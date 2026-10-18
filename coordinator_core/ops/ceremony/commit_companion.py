@@ -8,11 +8,32 @@ candidate missing from the index; no subprocess, no directory walk, no cache.
 from __future__ import annotations
 
 import hashlib
+from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path
-from typing import Collection, Dict, Iterable, List, Mapping, Sequence
+from typing import Callable, Collection, Dict, Iterable, Iterator, List, Mapping, Optional, Sequence
 
 from coordinator_core.git import git_index
 from coordinator_core.session.claim_index import _normalize_key
+
+#: Resolver ``candidates -> claimed subset`` (``None`` = contest unknown). Set by a caller that
+#: knows runs of the committing session which hold paths the session-level claim cannot separate.
+SiblingClaims = Callable[[Sequence[str]], Optional[Collection[str]]]
+
+_sibling_claims: ContextVar[Optional[SiblingClaims]] = ContextVar(
+    "own_left_behind_sibling_claims", default=None
+)
+
+
+@contextmanager
+def excluding_sibling_claims(resolver: SiblingClaims) -> Iterator[None]:
+    """Within the block, ``own_left_behind`` drops every candidate ``resolver`` reports claimed,
+    and returns nothing when it reports the contest unknown (``None``)."""
+    token = _sibling_claims.set(resolver)
+    try:
+        yield
+    finally:
+        _sibling_claims.reset(token)
 
 
 def untracked_companions(
@@ -73,7 +94,8 @@ def own_left_behind(
 ) -> List[str]:
     """Sorted normalized paths ``own_sid`` holds, outside ``pathspec``, not in ``contested``,
     that are dirty against the index: untracked-and-a-file-on-disk, or tracked with a stat
-    mismatch whose content differs. Zero subprocess; IndexParseError propagates.
+    mismatch whose content differs. Under ``excluding_sibling_claims`` a path a sibling run
+    claims is also dropped. Zero subprocess; IndexParseError propagates.
     """
     root = Path(worktree_root)
     excluded = {_normalize_key(p) for p in pathspec}
@@ -81,6 +103,13 @@ def own_left_behind(
     candidates = sorted(
         {p for p in map(_normalize_key, held_by.get(own_sid, ())) if p not in excluded}
     )
+    resolver = _sibling_claims.get()
+    if resolver is not None and candidates:
+        claimed = resolver(candidates)
+        if claimed is None:
+            return []
+        sibling = {_normalize_key(p) for p in claimed}
+        candidates = [p for p in candidates if p not in sibling]
     if not candidates:
         return []
 

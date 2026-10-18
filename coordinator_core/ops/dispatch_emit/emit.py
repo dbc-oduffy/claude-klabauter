@@ -3202,7 +3202,7 @@ def _verify_agent_call_expr(
     schema = {
         "type": "object",
         "properties": {"test": test_schema, "judge": judge_schema},
-        "required": ["judge"],
+        "required": ["test", "judge"],
         "additionalProperties": False,
     }
     prompt = (
@@ -3211,7 +3211,7 @@ def _verify_agent_call_expr(
         + _scoped_test_steps(
             scope, repo_root, typecheck, review_edits_base, owed_gates, surface, review_terminal
         )
-        + "Report raw evidence; do not gate. You have no Write tool: return it under `test` and omit sidecar_path."
+        + "Report raw evidence; do not gate. You have no Write tool: return it under `test` (required, even when tests failed or could not run) and omit sidecar_path."
         + (f" The plan is {_spec_path_for_prompt(Path(plan_path), repo_root).as_posix()}." if plan_path else "")
         + "\n\nStep 2 -- criterion verdict. Only once the step 1 result is in, rule the criterion below. "
         "A failing, errored or degraded test result is evidence for your verdict, never the verdict itself. "

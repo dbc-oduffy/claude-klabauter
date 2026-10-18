@@ -1011,6 +1011,55 @@ def _predecessor_rows(worktree_root: Path, plan_path: Optional[str], resume: obj
     return {halt_sha: by_plan} if by_plan else {}
 
 
+_CHECKPOINT_BASE_LINE = re.compile(r"^Checkpoint-Base:[ \t]*(?P<v>[0-9a-fA-F]+)\s*$", re.M)
+_PROCESS_HALF_SUFFIX = "(process files)"
+_HALTED_WALK_CAP = 500
+
+
+def _halted_run_checkpoint_rows(worktree_root: Path, plan_path: Optional[str], resume: object) -> dict:
+    """``{checkpoint sha: {plan: {row id}}}`` of the rows a ledger resume's halted run checkpointed.
+
+    Walks first-parent history in-process (zero spawns) from ``resume.halt_sha``, stepping over
+    stamp, foreign and halt commits, and records each same-plan checkpoint's named ids minus its
+    ``Checkpoint-Gate-Owed:`` ids at that checkpoint's sha. The process half (subject ends
+    ``(process files)``) is skipped: the product half names the same ids. The walk stops at the
+    newest-seen ``Checkpoint-Base:``, moved to each earlier wave's base as it is met, and at
+    ``_HALTED_WALK_CAP``. Empty for a non-resume close, a bad sha or an unreadable commit.
+    """
+    halt_sha = resume.get("halt_sha") if isinstance(resume, dict) else None
+    if not plan_path or not isinstance(halt_sha, str) or not _FULL_SHA_RE.fullmatch(halt_sha):
+        return {}
+    from coordinator_core.git.commit_walk import commit_meta
+    from coordinator_core.git.git_dir import resolve_git_common_dir
+    from coordinator_core.ops.dispatch_emit.checkpoint_stamp import parse_checkpoint
+
+    common_dir = resolve_git_common_dir(worktree_root)
+    landed: dict = {}
+    sha: Optional[str] = halt_sha
+    stop: Optional[str] = None
+    for _ in range(_HALTED_WALK_CAP):
+        if sha is None or (stop and sha.lower().startswith(stop)):
+            break
+        meta = commit_meta(common_dir, sha)
+        if meta is None:
+            break
+        message = meta.get("message") or ""
+        cp = None if is_stamp_commit(message) else parse_checkpoint(message)
+        if cp is not None and cp.plan_rel == plan_path:
+            base = _CHECKPOINT_BASE_LINE.search(message)
+            if base:
+                stop = base.group("v").lower()
+            subject = (message.splitlines() or [""])[0].strip()
+            ids = sorted(cp.row_ids - cp.gate_owed)
+            if ids and not subject.endswith(_PROCESS_HALF_SUFFIX):
+                by_plan = _source_rows_by_plan(worktree_root, plan_path, ids)
+                if by_plan:
+                    landed[sha] = by_plan
+        parents = meta.get("parents") or []
+        sha = parents[0] if parents else None
+    return landed
+
+
 
 def _checkpoint_attribution(worktree_root: Path, terminal_sha: str, plan_path: Optional[str], chunks: list) -> dict:
     """Chunk id -> sha of the run's own ``checkpoint(wave N)`` commit that landed its writes.
@@ -2349,6 +2398,22 @@ def _peer_held(
     except Exception:
         run_claims = None
     return held | set(run_claims or ())
+
+
+def _live_run_claims(worktree_root: Path, candidates: Sequence[str], own_run_id: str) -> Optional[set[str]]:
+    """The ``candidates`` a live run other than ``own_run_id`` declares it writes, whichever session
+    holds that run (a sibling run of the committing session included); ``None`` when a live run's
+    declaration is unreadable. The own session is not excluded: its other runs are the target."""
+    from coordinator_core.ops import warp_run_deliverable
+
+    try:
+        claims = warp_run_deliverable.live_run_write_claims(
+            worktree_root, list(candidates), exclude_session="", cwd=str(worktree_root),
+            exclude_run=own_run_id,
+        )
+    except Exception:  # noqa: BLE001 -- contest unknown: carry nothing
+        return None
+    return None if claims is None else set(claims)
 
 
 def _own_run_seniority(worktree_root: Path, run_id: object, script_path_raw: object = None) -> Optional[tuple]:
@@ -4639,8 +4704,15 @@ def _terminal_commit_inner(
     paragraphs.append("\n".join(trailers))
     message = "\n\n".join(paragraphs)
 
+    sibling_run_id = _run_id_of(params, ask_run_dir, script_path_raw)
+
     def commit_v2(params: dict, root: Path):
-        return reentrant_dispatch("ceremony.commit_v2", params, repo_root=root)
+        from coordinator_core.ops.ceremony import commit_companion
+
+        with commit_companion.excluding_sibling_claims(
+            lambda candidates: _live_run_claims(worktree_root, candidates, sibling_run_id)
+        ):
+            return reentrant_dispatch("ceremony.commit_v2", params, repo_root=root)
 
     allowlist_path = _regenerate_landing_allowlist(worktree_root, all_paths)
     if allowlist_path is not None and allowlist_path not in all_paths:
@@ -4778,9 +4850,18 @@ def _terminal_commit_inner(
         predecessor = {} if rows_untouched else _predecessor_rows(
             worktree_root, request.plan_path, params.get(TERMINAL_RESUME_LEDGER_PARAM)
         )
+        halted_checkpoints = {} if rows_untouched else _halted_run_checkpoint_rows(
+            worktree_root, request.plan_path, params.get(TERMINAL_RESUME_LEDGER_PARAM)
+        )
+        for csha, by_plan in halted_checkpoints.items():
+            for plan_rel, ids in by_plan.items():
+                fresh = ids.difference(*(other.get(plan_rel, set()) for other in predecessor.values()))
+                if fresh:
+                    checkpoint_rows.setdefault(csha, {}).setdefault(plan_rel, set()).update(fresh)
         landed_before = {
             (plan_rel, rid)
-            for by_plan in predecessor.values() for plan_rel, ids in by_plan.items() for rid in ids
+            for by_plan in (*predecessor.values(), *halted_checkpoints.values())
+            for plan_rel, ids in by_plan.items() for rid in ids
         }
         for csha, by_plan in predecessor.items():
             for plan_rel, ids in by_plan.items():

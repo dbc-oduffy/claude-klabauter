@@ -77,6 +77,47 @@ status: ready
 ## Trailer
 """
 
+_B1_BODY = """\
+  body: |
+    Run `pwsh -NoProfile -File scripts/build-plugin.ps1 -EngineVersion 5.8`.
+"""
+
+
+def _derived_plan(tmp_path: Path):
+    repo = _make_git_repo(tmp_path)
+    plan = _seed_plan(repo, "d.md", "")
+    rows = f"""\
+- id: B1
+  title: Build plugin
+  change_kind: verification
+  surface: scripts/build-plugin.ps1
+  writes: []
+  agent_type: coordinator:executor
+  queue_scope: project
+  disposition: open
+{_B1_BODY}- id: B2
+  title: Build and author
+  change_kind: code-edit
+  surface: scripts/build-plugin.ps1
+  writes: [x.cpp]
+  queue_scope: project
+  disposition: open
+{_B1_BODY}- id: B3
+  title: Operator build
+  change_kind: verification
+  surface: scripts/build-plugin.ps1
+  writes: []
+  queue_scope: project
+  execution_mode: operator
+  disposition: open
+{_B1_BODY}"""
+    plan.write_text(
+        "---\ntitle: P\nstatus: ready\n---\n\n## Tasks\n\n```yaml plan-tasks\n" + rows + "```\n",
+        encoding="utf-8",
+        newline="",
+    )
+    return repo, plan
+
 
 def _plan(tmp_path: Path):
     repo = _make_git_repo(tmp_path)
@@ -129,6 +170,33 @@ def test_empty_id_or_text_refused(tmp_path, extra):
     repo, plan = _plan(tmp_path)
     result = _call(repo, plan, **extra)
     assert result["exit_code"] == 1
+    assert not evidence_sidecar_path(plan).exists()
+
+
+def test_derived_em_row_discharges_and_leaves_plan_bytes(tmp_path):
+    repo, plan = _derived_plan(tmp_path)
+    before = plan.read_bytes()
+    result = _call(repo, plan, id="B1")
+    assert result["exit_code"] == 0 and result["applied"] is True, result
+    assert plan.read_bytes() == before
+    assert set(read_em_discharges(plan)) == {"B1"}
+    again = _call(repo, plan, id="B1", text="other")
+    assert again["exit_code"] == 0 and again["applied"] is False
+
+
+def test_writes_row_with_same_body_stays_agent(tmp_path):
+    repo, plan = _derived_plan(tmp_path)
+    result = _call(repo, plan, id="B2")
+    assert result["exit_code"] == 1
+    assert "is not performer: em" in str(result)
+    assert not evidence_sidecar_path(plan).exists()
+
+
+def test_derived_em_operator_row_hits_operator_refusal(tmp_path):
+    repo, plan = _derived_plan(tmp_path)
+    result = _call(repo, plan, id="B3")
+    assert result["exit_code"] == 1
+    assert "execution_mode: operator" in str(result)
     assert not evidence_sidecar_path(plan).exists()
 
 

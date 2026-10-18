@@ -135,10 +135,10 @@ def resumable_plan(
     Failing that, a rulable register row or a not_met recorded outcome resumes it as a synthesised
     `ALL_LANDED_HALT_KIND` ledger resume (`_all_landed_halt`); a spine with no `coded` row also pays the
     one `resume_landed_state` git spawn. A plan with
-    no readable spine or no rows is not resumable (None). A `performer: em` row that the plan's
-    evidence sidecar carries under `em_discharged` counts landed, as in `read_spine`
-    (`em_discharge_eligible`). One file read, plus one more on the already-ran path, plus one more
-    (the evidence sidecar) only when an open `performer: em` row exists; one `git log` only when a
+    no readable spine or no rows is not resumable (None). An em-performed row (declared `performer: em`,
+    or derived by `em_only_act`) that the plan's evidence sidecar carries under `em_discharged` counts
+    landed, as in `read_spine` (`em_discharge_eligible`). One file read, plus one more on the already-ran
+    path, plus one more (the evidence sidecar) only when an open em-performed row exists; one `git log` only when a
     row is open. With rows left open, a ledger resume
     also needs the newest ledger-check halt's committed record to have staged every one of them
     (`_ledger_halt_for`), pointer or no pointer; a row it did not stage keeps `ResumePlan.rows`.
@@ -224,11 +224,12 @@ def _terminal_coded(rows: Sequence, state=None) -> bool:
 def _drop_em_discharged(plan: Path, plan_text: str, rows: Sequence, open_ids: list) -> list:
     """`open_ids` less every row `read_spine` counts satisfied by an em-discharge entry. The evidence
     sidecar is read once, and only when an open row is eligible for discharge."""
+    from coordinator_core.ops.dispatch_emit.em_only_act import row_is_em_performed
     from coordinator_core.ops.dispatch_emit.spine_read import _frontmatter_external_gates, em_discharge_eligible
 
     open_set = set(open_ids)
     eligible = [
-        r for r in rows if isinstance(r, dict) and r.get("id") in open_set and r.get("performer") == "em"
+        r for r in rows if isinstance(r, dict) and r.get("id") in open_set and row_is_em_performed(r)
     ]
     if not eligible:
         return open_ids

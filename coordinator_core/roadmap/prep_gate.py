@@ -1250,9 +1250,10 @@ def _sibling_plan_edges(
     row is never scheduled, so its edges are not read (as ``read_spine``).
     """
     from coordinator_core.ops.dispatch_emit import spine_read
+    from coordinator_core.ops.dispatch_emit.em_only_act import row_is_em_performed
 
     edges = row.get("depends_on_plan")
-    if not edges or row.get("performer") == "em" or spine_read._is_memo_send_row(row):
+    if not edges or row_is_em_performed(row) or spine_read._is_memo_send_row(row):
         return frozenset(), [], []
     if not isinstance(edges, list):
         return frozenset(), [], [f"row {row_id!r} depends_on_plan is {edges!r}, not a list"]
@@ -1727,11 +1728,12 @@ def _em_owned_exit_warnings(
             _is_operator_row,
             read_spine,
         )
+        from coordinator_core.ops.dispatch_emit.em_only_act import row_is_em_performed
 
         raw = [r for r in raw_spine_rows(text) if isinstance(r, dict)]
         # Cheap precheck: a spine with no EM-owned shape skips the second spine read.
         if not any(
-            r.get("performer") == "em" or _is_operator_row(r) or _is_memo_send_row(r) for r in raw
+            row_is_em_performed(r) or _is_operator_row(r) or _is_memo_send_row(r) for r in raw
         ):
             return []
         exclusions: List[Dict[str, Any]] = []

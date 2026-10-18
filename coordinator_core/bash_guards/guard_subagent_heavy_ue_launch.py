@@ -160,18 +160,26 @@ def _segment_launches_heavy(tokens: List[str], depth: int) -> bool:
             if low in ("-file", "-f") and j + 1 < len(rest):
                 return _is_heavy(rest[j + 1])
             if low in ("-command", "-c") and j + 1 < len(rest):
-                return _launches_heavy(" ".join(rest[j + 1:]), depth + 1)
+                return launches_heavy(" ".join(rest[j + 1:]), depth + 1)
         return False
     if base in _PLAIN_INTERPRETERS:
         for j, tok in enumerate(rest):
             if tok.lower() in ("-c", "/c", "/k") and j + 1 < len(rest):
-                return _launches_heavy(" ".join(rest[j + 1:]), depth + 1)
+                return launches_heavy(" ".join(rest[j + 1:]), depth + 1)
         target = _first_positional(rest)
         return target is not None and _is_heavy(target)
     return False
 
 
-def _launches_heavy(cmd: str, depth: int = 0) -> bool:
+def launches_heavy(cmd: str, depth: int = 0) -> bool:
+    """True when dispatch would deny a subagent `cmd`: the single forbidden-command list.
+
+    Spawn-free and I/O-free; a command naming none of `_PREFILTER` returns after one scan.
+    """
+    if depth == 0:
+        low = cmd.lower()
+        if not any(s in low for s in _PREFILTER):
+            return False
     for tokens in _segments(cmd):
         if _segment_launches_heavy(tokens, depth):
             return True
@@ -206,8 +214,7 @@ def check(
         cmd = tool_input.get("command") if isinstance(tool_input, dict) else None
         if not isinstance(cmd, str) or not cmd.strip():
             return None
-        low = cmd.lower()
-        if not any(s in low for s in _PREFILTER) or not _launches_heavy(cmd):
+        if not launches_heavy(cmd):
             return None
     except Exception:
         return None

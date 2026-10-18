@@ -410,7 +410,7 @@ def classify(
     if not any(s in low for s in _PREFILTER):
         return light
     try:
-        if _ue._launches_heavy(command):
+        if _ue.launches_heavy(command):
             return Classification(HeavyClass.UE, False, background)
         if not isinstance(cwd, str) or not cwd:
             cwd = ti.get("cwd") if isinstance(ti.get("cwd"), str) else os.getcwd()

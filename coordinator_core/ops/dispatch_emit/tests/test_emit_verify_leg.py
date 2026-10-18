@@ -105,18 +105,24 @@ def test_the_prompt_carries_the_scoped_targets_then_the_judge_brief():
 def test_the_return_nests_test_and_judge_and_binds_both_result_variables():
     script = _compose()
 
-    assert '"required": ["judge"]' in script
+    assert '"required": ["test", "judge"]' in script
     assert "_testResult = _verifyReply.test;" in script
     assert "_falsifierResult = _verifyReply.judge;" in script
     assert "test: r.test ?? null" in script
     assert "return { test: null, judge: { status: 'indeterminate'" in script
 
 
+def test_the_test_result_is_required_so_an_omitted_test_cannot_degrade_a_met_run():
+    script = _compose()
+    assert "`test` (required, even when tests failed or could not run)" in script
+    assert '"required": ["judge"]' not in script
+
+
 def test_the_test_sidecar_is_absent_on_this_arm_and_the_digest_and_bookkeeping_tolerate_it(tmp_path):
     script = _compose()
     schema = script[script.index("label: 'verify'") :]
     test_schema = schema[schema.index('"test": {') :]
-    assert '"required": ["status", "tests_run", "tests_failed"]' in test_schema.split("}}, \"required\": [\"judge\"]")[0]
+    assert '"required": ["status", "tests_run", "tests_failed"]' in test_schema.split("}}, \"required\": [\"test\", \"judge\"]")[0]
     assert "sidecar_path ?? null" in script
     assert resolve_prep_sidecar(None, repo_root=tmp_path, session_id="s", tests_sidecar=None) is None
     assert resolve_prep_sidecar("prep.md", repo_root=tmp_path, session_id="s", tests_sidecar=None) is None

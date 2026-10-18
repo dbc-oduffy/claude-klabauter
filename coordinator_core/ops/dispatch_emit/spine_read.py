@@ -156,6 +156,7 @@ import yaml
 from coordinator_core.frontmatter.body_blocks import LocateStatus, locate_fenced_block
 from coordinator_core.frontmatter.primitives import split_frontmatter
 from coordinator_core.frontmatter.schema_validate import check_plan_tasks_source
+from coordinator_core.ops.dispatch_emit.em_only_act import forbidden_sole_act, row_is_em_performed
 from coordinator_core.ops.plan_tasks_render import RowsResult, load_rows
 
 
@@ -474,11 +475,11 @@ def memo_draft_fields(raw: dict) -> tuple[Optional[dict], str]:
 
 
 def em_discharge_eligible(raw: dict, extra_gates: tuple = ()) -> bool:
-    """True when an em-discharge entry would close `raw`: an open, undeferred `performer: em` row that
-    is neither a memo-send nor an operator row and carries no uncleared execution gate. Shared by
-    `read_spine` and the refire gate so the two cannot drift."""
+    """True when an em-discharge entry would close `raw`: an open, undeferred em-performed row (declared,
+    or derived by em_only_act) that is neither a memo-send nor an operator row and carries no uncleared
+    execution gate. Shared by `read_spine` and the refire gate so the two cannot drift."""
     return (
-        raw.get("performer") == "em"
+        row_is_em_performed(raw)
         and raw.get("disposition") not in NON_DISPATCHABLE_DISPOSITIONS
         and not (raw.get("deferred") is True or bool(raw.get("deferred_until")))
         and not _is_memo_send_row(raw)
@@ -1252,7 +1253,13 @@ def read_spine(
             if disposition not in NON_DISPATCHABLE_DISPOSITIONS and deferred is not True
             else None
         )
-        em_performed = raw.get("performer") == "em" or _is_memo_send_row(raw) or inbound_close is not None
+        forbidden_span = forbidden_sole_act(raw)
+        em_performed = (
+            raw.get("performer") == "em"
+            or forbidden_span is not None
+            or _is_memo_send_row(raw)
+            or inbound_close is not None
+        )
         memo_slug = None
         memo_delivered = False
         memo_owed = False
@@ -1366,9 +1373,14 @@ def read_spine(
                     "(verb resolve, plan_path, id, disposition coded, disposition_ref <sha>)",
                 )
             elif em_performed:
+                _lead = (
+                    f"EM: its only act is an agent-forbidden command (`{forbidden_span}`); perform it"
+                    if forbidden_span is not None and raw.get("performer") != "em"
+                    else "EM: perform it"
+                )
                 _reason = (
                     "em-performed",
-                    "EM: perform it, then run `coordinator-invoke plan.tasks.mutate` "
+                    f"{_lead}, then run `coordinator-invoke plan.tasks.mutate` "
                     "(verb em-discharge, plan_path, id, text)",
                 )
             elif plan_hold is not None:

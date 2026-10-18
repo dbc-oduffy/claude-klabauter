@@ -1200,7 +1200,8 @@ def read_em_discharges(plan_file: Path) -> dict:
 def _em_discharge(
     plan_path: str, row_id: str, text: str, worktree: Path, repo_root: Path
 ) -> dict:
-    """Apply the em-discharge verb: record that the EM performed ``performer: em`` row ``row_id``.
+    """Apply the em-discharge verb: record that the EM performed em-performed row ``row_id``
+    (declared ``performer: em``, or derived by ``em_only_act``).
 
     Writes only the evidence sidecar; the row's disposition and the plan body are untouched.
     A second discharge of the same row is a no-op, never an overwrite.
@@ -1229,7 +1230,9 @@ def _em_discharge(
             row = None
     if row is None:
         return _err(f"em-discharge: task id not found: {row_id!r}")
-    if row.get("performer") != "em":
+    from coordinator_core.ops.dispatch_emit.em_only_act import row_is_em_performed
+
+    if not row_is_em_performed(row):
         return _err(f"em-discharge: row {row_id!r} is not performer: em")
 
     from coordinator_core.ops.dispatch_emit.spine_read import (
