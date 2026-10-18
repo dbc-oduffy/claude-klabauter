@@ -46,6 +46,7 @@ Negative-spec:
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any, List, Optional
 
@@ -71,6 +72,9 @@ _LEDGER_VERDICTS = frozenset({"warn", "blocked"})
 _PREP_VERDICTS_COMPUTED = frozenset({"PREPPED", "NOT-PREPPED"})
 _INSTRUCTION_MAX = 1000
 _LIVE_DISPOSITIONS = frozenset({"open", "coded"})
+# A `fixed_by` of landed commits (the premise checker's own "on corrects: -> <sha>" form) names
+# its fix as surely as a live row id; a token that is neither covers nothing.
+_SHA_LIST = re.compile(r"[0-9a-f]{7,40}(\s*,\s*[0-9a-f]{7,40})*")
 _PULL_VERDICTS = frozenset({"pulled", "judgment"})
 
 
@@ -128,7 +132,8 @@ def _norm(text: Any) -> str:
 
 def _covering_row(row: dict, corrects: Any, spine_rows: Optional[List[dict]]) -> Optional[tuple]:
     """(citation, row id) of the first ``corrects`` entry that covers this premise row, else None.
-    Malformed entries, unknown row ids and rows not open/coded cover nothing."""
+    ``fixed_by`` is a live (open/coded) row id or a comma list of commit shas; malformed entries,
+    unknown row ids and rows not open/coded cover nothing."""
     if not isinstance(corrects, list):
         return None
     live = {
@@ -141,8 +146,9 @@ def _covering_row(row: dict, corrects: Any, spine_rows: Optional[List[dict]]) ->
         if not isinstance(entry, dict):
             continue
         citation, fixed_by = _norm(entry.get("citation")), entry.get("fixed_by")
-        if citation and citation in cited and isinstance(fixed_by, str) and fixed_by.strip() in live:
-            return citation, fixed_by.strip()
+        fix = fixed_by.strip() if isinstance(fixed_by, str) else ""
+        if citation and citation in cited and (fix in live or _SHA_LIST.fullmatch(fix)):
+            return citation, fix
     return None
 
 

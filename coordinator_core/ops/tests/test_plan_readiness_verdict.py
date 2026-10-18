@@ -375,6 +375,25 @@ def test_contradicted_row_on_corrects_list_with_spine_fix_is_a_note(tmp_path):
     assert "tree claim X -> C2" in reply["reason"]
 
 
+def test_plan_whose_only_blockers_are_corrected_reads_ready(tmp_path):
+    corrects = _CORRECTS + "  - citation: tree claim Y\n    fixed_by: C1\n"
+    common = _corrects_plan(tmp_path, corrects)
+    rows = [_row(), _row(citation="tree claim Y"), _row("RESOLVES", citation="other")]
+    reply = _op_reply(common, rows)
+    assert reply["verdict"] == "ready"
+    assert reply["blocking"] == []
+    assert "2 CONTRADICTED premise row(s) the plan corrects" in reply["reason"]
+
+
+def test_corrects_entry_fixed_by_commit_shas_covers_the_row(tmp_path):
+    # Shape from a live halt: `fixed_by` names landed commits, as the premise checker cites them.
+    corrects = 'corrects:\n  - citation: tree claim X\n    fixed_by: "6b07cc0fa, 8fdeaddba, 0044cec8b"\n'
+    common = _corrects_plan(tmp_path, corrects)
+    reply = _op_reply(common, [_row(citation="corrects: 'tree claim X'", evidence="on corrects: -> 0044cec8b")])
+    assert reply["verdict"] == "ready"
+    assert reply["blocking"] == []
+
+
 @pytest.mark.parametrize(
     "corrects, disposition",
     [
