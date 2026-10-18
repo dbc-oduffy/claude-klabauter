@@ -51,6 +51,7 @@ this way.
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 from pathlib import Path
 from typing import Optional
@@ -715,8 +716,18 @@ class TestGrandfatheredCorpusIsUnaffected:
             # only (never gates the refusal this test exists to pin). Every
             # OTHER key -- the actual stamp decision this AC is about --
             # must still match exactly.
+            # The checkpoint walk postdates the fixture: its diagnostics and
+            # cap note report how far it read, never the stamp decision.
             actual = dict(result)
             actual.pop("gates", None)
+            actual.pop("checkpoint_walk", None)
+            actual.pop("checkpoint_rows_coded", None)
+            if isinstance(actual.get("message"), str):
+                actual["message"] = re.sub(
+                    r" -- NOTE: checkpoint walk capped after \d+ commits with rows still unfound\.",
+                    "",
+                    actual["message"],
+                )
             fixture_expected = dict(expected["result"])
             fixture_expected.pop("gates", None)
 

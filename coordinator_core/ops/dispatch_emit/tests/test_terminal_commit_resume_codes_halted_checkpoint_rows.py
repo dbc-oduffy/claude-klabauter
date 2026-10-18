@@ -97,15 +97,15 @@ def test_other_plans_checkpoint_is_not_attributed(tmp_path):
     assert terminal_commit._halted_run_checkpoint_rows(root, "docs/other.md", {"halt_sha": halt}) == {}
 
 
-def test_walk_stops_at_the_checkpoint_base(repo):
-    root, _product, process, _halt, _base = repo
+def test_walk_crosses_a_checkpoint_base_and_stops_when_wanted_is_found(repo):
+    root, product, process, _halt, _base = repo
     (root / "later.py").write_text("l\n")
     _git(root, "add", "later.py")
     _git(root, "commit", "-qm", "checkpoint(wave 1): 1 rows — C3", "-m",
          f"Checkpoint-Plan: {REL}\nCheckpoint-Base: {process[:7]}")
     nxt = _git(root, "rev-parse", "HEAD")
     got = terminal_commit._halted_run_checkpoint_rows(root, REL, {"halt_sha": nxt})
-    assert got == {nxt: {REL: {"C3"}}}
+    assert got == {nxt: {REL: {"C3"}}, product: {REL: {"C1", "C2"}}}
 
 
 def test_resume_close_codes_halted_checkpoint_rows_and_spares_coded_and_owed(tmp_path, monkeypatch):

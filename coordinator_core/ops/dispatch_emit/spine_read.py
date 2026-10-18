@@ -488,6 +488,24 @@ def em_discharge_eligible(raw: dict, extra_gates: tuple = ()) -> bool:
     )
 
 
+def drop_em_discharged(plan, plan_text: str, rows, open_ids: list) -> list:
+    """`open_ids` less every row an `em-discharge` entry satisfies: the one predicate shared by
+    `read_spine`'s rule, `sizing_fire` and `close_out_and_stamp`. The evidence sidecar is read once,
+    and only when an open row is eligible for discharge."""
+    open_set = set(open_ids)
+    eligible = [r for r in rows if isinstance(r, dict) and r.get("id") in open_set and row_is_em_performed(r)]
+    if not eligible:
+        return open_ids
+    gates = _frontmatter_external_gates(plan_text, open_set)
+    candidates = [r["id"] for r in eligible if em_discharge_eligible(r, tuple(gates.get(r["id"], ())))]
+    if not candidates:
+        return open_ids
+    from coordinator_core.ops.plan_tasks_mutate import read_em_discharges
+
+    discharged = read_em_discharges(Path(plan))
+    return [i for i in open_ids if not (i in candidates and i in discharged)]
+
+
 def _has_uncleared_execution_gate(raw: dict, extra_gates: tuple = ()) -> bool:
     """True if `raw`'s row-level ``external_gate`` (plus any ``extra_gates``
     resolved onto this row from plan frontmatter — see

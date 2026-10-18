@@ -762,6 +762,11 @@ def _determine_shipped(
             f"disposition_ref for {', '.join(timed_out_ids)}; re-run close-out"
         )
     missing = [cid for cid in chunk_ids if cid not in verified_ids]
+    if missing:
+        from coordinator_core.ops.dispatch_emit.spine_read import drop_em_discharged
+
+        open_rows = [r for r in rows if isinstance(r, dict) and _row_disposition(r) == _OPEN]
+        missing = drop_em_discharged(repo_root / plan_path_rel, plan_text, open_rows, missing)
     return (len(missing) == 0), missing, True, None
 
 
@@ -1908,6 +1913,58 @@ def _release_committed_path_claims(
         pass
 
 
+def _code_rows_from_checkpoints(
+    text: str, plan_path_rel: str, root: Path, rows: Optional[list[Any]], missing: list[str]
+) -> tuple[str, dict[str, list[str]], dict[str, Any]]:
+    """Code still-`open` `missing` rows at the newest same-plan checkpoint that landed each.
+
+    Returns `(text, {checkpoint sha: [row ids]}, {"commits_read", "capped"})`. `text` is
+    unchanged when nothing flipped or the flip would turn a valid spine invalid. The
+    caller re-runs `_determine_shipped` on the result, so the `disposition_ref` ancestry
+    oracle, not this walk, judges the new refs.
+    """
+    walk_info: dict[str, Any] = {"commits_read": 0, "capped": False}
+    wanted = frozenset(
+        cid for cid in missing
+        if any(
+            isinstance(r, dict) and str(r.get("id")) == cid and _row_disposition(r) == _OPEN
+            for r in (rows or [])
+        )
+    )
+    if not wanted:
+        return text, {}, walk_info
+    from coordinator_core.git.git_state import head_sha
+    from coordinator_core.ops.dispatch_emit.checkpoint_stamp import (
+        checkpoint_rows_landed,
+        plan_created_floor,
+    )
+
+    start = head_sha(root)
+    if not start:
+        return text, {}, walk_info
+    walk = checkpoint_rows_landed(
+        root, plan_path_rel, start, wanted, floor_epoch=plan_created_floor(text)
+    )
+    walk_info = {"commits_read": walk.commits_read, "capped": walk.capped}
+    if not walk.landed:
+        return text, {}, walk_info
+
+    from coordinator_core.frontmatter.schema_validate import check_plan_tasks_source
+    from coordinator_core.ops.dispatch_emit.terminal_commit import _flip_rows_coded
+
+    updated = text
+    coded: dict[str, list[str]] = {}
+    for sha, ids in walk.landed.items():
+        updated, flipped = _flip_rows_coded(updated, set(ids), sha)
+        if flipped:
+            coded[sha] = sorted(flipped)
+    if not coded:
+        return text, {}, walk_info
+    if check_plan_tasks_source(updated) is not None and check_plan_tasks_source(text) is None:
+        return text, {}, walk_info
+    return updated, coded, walk_info
+
+
 def close_out_and_stamp(
     plan_path: str, *, repo_root: Optional[Path] = None, dry_run: bool = False
 ) -> tuple[int, dict[str, Any]]:
@@ -2012,7 +2069,9 @@ def close_out_and_stamp(
     evidence for a `## Tasks` spine row is its own verified
     `disposition_ref` (`_determine_shipped`); a plan predating the spine
     still resolves off its `## Dispatch Ledger` table's own
-    `committed <sha>` cells. Both are pure sha-ancestry checks.
+    `committed <sha>` cells. Both are pure sha-ancestry checks. Rows a same-plan
+    checkpoint commit landed are coded into the spine first
+    (`_code_rows_from_checkpoints`); the oracle is still `disposition_ref` ancestry.
 
     Returns `(exit_code, result_dict)`:
       - `EXIT_OK` with `{"shipped": bool, "stamped": bool,
@@ -2118,6 +2177,25 @@ def close_out_and_stamp(
     )
     if spine_error is not None:
         return EXIT_BUSINESS_FAIL, {"error": spine_error, "dry_run": dry_run}
+
+    checkpoint_rows_coded: dict[str, list[str]] = {}
+    checkpoint_walk: dict[str, Any] = {"commits_read": 0, "capped": False}
+    if missing and locate_fenced_block(text).status == LocateStatus.LOCATED:
+        pre_rows, _pre_error = _parse_spine_rows(text, plan_path_rel)
+        coded_text, checkpoint_rows_coded, checkpoint_walk = _code_rows_from_checkpoints(
+            text, plan_path_rel, root, pre_rows, missing
+        )
+        if checkpoint_rows_coded:
+            if not dry_run:
+                from coordinator_core.session.claimed_write import replace_text
+
+                replace_text(live_path, coded_text)
+            text = coded_text
+            shipped, missing, evidence_backed, spine_error = _determine_shipped(
+                text, plan_path_rel, root
+            )
+            if spine_error is not None:
+                return EXIT_BUSINESS_FAIL, {"error": spine_error, "dry_run": dry_run}
 
     plan_deliverable_id = _plan_deliverable_id(text)
 
@@ -2481,7 +2559,7 @@ def close_out_and_stamp(
     # case; `wrote_anything` is this function's actual single source of
     # truth for "did I change anything" that Defect 3's commit-gating
     # rationale refers to.
-    wrote_anything = stamped or partial_evaluation_stamped
+    wrote_anything = stamped or partial_evaluation_stamped or bool(checkpoint_rows_coded)
     stage_paths = [plan_path_rel]
     from coordinator_core.ops.plan_tasks_mutate import evidence_sidecar_path, read_row_evidence
 
@@ -2746,6 +2824,12 @@ def close_out_and_stamp(
                     f"{new_sha[:9]}\"`."
                 )
 
+    if checkpoint_walk["capped"] and missing:
+        message += (
+            f" -- NOTE: checkpoint walk capped after {checkpoint_walk['commits_read']} "
+            "commits with rows still unfound."
+        )
+
     if disposition_ref_foreign_sessions:
         foreign_notes = ", ".join(
             f"{chunk_id} ({session})"
@@ -2785,6 +2869,8 @@ def close_out_and_stamp(
         "disposition_ref_foreign_sessions": disposition_ref_foreign_sessions,
         "open_chunk_ids": open_blocking,
         "ac_table_desync": ac_table_desync,
+        "checkpoint_rows_coded": checkpoint_rows_coded,
+        "checkpoint_walk": checkpoint_walk,
         "commit": commit_result,
         "message": message,
         "dry_run": dry_run,

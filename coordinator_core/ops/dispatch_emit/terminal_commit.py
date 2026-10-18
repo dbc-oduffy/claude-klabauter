@@ -1011,54 +1011,58 @@ def _predecessor_rows(worktree_root: Path, plan_path: Optional[str], resume: obj
     return {halt_sha: by_plan} if by_plan else {}
 
 
-_CHECKPOINT_BASE_LINE = re.compile(r"^Checkpoint-Base:[ \t]*(?P<v>[0-9a-fA-F]+)\s*$", re.M)
-_PROCESS_HALF_SUFFIX = "(process files)"
 _HALTED_WALK_CAP = 500
 
 
-def _halted_run_checkpoint_rows(worktree_root: Path, plan_path: Optional[str], resume: object) -> dict:
-    """``{checkpoint sha: {plan: {row id}}}`` of the rows a ledger resume's halted run checkpointed.
+def _checkpoint_rows_from(
+    worktree_root: Path, plan_path: Optional[str], start_sha: object, exclude: frozenset = frozenset(),
+) -> dict:
+    """``{checkpoint sha: {plan: {row id}}}`` of the still-open rows same-plan checkpoints landed.
 
-    Walks first-parent history in-process (zero spawns) from ``resume.halt_sha``, stepping over
-    stamp, foreign and halt commits, and records each same-plan checkpoint's named ids minus its
-    ``Checkpoint-Gate-Owed:`` ids at that checkpoint's sha. The process half (subject ends
-    ``(process files)``) is skipped: the product half names the same ids. The walk stops at the
-    newest-seen ``Checkpoint-Base:``, moved to each earlier wave's base as it is met, and at
-    ``_HALTED_WALK_CAP``. Empty for a non-resume close, a bad sha or an unreadable commit.
+    One in-process walk (``checkpoint_stamp.checkpoint_rows_landed``, zero spawns) from
+    ``start_sha`` for the plan's rows open on disk minus ``exclude``; each row maps to the
+    newest checkpoint that named it. ``Checkpoint-Base:`` is not a stop: the wanted set, the
+    plan's ``created:`` floor and ``_HALTED_WALK_CAP`` bound it. Empty for a bad sha or a plan
+    with no open row.
     """
-    halt_sha = resume.get("halt_sha") if isinstance(resume, dict) else None
-    if not plan_path or not isinstance(halt_sha, str) or not _FULL_SHA_RE.fullmatch(halt_sha):
+    if not plan_path or not isinstance(start_sha, str) or not _FULL_SHA_RE.fullmatch(start_sha):
         return {}
-    from coordinator_core.git.commit_walk import commit_meta
-    from coordinator_core.git.git_dir import resolve_git_common_dir
-    from coordinator_core.ops.dispatch_emit.checkpoint_stamp import parse_checkpoint
+    wanted = frozenset(_open_row_ids(worktree_root, plan_path) - set(exclude))
+    if not wanted:
+        return {}
+    from coordinator_core.ops.dispatch_emit.checkpoint_stamp import checkpoint_rows_landed, plan_created_floor
 
-    common_dir = resolve_git_common_dir(worktree_root)
+    walk = checkpoint_rows_landed(
+        worktree_root, plan_path, start_sha.lower(), wanted,
+        floor_epoch=plan_created_floor(_read_rel(worktree_root, plan_path) or ""),
+        cap=_HALTED_WALK_CAP,
+    )
     landed: dict = {}
-    sha: Optional[str] = halt_sha
-    stop: Optional[str] = None
-    for _ in range(_HALTED_WALK_CAP):
-        if sha is None or (stop and sha.lower().startswith(stop)):
-            break
-        meta = commit_meta(common_dir, sha)
-        if meta is None:
-            break
-        message = meta.get("message") or ""
-        cp = None if is_stamp_commit(message) else parse_checkpoint(message)
-        if cp is not None and cp.plan_rel == plan_path:
-            base = _CHECKPOINT_BASE_LINE.search(message)
-            if base:
-                stop = base.group("v").lower()
-            subject = (message.splitlines() or [""])[0].strip()
-            ids = sorted(cp.row_ids - cp.gate_owed)
-            if ids and not subject.endswith(_PROCESS_HALF_SUFFIX):
-                by_plan = _source_rows_by_plan(worktree_root, plan_path, ids)
-                if by_plan:
-                    landed[sha] = by_plan
-        parents = meta.get("parents") or []
-        sha = parents[0] if parents else None
+    for sha, ids in walk.landed.items():
+        by_plan = _source_rows_by_plan(worktree_root, plan_path, sorted(ids))
+        if by_plan:
+            landed[sha] = by_plan
     return landed
 
+
+def _halted_run_checkpoint_rows(
+    worktree_root: Path, plan_path: Optional[str], resume: object, exclude: frozenset = frozenset(),
+) -> dict:
+    """``_checkpoint_rows_from`` the ledger resume's ``halt_sha``; empty for a non-resume close."""
+    halt_sha = resume.get("halt_sha") if isinstance(resume, dict) else None
+    return _checkpoint_rows_from(worktree_root, plan_path, halt_sha, exclude)
+
+
+def _earlier_fire_checkpoint_rows(
+    worktree_root: Path, plan_path: Optional[str], terminal_sha: str, exclude: frozenset = frozenset(),
+) -> dict:
+    """``_checkpoint_rows_from`` the terminal commit's first parent: a non-resume close's earlier fires."""
+    from coordinator_core.git.commit_walk import commit_meta
+    from coordinator_core.git.git_dir import resolve_git_common_dir
+
+    meta = commit_meta(resolve_git_common_dir(worktree_root), terminal_sha)
+    parents = (meta or {}).get("parents") or []
+    return _checkpoint_rows_from(worktree_root, plan_path, parents[0] if parents else None, exclude)
 
 
 def _checkpoint_attribution(worktree_root: Path, terminal_sha: str, plan_path: Optional[str], chunks: list) -> dict:
@@ -4850,9 +4854,18 @@ def _terminal_commit_inner(
         predecessor = {} if rows_untouched else _predecessor_rows(
             worktree_root, request.plan_path, params.get(TERMINAL_RESUME_LEDGER_PARAM)
         )
-        halted_checkpoints = {} if rows_untouched else _halted_run_checkpoint_rows(
-            worktree_root, request.plan_path, params.get(TERMINAL_RESUME_LEDGER_PARAM)
-        )
+        resume_ledger_param = params.get(TERMINAL_RESUME_LEDGER_PARAM)
+        own_coded = frozenset(c.id for c in coded_chunks) | frozenset(checkpoint_of)
+        if rows_untouched:
+            halted_checkpoints = {}
+        elif resume_ledger_param is not None:
+            halted_checkpoints = _halted_run_checkpoint_rows(
+                worktree_root, request.plan_path, resume_ledger_param, own_coded
+            )
+        else:
+            halted_checkpoints = _earlier_fire_checkpoint_rows(
+                worktree_root, request.plan_path, str(reply["sha"]), own_coded
+            )
         for csha, by_plan in halted_checkpoints.items():
             for plan_rel, ids in by_plan.items():
                 fresh = ids.difference(*(other.get(plan_rel, set()) for other in predecessor.values()))

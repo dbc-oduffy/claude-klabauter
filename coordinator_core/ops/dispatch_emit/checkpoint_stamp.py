@@ -51,6 +51,83 @@ def is_stamp_commit(message: str) -> bool:
     return bool(_STAMP_LINE.search(message))
 
 
+class CheckpointWalk(NamedTuple):
+    landed: dict  # {checkpoint sha: frozenset(row ids)}, ids minus that checkpoint's gate-owed
+    commits_read: int
+    capped: bool  # the cap ended the walk with wanted ids still unfound
+
+
+_PROCESS_HALF_SUFFIX = "(process files)"
+_FULL_SHA = re.compile(r"^[0-9a-f]{40}$")
+_CREATED_LINE = re.compile(r"^created:[ \t]*[\"']?(\d{4})-(\d{2})-(\d{2})", re.M)
+_DAY_SECONDS = 86400
+
+
+def plan_created_floor(plan_text: str) -> Optional[int]:
+    """Epoch below which no checkpoint of the plan can exist: its ``created:`` day at
+    00:00 UTC minus one day of timezone slack; None when absent or unparseable."""
+    head = plan_text.split("\n---", 1)[0] if plan_text.startswith("---") else ""
+    m = _CREATED_LINE.search(head)
+    if not m:
+        return None
+    try:
+        from datetime import datetime, timezone
+
+        day = datetime(int(m.group(1)), int(m.group(2)), int(m.group(3)), tzinfo=timezone.utc)
+    except ValueError:
+        return None
+    return int(day.timestamp()) - _DAY_SECONDS
+
+
+def checkpoint_rows_landed(
+    worktree_root: Path,
+    plan_rel: str,
+    start_sha: str,
+    wanted: frozenset,
+    *,
+    floor_epoch: Optional[int] = None,
+    cap: int = 500,
+) -> CheckpointWalk:
+    """Which ``wanted`` rows did same-plan checkpoints land, at which sha, newest first.
+
+    First-parent walk from ``start_sha``, in-process. Stamp commits, other plans'
+    checkpoints and process halves are stepped over; a same-plan checkpoint records
+    ``(row ids - gate-owed) & remaining`` at its own sha, so the newest landing wins.
+    Ends when ``wanted`` is exhausted, below ``floor_epoch``, at ``cap`` commits, or at
+    an unreadable or root commit. ``Checkpoint-Base:`` is not a stop.
+    """
+    empty = CheckpointWalk({}, 0, False)
+    if not wanted or not plan_rel or not isinstance(start_sha, str) or not _FULL_SHA.fullmatch(start_sha):
+        return empty
+    from coordinator_core.git.commit_walk import commit_meta
+    from coordinator_core.git.git_dir import resolve_git_common_dir
+
+    common_dir = resolve_git_common_dir(Path(worktree_root))
+    remaining = set(wanted)
+    landed: dict = {}
+    read = 0
+    sha: Optional[str] = start_sha
+    while remaining and sha is not None and read < cap:
+        meta = commit_meta(common_dir, sha)
+        if meta is None:
+            break
+        epoch = meta.get("committer_epoch")
+        if floor_epoch is not None and epoch is not None and epoch < floor_epoch:
+            break
+        read += 1
+        message = meta.get("message") or ""
+        cp = None if is_stamp_commit(message) else parse_checkpoint(message)
+        if cp is not None and cp.plan_rel == plan_rel:
+            subject = (message.splitlines() or [""])[0].strip()
+            ids = (cp.row_ids - cp.gate_owed) & remaining
+            if ids and not subject.endswith(_PROCESS_HALF_SUFFIX):
+                landed[sha] = frozenset(ids)
+                remaining -= ids
+        parents = meta.get("parents") or []
+        sha = parents[0] if parents else None
+    return CheckpointWalk(landed, read, bool(remaining) and sha is not None and read >= cap)
+
+
 def _plan_state(worktree_root: Path, rel: str, sha: str, data: bytes) -> str:
     """``clean`` (tracked at ``sha``, blob identical to ``data``), ``untracked`` (absent at
     ``sha``) or ``dirty`` (differs, or the tree cannot answer)."""

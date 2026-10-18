@@ -224,23 +224,9 @@ def _terminal_coded(rows: Sequence, state=None) -> bool:
 def _drop_em_discharged(plan: Path, plan_text: str, rows: Sequence, open_ids: list) -> list:
     """`open_ids` less every row `read_spine` counts satisfied by an em-discharge entry. The evidence
     sidecar is read once, and only when an open row is eligible for discharge."""
-    from coordinator_core.ops.dispatch_emit.em_only_act import row_is_em_performed
-    from coordinator_core.ops.dispatch_emit.spine_read import _frontmatter_external_gates, em_discharge_eligible
+    from coordinator_core.ops.dispatch_emit.spine_read import drop_em_discharged
 
-    open_set = set(open_ids)
-    eligible = [
-        r for r in rows if isinstance(r, dict) and r.get("id") in open_set and row_is_em_performed(r)
-    ]
-    if not eligible:
-        return open_ids
-    gates = _frontmatter_external_gates(plan_text, open_set)
-    candidates = [r["id"] for r in eligible if em_discharge_eligible(r, tuple(gates.get(r["id"], ())))]
-    if not candidates:
-        return open_ids
-    from coordinator_core.ops.plan_tasks_mutate import read_em_discharges
-
-    discharged = read_em_discharges(plan)
-    return [i for i in open_ids if not (i in candidates and i in discharged)]
+    return drop_em_discharged(plan, plan_text, rows, open_ids)
 
 
 def _all_landed_halt(
