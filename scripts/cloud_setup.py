@@ -1284,6 +1284,20 @@ def _warm_discovery_record(engine_root: str) -> dict | None:
 def _pid_alive(pid: object) -> bool:
     if not isinstance(pid, int) or pid <= 0:
         return False
+    if os.name == "nt":
+        # Trap: on Windows os.kill(pid, 0) sends CTRL_C_EVENT, killing a console group.
+        import ctypes
+        import ctypes.wintypes
+
+        kernel32 = ctypes.windll.kernel32
+        handle = kernel32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+        if not handle:
+            return False
+        try:
+            code = ctypes.wintypes.DWORD()
+            return bool(kernel32.GetExitCodeProcess(handle, ctypes.byref(code))) and code.value == 259
+        finally:
+            kernel32.CloseHandle(handle)
     try:
         os.kill(pid, 0)
     except PermissionError:

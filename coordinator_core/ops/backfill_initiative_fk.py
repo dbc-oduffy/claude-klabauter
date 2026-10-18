@@ -160,6 +160,11 @@ def _lock_path() -> str:
 
 
 def _pid_is_live(pid: int) -> bool:
+    if os.name == "nt":
+        # Trap: on Windows os.kill(pid, 0) sends CTRL_C_EVENT, killing a console group.
+        from coordinator_core.session.core import pid_alive
+
+        return pid_alive(pid)
     try:
         os.kill(pid, 0)
     except PermissionError:

@@ -1132,14 +1132,19 @@ _dispatch_seq = itertools.count()
 
 
 def _mint_dispatch_key() -> str:
-    """A key unique to this call: `{pid}-{monotonic_ns}-{seq}`.
+    """A key unique to this call: `{pid}-{seq}-{monotonic_ns}`.
 
-    The sequence suffix keeps two calls distinct when a coarse monotonic clock
+    The sequence keeps two calls distinct when a coarse monotonic clock
     (Windows) returns the same tick twice; the server refuses a repeated key
-    with -32009, so a collision fails a legitimate second dispatch. The key is
-    opaque to the server and to `_poll_command_for`.
+    with -32009, so a collision fails a legitimate second dispatch.
+
+    TRAP: the nanosecond stamp must stay the LAST field. The server is not
+    blind to the key -- `dispatch_ack.mint_ns_of` reads the tail as the mint
+    time and refuses any key minted before engine boot, so a trailing
+    sequence number reads as "minted at ns 0" and every mutating call is
+    refused with -32009.
     """
-    return f"{os.getpid()}-{time.monotonic_ns()}-{next(_dispatch_seq)}"
+    return f"{os.getpid()}-{next(_dispatch_seq)}-{time.monotonic_ns()}"
 
 
 def _try_warm_dispatch_inner(
