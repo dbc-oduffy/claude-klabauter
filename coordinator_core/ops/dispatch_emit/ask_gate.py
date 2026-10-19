@@ -62,6 +62,7 @@ from coordinator_core.ops.dispatch_emit.sizing_fire import (
     collect_fire_refusals,
     effective_route,
     load_sizing,
+    load_sizing_effective,
     resolve_arm,
     resumable_plan,
 )
@@ -171,7 +172,7 @@ def _arm_verdict(
 
     repo_root = Path(repo_root)
     try:
-        sizing = load_sizing(repo_root, sizing_rel)
+        sizing = load_sizing_effective(repo_root, sizing_rel)
         arm = resolve_arm(sizing)
     except SizingFireRefused as exc:
         return _halt(HALT_REFUSAL, "; ".join(exc.fields))

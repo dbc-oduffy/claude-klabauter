@@ -29,7 +29,7 @@ def read_execute_result(result: WorkflowResult) -> dict[str, Any] | Halt:
 
     for dev in d.get("deviations") or []:
         if isinstance(dev, dict) and dev.get("kind") == "blocked":
-            why = str(dev.get("anchor") or "").strip() or "the executor gave no reason; read its report in the task output"
+            why = str(dev.get("reason") or "").strip() or str(dev.get("anchor") or "").strip() or "the executor gave no reason; read its report in the task output"
             return halt("executor-block", f"chunk {dev.get('chunk')} blocked: {why}")
 
     verdict = ((d.get("review") or {}).get("delivery") or {}).get("verdict")

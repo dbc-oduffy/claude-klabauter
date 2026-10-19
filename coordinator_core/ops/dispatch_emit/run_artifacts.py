@@ -18,6 +18,8 @@ from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Iterable, Mapping, Optional, Sequence
 
+from glob import escape as glob_escape
+
 from coordinator_core.session.record_homes import home_dir
 
 ARTIFACT_CLASSES = (
@@ -218,6 +220,9 @@ def candidate_paths(
             base = stem.with_suffix("").as_posix()
             add("evidence-sidecar", f"{base}.evidence.yaml")
             add("seam-sidecar", f"{base}.seam.yaml")
+            plan_dir = PurePosixPath(base).parent.as_posix()
+            for wave_rel in _glob_files(root, plan_dir, f"{glob_escape(PurePosixPath(base).name)}.wave-*.seam.yaml"):
+                add("seam-sidecar", wave_rel)
             add("handoff", f"{_HANDOFFS_REL}/{stem.stem}.md")
     add("delivery-note", f"docs/delivery/{run_id}.md")
 
@@ -287,6 +292,9 @@ def superseded_runs(
 
 _SIDECAR_SUFFIXES = (".evidence.yaml", ".seam.yaml")
 
+#: `<stem>.wave-<N>` tail of a per-wave seam sidecar once `.seam.yaml` is stripped.
+_WAVE_SEAM_TAIL = re.compile(r"\.wave-\d+$")
+
 
 def _sizing_of_artifact(root: Path, rel: str) -> Optional[str]:
     """The sizing a dirty run artifact traces to, from the artifact's own frontmatter or its
@@ -303,7 +311,7 @@ def _sizing_of_artifact(root: Path, rel: str) -> Optional[str]:
         plan_name = name
         for suffix in _SIDECAR_SUFFIXES:
             if name.endswith(suffix):
-                plan_name = name[: -len(suffix)] + ".md"
+                plan_name = _WAVE_SEAM_TAIL.sub("", name[: -len(suffix)]) + ".md"
                 break
         if plan_name.endswith(".md"):
             return _norm_rel(_scalar(_read_text(root, f"docs/plans/{plan_name}"), "sizing_object"))

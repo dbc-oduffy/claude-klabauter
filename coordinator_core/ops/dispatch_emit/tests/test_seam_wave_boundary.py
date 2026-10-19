@@ -386,6 +386,66 @@ def test_seam_sidecars_join_the_terminal_pathspec(tmp_path):
     assert terminal_commit._seam_sidecars(tmp_path, None, []) == []
 
 
+def test_terminal_pathspec_carries_prep_and_wave_sidecars_only_of_its_own_plan(tmp_path):
+    _seed_plan(tmp_path, "docs/plans/p1.md", True)
+    _seed_plan(tmp_path, "docs/plans/p10.md", False)
+    d = tmp_path / "docs/plans"
+    for name in ("p1.wave-2.seam.yaml", "p1.wave-1.seam.yaml", "p10.wave-1.seam.yaml"):
+        (d / name).write_text("schema: seam-check\n", encoding="utf-8")
+    assert terminal_commit._seam_sidecars(tmp_path, "docs/plans/p1.md", ["C1"]) == [
+        "docs/plans/p1.seam.yaml",
+        "docs/plans/p1.wave-1.seam.yaml",
+        "docs/plans/p1.wave-2.seam.yaml",
+    ]
+    _seed_plan(tmp_path, "docs/plans/p3.md", False)
+    (d / "p3.wave-1.seam.yaml").write_text("schema: seam-check\n", encoding="utf-8")
+    assert terminal_commit._seam_sidecars(tmp_path, "docs/plans/p3.md", ["C1"]) == ["docs/plans/p3.wave-1.seam.yaml"]
+
+
+def test_run_artifacts_enumerates_wave_sidecars_and_maps_them_to_the_plan_sizing(tmp_path):
+    from coordinator_core.ops.dispatch_emit import run_artifacts as ra
+
+    run = "ask-20261016T120000-cccccc"
+    plan, sizing = "docs/plans/2026-10-16-x.md", "state/sizings/2026-10-16-x.yaml"
+    files = {
+        f"state/warp/{run}/run.json": json.dumps({"sizing_rel": sizing}),
+        sizing: f"plan: '{plan}'\n",
+        plan: f"sizing_object: {sizing}\n",
+        "docs/plans/2026-10-16-x.seam.yaml": "x\n",
+        "docs/plans/2026-10-16-x.wave-1.seam.yaml": "x\n",
+        "docs/plans/2026-10-16-x.wave-2.seam.yaml": "x\n",
+        "docs/plans/2026-10-16-xy.wave-1.seam.yaml": "x\n",
+    }
+    for rel, text in files.items():
+        p = tmp_path / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(text, encoding="utf-8")
+    found = ra.candidate_paths(tmp_path, run).by_class["seam-sidecar"]
+    assert found == (
+        "docs/plans/2026-10-16-x.seam.yaml",
+        "docs/plans/2026-10-16-x.wave-1.seam.yaml",
+        "docs/plans/2026-10-16-x.wave-2.seam.yaml",
+    )
+    assert ra._sizing_of_artifact(tmp_path, "docs/plans/2026-10-16-x.wave-2.seam.yaml") == sizing
+    assert ra._sizing_of_artifact(tmp_path, "docs/plans/2026-10-16-x.seam.yaml") == sizing
+
+
+def test_archive_plans_treats_wave_sidecars_as_sidecars_of_their_plan(tmp_path):
+    from pathlib import Path
+
+    from coordinator_core.ops.fleet import archive_plans
+
+    d = tmp_path / "docs/plans"
+    d.mkdir(parents=True)
+    for name in ("2026-10-16-x.md", "2026-10-16-x.seam.yaml", "2026-10-16-x.wave-1.seam.yaml", "notes.txt"):
+        (d / name).write_text("x\n", encoding="utf-8")
+    live = [p.name for p in archive_plans.collect_live_plan_paths(tmp_path)]
+    assert live == ["2026-10-16-x.md", "2026-10-16-x.seam.yaml", "2026-10-16-x.wave-1.seam.yaml"]
+    wave = Path(live[2])
+    assert archive_plans._is_sidecar(wave) and not archive_plans._is_sidecar(Path(live[0]))
+    assert archive_plans._primary_for_sidecar(d / live[2]).name == "2026-10-16-x.md"
+
+
 @_NODE
 def test_a_single_plan_drift_keeps_the_held_row_out_and_a_clean_leg_dispatches_it(tmp_path):
     script = _compose(_single_plan_waves(), SeamInputs({}, False), ONE)

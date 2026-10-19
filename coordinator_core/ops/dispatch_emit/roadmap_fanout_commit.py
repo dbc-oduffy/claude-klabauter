@@ -87,6 +87,12 @@ def _parent_mode(worktree_root: Path, parent: object) -> tuple[Optional[str], Op
     return (mode if isinstance(mode, str) and mode else None), None
 
 
+def _run_mode(spec: dict) -> Optional[str]:
+    """The run's own `interaction_mode` the fan-out spec carries, else None."""
+    mode = spec.get(INTERACTION_MODE_PARAM)
+    return mode.strip() if isinstance(mode, str) and mode.strip() else None
+
+
 def _plan_entries(plans: list, waves: dict, reason: str, detail: Optional[str] = None) -> list:
     return [not_fired_entry(reason=reason, plan=p, wave=waves.get(p), detail=detail) for p in plans]
 
@@ -182,6 +188,7 @@ def _land_and_fan_out(worktree_root: Path, repo_root: Path, params: dict, run_id
     inherited, refusal = _parent_mode(worktree_root, spec.get(PARENT_SIZING_KEY))
     if refusal is not None:
         return refusal
+    inherited = inherited or _run_mode(spec)
     resolved, refusal = _resolve_plans(worktree_root, spec["plans"])
     if refusal is not None:
         return refusal

@@ -352,6 +352,7 @@ from coordinator_core.ops.dispatch_emit.gate_owed import (
     report_line,
 )
 from coordinator_core.ops.dispatch_emit.wake_digest import (
+    CHUNK_REASON_VAR,
     PLAN_HELD_VAR,
     completion_return_js,
     stage_schema_literal,
@@ -3918,7 +3919,8 @@ def _gitignored_prefix_narration(dropped: list[tuple[str, str]]) -> str:
 
 def _row_state_decls_js(row_plans: Mapping[str, str], carried_gate_owed: Sequence[str]) -> str:
     """The script-wide bindings ``_run_row_helper_js`` and the wake digest
-    (``RUNTIME_VARS`` plus ``PLAN_HELD_VAR`` and ``GATE_OWED_VAR``) read,
+    (``RUNTIME_VARS`` plus ``PLAN_HELD_VAR``, ``CHUNK_REASON_VAR`` and
+    ``GATE_OWED_VAR``) read,
     declared once. ``carried_gate_owed`` seeds the rows a prior run left
     owing their build gate.
 
@@ -3943,6 +3945,7 @@ def _row_state_decls_js(row_plans: Mapping[str, str], carried_gate_owed: Sequenc
             "  const _stoppedBy = [];",
             "  const _notStarted = [];",
             f"  const {PLAN_HELD_VAR} = {{}};",
+            f"  const {CHUNK_REASON_VAR} = {{}};",
             "  let _halted = null;",
             "  let _haltedByHold = false;",
             "  const _verifications = [];",
@@ -4031,6 +4034,29 @@ def _run_row_helper_js(
         "    const m = _GATE_OWED_RE.exec(t);\n"
         "    return m ? 'gate-blocker: ' + m[1].toLowerCase() + m[2] : null;\n"
         "  }\n"
+        # One line of why a row did not finish: the status line's own text, else
+        # the first other non-status line; '' when the reply has neither.
+        f"  const _REASON_STATUS_RE = {_REASON_STATUS_LINE_JS_RE};\n"
+        f"  const _REASON_SPLIT_RE = {_REASON_SPLIT_JS_RE};\n"
+        "  function _reasonOf(result) {\n"
+        "    const raw = typeof result === 'string';\n"
+        "    const t = raw ? result : JSON.stringify(result ?? null);\n"
+        "    const tail = raw ? /[\\s*_`]+$/ : /[\\s*_`\"}\\]\\\\]+$/;\n"
+        "    const lines = t.split(_REASON_SPLIT_RE).map((l) => l.trim()).filter((l) => l);\n"
+        "    const tidy = (s) => s.replace(/^[\\s*_`:>#-]+/, '').replace(tail, '')"
+        ".replace(/\\s+/g, ' ').trim();\n"
+        "    const at = lines.findIndex((l) => _REASON_STATUS_RE.test(l));\n"
+        "    if (at >= 0) {\n"
+        "      const own = tidy(lines[at].replace(_REASON_STATUS_RE, ''));\n"
+        "      if (own) return own.slice(0, 1000);\n"
+        "    }\n"
+        "    for (const l of lines) {\n"
+        "      if (_REASON_STATUS_RE.test(l) || _DEP_ANY_STATUS_RE.test(l)) continue;\n"
+        "      const o = tidy(l);\n"
+        "      if (o) return o.slice(0, 1000);\n"
+        "    }\n"
+        "    return '';\n"
+        "  }\n"
         "  function _heldDependentsReason() {\n"
         "    const ids = Object.keys(_heldBy);\n"
         "    if (!ids.length) return null;\n"
@@ -4076,11 +4102,13 @@ def _run_row_helper_js(
         )
         + "    if (_halted) {\n"
         "      _notStarted.push(id);\n"
+        f"      {CHUNK_REASON_VAR}[id] = 'run halted by stop rule (' + _halted + ')';\n"
         "      return 'BLOCKED: run halted by stop rule (' + _halted + ')';\n"
         "    }\n"
         "    if (plan && _haltedPlans.has(plan)) {\n"
         "      _notStarted.push(id);\n"
         "      _planHeld[id] = 'plan halted by ' + _haltedPlanReasons.get(plan);\n"
+        f"      {CHUNK_REASON_VAR}[id] = _planHeld[id];\n"
         "      return 'BLOCKED: plan halted by stop rule in ' + "
         "_haltedPlanReasons.get(plan);\n"
         "    }\n"
@@ -4094,6 +4122,7 @@ def _run_row_helper_js(
         "      _notStarted.push(id);\n"
         "      _blockedChunks.push(id);\n"
         "      _heldBy[id] = _blocker;\n"
+        f"      {CHUNK_REASON_VAR}[id] = 'held: dependency ' + _blocker + ' did not finish DONE';\n"
         "      return 'BLOCKED: held, dependency ' + _blocker + ' did not finish DONE';\n"
         "    }\n"
         "    let result;\n"
@@ -4108,6 +4137,7 @@ def _run_row_helper_js(
         "      const _owed = _gateOwedOf(_text);\n"
         f"      if (_owed) {{ {GATE_OWED_VAR}[id] = _owed; }}\n"
         "      else {\n"
+        f"        {CHUNK_REASON_VAR}[id] = _reasonOf(result);\n"
         f"        if ({_BLOCKED_STATUS_JS_RE}.test(_text)) _blockedChunks.push(id);\n"
         "        _incompleteChunks.push(id);\n"
         "        incomplete = true;\n"
@@ -4115,6 +4145,7 @@ def _run_row_helper_js(
         "    } else if (!" + f"{_ANY_STATUS_JS_RE}.test(_text)) {{\n"
         "      _incompleteChunks.push(id);\n"
         "      _unansweredBriefs.push(id);\n"
+        f"      {CHUNK_REASON_VAR}[id] = 'no contract status line in the executor reply';\n"
         "      incomplete = true;\n"
         "    }\n"
         f"    if ({_STOP_RULE_JS_RE}.test(_text) && !{_ROW_LOCAL_BLOCK_JS_RE}.test(_text)) {{\n"
@@ -5900,6 +5931,18 @@ _BLOCKED_STATUS_JS_RE = (
     rf'|{_LINE_START_JS}{_STATUS_FIELD_JS}BLOCKED\b'
     r'|<exit-status>BLOCKED<\/exit-status>/'
 )
+
+#: One non-DONE status line, tested and stripped per line by ``_reasonOf``:
+#: the same forms as ``_NON_DONE_STATUS_JS_RE`` with the line-start piece
+#: reduced to the start of a single already-split line.
+_REASON_STATUS_LINE_JS_RE = (
+    r'/^"?\s*[*_`]{0,2}(?:PARTIAL|BLOCKED)[*_`]{0,2}:'
+    rf'|^"?{_STATUS_FIELD_JS}(?:PARTIAL|BLOCKED)\b'
+    r'|<exit-status>(?:PARTIAL|BLOCKED)<\/exit-status>/'
+)
+
+#: Line break in a raw reply (real, CRLF) or a JSON-stringified one (escaped).
+_REASON_SPLIT_JS_RE = r'/\r?\n|\\r\\n|\\n|\r/'
 
 #: Any contract status, DONE included, leading the reply or any line of it.
 #: A reply matching none of them did not answer its brief at all: an agent

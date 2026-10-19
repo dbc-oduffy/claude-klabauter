@@ -195,6 +195,21 @@ def test_a_replan_that_added_rows_but_returned_no_manifest_halts(monkeypatch):
     assert out["result"]["halted_by"]["reason"].startswith("no folded stage manifest")
 
 
+def test_the_no_folded_manifest_halt_names_the_refire_as_its_resume_route(monkeypatch):
+    out = _run(_script(monkeypatch), gate=_OWES_GATE, replies={
+        "ledger-replan": {"plan_rel": _PLAN, "added_rows": ["R9"], "manifest": None},
+    })
+    halted = out["result"]["halted_by"]
+    assert halted["reason"].startswith("no folded stage manifest")
+    assert "Refire: " in halted["next_action"] and _SIZING in halted["next_action"]
+    assert "coordinator:engine-ask" in halted["next_action"]
+
+
+def test_a_non_manifest_refusal_carries_no_resume_next_action(monkeypatch):
+    out = _run(_script(monkeypatch), manifest={"error": "boom"})
+    assert "next_action" not in out["result"]["halted_by"]
+
+
 def test_the_stage_op_runs_against_the_resume_ledger_plan_in_the_script_text(monkeypatch):
     script = _script(monkeypatch)
     assert f"_gate.{ask_compose.RESUME_LEDGER_KEY}.plan" in script[script.index("const _resumeLedger = "):]

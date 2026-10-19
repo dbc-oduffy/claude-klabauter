@@ -102,7 +102,7 @@ _HARNESS = r"""
 (async () => {
   const _incompleteChunks = [], _blockedChunks = [], _unansweredBriefs = [], _stoppedBy = [],
     _notStarted = [], _verifications = [], _landed = {};
-  const _gateOwed = {};
+  const _gateOwed = {}, _chunkReason = {};
   let _halted = null;
   const _rowPlan = {};
   const _haltedPlans = new Set(), _haltedPlanReasons = new Map();

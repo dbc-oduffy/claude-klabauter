@@ -35,6 +35,8 @@ _SCHEMA_PATH = Path(__file__).resolve().parent.parent.parent / "contract" / "wak
 HELD_VAR = "_heldRows"
 #: {row id: halt reason} for rows their plan's halt kept from starting.
 PLAN_HELD_VAR = "_planHeld"
+#: {chunk id: one-line reason} the row helper records for each non-done row.
+CHUNK_REASON_VAR = "_chunkReason"
 
 #: Emitted only by a script composed with a seam leg: `[{wave, class, plans, path}]`, one per blocking finding; `failed` replaces `class` for a leg that returned no verdict.
 SEAM_DRIFT_VAR = "_seamDrift"
@@ -535,7 +537,8 @@ def completion_return_js(
     drift from the contract it renders. Expressions reference only `RUNTIME_VARS`,
     stage-result bindings the caller passes in (`test_var`, `verification_var`,
     `falsifier_var`, `review_vars`), and emitter-computed literals (`chunks`, `width`,
-    `plan_path`, ...) — never an executor's own free-text reply.
+    `plan_path`, ...) — never an executor's own free-text reply, except the one-line
+    reason the row helper extracts into `_chunkReason`, capped here to the schema.
 
     `predispatch` (non-None is the only signal; its content is unread) is passed only by a script that composed
     the falsifier-integrity phase: its digest block, the `routed_out` deviation
@@ -675,6 +678,10 @@ def completion_return_js(
             f"({HELD_VAR}[id] !== undefined ? _cap({HELD_VAR}[id], "
             f"{_maxlength(schema, 'deviations[].anchor')}) : {deviation_anchor_expr})"
         )
+    deviation_reason_expr = (
+        f"_cap(({CHUNK_REASON_VAR}[id] ?? '') || {deviation_anchor_expr} || '', "
+        f"{_maxlength(schema, 'deviations[].reason')})"
+    )
     reviews_var = RUNTIME_VARS[9]
 
     table = {
@@ -790,6 +797,7 @@ def completion_return_js(
         "deviations[].kind": deviation_kind_expr,
         # Schema types anchor as a string: no anchor is '', never null.
         "deviations[].anchor": deviation_anchor_expr,
+        "deviations[].reason": deviation_reason_expr,
         "run_base_sha": RUNTIME_VARS[10] if run_base_runtime else _js_lit(run_base_sha),
         "width.rows": _js_lit(width["rows"]),
         "width.max_concurrent_rows": _js_lit(width["max_concurrent_rows"]),
@@ -907,11 +915,12 @@ def completion_return_js(
     lines.append(f"    integration_sidecar: {table['review.integration_sidecar']},")
     lines.append("  },")
     lines.append(
-        "  deviations: %s.map(id => ({ chunk: id, kind: %s, anchor: %s })),"
+        "  deviations: %s.map(id => ({ chunk: id, kind: %s, anchor: %s, reason: %s })),"
         % (
             deviation_ids_expr,
             table["deviations[].kind"],
             table["deviations[].anchor"],
+            table["deviations[].reason"],
         )
     )
     lines.append(f"  run_base_sha: {table['run_base_sha']},")

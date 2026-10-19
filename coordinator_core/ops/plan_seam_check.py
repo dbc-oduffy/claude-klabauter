@@ -7,7 +7,8 @@ unpromised-export, writes-collision, drifted-contract) and a verdict; with ``uni
 it adds a sixth, ``missing-seam``, that never blocks and never moves the verdict. The read/write
 pair mirrors ``plan.prep_gate`` / ``plan.stamp_prepped``: ``plan.seam_check`` evaluates
 and writes nothing; ``plan.seam_record`` evaluates inside the write so the reply and the
-files describe one tree, writes one ``docs/plans/<plan-stem>.seam.yaml`` per plan,
+files describe one tree, writes one ``docs/plans/<plan-stem>.seam.yaml`` per plan
+(``<plan-stem>.wave-<N>.seam.yaml`` at wave-boundary, so the prep record is never overwritten),
 atomically, and never commits.
 
 Wire params (both ops):
@@ -1019,8 +1020,9 @@ def _record_handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     by_plan: Dict[str, list] = {}
     for f in reply["findings"]:
         by_plan.setdefault(f["plan"], []).append(f)
+    suffix = f".wave-{reply['wave']}.seam.yaml" if reply["phase"] == "wave-boundary" else ".seam.yaml"
     for rel in reply["set"]:
-        target = (root / rel).with_name(Path(rel).stem + ".seam.yaml")
+        target = (root / rel).with_name(Path(rel).stem + suffix)
         body = yaml.dump(_sidecar(reply, rel, by_plan.get(rel, [])), Dumper=_DUMPER, sort_keys=False, allow_unicode=True)
         atomic_write_bytes(target, body.encode("utf-8"))
         written.append(target.resolve().relative_to(root.resolve()).as_posix())

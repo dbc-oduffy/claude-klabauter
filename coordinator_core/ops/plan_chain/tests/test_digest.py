@@ -51,6 +51,22 @@ def test_completed_chain():
     assert d["counts"]["reviewers"] == 2 and d["counts"]["findings_applied"] == 3
 
 
+def test_execute_deviation_reason_renders_in_line_and_absence_leaves_it_unchanged():
+    state = ChainState(stages_run=list(STAGES), commit={"sha": "abc", "receipt_path": "r.json"}, plan_path="p.md")
+    ex = {
+        "criterion": {"status": "met", "observation": "ok", "sidecar": None},
+        "deviations": [
+            {"chunk": "C1", "kind": "blocked", "anchor": "", "reason": "no pnpm on host"},
+            {"chunk": "C2", "kind": "partial", "anchor": "", "reason": ""},
+            {"chunk": "C3", "kind": "partial", "anchor": ""},
+        ],
+    }
+    d = D.assemble_final_digest(state, _manifest(), plan_digest=None, execute_digest=ex)
+    D.validate_final_digest(d)
+    lines = [x["line"] for x in d["deviations"]]
+    assert lines == ["C1: blocked — no pnpm on host", "C2: partial", "C3: partial"]
+
+
 def test_a_demoted_criterion_reason_reaches_the_final_digest_capped():
     state = ChainState(stages_run=list(STAGES), commit={"sha": "abc", "receipt_path": "r.json"}, plan_path="p.md")
     ex = {"criterion": {"status": "indeterminate", "observation": "o", "sidecar": None, "reason": "r" * 500}}

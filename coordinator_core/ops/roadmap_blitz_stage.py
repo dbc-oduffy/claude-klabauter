@@ -12,6 +12,7 @@ Wire params:
     edges_path   (str, optional) — an edges file (``A <- B`` lines) that overrides
                                     the edges derived from ``clusters.md``.
     branch       (str, optional) — branch recorded on each stub (default "main").
+    interaction_mode (str, optional) — the run's mode, recorded on each sizing minted.
     commit       (bool, optional) — commit the scaffolded stubs, then the frozen gate report,
                                     through ``ceremony.commit_v2``'s handler with explicit
                                     paths (default true). False leaves both uncommitted and
@@ -30,6 +31,8 @@ Reply fields:
      "roadmap_id", "edge_source",
      "approval_record": {path, recorded_at} | null, "overview_stamped": bool,
      "declined": bool (true means nothing was staged),
+     "held": [{stub_id, path, reason}] — stubs an APM hold (plan_blitz_hold_reason without a
+       clearance) keeps out of every wave; each also carries held/hold_reason in "stubs",
      "waves": [{index, batons: [{id, path, title, sized, planPath, executionOpen, tshirt,
        route, sizingObject}]}] — copied from the frozen plan_gate report in order, never
        regrouped; empty when the gate report was deferred}
@@ -121,6 +124,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         "edges_path": _optional_str(params, "edges_path"),
         "branch": _optional_str(params, "branch") or "main",
         "commit": _commit_flag(params),
+        "interaction_mode": _optional_str(params, "interaction_mode"),
     }
     approval = _approval(params.get("approval"))
     if approval is not None:

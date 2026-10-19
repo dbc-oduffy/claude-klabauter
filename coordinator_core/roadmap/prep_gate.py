@@ -36,6 +36,11 @@ dependency falls on. The four report classes are a routing aid, not four bars.
   CI_RETIRED     No schedulable row's ``writes:``/``writes_under:`` names a path
                  under ``.github/workflows/`` — GitHub Actions is retired
                  fleet-wide.
+  EXECUTOR_COMMIT No schedulable executor-performed row's ``body`` code span runs
+                 a commit or a deploy that needs a committed sha. Executors never
+                 commit; the fix is to split at an EM-owned commit boundary (the
+                 executor row writes, a ``performer: em`` row depending on it
+                 commits, then deploys). Body code spans only, never prose.
   PRIME_EXIT     ``prime_exit_criterion`` with a non-empty ``statement`` and a
                  non-empty ``derived_from``, at EVERY size — not only M/L/XL.
   REGISTER       A plan carrying ``register_claims`` names a sizing that carries
@@ -157,7 +162,9 @@ ENGINE_ERROR = "ENGINE-ERROR"
 #: Report-class order. Fixed, because the refusal message enumerates in it and a
 #: message whose line order varies per plan is harder to diff than one that does
 #: not.
-CLASS_ORDER = ("SPINE", "CENSUS", "EXTERNAL_DEPS", "PRIME_EXIT", "CI_RETIRED", "SCHEMA", "REGISTER")
+CLASS_ORDER = (
+    "SPINE", "CENSUS", "EXTERNAL_DEPS", "PRIME_EXIT", "CI_RETIRED", "EXECUTOR_COMMIT", "SCHEMA", "REGISTER",
+)
 
 #: ``external_gate[].requires`` — the discriminant the three-way split turns on.
 #: ``condition:`` is reader-facing prose the schema itself says no consumer parses
@@ -1238,6 +1245,46 @@ def _ci_retired(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     )
 
 
+EXECUTOR_COMMIT_FIX = (
+    "executors never commit and a deploy needs a committed sha. Fix: split at an "
+    "EM-owned commit boundary: the executor row writes; a performer: em row "
+    "depending on it commits, then deploys."
+)
+
+
+def _executor_commit(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Refuse a plan whose executor-performed rows tell the executor to commit or deploy.
+
+    Reads each schedulable row's ``body`` code spans through
+    ``em_only_act.executor_commit_act`` (prose never flags). Operator and
+    memo-send rows are the EM's already and are skipped.
+    """
+    from coordinator_core.ops.dispatch_emit.em_only_act import executor_commit_act
+    from coordinator_core.ops.dispatch_emit.spine_read import _is_memo_send_row, _is_operator_row
+
+    hits: List[str] = []
+    ids: List[str] = []
+    for row in rows:
+        if not isinstance(row, dict) or _row_is_unschedulable(row):
+            continue
+        if _is_operator_row(row) or _is_memo_send_row(row):
+            continue
+        span = executor_commit_act(row)
+        if span is None:
+            continue
+        row_id = str(row.get("id") or "<row with no id>")
+        ids.append(row_id)
+        hits.append(f"{row_id} (`{span[:60]}`)")
+    if not hits:
+        return _pass("no executor row commits or deploys")
+    return _defect(
+        "executor-commit-row",
+        f"rows an executor is told to commit or deploy in: {', '.join(hits)[:260]} — "
+        f"{EXECUTOR_COMMIT_FIX}",
+        withheld=sorted(set(ids)),
+    )
+
+
 def _sibling_plan_edges(
     row: Dict[str, Any], row_id: str, repo_root: Optional[Path], cache: dict
 ) -> "tuple[frozenset, List[str], List[str]]":
@@ -2125,6 +2172,7 @@ def evaluate_plan(
             ),
             "PRIME_EXIT": prime_exit,
             "CI_RETIRED": _ci_retired(raw_spine_rows(text)),
+            "EXECUTOR_COMMIT": _executor_commit(raw_spine_rows(text)),
             "SCHEMA": _schema(fm, prime_exit, parse_error),
             "REGISTER": _register(fm, repo_root),
         }
@@ -2262,6 +2310,8 @@ def _authoring_fix_lines(failing_classes: "Sequence[str] | set") -> List[str]:
             "  fix: declare `prime_exit_criterion.statement` and `.derived_from` "
             "(a sizing object or goal KR, never a self-declaration)"
         )
+    if "EXECUTOR_COMMIT" in failing_classes:
+        lines.append(f"  fix: {EXECUTOR_COMMIT_FIX}")
     if "REGISTER" in failing_classes:
         lines.append(_REGISTER_FIX)
     return lines
@@ -2378,7 +2428,9 @@ def refusal_message(
             k != "CENSUS" and v["status"] != "PASS" for k, v in classes.items()
         )) and not (register_failing and all(
             k == "REGISTER" or v["status"] == "PASS" for k, v in classes.items()
-        )):
+        )) and not all(
+            k == "EXECUTOR_COMMIT" or v["status"] == "PASS" for k, v in classes.items()
+        ):
             lines.append(_upgrade_fix_line())
     return "\n".join(lines)
 

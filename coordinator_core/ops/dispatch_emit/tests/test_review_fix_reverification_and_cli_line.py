@@ -91,7 +91,7 @@ def _digest(tmp_path, *, inline_note: str = "", params_extra: str = "") -> dict:
     harness = tmp_path / "cli.js"
     harness.write_text(
         "let _halted = null, _incompleteChunks = [], _unansweredBriefs = [], _notStarted = [], _planHeld = {}, "
-        "_blockedChunks = [], _gateOwed = {}, _stoppedBy = [];\n"
+        "_chunkReason = {}, _blockedChunks = [], _gateOwed = {}, _stoppedBy = [];\n"
         "let _testResult = {status:'pass', tests_run:5, tests_failed:0, build_clean:true, "
         "summary:'ok', sidecar_path:'s.md'};\n"
         "let _verifications = [{chunk:'C1', status:'pass'}];\n"
@@ -171,7 +171,7 @@ def test_a_digest_with_no_next_action_params_has_a_null_line(tmp_path):
     harness = tmp_path / "null.js"
     harness.write_text(
         "let _halted = null, _incompleteChunks = [], _unansweredBriefs = [], _notStarted = [], _planHeld = {}, "
-        "_blockedChunks = [], _gateOwed = {}, _stoppedBy = [], _verifications = [], _testResult = null, _falsifier = null;\n"
+        "_chunkReason = {}, _blockedChunks = [], _gateOwed = {}, _stoppedBy = [], _verifications = [], _testResult = null, _falsifier = null;\n"
         "console.log(JSON.stringify((function(){\n" + js + "\n})()));\n",
         encoding="utf-8",
     )

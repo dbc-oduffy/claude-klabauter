@@ -129,6 +129,7 @@ Spec: docs/plans/2026-09-27-emitter-dag-terminal-commit-wake-digest.md § D3
 from __future__ import annotations
 
 import ast
+import glob as _glob
 import json
 import os
 import re
@@ -826,7 +827,8 @@ def _source_rows_by_plan(
     return out
 
 
-#: Per-plan seam-check sidecar suffix; `plan.seam_record` writes `<plan-stem>` + this beside the plan.
+#: Per-plan seam-check sidecar suffix; `plan.seam_record` writes `<plan-stem>` + this beside the plan
+#: (prep phase) or `<plan-stem>.wave-<N>` + this (wave-boundary phase).
 _SEAM_SIDECAR_SUFFIX = ".seam.yaml"
 
 #: Mirrors `plan_tasks_mutate.EVIDENCE_SIDECAR_SUFFIX` (pinned by test): importing that module costs ~25ms.
@@ -841,9 +843,18 @@ def _seam_sidecars(worktree_root: Path, plan_path: Optional[str], chunk_ids: lis
     plans = {plan_path, *_source_rows_by_plan(worktree_root, plan_path, chunk_ids)}
     found = []
     for plan in sorted(plans):
-        rel = str(PurePosixPath(plan).with_name(PurePosixPath(plan).stem + _SEAM_SIDECAR_SUFFIX))
-        if (worktree_root / rel).is_file():
-            found.append(rel)
+        pure = PurePosixPath(plan)
+        prep = str(pure.with_name(pure.stem + _SEAM_SIDECAR_SUFFIX))
+        if (worktree_root / prep).is_file():
+            found.append(prep)
+        try:
+            waves = sorted(
+                p.name for p in (worktree_root / pure.parent).glob(f"{_glob.escape(pure.stem)}.wave-*{_SEAM_SIDECAR_SUFFIX}")
+                if p.is_file()
+            )
+        except OSError:
+            waves = []
+        found.extend(str(pure.with_name(name)) for name in waves)
     return found
 
 
@@ -3650,8 +3661,8 @@ def _resume_hint(stranded: dict, scope: dict, params: dict) -> str:
     command = f"emit-dispatch-workflow --plan {plan} --only-incomplete {run_text}"
     if stranded:
         return (
-            f"stranded files for {', '.join(sorted(stranded))}: commit or discard them, "
-            f"then re-emit with {command}"
+            f"stranded files for {', '.join(sorted(stranded))}: keep them in tree, "
+            f"re-emit with {command}"
         )
     return f"re-emit the incomplete rows with {command}"
 

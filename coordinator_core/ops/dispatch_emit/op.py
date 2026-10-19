@@ -2970,7 +2970,7 @@ def _gate_sizing_at_emit(
         ARM_ROADMAP,
         SizingFireRefused,
         SizingHandBack,
-        load_sizing,
+        load_sizing_effective,
         resolve_arm,
     )
     from coordinator_core.ops.sizing_acceptance import APM_ADMISSIBLE_MODES, sizing_acceptance_skipped
@@ -2986,7 +2986,7 @@ def _gate_sizing_at_emit(
         )
     except CrossRepoWriteError as exc:
         raise SizingFireRefused([str(exc)]) from exc
-    sizing = load_sizing(root, sizing_rel)
+    sizing = load_sizing_effective(root, sizing_rel)
     had_baton = bool(sizing.get("baton"))
     # An XS footprint is authored at run time when --writes is absent; the gate's
     # "XS needs writes" check re-runs in-run against the seeded set.

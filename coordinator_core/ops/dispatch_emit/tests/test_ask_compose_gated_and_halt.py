@@ -7,7 +7,11 @@ import re
 from coordinator_core.ops.dispatch_emit import ask_compose, emit
 from coordinator_core.ops.dispatch_emit.ask_compose import compose_ask_script
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
-from coordinator_core.ops.dispatch_emit.wake_digest import PLAN_HELD_VAR, RUNTIME_VARS
+from coordinator_core.ops.dispatch_emit.wake_digest import (
+    CHUNK_REASON_VAR,
+    PLAN_HELD_VAR,
+    RUNTIME_VARS,
+)
 
 _BLITZ_FN = "  async function planBlitz(args) {\n    return { ready: [] };\n  }"
 _GUARD = "(_manifest && !_manifest.error)"
@@ -84,7 +88,7 @@ def test_return_object_names_owed(monkeypatch):
 def test_every_digest_var_read_is_declared(monkeypatch):
     script = _script(monkeypatch)
 
-    for name in (*RUNTIME_VARS, PLAN_HELD_VAR):
+    for name in (*RUNTIME_VARS, PLAN_HELD_VAR, CHUNK_REASON_VAR):
         if re.search(rf"(?<![\w$]){re.escape(name)}(?![\w$])", script):
             assert re.search(rf"\b(const|let) {re.escape(name)}\b", script), name
 

@@ -416,11 +416,13 @@ def _fold_report(stubs: List[Dict[str, Any]], fold: Dict[str, Any]) -> Dict[str,
 
 
 def _write_sizing(
-    repo_root: Path, doc_new: Any, title: str, stub_id: str, deliverable_id: str, unit: Dict[str, Any], source: str
+    repo_root: Path, doc_new: Any, title: str, stub_id: str, deliverable_id: str, unit: Dict[str, Any], source: str,
+    interaction_mode: Optional[str] = None,
 ) -> str:
     """Mint this stub's own sizing object from its fold result and return its repo-relative path.
     The sizing carries the stub's deliverable_id; premise provenance is `read` (the roadmap's
-    own cluster text), its evidence naming the clusters read."""
+    own cluster text), its evidence naming the clusters read. A given `interaction_mode` is the run's
+    and is recorded on the sizing."""
     from coordinator_core.sizing_assemble import route, write_back
 
     decision = route(estimate={"tshirt": unit["loe"]}, premise_provenance="read")
@@ -438,7 +440,10 @@ def _write_sizing(
     target = repo_root / rel
     target.parent.mkdir(parents=True, exist_ok=True)
     create_exclusive(target, text if text.endswith("\n") else text + "\n")
-    write_back(repo_root, rel, decision, premise_provenance="read", premise_evidence=evidence)
+    write_back(
+        repo_root, rel, decision, premise_provenance="read", premise_evidence=evidence,
+        interaction_mode=interaction_mode,
+    )
     return rel
 
 
@@ -544,15 +549,46 @@ def _wave_baton_row(row: Dict[str, Any], baton_id: str) -> Dict[str, Any]:
     }
 
 
+_HOLD_REASON_RE = re.compile(r"^plan_blitz_hold_reason:[ \t]*(.*?)[ \t]*$", re.MULTILINE)
+
+
+def _hold_reason(repo_root: Path, rel: str) -> Optional[str]:
+    """The ``plan_blitz_hold_reason`` text of a baton the gate already classified held."""
+    try:
+        head = (repo_root / rel).read_text(encoding="utf-8", errors="replace")[:4000]
+    except OSError:
+        return None
+    found = _HOLD_REASON_RE.search(head)
+    return found.group(1).strip("'\"") or None if found else None
+
+
+def _held_of(repo_root: Path, report: Optional[Dict[str, Any]], stubs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Staged stubs the gate report lists under ``held`` (gate_v2's classification, not a second
+    detector). Marks each stub row ``held`` with its ``hold_reason``; a held baton stays staged."""
+    held_paths = set((report or {}).get("held") or [])
+    held: List[Dict[str, Any]] = []
+    for stub in stubs:
+        stub["held"] = stub.get("path") in held_paths
+        if stub["held"]:
+            stub["hold_reason"] = _hold_reason(repo_root, stub["path"])
+            held.append({"stub_id": stub["stub_id"], "path": stub["path"], "reason": stub["hold_reason"]})
+    return held
+
+
 def _waves_of(report: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """The report's own waves, in order, each baton id resolved to its report row; none when the
-    report was deferred."""
+    """The report's own waves, in order, each baton id resolved to its report row, held batons
+    dropped; none when the report was deferred."""
     if not report:
         return []
+    held_paths = set(report.get("held") or [])
     rows = {b.get("id"): b for b in report.get("batons") or []}
+    waves = [
+        [bid for bid in wave if rows.get(bid, {}).get("path") not in held_paths]
+        for wave in report.get("waves") or []
+    ]
     return [
         {"index": i, "batons": [_wave_baton_row(rows.get(bid, {}), bid) for bid in wave]}
-        for i, wave in enumerate(report.get("waves") or [])
+        for i, wave in enumerate(waves)
     ]
 
 
@@ -598,11 +634,15 @@ def stage_roadmap(
     commit: bool = True,
     approval: Optional[Dict[str, Any]] = None,
     trail_dir: Optional[str] = None,
+    interaction_mode: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Stage the roadmap at ``roadmap`` (its directory or any file in it).
     Returns ``{gate_report_path, stubs, numbering, folds, audit, commits, waves, ...}``.
     With ``approval`` the verdict is recorded under ``trail_dir`` first; a declined verdict stages
-    nothing, an approved one stamps OVERVIEW.md and commits the roadmap directory with the stubs."""
+    nothing, an approved one stamps OVERVIEW.md and commits the roadmap directory with the stubs.
+    ``held`` lists stubs the gate report holds (``{stub_id, path, reason}``); they stay in ``stubs``
+    flagged ``held`` and appear in no wave. ``interaction_mode``, the run's, is written onto each
+    sizing minted here."""
     repo_root = Path(repo_root)
     roadmap_path = Path(roadmap)
     if not roadmap_path.is_absolute():
@@ -744,6 +784,7 @@ def stage_roadmap(
         sizing_rel = _write_sizing(
             repo_root, doc_new, title, stub_id, deliverable_id, unit,
             f"{run_dir.relative_to(repo_root).as_posix()}/clusters.md",
+            interaction_mode,
         )
         content = doc_new._scaffold_roadmap_baton(
             title=title,
@@ -831,6 +872,7 @@ def stage_roadmap(
         **frozen,
         **approval_fields,
         "waves": _waves_of(gate_report),
+        "held": _held_of(repo_root, gate_report, stubs),
         "stubs": stubs,
         "numbering": numbering,
         "cluster_numbering": cluster_numbering,

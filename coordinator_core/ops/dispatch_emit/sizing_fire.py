@@ -88,6 +88,57 @@ def load_sizing(repo_root: Path, sizing_rel: str) -> dict:
     return doc
 
 
+def inherited_interaction_mode(sizing: Mapping, repo_root: Path) -> str | None:
+    """The `interaction_mode` a sibling of this sizing's fan-out records, else None.
+
+    Reads the sizing's `em_analysis.ask_parent` marker, the fan-out's parent record (the run's
+    tracked copy, else the runtime one), then each sibling sizing in submission order until one
+    records a mode. Reads only; a missing or malformed marker, record or sibling yields None.
+    """
+    import json
+
+    from coordinator_core.ops.dispatch_emit import ask_fanout_contract as fc
+
+    analysis = sizing.get("em_analysis")
+    parsed = fc.parse_ask_parent(analysis.get("ask_parent") if isinstance(analysis, Mapping) else None)
+    if parsed is None:
+        return None
+    parent_id, run_id = parsed
+    root = Path(repo_root)
+    record = None
+    for rel in (fc.run_parent_copy_rel(run_id), fc.parent_record_rel(parent_id)):
+        try:
+            record = fc.ParentRecord.from_json(json.loads((root / rel).read_text(encoding="utf-8")))
+            break
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+    if record is None:
+        return None
+    for run in record.runs:
+        if run.run_id == run_id or not run.slice_sizing:
+            continue
+        try:
+            mode = load_sizing(root, run.slice_sizing).get("interaction_mode")
+        except SizingFireRefused:
+            continue
+        if isinstance(mode, str) and mode.strip():
+            return mode.strip()
+    return None
+
+
+def load_sizing_effective(repo_root: Path, sizing_rel: str) -> dict:
+    """`load_sizing`, with a missing `interaction_mode` filled in memory from `inherited_interaction_mode`.
+
+    The one seam for a fire's readers: the file is never backfilled and a recorded mode is never overridden.
+    """
+    doc = load_sizing(repo_root, sizing_rel)
+    if not doc.get("interaction_mode"):
+        inherited = inherited_interaction_mode(doc, Path(repo_root))
+        if inherited:
+            doc = {**doc, "interaction_mode": inherited}
+    return doc
+
+
 def effective_route(sizing: Mapping) -> object:
     """`route`, except a `pm-decision` whose recorded `xl_exit` resolves it: the plan-resolving
     exit (plan_gate's constant) to `plan`, `roadmap` to `roadmap`. An unresolved one stays."""

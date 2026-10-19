@@ -167,7 +167,7 @@ def test_blocked_chunks_land_in_their_own_array_and_partial_stays_incomplete():
     script = compose_script(waves, name="wf", description="b", **REVIEW_KW)
     assert "const _blockedChunks = [];" in script
     assert (
-        f"if ({_BLOCKED_STATUS_JS_RE}.test(_text)) _blockedChunks.push(id);\n        _incompleteChunks.push(id);"
+        f"_chunkReason[id] = _reasonOf(result);\n        if ({_BLOCKED_STATUS_JS_RE}.test(_text)) _blockedChunks.push(id);\n        _incompleteChunks.push(id);"
         in script
     )
 

@@ -131,8 +131,8 @@ def test_blocked_row_reason_is_incomplete_unreported(repo):
 def test_stranded_row_reply_names_the_next_command(repo):
     out = _call(repo, _run(repo, "BLOCKED: no runtime\n"))
     assert out["next"] == (
-        "stranded files for C1: commit or discard them, "
-        "then re-emit with emit-dispatch-workflow --plan <plan> --only-incomplete <run-output-file>"
+        "stranded files for C1: keep them in tree, "
+        "re-emit with emit-dispatch-workflow --plan <plan> --only-incomplete <run-output-file>"
     )
 
 
@@ -143,7 +143,7 @@ def test_resume_hint_names_the_plan_and_every_stranded_row():
         {"plan_path": "docs/plans/p.md", "task_output_path": "out/task.output"},
     )
     assert hint == (
-        "stranded files for P1, X1: commit or discard them, then re-emit with "
+        "stranded files for P1, X1: keep them in tree, re-emit with "
         "emit-dispatch-workflow --plan docs/plans/p.md --only-incomplete out/task.output"
     )
 

@@ -57,6 +57,16 @@ def test_halt_reasons_distinguish_usage_limit_and_block():
     assert "C2" in out.reason
 
 
+def test_block_halt_prefers_reason_then_anchor_then_fallback():
+    def why(dev):
+        return er.read_execute_result(_wr(_digest(deviations=[dict(chunk="C2", kind="blocked", **dev)]))).reason
+
+    assert "no pnpm on host" in why({"anchor": "loc", "reason": " no pnpm on host "})
+    assert "loc" in why({"anchor": "loc"})
+    assert "loc" in why({"anchor": "loc", "reason": ""})
+    assert "the executor gave no reason" in why({"anchor": ""})
+
+
 def test_partial_deviation_is_not_a_block():
     d = _digest(deviations=[{"chunk": "C2", "kind": "partial", "anchor": "x"}])
     assert er.read_execute_result(_wr(d)) is PARAMS

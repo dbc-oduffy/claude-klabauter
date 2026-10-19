@@ -22,6 +22,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     RUN_DIR_ROOT,
 )
 from coordinator_core.ops.dispatch_emit.ask_fanout_contract import (
+    INTERACTION_MODE_PARAM,
     NOT_FIRED_KEY,
     PARENT_SIZING_KEY,
     PLAN_BLITZ_UNFIRED_BUCKETS,
@@ -69,17 +70,18 @@ def approver_for(interaction_mode: object) -> str:
 ROADMAP_DECLS = ("  let _rb = null;", "  const _ready = [];", "  const _unfired = [];")
 
 #: The run's one commit: lands the planning record, then fans the ready plans out as sibling runs.
-def roadmap_next_action_js(script_path: Optional[str] = None) -> str:
+def roadmap_next_action_js(script_path: Optional[str] = None, interaction_mode: object = None) -> str:
     """The terminal-commit `_nextAction` literal. `params` is the replayable block: `run_id`, the
     emitted script's repo-relative `script_path` when known (omitted, never null), and the fan-out."""
     from coordinator_core.ops.dispatch_emit import ask_compose as ac
 
     path = f"script_path: {ac._lit(script_path)}, " if script_path else ""
+    mode = f"{INTERACTION_MODE_PARAM}: {ac._lit(interaction_mode)}, " if isinstance(interaction_mode, str) and interaction_mode else ""
     return (
         "{ kind: 'terminal_commit', op: 'dispatch.terminal_commit', "
         f"params: {{ run_id: _runId, {path}{FANOUT_RECORD_PARAM}: {{ plans: _ready.map((r) => r.planPath), "
         "waves: Object.fromEntries(_ready.map((r) => [r.planPath, r.wave])), "
-        f"{PARENT_SIZING_KEY}: _sizingRel, {NOT_FIRED_KEY}: _unfired }} }} }}"
+        f"{mode}{PARENT_SIZING_KEY}: _sizingRel, {NOT_FIRED_KEY}: _unfired }} }} }}"
     )
 
 
@@ -150,7 +152,7 @@ def roadmap_stage_lines(
         "  }",
         "  if (!_halted && !_ready.length) { " + halt("'plan-blitz reported no ready plan'") + " }",
         "  }",
-        f"  if (!_halted) {{ _nextAction = {roadmap_next_action_js(script_path)}; }}",
+        f"  if (!_halted) {{ _nextAction = {roadmap_next_action_js(script_path, interaction_mode)}; }}",
     ]
 
 

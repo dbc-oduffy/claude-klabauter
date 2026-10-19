@@ -29,7 +29,7 @@ def _schema():
 def test_schema_is_valid_draft202012():
     schema = _schema()
     jsonschema.Draft202012Validator.check_schema(schema)
-    assert schema.get("x-schema-version") == "1.0.0"
+    assert schema.get("x-schema-version") == "1.1.0"
     assert all(
         obj.get("additionalProperties") is False
         for obj in _walk_objects(schema)
@@ -155,7 +155,7 @@ def test_generated_js_is_syntactically_valid_and_matches_schema(tmp_path):
     harness = tmp_path / "harness.js"
     harness.write_text(
         "let _halted = null, _incompleteChunks = [], _unansweredBriefs = [], _notStarted = [], _planHeld = {}, "
-        "_blockedChunks = [], _gateOwed = {};\n"
+        "_chunkReason = {}, _blockedChunks = [], _gateOwed = {};\n"
         "let _testResult = {status:'pass', tests_run:5, tests_failed:0, build_clean:true, "
         "summary:'ok', sidecar_path:'s.md'};\n"
         "let _verifications = [{chunk:'C1', status:'pass'}];\n"
@@ -205,7 +205,7 @@ def test_generated_js_no_review_no_test_halted_path_validates(tmp_path):
     harness = tmp_path / "harness2.js"
     harness.write_text(
         "let _halted = 'stop rule fired', _incompleteChunks = [], "
-        "_unansweredBriefs = [], _notStarted = [], _planHeld = {}, _blockedChunks = [], _gateOwed = {};\n"
+        "_unansweredBriefs = [], _notStarted = [], _planHeld = {}, _chunkReason = {}, _blockedChunks = [], _gateOwed = {};\n"
         "let _verifications = [];\n"
         "console.log(JSON.stringify((function(){\n" + js + "\n})()));\n",
         encoding="utf-8",
@@ -226,7 +226,10 @@ def _find_node():
     return shutil.which("node")
 
 
-def _run_digest(tmp_path, *, falsifier_js, incomplete=(), blocked=(), **overrides):
+def _run_digest(
+    tmp_path, *, falsifier_js, incomplete=(), blocked=(), not_started=(), reasons=None,
+    plan_held=None, **overrides,
+):
     """Evaluate the emitted return expression under node with the given
     `_falsifier` binding (a JS literal) and chunk arrays; skip without node."""
     js = wd.completion_return_js(**_kwargs(
@@ -238,7 +241,8 @@ def _run_digest(tmp_path, *, falsifier_js, incomplete=(), blocked=(), **override
     harness = tmp_path / "criterion.js"
     harness.write_text(
         f"let _halted = null, _incompleteChunks = {json.dumps(list(incomplete))}, "
-        "_unansweredBriefs = [], _notStarted = [], _planHeld = {}, _stoppedBy = [], "
+        f"_unansweredBriefs = [], _notStarted = {json.dumps(list(not_started))}, "
+        f"_planHeld = {json.dumps(plan_held or {})}, _chunkReason = {json.dumps(reasons or {})}, _stoppedBy = [], "
         f"_blockedChunks = {json.dumps(list(blocked))}, _gateOwed = {{}};\n"
         "let _testResult = {status:'pass', tests_run:1, tests_failed:0, build_clean:true, "
         "summary:'ok', sidecar_path:'s.md'};\n"
@@ -371,6 +375,18 @@ def test_validate_digest_accepts_failing_digest():
     assert wd.validate_digest(d) == []
 
 
+def _digest_with_deviation(**extra):
+    d = _base_digest(outcome="incomplete", completed=False)
+    d["deviations"] = [{"chunk": "A", "kind": "blocked", "anchor": "", **extra}]
+    return d
+
+
+def test_deviation_reason_is_optional_and_capped():
+    assert wd.validate_digest(_digest_with_deviation()) == []
+    assert wd.validate_digest(_digest_with_deviation(reason="no pnpm on host")) == []
+    assert wd.validate_digest(_digest_with_deviation(reason="x" * 301))
+
+
 def test_validate_digest_rejects_over_cap_string():
     d = _base_digest()
     d["decision_required"] = "x" * 301
@@ -433,7 +449,7 @@ def _digest_for(tmp_path, *, test_js, verifications_js, gate_owed_js="{}"):
     harness = tmp_path / "skips.js"
     harness.write_text(
         "let _halted = null, _incompleteChunks = [], _unansweredBriefs = [], _notStarted = [], _planHeld = {}, "
-        "_stoppedBy = [], _blockedChunks = [], _gateOwed = " + gate_owed_js + ";\n"
+        "_chunkReason = {}, _stoppedBy = [], _blockedChunks = [], _gateOwed = " + gate_owed_js + ";\n"
         f"let _testResult = {test_js};\n"
         f"let _verifications = {verifications_js};\n"
         "let _falsifier = {status:'met', observation:'ok', sidecar_path:'f.md'};\n"
@@ -517,7 +533,11 @@ def test_gate_owed_row_is_a_deviation_with_its_anchor_and_blocks_completed(tmp_p
     digest = _digest_for(tmp_path, test_js=_UNBUILT, verifications_js="[]", gate_owed_js=_OWED)
     assert wd.validate_digest(digest) == []
     assert digest["deviations"] == [
-        {"chunk": "C2", "kind": "gate_owed", "anchor": "gate-blocker: guard-denied: pnpm typecheck denied"}
+        {
+            "chunk": "C2", "kind": "gate_owed",
+            "anchor": "gate-blocker: guard-denied: pnpm typecheck denied",
+            "reason": "gate-blocker: guard-denied: pnpm typecheck denied",
+        }
     ]
     assert digest["outcome"] == "incomplete" and digest["completed"] is False
     assert digest["decision_required"] == "owed build gate unverified: C2"
@@ -542,3 +562,50 @@ def test_no_owed_gate_leaves_outcome_unchanged(tmp_path):
 def test_gate_owed_var_is_appended_last_and_kind_is_in_the_schema():
     assert wd.RUNTIME_VARS[-1] == "_gateOwed" and wd.RUNTIME_VARS[-2] == "_runBase"
     assert "gate_owed" in _schema()["properties"]["deviations"]["items"]["properties"]["kind"]["enum"]
+
+
+def _dev(digest, chunk):
+    return next(d for d in digest["deviations"] if d["chunk"] == chunk)
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_deviations_carry_the_seeded_reason_per_kind(tmp_path):
+    digest = _run_digest(
+        tmp_path, falsifier_js="null", incomplete=["P", "B"], blocked=["B"], not_started=["N"],
+        reasons={"B": "no pnpm on host", "P": "C3 tests unwritten", "N": "held: dependency B did not finish DONE"},
+    )
+    assert (_dev(digest, "B")["kind"], _dev(digest, "B")["reason"]) == ("blocked", "no pnpm on host")
+    assert (_dev(digest, "P")["kind"], _dev(digest, "P")["reason"]) == ("partial", "C3 tests unwritten")
+    assert _dev(digest, "N")["kind"] == "not_started" and "B" in _dev(digest, "N")["reason"]
+    assert all(d["anchor"] == "" for d in digest["deviations"])
+    assert wd.validate_digest(digest) == []
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_a_reason_over_the_schema_cap_renders_capped(tmp_path):
+    cap = wd._maxlength(_schema(), "deviations[].reason")
+    digest = _run_digest(tmp_path, falsifier_js="null", incomplete=["B"], blocked=["B"], reasons={"B": "x" * 400})
+    assert len(_dev(digest, "B")["reason"]) == cap == 300
+    assert wd.validate_digest(digest) == []
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_a_held_rows_reason_equals_its_anchor(tmp_path):
+    digest = _run_digest(
+        tmp_path, falsifier_js="null", not_started=["H"], plan_held={"H": "seam drift at wave 1"},
+    )
+    dev = _dev(digest, "H")
+    assert dev["kind"] == "held" and dev["anchor"] == "seam drift at wave 1"
+    assert dev["reason"] == dev["anchor"]
+    assert wd.validate_digest(digest) == []
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_a_row_with_no_recorded_reason_renders_an_empty_reason(tmp_path):
+    digest = _run_digest(tmp_path, falsifier_js="null", incomplete=["B"], blocked=["B"])
+    assert _dev(digest, "B")["reason"] == ""
+    assert wd.validate_digest(digest) == []

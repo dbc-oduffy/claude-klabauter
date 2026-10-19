@@ -35,12 +35,14 @@ def test_exactly_one_haiku_commit_leg_fires_the_fanout(repo, which):
     script = _scripts(repo)[which]
     commits = [leg for leg in lr.emitted_legs(script) if leg.label == "commit"]
     assert len(commits) == 1 and commits[0].model == "haiku"
-    emitted = (
+    head = (
         f"{FANOUT_RECORD_PARAM}: {{ plans: _ready.map((r) => r.planPath), "
         "waves: Object.fromEntries(_ready.map((r) => [r.planPath, r.wave])), "
-        "parent_sizing: _sizingRel, not_fired: _unfired }"
     )
-    assert script.count(emitted) == 1
+    tail = "parent_sizing: _sizingRel, not_fired: _unfired }"
+    spec = script[script.index(head):]
+    spec = spec[: spec.index(tail) + len(tail)]
+    assert script.count(head) == 1 and spec.count("interaction_mode") <= 1
     assert "dispatch.terminal_commit --params-file" in script
     assert "fanout: _commit?.fanout ?? null" in script
 

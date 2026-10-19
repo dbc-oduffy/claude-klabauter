@@ -524,9 +524,26 @@ def test_record_wave_boundary_sidecar_validates(tmp_path, git):
     b = _plan(root, "b", _row("B1", "[b.py]", "[lib.py]"))
     r = op._record_handler({"plans": [a, b], "phase": "wave-boundary", "named_set": True, "landed_range": RANGE,
                             "landed_rows": [{"plan": a, "row": "A1"}], "wave": 3}, repo_root=root)
-    d = yaml.safe_load((root / "docs/plans/b.seam.yaml").read_text())
+    d = yaml.safe_load((root / "docs/plans/b.wave-3.seam.yaml").read_text())
     _validate(d)
     assert d["verdict"] == "DRIFT" and d["wave"] == 3 and r["verdict"] == "DRIFT"
+    assert "docs/plans/b.wave-3.seam.yaml" in r["sidecars"]
+    assert not (root / "docs/plans/b.seam.yaml").exists()
+
+
+def test_wave_boundary_record_leaves_prep_sidecar_byte_identical(tmp_path, git):
+    root = _root(tmp_path)
+    a = _plan(root, "a", _row("A1", "[lib.py]"))
+    b = _plan(root, "b", _row("B1", "[b.py]", "[lib.py]"))
+    op._record_handler({"plans": [a, b], "phase": "prep", "named_set": True}, repo_root=root)
+    prep = root / "docs/plans/b.seam.yaml"
+    before = prep.read_bytes()
+    r = op._record_handler({"plans": [b], "phase": "wave-boundary", "named_set": True, "landed_range": RANGE,
+                            "landed_rows": [{"plan": a, "row": "A1"}], "wave": 1}, repo_root=root)
+    assert prep.read_bytes() == before
+    assert r["sidecars"] == ["docs/plans/b.wave-1.seam.yaml"]
+    assert (root / "docs/plans/b.wave-1.seam.yaml").is_file()
+    assert yaml.safe_load(before.decode())["phase"] == "prep"
 
 
 def test_seam_sidecar_travels_with_its_plan_on_archive(tmp_path):

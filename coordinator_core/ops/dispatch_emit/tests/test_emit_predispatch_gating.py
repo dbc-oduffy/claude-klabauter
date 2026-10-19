@@ -182,7 +182,7 @@ def test_row_block_bytes_is_per_row_and_independent_of_predispatch():
 _HARNESS = r"""
 (async () => {
   const _incompleteChunks = [], _blockedChunks = [], _unansweredBriefs = [], _stoppedBy = [],
-    _notStarted = [], _verifications = [];
+    _notStarted = [], _verifications = [], _chunkReason = {};
   let _halted = null;
   const _rowPlan = %(row_plan)s;
   const _haltedPlans = new Set(), _haltedPlanReasons = new Map();

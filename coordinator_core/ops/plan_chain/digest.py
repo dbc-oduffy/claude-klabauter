@@ -67,6 +67,9 @@ def _anchors(items: Any, caps: Mapping[str, int], *, from_execute_deviations: bo
             continue
         if from_execute_deviations:
             line = f"{item.get('chunk', '')}: {item.get('kind', '')}"
+            reason = " ".join(str(item.get("reason") or "").split())
+            if reason:
+                line += f" — {reason}"
         else:
             line = str(item.get("line", ""))
         out.append({"line": line[: caps["line"]], "anchor": str(item.get("anchor", ""))[: caps["anchor"]]})

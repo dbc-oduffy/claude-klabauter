@@ -94,6 +94,7 @@ from coordinator_core.ops.dispatch_emit.sizing_fire import (
     ARM_XS,
     SizingFireRefused,
     load_sizing,
+    load_sizing_effective,
     resolve_arm,
 )
 from coordinator_core.ops.dispatch_emit.terminal_commit_params_channel import PARAMS_BLOCK_JS, params_path
@@ -909,7 +910,7 @@ def _xl_exit_open(repo_root: str, sizing_rel: Optional[str]) -> bool:
     from coordinator_core.ops.sizing_acceptance import apm_picks_xl_exit
 
     try:
-        sizing = load_sizing(Path(repo_root), sizing_rel)
+        sizing = load_sizing_effective(Path(repo_root), sizing_rel)
     except (SizingFireRefused, OSError, ValueError, KeyError):
         return False
     return (
@@ -1254,7 +1255,7 @@ def compose_ask_script(
             repo_root=repo_root,
             sizing_rel=sizing_rel,
             run_id=run_id,
-            interaction_mode=load_sizing(Path(repo_root), sizing_rel).get("interaction_mode"),
+            interaction_mode=load_sizing_effective(Path(repo_root), sizing_rel).get("interaction_mode"),
             roadmap_text=roadmap_blitz_text,
             plan_blitz_fn=blitz_fn,
             plan_blitz_phases=blitz_phases,
@@ -2317,7 +2318,7 @@ def compose_ask_script(
         spec_js = "_scoutFalsifier ?? _planFalsifier" if sized_in_run else "_planFalsifier"
         b.append(f"  if (_gate.arm && _gate.arm !== {_lit(ARM_XS)}) {{ _falsifierSpec = {spec_js}; }}")
     b.append(
-        "  if (!_stagedManifest) { _manifest = { error: 'no folded stage manifest: the agent that closes the "
+        f"  if (!_stagedManifest) {{ _manifest = {{ error: '{NO_MANIFEST_PREFIX}: the agent that closes the "
         "gate, plan or plan-blitz ready path returned none' }; }"
     )
     b.append("  if (!_stagedManifest && _stageHalt) { _manifest = { error: _stageHalt }; }")
@@ -2345,7 +2346,8 @@ def compose_ask_script(
         "  else if (_manifest.error || (!(_manifest.rows ?? []).length && !_allLanded && !_resumeLedger)) { _halted = { halted: "
         f"{_lit(HALT_REFUSAL)}, kind: {_lit(HALT_REFUSAL)}, reason: _manifest.error || 'stage staged no rows', "
         "sizing: _sizingRel, plan: _planRel, run_id: _runId, "
-        f"...({_owed_handback_js(sizing_rel)} ? {{ next_action: {_owed_handback_js(sizing_rel)} }} : {{}}) }}; }}"
+        f"...({_owed_handback_js(sizing_rel)} ? {{ next_action: {_owed_handback_js(sizing_rel)} }} : "
+        f"{_no_manifest_next_action_js(sizing_rel)}) }}; }}"
     )
     b.append("  }")
 
@@ -2830,6 +2832,19 @@ def _owed_handback_js(sizing_rel: Optional[str]) -> str:
         "(((_manifest && !_manifest.error ? _manifest.owed : null) ?? []).length "
         "? 'Owed, not run: ' + _manifest.owed.map((o) => o.id + ': ' + (o.detail ?? '')).join('; ') "
         f"+ '. Then refire: ' + {_refire_js(sizing_rel)} : '')"
+    )
+
+
+NO_MANIFEST_PREFIX = "no folded stage manifest"
+
+
+def _no_manifest_next_action_js(sizing_rel: Optional[str]) -> str:
+    """JS expression: `{next_action}` for a halt whose manifest is missing, else `{}`. The refire
+    re-runs the gate op, which re-stages the plan from the sizing, so it is the resume route."""
+    return (
+        f"(String(_manifest?.error ?? '').startsWith({_lit(NO_MANIFEST_PREFIX)}) ? {{ next_action: "
+        "'Resume: the stage manifest is rebuilt when the gate re-stages the plan' + (_planRel ? ' ' + _planRel : '') "
+        f"+ '. Refire: ' + {_refire_js(sizing_rel)} }} : {{}})"
     )
 
 

@@ -330,3 +330,31 @@ def test_not_fired_names_every_plan_when_the_commit_does_not_land(repo, monkeypa
 def test_plan_outside_plans_root_refuses(repo):
     out = _call(repo, ["seed.txt"])
     assert out["committed"] is False and out["refused"] == "fanout-plan-path"
+
+
+def test_run_mode_in_the_spec_is_inherited_when_the_parent_sizing_has_none(repo, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import ask_fanout
+
+    seen: dict = {}
+    monkeypatch.setattr(ask_fanout, "fanout", lambda p, r: seen.update(p) or {"exit_code": 0, "ready": [], "runs": []})
+    _make_plan(repo, "a")
+    _record(repo)
+    _call_spec(
+        repo, [PLANS["a"]],
+        **{c.PARENT_SIZING_KEY: _parent_sizing(repo, None), c.INTERACTION_MODE_PARAM: "ceo"},
+    )
+    assert seen[c.INTERACTION_MODE_PARAM] == "ceo"
+
+
+def test_parent_sizing_mode_wins_over_the_spec_run_mode(repo, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import ask_fanout
+
+    seen: dict = {}
+    monkeypatch.setattr(ask_fanout, "fanout", lambda p, r: seen.update(p) or {"exit_code": 0, "ready": [], "runs": []})
+    _make_plan(repo, "a")
+    _record(repo)
+    _call_spec(
+        repo, [PLANS["a"]],
+        **{c.PARENT_SIZING_KEY: _parent_sizing(repo, "pm"), c.INTERACTION_MODE_PARAM: "ceo"},
+    )
+    assert seen[c.INTERACTION_MODE_PARAM] == "pm"

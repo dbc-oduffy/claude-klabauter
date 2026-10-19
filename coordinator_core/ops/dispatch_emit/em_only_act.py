@@ -14,6 +14,14 @@ line by line, then inline single-backtick spans). Prose naming a script is a men
 A code span quoting a forbidden command in negation ("never run `build-plugin.ps1 ...`") is
 indistinguishable from a run and derives em.
 Pure Python: no spawn, no I/O.
+
+INVARIANT: `executor_commit_act` reuses the Commit Gate's own matchers
+(`block_subagent_commit._has_git_commit`, `_has_committing_op_invoke`, `_has_coordinator_safe_commit`),
+imported lazily after a substring prefilter, so the plan bar and the guard agree on what a commit is.
+The deploy list `_DEPLOY_ACT` is closed: each entry ships a committed tree.
+
+TRAP: `executor_commit_act` flags a backticked commit or deploy quoted in negation ("never run
+`git commit`"); drop the backticks to make it a mention.
 """
 
 from __future__ import annotations
@@ -53,6 +61,53 @@ def forbidden_sole_act(raw: Dict[str, Any]) -> Optional[str]:
     for span in _code_spans(body):
         span = span.strip()
         if span and launches_heavy(span):
+            return span
+    return None
+
+
+# Closed list of commands that publish a committed tree, so an executor (who never commits) cannot
+# finish them: firebase/gcloud deploy upload the checked-in sources; npm/pnpm/yarn/bun deploy[:target]
+# scripts wrap those. Tolerates a path-prefixed argv0 and .cmd/.exe spellings.
+_DEPLOY_ACT = re.compile(
+    r"(?:^|[\s;&|(])(?:[^\s;&|]*[\\/])?(?:"
+    r"(?:firebase|gcloud)(?:\.cmd|\.exe)?\s+(?:[^;&|\n]*\s)?deploy\b"
+    r"|(?:npm|pnpm|yarn|bun)(?:\.cmd|\.exe)?\s+(?:run\s+)?deploy(?::[\w-]+)?(?=\s|$)"
+    r")",
+    re.IGNORECASE,
+)
+
+
+def _span_commits_or_deploys(span: str) -> bool:
+    lowered = span.lower()
+    if "commit" in lowered:
+        from coordinator_core.bash_guards.block_subagent_commit import (
+            _has_committing_op_invoke,
+            _has_coordinator_safe_commit,
+            _has_git_commit,
+        )
+
+        if (
+            _has_git_commit(span)
+            or _has_committing_op_invoke(span)
+            or _has_coordinator_safe_commit(span)
+        ):
+            return True
+    return "deploy" in lowered and _DEPLOY_ACT.search(span) is not None
+
+
+def executor_commit_act(raw: Dict[str, Any]) -> Optional[str]:
+    """The first body code span an executor would run to commit or deploy, or None.
+
+    None when row_is_em_performed(raw) (performer: em, or an agent-forbidden sole act).
+    """
+    if row_is_em_performed(raw):
+        return None
+    body = raw.get("body")
+    if not isinstance(body, str):
+        return None
+    for span in _code_spans(body):
+        span = span.strip()
+        if span and _span_commits_or_deploys(span):
             return span
     return None
 

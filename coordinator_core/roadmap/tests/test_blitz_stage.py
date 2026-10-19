@@ -479,6 +479,72 @@ def test_op_wraps_the_library(tmp_path, roadmap):
         _handler({}, repo_root=tmp_path / ".git")
 
 
+def _gate_listing_stubs(monkeypatch, tmp_path, held_ids, hold_text=None):
+    """Gate fake that lists every staged rmt stub as a ready baton, except ``held_ids`` which it
+    reports under ``held`` (gate_v2's shape: held records are not batons)."""
+    from coordinator_core.roadmap import gate_v2
+
+    def fake(root, **kwargs):
+        paths = {
+            p.name.split("_roadmap-")[1][:-3]: p.relative_to(tmp_path).as_posix()
+            for p in (tmp_path / "state" / "handoffs").glob("*_roadmap-rmt-*.md")
+        }
+        for sid in held_ids:
+            p = tmp_path / paths[sid]
+            p.write_text(p.read_text(encoding="utf-8").replace("\n---\n", f"\n{hold_text}\n---\n", 1), encoding="utf-8")
+        ready = [sid for sid in sorted(paths) if sid not in held_ids]
+        return {
+            "batons": [{"id": sid, "path": paths[sid], "title": sid, "sized": True} for sid in ready],
+            "waves": [ready],
+            "held": sorted(paths[sid] for sid in held_ids),
+        }
+
+    monkeypatch.setattr(gate_v2, "compute_gate_report", fake)
+
+
+def test_a_held_stub_is_reported_held_with_its_reason_and_outside_every_wave(tmp_path, roadmap, monkeypatch):
+    _gate_listing_stubs(monkeypatch, tmp_path, {"rmt-02"}, "plan_blitz_hold_reason: restate against an APM bar")
+    reply = bs.stage_roadmap(tmp_path, str(roadmap))
+    (held,) = reply["held"]
+    assert held["stub_id"] == "rmt-02" and held["reason"] == "restate against an APM bar"
+    by_id = {s["stub_id"]: s for s in reply["stubs"]}
+    assert by_id["rmt-02"]["held"] is True and by_id["rmt-02"]["hold_reason"] == held["reason"]
+    assert by_id["rmt-01"]["held"] is False
+    assert (tmp_path / held["path"]).is_file()
+    in_waves = {b["path"] for w in reply["waves"] for b in w["batons"]}
+    assert held["path"] not in in_waves and len(in_waves) == 3
+
+
+def test_held_stub_is_dropped_from_waves_even_if_a_report_lists_it(tmp_path, roadmap, monkeypatch):
+    from coordinator_core.roadmap import gate_v2
+
+    def fake(root, **kwargs):
+        (p,) = (tmp_path / "state" / "handoffs").glob("*_roadmap-rmt-01.md")
+        rel = p.relative_to(tmp_path).as_posix()
+        return {"batons": [{"id": "b1", "path": rel}], "waves": [["b1"]], "held": [rel]}
+
+    monkeypatch.setattr(gate_v2, "compute_gate_report", fake)
+    reply = bs.stage_roadmap(tmp_path, str(roadmap))
+    assert reply["waves"] == [{"index": 0, "batons": []}]
+    assert [h["stub_id"] for h in reply["held"]] == ["rmt-01"]
+
+
+def test_a_cleared_hold_stages_ready(tmp_path, roadmap, monkeypatch):
+    _gate_listing_stubs(monkeypatch, tmp_path, set())
+    reply = bs.stage_roadmap(tmp_path, str(roadmap))
+    assert reply["held"] == [] and all(s["held"] is False for s in reply["stubs"])
+    assert len([b for w in reply["waves"] for b in w["batons"]]) == 4
+
+
+def test_op_returns_the_held_disposition(tmp_path, roadmap, monkeypatch):
+    from coordinator_core.ops.roadmap_blitz_stage import _handler
+
+    _gate_listing_stubs(monkeypatch, tmp_path, {"rmt-03"}, "plan_blitz_hold_reason: wait")
+    reply = _handler({"roadmap": str(roadmap)}, repo_root=tmp_path / ".git")
+    assert [h["stub_id"] for h in reply["held"]] == ["rmt-03"]
+    assert all(b["id"] != "rmt-03" for w in reply["waves"] for b in w["batons"])
+
+
 def test_stubs_commit_with_explicit_paths_then_the_gate_report_commits_alone(tmp_path, roadmap, commit_calls):
     reply = bs.stage_roadmap(tmp_path, str(roadmap))
     assert len(commit_calls) == 2
@@ -608,3 +674,22 @@ def test_changed_since_index_drops_a_tracked_unchanged_path(tmp_path, monkeypatc
     entry = type("E", (), {"sha": blob})()
     monkeypatch.setattr(git_state, "read_index", lambda root: {"a.md": entry, "b.md": type("E", (), {"sha": "0"})()})
     assert bs._changed_since_index(tmp_path, ["a.md", "b.md", "c.md"]) == ["b.md", "c.md"]
+
+
+def test_run_interaction_mode_is_written_on_each_minted_sizing(tmp_path, roadmap):
+    import yaml
+
+    reply = bs.stage_roadmap(tmp_path, str(roadmap), interaction_mode="ceo")
+    paths = [s["sizing_object"] for s in reply["stubs"] if s.get("sizing_object")]
+    assert paths
+    for p in paths:
+        assert yaml.safe_load((tmp_path / p).read_text(encoding="utf-8"))["interaction_mode"] == "ceo"
+
+
+def test_no_run_mode_leaves_minted_sizings_without_one(tmp_path, roadmap):
+    import yaml
+
+    reply = bs.stage_roadmap(tmp_path, str(roadmap))
+    for s in reply["stubs"]:
+        if s.get("sizing_object"):
+            assert "interaction_mode" not in yaml.safe_load((tmp_path / s["sizing_object"]).read_text(encoding="utf-8"))
