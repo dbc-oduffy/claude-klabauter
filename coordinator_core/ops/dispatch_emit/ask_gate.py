@@ -37,6 +37,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     RESUME_LEDGER_KIND_FIELD,
     RESUME_LEDGER_NOTES_FIELD,
     RESUME_LEDGER_REMAINING_FIELD,
+    RESUME_LEDGER_UNLANDED_FIELD,
     RESUMED_RUN_ID_KEY,
     RUN_OUTCOME_FILE,
     GateVerdict,
@@ -349,6 +350,7 @@ def _resume_ledger(sizing: dict, halt, repo_root: Path) -> Optional[dict]:
         "rulable_ids": rulable,
         RESUME_LEDGER_HALT_SHA_FIELD: halt.halt_sha,
         RESUME_LEDGER_REMAINING_FIELD: {k: v for k, v in halt.remaining.items() if k in blocking},
+        RESUME_LEDGER_UNLANDED_FIELD: list(halt.unlanded),
         RESUME_LEDGER_NOTES_FIELD: (
             [] if all_landed and halt.run_id == ALL_LANDED_NO_RUN else read_notes(run_dir(Path(repo_root), halt.run_id))
         ),
@@ -499,6 +501,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         _record_resume_snapshot(root, params["run_id"], verdict)
     out = (replace(verdict, recorded=recorded) if recorded is not None else verdict).to_json()
     if params.get("run_id") and verdict.halt is None and verdict.resume_ledger is not None:
+        unlanded = list(verdict.resume_ledger.get(RESUME_LEDGER_UNLANDED_FIELD) or [])
         try:
             out["manifest"] = manifest_payload(root, stage(
                 root,
@@ -509,6 +512,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                 session_id=params.get("session_id") or None,
                 commit_sizing_rel=sizing_rel,
                 ledger_resume=True,
+                only_rows=unlanded or None,
             ))
         except (AskStageError, SizingFireRefused) as exc:
             out["manifest"] = {"error": str(exc)}

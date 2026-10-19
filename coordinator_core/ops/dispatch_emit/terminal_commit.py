@@ -922,6 +922,14 @@ _NOOP_DETAIL = (
 )
 
 
+def _outside_landing_detail(shas: list) -> str:
+    return (
+        "resolved as a no-op: the row's declared writes landed outside this run's executor at "
+        + ", ".join(s[:10] for s in shas)
+        + "; the run's executor changed nothing"
+    )
+
+
 def _flip_rows_coded(plan_text: str, row_ids: set, sha: str, details: Optional[dict] = None) -> tuple:
     """Line-level ``open`` -> ``coded`` + ``disposition_ref: <sha>`` on
     ``row_ids`` (``row_spans._stamp_rows_in_body``), then a stable D5 re-sort
@@ -1121,6 +1129,105 @@ def _checkpoint_attribution(worktree_root: Path, terminal_sha: str, plan_path: O
         if hits:
             out[chunk.id] = next((h[0] for h in hits if chunk.id in h[1]), hits[0][0])
     return out
+
+
+def _outside_landings(
+    worktree_root: Path, terminal_sha: str, plan_path: Optional[str], chunks: list, *,
+    include_start: bool = False, after_creation: bool = False,
+) -> dict:
+    """Chunk id -> landing shas (newest first) of commits outside this run that landed every declared write.
+
+    One in-process first-parent walk (zero spawns) from the terminal commit's parent,
+    stepping over stamp commits and checkpoint commits of ``plan_path``. It stops at
+    ``_REVIEW_WALK_CAP`` or at the first commit without the plan file, so nothing older
+    than the plan counts. A commit lands a path when its blob differs from its first
+    parent's. A chunk is present only when every entry of ``paths`` has a landing commit.
+    """
+    from coordinator_core.git.commit_walk import commit_meta
+    from coordinator_core.git.git_dir import resolve_git_common_dir
+    from coordinator_core.git.rollback_check import ABSENT, _blob_at_commit
+
+    wanted = [c for c in chunks if c.paths]
+    if not wanted or not plan_path:
+        return {}
+    common_dir = resolve_git_common_dir(worktree_root)
+    meta = commit_meta(common_dir, terminal_sha)
+    parents = (meta or {}).get("parents") or []
+    sha = terminal_sha if include_start else (parents[0] if parents else None)
+    walked: list = []  # newest first: (sha, first parent or None)
+    for _ in range(_REVIEW_WALK_CAP):
+        meta = commit_meta(common_dir, sha) if sha else None
+        if meta is None:
+            break
+        blob = _blob_at_commit(common_dir, sha, plan_path)
+        if blob is None or blob is ABSENT:
+            break
+        message = meta.get("message") or ""
+        parent = (meta.get("parents") or [None])[0]
+        if after_creation:
+            parent_blob = _blob_at_commit(common_dir, parent, plan_path) if parent else ABSENT
+            if parent_blob is None or parent_blob is ABSENT:
+                break
+        stepped_over = is_stamp_commit(message) or (
+            CHECKPOINT_SUBJECT.match((message.splitlines() or [""])[0].strip())
+            and (m := CHECKPOINT_PLAN_LINE.search(message)) is not None and m.group("v") == plan_path
+        )
+        if not stepped_over:
+            walked.append((sha, parent))
+        if parent is None:
+            break
+        sha = parent
+    out: dict = {}
+    for chunk in wanted:
+        shas: list = []
+        for path in chunk.paths:
+            hit = next(
+                (
+                    csha for csha, parent in walked
+                    if _blob_at_commit(common_dir, csha, path)
+                    != (_blob_at_commit(common_dir, parent, path) if parent else ABSENT)
+                ),
+                None,
+            )
+            if hit is None:
+                break
+            shas.append(hit)
+        else:
+            out[chunk.id] = sorted(set(shas), key=lambda s: [w[0] for w in walked].index(s))
+    return out
+
+
+def _outside_landing_attribution(
+    worktree_root: Path, terminal_sha: str, plan_path: Optional[str], chunks: list,
+) -> dict:
+    """Chunk id -> newest sha of the commit outside this run that landed its declared writes."""
+    return {
+        cid: shas[0] for cid, shas in _outside_landings(worktree_root, terminal_sha, plan_path, chunks).items()
+    }
+
+
+def rows_landed_outside_executor(worktree_root: Path, plan_path: str, rows: list) -> dict:
+    """Row id -> newest landing sha for each ``open`` row of ``plan_path`` whose every declared write
+    a commit at or before HEAD already landed. The walk is in-process (zero spawns) and bounded by the
+    plan file's creation commit, itself excluded, so a write at or before the plan never counts. A row with no ``writes`` is absent."""
+    from types import SimpleNamespace
+
+    from coordinator_core.git.git_state import head_sha
+
+    chunks = [
+        SimpleNamespace(id=r["id"], paths=[w for w in r["writes"] if isinstance(w, str) and w])
+        for r in rows
+        if isinstance(r, dict) and isinstance(r.get("id"), str) and isinstance(r.get("writes"), list)
+    ]
+    head = head_sha(worktree_root)
+    if not head or not chunks:
+        return {}
+    return {
+        cid: shas[0]
+        for cid, shas in _outside_landings(
+            worktree_root, head, plan_path, chunks, include_start=True, after_creation=True,
+        ).items()
+    }
 
 
 # Commits a review-only run walks back from the terminal sha to reach its run base.
@@ -1730,6 +1837,7 @@ def _stamp_coded_commit(
     receipt: Optional[str] = None,
     trailers: tuple = (), commit: bool = True, archive_after_flip: tuple = (),
     flip_reason: Optional[str] = None,
+    outside_rows: Optional[dict] = None,
 ) -> dict:
     """Second, plan-only ``commit_v2`` call stamping the product commit's
     rows ``coded`` with ``disposition_ref: <sha>`` -- a SHA only exists once
@@ -1738,7 +1846,10 @@ def _stamp_coded_commit(
     with no hunk in the commit: they close ``coded`` against the run's sha with a
     no-change ``disposition_detail``, so none stays ``open`` beneath a met run.
     ``checkpoint_rows`` (``{checkpoint sha: {plan: {row id}}}``) are done rows the run's
-    own checkpoint commits landed: they close ``coded`` at that checkpoint's sha. An edit that would make a schema-valid plan invalid
+    own checkpoint commits landed: they close ``coded`` at that checkpoint's sha.
+    ``outside_rows`` (``{plan: {row id: [landing sha, newest first]}}``) are done rows whose
+    writes commits outside the run landed: they close ``coded`` at the newest landing sha
+    with a no-op detail naming every landing sha. An edit that would make a schema-valid plan invalid
     is refused before any write; on any failure every plan edit is restored.
     ``flip_plan`` names the plan whose ``implemented`` status is written to disk without
     committing (``_stamp_plan_implemented`` reads the rows just written ``coded``), so
@@ -1768,7 +1879,8 @@ def _stamp_coded_commit(
 
     noop_rows = noop_rows or {}
     checkpoint_rows = checkpoint_rows or {}
-    plans = set(source_rows) | set(noop_rows)
+    outside_rows = outside_rows or {}
+    plans = set(source_rows) | set(noop_rows) | set(outside_rows)
     for by_plan in checkpoint_rows.values():
         plans |= set(by_plan)
     for plan_rel in sorted(plans):
@@ -1784,6 +1896,9 @@ def _stamp_coded_commit(
             if plan_rel in by_plan:
                 updated, more = _flip_rows_coded(updated, set(by_plan[plan_rel]), csha)
                 flipped = sorted(set(flipped) | set(more))
+        for rid, shas in sorted(outside_rows.get(plan_rel, {}).items()):
+            updated, more = _flip_rows_coded(updated, {rid}, shas[0], {rid: _outside_landing_detail(shas)})
+            flipped = sorted(set(flipped) | set(more))
         if not flipped:
             continue
         invalid = check_plan_tasks_source(updated)
@@ -2895,10 +3010,12 @@ def _ledger_met_regrades(
 
 def _credit_regrades(
     worktree_root: Path, artifacts, record_dir_rel: Optional[str], request: CommitRequest,
-    incomplete: set, held: set, run_dir: Optional[Path] = None,
+    incomplete: set, held: set, run_dir: Optional[Path] = None, sizing_rel: Optional[str] = None,
 ) -> dict:
     """``{chunk id: "credited: <evidence>"}`` for incomplete chunks the EM credited through
-    ``workflow.revise credit_chunks`` (this run's record dir and its superseded predecessors'). A credit overrides a BLOCKED report; a hold still bars it."""
+    ``workflow.revise credit_chunks`` (this run's record dir, its superseded predecessors', and any
+    earlier run of ``sizing_rel``, committed or not; this run's own entries win). A credit overrides a
+    BLOCKED report; a hold still bars it."""
     from coordinator_core.ops.dispatch_emit import run_credit
 
     dirs = list(artifacts.record_dirs) if artifacts is not None else []
@@ -2908,6 +3025,8 @@ def _credit_regrades(
     if run_dir is not None:
         paths.append(run_dir)
     credits = run_credit.read(paths)
+    if sizing_rel:
+        credits = {**run_credit.credits_for_sizing(worktree_root, sizing_rel), **credits}
     if not credits:
         return {}
     known = []
@@ -4269,7 +4388,8 @@ def _terminal_commit_inner(
             params.get("ledger_verdict"), held_now,
         ))
     credited_regraded = _credit_regrades(
-        worktree_root, artifacts, record_dir_rel, request, incomplete_chunks, held_now, ask_run_dir
+        worktree_root, artifacts, record_dir_rel, request, incomplete_chunks, held_now, ask_run_dir,
+        cited_sizing or (next(iter(artifacts.by_class.get("sizing", ())), None) if artifacts is not None else None),
     )
     more_regraded.update({k: v for k, v in credited_regraded.items() if k not in more_regraded})
     if more_regraded:
@@ -4885,6 +5005,18 @@ def _terminal_commit_inner(
             {} if rows_untouched or not noop_chunks
             else _checkpoint_attribution(worktree_root, str(reply["sha"]), request.plan_path, noop_chunks)
         )
+        outside_of = (
+            {} if rows_untouched or not noop_chunks
+            else _outside_landings(
+                worktree_root, str(reply["sha"]), request.plan_path,
+                [c for c in noop_chunks if c.id not in checkpoint_of],
+            )
+        )
+        outside_rows: dict = {}
+        for chunk_id, shas in outside_of.items():
+            for plan_rel, ids in _source_rows_by_plan(worktree_root, request.plan_path, [chunk_id]).items():
+                for rid in ids:
+                    outside_rows.setdefault(plan_rel, {})[rid] = shas
         checkpoint_rows: dict = {}
         for chunk_id, csha in checkpoint_of.items():
             for plan_rel, ids in _source_rows_by_plan(worktree_root, request.plan_path, [chunk_id]).items():
@@ -4902,7 +5034,7 @@ def _terminal_commit_inner(
             worktree_root, request.plan_path, params.get(TERMINAL_RESUME_LEDGER_PARAM)
         )
         resume_ledger_param = params.get(TERMINAL_RESUME_LEDGER_PARAM)
-        own_coded = frozenset(c.id for c in coded_chunks) | frozenset(checkpoint_of)
+        own_coded = frozenset(c.id for c in coded_chunks) | frozenset(checkpoint_of) | frozenset(outside_of)
         if rows_untouched:
             halted_checkpoints = {}
         elif resume_ledger_param is not None:
@@ -4930,7 +5062,7 @@ def _terminal_commit_inner(
             {} if rows_untouched
             else _source_rows_by_plan(
                 worktree_root, request.plan_path,
-                [c.id for c in noop_chunks if c.id not in checkpoint_of],
+                [c.id for c in noop_chunks if c.id not in checkpoint_of and c.id not in outside_of],
             )
         )
         noop_rows = {
@@ -4951,7 +5083,7 @@ def _terminal_commit_inner(
         # minted here lands in it and costs no commit of its own.
         if record_abs is not None and record is not None and (
             request.plan_path in source_rows or request.plan_path in noop_rows
-            or request.plan_path in partial_rows
+            or request.plan_path in outside_rows or request.plan_path in partial_rows
             or any(request.plan_path in by_plan for by_plan in checkpoint_rows.values())
         ):
             reply.update(
@@ -5054,7 +5186,7 @@ def _terminal_commit_inner(
                 commit_v2, worktree_root, repo_root, source_rows,
                 str(reply["sha"]), session_id,
                 also_commit=also_commit,
-                noop_rows=noop_rows, checkpoint_rows=checkpoint_rows,
+                noop_rows=noop_rows, checkpoint_rows=checkpoint_rows, outside_rows=outside_rows,
                 snapshot=snapshot,
                 flip_plan=request.plan_path if flips else None,
                 flip_reason=_criterion_reason(inline_review),

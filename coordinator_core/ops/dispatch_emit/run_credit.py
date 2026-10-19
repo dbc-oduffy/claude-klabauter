@@ -1,17 +1,21 @@
 """Structured per-run chunk credits: stranded chunks an EM ruled complete, with evidence.
 
-Invariant: a credit lives only in a run's record dir (beside ``notes.jsonl``) and expires when
-that dir lands with the commit that honoured it. Stdlib only; spawns no process.
+Invariant: a credit lives in a run's record dir (beside ``notes.jsonl``). It is honoured by the
+terminal commit of its run or of any later run of the same sizing, and a resume counts a credited
+row landed. Stdlib only; spawns no process.
 """
 
 from __future__ import annotations
 
 import json
+import os
 import re
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Iterable
 
+from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
 from coordinator_core.ops.dispatch_emit.credit_gate import BOOKKEEPING_CHUNK_IDS
+from coordinator_core.ops.dispatch_emit.halted_run import _DATE_PREFIX, _STAMP
 from coordinator_core.session.declared_writes import declare_write
 
 CREDIT_FILE = "credit.jsonl"
@@ -75,3 +79,54 @@ def read(record_dirs: Iterable[Path]) -> dict[str, str]:
             if isinstance(chunk, str) and chunk and isinstance(evidence, str) and evidence:
                 merged[chunk] = evidence
     return merged
+
+
+def _binds_sizing(run_dir: Path, sizing: str) -> bool:
+    try:
+        data = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    rel = data.get("sizing_rel") if isinstance(data, dict) else None
+    return isinstance(rel, str) and PurePosixPath(rel.replace("\\", "/")).as_posix() == sizing
+
+
+def credits_for_sizing(repo_root: Path, sizing_rel: str) -> dict[str, str]:
+    """``{chunk: evidence}`` across every run record dir binding ``sizing_rel``; never raises.
+
+    Dirs merge oldest stamp first (``ask-`` and ``warp-`` together), so the newest credit wins. Only
+    ``ask-<stamp>`` dirs stamped on or after the sizing's YYYY-MM-DD prefix and
+    ``warp-<sizing stem>-<stamp>`` dirs are read; an undated name yields ``{}``.
+    """
+    sizing = PurePosixPath(sizing_rel.replace("\\", "/")).as_posix()
+    stem = PurePosixPath(sizing).stem
+    dated = _DATE_PREFIX.match(stem)
+    if dated is None:
+        return {}
+    floor = "".join(dated.groups())
+    prefix = f"warp-{stem}-"
+    root = Path(repo_root) / RECORD_DIR_ROOT
+    candidates: list[tuple[str, Path]] = []
+    try:
+        with os.scandir(root) as it:
+            for entry in it:
+                name = entry.name
+                if name.startswith("ask-"):
+                    stamp = name[4:]
+                    if not (_STAMP.fullmatch(stamp) and stamp[:8] >= floor):
+                        continue
+                elif name.startswith(prefix):
+                    stamp = name[len(prefix):]
+                    if not _STAMP.fullmatch(stamp):
+                        continue
+                else:
+                    continue
+                try:
+                    if entry.is_dir():
+                        candidates.append((stamp, Path(entry.path)))
+                except OSError:
+                    continue
+    except OSError:
+        return {}
+    candidates.sort(key=lambda c: c[0])
+    bound = [d for _, d in candidates if (d / CREDIT_FILE).is_file() and _binds_sizing(d, sizing)]
+    return read(bound)

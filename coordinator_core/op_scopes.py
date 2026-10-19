@@ -736,6 +736,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "dispatch.reap_abandoned_runs":             "common_dir",
     "dispatch.commit_halted_rows":              "common_dir",
     "dispatch.supersede_slice":                 "common_dir",
+    "dispatch.record_halted_run_landed":        "common_dir",
     "dispatch.release_run_token":               "common_dir",
     # workflow.revise — appends to a warp run's ledger under the caller's own worktree's run dir.
     "workflow.revise":                          "common_dir",

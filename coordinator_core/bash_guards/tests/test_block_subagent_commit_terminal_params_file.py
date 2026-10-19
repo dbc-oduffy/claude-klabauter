@@ -111,10 +111,47 @@ def test_a_cd_prefixed_relative_params_path_writes_nothing(repo):
         lambda a, r: f"cd {r.as_posix()} extra && " + a,
     ],
 )
-def test_any_extra_segment_other_than_a_bare_cd_never_writes_the_params_file(repo, build):
+def test_any_extra_segment_other_than_a_bare_cd_or_mkdir_p_never_writes_the_params_file(repo, build):
     token = run_token.mint(repo, _RUN, _SCRIPT)
     params = {"script_path": _SCRIPT, "run_id": _RUN, "run_token": token, "incomplete_chunks": []}
     assert _check(build(_emitted_argv(repo), repo), _transcript(repo, params)) is not None
+    assert not chan.params_path(repo, _RUN).exists()
+
+
+@pytest.mark.parametrize("sep", ["&&", ";"])
+def test_a_mkdir_p_prefixed_argv_is_denied_but_its_params_file_is_written(repo, sep):
+    token = run_token.mint(repo, _RUN, _SCRIPT)
+    params = {"script_path": _SCRIPT, "run_id": _RUN, "run_token": token, "incomplete_chunks": []}
+    cmd = f"mkdir -p {repo.as_posix()}/sidecar/ {sep} " + _emitted_argv(repo)
+    verdict = _check(cmd, _transcript(repo, params))
+    assert verdict is not None
+    assert verdict["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert json.loads(chan.params_path(repo, _RUN).read_text(encoding="utf-8")) == params
+
+
+@pytest.mark.parametrize(
+    "prefix",
+    [
+        "mkdir {r}/s && ",
+        "mkdir -p -m 700 {r}/s && ",
+        "mkdir -p && ",
+        "mkdir -pv {r}/s && ",
+        "mkdir -p {r}/s -m 700 && ",
+    ],
+)
+def test_a_malformed_mkdir_prefix_never_writes_the_params_file(repo, prefix):
+    token = run_token.mint(repo, _RUN, _SCRIPT)
+    params = {"script_path": _SCRIPT, "run_id": _RUN, "run_token": token, "incomplete_chunks": []}
+    cmd = prefix.format(r=repo.as_posix()) + _emitted_argv(repo)
+    assert _check(cmd, _transcript(repo, params)) is not None
+    assert not chan.params_path(repo, _RUN).exists()
+
+
+def test_a_mkdir_p_prefixed_relative_params_path_writes_nothing(repo):
+    token = run_token.mint(repo, _RUN, _SCRIPT)
+    params = {"script_path": _SCRIPT, "run_id": _RUN, "run_token": token, "incomplete_chunks": []}
+    cmd = f"mkdir -p {repo.as_posix()}/s && coordinator-invoke dispatch.terminal_commit --params-file scratch/x.json"
+    assert _check(cmd, _transcript(repo, params)) is not None
     assert not chan.params_path(repo, _RUN).exists()
 
 

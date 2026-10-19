@@ -330,6 +330,10 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
         "coordinator_core/ops/dispatch_emit/slice_supersede.py",
         ("_handler",),
     ),
+    "dispatch.record_halted_run_landed": (
+        "coordinator_core/ops/dispatch_emit/halted_run_landed.py",
+        ("_handler",),
+    ),
     "workflow.revise": (
         "coordinator_core/ops/dispatch_emit/requirements_ledger.py",
         ("_handler",),

@@ -344,7 +344,8 @@ def _slice_deny(root: Path, marker: tuple[str, str]) -> Optional[str]:
                 continue
             return (
                 f"Predecessor {pred} halted, so {run_id} cannot start. "
-                f"Land {pred}'s declared writes, or resubmit the slice as a "
+                f"If its work landed, record it: dispatch.record_halted_run_landed "
+                f"{{run_id: {pred}, sha}}; else resubmit the slice as a "
                 f'fresh {{ask, supersedes: "{run_id}"}}.'
             )
         return f"Predecessor {pred} has not landed ({state or 'not started'}); its close names this run's fire call."

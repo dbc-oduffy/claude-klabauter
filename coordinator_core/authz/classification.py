@@ -2334,6 +2334,20 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #      The marker persists on disk.
     # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
     "dispatch.supersede_slice": OpClass.MUTATING,
+    # dispatch.record_halted_run_landed — MUTATING: records a halted run as landed at a verified sha
+    # through run_close.sibling_release (ops/dispatch_emit/halted_run_landed.py).
+    # DR-208 five-question affirmation (citing dispatch.record_halted_run_landed handler):
+    #   1. Writes, deletes, or reorders any state file, queue, or git object?  YES.
+    #      One scratch/warp/<run_id>/sibling-status.json rewrite via sibling_release; no git object.
+    #   2. Writes into rag's relational store?                                 No.
+    #   3. Opens any file for write (including sentinel creation)?             YES.
+    #      That status file, through claimed_write.
+    #   4. Mutates shared mutable state outside its own module?                YES.
+    #      The status the submit hook and sibling closes read.
+    #   5. Persistent state changes observable across process boundaries?     YES.
+    #      The status persists on disk.
+    # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
+    "dispatch.record_halted_run_landed": OpClass.MUTATING,
     # dispatch.release_run_token — MUTATING: deletes one warp run's unclaimed token record
     # (ops/dispatch_emit/release_run_token.py).
     # DR-208 five-question affirmation (citing dispatch.release_run_token handler):

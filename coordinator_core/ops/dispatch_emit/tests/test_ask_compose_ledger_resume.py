@@ -32,7 +32,10 @@ def test_the_gate_schema_carries_resume_ledger():
 def test_resume_binds_the_plan_and_takes_the_xs_tail_before_any_plan_or_executor_call(monkeypatch):
     script = _script(monkeypatch)
     bind = script.index("const _resumeLedger = !_halted && !!_gate.resume_ledger;")
-    assert "_planRel = _gate.resume_ledger.plan; if (!_ledgerOwes) { _gate = { ..._gate, arm: 'xs' }; }" in script[bind:]
+    assert (
+        "_planRel = _gate.resume_ledger.plan; if (_ledgerUnlanded.length) { _ledgerExec = true; } "
+        "else if (!_ledgerOwes) { _gate = { ..._gate, arm: 'xs' }; }"
+    ) in script[bind:]
     assert bind < script.index("label: 'plan'")
     execute = script.index("if (!_halted && (!_resumeLedger || _ledgerExec)) {\n  phase('Execute');")
     assert bind < execute < script.index("label: 'verify'")
@@ -51,9 +54,9 @@ def test_before_state_unconditional_xs_is_gone(monkeypatch):
 
 def test_a_work_owing_m_plus_resume_keeps_its_arm_and_replans_with_the_owed_work(monkeypatch):
     script = _script(monkeypatch)
-    owes = script.index("const _ledgerOwes = _resumeLedger && _gate.arm === 'm_plus'")
+    owes = script.index("const _ledgerOwes = _resumeLedger && (_gate.arm === 'm_plus' || _gate.arm === 's')")
     assert ".remaining ?? []).length > 0" in script[owes : owes + 400]
-    assert "if (!_ledgerOwes) { _gate = { ..._gate, arm: 'xs' }; }" in script
+    assert "else if (!_ledgerOwes) { _gate = { ..._gate, arm: 'xs' }; }" in script
     leg = script.index("label: 'ledger-replan'")
     prompt = script[leg - 4200 : leg]
     assert "_gate.resume_ledger.blocking.join(', ')" in prompt
@@ -69,20 +72,33 @@ def test_the_re_plan_adds_rows_that_are_staged_by_id_and_dispatched(monkeypatch)
     script = _script(monkeypatch)
     leg = script.index("label: 'ledger-replan'")
     prompt = script[leg - 4200 : leg]
-    assert "with only_rows added, set to the ids of exactly the rows you added" in prompt
+    assert "with only_rows set to the ids of exactly the rows you added" in prompt
+    assert "' together with these unlanded rows: '" in prompt
     assert "if (_ledgerAdded.length) { _ledgerExec = true; _adoptManifest(" in script
-    assert "else { _gate = { ..._gate, arm: 'xs' }; _stagedManifest = _gateStaged; _relayGap = _gateGap; }" in script
+    assert (
+        "else { if (!_ledgerUnlanded.length) { _gate = { ..._gate, arm: 'xs' }; } "
+        "_stagedManifest = _gateStaged; _relayGap = _gateGap; }"
+    ) in script
     assert script.count("if (!_halted && (!_resumeLedger || _ledgerExec)) {") == 2
     assert "if (_resumeLedger && !_ledgerExec && (_gate.resume_ledger.blocking ?? []).length) {" in script
 
 
-def test_a_re_judge_only_or_s_arm_resume_keeps_the_xs_tail(monkeypatch):
-    # _ledgerOwes is false unless the arm is m_plus AND a blocking id has non-empty remaining; then the
-    # xs force and the remaining-work leg both stay.
+def test_a_re_judge_only_resume_keeps_the_xs_tail(monkeypatch):
+    # _ledgerOwes is false unless the arm is m_plus or s AND a blocking id has non-empty remaining; with
+    # no unlanded row either, the xs force and the remaining-work leg both stay (AC5).
     script = _script(monkeypatch)
     owes = script[script.index("const _ledgerOwes"):][:400]
-    assert "_gate.arm === 'm_plus'" in owes and ".some(" in owes
+    assert "_gate.arm === 'm_plus'" in owes and "_gate.arm === 's'" in owes and ".some(" in owes
     assert script.count("label: 'ledger-remaining'") == 1
+
+
+def test_unlanded_rows_set_ledger_exec_without_forcing_xs(monkeypatch):
+    script = _script(monkeypatch)
+    assert (
+        "const _ledgerUnlanded = _resumeLedger ? (_gate.resume_ledger.unlanded ?? []) : [];"
+    ) in script
+    assert "if (_ledgerUnlanded.length) { _ledgerExec = true; }" in script
+    assert script.index("const _ledgerUnlanded") < script.index("const _ledgerOwes")
 
 
 def test_resume_composes_no_review_or_test_call_before_verify(monkeypatch):

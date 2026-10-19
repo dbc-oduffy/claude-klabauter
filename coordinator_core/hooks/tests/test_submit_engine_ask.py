@@ -1099,7 +1099,7 @@ def test_a_slice_behind_a_halted_predecessor_is_told_to_resubmit_fresh(tmp_path)
     out, _ = _submit_slice(root, "r2")
     reason = _hso(out)["permissionDecisionReason"]
     assert 'fresh {ask, supersedes: "r2"}' in reason and "r1" in reason
-    assert "Land r1's declared writes" in reason
+    assert "dispatch.record_halted_run_landed" in reason
 
 
 def test_a_halted_predecessor_whose_declared_writes_landed_releases_the_slice(tmp_path, monkeypatch):

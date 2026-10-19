@@ -14,7 +14,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
-from pathlib import Path
+from pathlib import Path, PurePath
 from typing import BinaryIO, Optional
 
 from coordinator_core.ops.dispatch_emit import run_token
@@ -42,6 +42,28 @@ def params_path(repo_root: object, run_id: object) -> Optional[Path]:
     if not isinstance(run_id, str) or not run_token._RUN_ID_RE.match(run_id):
         return None
     return Path(str(repo_root)) / RUN_DIR_ROOT / run_id / PARAMS_FILE_NAME
+
+
+def missing_file_diagnosis(path: str) -> Optional[str]:
+    """Message naming the params file's writer when `path` is a run's canonical params path.
+
+    Pure: one path parse, no filesystem call. None for any other path.
+    """
+    parts = PurePath(path).parts
+    root = PurePath(RUN_DIR_ROOT).parts
+    if len(parts) < len(root) + 2 or parts[-1] != PARAMS_FILE_NAME:
+        return None
+    if parts[-2 - len(root) : -2] != root:
+        return None
+    run_id = parts[-2]
+    if not run_token._RUN_ID_RE.match(run_id):
+        return None
+    return (
+        f"terminal_commit params file for run {run_id} was never written. Its writer is the "
+        "commit stage's `block_subagent_commit` run-token leg, which writes it from the spawn "
+        "prompt's params block on the git-commit-agent's Bash call; that leg did not run or "
+        "refused this command. Not dispatched; nothing committed."
+    )
 
 
 def render_params_block(params: dict) -> str:

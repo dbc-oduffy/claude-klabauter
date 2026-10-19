@@ -141,10 +141,9 @@ _BODY_PLACEHOLDER = (
     "<!-- Compose your memo body here (memo.compose), then deliver it via "
     "memo.send. -->\n"
     f"<!-- summary: one line, <= {_SUMMARY_MAX_CHARS} chars — memo.draft "
-    f"WARNS (advisory, still writes) on an explicitly-authored summary over "
-    f"the cap and keeps it out of summary: (recoverable here in the body "
-    f"instead); memo.compose and memo.send still hard-REFUSE one. A summary "
-    f"derived from your body at memo.compose time self-truncates instead. "
+    f"and memo.send REFUSE an explicitly-authored summary over the cap "
+    f"(memo.compose advises). A summary derived from your body at "
+    f"memo.compose time self-truncates instead. "
     f"-->\n"
     "<!-- Claims about the receiver's tree — their repo is co-located and "
     "readable, so READ IT rather than disclosing that you didn't.\n"
@@ -438,17 +437,9 @@ def _validate_draft_params(params: dict):
         )
 
     summary: Optional[str] = params.get("summary") or None
-    # 2026-08-07 warn-at-draft split (docs/plans/2026-08-07-memo-summary-cap-
-    # warn-at-draft.md § C2): an over-cap EXPLICITLY authored summary no
-    # longer fails the draft loud — memo.compose/memo.send still hard-refuse
-    # (unchanged, Anti-scope), but memo.draft is a staging step the author
-    # can still edit before delivery, so it advises instead. The advisory
-    # message (None when summary is absent or in-cap) is carried through to
-    # the handler via this tuple's last element; the ORIGINAL summary text
-    # is also returned unchanged here — the handler, not this function,
-    # decides how to keep it out of `summary:` while still writing it
-    # somewhere recoverable (AC1, AC2).
-    summary_cap_advisory = validate_explicit_summary("draft", summary)
+    summary_cap_error = validate_explicit_summary("draft", summary)
+    if summary_cap_error is not None:
+        return build_setup_error_result(_MODE, dry_run, summary_cap_error)
 
     # `kind` is REQUIRED here, matching memo.send's own gate on the same
     # field. Drafting without it mints an artifact this op's own send verb
@@ -522,8 +513,7 @@ def _validate_draft_params(params: dict):
 
     return (
         dry_run, topic, to, title, summary, kind, scoped_to, classify_receiver,
-        in_reply_to, space, supersedes, summary_cap_advisory,
-        display_name_advisory,
+        in_reply_to, space, supersedes, display_name_advisory,
     )
 
 
@@ -709,17 +699,13 @@ def _memo_draft(params: dict, repo_root=None) -> dict:
                                     RECEIVER's tree, which this op cannot read.
 
     Returns:
-        Both the dry_run preview candidate and the act-path acted item carry
-        an additive `summary_cap_advisory` field (str | None, 2026-08-07
-        warn-at-draft split) — None on a clean/absent summary, else the
-        `_memo_summary.validate_explicit_summary("draft", ...)` message when
-        the explicit `summary` param is over `_SUMMARY_MAX_CHARS`. This NEVER
-        blocks the draft (memo.compose/memo.send still hard-refuse — see
-        their own C3 handling); the over-cap text is kept out of `summary:`
-        and preserved verbatim in the draft body instead (AC1, AC2).
+        An explicit `summary` over `_SUMMARY_MAX_CHARS` returns an
+        exit_code:1 setup-error envelope (message from
+        `_memo_summary.validate_explicit_summary("draft", ...)`) in both
+        dry_run and act modes; nothing is written.
 
-        Both also carry an additive `display_name_advisory` field (str |
-        None) — None when neither `title` nor `summary` names a
+        Both the dry_run preview candidate and the act-path acted item carry
+        an additive `display_name_advisory` field (str | None) — None when neither `title` nor `summary` names a
         session-style display name (`<repo>-<nn>`) without a nearby session
         id (UUID) or claim reference, else the advisory message. This NEVER
         blocks the draft either — see `detect_unqualified_display_names` /
@@ -772,8 +758,7 @@ def _memo_draft(params: dict, repo_root=None) -> dict:
         return validated
 
     (dry_run, topic, to, title, summary, kind, scoped_to, classify_receiver,
-     in_reply_to, space, supersedes, summary_cap_advisory,
-     display_name_advisory) = validated
+     in_reply_to, space, supersedes, display_name_advisory) = validated
 
     refusal = feature_refusal("cross_repo_memos")
     if refusal:
@@ -819,7 +804,6 @@ def _memo_draft(params: dict, repo_root=None) -> dict:
                 "use memo.compose to edit it."
                 if collision_exists else None
             ),
-            "summary_cap_advisory": summary_cap_advisory,
             "display_name_advisory": display_name_advisory,
         }])
 
@@ -840,26 +824,12 @@ def _memo_draft(params: dict, repo_root=None) -> dict:
             ),
         }])
 
-    # compose_draft_frontmatter (which then writes SUMMARY_PLACEHOLDER, same
-    frontmatter_summary = summary if summary_cap_advisory is None else None
-    body_prefix = ""
-    if summary_cap_advisory is not None:
-        body_prefix = (
-            "<!-- memo.draft: your summary was "
-            f"{len(summary)} chars (cap {_SUMMARY_MAX_CHARS}) — it was NOT "
-            "written into summary: above (that would silently truncate it); "
-            "your original text is preserved below for you to shorten and "
-            "move back at memo.compose time.\n"
-            f"original over-cap summary: {summary}\n"
-            "-->\n"
-        )
-
     content = compose_draft_frontmatter(
         from_id=from_id, to=to, title=title, today=today,
-        summary=frontmatter_summary, kind=kind,
+        summary=summary, kind=kind,
         scoped_to=scoped_to, in_reply_to=in_reply_to, space=space,
         supersedes=supersedes,
-    ) + "\n" + body_prefix + _BODY_PLACEHOLDER
+    ) + "\n" + _BODY_PLACEHOLDER
 
     try:
         _write_draft_file(target_path, content)
@@ -881,7 +851,6 @@ def _memo_draft(params: dict, repo_root=None) -> dict:
         _MODE,
         [{
             "id": str(target_path), "written": True, "topic": topic, "to": to,
-            "summary_cap_advisory": summary_cap_advisory,
             "display_name_advisory": display_name_advisory,
         }],
         [],

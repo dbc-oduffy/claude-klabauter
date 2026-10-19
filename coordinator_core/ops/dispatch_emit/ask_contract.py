@@ -359,6 +359,9 @@ RESUME_LEDGER_REMAINING_FIELD = "remaining"
 RESUME_LEDGER_NOTES_FIELD = "revise_notes"
 #: `resume_ledger` verdict key carrying the ids an earlier halt judged met that a later no-landing halt re-listed.
 RESUME_LEDGER_CARRIED_MET_FIELD = "carried_met"
+#: `resume_ledger` verdict key carrying the open plan rows the halted run staged that no checkpoint
+#: or halt commit landed; `[]` when every staged row landed.
+RESUME_LEDGER_UNLANDED_FIELD = "unlanded"
 #: halted.json key a ledger-check halt records `[{id, remaining, evidence}]` for its blocking rows under.
 HALT_BLOCKING_ITEMS_FIELD = "blocking_items"
 #: `dispatch.terminal_commit` param carrying `{run_id, halt_sha, blocking}` on a ledger resume.
@@ -557,6 +560,8 @@ class LedgerHalt:
     outcome: str | None = None
     #: Derived from the halt chain at resume; never persisted in the pointer.
     carried_met: tuple[str, ...] = ()
+    #: Open plan rows the halted run staged that no commit landed; derived at resume, never persisted.
+    unlanded: tuple[str, ...] = ()
 
     def to_json(self) -> dict[str, Any]:
         if self.halted == ALL_LANDED_HALT_KIND:

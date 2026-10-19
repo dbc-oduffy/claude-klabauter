@@ -69,6 +69,57 @@ def test_later_dir_wins(tmp_path):
     assert rc.read([d1, d2]) == {"C1": "r1", "C2": "r2"}
 
 
+SIZING = "state/sizings/2026-10-19-thing.yaml"
+
+
+def _run(tmp_path, name, sizing=SIZING, credits=(("C1", "e"),)):
+    d = tmp_path / rc.RECORD_DIR_ROOT / name
+    d.mkdir(parents=True)
+    (d / "run.json").write_text(json.dumps({"sizing_rel": sizing}), encoding="utf-8")
+    if credits:
+        rc.record(d, [{"chunk": c, "evidence": e} for c, e in credits], "t")
+    return d
+
+
+def test_credits_for_sizing_newest_wins(tmp_path):
+    _run(tmp_path, "ask-20261019T100000-aaaaaa", credits=(("C1", "old"), ("C2", "x")))
+    _run(tmp_path, "ask-20261019T120000-bbbbbb", credits=(("C1", "new"),))
+    assert rc.credits_for_sizing(tmp_path, SIZING) == {"C1": "new", "C2": "x"}
+
+
+def test_credits_for_sizing_ignores_other_sizing(tmp_path):
+    _run(tmp_path, "ask-20261019T100000-aaaaaa", sizing="state/sizings/2026-10-19-other.yaml")
+    assert rc.credits_for_sizing(tmp_path, SIZING) == {}
+
+
+def test_credits_for_sizing_ignores_dir_before_sizing_date(tmp_path):
+    _run(tmp_path, "ask-20261018T230000-aaaaaa")
+    assert rc.credits_for_sizing(tmp_path, SIZING) == {}
+
+
+def test_credits_for_sizing_counts_warp_dir_ordered_by_stamp(tmp_path):
+    _run(tmp_path, "warp-2026-10-19-thing-20261019T130000-cccccc", credits=(("C1", "warp"),))
+    _run(tmp_path, "ask-20261019T140000-dddddd", credits=(("C1", "ask-newer"),))
+    assert rc.credits_for_sizing(tmp_path, SIZING) == {"C1": "ask-newer"}
+    _run(tmp_path, "warp-2026-10-19-thing-20261019T150000-eeeeee", credits=(("C1", "warp-newest"),))
+    assert rc.credits_for_sizing(tmp_path, SIZING) == {"C1": "warp-newest"}
+
+
+def test_credits_for_sizing_undated_name_yields_empty(tmp_path):
+    _run(tmp_path, "ask-20261019T100000-aaaaaa", sizing="state/sizings/undated.yaml")
+    assert rc.credits_for_sizing(tmp_path, "state/sizings/undated.yaml") == {}
+
+
+def test_credits_for_sizing_skips_malformed_line(tmp_path):
+    d = _run(tmp_path, "ask-20261019T100000-aaaaaa", credits=())
+    (d / rc.CREDIT_FILE).write_text('garbage\n{"chunk": "C1", "evidence": "ok"}\n', encoding="utf-8")
+    assert rc.credits_for_sizing(tmp_path, SIZING) == {"C1": "ok"}
+
+
+def test_credits_for_sizing_missing_root(tmp_path):
+    assert rc.credits_for_sizing(tmp_path, SIZING) == {}
+
+
 def test_read_never_raises(tmp_path):
     assert rc.read([tmp_path / "missing"]) == {}
     (tmp_path / rc.CREDIT_FILE).write_text(

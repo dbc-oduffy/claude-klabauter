@@ -785,6 +785,16 @@ def _dispatch_argv_body(argv: list, cwd: str, *, allow_warm: bool) -> None:
             # os.getcwd(), which is meaningless when served warm.
             try:
                 params_json_str = Path(cwd, args.params_file).read_text(encoding="utf-8")
+            except FileNotFoundError as exc:
+                from coordinator_core.ops.dispatch_emit import terminal_commit_params_channel
+
+                diagnosis = terminal_commit_params_channel.missing_file_diagnosis(
+                    args.params_file
+                )
+                _fatal_stderr(
+                    diagnosis
+                    or f"Cannot read --params-file {args.params_file!r}: {exc}"
+                )
             except (OSError, UnicodeDecodeError) as exc:
                 _fatal_stderr(f"Cannot read --params-file {args.params_file!r}: {exc}")
     elif args.params_json is not None:

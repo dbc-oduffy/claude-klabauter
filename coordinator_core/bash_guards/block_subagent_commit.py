@@ -6897,12 +6897,26 @@ def _is_terminal_commit_params_file_cmd(cmd_for_scan: str) -> bool:
     )
 
 
-def _cd_prefixed_params_file_value(cmd_for_scan: str) -> Optional[str]:
-    """The path typed by a run's terminal-commit params-file segment, alone or after bare `cd <dir>` segments.
+def _is_materialization_prefix_segment(seg: List[str]) -> bool:
+    """True for exactly `cd <one arg>` or `mkdir -p <dir>...` (no other flag)."""
+    if seg[0] == "cd":
+        return len(seg) == 2
+    return (
+        seg[0] == "mkdir"
+        and len(seg) >= 3
+        and seg[1] == "-p"
+        and not any(t.startswith("-") for t in seg[2:])
+    )
+
+
+def _prefixed_params_file_value(cmd_for_scan: str) -> Optional[str]:
+    """The path typed by a run's terminal-commit params-file segment, alone or after bare `cd`/`mkdir -p` segments.
 
     Trap: the last segment must satisfy `_is_terminal_commit_params_file_cmd`'s predicate and every
-    earlier one must be exactly `cd <one arg>`. With a `cd` present the typed path must be absolute:
-    a relative one resolves against the hook's cwd here and the post-`cd` directory in the shell.
+    earlier one must satisfy `_is_materialization_prefix_segment`: neither form can stage, commit or
+    redirect, and the params come from the spawn prompt, never the typed text. With any prefix
+    present the typed path must be absolute: a relative one resolves against the hook's cwd here
+    and the post-`cd` directory in the shell.
     """
     tokens = _tokenize_full_command(cmd_for_scan)
     if tokens is None:
@@ -6911,7 +6925,7 @@ def _cd_prefixed_params_file_value(cmd_for_scan: str) -> Optional[str]:
     if not segments:
         return None
     *prefix, last = segments
-    if any(len(seg) != 2 or seg[0] != "cd" for seg in prefix):
+    if not all(_is_materialization_prefix_segment(seg) for seg in prefix):
         return None
     if not _token_matches_binary(last[0], _COORDINATOR_INVOKE_BINARY):
         return None
@@ -7141,7 +7155,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         typed_params_file = (
             None
             if payload_legs or heredoc_stdin_import_hit or not git_root
-            else _cd_prefixed_params_file_value(cmd_for_scan)
+            else _prefixed_params_file_value(cmd_for_scan)
         )
         if typed_params_file is not None:
             params_leg = _prompt_sourced_params_admit(

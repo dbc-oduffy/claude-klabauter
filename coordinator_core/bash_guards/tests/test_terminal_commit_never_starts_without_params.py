@@ -7,8 +7,10 @@ block_subagent_commit refused the compound shape, guard_level warn demoted the r
 allow, and the params file was never materialized, so the op failed reading it.
 
 Invariant, through the real chain (`evaluate_payload_json`, `apply_guard_level` included),
-at strict/warn/off and bare / `cd &&` / `cd ;` shapes: the verdict is a deny, or the
-canonical params file exists and equals the spawn prompt's params block."""
+at strict/warn/off and bare / `cd &&` / `cd ;` / `mkdir -p &&` / `mkdir -p ;` shapes: the
+verdict is a deny, or the canonical params file exists and equals the spawn prompt's params block.
+The mkdir shapes are the trigger of run ask-20261019T195211-39a919: the sidecar clause's
+`mkdir -p` was chained ahead of the commit argv."""
 
 from __future__ import annotations
 
@@ -26,7 +28,7 @@ _COMMIT_AGENT = "coordinator:git-commit-agent"
 _SCRIPT = "scratch/warp/a.workflow.mjs"
 _RUN = "ask-1"
 _LEVELS = ["strict", "warn", "off"]
-_SHAPES = ["bare", "cd_and", "cd_semi"]
+_SHAPES = ["bare", "cd_and", "cd_semi", "mkdir_and", "mkdir_semi"]
 
 
 @pytest.fixture
@@ -60,6 +62,10 @@ def _command(repo, shape: str) -> str:
         return f"cd {repo.as_posix()} && {argv}"
     if shape == "cd_semi":
         return f"cd {repo.as_posix()}; {argv}"
+    if shape == "mkdir_and":
+        return f"mkdir -p {repo.as_posix()}/sidecar && {argv}"
+    if shape == "mkdir_semi":
+        return f"mkdir -p {repo.as_posix()}/sidecar; {argv}"
     return argv
 
 

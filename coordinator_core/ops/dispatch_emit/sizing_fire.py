@@ -201,7 +201,10 @@ def resumable_plan(
     one `resume_landed_state` git spawn. A plan with
     no readable spine or no rows is not resumable (None). An em-performed row (declared `performer: em`,
     or derived by `em_only_act`) that the plan's evidence sidecar carries under `em_discharged` counts
-    landed, as in `read_spine` (`em_discharge_eligible`). One file read, plus one more on the already-ran
+    landed, as in `read_spine` (`em_discharge_eligible`). A row the EM credited through
+    `workflow.revise credit_chunks` on any run of this sizing (`run_credit.credits_for_sizing`) also counts
+    landed: one date-floored scandir plus a `credit.jsonl` read per candidate dir, only while a row is
+    still open. One file read, plus one more on the already-ran
     path, plus one more (the evidence sidecar) only when an open em-performed row exists; one `git log` only when a
     row is open. With rows left open, a ledger resume
     also needs the newest ledger-check halt's committed record to have staged every one of them
@@ -239,6 +242,11 @@ def resumable_plan(
     ]
     if open_ids:
         open_ids = _drop_em_discharged(plan, plan_text, rows, open_ids)
+    if open_ids:
+        from coordinator_core.ops.dispatch_emit.run_credit import credits_for_sizing
+
+        credited = credits_for_sizing(root, sizing_rel)
+        open_ids = [i for i in open_ids if i not in credited]
     state = None
     landed_open: tuple = ()
     if open_ids or not _terminal_coded(rows) or _sha_coded(rows):
@@ -247,6 +255,12 @@ def resumable_plan(
         state = resume_landed_state(root, plan_rel)
         landed_open = tuple((i, state.row_shas[i]) for i in open_ids if i in state.rows and state.row_shas.get(i))
         open_ids = [i for i in open_ids if i not in state.rows]
+        if open_ids:
+            from coordinator_core.ops.dispatch_emit.terminal_commit import rows_landed_outside_executor
+
+            outside = rows_landed_outside_executor(root, plan_rel, [r for r in rows if r.get("id") in open_ids])
+            landed_open += tuple((i, outside[i]) for i in open_ids if i in outside)
+            open_ids = [i for i in open_ids if i not in outside]
     halt = _ledger_halt_for(root, plan_rel, sizing_rel, rows, open_ids, state)
     if halt is not None:
         return ResumePlan(plan_rel, (), ledger=halt)
@@ -395,7 +409,7 @@ def _ledger_halt_for(
         root, plan_rel,
         LedgerHalt(
             state.ledger_run, plan_rel, sizing_rel, tuple(blocking),
-            halt_sha=state.ledger_sha, remaining=record.remaining,
+            halt_sha=state.ledger_sha, remaining=record.remaining, unlanded=tuple(open_ids),
         ),
         state.run_halts,
     )

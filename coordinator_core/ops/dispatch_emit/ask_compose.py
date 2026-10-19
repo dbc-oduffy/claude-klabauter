@@ -42,6 +42,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     RESUME_LEDGER_KIND_FIELD,
     RESUME_LEDGER_NOTES_FIELD,
     RESUME_LEDGER_REMAINING_FIELD,
+    RESUME_LEDGER_UNLANDED_FIELD,
     TERMINAL_RESUME_LEDGER_PARAM,
     RECORD_DIR_ROOT,
     RELAYED_ASK_FILE,
@@ -1886,12 +1887,16 @@ def compose_ask_script(
     b.append("  let _ledgerAdded = [];")
     b.append(f"  const _resumeLedger = !_halted && !!{_rl0};")
     b.append(
-        f"  const _ledgerOwes = _resumeLedger && _gate.arm === {_lit(ARM_M_PLUS)} && ({_rl0}.blocking ?? [])"
+        f"  const _ledgerUnlanded = _resumeLedger ? ({_rl0}.{RESUME_LEDGER_UNLANDED_FIELD} ?? []) : [];"
+    )
+    b.append(
+        f"  const _ledgerOwes = _resumeLedger && (_gate.arm === {_lit(ARM_M_PLUS)} || _gate.arm === {_lit(ARM_S)})"
+        f" && ({_rl0}.blocking ?? [])"
         f".some((id) => (((({_rl0}.{RESUME_LEDGER_REMAINING_FIELD} ?? {{}})[id]) ?? {{}}).remaining ?? []).length > 0);"
     )
     b.append(
-        f"  if (_resumeLedger) {{ _planRel = {_rl0}.plan; "
-        f"if (!_ledgerOwes) {{ _gate = {{ ..._gate, arm: {_lit(ARM_XS)} }}; }} }}"
+        f"  if (_resumeLedger) {{ _planRel = {_rl0}.plan; if (_ledgerUnlanded.length) {{ _ledgerExec = true; }} "
+        f"else if (!_ledgerOwes) {{ _gate = {{ ..._gate, arm: {_lit(ARM_XS)} }}; }} }}"
     )
     b.append(
         f"  const _allLandedResume = _resumeLedger && {_rl0}.{RESUME_LEDGER_KIND_FIELD} === {_lit(ALL_LANDED_HALT_KIND)};"
@@ -1920,7 +1925,9 @@ def compose_ask_script(
             "js:JSON.stringify({ run_id: _runId, plan_path: _planRel, writes: _writes, "
             "cross_repo_approved: _crossRepoApproved, session_id: _SESSION_ID, "
             "...(_sizingRel ? { commit_sizing_path: _sizingRel } : {}) })",
-            " with only_rows added, set to the ids of exactly the rows you added, and return its JSON reply "
+            " with only_rows set to the ids of exactly the rows you added",
+            "js:(_ledgerUnlanded.length ? ' together with these unlanded rows: ' + JSON.stringify(_ledgerUnlanded) : '')",
+            ", and return its JSON reply "
             "verbatim as manifest, every field and every row, trimming nothing. If it replies "
             "{\"error\": ...}, return that message as error and manifest null. When you added no row, "
             f"stage nothing and return manifest null.{session_tail}",
@@ -1937,7 +1944,8 @@ def compose_ask_script(
             ".filter((s) => typeof s === 'string' && s.trim()); "
             "if (_ledgerAdded.length) { _ledgerExec = true; "
             "_adoptManifest(_replanned?.manifest ?? (_replanned?.error ? { error: _replanned.error } : null)); } "
-            f"else {{ _gate = {{ ..._gate, arm: {_lit(ARM_XS)} }}; _stagedManifest = _gateStaged; _relayGap = _gateGap; }} }}"
+            f"else {{ if (!_ledgerUnlanded.length) {{ _gate = {{ ..._gate, arm: {_lit(ARM_XS)} }}; }} "
+            "_stagedManifest = _gateStaged; _relayGap = _gateGap; } }"
         )
 
         if blitz_fn:

@@ -39,6 +39,27 @@ def test_held_and_superseded_slice_keeps_superseded_text(tmp_path, monkeypatch):
     assert why == f"Run {A} is superseded by {B}; it does not start."
 
 
+def _after_pair(root, pred_status):
+    _parent(
+        root,
+        [c.SiblingRun(A, "a", status=c.STATUS_RUNNING), c.SiblingRun(B, "b", after=(A,), status=c.STATUS_AFTER)],
+    )
+    _write(root, c.status_rel(A), json.dumps(pred_status))
+
+
+def test_halted_predecessor_deny_names_record_op(tmp_path):
+    _after_pair(tmp_path, {"status": "halted", "parent_id": PARENT})
+    why = sea._slice_deny(tmp_path, (PARENT, B))
+    assert why is not None
+    assert "dispatch.record_halted_run_landed" in why
+    assert f'{{ask, supersedes: "{B}"}}' in why
+
+
+def test_landed_predecessor_with_sha_does_not_deny(tmp_path):
+    _after_pair(tmp_path, {"status": "landed", "sha": "abc123def456", "parent_id": PARENT})
+    assert sea._slice_deny(tmp_path, (PARENT, B)) is None
+
+
 def test_non_held_after_slice_deny_text_is_unchanged(tmp_path):
     _parent(
         tmp_path,

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
+import sys
 
 import pytest
 
@@ -179,6 +180,38 @@ def test_materialize_returns_false_when_parent_is_a_file(tmp_path):
     blocker = tmp_path / "blocker"
     blocker.write_text("x")
     assert ch.materialize(blocker / "sub" / ch.PARAMS_FILE_NAME, PARAMS) is False
+
+
+def test_missing_file_diagnosis_names_run_and_writer(tmp_path):
+    diagnosis = ch.missing_file_diagnosis(str(tmp_path / "scratch" / "warp" / "run-1" / ch.PARAMS_FILE_NAME))
+    assert diagnosis is not None
+    assert "run-1" in diagnosis
+    assert "block_subagent_commit" in diagnosis
+    assert "Not dispatched" in diagnosis
+
+
+def test_missing_file_diagnosis_accepts_forward_slash_and_relative():
+    assert ch.missing_file_diagnosis("scratch/warp/run-1/" + ch.PARAMS_FILE_NAME) is not None
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="PurePosixPath does not split on backslash")
+def test_missing_file_diagnosis_accepts_backslash_separators():
+    assert ch.missing_file_diagnosis("r\\scratch\\warp\\run-1\\" + ch.PARAMS_FILE_NAME) is not None
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "scratch/warp/run-1/other.json",
+        "scratch/warp/-bad/" + ch.PARAMS_FILE_NAME,
+        "scratch/other/run-1/" + ch.PARAMS_FILE_NAME,
+        "warp/run-1/" + ch.PARAMS_FILE_NAME,
+        ch.PARAMS_FILE_NAME,
+        "",
+    ],
+)
+def test_missing_file_diagnosis_refuses_other_paths(path):
+    assert ch.missing_file_diagnosis(path) is None
 
 
 @pytest.mark.spawns_process

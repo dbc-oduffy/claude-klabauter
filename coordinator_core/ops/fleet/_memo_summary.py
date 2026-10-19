@@ -22,8 +22,8 @@ Negative-spec:
   - Does NOT know about frontmatter composition, YAML quoting, or the
     9-canonical-field emission order — those stay in memo_compose.py /
     memo_send.py respectively. This module is summary-derivation ONLY.
-  - Does NOT know about draft-vs-delivery refusal POLICY (warn-and-write at
-    memo.draft, hard-refuse at memo.compose/memo.send) — `validate_explicit_
+  - Does NOT know about draft-vs-delivery refusal POLICY (hard-refuse at
+    memo.draft/memo.send; memo.compose advises) — `validate_explicit_
     summary` below only performs the length comparison and formats the
     existing message text for the caller's mode; deciding whether an
     over-cap result blocks the call or merely advises stays with each
@@ -167,7 +167,7 @@ def validate_explicit_summary(mode: str, summary: str | None) -> str | None:
     `mode` selects which EXISTING caller's message wording to reproduce —
     one of "draft", "compose", "send", "send_backstop" (see
     _VALIDATION_MESSAGES above). Callers decide what to DO with a non-None
-    result (hard-refuse at compose/send, advise-and-write at draft) — this
+    result (refuse at draft/send, advise at compose) — this
     function only measures and formats.
     """
     if summary is None or len(summary) <= _SUMMARY_MAX_CHARS:

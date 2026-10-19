@@ -276,9 +276,19 @@ def _sizing_path(root: Path, sizing_rel: str) -> Path:
     from coordinator_core.session.record_homes import home_dir
 
     found = contained_path(Path(root) / sizing_rel, [Path(home_dir(str(root), "sizings"))])
-    if found is None or not found.is_file():
-        raise LedgerRefused(f"sizing {sizing_rel!r} is not a file under the sizings home")
-    return found
+    if found is not None and found.is_file():
+        return found
+    # Trap: the archive probe is a basename rglob, so it runs only on a live miss. Writers
+    # (_mutate_register, locked_rmw, apply_verdict) edit the archived record in place; that is
+    # intended -- the archive is the sizing's home once the review stamp moves it.
+    from coordinator_core.ops._sizing_citation import resolve_sizing_citation
+
+    archived = resolve_sizing_citation(root, sizing_rel)
+    if archived is not None and archived.is_file():
+        contained = contained_path(archived, [Path(root) / "archive" / "sizings"])
+        if contained is not None:
+            return contained
+    raise LedgerRefused(f"sizing {sizing_rel!r} is not a file under the sizings home or the sizings archive")
 
 
 def _withheld_revision(row: Mapping) -> Optional[str]:
