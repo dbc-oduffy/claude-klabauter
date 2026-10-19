@@ -3771,12 +3771,11 @@ def _meta_block(
     )
 
 
-#: Turns a group reply's `<ID>: <STATUS> <text>` line into the `<STATUS>: <text>` reply shape
-#: `_runRow` classifies; a missing line stays null, which reads incomplete.
+#: `_memberResult` already yields the `<STATUS>: <text>` shape `_runRow` classifies, so a group
+#: member's status is that line; a missing line stays null, which reads incomplete.
 _MEMBER_STATUS_JS = """\
 function _memberStatus(text, id) {
-  const line = _memberResult(text, id);
-  return line === null ? null : line.slice(id.length + 1).trim().replace(/^(\\w+):?/, '$1:');
+  return _memberResult(text, id);
 }
 """
 

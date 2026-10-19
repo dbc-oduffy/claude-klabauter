@@ -186,7 +186,7 @@ function _memberResult(text, id) {
   const re = new RegExp('(?:^|[^\\\\w.\\\\-/])[*_`]*' + esc + '[*_`]*\\\\s*:[*_`\\\\s]*(DONE|PARTIAL|BLOCKED)(?![\\\\w-])[*_`]*(.*)$', 'i');
   for (let i = lines.length - 1; i >= 0; i--) {
     const m = re.exec(lines[i]);
-    if (m) return (id + ': ' + m[1].toUpperCase() + ' ' + m[2].trim()).trim();
+    if (m) return (m[1].toUpperCase() + ': ' + m[2].trim()).trim();
   }
   return null;
 }

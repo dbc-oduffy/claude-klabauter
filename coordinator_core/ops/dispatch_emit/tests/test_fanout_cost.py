@@ -1,5 +1,6 @@
 """Pins the fanout_cost grouping rule, meta/reply rendering and group helpers."""
 
+import json
 import shutil
 import subprocess
 
@@ -143,7 +144,7 @@ def test_member_result_helper_returns_each_members_own_line_or_null():
         [shutil.which("node"), "-e", probe], capture_output=True, text=True, timeout=30,
         **no_console_creationflags(),
     )
-    assert out.stdout.strip() == '["C1: DONE ok","C10: PARTIAL half",null,null]'
+    assert out.stdout.strip() == '["DONE: ok","PARTIAL: half",null,null]'
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node absent")
@@ -162,6 +163,40 @@ def test_member_result_credits_decorated_and_inline_status_lines_each_to_own_row
         **no_console_creationflags(),
     )
     assert out.stdout.strip() == (
-        '["C0: DONE ran 51 tests pass","S1: PARTIAL half","T1: BLOCKED nope",null'
-        ',"C10: DONE ten","Z9: DONE inline",null]'
+        '["DONE: ran 51 tests pass","PARTIAL: half","BLOCKED: nope",null'
+        ',"DONE: ten","DONE: inline",null]'
     )
+
+
+_HQ07_REPLY = (
+    "C0: DONE `_manifest_from_json` no longer coerces `ttl_s` through `int()`, so `true` and `1.5` are now "
+    "refused. I added a test for that in `test_main.py`, and 53 tests pass across `test_contract`, `test_main`, "
+    "`test_bundle` and `test_launch`. Report: `.coordinator-local/subagent-share/dispatch-reports/"
+    "2026-10-19-gpu-placement-ledger-runpod-job-shape/C0.md`.\n"
+    "S1: DONE `job-shape.md` already held both shapes and the TTL-expiry finding. I added the missing term-trap "
+    "paragraph distinguishing pod TTL from the GPU-tenant lease `ttl_s`. I did not re-check the doc's other "
+    "file:line cites. Report: `.coordinator-local/subagent-share/dispatch-reports/"
+    "2026-10-19-gpu-placement-ledger-runpod-job-shape/S1.md`.\n\n"
+    "Beyond brief: I briefly wrote a scratch file `scratch/c0_append.txt` through Bash, outside my footprint, "
+    "and deleted it straight away.\n"
+)
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node absent")
+def test_hq07_reply_classifies_both_rows_done_through_the_real_run_row_regexes():
+    from coordinator_core.ops.dispatch_emit import emit
+
+    probe = (
+        f.GROUP_MEMBER_RESULT_JS
+        + emit._MEMBER_STATUS_JS
+        + f"const r = {json.dumps(_HQ07_REPLY)};"
+        + f"const any = {emit._ANY_STATUS_JS_RE}, nonDone = {emit._NON_DONE_STATUS_JS_RE};"
+        + "const cls = (res) => { const t = JSON.stringify(res ?? null);"
+        + " return nonDone.test(t) ? 'nondone' : any.test(t) ? 'done' : 'unanswered'; };"
+        + "console.log(JSON.stringify(['C0','S1','T1'].map(i=>cls(_memberStatus(r,i)))));"
+    )
+    out = subprocess.run(
+        [shutil.which("node"), "-e", probe], capture_output=True, text=True, timeout=30,
+        **no_console_creationflags(),
+    )
+    assert out.stdout.strip() == '["done","done","unanswered"]'
