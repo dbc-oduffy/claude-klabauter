@@ -177,8 +177,38 @@ def commit_halted_record(worktree_root: Path, repo_root: Path, params: dict) -> 
             refusal["siblings"] = siblings
         return refusal
     reply = _land(worktree_root, repo_root, params, run_id, record_dir_rel, halted)
+    if token is not None:
+        reply = _reconcile_landing(worktree_root, run_id, token, script_path, halted, reply)
     if siblings is not None:
         reply["siblings"] = siblings
+    return reply
+
+
+def _reconcile_landing(
+    worktree_root: Path, run_id: str, token: object, script_path: object, halted: dict, reply: dict
+) -> dict:
+    """Record a landed record commit beside the live token; answer a re-run that finds nothing left
+    to commit as ``already_landed`` with the recorded sha when it is on HEAD and the halt kind is the
+    same. The token is never consumed or released here, and a re-run lands no second commit."""
+    from coordinator_core.ops.dispatch_emit import run_token
+    from coordinator_core.ops.dispatch_emit.grind_commit_contract import ALREADY_LANDED_KEY
+    from coordinator_core.ops.dispatch_emit.terminal_commit_reconcile import landed_on_head
+
+    kind = halted.get("halted")
+    if reply.get("committed") and isinstance(reply.get("sha"), str):
+        run_token.note_halt_landing(
+            worktree_root, run_id, token, script_path,
+            {"sha": reply["sha"], "paths": list(reply.get("paths") or []), "halted": kind},
+        )
+        return reply
+    if reply.get("committed") is False and reply.get("nothing_to_commit") and not reply.get("error"):
+        landed = run_token.halt_landing(worktree_root, run_id, token, script_path)
+        sha = landed.get("sha") if landed else None
+        same_halt = bool(landed) and landed.get("halted") == kind
+        if same_halt and isinstance(sha, str) and landed_on_head(worktree_root, sha):
+            answer = {k: v for k, v in reply.items() if k != "nothing_to_commit"}
+            return {**answer, "committed": True, "sha": sha, ALREADY_LANDED_KEY: True,
+                    "paths": list(landed.get("paths") or [])}
     return reply
 
 

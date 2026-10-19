@@ -139,24 +139,58 @@ def _launched_task_ids(session_id: str, script_path: str, dirs: list[str]) -> li
     return [task_id for task_id, _ in _launch_records(session_id, script_path, dirs)]
 
 
-def _launch_records(session_id: str, script_path: str, dirs: list[str]) -> list[tuple[str, dict]]:
+class LaunchSnapshot:
+    """One session's launch-record filenames per launch dir, listed once, with each record read at
+    most once. Scoped to a single caller's loop: it never outlives it, so nothing invalidates it."""
+
+    def __init__(self, session_id: str, dirs: list[str]) -> None:
+        self.session_id = session_id
+        self.dirs = list(dirs)
+        self._names: dict[str, list[str]] = {}
+        self._records: dict[str, Optional[dict]] = {}
+        self._tails: dict[str, str] = {}
+        if _SAFE_ID_RE.match(session_id or ""):
+            prefix = f"workflow-run-{session_id}-"
+            for tmpdir in self.dirs:
+                try:
+                    listed = os.listdir(tmpdir)
+                except OSError:
+                    continue
+                self._names[tmpdir] = [n for n in listed if n.startswith(prefix) and n.endswith(".json")]
+
+    def tail(self, path: str) -> str:
+        if path not in self._tails:
+            self._tails[path] = _tail(path)
+        return self._tails[path]
+
+    def names(self, tmpdir: str) -> list[str]:
+        return self._names.get(tmpdir, [])
+
+    def read(self, tmpdir: str, name: str) -> Optional[dict]:
+        key = os.path.join(tmpdir, name)
+        if key not in self._records:
+            self._records[key] = _read_json(Path(tmpdir) / name)
+        return self._records[key]
+
+
+def _launch_records(
+    session_id: str, script_path: str, dirs: list[str], snapshot: Optional[LaunchSnapshot] = None
+) -> list[tuple[str, dict]]:
     """(task id, launch record) pairs for `script_path` in this session, newest record last."""
     if not _SAFE_ID_RE.match(session_id or ""):
         return []
+    if snapshot is not None and (snapshot.session_id != session_id or snapshot.dirs != list(dirs)):
+        snapshot = None
+    if snapshot is None:
+        snapshot = LaunchSnapshot(session_id, dirs)
     prefix = f"workflow-run-{session_id}-"
     found: dict[str, tuple[float, dict]] = {}
     for tmpdir in dirs:
-        try:
-            names = os.listdir(tmpdir)
-        except OSError:
-            continue
-        for name in names:
-            if not (name.startswith(prefix) and name.endswith(".json")):
-                continue
+        for name in snapshot.names(tmpdir):
             task_id = name[len(prefix):-len(".json")]
             if not _SAFE_ID_RE.match(task_id):
                 continue
-            record = _read_json(Path(tmpdir) / name)
+            record = snapshot.read(tmpdir, name)
             if record and _same_path(record.get("scriptPath"), script_path):
                 fired = record.get("fired_at")
                 found[task_id] = (fired if isinstance(fired, (int, float)) else 0.0, record)
@@ -165,7 +199,12 @@ def _launch_records(session_id: str, script_path: str, dirs: list[str]) -> list[
 
 
 def _own_launch_ids(
-    session_id: str, script_path: str, dirs: list[str], tool_use_id: object, minted_at: float
+    session_id: str,
+    script_path: str,
+    dirs: list[str],
+    tool_use_id: object,
+    minted_at: float,
+    snapshot: Optional[LaunchSnapshot] = None,
 ) -> list[str]:
     """Task ids of the launches this mint submitted. A halted run re-fired under its own id shares
     the script path with its earlier launches, so the path alone never attributes a launch.
@@ -175,7 +214,7 @@ def _own_launch_ids(
     naming none (every capture names one) cannot be disproved and stays. Without a submitted id, a
     named record fired before the mint's whole second is an earlier launch."""
     own: list[str] = []
-    for task_id, record in _launch_records(session_id, script_path, dirs):
+    for task_id, record in _launch_records(session_id, script_path, dirs, snapshot):
         if record.get("pending"):
             continue
         recorded = record.get("tool_use_id")
@@ -217,6 +256,7 @@ def _run_ended(
     minted_at: float,
     dirs: list[str],
     tool_use_id: object = None,
+    snapshot: Optional[LaunchSnapshot] = None,
 ) -> Optional[str]:
     """Why the run is over, else None while it is live: `_EVIDENCE` once the harness reported the
     run's task terminal (halted returns included) or the submitting call was refused; `_TIMER`
@@ -225,9 +265,12 @@ def _run_ended(
         # An ownerless token is the unlaunched state with no owner to read: it ages out on the
         # same bound and is never spent.
         return _TIMER if time.time() - minted_at > UNLAUNCHED_GRACE_SECONDS else None
-    task_ids = _own_launch_ids(session_id, script_path, dirs, tool_use_id, minted_at)
+    task_ids = _own_launch_ids(session_id, script_path, dirs, tool_use_id, minted_at, snapshot)
     has_transcript = isinstance(transcript_path, str) and bool(transcript_path)
-    tail = _tail(transcript_path) if has_transcript else ""
+    if not has_transcript:
+        tail = ""
+    else:
+        tail = snapshot.tail(transcript_path) if snapshot is not None else _tail(transcript_path)
     if not task_ids:
         if tail and isinstance(tool_use_id, str) and tool_use_id:
             seen = tail if tool_use_id in tail else _earlier_lines(transcript_path, tool_use_id) + "\n" + tail
@@ -387,6 +430,7 @@ def _record_live(
     dirs: list[str],
     *,
     ended_on_evidence: bool = False,
+    snapshot: Optional[LaunchSnapshot] = None,
 ) -> bool:
     """True while the run is live; with `ended_on_evidence`, True only when the run ended on the
     harness's evidence (the one site that consumes the token)."""
@@ -398,7 +442,13 @@ def _record_live(
     )
     script = submission.get("script_path") or record.get("script_path")
     ended = _run_ended(
-        run_session, script, transcript, float(record["minted_at"]), dirs, submission.get("tool_use_id")
+        run_session,
+        script,
+        transcript,
+        float(record["minted_at"]),
+        dirs,
+        submission.get("tool_use_id"),
+        snapshot,
     )
     if ended == _EVIDENCE:
         _run_token.consume(root, run_id)
@@ -407,13 +457,20 @@ def _record_live(
     return ended is None
 
 
-def run_ended_on_evidence(repo_root: Path, record: dict, *, tmpdir: Optional[str] = None) -> bool:
+def run_ended_on_evidence(
+    repo_root: Path,
+    record: dict,
+    *,
+    tmpdir: Optional[str] = None,
+    snapshot: Optional[LaunchSnapshot] = None,
+) -> bool:
     """True only when the harness's own evidence shows the run ended (a terminal or stopped task
     notification, a gone task, a refused submitting call); an unlaunched-grace timer end is False.
     `record` is a token record (`run_id`, `minted_at`, `script_path`, `session_id`). Spends the
     token on an evidence end, as `_record_live` does."""
+    dirs = snapshot.dirs if snapshot is not None else _launch_dirs(tmpdir)
     return _record_live(
-        Path(repo_root), record, None, None, _launch_dirs(tmpdir), ended_on_evidence=True
+        Path(repo_root), record, None, None, dirs, ended_on_evidence=True, snapshot=snapshot
     )
 
 

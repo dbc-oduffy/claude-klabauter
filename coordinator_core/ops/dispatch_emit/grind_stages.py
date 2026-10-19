@@ -87,6 +87,7 @@ from coordinator_core.ops.dispatch_emit.emit import (
     resolve_agent_model,
 )
 from coordinator_core.backlog_grind_assemble.grind_rows import evidence_rel
+from coordinator_core.ops.dispatch_emit.terminal_commit_reconcile import TERMINAL_COMMIT_RECONCILE_CLAUSE
 from coordinator_core.ops.dispatch_emit.agent_sidecar import sidecar_clause, sidecar_dir
 from coordinator_core.ops.workflow_scaffold import _js_string_literal
 
@@ -1198,7 +1199,9 @@ def compose_grind_terminal_commit_call(
         (
             "lit",
             "\n\nReturn from its JSON reply committed, sha, rows, dropped, error, refused, "
-            f"{ALREADY_LANDED_KEY} and {UNLANDED_KEY}, verbatim (null where absent). Run nothing else.",
+            f"{ALREADY_LANDED_KEY} and {UNLANDED_KEY}, verbatim (null where absent). "
+            + TERMINAL_COMMIT_RECONCILE_CLAUSE
+            + " Run nothing else.",
         ),
     ]
     return _compose_commit_agent_call(

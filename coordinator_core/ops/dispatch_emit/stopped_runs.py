@@ -81,6 +81,7 @@ def stopped_own_runs(repo_root: Path, session_id: str, *, now: Optional[float] =
     if not candidates:
         return ()
     held = {r["run_id"]: r for r in run_token.held_records(root)}
+    snapshot = warp_live.LaunchSnapshot(session_id, warp_live._launch_dirs(None))
     out: list[str] = []
     for run_id, stamp in sorted(candidates):
         try:
@@ -97,7 +98,7 @@ def stopped_own_runs(repo_root: Path, session_id: str, *, now: Optional[float] =
                 "session_id": session_id,
                 "sizing_rel": submission.get("sizing_rel"),
             }
-            if warp_live.run_ended_on_evidence(root, record):
+            if warp_live.run_ended_on_evidence(root, record, snapshot=snapshot):
                 out.append(run_id)
         except Exception:
             continue

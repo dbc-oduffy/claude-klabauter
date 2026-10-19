@@ -45,6 +45,8 @@ _DIR = "coordinator-warp-run-tokens"
 _CLAIMED = "claimed"
 #: Where `consume(landed=...)` leaves the receipt of a landed commit; `mint` removes a stale one.
 _SPENT = "spent"
+#: Where `note_halt_landing` leaves the receipt of a landed halted-run record commit, which never spends the token.
+_HALTED = "halted"
 _RUN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,200}$")
 TOKEN_RE = re.compile(r"^[0-9a-f]{32}$")
 
@@ -69,7 +71,7 @@ def _common_dir(repo_root: Path) -> Optional[Path]:
 
 
 def _record_path(
-    repo_root: Path, run_id: str, *, claimed: bool = False, spent: bool = False
+    repo_root: Path, run_id: str, *, claimed: bool = False, spent: bool = False, halted: bool = False
 ) -> Optional[Path]:
     if not _RUN_ID_RE.match(run_id or ""):
         return None
@@ -77,7 +79,7 @@ def _record_path(
     if common is None:
         return None
     base = common / _DIR
-    sub = _SPENT if spent else _CLAIMED if claimed else None
+    sub = _SPENT if spent else _HALTED if halted else _CLAIMED if claimed else None
     return (base / sub if sub else base) / f"{run_id}.json"
 
 
@@ -128,7 +130,11 @@ def mint(
         "session_id": session_id,
         "sizing_rel": sizing_rel,
     }
-    for stale in (_record_path(repo_root, run_id, claimed=True), _record_path(repo_root, run_id, spent=True)):
+    for stale in (
+        _record_path(repo_root, run_id, claimed=True),
+        _record_path(repo_root, run_id, spent=True),
+        _record_path(repo_root, run_id, halted=True),
+    ):
         if stale is not None:
             stale.unlink(missing_ok=True)
     path.write_text(json.dumps(record, sort_keys=True), encoding="utf-8")
@@ -255,6 +261,47 @@ def spent_receipt(repo_root: Path, run_id: object, token: object, script_path: o
     if not _well_formed(run_id, token, script_path):
         return None
     receipt = _read(_record_path(repo_root, run_id, spent=True))
+    if not _matches(receipt, run_id, token, script_path):
+        return None
+    landed = receipt.get("landed")
+    return landed if isinstance(landed, dict) else None
+
+
+def claim_pending(repo_root: Path, run_id: object, token: object, script_path: object) -> bool:
+    """Read-only: True while a `redeem`ed claim for this `token` and `script_path` is neither
+    consumed nor released, i.e. a terminal commit is running. Claims nothing."""
+    if not _well_formed(run_id, token, script_path):
+        return False
+    return _matches(_read(_record_path(repo_root, run_id, claimed=True)), run_id, token, script_path)
+
+
+def note_halt_landing(repo_root: Path, run_id: object, token: object, script_path: object, landed: dict) -> None:
+    """Record the landed halted-run record commit (`landed`: sha, paths, halted kind) beside the
+    token without spending it: the live record stays, so the resumed run's product commit can
+    still redeem. Writes nothing when the token no longer matches the live record."""
+    if not _well_formed(run_id, token, script_path):
+        return
+    record = _read(_record_path(repo_root, run_id))
+    target = _record_path(repo_root, run_id, halted=True)
+    if not _matches(record, run_id, token, script_path) or target is None:
+        return
+    from coordinator_core.atomic_replace import atomic_write_bytes
+
+    receipt = {k: record.get(k) for k in ("run_id", "sha256", "script_path", "minted_at")}
+    receipt["landed"] = landed
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write_bytes(target, json.dumps(receipt, sort_keys=True).encode("utf-8"), preserve_mode=False)
+    except OSError:  # the commit already landed; a missing receipt only costs the repeat-call answer
+        pass
+
+
+def halt_landing(repo_root: Path, run_id: object, token: object, script_path: object) -> Optional[dict]:
+    """Read-only: the `landed` dict `note_halt_landing` recorded, under the same match and TTL
+    rule as `spent_receipt`; else None."""
+    if not _well_formed(run_id, token, script_path):
+        return None
+    receipt = _read(_record_path(repo_root, run_id, halted=True))
     if not _matches(receipt, run_id, token, script_path):
         return None
     landed = receipt.get("landed")

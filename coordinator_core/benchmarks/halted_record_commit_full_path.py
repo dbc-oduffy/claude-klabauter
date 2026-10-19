@@ -5,6 +5,8 @@ Each invocation builds a fresh repo under a caller-given directory: an untracked
 (a modified tracked file a finished chunk declares, an untracked sizing, a second run's record
 dir). It then calls `dispatch.terminal_commit`'s handler with `halted_by` params (no plan, no
 incomplete_chunks); the run script's marker supplies the finished chunk.
+The halt carries no test verdict, so the commit lands the record only and withholds `product.py`
+(`halt-record-only`); the driver asserts that withhold.
 `--setup-only` does everything except that call, so the cost of the call is `full - setup-only`.
 
 `--incident-shape` swaps the fixture for a 3-chunk run with C1 committed, C2/C3 files dirty, a
@@ -129,9 +131,10 @@ def main(argv: list[str]) -> int:
         params["incomplete_chunks"] = ["C2", "C3"]
         params["landed_chunks"] = ["C1"]
         params["run_outcome"] = {"incomplete_chunks": ["C2", "C3"], "landed_chunks": ["C1"]}
-    else:
-        expected |= {"product.py"}
     out = terminal_commit._handler(params, repo_root=repo / ".git")
+    if not incident and (out.get("withheld") or {}).get("product.py") != "halt-record-only":
+        print(f"halted-record commit did not withhold product.py: {out!r}", file=sys.stderr)
+        return 1
     if out.get("committed") is not True or set(out.get("paths") or []) != expected:
         print(f"halted-record commit did not complete: {out!r}", file=sys.stderr)
         return 1

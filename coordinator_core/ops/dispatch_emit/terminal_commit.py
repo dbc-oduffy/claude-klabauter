@@ -3936,7 +3936,54 @@ def _terminal_commit(
     return reply
 
 
-def _settle_token(token_state: dict, *, landed: bool) -> None:
+_CLAIM_POLL_SECS = 0.05
+
+
+def _redeem_or_answer(worktree_root: Path, run_id: object, token: str, script_path: object) -> Optional[dict]:
+    """Redeem the run token; None when this call holds the claim, else the reply that ends it.
+
+    A failed redeem answers ``already_landed`` from the spent receipt when its sha is on HEAD.
+    A claim a first call still holds is polled (read-only, no spawn) until it resolves or the
+    dispatcher's deadline is spent; a claim released meanwhile is redeemed here. An unresolved
+    claim is refused ``run-token-in-flight``; anything else is refused ``run-token``."""
+    import time
+
+    from coordinator_core import dispatch_abandon
+    from coordinator_core.ops.dispatch_emit import run_token, terminal_commit_reconcile
+
+    if run_token.redeem(worktree_root, run_id, token, script_path):
+        return None
+    landed = terminal_commit_reconcile.already_landed_reply(worktree_root, run_id, token, script_path)
+    if landed is not None:
+        return landed
+    if run_token.claim_pending(worktree_root, run_id, token, script_path):
+        left = dispatch_abandon.remaining()
+        if left is not None:
+            end = time.monotonic() + max(0.0, left - dispatch_abandon.REPLY_MARGIN_SECS)
+            while run_token.claim_pending(worktree_root, run_id, token, script_path) and time.monotonic() < end:
+                landed = terminal_commit_reconcile.already_landed_reply(worktree_root, run_id, token, script_path)
+                if landed is not None:
+                    return landed
+                time.sleep(_CLAIM_POLL_SECS)
+            if run_token.redeem(worktree_root, run_id, token, script_path):
+                return None
+            landed = terminal_commit_reconcile.already_landed_reply(worktree_root, run_id, token, script_path)
+            if landed is not None:
+                return landed
+        if run_token.claim_pending(worktree_root, run_id, token, script_path):
+            return _error(
+                "a first call of this run's terminal commit still holds the run token claim and has not "
+                "finished; this call committed nothing",
+                refused="run-token-in-flight",
+            )
+    return _error(
+        "params.run_token does not match a live, unspent token minted for params.run_id and "
+        "this script (a token admits one landed commit)",
+        refused="run-token",
+    )
+
+
+def _settle_token(token_state: dict, *, landed: bool, receipt: Optional[dict] = None) -> None:
     claim = token_state.get("claim")
     if claim is None:
         return
@@ -3944,7 +3991,7 @@ def _settle_token(token_state: dict, *, landed: bool) -> None:
 
     root, run_id, token, script_path = claim
     if landed:
-        run_token.consume(root, run_id)
+        run_token.consume(root, run_id, landed=receipt)
     else:
         run_token.release(root, run_id, token, script_path)
 
@@ -4024,12 +4071,9 @@ def _terminal_commit_inner(
     if params.get("run_token") is not None:
         from coordinator_core.ops.dispatch_emit import run_token
 
-        if not run_token.redeem(worktree_root, params.get("run_id"), params["run_token"], script_path_raw):
-            return _error(
-                "params.run_token does not match a live, unspent token minted for params.run_id and "
-                "this script (a token admits one landed commit)",
-                refused="run-token",
-            )
+        answered = _redeem_or_answer(worktree_root, params.get("run_id"), params["run_token"], script_path_raw)
+        if answered is not None:
+            return answered
         token_state["claim"] = (worktree_root, params.get("run_id"), params["run_token"], script_path_raw)
 
     guarded_script = contained_path(worktree_root / script_path_raw, [worktree_root])
@@ -5005,6 +5049,10 @@ def _terminal_commit_inner(
         )
     if reply.get("committed") and reply.get("sha"):
         token_state["landed"] = True
+        # Spend at landing, before any post-commit step, so a repeat call finds the receipt.
+        _settle_token(token_state, landed=True, receipt={
+            "sha": str(reply["sha"]), "rows": [c.id for c in contributing_chunks], "paths": list(all_paths),
+        })
         _release_siblings_at_landing(close_ctx, str(reply["sha"]))
     if not reply.get("committed"):
         _remove(worktree_root, receipt_paths)

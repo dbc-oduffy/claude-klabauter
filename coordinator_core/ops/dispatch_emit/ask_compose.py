@@ -99,6 +99,7 @@ from coordinator_core.ops.dispatch_emit.sizing_fire import (
     resolve_arm,
 )
 from coordinator_core.ops.dispatch_emit.terminal_commit_params_channel import PARAMS_BLOCK_JS, params_path
+from coordinator_core.ops.dispatch_emit.terminal_commit_reconcile import TERMINAL_COMMIT_RECONCILE_CLAUSE
 from coordinator_core.ops.dispatch_emit.wake_digest import (
     CAP_HELPER_JS,
     TERMINAL_COMMIT_CLI_HELPER_JS,
@@ -185,8 +186,14 @@ def _agent(
     """
     effort_opt = f"effort: {_lit(effort)}, " if effort else ""
     clause = _lit(_sidecar.sidecar_clause(_sidecar.sidecar_dir("ask", run_id, label)))
-    if "bin/coordinator-invoke" in prompt_expr and _emit._INDETERMINATE_RECONCILE_CLAUSE not in prompt_expr:
-        clause = _lit(" " + _emit._INDETERMINATE_RECONCILE_CLAUSE) + " + " + clause
+    if "coordinator-invoke" in prompt_expr:
+        reconcile = (
+            TERMINAL_COMMIT_RECONCILE_CLAUSE
+            if "dispatch.terminal_commit" in prompt_expr
+            else _emit._INDETERMINATE_RECONCILE_CLAUSE
+        )
+        if reconcile not in prompt_expr:
+            clause = _lit(" " + reconcile) + " + " + clause
     return (
         f"agent(({prompt_expr}) + {clause}, {{ label: {_lit(label)}, phase: {_lit(phase)}, "
         f"agentType: {_lit(agent_type)}, {_emit._model_opt(agent_type, agent_model)}, {effort_opt}"
@@ -312,6 +319,7 @@ _COMMIT_SCHEMA = _obj(
     {
         "committed": {"type": "boolean"},
         "sha": {"type": ["string", "null"]},
+        "already_landed": {"type": ["boolean", "null"]},
         "error": {"type": ["string", "null"]},
         "refused": {"type": ["string", "null"]},
         "sizing_shipped": {"type": ["object", "null"]},
@@ -2990,6 +2998,7 @@ def _append_docs_and_commit(
     )
     b.append(
         "    else { if (!_halted) _halted = { halted: 'commit', refused: _commit?.refused ?? null, "
+        "already_landed: _commit?.already_landed ?? null, "
         "error: _commit?.error ?? null, blob_drift: _commit?.blob_drift ?? null, "
         "plan: _planRel ?? null, sizing: _sizingRel ?? null }; "
         "if (_incompleteChunks.length === 0) { _nextAction.params.halted = _halted; _reviseAndRefire = null; } "
@@ -3056,7 +3065,7 @@ def _commit_stage_call(
         "run_id: _runId, run_token: _RUN_TOKEN, "
         f"doc_paths: {_DOC_PATHS_JS} }})",
         "\n\ndispatch.terminal_commit enumerates every file this run authored and lands it; you run the "
-        "one command and return its reply.\n\nReturn from its JSON reply committed, sha, error, refused, "
+        "one command and return its reply.\n\nReturn from its JSON reply committed, sha, already_landed, error, refused, "
         "sizing_shipped, close, fanout, siblings, run_artifacts and run_artifact_residue, verbatim (null "
         "where absent). Run nothing else.",
     )
@@ -3097,7 +3106,7 @@ def _halt_record_commit_fn(
         "ledger_verdict: _nextAction.params.ledger_verdict ?? null, "
         "plan_path: _nextAction.params.plan_path ?? _planRel ?? null } } : {}) })",
         "\n\ndispatch.terminal_commit enumerates every file this run authored and lands it; you run the "
-        "one command and return its reply.\n\nReturn from its JSON reply committed, sha, error, refused, "
+        "one command and return its reply.\n\nReturn from its JSON reply committed, sha, already_landed, error, refused, "
         "run_artifacts and run_artifact_residue, verbatim (null where absent). Run nothing else.",
     )
     call = _agent(

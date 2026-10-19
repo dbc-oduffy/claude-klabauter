@@ -186,6 +186,33 @@ def test_residue_ignores_live_run(repo, tmp_path, no_peers):
     assert stopped_runs.residue(repo, SESSION, []) == stopped_runs.StoppedResidue({}, {})
 
 
+@pytest.mark.parametrize("n", [3, 9])
+def test_scan_lists_each_launch_dir_once(repo, tmp_path, monkeypatch, n):
+    managed = tmp_path / "managed"
+    legacy = tmp_path / "legacy"
+    legacy.mkdir()
+    monkeypatch.setattr(warp_live, "legacy_top_level_path", lambda name: legacy / name)
+    rids = [_run_id(60 + i, f"a{i:05d}") for i in range(n)]
+    for i, rid in enumerate(rids):
+        task = f"w{i}"
+        _submit(repo, tmp_path, rid, body=_stopped_body(rid, task))
+        target = managed if i % 2 else legacy
+        (target / f"workflow-run-{SESSION}-{task}.json").write_text(
+            json.dumps({"scriptPath": SCRIPT, "tool_use_id": "tu-" + rid, "fired_at": 1.0 + i}),
+            encoding="utf-8",
+        )
+    listed: list[str] = []
+    real = warp_live.os.listdir
+
+    def spy(path):
+        listed.append(str(path))
+        return real(path)
+
+    monkeypatch.setattr(warp_live.os, "listdir", spy)
+    assert stopped_runs.stopped_own_runs(repo, SESSION) == tuple(sorted(rids))
+    assert sorted(listed) == sorted([str(managed), str(legacy)])
+
+
 def test_zero_subprocess(repo, tmp_path, no_peers, monkeypatch):
     rid = _run_id()
     _submit(repo, tmp_path, rid, body=_stopped_body(rid))
