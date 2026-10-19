@@ -25,6 +25,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional
 
+from coordinator_core import dispatch_abandon
 from coordinator_core.ops._path_guard import contained_path, safe_id
 from coordinator_core.ops.dispatch_emit import review_edits, run_artifacts
 from coordinator_core.ops.warp_run_deliverable import record_sizing_rel
@@ -492,6 +493,13 @@ def _land(
         commit_params["ignored_untracked"] = snapshot.ignored_among(paths)
     if session_id is not None:
         commit_params["session_id"] = session_id
+    left = dispatch_abandon.remaining()
+    if left is not None and left - dispatch_abandon.REPLY_MARGIN_SECS <= 0:
+        return _error(
+            f"ceremony.commit_v2 step not started: {left:.1f}s left before the dispatch deadline; "
+            "nothing committed",
+            **base,
+        )
     try:
         reply = reentrant_dispatch("ceremony.commit_v2", commit_params, repo_root=repo_root)
     except OpUnavailableError:

@@ -13,13 +13,14 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Iterator, Optional
 
 from coordinator_core.ops.dispatch_emit import run_token
-from coordinator_core.ops.dispatch_emit.ask_contract import RUN_DIR_ROOT, record_dir
+from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT, RUN_DIR_ROOT, record_dir
 from coordinator_core.ops.dispatch_emit.commit_request import MalformedCommitRequestError, parse_marker
 
 RECONCILED_FILE = "reconciled.json"
@@ -149,7 +150,9 @@ def live_run_deliverable_id(repo_root: Path, session_id: str, paths: Iterable[st
 
 def _halted(root: Path, run_id: str) -> bool:
     """A run whose record carries a `halted` marker writes nothing more; its token stays fresh for
-    the TTL but its declaration contests no one. A `resumed` marker is live again."""
+    the TTL and its declaration contests no live write. Its declared writes stay held against
+    another run's carry until it resumes or ages out (`halted_run_write_claims`). A `resumed`
+    marker is live again."""
     from coordinator_core.ops.dispatch_emit import halted_run
 
     try:
@@ -244,6 +247,50 @@ def live_run_write_claims(
         for path in wanted:
             if path in declared_set or any(path.startswith(pre + "/") or path == pre for pre in prefixes):
                 claims.setdefault(path, set()).add(sid)
+    return {p: sorted(s) for p, s in claims.items()}
+
+
+def halted_run_write_claims(
+    repo_root: Path, paths: Iterable[str], *, exclude_run: Optional[str], now: Optional[float] = None,
+) -> Optional[dict]:
+    """`{path: sorted halted run ids}` for each of `paths` a halted, unresumed run declares it writes.
+
+    Only record dirs whose run-id stamp is within `run_token.TTL_SECONDS` of `now` are read; a name
+    with no stamp, or an older one, costs no IO. `exclude_run` is skipped. No session filter. Returns
+    None (hold unknown) when an in-window halted run's declaration is unparseable and yields no
+    usable paths; {} when nothing is declared."""
+    import time
+
+    from coordinator_core.ops.dispatch_emit import stopped_runs
+
+    root = Path(repo_root)
+    wanted = {_norm(p) for p in paths if p}
+    wanted.discard("")
+    claims: dict = {}
+    if not wanted:
+        return claims
+    moment = time.time() if now is None else now
+    try:
+        with os.scandir(root / RECORD_DIR_ROOT) as entries:
+            names = sorted(e.name for e in entries if e.is_dir())
+    except OSError:
+        return claims
+    for run_id in names:
+        if exclude_run is not None and run_id == exclude_run:
+            continue
+        stamp = stopped_runs._stamp_epoch(run_id)
+        if stamp is None or moment - stamp > run_token.TTL_SECONDS:
+            continue
+        if not _halted(root, run_id):
+            continue
+        declared, prefixes, unreadable = _manifest_declared(run_id, root)
+        if unreadable and not declared and not prefixes:
+            logging.getLogger(__name__).warning("halted run %s: unreadable write declaration", run_id)
+            return None
+        declared_set = set(declared)
+        for path in wanted:
+            if path in declared_set or any(path.startswith(pre + "/") or path == pre for pre in prefixes):
+                claims.setdefault(path, set()).add(run_id)
     return {p: sorted(s) for p, s in claims.items()}
 
 

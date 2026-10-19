@@ -794,6 +794,20 @@ def _env_overrides_signing_config() -> bool:
     return False
 
 
+# Below this much signing budget a signature cannot plausibly complete (one agent exchange or one
+# spawn), so signing is skipped and the commit lands unsigned.
+_MIN_SIGN_BUDGET_SECS = 1.0
+
+
+def _signing_budget() -> Optional[float]:
+    """Seconds signing may still take before the dispatcher stops waiting for the reply, net of the
+    reply margin; None when no dispatcher deadline is bound (cold path: unbounded)."""
+    left = dispatch_abandon.remaining()
+    if left is None:
+        return None
+    return max(0.0, left - dispatch_abandon.REPLY_MARGIN_SECS)
+
+
 def _sign_commit_in_process(
     repo: Union[str, Path],
     tree_sha: str,
@@ -827,8 +841,11 @@ def _sign_commit_in_process(
     head += f"author {who}\ncommitter {who}\n"
     head_b = head.encode("utf-8", "surrogateescape")
     msg = message if isinstance(message, bytes) else message.encode("utf-8", "surrogateescape")
+    budget = _signing_budget()
+    # sign_via_agent joins its worker on 2 * timeout, so the per-exchange bound is half the budget.
+    timeout = sshsig._DEFAULT_TIMEOUT_S if budget is None else min(sshsig._DEFAULT_TIMEOUT_S, budget / 2)
     try:
-        armored = sshsig.sign_via_agent(head_b + b"\n" + msg, pub)
+        armored = sshsig.sign_via_agent(head_b + b"\n" + msg, pub, timeout=timeout)
     except sshsig.AgentUnavailable:
         return None
     gpgsig = "gpgsig " + armored.rstrip("\n").replace("\n", "\n ") + "\n"
@@ -877,6 +894,12 @@ def _sign_commit_tree(
     """
     from coordinator_core.git.run import run_git
 
+    budget = _signing_budget()
+    if budget is not None and budget < _MIN_SIGN_BUDGET_SECS:
+        return None, (
+            "commit.gpgsign is set but signing was skipped: the dispatch deadline leaves "
+            f"{budget:.1f}s -- committed unsigned"
+        )
     try:
         in_process = _sign_commit_in_process(
             repo, tree_sha, parent_sha, name, email, when, message,
@@ -894,9 +917,16 @@ def _sign_commit_tree(
         "GIT_AUTHOR_NAME": name, "GIT_AUTHOR_EMAIL": email, "GIT_AUTHOR_DATE": when,
         "GIT_COMMITTER_NAME": name, "GIT_COMMITTER_EMAIL": email, "GIT_COMMITTER_DATE": when,
     })
+    budget = _signing_budget()  # re-read: the in-process attempt may have spent some
+    if budget is not None and budget < _MIN_SIGN_BUDGET_SECS:
+        return None, (
+            "commit.gpgsign is set but signing was skipped: the dispatch deadline leaves "
+            f"{budget:.1f}s -- committed unsigned"
+        )
     try:
         result = run_git(
             args, cwd=str(repo), input=message.encode("utf-8", "surrogateescape"), env=env,
+            timeout=budget,
         )
     except Exception as exc:  # noqa: BLE001 -- signing must never break a commit
         return None, (

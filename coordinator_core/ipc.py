@@ -2460,9 +2460,11 @@ async def _dispatch_message_impl(msg: dict) -> dict:
     # Set on timeout so a handler thread that outlives its budget refuses its
     # irreversible step (`git.commit.commit_paths`) instead of landing late.
     import threading
+    import time
     from coordinator_core import dispatch_abandon
     _abandoned = threading.Event()
     _abandoned_token = dispatch_abandon.ACTIVE.set(_abandoned)
+    _deadline_token = dispatch_abandon.DEADLINE.set(time.monotonic() + op_timeout)
     _op_cpu: list = []
     _op_cpu_token = _op_cpu_secs_var.set(_op_cpu)
     import inspect
@@ -2547,6 +2549,7 @@ async def _dispatch_message_impl(msg: dict) -> dict:
         _op_cpu_secs_var.reset(_op_cpu_token)
         _declared_writes_var.reset(_declared_writes_token)
         dispatch_abandon.ACTIVE.reset(_abandoned_token)
+        dispatch_abandon.DEADLINE.reset(_deadline_token)
 
 
 def _timeout_error_envelope(method: str, op_timeout: float, id_: Any) -> dict:

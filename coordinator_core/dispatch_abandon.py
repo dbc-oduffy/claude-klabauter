@@ -13,10 +13,30 @@ cold-start import path.
 from __future__ import annotations
 
 import threading
+import time
 from contextvars import ContextVar
 from typing import Optional
 
 ACTIVE: ContextVar[Optional[threading.Event]] = ContextVar("dispatch_abandoned", default=None)
+
+# time.monotonic() instant after which the dispatcher stops waiting for this handler's reply.
+# The deadline is the dispatcher's wait, not a promise that the handler will be stopped.
+DEADLINE: ContextVar[Optional[float]] = ContextVar("dispatch_deadline", default=None)
+
+
+def remaining() -> Optional[float]:
+    """Seconds left before the dispatcher stops waiting for this handler; None when unbound
+    (cold in-process path), which a caller treats as unbounded."""
+    deadline = DEADLINE.get()
+    if deadline is None:
+        return None
+    return max(0.0, deadline - time.monotonic())
+
+
+# Seconds a deadline-bounded step leaves unspent so its reply still arrives before the backstop:
+# serialising and returning the reply, plus the skew between the server's pool wait (starts at
+# accept, warm.server._POOL_RESULT_DEADLINE_SECS) and this deadline (starts at bind).
+REPLY_MARGIN_SECS = 2.0
 
 
 def is_abandoned() -> bool:

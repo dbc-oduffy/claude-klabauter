@@ -90,6 +90,15 @@ def halted_record_measurement(tmp_path_factory):
 
 
 @pytest.fixture(scope="module")
+def halted_incident_measurement(tmp_path_factory):
+    return _measure(
+        tmp_path_factory.mktemp("terminal_commit_budget_halted_incident"),
+        "--incident-shape",
+        driver="coordinator_core.benchmarks.halted_record_commit_full_path",
+    )
+
+
+@pytest.fixture(scope="module")
 def grind_measurement(tmp_path_factory):
     return _measure(
         tmp_path_factory.mktemp("terminal_commit_budget_grind"),
@@ -116,6 +125,11 @@ def test_terminal_commit_mise_full_path_is_under_the_500ms_bar(mise_full_path_me
 def test_terminal_commit_halted_record_is_under_the_500ms_bar(halted_record_measurement):
     _assert_under_bar(halted_record_measurement)
     print(f"TERMINAL-COMMIT-HALTED {halted_record_measurement['detail']}")
+
+
+def test_terminal_commit_halted_incident_shape_is_under_the_500ms_bar(halted_incident_measurement):
+    _assert_under_bar(halted_incident_measurement)
+    print(f"TERMINAL-COMMIT-HALTED-INCIDENT {halted_incident_measurement['detail']}")
 
 
 def test_terminal_commit_grind_mode_is_under_the_500ms_bar(grind_measurement):

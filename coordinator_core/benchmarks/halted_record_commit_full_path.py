@@ -7,7 +7,11 @@ dir). It then calls `dispatch.terminal_commit`'s handler with `halted_by` params
 incomplete_chunks); the run script's marker supplies the finished chunk.
 `--setup-only` does everything except that call, so the cost of the call is `full - setup-only`.
 
-    python -m coordinator_core.benchmarks.halted_record_commit_full_path <dir> [--setup-only]
+`--incident-shape` swaps the fixture for a 3-chunk run with C1 committed, C2/C3 files dirty, a
+`run_outcome` carrying incomplete_chunks and landed_chunks, and a peer run's record dir; the repo is
+unsigned, since a signing stall is wall-clock waiting and this measures work.
+
+    python -m coordinator_core.benchmarks.halted_record_commit_full_path <dir> [--setup-only] [--incident-shape]
 """
 
 from __future__ import annotations
@@ -30,6 +34,44 @@ def _git(repo: Path, *args: str) -> str:
     if not done.ok:
         raise subprocess.CalledProcessError(done.returncode, ["git", *args], done.stdout, done.stderr)
     return done.stdout
+
+
+def build_incident_fixture(parent: Path) -> Path:
+    """The incident shape: a 3-chunk run whose C1 is committed, C2/C3 declared files dirty, beside a
+    peer run's record dir; returns the repo root."""
+    from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
+    from coordinator_core.ops.dispatch_emit.commit_request import ChunkCommit, CommitRequest, render_marker
+
+    repo = parent / uuid.uuid4().hex[:12]
+    repo.mkdir(parents=True)
+    _git(repo, "init", "-q")
+    _git(repo, "config", "user.email", "t@example.com")
+    _git(repo, "config", "user.name", "t")
+    _git(repo, "config", "commit.gpgsign", "false")
+    for name in ("c1.py", "c2.py", "c3.py"):
+        (repo / name).write_text("a = 1\n", encoding="utf-8")
+    (repo / "README.md").write_text("seed\n", encoding="utf-8")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-q", "-m", "seed")
+    (repo / "reports").mkdir()
+    chunks = []
+    for cid in ("C1", "C2", "C3"):
+        (repo / "reports" / f"{cid}.md").write_text(f"DONE: {cid}\n", encoding="utf-8")
+        chunks.append(ChunkCommit(id=cid, title=cid, paths=(f"{cid.lower()}.py",), report=f"reports/{cid}.md"))
+    (repo / "c1.py").write_text("a = 2\n", encoding="utf-8")
+    _git(repo, "commit", "-q", "-am", "C1 landed")
+    (repo / "c2.py").write_text("a = 2\n", encoding="utf-8")
+    (repo / "c3.py").write_text("a = 2\n", encoding="utf-8")
+    marker = render_marker(CommitRequest(chunks=tuple(chunks), session_id=None, repo_root=None, plan_path=None))
+    (repo / "run.mjs").write_text(f"{marker}\n", encoding="utf-8")
+    record = repo / RECORD_DIR_ROOT / RUN_ID
+    record.mkdir(parents=True)
+    for name in RECORD_FILES:
+        (record / name).write_text(f"{name}\n", encoding="utf-8")
+    other = repo / RECORD_DIR_ROOT / OTHER_RUN_ID
+    other.mkdir(parents=True)
+    (other / "ask.md").write_text("other\n", encoding="utf-8")
+    return repo
 
 
 def build_fixture(parent: Path) -> Path:
@@ -66,25 +108,30 @@ def build_fixture(parent: Path) -> Path:
 
 def main(argv: list[str]) -> int:
     args = [a for a in argv if not a.startswith("--")]
-    unknown = [a for a in argv if a.startswith("--") and a != "--setup-only"]
+    unknown = [a for a in argv if a.startswith("--") and a not in ("--setup-only", "--incident-shape")]
     if len(args) != 1 or unknown:
-        print("usage: halted_record_commit_full_path <dir> [--setup-only]", file=sys.stderr)
+        print("usage: halted_record_commit_full_path <dir> [--setup-only] [--incident-shape]", file=sys.stderr)
         return 2
     declare_benchmark_origin()
-    repo = build_fixture(Path(args[0]))
+    incident = "--incident-shape" in argv
+    repo = (build_incident_fixture if incident else build_fixture)(Path(args[0]))
     from coordinator_core.ops.dispatch_emit import terminal_commit
     from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
 
     if "--setup-only" in argv:
         return 0
-    out = terminal_commit._handler(
-        {
-            "script_path": "run.mjs", "run_id": RUN_ID,
-            "halted_by": {"halted": "ledger-check", "reason": "sizing refused: route is not spec-dispatch"},
-        },
-        repo_root=repo / ".git",
-    )
-    expected = {f"{RECORD_DIR_ROOT}/{RUN_ID}/{n}" for n in (*RECORD_FILES, "halted.json")} | {"product.py"}
+    params = {
+        "script_path": "run.mjs", "run_id": RUN_ID,
+        "halted_by": {"halted": "ledger-check", "reason": "sizing refused: route is not spec-dispatch"},
+    }
+    expected = {f"{RECORD_DIR_ROOT}/{RUN_ID}/{n}" for n in (*RECORD_FILES, "halted.json")}
+    if incident:
+        params["incomplete_chunks"] = ["C2", "C3"]
+        params["landed_chunks"] = ["C1"]
+        params["run_outcome"] = {"incomplete_chunks": ["C2", "C3"], "landed_chunks": ["C1"]}
+    else:
+        expected |= {"product.py"}
+    out = terminal_commit._handler(params, repo_root=repo / ".git")
     if out.get("committed") is not True or set(out.get("paths") or []) != expected:
         print(f"halted-record commit did not complete: {out!r}", file=sys.stderr)
         return 1

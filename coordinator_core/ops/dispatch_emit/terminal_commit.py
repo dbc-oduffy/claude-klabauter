@@ -84,7 +84,9 @@ Negative-spec:
     reports it, because widening the pathspec would hide a wrong spine. The one exception is a
     path the committing session itself holds a write-claim on and no live peer holds: the product
     commit passes ``carry_own_left_behind`` and commit_v2 carries it (``own_left_behind`` in the
-    reply, relayed verbatim). The second is a stopped own run's residue that commit_v2 carries
+    reply, relayed verbatim); a path a halted, unresumed in-window run declares it writes is
+    never carried by either, and the dirty ones are named under ``held_by_halted_run``
+    (``{path: [run_id, ...]}``). The second is a stopped own run's residue that commit_v2 carries
     (``stopped_run_residue`` in the reply, relayed verbatim): those paths count as landed, in
     neither ``undeclared_dirty`` nor ``undeclared_dirty_peer_held``. A dirty file in a
     declared directory that this run itself touched (its chunk reports, review ``slice_files``,
@@ -2415,10 +2417,14 @@ def _peer_held(
     return held | set(run_claims or ())
 
 
-def _live_run_claims(worktree_root: Path, candidates: Sequence[str], own_run_id: str) -> Optional[set[str]]:
-    """The ``candidates`` a live run other than ``own_run_id`` declares it writes, whichever session
-    holds that run (a sibling run of the committing session included); ``None`` when a live run's
-    declaration is unreadable. The own session is not excluded: its other runs are the target."""
+def _live_run_claims(
+    worktree_root: Path, candidates: Sequence[str], own_run_id: str, held_out: Optional[dict] = None,
+) -> Optional[set[str]]:
+    """The ``candidates`` another run than ``own_run_id`` holds: a live run's declared writes,
+    whichever session holds that run (a sibling run of the committing session included), united with
+    the declared writes of a halted, unresumed in-window run. ``None`` when either declaration is
+    unreadable. The own session is not excluded: its other runs are the target. ``held_out``, when
+    given, gains ``{path: [halted run ids]}`` for each candidate the halted leg held."""
     from coordinator_core.ops import warp_run_deliverable
 
     try:
@@ -2426,9 +2432,34 @@ def _live_run_claims(worktree_root: Path, candidates: Sequence[str], own_run_id:
             worktree_root, list(candidates), exclude_session="", cwd=str(worktree_root),
             exclude_run=own_run_id,
         )
+        halted = warp_run_deliverable.halted_run_write_claims(
+            worktree_root, list(candidates), exclude_run=own_run_id,
+        )
     except Exception:  # noqa: BLE001 -- contest unknown: carry nothing
         return None
-    return None if claims is None else set(claims)
+    if claims is None or halted is None:
+        return None
+    if held_out is not None:
+        held_out.update(halted)
+    return {*claims, *halted}
+
+
+def _dirty_held_by_halted_run(worktree_root: Path, held: dict) -> dict:
+    """``held`` ({path: halted run ids}) narrowed to the paths still dirty against the index.
+
+    The sibling resolver runs before ``own_left_behind``'s dirty test, so a recorded hold may be
+    clean. The run's worktree snapshot does not cover a path outside the run's scope, so the test is
+    ``own_left_behind``'s own (index identity, zero subprocess) run without the resolver. An
+    unreadable index reports every hold rather than none."""
+    if not held:
+        return {}
+    from coordinator_core.ops.ceremony import commit_companion
+
+    try:
+        dirty = set(commit_companion.own_left_behind(worktree_root, {"-": list(held)}, "-", ()))
+    except Exception:  # noqa: BLE001 -- surface the hold rather than hide it
+        dirty = set(held)
+    return {p: list(ids) for p, ids in sorted(held.items()) if p in dirty}
 
 
 def _own_run_seniority(worktree_root: Path, run_id: object, script_path_raw: object = None) -> Optional[tuple]:
@@ -4721,11 +4752,13 @@ def _terminal_commit_inner(
 
     sibling_run_id = _run_id_of(params, ask_run_dir, script_path_raw)
 
+    halted_held: dict = {}
+
     def commit_v2(params: dict, root: Path):
         from coordinator_core.ops.ceremony import commit_companion
 
         with commit_companion.excluding_sibling_claims(
-            lambda candidates: _live_run_claims(worktree_root, candidates, sibling_run_id)
+            lambda candidates: _live_run_claims(worktree_root, candidates, sibling_run_id, halted_held)
         ):
             return reentrant_dispatch("ceremony.commit_v2", params, repo_root=root)
 
@@ -4810,6 +4843,9 @@ def _terminal_commit_inner(
         reply = {"committed": False, "sha": None, "error": f"unexpected commit_v2 reply: {reply!r}"}
 
     reply = dict(reply)
+    held_report = _dirty_held_by_halted_run(worktree_root, halted_held)
+    if held_report:
+        reply["held_by_halted_run"] = held_report
     if reply.get("refused") == "blob-drift" and isinstance(reply.get("error"), str):
         reply["error"] = _blob_drift_remedy(
             reply["error"], _run_id_of(params, ask_run_dir, script_path_raw)
