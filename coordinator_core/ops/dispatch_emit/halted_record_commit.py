@@ -6,9 +6,10 @@ as one ``ceremony.commit_v2`` call carrying that directory's top-level files, th
 record dirs, claimed docs-stage paths), the declared writes of every chunk the run finished, and
 the halt reason in the message. Candidates are named paths, never the dirty tree. A finished chunk's tracked
 deletion is declared, a deletion git cannot see is dropped, and a path a live peer's claim holds
-is withheld and named. Only a ``ledger-check`` halt lands chunk product, because a resumed run counts
+is withheld and named. Only a ``ledger-check`` halt carrying a test verdict lands chunk product, because a resumed run counts
 only that halt's ``Lands-Chunks`` (``emit.resume_landed_rows``) and re-runs every other halt's
-chunks; any other halt lands the record and run artifacts only (``halt-record-only``). A
+chunks; any other halt, and a ``ledger-check`` halt with no verdict (``targeted_tests.check``
+``no-verdict``), lands the record and run artifacts only (``halt-record-only``). A
 ``ledger-check`` halt lands a chunk only with its import closure: a chunk whose Python or TS/JS
 imports would be missing at the commit, transitively, is withheld whole (``import-closure-open``).
 A chunk owning a ``.py`` that fails to parse (``py-unparseable``) or whose landing blob drops lines a
@@ -419,6 +420,7 @@ def _land(
     integrity: list = []
     targeted: Optional[dict] = None
     tfind: list = []
+    tcheck = ""
     if halted["halted"] == "ledger-check":
         tfind, tcheck = landing_integrity.failed_targeted_tests(landing_integrity.targeted_test_verdict(params))
         targeted = {
@@ -430,6 +432,14 @@ def _land(
     elif product or gone:
         from coordinator_core.authoring_leaks import import_closure, ts_import_closure
         from coordinator_core.ops.dispatch_emit import halt_closure
+
+        # Trap: no verdict on a ledger-check halt means the scoped-test leg never ran, so landing
+        # would ship untested product; a resumed run re-runs the withheld chunks and its terminal
+        # commit carries the verdict.
+        if tcheck == "no-verdict":
+            withheld.update({p: "halt-record-only" for p in product + gone if p in owner})
+            product = [p for p in product if p not in withheld]
+            gone = [p for p in gone if p not in withheld]
 
         partial = halt_closure.partial_chunks(owner, pending, product + gone)
         withheld.update({p: "chunk-write-set-partial" for p in product + gone if owner.get(p) in partial})

@@ -488,12 +488,9 @@ def _granted_suite_run(cmd: str, session_id: object, cwd: Optional[str]) -> bool
     segments = _pytest_segments(cmd)
     if not segments or any(_normalize_executable_basename(w[0]) != _SUITE_MUTEX for w in segments):
         return False
-    from coordinator_core.session.grant import check_tier_u_grant
+    from coordinator_core.session.suite_authority import suite_authority
 
-    try:
-        return check_tier_u_grant(cwd, session_id=session_id)[0]
-    except Exception:
-        return False
+    return suite_authority(cwd, session_id=session_id).authorized
 
 
 def _bump_counter(repo_root: str, session_id: str, armed_since: float = 0.0) -> int:

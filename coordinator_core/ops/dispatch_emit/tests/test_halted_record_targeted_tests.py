@@ -86,13 +86,19 @@ def test_pre_existing_only_lands_chunks(repo):
     assert out["targeted_tests"] == {"check": "pre-existing-only", "findings": []}
 
 
-def test_no_verdict_lands_chunks_and_says_so(repo):
+def test_no_verdict_withholds_chunks_as_record_only_and_says_so(repo):
     _setup(repo)
 
     out = _call(repo, LEDGER)
 
-    assert out["landed_chunks"] == ["C1", "C2"]
+    assert out["committed"] is True, out
+    assert set(out["withheld"]) == {"c1.py", TESTS, "good.py"}
+    assert set(out["withheld"].values()) == {"halt-record-only"}
+    assert "landed_chunks" not in out
     assert out["targeted_tests"] == {"check": "no-verdict", "findings": []}
+    names = _landed(repo, out, "--name-only")
+    assert f"{RECORD_DIR_ROOT}/{RUN}/ask.md" in names
+    assert "good.py" not in names and "c1.py" not in names
 
 
 def test_non_ledger_check_halt_is_unchanged(repo):

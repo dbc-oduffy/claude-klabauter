@@ -5620,6 +5620,7 @@ def compose_script(
         em_owned_rows=em_owned_rows(excluded_rows),
         host_degraded=agent_type_host == _AGENT_TYPE_HOST_DEGRADED,
         review_terminal_sha=review_terminal_sha if review_only else None,
+        reverify=True,
     ):
         phase_titles.append(title)
         review_blocks.append(_unconst(block, _REVIEW_RESULT_NAMES))

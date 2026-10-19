@@ -145,7 +145,10 @@ def test_halt_commit_withholds_chunk_with_a_peer_held_write(repo, monkeypatch):
     monkeypatch.setattr("coordinator_core.warm.entry_seam.reentrant_dispatch", fake_dispatch)
     (repo / "state/warp/r1").mkdir(parents=True)
     halted = {"halted": "ledger-check"}
-    reply = hrc._land(repo, repo, {}, "r1", "state/warp/r1", halted)
+    reply = hrc._land(
+        repo, repo, {"targeted_tests": {"status": "pass", "tests_failed": 0, "baseline": None}},
+        "r1", "state/warp/r1", halted,
+    )
     assert "pkg/a1.py" not in seen.get("paths", [])
     assert "pkg/a2.py" not in seen.get("paths", [])
     assert "pkg/b1.py" in seen["paths"]

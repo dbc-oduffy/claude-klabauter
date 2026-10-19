@@ -24,7 +24,7 @@ def _git(root: Path, *args: str) -> None:
 def _write(root: Path, rel: str, text: str) -> None:
     p = root / rel
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(text, encoding="utf-8")
+    p.write_bytes(text.encode("utf-8"))
 
 
 @pytest.fixture
@@ -149,7 +149,7 @@ def test_syntax_error_skipped(repo):
     assert _gate(repo, ["pkg/a.py"]).passed
 
 
-def test_no_added_import_line_skips_parse(repo, monkeypatch):
+def test_no_added_import_line_or_dirty_alias_read_skips_parse(repo, monkeypatch):
     _write(repo, "pkg/a.py", "x = 2\n")
 
     def _boom(*a, **k):
@@ -157,6 +157,87 @@ def test_no_added_import_line_skips_parse(repo, monkeypatch):
 
     monkeypatch.setattr(import_closure.ast, "parse", _boom)
     assert _gate(repo, ["pkg/a.py"]).passed
+
+
+def _falsifier_repo(repo, caller_body="    return li.old_fn() + li.new_fn()\n", head_body="    return li.old_fn()\n", imp="from pkg import li"):
+    _write(repo, "pkg/caller.py", f"def run():\n    {imp}\n{head_body}")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "caller")
+    _write(repo, "pkg/li.py", "def old_fn():\n    pass\n\ndef new_fn():\n    pass\n")
+    _write(repo, "pkg/caller.py", f"def run():\n    {imp}\n{caller_body}")
+
+
+def test_attribute_read_of_uncommitted_name_refuses(repo):
+    _write(repo, "pkg/li.py", "def old_fn():\n    pass\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "li")
+    _falsifier_repo(repo)
+    out = _gate(repo, ["pkg/caller.py"])
+    assert not out.passed
+    assert sum("import_closure --" in d for d in out.diagnostics) == 1
+    assert "references new_fn from pkg.li; pkg/li.py is uncommitted in the worktree" in out.diagnostics[0]
+    assert "pkg/caller.py:3" in out.diagnostics[0]
+
+
+def test_attribute_read_with_definer_in_gate_passes(repo):
+    _falsifier_repo(repo)
+    assert _gate(repo, ["pkg/caller.py", "pkg/li.py"]).passed
+
+
+@pytest.mark.parametrize(
+    "imp,body",
+    [
+        ("import pkg.li as x", "    return x.new_fn()\n"),
+        ("import pkg.li", "    return pkg.li.new_fn()\n"),
+        ("from . import li", "    return li.new_fn()\n"),
+    ],
+)
+def test_attribute_read_import_forms_refuse(repo, imp, body):
+    _write(repo, "pkg/li.py", "def old_fn():\n    pass\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "li")
+    _falsifier_repo(repo, caller_body=body, head_body="    return None\n", imp=imp)
+    out = _gate(repo, ["pkg/caller.py"])
+    assert not out.passed
+    assert "references new_fn from pkg.li" in out.diagnostics[0]
+
+
+def test_attribute_read_of_unchanged_target_does_not_parse(repo, monkeypatch):
+    _write(repo, "pkg/li.py", "def old_fn():\n    pass\n")
+    _write(repo, "pkg/caller.py", "def run():\n    from pkg import li\n    return li.old_fn()\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "li")
+    _write(repo, "pkg/caller.py", "def run():\n    from pkg import li\n    return li.old_fn() + 1\n")
+
+    def _boom(*a, **k):
+        raise AssertionError("parsed")
+
+    monkeypatch.setattr(import_closure.ast, "parse", _boom)
+    assert _gate(repo, ["pkg/caller.py"]).passed
+
+
+def test_attribute_name_absent_everywhere_is_not_reported(repo):
+    _write(repo, "pkg/li.py", "def old_fn():\n    pass\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "li")
+    _write(repo, "pkg/li.py", "def old_fn():\n    pass\n# edited\n")
+    _write(repo, "pkg/caller.py", "def run():\n    from pkg import li\n    return li.ghost()\n")
+    assert _gate(repo, ["pkg/caller.py"]).passed
+
+
+def test_shadowed_alias_is_not_reported(repo):
+    _write(repo, "pkg/li.py", "def old_fn():\n    pass\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "li")
+    _write(repo, "pkg/li.py", "def old_fn():\n    pass\n\ndef new_fn():\n    pass\n")
+    _write(repo, "pkg/caller.py", "def run():\n    from pkg import li\n    li = object()\n    return li.new_fn()\n")
+    assert _gate(repo, ["pkg/caller.py"]).passed
+
+
+def test_package_attribute_that_is_a_committed_submodule_passes(repo):
+    _write(repo, "pkg/__init__.py", "# edited\n")
+    _write(repo, "pkg/caller.py", "import pkg\n\ndef run():\n    return pkg.b.old_fn()\n")
+    assert _gate(repo, ["pkg/caller.py"]).passed
 
 
 def test_non_py_and_missing_worktree_paths_ignored(repo):

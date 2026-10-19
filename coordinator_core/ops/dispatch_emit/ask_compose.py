@@ -137,7 +137,7 @@ _ANCHOR_CLAUSE = (
     "Repo root: {root} -- run `cd {root}` as its own standalone Bash call first; every "
     "repo-relative path below resolves against it."
 )
-_REVIEW_RESULT_NAMES = ("_reviewPrep", "_reviewWave", "_deliveryVerdict", "_deliveryNotRun", WAVE_NOT_RUN_VAR, "_reviewIntegration")
+_REVIEW_RESULT_NAMES = ("_reviewPrep", "_reviewWave", "_deliveryVerdict", "_deliveryNotRun", WAVE_NOT_RUN_VAR, "_reviewIntegration", "_reviewReverify")
 
 
 class AskComposeRefused(ValueError):
@@ -324,6 +324,11 @@ _COMMIT_SCHEMA = _obj(
 )
 _DOC_PATHS_JS = (
     "(typeof _docs !== 'undefined' && _docs && Array.isArray(_docs.doc_paths)) ? _docs.doc_paths : []"
+)
+# The scoped-test verdict as a params key; null before the test leg has run (a pre-test halt).
+_TARGETED_TESTS_JS = (
+    "targeted_tests: (_testResult && typeof _testResult.status === 'string') ? { status: _testResult.status, "
+    "tests_failed: _testResult.tests_failed ?? null, baseline: _testResult.baseline ?? null } : null,"
 )
 _LEDGER_CHECK_SCHEMA = _obj(
     ["items"],
@@ -1308,6 +1313,7 @@ def compose_ask_script(
         tier_js=_fire_tier_js(),
         executor_rows_js="(_manifest?.rows ?? []).length",
         tshirt_js="_gate?.tshirt",
+        reverify=True,
     )
     review_titles = [title for title, _ in review_blocks]
     ledger_charter = _folded_ledger_charter(
@@ -2775,7 +2781,7 @@ def compose_ask_script(
         "blocked: _blockedChunks, held_by: _heldBy, unanswered: _unansweredBriefs, "
         "stopped_by: _stoppedBy, not_started: _notStarted, halted_by: _halted, halt_commit: _haltCommit, "
         "review: { prep: _reviewPrep, wave: _reviewWave, delivery: _deliveryVerdict, "
-        "integration: _reviewIntegration }, "
+        "integration: _reviewIntegration, reverify: _reviewReverify }, "
         + (
             "roadmap: _viaRoadmap ? { gate: _rb, ready: _ready, fanout: _commit?.fanout ?? null, "
             "not_fired: _commit?.fanout?.not_fired ?? _unfired } : null, "
@@ -3044,7 +3050,7 @@ def _commit_stage_call(
         "request, so no `paths` array is owed.\n\n",
         f"coordinator-invoke dispatch.terminal_commit --params-file {params_file.as_posix()}",
         "\n\nThe engine reads the params block below. Do not copy, edit or pass it.\n\n",
-        "js:_terminalCommitParamsBlock({ ..._nextAction.params, "
+        "js:_terminalCommitParamsBlock({ ..._nextAction.params, " + _TARGETED_TESTS_JS + " "
         f"script_path: _nextAction.params.script_path ?? {_lit(script_path or '')}, "
         "run_id: _runId, run_token: _RUN_TOKEN, "
         f"doc_paths: {_DOC_PATHS_JS} }})",
@@ -3082,6 +3088,7 @@ def _halt_record_commit_fn(
         "\n\nThe engine reads the params block below. Do not copy, edit or pass it.\n\n",
         f"js:_terminalCommitParamsBlock({{ script_path: {_lit(script_path or '')}, run_id: _runId, "
         f"run_token: _RUN_TOKEN, {HALTED_RECORD_PARAM}: _halted, doc_paths: {_DOC_PATHS_JS}, "
+        + _TARGETED_TESTS_JS + " "
         "...(_nextAction && _nextAction.kind === 'terminal_commit' && _nextAction.params && _nextAction.params.inline_review "
         "? { run_outcome: { inline_review: _nextAction.params.inline_review, "
         "incomplete_chunks: _nextAction.params.incomplete_chunks ?? [], "

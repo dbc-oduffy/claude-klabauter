@@ -60,6 +60,7 @@ def _dirty_elsewhere(root: Path) -> set:
 
 
 LEDGER = {"halted": "ledger-check", "reason": REASON}
+PASSING = {"targeted_tests": {"status": "pass", "tests_failed": 0, "baseline": None}}
 
 
 def _call(root: Path, halted: dict | None = None, **extra) -> dict:
@@ -352,7 +353,7 @@ def test_halted_run_lands_done_chunk_not_unfinished_one(repo):
         {"C1": "DONE: C1\n", "C2": "PARTIAL: C2\n"},
     )
 
-    out = _call(repo, LEDGER)
+    out = _call(repo, LEDGER, **PASSING)
 
     assert out["committed"] is True, out
     assert out["landed_chunks"] == ["C1"]
@@ -388,7 +389,7 @@ def test_peer_held_path_withholds_its_whole_chunk_and_names_both(repo, monkeypat
     _marker_script(repo, [("C1", ["done.py", "other.py"])], {"C1": "DONE: C1\n"})
     _hold(monkeypatch, {"other.py"})
 
-    out = _call(repo, LEDGER)
+    out = _call(repo, LEDGER, **PASSING)
 
     assert out["withheld"] == {"other.py": "peer-held", "done.py": "chunk-write-set-partial"}
     names = _landed(repo, out, "--name-only")
@@ -400,7 +401,7 @@ def test_done_tracked_deletion_is_declared_and_never_tracked_path_is_not_staged(
     (repo / "product.py").unlink()
     _marker_script(repo, [("C1", ["product.py", "never-tracked.yaml"])], {"C1": "DONE: C1\n"})
 
-    out = _call(repo, LEDGER)
+    out = _call(repo, LEDGER, **PASSING)
 
     assert out["committed"] is True, out
     assert "D\tproduct.py" in _landed(repo, out, "--name-status")
@@ -421,7 +422,7 @@ def test_token_live_after_halt_landing_done_chunk(repo):
     _marker_script(repo, [("C1", ["done.py"])], {"C1": "DONE: C1\n"})
     token = run_token.mint(repo, RUN, "run.mjs")
 
-    out = _call(repo, LEDGER, run_token=token)
+    out = _call(repo, LEDGER, run_token=token, **PASSING)
 
     assert out["landed_chunks"] == ["C1"]
     assert run_token.admits(repo, RUN, token, "run.mjs")
@@ -454,7 +455,7 @@ def test_ledger_halt_withholds_chunk_importing_untracked_py(repo):
     (repo / "pkg" / "b.py").write_text("v = 1\n", encoding="utf-8")
     _marker_script(repo, [("C1", ["pkg/a.py"])], {"C1": "DONE: C1\n"})
 
-    out = _call(repo, LEDGER)
+    out = _call(repo, LEDGER, **PASSING)
 
     assert out["committed"] is True, out
     assert out["withheld"] == {"pkg/a.py": "import-closure-open"}
@@ -478,7 +479,7 @@ def test_ledger_halt_withholds_tsx_chunk_importing_untracked_alias_module(repo):
     (repo / "src" / "components" / "x.tsx").write_text("export const X = 1;\n", encoding="utf-8")
     _marker_script(repo, [("C1", ["src/page.tsx"])], {"C1": "DONE: C1\n"})
 
-    out = _call(repo, LEDGER)
+    out = _call(repo, LEDGER, **PASSING)
 
     assert out["committed"] is True, out
     assert out["withheld"] == {"src/page.tsx": "import-closure-open"}
@@ -500,7 +501,7 @@ def test_ledger_halt_lands_only_the_closed_chunk(repo):
         repo, [("C1", ["pkg/a.py"]), ("C2", ["done.py"])], {"C1": "DONE: C1\n", "C2": "DONE: C2\n"}
     )
 
-    out = _call(repo, LEDGER)
+    out = _call(repo, LEDGER, **PASSING)
 
     assert out["landed_chunks"] == ["C2"]
     assert "Lands-Chunks: C2" in _git(["log", "-1", "--format=%B"], repo)

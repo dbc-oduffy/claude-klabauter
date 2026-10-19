@@ -5,8 +5,12 @@ not a gate path absent from the worktree (a deletion in the commit). First-party
 top-level directories holding `__init__.py` post-commit or in the worktree; everything else is
 skipped. A target is parsed only when it is in the commit, or when the worktree differs from HEAD
 (then HEAD's bytes are what the commit leaves behind); an unchanged target is assumed to satisfy
-its names. A committed file is parsed only when an added line looks like an import, so an ordinary
-commit pays no `ast.parse`. A syntax error in a committed file is the author's to fix: no finding.
+its names. A committed file is parsed only when an added line looks like an import, or reads
+`alias.name` through an import alias of a first-party module that is in the commit or differs from
+HEAD, so an ordinary commit pays no `ast.parse`. That attribute arm refuses a read whose name only
+the uncommitted worktree target binds (a caller landing without its callee); a name bound nowhere is
+not a landing hazard and is not reported. A syntax error in a committed file is the author's to fix:
+no finding.
 
 Zero spawns. Wholly absent targets (in neither HEAD nor the worktree) are not findings: generated
 or compiled modules would false-refuse.
@@ -17,9 +21,10 @@ from __future__ import annotations
 import ast
 import re
 from pathlib import Path
-from typing import Iterable, List, Optional, Sequence, Set, Tuple
+from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 from coordinator_core.authoring_leaks import HeadView, LeakFinding, added_lines
+from coordinator_core.authoring_leaks.module_attrs import AttrRef, attribute_refs, module_aliases
 from coordinator_core.pyimports import ImportRecord, collect_imports, module_name_for_file, resolve_relative_module
 
 NAME = "import_closure"
@@ -199,26 +204,95 @@ class _Closure:
         return LeakFinding(rel, rec.lineno, KIND, f"imports {name} from {module}; {target} is {reason}")
 
 
+def _alias_hits(wt_text: str, rel: str, added: List[Tuple[int, str]]) -> Dict[str, frozenset]:
+    """Aliases (and their candidate modules) that an added line reads as `alias.name`."""
+    if not added:
+        return {}
+    aliases = module_aliases(wt_text, rel)
+    if not aliases:
+        return {}
+    pattern = re.compile(r"\b(?:%s)\.\w" % "|".join(re.escape(a) for a in aliases))
+    if not any(pattern.search(text) for _, text in added):
+        return {}
+    return aliases
+
+
+def _check_attr(closure: _Closure, rel: str, ref: AttrRef) -> Optional[LeakFinding]:
+    top = ref.module.split(".")[0]
+    if not closure.first_party(top):
+        return None
+    target = closure.locate(ref.module, closure.post_has)
+    if target is None or target in closure.gate:
+        return None
+    sub = f"{ref.module}.{ref.name}"
+    is_package = target.endswith("/__init__.py")
+    if is_package and closure.locate(sub, closure.post_has):
+        return None
+    wt_sub = bool(is_package and closure.locate(sub, closure.worktree_has))
+    names = closure.post_names(target, force=wt_sub)
+    if names is None or ref.name in names:
+        return None
+    if not wt_sub:
+        wt_text = _read_text(closure.root / target)
+        wt_names = _target_bound_names(wt_text) if wt_text is not None else None
+        if wt_names is None or ref.name not in wt_names:
+            return None
+    return LeakFinding(rel, ref.lineno, KIND, f"references {ref.name} from {ref.module}; {target} is uncommitted in the worktree")
+
+
 def detect(root: Path, gate_paths: Sequence[str], head: HeadView) -> List[LeakFinding]:
     root = Path(root)
     gate = set(gate_paths)
-    parsed: List[Tuple[str, ImportRecord]] = []
+    texts: Dict[str, str] = {}
+    import_files: Set[str] = set()
+    hits: Dict[str, Dict[str, frozenset]] = {}
     for rel in sorted(p for p in gate if p.endswith(".py")):
         wt_text = _read_text(root / rel)
         if wt_text is None:
             continue
-        if not any(_IMPORT_LINE.match(text) for _, text in added_lines(head.head_text(rel), wt_text)):
-            continue
+        added = added_lines(head.head_text(rel), wt_text)
+        texts[rel] = wt_text
+        if any(_IMPORT_LINE.match(text) for _, text in added):
+            import_files.add(rel)
+        alias_map = _alias_hits(wt_text, rel, added)
+        if alias_map:
+            hits[rel] = alias_map
+    probe: Set[str] = set()
+    for alias_map in hits.values():
+        for mods in alias_map.values():
+            for mod in mods:
+                probe.update(f for f in _module_files(mod) if (root / f).is_file())
+    probe_view = HeadView(root, probe) if probe else None
+    attr_files: Set[str] = set()
+    if probe_view is not None:
+        for rel, alias_map in hits.items():
+            if any(f in gate or probe_view.worktree_differs(f) for mods in alias_map.values() for mod in mods for f in _module_files(mod) if f in probe):
+                attr_files.add(rel)
+    parsed: List[Tuple[str, ImportRecord]] = []
+    refs: List[Tuple[str, AttrRef]] = []
+    for rel in sorted(import_files | attr_files):
         try:
-            tree = ast.parse(wt_text)
+            tree = ast.parse(texts[rel])
         except (SyntaxError, ValueError):
             continue
-        records, _ = collect_imports(tree)
-        parsed.extend((rel, rec) for rec in records)
-    if not parsed:
+        if rel in import_files:
+            records, _ = collect_imports(tree)
+            parsed.extend((rel, rec) for rec in records)
+        if rel in attr_files:
+            refs.extend((rel, ref) for ref in attribute_refs(tree, rel))
+    if not parsed and not refs:
         return []
-    closure = _Closure(root, gate, HeadView(root, _needed_paths(parsed)))
+    needed = _needed_paths(parsed)
+    for _, ref in refs:
+        needed.add(f"{ref.module.split('.')[0]}/__init__.py")
+        needed.update(_module_files(ref.module))
+        needed.update(_module_files(f"{ref.module}.{ref.name}"))
+    closure = _Closure(root, gate, HeadView(root, needed))
     findings: List[LeakFinding] = []
     for rel, rec in parsed:
         findings.extend(closure.check(rel, rec))
+    for rel, ref in refs:
+        finding = _check_attr(closure, rel, ref)
+        if finding is not None:
+            findings.append(finding)
     return findings

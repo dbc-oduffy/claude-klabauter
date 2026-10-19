@@ -8,6 +8,7 @@ from coordinator_core.ops.dispatch_emit import landing_integrity
 from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
 from coordinator_core.ops.dispatch_emit.tests.test_terminal_commit_halted_record import (  # noqa: F401
     LEDGER,
+    PASSING,
     RUN,
     _call,
     _git,
@@ -32,7 +33,7 @@ def _two_chunks(root, bad_text: str) -> None:
 def test_unparseable_py_chunk_is_withheld_and_record_lands(repo):
     _two_chunks(repo, 'x = "a\nb"\n')
 
-    out = _call(repo, LEDGER)
+    out = _call(repo, LEDGER, **PASSING)
 
     assert out["committed"] is True, out
     assert out["withheld"] == {"bad.py": "py-unparseable"}
@@ -61,7 +62,7 @@ def test_since_base_overlap_withholds_whole_chunk(repo, monkeypatch):
     monkeypatch.setattr(landing_integrity, "run_base_for", lambda *a, **k: "a" * 40)
     monkeypatch.setattr(landing_integrity, "since_base_findings", fake)
 
-    out = _call(repo, LEDGER)
+    out = _call(repo, LEDGER, **PASSING)
 
     assert seen["base"] == "a" * 40
     assert "plan" in seen
@@ -83,7 +84,7 @@ def test_clean_chunks_land_and_no_base_skips_overlap_arm(repo, monkeypatch):
 
     monkeypatch.setattr(landing_integrity, "since_base_findings", boom)
 
-    out = _call(repo, LEDGER)
+    out = _call(repo, LEDGER, **PASSING)
 
     assert out["landed_chunks"] == ["C2"]
     assert "integrity" not in out and "withheld" not in out

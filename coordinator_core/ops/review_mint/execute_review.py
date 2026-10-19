@@ -581,6 +581,128 @@ def _wave_schema_literal(schema_literal: str) -> str:
     )
 
 
+REVERIFY_PHASE = "Review re-verify"
+_REVERIFY_AGENT_TYPE = "coordinator:test-runner"
+
+_REVERIFY_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "edited": {"type": "array", "items": {"type": "string"}},
+        "failing": {"type": "array", "items": {"type": "string"}},
+        "reverted": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string"},
+                    "tests": {"type": "array", "items": {"type": "string"}},
+                    "findings": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {"sidecar": {"type": "string"}, "id": {"type": "string"}},
+                        },
+                    },
+                },
+                "required": ["path"],
+            },
+        },
+        "status_before": {"type": "string"},
+        "status_after": {"type": ["string", "null"]},
+        "record": {"type": ["string", "null"]},
+        "sidecar_path": {"type": "string"},
+    },
+    "required": ["edited", "failing", "reverted", "status_before"],
+}
+
+#: Run-time review sidecar paths of the wave, appended to the re-verify prompt for its `sidecars`.
+_REVERIFY_SIDECARS_JS = (
+    "'\\nreview_sidecars: ' + JSON.stringify((Array.isArray(_reviewWave) ? _reviewWave : [])"
+    ".filter(w => w && typeof w.sidecar_path === 'string').map(w => w.sidecar_path))"
+)
+
+#: `unapplied` for one re-verify reply `r`: each reverted path joined to the prep slices whose
+#: `files` hold it. A path no slice holds (a file review created) carries a null slice.
+_REVERIFY_UNAPPLIED_JS = (
+    "(r.reverted ?? []).flatMap(v => { "
+    "const norm = (p) => String(p).split('\\\\').join('/'); "
+    f"const owners = {REVIEW_PREP_SLICES_JS}.filter(s => (s.files ?? []).some(f => norm(f) === norm(v.path))); "
+    "const ids = (sc) => (v.findings ?? []).filter(f => sc === null || f.sidecar === sc).map(f => f.id); "
+    "if (!owners.length) return [{ path: v.path, slice_id: null, sidecar_path: null, finding_ids: ids(null) }]; "
+    "return owners.map(s => { "
+    "const w = (Array.isArray(_reviewWave) ? _reviewWave : []).find(x => x && typeof x.slice_id === 'string' && "
+    "x.slice_id.split('+').includes(s.id)); "
+    "const sc = (w && w.sidecar_path) ?? s.sidecar_path ?? null; "
+    "return { path: v.path, slice_id: s.id, sidecar_path: sc, finding_ids: ids(sc) }; }); })"
+)
+
+
+def _reverify_phase(
+    *,
+    base_ref: str,
+    prep_slice_id: str,
+    repo_root: Optional[str],
+    plan_path: str,
+    run_base_sha: str,
+    prompt_head: str,
+    host_degraded: bool,
+    sc,
+) -> Tuple[str, str]:
+    """The ``Review re-verify`` phase: a test-runner lists what review changed (``review.reverify``
+    list mode), runs only the tests covering it, and reverts the implicated files in revert mode
+    when any fail. ``unapplied`` is joined from the reply in the emitted JS, never by the agent."""
+    agent_type, role = _host_native(_REVERIFY_AGENT_TYPE, host_degraded)
+    repo_pin = f" --repo '{repo_root}'" if repo_root else ""
+    invoke = '"${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/bin/coordinator-invoke"'
+    base_args = f'"base":"{base_ref}","slice_prefix":"{prep_slice_id}"'
+    prompt = (
+        f"{prompt_head}\n\n{role}"
+        "Re-verify the edits this run's review applied in place, and keep only the ones whose "
+        "tests pass. Three steps, in order.\n"
+        f"1. List what review changed with ONE engine call: `{invoke} review.reverify "
+        f"'{{{base_args}}}'{repo_pin}`, its command word exactly as written (a guard denies the "
+        "prefix moved into a shell variable). When a non-empty `session_id:` value is given in "
+        'this brief, add it as `"session_id"`. Its `edited` and `created` lists are the files '
+        "review changed. If both are empty, return edited [], failing [], reverted [], "
+        "status_before pass.\n"
+        "2. Run, and only run, the tests covering those files: the test files among them, plus "
+        "the test files that import an edited module. Name each test file or node id; never a "
+        "directory, a tier (the fast tier included) or the full suite. Report every failing "
+        "node id as `failing` and set status_before to pass when none failed, else fail.\n"
+        f"3. When any failed, call review.reverify ONCE more in revert mode: `{invoke} review.reverify "
+        f"'{{{base_args},\"failing\":[<failing node ids>],\"sidecars\":[<the review_sidecars "
+        f"paths below>]}}'{repo_pin}` (add `session_id` as in step 1). Return its `reverted` and "
+        "`record` as given, re-run only the tests of the reverted paths, and set status_after to "
+        "pass or fail from that re-run. When nothing failed, status_after is null.\n"
+        "Revert only through review.reverify: never `git checkout`, `restore`, `stash` or "
+        "`reset`, and never edit a file yourself. Return the sidecar path you wrote as "
+        "sidecar_path.\n"
+        f"plan_path: {plan_path}\n"
+        f"run_base_sha: {run_base_sha}"
+    ).strip()
+    call = _agent_call_literal(
+        agent_type,
+        prompt,
+        REVERIFY_PHASE,
+        schema=True,
+        as_arrow=False,
+        agent_opts={agent_type: {"model": "sonnet"}},
+        schema_literal=json.dumps(_REVERIFY_SCHEMA, sort_keys=True),
+    )
+    prefix = f"agent({_prompt_literal(prompt)}, "
+    if not call.startswith(prefix):
+        raise ValueError("re-verify agent call does not open with its prompt literal")
+    call = f"agent({_prompt_literal(prompt)} + '\\n' + {_REVERIFY_SIDECARS_JS}, " + call[len(prefix):]
+    call = sc(call, "reverify", agent_type)
+    block = (
+        f"  phase({_js_string_literal(REVERIFY_PHASE)});\n"
+        f"  const _reviewReverify = _verifyOnly ? null : "
+        f"((r) => r ? {{ ...r, unapplied: {_REVERIFY_UNAPPLIED_JS} }} : null)"
+        f"(await {_degrading(call)});"
+    )
+    return REVERIFY_PHASE, block
+
+
 def compose_execute_review(
     review: ExecuteReview,
     *,
@@ -608,6 +730,7 @@ def compose_execute_review(
     tshirt_js: Optional[str] = None,
     repo_root: Optional[str] = None,
     prep_in_wave: bool = False,
+    reverify: bool = False,
 ) -> List[Tuple[str, str]]:
     """Compose the roster-v5 ``execute_review`` wave into ``(phase_title,
     block)`` entries: prep, review-wave, and -- ONLY when ``review.integration``
@@ -676,6 +799,12 @@ def compose_execute_review(
     ``executor_rows_per_reviewer``; a group with no slices returns no review. Prompts are the full
     briefs, since the diff size is unknown until the wave has run, and whole-diff reviewers are
     not skipped on a verify-only run. ``False`` keeps the output byte-identical.
+
+    ``reverify`` appends a "Review re-verify" phase after the last applying stage, binding
+    ``_reviewReverify`` (``null`` under ``_verifyOnly`` or when the agent call degrades): a
+    ``coordinator:test-runner`` agent lists the review-edited files with ``review.reverify``, runs
+    the tests covering them, and reverts the implicated files when any fail. ``False`` keeps the
+    output byte-identical.
 
     ``slice_key_js`` is a JS expression joined into the frozen-diff slice id at run time, for a
     function composed once and called once per item (emit-wave-fire's per-baton
@@ -1231,6 +1360,20 @@ def compose_execute_review(
                 integration_phase,
                 f"  phase({_js_string_literal(integration_phase)});\n"
                 f"  const _reviewIntegration = _verifyOnly ? null : await {_degrading(integration_call)};",
+            )
+        )
+
+    if reverify:
+        phases.append(
+            _reverify_phase(
+                base_ref=base_ref,
+                prep_slice_id=prep_slice_id,
+                repo_root=repo_root,
+                plan_path=plan_path,
+                run_base_sha=run_base_sha,
+                prompt_head=prompt_head,
+                host_degraded=host_degraded,
+                sc=_sc,
             )
         )
 

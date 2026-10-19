@@ -1535,8 +1535,8 @@ def _deny_reason(cmd: str, reason_kind: str, reason_class: str) -> str:
         "Use instead:\n"
         "  %s\n"
         "  %s\n"
-        "Scoped add from a list file: `git add --pathspec-from-file=<list>` "
-        "(`--pathspec-file-nul` for NUL-separated)." % (safe_argv0, safe_git)
+        "Scoped add from a list file: `git add --pathspec-from-file=<list>`; "
+        "NUL-separated: `git add --pathspec-from-file=<list> --pathspec-file-nul`." % (safe_argv0, safe_git)
     )
 
 

@@ -27,7 +27,7 @@ Reply:
 
 Design:
   - ``derive_edges(pset, hubs, root)`` is the one derivation of these edges (pure; ``_fix``
-    adds the writes). ``plan.write_order`` shares it, so the two ops cannot disagree on order.
+    adds the writes).
   - Direction: for a colliding pair the plan with the lexicographically later repo-relative
     path depends on the earlier one. Pairs are processed in (later plan, earlier plan, path)
     order; the first edge that orders a pair also orders every pair it implies transitively.

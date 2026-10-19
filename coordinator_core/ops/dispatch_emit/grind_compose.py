@@ -1432,6 +1432,7 @@ def compose_grind_script(
         prompt_head=_BRIEF_PRECEDENCE_CLAUSE,
         run_key=Path(run_dir).name,
         host_degraded=agent_type_host == _AGENT_TYPE_HOST_DEGRADED,
+        reverify=True,
     )
     review_phase_titles = [title for title, _ in review_blocks]
     run_dir_s = Path(run_dir).as_posix()
@@ -2071,10 +2072,18 @@ def compose_grind_script(
         "  log('execute_review skipped: no row committed, nothing landed to review');\n"
         "} else {\n"
         + "\n".join(block for _, block in review_blocks)
-        + f"\n  phase({_js_string_literal(_REVIEW_FIX_PHASE)});\n"
+        # Trap: the terminal commit already landed the rows in runGrind's finally before review
+        # started, so "Review fixes" is the only commit review edits reach; a red re-verify
+        # verdict stops them here.
+        + "\n  const _reviewFixWithheld = _reviewReverify ? (_reviewReverify.status_after ?? _reviewReverify.status_before) === 'fail' : !_verifyOnly;\n"
+        + "  if (!_reviewFixWithheld) {\n"
+        + f"  phase({_js_string_literal(_REVIEW_FIX_PHASE)});\n"
         + "  await (async () => {\n"
         + _indent_block(review_fix_call, "  ")
-        + "\n  })();\n}"
+        + "\n  })();\n"
+        + "  } else {\n"
+        + "    log('review fixes withheld: targeted-tests-failed');\n"
+        + "  }\n}"
     )
 
     adjudicate_text = pm_adjudication.compose_adjudicate_block(agent_type_host=agent_type_host, run_key=run_key, models=stage_models)

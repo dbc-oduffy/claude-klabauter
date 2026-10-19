@@ -135,7 +135,7 @@ def test_every_row_gets_one_execute_phase_no_commit_phase():
 
     phase_titles = _extract_phase_titles(script)
 
-    assert phase_titles == ["Execute", "Review prep", "Review wave", "Review integration", "Scoped test run"]
+    assert phase_titles == ["Execute", "Review prep", "Review wave", "Review integration", "Review re-verify", "Scoped test run"]
 
 
 def test_wave_phase_carries_executor_agent_type():
@@ -660,7 +660,7 @@ def test_completion_return_is_last_so_no_phase_follows_it():
     no_slices = "return { halted: 'review prep returned no slices'"
     assert script.count(no_slices) <= 1
     script = script.replace(noop, "", 1).replace(no_slices, "", 1)
-    completion = script.index("return {")
+    completion = script.index("return {\n  schema:")
     assert "phase(" not in script[completion:]
     assert "await agent(" not in script[completion:]
 
@@ -750,7 +750,11 @@ def test_test_runner_calls_carry_charter_haiku_while_rows_stay_sonnet():
 
     test_label_idx = script.find("agentType: 'coordinator:test-runner'")
     assert test_label_idx != -1, "fixture must compose the terminal test phase"
-    assert "model: 'haiku'" in script[test_label_idx:script.index("})", test_label_idx)]
+    reverify_idx = script.index("phase('Review re-verify')")
+    reverify_call = script.index("agentType: 'coordinator:test-runner'", reverify_idx)
+    assert "model: 'sonnet'" in script[reverify_call:script.index("})", reverify_call)]
+    terminal_idx = script.index("agentType: 'coordinator:test-runner'", script.index("phase('Scoped test run')"))
+    assert "model: 'haiku'" in script[terminal_idx:script.index("})", terminal_idx)]
 
     assert "model: 'sonnet'" in opts_for("work:"), (
         "executor rows keep their charter sonnet - only the mechanical "
@@ -1347,7 +1351,8 @@ def test_compose_script_review_wave_is_guarded_by_halted_and_precedes_the_test_p
     assert "if (!_halted) {" in script
     phase_titles = _extract_phase_titles(script)
     integration_index = phase_titles.index("Review integration")
-    assert phase_titles[integration_index + 1] == "Scoped test run"
+    assert phase_titles[integration_index + 1] == "Review re-verify"
+    assert phase_titles[integration_index + 2] == "Scoped test run"
 
 
 def test_compose_script_registers_declared_paths_as_review_targets(tmp_path):
@@ -1455,7 +1460,7 @@ def test_wave_at_threshold_emits_no_marker_split():
     script = compose_script(waves, name="wf", description="at threshold", **REVIEW_KW)
 
     phase_titles = _extract_phase_titles(script)
-    assert phase_titles == ["Execute", "Review prep", "Review wave", "Review integration", "Scoped test run"]
+    assert phase_titles == ["Execute", "Review prep", "Review wave", "Review integration", "Review re-verify", "Scoped test run"]
 
 
 def test_wave_over_threshold_still_a_single_execute_phase():
@@ -1463,7 +1468,7 @@ def test_wave_over_threshold_still_a_single_execute_phase():
     script = compose_script(waves, name="wf", description="over threshold", **REVIEW_KW)
 
     phase_titles = _extract_phase_titles(script)
-    assert phase_titles == ["Execute", "Review prep", "Review wave", "Review integration", "Scoped test run"]
+    assert phase_titles == ["Execute", "Review prep", "Review wave", "Review integration", "Review re-verify", "Scoped test run"]
     for i in range(1, 13):
         assert f"work:C{i}'" in script
 

@@ -1487,3 +1487,119 @@ def test_empty_relayed_slices_with_no_review_slice_id_still_halt():
     patch = "(r, n) => ({ ...r, prep: { ...r.prep, slices: [] } })"
     result = _run_in_wave(_FULL, 9, patch=patch)
     assert result["halted"].startswith("review prep returned no slices")
+
+
+def _reverify_phases(**kw):
+    review = parse_execute_review(_v5_fragment(), signals={"named": ["coordinator:staff-eng"]})
+    return compose_execute_review(
+        review,
+        stage_schemas=_STAGE_SCHEMAS,
+        plan_path="docs/plans/example.md",
+        run_base_sha="a" * 40,
+        declared_paths=["x.py"],
+        **kw,
+    )
+
+
+def test_reverify_false_output_equals_the_default_output():
+    assert _reverify_phases(reverify=False) == _reverify_phases()
+
+
+def test_reverify_true_places_the_phase_after_integration():
+    titles = [t for t, _ in _reverify_phases(reverify=True)]
+    assert titles == ["Review prep", "Review wave", "Review integration", "Review re-verify"]
+
+
+def test_reverify_without_integration_follows_the_wave():
+    fragment = _v5_fragment()
+    fragment["execute_review"]["stages"].pop()
+    review = parse_execute_review(fragment, signals={"named": ["coordinator:staff-eng"]})
+    phases = compose_execute_review(
+        review, stage_schemas=_STAGE_SCHEMAS, plan_path="docs/plans/example.md",
+        run_base_sha="a" * 40, declared_paths=["x.py"], reverify=True,
+    )
+    assert [t for t, _ in phases] == ["Review prep", "Review wave", "Review re-verify"]
+
+
+def test_reverify_prompt_names_the_op_the_agent_and_forbids_a_suite_run():
+    block = dict(_reverify_phases(reverify=True))["Review re-verify"]
+    assert "const _reviewReverify = _verifyOnly ? null :" in block
+    assert "agentType: 'coordinator:test-runner'" in block
+    assert block.count("review.reverify") >= 2
+    assert "never a directory, a tier (the fast tier included) or the full suite" in block
+    assert "never `git checkout`" in block
+    assert f'\\"slice_prefix\\":\\"{prep_slice_id_for("docs/plans/example.md", "a" * 40)}\\"' in block or (
+        f'"slice_prefix":"{prep_slice_id_for("docs/plans/example.md", "a" * 40)}"' in block
+    )
+    assert "catch (e) { return null; }" in block
+    assert "review_sidecars" in block
+
+
+def test_reverify_degrades_to_general_purpose_on_a_degraded_host():
+    review = parse_execute_review(_v5_fragment(), signals={"named": ["coordinator:staff-eng"]})
+    phases = compose_execute_review(
+        review, stage_schemas=_STAGE_SCHEMAS, plan_path="docs/plans/example.md",
+        run_base_sha="a" * 40, declared_paths=["x.py"], reverify=True, host_degraded=True,
+    )
+    block = dict(phases)["Review re-verify"]
+    assert "coordinator:" not in block
+    assert "agentType: 'general-purpose'" in block
+
+
+def test_reverify_slice_key_sentinel_is_resolved():
+    block = dict(_reverify_phases(reverify=True, slice_key_js="_k"))["Review re-verify"]
+    assert "__SLICE_KEY__" not in block
+    assert "String(_k)" in block
+
+
+def _run_reverify_block(reply, *, verify_only=False):
+    """Run the emitted re-verify block under node with the agent stubbed to return ``reply``."""
+    import shutil
+    import subprocess
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node not on PATH")
+    block = dict(_reverify_phases(reverify=True))["Review re-verify"]
+    body = "\n".join(ln for ln in block.splitlines() if not ln.lstrip().startswith("phase("))
+    prep = {"slices": [
+        {"id": "s1", "files": ["a/x.py"], "sidecar_path": "prep-s1.md"},
+        {"id": "s2", "files": ["b/y.py"], "sidecar_path": "prep-s2.md"},
+    ]}
+    wave = [{"slice_id": "s1", "sidecar_path": "wave-s1.md"}, None]
+    script = (
+        f"const _reviewPrep = {json.dumps(prep)}; const _reviewWave = {json.dumps(wave)};\n"
+        f"const _verifyOnly = {json.dumps(verify_only)};\n"
+        f"const agent = async (p, o) => ({json.dumps(reply)});\n"
+        f"(async () => {{ {body}\n console.log(JSON.stringify(_reviewReverify)); }})();"
+    )
+    out = subprocess.run(
+        [node, "-e", script], capture_output=True, text=True, check=True,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    return json.loads(out.stdout)
+
+
+def test_unapplied_maps_a_reverted_path_to_its_slice_and_wave_sidecar():
+    reply = {
+        "edited": ["a/x.py", "b/y.py", "new.py"], "failing": ["a/test_x.py::t"],
+        "reverted": [
+            {"path": "a\\x.py", "tests": ["a/test_x.py::t"],
+             "findings": [{"sidecar": "wave-s1.md", "id": "F1"}, {"sidecar": "other.md", "id": "F9"}]},
+            {"path": "b/y.py", "tests": [], "findings": [{"sidecar": "prep-s2.md", "id": "F2"}]},
+            {"path": "new.py", "tests": [], "findings": []},
+        ],
+        "status_before": "fail", "status_after": "pass",
+    }
+    result = _run_reverify_block(reply)
+    assert result["status_after"] == "pass"
+    assert result["unapplied"] == [
+        {"path": "a\\x.py", "slice_id": "s1", "sidecar_path": "wave-s1.md", "finding_ids": ["F1"]},
+        {"path": "b/y.py", "slice_id": "s2", "sidecar_path": "prep-s2.md", "finding_ids": ["F2"]},
+        {"path": "new.py", "slice_id": None, "sidecar_path": None, "finding_ids": []},
+    ]
+
+
+def test_reverify_is_null_under_verify_only_and_when_the_agent_returns_null():
+    assert _run_reverify_block({"edited": []}, verify_only=True) is None
+    assert _run_reverify_block(None) is None

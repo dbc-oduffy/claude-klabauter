@@ -25,6 +25,11 @@ present and every entry still matches the bytes on disk; a moved worktree recomp
 prior freeze. Range mode ignores it. Trap: the key is deliberately outside ``_STORED_KEYS``, so an
 older sidecar without it stays readable by ``stored_reply_for_run``.
 
+Worktree mode also writes a write-once pre-review snapshot beside the sidecar:
+``<slice_prefix>.pre-review/manifest.json`` (``base``, ``recorded_at``, ``paths``, ``files``: product
+path -> sha256) and one blob per distinct hash holding the bytes frozen. The reply names the manifest
+as ``pre_review_manifest`` (outside ``_STORED_KEYS``, like ``reviewed_sha256``). Range mode writes none.
+
 Optional ``group_index`` / ``group_count`` (both or neither) narrow the reply's ``slices`` to the
 one contiguous balanced group at ``group_index`` of ``min(slices, group_count)`` groups, the split
 ``execute_review._GROUP_SLICES_JS`` applies; every other field is the whole-run reply. Without
@@ -45,8 +50,11 @@ MUTATES = [
     "state/review-trail/diffs/*.head.sha",
     ".coordinator-local/subagent-share/*/*.review-prep.md",
     ".coordinator-local/subagent-share/*/*.review-prep.lock",
+    ".coordinator-local/subagent-share/*/*.pre-review/*",
 ]
 
+import hashlib
+import json
 import os
 import re
 import time
@@ -375,6 +383,9 @@ def review_prep(
                 reply = compute_locked()
             if reply is None:
                 reply = _fail(f"{REVIEW_PREP_BUSY_PREFIX} another caller holds the lock")
+    manifest = _manifest_path(share, slice_prefix)
+    if not head and not reply.get("error") and "pre_review_manifest" not in reply and manifest.exists():
+        reply = {**reply, "pre_review_manifest": _rel(manifest, repo_root)}
     return _for_group(reply, group_index, group_count)
 
 
@@ -421,8 +432,12 @@ def _compute(
     out["product_files"] = len(product)
     # Trap: hashed after the freeze, so a write landing between the two is recorded as reviewed
     # though the frozen diff lacks it; the moved-bytes check then serves that stale freeze.
-    hashes = {rel: compute_content_hash(repo_root / rel) for rel in product}
+    contents = {rel: _read_or_none(repo_root / rel) for rel in product}
+    hashes = {rel: None if data is None else hashlib.sha256(data).hexdigest() for rel, data in contents.items()}
     out["reviewed_sha256"] = {rel: h for rel, h in hashes.items() if h is not None}
+    if not head:
+        _write_pre_review_snapshot(share, repo_root, slice_prefix, base, paths, contents, hashes)
+        out["pre_review_manifest"] = _rel(_manifest_path(share, slice_prefix), repo_root)
 
     part = _heavy("partition_slices")(repo_root, base, paths, slice_prefix, head=head or None)
     if part["error"]:
@@ -455,6 +470,61 @@ def _compute(
     out["sidecar_path"] = _rel(sidecar, repo_root)
     _write_sidecar(sidecar, out, session, paths, head)
     return out
+
+
+def _read_or_none(path: Path) -> Optional[bytes]:
+    try:
+        return path.read_bytes()
+    except OSError:
+        return None
+
+
+def _manifest_path(share: Path, slice_prefix: str) -> Path:
+    return share / f"{slice_prefix}.pre-review" / "manifest.json"
+
+
+def _write_pre_review_snapshot(
+    share: Path,
+    repo_root: Path,
+    slice_prefix: str,
+    base: str,
+    paths: List[str],
+    contents: dict,
+    hashes: dict,
+) -> None:
+    """Write the P3 pre-review snapshot: one blob per distinct hash plus ``manifest.json``.
+
+    Trap: write-once. A recompute for the same ``slice_prefix`` happens precisely when review has
+    already moved bytes, so an existing manifest is never rewritten and its blobs are the
+    pre-review truth. Blobs land before the manifest so a manifest never names a missing blob."""
+    manifest = _manifest_path(share, slice_prefix)
+    if manifest.exists():
+        return
+    snap = manifest.parent
+    snap.mkdir(parents=True, exist_ok=True)
+    files = {rel: h for rel, h in hashes.items() if h is not None}
+    for rel, digest in files.items():
+        blob = snap / digest
+        if not blob.exists():
+            atomic_write_bytes(blob, contents[rel])
+            declare_write(blob)
+    body = json.dumps(
+        {
+            "base": base,
+            "recorded_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
+            "paths": paths,
+            "files": files,
+        },
+        indent=2,
+        sort_keys=True,
+    ).encode("utf-8")
+    try:
+        fd = os.open(manifest, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+    except FileExistsError:
+        return
+    with os.fdopen(fd, "wb") as handle:
+        handle.write(body)
+    declare_write(manifest)
 
 
 def _write_sidecar(sidecar: Path, result: dict, session: str, paths: List[str], head: Optional[str]) -> None:
