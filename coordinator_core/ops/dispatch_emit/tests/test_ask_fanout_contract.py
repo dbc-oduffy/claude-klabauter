@@ -201,13 +201,114 @@ def test_release_skip_frees_nothing_skipped_and_leaves_slot_free():
     assert c.release(parent, statuses, 1) == ("r1",)
 
 
+def _hq_batch():
+    ids = [["hq-03"], ["hq-05"], ["hq-04"], ["hq-02"], ["hq-06"], ["hq-08"]]
+    blocked = [[], [], ["hq-03"], ["hq-01"], ["hq-01"], ["hq-01", "hq-03", "hq-05", "hq-06"]]
+    writes = [[f"f{i}.py"] for i in range(6)]
+    return ids, blocked, writes
+
+
+def test_blocked_by_edges_hq_batch_edges_and_holds():
+    edges, holds = c.blocked_by_edges(*_hq_batch())
+    assert edges[0] == () and edges[1] == ()
+    assert edges[2] == (0,)
+    assert set(holds) == {3, 4, 5}
+    assert "hq-01" in holds[3] and "not in this fan-out" in holds[3]
+    assert "hq-01" in holds[4]
+    assert holds[5] == "blocked_by hq-01, which is not in this fan-out"
+    assert edges[3] == edges[4] == edges[5] == ()
+
+
+def test_blocked_by_edges_held_blocker_listed_first_reason_names_held():
+    edges, holds = c.blocked_by_edges(
+        [["a"], ["b"]], [["gone"], ["a"]], [["x"], ["y"]]
+    )
+    assert holds == {
+        0: "blocked_by gone, which is not in this fan-out",
+        1: "blocked_by a, which is held",
+    }
+    edges, holds = c.blocked_by_edges(
+        [["a"], ["b"], ["c"]], [["gone"], ["a"], ["a", "gone"]], [["x"], ["y"], ["z"]]
+    )
+    assert holds[2] == "blocked_by a, which is held"
+
+
+def test_blocked_by_edges_follows_later_submitted_blocker_and_wave_free():
+    edges, holds = c.blocked_by_edges([["a"], ["b"]], [["b"], []], [["x"], ["y"]])
+    assert edges == {0: (1,), 1: ()} and holds == {}
+
+
+def test_blocked_by_edges_writes_overlap_oriented_along_topological_order():
+    edges, _ = c.blocked_by_edges([["a"], ["b"]], [["b"], []], [["x"], ["x"]])
+    assert edges == {0: (1,), 1: ()}
+    edges, _ = c.blocked_by_edges([["a"], ["b"], ["c"]], [[], [], []], [["d"], ["d/e"], ["z"]])
+    assert edges == {0: (), 1: (0,), 2: ()}
+
+
+def test_blocked_by_edges_no_hint_overlaps_and_ordered_pair_adds_no_redundant_edge():
+    edges, _ = c.blocked_by_edges([["a"], ["b"]], [[], []], [None, ["y"]])
+    assert edges == {0: (), 1: (0,)}
+    edges, _ = c.blocked_by_edges([["a"], ["b"]], [[], ["a"]], [["x"], ["x"]])
+    assert edges == {0: (), 1: (0,)}
+
+
+def test_blocked_by_edges_overlap_with_held_item_adds_no_edge():
+    edges, holds = c.blocked_by_edges([["a"], ["b"]], [["gone"], []], [["x"], ["x"]])
+    assert edges == {0: (), 1: ()} and set(holds) == {0}
+
+
+@pytest.mark.parametrize(
+    "ids,blocked",
+    [
+        ([["a"], ["a"]], [[], []]),
+        ([["a"], ["b", "a"]], [[], []]),
+        ([["a"], ["b"]], [["a"], []]),
+        ([["a", "a2"], ["b"]], [["a2"], []]),
+        ([["a"], ["b"]], [["b"], ["a"]]),
+        ([["a"], ["b"], ["c"]], [["c"], ["a"], ["b"]]),
+    ],
+)
+def test_blocked_by_edges_bad_input_raises_value_error(ids, blocked):
+    with pytest.raises(ValueError):
+        c.blocked_by_edges(ids, blocked, [["x"]] * len(ids))
+
+
+def test_held_run_parent_record_round_trips_and_non_held_json_is_unchanged():
+    held = c.SiblingRun("r1", "a", (), "s1", c.STATUS_HELD, "blocked_by q, which is not in this fan-out")
+    plain = c.SiblingRun("r2", "b", ("r1",), "s2", c.STATUS_AFTER)
+    rec = c.ParentRecord("p", (held, plain))
+    data = rec.to_json()
+    assert data["runs"][0]["hold_reason"] == held.hold_reason
+    assert data["runs"][1] == {
+        "run_id": "r2", "label": "b", "after": ["r1"], "slice_sizing": "s2", "status": "after",
+    }
+    assert c.ParentRecord.from_json(data) == rec
+    assert c.SiblingRun("r", "l").hold_reason == ""
+    assert c.SiblingRun("r", "l", (), "s", "ready").hold_reason == ""
+
+
+def test_held_run_is_never_released_and_keeps_reason_through_admit():
+    held = c.SiblingRun("r1", "a", (), "s1", c.STATUS_HELD, "why")
+    parent = c.ParentRecord("p", (held,))
+    assert c.release(parent, {"r1": "held"}, 4) == ()
+    assert c.admit((held,), 4) == (held,)
+    assert c.STATUS_HELD in c.RUN_STATUSES
+
+
+def test_held_edge_mode_names():
+    assert (c.EDGES_FROM_PARAM, c.EDGES_FROM_BLOCKED_BY, c.ITEM_IDS_KEY, c.ITEM_BLOCKED_BY_KEY, c.HELD_KEY) == (
+        "edges_from", "blocked_by", "ids", "blocked_by", "held",
+    )
+
+
 def test_not_fired_names_and_vocabulary():
     assert (c.INTERACTION_MODE_PARAM, c.PARENT_SIZING_KEY, c.NOT_FIRED_KEY) == (
         "interaction_mode",
         "parent_sizing",
         "not_fired",
     )
-    assert len(c.NOT_FIRED_REASONS) == 14 and len(set(c.NOT_FIRED_REASONS)) == 14
+    assert len(c.NOT_FIRED_REASONS) == 15 and len(set(c.NOT_FIRED_REASONS)) == 15
+    assert "held" in c.NOT_FIRED_REASONS
     assert [k for k, _ in c.PLAN_BLITZ_UNFIRED_BUCKETS] == [
         "pulled", "replan", "errored", "surfacedToPm", "adjudicated", "xsRuns", "routedElsewhere",
     ]

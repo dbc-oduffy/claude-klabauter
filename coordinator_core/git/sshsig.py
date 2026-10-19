@@ -343,26 +343,32 @@ def sign_via_agent(
         + _s(sshsig_signed_blob(data)) + struct.pack(">I", flags)
     )
 
+    # A timeout below the default was cut by the caller's deadline: silence within it says
+    # nothing about the agent, so it must not poison the cache for later full-budget attempts.
+    truncated = timeout < _DEFAULT_TIMEOUT_S
     fd = _acquire_slot()
     try:
         return _run_bounded(
-            lambda: _sign_locked(address, pub_blob, sign_request, timeout),
+            lambda: _sign_locked(address, pub_blob, sign_request, timeout, truncated),
             2 * timeout,
             lambda: os.close(fd),
         )
     except AgentUnavailable as exc:
-        if "did not answer" in str(exc):
+        if "did not answer" in str(exc) and not truncated:
             _UNREACHABLE[address] = time.monotonic() + _UNREACHABLE_TTL_S
         raise
 
 
-def _sign_locked(address: str, pub_blob: bytes, sign_request: bytes, timeout: float) -> str:
+def _sign_locked(
+    address: str, pub_blob: bytes, sign_request: bytes, timeout: float, truncated: bool = False,
+) -> str:
     # Probe first, as its own exchange: a missing key must fail before any sign request
     # (slow, possibly prompting) reaches the agent.
     try:
         (ids_reply,) = _exchange(address, [bytes([_SSH_AGENTC_REQUEST_IDENTITIES])], timeout)
-    except AgentUnavailable:
-        _UNREACHABLE[address] = time.monotonic() + _UNREACHABLE_TTL_S
+    except AgentUnavailable as exc:
+        if not (truncated and "TimeoutError" in str(exc)):
+            _UNREACHABLE[address] = time.monotonic() + _UNREACHABLE_TTL_S
         raise
     if pub_blob not in _identities(ids_reply):
         raise AgentUnavailable("signing key is not loaded in the agent")

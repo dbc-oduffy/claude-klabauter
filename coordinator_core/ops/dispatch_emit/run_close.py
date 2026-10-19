@@ -480,9 +480,7 @@ def sibling_release(
     status is never rewritten as halted: that call returns ``None`` and writes nothing.
     """
     from coordinator_core.ops.dispatch_emit import ask_fanout_contract as contract
-    from coordinator_core.ops.dispatch_emit import sibling_hold
     from coordinator_core.session import claimed_write
-    from coordinator_core.warp_fire import fire_command
 
     base = Path(root)
     own = base / contract.status_rel(run_id)
@@ -516,13 +514,40 @@ def sibling_release(
         parent = contract.ParentRecord.from_json(parent_data)
     except (ValueError, KeyError, TypeError):
         return None
+    _, reply = release_view(base, parent, budget, own_run_id=run_id, reconcile=True)
+    return reply
+
+
+def release_view(
+    base: Path,
+    parent: Any,
+    budget: Optional[int] = None,
+    *,
+    own_run_id: Optional[str] = None,
+    reconcile: bool = False,
+) -> tuple[dict[str, str], dict[str, Any]]:
+    """Read every sibling's status file and compute what a close frees, in fanout order.
+
+    Returns ``(statuses, {parent_id, released, blocked[, superseded]})`` with ``statuses`` keyed run id
+    in fanout order. With *reconcile* a ``running`` sibling other than *own_run_id* whose terminal commit
+    is on HEAD is rewritten ``landed`` (``sibling_hold.reconcile_running``); without it the same
+    sibling reads ``landed`` from HEAD but nothing is written.
+    """
+    from coordinator_core.ops._path_guard import safe_id
+    from coordinator_core.ops.dispatch_emit import ask_fanout_contract as contract
+    from coordinator_core.ops.dispatch_emit import sibling_hold
+    from coordinator_core.warp_fire import fire_command
+
     statuses: dict[str, str] = {}
     complete: set[str] = set()
     for run in parent.runs:
         data = _read_json(base / contract.status_rel(run.run_id))
         status = data.get("status") if data else None
-        if status == contract.STATUS_RUNNING and run.run_id != run_id:
-            if sibling_hold.reconcile_running(base, run.run_id):
+        if status == contract.STATUS_RUNNING and run.run_id != own_run_id:
+            if reconcile:
+                if sibling_hold.reconcile_running(base, run.run_id):
+                    status = contract.STATUS_LANDED
+            elif safe_id(run.run_id) and sibling_hold._terminal_landing_head(base, run.run_id):
                 status = contract.STATUS_LANDED
         statuses[run.run_id] = status if status in contract.RUN_STATUSES else run.status
         if status == contract.STATUS_HALTED and (
@@ -556,7 +581,7 @@ def sibling_release(
     }
     if superseded:
         reply["superseded"] = superseded
-    return reply
+    return statuses, reply
 
 
 def close_halted_runs_for_plan(root: Path, plan_rel: str, sizing_rel: str) -> dict[str, Any]:

@@ -184,6 +184,80 @@ def test_token_stays_live_after_landed_record_commit_and_wrong_token_refuses(rep
     assert run_token.admits(repo, RUN, token, "run.mjs")
 
 
+def _assert_success_commit_redeems(root: Path, token: str) -> None:
+    assert run_token.redeem(root, RUN, token, "run.mjs")
+
+
+def test_token_redeems_after_landed_halt_record(repo):
+    _write_record(repo, RUN)
+    token = run_token.mint(repo, RUN, "run.mjs")
+
+    assert _call(repo, run_token=token)["committed"] is True
+
+    _assert_success_commit_redeems(repo, token)
+
+
+def test_token_redeems_after_nothing_to_commit_halt(repo):
+    token = run_token.mint(repo, RUN, "run.mjs")
+
+    assert _call(repo, run_token=token)["nothing_to_commit"] is True
+
+    _assert_success_commit_redeems(repo, token)
+
+
+def test_token_redeems_after_refused_halt(repo):
+    _write_record(repo, RUN)
+    token = run_token.mint(repo, RUN, "run.mjs")
+
+    assert _call(repo, run_token="0" * 32)["refused"] == "run-token"
+
+    _assert_success_commit_redeems(repo, token)
+
+
+def test_token_redeems_after_land_error_halt(repo, monkeypatch):
+    _write_record(repo, RUN)
+    token = run_token.mint(repo, RUN, "run.mjs")
+    monkeypatch.setattr(terminal_commit, "_worktree_snapshot", lambda *a, **k: None)
+
+    assert _call(repo, run_token=token)["committed"] is False
+
+    _assert_success_commit_redeems(repo, token)
+
+
+def test_token_redeems_after_halt_raising_mid_commit(repo, monkeypatch):
+    _write_record(repo, RUN)
+    token = run_token.mint(repo, RUN, "run.mjs")
+
+    def boom(*a, **k):
+        raise RuntimeError("commit_v2 blew up")
+
+    monkeypatch.setattr("coordinator_core.warm.entry_seam.reentrant_dispatch", boom)
+
+    with pytest.raises(RuntimeError):
+        _call(repo, run_token=token)
+
+    _assert_success_commit_redeems(repo, token)
+
+
+def test_token_unclaimed_while_halt_commit_in_flight(repo, monkeypatch):
+    """A halt op killed mid-commit strands nothing: the token is never claimed."""
+    _write_record(repo, RUN)
+    token = run_token.mint(repo, RUN, "run.mjs")
+    seen: dict = {}
+
+    def killed(*a, **k):
+        seen["live"] = run_token.is_live(repo, RUN)
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr("coordinator_core.warm.entry_seam.reentrant_dispatch", killed)
+
+    with pytest.raises(KeyboardInterrupt):
+        _call(repo, run_token=token)
+
+    assert seen["live"] is True
+    _assert_success_commit_redeems(repo, token)
+
+
 def _seed_siblings(root: Path) -> str:
     """Parent record naming RUN and a successor `after` it; RUN's status reads running."""
     import json

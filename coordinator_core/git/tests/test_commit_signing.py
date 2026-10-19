@@ -144,6 +144,40 @@ def test_message_bytes_reach_commit_tree_verbatim(tmp_path, no_global_config, mo
     assert not captured["text"]
 
 
+def test_exhausted_deadline_skips_signing_without_spawning(tmp_path, monkeypatch):
+    from coordinator_core.git import commit
+
+    monkeypatch.setattr(commit, "_signing_budget", lambda: 0.2)
+
+    def _refuse(*args, **kwargs):
+        raise AssertionError("must not spawn past the deadline")
+
+    monkeypatch.setattr(subprocess, "run", _refuse)
+    sha, warning = write_signed_commit_object(
+        tmp_path, "0" * 40, None, "msg", "C", "c@x", "1700000000 +0000",
+    )
+    assert sha is None
+    assert "signing was skipped" in warning
+
+
+def test_commit_tree_timeout_is_capped_by_remaining_deadline(tmp_path, no_global_config, monkeypatch):
+    from coordinator_core.git import commit
+
+    monkeypatch.setattr(commit, "_signing_budget", lambda: 5.0)
+    captured = {}
+
+    def _capture(args, **kwargs):
+        captured["timeout"] = kwargs.get("timeout")
+        return subprocess.CompletedProcess(args, 0, b"c" * 40 + b"\n", b"")
+
+    monkeypatch.setattr(subprocess, "run", _capture)
+    sha, warning = write_signed_commit_object(
+        tmp_path, "0" * 40, None, "msg", "C", "c@x", "1700000000 +0000",
+    )
+    assert warning is None
+    assert captured["timeout"] == 5.0
+
+
 def test_identity_is_pinned_for_author_and_committer(tmp_path, no_global_config, monkeypatch):
     captured = {}
 

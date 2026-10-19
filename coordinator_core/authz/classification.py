@@ -2287,6 +2287,10 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # parent record under scratch/warp/<parent_id>/, then raises sized_through_turn; spawns no process
     # (ops/dispatch_emit/ask_fanout.py).
     "dispatch.ask_fanout": OpClass.MUTATING,
+    # dispatch.sibling_status — COMPUTE_ONLY: reads one parent record and its siblings' status files and
+    # returns statuses plus released fire calls; writes no file and spawns no process
+    # (ops/dispatch_emit/sibling_status.py).
+    "dispatch.sibling_status": OpClass.COMPUTE_ONLY,
     # dispatch.reap_abandoned_runs — MUTATING: commits the state/warp/<run_id>/ record files of runs with no
     # live token and their orphaned sizings in one ceremony.commit_v2 call (ops/dispatch_emit/abandoned_runs.py).
     # DR-208 five-question affirmation (citing dispatch.reap_abandoned_runs handler):

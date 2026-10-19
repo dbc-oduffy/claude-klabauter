@@ -103,9 +103,17 @@ def write_signed_commit_object(
 ) -> Tuple[Optional[str], Optional[str]]:
     raw = message if isinstance(message, bytes) else message.encode("utf-8", "surrogateescape")
     body = raw if raw.endswith(b"\n") else raw + b"\n"
-    try:
-        from coordinator_core.git.commit import _sign_commit_in_process
+    from coordinator_core.git.commit import (
+        _MIN_SIGN_BUDGET_SECS,
+        _deadline_skip_warning,
+        _sign_commit_in_process,
+        _signing_budget,
+    )
 
+    budget = _signing_budget()
+    if budget is not None and budget < _MIN_SIGN_BUDGET_SECS:
+        return None, _deadline_skip_warning(budget)
+    try:
         in_process = _sign_commit_in_process(repo, root_tree, old_head, name, email, stamp, body)
     except Exception:  # noqa: BLE001 -- any in-process failure answers with the git path
         in_process = None
@@ -121,12 +129,16 @@ def write_signed_commit_object(
     if old_head:
         args += ["-p", old_head]
     args += ["-F", "-"]
+    budget = _signing_budget()  # re-read: the in-process attempt may have spent some
+    if budget is not None and budget < _MIN_SIGN_BUDGET_SECS:
+        return None, _deadline_skip_warning(budget)
+    timeout = 30 if budget is None else min(30, budget)
     try:
         proc = subprocess.run(
             args,
             input=body,
             capture_output=True,
-            timeout=30,
+            timeout=timeout,
             env=env,
             **no_console_creationflags(),
         )

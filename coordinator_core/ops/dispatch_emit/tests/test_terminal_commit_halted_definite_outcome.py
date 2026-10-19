@@ -94,6 +94,7 @@ def test_signing_stall_replies_inside_the_deadline_through_the_served_path(ssh_r
     elapsed = time.monotonic() - t0
 
     assert "error" not in response, response
+    # Budget 5s: the in-process sign joins on 2 * (5 - REPLY_MARGIN_SECS) / 2 = 3s, then the git fallback is skipped.
     assert elapsed < 5.0, elapsed
     result = response["result"]
     if result.get("committed") is True:

@@ -47,7 +47,7 @@ def repo(tmp_path, monkeypatch):
     return root
 
 
-def _make_plan(root: Path, name: str, with_sizing: bool = True) -> None:
+def _make_plan(root: Path, name: str, with_sizing: bool = True, baton_fm: str = "") -> None:
     sizing = f"state/sizings/2026-10-16-{name}.yaml"
     baton = f"state/handoffs/2026-10-16-{name}.md"
     fm = f"---\nsizing_object: {sizing}\n---\n\n" if with_sizing else ""
@@ -68,7 +68,7 @@ def _make_plan(root: Path, name: str, with_sizing: bool = True) -> None:
     (root / sizing).write_text(yaml.safe_dump(rec, sort_keys=False), encoding="utf-8", newline="\n")
     (root / baton).parent.mkdir(parents=True, exist_ok=True)
     (root / baton).write_text(
-        f"---\ntitle: b\nstatus: claimed\nkind: session-handoff\n---\n\n# baton {name}\n", encoding="utf-8"
+        f"---\ntitle: b\nstatus: claimed\nkind: session-handoff\n{baton_fm}---\n\n# baton {name}\n", encoding="utf-8"
     )
 
 
@@ -406,3 +406,73 @@ def test_parent_sizing_mode_wins_over_the_spec_run_mode(repo, monkeypatch):
         **{c.PARENT_SIZING_KEY: _parent_sizing(repo, "pm"), c.INTERACTION_MODE_PARAM: "ceo"},
     )
     assert seen[c.INTERACTION_MODE_PARAM] == "pm"
+
+
+def _capture_fanout(monkeypatch, reply=None) -> dict:
+    from coordinator_core.ops.dispatch_emit import ask_fanout
+
+    seen: dict = {}
+    canned = reply or {"exit_code": 0, "ready": [], "runs": []}
+    monkeypatch.setattr(ask_fanout, "fanout", lambda p, r: seen.update(p) or canned)
+    return seen
+
+
+def test_blocked_by_mode_sends_each_batons_ids_and_blocked_by(repo, monkeypatch):
+    seen = _capture_fanout(monkeypatch)
+    _make_plan(repo, "a", baton_fm="stub_id: hq-01\nhandoff_id: h-01\n")
+    _make_plan(repo, "b", baton_fm="stub_id: hq-02\nblocked_by: hq-01\n")
+    _record(repo)
+    out = _call_spec(repo, list(PLANS.values()))
+    assert out["committed"] is True, out
+    assert seen[c.EDGES_FROM_PARAM] == c.EDGES_FROM_BLOCKED_BY
+    a, b = seen["sizings"]
+    assert (a[c.ITEM_IDS_KEY], a[c.ITEM_BLOCKED_BY_KEY]) == (["hq-01", "h-01"], [])
+    assert (b[c.ITEM_IDS_KEY], b[c.ITEM_BLOCKED_BY_KEY]) == (["hq-02"], ["hq-01"])
+
+
+def test_blocked_by_list_and_baton_without_stub_id_in_a_stub_batch(repo, monkeypatch):
+    seen = _capture_fanout(monkeypatch)
+    _make_plan(repo, "a", baton_fm="stub_id: hq-01\n")
+    _make_plan(repo, "b", baton_fm="blocked_by: [hq-01, 7]\n")
+    _record(repo)
+    _call_spec(repo, list(PLANS.values()))
+    b = seen["sizings"][1]
+    assert b[c.ITEM_IDS_KEY] == [] and b[c.ITEM_BLOCKED_BY_KEY] == ["hq-01"]
+
+
+def test_no_stub_id_sends_no_blocked_by_mode(repo, monkeypatch):
+    seen = _capture_fanout(monkeypatch)
+    _make_plan(repo, "a", baton_fm="blocked_by: hq-09\n")
+    _make_plan(repo, "b")
+    _record(repo)
+    _call_spec(repo, list(PLANS.values()))
+    assert c.EDGES_FROM_PARAM not in seen
+    assert all(c.ITEM_IDS_KEY not in i and c.ITEM_BLOCKED_BY_KEY not in i for i in seen["sizings"])
+
+
+def test_baton_edge_fields_tolerate_a_missing_baton_and_bad_yaml(repo):
+    from coordinator_core.ops.dispatch_emit.roadmap_fanout_commit import _baton_edge_fields
+
+    assert _baton_edge_fields(repo, None) == ([], [])
+    assert _baton_edge_fields(repo, "state/handoffs/missing.md") == ([], [])
+    bad = repo / "state/handoffs/bad.md"
+    bad.parent.mkdir(parents=True, exist_ok=True)
+    bad.write_text("---\nstub_id: [unclosed\n---\n", encoding="utf-8")
+    assert _baton_edge_fields(repo, "state/handoffs/bad.md") == ([], [])
+
+
+def test_held_plans_are_reported_as_held_not_fired_with_the_reason(repo, monkeypatch):
+    reason = "blocked_by hq-01, which is not in this fan-out"
+    _capture_fanout(monkeypatch, {
+        "exit_code": 0, "ready": [],
+        "runs": [{"run_id": "r1", "label": "2026-10-16-a"}, {"run_id": "r2", "label": "2026-10-16-b"}],
+        c.HELD_KEY: [{"run_id": "r1", "label": "2026-10-16-a", "reason": reason}],
+    })
+    _make_plan(repo, "a", baton_fm="stub_id: hq-02\nblocked_by: hq-01\n")
+    _make_plan(repo, "b", baton_fm="stub_id: hq-03\n")
+    _record(repo)
+    out = _call_spec(repo, list(PLANS.values()), waves={PLANS["a"]: 1})
+    nf = {e["plan"]: e for e in out["fanout"][c.NOT_FIRED_KEY]}
+    assert nf[PLANS["a"]] == {"plan": PLANS["a"], "reason": "held", "wave": 1, "detail": reason}
+    assert nf[PLANS["b"]]["reason"] == "queued"
+    assert all(e["reason"] in c.NOT_FIRED_REASONS for e in nf.values())

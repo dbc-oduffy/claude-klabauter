@@ -380,6 +380,15 @@
       },
       "_rationale": "The gate reads the sizing and mints in process. A plan already on disk with a row still open adds exactly one `git log --grep=^Checkpoint-Plan:` (emit.py::checkpoint_landed_state via git/run.py::run_git) to subtract the rows a checkpoint commit landed; a plan with no open row, or none on disk, starts no process. Counted by coordinator_core/ops/dispatch_emit/tests/test_ask_gate_spawn_count.py with exact equality."
     },
+    "dispatch.sibling_status": {
+      "target_ms": 300,
+      "tolerance": {
+        "kind": "relative",
+        "value": 0.2
+      },
+      "spawn_count_budget": {},
+      "_rationale": "Reads one parent record and the status files of that parent's siblings, bounded by fan-out size, in process; no git, no file written, no process started."
+    },
     "dispatch.emit": {
       "target_ms": 300,
       "tolerance": {

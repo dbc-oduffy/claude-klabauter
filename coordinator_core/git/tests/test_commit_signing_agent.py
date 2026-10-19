@@ -170,6 +170,59 @@ def test_timed_out_worker_keeps_its_slot_until_it_finishes(tmp_path, monkeypatch
         pass
 
 
+def _hung_agent(monkeypatch, tmp_path):
+    monkeypatch.setattr(sshsig, "_SLOT_DIR", tmp_path / "slots")
+    sshsig._UNREACHABLE.clear()
+    gate = threading.Event()
+    monkeypatch.setattr(sshsig, "_exchange", lambda *a, **k: gate.wait(10))
+    return gate
+
+
+def test_deadline_truncated_timeout_leaves_agent_reachable(tmp_path, monkeypatch):
+    gate = _hung_agent(monkeypatch, tmp_path)
+    address = str(tmp_path / "s")
+    blob = sshsig._s(b"ssh-ed25519") + sshsig._s(b"k")
+    try:
+        with pytest.raises(sshsig.AgentUnavailable, match="did not answer"):
+            sshsig.sign_via_agent(b"x", blob, env={"SSH_AUTH_SOCK": address}, timeout=0.02)
+        assert address not in sshsig._UNREACHABLE
+    finally:
+        gate.set()
+
+
+def test_truncated_socket_timeout_in_probe_leaves_agent_reachable(tmp_path, monkeypatch):
+    sshsig._UNREACHABLE.clear()
+    address = str(tmp_path / "s")
+
+    def _timeout(*a, **k):
+        raise sshsig.AgentUnavailable("agent transport failed: TimeoutError('timed out')")
+
+    monkeypatch.setattr(sshsig, "_exchange", _timeout)
+    with pytest.raises(sshsig.AgentUnavailable):
+        sshsig._sign_locked(address, b"k", b"r", 0.02, True)
+    assert address not in sshsig._UNREACHABLE
+    with pytest.raises(sshsig.AgentUnavailable):
+        sshsig._sign_locked(address, b"k", b"r", 0.02, False)
+    assert address in sshsig._UNREACHABLE
+    sshsig._UNREACHABLE.clear()
+
+
+def test_full_timeout_non_answer_still_marks_agent_unreachable(tmp_path, monkeypatch):
+    gate = _hung_agent(monkeypatch, tmp_path)
+    monkeypatch.setattr(sshsig, "_DEFAULT_TIMEOUT_S", 0.02)
+    address = str(tmp_path / "s")
+    blob = sshsig._s(b"ssh-ed25519") + sshsig._s(b"k")
+    try:
+        with pytest.raises(sshsig.AgentUnavailable, match="did not answer"):
+            sshsig.sign_via_agent(
+                b"x", blob, env={"SSH_AUTH_SOCK": address}, timeout=sshsig._DEFAULT_TIMEOUT_S,
+            )
+        assert sshsig._UNREACHABLE[address] > 0
+    finally:
+        gate.set()
+        sshsig._UNREACHABLE.clear()
+
+
 def test_tampered_agent_signature_falls_back_to_git(tmp_path, key, monkeypatch):  # noqa: F811
     keyfile, private, pub_text, blob = key
 

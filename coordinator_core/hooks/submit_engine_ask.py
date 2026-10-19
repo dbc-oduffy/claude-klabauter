@@ -315,7 +315,8 @@ def _read_parent(root: Path, parent_id: str):
 def _slice_deny(root: Path, marker: tuple[str, str]) -> Optional[str]:
     """Why a slice sizing may not start now: an unlanded `after` predecessor, or a full budget."""
     from coordinator_core.ops.dispatch_emit.ask_fanout_contract import (
-        STATUS_AFTER, STATUS_HALTED, STATUS_LANDED, STATUS_QUEUED, STATUS_RUNNING, concurrent_run_budget,
+        STATUS_AFTER, STATUS_HALTED, STATUS_HELD, STATUS_LANDED, STATUS_QUEUED, STATUS_RUNNING,
+        concurrent_run_budget,
     )
 
     from coordinator_core.ops.dispatch_emit.ask_fanout_contract import read_superseded_by
@@ -329,6 +330,11 @@ def _slice_deny(root: Path, marker: tuple[str, str]) -> Optional[str]:
     mine = next((r for r in (parent.runs if parent else ()) if r.run_id == run_id), None)
     if mine is None:
         return f"Run {run_id} is not in parent {parent_id}'s record. Submit the ask as a fresh {{ask}}."
+    if mine.status == STATUS_HELD:
+        return (
+            f"Run {run_id} is held: {mine.hold_reason}. "
+            f'Resubmit as a fresh {{ask, supersedes: "{run_id}"}} once that blocker lands.'
+        )
     for pred in mine.after:
         state = _status_of(root, pred)
         if state == STATUS_LANDED:

@@ -1,7 +1,8 @@
 """Multi-ask submission contract: types, paths and pure checks shared by the fan-out op, the submit hook and run close.
 
 Leaf module, stdlib only. ``ledger_partition`` answers whether every parent row is claimed by exactly
-one slice; ``after_edges`` which slice pairs must be sequenced; ``concurrent_run_budget`` how many
+one slice; ``after_edges`` which slice pairs must be sequenced; ``blocked_by_edges`` the same from
+stub ``blocked_by`` (plus holds for out-of-batch blockers); ``concurrent_run_budget`` how many
 sibling runs of one parent may run at once; ``admit`` which ready runs wait; ``release`` which runs a
 close frees (never one in ``skip``). ``CLOSED_BY_KEY`` is the halted status-file key naming the
 evidence that closed the run; ``superseded_rel`` / ``read_superseded_by`` are a held slice's
@@ -31,6 +32,7 @@ STATUS_QUEUED = "queued"
 STATUS_RUNNING = "running"
 STATUS_LANDED = "landed"
 STATUS_HALTED = "halted"
+STATUS_HELD = "held"
 RUN_STATUSES = (
     STATUS_READY,
     STATUS_AFTER,
@@ -38,7 +40,14 @@ RUN_STATUSES = (
     STATUS_RUNNING,
     STATUS_LANDED,
     STATUS_HALTED,
+    STATUS_HELD,
 )
+
+EDGES_FROM_PARAM = "edges_from"
+EDGES_FROM_BLOCKED_BY = "blocked_by"
+ITEM_IDS_KEY = "ids"
+ITEM_BLOCKED_BY_KEY = "blocked_by"
+HELD_KEY = "held"
 
 # Submission params in, reply dict out; the hook injects it so it never imports the op module.
 FanoutFn = Callable[[dict, Any], dict]
@@ -65,6 +74,7 @@ class SiblingRun:
     after: tuple[str, ...] = ()
     slice_sizing: str = ""
     status: str = STATUS_READY
+    hold_reason: str = ""
 
 
 @dataclass(frozen=True)
@@ -105,6 +115,7 @@ class ParentRecord:
                     "after": list(r.after),
                     "slice_sizing": r.slice_sizing,
                     "status": r.status,
+                    **({"hold_reason": r.hold_reason} if r.hold_reason else {}),
                 }
                 for r in self.runs
             ],
@@ -121,6 +132,7 @@ class ParentRecord:
                 after=tuple(r.get("after", ())),
                 slice_sizing=str(r.get("slice_sizing", "")),
                 status=str(r.get("status", STATUS_READY)),
+                hold_reason=str(r.get("hold_reason", "")),
             )
             for r in data.get("runs", ())
         )
@@ -230,6 +242,7 @@ NOT_FIRED_REASONS = (
     "fanout-refused",
     "commit-not-landed",
     "nothing-to-commit",
+    "held",
 )
 
 # Trap: a bucket DoE adds to the plan-blitz WAVE RESULT later is read by no line until it is listed
@@ -339,6 +352,70 @@ def after_edges(slices: Sequence[AskSlice]) -> dict[int, tuple[int, ...]]:
     return edges
 
 
+def blocked_by_edges(
+    ids: Sequence[Sequence[str]],
+    blocked_by: Sequence[Sequence[str]],
+    writes: Sequence[Optional[Sequence[str]]],
+) -> tuple[dict[int, tuple[int, ...]], dict[int, str]]:
+    """``(edges, holds)`` for parallel per-item sequences of ids, blocked_by and writes.
+
+    ``edges`` maps every item index to the indices it must follow (empty for a held item); ``holds``
+    maps a held item to its reason. Item i follows each batch item its blocked_by names, in any
+    submission position. A blocked_by naming no batch id, or a held item, holds i with the first such
+    id in blocked_by order; holds propagate to dependants. Writes overlap between two non-held items
+    that blocked_by does not order adds an edge from the later item in the stable topological order
+    (ties by submission index) to the earlier, so edges never cycle and never touch a held item.
+    The wave plays no part. Raises ValueError for an id claimed by two items, an item blocked by its
+    own id, or a blocked_by cycle among batch items.
+    """
+    n = len(ids)
+    owner: dict[str, int] = {}
+    for i, item_ids in enumerate(ids):
+        for ident in item_ids:
+            if owner.setdefault(ident, i) != i:
+                raise ValueError(f"id {ident!r} is claimed by items {owner[ident]} and {i}")
+    for i in range(n):
+        if any(owner.get(b) == i for b in blocked_by[i]):
+            raise ValueError(f"item {i} is blocked by its own id")
+    deps = [{owner[b] for b in blocked_by[i] if b in owner} for i in range(n)]
+
+    order: list[int] = []
+    remaining = set(range(n))
+    while remaining:
+        ready = [i for i in sorted(remaining) if not (deps[i] & remaining)]
+        if not ready:
+            raise ValueError("blocked_by cycle among items " + ", ".join(map(str, sorted(remaining))))
+        order.append(ready[0])
+        remaining.discard(ready[0])
+
+    holds: dict[int, str] = {}
+    for i in order:
+        for b in blocked_by[i]:
+            if b not in owner:
+                holds[i] = f"blocked_by {b}, which is not in this fan-out"
+            elif owner[b] in holds:
+                holds[i] = f"blocked_by {b}, which is held"
+            else:
+                continue
+            break
+
+    anc: dict[int, set[int]] = {}
+    follows: dict[int, set[int]] = {i: set() if i in holds else set(deps[i]) for i in range(n)}
+    placed: list[int] = []
+    for b in order:
+        if b in holds:
+            continue
+        anc[b] = set()
+        for d in follows[b]:
+            anc[b] |= anc[d] | {d}
+        for a in placed:
+            if a not in anc[b] and _writes_overlap(writes[a], writes[b]):
+                follows[b].add(a)
+                anc[b] |= anc[a] | {a}
+        placed.append(b)
+    return {i: tuple(sorted(follows[i])) for i in range(n)}, holds
+
+
 def concurrent_run_budget(physical_cores: Optional[int] = None) -> int:
     """``max(1, physical_cores // 4)``; reads the box only when the argument is None."""
     if physical_cores is None:
@@ -367,7 +444,7 @@ def admit(runs: Sequence[SiblingRun], budget: int) -> tuple[SiblingRun, ...]:
 
 
 def _with_status(run: SiblingRun, status: str) -> SiblingRun:
-    return SiblingRun(run.run_id, run.label, run.after, run.slice_sizing, status)
+    return SiblingRun(run.run_id, run.label, run.after, run.slice_sizing, status, run.hold_reason)
 
 
 def release(

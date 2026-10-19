@@ -16,8 +16,9 @@ foreign commit added since the run's base (``since-base-overlap``) is withheld w
 and so is a chunk any of whose changed declared writes is withheld for another reason
 (``chunk-write-set-partial``): a chunk lands whole or not at all.
 With no finished chunk the commit is record-only. No receipt, sizing ship,
-plan stamp or close job runs, and the run token is redeemed then always released: a halt never
-spends the token the resumed run's product commit needs.
+plan stamp or close job runs, and the run token is only checked (``run_token.admits``), never
+claimed: no branch, raise or killed op can strand it, so a halt never spends the token the
+resumed run's product commit needs.
 """
 
 from __future__ import annotations
@@ -162,7 +163,7 @@ def commit_halted_record(worktree_root: Path, repo_root: Path, params: dict) -> 
     siblings = sibling_release(worktree_root, run_id, None)
     token = params.get("run_token")
     script_path = params.get("script_path")
-    if token is not None and not run_token.redeem(worktree_root, run_id, token, script_path):
+    if token is not None and not run_token.admits(worktree_root, run_id, token, script_path):
         refusal = _error(
             "params.run_token does not match a live, unspent token minted for params.run_id and "
             "this script (a token admits one landed commit)",
@@ -171,14 +172,10 @@ def commit_halted_record(worktree_root: Path, repo_root: Path, params: dict) -> 
         if siblings is not None:
             refusal["siblings"] = siblings
         return refusal
-    try:
-        reply = _land(worktree_root, repo_root, params, run_id, record_dir_rel, halted)
-        if siblings is not None:
-            reply["siblings"] = siblings
-        return reply
-    finally:
-        if token is not None:
-            run_token.release(worktree_root, run_id, token, script_path)
+    reply = _land(worktree_root, repo_root, params, run_id, record_dir_rel, halted)
+    if siblings is not None:
+        reply["siblings"] = siblings
+    return reply
 
 
 #: Evidence kept per blocking item, in UTF-8 bytes, so the marker stays small.

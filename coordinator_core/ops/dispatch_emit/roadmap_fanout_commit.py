@@ -19,7 +19,12 @@ import yaml
 from coordinator_core.ops._path_guard import contained_path, safe_id
 from coordinator_core.ops.dispatch_emit.ask_contract import FANOUT_RECORD_PARAM, RECORD_DIR_ROOT
 from coordinator_core.ops.dispatch_emit.ask_fanout_contract import (
+    EDGES_FROM_BLOCKED_BY,
+    EDGES_FROM_PARAM,
+    HELD_KEY,
     INTERACTION_MODE_PARAM,
+    ITEM_BLOCKED_BY_KEY,
+    ITEM_IDS_KEY,
     NOT_FIRED_KEY,
     PARENT_SIZING_KEY,
     not_fired_entry,
@@ -93,6 +98,29 @@ def _run_mode(spec: dict) -> Optional[str]:
     return mode.strip() if isinstance(mode, str) and mode.strip() else None
 
 
+def _baton_edge_fields(worktree_root: Path, baton_rel: Optional[str]) -> tuple[list, list]:
+    """``(ids, blocked_by)`` from the baton frontmatter: its non-empty str ``stub_id`` and
+    ``handoff_id``, and ``blocked_by`` (a scalar reads as one item). ``([], [])`` when the baton is
+    missing or its frontmatter does not parse. In-process read: no spawn."""
+    from coordinator_core.frontmatter.primitives import split_frontmatter
+    from coordinator_core.ops.dispatch_emit.terminal_commit import _read_rel
+
+    text = _read_rel(worktree_root, baton_rel) if baton_rel else None
+    split = split_frontmatter(text) if text is not None else None
+    if split is None:
+        return [], []
+    try:
+        fm = yaml.safe_load(split.fm_text)
+    except yaml.YAMLError:
+        return [], []
+    if not isinstance(fm, dict):
+        return [], []
+    ids = [v for k in ("stub_id", "handoff_id") for v in [fm.get(k)] if isinstance(v, str) and v]
+    raw = fm.get("blocked_by")
+    items = [raw] if isinstance(raw, str) else raw if isinstance(raw, list) else []
+    return ids, [v for v in items if isinstance(v, str) and v]
+
+
 def _plan_entries(plans: list, waves: dict, reason: str, detail: Optional[str] = None) -> list:
     return [not_fired_entry(reason=reason, plan=p, wave=waves.get(p), detail=detail) for p in plans]
 
@@ -105,9 +133,14 @@ def _unfired_siblings(fan: object, plans: list, waves: dict, sizings: list) -> l
         return _plan_entries(plans, waves, "fanout-refused", str(fan.get("error")))
     ready = {r.get("sizing") for r in fan.get("ready") or () if isinstance(r, dict)}
     runs = {r.get("label"): r for r in fan.get("runs") or () if isinstance(r, dict)}
+    held = {r.get("label"): r.get("reason") for r in fan.get(HELD_KEY) or () if isinstance(r, dict)}
     out: list = []
     for plan, sizing in zip(plans, sizings):
         if sizing in ready:
+            continue
+        label = PurePosixPath(plan).stem
+        if label in held:
+            out.append(not_fired_entry(reason="held", plan=plan, wave=waves.get(plan), detail=held[label]))
             continue
         after = (runs.get(PurePosixPath(plan).stem) or {}).get("after")
         entry = (
@@ -266,15 +299,22 @@ def _land_and_fan_out(worktree_root: Path, repo_root: Path, params: dict, run_id
             out["fanout"] = {NOT_FIRED_KEY: not_fired + _plan_entries(spec["plans"], waves, "commit-not-landed", detail)}
             return out
 
+    edge_fields = [_baton_edge_fields(worktree_root, baton) for _plan, _sizing, baton, _writes in resolved]
+    by_blocked_by = any(ids for ids, _blocked in edge_fields)
     items = []
-    for given, (plan, sizing, _baton, writes) in zip(spec["plans"], resolved):
+    for given, (plan, sizing, _baton, writes), (ids, blocked_by) in zip(spec["plans"], resolved, edge_fields):
         item: dict = {"sizing": sizing, "label": PurePosixPath(plan).stem}
         if given in waves:
             item["wave"] = waves[given]
         if writes is not None:
             item["writes"] = writes
+        if by_blocked_by:
+            item[ITEM_IDS_KEY] = ids
+            item[ITEM_BLOCKED_BY_KEY] = blocked_by
         items.append(item)
     fan_params: dict = {"sizings": items}
+    if by_blocked_by:
+        fan_params[EDGES_FROM_PARAM] = EDGES_FROM_BLOCKED_BY
     if inherited:
         fan_params[INTERACTION_MODE_PARAM] = inherited
     fan = ask_fanout.fanout(fan_params, worktree_root)

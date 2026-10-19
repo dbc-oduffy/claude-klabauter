@@ -12,7 +12,10 @@ Three arms:
             (R1..Rn) per ask, each slice claims its own.
   - slices: {slices: [{label, ask, rows, writes?}], parent_sizing, confirm_split?} -- the parent
             register is the parent sizing's own rows; each slice carries its rows byte for byte.
-  - sizings: {sizings: [{sizing, label?, writes?}], interaction_mode?, confirm_split?} -- existing
+  - sizings: {sizings: [{sizing, label?, writes?, wave?, ids?, blocked_by?}], interaction_mode?,
+            edges_from?: "blocked_by", confirm_split?} -- with edges_from, after edges follow each item's
+            blocked_by (a wave adds none), a blocker outside the batch holds the run, and the reply names
+            held runs under `held`. Existing
             planned sizings (each with a `plan:` edge); mints no sizing, runs no partition, only
             stamps each sizing's `em_analysis.ask_parent` and, where the sizing records no
             `interaction_mode`, the inherited top-level one (never overwriting a recorded mode;
@@ -246,8 +249,18 @@ def fanout(params: dict, root: Path) -> dict:
         return _err(str(exc))
 
 
-def _read_sizings(params: Mapping) -> list[tuple[str, str, Optional[tuple[str, ...]], Optional[int]]]:
-    """The sizings arm items as (sizing path, label, writes, wave); waves must not decrease."""
+def _str_list(value: Any, where: str, key: str) -> list[str]:
+    if value is None:
+        return []
+    if not isinstance(value, list) or not all(isinstance(v, str) and v.strip() for v in value):
+        raise _Refused(f"{where}: {key} must be a list of non-empty strings")
+    return [v.strip() for v in value]
+
+
+def _read_sizings(
+    params: Mapping,
+) -> list[tuple[str, str, Optional[tuple[str, ...]], Optional[int], list[str], list[str]]]:
+    """The sizings arm items as (sizing path, label, writes, wave, ids, blocked_by); waves must not decrease."""
     raw = params.get("sizings")
     if not isinstance(raw, list) or not raw:
         raise _Refused("sizings must be a non-empty list")
@@ -270,7 +283,11 @@ def _read_sizings(params: Mapping) -> list[tuple[str, str, Optional[tuple[str, .
             if top_wave is not None and wave < top_wave:
                 raise _Refused(f"{where}: wave {wave} is lower than an earlier item's wave {top_wave}; order items by wave")
             top_wave = wave
-        out.append((rel.strip(), (label or "").strip() or f"sizing-{i + 1}", _writes(item.get("writes"), where), wave))
+        out.append((
+            rel.strip(), (label or "").strip() or f"sizing-{i + 1}", _writes(item.get("writes"), where), wave,
+            _str_list(item.get(contract.ITEM_IDS_KEY), where, contract.ITEM_IDS_KEY),
+            _str_list(item.get(contract.ITEM_BLOCKED_BY_KEY), where, contract.ITEM_BLOCKED_BY_KEY),
+        ))
     return out
 
 
@@ -280,14 +297,26 @@ def _fanout_sizings(params: Mapping, worktree: Path, confirm: bool) -> dict:
     inherited = params.get(contract.INTERACTION_MODE_PARAM)
     if inherited is not None and (not isinstance(inherited, str) or not inherited.strip()):
         raise _Refused(f"{contract.INTERACTION_MODE_PARAM} must be a non-empty string")
-    slices = [contract.AskSlice(label, rel, (), writes, wave) for rel, label, writes, wave in items]
+    mode = params.get(contract.EDGES_FROM_PARAM)
+    if mode is not None and mode != contract.EDGES_FROM_BLOCKED_BY:
+        raise _Refused(f"{contract.EDGES_FROM_PARAM} must be absent or {contract.EDGES_FROM_BLOCKED_BY!r}")
+    slices = [contract.AskSlice(label, rel, (), writes, wave) for rel, label, writes, wave, _i, _b in items]
     stamp = datetime.now().strftime("%Y%m%dT%H%M%S")
     parent_id = f"ask-parent-{stamp}-{uuid.uuid4().hex[:6]}"
     run_ids = [f"ask-{stamp}-{uuid.uuid4().hex[:6]}" for _ in items]
-    edges = contract.after_edges(slices)
+    holds: dict[int, str] = {}
+    if mode is None:
+        edges = contract.after_edges(slices)
+    else:
+        try:
+            edges, holds = contract.blocked_by_edges(
+                [it[4] for it in items], [it[5] for it in items], [it[2] for it in items]
+            )
+        except ValueError as exc:
+            raise _Refused(str(exc)) from exc
 
     stamped: list[tuple[Path, str]] = []
-    for i, (rel, label, _w, _wv) in enumerate(items):
+    for i, (rel, label, *_rest) in enumerate(items):
         doc = _load_parent(worktree, rel)
         edge = doc.get("plan")
         if not isinstance(edge, str) or not edge.strip():
@@ -320,9 +349,13 @@ def _fanout_sizings(params: Mapping, worktree: Path, confirm: bool) -> dict:
             label=label,
             after=tuple(run_ids[j] for j in edges[i]),
             slice_sizing=rel,
-            status=contract.STATUS_AFTER if edges[i] else contract.STATUS_READY,
+            status=(
+                contract.STATUS_HELD if i in holds
+                else contract.STATUS_AFTER if edges[i] else contract.STATUS_READY
+            ),
+            hold_reason=holds.get(i, ""),
         )
-        for i, (rel, label, _w, _wv) in enumerate(items)
+        for i, (rel, label, *_rest) in enumerate(items)
     )
     runs = contract.admit(runs, contract.concurrent_run_budget())
     for path, text in stamped:
@@ -338,6 +371,10 @@ def _fanout_sizings(params: Mapping, worktree: Path, confirm: bool) -> dict:
         **contract.FanoutReply(parent_id, runs).to_json(),
         "ready": [{"run_id": r.run_id, "sizing": r.slice_sizing} for r in ready],
         "fire": [fire_command(r.slice_sizing) for r in ready],
+        contract.HELD_KEY: [
+            {"run_id": r.run_id, "label": r.label, "reason": r.hold_reason}
+            for r in runs if r.status == contract.STATUS_HELD
+        ],
     }
 
 

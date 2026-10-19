@@ -808,6 +808,13 @@ def _signing_budget() -> Optional[float]:
     return max(0.0, left - dispatch_abandon.REPLY_MARGIN_SECS)
 
 
+def _deadline_skip_warning(budget: float) -> str:
+    return (
+        "commit.gpgsign is set but signing was skipped: the dispatch deadline leaves "
+        f"{budget:.1f}s -- committed unsigned"
+    )
+
+
 def _sign_commit_in_process(
     repo: Union[str, Path],
     tree_sha: str,
@@ -896,10 +903,7 @@ def _sign_commit_tree(
 
     budget = _signing_budget()
     if budget is not None and budget < _MIN_SIGN_BUDGET_SECS:
-        return None, (
-            "commit.gpgsign is set but signing was skipped: the dispatch deadline leaves "
-            f"{budget:.1f}s -- committed unsigned"
-        )
+        return None, _deadline_skip_warning(budget)
     try:
         in_process = _sign_commit_in_process(
             repo, tree_sha, parent_sha, name, email, when, message,
@@ -919,10 +923,7 @@ def _sign_commit_tree(
     })
     budget = _signing_budget()  # re-read: the in-process attempt may have spent some
     if budget is not None and budget < _MIN_SIGN_BUDGET_SECS:
-        return None, (
-            "commit.gpgsign is set but signing was skipped: the dispatch deadline leaves "
-            f"{budget:.1f}s -- committed unsigned"
-        )
+        return None, _deadline_skip_warning(budget)
     try:
         result = run_git(
             args, cwd=str(repo), input=message.encode("utf-8", "surrogateescape"), env=env,

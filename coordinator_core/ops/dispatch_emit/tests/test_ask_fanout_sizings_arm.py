@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 import yaml
 
@@ -190,3 +192,103 @@ def test_interaction_mode_bad_value_refuses_and_writes_nothing(repo, bad):
     out = mod.fanout({"sizings": [{"sizing": a}], c.INTERACTION_MODE_PARAM: bad}, repo)
     assert out["exit_code"] == 1 and out["applied"] is False
     assert _snapshot(repo) == before
+
+
+HQ = [  # (label, blocked_by) in submission order; hq-01 is not in the batch
+    ("hq-03", []), ("hq-05", []), ("hq-04", ["hq-03"]), ("hq-02", ["hq-01"]),
+    ("hq-06", ["hq-01"]), ("hq-08", ["hq-01", "hq-03", "hq-05", "hq-06"]),
+]
+
+
+def _hq_items(repo, waves=False):
+    items = []
+    for n, (label, blocked) in enumerate(HQ):
+        rel = _sizing(repo, label, f"docs/plans/2026-10-16-{label}.md")
+        item = {"sizing": rel, "label": label, "writes": [f"pkg/{label}.py"], "ids": [label], "blocked_by": blocked}
+        if waves:
+            item["wave"] = n
+        items.append(item)
+    return items
+
+
+def _blocked_by_call(repo, items, **extra):
+    return mod.fanout({"sizings": items, c.EDGES_FROM_PARAM: c.EDGES_FROM_BLOCKED_BY, **extra}, repo)
+
+
+def test_blocked_by_hq_batch_builds_edges_and_held_runs(repo):
+    out = _blocked_by_call(repo, _hq_items(repo))
+    assert out["exit_code"] == 0, out
+    by = {r["label"]: r for r in out["runs"]}
+    rid = {label: r["run_id"] for label, r in by.items()}
+    assert "after" not in by["hq-03"] and "after" not in by["hq-05"]
+    assert by["hq-04"]["after"] == [rid["hq-03"]]
+    parent = json.loads((repo / c.parent_record_rel(out["parent_id"])).read_text(encoding="utf-8"))
+    status = {r["label"]: r["status"] for r in parent["runs"]}
+    for label in ("hq-02", "hq-06", "hq-08"):
+        assert status[label] == "held" and "after" not in by[label]
+    assert status["hq-04"] == "after" and status["hq-03"] == status["hq-05"] == "ready"
+    reasons = {r["label"]: r.get("hold_reason") for r in parent["runs"]}
+    assert "hq-01" in reasons["hq-02"] and "hq-01" in reasons["hq-06"] and "hq-01" in reasons["hq-08"]
+    assert reasons["hq-03"] is None
+    assert out[c.HELD_KEY] == [
+        {"run_id": rid[label], "label": label, "reason": reasons[label]} for label in ("hq-02", "hq-06", "hq-08")
+    ]
+    assert [r["run_id"] for r in out["ready"]] == [rid["hq-03"], rid["hq-05"]]
+    assert len(out["fire"]) == 2
+
+
+def test_blocked_by_mode_wave_adds_no_edge(repo):
+    out = _blocked_by_call(repo, _hq_items(repo, waves=True))
+    assert out["exit_code"] == 0, out
+    by = {r["label"]: r for r in out["runs"]}
+    assert "after" not in by["hq-05"]
+    assert by["hq-04"]["after"] == [by["hq-03"]["run_id"]]
+
+
+def test_blocked_by_absent_mode_is_legacy_with_empty_held(repo):
+    a, b = _sizing(repo, "a", PLAN_A), _sizing(repo, "b", PLAN_B)
+    out = mod.fanout({"sizings": [
+        {"sizing": a, "writes": ["pkg"], "ids": ["x"], "blocked_by": ["nope"]},
+        {"sizing": b, "writes": ["pkg/b.py"]},
+    ]}, repo)
+    assert out["exit_code"] == 0, out
+    assert out[c.HELD_KEY] == []
+    assert out["runs"][1]["after"] == [out["runs"][0]["run_id"]]
+    assert all(r.get("status") != "held" for r in out["runs"])
+
+
+@pytest.mark.parametrize("extra,item_patch,needle", [
+    ({c.EDGES_FROM_PARAM: "wave"}, {}, "edges_from"),
+    ({c.EDGES_FROM_PARAM: 3}, {}, "edges_from"),
+    ({}, {"ids": "a"}, "sizings[0]: ids must be"),
+    ({}, {"ids": [""]}, "sizings[0]: ids must be"),
+    ({}, {"blocked_by": "a"}, "sizings[0]: blocked_by must be"),
+    ({}, {"blocked_by": [1]}, "sizings[0]: blocked_by must be"),
+    ({}, {"ids": ["a"], "blocked_by": ["a"]}, "own id"),
+])
+def test_blocked_by_bad_input_refuses_and_writes_nothing(repo, extra, item_patch, needle):
+    a, b = _sizing(repo, "a", PLAN_A), _sizing(repo, "b", PLAN_B)
+    before = _snapshot(repo)
+    items = [{"sizing": a, "writes": ["x"], "ids": ["a"], **item_patch}, {"sizing": b, "writes": ["y"], "ids": ["b"]}]
+    out = mod.fanout({"sizings": items, **({c.EDGES_FROM_PARAM: c.EDGES_FROM_BLOCKED_BY} | extra)}, repo)
+    assert out["exit_code"] == 1 and out["applied"] is False and needle in out["error"]
+    assert _snapshot(repo) == before
+
+
+def test_blocked_by_cycle_refuses_and_writes_nothing(repo):
+    a, b = _sizing(repo, "a", PLAN_A), _sizing(repo, "b", PLAN_B)
+    before = _snapshot(repo)
+    out = _blocked_by_call(repo, [
+        {"sizing": a, "writes": ["x"], "ids": ["a"], "blocked_by": ["b"]},
+        {"sizing": b, "writes": ["y"], "ids": ["b"], "blocked_by": ["a"]},
+    ])
+    assert out["exit_code"] == 1 and "cycle" in out["error"]
+    assert _snapshot(repo) == before
+
+
+def test_held_run_is_still_stamped_with_its_ask_parent_marker(repo):
+    a = _sizing(repo, "a", PLAN_A)
+    out = _blocked_by_call(repo, [{"sizing": a, "writes": ["x"], "ids": ["a"], "blocked_by": ["gone"]}])
+    assert out["exit_code"] == 0, out
+    assert out["ready"] == [] and out["fire"] == []
+    assert _doc(repo, a)["em_analysis"]["ask_parent"] == c.ask_parent_marker(out["parent_id"], out["runs"][0]["run_id"])

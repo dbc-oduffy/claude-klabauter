@@ -731,6 +731,8 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "dispatch.ask_stage":                       "common_dir",
     # dispatch.ask_fanout — writes slice sizings and the parent record under the caller's own worktree.
     "dispatch.ask_fanout":                      "common_dir",
+    # dispatch.sibling_status — reads the same parent record and status files under the caller's own worktree.
+    "dispatch.sibling_status":                  "common_dir",
     "dispatch.reap_abandoned_runs":             "common_dir",
     "dispatch.commit_halted_rows":              "common_dir",
     "dispatch.supersede_slice":                 "common_dir",
