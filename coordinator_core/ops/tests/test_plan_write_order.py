@@ -172,6 +172,17 @@ def test_bad_params_are_refused(root, params):
         op._handler(params, repo_root=root)
 
 
+def test_201_entries_refused_before_any_path_resolves(root):
+    plans = [f"docs/plans/ghost-{i:03d}.md" for i in range(201)]
+    with pytest.raises(ValueError, match="bound is 200"):
+        op._handler({"plans": plans}, repo_root=root)
+
+
+def test_200_entries_accepted(root):
+    plans = [_plan(root, f"2026-10-01-b{i:03d}", _row("R1", f"[own{i}.py]")) for i in range(200)]
+    assert len(_order(root, plans)["set"]) == 200
+
+
 def test_handler_requires_repo_root():
     with pytest.raises(ValueError):
         op._handler({"plans": ["docs/plans/a.md"]}, repo_root=None)

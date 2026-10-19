@@ -152,3 +152,30 @@ def test_derive_edges_equals_the_oracle_on_declared_edges_cycles_and_prefix_name
     assert derived.skipped_cycles, "fixture must carry a mixed declared/derived cycle"
     assert derived.edges_added
     assert derived == _oracle_derive(pset, set(), tmp_path)
+
+
+BOUND_PLANS = 200
+BOUND_CHAIN = 170
+BOUND_MIN_EDGES = 158
+
+
+def test_write_order_first_warm_under_budget_at_the_200_plan_bound(tmp_path, monkeypatch):
+    """Fresh files salted with a token unique to this case, so no rows-memo hit from other cases."""
+    from coordinator_core.ops import plan_write_order as op
+
+    (tmp_path / ".git").mkdir()
+    rels = []
+    for i in range(BOUND_PLANS):
+        rel = f"docs/plans/2026-10-19-w{i:04d}.md"
+        shared = "shared/hub.py" if i < BOUND_CHAIN else f"grp{(i - BOUND_CHAIN) // 5}/f.py"
+        rows = _row("R1", [shared, f"own/{i}.py"]) + _row("R2", [shared])
+        _write_plan(tmp_path, rel, rows, fm=STAMP + f"salt: c8-bound-{i}-{time.time_ns()}\n")
+        rels.append(rel)
+    start = time.process_time()
+    with _count_spawns_attributed(monkeypatch) as spawns:
+        reply = op._write_order({"plans": rels}, tmp_path)
+    elapsed = time.process_time() - start
+    assert len(reply["set"]) == BOUND_PLANS and not reply["unreadable"]
+    assert len(reply["edges"]) >= BOUND_MIN_EDGES, len(reply["edges"])
+    assert list(spawns) == []
+    assert elapsed < 0.5, f"_write_order took {elapsed:.3f}s process time at {BOUND_PLANS} plans"

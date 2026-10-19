@@ -813,13 +813,110 @@ def test_has_variable_path_operand_does_not_match_embedded_reference():
     assert guard._has_variable_path_operand(["pytest", "$env:FILES"])
 
 
-@pytest.mark.parametrize("command", ["npx vitest run $FILES", "FILES=a.test.ts; npx vitest run $FILES"])
+@pytest.mark.parametrize("command", ["npx vitest run $FILES", "FILES=$(git ls-files); npx vitest run $FILES"])
 def test_subagent_deny_names_a_variable_held_path_list(repo, command):
     """A test-runner leg handing vitest its files through `$FILES` was denied
     as a full suite with no reason it could act on, and reported tests run: 0."""
     result = guard.check(_payload(command, repo, agent_id="agent-1"))
     reason = result["hookSpecificOutput"]["permissionDecisionReason"]
     assert "held in a variable" in reason and "Name the paths literally" in reason
+
+
+def test_literal_bound_non_scope_denies_without_the_variable_note(repo):
+    """A variable bound to a testpaths root resolves to that literal word, so
+    the deny is about breadth, not about a variable the guard could not see."""
+    result = guard.check(_payload("FILES=coordinator_core; pytest $FILES", repo, agent_id="agent-1"))
+    reason = _reason(result)
+    assert "held in a variable" not in reason
+
+
+@pytest.fixture
+def literal_repo(tmp_path, monkeypatch):
+    """A tmp repo whose ``testpaths`` is ``tests`` with two unit test files."""
+    (tmp_path / "pyproject.toml").write_text(
+        '[tool.pytest.ini_options]\ntestpaths = ["tests"]\n', encoding="utf-8"
+    )
+    unit = tmp_path / "tests" / "unit"
+    unit.mkdir(parents=True)
+    (unit / "test_a.py").write_text("", encoding="utf-8")
+    (unit / "test_b.py").write_text("", encoding="utf-8")
+    monkeypatch.setattr(guard, "resolve_git_root", lambda cwd: str(tmp_path))
+    monkeypatch.delenv(guard._OVERRIDE_ENV_VAR, raising=False)
+    monkeypatch.setattr(guard, "_tier_u_grant", lambda cwd: (True, None))
+    monkeypatch.setattr(guard, "_mutex_holder", lambda: None)
+    return tmp_path
+
+
+_LITERAL_ALLOWED = [
+    'for f in tests/unit/test_a.py tests/unit/test_b.py; do python -m pytest "$f" -q; done',
+    'FILES="tests/unit/test_a.py tests/unit/test_b.py"; python -m pytest $FILES',
+    'FILES="tests/unit/test_a.py"; for f in $FILES; do pytest "$f"; done',
+    'F=tests/unit/test_a.py && python -m pytest $F',
+]
+
+_LITERAL_DENIED = [
+    'for f in tests; do python -m pytest "$f"; done',
+    'for f in .; do pytest "$f"; done',
+    'for f in $(git ls-files); do python -m pytest "$f"; done',
+    "for f in `ls tests`; do pytest $f; done",
+    'for f in tests/*.py; do pytest "$f"; done',
+    "FILES=tests/unit/test_a.py pytest $FILES",
+    "FILES=tests/unit/test_a.py; FILES=tests; pytest $FILES",
+    "while true; do pytest; done",
+    "if true; then python -m pytest; fi",
+    "! pytest",
+    "for f in tests/unit/test_a.py; do python -m pytest; done",
+    'for f in tests tests/unit/test_a.py; do pytest "$f"; done',
+    'for f in . tests/unit/test_a.py; do pytest "$f"; done',
+    'FILES="tests tests/unit/test_a.py"; for f in $FILES; do pytest "$f"; done',
+    "false && F=tests/unit/test_a.py; pytest $F",
+    "true || F=tests/unit/test_a.py; pytest $F",
+    "false && for f in tests/unit/test_a.py; do pytest $f; done",
+    "F=tests/unit/test_a.py & pytest $F",
+    "F=tests/unit/test_a.py | cat; pytest $F",
+]
+
+
+@pytest.mark.parametrize("command", _LITERAL_ALLOWED)
+def test_subagent_literal_same_command_path_list_is_allowed(literal_repo, command):
+    _assert_allowed(guard.check(_payload(command, literal_repo, agent_id="agent-1")))
+
+
+@pytest.mark.parametrize("command", _LITERAL_DENIED)
+def test_subagent_broad_loop_or_unbound_variable_is_denied(literal_repo, command):
+    _reason(guard.check(_payload(command, literal_repo, agent_id="agent-1")))
+
+
+def test_unbound_variable_keeps_tier_u_and_the_variable_note(literal_repo):
+    matches = guard.classify_command("python -m pytest $FILES", cwd=str(literal_repo))
+    assert [m.tier for m in matches] == ["U"]
+    assert guard._VARIABLE_PATH_OPERAND_NOTE in matches[0].remediation
+
+
+def test_literal_binding_adds_no_spawn_and_bounded_process_time(literal_repo, monkeypatch):
+    import time
+
+    def _boom(*a, **k):
+        raise AssertionError("guard path must not spawn")
+
+    monkeypatch.setattr(subprocess, "Popen", _boom)
+    commands = _LITERAL_ALLOWED + _LITERAL_DENIED
+
+    def _per_call():
+        samples = []
+        for _ in range(20):
+            t0 = time.process_time()
+            for c in commands:
+                guard.check(_payload(c, literal_repo, agent_id="agent-1"))
+            samples.append((time.process_time() - t0) / len(commands))
+        return sorted(samples)[len(samples) // 2]
+
+    guard.check(_payload(commands[0], literal_repo, agent_id="agent-1"))
+    bound = _per_call()
+    monkeypatch.setattr(guard, "bind_literal_operands", lambda argvs, joiners=None: [list(a) for a in argvs])
+    monkeypatch.setattr(guard, "bind_literal_iterations", lambda argvs, joiners=None: [[list(a)] for a in argvs])
+    unbound = _per_call()
+    assert bound - unbound < 0.002
 
 
 def test_subagent_deny_of_plain_breadth_has_no_variable_note(repo):

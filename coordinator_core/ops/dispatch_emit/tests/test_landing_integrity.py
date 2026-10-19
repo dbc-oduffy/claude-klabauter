@@ -50,6 +50,64 @@ def test_run_base_resolver_order(tmp_path):
     assert li.run_base_for(tmp_path, None, {}) is None
 
 
+def _v(status, caused=None, baseline="absent"):
+    if baseline == "absent":
+        baseline = None if caused is None else {"caused": caused, "pre_existing": [], "unverified": []}
+    return {"status": status, "tests_failed": 2, "baseline": baseline}
+
+
+@pytest.mark.parametrize("status", ["pass", "pass-with-skips"])
+def test_passing_verdict_has_no_findings(status):
+    assert li.failed_targeted_tests(_v(status)) == ([], "pass")
+
+
+def test_caused_failures_yield_one_finding_per_test_file():
+    caused = ["a/test_x.py::t1", ".\\b\\test_y.py::T::t2", "a/test_x.py::t3"]
+    findings, check = li.failed_targeted_tests(_v("fail", caused))
+    assert check == "failed"
+    assert [(f.path, f.reason) for f in findings] == [
+        ("a/test_x.py", li.TARGETED_TESTS_FAILED),
+        ("b/test_y.py", li.TARGETED_TESTS_FAILED),
+    ]
+    assert "a/test_x.py::t1" in findings[0].detail and "a/test_x.py::t3" in findings[0].detail
+
+
+def test_detail_names_at_most_three_node_ids():
+    caused = [f"t/test_z.py::t{i}" for i in range(5)]
+    (finding,), _ = li.failed_targeted_tests(_v("fail", caused))
+    assert finding.detail.count("::") == 3
+
+
+def test_baseline_present_with_nothing_caused_is_pre_existing_only():
+    assert li.failed_targeted_tests(_v("fail", [])) == ([], "pre-existing-only")
+
+
+def test_error_without_baseline_is_one_unattributed_finding():
+    findings, check = li.failed_targeted_tests(_v("error", None, baseline=None))
+    assert check == "failed"
+    assert [(f.path, f.reason) for f in findings] == [("", li.TARGETED_TESTS_FAILED)]
+
+
+def test_absent_verdict_is_no_verdict():
+    assert li.failed_targeted_tests(None) == ([], "no-verdict")
+
+
+def test_verdict_prefers_targeted_tests_over_both_inline_review_locations():
+    direct = {"status": "pass", "tests_failed": 0, "baseline": None}
+    inline = {"tests": {"status": "fail", "failed": 3}}
+    params = {"targeted_tests": direct, "inline_review": inline, "run_outcome": {"inline_review": inline}}
+    assert li.targeted_test_verdict(params) == direct
+
+
+def test_verdict_falls_back_to_inline_review_then_run_outcome():
+    tests = {"status": "fail", "failed": 3}
+    expected = {"status": "fail", "tests_failed": 3, "baseline": None}
+    assert li.targeted_test_verdict({"inline_review": {"tests": tests}}) == expected
+    assert li.targeted_test_verdict({"run_outcome": {"inline_review": {"tests": tests}}}) == expected
+    assert li.targeted_test_verdict({"targeted_tests": None}) is None
+    assert li.targeted_test_verdict({}) is None
+
+
 @pytest.mark.spawns_process
 @pytest.mark.cadence
 def test_recorded_base_branch_does_not_import_dispatch_emit_op(tmp_path):

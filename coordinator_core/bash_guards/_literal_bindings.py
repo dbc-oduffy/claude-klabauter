@@ -47,11 +47,14 @@ Resolution rules and traps:
     first pass). A plain variable is one run, so it keeps all words. An empty
     ``for`` list falls back to the all-words (empty) replacement. Both functions
     share one resolution scan.
-  * The argvs carry no ``&&``/``||``/``|`` operators, so a binding after
-    ``false &&`` or inside a pipeline stage is treated as unconditional. This is
-    an OPEN bypass: ``false && F=tests/a.py; pytest $F`` runs the whole suite
-    but binds as scoped. No test or guard enforces it; closing it needs the
-    tokenizer to hand operators to ``_resolve``.
+  * Unconditional only: both public functions take ``joiners``, the separator
+    text that precedes each segment (``""`` for the first, ``";"`` or a
+    newline for a sequence). A binding whose segment is joined to what precedes
+    it by ``&&``, ``||``, ``|`` or ``&`` -- or is followed by a lone ``|`` or
+    ``&`` (a backgrounded or piped stage runs in a subshell) -- may never run
+    (``false && F=tests/a.py; pytest $F`` runs the whole suite), so it counts
+    as a touch, not a binding. ``joiners=None`` means every segment is
+    sequential.
 """
 
 from __future__ import annotations
@@ -105,7 +108,23 @@ def _touch_names(head: str, rest: Sequence[str]) -> List[str]:
     return names
 
 
-def _resolve(segments: List[List[str]]) -> tuple:
+def _conditional_flags(count: int, joiners: Optional[Sequence[str]]) -> List[bool]:
+    """Per segment: is a binding written here possibly skipped or subshelled?"""
+    if joiners is None:
+        return [False] * count
+    padded = list(joiners) + [""] * max(0, count - len(joiners))
+    flags: List[bool] = []
+    for i in range(count):
+        before = padded[i]
+        after = padded[i + 1] if i + 1 < count else ""
+        flags.append(
+            ("&" in before or "|" in before)
+            or after in ("|", "&", "|&")
+        )
+    return flags
+
+
+def _resolve(segments: List[List[str]], joiners: Optional[Sequence[str]] = None) -> tuple:
     """One scan for both public functions: ``(resolved, poison_from)`` where
     ``resolved[name] = (segment_index, words, from_for_header)``."""
     # events[name] -> list of (segment_index, words or None); None = touch.
@@ -116,10 +135,13 @@ def _resolve(segments: List[List[str]]) -> tuple:
     def note(name: str, idx: int, words: Optional[List[str]]) -> None:
         events.setdefault(name, []).append((idx, words))
 
+    conditional = _conditional_flags(len(segments), joiners)
     for idx, seg in enumerate(segments):
         if not seg:
             continue
         peeled, rest = _peel(seg)
+        if conditional[idx]:
+            peeled = max(peeled, 1)
         if not rest:
             continue
         head = rest[0]
@@ -206,12 +228,15 @@ def _hit(resolved: Dict[str, tuple], tok: str, idx: int) -> Optional[tuple]:
     return hit if hit is not None and hit[0] < idx else None
 
 
-def bind_literal_operands(segment_argvs: Sequence[Sequence[str]]) -> List[List[str]]:
+def bind_literal_operands(
+    segment_argvs: Sequence[Sequence[str]],
+    joiners: Optional[Sequence[str]] = None,
+) -> List[List[str]]:
     """Return ``segment_argvs`` with each resolvable bare ``$NAME`` operand
     replaced by its same-command literal words. Same length as the input;
     unresolvable tokens are left untouched."""
     segments = [list(seg) for seg in segment_argvs]
-    resolved, poison_from = _resolve(segments)
+    resolved, poison_from = _resolve(segments, joiners)
     out: List[List[str]] = []
     for idx, seg in enumerate(segments):
         if poison_from is not None and idx > poison_from:
@@ -230,12 +255,13 @@ def bind_literal_operands(segment_argvs: Sequence[Sequence[str]]) -> List[List[s
 
 def bind_literal_iterations(
     segment_argvs: Sequence[Sequence[str]],
+    joiners: Optional[Sequence[str]] = None,
 ) -> List[List[List[str]]]:
     """Per-segment argv variants: a segment referencing a resolved ``for``-bound
     name yields one variant per list word (product across distinct such names);
     every other segment yields the single ``bind_literal_operands`` argv."""
     segments = [list(seg) for seg in segment_argvs]
-    resolved, poison_from = _resolve(segments)
+    resolved, poison_from = _resolve(segments, joiners)
     out: List[List[List[str]]] = []
     for idx, seg in enumerate(segments):
         if poison_from is not None and idx > poison_from:

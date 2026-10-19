@@ -418,6 +418,10 @@ from coordinator_core.bash_guards._command_tokenizer import (
     tokenize_full_command as _tokenize_full_command,
     segments_from_tokens_simple as _segments_from_tokens_simple,
 )
+from coordinator_core.bash_guards._literal_bindings import (
+    bind_literal_iterations,
+    bind_literal_operands,
+)
 from coordinator_core.bash_guards._dialect import (
     Dialect as _Dialect,
     dialect_from_tool_name as _dialect_from_tool_name,
@@ -850,20 +854,91 @@ def _segment_argvs(cmd: str, dialect: Optional[_Dialect] = None) -> List[List[st
     before this parameter existed (AC4 -- zero behavior change on the bash
     leg).
     """
+    segments, joiners, bash_leg = _unbound_segment_argvs(cmd, dialect)
+    return bind_literal_operands(segments, joiners) if bash_leg else segments
+
+
+def _segment_argv_variants(
+    cmd: str, dialect: Optional[_Dialect] = None
+) -> List[List[List[str]]]:
+    """``_segment_argvs`` for callers that judge a run's SCOPE: one entry per
+    segment, each a non-empty list of argv variants. A ``for``-bound name
+    yields one variant per list word, because bash runs the body once per
+    word and every pass must be judged alone (all-words binding lets one
+    scoped word launder a testpaths root beside it). The PowerShell dialect
+    leg is unbound: one variant per segment."""
+    segments, joiners, bash_leg = _unbound_segment_argvs(cmd, dialect)
+    if bash_leg:
+        return bind_literal_iterations(segments, joiners)
+    return [[seg] for seg in segments]
+
+
+def _unbound_segment_argvs(
+    cmd: str, dialect: Optional[_Dialect]
+) -> Tuple[List[List[str]], List[str], bool]:
+    """Segment argvs before literal binding, the separator text preceding each
+    (``""`` for a sequential join), and whether they came from a bash leg (the
+    only legs the binding applies to)."""
     cmd = _protect_windows_drive_paths(_strip_heredoc_bodies(cmd))
     if dialect is _Dialect.POWERSHELL:
         segments = _resolve_segments_for_dialect(cmd, dialect, guard_name="check_test_suite_invocation")
         if segments is not None:
-            return [_strip_redirections(seg) for seg, _pipe_before in segments if seg]
+            kept = [_strip_redirections(seg) for seg, _pipe_before in segments if seg]
+            return kept, [""] * len(kept), False
     tokens = _tokenize_full_command(cmd)
     if tokens is not None:
-        return [_strip_redirections(seg) for seg in _segments_from_tokens_simple(tokens) if seg]
+        out_t: List[List[str]] = []
+        joiners_t: List[str] = []
+        current: List[str] = []
+        pending = ""
+        for tok in tokens:
+            if re.match(r"^[;&|]+$", tok):
+                if current:
+                    out_t.append(_strip_redirections(current))
+                    joiners_t.append(pending)
+                    pending = ""
+                    current = []
+                pending += tok
+                continue
+            current.append(tok)
+        if current:
+            out_t.append(_strip_redirections(current))
+            joiners_t.append(pending)
+        pairs = [(a, j) for a, j in zip(out_t, joiners_t) if a]
+        return [a for a, _j in pairs], [j for _a, j in pairs], True
     out: List[List[str]] = []
-    for segment in _segments(cmd):
-        if not segment.strip():
+    joiners: List[str] = []
+    parts = re.split(r"([;&|]+)", cmd.replace("\r", "").replace("\\\n", " "))
+    pending = ""
+    for k, part in enumerate(parts):
+        if k % 2:
+            pending += part
             continue
-        out.append(_strip_redirections(_tokens(segment)))
-    return out
+        if not part.strip():
+            continue
+        out.append(_strip_redirections(_tokens(part)))
+        joiners.append(pending)
+        pending = ""
+    return out, joiners, True
+
+
+def _judge_variants(
+    variants: Sequence[Sequence[str]], testpaths: Sequence[str], cwd: Optional[str]
+) -> Tuple[List[str], Optional[str]]:
+    """Strip each variant's prefix and classify it. Returns the first
+    suite-shaped variant's ``(argv, detected)``, else the first non-empty
+    variant with ``detected=None``, else ``([], None)``."""
+    first: List[str] = []
+    for variant in variants:
+        argv = _strip_command_prefix(variant)
+        if not argv:
+            continue
+        detected = _classify_tokens(argv, testpaths, cwd)
+        if detected is not None:
+            return argv, detected
+        if not first:
+            first = argv
+    return first, None
 
 
 #: A shell redirection token as the shared tokenizer hands it back:
@@ -933,6 +1008,10 @@ _BASELINE_EXPORT_BASENAMES = frozenset({
 
 _BUNDLED_C_FLAG_RE = re.compile(r"^-[a-zA-Z]*c[a-zA-Z]*$")
 
+_SHELL_RESERVED_PREFIX_WORDS = frozenset({
+    "do", "then", "else", "elif", "if", "while", "until", "!",
+})
+
 
 def _strip_command_prefix(tokens: Sequence[str]) -> List[str]:
     """Drop leading ``VAR=value`` assignments and wrapper commands so the
@@ -962,6 +1041,12 @@ def _strip_command_prefix(tokens: Sequence[str]) -> List[str]:
         # the shared tokenizer for the same reason `{` does, and was never
         # peeled here either.
         if tok == "(":
+            i += 1
+            continue
+        # Reserved words: a loop or conditional body segment reads
+        # `do pytest ...`, so without this peel its head was `do` and no
+        # runner was seen -- every body, broad ones included, was invisible.
+        if tok in _SHELL_RESERVED_PREFIX_WORDS:
             i += 1
             continue
         if _ENV_ASSIGN_RE.match(tok):
@@ -1411,15 +1496,15 @@ def _has_variable_path_operand(argv: Sequence[str]) -> bool:
     own tokens (``python -m pytest $FILES``, ``python -m pytest
     "$env:FILES"``)?
 
-    The classification is UNCHANGED either way -- this guard cannot see
-    inside a variable, and ``_is_real_scope`` already, correctly, treats
-    such a token as no scope (neither a node id nor a path that exists on
-    disk), so the command still classifies Tier U. This predicate exists
-    ONLY so ``_remediation_text`` can name WHY: without it, the remediation
-    read as "scope this to what was actually touched", which is exactly
-    what a caller passing `$FILES` believed it had done -- the friction was
-    never told apart from ordinary unscoped breadth. See the memo above for
-    the two live repro shapes this matches.
+    An UNRESOLVED reference is still no scope: ``_is_real_scope`` treats the
+    token as neither a node id nor a path that exists on disk, so the command
+    classifies Tier U. A reference the same command binds to literal words is
+    replaced by those words upstream (``bind_literal_operands``) and never
+    reaches this predicate, so the note names only what the guard could not
+    see through. This predicate exists ONLY so ``_remediation_text`` can name
+    WHY: without it, the remediation read as "scope this to what was actually
+    touched", which is exactly what a caller passing `$FILES` believed it had
+    done. See the memo above for the two live repro shapes this matches.
     """
     return any(_VARIABLE_PATH_OPERAND_RE.match(tok) for tok in argv)
 
@@ -2132,22 +2217,24 @@ def _command_wrapped_in_suite_mutex(
     """
     stripped_segments: List[List[str]] = []
     wrapped_flags: List[bool] = []
-    for raw_argv in _segment_argvs(cmd, dialect):
+    suite_shaped_flags: List[bool] = []
+    for variants in _segment_argv_variants(cmd, dialect):
+        stripped, seg_detected = _judge_variants(variants, testpaths, cwd)
+        if not stripped:
+            continue
+        raw_argv = variants[0]
         idx = 0
         n = len(raw_argv)
         while idx < n and _ENV_ASSIGN_RE.match(raw_argv[idx]):
             idx += 1
         wrapped = idx < n and _base(raw_argv[idx]).lower() in _WITH_SUITE_MUTEX_BASENAMES
-        stripped = _strip_command_prefix(raw_argv)
-        if not stripped:
-            continue
         stripped_segments.append(stripped)
         wrapped_flags.append(wrapped)
+        suite_shaped_flags.append(seg_detected is not None)
 
     suite_flags = [
-        _classify_tokens(seg, testpaths, cwd) is not None
-        or _matches_configured_cmd([seg], configured) is not None
-        for seg in stripped_segments
+        shaped or _matches_configured_cmd([seg], configured) is not None
+        for seg, shaped in zip(stripped_segments, suite_shaped_flags)
     ]
 
     if any(suite_flags):
@@ -2196,7 +2283,12 @@ def _command_is_reuse_fresh_wrapped(
     """
     stripped_segments: List[List[str]] = []
     reuse_flags: List[bool] = []
-    for raw_argv in _segment_argvs(cmd, dialect):
+    suite_shaped_flags: List[bool] = []
+    for variants in _segment_argv_variants(cmd, dialect):
+        stripped, seg_detected = _judge_variants(variants, testpaths, cwd)
+        if not stripped:
+            continue
+        raw_argv = variants[0]
         idx = 0
         n = len(raw_argv)
         while idx < n and _ENV_ASSIGN_RE.match(raw_argv[idx]):
@@ -2206,16 +2298,13 @@ def _command_is_reuse_fresh_wrapped(
             rest = list(raw_argv[idx + 1:])
             flags = rest[: rest.index("--")] if "--" in rest else rest
             reuse = _mutex_flags_include_reuse_fresh(flags)
-        stripped = _strip_command_prefix(raw_argv)
-        if not stripped:
-            continue
         stripped_segments.append(stripped)
         reuse_flags.append(reuse)
+        suite_shaped_flags.append(seg_detected is not None)
 
     suite_flags = [
-        _classify_tokens(seg, testpaths, cwd) is not None
-        or _matches_configured_cmd([seg], configured) is not None
-        for seg in stripped_segments
+        shaped or _matches_configured_cmd([seg], configured) is not None
+        for seg, shaped in zip(stripped_segments, suite_shaped_flags)
     ]
     if any(suite_flags):
         return all(r for r, s in zip(reuse_flags, suite_flags) if s)
@@ -3160,13 +3249,13 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     configured: Optional[List[ConfiguredCmd]] = None
     segments_argv: List[List[str]] = []
     dialect = _dialect_from_tool_name(payload.get("tool_name"))
-    for raw_argv in _segment_argvs(cmd, dialect):
-        argv = _strip_command_prefix(raw_argv)
+    for variants in _segment_argv_variants(cmd, dialect):
+        argv, seg_detected = _judge_variants(variants, testpaths, cwd)
         if not argv:
             continue
         segments_argv.append(argv)
         if detected is None:
-            detected = _classify_tokens(argv, testpaths, cwd)
+            detected = seg_detected
 
     if detected is None:
         configured = _configured_test_cmds(repo_root)
@@ -3601,20 +3690,29 @@ def _classify_command_core(
 
     seg_infos: List[Tuple[str, int, int, List[str], Tuple[str, ...]]] = []
     invocation_segments: List[Tuple[str, ...]] = []
+    spans: List[Tuple[str, int, int, List[str]]] = []
     for seg_text, start, end in _segments_with_spans(command):
         stripped = seg_text.strip()
         if not stripped:
             continue
         lead = len(seg_text) - len(seg_text.lstrip())
         trail = len(seg_text) - len(seg_text.rstrip())
-        seg_start, seg_end = start + lead, end - trail
+        spans.append((stripped, start + lead, end - trail, _tokens(stripped)))
 
-        tokens = _tokens(stripped)
-        argv = _strip_command_prefix(tokens)
-        if not argv:
+    joiners = [
+        "".join(ch for ch in command[(spans[k - 1][2] if k else 0):spans[k][1]] if ch in ";&|")
+        for k in range(len(spans))
+    ]
+    variants_per_span = bind_literal_iterations([tokens for _s, _a, _b, tokens in spans], joiners)
+    for (stripped, seg_start, seg_end, tokens), variants in zip(spans, variants_per_span):
+        unbound_argv = _strip_command_prefix(tokens)
+        if not unbound_argv:
             continue
+        argv, _seg_detected = _judge_variants(variants, testpaths, cwd)
+        if not argv:
+            argv = unbound_argv
 
-        target = (_norm_head(argv[0]),) + tuple(_norm_arg(a) for a in argv[1:])
+        target = (_norm_head(unbound_argv[0]),) + tuple(_norm_arg(a) for a in unbound_argv[1:])
         seg_infos.append((stripped, seg_start, seg_end, argv, target))
         invocation_segments.append(target)
 
@@ -3782,12 +3880,12 @@ def classify_runner_footprint(command: str, *, cwd: Optional[str] = None) -> str
     testpaths = _read_testpaths(repo_root)
 
     verdict = RUNNER_FOOTPRINT_NONE
-    for segment in _segment_argvs(command):
-        argv = _strip_command_prefix(segment)
+    for variants in _segment_argv_variants(command):
+        argv, seg_detected = _judge_variants(variants, testpaths, cwd)
         if not argv:
             continue
         if _runner_recognized(argv):
-            if _classify_tokens(argv, testpaths, cwd) is not None:
+            if seg_detected is not None:
                 return RUNNER_FOOTPRINT_UNPROVEN
             verdict = RUNNER_FOOTPRINT_SCOPED
             continue

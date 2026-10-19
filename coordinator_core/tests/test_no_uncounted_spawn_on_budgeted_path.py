@@ -411,6 +411,10 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
         "coordinator_core/ops/plan_seam_fix.py",
         ("_handler",),
     ),
+    "plan.write_order": (
+        "coordinator_core/ops/plan_write_order.py",
+        ("_handler",),
+    ),
     "seam.mint_batons": (
         "coordinator_core/ops/seam_baton_mint.py",
         ("_mint_handler",),
@@ -427,6 +431,14 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
     "review_stamp.rejudge": (
         "coordinator_core/ops/review_stamp.py",
         ("_rejudge_handler",),
+    ),
+    "review.reverify": (
+        "coordinator_core/ops/review_reverify.py",
+        ("_handler",),
+    ),
+    "dispatch.sibling_status": (
+        "coordinator_core/ops/dispatch_emit/sibling_status.py",
+        ("_handler",),
     ),
     # Enrolled 2026-10-09: each measures an EMPTY function-granular reachable spawn set.
     "plan.signoff": (

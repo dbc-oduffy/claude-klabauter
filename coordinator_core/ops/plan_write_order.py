@@ -6,7 +6,7 @@ edges and a total run order, without touching a plan. Phase 0 uses the result in
 ``depends_on_plan`` body edit, which would void the ``mise_prepped_sha`` stamp.
 
 Wire params:
-    plans (list[str], required) — repo-relative ``docs/plans/*.md`` paths, at least one.
+    plans (list[str], required) — 1 to 200 entries: repo-relative ``docs/plans/*.md`` paths.
         Duplicates are dropped; input order does not affect the reply.
 
 Reply:
@@ -47,6 +47,10 @@ from coordinator_core.ops.plan_seam_fix import derive_edges
 
 GENERATES: list = []
 
+# Bound ruled in state/apm-rulings/2026-10-19-plan-write-order-budget-point.md; covers
+# example-game-repo's 183-plan Phase 0 call. First-warm parse cost is what the 500ms bar prices.
+MAX_PLANS = 200
+
 
 def _parse_params(params: dict, root: Path) -> List[str]:
     plans_raw = params.get("plans")
@@ -54,6 +58,8 @@ def _parse_params(params: dict, root: Path) -> List[str]:
         isinstance(p, str) and p.strip() for p in plans_raw
     ):
         raise ValueError("plans must be a non-empty list of repo-relative plan paths")
+    if len(plans_raw) > MAX_PLANS:
+        raise ValueError(f"plans lists {len(plans_raw)} entries; the bound is {MAX_PLANS}. Split the set.")
     plans: List[str] = []
     for raw in plans_raw:
         rel = _contained_rel(raw, root)
