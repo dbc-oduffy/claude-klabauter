@@ -49,6 +49,7 @@ from coordinator_core.ops.dispatch_emit.commit_request import (
     render_marker,
 )
 from coordinator_core.ops.dispatch_emit.credit_gate import DOCS_CHUNK_ID, SIZING_CHUNK_ID
+from coordinator_core.ops.dispatch_emit.fanout_cost import FanoutCost, Unit, propose_groups
 from coordinator_core.ops.dispatch_emit.engine_owned_rows import engine_owner_rows
 from coordinator_core.ops.dispatch_emit.falsifier_integrity_phase import (
     REVIEWER_AGENT_TYPE,
@@ -432,6 +433,22 @@ def _memo_draft_steps(
     return out_owed, steps
 
 
+def _group_rows(
+    rows: Sequence[ManifestRow], sizes: Mapping[str, int], raw_by_id: Mapping[str, Mapping]
+) -> tuple[list[ManifestRow], tuple[tuple[str, ...], ...]]:
+    """Rows with `group` set where small same-wave rows share one agent, and every agent's member
+    ids in proposal order (solo rows included). Reviewer and `needs_slot` rows get a unique key so
+    they stay solo; a one-member group leaves `group` empty. Row order is unchanged."""
+    units = []
+    for r in rows:
+        solo = r.agent_type == REVIEWER_AGENT_TYPE or (raw_by_id.get(r.id) or {}).get("needs_slot") is True
+        key = f"solo:{r.id}" if solo else f"{r.wave}|{','.join(sorted(r.deps))}|{r.agent_type}|{r.model}"
+        units.append(Unit(r.id, key, sizes.get(r.id, 0)))
+    groups = propose_groups(sorted(units, key=lambda u: u.key))
+    group_of = {m: f"g{next(r.wave for r in rows if r.id == g[0])}-{g[0]}" for g in groups if len(g) > 1 for m in g}
+    return [replace(r, group=group_of.get(r.id, "")) for r in rows], groups
+
+
 def _refuse_unapproved_design(sizing: Mapping, sizing_rel: str) -> None:
     """Refuse staging under a canvas design_route the PM has not approved."""
     payload, error = design_route.read(sizing, sizing_rel)
@@ -611,6 +628,7 @@ def stage(
     manifest_rows: list[ManifestRow] = []
     chunks: list[ChunkCommit] = []
     declared: list[str] = []
+    brief_sizes: dict[str, int] = {}
     for wave_no, wave in enumerate(waves):
         for row in wave:
             agent_type = _row_agent_type(row)
@@ -629,6 +647,7 @@ def stage(
                 if prior:
                     text = text.rstrip() + "\n\n" + _prior_report_line(prior) + "\n"
             _write(brief, text)
+            brief_sizes[row.id] = len(text.encode("utf-8"))
             paths = _widen_with_test_candidates(
                 commit_pathspec_or_none([row]) or [], root
             )
@@ -654,8 +673,15 @@ def stage(
                 )
             )
 
+    manifest_rows, row_groups = _group_rows(manifest_rows, brief_sizes, raw_by_id)
     owed, draft_rows = _memo_draft_steps(root, run_dir, owed, raw_by_id, intent)
     manifest_rows.extend(draft_rows)
+    fanout = FanoutCost(
+        units=len(manifest_rows),
+        agents=len(row_groups) + len(draft_rows),
+        basis="exact",
+        groups=(*row_groups, *((r.id,) for r in draft_rows)),
+    )
 
     docs = doc_writes(run_id, run_sizing)
     _refuse_live_write_overlap(
@@ -694,6 +720,7 @@ def stage(
         engine_rows=_engine_rows(root, plan_path, raw_by_id, gated, run_sizing),
         test_targets=test_targets,
         no_test_target=no_test_target,
+        fanout=fanout.meta_dict(),
         doc_writes=docs,
         rulable_ids=rulable_ids(
             [r for r in ((run_sizing or {}).get("requirement_register") or {}).get("rows") or [] if isinstance(r, Mapping)]

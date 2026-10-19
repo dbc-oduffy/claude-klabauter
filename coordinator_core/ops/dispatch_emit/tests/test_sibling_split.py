@@ -217,7 +217,7 @@ def test_merge_digests_is_schema_valid_and_aggregates():
     assert merged["deviations"][0]["chunk"] == "B"
     assert merged["run_base_sha"] == "a" * 40
     assert merged["next_action"]["params"]["incomplete_chunks"] == ["C", "D"]
-    assert merged["terminal_commit_cli"].startswith("coordinator-invoke dispatch.terminal_commit --params-file - <<'JSON'\n")
+    assert merged["terminal_commit_cli"].startswith("coordinator-invoke dispatch.terminal_commit --from-task-output ")
     assert merged["width"]["max_concurrent_rows"] == m["achieved_width"]
     assert merged["width"]["rows"] == 4
 

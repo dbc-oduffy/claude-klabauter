@@ -14,11 +14,17 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from coordinator_core.ops.dispatch_emit import emit as _emit
+from coordinator_core.ops.dispatch_emit.fanout_cost import with_fanout
 from coordinator_core.ops.dispatch_emit.ask_contract import (
     FANOUT_RECORD_PARAM,
     HALT_REFUSAL,
     OP_ASK_GATE,
     RUN_DIR_ROOT,
+)
+from coordinator_core.ops.dispatch_emit.ask_fanout_contract import (
+    NOT_FIRED_KEY,
+    PARENT_SIZING_KEY,
+    PLAN_BLITZ_UNFIRED_BUCKETS,
 )
 from coordinator_core.ops.dispatch_emit.ask_plan_blitz import (
     AskPlanBlitzRefused,
@@ -60,7 +66,7 @@ def approver_for(interaction_mode: object) -> str:
     return _PM_APPROVER if interaction_mode == "hands-on" else _APM_APPROVER
 
 
-ROADMAP_DECLS = ("  let _rb = null;", "  const _ready = [];")
+ROADMAP_DECLS = ("  let _rb = null;", "  const _ready = [];", "  const _unfired = [];")
 
 #: The run's one commit: lands the planning record, then fans the ready plans out as sibling runs.
 def roadmap_next_action_js(script_path: Optional[str] = None) -> str:
@@ -72,7 +78,8 @@ def roadmap_next_action_js(script_path: Optional[str] = None) -> str:
     return (
         "{ kind: 'terminal_commit', op: 'dispatch.terminal_commit', "
         f"params: {{ run_id: _runId, {path}{FANOUT_RECORD_PARAM}: {{ plans: _ready.map((r) => r.planPath), "
-        "waves: Object.fromEntries(_ready.map((r) => [r.planPath, r.wave])) } } }"
+        "waves: Object.fromEntries(_ready.map((r) => [r.planPath, r.wave])), "
+        f"{PARENT_SIZING_KEY}: _sizingRel, {NOT_FIRED_KEY}: _unfired }} }} }}"
     )
 
 
@@ -109,12 +116,37 @@ def roadmap_stage_lines(
         "  if (!_halted) {",
         "  const _waves = [...(_rb?.stage?.waves ?? [])].sort((a, c) => a.index - c.index);",
         "  if (!_waves.length) { " + halt("'roadmap-blitz stage reply carries no waves'") + " }",
+        "  let _ran = 0;",
+        "  const _bid = (x) => (x && typeof x === 'object') ? (x.batonId ?? x.baton ?? x.id ?? null) : x;",
+        "  const _pth = (x) => (x && typeof x === 'object') ? (x.planPath ?? x.path ?? null) : null;",
         "  for (const w of _waves) {",
         "    if (_halted) break;",
         f"    const _pb = await {_plan_blitz_call(spread, run_dir)};",
+        "    _ran++;",
+        "    const _seen = new Set();",
+        "    for (const r of (_pb?.ready ?? [])) { _seen.add(_bid(r)); _seen.add(_pth(r)); _seen.add(r); }",
+        f"    for (const [_k, _why] of {json.dumps([list(p) for p in PLAN_BLITZ_UNFIRED_BUCKETS])}) {{",
+        "      for (const e of (_pb?.[_k] ?? [])) {",
+        "        const _b = _bid(e), _p = _pth(e) ?? ((e && typeof e === 'object') ? null : e);",
+        "        _seen.add(_b); _seen.add(_p);",
+        "        _unfired.push({ wave: w.index, ...(_b ? { baton: _b } : {}), ...(_p ? { plan: _p } : {}), reason: _why, "
+        "...((e && e.reason) ? { detail: String(e.reason) } : {}) });",
+        "      }",
+        "    }",
+        "    for (const b of (w.batons ?? [])) {",
+        "      const _b = _bid(b), _p = _pth(b);",
+        "      if (_seen.has(_b) || (_p && _seen.has(_p))) continue;",
+        "      _unfired.push({ wave: w.index, ...(_b ? { baton: String(_b) } : {}), ...(_p ? { plan: _p } : {}), reason: 'absent-from-wave-reply' });",
+        "    }",
         "    if ((_pb?.surfacedToPm ?? []).length) { "
         + halt("'plan-blitz surfaced items to the PM'") + " _halted.surfaced = _pb.surfacedToPm; break; }",
         "    for (const r of (_pb?.ready ?? [])) _ready.push({ wave: w.index, planPath: (r && typeof r === 'object') ? r.planPath : r });",
+        "  }",
+        "  for (const w of _waves.slice(_ran)) {",
+        "    for (const b of (w.batons ?? [])) {",
+        "      const _b = _bid(b), _p = _pth(b);",
+        "      _unfired.push({ wave: w.index, ...(_b ? { baton: String(_b) } : {}), ...(_p ? { plan: _p } : {}), reason: 'wave-not-run' });",
+        "    }",
         "  }",
         "  if (!_halted && !_ready.length) { " + halt("'plan-blitz reported no ready plan'") + " }",
         "  }",
@@ -181,13 +213,17 @@ def compose_roadmap_script(
             head=head, anchor=anchor, repo_root=repo_root, run_id=run_id, script_path=script_path
         ),
         "  return { arm: 'roadmap', sizing: _sizingRel, run_id: _runId, roadmap: _rb, ready: _ready, "
+        f"{NOT_FIRED_KEY}: _commit?.fanout?.{NOT_FIRED_KEY} ?? _unfired, "
         "commit: _commit, fanout: _commit?.fanout ?? null, next_action: _nextAction, halted_by: _halted };",
     ]
     titles = roadmap_phase_titles(rb_phases, plan_blitz_phases)
-    meta = _emit._meta_block(
-        "warp-ask-roadmap",
-        "One in-session run from a roadmap sizing: roadmap-blitz, plan-blitz waves, one record commit that fans the plans out.",
-        titles,
+    meta = with_fanout(
+        _emit._meta_block(
+            "warp-ask-roadmap",
+            "One in-session run from a roadmap sizing: roadmap-blitz, plan-blitz waves, one record commit that fans the plans out.",
+            titles,
+        ),
+        ac.composed_fanout(b),
     )
     script = f"{_emit._NODE_CHECK_DOES_NOT_APPLY_COMMENT}\n{meta}\n" + "\n".join(b) + "\n"
     if len(script.encode("utf-8")) > _emit._WORKFLOW_SCRIPT_BYTE_CAP:

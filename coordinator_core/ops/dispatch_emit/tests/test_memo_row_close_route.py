@@ -90,7 +90,7 @@ def test_inbox_row_without_slug_is_held_not_raised(tmp_path):
 
 
 def test_inbox_row_with_receipt_reports_delivered_once_receipt_exists(tmp_path):
-    row = _INBOX_ROW.replace("  writes: []\n", f"  writes: []\n  receipt: {_SENT}/note.md\n")
+    row = _INBOX_ROW.replace("  writes: []\n", f"  writes: []\n  memo_to: coordinator-content-repo\n  receipt: {_SENT}/note.md\n")
     plan = _plan(tmp_path, row)
     exclusions: list = []
     read_spine(plan, exclusions=exclusions)
@@ -105,7 +105,7 @@ def test_inbox_row_with_receipt_reports_delivered_once_receipt_exists(tmp_path):
 
 def test_performer_em_memo_row_reads_memo_send_not_em_performed(tmp_path):
     row = (
-        "- id: M1\n  title: send\n  change_kind: verification\n  performer: em\n  kind: memo-send\n"
+        "- id: M1\n  title: send\n  change_kind: verification\n  performer: em\n  kind: memo-send\n  memo_to: coordinator-content-repo\n"
         f"  surface: docs/x.md\n  writes: []\n  receipt: {_SENT}/topic.md\n  disposition: open\n"
         "  body: |\n    Send.\n"
     )

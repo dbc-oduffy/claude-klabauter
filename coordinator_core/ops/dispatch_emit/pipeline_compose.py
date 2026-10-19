@@ -15,6 +15,7 @@ stage runs per subject and `{{scratch_dir}}` is that subject's own directory.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, replace
 from typing import Mapping, Sequence
 
@@ -48,6 +49,14 @@ from coordinator_core.ops.dispatch_emit.pipeline_contract import (
     subject_slug,
 )
 from coordinator_core.ops.dispatch_emit.agent_sidecar import sidecar_clause_js
+from coordinator_core.ops.dispatch_emit.fanout_cost import (
+    FANOUT_GROUP_MODES,
+    FanoutCost,
+    Unit,
+    group_prompt,
+    propose_groups,
+    with_fanout,
+)
 from coordinator_core.ops.workflow_scaffold import _js_string_literal
 
 __all__ = ["compose_pipeline_script", "compose_chain_script", "compose_chain_parts", "ChainPart"]
@@ -259,6 +268,21 @@ def _uses_item(stage: Stage, manifest: Manifest) -> bool:
     return _has_item(manifest.templates.get(stage.template, "")) or _has_item(stage.output)
 
 
+def _member_prompt_chain(prompt: str, sizes: Sequence[int]) -> str:
+    """JS expression building a group item's prompt from `item.members`, one `group_prompt` per group size present; members are positional (M1, M2, ...) because the header is fixed per call site."""
+    built = [
+        group_prompt(
+            [f"(item.members[{k}].prompt ?? withItem({prompt}, item.members[{k}].slug))" for k in range(n)],
+            [f"M{k + 1}" for k in range(n)],
+        )
+        for n in sizes
+    ]
+    expr = f"({built[-1]})"
+    for n, text in zip(reversed(sizes[:-1]), reversed(built[:-1])):
+        expr = f"(item.members.length === {n} ? ({text}) : {expr})"
+    return expr
+
+
 def _stage_expression(
     stage: Stage,
     scope: str,
@@ -267,6 +291,7 @@ def _stage_expression(
     stages: Mapping[str, Stage],
     schedule: Schedule,
     agent_type_host: str | None,
+    group_sizes: Sequence[int] = (),
 ) -> str:
     holder = "s" if scope == SCOPE_SUBJECT else "common"
     prompt = f"{holder}.prompts[{_js_string_literal(stage.id)}]"
@@ -286,6 +311,8 @@ def _stage_expression(
         expr = _agent_call(stage, manifest, inputs, agent_type_host, prompt, label, "item")
     elif stage.fan_out.emit_time:
         item_prompt = f"(item.prompt ?? withItem({prompt}, item.slug))"
+        if group_sizes:
+            item_prompt = f"(item.members ? {_member_prompt_chain(prompt, group_sizes)} : {item_prompt})"
         call = _agent_call(stage, manifest, inputs, agent_type_host, item_prompt, item_label, "item.slug")
         expr = (
             "(async () => {\n"
@@ -336,6 +363,7 @@ def _level_lines(
     indent: str,
     tag: str = "",
     segment: tuple[str, str] | None = None,
+    group_sizes: Mapping[str, Sequence[int]] | None = None,
 ) -> list[str]:
     target = _RETURN_NAME[scope]
     lines: list[str] = []
@@ -343,7 +371,9 @@ def _level_lines(
         for title in dict.fromkeys(stage_phase(stages[i]) for i in level):
             lines.append(f"{indent}phase({_js_string_literal(title)});")
         exprs = [
-            _stage_expression(stages[i], scope, manifest, inputs, stages, schedule, agent_type_host)
+            _stage_expression(
+                stages[i], scope, manifest, inputs, stages, schedule, agent_type_host, (group_sizes or {}).get(i, ()),
+            )
             for i in level
         ]
         if len(level) == 1:
@@ -443,6 +473,38 @@ def _element_value(element: object) -> object:
     return element["slug"] if isinstance(element, dict) and "slug" in element else element
 
 
+def _unit_part(text: str) -> str:
+    """`text` reduced to characters that cannot trip the meta pure-literal check."""
+    return re.sub(r"[^\w./+-]", "_", text)
+
+
+def _unit_ids(prefix: str, slugs: Sequence[str | None]) -> list[str]:
+    """One unique unit id per element, `prefix` + its slug (its position when it has none)."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for i, slug in enumerate(slugs):
+        uid = prefix + (_unit_part(slug) if slug else str(i + 1))
+        if uid in seen:
+            uid = f"{uid}#{i + 1}"
+        seen.add(uid)
+        out.append(uid)
+    return out
+
+
+def _groupable(stage: Stage, manifest: Manifest) -> bool:
+    """An emit-time fan-out stage whose agents can share a prompt: no schema, no roster type, and
+    nothing reads its returns (another stage's `when` or `over` source, its own halts)."""
+    if stage.schema is not None or stage.agent_type_from is not None or stage.produces_brief:
+        return False
+    if stage.halts_unless or stage.halts_unless_nonempty or stage.halts_unless_count is not None:
+        return False
+    return not any(
+        other.id != stage.id
+        and ((other.when is not None and other.when.stage == stage.id) or other.fan_out.source == stage.id)
+        for other in manifest.stages
+    )
+
+
 Segment = tuple[Manifest, PipelineInputs, Schedule]
 
 
@@ -456,13 +518,17 @@ def _segment(
     chained: bool,
     segment: tuple[str, str] | None = None,
     skip_guard: bool = False,
+    fanout_group: str = "auto",
+    tally: list | None = None,
 ) -> tuple[list[str], list[str], list[Stage]]:
     """A segment's data consts, its body lines and its active stages; a chained segment leaves `results` to the chain and tags its result entries with the pipeline.
 
     `segment` is (block label, leg) for a scoped segment; `skip_guard` opens it with the check that
-    skips it once an earlier segment of its leg has halted.
+    skips it once an earlier segment of its leg has halted. `tally` collects one
+    `(units, agents, run_time, groups)` entry per stage a script run reaches.
     """
     stages = {stage.id: stage for stage in manifest.stages}
+    group_sizes: dict[str, tuple[int, ...]] = {}
     if (
         ITEM_MARK in inputs.brief
         or ITEM_MARK in (inputs.validator or "")
@@ -501,26 +567,49 @@ def _segment(
                     items[stage.id].append(
                         {"prompt": prompt, "output": output, "slug": value if isinstance(value, str) else None}
                     )
+                full = items[stage.id]
                 # One shared prompt when every item's prompt differs only by its slug (a roster
                 # entry's slug, or a string element itself): N copies of a multi-KB template
                 # otherwise ride in the script.
-                if not elements or not (
+                if elements and (
                     all(isinstance(e, dict) and "slug" in e for e in elements)
                     or all(isinstance(e, str) for e in elements)
                 ):
-                    continue
-                seen = len(errors)
-                shared, _ = fill_stage(stage, name, ITEM_MARK)
-                probe_failed = len(errors) > seen
-                del errors[seen:]
-                if not probe_failed and all(
-                    e["prompt"] == shared.replace(ITEM_MARK, e["slug"]) for e in items[stage.id]
-                ):
-                    prompts[stage.id] = shared
-                    items[stage.id] = [{"slug": e["slug"]} for e in items[stage.id]]
+                    seen = len(errors)
+                    shared, _ = fill_stage(stage, name, ITEM_MARK)
+                    probe_failed = len(errors) > seen
+                    del errors[seen:]
+                    if not probe_failed and all(e["prompt"] == shared.replace(ITEM_MARK, e["slug"]) for e in full):
+                        prompts[stage.id] = shared
+                        items[stage.id] = [{"slug": e["slug"]} for e in full]
+                prefix = f"{_unit_part(name)}/{stage.id}:" if name is not None else f"{stage.id}:"
+                ids = _unit_ids(prefix, [e["slug"] for e in full])
+                if _groupable(stage, manifest):
+                    groups = propose_groups(
+                        [Unit(uid, stage.id, len(e["prompt"].encode("utf-8"))) for uid, e in zip(ids, full)],
+                        fanout_group,
+                    )
+                else:
+                    groups = tuple((uid,) for uid in ids)
+                if any(len(g) > 1 for g in groups):
+                    at = {uid: i for i, uid in enumerate(ids)}
+                    base = items[stage.id]
+                    items[stage.id] = [
+                        base[at[g[0]]] if len(g) == 1 else {
+                            "slug": "+".join(full[at[u]]["slug"] or u for u in g),
+                            "members": [base[at[u]] if "prompt" not in base[at[u]] else
+                                        {"prompt": base[at[u]]["prompt"], "slug": base[at[u]]["slug"]} for u in g],
+                        }
+                        for g in groups
+                    ]
+                    group_sizes[stage.id] = tuple(sorted({*group_sizes.get(stage.id, ()), *(len(g) for g in groups if len(g) > 1)}))
+                if tally is not None:
+                    tally.append((len(elements), len(groups), False, groups))
             else:
                 runtime_item = ITEM_MARK if stage.fan_out.kind == FAN_OUT_OVER else None
                 prompts[stage.id], outputs[stage.id] = fill_stage(stage, name, runtime_item)
+                if tally is not None:
+                    tally.append((1, 1, stage.fan_out.kind == FAN_OUT_OVER, ()))
         return {"prompts": prompts, "outputs": outputs, **({"items": items} if items else {})}
 
     has_subject_stage = any(v == SCOPE_SUBJECT for v in schedule.scope.values())
@@ -568,9 +657,9 @@ def _segment(
     if not chained:
         body.append("const results = [];")
     body.append("")
-    body += _level_lines(SCOPE_PRE, manifest, inputs, schedule, stages, agent_type_host, "", tag, segment)
+    body += _level_lines(SCOPE_PRE, manifest, inputs, schedule, stages, agent_type_host, "", tag, segment, group_sizes=group_sizes)
     body += ["for (const s of subjects) {", "  const ret = {};", "  subjRets.push(ret);", "  try {"]
-    body += _level_lines(SCOPE_SUBJECT, manifest, inputs, schedule, stages, agent_type_host, "    ", tag, segment)
+    body += _level_lines(SCOPE_SUBJECT, manifest, inputs, schedule, stages, agent_type_host, "    ", tag, segment, group_sizes=group_sizes)
     body += [
         f"    results.push({{ subject: s.subject, returns: ret{tag} }});",
         "  } catch (err) {",
@@ -579,7 +668,7 @@ def _segment(
         "}",
         "",
     ]
-    body += _level_lines(SCOPE_POST, manifest, inputs, schedule, stages, agent_type_host, "", tag, segment)
+    body += _level_lines(SCOPE_POST, manifest, inputs, schedule, stages, agent_type_host, "", tag, segment, group_sizes=group_sizes)
     for scope in (SCOPE_PRE, SCOPE_POST):
         if schedule.levels.get(scope):
             body.append(f"results.push({{ scope: {_js_string_literal(scope)}, returns: {_RETURN_NAME[scope]}{tag} }});")
@@ -594,6 +683,7 @@ def compose_chain_script(
     next_action: Mapping | None = None,
     legs: Mapping[str, str] | None = None,
     nest_scratch: bool = True,
+    fanout_group: str = "auto",
 ) -> str:
     """One Workflow script running `segments` in order; each segment keeps its own stores in its own block, and every segment after the first, and every keyed segment, writes under `{{scratch_dir}}/<segment name>/`.
 
@@ -606,11 +696,13 @@ def compose_chain_script(
     """
     if not segments:
         raise PipelineEmitRefused(["a chain needs at least one segment"])
+    _check_fanout_group(fanout_group)
     chained = len(segments) > 1
     scoped = chained or legs is not None
     leg_of = [(legs or {}).get(segment_name(m, i), segment_name(m, i)) for m, i, _ in segments]
     errors: list[str] = []
     parts = []
+    tally: list = []
     for index, (manifest, inputs, schedule) in enumerate(segments):
         if nest_scratch and ((chained and index > 0) or inputs.segment_key):
             inputs = replace(inputs, scratch_dir=f"{inputs.scratch_dir.rstrip('/')}/{segment_name(manifest, inputs)}")
@@ -618,6 +710,7 @@ def compose_chain_script(
         parts.append((manifest, inputs, _segment(
             manifest, inputs, schedule, agent_type_host, errors, chained=scoped,
             segment=label, skip_guard=scoped and leg_of[index] in leg_of[:index],
+            fanout_group=fanout_group, tally=tally,
         )))
     if errors:
         raise PipelineEmitRefused(sorted(set(errors)))
@@ -628,12 +721,21 @@ def compose_chain_script(
     active = [stage for _, _, (_, _, act) in parts for stage in act]
     phases = ", ".join(_js_string_literal(title) for title in dict.fromkeys(stage_phase(s) for s in active))
     description = manifest.description or f"Pipeline {manifest.pipeline} over {len(inputs.subjects)} subject(s), run sequentially"
-    out = [
+    cost = FanoutCost(
+        units=sum(t[0] for t in tally),
+        agents=sum(t[1] for t in tally),
+        basis="lower-bound" if any(t[2] for t in tally) else "exact",
+        groups=tuple(g for t in tally for g in t[3]),
+    )
+    meta = "\n".join([
         "export const meta = {",
         f"  name: {_js_string_literal(name)},",
         f"  description: {_js_string_literal(description)},",
         f"  phases: [{phases}],",
         "};",
+    ])
+    out = [
+        with_fanout(meta, cost),
         "",
         f"const ITEM_MARK = {json.dumps(ITEM_MARK)};",
         _RELAY_DECL,
@@ -691,6 +793,11 @@ def compose_chain_script(
     return text
 
 
+def _check_fanout_group(fanout_group: str) -> None:
+    if fanout_group not in FANOUT_GROUP_MODES:
+        raise PipelineEmitRefused([f"fanout_group must be one of {list(FANOUT_GROUP_MODES)}, got {fanout_group!r}"])
+
+
 class _ScriptCapRefused(PipelineEmitRefused):
     """The composed script exceeds the Workflow cap; the only refusal a per-pipeline split can cure."""
 
@@ -710,6 +817,7 @@ def compose_chain_parts(
     agent_type_host: str | None,
     next_action: Mapping | None = None,
     legs: Mapping[str, str] | None = None,
+    fanout_group: str = "auto",
 ) -> tuple[ChainPart, ...]:
     """The chain as one script when it fits the cap, else one script per leg, ordered by each leg's first segment.
 
@@ -718,9 +826,11 @@ def compose_chain_parts(
     a part returns `segment_halts`. Only the last part carries `next_action`. A part still over the
     cap raises PipelineEmitRefused.
     """
+    _check_fanout_group(fanout_group)
     try:
         script = compose_chain_script(
             segments, run_id=run_id, agent_type_host=agent_type_host, next_action=next_action, legs=legs,
+            fanout_group=fanout_group,
         )
     except _ScriptCapRefused:
         if len(segments) < 2:
@@ -741,7 +851,7 @@ def compose_chain_parts(
         ChainPart(tuple(segment_name(m, i) for m, i, _ in group), compose_chain_script(
             group, run_id=run_id, agent_type_host=agent_type_host,
             next_action=next_action if index == len(groups) - 1 else None,
-            legs=legs or {}, nest_scratch=False,
+            legs=legs or {}, nest_scratch=False, fanout_group=fanout_group,
         ))
         for index, group in enumerate(groups)
     )
@@ -754,6 +864,10 @@ def compose_pipeline_script(
     *,
     run_id: str,
     agent_type_host: str | None,
+    fanout_group: str = "auto",
 ) -> str:
     """The Workflow script text for `manifest` run over `inputs` on `schedule`; deterministic for fixed arguments."""
-    return compose_chain_script([(manifest, inputs, schedule)], run_id=run_id, agent_type_host=agent_type_host)
+    return compose_chain_script(
+        [(manifest, inputs, schedule)], run_id=run_id, agent_type_host=agent_type_host,
+        fanout_group=fanout_group,
+    )

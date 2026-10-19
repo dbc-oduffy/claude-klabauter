@@ -10,7 +10,6 @@ dispatch.ask_stage; the script only interprets the manifest. Pure composition: n
 from __future__ import annotations
 
 import json
-import re
 import shlex
 from datetime import date
 from pathlib import Path
@@ -20,6 +19,7 @@ from coordinator_core.git.git_state import head_sha
 from coordinator_core.warp_fire import fire_command
 from coordinator_core.ops.dispatch_emit import agent_sidecar as _sidecar
 from coordinator_core.ops.dispatch_emit import emit as _emit
+from coordinator_core.ops.dispatch_emit.fanout_cost import AGENT_CALL_RE, GROUP_HEADER_TAIL, GROUP_MEMBER_RESULT_JS, FanoutCost, with_fanout
 from coordinator_core.ops.dispatch_emit.falsifier_integrity_phase import REVIEWER_AGENT_TYPE
 from coordinator_core.ops.dispatch_emit.ask_brief import EM_BRIEF_VAR, EmBrief, brief_decl_js
 from coordinator_core.ops.dispatch_emit.sizing_fire import RESUME_LEDGER_HALT_BLOCKING_FIELD
@@ -422,9 +422,11 @@ _MANIFEST_SCHEMA = _obj(
                     "writes": {"type": "array", "items": _STR},
                     "wave": {"type": "integer"},
                     "deps": {"type": "array", "items": _STR},
+                    "group": _STR,
                 },
             ),
         },
+        "fanout": {"type": ["object", "null"]},
         "review_declared_paths": {"type": "array", "items": _STR},
         "test_targets": {"type": "array", "items": _STR},
         "no_test_target": {"type": ["object", "null"]},
@@ -2367,8 +2369,7 @@ def compose_ask_script(
         f"  const _rowVerifyWanted = !(_gate.arm !== {_lit(ARM_XS)} && (_manifest.test_targets ?? []).length);"
     )
     b.append("  const _waves = [...new Set(_manifest.rows.map((r) => r.wave))].sort((a, b) => a - b);")
-    b.append("  for (const w of _waves) {")
-    b.append("    for (const r of _manifest.rows.filter((x) => x.wave === w)) {")
+    b.append("  if (_manifest.fanout) log('Fanout: ' + JSON.stringify(_manifest.fanout));")
     row_prompt = _cat(
         f"{brief_prefix}{_AGENT_DEFS_MARKER}{_emit._prompt_head(preamble)}\n\n{anchor}\n\n",
         "Your brief is the file ",
@@ -2376,10 +2377,34 @@ def compose_ask_script(
         f" -- read it completely, then execute it as written.{ledger_clause}{session_tail}",
         "js:" + _row_sidecar_js(run_id, _lit(build_work_label(''))),
     )
-    b.extend(_reviewer_row_js(anchor, _lit(build_work_label('')), run_id))
+    work_label = _lit(build_work_label(''))
+    exec_phase = _lit(_emit._EXECUTE_PHASE_TITLE)
+    # Rows sharing a `group` share one memoised agent; each member keeps its own `_runRow` and reads
+    # its own `<ID>:` line out of the shared reply, so a member the agent omitted reads incomplete.
+    b.append(GROUP_MEMBER_RESULT_JS)
+    b.append(f"  const _rowPrompt = (r) => {row_prompt};")
+    b.append("  const _groups = {};")
     b.append(
-        f"      else _rows[r.id] = _runRow(r.id, (r.deps ?? []).map((d) => _rows[d]), null, async () => agent({row_prompt}, "
-        f"{{ label: {_lit(build_work_label(''))} + r.id, phase: {_lit(_emit._EXECUTE_PHASE_TITLE)}, "
+        "  function _groupPrompt(g) {\n"
+        "    const ms = _manifest.rows.filter((x) => x.group === g);\n"
+        "    return 'You own ' + ms.length + ' assignments, in this order: ' + ms.map((m) => m.id).join(', ') "
+        f"+ {_js_string_literal(GROUP_HEADER_TAIL)} + ms.map("
+        "(m) => '=== Assignment ' + m.id + ' ===\\n' + _rowPrompt(m) + '\\n\\n').join('');\n"
+        "  }"
+    )
+    b.append(
+        "  async function _groupRun(r) {\n"
+        f"    _groups[r.group] ??= agent(_groupPrompt(r.group), {{ label: {work_label} + r.group, phase: {exec_phase}, "
+        f"agentType: r.agent_type, model: r.model, stallMs: {_emit._EXECUTOR_STALL_MS} }});\n"
+        "    return _memberResult(await _groups[r.group], r.id);\n"
+        "  }"
+    )
+    b.append("  for (const w of _waves) {")
+    b.append("    for (const r of _manifest.rows.filter((x) => x.wave === w)) {")
+    b.extend(_reviewer_row_js(anchor, work_label, run_id))
+    b.append(
+        f"      else _rows[r.id] = _runRow(r.id, (r.deps ?? []).map((d) => _rows[d]), null, async () => r.group ? _groupRun(r) : agent(_rowPrompt(r), "
+        f"{{ label: {work_label} + r.id, phase: {exec_phase}, "
         f"agentType: r.agent_type, model: r.model, stallMs: {_emit._EXECUTOR_STALL_MS} }}), "
         "{ title: r.id, paths: r.writes ?? [], declared: r.writes ?? [] });"
     )
@@ -2742,7 +2767,8 @@ def compose_ask_script(
         "review: { prep: _reviewPrep, wave: _reviewWave, delivery: _deliveryVerdict, "
         "integration: _reviewIntegration }, "
         + (
-            "roadmap: _viaRoadmap ? { gate: _rb, ready: _ready, fanout: _commit?.fanout ?? null } : null, "
+            "roadmap: _viaRoadmap ? { gate: _rb, ready: _ready, fanout: _commit?.fanout ?? null, "
+            "not_fired: _commit?.fanout?.not_fired ?? _unfired } : null, "
             "fanout: _commit?.fanout ?? null, "
             if rb_fn else ""
         )
@@ -2807,9 +2833,20 @@ def _owed_handback_js(sizing_rel: Optional[str]) -> str:
     )
 
 
+def composed_fanout(body_lines: Sequence[str]) -> FanoutCost:
+    """Cost of the agent legs a script composes at emit: one per `agent(` call site outside the
+    execute loop's row dispatch. Rows are counted at stage time (the manifest's `fanout`), so the
+    basis is always `lower-bound`. `units` and `agents` here exclude rows, so the script's own meta
+    understates the run; the row-inclusive count is the manifest `fanout`."""
+    legs = sum(
+        len(AGENT_CALL_RE.findall(ln)) for ln in body_lines if "_rows[r.id] = _runRow(" not in ln and "_groups[" not in ln
+    )
+    return FanoutCost(units=legs, agents=legs, basis="lower-bound")
+
+
 def _finish_script(b: list[str], manifest_rel: str, description: str, phase_titles: list[str]) -> str:
     """The script text from its composed body lines, refused over the Workflow runner's byte cap."""
-    meta = _emit._meta_block("warp-ask", description, phase_titles)
+    meta = with_fanout(_emit._meta_block("warp-ask", description, phase_titles), composed_fanout(b))
     script = (
         f"{_emit._NODE_CHECK_DOES_NOT_APPLY_COMMENT}\n{meta}\n"
         f"{ASK_MANIFEST_MARKER}{manifest_rel}\n"

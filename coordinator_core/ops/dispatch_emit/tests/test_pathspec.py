@@ -119,6 +119,21 @@ def test_commit_pathspec_warns_but_returns_real_paths_when_one_row_declares_empt
     assert "'C1'" not in caplog.text
 
 
+def test_zero_contribution_warning_names_a_row_once_per_emit_and_again_on_the_next(caplog):
+    rows = [_wave_row("C1", ["a.py"]), _wave_row("C2", [])]
+    with caplog.at_level("WARNING"):
+        for _ in range(4):
+            commit_pathspec(rows)
+            commit_pathspec_or_none([rows[1], rows[0]])
+    assert caplog.text.count("'C2'") == 1
+
+    caplog.clear()
+    next_emit = [_wave_row("C1", ["a.py"]), _wave_row("C2", [])]
+    with caplog.at_level("WARNING"):
+        commit_pathspec(next_emit)
+    assert caplog.text.count("'C2'") == 1
+
+
 def test_commit_pathspec_warns_but_returns_surface_fallback_when_empty_writes_row_shares_a_wave(caplog):
     wave = [
         _wave_row("C1", UNDECLARED, surface="coordinator_core/ops/dispatch_emit/pathspec.py"),

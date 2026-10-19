@@ -577,8 +577,46 @@ def test_relayed_source_forwards_ask_source(tmp_path):
     assert emit.calls[0][0]["ask_source"] == "relayed"
     mod.evaluate(_payload(root, {"ask": "a", "source": "pm"}), emit=emit)
     mod.evaluate(_payload(root, {"ask": "a"}), emit=emit)
-    assert "ask_source" not in emit.calls[1][0]
+    assert emit.calls[1][0]["ask_source"] == "pm"
     assert "ask_source" not in emit.calls[2][0]
+    assert "session_root" not in emit.calls[2][0]
+
+
+def test_a_derived_relayed_run_is_named_in_the_allow_reason(tmp_path):
+    root = _repo(tmp_path)
+
+    unmarked = _hso(mod.evaluate(_payload(root, {"ask": "a"}), emit=_Emit()))["additionalContext"]
+    assert "Unmarked: runs as an AI-derived (relayed) ask" in unmarked
+    chosen = _hso(mod.evaluate(_payload(root, {"ask": "a", "source": "relayed"}, tool_use_id="t2"), emit=_Emit()))
+    assert "Unmarked" not in chosen["additionalContext"]
+    pm = _hso(mod.evaluate(_payload(root, {"ask": "a", "source": "pm"}, tool_use_id="t3"), emit=_Emit()))
+    assert "Unmarked" not in pm["additionalContext"]
+    assert "unverified" not in pm["additionalContext"]
+
+
+def test_an_unverifiable_pm_marking_is_flagged_in_the_allow_reason(tmp_path):
+    root = _repo(tmp_path)
+
+    def unverifiable(params, root_):
+        return {**_Emit()(params, root_), "ask_source": "pm", "pm_verification": "unverifiable"}
+
+    out = _hso(mod.evaluate(_payload(root, {"ask": "a", "source": "pm"}), emit=unverifiable))["additionalContext"]
+    assert "source pm is unverified: no session turn log resolved." in out
+    assert "Unmarked" not in out
+
+
+def test_a_redirected_root_passes_the_sessions_own_repo(tmp_path):
+    root = _repo(tmp_path)
+    other = _repo(tmp_path / "other")
+    emit = _Emit()
+    mod.evaluate(_payload(root, {"ask": "a", "repo": str(other)}), emit=emit)
+    params, called_root = emit.calls[0]
+    assert called_root.resolve() == other.resolve()
+    assert Path(params["session_root"]).resolve() == root.resolve()
+
+    fan = _Fanout([("r1", "a", (), "ready"), ("r2", "b", (), "ready")])
+    mod.evaluate(_payload(root, {**_asks("a", "b"), "repo": str(other)}), emit=_Emit(), fanout=fan)
+    assert Path(fan.calls[0][0]["session_root"]).resolve() == root.resolve()
 
 
 def test_a_relayed_ask_is_admitted_with_no_pm_turn_check_of_its_own(tmp_path):

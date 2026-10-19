@@ -19,24 +19,34 @@ PARAMS = {
 }
 
 
-def _body(cli: str) -> str:
-    return cli.split("<<'JSON'\n", 1)[1].rsplit("\nJSON", 1)[0]
-
-
 SIDECAR_PARAMS = {
     "run_id": "r1",
     "run_token": "tok",
     "script_path": r"D:\scratch\run\y.mjs",  # abs-path-ok: escape fixture
     "wave_sidecar_paths": [r"E:\x\.coordinator-local\s.md"],  # abs-path-ok: escape fixture
 }
+OUT = r"C:\Users\x\tasks\abc.output"  # abs-path-ok: task-output fixture
+WITH_PATH = {**SIDECAR_PARAMS, "task_output_path": OUT}
+HOSTILE_PATH = {**SIDECAR_PARAMS, "task_output_path": "/t/a&b<c>'d.output"}
+ALL_PARAMS = [PARAMS, SIDECAR_PARAMS, WITH_PATH, HOSTILE_PATH]
 
 
-@pytest.mark.parametrize("params", [PARAMS, SIDECAR_PARAMS])
-def test_python_cli_survives_unquoted_heredoc_and_retype(params):
-    body = _body(sibling_split._cli(params))
-    assert "\\\\" not in body
-    assert "\\u005c" in body
-    assert json.loads(body) == params
+@pytest.mark.parametrize("params", ALL_PARAMS)
+def test_python_cli_has_no_html_escapable_character_and_no_heredoc(params):
+    cli = sibling_split._cli(params)
+    assert not set(cli) & set("<>&")
+    assert "\n" not in cli and "JSON" not in cli
+
+
+def test_python_cli_names_the_task_output_path_as_one_quoted_argument():
+    assert sibling_split._cli(WITH_PATH) == (
+        f"coordinator-invoke dispatch.terminal_commit --from-task-output '{OUT}'"
+    )
+
+
+@pytest.mark.parametrize("params", [PARAMS, SIDECAR_PARAMS, HOSTILE_PATH])
+def test_a_missing_or_unquotable_path_yields_the_placeholder_token(params):
+    assert sibling_split._cli(params).endswith(" --from-task-output TASK_OUTPUT_PATH")
 
 
 def _halve(text: str) -> str:
@@ -44,16 +54,8 @@ def _halve(text: str) -> str:
     return text.replace("\\\\", "\\")
 
 
-@pytest.mark.parametrize("params", [PARAMS, SIDECAR_PARAMS])
-def test_emitted_body_survives_the_halving_hop(params):
-    assert json.loads(_halve(_body(sibling_split._cli(params)))) == params
-
-
-@pytest.mark.parametrize("params", [PARAMS, SIDECAR_PARAMS])
-def test_unescaped_body_fails_the_halving_hop(params):
-    lossy = _halve(json.dumps(params, separators=(",", ":"), ensure_ascii=False))
-    with pytest.raises(json.JSONDecodeError, match="Invalid .escape"):
-        json.loads(lossy)
+def test_no_params_yields_no_line():
+    assert sibling_split._cli(None) is None and sibling_split._cli({}) is None
 
 
 _RUN_ID = "ask-pin"
@@ -169,14 +171,7 @@ def test_ask_compose_still_wires_the_shared_cli_helper_not_a_local_copy():
     assert "TERMINAL_COMMIT_CLI_HELPER_JS" in src
 
 
-def test_token_params_still_parse():
-    got = run_token.token_params_from_command(sibling_split._cli(PARAMS))
-    assert got["script_path"] == PARAMS["script_path"]
-
-
-@pytest.mark.spawns_process
-@pytest.mark.parametrize("params", [PARAMS, SIDECAR_PARAMS])
-def test_js_and_python_helpers_agree(params):
+def _js_cli(params) -> str:
     node = shutil.which("node")
     if node is None:
         pytest.skip("node unavailable")
@@ -189,4 +184,23 @@ def test_js_and_python_helpers_agree(params):
         **no_console_creationflags(),
     )
     assert out.returncode == 0, out.stderr
-    assert out.stdout == sibling_split._cli(params)
+    return out.stdout
+
+
+@pytest.mark.spawns_process
+@pytest.mark.parametrize("params", ALL_PARAMS)
+def test_js_and_python_helpers_agree(params):
+    assert _js_cli(params) == sibling_split._cli(params)
+
+
+@pytest.mark.spawns_process
+@pytest.mark.parametrize("params", ALL_PARAMS)
+def test_js_line_has_no_html_escapable_character(params):
+    assert not set(_js_cli(params)) & set("<>&")
+
+
+def test_ask_compose_in_run_getter_routes_through_the_helper():
+    from coordinator_core.ops.dispatch_emit import ask_compose
+
+    src = Path(ask_compose.__file__).read_text(encoding="utf-8")
+    assert "? _terminalCommitCli(this.next_action.params) : null" in src

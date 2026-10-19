@@ -81,7 +81,7 @@ def _write_two_row_plan(tmp_path, name, surface):
         "- id: C1\n  title: Row 1\n  change_kind: script-edit\n"
         "  surface: pkg/row1.py\n  writes:\n    - pkg/row1.py\n"
         "- id: C2\n  title: Row 2\n  change_kind: script-edit\n"
-        f"  surface: {surface}\n  writes:\n    - {surface}\n"
+        f"  surface: {surface}\n  memo_to: receiver-repo-em\n  writes:\n    - {surface}\n"
         "```\n",
         encoding="utf-8",
     )

@@ -83,7 +83,6 @@ _KNOWN_LITERAL_SITES = frozenset({
     "bash_guards/_write_bump_stand_down.py",
     "bash_guards/dispatch_checks.py",
     "baton_assemble/__init__.py",
-    "block_discharge.py",
     "ceremony_common/_phantom_sweep_providers.py",
     "claude_md_budget.py",
     "commit_ledger/resolve_owner.py",

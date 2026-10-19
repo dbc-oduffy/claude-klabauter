@@ -20,10 +20,17 @@ of them and this module never prints it:
   UNSTAMPED    never certified. Gate and stamp.
   MALFORMED    a hand-written stamp. Repair the frontmatter; do not stamp over it.
 
-WHAT IT DOES NOT DO. It does not decide what to fire, does not run a plan's `census[]`
-commands (that is the fire-time leg, and it belongs to the runner), and does not author
-anything into a plan. A plan that fails the bar is REPORTED with its failing classes and
-the upgrade command that writes the declarations derivable from the plan's own text —
+CENSUS LEG. After the seam pass and before any stamp, each plan this run is about to stamp (gate
+PREPPED, not SEAM-REFUSED, not already CERTIFIED) has its `census[]` commands re-run through the
+sibling `mise-census-revalidate` executor (`require_stamp=False`: the plan is not stamped yet). A
+DRIFT refuses the stamp and reads CENSUS-DRIFT; MATCH, UNDECIDABLE, REFUSED and UNRUNNABLE do not
+block, the same rule the fire-time leg uses. Other rows are never measured. It runs under
+`--dry-run` too, being read-only.
+
+WHAT IT DOES NOT DO. It does not decide what to fire, does not refresh a plan's recorded
+`result:` values, and does not author anything into a plan beyond the `depends_on_plan`
+edges `plan.seam_fix` writes. A plan that fails the bar is REPORTED with its failing
+classes and the upgrade command that writes the declarations derivable from the plan's own text —
 `mise-prep-upgrade` never invents one, and neither does this. `--upgrade` runs it for
 you and re-gates; without the flag nothing under `docs/plans/` is written except an
 attest the gate has just passed.
@@ -35,6 +42,11 @@ Usage:
 With no plan arguments the set is every APPROVED plan the engine's plan gate reports —
 mise-prep's own entry set, taken from the same seam `mise-prep-entry.py` reads, never
 re-derived from plan frontmatter.
+
+Before any plan is gated, `plan.seam_fix` runs once over the set (`dry_run` under `--dry-run`),
+minting the `depends_on_plan` edges that order in-set writes collisions. It is the one op here that
+edits plan bodies, and it runs first so every stamp is computed over the edged body. Pairs it
+cannot order without a cycle come back as `skippedCycles` on the report.
 
 After every plan is gated, one seam check runs over the whole set (`plan.seam_record` at
 `phase: prep`; `plan.seam_check` under `--dry-run`, which writes no sidecar). A plan the check
@@ -60,6 +72,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import functools
 import importlib.util
 import json
 import os
@@ -86,6 +99,22 @@ def _load_entry():
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
+
+
+@functools.cache
+def _revalidator():
+    """The census leg, loaded from its sibling file so prep, certify and fire share one executor."""
+    path = _HERE / "mise-census-revalidate.py"
+    spec = importlib.util.spec_from_file_location("mise_census_revalidate", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+_CENSUS_ROUTE = (
+    "route: the premise moved — re-plan the census and the body resting on it; a format-only or "
+    "benign-growth ruling is coordinator:apm's, never a hand edit of result:"
+)
 
 
 def _default_engine_root() -> Path | None:
@@ -178,6 +207,22 @@ def _seam_call(repo_root: Path, plans: list[str], phase: str, named_set: bool, r
     if not isinstance(reply.get("verdict"), str) or not isinstance(reply.get("per_plan"), dict):
         raise ValueError(f"{op} returned a reply without `verdict` and `per_plan`")
     return reply
+
+
+def _seam_fix(repo_root: Path, plans: list[str], dry_run: bool) -> dict:
+    """One `plan.seam_fix` call over the set, normalized to the report's `seamFix` shape.
+
+    Runs before any gate so every stamp is computed over the edged body. The reply is returned
+    once for the report and the downstream APM stage; callers never re-call the op. Raises
+    `ValueError` on an op error.
+    """
+    reply = _invoke(repo_root, "plan.seam_fix", {"plans": list(plans), "dry_run": dry_run})
+    return {
+        "edgesAdded": list(reply.get("edges_added") or []),
+        "skippedCycles": list(reply.get("skipped_cycles") or []),
+        "converged": bool(reply.get("converged")),
+        "files": list(reply.get("files") or []),
+    }
 
 
 def _seam_spell(verdict: str | None) -> str | None:
@@ -474,6 +519,10 @@ def main(argv=None) -> int:
         "only the declarations derivable from the plan's own text; it invents none, so a "
         "plan needing real authoring still comes back NOT-PREPPED with its classes named.",
     )
+    ap.add_argument(
+        "--census-timeout", type=int, default=30,
+        help="seconds one census command may run before it reads UNRUNNABLE (default 30)",
+    )
     ap.add_argument("--dry-run", action="store_true", help="gate and report; stamp nothing")
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args(argv)
@@ -515,6 +564,11 @@ def main(argv=None) -> int:
             # --json owns stdout: a prose line ahead of the document makes it unparseable.
             file=sys.stderr if args.json else sys.stdout,
         )
+
+    try:
+        seam_fix = _seam_fix(repo_root, plans, args.dry_run)
+    except ValueError as exc:
+        return refuse(f"seam fix: {exc}")
 
     rows = []
     gates: dict[str, dict] = {}
@@ -574,9 +628,26 @@ def main(argv=None) -> int:
         if _seam_implicated(seam, plan):
             row["outcome"] = "SEAM-REFUSED"
 
+    # Census leg: runs only on rows about to be stamped. A stamped, refused or non-PREPPED row
+    # writes no stamp, and the fire-time leg owns already-certified plans. Only DRIFT blocks, the
+    # same rule the fire leg uses: an UNDECIDABLE or UNRUNNABLE census is not evidence of movement.
+    for row in rows:
+        row["census"] = None
+        if (
+            row["outcome"] is None
+            and row["verdict"] == "PREPPED"
+            and row["stamp_state"] != "CERTIFIED"
+        ):
+            rep = _revalidator().revalidate(
+                repo_root / row["plan"], repo_root, args.census_timeout, require_stamp=False
+            )
+            row["census"] = rep
+            if rep.get("state") == "DRIFT":
+                row["outcome"] = "CENSUS-DRIFT"
+
     for row in rows:
         plan, gate = row["plan"], gates[row["plan"]]
-        if row["outcome"] == "SEAM-REFUSED":
+        if row["outcome"] in ("SEAM-REFUSED", "CENSUS-DRIFT"):
             continue
         if gate.get("verdict") == "PREPPED" and not args.dry_run:
             try:
@@ -614,6 +685,7 @@ def main(argv=None) -> int:
                     "certified": len(certified),
                     "dryRun": args.dry_run,
                     "seam": _seam_spell(seam["verdict"]),
+                    "seamFix": seam_fix,
                 },
                 indent=2,
             )
@@ -624,6 +696,13 @@ def main(argv=None) -> int:
         pending = sum(1 for r in rows if r["outcome"] == "would-stamp")
         work = f" — {pending} would be written" if args.dry_run else ""
         print(f"mise-prep-run: {len(certified)} of {len(rows)} plan(s) {verb}{mode}{work}")
+        n_edges = len(seam_fix["edgesAdded"])
+        print(
+            f"seam-fix: {n_edges} edge(s) {'would be added' if args.dry_run else 'added'}; "
+            f"converged={seam_fix['converged']}"
+        )
+        for c in seam_fix["skippedCycles"]:
+            print(f"seam-fix: skipped cycle {c.get('plans')} path={c.get('path')} — {c.get('detail')}")
         for r in rows:
             if r in certified:
                 held = r.get("mise_prepped_findings") or []
@@ -643,10 +722,19 @@ def main(argv=None) -> int:
                     print(f"                     {_repair_line(r['failing'], r['plan'])}")
                 for f in r.get("seam") or []:
                     print(f"                     {_seam_line(f)}")
+                if r["outcome"] == "CENSUS-DRIFT":
+                    for e in (r["census"] or {}).get("entries") or []:
+                        if e.get("state") == "DRIFT":
+                            print(
+                                f"                     census: DRIFT {str(e.get('command'))[:110]} "
+                                f"— {e.get('basis')}"
+                            )
+                    print(f"                     {_CENSUS_ROUTE}")
 
     if short:
         refused = [r for r in short if r["outcome"] == "SEAM-REFUSED"]
-        unprepped = len(short) - len(refused)
+        drifted = [r for r in short if r["outcome"] == "CENSUS-DRIFT"]
+        unprepped = len(short) - len(refused) - len(drifted)
         lines = []
         if unprepped:
             lines.append(
@@ -659,6 +747,15 @@ def main(argv=None) -> int:
                 f"\nmise-prep-run: {len(refused)} plan(s) are SEAM-REFUSED. Follow each "
                 "finding's own `route:` line above; re-authoring does not clear them."
             )
+        if drifted:
+            lines.append(
+                f"\nmise-prep-run: {len(drifted)} plan(s) are CENSUS-DRIFT. The premise moved — "
+                "re-plan the census and the body resting on it; a format-only or benign-growth "
+                "ruling is coordinator:apm's, never a hand edit of result:."
+            )
+        # stdout is block-buffered on a pipe while stderr is line-buffered, so without this the
+        # summary overtakes the report on a shared stream.
+        sys.stdout.flush()
         print("\n".join(lines), file=sys.stderr)
         return EXIT_NOT_ALL_CERTIFIED
     return EXIT_OK

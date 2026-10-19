@@ -729,9 +729,11 @@ class ManifestRow:
     wave: int
     #: The rows this one waits on (`DagNode.after`): never a whole earlier wave.
     deps: tuple[str, ...] = ()
+    #: Rows sharing a non-empty `group` share one agent; each keeps its own `_runRow` entry.
+    group: str = ""
 
     def to_json(self) -> dict[str, Any]:
-        return {
+        out: dict[str, Any] = {
             "id": self.id,
             "agent_type": self.agent_type,
             "model": self.model,
@@ -740,6 +742,9 @@ class ManifestRow:
             "wave": self.wave,
             "deps": list(self.deps),
         }
+        if self.group:
+            out["group"] = self.group
+        return out
 
     @classmethod
     def from_json(cls, data: dict[str, Any]) -> "ManifestRow":
@@ -751,6 +756,7 @@ class ManifestRow:
             writes=tuple(data["writes"]),
             wave=data["wave"],
             deps=tuple(data.get("deps") or ()),
+            group=data.get("group") or "",
         )
 
 
@@ -828,8 +834,16 @@ class StageManifest:
     owed: tuple[OwedRow, ...] = ()
     #: Register row ids still unruled (neither met nor waived) at stage time.
     rulable_ids: tuple[str, ...] = ()
+    #: The staged rows' `fanout_cost.FanoutCost.meta_dict()` (agents, basis, groups); None when unset.
+    fanout: dict[str, Any] | None = None
 
     def to_json(self) -> dict[str, Any]:
+        out = self._base_json()
+        if self.fanout is not None:
+            out["fanout"] = dict(self.fanout)
+        return out
+
+    def _base_json(self) -> dict[str, Any]:
         return {
             "rulable_ids": list(self.rulable_ids),
             "owed": [o.to_json() for o in self.owed],
@@ -860,4 +874,5 @@ class StageManifest:
             engine_rows=tuple(dict(r) for r in data.get("engine_rows") or ()),
             owed=tuple(OwedRow.from_json(o) for o in data.get("owed") or ()),
             rulable_ids=tuple(data.get("rulable_ids") or ()),
+            fanout=dict(data["fanout"]) if data.get("fanout") else None,
         )

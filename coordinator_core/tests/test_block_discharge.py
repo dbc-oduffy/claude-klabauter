@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from coordinator_core import block_discharge as bd
@@ -68,7 +70,7 @@ class TestWriteFailureDoesNotCrash:
     def test_record_fire_returns_none_and_does_not_raise(self, tmp_path):
         repo_root = str(tmp_path)
         session_id = "sess-unwritable"
-        ledger_path = tmp_path / "state" / "block-discharge" / f"{session_id}.jsonl"
+        ledger_path = Path(bd.ledger_dir()) / f"{session_id}.jsonl"
         ledger_path.mkdir(parents=True)
 
         nonce = bd.record_fire(repo_root, session_id, "guard-x", "reason")
@@ -78,7 +80,7 @@ class TestWriteFailureDoesNotCrash:
     def test_read_ledger_over_colliding_directory_does_not_crash(self, tmp_path):
         repo_root = str(tmp_path)
         session_id = "sess-unwritable-2"
-        ledger_path = tmp_path / "state" / "block-discharge" / f"{session_id}.jsonl"
+        ledger_path = Path(bd.ledger_dir()) / f"{session_id}.jsonl"
         ledger_path.mkdir(parents=True)
 
         nonce = bd.record_fire(repo_root, session_id, "guard-x", "reason")
@@ -106,8 +108,8 @@ class TestTruncatedFinalLineIsSkippedNotFatal:
     def test_read_ledger_yields_wellformed_records_plus_skip_count(self, tmp_path):
         repo_root = str(tmp_path)
         session_id = "sess-truncated"
-        ledger_path = tmp_path / "state" / "block-discharge" / f"{session_id}.jsonl"
-        ledger_path.parent.mkdir(parents=True)
+        ledger_path = Path(bd.ledger_dir()) / f"{session_id}.jsonl"
+        ledger_path.parent.mkdir(parents=True, exist_ok=True)
         nonce = bd.record_fire(repo_root, session_id, "guard-x", "reason")
         assert nonce is not None
         assert bd.record_discharge(repo_root, session_id, nonce, "did the thing")
@@ -168,8 +170,27 @@ class TestWriterNeverStages:
 
         assert (tmp_path / ".git" / "index").read_bytes() == index_before
         assert git("diff", "--cached", "--name-only").strip() == ""
-        status = git("status", "--porcelain", "--", "state/block-discharge").splitlines()
-        assert status and all(line.startswith("??") for line in status)
+        assert git("status", "--porcelain").strip() == ""
+        assert not (tmp_path / "state").exists()
+        assert (Path(bd.ledger_dir()) / "sess-idx.jsonl").is_file()
+
+
+class TestStoreIsMachineLocal:
+    def test_ledger_dir_is_under_machine_local_and_fire_carries_repo(self, tmp_path):
+        from coordinator_core import _settings_home
+
+        expected = Path(_settings_home.machine_local_dir()) / "block-discharge"
+        assert Path(bd.ledger_dir()) == expected
+
+        repo_root = str(tmp_path / "some-repo")
+        nonce = bd.record_fire(repo_root, "sess-repo", "guard-x", "reason")
+        assert nonce is not None
+        assert (expected / "sess-repo.jsonl").is_file()
+        assert not (tmp_path / "some-repo").exists()
+
+        records, _ = bd.read_ledger("anywhere-else", session_id="sess-repo")
+        fires = [r for r in records if r.get("kind") == "fire"]
+        assert fires and fires[0]["repo"] == repo_root
 
 
 class TestLedgerWriteIsLfOnly:
@@ -185,6 +206,6 @@ class TestLedgerWriteIsLfOnly:
         assert nonce is not None
         assert bd.record_discharge(repo_root, "sess-crlf", nonce, "did the thing")
 
-        ledger_path = tmp_path / "state" / "block-discharge" / "sess-crlf.jsonl"
+        ledger_path = Path(bd.ledger_dir()) / "sess-crlf.jsonl"
         raw = ledger_path.read_bytes()
         assert b"\r\n" not in raw

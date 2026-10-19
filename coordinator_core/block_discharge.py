@@ -17,7 +17,7 @@ discharged.
 Record shapes, one JSON object per line:
 
     {"kind": "fire", "nonce": ..., "guard": ..., "session_id": ...,
-     "reason": ..., "at": ...}
+     "repo": ..., "reason": ..., "at": ...}
     {"kind": "discharge", "nonce": ..., "action": ..., "at": ...}
 
 `nonce` is the join key between the two record kinds -- minted fresh by
@@ -25,11 +25,14 @@ Record shapes, one JSON object per line:
 naming a nonce with no matching fire record is rejected (returns False)
 rather than silently recording a self-issued discharge.
 
-Storage: `state/block-discharge/<session-id>.jsonl` -- ONE file per session,
-appended to, never one file per fire. Many peer sessions share this
-worktree; a per-fire file would multiply `git status` churn for all of them
-with no read-side gain. `repo_root` is always a caller-supplied parameter --
-this module does not walk for it and does not spawn `git rev-parse`.
+Storage: `<settings-home>/machine-local/block-discharge/<session-id>.jsonl`
+(`ledger_dir()`) -- a per-box store outside every repo, never committed: the
+spool is per-box session telemetry and committing it polluted shared history.
+ONE flat file per session, appended to, never one file per fire; session ids
+are box-unique, so a nonce is found wherever the guard fired from.
+`repo_root` on `record_fire` is stored as the fire's `repo` field (which
+checkout fired); on `record_discharge`/`read_ledger` it is accepted for
+signature compatibility with cross-repo callers and not read.
 
 Writer discipline -- deliberately NOT a whole-file read-modify-write
 replace. An audit record must not be lossy under concurrent writers, since
@@ -54,19 +57,23 @@ import time
 import uuid
 from typing import Optional
 
-from coordinator_core import atomic_append
-
-_LEDGER_DIRNAME = os.path.join("state", "block-discharge")
+from coordinator_core import _settings_home, atomic_append
 
 
 class InvalidSessionId(ValueError):
     pass
 
 
+def ledger_dir() -> str:
+    """Per-box spool directory; re-derived per call so a redirected settings
+    home is honoured. Pure env/home read, no spawn."""
+    return os.path.join(str(_settings_home.machine_local_dir()), "block-discharge")
+
+
 def _ledger_path(repo_root: str, session_id: str) -> str:
     if not session_id or "/" in session_id or "\\" in session_id or session_id.startswith("."):
         raise InvalidSessionId(f"unsafe session_id: {session_id!r}")
-    return os.path.join(repo_root, _LEDGER_DIRNAME, session_id + ".jsonl")
+    return os.path.join(ledger_dir(), session_id + ".jsonl")
 
 
 def _now_iso() -> str:
@@ -125,6 +132,7 @@ def record_fire(repo_root: str, session_id: str, guard: str, reason: str) -> Opt
         "nonce": nonce,
         "guard": guard,
         "session_id": session_id,
+        "repo": repo_root,
         "reason": reason,
         "at": _now_iso(),
     }
@@ -163,7 +171,7 @@ def read_ledger(repo_root: str, session_id: Optional[str] = None) -> tuple:
     if session_id is not None:
         return _read_one(_ledger_path(repo_root, session_id))
 
-    directory = os.path.join(repo_root, "state", "block-discharge")
+    directory = ledger_dir()
     all_records: list = []
     total_skipped = 0
     try:

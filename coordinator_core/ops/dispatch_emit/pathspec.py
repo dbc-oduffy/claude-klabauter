@@ -276,6 +276,7 @@ otherwise will refuse at runtime with nobody present to widen it.
 from __future__ import annotations
 
 import logging
+from collections import OrderedDict
 from functools import lru_cache
 from pathlib import Path, PurePosixPath
 from typing import cast
@@ -438,6 +439,27 @@ def _dedupe(paths: list[str]) -> list[str]:
     return ordered
 
 
+_WARNED_ROWS_CAP = 512
+_warned_rows: OrderedDict[int, WaveRow] = OrderedDict()
+
+
+def _first_warning(row: WaveRow) -> bool:
+    """True the first time this ``WaveRow`` OBJECT is warned about.
+
+    One emit calls ``commit_pathspec`` several times over the same row
+    objects; the next emit re-reads the spine and builds fresh ones, so
+    object identity is the emit boundary. The map holds the row itself so its
+    ``id()`` cannot be recycled, and is capped so a warm engine never grows it.
+    """
+    key = id(row)
+    if key in _warned_rows:
+        return False
+    _warned_rows[key] = row
+    if len(_warned_rows) > _WARNED_ROWS_CAP:
+        _warned_rows.popitem(last=False)
+    return True
+
+
 def _named_rows(rows) -> str:
     return ", ".join(repr(row.id) for row in rows)
 
@@ -508,7 +530,9 @@ def commit_pathspec(wave: list[WaveRow]) -> list[str]:
             f"phase pathspec (rows: {_named_rows(wave)})"
         )
 
-    zero_contribution = [row for row in wave if is_zero_contribution(row)]
+    zero_contribution = [
+        row for row in wave if is_zero_contribution(row) and _first_warning(row)
+    ]
     if zero_contribution:
         _logger.warning(
             "writes: [] declared, excluded from this wave's commit "

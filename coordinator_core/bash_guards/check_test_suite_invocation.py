@@ -1834,7 +1834,41 @@ def _segment_contains(cfg_seg: Sequence[str], inv_seg: Sequence[str]) -> bool:
         return False
     if not cfg_seg[1:]:
         return False
-    return set(cfg_seg[1:]).issubset(set(inv_seg[1:]))
+    return set(cfg_seg[1:]).issubset(set(_args_before_script(cfg_seg, inv_seg)))
+
+
+#: Verbs a package manager hands a script to; everything after one belongs to
+#: the script, not to the package manager.
+_SCRIPT_RUNNER_VERBS = frozenset({
+    "tsx", "ts-node", "node", "deno", "esno", "jiti", "babel-node",
+})
+
+_SCRIPT_FILE_SUFFIXES = (".ts", ".mts", ".cts", ".tsx", ".js", ".mjs", ".cjs", ".jsx", ".py", ".sh")
+
+
+def _args_before_script(cfg_seg: Sequence[str], inv_seg: Sequence[str]) -> Sequence[str]:
+    """``inv_seg``'s arguments up to a script-runner boundary, for package-manager
+    heads only.
+
+    ``pnpm tsx scripts/x.ts --all test`` carries the configured ``pnpm test``
+    token ``test`` as an argument to the script, so unordered containment read
+    a probe CLI as the suite. The boundary is the first positional that is a
+    script-runner verb or a script file path; a boundary the configured
+    command itself names is no boundary (a declared ``pnpm tsx run.ts``
+    suite still matches). A flag's value is not distinguished from a positional,
+    so ``pnpm -F node test`` truncates at ``node`` and reads as not-the-suite.
+    """
+    if inv_seg[0] not in _PM_BASES:
+        return inv_seg[1:]
+    cfg_args = set(cfg_seg[1:])
+    for idx, tok in enumerate(inv_seg[1:], start=1):
+        if tok.startswith("-") or tok in cfg_args:
+            continue
+        if tok in _SCRIPT_RUNNER_VERBS or (
+            idx == 1 and tok.lower().endswith(_SCRIPT_FILE_SUFFIXES)
+        ):
+            return inv_seg[1:idx]
+    return inv_seg[1:]
 
 
 def _cfg_segments_satisfied(cfg_segments: Sequence[Tuple[str, ...]],

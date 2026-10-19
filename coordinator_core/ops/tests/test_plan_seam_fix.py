@@ -80,13 +80,26 @@ def test_every_covering_row_of_the_later_plan_is_edged_and_second_run_is_quiet(r
     assert _fix(root, [a, b])["edges_added"] == []
 
 
+def test_schema_failing_plan_is_skipped_and_reported_not_aborting_the_set(root):
+    a = _plan(root, "a", _row("R1", "[x.py]"))
+    bad = _plan(root, "b", _row("R1", "[x.py]", "  queue_scope: not-a-scope\n"))
+    c = _plan(root, "c", _row("R1", "[x.py]"))
+    before_bad = (root / bad).read_bytes()
+    r = _fix(root, [a, bad, c])
+    assert r["files"] == [c]
+    assert (root / bad).read_bytes() == before_bad
+    assert [e["plan"] for e in r["edges_added"]] == [c]
+    assert [s["plan"] for s in r["skipped_plans"]] == [bad] and r["skipped_plans"][0]["detail"]
+    assert "depends_on_plan" in _rows(root, c)[0]
+
+
 def test_second_run_writes_nothing(root):
     a = _plan(root, "a", _row("R1", "[x.py]"))
     b = _plan(root, "b", _row("R1", "[x.py]"))
     _fix(root, [a, b])
     snap = (root / b).read_bytes()
     r = _fix(root, [a, b])
-    assert r == {"edges_added": [], "skipped_cycles": [], "files": [], "converged": True}
+    assert r == {"edges_added": [], "skipped_cycles": [], "skipped_plans": [], "files": [], "converged": True}
     assert (root / b).read_bytes() == snap
 
 

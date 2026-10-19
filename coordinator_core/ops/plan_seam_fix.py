@@ -15,8 +15,13 @@ Wire params:
 Reply:
     {"edges_added": [{"plan", "chunk", "depends_on": {"plan", "chunk"}, "path"}],
      "skipped_cycles": [{"class": "seam-fix-cycle", "plans": [later, earlier], "path", "detail"}],
+     "skipped_plans": [{"plan", "detail"}],
      "files": [repo-relative paths written], "converged": bool}
     ``edges_added`` under dry_run lists the edges that WOULD be written; ``files`` is empty.
+    ``skipped_plans``: a plan whose write raised ``MutateAbort`` (e.g. a row failing the
+    current schema) is left byte-identical, its edges leave ``edges_added``, and the rest of
+    the set is still written; ``detail`` is the abort message. Other exceptions propagate.
+    Always empty under dry_run (nothing is written, so no abort can occur).
     ``converged``: a seam check over the same set (after the writes; against the planned
     graph under dry_run) has no in-set writes-collision left.
 
@@ -58,6 +63,7 @@ from typing import Dict, List, Optional, Tuple
 from coordinator_core.frontmatter.body_blocks import LocateStatus, locate_fenced_block
 from coordinator_core.ipc import register_op
 from coordinator_core.lifecycle import main_worktree_root
+from coordinator_core.locked_write import MutateAbort
 from coordinator_core.ops.dispatch_emit.spine_read import UNDECLARED
 from coordinator_core.ops.plan_seam_check import (
     COLLISION,
@@ -164,7 +170,7 @@ def _plan_edges(pset: Dict[str, _Plan]) -> Dict[str, set]:
 def _write_edges(root: Path, rel: str, edges: List[dict]) -> bool:
     """Append ``edges`` ({row, edge}) to their rows' ``depends_on_plan`` under one lock.
     True when the file changed."""
-    from coordinator_core.locked_write import MutateAbort, locked_rmw
+    from coordinator_core.locked_write import locked_rmw
     from coordinator_core.ops.plan_tasks_mutate import (
         _carry_prep_certificate,
         _parse_rows_or_abort,
@@ -248,18 +254,26 @@ def _fix(params: dict, root: Path) -> dict:
                                 "depends_on": {"plan": earlier, "chunk": theirs[-1]}, "path": path})
 
     files: List[str] = []
+    skipped_plans: List[dict] = []
     if not dry_run:
+        failed: Dict[str, str] = {}
         for rel in sorted(per_plan):
-            if _write_edges(root, rel, per_plan[rel]):
-                files.append(rel)
+            try:
+                if _write_edges(root, rel, per_plan[rel]):
+                    files.append(rel)
+            except MutateAbort as exc:
+                failed[rel] = str(exc)
+        if failed:
+            edges_added = [e for e in edges_added if e["plan"] not in failed]
+            skipped_plans = [{"plan": rel, "detail": detail} for rel, detail in failed.items()]
         fresh = {rel: _Plan(rel, root) for rel in plans}
         converged = not _collision_pairs(fresh, hubs, root)
     else:
         converged = all(
             _reaches(graph, a, b) or _reaches(graph, b, a) for a, b, _ in pairs
         )
-    return {"edges_added": edges_added, "skipped_cycles": skipped, "files": files,
-            "converged": converged}
+    return {"edges_added": edges_added, "skipped_cycles": skipped,
+            "skipped_plans": skipped_plans, "files": files, "converged": converged}
 
 
 @register_op("plan.seam_fix")

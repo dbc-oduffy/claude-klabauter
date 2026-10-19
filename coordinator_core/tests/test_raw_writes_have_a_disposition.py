@@ -412,7 +412,7 @@ _DISPOSITIONS: Dict[str, Tuple[str, str]] = {
     'coordinator_core/bash_guards/commit_tripwires.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: _log_pathspec_divergence_override'),
     'coordinator_core/bash_guards/dispatch_checks.py': ('claims-explicitly', 'claim token in check_validate_commit'),
     'coordinator_core/bash_guards/guard_doctrine_surface_bash_write.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: <module-level>, _fold_literal_joins, _interpreter_write_sinks_are_ungoverned'),
-    'coordinator_core/block_discharge.py': ('to-fix', 'raw-write site(s): _append_record; runtime observed=not-scanned (n=0), sample=n/a'),
+    'coordinator_core/block_discharge.py': ('outside-repo', 'block-discharge spool under settings_home()/machine-local, outside every repo'),
     'coordinator_core/ceremony_common/_phantom_sweep_providers.py': ('outside-repo', 'raw-write site(s) near tempdir/home/settings-home construct: sweep_review_assemble writes its fixture .md files under a pytest tmp_path, never a tracked path in this repo'),
     'coordinator_core/claims_emit.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: _write_atomic_pair'),
     'coordinator_core/comment_strip/engine.py': ('in-repo-non-state', 'rewrites the source files being comment-stripped (and reverts them) plus an operator-named report path; no state/ target'),
@@ -666,7 +666,6 @@ _TO_FIX_CEILING: FrozenSet[str] = frozenset({
     'coordinator_core/bash_guards/_dialect.py',
     'coordinator_core/bash_guards/_write_bump_stand_down.py',
     'coordinator_core/bash_guards/chain_arrival_ledger.py',
-    'coordinator_core/block_discharge.py',
     'coordinator_core/hooks/context_pressure_precompact.py',
     'coordinator_core/hooks/nudge_unrouted_sizing.py',
     'coordinator_core/ops/archive_auto_memory_rows.py',
@@ -867,7 +866,7 @@ def test_at_close_out_the_ceiling_is_empty():
     runtime_tripwire_em_check.py with no raw token (33 to 32)), so
     a reader of this file at this commit does not mistake a non-empty
     ceiling for a defect."""
-    assert len(_TO_FIX_CEILING) == 32
+    assert len(_TO_FIX_CEILING) == 31
 
 
 @pytest.mark.parametrize(

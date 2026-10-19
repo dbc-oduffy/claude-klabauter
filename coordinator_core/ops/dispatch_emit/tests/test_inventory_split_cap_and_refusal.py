@@ -120,7 +120,7 @@ def test_over_cap_inventory_is_split_into_parts_with_distinct_run_ids(tmp_path, 
     assert rows[0].isdisjoint(rows[1])
     assert rows[0] | rows[1] == {f"I{i}" for i in range(1, _ITEMS + 1)}
     for i in (1, 2):
-        script = tmp_path / f"run-p{i}.workflow.mjs"
+        script = tmp_path / f"{_RUN_ID}-p{i}.workflow.mjs"
         assert script.is_file() and _script_size(script) <= cap
 
 
@@ -128,7 +128,7 @@ def test_parts_of_an_existing_tranche_share_its_number(tmp_path):
     inventory = _repo_with_inventory(tmp_path)
     report: dict = {}
     sink: dict = {}
-    im.mint_spine(str(inventory), row_budget=100, tranche_out=report, tranche_inventory_out=sink)
+    im.mint_spine(str(inventory), row_budget=6, tranche_out=report, tranche_inventory_out=sink)
     tranche = sink["path"]
     tranche.write_text(sink["text"], encoding="utf-8")
 
@@ -136,7 +136,7 @@ def test_parts_of_an_existing_tranche_share_its_number(tmp_path):
     for index in (1, 2):
         part_sink: dict = {}
         _, spine_path = im.mint_spine(
-            str(tranche), row_budget=100, part=(index, 2), tranche_inventory_out=part_sink
+            str(tranche), row_budget=6, part=(index, 2), tranche_inventory_out=part_sink
         )
         assert part_sink == {}
         paths.append(spine_path.name)
@@ -151,7 +151,7 @@ def test_over_cap_tranche_parts_carry_one_tranche_number(tmp_path, monkeypatch, 
     inventory = Path(record_path(str(tmp_path), "mise-inventory", f"{_RUN_ID}.md"))
     capsys.readouterr()
 
-    rc = cli_module.main([*_argv(tmp_path, inventory), "--row-budget", "100"])
+    rc = cli_module.main([*_argv(tmp_path, inventory), "--row-budget", "6"])
 
     assert rc == cli_module.EXIT_OK
     inv_dir = inventory.parent

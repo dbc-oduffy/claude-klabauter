@@ -316,8 +316,19 @@ from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.temp_layout import managed_tempdir
 from coordinator_core.ops.ceremony import git_native
 from coordinator_core.wire_paths import rel_id
+from coordinator_core.atomic_replace import atomic_write_bytes
 
 _PROG = "plan-status-transition"
+
+
+def _write_plan_atomic(plan_path: str, text: str) -> None:
+    """Replace the plan file with `text` via same-directory temp + os.replace.
+
+    Trap: never open the plan in "w" mode -- an interrupted write leaves a
+    zero-byte plan. Bytes are encoded without newline translation, matching
+    the prior newline="" text-mode write.
+    """
+    atomic_write_bytes(plan_path, text.encode("utf-8"))
 
 # YAML comment start: a `#` preceded by whitespace (space or tab). A `#` not
 # preceded by whitespace is a literal character, not a comment start -- this
@@ -1920,8 +1931,7 @@ def _stamp_implemented(opts: _Opts) -> int:
             print(exc.args[0] if exc.args else f"{_PROG}: mutation aborted", file=sys.stderr)
             return 1
         if new_text != old_text:
-            with open(plan_path, "w", encoding="utf-8", newline="") as f:
-                f.write(new_text)
+            _write_plan_atomic(plan_path, new_text)
         written_text = new_text
 
     # Only reachable when a git repo was actually resolved (`worktree_root` is
@@ -2274,8 +2284,7 @@ def _stamp_superseded(opts: _Opts) -> int:
             print(exc.args[0] if exc.args else f"{_PROG}: mutation aborted", file=sys.stderr)
             return 1
         if new_text != old_text:
-            with open(plan_path, "w", encoding="utf-8", newline="") as f:
-                f.write(new_text)
+            _write_plan_atomic(plan_path, new_text)
 
     if not _state["flipped"]:
         print(f"{_PROG}: {opts.plan} status \"{_state['prior_status']}\" is already superseded — no-op")
@@ -2526,8 +2535,7 @@ def _stamp_reopened(opts: _Opts) -> int:
             print(exc.args[0] if exc.args else f"{_PROG}: mutation aborted", file=sys.stderr)
             return 1
         if new_text != old_text:
-            with open(plan_path, "w", encoding="utf-8", newline="") as f:
-                f.write(new_text)
+            _write_plan_atomic(plan_path, new_text)
         written_text = new_text
 
     if not _state["flipped"]:
@@ -2714,8 +2722,7 @@ def _stamp_blocked(opts: _Opts) -> int:
             print(exc.args[0] if exc.args else f"{_PROG}: mutation aborted", file=sys.stderr)
             return 1
         if new_text != old_text:
-            with open(plan_path, "w", encoding="utf-8", newline="") as f:
-                f.write(new_text)
+            _write_plan_atomic(plan_path, new_text)
         written_text = new_text
 
     if not _state["flipped"]:
@@ -2851,8 +2858,7 @@ def _stamp_unblocked(opts: _Opts) -> int:
             print(exc.args[0] if exc.args else f"{_PROG}: mutation aborted", file=sys.stderr)
             return 1
         if new_text != old_text:
-            with open(plan_path, "w", encoding="utf-8", newline="") as f:
-                f.write(new_text)
+            _write_plan_atomic(plan_path, new_text)
         written_text = new_text
 
     if not _state["flipped"]:
@@ -3032,8 +3038,7 @@ def _stamp_abandoned(opts: _Opts) -> int:
             print(exc.args[0] if exc.args else f"{_PROG}: mutation aborted", file=sys.stderr)
             return 1
         if new_text != old_text:
-            with open(plan_path, "w", encoding="utf-8", newline="") as f:
-                f.write(new_text)
+            _write_plan_atomic(plan_path, new_text)
         written_text = new_text
 
     if not _state["flipped"]:
@@ -3189,8 +3194,7 @@ def _stamp_standdown(opts: _Opts) -> int:
         except MutateAbort as exc:
             print(exc.args[0] if exc.args else f"{_PROG}: mutation aborted", file=sys.stderr)
             return 1
-        with open(plan_path, "w", encoding="utf-8", newline="") as f:
-            f.write(new_text)
+        _write_plan_atomic(plan_path, new_text)
         written_text = new_text
 
     if worktree_root is not None:
@@ -3394,8 +3398,7 @@ def _stamp_rung(
             print(exc.args[0] if exc.args else f"{_PROG}: mutation aborted", file=sys.stderr)
             return 1
         if new_text != old_text:
-            with open(plan_path, "w", encoding="utf-8", newline="") as f:
-                f.write(new_text)
+            _write_plan_atomic(plan_path, new_text)
         written_text = new_text
 
     if not _state["flipped"]:
@@ -3677,8 +3680,7 @@ def _stamp_review_verified(opts: _Opts) -> int:
             print(exc.args[0] if exc.args else f"{_PROG}: mutation aborted", file=sys.stderr)
             return 1
         if new_text != old_text:
-            with open(plan_path, "w", encoding="utf-8", newline="") as f:
-                f.write(new_text)
+            _write_plan_atomic(plan_path, new_text)
         written_text = new_text
 
     if not _state["flipped"]:

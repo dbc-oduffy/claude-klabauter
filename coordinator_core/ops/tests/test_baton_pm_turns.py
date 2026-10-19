@@ -136,6 +136,34 @@ def test_bound_window_head_cuts_an_oversized_turn(tmp_path, monkeypatch):
     assert win[0]["text"] == "z" * PT.SIZING_WINDOW_CHARS and win[0]["truncated"] is True
 
 
+def test_is_turn_excerpt_rule():
+    turn = "Shouldn't the engine only recognize PMs words if that flag is chosen, and otherwise relay?"
+    assert PT.is_turn_excerpt(turn.upper(), turn)
+    assert PT.is_turn_excerpt("only recognize PMs words if that flag", turn)
+    assert not PT.is_turn_excerpt("only recognize PMs words if", turn)  # 5 words
+    assert not PT.is_turn_excerpt("only recognize words PMs if that flag", turn)
+    assert not PT.is_turn_excerpt("Relayed from a peer: " + turn, turn)
+    assert not PT.is_turn_excerpt("", turn)
+    assert PT.is_turn_excerpt("yes", "Yes.")
+    assert not PT.is_turn_excerpt("yes", "yes please do")
+
+
+def test_verify_pm_ask_has_three_verdicts(tmp_path, monkeypatch):
+    _session(tmp_path, monkeypatch, "sid-ptf")
+    said = "make the engine default unmarked asks to relayed"
+    PT.append_turn(said, session_id="sid-ptf")
+    PT.append_turn("unrelated words here", session_id="sid-ptf")
+    PT.append_turn(said + "!", session_id="sid-ptf")
+    got = PT.verify_pm_ask(said, session_id="sid-ptf")
+    assert got["verdict"] == "matched"
+    assert got["turn"]["turn"] == 2 and got["turn"]["text"] == said + "!" and got["turn"]["ts"]
+    assert PT.verify_pm_ask("nothing like it at all", session_id="sid-ptf") == {"verdict": "unmatched", "turn": None}
+    assert PT.verify_pm_ask("  ", session_id="sid-ptf")["verdict"] == "unmatched"
+    _session(tmp_path, monkeypatch, "sid-empty")
+    assert PT.verify_pm_ask(said, session_id="sid-empty") == {"verdict": "unverifiable", "turn": None}
+    assert PT.verify_pm_ask(said, session_id="sid-nolog") == {"verdict": "unverifiable", "turn": None}
+
+
 def test_unicode_line_separators_stay_inside_one_turn(tmp_path, monkeypatch):
     _session(tmp_path, monkeypatch, "sid-u")
     prompt = "a b c\u0085d"

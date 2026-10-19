@@ -12,7 +12,8 @@ THE TWO LEGS ARE ORDERED, AND THIS ONE IS SECOND. The sha leg is spawn-free and 
 this one spawns a process per declared command. Running it against a plan whose body already
 failed the cheap leg spends the box's budget re-measuring premises of a document that is no
 longer the certified one. This module therefore REFUSES a plan that is not CERTIFIED, rather
-than reporting on it.
+than reporting on it. The one caller that opts out is mise-prep-run (`require_stamp=False`): it
+runs this leg on a plan it is ABOUT to stamp, so the sha leg is the gate that plan just passed.
 
 WHAT IT WILL NOT DO, and the reason is the whole design:
 
@@ -278,7 +279,7 @@ def run_entry(entry: dict, repo_root: Path, timeout: int) -> dict:
     return row
 
 
-def revalidate(plan: Path, repo_root: Path, timeout: int) -> dict:
+def revalidate(plan: Path, repo_root: Path, timeout: int, *, require_stamp: bool = True) -> dict:
     yaml = _load_yaml()
     text = plan.read_text(encoding="utf-8", errors="replace")
     parts = text.split("---", 2)
@@ -289,7 +290,7 @@ def revalidate(plan: Path, repo_root: Path, timeout: int) -> dict:
         except yaml.YAMLError as exc:
             return {"plan": str(plan), "state": UNRUNNABLE, "detail": f"frontmatter: {exc}",
                     "entries": []}
-    if not fm.get("mise_prepped_sha"):
+    if require_stamp and not fm.get("mise_prepped_sha"):
         return {"plan": str(plan), "state": REFUSED,
                 "detail": "not CERTIFIED — the sha leg is ordered first and has not passed",
                 "entries": []}

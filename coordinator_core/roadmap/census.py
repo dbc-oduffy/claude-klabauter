@@ -32,6 +32,9 @@ READ_ONLY_HEADS = frozenset({
     # `cd` mutates only the child shell the revalidator spawns and dies with it. Present because
     # the `cd <repo> && grep ...` idiom is how an author writes a question about a sibling tree.
     "cd",
+    # Portable environment read (Linux-only /proc/self/environ is the alternative). `env` runs
+    # its operand as a command, so it is admitted only bare -- see `screen`.
+    "printenv", "env",
 })
 
 #: `git` subcommands that only read. Everything else under `git` is refused, including the ones
@@ -256,6 +259,8 @@ def screen(
         head = Path(parts[0]).name
         if head not in READ_ONLY_HEADS:
             return f"{head!r} is not on the read-only allowlist"
+        if head == "env" and len(parts) > 1:
+            return "env with arguments can run a command or set variables -- use bare `env` or `printenv NAME`"
         if head == "git":
             # `git -C <path> <sub>` and `--git-dir=<path> <sub>` put a value before the
             # subcommand; skip a flag and, where it takes a separate value, its value too.

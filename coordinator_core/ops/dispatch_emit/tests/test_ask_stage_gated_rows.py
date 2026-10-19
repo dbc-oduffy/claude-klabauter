@@ -155,6 +155,7 @@ title: fixture
   title: memo
   change_kind: doc-edit
   kind: memo-send
+  memo_to: coordinator-content-repo
   surface: pkg/memo.md
   receipt: .coordinator-local/memo-outbox/sent/the-topic.md
   writes:

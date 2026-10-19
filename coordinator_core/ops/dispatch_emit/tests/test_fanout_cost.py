@@ -1,0 +1,146 @@
+"""Pins the fanout_cost grouping rule, meta/reply rendering and group helpers."""
+
+import shutil
+import subprocess
+
+import pytest
+
+from coordinator_core.ops._workflow_contract import check_meta_pure_literal, extract_meta_block
+from coordinator_core.ops.dispatch_emit import fanout_cost as f
+from coordinator_core.ops.dispatch_emit.pipeline_compose import _check_fanout_group
+from coordinator_core.ops.dispatch_emit.pipeline_contract import PipelineEmitRefused
+from coordinator_core.win_portability import no_console_creationflags
+
+META = "export const meta = {\n  name: 'x',\n  description: 'a {brace} d',\n  phases: ['Run'],\n};\n"
+
+
+def _units(n, key="k", size=100):
+    return [f.Unit(f"u{i}", key, size) for i in range(n)]
+
+
+def test_six_small_units_group_two_per_agent_in_order():
+    groups = f.propose_groups(_units(6))
+    assert groups == (("u0", "u1"), ("u2", "u3"), ("u4", "u5"))
+
+
+def test_odd_count_leaves_a_trailing_solo():
+    assert f.propose_groups(_units(5))[-1] == ("u4",)
+
+
+def test_fewer_than_three_units_never_group():
+    assert f.propose_groups(_units(2)) == (("u0",), ("u1",))
+    assert f.propose_groups([]) == ()
+
+
+def test_split_mode_is_one_group_per_unit():
+    assert f.propose_groups(_units(6), "split") == tuple((f"u{i}",) for i in range(6))
+
+
+def test_unknown_mode_is_refused():
+    with pytest.raises(ValueError):
+        f.propose_groups(_units(3), "bogus")
+
+
+def test_units_group_only_with_equal_key_neighbours():
+    units = [f.Unit("a", "x", 1), f.Unit("b", "y", 1), f.Unit("c", "y", 1), f.Unit("d", "x", 1)]
+    assert f.propose_groups(units) == (("a",), ("b", "c"), ("d",))
+
+
+def test_large_unit_stays_solo_and_does_not_pair():
+    units = _units(3) + [f.Unit("big", "k", f.LARGE_UNIT_BYTES + 1)] + _units(2)
+    groups = f.propose_groups(units)
+    assert ("big",) in groups
+    assert groups[0] == ("u0", "u1")
+
+
+def test_pair_past_context_cap_stays_split():
+    half = f.GROUP_CONTEXT_CAP_BYTES // 2 + 1
+    assert half <= f.LARGE_UNIT_BYTES
+    units = [f.Unit(f"u{i}", "k", half) for i in range(4)]
+    assert f.propose_groups(units) == (("u0",), ("u1",), ("u2",), ("u3",))
+
+
+def test_every_unit_lands_in_exactly_one_group():
+    units = _units(7) + [f.Unit("odd", "z", 5)]
+    flat = [i for g in f.propose_groups(units) for i in g]
+    assert flat == [u.id for u in units]
+
+
+def test_cost_total_and_basis_validation():
+    cost = f.FanoutCost(6, 3, "exact", groups=(("a", "b"),))
+    assert cost.startup_tokens_total == 3 * f.STARTUP_TOKENS_PER_AGENT
+    assert cost.meta_dict()["groups"] == [["a", "b"]]
+    assert "groups" not in f.FanoutCost(1, 1, "exact").meta_dict()
+    with pytest.raises(ValueError):
+        f.FanoutCost(1, 1, "guess")
+
+
+def test_with_fanout_is_a_pure_literal_and_reads_back():
+    cost = f.FanoutCost(6, 3, "lower-bound", groups=(("u0", "u1"), ("u2",)))
+    out = f.with_fanout(META, cost)
+    block = extract_meta_block(out)
+    assert block is not None and check_meta_pure_literal(block) == []
+    assert f.read_fanout(out) == cost.meta_dict()
+    assert f.read_fanout(out)["expectedAgents"] == 3
+    assert out.startswith(META.split("};")[0].rstrip(",").rstrip())
+
+
+def test_with_fanout_adds_comma_after_a_last_entry_without_one():
+    out = f.with_fanout("export const meta = {\n  name: 'x'\n};\n", f.FanoutCost(1, 1, "exact"))
+    assert "name: 'x',\n  fanout:" in out
+    assert f.read_fanout(out)["units"] == 1
+
+
+def test_with_fanout_inside_a_full_script_leaves_the_rest_alone():
+    script = META + "\nconst a = {x: 1};\nreturn 1;\n"
+    out = f.with_fanout(script, f.FanoutCost(3, 3, "exact"))
+    assert out.endswith("\nconst a = {x: 1};\nreturn 1;\n")
+
+
+def test_with_fanout_refuses_missing_meta_and_double_write_and_impure_ids():
+    with pytest.raises(ValueError):
+        f.with_fanout("const a = 1;", f.FanoutCost(1, 1, "exact"))
+    once = f.with_fanout(META, f.FanoutCost(1, 1, "exact"))
+    with pytest.raises(ValueError):
+        f.with_fanout(once, f.FanoutCost(1, 1, "exact"))
+    with pytest.raises(ValueError):
+        f.with_fanout(META, f.FanoutCost(1, 1, "exact", groups=(("run(x)",),)))
+
+
+def test_read_fanout_is_none_without_an_entry_or_meta():
+    assert f.read_fanout(META) is None
+    assert f.read_fanout("nothing here") is None
+
+
+def test_group_prompt_names_members_in_order_and_wraps_each_prompt():
+    expr = f.group_prompt(["p0", "p1"], ["a", "b"])
+    assert expr.index("Assignment a") < expr.index("(p0)") < expr.index("Assignment b") < expr.index("(p1)")
+    assert "<ID>: <STATUS>" in expr and "a, b" in expr
+    with pytest.raises(ValueError):
+        f.group_prompt(["p0"], ["a", "b"])
+
+
+def test_pipeline_compose_refuses_unknown_fanout_group():
+    _check_fanout_group("auto")
+    _check_fanout_group("split")
+    with pytest.raises(PipelineEmitRefused):
+        _check_fanout_group("bogus")
+
+
+def test_agent_call_re_matches_a_dispatch_site_not_a_member_call():
+    text = "await agent(p);\nconst x = _rows.agent(p);\nmyagent(p);\n  agent(q)"
+    assert len(f.AGENT_CALL_RE.findall(text)) == 2
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node absent")
+def test_member_result_helper_returns_each_members_own_line_or_null():
+    probe = (
+        f.GROUP_MEMBER_RESULT_JS
+        + "const r = 'work\\nC1: DONE ok\\nC10: PARTIAL half';"
+        + "console.log(JSON.stringify([_memberResult(r,'C1'),_memberResult(r,'C10'),_memberResult(r,'C2'),_memberResult(null,'C1')]));"
+    )
+    out = subprocess.run(
+        [shutil.which("node"), "-e", probe], capture_output=True, text=True, timeout=30,
+        **no_console_creationflags(),
+    )
+    assert out.stdout.strip() == '["C1: DONE ok","C10: PARTIAL half",null,null]'

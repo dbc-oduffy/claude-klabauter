@@ -84,7 +84,6 @@ HOMES = frozenset({
     "backlogs",
     "baselines",
     "bash-guards",
-    "block-discharge",
     "bug-backlog",
     "bug-queue",
     "capabilities",

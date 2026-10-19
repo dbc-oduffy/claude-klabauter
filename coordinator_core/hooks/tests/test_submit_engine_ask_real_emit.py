@@ -14,6 +14,7 @@ from coordinator_core import warp_fire
 from coordinator_core.benchmarks.budget import load_manifest
 from coordinator_core.benchmarks.spawn_counter import _count_spawns_attributed
 from coordinator_core.hooks import submit_engine_ask as mod
+from coordinator_core.ops import baton_pm_turns as pm_turns
 from coordinator_core.ops.dispatch_emit import ask_compose
 from coordinator_core.ops.dispatch_emit.ask_contract import ASK_TEXT_FILE, RELAYED_ASK_FILE, RUN_DIR_ROOT, record_dir
 
@@ -99,8 +100,11 @@ def test_sizing_submission_through_the_real_emit(repo, monkeypatch):
 
 
 def test_raw_ask_submission_through_the_real_emit(repo, monkeypatch):
+    sid = "sess-real-emit"
+    pm_turns.log_path(sid, str(repo)).parent.mkdir(parents=True)
+    assert pm_turns.append_turn("add the widget", session_id=sid, cwd=str(repo))["ok"]
     with _count_spawns_attributed(monkeypatch) as spawns:
-        env = mod.evaluate(_payload(repo, {"ask": "add the widget"}))
+        env = mod.evaluate(_payload(repo, {"ask": "add the widget", "source": "pm"}))
 
     _assert_rewrite(env)
     (run_dir,) = _run_dirs(repo)

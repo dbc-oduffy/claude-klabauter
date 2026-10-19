@@ -357,6 +357,7 @@ from coordinator_core.ops.dispatch_emit.wake_digest import (
     stage_schema_literal,
 )
 from coordinator_core.ops.dispatch_emit.work_label import build_work_label
+from coordinator_core.ops.dispatch_emit import fanout_cost as _fanout
 from coordinator_core.ops.dispatch_emit.agent_sidecar import (
     sidecar_clause as _sidecar_clause,
     sidecar_clause_js as _sidecar_clause_js,
@@ -1947,9 +1948,9 @@ def _gate_baseline_blocks(
 ) -> list[str]:
     """Pre-dispatch blocks running each distinct row-gate command once at run_base.
 
-    One read-only agent per command, in parallel, before the first row registers: the
-    emit op itself spawns nothing (a build gate runs for seconds, far past the engine's
-    process budget). A failed or malformed baseline agent leaves the command out of
+    One read-only agent per command (``coordinator:test-runner``, haiku), in parallel, before
+    the first row registers: the emit op itself spawns nothing (a build gate runs for seconds,
+    far past the engine's process budget). A failed or malformed baseline agent leaves the command out of
     ``_gateBase``, so its rows fall back to the plain gate rule.
     """
     thunks = ",\n".join(
@@ -1957,7 +1958,8 @@ def _gate_baseline_blocks(
         f"{_js_string_literal(_gate_baseline_prompt(c) + _emit_sidecar_clause(plan_path, f'gatebase:{i}'))}, {{ "
         f"label: {_js_string_literal(f'gatebase:{i}')}, "
         f"phase: {_js_string_literal(_GATE_BASELINE_PHASE_TITLE)}, "
-        f"{_model_opt('', 'sonnet')}, "
+        f"agentType: {_js_string_literal(_degrade_agent_type(_TEST_AGENT_TYPE, agent_type_host))}, "
+        f"{_model_opt(_TEST_AGENT_TYPE)}, "
         f"schema: {_GATE_BASELINE_SCHEMA} }}); "
         "} catch (e) { return null; } }"
         for i, c in enumerate(commands)
@@ -2829,6 +2831,33 @@ def _row_agent_call_expr(
     forward unopened straight to ``_row_prompt`` -- see that function's
     docstring.
     """
+    prompt_literal = _row_prompt_expr(
+        row,
+        plan_path,
+        plan_context,
+        shared,
+        preamble=preamble,
+        new_module_paths=new_module_paths,
+        chatty_brief=chatty_brief,
+        chatty_nonce_var=chatty_nonce_var,
+        predecessor_state=predecessor_state,
+    )
+    return _agent_call_over(prompt_literal, row, agent_type_host, label_id=row.id)
+
+
+def _row_prompt_expr(
+    row: WaveRow,
+    plan_path: Optional[str],
+    plan_context: Optional[PlanContext],
+    shared: Optional[SharedBlocks],
+    *,
+    preamble: Optional[str] = None,
+    new_module_paths: tuple = (),
+    chatty_brief: Optional[str] = None,
+    chatty_nonce_var: Optional[str] = None,
+    predecessor_state: Optional[str] = None,
+) -> str:
+    """The JS string expression of one row's filled prompt, the first argument of its ``agent()`` call."""
     prompt = _row_prompt(
         row,
         plan_path,
@@ -2858,12 +2887,19 @@ def _row_agent_call_expr(
         )
     elif chatty_brief:
         prompt_literal = f"{prompt_literal} + {_js_string_literal(chatty_brief)}"
+    return prompt_literal
+
+
+def _agent_call_over(
+    prompt_literal: str, row: WaveRow, agent_type_host: Optional[str], *, label_id: str
+) -> str:
+    """``agent(<prompt>, {...})`` run as ``row``'s agent type and model, labelled ``work:<label_id>``."""
     row_agent_type = _row_agent_type(row)
     return (
         "agent("
         f"{prompt_literal}, "
         "{ "
-        f"label: {_js_string_literal(build_work_label(row.id))}, "
+        f"label: {_js_string_literal(build_work_label(label_id))}, "
         f"phase: {_js_string_literal(_EXECUTE_PHASE_TITLE)}, "
         f"agentType: {_js_string_literal(_degrade_agent_type(row_agent_type, agent_type_host))}, "
         f"{_model_opt(row_agent_type, row.agent_model)}, "
@@ -3732,6 +3768,69 @@ def _meta_block(
         f"{chatty_line}"
         "};\n"
     )
+
+
+#: Turns a group reply's `<ID>: <STATUS> <text>` line into the `<STATUS>: <text>` reply shape
+#: `_runRow` classifies; a missing line stays null, which reads incomplete.
+_MEMBER_STATUS_JS = """\
+function _memberStatus(text, id) {
+  const line = _memberResult(text, id);
+  return line === null ? null : line.slice(id.length + 1).trim().replace(/^(\\w+):?/, '$1:');
+}
+"""
+
+
+def _plan_row_groups(
+    dag,
+    plan_path: Optional[str],
+    plan_context: Optional[PlanContext],
+    shared: Optional[SharedBlocks],
+    *,
+    preamble: Optional[str],
+    repo_root: Optional[Path],
+    predecessor_state: Optional[str],
+    solo_ids: frozenset,
+    seam_held: frozenset,
+) -> tuple[dict[str, str], dict[str, tuple[str, ...]]]:
+    """Each DAG row's prompt expression, and the multi-row groups sharing one agent.
+
+    Rows group only when their `DagNode.after` sets, agent type and model are identical (a
+    contiguous run in DAG order) and the row is small. Reviewer, verification, slot, held and
+    seam-held rows stay solo. Returns (prompt expression by row id, group members by member id;
+    solo rows absent).
+    """
+    exprs: dict[str, str] = {}
+    units = []
+    for node in dag.nodes:
+        row = node.row
+        exprs[row.id] = _row_prompt_expr(
+            row,
+            plan_path,
+            plan_context,
+            shared,
+            preamble=preamble,
+            new_module_paths=tuple(_new_module_paths(row, repo_root)),
+            predecessor_state=predecessor_state,
+        )
+        agent_type = _row_agent_type(row)
+        solo = (
+            row.id in solo_ids
+            or row.id in seam_held
+            or "review" in agent_type.lower()
+            or _is_verification_row(row)
+        )
+        key = (
+            f"solo:{row.id}"
+            if solo
+            else f"{sorted(node.after)}|{agent_type}|{row.agent_model or ''}|{_row_source_plan(row) or ''}"
+        )
+        units.append(_fanout.Unit(row.id, key, len(exprs[row.id].encode("utf-8"))))
+    group_of: dict[str, tuple[str, ...]] = {}
+    for members in _fanout.propose_groups(units):
+        if len(members) > 1:
+            for m in members:
+                group_of[m] = members
+    return exprs, group_of
 
 
 def _excluded_rows_narration(excluded: list) -> str:
@@ -5140,6 +5239,8 @@ def compose_script(
             body_blocks.extend(_pre_phase_blocks(review_specs, agent_type_host, repo_root, plan_path))
 
     runtime_cap = _runtime_cap_on_host()
+    agent_count = 0
+    row_group: dict[str, tuple[str, ...]] = {}
     if not review_only:
         phase_titles.append(_EXECUTE_PHASE_TITLE)
         body_blocks.append(f"  phase({_js_string_literal(_EXECUTE_PHASE_TITLE)});")
@@ -5172,6 +5273,38 @@ def compose_script(
                 body_blocks.append(
                     f"  _seamGates[{n}] = new Promise((res) => {{ _seamRelease[{n}] = res; }});"
                 )
+        row_exprs: dict[str, str] = {}
+        if roster is None:
+            row_exprs, row_group = _plan_row_groups(
+                dag,
+                plan_path,
+                plan_context,
+                shared,
+                preamble=preamble,
+                repo_root=repo_root,
+                predecessor_state=predecessor_state,
+                solo_ids=frozenset(slot_rows) | {rid for rid, _ in held_rows},
+                seam_held=frozenset(seam_leg.holds) if seam_leg is not None else frozenset(),
+            )
+        node_by_id = {n.row.id: n for n in dag.nodes}
+        if row_group:
+            body_blocks.append(_fanout.GROUP_MEMBER_RESULT_JS + _MEMBER_STATUS_JS)
+            body_blocks.append("  const _groupCalls = {};\n  const _groupRuns = {};")
+            for members in dict.fromkeys(row_group.values()):
+                first = node_by_id[members[0]].row
+                gid = _js_string_literal(members[0])
+                gcall = _agent_call_over(
+                    _fanout.group_prompt([row_exprs[m] for m in members], members),
+                    first,
+                    agent_type_host,
+                    label_id=members[0],
+                )
+                member_labels = ", ".join(_js_string_literal(build_work_label(m)) for m in members)
+                body_blocks.append(
+                    f"  _groupCalls[{gid}] = () => {{ log('one agent for ' + [{member_labels}].join(' + ')); "
+                    f"return {gcall}; }};"
+                )
+        agent_count = len(dag.nodes) - sum(len(g) - 1 for g in set(row_group.values()))
         for node in dag.nodes:
             row = node.row
             deps_expr = (
@@ -5192,21 +5325,28 @@ def compose_script(
                 if verify_scope
                 else "null"
             )
-            call_expr = _row_agent_call_expr(
-                row,
-                plan_path,
-                plan_context,
-                shared,
-                agent_type_host=agent_type_host,
-                preamble=preamble,
-                new_module_paths=tuple(_new_module_paths(row, repo_root)),
-                predecessor_state=predecessor_state,
-                chatty_brief=(
-                    _chatty.member_brief(row.id, _chatty.member_nonce(roster, row.id))
-                    if roster is not None
-                    else None
-                ),
-            )
+            if row.id in row_group:
+                members = row_group[row.id]
+                call_expr = (
+                    f"_memberStatus(await (_groupRuns[{_js_string_literal(members[0])}] ??= "
+                    f"_groupCalls[{_js_string_literal(members[0])}]()), {_js_string_literal(row.id)})"
+                )
+            elif roster is None:
+                call_expr = _agent_call_over(
+                    row_exprs[row.id], row, agent_type_host, label_id=row.id
+                )
+            else:
+                call_expr = _row_agent_call_expr(
+                    row,
+                    plan_path,
+                    plan_context,
+                    shared,
+                    agent_type_host=agent_type_host,
+                    preamble=preamble,
+                    new_module_paths=tuple(_new_module_paths(row, repo_root)),
+                    predecessor_state=predecessor_state,
+                    chatty_brief=_chatty.member_brief(row.id, _chatty.member_nonce(roster, row.id)),
+                )
             row_paths = row_pathspecs.get(row.id) or []
             if len(row_paths) > _SHARED_PATH_ARRAY_THRESHOLD:
                 unchecked_rows.append(row.id)
@@ -5684,6 +5824,21 @@ def compose_script(
     )
 
     meta_block = _meta_block(name, description, phase_titles, chatty, box_terms)
+    if not review_only:
+        # Row agents are exact; review stages, per-row verifiers and checkpoint commits start
+        # at run time, so they make the count a floor.
+        leg_agents = (1 if test_var is not None else 0) + (1 if falsifier_var is not None and not verify_merge else 0)
+        run_time_legs = bool(review_blocks) or (test_var is None and any(row_verify_scopes.values()))
+        groups = tuple(dict.fromkeys(row_group.get(r.id, (r.id,)) for r in flat_rows))
+        meta_block = _fanout.with_fanout(
+            meta_block,
+            _fanout.FanoutCost(
+                units=len(flat_rows),
+                agents=agent_count + leg_agents + sum(len(_fanout.AGENT_CALL_RE.findall(b)) for b in review_blocks),
+                basis="lower-bound" if run_time_legs else "exact",
+                groups=groups,
+            ),
+        )
     path_list_declaration = shared.path_list_declaration() if shared is not None else None
     if path_list_declaration is not None:
         body_blocks.insert(0, path_list_declaration)

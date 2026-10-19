@@ -63,6 +63,7 @@ def _make_plan(root: Path, name: str, with_sizing: bool = True) -> None:
     rec = intake_record(name=name, turn={"text": "do the thing", "turn": 1}, today="2026-10-16")
     rec["plan"] = PLANS[name]
     rec["baton"] = baton
+    rec.setdefault("interaction_mode", "pm")
     (root / sizing).parent.mkdir(parents=True, exist_ok=True)
     (root / sizing).write_text(yaml.safe_dump(rec, sort_keys=False), encoding="utf-8", newline="\n")
     (root / baton).parent.mkdir(parents=True, exist_ok=True)
@@ -200,6 +201,130 @@ def test_halted_and_fanout_together_refuse(repo):
     _make_plan(repo, "a")
     out = _call(repo, [PLANS["a"]], **{HALTED_RECORD_PARAM: {"halted": "refusal"}})
     assert out["committed"] is False and out["refused"] == "mode-ambiguous"
+
+
+def _parent_sizing(root: Path, mode) -> str:
+    rel = "state/sizings/2026-10-16-parent.yaml"
+    (root / rel).parent.mkdir(parents=True, exist_ok=True)
+    (root / rel).write_text(yaml.safe_dump({"interaction_mode": mode} if mode else {"name": "p"}), encoding="utf-8")
+    return rel
+
+
+def _call_spec(root: Path, plans, **spec_extra) -> dict:
+    params = {"script_path": "run.mjs", "run_id": RUN, FANOUT_RECORD_PARAM: {"plans": plans, **spec_extra}}
+    return terminal_commit._handler(params, repo_root=root / ".git")
+
+
+def test_interaction_mode_of_the_parent_sizing_reaches_the_fanout_params(repo, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import ask_fanout
+
+    seen: dict = {}
+
+    def fake(params, root):
+        seen.update(params)
+        return {"exit_code": 0, "runs": [], "ready": [], "fire": []}
+
+    monkeypatch.setattr(ask_fanout, "fanout", fake)
+    _make_plan(repo, "a")
+    _record(repo)
+    out = _call_spec(repo, [PLANS["a"]], **{c.PARENT_SIZING_KEY: _parent_sizing(repo, "pm")})
+    assert out["committed"] is True, out
+    assert seen[c.INTERACTION_MODE_PARAM] == "pm"
+
+
+def test_interaction_mode_is_not_passed_when_the_parent_records_none(repo, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import ask_fanout
+
+    seen: dict = {}
+    monkeypatch.setattr(ask_fanout, "fanout", lambda p, r: seen.update(p) or {"exit_code": 0, "ready": [], "runs": []})
+    _make_plan(repo, "a")
+    _record(repo)
+    _call_spec(repo, [PLANS["a"]], **{c.PARENT_SIZING_KEY: _parent_sizing(repo, None)})
+    assert c.INTERACTION_MODE_PARAM not in seen
+
+
+@pytest.mark.parametrize("parent", ["state/sizings/missing.yaml", "docs/plans/2026-10-16-a.md", "../x.yaml", 5])
+def test_bad_parent_sizing_refuses_before_the_commit_interaction_mode(repo, parent):
+    _make_plan(repo, "a")
+    _record(repo)
+    head = _git(["rev-parse", "HEAD"], repo)
+    out = _call_spec(repo, [PLANS["a"]], **{c.PARENT_SIZING_KEY: parent})
+    assert out["committed"] is False and out["refused"] == "fanout-parent-sizing"
+    assert _git(["rev-parse", "HEAD"], repo) == head
+
+
+@pytest.mark.parametrize("bad", ["x", [{"reason": "nope", "plan": "p"}], [{"reason": "pulled"}], [3]])
+def test_malformed_not_fired_refuses_before_the_commit(repo, bad):
+    _make_plan(repo, "a")
+    _record(repo)
+    head = _git(["rev-parse", "HEAD"], repo)
+    out = _call_spec(repo, [PLANS["a"]], **{c.NOT_FIRED_KEY: bad})
+    assert out["committed"] is False and out["refused"] == "fanout-not-fired"
+    assert _git(["rev-parse", "HEAD"], repo) == head
+
+
+def test_not_fired_echoes_upstream_entries_and_names_after_plans(repo):
+    _make_plan(repo, "a")
+    _make_plan(repo, "b")
+    _record(repo)
+    upstream = {"plan": "docs/plans/2026-10-16-hq-01.md", "reason": "pulled", "wave": 0}
+    out = _call_spec(
+        repo, [PLANS["a"], PLANS["b"]], waves={PLANS["a"]: 0, PLANS["b"]: 1}, **{c.NOT_FIRED_KEY: [upstream]},
+    )
+    assert out["committed"] is True, out
+    nf = out["fanout"][c.NOT_FIRED_KEY]
+    assert nf[0] == upstream
+    assert [e["plan"] for e in nf[1:]] == [PLANS["b"]]
+    assert nf[1]["reason"] == "after" and nf[1]["wave"] == 1 and "ask-" in nf[1]["detail"]
+    assert all(e["reason"] in c.NOT_FIRED_REASONS for e in nf)
+    fired = {r["sizing"] for r in out["fanout"]["ready"]}
+    assert fired == {"state/sizings/2026-10-16-a.yaml"}
+
+
+def test_not_fired_names_every_plan_when_fanout_refuses(repo, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import ask_fanout
+
+    monkeypatch.setattr(ask_fanout, "fanout", lambda p, r: {"exit_code": 1, "applied": False, "error": "boom"})
+    _make_plan(repo, "a")
+    _make_plan(repo, "b")
+    _record(repo)
+    out = _call_spec(repo, list(PLANS.values()))
+    assert out["committed"] is True
+    nf = out["fanout"][c.NOT_FIRED_KEY]
+    assert [(e["plan"], e["reason"], e["detail"]) for e in nf] == [(p, "fanout-refused", "boom") for p in PLANS.values()]
+
+
+def test_not_fired_names_a_queued_plan(repo, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import ask_fanout
+
+    monkeypatch.setattr(
+        ask_fanout, "fanout",
+        lambda p, r: {"exit_code": 0, "ready": [], "runs": [{"run_id": "r1", "label": "2026-10-16-a"}]},
+    )
+    _make_plan(repo, "a")
+    _record(repo)
+    out = _call_spec(repo, [PLANS["a"]])
+    assert [(e["plan"], e["reason"]) for e in out["fanout"][c.NOT_FIRED_KEY]] == [(PLANS["a"], "queued")]
+
+
+def test_not_fired_names_every_plan_when_nothing_to_commit(repo):
+    _make_plan(repo, "a")
+    _git(["add", "."], repo)
+    _git(["commit", "-q", "-m", "plans"], repo)
+    out = _call_spec(repo, [PLANS["a"]])
+    assert out["nothing_to_commit"] is True, out
+    assert [(e["plan"], e["reason"]) for e in out["fanout"][c.NOT_FIRED_KEY]] == [(PLANS["a"], "nothing-to-commit")]
+
+
+def test_not_fired_names_every_plan_when_the_commit_does_not_land(repo, monkeypatch):
+    from coordinator_core.warm import entry_seam
+
+    monkeypatch.setattr(entry_seam, "reentrant_dispatch", lambda *a, **k: {"committed": False, "error": "gate said no"})
+    _make_plan(repo, "a")
+    _record(repo)
+    out = _call_spec(repo, [PLANS["a"]])
+    assert out["committed"] is False
+    assert [(e["reason"], e["detail"]) for e in out["fanout"][c.NOT_FIRED_KEY]] == [("commit-not-landed", "gate said no")]
 
 
 def test_plan_outside_plans_root_refuses(repo):

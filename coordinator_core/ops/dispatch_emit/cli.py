@@ -108,7 +108,14 @@ from coordinator_core.ops.dispatch_emit.pipeline_inputs import (
 )
 from coordinator_core.ops.dispatch_emit.emit import ScriptOverCapError
 from coordinator_core.ops.dispatch_emit.sibling_split import WidthOverCapError
-from coordinator_core.ops.dispatch_emit.inventory_mint import NothingUnlandedError, part_run_id
+from coordinator_core.ops.dispatch_emit.inventory_mint import (
+    NothingUnlandedError,
+    earlier_outputs,
+    last_minted_spine,
+    part_run_id,
+    part_script_name,
+    spine_path_for,
+)
 from coordinator_core.ops.dispatch_emit.ask_contract import ASK_SOURCES, STOP_AFTER_PLAN
 from coordinator_core.ops.dispatch_emit.sizing_fire import SizingFireRefused, SizingHandBack
 from coordinator_core.ops.dispatch_emit.mark_landed import (
@@ -311,6 +318,13 @@ def _build_parser() -> argparse.ArgumentParser:
         help="research route: one scout over every --ask question",
     )
     parser.add_argument(
+        "--fanout",
+        choices=("auto", "split"),
+        default=None,
+        help="pipeline and research routes: auto groups small fan-out units two per agent (default); "
+        "split keeps one agent per unit",
+    )
+    parser.add_argument(
         "--sizing",
         default=None,
         help="existing sizing under state/sizings/; the same entry as --ask --sizing",
@@ -444,7 +458,7 @@ def _build_parser() -> argparse.ArgumentParser:
         metavar="SCRIPT",
         help="the emitted script to edit, with --mark-landed",
     )
-    parser.add_argument("--out", dest="out_path", default=None, help="path to write the emitted .mjs script to")
+    parser.add_argument("--out", dest="out_path", default=None, help="path to write the emitted .mjs script to; when the script splits, parts are written as <run_id>-pN siblings and --out is reported as ignored")
     parser.add_argument(
         "--queue",
         action="append",
@@ -642,8 +656,9 @@ def _build_parser() -> argparse.ArgumentParser:
         dest="ask_source",
         choices=list(ASK_SOURCES),
         default=None,
-        help="ask route: 'relayed' marks the --ask text as an agent's relay, not the PM's words "
-        "(kept under its own heading, never the PM-intent block); default pm; --ask only",
+        help="ask route: 'pm' marks the --ask text as the PM's words, verified against the "
+        "session's recorded turns (refused when none matches, flagged when no log resolves); "
+        "'relayed' or absent: an agent's text, kept under its own heading; --ask only",
     )
     parser.add_argument(
         "--research",
@@ -869,10 +884,55 @@ def _print_workflow_invocation(
             )
 
 
-def _part_out_path(out_path: str, index: int) -> str:
-    out = Path(out_path)
-    stem = out.name[: -len(_REQUIRED_OUT_SUFFIX)]
-    return str(out.with_name(f"{part_run_id(stem, index)}{_REQUIRED_OUT_SUFFIX}"))
+def _print_accounting(accounting: "Optional[dict]", landed_reconciled: "Optional[dict]") -> None:
+    """Print the inventory accounting summary and one `edited` line per plan file to stderr.
+
+    A reply with no `inventory_accounting` (a non-inventory or review-only emit) prints the
+    `edited` lines alone, so a plan edit is never silent."""
+    from coordinator_core.ops.dispatch_emit import inventory_accounting
+
+    landed = landed_reconciled or {}
+    if accounting:
+        lines = inventory_accounting.summary_lines(accounting, landed)
+    else:
+        lines = [f"edited {plan}: {', '.join(rows)} -> coded" for plan, rows in landed.items()]
+    for line in lines:
+        print(f"emit-dispatch-workflow: {line}" if not line.startswith(" ") else line, file=sys.stderr)
+
+
+def _merge_landed(results: "list[dict]") -> dict:
+    """Union the parts' `landed_reconciled` maps: plan path to its row ids, order kept, no repeats."""
+    merged: "dict[str, list]" = {}
+    for result in results:
+        for plan, rows in (result.get("landed_reconciled") or {}).items():
+            bucket = merged.setdefault(plan, [])
+            bucket.extend(r for r in rows if r not in bucket)
+    return merged
+
+
+def _clear_earlier_outputs(inventory_path: str, live: "list[Path]") -> None:
+    """Delete this inventory's regenerable spine and script files that this emit did not write.
+
+    Matches only `earlier_outputs` names (this run id, its tranches and parts) beside the
+    record; tranche records are inputs and are named, never deleted. Sibling tranche spines
+    of the same base are deleted too: only this emit's spines survive."""
+    keep = {p.resolve() for p in live}
+    derived, records = earlier_outputs(Path(inventory_path))
+    for stale in derived:
+        if stale.resolve() in keep:
+            continue
+        try:
+            stale.unlink()
+        except OSError:
+            print(f"emit-dispatch-workflow: could not remove stale {stale}", file=sys.stderr)
+            continue
+        print(f"emit-dispatch-workflow: removed stale earlier output {stale}", file=sys.stderr)
+    if records:
+        print(
+            "emit-dispatch-workflow: earlier tranche records kept (inventory inputs): "
+            + ", ".join(str(r) for r in records),
+            file=sys.stderr,
+        )
 
 
 def _emit_inventory_parts(
@@ -891,17 +951,14 @@ def _emit_inventory_parts(
     tranche_record = getattr(over, "tranche_inventory", None)
     if tranche_record:
         params = {**params, "inventory_path": str(tranche_record)}
-    if not params.get("output_path"):
-        from coordinator_core.ops.read_frontmatter_field import read_frontmatter_field
+    from coordinator_core.ops.read_frontmatter_field import read_frontmatter_field
 
-        # The spine run id is minted from this record, so the script name is keyed off
-        # the same record (tranche suffix included), never the pre-tranche inventory.
-        inventory = Path(params["inventory_path"])
-        run_id = read_frontmatter_field(str(inventory), "run_id") or inventory.stem
-        params = {
-            **params,
-            "output_path": str(inventory.parent / f"{run_id}{_REQUIRED_OUT_SUFFIX}"),
-        }
+    # The spine run id is minted from this record, so the part scripts are named from the
+    # same record (tranche suffix included): spine, script and run label share one stem.
+    inventory = Path(params["inventory_path"])
+    run_id = read_frontmatter_field(str(inventory), "run_id") or inventory.stem
+    requested_out = params.get("output_path")
+    out_dir = Path(requested_out).parent if requested_out else inventory.parent
     while True:
         results: list = []
         try:
@@ -909,7 +966,7 @@ def _emit_inventory_parts(
                 part_params = {
                     **params,
                     "inventory_part": [index, count],
-                    "output_path": _part_out_path(params["output_path"], index),
+                    "output_path": str(out_dir / part_script_name(run_id, index)),
                 }
                 part_result = _dispatch_emit(part_params, repo_root=repo_root)
                 part_result["part"] = f"{index}/{count}"
@@ -917,13 +974,34 @@ def _emit_inventory_parts(
             break
         except ScriptOverCapError:
             count += 1
+    part_accountings = [r["inventory_accounting"] for r in results if r.get("inventory_accounting")]
+    merged_accounting = None
+    if part_accountings:
+        from coordinator_core.ops.dispatch_emit import inventory_accounting
+
+        merged_accounting = inventory_accounting.merge_parts(part_accountings)
+    total = f" from {merged_accounting['inventory_rows']} inventory rows" if merged_accounting else ""
     print(
         f"emit-dispatch-workflow: inventory over the {_emit._WORKFLOW_SCRIPT_BYTE_CAP}-byte "
-        f"Workflow script cap ({over.row_count} rows); emitted {count} parts. "
+        f"Workflow script cap ({over.row_count} minted rows{total}); emitted {count} parts. "
         "Fire them in order, each only after the previous run has landed.",
         file=sys.stderr,
     )
-    print(json.dumps({"parts": results, "admission": admission_record}, indent=2, sort_keys=True))
+    document = {"parts": results, "admission": admission_record}
+    if requested_out:
+        document["out_ignored"] = {"requested": requested_out, "parts": [r["path"] for r in results]}
+        print(
+            f"emit-dispatch-workflow: --out {requested_out} was not written: the inventory split "
+            f"into {count} parts, named by run id {run_id}-pN beside it: "
+            + ", ".join(r["path"] for r in results),
+            file=sys.stderr,
+        )
+    if all(r["ok"] for r in results):
+        live = [Path(r["path"]) for r in results]
+        live += [spine_path_for(inventory, part_run_id(run_id, i)) for i in range(1, count + 1)]
+        _clear_earlier_outputs(str(inventory), live)
+    _print_accounting(merged_accounting, _merge_landed(results))
+    print(json.dumps(document, indent=2, sort_keys=True))
     for part_result in results:
         _print_workflow_invocation(part_result, is_queue_route=False, repo_root=repo_root)
     if fire:
@@ -1667,6 +1745,8 @@ def main(argv: "Optional[list[str]]" = None) -> int:
         params["cross_repo_approved"] = True
     if args.out_path:
         params["output_path"] = args.out_path
+    if args.fanout:
+        params["fanout_group"] = args.fanout
     if is_ask_route:
         params["ask"] = args.ask if args.ask is not None else True
         if args.sizing:
@@ -1956,6 +2036,9 @@ def main(argv: "Optional[list[str]]" = None) -> int:
         print(f"emit-dispatch-workflow: ERROR — {exc}", file=sys.stderr)
         return EXIT_DATA_ERROR
 
+    if args.inventory and not args.lanes and args.review_only is None and result.get("ok") and result.get("path"):
+        minted = last_minted_spine()
+        _clear_earlier_outputs(args.inventory, [Path(result["path"])] + ([minted] if minted else []))
     result["admission"] = admission_record
     if regenerable_dirty:
         result["regenerable_dirty"] = regenerable_dirty
@@ -2000,6 +2083,9 @@ def main(argv: "Optional[list[str]]" = None) -> int:
             "re-emit with --only-incomplete once the hold clears",
             file=sys.stderr,
         )
+
+    if not split_research and (result.get("inventory_accounting") or result.get("landed_reconciled")):
+        _print_accounting(result.get("inventory_accounting"), result.get("landed_reconciled"))
 
     for key in ("batons", "uncommitted"):
         if key in result:

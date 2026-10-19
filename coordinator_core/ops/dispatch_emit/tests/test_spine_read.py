@@ -716,7 +716,7 @@ def test_closure_detail_names_em_owed_root_not_gated(tmp_path):
 
 
 def test_closure_detail_names_memo_send_root_not_gated(tmp_path):
-    entry = _closure_detail(tmp_path, "  kind: memo-send\n  receipt: .coordinator-local/memo-outbox/sent/slug-x.md\n")
+    entry = _closure_detail(tmp_path, "  kind: memo-send\n  memo_to: coordinator-content-repo\n  receipt: .coordinator-local/memo-outbox/sent/slug-x.md\n")
     assert entry["reason"] == "withheld_by_owed_dependency"
     assert (entry["root"], entry["root_reason"]) == ("C1", "memo-send")
     assert "; root C1 is owed by the EM (" in entry["detail"]
@@ -1145,3 +1145,12 @@ def test_deferred_until_row_is_withheld_like_deferred_true(tmp_path):
     by_id = {e["id"]: e for e in exclusions}
     assert by_id["C9"]["reason"] == "deferred"
     assert by_id["C9f"]["reason"] == "withheld_by_deferred_dependency"
+
+
+def test_memo_close_route_names_every_delivered_elsewhere_field():
+    from coordinator_core.ops.dispatch_emit.spine_read import memo_close_route
+
+    for slug in ("topic", None):
+        route = memo_close_route("C6", slug)
+        for field in ("disposition delivered_elsewhere", "delivered_via memo", "disposition_ref", "disposition_detail"):
+            assert field in route

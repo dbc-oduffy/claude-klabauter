@@ -106,7 +106,7 @@ def _bind(root: Path, run) -> list[str]:
 
 
 def _disjoint(n: int = 2) -> list[dict]:
-    return [{"ask": f"job {i}", "label": f"job-{i}", "writes": [f"pkg/m{i}.py"]} for i in range(n)]
+    return [{"ask": f"job {i}", "source": "pm", "label": f"job-{i}", "writes": [f"pkg/m{i}.py"]} for i in range(n)]
 
 
 def test_a_disjoint_pair_replies_parent_and_runs_and_fires_one_with_the_other_listed(repo):
@@ -273,7 +273,7 @@ def test_slices_arm_ledgers_union_exactly_to_the_parent_register(repo):
 
 def test_a_mixed_relayed_and_pm_submission_records_each_slice_origin(repo):
     env = _submit(repo, {"asks": [{"ask": "relay job", "source": "relayed", "writes": ["a.py"]},
-                                  {"ask": "pm job", "writes": ["b.py"]}]})
+                                  {"ask": "pm job", "source": "pm", "writes": ["b.py"]}]})
     assert _hso(env)["permissionDecision"] == "allow", env
     parent = _parent(repo, _reply_json(env)["parent_id"])
     relayed_run, pm_run = parent.runs

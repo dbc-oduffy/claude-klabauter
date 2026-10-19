@@ -8,7 +8,8 @@ away. The baton held only ``first_prompt``, capped by its writer; a session
 that wanted turn 7 verbatim, or the launch ask uncut for a ``## PM brief``, had
 nowhere to get it. ``baton.pm_turn_append`` records each human prompt as it
 arrives; ``baton.pm_turns`` returns one turn, a range, or all of them as text
-ready to paste or pipe. Turn 0 is the default extract.
+ready to paste or pipe. Turn 0 is the default extract. The log verifies a
+pm-marked engine ask (``verify_pm_ask``); it never makes an unmarked one PM.
 
 WHY A SIBLING FILE, NOT A BATON FIELD. ``pm_turns.jsonl`` lives beside
 ``baton.json`` in ``<git-common-dir>/coordinator-sessions/<sid>/``. The baton
@@ -275,6 +276,39 @@ def quotes_turn(intent: str, turn_text: str) -> bool:
     n = _QUOTE_RUN_WORDS
     runs = {" ".join(have[i:i + n]) for i in range(len(have) - n + 1)}
     return any(" ".join(turn[i:i + n]) in runs for i in range(len(turn) - n + 1))
+
+
+def is_turn_excerpt(ask: str, turn_text: str) -> bool:
+    """True when `ask` is the PM's own words from `turn_text`: its words equal the turn's, or
+    form a contiguous run of it at least `_QUOTE_RUN_WORDS` long (case and punctuation ignored).
+    An ask carrying the whole turn plus other words is not an excerpt."""
+    have, turn = _words(ask), _words(turn_text)
+    if not have or len(have) > len(turn):
+        return False
+    if have == turn:
+        return True
+    if len(have) < _QUOTE_RUN_WORDS:
+        return False
+    return " " + " ".join(have) + " " in " " + " ".join(turn) + " "
+
+
+def verify_pm_ask(ask: str, session_id: Optional[str] = None,
+                  cwd: Optional[str] = None) -> Dict[str, Any]:
+    """Check a pm-marked `ask` against the session's turn log: ``{verdict, turn}``.
+    ``matched``: the newest recorded turn `ask` quotes verbatim (`is_turn_excerpt`), as
+    ``{turn, ts, text}``. ``unmatched``: turns exist and none is quoted. ``unverifiable``: no
+    session id, no log file, or no loaded turn (``turn`` is None for both non-matches)."""
+    sid = session_id or resolve_current_session_id(Path(cwd) if cwd else None)
+    path = log_path(sid, cwd) if sid else None
+    turns = _load(path) if path is not None and path.is_file() else []
+    if not turns:
+        return {"verdict": "unverifiable", "turn": None}
+    if isinstance(ask, str) and _words(ask):
+        for entry in reversed(turns):
+            if is_turn_excerpt(ask, entry["prompt"]):
+                return {"verdict": "matched",
+                        "turn": {"turn": entry["turn"], "ts": entry.get("ts"), "text": entry["prompt"]}}
+    return {"verdict": "unmatched", "turn": None}
 
 
 def bound_window(intent: Optional[str], session_id: Optional[str] = None, cwd: Optional[str] = None,

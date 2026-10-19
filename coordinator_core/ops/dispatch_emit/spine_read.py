@@ -269,6 +269,22 @@ def _unlanded_plan_edge(
     )
 
 
+def in_run_edge_key(edge) -> Optional[tuple]:
+    """``(plan, chunk)`` of a chunk-form ``depends_on_plan`` edge, else ``None``."""
+    if isinstance(edge, dict) and edge.get("plan") and edge.get("chunk"):
+        return (str(edge["plan"]).replace("\\", "/"), str(edge["chunk"]))
+    return None
+
+
+def _without_in_run_edges(raw: dict, in_run: frozenset) -> dict:
+    """``raw`` with the ``depends_on_plan`` edges that land in ``in_run`` dropped."""
+    edges = raw.get("depends_on_plan")
+    if not in_run or not isinstance(edges, list):
+        return raw
+    kept = [e for e in edges if in_run_edge_key(e) not in in_run]
+    return raw if len(kept) == len(edges) else {**raw, "depends_on_plan": kept}
+
+
 class PlanEdgeResolution(NamedTuple):
     """``named_row`` the predecessor row (canonical disposition) of a chunk edge,
     None for a status edge; ``hold`` the detail while the edge is unsatisfied,
@@ -436,12 +452,14 @@ def memo_close_route(row_id: str, slug: Optional[str]) -> str:
     if slug is None:
         return (
             f"once sent, close it: `plan.tasks.mutate` verb resolve, id {row_id}, disposition "
-            f"delivered_elsewhere, delivered_via memo, disposition_ref {MEMO_OUTBOX_RELDIR}/sent/<slug>.md "
+            f"delivered_elsewhere, delivered_via memo, disposition_ref {MEMO_OUTBOX_RELDIR}/sent/<slug>.md, "
+            "disposition_detail <what was sent and to whom> "
             "(declare receipt: on the row so the receipt names the slug)"
         )
     return (
         f"once sent, close it: `plan.tasks.mutate` verb resolve, id {row_id}, disposition "
-        f"delivered_elsewhere, delivered_via memo, disposition_ref {MEMO_OUTBOX_RELDIR}/sent/{slug}.md"
+        f"delivered_elsewhere, delivered_via memo, disposition_ref {MEMO_OUTBOX_RELDIR}/sent/{slug}.md, "
+        "disposition_detail <what was sent and to whom>"
     )
 
 
@@ -608,6 +626,10 @@ class SpineReadError(ValueError):
     — this module does not attempt to emit against a spine it could not
     locate or parse.
     """
+
+
+class MemoRowNoReceiverError(SpineReadError):
+    """A dispatchable, unsent memo-send row names no ``memo_to:`` receiver."""
 
 
 class MemoRowNoReceiptError(SpineReadError):
@@ -966,8 +988,13 @@ def read_spine(
     *,
     schema_preflight: bool = True,
     cleared_gate_owners: frozenset = frozenset(),
+    in_run_plan_chunks: frozenset = frozenset(),
 ) -> list[EmitterRow]:
     """Read `plan_path`'s task-spine and return normalized ``EmitterRow`` objects.
+
+    ``in_run_plan_chunks`` names ``(repo-relative plan path, chunk id)`` pairs minted in
+    the same run: a row-level ``depends_on_plan`` chunk edge onto one of them orders
+    instead of withholding (the mint turns it into a ``depends_on`` edge).
 
     ``cleared_gate_owners`` names ``external_gate`` ``owner_repo`` values this call treats as the
     run's own repo: their gates withhold nothing. Per-call, so concurrent reads never share it.
@@ -1299,6 +1326,12 @@ def read_spine(
             else:
                 memo_slug = slug
                 memo_delivered = memo_receipt_exists(_repo_root_of(plan_path), slug)
+                to = raw.get("memo_to")
+                if not memo_delivered and (not isinstance(to, str) or not to.strip()):
+                    raise MemoRowNoReceiverError(
+                        f"row {raw.get('id')!r} is a memo-send row but names no memo_to: "
+                        "add `memo_to: <receiver>` to the row"
+                    )
         em_discharged = None
         if em_discharge_eligible(raw, tuple(frontmatter_gates.get(raw.get("id"), ()))):
             if discharges is None:
@@ -1317,7 +1350,10 @@ def read_spine(
             or em_performed
         ):
             plan_hold = plan_level_hold or _unlanded_plan_edge(
-                raw, plan_path, plan_edge_root, plan_edge_cache
+                _without_in_run_edges(raw, in_run_plan_chunks),
+                plan_path,
+                plan_edge_root,
+                plan_edge_cache,
             )
         if disposition is not None and disposition not in KNOWN_DISPOSITIONS:
             raise UnknownDispositionError(

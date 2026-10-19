@@ -181,50 +181,32 @@ def _diverge(tmp_path: Path, origin: Path, clone: Path, filename: str, upstream:
     _git(other, "push", "-q", "origin", "main")
 
 
-def test_clean_index_prints_no_spool_line(tmp_path, capsys, monkeypatch):
+def test_clean_index_merges(tmp_path, monkeypatch):
     origin, clone = _make_origin_and_clone(tmp_path)
     _diverge(tmp_path, origin, clone, "upstream.txt", "more\n")
     monkeypatch.chdir(clone)
     assert main([]) == 0
-    assert "SPOOL-COMMITTED" not in capsys.readouterr().out
 
 
-def test_staged_spool_is_committed_then_merge_proceeds(tmp_path, capsys, monkeypatch):
+def test_staged_spool_shaped_path_is_refused_and_nothing_committed(tmp_path, capsys, monkeypatch):
     origin, clone = _make_origin_and_clone(tmp_path)
     _diverge(tmp_path, origin, clone, "upstream.txt", "more\n")
     spool = clone / "state" / "block-discharge"
     spool.mkdir(parents=True)
     (spool / "s1.jsonl").write_text("{}\n")
-    (spool / "s2.jsonl").write_text("{}\n")
-    _git(clone, "add", "state/block-discharge")
+    _git(clone, "add", "-f", "state/block-discharge")
+    head_before = _git(clone, "rev-parse", "HEAD").stdout
 
     monkeypatch.chdir(clone)
     rc = main([])
-    out = capsys.readouterr().out
-    assert rc == 0
-    assert out.splitlines()[0] == "SPOOL-COMMITTED 2"
-    assert "RECONCILED-MERGE" in out
-    assert _git(clone, "status", "--porcelain=v1").stdout.strip() == ""
-    subjects = _git(clone, "log", "--format=%s", "-3", "--no-merges").stdout
-    assert "block-discharge: commit staged spool so reconcile can merge" in subjects
-
-
-def test_spool_appended_after_staging_commits_worktree_bytes(tmp_path, capsys, monkeypatch):
-    origin, clone = _make_origin_and_clone(tmp_path)
-    _diverge(tmp_path, origin, clone, "upstream.txt", "more\n")
-    spool = clone / "state" / "block-discharge"
-    spool.mkdir(parents=True)
-    (spool / "s1.jsonl").write_text("{}\n")
-    _git(clone, "add", "state/block-discharge")
-    with (spool / "s1.jsonl").open("a") as handle:
-        handle.write('{"later": 1}\n')
-
-    monkeypatch.chdir(clone)
-    rc = main([])
-    assert rc == 0
-    assert "SPOOL-COMMITTED 1" in capsys.readouterr().out
-    assert _git(clone, "status", "--porcelain=v1").stdout.strip() == ""
-    assert '{"later": 1}' in _git(clone, "show", "HEAD^1:state/block-discharge/s1.jsonl").stdout
+    captured = capsys.readouterr()
+    assert rc == 3
+    assert "RECONCILE-MERGE-NOT-STARTED" in captured.out
+    assert "SPOOL-COMMITTED" not in captured.out
+    assert captured.err.split("STAGED-PATHS\n", 1)[1].splitlines()[:1] == [
+        "state/block-discharge/s1.jsonl"
+    ]
+    assert _git(clone, "rev-parse", "HEAD").stdout == head_before
 
 
 def test_staged_non_spool_path_is_named_and_nothing_committed(tmp_path, capsys, monkeypatch):
@@ -234,7 +216,7 @@ def test_staged_non_spool_path_is_named_and_nothing_committed(tmp_path, capsys, 
     spool.mkdir(parents=True)
     (spool / "s1.jsonl").write_text("{}\n")
     (clone / "peer.txt").write_text("peer\n")
-    _git(clone, "add", "state/block-discharge", "peer.txt")
+    _git(clone, "add", "-f", "state/block-discharge", "peer.txt")
     head_before = _git(clone, "rev-parse", "HEAD").stdout
 
     monkeypatch.chdir(clone)

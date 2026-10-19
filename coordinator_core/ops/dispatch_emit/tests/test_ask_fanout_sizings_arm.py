@@ -33,8 +33,10 @@ def _plan(repo, rel):
     )
 
 
-def _sizing(repo, name, plan=PLAN_A, marker=None):
+def _sizing(repo, name, plan=PLAN_A, marker=None, mode="pm"):
     rec = intake_record(name=name, turn={"text": "do the thing", "turn": 1}, today="2026-10-16")
+    if mode:
+        rec["interaction_mode"] = mode
     if plan:
         rec["plan"] = plan
     if marker:
@@ -137,3 +139,41 @@ def test_stamped_sizing_validates_and_resumes_its_plan(repo):
     plan = resumable_plan(doc, a, repo)
     assert plan.plan_rel == PLAN_A and plan.incomplete == ("A1",)
     assert (repo / c.parent_record_rel(out["parent_id"])).is_file()
+
+
+def _doc(repo, rel):
+    return yaml.safe_load((repo / rel).read_text(encoding="utf-8"))
+
+
+def test_interaction_mode_absent_is_stamped_from_the_inherited_param(repo):
+    a = _sizing(repo, "a", PLAN_A, mode=None)
+    out = mod.fanout({"sizings": [{"sizing": a}], c.INTERACTION_MODE_PARAM: "ceo"}, repo)
+    assert out["exit_code"] == 0, out
+    doc = _doc(repo, a)
+    assert doc["interaction_mode"] == "ceo"
+    assert validate_frontmatter(doc, mod._SIZING_SCHEMA_PATH) == []
+
+
+def test_interaction_mode_recorded_is_kept_never_overwritten(repo):
+    a = _sizing(repo, "a", PLAN_A, mode="hands-on")
+    out = mod.fanout({"sizings": [{"sizing": a}], c.INTERACTION_MODE_PARAM: "ceo"}, repo)
+    assert out["exit_code"] == 0, out
+    assert _doc(repo, a)["interaction_mode"] == "hands-on"
+
+
+def test_interaction_mode_neither_recorded_nor_inherited_refuses_and_writes_nothing(repo):
+    a = _sizing(repo, "a", PLAN_A, mode=None)
+    before = _snapshot(repo)
+    out = mod.fanout({"sizings": [{"sizing": a}]}, repo)
+    assert out["exit_code"] == 1 and out["applied"] is False
+    assert "records no interaction_mode" in out["error"] and a in out["error"]
+    assert _snapshot(repo) == before
+
+
+@pytest.mark.parametrize("bad", ["bogus", "", 3])
+def test_interaction_mode_bad_value_refuses_and_writes_nothing(repo, bad):
+    a = _sizing(repo, "a", PLAN_A, mode=None)
+    before = _snapshot(repo)
+    out = mod.fanout({"sizings": [{"sizing": a}], c.INTERACTION_MODE_PARAM: bad}, repo)
+    assert out["exit_code"] == 1 and out["applied"] is False
+    assert _snapshot(repo) == before

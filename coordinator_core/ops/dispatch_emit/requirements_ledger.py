@@ -1098,7 +1098,8 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     when the sizing's plan pinned rows the register no longer matches, and `warning` plus
     `unclaimed_rows` when its register_claims omit register rows; `item` is the new row id
     (`Q<n>` while a raw ask's sizing is not yet minted), `run_live` is false once the run's commit
-    token is redeemed or absent (nothing will read it). A refused request replies `{"error": str}`.
+    token is redeemed or absent, or the run holds a `halted` marker (nothing will read it: the
+    marker is stamped `revised_at` and the reply names the fresh refire). A refused request replies `{"error": str}`.
     """
     if repo_root is None:
         return {"error": "workflow.revise requires repo_root"}
@@ -1121,9 +1122,11 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             "all_of_pm_ask": False, "sizing": None, "ledger": None, "run_live": False, "held": True,
             "note": "run not emitted yet: the revision is held and folds into the ledger at emit.",
         }
-    from coordinator_core.ops.dispatch_emit import run_token
+    from coordinator_core.ops.dispatch_emit import halted_run, run_token
 
-    live = run_token.is_live(root, params["run_id"])
+    halted_run.mark_revised(dir_, _now())
+    halted = halted_run.revised_halt(dir_) is not None
+    live = run_token.is_live(root, params["run_id"]) and not halted
     out = {
         "ok": True,
         "run_id": params["run_id"],
@@ -1164,7 +1167,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     if warnings:
         out["warning"] = " ".join(warnings) + " Re-plan against the register before the run spends further."
     if not live:
-        out.update(_refire(ledger.sizing_rel, root, unclaimed_result))
+        out.update(_refire(ledger.sizing_rel, root, unclaimed_result, halted=halted))
     return out
 
 
@@ -1221,10 +1224,10 @@ def _unclaimed_rows(root: Path, sizing_rel: Optional[str]) -> tuple[Optional[str
 
 def _refire(
     sizing_rel: Optional[str], root: Optional[Path] = None,
-    unclaimed: Optional[tuple[Optional[str], list[str]]] = None,
+    unclaimed: Optional[tuple[Optional[str], list[str]]] = None, halted: bool = False,
 ) -> dict:
     """`{next, note}` for a revision no stage will read: the exact submit call that starts a run which
-    will. When the sizing's plan omits register rows, the refire would fire that stale plan: the
+    will. `halted` words the note for a halted run, whose resume would replay its stages. When the sizing's plan omits register rows, the refire would fire that stale plan: the
     reply names the plan-revision step first and holds the fire call as `then`."""
     from coordinator_core.warp_fire import fire_command
 
@@ -1239,5 +1242,8 @@ def _refire(
         }
     return {
         "next": {"kind": "refire", "call": fire_command(sizing_rel)},
-        "note": "run finished: nothing reads this revision until a refire.",
+        "note": (
+            "run halted: resumeFromRunId replays its stages and never reads this revision; refire fresh with next.call."
+            if halted else "run finished: nothing reads this revision until a refire."
+        ),
     }

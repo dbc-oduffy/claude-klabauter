@@ -17,8 +17,11 @@ or the fan-out, and either beside `{sizing}` is refused) (each ask a
 separate sibling run via `dispatch.ask_fanout`; the call fires the first ready run and the allow reason
 carries `{parent_id, runs}` plus the other ready runs' fire calls; a one-element array is an `ask`; a
 slice `{sizing}` is denied until its `after` predecessors land and while its parent is at budget), optional `repo` (absolute path; else the payload
-cwd's repo, or for an ask whose absolute `context` lies in another registered repo, that repo), optional `source: "pm" | "relayed"` (absent is `pm`; on `asks` it is the default for items naming
-no `source` of their own; a relayed ask is forwarded to the engine as `ask_source: "relayed"`), optional EM brief beside either arm
+cwd's repo, or for an ask whose absolute `context` lies in another registered repo, that repo), optional `source: "pm" | "relayed"` (a chosen source is forwarded to the engine verbatim as `ask_source`; absent, the ask runs relayed
+(AI-derived) with no turn-log lookup and the allow reason says so; only `source: "pm"` makes it the PM's
+words, which the engine verifies against the session's recorded turns (refused when contradicted, flagged
+when no log resolves); on `asks` it is the default for items naming no `source` of their own; a redirected
+root passes `session_root`, the submitting session's repo, so the log is found for that verification), optional EM brief beside either arm
 (`brief` inline text, `brief_file` repo path, `context` path or list of paths; carried to the emit
 op's `ask_brief` / `ask_brief_file` / `ask_context`, whose refusal is the deny reason), optional `cross_repo_approved: true` (the
 PM's local cross-repo assent; implied on a remote venue), optional `supersedes: "<held run id>"` (on `ask` / `sizing`
@@ -442,7 +445,7 @@ def evaluate(
         return _refuse(asks_refusal)
     if sum(x is not None for x in (ask, sizing_rel, asks)) != 1:
         return _refuse("Submit exactly one of ask, sizing, asks.")
-    from coordinator_core.ops.dispatch_emit.ask_contract import ASK_SOURCE_RELAYED, ASK_SOURCES
+    from coordinator_core.ops.dispatch_emit.ask_contract import ASK_SOURCES
 
     route_pref, em_rationale, route_refusal = _call_preference(payload["tool_input"], sizing_rel, asks is not None)
     if route_refusal:
@@ -477,8 +480,14 @@ def evaluate(
         where = repo_arg or payload.get("cwd") or "the session cwd"
         return _refuse(f"{where} is in no git repo. Add `repo: \"<abs path>\"` to args.")
 
+    target_root = root
     if (ask is not None or asks is not None) and repo_arg is None and brief.get("ask_context"):
         root = _context_home(root, brief["ask_context"])
+    session_root: Optional[str] = None
+    if (ask is not None or asks is not None) and (repo_arg is not None or root != target_root):
+        own = _repo_root(None, payload) if repo_arg and Path(repo_arg).is_absolute() else target_root
+        if own is not None and own.resolve() != root.resolve():
+            session_root = str(own)
     missing = _missing_context(root, brief.get("ask_context", []))
     if missing:
         return _refuse(f"context {missing}: no such file. Pass inline prose as brief or context text, or fix the path.")
@@ -499,6 +508,8 @@ def evaluate(
     reserved_run_id: Optional[str] = None
     if asks is not None:
         fan_params: dict = {"asks": asks, "session_id": session_id or ""}
+        if session_root:
+            fan_params["session_root"] = session_root
         if payload["tool_input"]["args"].get("confirm_split") is True:
             fan_params["confirm_split"] = True
         try:
@@ -569,8 +580,10 @@ def evaluate(
                 params["writes"] = [w.strip() for w in writes]
         else:
             params["ask"] = ask
-            if source == ASK_SOURCE_RELAYED:
-                params["ask_source"] = ASK_SOURCE_RELAYED
+            if source is not None:
+                params["ask_source"] = source
+            if session_root:
+                params["session_root"] = session_root
             if route_pref is not None:
                 params["route_preference"] = route_pref
             if em_rationale is not None:
@@ -647,10 +660,17 @@ def evaluate(
         if isinstance(redirect, dict)
         else ""
     )
+    derived = (
+        " Unmarked: runs as an AI-derived (relayed) ask. PM words go in marked source: pm."
+        if source is None and asks is None and sizing_rel is None
+        else ""
+    )
+    if isinstance(result, dict) and result.get("pm_verification") == "unverifiable":
+        derived += " source pm is unverified: no session turn log resolved."
     envelope = rewrite_input(
         "PreToolUse",
         new_input,
-        f"{lead}Submitted to the engine as run {run_id}.{marked}{carries} {tail}",
+        f"{lead}Submitted to the engine as run {run_id}.{marked}{carries}{derived} {tail}",
     )
     hso = envelope["hookSpecificOutput"]
     hso["permissionDecision"] = "allow"

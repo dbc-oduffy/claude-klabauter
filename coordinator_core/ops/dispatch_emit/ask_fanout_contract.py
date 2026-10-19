@@ -7,7 +7,9 @@ close frees (never one in ``skip``). ``CLOSED_BY_KEY`` is the halted status-file
 evidence that closed the run; ``superseded_rel`` / ``read_superseded_by`` are a held slice's
 write-once supersession marker. ``AskSlice.source`` is a slice's own ask source (None reads as ``pm``);
 ``SLICE_SOURCE_KEY`` is the ``em_analysis`` key a relayed slice sizing carries; ``slice_ask_source``
-reads it back. Reference: docs/reference/multi-ask-submission-contract.md.
+reads it back. ``NOT_FIRED_REASONS`` / ``PLAN_BLITZ_UNFIRED_BUCKETS`` / ``not_fired_entry`` /
+``not_fired_refusal`` are the roadmap fan-out's unfired-plan report vocabulary.
+Reference: docs/reference/multi-ask-submission-contract.md.
 """
 
 from __future__ import annotations
@@ -207,6 +209,69 @@ def slice_ask_source(sizing: Mapping) -> Optional[str]:
         return None
     value = analysis.get(SLICE_SOURCE_KEY)
     return value if isinstance(value, str) else None
+
+
+INTERACTION_MODE_PARAM = "interaction_mode"
+PARENT_SIZING_KEY = "parent_sizing"
+NOT_FIRED_KEY = "not_fired"
+
+NOT_FIRED_REASONS = (
+    "pulled",
+    "replan",
+    "errored",
+    "surfaced-to-pm",
+    "adjudicated",
+    "xs-run",
+    "routed-elsewhere",
+    "absent-from-wave-reply",
+    "wave-not-run",
+    "after",
+    "queued",
+    "fanout-refused",
+    "commit-not-landed",
+    "nothing-to-commit",
+)
+
+# Trap: a bucket DoE adds to the plan-blitz WAVE RESULT later is read by no line until it is listed
+# here, and its plans go unreported.
+PLAN_BLITZ_UNFIRED_BUCKETS = (
+    ("pulled", "pulled"),
+    ("replan", "replan"),
+    ("errored", "errored"),
+    ("surfacedToPm", "surfaced-to-pm"),
+    ("adjudicated", "adjudicated"),
+    ("xsRuns", "xs-run"),
+    ("routedElsewhere", "routed-elsewhere"),
+)
+
+
+def not_fired_entry(
+    *,
+    reason: str,
+    plan: Optional[str] = None,
+    baton: Optional[str] = None,
+    wave: Optional[int] = None,
+    detail: Optional[str] = None,
+) -> dict:
+    """A ``{plan, reason, wave?, baton?, detail?}`` item; keys whose value is None are left out."""
+    if reason not in NOT_FIRED_REASONS:
+        raise ValueError(f"not-fired reason {reason!r} is not in NOT_FIRED_REASONS")
+    candidates = (("plan", plan), ("reason", reason), ("wave", wave), ("baton", baton), ("detail", detail))
+    return {k: v for k, v in candidates if v is not None}
+
+
+def not_fired_refusal(value: Any) -> Optional[str]:
+    """None for a valid not-fired list, else a message naming the first bad index."""
+    if not isinstance(value, (list, tuple)):
+        return f"{NOT_FIRED_KEY} must be a list, got {type(value).__name__}"
+    for i, item in enumerate(value):
+        if not isinstance(item, Mapping):
+            return f"{NOT_FIRED_KEY}[{i}] must be an object"
+        if item.get("reason") not in NOT_FIRED_REASONS:
+            return f"{NOT_FIRED_KEY}[{i}] reason {item.get('reason')!r} is not in NOT_FIRED_REASONS"
+        if not any(isinstance(item.get(k), str) and item.get(k) for k in ("plan", "baton")):
+            return f"{NOT_FIRED_KEY}[{i}] needs a non-empty str plan or baton"
+    return None
 
 
 def ledger_partition(parent_row_ids: Sequence[str], slices: Sequence[AskSlice]) -> Optional[str]:

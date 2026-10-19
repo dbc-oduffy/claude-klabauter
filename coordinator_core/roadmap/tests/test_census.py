@@ -29,6 +29,9 @@ pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
         "grep -c x f\ngrep -c y f",
         "grep 'a\nb' f",
         "grep x \\\n  f",
+        "printenv",
+        "printenv HOME PATH | wc -l",
+        "env | grep -c HOME",
     ],
 )
 def test_a_read_clears_the_screen(command):
@@ -60,6 +63,11 @@ def test_a_read_clears_the_screen(command):
         "diff <(ls a) <(ls b)",
         "grep x &>o",
         "cat `rm x`",
+        "env rm x",
+        "env FOO=1 grep x f",
+        "env -i sh",
+        "printenv > out",
+        "printenv | tee o",
     ],
 )
 def test_a_write_or_unscreenable_form_is_refused(command):

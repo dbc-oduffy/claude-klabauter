@@ -12,14 +12,18 @@ Three arms:
             (R1..Rn) per ask, each slice claims its own.
   - slices: {slices: [{label, ask, rows, writes?}], parent_sizing, confirm_split?} -- the parent
             register is the parent sizing's own rows; each slice carries its rows byte for byte.
-  - sizings: {sizings: [{sizing, label?, writes?}], confirm_split?} -- existing planned sizings
-            (each with a `plan:` edge); mints no sizing, runs no partition, only stamps each
-            sizing's `em_analysis.ask_parent`.
+  - sizings: {sizings: [{sizing, label?, writes?}], interaction_mode?, confirm_split?} -- existing
+            planned sizings (each with a `plan:` edge); mints no sizing, runs no partition, only
+            stamps each sizing's `em_analysis.ask_parent` and, where the sizing records no
+            `interaction_mode`, the inherited top-level one (never overwriting a recorded mode;
+            a sizing with none and no inherited mode is refused by name).
 
 Negative spec:
   - Refuses before writing anything: shape and partition checks run first.
-  - Does NOT refuse for a missing PM turn: a relayed slice, or any slice with no PM turn, is stamped
-    relayed (text and sender in `em_analysis`) and carries no `pm_verbatims`.
+  - An asks item naming no `source` is AI-derived: stamped relayed (text and sender in `em_analysis`),
+    no `pm_verbatims`, and the turn log is never read for it, whatever its text.
+  - Only an explicit `source: pm` item carries the session's recorded PM turn; when the session records
+    none the submission is refused before any write. The log is read once, and only for a pm item.
   - Does NOT call the `sizing.intake_mint` handler (it refuses a second mint for one PM turn).
   - Does NOT spawn a process (no git); every write goes through `session.claimed_write`.
   - Does NOT fire anything: it returns the fire calls, the caller fires them.
@@ -45,7 +49,7 @@ from coordinator_core.ops import baton_pm_turns
 from coordinator_core.ops import requirement_register as rr
 from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.ops.dispatch_emit import ask_fanout_contract as contract
-from coordinator_core.ops.dispatch_emit.ask_contract import ASK_SOURCE_RELAYED, ASK_SOURCES
+from coordinator_core.ops.dispatch_emit.ask_contract import ASK_SOURCE_PM, ASK_SOURCE_RELAYED, ASK_SOURCES
 from coordinator_core.ops.dispatch_emit.route_preference import RoutePreference, parse, refusal, to_em_analysis
 from coordinator_core.ops.fleet._common import main_worktree_root
 from coordinator_core.ops.session_context import resolve_current_session_id
@@ -174,8 +178,8 @@ def _parent_rows(sizing: Mapping) -> list[dict]:
 
 
 def _verbatim_turns(parent: Optional[Mapping], sid: Optional[str], cwd: str) -> list[dict]:
-    """The PM verbatim a non-relayed slice carries: the parent sizing's own, else the newest recorded
-    turn. Empty when the session has recorded no PM turn: those slices are stamped relayed."""
+    """The PM verbatim a pm-marked slice carries: the parent sizing's own, else the newest recorded
+    turn. Empty when the session has recorded no PM turn. Read only for the slices arm or a pm item."""
     if parent:
         kept = [v for v in parent.get("pm_verbatims") or [] if isinstance(v, Mapping) and isinstance(v.get("text"), str)]
         if kept:
@@ -188,13 +192,19 @@ def _verbatim_turns(parent: Optional[Mapping], sid: Optional[str], cwd: str) -> 
     return [dict(newest[0])]
 
 
+def _slice_turns(sl: contract.AskSlice, shared: list[dict]) -> list[dict]:
+    """The turns one asks item carries: only an explicit `pm` item carries the shared turns; an
+    unmarked or relayed item carries none and is stamped relayed. Never consults the turn log."""
+    return shared if sl.source == ASK_SOURCE_PM else []
+
+
 def _slice_record(
     sl: contract.AskSlice, *, name: str, turns: list[dict], marker: str, today: str,
     parent_rows: Optional[dict[str, dict]], sources: Optional[list] = None,
     sender: Optional[str] = None, relayed_text: Optional[str] = None,
     route_pref: Optional[RoutePreference] = None,
 ) -> dict:
-    """A slice sizing. A relayed slice, or any slice when no PM turn exists, is stamped relayed,
+    """A slice sizing. A relayed or unmarked asks item (it arrives with no `turns`) is stamped relayed,
     carries its text and sender in `em_analysis`, and never gets a `pm_verbatims` row."""
     relayed = sl.source == ASK_SOURCE_RELAYED or not turns
     record = intake_record(name=name, turn={"text": sl.ask} if not turns else turns[-1], today=today)
@@ -267,6 +277,9 @@ def _read_sizings(params: Mapping) -> list[tuple[str, str, Optional[tuple[str, .
 def _fanout_sizings(params: Mapping, worktree: Path, confirm: bool) -> dict:
     """The sizings arm: sibling runs over existing planned sizings, each stamped with its marker."""
     items = _read_sizings(params)
+    inherited = params.get(contract.INTERACTION_MODE_PARAM)
+    if inherited is not None and (not isinstance(inherited, str) or not inherited.strip()):
+        raise _Refused(f"{contract.INTERACTION_MODE_PARAM} must be a non-empty string")
     slices = [contract.AskSlice(label, rel, (), writes, wave) for rel, label, writes, wave in items]
     stamp = datetime.now().strftime("%Y%m%dT%H%M%S")
     parent_id = f"ask-parent-{stamp}-{uuid.uuid4().hex[:6]}"
@@ -288,6 +301,10 @@ def _fanout_sizings(params: Mapping, worktree: Path, confirm: bool) -> dict:
         if held:
             raise _Refused(f"sizings[{i}] {rel!r} already carries ask_parent {held!r}")
         analysis[ASK_PARENT_KEY] = contract.ask_parent_marker(parent_id, run_ids[i])
+        if not doc.get("interaction_mode"):
+            if inherited is None:
+                raise _Refused(f"sizings[{i}] {rel!r} records no interaction_mode and the fan-out inherits none")
+            doc["interaction_mode"] = inherited.strip()
         errors = validate_frontmatter(doc, _SIZING_SCHEMA_PATH)
         if errors:
             raise _Refused(f"sizings[{i}] {rel!r} failed schema validation: {format_validation_errors(errors)}")
@@ -346,7 +363,14 @@ def _fanout(params: Mapping, root: Path) -> dict:
         raise _Refused(refusal)
 
     sid = params.get("session_id") or resolve_current_session_id(Path(cwd))
-    turns = _verbatim_turns(parent_doc, sid, cwd)
+    log_cwd = params.get("session_root") or cwd
+    pm_items = [i for i, sl in enumerate(slices) if sl.source == ASK_SOURCE_PM]
+    turns = _verbatim_turns(parent_doc, sid, log_cwd) if parent_rel is not None or pm_items else []
+    if pm_items and not turns:
+        raise _Refused(
+            f"asks[{pm_items[0]}]: source pm, but this session records no PM turn to carry. "
+            "Mark it relayed, or submit from the session the PM spoke in."
+        )
     relay = _relay_fields(params, len(slices))
     route_prefs = _route_fields(params, len(slices))
 
@@ -368,7 +392,9 @@ def _fanout(params: Mapping, root: Path) -> dict:
         slug = _slug(sl.label) or f"slice-{i + 1}"
         rel = f"{Path(home_dir('', 'sizings')).as_posix()}/{today}-{parent_hex}-{i + 1}-{slug}.yaml"
         record = _slice_record(
-            sl, name=f"{sl.label}"[:60], turns=turns, marker=contract.ask_parent_marker(parent_id, run_ids[i]),
+            sl, name=f"{sl.label}"[:60],
+            turns=turns if parent_rel is not None else _slice_turns(sl, turns),
+            marker=contract.ask_parent_marker(parent_id, run_ids[i]),
             today=today, parent_rows=parent_rows, sources=sources,
             sender=relay[i][0], relayed_text=relay[i][1], route_pref=route_prefs[i],
         )

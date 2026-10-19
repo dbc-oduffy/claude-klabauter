@@ -2104,6 +2104,41 @@ def _patch_body(body: str, original_rows: list, rows: list) -> str:
     return patched[:-1] if not body.endswith("\n") and patched.endswith("\n") else patched
 
 
+def _resolve_missing_fields(resolutions: list) -> list:
+    """Every required-field defect across the resolve batch, one string per row/field
+    group, so a caller repairs the call in a single round trip. Pure: reads no plan."""
+    problems: list = []
+    if not isinstance(resolutions, list) or not resolutions:
+        return ["'id'/'disposition' (or a non-empty 'resolves' batch) is required"]
+    for i, r in enumerate(resolutions):
+        if not isinstance(r, dict):
+            problems.append(f"entry {i}: must be a dict")
+            continue
+        tid = r.get("id")
+        label = f"row {tid}" if tid else f"entry {i}"
+        if not tid:
+            problems.append(f"{label}: 'id' is required")
+        if not r.get("disposition"):
+            problems.append(f"{label}: 'disposition' is required")
+            continue
+        if r["disposition"] != _DELIVERED_ELSEWHERE:
+            continue
+        missing = [
+            f
+            for f in ("disposition_ref", "disposition_detail")
+            if not str(r.get(f) or "").strip()
+        ]
+        if missing:
+            problems.append(
+                f"{label}: delivered_elsewhere requires a non-blank {', '.join(missing)}"
+            )
+        if r.get("delivered_via") not in _DELIVERED_VIA:
+            problems.append(
+                f"{label}: delivered_via must be one of {sorted(_DELIVERED_VIA)}"
+            )
+    return problems
+
+
 def _resolve(
     plan_path: str,
     resolutions: list,
@@ -2155,11 +2190,9 @@ def _resolve(
     if not isinstance(resolutions, list) or not resolutions:
         return _err("resolve: 'id'/'disposition' (or a non-empty 'resolves' batch) is required")
 
-    for r in resolutions:
-        if not isinstance(r, dict) or not r.get("id"):
-            return _err("resolve: 'id' is required")
-        if not r.get("disposition"):
-            return _err("resolve: 'disposition' is required")
+    problems = _resolve_missing_fields(resolutions)
+    if problems:
+        return _err("resolve: " + "; ".join(problems))
 
     seen_ids: set = set()
     for r in resolutions:
@@ -2336,19 +2369,6 @@ def _resolve(
                     "cutting on the row."
                 )
 
-        for r in resolutions:
-            if r["disposition"] != _DELIVERED_ELSEWHERE:
-                continue
-            tid = r["id"]
-            if not str(r.get("disposition_ref") or "").strip():
-                raise MutateAbort(f"resolve: row {tid}: delivered_elsewhere requires a non-blank ref")
-            if not str(r.get("disposition_detail") or "").strip():
-                raise MutateAbort(f"resolve: row {tid}: delivered_elsewhere requires a non-blank disposition_detail")
-            if r.get("delivered_via") not in _DELIVERED_VIA:
-                raise MutateAbort(
-                    f"resolve: row {tid}: delivered_via must be one of {sorted(_DELIVERED_VIA)}"
-                )
-
         memo_receipts = _memo_receipt_refusal(resolutions, rows_by_id, worktree)
 
         for r in resolutions:
@@ -2501,6 +2521,40 @@ def _resolve(
 # JSON-RPC handler
 
 
+def _resolutions_from_params(params: dict):
+    """Normalize resolve params (`resolves` batch or single-row shape) to
+    `(resolutions, None)`, or `(None, error_reply)` on a malformed batch."""
+    resolves_param = params.get("resolves")
+    if resolves_param is None:
+        return [_resolution_entry(params)], None
+    if not isinstance(resolves_param, list) or not resolves_param:
+        return None, _err(
+            "plan.tasks.mutate: 'resolves' must be a non-empty list of "
+            "{id, disposition, disposition_ref, disposition_detail, "
+            "case_against} dicts"
+        )
+    for entry in resolves_param:
+        if not isinstance(entry, dict):
+            return None, _err(
+                "plan.tasks.mutate: every 'resolves' entry must be a dict "
+                "with a non-empty 'id'"
+            )
+    return [_resolution_entry(e) for e in resolves_param], None
+
+
+def _resolution_entry(src: dict) -> dict:
+    return {
+        "id": (src.get("id") or "").strip(),
+        "disposition": src.get("disposition"),
+        "disposition_ref": src.get("disposition_ref"),
+        "disposition_detail": src.get("disposition_detail"),
+        "case_against": src.get("case_against"),
+        "delivered_via": src.get("delivered_via"),
+        "reason": src.get("reason"),
+        "actor": src.get("actor"),
+    }
+
+
 @register_op("plan.tasks.mutate")
 async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC 'plan.tasks.mutate' handler — plan '## Tasks' task-spine mutations.
@@ -2601,6 +2655,12 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     if not verb:
         return _err("plan.tasks.mutate: 'verb' is required (add-task | stamp | resolve | reopen | depends-on | clear-gate | evidence-append | em-discharge)")
     if not plan_path:
+        if verb == "resolve":
+            resolutions, bad = _resolutions_from_params(params)
+            if bad:
+                return bad
+            problems = ["'plan_path' is required"] + _resolve_missing_fields(resolutions)
+            return _err("resolve: " + "; ".join(problems))
         return _err("plan.tasks.mutate: 'plan_path' is required")
 
     if repo_root is None:
@@ -2620,46 +2680,9 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         return await asyncio.to_thread(_stamp, plan_path, updates, worktree, repo_root)
 
     if verb == "resolve":
-        resolves_param = params.get("resolves")
-        if resolves_param is not None:
-            if not isinstance(resolves_param, list) or not resolves_param:
-                return _err(
-                    "plan.tasks.mutate: 'resolves' must be a non-empty list of "
-                    "{id, disposition, disposition_ref, disposition_detail, "
-                    "case_against} dicts"
-                )
-            resolutions = []
-            for entry in resolves_param:
-                if not isinstance(entry, dict):
-                    return _err(
-                        "plan.tasks.mutate: every 'resolves' entry must be a dict "
-                        "with a non-empty 'id'"
-                    )
-                resolutions.append(
-                    {
-                        "id": (entry.get("id") or "").strip(),
-                        "disposition": entry.get("disposition"),
-                        "disposition_ref": entry.get("disposition_ref"),
-                        "disposition_detail": entry.get("disposition_detail"),
-                        "case_against": entry.get("case_against"),
-                        "delivered_via": entry.get("delivered_via"),
-                        "reason": entry.get("reason"),
-                        "actor": entry.get("actor"),
-                    }
-                )
-        else:
-            resolutions = [
-                {
-                    "id": (params.get("id") or "").strip(),
-                    "disposition": params.get("disposition"),
-                    "disposition_ref": params.get("disposition_ref"),
-                    "disposition_detail": params.get("disposition_detail"),
-                    "case_against": params.get("case_against"),
-                    "delivered_via": params.get("delivered_via"),
-                    "reason": params.get("reason"),
-                    "actor": params.get("actor"),
-                }
-            ]
+        resolutions, bad = _resolutions_from_params(params)
+        if bad:
+            return bad
         return await asyncio.to_thread(_resolve, plan_path, resolutions, worktree, repo_root)
 
     if verb == "reopen":

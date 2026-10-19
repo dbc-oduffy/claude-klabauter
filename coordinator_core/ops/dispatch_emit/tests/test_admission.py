@@ -166,6 +166,8 @@ def test_notice_line_names_each_missing_key_once_with_the_remedy():
     for key in keys:
         assert line.count(f"workflow_admission.{key}") == 1
     assert "machine-local set" in line
+    assert "default unthrottled" in line
+    assert "\n" not in line
     assert "[]" not in line and "waited" not in line
 
 

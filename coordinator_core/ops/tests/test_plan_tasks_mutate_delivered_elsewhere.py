@@ -126,6 +126,27 @@ def test_close_warns_that_completion_is_asserted_not_proven(tmp_path):
     assert f"completion asserted, not commit-proven: {_REF} via direct-message" in closed["warnings"]
 
 
+def test_all_missing_required_fields_are_named_in_one_refusal(tmp_path):
+    repo, plan, _sha = _fixture(tmp_path)
+    original = plan.read_bytes()
+
+    result = asyncio.run(_handler(
+        {"verb": "resolve", "id": "C1", "disposition": "delivered_elsewhere"},
+        repo_root=repo / ".git",
+    ))
+
+    assert result["exit_code"] != 0, result
+    for needle in ("plan_path", "disposition_ref", "disposition_detail", "delivered_via"):
+        assert needle in result["error"], result["error"]
+    assert plan.read_bytes() == original
+
+    with_path = _call(repo, plan, disposition="delivered_elsewhere")
+    assert with_path["exit_code"] != 0
+    for needle in ("disposition_ref", "disposition_detail", "delivered_via"):
+        assert needle in with_path["error"], with_path["error"]
+    assert plan.read_bytes() == original
+
+
 @pytest.mark.parametrize(
     "overrides",
     [

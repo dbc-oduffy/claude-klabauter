@@ -28,6 +28,11 @@ session as emitter; (3) no receipt at all while at least one `agent()` call is
 untyped or write-capable — a hand-rolled dispatch with no provenance and no
 per-agent cost/write attribution.
 
+A fourth DENY, checked last (after sha and session): a `resumeFromRunId` fire of
+`<root>/scratch/warp/<run_id>.workflow.mjs` whose record dir holds a `halted` marker
+stamped `revised_at` (`halted_run.revised_halt`) — a resume replays the stages without the
+revision; the reason names the fresh `fire_command`. Any failure there falls through.
+
 § Read-only exemption. A script whose every `agent()` call resolves to a
 read-only `agentType` (e.g. `Explore`, or a read-only coordinator role such
 as `premise-checker`) — or that dispatches no `agent()` at all — poses none
@@ -75,7 +80,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Mapping, Optional
 
 from coordinator_core._hook_envelope import deny, no_advisory, payload_of
@@ -220,6 +225,37 @@ def _every_agent_call_is_read_only(script_text: str) -> bool:
     return all(_agent_type_is_read_only(agent_type) for _has_model, agent_type in calls)
 
 
+def _resume_after_revise_reason(script: Path) -> "Optional[str]":
+    """Deny reason when `script` is `<root>/scratch/warp/<run_id>.workflow.mjs` of a halted run
+    revised after its halt, else None. Any failure yields None."""
+    try:
+        from coordinator_core.ops.dispatch_emit import halted_run
+        from coordinator_core.ops.dispatch_emit.ask_contract import RUN_DIR_ROOT, record_dir
+        from coordinator_core.warp_fire import fire_command
+
+        parts = PurePosixPath(str(script).replace("\\", "/")).parts
+        suffix = ".workflow.mjs"
+        run_root = tuple(RUN_DIR_ROOT.split("/"))
+        n = len(run_root)
+        if len(parts) < n + 2 or parts[-1 - n:-1] != run_root or not parts[-1].endswith(suffix):
+            return None
+        run_id = parts[-1][: -len(suffix)]
+        norm = str(script).replace("\\", "/")
+        root = Path(norm[: len(norm) - len("/".join(parts[-1 - n:]))].rstrip("/") or "/")
+        rec = record_dir(root, run_id)
+        if not halted_run.revised_halt(rec):
+            return None
+        marker = halted_run._read(rec) or {}
+        sizing_rel = marker.get("sizing_rel")
+        call = fire_command(sizing_rel if isinstance(sizing_rel, str) and sizing_rel else None)
+        return (
+            f"Run {run_id} was revised after it halted; a resume replays its stages "
+            f"without the revision.\nFire fresh: {call}."
+        )
+    except Exception:
+        return None
+
+
 @register_op("hooks.block_workflow_foreign_emission")
 def _handler(params: dict, repo_root=None) -> dict:
     params = payload_of(params)
@@ -274,11 +310,14 @@ def _handler(params: dict, repo_root=None) -> dict:
         )
 
     session = _session_id(params)
-    if session is None or recorded_session is None:
-        return no_advisory()
-    if session != recorded_session:
+    if session is not None and recorded_session is not None and session != recorded_session:
         return _resolved_deny(
             _session_mismatch_reason(script, session, recorded_session),
         )
+
+    if tool_input.get("resumeFromRunId"):
+        reason = _resume_after_revise_reason(script)
+        if reason:
+            return _resolved_deny(reason)
 
     return no_advisory()

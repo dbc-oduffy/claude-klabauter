@@ -1026,7 +1026,7 @@ class TestCloseReleasesRowClaim:
 
 class TestRunRecordLandsTheRunsBookkeeping:
     """`run-record` commits the run's own ledgers, sweep, evidence, record and
-    block-discharge row in one commit, in a real tmp repo."""
+    record in one commit, in a real tmp repo; the block-discharge ledger is not landed."""
 
     SID = "sid-a"
 
@@ -1094,10 +1094,12 @@ class TestRunRecordLandsTheRunsBookkeeping:
             "state/queue-grind/bug/new-1.jsonl",
             "state/queue-grind/bug/evidence/r/new-1.done.md",
             "state/queue-grind/bug/runs/20261015T000000Z.json",
-            f"state/block-discharge/{self.SID}.jsonl",
         }
+        assert f"state/block-discharge/{self.SID}.jsonl" not in out["landed"]
         assert _git(["rev-list", "--count", "HEAD"], repo).stdout.strip() == str(int(before) + 1)
-        assert _git(["status", "--porcelain"], repo).stdout == ""
+        assert _git(["status", "--porcelain"], repo).stdout.split() == [
+            "??", "state/block-discharge/"
+        ]
         subject = _git(["log", "-1", "--format=%s"], repo).stdout.strip()
         assert subject == "grind(bug): run 20261015T000000Z bookkeeping, removed 2 settled ledgers"
 

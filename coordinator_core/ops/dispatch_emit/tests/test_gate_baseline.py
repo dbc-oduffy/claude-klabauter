@@ -43,6 +43,17 @@ def test_one_baseline_agent_per_distinct_command_before_the_first_row():
     assert "row_build_gate red at run_base" in script
 
 
+def test_every_gatebase_leg_runs_on_the_haiku_pinned_test_runner():
+    script = _compose([_row("A", "a.ts")])
+    legs = [s for s in script.split("agent(")[1:] if "label: 'gatebase:" in s.split("schema:")[0]]
+    assert legs
+    for leg in legs:
+        opts = leg.split("label: 'gatebase:")[1].split("schema:")[0]
+        assert "agentType: 'coordinator:test-runner'" in opts
+        assert "model: 'haiku'" in opts
+        assert "model: 'sonnet'" not in opts
+
+
 def test_gated_row_brief_reads_the_baseline_at_runtime():
     script = _compose([_row("A", "a.ts")])
     assert '_gateBaselineText(["tsc --noEmit"])' in script

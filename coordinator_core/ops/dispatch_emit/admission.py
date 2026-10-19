@@ -347,8 +347,8 @@ def notice_line(record: dict) -> Optional[str]:
     if verdict == "admitted_unconfigured":
         keys = ", ".join(_MACHINE_LOCAL_PREFIX + k for k in record.get("missing_keys") or ())
         return (
-            "emit-dispatch-workflow: admission — unconfigured, not load-checked; "
-            f"unset: {keys}; machine-local set <key> <value>"
+            "emit-dispatch-workflow: admission — unconfigured, default unthrottled "
+            f"(no load check); to throttle set {keys} via machine-local set <key> <value>"
         )
     return (
         "emit-dispatch-workflow: admission — "

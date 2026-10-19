@@ -809,8 +809,8 @@ def _land_set(
 ) -> "_LandSet | str":
     """Which of the run's writes still differ from HEAD. Candidates are the paths THIS
     session claims under `roots` minus `baseline_dirty` (claims that predate the run), the
-    `declared` paths under `roots`, and this session's block-discharge ledger. `roots=None`
-    is the profile's ledger dir alone. Returns a refusal string when HEAD cannot be read.
+    `declared` paths under `roots`. `roots=None` is the profile's ledger dir alone. Returns a
+    refusal string when HEAD cannot be read.
     Never a directory pathspec; a path a live peer holds is withheld. Zero git spawns."""
     from coordinator_core.git.git_state import head_sha, read_tree_spine
     from coordinator_core.ops.dispatch_emit.grind_commit_contract import under_roots
@@ -827,8 +827,6 @@ def _land_set(
         if under_roots(p, roots) and p not in baseline_dirty
     }
     held.update(p for p in declared if under_roots(p, roots))
-    if "/" not in sid and "\\" not in sid and not sid.startswith("."):
-        held.add(f"state/block-discharge/{sid}.jsonl")
     candidates = sorted(p for p in held if not (repo_root / p).is_dir())
     if not candidates:
         return result
@@ -945,8 +943,7 @@ def cmd_run_record(rest: list[str]) -> int:
     Then lands the run's own bookkeeping in one commit through the in-process
     `ceremony.commit_v2` handler (no git spawn on the common shape): the paths this
     session claims under `state/queue-grind/<P>/` (swept and settled ledgers,
-    appended ledgers, evidence, the record) and its own
-    `state/block-discharge/<session>.jsonl`, each only when it differs from HEAD.
+    appended ledgers, evidence, the record), each only when it differs from HEAD.
     A path a live peer also claims is withheld and named. Deletions are declared as
     reverts only when settled (a ledger under `state/queue-grind/<P>/`) or resolved (a
     row whose archive copy exists, which then lands too, `--profile-dir` required); any

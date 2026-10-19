@@ -143,9 +143,12 @@ import yaml
 from coordinator_core.frontmatter.body_blocks import LocateStatus
 from coordinator_core.ops.plan_tasks_render import load_rows
 from coordinator_core.ops.read_frontmatter_field import read_frontmatter_field
+from coordinator_core.ops.dispatch_emit.inventory_accounting import IN_ANOTHER_PART
 from coordinator_core.ops.dispatch_emit.spine_read import (
     NON_DISPATCHABLE_DISPOSITIONS,
     SpineReadError,
+    _has_uncleared_execution_gate,
+    in_run_edge_key,
     load_rows_memo,
     read_spine,
     with_canonical_disposition,
@@ -940,6 +943,7 @@ def _plan_sub_rows(
     inventory_path: Optional[Path],
     spec_path: str,
     spine_cache: Dict[Path, object],
+    in_run: frozenset = frozenset(),
 ):
     """`spec_path` (a Chunk-table row's spec cell) -> the LIST of dispatchable
     ``EmitterRow`` objects `spine_read.read_spine` derives from it, or
@@ -971,7 +975,7 @@ def _plan_sub_rows(
     if plan_path not in spine_cache:
         exclusions: list = []
         try:
-            rows = read_spine(plan_path, exclusions=exclusions)
+            rows = read_spine(plan_path, exclusions=exclusions, in_run_plan_chunks=in_run)
         except (OSError, SpineReadError):
             rows = None
         held = [e for e in exclusions if e.get("reason") != "disposition"]
@@ -986,6 +990,46 @@ def _plan_sub_rows(
     return spine_cache[plan_path]
 
 
+def _in_run_plan_chunks(
+    live: List[Tuple[str, Dict[str, str], List[str]]],
+    inventory_path: Optional[Path],
+    plan_cache: Dict[Path, Dict[str, dict]],
+) -> Dict[Tuple[str, str], str]:
+    """`{(repo-relative plan path, chunk id): minted id}` for every open,
+    dispatchable chunk of a whole-plan item in this run -- what a same-run
+    `depends_on_plan` edge resolves to. A row-id reference (one specific chunk)
+    is not a whole-plan item and contributes nothing."""
+    if inventory_path is None:
+        return {}
+    root = inventory_path.resolve().parents[2]
+    out: Dict[Tuple[str, str], str] = {}
+    seen: set = set()
+    for row_id, row, _writes in live:
+        spec_path = _strip_backtick(row["spec path"])
+        if not spec_path:
+            continue
+        plan_path = _resolve_spec_plan_path(inventory_path, spec_path)
+        try:
+            rel = plan_path.resolve().relative_to(root).as_posix()
+        except ValueError:
+            continue
+        raw_rows = _plan_raw_rows_by_id(inventory_path, spec_path, plan_cache)
+        if rel in seen or not raw_rows or row_id in raw_rows or _bare_plan_row_id(row_id) in raw_rows:
+            continue
+        seen.add(rel)
+        for chunk, raw in raw_rows.items():
+            if (
+                with_canonical_disposition(raw).get("disposition") in NON_DISPATCHABLE_DISPOSITIONS
+                or raw.get("deferred") is True
+                or raw.get("deferred_until")
+                or raw.get("execution_mode") == "operator"
+                or _has_uncleared_execution_gate(raw)
+            ):
+                continue
+            out[(rel, chunk)] = f"{row_id}.{chunk}"
+    return out
+
+
 def mint_rows(
     chunk_rows: List[Dict[str, str]],
     inventory_path: Optional[Path] = None,
@@ -994,6 +1038,7 @@ def mint_rows(
     withheld_out: Optional[Dict[str, str]] = None,
     landed_out: Optional[Dict[str, str]] = None,
     withheld_rows_out: Optional[Dict[str, int]] = None,
+    accounting_out: Optional[Dict[str, str]] = None,
 ) -> List[dict]:
     """`## Chunk table` rows (as `parse_chunk_table` returns) -> a list of
     schema-valid plan-tasks row dicts, LIVE rows only. See module docstring's
@@ -1024,6 +1069,11 @@ def mint_rows(
     `withheld_rows_out` is filled `{item id: open plan rows}` for the same
     withheld items -- what is still owed behind them, not what this mint
     dispatches.
+
+    `accounting_out`, when given, is filled `{item id: reason}` for EVERY item
+    that mints no row: routed out (its own disposition text, or `dependency X
+    routed out`), closed-satisfied (its disposition text), coded under
+    `skip_landed`, landed, or withheld. An item absent from it owns a minted row.
     """
     plan_cache: Dict[Path, Dict[str, dict]] = {}
     repairs: Dict[str, dict] = {}
@@ -1032,6 +1082,21 @@ def mint_rows(
             chunk_rows, inventory_path, plan_cache, skip_landed
         )
     dep_kinds = _resolve_dep_kinds(chunk_rows)
+    if accounting_out is not None:
+        for row in chunk_rows:
+            row_id = _strip_backtick(row["id"])
+            if dep_kinds[row_id] == _DEP_KIND_LIVE:
+                continue
+            blocker = None
+            if _raw_disposition_kind(row_id, row["disposition"]) == _DEP_KIND_LIVE:
+                for dep_id in _split_id_list(row["deps"]):
+                    dotted = _dotted_dep_parent(dep_id, dep_kinds)
+                    if dep_kinds.get(dotted[0] if dotted else dep_id) == _DEP_KIND_ROUTED_OUT:
+                        blocker = dotted[0] if dotted else dep_id
+                        break
+            accounting_out[row_id] = (
+                f"dependency {blocker} routed out" if blocker else row["disposition"].strip()
+            )
     if skip_landed and inventory_path is not None:
         for row in chunk_rows:
             row_id = _strip_backtick(row["id"])
@@ -1045,6 +1110,8 @@ def mint_rows(
                 dep_kinds[row_id] = _DEP_KIND_CLOSED_SATISFIED
                 if skipped_out is not None:
                     skipped_out.append(row_id)
+                if accounting_out is not None:
+                    accounting_out[row_id] = "coded in its plan (skip_landed)"
     live: List[Tuple[str, Dict[str, str], List[str]]] = []
     writes_by_id: Dict[str, set] = {}
     writes_under_by_id: Dict[str, List[str]] = {}
@@ -1079,6 +1146,7 @@ def mint_rows(
         live.append((row_id, row, writes))
 
     spine_cache: Dict[Path, object] = {}
+    in_run_map = _in_run_plan_chunks(live, inventory_path, plan_cache)
     withheld_items: Dict[str, str] = {}
     minted: List[dict] = []
     preceding_ids: set = set()
@@ -1149,6 +1217,8 @@ def mint_rows(
             withheld_items[row_id] = f"depends on withheld item {withheld_dep}"
             if withheld_rows_out is not None:
                 withheld_rows_out[row_id] = _open_rows(inventory_path, spec_path, plan_cache)
+            if accounting_out is not None:
+                accounting_out[row_id] = withheld_items[row_id]
             continue
 
         # Every minted id an inter-item `deps` edge from this row must fan
@@ -1168,7 +1238,11 @@ def mint_rows(
         ]
 
         sub_rows = (
-            _plan_sub_rows(inventory_path, spec_path, spine_cache) if spec_path else None
+            _plan_sub_rows(
+                inventory_path, spec_path, spine_cache, frozenset(in_run_map)
+            )
+            if spec_path
+            else None
         )
         if isinstance(sub_rows, _LandedSpine):
             raw_ids = _plan_raw_rows_by_id(inventory_path, spec_path, plan_cache)
@@ -1177,6 +1251,8 @@ def mint_rows(
             else:
                 if landed_out is not None:
                     landed_out[row_id] = "no live rows (every plan chunk is closed)"
+                if accounting_out is not None:
+                    accounting_out[row_id] = "no live rows (every plan chunk is closed)"
                 item_all_ids[row_id] = []
                 preceding_ids.add(row_id)
                 continue
@@ -1188,6 +1264,8 @@ def mint_rows(
                 withheld_items[row_id] = f"plan spine fully withheld ({sub_rows.detail})"
                 if withheld_rows_out is not None:
                     withheld_rows_out[row_id] = _open_rows(inventory_path, spec_path, plan_cache)
+                if accounting_out is not None:
+                    accounting_out[row_id] = withheld_items[row_id]
                 continue
         if sub_rows:
             # An item id (or its plan-prefix-stripped form) that already
@@ -1215,6 +1293,7 @@ def mint_rows(
             # items (coordinator-claude#72 F25b), rather than flattening the
             # whole plan into one agent.
             id_map = {r.id: f"{row_id}.{r.id}" for r in sub_rows}
+            plan_raw_rows = _plan_raw_rows_by_id(inventory_path, spec_path, plan_cache)
             entry_ids: List[str] = []
             for r in sub_rows:
                 minted_id = id_map[r.id]
@@ -1234,6 +1313,18 @@ def mint_rows(
                     # plan's predecessors, which order after the dependency
                     # transitively via those predecessors' own roots.
                     depends_on.extend(inter_item_targets)
+                for plan_edge in (plan_raw_rows.get(r.id) or {}).get("depends_on_plan") or []:
+                    target = in_run_map.get(in_run_edge_key(plan_edge))
+                    if target is None or target.split(".", 1)[0] == row_id:
+                        continue
+                    if not any(e["chunk"] == target for e in depends_on):
+                        depends_on.append(
+                            {
+                                "chunk": target,
+                                "gate_kind": plan_edge.get("gate_kind")
+                                or "output-consumption-runtime",
+                            }
+                        )
 
                 r_writes = r.writes if isinstance(r.writes, list) else []
                 writes_set = set(r_writes)
@@ -1423,6 +1514,46 @@ def part_run_id(run_id: str, index: int) -> str:
     """The run id of part ``index`` (1-based) of an over-cap inventory: the sole
     source of the ``-pN`` suffix on the part's spine run id and its script name."""
     return f"{run_id}-p{index}"
+
+
+def part_script_name(run_id: str, index: int) -> str:
+    """The script file name of part ``index``: its spine's run id plus the script suffix,
+    so a part's spine, script and Workflow run label share one stem."""
+    return f"{part_run_id(run_id, index)}.workflow.mjs"
+
+
+# Trap: process-global slot; a value from an earlier call in-process outlives it.
+_LAST_MINTED_SPINE: List[Path] = []
+
+
+def last_minted_spine() -> Optional[Path]:
+    """The spine path the latest `mint_spine` call in this process returned, else None."""
+    return _LAST_MINTED_SPINE[-1] if _LAST_MINTED_SPINE else None
+
+
+def inventory_family_base(inventory_path: Path) -> str:
+    """The run id every tranche (`-tN`) and part (`-pN`) of one inventory hangs off."""
+    run_id = read_frontmatter_field(str(inventory_path), "run_id") or inventory_path.stem
+    return _TRANCHE_SUFFIX_RE.sub("", run_id)
+
+
+def earlier_outputs(inventory_path: Path) -> Tuple[List[Path], List[Path]]:
+    """`(derived, tranche_records)` of this inventory's run id beside the record.
+
+    `derived` are the regenerable `.spine.md` / `.workflow.mjs` files of the base, its
+    tranches and its parts; `tranche_records` are the `<base>-tN.md` inventory inputs.
+    Only names that are exactly this run id plus those suffixes match."""
+    base = re.escape(inventory_family_base(inventory_path))
+    derived_re = re.compile(rf"^{base}(-t\d+)?(-p\d+)?\.(spine\.md|spine\.workflow\.mjs|workflow\.mjs)$")
+    record_re = re.compile(rf"^{base}-t\d+\.md$")
+    derived: List[Path] = []
+    records: List[Path] = []
+    for child in sorted(inventory_path.parent.iterdir()):
+        if derived_re.match(child.name):
+            derived.append(child)
+        elif record_re.match(child.name):
+            records.append(child)
+    return derived, records
 
 
 def select_part(rows: List[dict], item_ids: List[str], index: int, count: int) -> List[dict]:
@@ -1687,6 +1818,7 @@ def select_tranche(
     dispositions: Optional[Dict[str, str]] = None,
     landed: Optional[Dict[str, str]] = None,
     withheld_rows: Optional[Dict[str, int]] = None,
+    reasons: Optional[Dict[str, str]] = None,
 ) -> Tuple[List[dict], dict]:
     """The next tranche of `rows`: whole plan items, in table order, whose
     rows sum to <= `row_budget`, plus a report `{"row_budget", "rows",
@@ -1701,8 +1833,9 @@ def select_tranche(
     fits the budget; an oversize group is split plan-by-plan across sequential
     tranches (`_pick_groups`). Only a single plan over the budget is
     `unplaceable`. A plan is never split; later
-    items that fit are still taken. Table items with no minted rows (withheld,
-    routed out, fully landed) are `skipped`, never counted. `remaining`
+    items that fit are still taken. Every table item with no minted rows
+    (withheld, routed out, closed, fully landed) is `skipped`, never counted;
+    `reasons` (mint's `accounting_out`) names why. `remaining`
     simulates further tranches at the same budget over the deferred set,
     assuming each lands; withheld plans cannot be simulated (they unblock only
     when a predecessor lands) and are counted in `withheld_not_counted`.
@@ -1760,7 +1893,7 @@ def select_tranche(
             "plan": item,
             "reason": (withheld or {}).get(item)
             or (landed or {}).get(item)
-            or f"no live rows ({(dispositions or {}).get(item, 'none minted')})",
+            or f"no live rows ({(reasons or {}).get(item) or (dispositions or {}).get(item, 'none minted')})",
         }
         for item in dict.fromkeys(item_ids)
         if item not in present
@@ -1851,6 +1984,7 @@ def mint_spine(
     withheld_out: Optional[Dict[str, str]] = None,
     tranche_inventory_out: Optional[dict] = None,
     part_items_out: Optional[List[str]] = None,
+    accounting_out: Optional[Dict[str, str]] = None,
 ) -> Tuple[str, Path]:
     """The `--inventory` mint leg's one entry point.
 
@@ -1866,6 +2000,9 @@ def mint_spine(
     In tranche mode `tranche_inventory_out` receives `{"path", "text"}` of the
     tranche's own inventory record (`_tranche_inventory`); the caller writes it,
     and the returned spine path sits beside it under the tranche run id.
+    `accounting_out` receives `{item id: reason}` for every Chunk-table item the
+    returned spine holds no row for (mint, tranche deferral, other parts); an
+    item absent from it owns a row in the spine.
 
     Raises `ChunkTableAbsentError` / `ChunkTableMalformedError` /
     `FootprintUnreadableError` -- see their docstrings. An unreadable
@@ -1882,6 +2019,7 @@ def mint_spine(
     chunk_rows = parse_chunk_table(text)
     landed: Dict[str, str] = {}
     withheld_rows: Dict[str, int] = {}
+    ledger: Dict[str, str] = {}
     rows = mint_rows(
         chunk_rows,
         inventory_path=path,
@@ -1890,7 +2028,10 @@ def mint_spine(
         withheld_out=withheld_out,
         landed_out=landed,
         withheld_rows_out=withheld_rows,
+        accounting_out=ledger,
     )
+    if accounting_out is not None:
+        accounting_out.update(ledger)
     if skip_landed and not rows:
         raise NothingUnlandedError(f"inventory {path.name}: every row has already landed")
     if row_budget is not None:
@@ -1904,9 +2045,19 @@ def mint_spine(
             landed=landed,
             dispositions={_strip_backtick(r["id"]): r["disposition"] for r in chunk_rows},
             withheld_rows=withheld_rows,
+            reasons=ledger,
         )
-        if part is not None and _TRANCHE_SUFFIX_RE.search(path.stem):
-            # Already a tranche record: its parts share its N, minting no sibling tranche.
+        if accounting_out is not None:
+            for entry in report["deferred"]:
+                accounting_out[entry["plan"]] = f"deferred to a later tranche: {entry['reason']}"
+        planned = set(report["plans"])
+        binding = any(
+            _is_live_disposition(r["disposition"]) and _strip_backtick(r["id"]) not in planned
+            for r in chunk_rows
+        )
+        if not binding or (part is not None and _TRANCHE_SUFFIX_RE.search(path.stem)):
+            # Budget not binding, or already a tranche record (its parts share its N):
+            # no tranche record is minted.
             tranche_text = None
         else:
             tranche_path, tranche_text, run_id = _tranche_inventory(
@@ -1921,12 +2072,16 @@ def mint_spine(
             tranche_out.update(report)
     if part is not None:
         index, count = part
-        rows = select_part(rows, [_strip_backtick(r["id"]) for r in chunk_rows], index, count)
+        all_ids = [_strip_backtick(r["id"]) for r in chunk_rows]
+        before = set(_row_item_ids(rows, all_ids))
+        rows = select_part(rows, all_ids, index, count)
         run_id = part_run_id(run_id, index)
+        in_part = list(dict.fromkeys(_row_item_ids(rows, all_ids)))
         if part_items_out is not None:
-            part_items_out.extend(
-                dict.fromkeys(_row_item_ids(rows, [_strip_backtick(r["id"]) for r in chunk_rows]))
-            )
+            part_items_out.extend(in_part)
+        if accounting_out is not None:
+            for item in before.difference(in_part):
+                accounting_out[item] = IN_ANOTHER_PART
     if row_budget is None and max_rows is not None and len(rows) > max_rows:
         raise InventoryTooLargeError(
             f"inventory {path.name} mints {len(rows)} live rows, over max_rows "
@@ -1952,4 +2107,7 @@ def mint_spine(
         + "```\n"
     )
 
-    return spine_text, spine_path_for(path, run_id)
+    spine_path = spine_path_for(path, run_id)
+    _LAST_MINTED_SPINE.append(spine_path)
+    del _LAST_MINTED_SPINE[:-1]
+    return spine_text, spine_path

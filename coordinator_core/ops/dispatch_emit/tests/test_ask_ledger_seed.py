@@ -102,8 +102,8 @@ def test_relayed_ask_is_written_beside_no_ask_md_and_bound_as_relayed(repo, caps
     assert [(i.text, i.origin) for i in ledger.items][-1] == ("RELAYED-MARK add a thing", "relayed")
 
 
-def test_an_unmarked_ask_still_writes_ask_md(repo, capsys):
-    assert cli.main(["--ask", "add a thing", "--repo-root", str(repo)]) == 0
+def test_a_chosen_pm_ask_still_writes_ask_md(repo, capsys):
+    assert cli.main(["--ask", "add a thing", "--ask-source", "pm", "--repo-root", str(repo)]) == 0
     (path,) = _runs(repo)
     assert (path.parent / ASK_TEXT_FILE).is_file() and not (path.parent / RELAYED_ASK_FILE).exists()
 

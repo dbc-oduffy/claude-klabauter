@@ -140,6 +140,34 @@ def test_phase_titles_follow_the_landed_roadmap_blitz_meta(repo):
     assert "Fill stubs" not in script and "Size review" not in script
 
 
+def test_unfired_is_declared_and_collects_every_plan_blitz_bucket(repo):
+    from coordinator_core.ops.dispatch_emit.ask_fanout_contract import PLAN_BLITZ_UNFIRED_BUCKETS
+
+    _put(repo)
+    script = _compose(repo)
+    assert "const _unfired = [];" in script
+    for key, reason in PLAN_BLITZ_UNFIRED_BUCKETS:
+        assert f'["{key}", "{reason}"]' in script, key
+    assert "'absent-from-wave-reply'" in script and "'wave-not-run'" in script
+    assert script.index("_unfired.push") < script.index("plan-blitz surfaced items to the PM")
+
+
+def test_unfired_rides_the_next_action_and_both_returns(repo):
+    _put(repo)
+    script = _compose(repo)
+    assert "parent_sizing: _sizingRel, not_fired: _unfired" in script
+    assert "not_fired: _commit?.fanout?.not_fired ?? _unfired" in script
+    assert len(script.encode("utf-8")) < ask_compose._emit._WORKFLOW_SCRIPT_BYTE_CAP
+
+
+def test_unfired_is_in_the_run_embedded_roadmap_return(repo):
+    from coordinator_core.ops.dispatch_emit.tests.test_ask_compose import _compose as raw
+
+    script = raw(roadmap_blitz_text=_RB, in_run_commit=True)
+    assert "const _unfired = [];" in script
+    assert "ready: _ready, fanout: _commit?.fanout ?? null, not_fired: _commit?.fanout?.not_fired ?? _unfired }" in script
+
+
 def test_waves_pass_plan_blitz_batons_only_with_no_size_review_switch(repo):
     """DoE bd56e7cb55 folded Size review into Size; a sized baton (`sized: true`) already skips the
     scout, so the wave call carries no extra switch."""

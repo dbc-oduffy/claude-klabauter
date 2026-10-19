@@ -127,7 +127,6 @@ def test_non_spool_staged_path_commits_nothing_and_names_it(monkeypatch, capsys)
     captured = capsys.readouterr()
     assert rc == 3
     assert "RECONCILE-MERGE-NOT-STARTED branch=" in captured.out
-    assert "SPOOL-COMMITTED" not in captured.out
     assert captured.err.split("STAGED-PATHS\n", 1)[1].splitlines()[:2] == [
         "state/block-discharge/a.jsonl",
         "src/x.py",

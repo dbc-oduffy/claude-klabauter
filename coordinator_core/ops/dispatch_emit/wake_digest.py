@@ -70,16 +70,19 @@ CAP_HELPER_JS = (
 )
 
 
-#: Quoted stdin heredoc (`--params-file -`): neither ARG_MAX nor an apostrophe applies. Trap: the
-#: Bash tool halves backslashes in a heredoc body, so a Windows path loses an escape level; the
-#: `\u005c` rewrite below survives that. The in-run commit stage does not use this helper: it runs
-#: `--params-file <path>` and never sends params through a heredoc.
+#: One pasteable line: `--from-task-output '<path>'` hands the CLI the run's own task-output file,
+#: whose `next_action.params` it reads. No `<`, `>` or `&` appears (a heredoc's `<<` and JSON free
+#: text arrive HTML-escaped on a reader's surface). The path is `p.task_output_path` when the params
+#: carry one; the script cannot see its own output file, so otherwise the bare token
+#: `TASK_OUTPUT_PATH` stands for the wake notification's output path. Python port:
+#: `sibling_split._cli`; keep them identical.
+#: A Windows path stays literal inside the single quotes, so no escape such as `\u005c` is needed. The in-run commit stage does not use this helper: it runs `--params-file <path>`.
 TERMINAL_COMMIT_CLI_HELPER_JS = (
     "function _terminalCommitCli(p) { "
     "if (!p) return null; "
-    + r"""const s = JSON.stringify(p).replace(/\\\\/g, '\\u005c'); """
-    "const head = 'coordinator-invoke dispatch.terminal_commit'; "
-    + r"""return head + " --params-file - <<'JSON'\n" + s + "\nJSON"; """
+    "const t = (typeof p.task_output_path === 'string' && p.task_output_path "
+    + r"""&& !/[<>&'\r\n]/.test(p.task_output_path)) ? "'" + p.task_output_path + "'" : 'TASK_OUTPUT_PATH'; """
+    "return 'coordinator-invoke dispatch.terminal_commit --from-task-output ' + t; "
     "}"
 )
 

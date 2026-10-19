@@ -201,6 +201,45 @@ def test_release_skip_frees_nothing_skipped_and_leaves_slot_free():
     assert c.release(parent, statuses, 1) == ("r1",)
 
 
+def test_not_fired_names_and_vocabulary():
+    assert (c.INTERACTION_MODE_PARAM, c.PARENT_SIZING_KEY, c.NOT_FIRED_KEY) == (
+        "interaction_mode",
+        "parent_sizing",
+        "not_fired",
+    )
+    assert len(c.NOT_FIRED_REASONS) == 14 and len(set(c.NOT_FIRED_REASONS)) == 14
+    assert [k for k, _ in c.PLAN_BLITZ_UNFIRED_BUCKETS] == [
+        "pulled", "replan", "errored", "surfacedToPm", "adjudicated", "xsRuns", "routedElsewhere",
+    ]
+    assert all(reason in c.NOT_FIRED_REASONS for _, reason in c.PLAN_BLITZ_UNFIRED_BUCKETS)
+
+
+def test_not_fired_entry_drops_none_and_refuses_unknown_reason():
+    assert c.not_fired_entry(reason="after", plan="p.md", detail="waits on r1") == {
+        "plan": "p.md",
+        "reason": "after",
+        "detail": "waits on r1",
+    }
+    assert c.not_fired_entry(reason="wave-not-run", baton="b.md", wave=2) == {
+        "reason": "wave-not-run",
+        "wave": 2,
+        "baton": "b.md",
+    }
+    with pytest.raises(ValueError):
+        c.not_fired_entry(reason="bogus", plan="p.md")
+
+
+def test_not_fired_refusal_accepts_valid_and_names_first_bad_index():
+    good = [c.not_fired_entry(reason="queued", plan="p.md"), c.not_fired_entry(reason="pulled", baton="b")]
+    assert c.not_fired_refusal(good) is None
+    assert c.not_fired_refusal([]) is None
+    assert "[1]" in c.not_fired_refusal([good[0], "x"])
+    assert "[1]" in c.not_fired_refusal([good[0], {"reason": "nope", "plan": "p"}])
+    assert "[0]" in c.not_fired_refusal([{"reason": "queued"}])
+    assert "[0]" in c.not_fired_refusal([{"reason": "queued", "plan": ""}])
+    assert c.not_fired_refusal("x") is not None
+
+
 def test_superseded_marker_path_and_reader(tmp_path):
     assert c.superseded_rel("r") == "scratch/warp/r/superseded.json"
     assert c.read_superseded_by(tmp_path, "r") is None

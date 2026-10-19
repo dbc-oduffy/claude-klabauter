@@ -896,6 +896,7 @@ _PARAM_FIELDS = (
     Field("ask_brief_file", "str"),
     Field("stop_after", "str"),
     Field("ask_source", "str"),
+    Field("session_root", "str"),
     Field("route_preference", "str"),
     Field("em_rationale", "str"),
     Field("ask_context", "str_list"),
@@ -903,6 +904,7 @@ _PARAM_FIELDS = (
     Field("required_reviewers", "str_list"),
     Field("hold_rows", "str_list"),
     Field("hold_reason", "str"),
+    Field("fanout_group", "str"),
     Field("box_terms", "str_list"),
     Field("run_base_sha", "str"),
     Field("flags", "dict"),
@@ -1361,6 +1363,51 @@ def _research_route_setup(
     return research_ctx, pipeline_ctx, params
 
 
+def _account_inventory(
+    spine_path,
+    item_ids: list,
+    ledger: dict,
+    *,
+    landed_rows=None,
+    sibling=None,
+) -> dict:
+    """The `inventory_accounting` reply: every Chunk-table item in exactly one of
+    emitted, skipped (mint ledger, landed rows, other sibling) or refused
+    (`read_spine` exclusions). Raises `InventoryAccountingError` on a gap, so no
+    script ships with an unaccounted row. Rows are read the way `emit_script`
+    reads them; trailer-landed rows are not subtracted."""
+    from coordinator_core.ops.dispatch_emit.inventory_accounting import IN_ANOTHER_PART, account
+    from coordinator_core.ops.dispatch_emit.inventory_mint import _row_item_ids
+    from coordinator_core.ops.dispatch_emit.spine_read import read_spine
+
+    exclusions: list = []
+    rows = read_spine(spine_path, exclusions=exclusions)
+    owner = dict(zip((r.id for r in rows), _row_item_ids([{"id": r.id} for r in rows], item_ids)))
+    landed = frozenset(landed_rows or ())
+    keep = frozenset(sibling["keep_rows"]) if sibling else None
+
+    emitted: dict = {}
+    skipped: dict = dict(ledger)
+    spine_items: dict = {}
+    for r in rows:
+        spine_items.setdefault(owner[r.id], []).append(r.id)
+    for item, ids in spine_items.items():
+        live = [i for i in ids if i not in landed and (keep is None or i in keep)]
+        if live:
+            emitted[item] = True
+        elif keep is not None and not any(i in landed for i in ids):
+            skipped[item] = IN_ANOTHER_PART
+        else:
+            skipped[item] = "rows already landed (landed_rows)"
+    refused: dict = {}
+    if exclusions:
+        ex_ids = [{"id": str(e["id"])} for e in exclusions]
+        for e, item in zip(exclusions, _row_item_ids(ex_ids, item_ids)):
+            if item not in emitted and item not in skipped:
+                refused.setdefault(item, []).append(f"{e['id']} ({e['reason']}: {e['detail']})")
+    return account(item_ids, emitted, skipped, {i: "; ".join(why) for i, why in refused.items()})
+
+
 def _refuse_inventory_outside_repo(inventory_path: str, repo_root) -> None:
     """A plan row's `spec path` resolves against the inventory's own
     `<repo>/state/mise-inventory/` grandparent; an inventory anywhere else
@@ -1564,6 +1611,15 @@ def _dispatch_emit(
     refusal = validate_params("dispatch.emit", params, _PARAM_FIELDS)
     if refusal is not None:
         return refusal
+    from coordinator_core.ops.dispatch_emit.fanout_cost import FANOUT_GROUP_MODES, read_fanout
+
+    fanout_group = params.get("fanout_group")
+    if fanout_group is None:
+        fanout_group = "auto"
+    if fanout_group not in FANOUT_GROUP_MODES:
+        return {"error": f"dispatch.emit params.fanout_group must be one of {list(FANOUT_GROUP_MODES)}, got {fanout_group!r}"}
+    # Passed only when it departs from the default: "auto" is each composer's own default.
+    fanout_kwargs = {"fanout_group": fanout_group} if fanout_group != "auto" else {}
     plan_path = aliased_param(params, "plan_path", "plan")
     inventory_path = params.get("inventory_path")
     queue = params.get("queue")
@@ -1599,6 +1655,11 @@ def _dispatch_emit(
     if not isinstance(research_flag, bool):
         raise ValueError("dispatch.emit research must be a boolean")
     research_route = bool(from_sizing) or research_flag
+    if fanout_group == "split" and not (research_route or pipeline_name):
+        return {
+            "error": "dispatch.emit params.fanout_group 'split' is honoured by the pipeline and research "
+            "routes only; the plan, queue and ask composers take no override"
+        }
     research_ctx: Optional[dict] = None
     if research_route:
         if research_flag and not (isinstance(ask, str) and ask):
@@ -1671,7 +1732,9 @@ def _dispatch_emit(
             )
         if not sizing_path and not (isinstance(ask, str) and ask):
             raise ValueError("dispatch.emit ask requires a prompt string or sizing_path")
-        ask_source = params.get("ask_source") or ASK_SOURCE_PM
+        chosen_source = params.get("ask_source")
+        ask_source = chosen_source if chosen_source else (ASK_SOURCE_PM if sizing_path else ASK_SOURCE_RELAYED)
+        pm_verdict: Optional[str] = None
         if ask_source not in ASK_SOURCES:
             raise ValueError(f"dispatch.emit ask_source takes one of {ASK_SOURCES}, got {ask_source!r}")
         if ask_source == ASK_SOURCE_RELAYED and sizing_path:
@@ -1723,6 +1786,18 @@ def _dispatch_emit(
             ask_baton = _read_baton_ids(
                 ask_root, params.get("baton"), params.get("deliverable_id")
             )
+            if ask_source == ASK_SOURCE_PM:
+                from coordinator_core.ops import baton_pm_turns as _pm_turns
+
+                pm_verdict = _pm_turns.verify_pm_ask(
+                    ask, session_id=_receipt_session_id(params) or None,
+                    cwd=params.get("session_root") or str(ask_root),
+                )["verdict"]
+                if pm_verdict == "unmatched":
+                    raise ValueError(
+                        "dispatch.emit ask_source 'pm': the ask quotes no recorded PM turn of this session. "
+                        "Pass the PM's turn verbatim, or mark it relayed."
+                    )
         run_stamp = f"{datetime.now().strftime('%Y%m%dT%H%M%S')}-{uuid.uuid4().hex[:6]}"
         run_id = f"warp-{Path(sizing_rel).stem}-{run_stamp}" if sizing_rel else f"ask-{run_stamp}"
         reserved_parent = None
@@ -1769,7 +1844,8 @@ def _dispatch_emit(
             "root": ask_root, "prompt": prompt, "sizing_rel": sizing_rel, "run_id": run_id,
             "reserved_parent": reserved_parent, "rebound": rebound, "output_redirect": output_redirect,
             "inherited_base": inherited_base, "resumes_ask": resumes_ask,
-            "ask_source": ask_source, "relayed_slice_text": relayed_slice_text,
+            "ask_source": ask_source, "pm_verification": pm_verdict,
+            "relayed_slice_text": relayed_slice_text,
             "route_preference": route_pref,
             "required_reviewers": list(params.get("required_reviewers") or ()),
         }
@@ -1859,6 +1935,7 @@ def _dispatch_emit(
         return _emit_lanes(params, repo_root)
 
     inventory_review_specs: list = []
+    inventory_accounting: Optional[dict] = None
     tranche_inventory: dict = {}
     if not is_queue_route and ask_ctx is None and pipeline_ctx is None:
         if inventory_path:
@@ -1870,6 +1947,11 @@ def _dispatch_emit(
             tranche_report: dict = {}
             withheld_plans: dict = {}
             part_items: list = []
+            accounting_ledger: dict = {}
+            accounting_item_ids = [
+                _strip_backtick(r["id"])
+                for r in parse_chunk_table(Path(inventory_path).read_text(encoding="utf-8"))
+            ]
             spine_text, spine_path = mint_spine(
                 inventory_path,
                 max_rows=None if params.get("review_only_rows") else (params.get("max_rows") or DEFAULT_MAX_INVENTORY_ROWS),
@@ -1881,6 +1963,7 @@ def _dispatch_emit(
                 withheld_out=withheld_plans,
                 tranche_inventory_out=tranche_inventory,
                 part_items_out=part_items,
+                accounting_out=accounting_ledger,
             )
             if part:
                 # A part is cut from the inventory's rows, not its record, so
@@ -2040,6 +2123,7 @@ def _dispatch_emit(
             agent_type_host=agent_type_host,
             next_action=research_ctx["next_action"],
             legs=research_ctx["legs"],
+            **fanout_kwargs,
         )
         script = chain_parts[0].script
         receipt_extras = {
@@ -2072,6 +2156,7 @@ def _dispatch_emit(
             schedule,
             run_id=pipeline_ctx["run_id"],
             agent_type_host=agent_type_host,
+            **fanout_kwargs,
         )
         receipt_extras = {
             **(receipt_extras or {}),
@@ -2202,6 +2287,14 @@ def _dispatch_emit(
             if dropped:
                 raise NoWavesError(f"{empty}; read_spine excluded: {dropped}") from empty
             raise
+        if inventory_path and params.get("review_only_rows") is None:
+            inventory_accounting = _account_inventory(
+                plan_path,
+                accounting_item_ids,
+                accounting_ledger,
+                landed_rows=params.get("landed_rows"),
+                sibling=params.get("sibling"),
+            )
         if held_out:
             receipt_extras = {
                 **(receipt_extras or {}),
@@ -2276,6 +2369,9 @@ def _dispatch_emit(
         "error_count": error_count,
         "warn_count": warn_count,
     }
+    # A split chain has one script per part: each part reports its own fanout, none is summed.
+    if not split_parts:
+        reply["fanout"] = read_fanout(script)
     if split_parts:
         reply["parts"] = [
             {
@@ -2284,6 +2380,7 @@ def _dispatch_emit(
                 "sha256": e["sha256"],
                 "receipt": e["receipt"],
                 "part": f"{i}/{len(emitted)}",
+                "fanout": read_fanout(part.script),
             }
             for i, (part, e) in enumerate(emitted, start=1)
         ]
@@ -2295,6 +2392,9 @@ def _dispatch_emit(
 
     if ask_ctx is not None:
         reply["run_id"] = ask_ctx["run_id"]
+        reply["ask_source"] = ask_ctx["ask_source"]
+        if ask_ctx.get("pm_verification"):
+            reply["pm_verification"] = ask_ctx["pm_verification"]
         if ask_ctx.get("output_redirect"):
             from coordinator_core.ops.dispatch_emit.ask_contract import OUTPUT_PATH_REDIRECT_KEY
 
@@ -2334,6 +2434,8 @@ def _dispatch_emit(
 
     if inventory_path:
         reply["landed_reconciled"] = landed_reconciled
+        if inventory_accounting is not None:
+            reply["inventory_accounting"] = inventory_accounting
         if params.get("skip_landed"):
             reply["resume_skipped_landed"] = resume_skipped
         if tranche_report:

@@ -10,14 +10,14 @@ import pytest
 
 from coordinator_core.ops.dispatch_emit import terminal_commit
 from coordinator_core.ops.dispatch_emit.emit import emit_script
-from coordinator_core.ops.dispatch_emit.spine_read import MemoRowNoReceiptError, read_spine
+from coordinator_core.ops.dispatch_emit.spine_read import MemoRowNoReceiptError, MemoRowNoReceiverError, read_spine
 
 from .conftest import REVIEW_KW
 
 _OUTBOX = ".coordinator-local/memo-outbox"
 _MEMO_ROW = (
     "- id: M1\n  title: send the memo\n  change_kind: doc-edit\n"
-    f"  surface: {_OUTBOX}/topic.md\n  writes: []\n  disposition: open\n"
+    f"  surface: {_OUTBOX}/topic.md\n  writes: []\n  memo_to: example-game-repo-em\n  disposition: open\n"
     "  body: |\n    Send it.\n"
 )
 _CODE_ROW = (
@@ -86,6 +86,31 @@ def test_memo_row_naming_no_slug_is_refused(tmp_path):
     )
     with pytest.raises(MemoRowNoReceiptError):
         read_spine(_plan(tmp_path, row))
+
+
+def test_memo_row_without_memo_to_is_refused_naming_row_and_field(tmp_path):
+    row = _MEMO_ROW.replace("  memo_to: example-game-repo-em\n", "")
+    with pytest.raises(MemoRowNoReceiverError, match=r"'M1'.*memo_to"):
+        read_spine(_plan(tmp_path, row, _CODE_ROW))
+
+
+def test_memo_row_with_blank_memo_to_is_refused(tmp_path):
+    row = _MEMO_ROW.replace("memo_to: example-game-repo-em", "memo_to: '  '")
+    with pytest.raises(MemoRowNoReceiverError):
+        read_spine(_plan(tmp_path, row))
+
+
+def test_deferred_memo_row_without_memo_to_is_not_refused(tmp_path):
+    row = _MEMO_ROW.replace("  memo_to: example-game-repo-em\n", "").replace(
+        "disposition: open", "disposition: open\n  deferred: true"
+    )
+    assert [r.id for r in read_spine(_plan(tmp_path, row, _CODE_ROW))] == ["C1"]
+
+
+def test_memo_row_with_memo_to_reads_and_stages(tmp_path):
+    exclusions: list = []
+    read_spine(_plan(tmp_path, _MEMO_ROW, _CODE_ROW), exclusions=exclusions)
+    assert [(e["id"], e["reason"]) for e in exclusions] == [("M1", "memo-send")]
 
 
 def test_non_memo_empty_writes_row_is_unchanged(tmp_path):

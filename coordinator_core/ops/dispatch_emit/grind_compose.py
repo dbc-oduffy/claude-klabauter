@@ -118,6 +118,8 @@ from coordinator_core.ops.dispatch_emit.emit import (
 )
 from coordinator_core.ops.review_mint.execute_review import compose_execute_review
 from coordinator_core.ops.review_mint.roster import parse_execute_review
+from coordinator_core.ops._workflow_contract import scrub
+from coordinator_core.ops.dispatch_emit.fanout_cost import AGENT_CALL_RE, FanoutCost, with_fanout
 from coordinator_core.ops.dispatch_emit.grind_profile import Profile
 from coordinator_core.ops.dispatch_emit.queue_select import Manifest, ManifestEntry
 from coordinator_core.ops.workflow_scaffold import _js_string_literal
@@ -1471,7 +1473,10 @@ def compose_grind_script(
 
     lines: list[str] = []
     lines.append(_NODE_CHECK_COMMENT)
-    lines.append(_meta_block("queue-grind:" + profile.name, f"Queue grind over profile {profile.name!r}.", ["Grind", *review_phase_titles, _REVIEW_FIX_PHASE, pm_adjudication.ADJUDICATE_PHASE_TITLE]))
+    meta_text = _meta_block("queue-grind:" + profile.name, f"Queue grind over profile {profile.name!r}.", ["Grind", *review_phase_titles, _REVIEW_FIX_PHASE, pm_adjudication.ADJUDICATE_PHASE_TITLE])
+    meta_index = len(lines)
+    lines.append(meta_text)
+    once_per_run_legs: list[str] = []
     lines.append(_manifest_const(manifest))
     lines.append(
         "const BATCHES = " + json.dumps(batches_const, sort_keys=True) + ";"
@@ -1764,13 +1769,15 @@ def compose_grind_script(
         params_file_js="_paramsFile", params_js="params",
         agent_type_host=agent_type_host, run_key=run_key,
     )
-    lines.append(
+    terminal_commit_text = (
         "async function _terminalCommitCall(params) {\n"
         f"  const _paramsFile = REPO_ROOT.replace(/\\/+$/, '') + {_js_string_literal('/' + RUN_DIR_ROOT + '/')}"
         f" + RUN_ID + {_js_string_literal('/' + PARAMS_FILE_NAME)};\n"
         + _indent_block(_capture(commit_raw, "commit"), "  ")
         + "\n}"
     )
+    once_per_run_legs.append(terminal_commit_text)
+    lines.append(terminal_commit_text)
 
     lines.append(
         "function _counts() {\n  const by_type = {};\n  for (const h of _handedBack) { by_type[h.type] = (by_type[h.type] || 0) + 1; }\n  const by_outcome = {};\n  for (const s of _settled) { by_outcome[s.outcome] = (by_outcome[s.outcome] || 0) + 1; }\n  return { by_type, by_outcome, by_refute_origin: _byRefuteOrigin, by_triage_check: _byTriageCheck };\n}\nfunction _spend() {\n  return { output_tokens: budget.spent() - _startSpent, agent_calls_total: _callCount, agent_calls_by_stage_kind: _agentCallsByStageKind };\n}\nfunction _runCostRecord() {\n  return { profile: PROFILE_NAME, appetite: APPETITE_NAME, run_id: RUN_ID, resolved_knobs: RESOLVED_KNOBS, " + stage_models_field + "manifest_digest: MANIFEST_DIGEST, counts: _counts(), spend: _spend(), handed_back: _handedBack, halted: _haltReason() !== null, halted_reason: _haltReason(), terminal_commit_dropped: _terminalCommitDropped };\n}\nfunction _declaredWrites() {\n  const out = [];\n  for (const r of Object.keys(_rows)) { if (_rows[r].origin) out.push(_rows[r].path); if (_rows[r].sizingPath) out.push(_rows[r].sizingPath); }\n  return Array.from(new Set(out));\n}"
@@ -2005,9 +2012,9 @@ def compose_grind_script(
         "}"
     )
 
-    lines.append(
-        _run_close_block(profile_name=profile.name, queue_dirs=queue_dirs, agent_type_host=agent_type_host, run_key=run_key, models=stage_models)
-    )
+    run_close_text = _run_close_block(profile_name=profile.name, queue_dirs=queue_dirs, agent_type_host=agent_type_host, run_key=run_key, models=stage_models)
+    once_per_run_legs.append(run_close_text)
+    lines.append(run_close_text)
     lines.append(
         "const _admitted = {};\n"
         "const _queue = BATCHES.map((b) => b.id);\n"
@@ -2055,6 +2062,8 @@ def compose_grind_script(
         profile=profile.name, agent_type_host=agent_type_host, run_key=run_key, trailers=commit_trailers,
     )
     review_fix_call = _capture(review_fix_raw, "review-fix-commit")
+    once_per_run_legs.extend(block for _, block in review_blocks)
+    once_per_run_legs.append(review_fix_call)
     lines.append(
         "const _reviewPaths = Array.from(new Set(_settled.filter((s) => s.outcome === 'committed')"
         ".flatMap((s) => (_rows[s.row] || {}).touchedFiles || [])));\n"
@@ -2068,7 +2077,9 @@ def compose_grind_script(
         + "\n  })();\n}"
     )
 
-    lines.append(pm_adjudication.compose_adjudicate_block(agent_type_host=agent_type_host, run_key=run_key, models=stage_models))
+    adjudicate_text = pm_adjudication.compose_adjudicate_block(agent_type_host=agent_type_host, run_key=run_key, models=stage_models)
+    once_per_run_legs.append(adjudicate_text)
+    lines.append(adjudicate_text)
     lines.append(
         "await _adjudicatePmBound();\n"
         "} catch (e) { _grindErr = e; throw e; } finally { await _runClose(); }"
@@ -2087,4 +2098,15 @@ def compose_grind_script(
     )
     lines.append("return HANDBACK;")
 
+    # Per-row legs (size/fix/reject/verify/close), a retried drain and per-handback adjudication
+    # route at run time, so the count is a floor.
+    lines[meta_index] = with_fanout(
+        meta_text,
+        FanoutCost(
+            units=len(manifest.entries),
+            agents=len(grouped) + sum(len(AGENT_CALL_RE.findall(scrub(leg))) for leg in once_per_run_legs),
+            basis="lower-bound",
+            groups=tuple(tuple(e.row_id for e in entries) for _, entries in grouped),
+        ),
+    )
     return "\n\n".join(lines) + "\n"

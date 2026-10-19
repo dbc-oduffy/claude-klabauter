@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from coordinator_core.ops.dispatch_emit.ask_stage import _handler
 from coordinator_core.ops.dispatch_emit.spine_read import memo_draft_fields
 
@@ -72,11 +74,12 @@ def test_sent_receipt_yields_neither(tmp_path):
     assert reply["owed"] == []
 
 
-def test_row_without_a_receiver_gets_no_step_and_says_why(tmp_path):
-    reply = _stage(tmp_path, _plan(extra=""))
-    assert [r["id"] for r in reply["rows"]] == ["C1"]
-    assert _owed(reply) == [("M1", "memo-send")]
-    assert "no receiver" in reply["owed"][0]["detail"]
+def test_row_without_a_receiver_is_refused_at_read(tmp_path):
+    # read_spine refuses an unsent memo-send row with no memo_to before staging runs.
+    from coordinator_core.ops.dispatch_emit.spine_read import MemoRowNoReceiverError
+
+    with pytest.raises(MemoRowNoReceiverError):
+        _stage(tmp_path, _plan(extra=""))
 
 
 def test_draft_fields_refuse_a_bad_kind_and_a_missing_slug():

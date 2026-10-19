@@ -262,13 +262,12 @@ def _first(values: Sequence):
 
 def _cli(params: Optional[dict]) -> Optional[str]:
     """Python port of the emitted ``_terminalCommitCli`` helper."""
-    import json
-
     if not params:
         return None
-    s = json.dumps(params, separators=(",", ":"), ensure_ascii=False).replace("\\\\", "\\u005c")
-    head = "coordinator-invoke dispatch.terminal_commit"
-    return head + " --params-file - <<'JSON'\n" + s + "\nJSON"
+    path = params.get("task_output_path")
+    ok = isinstance(path, str) and path and not any(c in path for c in "<>&'\r\n")
+    target = f"'{path}'" if ok else "TASK_OUTPUT_PATH"
+    return "coordinator-invoke dispatch.terminal_commit --from-task-output " + target
 
 
 def merge_digests(digests: Mapping[str, dict], manifest: Mapping) -> dict:

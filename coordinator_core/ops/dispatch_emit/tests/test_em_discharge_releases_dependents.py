@@ -73,7 +73,7 @@ def test_undischarged_em_row_still_withholds_dependent(tmp_path):
 @pytest.mark.parametrize(
     "extra",
     [
-        "  performer: em\n  kind: memo-send\n  receipt: .coordinator-local/memo-outbox/sent/slug-x.md\n",
+        "  performer: em\n  kind: memo-send\n  memo_to: coordinator-content-repo\n  receipt: .coordinator-local/memo-outbox/sent/slug-x.md\n",
         "  performer: em\n  execution_mode: operator\n",
     ],
     ids=["memo-send", "operator"],

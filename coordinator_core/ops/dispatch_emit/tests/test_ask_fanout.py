@@ -54,7 +54,7 @@ def test_disjoint_pair_is_two_ready_runs_with_the_frozen_reply(repo):
 
 
 def test_slice_sizing_carries_verbatim_intent_and_parent_marker(repo):
-    out = _go(repo, {"asks": [{"ask": "fix a", "writes": ["a"]}, {"ask": "fix b", "writes": ["b"]}]})
+    out = _go(repo, {"asks": [{"ask": "fix a", "source": "pm", "writes": ["a"]}, {"ask": "fix b", "source": "pm", "writes": ["b"]}]})
     for run, ready in zip(out["runs"], out["ready"]):
         doc = _sizing(repo, ready["sizing"])
         assert doc["intent"].startswith("fix ") and doc["intent_source"] == "em-elaborated"
@@ -67,7 +67,7 @@ def test_mixed_sources_stamp_only_the_relayed_slice(repo):
     out = _go(repo, {"asks": [
         {"ask": "fix a", "source": "relayed", "writes": ["a"]},
         {"ask": "fix b", "source": "pm", "writes": ["b"]},
-        {"ask": "fix c", "writes": ["c"]},
+        {"ask": VERBATIM, "writes": ["c"]},
     ]})
     assert out["exit_code"] == 0, out
     paths = sorted((repo / "state" / "sizings").glob("*.yaml"))
@@ -75,7 +75,8 @@ def test_mixed_sources_stamp_only_the_relayed_slice(repo):
     assert len(docs) == 3
     assert docs[0]["em_analysis"][c.SLICE_SOURCE_KEY] == "relayed"
     assert c.slice_ask_source(docs[0]) == "relayed"
-    assert all(c.SLICE_SOURCE_KEY not in d["em_analysis"] for d in docs[1:])
+    assert c.SLICE_SOURCE_KEY not in docs[1]["em_analysis"]
+    assert c.slice_ask_source(docs[2]) == "relayed" and "pm_verbatims" not in docs[2]
 
 
 def test_overlapping_and_no_hint_slices_are_sequenced(repo):
@@ -187,7 +188,7 @@ def test_no_recorded_pm_turn_proceeds_stamped_relayed(tmp_path, monkeypatch):
 def test_relayed_source_with_a_pm_turn_carries_text_and_sender_not_the_pm_turn(repo):
     out = _go(repo, {"sender": "peer-b", "asks": [
         {"ask": "fix a", "source": "relayed", "relayed_text": "peer said: fix a", "writes": ["a"]},
-        {"ask": "fix b", "writes": ["b"]},
+        {"ask": "fix b", "source": "pm", "writes": ["b"]},
     ]})
     assert out["exit_code"] == 0, out
     relayed, pm = (_sizing(repo, r["sizing"]) for r in out["ready"])
@@ -234,6 +235,52 @@ def test_invalid_route_preference_refuses_before_any_write(repo, item, named):
 
 
 def test_sized_through_turn_moves_once_after_the_last_slice(repo):
-    out = _go(repo, {"asks": [{"ask": "x", "writes": ["a"]}, {"ask": "y", "writes": ["b"]}]})
+    out = _go(repo, {"asks": [
+        {"ask": "x", "source": "pm", "writes": ["a"]}, {"ask": "y", "source": "pm", "writes": ["b"]},
+    ]})
     assert out["exit_code"] == 0
     assert store.read_baton(SID, str(repo)).get("sized_through_turn") == 0
+
+
+def test_all_relayed_submission_does_not_move_the_sized_through_mark(repo):
+    out = _go(repo, {"asks": [{"ask": "x", "writes": ["a"]}, {"ask": "y", "source": "relayed", "writes": ["b"]}]})
+    assert out["exit_code"] == 0
+    assert store.read_baton(SID, str(repo)).get("sized_through_turn") != 0
+
+
+def test_unmarked_item_matching_a_recorded_turn_is_relayed_without_pm_verbatims(repo):
+    out = _go(repo, {"asks": [{"ask": VERBATIM.upper(), "writes": ["a"]}]})
+    doc = _sizing(repo, out["ready"][0]["sizing"])
+    assert "pm_verbatims" not in doc
+    assert c.slice_ask_source(doc) == "relayed"
+
+
+def test_unmarked_and_relayed_items_never_read_the_turn_log(repo, monkeypatch):
+    def boom(*a, **k):
+        raise AssertionError("turn log read")
+
+    monkeypatch.setattr(PT, "recent_window", boom)
+    monkeypatch.setattr(PT, "_load", boom)
+    out = _go(repo, {"asks": [{"ask": VERBATIM, "writes": ["a"]}, {"ask": "y", "source": "relayed", "writes": ["b"]}]})
+    assert out["exit_code"] == 0, out
+
+
+def test_pm_item_with_no_recorded_turn_refuses_before_any_write(tmp_path, monkeypatch):
+    (tmp_path / ".git").mkdir()
+    (tmp_path / "hub" / SID).mkdir(parents=True)
+    monkeypatch.setattr(store, "baton_dir", lambda s, cwd=None: tmp_path / "hub" / s)
+    monkeypatch.setattr(c, "concurrent_run_budget", lambda physical_cores=None: 2)
+    before = _snapshot(tmp_path)
+    out = mod.fanout({"asks": [{"ask": "x", "writes": ["a"]}, {"ask": "y", "source": "pm", "writes": ["b"]}], "session_id": SID}, tmp_path)
+    assert out["exit_code"] == 1 and out["applied"] is False
+    assert "asks[1]" in out["error"] and "relayed" in out["error"]
+    assert _snapshot(tmp_path) == before
+
+
+def test_unmarked_item_matching_no_turn_is_relayed_without_pm_verbatims(repo):
+    out = _go(repo, {"asks": [{"ask": "fix a", "writes": ["a"]}, {"ask": f"EM says: {VERBATIM}", "writes": ["b"]}]})
+    assert out["exit_code"] == 0, out
+    for ready in out["ready"]:
+        doc = _sizing(repo, ready["sizing"])
+        assert "pm_verbatims" not in doc
+        assert c.slice_ask_source(doc) == "relayed"

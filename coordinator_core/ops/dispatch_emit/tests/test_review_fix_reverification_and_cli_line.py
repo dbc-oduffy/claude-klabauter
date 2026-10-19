@@ -81,11 +81,13 @@ def test_ask_route_terminal_test_covers_review_edits_too():
 # --- terminal_commit_cli ----------------------------------------------------
 
 
-def _digest(tmp_path, *, inline_note: str = "") -> dict:
+def _digest(tmp_path, *, inline_note: str = "", params_extra: str = "") -> dict:
     node = shutil.which("node")
     if node is None:
         pytest.skip("node unavailable to execute the generated script")
     js = wd.completion_return_js(**_kwargs(script_path="wf.mjs", session_id="s" * 8, anchor_plan_path="p.md"))
+    if params_extra:
+        js = js.replace("incomplete_chunks:", params_extra + ", incomplete_chunks:", 1)
     harness = tmp_path / "cli.js"
     harness.write_text(
         "let _halted = null, _incompleteChunks = [], _unansweredBriefs = [], _notStarted = [], _planHeld = {}, "
@@ -109,74 +111,54 @@ def _digest(tmp_path, *, inline_note: str = "") -> dict:
     return json.loads(proc.stdout)
 
 
-def _heredoc(line: str) -> tuple[str, str]:
-    head, _, rest = line.partition("\n")
-    body, _, tail = rest.rpartition("\n")
-    assert tail == "JSON"
-    return head, body
-
-
-_HEAD = "coordinator-invoke dispatch.terminal_commit --params-file - <<'JSON'"
+_CLI = "coordinator-invoke dispatch.terminal_commit --from-task-output TASK_OUTPUT_PATH"
 
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_digest_carries_a_terminal_commit_line_whose_params_equal_next_action_params(tmp_path):
+def test_digest_carries_one_pasteable_terminal_commit_line(tmp_path):
     digest = _digest(tmp_path)
 
-    head, body = _heredoc(digest["terminal_commit_cli"])
-    assert head == _HEAD
-    params = json.loads(body)
-    assert params == digest["next_action"]["params"]
-    assert params["inline_review"]["integration_stem"]
+    assert digest["terminal_commit_cli"] == _CLI
+    assert digest["next_action"]["params"]["inline_review"]["integration_stem"]
     assert wd.validate_digest(digest) == []
 
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_an_apostrophe_in_the_params_survives_the_heredoc(tmp_path):
-    digest = _digest(tmp_path, inline_note="it's ")
+def test_params_free_text_never_reaches_the_cli_line(tmp_path):
+    digest = _digest(tmp_path, inline_note="it's <&> E:\\x\\.coordinator-local\\")
 
-    _, body = _heredoc(digest["terminal_commit_cli"])
-
-    assert json.loads(body) == digest["next_action"]["params"]
-    assert "it's w.md" in body
+    assert digest["terminal_commit_cli"] == _CLI
+    assert not set(digest["terminal_commit_cli"]) & set("<>&")
 
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_a_windows_path_in_the_params_round_trips_through_the_cli_line(tmp_path):
-    digest = _digest(tmp_path, inline_note="E:\\x\\.coordinator-local\\")
-    line = digest["terminal_commit_cli"]
+def test_a_params_task_output_path_is_named_in_the_line(tmp_path):
+    digest = _digest(tmp_path, params_extra="task_output_path: '/t/run.output'")
 
-    _, body = _heredoc(line)
-    assert json.loads(body) == digest["next_action"]["params"]
-    assert "\\\\" not in body
-    assert "E:\\u005cx\\u005c.coordinator-local\\u005cw.md" in body  # abs-path-ok: escape fixture
+    assert digest["next_action"]["params"]["task_output_path"] == "/t/run.output"
+    assert digest["terminal_commit_cli"] == (
+        "coordinator-invoke dispatch.terminal_commit --from-task-output '/t/run.output'"
+    )
 
-    # The file route: the shell hands the heredoc to the CLI's `--params-file -` untouched.
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_the_line_pastes_into_a_shell_as_one_invocation(tmp_path):
+    digest = _digest(tmp_path, params_extra="task_output_path: 'C:\\\\t\\\\run.output'")  # abs-path-ok: quoting fixture
     bash = shutil.which("bash")
     if bash is None:
-        pytest.skip("bash unavailable to execute the heredoc")
-    shell_line = line.replace(
-        "coordinator-invoke dispatch.terminal_commit --params-file -", "cat", 1
+        pytest.skip("bash unavailable to execute the line")
+    shell_line = digest["terminal_commit_cli"].replace(
+        "coordinator-invoke dispatch.terminal_commit --from-task-output", "printf %s", 1
     )
     proc = subprocess.run(
         [bash, "-s"], input=shell_line, capture_output=True, text=True, timeout=30, **no_console_creationflags()
     )
     assert proc.returncode == 0, proc.stderr
-    assert json.loads(proc.stdout) == digest["next_action"]["params"]
-
-
-@pytest.mark.spawns_process
-@pytest.mark.cadence
-def test_large_params_use_the_same_heredoc(tmp_path):
-    digest = _digest(tmp_path, inline_note="x" * 20000)
-
-    head, body = _heredoc(digest["terminal_commit_cli"])
-
-    assert head == _HEAD
-    assert json.loads(body) == digest["next_action"]["params"]
+    assert proc.stdout == digest["next_action"]["params"]["task_output_path"]
 
 
 @pytest.mark.spawns_process
@@ -206,4 +188,3 @@ def test_the_ask_route_return_carries_the_line_too():
     ask = _compose_ask()
 
     assert "get terminal_commit_cli()" in ask and "function _terminalCommitCli(" in ask
-

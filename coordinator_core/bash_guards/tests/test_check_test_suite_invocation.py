@@ -2925,6 +2925,45 @@ def test_pnpm_test_package_script_keeps_its_verdict(pnpm_fast_cmd):
         assert guard.check(_payload(cmd, pnpm_fast_cmd, agent_id=_AGENT_ID)) is not None
 
 
+@pytest.mark.parametrize("cmd", [
+    "pnpm tsx scripts/ddct-probe.ts --all",
+    "pnpm tsx scripts/ddct-probe.ts --all --verbose",
+    "pnpm tsx scripts/ddct-probe.ts --all test",
+    "pnpm tsx scripts/ddct-probe.ts --all --filter test",
+    "pnpm tsx scripts/ddct-probe.ts --all -- test",
+    "pnpm tsx scripts/ddct-probe.ts --all 2>&1 | tee out.log",
+    "mkdir -p out/probe && ls out/probe && pnpm tsx scripts/ddct-probe.ts --all --base https://playeratlas.web.app --entity test",
+    "pnpm scripts/ddct-probe.ts test",
+    "yarn node scripts/probe.mjs --suite test",
+])
+def test_script_cli_sharing_a_token_with_pnpm_test_is_not_the_configured_suite(pnpm_fast_cmd, cmd):
+    assert guard.classify_command(cmd, cwd=str(pnpm_fast_cmd)) == []
+    assert guard.check(_payload(cmd, pnpm_fast_cmd, agent_id=_AGENT_ID)) is None
+    assert guard.check(_payload(cmd, pnpm_fast_cmd)) is None
+
+
+@pytest.mark.parametrize("cmd", [
+    "pnpm test",
+    "pnpm test --all",
+    "pnpm -r test",
+    "pnpm run test",
+    "pnpm test src/a.test.ts",
+    "pnpm test scripts/ddct-probe.ts",
+])
+def test_script_cli_carve_out_keeps_real_pnpm_test_runs_denied(pnpm_fast_cmd, cmd):
+    assert guard.classify_command(cmd, cwd=str(pnpm_fast_cmd)) != []
+    assert guard.check(_payload(cmd, pnpm_fast_cmd, agent_id=_AGENT_ID)) is not None
+
+
+def test_script_cli_carve_out_does_not_apply_when_config_names_the_script(repo, free_mutex, monkeypatch):
+    monkeypatch.setattr(
+        guard, "_configured_test_cmds",
+        lambda root: [guard.ConfiguredCmd("fast_test_cmd", "pnpm tsx scripts/run-suite.ts --all", 0)],
+    )
+    cmd = "pnpm tsx scripts/run-suite.ts --all -q"
+    assert guard.check(_payload(cmd, repo, agent_id=_AGENT_ID)) is not None
+
+
 def test_pm_exec_without_a_runner_is_not_peeled():
     assert guard._strip_command_prefix(["pnpm", "exec"]) == ["pnpm", "exec"]
     assert guard._strip_command_prefix(["pnpm", "test"]) == ["pnpm", "test"]

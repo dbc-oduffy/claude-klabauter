@@ -4,7 +4,7 @@ The marker is `halted.json` in the run's record dir. It is rewritten to `resumed
 unlinked: terminal_commit drops record-dir deletions, so an unlinked marker would stay an
 uncommitted tracked deletion. The marker may carry `run_base_sha` (the halted run's review base,
 read by `halted_run_base`); `halted_ask_run_for` finds a halted `ask-*` run naming a sizing.
-Stdlib plus the atomic writer; no subprocess, no git.
+`revised_at` is stamped by `mark_revised` when workflow.revise lands on a halted run and read by `revised_halt`. Stdlib plus the atomic writer; no subprocess, no git.
 
 Accepted residual: two concurrent refires of one halted sizing can both read `halted` before
 either rewrites it.
@@ -28,6 +28,7 @@ from coordinator_core.ops.dispatch_emit.ask_fanout_contract import STATUS_HALTED
 HALTED_FILE = "halted.json"
 STATUS_RESUMED = "resumed"
 HALT_RUN_BASE_FIELD = "run_base_sha"
+REVISED_AT_FIELD = "revised_at"
 _SHA40 = re.compile(r"[0-9a-f]{40}")
 _DATE_PREFIX = re.compile(r"(\d{4})-(\d{2})-(\d{2})")
 
@@ -192,6 +193,24 @@ def rebind_blocker(repo_root: Path, run_id: str, session_id: str) -> Optional[st
     if recorded is None or recorded == session_id:
         return None
     return None if session_live(recorded) else EMITTER_GONE
+
+
+def mark_revised(record_dir: Path, at: str) -> bool:
+    """Stamp `revised_at` on a `halted` marker; False and no write when it is absent or not halted."""
+    marker = _read(Path(record_dir))
+    if marker is None or marker.get("status") != STATUS_HALTED:
+        return False
+    _write(Path(record_dir), {**marker, REVISED_AT_FIELD: at})
+    return True
+
+
+def revised_halt(record_dir: Path) -> Optional[str]:
+    """The `revised_at` value while the marker is `halted`, else None. One marker read."""
+    marker = _read(Path(record_dir))
+    if marker is None or marker.get("status") != STATUS_HALTED:
+        return None
+    value = marker.get(REVISED_AT_FIELD)
+    return value if isinstance(value, str) and value else None
 
 
 def mark_resumed(record_dir: Path) -> bool:
