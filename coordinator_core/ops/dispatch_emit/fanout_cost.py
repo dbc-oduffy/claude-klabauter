@@ -182,10 +182,11 @@ def read_fanout(script: str) -> dict[str, Any] | None:
 GROUP_MEMBER_RESULT_JS = """\
 function _memberResult(text, id) {
   const lines = String(text == null ? '' : text).split('\\n');
-  const head = id + ':';
+  const esc = id.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&');
+  const re = new RegExp('(?:^|[^\\\\w.\\\\-/])[*_`]*' + esc + '[*_`]*\\\\s*:[*_`\\\\s]*(DONE|PARTIAL|BLOCKED)(?![\\\\w-])[*_`]*(.*)$', 'i');
   for (let i = lines.length - 1; i >= 0; i--) {
-    const line = lines[i].trim();
-    if (line.startsWith(head)) return line;
+    const m = re.exec(lines[i]);
+    if (m) return (id + ': ' + m[1].toUpperCase() + ' ' + m[2].trim()).trim();
   }
   return null;
 }

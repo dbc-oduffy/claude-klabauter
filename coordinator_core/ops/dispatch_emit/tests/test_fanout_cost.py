@@ -144,3 +144,24 @@ def test_member_result_helper_returns_each_members_own_line_or_null():
         **no_console_creationflags(),
     )
     assert out.stdout.strip() == '["C1: DONE ok","C10: PARTIAL half",null,null]'
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node absent")
+def test_member_result_credits_decorated_and_inline_status_lines_each_to_own_row():
+    r = (
+        "work done\\n**C0: DONE** ran 51 tests pass\\n- S1: PARTIAL half\\n"
+        "* `T1`: BLOCKED nope\\nC1 notes: DONE-ish\\nC10: DONE ten\\nfinal: Z9: DONE inline"
+    )
+    probe = (
+        f.GROUP_MEMBER_RESULT_JS
+        + f"const r = '{r}';"
+        + "console.log(JSON.stringify(['C0','S1','T1','C1','C10','Z9','Q'].map(i=>_memberResult(r,i))));"
+    )
+    out = subprocess.run(
+        [shutil.which("node"), "-e", probe], capture_output=True, text=True, timeout=30,
+        **no_console_creationflags(),
+    )
+    assert out.stdout.strip() == (
+        '["C0: DONE ran 51 tests pass","S1: PARTIAL half","T1: BLOCKED nope",null'
+        ',"C10: DONE ten","Z9: DONE inline",null]'
+    )
