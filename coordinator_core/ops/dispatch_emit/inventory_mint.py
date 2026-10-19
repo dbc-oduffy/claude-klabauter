@@ -844,6 +844,19 @@ def _plan_raw_rows_by_id(
 _WRITABLE_GATE_KINDS = ("output-consumption-runtime", "epistemic-premise")
 
 
+def _plan_row_skip_reason(named: dict, skip_landed: bool) -> Optional[str]:
+    """Why a single-chunk-reference item mints no row, from its source plan row's
+    disposition; `None` when it mints. `coded` skips only under `skip_landed`;
+    every other `NON_DISPATCHABLE_DISPOSITIONS` value (`delivered_elsewhere`,
+    `spun_off`, ...) skips always -- the plan row is the one home of a disposition."""
+    disposition = with_canonical_disposition(named).get("disposition")
+    if disposition == "coded":
+        return "coded in its plan (skip_landed)" if skip_landed else None
+    if disposition in NON_DISPATCHABLE_DISPOSITIONS:
+        return f"disposition {disposition} in its plan"
+    return None
+
+
 def _plan_chunk_repairs(
     chunk_rows: List[Dict[str, str]],
     inventory_path: Path,
@@ -873,7 +886,7 @@ def _plan_chunk_repairs(
             continue
         if _raw_disposition_kind(row_id, row["disposition"]) != _DEP_KIND_LIVE:
             continue
-        if skip_landed and with_canonical_disposition(named).get("disposition") == "coded":
+        if _plan_row_skip_reason(named, skip_landed) is not None:
             continue
         prefix = row_id.split("-", 1)[0] if "-" in row_id else None
         cell_deps = _split_id_list(row["deps"])
@@ -1097,7 +1110,7 @@ def mint_rows(
             accounting_out[row_id] = (
                 f"dependency {blocker} routed out" if blocker else row["disposition"].strip()
             )
-    if skip_landed and inventory_path is not None:
+    if inventory_path is not None:
         for row in chunk_rows:
             row_id = _strip_backtick(row["id"])
             if dep_kinds[row_id] != _DEP_KIND_LIVE or not _strip_backtick(row["spec path"]):
@@ -1106,12 +1119,13 @@ def mint_rows(
                 inventory_path, _strip_backtick(row["spec path"]), plan_cache
             )
             named = raw_rows.get(row_id) or raw_rows.get(_bare_plan_row_id(row_id))
-            if named is not None and with_canonical_disposition(named).get("disposition") == "coded":
+            reason = _plan_row_skip_reason(named, skip_landed) if named is not None else None
+            if reason is not None:
                 dep_kinds[row_id] = _DEP_KIND_CLOSED_SATISFIED
-                if skipped_out is not None:
+                if skipped_out is not None and with_canonical_disposition(named).get("disposition") == "coded":
                     skipped_out.append(row_id)
                 if accounting_out is not None:
-                    accounting_out[row_id] = "coded in its plan (skip_landed)"
+                    accounting_out[row_id] = reason
     live: List[Tuple[str, Dict[str, str], List[str]]] = []
     writes_by_id: Dict[str, set] = {}
     writes_under_by_id: Dict[str, List[str]] = {}

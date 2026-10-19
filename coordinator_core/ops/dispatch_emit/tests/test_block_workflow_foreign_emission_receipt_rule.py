@@ -42,6 +42,7 @@ def _denied(result):
 def test_amended_plan_is_denied_naming_reemit(tmp_path):
     result = _fire(tmp_path, receipt_extra=_provenance(PLAN_V1), plan_now=PLAN_V2)
     assert _denied(result)
+    assert "changed since emission" in json.dumps(result)
     assert "--plan " + PLAN_REL in json.dumps(result)
 
 

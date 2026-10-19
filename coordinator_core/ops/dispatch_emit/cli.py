@@ -375,6 +375,13 @@ def _build_parser() -> argparse.ArgumentParser:
         "edges onto landed rows count as satisfied",
     )
     parser.add_argument(
+        "--only",
+        default=None,
+        metavar="ROW[,ROW...]",
+        help="with --only-incomplete: restrict the re-emit to these incomplete rows; every other "
+        "incomplete row is held out. Exclusive of --hold",
+    )
+    parser.add_argument(
         "--hold",
         default=None,
         metavar="ROW[,ROW...]",
@@ -1178,10 +1185,61 @@ def _do_resume(args: argparse.Namespace) -> int:
     return EXIT_OK if all(r.get("ok", True) for r in results) else EXIT_DATA_ERROR
 
 
+def _only_subset_holds(args, params: dict, repo_root) -> "Optional[str]":
+    """Express ``--only`` as ``hold_rows`` over the other incomplete rows, or return the one-line
+    refusal. Landed rows are the run text's plus the plan's checkpoint trailers, as ``emit_script``
+    reckons them; ``emit_script`` re-reads the trailers, so this path pays that git read twice."""
+    from coordinator_core.ops.dispatch_emit.emit import _spec_path_for_prompt, checkpoint_landed_state
+    from coordinator_core.ops.dispatch_emit.op import _repo_root_for_plan
+    from coordinator_core.ops.dispatch_emit.spine_read import SpineReadError, read_spine
+    from coordinator_core.ops.dispatch_emit.wave_map import transitive_dependents
+
+    named = {r.strip() for r in args.only.split(",") if r.strip()}
+    if not named:
+        return "--only names no row"
+    try:
+        spine = read_spine(Path(args.plan))
+    except (OSError, SpineReadError) as exc:
+        return str(exc)
+    root = repo_root or _repo_root_for_plan(args.plan)
+    landed = set(params.get("landed_rows") or ())
+    if root is not None:
+        landed |= checkpoint_landed_state(
+            Path(root), _spec_path_for_prompt(Path(args.plan), root).as_posix()
+        )[0]
+    incomplete = {r.id for r in spine} - landed
+    unknown = named - incomplete
+    if unknown:
+        return (
+            f"--only row(s) {', '.join(sorted(unknown))} are not incomplete dispatchable rows of "
+            f"{args.plan} (incomplete: {', '.join(sorted(incomplete)) or 'none'})"
+        )
+    others = incomplete - named
+    if not others:
+        return None
+    blocked = transitive_dependents([r for r in spine if r.id in incomplete], others)
+    stuck = sorted(named & set(blocked))
+    if stuck:
+        return (
+            f"--only row(s) {', '.join(stuck)} depend on incomplete row(s) outside --only; "
+            "name those rows too"
+        )
+    params["hold_rows"] = sorted(others)
+    params["hold_reason"] = "outside the --only subset"
+    return None
+
+
 def _review_only_refusal(args) -> "Optional[str]":
     """The usage error for a bad ``--review-only``/``--run-base`` combination, or None."""
     if args.rows is not None and args.review_only is None:
-        return "--rows is accepted only with --review-only"
+        return "--rows is accepted only with --review-only; to restrict an --only-incomplete re-emit use --only"
+    if args.only is not None:
+        if not args.only_incomplete:
+            return "--only is accepted only with --only-incomplete"
+        if args.hold or args.hold_reason:
+            return "--only is exclusive of --hold"
+        if not args.plan or args.inventory or args.review_only is not None or args.sibling:
+            return "--only applies to --plan alone"
     if args.review_only is None and args.run_base is None:
         return None
     if args.review_only is None or args.run_base is None:
@@ -1858,6 +1916,11 @@ def main(argv: "Optional[list[str]]" = None) -> int:
                 )
                 return EXIT_USAGE
             params["landed_rows"] = sorted(landed_rows_from_text(run_text))
+        if args.only is not None:
+            refusal = _only_subset_holds(args, params, repo_root)
+            if refusal:
+                print(f"emit-dispatch-workflow: ERROR — {refusal}", file=sys.stderr)
+                return EXIT_USAGE
     if args.review_only is not None:
         from coordinator_core.ops.dispatch_emit.emit import landed_rows_from_text
         from coordinator_core.ops.dispatch_emit.spine_read import SpineReadError, coded_row_ids

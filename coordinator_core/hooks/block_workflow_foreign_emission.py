@@ -157,8 +157,9 @@ def _session_mismatch_reason(script: Path, session: str, recorded_session: str) 
 
 def _plan_amended_reason(script: Path, receipt: Mapping) -> "Optional[str]":
     """Deny reason when the receipt's plan body sha differs from the plan file's current
-    canonical body sha, else None. A receipt without the keys, a missing plan, or any
-    failure yields None."""
+    canonical body sha, else None. A receipt without the keys, a missing plan, or an
+    unreadable plan yields None. The repo root is walked from the SCRIPT's parents, so a script
+    emitted outside the checkout is never checked (fail-open)."""
     try:
         recorded = receipt.get("plan_body_sha")
         rel = receipt.get("plan_relpath")
@@ -184,7 +185,7 @@ def _plan_amended_reason(script: Path, receipt: Mapping) -> "Optional[str]":
             "Fix: re-emit --\n"
             f"  {launcher} --plan {rel}"
         )
-    except Exception:
+    except (OSError, UnicodeDecodeError, ValueError):
         return None
 
 
@@ -348,6 +349,7 @@ def _handler(params: dict, repo_root=None) -> dict:
             _session_mismatch_reason(script, session, recorded_session),
         )
 
+    # Runs before the resume branch: resuming a run whose plan was amended is refused too.
     amended = _plan_amended_reason(script, receipt)
     if amended:
         return _resolved_deny(amended)
