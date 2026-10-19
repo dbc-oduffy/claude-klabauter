@@ -479,6 +479,7 @@
           "properties": {
             "pre_existing": { "type": "array", "maxItems": 50, "items": { "type": "string", "maxLength": 300 } },
             "caused": { "type": "array", "maxItems": 50, "items": { "type": "string", "maxLength": 300 } },
+            "foreign": { "type": "array", "maxItems": 50, "items": { "type": "string", "maxLength": 300 } },
             "unverified": {
               "type": "array",
               "maxItems": 50,

@@ -1902,7 +1902,8 @@ def compose_ask_script(
     )
     b.append(
         f"  if (_resumeLedger) {{ _planRel = {_rl0}.plan; if (_ledgerUnlanded.length) {{ _ledgerExec = true; }} "
-        f"else if (!_ledgerOwes) {{ _gate = {{ ..._gate, arm: {_lit(ARM_XS)} }}; }} }}"
+        f"else if (!_ledgerOwes) {{ _gate = {{ ..._gate, arm: {_lit(ARM_XS)} }}; }} "
+        f"if (_gate.arm === {_lit(ARM_S)}) {{ _gate = {{ ..._gate, resume_plan: _planRel }}; }} }}"
     )
     b.append(
         f"  const _allLandedResume = _resumeLedger && {_rl0}.{RESUME_LEDGER_KIND_FIELD} === {_lit(ALL_LANDED_HALT_KIND)};"

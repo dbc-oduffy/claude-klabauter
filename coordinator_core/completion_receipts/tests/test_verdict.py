@@ -207,6 +207,35 @@ def test_a_caused_unverified_or_unattributed_failure_still_refuses(over):
     assert not baseline_clears(record) and effective_test_verdict(record) == "fail"
 
 
+def test_all_foreign_failures_clear():
+    record = _baseline_record(
+        tests_failed=2, baseline={"pre_existing": [], "foreign": ["a", "b"], "caused": [], "unverified": []}
+    )
+    assert baseline_clears(record) and effective_test_verdict(record) == "pass"
+
+
+def test_pre_existing_plus_foreign_mix_covering_the_failures_clears():
+    record = _baseline_record(
+        tests_failed=2, baseline={"pre_existing": ["a"], "foreign": ["b"], "caused": [], "unverified": []}
+    )
+    assert baseline_clears(record)
+
+
+def test_foreign_plus_one_caused_does_not_clear():
+    record = _baseline_record(
+        tests_failed=2, baseline={"pre_existing": [], "foreign": ["a"], "caused": ["b"], "unverified": []}
+    )
+    assert not baseline_clears(record)
+
+
+def test_foreign_under_a_heuristic_method_does_not_clear():
+    record = _baseline_record(
+        tests_failed=1, baseline_method="heuristic",
+        baseline={"pre_existing": [], "foreign": ["a"], "caused": [], "unverified": []},
+    )
+    assert not baseline_clears(record)
+
+
 def _no_delivery() -> dict:
     rec = _record()
     rec["delivery"] = {}

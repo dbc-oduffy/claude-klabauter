@@ -219,3 +219,36 @@ def test_the_no_rows_refusal_is_exempted_only_by_the_resume_ledger_flag(monkeypa
     script = _script(monkeypatch)
     assert "!(_manifest.rows ?? []).length && !_allLanded && !_resumeLedger)) { _halted = { halted: " in script
     assert "'stage staged no rows'" in script
+
+
+def _s_script(monkeypatch) -> str:
+    monkeypatch.setattr(ask_compose, "_known_arm", lambda *_: "s")
+    return compose_ask_script(
+        repo_root="REPO", prompt=None, sizing_rel=_SIZING, run_id="run-1", session_id=None,
+        script_path="scratch/warp/x.mjs", in_run_commit=True, **REVIEW_KW,
+    )
+
+
+def _s_gate(resume_ledger, manifest=_DISK) -> dict:
+    return {
+        "arm": "s", "halt": None, "baton": None, "resume_ledger": resume_ledger, "resume_plan": None,
+        "tshirt": "S", "route": "spec-dispatch", "manifest": manifest,
+    }
+
+
+def test_an_s_arm_ledger_refire_that_owes_work_never_authors_a_new_plan(monkeypatch):
+    out = _run(_s_script(monkeypatch), gate=_s_gate(_OWED), replies={
+        "ledger-replan": {"plan_rel": _PLAN, "added_rows": ["R9"], "manifest": _DISK},
+    })
+    labels = _labels(out)
+    assert "plan" not in labels, labels
+    assert "work:C1" in labels, labels
+    assert "no folded stage manifest" not in str(out["result"]["halted_by"])
+    assert out["result"]["plan"] == _PLAN
+
+
+def test_an_s_arm_ledger_refire_that_owes_nothing_reaches_the_commit(monkeypatch):
+    out = _run(_s_script(monkeypatch), gate=_s_gate(_RESUME))
+    assert out["result"]["halted_by"] is None, out["result"]["halted_by"]
+    assert "plan" not in _labels(out)
+    assert _labels(out).index("verify") < _labels(out).index("commit")

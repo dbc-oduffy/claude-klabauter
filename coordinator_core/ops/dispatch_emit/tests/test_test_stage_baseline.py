@@ -42,6 +42,17 @@ def test_the_test_result_schema_accepts_the_baseline_fields():
     )
 
 
+def test_the_schema_accepts_a_baseline_with_and_without_foreign():
+    schema = json.loads(wd.stage_schema_literal("test_result"))
+    base = {"pre_existing": [], "caused": [], "unverified": []}
+    for baseline in (base, {**base, "foreign": ["t::a"]}):
+        jsonschema.validate(
+            {"status": "fail", "tests_run": 3, "tests_failed": 1, "sidecar_path": "s.md",
+             "baseline": baseline, "baseline_method": "export"},
+            schema,
+        )
+
+
 def _status(result: dict) -> str:
     node = shutil.which("node")
     if node is None:
@@ -68,6 +79,10 @@ def _red(baseline, method="export", failed=1):
         (_red({"pre_existing": ["t::a"], "caused": [], "unverified": []}, method="heuristic"), "fail"),
         (_red({"pre_existing": ["t::a"], "caused": [], "unverified": []}, failed=2), "fail"),
         (_red(None), "fail"),
+        (_red({"pre_existing": [], "foreign": ["t::a"], "caused": [], "unverified": []}), "pass"),
+        (_red({"pre_existing": ["t::a"], "foreign": ["t::b"], "caused": [], "unverified": []}, failed=2), "pass"),
+        (_red({"pre_existing": [], "foreign": ["t::a"], "caused": ["t::b"], "unverified": []}, failed=2), "fail"),
+        (_red({"pre_existing": [], "foreign": ["t::a"], "caused": [], "unverified": []}, method="heuristic"), "fail"),
     ],
 )
 def test_the_stage_fails_on_caused_and_unverified_only(result, expected):

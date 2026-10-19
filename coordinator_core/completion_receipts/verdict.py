@@ -108,8 +108,9 @@ def test_verdict_of(build_test: dict) -> Any:
 
 
 def baseline_clears(build_test: dict) -> bool:
-    """True for a `fail` whose every failure the runner re-ran in an export of the run base and
-    found failing there too: nothing the run caused, nothing unverified. Mirrors the digest's
+    """True for a `fail` whose every failure the runner re-ran in an export of the run base or of
+    the landing tree and attributed to `pre_existing` or `foreign`: nothing the run caused, nothing
+    unverified. Mirrors the digest's
     `wake_digest._BASELINE_CLEARS_JS`; keep the two in step."""
     if test_verdict_of(build_test) != "fail" or build_test.get("baseline_method") != "export":
         return False
@@ -117,14 +118,17 @@ def baseline_clears(build_test: dict) -> bool:
     if not isinstance(baseline, dict):
         return False
     pre_existing = baseline.get("pre_existing") or []
+    foreign = baseline.get("foreign") or []
     failed = build_test.get("tests_failed", build_test.get("failed")) or 0
+    if not (isinstance(pre_existing, list) and isinstance(foreign, list)):
+        return False
+    cleared = len(pre_existing) + len(foreign)
     return (
         not (baseline.get("caused") or [])
         and not (baseline.get("unverified") or [])
-        and isinstance(pre_existing, list)
-        and len(pre_existing) > 0
+        and cleared > 0
         and isinstance(failed, int)
-        and len(pre_existing) >= failed
+        and cleared >= failed
     )
 
 

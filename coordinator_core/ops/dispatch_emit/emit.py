@@ -2402,6 +2402,22 @@ _SCRATCH_HYGIENE_CLAUSE = (
 )
 
 
+_LANDING_EXPORT_MODULE = "coordinator_core.ops.dispatch_emit.landing_export"
+
+
+def _foreign_red_clause() -> str:
+    """The executor-facing rule for a test that is red in the shared worktree.
+
+    The landing export holds HEAD plus only the bytes this row writes, so a target that is
+    green there was broken by a peer's uncommitted edit, not by this row.
+    """
+    return (
+        "A target red in the worktree but green in the landing export of your own writes "
+        f"(`python -m {_LANDING_EXPORT_MODULE} scratch/test-landing-<row> <your writes...>`) "
+        "is a peer's dirt. Report it in your summary, and it is not a BLOCKED."
+    )
+
+
 def _stop_rule_clause() -> str:
     """The executor-facing half of the stop-rule halt: how to declare that a
     stop rule fired, and what the declaration costs.
@@ -2615,6 +2631,7 @@ def _row_return_contract(
     )
     parts.append(_stop_rule_clause())
     parts.append(_SCRATCH_HYGIENE_CLAUSE)
+    parts.append(_foreign_red_clause())
     parts.append(_declared_scope_block(row))
     return "\n\n".join(parts)
 
@@ -3384,6 +3401,10 @@ def _baseline_context_clause(
         "Attribute every failure per coordinator/docs/wiki/reviewer-pipeline/test-runner-baseline-attribution.md; "
         f"fill diff_files from {_edited_set_listing(run_base_sha, surface, review_terminal)}.\n"
         f"BASELINE_CONTEXT\n```json\n{block}\n```\n"
+        "For every id you labelled `caused`, run "
+        f"`python -m {_LANDING_EXPORT_MODULE} scratch/test-landing-{run_base_sha[:8]} <diff_files...>`, "
+        "re-run only those ids inside it, and move each one green there into `baseline.foreign`. "
+        "Delete the export afterwards. A failed export leaves the ids `caused`.\n"
     )
 
 

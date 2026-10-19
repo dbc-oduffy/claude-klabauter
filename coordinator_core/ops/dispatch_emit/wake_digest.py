@@ -227,12 +227,14 @@ def _skips_list_js(owner: str, schema_cap: int = 300) -> str:
 
 
 #: The stage's fail set is `caused` + `unverified` (DoE test-runner-baseline-attribution): a
-#: failing run whose export-measured baseline puts every failure in `pre_existing` passes.
+#: failing run whose export-measured baseline puts every failure in `pre_existing` or `foreign`
+#: (re-ran in an export of the run base or of the landing tree) passes.
 #: A heuristic baseline never clears -- its ids are all `unverified` by contract.
 _BASELINE_CLEARS_JS = (
     "((t) => { const b = t && t.baseline; return !!(t.status === 'fail' && t.baseline_method === 'export' && b "
     "&& (b.caused ?? []).length === 0 && (b.unverified ?? []).length === 0 "
-    "&& (b.pre_existing ?? []).length > 0 && (b.pre_existing ?? []).length >= (t.tests_failed ?? 0)); })"
+    "&& ((b.pre_existing ?? []).length + (b.foreign ?? []).length) > 0 "
+    "&& ((b.pre_existing ?? []).length + (b.foreign ?? []).length) >= (t.tests_failed ?? 0)); })"
 )
 
 

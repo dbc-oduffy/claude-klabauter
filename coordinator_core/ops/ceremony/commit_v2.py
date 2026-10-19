@@ -1190,6 +1190,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     }
     stopped_flat = list(dict.fromkeys(p for ps in stopped_carried.values() for p in ps))
     carried: list = []
+    own_paths = list(raw_paths)
     if (raw_carry and free) or stopped_flat:
         probe = list(dict.fromkeys([*(free if raw_carry else ()), *stopped_flat]))
         # A supplied set answers only for `paths`; carried candidates sit outside it.
@@ -1227,8 +1228,34 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         prefer_staged=raw_prefer_staged,
         deliberate_stage=raw_prefer_deliberate_stage,
     )
+    carry_withheld_note: Optional[str] = None
     if gate_refusal is not None:
-        return _error(gate_refusal)
+        # TRAP: the carry is opportunistic and must never cost the run its own landing. A
+        # refusal with something carried is re-judged over the caller's own paths; the second
+        # pass is paid only on a refusal that was already going to stop the commit.
+        if not ((carried or stopped_flat) and (own_paths or raw_removed)):
+            return _error(gate_refusal)
+        own_reader = post_commit_reader(
+            worktree_root,
+            resolve_git_common_dir(worktree_root),
+            paths=own_paths,
+            deleted_paths=raw_removed,
+            prefer_staged=raw_prefer_staged,
+            prefer_deliberate_stage=raw_prefer_deliberate_stage,
+        )
+        own_refusal = _pre_commit_gates(
+            worktree_root, own_paths, raw_removed, own_reader,
+            prefer_staged=raw_prefer_staged,
+            deliberate_stage=raw_prefer_deliberate_stage,
+        )
+        if own_refusal is not None:
+            return _error(own_refusal)
+        stopped_withheld.update({p: "gate-refused" for p in stopped_flat})
+        left = left + carried
+        carried = []
+        stopped_carried = {}
+        raw_paths = own_paths
+        carry_withheld_note = "carried residue withheld: " + gate_refusal.splitlines()[0][:200]
 
     # Declared-vs-actual EOL repair for the executables this commit touches (`docs/reference/eol-drift-detection.md`).
     # Filter-first: no `.cmd`/`.ps1`/`.sh`/`.bat` means no spawn and no read. Runs BEFORE the commit; not a
@@ -1361,6 +1388,8 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             f"dropped {len(dropped_ignored)} gitignored-untracked path(s) from `paths`: {shown}."
         )
     warnings.extend(peer_claim_warnings)
+    if carry_withheld_note is not None:
+        warnings.append(carry_withheld_note)
     if stopped_error is not None:
         warnings.append(stopped_error)
     warnings.extend(
