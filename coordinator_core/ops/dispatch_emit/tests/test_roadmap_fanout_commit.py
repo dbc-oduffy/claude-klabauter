@@ -316,6 +316,54 @@ def test_not_fired_names_every_plan_when_nothing_to_commit(repo):
     assert [(e["plan"], e["reason"]) for e in out["fanout"][c.NOT_FIRED_KEY]] == [(PLANS["a"], "nothing-to-commit")]
 
 
+def test_record_and_plans_already_at_head_fan_out_in_wave_order(repo):
+    _make_plan(repo, "a")
+    _make_plan(repo, "b")
+    _record(repo)
+    _git(["add", "."], repo)
+    _git(["commit", "-q", "-m", "record"], repo)
+    head = _git(["rev-parse", "HEAD"], repo).strip()
+    token = run_token.mint(repo, RUN, "run.mjs")
+
+    out = _call(repo, [PLANS["a"], PLANS["b"]], waves={PLANS["a"]: 0, PLANS["b"]: 1}, run_token=token)
+
+    assert out["committed"] is False and out["sha"] == head, out
+    assert out["fanned_out_at_head"] is True, out
+    assert _git(["rev-parse", "HEAD"], repo).strip() == head
+    by = {r["slice_sizing"]: r for r in _parent_runs(repo, out)}
+    first, second = by["state/sizings/2026-10-16-a.yaml"], by["state/sizings/2026-10-16-b.yaml"]
+    assert second["status"] == "after" and first["run_id"] in str(second)
+    assert first["status"] != "after"
+    assert len(out["fanout"]["fire"]) == 1
+    assert not run_token.is_live(repo, RUN)
+
+
+def test_a_withheld_plan_blocks_the_head_fanout(repo):
+    _make_plan(repo, "a")
+    _record(repo)
+    _git(["add", "."], repo)
+    _git(["commit", "-q", "-m", "record"], repo)
+    (repo / PLANS["a"]).write_text((repo / PLANS["a"]).read_text(encoding="utf-8") + "\nedit\n", encoding="utf-8")
+    _declare_run(repo, "peer-run-1", "fanout-peer", [PLANS["a"]])
+
+    out = _call(repo, [PLANS["a"]])
+
+    assert out["withheld"] == {PLANS["a"]: "peer-held"}, out
+    assert "fanned_out_at_head" not in out and "parent_id" not in out["fanout"], out
+    assert [(e["plan"], e["reason"]) for e in out["fanout"][c.NOT_FIRED_KEY]] == [(PLANS["a"], "nothing-to-commit")]
+
+
+def test_a_record_absent_from_head_blocks_the_head_fanout(repo):
+    _make_plan(repo, "a")
+    _git(["add", "."], repo)
+    _git(["commit", "-q", "-m", "plans only"], repo)
+
+    out = _call(repo, [PLANS["a"]])
+
+    assert out["nothing_to_commit"] is True and "fanned_out_at_head" not in out, out
+    assert [(e["plan"], e["reason"]) for e in out["fanout"][c.NOT_FIRED_KEY]] == [(PLANS["a"], "nothing-to-commit")]
+
+
 def test_not_fired_names_every_plan_when_the_commit_does_not_land(repo, monkeypatch):
     from coordinator_core.warm import entry_seam
 

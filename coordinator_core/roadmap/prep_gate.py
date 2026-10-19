@@ -206,6 +206,10 @@ FLEET_REPOS = (
 #: can answer it.
 CENSUS_ENTRY_KEYS = ("question", "command", "result")
 
+#: Keys a typed (``kind:``) census entry declares in place of ``command``; its
+#: field shape is ``census.typed_defect``, still presence-and-shape only.
+CENSUS_TYPED_ENTRY_KEYS = ("question", "result")
+
 #: Scaffold placeholders. A key whose value is still the generator's marker is
 #: PRESENT and NON-BLANK, so every predicate here that tests "non-empty" would
 #: pass it — which is the one way a live-emitted stub could clear this bar
@@ -766,6 +770,9 @@ def _unroutable_rows(waves: Sequence[Sequence[Any]]) -> "tuple[List[str], Option
 def _census(fm: Dict[str, Any], repo_root: Optional[Path] = None) -> Dict[str, Any]:
     """``census:`` present, every entry ``question`` + ``command`` + ``result``.
 
+    A typed entry (``kind:`` present) declares ``question`` + ``result`` and the
+    ``census.typed_defect`` shape instead of a command; it skips the command screen.
+
     Presence is the predicate, and ``census: []`` passes. Requiring the KEY asks
     the author one question a reader can falsify by reading the plan: does this
     plan rest on a counted premise? A ``census: []`` that is wrong is a defect a
@@ -794,7 +801,7 @@ def _census(fm: Dict[str, Any], repo_root: Optional[Path] = None) -> Dict[str, A
             [
                 c
                 for e in entries
-                if isinstance(e, dict)
+                if isinstance(e, dict) and not census.is_typed(e)
                 for c in census.python_candidates(str(e.get("command") or ""), repo_root)
             ],
         )
@@ -802,13 +809,20 @@ def _census(fm: Dict[str, Any], repo_root: Optional[Path] = None) -> Dict[str, A
         if not isinstance(entry, dict):
             bad.append(f"[{index}] not a mapping")
             continue
-        missing = [k for k in CENSUS_ENTRY_KEYS if not str(entry.get(k) or "").strip()]
+        typed = census.is_typed(entry)
+        keys = CENSUS_TYPED_ENTRY_KEYS if typed else CENSUS_ENTRY_KEYS
+        missing = [k for k in keys if not str(entry.get(k) or "").strip()]
         if missing:
             bad.append(f"[{index}] missing {', '.join(missing)}")
             continue
-        unanswered = [k for k in CENSUS_ENTRY_KEYS if is_placeholder(entry.get(k))]
+        unanswered = [k for k in keys if is_placeholder(entry.get(k))]
         if unanswered:
             bad.append(f"[{index}] scaffold placeholder in {', '.join(unanswered)}")
+            continue
+        if typed:
+            typed_bad = census.typed_defect(entry)
+            if typed_bad:
+                bad.append(f"[{index}] {typed_bad}")
             continue
         bad_count = census.count_defect(entry)
         if bad_count:

@@ -31,6 +31,9 @@ WHAT IT WILL NOT DO, and the reason is the whole design:
   leg's strongest verdict, earned by measuring nothing, and indistinguishable on the wire from a
   plan whose every counted premise was re-checked and held.
 
+  A TYPED ENTRY (`kind:` instead of `command:`) IS EVALUATED IN-PROCESS by
+  `census.evaluate_typed`: one directory listing, no shell, no spawn.
+
   IT NEVER RUNS A COMMAND THAT COULD MUTATE. A census command is a QUESTION, and these are
   strings lifted out of plan frontmatter that agents wrote. A leg that shells out to whatever it
   finds there would make "certify this plan" an arbitrary-execution surface, on a tree many
@@ -219,6 +222,12 @@ def run_entry(entry: dict, repo_root: Path, timeout: int) -> dict:
     command = str(entry.get("command") or "").strip()
     recorded = str(entry.get("result") or "")
     row: dict[str, Any] = {"question": str(entry.get("question") or ""), "command": command}
+    census = _census()
+    if census.is_typed(entry):
+        row["command"] = census.describe_typed(entry)
+        row.update(census.evaluate_typed(entry, repo_root))
+        row["recorded"] = f"claims {entry.get('claims')}"
+        return row
     if not command:
         row.update({"state": REFUSED, "detail": "entry declares no command"})
         return row

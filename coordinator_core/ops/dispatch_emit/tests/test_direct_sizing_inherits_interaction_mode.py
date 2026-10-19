@@ -8,6 +8,7 @@ import pytest
 import yaml
 
 from coordinator_core.ops.dispatch_emit import ask_fanout_contract as fc
+from coordinator_core.ops.dispatch_emit import sizing_fire as sf
 from coordinator_core.ops.dispatch_emit.ask_gate import gate
 
 PARENT = "ask-parent-20261019T000000-aaaaaa"
@@ -55,6 +56,7 @@ def repo(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("COORDINATOR_SESSION_ID", "11111111-2222-3333-4444-555555555555")
     monkeypatch.delenv("DELIVERABLE_ID", raising=False)
+    monkeypatch.setattr(sf, "_fleet_interaction_mode", lambda: None)
     return tmp_path
 
 
@@ -129,6 +131,29 @@ def test_load_sizing_effective_keeps_own_mode_and_stays_absent_without_parent(re
     assert load_sizing_effective(repo, ME)["interaction_mode"] == "pm"
     _write(repo, ME, _doc(em_analysis={}))
     assert "interaction_mode" not in load_sizing_effective(repo, ME)
+
+
+def test_fleet_mode_is_the_final_fallback_and_file_is_not_rewritten(repo, monkeypatch):
+    monkeypatch.setattr(sf, "_fleet_interaction_mode", lambda: "ceo")
+    _write(repo, ME, _doc(em_analysis={}))
+    before = (repo / ME).read_bytes()
+    assert sf.load_sizing_effective(repo, ME)["interaction_mode"] == "ceo"
+    assert (repo / ME).read_bytes() == before
+
+
+def test_fleet_mode_never_overrides_recorded_or_inherited_mode(repo, monkeypatch):
+    monkeypatch.setattr(sf, "_fleet_interaction_mode", lambda: "ceo")
+    _write(repo, ME, _doc(interaction_mode="pm"))
+    assert sf.load_sizing_effective(repo, ME)["interaction_mode"] == "pm"
+    _write(repo, ME, _doc())
+    _write(repo, SIB, _doc(interaction_mode="pm"))
+    _parent(repo)
+    assert sf.load_sizing_effective(repo, ME)["interaction_mode"] == "pm"
+
+
+def test_real_fleet_resolution_yields_a_mode(repo, monkeypatch):
+    monkeypatch.undo()
+    assert isinstance(sf._fleet_interaction_mode(), str)
 
 
 def test_xl_exit_reader_and_roadmap_mode_see_the_inherited_mode(repo):

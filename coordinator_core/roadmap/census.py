@@ -11,10 +11,14 @@ A stamped premise is runnable only if both sides ask the same function.
 Screening is pure string work, except a `python` target: with a `repo_root` it must be a
 git-tracked file of that repo, resolved by ONE `git ls-files` call per batch (`tracked_targets`),
 never one per entry.
+
+A TYPED entry (`kind` instead of `command`) is not screened: `evaluate_typed` answers it with one
+directory listing, still spawn-free and shell-free.
 """
 
 from __future__ import annotations
 
+import os
 import re
 import shlex
 from pathlib import Path
@@ -357,3 +361,85 @@ def count_defect(entry: dict) -> Optional[str]:
     if isinstance(value, bool) or not isinstance(value, int) or value < 0:
         return f"count {value!r} is not a non-negative integer"
     return None
+
+
+#: Entry kinds that carry `dir`/`claims` instead of `command`. A closed set: a new kind is a
+#: deliberate act with its own evaluator branch.
+TYPED_KINDS = frozenset({"next-free-number"})
+
+_LEADING_INT = re.compile(r"^(\d+)")
+_DIR_FORBIDDEN = re.compile(r"[$*?\[`]")
+
+
+def is_typed(entry: dict) -> bool:
+    """True when the entry declares a `kind`, which routes it past the command screen."""
+    return "kind" in entry
+
+
+def typed_defect(entry: dict) -> Optional[str]:
+    """Why a typed entry cannot be evaluated without a shell, or None when it can."""
+    kind = entry.get("kind")
+    if kind not in TYPED_KINDS:
+        return f"kind {kind!r} is not one of {sorted(TYPED_KINDS)}"
+    for key in ("command", "count"):
+        if key in entry:
+            return f"typed entry must not carry {key!r}"
+    d = entry.get("dir")
+    if not isinstance(d, str) or not d.strip():
+        return "dir is missing or not a non-empty string"
+    if d.startswith(("/", "\\")) or re.match(r"^[A-Za-z]:", d):
+        return f"dir {d!r} is absolute -- name a repo-relative path"
+    if ".." in d.replace("\\", "/").split("/"):
+        return f"dir {d!r} contains '..'"
+    if _DIR_FORBIDDEN.search(d):
+        return f"dir {d!r} contains a glob or variable character"
+    if "claims" not in entry:
+        return "claims is missing"
+    claims = entry["claims"]
+    if isinstance(claims, bool) or not isinstance(claims, int) or claims < 0:
+        return f"claims {claims!r} is not a non-negative integer"
+    return None
+
+
+def describe_typed(entry: dict) -> str:
+    """The command-column text a report prints for a typed entry."""
+    return f"{entry.get('kind')} {entry.get('dir')} claims {entry.get('claims')}"
+
+
+def evaluate_typed(entry: dict, repo_root: Path) -> dict:
+    """`{"state", "basis"|"detail", "observed"}` for a typed entry; one `os.scandir`, no spawn.
+
+    next-free-number: MATCH iff `claims` is not taken and exceeds every leading-digit integer of
+    the regular files directly in `dir`. The working tree is read, a superset of what is committed.
+    """
+    defect = typed_defect(entry)
+    if defect:
+        return {"state": "REFUSED", "detail": defect, "observed": ""}
+    claims = entry["claims"]
+    target = Path(repo_root, *entry["dir"].replace("\\", "/").split("/"))
+    taken: dict[int, str] = {}
+    try:
+        with os.scandir(target) as it:
+            for de in it:
+                m = _LEADING_INT.match(de.name)
+                if m and de.is_file():
+                    taken.setdefault(int(m.group(1)), de.name)
+    except (FileNotFoundError, NotADirectoryError):
+        return {
+            "state": "UNRUNNABLE",
+            "detail": f"dir {entry['dir']!r} is not a directory under the repo root",
+            "observed": "",
+        }
+    except OSError as exc:
+        return {"state": "UNRUNNABLE", "detail": f"cannot list {entry['dir']!r}: {exc}", "observed": ""}
+    if not taken:
+        return {"state": "MATCH", "basis": f"{entry['dir']} holds no numbered file", "observed": "empty"}
+    head = max(taken)
+    observed = f"next free {head + 1}"
+    if claims in taken:
+        basis = f"{taken[claims]} already holds {claims}; {observed}"
+    elif claims < head:
+        basis = f"{taken[head]} is already past {claims}; {observed}"
+    else:
+        return {"state": "MATCH", "basis": f"{claims} is free and above head {head}", "observed": observed}
+    return {"state": "DRIFT", "basis": basis, "observed": observed}

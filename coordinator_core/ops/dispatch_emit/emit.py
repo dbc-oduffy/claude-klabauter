@@ -5935,6 +5935,7 @@ _BLOCKED_STATUS_JS_RE = (
 #: One non-DONE status line, tested and stripped per line by ``_reasonOf``:
 #: the same forms as ``_NON_DONE_STATUS_JS_RE`` with the line-start piece
 #: reduced to the start of a single already-split line.
+#: Keep the status forms in step with ``_NON_DONE_STATUS_JS_RE``.
 _REASON_STATUS_LINE_JS_RE = (
     r'/^"?\s*[*_`]{0,2}(?:PARTIAL|BLOCKED)[*_`]{0,2}:'
     rf'|^"?{_STATUS_FIELD_JS}(?:PARTIAL|BLOCKED)\b'

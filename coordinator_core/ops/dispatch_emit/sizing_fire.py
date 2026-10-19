@@ -127,16 +127,29 @@ def inherited_interaction_mode(sizing: Mapping, repo_root: Path) -> str | None:
 
 
 def load_sizing_effective(repo_root: Path, sizing_rel: str) -> dict:
-    """`load_sizing`, with a missing `interaction_mode` filled in memory from `inherited_interaction_mode`.
+    """`load_sizing`, with a missing `interaction_mode` filled in memory.
 
-    The one seam for a fire's readers: the file is never backfilled and a recorded mode is never overridden.
+    Fill order: `inherited_interaction_mode`, then the fleet-resolved mode `sizing-assemble` uses
+    when no `--interaction-mode` is passed. The one seam for a fire's readers: the file is never
+    backfilled and a recorded mode is never overridden.
     """
     doc = load_sizing(repo_root, sizing_rel)
     if not doc.get("interaction_mode"):
-        inherited = inherited_interaction_mode(doc, Path(repo_root))
-        if inherited:
-            doc = {**doc, "interaction_mode": inherited}
+        mode = inherited_interaction_mode(doc, Path(repo_root)) or _fleet_interaction_mode()
+        if mode:
+            doc = {**doc, "interaction_mode": mode}
     return doc
+
+
+def _fleet_interaction_mode() -> str | None:
+    """`resolve_mode("interaction_mode")` as `sizing-assemble` resolves it with no flag; None if unresolvable."""
+    from coordinator_core.session.mode_resolution import resolve_mode
+
+    try:
+        mode = resolve_mode("interaction_mode", "sizing-assemble-cli", env=None)
+    except Exception:
+        return None
+    return mode.strip() if isinstance(mode, str) and mode.strip() else None
 
 
 def effective_route(sizing: Mapping) -> object:

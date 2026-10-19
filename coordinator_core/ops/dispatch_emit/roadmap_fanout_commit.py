@@ -157,7 +157,7 @@ def commit_fanout_record(worktree_root: Path, repo_root: Path, params: dict) -> 
     landed = False
     try:
         reply = _land_and_fan_out(worktree_root, repo_root, params, run_id)
-        landed = bool(reply.get("committed"))
+        landed = bool(reply.get("committed") or reply.get("fanned_out_at_head"))
         return reply
     finally:
         if token is not None:
@@ -165,6 +165,22 @@ def commit_fanout_record(worktree_root: Path, repo_root: Path, params: dict) -> 
                 run_token.consume(worktree_root, run_id)
             else:
                 run_token.release(worktree_root, run_id, token, script_path)
+
+
+def _head_sha_when_all_tracked(worktree_root: Path, record_dir_rel: str, declared: list) -> Optional[str]:
+    """HEAD's sha when the record dir holds a tracked file and every declared plan, sizing and baton
+    is tracked; ``None`` otherwise. Callers have already seen none of them differ from the index/HEAD."""
+    from coordinator_core.git import git_index
+    from coordinator_core.git.git_state import head_sha
+
+    try:
+        entries = git_index.parse_index_identity(worktree_root, set(declared), prefixes=[record_dir_rel])
+    except git_index.IndexParseError:
+        return None
+    prefix = record_dir_rel + "/"
+    if not any(p.startswith(prefix) for p in entries) or any(p not in entries for p in declared):
+        return None
+    return head_sha(worktree_root, fresh=True)
 
 
 def _land_and_fan_out(worktree_root: Path, repo_root: Path, params: dict, run_id: str) -> dict:
@@ -212,39 +228,43 @@ def _land_and_fan_out(worktree_root: Path, repo_root: Path, params: dict, run_id
     product = [p for p in product if p not in held]
     paths = record + product
     if not paths and not record_gone:
-        not_fired += _plan_entries(spec["plans"], waves, "nothing-to-commit")
-        return {
-            "committed": False, "sha": None, "nothing_to_commit": True,
-            **({"withheld": withheld} if withheld else {}), **base,
-            "fanout": {NOT_FIRED_KEY: not_fired},
-        }
-
-    stems = [PurePosixPath(plan).stem for plan, *_ in resolved]
-    message = f"warp: record roadmap {run_id} plans and fan out\n\nPlans: " + ", ".join(stems)
-    commit_params: dict = {"paths": paths + record_gone, "message": message}
-    if record_gone:
-        commit_params["deleted_paths"] = record_gone
-        commit_params["declared_reverts"] = record_gone
-    if product:
-        commit_params["ignored_untracked"] = snapshot.ignored_among(paths)
-    if session_id is not None:
-        commit_params["session_id"] = session_id
-    try:
-        reply = reentrant_dispatch("ceremony.commit_v2", commit_params, repo_root=repo_root)
-    except OpUnavailableError:
-        reply = None
-        failure = "ceremony.commit_v2 is not registered"
+        head = None if withheld else _head_sha_when_all_tracked(worktree_root, record_dir_rel, declared)
+        if head is None:
+            not_fired += _plan_entries(spec["plans"], waves, "nothing-to-commit")
+            return {
+                "committed": False, "sha": None, "nothing_to_commit": True,
+                **({"withheld": withheld} if withheld else {}), **base,
+                "fanout": {NOT_FIRED_KEY: not_fired},
+            }
+        sha = head
+        out: dict = {"committed": False, "sha": head, "nothing_to_commit": True, "fanned_out_at_head": True, **base}
     else:
-        failure = None if isinstance(reply, dict) else f"unexpected commit_v2 reply: {reply!r}"
-    if failure is not None:
-        not_fired += _plan_entries(spec["plans"], waves, "commit-not-landed", failure)
-        return _error(failure, fanout={NOT_FIRED_KEY: not_fired}, **base)
-    out: dict = {**reply, "paths": paths + record_gone, **({"withheld": withheld} if withheld else {}), **base}
-    sha = reply.get("sha")
-    if not (reply.get("committed") and sha):
-        detail = str(reply.get("error") or reply.get("refused") or "commit did not land")
-        out["fanout"] = {NOT_FIRED_KEY: not_fired + _plan_entries(spec["plans"], waves, "commit-not-landed", detail)}
-        return out
+        stems = [PurePosixPath(plan).stem for plan, *_ in resolved]
+        message = f"warp: record roadmap {run_id} plans and fan out\n\nPlans: " + ", ".join(stems)
+        commit_params: dict = {"paths": paths + record_gone, "message": message}
+        if record_gone:
+            commit_params["deleted_paths"] = record_gone
+            commit_params["declared_reverts"] = record_gone
+        if product:
+            commit_params["ignored_untracked"] = snapshot.ignored_among(paths)
+        if session_id is not None:
+            commit_params["session_id"] = session_id
+        try:
+            reply = reentrant_dispatch("ceremony.commit_v2", commit_params, repo_root=repo_root)
+        except OpUnavailableError:
+            reply = None
+            failure = "ceremony.commit_v2 is not registered"
+        else:
+            failure = None if isinstance(reply, dict) else f"unexpected commit_v2 reply: {reply!r}"
+        if failure is not None:
+            not_fired += _plan_entries(spec["plans"], waves, "commit-not-landed", failure)
+            return _error(failure, fanout={NOT_FIRED_KEY: not_fired}, **base)
+        out = {**reply, "paths": paths + record_gone, **({"withheld": withheld} if withheld else {}), **base}
+        sha = reply.get("sha")
+        if not (reply.get("committed") and sha):
+            detail = str(reply.get("error") or reply.get("refused") or "commit did not land")
+            out["fanout"] = {NOT_FIRED_KEY: not_fired + _plan_entries(spec["plans"], waves, "commit-not-landed", detail)}
+            return out
 
     items = []
     for given, (plan, sizing, _baton, writes) in zip(spec["plans"], resolved):

@@ -85,6 +85,39 @@ def test_receipt_sha256_matches_the_script_bytes_on_disk(tmp_path):
     assert receipt["sha256"] == expected
 
 
+def test_receipt_records_plan_body_sha_and_repo_relative_plan_path(tmp_path):
+    from coordinator_core.frontmatter.primitives import canonical_body_sha
+
+    (tmp_path / ".git").mkdir()
+    _result, output_path, plan_path = _emit(tmp_path)
+
+    receipt = _receipt_of(output_path)
+    assert receipt["plan_body_sha"] == canonical_body_sha(plan_path.read_text(encoding="utf-8"))
+    assert receipt["plan_relpath"] == plan_path.resolve().relative_to(tmp_path.resolve()).as_posix()
+    assert set(receipt) == _RECEIPT_KEYS | {"plan_body_sha", "plan_relpath"}
+
+
+def test_receipt_omits_plan_keys_outside_a_git_checkout(tmp_path):
+    _result, output_path, _plan_path = _emit(tmp_path)
+
+    receipt = _receipt_of(output_path)
+    assert "plan_body_sha" not in receipt
+    assert "plan_relpath" not in receipt
+
+
+def test_plan_body_sha_changes_when_the_plan_body_is_amended(tmp_path):
+    (tmp_path / ".git").mkdir()
+    _result, output_path, plan_path = _emit(tmp_path)
+    before = _receipt_of(output_path)["plan_body_sha"]
+
+    plan_path.write_text(plan_path.read_text(encoding="utf-8") + "\namended\n", encoding="utf-8")
+    _dispatch_emit(
+        {"plan_path": str(plan_path), "output_path": str(output_path), "force": True}
+    )
+
+    assert _receipt_of(output_path)["plan_body_sha"] != before
+
+
 # ---------------------------------------------------------------------------
 # Session id -- taken, never minted
 # ---------------------------------------------------------------------------

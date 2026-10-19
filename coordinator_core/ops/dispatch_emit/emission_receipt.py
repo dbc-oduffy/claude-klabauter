@@ -15,6 +15,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+from coordinator_core.frontmatter.primitives import canonical_body_sha
 from coordinator_core.ops.dispatch_emit.emit import NoReviewStageError
 from coordinator_core.ops.review_mint import op as review_mint_op
 from coordinator_core.ops.review_mint.roster import RosterFragmentError, require_emit_route
@@ -112,6 +113,34 @@ def _receipt_session_id(params: dict) -> str:
     return resolve_session_id() or ""
 
 
+def _plan_body_provenance(plan_path: Optional[str]) -> dict:
+    """``{"plan_body_sha", "plan_relpath"}`` for a readable plan inside a git checkout, else ``{}``.
+
+    ``plan_body_sha`` is ``canonical_body_sha`` of the plan text (newline-normalised, frontmatter
+    excluded); ``plan_relpath`` is the plan's POSIX path relative to the nearest ancestor holding
+    ``.git``. A fire-time reader re-hashes ``<repo root>/<plan_relpath>`` and compares.
+
+    Negative-spec:
+      - Does NOT spawn: the root is a parent walk, not ``git rev-parse``.
+      - Does NOT record an absolute path, nor a sha without its path: either missing yields
+        ``{}`` so a reader treats the receipt as legacy and fails open.
+    """
+    if not plan_path:
+        return {}
+    try:
+        resolved = Path(plan_path).resolve()
+        root = next((p for p in resolved.parents if (p / ".git").exists()), None)
+        if root is None:
+            return {}
+        sha = canonical_body_sha(resolved.read_text(encoding="utf-8"))
+        rel = resolved.relative_to(root).as_posix()
+    except (OSError, ValueError):
+        return {}
+    if sha is None:
+        return {}
+    return {"plan_body_sha": sha, "plan_relpath": rel}
+
+
 def _write_emission_receipt(
     guarded_script_path: Path,
     plan_path: Optional[str],
@@ -165,6 +194,7 @@ def _write_emission_receipt(
             "emitted_at": datetime.now().isoformat(timespec="seconds"),
             "plan": Path(plan_path).name if plan_path else None,
         }
+        receipt.update(_plan_body_provenance(plan_path))
         if extras:
             receipt.update(extras)
         receipt_path.write_text(

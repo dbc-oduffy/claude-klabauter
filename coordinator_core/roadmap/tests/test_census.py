@@ -201,3 +201,108 @@ def test_prep_resolves_every_python_target_in_one_ls_files_spawn(repo, monkeypat
 def test_same_value_normalises_the_count_prefix(count, recorded, observed, state):
     verdict = census.same_value(count, recorded, observed)
     assert (verdict["state"] if verdict else None) == state
+
+
+def _typed(claims=715, **over):
+    entry = {"question": "q", "kind": "next-free-number", "dir": "supabase/migrations",
+             "claims": claims, "result": str(claims)}
+    entry.update(over)
+    return entry
+
+
+def _mig(tmp_path, *names):
+    d = tmp_path / "supabase" / "migrations"
+    d.mkdir(parents=True)
+    for n in names:
+        (d / n).write_text("x")
+    return tmp_path
+
+
+@pytest.mark.parametrize(
+    "files,claims,state",
+    [
+        (("715_a.sql",), 715, "DRIFT"),
+        (("716_b.sql",), 715, "DRIFT"),
+        (("714_c.sql",), 715, "MATCH"),
+        (("714_c.sql",), 720, "MATCH"),
+        ((), 715, "MATCH"),
+        (("notes.md", "714_c.sql"), 715, "MATCH"),
+    ],
+)
+def test_evaluate_typed_verdicts(tmp_path, files, claims, state):
+    got = census.evaluate_typed(_typed(claims), _mig(tmp_path, *files))
+    assert got["state"] == state
+    if state == "DRIFT":
+        assert "next free" in got["basis"]
+
+
+def test_evaluate_typed_drift_names_colliding_file(tmp_path):
+    got = census.evaluate_typed(_typed(715), _mig(tmp_path, "715_a.sql", "714_z.sql"))
+    assert "715_a.sql" in got["basis"] and got["observed"] == "next free 716"
+
+
+def test_evaluate_typed_missing_dir_is_unrunnable(tmp_path):
+    assert census.evaluate_typed(_typed(), tmp_path)["state"] == "UNRUNNABLE"
+
+
+def test_evaluate_typed_dir_is_a_file_is_unrunnable(tmp_path):
+    (tmp_path / "supabase").mkdir()
+    (tmp_path / "supabase" / "migrations").write_text("x")
+    assert census.evaluate_typed(_typed(), tmp_path)["state"] == "UNRUNNABLE"
+
+
+def test_evaluate_typed_subdirectory_is_not_taken(tmp_path):
+    root = _mig(tmp_path)
+    (root / "supabase" / "migrations" / "715_dir").mkdir()
+    assert census.evaluate_typed(_typed(715), root)["state"] == "MATCH"
+
+
+def test_evaluate_typed_defect_is_refused(tmp_path):
+    assert census.evaluate_typed(_typed(dir="/abs"), tmp_path)["state"] == "REFUSED"
+
+
+@pytest.mark.parametrize(
+    "over",
+    [
+        {"kind": "bogus"},
+        {"dir": "/abs/x"},
+        {"dir": "C:" + "/x"},
+        {"dir": "\\abs\\x"},
+        {"dir": "a/`b`"},
+        {"dir": "a/../b"},
+        {"dir": "a/*"},
+        {"dir": "$HOME/x"},
+        {"dir": ""},
+        {"claims": -1},
+        {"claims": True},
+        {"claims": "715"},
+        {"command": "ls"},
+        {"count": 1},
+    ],
+)
+def test_typed_defect_cases(over):
+    assert census.typed_defect(_typed(**over))
+
+
+@pytest.mark.parametrize("missing", ["dir", "claims"])
+def test_typed_defect_missing_field(missing):
+    entry = _typed()
+    del entry[missing]
+    assert missing in census.typed_defect(entry)
+
+
+def test_typed_defect_clean_and_helpers():
+    assert census.typed_defect(_typed()) is None
+    assert census.is_typed(_typed()) and not census.is_typed({"command": "ls"})
+    assert census.describe_typed(_typed()) == "next-free-number supabase/migrations claims 715"
+
+
+def test_evaluate_typed_spawns_nothing(tmp_path, monkeypatch):
+    import subprocess
+
+    def boom(*a, **k):
+        raise AssertionError("spawn")
+
+    monkeypatch.setattr(subprocess, "run", boom)
+    monkeypatch.setattr(subprocess, "Popen", boom)
+    assert census.evaluate_typed(_typed(715), _mig(tmp_path, "715_a.sql"))["state"] == "DRIFT"

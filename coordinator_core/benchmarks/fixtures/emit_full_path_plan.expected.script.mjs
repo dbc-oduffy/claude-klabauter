@@ -52,6 +52,7 @@ Plan: Script-fired reconcile merge: start, file-only resolver, conclude
   const _stoppedBy = [];
   const _notStarted = [];
   const _planHeld = {};
+  const _chunkReason = {};
   let _halted = null;
   let _haltedByHold = false;
   const _verifications = [];
@@ -177,6 +178,26 @@ Plan: Script-fired reconcile merge: start, file-only resolver, conclude
     const m = _GATE_OWED_RE.exec(t);
     return m ? 'gate-blocker: ' + m[1].toLowerCase() + m[2] : null;
   }
+  const _REASON_STATUS_RE = /^"?\s*[*_`]{0,2}(?:PARTIAL|BLOCKED)[*_`]{0,2}:|^"?[ \t>#-]*[*_`]{0,2}[Ss]tatus[*_`]{0,2}[ \t]*:[ \t]*[*_`]{0,2}[ \t]*(?:PARTIAL|BLOCKED)\b|<exit-status>(?:PARTIAL|BLOCKED)<\/exit-status>/;
+  const _REASON_SPLIT_RE = /\r?\n|\\r\\n|\\n|\r/;
+  function _reasonOf(result) {
+    const raw = typeof result === 'string';
+    const t = raw ? result : JSON.stringify(result ?? null);
+    const tail = raw ? /[\s*_`]+$/ : /[\s*_`"}\]\\]+$/;
+    const lines = t.split(_REASON_SPLIT_RE).map((l) => l.trim()).filter((l) => l);
+    const tidy = (s) => s.replace(/^[\s*_`:>#-]+/, '').replace(tail, '').replace(/\s+/g, ' ').trim();
+    const at = lines.findIndex((l) => _REASON_STATUS_RE.test(l));
+    if (at >= 0) {
+      const own = tidy(lines[at].replace(_REASON_STATUS_RE, ''));
+      if (own) return own.slice(0, 1000);
+    }
+    for (const l of lines) {
+      if (_REASON_STATUS_RE.test(l) || _DEP_ANY_STATUS_RE.test(l)) continue;
+      const o = tidy(l);
+      if (o) return o.slice(0, 1000);
+    }
+    return '';
+  }
   function _heldDependentsReason() {
     const ids = Object.keys(_heldBy);
     if (!ids.length) return null;
@@ -216,11 +237,13 @@ Plan: Script-fired reconcile merge: start, file-only resolver, conclude
     const plan = _rowPlan[id] || 'docs/plans/emit-full-path-plan.md';
     if (_halted) {
       _notStarted.push(id);
+      _chunkReason[id] = 'run halted by stop rule (' + _halted + ')';
       return 'BLOCKED: run halted by stop rule (' + _halted + ')';
     }
     if (plan && _haltedPlans.has(plan)) {
       _notStarted.push(id);
       _planHeld[id] = 'plan halted by ' + _haltedPlanReasons.get(plan);
+      _chunkReason[id] = _planHeld[id];
       return 'BLOCKED: plan halted by stop rule in ' + _haltedPlanReasons.get(plan);
     }
     if (_depResults.some(r => typeof r === 'string' && r.startsWith('ROUTED-OUT:'))) {
@@ -232,6 +255,7 @@ Plan: Script-fired reconcile merge: start, file-only resolver, conclude
       _notStarted.push(id);
       _blockedChunks.push(id);
       _heldBy[id] = _blocker;
+      _chunkReason[id] = 'held: dependency ' + _blocker + ' did not finish DONE';
       return 'BLOCKED: held, dependency ' + _blocker + ' did not finish DONE';
     }
     let result;
@@ -246,6 +270,7 @@ Plan: Script-fired reconcile merge: start, file-only resolver, conclude
       const _owed = _gateOwedOf(_text);
       if (_owed) { _gateOwed[id] = _owed; }
       else {
+        _chunkReason[id] = _reasonOf(result);
         if (/(?:^"?|\n|\\n)\s*[*_`]{0,2}BLOCKED[*_`]{0,2}:|(?:^"?|\n|\\n)[ \t>#-]*[*_`]{0,2}[Ss]tatus[*_`]{0,2}[ \t]*:[ \t]*[*_`]{0,2}[ \t]*BLOCKED\b|<exit-status>BLOCKED<\/exit-status>/.test(_text)) _blockedChunks.push(id);
         _incompleteChunks.push(id);
         incomplete = true;
@@ -253,6 +278,7 @@ Plan: Script-fired reconcile merge: start, file-only resolver, conclude
     } else if (!/(?:^"?|\n|\\n)\s*[*_`]{0,2}(?:DONE(?:_WITH_CONCERNS)?|PARTIAL|BLOCKED)[*_`]{0,2}:|<exit-status>(?:DONE|PARTIAL|BLOCKED)<\/exit-status>/.test(_text)) {
       _incompleteChunks.push(id);
       _unansweredBriefs.push(id);
+      _chunkReason[id] = 'no contract status line in the executor reply';
       incomplete = true;
     }
     if (/(?:^|\n|\\n)[*_]{0,2}STOP-RULE-FIRED[*_]{0,2}:\s*(?![*_`]*(?:[Nn]one|[Nn]\/[Aa]|[Nn]o)[*_`.]*\s*(?:$|\n|\\n|<))\S/.test(_text) && !/(?:^|\n|\\n)[*_]{0,2}ROW-LOCAL-BLOCK[*_]{0,2}:\s*(?![*_`]*(?:[Nn]one|[Nn]\/[Aa]|[Nn]o)[*_`.]*\s*(?:$|\n|\\n|<))\S/.test(_text)) {
@@ -414,7 +440,7 @@ return {
     delivery: { verdict: (_deliveryVerdict?.verdict ?? 'not_run'), product_files: (_deliveryVerdict?.product_files ?? null), claims_unbacked: (_deliveryVerdict?.claims_unbacked?.length ?? null) },
     integration_sidecar: _cap(null?.sidecar_path ?? null, 300),
   },
-  deviations: [...new Set([..._incompleteChunks, ..._unansweredBriefs, ..._notStarted, ...Object.keys(_gateOwed)])].map(id => ({ chunk: id, kind: (_planHeld[id] !== undefined ? 'held' : (_gateOwed[id] !== undefined ? 'gate_owed' : (_notStarted.includes(id) ? 'not_started' : (_stoppedBy.includes(id) ? 'stop_rule' : (_unansweredBriefs.includes(id) ? 'no_answer' : (_blockedChunks.includes(id) ? 'blocked' : 'partial')))))), anchor: (_planHeld[id] !== undefined ? _cap(_planHeld[id], 300) : (_gateOwed[id] !== undefined ? _cap(_gateOwed[id], 300) : '')) })),
+  deviations: [...new Set([..._incompleteChunks, ..._unansweredBriefs, ..._notStarted, ...Object.keys(_gateOwed)])].map(id => ({ chunk: id, kind: (_planHeld[id] !== undefined ? 'held' : (_gateOwed[id] !== undefined ? 'gate_owed' : (_notStarted.includes(id) ? 'not_started' : (_stoppedBy.includes(id) ? 'stop_rule' : (_unansweredBriefs.includes(id) ? 'no_answer' : (_blockedChunks.includes(id) ? 'blocked' : 'partial')))))), anchor: (_planHeld[id] !== undefined ? _cap(_planHeld[id], 300) : (_gateOwed[id] !== undefined ? _cap(_gateOwed[id], 300) : '')), reason: _cap((_chunkReason[id] ?? '') || (_planHeld[id] !== undefined ? _cap(_planHeld[id], 300) : (_gateOwed[id] !== undefined ? _cap(_gateOwed[id], 300) : '')) || '', 300) })),
   run_base_sha: _runBase,
   width: { rows: 8, max_concurrent_rows: 5, critical_path_rows: 3, runtime_cap: 'min(16, CPUs-2)', runtime_cap_on_emitting_host: <RUNTIME_CAP> },
   predispatch: null,

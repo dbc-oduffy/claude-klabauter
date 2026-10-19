@@ -161,3 +161,44 @@ def test_does_not_write_anything(cr, tmp_path):
     before = plan.read_text(encoding="utf-8")
     cr.recheck_plan(plan, tmp_path, 10)
     assert plan.read_text(encoding="utf-8") == before
+
+
+_TYPED = ('census:\n  - question: q\n    kind: next-free-number\n'
+          '    dir: supabase/migrations\n    claims: 715\n    result: "715"\n')
+
+
+def _typed_repo(tmp_path: Path, name: str) -> None:
+    d = tmp_path / "supabase" / "migrations"
+    d.mkdir(parents=True)
+    (d / name).write_text("select 1;\n", encoding="utf-8")
+
+
+@pytest.fixture
+def no_spawn(monkeypatch):
+    def boom(*a, **k):
+        raise AssertionError("a typed entry must not spawn")
+
+    monkeypatch.setattr(subprocess, "run", boom)
+    monkeypatch.setattr(subprocess, "Popen", boom)
+
+
+def test_typed_taken_number_is_drift(cr, tmp_path, no_spawn):
+    _typed_repo(tmp_path, "715_x.sql")
+    out = cr.recheck_plan(_plan(tmp_path, _TYPED), tmp_path, 10)
+    row = out["rows"][0]
+    assert out["verdict"] == cr.DRIFT
+    assert row["command"] == "next-free-number supabase/migrations claims 715"
+    assert "715_x.sql" in row["detail"] and "no command" not in row["detail"]
+
+
+def test_typed_free_number_is_current(cr, tmp_path, no_spawn):
+    _typed_repo(tmp_path, "714_y.sql")
+    out = cr.recheck_plan(_plan(tmp_path, _TYPED), tmp_path, 10)
+    assert out["verdict"] == cr.CURRENT
+
+
+def test_typed_missing_dir_and_defect_are_unrunnable(cr, tmp_path, no_spawn):
+    assert cr.recheck_plan(_plan(tmp_path, _TYPED), tmp_path, 10)["verdict"] == cr.UNRUNNABLE
+    bad = _TYPED.replace("supabase/migrations", "../x")
+    out = cr.recheck_plan(_plan(tmp_path, bad), tmp_path, 10)
+    assert out["verdict"] == cr.UNRUNNABLE and ".." in out["rows"][0]["detail"]

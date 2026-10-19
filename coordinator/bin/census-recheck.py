@@ -12,7 +12,8 @@ that the question is ASKABLE", never that the answer still holds.
 
 So the leg is specified three times and implemented zero times. This is that
 implementation, and nothing else: one command per entry, its real output, and a diff
-against what the plan recorded.
+against what the plan recorded. A typed entry (`kind:` in place of `command:`) is answered
+in-process by `census.evaluate_typed`, with no shell and no spawn.
 
 WHAT IT CATCHES THAT THE BAR CANNOT. The bar is pure and spawn-free by design, so a
 census that is complete, well-formed, re-askable and WRONG passes it. Measured on
@@ -73,6 +74,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
+from coordinator_core.roadmap import census  # noqa: E402
 from coordinator_core.win_portability import no_console_creationflags  # noqa: E402
 
 CURRENT = "CURRENT"
@@ -81,6 +83,10 @@ UNRUNNABLE = "UNRUNNABLE"
 UNDIFFABLE = "UNDIFFABLE"
 NO_CENSUS = "NO-CENSUS"
 DECLARED_EMPTY = "DECLARED-EMPTY"
+
+#: A typed entry's evaluator state in this script's vocabulary; a REFUSED typed entry (a
+#: malformed one) is a defect in the census, which this script calls UNRUNNABLE.
+_TYPED_STATE = {"MATCH": CURRENT, "DRIFT": DRIFT, "UNRUNNABLE": UNRUNNABLE, "REFUSED": UNRUNNABLE}
 
 EXIT_CURRENT = 0
 EXIT_DRIFT = 1
@@ -160,6 +166,15 @@ def recheck_entry(entry: dict, cwd: Path, timeout_s: int) -> dict:
         "recorded": recorded,
         "ref": entry.get("ref"),
     }
+    if census.is_typed(entry):
+        verdict = census.evaluate_typed(entry, cwd)
+        row["command"] = census.describe_typed(entry)
+        row.update(
+            state=_TYPED_STATE[verdict["state"]],
+            observed=verdict.get("observed", ""),
+            detail=verdict.get("basis") or verdict.get("detail"),
+        )
+        return row
     if not command:
         row.update(state=UNRUNNABLE, observed="", detail="entry declares no command")
         return row
