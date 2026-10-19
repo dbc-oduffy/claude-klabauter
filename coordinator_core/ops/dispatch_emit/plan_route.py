@@ -279,9 +279,10 @@ def main(argv: "Optional[list[str]]" = None) -> int:
             landed_rows = frozenset(r.id for r in read_spine(Path(plan_arg))) - resume
         if guard_root is not None and (resume is not None or not _write_set_provably_clean(Path(plan_arg), guard_root)):
             from coordinator_core.ops.dispatch_emit.dirty_write_set import guard_against_dirty_write_set
+            from coordinator_core.ops.dispatch_emit.wave_map import held_out_row_ids
 
             regenerable_dirty = guard_against_dirty_write_set(
-                Path(plan_arg), guard_root,
+                Path(plan_arg), guard_root, hold=held_out_row_ids(read_spine(Path(plan_arg))),
                 **({} if resume is None else {"landed": landed_rows, "own": resume}),
             )
             if regenerable_dirty and "own_leftover" in regenerable_dirty:

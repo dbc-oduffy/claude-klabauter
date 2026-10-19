@@ -642,6 +642,11 @@ def _compute_held_out(
     return reasons
 
 
+def held_out_row_ids(rows: list[EmitterRow]) -> frozenset[str]:
+    """Ids `build_waves` would hold out of the wave graph for these rows (silent)."""
+    return frozenset(_compute_held_out(rows, _predecessors(rows)))
+
+
 def transitive_dependents(rows: list[EmitterRow], seeds: set[str]) -> dict[str, list[str]]:
     """Row id -> the held ids it directly depends on, for every row that
     (transitively, over declared and read-after-write edges) depends on a

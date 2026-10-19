@@ -160,6 +160,7 @@ def guard_against_dirty_write_set(
         declared = {
             row.id: [fo(_norm(d)) for d in (*_declared_paths(row), *row.writes_under) if _norm(d)]
             for row in rows
+            if row.id not in skipped
         }
         remaining = []
         for d in dirty:

@@ -375,3 +375,91 @@ def test_dirty_path_of_a_row_outside_own_still_refuses(tmp_path) -> None:
 def test_own_empty_refuses_as_today(tmp_path) -> None:
     with pytest.raises(tool.DirtyWriteSetError, match="src/b.py"):
         _guard(_plan(tmp_path, ROWS_CHAIN), tmp_path, FakeRun(" M src/b.py\n"))
+
+
+def test_held_row_sharing_a_path_does_not_make_it_two_owned(tmp_path) -> None:
+    out = tool.guard_against_dirty_write_set(
+        _plan(tmp_path, ROWS_OVERLAP), tmp_path, run=FakeRun(" M src/shared.py\n"),
+        ignorecase=False, hold=frozenset({"C1"}), own=frozenset({"C2"}),
+    )
+    assert out == {"own_leftover": {"C2": ["src/shared.py"]}}
+
+
+# --- through the plain `--plan` route entry point ---------------------------
+
+
+ROUTE_ROWS = """\
+- id: C1
+  title: dispatched
+  change_kind: doc-edit
+  surface: docs/x/c1.md
+  writes:
+    - docs/x/c1.md
+- id: C6
+  title: held out
+  change_kind: doc-edit
+  surface: docs/x/c6.md
+  depends_on:
+    - chunk: C1
+      gate_kind: epistemic-premise
+"""
+
+
+_REAL_GUARD = tool.guard_against_dirty_write_set
+
+
+def _route_repo(tmp_path: Path, monkeypatch) -> Path:
+    import subprocess
+
+    from coordinator_core import machine_resolver
+    from coordinator_core.ops.dispatch_emit import plan_route
+    from coordinator_core.win_portability import no_console_creationflags
+
+    monkeypatch.setattr(tool, "guard_against_dirty_write_set", _REAL_GUARD)
+    monkeypatch.setenv("COORDINATOR_WORKFLOW_ADMISSION_DISABLE", "1")
+    monkeypatch.setenv("COORDINATOR_SESSION_ID", "11111111-2222-4333-8444-555555555555")
+    real = machine_resolver.registry_get
+    monkeypatch.setattr(
+        machine_resolver, "registry_get", lambda key: None if key == plan_route.BOX_TERMS_KEY else real(key)
+    )
+    repo = tmp_path / "repo"
+    (repo / "docs" / "plans").mkdir(parents=True)
+    (repo / "docs" / "plans" / "p.md").write_text(
+        f"---\ntitle: p\n---\n\n# p\n\n## Tasks\n\n```yaml plan-tasks\n{ROUTE_ROWS}```\n",
+        encoding="utf-8", newline="\n",
+    )
+    for name in ("c1", "c6"):
+        (repo / "docs" / "x").mkdir(exist_ok=True)
+        (repo / "docs" / "x" / f"{name}.md").write_text("v1\n", encoding="utf-8")
+    for args in (("init", "-q"), ("config", "user.email", "t@example.invalid"), ("config", "user.name", "t"),
+                 ("add", "-A"), ("commit", "-q", "-m", "fixture")):
+        subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True, **no_console_creationflags())
+    return repo
+
+
+def _route_emit(repo: Path) -> int:
+    from coordinator_core.ops.dispatch_emit import plan_route
+
+    return plan_route.main(
+        ["--plan", str(repo / "docs" / "plans" / "p.md"), "--out", str(repo / "out" / "p.workflow.mjs"),
+         "--repo-root", str(repo)]
+    )
+
+
+@pytest.mark.cadence
+@pytest.mark.spawns_process
+# The hold is wave_map's epistemic-premise holdout (undeclared `writes`): the row survives
+# `read_spine`, so only the route threading its id into the guard admits it.
+def test_route_admits_dirt_of_a_row_held_out_of_the_wave(tmp_path, monkeypatch, capsys) -> None:
+    repo = _route_repo(tmp_path, monkeypatch)
+    (repo / "docs" / "x" / "c6.md").write_text("stranded\n", encoding="utf-8")
+    assert _route_emit(repo) == 0, capsys.readouterr().err
+
+
+@pytest.mark.cadence
+@pytest.mark.spawns_process
+def test_route_still_refuses_dirt_of_a_dispatched_row(tmp_path, monkeypatch, capsys) -> None:
+    repo = _route_repo(tmp_path, monkeypatch)
+    (repo / "docs" / "x" / "c1.md").write_text("dirt\n", encoding="utf-8")
+    assert _route_emit(repo) == 1
+    assert "docs/x/c1.md" in capsys.readouterr().err
