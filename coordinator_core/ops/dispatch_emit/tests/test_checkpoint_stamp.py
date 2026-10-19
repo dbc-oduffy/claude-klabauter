@@ -21,9 +21,10 @@ PLAN = "docs/plans/p.md"
 SUBJECT = "checkpoint(wave 0): 2 rows — C1, C2"
 
 
-def _message(subject=SUBJECT, owed=None, plan=PLAN) -> str:
+def _message(subject=SUBJECT, owed=None, plan=PLAN, stopped=None) -> str:
     out = f"{subject}\n\nCheckpoint-Plan: {plan}\nCheckpoint-Base: abc1234\nSession-Id: s-1"
-    return out + (f"\nCheckpoint-Gate-Owed: {owed}" if owed else "")
+    out += f"\nCheckpoint-Gate-Owed: {owed}" if owed else ""
+    return out + (f"\n{checkpoint_stamp.STOP_RULE_TRAILER}: {stopped}" if stopped else "")
 
 
 def _git(root: Path, *args: str) -> str:
@@ -201,6 +202,46 @@ def test_non_checkpoint_message_stamps_nothing(tmp_path):
     before = (root / PLAN).read_bytes()
     assert stamp_checkpoint(root, "plain commit", sha) == {}
     assert (root / PLAN).read_bytes() == before
+
+
+def test_parse_checkpoint_reads_stop_rule_line():
+    sub = "checkpoint(wave 0): 2 rows — L6, L7"
+    assert parse_checkpoint(_message(subject=sub, stopped="L7")).stop_rule == {"L7"}
+    assert parse_checkpoint(_message(subject=sub)).stop_rule == frozenset()
+    both = parse_checkpoint(_message(subject=sub, owed="L6", stopped="L7"))
+    assert both.gate_owed == {"L6"} and both.stop_rule == {"L7"}
+
+
+def test_stop_rule_row_stays_open_and_sibling_is_coded(tmp_path):
+    text = _plan_text((("L6", "open"), ("L7", "open"), ("C3", "open")))
+    root, sha = _repo(tmp_path, text)
+
+    out = stamp_checkpoint(
+        root, _message(subject="checkpoint(wave 0): 2 rows — L6, L7", stopped="L7"), sha
+    )
+
+    assert out["rows_coded"] == {PLAN: ["L6"]}
+    rows = _rows(root)
+    assert rows["L6"]["disposition"] == "coded" and rows["L6"]["disposition_ref"] == sha
+    assert rows["L7"]["disposition"] == "open" and "disposition_ref" not in rows["L7"]
+
+
+def test_checkpoint_rows_landed_omits_stop_rule_row_until_a_bare_checkpoint(tmp_path):
+    root, _ = _repo(tmp_path)
+    sub = "checkpoint(wave 0): 2 rows — L6, L7"
+    (root / "seed.txt").write_text("a\n", encoding="utf-8")
+    _git(root, "commit", "-q", "-am", _message(subject=sub, stopped="L7"))
+    first = _git(root, "rev-parse", "HEAD")
+    wanted = frozenset({"L6", "L7"})
+
+    walk = checkpoint_stamp.checkpoint_rows_landed(root, PLAN, first, wanted)
+    assert walk.landed == {first: frozenset({"L6"})}
+
+    (root / "seed.txt").write_text("b\n", encoding="utf-8")
+    _git(root, "commit", "-q", "-am", _message(subject="checkpoint(wave 1): 1 rows — L7"))
+    second = _git(root, "rev-parse", "HEAD")
+    walk = checkpoint_stamp.checkpoint_rows_landed(root, PLAN, second, wanted)
+    assert walk.landed == {second: frozenset({"L7"}), first: frozenset({"L6"})}
 
 
 def test_module_top_imports_stdlib_only():

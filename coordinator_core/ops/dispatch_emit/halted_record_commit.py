@@ -14,7 +14,10 @@ imports would be missing at the commit, transitively, is withheld whole (``impor
 A chunk owning a ``.py`` that fails to parse (``py-unparseable``) or whose landing blob drops lines a
 foreign commit added since the run's base (``since-base-overlap``) is withheld whole the same way,
 and so is a chunk any of whose changed declared writes is withheld for another reason
-(``chunk-write-set-partial``): a chunk lands whole or not at all.
+(``chunk-write-set-partial``): a chunk lands whole or not at all. A carried test verdict naming a
+run-caused failure withholds the chunk owning the failing test file, or every chunk when the
+failure is unattributed or in a file no landing chunk owns (``targeted-tests-failed``); the reply's
+``targeted_tests.check`` says ``no-verdict`` when none was carried.
 With no finished chunk the commit is record-only. No receipt, sizing ship,
 plan stamp or close job runs, and the run token is only checked (``run_token.admits``), never
 claimed: no branch, raise or killed op can strand it, so a halt never spends the token the
@@ -414,6 +417,14 @@ def _land(
     art_deleted = [p for p in art_deleted if p not in withheld]
     closure_open: dict = {}
     integrity: list = []
+    targeted: Optional[dict] = None
+    tfind: list = []
+    if halted["halted"] == "ledger-check":
+        tfind, tcheck = landing_integrity.failed_targeted_tests(landing_integrity.targeted_test_verdict(params))
+        targeted = {
+            "check": tcheck,
+            "findings": [{"path": f.path, "reason": f.reason, "detail": f.detail} for f in tfind],
+        }
     if halted["halted"] != "ledger-check":
         withheld.update({p: "halt-record-only" for p in product + gone if p in owner})
     elif product or gone:
@@ -441,6 +452,15 @@ def _land(
             withheld.update({
                 p: bad_chunks[owner[p]] for p in product + gone
                 if p not in withheld and owner.get(p) in bad_chunks
+            })
+        if tfind:
+            landing = {p for p in product + gone if p not in withheld}
+            landing_chunks = {owner[p] for p in landing if p in owner}
+            hit = {owner[f.path] for f in tfind if f.path in owner and owner[f.path] in landing_chunks}
+            everything = any(f.path not in owner or owner[f.path] not in landing_chunks for f in tfind)
+            withheld.update({
+                p: landing_integrity.TARGETED_TESTS_FAILED for p in landing
+                if p in owner and (everything or owner[p] in hit)
             })
     product = [p for p in product if p not in withheld]
     gone = [p for p in gone if p not in withheld]
@@ -470,7 +490,8 @@ def _land(
         _settle_ledger_pointer(repo_root, run_id, halted, sizing_rel, outcome_rel)
         return {
             "committed": False, "sha": None, "nothing_to_commit": True,
-            **({"withheld": withheld} if withheld else {}), **review_reply, **base,
+            **({"withheld": withheld} if withheld else {}),
+            **({"targeted_tests": targeted} if targeted is not None else {}), **review_reply, **base,
         }
 
     message = halted_record_message(run_id, halted)
@@ -520,6 +541,8 @@ def _land(
         extra["closure_open"] = closure_open
     if dropped:
         extra["dropped"] = dropped
+    if targeted is not None:
+        extra["targeted_tests"] = targeted
     if integrity:
         extra["integrity"] = [{"path": f.path, "reason": f.reason, "detail": f.detail} for f in integrity]
     return {**reply, "paths": paths + deleted, **extra, **base}  # paths: everything the commit names

@@ -8,8 +8,8 @@ This module answers three questions and does nothing else:
   classify_census  which unscreenable census entry no read-only rewrite can carry ("leftover")
   residue_args     what the workflow needs to run with no EM relay (`mise-prep-residue-args/1`)
 
-UNWIRED: `mise-prep-run` does not yet call `residue_args`/`has_work`, and `coordinator:residue-author`
-is not yet in `emit.py`; until both land the EM hand-dispatch line is still live.
+Caller: `coordinator/bin/mise-prep-run.py :: _emit_residue` calls `residue_args`/`has_work` and passes
+`RESIDUE_AGENT_TYPE`.
 
 No model literal lives here: the caller passes models resolved by `emit.resolve_agent_model`.
 Reading a plan's census costs one `census.tracked_targets` spawn for the whole set, never one per
@@ -27,6 +27,8 @@ from coordinator_core.roadmap import census as _census  # uses its private _spli
 SCHEMA = "mise-prep-residue-args/1"
 RESIDUE_BATCH_MAX = 8
 APM_AGENT_TYPE = "coordinator:apm"
+#: The DoE agent that authors residue; callers pass it as `residue_agent_type`.
+RESIDUE_AGENT_TYPE = "coordinator:plan-author-residue"
 
 #: Heads whose question cannot be asked read-only; the author has no rewrite to offer.
 LEFTOVER_HEADS = frozenset({"node", "npx", "gh", "claude"})

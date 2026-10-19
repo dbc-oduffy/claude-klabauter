@@ -744,7 +744,10 @@ def _stamp(plan_path: str, updates: list, worktree: Path, repo_root: Path) -> di
         return _err(f"stamp: {exc}")
 
     if not isinstance(updates, list) or not updates:
-        return _err("stamp: 'updates' must be a non-empty list of {id, ...fields} dicts")
+        return _err(
+            "stamp: 'updates' must be a non-empty list of {id, ...fields} dicts; "
+            + _MARK_CODED_SHAPE
+        )
     for u in updates:
         if not isinstance(u, dict) or not u.get("id"):
             return _err("stamp: every update entry must be a dict with a non-empty 'id'")
@@ -758,7 +761,8 @@ def _stamp(plan_path: str, updates: list, worktree: Path, repo_root: Path) -> di
                 f"{fields} — disposition is resolve's surface: use --verb "
                 "resolve. A closed disposition (spun_off/backlogged/wont_do) "
                 "records that the PM ratified this cut, so it waits on their "
-                "ruling. Refusing the whole batch — no writes applied."
+                "ruling. Refusing the whole batch — no writes applied. "
+                + _MARK_CODED_SHAPE
             )
 
     for u in updates:
@@ -2104,9 +2108,27 @@ def _patch_body(body: str, original_rows: list, rows: list) -> str:
     return patched[:-1] if not body.endswith("\n") and patched.endswith("\n") else patched
 
 
+_MARK_CODED_SHAPE = (
+    "to mark a row coded: {verb: 'resolve', plan_path: <docs/plans/...md>, "
+    "id: <row id>, disposition: 'coded', disposition_ref: <7-40 char commit SHA>} "
+    "(disposition_detail optional; a batch passes resolves: [{id, disposition, "
+    "disposition_ref}, ...]). `stamp` cannot set disposition fields"
+)
+
+
 def _resolve_missing_fields(resolutions: list) -> list:
     """Every required-field defect across the resolve batch, one string per row/field
-    group, so a caller repairs the call in a single round trip. Pure: reads no plan."""
+    group, so a caller repairs the call in a single round trip. Pure: reads no plan.
+
+    The first defect list also names the full mark-coded shape (`_MARK_CODED_SHAPE`),
+    so a caller one field short never has to discover the rest one error at a time."""
+    problems = _resolve_field_defects(resolutions)
+    if problems:
+        problems.append(_MARK_CODED_SHAPE)
+    return problems
+
+
+def _resolve_field_defects(resolutions: list) -> list:
     problems: list = []
     if not isinstance(resolutions, list) or not resolutions:
         return ["'id'/'disposition' (or a non-empty 'resolves' batch) is required"]
@@ -2492,7 +2514,10 @@ def _resolve(
     except LockTimeout as exc:
         return _err(f"resolve: timed out waiting for file lock on {plan_path}: {exc}")
     except MutateAbort as exc:
-        return _err(exc.args[0] if exc.args else "resolve: mutation aborted")
+        message = exc.args[0] if exc.args else "resolve: mutation aborted"
+        if "schema-invalid" in message and any(r.get("disposition") == "coded" for r in resolutions):
+            message = f"{message}; {_MARK_CODED_SHAPE}"
+        return _err(message)
 
     result = _ok(_state["applied"], _state["message"], warnings=_state["warnings"])
     if _state.get("narrow_hint"):
@@ -2653,15 +2678,15 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     plan_path = (params.get("plan_path") or "").strip()
 
     if not verb:
-        return _err("plan.tasks.mutate: 'verb' is required (add-task | stamp | resolve | reopen | depends-on | clear-gate | evidence-append | em-discharge)")
+        return _err("plan.tasks.mutate: 'verb' is required (add-task | stamp | resolve | reopen | depends-on | clear-gate | evidence-append | em-discharge); " + _MARK_CODED_SHAPE)
     if not plan_path:
         if verb == "resolve":
             resolutions, bad = _resolutions_from_params(params)
             if bad:
                 return bad
-            problems = ["'plan_path' is required"] + _resolve_missing_fields(resolutions)
-            return _err("resolve: " + "; ".join(problems))
-        return _err("plan.tasks.mutate: 'plan_path' is required")
+            problems = ["'plan_path' is required"] + _resolve_field_defects(resolutions)
+            return _err("resolve: " + "; ".join(problems + [_MARK_CODED_SHAPE]))
+        return _err("plan.tasks.mutate: 'plan_path' is required; " + _MARK_CODED_SHAPE)
 
     if repo_root is None:
         return _err(
@@ -2740,5 +2765,6 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         )
 
     return _err(
-        f"plan.tasks.mutate: unknown verb {verb!r} — supported: add-task, stamp, resolve, reopen, depends-on, clear-gate, evidence-append, em-discharge"
+        f"plan.tasks.mutate: unknown verb {verb!r} — supported: add-task, stamp, resolve, reopen, depends-on, clear-gate, evidence-append, em-discharge; "
+        + _MARK_CODED_SHAPE
     )

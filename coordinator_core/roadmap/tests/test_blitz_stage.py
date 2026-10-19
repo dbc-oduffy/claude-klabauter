@@ -470,6 +470,32 @@ def test_cycle_is_refused(tmp_path, roadmap):
         bs.stage_roadmap(tmp_path, str(roadmap))
 
 
+def _edges_of(body: str):
+    text = "## C1 — a\n**loe:** M\n\n## C2 — b\n**loe:** M\n" + body + "\n\n## C3 — c\n**loe:** M\n"
+    return bs._cluster_edges(bs.parse_clusters(text))
+
+
+@pytest.mark.parametrize(
+    "line,expected",
+    [
+        ("**blocked_by:** C1.", [{"from": "C2", "to": "C1"}]),
+        ("**blocked_by:** C1 and C3", [{"from": "C2", "to": "C1"}, {"from": "C2", "to": "C3"}]),
+        ("**blocked_by:** C1; C3", [{"from": "C2", "to": "C1"}, {"from": "C2", "to": "C3"}]),
+        ("**blocked_by:** `C1`, C3", [{"from": "C2", "to": "C1"}, {"from": "C2", "to": "C3"}]),
+        ("**blocked_by:** none (C1 reviewed this)", []),
+        ("**blocked_by:** (see C1)", []),
+        ("**blocked_by:** waits on C1 to land", []),
+        ("**blocked_by:** C1 (reviewer: also C3 maybe)", [{"from": "C2", "to": "C1"}]),
+        ("**blocks:** C3.", [{"from": "C3", "to": "C2"}]),
+        ("**blocks:** nothing (C1 unaffected)", []),
+        ("**blocks:** after C1 ships, C3 starts", []),
+        ("**blocks:** C1 (note: C3 too)", [{"from": "C1", "to": "C2"}]),
+    ],
+)
+def test_only_structured_entries_yield_edges(line, expected):
+    assert _edges_of(line) == expected
+
+
 def test_op_wraps_the_library(tmp_path, roadmap):
     from coordinator_core.ops.roadmap_blitz_stage import _handler
 

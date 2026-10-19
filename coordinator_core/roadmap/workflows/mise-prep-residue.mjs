@@ -7,7 +7,7 @@
 
 export const meta = {
   name: 'mise-prep-residue',
-  description: 'Residue authoring for mise-prep: one residue-author agent per batch of plans, then one APM agent over leftover census rows and seam-fix cycles.',
+  description: 'Residue authoring for mise-prep: one coordinator:plan-author-residue agent per batch of plans, then one APM agent over leftover census rows and seam-fix cycles.',
   phases: ['Residue', 'APM'],
 };
 

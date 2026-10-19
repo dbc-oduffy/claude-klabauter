@@ -13,6 +13,8 @@
     }
   ],
   "plan": "emit-full-path-plan.md",
+  "plan_body_sha": "67ea806161a74ddef1b5b951d3e53b44ac533a53",
+  "plan_relpath": "docs/plans/emit-full-path-plan.md",
   "session_id": "<SESSION_ID>",
-  "sha256": "3f138e90f3dfeeda0f4f8bb0cb0234f049d52ecafb4fd480011043d9e582a884"
+  "sha256": "ec910cb5cc044fda2b4a2ced2cc867c006af19062218dfe0707a392f470c0966"
 }

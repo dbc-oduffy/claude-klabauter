@@ -4494,3 +4494,34 @@ def test_resolve_keeps_the_rows_comments_and_formatting(tmp_path):
     assert "  writes:\n    - a.py\n" in text
     assert "  note: >-\n    folded\n    note\n" in text
     assert "disposition: coded" in text
+
+
+_CODED_SHAPE_TOKENS = ("verb: 'resolve'", "disposition: 'coded'", "disposition_ref", "plan_path")
+
+
+def _assert_names_coded_shape(result):
+    assert result["exit_code"] == 1, result
+    err = result["error"]
+    for token in _CODED_SHAPE_TOKENS:
+        assert token in err, (token, err)
+
+
+def test_first_shape_error_names_full_mark_coded_shape(tmp_path):
+    """Every first shape error on the mark-coded path carries the whole shape, no write."""
+    repo = _make_git_repo(tmp_path)
+    plan = _seed_plan(repo, "coded-shape.md", _PLAN_WITH_TASKS)
+    original = plan.read_text(encoding="utf-8")
+    gh = repo / ".git"
+    calls = [
+        {},
+        {"verb": "bogus", "plan_path": str(plan)},
+        {"verb": "stamp", "plan_path": str(plan)},
+        {"verb": "stamp", "plan_path": str(plan),
+         "updates": [{"id": "C1", "disposition": "coded"}]},
+        {"verb": "resolve", "plan_path": str(plan), "id": "C1"},
+        {"verb": "resolve", "plan_path": str(plan), "id": "C1", "disposition": "coded"},
+        {"verb": "resolve", "id": "C1", "disposition": "coded", "disposition_ref": "abc1234"},
+    ]
+    for params in calls:
+        _assert_names_coded_shape(_run(_handler(params, repo_root=gh)))
+    assert plan.read_text(encoding="utf-8") == original

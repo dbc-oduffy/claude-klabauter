@@ -22,6 +22,14 @@ def test_landed_ids_parsed_from_checkpoint_subjects():
     assert landed_rows_from_text(text) == {"A", "B", "C"}
 
 
+def test_prose_after_checkpoint_subject_never_yields_ids():
+    text = (
+        'x checkpoint(wave 2): 5 rows — l07.C6, l07.C8, l07.C17\\\\\\"), Session-Id c9c3 '
+        "(verified via trailer). Committed paths, read back with git show --name-only: a/b"
+    )
+    assert landed_rows_from_text(text) == {"l07.C6", "l07.C8", "l07.C17"}
+
+
 def test_drop_landed_strips_edges_and_keeps_rest():
     rows = [_row("A"), _row("B", ["A"]), _row("C", ["A", "B"])]
     kept = _drop_landed_rows(rows, frozenset({"A"}))

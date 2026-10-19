@@ -149,6 +149,7 @@ AGENT_IDENTIFIERS = (
     "overengineering-reviewer",
     "parallel-review-synthesizer",
     "plan-author",
+    "plan-author-residue",
     "plan-coverage-checker",
     "premise-checker",
     "prior-art-checker",

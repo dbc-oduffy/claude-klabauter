@@ -15,10 +15,11 @@ import pytest
 
 from coordinator_core.ops.workflow_bind import _workflow_bind_args
 from coordinator_core.ops.workflow_validate import _workflow_validate
+from coordinator_core.roadmap.mise_residue import RESIDUE_AGENT_TYPE
 
 SOURCE = Path(__file__).resolve().parents[1] / "workflows" / "mise-prep-residue.mjs"
 
-RESIDUE_TYPE = "coordinator:residue-author"
+RESIDUE_TYPE = RESIDUE_AGENT_TYPE
 APM_TYPE = "coordinator:apm"
 
 

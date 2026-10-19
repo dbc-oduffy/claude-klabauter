@@ -1353,6 +1353,15 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #   4. Mutates shared mutable state outside its own module?                YES.
     #   5. Persistent state changes observable across process boundaries?     YES.
     "plan.seam_fix": OpClass.MUTATING,
+    # plan.write_order — COMPUTE_ONLY: derives write-overlap ordering edges and a run order for
+    # caller-named docs/plans/*.md and RETURNS them; persists nothing (plan.seam_fix writes).
+    # DR-208 five-question affirmation (citing ops/plan_write_order.py):
+    #   1. Writes, deletes, or reorders any state file, queue, or git object?  No.
+    #   2. Writes into rag's relational store?                                 No.
+    #   3. Opens any file for write (including sentinel creation)?             No.
+    #   4. Mutates shared mutable state outside its own module?                No.
+    #   5. Persistent state changes observable across process boundaries?     No.
+    "plan.write_order": OpClass.COMPUTE_ONLY,
     # seam.mint_batons — MUTATING: mints staged (awaiting_gate) handoff batons for residual
     # seam flags, capped with one rollup, and records key->baton in state/seam-baton-index.json
     # for cross-run dedup. Never commits.
@@ -2133,6 +2142,11 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # (state/review-trail/diffs/<slice_id>.{diff,head.sha}) and writes one prep sidecar under the
     # session share dir. DR-208 answers are those of review.partition_slices above; it commits nothing.
     "review.prep": OpClass.MUTATING,
+    # review.reverify — MUTATING (DR-208): (1) it restores or removes review-edited product files
+    # and writes reverify.json beside the pre-review snapshot; (2) that state persists on disk;
+    # (3) every write goes through the declared-write seam; (4) it commits nothing and spawns
+    # nothing; (5) list mode alone writes nothing, but the op as a whole is classed by revert mode.
+    "review.reverify": OpClass.MUTATING,
     # ---------------------------------------------------------------------------
     # Backfill: 3 ops registered by concurrent sessions (records.query / ceremony.*) without a
     # classification entry, leaving the drift-guard gate RED on HEAD.

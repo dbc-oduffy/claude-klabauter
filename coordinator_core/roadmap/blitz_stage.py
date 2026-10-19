@@ -76,6 +76,8 @@ _CLUSTER_HEAD_RE = re.compile(
     r"^##\s+(?P<id>[A-Za-z]{1,6}-?\d+[A-Za-z0-9]*)\s*[—–:\-]+\s*(?P<title>.+?)\s*$"
 )
 _ID_TOKEN_RE = re.compile(r"\b[A-Za-z]{1,6}-?\d+[A-Za-z0-9]*\b")
+_ID_FULL_RE = re.compile(_ID_TOKEN_RE.pattern.replace(r"\b", ""))
+_PAREN_RE = re.compile(r"\([^)]*\)?")
 _BLOCKED_BY_RE = re.compile(r"\*\*blocked_by:\*\*([^*\n]*)", re.IGNORECASE)
 _BLOCKS_RE = re.compile(r"\*\*blocks:\*\*([^*\n]*)", re.IGNORECASE)
 _LOE_RE = re.compile(r"\*\*(?:loe|size):\*\*\s*(XXL|XL|XS|S|M|L)\b", re.IGNORECASE)
@@ -126,6 +128,20 @@ def _resolve_run_dir(roadmap: Path) -> Tuple[Path, str]:
     return run_dir, roadmap_id
 
 
+def _structured_ids(remainder: str) -> List[str]:
+    """Ids of the entries on a blocked_by/blocks line that are nothing but ids.
+
+    Parentheticals are dropped; the rest splits on commas, semicolons and ``and``. An entry
+    carrying any other word is prose and yields nothing."""
+    entries = re.split(r"[,;]|\band\b", _PAREN_RE.sub(" ", remainder))
+    ids: List[str] = []
+    for entry in entries:
+        words = entry.replace("`", " ").strip().rstrip(".").split()
+        if words and all(_ID_FULL_RE.fullmatch(w) for w in words):
+            ids.extend(words)
+    return ids
+
+
 def parse_clusters(text: str) -> List[Dict[str, Any]]:
     """Cluster sections of ``clusters.md`` in file order, each with its
     declared ``blocked_by``/``blocks`` tokens and optional ``loe``."""
@@ -142,8 +158,8 @@ def parse_clusters(text: str) -> List[Dict[str, Any]]:
             current["body"].append(line)
     for sec in sections:
         body = "\n".join(sec.pop("body"))
-        sec["blocked_by_tokens"] = [t for m in _BLOCKED_BY_RE.finditer(body) for t in _ID_TOKEN_RE.findall(m.group(1))]
-        sec["blocks_tokens"] = [t for m in _BLOCKS_RE.finditer(body) for t in _ID_TOKEN_RE.findall(m.group(1))]
+        sec["blocked_by_tokens"] = [t for m in _BLOCKED_BY_RE.finditer(body) for t in _structured_ids(m.group(1))]
+        sec["blocks_tokens"] = [t for m in _BLOCKS_RE.finditer(body) for t in _structured_ids(m.group(1))]
         loe = _LOE_RE.search(body)
         sec["loe"] = loe.group(1).upper() if loe else None
     return sections

@@ -2,7 +2,8 @@
 
 ``parse_checkpoint`` reads the message ``emit._checkpoint_commit_js`` composes;
 ``stamp_checkpoint`` flips the rows it names from ``open`` to ``coded`` at the
-checkpoint's own sha, in-process, and lands one plan-only follow-up commit
+checkpoint's own sha, in-process (rows named on ``Checkpoint-Gate-Owed:`` or
+``Checkpoint-Stop-Rule:`` stay ``open``), and lands one plan-only follow-up commit
 carrying ``Checkpoint-Stamp: <sha>``. Stdlib-only at module top: callers gate the
 import on a literal ``Checkpoint-Plan: `` test so a plain commit pays nothing.
 """
@@ -17,6 +18,10 @@ from typing import NamedTuple, Optional
 CHECKPOINT_SUBJECT = re.compile(r"^checkpoint\(wave [^)]*\): \d+ rows? — (?P<ids>.+)$")
 CHECKPOINT_PLAN_LINE = re.compile(r"^Checkpoint-Plan: (?P<v>\S.*?)\s*$", re.M)
 CHECKPOINT_GATE_OWED_LINE = re.compile(r"^Checkpoint-Gate-Owed:[ \t]*(?P<v>.+?)\s*$", re.M)
+CHECKPOINT_STOP_RULE_LINE = re.compile(r"^Checkpoint-Stop-Rule:[ \t]*(?P<v>.+?)\s*$", re.M)
+# Trap: a stopped row's bytes ARE in the commit that names it here; only its
+# landed-ness is withheld, so a refire re-dispatches it.
+STOP_RULE_TRAILER = "Checkpoint-Stop-Rule"
 STAMP_TRAILER = "Checkpoint-Stamp"
 _STAMP_LINE = re.compile(r"^" + STAMP_TRAILER + r":[ \t]*\S", re.M)
 
@@ -25,6 +30,7 @@ class Checkpoint(NamedTuple):
     plan_rel: str
     row_ids: frozenset
     gate_owed: frozenset
+    stop_rule: frozenset = frozenset()  # carried, not landed
 
 
 def _ids(text: str) -> frozenset:
@@ -32,17 +38,19 @@ def _ids(text: str) -> frozenset:
 
 
 def parse_checkpoint(message: str) -> Optional[Checkpoint]:
-    """The plan, named row ids and gate-owed ids of a checkpoint message; None when
+    """The plan, named row ids, gate-owed and stop-rule ids of a checkpoint message; None when
     the subject is not a checkpoint's or the ``Checkpoint-Plan:`` line is absent."""
     subject = CHECKPOINT_SUBJECT.match((message.splitlines() or [""])[0].strip())
     plan = CHECKPOINT_PLAN_LINE.search(message)
     if not subject or not plan:
         return None
     owed = CHECKPOINT_GATE_OWED_LINE.search(message)
+    stopped = CHECKPOINT_STOP_RULE_LINE.search(message)
     return Checkpoint(
         plan.group("v").replace("\\", "/"),
         _ids(subject.group("ids")),
         _ids(owed.group("v")) if owed else frozenset(),
+        _ids(stopped.group("v")) if stopped else frozenset(),
     )
 
 
@@ -52,7 +60,7 @@ def is_stamp_commit(message: str) -> bool:
 
 
 class CheckpointWalk(NamedTuple):
-    landed: dict  # {checkpoint sha: frozenset(row ids)}, ids minus that checkpoint's gate-owed
+    landed: dict  # {checkpoint sha: frozenset(row ids)}, ids minus that checkpoint's gate-owed and stop-rule
     commits_read: int
     capped: bool  # the cap ended the walk with wanted ids still unfound
 
@@ -92,7 +100,7 @@ def checkpoint_rows_landed(
 
     First-parent walk from ``start_sha``, in-process. Stamp commits, other plans'
     checkpoints and process halves are stepped over; a same-plan checkpoint records
-    ``(row ids - gate-owed) & remaining`` at its own sha, so the newest landing wins.
+    ``(row ids - gate-owed - stop-rule) & remaining`` at its own sha, so the newest landing wins.
     Ends when ``wanted`` is exhausted, below ``floor_epoch``, at ``cap`` commits, or at
     an unreadable or root commit. ``Checkpoint-Base:`` is not a stop.
     """
@@ -119,7 +127,7 @@ def checkpoint_rows_landed(
         cp = None if is_stamp_commit(message) else parse_checkpoint(message)
         if cp is not None and cp.plan_rel == plan_rel:
             subject = (message.splitlines() or [""])[0].strip()
-            ids = (cp.row_ids - cp.gate_owed) & remaining
+            ids = (cp.row_ids - cp.gate_owed - cp.stop_rule) & remaining
             if ids and not subject.endswith(_PROCESS_HALF_SUFFIX):
                 landed[sha] = frozenset(ids)
                 remaining -= ids
@@ -151,7 +159,7 @@ def _plan_state(worktree_root: Path, rel: str, sha: str, data: bytes) -> str:
 def stamp_checkpoint(
     worktree_root: Path, message: str, sha: str, *, session_id: Optional[str] = None
 ) -> dict:
-    """Stamp the checkpoint's open, non-gate-owed rows ``coded`` at ``sha``.
+    """Stamp the checkpoint's open rows ``coded`` at ``sha``, minus gate-owed and stop-rule rows.
 
     Returns ``{}`` when nothing flips; else ``{"rows_coded": {plan: [ids]}, "stamp_sha"}``
     (``stamp_sha`` None with ``stamp_skipped`` when the plan stays stamped on disk only: an
@@ -173,7 +181,7 @@ def stamp_checkpoint(
         )
         from coordinator_core.session.claimed_write import replace_text
 
-        ids = sorted(cp.row_ids - cp.gate_owed)
+        ids = sorted(cp.row_ids - cp.gate_owed - cp.stop_rule)
         by_plan = _source_rows_by_plan(worktree_root, cp.plan_rel, ids)
         rows_coded: dict = {}
         state: dict = {}

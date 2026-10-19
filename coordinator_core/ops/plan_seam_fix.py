@@ -26,6 +26,8 @@ Reply:
     graph under dry_run) has no in-set writes-collision left.
 
 Design:
+  - ``derive_edges(pset, hubs, root)`` is the one derivation of these edges (pure; ``_fix``
+    adds the writes). ``plan.write_order`` shares it, so the two ops cannot disagree on order.
   - Direction: for a colliding pair the plan with the lexicographically later repo-relative
     path depends on the earlier one. Pairs are processed in (later plan, earlier plan, path)
     order; the first edge that orders a pair also orders every pair it implies transitively.
@@ -58,7 +60,7 @@ from __future__ import annotations
 import copy
 import posixpath
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, NamedTuple, Optional, Tuple
 
 from coordinator_core.frontmatter.body_blocks import LocateStatus, locate_fenced_block
 from coordinator_core.ipc import register_op
@@ -160,7 +162,8 @@ def _collision_pairs(pset: Dict[str, _Plan], hubs: set, root: Path) -> List[Tupl
         if f["class"] == COLLISION and other and path and other in pset and f["plan"] in pset:
             earlier, later = sorted((f["plan"], other))
             pairs.add((later, earlier, path))
-    return sorted(pairs, key=lambda t: (t[0], [-ord(ch) for ch in t[1]], t[2]))
+    rank = {n: i for i, n in enumerate(sorted({t[1] for t in pairs}, key=lambda n: [-ord(ch) for ch in n]))}
+    return sorted(pairs, key=lambda t: (t[0], rank[t[1]], t[2]))
 
 
 def _plan_edges(pset: Dict[str, _Plan]) -> Dict[str, set]:
@@ -217,21 +220,52 @@ def _write_edges(root: Path, rel: str, edges: List[dict]) -> bool:
     return path.read_bytes() != before
 
 
-def _fix(params: dict, root: Path) -> dict:
-    plans, dry_run = _parse_params(params, root)
-    pset: Dict[str, _Plan] = {rel: _Plan(rel, root) for rel in plans}
-    hubs = _declared_append_hubs(root)
+class EdgeDerivation(NamedTuple):
+    """Result of ``derive_edges``; pure data, nothing written."""
+
+    pairs: List[Tuple[str, str, str]]
+    graph: Dict[str, set]
+    edges_added: List[dict]
+    per_plan: Dict[str, List[dict]]
+    skipped_cycles: List[dict]
+    already_ordered: List[Tuple[str, str, str]]
+
+
+def _reach_masks(graph: Dict[str, set], bit: Dict[str, int]) -> Dict[str, int]:
+    """Per plan, a bitmask of every plan it reaches through one or more ``graph`` edges."""
+    reach: Dict[str, int] = {}
+    for rel in graph:
+        seen = 0
+        stack = list(graph[rel])
+        while stack:
+            cur = stack.pop()
+            if not seen & bit[cur]:
+                seen |= bit[cur]
+                stack.extend(graph.get(cur, ()))
+        reach[rel] = seen
+    return reach
+
+
+def derive_edges(pset: Dict[str, _Plan], hubs: set, root: Path) -> EdgeDerivation:
+    """The one write-overlap ordering derivation: opens no file, spawns nothing.
+    ``graph`` is the in-set plan graph after the added edges."""
     pairs = _collision_pairs(pset, hubs, root)
 
     graph = _plan_edges(pset)
+    bit = {rel: 1 << i for i, rel in enumerate(graph)}
+    # Invariant: reach[x] is exactly the in-set plans x transitively depends on, after every
+    # edge added to ``graph`` so far.
+    reach = _reach_masks(graph, bit)
     orders: Dict[str, List[str]] = {}
     edges_added: List[dict] = []
     skipped: List[dict] = []
     per_plan: Dict[str, List[dict]] = {}
+    already_ordered: List[Tuple[str, str, str]] = []
     for later, earlier, path in pairs:
-        if _reaches(graph, later, earlier):
+        if reach[later] & bit[earlier]:
+            already_ordered.append((later, earlier, path))
             continue
-        if _reaches(graph, earlier, later):
+        if reach[earlier] & bit[later]:
             skipped.append({
                 "class": CYCLE_CLASS, "plans": [later, earlier], "path": path,
                 "detail": f"{later} after {earlier} would close a cycle: {earlier} already "
@@ -248,10 +282,25 @@ def _fix(params: dict, root: Path) -> dict:
         edge = {"plan": earlier, "chunk": theirs[-1], "gate_kind": GATE_KIND,
                 "note": f"orders the shared write to {path}"}
         graph[later].add(earlier)
+        gained = reach[earlier] | bit[earlier]
+        later_bit = bit[later]
+        for rel, mask in reach.items():
+            if rel == later or mask & later_bit:
+                reach[rel] = mask | gained
         for rid in mine:
             per_plan.setdefault(later, []).append({"row": rid, "edge": edge})
             edges_added.append({"plan": later, "chunk": rid,
                                 "depends_on": {"plan": earlier, "chunk": theirs[-1]}, "path": path})
+    return EdgeDerivation(pairs, graph, edges_added, per_plan, skipped, already_ordered)
+
+
+def _fix(params: dict, root: Path) -> dict:
+    plans, dry_run = _parse_params(params, root)
+    pset: Dict[str, _Plan] = {rel: _Plan(rel, root) for rel in plans}
+    hubs = _declared_append_hubs(root)
+    derived = derive_edges(pset, hubs, root)
+    pairs, graph, per_plan = derived.pairs, derived.graph, derived.per_plan
+    edges_added, skipped = derived.edges_added, derived.skipped_cycles
 
     files: List[str] = []
     skipped_plans: List[dict] = []

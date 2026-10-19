@@ -1936,7 +1936,7 @@ def main(argv: "Optional[list[str]]" = None) -> int:
                     file=sys.stderr,
                 )
                 return EXIT_USAGE
-            review_set |= landed_rows_from_text(text)
+            review_set |= landed_rows_from_text(text, exclude_stop_rule=False)
         if not review_set and args.inventory:
             print(
                 "emit-dispatch-workflow: ERROR — --review-only with --inventory names no row: "

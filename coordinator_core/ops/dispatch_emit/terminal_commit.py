@@ -268,7 +268,9 @@ def _landing_integrity_gate(
     params: dict, run_id: Optional[str], plan: Optional[str] = None,
 ) -> dict:
     """Pre-commit integrity findings over the product landing set (unparseable ``.py``, and a
-    blob dropping lines a foreign commit added since the run base). Returns ``{}``-like extras:
+    blob dropping lines a foreign commit added since the run base, and a carried test verdict
+    naming a run-caused failure: ``targeted-tests-failed``, with ``targeted_tests_check`` always
+    set). Returns ``{}``-like extras:
     ``refused`` + ``integrity`` on any finding, ``since_base_check: "no-base"`` when the run has
     no recorded base so the overlap arm was skipped."""
     from coordinator_core.ops.dispatch_emit import landing_integrity as li
@@ -287,6 +289,11 @@ def _landing_integrity_gate(
         extra["since_base_check"] = "no-base"
     else:
         findings += li.since_base_findings(worktree_root, paths, base, run_id=run_id, plan=plan)
+    # Trap: ``inline_review.tests.status`` is already baseline-aware (a baseline-cleared run folds
+    # to ``pass``), so a carried ``fail`` here is run-caused or a failed row verification.
+    tested, tcheck = li.failed_targeted_tests(li.targeted_test_verdict(params))
+    findings += tested
+    extra["targeted_tests_check"] = tcheck
     if findings:
         extra["refused"] = findings[0].reason
         extra["integrity"] = [
@@ -5318,6 +5325,7 @@ def _terminal_commit_inner(
         )
     if integrity_extra.get("since_base_check"):
         reply["since_base_check"] = integrity_extra["since_base_check"]
+    reply["targeted_tests_check"] = integrity_extra["targeted_tests_check"]
     reply["receipts"] = receipt_paths
     reply["receipt_coverage"] = "written" if receipt_paths else "unidentified"
     if (

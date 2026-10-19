@@ -343,6 +343,7 @@ from coordinator_core.ops.dispatch_emit.wave_map import (
     dag_from_waves,
     transitive_dependents,
 )
+from coordinator_core.ops.dispatch_emit.checkpoint_stamp import STOP_RULE_TRAILER
 from coordinator_core.ops.dispatch_emit.gate_owed import (
     GATE_OWED_JS_RE,
     GATE_OWED_VAR,
@@ -479,6 +480,7 @@ _AGENT_MODELS = {
     "coordinator:falsifier-integrity-reviewer": "sonnet",
     "coordinator:apm": "opus",
     "coordinator:plan-author": "opus",
+    "coordinator:plan-author-residue": "sonnet",
     "coordinator:code-reviewer": "sonnet",
     "coordinator:delivery-verifier": "sonnet",
     "coordinator:staff-eng": "opus",
@@ -2025,7 +2027,8 @@ def _footprint_miss_clause() -> str:
         "PARTIAL with the report line "
         f"`{report_line(KIND_OUTSIDE_FOOTPRINT, '<first failing test>')}` in your "
         "summary and nothing else undone. A failure inside your footprint is never "
-        "this case."
+        "this case. Copy that `gate-blocker:` line verbatim as the second line of "
+        "your reply, under the status line."
     )
 
 
@@ -2411,7 +2414,9 @@ def _stop_rule_clause() -> str:
     Negative spec: this never becomes a fourth status. The status enum stays
     DONE/BLOCKED/PARTIAL (`done_summary_constraint`), so a stopped chunk's
     finished work still commits through the ordinary DONE path -- the halt
-    lands AFTER that commit, never instead of it.
+    lands AFTER that commit, never instead of it. The commit names the row on
+    `Checkpoint-Stop-Rule:`, so no reader counts it landed and a refire
+    re-dispatches it with its dependents.
     """
     return (
         "STOP RULES: if your row's `body` carries a STOP RULE and its "
@@ -2774,7 +2779,7 @@ def _row_prompt(
         "dressed as compliance. Anything you do beyond your row, report under "
         "`Beyond brief:` with your reason. Never take another row (a peer "
         "holds it) and never edit the plan (it is every peer's instructions)."
-        f"\n\n{_row_return_contract(row, plan_path, shared=shared, gate_owed_reply=(bool(gate_commands) or criterion_routed) and not is_slot_row)}"
+        f"\n\n{_row_return_contract(row, plan_path, shared=shared, gate_owed_reply=(bool(gate_commands) or criterion_routed or plan_context is not None) and not is_slot_row)}"
     )
     if new_module_paths:
         body += (
@@ -4602,10 +4607,12 @@ def _checkpoint_commit_js(
         "    const id = 'wave ' + n;",
         "    const subject = 'checkpoint(wave ' + n + '): ' + done.length + ' rows \u2014 ' + done.join(', ');",
         f"    const owed = done.filter((i) => {GATE_OWED_VAR}[i]);",
+        "    const stopped = done.filter((i) => _stoppedBy.includes(i));",
         "    const message = subject + "
         + _checkpoint_trailer_js(plan_path, run_base_sha, prior_run_base, runtime_plan_js)
         + (
-            " + (owed.length ? '\\nCheckpoint-Gate-Owed: ' + owed.join(', ') : '');"
+            " + (owed.length ? '\\nCheckpoint-Gate-Owed: ' + owed.join(', ') : '')"
+            f" + (stopped.length ? '\\n{STOP_RULE_TRAILER}: ' + stopped.join(', ') : '');"
             if plan_path or runtime_plan_js
             else ";"
         ),
@@ -6357,15 +6364,36 @@ def _keep_landed_rows(rows: list, landed: frozenset) -> list:
 _RUN_BASE_RE = re.compile(r"^[0-9a-f]{7,40}$")
 
 
-_CHECKPOINT_SUBJECT_RE = re.compile(r"checkpoint\(wave \d+\): \d+ rows \u2014 ([^\n]*)")
+_ROW_ID_PATTERN = r"\w+(?:[.\-]\w+)*"
+_CHECKPOINT_SUBJECT_RE = re.compile(
+    r"checkpoint\(wave \d+\): \d+ rows \u2014 (" + _ROW_ID_PATTERN + r"(?:,\s*" + _ROW_ID_PATTERN + r")*)"
+)
 
 
-def landed_rows_from_text(text: str) -> frozenset:
+_STOP_RULE_TEXT_RE = re.compile(
+    r"(?:^|\n|\\n)" + STOP_RULE_TRAILER + r":[ \t]*(" + _ROW_ID_PATTERN + r"(?:,[ \t]*" + _ROW_ID_PATTERN + r")*)"
+)
+
+
+def landed_rows_from_text(text: str, *, exclude_stop_rule: bool = True) -> frozenset:
     """Row ids named by the checkpoint commit subjects found in ``text`` (a
-    ``git log`` dump or a run's task output)."""
+    ``git log`` dump or a run's task output). Only the leading comma-separated
+    id list after the dash is read: prose following it (including JSON-escaped
+    text with no real newline) never yields an id.
+
+    With ``exclude_stop_rule`` (the refire path) each subject drops the ids on a
+    ``Checkpoint-Stop-Rule:`` line of its own commit, i.e. before the next
+    subject; a stopped row's bytes committed but it is not landed. ``--review-only``
+    passes False because those bytes still owe review."""
     ids: set = set()
-    for m in _CHECKPOINT_SUBJECT_RE.finditer(text):
-        ids.update(i.strip() for i in re.split(r"[,\s]+", m.group(1)) if i.strip())
+    subjects = list(_CHECKPOINT_SUBJECT_RE.finditer(text))
+    for n, m in enumerate(subjects):
+        landed = {i.strip() for i in m.group(1).split(",")}
+        if exclude_stop_rule:
+            end = subjects[n + 1].start() if n + 1 < len(subjects) else len(text)
+            for s in _STOP_RULE_TEXT_RE.finditer(text, m.end(), end):
+                landed -= {i.strip() for i in s.group(1).split(",")}
+        ids.update(landed)
     return frozenset(ids)
 
 
@@ -6384,7 +6412,8 @@ def checkpoint_landed_state(repo_root: Path, plan: str) -> tuple:
             "--format=%s\x1f%(trailers:key=Checkpoint-Plan,valueonly,separator=%x1d)"
             "\x1f%(trailers:key=Checkpoint-Gate-Owed,valueonly,separator=%x1d)"
             "\x1f%(trailers:key=Checkpoint-Review-Base,valueonly,separator=%x1d)"
-            "\x1f%(trailers:key=Checkpoint-Base,valueonly,separator=%x1d)\x1e",
+            "\x1f%(trailers:key=Checkpoint-Base,valueonly,separator=%x1d)"
+            f"\x1f%(trailers:key={STOP_RULE_TRAILER},valueonly,separator=%x1d)\x1e",
         ],
         cwd=str(repo_root),
     )
@@ -6397,9 +6426,11 @@ def checkpoint_landed_state(repo_root: Path, plan: str) -> tuple:
         subject, _, rest = record.strip("\r\n").partition("\x1f")
         trailer, _, rest = rest.partition("\x1f")
         owed_text, _, rest = rest.partition("\x1f")
-        review_text, _, base_text = rest.partition("\x1f")
+        review_text, _, rest = rest.partition("\x1f")
+        base_text, _, stop_text = rest.partition("\x1f")
         if any(checkpoint_plan_matches(v, plan) for v in trailer.split("\x1d") if v.strip()):
-            ids.update(plan_commit_row_ids(subject))
+            stop_ids = {i for i in re.split(r"[,\s\x1d]+", stop_text) if i}
+            ids.update(set(plan_commit_row_ids(subject)) - stop_ids)
             owed.update(i.strip() for i in re.split(r"[,\s\x1d]+", owed_text) if i.strip())
             if review_base is None:
                 for text in (review_text, base_text):
@@ -6453,7 +6484,8 @@ def resume_landed_state(repo_root: Path, plan: str) -> ResumeLanded:
             "--format=%s\x1f%(trailers:key=Checkpoint-Plan,valueonly,separator=%x1d)"
             f"\x1f%(trailers:key={HALT_PLAN_TRAILER},valueonly,separator=%x1d)"
             "\x1f%(trailers:key=Halted-By,valueonly,separator=%x1d)"
-            "\x1f%(trailers:key=Lands-Chunks,valueonly,separator=%x1d)\x1f%H\x1e",
+            "\x1f%(trailers:key=Lands-Chunks,valueonly,separator=%x1d)\x1f%H"
+            f"\x1f%(trailers:key={STOP_RULE_TRAILER},valueonly,separator=%x1d)\x1e",
         ],
         cwd=str(repo_root),
     )
@@ -6477,8 +6509,9 @@ def resume_landed_state(repo_root: Path, plan: str) -> ResumeLanded:
             continue
         subject, checkpoint, halt_plan, halted_by, chunks, sha = parts[:6]
         sha = sha.strip()
+        stop_ids = {i for i in re.split(r"[,\s\x1d]+", parts[6]) if i} if len(parts) > 6 else set()
         if any(checkpoint_plan_matches(v, plan) for v in checkpoint.split("\x1d") if v.strip()):
-            _land(plan_commit_row_ids(subject), sha)
+            _land(set(plan_commit_row_ids(subject)) - stop_ids, sha)
         is_ledger_check = any(v.strip() == "ledger-check" for v in halted_by.split("\x1d"))
         named = [v for v in halt_plan.split("\x1d") if v.strip()]
         names_plan = any(checkpoint_plan_matches(v, plan) for v in named)

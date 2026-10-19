@@ -85,7 +85,7 @@ def test_census_entries_without_census_key():
 def _args(rows, reply=None, texts=None):
     return mr.residue_args(
         rows, reply, repo_root=Path("repo"), run_id="20261019T1630Z-abcd1234",
-        gate_command="mise-prep-gate --repo-root repo", residue_agent_type="coordinator:residue-author",
+        gate_command="mise-prep-gate --repo-root repo", residue_agent_type=mr.RESIDUE_AGENT_TYPE,
         residue_model="sonnet", apm_model="opus",
         read_text=lambda root, plan: (texts or {}).get(plan, ""),
     )
@@ -104,7 +104,7 @@ def test_residue_args_shape_roundtrips_json():
     args = _args(rows, reply, {"a.md": PLAN})
     assert json.loads(json.dumps(args)) == args
     assert args["schema"] == "mise-prep-residue-args/1"
-    assert args["residue"] == {"agentType": "coordinator:residue-author", "model": "sonnet"}
+    assert args["residue"] == {"agentType": mr.RESIDUE_AGENT_TYPE, "model": "sonnet"}
     assert args["apm"] == {"agentType": "coordinator:apm", "model": "opus"}
     (batch,) = args["batches"]
     (member,) = batch["plans"]
