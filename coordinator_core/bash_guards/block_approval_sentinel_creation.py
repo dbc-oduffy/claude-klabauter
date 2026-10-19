@@ -1534,7 +1534,9 @@ def _deny_reason(cmd: str, reason_kind: str, reason_class: str) -> str:
         "edits. Ask the PM to create it.\n\n"
         "Use instead:\n"
         "  %s\n"
-        "  %s" % (safe_argv0, safe_git)
+        "  %s\n"
+        "Scoped add from a list file: `git add --pathspec-from-file=<list>` "
+        "(`--pathspec-file-nul` for NUL-separated)." % (safe_argv0, safe_git)
     )
 
 

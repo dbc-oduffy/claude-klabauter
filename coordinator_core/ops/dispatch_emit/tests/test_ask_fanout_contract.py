@@ -30,11 +30,22 @@ def test_partition_names_row_unknown_to_parent():
     assert msg is not None and "R9" in msg
 
 
-def test_no_hint_pair_sequenced_both_ways_of_order():
+def test_no_hint_pair_unsequenced_both_ways_of_order():
     edges = c.after_edges([_slice("a", writes=("x.py",)), _slice("b", writes=None)])
-    assert edges == {0: (), 1: (0,)}
+    assert edges == {0: (), 1: ()}
     edges = c.after_edges([_slice("a", writes=None), _slice("b", writes=("x.py",))])
-    assert edges[1] == (0,)
+    assert edges == {0: (), 1: ()}
+
+
+def test_undeclared_slices_get_empty_edges_for_every_index():
+    edges = c.after_edges([_slice(n) for n in "abc"])
+    assert edges == {0: (), 1: (), 2: ()}
+
+
+def test_undeclared_slice_still_follows_lower_wave():
+    later = c.AskSlice(label="b", ask="b", wave=1)
+    earlier = c.AskSlice(label="a", ask="a", wave=0)
+    assert c.after_edges([earlier, later])[1] == (0,)
 
 
 def test_disjoint_pair_unsequenced():
@@ -49,7 +60,7 @@ def test_overlap_by_path_and_directory_prefix():
 
 
 def test_empty_writes_hint_overlaps_nothing():
-    assert c.after_edges([_slice("a", writes=()), _slice("b", writes=None)])[1] == (0,)
+    assert c.after_edges([_slice("a", writes=()), _slice("b", writes=None)])[1] == ()
     assert c.after_edges([_slice("a", writes=()), _slice("b", writes=("x",))])[1] == ()
 
 

@@ -79,7 +79,7 @@ def test_mixed_sources_stamp_only_the_relayed_slice(repo):
     assert c.slice_ask_source(docs[2]) == "relayed" and "pm_verbatims" not in docs[2]
 
 
-def test_overlapping_and_no_hint_slices_are_sequenced(repo):
+def test_overlapping_declared_slices_are_sequenced_and_undeclared_runs_parallel(repo):
     out = _go(repo, {"asks": [
         {"ask": "one", "writes": ["pkg"]},
         {"ask": "two", "writes": ["pkg/x.py"]},
@@ -88,8 +88,17 @@ def test_overlapping_and_no_hint_slices_are_sequenced(repo):
     first, second, third = out["runs"]
     assert "after" not in first
     assert second["after"] == [first["run_id"]]
-    assert third["after"] == [first["run_id"], second["run_id"]]
-    assert [r["run_id"] for r in out["ready"]] == [first["run_id"]]
+    assert "after" not in third
+    assert [r["run_id"] for r in out["ready"]] == [first["run_id"], third["run_id"]]
+
+
+def test_three_undeclared_asks_are_sibling_runs_with_no_after_edges(repo, monkeypatch):
+    monkeypatch.setattr(c, "concurrent_run_budget", lambda physical_cores=None: 3)
+    out = _go(repo, {"asks": [{"ask": f"job {i}"} for i in range(3)]})
+    assert out["exit_code"] == 0, out
+    assert len(out["runs"]) == 3
+    assert all("after" not in r for r in out["runs"])
+    assert len(out["ready"]) == 3
 
 
 def test_overflow_is_queued_in_submission_order_never_refused(repo):

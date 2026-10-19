@@ -289,6 +289,13 @@ class TestDenyMessageDiscipline:
         reason = _reason(out)
         assert SENTINEL not in reason
 
+    def test_deny_reason_names_pathspec_from_file_as_scoped_list_add(self):
+        out = guard.check(_payload("touch %s" % SENTINEL))
+        assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+        reason = _reason(out)
+        assert "git add --pathspec-from-file" in reason
+        assert SENTINEL not in reason
+
     def test_deny_reason_does_not_echo_the_command(self):
         code = "open('%s', 'w').close()" % SENTINEL
         cmd = "python3 -c \"%s\"" % code

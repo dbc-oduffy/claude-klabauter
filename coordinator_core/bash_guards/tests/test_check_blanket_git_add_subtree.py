@@ -267,6 +267,49 @@ def test_own_run_record_dir_is_not_foreign_when_no_live_peer_holds_it(monkeypatc
     assert result is None
 
 
+def test_generated_tree_paths_are_not_listed_as_foreign(monkeypatch, tmp_path):
+    root = tmp_path / "repo"
+    (root / "data" / "serving").mkdir(parents=True)
+    monkeypatch.chdir(root)
+    _wire_hazard(monkeypatch)
+    _wire_git(
+        monkeypatch,
+        str(root),
+        dry_run_lines=["add 'data/serving/index.bin'", "add 'data/serving/meta.json'"],
+    )
+    _wire_claims(monkeypatch, set())
+
+    result = guard.check_blanket_git_add(
+        "git add -- data/", session_id="sess1", hook_payload={}
+    )
+
+    assert result is None
+
+
+def test_non_generated_foreign_path_beside_generated_tree_is_still_listed(
+    monkeypatch, tmp_path
+):
+    root = tmp_path / "repo"
+    (root / "data" / "serving").mkdir(parents=True)
+    monkeypatch.chdir(root)
+    _wire_hazard(monkeypatch)
+    _wire_git(
+        monkeypatch,
+        str(root),
+        dry_run_lines=["add 'data/serving/index.bin'", "add 'data/notes.md'"],
+    )
+    _wire_claims(monkeypatch, set())
+
+    result = guard.check_blanket_git_add(
+        "git add -- data/", session_id="sess1", hook_payload={}
+    )
+
+    assert result is not None
+    reason = result["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "data/notes.md" in reason
+    assert "data/serving/index.bin" not in reason
+
+
 def test_run_record_dir_held_by_a_live_peer_is_still_foreign(monkeypatch, tmp_path):
     root = tmp_path / "repo"
     (root / "state" / "warp" / "ask-1").mkdir(parents=True)

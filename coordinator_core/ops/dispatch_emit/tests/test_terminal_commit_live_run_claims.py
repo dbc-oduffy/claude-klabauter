@@ -117,6 +117,69 @@ def test_control_a_dead_peer_session_admits_the_same_path(repo, monkeypatch):
     assert out["run_owned"] == ["src/op.py"]
 
 
+def _live_same_session_sibling(repo: Path, declared: str, *dirtied: str) -> None:
+    """Run B: a RUNNING (fresh token, live session, no halted marker) sibling run of the same
+    session in the same tree. It declares `declared` and has also dirtied each of `dirtied`
+    without declaring it; every file carries the session's touch claim."""
+    from coordinator_core.session import scope as session_scope
+
+    manifest_dir = repo / "state" / "warp" / "run-b"
+    manifest_dir.mkdir(parents=True)
+    (manifest_dir / "manifest.json").write_text(
+        json.dumps({"rows": [{"id": "C1", "writes": [declared]}], "doc_writes": []}),
+        encoding="utf-8",
+    )
+    run_token.mint(repo, "run-b", "b.mjs", session_id=SELF)
+    (repo / "other").mkdir(exist_ok=True)
+    for rel in (declared, *dirtied):
+        (repo / rel).write_text("sibling\n", encoding="utf-8")
+        session_scope.touch(SELF, rel, cwd=str(repo))
+
+
+def _run_a_same_session(repo: Path) -> dict:
+    from coordinator_core.session import scope as session_scope
+
+    session_scope.touch(SELF, "src/a.py", cwd=str(repo))
+    request = CommitRequest(chunks=(ChunkCommit(id="C1", title="t1", paths=("src/a.py",)),))
+    (repo / "run-a.mjs").write_text("// emitted\n" + render_marker(request) + "\n", encoding="utf-8")
+    return terminal_commit._handler(
+        {"script_path": "run-a.mjs", "incomplete_chunks": [], "inline_review": _REVIEWED,
+         "session_id": SELF},
+        repo_root=repo / ".git",
+    )
+
+
+def test_a_running_same_session_sibling_keeps_declared_and_dirtied_files_out_of_the_commit(repo):
+    _live_same_session_sibling(repo, "src/b.py", "src/c.py")
+    out = _run_a_same_session(repo)
+    assert out["committed"] is True, out
+    assert _committed(repo) == ["src/a.py"]
+    assert _git(["ls-files", "src/b.py", "src/c.py"], repo).strip() == ""
+    assert (repo / "src" / "b.py").read_text(encoding="utf-8") == "sibling\n"
+    assert (repo / "src" / "c.py").read_text(encoding="utf-8") == "sibling\n"
+    porcelain = _git(["status", "--porcelain", "--untracked-files=all"], repo)
+    assert "src/b.py" in porcelain and "src/c.py" in porcelain
+
+
+def test_a_running_same_session_sibling_declared_path_outside_the_shared_dir_stays_out(repo):
+    _live_same_session_sibling(repo, "other/b.py")
+    out = _run_a_same_session(repo)
+    assert out["committed"] is True, out
+    assert _committed(repo) == ["src/a.py"]
+    assert _git(["ls-files", "other/b.py"], repo).strip() == ""
+
+
+def test_control_a_stale_same_session_sibling_token_releases_its_declared_path(repo):
+    _live_same_session_sibling(repo, "other/b.py")
+    record_path = run_token._record_path(repo, "run-b")
+    record = json.loads(record_path.read_text(encoding="utf-8"))
+    record["minted_at"] = 1.0
+    record_path.write_text(json.dumps(record), encoding="utf-8")
+    out = _run_a_same_session(repo)
+    assert out["committed"] is True, out
+    assert "other/b.py" in _committed(repo)
+
+
 def test_each_claim_check_lists_the_token_store_once(repo, monkeypatch):
     _peer_run_declares(repo, "src/op.py")
     listings: list = []

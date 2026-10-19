@@ -55,7 +55,7 @@ FanoutFn = Callable[[dict, Any], dict]
 
 @dataclass(frozen=True)
 class AskSlice:
-    """One separable ask. ``writes`` None means no hint was given (overlaps everything)."""
+    """One separable ask. ``writes`` None means no hint was given (overlaps nothing)."""
 
     label: str
     ask: str
@@ -338,16 +338,22 @@ def _earlier_wave(earlier: AskSlice, later: AskSlice) -> bool:
 def after_edges(slices: Sequence[AskSlice]) -> dict[int, tuple[int, ...]]:
     """Map slice index to the earlier indices it must follow.
 
-    j follows earlier i when their writes overlap (exact path, or one a directory prefix of the other)
-    or either carries no hint, or when both carry a ``wave`` and i's is lower. An empty ``writes``
-    list is a hint: it overlaps nothing.
+    j follows earlier i when both declare writes and those overlap (exact path, or one a directory
+    prefix of the other), or when both carry a ``wave`` and i's is lower. A slice with no ``writes``
+    hint overlaps nothing: undeclared slices run in parallel and the shared-tree claim mechanism
+    arbitrates their overlap. An empty ``writes`` list likewise overlaps nothing.
     """
     edges: dict[int, tuple[int, ...]] = {}
     for j, later in enumerate(slices):
         edges[j] = tuple(
             i
             for i in range(j)
-            if _writes_overlap(slices[i].writes, later.writes) or _earlier_wave(slices[i], later)
+            if (
+                slices[i].writes is not None
+                and later.writes is not None
+                and _writes_overlap(slices[i].writes, later.writes)
+            )
+            or _earlier_wave(slices[i], later)
         )
     return edges
 

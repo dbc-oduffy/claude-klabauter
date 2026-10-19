@@ -466,7 +466,7 @@ class TestCheckVerb:
         monkeypatch.chdir(tmp_path)
         row_a = tmp_path / "a.yaml"
         row_a.write_text("---\nid: a\n---\nbody\n", encoding="utf-8")
-        digest_a = _sha256(row_a.read_text(encoding="utf-8"))
+        digest_a = hashlib.sha256(row_a.read_bytes()).hexdigest()
 
         row_b = tmp_path / "b.yaml"
         row_b.write_text("---\nid: b\n---\nbody\n", encoding="utf-8")
