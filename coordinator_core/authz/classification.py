@@ -1353,6 +1353,15 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #   4. Mutates shared mutable state outside its own module?                YES.
     #   5. Persistent state changes observable across process boundaries?     YES.
     "plan.seam_fix": OpClass.MUTATING,
+    # plan.overlap_edges — COMPUTE_ONLY: derives write-overlap ordering edges across up to 200
+    # certified docs/plans/*.md from declared writes; returns them, persists nothing.
+    # DR-208 five-question affirmation (citing ops/plan_overlap_edges.py):
+    #   1. Writes, deletes, or reorders any state file, queue, or git object?  No.
+    #   2. Writes into rag's relational store?                                 No.
+    #   3. Opens any file for write (including sentinel creation)?             No.
+    #   4. Mutates shared mutable state outside its own module?                No.
+    #   5. Persistent state changes observable across process boundaries?     No.
+    "plan.overlap_edges": OpClass.COMPUTE_ONLY,
     # seam.mint_batons — MUTATING: mints staged (awaiting_gate) handoff batons for residual
     # seam flags, capped with one rollup, and records key->baton in state/seam-baton-index.json
     # for cross-run dedup. Never commits.

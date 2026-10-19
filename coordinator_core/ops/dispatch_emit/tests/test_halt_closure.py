@@ -159,6 +159,78 @@ def test_halt_commit_withholds_chunk_with_a_peer_held_write(repo, monkeypatch):
     json.dumps(reply)
 
 
+def _attribute_read_shape(root: Path) -> None:
+    """Tracked caller reads `li.old()`; worktree adds `li.new_fn()` with `new_fn` only in the dirty definer."""
+    _write(root, "pkg/li.py", "def old():\n    return 1\n")
+    _write(
+        root, "pkg/caller.py",
+        "def run():\n    from pkg import li\n    return li.old()\n",
+    )
+    _git(root, "add", "-A")
+    _git(root, "commit", "-q", "-m", "seed li and caller")
+    _write(root, "pkg/li.py", "def old():\n    return 1\n\n\ndef new_fn():\n    return 2\n")
+    _write(
+        root, "pkg/caller.py",
+        "def run():\n    from pkg import li\n    return li.old() + li.new_fn()\n",
+    )
+
+
+def test_attribute_read_of_a_withheld_definer_opens_the_caller_chunk(repo):
+    _attribute_read_shape(repo)
+    got = open_chunks(
+        repo, {"pkg/caller.py": "C4", "pkg/li.py": "C1"}, ["pkg/caller.py"], (import_closure,)
+    )
+    assert list(got) == ["C4"]
+    assert "new_fn" in got["C4"][0]
+    assert "pkg/li.py" in got["C4"][0]
+
+
+def test_attribute_read_stays_closed_when_the_definer_lands_with_it(repo):
+    _attribute_read_shape(repo)
+    owner = {"pkg/caller.py": "C4", "pkg/li.py": "C1"}
+    assert open_chunks(repo, owner, ["pkg/caller.py", "pkg/li.py"], (import_closure,)) == {}
+
+
+def test_halt_commit_withholds_caller_chunk_whose_attribute_definer_is_peer_held(repo, monkeypatch):
+    from coordinator_core.ops.ceremony import commit_v2
+    from coordinator_core.ops.dispatch_emit import halted_record_commit as hrc
+
+    _attribute_read_shape(repo)
+    _write(repo, "pkg/other.py", "x = 3\n")
+    chunks = [
+        type("C", (), {"id": "C1", "paths": ["pkg/li.py"], "report": None})(),
+        type("C", (), {"id": "C4", "paths": ["pkg/caller.py"], "report": None})(),
+        type("C", (), {"id": "C9", "paths": ["pkg/other.py"], "report": None})(),
+    ]
+    monkeypatch.setattr(hrc, "done_chunks", lambda *_a: chunks)
+    monkeypatch.setattr(
+        "coordinator_core.ops.dispatch_emit.terminal_commit._own_prefix_files", lambda *_a: []
+    )
+
+    def claims(root, paths, holds, own_sid=None):
+        holds.append(("pkg/li.py", "peer"))
+        return []
+
+    monkeypatch.setattr(commit_v2, "_peer_claim_warnings", claims)
+    seen: dict = {}
+
+    def fake_dispatch(op, params, repo_root=None):
+        seen.update(params)
+        return {"committed": True}
+
+    monkeypatch.setattr("coordinator_core.warm.entry_seam.reentrant_dispatch", fake_dispatch)
+    (repo / "state/warp/r1").mkdir(parents=True)
+    reply = hrc._land(
+        repo, repo, {"targeted_tests": {"status": "pass", "tests_failed": 0, "baseline": None}},
+        "r1", "state/warp/r1", {"halted": "ledger-check"},
+    )
+    assert reply["withheld"]["pkg/li.py"] == "peer-held"
+    assert reply["withheld"]["pkg/caller.py"] == "import-closure-open"
+    assert "pkg/caller.py" not in seen.get("paths", [])
+    assert "pkg/li.py" not in seen.get("paths", [])
+    assert "pkg/other.py" in seen["paths"]
+
+
 def test_finding_on_non_owner_path_is_ignored(repo):
     _write(repo, "pkg/untracked.py", "y = 1\n")
     _write(repo, "pkg/a.py", "import pkg.untracked\n")

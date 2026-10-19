@@ -84,6 +84,32 @@ def test_a_stubbed_overlap_finding_is_refused_and_the_token_is_released(repo, mo
     assert run_token.admits(repo, "r1", token, "run.mjs") is True
 
 
+def test_a_caller_reading_a_name_only_the_worktree_callee_binds_is_refused(repo):
+    pkg = repo / "pkg"
+    pkg.mkdir()
+    (pkg / "__init__.py").write_text("", encoding="utf-8")
+    (pkg / "li.py").write_text("def old():\n    return 1\n", encoding="utf-8")
+    (pkg / "caller.py").write_text(
+        "def run():\n    from pkg import li\n    return li.old()\n", encoding="utf-8"
+    )
+    _git(["add", "."], repo)
+    _git(["commit", "-q", "-m", "seed pkg"], repo)
+    (pkg / "li.py").write_text(
+        "def old():\n    return 1\n\n\ndef new_fn():\n    return 2\n", encoding="utf-8"
+    )
+    (pkg / "caller.py").write_text(
+        "def run():\n    from pkg import li\n    return li.old() + li.new_fn()\n", encoding="utf-8"
+    )
+    head = _git(["rev-parse", "HEAD"], repo)
+
+    out = _fire(repo, "pkg/caller.py")
+
+    assert out["committed"] is False, out
+    text = str(out)
+    assert "import_closure" in text and "new_fn" in text, out
+    assert _git(["rev-parse", "HEAD"], repo) == head
+
+
 def test_a_clean_landing_without_a_base_commits_and_reports_no_base(repo):
     (repo / "ok.py").write_text("x = 1\n", encoding="utf-8")
 

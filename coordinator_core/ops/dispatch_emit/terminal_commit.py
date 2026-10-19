@@ -2172,6 +2172,20 @@ def _every_staged_row_landed(resume: object) -> bool:
     return isinstance(raw, list) and not raw
 
 
+def _resolve_halt_sha(worktree_root: Path, resume: object) -> Optional[str]:
+    """The newest ledger-check halt commit sha of the resume's ``run_id`` (one ``git log``), for a
+    ``resume_ledger`` whose ``halt_sha`` arrived unfilled; None when the run's halt commit is not found."""
+    if not isinstance(resume, dict):
+        return None
+    run_id, plan = resume.get("run_id"), resume.get("plan")
+    if not isinstance(run_id, str) or not isinstance(plan, str) or not plan:
+        return None
+    from coordinator_core.ops.dispatch_emit.emit import resume_landed_state
+
+    sha = resume_landed_state(worktree_root, plan).run_halts.get(run_id, (None, None))[1]
+    return sha if isinstance(sha, str) and _FULL_SHA_RE.fullmatch(sha) else None
+
+
 def _unchanged_since_halt_failures(
     worktree_root: Path, resume: object, verdict: object, manifest_path: Optional[Path],
 ) -> list:
@@ -2193,6 +2207,8 @@ def _unchanged_since_halt_failures(
     if not judged or _every_staged_row_landed(resume):
         return []
     halt_sha = resume.get("halt_sha")
+    if not (isinstance(halt_sha, str) and _FULL_SHA_RE.fullmatch(halt_sha)):
+        halt_sha = _resolve_halt_sha(worktree_root, resume)
     paths = _declared_product_paths(manifest_path)
     changed = False
     if isinstance(halt_sha, str) and _FULL_SHA_RE.fullmatch(halt_sha) and paths:

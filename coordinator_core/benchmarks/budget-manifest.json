@@ -75,6 +75,12 @@
       "tolerance": {"kind": "relative", "value": 0.2},
       "_rationale": "Measured 2026-10-08, process time: 88ms for a 50-plan named set writing 49 edges (test_plan_seam_fix asserts under 500ms). Spawn-free: plan rows are read and patched in-process under locked_rmw."
     },
+    "plan.overlap_edges": {
+      "target_ms": 188,
+      "tolerance": {"kind": "relative", "value": 0.2},
+      "spawn_count_budget": 0,
+      "_rationale": "Measured 2026-10-19, process time, cold first call (C5 of 2026-10-19-plan-write-overlap-edges-spiked): 187.5ms max over repo200, 171.9ms example-game-repo (183 plans), 156.2ms synthetic 200. Bound is 200 plans (MAX_PLANS); the 200ms test bar is APM-ruled. Spawn-free: lean in-process reader, no git, no write."
+    },
     "seam.mint_batons": {
       "target_ms": 200,
       "tolerance": {"kind": "relative", "value": 0.2},

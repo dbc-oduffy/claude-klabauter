@@ -304,6 +304,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "plan.seam_check":                       "common_dir",
     "plan.seam_record":                      "common_dir",
     "plan.seam_fix":                         "common_dir",
+    "plan.overlap_edges":                    "common_dir",
     "seam.mint_batons":                      "common_dir",
     "goal.match_candidates":                 "common_dir",
     "goal.close_day":                        "common_dir",

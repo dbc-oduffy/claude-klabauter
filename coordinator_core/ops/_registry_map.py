@@ -235,6 +235,7 @@ OP_MODULE_MAP: Dict[str, str] = {
     "plan.seam_check":                        "coordinator_core.ops.plan_seam_check",
     "plan.seam_record":                       "coordinator_core.ops.plan_seam_check",
     "plan.seam_fix":                          "coordinator_core.ops.plan_seam_fix",
+    "plan.overlap_edges":                     "coordinator_core.ops.plan_overlap_edges",
     "seam.mint_batons":                       "coordinator_core.ops.seam_baton_mint",
     "queue.append":                           "coordinator_core.ops.queue_append",
     "queue.cluster":                          "coordinator_core.ops.queue_cluster",

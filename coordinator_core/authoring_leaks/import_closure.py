@@ -237,7 +237,8 @@ def _check_attr(closure: _Closure, rel: str, ref: AttrRef) -> Optional[LeakFindi
         wt_names = _target_bound_names(wt_text) if wt_text is not None else None
         if wt_names is None or ref.name not in wt_names:
             return None
-    return LeakFinding(rel, ref.lineno, KIND, f"references {ref.name} from {ref.module}; {target} is uncommitted in the worktree")
+    where = closure.locate(sub, closure.worktree_has) if wt_sub else target
+    return LeakFinding(rel, ref.lineno, KIND, f"references {ref.name} from {ref.module}; {where} is uncommitted in the worktree")
 
 
 def detect(root: Path, gate_paths: Sequence[str], head: HeadView) -> List[LeakFinding]:
