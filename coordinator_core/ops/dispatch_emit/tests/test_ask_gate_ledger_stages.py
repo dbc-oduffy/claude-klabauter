@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from coordinator_core.benchmarks.spawn_counter import _count_spawns_attributed
@@ -85,8 +87,6 @@ def test_a_halt_that_landed_no_chunk_names_its_staged_rows_unlanded_and_stages_e
         PLAN_REL,
         ACCEPTED,
     )
-    import json
-
     from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT, halted_record_message
     from coordinator_core.ops.dispatch_emit.halted_run import write_halt_marker
 

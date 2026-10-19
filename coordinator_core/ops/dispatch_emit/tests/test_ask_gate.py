@@ -62,7 +62,11 @@ def test_xl_null_acceptance_halts_as_touchpoint_naming_invoke_line(repo):
     assert "sizing-accept-exit-criterion" in v.halt["touchpoint"]  # C2/C9: launcher line and REL in v.halt["touchpoint"]
 
 
-def test_refusals_halt_all_named_at_once(repo):
+def test_refusals_halt_all_named_at_once(repo, monkeypatch):
+    # With a resolvable fleet mode an absent interaction_mode is filled, not refused.
+    from coordinator_core.ops.dispatch_emit import sizing_fire
+
+    monkeypatch.setattr(sizing_fire, "_fleet_interaction_mode", lambda: None)
     _put(repo, tshirt="S", route="dispatch", accepted={"pm_quote": "y"}, status="draft", interaction_mode=None)
     v = gate(repo, REL)
     assert v.halt["kind"] == "refusal"

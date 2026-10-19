@@ -133,12 +133,50 @@ def test_sha_beyond_window_refuses(repo, monkeypatch):
 
 @pytest.mark.parametrize("params", [
     {"run_id": "../x", "sha": "a" * 40},
-    {"run_id": "A", "sha": "abc1234"},
+    {"run_id": "A", "sha": "abc"},
+    {"run_id": "A", "sha": "xyz1234"},
     {"run_id": "A", "sha": "A" * 40},
     {"run_id": "", "sha": "a" * 40},
 ])
 def test_malformed_params_refuse(repo, params):
     assert not _call(repo[0], **params)["ok"]
+
+
+def test_abbreviated_sha_records_full_sha(repo):
+    root, first, _ = repo
+    _seed(root, {"A": {"status": "halted"}, "B": {"status": "after"}})
+    out = _call(root, run_id="A", sha=first[:10])
+    assert out["ok"] and out["written"] is True and out["sha"] == first
+    assert _status(root, "A")["sha"] == first
+
+
+def test_abbreviated_sha_idempotent_after_landing(repo):
+    root, first, _ = repo
+    _seed(root, {"A": {"status": "halted"}})
+    _call(root, run_id="A", sha=first[:10])
+    out = _call(root, run_id="A", sha=first[:10])
+    assert out == {"ok": True, "run_id": "A", "sha": first, "written": False}
+
+
+def test_ambiguous_abbreviation_refuses_by_name(repo, monkeypatch):
+    from coordinator_core.git import rollback_check
+
+    root = repo[0]
+    _seed(root, {"A": {"status": "halted"}})
+    fake =["abcd" + "1" * 36, "abcd" + "2" * 36]
+    monkeypatch.setattr(rollback_check, "_first_parent_ancestors", lambda *a, **k: [(0, s) for s in fake])
+    out = _call(root, run_id="A", sha="abcd")
+    assert not out["ok"] and "abcd" in out["error"] and "ambiguous" in out["error"]
+    assert _status(root, "A")["status"] == "halted"
+
+
+def test_unknown_abbreviation_refuses_by_name(repo):
+    root, first, second = repo
+    prefix = "0000" if not (first + second).count("0000") else "ffff"
+    _seed(root, {"A": {"status": "halted"}})
+    out = _call(root, run_id="A", sha=prefix)
+    assert not out["ok"] and prefix in out["error"] and "no commit" in out["error"]
+    assert _status(root, "A")["status"] == "halted"
 
 
 def test_op_spawns_no_process(repo, monkeypatch):

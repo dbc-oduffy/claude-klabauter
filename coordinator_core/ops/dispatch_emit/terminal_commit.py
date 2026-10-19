@@ -150,6 +150,7 @@ from coordinator_core.ops.dispatch_emit import credit_gate, gate_owed  # noqa: E
 from coordinator_core.ops.dispatch_emit.ask_contract import (
     DELIVERY_NOTE_DIR,
     RECORD_DIR_ROOT,
+    RESUME_LEDGER_UNLANDED_FIELD,
     RESUMED_RUN_ID_KEY,
     RUN_DIR_ROOT,
     SPINE_SUFFIX as _SPINE_SUFFIX,
@@ -2156,13 +2157,22 @@ def verified_only_rows(resume: object) -> dict:
     return out
 
 
+def _every_staged_row_landed(resume: object) -> bool:
+    """True when a ledger resume carries ``unlanded`` as an empty list: every open plan row was
+    landed before the halt (checkpoint or halt commit, landed-writes gate) or credited, so no
+    declared path owes a diff. An absent or non-list ``unlanded`` is no evidence."""
+    raw = resume.get(RESUME_LEDGER_UNLANDED_FIELD) if isinstance(resume, dict) else None
+    return isinstance(raw, list) and not raw
+
+
 def _unchanged_since_halt_failures(
     worktree_root: Path, resume: object, verdict: object, manifest_path: Optional[Path],
 ) -> list:
     """``[{id, reason}]`` for each blocking row of a ledger resume that ``verdict`` judges met or
     post_commit while no declared product path differs from the halt commit. One ``git diff
     --quiet`` against the worktree, run only when such a row exists; a bad halt sha, an empty
-    declared set or any git exit other than 1 refuses the same rows."""
+    declared set or any git exit other than 1 refuses the same rows. A resume whose ``unlanded`` is
+    an empty list owes no diff and refuses nothing (``_every_staged_row_landed``)."""
     blocking = resume.get("blocking") if isinstance(resume, dict) else None
     items = verdict.get("items") if isinstance(verdict, dict) else None
     if not isinstance(blocking, list) or not isinstance(items, list):
@@ -2173,7 +2183,7 @@ def _unchanged_since_halt_failures(
     ]
     exempt = verified_only_rows(resume)
     judged = [i for i in judged if i not in exempt]
-    if not judged:
+    if not judged or _every_staged_row_landed(resume):
         return []
     halt_sha = resume.get("halt_sha")
     paths = _declared_product_paths(manifest_path)
