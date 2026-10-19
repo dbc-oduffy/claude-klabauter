@@ -165,6 +165,8 @@ REGISTER: tuple[LegDecl, ...] = (
         "runs the plan's scoped tests, then rules the exit criterion in one agent on the judge's type",
     ),
     _earns("reverify", "review:coordinator:test-runner", "re-runs the plan's scoped tests where no judge is rostered"),
+    _earns("ask", "review:coordinator:test-runner", "re-runs the scoped tests over review-applied edits"),
+    _earns("grind", "review:coordinator:test-runner", "re-runs the scoped tests over review-applied edits"),
     _earns("reverify", "review:coordinator:criterion-judge", "rules the plan's criterion against the register"),
     *_review_legs("review", prep=_earns("review", "review:coordinator:review-prep", "multi-step review prep")),
     _earns("review", "review:coordinator:overengineering-reviewer", "reads the diff for overbuild"),

@@ -151,5 +151,5 @@ def test_cli_prints_one_json_line_and_refuses_with_exit_2(repo, monkeypatch, cap
     assert le.main(["scratch/cli", "pkg/own.py", "--base-export", str(base), "--base-sha", base_sha]) == 0
     line = capsys.readouterr().out.strip()
     assert json.loads(line)["overlaid"] == ["pkg/own.py"]
-    assert le.main(["/elsewhere", "pkg/own.py"]) == 2
+    assert le.main(["/elsewhere", "pkg/own.py", "--base-export", str(base), "--base-sha", base_sha]) == 2
     assert "refused" in capsys.readouterr().out

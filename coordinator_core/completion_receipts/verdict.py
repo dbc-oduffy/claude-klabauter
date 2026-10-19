@@ -110,8 +110,7 @@ def test_verdict_of(build_test: dict) -> Any:
 def baseline_clears(build_test: dict) -> bool:
     """True for a `fail` whose every failure the runner re-ran in an export of the run base or of
     the landing tree and attributed to `pre_existing` or `foreign`: nothing the run caused, nothing
-    unverified. Mirrors the digest's
-    `wake_digest._BASELINE_CLEARS_JS`; keep the two in step."""
+    unverified. Mirrors the digest's `wake_digest._BASELINE_CLEARS_JS`; keep the two in step."""
     if test_verdict_of(build_test) != "fail" or build_test.get("baseline_method") != "export":
         return False
     baseline = build_test.get("baseline")

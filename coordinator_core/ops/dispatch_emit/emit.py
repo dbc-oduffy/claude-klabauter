@@ -2413,7 +2413,7 @@ def _foreign_red_clause() -> str:
     """
     return (
         "A target red in the worktree but green in the landing export of your own writes "
-        f"(`python -m {_LANDING_EXPORT_MODULE} scratch/test-landing-<row> <your writes...>`) "
+        f"(`python -m {_LANDING_EXPORT_MODULE} scratch/test-landing-<row> <your writes...> --base-export <run-base export> --base-sha <run_base_sha>`) "
         "is a peer's dirt. Report it in your summary, and it is not a BLOCKED."
     )
 
@@ -3402,7 +3402,7 @@ def _baseline_context_clause(
         f"fill diff_files from {_edited_set_listing(run_base_sha, surface, review_terminal)}.\n"
         f"BASELINE_CONTEXT\n```json\n{block}\n```\n"
         "For every id you labelled `caused`, run "
-        f"`python -m {_LANDING_EXPORT_MODULE} scratch/test-landing-{run_base_sha[:8]} <diff_files...>`, "
+        f"`python -m {_LANDING_EXPORT_MODULE} scratch/test-landing-{run_base_sha[:8]} <diff_files...> --base-export <your run-base export> --base-sha {run_base_sha}`, "
         "re-run only those ids inside it, and move each one green there into `baseline.foreign`. "
         "Delete the export afterwards. A failed export leaves the ids `caused`.\n"
     )

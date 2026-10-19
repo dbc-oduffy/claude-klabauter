@@ -32,9 +32,6 @@ from coordinator_core.git import git_objects
 from coordinator_core.git.git_dir import resolve_git_common_dir
 from coordinator_core.git.git_state import head_sha
 
-BASE_EXPORT_ENV = "COORDINATOR_LANDING_BASE_EXPORT"
-BASE_SHA_ENV = "COORDINATOR_LANDING_BASE_SHA"
-
 _MODE_TREE = b"40000"
 _MODE_SUBMODULE = b"160000"
 
@@ -168,7 +165,8 @@ def build_landing_export(
     """Materialise HEAD plus `landing_paths` (worktree bytes) at `out_dir`.
 
     `base_export` must hold the tree of commit `base_sha`; it is consumed (moved to
-    `out_dir`). Raises LandingExportError on any refusal, before touching `base_export`.
+    `out_dir`). Argument refusals raise LandingExportError before `base_export` is touched; a
+    failure while overlaying leaves it already moved to `out_dir`, half-applied.
     """
     root = Path(worktree_root).resolve()
     scratch = (root / "scratch").resolve()
@@ -229,8 +227,8 @@ def _find_root(start: Path) -> Path:
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
-    base_export = os.environ.get(BASE_EXPORT_ENV)
-    base_sha = os.environ.get(BASE_SHA_ENV)
+    base_export: Optional[str] = None
+    base_sha: Optional[str] = None
     rest: list = []
     i = 0
     try:
