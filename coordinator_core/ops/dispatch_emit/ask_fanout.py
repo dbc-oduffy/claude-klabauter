@@ -16,7 +16,7 @@ Three arms:
             planned sizings (each with a `plan:` edge); mints no sizing, runs no partition, only
             stamps each sizing's `em_analysis.ask_parent` and, where the sizing records no
             `interaction_mode`, the inherited top-level one (never overwriting a recorded mode;
-            a sizing with none and no inherited mode is refused by name).
+            a sizing with none takes the fleet mode; none resolvable is refused by name).
 
 Negative spec:
   - Refuses before writing anything: shape and partition checks run first.
@@ -302,6 +302,10 @@ def _fanout_sizings(params: Mapping, worktree: Path, confirm: bool) -> dict:
             raise _Refused(f"sizings[{i}] {rel!r} already carries ask_parent {held!r}")
         analysis[ASK_PARENT_KEY] = contract.ask_parent_marker(parent_id, run_ids[i])
         if not doc.get("interaction_mode"):
+            if inherited is None:
+                from coordinator_core.ops.dispatch_emit.sizing_fire import _fleet_interaction_mode
+
+                inherited = _fleet_interaction_mode()
             if inherited is None:
                 raise _Refused(f"sizings[{i}] {rel!r} records no interaction_mode and the fan-out inherits none")
             doc["interaction_mode"] = inherited.strip()

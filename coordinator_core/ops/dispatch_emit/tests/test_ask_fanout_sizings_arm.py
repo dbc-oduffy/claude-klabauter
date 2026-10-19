@@ -161,7 +161,20 @@ def test_interaction_mode_recorded_is_kept_never_overwritten(repo):
     assert _doc(repo, a)["interaction_mode"] == "hands-on"
 
 
-def test_interaction_mode_neither_recorded_nor_inherited_refuses_and_writes_nothing(repo):
+def test_interaction_mode_absent_everywhere_takes_the_fleet_mode(repo, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import sizing_fire
+
+    monkeypatch.setattr(sizing_fire, "_fleet_interaction_mode", lambda: "pm")
+    a = _sizing(repo, "a", PLAN_A, mode=None)
+    out = mod.fanout({"sizings": [{"sizing": a}]}, repo)
+    assert out["exit_code"] == 0, out
+    assert _doc(repo, a)["interaction_mode"] == "pm"
+
+
+def test_interaction_mode_unresolvable_anywhere_refuses_and_writes_nothing(repo, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import sizing_fire
+
+    monkeypatch.setattr(sizing_fire, "_fleet_interaction_mode", lambda: None)
     a = _sizing(repo, "a", PLAN_A, mode=None)
     before = _snapshot(repo)
     out = mod.fanout({"sizings": [{"sizing": a}]}, repo)

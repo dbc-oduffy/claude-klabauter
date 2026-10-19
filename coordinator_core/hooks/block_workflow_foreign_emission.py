@@ -155,6 +155,39 @@ def _session_mismatch_reason(script: Path, session: str, recorded_session: str) 
     )
 
 
+def _plan_amended_reason(script: Path, receipt: Mapping) -> "Optional[str]":
+    """Deny reason when the receipt's plan body sha differs from the plan file's current
+    canonical body sha, else None. A receipt without the keys, a missing plan, or any
+    failure yields None."""
+    try:
+        recorded = receipt.get("plan_body_sha")
+        rel = receipt.get("plan_relpath")
+        if not (isinstance(recorded, str) and recorded and isinstance(rel, str) and rel):
+            return None
+        from coordinator_core.frontmatter.primitives import canonical_body_sha
+
+        root = next(
+            (p for p in script.resolve().parents if (p / ".git").exists()), None
+        )
+        if root is None:
+            return None
+        plan = root / rel
+        if not plan.is_file():
+            return None
+        current = canonical_body_sha(plan.read_text(encoding="utf-8"))
+        if not current or current == recorded:
+            return None
+        launcher = _emitter_launcher_invocation()
+        return (
+            f"{script.name} embeds a plan body that changed since emission "
+            f"(plan sha {recorded[:12]}; now {current[:12]}) -- refusing to fire.\n"
+            "Fix: re-emit --\n"
+            f"  {launcher} --plan {rel}"
+        )
+    except Exception:
+        return None
+
+
 def _no_receipt_deny_reason(script_name: str) -> str:
     launcher = _emitter_launcher_invocation()
     return (
@@ -314,6 +347,10 @@ def _handler(params: dict, repo_root=None) -> dict:
         return _resolved_deny(
             _session_mismatch_reason(script, session, recorded_session),
         )
+
+    amended = _plan_amended_reason(script, receipt)
+    if amended:
+        return _resolved_deny(amended)
 
     if tool_input.get("resumeFromRunId"):
         reason = _resume_after_revise_reason(script)
