@@ -2090,8 +2090,8 @@
     "coordinator_core/_content_root_primitive.py": "f7fcd3083855a5e1dd53c09233fbfd64f8dffdf5",
     "coordinator_core/_data_root.py": "0c7c8524f25376ae49593f11334445539dc557f9",
     "coordinator_core/_engine_landing.py": "06dbb1273f3c36fdb6be08767ec75e73c71630e7",
-    "coordinator_core/_engine_published_at": "5fadcd3a4882515cbe2634ee133eeb477f80be97",
-    "coordinator_core/_engine_stamp": "b6363d3abef8f5f7198c0a3f350b45b72f17104f",
+    "coordinator_core/_engine_published_at": "8f9b1ff49c3c51f5624ac853733987315d64a4f1",
+    "coordinator_core/_engine_stamp": "6c9937b4d681f3532521674ad0239b493926cc07",
     "coordinator_core/_fleet_names.py": "e81fc4247611fe486697f4707b28a1a3a008f392",
     "coordinator_core/_hook_envelope.py": "1b1bb3d24c0212be93325530986081263f011d49",
     "coordinator_core/_repo_root_probe.py": "2d8edfa8cd9343436a650584da430aa87ae0397d",
@@ -4501,7 +4501,7 @@
     "coordinator_core/ops/dispatch_emit/source_memo_ref.py": "700cfbcf8e8870a6098d3e13bb56618b8df422ba",
     "coordinator_core/ops/dispatch_emit/spine_read.py": "66e853498ce90008a6ade4d6d5fc9a1ba2471cc4",
     "coordinator_core/ops/dispatch_emit/stopped_runs.py": "0b3bf18c86a9e404cca626b59b2aba3514b84294",
-    "coordinator_core/ops/dispatch_emit/terminal_commit.py": "66f3bf9eea4a5913efd3e1c6c7b7cda0189d86a7",
+    "coordinator_core/ops/dispatch_emit/terminal_commit.py": "c19bf0ad283803b67ff4f4d740c15580fa33d784",
     "coordinator_core/ops/dispatch_emit/terminal_commit_params_channel.py": "3216dfeff564ae000a6c1c4ee13a53a80e17b4cd",
     "coordinator_core/ops/dispatch_emit/terminal_commit_reconcile.py": "d37a375606433927d4aae9cdfc64fd1706ba684f",
     "coordinator_core/ops/dispatch_emit/test_caller_widen.py": "ad81dae6f88a12df82b4101a0df32b2164b27ac3",
@@ -4833,6 +4833,7 @@
     "coordinator_core/ops/dispatch_emit/tests/test_memo_rows_leaf.py": "02fdf4b04fe3cf148b5cbaef5c76b979110a3827",
     "coordinator_core/ops/dispatch_emit/tests/test_memo_send_row.py": "ef5ad67c1e8c4f8927d7aa33b0d42ee3390ba06f",
     "coordinator_core/ops/dispatch_emit/tests/test_met_judge_reaches_close_legs_e2e.py": "8a75e2e690dcfb594bb30fb94d3194185cfbf357",
+    "coordinator_core/ops/dispatch_emit/tests/test_met_refire_lands_its_own_product_changes.py": "90de36a15fad333906967fee07dd9af82cfe6ccb",
     "coordinator_core/ops/dispatch_emit/tests/test_mint_rows_keeps_overlap_edges.py": "d4c005410c0a6f953c85e147d87092b632ff1632",
     "coordinator_core/ops/dispatch_emit/tests/test_minted_spine_source_memo.py": "ec8b751960f6be416ad96a5df351a6751b38232d",
     "coordinator_core/ops/dispatch_emit/tests/test_multi_turn_register_excludes_swept_turns.py": "d1707599ce5620c791bbf6e36e9efa293612adf3",
@@ -5091,7 +5092,7 @@
     "coordinator_core/ops/dispatch_emit/tests/test_terminal_commit_residue.py": "9c59dbf4ac0551a6815664210a5b6542da4566fb",
     "coordinator_core/ops/dispatch_emit/tests/test_terminal_commit_resume_codes_halted_checkpoint_rows.py": "714ceda6fc453693e107e4bd40e2df7f126a9b9d",
     "coordinator_core/ops/dispatch_emit/tests/test_terminal_commit_resume_codes_predecessor_rows.py": "01277a59e1e8f9185037d42bf295c62d2a966d50",
-    "coordinator_core/ops/dispatch_emit/tests/test_terminal_commit_resume_unchanged_refuses_met.py": "2198606e503c3af854f7f2a60b81d2631299340f",
+    "coordinator_core/ops/dispatch_emit/tests/test_terminal_commit_resume_unchanged_refuses_met.py": "4791570eb9493ceb971ff9f3a129c09daae5a411",
     "coordinator_core/ops/dispatch_emit/tests/test_terminal_commit_resumed_review_writes.py": "6e8752e05e8b24ea35c18141fabb8490e462324f",
     "coordinator_core/ops/dispatch_emit/tests/test_terminal_commit_review_only_advances_stamp.py": "7873bc583c3a5868b341af868115a378557379f3",
     "coordinator_core/ops/dispatch_emit/tests/test_terminal_commit_review_only_coding.py": "3c3126ef2e71ad529eb7c8e310de5b27f7c6a31b",
@@ -7685,7 +7686,7 @@
     "coordinator_core/warm/door/build_posix.py": "e1362db73481be70cc5436a2c3268678c77c45e9",
     "coordinator_core/warm/door/door.c": "0487914e7b594f3a01308bf5314bf881ad4c6b89",
     "coordinator_core/warm/door/door.exe": "7bb49472e3613bed9e774d3a83392bbf4242a7af",
-    "coordinator_core/warm/door/door.exe.provenance.json": "c573369c5e246444d5cc6ff9482d728add81870f",
+    "coordinator_core/warm/door/door.exe.provenance.json": "64217a405506aa027f8dc40fa3907e375f87fad3",
     "coordinator_core/warm/door/door.image-identity.txt": "4d0c1336cc11b0a0110ad17b0ad1638d239f117a",
     "coordinator_core/warm/door/door_core.c": "a910614967345979b74818bc015880c26510dab0",
     "coordinator_core/warm/door/door_core.h": "545b6545431f9caf81d5c11d4de0af13a45f394f",
@@ -8392,5 +8393,5 @@
     "scripts/unstick_claude.py": "5458a0f699f1793ff9fd32295b9d0b33635f1c06"
   },
   "schema": 1,
-  "source_head": "e3002dec60aae987a70a0c38f6f57eaa1a24e72b"
+  "source_head": "4aaf5979c03b97b9862791d8acc71308f445f978"
 }

@@ -145,3 +145,87 @@ def test_verified_only_with_executed_evidence_passes(run):
 def test_verified_only_without_evidence_is_refused(run, ev):
     resume = {**_resume(run), "verified_only": {"R1": ev}}
     assert _gate(run, resume)["ledger_failures"] == [{"id": "R1", "reason": UNCHANGED_SINCE_HALT_REASON}]
+
+
+# ask_compose composes the terminal param as {run_id, halt_sha: <gate halt_sha or null>, blocking}
+# and never a `plan`: the shape every case below uses.
+PLAN = "docs/plans/2026-10-17-resume.md"
+
+
+def _composed(halt_sha=None):
+    return {"run_id": RUN, "halt_sha": halt_sha, "blocking": ["R1"]}
+
+
+def _stamp_head(run, head, writes=("prod.py", f"{RECORD_DIR_ROOT}/x.md", "state/y.yaml")):
+    run[2].write_text(
+        json.dumps({"rows": [{"id": "C1", "writes": list(writes)}], "head_sha": head}), encoding="utf-8"
+    )
+
+
+def _gate_plan(run, resume, plan_rel=None):
+    root, run_dir, mpath, _ = run
+    return tc._ledger_gate(root, run_dir, MET, mpath, resume_ledger=resume, plan_rel=plan_rel)[0]
+
+
+def _halt_commit(root, plan=PLAN):
+    from coordinator_core.ops.dispatch_emit.ask_contract import halted_record_message
+
+    message = halted_record_message(RUN, {"halted": "ledger-check", "plan": plan}) + "\nLands-Chunks: C1"
+    _git(root, "commit", "-q", "--allow-empty", "-m", message)
+    return _git(root, "rev-parse", "HEAD")
+
+
+def test_composed_param_with_stage_head_passes_when_declared_path_changed(run):
+    _stamp_head(run, run[3])
+    (run[0] / "prod.py").write_text("x = 8\n", encoding="utf-8")
+    assert _gate_plan(run, _composed()) is None
+
+
+def test_composed_param_with_stage_head_refuses_unchanged_and_names_the_base(run):
+    _stamp_head(run, run[3])
+    refusal = _gate_plan(run, _composed())
+    assert refusal["refused"] == "ledger-unmet"
+    assert refusal["ledger_failures"] == [{"id": "R1", "reason": UNCHANGED_SINCE_HALT_REASON}]
+    assert refusal["since_halt"] == {"base": run[3], "base_source": "stage-head", "outcome": "unchanged"}
+
+
+def test_composed_param_resolves_halt_commit_from_plan_rel(run):
+    halt = _halt_commit(run[0])
+    (run[0] / "prod.py").write_text("x = 9\n", encoding="utf-8")
+    assert _gate_plan(run, _composed(), plan_rel=PLAN) is None
+    _git(run[0], "checkout", "--", "prod.py")
+    refusal = _gate_plan(run, _composed(), plan_rel=PLAN)
+    assert refusal["since_halt"] == {"base": halt, "base_source": "resolved", "outcome": "unchanged"}
+
+
+def test_param_sha_outranks_plan_rel_and_stage_head(run):
+    _halt_commit(run[0])
+    _stamp_head(run, run[3])
+    refusal = _gate_plan(run, _composed(run[3]), plan_rel=PLAN)
+    assert refusal["since_halt"] == {"base": run[3], "base_source": "param", "outcome": "unchanged"}
+
+
+def test_no_base_at_all_is_refused_as_no_base(run):
+    (run[0] / "prod.py").write_text("x = 10\n", encoding="utf-8")
+    refusal = _gate_plan(run, _composed(), plan_rel=PLAN)
+    assert refusal["refused"] == "ledger-unmet"
+    assert refusal["since_halt"] == {"base": None, "base_source": None, "outcome": "no-base"}
+
+
+def test_empty_declared_set_is_named_no_declared_paths(run):
+    _stamp_head(run, run[3], writes=("state/y.yaml",))
+    (run[0] / "prod.py").write_text("x = 11\n", encoding="utf-8")
+    refusal = _gate_plan(run, _composed())
+    assert refusal["since_halt"]["outcome"] == "no-declared-paths"
+
+
+def test_git_failure_is_named_by_its_exit_code(run):
+    (run[0] / "prod.py").write_text("x = 12\n", encoding="utf-8")
+    refusal = _gate_plan(run, _composed("0" * 40))
+    assert refusal["since_halt"] == {"base": "0" * 40, "base_source": "param", "outcome": "git-exit-128"}
+
+
+def test_stage_head_that_is_not_a_full_sha_is_no_base(run):
+    _stamp_head(run, "HEAD")
+    (run[0] / "prod.py").write_text("x = 13\n", encoding="utf-8")
+    assert _gate_plan(run, _composed())["since_halt"]["outcome"] == "no-base"

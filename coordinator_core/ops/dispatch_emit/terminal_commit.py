@@ -2141,15 +2141,17 @@ def _routed_from_manifest(manifest_path: Optional[Path]) -> dict:
 _FULL_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 
 
-def _declared_product_paths(manifest_path: Optional[Path]) -> list:
-    """The `writes` of the manifest's rows, minus run-record and state paths; ``[]`` when the
-    manifest is unreadable or declares none."""
+def _manifest_declared(manifest_path: Optional[Path]) -> tuple:
+    """``(declared product paths, manifest head_sha)`` from one read of the manifest: the `writes`
+    of its rows minus run-record and state paths, and the staging HEAD (None when absent or not a
+    full sha). ``([], None)`` when the manifest is unreadable."""
     if manifest_path is None:
-        return []
+        return [], None
     try:
-        rows = json.loads(Path(manifest_path).read_text(encoding="utf-8")).get("rows")
+        data = json.loads(Path(manifest_path).read_text(encoding="utf-8"))
+        rows = data.get("rows")
     except (OSError, ValueError, AttributeError):
-        return []
+        return [], None
     skip = (RECORD_DIR_ROOT.rstrip("/") + "/", RUN_DIR_ROOT.rstrip("/") + "/", "state/")
     paths: list = []
     for row in rows if isinstance(rows, list) else ():
@@ -2157,7 +2159,8 @@ def _declared_product_paths(manifest_path: Optional[Path]) -> list:
         for w in writes if isinstance(writes, list) else ():
             if isinstance(w, str) and w and not w.startswith(skip) and w not in paths:
                 paths.append(w)
-    return paths
+    head = data.get("head_sha")
+    return paths, head if isinstance(head, str) and _FULL_SHA_RE.fullmatch(head) else None
 
 
 def verified_only_rows(resume: object) -> dict:
@@ -2183,12 +2186,13 @@ def _every_staged_row_landed(resume: object) -> bool:
     return isinstance(raw, list) and not raw
 
 
-def _resolve_halt_sha(worktree_root: Path, resume: object) -> Optional[str]:
+def _resolve_halt_sha(worktree_root: Path, resume: object, plan_rel: Optional[str] = None) -> Optional[str]:
     """The newest ledger-check halt commit sha of the resume's ``run_id`` (one ``git log``), for a
-    ``resume_ledger`` whose ``halt_sha`` arrived unfilled; None when the run's halt commit is not found."""
+    ``resume_ledger`` whose ``halt_sha`` arrived unfilled; the plan is the param's ``plan`` else
+    ``plan_rel``. None when the run's halt commit is not found."""
     if not isinstance(resume, dict):
         return None
-    run_id, plan = resume.get("run_id"), resume.get("plan")
+    run_id, plan = resume.get("run_id"), resume.get("plan") or plan_rel
     if not isinstance(run_id, str) or not isinstance(plan, str) or not plan:
         return None
     from coordinator_core.ops.dispatch_emit.emit import resume_landed_state
@@ -2199,12 +2203,18 @@ def _resolve_halt_sha(worktree_root: Path, resume: object) -> Optional[str]:
 
 def _unchanged_since_halt_failures(
     worktree_root: Path, resume: object, verdict: object, manifest_path: Optional[Path],
+    plan_rel: Optional[str] = None, detail: Optional[dict] = None,
 ) -> list:
     """``[{id, reason}]`` for each blocking row of a ledger resume that ``verdict`` judges met or
-    post_commit while no declared product path differs from the halt commit. One ``git diff
-    --quiet`` against the worktree, run only when such a row exists; a bad halt sha, an empty
-    declared set or any git exit other than 1 refuses the same rows. A resume whose ``unlanded`` is
-    an empty list owes no diff and refuses nothing (``_every_staged_row_landed``)."""
+    post_commit while no declared product path differs from the diff base. One ``git diff
+    --quiet`` against the worktree, run only when such a row exists. The base is the first that
+    resolves: the param's 40-hex ``halt_sha`` (``param``); the newest ledger-check halt commit of
+    ``run_id`` under the param's ``plan`` else ``plan_rel`` (``resolved``); the manifest's
+    ``head_sha``, the HEAD the refire's staging stamped (``stage-head``). No base, an empty
+    declared set or any git exit other than 0 or 1 refuses the same rows. A resume whose
+    ``unlanded`` is an empty list owes no diff and refuses nothing (``_every_staged_row_landed``).
+    When ``detail`` is given and the rows are refused it receives ``{base, base_source, outcome}``,
+    ``outcome`` one of ``unchanged``, ``no-base``, ``no-declared-paths``, ``git-exit-<n>``."""
     blocking = resume.get("blocking") if isinstance(resume, dict) else None
     items = verdict.get("items") if isinstance(verdict, dict) else None
     if not isinstance(blocking, list) or not isinstance(items, list):
@@ -2217,25 +2227,35 @@ def _unchanged_since_halt_failures(
     judged = [i for i in judged if i not in exempt]
     if not judged or _every_staged_row_landed(resume):
         return []
-    halt_sha = resume.get("halt_sha")
-    if not (isinstance(halt_sha, str) and _FULL_SHA_RE.fullmatch(halt_sha)):
-        halt_sha = _resolve_halt_sha(worktree_root, resume)
-    paths = _declared_product_paths(manifest_path)
-    changed = False
-    if isinstance(halt_sha, str) and _FULL_SHA_RE.fullmatch(halt_sha) and paths:
+    paths, stage_head = _manifest_declared(manifest_path)
+    base, source = resume.get("halt_sha"), "param"
+    if not (isinstance(base, str) and _FULL_SHA_RE.fullmatch(base)):
+        base, source = _resolve_halt_sha(worktree_root, resume, plan_rel), "resolved"
+    if base is None:
+        base, source = stage_head, "stage-head"
+    if base is None:
+        source = None
+    outcome = "no-base" if base is None else "no-declared-paths" if not paths else "unchanged"
+    if outcome == "unchanged":
         result = run_git(
-            ["--literal-pathspecs", "diff", "--quiet", halt_sha, "--", *paths], cwd=str(worktree_root)
+            ["--literal-pathspecs", "diff", "--quiet", base, "--", *paths], cwd=str(worktree_root)
         )
-        changed = result.returncode == 1
+        if result.returncode == 1:
+            return []
         if result.returncode == 0:
             # `git diff` cannot see a file the remaining-work leg created and left unstaged.
             created = run_git(
                 ["--literal-pathspecs", "ls-files", "--others", "--exclude-standard", "--", *paths],
                 cwd=str(worktree_root),
             )
-            changed = created.returncode == 0 and bool(created.stdout.strip())
-    if changed:
-        return []
+            if created.returncode == 0 and created.stdout.strip():
+                return []
+            if created.returncode != 0:
+                outcome = f"git-exit-{created.returncode}"
+        else:
+            outcome = f"git-exit-{result.returncode}"
+    if detail is not None:
+        detail.update(base=base, base_source=source, outcome=outcome)
     return [{"id": i, "reason": UNCHANGED_SINCE_HALT_REASON} for i in judged]
 
 
@@ -2313,7 +2333,7 @@ def _ledger_gate(
     worktree_root: Path, run_dir: Path, verdict: object, manifest_path: Optional[Path] = None,
     gated: Optional[Sequence[str]] = None, operator: Optional[dict] = None,
     plan_text: Optional[str] = None, inline_review: Optional[dict] = None,
-    resume_ledger: object = None,
+    resume_ledger: object = None, plan_rel: Optional[str] = None,
 ) -> tuple[Optional[dict], object, list]:
     """(refusal or None, ledger, open) for a ledger-bearing ask run: the refusal when ``verdict``
     does not pass ``requirements_ledger.judge`` against the live register rows, an engine-routed
@@ -2321,7 +2341,9 @@ def _ledger_gate(
     owed. ``gated`` is the manifest's gated chunk ids; a ``not_met`` row whose ``withheld_by`` names
     one passes and comes back in ``open`` (``[{id, reason}]``), as does a non-essential one.
     A run emitted without a ledger is not gated (``(None, None, [])``). The pass is one gate among
-    the review stage's; it discharges none of them."""
+    the review stage's; it discharges none of them. ``plan_rel`` is the request's plan, the
+    since-halt check's halt-commit lookup when ``resume_ledger`` names none; a since-halt refusal
+    carries ``since_halt: {base, base_source, outcome}``."""
     from coordinator_core.ops.dispatch_emit import requirements_ledger
 
     try:
@@ -2346,8 +2368,11 @@ def _ledger_gate(
         wave_reviews=[w for w in (inline_review or {}).get("wave_reviews") or [] if isinstance(w, dict)],
         noted_paths=requirements_ledger.noted_paths(worktree_root, run_dir),
     )
+    since_halt: dict = {}
     if resume_ledger is not None:
-        stale = _unchanged_since_halt_failures(worktree_root, resume_ledger, verdict, manifest_path)
+        stale = _unchanged_since_halt_failures(
+            worktree_root, resume_ledger, verdict, manifest_path, plan_rel, since_halt
+        )
         if stale:
             result = {**result, "pass": False, "failures": [*result["failures"], *stale]}
     if result["pass"]:
@@ -2367,6 +2392,7 @@ def _ledger_gate(
         ledger_items=len(ledger.items),
         all_of_pm_ask=ledger.all_of_pm_ask,
         awaiting_operator=_awaiting_operator(result["open"]),
+        **({"since_halt": since_halt} if since_halt else {}),
     ), ledger, []
 
 
@@ -4241,7 +4267,7 @@ def _terminal_commit_inner(
             {o.id: o.detail for o in manifest.owed if o.reason == "operator"},
             _read_rel(worktree_root, request.plan_path) if request.plan_path else None,
             inline_review,
-            params.get(TERMINAL_RESUME_LEDGER_PARAM),
+            params.get(TERMINAL_RESUME_LEDGER_PARAM), request.plan_path,
         )
         if unmet is not None:
             return unmet
