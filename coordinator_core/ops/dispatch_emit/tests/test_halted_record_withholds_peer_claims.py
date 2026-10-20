@@ -7,6 +7,7 @@ import pytest
 from coordinator_core.ops.ceremony import commit_v2
 from coordinator_core.ops.dispatch_emit.tests.test_terminal_commit_halted_record import (  # noqa: F401
     LEDGER,
+    PASSING,
     RUN,
     _call,
     _landed,
@@ -77,7 +78,7 @@ def test_peer_held_declared_path_is_withheld_and_not_landed_chunk(repo, oracle):
     _two_chunks(repo)
     oracle.held = {"other.py"}
 
-    out = _call(repo, LEDGER)
+    out = _call(repo, LEDGER, **PASSING)
 
     assert out["withheld"] == {"other.py": "peer-held"}
     assert "other.py" not in oracle.params[0]["paths"]
@@ -141,7 +142,7 @@ def test_per_path_indeterminate_withholds_only_that_path(repo, oracle):
     _two_chunks(repo)
     oracle.warnings = ["claim state indeterminate for 'other.py'"]
 
-    out = _call(repo, LEDGER)
+    out = _call(repo, LEDGER, **PASSING)
 
     assert out["withheld"] == {"other.py": "peer-claim-indeterminate"}
     assert "done.py" in _landed(repo, out, "--name-only")
@@ -151,7 +152,7 @@ def test_per_path_indeterminate_withholds_only_that_path(repo, oracle):
 def test_no_hold_lands_everything_declared(repo, oracle):
     _two_chunks(repo)
 
-    out = _call(repo, LEDGER)
+    out = _call(repo, LEDGER, **PASSING)
 
     assert "withheld" not in out
     assert set(oracle.params[0]["paths"]) >= {"done.py", "other.py"}

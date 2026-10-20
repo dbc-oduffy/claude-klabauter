@@ -53,8 +53,10 @@ def test_six_entries_compose_fewer_batches_than_entries_and_meta_reports_it():
 
 def test_fixed_legs_equal_the_agent_sites_of_the_once_per_run_legs():
     fanout = fanout_cost.read_fanout(_compose(7))
-    assert fanout["expectedAgents"] == 9
-    assert fanout["expectedAgents"] - len(fanout["groups"]) == 7
+    # Eight fixed sites: terminal commit, run close, review prep, review wave, review integration,
+    # review re-verify, review-fix commit, adjudicate. Add a leg, bump this.
+    assert fanout["expectedAgents"] == 10
+    assert fanout["expectedAgents"] - len(fanout["groups"]) == 8
 
 
 def test_fixed_legs_do_not_vary_with_entry_count():

@@ -41,14 +41,20 @@ def test_a_bare_prefix_is_not_a_chunk():
 
 
 def test_the_emitter_builds_its_label_through_the_grammar():
-    """The per-row call composer goes through `build_work_label`, and
-    never reconstructs the token itself. A re-introduced f-string passes
-    every other test in this file."""
-    source = inspect.getsource(emit._row_agent_call_expr)
-    assert "build_work_label(row.id)" in source, (
-        "the row call composer no longer builds its label through the grammar"
+    """The per-row call composer hands its row id to `_agent_call_over`, the
+    one place a `work:` label is built, and that goes through
+    `build_work_label`; neither reconstructs the token itself. A
+    re-introduced f-string passes every other test in this file."""
+    row_source = inspect.getsource(emit._row_agent_call_expr)
+    over_source = inspect.getsource(emit._agent_call_over)
+    assert "label_id=row.id" in row_source, (
+        "the row call composer no longer hands its row id to the labelled call builder"
     )
-    assert "f'work:" not in source and 'f"work:' not in source, (
-        "the row call composer composes a `work:` label itself, beside the "
-        "grammar -- that is the drift work_label.py exists to prevent"
+    assert "build_work_label(label_id)" in over_source, (
+        "the labelled call builder no longer builds its label through the grammar"
     )
+    for source in (row_source, over_source):
+        assert "f'work:" not in source and 'f"work:' not in source, (
+            "the row call composer composes a `work:` label itself, beside the "
+            "grammar -- that is the drift work_label.py exists to prevent"
+        )

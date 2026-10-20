@@ -129,6 +129,20 @@ _NO_STAGING_CLAUSE = (
     "that."
 )
 
+#: Brief for a verify node that runs before any fix (routing verify). Its pass edge leads to a
+#: fix, refute-close or hand-back, so the fix-on-disk question does not apply.
+_ROUTING_VERIFY_CLAUSE = (
+    "Judge the routing only: are the triage verdict and target right for this row? "
+    "Read the row and what it cites. Report pass if both are right; report fail, "
+    "with the reason, if either is wrong. Do not ask whether a fix landed and do not "
+    "require any change on disk. You are read-only: do not edit any file. "
+    + _NO_STAGING_CLAUSE
+)
+
+_ROUTING_VERIFY_RUNNER_CLAUSE = (
+    " Run no tests: return `tests_record` as an empty string and `tests_outcome` as `nothing-to-run`."
+)
+
 _JUDGE_AGAINST_HEAD_CLAUSE = (
     "If `git status --porcelain -- <path>` shows a file you are judging as "
     "modified, judge its `git show HEAD:<path>` content instead, because "
@@ -866,15 +880,20 @@ def compose_verify_agent_call(
     repo_root_js: str = "REPO_ROOT",
     final_js: Optional[str] = None,
     undo_paths_js: Optional[str] = None,
+    pre_fix_js: Optional[str] = None,
 ) -> str:
     """The `verify` agent call. With ``undo_paths_js`` (and ``final_js``) the verifier also runs the undo
-    op on the row's final verification when its own verdict is `fail`, and returns the result as `undo`."""
-    parts: list[tuple[str, str]] = [
+    op on the row's final verification when its own verdict is `fail`, and returns the result as `undo`.
+    ``pre_fix_js`` is a JS boolean expression; true at run time swaps the post-fix brief for the routing
+    brief (no fix has run: judge the triage verdict and target, require nothing on disk, no undo)."""
+    head: list[tuple[str, str]] = [
         *_preamble_parts(preamble_expr),
         ("lit", "You are the verify stage for row "),
         ("expr", row_id_js) if row_id_js else ("lit", "<row id>"),
         ("lit", " at "),
         ("expr", row_path_js) if row_path_js else ("lit", "<row path>"),
+    ]
+    parts: list[tuple[str, str]] = [
         ("lit", ". The fixer touched: ["),
     ]
     parts.extend(_list_parts((), touched_files_js))
@@ -937,6 +956,17 @@ def compose_verify_agent_call(
             repo_root_js=repo_root_js,
         ))
         schema["properties"]["undo"] = _UNDO_SCHEMA
+    if pre_fix_js:
+        routing_parts: list[tuple[str, str]] = [
+            ("lit", ". No fix has run for this row and none is expected. Triage evidence: "),
+            ("expr", evidence_js) if evidence_js else ("lit", "(none)"),
+            ("lit", ". " + _ROUTING_VERIFY_CLAUSE),
+        ]
+        if targeted_runner:
+            routing_parts.append(("lit", _ROUTING_VERIFY_RUNNER_CLAUSE))
+        branch = f"({pre_fix_js}) ? ({_join_prompt_parts(routing_parts)}) : ({_join_prompt_parts(parts)})"
+        parts = [("expr", branch)]
+    parts = [*head, *parts]
     return _agent_call(
         _join_prompt_parts(parts),
         stage="verify",
@@ -1341,10 +1371,8 @@ def compose_ledger_sweep_call(
         ("expr", f"({decisions_js}) ? ' --{DECISIONS_FLAG} ' + _shq({decisions_js}) : ''"),
         ("lit", " --repo-root "),
         _shq_part(repo_root_js),
-        ("lit", " && rm -f "),
-        *rec_file,
-        ("lit", " "),
-        *dec_file,
+        # No trailing rm: the subagent-destructive guard denies the whole chain, so the
+        # record never lands. The scratch pieces are truncated by `: >` on the next run.
         (
             "lit",
             "\n```\nThe last command's JSON output carries `swept` and `sweep_reason`. Return "

@@ -19,6 +19,7 @@ from coordinator_core.ops.dispatch_emit.tests.test_pipeline_compose_brief_and_ha
 
 _LABEL_RE = re.compile(r"label: ('[^']*'|\"[^\"]*\")")
 _HEREDOC_PHRASES = ("Bash heredoc", "never skip it")
+_HOISTED_PROMPT_REF = re.compile(r"\b(_\w*Prompt)\b")
 
 
 def _calls(script: str) -> list[str]:
@@ -30,6 +31,27 @@ def _calls(script: str) -> list[str]:
     return out
 
 
+def _hoisted_definition(script: str, name: str) -> str:
+    """Text of the ``const <name> = ...`` line or ``function <name>(...) {...}`` block a call's prompt is hoisted into."""
+    found = re.search(rf"^[ \t]*const {name} = [^\n]*", script, re.M) or re.search(
+        rf"^[ \t]*function {name}\(.*?\n  \}}", script, re.M | re.S
+    )
+    return found.group(0) if found else ""
+
+
+def _expand_hoisted_prompts(call: str, script: str, seen: frozenset[str] = frozenset()) -> str:
+    """A call whose prompt is a hoisted ``_xxxPrompt`` is judged by that definition's text, followed transitively.
+
+    Trap: an unresolvable reference stays unexpanded, so the call still reads as bare and offends."""
+    out = call
+    for name in dict.fromkeys(_HOISTED_PROMPT_REF.findall(call)):
+        if name in seen:
+            continue
+        definition = _hoisted_definition(script, name)
+        out += _expand_hoisted_prompts(definition, script, seen | {name}) if definition else ""
+    return out
+
+
 def _label(call: str) -> str:
     found = _LABEL_RE.search(call)
     return found.group(1) if found else call[:80]
@@ -37,7 +59,8 @@ def _label(call: str) -> str:
 
 def _offences(workflow: str, script: str) -> list[str]:
     bad = []
-    for call in _calls(script):
+    for raw in _calls(script):
+        call = _expand_hoisted_prompts(raw, script)
         count = call.count(SIDECAR_DIR_MARKER_PREFIX)
         if count != 1:
             bad.append(f"{workflow} {_label(call)}: {count} sidecar_dir markers")
@@ -90,3 +113,14 @@ def test_the_ratchet_refuses_a_doubled_marker():
 def test_the_ratchet_refuses_a_call_missing_one_phrase(phrase):
     script = f"await agent({sidecar_clause('d/').replace(phrase, 'zzz')!r}, {{ label: 'p' }});"
     assert any("heredoc fallback missing" in o for o in _offences("t", script))
+
+
+def test_a_hoisted_prompt_is_judged_by_its_definition_transitively():
+    clause = sidecar_clause("d/")
+    call = "await agent(_groupPrompt(g), { label: 'work:' + g });"
+    group = "function _groupPrompt(g) {\n    return ms.map((m) => _rowPrompt(m)).join('');\n  }\n"
+    bare = f"const _rowPrompt = (r) => 'x';\n{group}{call}"
+    carried = f"const _rowPrompt = (r) => {'x' + clause!r};\n{group}{call}"
+    assert _offences("t", bare)
+    assert _offences("t", carried) == []
+    assert _offences("t", f"{group}{call}")

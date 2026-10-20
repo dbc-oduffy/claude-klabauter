@@ -128,6 +128,7 @@ __all__ = [
     "STAGE_OUTPUT_TOKENS",
     "batch_reserve",
     "build_routing_table",
+    "pre_fix_verify_nodes",
     "route_after_triage",
     "triage_fix_verdict",
     "follow_edge",
@@ -173,6 +174,21 @@ def build_routing_table(profile: Profile) -> dict[str, dict[str, Any]]:
         node_id: {"kind": node.kind, "edges": dict(node.edges), "on_fail": node.on_fail}
         for node_id, node in profile.graph.items()
     }
+
+def pre_fix_verify_nodes(routing: Mapping[str, dict]) -> frozenset[str]:
+    """Verify nodes no fix node can reach through ``edges`` or ``on_fail``: they run before any fix,
+    so they judge routing (pass leads to fix, refute-close, a hand-back), not the fix.
+    Twin: ``VERIFY_PRE_FIX`` in the emitted script."""
+    reached: set[str] = set()
+    stack = [n for n, node in routing.items() if node["kind"] == "fix"]
+    while stack:
+        node = routing[stack.pop()]
+        for target in (*node["edges"].values(), node.get("on_fail")):
+            if target in routing and target not in reached:
+                reached.add(target)
+                stack.append(target)
+    return frozenset(n for n, node in routing.items() if node["kind"] == "verify" and n not in reached)
+
 
 def _triage_node_id(profile: Profile) -> str:
     for node_id, node in profile.graph.items():
@@ -450,6 +466,7 @@ def run_admission(
     terminal_params: Optional[dict] = None
     by_refute_origin: dict[str, dict[str, int]] = {}
     by_triage_check: dict[str, int] = {k: 0 for k in _SIZE_CHECK_KEYS}
+    pre_fix_verify = pre_fix_verify_nodes(routing)
     fix_verdict = triage_fix_verdict(routing, triage_node_id)
     fix_target = routing[triage_node_id]["edges"].get(fix_verdict) if fix_verdict else None
 
@@ -792,12 +809,13 @@ def run_admission(
                 row.verify_feedback = result.get("reason", "")
                 row.node = row.fix_node or row.node
                 return
-            if undo_paths_sink is not None:
-                undo_paths_sink.append({"row": row.row_id, "paths": _undo_paths(row)})
-            undo_result = result.get("undo") or {}
-            if undo_result.get("outcome") != "undone":
-                _handback(row, "stage-dead", _undo_failed_reason(undo_result))
-                return
+            if row.node not in pre_fix_verify:
+                if undo_paths_sink is not None:
+                    undo_paths_sink.append({"row": row.row_id, "paths": _undo_paths(row)})
+                undo_result = result.get("undo") or {}
+                if undo_result.get("outcome") != "undone":
+                    _handback(row, "stage-dead", _undo_failed_reason(undo_result))
+                    return
             _handback(row, "rejected-after-retry", "verify failed twice")
             return
         _apply_route_row(row, follow_edge(routing, row.node, outcome, row), f"verify outcome {outcome!r}")
@@ -1463,6 +1481,7 @@ def compose_grind_script(
         )
         for bk in distinct_keys
     }
+    pre_fix_nodes = sorted(pre_fix_verify_nodes(routing_table))
     verify_node_ids = [node_id for node_id, kind in node_kind.items() if kind == "verify"]
     verify_spec_by_node: dict[str, dict[str, dict[str, Any]]] = {
         node_id: {
@@ -1541,6 +1560,7 @@ def compose_grind_script(
     lines.append(f"const MANIFEST_DIGEST = {_js_string_literal(manifest.digest)};")
     lines.append("const TRIAGE_DEPTH_BY_KEY = " + json.dumps(triage_depth_by_key, sort_keys=True) + ";")
     lines.append("const VERIFY_SPEC = " + json.dumps(verify_spec_by_node, sort_keys=True) + ";")
+    lines.append("const VERIFY_PRE_FIX = " + json.dumps(pre_fix_nodes) + ";")
 
     lines.append("let _callCount = 0;")
     lines.append("const _agentCallsByStageKind = {};")
@@ -1719,6 +1739,7 @@ def compose_grind_script(
         agent_type_host=agent_type_host, run_key=run_key, preamble_expr=preamble_expr,
         targeted_runner=targeted_runner, profile=profile.name, run_id_js="RUN_ID",
         final_js="row.verifyRetried", undo_paths_js="_undoPaths(row)",
+        pre_fix_js="VERIFY_PRE_FIX.includes(row.node)",
     )
     _runner_fail = json.dumps([
         o for o in stages.RUNNER_FAIL_OUTCOMES if profile.name == "bug" or o != "no-runner"
@@ -1982,8 +2003,9 @@ def compose_grind_script(
         "      row.node = row.fixNode || row.node;\n"
         "      return;\n"
         "    }\n"
-        "    const _undone = result.undo || {};\n"
         "    row.done = true;\n"
+        "    if (VERIFY_PRE_FIX.includes(row.node)) { _handBack(rowId, 'rejected-after-retry', 'verify failed twice'); return; }\n"
+        "    const _undone = result.undo || {};\n"
         "    if (_undone.outcome !== 'undone') { _handBack(rowId, 'stage-dead', '" + _UNDO_FAILED_HEAD + "' + (_undone.reason ? ` (${_undone.reason})` : (_undone.outcome ? '' : ' (the verify stage returned no undo reply)')) + '" + _UNDO_FAILED_TAIL + "'); return; }\n"
         "    _handBack(rowId, 'rejected-after-retry', 'verify failed twice'); return;\n"
         "  }\n"

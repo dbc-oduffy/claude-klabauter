@@ -21,7 +21,8 @@ Op contract: `params` carries the Stop payload (`session_id`, `cwd`,
 `transcript_path`, `last_assistant_message`, `agent_id`, ...), wrapped as
 `params["payload"]` or flat; `_envelope.payload_of` reads both. Returns
 `deny("Stop", BLOCK_REASON)` when the tail is missing and the block arms,
-else `no_advisory()`. Fail-open on every error.
+else the once-per-session go-ask `post_advisory` (Group EM live, go-ask in the
+last two sentences; a block wins), else `no_advisory()`. Fail-open on every error.
 
 Intent text: `last_assistant_message` when non-empty, else the transcript's
 final assistant text.
@@ -37,18 +38,24 @@ DoE source: coordinator/hooks/scripts/guard-manufactured-blocker.py
 
 from __future__ import annotations
 
+import json
+import os
 import re
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from coordinator_core.hooks._envelope import deny, no_advisory, payload_of
+from coordinator_core.hooks._envelope import deny, no_advisory, payload_of, post_advisory
 from coordinator_core.hooks.guard_manufactured_blocker import (
     _HANDOFF_PATTERNS,
     _OWNERSHIP_CUE_PATTERNS,
     _POSSESSIVE_PATTERNS,
     _QUOTE_CHARS,
     _final_assistant_text,
+    _has_fired_this_session,
+    _mark_fired_this_session,
+    _repo_root,
     _reported_speech,
     _split_sentences,
     _third_party_clause,
@@ -89,6 +96,16 @@ _GO_ASK_PATTERNS = [
     re.compile(r"\b(?:want|would\s+you\s+like)\s+me\s+to\b[^.?!\n]*\?", re.IGNORECASE),
 ]
 _GO_ASK_TAIL_SENTENCES = 2
+
+# The go-ask advisory (DoE `_emit_go_ask_advisory`): advisory only, never a block. Gated on the
+# Group EM heartbeat so a session with no live holder may still end on a question.
+_GROUP_EM_WATCH_REL = ("state", "group-em-watch.json")
+_GROUP_EM_LIVE_SECONDS = 15 * 60
+_GO_ASK_FIRED_MARKER = "guard-go-ask-fired.json"
+_GO_ASK_ADVISORY_TEXT = (
+    "Turn ends asking for a go while a Group EM is live. "
+    "Edit the tail to state what you did or will do, or route the question to the Group EM."
+)
 
 
 def _inside_quote(prefix: str) -> bool:
@@ -144,6 +161,40 @@ def _heuristic_turn_intent(text: str) -> "tuple[bool, str]":
         if any(_fires(p, sentence) for p in _GO_ASK_PATTERNS):
             return True, sentence[:_turn_intent.ASK_MAX]
     return (True, "") if _matches_manufactured_blocker(text) else (False, "")
+
+
+def _go_ask_tail(text: str) -> bool:
+    tail = _split_sentences(text)[-_GO_ASK_TAIL_SENTENCES:]
+    return any(_fires(p, s) for s in tail for p in _GO_ASK_PATTERNS)
+
+
+def _group_em_live(payload: dict) -> bool:
+    """True iff the watch heartbeat names a holder and ticked within `_GROUP_EM_LIVE_SECONDS`.
+    Any read or parse failure is "not live"."""
+    try:
+        repo_root = _repo_root(payload)
+        if repo_root is None:
+            return False
+        with open(os.path.join(repo_root, *_GROUP_EM_WATCH_REL), encoding="utf-8") as fh:
+            watch = json.load(fh)
+        if not isinstance(watch, dict) or not str(watch.get("holder_session_id") or "").strip():
+            return False
+        ticked = datetime.fromisoformat(str(watch["last_tick_at"]).replace("Z", "+00:00"))
+        if ticked.tzinfo is None:
+            ticked = ticked.replace(tzinfo=timezone.utc)
+        return (datetime.now(timezone.utc) - ticked).total_seconds() <= _GROUP_EM_LIVE_SECONDS
+    except Exception:
+        return False
+
+
+def _go_ask_advisory(payload: dict, text: str) -> dict:
+    """Once per session; the marker is written only when the advisory is returned."""
+    if not _go_ask_tail(text) or not _group_em_live(payload):
+        return no_advisory()
+    if _has_fired_this_session(payload, _GO_ASK_FIRED_MARKER):
+        return no_advisory()
+    _mark_fired_this_session(payload, _GO_ASK_FIRED_MARKER)
+    return post_advisory(_GO_ASK_ADVISORY_TEXT)
 
 
 def _git_root_walk(start: str) -> "Optional[str]":
@@ -204,6 +255,7 @@ def _handler(params: dict, repo_root=None) -> dict:
             text = _final_assistant_text(transcript_path) if has_transcript else ""
         if _turn_intent_step(payload, text):
             return deny("Stop", _turn_intent.BLOCK_REASON)
+        return _go_ask_advisory(payload, text)
     except Exception:
         pass
     return no_advisory()

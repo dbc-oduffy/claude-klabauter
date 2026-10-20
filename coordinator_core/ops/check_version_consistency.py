@@ -84,7 +84,7 @@ from coordinator_core.git.repo_root import show_toplevel
 _PROG = "check-version-consistency"
 
 _USAGE = """\
-check-version-consistency.sh [--root <dir>] [--repo-root <dir>] [--check-tag] [--quiet]
+check-version-consistency.sh [--root <dir>] [--repo-root <dir>] [--check-tag] [--strict] [--quiet]
   --root <dir>       bundle root containing .claude-plugin/marketplace.json
                       (fail-loud if missing; no identity check, no N/A branch)
   --repo-root <dir>  the repo being closed (default: cwd's git toplevel).
@@ -96,6 +96,7 @@ check-version-consistency.sh [--root <dir>] [--repo-root <dir>] [--check-tag] [-
   --check-tag        additionally compare the latest v* git tag (advisory: a
                       mismatch WARNs, does not fail — source_is_live repos
                       never tag)
+  --strict           implies --check-tag; a tag mismatch exits 3
   --quiet            suppress the OK line (failures and N/A always print)
 """
 
@@ -295,7 +296,7 @@ def locate_surfaces(repo_root: str) -> Optional[dict]:
     }
 
 
-def _run(root_arg: str, repo_root_arg: str, check_tag: bool, quiet: bool) -> int:
+def _run(root_arg: str, repo_root_arg: str, check_tag: bool, quiet: bool, strict: bool = False) -> int:
     if root_arg:
         bundle_root = _discover_root(root_arg)
     else:
@@ -347,6 +348,13 @@ def _run(root_arg: str, repo_root_arg: str, check_tag: bool, quiet: bool) -> int
         if latest_tag:
             tag_ver = latest_tag[1:] if latest_tag.startswith("v") else latest_tag
             if tag_ver != plugin_ver:
+                if strict:
+                    print(
+                        f"check-version-consistency: FAIL — latest git tag {latest_tag} != "
+                        f"plugin.json {plugin_ver}; tag the release or drop --strict",
+                        file=sys.stderr,
+                    )
+                    return 3
                 print(
                     f"check-version-consistency: NOTE — latest git tag {latest_tag} != "
                     f"plugin.json {plugin_ver} (advisory; expected if this release is not yet tagged)",
@@ -361,6 +369,7 @@ def _run(root_arg: str, repo_root_arg: str, check_tag: bool, quiet: bool) -> int
 
 def main(argv: List[str]) -> int:
     check_tag = False
+    strict = False
     quiet = False
     root_arg = ""
     repo_root_arg = ""
@@ -380,6 +389,10 @@ def main(argv: List[str]) -> int:
             check_tag = True
             i += 1
             continue
+        if arg == "--strict":
+            check_tag = strict = True
+            i += 1
+            continue
         if arg == "--quiet":
             quiet = True
             i += 1
@@ -391,7 +404,7 @@ def main(argv: List[str]) -> int:
         return 2
 
     try:
-        return _run(root_arg, repo_root_arg, check_tag, quiet)
+        return _run(root_arg, repo_root_arg, check_tag, quiet, strict)
     except _GateFailure:
         print(
             f"skip: main: return _run(root_arg, repo_root_arg, check_tag, quiet) failed: {sys.exc_info()[1]}",

@@ -132,6 +132,22 @@ def test_ac8_check_tag_mismatch_is_advisory(tmp_path, capsys):
     assert "NOTE" in captured.err
 
 
+def test_strict_tag_mismatch_exits_3(tmp_path, capsys):
+    d = tmp_path / "strict"
+    _make_bundle(d, "2.9.0", "2.9.0", "2.9.0")
+    _git_bundle(d, "v2.8.0")
+    rc = _run(d, "--strict")
+    assert rc == 3
+    assert "FAIL" in capsys.readouterr().err
+
+
+def test_strict_tag_matching_exits_0(tmp_path):
+    d = tmp_path / "strict-ok"
+    _make_bundle(d, "2.9.0", "2.9.0", "2.9.0")
+    _git_bundle(d, "v2.9.0")
+    assert _run(d, "--strict", "--quiet") == 0
+
+
 def test_ac9_plugin_entry_version_ignored(tmp_path):
     d = tmp_path / "ac9"
     (d / ".claude-plugin").mkdir(parents=True)

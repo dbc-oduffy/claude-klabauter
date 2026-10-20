@@ -129,7 +129,10 @@ def test_row_met_out_of_band_resumes_the_same_sizing_and_the_new_run_commits(hal
     assert "disposition: coded" in (halted / PLAN).read_text(encoding="utf-8")
 
     later = gate(halted, SIZING)
-    assert later.arm is None and "already ran" in later.halt["reason"]
+    # The closing commit ships the sizing (`sizing.ship`), and a shipped sizing is held by the status gate in
+    # `sizing_fire.collect_fire_refusals`; the closed-plan "already ran" refusal is pinned by test_ask_gate_resume.py.
+    assert later.arm is None and later.resume_ledger is None
+    assert later.halt["kind"] == "refusal" and "'shipped'" in later.halt["reason"]
 
 
 def test_row_still_not_met_refuses_the_commit_at_the_ledger_gate(halted):

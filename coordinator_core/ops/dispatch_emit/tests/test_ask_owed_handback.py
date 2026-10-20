@@ -37,7 +37,8 @@ def test_owed_handback_names_rows_and_the_refire():
 def test_no_rows_halt_carries_the_owed_handback(monkeypatch):
     script = _script(monkeypatch)
     expr = ask_compose._owed_handback_js("state/sizings/x.yaml")
-    assert f"next_action: {expr} }} : {{}})" in script
+    fallback = ask_compose._no_manifest_next_action_js("state/sizings/x.yaml")
+    assert f"next_action: {expr} }} : {fallback}" in script
 
 
 def test_return_object_carries_owed_next_action(monkeypatch):

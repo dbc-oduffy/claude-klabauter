@@ -151,4 +151,7 @@ def test_a_closed_run_does_not_resume_again(halted, monkeypatch):
 
     later = gate(halted, SIZING)
 
-    assert later.arm is None and "already ran" in later.halt["reason"]
+    # The closing commit ships the sizing (`sizing.ship`), and a shipped sizing is held by the status gate in
+    # `sizing_fire.collect_fire_refusals`; the closed-plan "already ran" refusal is pinned by test_ask_gate_resume.py.
+    assert later.arm is None and later.resume_ledger is None
+    assert later.halt["kind"] == "refusal" and "'shipped'" in later.halt["reason"]

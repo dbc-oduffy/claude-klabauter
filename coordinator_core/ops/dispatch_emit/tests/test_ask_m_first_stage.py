@@ -85,7 +85,14 @@ def test_every_agent_in_the_emitted_script_is_reached_by_the_brief(
     outside = script.replace(blitz, "")
     prompts = _agent_prompts(outside)
     assert len(prompts) >= 9
-    assert [p for p in prompts if EM_BRIEF_VAR not in p] == []
+    # The execute rows' prompt is built once in `_rowPrompt`, and `_groupPrompt` concatenates it per member, so
+    # the call sites name a builder, not the brief; the brief must ride each builder's definition.
+    row_prompt_def = re.search(r"const _rowPrompt = \(r\) => (.*?);\n", outside, re.S)
+    assert row_prompt_def and EM_BRIEF_VAR in row_prompt_def.group(1)
+    group_prompt_def = re.search(r"function _groupPrompt\(g\) \{(.*?)\n  \}", outside, re.S)
+    assert group_prompt_def and "_rowPrompt(m)" in group_prompt_def.group(1)
+    via_builder = {"_rowPrompt(r)", "_groupPrompt(r.group)"}
+    assert [p for p in prompts if EM_BRIEF_VAR not in p and p.strip().rstrip("{").strip().rstrip(",") not in via_builder] == []
     assert _agent_prompts(blitz.split("\n", 2)[2])  # plan-blitz agents exist and ride the shadow
 
 

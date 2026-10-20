@@ -203,7 +203,7 @@ def _emitted_run_record_argv(cwd, *, record: str, declared: list, decisions: str
         if last:
             argv = ran.stdout.split("\0")[:-1]
     assert argv[0] == "grind-row"
-    assert not list(cwd.glob("scratch/run-record-*")), "the final command removes its piece files"
+    assert "rm -f" not in block, "the chained command carries no removal; the guard denies the whole command"
     return argv[1:]
 
 

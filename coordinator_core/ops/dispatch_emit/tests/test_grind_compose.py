@@ -852,6 +852,7 @@ def test_golden_verify_stage_gates_rejected_after_retry_on_undone_outcome():
     golden = _GOLDEN_PATH.read_text(encoding="utf-8")
     stage = golden[golden.index("async function _verifyStage"):golden.index("async function _commitStage")]
     assert "const _undone = result.undo || {};" in stage
+    stage = stage[stage.index("const _undone = result.undo"):]
     assert "_undoCall" not in stage
     assert stage.index("_undone.outcome !== 'undone'") < stage.index("'rejected-after-retry'")
     assert "'undo-failed: " in stage

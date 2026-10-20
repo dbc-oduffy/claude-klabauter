@@ -331,7 +331,8 @@ def test_an_l_run_with_a_passing_ledger_but_null_delivery_does_not_close(repo):
     _size_l(repo)
     out = _call(repo, inline_review={**_REVIEWED, "delivery": None, "criterion": None})
     assert out["committed"] is True and out.get("plan_status") != "implemented", out
-    assert {"review", "completion-entry"} <= set(out["close"]["outstanding"])
+    assert "review" in out["close"]["outstanding"]
+    assert out["close"]["legs"]["completion-entry"]["status"] == "ran"
 
 
 def test_an_l_run_with_a_failing_ledger_is_refused_though_delivery_passes(repo):
@@ -401,7 +402,10 @@ def test_ask_run_spawn_count_is_pinned(repo, monkeypatch):
     seen = _spawns(monkeypatch)
     out = _call(repo)
     assert out["committed"] is True, out
-    assert len(seen) == 2
+    # Measured on 97f227107b: 2 (the `git status` worktree snapshot + the detached close_background job).
+    # 3b70da1c39 answers the snapshot in-process (scoped_worktree_status), leaving the one detached job.
+    assert len(seen) == 1, seen
+    assert "close_background.py" in " ".join(map(str, seen[0])), seen
 
 
 def test_a_record_dir_run_commits_its_record_files_with_the_run(repo, monkeypatch):
@@ -443,7 +447,7 @@ def _composed_digest(ledger_js: str) -> dict:
     stop = script.index("};", stop) + 2
     stubs = (
         "const _manifest={plan_id:'p'}, _incompleteChunks=[], _notStarted=[], _planHeld={}, _verifications=[], "
-        "_reviewIntegration={fixes_applied:0,sidecar_path:'x'}, _reviewPrep={slices:[1]}, _reviewWave=[], "
+        "_reviewIntegration={fixes_applied:0,sidecar_path:'x'}, _reviewReverify=null, _reviewPrep={slices:[1]}, _reviewWave=[], "
         "_deliveryVerdict=null, _deliveryNotRun=null, _waveNotRun=[], _haltCommit=null, _commitHaltRecord=async () => null, _testResult=null, _halted=null, _splitExit=null, _viaRoadmap=false, _RUN_TOKEN=null, "
         "_sizingRel='s', _planRel=null, _resumeLedger=false, REPO_ROOT='/r', _gate={arm:'xs'}, _runId='r', _heldBy=[], _unansweredBriefs=[], "
         f"_stoppedBy=[], _blockedChunks=[], _docs=null, _commit=null; let _nextAction=null; const _ledger={ledger_js};\n"
@@ -456,8 +460,8 @@ def _composed_digest(ledger_js: str) -> dict:
 
 
 def _printed_params(digest: dict) -> dict:
-    cli = digest["terminal_commit_cli"]
-    return json.loads(cli.split("\n")[1])
+    assert digest["terminal_commit_cli"].startswith("coordinator-invoke dispatch.terminal_commit --from-task-output ")
+    return digest["next_action"]["params"]
 
 
 def test_the_printed_terminal_commit_params_carry_the_ledger_verdict_top_level(repo):

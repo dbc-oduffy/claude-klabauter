@@ -125,9 +125,9 @@ def _landing_root(span: str) -> Path | None:
 def _js_string_value(expr: str, repo_root: str, slug: str = "x") -> str:
     out = []
     for token in (t.strip() for t in expr.split(" + ")):
-        if token.startswith("'") and token.endswith("'"):
+        if len(token) >= 2 and token[0] == token[-1] and token[0] in "'\"":
             out.append(token[1:-1])
-        elif token == "_slug":
+        elif token in ("_slug", "_slugOf(r)"):
             out.append(slug)
         elif token == "REPO_ROOT":
             out.append(repo_root)
@@ -140,12 +140,19 @@ def test_b1_the_sizing_is_written_and_read_in_the_same_repo(world):
     """The size phase writes the sizing with a repo-relative `--write`, which lands in the cwd repo;
     the gate and every later phase read it from the run's root."""
     script = _compose(world.target)
-    expr = re.search(r"const _sizingPath = (.+);\n", script).group(1)
+    expr = re.search(r"const _sizingPathFor = \(r\) => (.+);\n", script).group(1)
     sizing = _js_string_value(expr, world.target.as_posix())
     scout = next(ln for ln in script.splitlines() if "const _scouted" in ln)
     write_root = _landing_root(scout)
     written = Path(sizing) if Path(sizing).is_absolute() else write_root / sizing
     assert _enclosing_repo(written.parent) == world.target.resolve(), f"sizing written at {written}"
+    # The read-side expression above is injected with the target as root, so it cannot show where the
+    # scout's own `--write` lands; pin that argument in the composed prompt.
+    template_writes = re.findall(r"--write \\'([^']+?)\\'", scout)
+    assert template_writes, "the scout prompt names no --write argument"
+    for arg in template_writes:
+        landed = Path(arg) if Path(arg).is_absolute() else write_root / arg
+        assert _enclosing_repo(landed.parent) == world.target.resolve(), f"scout --write {arg!r} lands at {landed}"
     assert "dispatch.ask_gate" in scout
     assert _landing_root(scout) == world.target.resolve()
 

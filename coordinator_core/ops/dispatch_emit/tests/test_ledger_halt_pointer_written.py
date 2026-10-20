@@ -105,9 +105,12 @@ def test_spawn_count_matches_a_halt_without_a_plan(repo, monkeypatch):
         return real(*a, **k)
 
     monkeypatch.setattr(subprocess, "Popen", spy)
-    _call(repo, **{HALTED_RECORD_PARAM: {"halted": "ledger-check", "items": [{"id": "R1"}]}})
+    first = _call(repo, **{HALTED_RECORD_PARAM: {"halted": "ledger-check", "items": [{"id": "R1"}]}})
+    assert first["committed"] is True, first
+    # The halt commit is the zero-spawn in-process writer (commit_v2 / DR-344 brightline), so the planless
+    # baseline is 0 by design. The pin is that writing the pointer adds no spawn over it; the liveness
+    # probe below keeps the equality from passing vacuously on a dead spy.
     without_plan = count["n"]
-    assert without_plan > 0
 
     _git(["reset", "-q", "--hard", "HEAD~1"], repo)
     _with_sizing(repo)
@@ -115,3 +118,5 @@ def test_spawn_count_matches_a_halt_without_a_plan(repo, monkeypatch):
     _call(repo, **{HALTED_RECORD_PARAM: LEDGER_HALT})
     assert read_ledger_halt(ledger_halt_path(repo, PLAN)) is not None
     assert count["n"] == without_plan
+    _git(["--version"], repo)
+    assert count["n"] == without_plan + 1, "spawn spy is not counting"

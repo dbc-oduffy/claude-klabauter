@@ -51,7 +51,8 @@ def test_a_raw_ask_with_a_preference_writes_the_record_file_and_renders_the_bloc
     saved = json.loads(_pref_file(repo, result).read_text(encoding="utf-8"))
     assert saved == {"route_preference": "roadmap", "em_rationale": WHY}
     assert HEADING in script and "roadmap" in script and WHY in script
-    assert script.index(HEADING) < script.index("Ask:")
+    # `_emit` passes no ask_source, and a raw ask defaults to relayed, so the ask text follows "Relayed ask (".
+    assert script.index(HEADING) < script.index("Relayed ask (")
 
 
 def test_each_key_is_independently_optional(repo):

@@ -659,7 +659,7 @@ _AUTO_DISCHARGE_ACTION = "auto-discharged: this guard fires at most once per ses
 _FIRED_MARKER_FILENAME = "guard-manufactured-blocker-fired.json"
 
 
-def _fired_marker_path(payload: Mapping) -> "Optional[str]":
+def _fired_marker_path(payload: Mapping, filename: str = _FIRED_MARKER_FILENAME) -> "Optional[str]":
     """Per-session has-fired sentinel path, mirroring
     `em_report_altitude._tally_path`'s shape (git-common-dir
     `coordinator-sessions/<session>/`, not `state/`, so this stays session
@@ -677,11 +677,11 @@ def _fired_marker_path(payload: Mapping) -> "Optional[str]":
     git_dir = _resolve_git_dir(os.path.join(repo_root, ".git"))
     if not git_dir:
         return None
-    return os.path.join(git_dir, "coordinator-sessions", safe_session, _FIRED_MARKER_FILENAME)
+    return os.path.join(git_dir, "coordinator-sessions", safe_session, filename)
 
 
-def _has_fired_this_session(payload: Mapping) -> bool:
-    path = _fired_marker_path(payload)
+def _has_fired_this_session(payload: Mapping, filename: str = _FIRED_MARKER_FILENAME) -> bool:
+    path = _fired_marker_path(payload, filename)
     if not path:
         return False
     try:
@@ -690,8 +690,8 @@ def _has_fired_this_session(payload: Mapping) -> bool:
         return False
 
 
-def _mark_fired_this_session(payload: Mapping) -> None:
-    path = _fired_marker_path(payload)
+def _mark_fired_this_session(payload: Mapping, filename: str = _FIRED_MARKER_FILENAME) -> None:
+    path = _fired_marker_path(payload, filename)
     if not path:
         return
     try:

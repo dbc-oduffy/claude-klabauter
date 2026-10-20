@@ -64,8 +64,19 @@ def test_gated_row_brief_reads_the_baseline_at_runtime():
     assert "second line of the reply" in script
 
 
-def test_ungated_row_reply_contract_has_no_gate_owed_line():
+def test_ungated_row_with_plan_context_still_carries_the_gate_owed_reply_line():
+    # A plan-context row owes the reply line even with no gate command: the
+    # line is keyed on plan_context presence, not on a resolved gate.
     script = _compose([_row("A", "a.py")])
+    assert "second line of the reply" in script
+
+
+def test_ungated_row_without_plan_context_has_no_gate_owed_line():
+    script = compose_script(
+        [[_row("A", "a.py")]], name="wf", description="d",
+        plan_path=Path(record_path(".", "mise-inventory", "x.spine.md")).as_posix(),
+        predispatch=True, review_specs=[], plan_context=None, **REVIEW_KW,
+    )
     assert "second line of the reply" not in script
 
 

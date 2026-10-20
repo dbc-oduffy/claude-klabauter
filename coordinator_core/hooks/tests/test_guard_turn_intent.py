@@ -251,3 +251,64 @@ def test_flat_payload_shape_is_read(tmp_path):
 @pytest.mark.parametrize("value,expected", [("1", True), ("TRUE", True), (" true ", True), ("0", False), ("", False)])
 def test_under_cockpit_values(value, expected):
     assert under_cockpit({"COORDINATOR_COCKPIT": value}) is expected
+
+
+# --- go-ask tail advisory (Group EM live) ---------------------------------
+
+GO_ASK = "Everything is fixed and verified. Should I go ahead and ship it?"
+
+
+def _heartbeat(root: Path, *, age_s: float = 60, holder: str = "gem-1"):
+    from datetime import datetime, timedelta, timezone
+
+    ticked = datetime.now(timezone.utc) - timedelta(seconds=age_s)
+    path = root / "state" / "group-em-watch.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps({"holder_session_id": holder, "last_tick_at": ticked.isoformat()}),
+        encoding="utf-8",
+    )
+
+
+def _advisory(result: dict) -> str:
+    return result.get("hookSpecificOutput", {}).get("additionalContext", "")
+
+
+def test_go_ask_advisory_fires_when_group_em_live(tmp_path):
+    root, _g, _s, _d, payload = _seed(tmp_path, GO_ASK, role=False)
+    _heartbeat(root)
+    result = _run({**payload, "last_assistant_message": GO_ASK})
+    assert "asking for a go" in _advisory(result)
+    assert "decision" not in result
+
+
+@pytest.mark.parametrize("age_s", [16 * 60, None])
+def test_go_ask_silent_when_heartbeat_stale_or_missing(tmp_path, age_s):
+    root, _g, _s, _d, payload = _seed(tmp_path, GO_ASK, role=False)
+    if age_s is not None:
+        _heartbeat(root, age_s=age_s)
+    assert _run({**payload, "last_assistant_message": GO_ASK}) == {}
+
+
+def test_go_ask_silent_when_pattern_outside_tail(tmp_path):
+    text = "Should I go ahead and ship it? One. Two. Three, all done."
+    root, _g, _s, _d, payload = _seed(tmp_path, text, role=False)
+    _heartbeat(root)
+    assert _run({**payload, "last_assistant_message": text}) == {}
+
+
+def test_go_ask_advisory_once_per_session(tmp_path):
+    root, _g, _s, _d, payload = _seed(tmp_path, GO_ASK, role=False)
+    _heartbeat(root)
+    payload = {**payload, "last_assistant_message": GO_ASK}
+    assert _advisory(_run(payload))
+    assert _run(payload) == {}
+
+
+def test_block_takes_precedence_over_go_ask_advisory(tmp_path, monkeypatch):
+    monkeypatch.setattr(gti, "under_cockpit", lambda: True)
+    root, _g, _s, _d, payload = _seed(tmp_path, GO_ASK)
+    _heartbeat(root)
+    result = _run({**payload, "last_assistant_message": GO_ASK})
+    assert _blocked(result)
+    assert not _advisory(result)
