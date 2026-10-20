@@ -601,6 +601,19 @@ def _parked_line(
     )
 
 
+_PARK_SIG_RE = re.compile(r'waiting_on="(.*?)" next="(.*?)" at=')
+
+
+def _park_signature(line: str) -> Optional[str]:
+    """`waiting_on` + `next` of a composed PARKED/WAITING line, or None.
+
+    Read off the composed line so the signature can never drift from what the
+    reader was shown.
+    """
+    m = _PARK_SIG_RE.search(line)
+    return f"{m.group(1)}|{m.group(2)}" if m else None
+
+
 def _displacement_line(record: dict, now: datetime) -> str:
     """One DISPLACED line: a successor took this repo's watch record.
 
@@ -795,6 +808,13 @@ def poll_once(
         sid: {"name": agents_by_id.get(sid, {}).get("name"), "last_seen": now_epoch}
         for sid in cur_parked
     }
+    # A re-park on an unchanged waiting_on+next is a handled park, not news. The
+    # last EMITTED signature rides in peer_notes across unparked ticks so a park
+    # cycle on the same wait stays quiet; any change re-emits.
+    for sid in peer_notes:
+        prior_sig = ((prev_names or {}).get(sid) or {}).get("parked_sig")
+        if isinstance(prior_sig, str):
+            peer_notes[sid]["parked_sig"] = prior_sig
 
     watched_repo = (
         "the box"
@@ -833,6 +853,14 @@ def poll_once(
             now,
             name=peer.get("name"),
         )
+        sig = _park_signature(line)
+        if sig is not None and sig == peer_notes.get(session_id, {}).get("parked_sig"):
+            declinations.append(
+                _declination(session_id, "unchanged-park", "same-waiting_on-and-next")
+            )
+            continue
+        if sig is not None and session_id in peer_notes:
+            peer_notes[session_id]["parked_sig"] = sig
         emit(line)
 
     transitioned_set = set(transitioned)

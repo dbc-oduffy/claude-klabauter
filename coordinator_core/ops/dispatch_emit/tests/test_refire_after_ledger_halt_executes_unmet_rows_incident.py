@@ -106,7 +106,7 @@ def test_the_refire_gate_carries_the_halt_sha_the_owed_work_and_the_revise_note(
 def test_the_composed_resume_script_runs_a_remaining_work_leg_before_the_verify(monkeypatch):
     script = _script(monkeypatch)
     leg = script.index("label: 'ledger-remaining'")
-    assert script.index("if (_resumeLedger && !_ledgerExec && (_gate.resume_ledger.blocking ?? []).length) {") < leg
+    assert script.index("if (_resumeLedger && !_ledgerExec && ((_gate.resume_ledger.blocking ?? []).length || _reviseNoted)) {") < leg
     assert leg < script.index("label: 'verify'")
     prompt = script[leg - 2200 : leg]
     assert "_gate.resume_ledger.remaining ?? {}" in prompt and "_gate.resume_ledger.revise_notes ?? []" in prompt
@@ -185,7 +185,7 @@ def test_unlanded_composed_script_sets_ledger_exec_ahead_of_the_execute_phase(re
     assert "_ledgerUnlanded.length" in script[:guard]
     # The remaining-work leg is the fallback for a resume with nothing unlanded, never the unlanded path.
     leg = script.index("label: 'ledger-remaining'")
-    gate_if = script.index("if (_resumeLedger && !_ledgerExec && (_gate.resume_ledger.blocking ?? []).length) {")
+    gate_if = script.index("if (_resumeLedger && !_ledgerExec && ((_gate.resume_ledger.blocking ?? []).length || _reviseNoted)) {")
     assert gate_if < leg and script.index("_ledgerExec = true", field) < gate_if
 
 

@@ -433,6 +433,11 @@ def _land(
     )
     held = {p for p, _sid in holds}
     withheld.update({p: "peer-held" for p in sorted(held)})
+    peer_held_by: dict = {}
+    if holds:
+        from coordinator_core.ops.dispatch_emit import peer_claim_contract
+
+        peer_held_by = {"peer_held_by": peer_claim_contract.group(holds)}
     # Warning text is commit_v2._peer_claim_warnings' contract: "claim state indeterminate (<exc>)" or "... for '<path>'".
     indeterminate = [w for w in warnings if w.startswith("claim state indeterminate")]
     if indeterminate:
@@ -530,7 +535,7 @@ def _land(
         _settle_ledger_pointer(repo_root, run_id, halted, sizing_rel, outcome_rel)
         return {
             "committed": False, "sha": None, "nothing_to_commit": True,
-            **({"withheld": withheld} if withheld else {}),
+            **({"withheld": withheld} if withheld else {}), **peer_held_by,
             **({"targeted_tests": targeted} if targeted is not None else {}), **review_reply, **base,
         }
 
@@ -564,7 +569,7 @@ def _land(
         return _error("ceremony.commit_v2 is not registered", **base)
     if not isinstance(reply, dict):
         return _error(f"unexpected commit_v2 reply: {reply!r}", **base)
-    extra: dict = dict(review_reply)
+    extra: dict = {**review_reply, **peer_held_by}
     if not reply.get("error"):
         _settle_ledger_pointer(repo_root, run_id, halted, sizing_rel, outcome_rel)
         left = run_artifacts.residue(

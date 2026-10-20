@@ -49,15 +49,15 @@ def test_manifest_error_quoting_the_prefix_mid_text_is_not_a_design_review_halt(
     assert "String(_manifest.error).includes(\"design-review:\")" not in script
 
 
-def test_ready_op_error_carrying_the_prefix_becomes_a_stage_refusal():
+def test_any_ready_op_error_but_the_did_not_run_sentinel_becomes_a_stage_refusal():
     script = _compose(prompt=None, sizing_rel="state/sizings/s.yaml")
     assert "_adoptReadyError(_ready)" in script and "_adoptReadyError(_reready)" in script
-    assert "String(e.readyOpError ?? '').includes(\"design-review:\")" in script
+    assert "_re !== '' && !/did not run/.test(_re)) _stageRefusal = _re;" in script
 
 
 def test_ready_error_adoption_never_overrides_a_staged_manifest_or_prior_refusal():
     script = _compose(prompt=None, sizing_rel="state/sizings/s.yaml")
-    assert "if (!_stagedManifest && !_stageRefusal && String(e.readyOpError" in script
+    assert "if (!_stagedManifest && !_stageRefusal && _re !== ''" in script
 
 
 def test_in_run_next_action_is_built_from_sizing_rel_and_agrees_with_the_python_text():

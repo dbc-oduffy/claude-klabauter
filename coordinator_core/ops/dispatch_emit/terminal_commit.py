@@ -2066,14 +2066,14 @@ def _own_prefix_files(worktree_root: Path, chunk, report_cache: dict) -> Optiona
 
 def _expanded_prefix_files(
     worktree_root: Path, chunk, snapshot: Optional["_Snapshot"], session_id: Optional[str],
-    touched: frozenset,
+    touched: frozenset, *, left_out: Optional[dict] = None,
 ) -> list:
     """Existing changed files under ``chunk``'s own ``writes_under`` prefixes that ``touched``
     (this run's own touched set) names and no live peer contests, read from the pre-commit
     ``snapshot`` (no git spawn). Empty with no snapshot, no session id or no prefixes. Admission
     is the run's touched set, never a session claim: a sibling run's file under a shared prefix
     is not staged and surfaces in ``undeclared_dirty``. ``session_id`` only keys the live-peer
-    contest."""
+    contest. ``left_out``, when given, receives the ``{path: [sid]}`` it dropped as contested."""
     if snapshot is None or not session_id or not chunk.prefixes:
         return []
     found = sorted(
@@ -2089,6 +2089,8 @@ def _expanded_prefix_files(
     contested = session_scope.contested_by_live_peers(found, session_id, cwd=root_str)
     if contested is None:
         return []
+    if left_out is not None:
+        left_out.update({p: list(contested[p]) for p in found if p in contested})
     return [p for p in found if p not in contested]
 
 
@@ -2758,6 +2760,7 @@ def _undeclared_dirty(
 def _run_owned_dirt(
     worktree_root: Path, request: CommitRequest, snapshot: Optional[_Snapshot],
     session_id: Optional[str], all_paths: list, deleted_paths: list, touched: frozenset,
+    *, left_out: Optional[dict] = None,
 ) -> tuple:
     """``(files, deletions)`` beside the run's declared writes (``_in_scope``) that join the one
     commit_v2 call, read from the pre-commit snapshot; both empty with no snapshot or session id.
@@ -2768,7 +2771,8 @@ def _run_owned_dirt(
     yields none (these are not declared deletions, so unknown never means tracked).
     Admission is the run's touched set, never a session claim: a sibling run's dirt in a shared
     directory is not staged and surfaces in ``undeclared_dirty``. ``session_id`` only keys the
-    live-peer contest."""
+    live-peer contest. ``left_out``, when given, receives the ``{path: [sid]}`` it dropped as
+    contested."""
     if snapshot is None or not session_id:
         return [], []
     taken = set(all_paths) | set(deleted_paths)
@@ -2788,6 +2792,8 @@ def _run_owned_dirt(
     contested = session_scope.contested_by_live_peers(candidates, session_id, cwd=root_str)
     if contested is None:
         return [], []
+    if left_out is not None:
+        left_out.update({p: list(contested[p]) for p in candidates if p in contested})
     files = [p for p in present if p in owned and p not in contested]
     gone_ok = [p for p in gone if (p in owned or p in declared) and p not in contested]
     deletions: list = []
@@ -3851,6 +3857,10 @@ def _handler_body(params: dict, repo_root: Optional[Path] = None) -> dict:
         reply["blockers"] = blockers
     if regraded:
         reply["regraded"] = regraded
+    if scope.get("peer_held_left"):
+        from coordinator_core.ops.dispatch_emit import peer_claim_contract
+
+        reply["peer_held_left"] = peer_claim_contract.left_out(scope["peer_held_left"])
     if scope:
         if scope.get("run_owned") is not None:
             reply["run_owned"] = scope["run_owned"]
@@ -4611,10 +4621,11 @@ def _terminal_commit_inner(
         request, inline_review, artifacts.paths() if artifacts is not None else ()
     )
 
+    left_out_map: dict = {}
     for chunk in done_chunks:
         own_prefix_files = _with_expansion(
             _own_prefix_files(worktree_root, chunk, report_cache),
-            _expanded_prefix_files(worktree_root, chunk, snapshot, session_id, touched),
+            _expanded_prefix_files(worktree_root, chunk, snapshot, session_id, touched, left_out=left_out_map),
         )
         if own_prefix_files is None:
             return _error(
@@ -4632,7 +4643,7 @@ def _terminal_commit_inner(
     for chunk in partial_chunks:
         own_prefix_files = _with_expansion(
             _own_prefix_files(worktree_root, chunk, report_cache),
-            _expanded_prefix_files(worktree_root, chunk, snapshot, session_id, touched),
+            _expanded_prefix_files(worktree_root, chunk, snapshot, session_id, touched, left_out=left_out_map),
         ) or []
         own_prefix_files = _bar_stranded(own_prefix_files)
         all_paths.extend(list(chunk.paths) + own_prefix_files)
@@ -4730,7 +4741,10 @@ def _terminal_commit_inner(
 
     run_owned, owned_deletions = _run_owned_dirt(
         worktree_root, request, snapshot, session_id, all_paths, deleted_paths, touched,
+        left_out=left_out_map,
     )
+    if left_out_map:
+        scope["peer_held_left"] = left_out_map
     run_owned = _bar_stranded(run_owned)
     owned_deletions = _bar_stranded(list(owned_deletions))
     all_paths.extend(run_owned)
@@ -4862,17 +4876,12 @@ def _terminal_commit_inner(
                 peer_holds.append((path, sid))
                 seen.add((path, sid))
     if peer_holds:
-        sids = sorted({sid for _p, sid in peer_holds})
-        return _error(
-            "live peer session(s) " + ", ".join(sids) + " hold write claims on path(s) this "
-            "commit would carry: " + ", ".join(sorted({p for p, _s in peer_holds})) + ". "
-            "Wait for the peer to finish, or have it commit them, then re-fire. The holder frees a "
-            "run declaration with workflow.revise withhold_paths, and a touch claim with "
-            "`session-claim-cli release-artifact artifact <path>`. Or leave them out: "
-            + _WITHHOLD_REMEDY.format(run_id=_run_id_of(params, ask_run_dir, script_path_raw)),
-            refused="peer-claim",
-            peer_claims=[{"path": p, "session": s} for p, s in peer_holds],
+        from coordinator_core.ops.dispatch_emit import peer_claim_contract
+
+        message, fields = peer_claim_contract.refusal(
+            peer_holds, _run_id_of(params, ask_run_dir, script_path_raw)
         )
+        return _error(message, refused="peer-claim", **fields)
     final_paths_set = set(all_paths)
 
     def contributes(c) -> bool:

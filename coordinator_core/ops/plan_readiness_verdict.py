@@ -54,6 +54,7 @@ from coordinator_core.ipc import register_op
 from coordinator_core.ops._param_alias import aliased_param, spellings
 from coordinator_core.ops.plan_prep_gate import _handler as _prep_gate_handler
 from coordinator_core.ops.review_findings_ledger import read_ledger
+from coordinator_core.roadmap.prep_gate import ZERO_DISPATCHABLE_KIND
 
 GENERATES: list = []
 
@@ -236,7 +237,10 @@ def readiness_verdict(
         if cls.get("mechanical") and cls.get("repair"):
             repairs.append(_repair(str(cls.get("kind") or name), name, cls["repair"]))
         else:
-            substantive.append(f"{name}:{cls.get('kind') or cls.get('status')}")
+            entry = f"{name}:{cls.get('kind') or cls.get('status')}"
+            if cls.get("kind") == ZERO_DISPATCHABLE_KIND:
+                entry += f" ({cls.get('detail')})"
+            substantive.append(entry)
 
     if coverage is not None:
         mechanical = _findings(coverage.get("mechanicalFindings"), "mechanicalFindings")

@@ -139,6 +139,49 @@ _LIVENESS_GATED_PROFILES = frozenset({"bug"})
 
 
 @dataclass(frozen=True)
+class RowSchemaGate:
+    """The profile's row schema and the fields `grind-row close` stamps itself.
+
+    A row that fails this schema on any OTHER field can never pass `grind-row close`'s
+    post-stamp validation, so admission declines it up front with the reason instead of
+    letting the grind spend triage, refute and close calls on it."""
+
+    schema: Mapping[str, Any]
+    closure_fields: frozenset
+
+
+def load_row_schema_gate(profile_obj: Any, repo_root: Path) -> Optional[RowSchemaGate]:
+    """The gate for a loaded profile, or None when its schema file does not resolve
+    (`grind-row close` refuses that case loudly on its own)."""
+    from coordinator_core.backlog_grind_assemble.grind_rows import _resolve_schema_path
+
+    schema_path = _resolve_schema_path(profile_obj.schema, Path(repo_root))
+    if not schema_path.is_file():
+        return None
+    closure = profile_obj.closure
+    return RowSchemaGate(
+        schema=json.loads(schema_path.read_text(encoding="utf-8")),
+        closure_fields=frozenset({closure.status_field, *closure.stamp_fields}),
+    )
+
+
+def _row_schema_decline_reason(parsed: Mapping[str, Any], gate: RowSchemaGate) -> Optional[str]:
+    result = schema_validate.validate_frontmatter_obj(dict(parsed), dict(gate.schema))
+    if isinstance(result, dict) and result.get("ok"):
+        return None
+    errors = [
+        e for e in (result.get("errors") or [] if isinstance(result, dict) else [])
+        if not (isinstance(e, dict) and e.get("field") in gate.closure_fields)
+    ]
+    if not errors and isinstance(result, dict) and result.get("errors"):
+        return None
+    detail = "; ".join(
+        f"{e.get('field')}: {e.get('error')}" if isinstance(e, dict) else str(e) for e in errors
+    ) or "schema validation failed"
+    return f"admission: row fails its schema and cannot be closed ({detail})"
+
+
+@dataclass(frozen=True)
 class ManifestEntry:
     """One frozen row: `{row_id, path, digest, batch_key}` plus fold-in state.
 
@@ -614,6 +657,7 @@ def select_rows(
     absent_sentinels: Optional[Mapping[str, Sequence[Any]]] = None,
     source_row_dir: Optional[Path] = None,
     claimant_sid: Optional[str] = None,
+    row_schema_gate: Optional[RowSchemaGate] = None,
 ) -> Manifest:
     """Turn one or more queue directories into a frozen `Manifest`.
 
@@ -643,6 +687,8 @@ def select_rows(
     A row another session holds a live row claim on (`claims.row_claim_blocker`)
     is dropped after `where`/`order` and before `limit`, and listed in
     `Manifest.claimed`; `claimant_sid=None` treats every live claim as blocking.
+    `row_schema_gate`, when given, declines (reason named, never raised) a row whose
+    fields fail the profile schema outside the closure-stamped fields.
     """
     absent_sentinels = absent_sentinels or {}
     repo_root = Path(repo_root)
@@ -791,6 +837,14 @@ def select_rows(
                         ),
                     )
                 )
+                continue
+        if row_schema_gate is not None:
+            # The raw row: sentinel normalisation must not make a present field look missing.
+            malformed = _row_schema_decline_reason(
+                schema_validate.parse_yaml(row_path.read_text(encoding="utf-8")), row_schema_gate
+            )
+            if malformed is not None:
+                declined.append(DeclinedEntry(row_id=row_id, path=rel_path, reason=malformed))
                 continue
         skip_stages, declined_reason = _fold_in_ledger(row_id, digest, ledger_by_row)
         if declined_reason is not None:

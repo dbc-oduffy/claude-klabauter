@@ -53,8 +53,11 @@ def _stale(directory: Path, keep: set, pattern: str) -> list:
     return sorted(p for p in directory.glob(pattern) if p.is_file() and p not in keep)
 
 
-def write_record(lifted: model.Lifted, out_dir, now: datetime) -> model.RecordWrite:
-    """Write frames, threads, threads.rendered.txt and harvest.json under `out_dir`; return what was written and removed."""
+def write_record(lifted: model.Lifted, out_dir, now: datetime, *, account: str | None = None) -> model.RecordWrite:
+    """Write frames, threads, threads.rendered.txt and harvest.json under `out_dir`; return what was written and removed.
+
+    `account` is the login the harvest ran under; harvest.json records it as `harvest.account` (null when None).
+    """
     out_dir = Path(out_dir)
     read = lifted.artifact_read
     if read is None:
@@ -102,6 +105,7 @@ def write_record(lifted: model.Lifted, out_dir, now: datetime) -> model.RecordWr
         },
         "harvest": {
             "harvested_at": model.utc_string(now),
+            "account": account,
             "version": read.version,
             "thread_ids": ids,
             "latest_comment_at": model.latest_comment_at(threads),

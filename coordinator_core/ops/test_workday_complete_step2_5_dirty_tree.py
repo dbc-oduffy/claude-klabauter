@@ -836,3 +836,33 @@ def test_golden_fixture_parity(tmp_path, capsys, scenario):
     assert other_token not in port_out, (
         f"unexpected verdict-line for {scenario}: {other_token!r} present in port_out={port_out!r}"
     )
+
+
+def test_workday_start_marker_is_ceremony_owned_not_ambiguous(tmp_path, capsys):
+    repo = _make_repo(tmp_path)
+    (repo / "state").mkdir()
+    (repo / "state" / ".workday-start-marker").write_text("2026-10-20")
+    rc, out, err = _run_port(repo, [], capsys)
+    assert rc == 0
+    assert "ambiguous" not in out + err
+
+
+def test_adopt_ambiguous_commits_only_ambiguous_paths(tmp_path):
+    from coordinator_core.ops.workday_complete_step2_5_dirty_tree import adopt_ambiguous
+
+    repo = _make_repo(tmp_path)
+    (repo / "scratchy").mkdir()
+    (repo / "scratchy" / "a.txt").write_text("a")
+    (repo / "bin").mkdir()
+    (repo / "bin" / "tool").write_text("src")
+    before = _rev_count(repo)
+    rc, text = adopt_ambiguous(str(repo))
+    assert rc == 0 and "1 paths" in text
+    assert _rev_count(repo) == before + 1
+    status = subprocess.run(
+        ["git", "status", "--porcelain", "--untracked-files=all"], cwd=repo,
+        capture_output=True, text=True, check=True, **no_console_creationflags(),
+    ).stdout
+    assert "bin/tool" in status and "scratchy" not in status
+    assert adopt_ambiguous(str(repo))[0] == 0
+    assert _rev_count(repo) == before + 1

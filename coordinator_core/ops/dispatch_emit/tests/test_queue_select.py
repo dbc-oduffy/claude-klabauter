@@ -577,3 +577,57 @@ def test_claimed_is_not_in_the_digest(claim_env):
     without_row = claim_env.select(claimant_sid="sid-b")
     assert with_claim.claimed and not without_row.claimed
     assert with_claim.digest == without_row.digest
+
+
+def _lesson_gate():
+    from coordinator_core.ops.dispatch_emit.queue_select import RowSchemaGate
+    import coordinator_core.frontmatter.schema_validate as sv
+
+    path = Path(sv.__file__).resolve().parent / "schemas" / "lesson-entry.schema.json"
+    return RowSchemaGate(
+        schema=json.loads(path.read_text(encoding="utf-8")),
+        closure_fields=frozenset({"status", "closed_at", "closed_by"}),
+    )
+
+
+def test_admission_declines_a_row_that_fails_its_schema_with_the_reason(tmp_path):
+    queue_dir = tmp_path / "state" / "lessons"
+    queue_dir.mkdir(parents=True)
+    good = dict(created="2026-09-21", title="t", body="b", status="open", scope="project", from_repo="x")
+    _write_row(queue_dir / "good.yaml", **good)
+    _write_row(queue_dir / "bad.yaml", **{k: v for k, v in good.items() if k not in ("scope", "from_repo")})
+    manifest = _select(queue=[queue_dir], repo_root=tmp_path, row_schema_gate=_lesson_gate())
+    assert [e.row_id for e in manifest.entries] == ["good"]
+    (declined,) = manifest.declined
+    assert declined.row_id == "bad"
+    assert declined.reason.startswith("admission:") and "scope" in declined.reason and "from_repo" in declined.reason
+
+
+def test_admission_ignores_schema_errors_on_fields_close_stamps(tmp_path):
+    queue_dir = tmp_path / "state" / "lessons"
+    queue_dir.mkdir(parents=True)
+    row = dict(created="2026-09-21", title="t", body="b", scope="project", from_repo="x")
+    _write_row(queue_dir / "nostatus.yaml", **row)  # `status` is stamped by close, so its absence is not malformed
+    manifest = _select(queue=[queue_dir], repo_root=tmp_path, row_schema_gate=_lesson_gate())
+    assert [e.row_id for e in manifest.entries] == ["nostatus"] and manifest.declined == ()
+
+
+def test_admission_without_a_gate_keeps_malformed_rows(tmp_path):
+    queue_dir = tmp_path / "state" / "lessons"
+    queue_dir.mkdir(parents=True)
+    _write_row(queue_dir / "bad.yaml", created="2026-09-21", title="t", body="b", status="open")
+    assert [e.row_id for e in _select(queue=[queue_dir], repo_root=tmp_path).entries] == ["bad"]
+
+
+def test_load_row_schema_gate_reads_the_profile_schema_and_closure_fields(tmp_path):
+    from types import SimpleNamespace
+
+    from coordinator_core.ops.dispatch_emit.queue_select import load_row_schema_gate
+
+    profile = SimpleNamespace(
+        schema="lesson-entry.schema.json",
+        closure=SimpleNamespace(status_field="status", stamp_fields=("closed_at", "closed_by")),
+    )
+    gate = load_row_schema_gate(profile, tmp_path)
+    assert gate.closure_fields == {"status", "closed_at", "closed_by"} and "scope" in gate.schema["required"]
+    assert load_row_schema_gate(SimpleNamespace(schema="nope.schema.json", closure=profile.closure), tmp_path) is None

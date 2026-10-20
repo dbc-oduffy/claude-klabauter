@@ -408,6 +408,10 @@ def _refuse(kind: str, detail: str, withheld: Optional[List[str]] = None) -> Dic
 # Predicate: SPINE
 # ---------------------------------------------------------------------------
 
+#: SPINE defect kind for a spine that reads but leaves nothing to dispatch; ``plan.readiness_verdict``
+#: keys on it to carry the defect's detail (the EM-owned row ids) into its reason.
+ZERO_DISPATCHABLE_KIND = "zero-dispatchable-rows"
+
 
 def _spine(plan_path: Path, text: str, repo_root: Optional[Path] = None) -> Dict[str, Any]:
     """``read_spine()`` + ``build_waves()``, EXECUTED. Never a review of shape.
@@ -425,6 +429,7 @@ def _spine(plan_path: Path, text: str, repo_root: Optional[Path] = None) -> Dict
         UNDECLARED,
         DanglingPlanDependencyError,
         SpineReadError,
+        em_owned_rows,
         executable_body,
         load_rows_memo,
         read_spine,
@@ -450,8 +455,9 @@ def _spine(plan_path: Path, text: str, repo_root: Optional[Path] = None) -> Dict
             "spine-absent",
             "no ```yaml plan-tasks block — a plan with no spine declares no scope to schedule",
         )
+    excluded: list = []
     try:
-        rows = read_spine(plan_path)
+        rows = read_spine(plan_path, exclusions=excluded)
     except DanglingPlanDependencyError:
         return _defect(
             "predecessor-plan-dangling",
@@ -459,6 +465,14 @@ def _spine(plan_path: Path, text: str, repo_root: Optional[Path] = None) -> Dict
         )
     except SpineReadError as exc:
         return _defect(type(exc).__name__, str(exc).strip().splitlines()[0][:300])
+    # Zero rows with nothing owed is a plan whose work is done, held or voided: it certifies.
+    # Zero rows with rows owed by the EM is what `ask.stage` refuses at fire time.
+    owed = em_owned_rows(excluded)
+    if not rows and owed:
+        return _defect(
+            ZERO_DISPATCHABLE_KIND,
+            f"the spine derives zero dispatchable rows; owed by the EM: {', '.join(owed)}",
+        )
     # A row held out of the emit already -- because an earlier row's `epistemic-premise`
     # depends_on edge decides its writes, directly OR transitively through a chain of
     # non-epistemic-premise edges -- declares nothing a fire-time driver must resolve, since

@@ -48,7 +48,7 @@ created: 2026-06-01
 
 def _git_init(path: Path) -> None:
     path.mkdir(parents=True, exist_ok=True)
-    subprocess.run(["git", "init", str(path)], check=True, capture_output=True, **no_console_creationflags())
+    subprocess.run(["git", "init", "-b", "work/test", str(path)], check=True, capture_output=True, **no_console_creationflags())
     (path / ".gitkeep").touch()
     subprocess.run(["git", "-C", str(path), "add", ".gitkeep"], check=True, capture_output=True, **no_console_creationflags())
     subprocess.run(

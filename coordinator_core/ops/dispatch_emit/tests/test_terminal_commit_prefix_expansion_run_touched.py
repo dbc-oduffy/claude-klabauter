@@ -87,3 +87,32 @@ def test_two_runs_one_session_each_commit_only_their_own_prefix_file(repo):
     landed = _committed(repo)
     assert "out/b.txt" in landed
     assert "out/a.txt" not in landed
+
+
+def test_a_run_touched_prefix_file_a_live_peer_holds_is_left_out_and_named(repo):
+    peer = "5e1f0000-0000-4000-8000-0000000000b2"
+    for name in ("a", "c"):
+        (repo / "out" / f"{name}.txt").write_text(f"{name}\n", encoding="utf-8")
+    session_core.init(peer, cwd=str(repo))
+    session_scope.touch(peer, "out/c.txt", cwd=str(repo))
+
+    out = _run_touching(repo, "A", ["out/a.txt", "out/c.txt"])
+    assert out["committed"] is True, out
+    assert _committed(repo) == ["out/a.txt"]
+    assert out["peer_held_left"] == [{"path": "out/c.txt", "sessions": [peer]}]
+
+
+def _run_touching(repo: Path, name: str, files: list) -> dict:
+    report = f"report-{name}.md"
+    (repo / report).write_text("DONE\n", encoding="utf-8")
+    request = CommitRequest(
+        chunks=(ChunkCommit(id=name, title=name, prefixes=("out/",), report=report),)
+    )
+    script = f"run-{name}.mjs"
+    (repo / script).write_text("// emitted\n" + render_marker(request) + "\n", encoding="utf-8")
+    review = {**_REVIEWED, "prep": {"slice_files": files}}
+    return terminal_commit._handler(
+        {"script_path": script, "incomplete_chunks": [], "inline_review": review,
+         "session_id": SELF},
+        repo_root=repo / ".git",
+    )

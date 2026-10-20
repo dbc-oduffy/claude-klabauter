@@ -95,7 +95,7 @@ from coordinator_core.ops.dispatch_emit.grind_profile import (
     resolve_appetite,
     validate_graph,
 )
-from coordinator_core.ops.dispatch_emit.queue_select import restrict_manifest, select_rows
+from coordinator_core.ops.dispatch_emit.queue_select import load_row_schema_gate, restrict_manifest, select_rows
 from coordinator_core.ops.dispatch_emit.receipt_extras_guard import refuse_colliding_receipt_extras
 from coordinator_core.session import core
 
@@ -207,6 +207,7 @@ def emit_queue_script(
         absent_sentinels=loaded_profile.absent_sentinels,
         source_row_dir=Path(guarded_run_dir) / "source-rows",
         claimant_sid=core.resolve_session_id(str(repo_root)) or None,
+        row_schema_gate=load_row_schema_gate(loaded_profile, repo_root),
     )
 
     run_order = [

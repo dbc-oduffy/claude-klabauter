@@ -2,6 +2,7 @@
 
 import json
 import os
+import subprocess
 
 import pytest
 
@@ -12,6 +13,132 @@ AID = "abc123"
 T_HARVEST = "2026-01-01T10:00:00Z"
 T_AFTER = "2026-01-01T11:00:00Z"
 NOW = "2026-01-01T11:05:00Z"
+
+
+@pytest.fixture(autouse=True)
+def _config_dir(tmp_path, monkeypatch):
+    cfg = tmp_path / "cfg"
+    cfg.mkdir()
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(cfg))
+    return cfg
+
+
+def _login(cfg, email):
+    (cfg / ".claude.json").write_text(json.dumps({"oauthAccount": {"emailAddress": email}}), encoding="utf-8")
+
+
+def _git(cwd, *args):
+    probe_stamp._git(cwd, "-c", "user.email=t@t", "-c", "user.name=t", "-c", "core.autocrlf=false", *args)
+
+
+def _committed_repo(tmp_path, account="a@x"):
+    """A git repo whose HEAD holds the full record under harvest/ (frame a.html listed, thread t1)."""
+    rec = _record()
+    rec["harvest"]["account"] = account
+    rec["harvest"]["frames"] = [{"path": "a.html", "sha256": "0" * 64}]
+    out = _setup(tmp_path, rec)
+    _git(tmp_path, "init", "-q")
+    _git(tmp_path, "add", "-A")
+    _git(tmp_path, "commit", "-q", "-m", "m")
+    return out
+
+
+def _unreadable(out, kind=model.NOT_FOUND):
+    probe_stamp.stamp_unreadable(model.ReadError(kind, "l", NOW), AID, out, "s1", NOW)
+    return json.loads((out / "harvest.json").read_text())["probe"]
+
+
+def test_readable_probe_stamps_account_and_never_backfills(tmp_path, _config_dir):
+    _login(_config_dir, "me@x")
+    out = _setup(tmp_path, _record())
+    probe_stamp.stamp_probe(_lifted(), out, "s1", NOW)
+    after = json.loads((out / "harvest.json").read_text())
+    assert after["probe"]["account"] == "me@x"
+    assert "record_committed" not in after["probe"]
+    assert "account" not in after["harvest"]
+
+
+@pytest.mark.parametrize(
+    "held,login,kind,expected",
+    [
+        ("a@x", "b@x", model.NOT_FOUND, "other-account"),
+        ("a@x", "a@x", model.NOT_FOUND, "not-found"),
+        (None, "b@x", model.NOT_FOUND, "not-found"),
+        ("a@x", None, model.NOT_FOUND, "not-found"),
+        ("", "b@x", model.NOT_FOUND, "not-found"),
+        ("a@x", "b@x", model.NEEDS_APPROVAL, "needs-approval"),
+    ],
+)
+def test_unreadable_reason_by_accounts(tmp_path, _config_dir, held, login, kind, expected):
+    if login:
+        _login(_config_dir, login)
+    rec = _record()
+    rec["harvest"]["account"] = held
+    out = _setup(tmp_path, rec)
+    probe = _unreadable(out, kind)
+    assert probe["unreadable_reason"] == expected
+    assert probe["account"] == login
+
+
+def test_record_committed_true_when_head_matches(tmp_path):
+    out = _committed_repo(tmp_path)
+    assert _unreadable(out)["record_committed"] is True
+
+
+def test_record_committed_ignores_prior_probe_key(tmp_path):
+    out = _committed_repo(tmp_path)
+    _unreadable(out)
+    assert _unreadable(out)["record_committed"] is True
+
+
+@pytest.mark.parametrize("rel", ["SETTLED.md", "frames/a.html", "threads/t1.json"])
+def test_record_committed_false_when_listed_file_differs(tmp_path, rel):
+    out = _committed_repo(tmp_path)
+    (out / rel).write_bytes(b"changed\n")
+    assert _unreadable(out)["record_committed"] is False
+
+
+def test_record_committed_false_when_listed_file_missing(tmp_path):
+    out = _committed_repo(tmp_path)
+    (out / "frames" / "a.html").unlink()
+    assert _unreadable(out)["record_committed"] is False
+
+
+def test_record_committed_false_when_record_body_differs(tmp_path):
+    out = _committed_repo(tmp_path)
+    rec = json.loads((out / "harvest.json").read_text())
+    rec["harvest"]["version"] = "v9"
+    (out / "harvest.json").write_bytes(model.dump_json(rec))
+    assert _unreadable(out)["record_committed"] is False
+
+
+def test_record_committed_false_when_not_in_git(tmp_path):
+    out = _setup(tmp_path, _record())
+    assert _unreadable(out)["record_committed"] is False
+
+
+def test_record_committed_false_when_file_untracked(tmp_path):
+    out = _committed_repo(tmp_path)
+    (out / "threads" / "t2.json").write_bytes(b"{}\n")
+    rec = json.loads((out / "harvest.json").read_text())
+    rec["harvest"]["thread_ids"] = ["t1", "t2"]
+    (out / "harvest.json").write_bytes(model.dump_json(rec))
+    assert _unreadable(out)["record_committed"] is False
+
+
+def test_record_committed_issues_no_git_write(tmp_path, monkeypatch):
+    out = _committed_repo(tmp_path)
+    seen = []
+    real = subprocess.run
+
+    def spy(cmd, *a, **k):
+        seen.append(cmd)
+        return real(cmd, *a, **k)
+
+    monkeypatch.setattr(subprocess, "run", spy)
+    assert _unreadable(out)["record_committed"] is True
+    verbs = {c[3] for c in seen}
+    assert verbs <= {"ls-tree", "show"} and verbs
 
 
 def _record(probe=None, n_files=0):
@@ -86,6 +213,7 @@ def test_only_probe_differs(tmp_path):
     assert probe == {
         "probed_at": NOW,
         "session_id": "s1",
+        "account": None,
         "readable": True,
         "unreadable_reason": None,
         "version": "v2",
@@ -169,7 +297,8 @@ def test_unreadable_over_record(tmp_path, kind):
     probe = after.pop("probe")
     before.pop("probe")
     assert after == before
-    assert probe == {"probed_at": NOW, "session_id": "s1", "readable": False, "unreadable_reason": kind,
+    assert probe == {"probed_at": NOW, "session_id": "s1", "account": None, "readable": False,
+                     "unreadable_reason": kind, "record_committed": False,
                      "version": "", "thread_ids": [], "latest_comment_at": None}
     assert _snapshot(out) == snap
 

@@ -160,6 +160,7 @@ from typing import Any
 
 import yaml
 
+from coordinator_core.git.git_state import head_branch
 from coordinator_core.git.repo_root import show_toplevel as _show_toplevel
 from coordinator_core.temp_layout import managed_tempdir
 from coordinator_core.lifecycle import main_worktree_root
@@ -260,6 +261,33 @@ def _containment_check(memo: str, cwd: str | None = None) -> tuple[Path, Path]:
         f"cross-repo/ or state/ subtree): resolved {m} is not under "
         f"{git_root}/cross-repo or {git_root}/state"
     )
+
+
+# Branches the follow-up commit must never land on: a memo.transition commit on a
+# local default branch strands it ahead of origin and trips the ceremony's sync-main.
+_DEFAULT_BRANCHES = frozenset({"main", "master"})
+
+
+def _refuse_on_default_branch(memo: str, cwd: str | None) -> dict | None:
+    """Error reply when the memo's repo has a default branch checked out, else None.
+
+    Zero-spawn (HEAD file read). Runs before any verb touches the memo, so a refusal
+    leaves no uncommitted frontmatter write behind. An unreadable HEAD or a memo
+    outside a repo is left to ``_containment_check`` to report.
+    """
+    raw = Path(memo)
+    if cwd and not raw.is_absolute():
+        raw = Path(cwd) / raw
+    top = _show_toplevel(cwd=str(raw.resolve().parent))
+    if not top:
+        return None
+    branch = head_branch(top)
+    if branch in _DEFAULT_BRANCHES:
+        return _err(
+            f"memo.transition: HEAD is the default branch {branch!r} in {top}; the commit "
+            f"would land on local {branch}. Switch to a work branch and retry."
+        )
+    return None
 
 
 def _ok(applied: bool, message: str, commit_sha: str | None = None) -> dict:
@@ -1937,6 +1965,11 @@ async def _handler(
             cwd = str(main_worktree_root(Path(repo_root)))
         except ValueError:
             cwd = None
+
+    if verb in ("claim", "action", "release", "resolve", "claim-action", "lift", "close"):
+        refusal = await asyncio.to_thread(_refuse_on_default_branch, memo, cwd)
+        if refusal is not None:
+            return refusal
 
     if verb == "claim":
         return await asyncio.to_thread(_claim, memo, session_id, at, cwd)

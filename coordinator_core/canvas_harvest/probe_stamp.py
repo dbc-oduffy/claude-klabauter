@@ -6,15 +6,19 @@ size. It never counts the record, never deletes, and opens no frames/ or threads
 
 from __future__ import annotations
 
+import hashlib
 import json
+import subprocess
 from pathlib import Path
 from typing import Optional
 
-from coordinator_core.canvas_harvest import model
+from coordinator_core.canvas_harvest import account, model
 from coordinator_core.session import claimed_write
 from coordinator_core.timestamps import with_age
 
 RECORD_NAME = "harvest.json"
+OTHER_ACCOUNT = "other-account"
+_GIT_TIMEOUT_S = 5
 
 
 def _load(out_dir: Path) -> Optional[dict]:
@@ -74,6 +78,55 @@ def _require_later(read_at: str, floors: list, what: str) -> None:
             )
 
 
+def _git(out_dir: Path, *args: str) -> bytes:
+    done = subprocess.run(
+        ["git", "-C", str(out_dir), *args],
+        capture_output=True,
+        timeout=_GIT_TIMEOUT_S,
+        check=True,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    return done.stdout
+
+
+def _blob_sha(data: bytes) -> str:
+    return hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest()
+
+
+def _without_probe(raw: bytes) -> dict:
+    record = json.loads(raw.decode("utf-8"))
+    record.pop("probe", None)
+    return record
+
+
+def record_committed(out_dir, record: dict) -> bool:
+    """True when the record's SETTLED.md, listed frames and threads equal their HEAD blobs and harvest.json
+    at HEAD equals the disk record with `probe` stripped from both. Read-only git; False on any failure.
+    Compares raw disk bytes to SHA-1 blob ids, so a checkout that rewrites line endings (autocrlf) or a
+    sha256 object-format repo reads False: the failure direction is "not committed", never a false True.
+    """
+    out_dir = Path(out_dir)
+    try:
+        harvest = record["harvest"]
+        listed = ["SETTLED.md"]
+        listed += [f"frames/{frame['path']}" for frame in harvest["frames"]]
+        listed += [f"threads/{thread_id}.json" for thread_id in harvest["thread_ids"]]
+        tree = _git(out_dir, "ls-tree", "-r", "-z", "HEAD", "--", ".")
+        blobs = {}
+        for entry in tree.split(b"\0"):
+            if entry:
+                meta, _, name = entry.partition(b"\t")
+                blobs[name.decode("utf-8")] = meta.split()[2].decode("ascii")
+        for rel in listed:
+            if blobs.get(rel) != _blob_sha((out_dir / rel).read_bytes()):
+                return False
+        head = _git(out_dir, "show", f"HEAD:./{RECORD_NAME}")
+        disk = (out_dir / RECORD_NAME).read_bytes()
+        return _without_probe(head) == _without_probe(disk)
+    except Exception:
+        return False
+
+
 def stamp_probe(lifted, out_dir, session_id, now, *, artifact_id: Optional[str] = None) -> Path:
     """Stamp a readable probe over the record in `out_dir`; returns the one path written.
 
@@ -102,6 +155,7 @@ def stamp_probe(lifted, out_dir, session_id, now, *, artifact_id: Optional[str] 
     probe = {
         "probed_at": _stamp(now),
         "session_id": session_id,
+        "account": account.current_login(),
         "readable": True,
         "unreadable_reason": None,
         "version": lifted.version.version,
@@ -121,11 +175,18 @@ def stamp_unreadable(error, artifact_id, out_dir, session_id, now) -> Optional[P
     session_id = _require_session(session_id)
     if error.kind not in (model.NOT_FOUND, model.NEEDS_APPROVAL):
         raise model.HarvestError(model.READ_ERROR_UNCLASSIFIED, error.first_line)
+    login = account.current_login()
+    held = record["harvest"].get("account")
+    reason = error.kind
+    if reason == model.NOT_FOUND and login and held and login != held:
+        reason = OTHER_ACCOUNT
     probe = {
         "probed_at": _stamp(now),
         "session_id": session_id,
+        "account": login,
         "readable": False,
-        "unreadable_reason": error.kind,
+        "unreadable_reason": reason,
+        "record_committed": record_committed(out_dir, record),
         "version": "",
         "thread_ids": [],
         "latest_comment_at": None,

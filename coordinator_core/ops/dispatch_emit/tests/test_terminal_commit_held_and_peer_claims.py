@@ -132,6 +132,25 @@ def test_a_live_peer_write_claim_refuses_the_commit(repo):
     assert _git(["rev-parse", "HEAD"], repo) == head
 
 
+def test_two_peers_over_two_paths_refuse_with_the_path_level_contract(repo):
+    request = _two_chunks(repo)
+    other = "held-peer-2"
+    session_core.init(PEER, cwd=str(repo))
+    session_core.init(other, cwd=str(repo))
+    session_scope.touch(PEER, "a.py", cwd=str(repo))
+    session_scope.touch(other, "b.py", cwd=str(repo))
+    head = _git(["rev-parse", "HEAD"], repo)
+    out = _run(repo, request)
+    assert out["refused"] == "peer-claim"
+    assert out["peer_claim_contract"] == "path-level"
+    assert out["peer_claims_by_session"] == [
+        {"session": PEER, "paths": ["a.py"]}, {"session": other, "paths": ["b.py"]},
+    ]
+    assert [r["route"] for r in out["peer_claim_routes"]] == ["withhold", "peer-commits", "release"]
+    assert f"a.py held by {PEER}" in out["error"] and f"b.py held by {other}" in out["error"]
+    assert _git(["rev-parse", "HEAD"], repo) == head
+
+
 def test_an_abandoned_live_peer_claim_does_not_refuse_the_commit(repo, monkeypatch):
     request = _two_chunks(repo)
     session_core.init(PEER, cwd=str(repo))

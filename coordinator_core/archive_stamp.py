@@ -2907,7 +2907,14 @@ def _open_spine_row_ids(plan_path: Path) -> list[str]:
     result = load_rows(source)
     if result.status is not LocateStatus.LOCATED:
         return []
-    return [str(row.get("id", "?")) for row in spine_projection(result.rows)["open"]]
+    open_rows = spine_projection(result.rows)["open"]
+    ids = [str(row.get("id", "?")) for row in open_rows]
+    if open_rows:
+        # An em-discharged row is settled by its sidecar entry, not by a disposition rewrite.
+        from coordinator_core.ops.dispatch_emit.spine_read import drop_em_discharged
+
+        ids = drop_em_discharged(plan_path, source, open_rows, ids)
+    return ids
 
 
 def cs_stamp_plan_implemented(

@@ -92,6 +92,7 @@ from typing import TYPE_CHECKING, Any, Optional
 from coordinator_core.ceremony_common.apply_halt import (
     UnrecognizedDirective,
     _directive_gate_open,
+    _normalize_depends_on,
     advisory_breach_count,
     budget_advisory_mid_directive,
     budget_check_post_mutation,
@@ -310,6 +311,20 @@ def _unload_cli_module(cli_name: str) -> None:
         sys.modules.pop(module.__name__, None)
 
 
+def _closed_by_resolved_jp(
+    directive: dict[str, Any],
+    jp_by_id: dict[str, dict[str, Any]],
+    decisions: dict[str, Any],
+) -> bool:
+    """True when every judgment point gating `directive` carries a chosen disposition, so the
+    closed gate is an answer ("skip") and not an open question. A missing decision, or a
+    dependency that is no judgment point, keeps the directive `blocked`."""
+    gating = [d for d in _normalize_depends_on(directive.get("depends_on")) if d in jp_by_id]
+    return bool(gating) and all(
+        isinstance(decisions.get(d), dict) and decisions[d].get("disposition") for d in gating
+    )
+
+
 def _execute_directives(
     directives: list[dict[str, Any]],
     judgment_points: list[dict[str, Any]],
@@ -327,7 +342,10 @@ def _execute_directives(
 
     Returns `(exit_code, report)`. `report["landed"]` names directive ids
     that dispatched AND exited 0; `report["blocked"]` names directive ids
-    whose judgment-point gate stayed closed this pass; `report["failed"]`
+    whose judgment-point gate stayed unresolved this pass (no disposition chosen);
+    `report["skipped"]` names directive ids whose gate closed because a chosen disposition
+    does not resolve them (e.g. `jp_day_goal_closeout=skip`), which never halts the run;
+    `report["failed"]`
     names directive ids whose dispatch either raised OR returned a non-zero
     `exit_code` (2026-07-26 arg-mismatch audit, systemic finding 1: a
     directive previously joined `landed` after any dispatch that did not
@@ -372,6 +390,7 @@ def _execute_directives(
     jp_by_id = _judgment_points_by_id(judgment_points)
     landed: list[str] = []
     blocked: list[str] = []
+    skipped: list[str] = []
     failed: list[dict[str, Any]] = []
     degraded: list[dict[str, Any]] = []
     results: list[dict[str, Any]] = []
@@ -456,8 +475,12 @@ def _execute_directives(
             directive_progress(_PROG, directive["id"], "failed")
             continue
         if not gate_open:
-            blocked.append(directive["id"])
-            directive_progress(_PROG, directive["id"], "blocked")
+            if _closed_by_resolved_jp(directive, jp_by_id, decisions):
+                skipped.append(directive["id"])
+                directive_progress(_PROG, directive["id"], "skipped")
+            else:
+                blocked.append(directive["id"])
+                directive_progress(_PROG, directive["id"], "blocked")
             continue
 
         stdin_from = directive.get("stdin_from")
@@ -547,6 +570,7 @@ def _execute_directives(
     report = {
         "landed": landed,
         "blocked": blocked,
+        "skipped": skipped,
         "failed": failed,
         "degraded": degraded,
         "results": results,

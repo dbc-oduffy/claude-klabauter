@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import itertools
+import importlib
 import json
 from pathlib import Path
 
@@ -234,7 +235,16 @@ def test_record_without_a_usable_payload_is_a_refusal(payload):
     )
 
 
-@pytest.mark.parametrize("disposition", ("adopt_commit", "attribute_to_session"))
+def test_adopt_commit_is_a_gating_commit_step():
+    steps = run_spec.finish_steps([_decision(run_spec.DIRTY_TREE_POINT, "adopt_commit")], [], run={})
+    assert [s.id for s in steps] == ["adopt_dirty_tree"]
+    assert steps[0].gates_next and steps[0].kind == "inproc"
+    assert steps[0].target == run_spec.ADOPT_COMMIT_TARGET
+    module, _, func = steps[0].target.partition(":")
+    assert callable(getattr(importlib.import_module(module), func))
+
+
+@pytest.mark.parametrize("disposition", ("attribute_to_session",))
 def test_dirty_tree_decision_has_no_step_to_carry_it(disposition):
     decisions = [
         _decision(run_spec.CLOSEOUT_POINT, "record", {"g1": "done"}),

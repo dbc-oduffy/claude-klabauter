@@ -10,7 +10,8 @@ Callee signatures (the contract rows C2 to C5 build to):
 
     lift.lift(transcripts: list[Path], artifact_id: str, *, reader_agent_id: str | None = None,
               require_frames: bool = True) -> model.Lifted
-    record.write_record(lifted: model.Lifted, out_dir: Path, now: datetime) -> model.RecordWrite
+    record.write_record(lifted: model.Lifted, out_dir: Path, now: datetime, *, account: str | None = None)
+        -> model.RecordWrite   (account lands in harvest.json as harvest.account)
     probe_stamp.stamp_probe(lifted: model.Lifted, out_dir: Path, session_id: str, now: datetime,
                             *, artifact_id: str | None = None) -> Path   (the harvest.json written)
     probe_stamp.stamp_unreadable(error: model.ReadError, artifact_id: str, out_dir: Path,
@@ -91,9 +92,9 @@ def harvest(
     lifted = lift.lift(transcripts, artifact_id, reader_agent_id=reader_agent_id)
     if lifted.error is not None:
         _raise_unreadable(lifted, artifact_id, out_dir, sid, now)
-    from coordinator_core.canvas_harvest import record, render
+    from coordinator_core.canvas_harvest import account, record, render
 
-    result = record.write_record(lifted, out_dir, now)
+    result = record.write_record(lifted, out_dir, now, account=account.current_login())
     if not render.write_settled_skeleton(lifted, out_dir):
         return result
     return model.RecordWrite(

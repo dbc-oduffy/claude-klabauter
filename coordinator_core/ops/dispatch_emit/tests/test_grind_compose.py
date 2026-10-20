@@ -1073,7 +1073,7 @@ def test_drain_commit_is_handed_the_run_cost_record_body():
 
 
 def test_batch_helpers_receive_a_batches_entry_never_batch_state():
-    """`batchState` ({id, batchKey, triaged, closeCalled}) has no `.rows`; a
+    """`batchState` ({id, batchKey, triaged, closedRows}) has no `.rows`; a
     helper typed on a BATCHES entry that is handed batchState throws at run
     time (every grind died at _finishBatch this way). Node is barred, so the
     call sites are checked statically over the rendered script."""
@@ -2536,3 +2536,42 @@ def test_the_twin_terminal_commit_hands_an_unlanded_row_back_with_the_engines_re
     assert "r0" not in handed
     assert handed["r1"]["type"] == "commit-failed" and handed["r1"]["reason"].startswith("r1 is not in landed commit abc123")
     assert [s["sha"] for s in result["settled"] if s["row"] == "r0"] == ["abc123"]
+
+
+def test_refute_close_guard_is_once_per_row_not_once_per_batch():
+    """A row reaching a refute-close node after the batch's first close call gets its own call."""
+    routing = {
+        "triage": {"kind": "triage", "edges": {"confirmed-bug": "fix", "not-reproduced": "close"}, "on_fail": None},
+        "fix": {"kind": "fix", "edges": {"done": "close"}, "on_fail": None},
+        "close": {"kind": "refute-close", "edges": {"confirmed": "settled-direct", "refuted": "settled-direct"}, "on_fail": None},
+    }
+    close_calls: list[str] = []
+
+    def close_stub(bid):
+        close_calls.append(bid)
+        pending = "r0" if len(close_calls) == 1 else "r1"
+        return {"confirmed": [{"row": pending, "new_path": f"archive/{pending}.yaml"}], "refuted": []}
+
+    script_by_kind = {
+        "triage": lambda bid: [
+            {"row": "r0", "verdict": "not-reproduced", "tshirt_size": "S", "tradeoff": ""},
+            {"row": "r1", "verdict": "confirmed-bug", "tshirt_size": "S", "tradeoff": ""},
+        ],
+        "fix": lambda rid: {"outcome": "done"},
+        "refute-close": close_stub,
+        "commit": lambda _unit: {"committed": True, "sha": "abc"},
+    }
+    budget = _StubBudgetSpender()
+    result = gc.run_admission(
+        [("b0", ["r0", "r1"])], routing, "triage",
+        reserve=gc.batch_reserve(2), budget=budget, agent=_agent_stub(script_by_kind, budget),
+    )
+    assert close_calls == ["b0", "b0"]
+    assert not [h for h in result["handed_back"] if "already called" in h.get("reason", "")]
+    assert {h["row"] for h in result["handed_back"] if h["type"] == "settled-direct"} == {"r0", "r1"}
+
+
+def test_rendered_refute_close_guard_is_keyed_by_row():
+    script = _compose()
+    assert "closeCalled" not in script
+    assert "closedRows.has(rowId)" in script and "closedRows.add(r)" in script

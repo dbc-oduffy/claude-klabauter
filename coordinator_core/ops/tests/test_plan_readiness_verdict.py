@@ -134,6 +134,22 @@ def test_coverage_must_be_an_object(tmp_path):
         op._handler({"plan": REL, "coverage": "pull"}, common)
 
 
+def test_zero_dispatchable_rows_fail_spine_and_name_the_em_owned_rows(tmp_path):
+    common = _plan(tmp_path)
+    plan = tmp_path / REL
+    plan.write_text(
+        plan.read_text(encoding="utf-8").replace("  disposition: open\n", "  disposition: open\n  performer: em\n"),
+        encoding="utf-8",
+    )
+    reply = op._handler({"plan": REL}, common)
+    spine = reply["prep_gate"]["classes"]["SPINE"]
+    assert spine["status"] == "DEFECT" and spine["kind"] == "zero-dispatchable-rows"
+    assert "owed by the EM: C1" in spine["detail"]
+    assert reply["verdict"] == "pulled" and reply["pull_class"] == "substantive"
+    assert "owed by the EM: C1" in reply["reason"]
+    _validate(reply)
+
+
 def test_handler_reply_validates_and_spawns_nothing_under_the_bar(tmp_path, monkeypatch):
     common = _plan(tmp_path)
     with _count_spawns_attributed(monkeypatch) as spawns:

@@ -81,7 +81,7 @@ def test_the_re_plan_adds_rows_that_are_staged_by_id_and_dispatched(monkeypatch)
         "_stagedManifest = _gateStaged; _relayGap = _gateGap; }"
     ) in script
     assert script.count("if (!_halted && (!_resumeLedger || _ledgerExec)) {") == 2
-    assert "if (_resumeLedger && !_ledgerExec && (_gate.resume_ledger.blocking ?? []).length) {" in script
+    assert "if (_resumeLedger && !_ledgerExec && ((_gate.resume_ledger.blocking ?? []).length || _reviseNoted)) {" in script
 
 
 def test_a_re_judge_only_resume_keeps_the_xs_tail(monkeypatch):
@@ -126,7 +126,7 @@ def test_the_clause_demands_work_changed_since_the_halt_and_lists_the_notes(monk
 
 def test_a_remaining_work_leg_runs_for_blocking_rows_before_the_verify(monkeypatch):
     script = _script(monkeypatch)
-    guard = "if (_resumeLedger && !_ledgerExec && (_gate.resume_ledger.blocking ?? []).length) {"
+    guard = "if (_resumeLedger && !_ledgerExec && ((_gate.resume_ledger.blocking ?? []).length || _reviseNoted)) {"
     assert script.count("label: 'ledger-remaining'") == 1
     assert script.index(guard) < script.index("label: 'ledger-remaining'") < script.index("label: 'verify'")
     label_at = script.index("label: 'ledger-remaining'")
@@ -138,12 +138,15 @@ def test_a_remaining_work_leg_runs_for_blocking_rows_before_the_verify(monkeypat
     assert "agentType: 'coordinator:executor'" in script[script.index("label: 'ledger-remaining'"):][:200]
 
 
-def test_no_leg_runs_when_blocking_is_empty_by_the_guard(monkeypatch):
-    # The leg is only reachable through the blocking.length guard, so blocking: [] skips it.
+def test_a_revise_note_runs_the_remaining_leg_even_when_no_row_blocks(monkeypatch):
+    # Blocking [] with a note used to skip the executor leg: the note was read by nothing that wrote.
     script = _script(monkeypatch)
-    guard = "if (_resumeLedger && !_ledgerExec && (_gate.resume_ledger.blocking ?? []).length) {"
-    assert script.index("label: 'ledger-remaining'") > script.index(guard)
+    guard = "if (_resumeLedger && !_ledgerExec && ((_gate.resume_ledger.blocking ?? []).length || _reviseNoted)) {"
     assert script.count(guard) == 1
+    assert "const _reviseNoted = _resumeLedger && (_gate.resume_ledger.revise_notes ?? []).length > 0;" in script
+    assert script.index("const _reviseNoted") < script.index(guard) < script.index("label: 'ledger-remaining'")
+    # An all-landed resume still skips the leg unless a note asks for work.
+    assert "if (!_allLandedResume || _reviseNoted) { try {" in script
 
 
 def test_the_terminal_commit_params_carry_the_resume_block(monkeypatch):

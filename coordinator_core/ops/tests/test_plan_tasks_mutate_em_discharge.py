@@ -207,3 +207,53 @@ def test_reader_never_raises(tmp_path):
     assert read_em_discharges(plan) == {}
     evidence_sidecar_path(plan).write_text("em_discharged: [1, 2]\n", encoding="utf-8")
     assert read_em_discharges(plan) == {}
+
+
+_ONLY_EM_ROW = """\
+---
+title: "Discharge Only"
+status: ready
+---
+
+## Tasks
+
+```yaml plan-tasks
+- id: E1
+  title: EM step
+  change_kind: verification
+  surface: some/path.py
+  queue_scope: project
+  performer: em
+  disposition: open
+  body: |
+    Do it.
+- id: X1
+  title: Executor step
+  change_kind: script-edit
+  surface: some/path.py
+  queue_scope: project
+  disposition: open
+  body: |
+    Code.
+```
+"""
+
+
+def test_discharged_row_no_longer_counts_as_open_for_stamp_and_gate(tmp_path):
+    """em-discharge leaves disposition open by contract; the close oracles must read the sidecar."""
+    from coordinator_core.archive_stamp import _open_spine_row_ids
+    from coordinator_core.workstream_complete.directives_spine_worklist import (
+        compute_open_spine_row_gate,
+    )
+
+    repo = _make_git_repo(tmp_path)
+    plan = _seed_plan(repo, "d2.md", "")
+    plan.write_text(_ONLY_EM_ROW, encoding="utf-8", newline="")
+
+    assert _open_spine_row_ids(plan) == ["E1", "X1"]
+    assert _call(repo, plan)["applied"] is True
+    assert _call(repo, plan)["applied"] is False  # the "already discharged" reply
+
+    assert _open_spine_row_ids(plan) == ["X1"]
+    gate = compute_open_spine_row_gate(plan.stem, plan)
+    assert [r.id for r in gate.rows] == ["X1"]

@@ -43,6 +43,7 @@ STAGE_FINISH_BUILT = "finish-built"
 GRANT_STEP_ID = "tier_u_grant"
 ENVELOPE_STEP_ID = "assemble_brief"
 NOT_COMPOSED_TARGET = "not-composed"
+ADOPT_COMMIT_TARGET = "coordinator_core.ops.workday_complete_step2_5_dirty_tree:adopt_ambiguous"
 
 # Typed by hand; the `workday_complete_run` row of `authz.dispatchable` is pinned equal to it.
 CONSUMES_MANIFEST: frozenset[str] = frozenset({
@@ -595,16 +596,22 @@ def finish_steps(
 ) -> list[StepSpec]:
     """The steps the decisions and the launch rows open, refusals first.
 
-    A dirty-tree decision opens `d_step3_consolidate` but no step performs `adopt_commit` or
-    `attribute_to_session`, so it yields a gating refusal; the driver runs it ahead of the
-    envelope's ready directives so consolidate is halted by it.
+    `adopt_commit` opens a gating commit step for the ambiguous paths; `attribute_to_session`
+    has no step that carries it, so it yields a gating refusal. Either runs ahead of the
+    envelope's ready directives, so a failure halts `d_step3_consolidate`.
     """
     steps: list[StepSpec] = []
     by_point = {d.point_id: d for d in decisions}
 
     dirty = by_point.get(DIRTY_TREE_POINT)
     if dirty is not None:
-        steps.append(_refusal("refuse_dirty_tree", f"no-step-carries:{dirty.decision}"))
+        if dirty.decision == "adopt_commit":
+            steps.append(_step(
+                "adopt_dirty_tree", ADOPT_COMMIT_TARGET, [], kind="inproc", stage=STAGE_FINISH,
+                gates_next=True, detail="Step 2.5: commit the ambiguous paths (adopt_commit).",
+            ))
+        else:
+            steps.append(_refusal("refuse_dirty_tree", f"no-step-carries:{dirty.decision}"))
 
     closeout = by_point.get(CLOSEOUT_POINT)
     if closeout is not None and closeout.decision == "record":

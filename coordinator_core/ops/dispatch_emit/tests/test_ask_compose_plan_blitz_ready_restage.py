@@ -151,7 +151,17 @@ def test_a_ready_entry_carrying_readyop_error_still_halts_without_the_leg(monkey
     out = _run(_script(monkeypatch, {"planPath": _PLAN, "readyOpError": "boom"}))
     assert "blitz-stage-read" not in _labels(out)
     assert out["result"]["halted_by"]["kind"] == "refusal"
-    assert "no folded stage manifest" in out["result"]["halted_by"]["reason"]
+    assert "stage refused: boom" in out["result"]["halted_by"]["reason"]
+
+
+def test_a_zero_rows_readyop_error_halts_carrying_the_real_reason(monkeypatch):
+    err = "the spine derives zero dispatchable rows; owed by the EM: C9 (send the memo)"
+    out = _run(_script(monkeypatch, {"planPath": _PLAN, "readyOpError": err}))
+    halt = out["result"]["halted_by"]
+    assert halt["kind"] == "refusal"
+    assert err in halt["reason"]
+    assert "no folded stage manifest" not in halt["reason"]
+    assert "blitz-stage-read" not in _labels(out)
 
 
 def test_a_refused_stage_in_the_leg_halts_naming_it(monkeypatch):

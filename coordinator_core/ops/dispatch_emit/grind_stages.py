@@ -91,7 +91,9 @@ from coordinator_core.ops.dispatch_emit.terminal_commit_reconcile import TERMINA
 from coordinator_core.ops.dispatch_emit.agent_sidecar import sidecar_clause, sidecar_dir
 from coordinator_core.ops.workflow_scaffold import _js_string_literal
 
-#: ``OP_RUNNER_AGENT_TYPE`` (imported above) is the op-runner type.
+#: ``OP_RUNNER_AGENT_TYPE`` (imported above) is the op-runner type: its spec runs
+#: ``coordinator-invoke <op>`` and refuses any other command, so a call that also carries a
+#: ``backlog-grind-assemble`` command (undo, drain) never rides it.
 GENERAL_PURPOSE_AGENT_TYPE = "general-purpose"
 COMMIT_AGENT_TYPE = _COMMIT_AGENT_TYPE
 #: Equals ``pm_adjudication.ADJUDICATOR_AGENT_TYPE``, which imports this module.
@@ -105,7 +107,6 @@ STAGE_AGENT_TYPES: dict[str, str] = {
     "verify-op": OP_RUNNER_AGENT_TYPE,
     "commit": COMMIT_AGENT_TYPE,
     "adjudicate": APM_AGENT_TYPE,
-    "ledger-sweep": OP_RUNNER_AGENT_TYPE,
 }
 
 #: The grind size scout's return: the shared scout fields plus its closing sizing chain's result.
@@ -121,6 +122,9 @@ STAGE_MODELS: dict[str, str] = {
     "triage": "haiku",
     "refute-close": "sonnet",
     "fix": "sonnet",
+    # The drain runs `backlog-grind-assemble`, which the op-runner's spec refuses (it runs
+    # `coordinator-invoke <op>` only), so it rides a general-purpose agent like the other grind-row legs.
+    "ledger-sweep": "haiku",
     **{stage: _AGENT_MODELS[t] for stage, t in STAGE_AGENT_TYPES.items()},
 }
 
@@ -1032,7 +1036,7 @@ def compose_verify_op_call(
             models=models,
             label=label,
             phase_title=phase_title,
-            agent_type=OP_RUNNER_AGENT_TYPE,
+            agent_type=GENERAL_PURPOSE_AGENT_TYPE,
             agent_type_host=agent_type_host,
             run_key=run_key,
             effort="low",
@@ -1082,7 +1086,7 @@ def compose_verify_op_call(
         models=models,
         label=label,
         phase_title=phase_title,
-        agent_type=OP_RUNNER_AGENT_TYPE,
+        agent_type=GENERAL_PURPOSE_AGENT_TYPE if undo_paths_js else OP_RUNNER_AGENT_TYPE,
         agent_type_host=agent_type_host,
         run_key=run_key,
         effort="low",
@@ -1397,7 +1401,7 @@ def compose_ledger_sweep_call(
         models=models,
         label=label,
         phase_title=phase_title,
-        agent_type=OP_RUNNER_AGENT_TYPE,
+        agent_type=GENERAL_PURPOSE_AGENT_TYPE,
         agent_type_host=agent_type_host,
         run_key=run_key,
         effort="low",

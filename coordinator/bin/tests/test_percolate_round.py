@@ -55,6 +55,10 @@ _LIB_DIR = _BIN_DIR.parent / "lib"
 if str(_LIB_DIR) not in sys.path:
     sys.path.insert(0, str(_LIB_DIR))
 
+# The module `percolate.targets` binds `_machine_local_get` from, and so the owner
+# of the `_dump_cache` the round actually reads: `percolate.resolve_target` is a
+# distinct module object with its own cache.
+from coordinator.lib.percolate import resolve_target as _resolve_target  # noqa: E402
 from percolate.wire_contract import COORDINATOR_ALLOW_PERCOLATE_QUEUE_ENV  # noqa: E402
 
 
@@ -2383,14 +2387,41 @@ def test_every_leg_bound_comes_from_a_declared_family(tmp_path, monkeypatch):
     for this loop to check."""
     _install_commit_pipeline_stub(monkeypatch)
     monkeypatch.setattr(Path, "exists", lambda self: True)
+    # `_dump_cache` is process-global; a warm entry would hide the dump spawn.
+    monkeypatch.setattr(_resolve_target, "_dump_cache", {})
     rc, out, spy, dest = _run_round(tmp_path, monkeypatch)
 
     assert rc == _mod._EXIT_OK
+    assert any("machine-local" in str(c[0]) for c in spy.calls), "dump spawn not exercised"
     declared = {getattr(_mod, name) for name in _DECLARED_LEG_BOUNDS}
     assert spy.call_kwargs, "expected at least one spawn"
     for call, kw in zip(spy.calls, spy.call_kwargs):
         assert "timeout" in kw, call
         assert kw["timeout"] in declared, (call, kw["timeout"])
+
+
+def test_resolve_target_dump_bound_matches_round_family():
+    assert _resolve_target._REGISTRY_CLI_TIMEOUT_SECS == _mod._REGISTRY_CLI_TIMEOUT_SECS
+
+
+def test_dump_registry_timeout_is_a_transport_failure_and_not_cached(monkeypatch):
+    """A hung `machine-local dump` must raise rc 4 (transport), never degrade
+    to an empty registry that reads as "key unset", and must not poison the
+    cache."""
+    monkeypatch.setattr(_resolve_target, "_dump_cache", {})
+    seen = {}
+
+    def hang(cmd, **kw):
+        seen.update(kw)
+        raise subprocess.TimeoutExpired(cmd, kw["timeout"])
+
+    monkeypatch.setattr(subprocess, "run", hang)
+    with pytest.raises(_resolve_target.ResolveError) as ei:
+        _resolve_target._dump_registry("machine-local-x")
+    assert ei.value.code == 4
+    assert "did not finish" in ei.value.message
+    assert seen["timeout"] == _resolve_target._REGISTRY_CLI_TIMEOUT_SECS
+    assert "machine-local-x" not in _resolve_target._dump_cache
 
 
 def test_local_git_legs_carry_the_plumbing_bound_not_a_publish_bound(tmp_path, monkeypatch):

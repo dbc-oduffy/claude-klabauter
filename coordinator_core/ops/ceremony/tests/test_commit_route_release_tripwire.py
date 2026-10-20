@@ -511,6 +511,10 @@ ALLOWLIST: dict[str, dict[str, object]] = {
         "reason": "release",
         "confirmed": False,
     },
+    "ops/workday_complete_step2_5_dirty_tree.py::adopt_ambiguous": {
+        "reason": "release",
+        "confirmed": False,
+    },
     # Found by the enumerator, not in the brief's seed list. `_memo_send`'s
     # own commit_scoped call here is the SENDER-side receipt commit into the
     # calling session's own worktree (sent/ + ledger row) -- distinct from

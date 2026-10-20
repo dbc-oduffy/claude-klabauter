@@ -273,10 +273,13 @@ def test_drain_call_omits_decisions_flag_behind_a_runtime_guard():
     assert "(DEC) ? " in call_text and "_shq(DEC) : ''" in call_text
 
 
-def test_drain_stage_takes_the_op_runner_model():
+def test_drain_runs_assemble_so_it_never_rides_the_op_runner():
+    # The op-runner spec refuses anything but `coordinator-invoke <op>`; the drain runs backlog-grind-assemble.
     assert "run-record" not in grind_stages.STAGE_AGENT_TYPES
-    assert grind_stages.STAGE_AGENT_TYPES["ledger-sweep"] == OP_RUNNER_AGENT_TYPE
-    assert OP_RUNNER_AGENT_TYPE in _sweep_call()
+    assert "ledger-sweep" not in grind_stages.STAGE_AGENT_TYPES
+    call = _sweep_call()
+    assert OP_RUNNER_AGENT_TYPE not in call
+    assert "agentType: 'general-purpose'" in call and "model: 'haiku'" in call
 
 
 def test_drain_call_without_queues_omits_the_sweep_flag():
@@ -590,7 +593,8 @@ def test_reject_mode_is_one_undo_command_run_by_the_op_runner_under_the_verify_o
     assert "\\' --repo-root ' + (_shq(REPO_ROOT))" in call_text
     assert "ONE Bash call" in call_text
     assert "git checkout" not in call_text
-    assert f"agentType: '{grind_stages.OP_RUNNER_AGENT_TYPE}'" in call_text
+    assert "agentType: 'general-purpose'" in call_text
+    assert grind_stages.OP_RUNNER_AGENT_TYPE not in call_text
 
 
 def test_reject_mode_literal_paths_render_a_json_array():
@@ -957,7 +961,7 @@ def test_the_verify_stages_run_the_undo_op_themselves_on_the_final_verification(
         assert "and return its result as `undo`" in call, key
         assert '"undo": {' in call, key
     op_call = _final_verify_calls()["verify-op"]
-    assert f"agentType: '{OP_RUNNER_AGENT_TYPE}'" in op_call
+    assert "agentType: 'general-purpose'" in op_call and OP_RUNNER_AGENT_TYPE not in op_call
     assert "naming neither `' + (row.rowId) + '` nor `' + (row.path) + '`" in op_call
     assert "neither `passed` nor `nothing-to-run`" in _final_verify_calls()["verify-targeted"]
 
@@ -1055,7 +1059,7 @@ def test_every_doe_typed_call_reads_the_engine_table():
     for stage, agent_type in grind_stages.STAGE_AGENT_TYPES.items():
         assert grind_stages.STAGE_MODELS[stage] == emit._AGENT_MODELS[agent_type]
     general = set(grind_stages.STAGE_MODELS) - set(grind_stages.STAGE_AGENT_TYPES)
-    assert general == {"triage", "refute-close", "fix"}
+    assert general == {"triage", "refute-close", "fix", "ledger-sweep"}
 
 
 @pytest.mark.parametrize("stage", sorted(set(grind_stages.STAGE_AGENT_TYPES) - {"adjudicate"}))

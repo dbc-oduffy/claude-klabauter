@@ -81,6 +81,7 @@ def test_peer_held_declared_path_is_withheld_and_not_landed_chunk(repo, oracle):
     out = _call(repo, LEDGER, **PASSING)
 
     assert out["withheld"] == {"other.py": "peer-held"}
+    assert out["peer_held_by"] == [{"session": "peer-sid", "paths": ["other.py"]}]
     assert "other.py" not in oracle.params[0]["paths"]
     assert "other.py" not in _landed(repo, out, "--name-only")
     message = _message(repo)
@@ -154,7 +155,7 @@ def test_no_hold_lands_everything_declared(repo, oracle):
 
     out = _call(repo, LEDGER, **PASSING)
 
-    assert "withheld" not in out
+    assert "withheld" not in out and "peer_held_by" not in out
     assert set(oracle.params[0]["paths"]) >= {"done.py", "other.py"}
     assert "Lands-Chunks: C1, C2" in _message(repo)
 

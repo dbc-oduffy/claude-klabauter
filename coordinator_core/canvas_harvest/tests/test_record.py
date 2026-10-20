@@ -61,8 +61,9 @@ def test_full_write_and_field_set(tmp_path):
     assert list(doc) == ["schema", "artifact", "harvest"]
     assert doc["schema"] == model.SCHEMA
     assert doc["artifact"] == {"url": f"claude.ai/artifact/{ART}", "id": ART, "title": "T", "type": "design"}
-    assert list(doc["harvest"]) == ["harvested_at", "version", "thread_ids", "latest_comment_at", "frames"]
+    assert list(doc["harvest"]) == ["harvested_at", "account", "version", "thread_ids", "latest_comment_at", "frames"]
     assert doc["harvest"]["harvested_at"] == "2026-10-13T12:00:00Z"
+    assert doc["harvest"]["account"] is None
     assert doc["harvest"]["thread_ids"] == ["thr-1", "thr-2"]
     assert doc["harvest"]["latest_comment_at"] == "2026-10-12T10:00:00+00:00"
     assert doc["harvest"]["frames"] == [
@@ -78,6 +79,28 @@ def test_full_write_and_field_set(tmp_path):
     assert result.deleted == ()
     assert result.written[-1] == out / "harvest.json"
     assert set(result.written) == {p for p in out.rglob("*") if p.is_file()}
+
+
+def test_account_is_recorded_in_harvest_json(tmp_path):
+    out = tmp_path / "out"
+    record.write_record(_lifted(tmp_path), out, NOW, account="a@example.com")
+    assert json.loads((out / "harvest.json").read_bytes())["harvest"]["account"] == "a@example.com"
+
+
+def test_api_harvest_stamps_the_current_login(tmp_path, monkeypatch):
+    from coordinator_core.canvas_harvest import api, lift
+
+    cfg = tmp_path / "cfg"
+    cfg.mkdir()
+    (cfg / ".claude.json").write_text(json.dumps({"oauthAccount": {"emailAddress": "me@example.com"}}), encoding="utf-8")
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(cfg))
+    transcript = tmp_path / "t.jsonl"
+    transcript.write_text("", encoding="utf-8")
+    lifted = _lifted(tmp_path)
+    monkeypatch.setattr(lift, "lift", lambda *a, **k: lifted)
+    out = tmp_path / "out"
+    api.harvest(f"https://claude.ai/artifact/{ART}", out, session_id="s", transcript=transcript, now=NOW)
+    assert json.loads((out / "harvest.json").read_bytes())["harvest"]["account"] == "me@example.com"
 
 
 def test_sha_mismatch_and_missing_source(tmp_path):

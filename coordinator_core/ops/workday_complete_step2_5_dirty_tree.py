@@ -259,6 +259,9 @@ _COMMIT_PREFIXES = [
     "archive/",
 ]
 
+# Exact paths the ceremony itself writes: AUTO-COMMIT, never ambiguous.
+_COMMIT_EXACT_PATHS = frozenset({"state/.workday-start-marker"})
+
 # AUTO-COMMIT docs/plans/ sidecar suffix allow-list (glob-matched full path).
 _COMMIT_PLAN_SIDECAR_GLOBS = [
     "docs/plans/*.plan-coverage-check.md",
@@ -340,6 +343,8 @@ def _classify_gitignore(path: str, bname: str) -> Optional[str]:
 
 def _classify_commit(path: str) -> Optional[str]:
     """Returns the matched commit_root, or None if not an AUTO-COMMIT hit."""
+    if path in _COMMIT_EXACT_PATHS:
+        return path
     for prefix in _COMMIT_PREFIXES:
         if path.startswith(prefix):
             return prefix
@@ -406,6 +411,8 @@ class _Accumulators:
         self.commit_roots_seen: List[str] = []
         self.notices: List[str] = []
         self.redirect_paths: List[str] = []
+        self.ambiguous_paths: List[str] = []
+        self.ambiguous_statuses: Dict[str, str] = {}
 
 
 def _resolve_claim_context(
@@ -664,6 +671,8 @@ def _classify_main_pass(
 
         # 8. AMBIGUOUS.
         acc.notices.append(f"[{_PROG}] ambiguous: {path}")
+        acc.ambiguous_paths.append(path)
+        acc.ambiguous_statuses[path] = xy
         counters.ambiguous += 1
         needs_pm = True
 
@@ -860,8 +869,8 @@ class DirtyTreeClassification:
         return lines
 
 
-def classify_dirty_tree() -> DirtyTreeClassification:
-    repo_root = show_toplevel()
+def classify_dirty_tree(cwd: Optional[str] = None) -> DirtyTreeClassification:
+    repo_root = show_toplevel(cwd)
     if not repo_root:
         return DirtyTreeClassification(
             needs_pm=False,
@@ -897,6 +906,36 @@ def classify_dirty_tree() -> DirtyTreeClassification:
     needs_pm = _classify_rename_source_pass(status_lines, counters, acc) or needs_pm
 
     return DirtyTreeClassification(needs_pm=needs_pm, error=None, counters=counters, acc=acc)
+
+
+_ADOPT_COMMIT_MSG = "chore: adopt ambiguous dirty-tree paths at workday-complete ({n} paths)"
+
+
+def adopt_ambiguous(repo_root: object) -> Tuple[int, str]:
+    """Inproc step for the `adopt_commit` disposition: commit the AMBIGUOUS paths.
+
+    Source-tree and peer-claimed paths are not ambiguous and stay needs-PM.
+    Returns `(exit_code, text)`.
+    """
+    classification = classify_dirty_tree(str(repo_root))
+    if classification.error is not None:
+        return 1, classification.error
+    paths = classification.acc.ambiguous_paths
+    if not paths:
+        return 0, f"[{_PROG}] adopt_commit: no ambiguous paths"
+    root = show_toplevel(str(repo_root))
+    if not root:
+        return 1, f"[{_PROG}] ERROR: not inside a git repo"
+    add_paths = [p for p in paths if classification.acc.ambiguous_statuses.get(p, "  ")[1:2] != "D"]
+    if add_paths:
+        add_res = _run_git(["add", "--"] + add_paths, cwd=root)
+        if add_res.returncode != 0:
+            return 1, f"[{_PROG}] ERROR: git add for adopt_commit paths failed"
+    msg = _ADOPT_COMMIT_MSG.format(n=len(paths))
+    commit_res = _run_git(["commit", "-m", msg, "--"] + paths, cwd=root)
+    if commit_res.returncode != 0:
+        return 1, f"[{_PROG}] ERROR: adopt_commit failed: {commit_res.stderr.strip()}"
+    return 0, f"[{_PROG}] adopt_commit: {len(paths)} paths"
 
 
 def main(argv: List[str]) -> int:

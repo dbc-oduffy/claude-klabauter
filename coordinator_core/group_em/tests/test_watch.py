@@ -2506,3 +2506,48 @@ def test_cli_until_event_dispatches_to_until_event(tmp_path):
         rc = watch._cli(["--repo-root", str(tmp_path), "--until-event", "--tick-interval-seconds", "30"])
     assert rc == 0
     assert ue.call_args.kwargs["tick_interval_seconds"] == 30.0
+
+
+def _park_cycle(prev_parked, prev_names, waiting):
+    emitted = []
+    with mock.patch.object(
+        watch.read_pass, "fetch_live_agents", return_value=[_agent()]
+    ), mock.patch.object(
+        watch.read_pass, "enumerate_repo_peers", side_effect=lambda agents, sid: agents
+    ), mock.patch.object(
+        watch.read_pass,
+        "classify_peer",
+        return_value={"state": "PAUSED", "reason": "turn-ended", "candidate": True},
+    ), mock.patch.object(
+        watch, "_cooldown_active", return_value=False
+    ), mock.patch.object(
+        watch, "_stamped_age_seconds", return_value=1.0
+    ), mock.patch.object(
+        watch, "_transcript_idle_seconds", return_value=None
+    ), mock.patch.object(
+        watch, "_waiting_on", return_value=(waiting, False)
+    ), mock.patch.object(
+        watch.obligations, "for_peer", return_value=None
+    ):
+        now = datetime(2026, 8, 31, 12, 0, 0, tzinfo=timezone.utc)
+        _p, decl, notes, _i = watch.poll_once(
+            REPO_ROOT, "caller-1", prev_parked=prev_parked, prev_names=prev_names,
+            now=now, emit=emitted.append,
+        )
+    return emitted, decl, notes
+
+
+def test_reparked_peer_with_unchanged_waiting_on_and_next_is_not_re_emitted():
+    emitted, _d, notes = _park_cycle({"peer-1": False}, None, "none")
+    assert len(emitted) == 1 and notes["peer-1"]["parked_sig"]
+
+    # Unparked, then parked again on the same wait: the sig survives the cycle.
+    _e, _d, notes = _park_cycle({"peer-1": True}, notes, "none")
+    emitted, decl, notes = _park_cycle({"peer-1": False}, notes, "none")
+    assert emitted == []
+    assert any(d["session_id"] == "peer-1" and d["gate"] == "unchanged-park" for d in decl)
+
+    # A changed waiting_on is a changed state: the line comes back.
+    emitted, _d, notes2 = _park_cycle({"peer-1": False}, notes, "a3's rehearsal")
+    assert len(emitted) == 1
+    assert notes2["peer-1"]["parked_sig"] != notes["peer-1"]["parked_sig"]

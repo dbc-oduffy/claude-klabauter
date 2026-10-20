@@ -238,6 +238,14 @@ def compute_open_spine_row_gate(
 
     projection = spine_projection(result.rows)
     open_rows = projection["open"]
+    if open_rows:
+        # An em-discharged row is settled by its sidecar entry, not by a disposition rewrite.
+        from coordinator_core.ops.dispatch_emit.spine_read import drop_em_discharged
+
+        still_open = set(
+            drop_em_discharged(governing_plan_path, source, open_rows, [r.get("id") for r in open_rows])
+        )
+        open_rows = [r for r in open_rows if r.get("id") in still_open]
     if not open_rows:
         return OpenSpineRowGate(
             applies=False, rows=(), open_count=0, warn_text=None,

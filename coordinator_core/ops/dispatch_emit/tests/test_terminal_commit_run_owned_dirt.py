@@ -115,6 +115,7 @@ def test_a_peer_claimed_file_in_the_same_directory_is_reported_not_committed(rep
     assert _committed(repo) == ["src/a.py", "src/own.py"]
     assert out["run_owned"] == ["src/own.py"]
     assert "src/theirs.py" in out["undeclared_dirty"] or out.get("undeclared_dirty_peer_held")
+    assert out["peer_held_left"] == [{"path": "src/theirs.py", "sessions": [PEER]}]
 
 
 def test_an_unclaimed_undeclared_file_is_reported_not_committed(repo):

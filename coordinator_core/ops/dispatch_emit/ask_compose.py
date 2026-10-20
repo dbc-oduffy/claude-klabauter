@@ -567,11 +567,12 @@ _ADMIT_MANIFEST_JS = (
     "    if (gap) { if (!soft && !_relayGap) _relayGap = gap; return; }\n"
     "    _stagedManifest = m;\n"
     "  };\n"
-    "  // readyOpError is one agent-authored line that may carry a lead-in, so this stays a substring test.\n"
+    "  // Any non-empty readyOpError is the stage op's own refusal, except plan-blitz's 'did not run'\n"
+    "  // sentinel (the op never ran; the one stage leg decides). The design-review prefix is matched\n"
+    "  // later, on the adopted text.\n"
     "  const _adoptReadyError = (e) => {\n"
-    "    if (!_stagedManifest && !_stageRefusal && String(e.readyOpError ?? '').includes("
-    + json.dumps(STAGE_REFUSAL_PREFIX)
-    + ")) _stageRefusal = String(e.readyOpError);\n"
+    "    const _re = String(e.readyOpError ?? '').trim();\n"
+    "    if (!_stagedManifest && !_stageRefusal && _re !== '' && !/did not run/.test(_re)) _stageRefusal = _re;\n"
     "  };"
 )
 #: The run reads its commit token from the Workflow `args` the emit's fire args carry, so the
@@ -2632,8 +2633,8 @@ def compose_ask_script(
     # check bounds what counts as met, not what the leg touches.
     remaining_prompt = _cat(
         f"{head}\n\n{anchor}\n\n",
-        "Ledger-resume remaining-work leg. An earlier run halted at the ledger check; these requirement rows "
-        "stayed not_met and the revise did not rule them out_of_scope: ",
+        "Ledger-resume remaining-work leg. An earlier run halted; its revise notes may ask for work with no "
+        "requirement row blocking. Rows still not_met and not ruled out_of_scope by the revise: ",
         f"js:{_rl}.blocking.join(', ')",
         f". Read each row's register text in {ledger_rel}. Work still owed, by row: ",
         f"js:JSON.stringify({_rl}.{RESUME_LEDGER_REMAINING_FIELD} ?? {{}})",
@@ -2652,8 +2653,9 @@ def compose_ask_script(
         run_id=run_id,
     )
     verify_lines[2:2] = [
-        f"    if (_resumeLedger && !_ledgerExec && ({_rl}.blocking ?? []).length) {{\n"
-        f"      if (!_allLandedResume) {{ try {{ await {remaining_call}; }} catch (e) {{ const _m = String((e && e.message) ?? e); "
+        f"    const _reviseNoted = _resumeLedger && ({_rl}.{RESUME_LEDGER_NOTES_FIELD} ?? []).length > 0;\n"
+        f"    if (_resumeLedger && !_ledgerExec && (({_rl}.blocking ?? []).length || _reviseNoted)) {{\n"
+        f"      if (!_allLandedResume || _reviseNoted) {{ try {{ await {remaining_call}; }} catch (e) {{ const _m = String((e && e.message) ?? e); "
         "if (_USAGE_LIMIT_RE.test(_m)) { _haltOnUsageLimit(e); } else { log('ledger-remaining leg threw: ' + _m); } } }\n"
         "    }"
     ]

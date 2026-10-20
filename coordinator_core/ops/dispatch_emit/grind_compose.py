@@ -362,7 +362,9 @@ class _Batch:
     batch_id: str
     row_ids: list[str]
     triaged: bool = False
-    close_called: bool = False
+    #: Rows already proposed to a refute-close call: the guard is once per ROW, because rows reach
+    #: a refute-close node at different times and a later arrival needs its own call.
+    closed_rows: set[str] = field(default_factory=set)
 
 
 _EXHAUSTED_REASON = (
@@ -692,11 +694,13 @@ def run_admission(
             _handback(row, "baton", f"{intent} (size step failed: exit {code})")
 
     def _close_batch(batch: _Batch) -> None:
+        close_node_ids = {nid for nid, node in routing.items() if node["kind"] == "refute-close"}
         proposal_ids = [
-            rid for rid in batch.row_ids if rows[rid].node is not None and not rows[rid].done
+            rid for rid in batch.row_ids
+            if rows[rid].node in close_node_ids and not rows[rid].done and rid not in batch.closed_rows
         ]
         result = _record_call("refute-close", batch.batch_id) or {}
-        batch.close_called = True
+        batch.closed_rows.update(proposal_ids)
         for item in result.get("confirmed", []):
             row = rows[item["row"]]
             if row.node is None or row.done:
@@ -723,7 +727,6 @@ def run_admission(
             if row.node is None or row.done:
                 continue
             _handback(row, "manifest-stale", "refute-close close exited 3 (digest mismatch)")
-        close_node_ids = {nid for nid, node in routing.items() if node["kind"] == "refute-close"}
         for rid in proposal_ids:
             row = rows[rid]
             if not row.done and row.node in close_node_ids:
@@ -832,7 +835,7 @@ def run_admission(
         elif kind == "commit":
             _commit_row(row)
         elif kind == "refute-close":
-            if not batch.close_called:
+            if row.row_id not in batch.closed_rows:
                 _close_batch(batch)
             else:
                 _handback(row, "stage-dead", "refute-close already called for this batch")
@@ -1127,7 +1130,7 @@ _ISSUE_GATE_JS = (
     "    }\n"
     "    if (_exhausted) break;\n"
     "    const bid = _queue.shift();\n"
-    "    const batchState = { id: bid, batchKey: BATCHES.find((b) => b.id === bid).batch_key, triaged: false, closeCalled: false };\n"
+    "    const batchState = { id: bid, batchKey: BATCHES.find((b) => b.id === bid).batch_key, triaged: false, closedRows: new Set() };\n"
     "    _admitted[bid] = batchState;\n"
     "    _runBatchWorker(batchState).catch((err) => {\n"
     "      if (!_workerFailure) { _workerFailure = { err }; }\n"
@@ -1899,13 +1902,13 @@ def compose_grind_script(
         "async function _closeBatch(batchState) {\n"
         "  const closeNodeIds = Object.keys(ROUTING).filter((n) => ROUTING[n].kind === 'refute-close');\n"
         "  const batch = BATCHES.find((b) => b.id === batchState.id);\n"
-        "  const proposalIds = batch.rows.filter((r) => closeNodeIds.includes(_rows[r].node));\n"
+        "  const proposalIds = batch.rows.filter((r) => closeNodeIds.includes(_rows[r].node) && !_rows[r].done && !batchState.closedRows.has(r));\n"
         "  const proposals = proposalIds.map((r) => {\n"
         "    const row = _rows[r];\n"
         "    return { row_id: r, path: row.path, digest: (QUEUE_GRIND_MANIFEST.entries.find((e) => e.row_id === r) || {}).digest, evidence: row.evidence, origin: row.origin };\n"
         "  });\n"
         "  const result = await _issue(batchState.id, '', () => _closeCall(proposals));\n"
-        "  batchState.closeCalled = true;\n"
+        "  for (const r of proposalIds) { batchState.closedRows.add(r); }\n"
         "  for (const item of (result.confirmed || [])) {\n"
         "    const itemRow = _normalizeRowRef(proposals, item.row);\n"
         "    const row = _rows[itemRow];\n"
@@ -2028,7 +2031,7 @@ def compose_grind_script(
         "  else if (kind === 'verify') { await _verifyStage(rowId); }\n"
         "  else if (kind === 'commit') { await _commitStage(rowId); }\n"
         "  else if (kind === 'refute-close') {\n"
-        "    if (!batchState.closeCalled) { await _closeBatch(batchState); }\n"
+        "    if (!batchState.closedRows.has(rowId)) { await _closeBatch(batchState); }\n"
         "    else { row.done = true; _handBack(rowId, 'stage-dead', 'refute-close already called for this batch'); }\n"
         "  }\n"
         "  else { row.done = true; _handBack(rowId, 'stage-dead', `unhandled node kind ${kind}`); }\n"

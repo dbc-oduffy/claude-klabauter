@@ -749,3 +749,28 @@ def test_budget_advisory_breach_prints_once_and_report_counts_all(
     assert err.count("mid-directive advisory breach") == 1
     assert "directive='d0'" in err
     assert report["budget_advisory_breaches"] == 3
+
+
+def test_gate_closed_by_a_resolved_jp_is_skipped_not_blocked(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    judgment_points = [
+        {
+            "id": "jp_day_goal_closeout",
+            "dispositions": [
+                {"value": "record", "resolves": ["d_goal_close_day"]},
+                {"value": "skip", "resolves": []},
+            ],
+        }
+    ]
+    directives = [_directive("d_goal_close_day", "goal-close-day", depends_on="jp_day_goal_closeout")]
+    monkeypatch.setattr(wc_apply, "_load_cli_module", lambda cli_name: pytest.fail("must not dispatch"))
+    skipped_code, skipped = wc_apply._execute_directives(
+        directives, judgment_points, {"jp_day_goal_closeout": {"disposition": "skip"}}
+    )
+    assert skipped["skipped"] == ["d_goal_close_day"] and skipped["blocked"] == []
+    assert skipped_code == int(wc_apply.WorkdayApplyExitCode.SUCCESS)
+
+    open_code, unresolved = wc_apply._execute_directives(directives, judgment_points, {})
+    assert unresolved["blocked"] == ["d_goal_close_day"] and unresolved["skipped"] == []
+    assert open_code == int(wc_apply.WorkdayApplyExitCode.HALTED_AT_JUDGMENT)
