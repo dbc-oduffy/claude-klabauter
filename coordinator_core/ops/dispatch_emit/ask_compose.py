@@ -499,7 +499,11 @@ _REPLAN_STAGED_SCHEMA = _obj(
 #: The pre-sized gate agent's return: the gate reply plus the stage it runs as its closing act.
 _GATE_STAGED_SCHEMA = {
     **_GATE_SCHEMA,
-    "properties": {**_GATE_SCHEMA["properties"], "manifest": _RELAYED_MANIFEST_SCHEMA},
+    "properties": {
+        **_GATE_SCHEMA["properties"],
+        "manifest": _RELAYED_MANIFEST_SCHEMA,
+        "stage_error": {"type": ["string", "null"]},
+    },
 }
 #: The size-reword agent's return: the reworded criterion, its own sizing-assemble result, and the
 #: gate reply (plus stage manifest) it runs as closing acts.
@@ -510,7 +514,11 @@ _REWORD_SCHEMA = _obj(
 #: The ask scout's return with its relayed stage manifest held to the strict schema.
 _ASK_SCOUT_STAGED_SCHEMA = {
     **ASK_SCOUT_SCHEMA,
-    "properties": {**ASK_SCOUT_SCHEMA["properties"], "manifest": _RELAYED_MANIFEST_SCHEMA},
+    "properties": {
+        **ASK_SCOUT_SCHEMA["properties"],
+        "manifest": _RELAYED_MANIFEST_SCHEMA,
+        "stage_error": {"type": ["string", "null"]},
+    },
 }
 #: The blitz-stage-read leg's return: the manifest read from disk, or the stage op's own refusal.
 _BLITZ_STAGE_READ_SCHEMA = _obj(
@@ -1432,22 +1440,18 @@ def compose_ask_script(
         ``js:`` expression.
         """
         return (
-            " When the gate reply carries its own `manifest` (a ledger resume stages itself), return it "
-            "verbatim as manifest, every field and every row, trimming nothing, and run no stage command. "
-            "As your very last act otherwise, stage the run, but only when the gate reply's halt is null: when its arm "
-            f"is XS, run `{_INVOKE} {OP_ASK_STAGE} '<params>'` once, <params> being the JSON object ",
+            " When the gate reply carries its own `manifest` (a ledger resume or an S resume stages itself), "
+            "return it verbatim as manifest, every field and every row, trimming nothing, and run no stage command. "
+            "As your very last act otherwise, stage the run, but only when the gate reply's halt is null and its arm "
+            f"is XS: run `{_INVOKE} {OP_ASK_STAGE} '<params>'` once, <params> being the JSON object ",
             base,
             " with sizing_path ",
             sizing,
             " and gated ",
             gated,
-            f" added; when its arm is S and its resume_plan is non-null, run `{_INVOKE} "
-            f"{OP_ASK_STAGE} '<params>'` once, <params> being the same JSON object with plan_path set to that "
-            "resume_plan and commit_sizing_path ",
-            sizing,
-            " added (and no gated). Return the JSON reply verbatim as manifest, every field and every row, "
-            "trimming nothing, or null when it replies {\"error\": ...}. On any other arm run no stage command "
-            "and return no manifest.",
+            " added. Return the JSON reply verbatim as manifest, every field and every row, trimming nothing; "
+            "when it replies {\"error\": ...}, return that message as stage_error with manifest null. On any "
+            "other arm run no stage command and return no manifest.",
         )
 
     def _gate_agent_call(label: str, phase_title: str, stage_act: bool = False) -> str:
@@ -1783,6 +1787,9 @@ def compose_ask_script(
         b.append(
             f"  if ({clean_js} && (_gate.arm === {_lit(ARM_XS)} || (_gate.arm === {_lit(ARM_S)} && _gate.resume_plan) "
             f"|| _gate.{RESUME_LEDGER_KEY})) {{ _adoptManifest({reply_js}.manifest); }}"
+        )
+        b.append(
+            f"  if ({clean_js} && {reply_js}.stage_error) {{ _adoptManifest({{ error: {reply_js}.stage_error }}); }}"
         )
 
     def _record_clause(record_js: str, fields: str) -> list[str]:

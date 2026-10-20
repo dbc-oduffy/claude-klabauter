@@ -53,6 +53,7 @@ from coordinator_core.ops.sizing_acceptance import (
 from coordinator_core.ops.dispatch_emit.ask_stage import AskStageError, manifest_payload, stage
 from coordinator_core.ops.dispatch_emit.request_validation import Field, validate_params
 from coordinator_core.ops.dispatch_emit.sizing_fire import (
+    ARM_S,
     ALL_LANDED_NO_RUN,
     ARM_M_PLUS,
     ARM_ROADMAP,
@@ -458,8 +459,9 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     design_approval, board_url, pm_ruling, ruling_ref: the canvas board link and the PM's verbatim approval,
     echoed in `recorded` and not stored),
     `run_id` (str: the warp run asking), `cross_repo_approved` (bool) and `session_id` (str): the stage params
-    for a ledger-resume verdict, which with `run_id` gains `manifest` (the `dispatch.ask_stage` reply on its
-    `resume_ledger.plan`, or its `{error}`); no other verdict carries the key.
+    for a ledger-resume verdict or an S verdict with `resume_plan`, which with `run_id` gains `manifest` (the
+    `dispatch.ask_stage` reply on `resume_ledger.plan`, or on `resume_plan` limited to `resume_rows`; or its
+    `{error}`); no other verdict carries the key.
 
     `route_override_reason` (str): why the sizing routes against the run's `route-preference.json`; with a
     `run_id` whose record holds a preference it is written to `em_analysis`, and a divergence with no reason
@@ -500,19 +502,26 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     if params.get("run_id"):
         _record_resume_snapshot(root, params["run_id"], verdict)
     out = (replace(verdict, recorded=recorded) if recorded is not None else verdict).to_json()
-    if params.get("run_id") and verdict.halt is None and verdict.resume_ledger is not None:
-        unlanded = list(verdict.resume_ledger.get(RESUME_LEDGER_UNLANDED_FIELD) or [])
+    if params.get("run_id") and verdict.halt is None:
+        if verdict.resume_ledger is not None:
+            unlanded = list(verdict.resume_ledger.get(RESUME_LEDGER_UNLANDED_FIELD) or [])
+            plan_rel, ledger_resume, only_rows = verdict.resume_ledger["plan"], True, unlanded or None
+        elif verdict.arm == ARM_S and verdict.resume_plan and verdict.resume_rows is not None:
+            # An empty resume_rows stages no rows (all landed); None would re-stage every row.
+            plan_rel, ledger_resume, only_rows = verdict.resume_plan, False, list(verdict.resume_rows)
+        else:
+            return out
         try:
             out["manifest"] = manifest_payload(root, stage(
                 root,
                 run_id=params["run_id"],
-                plan_rel=verdict.resume_ledger["plan"],
+                plan_rel=plan_rel,
                 writes=writes,
                 cross_repo_approved=bool(params.get("cross_repo_approved")),
                 session_id=params.get("session_id") or None,
                 commit_sizing_rel=sizing_rel,
-                ledger_resume=True,
-                only_rows=unlanded or None,
+                ledger_resume=ledger_resume,
+                only_rows=only_rows,
             ))
         except (AskStageError, SizingFireRefused) as exc:
             out["manifest"] = {"error": str(exc)}

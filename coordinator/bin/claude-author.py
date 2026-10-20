@@ -738,6 +738,8 @@ Wrapper-only flags (consumed here, never forwarded to claude):
                            @@ALIAS@@ <path> / @@ALIAS@@=<path> are exact synonyms.
   --dry-run               Print the resolved exec line and exit 0 without
                            launching claude.
+  --control-socket        Relay claude through a PTY supervisor that serves a
+                           per-session control socket (not with --vanilla).
   --print-plugin-dir      Print only the resolved --plugin-dir value and
                            exit 0.
   --help, -h              Show this message and exit 0.
@@ -817,6 +819,42 @@ def _launch(exec_prefix: list[str], full_argv: list[str]) -> int:
     return 1  # pragma: no cover - unreachable, execv replaces the process on success
 
 
+def _runtime_base() -> str:
+    """Runtime base dir: COORDINATOR_WARM_RUNTIME_BASE, else LOCALAPPDATA, else ~/.cache."""
+    base = os.environ.get("COORDINATOR_WARM_RUNTIME_BASE", "").strip()
+    if not base:
+        base = os.environ.get("LOCALAPPDATA") or os.path.join(os.path.expanduser("~"), ".cache")
+    return base
+
+
+def _run_supervisor(full_argv: list[str], plugin_dir: str, control_base: str) -> int:
+    """Load the control-socket supervisor by path and run it. Never falls back to `_launch`."""
+    pkg_dir = os.path.join(plugin_dir, "bin", "lib", "claude_author_control")
+    init = os.path.join(pkg_dir, "__init__.py")
+    sup_path = os.path.join(pkg_dir, "supervisor.py")
+    try:
+        import importlib.util
+
+        if not os.path.isfile(sup_path):
+            raise FileNotFoundError(f"supervisor module not found at {sup_path}")
+        pkg_name = "claude_author_control"
+        pkg_spec = importlib.util.spec_from_file_location(
+            pkg_name, init, submodule_search_locations=[pkg_dir]
+        )
+        pkg = importlib.util.module_from_spec(pkg_spec)
+        sys.modules[pkg_name] = pkg
+        if os.path.isfile(init):
+            pkg_spec.loader.exec_module(pkg)
+        spec = importlib.util.spec_from_file_location(f"{pkg_name}.supervisor", sup_path)
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules[f"{pkg_name}.supervisor"] = mod
+        spec.loader.exec_module(mod)
+        return int(mod.run(full_argv, plugin_dir=plugin_dir, control_base=control_base))
+    except Exception as exc:  # noqa: BLE001 -- fail loud, one line, no fallback
+        sys.stderr.write(f"claude-author: --control-socket supervisor failed: {type(exc).__name__}: {exc}\n")
+        return 1
+
+
 def main(argv: list[str]) -> int:
     # -------------------------------------------------------------------
     # --help/-h answered here, first, before ANY clone/registry resolution
@@ -831,6 +869,9 @@ def main(argv: list[str]) -> int:
     # Before any resolution: `--vanilla` must work on a box where every rung
     # below is broken, since that is the box that needs it.
     if "--vanilla" in argv:
+        if "--control-socket" in argv:
+            sys.stderr.write("claude-author: --control-socket needs the coordinator plugin; not available with --vanilla\n")
+            return 2
         claude_bin = _resolve_claude_bin()
         if not claude_bin:
             sys.stderr.write("claude-author: claude: command not found\n")
@@ -847,6 +888,7 @@ def main(argv: list[str]) -> int:
     dry_run = os.environ.get("CLAUDE_AUTHOR_DRY_RUN", os.environ.get(_LEGACY_ENV_PREFIX + "DRY_RUN", "0")) == "1"
     print_plugin_dir = os.environ.get("CLAUDE_AUTHOR_PRINT_PLUGIN_DIR", os.environ.get(_LEGACY_ENV_PREFIX + "PRINT_PLUGIN_DIR", "0")) == "1"
     cli_content_root = ""
+    control_socket = False
     passthrough_args: list[str] = []
 
     i = 0
@@ -854,6 +896,8 @@ def main(argv: list[str]) -> int:
         arg = argv[i]
         if arg == "--dry-run":
             dry_run = True
+        elif arg == "--control-socket":
+            control_socket = True
         elif arg == "--print-plugin-dir":
             print_plugin_dir = True
         elif arg in _ROOT_FLAGS:
@@ -874,6 +918,8 @@ def main(argv: list[str]) -> int:
         else:
             passthrough_args.append(arg)
         i += 1
+
+    control_base = os.path.join(_runtime_base(), "coordinator", "control-socket") if control_socket else ""
 
     doe_clone = _resolve_doe_clone(cli_content_root)
     if doe_clone is None:
@@ -920,7 +966,10 @@ def main(argv: list[str]) -> int:
         # Args are space-joined (not shell-quoted); display only, not eval.
         # Security: single %s so passthrough args containing % are never treated as format specifiers.
         suffix = f" {' '.join(passthrough_args)}" if passthrough_args else ""
-        print(f"exec claude --plugin-dir {doe_coordinator}{suffix}")
+        verb = "supervise" if control_socket else "exec"
+        print(f"{verb} claude --plugin-dir {doe_coordinator}{suffix}")
+        if control_socket:
+            print(f"control-socket: {control_base}")
         print(f"forwarded-flags: {' '.join(a for a in passthrough_args if a.startswith('--'))}")
         return 0
 
@@ -1070,11 +1119,7 @@ def main(argv: list[str]) -> int:
     # three candidates below mirror `_runtime_base` exactly and must change in
     # one move with it.
     try:
-        _base = os.environ.get("COORDINATOR_WARM_RUNTIME_BASE", "").strip()
-        if not _base:
-            _base = os.environ.get("LOCALAPPDATA") or os.path.join(
-                os.path.expanduser("~"), ".cache"
-            )
+        _base = _runtime_base()
         _key_path = os.path.join(_base, "coordinator", "warm", "door-key")
         _key = ""
         try:
@@ -1097,6 +1142,9 @@ def main(argv: list[str]) -> int:
         os.environ.setdefault("COORDINATOR_DOOR_KEY", _key)
     except Exception:  # noqa: BLE001 -- never block a launch on the credential
         pass
+
+    if control_socket:
+        return _run_supervisor(full_argv, doe_coordinator, control_base)
 
     return _launch(exec_prefix, full_argv)
 

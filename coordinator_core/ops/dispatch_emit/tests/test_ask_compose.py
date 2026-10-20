@@ -403,9 +403,9 @@ def _presized(monkeypatch, arm="xs", **over):
     return _compose(prompt=None, sizing_rel="state/sizings/x.yaml", **over)
 
 
-def test_the_scout_runs_ask_stage_as_its_last_act_for_xs_and_a_resumed_plan():
+def test_the_scout_runs_ask_stage_as_its_last_act_for_xs_only():
     scout = _scout_prompt(_compose())
-    assert OP_ASK_STAGE in scout and "resume_plan is non-null" in scout
+    assert OP_ASK_STAGE in scout and "plan_path" not in scout.split(OP_ASK_STAGE, 1)[1]
     assert scout.index(OP_ASK_GATE) < scout.index(OP_ASK_STAGE)
     assert scout.rindex(OP_ASK_STAGE) > scout.index("sizing-assemble")
     assert "manifest" in ask_compose.ASK_SCOUT_SCHEMA["properties"]
@@ -414,7 +414,20 @@ def test_the_scout_runs_ask_stage_as_its_last_act_for_xs_and_a_resumed_plan():
 def test_the_presized_gate_agent_runs_ask_stage_after_the_gate_op(monkeypatch):
     gate = _gate_prompt(_presized(monkeypatch))
     assert gate.index(OP_ASK_GATE) < gate.index(OP_ASK_STAGE)
-    assert "resume_plan is non-null" in gate
+
+
+def test_the_gate_prompt_stages_xs_only_and_passes_an_s_resume_manifest_through(monkeypatch):
+    gate = _gate_prompt(_presized(monkeypatch))
+    stage_act = gate.split("As your very last act", 1)[1]
+    assert "arm is XS" in stage_act and "plan_path" not in stage_act and "resume_plan is non-null" not in gate
+    assert "an S resume stages itself" in gate and "stage_error" in gate
+    assert "stage_error" in ask_compose._GATE_STAGED_SCHEMA["properties"]
+    assert "stage_error" in ask_compose._ASK_SCOUT_STAGED_SCHEMA["properties"]
+
+
+def test_a_gate_stage_error_halts_by_name_not_as_a_missing_manifest(monkeypatch):
+    script = _presized(monkeypatch)
+    assert "_gate.stage_error) { _adoptManifest({ error: _gate.stage_error })" in script
 
 
 def test_a_stop_after_script_carries_no_stage_or_falsifier_act(monkeypatch):

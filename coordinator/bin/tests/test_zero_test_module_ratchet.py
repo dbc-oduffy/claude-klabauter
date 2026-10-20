@@ -181,6 +181,10 @@ _ZERO_NODE_EXEMPT: dict[str, str] = {
         "Production module (the test-red record emitter, a cross-repo contract name); holds "
         "no tests. Imported by bin/workday-complete-step1-validate.py."
     ),
+    "coordinator_core/ops/test_red_triage.py": (
+        "Production module (the deterministic triage beside state/test-red/<machine>.yaml, named for its subject); holds "
+        "no tests. Imported by ops/test_red_record.py and bin/workday-complete-step1-validate.py."
+    ),
     "coordinator_core/ops/tests/test_handoff_archive_transition_holder_live.py": (
         "Skips at module level because the killed op handoff.archive_transition is unregistered; held by recorded decision (module comment, EM ruling 2026-10-17) for plan pln-one-corpus-read-or-the-houseke-18d29a, which owns the disposition."
     ),

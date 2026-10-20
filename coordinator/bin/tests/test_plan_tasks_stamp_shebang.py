@@ -1,22 +1,12 @@
-"""test_plan_tasks_stamp_shebang.py — `plan-tasks-stamp` follows the
-ratified `coordinator/bin/` convention (`e167d08d1`): NO shebang, NO exec
-bit (mode 100644), invoked as `python3 <path>` on POSIX and via the
-co-located `.cmd`/`.ps1` launcher on Windows.
+"""test_plan_tasks_stamp_shebang.py -- `plan-tasks-stamp` carries the
+python3 shebang that its 100755 index mode requires.
 
-History this closes: the file was created with the exec bit set and no
-shebang at all -- an ENOEXEC OSError under the entrypoint gate's
-no-interpreter-resolved direct-exec branch. `efa4bd3a0` patched around it
-by adding a shebang and pinning direct exec, which stood as a standing
-exception to the ratified convention. That exception itself then caused a
-second live breakage: a bulk shebang-strip left the file exec-bit-set with
-no shebang, reproducing the exact ENOEXEC failure. The exception is
-removed at its cause here: the exec bit is dropped, so the entrypoint
-gate's `_run_one_entrypoint` takes its `sys.executable` fallback and no
-shebang is needed, collapsing the file back onto every compliant sibling
-(e.g. `coordinator/bin/append-integrator-dispositions.py`).
-
-Spec backlink: the four-coordinator-bin-entrypoints bug backlog item filed
-under state/bug-backlog/.
+Rule history: e167d08d1 stripped the shebang and exec bit from bin entries;
+a1f0c262c2 applied that to this file. The rule then moved: every extensionless
+`coordinator/bin/` entry is indexed 100755
+(test_bin_extensionless_exec_bit, 70ec8f5fd8), and an exec-bit file without a
+shebang is the ENOEXEC failure this file's history started from. So the
+shebang is required; the exec bit itself is pinned by the sibling ratchet.
 
 Run:
     python3 -m pytest coordinator/bin/tests/test_plan_tasks_stamp_shebang.py -v
@@ -42,23 +32,13 @@ _SCRIPT = _BIN_DIR / "plan-tasks-stamp"
 
 
 class TestConventionCompliant(unittest.TestCase):
-    def test_no_shebang_first_line(self):
+    def test_shebang_first_line(self):
         first_line = _SCRIPT.read_text(encoding="utf-8").splitlines()[0]
-        self.assertNotEqual(
+        self.assertEqual(
             first_line,
             "#!/usr/bin/env python3",
-            "plan-tasks-stamp should follow the ratified coordinator/bin/ "
-            "convention (e167d08d1): no shebang, invoked as `python3 <path>`.",
-        )
-
-    def test_not_executable(self):
-        import stat
-
-        mode = _SCRIPT.stat().st_mode
-        self.assertFalse(
-            mode & stat.S_IXUSR,
-            "plan-tasks-stamp should carry mode 100644 (no exec bit) per "
-            "the ratified coordinator/bin/ convention (e167d08d1).",
+            "plan-tasks-stamp is indexed 100755 and needs its python3 shebang "
+            "(test_bin_extensionless_exec_bit).",
         )
 
     def test_help_starts_cleanly_via_python3_invocation(self):
