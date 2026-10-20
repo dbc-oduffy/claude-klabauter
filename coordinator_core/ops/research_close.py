@@ -56,6 +56,12 @@ subset of the new, count not smaller): a re-close after moving strays into scrat
 and commits the extended record; a re-close on a later day names a new destination dir, so
 its record differs and is refused.
 
+``group_runs`` (optional list of safe run ids, must include ``run_id``; per-group research fan-out):
+with a ``sizing``, the research block is dropped after this run's trail is written and only when
+every listed sibling's trail file is on disk; otherwise the sizing is left untouched and the reply
+carries ``research_block: "kept (<n> of <m> groups closed)"``. A sibling counts closed by its trail
+file, not its landed commit. Absent ``group_runs`` the drop precedes the trail write.
+
 Negative-spec:
   - Never calls ``ceremony.scoped_git_commit`` or ``run_commit_pipeline``; one
     ``commit_paths`` call or none.
@@ -383,7 +389,9 @@ def _close_archived(
     subject = f"research({topic_slug}): close {run_id}"
 
     pre_drop: Optional[bytes] = None
-    if meta.get("sizing_rel"):
+    group_runs = meta.get("group_runs")
+    block_note: Optional[str] = None
+    if meta.get("sizing_rel") and not group_runs:
         try:
             pre_drop = drop_research_block(worktree, meta["sizing_rel"])
         except ResearchSizingRefused as exc:
@@ -410,6 +418,16 @@ def _close_archived(
             if pre_drop is not None:
                 (worktree / meta["sizing_rel"]).write_bytes(pre_drop)
             return _err(f"cannot write the close outputs: {exc}")
+        if meta.get("sizing_rel") and group_runs:
+            siblings = [g for g in group_runs if g != run_id]
+            closed = 1 + sum(1 for g in siblings if (worktree / _research_trail.trail_rel(g)).is_file())
+            if closed == len(group_runs):
+                try:
+                    pre_drop = drop_research_block(worktree, meta["sizing_rel"])
+                except ResearchSizingRefused as exc:
+                    return _err(f"sizing research block not dropped: {exc}")
+            else:
+                block_note = f"kept ({closed} of {len(group_runs)} groups closed)"
         commit_rel = [*rel_paths, trail_rel]
         if meta.get("sizing_rel") and meta["sizing_rel"] not in commit_rel:
             commit_rel.append(meta["sizing_rel"])
@@ -431,8 +449,10 @@ def _close_archived(
                 (worktree / meta["sizing_rel"]).write_bytes(pre_drop)
             return _err(f"commit refused: {exc}", paths=commit_rel)
     dropped = pre_drop is not None
+    note = {"research_block": block_note} if block_note is not None else {}
     if local:
         return {
+            **note,
             "exit_code": 0,
             "committed": True,
             "research_block_dropped": dropped,
@@ -447,6 +467,7 @@ def _close_archived(
         }
     return _with_strays(
         {
+            **note,
             "exit_code": 0, "committed": True, "deliverable": True, "sha": sha or "",
             "paths": rel_paths, "trail": trail_rel, "research_block_dropped": dropped,
         },
@@ -588,6 +609,15 @@ def _close_sync(worktree: Path, params: dict) -> dict:
         if problem:
             return _err(problem)
         outputs, segment_dirs = ["digest.md"], []
+    group_runs = params.get("group_runs")
+    if group_runs is not None:
+        if (
+            not isinstance(group_runs, list) or not group_runs
+            or not all(isinstance(g, str) and g and safe_id(g) for g in group_runs)
+        ):
+            return _err(f"group_runs must be a non-empty list of safe run ids: {group_runs!r}")
+        if run_id not in group_runs:
+            return _err(f"group_runs must include this run_id {run_id!r}: {group_runs!r}")
     sizing_rel = None
     if sizing is not None:
         sized = contained_path(worktree / sizing, [worktree])
@@ -596,7 +626,10 @@ def _close_sync(worktree: Path, params: dict) -> dict:
         if not sized.is_file():
             return _err(f"sizing is not on disk: {sizing!r}")
         sizing_rel = os.path.normpath(sizing).replace("\\", "/")
-    meta = {"tier": tier, "value_class": value_class, "sizing": sizing, "sizing_rel": sizing_rel}
+    meta = {
+        "tier": tier, "value_class": value_class, "sizing": sizing, "sizing_rel": sizing_rel,
+        "group_runs": group_runs,
+    }
     local_root_raw = params.get("local_root")
     return _close_committed(
         worktree, scratch, run_id, topic_slug, outputs, segment_dirs, meta,

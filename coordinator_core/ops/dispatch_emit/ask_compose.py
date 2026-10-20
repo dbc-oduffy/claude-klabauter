@@ -1481,9 +1481,14 @@ def compose_ask_script(
     if sized_in_run:
         b.append("  phase('size');")
         _sizings_prefix = Path(home_dir(".", "sizings")).as_posix() + "/"
+        # One path form for both the scout's `--write` template and the runtime `_sizingPathFor`: a
+        # template without the run suffix lets the file land where `_sizingRel` (refire line, stage
+        # and plan legs) does not look.
+        _sizing_stem_head = f"{date.today().isoformat()}-"
+        _sizing_stem_tail = f"-{run_id.rsplit('-', 1)[-1]}.yaml"
         sizing_write_rel = (
             sizing_rel if intake is not None
-            else f"{_sizings_prefix}{date.today().isoformat()}-<name>.yaml"
+            else f"{_sizings_prefix}{_sizing_stem_head}<name>{_sizing_stem_tail}"
         )
         _deliverable_js = (
             f" + {_lit(' --deliverable-id ' + shlex.quote(baton['deliverable_id']))}" if baton and baton.get("deliverable_id") else ""
@@ -1585,7 +1590,7 @@ def compose_ask_script(
         else:
             b.append(
                 f"  const _sizingPathFor = (r) => REPO_ROOT + '/' + '{_sizings_prefix}' + "
-                f"{_lit(date.today().isoformat() + '-')} + _slugOf(r) + '-' + _runId.split('-').pop() + '.yaml';"
+                f"{_lit(_sizing_stem_head)} + _slugOf(r) + {_lit(_sizing_stem_tail)};"
             )
         # An agent's Bash tool folds stderr into stdout, so sizing-assemble's stderr notes trail the
         # JSON; the decision is the span from the first `{` to the last column-0 `}`. A compact

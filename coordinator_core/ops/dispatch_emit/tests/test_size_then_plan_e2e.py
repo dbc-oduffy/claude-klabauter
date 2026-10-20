@@ -122,7 +122,7 @@ def _assemble(repo: Path, argv: list[str], monkeypatch, mode: str, capsys) -> di
 def _fixture(tmp_path: Path, monkeypatch, capsys, tshirt: str, mode: str, flags: list[str]):
     """Real assemble + real gate in one repo; a second repo for replaying the script's own command."""
     scout = _scout(tshirt, flags)
-    rel = f"state/sizings/{date.today().isoformat()}-{scout['name']}.yaml"
+    rel = f"state/sizings/{date.today().isoformat()}-{scout['name']}-1.yaml"
     repo = _make_repo(tmp_path / "captured")
     decision = _assemble(repo, _sizing_args(scout, rel, flags), monkeypatch, mode, capsys)
     verdict = ask_gate.gate(repo, rel, writes=scout["writes"]).to_json()

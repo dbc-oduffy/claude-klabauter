@@ -70,7 +70,7 @@ def test_sizing_path_prefix_is_emitted_verbatim():
 
 def test_raw_ask_sizing_path_is_run_unique_so_a_slug_collision_cannot_reattach():
     line = next(ln for ln in _compose().splitlines() if "const _sizingPathFor" in ln)
-    assert "_slugOf(r) + '-' + _runId.split('-').pop() + '.yaml'" in line
+    assert "_slugOf(r) + '-1.yaml'" in line
 
 
 def test_caller_passed_sizing_still_reattaches_to_that_path():
