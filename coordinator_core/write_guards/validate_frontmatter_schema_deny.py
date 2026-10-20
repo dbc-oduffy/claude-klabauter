@@ -161,6 +161,7 @@ from coordinator_core.frontmatter.baton_class import (
     _PRE_RENAME_ALIASES as _HANDOFF_KIND_PRE_RENAME_ALIASES,
     canonical_kind as _canonical_kind,
 )
+from coordinator_core.frontmatter.memo_contract import memo_contract_digest
 from coordinator_core.frontmatter.primitives import split_frontmatter as _split_frontmatter
 from coordinator_core.git.repo_root import show_toplevel as _git_show_toplevel
 from coordinator_core.content_root import read_content_root
@@ -680,13 +681,16 @@ def _scaffold_offer_message(
     return message
 
 
-def _violation_message(schema_name: str, errors: "list[dict]") -> str:
+def _violation_message(schema_name: str, errors: "list[dict]", contract: Optional[str] = None) -> str:
     parts = []
     for e in errors:
         field = e.get("field") or "(unknown)"
         hint = f"; required shape: {e['hint']}" if e.get("hint") else ""
         parts.append(f"{field}: {e.get('error')}{hint}")
-    return f"{schema_name}: {'; '.join(parts)}"
+    message = f"{schema_name}: {'; '.join(parts)}"
+    if contract:
+        message += f". Full contract: {contract}"
+    return message
 
 
 def _run_report_glob_match_is_content_thin(
@@ -1186,6 +1190,7 @@ def _evaluate_schema_validation(
 ) -> Optional[str]:
     """Returns a violation MESSAGE string on failure, or None when valid."""
     match_mode = schema.get("match_mode")
+    is_memo = schema_name in _MEMO_SCHEMA_NAMES
 
     if match_mode in ("whole-document-yaml", "whole-document-records"):
         try:
@@ -1201,7 +1206,7 @@ def _evaluate_schema_validation(
                 "field": "(parse error)",
                 "error": f"YAML parse error: {err}",
                 "hint": "Ensure the file is valid YAML with no --- frontmatter fences",
-            }])
+            }], memo_contract_digest(schema) if is_memo else None)
         if match_mode == "whole-document-records":
             validation_result = _validate_whole_document_records(parsed, schema)
         else:
@@ -1220,7 +1225,7 @@ def _evaluate_schema_validation(
                 "field": "(missing frontmatter)",
                 "error": "no YAML frontmatter found",
                 "hint": hint,
-            }])
+            }], memo_contract_digest(schema) if is_memo else None)
         validation_result = _validate_frontmatter_obj(frontmatter, schema)
 
     errors = [] if validation_result.get("ok") else list(validation_result.get("errors", []))
@@ -1230,7 +1235,9 @@ def _evaluate_schema_validation(
 
     if not errors:
         return None
-    return _violation_message(schema_name, errors)
+    return _violation_message(
+        schema_name, errors, memo_contract_digest(schema) if is_memo else None
+    )
 
 
 def _evaluate_grouping_approval(prospective_content: str, repo_rel: str) -> Optional[str]:

@@ -26,22 +26,29 @@
 
 ## 1. The key (D1)
 
-The client mints one dispatch key per request, `f"{os.getpid()}-{<clock>_ns}"`, and sends it as
-the `_dispatch_key` side-channel field (the same channel already carries `_caller`, `_env` and
-`_settings_home`). `_serve_line` pops it before dispatch. The clock is
-`time.monotonic_ns()` where the executing OS's spike verdict showed it ordered across
-independently-started interpreters, else `time.time_ns()` — see
-`docs/research/spike-verdicts/2026-09-23-dispatch-ack-cost-and-ordering.md` (viable; Linux picked
-`monotonic_ns()`; Windows/Darwin readings recorded as owed). The key is never the JSON-RPC `id`,
-and the `id` field's current value is unchanged by this contract.
+There is one minter, `dispatch_ack.mint_key()`, and one clock, `time.monotonic_ns()`. The key is
+`f"{pid}-{seq}-{monotonic_ns}"`: the process id, a per-process counter that keeps two mints in one
+clock tick distinct, and the mint ns as the last field (`mint_ns_of` reads the last field). The
+client calls it once per request and sends the result as the `_dispatch_key` side-channel field
+(the same channel already carries `_caller`, `_env` and `_settings_home`). `_serve_line` pops it
+before dispatch. The clock is `monotonic_ns()` because it orders across independently-started
+interpreters — see `docs/research/spike-verdicts/2026-09-23-dispatch-ack-cost-and-ordering.md`
+(viable; Linux picked `monotonic_ns()`; Windows/Darwin readings recorded as owed). The key is never
+the JSON-RPC `id`, and the `id` field's current value is unchanged by this contract.
 
 An unkeyed MUTATING frame (the door build mints none; an old client in a rollout skew window
-sends none) is keyed by the accept process: `_serve_line` calls `dispatch_ack.mint_key()`
-(`f"{os.getpid()}-{time.time_ns()}"`) before `admit`, so the door path is recorded and its -32004
-can name the key. The server-minted key rides `error.data.dispatch_key` on every MUTATING -32004.
-`mint_key` uses `time.time_ns()`, which is far above any `boot_ns` taken from `monotonic_ns()` on
-the same engine, so a minted key always sorts after `boot_ns`. A COMPUTE_ONLY unkeyed frame is
+sends none) is keyed by the accept process: `_serve_line` calls the same `dispatch_ack.mint_key()`
+before `admit`, so the door path is recorded and its -32004 can name the key. The server-minted key
+rides `error.data.dispatch_key` on every MUTATING -32004. A COMPUTE_ONLY unkeyed frame is
 dispatched as before and recorded nowhere.
+
+**Invariant: every key's tail, `boot_ns` and `low_water_ns` share one clock.** Eviction lifts
+`low_water_ns` to an evicted key's tail (§ 5), and `admit` refuses any key at or below it. A key
+minted in another clock domain (wall-clock `time_ns()` is about 1.8e18 against a `monotonic_ns()`
+of about 6.5e12) lifts `low_water_ns` past every key a client will ever mint, so every later
+client-minted key is refused -32009 until the engine restarts. That was the 2026-10-20
+-32009-on-every-call defect, reached after the first eviction of a server-minted key (4000
+records). A second minter, or a second clock, reopens it.
 
 ## 2. Where the record lives (D2)
 

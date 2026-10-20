@@ -66,6 +66,7 @@ import yaml
 
 from coordinator_core.atomic_replace import atomic_write_bytes
 from coordinator_core.frontmatter.primitives import split_frontmatter
+from coordinator_core.git.content_hash import eol_folded_sha256
 from coordinator_core.git.literal_pathspec import git_pathspec
 from coordinator_core.git.run import run_git
 from coordinator_core.ipc import register_op
@@ -434,7 +435,9 @@ def _compute(
     # though the frozen diff lacks it; the moved-bytes check then serves that stale freeze.
     contents = {rel: _read_or_none(repo_root / rel) for rel in product}
     hashes = {rel: None if data is None else hashlib.sha256(data).hexdigest() for rel, data in contents.items()}
-    out["reviewed_sha256"] = {rel: h for rel, h in hashes.items() if h is not None}
+    out["reviewed_sha256"] = {
+        rel: eol_folded_sha256(data) for rel, data in contents.items() if data is not None
+    }
     if not head:
         _write_pre_review_snapshot(share, repo_root, slice_prefix, base, paths, contents, hashes)
         out["pre_review_manifest"] = _rel(_manifest_path(share, slice_prefix), repo_root)

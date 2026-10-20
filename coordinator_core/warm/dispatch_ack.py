@@ -10,6 +10,7 @@ isolation.
 
 from __future__ import annotations
 
+import itertools
 import json
 import os
 import threading
@@ -44,9 +45,23 @@ _FINISHED_OUTCOMES = (OUTCOME_RESULT, OUTCOME_ERROR)
 _UNKNOWABLE_OUTCOMES = (OUTCOME_ABANDONED, OUTCOME_WORKER_LOST)
 
 
+#: Per-process call counter; `next()` on an `itertools.count` is atomic under the GIL.
+_dispatch_seq = itertools.count()
+
+
 def mint_key(pid: Optional[int] = None) -> str:
-    """Accept-process dispatch key, `<pid>-<time_ns>` (contract § 1)."""
-    return f"{os.getpid() if pid is None else pid}-{time.time_ns()}"
+    """The one dispatch-key minter, `<pid>-<seq>-<monotonic_ns>` (contract § 1).
+
+    The sequence keeps two calls distinct when a coarse monotonic clock
+    (Windows) returns the same tick twice.
+
+    TRAP: the nanosecond stamp must stay the LAST field -- `mint_ns_of` reads
+    the tail as the mint time, so a trailing sequence reads as "minted at ns 0".
+    The clock must be the one `boot_ns` uses: eviction lifts `low_water_ns` to an
+    evicted key's tail, so a key from another clock domain refuses every later
+    key from this one.
+    """
+    return f"{os.getpid() if pid is None else pid}-{next(_dispatch_seq)}-{time.monotonic_ns()}"
 
 
 def mint_ns_of(key: str) -> Optional[int]:

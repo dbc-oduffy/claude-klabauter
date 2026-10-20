@@ -446,12 +446,12 @@ def _sidecar_fm(repo: Path, reply: dict) -> dict:
 
 
 def test_worktree_prep_records_reviewed_sha256_and_re_freezes_a_moved_file(repo):
-    import hashlib  # noqa: PLC0415
+    from coordinator_core.git.content_hash import eol_folded_sha256  # noqa: PLC0415
 
     _write(repo, ["a/one.py", "b/two.py"], 3)
     first = _stored(repo, ["a/one.py", "b/two.py"])
     expected = {
-        rel: hashlib.sha256((repo / rel).read_bytes()).hexdigest() for rel in ("a/one.py", "b/two.py")
+        rel: eol_folded_sha256((repo / rel).read_bytes()) for rel in ("a/one.py", "b/two.py")
     }
     assert first["reviewed_sha256"] == expected
     assert _sidecar_fm(repo, first)["reviewed_sha256"] == expected
@@ -460,7 +460,7 @@ def test_worktree_prep_records_reviewed_sha256_and_re_freezes_a_moved_file(repo)
     _write(repo, ["a/one.py"], 5)
     second = _stored(repo, ["a/one.py", "b/two.py"])
     assert second["error"] is None
-    assert second["reviewed_sha256"]["a/one.py"] == hashlib.sha256((repo / "a/one.py").read_bytes()).hexdigest()
+    assert second["reviewed_sha256"]["a/one.py"] == eol_folded_sha256((repo / "a/one.py").read_bytes())
     assert second["reviewed_sha256"]["a/one.py"] != expected["a/one.py"]
     assert second["reviewed_sha256"]["b/two.py"] == expected["b/two.py"]
     assert list(Path(first["whole_diff_path"]).parent.glob("*.attempt1.diff"))

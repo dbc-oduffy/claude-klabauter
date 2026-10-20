@@ -1143,6 +1143,16 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             raw_target=file_path if file_path != target_repo else "",
             surface=SURFACE_TOOL,
         )
+        try:
+            from coordinator_core.ops.sibling_repo_provision_contract import (
+                ROUTE_REMEDY,
+                remedy_applies,
+            )
+
+            if remedy_applies(file_path, session_repo):
+                message = message.rstrip("\n") + "\n" + ROUTE_REMEDY
+        except (ImportError, OSError):
+            pass
 
         record_applicability_event(
             session_id,

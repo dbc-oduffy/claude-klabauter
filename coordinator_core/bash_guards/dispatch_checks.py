@@ -9462,6 +9462,25 @@ def _heredoc_write_target_is_scratch(abs_path: str) -> bool:
     return False
 
 
+def _heredoc_write_target_is_claude_memory(abs_path: str) -> bool:
+    """True if `abs_path` is a file under ``<claude-config>/projects/<slug>/memory/``
+    -- Claude auto-memory, never part of a session's commit. The config dir is
+    ``$CLAUDE_CONFIG_DIR`` or ``~/.claude``, read fresh per call; matching is
+    pure string arithmetic, separator- and case-insensitive."""
+    target = abs_path.replace("\\", "/").lower()
+    roots = [os.environ.get("CLAUDE_CONFIG_DIR"), os.path.join(os.path.expanduser("~"), ".claude")]
+    for root in roots:
+        if not root:
+            continue
+        root_n = os.path.normpath(root).replace("\\", "/").lower().rstrip("/")
+        prefix = root_n + "/projects/"
+        if target.startswith(prefix):
+            parts = target[len(prefix):].split("/")
+            if len(parts) >= 3 and parts[1] == "memory":
+                return True
+    return False
+
+
 def _paths_match_prefix(root: str, target: str) -> bool:
     """True if normalized `target` is `root` itself or lives underneath it --
     pure `os.path` string arithmetic, no `stat`/`samefile` (the target of a
@@ -9613,6 +9632,8 @@ def check_heredoc_repo_write_advise(
             if rel == ".git" or rel.startswith(".git/"):
                 continue
             if _heredoc_write_target_is_scratch(candidate):
+                continue
+            if _heredoc_write_target_is_claude_memory(candidate):
                 continue
             _hd_note = operator_override_note(
                 "COORDINATOR_ALLOW_HEREDOC_REPO_WRITE", payload=payload, git_root=git_root

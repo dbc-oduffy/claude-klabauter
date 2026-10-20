@@ -30,6 +30,7 @@ STATUS_RESUMED = "resumed"
 STATUS_LANDED = "landed"
 HALT_RUN_BASE_FIELD = "run_base_sha"
 HALT_REASON_FIELD = "reason"
+HALT_RUN_ARTIFACTS_FIELD = "run_artifacts"
 REVISED_AT_FIELD = "revised_at"
 _SHA40 = re.compile(r"[0-9a-f]{40}")
 _DATE_PREFIX = re.compile(r"(\d{4})-(\d{2})-(\d{2})")
@@ -198,6 +199,25 @@ def rebind_blocker(repo_root: Path, run_id: str, session_id: str) -> Optional[st
     if recorded is None or recorded == session_id:
         return None
     return None if session_live(recorded) else EMITTER_GONE
+
+
+def record_withheld(record_dir: Path, withheld: dict) -> bool:
+    """Stamp ``run_artifacts.withheld`` (``{path: reason}``) on a ``halted`` marker so a refire can
+    tell product the halt left dirty on purpose from product it never touched; False and no write
+    when nothing was withheld or the marker is absent or not halted."""
+    marker = _read(Path(record_dir))
+    if not withheld or marker is None or marker.get("status") != STATUS_HALTED:
+        return False
+    _write(Path(record_dir), {**marker, HALT_RUN_ARTIFACTS_FIELD: {"withheld": dict(sorted(withheld.items()))}})
+    return True
+
+
+def halted_withheld(record_dir: Path) -> dict:
+    """``{path: reason}`` the halt recorded as withheld; empty when absent or malformed."""
+    marker = _read(Path(record_dir))
+    arts = marker.get(HALT_RUN_ARTIFACTS_FIELD) if marker else None
+    raw = arts.get("withheld") if isinstance(arts, dict) else None
+    return {k: v for k, v in raw.items() if isinstance(k, str)} if isinstance(raw, dict) else {}
 
 
 def mark_revised(record_dir: Path, at: str) -> bool:

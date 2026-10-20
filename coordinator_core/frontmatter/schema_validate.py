@@ -4662,19 +4662,19 @@ def _memo_cf_central_only_requires_to(fm: dict) -> ErrorDict | None:
 
 
 def _memo_cf_summary_length_cap(fm: dict) -> ErrorDict | None:
-    """summary must not exceed 120 characters when present.
+    """summary must not exceed 240 characters when present.
 
-    Port of schema.js:1490-1499. Memo cap is 120 chars (distinct from handoff cap of 140).
+    Port of schema.js:1490-1499. Memo cap is 240 chars (distinct from handoff cap of 140).
     The __skip__ grandfather guard ensures this only fires for post-cutoff memos.
     """
     summary = fm.get('summary')
     if summary is None:
         return None
-    if len(str(summary)) > 120:
+    if len(str(summary)) > 240:
         return {
             'field': 'summary',
-            'error': f'summary exceeds 120 characters (got {len(str(summary))})',
-            'hint': 'Keep summary to one concise line of 120 characters or fewer',
+            'error': f'summary exceeds 240 characters (got {len(str(summary))})',
+            'hint': 'Keep summary to one concise line of 240 characters or fewer',
         }
     return None
 
@@ -4745,14 +4745,21 @@ def _memo_cf_kind_enum(fm: dict) -> ErrorDict | None:
         return None
     valid_kinds = list(_VALID_KINDS)
     if str(kind) not in valid_kinds:
+        hint = (
+            f'kind must be one of: {", ".join(valid_kinds)}. '
+            "Absent is also valid (reader applies 'ask' default). "
+            "Note: 'ack' is not a kind — acknowledgement is receipt-state."
+        )
+        if str(kind) == 'reply' or str(kind).endswith('-reply'):
+            hint += (
+                ' There is no reply kind: threading is in_reply_to. '
+                "On a received memo the sender's kind is tolerated "
+                '(memo_transition); leave it.'
+            )
         return {
             'field': 'kind',
             'error': f'invalid enum value "{kind}" for kind',
-            'hint': (
-                f'kind must be one of: {", ".join(valid_kinds)}. '
-                "Absent is also valid (reader applies 'ask' default). "
-                "Note: 'ack' is not a kind — acknowledgement is receipt-state."
-            ),
+            'hint': hint,
         }
     return None
 

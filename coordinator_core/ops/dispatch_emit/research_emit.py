@@ -144,19 +144,39 @@ def topic_slug(ask: str = "", sizing_rel: str = "") -> str:
 _PROBE_ARG_RE = re.compile(rc.PROBE_ARG_PATTERN)
 
 
-def probe_allowlist(content_root: Path) -> dict[str, bool]:
-    """DoE's probe allowlist as `{probe id: takes an arg}`, read from `<content_root>/contract/scouts-ask-fragment.json`.
+class _MalformedCliProbe(ValueError):
+    """A CLI probe entry missing its tool, verb ref or a non-empty list of safe verbs."""
 
-    A probe whose `ref` is `PROBE_NO_REF` takes no arg. Raises one PipelineEmitRefused naming the
-    file when it is missing, not JSON, or its `probe_allowlist` is absent or malformed (an empty
-    list is valid and refuses every local target). Runs no probe.
+
+def _probe_takes(entry: Mapping) -> "bool | tuple[str, ...]":
+    """One allowlist entry's value: a bool (takes an arg), or for a CLI probe its non-empty verb tuple; _MalformedCliProbe when a CLI entry is malformed."""
+    if rc.PROBE_TOOL_KEY not in entry and rc.PROBE_VERBS_KEY not in entry:
+        return entry.get("ref") != rc.PROBE_NO_REF
+    tool, verbs = entry.get(rc.PROBE_TOOL_KEY), entry.get(rc.PROBE_VERBS_KEY)
+    if not (isinstance(tool, str) and tool.strip() and entry.get("ref") == rc.PROBE_VERB_REF
+            and isinstance(verbs, list) and verbs
+            and all(isinstance(v, str) and _PROBE_ARG_RE.fullmatch(v) for v in verbs)):
+        raise _MalformedCliProbe(
+            f"CLI probe {entry.get('id')!r} needs a {rc.PROBE_TOOL_KEY}, ref {rc.PROBE_VERB_REF!r} and a non-empty {rc.PROBE_VERBS_KEY} list of {rc.PROBE_ARG_PATTERN} words"
+        )
+    return tuple(verbs)
+
+
+def probe_allowlist(content_root: Path) -> dict[str, "bool | tuple[str, ...]"]:
+    """DoE's probe allowlist as `{probe id: takes an arg, or a CLI probe's verb tuple}`, read from `<content_root>/contract/scouts-ask-fragment.json`.
+
+    A probe whose `ref` is `PROBE_NO_REF` takes no arg. A CLI probe (an entry with `tool`/`verbs`)
+    maps to its verb tuple instead of a bool. Raises one PipelineEmitRefused naming the
+    file when it is missing, not JSON, or its `probe_allowlist` is absent or malformed, a malformed
+    CLI entry included (an empty list is valid and refuses every local target). Runs no probe.
     """
     path = Path(content_root) / rc.SCOUTS_ASK_FRAGMENT
     try:
         entries = json.loads(path.read_text(encoding="utf-8"))[rc.PROBE_ALLOWLIST_KEY]
-        return {e["id"]: e.get("ref") != rc.PROBE_NO_REF for e in entries}
+        return {e["id"]: _probe_takes(e) for e in entries}
     except (OSError, ValueError, KeyError, TypeError, AttributeError) as err:
-        raise PipelineEmitRefused([f"{path.as_posix()} has no readable {rc.PROBE_ALLOWLIST_KEY} ({type(err).__name__})"]) from err
+        detail = str(err) if isinstance(err, _MalformedCliProbe) else type(err).__name__
+        raise PipelineEmitRefused([f"{path.as_posix()} has no readable {rc.PROBE_ALLOWLIST_KEY} ({detail})"]) from err
 
 
 def _split_entry(entry: object) -> tuple[object, object]:
@@ -169,16 +189,19 @@ def _split_entry(entry: object) -> tuple[object, object]:
     return None, None
 
 
-def _local_ref_refusal(ref: str, allowlist: Mapping[str, bool] | None) -> str:
+def _local_ref_refusal(ref: str, allowlist: Mapping[str, "bool | tuple[str, ...]"] | None) -> str:
     if allowlist is None:
         return "local target cannot be checked: no probe allowlist is loaded"
     probe, sep, arg = ref.partition(rc.TARGET_ENTRY_SEP)
     if probe not in allowlist:
         return f"local probe {probe!r} is not in the probe allowlist ({', '.join(sorted(allowlist)) or 'empty'})"
-    if not allowlist[probe]:
+    takes = allowlist[probe]
+    if not takes:
         return f"local probe {probe!r} takes no arg" if sep else ""
     if not sep or not arg:
         return f"local probe {probe!r} needs an arg after '{rc.TARGET_ENTRY_SEP}'"
+    if isinstance(takes, tuple):
+        return "" if arg in takes else f"local probe {probe!r} verb {arg!r} is not allowed; allowed verbs: {', '.join(takes)}"
     if not _PROBE_ARG_RE.fullmatch(arg):
         return f"local probe arg {arg!r} must match {rc.PROBE_ARG_PATTERN}"
     return ""

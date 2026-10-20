@@ -1052,6 +1052,10 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
         "coordinator_core/ops/records_query.py",
         ("_handler",),
     ),
+    "research.reground": (
+        "coordinator_core/ops/research_reground.py",
+        ("_handler",),
+    ),
     "research.shape": (
         "coordinator_core/ops/research_shape.py",
         ("_research_shape",),
@@ -6964,6 +6968,8 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     # 3 -> 4, 2026-09-06: same `_existing_origin_url` site as
     # `install.clone_idempotent` above, reached through the shared helper.
     "repo.clone_and_register": 4,
+    # Static count: the op's git calls share one `_git` site; runtime spawns on create are 4.
+    "repo.provision_local": 1,
     "repo.create_and_push_remote": 3,
     "tracker.push_suggestion": 3,
     "cartography.file_index": 2,

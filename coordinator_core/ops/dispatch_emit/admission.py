@@ -58,6 +58,7 @@ admission token.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import random
 import time
@@ -65,7 +66,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
 
-from coordinator_core.machine_resolver import merged_flat_registry
+from coordinator_core.machine_resolver import merged_flat_registry, registry_dir
 from coordinator_core.resolve_validation_cmd import cs_read_local_md_mapping
 from coordinator_core.telemetry import op_latency
 
@@ -261,9 +262,13 @@ def await_admission(
 
     thresholds, missing_keys = _load_thresholds_with_missing(start_dir)
     if thresholds is None:
-        return _record(
+        record = _record(
             "admitted_unconfigured", route, None, None, [], 0.0, 0, None, missing_keys
         )
+        repo_root = _find_repo_root(start_dir)
+        if repo_root is not None:
+            record["repo_root"] = str(repo_root)
+        return record
 
     reader = read_load
     if reader is None:
@@ -335,16 +340,36 @@ def await_admission(
     )
 
 
+def _unconfigured_marker(record: dict) -> Optional[Path]:
+    """Per-repo marker under the machine-local dir, or None when the record
+    names no repo (then the notice is never remembered)."""
+    repo_root = record.get("repo_root")
+    if not repo_root:
+        return None
+    digest = hashlib.sha1(str(repo_root).encode("utf-8")).hexdigest()[:16]
+    return registry_dir() / "admission-unconfigured-noticed" / digest
+
+
 def notice_line(record: dict) -> Optional[str]:
     """The one stderr line an emission prints for `record`, or None when the
     verdict is `admitted`/`disabled`. An unconfigured admission names each
     missing machine-local key once; every other verdict keeps verdict,
-    reasons and wait. Called on every emit: nothing remembers a prior notice, so the
-    unconfigured line repeats until the keys are set."""
+    reasons and wait. The unconfigured line prints once per machine and repo
+    (one stat, no spawn): a marker file under the machine-local dir records
+    it, and a marker that cannot be read or written leaves the line printing."""
     verdict = record.get("verdict")
     if verdict in ("admitted", "disabled"):
         return None
     if verdict == "admitted_unconfigured":
+        marker = _unconfigured_marker(record)
+        if marker is not None:
+            if marker.exists():
+                return None
+            try:
+                marker.parent.mkdir(parents=True, exist_ok=True)
+                marker.touch()
+            except OSError:
+                pass
         keys = ", ".join(_MACHINE_LOCAL_PREFIX + k for k in record.get("missing_keys") or ())
         return (
             "emit-dispatch-workflow: admission — unconfigured, default unthrottled "

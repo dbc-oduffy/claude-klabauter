@@ -321,6 +321,19 @@ _STAND_DOWN_SINK = "outside-repo-write.log"
 _STAND_DOWN_LABEL = "outside-repo-write"
 
 
+def _with_route_remedy(message: str, target: str, git_root: str) -> str:
+    """Append `ROUTE_REMEDY` when `target` lies in an absent or provisioned sibling of `git_root`.
+    Text only; the contract import is deferred so the common allow path never pays for it."""
+    try:
+        from coordinator_core.ops.sibling_repo_provision_contract import ROUTE_REMEDY, remedy_applies
+
+        if remedy_applies(target, git_root):
+            return message.rstrip("\n") + "\n" + ROUTE_REMEDY
+    except Exception:
+        pass
+    return message
+
+
 def _stand_down_instead_of_denying(
     anchor_git_root: Optional[str],
     effective_sid: str,
@@ -951,6 +964,7 @@ def check_bump_outside_repo_write(
             destination_owner=destination_owner,
             raw_target=raw_target if raw_target != target_dir else "",
         )
+        message = _with_route_remedy(message, target_dir, anchor_git_root_str)
         stood_down = environment_stands_the_bump_down(env)
         if stood_down is not None:
             _stand_down_instead_of_denying(
@@ -1171,6 +1185,7 @@ def _check_bump_outside_repo_write_powershell(
             destination_owner=destination_owner,
             raw_target=raw_target if raw_target != target_dir else "",
         )
+        message = _with_route_remedy(message, target_dir, anchor_git_root_str)
         stood_down = environment_stands_the_bump_down(env)
         if stood_down is not None:
             _stand_down_instead_of_denying(

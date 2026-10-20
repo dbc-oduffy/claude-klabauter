@@ -78,6 +78,15 @@ checkout.
 Session id is read from `params` only — never `os.environ` — per this
 package's established payload-only-input convention.
 
+Forwarder contract. `evaluate(payload, env=None, repo_root=None) -> dict` is the one body behind
+the registered op and the seam a thin external hook script forwards to. `payload` is the hook
+stdin JSON (`tool_name`, `tool_input`, `cwd`, `session_id`, optionally wrapped as `{"payload":
+...}`); `env` defaults to `os.environ` and supplies the fire token and the session-id fallback.
+It returns `{}` (admit) or `{"hookSpecificOutput": {"hookEventName": "PreToolUse",
+"permissionDecision": "deny", "permissionDecisionReason": ...}}` (deny, per `_hook_envelope.deny`
+after `apply_guard_level`). Any internal error fails open to `{}`. The op handler delegates here,
+passing only `payload["env"]` (never `os.environ`) as `env`.
+
 Spec backlink: docs/plans/2026-09-18-doe-holds-no-scripts.md § W4-C9
 """
 
@@ -85,6 +94,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 from pathlib import Path, PurePosixPath
 from typing import Mapping, Optional
@@ -297,9 +307,21 @@ def _resume_after_revise_reason(script: Path) -> "Optional[str]":
         return None
 
 
-@register_op("hooks.block_workflow_foreign_emission")
-def _handler(params: dict, repo_root=None) -> dict:
-    params = payload_of(params)
+def evaluate(
+    payload: dict,
+    env: "Optional[Mapping[str, str]]" = None,
+    repo_root=None,
+) -> dict:
+    """Single-call forwarder seam — see module docstring "Forwarder contract"."""
+    try:
+        effective_env = os.environ if env is None else env
+        return _evaluate(dict(payload_of(payload)), effective_env)
+    except Exception:
+        return no_advisory()
+
+
+def _evaluate(params: dict, env: Mapping) -> dict:
+    params["env"] = env
     if params.get("tool_name") != "Workflow":
         return no_advisory()
 
@@ -372,3 +394,10 @@ def _handler(params: dict, repo_root=None) -> dict:
             return _resolved_deny(reason)
 
     return no_advisory()
+
+
+@register_op("hooks.block_workflow_foreign_emission")
+def _handler(params: dict, repo_root=None) -> dict:
+    inner = payload_of(params)
+    env = inner.get("env")
+    return evaluate(inner, env if isinstance(env, Mapping) else {}, repo_root)

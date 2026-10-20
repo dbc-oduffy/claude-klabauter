@@ -163,6 +163,73 @@ def test_refused_follow_up_commit_restores_the_bytes(tmp_path, monkeypatch):
     assert (root / PLAN).read_bytes() == before
 
 
+def _cas_loser(root, real, losses, exc_factory=None):
+    """commit_paths stand-in: a peer commits, then this call loses the ref CAS, `losses` times."""
+    from coordinator_core.git import commit
+
+    calls = {"n": 0}
+
+    def wrapper(*a, **k):
+        calls["n"] += 1
+        if calls["n"] <= losses:
+            (root / "peer.txt").write_text(f"peer {calls['n']}\n", encoding="utf-8")
+            _git(root, "add", "peer.txt")
+            _git(root, "commit", "-q", "-m", f"peer {calls['n']}")
+            raise (exc_factory or (lambda: commit.CommitRefused(
+                "compare-and-swap failed -- refs/heads/x moved since abc was captured.")))()
+        return real(*a, **k)
+
+    return wrapper, calls
+
+
+def test_peer_commit_between_head_read_and_cas_is_retried_and_lands(tmp_path, monkeypatch):
+    from coordinator_core.git import commit
+
+    root, sha = _repo(tmp_path)
+    wrapper, calls = _cas_loser(root, commit.commit_paths, 1)
+    monkeypatch.setattr(commit, "commit_paths", wrapper)
+
+    out = stamp_checkpoint(root, _message(), sha)
+
+    assert "stamp_error" not in out and out["stamp_sha"]
+    assert calls["n"] == 2
+    assert _git(root, "rev-parse", "HEAD") == out["stamp_sha"]
+    assert _git(root, "log", "-1", "--format=%P") == _git(root, "rev-parse", "HEAD~1")
+    assert _git(root, "log", "-2", "--format=%s").splitlines()[1] == "peer 1"
+    assert _rows(root)["C1"]["disposition"] == "coded"
+
+
+def test_cas_retries_are_bounded_then_stamp_error_and_restore(tmp_path, monkeypatch):
+    from coordinator_core.git import commit
+
+    root, sha = _repo(tmp_path)
+    before = (root / PLAN).read_bytes()
+    wrapper, calls = _cas_loser(root, commit.commit_paths, 99)
+    monkeypatch.setattr(commit, "commit_paths", wrapper)
+
+    out = stamp_checkpoint(root, _message(), sha)
+
+    assert "stamp_error" in out
+    assert calls["n"] == checkpoint_stamp.STAMP_CAS_ATTEMPTS
+    assert (root / PLAN).read_bytes() == before
+
+
+@pytest.mark.parametrize("which", ["BlobDriftRefused", "NothingToCommit"])
+def test_drift_and_nothing_to_commit_are_not_retried(tmp_path, monkeypatch, which):
+    from coordinator_core.git import commit
+
+    root, sha = _repo(tmp_path)
+    cls = getattr(commit, which)
+    wrapper, calls = _cas_loser(
+        root, commit.commit_paths, 99, lambda: cls("compare-and-swap failed -- moved")
+    )
+    monkeypatch.setattr(commit, "commit_paths", wrapper)
+
+    out = stamp_checkpoint(root, _message(), sha)
+
+    assert "stamp_error" in out and calls["n"] == 1
+
+
 def test_gitignored_plan_is_stamped_on_disk_only(tmp_path):
     root, sha = _repo(tmp_path, ignore_plan=True)
 

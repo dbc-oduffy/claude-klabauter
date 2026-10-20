@@ -27,12 +27,12 @@ def test_third_party_subject_is_silent(text):
     "text",
     [
         "I'm waiting on your call to proceed",
-        "coordinator-content-repo-55 is idle and I'm waiting on you",
-        "coordinator-content-repo-55 is done, so we're waiting on you",
+        "coordinator-content-repo-55 is idle and I'm waiting on you, please confirm",
+        "coordinator-content-repo-55 is done, so we're waiting on you, please confirm",
         "The peer shipped it; my read is it now waits on you",
         "coordinator-content-repo-55 is done. Your call.",
         "The peer is blocked, and this session waits on you",
-        "Our peer is waiting on you",
+        "Our peer is waiting on you, please confirm",
     ],
 )
 def test_first_person_or_fresh_clause_fires(text):

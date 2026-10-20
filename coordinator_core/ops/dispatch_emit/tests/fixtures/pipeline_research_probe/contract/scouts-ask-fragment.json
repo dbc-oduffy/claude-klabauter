@@ -69,6 +69,18 @@
         "Windows": "cmdkey /list | findstr /i \"{ref}\"",
         "Linux": "secret-tool search --all service {ref} 2>/dev/null | grep -E '^(label|attribute\\.)'"
       }
+    },
+    {
+      "id": "p4-readonly",
+      "reports": "output of one read-only p4 verb from the verbs list, never a write",
+      "ref": "verb",
+      "tool": "p4",
+      "verbs": ["changes", "describe", "filelog", "fstat", "opened"],
+      "commands": {
+        "macOS": "p4 {ref}",
+        "Windows": "p4 {ref}",
+        "Linux": "p4 {ref}"
+      }
     }
   ],
   "probe_rules": {

@@ -125,6 +125,7 @@ ASK_SCOUT_SCHEMA = {
         "arm": {"type": ["string", "null"]},
         "halt": {"type": ["object", "null"]},
         "baton": {"type": ["object", "null"]},
+        "sizing_path": {"type": ["string", "null"]},
         "resume_plan": {"type": ["string", "null"]},
         "resume_rows": {"type": ["array", "null"], "items": _STR},
         "spine_plan": {"type": ["string", "null"]},
@@ -841,6 +842,10 @@ class StageManifest:
     owed: tuple[OwedRow, ...] = ()
     #: Register row ids still unruled (neither met nor waived) at stage time.
     rulable_ids: tuple[str, ...] = ()
+    #: Register row ids the ledger judges, and those a recorded out-of-scope ruling withholds
+    #: (`requirements_ledger.ledger_ids`); an absent key reads as ``()``.
+    ledger_item_ids: tuple[str, ...] = ()
+    withheld_ids: tuple[str, ...] = ()
     #: The staged rows' `fanout_cost.FanoutCost.meta_dict()` (agents, basis, groups); None when unset.
     fanout: dict[str, Any] | None = None
 
@@ -853,6 +858,8 @@ class StageManifest:
     def _base_json(self) -> dict[str, Any]:
         return {
             "rulable_ids": list(self.rulable_ids),
+            "ledger_item_ids": list(self.ledger_item_ids),
+            "withheld_ids": list(self.withheld_ids),
             "owed": [o.to_json() for o in self.owed],
             "engine_rows": [dict(r) for r in self.engine_rows],
             "plan_id": self.plan_id,
@@ -881,5 +888,7 @@ class StageManifest:
             engine_rows=tuple(dict(r) for r in data.get("engine_rows") or ()),
             owed=tuple(OwedRow.from_json(o) for o in data.get("owed") or ()),
             rulable_ids=tuple(data.get("rulable_ids") or ()),
+            ledger_item_ids=tuple(data.get("ledger_item_ids") or ()),
+            withheld_ids=tuple(data.get("withheld_ids") or ()),
             fanout=dict(data["fanout"]) if data.get("fanout") else None,
         )

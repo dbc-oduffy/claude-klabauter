@@ -170,6 +170,15 @@ def test_mint_key_parses_and_sorts_after_a_default_boot_ns():
     assert store.admit(key, "ceremony.commit_v2") is True
 
 
+def test_eviction_of_a_server_minted_key_does_not_refuse_a_client_minted_key():
+    store = dispatch_ack.AckStore(capacity=2)
+    for _ in range(3):
+        assert store.admit(dispatch_ack.mint_key(), "ceremony.commit_v2") is True
+    assert store.low_water_ns < time.monotonic_ns()
+    client_key = f"{os.getpid()}-0-{time.monotonic_ns()}"
+    assert store.admit(client_key, "memo.draft") is True
+
+
 def test_stamp_result_is_returned_by_status():
     store = _store()
     key = _key(1, 1_000_100)

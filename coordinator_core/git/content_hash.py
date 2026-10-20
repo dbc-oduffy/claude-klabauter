@@ -59,6 +59,7 @@ from coordinator_core.git import call_io_scope
 from coordinator_core.git.git_dir import resolve_git_common_dir, resolve_git_dir
 
 __all__ = [
+    "eol_folded_sha256",
     "content_matches_index_sha",
     "_autocrlf_checkin_normalize",
     "_repo_autocrlf_true",
@@ -69,6 +70,14 @@ __all__ = [
 ]
 
 _LOCAL_ATTRIBUTES_FILENAME = ".gitattributes"
+
+
+def eol_folded_sha256(data: bytes) -> str:
+    """sha256 hex of ``data`` with CRLF folded to LF: the one expectation hash shared by
+    ``commit_paths``' content-drift check, ``touch_record.compute_content_hash`` and
+    ``review_prep``'s ``reviewed_sha256``. A CRLF/LF-only change is not drift; all three
+    must fold alike or an expectation minted by one reads as drift in another."""
+    return hashlib.sha256(data.replace(b"\r\n", b"\n")).hexdigest()
 
 
 def _read_text_scoped(path: Path) -> Optional[str]:

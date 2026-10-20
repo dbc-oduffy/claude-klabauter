@@ -251,6 +251,7 @@ _GATE_SCHEMA = _obj(
         "arm": {"type": ["string", "null"]},
         "halt": {"type": ["object", "null"]},
         "baton": {"type": ["object", "null"]},
+        "sizing_path": {"type": ["string", "null"]},
         "tshirt": _STR,
         "route": _STR,
         "resume_plan": {"type": ["string", "null"]},
@@ -435,6 +436,8 @@ _MANIFEST_SCHEMA = _obj(
         "run_dir": _STR,
         "plan_id": {"type": ["string", "null"]},
         "error": {"type": ["string", "null"]},
+        "owed_em_ids": {"type": "array", "items": _STR},
+        "owed_plan": _STR,
         "rows": {
             "type": "array",
             "items": _obj(
@@ -458,6 +461,8 @@ _MANIFEST_SCHEMA = _obj(
         "doc_writes": {"type": "array", "items": _STR},
         "marker_path": _STR,
         "rulable_ids": {"type": "array", "items": _STR},
+        "ledger_item_ids": {"type": "array", "items": _STR},
+        "withheld_ids": {"type": "array", "items": _STR},
         "gated": {"type": "array", "items": _obj(["id"], {"id": _STR, "reason": _STR, "gate": _STR, "owner_repo": _STR, "owner_root": _STR, "closure_key": {}})},
         "owed": {"type": "array", "items": _obj(["id"], {"id": _STR, "reason": _STR, "detail": _STR})},
         "engine_rows": {"type": "array", "items": _obj(["id"], {"id": _STR, "owner_repo": _STR, "owner_root": _STR, "root_class": _STR, "engine": {"type": "boolean"}})},
@@ -537,6 +542,7 @@ _DESIGN_PREFIX_JS = f"(_gate?.{DESIGN_BRIEF_KEY} ? String(_gate.{DESIGN_BRIEF_KE
 #: lands in `_relayGap` (halts by name) unless `soft` (the plan-blitz arm, which re-reads on a gap).
 _ADMIT_MANIFEST_JS = (
     "  let _stageRefusal = null;\n"
+    "  let _stageOwedEm = null;\n"
     "  let _relayGap = null;\n"
     "  let _diskHalt = null;\n"
     "  const _wholeManifestGap = (m) => {\n"
@@ -563,7 +569,9 @@ _ADMIT_MANIFEST_JS = (
     "    if (m === null || m === undefined || typeof m !== 'object' || Array.isArray(m)) return;\n"
     # A soft (relayed) reply's `error` is agent prose -- a relay that shortens an oversized
     # manifest writes its note there -- so it never refuses; the disk read that follows decides.
-    "    if (m.error) { if (!soft && !_stageRefusal) _stageRefusal = String(m.error); return; }\n"
+    "    if (m.error) { if (!soft && !_stageRefusal) { _stageRefusal = String(m.error); "
+    "if (Array.isArray(m.owed_em_ids) && m.owed_em_ids.length) _stageOwedEm = { ids: m.owed_em_ids.map(String), "
+    "plan: typeof m.owed_plan === 'string' ? m.owed_plan : null }; } return; }\n"
     "    const gap = _wholeManifestGap(m);\n"
     "    if (gap) { if (!soft && !_relayGap) _relayGap = gap; return; }\n"
     "    _stagedManifest = m;\n"
@@ -1525,7 +1533,7 @@ def compose_ask_script(
             "stderr. Do not edit, retry or repair it. (2) Only when exit_code is 0, run the next command "
             "with <name> filled as above and <your writes> replaced by the JSON array you return as writes:\n\n"
             + gate_template
-            + "\n\nand return its JSON reply verbatim as arm, halt, baton and (when present) resume_plan, "
+            + "\n\nand return its JSON reply verbatim as arm, halt, baton, sizing_path and (when present) resume_plan, "
             f"resume_rows, resume_ledger and spine_plan, plus design_brief and design_route when present; then read estimate.tshirt and route from the sizing at {sizing_write_rel} "
             "and return them as tshirt and route (tshirt replaces your own judged value). "
             "On a non-zero exit_code run no gate command and return no arm or halt."
@@ -1597,6 +1605,10 @@ def compose_ask_script(
                 f"  const _sizingPathFor = (r) => REPO_ROOT + '/' + '{_sizings_prefix}' + "
                 f"{_lit(_sizing_stem_head)} + _slugOf(r) + {_lit(_sizing_stem_tail)};"
             )
+        b.append(
+            "  const _boundRelOf = (v) => typeof v === 'string' && v !== '' && !v.startsWith('/') "
+            "&& !/^[A-Za-z]:/.test(v) && !v.includes('\\\\') && !v.split('/').includes('..') ? v : null;"
+        )
         # An agent's Bash tool folds stderr into stdout, so sizing-assemble's stderr notes trail the
         # JSON; the decision is the span from the first `{` to the last column-0 `}`. A compact
         # one-line decision has no column-0 `}`, so the spans widen to the last `}`, then to the
@@ -1647,7 +1659,7 @@ def compose_ask_script(
         b.append("  const _scoutClean = _scouted.exit_code === 0 && !_scouted.halt && !!_scouted.arm;")
         b.append("  _writes = _scouted.writes ?? [];")
         b.append("  _gated = _scouted.gated ?? [];")
-        b.append("  const _sizingPath = _sizingPathFor(_scouted);")
+        b.append("  const _sizingPath = _boundRelOf(_scouted.sizing_path) ? REPO_ROOT + '/' + _scouted.sizing_path : _sizingPathFor(_scouted);")
         assemble_cmd_js = _assemble_cmd_js("_sizingPath")
         _reword_sizing_js = "_sizingPath.slice(REPO_ROOT.length + 1)"
         reword_closing = (
@@ -1658,7 +1670,7 @@ def compose_ask_script(
             "\n\nReturn its exit code as exit_code, its stdout verbatim as stdout and its stderr as stderr. "
             f"Do not edit, retry or repair it. (2) Only when exit_code is 0, run `{_INVOKE} {OP_ASK_GATE} '",
             _gate_payload(sizing_js=_reword_sizing_js),
-            "'` and return its JSON reply verbatim as arm, halt, baton and (when present) resume_plan, resume_rows, resume_ledger, "
+            "'` and return its JSON reply verbatim as arm, halt, baton, sizing_path and (when present) resume_plan, resume_rows, resume_ledger, "
             "spine_plan, design_brief and design_route; when the command is denied or fails, return halt {kind: 'refusal', reason: <its error "
             "text>}, never arm and halt both null. Also read the sizing at ",
             "js:" + _reword_sizing_js,
@@ -1714,10 +1726,12 @@ def compose_ask_script(
             "_scouted.stdout = _reworded.stdout; _scouted.stderr = _reworded.stderr;"
         )
         b.append("    if (_scouted.exit_code === 0) {")
-        b.append("      _sizingRel = _sizingPath.slice(REPO_ROOT.length + 1);")
+        b.append(
+            "      _sizingRel = _boundRelOf(_reworded.sizing_path) ?? _sizingPath.slice(REPO_ROOT.length + 1);"
+        )
         b.append(
             "      Object.assign(_scouted, { arm: _reworded.arm ?? null, halt: _reworded.halt ?? null, "
-            "baton: _reworded.baton ?? null, tshirt: _reworded.tshirt, route: _reworded.route, "
+            "baton: _reworded.baton ?? null, sizing_path: _sizingRel, tshirt: _reworded.tshirt, route: _reworded.route, "
             "resume_plan: _reworded.resume_plan ?? null, resume_rows: _reworded.resume_rows ?? null, resume_ledger: _reworded.resume_ledger ?? null, spine_plan: _reworded.spine_plan ?? null, "
             f"{DESIGN_BRIEF_KEY}: _reworded.{DESIGN_BRIEF_KEY} ?? null, "
             f"{DESIGN_ROUTE_KEY}: _reworded.{DESIGN_ROUTE_KEY} ?? null, "
@@ -1741,7 +1755,9 @@ def compose_ask_script(
             "detail: [_scouted.stderr, _scouted.stdout].map((s) => String(s ?? '').trim())"
             ".filter((s) => s).join('\\n').slice(0, 600), run_id: _runId }; }"
         )
-        b.append("  else { _sizingRel = _sizingPath.slice(REPO_ROOT.length + 1); }")
+        b.append(
+            "  else { _sizingRel = _boundRelOf(_scouted.sizing_path) ?? _sizingPath.slice(REPO_ROOT.length + 1); }"
+        )
         # Exit 0 proves nothing when the scout never ran sizing-assemble (stdout 'not run'). Proof is
         # a parsed assemble decision (always carries `route`) or a gate reply (an arm or a halt):
         # ask_gate reads the sizing from disk, so it answers only once the file exists. Scouts
@@ -2395,7 +2411,10 @@ def compose_ask_script(
         f"  if (!_stagedManifest) {{ _manifest = {{ error: '{NO_MANIFEST_PREFIX}: the agent that closes the "
         "gate, plan or plan-blitz ready path returned none' }; }"
     )
-    b.append("  if (!_stagedManifest && _stageHalt) { _manifest = { error: _stageHalt }; }")
+    b.append(
+        "  if (!_stagedManifest && _stageHalt) { _manifest = { error: _stageHalt, owed_em_ids: _stageOwedEm?.ids ?? [], "
+        "owed_plan: _stageOwedEm?.plan ?? null }; }"
+    )
     b.append("  if (!_manifest.error) { for (const g of (_manifest.gated ?? [])) { _incompleteChunks.push(g.id); } }")
     b.append("  if (!_manifest.error) { for (const o of (_manifest.owed ?? [])) { _incompleteChunks.push(o.id); } }")
     b.append(
@@ -2421,7 +2440,7 @@ def compose_ask_script(
         f"{_lit(HALT_REFUSAL)}, kind: {_lit(HALT_REFUSAL)}, reason: _manifest.error || 'stage staged no rows', "
         "sizing: _sizingRel, plan: _planRel, run_id: _runId, "
         f"...({_owed_handback_js(sizing_rel)} ? {{ next_action: {_owed_handback_js(sizing_rel)} }} : "
-        f"{_no_manifest_next_action_js(sizing_rel)}) }}; }}"
+        f"{_all_em_next_action_js(sizing_rel)}) }}; }}"
     )
     b.append("  }")
 
@@ -2712,22 +2731,31 @@ def compose_ask_script(
     # apart, with the ledger re-check as its remedy.
     b.append(
         f"    const _rulable = _manifest?.rulable_ids ?? _gate.{RESUME_LEDGER_KEY}?.rulable_ids ?? [];\n"
-        "    const _blkIds = (_ledger ? _ledgerBlocking(_ledger) : []).map((i) => i && i.id).filter(Boolean);\n"
+        f"    const _ledgerIds = _gate.{RESUME_LEDGER_KEY}?.ledger_item_ids ?? _manifest?.ledger_item_ids ?? null;\n"
+        f"    const _withheldIds = _gate.{RESUME_LEDGER_KEY}?.withheld_ids ?? _manifest?.withheld_ids ?? null;\n"
+        "    const _allRuledOut = Array.isArray(_ledgerIds) && !_ledgerIds.length "
+        "&& Array.isArray(_withheldIds) && _withheldIds.length > 0;\n"
+        "    const _emptyVerdict = !!_ledger && (_ledger.items ?? []).length === 0 && !_allRuledOut;\n"
+        "    const _owedIds = _emptyVerdict && Array.isArray(_ledgerIds) ? _ledgerIds : [];\n"
+        "    const _blkIds = (_emptyVerdict ? _owedIds : (_ledger ? _ledgerBlocking(_ledger) : []))"
+        ".map((i) => (i && typeof i === 'object') ? i.id : i).filter(Boolean);\n"
         "    const _blkRulable = _blkIds.filter((id) => _rulable.includes(id));\n"
         "    const _blkForeign = _blkIds.filter((id) => !_rulable.includes(id));"
     )
     b.append(
-        "    if (!_halted && (!_ledger || !(_ledger.items ?? []).length || _ledgerBlocking(_ledger).length)) "
+        "    if (!_halted && (!_ledger || _emptyVerdict || _ledgerBlocking(_ledger).length)) "
         "{ _halted = { halted: 'ledger-check', "
-        "items: _ledger ? _ledgerBlocking(_ledger) : [], "
+        "items: _emptyVerdict ? _owedIds.map((id) => ({ id, status: 'not_met' })) : (_ledger ? _ledgerBlocking(_ledger) : []), "
         f"conflicts: _ledger?.conflicts ?? [], ledger: {_lit(ledger_rel)}, sizing: _sizingRel, run_id: _runId, "
         f"{HALT_PLAN_FIELD}: _planRel, "
-        "next_action: 'Ledger rows ' + (_blkIds.join(', ') || '(ledger unreadable)') + ' block the commit.' "
+        "next_action: (_blkIds.length ? 'Ledger rows ' + _blkIds.join(', ') + (_emptyVerdict ? ' were owed a verdict and the verify leg returned none' : '') + ' block the commit.' "
+        ": !_ledger ? 'The verify leg returned no items list, so the ledger holds no verdict: fix the verify leg before re-running.' "
+        ": 'The verify leg returned an empty items list and no ledger row ids are on record to hold it against: fix the verify leg before re-running.') "
         "+ (_blkRulable.length ? ' Run coordinator-invoke workflow.revise with run_id ' + _runId "
         "+ ' with out_of_scope: [' + _blkRulable.join(', ') + '] for the rows ruled out; `verbatim` carries the PM words ruling them out, recorded as the ruling and adding no row. The re-fire resumes at the ledger check.' : '') "
         "+ (_blkForeign.length ? ' ' + _blkForeign.join(', ') + ' are not in the stage manifest rulable_ids: re-run the ledger check.' : '') "
-        "+ ' Re-fire the same sizing: it executes the remaining work of the rows it keeps, briefed with the revise notes, '"
-        "+ 'and a row is met only on work changed since this halt.' }; }"
+        "+ (_blkIds.length ? ' Re-fire the same sizing: it executes the remaining work of the rows it keeps, briefed with the revise notes, '"
+        "+ 'and a row is met only on work changed since this halt.' : '') }; }"
     )
     b.append("  }")
     b.append("  }")
@@ -2911,6 +2939,19 @@ def _owed_handback_js(sizing_rel: Optional[str]) -> str:
 
 
 NO_MANIFEST_PREFIX = "no folded stage manifest"
+
+def _all_em_next_action_js(sizing_rel: Optional[str]) -> str:
+    """JS expression: `{next_action}` for a stage refusal that derived zero dispatchable rows with
+    rows owed by the EM (the stage reply's `owed_em_ids`), else `{}`. Names the exact em-discharge
+    call per owed id, then the refire."""
+    return (
+        "((_manifest?.owed_em_ids ?? []).length ? { next_action: "
+        "'Every stage performer is the EM; nothing to dispatch. Perform each row, then record it: ' + "
+        "_manifest.owed_em_ids"
+        ".map((id) => 'coordinator-invoke plan.tasks.mutate {\"verb\":\"em-discharge\",\"plan_path\":' "
+        "+ JSON.stringify(_manifest.owed_plan ?? _planRel ?? '') + ',\"id\":' + JSON.stringify(id) + ',\"text\":\"<what you did>\"}').join('; ') "
+        f"+ '. Then refire: ' + {_refire_js(sizing_rel)} }} : {_no_manifest_next_action_js(sizing_rel)})"
+    )
 
 
 def _no_manifest_next_action_js(sizing_rel: Optional[str]) -> str:

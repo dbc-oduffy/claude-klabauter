@@ -20,7 +20,7 @@ def _load_cli():
 
 
 class _Refusal(RuntimeError):
-    op_stderr = "fleet op setup error: memo.send: summary is 130 chars, cap is 120 — shorten it"
+    op_stderr = "fleet op setup error: memo.send: summary is 250 chars, cap is 240 — shorten it"
     result = None
 
 
@@ -28,7 +28,7 @@ def test_over_cap_refusal_reaches_stdout_with_actual_length(capsys):
     cli = _load_cli()
     cli._echo_summary_cap_refusal_to_stdout(_Refusal("refused"))
     out = capsys.readouterr().out
-    assert "summary is 130 chars, cap is 120" in out
+    assert "summary is 250 chars, cap is 240" in out
 
 
 def test_unrelated_refusal_prints_nothing_on_stdout(capsys):

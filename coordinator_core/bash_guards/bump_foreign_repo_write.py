@@ -1799,6 +1799,13 @@ def _evaluate_foreign_repo_candidate(
             raw_target=raw_target if raw_target and raw_target != target_dir else "",
             write_verb_label=write_verb_label,
         )
+        try:
+            from coordinator_core.ops.sibling_repo_provision_contract import ROUTE_REMEDY, remedy_applies
+
+            if remedy_applies(target_dir, session_root_for_marker or anchor):
+                message = message + "\n" + ROUTE_REMEDY
+        except Exception:
+            pass
     stood_down = _environment_stands_the_bump_down(env)
     if stood_down is not None:
         _log_environment_stand_down(

@@ -59,6 +59,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import logging
+import subprocess
 import sys
 from functools import partial
 from pathlib import Path
@@ -68,6 +69,7 @@ from coordinator_core.git.commit import checkin_sizes, hash_worktree_blobs_via_s
 from coordinator_core.git.git_dir import resolve_git_common_dir
 from coordinator_core.git.git_objects import read_object
 from coordinator_core.git.git_state import _parse_tree_entries, head_blobs, read_tree_spine
+from coordinator_core.win_portability import no_console_creationflags
 from coordinator_core.hooks.claude_md_ledger import (
     GOVERNED_AUTHORING_SURFACES,
     admission_check_for_surface,
@@ -119,6 +121,87 @@ def governed_surface_refusal(root: Path, assembled: Mapping[str, object]) -> Opt
         if refusal is not None:
             refusals.append(refusal)
     return "\n".join(refusals) if refusals else None
+
+
+#: Source dirs of the published rows whose field-7 allowlist is generated from
+#: the tracked top-level names (mirrors `_ROWS` in
+#: coordinator/bin/publish-allowlist-generate.py, which is hyphen-named and so
+#: not importable here).
+_PUBLISHED_ROW_SOURCE_DIRS = ("coordinator_core", "coordinator/bin")
+_ALLOWLIST_GENERATOR = "coordinator/bin/publish-allowlist-generate.py"
+_ALLOWLIST_TIMEOUT_S = 20
+
+
+def _new_top_level_names(root: Path, assembled: Mapping[str, object]) -> Dict[str, List[str]]:
+    """`{source_dir: [new top-level name, ...]}` for names the commit adds under a
+    published row's source dir. In-process tree read; spawns nothing. An
+    unreadable HEAD tree raises (caller fails open)."""
+    out: Dict[str, List[str]] = {}
+    for src in _PUBLISHED_ROW_SOURCE_DIRS:
+        prefix = src + "/"
+        names = sorted(
+            {
+                p[len(prefix):].split("/", 1)[0]
+                for p, entry in assembled.items()
+                if p.startswith(prefix) and isinstance(entry, tuple)
+            }
+        )
+        if not names:
+            continue
+        spine = read_tree_spine(root, [prefix + names[0]])
+        if spine is None:
+            raise ValueError("HEAD tree unreadable")
+        existing = spine.get(src, {})
+        added = [n for n in names if n not in existing]
+        if added:
+            out[src] = added
+    return out
+
+
+def publish_allowlist_drift_refusal(root: Path, assembled: Mapping[str, object]) -> Optional[str]:
+    """Refuse a commit that adds a top-level name under a published row's source
+    dir while the generated field-7 allowlist does not cover it.
+
+    Spawns the generator's `--check` only when such a name is added, so the
+    ordinary commit pays nothing. Fails open on a plumbing failure (generator
+    absent, timeout, unreadable tree); only measured drift refuses."""
+    root = Path(root)
+    script = root / _ALLOWLIST_GENERATOR
+    if not script.is_file():
+        return None
+    try:
+        added = _new_top_level_names(root, assembled)
+        if not added:
+            return None
+        pending = [
+            arg
+            for p, entry in assembled.items()
+            if isinstance(entry, tuple) and p.split("/", 1)[0] in ("coordinator_core", "coordinator")
+            for arg in ("--pending", p)
+        ]
+        result = subprocess.run(
+            [sys.executable, str(script), "--check", *pending],
+            cwd=str(root),
+            capture_output=True,
+            text=True,
+            errors="replace",
+            timeout=_ALLOWLIST_TIMEOUT_S,
+            **no_console_creationflags(),
+        )
+    except Exception as exc:  # noqa: BLE001 -- fail open, like the skill-weight leg.
+        _LOG.warning("publish-allowlist drift check did not run: %s", exc)
+        return None
+    if result.returncode == 0:
+        return None
+    names = ", ".join(f"{src}/{n}" for src, ns in added.items() for n in ns)
+    detail = (result.stderr or result.stdout).strip()
+    return (
+        f"publish allowlist drift: this commit adds {names}, and field 7 of "
+        "setup/publish-targets.portable does not cover it.\n"
+        f"{detail}\n"
+        "Remedy: run coordinator/bin/publish-allowlist-generate.py (no --check), "
+        "and include setup/publish-targets.portable in the commit."
+    )
 
 
 _SKILLS_PREFIX = "coordinator/skills/"

@@ -109,6 +109,7 @@ from coordinator_core.write_guards.validate_frontmatter_schema_deny import (
 from coordinator_core.dag import check_lineage_reachability as _check_lineage_reachability
 from coordinator_core.data_root import content_root_for
 from coordinator_core.frontmatter.baton_class import canonical_kind as _canonical_kind
+from coordinator_core.frontmatter.memo_contract import memo_contract_digest
 from coordinator_core.frontmatter.schema_validate import (
     _is_parseable_iso_date,
     check_plan_tasks_grouping_approval as _check_plan_tasks_grouping_approval,
@@ -342,6 +343,7 @@ def build_violation_payload_advisory(
     *,
     payload: Optional[dict] = None,
     git_root: Optional[str] = None,
+    contract: Optional[str] = None,
 ) -> Optional[dict]:
     # This builder hand-rolled its own
     # "see docs/reference/guard-override-keys.md" pointer, unconditionally,
@@ -357,6 +359,8 @@ def build_violation_payload_advisory(
         hint = f"; required shape: {e['hint']}" if e.get("hint") else ""
         parts.append(f"{field}: {e.get('error')}{hint}")
     message = f"{schema_name}: {'; '.join(parts)}"
+    if contract:
+        message += f"\nFull contract: {contract}"
 
     override_note = operator_override_note(
         "COORDINATOR_SCHEMA_STRICT", payload=payload, git_root=git_root
@@ -1224,6 +1228,7 @@ def _evaluate_schema_validation_advisory(
     git_root: Optional[str] = None,
 ) -> Optional[dict]:
     match_mode = schema.get("match_mode")
+    is_memo = schema_name in _MEMO_SCHEMA_NAMES
 
     if match_mode in ("whole-document-yaml", "whole-document-records"):
         try:
@@ -1244,6 +1249,7 @@ def _evaluate_schema_validation_advisory(
                 }],
                 payload=payload,
                 git_root=git_root,
+                contract=memo_contract_digest(schema) if is_memo else None,
             )
         if match_mode == "whole-document-records":
             validation_result = _validate_whole_document_records(parsed, schema)
@@ -1270,6 +1276,7 @@ def _evaluate_schema_validation_advisory(
                 }],
                 payload=payload,
                 git_root=git_root,
+                contract=memo_contract_digest(schema) if is_memo else None,
             )
         validation_result = validate_frontmatter_obj(frontmatter, schema)
 
@@ -1285,7 +1292,11 @@ def _evaluate_schema_validation_advisory(
         return None
 
     return build_violation_payload_advisory(
-        schema_name, errors, payload=payload, git_root=git_root
+        schema_name,
+        errors,
+        payload=payload,
+        git_root=git_root,
+        contract=memo_contract_digest(schema) if is_memo else None,
     )
 
 

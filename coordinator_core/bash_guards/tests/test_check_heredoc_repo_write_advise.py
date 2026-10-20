@@ -135,6 +135,49 @@ class TestSilent:
         assert dc.check_heredoc_repo_write_advise(cmd, "sess", None, str(tmp_path)) is None
 
 
+class TestClaudeMemoryExempt:
+    @pytest.fixture
+    def home(self, tmp_path, monkeypatch):
+        # A fake home outside TEMP/TMP: a real tmp_path home would be classed as
+        # scratch first (TEMP-rooted on Windows, /tmp on Linux), making the
+        # silent cases pass vacuously and the advisory cases fail.
+        h = "/fires-git-root-fixture/" + tmp_path.name + "/home"
+        monkeypatch.setenv("HOME", h)
+        monkeypatch.setenv("USERPROFILE", h)
+        monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+        return h
+
+    def _write(self, target):
+        return _heredoc('open(%r, "w").write("hi")' % target)
+
+    def test_memory_file_silent_when_git_root_is_config_dir(self, home):
+        cfg = home + "/.claude"
+        target = cfg + "/projects/-slug/memory/note.md"
+        assert dc.check_heredoc_repo_write_advise(self._write(target), "s", None, cfg) is None
+
+    def test_memory_file_silent_with_windows_separators(self, home):
+        cfg = home + "/.claude"
+        target = (cfg + "/Projects/-slug/MEMORY/note.md").replace("/", "\\")
+        assert dc._heredoc_write_target_is_claude_memory(target)
+        assert not dc._heredoc_write_target_is_claude_memory(cfg.replace("/", "\\") + "\\projects\\-slug\\memory")
+
+    def test_memory_file_silent_under_claude_config_dir_env(self, tmp_path, monkeypatch):
+        cfg = "/fires-git-root-fixture/" + tmp_path.name + "/cfg"
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", cfg)
+        target = cfg + "/projects/p/memory/a.md"
+        assert dc.check_heredoc_repo_write_advise(self._write(target), "s", None, cfg) is None
+
+    def test_non_memory_file_in_config_dir_still_advises(self, home):
+        cfg = home + "/.claude"
+        target = cfg + "/projects/-slug/other/note.md"
+        assert dc.check_heredoc_repo_write_advise(self._write(target), "s", None, cfg) is not None
+
+    def test_memory_shaped_path_in_ordinary_repo_still_advises(self, home):
+        root = "/fires-git-root-fixture/repo"
+        target = root + "/projects/x/memory/a.md"
+        assert dc.check_heredoc_repo_write_advise(self._write(target), "s", None, root) is not None
+
+
 class TestAdvisoryNeverBlocking:
     def test_all_firing_cases_are_advisory_allow(self, fires_git_root):
         cases = [

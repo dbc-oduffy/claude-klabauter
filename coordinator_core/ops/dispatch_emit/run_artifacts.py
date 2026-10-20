@@ -232,9 +232,12 @@ def candidate_paths(
             add("slice-sizing", rel)
 
     parent = _read_json(root, f"{record_dir}/{_PARENT_FILE}") or {}
-    runs = parent.get("runs")
-    for item in runs if isinstance(runs, list) else ():
-        if isinstance(item, dict) and item.get("slice_sizing"):
+    # Every child of a split carries the same parent.json, so only the row naming this run is its
+    # own slice sizing; a parent-level record with no own row keeps every row.
+    rows = [i for i in (parent.get("runs") if isinstance(parent.get("runs"), list) else ()) if isinstance(i, dict)]
+    own_rows = [i for i in rows if i.get("run_id") == run_id]
+    for item in own_rows or rows:
+        if item.get("slice_sizing"):
             add("slice-sizing", item.get("slice_sizing"))
 
     for raw in doc_paths or ():

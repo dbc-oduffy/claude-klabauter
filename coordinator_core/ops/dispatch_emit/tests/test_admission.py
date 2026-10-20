@@ -171,6 +171,43 @@ def test_notice_line_names_each_missing_key_once_with_the_remedy():
     assert "[]" not in line and "waited" not in line
 
 
+def test_unconfigured_notice_prints_once_per_repo(tmp_path, monkeypatch):
+    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(tmp_path / "reg"))
+    rec = {"verdict": "admitted_unconfigured", "missing_keys": ["max_hold_s"], "repo_root": "/r1"}
+    assert "unconfigured" in admission.notice_line(rec)
+    assert admission.notice_line(rec) is None
+    other = dict(rec, repo_root="/r2")
+    assert "unconfigured" in admission.notice_line(other)
+
+
+def test_unconfigured_notice_without_repo_root_always_prints(tmp_path, monkeypatch):
+    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(tmp_path / "reg"))
+    rec = {"verdict": "admitted_unconfigured", "missing_keys": ["max_hold_s"]}
+    assert admission.notice_line(rec) and admission.notice_line(rec)
+    assert not (tmp_path / "reg").exists()
+
+
+def test_await_admission_unconfigured_record_carries_repo_root(tmp_path, monkeypatch):
+    (tmp_path / ".git").mkdir()
+    _unconfigured(monkeypatch, ["max_hold_s"])
+    record = admission.await_admission(tmp_path, hold_allowed=False)
+    assert record["repo_root"] == str(tmp_path.resolve())
+
+
+def test_unconfigured_notice_keeps_printing_when_marker_cannot_be_written(tmp_path, monkeypatch):
+    blocker = tmp_path / "blocker"
+    blocker.write_text("not a dir")
+    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(blocker / "reg"))
+    rec = {"verdict": "admitted_unconfigured", "missing_keys": ["max_hold_s"], "repo_root": "/r1"}
+    assert admission.notice_line(rec) and admission.notice_line(rec)
+
+
+def test_other_verdicts_print_every_call(tmp_path, monkeypatch):
+    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(tmp_path / "reg"))
+    rec = {"verdict": "admitted_after_hold", "reasons": [], "waited_s": 1.0, "repo_root": "/r1"}
+    assert admission.notice_line(rec) and admission.notice_line(rec)
+
+
 def test_notice_line_is_silent_for_admitted_and_disabled():
     assert admission.notice_line({"verdict": "admitted"}) is None
     assert admission.notice_line({"verdict": "disabled"}) is None

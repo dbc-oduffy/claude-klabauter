@@ -195,6 +195,8 @@ def test_zero_waves_error_names_owed_rows(tmp_path):
     only_em = full[: full.index("- id: U1")] + full[full.index("- id: C3") : full.index("- id: C5")] + "```\n"
     reply = _stage(tmp_path, only_em)
     assert "owed by the EM: C3, C4" in reply["error"]
+    assert reply["owed_em_ids"] == ["C3", "C4"]
+    assert reply["owed_plan"]
 
 
 def test_dependent_of_gated_row_is_gated_transitively(tmp_path):

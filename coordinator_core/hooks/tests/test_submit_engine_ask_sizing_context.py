@@ -95,7 +95,7 @@ def _ask_payload(cwd_repo, ctx):
         "session_id": "s1",
         "tool_input": {
             "name": mod.SUBMIT_WORKFLOW_NAME,
-            "args": {"ask": "do the thing", "context": str(ctx)},
+            "args": {"ask": "do the thing", "source": "pm", "context": str(ctx)},
         },
     }
 
@@ -154,7 +154,7 @@ def test_bad_context_refusal_reaches_the_deny_reason_whole(tmp_path):
         "tool_name": "Workflow",
         "cwd": str(tmp_path),
         "session_id": "s1",
-        "tool_input": {"name": mod.SUBMIT_WORKFLOW_NAME, "args": {"ask": "a", "context": "ctx.md"}},
+        "tool_input": {"name": mod.SUBMIT_WORKFLOW_NAME, "args": {"ask": "a", "source": "pm", "context": "ctx.md"}},
     }
     env = mod.evaluate(payload, emit=emit)
     assert long_reason in env["hookSpecificOutput"]["permissionDecisionReason"]

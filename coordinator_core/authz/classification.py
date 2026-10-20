@@ -4544,6 +4544,9 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     "release.cut_tag": OpClass.MUTATING,
     "release.cut_tag_and_publish": OpClass.MUTATING,
     "repo.clone_and_register": OpClass.MUTATING,
+    # repo.provision_local — ops/sibling_repo_provision.py: writes the sibling
+    # repo tree (git init, files, commit) AND the machine-local registry key.
+    "repo.provision_local": OpClass.MUTATING,
     "repo.create_and_push_remote": OpClass.MUTATING,
     "repo_setup.copy_console_subprocess_tripwire": OpClass.MUTATING,
     "research.archive_workdir": OpClass.MUTATING,
@@ -4560,6 +4563,10 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # research.close — MUTATING: ops/research_close.py copies a run's outputs into
     # docs/research/<date>-<slug>/ and makes one commit_paths call (scouts: scratch digest only).
     "research.close": OpClass.MUTATING,
+
+    # research.reground — MUTATING: ops/research_reground.py renames a run's grounding.md to
+    # grounding.stale-<n>.md and writes reground-<n>.md, a grounding-only workflow script and its receipt.
+    "research.reground": OpClass.MUTATING,
 
     # research.shape — COMPUTE_ONLY: ops/research_shape.py maps a caller-passed
     # research block to tier/pipelines; no I/O.

@@ -2551,3 +2551,76 @@ def test_reparked_peer_with_unchanged_waiting_on_and_next_is_not_re_emitted():
     emitted, _d, notes2 = _park_cycle({"peer-1": False}, notes, "a3's rehearsal")
     assert len(emitted) == 1
     assert notes2["peer-1"]["parked_sig"] != notes["peer-1"]["parked_sig"]
+
+
+# --- recent contact suppression and batch mode -----------------------------
+
+
+def test_recent_contact_suppresses_a_park_and_leaves_a_declination():
+    with mock.patch.object(watch, "_recent_contact", return_value=True):
+        emitted, decl, notes = _park_cycle({"peer-1": False}, None, "none")
+    assert emitted == []
+    assert any(d["session_id"] == "peer-1" and d["gate"] == "recent-contact" for d in decl)
+    assert "parked_sig" not in notes["peer-1"]
+
+
+def _transcript(path, stamp, to):
+    rec = {"type": "assistant", "timestamp": stamp,
+           "message": {"content": [{"type": "tool_use", "name": "SendMessage", "input": {"to": to}}]}}
+    path.write_text(json.dumps(rec) + "\n", encoding="utf-8")
+
+
+def test_recent_contact_reads_both_transcripts_and_honours_the_window(tmp_path):
+    now = datetime(2026, 10, 20, 12, 0, 0, tzinfo=timezone.utc)
+    gem, peer = tmp_path / "gem.jsonl", tmp_path / "peer.jsonl"
+    paths = {"gem-1": str(gem), "peer-1": str(peer)}
+
+    def call():
+        with mock.patch.object(watch.read_pass, "_transcript_path_for", side_effect=lambda sid, cwd: paths[sid]):
+            return watch._recent_contact(
+                str(tmp_path), "gem-1", "gem-name", "peer-1", "peer-name", str(tmp_path), now.timestamp()
+            )
+
+    gem.write_text("", encoding="utf-8")
+    peer.write_text("", encoding="utf-8")
+    assert call() is False
+    _transcript(gem, "2026-10-20T11:50:00Z", "peer-name")
+    assert call() is True
+    _transcript(gem, "2026-10-20T11:30:00Z", "peer-name")
+    assert call() is False
+    _transcript(peer, "2026-10-20T11:55:00Z", "gem-name")
+    assert call() is True
+    _transcript(peer, "2026-10-20T11:55:00Z", "someone-else")
+    assert call() is False
+
+
+def test_recent_contact_unreadable_transcript_is_not_suppression(tmp_path):
+    with mock.patch.object(watch.read_pass, "_transcript_path_for", return_value=str(tmp_path / "nope")):
+        assert watch._recent_contact(str(tmp_path), "g", "gn", "p", "pn", str(tmp_path), 0.0) is False
+
+
+def test_batch_seconds_keeps_polling_then_emits_one_batch(tmp_path):
+    ticks = iter(["PARKED a", "", "GONE b", "", ""])
+    stream = io.StringIO()
+    sleeps: list[float] = []
+
+    def fake_tick(*_a, stream=None, **_k):
+        line = next(ticks)
+        if line:
+            stream.write(line + "\n")
+        return 0
+
+    with mock.patch.object(watch, "tick_once", side_effect=fake_tick):
+        rc = watch.until_event(
+            str(tmp_path), "w", "g", stream=stream, tick_interval_seconds=30.0,
+            sleep_fn=sleeps.append, batch_seconds=60.0,
+        )
+    assert rc == 0
+    assert stream.getvalue().splitlines() == ["PARKED a", "GONE b"]
+    assert sleeps == [30.0, 30.0]
+
+
+def test_cli_batch_seconds_reaches_until_event(tmp_path):
+    with mock.patch.object(watch, "until_event", return_value=0) as ue:
+        watch._cli(["--repo-root", str(tmp_path), "--until-event", "--batch-seconds", "45"])
+    assert ue.call_args.kwargs["batch_seconds"] == 45.0

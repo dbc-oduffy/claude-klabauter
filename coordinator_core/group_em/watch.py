@@ -539,6 +539,59 @@ def _cooldown_active(
     return remaining > 0
 
 
+#: A peer in SendMessage contact with the Group EM this recently is not news when it parks.
+RECENT_CONTACT_SECONDS = 15 * 60.0
+
+
+def _sendmessage_stamps(raw: str, needle: Optional[str]) -> list[float]:
+    stamps: list[float] = []
+    for line in raw.split("\n"):
+        if '"SendMessage"' not in line:
+            continue
+        if needle is not None and needle not in line:
+            continue
+        for stamp in idle_report._TIMESTAMP.findall(line):
+            try:
+                stamps.append(
+                    datetime.fromisoformat(stamp.replace("Z", "+00:00")).timestamp()
+                )
+            except ValueError:
+                continue
+    return stamps
+
+
+def _recent_contact(
+    repo_root: str,
+    group_em_session_id: str,
+    group_em_name: Optional[str],
+    peer_session_id: str,
+    peer_name: Optional[str],
+    peer_cwd: str,
+    now_epoch: float,
+    window_seconds: float = RECENT_CONTACT_SECONDS,
+) -> bool:
+    """True when a `SendMessage` passed between the peer and the Group EM within the window.
+
+    Two bounded tail reads, paid only on a PARKED transition. Unreadable
+    transcripts or an unnamed counterparty answer False: a line is never
+    dropped on missing evidence.
+    """
+    cutoff = now_epoch - window_seconds
+    if peer_name:
+        raw, ok = idle_report._tail_text(
+            read_pass._transcript_path_for(group_em_session_id, repo_root)
+        )
+        if ok and any(t >= cutoff for t in _sendmessage_stamps(raw, peer_name)):
+            return True
+    if group_em_name:
+        raw, ok = idle_report._tail_text(
+            read_pass._transcript_path_for(peer_session_id, peer_cwd)
+        )
+        if ok and any(t >= cutoff for t in _sendmessage_stamps(raw, group_em_name)):
+            return True
+    return False
+
+
 def _parked_line(
     repo_root: str,
     session_id: str,
@@ -845,6 +898,19 @@ def poll_once(
             )
             continue
         peer = agents_by_id.get(session_id, {})
+        if _recent_contact(
+            repo_root,
+            group_em_session_id,
+            _holder_name(agents, group_em_session_id),
+            session_id,
+            peer.get("name"),
+            peer.get("cwd") or repo_root,
+            now_epoch,
+        ):
+            declinations.append(
+                _declination(session_id, "recent-contact", "sendmessage-within-window")
+            )
+            continue
         line = _parked_line(
             _peer_repo_root(peer, repo_root, box_wide),
             session_id,
@@ -1114,8 +1180,14 @@ def until_event(
     box_wide: bool = False,
     sleep_fn: Callable[[float], None] = time.sleep,
     max_iterations: Optional[int] = None,
+    batch_seconds: float = 0.0,
 ) -> int:
     """Poll with `tick_once` every `tick_interval_seconds`; exit 0 after the first tick that emits a line.
+
+    `batch_seconds` > 0 is the persistent mode: after the first emitting tick
+    the loop keeps polling until that much sleep has elapsed, then emits every
+    collected line in one batch and exits -- one relaunch turn for a burst, no
+    line dropped.
 
     Every line `tick_once` can emit (PARKED, WAITING, GONE, POLL-ERROR) is
     actionable, so "emitted anything" is the exit condition. State is loaded and
@@ -1126,6 +1198,8 @@ def until_event(
     """
     out = sys.stdout if stream is None else stream
     iterations = 0
+    collected: list[str] = []
+    waited = 0.0
     while max_iterations is None or iterations < max_iterations:
         buffer = io.StringIO()
         tick_once(
@@ -1136,16 +1210,23 @@ def until_event(
             tick_interval_seconds=tick_interval_seconds,
             box_wide=box_wide,
         )
-        lines = [line for line in buffer.getvalue().splitlines() if line.strip()]
-        if lines:
-            emit = _emit_for(out)
-            for line in lines:
-                emit(line)
-            return 0
+        collected.extend(line for line in buffer.getvalue().splitlines() if line.strip())
         iterations += 1
+        if collected and (batch_seconds <= 0 or waited >= batch_seconds):
+            break
         if max_iterations is not None and iterations >= max_iterations:
             break
-        sleep_fn(tick_interval_seconds)
+        step = (
+            min(tick_interval_seconds, batch_seconds - waited)
+            if collected
+            else tick_interval_seconds
+        )
+        sleep_fn(step)
+        if collected:
+            waited += step
+    emit = _emit_for(out)
+    for line in collected:
+        emit(line)
     return 0
 
 
@@ -1523,6 +1604,13 @@ def _cli(argv: "list[str] | None" = None) -> int:
              "--until-event, where the interval is measured at arm time.",
     )
     parser.add_argument(
+        "--batch-seconds",
+        type=float,
+        default=0.0,
+        help="With --until-event: after the first emitting tick keep polling this many seconds, "
+             "then exit once with every collected line (persistent mode: one relaunch per burst).",
+    )
+    parser.add_argument(
         "--max-iterations",
         type=int,
         default=None,
@@ -1578,6 +1666,7 @@ def _cli(argv: "list[str] | None" = None) -> int:
                 tick_interval_seconds=args.tick_interval_seconds,
                 box_wide=args.scope == "box",
                 max_iterations=args.max_iterations,
+                batch_seconds=args.batch_seconds,
             )
         except KeyboardInterrupt:
             return 0

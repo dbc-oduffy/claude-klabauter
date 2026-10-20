@@ -16,7 +16,7 @@ pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 _PINNED_ARGV = [
     "claude",
     "-p",
-    fire._PROMPT_TEMPLATE.format(script_path="/s/wf.js"),
+    fire.render_prompt("/s/wf.js"),
     "--allowedTools",
     "Workflow", "Read", "Write", "Edit", "Bash", "Grep", "Glob", "ToolSearch",
     "--plugin-dir",
@@ -42,7 +42,7 @@ def test_prompt_and_session_id_appear_once():
     assert argv.count("--session-id") == 1
     assert argv.count("sid-123") == 1
     assert argv[argv.index("--session-id") + 1] == "sid-123"
-    assert fire._PROMPT_TEMPLATE.format(script_path="/s/wf.js") not in argv
+    assert fire.render_prompt("/s/wf.js") not in argv
 
 
 def _stub_claude(tmp_path):
@@ -110,3 +110,10 @@ def test_spawn_failure_with_session_id_raises_and_discards(tmp_path, monkeypatch
         )
     reg = fire._registry_dir(str(repo))
     assert not [p for p in reg.glob("*.json")]
+
+
+def test_prompt_never_inlines_json_and_forward_slashes_windows_paths():
+    prompt = fire.render_prompt("E:\coordinator-content-repo\scratch\wf.js")
+    assert "\\" not in prompt
+    assert "'<json>'" not in prompt
+    assert "--params-file E:/coordinator-content-repo/scratch/wf.js.terminal-params.json" in prompt

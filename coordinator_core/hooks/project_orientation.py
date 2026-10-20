@@ -917,6 +917,43 @@ def _scratch_size_banner(out: List[str], repo_root: Optional[str]) -> None:
     out.append(f"── ⚠ {head} — resolve: {remedy} ──\n")
 
 
+BANNER_DETAIL_ENV = "COORDINATOR_BANNER_DETAIL"
+_BLOCKING_MARKERS = ("Install surface missing", "⚠ Scratch ")
+_INFO_MARKERS = ("── Engine:", ": last ran ")
+_HEAD_MAX = 48
+
+
+def _warning_head(line: str) -> str:
+    text = line.strip().strip("─").strip().lstrip("⚠").strip()
+    return text.split(" — ")[0].split(": ", 1)[0][:_HEAD_MAX] if text else ""
+
+
+def _collapse_banner(lines: List[str], detail: bool) -> List[str]:
+    """Render collected banner legs: informational and blocking lines verbatim, other warnings as one count line.
+
+    Fewer than two collapsible warnings pass through unchanged; `detail` (env BANNER_DETAIL_ENV) disables the collapse.
+    """
+    if detail:
+        return lines
+    collapsible = [
+        i for i, ln in enumerate(lines)
+        if ln.strip()
+        and not any(m in ln for m in _BLOCKING_MARKERS)
+        and not any(m in ln for m in _INFO_MARKERS)
+    ]
+    if len(collapsible) < 2:
+        return lines
+    dropped = set(collapsible)
+    warnings = [lines[i] for i in collapsible]
+    kept = [ln for i, ln in enumerate(lines) if i not in dropped and ln.strip()]
+    heads = "; ".join(h for h in (_warning_head(w) for w in warnings) if h)
+    summary = (
+        f"── ⚠ {len(warnings)} session warnings ({heads}) — full text and remedies: "
+        f"set {BANNER_DETAIL_ENV}=1 and restart ──\n"
+    )
+    return ["\n", summary, *kept]
+
+
 @register_op("hooks.project_orientation")
 def _handler(params: dict, repo_root=None) -> dict:
     payload = payload_of(params)
@@ -942,50 +979,28 @@ def _handler(params: dict, repo_root=None) -> dict:
 
     out: List[str] = []
 
-    try:
-        _repomap_staleness_banner(out, env, session_repo_root)
-    except Exception:
-        pass
-    try:
-        _exec_summary_staleness_banner(out, env, session_repo_root)
-    except Exception:
-        pass
-    try:
-        _peer_recheck_staleness_banner(out, env, session_repo_root)
-    except Exception:
-        pass
-    try:
-        _harness_version_drift_banner(out, env, session_repo_root)
-    except Exception:
-        pass
-    try:
-        _orientation_cache_staleness_banner(out, env, session_repo_root, cache_text)
-    except Exception:
-        pass
-    try:
-        _engine_resolution_banner(out)
-    except Exception:
-        pass
-    try:
-        _local_install_surface_banner(out, env, session_repo_root)
-    except Exception:
-        pass
-    try:
-        _install_currency_banner(out, env)
-    except Exception:
-        pass
-    try:
-        _corpus_currency_banner(out, env)
-    except Exception:
-        pass
-    try:
-        _tier_currency_banner(out, env, session_repo_root)
-    except Exception:
-        pass
-    try:
-        _scratch_size_banner(out, session_repo_root)
-    except Exception:
-        pass
+    legs = (
+        lambda o: _repomap_staleness_banner(o, env, session_repo_root),
+        lambda o: _exec_summary_staleness_banner(o, env, session_repo_root),
+        lambda o: _peer_recheck_staleness_banner(o, env, session_repo_root),
+        lambda o: _harness_version_drift_banner(o, env, session_repo_root),
+        lambda o: _orientation_cache_staleness_banner(o, env, session_repo_root, cache_text),
+        _engine_resolution_banner,
+        lambda o: _local_install_surface_banner(o, env, session_repo_root),
+        lambda o: _install_currency_banner(o, env),
+        lambda o: _corpus_currency_banner(o, env),
+        lambda o: _tier_currency_banner(o, env, session_repo_root),
+        lambda o: _scratch_size_banner(o, session_repo_root),
+    )
+    lines: List[str] = []
+    for leg in legs:
+        buf: List[str] = []
+        try:
+            leg(buf)
+        except Exception:
+            pass
+        lines.extend(buf)
+    out.extend(_collapse_banner(lines, _env_get(env, BANNER_DETAIL_ENV).strip() == "1"))
 
     try:
         if _handle_cache_present_boot(out, cache_text):

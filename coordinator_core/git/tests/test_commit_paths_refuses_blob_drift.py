@@ -117,6 +117,28 @@ def test_content_match_and_mismatch(tmp_path):
     assert _state(repo) == before
 
 
+def test_a_crlf_only_difference_from_the_expectation_is_not_drift(tmp_path):
+    repo = _repo(tmp_path)
+    (repo / "seed.txt").write_bytes(b"A\r\nB\r\n")
+    out = gcommit.commit_paths(
+        repo, ["seed.txt"], "m", expected_content_sha256={"seed.txt": _sha256(b"A\nB\n")}
+    )
+    assert out.sha
+    (repo / "seed.txt").write_bytes(b"A\r\nC\r\n")
+    with pytest.raises(gcommit.BlobDriftRefused):
+        gcommit.commit_paths(
+            repo, ["seed.txt"], "m", expected_content_sha256={"seed.txt": _sha256(b"A\nB\n")}
+        )
+
+
+def test_touch_hash_and_commit_digest_fold_crlf_alike(tmp_path):
+    from coordinator_core.session.touch_record import compute_content_hash
+
+    f = tmp_path / "f.txt"
+    f.write_bytes(b"A\r\nB\r\n")
+    assert compute_content_hash(f) == _sha256(b"A\nB\n")
+
+
 def test_stale_expectation_on_a_path_equal_to_head_does_not_refuse(tmp_path):
     repo = _repo(tmp_path)
     _write(repo, "new.txt", "n\n")
@@ -217,7 +239,7 @@ def test_crlf_pinned_fallback_path_with_blob_expectation(tmp_path):
 
     out = gcommit.commit_paths(
         repo, ["a.cmd"], "m", blob_fallback=fallback_real,
-        expected_content_sha256={"a.cmd": _sha256(b"one\r\ntwo\r\n")},
+        expected_content_sha256={"a.cmd": _sha256(b"one\ntwo\n")},
     )
     assert out.sha and seen == [["a.cmd"]]
 

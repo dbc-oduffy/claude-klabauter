@@ -154,7 +154,7 @@ def test_relayed_ask_submission_writes_relayed_ask_beside_no_ask_md(repo, monkey
 
 
 def test_ask_with_inline_brief_reaches_the_real_emit(repo):
-    env = mod.evaluate(_payload(repo, {"ask": "add the widget", "brief": "BRIEF-MARK prefer small"}))
+    env = mod.evaluate(_payload(repo, {"ask": "add the widget", "source": "pm", "brief": "BRIEF-MARK prefer small"}))
     _assert_rewrite(env)
     (run_dir,) = _run_dirs(repo)
     assert any(
@@ -165,7 +165,7 @@ def test_ask_with_inline_brief_reaches_the_real_emit(repo):
 
 
 def test_ask_with_a_missing_brief_file_is_denied_by_the_real_emit(repo):
-    env = mod.evaluate(_payload(repo, {"ask": "add the widget", "brief_file": "nope.md"}))
+    env = mod.evaluate(_payload(repo, {"ask": "add the widget", "source": "pm", "brief_file": "nope.md"}))
     hso = env["hookSpecificOutput"]
     assert hso["permissionDecision"] == "deny"
     assert "nope.md" in hso["permissionDecisionReason"]

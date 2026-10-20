@@ -12,13 +12,13 @@ the emitted run, in the background, under `claude -p` as interactively; its comp
 notification is the EM's one wake. The stub only ever runs when this hook did not: it returns a
 halt that names the gap, never a run.
 
-`args` shape: `{ask: str, route_preference?, em_rationale?}` | `{sizing: str}` | `{asks: [{ask, source?, sender?, relayed_text?, route_preference?, em_rationale?, label?, writes?}], confirm_split?}` (`route_preference` is goal|roadmap|plan, `em_rationale` at most 2000 chars; both forward to the emit op
+`args` shape: `{ask: str, em_context?, route_preference?, em_rationale?}` | `{sizing: str}` | `{asks: [{ask, source?, sender?, relayed_text?, em_context?, route_preference?, em_rationale?, label?, writes?}], confirm_split?}` (`em_context` is a string of the EM's own context, carried in the emit op's `ask_brief` under an EM marker, never merged into the ask text, so `source: "pm"` stays true for the verbatim `ask`; on a multi-item `asks` the items' `em_context` rides the fan-out items, which has no brief slot; `route_preference` is goal|roadmap|plan, `em_rationale` at most 2000 chars; both forward to the emit op
 or the fan-out, and either beside `{sizing}` is refused) (each ask a
 separate sibling run via `dispatch.ask_fanout`; the call fires the first ready run and the allow reason
 carries `{parent_id, runs}` plus the other ready runs' fire calls; a one-element array is an `ask`; a
 slice `{sizing}` is denied until its `after` predecessors land and while its parent is at budget), optional `repo` (absolute path; else the payload
-cwd's repo, or for an ask whose absolute `context` lies in another registered repo, that repo), optional `source: "pm" | "relayed"` (a chosen source is forwarded to the engine verbatim as `ask_source`; absent, the ask runs relayed
-(AI-derived) with no turn-log lookup and the allow reason says so; only `source: "pm"` makes it the PM's
+cwd's repo, or for an ask whose absolute `context` lies in another registered repo, that repo), optional `source: "pm" | "relayed"` (a chosen source is forwarded to the engine verbatim as `ask_source`; an unmarked single `ask` is denied before
+it fires, except on the session's first human turn, where it defaults to `pm` (the allow reason says so); only `source: "pm"` makes it the PM's
 words, which the engine verifies against the session's recorded turns (refused when contradicted, flagged
 when no log resolves); on `asks` it is the default for items naming no `source` of their own; a redirected
 root passes `session_root`, the submitting session's repo, so the log is found for that verification), optional EM brief beside either arm
@@ -47,6 +47,7 @@ the emitted script. Never denies a Workflow call that does not name the stub.
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 from typing import Any, Callable, Mapping, Optional
 
@@ -96,6 +97,39 @@ def _request(
     )
 
 
+def _is_first_turn(payload: Mapping[str, Any]) -> bool:
+    """True when the session transcript holds exactly one human turn; unreadable reads False.
+
+    Reads the transcript file in-process and stops at the second human turn.
+    """
+    import json
+
+    path = payload.get("transcript_path")
+    if not isinstance(path, str) or not path:
+        return False
+    turns = 0
+    try:
+        with open(path, encoding="utf-8") as fh:
+            for line in fh:
+                try:
+                    rec = json.loads(line)
+                except ValueError:
+                    continue
+                if not isinstance(rec, dict) or rec.get("type") != "user" or rec.get("isMeta"):
+                    continue
+                content = (rec.get("message") or {}).get("content")
+                if isinstance(content, list) and any(
+                    isinstance(b, dict) and b.get("type") == "tool_result" for b in content
+                ):
+                    continue
+                turns += 1
+                if turns > 1:
+                    return False
+    except OSError:
+        return False
+    return turns == 1
+
+
 def _call_preference(
     tool_input: Mapping[str, Any], sizing_rel: Optional[str], asks_present: bool
 ) -> tuple[Any, Any, Optional[str]]:
@@ -129,6 +163,11 @@ def _brief_params(tool_input: Mapping[str, Any]) -> tuple[dict, Optional[str]]:
             return {}, f"{key} must be a string."
         if value.strip():
             params[param] = value
+    em_context = args.get("em_context")
+    if em_context is not None and not isinstance(em_context, str):
+        return {}, "em_context must be a string."
+    if isinstance(em_context, str) and em_context.strip():
+        params["ask_brief"] = _with_em_context(params.get("ask_brief"), em_context)
     context = args.get("context")
     if context is not None:
         items = [context] if isinstance(context, str) else context
@@ -141,6 +180,12 @@ def _brief_params(tool_input: Mapping[str, Any]) -> tuple[dict, Optional[str]]:
         if prose:
             params["ask_brief"] = "\n\n".join(([params["ask_brief"]] if "ask_brief" in params else []) + prose)
     return params, None
+
+
+def _with_em_context(brief: Optional[str], em_context: str) -> str:
+    """`brief` with the EM's context appended under its own marker; the ask text is never touched."""
+    block = f"EM context (not the PM's words):\n{em_context.strip()}"
+    return f"{brief}\n\n{block}" if brief else block
 
 
 def _is_path_shaped(item: str) -> bool:
@@ -256,6 +301,8 @@ def _asks(tool_input: Mapping[str, Any]) -> tuple[Optional[list], Optional[str]]
         route_why = route_refusal(f"asks[{i}]", item.get("route_preference"), item.get("em_rationale"))
         if route_why:
             return None, route_why
+        if item.get("em_context") is not None and not isinstance(item["em_context"], str):
+            return None, f"asks[{i}].em_context must be a string."
         label = item.get("label")
         if label is not None and not isinstance(label, str):
             return None, f"asks[{i}].label must be a string."
@@ -369,6 +416,15 @@ def _supersedes(tool_input: Mapping[str, Any]) -> tuple[Optional[str], Optional[
     return value.strip(), None
 
 
+def _revise_hint(run_id: str) -> str:
+    """The call shape for a mid-run PM revision of `run_id`."""
+    return (
+        "Mid-run PM revision: "
+        f"coordinator-invoke workflow.revise '{{\"run_id\": \"{run_id}\", \"verbatim\": \"<requirement>\"}}'"
+        " (optional: from, all_of_pm_ask; full contract: --describe)."
+    )
+
+
 def _fan_tail(root: Path, reply: Mapping[str, Any], fired_run: str) -> str:
     """The allow reason's tail for an asks submission: the frozen reply and the other ready runs' fire calls."""
     import json
@@ -433,6 +489,50 @@ def _live_write_overlap_deny(root: Path, tool_input: Mapping[str, Any], sizing_d
     return f"Run {run_id} is live and writes {shown}, which this ask also writes. Resubmit when {run_id} lands."
 
 
+_RESEARCH_NAME_RE = re.compile(r"^\d{4}-\d{2}-\d{2}-(.+?)(?:\.md)?$")
+_RESEARCH_STOPWORDS = frozenset(
+    "the and for with that this from into what how why does did are was were can should would could "
+    "about when which where who whom your our its their not any all has have had".split()
+)
+_FUZZY_MIN_SHARED = 3
+_FUZZY_MIN_COVERAGE = 0.6
+
+
+def _slug_terms(slug: str) -> frozenset[str]:
+    return frozenset(t for t in slug.split("-") if len(t) >= 3 and t not in _RESEARCH_STOPWORDS)
+
+
+def _existing_research(root: Path, ask: Optional[str], sizing_rel: Optional[str]) -> list[str]:
+    """Repo-relative `docs/research/` entries (archived `<date>-<topic>/` dirs or flat `<date>-<name>.md` files) for this submission's topic.
+
+    One directory listing under `docs/research`, matched by name: the topic slug exactly, or at least
+    three shared slug terms covering most of the smaller side (a differently worded ask). Never reads
+    content, never spawns.
+    """
+    from coordinator_core.ops.dispatch_emit.research_emit import _TOPIC_FALLBACK, topic_slug
+
+    slug = topic_slug(ask or "", sizing_rel or "")
+    if slug == _TOPIC_FALLBACK:
+        return []
+    want = _slug_terms(slug)
+    found = []
+    try:
+        for p in (root / "docs" / "research").iterdir():
+            m = _RESEARCH_NAME_RE.match(p.name)
+            if not m or not (p.is_dir() or p.suffix == ".md"):
+                continue
+            name = m.group(1)
+            have = _slug_terms(name)
+            shared = len(want & have)
+            if name == slug or (
+                shared >= _FUZZY_MIN_SHARED and shared / min(len(want), len(have)) >= _FUZZY_MIN_COVERAGE
+            ):
+                found.append(f"docs/research/{p.name}{'/' if p.is_dir() else ''}")
+    except OSError:
+        return []
+    return sorted(found)
+
+
 def _refuse(text: str) -> dict:
     return deny("PreToolUse", f"{text}\nInstead: `Workflow({{name: \"{SUBMIT_WORKFLOW_NAME}\", {_ARGS_SHAPE}}})`.")
 
@@ -462,6 +562,7 @@ def evaluate(
             return _refuse(f"source {source!r} is not one of: {', '.join(ASK_SOURCES)}.")
         if sizing_rel is not None:
             return _refuse("source marks an ask's text; a sizing submission carries none.")
+    item_em_context: Optional[str] = None
     if asks is not None:
         asks = [
             {**item, "source": item.get("source", source)} if item.get("source", source) is not None else dict(item)
@@ -470,7 +571,17 @@ def evaluate(
         if len(asks) == 1 and not (asks[0].get("sender") or asks[0].get("relayed_text")):
             ask, source = asks[0]["ask"], asks[0].get("source")
             route_pref, em_rationale = asks[0].get("route_preference"), asks[0].get("em_rationale")
+            item_em_context = asks[0].get("em_context")
             asks = None
+
+    defaulted_pm = False
+    if ask is not None and source is None:
+        if not _is_first_turn(payload):
+            return _refuse(
+                "Unmarked ask: without `source` it runs as an AI-derived (relayed) ask. "
+                "Add `source: \"pm\"` for the PM's verbatim words, else `source: \"relayed\"`."
+            )
+        source, defaulted_pm = "pm", True
 
     supersedes, supersedes_refusal = _supersedes(payload["tool_input"])
     if supersedes_refusal:
@@ -478,6 +589,8 @@ def evaluate(
     brief, brief_refusal = _brief_params(payload["tool_input"])
     if brief_refusal:
         return _refuse(brief_refusal)
+    if isinstance(item_em_context, str) and item_em_context.strip():
+        brief["ask_brief"] = _with_em_context(brief.get("ask_brief"), item_em_context)
     if asks is not None:
         if "ask_brief" in brief or "ask_brief_file" in brief:
             return _refuse("A brief rides one run, not a set of sibling runs. Put each run's directives in its ask text.")
@@ -668,16 +781,23 @@ def evaluate(
         else ""
     )
     derived = (
-        " Unmarked: runs as an AI-derived (relayed) ask. PM words go in marked source: pm."
-        if source is None and asks is None and sizing_rel is None
+        " Unmarked on the session's first turn: defaulted to source pm (the engine verifies it)."
+        if defaulted_pm
         else ""
     )
     if isinstance(result, dict) and result.get("pm_verification") == "unverifiable":
         derived += " source pm is unverified: no session turn log resolved."
+    if asks is None and not (sizing_rel and _has_research_block(sizing_doc)):
+        found = _existing_research(root, ask, sizing_rel)
+        if found:
+            derived += (
+                f" Research artifacts for this ask already exist: {', '.join(found)}. "
+                "Read them before the build reruns that work."
+            )
     envelope = rewrite_input(
         "PreToolUse",
         new_input,
-        f"{lead}Submitted to the engine as run {run_id}.{marked}{carries}{derived} {tail}",
+        f"{lead}Submitted to the engine as run {run_id}.{marked}{carries}{derived} {tail} {_revise_hint(str(run_id))}",
     )
     hso = envelope["hookSpecificOutput"]
     hso["permissionDecision"] = "allow"

@@ -217,3 +217,22 @@ def test_drifted_pin_refuses_naming_the_row(repo):
 def test_matching_pin_stages_normally(repo):
     _pinned_plan(repo, "same words", "same   words")
     assert {r.id for r in stage(repo, run_id="r1", plan_rel=PLAN_REL).rows} == {"C1", "C2", "C3"}
+
+
+def test_audit_and_scratch_only_rows_declare_no_reviewable_path(repo):
+    """Rows writing only bookkeeping or scratch freeze no reviewable diff: an empty
+    `review_declared_paths` makes the composed script skip review instead of halting at prep."""
+    plan = PLAN.split("```yaml plan-tasks")[0] + """```yaml plan-tasks
+- id: C1
+  title: audit
+  change_kind: code-edit
+  surface: state/audits/x.md
+  writes:
+    - state/audits/x.md
+    - scratch/notes.md
+```
+"""
+    (repo / PLAN_REL).write_text(plan, encoding="utf-8", newline="\n")
+    m = stage(repo, run_id="r2", plan_rel=PLAN_REL)
+    assert [r.id for r in m.rows] == ["C1"]
+    assert m.review_declared_paths == ()

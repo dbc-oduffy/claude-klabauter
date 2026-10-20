@@ -65,7 +65,10 @@ def test_scout_reports_inline_through_its_schema_so_no_sidecar_is_owed():
 def test_sizing_path_prefix_is_emitted_verbatim():
     script = _compose()
     assert "const _sizingPathFor = (r) => REPO_ROOT + '/' + 'state/sizings/' + " in script
-    assert "const _sizingPath = _sizingPathFor(_scouted);" in script
+    assert (
+        "const _sizingPath = _boundRelOf(_scouted.sizing_path) ? REPO_ROOT + '/' + _scouted.sizing_path"
+        " : _sizingPathFor(_scouted);"
+    ) in script
 
 
 def test_raw_ask_sizing_path_is_run_unique_so_a_slug_collision_cannot_reattach():
@@ -174,7 +177,9 @@ def test_paraphrased_relay_with_exit_zero_still_reaches_the_sizing_path():
     and the only halt condition is the exit code, so the else branch assigns the sizing."""
     script = _compose()
     assert "if (_scouted.exit_code !== 0)" in script
-    assert "else { _sizingRel = _sizingPath.slice(REPO_ROOT.length + 1); }" in script
+    assert (
+        "else { _sizingRel = _boundRelOf(_scouted.sizing_path) ?? _sizingPath.slice(REPO_ROOT.length + 1); }"
+    ) in script
     assert "!_decision" not in script
 
 

@@ -100,10 +100,12 @@ Each sub-module self-registers its op via `register_op()` at import time.
 | `queue_promote.py` | `queue.promote` | Port of `coordinator-lesson-promote` — lessons-outbox appender |
 | `records_query.py` | `records.query` | COMPUTE_ONLY — queries claude-klabauter's own state records |
 | `release_tagging.py` | `release.cut_tag`, `release.cut_tag_and_publish` | Idempotent annotated-tag cutting, with an optional GitHub-release publish step |
+| `sibling_repo_provision.py` | `repo.provision_local` | Idempotent local-only create-or-update of a sibling repo from a manifest; marks it and registers it (no remote, no push) |
 | `repo_bootstrap.py` | `repo.clone_and_register` | Clones + registers a sibling repo in the operator's machine-local registry (guarded no-op on already-present) |
 | `research_archive_workdir.py` | `research.archive_workdir` | Idempotently archives a completed research run's workdir into `docs/research/archive/` (`os.rename` with EXDEV fallback) |
 | `research_dir_restructure.py` | `research.restructure_for_repeat_topic` | Resumable two-step restructure of `docs/research/` for a repeat-topic run (per-step already-done skip) |
 | `research_close.py` | `research.close` | Closes a research run: scouts writes one scratch digest and commits nothing; corpus and deep copy outputs to `docs/research/<date>-<slug>/` in exactly one `commit_paths` commit |
+| `research_reground.py` | `research.reground` | Moves a scouts run's stale `grounding.md` aside to `grounding.stale-<n>.md` and emits a grounding-only Workflow script over the same scratch; spawns and commits nothing |
 | `research_shape.py` | `research.shape` | Maps a sizing research block to tier, reason and ordered pipelines (nlm-preflight first iff notebooklm) |
 | `resolve_baton_path.py` | `baton.resolve_path_and_repo` | Resolves a caller-supplied baton path to its absolute native form + owning git repo |
 | `resolve_mcp_server_cli_path.py` | `mcp.resolve_server_cli_path` | Resolves an MCP server's CLI path + project root from `~/.claude.json` |

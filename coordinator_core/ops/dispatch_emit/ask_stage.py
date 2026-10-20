@@ -42,6 +42,7 @@ from coordinator_core.ops.dispatch_emit.cross_repo_write_refusal import (
     check_cross_repo_writes,
     gated_rows,
     own_gate_owners,
+    provisioned_sibling_roots,
 )
 from coordinator_core.ops.dispatch_emit.commit_request import (
     ChunkCommit,
@@ -210,6 +211,16 @@ def doc_writes(run_id: str, sizing: Optional[Mapping]) -> tuple[str, ...]:
     return tuple(out)
 
 
+def _reviewable(declared: Sequence[str]) -> tuple[str, ...]:
+    """The declared paths a reviewer can read a product diff for. Bookkeeping and scratch writes
+    (audits, state, plans) freeze no reviewable diff, so a run declaring only those has an empty
+    list and the composed script skips the review wave instead of halting at review prep."""
+    from coordinator_core.ops.review_stamp import PRODUCT_FILE_EXCLUDED_PREFIXES
+
+    skip = (*PRODUCT_FILE_EXCLUDED_PREFIXES, "scratch/")
+    return tuple(p for p in declared if not p.replace("\\", "/").removeprefix("./").startswith(skip))
+
+
 def _test_scope(waves, root: Path) -> tuple[tuple[str, ...], Optional[dict]]:
     """(test targets, None), or ((), the typed no-target record) when the locator maps no
     testable write to a runnable target -- e.g. a .ts-only spine in a repo whose tests it cannot
@@ -247,7 +258,14 @@ def scaffold_markers(text: str) -> dict[str, int]:
 
 
 class AskStageError(ValueError):
-    """The stage inputs name no stageable plan or sizing, or escape the run dir."""
+    """The stage inputs name no stageable plan or sizing, or escape the run dir.
+
+    `owed_em_ids` / `plan_path` are set when every row is EM-owned; the op reply carries them as fields."""
+
+    def __init__(self, message: str, *, owed_em_ids: Optional[list] = None, plan_path: Optional[str] = None):
+        super().__init__(message)
+        self.owed_em_ids = list(owed_em_ids) if owed_em_ids else None
+        self.plan_path = plan_path
 
 
 def _write(path: Path, text: str) -> None:
@@ -340,6 +358,7 @@ def _engine_rows(
     raw_by_id: Mapping[str, Mapping],
     gated: Sequence[GatedRow],
     run_sizing: Optional[Mapping],
+    sibling_roots: Optional[Mapping[str, Path]] = None,
 ) -> tuple[dict, ...]:
     """Rows delivered in the engine plane, over the plan's ungated raw rows, the run sizing's
     register rows and the plan's evidence sidecar. One text scan and at most one resolver call."""
@@ -353,7 +372,22 @@ def _engine_rows(
         evidence = sidecar.read_text(encoding="utf-8") if sidecar.is_file() else ""
     except OSError:
         evidence = ""
-    return tuple(engine_owner_rows(plan_rows, [r for r in register if isinstance(r, Mapping)], evidence, root))
+    rows = engine_owner_rows(plan_rows, [r for r in register if isinstance(r, Mapping)], evidence, root)
+    return tuple(rows) + _sibling_owner_rows(plan_rows, sibling_roots or {})
+
+
+def _sibling_owner_rows(plan_rows: Sequence[Mapping], sibling_roots: Mapping[str, Path]) -> tuple[dict, ...]:
+    """One owner-repo row (no ``engine`` flag) per staged plan row gated on a provisioned sibling,
+    judged at that sibling's root."""
+    out: list[dict] = []
+    for raw in plan_rows:
+        gates = raw.get("external_gate") if isinstance(raw, Mapping) else None
+        for g in gates if isinstance(gates, list) else ():
+            owner = g.get("owner_repo") if isinstance(g, Mapping) else None
+            if owner in sibling_roots and g.get("cleared") is not True:
+                out.append({"id": raw["id"], "owner_repo": owner, "owner_root": sibling_roots[owner].as_posix()})
+                break
+    return tuple(out)
 
 
 def _only_rows(
@@ -583,11 +617,12 @@ def stage(
         for raw in load_rows(plan_text).rows
         if isinstance(raw, dict) and isinstance(raw.get("id"), str)
     }
+    sibling_roots = provisioned_sibling_roots(raw_by_id.values(), root)
     try:
         rows = read_spine(
             plan_path,
             exclusions=exclusions,
-            cleared_gate_owners=own_gate_owners(raw_by_id.values(), root),
+            cleared_gate_owners=own_gate_owners(raw_by_id.values(), root) | frozenset(sibling_roots),
         )
     except InvalidChangeKindError as exc:
         raise AskStageError(f"INVALID-CHANGE-KIND: {plan_posix}: {exc}") from exc
@@ -616,7 +651,11 @@ def stage(
         named = f"; gated: {', '.join(g.id for g in gated)}" if gated else ""
         if owed:
             named += f"; owed by the EM: {', '.join(o.id for o in owed)}"
-        raise AskStageError(f"the spine derives zero dispatchable rows{named}")
+        raise AskStageError(
+            f"the spine derives zero dispatchable rows{named}",
+            owed_em_ids=[o.id for o in owed],
+            plan_path=plan_posix,
+        )
 
     context = derive_plan_context(
         plan_text, fallback_title=plan_path.stem, repo_root=root.as_posix()
@@ -726,22 +765,26 @@ def stage(
     marker_path = run_dir / "commit-request.txt"
     _write(marker_path, f"{marker}\n" if marker else "")
 
+    register_rows = [
+        r for r in ((run_sizing or {}).get("requirement_register") or {}).get("rows") or [] if isinstance(r, Mapping)
+    ]
+    ledger_item_ids, withheld_ids = requirements_ledger.ledger_ids(register_rows)
     manifest = StageManifest(
         run_dir=_rel(root, run_dir),
         rows=tuple(manifest_rows),
-        review_declared_paths=tuple(_dedupe_preserve_order(declared)),
+        review_declared_paths=_reviewable(_dedupe_preserve_order(declared)),
         marker_path=_rel(root, marker_path),
         plan_id=_plan_id(plan_text),
         gated=tuple(gated),
         owed=tuple(owed),
-        engine_rows=_engine_rows(root, plan_path, raw_by_id, gated, run_sizing),
+        engine_rows=_engine_rows(root, plan_path, raw_by_id, gated, run_sizing, sibling_roots),
         test_targets=test_targets,
         no_test_target=no_test_target,
         fanout=fanout.meta_dict(),
         doc_writes=docs,
-        rulable_ids=rulable_ids(
-            [r for r in ((run_sizing or {}).get("requirement_register") or {}).get("rows") or [] if isinstance(r, Mapping)]
-        ),
+        rulable_ids=rulable_ids(register_rows),
+        ledger_item_ids=ledger_item_ids,
+        withheld_ids=withheld_ids,
     )
     _write(record / "manifest.json", json.dumps(manifest_payload(root, manifest), indent=2) + "\n")
     if session_id:
@@ -788,5 +831,9 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             only_rows=params["only_rows"] if params.get("only_rows") is not None else None,
         )
     except (AskStageError, SizingFireRefused) as exc:
-        return {"error": str(exc)}
+        reply = {"error": str(exc)}
+        if getattr(exc, "owed_em_ids", None):
+            reply["owed_em_ids"] = exc.owed_em_ids
+            reply["owed_plan"] = exc.plan_path
+        return reply
     return manifest_payload(root, manifest)

@@ -115,13 +115,42 @@ _OWNERSHIP_CUE_PATTERNS = [
 # A trigger match is disqualified when it sits in a negated clause
 # ("nothing is waiting on you") or inside a quotation (a hand-up quoted
 # from another session's transcript, not made by this turn's speaker).
-_NEGATION_RE = re.compile(r"\b(?:nothing|no|not|never|none)\b", re.IGNORECASE)
+_NEGATION_RE = re.compile(
+    r"\b(?:nothing|no|not|never|none)\b|\b\w+n['’]t\b", re.IGNORECASE
+)
 _CLAUSE_SPLIT_RE = re.compile(r"[,;]")
 _QUOTE_CHARS = "\"“”`"
 
 
 def _quote_parity_odd(span: str) -> bool:
     return sum(1 for ch in span if ch in _QUOTE_CHARS) % 2 == 1
+
+
+def _inside_quote(prefix: str) -> bool:
+    """Line-scoped: a quoted span holding a comma is split into clauses by
+    `_pattern_matches`, so clause-local parity alone misses its tail."""
+    return _quote_parity_odd(prefix[prefix.rfind("\n") + 1:])
+
+
+# "waiting on you" in a sentence that neither asks a question nor requests a
+# decision is a status line describing a gate, not a hand-up.
+_PROGRESSIVE_WAIT_RE = re.compile(r"\bwaiting\s+on\s+you\b", re.IGNORECASE)
+_HANDOFF_REQUEST_RE = re.compile(
+    r"\?|\b(?:decide|decision|approve|approval|authori[sz]\w*|confirm|go-ahead|sign-off"
+    r"|your\s+(?:call|input|go)|please|need\s+you|can\s+you|could\s+you|let\s+me\s+know"
+    r"|tell\s+me|should\s+I|want\s+me)\b",
+    re.IGNORECASE,
+)
+_SENTENCE_BREAK_RE = re.compile(r"[.!?\n]")
+
+
+def _status_line_wait(text: str, start: int, end: int) -> bool:
+    left = max((text.rfind(ch, 0, start) for ch in ".!?\n"), default=-1) + 1
+    tail = _SENTENCE_BREAK_RE.search(text, end)
+    right = tail.end() if tail else len(text)
+    if text[end:end + 1] == ":":
+        return False
+    return not _HANDOFF_REQUEST_RE.search(text[left:right])
 
 
 # Reported speech: the call is attributed to a named party or an existing
@@ -181,9 +210,16 @@ def _pattern_matches(pattern: "re.Pattern", text: str) -> bool:
                 continue
             if _quote_parity_odd(prefix):
                 continue
-            if _reported_speech(text[: offset + m.start()]):
+            at = offset + m.start()
+            if _inside_quote(text[:at]):
                 continue
-            if _third_party_clause(text[: offset + m.start()]):
+            if _PROGRESSIVE_WAIT_RE.fullmatch(m.group(0)) and _status_line_wait(
+                text, at, offset + m.end()
+            ):
+                continue
+            if _reported_speech(text[:at]):
+                continue
+            if _third_party_clause(text[:at]):
                 continue
             return True
         offset +=len(clause) + 1
@@ -571,6 +607,47 @@ def _trigger_window_idxs(text: str) -> "tuple[list[str], set]":
     return sentences, window_idxs
 
 
+_EM_ONLY_MARKER_PATTERNS = [
+    re.compile(r"\b[AC]\d+\b"),
+    re.compile(r"\b[A-Z][a-z0-9]+(?:[A-Z][a-z0-9]+)+\b"),
+    re.compile(r"\b[a-z][a-z0-9]*_[a-z0-9_]+\b"),
+    re.compile(r"\b\w+\(\)"),
+    re.compile(r"(?<![\w-])--[a-z][\w-]*"),
+    re.compile(r"\b[\w.-]+/[\w./-]+\.(?:py|md|ya?ml|json|sh|js|toml)\b"),
+    re.compile(r"\b\w[\w-]*\.(?:py|md|ya?ml|json|sh|js|toml)\b"),
+    re.compile(
+        r"\bexit[- ]codes?\b|\bnegative-spec\b|\bexecute-plan\b|\bauthorization\s+gate\b"
+        r"|\b(?:hook|guard|tripwire|sidecar|nonce|executor|subagent|worktree"
+        r"|frontmatter|dispatch(?:ed)?)s?\b",
+        re.IGNORECASE,
+    ),
+]
+
+# A concrete quantity the PM can weigh (size, time, money). Drive-letter paths
+# are deliberately not EM-only markers: they name the PM's own disks.
+_QUANTITY_RE = re.compile(
+    r"\d[\d,.]*\s*(?:[KMGT]i?B|%|hours?|hrs?|minutes?|mins?|days?|weeks?|seconds?)\b"
+    r"|[$£€]\s*\d",
+    re.IGNORECASE,
+)
+
+
+def _window_names_em_only_things(scope: str) -> bool:
+    return _any_pattern_matches(_BARE_IDENTIFIER_PATTERNS, scope) or any(
+        p.search(scope) for p in _EM_ONLY_MARKER_PATTERNS
+    )
+
+
+def _plain_noun_handoff(text: str) -> bool:
+    """A handoff whose trigger window states a quantified choice and carries no
+    EM-only marker. A quantity-free plain handoff stays on the altitude block."""
+    sentences, window_idxs = _trigger_window_idxs(text)
+    if not window_idxs:
+        return False
+    scope = " ".join(sentences[i] for i in sorted(window_idxs))
+    return bool(_QUANTITY_RE.search(scope)) and not _window_names_em_only_things(scope)
+
+
 def _final_sentence(text: str) -> str:
     sentences = _split_sentences(text)
     return sentences[-1] if sentences else ""
@@ -752,7 +829,7 @@ def _handler(params: dict, repo_root=None) -> dict:
             return _emit_declarative_stall_verdict(text)
         return _emit_decidability_verdict(candidate, text)
 
-    if _any_exemption_applies(payload, text):
+    if _any_exemption_applies(payload, text) or _plain_noun_handoff(text):
         candidate = _candidate_ownership_sentence(text) or text
         return _emit_decidability_verdict(candidate, text)
 

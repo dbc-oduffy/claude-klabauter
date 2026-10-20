@@ -1,7 +1,9 @@
 """Research route: list targets, allowlisted local probes bound onto the scouts segment, and from_sizing question targets."""
 from __future__ import annotations
 
+import json
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -101,6 +103,83 @@ def test_list_targets_reach_the_reply_and_ask(repo):
 def test_bad_local_refs_are_refused_naming_the_question(repo, ref):
     with pytest.raises(PipelineEmitRefused, match="scout question 2"):
         _ask(repo, ["Q1?", {"text": "Q2?", "targets": [ref]}])
+
+
+def _cli_ask(repo, ref):
+    return _ask(repo, ["Q1?", {"text": "Q2?", "targets": [ref]}])
+
+
+def test_cli_probe_with_an_allowlisted_verb_emits_cleanly(repo):
+    seg = _scouts(_cli_ask(repo, "local:p4-readonly:changes"))
+    assert seg["lists"][rc.PROBES_LIST] == [seg["lists"]["questions"][1]]
+    assert seg["flags"][rc.LOCAL_PROBE_FLAG] is True
+
+
+@pytest.mark.parametrize("ref", ["local:p4-readonly:submit", "local:p4-readonly:changes;rm", "local:p4-readonly"])
+def test_cli_probe_with_a_non_allowlisted_or_missing_verb_is_refused(repo, ref):
+    with pytest.raises(PipelineEmitRefused, match="scout question 2"):
+        _cli_ask(repo, ref)
+
+
+def test_refused_verb_message_names_the_allowed_verbs(repo):
+    with pytest.raises(PipelineEmitRefused) as err:
+        _cli_ask(repo, "local:p4-readonly:submit")
+    assert "changes" in str(err.value) and "opened" in str(err.value)
+
+
+def _content_root_with_p4_entry(tmp_path, mutate):
+    root = tmp_path / "content"
+    shutil.copytree(_PROBE_ROOT, root)
+    path = root / rc.SCOUTS_ASK_FRAGMENT
+    doc = json.loads(path.read_text(encoding="utf-8"))
+    entry = next(e for e in doc[rc.PROBE_ALLOWLIST_KEY] if e["id"] == "p4-readonly")
+    mutate(entry)
+    path.write_text(json.dumps(doc), encoding="utf-8")
+    return root
+
+
+def _drop_verbs(entry):
+    del entry[rc.PROBE_VERBS_KEY]
+
+
+def _empty_verbs(entry):
+    entry[rc.PROBE_VERBS_KEY] = []
+
+
+def _unsafe_verb(entry):
+    entry[rc.PROBE_VERBS_KEY] = ["changes;rm"]
+
+
+def _verbs_not_a_list(entry):
+    entry[rc.PROBE_VERBS_KEY] = "changes"
+
+
+def _drop_tool(entry):
+    del entry[rc.PROBE_TOOL_KEY]
+
+
+def _blank_tool(entry):
+    entry[rc.PROBE_TOOL_KEY] = " "
+
+
+def _wrong_ref(entry):
+    entry["ref"] = "arg"
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [_drop_verbs, _empty_verbs, _unsafe_verb, _verbs_not_a_list, _drop_tool, _blank_tool, _wrong_ref],
+)
+def test_malformed_cli_entry_is_refused_naming_the_file(repo, monkeypatch, tmp_path, mutate):
+    root = _content_root_with_p4_entry(tmp_path, mutate)
+    monkeypatch.setattr(op_module, "_pipeline_content_root", lambda: root)
+    with pytest.raises(PipelineEmitRefused, match=r"scouts-ask-fragment.*CLI probe 'p4-readonly'"):
+        _cli_ask(repo, "local:p4-readonly:changes")
+
+
+def test_existing_takes_arg_probe_still_emits_beside_a_cli_probe(repo):
+    seg = _scouts(_ask(repo, _MIXED))
+    assert seg["flags"][rc.LOCAL_PROBE_FLAG] is True
 
 
 def test_manifest_without_probes_drops_nothing_for_a_plain_ask_and_refuses_a_local_one(repo, monkeypatch):

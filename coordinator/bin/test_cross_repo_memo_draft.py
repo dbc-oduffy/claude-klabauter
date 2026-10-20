@@ -972,3 +972,41 @@ def test_compose_open_without_editor() -> None:
         if "editor" not in combined.lower() and "$editor" not in combined.lower():
             raise AssertionError(f"{name}: " + (f"compose --open without EDITOR should warn about EDITOR. output: {combined!r}"))
 
+
+_KNOWN_FOR_FOLD = ["coordinator-content-repo-em", "example-retrieval-repo-em", "example-retrieval-repo-ue-addon-em"]
+
+
+def test_repo_name_folds_to_canonical_receiver_id() -> None:
+    mod = _load_dispatcher_module()
+    for spelled in ("coordinator-content-repo", "content_root", "COORDINATOR-CONTENT-REPO", "project-rag"):
+        got = mod._canonical_receiver_for(spelled, _KNOWN_FOR_FOLD)
+        want = "coordinator-content-repo-em" if spelled.lower().startswith("doe") else "example-retrieval-repo-em"
+        assert got == want, f"{spelled!r} -> {got!r}, want {want!r}"
+
+
+def test_unknown_or_ambiguous_repo_name_is_not_folded() -> None:
+    mod = _load_dispatcher_module()
+    assert mod._canonical_receiver_for("project", _KNOWN_FOR_FOLD) is None
+    assert mod._canonical_receiver_for("nonesuch", _KNOWN_FOR_FOLD) is None
+    assert mod._canonical_receiver_for("", _KNOWN_FOR_FOLD) is None
+    assert mod._canonical_receiver_for("ax", ["a-x-em", "a_x"]) is None
+
+
+def test_unresolved_error_names_canonical_id() -> None:
+    import io
+    import contextlib
+
+    mod = _load_dispatcher_module()
+    mod._known_receiver_ids = lambda: list(_KNOWN_FOR_FOLD)
+    mod._receiver_repo_key = lambda to: "repos.content_root"
+    mod._is_central_receiver = lambda to: False
+    buf = io.StringIO()
+    with contextlib.redirect_stderr(buf):
+        rc = mod._print_receiver_unresolved_error("coordinator-content-repo")
+    assert rc == 1
+    assert "'coordinator-content-repo-em'" in buf.getvalue() and "Did you mean" in buf.getvalue()
+    buf = io.StringIO()
+    with contextlib.redirect_stderr(buf):
+        mod._print_receiver_unresolved_error("nonesuch")
+    assert "Did you mean" not in buf.getvalue()
+

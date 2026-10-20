@@ -433,6 +433,23 @@ def _receiver_repo_key(receiver_em_id: str) -> str:
 _PR_COMMENT_FALLBACK = "Fallback: post the memo as a comment on the session's PR."
 
 
+def _canonical_receiver_for(to: str, known: list[str]) -> str | None:
+    """Return the one known receiver id that the repo name `to` names, else None.
+
+    Equality on `_normalize_repo_name` folds, with and without the trailing
+    '-em' on each known id (`coordinator-content-repo` -> `coordinator-content-repo-em`). Zero or several
+    matches return None: never a prefix or fuzzy guess.
+    """
+    target = _normalize_repo_name(to)
+    if not target:
+        return None
+    hits = {
+        k for k in known
+        if target in (_normalize_repo_name(k), _normalize_repo_name(k[:-3] if k.endswith("-em") else k))
+    }
+    return next(iter(hits)) if len(hits) == 1 else None
+
+
 def _print_receiver_unresolved_error(to: str) -> int:
     """Shared 'receiver unresolved' diagnostic for both --dry-run and a real send.
 
@@ -456,6 +473,9 @@ def _print_receiver_unresolved_error(to: str) -> int:
         f"\n  Known receivers on this machine: {', '.join(known)}."
         if known else ""
     )
+    canonical = _canonical_receiver_for(to, known)
+    if canonical:
+        hint += f"\n  Did you mean '{canonical}'? Re-run with `--to {canonical}`."
     print(
         f"cross-repo-memo: cannot deliver to '{to}' — it resolves to "
         f"machine-local key '{repo_key}', which is not registered on this "
@@ -2536,6 +2556,12 @@ def _cmd_draft(args: argparse.Namespace) -> int:
     topic = args.topic
     to = args.to
     title = args.title
+    if not to.strip().lower().endswith("-em"):
+        folded = _canonical_receiver_for(to, _known_receiver_ids())
+        if folded:
+            print(f"cross-repo-memo draft: resolved {to!r} -> {folded!r}", file=sys.stderr)
+            to = folded
+            args.to = folded
 
     # C3 (docs/plans/2026-08-31-prose-flags-travel-as-files-through-the...):
     # --title has no --title-file sibling (see the flag definition's comment
@@ -4165,6 +4191,9 @@ def main(argv: list[str] | None = None) -> int:
             f"verdict: receiver '{to_val}' does not resolve to a known repo on "
             f"this machine"
         )
+        canonical = _canonical_receiver_for(to_val, _known_receiver_ids())
+        if canonical is not None:
+            print(f"Did you mean '{canonical}'?")
         return 4
 
     # --list-receivers is a discovery-only mode: print every valid --to target

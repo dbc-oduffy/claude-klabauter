@@ -34,6 +34,7 @@ from coordinator_core import dispatch_abandon
 from coordinator_core.ops._path_guard import contained_path, safe_id
 from coordinator_core.ops.dispatch_emit import review_edits, run_artifacts
 from coordinator_core.ops.warp_run_deliverable import record_sizing_rel
+from coordinator_core.ops.dispatch_emit import halted_run
 from coordinator_core.ops.dispatch_emit.halted_run import write_halt_marker
 from coordinator_core.ops.dispatch_emit.ask_contract import (
     HALT_DEPENDENTS_UNSTARTED,
@@ -439,6 +440,21 @@ def _land(
     art_paths = list(extra_artifacts.present)
     art_deleted = list(extra_artifacts.deleted)
 
+    from coordinator_core.ops.dispatch_emit import sibling_claims
+
+    sibling = sibling_claims.sibling_run_claims(
+        worktree_root, run_id, product + gone + art_paths + art_deleted + review_literals
+    )
+    if sibling:
+        own_declared = set(owner) | set(paths) | set(deleted) | own_record
+        if sizing_rel:
+            own_declared.add(sizing_rel)
+        product, w1 = sibling_claims.filter_own(product, sibling, own_declared)
+        gone, w2 = sibling_claims.filter_own(gone, sibling, own_declared)
+        art_paths, w3 = sibling_claims.filter_own(art_paths, sibling, own_declared)
+        art_deleted, w4 = sibling_claims.filter_own(art_deleted, sibling, own_declared)
+        withheld.update({p: sibling_claims.SIBLING_WITHHELD_REASON for p in (*w1, *w2, *w3, *w4)})
+
     holds: list = []
     warnings = commit_v2._peer_claim_warnings(
         worktree_root, product + gone + art_paths + art_deleted, holds, own_sid=session_id
@@ -537,7 +553,7 @@ def _land(
     else:
         verdict = review_edits.partition(
             review_written, changed=snapshot.changed, ignored=snapshot.ignored,
-            committed=set(paths) | set(deleted), sibling_declared={}, contested=set(),
+            committed=set(paths) | set(deleted), sibling_declared=sibling, contested=set(),
             present=lambda p: (worktree_root / p).is_file(),
         )
         unlanded = {p: HALT_RUN_REASON for p in sorted([*verdict.land, *verdict.halt])}
@@ -560,6 +576,8 @@ def _land(
         message += "\nLands-Artifacts: " + ", ".join(f"{c}={n}" for c, n in sorted(landed_classes.items()))
     if deleted:
         message += "\nRemoves: " + ", ".join(deleted)
+    if (worktree_root / record_dir_rel).is_dir():
+        halted_run.record_withheld(worktree_root / record_dir_rel, withheld)
     commit_params: dict = {"paths": paths, "message": message}
     if deleted:
         commit_params["deleted_paths"] = deleted

@@ -38,7 +38,7 @@ from __future__ import annotations
 
 import re
 
-_SUMMARY_MAX_CHARS = 120
+_SUMMARY_MAX_CHARS = 240
 
 # Self-measuring ruler written into a fresh memo.draft's `summary:` field when
 # no usable summary resolves (docs/plans/2026-08-07-memo-summary-cap-warn-at-

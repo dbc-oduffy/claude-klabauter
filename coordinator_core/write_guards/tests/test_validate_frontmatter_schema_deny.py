@@ -2702,3 +2702,35 @@ class TestUnvendoredOfferableAdvisory:
         fp.write_text("plain body, no frontmatter block", encoding="utf-8")
         result = guard.check(_payload("Write", str(fp), str(tmp_path), content="plain body"))
         assert result is None
+
+
+class TestMemoContractInViolationMessage:
+    def _memo_fixture(self, tmp_path):
+        d = tmp_path / "cross-repo" / "inbox"
+        d.mkdir(parents=True, exist_ok=True)
+        fp = d / "2099-01-01-memo-contract-test.md"
+        content = "---\ntitle: t\nkind: reply\n---\nbody"
+        fp.write_text(content, encoding="utf-8")
+        return fp, content
+
+    def test_memo_contract_appended_to_strict_reason(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("COORDINATOR_SCHEMA_STRICT", "1")
+        fp, content = self._memo_fixture(tmp_path)
+        result = guard.check(_payload("Write", str(fp), str(tmp_path), content=content))
+        assert result is not None
+        hso = result["hookSpecificOutput"]
+        text = hso.get("permissionDecisionReason") or hso.get("additionalContext")
+        assert "Full contract:" in text
+        assert "picked_up_by" in text
+
+    def test_memo_contract_absent_from_non_memo_message(self):
+        msg = guard._violation_message("handoff", [{"field": "title", "error": "required"}])
+        assert "Full contract" not in msg
+
+    def test_memo_contract_evaluate_appends_for_memo_schema_only(self):
+        schema = json.loads(
+            (Path(guard.__file__).resolve().parents[1] / "contract" / "cross-repo-memo.schema.json")
+            .read_text(encoding="utf-8")
+        )
+        msg = guard._evaluate_schema_validation("cross-repo-memo", schema, {"title": "t"}, "", "x.md", {})
+        assert msg and "Full contract:" in msg and "picked_up_by" in msg

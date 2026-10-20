@@ -122,9 +122,9 @@ def test_refused_plan_flip_carries_its_reason_at_top_level(tmp_path, monkeypatch
 
 
 def test_driver_prompt_relays_the_verdict_line():
-    from coordinator_core.ops.workflow_fire.fire import _PROMPT_TEMPLATE
+    from coordinator_core.ops.workflow_fire.fire import render_prompt
 
-    prompt = _PROMPT_TEMPLATE.format(script_path="s.mjs")
+    prompt = render_prompt("s.mjs")
     for key in ("criterion_status", "plan_status", "plan_status_reason"):
         assert key in prompt
 

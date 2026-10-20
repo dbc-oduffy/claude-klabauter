@@ -2203,6 +2203,34 @@ def _resolve_halt_sha(worktree_root: Path, resume: object, plan_rel: Optional[st
     return sha if isinstance(sha, str) and _FULL_SHA_RE.fullmatch(sha) else None
 
 
+def _withheld_work_pending(worktree_root: Path, resume: object, declared: Sequence[str]) -> bool:
+    """True when a declared path the halt withheld (``run_artifacts.withheld`` of the resume, else
+    of the halted run's ``halted.json``) is dirty or untracked: the halt left that product in the
+    tree with the halt state's own bytes, so ``git diff <halt_sha>`` reads it as unchanged while
+    it is exactly the work this refire has to land."""
+    if not isinstance(resume, dict):
+        return False
+    arts = resume.get("run_artifacts")
+    withheld = arts.get("withheld") if isinstance(arts, dict) else None
+    if not isinstance(withheld, dict):
+        run_id = resume.get("run_id")
+        from coordinator_core.ops._path_guard import safe_id
+
+        if not (isinstance(run_id, str) and safe_id(run_id)):
+            return False
+        from coordinator_core.ops.dispatch_emit.halted_run import halted_withheld
+
+        withheld = halted_withheld(worktree_root / RECORD_DIR_ROOT / run_id)
+    pending = [p for p in declared if p in withheld]
+    if not pending:
+        return False
+    status = run_git(
+        ["--literal-pathspecs", "status", "--porcelain", "--untracked-files=all", "--", *pending],
+        cwd=str(worktree_root),
+    )
+    return status.returncode == 0 and bool(status.stdout.strip())
+
+
 def _unchanged_since_halt_failures(
     worktree_root: Path, resume: object, verdict: object, manifest_path: Optional[Path],
     plan_rel: Optional[str] = None, detail: Optional[dict] = None,
@@ -2251,6 +2279,8 @@ def _unchanged_since_halt_failures(
                 cwd=str(worktree_root),
             )
             if created.returncode == 0 and created.stdout.strip():
+                return []
+            if created.returncode == 0 and _withheld_work_pending(worktree_root, resume, paths):
                 return []
             if created.returncode != 0:
                 outcome = f"git-exit-{created.returncode}"
@@ -2856,9 +2886,11 @@ def _resumed_review_source(
 def _review_edit_verdict(
     worktree_root: Path, writes: Optional[dict], snapshot: Optional[_Snapshot],
     session_id: Optional[str], run_id: Optional[str], committed: set,
+    sibling_claims: Optional[dict] = None,
 ):
     """``review_edits.partition`` over the review stage's writes against the pre-commit snapshot.
-    Without a snapshot the dirt cannot be read, so the verdict is unanswerable."""
+    Without a snapshot the dirt cannot be read, so the verdict is unanswerable. ``sibling_claims``
+    ({path: run id} an unlanded sibling run claims) joins the live siblings' declared paths."""
     from coordinator_core.ops.dispatch_emit import review_edits
 
     if writes is None or snapshot is None:
@@ -2880,7 +2912,7 @@ def _review_edit_verdict(
         changed=snapshot.changed,
         ignored=snapshot.ignored_among(inside),
         committed=committed,
-        sibling_declared=review_edits.live_sibling_declared(worktree_root, run_id),
+        sibling_declared={**(sibling_claims or {}), **review_edits.live_sibling_declared(worktree_root, run_id)},
         contested=contested,
         present=lambda p: (worktree_root / p).is_file(),
     )
@@ -2979,6 +3011,22 @@ def _partial_chunks(
         elif withheld is not None and _PARTIAL_REPORT_RE.search(text):
             withheld[chunk.id] = _undone_summary(text)
     return out
+
+
+def _reverted_paths(params: dict, inline_review: object) -> frozenset:
+    """Repo-relative paths the run's test-runner or review recorded as reverted: the string
+    entries of ``reverted`` under ``params.targeted_tests``, ``inline_review.tests`` and
+    ``inline_review.integration``. Malformed input contributes nothing and never raises.
+    A reverted path absent from the worktree is a revert, never a declared deletion."""
+    holders: list = [params.get("targeted_tests")]
+    if isinstance(inline_review, dict):
+        holders += [inline_review.get("tests"), inline_review.get("integration")]
+    found: set = set()
+    for holder in holders:
+        listed = holder.get("reverted") if isinstance(holder, dict) else None
+        if isinstance(listed, list):
+            found.update(p.replace("\\", "/") for p in listed if isinstance(p, str) and p)
+    return frozenset(found)
 
 
 def _reviewed_files_if_passed(inline_review: dict) -> Optional[set]:
@@ -4706,6 +4754,8 @@ def _terminal_commit_inner(
     absent = [p for p in all_paths if not (worktree_root / p).exists()]
     dropped_absent: list = []
     deleted_paths: list = []
+    reverted_absent: list = []
+    reverted = _reverted_paths(params, inline_review)
     if absent:
         from coordinator_core.git.commit import partition_declared_deletions
 
@@ -4722,16 +4772,20 @@ def _terminal_commit_inner(
                 "path(s) gone from the worktree but still tracked at HEAD are not "
                 f"in any DONE chunk's declared writes, an undeclared deletion: {undeclared}"
             )
-        deleted_paths = sorted(set(tracked_at_head))
+        reverted_absent = sorted(p for p in tracked_at_head if p in reverted)
+        deleted_paths = sorted(p for p in set(tracked_at_head) if p not in reverted)
         dropped_absent = list(absent_from_head)
-        removed = set(dropped_absent) | set(deleted_paths)
+        removed = set(dropped_absent) | set(deleted_paths) | set(reverted_absent)
         all_paths = [p for p in all_paths if p not in removed]
 
     if art_landable is not None:
         all_paths.extend(
             p for p in _bar_stranded([q for q in art_landable.present if q not in all_paths])
         )
-        deleted_paths = sorted(set(deleted_paths) | set(_bar_stranded(list(art_landable.deleted))))
+        deleted_paths = sorted(
+            set(deleted_paths)
+            | {p for p in _bar_stranded(list(art_landable.deleted)) if p not in reverted}
+        )
         all_paths = [p for p in all_paths if p not in deleted_paths]
 
     if not all_paths and not deleted_paths:
@@ -4746,7 +4800,7 @@ def _terminal_commit_inner(
     if left_out_map:
         scope["peer_held_left"] = left_out_map
     run_owned = _bar_stranded(run_owned)
-    owned_deletions = _bar_stranded(list(owned_deletions))
+    owned_deletions = [p for p in _bar_stranded(list(owned_deletions)) if p not in reverted]
     all_paths.extend(run_owned)
     deleted_paths = sorted(set(deleted_paths) | set(owned_deletions))
     scope["run_owned"] = list(run_owned)
@@ -4816,10 +4870,28 @@ def _terminal_commit_inner(
     scope["stranded_residue"] = residue
     review_land: tuple = ()
     review_unanswerable: Optional[str] = None
+    sibling_claim_run_id = _run_id_of(params, ask_run_dir, script_path_raw)
+    sibling_claims_seen: set = set()
+    sibling_claims: dict = {}
+
+    def claims_over(paths: Sequence[str]) -> dict:
+        """Unlanded-sibling claims over `paths`, read once per path (an earlier answer is kept)."""
+        from coordinator_core.ops.dispatch_emit import sibling_claims as sc
+
+        fresh = {p for p in paths if p and p not in sibling_claims_seen}
+        if fresh:
+            sibling_claims_seen.update(fresh)
+            sibling_claims.update(sc.sibling_run_claims(worktree_root, sibling_claim_run_id, fresh))
+        return sibling_claims
+
+    claims_over([
+        *all_paths, *deleted_paths,
+        *(p for p in (review_writes or ()) if not p.startswith(("/", "../")) and p != ".." and p[1:2] != ":"),
+    ])
     if review_checked:
         verdict = _review_edit_verdict(
             worktree_root, review_writes, snapshot, session_id, review_run_id,
-            set(all_paths) | set(deleted_paths),
+            set(all_paths) | set(deleted_paths), sibling_claims,
         )
         if verdict.halt:
             return _error(
@@ -4920,7 +4992,9 @@ def _terminal_commit_inner(
     credited: dict = {}
     for c in done_chunks + contributing_partial:
         declared = set(c.paths) | set(_own_prefix_files(worktree_root, c, report_cache) or [])
-        credited[c.id] = sorted(declared - absent_dropped - set(wh_reasons) - set(never_commit_dropped))
+        credited[c.id] = sorted(
+            declared - absent_dropped - set(wh_reasons) - set(never_commit_dropped) - set(reverted_absent)
+        )
     sibling_set = {p for ps in sibling_paths.values() for p in ps}
     landing_now = set(all_paths) | set(deleted_paths) | sibling_set
     unprobed = sorted({p for ps in credited.values() for p in ps} - landing_now)
@@ -5042,6 +5116,34 @@ def _terminal_commit_inner(
     if allowlist_path is not None and allowlist_path not in all_paths:
         all_paths.append(allowlist_path)
 
+    # One choke point for every admission arm: a path an unlanded sibling run claims and this run
+    # does not declare never reaches the integrity gate or the commit.
+    from coordinator_core.ops.dispatch_emit import sibling_claims as _sc
+
+    own_declared = {
+        *declared_writes, *run_owned, *receipt_paths,
+        *(p for p in (ask_note_rel, bookkeeping_record_path, cited_sizing, allowlist_path) if p),
+    }
+    if record_dir_rel:
+        own_declared.update(
+            p for p in (*all_paths, *deleted_paths) if p == record_dir_rel or p.startswith(record_dir_rel.rstrip("/") + "/")
+        )
+    all_paths, sibling_withheld = _sc.filter_own(
+        all_paths, claims_over([*all_paths, *deleted_paths]), own_declared,
+    )
+    deleted_paths, withheld_deleted = _sc.filter_own(deleted_paths, sibling_claims, own_declared)
+    sibling_withheld.update(withheld_deleted)
+    if sibling_withheld:
+        review_land = tuple(p for p in review_land if p not in sibling_withheld)
+        if not all_paths and not deleted_paths:
+            _remove(worktree_root, receipt_paths)
+            if close_ctx is not None:
+                close_ctx.clear()
+            return _with_withheld(_with_siblings({
+                "committed": False, "nothing_to_commit": not sibling_paths,
+                "sibling_withheld": dict(sibling_withheld),
+            }))
+
     # commit_v2 carries every path the session holds a claim on, so it is asked only when no dirty
     # file sits unlanded in the run's declared scope: such a file may be a sibling run's of the
     # same session, which `undeclared_dirty` reports and the commit must not widen to.
@@ -5102,8 +5204,19 @@ def _terminal_commit_inner(
         _remove(worktree_root, receipt_paths)
         findings = integrity_extra["integrity"]
         first = findings[0]
+        remedy = ""
+        if first["reason"] == "since-base-overlap":
+            from coordinator_core.ops import warp_run_deliverable
+
+            remedy = ". " + _sc.reland_remedy(
+                warp_run_deliverable.record_sizing_rel(
+                    worktree_root, _run_id_of(params, ask_run_dir, script_path_raw)
+                )
+            )
+        if sibling_withheld:
+            integrity_extra["sibling_withheld"] = dict(sibling_withheld)
         return _error(
-            f"landing refused {first['reason']}: {first['path']} ({first['detail']})",
+            f"landing refused {first['reason']}: {first['path']} ({first['detail']}){remedy}",
             **integrity_extra,
         )
 
@@ -5122,6 +5235,8 @@ def _terminal_commit_inner(
     held_report = _dirty_held_by_halted_run(worktree_root, halted_held)
     if held_report:
         reply["held_by_halted_run"] = held_report
+    if sibling_withheld:
+        reply["sibling_withheld"] = dict(sibling_withheld)
     if reply.get("refused") == "blob-drift" and isinstance(reply.get("error"), str):
         reply["error"] = _blob_drift_remedy(
             reply["error"], _run_id_of(params, ask_run_dir, script_path_raw)
@@ -5493,6 +5608,8 @@ def _terminal_commit_inner(
     reply["dropped_absent"] = dropped_absent
     reply["never_commit_dropped"] = never_commit_dropped
     reply["deleted_paths"] = deleted_paths
+    if reverted_absent:
+        reply["reverted_absent"] = reverted_absent
     reply["unmarked_incomplete"] = unmarked_incomplete
     if unsent_memos:
         reply["memo_unsent"] = dict(sorted(unsent_memos.items()))

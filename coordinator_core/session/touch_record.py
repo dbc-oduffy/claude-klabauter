@@ -199,7 +199,6 @@ countable and bounded, never silent.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
 import itertools
@@ -457,7 +456,7 @@ def sink_path(claimant_dir: "Path | str") -> Path:
 
 
 def compute_content_hash(file_path: "Path | str") -> Optional[str]:
-    """The C10 fingerprint: a whole-file ``sha256`` hex digest, read and
+    """The C10 fingerprint: a whole-file ``sha256`` hex digest over CRLF-folded bytes (``eol_folded_sha256``), read and
     hashed in-process -- ~0.148ms/call measured against a 267KB file
     (``docs/research/2026-08-27-hunk-level-ownership-spike.md``), zero
     subprocess spawns. NOT ``size+mtime``: that candidate was tested and
@@ -480,7 +479,9 @@ def compute_content_hash(file_path: "Path | str") -> Optional[str]:
         data = Path(file_path).read_bytes()
     except OSError:
         return None
-    return hashlib.sha256(data).hexdigest()
+    from coordinator_core.git.content_hash import eol_folded_sha256
+
+    return eol_folded_sha256(data)
 
 
 def is_stale(recorded_hash: Optional[str], abs_path: "Path | str") -> bool:

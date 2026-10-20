@@ -83,6 +83,7 @@ from coordinator_core.git.git_dir import resolve_git_dir, resolve_git_common_dir
 from coordinator_core.git.path_canon import first_non_canonical_path_refusal
 from coordinator_core.git import checkin_attrs
 from coordinator_core.git.content_hash import (
+    eol_folded_sha256,
     _autocrlf_checkin_normalize,
     _clean_filter_may_apply,
     _repo_autocrlf_true,
@@ -1419,7 +1420,7 @@ def commit_paths(
             except OSError as exc:
                 raise CommitRefused(f"cannot read {p}: {exc}") from exc
             if p in exp_content:
-                content_digest[p] = hashlib.sha256(data).hexdigest()
+                content_digest[p] = eol_folded_sha256(data)
             try:
                 blob = _worktree_blob(gitdir, root, p, data, created_blobs)
             except FilterUnsupported:

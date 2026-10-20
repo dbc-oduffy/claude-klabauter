@@ -6037,21 +6037,15 @@ class TestMemoRuleCentralOnlyRequiresTo:
 
 
 class TestMemoRuleSummaryLengthCap:
-    def test_summary_at_120_chars_valid(self):
-        fm = _valid_memo(summary='x' * 120)
+    def test_summary_at_240_chars_valid(self):
+        fm = _valid_memo(summary='x' * 240)
         errors = validate_memo_cross_fields(fm)
         assert not any(e['field'] == 'summary' for e in errors)
 
-    def test_summary_at_121_chars_fails(self):
-        fm = _valid_memo(summary='x' * 121)
+    def test_summary_at_241_chars_fails(self):
+        fm = _valid_memo(summary='x' * 241)
         errors = validate_memo_cross_fields(fm)
-        assert any(e['field'] == 'summary' and '120' in e['error'] for e in errors)
-
-    def test_summary_over_140_would_fail_memo_cap(self):
-        """Even values that would pass handoff's 140-char cap fail memo's 120-char cap."""
-        fm = _valid_memo(summary='x' * 130)
-        errors = validate_memo_cross_fields(fm)
-        assert any(e['field'] == 'summary' for e in errors)
+        assert any(e['field'] == 'summary' and '240' in e['error'] for e in errors)
 
     def test_summary_absent_ok(self):
         fm = _valid_memo()

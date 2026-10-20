@@ -54,7 +54,7 @@
       },
       "returncode": 1,
       "stdout": "",
-      "stderr": "memo-transition: memo summary is 121 chars; cap is 120 \u2014 trim by 1 char and re-submit\n",
+      "stderr": "memo-transition: memo summary is 241 chars; cap is 240 \u2014 trim by 1 char and re-submit\n",
       "resulting_file_content": "---\nkind: fyi\nstatus: open\nfrom: sender-session\nsummary: \"BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB\"\ncreated: 2026-06-01\n---\n"
     },
     "claim_reject_invalid_kind": {

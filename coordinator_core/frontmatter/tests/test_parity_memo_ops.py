@@ -31,7 +31,7 @@ Validation-fail arm (mirrors TestOvercapSummaryRejectionParity in test_parity_ha
 
 Grandfather SKIP:
   - Pre-cutoff memo (created < 2026-05-22) is verified to be ACCEPTED by both paths
-    even when it would otherwise fail validation (summary > 120 chars). (This case
+    even when it would otherwise fail validation (summary > 240 chars). (This case
     remains `xfail(strict=True)` — see `test_grandfather_skip_pre_cutoff` — a known
     cross-repo contract drift unrelated to the golden conversion; the frozen golden
     simply pins the SAME divergent oracle output that made the live-oracle comparison
@@ -262,9 +262,9 @@ created: 2026-06-01
 ---
 """
 
-# Over-cap summary memo (121 chars > 120-char memo cap) — post-cutoff.
+# Over-cap summary memo (241 chars > 240-char memo cap) — post-cutoff.
 # Claim on this must REJECT (summary_length_cap rule fires post-mutation).
-_OVERCAP_SUMMARY = "B" * 121
+_OVERCAP_SUMMARY = "B" * 241
 _OVERCAP_MEMO = (
     "---\n"
     "kind: fyi\n"
@@ -1281,7 +1281,7 @@ class TestReleaseParity:
 #   (b) py_file unchanged                     (no partial write on rejection)
 #
 # Reachable rules tested here:
-#   - summary_length_cap (>120 chars): NOT a rejection case on the receive path — see
+#   - summary_length_cap (>240 chars): NOT a rejection case on the receive path — see
 #     test_receive_overcap_summary_truncated_and_warned for the ratified absorb-and-warn
 #     behaviour (2026-07-22 supersedes 2026-07-13's reject-canon on receive only; sender-side
 #     compose/send still rejects/caps at source).
@@ -1333,7 +1333,7 @@ class TestValidationRejectionParity:
         )
 
     def test_receive_overcap_summary_truncated_and_warned(self, tmp_path, capsys):
-        """Claim on memo with >120-char summary → claude-klabauter ABSORBS it, JS golden still rejects.
+        """Claim on memo with >240-char summary → claude-klabauter ABSORBS it, JS golden still rejects.
 
         This surface has ratcheted through three rulings; read all three before touching it
         again, since the second one already got mistaken for a bug by an agent that only saw
@@ -1369,7 +1369,7 @@ class TestValidationRejectionParity:
         against the JS golden: it is supposed to diverge. Only rules (1)-(3) above can change
         that, not a golden recapture.
 
-        Memo cap is 120 chars (distinct from handoff cap of 140).
+        Memo cap is 240 chars (distinct from handoff cap of 140).
         """
         js_file, py_file = self._setup_repos(tmp_path)
         _write_memo(js_file, _OVERCAP_MEMO)
@@ -1584,7 +1584,7 @@ class TestValidationRejectionParity:
         """Pre-cutoff memo (created < 2026-05-22) with overcap summary — both ACCEPT.
 
         Grandfather __skip__ rule short-circuits all cross-field validation for memos
-        with created < 2026-05-22.  Even though summary > 120 chars would normally reject,
+        with created < 2026-05-22.  Even though summary > 240 chars would normally reject,
         the grandfather rule returns {__skip__: True} before summary_length_cap fires.
         Both node and native exit 0; file IS modified (claim applied).
         Byte-identical output verifies parity of the grandfather skip behaviour.

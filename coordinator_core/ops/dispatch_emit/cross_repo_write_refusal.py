@@ -41,6 +41,11 @@ from typing import Iterable, Mapping, Optional, Sequence
 
 from coordinator_core.ops.dispatch_emit.ask_contract import GatedRow
 from coordinator_core.ops.dispatch_emit.spine_read import UNDECLARED
+from coordinator_core.ops.sibling_repo_provision_contract import (
+    ROUTE_REMEDY,
+    provisioned_local_root,
+    provisioned_target_of,
+)
 
 _DRIVE_ABS = re.compile(r"^[A-Za-z]:/")
 
@@ -190,6 +195,29 @@ def record_grants(repo_root: Path, session_id: str, sibling_paths: Iterable[str]
         return
 
 
+def _absent_sibling_name(raw: str, repo_root: Path) -> Optional[str]:
+    """The first segment of ``raw`` under ``repo_root``'s parent when that child does not exist
+    yet (a sibling a provision op could create); else None."""
+    posix = _posix(raw)
+    if _is_absolute(posix):
+        parent = _posix(str(repo_root.parent)).rstrip("/") + "/"
+        normalized = posixpath.normpath(posix)
+        if not normalized.startswith(parent):
+            return None
+        rest = normalized[len(parent):]
+    else:
+        normalized = posixpath.normpath(posix)
+        if not normalized.startswith("../"):
+            return None
+        rest = normalized[3:]
+        if rest.startswith("../"):
+            return None
+    segment = _first_segment(rest)
+    if segment is None or "/" not in rest or segment in (".", ".."):
+        return None
+    return None if (repo_root.parent / segment).exists() else segment
+
+
 def check_cross_repo_writes(
     rows,
     repo_root: Optional[Path],
@@ -211,6 +239,7 @@ def check_cross_repo_writes(
     repo_root = Path(repo_root)
 
     unreachable: list[str] = []
+    absent_sibling: list[str] = []
     sibling_rows: list[str] = []
     granted: list[str] = []
     repos: list[str] = []
@@ -224,17 +253,26 @@ def check_cross_repo_writes(
             hit = sibling_write(p, repo_root)
             if hit is None:
                 unreachable.append(f"{row.id} ({p!r})")
+                name = _absent_sibling_name(p, repo_root)
+                if name and name not in absent_sibling:
+                    absent_sibling.append(name)
                 continue
+            if provisioned_target_of(hit[0] / hit[1], repo_root) is not None:
+                raise CrossRepoWriteError(
+                    f"writes: {row.id} ({p!r}) lands inside the provisioned local sibling "
+                    f"{hit[0].name}, a publish target. {ROUTE_REMEDY}"
+                )
             sibling_rows.append(f"{row.id} ({p!r})")
             granted.append(_posix(str(hit[0] / hit[1])))
             if hit[0].name not in repos:
                 repos.append(hit[0].name)
 
     if unreachable:
+        hint = f" {ROUTE_REMEDY}" if absent_sibling else ""
         raise CrossRepoWriteError(
             f"writes: resolve outside every git checkout beside repoRoot ({repo_root}) -- "
             f"{'; '.join(unreachable)}. No commit can land these paths; name them "
-            "under the owning repo's checkout."
+            f"under the owning repo's checkout.{hint}"
         )
     if sibling_rows and not approved and not is_remote_venue(env):
         raise CrossRepoApprovalNeeded(
@@ -322,4 +360,26 @@ def own_gate_owners(raw_rows: Iterable[Mapping], root: Path) -> frozenset[str]:
     from coordinator_core.ops.fleet._memo_resolver import receiver_em_to_repo_key
 
     return frozenset(o for o in owners if _same_root(registry_get(receiver_em_to_repo_key(o)) or "", root))
+
+
+def provisioned_sibling_roots(raw_rows: Iterable[Mapping], root: Path) -> dict[str, Path]:
+    """``{owner_repo: root}`` for owners whose every uncleared ``external_gate`` is
+    ``requires: commit-in-owner-repo`` and whose registered root is a marked, remote-free sibling
+    of ``root``. An owner with any other uncleared gate (``landed-work``) is absent. No process
+    is spawned."""
+    owners: dict[str, bool] = {}
+    for raw in raw_rows:
+        gates = raw.get("external_gate") if isinstance(raw, Mapping) else None
+        for g in gates if isinstance(gates, list) else ():
+            if not isinstance(g, Mapping) or g.get("cleared") is True:
+                continue
+            owner = g.get("owner_repo")
+            if isinstance(owner, str) and owner:
+                owners[owner] = owners.get(owner, True) and g.get("requires") == "commit-in-owner-repo"
+    out: dict[str, Path] = {}
+    for owner in (o for o, ok in owners.items() if ok):
+        hit = provisioned_local_root(owner)
+        if hit is not None and _same_root(str(hit.parent), Path(root).parent) and not _same_root(str(hit), root):
+            out[owner] = hit
+    return out
 

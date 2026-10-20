@@ -72,6 +72,12 @@ def _local_venue(monkeypatch):
         monkeypatch.delenv(name, raising=False)
 
 
+@pytest.fixture(autouse=True)
+def _first_turn(monkeypatch):
+    """Unmarked asks default to pm unless a test sets the session past its first turn."""
+    monkeypatch.setattr(mod, "_is_first_turn", lambda _payload: True)
+
+
 def test_submit_call_is_what_every_guard_names():
     call = warp_fire.fire_command()
     assert call.startswith('Workflow({name: "coordinator:engine-ask", args: {"ask": ')
@@ -106,7 +112,7 @@ def test_raw_ask_becomes_the_fired_run(tmp_path):
     }
     assert "one wake" in hso["additionalContext"]
     params, called_root = emit.calls[0]
-    assert params == {"session_id": "sess-1", "ask": ask}
+    assert params == {"session_id": "sess-1", "ask": ask, "ask_source": "pm"}
     assert called_root == root
     record = json.loads((root / "scratch" / "warp" / "ask-20261013T000000-abcdef" / "submission.json").read_text())
     assert record["session_id"] == "sess-1" and record["sizing_rel"] is None
@@ -128,6 +134,15 @@ def test_a_refire_echoes_the_revisions_it_carries(tmp_path):
 
     plain = _hso(mod.evaluate(_payload(root, {"ask": "b"}, tool_use_id="t2"), emit=_Emit()))["additionalContext"]
     assert "Carries revisions" not in plain
+
+
+def test_the_allow_reason_carries_the_workflow_revise_call_shape(tmp_path):
+    root = _repo(tmp_path)
+    ctx = _hso(mod.evaluate(_payload(root, {"ask": "a"}), emit=_Emit()))["additionalContext"]
+    assert (
+        "coordinator-invoke workflow.revise "
+        '\'{"run_id": "ask-20261013T000000-abcdef", "verbatim": "<requirement>"}\''
+    ) in ctx
 
 
 def test_a_research_sizing_takes_the_research_route(tmp_path):
@@ -576,17 +591,62 @@ def test_relayed_source_forwards_ask_source(tmp_path):
     mod.evaluate(_payload(root, {"ask": "a", "source": "relayed"}), emit=emit)
     assert emit.calls[0][0]["ask_source"] == "relayed"
     mod.evaluate(_payload(root, {"ask": "a", "source": "pm"}), emit=emit)
-    mod.evaluate(_payload(root, {"ask": "a"}), emit=emit)
     assert emit.calls[1][0]["ask_source"] == "pm"
-    assert "ask_source" not in emit.calls[2][0]
-    assert "session_root" not in emit.calls[2][0]
+
+
+def test_an_unmarked_first_turn_ask_defaults_to_pm_and_says_so(tmp_path):
+    root = _repo(tmp_path)
+    emit = _Emit()
+    out = mod.evaluate(_payload(root, {"ask": "a"}), emit=emit)
+    assert emit.calls[0][0]["ask_source"] == "pm"
+    assert "defaulted to source pm" in _hso(out)["additionalContext"]
+    assert _hso(mod.evaluate(_payload(root, "bare", tool_use_id="t2"), emit=_Emit()))["permissionDecision"] == "allow"
+
+
+def test_an_unmarked_later_turn_ask_is_denied_before_it_fires(tmp_path, monkeypatch):
+    monkeypatch.setattr(mod, "_is_first_turn", lambda _payload: False)
+    root = _repo(tmp_path)
+    emit = _Emit()
+    for args in ({"ask": "a"}, "bare", {"asks": [{"ask": "a"}]}):
+        out = mod.evaluate(_payload(root, args), emit=emit)
+        assert _hso(out)["permissionDecision"] == "deny"
+        assert "Unmarked ask" in _hso(out)["permissionDecisionReason"]
+    assert emit.calls == []
+
+
+def test_a_marked_ask_is_forwarded_verbatim_on_any_turn(tmp_path, monkeypatch):
+    monkeypatch.setattr(mod, "_is_first_turn", lambda _payload: False)
+    root = _repo(tmp_path)
+    emit = _Emit()
+    for source in ("relayed", "pm"):
+        out = mod.evaluate(_payload(root, {"ask": "a", "source": source}), emit=emit)
+        assert _hso(out)["permissionDecision"] == "allow"
+        assert "Unmarked" not in _hso(out)["additionalContext"]
+    assert [c[0]["ask_source"] for c in emit.calls] == ["relayed", "pm"]
+
+
+def _transcript(tmp_path, *records) -> dict:
+    path = tmp_path / "t.jsonl"
+    path.write_text("".join(json.dumps(r) + "\n" for r in records), encoding="utf-8")
+    return {"transcript_path": str(path)}
+
+
+def test_first_turn_reads_human_turns_only(tmp_path, monkeypatch):
+    monkeypatch.undo()
+    human = {"type": "user", "message": {"content": "hi"}}
+    result = {"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "x"}]}}
+    meta = {"type": "user", "isMeta": True, "message": {"content": "m"}}
+    assistant = {"type": "assistant"}
+    assert mod._is_first_turn(_transcript(tmp_path, meta, human, assistant, result)) is True
+    assert mod._is_first_turn(_transcript(tmp_path, human, assistant, human)) is False
+    assert mod._is_first_turn(_transcript(tmp_path)) is False
+    assert mod._is_first_turn({"transcript_path": str(tmp_path / "missing.jsonl")}) is False
+    assert mod._is_first_turn({}) is False
 
 
 def test_a_derived_relayed_run_is_named_in_the_allow_reason(tmp_path):
     root = _repo(tmp_path)
 
-    unmarked = _hso(mod.evaluate(_payload(root, {"ask": "a"}), emit=_Emit()))["additionalContext"]
-    assert "Unmarked: runs as an AI-derived (relayed) ask" in unmarked
     chosen = _hso(mod.evaluate(_payload(root, {"ask": "a", "source": "relayed"}, tool_use_id="t2"), emit=_Emit()))
     assert "Unmarked" not in chosen["additionalContext"]
     pm = _hso(mod.evaluate(_payload(root, {"ask": "a", "source": "pm"}, tool_use_id="t3"), emit=_Emit()))
@@ -862,7 +922,7 @@ def test_a_submission_without_a_brief_adds_no_brief_params(tmp_path):
     root = _repo(tmp_path)
     emit = _Emit()
     mod.evaluate(_payload(root, {"ask": "a", "brief": "  ", "context": []}), emit=emit)
-    assert not any(k.startswith("ask_") for k in emit.calls[0][0])
+    assert not any(k.startswith("ask_") and k != "ask_source" for k in emit.calls[0][0])
 
 
 def test_a_malformed_brief_is_refused_not_dropped(tmp_path):
@@ -962,7 +1022,7 @@ def test_a_one_element_asks_array_is_an_ask(tmp_path):
     emit = _Emit()
     mod.evaluate(_payload(root, _asks("a")), emit=emit, fanout=fan)
     assert fan.calls == []
-    assert emit.calls[0][0] == {"session_id": "sess-1", "ask": "ask a"}
+    assert emit.calls[0][0] == {"session_id": "sess-1", "ask": "ask a", "ask_source": "pm"}
 
 
 def _sources(fan):
@@ -1279,3 +1339,129 @@ def test_a_one_item_relayed_ask_with_sender_keeps_the_fanout_arm_and_forwards_it
     assert _hso(out)["permissionDecision"] == "allow"
     item = fan.calls[0][0]["asks"][0]
     assert item["sender"] == "coordinator-content-repo-dc" and item["relayed_text"] == "the words"
+
+
+def test_em_context_rides_the_brief_and_leaves_a_pm_ask_untouched(tmp_path):
+    emit = _Emit()
+    args = {"ask": "the PM's words", "source": "pm", "em_context": "the EM's gloss", "brief": "prefer X"}
+    out = mod.evaluate(_payload(_repo(tmp_path), args), emit=emit)
+    assert _hso(out)["permissionDecision"] == "allow"
+    params = emit.calls[0][0]
+    assert params["ask"] == "the PM's words" and params["ask_source"] == "pm"
+    assert params["ask_brief"] == "prefer X\n\nEM context (not the PM's words):\nthe EM's gloss"
+    assert "gloss" not in params["ask"]
+
+
+def test_a_one_item_asks_collapse_carries_the_items_em_context(tmp_path):
+    emit = _Emit()
+    args = {"asks": [{"ask": "pm words", "source": "pm", "em_context": "ctx"}]}
+    out = mod.evaluate(_payload(_repo(tmp_path), args), emit=emit, fanout=_Fanout([]))
+    assert _hso(out)["permissionDecision"] == "allow"
+    params = emit.calls[0][0]
+    assert params["ask"] == "pm words" and params["ask_source"] == "pm"
+    assert params["ask_brief"].endswith("ctx")
+
+
+def test_a_multi_item_asks_forwards_each_items_em_context_to_the_fanout(tmp_path):
+    fan = _Fanout([("r1", "a", (), "ready"), ("r2", "b", (), "ready")])
+    args = {"asks": [{"ask": "x", "source": "pm", "em_context": "ctx"}, {"ask": "y", "source": "pm"}]}
+    out = mod.evaluate(_payload(_repo(tmp_path), args), emit=_Emit(), fanout=fan)
+    assert _hso(out)["permissionDecision"] == "allow"
+    sent = fan.calls[0][0]["asks"]
+    assert sent[0]["em_context"] == "ctx" and sent[0]["ask"] == "x" and "em_context" not in sent[1]
+
+
+@pytest.mark.parametrize(
+    "args, needle",
+    [
+        ({"ask": "a", "em_context": 3}, "em_context must be a string."),
+        ({"asks": [{"ask": "x"}, {"ask": "y", "em_context": ["c"]}]}, "asks[1].em_context must be a string."),
+    ],
+)
+def test_a_non_string_em_context_is_refused(tmp_path, args, needle):
+    emit, fan = _Emit(), _Fanout([])
+    out = mod.evaluate(_payload(_repo(tmp_path), args), emit=emit, fanout=fan)
+    assert _hso(out)["permissionDecision"] == "deny"
+    assert needle in _hso(out)["permissionDecisionReason"]
+    assert emit.calls == [] and fan.calls == []
+
+
+def test_the_module_docstring_names_em_context():
+    assert "em_context" in mod.__doc__
+
+
+def _archived(root: Path, dirname: str) -> None:
+    """An archived `research.close` destination dir, as `docs/research/<date>-<topic>/`."""
+    (root / "docs" / "research" / dirname).mkdir(parents=True)
+
+
+def test_a_build_ask_with_archived_research_warns_naming_it_and_still_fires(tmp_path):
+    root = _repo(tmp_path)
+    _archived(root, "2026-10-19-how-does-the-hook-warn")
+    _archived(root, "2026-10-19-how-does-the-hook-warn-more")
+    emit = _Emit()
+    out = mod.evaluate(_payload(root, {"ask": "How does the hook warn?", "source": "pm"}), emit=emit)
+
+    hso = _hso(out)
+    assert hso["permissionDecision"] == "allow" and len(emit.calls) == 1
+    assert "Research artifacts for this ask already exist: docs/research/2026-10-19-how-does-the-hook-warn/." in (
+        hso["additionalContext"]
+    )
+    assert "warn-more" not in hso["additionalContext"]
+
+
+def test_a_build_sizing_with_archived_research_warns(tmp_path):
+    root = _repo(tmp_path)
+    (root / "state" / "sizings").mkdir(parents=True)
+    (root / "state" / "sizings" / "2026-10-20-topic-x.yaml").write_text("name: x\n", encoding="utf-8")
+    _archived(root, "2026-10-19-topic-x")
+    out = mod.evaluate(_payload(root, {"sizing": "state/sizings/2026-10-20-topic-x.yaml"}), emit=_Emit())
+    assert "docs/research/2026-10-19-topic-x/" in _hso(out)["additionalContext"]
+
+
+def test_a_flat_research_file_for_the_ask_warns_naming_it(tmp_path):
+    root = _repo(tmp_path)
+    research = root / "docs" / "research"
+    research.mkdir(parents=True)
+    (research / "2026-10-19-how-does-the-hook-warn.md").write_text("x", encoding="utf-8")
+    out = mod.evaluate(_payload(root, {"ask": "How does the hook warn?", "source": "pm"}), emit=_Emit())
+    assert "docs/research/2026-10-19-how-does-the-hook-warn.md" in _hso(out)["additionalContext"]
+
+
+def test_a_differently_worded_ask_for_the_same_subject_warns(tmp_path):
+    root = _repo(tmp_path)
+    _archived(root, "2026-10-19-submission-hook-existing-research-warning")
+    (root / "docs" / "research" / "2026-10-19-existing-research-warning-hook.md").write_text("x", encoding="utf-8")
+    out = mod.evaluate(
+        _payload(root, {"ask": "Warning for existing research on the submission hook", "source": "pm"}),
+        emit=_Emit(),
+    )
+    ctx = _hso(out)["additionalContext"]
+    assert "docs/research/2026-10-19-submission-hook-existing-research-warning/" in ctx
+    assert "docs/research/2026-10-19-existing-research-warning-hook.md" in ctx
+
+
+def test_an_unrelated_build_ask_gets_no_warning_beside_flat_research(tmp_path):
+    root = _repo(tmp_path)
+    _archived(root, "2026-10-19-submission-hook-existing-research-warning")
+    (root / "docs" / "research" / "2026-10-19-existing-research-warning-hook.md").write_text("x", encoding="utf-8")
+    out = mod.evaluate(_payload(root, {"ask": "Rename the cache directory layout", "source": "pm"}), emit=_Emit())
+    assert "Research artifacts" not in _hso(out)["additionalContext"]
+
+
+def test_no_archived_research_means_no_warning(tmp_path):
+    root = _repo(tmp_path)
+    _archived(root, "2026-10-19-something-else")
+    out = mod.evaluate(_payload(root, {"ask": "Make X do Y.", "source": "pm"}), emit=_Emit())
+    assert _hso(out)["permissionDecision"] == "allow"
+    assert "Research artifacts" not in _hso(out)["additionalContext"]
+
+
+def test_a_research_sizing_gets_no_existing_research_warning(tmp_path):
+    root = _repo(tmp_path)
+    (root / "state" / "sizings").mkdir(parents=True)
+    (root / "state" / "sizings" / "topic-y.yaml").write_text("research:\n  question: q\n", encoding="utf-8")
+    _archived(root, "2026-10-19-topic-y")
+    out = mod.evaluate(_payload(root, {"sizing": "state/sizings/topic-y.yaml"}), emit=_Emit())
+    assert _hso(out)["permissionDecision"] == "allow"
+    assert "Research artifacts" not in _hso(out)["additionalContext"]

@@ -91,22 +91,30 @@ def test_is_placeholder_summary_false_for_ordinary_summary():
 
 
 def test_validate_explicit_summary_none_at_cap_boundary():
-    summary_120 = "x" * _SUMMARY_MAX_CHARS
-    assert _SUMMARY_MAX_CHARS == 120
-    assert validate_explicit_summary("compose", summary_120) is None
+    summary_240 = "x" * _SUMMARY_MAX_CHARS
+    assert _SUMMARY_MAX_CHARS == 240
+    assert validate_explicit_summary("compose", summary_240) is None
 
 
-def test_validate_explicit_summary_none_at_119_chars():
-    summary_119 = "x" * 119
-    assert validate_explicit_summary("compose", summary_119) is None
+def test_validate_explicit_summary_none_at_121_chars():
+    assert validate_explicit_summary("compose", "x" * 121) is None
 
 
-def test_validate_explicit_summary_error_at_121_chars():
-    summary_121 = "x" * 121
-    error = validate_explicit_summary("compose", summary_121)
+def test_validate_explicit_summary_error_at_241_chars():
+    summary_241 = "x" * 241
+    error = validate_explicit_summary("compose", summary_241)
     assert error is not None
-    assert "121 chars" in error
-    assert "cap is 120" in error
+    assert "241 chars" in error
+    assert "cap is 240" in error
+
+
+def test_memo_cf_summary_length_cap_edges():
+    from coordinator_core.frontmatter.schema_validate import _memo_cf_summary_length_cap
+
+    assert _memo_cf_summary_length_cap({"summary": "x" * 121}) is None
+    assert _memo_cf_summary_length_cap({"summary": "x" * 240}) is None
+    err = _memo_cf_summary_length_cap({"summary": "x" * 241})
+    assert err is not None and "240" in err["error"]
 
 
 def test_validate_explicit_summary_none_when_summary_is_none():
@@ -114,33 +122,33 @@ def test_validate_explicit_summary_none_when_summary_is_none():
 
 
 def test_validate_explicit_summary_draft_message_wording():
-    over_cap = "x" * 121
+    over_cap = "x" * 241
     error = validate_explicit_summary("draft", over_cap)
     assert error == (
-        "memo.draft: summary is 121 chars, cap is 120 — shorten it or omit "
+        "memo.draft: summary is 241 chars, cap is 240 — shorten it or omit "
         "summary and let memo.compose derive one from the body instead"
     )
 
 
 def test_validate_explicit_summary_compose_message_wording():
-    over_cap = "x" * 121
+    over_cap = "x" * 241
     error = validate_explicit_summary("compose", over_cap)
     assert error == (
-        "memo.compose: summary is 121 chars, cap is 120 — shorten it or "
+        "memo.compose: summary is 241 chars, cap is 240 — shorten it or "
         "omit summary to derive one from the body instead"
     )
 
 
 def test_validate_explicit_summary_send_message_wording():
-    over_cap = "x" * 121
+    over_cap = "x" * 241
     error = validate_explicit_summary("send", over_cap)
-    assert error == "memo.send: summary is 121 chars, cap is 120 — shorten it"
+    assert error == "memo.send: summary is 241 chars, cap is 240 — shorten it"
 
 
 def test_validate_explicit_summary_send_backstop_message_wording():
-    over_cap = "x" * 121
+    over_cap = "x" * 241
     error = validate_explicit_summary("send_backstop", over_cap)
     assert error == (
-        "memo.send: summary is 121 chars, cap is 120 — shorten it or omit "
+        "memo.send: summary is 241 chars, cap is 240 — shorten it or omit "
         "summary to derive one from the body instead"
     )

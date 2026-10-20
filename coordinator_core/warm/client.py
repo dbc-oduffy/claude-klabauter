@@ -183,7 +183,6 @@ AC3/AC4 (docs/plans/2026-08-19-the-fired-path-reaches-the-engine.md § C3):
 from __future__ import annotations
 
 import errno
-import itertools
 import json
 import os
 import sys
@@ -225,6 +224,7 @@ ENGINE_SKEW = -32002
 #: either direction here closes `engine_root -> skew -> client -> election
 #: -> engine_root` into a real cycle.
 if __name__ != "__main__":
+    from coordinator_core.warm import dispatch_ack
     from coordinator_core.warm.settings import is_warm_enabled
 
 
@@ -1127,26 +1127,6 @@ def _record_cold_fallback(op: "str | None" = None) -> None:
         return
 
 
-#: Per-process call counter; `next()` on an `itertools.count` is atomic under the GIL.
-_dispatch_seq = itertools.count()
-
-
-def _mint_dispatch_key() -> str:
-    """A key unique to this call: `{pid}-{seq}-{monotonic_ns}`.
-
-    The sequence keeps two calls distinct when a coarse monotonic clock
-    (Windows) returns the same tick twice; the server refuses a repeated key
-    with -32009, so a collision fails a legitimate second dispatch.
-
-    TRAP: the nanosecond stamp must stay the LAST field. The server is not
-    blind to the key -- `dispatch_ack.mint_ns_of` reads the tail as the mint
-    time and refuses any key minted before engine boot, so a trailing
-    sequence number reads as "minted at ns 0" and every mutating call is
-    refused with -32009.
-    """
-    return f"{os.getpid()}-{next(_dispatch_seq)}-{time.monotonic_ns()}"
-
-
 def _try_warm_dispatch_inner(
     msg: dict, read_deadline_secs: Optional[float] = None
 ) -> Optional[dict]:
@@ -1189,12 +1169,11 @@ def _try_warm_dispatch_inner(
     # THE DISPATCH KEY (D1, contract § 1). Minted once per request, here --
     # never at module scope, matching every other per-call seam below (`_caller`,
     # publish-lane, settings-home) -- and sent as the `_dispatch_key`
-    # side-channel field `_serve_line` pops before dispatch. `time.monotonic_ns()`
-    # is the clock C1's spike verdict picked on the executing (Linux) host as
-    # ordered across independently-started interpreters; a Windows/Darwin
-    # reading is recorded there as owed, not assumed here; `_mint_dispatch_key`
-    # adds a per-process sequence so a coarse clock cannot repeat a key.
-    dispatch_key = _mint_dispatch_key()
+    # side-channel field `_serve_line` pops before dispatch. The shared minter
+    # `dispatch_ack.mint_key` is the only one: its monotonic_ns clock is the one
+    # `AckStore.boot_ns`/`low_water_ns` use, and its per-process sequence keeps
+    # a coarse clock from repeating a key.
+    dispatch_key = dispatch_ack.mint_key()
     request["_dispatch_key"] = dispatch_key
     # Caller-identity seam (module docstring): one top-level `_caller` object, ADDED
     # 2026-08-30 (docs/plans/2026-08-30-every-op-runs-in-the-callers-environment.md

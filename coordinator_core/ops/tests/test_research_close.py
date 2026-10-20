@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime
+import os
 import shutil
 import subprocess
 import time
@@ -583,6 +584,40 @@ def test_ungrounded_report_fixed_then_reclosed_commits(repo, scratch):
     _refused(repo, scratch)
     _report(scratch, _GOOD)
     assert _close(repo, scratch, "scouts")["exit_code"] == 0
+
+
+def _age(path: Path, delta: float) -> None:
+    now = time.time()
+    os.utime(path, (now + delta, now + delta))
+
+
+def test_refusal_over_an_edited_digest_names_reground(repo, scratch):
+    _report(scratch, _GOOD + "- **contradicted** bad\n")
+    _age(scratch / "grounding.md", -100)
+    _age(scratch / "digest-a.md", 0)
+    out = _refused(repo, scratch)
+    assert "research.reground" in out["error"]
+    assert out["next_action"] == {
+        "op": "research.reground",
+        "params": {"run_id": "r1", "scratch_dir": scratch.resolve().as_posix()},
+    }
+
+
+def test_refusal_with_grounding_newer_than_digests_has_no_next_action(repo, scratch):
+    _report(scratch, _GOOD + "- **contradicted** bad\n")
+    _age(scratch / "digest-a.md", -200)
+    _age(scratch / "digest-b.md", -200)
+    _age(scratch / "grounding.md", -100)
+    out = _refused(repo, scratch)
+    assert "next_action" not in out and "reground" not in out["error"]
+
+
+def test_clean_grounding_over_an_edited_digest_still_closes(repo, scratch):
+    _report(scratch, _GOOD)
+    _age(scratch / "grounding.md", -100)
+    _age(scratch / "digest-a.md", 0)
+    out = _close(repo, scratch, "scouts")
+    assert out["exit_code"] == 0 and "next_action" not in out
 
 
 def test_grounding_report_is_the_last_section_of_the_committed_digest(repo, scratch):

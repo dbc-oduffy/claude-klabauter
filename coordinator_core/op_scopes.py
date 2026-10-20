@@ -633,6 +633,9 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # OPERATOR's own machine-local registry, neither of which is the caller's own
     # dispatching tree; matches the plugin_health.* operator-machine-scoped class.
     "repo.clone_and_register":                "none",
+    # repo.provision_local — "show_top": reads the manifest from the invoking
+    # worktree; the target is that worktree's parent's child.
+    "repo.provision_local":                   "show_top",
     "release.cut_tag":                        "common_dir",
     "release.cut_tag_and_publish":             "common_dir",
     "dependency.detect_changed_manifests":    "show_top",
@@ -772,6 +775,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "research.archive_workdir":                 "common_dir",
     "research.restructure_for_repeat_topic":    "common_dir",
     "research.close":                           "common_dir",
+    "research.reground":                        "common_dir",
     "research.shape":                           "none",
     "requirement_register.stall_report":        "show_top",
     "session.resolve_chain_terminal_disposition": "common_dir",

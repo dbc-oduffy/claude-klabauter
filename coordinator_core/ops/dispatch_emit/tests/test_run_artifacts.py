@@ -70,6 +70,27 @@ def test_every_class_found(graph):
     assert a.record_dirs == (f"state/warp/{RUN}",)
 
 
+def _four_slice_parent(root: Path, rec_run: str) -> list[str]:
+    slices = [f"state/sizings/2026-10-16-x-slice-{n}.yaml" for n in range(1, 5)]
+    rows = [{"run_id": f"ask-20261016T12000{n}-{n:06d}", "slice_sizing": s} for n, s in enumerate(slices, 1)]
+    _w(root, f"state/warp/{rec_run}/parent.json", json.dumps({"runs": rows}))
+    for s in slices:
+        _w(root, s)
+    return slices
+
+
+def test_parent_json_yields_only_own_slice_sizing(tmp_path):
+    slices = _four_slice_parent(tmp_path, "ask-20261016T120002-000002")
+    a = ra.candidate_paths(tmp_path, "ask-20261016T120002-000002")
+    assert a.by_class["slice-sizing"] == (slices[1],)
+
+
+def test_parent_level_record_keeps_every_slice_sizing(tmp_path):
+    slices = _four_slice_parent(tmp_path, RUN)
+    a = ra.candidate_paths(tmp_path, RUN)
+    assert a.by_class["slice-sizing"] == tuple(sorted(slices))
+
+
 def test_missing_run_json_yields_empty(tmp_path):
     a = ra.candidate_paths(tmp_path, "ask-20261016T120000-cccccc")
     assert a.paths() == ()

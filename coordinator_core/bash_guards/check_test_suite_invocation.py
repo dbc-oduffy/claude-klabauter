@@ -1311,9 +1311,45 @@ def _classify_pytest(args: Sequence[str], testpaths: Sequence[str],
 _PYTEST_INFO_ONLY_FLAGS = frozenset({"--version", "-V", "--help", "-h", "--markers"})
 
 
-def _classify_unittest(args: Sequence[str]) -> Optional[str]:
+def _unittest_start_dir(args: Sequence[str]) -> Optional[str]:
+    """The ``-s``/``--start-directory`` value of a ``discover`` invocation, else None."""
+    for i, a in enumerate(args):
+        if a in ("-s", "--start-directory"):
+            return args[i + 1] if i + 1 < len(args) else None
+        if a.startswith("--start-directory="):
+            return a.split("=", 1)[1] or None
+        if a.startswith("-s") and len(a) > 2 and not a.startswith("--"):
+            return a[2:]
+    return None
+
+
+def _inside_provisioned_target(start_dir: str, cwd: Optional[str]) -> bool:
+    """True when ``start_dir`` (resolved against ``cwd``) lies inside a repo carrying a
+    ``repo.provision_local`` marker. File stats only: no spawn."""
+    root = _cheap_repo_root(cwd)
+    if not root or not cwd:
+        return False
+    from coordinator_core.ops.sibling_repo_provision_contract import (
+        provisioned_target_of, read_marker,
+    )
+
+    path = os.path.normpath(os.path.join(os.path.abspath(cwd), start_dir))
+    if provisioned_target_of(path, root) is not None:
+        return True
+    try:
+        inside_root = os.path.commonpath([path, root]) == root
+    except ValueError:
+        return False
+    return inside_root and read_marker(root) is not None
+
+
+def _classify_unittest(args: Sequence[str], cwd: Optional[str] = None) -> Optional[str]:
     positional = [a for a in args if not a.startswith("-")]
     if not positional or positional[0] == "discover":
+        if positional and positional[0] == "discover":
+            start_dir = _unittest_start_dir(args)
+            if start_dir and _inside_provisioned_target(start_dir, cwd):
+                return None
         return "python -m unittest"
     return None
 
@@ -1331,7 +1367,7 @@ def _classify_python_module(tokens: Sequence[str], testpaths: Sequence[str],
     if module in ("pytest", "py.test"):
         return _classify_pytest(rest, testpaths, cwd, "python -m pytest")
     if module in ("unittest", "nose2"):
-        return _classify_unittest(rest)
+        return _classify_unittest(rest, cwd if module == "unittest" else None)
     return None
 
 

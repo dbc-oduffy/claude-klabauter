@@ -103,7 +103,10 @@ from coordinator_core.ops.ceremony.commit_gates import (
     op_scope_coverage_gate,
     registration_quad_gate,
 )
-from coordinator_core.ops.ceremony.commit_admission import skill_weight_check_worktree
+from coordinator_core.ops.ceremony.commit_admission import (
+    publish_allowlist_drift_refusal,
+    skill_weight_check_worktree,
+)
 from coordinator_core.ops.ceremony.commit_source import post_commit_reader
 from coordinator_core.lifecycle import main_worktree_root
 from coordinator_core.session import claim_index as session_claim_index
@@ -1296,6 +1299,12 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     )
     if skill_weight_refusal is not None:
         return _error(skill_weight_refusal)
+
+    allowlist_drift = publish_allowlist_drift_refusal(
+        worktree_root, {p: ("", "") for p in [*raw_paths, *raw_untracked]}
+    )
+    if allowlist_drift is not None:
+        return _error(allowlist_drift)
 
     # Process files (see `_PROCESS_PREFIXES`) never ride in a
     # product commit on a non-DoE repo: a mixed call lands product first, process second.

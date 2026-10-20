@@ -1400,3 +1400,42 @@ class TestReviewedRangeOffer:
         assert "required shape:" in text
         assert f'"{value}"' in text
         assert "reviewed_targets" in text
+
+
+class TestMemoContract:
+    def _memo_check(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(guard, "read_content_root", lambda: None)
+        d = tmp_path / "cross-repo" / "inbox"
+        d.mkdir(parents=True, exist_ok=True)
+        fp = d / "2026-10-20-x.md"
+        content = (
+            "---\ntitle: t\nfrom: a-em\nto: b-em\ncreated: 2026-10-20\nkind: reply\n---\nbody"
+        )
+        return guard.check(_payload("Write", str(fp), str(tmp_path), content=content))
+
+    def test_memo_contract_appended_once_to_memo_warning(self, tmp_path, monkeypatch):
+        import time
+
+        t0 = time.process_time()
+        result = self._memo_check(tmp_path, monkeypatch)
+        elapsed_ms = (time.process_time() - t0) * 1000
+        assert result is not None
+        text = _advisory_text(result)
+        assert text.count("Full contract:") == 1
+        for needle in (
+            "open|in_progress", "actioned", "closed", "superseded",
+            "receiver-repo", "central-only", "picked_up_by", "in_reply_to",
+        ):
+            assert needle in text, needle
+        print(f"memo_contract check() process time: {elapsed_ms:.1f}ms")
+        assert elapsed_ms < 200
+
+    def test_memo_contract_absent_from_non_memo_warning(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(guard, "read_content_root", lambda: None)
+        d = tmp_path / "state" / "handoffs"
+        d.mkdir(parents=True, exist_ok=True)
+        result = guard.check(
+            _payload("Write", str(d / "x.md"), str(tmp_path), content="---\ntitle: t\n---\nbody")
+        )
+        assert result is not None
+        assert "Full contract:" not in _advisory_text(result)

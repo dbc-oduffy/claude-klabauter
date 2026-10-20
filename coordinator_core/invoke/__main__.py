@@ -183,10 +183,22 @@ def _record_dispatch_process_time(msg: dict, t_start: float, process_start: floa
 # Argument parsing
 # ---------------------------------------------------------------------------
 
+_HELP_EPILOG = """\
+Sending a mid-run revision to a warp run:
+  coordinator-invoke workflow.revise '{"run_id": "<run id>", "verbatim": "<requirement>"}'
+  params: run_id (required); verbatim (a requirement, adds a row); note (free text, no row);
+  from (sending peer session); all_of_pm_ask (bool); out_of_scope (row ids, needs verbatim);
+  withhold_paths ([{path, reason}]); credit_chunks ([{chunk, evidence}]); build_only (bool).
+  Full contract: coordinator-invoke workflow.revise --describe
+"""
+
+
 def _build_arg_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="coordinator_core.invoke",
         description="In-process dispatch of any registered coordinator_core op.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=_HELP_EPILOG,
     )
     p.add_argument(
         "op",

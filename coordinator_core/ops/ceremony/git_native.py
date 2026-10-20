@@ -95,6 +95,7 @@ from coordinator_core.git.path_canon import (  # noqa: F401 - re-exported for ca
 )
 from coordinator_core.ops.ceremony.commit_admission import (
     governed_surface_refusal,
+    publish_allowlist_drift_refusal,
     skill_weight_check,
 )
 from coordinator_core.ops.ceremony.commit_path_legality import illegal_path_refusal
@@ -4816,6 +4817,9 @@ def _commit_via_head_spine(
     skill_weight, _ = skill_weight_check(root, assembled)  # could-not-run note: commit_v2 only
     if skill_weight is not None:
         return GitResult(returncode=1, stdout="", stderr=skill_weight)
+    allowlist_drift = publish_allowlist_drift_refusal(root, assembled)
+    if allowlist_drift is not None:
+        return GitResult(returncode=1, stdout="", stderr=f"{caller}: refused -- {allowlist_drift}")
     legality_refusal = illegal_path_refusal(assembled)
     if legality_refusal is not None:
         return GitResult(

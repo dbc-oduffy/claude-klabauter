@@ -329,6 +329,13 @@ def _ledger_of(rows: Sequence[Mapping], all_of: bool, sizing_rel: Optional[str])
     return Ledger(tuple(items), all_of, sizing_rel, tuple(withheld))
 
 
+def ledger_ids(rows: Sequence[Mapping]) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """`(item_ids, withheld_ids)` of the ledger `_ledger_of` builds from `rows`, in register order:
+    the rows the verify leg must judge, and the rows a recorded out-of-scope ruling withholds."""
+    ledger = _ledger_of(rows, False, None)
+    return tuple(i.id for i in ledger.items), tuple(w["id"] for w in ledger.withheld)
+
+
 def _next_id(rows: Sequence[Mapping]) -> str:
     used = {str(r.get(rr.ROW_ID)) for r in rows}
     n = len(rows) + 1
@@ -1270,10 +1277,14 @@ def _refire(
     plan_rel, missing = unclaimed or (_unclaimed_rows(root, sizing_rel) if root is not None else (None, []))
     if plan_rel:
         return {
-            "next": {"kind": "revise-plan", "plan": plan_rel, "rows": missing, "then": fire_command(sizing_rel)},
+            "next": {
+                "kind": "revise-plan", "plan": plan_rel, "sizing": sizing_rel, "rows": missing,
+                "then": fire_command(sizing_rel),
+            },
             "note": (
                 f"run finished: {plan_rel} omits register row(s) {', '.join(missing)} in register_claims.rows; "
-                "a refire would fire the stale plan. Revise the plan to claim them, then refire."
+                f"a refire would fire the stale plan. Dispatch plan-author with {sizing_rel} named in its prompt "
+                "to claim them, then refire."
             ),
         }
     return {

@@ -649,7 +649,7 @@ def _memo_draft(params: dict, repo_root=None) -> dict:
                                    own resolved receiver identity (see
                                    `_memo_compose.resolve_and_assert_sender_id`) —
                                    never a fixed literal (DoE e267d18336).
-        summary (str, optional):  tl;dr ≤120 chars; left empty-string when absent
+        summary (str, optional):  tl;dr ≤240 chars; left empty-string when absent
                                    (filled in / re-derived by memo.compose once
                                    a body exists — footgun #4).
         kind    (str, REQUIRED):  one of `memo_kinds.VALID_KINDS` -- read the

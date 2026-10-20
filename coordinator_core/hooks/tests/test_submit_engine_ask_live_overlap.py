@@ -33,7 +33,7 @@ def test_overlapping_declared_writes_are_denied_naming_run_and_path(tmp_path, mo
     (tmp_path / ".git").mkdir()
     _live(monkeypatch, {"run-a": frozenset({"pkg/mod.py"})})
     seen: list = []
-    env = mod.evaluate(_payload(tmp_path, {"ask": "fix it", "writes": ["pkg/mod.py"]}), emit=_emit_recorder(tmp_path, seen))
+    env = mod.evaluate(_payload(tmp_path, {"ask": "fix it", "source": "pm", "writes": ["pkg/mod.py"]}), emit=_emit_recorder(tmp_path, seen))
     hso = env["hookSpecificOutput"]
     assert hso["permissionDecision"] == "deny"
     reason = hso["permissionDecisionReason"]
@@ -45,7 +45,7 @@ def test_disjoint_writes_and_unstaged_runs_are_allowed(tmp_path, monkeypatch):
     (tmp_path / ".git").mkdir()
     _live(monkeypatch, {"run-a": frozenset({"other/x.py"}), "run-b": None})
     seen: list = []
-    env = mod.evaluate(_payload(tmp_path, {"ask": "fix it", "writes": ["pkg/mod.py"]}), emit=_emit_recorder(tmp_path, seen))
+    env = mod.evaluate(_payload(tmp_path, {"ask": "fix it", "source": "pm", "writes": ["pkg/mod.py"]}), emit=_emit_recorder(tmp_path, seen))
     assert env["hookSpecificOutput"]["permissionDecision"] == "allow"
     assert len(seen) == 1
 
@@ -58,7 +58,7 @@ def test_no_declared_writes_allows_without_reading_live_runs(tmp_path, monkeypat
 
     monkeypatch.setattr(live_run_writes, "live_footprints", boom)
     seen: list = []
-    env = mod.evaluate(_payload(tmp_path, {"ask": "fix it"}), emit=_emit_recorder(tmp_path, seen))
+    env = mod.evaluate(_payload(tmp_path, {"ask": "fix it", "source": "pm"}), emit=_emit_recorder(tmp_path, seen))
     assert env["hookSpecificOutput"]["permissionDecision"] == "allow"
 
 

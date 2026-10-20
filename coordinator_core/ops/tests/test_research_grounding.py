@@ -1,5 +1,7 @@
 """Tests for the pure grounding-report parser."""
 
+import pytest
+
 from coordinator_core.ops import _research_grounding as g
 
 NAMES = ["digest-a.md", "digest-b.md"]
@@ -68,6 +70,44 @@ def test_counts_exact():
     assert g.grounding_counts(text) == {
         "grounded": 2, "ungrounded": 2, "contradicted": 0, "real": 2, "invented": 1,
     }
+
+
+def test_reground_names():
+    assert g.REGROUND_OP == "research.reground"
+    assert g.stale_report_name(3) == "grounding.stale-3.md"
+    assert g.reground_brief_name(2) == "reground-2.md"
+
+
+def test_names_refuse_generation_below_one():
+    for fn in (g.stale_report_name, g.reground_brief_name):
+        for n in (0, -1):
+            with pytest.raises(ValueError):
+                fn(n)
+
+
+def test_next_stale_index_empty_is_one():
+    assert g.next_stale_index([]) == 1
+
+
+def test_next_stale_index_gapped_takes_max():
+    assert g.next_stale_index(["grounding.stale-1.md", "grounding.stale-4.md"]) == 5
+
+
+def test_next_stale_index_counts_reground_briefs():
+    assert g.next_stale_index(["grounding.stale-1.md", "reground-2.md"]) == 3
+
+
+def test_next_stale_index_ignores_non_matching():
+    names = ["grounding.md", "grounding.stale-x.md", "grounding.stale-.md",
+             "grounding.stale-2.txt", "digest-a.md", "reground-b.md"]
+    assert g.next_stale_index(names) == 1
+
+
+def test_grounding_predates_digest_strictness():
+    assert g.grounding_predates_digest(10.0, [9.0, 10.5]) is True
+    assert g.grounding_predates_digest(10.0, [10.0]) is False
+    assert g.grounding_predates_digest(10.0, [9.0]) is False
+    assert g.grounding_predates_digest(10.0, []) is False
 
 
 def test_prose_mentioning_verdict_is_not_a_verdict_line():

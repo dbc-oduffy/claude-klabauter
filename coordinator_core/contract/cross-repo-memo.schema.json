@@ -146,7 +146,7 @@
     },
     "summary": {
       "type": "string",
-      "description": "One-line memo summary (<= 120 chars). Length enforced by a cross-field rule (schema_validate._memo_cf_summary_length_cap) for non-grandfathered memos (created >= the grandfather cutoff) — required at SEND time only (DEC-1: memo_send.py's own gate, not this schema's `required` array)."
+      "description": "One-line memo summary (<= 240 chars). Length enforced by a cross-field rule (schema_validate._memo_cf_summary_length_cap) for non-grandfathered memos (created >= the grandfather cutoff) — required at SEND time only (DEC-1: memo_send.py's own gate, not this schema's `required` array)."
     },
     "campaign_id": {
       "type": "string",

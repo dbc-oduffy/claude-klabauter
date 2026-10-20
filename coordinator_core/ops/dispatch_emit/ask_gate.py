@@ -324,10 +324,11 @@ def _resume_ledger(sizing: dict, halt, repo_root: Path) -> Optional[dict]:
     row (neither met nor waived), so rows recorded or left unjudged after the halt are judged too."""
     if halt is None:
         return None
-    from coordinator_core.ops.dispatch_emit.requirements_ledger import read_notes, ruled_out_ids, run_dir
+    from coordinator_core.ops.dispatch_emit.requirements_ledger import ledger_ids, read_notes, ruled_out_ids, run_dir
     from coordinator_core.ops.plan_tasks_mutate import read_em_discharges
 
     rows = (sizing.get("requirement_register") or {}).get("rows") or []
+    item_ids, withheld_ids = ledger_ids([r for r in rows if isinstance(r, dict)])
     out = set(ruled_out_ids([r for r in rows if isinstance(r, dict)]))
     rulable = [r for r in rulable_ids(rows) if r not in out]
     discharged = {
@@ -349,6 +350,8 @@ def _resume_ledger(sizing: dict, halt, repo_root: Path) -> Optional[dict]:
         RESUME_LEDGER_HALT_BLOCKING_FIELD: [b for b in halt.blocking if b not in out],
         RESUME_LEDGER_EM_DISCHARGED_FIELD: discharged,
         "rulable_ids": rulable,
+        "ledger_item_ids": list(item_ids),
+        "withheld_ids": list(withheld_ids),
         RESUME_LEDGER_HALT_SHA_FIELD: halt.halt_sha,
         RESUME_LEDGER_REMAINING_FIELD: {k: v for k, v in halt.remaining.items() if k in blocking},
         RESUME_LEDGER_UNLANDED_FIELD: list(halt.unlanded),
@@ -467,7 +470,9 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     `run_id` whose record holds a preference it is written to `em_analysis`, and a divergence with no reason
     on the call or the sizing replies a refusal halt.
 
-    With `run_id`, the run is bound to the sizing first (`_bind_run`), whatever the verdict. With
+    With `run_id`, the run is bound to the sizing first (`_bind_run`), whatever the verdict, and a bound
+    run's reply carries `sizing_path`: the sizing the run is bound to, repo-relative and forward-slash
+    (absent without `run_id` and on a refused bind). With
     `record`, writes that ruling through its single writer, then gates the sizing as it stands and
     adds `recorded` {ok, error?, pm_ruling?, ruling_ref?} to the reply; a refused write still returns the verdict. Replies
     `GateVerdict.to_json()`; a malformed request replies `{"error": str}` and writes nothing.
@@ -502,6 +507,10 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     if params.get("run_id"):
         _record_resume_snapshot(root, params["run_id"], verdict)
     out = (replace(verdict, recorded=recorded) if recorded is not None else verdict).to_json()
+    if params.get("run_id"):
+        from coordinator_core.ops.dispatch_emit import run_token
+
+        out["sizing_path"] = run_token.normalize_sizing_rel(root, sizing_rel)
     if params.get("run_id") and verdict.halt is None:
         if verdict.resume_ledger is not None:
             unlanded = list(verdict.resume_ledger.get(RESUME_LEDGER_UNLANDED_FIELD) or [])

@@ -169,9 +169,11 @@ _PROMPT_TEMPLATE = (
     "Call the Workflow tool exactly once, with scriptPath set to {script_path!r}. "
     "The tool's return value is the workflow's wake digest. "
     "If the digest's next_action.op equals \"dispatch.terminal_commit\", run exactly "
-    "one Bash command: coordinator-invoke dispatch.terminal_commit '<json>' -- where "
-    "<json> is the digest's next_action.params object, verbatim, with a \"script_path\" "
-    "key added set to {script_path!r}, serialized as compact JSON with no extra keys. "
+    "two steps. (1) Write tool: create the file {params_path!r} whose content is the "
+    "digest's next_action.params object, verbatim, with a \"script_path\" key added set to "
+    "{script_path!r}, as JSON with no extra keys; keep every path string exactly as given "
+    "(never retype backslashes in a shell). (2) one Bash command: coordinator-invoke "
+    "dispatch.terminal_commit --params-file {params_path} "
     "Otherwise call no other tool. Never call more than these two tools, and never call "
     "either one more than once. Your final answer is that command's JSON reply, led by a "
     "line of its top-level criterion_status, plan_status and plan_status_reason values "
@@ -471,6 +473,15 @@ def resolve_plugin_dir() -> str:
     )
 
 
+def render_prompt(script_path: str) -> str:
+    """Driver prompt with every path forward-slashed: a Windows backslash in a
+    quoted/inline shell argument is halved before the op parses it."""
+    posix = str(script_path).replace("\\", "/")
+    return _PROMPT_TEMPLATE.format(
+        script_path=posix, params_path=posix + ".terminal-params.json"
+    )
+
+
 def build_fire_command(
     script_path: str,
     plugin_dir: str,
@@ -494,7 +505,7 @@ def build_fire_command(
     argv = [
         claude_bin,
         "-p",
-        prompt if prompt is not None else _PROMPT_TEMPLATE.format(script_path=script_path),
+        prompt if prompt is not None else render_prompt(script_path),
         "--allowedTools",
         *_SESSION_ALLOWED_TOOLS,
         "--plugin-dir",

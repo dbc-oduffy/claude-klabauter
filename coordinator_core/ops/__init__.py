@@ -558,6 +558,7 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
         'registers "release.cut_tag", "release.cut_tag_and_publish"',
     ),
     ("coordinator_core.ops.repo_bootstrap", 'registers "repo.clone_and_register"'),
+    ("coordinator_core.ops.sibling_repo_provision", 'registers "repo.provision_local"'),
     ("coordinator_core.ops.resolve_mcp_server_cli_path", 'registers "mcp.resolve_server_cli_path"'),
     ("coordinator_core.ops.resolve_swept_baton", 'registers "baton.resolve_swept_in_archive"'),
     ("coordinator_core.ops.run_pip_audit", 'registers "ci.run_pip_audit"'),
@@ -571,6 +572,7 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ),
     ("coordinator_core.ops.research_archive_workdir", 'registers "research.archive_workdir"'),
     ("coordinator_core.ops.research_close", 'registers "research.close"'),
+    ("coordinator_core.ops.research_reground", 'registers "research.reground"'),
     ("coordinator_core.ops.research_shape", 'registers "research.shape"'),
     ("coordinator_core.ops.requirement_register_stall", 'registers "requirement_register.stall_report"'),
     (

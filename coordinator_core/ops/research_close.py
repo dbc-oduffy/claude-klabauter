@@ -32,7 +32,9 @@ scouts only, default false: true refuses the close with ``deliverable: false`` b
 when ``grounding.md`` is absent or whitespace-only). A scouts ``grounding.md`` that has text is
 always enforced, with or without the param: an ungrounded or contradicted claim, an invented
 contradiction ruling, a digest with no section, or no graded claim refuses the close
-(``_research_grounding.grounding_problems``).
+(``_research_grounding.grounding_problems``). When such a refusal finds a ``digest-*.md`` newer
+than ``grounding.md``, the error says so and the reply carries ``next_action`` naming
+``research.reground``.
 Only a named segment is excused: a root-level ``require_claims`` entry has no segment prefix
 and is never excused (the research route puts ``nlm-preflight`` ahead of notebooklm, so the
 root never holds notebooklm's claims).
@@ -143,6 +145,16 @@ def _grounding_text(scratch: Path) -> str:
     except (OSError, UnicodeDecodeError) as exc:
         return f"- **ungrounded** {_research_grounding.GROUNDING_REPORT} unreadable: {exc.__class__.__name__}"
     return text if text.strip() else ""
+
+
+def _grounding_predates_a_digest(scratch: Path) -> bool:
+    """True when some ``digest-*.md`` was modified after ``grounding.md``; an unstatable file is False."""
+    try:
+        grounded = (scratch / _research_grounding.GROUNDING_REPORT).stat().st_mtime
+        digests = [p.stat().st_mtime for p in scratch.glob("digest-*.md") if p.is_file()]
+    except OSError:
+        return False
+    return _research_grounding.grounding_predates_digest(grounded, digests)
 
 
 def _build_digest(scratch: Path) -> Optional[str]:
@@ -596,10 +608,19 @@ def _close_sync(worktree: Path, params: dict) -> dict:
                 grounding, [p.name for p in sorted(scratch.glob("digest-*.md")) if p.is_file()]
             )
             if found:
+                message = f"run is not deliverable: {report}: " + "; ".join(found)
+                extra: dict = {}
+                if _grounding_predates_a_digest(scratch):
+                    message += f"; {report} predates an edited digest; run {_research_grounding.REGROUND_OP}"
+                    extra["next_action"] = {
+                        "op": _research_grounding.REGROUND_OP,
+                        "params": {"run_id": run_id, "scratch_dir": Path(os.path.abspath(scratch)).as_posix()},
+                    }
                 problem = _err(
-                    f"run is not deliverable: {report}: " + "; ".join(found),
+                    message,
                     deliverable=False,
                     grounding=_research_grounding.grounding_counts(grounding),
+                    **extra,
                 )
         if problem:
             if halted_segments is not None:
@@ -647,7 +668,9 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     local-only adds ``local_only``, ``destination``, ``claims_out``. Returns (exit_code 1):
     ``{committed: false, error}``; a ``require_claims``, ``require_outputs`` or ``require_grounding``
     refusal adds ``deliverable: false``; a grounding-verdict refusal also adds ``grounding`` (the
-    five verdict counts).
+    five verdict counts); when a ``digest-*.md`` is newer than ``grounding.md`` that refusal also
+    adds ``next_action: {op: "research.reground", params: {run_id, scratch_dir}}`` (absolute
+    ``scratch_dir``).
     ``halted_segments`` is echoed in every reply when the param was given.
     """
     if repo_root is None:

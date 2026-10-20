@@ -47,6 +47,12 @@ def test_refire_names_the_plan_revision_when_the_plan_omits_the_new_row(tmp_path
     assert PLAN in out["note"] and "R4" in out["note"]
 
 
+def test_revise_plan_reply_names_the_sizing_the_plan_author_prompt_must_bind(tmp_path):
+    out = _revise(_repo(tmp_path, plan_edge=True))
+    assert out["next"]["sizing"] == REL
+    assert f"{REL} named in its prompt" in out["note"]
+
+
 def test_refire_is_the_bare_fire_when_the_plan_claims_every_row(tmp_path):
     repo = _repo(tmp_path, plan_edge=True)
     plan = repo / PLAN
