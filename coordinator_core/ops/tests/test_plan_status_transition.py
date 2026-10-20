@@ -2152,3 +2152,11 @@ def test_stamp_implemented_admits_subject_plan_with_valid_review_stamp(tmp_path,
     landed = p if p.exists() else dest
     assert landed.exists(), f"plan not found at {p} or {dest}"
     assert "status: implemented" in landed.read_text(encoding="utf-8")
+
+
+def test_ledger_met_without_no_commit_is_refused(tmp_path, capsys):
+    p = tmp_path / "plan.md"
+    p.write_text("---\nstatus: executing\n---\n\n# Plan\n", encoding="utf-8")
+    assert main(["stamp-implemented", "--plan", str(p), "--ledger-met", "ledger-met: R1"]) == 1
+    assert "--ledger-met requires" in capsys.readouterr().err
+    assert "status: executing" in p.read_text(encoding="utf-8")

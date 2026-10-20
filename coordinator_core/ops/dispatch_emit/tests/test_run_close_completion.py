@@ -70,6 +70,28 @@ def test_not_met_with_observation_still_fails(root):
     assert paths == [] and _entries(root) == []
 
 
+def test_indeterminate_criterion_with_met_ledger_writes_entry(root):
+    result, paths = rcc.completion_entry_leg(
+        root, "r1", PLAN, {"status": "indeterminate"}, ledger_met="ledger-met: R1"
+    )
+    assert result.status == "ran" and len(paths) == 1
+    assert "ledger-met: R1" in (root / paths[0]).read_text(encoding="utf-8")
+
+
+def test_not_met_criterion_with_met_ledger_still_fails(root):
+    result, paths = rcc.completion_entry_leg(
+        root, "r1", PLAN, {"status": "not_met"}, ledger_met="ledger-met: R1"
+    )
+    assert result.status == "failed" and result.detail.startswith("criterion not_met; ")
+    assert paths == [] and _entries(root) == []
+
+
+def test_indeterminate_criterion_without_ledger_fails(root):
+    result, paths = rcc.completion_entry_leg(root, "r1", PLAN, {"status": "indeterminate"})
+    assert result.status == "failed" and result.detail.startswith("criterion indeterminate; ")
+    assert paths == [] and _entries(root) == []
+
+
 def test_not_met_fails_and_writes_nothing(root):
     crit = {"status": "not_met", "completion_summary": "It shipped."}
     result, paths = rcc.completion_entry_leg(root, "r1", PLAN, crit)

@@ -588,7 +588,9 @@ def test_a_scout_reply_without_exit_code_is_redispatched_once_then_halts_distinc
     assert script.count("label: 'size-retry'") == 1
     assert "you did not run sizing-assemble" in script
     assert script.index("label: 'size-retry'") < script.index("if (!_scoutAssembled) { _halted")
-    assert "Number.isInteger(_scoutedFirst.exit_code) ? _scoutedFirst : await " in script
+    assert "_assembleProven(_scoutedFirst) ? _scoutedFirst : { ..._scoutedFirst, ...(await " in script
+    assert "_scoutHasValues(_scoutedFirst) ? (" in script
+    assert script.index("const _assembleProven") < script.index("label: 'size-retry'")
     assert "if (!_scoutAssembled) { _halted" in script
     assert ask_compose.SCOUT_DID_NOT_ASSEMBLE_REASON in script.replace("\\'", "'")
     assert "else if (_scouted.exit_code !== 0) { _halted" in script

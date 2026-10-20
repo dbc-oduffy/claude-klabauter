@@ -154,6 +154,15 @@ SCOUT_DID_NOT_ASSEMBLE_RETRY = (
     "\n\nYour previous reply carried no exit_code: you did not run sizing-assemble. Run it as your "
     "closing command and return its exit code as exit_code."
 )
+#: Retry addendum head when the first reply carried a full sizing but no sizing-assemble result; the
+#: engine-built command and the closing acts follow it.
+SCOUT_VALUES_ASSEMBLE_RETRY = (
+    "\n\nYour previous reply carried a full sizing but no sizing-assemble result. Keep those values "
+    "unless one is wrong, and keep `name` unchanged. Run exactly this command now, changing nothing "
+    "in it:\n\n"
+)
+_SCOUT_STRING_FIELDS = [k for k in SCOUT_SCHEMA["required"] if SCOUT_SCHEMA["properties"][k]["type"] == "string"]
+_SCOUT_ARRAY_FIELDS = [k for k in SCOUT_SCHEMA["required"] if SCOUT_SCHEMA["properties"][k]["type"] == "array"]
 
 
 def _lit(text: str) -> str:
@@ -1501,12 +1510,8 @@ def compose_ask_script(
             + (f',"route_override_reason":"{_OVERRIDE_SLOT}"' if has_route_pref else "")
             + "}'"
         )
-        scout_closing = (
-            " Your closing acts, in order, once your fields are settled. (1) Run sizing-assemble once: "
-            "replace each <field> in the command below with your own value, POSIX single-quoted (an "
-            "embedded ' written '\\'''), <name> being lowercase kebab-case ([a-z0-9-] only):\n\n"
-            + assemble_template
-            + "\n\nReturn its exit code as exit_code, its stdout verbatim as stdout and its stderr as "
+        scout_closing_tail = (
+            "\n\nReturn its exit code as exit_code, its stdout verbatim as stdout and its stderr as "
             "stderr. Do not edit, retry or repair it. (2) Only when exit_code is 0, run the next command "
             "with <name> filled as above and <your writes> replaced by the JSON array you return as writes:\n\n"
             + gate_template
@@ -1516,7 +1521,7 @@ def compose_ask_script(
             "On a non-zero exit_code run no gate command and return no arm or halt."
         )
         if fold_falsifier:
-            scout_closing += (
+            scout_closing_tail += (
                 " (3) Only when the gate reply's halt is null and its arm is neither null nor XS, author the "
                 "baseline falsifier for the exit_criterion you assembled. " + _FALSIFIER_ACT
                 + " Return it as falsifier. On any other arm, or a halt, author none and return no falsifier."
@@ -1525,9 +1530,28 @@ def compose_ask_script(
             _scout_base = json.dumps(
                 {"run_id": run_id, "cross_repo_approved": bool(cross_repo_approved), "session_id": session_id or ""}
             )[:-1] + ', "writes": <your writes array>}'
-            scout_closing += "".join(
+            scout_closing_tail += "".join(
                 _stage_act_parts(_scout_base, json.dumps(sizing_write_rel), "<your gated array>")
             )
+        scout_closing = (
+            " Your closing acts, in order, once your fields are settled. (1) Run sizing-assemble once: "
+            "replace each <field> in the command below with your own value, POSIX single-quoted (an "
+            "embedded ' written '\\'''), <name> being lowercase kebab-case ([a-z0-9-] only):\n\n"
+            + assemble_template
+            + scout_closing_tail
+        )
+        def _assemble_cmd_js(path_js: str) -> str:
+            """JS expression building the sizing-assemble command over `_asmFields`, writing to `path_js`."""
+            return (
+                f"{_lit(SIZING_ASSEMBLE_CMD)}"
+                + scout_assemble_flags_js("_asmFields", "_q", _deliverable_js)
+                + research_assemble_flags_js("_asmFields", "_q")
+                + design_route_assemble_flags_js("_asmFields", "_q")
+                + acceptance_rows_assemble_flags_js("_asmFields", "_q")
+                + f" + ' --write ' + _q({path_js}) + ' --json ' + {_lit(NO_PLAN_HAND_OFF_FLAG)}"
+                + (f" + {_lit(' --relayed-ask-file ' + shlex.quote(record_dir + '/' + RELAYED_ASK_FILE))}" if relayed else "")
+            )
+
         scout_prompt = prompt_of(
             "Size this ask afresh, never reusing or editing an existing sizing"
             + _sizing_procedure_pointer()
@@ -1551,14 +1575,61 @@ def compose_ask_script(
             )
             + (prompt or str((intake or {}).get("intent") or ""))
         )
+        b.append("  const _q = (v) => \"'\" + String(v ?? '').replace(/'/g, \"'\\\\''\") + \"'\";")
+        b.append(
+            "  const _slugOf = (r) => String(r.name || 'ask').toLowerCase().replace(/[^a-z0-9]+/g, '-')"
+            ".replace(/^-+|-+$/g, '') || 'ask';"
+        )
+        if intake is not None:
+            b.append(f"  const _sizingPathFor = (r) => REPO_ROOT + '/' + {_lit(sizing_rel)};")
+        else:
+            b.append(
+                f"  const _sizingPathFor = (r) => REPO_ROOT + '/' + '{_sizings_prefix}' + "
+                f"{_lit(date.today().isoformat() + '-')} + _slugOf(r) + '.yaml';"
+            )
+        # An agent's Bash tool folds stderr into stdout, so sizing-assemble's stderr notes trail the
+        # JSON; the decision is the span from the first `{` to the last column-0 `}`. A compact
+        # one-line decision has no column-0 `}`, so the spans widen to the last `}`, then to the
+        # first whole line that parses as a decision: a written sizing must not read as "not run".
+        b.append(
+            "  const _parseDecision = (stdout) => { try { const _out = String(stdout ?? ''); "
+            "const _try = (t) => { try { const d = JSON.parse(t); "
+            "return d && typeof d === 'object' && typeof d.route === 'string' ? d : null; } catch (_e) { return null; } }; "
+            "const _s = _out.indexOf('{'); "
+            "return _try(_out.slice(_s, _out.lastIndexOf('\\n}') + 2)) "
+            "?? _try(_out.slice(_s, _out.lastIndexOf('}') + 1)) "
+            "?? _out.split('\\n').map((l) => l.trim()).filter((l) => l.startsWith('{')).map(_try)"
+            ".find((d) => d) ?? null; } "
+            "catch (_e) { return null; } };"
+        )
+        # Proof sizing-assemble ran: an integer exit_code, and at exit 0 a parsed decision or a gate
+        # reply (an arm or a halt; ask_gate reads the sizing from disk, so it answers only once the file
+        # exists). A non-zero exit is proof too: the reword and failed-exit paths own it.
+        b.append(
+            "  const _assembleProven = (r) => Number.isInteger(r.exit_code) && (r.exit_code !== 0 "
+            "|| !!_parseDecision(r.stdout) || typeof r.arm === 'string' "
+            "|| !!(r.halt && typeof r.halt === 'object'));"
+        )
+        b.append(
+            "  const _scoutHasValues = (r) => "
+            f"{json.dumps(_SCOUT_STRING_FIELDS)}.every((k) => typeof r[k] === 'string' && r[k].trim() !== '') "
+            f"&& {json.dumps(_SCOUT_ARRAY_FIELDS)}.every((k) => Array.isArray(r[k]));"
+        )
         b.append(
             f"  const _scoutedFirst = await {_agent(scout_prompt, label='size', phase='size', agent_type=SIZING_SCOUT_AGENT_TYPE, schema=_ASK_SCOUT_STAGED_SCHEMA if fold_stage else ASK_SCOUT_SCHEMA, run_id=run_id)};"
         )
-        # One re-dispatch when the scout never ran sizing-assemble (no integer exit_code); a second
-        # miss falls through to the did-not-run halt below.
+        # One re-dispatch whenever assemble is unproven. With a full sizing in hand the retry carries
+        # the engine-built command over those values; otherwise the scout is told to run it itself.
+        # The retry merges over the first reply so a value it omits persists; a second miss falls
+        # through to the halts below.
+        values_retry = _cat(
+            SCOUT_VALUES_ASSEMBLE_RETRY,
+            "js:(() => { const _asmFields = { ..._scoutedFirst }; return " + _assemble_cmd_js("_sizingPathFor(_scoutedFirst)") + "; })()",
+            scout_closing_tail,
+        )
         b.append(
-            "  const _scouted = Number.isInteger(_scoutedFirst.exit_code) ? _scoutedFirst : await "
-            f"{_agent(scout_prompt + ' + ' + _lit(SCOUT_DID_NOT_ASSEMBLE_RETRY), label='size-retry', phase='size', agent_type=SIZING_SCOUT_AGENT_TYPE, schema=_ASK_SCOUT_STAGED_SCHEMA if fold_stage else ASK_SCOUT_SCHEMA, run_id=run_id)};"
+            "  const _scouted = _assembleProven(_scoutedFirst) ? _scoutedFirst : { ..._scoutedFirst, ...(await "
+            f"{_agent(scout_prompt + ' + (_scoutHasValues(_scoutedFirst) ? (' + values_retry + ') : ' + _lit(SCOUT_DID_NOT_ASSEMBLE_RETRY) + ')', label='size-retry', phase='size', agent_type=SIZING_SCOUT_AGENT_TYPE, schema=_ASK_SCOUT_STAGED_SCHEMA if fold_stage else ASK_SCOUT_SCHEMA, run_id=run_id)}) }};"
         )
         b.append("  const _scoutAssembled = Number.isInteger(_scouted.exit_code);")
         # Captured before the reword path mutates `_scouted`: a folded manifest or falsifier is
@@ -1566,27 +1637,8 @@ def compose_ask_script(
         b.append("  const _scoutClean = _scouted.exit_code === 0 && !_scouted.halt && !!_scouted.arm;")
         b.append("  _writes = _scouted.writes ?? [];")
         b.append("  _gated = _scouted.gated ?? [];")
-        b.append(
-            "  const _slug = String(_scouted.name || 'ask').toLowerCase().replace(/[^a-z0-9]+/g, '-')"
-            ".replace(/^-+|-+$/g, '') || 'ask';"
-        )
-        if intake is not None:
-            b.append(f"  const _sizingPath = REPO_ROOT + '/' + {_lit(sizing_rel)};")
-        else:
-            b.append(
-                f"  const _sizingPath = REPO_ROOT + '/' + '{_sizings_prefix}' + "
-                f"{_lit(date.today().isoformat() + '-')} + _slug + '.yaml';"
-            )
-        b.append("  const _q = (v) => \"'\" + String(v ?? '').replace(/'/g, \"'\\\\''\") + \"'\";")
-        assemble_cmd_js = (
-            f"{_lit(SIZING_ASSEMBLE_CMD)}"
-            + scout_assemble_flags_js("_asmFields", "_q", _deliverable_js)
-            + research_assemble_flags_js("_asmFields", "_q")
-            + design_route_assemble_flags_js("_asmFields", "_q")
-            + acceptance_rows_assemble_flags_js("_asmFields", "_q")
-            + f" + ' --write ' + _q(_sizingPath) + ' --json ' + {_lit(NO_PLAN_HAND_OFF_FLAG)}"
-            + (f" + {_lit(' --relayed-ask-file ' + shlex.quote(record_dir + '/' + RELAYED_ASK_FILE))}" if relayed else "")
-        )
+        b.append("  const _sizingPath = _sizingPathFor(_scouted);")
+        assemble_cmd_js = _assemble_cmd_js("_sizingPath")
         _reword_sizing_js = "_sizingPath.slice(REPO_ROOT.length + 1)"
         reword_closing = (
             "\n\nThen, in order: (1) run exactly this one command, replacing the quoted placeholder "
@@ -1665,21 +1717,7 @@ def compose_ask_script(
         b.append("    }")
         b.append("  }")
         b.append("  let _decision = null;")
-        # An agent's Bash tool folds stderr into stdout, so sizing-assemble's stderr notes trail the
-        # JSON; the decision is the span from the first `{` to the last column-0 `}`. A compact
-        # one-line decision has no column-0 `}`, so the spans widen to the last `}`, then to the
-        # first whole line that parses as a decision: a written sizing must not read as "not run".
-        b.append(
-            "  try { const _out = String(_scouted.stdout ?? ''); "
-            "const _try = (t) => { try { const d = JSON.parse(t); "
-            "return d && typeof d === 'object' && typeof d.route === 'string' ? d : null; } catch (_e) { return null; } }; "
-            "const _s = _out.indexOf('{'); "
-            "_decision = _try(_out.slice(_s, _out.lastIndexOf('\\n}') + 2)) "
-            "?? _try(_out.slice(_s, _out.lastIndexOf('}') + 1)) "
-            "?? _out.split('\\n').map((l) => l.trim()).filter((l) => l.startsWith('{')).map(_try)"
-            ".find((d) => d) ?? null; } "
-            "catch (_e) { _decision = null; }"
-        )
+        b.append("  _decision = _parseDecision(_scouted.stdout);")
         b.append(
             "  if (!_scoutAssembled) { _halted = { halted: "
             f"{_lit(HALT_REFUSAL)}, reason: {_lit(SCOUT_DID_NOT_ASSEMBLE_REASON)}, "

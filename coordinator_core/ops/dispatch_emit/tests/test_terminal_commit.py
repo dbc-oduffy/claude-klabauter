@@ -1298,6 +1298,40 @@ def test_a_goal_gate_refusal_keeps_its_cause_in_the_reported_text(repo):
     assert "baseline_ref" in out["plan_status_refusal"], out
 
 
+def _stamped_plan(repo, status):
+    plan = repo / "docs" / "plan.md"
+    plan.parent.mkdir(exist_ok=True)
+    plan.write_text(
+        _SINGLE_ROW_PLAN.replace("disposition: open", "disposition: coded\n  disposition_ref: " + "b" * 40).replace(
+            "---\n\n# Plan",
+            "review_stamp:\n  delivery: {verdict: PASS, product_files: 1, claims_unbacked: 0}\n"
+            "  tests: {status: not_run, run: 0, failed: 0, sidecar: null}\n"
+            f"  criterion:\n    status: {status}\n    observation: judged\n---\n\n# Plan", 1),
+        encoding="utf-8")
+    return plan
+
+
+def test_stamp_plan_implemented_without_ledger_keeps_the_indeterminate_refusal(repo):
+    _stamped_plan(repo, "indeterminate")
+    out = terminal_commit._stamp_plan_implemented(repo, "docs/plan.md", "a" * 40)
+    assert out == {"plan_status": "not-stamped", "plan_status_reason": "review_stamp criterion is not met"}
+
+
+def test_stamp_plan_implemented_met_ledger_never_overrides_not_met(repo):
+    _stamped_plan(repo, "not_met")
+    out = terminal_commit._stamp_plan_implemented(repo, "docs/plan.md", "a" * 40, ledger_met="ledger-met: R1")
+    assert out["plan_status"] == "not-stamped", out
+
+
+def test_ledger_met_observation_cases():
+    obs = terminal_commit._ledger_met_observation
+    verdict = {"items": [{"id": "R1", "status": "met"}, {"id": "R2", "status": "unmet"}]}
+    assert obs(object(), verdict, [object()]) is None
+    assert obs(object(), {"items": [{"id": "R1", "status": "unmet"}]}, []) is None
+    assert obs(None, verdict, []) is None
+    assert obs(object(), verdict, []) == "ledger-met: R1"
+
+
 def _unrostered_review(reason, product_files=0, unresolved=()):
     from coordinator_core.ops.review_mint.roster import DELIVERY_NOT_ROSTERED
 

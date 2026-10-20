@@ -27,6 +27,7 @@ from coordinator_core.ops.dispatch_emit.ask_fanout_contract import STATUS_HALTED
 
 HALTED_FILE = "halted.json"
 STATUS_RESUMED = "resumed"
+STATUS_LANDED = "landed"
 HALT_RUN_BASE_FIELD = "run_base_sha"
 REVISED_AT_FIELD = "revised_at"
 _SHA40 = re.compile(r"[0-9a-f]{40}")
@@ -219,4 +220,16 @@ def mark_resumed(record_dir: Path) -> bool:
     if marker is None or marker.get("status") != STATUS_HALTED:
         return False
     _write(Path(record_dir), {**marker, "status": STATUS_RESUMED})
+    return True
+
+
+def mark_landed(record_dir: Path, sha: str) -> bool:
+    """Rewrite a `halted` marker as `landed` at `sha`; False and no write when no halted marker is present.
+
+    A `landed` marker is skipped by `halted_run_for` / `halted_ask_run_for`, so a refire no longer resumes it.
+    """
+    marker = _read(Path(record_dir))
+    if marker is None or marker.get("status") != STATUS_HALTED:
+        return False
+    _write(Path(record_dir), {**marker, "status": STATUS_LANDED, "sha": sha})
     return True

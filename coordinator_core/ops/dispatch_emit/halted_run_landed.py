@@ -5,9 +5,11 @@ characters; an abbreviation must name exactly one commit in the first-parent win
 recorded marker carry the full 40-hex sha. The run's sibling status must read
 ``halted`` (or already ``landed`` at the same sha) and ``sha`` must be a commit on HEAD's first-parent
 chain within ``ANCESTRY_WINDOW``. The write and the release of ``after`` successors are
-``run_close.sibling_release``'s; this op never writes the status file itself. Spawns nothing: commit
+``run_close.sibling_release``'s; this op never writes the sibling status file itself. A solo run has
+no sibling status: its halt marker (``halted_run``) is read and rewritten to ``landed`` instead, and
+the reply names that tracked path as ``recorded``; the op never commits. Spawns nothing: commit
 existence and ancestry are in-process object reads.
-Reply: ``{ok, run_id, sha, written, siblings?}`` or ``{ok: false, error}``.
+Reply: ``{ok, run_id, sha, written, siblings?, recorded?}`` or ``{ok: false, error}``.
 """
 
 from __future__ import annotations
@@ -75,6 +77,38 @@ def _reachable(root: Path, sha: str) -> Optional[str]:
     return None
 
 
+def _record_solo(root: Path, run_id: str, sha: str, abbreviated: bool) -> dict:
+    """Solo run (no sibling status): record landed on its halt marker; the caller commits ``recorded``."""
+    from coordinator_core.ops.dispatch_emit import ask_contract, halted_run
+
+    try:
+        record_dir = ask_contract.record_dir(root, run_id)
+    except ValueError as exc:
+        return _refuse(str(exc))
+    marker = halted_run._read(record_dir)
+    if marker is None:
+        return _refuse(f"{run_id} has no sibling status or halt record; it never ran")
+    status = marker.get("status")
+    if status == halted_run.STATUS_LANDED:
+        landed = marker.get("sha")
+        if isinstance(landed, str) and landed.startswith(sha):
+            return {"ok": True, "run_id": run_id, "sha": landed, "written": False}
+        return _refuse(f"{run_id} already landed at {marker.get('sha')}; nothing to record")
+    if status != halted_run.STATUS_HALTED:
+        return _refuse(f"{run_id} is {status}, not halted; only a halted run is recorded landed")
+    if abbreviated:
+        sha, problem = _resolve_prefix(root, sha)
+        if problem:
+            return _refuse(problem)
+    problem = _reachable(root, sha)
+    if problem:
+        return _refuse(problem)
+    if not halted_run.mark_landed(record_dir, sha):
+        return _refuse(f"{run_id} halt marker changed under the write; retry")
+    recorded = (record_dir / halted_run.HALTED_FILE).relative_to(root).as_posix()
+    return {"ok": True, "run_id": run_id, "sha": sha, "written": True, "recorded": recorded}
+
+
 @register_op(OP_NAME)
 def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "dispatch.record_halted_run_landed": verify the sha, then close the run as landed."""
@@ -95,8 +129,10 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     root = main_worktree_root(Path(repo_root))
     try:
         prior = json.loads((root / contract.status_rel(run_id)).read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return _record_solo(root, run_id, sha, abbreviated)
     except (OSError, ValueError):
-        return _refuse(f"{run_id} has no sibling status; it never bound")
+        return _refuse(f"{run_id} sibling status is unreadable")
     status = prior.get("status") if isinstance(prior, dict) else None
     if status == contract.STATUS_LANDED:
         landed = prior.get("sha")

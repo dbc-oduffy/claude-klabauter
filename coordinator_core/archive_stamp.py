@@ -2919,6 +2919,7 @@ def cs_stamp_plan_implemented(
     refuse_open_spine_rows: bool = False,
     commit: bool = True,
     ship_sha: Optional[str] = None,
+    ledger_met: Optional[str] = None,
 ) -> int:
     """Flips a plan's frontmatter status: to implemented via the native
     coordinator_core.ops.plan_status_transition port (a completed 1:1,
@@ -2949,7 +2950,9 @@ def cs_stamp_plan_implemented(
     ``commit=False`` passes ``--no-commit``: every refusal still runs and the plan is
     written, but the caller owns committing it; archival is skipped because it rides
     on the commit. ``ship_sha`` is the caller's commit the baton cascade ships on; without
-    it a no-commit stamp has no sha and the cascade refuses every baton.
+    it a no-commit stamp has no sha and the cascade refuses every baton. ``ledger_met``
+    (no-commit only) forwards ``--ledger-met``: a met-ledger observation that discharges an
+    ``indeterminate`` review_stamp criterion at the transition's ``criterion_refusal``.
     """
     if refuse_open_spine_rows:
         open_ids = _open_spine_row_ids(Path(plan_path))
@@ -2973,6 +2976,8 @@ def cs_stamp_plan_implemented(
         argv.append("--no-commit")
         if ship_sha:
             argv += ["--ship-sha", ship_sha]
+        if ledger_met:
+            argv += ["--ledger-met", ledger_met]
     return plan_status_transition.main(argv)
 
 

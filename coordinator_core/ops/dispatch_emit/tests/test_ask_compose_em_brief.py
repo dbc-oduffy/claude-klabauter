@@ -43,7 +43,13 @@ def _compose(wrap=None, **over):
 _UNBRIEFED = {"commit:wave-", "work:blinded-reviewer"}
 
 
+def _row_prompt_definition(script: str) -> str:
+    start = script.index("const _rowPrompt = ")
+    return script[start : script.index("\n", start)]
+
+
 def _agent_prompts(script: str) -> list[str]:
+    """Each agent() prompt expression, with a `_rowPrompt(`/`_groupPrompt(` call resolved to the row-prompt definition it renders."""
     prompts = []
     for m in re.finditer(r"(?<![\w.])agent\(", script):
         end = script.index("label:", m.end())
@@ -51,7 +57,10 @@ def _agent_prompts(script: str) -> list[str]:
         if label == "work:" and "schema:" in script[end : script.index("})", end)]:
             label = "work:blinded-reviewer"
         if label not in _UNBRIEFED:
-            prompts.append(script[m.end():end])
+            prompt = script[m.end():end]
+            if prompt.lstrip().startswith(("_rowPrompt(", "_groupPrompt(")):
+                prompt = _row_prompt_definition(script)
+            prompts.append(prompt)
     return prompts
 
 

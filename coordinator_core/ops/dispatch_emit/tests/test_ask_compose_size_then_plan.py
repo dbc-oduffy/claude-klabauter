@@ -63,7 +63,9 @@ def test_scout_reports_inline_through_its_schema_so_no_sidecar_is_owed():
 
 
 def test_sizing_path_prefix_is_emitted_verbatim():
-    assert "const _sizingPath = REPO_ROOT + '/' + 'state/sizings/' + " in _compose()
+    script = _compose()
+    assert "const _sizingPathFor = (r) => REPO_ROOT + '/' + 'state/sizings/' + " in script
+    assert "const _sizingPath = _sizingPathFor(_scouted);" in script
 
 
 def _scout_line(script):
@@ -244,10 +246,10 @@ def test_reword_branch_is_guarded_by_both_markers_and_a_nonzero_exit():
 def test_reword_merges_only_the_criterion_and_the_halt_follows_it():
     script = _compose()
     assert script.count("_scouted.exit_criterion = _reworded.exit_criterion;") == 1
-    assert script.count("const _sizingPath") == 1
+    assert script.count("const _sizingPath =") == 1
     reword_end = script.index("label: 'size-reword'")
     halt = script.index("if (_scouted.exit_code !== 0) { _halted")
-    assert reword_end < script.index("const _try = ") < halt
+    assert reword_end < script.index("_decision = _parseDecision(") < halt
     assert "the gate, plan, stage, execute and review phases were skipped" in script[halt:]
 
 

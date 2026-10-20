@@ -1556,10 +1556,12 @@ def check(plan_path: Path, repo_root: Path, *, supersession: bool = False) -> Op
 _UNMET_CRITERION = ("not_met", "indeterminate")
 
 
-def criterion_refusal(plan_path: Path, fm_text: str) -> Optional[str]:
+def criterion_refusal(plan_path: Path, fm_text: str, *, ledger_met: Optional[str] = None) -> Optional[str]:
     """Refusal when the plan's `review_stamp` records an unmet criterion that no re-judge
     has since turned `met`; `None` otherwise (no stamp, or a `met` one). A `met` replaces
-    the unmet status only through `rejudge`, from a bound judge sidecar."""
+    the unmet status only through `rejudge`, from a bound judge sidecar. A non-blank
+    `ledger_met` (the run's met-ledger observation) discharges an `indeterminate` criterion;
+    a judged `not_met` still refuses."""
     try:
         fm_data = yaml.safe_load(fm_text) or {}
     except yaml.YAMLError:
@@ -1568,6 +1570,8 @@ def criterion_refusal(plan_path: Path, fm_text: str) -> Optional[str]:
     criterion = stamp.get("criterion") if isinstance(stamp, dict) else None
     status = criterion.get("status") if isinstance(criterion, dict) else None
     if status not in _UNMET_CRITERION:
+        return None
+    if status != "not_met" and isinstance(ledger_met, str) and ledger_met.strip():
         return None
     acceptance = fm_data.get("review_stamp_acceptance")
     if (

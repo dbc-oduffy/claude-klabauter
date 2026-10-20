@@ -1854,6 +1854,7 @@ def _stamp_coded_commit(
     trailers: tuple = (), commit: bool = True, archive_after_flip: tuple = (),
     flip_reason: Optional[str] = None,
     outside_rows: Optional[dict] = None,
+    ledger_met: Optional[str] = None,
 ) -> dict:
     """Second, plan-only ``commit_v2`` call stamping the product commit's
     rows ``coded`` with ``disposition_ref: <sha>`` -- a SHA only exists once
@@ -1933,7 +1934,9 @@ def _stamp_coded_commit(
     flip_result: Optional[dict] = None
     if flip_plan is not None and paths:
         before = _read_rel(worktree_root, flip_plan)
-        flip_result = _stamp_plan_implemented(worktree_root, flip_plan, sha, reason=flip_reason)
+        flip_result = _stamp_plan_implemented(
+            worktree_root, flip_plan, sha, reason=flip_reason, ledger_met=ledger_met,
+        )
         if flip_result.get("plan_status") == "implemented":
             if before is not None:
                 originals.setdefault(flip_plan, before)
@@ -2468,7 +2471,8 @@ def _criterion_reason(inline_review: object) -> Optional[str]:
 
 
 def _stamp_plan_implemented(
-    worktree_root: Path, plan_rel: str, sha: str, *, reason: Optional[str] = None
+    worktree_root: Path, plan_rel: str, sha: str, *, reason: Optional[str] = None,
+    ledger_met: Optional[str] = None,
 ) -> dict:
     """Write the plan's ``implemented`` status to disk, uncommitted, when the
     review stamp it now carries records a ``met`` criterion; the caller's commit
@@ -2476,7 +2480,11 @@ def _stamp_plan_implemented(
     a minted stamp can discharge it. A refusal (open spine rows, the goal gate)
     is reported and writes nothing. The refusal text is kept from its head: the
     cause leads it and the override boilerplate trails. ``reason`` is the judge's own reason,
-    appended to the stamp prose only; the met check never reads it."""
+    appended to the stamp prose only; the met check never reads it. ``ledger_met`` (the
+    ``_ledger_met_observation`` line) discharges an undecided criterion (absent or not ``met``/
+    ``not_met``) with source "requirements ledger"; a ``not_met`` criterion still refuses. An
+    ``indeterminate`` stamp is likewise discharged at the transition's ``criterion_refusal`` by
+    the same ``ledger_met``, forwarded to it."""
     import contextlib
     import io
 
@@ -2496,12 +2504,16 @@ def _stamp_plan_implemented(
         fm = {}
     stamp = fm.get("review_stamp") if isinstance(fm, dict) else None
     criterion = stamp.get("criterion") if isinstance(stamp, dict) else None
-    if not isinstance(criterion, dict) or criterion.get("status") != "met":
+    status = criterion.get("status") if isinstance(criterion, dict) else None
+    if status == "met":
+        observation = str(criterion.get("observation") or "").strip()
+        source = criterion.get("sidecar") or "the run's criterion leg"
+    elif ledger_met and ledger_met.strip() and status != "not_met":
+        observation, source = ledger_met.strip(), "requirements ledger"
+    else:
         return {"plan_status": "not-stamped", "plan_status_reason": "review_stamp criterion is not met"}
-    observation = str(criterion.get("observation") or "").strip()
     if not observation:
         return {"plan_status": "not-stamped", "plan_status_reason": "criterion observation is empty"}
-    source = criterion.get("sidecar") or "the run's criterion leg"
     err = io.StringIO()
     recorded = isinstance(fm, dict) and fm.get("exit_criterion_met") is not None
     record = (
@@ -2515,7 +2527,8 @@ def _stamp_plan_implemented(
     )
     with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
         rc = cs_stamp_plan_implemented(
-            str(plan_abs), **record, refuse_open_spine_rows=True, commit=False, ship_sha=sha
+            str(plan_abs), **record, refuse_open_spine_rows=True, commit=False, ship_sha=sha,
+            ledger_met=ledger_met if status != "met" else None,
         )
     if rc != 0:
         reason = err.getvalue().strip()[:600]
@@ -3013,6 +3026,24 @@ def _clean_review_files(inline_review: dict) -> Optional[set]:
     return {f for f in files if isinstance(f, str)}
 
 
+def _ledger_met_ids(ledger_verdict: object) -> list:
+    """Ids of the verdict items whose status is ``met``, in verdict order."""
+    items = ledger_verdict.get("items") if isinstance(ledger_verdict, dict) else None
+    return [
+        str(i["id"]) for i in (items if isinstance(items, list) else [])
+        if isinstance(i, dict) and i.get("status") == "met" and i.get("id") is not None
+    ]
+
+
+def _ledger_met_observation(ledger: object, verdict: object, open_rows: object) -> Optional[str]:
+    """``"ledger-met: <ids>"`` when a ledger-bearing run's passed gate left no awaiting-operator
+    row and the verdict names a ``met`` item; else None. Call only after ``_ledger_gate`` passed."""
+    if ledger is None or open_rows:
+        return None
+    met = _ledger_met_ids(verdict)
+    return ("ledger-met: " + ", ".join(met))[:_UNDONE_CAP] if met else None
+
+
 def _ledger_met_regrades(
     worktree_root: Path, request: CommitRequest, incomplete: set, inline_review: dict,
     report_cache: dict, ledger_verdict: object, held: set,
@@ -3022,11 +3053,7 @@ def _ledger_met_regrades(
     and every declared and own-prefix file sits in ``prep.slice_files``. Call only once the ledger
     gate passed. The ledger is run-wide, not mapped to chunks: a PARTIAL report's undone text is not
     weighed."""
-    items = ledger_verdict.get("items") if isinstance(ledger_verdict, dict) else None
-    met = [
-        str(i["id"]) for i in (items if isinstance(items, list) else [])
-        if isinstance(i, dict) and i.get("status") == "met" and i.get("id") is not None
-    ]
+    met = _ledger_met_ids(ledger_verdict)
     blocked = set(held)
     files: dict = {}
     candidates = []
@@ -3419,7 +3446,7 @@ def _pay_inline_legs(
     criterion = ctx["inline_review"].get("criterion")
     criterion = criterion if isinstance(criterion, dict) else None
     try:
-        result, entry_paths = completion_entry_leg(worktree_root, run_id, ctx["plan_rel"], criterion)
+        result, entry_paths = completion_entry_leg(worktree_root, run_id, ctx["plan_rel"], criterion, ledger_met=ctx.get("ledger_met"))
     except Exception as exc:  # noqa: BLE001 -- a leg failure is reported, never raised
         result, entry_paths = _leg("failed", f"completion-entry raised {type(exc).__name__}"), []
     legs["completion-entry"] = result
@@ -3431,7 +3458,8 @@ def _pay_inline_legs(
     status = criterion.get("status") if criterion else None
     saved: dict = {}
     written = list(entry_paths)
-    if batons and status != "met":
+    discharged = status == "met" or (bool(ctx.get("ledger_met")) and status != "not_met")
+    if batons and not discharged:
         legs["baton-ship"] = _leg("failed", f"criterion {status or 'absent'}: batons not shipped")
     else:
         saved = {rel: _read_rel(worktree_root, rel) for rel in batons}
@@ -4217,6 +4245,12 @@ def _terminal_commit_inner(
         )
         if unmet is not None:
             return unmet
+    ledger_met = (
+        _ledger_met_observation(ledger, params.get("ledger_verdict"), open_rows)
+        if ask_run_dir is not None else None
+    )
+    if close_ctx is not None:
+        close_ctx["ledger_met"] = ledger_met
 
     observed_branch = head_branch(worktree_root)
     if observed_branch == "HEAD":
@@ -5278,7 +5312,7 @@ def _terminal_commit_inner(
                 noop_rows=noop_rows, checkpoint_rows=checkpoint_rows, outside_rows=outside_rows,
                 snapshot=snapshot,
                 flip_plan=request.plan_path if flips else None,
-                flip_reason=_criterion_reason(inline_review),
+                flip_reason=_criterion_reason(inline_review), ledger_met=ledger_met,
                 receipt=request.plan_path if plan_commits and reply.get("review_stamp") == "minted" else None,
                 trailers=(f"Sizing-Shipped: {shipped_sizing} {reply['sha']}",) if shipped_sizing else (),
                 commit=stamp_commit,
@@ -5323,7 +5357,7 @@ def _terminal_commit_inner(
             reply.update(
                 _stamp_plan_implemented(
                     worktree_root, request.plan_path, str(reply["sha"]),
-                    reason=_criterion_reason(inline_review),
+                    reason=_criterion_reason(inline_review), ledger_met=ledger_met,
                 )
             )
         elif request.plan_path and reply.get("review_stamp") == "minted":

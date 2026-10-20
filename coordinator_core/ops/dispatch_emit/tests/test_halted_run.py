@@ -29,6 +29,26 @@ def test_round_trip(tmp_path):
     assert hr.mark_resumed(d) is False
 
 
+def test_mark_landed_rewrites_only_a_halted_marker(tmp_path):
+    d = _dir(tmp_path, "20261016T010000-aaaaaa")
+    sha = "a" * 40
+    assert hr.mark_landed(d, sha) is False
+    assert not (d / hr.HALTED_FILE).exists()
+    p = hr.write_halt_marker(d, halted="criterion_not_met", sizing_rel=SIZING)
+    assert hr.mark_landed(d, sha) is True
+    data = json.loads(p.read_text())
+    assert data["status"] == hr.STATUS_LANDED and data["sha"] == sha and data["halted"] == "criterion_not_met"
+    assert hr.halted_run_for(tmp_path, SIZING) is None
+    assert hr.mark_landed(d, "b" * 40) is False
+    assert json.loads(p.read_text())["sha"] == sha
+    resumed = _dir(tmp_path, "20261016T020000-bbbbbb")
+    hr.write_halt_marker(resumed, halted="x", sizing_rel=SIZING)
+    hr.mark_resumed(resumed)
+    before = (resumed / hr.HALTED_FILE).read_bytes()
+    assert hr.mark_landed(resumed, sha) is False
+    assert (resumed / hr.HALTED_FILE).read_bytes() == before
+
+
 def test_newest_dir_rule(tmp_path):
     old = _dir(tmp_path, "20261016T010000-aaaaaa")
     hr.write_halt_marker(old, halted="x", sizing_rel=SIZING)

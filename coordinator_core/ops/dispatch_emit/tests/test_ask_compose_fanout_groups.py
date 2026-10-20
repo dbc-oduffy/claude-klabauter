@@ -108,8 +108,8 @@ def test_group_runs_one_agent_and_solo_runs_its_own():
     group_prompt = got["calls"][0]["prompt"]
     assert "b/C1.md" in group_prompt and "b/C2.md" in group_prompt
     assert group_prompt.index("b/C1.md") < group_prompt.index("b/C2.md")
-    assert got["settled"]["C1"] == "C1: DONE ok"
-    assert got["settled"]["C2"] == "C2: PARTIAL half"
+    assert got["settled"]["C1"] == "DONE: ok"
+    assert got["settled"]["C2"] == "PARTIAL: half"
     assert any("Fanout" in m for m in got["logs"])
 
 
@@ -118,5 +118,5 @@ def test_group_runs_one_agent_and_solo_runs_its_own():
 def test_member_absent_from_the_group_reply_reads_incomplete():
     rows = [_row("C1", group="g1"), _row("C2", group="g1")]
     got = _run(rows, "work\nC1: DONE ok")
-    assert got["settled"]["C1"] == "C1: DONE ok"
+    assert got["settled"]["C1"] == "DONE: ok"
     assert got["settled"]["C2"] == "INCOMPLETE C2"

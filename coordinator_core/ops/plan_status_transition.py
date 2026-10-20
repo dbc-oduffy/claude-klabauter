@@ -427,6 +427,7 @@ class _Opts:
     __slots__ = (
         "verb", "plan", "by", "override_reason", "reason", "findings",
         "falsifier_verdict", "falsifier_output", "prose", "no_commit", "ship_sha",
+        "ledger_met",
     )
 
     def __init__(
@@ -442,9 +443,11 @@ class _Opts:
         prose: Optional[str] = None,
         no_commit: bool = False,
         ship_sha: Optional[str] = None,
+        ledger_met: Optional[str] = None,
     ) -> None:
         self.no_commit = no_commit
         self.ship_sha = ship_sha
+        self.ledger_met = ledger_met
         self.falsifier_verdict = falsifier_verdict
         self.falsifier_output = falsifier_output
         self.prose = prose
@@ -541,6 +544,11 @@ def _parse_args(argv: List[str]) -> _Opts:
                 raise _CliError(f"flag requires a value: {a}")
             i += 1
             opts.ship_sha = argv[i]
+        elif a == "--ledger-met":
+            if i + 1 >= len(argv):
+                raise _CliError(f"flag requires a value: {a}")
+            i += 1
+            opts.ledger_met = argv[i]
         elif a in _EXIT_CRITERION_FLAGS:
             if i + 1 >= len(argv):
                 raise _CliError(f"flag requires a value: {a}")
@@ -1781,7 +1789,7 @@ def _stamp_implemented(opts: _Opts) -> int:
 
         from coordinator_core.ops.review_stamp import criterion_refusal
 
-        unmet = criterion_refusal(plan_path, split.fm_text)
+        unmet = criterion_refusal(plan_path, split.fm_text, ledger_met=opts.ledger_met)
         if unmet is not None:
             raise MutateAbort(f"{_PROG}: refusing to stamp implemented: {opts.plan}: {unmet}")
 
@@ -3770,6 +3778,14 @@ def main(argv: List[str]) -> int:
     if opts.ship_sha is not None and not opts.no_commit:
         print(
             f"{_PROG}: --ship-sha requires --no-commit (a committing stamp ships on its own sha)",
+            file=sys.stderr,
+        )
+        return 1
+
+    if opts.ledger_met is not None and (opts.verb != "stamp-implemented" or not opts.no_commit):
+        print(
+            f"{_PROG}: --ledger-met requires stamp-implemented with --no-commit "
+            "(a run's terminal commit supplies it)",
             file=sys.stderr,
         )
         return 1

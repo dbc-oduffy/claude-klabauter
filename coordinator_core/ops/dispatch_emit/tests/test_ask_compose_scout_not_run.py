@@ -31,6 +31,11 @@ def _line(script: str, marker: str) -> str:
     return next(ln for ln in script.splitlines() if marker in ln)
 
 
+def _decision_lines(script: str) -> list[str]:
+    """The parse helper, the decision assignment and the did-not-run check, in composed order."""
+    return [_line(script, m) for m in (_PARSE_MARK, _ASSIGN_MARK, _NOT_RUN_MARK)]
+
+
 def _run(lines: list[str], setup: str, tmp_path) -> dict:
     if not shutil.which("node"):
         pytest.skip("node not installed")
@@ -45,13 +50,14 @@ def _run(lines: list[str], setup: str, tmp_path) -> dict:
 
 
 _PARSE_MARK = "const _try = "
+_ASSIGN_MARK = "_decision = _parseDecision("
 _NOT_RUN_MARK = "_decision === null"
 _GATE_MARK = "if (_gate.halt || !_gate.arm)"
 
 
 def test_scout_not_run_check_is_composed_after_the_decision_parse():
     script = _compose()
-    assert script.index(_PARSE_MARK) < script.index(_NOT_RUN_MARK) < script.index("const _pmExit")
+    assert script.index(_PARSE_MARK) < script.index(_ASSIGN_MARK) < script.index(_NOT_RUN_MARK) < script.index("const _pmExit")
     assert "sizing-assemble did not run" in script
 
 
@@ -60,10 +66,10 @@ def test_scout_not_run_check_is_composed_after_the_decision_parse():
 def test_exit_zero_with_a_non_decision_stdout_halts_with_a_named_refusal(stdout, tmp_path):
     script = _compose()
     setup = (
-        "let _halted = null; const _runId = 'run-1';\n"
+        "let _halted = null; let _decision = null; const _runId = 'run-1';\n"
         f"const _scouted = {{ exit_code: 0, stdout: {json.dumps(stdout)}, stderr: '' }};"
     )
-    halted = _run([_line(script, _PARSE_MARK), _line(script, _NOT_RUN_MARK)], setup, tmp_path)
+    halted = _run(_decision_lines(script), setup, tmp_path)
     assert halted["halted"] == "refusal"
     assert "sizing-assemble did not run" in halted["reason"]
     assert halted["run_id"] == "run-1"
@@ -74,10 +80,10 @@ def test_exit_zero_with_a_real_decision_does_not_halt(tmp_path):
     script = _compose()
     decision = json.dumps({"route": "plan"}, indent=2) + "\nderived 1 row\n"
     setup = (
-        "let _halted = null; const _runId = 'run-1';\n"
+        "let _halted = null; let _decision = null; const _runId = 'run-1';\n"
         f"const _scouted = {{ exit_code: 0, stdout: {json.dumps(decision)}, stderr: '' }};"
     )
-    assert _run([_line(script, _PARSE_MARK), _line(script, _NOT_RUN_MARK)], setup, tmp_path) is None
+    assert _run(_decision_lines(script), setup, tmp_path) is None
 
 
 @pytest.mark.spawns_process
@@ -86,10 +92,10 @@ def test_an_abridged_stdout_with_a_gate_reply_does_not_halt(gate, tmp_path):
     # The scout summarised assemble's stdout; the gate reply proves the sizing was on disk.
     script = _compose()
     setup = (
-        "let _halted = null; const _runId = 'run-1';\n"
+        "let _halted = null; let _decision = null; const _runId = 'run-1';\n"
         f"const _scouted = {{ exit_code: 0, stdout: 'route spec-dispatch, tshirt S (abridged)', stderr: '', {gate} }};"
     )
-    assert _run([_line(script, _PARSE_MARK), _line(script, _NOT_RUN_MARK)], setup, tmp_path) is None
+    assert _run(_decision_lines(script), setup, tmp_path) is None
 
 
 @pytest.mark.spawns_process
@@ -131,10 +137,10 @@ def test_no_arm_reason_cites_the_scout_stdout_when_sized_in_run():
 def test_a_compact_one_line_decision_is_a_decision_not_a_scout_that_never_ran(stdout, tmp_path):
     script = _compose()
     setup = (
-        "let _halted = null; const _runId = 'run-1';\n"
+        "let _halted = null; let _decision = null; const _runId = 'run-1';\n"
         f"const _scouted = {{ exit_code: 0, stdout: {json.dumps(stdout)}, stderr: '' }};"
     )
-    assert _run([_line(script, _PARSE_MARK), _line(script, _NOT_RUN_MARK)], setup, tmp_path) is None
+    assert _run(_decision_lines(script), setup, tmp_path) is None
 
 
 @pytest.mark.spawns_process
@@ -152,7 +158,7 @@ def test_only_an_object_with_a_string_route_is_the_decision(stdout, expect, tmp_
     script = _compose()
     prog = (
         f"let _halted = null; let _decision; const _scouted = {{ exit_code: 0, stdout: {json.dumps(stdout)}, stderr: '' }};\n"
-        + _line(script, _PARSE_MARK)
+        + "\n".join(_decision_lines(script)[:-1])
         + "\nconsole.log(JSON.stringify(_decision));\n"
     )
     f = tmp_path / "t.js"

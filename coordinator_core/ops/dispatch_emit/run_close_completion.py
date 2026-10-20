@@ -7,8 +7,9 @@ once per run id, for ``dispatch.terminal_commit``'s close block.
 Negative-spec:
   - No process spawn. File writes only, through ``completion_entry``'s locked helpers.
   - No composed prose: the prose is the judge's ``completion_summary``, else a ``met``
-    criterion's ``observation`` (a recorded re-judge carries only that), copied verbatim, never
-    composed from the plan or the verdict. Neither, or a criterion that is not ``met``, is
+    criterion's ``observation`` (a recorded re-judge carries only that), else the caller's
+    ``ledger_met`` line for an undecided (not ``not_met``) criterion, copied verbatim, never
+    composed from the plan or the verdict. None of these, or a ``not_met`` criterion, is
     ``failed`` and writes nothing.
   - The returned paths are for the caller's ``also_commit``; a caller whose commit does not
     land removes them.
@@ -91,12 +92,19 @@ def _stamp_run_id(root: Path, entry_rel: str, run_id: str) -> bool:
 
 
 def completion_entry_leg(
-    root: Path, run_id: str, plan_rel: str, criterion: Optional[Mapping[str, Any]]
+    root: Path,
+    run_id: str,
+    plan_rel: str,
+    criterion: Optional[Mapping[str, Any]],
+    *,
+    ledger_met: Optional[str] = None,
 ) -> tuple[LegResult, list[str]]:
     """Return ``(LegResult, written_paths)`` for the completion-entry leg.
 
     ``failed`` when *criterion* is not ``met`` or carries neither a ``completion_summary`` nor
-    an ``observation``;
+    an ``observation``; a criterion that is neither ``met`` nor ``not_met`` (absent,
+    ``indeterminate``) is instead discharged by a non-blank *ledger_met*, which is then the prose.
+    A ``not_met`` criterion fails regardless of *ledger_met*.
     ``discharged`` when this run id's entry already exists; otherwise ``ran`` naming the
     new entry, which is also the single written path.
     """
@@ -104,8 +112,11 @@ def completion_entry_leg(
     status = str(criterion.get("status") or "absent")
     summary = criterion.get("completion_summary")
     title = _plan_title(root, plan_rel, run_id)
-    if status != "met":
+    ledger_prose = ledger_met if isinstance(ledger_met, str) and ledger_met.strip() else None
+    if status != "met" and not (ledger_prose and status != "not_met"):
         return LegResult("failed", _remedy(f"criterion {status}", title)), []
+    if status != "met":
+        summary = ledger_prose
     if not isinstance(summary, str) or not summary.strip():
         summary = criterion.get("observation")
     if not isinstance(summary, str) or not summary.strip():

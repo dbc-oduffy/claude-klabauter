@@ -102,7 +102,67 @@ def test_landed_at_other_sha_refuses(repo):
 def test_absent_status_refuses(repo):
     root, first, _ = repo
     out = _call(root, run_id="A", sha=first)
-    assert not out["ok"] and "never bound" in out["error"]
+    assert not out["ok"] and "never ran" in out["error"]
+
+
+SOLO = "warp-2026-10-20-solo-20261020T000000-abcdef"
+
+
+def _solo(root: Path, status: str = "halted", **extra) -> Path:
+    d = root / "state" / "warp" / SOLO
+    d.mkdir(parents=True, exist_ok=True)
+    marker = d / "halted.json"
+    marker.write_text(json.dumps({"status": status, "halted": "x", "sizing_rel": None, **extra}), encoding="utf-8")
+    return marker
+
+
+def test_solo_halted_run_records_landed_marker(repo):
+    root, first, _ = repo
+    marker = _solo(root)
+    out = _call(root, run_id=SOLO, sha=first[:10])
+    assert out == {
+        "ok": True, "run_id": SOLO, "sha": first, "written": True,
+        "recorded": f"state/warp/{SOLO}/halted.json",
+    }
+    data = json.loads(marker.read_text(encoding="utf-8"))
+    assert data["status"] == "landed" and data["sha"] == first and data["halted"] == "x"
+    assert not (root / c.status_rel(SOLO)).exists()
+
+
+def test_solo_second_call_is_idempotent(repo):
+    root, first, _ = repo
+    marker = _solo(root)
+    _call(root, run_id=SOLO, sha=first)
+    before = marker.read_bytes()
+    out = _call(root, run_id=SOLO, sha=first)
+    assert out == {"ok": True, "run_id": SOLO, "sha": first, "written": False}
+    assert marker.read_bytes() == before
+
+
+def test_solo_unreachable_sha_refuses_and_leaves_marker(repo):
+    root, _, _ = repo
+    marker = _solo(root)
+    before = marker.read_bytes()
+    out = _call(root, run_id=SOLO, sha="b" * 40)
+    assert not out["ok"] and "not a commit" in out["error"]
+    assert marker.read_bytes() == before
+
+
+def test_solo_landed_at_other_sha_refuses(repo):
+    root, first, second = repo
+    _solo(root, "landed", sha=second)
+    out = _call(root, run_id=SOLO, sha=first)
+    assert not out["ok"] and "already landed" in out["error"]
+
+
+@pytest.mark.parametrize("status", ["resumed", "running"])
+def test_solo_non_halted_status_refuses(repo, status):
+    root, first, _ = repo
+    marker = _solo(root, status)
+    before = marker.read_bytes()
+    out = _call(root, run_id=SOLO, sha=first)
+    assert not out["ok"] and "not halted" in out["error"]
+    assert marker.read_bytes() == before
 
 
 def test_sha_not_a_commit_refuses(repo):
@@ -188,4 +248,16 @@ def test_op_spawns_no_process(repo, monkeypatch):
 
     monkeypatch.setattr(subprocess, "Popen", boom)
     out = _call(root, run_id="A", sha=first)
+    assert out["ok"] and out["written"] is True
+
+
+def test_op_spawns_no_process_solo(repo, monkeypatch):
+    root, first, _ = repo
+    _solo(root)
+
+    def boom(*a, **k):
+        raise AssertionError("spawned a process")
+
+    monkeypatch.setattr(subprocess, "Popen", boom)
+    out = _call(root, run_id=SOLO, sha=first)
     assert out["ok"] and out["written"] is True
