@@ -60,6 +60,7 @@ ASK_VERIFY_DOCS_KEYS = ("doc_paths", "note_path", "stale_docs")
 ASK_VERIFY_RETURN_KEYS = ("test", "judge", *ASK_VERIFY_LEDGER_KEYS, *ASK_VERIFY_DOCS_KEYS)
 OP_ASK_GATE, OP_ASK_STAGE = "dispatch.ask_gate", "dispatch.ask_stage"
 HALT_ROOM, HALT_TOUCHPOINT, HALT_REFUSAL = "room", "touchpoint", "refusal"
+HALT_DEPENDENTS_UNSTARTED = "dependents_unstarted"
 HALT_SPLIT = "split"
 HALT_RESEARCH = "research"
 #: Raised by the ask script when an ask_stage refusal starts with design_route.STAGE_REFUSAL_PREFIX;

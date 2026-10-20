@@ -1,8 +1,8 @@
 """The workday-complete run spec: dispatch-row parity, brief coverage, rules, groups, finish steps."""
 from __future__ import annotations
 
-import itertools
 import importlib
+import itertools
 import json
 from pathlib import Path
 
@@ -318,6 +318,13 @@ def test_spec_declares_the_workday_start_template_and_a_closed_flag_set():
     spec = run_spec.SPEC
     assert spec.name == "workday-complete" and spec.dispatch_key == "workday_complete_run"
     assert spec.marker_path is None and spec.chain is None and spec.render is None
-    assert spec.launch_flags == {"--for-date", "--only", "--scope-summary", "--summary"}
+    assert spec.launch_flags == {
+        "--for-date",
+        "--only",
+        "--scope-summary",
+        "--summary",
+        "--catch-up",
+        "--conclude",
+    }
     assert spec.template == "workflows/workday-start.mjs"
     assert spec.spec_points({}, {}, []) == []

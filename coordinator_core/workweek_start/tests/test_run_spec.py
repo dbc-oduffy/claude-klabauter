@@ -395,6 +395,24 @@ def test_reset_week_step_archives_and_update_step_marks(tmp_path):
     assert rs.header_state(tmp_path)["last_start"] == "2026-10-13"
 
 
+def test_start_week_writes_the_week_anchor_not_today(tmp_path):
+    rs.header.bootstrap(tmp_path)
+    (tmp_path / "archive/week-changelogs/2026-09-28").mkdir(parents=True)
+    code, text = rs._start_week(tmp_path, today="2026-10-07")
+    assert (code, text) == (0, "week starts 2026-10-05")
+    assert rs.header_state(tmp_path)["week_starting"] == "2026-10-05"
+
+
+def test_marker_point_names_missed_weeks_and_catch_up_when_no_release_record():
+    state = {"week_starting": "2026-09-28", "last_start": None, "unset": False,
+             "missed_weeks": ["2026-09-28"], "release_recorded": False}
+    evidence = rs._marker_point(state)["evidence"]
+    assert "missed weeks: 2026-09-28" in evidence and "/workweek-complete --catch-up" in evidence
+    released = rs._marker_point({**state, "release_recorded": True})["evidence"]
+    assert "missed weeks: 2026-09-28" in released and "--catch-up" not in released
+    assert "missed weeks" not in rs._marker_point({**state, "missed_weeks": []})["evidence"]
+
+
 def test_bound_target_rejects_an_unknown_name():
     with pytest.raises(AttributeError):
         getattr(rs, "nothing~e30")

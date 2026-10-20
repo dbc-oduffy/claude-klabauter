@@ -3,10 +3,10 @@ coordinator_core.ops.dispatch_emit.terminal_commit -- JSON-RPC
 "dispatch.terminal_commit" operation.
 
 Purpose: § Design D3 of docs/plans/2026-09-27-emitter-dag-terminal-commit-
-wake-digest.md. The emitted DAG script (C12) no longer dispatches a
-``coordinator:git-commit-agent`` per wave -- it writes ONE terminal-commit-
-request marker (D2, ``commit_request.py``) recording what the run promises
-the terminal commit. This op is fired once, after the run finishes, by the
+wake-digest.md. The emitted DAG script (C12) commits each wave through a
+checkpoint commit (``ask_compose`` wires it per wave) and also writes ONE
+terminal-commit-request marker (D2, ``commit_request.py``) recording what
+the run promises the terminal commit. This op is fired once, after the run finishes, by the
 driver (C7 for a headless fire, DoE D1/D2 for the EM) and lands exactly one
 ``ceremony.commit_v2`` call over the run's DONE chunks.
 
@@ -1617,7 +1617,7 @@ def _withhold_reasons(worktree_root: Path, artifacts, record_dir_rel: Optional[s
     return run_withhold.read(worktree_root / d for d in reversed(dirs))
 
 
-_WITHHOLD_REMEDY = "workflow.revise run_id={run_id} withhold_paths=[{{path, reason}}], then re-fire."
+from coordinator_core.ops.dispatch_emit.peer_claim_contract import WITHHOLD_CALL as _WITHHOLD_REMEDY  # noqa: E402
 _GENERIC_DRIFT_REMEDY = "Re-review the current bytes and pass their blob, or leave the path out."
 
 

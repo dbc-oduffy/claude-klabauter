@@ -17,6 +17,7 @@ from datetime import date
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
+from coordinator_core.cadence.period_mode import CATCH_UP_FLAG, CONCLUDE_FLAG, PERIOD_MODE_KEY
 from coordinator_core.ceremony_common.run import decide
 from coordinator_core.ceremony_common.run.contract import (
     RUN_DIR_SUFFIX,
@@ -248,6 +249,9 @@ def front_door(flags: Mapping[str, Any] | None = None) -> tuple[StepSpec, ...]:
     scope = _scope_summary(flags)
     if scope:
         brief_args.append(f"--scope-summary={scope}")
+    for flag in (CATCH_UP_FLAG, CONCLUDE_FLAG):
+        if _flag(flags, flag.removeprefix("--")):
+            brief_args.append(flag)
     return (
         _step(
             GRANT_STEP_ID, "tier-u-grant-cli",
@@ -430,6 +434,11 @@ def _envelope_scope(envelope: Mapping[str, Any]) -> tuple[str, bool]:
     return day, only
 
 
+def _catch_up(envelope: Mapping[str, Any]) -> bool:
+    """True when the brief resolved `catch_up`: the in-progress day is left open, so not audited."""
+    return (envelope.get(PERIOD_MODE_KEY) or {}).get("mode") == "catch_up"
+
+
 def _gap_rows(scan_stdout: str) -> list[tuple[str, str, str, str]]:
     rows = []
     for line in scan_stdout.splitlines():
@@ -530,7 +539,7 @@ def agent_groups(
             "argv": None, "inputs": {"day": day},
         }]))
 
-    if not only:
+    if not only and not _catch_up(envelope):
         groups.append(_group("archive-audit", 2, [{
             "key": f"archive-audit:{day}",
             "brief": (
@@ -731,5 +740,7 @@ SPEC = CeremonySpec(
     render=None,
     costs=COSTS,
     chain=None,
-    launch_flags=frozenset({"--for-date", "--only", "--scope-summary", "--summary"}),
+    launch_flags=frozenset(
+        {"--for-date", "--only", "--scope-summary", "--summary", CATCH_UP_FLAG, CONCLUDE_FLAG}
+    ),
 )

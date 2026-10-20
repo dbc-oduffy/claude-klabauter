@@ -26,6 +26,7 @@ from coordinator_core.ops.dispatch_emit.sizing_fire import RESUME_LEDGER_HALT_BL
 from coordinator_core.ops._workflow_contract import agent_options_phase_titles
 from coordinator_core.ops.dispatch_emit.ask_contract import (
     ALL_LANDED_HALT_KIND,
+    HALT_DEPENDENTS_UNSTARTED,
     ASK_MANIFEST_MARKER,
     ASK_PHASES,
     ASK_SOURCE_RELAYED,
@@ -641,7 +642,6 @@ def _test_instruction_js(review_edits_base: str) -> str:
 
 _USAGE_LIMIT_RE = r"/(usage|session|rate|weekly|5-hour) limit|limit reached|resets \d{1,2}(:\d{2})?\s*(am|pm)?|quota/i"
 HALT_USAGE_LIMIT = "usage_limit"
-HALT_DEPENDENTS_UNSTARTED = "dependents_unstarted"
 HALT_REVIEW_BLOCKED = "review_blocked"
 HALT_CRITERION_NOT_MET = "criterion_not_met"
 HALT_DELIVERY_FAIL = "delivery_fail"
@@ -2411,7 +2411,7 @@ def compose_ask_script(
         f"{{ _allLanded = true; _gate = {{ ..._gate, arm: {_lit(ARM_XS)} }}; }}"
     )
     b.append(
-        f"  if (_manifest.error && String(_manifest.error).startsWith({json.dumps(STAGE_REFUSAL_PREFIX)})) {{ _halted = {{ "
+        f"  if (_manifest.error && /^(?:stage refused: )?{STAGE_REFUSAL_PREFIX}/.test(String(_manifest.error))) {{ _halted = {{ "
         f"halted: {_lit(HALT_DESIGN_REVIEW)}, kind: {_lit(HALT_DESIGN_REVIEW)}, reason: String(_manifest.error), "
         f"board_url: _gate?.{DESIGN_ROUTE_KEY}?.board?.url ?? null, {DESIGN_ROUTE_KEY}: _gate?.{DESIGN_ROUTE_KEY} ?? null, "
         f"sizing: _sizingRel, plan: _planRel, run_id: _runId, next_action: {_design_next_action_js(sizing_rel)} }}; }}"

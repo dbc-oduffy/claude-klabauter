@@ -31,7 +31,7 @@ def test_reset_moves_dailies_and_fragments_keeps_header_and_pending(tmp_path):
     (d / "2026-09-30-pending-release.md").write_text("p", encoding="utf-8")
     h.write_priorities_fragment(tmp_path, "abc123", [("T", "state/goals/g.yaml")])
 
-    assert h.reset_week(tmp_path, "2026-10-05") == "2026-09-28"
+    assert h.reset_week(tmp_path, "2026-10-05") == ("2026-09-28",)
 
     arch = tmp_path / "archive" / "week-changelogs" / "2026-09-28"
     assert sorted(p.name for p in arch.iterdir()) == [
@@ -44,6 +44,48 @@ def test_reset_moves_dailies_and_fragments_keeps_header_and_pending(tmp_path):
     assert "**Week starting:** 2026-10-05" in text
     assert "**Prior week released:** v0.6.0 (commit abcdef1, 2026-09-06)" in text
     assert not list(d.glob("HEADER.priorities.*"))
+
+
+def test_reset_archives_each_missed_week_and_keeps_current_week(tmp_path):
+    d = tmp_path / "state" / "week-changelog"
+    d.mkdir(parents=True)
+    (d / "HEADER.md").write_text(
+        "# Week Changelog\n\n**Week starting:** 2026-09-22\n"
+        "**Prior week released:** (none recorded)\n**Last /workweek-start:** 2026-09-22\n",
+        encoding="utf-8",
+    )
+    for name in ("2026-09-22-a.md", "2026-09-28-a.md", "2026-10-06-a.md", "2026-10-13-a.md"):
+        (d / name).write_text("x", encoding="utf-8")
+    h.write_priorities_fragment(tmp_path, "abc123", [("T", "g.yaml")])
+
+    assert h.missed_weeks(tmp_path, "2026-10-14") == ("2026-09-22", "2026-10-06")
+    assert h.reset_week(tmp_path, "2026-10-14") == ("2026-09-22", "2026-10-06")
+
+    arch = tmp_path / "archive" / "week-changelogs"
+    assert sorted(p.name for p in (arch / "2026-09-22").iterdir()) == [
+        "2026-09-22-a.md", "2026-09-28-a.md", "HEADER.priorities.abc123.md"]
+    assert [p.name for p in (arch / "2026-10-06").iterdir()] == ["2026-10-06-a.md"]
+    assert (d / "2026-10-13-a.md").exists()
+    assert "**Week starting:** 2026-10-13" in (d / "HEADER.md").read_text(encoding="utf-8")
+
+
+def test_reset_inside_header_week_archives_nothing(tmp_path):
+    d = tmp_path / "state" / "week-changelog"
+    d.mkdir(parents=True)
+    (d / "HEADER.md").write_text("**Week starting:** 2026-10-05\n", encoding="utf-8")
+    (d / "2026-10-06.md").write_text("x", encoding="utf-8")
+    before = (d / "HEADER.md").read_bytes()
+    assert h.reset_week(tmp_path, "2026-10-08") == ()
+    assert (d / "HEADER.md").read_bytes() == before
+    assert (d / "2026-10-06.md").exists()
+    assert "**Week starting:** 2026-10-05" in (d / "HEADER.md").read_text(encoding="utf-8")
+
+
+def test_current_week_start_uses_header_then_archive_chain(tmp_path):
+    h.bootstrap(tmp_path)
+    assert h.current_week_start(tmp_path, "2026-10-08") == "2026-10-08"
+    (tmp_path / "archive" / "week-changelogs" / "2026-09-28").mkdir(parents=True)
+    assert h.current_week_start(tmp_path, "2026-10-08") == "2026-10-05"
 
 
 def test_reset_on_sentinel_raises(tmp_path):

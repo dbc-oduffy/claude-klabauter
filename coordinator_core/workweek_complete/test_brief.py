@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -77,6 +78,156 @@ def test_trampoline_parser_takes_doc_and_has_no_ack_flag() -> None:
     assert parser.parse_args(["--doc", "README.md"]).doc == "README.md"
     with pytest.raises(SystemExit):
         parser.parse_args(["--doc", "README.md", "--ack"])
+
+
+_CONCLUDING = (
+    "d_step13_archive_close",
+    "d_step13_5_post_command_hook",
+    "jp_step8_5_loe_high_water",
+    "jp_step9_editorial_bucketing",
+    "jp_step9_pm_release_notes_gate",
+    "jp_step10_semver_judgment",
+    "jp_step10_5_gh_release_publish",
+)
+
+
+def _brief_at(
+    monkeypatch, tmp_path: Path, anchor: str | None, now: datetime, **flags
+) -> tuple[int, dict]:
+    from coordinator_core.workweek_complete.brief_inputs import BriefInputs
+
+    if anchor is not None:
+        header = tmp_path / "state" / "week-changelog" / "HEADER.md"
+        header.parent.mkdir(parents=True, exist_ok=True)
+        header.write_text(f"**Week starting:** {anchor}\n", encoding="utf-8")
+    monkeypatch.setattr(
+        wwc_brief,
+        "compute_brief_inputs",
+        lambda *a, **k: BriefInputs(repo_root=tmp_path.as_posix()),
+    )
+    monkeypatch.setattr(wwc_brief, "resolve_operator_config", lambda env=None: None)
+    return wwc_brief.brief(now_local=now, **flags)
+
+
+def _ids(envelope: dict) -> set[str]:
+    return {d["id"] for d in envelope["directives"]} | {
+        p["id"] for p in envelope["judgment_points"]
+    }
+
+
+def test_catch_up_archives_each_missed_week_and_omits_every_concluding_id(
+    monkeypatch, tmp_path: Path
+) -> None:
+    code, env = _brief_at(monkeypatch, tmp_path, "2026-09-28", datetime(2026, 10, 14, 10, 0), catch_up=True)
+    assert code == 0
+    assert env["period_mode"]["mode"] == "catch_up"
+    assert env["period_mode"]["missed"] == ["2026-09-28", "2026-10-05"]
+    assert env["period_mode"]["in_progress"] == "2026-10-12"
+    assert not _ids(env) & set(_CONCLUDING)
+    archives = [d for d in env["directives"] if d["id"].startswith(wwc_brief.CATCH_UP_ARCHIVE_PREFIX)]
+    assert [d["id"] for d in archives] == [
+        "d_step13_catch_up_archive_2026-09-28",
+        "d_step13_catch_up_archive_2026-10-05",
+    ]
+    assert archives[0]["cli"] == "workweek-complete-close"
+    assert archives[0]["args"][:7] == [
+        "archive", "--week-only", "--week-starting", "2026-09-28",
+        "--week-ending", "2026-10-04", "--version",
+    ]
+    assert "--move-priorities" in archives[0]["args"]
+    assert "--move-priorities" not in archives[1]["args"]
+    assert all("--no-push" in d["args"] for d in archives)
+    step1b = next(d for d in env["directives"] if d["id"] == "d_step1b_backfill_changelog_gaps")
+    assert step1b["args"] == ["--through", "2026-10-11"]
+
+
+def test_catch_up_performs_no_release_act(monkeypatch, tmp_path: Path) -> None:
+    _, env = _brief_at(monkeypatch, tmp_path, "2026-09-28", datetime(2026, 10, 14, 10, 0), catch_up=True)
+    for d in env["directives"]:
+        assert d["cli"] != "gh"
+        assert "release" not in d["id"] and "semver" not in d["id"]
+        assert "--no-push" in d["args"] or d["cli"] != "workweek-complete-close"
+
+
+def test_catch_up_narration_leads_and_names_conclude_when_clock_chose(
+    monkeypatch, tmp_path: Path
+) -> None:
+    _, env = _brief_at(monkeypatch, tmp_path, "2026-09-28", datetime(2026, 10, 14, 10, 0))
+    assert env["period_mode"]["source"] == "auto-clock"
+    assert env["narration"].startswith(
+        "Catch-up run: 2026-09-28, 2026-10-05 backfilled; 2026-10-12 left open."
+    )
+    assert "--conclude" in env["narration"]
+
+
+def test_explicit_catch_up_narration_does_not_push_conclude(monkeypatch, tmp_path: Path) -> None:
+    _, env = _brief_at(monkeypatch, tmp_path, "2026-09-28", datetime(2026, 10, 16, 10, 0), catch_up=True)
+    assert env["period_mode"]["source"] == "explicit"
+    assert env["narration"].startswith("Catch-up run: ")
+    assert "--conclude" not in env["narration"]
+
+
+def test_late_week_without_flags_concludes_with_the_full_set(monkeypatch, tmp_path: Path) -> None:
+    _, env = _brief_at(monkeypatch, tmp_path, "2026-10-12", datetime(2026, 10, 16, 10, 0))
+    assert env["period_mode"]["mode"] == "conclude"
+    assert "d_step13_archive_close" in _ids(env)
+    assert not any(i.startswith(wwc_brief.CATCH_UP_ARCHIVE_PREFIX) for i in _ids(env))
+    step1b = next(d for d in env["directives"] if d["id"] == "d_step1b_backfill_changelog_gaps")
+    assert step1b["args"] == []
+
+
+def test_explicit_conclude_early_in_the_week_keeps_the_concluding_ids(
+    monkeypatch, tmp_path: Path
+) -> None:
+    _, env = _brief_at(
+        monkeypatch, tmp_path, "2026-10-12", datetime(2026, 10, 13, 9, 0), conclude=True
+    )
+    assert env["period_mode"]["mode"] == "conclude"
+    assert "d_step13_archive_close" in _ids(env)
+
+
+def test_already_archived_week_is_not_missed(monkeypatch, tmp_path: Path) -> None:
+    (tmp_path / "archive" / "week-changelogs" / "2026-09-28").mkdir(parents=True)
+    _, env = _brief_at(monkeypatch, tmp_path, "2026-09-28", datetime(2026, 10, 14, 10, 0), catch_up=True)
+    assert env["period_mode"]["missed"] == ["2026-10-05"]
+    step1b = next(d for d in env["directives"] if d["id"] == "d_step1b_backfill_changelog_gaps")
+    assert step1b["args"] == ["--through", "2026-10-11"]
+
+
+def test_header_without_a_dated_anchor_keeps_the_concluding_ceremony(
+    monkeypatch, tmp_path: Path
+) -> None:
+    _, env = _brief_at(monkeypatch, tmp_path, None, datetime(2026, 10, 13, 9, 0))
+    assert env["period_mode"]["mode"] == "conclude"
+    assert "d_step13_archive_close" in _ids(env)
+
+
+def test_catch_up_step_cost_row_exists() -> None:
+    import json
+
+    costs = json.loads((Path(wwc_brief.__file__).parent / "step_costs.json").read_text(encoding="utf-8"))
+    assert wwc_brief.CATCH_UP_ARCHIVE_PREFIX in costs["steps"]
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["--catch-up", "--conclude"],
+        ["--catch-up", "--only"],
+        ["--conclude", "--only"],
+        ["--catch-up", "--for-date", "2026-10-13"],
+    ],
+)
+def test_brief_main_refuses_forbidden_flag_combinations(argv: list[str], capsys) -> None:
+    assert wwc_brief.main(argv) != 0
+    assert capsys.readouterr().out == ""
+
+
+@pytest.mark.parametrize("argv", [["--catch-up", "--conclude"]])
+def test_apply_main_refuses_forbidden_flag_combinations(argv: list[str]) -> None:
+    from coordinator_core.workweek_complete import apply as wwc_apply
+
+    assert wwc_apply.main(argv) != 0
 
 
 def test_brief_emits_no_doc_staleness_id_and_never_enters_the_op(monkeypatch) -> None:

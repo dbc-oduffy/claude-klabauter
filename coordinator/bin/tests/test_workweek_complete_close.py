@@ -328,3 +328,70 @@ def test_archive_sentinel_header_without_week_starting_moves_nothing(tmp_path: P
     assert "--week-starting" in capsys.readouterr().err
     assert (wc / "2026-09-29-host.md").exists()
     assert not (tmp_path / "archive").exists()
+
+
+def test_week_arithmetic_lives_in_period_mode_not_in_this_cli() -> None:
+    assert not hasattr(_mod, "_own_week_folder")
+    source = (_BIN_DIR / "workweek-complete-close.py").read_text(encoding="utf-8")
+    assert "days=7" not in source
+
+
+def test_catch_up_week_only_archive_closes_one_week_and_leaves_the_rest(tmp_path: Path) -> None:
+    (
+        week_changelog_dir,
+        archive_week_root,
+        review_trail_dir,
+        review_trail_archive_root,
+        _,
+        _,
+    ) = _setup_week_only_fixture(tmp_path)
+    (week_changelog_dir / "2026-08-18.md").write_text("w1", encoding="utf-8")
+    (week_changelog_dir / "2026-08-25.md").write_text("w2", encoding="utf-8")
+
+    _mod.perform_archive_files(
+        week_changelog_dir,
+        archive_week_root,
+        review_trail_dir,
+        review_trail_archive_root,
+        "2026-08-17",
+        "none",
+        "none",
+        "2026-09-01",
+        week_only=True,
+        week_ending="2026-08-23",
+    )
+
+    assert (archive_week_root / "2026-08-17" / "2026-08-18.md").exists()
+    assert (week_changelog_dir / "2026-08-25.md").exists()
+
+
+def test_version_none_week_only_archive_leaves_header_bytes_unchanged(tmp_path: Path) -> None:
+    (
+        week_changelog_dir,
+        archive_week_root,
+        review_trail_dir,
+        review_trail_archive_root,
+        _,
+        _,
+    ) = _setup_week_only_fixture(tmp_path)
+    (week_changelog_dir / "2026-08-18.md").write_text("w1", encoding="utf-8")
+    header = week_changelog_dir / "HEADER.md"
+    before = header.read_bytes()
+    touched: list[Path] = []
+
+    _mod.perform_archive_files(
+        week_changelog_dir,
+        archive_week_root,
+        review_trail_dir,
+        review_trail_archive_root,
+        "2026-08-17",
+        "none",
+        "none",
+        "2026-09-01",
+        week_only=True,
+        touched_out=touched,
+    )
+
+    assert (archive_week_root / "2026-08-17" / "2026-08-18.md").exists()
+    assert header.read_bytes() == before
+    assert header not in touched

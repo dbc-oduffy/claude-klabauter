@@ -418,3 +418,53 @@ def test_step2_directive_routes_to_the_fast_tier_resolver(
         f"to route to resolve_fast_test_cmd exactly once, got {calls!r}"
     )
     assert exit_code == 0
+
+
+@pytest.mark.parametrize(
+    ("argv", "expected"),
+    [
+        (["--catch-up"], {"catch_up": True, "conclude": False}),
+        (["--conclude"], {"catch_up": False, "conclude": True}),
+        ([], {"catch_up": False, "conclude": False}),
+    ],
+)
+def test_main_threads_period_flags_into_apply(
+    monkeypatch: pytest.MonkeyPatch, argv: list[str], expected: dict[str, bool]
+) -> None:
+    seen: dict[str, Any] = {}
+
+    def fake_apply(*, decisions=None, catch_up=False, conclude=False):
+        seen.update(catch_up=catch_up, conclude=conclude)
+        return 0, {}
+
+    monkeypatch.setattr(wwc_apply, "apply", fake_apply)
+    with contextlib.redirect_stdout(io.StringIO()):
+        assert wwc_apply.main(argv) == 0
+    assert seen == expected
+
+
+def test_main_refuses_catch_up_with_conclude_before_applying(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        wwc_apply, "apply", lambda **_: pytest.fail("apply must not run on a refused flag pair")
+    )
+    stderr = io.StringIO()
+    with contextlib.redirect_stderr(stderr):
+        rc = wwc_apply.main(["--catch-up", "--conclude"])
+    assert rc == int(wwc_apply.WorkweekApplyExitCode.TRANSPORT_FAIL)
+    assert "mutually exclusive" in stderr.getvalue()
+
+
+def test_apply_recomputes_the_brief_with_the_period_flags(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: dict[str, Any] = {}
+
+    def fake_brief(decisions=None, **kwargs):
+        seen.update(kwargs)
+        return 1, {"error": "stop here"}
+
+    monkeypatch.setattr(wwc_apply, "brief", fake_brief)
+    wwc_apply.apply(catch_up=True)
+    assert seen == {"catch_up": True, "conclude": False}

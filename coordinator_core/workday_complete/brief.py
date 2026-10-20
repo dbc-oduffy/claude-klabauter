@@ -96,10 +96,22 @@ import argparse
 import json
 import re
 import sys
-from datetime import date
+from dataclasses import replace
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Optional
 
+from coordinator_core.cadence.period_mode import (
+    CATCH_UP_FLAG,
+    CONCLUDE_FLAG,
+    CONCLUDING_DIRECTIVES,
+    NARRATION_LEAD_PREFIX,
+    PERIOD_MODE_KEY,
+    PeriodMode,
+    local_now,
+    period_flag_error,
+    resolve_period_mode,
+)
 from coordinator_core.ceremony_common.tail import build_ceremony_close_tail
 from coordinator_core.contract.decision_object.envelope import (
     build_envelope,
@@ -195,6 +207,8 @@ def _compute_register_stall() -> StallReport:
     except Exception:  # noqa: BLE001 - never fail the ceremony
         return StallReport()
 
+
+_CONCLUDING_IDS = frozenset(CONCLUDING_DIRECTIVES["workday-complete"])
 
 #: Gap rows above which the backfill fan-out needs a PM glance.
 BACKFILL_CAP_ROWS = 10
@@ -378,6 +392,7 @@ def _build_directives(
     only_mode: bool = False,
     scope_summary: Optional[str] = None,
     backfill_cap_live: bool = True,
+    catch_up: bool = False,
 ) -> list[dict[str, Any]]:
     """Tier-1 (mechanical, no open question) directive entries — one per
     collapsed workday-complete.md step: 1/1.5/2.5/2.6/2.65/3/3.5-PhaseA0/4a/6/
@@ -476,6 +491,9 @@ def _build_directives(
     spelling (never the two-token `--scope-summary`, `VALUE` split) so
     argparse never has to classify `VALUE` as a candidate option at all.
     Neither approach mangles or strips the user's prose.
+
+    `catch_up` drops every `CONCLUDING_DIRECTIVES["workday-complete"]` id from the list: the
+    in-progress day stays open, so nothing concluding is emitted, and none is self-skipping.
     """
     directives = [
         _directive(
@@ -606,6 +624,8 @@ def _build_directives(
             ceremony_name="workday-complete",
         ),
     ]
+    if catch_up:
+        directives = [d for d in directives if d["id"] not in _CONCLUDING_IDS]
     for entry in directives:
         assert entry["cli"] in CONSUMES_MANIFEST, (
             f"_build_directives: directive {entry['id']!r} names {entry['cli']!r}, "
@@ -680,8 +700,14 @@ def _build_judgment_points(
     for_date: Optional[str] = None,
     register_stall: Optional[StallReport] = None,
     backfill_scan_result: Optional[GapScan] = None,
+    catch_up: bool = False,
 ) -> list[dict[str, Any]]:
     """Tier-2/3 (open-question) judgment-point entries.
+
+    `catch_up` drops the concluding points (`CONCLUDING_DIRECTIVES["workday-complete"]`) and
+    `jp_day_goal_closeout`, whose only disposition target is the absent `d_goal_close_day`.
+    The gap days' summaries are the `backfill-summary` agent group over the scan rows, so no
+    gap-day analyst point is re-emitted.
 
     `backfill_scan_result` is `brief()`'s one pre-A0 scan: `jp_step3_5_backfill_cap` is
     emitted only when it holds more than `BACKFILL_CAP_ROWS` rows or any older gap. `None`
@@ -874,6 +900,9 @@ def _build_judgment_points(
     ]
     if register_stall:
         points.append(stall_judgment_point(register_stall, id="jp_requirement_register_stall"))
+    if catch_up:
+        dropped = _CONCLUDING_IDS | {"jp_day_goal_closeout"}
+        points = [p for p in points if p["id"] not in dropped]
     return points
 
 
@@ -894,6 +923,47 @@ def _reported_narration_suffix(reported_judgment_points: list[dict[str, Any]]) -
     )
 
 
+def _resolve_day_period_mode(
+    scan: GapScan,
+    now_local: datetime,
+    *,
+    catch_up: bool,
+    conclude: bool,
+    single_date: bool,
+) -> PeriodMode:
+    """Resolve the day's mode, reading `missed` off the scan rows (a day absent from them is concluded).
+
+    A `--for-date`/`--only` run keeps its single-date semantics: it always concludes."""
+    gap_days: set[str] = set()
+    for row in scan.rows:
+        try:
+            date.fromisoformat(row.date)
+        except ValueError:
+            continue
+        gap_days.add(row.date)
+    today = now_local.date()
+    since = date.fromisoformat(min(gap_days)) if gap_days else None
+    concluded: list[str] = []
+    if since is not None:
+        d = since
+        while d < today:
+            if d.isoformat() not in gap_days:
+                concluded.append(d.isoformat())
+            d += timedelta(days=1)
+    explicit = "conclude" if single_date else "catch_up" if catch_up else "conclude" if conclude else None
+    resolved = resolve_period_mode(
+        "day", now_local, explicit, week_anchor=today, concluded=concluded, since=since
+    )
+    if single_date:
+        resolved = replace(resolved, reason="single-date run (--for-date/--only) concludes the named day")
+    return resolved
+
+
+def _catch_up_narration_lead(period: PeriodMode) -> str:
+    missed = ", ".join(period.missed) or "no missed days"
+    return f"{NARRATION_LEAD_PREFIX}{missed} backfilled; {period.in_progress} left open"
+
+
 def brief(
     *,
     decisions: Optional[dict[str, Any]] = None,
@@ -901,6 +971,9 @@ def brief(
     for_date: Optional[str] = None,
     only_mode: bool = False,
     scope_summary: Optional[str] = None,
+    catch_up: bool = False,
+    conclude: bool = False,
+    now_local: Optional[datetime] = None,
 ) -> tuple[int, dict[str, Any]]:
     """Compute the workday-complete decision object. Read-only — never
     mutates disk/git state itself; every mutation is a named `directives[]`
@@ -935,9 +1008,19 @@ def brief(
     the exact (deliberately asymmetric) args shape each directive gets and
     the leading-dash handling used for each.
 
+    `catch_up`/`conclude` pick the period mode explicitly; both off lets the clock decide
+    (`resolve_period_mode`, `now_local` defaulting to the coordinator's local now). Under
+    `catch_up` the concluding directives are absent and the envelope's `narration` leads with
+    the catch-up line. The resolved mode rides the envelope's top-level `period_mode` key.
+
     Returns `(exit_code, envelope)` using `WorkdayExitCode` (0-3, brief-side
     only — see module docstring).
     """
+    conflict = period_flag_error(
+        catch_up=catch_up, conclude=conclude, only_mode=only_mode, for_date=for_date
+    )
+    if conflict is not None:
+        return int(WorkdayExitCode.USAGE), {"error": conflict}
     if for_date is not None:
         if not re.match(r"^\d{4}-\d{2}-\d{2}$", for_date):
             return (
@@ -977,6 +1060,14 @@ def brief(
         open_day_goals = _compute_open_day_goals()
         dirty_tree_verdict = _compute_dirty_tree_verdict()
         backfill_scan_result, backfill_scan_note = _compute_backfill_scan()
+        period = _resolve_day_period_mode(
+            backfill_scan_result,
+            now_local if now_local is not None else local_now(),
+            catch_up=catch_up,
+            conclude=conclude,
+            single_date=bool(for_date or only_mode),
+        )
+        in_catch_up = period.mode == "catch_up"
         directives = _build_directives(
             decisions if decisions is not None else {},
             open_day_goals,
@@ -985,6 +1076,7 @@ def brief(
             only_mode=only_mode,
             scope_summary=scope_summary,
             backfill_cap_live=_backfill_cap_live(backfill_scan_result),
+            catch_up=in_catch_up,
         )
         judgment_points = _build_judgment_points(
             open_day_goals,
@@ -992,6 +1084,7 @@ def brief(
             for_date=for_date,
             register_stall=_compute_register_stall(),
             backfill_scan_result=backfill_scan_result,
+            catch_up=in_catch_up,
         )
         recommendation_carrying = [
             point for point in judgment_points if point.get("recommendation") is not None
@@ -1019,6 +1112,8 @@ def brief(
     reported_narration_suffix = _reported_narration_suffix(reported_judgment_points)
     if reported_narration_suffix:
         narration = f"{narration} {reported_narration_suffix}"
+    if in_catch_up:
+        narration = f"{_catch_up_narration_lead(period)}. {narration}"
 
     envelope = build_envelope(
         artifact={"kind": "ceremony", "name": "workday-complete"},
@@ -1034,6 +1129,9 @@ def brief(
         next_move="resolve open judgment_points, then dispatch apply()",
     )
     emit(envelope)
+    # Trap: attached after `emit`, whose 8-key check mirrors the DoE schema-of-record and
+    # refuses a ninth key; the cadence fragment pins `period_mode` as a top-level brief key.
+    envelope[PERIOD_MODE_KEY] = period.to_dict()
     return int(WorkdayExitCode.SUCCESS), envelope
 
 
@@ -1042,13 +1140,19 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--for-date", dest="for_date", default=None)
     parser.add_argument("--only", dest="only_mode", action="store_true")
     parser.add_argument("--scope-summary", dest="scope_summary", default=None)
+    parser.add_argument(CATCH_UP_FLAG, dest="catch_up", action="store_true")
+    parser.add_argument(CONCLUDE_FLAG, dest="conclude", action="store_true")
     try:
         args = parser.parse_args(argv)
     except SystemExit as exc:
         return int(exc.code) if exc.code is not None else int(WorkdayExitCode.USAGE)
 
+    period_flags = {k: True for k in ("catch_up", "conclude") if getattr(args, k)}
     exit_code, envelope = brief(
-        for_date=args.for_date, only_mode=args.only_mode, scope_summary=args.scope_summary
+        for_date=args.for_date,
+        only_mode=args.only_mode,
+        scope_summary=args.scope_summary,
+        **period_flags,
     )
     print(json.dumps(envelope, indent=2, sort_keys=True))
     return exit_code

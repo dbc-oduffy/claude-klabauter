@@ -91,7 +91,7 @@ def test_plain_partial_with_held_dependent_names_the_rows():
         "_rows.A = _runRow('A', [], null, run('A', 'PARTIAL: half'));"
         "_rows.B = _runRow('B', [_rows.A], null, run('B'));"
     )
-    assert out["reason"] == "dependents unstarted: B (held by A)"
+    assert out["reason"] == "dependents unstarted: B (held by A); A: half"
 
 
 def test_operator_hold_does_not_halt():

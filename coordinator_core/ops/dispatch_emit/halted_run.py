@@ -29,6 +29,7 @@ HALTED_FILE = "halted.json"
 STATUS_RESUMED = "resumed"
 STATUS_LANDED = "landed"
 HALT_RUN_BASE_FIELD = "run_base_sha"
+HALT_REASON_FIELD = "reason"
 REVISED_AT_FIELD = "revised_at"
 _SHA40 = re.compile(r"[0-9a-f]{40}")
 _DATE_PREFIX = re.compile(r"(\d{4})-(\d{2})-(\d{2})")
@@ -65,10 +66,11 @@ def write_halt_marker(
     blocking: Optional[tuple] = None,
     run_base_sha: Optional[str] = None,
     blocking_items: Optional[list] = None,
+    reason: Optional[str] = None,
 ) -> Path:
     """Write the `halted` marker into `record_dir` (created if absent); return its path.
 
-    `plan`, the blocking key, the blocking items and the base are written only when given (the base
+    `plan`, the blocking key, the blocking items, the reason and the base are written only when given (the base
     only when 40-hex), so other halts' markers are unchanged.
     """
     payload = {
@@ -82,6 +84,8 @@ def write_halt_marker(
         payload[HALT_BLOCKING_FIELD] = list(blocking)
     if blocking_items is not None:
         payload[HALT_BLOCKING_ITEMS_FIELD] = list(blocking_items)
+    if reason:
+        payload[HALT_REASON_FIELD] = reason
     if run_base_sha and _SHA40.fullmatch(run_base_sha):
         payload[HALT_RUN_BASE_FIELD] = run_base_sha
     return _write(Path(record_dir), payload)

@@ -223,3 +223,14 @@ def test_undated_sizing_name_returns_none(tmp_path):
     rel = "state/sizings/foo.yaml"
     hr.write_halt_marker(_ask(tmp_path, "20261016T010000-aaaaaa"), halted="x", sizing_rel=rel)
     assert hr.halted_ask_run_for(tmp_path, rel) is None
+
+
+def test_halt_marker_carries_the_reason_only_when_given(tmp_path):
+    import json
+
+    from coordinator_core.ops.dispatch_emit.halted_run import HALTED_FILE, write_halt_marker
+
+    with_reason = write_halt_marker(tmp_path / "a", halted="dependents_unstarted", sizing_rel=None, reason="A: half")
+    assert json.loads(with_reason.read_text(encoding="utf-8"))["reason"] == "A: half"
+    without = write_halt_marker(tmp_path / "b", halted="dependents_unstarted", sizing_rel=None)
+    assert "reason" not in json.loads((tmp_path / "b" / HALTED_FILE).read_text(encoding="utf-8"))

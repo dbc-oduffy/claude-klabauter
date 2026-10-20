@@ -18,6 +18,7 @@ from datetime import date
 from pathlib import Path
 
 from coordinator_core.atomic_replace import atomic_write_bytes
+from coordinator_core.cadence.period_mode import week_window
 from coordinator_core.ops.check_weekly_staleness import (
     _PRIOR_WEEK_RELEASED_RE,
     _WEEK_STARTING_RE,
@@ -156,44 +157,112 @@ def update_in_place(repo_root: Path, today: date | str) -> None:
     _write(header, "".join(lines))
 
 
-def reset_week(repo_root: Path, today: date | str) -> str:
-    """Archive the closing week and write a fresh HEADER; return the prior week start.
+def _as_date(value: date | str) -> date:
+    return value if isinstance(value, date) else date.fromisoformat(str(value))
 
-    Daily files and priorities fragments move to
-    archive/week-changelogs/<prior-week-start>/. HEADER.md and
-    `*-pending-release.md` stay. `Prior week released:` carries over.
+
+def _header_anchor(lines: list[str]) -> date | None:
+    week_line = _first_line(lines, _WEEK_STARTING_RE)
+    m = _BARE_DATE_RE.match(week_line) if week_line else None
+    return date.fromisoformat(m.group(1)) if m else None
+
+
+def _daily_week_starts(week_dir: Path, anchor: date) -> dict[Path, date]:
+    """Each archivable daily file mapped to the start of its week on `anchor`'s chain."""
+    out: dict[Path, date] = {}
+    for f in sorted(week_dir.glob("*.md")):
+        if not _DAILY_FILE_RE.match(f.name) or f.name.endswith(_PENDING_RELEASE_SUFFIX):
+            continue
+        try:
+            day = date.fromisoformat(f.name[:10])
+        except ValueError:
+            continue
+        out[f] = week_window(day, anchor)[0]
+    return out
+
+
+def missed_weeks(repo_root: Path, today: date | str) -> tuple[str, ...]:
+    """Week starts, oldest first, that `reset_week` would archive; () when HEADER is unset or unreadable."""
+    root = Path(repo_root)
+    try:
+        anchor = _header_anchor(_read_lines(_header_path(root)))
+    except OSError:
+        return ()
+    if anchor is None:
+        return ()
+    current = week_window(_as_date(today), anchor)[0]
+    starts = {s for s in _daily_week_starts(root / WEEK_DIR, anchor).values() if s < current}
+    if week_window(anchor, anchor)[0] < current:
+        starts.add(week_window(anchor, anchor)[0])
+    return tuple(s.isoformat() for s in sorted(starts))
+
+
+def current_week_start(repo_root: Path, today: date | str) -> str:
+    """The week start containing `today`, on the chain of HEADER's `Week starting:`.
+
+    An unset HEADER falls back to the newest archived week's chain, then to `today`.
+    """
+    root = Path(repo_root)
+    day = _as_date(today)
+    try:
+        anchor = _header_anchor(_read_lines(_header_path(root)))
+    except OSError:
+        anchor = None
+    if anchor is None:
+        archived = sorted(
+            p.name for p in (root / ARCHIVE_DIR).glob("*") if re.fullmatch(r"\d{4}-\d{2}-\d{2}", p.name)
+        ) if (root / ARCHIVE_DIR).is_dir() else []
+        anchor = date.fromisoformat(archived[-1]) if archived else day
+    return week_window(day, anchor)[0].isoformat()
+
+
+def reset_week(repo_root: Path, today: date | str) -> tuple[str, ...]:
+    """Archive each missed week and write a fresh HEADER; return the archived week starts, oldest first.
+
+    Daily files bucket by week on HEADER's `Week starting:` weekday chain; each
+    missed week goes to archive/week-changelogs/<its-start>/. Files of the
+    current week, HEADER.md and `*-pending-release.md` stay. Priorities
+    fragments move with HEADER's own week. `Week starting:` becomes the current
+    week's start, not `today`. `Prior week released:` carries over. Nothing is
+    archived while `today` is still in HEADER's week, and then HEADER is not rewritten.
     Raises WeekUnsetError when `Week starting:` is the unset sentinel.
     """
     root = Path(repo_root)
     header = _header_path(root)
     lines = _read_lines(header)
-    week_line = _first_line(lines, _WEEK_STARTING_RE)
-    m = _BARE_DATE_RE.match(week_line) if week_line else None
-    if m is None:
+    anchor = _header_anchor(lines)
+    if anchor is None:
         raise WeekUnsetError(
             f"{header}: `Week starting:` is unset; nothing to archive"
         )
-    prior = m.group(1)
+    header_week = week_window(anchor, anchor)[0]
+    current = week_window(_as_date(today), anchor)[0]
 
     week_dir = root / WEEK_DIR
-    dest = root / ARCHIVE_DIR / prior
-    dest.mkdir(parents=True, exist_ok=True)
-    movers = [
-        f
-        for f in sorted(week_dir.glob("*.md"))
-        if (_DAILY_FILE_RE.match(f.name) and not f.name.endswith(_PENDING_RELEASE_SUFFIX))
-        or f.name.startswith("HEADER.priorities.")
-    ]
-    for f in movers:
+    archived: set[date] = set()
+    if header_week < current:
+        archived.add(header_week)
+        (root / ARCHIVE_DIR / header_week.isoformat()).mkdir(parents=True, exist_ok=True)
+        for f in sorted(week_dir.glob("HEADER.priorities.*.md")):
+            shutil.move(str(f), str(root / ARCHIVE_DIR / header_week.isoformat() / f.name))
+    for f, start in _daily_week_starts(week_dir, anchor).items():
+        if start >= current:
+            continue
+        dest = root / ARCHIVE_DIR / start.isoformat()
+        dest.mkdir(parents=True, exist_ok=True)
         shutil.move(str(f), str(dest / f.name))
+        archived.add(start)
+
+    if not archived:
+        return ()
 
     released = _first_line(lines, _PRIOR_WEEK_RELEASED_RE)
     _write(
         header,
         _HEADER_TEMPLATE
-        + f"**Week starting:** {today}\n"
+        + f"**Week starting:** {current.isoformat()}\n"
         + (released + "\n" if released else _UNSET_PRIOR)
         + "**Last /workweek-start:** (none)\n"
         + _PRIORITIES_LINE,
     )
-    return prior
+    return tuple(s.isoformat() for s in sorted(archived))

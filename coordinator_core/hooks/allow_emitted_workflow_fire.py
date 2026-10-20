@@ -111,7 +111,10 @@ def _decide(params: dict) -> Optional[str]:
     recorded_session = receipt.get("session_id")
     session = _session_id(params)
     if session and recorded_session and session != recorded_session:
-        return None
+        from coordinator_core.ops.workflow_fire.receipt import fire_token_matches
+
+        if not fire_token_matches(receipt, params.get("env")):
+            return None
 
     return _compose_allow_reason(
         str(receipt.get("plan") or "unrecorded"),

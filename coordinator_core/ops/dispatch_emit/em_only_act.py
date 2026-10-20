@@ -9,6 +9,10 @@ even when its body runs a heavy command: that is the needs_slot author lane, whe
 and the EM runs the slot leg. Deriving em there would strand the authoring. A row without a
 declared `writes` key is unknown and never derived.
 
+A row whose `blocked_on.capability` names a capability only the EM session holds (the Workflow tool,
+the Agent tool, SendMessage, "EM session") is em-performed too: an executor lacks that tool, so the
+row cannot finish there whatever it writes. `em_only_capability` reads it.
+
 Rows carry no commands field, so the command is read from the body's code spans (fenced blocks
 line by line, then inline single-backtick spans). Prose naming a script is a mention, not a run.
 A code span quoting a forbidden command in negation ("never run `build-plugin.ps1 ...`") is
@@ -46,6 +50,21 @@ def _code_spans(body: str) -> Iterator[str]:
         else:
             for match in _INLINE.finditer(line):
                 yield match.group(1)
+
+
+# Capabilities a dispatched executor lacks: the harness grants them to the EM session alone.
+_EM_ONLY_CAPABILITY = re.compile(
+    r"\bworkflow\b|\bagent tool\b|\bsendmessage\b|\bem[- ](?:session|only)\b", re.IGNORECASE
+)
+
+
+def em_only_capability(raw: Dict[str, Any]) -> Optional[str]:
+    """`blocked_on.capability` when it names a capability only the EM session has, else None."""
+    blocked = raw.get("blocked_on")
+    capability = blocked.get("capability") if isinstance(blocked, dict) else None
+    if isinstance(capability, str) and _EM_ONLY_CAPABILITY.search(capability):
+        return capability
+    return None
 
 
 def forbidden_sole_act(raw: Dict[str, Any]) -> Optional[str]:
@@ -113,5 +132,10 @@ def executor_commit_act(raw: Dict[str, Any]) -> Optional[str]:
 
 
 def row_is_em_performed(raw: Dict[str, Any]) -> bool:
-    """True for a declared `performer: em` row or one whose only act is agent-forbidden."""
-    return raw.get("performer") == "em" or forbidden_sole_act(raw) is not None
+    """True for a declared `performer: em` row, one whose only act is agent-forbidden, or one
+    blocked on a capability only the EM session has."""
+    return (
+        raw.get("performer") == "em"
+        or forbidden_sole_act(raw) is not None
+        or em_only_capability(raw) is not None
+    )

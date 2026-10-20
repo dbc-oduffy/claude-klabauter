@@ -96,7 +96,7 @@ def test_narration_renderer_still_carries_question_and_rationale():
 
 
 def test_tier3_no_recommendation_points_stay_asked(operator_env):
-    exit_code, envelope = brief(env=operator_env)
+    exit_code, envelope = brief(env=operator_env, conclude=True)
     assert exit_code == 0, envelope
     ids = {p["id"] for p in envelope["judgment_points"]}
     for tier3_id in (

@@ -29,7 +29,7 @@ def test_pre_sized_script_names_the_key_on_prompts_and_both_returns():
     assert f"return {{ arm: _gate.arm, {_CARRY}" in full
 
 
-_HALT_HEAD = "if (_manifest.error && String(_manifest.error).startsWith(\"design-review:\")) { _halted = { "
+_HALT_HEAD = "if (_manifest.error && /^(?:stage refused: )?design-review:/.test(String(_manifest.error))) { _halted = { "
 
 
 def test_stage_refusal_maps_to_a_design_review_halt_ahead_of_the_refusal_halt():
@@ -45,8 +45,22 @@ def test_stage_refusal_maps_to_a_design_review_halt_ahead_of_the_refusal_halt():
 
 def test_manifest_error_quoting_the_prefix_mid_text_is_not_a_design_review_halt():
     script = _compose(prompt=None, sizing_rel="state/sizings/s.yaml")
-    assert "String(_manifest.error).startsWith(\"design-review:\")" in script
+    assert "/^(?:stage refused: )?design-review:/.test(String(_manifest.error))" in script
     assert "String(_manifest.error).includes(\"design-review:\")" not in script
+
+
+@pytest.mark.spawns_process
+def test_design_review_check_matches_the_stage_refused_spelling_only_at_the_start():
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is not installed")
+    script = _compose(prompt=None, sizing_rel="state/sizings/s.yaml")
+    head = "/^(?:stage refused: )?design-review:/"
+    at = script.index(head)
+    regex = script[at : script.index("/", at + 1) + 1]
+    probe = "const r = %s; console.log(JSON.stringify(['design-review: x', 'stage refused: design-review: x', 'no manifest: design-review: x', 'stage refused: other'].map((e) => r.test(e))));" % regex
+    proc = subprocess.run([node, "-e", probe], capture_output=True, text=True, timeout=60, **no_console_creationflags())
+    assert json.loads(proc.stdout) == [True, True, False, False]
 
 
 def test_any_ready_op_error_but_the_did_not_run_sentinel_becomes_a_stage_refusal():

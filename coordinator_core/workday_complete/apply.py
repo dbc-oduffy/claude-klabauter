@@ -120,6 +120,7 @@ from coordinator_core.telemetry.composition_record import (
     flush_composition_record,
     make_fleet_budget,
 )
+from coordinator_core.cadence.period_mode import CATCH_UP_FLAG, CONCLUDE_FLAG, period_flag_error
 from coordinator_core.workday_complete.brief import CONSUMES_MANIFEST, brief
 from coordinator_core.contract.apply_base import assert_dispatchable
 from coordinator_core.contract.apply_base import judgment_points_by_id as _judgment_points_by_id
@@ -594,11 +595,18 @@ def _execute_directives(
     return int(WorkdayApplyExitCode.SUCCESS), report
 
 
+def _period_kwargs(catch_up: bool, conclude: bool) -> dict[str, bool]:
+    """Only the period flags that were given, so a no-flag call keeps its pre-catch-up shape."""
+    return {k: True for k, on in (("catch_up", catch_up), ("conclude", conclude)) if on}
+
+
 def apply(
     *,
     decisions: Optional[dict[str, Any]] = None,
     for_date: Optional[str] = None,
     only_mode: bool = False,
+    catch_up: bool = False,
+    conclude: bool = False,
 ) -> tuple[int, dict[str, Any]]:
     """`apply()` — recomputes the brief in-process (never trusts a
     caller-supplied decision object) and executes every execution-ready
@@ -621,6 +629,9 @@ def apply(
     `brief._build_directives`'s docstring for the exact args shape; every
     other directive in the recomputed envelope is unaffected.
 
+    `catch_up`/`conclude` are threaded into the recompute so the executed `directives[]` is the
+    brief's: under catch-up no concluding directive exists to run.
+
     Constructs a fresh composition budget (never module-level — see
     `telemetry.composition_record`'s own PER-CALL FACTORY note) and flushes
     exactly one record for it in a `finally`, regardless of outcome
@@ -631,7 +642,10 @@ def apply(
     exit_label = None
     try:
         brief_exit_code, envelope = brief(
-            decisions=decisions, for_date=for_date, only_mode=only_mode
+            decisions=decisions,
+            for_date=for_date,
+            only_mode=only_mode,
+            **_period_kwargs(catch_up, conclude),
         )
         if brief_exit_code != 0:
             transport_fail_report = {
@@ -686,6 +700,8 @@ def main(argv: list[str]) -> int:
     decisions: Optional[dict[str, Any]] = None
     for_date: Optional[str] = None
     only_mode = False
+    catch_up = False
+    conclude = False
     conflict = detect_conflicting_payload_channels(argv)
     if conflict is not None:
         print(f"workday-complete-apply: {conflict}", file=sys.stderr)
@@ -708,11 +724,29 @@ def main(argv: list[str]) -> int:
         elif tok == "--only":
             only_mode = True
             i += 1
+        elif tok == CATCH_UP_FLAG:
+            catch_up = True
+            i += 1
+        elif tok == CONCLUDE_FLAG:
+            conclude = True
+            i += 1
         else:
             print(f"workday-complete-apply: unrecognized argument {tok!r}", file=sys.stderr)
             return int(WorkdayApplyExitCode.TRANSPORT_FAIL)
 
-    exit_code, report = apply(decisions=decisions, for_date=for_date, only_mode=only_mode)
+    refusal = period_flag_error(
+        catch_up=catch_up, conclude=conclude, only_mode=only_mode, for_date=for_date
+    )
+    if refusal is not None:
+        print(f"workday-complete-apply: {refusal}", file=sys.stderr)
+        return int(WorkdayApplyExitCode.TRANSPORT_FAIL)
+
+    exit_code, report = apply(
+        decisions=decisions,
+        for_date=for_date,
+        only_mode=only_mode,
+        **_period_kwargs(catch_up, conclude),
+    )
     print(json.dumps(report, indent=2, sort_keys=True))
     return exit_code
 

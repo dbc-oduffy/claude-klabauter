@@ -33,6 +33,12 @@ A fourth DENY, checked last (after sha and session): a `resumeFromRunId` fire of
 stamped `revised_at` (`halted_run.revised_halt`) — a resume replays the stages without the
 revision; the reason names the fresh `fire_command`. Any failure there falls through.
 
+§ Fired child. `--fire` stamps the receipt with a `fire` block (the fire id and the SHA-256 of a
+one-time token) and passes the token to the `claude -p` child as `COORDINATOR_ALLOW_FIRE_TOKEN`.
+The child is a NEW session id the session check would otherwise deny. A session mismatch is
+admitted only when `params["env"]` carries a token whose digest matches the receipt; the sha,
+plan-amended and resume checks still apply to it.
+
 § Read-only exemption. A script whose every `agent()` call resolves to a
 read-only `agentType` (e.g. `Explore`, or a read-only coordinator role such
 as `premise-checker`) — or that dispatches no `agent()` at all — poses none
@@ -87,6 +93,7 @@ from coordinator_core._hook_envelope import deny, no_advisory, payload_of
 from coordinator_core._settings_home import settings_home
 from coordinator_core.ipc import register_op
 from coordinator_core.machine_profile import apply_guard_level
+from coordinator_core.ops.workflow_fire.receipt import fire_token_matches
 
 GUARD_NAME = "block-workflow-foreign-emission"
 
@@ -344,7 +351,12 @@ def _handler(params: dict, repo_root=None) -> dict:
         )
 
     session = _session_id(params)
-    if session is not None and recorded_session is not None and session != recorded_session:
+    if (
+        session is not None
+        and recorded_session is not None
+        and session != recorded_session
+        and not fire_token_matches(receipt, params.get("env"))
+    ):
         return _resolved_deny(
             _session_mismatch_reason(script, session, recorded_session),
         )

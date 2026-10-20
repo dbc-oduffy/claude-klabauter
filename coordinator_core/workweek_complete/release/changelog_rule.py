@@ -11,6 +11,7 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Sequence
 
+from coordinator_core.cadence.period_mode import week_window
 from coordinator_core.git.run import run_git
 from coordinator_core.ops.ceremony.records_query import query_records
 from coordinator_core.session.record_homes import home_dir
@@ -97,7 +98,8 @@ def evaluate(repo_root: Path | str, *, ledger_rows: Sequence[object]) -> RuleRes
         return _miss("backfill-not-run", week_start=week_start)
 
     blocks = _block_dates(week_dir)
-    outside = sorted(d for d in blocks if not close._in_week_window(date.fromisoformat(d), start))
+    window_start, window_end = week_window(start, start)
+    outside = sorted(d for d in blocks if not (window_start <= date.fromisoformat(d) < window_end))
     if outside:
         return _miss("block-outside-week", week_start=week_start, dates=outside[:MAX_LISTED])
 

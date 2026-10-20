@@ -83,3 +83,17 @@ def test_eligibility_follows_the_derivation_and_the_disposition(tmp_path):
     assert em_discharge_eligible(raw) is True
     assert em_discharge_eligible({**raw, "disposition": "coded"}) is False
     assert em_discharge_eligible({**raw, "writes": ["a.cpp"]}) is False
+
+
+def test_row_blocked_on_the_workflow_tool_is_excluded_em_performed(tmp_path):
+    rows = (
+        "- id: W1\n  title: fire\n  change_kind: code-edit\n  surface: pkg/a.py\n"
+        "  writes:\n    - pkg/a.py\n  agent_type: coordinator:executor\n"
+        "  blocked_on:\n    capability: Workflow tool\n    probe: 'ToolSearch select:Workflow'\n"
+        "  body: |\n    Fire the workflow.\n"
+    )
+    exclusions: list = []
+    assert read_spine(_plan(tmp_path, rows), exclusions=exclusions) == []
+    (entry,) = exclusions
+    assert (entry["id"], entry["reason"]) == ("W1", "em-performed")
+    assert "Workflow tool" in entry["detail"]

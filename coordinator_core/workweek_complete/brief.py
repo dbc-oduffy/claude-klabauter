@@ -73,10 +73,25 @@ window, no back-compat/dual-spelling transition.
 
 from __future__ import annotations
 
+import argparse
+import json
 import re
+import sys
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Optional
 
+from coordinator_core.cadence.period_mode import (
+    CATCH_UP_FLAG,
+    CONCLUDE_FLAG,
+    CONCLUDING_DIRECTIVES,
+    NARRATION_LEAD_PREFIX,
+    PERIOD_MODE_KEY,
+    PeriodMode,
+    local_now,
+    period_flag_error,
+    resolve_period_mode,
+)
 from coordinator_core.ceremony_common.tail import build_ceremony_close_tail
 from coordinator_core.contract.decision_object.envelope import (
     build_envelope,
@@ -132,6 +147,12 @@ CONSUMES_MANIFEST: tuple[str, ...] = (
 
 
 _CEREMONY_NAME = "workweek-complete"
+
+#: Id prefix of the per-missed-week archive directives a `catch_up` brief emits in place of
+#: `d_step13_archive_close`; `step_costs.json` carries one row under the same key.
+CATCH_UP_ARCHIVE_PREFIX = "d_step13_catch_up_archive"
+
+_WEEK_STARTING_RE = re.compile(r"\*\*Week starting:\*\*[ \t]*(\d{4}-\d{2}-\d{2})")
 
 #: Stored VERBATIM in the grant record's `note` (write_tier_u_grant never
 #: normalizes it). Names the ceremony's Tier-U consumers so an auditor
@@ -193,9 +214,61 @@ def _doc_verify_evidence(path: str, findings: list[dict[str, Any]]) -> str:
     return f"{path}: {len(findings)} finding(s) -- {rendered}"
 
 
+def _catch_up_archive_directive(week_start: str, *, move_priorities: bool) -> dict[str, Any]:
+    week_end = (date.fromisoformat(week_start) + timedelta(days=6)).isoformat()
+    args = [
+        "archive",
+        "--week-only",
+        "--week-starting",
+        week_start,
+        "--week-ending",
+        week_end,
+        "--version",
+        "none",
+        "--merge-sha",
+        "none",
+        "--no-push",
+    ]
+    if move_priorities:
+        args.append("--move-priorities")
+    return _directive(
+        f"{CATCH_UP_ARCHIVE_PREFIX}_{week_start}", cli="workweek-complete-close", args=args
+    )
+
+
+def _to_catch_up(
+    directives: list[dict[str, Any]], period: PeriodMode, week_anchor: Optional[date]
+) -> list[dict[str, Any]]:
+    """Rewrites the concluding-mode list for a `catch_up` run: Step 1b stops at the last missed
+    week's end, `d_step13_archive_close` becomes one `--week-only` archive per missed week, and
+    every id in `CONCLUDING_DIRECTIVES` is absent (never self-skipping)."""
+    absent = set(CONCLUDING_DIRECTIVES[_CEREMONY_NAME])
+    if period.missed:
+        through = date.fromisoformat(period.missed[-1]) + timedelta(days=6)
+    else:
+        through = date.fromisoformat(period.in_progress) - timedelta(days=1)
+    anchor_iso = week_anchor.isoformat() if week_anchor is not None else None
+    out: list[dict[str, Any]] = []
+    for entry in directives:
+        if entry["id"] == "d_step1b_backfill_changelog_gaps":
+            entry = {**entry, "args": ["--through", through.isoformat()]}
+        if entry["id"] == "d_step13_archive_close":
+            out.extend(
+                _catch_up_archive_directive(week, move_priorities=week == anchor_iso)
+                for week in period.missed
+            )
+            continue
+        if entry["id"] in absent:
+            continue
+        out.append(entry)
+    return out
+
+
 def _build_directives(
     doc_verify_findings_by_doc: Optional[dict[str, list[dict[str, Any]]]] = None,
     repo_root: Optional[str] = _ROOT_UNSET,
+    period: Optional[PeriodMode] = None,
+    week_anchor: Optional[date] = None,
 ) -> list[dict[str, Any]]:
     """Tier-1 (mechanical, no open question) directive entries — one per
     collapsed workweek-complete.md step: 1a/1b/2/3.5/4-counts/
@@ -398,6 +471,8 @@ def _build_directives(
             args=["revoke", "--only-ceremony", _CEREMONY_NAME],
         ),
     ]
+    if period is not None and period.mode == "catch_up":
+        directives = _to_catch_up(directives, period, week_anchor)
     # `hard_block` is metadata only — the halt contract in apply.py does not
     # read it; it exists so the skill-body render (C6) can preserve
     # hard-block-vs-advisory granularity per AC9/C8 (see C4's census note on
@@ -434,6 +509,7 @@ def _build_directives(
 def _build_judgment_points(
     doc_verify_findings_by_doc: Optional[dict[str, list[dict[str, Any]]]] = None,
     version_recommendation: Optional[dict[str, str]] = None,
+    catch_up: bool = False,
 ) -> list[dict[str, Any]]:
     """Tier-2 (judgment, recommendation required) and Tier-3 (your-call, no
     recommendation) judgment-point entries.
@@ -670,6 +746,9 @@ def _build_judgment_points(
             round_trip="terminal",
         ),
     ] + doc_verify_points
+    if catch_up:
+        absent = set(CONCLUDING_DIRECTIVES[_CEREMONY_NAME])
+        points = [point for point in points if point.get("id") not in absent]
     return points
 
 
@@ -685,19 +764,108 @@ def _reported_narration(reported_points: list[dict[str, Any]]) -> str:
     return " ".join(lines)
 
 
+def _read_week_anchor(repo_root: Optional[str]) -> Optional[date]:
+    """The dated `Week starting:` of HEADER.md, or `None` (no repo, no file, or the unset sentinel)."""
+    if not repo_root:
+        return None
+    try:
+        text = (Path(repo_root) / "state" / "week-changelog" / "HEADER.md").read_text(
+            encoding="utf-8"
+        )
+    except OSError:
+        return None
+    m = _WEEK_STARTING_RE.search(text)
+    if not m:
+        return None
+    try:
+        return date.fromisoformat(m.group(1))
+    except ValueError:
+        return None
+
+
+def _archived_weeks(repo_root: Optional[str]) -> list[str]:
+    if not repo_root:
+        return []
+    root = Path(repo_root) / "archive" / "week-changelogs"
+    try:
+        return [p.name for p in root.iterdir() if p.is_dir()]
+    except OSError:
+        return []
+
+
+def _resolve_week_period(
+    repo_root: Optional[str],
+    now_local: datetime,
+    *,
+    catch_up: bool,
+    conclude: bool,
+) -> tuple[PeriodMode, Optional[date]]:
+    """The week's mode and its anchor. A missed week is one from HEADER's `Week starting:` up to
+    the in-progress week with no `archive/week-changelogs/<start>/`. No dated anchor means no
+    period arithmetic is possible: an unflagged run keeps the full concluding ceremony."""
+    anchor = _read_week_anchor(repo_root)
+    explicit = "catch_up" if catch_up else "conclude" if conclude else None
+    if anchor is None:
+        if explicit is None:
+            return (
+                PeriodMode(
+                    "conclude",
+                    "auto-clock",
+                    now_local.date().isoformat(),
+                    (),
+                    "no dated Week starting in HEADER.md; concluding ceremony kept",
+                ),
+                None,
+            )
+        anchor = now_local.date()
+    period = resolve_period_mode(
+        "week", now_local, explicit, week_anchor=anchor, concluded=_archived_weeks(repo_root)
+    )
+    return period, anchor
+
+
+def _catch_up_narration_lead(period: PeriodMode) -> str:
+    missed = ", ".join(period.missed) or "no missed weeks"
+    lead = f"{NARRATION_LEAD_PREFIX}{missed} backfilled; {period.in_progress} left open."
+    if period.source == "auto-clock":
+        lead += (
+            f" Resolved by the clock ({period.reason}); pass {CONCLUDE_FLAG} to close and "
+            "release the current week."
+        )
+    return lead
+
+
 def brief(
-    *, decisions: Optional[dict[str, Any]] = None, env: Optional[dict[str, str]] = None
+    *,
+    decisions: Optional[dict[str, Any]] = None,
+    env: Optional[dict[str, str]] = None,
+    catch_up: bool = False,
+    conclude: bool = False,
+    now_local: Optional[datetime] = None,
 ) -> tuple[int, dict[str, Any]]:
+    conflict = period_flag_error(catch_up=catch_up, conclude=conclude)
+    if conflict is not None:
+        return int(WorkweekExitCode.USAGE), {"error": conflict}
     try:
         resolve_operator_config(env=env)
     except Exception as exc:  # noqa: BLE001 - mirrors workday_complete.brief's own backstop
         return int(WorkweekExitCode.TRANSPORT_FAIL), {"error": str(exc)}
 
     inputs = compute_brief_inputs()
-    directives = _build_directives(inputs.doc_verify_findings_by_doc, inputs.repo_root)
+    period, week_anchor = _resolve_week_period(
+        inputs.repo_root,
+        now_local if now_local is not None else local_now(),
+        catch_up=catch_up,
+        conclude=conclude,
+    )
+    in_catch_up = period.mode == "catch_up"
+    directives = _build_directives(
+        inputs.doc_verify_findings_by_doc, inputs.repo_root, period, week_anchor
+    )
     all_judgment_points = _build_judgment_points(
         inputs.doc_verify_findings_by_doc,
         inputs.version_recommendation,
+        catch_up=in_catch_up,
     )
 
     recommendation_carrying = [
@@ -717,6 +885,8 @@ def brief(
     reported_narration = _reported_narration(reported_points)
     if reported_narration:
         narration = f"{narration} {reported_narration}"
+    if in_catch_up:
+        narration = f"{_catch_up_narration_lead(period)} {narration}"
 
     envelope = build_envelope(
         artifact={"kind": "ceremony", "name": "workweek-complete"},
@@ -729,13 +899,31 @@ def brief(
         next_move="resolve open judgment_points, then dispatch apply()",
     )
     emit(envelope)
+    envelope[PERIOD_MODE_KEY] = period.to_dict()
     return int(WorkweekExitCode.SUCCESS), envelope
 
 
 def main(argv: list[str]) -> int:
-    import json
+    parser = argparse.ArgumentParser(prog="workweek-complete-assemble brief", add_help=False)
+    parser.add_argument(CATCH_UP_FLAG, dest="catch_up", action="store_true")
+    parser.add_argument(CONCLUDE_FLAG, dest="conclude", action="store_true")
+    parser.add_argument("--only", dest="only_mode", action="store_true")
+    parser.add_argument("--for-date", dest="for_date", default=None)
+    try:
+        args, _unknown = parser.parse_known_args(argv)
+    except SystemExit as exc:
+        return int(exc.code) if exc.code is not None else int(WorkweekExitCode.USAGE)
+    refusal = period_flag_error(
+        catch_up=args.catch_up,
+        conclude=args.conclude,
+        only_mode=args.only_mode,
+        for_date=args.for_date,
+    )
+    if refusal is not None:
+        print(f"workweek-complete-brief: {refusal}", file=sys.stderr)
+        return int(WorkweekExitCode.USAGE)
 
-    exit_code, envelope = brief()
+    exit_code, envelope = brief(catch_up=args.catch_up, conclude=args.conclude)
     print(json.dumps(envelope, indent=2, sort_keys=True))
     return exit_code
 

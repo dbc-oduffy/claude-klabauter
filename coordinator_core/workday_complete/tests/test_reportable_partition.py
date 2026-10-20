@@ -1,6 +1,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+
 from coordinator_core.contract.decision_object.judgment import partition_reportable
 from coordinator_core.ops.requirement_register import StallReport
 from coordinator_core.workday_complete import brief as wc_brief
@@ -103,8 +105,26 @@ def test_brief_end_to_end_keeps_action_class_points_in_judgment_points(monkeypat
         "_compute_dirty_tree_verdict",
         lambda: {"ambiguous": False, "evidence": "synthetic: clean"},
     )
-    exit_code, envelope = wc_brief.brief(decisions={})
+    exit_code, envelope = wc_brief.brief(decisions={}, now_local=datetime(2026, 10, 20, 18, 0))
     assert exit_code == 0
     jp_ids = {p["id"] for p in envelope["judgment_points"]}
     assert _KNOWN_ACTION_CLASS_IDS <= jp_ids
     assert "point(s) gate nothing on this run and are reported, not asked" not in envelope["narration"]
+
+
+def test_catch_up_reduced_set_partitions_with_no_dangling_resolves():
+    directives = wc_brief._build_directives(
+        {}, _NONEMPTY_OPEN_DAY_GOALS, _DIRTY_TREE, catch_up=True
+    )
+    points = wc_brief._build_judgment_points(_NONEMPTY_OPEN_DAY_GOALS, _DIRTY_TREE, catch_up=True)
+    asked, reported = partition_reportable(points, directives)
+    assert reported == []
+    assert {p["id"] for p in asked} == {
+        "jp_step2_5_dirty_tree_ambiguous",
+        "jp_step3_5_backfill_cap",
+        "jp_step4e_health_ledger_new_rows",
+    }
+    directive_ids = {d["id"] for d in directives}
+    for point in points:
+        for disposition in point.get("dispositions") or []:
+            assert set(disposition.get("resolves") or []) <= directive_ids, point["id"]

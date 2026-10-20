@@ -3,7 +3,8 @@
 The table is a literal tuple of directive records (`build_directive` shape; `op` or `inproc`
 replaces `cli` for those kinds) beside a literal mapping of run fields. `steps_for` converts
 each through `contract.step_from_directive`; nothing else builds a step. Gates read the tree
-and the caller's inputs only: no spawn.
+and the caller's inputs only: no spawn. The one exception is `catchup_gap_detect`, an inproc
+step that spends a single `git log` only when the archive listing leaves a candidate day.
 """
 from __future__ import annotations
 
@@ -11,6 +12,7 @@ import datetime as _dt
 import functools
 import json
 import os
+import subprocess
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -46,6 +48,95 @@ def _op(id_: str, op: str, params: str, detail: str) -> dict[str, Any]:
 
 def _inproc(id_: str, target: str, args: list[str], detail: str) -> dict[str, Any]:
     return _swap_key("inproc", build_directive(id_, target, args, detail))
+
+
+CATCH_UP_STEP = "catchup-gap-detect"
+CATCH_UP_WINDOW_DAYS = 14
+SYNTHESIZED_BACKFILL_MARKER = "(synthesized backfill)"
+
+
+def _day_prefixes(directory: Path) -> dict[str, list[Path]]:
+    """`<day>` -> the `.md` files of `directory` named `<day>*.md`; empty when it cannot be listed."""
+    out: dict[str, list[Path]] = {}
+    try:
+        names = os.listdir(directory)
+    except OSError:
+        return out
+    for name in names:
+        if name.endswith(".md") and len(name) >= 10:
+            out.setdefault(name[:10], []).append(directory / name)
+    return out
+
+
+def _is_synthesized(path: Path) -> bool:
+    try:
+        return SYNTHESIZED_BACKFILL_MARKER in path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+
+
+def _concluded_days(root: Path) -> set[str]:
+    """Days with BOTH a curated week-changelog block (live or archived) and a daily summary."""
+    changelog = _day_prefixes(root / "state" / "week-changelog")
+    archive = root / "archive" / "week-changelogs"
+    try:
+        weeks = [archive / n for n in os.listdir(archive)]
+    except OSError:
+        weeks = []
+    for week in weeks:
+        for day, paths in _day_prefixes(week).items():
+            changelog.setdefault(day, []).extend(paths)
+    summaries = _day_prefixes(root / "archive" / "daily-summaries")
+    return {
+        day for day, paths in changelog.items()
+        if day in summaries and any(not _is_synthesized(p) for p in paths)
+    }
+
+
+def _commit_days(root: Path, first: _dt.date) -> set[str]:
+    """Host-local calendar days with a non-merge commit on `main` or `HEAD` since `first`; one `git log`."""
+    after = (first - _dt.timedelta(days=1)).isoformat() + "T23:59:59"
+    try:
+        res = subprocess.run(
+            ["git", "-C", str(root), "log", "--no-merges", "--format=%ct", f"--after={after}",
+             "--branches=main", "HEAD"],
+            capture_output=True, text=True, check=False, timeout=10,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return set()
+    if res.returncode != 0:
+        return set()
+    days: set[str] = set()
+    for line in res.stdout.split():
+        try:
+            days.add(_dt.datetime.fromtimestamp(int(line)).date().isoformat())
+        except (ValueError, OverflowError, OSError):
+            continue
+    return days
+
+
+def catchup_gap_detect(repo_root: Path) -> tuple[int, str]:
+    """One line naming past local days with commits and no concluded wrap; silent when there are none.
+
+    Lists the last `CATCH_UP_WINDOW_DAYS` days before today against the archive (zero spawns) and
+    spends one `git log` only when a candidate remains. A day whose commits sit only on an unmerged
+    work branch is missed: the in-process `workday-complete` scan still reaches it.
+    """
+    from coordinator_core.daily_day import local_day
+
+    root = Path(repo_root)
+    today = _dt.date.fromisoformat(local_day(str(root)))
+    window = [(today - _dt.timedelta(days=n)).isoformat() for n in range(CATCH_UP_WINDOW_DAYS, 0, -1)]
+    concluded = _concluded_days(root)
+    candidates = [d for d in window if d not in concluded]
+    if not candidates:
+        return 0, ""
+    committed = _commit_days(root, _dt.date.fromisoformat(candidates[0]))
+    gaps = [d for d in candidates if d in committed]
+    if not gaps:
+        return 0, ""
+    return 0, f"- Catch-up: {len(gaps)} past day(s) with commits and no concluded wrap: {', '.join(gaps)}"
 
 
 def touch_weekly_marker(repo_root: Path) -> tuple[int, str]:
@@ -144,6 +235,8 @@ STEP_TABLE: tuple[dict[str, Any], ...] = (
     _op("fresh-commit-delta", "freshness.commit_delta", "{}",
         "Steps 2, 3, 3.5: doc, test and bug-sweep commit deltas."),
     _cli("blast-radius", "tier-last-run", ["blast-radius"], "Step 3.7."),
+    _inproc(CATCH_UP_STEP, f"{__name__}:catchup_gap_detect", [],
+            "Past days with commits and no concluded wrap; the run dispatches one workday-complete --catch-up."),
     _cli("weekly-orphan-branch-sweep", "orphan-branch-sweep",
          ["--format", "text", "--severity-min", "warning"], "Weekly: orphan branches."),
     _cli("weekly-draft-plan-aging", "draft-plan-aging", ["docs/plans"], "Weekly: stale draft plans."),
@@ -230,6 +323,7 @@ RUN_FIELDS: Mapping[str, Mapping[str, Any]] = {
     "sentinel-check-fixture-sync": {"stage": "sentinels", "heading": "Addon Health"},
     "fresh-commit-delta": {"stage": "freshness", "heading": "Context Freshness"},
     "blast-radius": {"stage": "freshness", "heading": "Blast Radius"},
+    CATCH_UP_STEP: {"stage": "catch-up", "heading": "Context Freshness"},
     "weekly-orphan-branch-sweep": {"stage": "weekly", "heading": "Orphan Sweep", "gate": "weekly"},
     "weekly-draft-plan-aging": {"stage": "weekly", "heading": "Weekly", "gate": "weekly+plans"},
     "weekly-check-harvest-debt": {"stage": "weekly", "heading": "Weekly", "gate": "harvest"},

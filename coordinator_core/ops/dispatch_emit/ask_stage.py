@@ -384,10 +384,14 @@ def _memo_draft_steps(
     owed: Sequence[OwedRow],
     raw_by_id: Mapping[str, Mapping],
     intent: str,
+    staged: Sequence[ManifestRow] = (),
 ) -> tuple[list[OwedRow], list[ManifestRow]]:
     """Does the outbox hold the draft each owed `memo-send` row's send needs? One dispatched draft
     step per row whose draft is absent and whose receiver is named; the row stays owed for the EM's
-    send either way, its detail saying why no step was staged. No subagent sends."""
+    send either way, its detail saying why no step was staged. No subagent sends.
+
+    The step inherits the owed row's `depends_on` edges that name a `staged` row, and sits one wave
+    after the latest of them: the draft carries content those rows produce."""
     from coordinator_core.ops.dispatch_emit.spine_read import memo_draft_fields
     from coordinator_core.session.machinery_paths import LEGACY_MEMO_OUTBOX_RELDIR, MEMO_OUTBOX_RELDIR
 
@@ -407,6 +411,7 @@ def _memo_draft_steps(
         if (root / draft_rel).is_file() or (root / LEGACY_MEMO_OUTBOX_RELDIR / f"{slug}.md").is_file():
             out_owed.append(o)
             continue
+        deps, wave = _staged_dependencies(raw, staged)
         step_id = f"{o.id}-memo-draft"
         brief = run_dir / "briefs" / f"{step_id}.md"
         body = raw.get("brief") or raw.get("body") or ""
@@ -426,11 +431,23 @@ def _memo_draft_steps(
                 model=resolve_agent_model(_EXECUTOR_AGENT_TYPE, None),
                 brief_path=_rel(root, brief),
                 writes=(draft_rel,),
-                wave=0,
+                wave=wave,
+                deps=deps,
             )
         )
         out_owed.append(o)
     return out_owed, steps
+
+
+def _staged_dependencies(raw: Mapping, staged: Sequence[ManifestRow]) -> tuple[tuple[str, ...], int]:
+    """The ids `raw.depends_on` names among `staged`, and the wave one past the latest of them (0 for none)."""
+    waves = {r.id: r.wave for r in staged}
+    ids: list[str] = []
+    for edge in raw.get("depends_on") or ():
+        chunk = edge.get("chunk") if isinstance(edge, Mapping) else edge
+        if isinstance(chunk, str) and chunk in waves and chunk not in ids:
+            ids.append(chunk)
+    return tuple(ids), (max(waves[i] for i in ids) + 1 if ids else 0)
 
 
 def _group_rows(
@@ -674,7 +691,7 @@ def stage(
             )
 
     manifest_rows, row_groups = _group_rows(manifest_rows, brief_sizes, raw_by_id)
-    owed, draft_rows = _memo_draft_steps(root, run_dir, owed, raw_by_id, intent)
+    owed, draft_rows = _memo_draft_steps(root, run_dir, owed, raw_by_id, intent, manifest_rows)
     manifest_rows.extend(draft_rows)
     fanout = FanoutCost(
         units=len(manifest_rows),

@@ -23,6 +23,7 @@ from typing import Any, Callable, Mapping, Sequence
 
 import yaml
 
+from coordinator_core.daily_day import local_day
 from coordinator_core.contract.decision_object.judgment import build_disposition, build_judgment_point
 from coordinator_core.ceremony_common.run import decide, receipt
 from coordinator_core.ceremony_common.run.contract import Decision, StepSpec
@@ -114,10 +115,14 @@ def header_state(repo_root: Path) -> dict[str, Any] | None:
     except OSError:
         return None
     week = _date_in("Week starting", text)
+    released = re.search(r"^\*\*Prior week released:\*\*[ \t]*(.*)$", text, re.MULTILINE)
     return {
         "week_starting": week,
         "last_start": _date_in("Last /workweek-start", text),
         "unset": week is None and header.UNSET_SENTINEL in text,
+        "missed_weeks": list(header.missed_weeks(Path(repo_root), local_day(str(repo_root)))),
+        "release_recorded": bool(released and "(none recorded)" not in released.group(1)
+                                 and released.group(1).strip()),
     }
 
 
@@ -162,21 +167,22 @@ def _write_fragment(repo_root: Path, *, sid: str, priorities: list[list[str]]) -
 
 
 def _reset(repo_root: Path, *, today: str) -> tuple[int, str]:
-    prior = header.reset_week(Path(repo_root), today)
-    return 0, f"archived week {prior}"
+    archived = header.reset_week(Path(repo_root), today)
+    return 0, f"archived week {', '.join(archived)}" if archived else "archived no week"
 
 
 def _start_week(repo_root: Path, *, today: str) -> tuple[int, str]:
     """HEADER carries the unset sentinel (a complete already archived): set the week, archive nothing."""
+    start = header.current_week_start(Path(repo_root), today)
     path = Path(repo_root) / header.WEEK_DIR / "HEADER.md"
     lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
     for i, line in enumerate(lines):
         if header._WEEK_STARTING_RE.match(line):
-            lines[i] = f"**Week starting:** {today}\n"
+            lines[i] = f"**Week starting:** {start}\n"
             break
     header._write(path, "".join(lines))
     header.update_in_place(Path(repo_root), today)
-    return 0, f"week starts {today}"
+    return 0, f"week starts {start}"
 
 
 def _update(repo_root: Path, *, today: str) -> tuple[int, str]:
@@ -389,13 +395,24 @@ def _priorities_point(
     return point
 
 
+def _missed_week_note(state: Mapping[str, Any]) -> str:
+    """Names the missed weeks; adds the catch-up pointer when no release is recorded for them."""
+    missed = state.get("missed_weeks") or []
+    if not missed:
+        return ""
+    note = f" | missed weeks: {', '.join(missed)}"
+    if not state.get("release_recorded"):
+        note += " | no release record: run /workweek-complete --catch-up"
+    return note
+
+
 def _marker_point(state: Mapping[str, Any]) -> dict[str, Any]:
     point = build_judgment_point(
         None,
         id=MARKER_POINT,
         question="Does HEADER.md start a new week or update in place?",
         dispositions=[build_disposition("reset_week"), build_disposition("update_in_place")],
-        evidence=f"HEADER state: {json.dumps(state, sort_keys=True)}",
+        evidence=f"HEADER state: {json.dumps(state, sort_keys=True)}{_missed_week_note(state)}",
         reason="recommendation-forbidden",
     )
     point["header"] = dict(state)

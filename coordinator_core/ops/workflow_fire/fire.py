@@ -109,6 +109,7 @@ from pathlib import Path
 from typing import Optional
 
 from coordinator_core.git.repo_root import show_toplevel
+from coordinator_core.ops.workflow_fire.receipt import FIRE_TOKEN_ENV, stamp_fire_ownership
 from coordinator_core.session.core import sessions_dir
 from coordinator_core.warm import skew
 from coordinator_core.warm.engine_root import current_engine_clone
@@ -731,7 +732,7 @@ _LOG_SCAN_WINDOW_BYTES = 64 * 1024
 #: and re-stamped -- which is how a record settled by an earlier version
 #: picks up a field that version never wrote, without a migration pass and
 #: without re-reading its log on every subsequent sweep.
-_ANNOTATION_VERSION = 3
+_ANNOTATION_VERSION = 4
 
 _STALENESS_NOTE = (
     "`state`, `exit_code` and `outcome` are only valid as of `status_checked_at` -- "
@@ -812,8 +813,35 @@ def _terminal_envelope(text: str) -> Optional[dict]:
     return None
 
 
+_NOT_ENDED_BASIS = "the run has not been observed to end"
+
+#: Substring the foreign-emission guard's refusals share ("... -- refusing to fire.").
+_GUARD_REFUSAL_QUOTE = "refusing to fire"
+
+
+def _denial_reason(envelope: Optional[dict]) -> Optional[str]:
+    """Why the driver was refused, from its own result envelope, else None.
+
+    A tool in ``permission_denials`` (a hook deny lands there), or the guard's refusal quoted in
+    the envelope's ``result`` text (first matching line only, not the whole narration).
+    """
+    if not envelope:
+        return None
+    parts = []
+    denials = envelope.get("permission_denials")
+    if isinstance(denials, list):
+        names = sorted({str(d.get("tool_name")) for d in denials if isinstance(d, dict) and d.get("tool_name")})
+        if names:
+            parts.append("permission denied for " + ", ".join(names))
+    result = envelope.get("result")
+    if isinstance(result, str) and _GUARD_REFUSAL_QUOTE in result:
+        quote = next((ln.strip() for ln in result.splitlines() if _GUARD_REFUSAL_QUOTE in ln), "")
+        parts.append(f"guard refusal quoted: {quote[:300]}")
+    return "; ".join(parts) or None
+
+
 def _classify_outcome(record: dict) -> tuple:
-    """Classify a fire as ``clean`` / ``failed`` / ``truncated`` / ``unknown``
+    """Classify a fire as ``clean`` / ``failed`` / ``denied`` / ``truncated`` / ``unknown``
     from the child's own log, returning ``(outcome, basis, driver_session_id,
     failure_subtype)``.
 
@@ -840,12 +868,15 @@ def _classify_outcome(record: dict) -> tuple:
     recovered (or, for the subtype, when the envelope reported no error).
     """
     if record.get("state") != "exited":
-        return "unknown", "the run has not been observed to end", None, None
+        return "unknown", _NOT_ENDED_BASIS, None, None
     text = _read_log_window(record.get("log_path", ""))
     if text is None:
         return "unknown", "the child's log could not be read", None, None
     envelope = _terminal_envelope(text)
     session_id = (envelope or {}).get("session_id")
+    denial = _denial_reason(envelope)
+    if denial:
+        return "denied", f"the driver was refused: {denial}", session_id, None
     if _has_truncation_banner(text):
         return (
             "truncated",
@@ -899,8 +930,12 @@ def _annotate_record(record: dict) -> dict:
     # not yet been observed to end stays unsettled, which is the case that
     # must keep re-checking.
     outcome_now = annotated.get("outcome")
-    settled = outcome_now in ("clean", "failed", "truncated") or (
-        outcome_now == "unknown" and annotated.get("state") == "exited"
+    # An ``unknown`` computed while the run was live is NOT settled once the record reads
+    # ``exited``: the transition must classify from the log, else it stays unknown forever.
+    settled = outcome_now in ("clean", "failed", "truncated", "denied") or (
+        outcome_now == "unknown"
+        and annotated.get("state") == "exited"
+        and annotated.get("outcome_basis") != _NOT_ENDED_BASIS
     )
     current = annotated.get("_annotation_version") == _ANNOTATION_VERSION
     if not (settled and current):
@@ -1130,10 +1165,18 @@ def fire_workflow(
         prompt=prompt, session_id=session_id,
     )
 
+    # The child is a new session; the token (its session id is unknowable before spawn) is what
+    # lets the foreign-emission guard recognise it. Stamped before spawn: the child's first act is
+    # the Workflow call.
+    fire_token = uuid.uuid4().hex
+    stamp_fire_ownership(script, fire_id, fire_token)
+    child_env = build_fire_env()
+    child_env[FIRE_TOKEN_ENV] = fire_token
+
     popen_kwargs: dict = {
         "stdin": subprocess.DEVNULL,
         "close_fds": True,
-        "env": build_fire_env(),
+        "env": child_env,
     }
     if sys.platform == "win32":
         popen_kwargs["creationflags"] = _CREATE_NO_WINDOW | _CREATE_NEW_PROCESS_GROUP

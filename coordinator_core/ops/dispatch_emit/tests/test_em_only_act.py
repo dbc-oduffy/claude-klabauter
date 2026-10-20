@@ -77,3 +77,15 @@ def test_powershell_backtick_continuation_in_fence():
     body = "```powershell\npwsh -File scripts/build-plugin.ps1 `\n  -EngineVersion 5.8\n```\n"
     span = forbidden_sole_act(_row(body, writes=[]))
     assert span is not None and "build-plugin.ps1" in span
+
+
+def test_blocked_on_em_only_capability_is_em_performed():
+    for cap in ("Workflow tool", "the workflow tool (EM session only)", "Agent tool", "SendMessage"):
+        raw = _row("Do it.", writes=["a.py"], blocked_on={"capability": cap, "probe": "x"})
+        assert row_is_em_performed(raw) is True, cap
+
+
+def test_blocked_on_an_ordinary_capability_stays_agent():
+    raw = _row("Do it.", writes=["a.py"], blocked_on={"capability": "docker daemon", "probe": "docker ps"})
+    assert row_is_em_performed(raw) is False
+    assert row_is_em_performed(_row("Do it.", writes=["a.py"], blocked_on="Workflow")) is False

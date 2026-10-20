@@ -10,7 +10,7 @@ from collections.abc import Iterable, Mapping, Sequence
 CONTRACT = "path-level"
 ROUTES = ("withhold", "peer-commits", "release")
 
-_WITHHOLD_CALL = "workflow.revise run_id={run_id} withhold_paths=[{{path, reason}}], then re-fire."
+WITHHOLD_CALL = "workflow.revise run_id={run_id} withhold_paths=[{{path, reason}}], then re-fire."
 _PEER_COMMITS_CALL = "Wait for the peer to finish, or have it commit the path, then re-fire."
 _RELEASE_CALL = "session-claim-cli release-artifact artifact <path>"
 
@@ -28,7 +28,7 @@ def refusal(holds: Iterable[tuple[str, str]], run_id: str) -> tuple[str, dict]:
     pairs = list(holds)
     ordered = sorted(set(pairs))
     held = "; ".join(f"{p} held by {s}" for p, s in ordered)
-    withhold = _WITHHOLD_CALL.format(run_id=run_id)
+    withhold = WITHHOLD_CALL.format(run_id=run_id)
     message = (
         f"{held}. {CONTRACT}: a peer-held path lands whole or not at all. "
         f"{_PEER_COMMITS_CALL} The holder frees a touch claim with `{_RELEASE_CALL}`. "

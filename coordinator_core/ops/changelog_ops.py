@@ -64,6 +64,7 @@ import tempfile
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+from coordinator_core.daily_day import local_day
 from coordinator_core.frontmatter.schema_validate import parse_frontmatter
 from coordinator_core.git.correction_note import parse_note
 from coordinator_core.git.repo_root import git_common_dir
@@ -706,12 +707,24 @@ def _git_log_for_date(repo_path: str, date: str, next_date: str) -> str:
         return ""
 
 
+def _is_iso_date(value: object) -> bool:
+    """True for a calendar-valid YYYY-MM-DD string; shape alone admits '9999-99-99'."""
+    if not isinstance(value, str) or not re.match(r"^\d{4}-\d{2}-\d{2}$", value):
+        return False
+    try:
+        datetime.date.fromisoformat(value)
+    except ValueError:
+        return False
+    return True
+
+
 def backfill_gaps(
     *,
     repo_root: Path,
     host: Optional[str] = None,
     today_override: Optional[str] = None,
     dry_run: bool = False,
+    through: Optional[str] = None,
 ) -> dict:
     """Backfill synthesized daily changelog blocks for any date gap since WEEK_START.
 
@@ -722,7 +735,10 @@ def backfill_gaps(
     Params:
         repo_root: git common_dir (main_worktree_root derives the worktree).
         host: machine/host name override; defaults to COORDINATOR_MACHINE env or hostname.
-        today_override: date override for 'today' (YYYY-MM-DD); defaults to current UTC date.
+        today_override: date override for 'today' (YYYY-MM-DD); defaults to the coordinator local day
+            (`daily_day.local_day`).
+        through: last day (YYYY-MM-DD) this backfill may write; the loop bound is
+            min(today, through). Absent: bounded by today alone.
         dry_run: when True, compute the same {backfilled, skipped} result WITHOUT
             writing anything to disk (no `_atomic_write`, no `declare_write`).
             Added for cross-repo/inbox/2026-08-11-example-retrieval-repo-em-backfill-
@@ -733,7 +749,7 @@ def backfill_gaps(
         {backfilled: [str, ...], skipped: [str, ...]}
 
     This pure function trusts its arguments;
-    `today_override`-shape validation (unbounded loop toward
+    `today_override`/`through`-shape validation (unbounded loop toward
     `datetime.date.max` otherwise, one git-log subprocess per iteration)
     lives only in `_backfill_gaps_handler`. A caller reaching this function
     directly does NOT get that DoS guard for free.
@@ -758,7 +774,8 @@ def backfill_gaps(
         return {"backfilled": [], "skipped": [], "message": "no Week starting: in HEADER.md"}
 
     week_start = m.group(1)
-    today = today_override or _today_utc()
+    today = today_override or local_day(str(worktree))
+    last_day = min(today, through) if through else today
     resolved_host = (
         host
         or os.environ.get("COORDINATOR_MACHINE", "").strip()
@@ -772,7 +789,7 @@ def backfill_gaps(
     skipped: List[str] = []
 
     d = week_start
-    while d <= today:
+    while d <= last_day:
         next_d = _next_day(d)
         if not _has_daily_file(d, today, resolved_host, week_changelog_dir):
             git_body = _git_log_for_date(str(worktree), d, next_d)
@@ -802,7 +819,8 @@ async def _backfill_gaps_handler(
     Optional params:
         host (str) — machine/host name. Defaults to COORDINATOR_MACHINE env or hostname.
                      Must be the calling session's machine (preserve legacy attribution).
-        today (str, YYYY-MM-DD) — override for 'today'; defaults to current UTC date.
+        today (str, YYYY-MM-DD) — override for 'today'; defaults to the coordinator local day.
+        through (str, YYYY-MM-DD) — last day the backfill may write; default: today.
 
     Returns:
         {backfilled: [str, ...], skipped: [str, ...]}
@@ -826,21 +844,13 @@ async def _backfill_gaps_handler(
     # datetime.date.max, spawning a git-log subprocess per iteration, before
     # _next_day finally raises. Calendar-validate via date.fromisoformat to reject
     # this before it ever reaches the loop.
-    if today_override is not None:
-        if not re.match(r"^\d{4}-\d{2}-\d{2}$", today_override):
+    through = params.get("through")
+    for label, value in (("today", today_override), ("through", through)):
+        if value is not None and not _is_iso_date(value):
             return {
                 "backfilled": [],
                 "skipped": [],
-                "error": f"backfill_gaps: 'today' param is not a valid YYYY-MM-DD date: {today_override!r}",
-            }
-        try:
-            datetime.date.fromisoformat(today_override)
-        except ValueError:
-            print(f"skip: _backfill_gaps_handler: datetime.date.fromisoformat(today_override) failed: {sys.exc_info()[1]}", file=sys.stderr)
-            return {
-                "backfilled": [],
-                "skipped": [],
-                "error": f"backfill_gaps: 'today' param is not a valid YYYY-MM-DD date: {today_override!r}",
+                "error": f"backfill_gaps: '{label}' param is not a valid YYYY-MM-DD date: {value!r}",
             }
 
     # Require explicit host to prevent silent attribution flip to
@@ -874,6 +884,7 @@ async def _backfill_gaps_handler(
             repo_root=repo_root,
             host=host,
             today_override=today_override,
+            through=through,
         )
     except Exception as exc:  # advisory — never abort the caller
         logger.warning("changelog.backfill_gaps: advisory error (non-fatal): %s", exc)
@@ -2499,7 +2510,8 @@ def main(argv: List[str]) -> int:
     `backfill_gaps()` this calls directly).
 
     Usage (unchanged surface — zero caller repoints):
-        backfill-week-changelog-gaps.sh [repo-root]
+        backfill-week-changelog-gaps.sh [repo-root] [--dry-run] [--through YYYY-MM-DD]
+        --through bounds the last day written (malformed: exit 2, stderr).
         NOTE: the optional [repo-root] positional is accepted but IGNORED —
         matches the legacy/facade contract exactly (repo root is always
         resolved from $PWD via git, never from argv).
@@ -2546,6 +2558,18 @@ def main(argv: List[str]) -> int:
         print(main.__doc__)
         return 0
     dry_run = "--dry-run" in argv
+    through: Optional[str] = None
+    for i, tok in enumerate(argv):
+        if tok == "--through":
+            through = argv[i + 1] if i + 1 < len(argv) else ""
+        elif tok.startswith("--through="):
+            through = tok.partition("=")[2]
+    if through is not None and not _is_iso_date(through):
+        print(
+            f"backfill-week-changelog-gaps: 'through' is not a valid YYYY-MM-DD date: {through!r}",
+            file=sys.stderr,
+        )
+        return 2
     # every other positional (including the legacy [repo-root]) stays
     # accepted-but-ignored, per legacy/facade contract
     cwd = os.getcwd()
@@ -2562,7 +2586,7 @@ def main(argv: List[str]) -> int:
     host = compute_machine()
 
     try:
-        result = backfill_gaps(repo_root=common_dir, host=host, dry_run=dry_run)
+        result = backfill_gaps(repo_root=common_dir, host=host, dry_run=dry_run, through=through)
     except Exception as exc:  # advisory — never fail the caller (DR-216 D2 legacy parity)
         logger.warning("backfill_gaps CLI: advisory error (non-fatal): %s", exc)
         result = {"backfilled": [], "skipped": [], "error": str(exc)}

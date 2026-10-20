@@ -4086,7 +4086,9 @@ def _run_row_helper_js(
         "    const ids = Object.keys(_heldBy);\n"
         "    if (!ids.length) return null;\n"
         "    const by = [...new Set(ids.map((i) => _heldBy[i]))];\n"
-        "    return 'dependents unstarted: ' + ids.join(', ') + ' (held by ' + by.join(', ') + ')';\n"
+        "    const why = by.filter((h) => _chunkReason[h] && !(h in _heldBy)).map((h) => h + ': ' + _chunkReason[h]);\n"
+        "    return 'dependents unstarted: ' + ids.join(', ') + ' (held by ' + by.join(', ') + ')' "
+        "+ (why.length ? '; ' + why.join('; ') : '');\n"
         "  }\n"
         "  function _owedReleases(owed, id) {\n"
         "    const m = /^gate-blocker: needs-dependent: *([^ \\\\\"]+)/.exec(owed);\n"
@@ -5667,6 +5669,11 @@ def compose_script(
         run_base_sha=_run_base_marker() if runtime_base else (run_base_sha or ""),
         falsifier=falsifier,
         prompt_head=_BRIEF_PRECEDENCE_CLAUSE
+        + (
+            _REPO_ANCHOR_LINE.format(root=_runtime_root_marker()) + " "
+            if plan_context is not None and plan_context.repo_root
+            else ""
+        )
         + _judge_engine_clause(
             plan_path, plan_text, repo_root if repo_root is not None else _REPO_ROOT,
             judge_register, excluded_rows,

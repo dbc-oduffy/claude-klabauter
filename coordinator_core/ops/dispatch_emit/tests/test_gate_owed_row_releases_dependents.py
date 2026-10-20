@@ -73,4 +73,7 @@ def test_gate_words_in_prose_do_not_release():
     out = _go("PARTIAL: report.md because the gate-blocker: guard-denied happened")
     assert out["calls"] == ["A"]
     assert out["owed"] == {} and out["incomplete"] == ["A"]
-    assert out["reason"] == "dependents unstarted: B, C (held by A, B)"
+    assert out["reason"] == (
+        "dependents unstarted: B, C (held by A, B); "
+        "A: report.md because the gate-blocker: guard-denied happened"
+    )

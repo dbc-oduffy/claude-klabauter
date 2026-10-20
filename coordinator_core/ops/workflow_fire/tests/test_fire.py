@@ -905,3 +905,54 @@ def test_child_that_stays_alive_reports_pid_and_log_path(repo, script, monkeypat
 
 def test_startup_liveness_window_stays_inside_the_brightline():
     assert fire._LIVENESS_POLL_INTERVAL_S * fire._LIVENESS_POLL_ATTEMPTS <= 0.3 + 1e-9
+
+
+# ---------------------------------------------------------------------------
+# fire ownership token + denied outcome
+# ---------------------------------------------------------------------------
+
+def test_fire_stamps_receipt_and_passes_the_token_to_the_child(repo, script, monkeypatch):
+    from coordinator_core.ops.workflow_fire.receipt import FIRE_TOKEN_ENV, fire_token_digest
+
+    receipt_path = Path(str(script) + ".emitted.json")
+    receipt_path.write_text(json.dumps({"sha256": "x", "session_id": "emitter"}), encoding="utf-8")
+    _patch_plugin_dir(monkeypatch)
+    monkeypatch.setattr(fire.subprocess, "Popen", lambda *a, **k: _FakePopen(*a, **k))
+    monkeypatch.setattr(fire.time, "sleep", lambda *_: None)
+
+    record = fire.fire_workflow(str(script), cwd=str(repo))
+
+    token = _FakePopen._instances[0].kwargs["env"][FIRE_TOKEN_ENV]
+    stamped = json.loads(receipt_path.read_text(encoding="utf-8"))["fire"]
+    assert stamped == {"fire_id": record["fire_id"], "token_sha256": fire_token_digest(token)}
+    assert token not in receipt_path.read_text(encoding="utf-8")
+
+
+_DENIED_ENVELOPE = json.dumps({
+    "type": "result", "subtype": "success", "is_error": False, "session_id": "child",
+    "permission_denials": [{"tool_name": "Workflow", "tool_input": {}}],
+    "result": "Blocked: p.workflow.mjs was emitted by a DIFFERENT session -- refusing to fire.",
+}) + "\n"
+
+
+def test_a_permission_denial_in_the_envelope_is_outcome_denied_with_the_reason(repo):
+    refreshed = fire._refresh_record_state(_exited_record(repo, log_text=_DENIED_ENVELOPE))
+
+    assert refreshed["outcome"] == "denied"
+    assert "Workflow" in refreshed["outcome_basis"]
+    assert "refusing to fire" in refreshed["outcome_basis"]
+    assert refreshed["driver_session_id"] == "child"
+
+
+def test_a_guard_quote_without_a_denial_entry_is_still_denied(repo):
+    env = json.dumps({"type": "result", "subtype": "success", "is_error": False,
+                      "permission_denials": [], "result": "x\nfoo -- refusing to fire.\n"})
+    assert fire._refresh_record_state(_exited_record(repo, log_text=env + "\n"))["outcome"] == "denied"
+
+
+def test_unknown_computed_while_running_is_reclassified_once_exited(repo):
+    live = _exited_record(
+        repo, log_text=_DENIED_ENVELOPE, outcome="unknown",
+        outcome_basis=fire._NOT_ENDED_BASIS, _annotation_version=fire._ANNOTATION_VERSION,
+    )
+    assert fire._refresh_record_state(live)["outcome"] == "denied"

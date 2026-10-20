@@ -9,6 +9,7 @@ from __future__ import annotations
 import dataclasses
 import datetime as _dt
 import json
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
@@ -32,6 +33,9 @@ INBOX_STEP = "memo-inbox-blitz-assemble"
 NOMINATION_STEP = "groupem-nomination-who"
 FRESHNESS_STEP = "fresh-commit-delta"
 ALIGNMENT_STEPS = ("priority-whats-next", "triage-query-completions")
+
+CATCH_UP_ARGV = ("workday-complete", "--catch-up")
+_DAY_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
 
 PHASE_ONE_LAST_STAGE = "freshness"
 POST_BRIEFING_STAGES = FINISH_STAGES[FINISH_STAGES.index("briefing") + 1 :]
@@ -175,6 +179,15 @@ def agent_groups(
             "id": "inbox", "phase": 1, "agent": "coordinator:executor", "ruling_agent": "coordinator:apm",
             "inputs": {"supersession_candidates": inbox.get("supersession_candidates") or []},
             "entries": entries,
+        })
+    gap = _latest(ledger_rows, manifest.CATCH_UP_STEP)
+    days = _DAY_RE.findall(_raw(gap)) if gap is not None and gap["status"] == "ran" else []
+    if days:
+        groups.append({
+            "id": "backfill", "phase": 2, "agent": None, "ruling_agent": None, "inputs": {},
+            "entries": [{
+                "key": "catch-up", "brief": None, "argv": list(CATCH_UP_ARGV), "inputs": {"days": days},
+            }],
         })
     ran = [
         s for s in ALIGNMENT_STEPS

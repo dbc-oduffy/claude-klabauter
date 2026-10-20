@@ -122,6 +122,7 @@ from coordinator_core.ops.dirty_tree_gate import parse_porcelain_paths
 from coordinator_core.session import scope as session_scope
 from coordinator_core.session.core import resolve_session_id
 from coordinator_core.workstream_complete import directives_commit_tail
+from coordinator_core.cadence.period_mode import CATCH_UP_FLAG, CONCLUDE_FLAG, period_flag_error
 from coordinator_core.workweek_complete.brief import (
     CONSUMES_MANIFEST,
     _resolve_repo_root_for_doc_staleness,
@@ -566,12 +567,20 @@ def _run_workweek_commit_tail(
     return report
 
 
-def apply(*, decisions: Optional[dict[str, Any]] = None) -> tuple[int, dict[str, Any]]:
+def apply(
+    *,
+    decisions: Optional[dict[str, Any]] = None,
+    catch_up: bool = False,
+    conclude: bool = False,
+) -> tuple[int, dict[str, Any]]:
     """`apply()` — recomputes the brief in-process (never trusts a
     caller-supplied decision object) and executes every execution-ready
     `directives[]` entry per the halt contract. `decisions` is the EM-
     resolved `{judgment_point_id: {disposition, ...}}` map — omitted
     entries leave their gated directives blocked, not auto-fired.
+
+    `catch_up`/`conclude` are threaded into the recompute so the executed list is the brief's:
+    under catch-up no concluding directive exists to run.
 
     Constructs a fresh composition budget (never module-level — see
     `telemetry.composition_record`'s own PER-CALL FACTORY note) and flushes
@@ -582,7 +591,8 @@ def apply(*, decisions: Optional[dict[str, Any]] = None) -> tuple[int, dict[str,
     outcome = "directive_failed"
     exit_label = None
     try:
-        brief_exit_code, envelope = brief(decisions=decisions)
+        period_kwargs = {"catch_up": catch_up, "conclude": conclude} if catch_up or conclude else {}
+        brief_exit_code, envelope = brief(decisions=decisions, **period_kwargs)
         if brief_exit_code != 0:
             transport_fail_report = {
                 "error": envelope.get("error", "brief() did not resolve an actionable plan"),
@@ -646,6 +656,8 @@ def apply(*, decisions: Optional[dict[str, Any]] = None) -> tuple[int, dict[str,
 
 def main(argv: list[str]) -> int:
     decisions: Optional[dict[str, Any]] = None
+    catch_up = False
+    conclude = False
     conflict = detect_conflicting_payload_channels(argv)
     if conflict is not None:
         print(f"workweek-complete-apply: {conflict}", file=sys.stderr)
@@ -659,11 +671,22 @@ def main(argv: list[str]) -> int:
                 return int(WorkweekApplyExitCode.TRANSPORT_FAIL)
             decisions = payload.value
             i += payload.consumed
+        elif tok == CATCH_UP_FLAG:
+            catch_up = True
+            i += 1
+        elif tok == CONCLUDE_FLAG:
+            conclude = True
+            i += 1
         else:
             print(f"workweek-complete-apply: unrecognized argument {tok!r}", file=sys.stderr)
             return int(WorkweekApplyExitCode.TRANSPORT_FAIL)
 
-    exit_code, report = apply(decisions=decisions)
+    refusal = period_flag_error(catch_up=catch_up, conclude=conclude)
+    if refusal is not None:
+        print(f"workweek-complete-apply: {refusal}", file=sys.stderr)
+        return int(WorkweekApplyExitCode.TRANSPORT_FAIL)
+
+    exit_code, report = apply(decisions=decisions, catch_up=catch_up, conclude=conclude)
     print(json.dumps(report, indent=2, sort_keys=True))
     return exit_code
 

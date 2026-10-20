@@ -156,7 +156,7 @@ import yaml
 from coordinator_core.frontmatter.body_blocks import LocateStatus, locate_fenced_block
 from coordinator_core.frontmatter.primitives import split_frontmatter
 from coordinator_core.frontmatter.schema_validate import check_plan_tasks_source
-from coordinator_core.ops.dispatch_emit.em_only_act import forbidden_sole_act, row_is_em_performed
+from coordinator_core.ops.dispatch_emit.em_only_act import em_only_capability, forbidden_sole_act, row_is_em_performed
 from coordinator_core.ops.plan_tasks_render import RowsResult, load_rows
 
 
@@ -1299,9 +1299,9 @@ def read_spine(
             else None
         )
         forbidden_span = forbidden_sole_act(raw)
+        em_capability = em_only_capability(raw)
         em_performed = (
-            raw.get("performer") == "em"
-            or forbidden_span is not None
+            row_is_em_performed(raw)
             or _is_memo_send_row(raw)
             or inbound_close is not None
         )
@@ -1427,11 +1427,14 @@ def read_spine(
                     "(verb resolve, plan_path, id, disposition coded, disposition_ref <sha>)",
                 )
             elif em_performed:
-                _lead = (
-                    f"EM: its only act is an agent-forbidden command (`{forbidden_span}`); perform it"
-                    if forbidden_span is not None and raw.get("performer") != "em"
-                    else "EM: perform it"
-                )
+                if raw.get("performer") == "em":
+                    _lead = "EM: perform it"
+                elif forbidden_span is not None:
+                    _lead = f"EM: its only act is an agent-forbidden command (`{forbidden_span}`); perform it"
+                elif em_capability is not None:
+                    _lead = f"EM: it is blocked on `{em_capability}`, which only the EM session has; perform it"
+                else:
+                    _lead = "EM: perform it"
                 _reason = (
                     "em-performed",
                     f"{_lead}, then run `coordinator-invoke plan.tasks.mutate` "

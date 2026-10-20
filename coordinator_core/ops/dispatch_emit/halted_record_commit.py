@@ -36,6 +36,8 @@ from coordinator_core.ops.dispatch_emit import review_edits, run_artifacts
 from coordinator_core.ops.warp_run_deliverable import record_sizing_rel
 from coordinator_core.ops.dispatch_emit.halted_run import write_halt_marker
 from coordinator_core.ops.dispatch_emit.ask_contract import (
+    HALT_DEPENDENTS_UNSTARTED,
+    HALT_REASON_FIELDS,
     HALT_PLAN_FIELD,
     HALTED_RECORD_PARAM,
     RECORD_DIR_ROOT,
@@ -148,6 +150,15 @@ def done_chunks(worktree_root: Path, params: dict) -> list:
                 continue
         out.append(chunk)
     return out
+
+
+def _held_reason(halted: dict) -> Optional[str]:
+    """The halt's first non-empty reason field, whitespace collapsed; None when it carries none."""
+    for field in HALT_REASON_FIELDS:
+        text = " ".join(str(halted.get(field) or "").split())
+        if text:
+            return text
+    return None
 
 
 def commit_halted_record(worktree_root: Path, repo_root: Path, params: dict) -> dict:
@@ -371,6 +382,7 @@ def _land(
             blocking=blocking if plan_rel else None,
             blocking_items=blocking_items if plan_rel else None,
             run_base_sha=run_base,
+            reason=_held_reason(halted) if halted["halted"] == HALT_DEPENDENTS_UNSTARTED else None,
         )
     raw_docs = params.get(run_artifacts.DOC_PATHS_PARAM)
     artifacts = within_handoffs_home(worktree_root, run_artifacts.candidate_paths(

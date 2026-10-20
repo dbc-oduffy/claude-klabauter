@@ -89,3 +89,19 @@ def test_draft_fields_refuse_a_bad_kind_and_a_missing_slug():
     assert memo_draft_fields({"surface": "pkg/a.py", "memo_to": "x"})[0] is None
     assert memo_draft_fields({"receipt": "../x", "memo_to": "x"})[0] is None
     assert memo_draft_fields({"receipt": "a b.md", "memo_to": "x"})[0] is None
+
+
+def test_draft_step_inherits_the_owed_rows_staged_dependency(tmp_path):
+    plan = _plan().replace(
+        "  writes: []\n  memo_to", "  writes: []\n  depends_on:\n    - chunk: C1\n      gate_kind: output-consumption-runtime\n  memo_to"
+    )
+    reply = _stage(tmp_path, plan)
+    code = next(r for r in reply["rows"] if r["id"] == "C1")
+    step = next(r for r in reply["rows"] if r["id"] == "M1-memo-draft")
+    assert step["deps"] == ["C1"]
+    assert step["wave"] == code["wave"] + 1
+
+
+def test_draft_step_without_dependencies_stays_at_wave_zero(tmp_path):
+    step = next(r for r in _stage(tmp_path, _plan())["rows"] if r["id"] == "M1-memo-draft")
+    assert (step["deps"], step["wave"]) == ([], 0)
