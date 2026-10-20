@@ -392,6 +392,14 @@ ALLOWLIST: dict[str, dict[str, object]] = {
         "reason": "ineligible: benchmark fixture seeding a throwaway repo; no claims exist",
         "confirmed": True,
     },
+    "benchmarks/commit_v2_terminal_shape_full_path.py::build_fixture": {
+        "reason": "ineligible: benchmark fixture seeding a throwaway repo; no claims exist",
+        "confirmed": True,
+    },
+    "benchmarks/halted_record_commit_full_path.py::build_incident_fixture": {
+        "reason": "ineligible: benchmark fixture seeding a throwaway repo; no claims exist",
+        "confirmed": True,
+    },
     "benchmarks/workstream_complete_brief_full_path.py::_build": {
         "reason": "ineligible: benchmark fixture seeding a throwaway repo; no claims exist",
         "confirmed": True,

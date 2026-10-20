@@ -350,3 +350,12 @@ def test_a_resumed_run_declares_again(repo, live):
     halted_run.write_halt_marker(record_dir(repo, "p1"), halted="criterion_not_met", sizing_rel=None)
     halted_run.mark_resumed(record_dir(repo, "p1"))
     assert _claims(repo, ["a.py"]) == {"a.py": [PEER]}
+
+
+def test_withheld_path_is_not_claimed(repo, live):
+    from coordinator_core.ops.dispatch_emit import run_withhold
+
+    _manifest(repo, "p1", writes=["a.py", "b.py"])
+    run_token.mint(repo, "p1", "s.mjs", session_id=PEER)
+    run_withhold.record(repo / "state/warp/p1", [{"path": "a.py", "reason": "handed off"}], "t")
+    assert _claims(repo, ["a.py", "b.py"]) == {"b.py": [PEER]}

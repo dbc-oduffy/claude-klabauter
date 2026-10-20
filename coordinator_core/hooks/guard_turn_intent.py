@@ -242,8 +242,8 @@ def _turn_intent_step(payload: dict, text: str) -> bool:
 
 @register_op("hooks.guard_turn_intent")
 def _handler(params: dict, repo_root=None) -> dict:
+    payload = payload_of(params)
     try:
-        payload = payload_of(params)
         if payload.get("agent_id"):
             return no_advisory()
         last_message = payload.get("last_assistant_message")

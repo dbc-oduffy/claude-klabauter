@@ -378,3 +378,17 @@ def test_op_dispatch_cold_path_carries_origin_worktree(tmp_path, monkeypatch):
     out = runner._dispatch_op(_op_step(), repo_root=tmp_path, run_dir=tmp_path, deadline_s=5.0)
     assert out.exit_code == 0
     assert seen["_origin_worktree"] == str(tmp_path)
+
+
+def test_failed_reason_prefers_the_drift_line_over_a_leading_ok_line():
+    outcome = ChildOutcome(
+        exit_code=1,
+        stdout="[ok] coordinator-claude: n/a by design\n[drift] example-game-repo: installed copy lags\n",
+    )
+    result = runner._result_from(_step("a"), outcome)
+    assert result.reason == "exit 1: [drift] example-game-repo: installed copy lags"
+
+
+def test_failed_reason_without_a_marker_line_keeps_the_first_line():
+    result = runner._result_from(_step("a"), ChildOutcome(exit_code=1, stdout="first\nsecond\n"))
+    assert result.reason == "exit 1: first"

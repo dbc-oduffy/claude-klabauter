@@ -93,8 +93,13 @@ def test_minted_token_commits_and_is_redeemed(repo):
 def test_a_token_the_guard_already_claimed_still_redeems_once(repo):
     token = run_token.mint(repo, "ask-1", "run.mjs")
     assert run_token.admits(repo, "ask-1", token, "run.mjs")
-    assert _call(repo, run_id="ask-1", run_token=token)["committed"] is True
-    assert _call(repo, run_id="ask-1", run_token=token)["refused"] == "run-token"
+    first = _call(repo, run_id="ask-1", run_token=token)
+    assert first["committed"] is True
+    head = _git(repo, "rev-parse", "HEAD")
+    second = _call(repo, run_id="ask-1", run_token=token)
+    assert second["committed"] is True and second["already_landed"] is True
+    assert second["sha"] == first["sha"] and second["refused"] is None
+    assert _git(repo, "rev-parse", "HEAD") == head
 
 
 def _claimed(repo: Path, run_id: str = "ask-1") -> Path:

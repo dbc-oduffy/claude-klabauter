@@ -274,3 +274,29 @@ def test_commit_v2_non_triggering_commit_carries_no_warning(tmp_path):
     result = _v2(root, "other.txt")
     assert result["committed"] is True
     assert not any("skill-weight" in w for w in result["warnings"])
+
+
+_LIMIT_RAISES = '''
+
+def limit_raises(proposed_baseline, base_baseline):
+    if base_baseline is None:
+        return []
+    old = base_baseline["fleet"]["resident_limit"]
+    new = proposed_baseline["fleet"]["resident_limit"]
+    return [f"limit-raise fleet.resident_limit: {old} B -> {new} B (+{new - old})"] if new > old else []
+'''
+
+
+def test_a_baseline_limit_raise_is_refused_and_a_lowering_admitted(tmp_path):
+    root = _doe_repo(tmp_path, fleet_limit=100_000)
+    _write(root, _ADMISSION_REL, _ADMISSION + _LIMIT_RAISES)
+    _git(["add", _ADMISSION_REL], root)
+    _git(["commit", "-q", "-m", "lock"], root)
+    before = _head(root)
+    raised = json.dumps({"fleet": {"resident_limit": 200_000}, "exceptions": {}})
+    result = _commit(root, _BASELINE_REL, raised)
+    assert not result.ok
+    assert "limit-raise fleet.resident_limit: 100000 B -> 200000 B (+100000)" in result.stderr
+    assert _head(root) == before
+    lowered = json.dumps({"fleet": {"resident_limit": 90_000}, "exceptions": {}})
+    assert _commit(root, _BASELINE_REL, lowered).ok

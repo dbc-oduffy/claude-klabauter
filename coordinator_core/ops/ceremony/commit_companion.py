@@ -81,8 +81,15 @@ def _differs_from_index(path: Path, entry: git_index.IndexIdentity) -> bool:
     ):
         return False
     data = path.read_bytes()
-    blob = hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest()
-    return blob != entry.sha
+    if _blob_sha(data) == entry.sha:
+        return False
+    # core.autocrlf=true (Windows default) indexes the LF form of a CRLF working file; an
+    # EOL-only difference is not a pending change, and no subprocess may ask git.
+    return _blob_sha(data.replace(b"\r\n", b"\n")) != entry.sha
+
+
+def _blob_sha(data: bytes) -> str:
+    return hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest()
 
 
 def own_left_behind(

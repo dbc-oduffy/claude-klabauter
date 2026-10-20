@@ -221,6 +221,7 @@ def test_the_peer_claim_text_names_withhold_paths_and_keeps_the_wait_clause(repo
     assert out["refused"] == "peer-claim"
     assert "withhold_paths" in out["error"] and f"run_id={RUN}" in out["error"]
     assert "Wait for the peer" in out["error"]
+    assert "session-claim-cli release-artifact artifact" in out["error"]
 
 
 def test_the_blob_drift_remedy_names_withhold_paths():

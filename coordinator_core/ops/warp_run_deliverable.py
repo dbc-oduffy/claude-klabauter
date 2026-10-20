@@ -201,6 +201,13 @@ def _manifest_declared(run_id: str, root: Path) -> tuple:
     )
 
 
+def _withheld_paths(root: Path, run_id: str) -> set:
+    """Normalized paths a run recorded in `withhold.jsonl`: it promised not to carry them."""
+    from coordinator_core.ops.dispatch_emit import run_withhold
+
+    return {n for n in (_norm(p) for p in run_withhold.read([record_dir(root, run_id)])) if n}
+
+
 def live_run_write_claims(
     repo_root: Path,
     paths: Iterable[str],
@@ -216,7 +223,7 @@ def live_run_write_claims(
     non-empty `session_id` differs from `exclude_session` and is `touch_record.session_live`.
     `exclude_run` skips that run id before any other test. `minted_before=(minted_at, run_id)`
     keeps only strictly senior runs. A path matches a declared path or sits under a declared
-    prefix. Returns None (contest unknown) when a live peer's declaration is unparseable and
+    prefix, unless the run recorded it with `workflow.revise withhold_paths`. Returns None (contest unknown) when a live peer's declaration is unparseable and
     yields no usable paths; {} when nothing is declared."""
     from coordinator_core.session import touch_record
 
@@ -244,7 +251,8 @@ def live_run_write_claims(
             logging.getLogger(__name__).warning("live run %s: unreadable write declaration", run_id)
             return None
         declared_set = set(declared)
-        for path in wanted:
+        withheld = _withheld_paths(root, run_id)
+        for path in wanted - withheld:
             if path in declared_set or any(path.startswith(pre + "/") or path == pre for pre in prefixes):
                 claims.setdefault(path, set()).add(sid)
     return {p: sorted(s) for p, s in claims.items()}

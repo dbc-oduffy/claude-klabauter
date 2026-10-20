@@ -641,6 +641,14 @@ _EXPECTED_CLAIM_INDEX_LOOKUP_CALL_SITES = frozenset(
             "coordinator_core/ops/dispatch_emit/reverify_delivery.py",
             "live_held_claims",
         ),
+        # Review-prep evidence: `foreign_claims` lists which changed paths a
+        # live peer still claims, for the reviewer's brief. Read-only, never
+        # refuses or narrows a commit. Added by fb059af8ab (2026-10-15); the
+        # inventory missed it until now.
+        (
+            "coordinator_core/ops/review_prep.py",
+            "foreign_claims",
+        ),
         # Explicit-pathspec contest read: returns {path: [peer_sid]} (or
         # None when unestablishable) for the caller to report; fails open.
         (

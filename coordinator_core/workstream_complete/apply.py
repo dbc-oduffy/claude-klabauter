@@ -1804,6 +1804,7 @@ def _run_close_commit_tail(
             report["not_landed"] = not_landed
         elif stage_paths:
             report["already_landed"] = True
+            report["already_satisfied"] = True
     return report
 
 

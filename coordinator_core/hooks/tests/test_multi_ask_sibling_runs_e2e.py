@@ -153,11 +153,8 @@ def test_slice_ledgers_union_to_the_parent_register_and_seed_no_verbatim(repo):
 
 @pytest.mark.parametrize(
     "asks",
-    [
-        [{"ask": "one", "writes": ["pkg"]}, {"ask": "two", "writes": ["pkg/x.py"]}],
-        [{"ask": "one", "writes": ["a.py"]}, {"ask": "two"}],
-    ],
-    ids=["overlapping", "no-hint"],
+    [[{"ask": "one", "writes": ["pkg"]}, {"ask": "two", "writes": ["pkg/x.py"]}]],
+    ids=["overlapping"],
 )
 def test_a_sequenced_slice_is_denied_until_the_predecessor_close_names_its_fire_call(repo, asks):
     reply = _reply_json(_submit(repo, {"asks": asks}))
@@ -177,6 +174,13 @@ def test_a_sequenced_slice_is_denied_until_the_predecessor_close_names_its_fire_
     allowed = _fire_slice(repo, parent.runs[1].slice_sizing)
     assert _hso(allowed)["permissionDecision"] == "allow", allowed
     assert _status(repo, parent.runs[1].run_id) == "running"
+
+
+def test_unhinted_siblings_run_in_parallel_with_no_after(repo):
+    env = _submit(repo, {"asks": [{"ask": "one", "writes": ["a.py"]}, {"ask": "two"}]})
+    reply = _reply_json(env)
+    assert all("after" not in r for r in reply["runs"])
+    assert [r.status for r in _parent(repo, reply["parent_id"]).runs] == ["ready", "ready"]
 
 
 def test_a_halted_predecessor_releases_no_successor(repo):

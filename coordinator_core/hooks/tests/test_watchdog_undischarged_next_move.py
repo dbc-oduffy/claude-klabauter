@@ -125,10 +125,8 @@ def test_stop_leg_blocks_at_default_posture(tmp_path) -> None:
         "transcript_path": str(tmp_path / "transcript.jsonl"),
     }
     result = _handler({"payload": stop_payload})
-    hso = result["hookSpecificOutput"]
-    assert hso["hookEventName"] == "Stop"
-    assert hso["permissionDecision"] == "deny"
-    assert "Invoke it now" in hso["permissionDecisionReason"]
+    assert result["decision"] == "block"
+    assert "Invoke it now" in result["reason"]
 
 
 def test_stop_leg_blocks_via_claude_home_from_payload_env(tmp_path) -> None:
@@ -161,10 +159,8 @@ def test_stop_leg_blocks_via_claude_home_from_payload_env(tmp_path) -> None:
         "env": {"CLAUDE_HOME": str(claude_home)},
     }
     result = _handler({"payload": stop_payload})
-    hso = result["hookSpecificOutput"]
-    assert hso["hookEventName"] == "Stop"
-    assert hso["permissionDecision"] == "deny"
-    assert "Invoke it now" in hso["permissionDecisionReason"]
+    assert result["decision"] == "block"
+    assert "Invoke it now" in result["reason"]
 
 
 def test_discharge_closes_the_obligation_before_stop_fires(tmp_path) -> None:

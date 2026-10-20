@@ -106,6 +106,19 @@ def _first_line(*texts: str) -> str:
     return ""
 
 
+_FAILING_MARKERS = ("[drift]", "[fail]")
+
+
+def _reason_line(stderr: str, stdout: str) -> str:
+    """The line that names a failed step: the first `[drift]`/`[fail]` line, else the first
+    non-blank line. A check's leading `[ok]` lines are not its failure."""
+    for text in (stderr, stdout):
+        for line in text.splitlines():
+            if line.strip().lower().startswith(_FAILING_MARKERS):
+                return line.strip()
+    return _first_line(stderr, stdout)
+
+
 def _warm_entrypoints() -> frozenset[str]:
     try:
         return frozenset(json.loads(_ALLOWLIST.read_text(encoding="utf-8")).get("entrypoints", ()))
@@ -290,7 +303,7 @@ def _result_from(step: StepSpec, outcome: ChildOutcome) -> StepResult:
     if outcome.reason == "deadline":
         status = "failed"
     elif status == "failed" and (not reason or reason == REASON_COLD):
-        reason = f"exit {outcome.exit_code}: {_first_line(outcome.stderr, outcome.stdout)}".rstrip(": ")
+        reason = f"exit {outcome.exit_code}: {_reason_line(outcome.stderr, outcome.stdout)}".rstrip(": ")
     return StepResult(
         id=step.id, status=status, reason=reason, exit_code=outcome.exit_code,
         process_ms=outcome.process_ms, spawns=outcome.spawns,

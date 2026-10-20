@@ -66,7 +66,8 @@ def _readers(reply):
     body = script.split("const common = ", 1)[1].split("\n};", 1)[0] + "\n}"
     common = json.loads(body)
     assert common["prompts"]["readers"].startswith("Read batch ")
-    return [item["slug"] for item in common["items"]["readers"]]
+    # Default grouping (fanout_cost.propose_groups) packs several batches into one leg, slug "b1+b2".
+    return [member for item in common["items"]["readers"] for member in item["slug"].split("+")]
 
 
 def test_only_batches_without_a_landed_result_are_re_emitted(repo):

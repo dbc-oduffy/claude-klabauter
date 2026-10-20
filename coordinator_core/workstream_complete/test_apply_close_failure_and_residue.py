@@ -115,6 +115,7 @@ def test_no_sha_commit_whose_stage_paths_match_head_is_an_idempotent_reclose(mon
     assert exit_code == int(EXIT.SUCCESS)
     assert report["failed"] == []
     assert report["close_commit"]["already_landed"] is True
+    assert report["close_commit"]["already_satisfied"] is True
     assert "not_landed" not in report["close_commit"]
 
 

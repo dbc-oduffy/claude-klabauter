@@ -6,6 +6,7 @@ import re
 
 from coordinator_core.ops._workflow_contract import _AGENT_CALL_SITE, _find_matching_paren, scrub
 from coordinator_core.ops.dispatch_emit import agent_sidecar as sc
+from coordinator_core.ops.dispatch_emit.tests.test_every_emitted_leg_names_its_sidecar import _expand_hoisted_prompts
 from coordinator_core.ops.dispatch_emit.tests.test_leg_register_ratchet import _ask, _ask_scripts
 
 #: Legs composed by emit.py or review_mint, not by ask_compose; their clause is C2's and C6's.
@@ -32,6 +33,7 @@ def test_every_ask_owned_call_carries_one_marker(tmp_path):
     seen = 0
     for script in _ask_scripts(tmp_path):
         for label, raw in _owned_calls(script):
+            raw = _expand_hoisted_prompts(raw, script)
             seen += 1
             n = raw.count(sc.SIDECAR_DIR_MARKER_PREFIX)
             assert n == 1, f"ask agent() {label!r}: {n} sidecar_dir markers"
@@ -49,7 +51,7 @@ def test_static_call_names_its_run_and_label_dir():
 def test_work_leg_uses_fire_time_label():
     script = _ask()
     prefix = sc.sidecar_dir("ask", _RUN_ID, "x")[: -len("x/")]
-    work = [raw for label, raw in _owned_calls(script) if label.startswith("work:")]
+    work = [_expand_hoisted_prompts(raw, script) for label, raw in _owned_calls(script) if label.startswith("work:")]
     assert work, "no work: leg composed"
     for raw in work:
         assert prefix in raw

@@ -174,3 +174,19 @@ def test_close_commit_carries_co_authored_by(tmp_path):
     assert result.commit_failed is False, result.diagnostics
     message = _commit_message(repo)
     assert "Co-Authored-By: Claude <noreply@anthropic.com>" in message
+
+
+def test_a_close_whose_paths_already_match_head_is_satisfied_not_failed(tmp_path):
+    repo = _init_repo(tmp_path)
+    result = _tail.run_close_commit(
+        repo,
+        session_id=_unique_session_id(),
+        subject="re-close with nothing new",
+        prose="",
+        stage_paths=["README.md"],
+        caller_paths={"README.md"},
+    )
+
+    assert result.commit_failed is False, result.diagnostics
+    assert result.committed_sha is None
+    assert any("nothing to commit" in d for d in result.diagnostics)

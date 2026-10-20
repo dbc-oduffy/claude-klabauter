@@ -275,6 +275,13 @@ def _skill_weight_leg(root, touched, changed, baseline_text_for):
         violations = admission.admission_violations(
             resident(proposed_sizes), resident(base_sizes), baseline
         )
+        # A DoE tree predating `limit_raises` has no lock to enforce.
+        limit_raises = getattr(admission, "limit_raises", None)
+        if limit_raises is not None:
+            head_entry = head_blobs(root, [_SW_BASELINE]).get(_SW_BASELINE)
+            base_text = None if head_entry is None else _blob_text(common_dir, head_entry[1])
+            base_baseline = None if base_text is None else json.loads(base_text)
+            violations = [*violations, *limit_raises(baseline, base_baseline)]
     except Exception as exc:  # noqa: BLE001 -- fail open, see module docstring.
         _LOG.warning("%s did not run this commit: %s", _SW_TAG, exc)
         return None, f"{_SW_TAG} check did not run: {exc.__class__.__name__}: {exc}"

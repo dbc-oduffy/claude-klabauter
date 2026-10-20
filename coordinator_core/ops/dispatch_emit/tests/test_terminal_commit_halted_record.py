@@ -51,8 +51,10 @@ def _write_record(root: Path, run_id: str, names=("ask.md", "pm-intent.md", "run
 
 
 def _dirty_elsewhere(root: Path) -> set:
-    (root / "docs" / "guide.md").write_text("edited\n", encoding="utf-8")
-    (root / "product.py").write_text("x = 2\n", encoding="utf-8")
+    # Edits change the file SIZE too: a same-size rewrite within one filesystem timestamp tick
+    # leaves git's stat cache looking clean (racy-git), so `git status` omits the file under load.
+    (root / "docs" / "guide.md").write_text("edited elsewhere\n", encoding="utf-8")
+    (root / "product.py").write_text("x = 2000\n", encoding="utf-8")
     (root / "state" / "sizings").mkdir(parents=True)
     (root / "state" / "sizings" / "x.yaml").write_text("a: 1\n", encoding="utf-8")
     _write_record(root, OTHER, ("ask.md",))

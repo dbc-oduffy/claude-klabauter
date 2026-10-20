@@ -103,7 +103,7 @@ def _tests_prompt(head_sha: str, plan_path: str, base: str, *, write_record: boo
     )
 
 #: The verifier has no Write tool; `record` persists its returned verdict.
-_NO_SIDECAR_NOTE = "Return the verdict as your structured result only; the engine records it. Write no sidecar."
+_NO_SIDECAR_NOTE = "Return the verdict as your structured result only; the engine records it. Write no verdict file; the sidecar dir is for run notes only."
 _DELIVERY_SIDECAR_AGENT_TYPE = "coordinator:delivery-verifier"
 
 

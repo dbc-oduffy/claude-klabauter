@@ -4866,7 +4866,9 @@ def _terminal_commit_inner(
         return _error(
             "live peer session(s) " + ", ".join(sids) + " hold write claims on path(s) this "
             "commit would carry: " + ", ".join(sorted({p for p, _s in peer_holds})) + ". "
-            "Wait for the peer to finish, or have it commit them, then re-fire, or leave them out: "
+            "Wait for the peer to finish, or have it commit them, then re-fire. The holder frees a "
+            "run declaration with workflow.revise withhold_paths, and a touch claim with "
+            "`session-claim-cli release-artifact artifact <path>`. Or leave them out: "
             + _WITHHOLD_REMEDY.format(run_id=_run_id_of(params, ask_run_dir, script_path_raw)),
             refused="peer-claim",
             peer_claims=[{"path": p, "session": s} for p, s in peer_holds],

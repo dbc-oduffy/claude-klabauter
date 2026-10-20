@@ -1216,7 +1216,12 @@ def run_close_commit(
     session should call `run_close_commit_and_release_claims`, not this
     function directly.
     """
-    from coordinator_core.git.commit import CommitRefused, FilterUnsupported, commit_paths
+    from coordinator_core.git.commit import (
+        CommitRefused,
+        FilterUnsupported,
+        NothingToCommit,
+        commit_paths,
+    )
     from coordinator_core.git.commit import hash_worktree_blobs_via_spawn
     from coordinator_core.git.commit_trailers import apply_missing_trailers
     from coordinator_core.ops.ceremony.commit_message import compose_message
@@ -1290,6 +1295,19 @@ def run_close_commit(
             message,
             deleted_paths=list(deleted_paths),
             blob_fallback=partial(hash_worktree_blobs_via_spawn, cwd=root),
+        )
+    except NothingToCommit as exc:
+        # Every path already matches HEAD: the close is satisfied, not failed. The caller
+        # (`apply._run_close_commit_tail`) tells a landed idempotent re-close from a still-dirty
+        # path by reading the stage paths' landing state.
+        return CommitTailOutcome(
+            committed_sha=None,
+            pushed=None,
+            push_status=PUSH_STATUS_NOT_ATTEMPTED,
+            commit_failed=False,
+            integrity_breach=False,
+            sha_unverified=False,
+            diagnostics=[*vanished_diagnostics, str(exc)],
         )
     except (CommitRefused, FilterUnsupported) as exc:
         return CommitTailOutcome(

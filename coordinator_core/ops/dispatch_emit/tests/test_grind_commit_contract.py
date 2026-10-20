@@ -180,6 +180,8 @@ def test_import_adds_no_non_stdlib_module():
         "coordinator_core.ops.dispatch_emit.grind_commit_contract",
         "coordinator_core._engine_landing",
         "coordinator_core.op_scopes",
+        "coordinator_core.session",
+        "coordinator_core.session.record_homes",
     }
     extra = [m for m in out if m not in allowed and not any(allowed_pkg == m for allowed_pkg in (
         "coordinator_core", "coordinator_core.ops", "coordinator_core.ops.dispatch_emit"))]

@@ -4,6 +4,7 @@ the test-runner's sidecar to the plan; neither is left to the agent."""
 from __future__ import annotations
 
 import json
+import re
 
 import pytest
 
@@ -25,9 +26,10 @@ def _script(**kw):
 
 
 def test_verifier_brief_forbids_a_sidecar_write_and_names_no_sidecar_path():
-    script = _script()
-    assert "Write no sidecar" in script
-    assert "sidecar_path" not in script
+    script = _script().replace("\\n", "\n")
+    assert "the engine records it. Write no verdict file" in script
+    assert "sidecar_dir: " in script
+    assert not re.search(r"^sidecar_path:\s*\S", script, re.M)
 
 
 def test_ident_carries_plan_path_for_the_record_op():

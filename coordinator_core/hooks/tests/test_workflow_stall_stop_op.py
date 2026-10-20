@@ -63,13 +63,13 @@ def _call(params):
 def test_op_blocks_on_stale_run(tmp_path, tdir):
     _stale_run(tmp_path, tdir)
     result = _call({"payload": {"session_id": SID, "transcript_path": "", "stop_hook_active": False}})
-    assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert result["decision"] == "block"
 
 
 def test_op_flat_params_also_block(tmp_path, tdir):
     _stale_run(tmp_path, tdir)
     result = _call({"session_id": SID, "transcript_path": "", "stop_hook_active": False})
-    assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert result["decision"] == "block"
 
 
 def test_op_chained_stop_downgrades_to_advisory(tmp_path, tdir):
@@ -130,8 +130,8 @@ def test_drive_root_new_dir_blocks_once(tmp_path, drive):
     sd._guard_drive_root_new_dir_handler(_drive_params(tmp_path))
     (drive / "stray").mkdir()
     res = sd._guard_drive_root_new_dir_handler(_drive_params(tmp_path))
-    assert res["hookSpecificOutput"]["permissionDecision"] == "deny"
-    assert "stray" in res["hookSpecificOutput"]["permissionDecisionReason"]
+    assert res["decision"] == "block"
+    assert "stray" in res["reason"]
     again = sd._guard_drive_root_new_dir_handler(_drive_params(tmp_path))
     assert not _blocked(again)
 
@@ -155,5 +155,5 @@ def test_drive_root_override_is_caller_keyed_not_ambient(tmp_path, drive, monkey
     (drive / "stray3").mkdir()
     monkeypatch.setenv("COORDINATOR_ALLOW_DRIVE_ROOT_NEW_DIR", "1")
     res = sd._guard_drive_root_new_dir_handler(_drive_params(tmp_path, env={"PATH": "x"}))
-    assert res["hookSpecificOutput"]["permissionDecision"] == "deny"
-    assert "stray3" in res["hookSpecificOutput"]["permissionDecisionReason"]
+    assert res["decision"] == "block"
+    assert "stray3" in res["reason"]
