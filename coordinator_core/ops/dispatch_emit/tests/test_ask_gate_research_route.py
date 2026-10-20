@@ -6,6 +6,7 @@ import pytest
 import yaml
 
 from coordinator_core.ops.dispatch_emit.ask_contract import RESEARCH_MIXED_REFUSAL
+from coordinator_core.ops._research_sizing import drop_research_block
 from coordinator_core.ops.dispatch_emit.ask_gate import gate
 from coordinator_core.warp_fire import fire_command
 
@@ -16,6 +17,7 @@ ROUTE = {"XS": "dispatch", "S": "spec-dispatch", "M": "plan", "L": "plan", "XL":
 
 @pytest.fixture
 def repo(tmp_path, monkeypatch):
+    (tmp_path / ".git").mkdir()
     (tmp_path / "state" / "sizings").mkdir(parents=True)
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("COORDINATOR_SESSION_ID", "11111111-2222-3333-4444-555555555555")
@@ -64,6 +66,17 @@ def test_research_plus_writes_is_refused_with_two_step_remedy(repo, tshirt):
     assert v.halt["reason"] == RESEARCH_MIXED_REFUSAL
     assert "/coordinator:research" in RESEARCH_MIXED_REFUSAL
     assert "engine-ask" not in RESEARCH_MIXED_REFUSAL
+    assert "research.close" in RESEARCH_MIXED_REFUSAL
+    assert "workflow.revise build_only=true" in RESEARCH_MIXED_REFUSAL
+
+
+@pytest.mark.parametrize("tshirt", ["XS", "S"])
+def test_dropped_research_block_arms_with_writes(repo, tshirt):
+    _put(repo, tshirt, RESEARCH)
+    assert drop_research_block(repo, REL) is not None
+    v = gate(repo, REL, writes=["a.py"])
+    assert v.halt is None
+    assert v.arm is not None
 
 
 def test_pure_research_with_empty_writes_is_not_mixed(repo):

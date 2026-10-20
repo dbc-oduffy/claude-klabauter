@@ -190,8 +190,9 @@ RESEARCH_CLASSIFY_CLAUSE = (
 RESEARCH_HANDBACK_ROUTE = "research"
 #: `ask_gate` refusal for a research sizing whose request carries `writes`.
 RESEARCH_MIXED_REFUSAL = (
-    "Research ask also names file writes. Submit the research ask alone to /coordinator:research, "
-    "then submit the build ask citing the research artifact."
+    "Research ask also names file writes. Submit the research ask alone to /coordinator:research. "
+    "Once research.close (with `sizing`) or `workflow.revise build_only=true` drops the sizing's "
+    "research block, the build ask fires."
 )
 ASSEMBLE_SCHEMA = {
     "type": "object",

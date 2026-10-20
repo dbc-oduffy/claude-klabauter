@@ -70,6 +70,7 @@ _PARAMS = (
     Field("out_of_scope", "str_list"),
     Field("withhold_paths", "list"),
     Field("credit_chunks", "list"),
+    Field("build_only", "bool"),
     Field("from", "str"),
 )
 #: Separator between a revision anchor's UTC stamp and the peer session that sent it.
@@ -733,7 +734,8 @@ def bind(
 def revise(
     repo_root: Path, run_id: str, *, verbatim: Optional[str] = None, all_of_pm_ask: Optional[bool] = None,
     out_of_scope: Sequence[str] = (), note: Optional[str] = None, sender: Optional[str] = None,
-    withhold_paths: Sequence = (), credit_chunks: Sequence = (),
+    withhold_paths: Sequence = (), credit_chunks: Sequence = (), build_only: bool = False,
+    outcome: Optional[dict] = None,
 ) -> tuple[Ledger, Path, Optional[str]]:
     """Append the EM's revision (and/or set the flag) on an emitted run: a register row when the
     run's sizing is bound, else a queued revision `bind` folds in. `note` is free text that is
@@ -752,6 +754,10 @@ def revise(
     `credit_chunks` (`[{chunk, evidence}]`, `run_credit.validate` before any write) marks stranded
     chunks complete: recorded to the run's `credit.jsonl`, same preconditions and effects as
     `withhold_paths`; the re-fired terminal commit re-grades the named chunks.
+    `build_only=True` rules the research half done or abandoned: it removes the bound sizing's `research`
+    block (`_research_sizing.drop_research_block`) so the ask gate stops reading it as a research sizing.
+    It needs an emitted run bound to a sizing (else it refuses and writes nothing), adds no row, and
+    alone satisfies the non-empty precondition; `outcome`, when given, receives `research_dropped`.
     Returns (ledger, run dir, the new row id or None)."""
     text = verbatim.strip() if isinstance(verbatim, str) else ""
     named = [str(i) for i in out_of_scope]
@@ -772,10 +778,13 @@ def revise(
             credit_entries = run_credit.validate(credit_chunks)
         except ValueError as exc:
             raise LedgerRefused(str(exc)) from exc
-    if not text and all_of_pm_ask is None and not has_note and not withheld_entries and not credit_entries:
+    if (
+        not text and all_of_pm_ask is None and not has_note and not withheld_entries and not credit_entries
+        and not build_only
+    ):
         raise LedgerRefused(
             "workflow.revise needs a non-empty verbatim, note, all_of_pm_ask, withhold_paths, "
-            "credit_chunks, or a combination"
+            "credit_chunks, build_only, or a combination"
         )
     if named and not text:
         raise LedgerRefused("out_of_scope needs a non-empty verbatim: the ruling carries its words")
@@ -785,7 +794,7 @@ def revise(
     dir_ = run_dir(root, run_id)
     run = read_run(dir_)
     if run is None:
-        if named or all_of_pm_ask is not None or withheld_entries or credit_entries:
+        if named or all_of_pm_ask is not None or withheld_entries or credit_entries or build_only:
             raise LedgerRefused(
                 f"no ledger-bearing run {run_id!r} under {RECORD_DIR_ROOT}: emit it first "
                 "(a held run takes only a verbatim revision)"
@@ -809,7 +818,20 @@ def revise(
         return queued, dir_, f"Q{len(queued.items)}"
     if named and not run.get("sizing_rel"):
         raise LedgerRefused("out_of_scope needs a bound sizing: the run has no register yet")
-    withhold = {"ids": named, "run_id": run_id, "verbatim": text} if named else None
+    if build_only and not run.get("sizing_rel"):
+        raise LedgerRefused(
+            "build_only needs a run bound to a sizing: close the research with research.close and `sizing`"
+        )
+    if build_only:
+        from coordinator_core.ops._research_sizing import ResearchSizingRefused, drop_research_block
+
+        try:
+            dropped = drop_research_block(root, run["sizing_rel"]) is not None
+        except ResearchSizingRefused as exc:
+            raise LedgerRefused(str(exc)) from exc
+        if outcome is not None:
+            outcome["research_dropped"] = dropped
+    withhold ={"ids": named, "run_id": run_id, "verbatim": text} if named else None
     if all_of_pm_ask is not None:
         run = {**run, "all_of_pm_ask": bool(all_of_pm_ask)}
         _write_run(dir_, run)
@@ -1100,7 +1122,8 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     `withhold.jsonl`; needs an emitted run, no sizing, adds no row; replied as `withhold_paths`),
     `credit_chunks` (list of `{chunk, evidence}`: stranded chunks the EM rules complete, recorded to
     the run's `credit.jsonl` for the re-fired terminal commit to re-grade; needs an emitted run, no
-    sizing, adds no row; replied as `credit_chunks`).
+    sizing, adds no row; replied as `credit_chunks`), `build_only` (bool: removes the bound sizing's
+    `research` block; needs an emitted run bound to a sizing; adds no row; replied as `research_dropped`).
 
     Appends a stamped revision row to the run's requirements (its sizing's requirement_register),
     which every later stage of the run reads at its start. Replies `{ok, run_id, item, items,
@@ -1117,9 +1140,10 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     if refusal is not None:
         return refusal
     root = main_worktree_root(Path(repo_root))
+    outcome: dict = {}
     try:
         ledger, dir_, added = revise(
-            root, params["run_id"], verbatim=params.get("verbatim"), all_of_pm_ask=params.get("all_of_pm_ask"),
+            root, params["run_id"], build_only=bool(params.get("build_only")), outcome=outcome, verbatim=params.get("verbatim"), all_of_pm_ask=params.get("all_of_pm_ask"),
             out_of_scope=params.get("out_of_scope") or (), note=params.get("note"),
             sender=params.get("from"), withhold_paths=params.get("withhold_paths") or (),
             credit_chunks=params.get("credit_chunks") or (),
@@ -1147,6 +1171,8 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         "ledger": (dir_ / LEDGER_VIEW_FILE).relative_to(root.resolve()).as_posix(),
         "run_live": live,
     }
+    if "research_dropped" in outcome:
+        out["research_dropped"] = outcome["research_dropped"]
     if params.get("withhold_paths"):
         from coordinator_core.ops.dispatch_emit import run_withhold
 

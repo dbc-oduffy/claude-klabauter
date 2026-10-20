@@ -13,7 +13,9 @@ Params: ``scratch_dir`` (absolute), ``tier`` (scouts|corpus|deep), ``run_id``,
 ``topic_slug`` (both safe single path segments), ``value_class`` (optional, in
 ``rc.VALUE_CLASSES``, default ``tier``), ``sizing`` (optional repo-relative path named in the
 record; it must exist on disk, else the close is refused before any copy or commit, and it
-lands in the same commit as the trail record), ``outputs`` (optional list of
+lands in the same commit as the trail record; the close removes its ``research`` block first
+(``_research_sizing.drop_research_block``) so the sizing reads as a build sizing, and the reply
+carries ``research_block_dropped``; a refused commit restores the pre-drop bytes), ``outputs`` (optional list of
 scratch-relative file paths; default is every regular file directly in scratch_dir and
 directly in each ``segment_dirs`` subdirectory), ``segment_dirs`` (optional safe single
 path segments: a multi-pipeline run writes every segment after the first under
@@ -60,7 +62,8 @@ Negative-spec:
   - Zero spawns on the clean path; one (``hash_worktree_blobs_via_spawn``) only on a
     CRLF-pinned path.
   - A missing output or a missing/escaping ``sizing`` is a structured refusal before any copy
-    or commit; the sizing rides the same single ``commit_paths`` call.
+    or commit; the sizing, minus its research block, rides the same single ``commit_paths`` call.
+  - A refused close leaves the sizing byte-identical.
 """
 
 from __future__ import annotations
@@ -92,6 +95,7 @@ from coordinator_core.ops import _research_contract as rc
 from coordinator_core.ops import _research_grounding
 from coordinator_core.ops import _research_trail
 from coordinator_core.ops._path_guard import contained_path, safe_id
+from coordinator_core.ops._research_sizing import ResearchSizingRefused, drop_research_block
 from coordinator_core.ops.fleet._common import main_worktree_root
 from coordinator_core.repo_relative_text import relativize_text
 
@@ -378,18 +382,34 @@ def _close_archived(
             )
     subject = f"research({topic_slug}): close {run_id}"
 
+    pre_drop: Optional[bytes] = None
+    if meta.get("sizing_rel"):
+        try:
+            pre_drop = drop_research_block(worktree, meta["sizing_rel"])
+        except ResearchSizingRefused as exc:
+            return _err(f"sizing research block not dropped: {exc}")
+
     # Trap: a retry after the extended trail was written but the commit refused finds equal bytes
     # and resolves the earlier close commit (same subject), leaving the extension uncommitted.
-    landed = trail_path.is_file() and not extend and all(dst.is_file() for _, dst in pairs)
+    # A drop that just changed the sizing is uncommitted work, so the run is not landed.
+    landed = (
+        pre_drop is None
+        and trail_path.is_file() and not extend and all(dst.is_file() for _, dst in pairs)
+    )
     sha = _landed_sha(worktree, subject) if landed else None
     if sha is None:
-        for src, dst in pairs:
-            if not dst.is_file():
-                dst.parent.mkdir(parents=True, exist_ok=True)
-                dst.write_bytes(payload[dst])
-        trail_path.parent.mkdir(parents=True, exist_ok=True)
-        if extend or not trail_path.is_file():
-            trail_path.write_bytes(trail_bytes)
+        try:
+            for src, dst in pairs:
+                if not dst.is_file():
+                    dst.parent.mkdir(parents=True, exist_ok=True)
+                    dst.write_bytes(payload[dst])
+            trail_path.parent.mkdir(parents=True, exist_ok=True)
+            if extend or not trail_path.is_file():
+                trail_path.write_bytes(trail_bytes)
+        except OSError as exc:
+            if pre_drop is not None:
+                (worktree / meta["sizing_rel"]).write_bytes(pre_drop)
+            return _err(f"cannot write the close outputs: {exc}")
         commit_rel = [*rel_paths, trail_rel]
         if meta.get("sizing_rel") and meta["sizing_rel"] not in commit_rel:
             commit_rel.append(meta["sizing_rel"])
@@ -407,11 +427,15 @@ def _close_archived(
         except NothingToCommit:
             sha = head_sha(worktree)
         except (CommitRefused, FilterUnsupported, IndexWriteError) as exc:
+            if pre_drop is not None:
+                (worktree / meta["sizing_rel"]).write_bytes(pre_drop)
             return _err(f"commit refused: {exc}", paths=commit_rel)
+    dropped = pre_drop is not None
     if local:
         return {
             "exit_code": 0,
             "committed": True,
+            "research_block_dropped": dropped,
             "sha": sha or "",
             "local_only": True,
             "destination": dest_dir.as_posix(),
@@ -424,7 +448,7 @@ def _close_archived(
     return _with_strays(
         {
             "exit_code": 0, "committed": True, "deliverable": True, "sha": sha or "",
-            "paths": rel_paths, "trail": trail_rel,
+            "paths": rel_paths, "trail": trail_rel, "research_block_dropped": dropped,
         },
         worktree, dest_dir, since,
     )

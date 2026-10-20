@@ -1585,7 +1585,7 @@ def compose_ask_script(
         else:
             b.append(
                 f"  const _sizingPathFor = (r) => REPO_ROOT + '/' + '{_sizings_prefix}' + "
-                f"{_lit(date.today().isoformat() + '-')} + _slugOf(r) + '.yaml';"
+                f"{_lit(date.today().isoformat() + '-')} + _slugOf(r) + '-' + _runId.split('-').pop() + '.yaml';"
             )
         # An agent's Bash tool folds stderr into stdout, so sizing-assemble's stderr notes trail the
         # JSON; the decision is the span from the first `{` to the last column-0 `}`. A compact
@@ -1740,10 +1740,10 @@ def compose_ask_script(
             "  if (!_halted && (_decision === null || typeof _decision !== 'object' "
             "|| typeof _decision.route !== 'string') && typeof _scouted.arm !== 'string' "
             "&& !(_scouted.halt && typeof _scouted.halt === 'object')) { _halted = { halted: "
-            f"{_lit(HALT_REFUSAL)}, reason: 'sizing-assemble did not run: the scout replied exit 0 but its stdout is "
+            f"{_lit(HALT_REFUSAL)}, reason: 'scout failure: sizing-assemble did not run: the scout replied exit 0 but its stdout is "
             "not a sizing-assemble decision, so the sizing file was never written; the gate, plan, stage, execute "
             "and review phases were skipped', "
-            "detail: [_scouted.stderr, _scouted.stdout].map((s) => String(s ?? '').trim())"
+            "detail: [_scouted.stdout, _scouted.stderr].map((s) => String(s ?? '').trim())"
             ".filter((s) => s).join('\\n').slice(0, 600), run_id: _runId }; }"
         )
         b.append(f"  const _pmExit = (_decision && _decision[{_lit(PM_EXIT_QUESTION_KEY)}]) || null;")

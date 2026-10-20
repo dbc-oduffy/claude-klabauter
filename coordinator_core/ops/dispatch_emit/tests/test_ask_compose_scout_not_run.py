@@ -72,7 +72,21 @@ def test_exit_zero_with_a_non_decision_stdout_halts_with_a_named_refusal(stdout,
     halted = _run(_decision_lines(script), setup, tmp_path)
     assert halted["halted"] == "refusal"
     assert "sizing-assemble did not run" in halted["reason"]
+    assert halted["reason"].startswith("scout failure:")
+    assert halted["detail"] == stdout.strip()
     assert halted["run_id"] == "run-1"
+
+
+@pytest.mark.spawns_process
+def test_the_scout_failure_detail_leads_with_stdout_over_stderr(tmp_path):
+    script = _compose()
+    setup = (
+        "let _halted = null; let _decision = null; const _runId = 'run-1';\n"
+        "const _scouted = { exit_code: 0, stdout: 'I could not run it', stderr: 'E'.repeat(700) };"
+    )
+    halted = _run(_decision_lines(script), setup, tmp_path)
+    assert halted["detail"].startswith("I could not run it\n")
+    assert len(halted["detail"]) == 600
 
 
 @pytest.mark.spawns_process

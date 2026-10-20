@@ -68,6 +68,16 @@ def test_sizing_path_prefix_is_emitted_verbatim():
     assert "const _sizingPath = _sizingPathFor(_scouted);" in script
 
 
+def test_raw_ask_sizing_path_is_run_unique_so_a_slug_collision_cannot_reattach():
+    line = next(ln for ln in _compose().splitlines() if "const _sizingPathFor" in ln)
+    assert "_slugOf(r) + '-' + _runId.split('-').pop() + '.yaml'" in line
+
+
+def test_caller_passed_sizing_still_reattaches_to_that_path():
+    script = _compose(prompt=None, sizing_rel="state/sizings/x.yaml")
+    assert "let _sizingRel = 'state/sizings/x.yaml';" in script
+
+
 def _scout_line(script):
     return next(ln for ln in script.splitlines() if "const _scouted" in ln)
 

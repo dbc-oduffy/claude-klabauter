@@ -650,3 +650,75 @@ def test_grounding_reclose_of_a_grounded_run_returns_the_landed_sha(repo, scratc
     again = _close(repo, scratch, "scouts", require_grounding=True)
     assert again["exit_code"] == 0 and again["sha"] == first["sha"], again
     assert _count(repo) == before
+
+
+_RESEARCH_SIZING = "size: S\nresearch:\n  class: corpus\nnote: keep\n"
+
+
+def _research_sizing(repo: Path, text: str = _RESEARCH_SIZING) -> Path:
+    p = _write_sizing(repo)
+    p.write_bytes(text.encode("utf-8"))
+    return p
+
+
+def test_a_close_drops_the_sizing_research_block_in_the_close_commit(repo, scratch):
+    p = _research_sizing(repo)
+    out = _close(repo, scratch, "corpus", outputs=["final.md"], sizing="state/sizings/x.yaml")
+    assert out["exit_code"] == 0 and out["research_block_dropped"] is True, out
+    assert "research" not in p.read_text() and "note: keep" in p.read_text()
+    assert "state/sizings/x.yaml" in _trail_files(repo)
+    assert _git(repo, "status", "--porcelain") == ""
+
+
+def test_a_sizing_with_no_block_reports_not_dropped(repo, scratch):
+    _write_sizing(repo)
+    out = _close(repo, scratch, "corpus", outputs=["final.md"], sizing="state/sizings/x.yaml")
+    assert out["exit_code"] == 0 and out["research_block_dropped"] is False, out
+
+
+def test_a_crlf_sizing_stays_crlf_after_the_drop(repo, scratch):
+    p = _research_sizing(repo, _RESEARCH_SIZING.replace("\n", "\r\n"))
+    out = _close(repo, scratch, "corpus", outputs=["final.md"], sizing="state/sizings/x.yaml")
+    assert out["research_block_dropped"] is True, out
+    raw = p.read_bytes()
+    assert b"research" not in raw and b"\r\n" in raw and b"\n" not in raw.replace(b"\r\n", b"")
+
+
+def test_a_refused_close_leaves_the_sizing_byte_identical(repo, scratch):
+    p = _research_sizing(repo)
+    before = p.read_bytes()
+    (scratch / "final.md").write_text("api_key = abcd1234efgh5678ijkl9012\n")
+    out = _close(repo, scratch, "corpus", outputs=["final.md"], sizing="state/sizings/x.yaml")
+    assert out["exit_code"] == 1, out
+    assert p.read_bytes() == before
+
+
+def test_a_refused_commit_restores_the_sizing(repo, scratch, monkeypatch):
+    from coordinator_core.git.commit import CommitRefused
+    from coordinator_core.ops import research_close
+
+    p = _research_sizing(repo)
+    before = p.read_bytes()
+
+    def boom(*a, **k):
+        raise CommitRefused("no")
+
+    monkeypatch.setattr(research_close, "commit_paths", boom)
+    out = _close(repo, scratch, "corpus", outputs=["final.md"], sizing="state/sizings/x.yaml")
+    assert out["exit_code"] == 1 and "commit refused" in out["error"], out
+    assert p.read_bytes() == before
+
+
+def test_reclose_of_a_landed_run_whose_sizing_kept_its_block_drops_and_commits(repo, scratch):
+    p = _research_sizing(repo)
+    first = _close(repo, scratch, "corpus", outputs=["final.md"], sizing="state/sizings/x.yaml")
+    assert first["exit_code"] == 0
+    p.write_bytes(_RESEARCH_SIZING.encode("utf-8"))
+    _git(repo, "add", "state/sizings/x.yaml")
+    _git(repo, "commit", "-q", "-m", "restore block")
+    before = _count(repo)
+    second = _close(repo, scratch, "corpus", outputs=["final.md"], sizing="state/sizings/x.yaml")
+    assert second["exit_code"] == 0 and second["research_block_dropped"] is True, second
+    assert second["sha"] != first["sha"] and _count(repo) == before + 1
+    assert "research" not in p.read_text(), "the re-close must drop the stale block"
+    assert _git(repo, "status", "--porcelain") == ""
