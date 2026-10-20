@@ -418,7 +418,7 @@ def test_agent_call_site_count_independent_of_row_count():
     small_count, _small_bytes = _agent_count(7)
     large_count, large_bytes = _agent_count(300)
     assert small_count == large_count
-    assert large_bytes < 150 * 1024
+    assert large_bytes < 160 * 1024
 
 
 def test_triage_declared_files_never_overwrites_touched_files():

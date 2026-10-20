@@ -370,6 +370,8 @@ def _fold_in_ledger(
         if line.get("digest") != digest:
             continue
         stage = line.get("stage")
+        if stage == "verify" and line.get("outcome") == "fail":
+            continue
         if stage not in seen:
             seen.add(stage)
             passed.append(stage)

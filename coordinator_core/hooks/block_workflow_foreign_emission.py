@@ -111,6 +111,12 @@ GUARD_NAME = "block-workflow-foreign-emission"
 def _resolved_deny(reason: str) -> dict:
     return apply_guard_level(GUARD_NAME, deny("PreToolUse", reason)) or no_advisory()
 
+
+def _floor_deny(reason: str) -> dict:
+    # A peer-emitted or post-emit-edited script can put an external-facing send back
+    # in play (2026-08-30 incident): irreversible, so no guard level lowers it.
+    return deny("PreToolUse", reason)
+
 _READ_ONLY_AGENT_TYPE_ALLOWLIST = frozenset({"explore", "premise-checker"})
 
 _WRITE_CAPABLE_TOOLS = frozenset({"Edit", "Write", "MultiEdit", "NotebookEdit", "Bash"})
@@ -368,7 +374,7 @@ def _evaluate(params: dict, env: Mapping) -> dict:
         return no_advisory()
 
     if actual_sha != recorded_sha:
-        return _resolved_deny(
+        return _floor_deny(
             _sha_mismatch_reason(script, receipt_path, recorded_sha, actual_sha),
         )
 
@@ -379,7 +385,7 @@ def _evaluate(params: dict, env: Mapping) -> dict:
         and session != recorded_session
         and not fire_token_matches(receipt, params.get("env"))
     ):
-        return _resolved_deny(
+        return _floor_deny(
             _session_mismatch_reason(script, session, recorded_session),
         )
 

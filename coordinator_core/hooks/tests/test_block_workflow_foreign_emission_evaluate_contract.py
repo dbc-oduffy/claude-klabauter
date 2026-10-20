@@ -149,3 +149,26 @@ def test_handler_and_evaluate_agree(tmp_path, case):
         payload = _payload(script, sess)
     expected = bwfe.evaluate(payload, env)
     assert bwfe._handler({**payload, "env": env}) == expected
+
+
+@pytest.fixture
+def _warn_level(monkeypatch):
+    monkeypatch.setattr(bwfe, "apply_guard_level", lambda name, env, **kw: {
+        "hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "allow",
+                               "additionalContext": "Advisory: warn"}})
+
+
+def test_post_emit_edit_denies_even_at_warn_level(tmp_path, _warn_level):
+    script = _emit(tmp_path)
+    script.write_text("// edited after emit\n", encoding="utf-8")
+    _reason(bwfe.evaluate(_payload(script), env={}))
+
+
+def test_peer_session_script_denies_even_at_warn_level(tmp_path, _warn_level):
+    script = _emit(tmp_path)
+    _reason(bwfe.evaluate(_payload(script, session="sess-peer"), env={}))
+
+
+def test_no_receipt_inline_script_follows_the_guard_level(tmp_path, _warn_level):
+    out = bwfe.evaluate({"tool_name": "Workflow", "tool_input": {"script": _UNTYPED}}, env={})
+    assert out["hookSpecificOutput"]["permissionDecision"] == "allow"

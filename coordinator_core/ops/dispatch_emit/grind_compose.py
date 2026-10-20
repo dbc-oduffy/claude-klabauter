@@ -175,6 +175,12 @@ def build_routing_table(profile: Profile) -> dict[str, dict[str, Any]]:
         for node_id, node in profile.graph.items()
     }
 
+def _verify_failed_twice(reason: Any) -> str:
+    """Hand-back reason for a row whose verify failed on the retry; carries the verifier's own reason.
+    Twin: ``_why`` in ``_verifyStage``."""
+    return "verify failed twice" + (f": {str(reason)[:400]}" if reason else "")
+
+
 def pre_fix_verify_nodes(routing: Mapping[str, dict]) -> frozenset[str]:
     """Verify nodes no fix node can reach through ``edges`` or ``on_fail``: they run before any fix,
     so they judge routing (pass leads to fix, refute-close, a hand-back), not the fix.
@@ -570,7 +576,7 @@ def run_admission(
         nonlocal terminal_params, terminal_commit_dropped
         if not pending_commit:
             return
-        queued = list(pending_commit)
+        queued = sorted(pending_commit, key=lambda q: q["row_id"])
         pending_commit.clear()
         run_dirty.clear()
 
@@ -819,7 +825,7 @@ def run_admission(
                 if undo_result.get("outcome") != "undone":
                     _handback(row, "stage-dead", _undo_failed_reason(undo_result))
                     return
-            _handback(row, "rejected-after-retry", "verify failed twice")
+            _handback(row, "rejected-after-retry", _verify_failed_twice(result.get("reason")))
             return
         _apply_route_row(row, follow_edge(routing, row.node, outcome, row), f"verify outcome {outcome!r}")
 
@@ -1200,7 +1206,7 @@ _TERMINAL_COMMIT_JS = (
     "}\n"
     "async function _terminalCommit() {\n"
     "  if (_pendingCommit.length === 0) return;\n"
-    "  const queued = _pendingCommit.splice(0, _pendingCommit.length);\n"
+    "  const queued = _pendingCommit.splice(0, _pendingCommit.length).sort((x, y) => (x.row_id < y.row_id ? -1 : x.row_id > y.row_id ? 1 : 0));\n"
     "  _runDirty.clear();\n"
     "  const _failAll = (reason) => {\n"
     "    for (const q of queued) { _unsettle(q.row_id); _handBack(q.row_id, 'commit-failed', reason); }\n"
@@ -1743,6 +1749,7 @@ def compose_grind_script(
         targeted_runner=targeted_runner, profile=profile.name, run_id_js="RUN_ID",
         final_js="row.verifyRetried", undo_paths_js="_undoPaths(row)",
         pre_fix_js="VERIFY_PRE_FIX.includes(row.node)",
+        digest_js="row.digest",
     )
     _runner_fail = json.dumps([
         o for o in stages.RUNNER_FAIL_OUTCOMES if profile.name == "bug" or o != "no-runner"
@@ -1762,6 +1769,7 @@ def compose_grind_script(
         agent_type_host=agent_type_host, run_key=run_key,
         row_id_js="row.rowId", row_path_js="row.path",
         final_js="row.verifyRetried", undo_paths_js="_undoPaths(row)",
+        digest_js="row.digest", profile=profile.name, run_id_js="RUN_ID",
     )
     lines.append(
         "async function _verifyCall(row) {\n"
@@ -2007,10 +2015,11 @@ def compose_grind_script(
         "      return;\n"
         "    }\n"
         "    row.done = true;\n"
-        "    if (VERIFY_PRE_FIX.includes(row.node)) { _handBack(rowId, 'rejected-after-retry', 'verify failed twice'); return; }\n"
+        "    const _why = 'verify failed twice' + (result.reason ? ': ' + String(result.reason).slice(0, 400) : '');\n"
+        "    if (VERIFY_PRE_FIX.includes(row.node)) { _handBack(rowId, 'rejected-after-retry', _why); return; }\n"
         "    const _undone = result.undo || {};\n"
         "    if (_undone.outcome !== 'undone') { _handBack(rowId, 'stage-dead', '" + _UNDO_FAILED_HEAD + "' + (_undone.reason ? ` (${_undone.reason})` : (_undone.outcome ? '' : ' (the verify stage returned no undo reply)')) + '" + _UNDO_FAILED_TAIL + "'); return; }\n"
-        "    _handBack(rowId, 'rejected-after-retry', 'verify failed twice'); return;\n"
+        "    _handBack(rowId, 'rejected-after-retry', _why); return;\n"
         "  }\n"
         "  await _applyRouteRow(row, rowId, followEdge(row.node, result.outcome, row), `verify outcome ${result.outcome}`);\n"
         "}"
@@ -2092,7 +2101,7 @@ def compose_grind_script(
     once_per_run_legs.append(review_fix_call)
     lines.append(
         "const _reviewPaths = Array.from(new Set(_settled.filter((s) => s.outcome === 'committed')"
-        ".flatMap((s) => (_rows[s.row] || {}).touchedFiles || [])));\n"
+        ".flatMap((s) => (_rows[s.row] || {}).touchedFiles || []))).sort();\n"
         "if (_reviewPaths.length === 0) {\n"
         "  log('execute_review skipped: no row committed, nothing landed to review');\n"
         "} else {\n"

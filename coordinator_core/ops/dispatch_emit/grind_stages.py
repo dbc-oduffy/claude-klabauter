@@ -143,6 +143,14 @@ _ROUTING_VERIFY_CLAUSE = (
     + _NO_STAGING_CLAUSE
 )
 
+_COVERED_CLOSE_VERIFY_CLAUSE = (
+    "If the row was closed as a dedupe (already covered by a wiki page or doc) or as a refuted/not-live "
+    "defect, nothing is expected to have changed: an empty touched list, no diff and no commit are not "
+    "grounds to reject. Judge instead whether the covering artifact the evidence cites exists at HEAD and "
+    "states what the row claims, or whether the defect is truly not live; fail only if the artifact is "
+    "missing or does not cover the claim."
+)
+
 _ROUTING_VERIFY_RUNNER_CLAUSE = (
     " Run no tests: return `tests_record` as an empty string and `tests_outcome` as `nothing-to-run`."
 )
@@ -885,8 +893,10 @@ def compose_verify_agent_call(
     final_js: Optional[str] = None,
     undo_paths_js: Optional[str] = None,
     pre_fix_js: Optional[str] = None,
+    digest_js: Optional[str] = None,
 ) -> str:
-    """The `verify` agent call. With ``undo_paths_js`` (and ``final_js``) the verifier also runs the undo
+    """The `verify` agent call. With ``digest_js`` the verifier records every `fail` -- the check, what it
+    expected, what it saw -- as a ledger line and returns the same text as `reason`. With ``undo_paths_js`` (and ``final_js``) the verifier also runs the undo
     op on the row's final verification when its own verdict is `fail`, and returns the result as `undo`.
     ``pre_fix_js`` is a JS boolean expression; true at run time swaps the post-fix brief for the routing
     brief (no fix has run: judge the triage verdict and target, require nothing on disk, no undo)."""
@@ -915,6 +925,29 @@ def compose_verify_agent_call(
             + _NO_STAGING_CLAUSE,
         )
     )
+    parts.append(("lit", " " + _COVERED_CLOSE_VERIFY_CLAUSE))
+    fail_record: list[tuple[str, str]] = []
+    if digest_js:
+        row_id_part_fr: tuple[str, str] = ("expr", row_id_js) if row_id_js else ("lit", "<row id>")
+        run_id_part_fr: tuple[str, str] = ("expr", run_id_js) if run_id_js else ("lit", "<run-id>")
+        fail_record = [
+            (
+                "lit",
+                " When your outcome is fail, write the failing check, what it expected and what you saw "
+                "to the evidence file below (append a section if it exists), return that text as `reason`, "
+                "and run `" + ASSEMBLE_CMD + f" grind-row append --profile {profile} --row-id ",
+            ),
+            row_id_part_fr,
+            ("lit", " --digest "),
+            ("expr", digest_js),
+            ("lit", " --stage verify --verdict fail --outcome fail --evidence-file "),
+            *_evidence_path_parts(profile, run_id_part_fr, row_id_part_fr, "verify"),
+            ("lit", " --run-stamp "),
+            run_id_part_fr,
+            ("lit", " --repo-root "),
+            _shq_part(repo_root_js),
+            ("lit", "`."),
+        ]
     schema = {
         "type": "object",
         "required": ["outcome"],
@@ -970,7 +1003,7 @@ def compose_verify_agent_call(
             routing_parts.append(("lit", _ROUTING_VERIFY_RUNNER_CLAUSE))
         branch = f"({pre_fix_js}) ? ({_join_prompt_parts(routing_parts)}) : ({_join_prompt_parts(parts)})"
         parts = [("expr", branch)]
-    parts = [*head, *parts]
+    parts = [*head, *parts, *fail_record]
     return _agent_call(
         _join_prompt_parts(parts),
         stage="verify",
@@ -984,6 +1017,35 @@ def compose_verify_agent_call(
         schema=schema,
         is_expr=True,
     )
+
+
+def _verify_op_record_parts(
+    *, profile: str, row_id_js: str, row_path_js: str, digest_js: str,
+    run_id_js: Optional[str], repo_root_js: str,
+) -> list[tuple[str, str]]:
+    """The ledger-append clause of an op-mode verify: one `grind-row append --stage verify` per row,
+    verdict from the same failing-row rule `_verifyCall` applies to the op's output."""
+    row_id_part: tuple[str, str] = ("expr", row_id_js)
+    run_id_part: tuple[str, str] = ("expr", run_id_js) if run_id_js else ("lit", "<run-id>")
+    return [
+        ("lit", " Then record this row once: it passes on exit 0, or when `failing_ids` is a non-empty list "
+                "naming neither `"),
+        ("expr", row_id_js),
+        ("lit", "` nor `"),
+        ("expr", row_path_js),
+        ("lit", "`; else it fails. Write the output JSON verbatim to the --evidence-file path, then run `"
+                + ASSEMBLE_CMD + f" grind-row append --profile {profile} --row-id "),
+        row_id_part,
+        ("lit", " --digest "),
+        ("expr", digest_js),
+        ("lit", " --stage verify --verdict <pass|fail> --outcome <pass|fail> --evidence-file "),
+        *_evidence_path_parts(profile, run_id_part, row_id_part, "verify"),
+        ("lit", " --run-stamp "),
+        run_id_part,
+        ("lit", " --repo-root "),
+        _shq_part(repo_root_js),
+        ("lit", "`."),
+    ]
 
 
 def compose_verify_op_call(
@@ -1005,8 +1067,13 @@ def compose_verify_op_call(
     repo_root_js: str = "REPO_ROOT",
     reject_paths_js: Optional[str] = None,
     reject_reason_js: Optional[str] = None,
+    digest_js: Optional[str] = None,
+    profile: str = "",
+    run_id_js: Optional[str] = None,
 ) -> str:
-    """The `verify-op` op-runner call. With ``undo_paths_js`` (and ``row_id_js``/``row_path_js``/
+    """The `verify-op` op-runner call. With ``digest_js`` (plus ``row_id_js``/``row_path_js``) the runner
+    also appends the row's verify verdict, pass or fail, to the row ledger through `grind-row append`.
+    The batch-level exit code and the failing-row rule are the script's ``_verifyCall`` twin. With ``undo_paths_js`` (and ``row_id_js``/``row_path_js``/
     ``final_js``) the runner also runs the undo op on the row's final verification when the batch
     fails that row, and returns its result as `undo`; the failing-row rule twins the script's
     ``_pass`` in ``_verifyCall``.
@@ -1058,6 +1125,11 @@ def compose_verify_op_call(
             "either way; do not summarize or reinterpret it. " + _NO_STAGING_CLAUSE,
         ),
     ]
+    if digest_js and row_id_js and row_path_js:
+        parts.extend(_verify_op_record_parts(
+            profile=profile, row_id_js=row_id_js, row_path_js=row_path_js, digest_js=digest_js,
+            run_id_js=run_id_js, repo_root_js=repo_root_js,
+        ))
     schema = {
         "type": "object",
         "required": ["exit_code", "output"],
