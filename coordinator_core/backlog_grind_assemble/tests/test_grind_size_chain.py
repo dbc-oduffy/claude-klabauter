@@ -101,14 +101,15 @@ def test_assemble_failure_stops_chain(env):
     repo, _, calls, codes = env
     codes["sizing-assemble"] = 7
     assert grind_size_chain.cmd_size_chain(_argv(repo, NEW)) == 7
-    assert _tools(calls) == ["sizing-assemble"] and _lines(repo, NEW) == []
+    assert _tools(calls) == ["sizing-assemble"]
+    assert [json.loads(x)["verdict"] for x in _lines(repo, NEW)] == ["fail"]
 
 
 def test_doc_new_failure_stops_before_append(env):
     repo, _, calls, codes = env
     codes["coordinator-doc-new"] = 5
     assert grind_size_chain.cmd_size_chain(_argv(repo, NEW)) == 5
-    assert _lines(repo, NEW) == []
+    assert [json.loads(x)["verdict"] for x in _lines(repo, NEW)] == ["fail"]
 
 
 def test_assemble_argv_carries_passthrough_and_fixed_flags(env):
@@ -149,3 +150,44 @@ def test_module_has_no_shell_and_no_banned_pattern():
     assert "shell=True" not in text and "shlex" not in text
     banned = re.compile(r"/Users/|/home/|\b[A-Za-z]:\\|~/\.claude/projects|/private/tmp|gettempdir|machine_local")
     assert not banned.search(text)
+
+
+def test_failing_step_ledgers_a_size_fail_with_exit_code_and_stderr_tail(env, monkeypatch):
+    repo, _, calls, codes = env
+    codes["coordinator-doc-new"] = 1
+
+    def fake(argv, cwd):
+        calls.append(list(argv))
+        code = codes.get(Path(argv[0]).name, 0)
+        grind_size_chain._last_stderr[0] = "refused: estimate.tshirt is 'XS'" if code else ""
+        return code
+
+    monkeypatch.setattr(grind_size_chain, "_run_tool", fake)
+    assert grind_size_chain.cmd_size_chain(_argv(repo, NEW)) == 1
+    (line,) = [json.loads(x) for x in _lines(repo, NEW)]
+    assert (line["stage"], line["verdict"], line["outcome"], line["run_stamp"]) == ("size", "fail", "fail", "T")
+    evidence = (repo / line["evidence_file"]).read_text(encoding="utf-8")
+    assert "coordinator-doc-new exited 1" in evidence and "estimate.tshirt is 'XS'" in evidence
+
+
+def test_size_fail_verb_records_the_reason_without_a_chain(env):
+    repo, _, calls, _ = env
+    argv = [
+        "--profile", PROFILE, "--row-id", NEW, "--digest", "d", "--run-stamp", "T",
+        "--repo-root", str(repo), "--reason", "scout ran no command",
+    ]
+    assert grind_size_chain.cmd_size_fail(argv) == 0 and calls == []
+    (line,) = [json.loads(x) for x in _lines(repo, NEW)]
+    assert (line["stage"], line["verdict"]) == ("size", "fail")
+    assert "scout ran no command" in (repo / line["evidence_file"]).read_text(encoding="utf-8")
+    assert grind_size_chain.cmd_size_fail(argv[:-2]) == 2
+
+
+def test_run_tool_echoes_stderr_and_keeps_its_tail(tmp_path, capfd):
+    import sys
+
+    code = grind_size_chain._run_tool(
+        [sys.executable, "-c", "import sys; sys.stderr.write('boom'); sys.exit(3)"], tmp_path
+    )
+    assert code == 3 and grind_size_chain._last_stderr[0] == "boom"
+    assert "boom" in capfd.readouterr().err

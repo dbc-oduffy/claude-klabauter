@@ -656,8 +656,10 @@ def compose_size_call(
             "\n\nAdd --jtbd-unclear after its ` --` when jtbd_unclear is true and "
             "--well-trodden-step-change when well_trodden_step_change is true. Return its exit code "
             "as exit_code, its stdout verbatim as stdout and its stderr as stderr. Do not edit, "
-            "retry or repair it. When you run no command, return no exit_code.",
+            "retry or repair it. When you run no command, run this once instead, replacing <why> with the "
+            "cause (the quotes around it stay; an embedded ' is written '\\''), and return no exit_code:\n\n",
         ),
+        ("expr", f"_sizeFailTemplate({row_js})"),
     ]
     return _agent_call(
         _join_prompt_parts(parts),
@@ -692,6 +694,11 @@ SIZE_ASSEMBLE_JS = (
     "const _SIZE_SLOTS = { tshirt: '<tshirt>', intent: '<intent>', name: '<name>', premise_provenance: '<premise_provenance>',"
     " premise_evidence: '<premise_evidence>', exit_criterion: '<exit_criterion>' };\n"
     "const _sizeChainTemplate = (row) => _sizeChainCmd(_SIZE_SLOTS, row, _sizingPathFor('<name>', row.row_id));\n"
+    "const _sizeFailTemplate = (row) => "
+    + _js_string_literal(ASSEMBLE_CMD + " grind-row size-fail")
+    + " + ' --profile ' + _shq(PROFILE_NAME) + ' --row-id ' + _shq(row.row_id)"
+    " + ' --digest ' + _shq(row.digest) + ' --run-stamp ' + _shq(RUN_ID)"
+    " + ' --repo-root ' + _shq(REPO_ROOT) + ' --reason ' + \"'<why>'\";\n"
     "const _sizeAssembleWhen = () => (SIZE_FIX_TARGET && ROUTING[SIZE_FIX_TARGET])"
     " ? 'Only when your tshirt is ' + _TSHIRT_ORDER.slice(PLAN_WEIGHT_FLOOR_RANK).join(', ') + ' (plan weight or larger), run'"
     " : 'Run';"

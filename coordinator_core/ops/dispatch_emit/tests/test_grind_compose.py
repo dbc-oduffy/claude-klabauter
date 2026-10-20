@@ -30,6 +30,7 @@ from pathlib import Path
 import pytest
 import yaml
 
+from coordinator_core.contract import grind_vocab as vocab
 from coordinator_core.ops import _workflow_contract as wc
 from coordinator_core.ops.dispatch_emit import grind_commit_contract
 from coordinator_core.ops.dispatch_emit import grind_compose as gc
@@ -1419,13 +1420,25 @@ def test_nonzero_assemble_exit_is_a_baton_naming_the_exit_code():
     result, _ = _run([("b0", ["r0"])], script_by_kind)
     hand = next(h for h in result["handed_back"] if h["row"] == "r0")
     assert hand["type"] == "baton"
-    assert hand["reason"] == "intent L (size step failed: exit 3)"
+    assert hand["reason"] == "intent L (size step failed: exit 3: (no stderr))"
+
+
+def test_nonzero_assemble_exit_hand_back_carries_the_stderr_tail():
+    script_by_kind = {
+        "triage": _m_triage(["r0"]),
+        "size": lambda rid: _scout("L", exit_code=1, stderr="  error: estimate.tshirt is 'XS'  "),
+    }
+    result, _ = _run([("b0", ["r0"])], script_by_kind)
+    hand = next(h for h in result["handed_back"] if h["row"] == "r0")
+    assert hand["reason"] == "intent L (size step failed: exit 1: error: estimate.tshirt is 'XS')"
 
 
 def test_scout_that_returns_no_exit_code_is_a_baton_naming_a_missing_exit():
     result, _ = _run([("b0", ["r0"])], {"triage": _m_triage(["r0"]), "size": lambda rid: _scout("M")})
     hand = next(h for h in result["handed_back"] if h["row"] == "r0")
-    assert hand["reason"] == "intent M (size step failed: exit missing)"
+    assert hand["reason"] == (
+        "intent M (size step failed: exit missing: the scout ran no size-chain command; (no stderr))"
+    )
 
 
 def test_scout_with_no_size_hands_back_baton_without_an_assemble_call():
@@ -1563,7 +1576,7 @@ def test_golden_size_scout_hands_back_the_baton_from_its_own_assemble_reply():
     assert "scouted.exit_code === 0" in to_size
     assert "row.sizingPath = _sizingPath(scouted, rid);" in to_size
     assert "'sized at ' + row.sizingPath" in to_size
-    assert "size step failed: exit" in to_size
+    assert "size step failed: ' + _sizeFailReason(scouted)" in to_size
 
 
 def test_golden_holds_no_resize_in_any_case():
@@ -2575,3 +2588,46 @@ def test_rendered_refute_close_guard_is_keyed_by_row():
     script = _compose()
     assert "closeCalled" not in script
     assert "closedRows.has(rowId)" in script and "closedRows.add(r)" in script
+
+
+def _retire_triage(verdict, tshirt):
+    return lambda batch_id: [{"row": "r0", "verdict": verdict, "tshirt_size": tshirt, "tradeoff": ""}]
+
+
+def test_retire_verdict_row_skips_baton_and_size_routing():
+    for verdict in sorted(vocab.RETIRE_VERDICTS):
+        routing = {
+            "triage": {"kind": "triage", "edges": {verdict: "fix"}},
+            "fix": {"kind": "fix", "edges": {}},
+        }
+        assert gc.route_after_triage(routing, "triage", verdict, "L", "") == ("node", "fix")
+        assert gc.route_after_triage(routing, "triage", "other", "L", "") == ("handback", "baton")
+
+
+def test_retire_verdict_gate_is_in_the_emitted_script():
+    script = _compose()
+    assert 'const RETIRE_VERDICTS = ["dedupe", "discard"];' in script
+    assert "!RETIRE_VERDICTS.includes(verdict) && _tshirtRank(size) >= PLAN_WEIGHT_FLOOR_RANK" in script
+
+
+def test_size_fail_reason_names_missing_exit_and_exit_code_with_stderr_tail():
+    assert gc.size_fail_reason({}) == "exit missing: the scout ran no size-chain command; (no stderr)"
+    assert gc.size_fail_reason({"exit_code": 1, "stderr": "x" * 400}) == "exit 1: " + "x" * 300
+
+
+def test_fix_target_reached_through_verify_nodes_is_found_and_ambiguity_refused():
+    routing = {
+        "triage": {"kind": "triage", "edges": {"a": "vfix", "b": "vfix", "c": "vclose"}},
+        "vfix": {"kind": "verify", "edges": {"pass": "fix"}},
+        "vclose": {"kind": "verify", "edges": {"pass": "close"}},
+        "close": {"kind": "refute-close", "edges": {}},
+        "fix": {"kind": "fix", "edges": {}},
+    }
+    assert gc.triage_fix_target(routing, "triage") == "vfix"
+    routing["triage"]["edges"]["d"] = "fix"
+    assert gc.triage_fix_target(routing, "triage") is None
+
+
+def test_below_floor_size_collapse_only_for_a_row_whose_own_verdict_reaches_fix():
+    script = _compose()
+    assert "_ownTarget === SIZE_FIX_TARGET" in script

@@ -42,6 +42,9 @@ TSHIRT_SIZES: frozenset[str] = frozenset({"XS", "S", "M", "L", "XL", "XXL"})
 
 PLAN_WEIGHT_FLOOR: str = "M"
 
+# Triage verdicts that close a row rather than size work: their estimate never routes to a baton.
+RETIRE_VERDICTS: frozenset[str] = frozenset({"discard", "dedupe"})
+
 
 UNIVERSAL_HANDBACK_TYPES: frozenset[str] = frozenset(
     {

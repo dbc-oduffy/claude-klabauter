@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.ops.ceremony import commit_admission
+from coordinator_core.win_portability import no_console_creationflags
 
 from .fixtures.real_git import real_git_repo
 
@@ -31,8 +32,8 @@ def _repo(tmp_path: Path, code: int) -> Path:
         f = root / rel
         f.parent.mkdir(parents=True, exist_ok=True)
         f.write_text(text, encoding="utf-8")
-    subprocess.run(["git", "add", "-A"], cwd=root, check=True)
-    subprocess.run(["git", "commit", "-q", "-m", "seed"], cwd=root, check=True)
+    subprocess.run(["git", "add", "-A"], cwd=root, check=True, **no_console_creationflags())
+    subprocess.run(["git", "commit", "-q", "-m", "seed"], cwd=root, check=True, **no_console_creationflags())
     return root
 
 

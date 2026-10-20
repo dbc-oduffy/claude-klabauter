@@ -64,7 +64,11 @@ Spec backlink: docs/plans/2026-09-21-bug-blitz-emitter-engine-leg.md § Design
 - `size-chain --profile P --row-id R --digest D --sizing S --run-stamp T --repo-root D
   -- <sizing-assemble flags>`: implemented in `grind_size_chain.py`; skips when a
   superseded predecessor already carries route-to-plan, else runs sizing-assemble,
-  coordinator-doc-new and the ledger mark.
+  coordinator-doc-new and the ledger mark; any failing step writes
+  `<item>.size.md` and appends a `size`/`fail` ledger line.
+
+- `size-fail --profile P --row-id R --digest D --run-stamp T --repo-root D --reason TEXT`:
+  the same fail record for a size stage that ran no chain.
 
 - `undo --paths-urlenc E --repo-root R`: implemented in `grind_undo.py` (the
   one verb here that spawns git): puts each named path back to HEAD when this
@@ -341,11 +345,11 @@ def _ledger_path(repo_root: Path, profile: str, row_id: str) -> Path:
 def evidence_rel(profile: str, run_id: str, item_id: str, kind: str) -> str:
     """POSIX repo-relative `state/queue-grind/<profile>/evidence/<run_id>/<item_id>.<kind>.md`.
 
-    `kind` is `done`, `verify` or `judgment`. Segments are joined unchecked: callers pass
+    `kind` is `done`, `verify`, `judgment` or `size`. Segments are joined unchecked: callers pass
     literals or dispatch-time placeholders; an agent-supplied path is checked
     in `cmd_append`. Pure string work."""
-    if kind not in ("done", "verify", "judgment"):
-        raise ValueError(f"grind-row: evidence kind must be 'done', 'verify' or 'judgment': {kind!r}")
+    if kind not in ("done", "verify", "judgment", "size"):
+        raise ValueError(f"grind-row: evidence kind must be 'done', 'verify', 'judgment' or 'size': {kind!r}")
     return f"state/queue-grind/{profile}/evidence/{run_id}/{item_id}.{kind}.md"
 
 
@@ -1154,6 +1158,12 @@ def _cmd_settle_run(rest: list[str]) -> int:
     return cmd_settle_run(rest)
 
 
+def _cmd_size_fail(rest: list[str]) -> int:
+    from coordinator_core.backlog_grind_assemble.grind_size_chain import cmd_size_fail
+
+    return cmd_size_fail(rest)
+
+
 def _cmd_size_chain(rest: list[str]) -> int:
     from coordinator_core.backlog_grind_assemble.grind_size_chain import cmd_size_chain
 
@@ -1170,12 +1180,13 @@ _VERBS = {
     "undo": cmd_undo,
     "settle-run": _cmd_settle_run,
     "size-chain": _cmd_size_chain,
+    "size-fail": _cmd_size_fail,
 }
 
 
 def main(argv: list[str]) -> int:
     if not argv:
-        return _usage("usage: grind-row check|append|close|settle|sweep|run-record|undo|settle-run|size-chain [...]")
+        return _usage("usage: grind-row check|append|close|settle|sweep|run-record|undo|settle-run|size-chain|size-fail [...]")
     verb, rest = argv[0], argv[1:]
     handler = _VERBS.get(verb)
     if handler is None:

@@ -1,7 +1,8 @@
 """grind-row size-chain: the queue-grind size stage's one engine command.
 
 Skips when a superseded predecessor of the same slug already carries route-to-plan;
-otherwise runs sizing-assemble, then coordinator-doc-new, then the ledger mark.
+otherwise runs sizing-assemble, then coordinator-doc-new, then the ledger mark. A failing step
+records its exit code and stderr tail in `<item>.size.md` and a `size`/`fail` ledger line.
 
 Command line:
   size-chain --profile P --row-id R --digest D --sizing S --run-stamp T --repo-root ROOT
@@ -35,6 +36,10 @@ _ROUTE_TO_PLAN_BYTES = '"outcome": "route-to-plan"'
 _CMD_UNSAFE = "&|<>%^\""
 
 _REQUIRED = ("profile", "row-id", "digest", "sizing", "run-stamp", "repo-root")
+_FAIL_REQUIRED = ("profile", "row-id", "digest", "run-stamp", "repo-root", "reason")
+_FAIL_USAGE = (
+    "usage: grind-row size-fail --profile P --row-id R --digest D --run-stamp T --repo-root D --reason TEXT"
+)
 _USAGE = (
     "usage: grind-row size-chain --profile P --row-id R --digest D --sizing S "
     "--run-stamp T --repo-root D -- <sizing-assemble flags>"
@@ -81,30 +86,81 @@ def _resolve_tool(name: str) -> Optional[Path]:
     return None
 
 
+_STDERR_TAIL_CHARS = 600
+_last_stderr: list[str] = [""]
+
+
 def _run_tool(argv: list[str], cwd: Path) -> int:
-    """The one spawn seam; stdout and stderr pass through to the caller's."""
+    """The one spawn seam; stdout passes through, stderr is echoed and its tail kept in `_last_stderr`."""
     sys.stdout.flush()
-    return subprocess.run(
-        argv,
-        cwd=str(cwd),
-        **no_console_passthrough_kwargs(),
-    ).returncode
+    kwargs = no_console_passthrough_kwargs()
+    kwargs.pop("stderr", None)
+    done = subprocess.run(argv, cwd=str(cwd), stderr=subprocess.PIPE, **kwargs)
+    if done.stdout:
+        sys.stdout.write(done.stdout.decode("utf-8", errors="replace"))
+        sys.stdout.flush()
+    text = (done.stderr or b"").decode("utf-8", errors="replace")
+    if text:
+        sys.stderr.write(text)
+        sys.stderr.flush()
+    _last_stderr[0] = text[-_STDERR_TAIL_CHARS:]
+    return done.returncode
+
+
+def record_size_fail(
+    *, repo_root: Path, profile: str, row_id: str, digest: str, run_stamp: str, reason: str
+) -> int:
+    """Write `<item>.size.md` holding `reason` and append the row's `size`/`fail` ledger line."""
+    evidence = grind_rows.evidence_rel(profile, run_stamp, row_id, "size")
+    path = repo_root / evidence
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(f"# Size stage failed\n\n{reason}\n", encoding="utf-8", newline="\n")
+    return grind_rows.cmd_append(
+        [
+            "--profile", profile,
+            "--row-id", row_id,
+            "--digest", digest,
+            "--stage", "size",
+            "--verdict", "fail",
+            "--outcome", "fail",
+            "--evidence-file", evidence,
+            "--run-stamp", run_stamp,
+            "--repo-root", str(repo_root),
+        ]
+    )
+
+
+def cmd_size_fail(rest: list[str]) -> int:
+    flags = grind_rows._parse_flags(rest, required=_FAIL_REQUIRED)
+    if flags is None:
+        return grind_rows._usage(_FAIL_USAGE)
+    try:
+        return record_size_fail(
+            repo_root=Path(flags["repo-root"]), profile=flags["profile"], row_id=flags["row-id"],
+            digest=flags["digest"], run_stamp=flags["run-stamp"], reason=flags["reason"],
+        )
+    except grind_rows.RowIdEscapeError as exc:
+        return grind_rows._usage(str(exc))
 
 
 def _spawn(name: str, args: list[str], cwd: Path) -> int:
+    _last_stderr[0] = ""
     tool = _resolve_tool(name)
     if tool is None:
-        print(f"grind-row size-chain: {name} not found under the settings home bin", file=sys.stderr)
+        message = f"grind-row size-chain: {name} not found under the settings home bin"
+        print(message, file=sys.stderr)
+        _last_stderr[0] = message
         return grind_rows.EXIT_REFUSAL
     if tool.suffix.lower() == ".cmd":
         for arg in args:
             bad = next((ch for ch in _CMD_UNSAFE if ch in arg), None)
             if bad is not None:
-                print(
+                message = (
                     f"grind-row size-chain: refusing to run {name}.cmd with an argument holding "
-                    f"{bad!r}: cmd.exe re-parses it",
-                    file=sys.stderr,
+                    f"{bad!r}: cmd.exe re-parses it"
                 )
+                print(message, file=sys.stderr)
+                _last_stderr[0] = message
                 return grind_rows.EXIT_REFUSAL
     return _run_tool([str(tool), *args], cwd)
 
@@ -137,12 +193,19 @@ def cmd_size_chain(rest: list[str]) -> int:
         str(repo_root / sizing),
         NO_PLAN_HAND_OFF_FLAG,
     ]
-    code = _spawn("sizing-assemble", assemble, repo_root)
-    if code != 0:
-        return code
-    code = _spawn("coordinator-doc-new", ["--type", "spinoff", "--from-sizing", sizing], repo_root)
-    if code != 0:
-        return code
+    steps = (
+        ("sizing-assemble", assemble),
+        ("coordinator-doc-new", ["--type", "spinoff", "--from-sizing", sizing]),
+    )
+    for name, args in steps:
+        code = _spawn(name, args, repo_root)
+        if code != 0:
+            reason = f"{name} exited {code}: {_last_stderr[0].strip() or '(no stderr)'}"
+            record_size_fail(
+                repo_root=repo_root, profile=profile, row_id=row_id, digest=flags["digest"],
+                run_stamp=flags["run-stamp"], reason=reason,
+            )
+            return code
     return grind_rows.cmd_append(
         [
             "--profile", profile,

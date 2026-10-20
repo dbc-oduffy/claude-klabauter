@@ -131,6 +131,8 @@ __all__ = [
     "pre_fix_verify_nodes",
     "route_after_triage",
     "triage_fix_verdict",
+    "triage_fix_target",
+    "size_fail_reason",
     "follow_edge",
     "Row",
     "run_admission",
@@ -231,7 +233,7 @@ def _out_of_root_paths(paths: Optional[Sequence[str]]) -> list[str]:
 def route_after_triage(
     routing: Mapping[str, dict], triage_node_id: str, verdict: str, tshirt_size: Optional[str], tradeoff: str
 ) -> tuple[str, str]:
-    if _tshirt_rank(tshirt_size) >= _PLAN_WEIGHT_FLOOR_RANK:
+    if verdict not in vocab.RETIRE_VERDICTS and _tshirt_rank(tshirt_size) >= _PLAN_WEIGHT_FLOOR_RANK:
         return ("handback", "baton")
     if tradeoff:
         return ("handback", "needs-judgment")
@@ -240,6 +242,31 @@ def route_after_triage(
     if target is None or target not in routing:
         return ("handback", target or "stage-dead")
     return ("node", target)
+
+def triage_fix_target(routing: Mapping[str, dict], triage_node_id: str) -> Optional[str]:
+    """The one node a triage edge enters on the way to a fix node (directly, or through verify nodes' `pass`
+    edges); None when there are none or several. A below-plan-weight sizing re-enters the graph there."""
+    def reaches_fix(node_id: str, seen: frozenset) -> bool:
+        node = routing.get(node_id)
+        if node is None or node_id in seen:
+            return False
+        if node["kind"] == "fix":
+            return True
+        nxt = node["edges"].get("pass") if node["kind"] == "verify" else None
+        return nxt is not None and reaches_fix(nxt, seen | {node_id})
+
+    targets = {t for t in routing[triage_node_id]["edges"].values() if reaches_fix(t, frozenset())}
+    return next(iter(targets)) if len(targets) == 1 else None
+
+
+def size_fail_reason(scouted: Mapping[str, Any]) -> str:
+    """The failed size stage's cause: the exit code (or its absence) and the stderr tail. Twin: ``_sizeFailReason``."""
+    code = scouted.get("exit_code")
+    tail = str(scouted.get("stderr") or "").strip()[-300:] or "(no stderr)"
+    if code is None:
+        return f"exit missing: the scout ran no size-chain command; {tail}"
+    return f"exit {code}: {tail}"
+
 
 def triage_fix_verdict(routing: Mapping[str, dict], triage_node_id: str) -> Optional[str]:
     """The one triage verdict whose edge reaches a fix-kind node; None when there are none or several."""
@@ -475,8 +502,7 @@ def run_admission(
     by_refute_origin: dict[str, dict[str, int]] = {}
     by_triage_check: dict[str, int] = {k: 0 for k in _SIZE_CHECK_KEYS}
     pre_fix_verify = pre_fix_verify_nodes(routing)
-    fix_verdict = triage_fix_verdict(routing, triage_node_id)
-    fix_target = routing[triage_node_id]["edges"].get(fix_verdict) if fix_verdict else None
+    fix_target = triage_fix_target(routing, triage_node_id)
 
     def _bump_refute_origin(origin: str, key: str) -> None:
         entry = by_refute_origin.setdefault(origin, {"confirmed": 0, "refuted": 0})
@@ -683,7 +709,8 @@ def run_admission(
             _handback(row, "baton", "size scout returned no size" + (f": {reason}" if reason else ""))
             return
         below_floor = _tshirt_rank(tshirt) < _PLAN_WEIGHT_FLOOR_RANK
-        if below_floor and fix_target and fix_target in routing:
+        own_target = routing[triage_node_id]["edges"].get(row.origin.removeprefix("triage:"))
+        if below_floor and fix_target and fix_target in routing and own_target == fix_target:
             by_triage_check["size_collapsed"] += 1
             row.origin = "size:below-plan-weight"
             row.node = fix_target
@@ -692,12 +719,11 @@ def run_admission(
             by_triage_check["size_confirmed"] += 1
         row.done = True
         intent = scouted.get("intent", "")
-        code = scouted.get("exit_code", "missing")
-        if code == 0:
+        if scouted.get("exit_code") == 0:
             row.sizing_path = _sizing_path(run_id, scouted, row.row_id)
             _handback(row, "baton", f"sized at {row.sizing_path}: {intent}")
         else:
-            _handback(row, "baton", f"{intent} (size step failed: exit {code})")
+            _handback(row, "baton", f"{intent} (size step failed: {size_fail_reason(scouted)})")
 
     def _close_batch(batch: _Batch) -> None:
         close_node_ids = {nid for nid, node in routing.items() if node["kind"] == "refute-close"}
@@ -1079,7 +1105,7 @@ _ROUTING_HELPERS = (
     "  return out;\n"
     "}\n"
     "function routeAfterTriage(verdict, size, tradeoff) {\n"
-    "  if (_tshirtRank(size) >= PLAN_WEIGHT_FLOOR_RANK) return { kind: 'handback', value: 'baton' };\n"
+    "  if (!RETIRE_VERDICTS.includes(verdict) && _tshirtRank(size) >= PLAN_WEIGHT_FLOOR_RANK) return { kind: 'handback', value: 'baton' };\n"
     "  if (tradeoff) return { kind: 'handback', value: 'needs-judgment' };\n"
     "  const target = ROUTING[TRIAGE_NODE_ID].edges[verdict];\n"
     "  if (!target || !ROUTING[target]) return { kind: 'handback', value: target || 'stage-dead' };\n"
@@ -1101,6 +1127,10 @@ _ROUTING_HELPERS = (
     "  else { row.node = route.value; }\n"
     "}\n"
     "function _lockKeysFor(row, rowId) { return row.declaredFiles.concat([`ledger:${rowId}`]); }\n"
+    "function _sizeFailReason(s) {\n"
+    "  const tail = String(s.stderr || '').trim().slice(-300) || '(no stderr)';\n"
+    "  return s.exit_code === undefined || s.exit_code === null ? 'exit missing: the scout ran no size-chain command; ' + tail : 'exit ' + s.exit_code + ': ' + tail;\n"
+    "}\n"
     "function _commitReason(result) { return result && result.reason ? `: ${result.reason}` : ''; }"
 )
 
@@ -1474,8 +1504,7 @@ def compose_grind_script(
     triage_node_id = _triage_node_id(profile)
     node_kind = {node_id: node.kind for node_id, node in profile.graph.items()}
     routing_table = build_routing_table(profile)
-    size_fix_verdict = triage_fix_verdict(routing_table, triage_node_id)
-    size_fix_target = routing_table[triage_node_id]["edges"].get(size_fix_verdict) if size_fix_verdict else None
+    size_fix_target = triage_fix_target(routing_table, triage_node_id)
 
     batches_const: list[dict[str, Any]] = [
         {"id": batch_id, "batch_key": entries[0].batch_key, "rows": [e.row_id for e in entries]}
@@ -1515,6 +1544,7 @@ def compose_grind_script(
     )
     lines.append(f"const TRIAGE_NODE_ID = {_js_string_literal(triage_node_id)};")
     lines.append(f"const PLAN_WEIGHT_FLOOR_RANK = {_PLAN_WEIGHT_FLOOR_RANK};")
+    lines.append(f"const RETIRE_VERDICTS = {json.dumps(sorted(vocab.RETIRE_VERDICTS))};")
     lines.append(f"const SIZE_FIX_TARGET = {json.dumps(size_fix_target)};")
     lines.append(_MUTEX_HELPERS)
     lines.append(_ROUTING_HELPERS)
@@ -1891,7 +1921,8 @@ def compose_grind_script(
         "      continue;\n"
         "    }\n"
         "    const _belowFloor = _tshirtRank(scouted.tshirt) < PLAN_WEIGHT_FLOOR_RANK;\n"
-        "    if (_belowFloor && SIZE_FIX_TARGET && ROUTING[SIZE_FIX_TARGET]) {\n"
+        "    const _ownTarget = ROUTING[TRIAGE_NODE_ID].edges[String(row.origin).replace(/^triage:/, '')];\n"
+        "    if (_belowFloor && SIZE_FIX_TARGET && ROUTING[SIZE_FIX_TARGET] && _ownTarget === SIZE_FIX_TARGET) {\n"
         "      _byTriageCheck.size_collapsed += 1;\n"
         "      row.origin = 'size:below-plan-weight';\n"
         "      row.node = SIZE_FIX_TARGET;\n"
@@ -1901,7 +1932,7 @@ def compose_grind_script(
         "    row.done = true;\n"
         "    const _intent = scouted.intent || '';\n"
         "    if (scouted.exit_code === 0) { row.sizingPath = _sizingPath(scouted, rid); _handBack(rid, 'baton', 'sized at ' + row.sizingPath + ': ' + _intent); }\n"
-        "    else { _handBack(rid, 'baton', _intent + ' (size step failed: exit ' + (scouted.exit_code === undefined ? 'missing' : scouted.exit_code) + ')'); }\n"
+        "    else { _handBack(rid, 'baton', _intent + ' (size step failed: ' + _sizeFailReason(scouted) + ')'); }\n"
         "  }\n"
         "}"
     )
