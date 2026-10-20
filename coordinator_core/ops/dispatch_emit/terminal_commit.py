@@ -1153,11 +1153,19 @@ def _outside_landings(
     """
     from coordinator_core.git.commit_walk import commit_meta
     from coordinator_core.git.git_dir import resolve_git_common_dir
-    from coordinator_core.git.rollback_check import ABSENT, _blob_at_commit
+    from coordinator_core.git.rollback_check import ABSENT, _blob_at_commit as _resolve_blob
 
     wanted = [c for c in chunks if c.paths]
     if not wanted or not plan_path:
         return {}
+    blobs: dict = {}  # (sha, path) -> blob; scoped to this call so it never outlives the walk
+
+    def _blob_at_commit(cdir, csha, path):
+        key = (csha, path)
+        if key not in blobs:
+            blobs[key] = _resolve_blob(cdir, csha, path)
+        return blobs[key]
+
     common_dir = resolve_git_common_dir(worktree_root)
     meta = commit_meta(common_dir, terminal_sha)
     parents = (meta or {}).get("parents") or []

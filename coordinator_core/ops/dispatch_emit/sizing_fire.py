@@ -23,6 +23,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     read_ledger_halt,
     rulable_ids,
 )
+from coordinator_core.ops.dispatch_emit.run_credit import credits_for_sizing
 
 COMMIT_HALT_KIND = "commit"
 #: `run_id` of an all-landed halt when no halted run is known.
@@ -243,8 +244,6 @@ def resumable_plan(
     if open_ids:
         open_ids = _drop_em_discharged(plan, plan_text, rows, open_ids)
     if open_ids:
-        from coordinator_core.ops.dispatch_emit.run_credit import credits_for_sizing
-
         credited = credits_for_sizing(root, sizing_rel)
         open_ids = [i for i in open_ids if i not in credited]
     state = None

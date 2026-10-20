@@ -97,6 +97,11 @@ def test_credits_for_sizing_ignores_dir_before_sizing_date(tmp_path):
     assert rc.credits_for_sizing(tmp_path, SIZING) == {}
 
 
+def test_credits_for_sizing_counts_dir_stamped_exactly_at_floor(tmp_path):
+    _run(tmp_path, "ask-20261019T000000-aaaaaa", credits=(("C1", "at-floor"),))
+    assert rc.credits_for_sizing(tmp_path, SIZING) == {"C1": "at-floor"}
+
+
 def test_credits_for_sizing_counts_warp_dir_ordered_by_stamp(tmp_path):
     _run(tmp_path, "warp-2026-10-19-thing-20261019T130000-cccccc", credits=(("C1", "warp"),))
     _run(tmp_path, "ask-20261019T140000-dddddd", credits=(("C1", "ask-newer"),))
