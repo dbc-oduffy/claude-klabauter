@@ -62,7 +62,7 @@ def _run_id(env: dict) -> str:
 
 
 def test_a_preference_and_rationale_persist_in_the_run_record_and_reach_the_scout_prompt(repo):
-    env = _submit(repo, {"ask": "make the exporter streaming", "route_preference": "roadmap",
+    env = _submit(repo, {"ask": "make the exporter streaming", "source": "pm", "route_preference": "roadmap",
                          "em_rationale": RATIONALE})
 
     assert _hso(env)["permissionDecision"] == "allow", env
@@ -76,7 +76,7 @@ def test_a_preference_and_rationale_persist_in_the_run_record_and_reach_the_scou
 
 
 def test_a_submission_without_a_preference_writes_no_record_and_no_block(repo):
-    env = _submit(repo, {"ask": "make the exporter streaming"})
+    env = _submit(repo, {"ask": "make the exporter streaming", "source": "pm"})
 
     assert _hso(env)["permissionDecision"] == "allow", env
     assert not (record_dir(repo, _run_id(env)) / ROUTE_PREFERENCE_FILE).exists()

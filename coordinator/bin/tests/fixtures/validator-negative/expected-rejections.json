@@ -542,15 +542,15 @@
     {
       "fixture": "m08-summary-too-long.md",
       "schema": "cross-repo-memo",
-      "rule_covered": "M-CROSS-7: summary <= 120 chars",
+      "rule_covered": "M-CROSS-7: summary <= 240 chars",
       "expect_ok": false,
       "current_validator_result": {
         "ok": false,
         "errors": [
           {
             "field": "summary",
-            "error": "summary exceeds 120 characters (got 161)",
-            "hint": "Keep summary to one concise line of 120 characters or fewer"
+            "error": "summary exceeds 240 characters (got 297)",
+            "hint": "Keep summary to one concise line of 240 characters or fewer"
           }
         ]
       }

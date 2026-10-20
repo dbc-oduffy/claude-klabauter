@@ -44,7 +44,7 @@ def test_blobs_and_trees_land_in_one_pack(tmp_path):
     out = gcommit.commit_paths(repo, paths, "add files")
 
     new_loose = _loose(repo) - before
-    assert new_loose == {out.sha}, "only the commit object goes loose"
+    assert new_loose == set(), "unsigned: blobs, trees and the commit all land in the one pack"
     packs = set((repo / ".git" / "objects" / "pack").glob("*.idx")) - packs_before
     assert len(packs) == 1
     _git(repo, "fsck", "--full", "--strict")

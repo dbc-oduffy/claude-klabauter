@@ -37,7 +37,7 @@ def test_scout_write_gate_and_stage_paths_all_carry_the_run_suffix():
     assert f'\\\'{{"sizing_path":"state/sizings/' in script
     assert f'sizing_path "state/sizings/' in script
     assert script.count(suffixed) >= 4
-    assert f"_runId.split('-').pop() + '.yaml'" in script
+    assert f"_slugOf(r) + '-{SUFFIX}.yaml';" in script
 
 
 def test_scout_is_told_to_return_sizing_path_and_the_schema_admits_it():

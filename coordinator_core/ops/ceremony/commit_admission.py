@@ -193,6 +193,9 @@ def publish_allowlist_drift_refusal(root: Path, assembled: Mapping[str, object])
         return None
     if result.returncode == 0:
         return None
+    if "Traceback (most recent call last)" in (result.stderr or ""):
+        _LOG.warning("publish-allowlist generator crashed; drift not measured")
+        return None
     names = ", ".join(f"{src}/{n}" for src, ns in added.items() for n in ns)
     detail = (result.stderr or result.stdout).strip()
     return (

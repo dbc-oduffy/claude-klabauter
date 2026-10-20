@@ -139,8 +139,6 @@ def test_an_overlap_on_a_siblings_path_does_not_refuse_the_run(repo):
 
 
 def test_an_overlap_on_the_runs_own_path_still_refuses_with_the_reland_remedy(repo):
-    from coordinator_core.ops.dispatch_emit import sibling_claims
-
     base = _git(["rev-parse", "HEAD"], repo).strip()
     own = repo / "README.md"
     own.write_text("seed\nforeign line\n", encoding="utf-8")
@@ -149,4 +147,4 @@ def test_an_overlap_on_the_runs_own_path_still_refuses_with_the_reland_remedy(re
     session_scope.touch(SELF, "README.md", cwd=str(repo))
     out = _run_a(repo, own_paths=("src/a.py", "README.md"), run_base_sha=base, doc_paths=[])
     assert out.get("refused") == "since-base-overlap", out
-    assert sibling_claims.RELAND_REMEDY in out["error"]
+    assert "re-land: coordinator-invoke dispatch.ask_gate" in out["error"]

@@ -398,6 +398,6 @@ def _evaluate(params: dict, env: Mapping) -> dict:
 
 @register_op("hooks.block_workflow_foreign_emission")
 def _handler(params: dict, repo_root=None) -> dict:
-    inner = payload_of(params)
-    env = inner.get("env")
-    return evaluate(inner, env if isinstance(env, Mapping) else {}, repo_root)
+    payload = payload_of(params)
+    env = payload.get("env")
+    return evaluate(payload, env if isinstance(env, Mapping) else {}, repo_root)

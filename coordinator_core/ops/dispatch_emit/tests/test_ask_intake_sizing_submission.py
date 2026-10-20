@@ -53,7 +53,10 @@ def test_intake_sizing_with_brief_emits_the_brief_clause_and_sizes_in_run(repo, 
     assert "phase('size')" in script
     # `_sizingPath` derives from `_sizingPathFor`, which for an intake sizing is the submitted path verbatim.
     assert re.search(rf"const _sizingPathFor = \(r\) => REPO_ROOT \+ '/' \+ ['\"]{re.escape(REL)}['\"];", script)
-    assert "const _sizingPath = _sizingPathFor(_scouted);" in script
+    assert (
+        "const _sizingPath = _boundRelOf(_scouted.sizing_path) ? REPO_ROOT + '/' + _scouted.sizing_path"
+        " : _sizingPathFor(_scouted);"
+    ) in script
 
 
 def test_intake_sizing_without_brief_emits_no_clause(repo, capsys):

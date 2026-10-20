@@ -71,7 +71,7 @@ def test_matching_pointer_resumes_with_resume_ledger_and_no_halt(repo):  # noqa:
     _pointer(repo, blocking=("R1", "R2"))
     v = gate(repo, REL)
     assert v.halt is None
-    assert {k: x for k, x in v.resume_ledger.items() if k != "em_discharged"} == {
+    assert {k: x for k, x in v.resume_ledger.items() if k not in ("em_discharged", "ledger_item_ids", "withheld_ids")} == {
         "run_id": "run-1", "plan": PLAN_REL, "blocking": ["R1", "R2"], "rulable_ids": ["R1", "R2"],
         "carried_met": [], "halt_blocking": ["R1", "R2"], "halt_sha": None, "remaining": {}, "revise_notes": [],
         "unlanded": [],

@@ -168,7 +168,7 @@ def test_a_halted_predecessor_closed_by_stamp_implemented_releases_the_successor
 def test_a_superseded_held_slice_is_reported_not_released_and_its_fire_is_denied(repo, capsys):
     first, second = _sequenced_pair(repo)
 
-    fresh = _submit(repo, {"ask": "two, resubmitted", "supersedes": second.run_id})
+    fresh = _submit(repo, {"ask": "two, resubmitted", "source": "relayed", "supersedes": second.run_id})
     assert _hso(fresh)["permissionDecision"] == "allow", fresh
     marker = json.loads((repo / c.superseded_rel(second.run_id)).read_text(encoding="utf-8"))
     superseding = marker[c.SUPERSEDED_BY_KEY]
