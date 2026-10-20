@@ -10,33 +10,6 @@ def _run(coro):
     return asyncio.run(coro)
 
 
-def test_guard_kira_verdict_routed_registers():
-    from coordinator_core.ipc import _REGISTRY
-    import coordinator_core.hooks.guard_kira_verdict_routed  # noqa: F401
-
-    assert "hooks.guard_kira_verdict_routed" in _REGISTRY
-
-
-def test_guard_kira_verdict_routed_skips_on_subagent_stop():
-    from coordinator_core.hooks.guard_kira_verdict_routed import (
-        _guard_kira_verdict_routed_handler,
-    )
-
-    out = _guard_kira_verdict_routed_handler({"payload": {"agent_id": "sub-1"}})
-    assert out == {}
-
-
-def test_guard_kira_verdict_routed_no_session_id_is_advisory_not_block():
-    from coordinator_core.hooks.guard_kira_verdict_routed import (
-        _guard_kira_verdict_routed_handler,
-    )
-
-    out = _guard_kira_verdict_routed_handler({"payload": {}})
-    hso = out.get("hookSpecificOutput")
-    assert hso is not None
-    assert hso.get("permissionDecision") != "deny"
-
-
 def test_guard_manufactured_blocker_registers():
     from coordinator_core.ipc import _REGISTRY
     import coordinator_core.hooks.guard_manufactured_blocker  # noqa: F401
@@ -339,16 +312,6 @@ def test_group_em_park_spool_build_record_only_spools_paused():
         "at": "2026-09-18T00:00:00Z",
         "writer": "receiver-state-sensor",
     }
-
-
-def test_stop_dispatch_reexports_guard_kira_verdict_routed():
-    import coordinator_core.hooks.stop_dispatch as stop_dispatch
-    import coordinator_core.hooks.guard_kira_verdict_routed as extracted
-
-    assert (
-        stop_dispatch._guard_kira_verdict_routed_handler
-        is extracted._guard_kira_verdict_routed_handler
-    )
 
 
 if __name__ == "__main__":

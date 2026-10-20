@@ -95,7 +95,6 @@ def test_stop_dispatch_composes_exactly_these_legs_in_order():
         "runtime_tripwire_em_check",
         "watchdog_undischarged_next_move",
         "guard_manufactured_blocker",
-        "guard_kira_verdict_routed",
         "guard_terminal_review",
         "guard_drive_root_new_dir",
         "stop_em_report_altitude",

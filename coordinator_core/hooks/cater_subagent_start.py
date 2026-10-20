@@ -255,9 +255,8 @@ SIDECAR_MISS_NOTICE_LEAD = "Sidecar provisioning missed"
 #: that got no scaffold, one skipped its stamp and said so; the other wrote its
 #: `integrated_from` receipt into a CONCURRENTLY-RUNNING sibling's sidecar. That
 #: receipt was well-formed, at column zero, in valid frontmatter, and attesting a
-#: pairing that agent never performed -- and `guard-kira-verdict-routed` and the
-#: `review_receipt` gate decide "was this review integrated?" by reading exactly
-#: that field. A receipt in the wrong file is strictly worse than a missing one,
+#: pairing that agent never performed -- and the `review_receipt` gate decides
+#: "was this review integrated?" by reading exactly that field. A receipt in the wrong file is strictly worse than a missing one,
 #: because absence is the case the guards are built to notice.
 #:
 #: Appended to every miss body, including the sentinel one: an agent holding a
@@ -780,9 +779,8 @@ def _compute_unnamed_sentinel_leaf(agent_type: str) -> Optional[str]:
     Nonce, not digest: with no `agent_id` there is nothing stable to key on,
     so there is no identity to be idempotent about and a re-fired dispatch
     is MEANT to open a new doc -- `_provision`'s own nonce branch states the
-    same rationale. This arm's consumer is
-    `stop_dispatch :: _guard_kira_verdict_routed`, which SCANS the session
-    share directory and classifies on frontmatter, never on a derived path.
+    same rationale. Readers SCAN the session share directory and classify on
+    frontmatter, never on a derived path.
 
     Returns `None` when `agent_type` sanitizes to a degenerate result -- the
     caller must not write a path-less sentinel.
@@ -863,10 +861,8 @@ def _write_miss_sentinel(
         # PROCESS's own ambient cwd instead of refusing, which for a
         # multi-repo plan-blitz dispatch is a REAL repo that is simply not
         # this dispatch's target -- exactly how klabauter#47's "durable
-        # wrong record" gets written: `_guard_kira_verdict_routed`
-        # (coordinator-content-repo `hooks/stop_dispatch.py`) then reads a sentinel filed
-        # under the wrong repo's `state/subagent-share/` and reports a
-        # false owed-route or a false in-flight verdict off it. So this leg
+        # wrong record" gets written: a sentinel filed under the
+        # wrong repo's `state/subagent-share/` that readers then trust. So this leg
         # refuses BEFORE the walk when the caller gave it no target at all,
         # rather than letting an ambient guess stand in for one.
         if not cwd:
@@ -1092,16 +1088,10 @@ def _resolve_sidecar_leg(
     # programmatically today, so this is a correctness-of-record fix rather
     # than a live-defect one -- but the sentinel is a file an EM opens and
     # reads, and it named the wrong agent.
-    # An UNNAMED dispatch gets a sentinel too. Its consumer is
-    # `hooks/stop_dispatch.py :: _guard_kira_verdict_routed`, which SCANS
-    # `state/subagent-share/<session>/` and classifies on frontmatter, never
-    # on a derived path -- and its two branches diverge on exactly this file's
-    # existence. `_kira_unstamped_integrators` selects sidecars carrying an
-    # `integrator_receipt` and no `integrated_from`, which is what separates
-    # "an integrator ran and skipped only the stamp -- do NOT re-dispatch it"
-    # from "no integrator ran -- owed route: review-integrator". With no file
-    # at all, a dispatch that ran correctly reads as one that never happened,
-    # and the guard advises re-dispatching work that is already done.
+    # An UNNAMED dispatch gets a sentinel too. Readers SCAN
+    # `state/subagent-share/<session>/` and classify on frontmatter, never
+    # on a derived path. With no file at all, a dispatch that ran correctly
+    # reads as one that never happened.
     #
     # It is also the sidecar-less agent's own place to write. Without one, the
     # observed alternatives are both bad: skip the stamp (routing invisible),

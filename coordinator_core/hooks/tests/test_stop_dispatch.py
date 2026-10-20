@@ -3,23 +3,19 @@ coordinator_core.hooks.tests.test_stop_dispatch — Tier-T test for the Stop
 fan-in port (chunk C3, docs/reference/warm-hook-migration.md).
 
 One op lands from this module: the composed fan-in (`hooks.stop_dispatch`).
-The ported residue guard (`_guard_kira_verdict_routed_handler`) and three thin
-wrappers over previously-handler-less library modules
+Three thin wrappers over previously-handler-less library modules
 (`_stop_em_report_altitude_handler`, `_nudge_harness_directive_dispatch_handler`,
 `_nudge_unrouted_sizing_handler`) remain plain module-level functions the
 fan-in calls directly — they lost their `@register_op` registrations
 (overengineering-reviewer/Kira, 2026-08-31: no registration, dispatch site,
-or cross-module caller found for any of the four op keys, in claude-klabauter or
+or cross-module caller found for any of the op keys, in claude-klabauter or
 Coordinator-content-repo) but are otherwise unchanged.
 
 Obligations, per this chunk's dispatch brief:
   (a) `hooks.stop_dispatch` is registered and resolvable through
       `warm.hook_http.op_for_path`;
   (b) it is CLASSIFIED — an explicit assertion of the `classify()` result;
-  (c) `guard_kira_verdict_routed` reproduces `guard-kira-verdict-routed.py`'s
-      own decision against a captured payload/sidecar corpus (trigger-scope
-      skip, clean pass, and the unrouted-verdict BLOCK);
-  (d) the aggregate `hooks.stop_dispatch` composes without raising on a
+  (c) the aggregate `hooks.stop_dispatch` composes without raising on a
       minimal no-signal Stop payload.
 """
 
@@ -66,16 +62,9 @@ def _share_dir(repo_root: str, session_id: str) -> str:
     return path
 
 
-def _write_sidecar(share_dir: str, filename: str, frontmatter_lines: list) -> None:
-    body = "---\n" + "\n".join(frontmatter_lines) + "\n---\n\n## body\n"
-    with open(os.path.join(share_dir, filename), "w", encoding="utf-8") as fh:
-        fh.write(body)
-
-
 def test_stop_dispatch_op_registers_and_resolves_through_op_for_path() -> None:
     module = importlib.import_module(_MODULE)
     assert hasattr(module, "_handler")
-    assert hasattr(module, "_guard_kira_verdict_routed_handler")
     assert hasattr(module, "_stop_em_report_altitude_handler")
     assert hasattr(module, "_nudge_harness_directive_dispatch_handler")
     assert hasattr(module, "_nudge_unrouted_sizing_handler")
@@ -156,240 +145,6 @@ def test_aggregate_stop_dispatch_folds_guard_terminal_review_block(tmp_path) -> 
     assert "review" in result["hookSpecificOutput"]["permissionDecisionReason"].lower()
 
 
-def test_guard_kira_verdict_routed_skips_on_subagent_stop(tmp_path) -> None:
-    from coordinator_core.hooks.stop_dispatch import _guard_kira_verdict_routed
-
-    repo_root = _make_repo(tmp_path)
-    _share_dir(repo_root, "sess-1")
-    payload = {"cwd": repo_root, "session_id": "sess-1", "agent_id": "some-subagent"}
-
-    assert _guard_kira_verdict_routed(payload) == {}
-
-
-def test_guard_kira_verdict_routed_skips_on_stop_hook_active(tmp_path) -> None:
-    from coordinator_core.hooks.stop_dispatch import _guard_kira_verdict_routed
-
-    repo_root = _make_repo(tmp_path)
-    _share_dir(repo_root, "sess-1")
-    payload = {"cwd": repo_root, "session_id": "sess-1", "stop_hook_active": True}
-
-    assert _guard_kira_verdict_routed(payload) == {}
-
-
-def test_guard_kira_verdict_routed_clean_pass_no_sidecars(tmp_path) -> None:
-    from coordinator_core.hooks.stop_dispatch import _guard_kira_verdict_routed
-
-    repo_root = _make_repo(tmp_path)
-    _share_dir(repo_root, "sess-1")
-    payload = {"cwd": repo_root, "session_id": "sess-1"}
-
-    assert _guard_kira_verdict_routed(payload) == {}
-
-
-def test_guard_kira_verdict_routed_blocks_unanswered_findings(tmp_path) -> None:
-    from coordinator_core.hooks.stop_dispatch import _guard_kira_verdict_routed
-
-    repo_root = _make_repo(tmp_path)
-    share_dir = _share_dir(repo_root, "sess-1")
-    _write_sidecar(
-        share_dir,
-        "coordinatoroverengineering-reviewer.abc.md",
-        [
-            "agent_type: coordinator:overengineering-reviewer",
-            "spawned_at: 2026-08-31T00:00:00Z",
-            "findings_count: 2",
-        ],
-    )
-    payload = {"cwd": repo_root, "session_id": "sess-1"}
-
-    result = _guard_kira_verdict_routed(payload)
-    assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
-    reason = result["hookSpecificOutput"]["permissionDecisionReason"]
-    assert "unrouted Kira" in reason
-    assert "findings_count=2" in reason
-
-
-def test_guard_kira_verdict_routed_passes_when_answered(tmp_path) -> None:
-    from coordinator_core.hooks.stop_dispatch import _guard_kira_verdict_routed
-
-    repo_root = _make_repo(tmp_path)
-    share_dir = _share_dir(repo_root, "sess-1")
-    kira_file = "coordinatoroverengineering-reviewer.abc.md"
-    _write_sidecar(
-        share_dir,
-        kira_file,
-        [
-            "agent_type: coordinator:overengineering-reviewer",
-            "spawned_at: 2026-08-31T00:00:00Z",
-            "findings_count: 2",
-            "rebuild_recommended: true",
-        ],
-    )
-    _write_sidecar(
-        share_dir,
-        "coordinatorexecutor.def.md",
-        [
-            "agent_type: coordinator:executor",
-            "spawned_at: 2026-08-31T00:01:00Z",
-            "integrated_from: [coordinatoroverengineering-reviewer.abc]",
-        ],
-    )
-    payload = {"cwd": repo_root, "session_id": "sess-1"}
-
-    assert _guard_kira_verdict_routed(payload) == {}
-
-
-_RUN_OWNED_REVIEW_SIDECARS = [
-    ("ask-20261016T140005-a68c92.review-wave-bookkeeping.md", ["agent_type: engine:review-wave-bookkeeping"]),
-    ("manifest-ask-x-prep.review-prep.md", ["agent_type: engine:prep-freeze"]),
-    (
-        "2026-10-16-codereview-slicewhole-diff.md",
-        ["agent_type: review-findings", "spawned_at: 2026-10-16T13:04:26Z", "plan_id: pln-x"],
-    ),
-]
-
-
-def _write_run_owned_review_sidecars(share_dir: str) -> None:
-    for name, lines in _RUN_OWNED_REVIEW_SIDECARS:
-        _write_sidecar(share_dir, name, lines)
-
-
-def _touch_record_repo(tmp_path, session_id: str, events: list) -> str:
-    """A bare fixture repo whose `session_id` touch record holds `events`
-    as (verb, path, kind) triples."""
-    from coordinator_core.session import touch_record
-    from coordinator_core.session.core import session_dir
-
-    repo_root = _make_repo(tmp_path)
-    sink = touch_record.sink_path(session_dir(session_id, repo_root))
-    for verb, path, kind in events:
-        touch_record.append_event(
-            sink, session_id=session_id, agent_id=None, verb=verb, path=path, kind=kind
-        )
-    return repo_root
-
-
-_CODE_WRITE = [("T", "coordinator_core/x.py", "w")]
-
-
-def test_session_authored_diff_reads_touch_record_without_spawning(tmp_path, monkeypatch) -> None:
-    from coordinator_core.hooks.guard_kira_verdict_routed import _kira_session_authored_diff
-
-    def _boom(*a, **k):
-        raise AssertionError("spawned")
-
-    monkeypatch.setattr(subprocess, "run", _boom)
-    monkeypatch.setattr(subprocess, "Popen", _boom)
-    repo_root = _touch_record_repo(tmp_path, "s1", _CODE_WRITE)
-    assert _kira_session_authored_diff(repo_root, "s1") is True
-
-
-def test_session_authored_diff_counts_a_released_code_write(tmp_path) -> None:
-    from coordinator_core.hooks.guard_kira_verdict_routed import _kira_session_authored_diff
-
-    repo_root = _touch_record_repo(
-        tmp_path, "s1", _CODE_WRITE + [("R", "coordinator_core/x.py", None)]
-    )
-    assert _kira_session_authored_diff(repo_root, "s1") is True
-
-
-@pytest.mark.parametrize(
-    "events",
-    [
-        [],
-        [("T", "docs/plans/p.md", "w"), ("T", "notes.yaml", "w")],
-        [("T", ".coordinator-local/subagent-share/x.py", "w")],
-        [("T", "coordinator_core/x.py", "r")],
-    ],
-)
-def test_session_authored_diff_false_for_non_code_or_read_or_empty(tmp_path, events) -> None:
-    from coordinator_core.hooks.guard_kira_verdict_routed import _kira_session_authored_diff
-
-    repo_root = _touch_record_repo(tmp_path, "s1", events)
-    assert _kira_session_authored_diff(repo_root, "s1") is False
-
-
-def test_session_authored_diff_ignores_other_sessions_record(tmp_path) -> None:
-    from coordinator_core.hooks.guard_kira_verdict_routed import _kira_session_authored_diff
-
-    repo_root = _touch_record_repo(tmp_path, "other", _CODE_WRITE)
-    assert _kira_session_authored_diff(repo_root, "s1") is False
-
-
-def test_session_authored_diff_unreadable_record_reads_false(tmp_path, monkeypatch) -> None:
-    from coordinator_core.hooks.guard_kira_verdict_routed import _kira_session_authored_diff
-    from coordinator_core.session import touch_record
-
-    repo_root = _touch_record_repo(tmp_path, "s1", _CODE_WRITE)
-
-    def _bad(*a, **k):
-        raise OSError("denied")
-
-    monkeypatch.setattr(touch_record, "discover_family", _bad)
-    assert _kira_session_authored_diff(repo_root, "s1") is False
-
-
-def test_guard_kira_verdict_routed_allows_run_owned_review_without_authored_diff(tmp_path) -> None:
-    from coordinator_core.hooks.stop_dispatch import _guard_kira_verdict_routed
-
-    session_id = "sess-no-diff"
-    repo_root = _touch_record_repo(tmp_path, "some-other-session", _CODE_WRITE)
-    _write_run_owned_review_sidecars(_share_dir(repo_root, session_id))
-
-    assert _guard_kira_verdict_routed({"cwd": repo_root, "session_id": session_id}) == {}
-
-
-def test_guard_kira_verdict_routed_still_blocks_session_review_with_authored_diff(tmp_path) -> None:
-    from coordinator_core.hooks.stop_dispatch import _guard_kira_verdict_routed
-
-    session_id = "sess-with-diff"
-    repo_root = _touch_record_repo(tmp_path, session_id, _CODE_WRITE)
-    _write_sidecar(
-        _share_dir(repo_root, session_id),
-        "coordinatorcode-reviewer.abc.md",
-        ["agent_type: coordinator:code-reviewer", "spawned_at: 2026-10-16T13:04:26Z"],
-    )
-
-    result = _guard_kira_verdict_routed({"cwd": repo_root, "session_id": session_id})
-    assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
-    assert "unrouted Kira" in result["hookSpecificOutput"]["permissionDecisionReason"]
-
-
-def test_guard_kira_verdict_routed_run_owned_sidecars_do_not_mask_diff_session_review(tmp_path) -> None:
-    from coordinator_core.hooks.stop_dispatch import _guard_kira_verdict_routed
-
-    session_id = "sess-mixed"
-    repo_root = _touch_record_repo(tmp_path, session_id, _CODE_WRITE)
-    share_dir = _share_dir(repo_root, session_id)
-    _write_run_owned_review_sidecars(share_dir)
-    _write_sidecar(
-        share_dir,
-        "coordinatorcode-reviewer.abc.md",
-        ["agent_type: coordinator:code-reviewer", "spawned_at: 2026-10-16T13:04:26Z"],
-    )
-
-    result = _guard_kira_verdict_routed({"cwd": repo_root, "session_id": session_id})
-    assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
-
-
-def test_guard_kira_verdict_routed_allows_run_owned_kira_findings_without_authored_diff(tmp_path) -> None:
-    from coordinator_core.hooks.stop_dispatch import _guard_kira_verdict_routed
-
-    session_id = "sess-run-kira"
-    repo_root = _touch_record_repo(tmp_path, "some-other-session", _CODE_WRITE)
-    _write_sidecar(
-        _share_dir(repo_root, session_id),
-        "manifest-ask-x-prep.kira.md",
-        [
-            "agent_type: coordinator:overengineering-reviewer",
-            "spawned_at: 2026-10-16T13:04:26Z",
-            "findings_count: 2",
-        ],
-    )
-
-    assert _guard_kira_verdict_routed({"cwd": repo_root, "session_id": session_id}) == {}
-
-
 def test_stop_em_report_altitude_wrapper_suppresses_on_subagent_stop() -> None:
     from coordinator_core.hooks.stop_dispatch import _stop_em_report_altitude_handler
 
@@ -409,25 +164,6 @@ def test_aggregate_stop_dispatch_no_signal_returns_no_advisory(tmp_path) -> None
     assert result == {}
 
 
-def test_aggregate_stop_dispatch_folds_kira_block(tmp_path) -> None:
-    from coordinator_core.hooks.stop_dispatch import _handler
-
-    repo_root = _make_repo(tmp_path)
-    share_dir = _share_dir(repo_root, "sess-1")
-    _write_sidecar(
-        share_dir,
-        "coordinatoroverengineering-reviewer.abc.md",
-        [
-            "agent_type: coordinator:overengineering-reviewer",
-            "spawned_at: 2026-08-31T00:00:00Z",
-            "findings_count: 1",
-        ],
-    )
-    payload = {"cwd": repo_root, "session_id": "sess-1"}
-
-    result = asyncio.run(_handler({"payload": payload}))
-    assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
-    assert "unrouted Kira" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
 # --- CONCATENATE-ALL aggregation parity -------------------------------------
@@ -453,7 +189,6 @@ def _silence_all_legs(monkeypatch, mod):
     for name in (
         "_runtime_tripwire_em_check_handler",
         "_watchdog_undischarged_next_move_handler",
-        "_guard_kira_verdict_routed_handler",
         "_guard_drive_root_new_dir_handler",
         "_stop_em_report_altitude_handler",
         "_nudge_harness_directive_dispatch_handler",
@@ -498,7 +233,7 @@ def test_two_blocking_legs_both_reasons_appear(monkeypatch):
     mod = importlib.import_module(_MODULE)
     _silence_all_legs(monkeypatch, mod)
     monkeypatch.setattr(
-        mod, "_guard_kira_verdict_routed_handler",
+        mod, "_guard_drive_root_new_dir_handler",
         lambda _p: deny("Stop", "BLOCK-REASON-ONE"), raising=True)
     monkeypatch.setattr(
         mod, "_runtime_tripwire_em_check_handler",
@@ -521,7 +256,6 @@ _DOE_STOP_LEGS = (
     "watchdog_undischarged_next_move",
     "guard_manufactured_blocker",
     "stop_em_report_altitude",
-    "guard_kira_verdict_routed",
     "receiver_state_sensor",
     "group_em_park_spool",
 )

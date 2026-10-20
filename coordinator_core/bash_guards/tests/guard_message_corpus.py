@@ -3843,7 +3843,6 @@ from coordinator_core.hooks import guard_handoff_summary_cap_on_write as _hook_g
 from coordinator_core.hooks import guard_hook_generation_self_probe as _hook_guard_hook_generation_self_probe
 from coordinator_core.hooks import guard_host_subagent_bash_ban as _hook_guard_host_subagent_bash_ban
 from coordinator_core.hooks import guard_host_subagent_bash_spawn_shapes as _hook_guard_host_subagent_bash_spawn_shapes
-from coordinator_core.hooks import guard_kira_verdict_routed as _hook_guard_kira_verdict_routed
 from coordinator_core.hooks import guard_manufactured_blocker as _hook_guard_manufactured_blocker
 from coordinator_core.hooks import guard_named_dispatch_tool_restriction as _hook_guard_named_dispatch_tool_restriction
 from coordinator_core.hooks import guard_posix_invocation_doctrine_write as _hook_guard_posix_invocation_doctrine_write
@@ -5110,19 +5109,6 @@ def _fire_guard_host_subagent_bash_spawn_shapes_control() -> Optional[Dict[str, 
     )
 
 
-def _fire_guard_kira_verdict_routed() -> Optional[Dict[str, Any]]:
-    return _to_envelope_or_none(
-        _hook_guard_kira_verdict_routed._guard_kira_verdict_routed_handler({"payload": {}})
-    )
-
-
-def _fire_guard_kira_verdict_routed_control() -> Optional[Dict[str, Any]]:
-    payload = {"payload": {"session_id": "sess-x", "cwd": "."}}
-    return _to_envelope_or_none(
-        _hook_guard_kira_verdict_routed._guard_kira_verdict_routed_handler(payload)
-    )
-
-
 def _fire_guard_manufactured_blocker() -> Optional[Dict[str, Any]]:
     with tempfile.TemporaryDirectory(prefix="guard-message-corpus-gmb-", dir=_neutral_scratch_parent()) as scratch:
         transcript = Path(scratch) / "t.jsonl"
@@ -6367,10 +6353,6 @@ HOOK_ROWS: List[HookRow] = [
         "control-no-policy",
         False,
         _fire_guard_host_subagent_bash_spawn_shapes_control,
-    ),
-    HookRow("guard_kira_verdict_routed", "fire-eval-failure", True, _fire_guard_kira_verdict_routed),
-    HookRow(
-        "guard_kira_verdict_routed", "control-no-verdict", False, _fire_guard_kira_verdict_routed_control
     ),
     HookRow("guard_manufactured_blocker", "fire-declarative-stall", True, _fire_guard_manufactured_blocker),
     HookRow(

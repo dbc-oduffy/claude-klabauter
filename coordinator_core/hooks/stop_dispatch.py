@@ -1,5 +1,5 @@
 """
-coordinator_core.hooks.stop_dispatch — Stop-event fan-in, twelve legs.
+coordinator_core.hooks.stop_dispatch — Stop-event fan-in, eleven legs.
 
 Purpose: warm-engine composition for coordinator-content-repo's `stop-dispatch.py`, the
 single `Stop` hooks.json registration that currently pays one interpreter
@@ -9,7 +9,7 @@ engine-side op that registration can eventually point at (per this plan's
 own exit criterion — the `type`/`url` edit itself is DoE's, not ours).
 
 `stop-dispatch.py`'s own `REGISTRY` carries nine `StopGuard` entries; all
-nine are composed. A tenth leg, `guard_terminal_review`, is
+but the retired Kira verdict guard are composed. A further leg, `guard_terminal_review`, is
 composed here ahead of DoE's own registration
 (docs/plans/2026-09-26-terminal-review-gate-mechanical.md, chunk C2) — its
 DoE-side `StopGuard` row lands separately (that plan's chunk C3). Disposition
@@ -37,16 +37,9 @@ per leg:
   3. `guard_manufactured_blocker` — COMPOSED by importing its `_handler`
      (`coordinator_core/hooks/guard_manufactured_blocker.py`), placed after
      `watchdog_undischarged_next_move` as DoE's REGISTRY places it. Its deny
-     folds into the aggregate deny like the Kira leg's; its per-session
+     folds into the aggregate deny; its per-session
      fired marker bounds a replayed Stop payload to one deny. A guard that
      cannot run allows and says so (DR-402).
-
-  4. `guard_kira_verdict_routed` — PORTED (residue; no existing op or
-     library module covered this script before this chunk). Full verbatim
-     port of `guard-kira-verdict-routed.py`'s frontmatter-only decision
-     logic below (`_guard_kira_verdict_routed` + helpers). Registered as its
-     own op, `hooks.guard_kira_verdict_routed`, for independent testability,
-     and composed into the fan-in below.
 
   5. `stop_em_report_altitude` — COMPOSED via a thin `@register_op` wrapper.
      `coordinator_core/hooks/em_report_altitude.py` already carries the
@@ -82,9 +75,8 @@ per leg:
      session's code-diff commits are not covered by a reviewer receipt, a
      reviewer window, or a valid `Inline-Review:` trailer — see that
      module's own docstring for the three credit arms. Its handler already
-     matches the `_guard_kira_verdict_routed_handler` shape (`deny()` /
-     `post_advisory()` / `no_advisory()`), so it composes into the fold
-     below exactly like the Kira leg, placed immediately after it.
+     returns the `deny()` / `post_advisory()` / `no_advisory()` shapes, so it
+     composes into the fold below.
 
   12. `guard_drive_root_new_dir` — PORTED from DoE's `guard-drive-root-new-dir.py`
      (no claude-klabauter body existed): a new top-level directory on a drive root since
@@ -121,8 +113,7 @@ other payload-cwd-resolving `hooks.*` op in this family.
 
 Spec: docs/plans/2026-08-31-six-hook-scripts-become-engine-ops.md, chunk C3
 Dispatch brief: state/dispatch-briefs/2026-08-31-six-hook-scripts-become-engine-ops/C3.md
-DoE source: coordinator/hooks/scripts/stop-dispatch.py,
-    coordinator/hooks/scripts/guard-kira-verdict-routed.py
+DoE source: coordinator/hooks/scripts/stop-dispatch.py
 """
 from __future__ import annotations
 
@@ -140,10 +131,6 @@ from coordinator_core.hooks._envelope import deny, no_advisory, payload_of, post
 from coordinator_core.hooks.em_report_altitude import op as _em_report_altitude_op
 from coordinator_core.hooks.group_em_park_spool import _handler as _group_em_park_spool_handler
 from coordinator_core.hooks.guard_manufactured_blocker import _handler as _guard_manufactured_blocker_handler
-from coordinator_core.hooks.guard_kira_verdict_routed import (
-    _guard_kira_verdict_routed,
-    _guard_kira_verdict_routed_handler,
-)
 from coordinator_core.hooks.guard_terminal_review import (
     _guard_terminal_review_handler,
 )
@@ -371,7 +358,6 @@ _FOLDED_LEGS = (
     ("runtime_tripwire_em_check", lambda p: _runtime_tripwire_em_check_handler(p)),
     ("watchdog_undischarged_next_move", lambda p: _watchdog_undischarged_next_move_handler(p)),
     ("guard_manufactured_blocker", lambda p: _guard_manufactured_blocker_handler(p)),
-    ("guard_kira_verdict_routed", lambda p: _guard_kira_verdict_routed_handler(p)),
     ("guard_terminal_review", lambda p: _guard_terminal_review_handler(p)),
     ("guard_drive_root_new_dir", lambda p: _guard_drive_root_new_dir_handler(p)),
     ("stop_em_report_altitude", lambda p: _stop_em_report_altitude_handler(p)),
@@ -414,7 +400,7 @@ def _extract_advisory(result) -> "tuple[bool, Optional[str]]":
 
 @register_op("hooks.stop_dispatch")
 async def _handler(params: dict, repo_root=None) -> dict:
-    """Stop fan-in: compose the twelve legs and aggregate CONCATENATE-ALL, per
+    """Stop fan-in: compose the eleven legs and aggregate CONCATENATE-ALL, per
     module docstring.
 
     `repo_root` (the framework-supplied handler argument) is unused — every

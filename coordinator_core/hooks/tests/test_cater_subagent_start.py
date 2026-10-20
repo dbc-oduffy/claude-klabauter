@@ -560,9 +560,7 @@ def test_missing_cwd_refuses_miss_sentinel_rather_than_guessing_ambient(
     """Same control on the MISS leg: an eligible dispatch whose provisioning
     came back empty still must not have `_write_miss_sentinel` fall back to
     `show_toplevel`'s ambient-process-cwd walk just because `cwd` is falsy --
-    that write is the exact "durable wrong record" klabauter#47 names
-    (`_guard_kira_verdict_routed`, coordinator-content-repo `hooks/stop_dispatch.py`, reads
-    it back and reports a false routing verdict off it)."""
+    that write is the exact "durable wrong record" klabauter#47 names."""
     monkeypatch.chdir(git_repo)
     _force_provisioning_miss(monkeypatch)
     payload = _payload(ELIGIBLE_TYPE, "session-k47-no-cwd-miss", "")
@@ -1375,9 +1373,8 @@ def test_no_miss_body_leaves_a_foreign_sidecar_write_unforbidden():
 # ---------------------------------------------------------------------------
 # The miss sentinel for an UNNAMED dispatch. Regression cover for 2026-09-01:
 # a review-integrator ran with no provisioned sidecar, so nothing on disk
-# carried an `integrator_receipt`, and `_guard_kira_verdict_routed` could not
-# tell "an integrator ran and skipped only the stamp" from "no integrator ran".
-# The guard took the second branch and advised re-dispatching work already done.
+# carried an `integrator_receipt`, so "an integrator ran and skipped only the
+# stamp" was indistinguishable from "no integrator ran".
 # ---------------------------------------------------------------------------
 
 

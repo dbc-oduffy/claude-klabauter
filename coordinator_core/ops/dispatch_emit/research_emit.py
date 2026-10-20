@@ -360,7 +360,8 @@ def bind_context(root: Path, scratch_rel: str, brief_rel: str, context: Sequence
     for raw in context:
         path = Path(raw) if Path(raw).is_absolute() else root / raw
         if not path.is_file():
-            missing.append(f"context file {raw} does not exist")
+            # Members read the path later, so a pipe or `<(...)` is gone by then.
+            missing.append(f"context file {raw} does not exist; --context takes a saved file path, not a pipe")
             continue
         try:
             names.append(path.resolve().relative_to(root.resolve()).as_posix())

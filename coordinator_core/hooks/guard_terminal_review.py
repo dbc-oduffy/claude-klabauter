@@ -12,7 +12,7 @@ by firing on the EM's own Stop, independent of whether any skill ran.
 Trigger conditions (all must hold to refuse a Stop):
   1. The Stop is the EM's own — a payload with `agent_id` set, or
      `stop_hook_active` set, is skipped (same two-leg platform contract as
-     every peer blocking guard, e.g. `guard_kira_verdict_routed`).
+     every peer blocking guard).
   2. The session has at least one CODE-diff commit of its own — a commit
      whose `Session-Id` trailer equals the payload's `session_id`, and at
      least one touched path is CODE. A path is non-code (exempt) when it is
@@ -66,7 +66,7 @@ Two entry points:
     truthy `message` as blocking (exit 2) — an advisory must never travel
     through this channel or a fail-open would wrongly block the turn.
   - `_guard_terminal_review_handler(params) -> deny(...) | post_advisory(...)
-    | no_advisory()` — the `guard_kira_verdict_routed`-shaped handler C2
+    | no_advisory()` — the handler C2
     composes into the engine's own `stop_dispatch` fold set. This is the
     channel that DOES surface the fail-open advisory breadcrumb, since
     `post_advisory` is non-blocking by construction.

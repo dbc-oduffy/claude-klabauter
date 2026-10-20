@@ -241,7 +241,6 @@ _EAGER_HOOK_MODULES: list[str] = [
     "coordinator_core.hooks.sessionend_auto_commit",
     "coordinator_core.hooks.subagent_zero_tool_use_detect",
     "coordinator_core.hooks.group_em_park_spool",
-    "coordinator_core.hooks.guard_kira_verdict_routed",
     "coordinator_core.hooks.guard_manufactured_blocker",
     "coordinator_core.hooks.guard_terminal_review",
 ]

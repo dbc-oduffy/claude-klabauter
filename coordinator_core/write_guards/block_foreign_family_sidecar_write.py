@@ -7,10 +7,10 @@ the SAME dispatched family (subagent_type), under
 Purpose: an agent told "sidecar provisioning missed" has no file of its own
 to stamp, and on 2026-08-31 one of them wrote its ``integrated_from``
 receipt into a CONCURRENTLY-RUNNING sibling integrator's sidecar instead.
-That field is what ``guard-kira-verdict-routed`` and the ``review_receipt``
-gate read to decide whether a review was integrated, so a present,
+That field is what the ``review_receipt``
+gate reads to decide whether a review was integrated, so a present,
 well-formed stamp about someone else's work is strictly worse than
-absence -- absence is the thing those gates are built to notice. Filed at
+absence -- absence is the thing that gate is built to notice. Filed at
 ``state/bug-backlog/2026-08-31-missing-sidecar-provisioning-sends-an-
 integrator-receipt-into-a-siblings-file.yaml``.
 

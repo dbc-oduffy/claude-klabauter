@@ -333,14 +333,13 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # hooks.stop_dispatch (C3) — MUTATING by union: composes
     # hooks.runtime_tripwire_em_check, hooks.watchdog_undischarged_next_move,
     # and hooks.receiver_state_sensor (all MUTATING), plus the in-module
-    # guard-kira-verdict-routed and guard_terminal_review legs (both
-    # read-only/COMPUTE_ONLY) and three sentinel-writing wrappers over
-    # library op()s. See coordinator_core/hooks/stop_dispatch.py's own
-    # module docstring for the full nine-leg disposition.
-    # The four sibling op-key rows
-    # formerly here (guard_kira_verdict_routed, stop_em_report_altitude,
-    # nudge_harness_directive_dispatch, nudge_unrouted_sizing) were removed
-    # with their registrations; no consumer found for any of them.
+    # guard_terminal_review leg (read-only/COMPUTE_ONLY) and three
+    # sentinel-writing wrappers over library op()s. See
+    # coordinator_core/hooks/stop_dispatch.py's own module docstring for the
+    # full leg disposition.
+    # The sibling op-key rows formerly here (guard_kira_verdict_routed,
+    # stop_em_report_altitude, nudge_harness_directive_dispatch,
+    # nudge_unrouted_sizing) were removed with their registrations.
     "hooks.stop_dispatch": OpClass.MUTATING,
     "hooks.workflow_stall_stop": OpClass.MUTATING,
     "hooks.subagent_zero_tool_use": OpClass.MUTATING,
@@ -453,7 +452,6 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     "hooks.sessionend_auto_commit": OpClass.MUTATING,
     "hooks.subagent_zero_tool_use_detect": OpClass.MUTATING,
     "hooks.group_em_park_spool": OpClass.MUTATING,
-    "hooks.guard_kira_verdict_routed": OpClass.MUTATING,
     # hooks.guard_terminal_review — COMPUTE_ONLY per this op's own dispatch
     # brief ("classify by what the op does: it reads git and sidecars and
     # writes nothing"). Five-question checklist:

@@ -2942,6 +2942,7 @@ def main(argv: list[str]) -> int:
         return EXIT_OK
 
     if tshirt is None:
+        print(f"{prog}: missing required --tshirt", file=sys.stderr)
         return _usage(prog)
 
     research_block, research_errors = build_research_block(

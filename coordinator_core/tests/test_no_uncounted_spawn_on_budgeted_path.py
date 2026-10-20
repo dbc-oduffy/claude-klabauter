@@ -1492,10 +1492,6 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
         "coordinator_core/hooks/guard_host_subagent_bash_spawn_shapes.py",
         ("_handler",),
     ),
-    "hooks.guard_kira_verdict_routed": (
-        "coordinator_core/hooks/guard_kira_verdict_routed.py",
-        ("_guard_kira_verdict_routed_handler",),
-    ),
     "hooks.guard_manufactured_blocker": (
         "coordinator_core/hooks/guard_manufactured_blocker.py",
         ("_handler",),

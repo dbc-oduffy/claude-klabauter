@@ -1535,8 +1535,7 @@ def _provision(payload: Dict[str, Any], policy_path: Optional[str], cwd: Optiona
     repo is NOT unambiguously resolvable from here -- guessing via this process's own ambient
     directory is exactly how a multi-repo plan-blitz item misfiles its receipt into whichever
     repo this process happens to be sitting in, which is a DURABLE wrong record once
-    written (`hooks/stop_dispatch.py :: _guard_kira_verdict_routed`, coordinator-content-repo, reads it back
-    and reports a false owed-route or a false in-flight verdict off it). Refuse, don't guess.
+    written (readers of `state/subagent-share/` trust it). Refuse, don't guess.
     """
     if not cwd:
         return None

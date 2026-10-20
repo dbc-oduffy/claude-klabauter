@@ -162,7 +162,6 @@ OP_MODULE_MAP: Dict[str, str] = {
     "hooks.sessionend_auto_commit":           "coordinator_core.hooks",
     "hooks.subagent_zero_tool_use_detect":    "coordinator_core.hooks",
     "hooks.group_em_park_spool":              "coordinator_core.hooks",
-    "hooks.guard_kira_verdict_routed":        "coordinator_core.hooks",
     "hooks.guard_manufactured_blocker":       "coordinator_core.hooks",
     "hooks.guard_terminal_review":            "coordinator_core.hooks",
     "goal.append":                            "coordinator_core.ops.goal_append",
