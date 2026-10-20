@@ -464,6 +464,7 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #      a computed refusal/advisory/pass verdict only.
     "hooks.guard_terminal_review": OpClass.COMPUTE_ONLY,
     "hooks.guard_manufactured_blocker": OpClass.MUTATING,
+    "hooks.guard_turn_intent": OpClass.MUTATING,
     # goal.append — MUTATING: appends a goal-event JSON line to the per-machine append-only
     # JSONL shard <central_state_root>/goals-log.<machine>.jsonl (an on-disk state write).
     # Writes coordinator substrate ONLY, never rag's relational store (dual-write ban,

@@ -146,6 +146,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "hooks.subagent_zero_tool_use_detect":    "common_dir",
     "hooks.group_em_park_spool":              "common_dir",
     "hooks.guard_manufactured_blocker":       "common_dir",
+    "hooks.guard_turn_intent":                 "common_dir",
     "hooks.guard_terminal_review":            "common_dir",
     "warm_guard.evaluate":                   "none",
     "percolate.run":                         "none",

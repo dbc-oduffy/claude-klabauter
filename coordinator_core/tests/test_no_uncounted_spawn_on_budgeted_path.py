@@ -1496,6 +1496,10 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
         "coordinator_core/hooks/guard_manufactured_blocker.py",
         ("_handler",),
     ),
+    "hooks.guard_turn_intent": (
+        "coordinator_core/hooks/guard_turn_intent.py",
+        ("_handler",),
+    ),
     "hooks.guard_named_dispatch_tool_restriction": (
         "coordinator_core/hooks/guard_named_dispatch_tool_restriction.py",
         ("_handler",),
