@@ -144,6 +144,9 @@ def post_advisory(context: str) -> dict:
     return envelope
 
 
+_STOP_EVENTS = frozenset({"Stop", "SubagentStop"})
+
+
 def deny(event_name: str, reason: str) -> dict:
     """Return a deny envelope with a human-readable reason.
 
@@ -156,7 +159,14 @@ def deny(event_name: str, reason: str) -> dict:
     Args:
         event_name: value for hookEventName (e.g. "PreToolUse").
         reason:     human-readable denial reason in permissionDecisionReason.
+
+    Stop/SubagentStop ignore hookSpecificOutput.permissionDecision: the only
+    shape that holds a stop is top-level {"decision": "block", "reason": ...}.
     """
+    if event_name in _STOP_EVENTS:
+        envelope = {"decision": "block", "reason": _stamp(reason)}
+        _record("deny", envelope)
+        return envelope
     envelope = {
         "hookSpecificOutput": {
             "hookEventName": event_name,

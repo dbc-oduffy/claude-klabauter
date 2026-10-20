@@ -141,8 +141,8 @@ def test_aggregate_stop_dispatch_folds_guard_terminal_review_block(tmp_path) -> 
     payload = {"cwd": repo_root, "session_id": session_id}
 
     result = asyncio.run(_handler({"payload": payload}))
-    assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
-    assert "review" in result["hookSpecificOutput"]["permissionDecisionReason"].lower()
+    assert result["decision"] == "block"
+    assert "review" in result["reason"].lower()
 
 
 def test_stop_em_report_altitude_wrapper_suppresses_on_subagent_stop() -> None:
@@ -293,8 +293,8 @@ def test_guard_manufactured_blocker_deny_folds_through(monkeypatch) -> None:
         lambda _p: deny("Stop", "MB-BLOCK"), raising=True)
 
     _mod, result = _aggregate({"cwd": "", "session_id": "", "transcript_path": ""})
-    assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
-    assert "MB-BLOCK" in result["hookSpecificOutput"]["permissionDecisionReason"]
+    assert result["decision"] == "block"
+    assert "MB-BLOCK" in result["reason"]
 
 
 def test_replayed_stop_payload_fires_blocker_at_most_once(tmp_path, monkeypatch) -> None:
@@ -306,7 +306,7 @@ def test_replayed_stop_payload_fires_blocker_at_most_once(tmp_path, monkeypatch)
     denies = 0
     for _ in range(2):
         _mod, result = _aggregate(dict(payload))
-        if result.get("hookSpecificOutput", {}).get("permissionDecision") == "deny":
+        if result.get("decision") == "block":
             denies += 1
     assert denies == 1
 
@@ -354,14 +354,14 @@ def _stall_aggregate(monkeypatch, tmp_path, text, **payload_extra):
 
 def test_stalled_workflow_blocks_with_the_resume_call(monkeypatch, tmp_path) -> None:
     result = _stall_aggregate(monkeypatch, tmp_path, _RESUME_TEXT)
-    hso = result["hookSpecificOutput"]
-    assert hso["permissionDecision"] == "deny"
-    assert "RESUME-CALL" in hso["permissionDecisionReason"]
+    assert result["decision"] == "block"
+    assert "RESUME-CALL" in result["reason"]
 
 
 def test_stop_hook_active_downgrades_stalled_workflow_to_advisory(monkeypatch, tmp_path) -> None:
     result = _stall_aggregate(monkeypatch, tmp_path, _RESUME_TEXT, stop_hook_active=True)
     hso = result["hookSpecificOutput"]
+    assert result.get("decision") != "block"
     assert hso.get("permissionDecision") != "deny"
     assert "RESUME-CALL" in hso["additionalContext"]
 

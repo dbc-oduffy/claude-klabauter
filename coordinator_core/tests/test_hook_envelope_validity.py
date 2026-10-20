@@ -195,6 +195,24 @@ def test_deny_envelope_is_valid_json_with_a_legal_decision(prose):
     assert isinstance(reason, str) and reason, "deny without a string reason fails open"
 
 
+@pytest.mark.parametrize("event", ["Stop", "SubagentStop"])
+def test_stop_deny_is_the_top_level_block_shape(event):
+    """Stop ignores permissionDecision; only top-level decision:block holds a stop."""
+    envelope = _round_trip(deny(event, "STOP-REASON"))
+    assert envelope["decision"] == "block"
+    assert "STOP-REASON" in envelope["reason"]
+    assert "hookSpecificOutput" not in envelope
+
+
+def test_pretooluse_deny_shape_is_unchanged():
+    envelope = _round_trip(deny("PreToolUse", "PRE-REASON"))
+    assert "decision" not in envelope
+    hso = envelope["hookSpecificOutput"]
+    assert hso["hookEventName"] == "PreToolUse"
+    assert hso["permissionDecision"] == "deny"
+    assert "PRE-REASON" in hso["permissionDecisionReason"]
+
+
 @pytest.mark.parametrize("prose", ["plain advisory", _HOSTILE])
 def test_allow_advisory_envelope_is_valid_json(prose):
     envelope = allow_advisory("PreToolUse", prose)

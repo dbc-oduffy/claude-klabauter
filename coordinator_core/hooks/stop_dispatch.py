@@ -385,6 +385,9 @@ def _extract_advisory(result) -> "tuple[bool, Optional[str]]":
     """
     if not isinstance(result, dict):
         return False, None
+    if result.get("decision") == "block":
+        reason = result.get("reason")
+        return True, reason if isinstance(reason, str) and reason else None
     hso = result.get("hookSpecificOutput")
     if isinstance(hso, dict):
         if hso.get("permissionDecision") == "deny":

@@ -909,6 +909,8 @@ _PARAM_FIELDS = (
     Field("run_base_sha", "str"),
     Field("flags", "dict"),
     Field("lists", "dict"),
+    Field("per_group", "bool"),
+    Field("group_refs", "str_list"),
 )
 
 
@@ -1124,7 +1126,12 @@ def _sizing_scout_questions(research: dict) -> list:
 
 
 def _research_route_setup(
-    params: dict, repo_root: Optional[Path], from_sizing: Optional[str], ask: object
+    params: dict,
+    repo_root: Optional[Path],
+    from_sizing: Optional[str],
+    ask: object,
+    group: Optional[dict] = None,
+    manifests: Optional[dict] = None,
 ) -> tuple[dict, dict, dict]:
     """Resolve the research route: shape, scratch dir, ask file, loaded and validated segments.
 
@@ -1136,6 +1143,10 @@ def _research_route_setup(
     (``research_emit.bind_context``). ``lists['questions']`` are the scout questions; any other
     given list or ``flags`` entry overrides the segment whose manifest declares it. Every
     segment's refusals are raised together, prefixed by pipeline.
+
+    ``group`` (``{"ref", "topic_slug"}``, per-group fan-out) narrows the sizing's notebooklm targets
+    to that one ref, digests it into the run id and fixes the close topic; ``manifests`` is a
+    pipeline-keyed cache shared across the groups of one emit.
     """
     from coordinator_core.ops import research_shape
     from coordinator_core.ops.dispatch_emit import research_emit
@@ -1149,6 +1160,8 @@ def _research_route_setup(
         slug_refusal = research_emit.given_slug_refusal(given_topic)
         if slug_refusal:
             raise PipelineEmitRefused([slug_refusal])
+    if group:
+        given_topic = group["topic_slug"]
     lists = dict(params.get("lists") or {})
     given_mode = params.get(rc.SCOUT_MODE_PARAM)
     mode = given_mode or rc.DEFAULT_SCOUT_MODE
@@ -1175,6 +1188,15 @@ def _research_route_setup(
         research = load_sizing(root, brief_rel).get("research")
         if not isinstance(research, dict) or not research:
             raise PipelineEmitRefused([f"sizing {brief_rel} has no research block; set one with sizing-assemble --research-class"])
+        if group:
+            kept, taken = [], False
+            for t in research.get("targets") or ():
+                if isinstance(t, dict) and t.get("source") == "notebooklm":
+                    if taken or t.get("ref") != group["ref"]:
+                        continue
+                    taken = True
+                kept.append(t)
+            research = {**research, "targets": kept}
         mode = _sizing_scout_mode(research, given_mode) or mode
         if not questions:
             questions = _sizing_scout_questions(research)
@@ -1196,6 +1218,8 @@ def _research_route_setup(
         "brief": brief_rel or str(ask), "research": research, "lists": lists,
         "flags": params.get("flags") or {}, "context": [str(c) for c in params.get("context") or ()],
     }
+    if group:
+        digest_parts["group"] = group["ref"]
     if raw_questions or from_sizing or mode != rc.DEFAULT_SCOUT_MODE:
         digest_parts["scout_questions"] = questions
         digest_parts["scout_mode"] = mode
@@ -1250,7 +1274,10 @@ def _research_route_setup(
     reasons: list[str] = []
     claimed: set[str] = set()
     for pipeline, inputs in pairs:
-        manifest = load_manifest(content_root, pipeline)
+        if manifests is None:
+            manifest = load_manifest(content_root, pipeline)
+        else:
+            manifest = manifests.get(pipeline) or manifests.setdefault(pipeline, load_manifest(content_root, pipeline))
         if pipeline == "notebooklm":
             try:
                 manifest = research_emit.gate_notebooklm(manifest)
@@ -1361,6 +1388,75 @@ def _research_route_setup(
     }
     pipeline_ctx = {"root": root, "run_id": run_id, "resume_missing": False, "inputs": segments[0][1]}
     return research_ctx, pipeline_ctx, params
+
+
+def _emit_per_group(params: dict, repo_root: Optional[Path], from_sizing: object, emit: Callable) -> dict:
+    """One single-group research emit per notebooklm target of the sizing; the reply is the fan-out plan.
+
+    Every group of the sizing is set up first so each close names all sibling run ids (a ``group_refs``
+    subset still closes against the full set, so the research block survives until every group closes),
+    then the selected groups are emitted through ``emit`` (the op itself) with their prepared route
+    context. Refusals are raised together.
+    """
+    from coordinator_core.ops import research_shape
+    from coordinator_core.ops.dispatch_emit import research_emit
+    from coordinator_core.ops.dispatch_emit.research_groups import (
+        GROUP_RUNS_CLOSE_PARAM, GROUPS_PARAM, GROUPS_REPLY_KEY, PER_GROUP_PARAM, groups_for, per_group_refusals,
+    )
+    from coordinator_core.ops.dispatch_emit.sizing_fire import load_sizing
+
+    if not from_sizing:
+        raise ValueError(f"dispatch.emit {PER_GROUP_PARAM} needs from_sizing")
+    if aliased_param(params, "output_path", "out_path") or params.get("research"):
+        raise ValueError(f"dispatch.emit {PER_GROUP_PARAM} derives each script path and takes no output_path or research")
+    given_topic = params.get("topic_slug")
+    if given_topic is not None:
+        slug_refusal = research_emit.given_slug_refusal(given_topic)
+        if slug_refusal:
+            raise PipelineEmitRefused([slug_refusal])
+    root = _sizing_root(params, repo_root, str(from_sizing))
+    sizing_rel = normalize_sizing_rel(root, str(from_sizing))
+    research = load_sizing(root, sizing_rel).get("research")
+    if not isinstance(research, dict) or not research:
+        raise PipelineEmitRefused([f"sizing {sizing_rel} has no research block; set one with sizing-assemble --research-class"])
+    selected = tuple(params.get(GROUPS_PARAM) or ())
+    reasons = per_group_refusals(research_shape.shape(research), research, selected)
+    if reasons:
+        raise PipelineEmitRefused(reasons)
+    specs = groups_for(research, given_topic or research_emit.topic_slug("", sizing_rel))
+    base = {k: v for k, v in params.items() if k not in (PER_GROUP_PARAM, GROUPS_PARAM, "topic_slug")}
+    manifests: dict = {}
+    prepared = [
+        _research_route_setup(
+            base, repo_root, from_sizing, None,
+            group={"ref": s.ref, "topic_slug": s.topic_slug}, manifests=manifests,
+        )
+        for s in specs
+    ]
+    run_ids = [ctx["run_id"] for ctx, _, _ in prepared]
+    entries = []
+    for spec, ready in zip(specs, prepared):
+        if selected and spec.ref not in selected:
+            continue
+        ready[0]["next_action"]["params"][GROUP_RUNS_CLOSE_PARAM] = run_ids
+        sub = emit(ready[2], repo_root, _research_ready=ready)
+        if "path" not in sub:
+            return sub
+        entries.append((spec, sub))
+    first = entries[0][1]
+    return {
+        **first,
+        PER_GROUP_PARAM: True,
+        "ok": all(sub["ok"] for _, sub in entries),
+        GROUPS_REPLY_KEY: [
+            {
+                "group": spec.group, "ref": spec.ref, "priority": spec.priority, "run_id": sub["run_id"],
+                "path": sub["path"], "sha256": sub["sha256"], "receipt": sub["receipt"],
+                "fanout": sub.get("fanout"), "next_action": sub["next_action"],
+            }
+            for spec, sub in entries
+        ],
+    }
 
 
 def _account_inventory(
@@ -1500,8 +1596,16 @@ def _dispatch_emit(
     repo_root: Optional[Path] = None,
     *,
     only_review_plans: Optional[frozenset] = None,
+    _research_ready: Optional[tuple] = None,
 ) -> dict:
     """JSON-RPC "dispatch.emit" handler.
+
+    ``_research_ready`` is the per-group seam's own (never a request param): a research route
+    context already set up by ``_emit_per_group``.
+
+    ``per_group`` (bool, with ``from_sizing``; optional ``group_refs`` subset): one independent
+    single-notebook research emit per notebooklm target in sizing order, replied as
+    ``research_groups`` plus ``per_group: true``.
 
     ``only_review_plans`` is the lanes flow's own seam (never a request
     param): when not ``None``, an ``--inventory`` emission reviews only those
@@ -1655,6 +1759,10 @@ def _dispatch_emit(
     if not isinstance(research_flag, bool):
         raise ValueError("dispatch.emit research must be a boolean")
     research_route = bool(from_sizing) or research_flag
+    if _research_ready is None and (params.get("per_group") or params.get("group_refs")):
+        if params.get("per_group") is False:
+            raise ValueError("dispatch.emit group_refs needs per_group")
+        return _emit_per_group(params, repo_root, from_sizing, _dispatch_emit)
     if fanout_group == "split" and not (research_route or pipeline_name):
         return {
             "error": "dispatch.emit params.fanout_group 'split' is honoured by the pipeline and research "
@@ -1672,7 +1780,7 @@ def _dispatch_emit(
                 "dispatch.emit research route accepts from_sizing, or research with an ask, "
                 "alone -- not with plan_path/inventory_path/queue/profile/pipeline/sizing_path/cloud_spawn"
             )
-        research_ctx, pipeline_ctx, params = _research_route_setup(params, repo_root, from_sizing, ask)
+        research_ctx, pipeline_ctx, params = _research_ready or _research_route_setup(params, repo_root, from_sizing, ask)
         repo_root = repo_root or research_ctx["root"]
 
     if pipeline_name:

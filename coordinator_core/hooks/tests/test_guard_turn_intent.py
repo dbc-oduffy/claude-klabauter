@@ -137,8 +137,7 @@ def _run(payload: dict):
 
 
 def _blocked(result: dict) -> bool:
-    out = result.get("hookSpecificOutput") or {}
-    return ti.BLOCK_REASON in str(out.get("permissionDecisionReason", ""))
+    return result.get("decision") == "block" and ti.BLOCK_REASON in str(result.get("reason", ""))
 
 
 def _record(directory: Path) -> dict:
@@ -159,7 +158,7 @@ def test_missing_tail_blocks_twice_then_heuristic(tmp_path, monkeypatch):
     first = _run(payload)
     second = _run({**payload, "stop_hook_active": True})
     assert _blocked(first) and _blocked(second)
-    assert first["hookSpecificOutput"]["hookEventName"] == "Stop"
+    assert first["decision"] == "block"
     assert not (d / ti.RECORD_NAME).exists()
     third = _run({**payload, "stop_hook_active": True})
     assert not _blocked(third)

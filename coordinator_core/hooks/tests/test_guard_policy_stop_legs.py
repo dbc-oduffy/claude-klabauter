@@ -36,8 +36,7 @@ def _write(reg, text):
 
 
 def _denies(result) -> bool:
-    hso = result.get("hookSpecificOutput") or {}
-    return hso.get("permissionDecision") == "deny"
+    return result.get("decision") == "block" and "BLOCK-TEXT" in str(result.get("reason", ""))
 
 
 def _gated(name):

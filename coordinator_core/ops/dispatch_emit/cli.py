@@ -651,6 +651,22 @@ def _build_parser() -> argparse.ArgumentParser:
         "a pipeline's derived inputs (e.g. --flag compare=true), plus --context and --scratch-dir",
     )
     parser.add_argument(
+        "--per-group",
+        dest="per_group",
+        action="store_true",
+        help="with --from-sizing: emit one independently fireable research run per notebooklm target "
+        "(own run id, close and trail), in sizing target order; one run line per group on stderr",
+    )
+    parser.add_argument(
+        "--group",
+        dest="group_refs",
+        action="append",
+        default=None,
+        metavar="REF",
+        help="with --from-sizing: emit only the group whose notebooklm target ref is REF "
+        "(repeatable; implies --per-group)",
+    )
+    parser.add_argument(
         "--stop-after",
         dest="stop_after",
         choices=[STOP_AFTER_PLAN],
@@ -1459,6 +1475,13 @@ def main(argv: "Optional[list[str]]" = None) -> int:
                 file=sys.stderr,
             )
             return EXIT_USAGE
+    per_group = bool(args.per_group or args.group_refs)
+    if per_group and (not args.from_sizing or args.out_path):
+        problem = "--per-group/--group needs --from-sizing" if not args.from_sizing else (
+            "--per-group/--group derives each group's script path and is exclusive of --out"
+        )
+        print(f"emit-dispatch-workflow: ERROR — {problem}", file=sys.stderr)
+        return EXIT_USAGE
     ask_route_early = (args.ask is not None or bool(args.sizing)) and not is_research_route
     if args.context and not is_research_route and not ask_route_early:
         print("emit-dispatch-workflow: ERROR — --context requires --from-sizing or --research", file=sys.stderr)
@@ -1832,6 +1855,12 @@ def main(argv: "Optional[list[str]]" = None) -> int:
     if is_research_route:
         if args.from_sizing:
             params["from_sizing"] = args.from_sizing
+            if per_group:
+                from coordinator_core.ops.dispatch_emit import research_groups as rg
+
+                params[rg.PER_GROUP_PARAM] = True
+                if args.group_refs:
+                    params[rg.GROUPS_PARAM] = list(args.group_refs)
         else:
             params["research"] = True
             params["ask"] = args.ask
@@ -2112,7 +2141,21 @@ def main(argv: "Optional[list[str]]" = None) -> int:
     # and carries the fire record under "fire".
     pending_doc = printed
     split_research = bool(result.get("parts")) and not args.lanes
-    if args.lanes or split_research:
+    group_entries = None
+    if per_group:
+        from coordinator_core.ops.dispatch_emit import research_groups as rg
+
+        group_entries = result.get(rg.GROUPS_REPLY_KEY)
+    if group_entries:
+        for entry in group_entries:
+            _print_workflow_invocation(entry, is_queue_route=False)
+            print(f"emit-dispatch-workflow: {rg.run_line(entry)}", file=sys.stderr)
+        print(
+            f"emit-dispatch-workflow: {len(group_entries)} groups; each group is its own run; "
+            "fire in priority order, independently; each closes on its own next_action.",
+            file=sys.stderr,
+        )
+    elif args.lanes or split_research:
         for emitted in result["parts"]:
             _print_workflow_invocation(
                 {**emitted, "fire_args": result.get("fire_args")},

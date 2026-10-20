@@ -94,6 +94,9 @@ def per_group_refusals(shape: Mapping, research: Mapping, selected: Sequence[str
     seen: dict[str, str] = {}
     for ref in refs:
         slug = _group_slug(ref)
+        if not slug:
+            reasons.append(f"notebooklm target {ref!r} has no slug characters; rename it")
+            continue
         if slug in seen and seen[slug] != ref:
             reasons.append(f"notebooklm targets {seen[slug]!r} and {ref!r} slug alike ({slug!r}); rename one")
         seen.setdefault(slug, ref)

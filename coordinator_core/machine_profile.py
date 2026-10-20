@@ -285,6 +285,9 @@ def _deny_body(envelope: Any) -> Optional[Dict[str, Any]]:
     hso = envelope.get("hookSpecificOutput")
     if isinstance(hso, dict) and hso.get("permissionDecision") == "deny":
         return hso
+    if envelope.get("decision") == "block":
+        # Stop-event deny (see _hook_envelope.deny), read through the same body.
+        return {"hookEventName": "Stop", "permissionDecisionReason": envelope.get("reason")}
     return None
 
 
