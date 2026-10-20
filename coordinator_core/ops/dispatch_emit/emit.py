@@ -481,6 +481,7 @@ _AGENT_MODELS = {
     "coordinator:apm": "opus",
     "coordinator:plan-author": "opus",
     "coordinator:plan-author-residue": "sonnet",
+    "coordinator:premise-checker": "sonnet",
     "coordinator:code-reviewer": "sonnet",
     "coordinator:delivery-verifier": "sonnet",
     "coordinator:staff-eng": "opus",

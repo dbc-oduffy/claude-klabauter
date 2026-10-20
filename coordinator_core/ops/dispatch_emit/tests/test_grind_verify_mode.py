@@ -44,13 +44,15 @@ def test_fix_before_verify_graph_has_no_pre_fix_verify():
     assert gc.pre_fix_verify_nodes(gc.build_routing_table(profile)) == frozenset()
 
 
-def test_one_verify_prompt_carries_both_briefs_chosen_by_the_node(tmp_path):
+def test_routing_and_post_fix_briefs_ride_separate_calls_chosen_by_the_node(tmp_path):
     script = _script(_routing_profile(tmp_path))
     assert 'const VERIFY_PRE_FIX = ["verify-routing"];' in script
-    call = re.search(r"VERIFY_PRE_FIX\.includes\(row\.node\)\) \? \((.*?)\) : \(", script, re.S).group(1)
-    assert _ROUTING_MARK in call and "do not require any change on disk" in call
-    assert _POST_FIX_MARK not in call
+    block = script[script.index("if (VERIFY_PRE_FIX.includes(row.node)) {\n"):]
+    routing_call = block[: block.index("\n  }\n")]
+    assert _ROUTING_MARK in routing_call and "do not require any change on disk" in routing_call
+    assert _POST_FIX_MARK not in routing_call
     assert script.count(_POST_FIX_MARK) == 1
+    assert script.count(_ROUTING_MARK) == 1
 
 
 def test_pre_fix_verify_failing_twice_is_handed_back_without_undo():

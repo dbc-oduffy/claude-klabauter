@@ -28,7 +28,7 @@ def test_post_fix_verify_judges_the_covering_artifact_not_a_diff():
 
 
 def test_verify_fail_is_recorded_to_the_row_ledger_with_check_expected_and_seen():
-    call = _verify_call(pre_fix_js="false")
+    call = _verify_call()
     assert call.count("--stage verify --verdict fail --outcome fail") == 1
     assert "what it expected and what you saw" in call
     assert "/evidence/" in call and ".verify.md" in call

@@ -359,6 +359,9 @@ def _calls_by_stage(**kw) -> dict:
             label="fix:row1", phase_title="Fix", row_id="row1", locked_files=["a.py"], **kw
         ),
         "verify": grind_stages.compose_verify_agent_call(label="v", phase_title="Verify", **kw),
+        "verify-routing": grind_stages.compose_verify_agent_call(
+            label="vr", phase_title="Verify", routing=True, **kw
+        ),
         "verify-op": grind_stages.compose_verify_op_call(
             label="vo", phase_title="Verify", op="x.y", run_dir="r", batch_id="b1", **kw
         ),

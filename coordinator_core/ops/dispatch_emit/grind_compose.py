@@ -129,6 +129,7 @@ __all__ = [
     "batch_reserve",
     "build_routing_table",
     "pre_fix_verify_nodes",
+    "dedupe_flip_route",
     "route_after_triage",
     "triage_fix_verdict",
     "triage_fix_target",
@@ -181,6 +182,13 @@ def _verify_failed_twice(reason: Any) -> str:
     """Hand-back reason for a row whose verify failed on the retry; carries the verifier's own reason.
     Twin: ``_why`` in ``_verifyStage``."""
     return "verify failed twice" + (f": {str(reason)[:400]}" if reason else "")
+
+
+def dedupe_flip_route(routing: Mapping[str, dict], triage_node_id: str) -> Optional[str]:
+    """The node a retire-verdict ``dedupe`` enters from triage, or None when the profile routes it to a
+    hand-back. Twin: ``routeAfterTriage('dedupe', ...)`` in ``_verifyStage``."""
+    action = route_after_triage(routing, triage_node_id, "dedupe", None, "")
+    return action[1] if action[0] == "node" else None
 
 
 def pre_fix_verify_nodes(routing: Mapping[str, dict]) -> frozenset[str]:
@@ -382,6 +390,7 @@ class Row:
     declared_files: list = field(default_factory=list)
     widened: bool = False
     verify_retried: bool = False
+    dedupe_flipped: bool = False
     on_fail_used: bool = False
     done: bool = False
     sha: str = ""
@@ -389,6 +398,7 @@ class Row:
     refute_note: str = ""
     fix_reported: bool = False
     sizing_path: str = ""
+    evidence: str = ""
 
 @dataclass
 class _Batch:
@@ -839,6 +849,17 @@ def run_admission(
         result = _record_call("verify", row.row_id) or {}
         outcome = result.get("outcome")
         if outcome == "fail":
+            flip_to = dedupe_flip_route(routing, triage_node_id)
+            if (
+                result.get("covered_by") and row.node in pre_fix_verify and not row.dedupe_flipped
+                and row.origin != "triage:dedupe" and flip_to is not None
+            ):
+                row.dedupe_flipped = True
+                row.verify_retried = True
+                row.origin = "triage:dedupe"
+                row.evidence = f"already covered at {result['covered_by']}"
+                row.node = flip_to
+                return
             if not row.verify_retried:
                 row.verify_retried = True
                 row.verify_feedback = result.get("reason", "")
@@ -1778,8 +1799,16 @@ def compose_grind_script(
         agent_type_host=agent_type_host, run_key=run_key, preamble_expr=preamble_expr,
         targeted_runner=targeted_runner, profile=profile.name, run_id_js="RUN_ID",
         final_js="row.verifyRetried", undo_paths_js="_undoPaths(row)",
-        pre_fix_js="VERIFY_PRE_FIX.includes(row.node)",
         digest_js="row.digest",
+    )
+    verify_routing_raw = stages.compose_verify_agent_call(
+        models=stage_models,
+        label="verify-routing", phase_title="Grind",
+        row_id_js="row.rowId", row_path_js="row.path", touched_files_js="row.touchedFiles",
+        evidence_js="row.evidence", fix_plan_js="row.fixPlan",
+        agent_type_host=agent_type_host, run_key=run_key, preamble_expr=preamble_expr,
+        targeted_runner=targeted_runner, profile=profile.name, run_id_js="RUN_ID",
+        routing=True, digest_js="row.digest",
     )
     _runner_fail = json.dumps([
         o for o in stages.RUNNER_FAIL_OUTCOMES if profile.name == "bug" or o != "no-runner"
@@ -1819,6 +1848,16 @@ def compose_grind_script(
             "    ",
         )
         + "\n  }\n"
+        + (
+            "  if (VERIFY_PRE_FIX.includes(row.node)) {\n"
+            + _indent_block(
+                _capture(verify_routing_raw, "verify", tail=verify_agent_tail if targeted_runner else None),
+                "    ",
+            )
+            + "\n  }\n"
+            if pre_fix_nodes
+            else ""
+        )
         + _indent_block(
             _capture(verify_agent_raw, "verify", tail=verify_agent_tail if targeted_runner else None),
             "  ",
@@ -1855,7 +1894,7 @@ def compose_grind_script(
         "declaredFiles: [_path], touchedFiles: [_path], removedFiles: [], createdFiles: [], "
         "evidence: '', verifyFeedback: '', fixPlan: '', fixNode: null, closeResult: null, lastOutcome: '', "
         "origin: '', refuteNote: '', fixReported: false, sizingPath: '', undoReason: '', "
-        "widened: false, verifyRetried: false, onFailUsed: false, done: false, sha: '' };\n"
+        "widened: false, verifyRetried: false, dedupeFlipped: false, onFailUsed: false, done: false, sha: '' };\n"
         "  }\n"
         "}"
     )
@@ -2039,6 +2078,17 @@ def compose_grind_script(
         "  const lockKeys = _lockKeysFor(row, rowId);\n"
         "  const result = await _issue(row.batchId, rowId, () => withLock(lockKeys, async () => _verifyCall(row)));\n"
         "  if (result.outcome === 'fail') {\n"
+        "    if (result.covered_by && VERIFY_PRE_FIX.includes(row.node) && !row.dedupeFlipped && row.origin !== 'triage:dedupe') {\n"
+        "      const _flip = routeAfterTriage('dedupe', null, '');\n"
+        "      if (_flip.kind === 'node') {\n"
+        "        row.dedupeFlipped = true;\n"
+        "        row.verifyRetried = true;\n"
+        "        row.origin = 'triage:dedupe';\n"
+        "        row.evidence = 'already covered at ' + result.covered_by;\n"
+        "        row.node = _flip.value;\n"
+        "        return;\n"
+        "      }\n"
+        "    }\n"
         "    if (!row.verifyRetried) {\n"
         "      row.verifyRetried = true;\n"
         "      row.verifyFeedback = result.reason || '';\n"

@@ -99,11 +99,16 @@ COMMIT_AGENT_TYPE = _COMMIT_AGENT_TYPE
 #: Equals ``pm_adjudication.ADJUDICATOR_AGENT_TYPE``, which imports this module.
 APM_AGENT_TYPE = "coordinator:apm"
 
+#: The routing verify judges a verdict and what the row cites, which the test-runner's role refuses
+#: as review work; the premise-checker resolves citations against the tree and can run the ledger command.
+ROUTING_VERIFY_AGENT_TYPE = "coordinator:premise-checker"
+
 #: Stages that dispatch a DoE-defined agent type: their model is that type's
 #: ``emit._AGENT_MODELS`` entry and no run ``models`` entry may change it.
 STAGE_AGENT_TYPES: dict[str, str] = {
     "size": SIZING_SCOUT_AGENT_TYPE,
     "verify": _TEST_AGENT_TYPE,
+    "verify-routing": ROUTING_VERIFY_AGENT_TYPE,
     "verify-op": OP_RUNNER_AGENT_TYPE,
     "commit": COMMIT_AGENT_TYPE,
     "adjudicate": APM_AGENT_TYPE,
@@ -150,6 +155,13 @@ _COVERED_CLOSE_VERIFY_CLAUSE = (
     "states what the row claims, or whether the defect is truly not live; fail only if the artifact is "
     "missing or does not cover the claim."
 )
+
+_COVERED_BY_CLAUSE = (
+    " If the row's claim is already covered by an existing artifact (a wiki page, doc, code or test), "
+    "report fail and set `covered_by` to that artifact as `path:line`; set `covered_by` for no other failure."
+)
+
+_COVERED_BY_LEDGER_CLAUSE = " When you set `covered_by`, pass `--verdict dedupe` in that command."
 
 _ROUTING_VERIFY_RUNNER_CLAUSE = (
     " Run no tests: return `tests_record` as an empty string and `tests_outcome` as `nothing-to-run`."
@@ -899,14 +911,15 @@ def compose_verify_agent_call(
     repo_root_js: str = "REPO_ROOT",
     final_js: Optional[str] = None,
     undo_paths_js: Optional[str] = None,
-    pre_fix_js: Optional[str] = None,
+    routing: bool = False,
     digest_js: Optional[str] = None,
 ) -> str:
     """The `verify` agent call. With ``digest_js`` the verifier records every `fail` -- the check, what it
     expected, what it saw -- as a ledger line and returns the same text as `reason`. With ``undo_paths_js`` (and ``final_js``) the verifier also runs the undo
     op on the row's final verification when its own verdict is `fail`, and returns the result as `undo`.
-    ``pre_fix_js`` is a JS boolean expression; true at run time swaps the post-fix brief for the routing
-    brief (no fix has run: judge the triage verdict and target, require nothing on disk, no undo)."""
+    ``routing`` swaps the post-fix brief for the routing brief (no fix has run: judge the triage verdict and
+    target, require nothing on disk, no undo) and dispatches ``ROUTING_VERIFY_AGENT_TYPE``; its reply may
+    carry ``covered_by`` (``path:line``), the structured "already covered" outcome."""
     head: list[tuple[str, str]] = [
         *_preamble_parts(preamble_expr),
         ("lit", "You are the verify stage for row "),
@@ -955,6 +968,8 @@ def compose_verify_agent_call(
             _shq_part(repo_root_js),
             ("lit", "`."),
         ]
+        if routing:
+            fail_record.append(("lit", _COVERED_BY_LEDGER_CLAUSE))
     schema = {
         "type": "object",
         "required": ["outcome"],
@@ -984,7 +999,7 @@ def compose_verify_agent_call(
         schema["properties"]["tests_record"] = {"type": "string"}
         schema["properties"]["tests_outcome"] = {"type": "string", "enum": list(RUNNER_OUTCOMES)}
         schema["properties"]["tests_failing_ids"] = {"type": "array", "items": {"type": "string"}}
-    if undo_paths_js:
+    if undo_paths_js and not routing:
         fail_when = (
             "When your outcome is fail"
             + (
@@ -1000,24 +1015,23 @@ def compose_verify_agent_call(
             repo_root_js=repo_root_js,
         ))
         schema["properties"]["undo"] = _UNDO_SCHEMA
-    if pre_fix_js:
-        routing_parts: list[tuple[str, str]] = [
+    if routing:
+        parts = [
             ("lit", ". No fix has run for this row and none is expected. Triage evidence: "),
             ("expr", evidence_js) if evidence_js else ("lit", "(none)"),
-            ("lit", ". " + _ROUTING_VERIFY_CLAUSE),
+            ("lit", ". " + _ROUTING_VERIFY_CLAUSE + _COVERED_BY_CLAUSE),
         ]
         if targeted_runner:
-            routing_parts.append(("lit", _ROUTING_VERIFY_RUNNER_CLAUSE))
-        branch = f"({pre_fix_js}) ? ({_join_prompt_parts(routing_parts)}) : ({_join_prompt_parts(parts)})"
-        parts = [("expr", branch)]
+            parts.append(("lit", _ROUTING_VERIFY_RUNNER_CLAUSE))
+        schema["properties"]["covered_by"] = {"type": "string"}
     parts = [*head, *parts, *fail_record]
     return _agent_call(
         _join_prompt_parts(parts),
-        stage="verify",
+        stage="verify-routing" if routing else "verify",
         models=models,
         label=label,
         phase_title=phase_title,
-        agent_type=_TEST_AGENT_TYPE,
+        agent_type=ROUTING_VERIFY_AGENT_TYPE if routing else _TEST_AGENT_TYPE,
         agent_type_host=agent_type_host,
         run_key=run_key,
         effort="high",
