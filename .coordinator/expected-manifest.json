@@ -2096,8 +2096,8 @@
     "coordinator_core/_content_root_primitive.py": "f7fcd3083855a5e1dd53c09233fbfd64f8dffdf5",
     "coordinator_core/_data_root.py": "0c7c8524f25376ae49593f11334445539dc557f9",
     "coordinator_core/_engine_landing.py": "06dbb1273f3c36fdb6be08767ec75e73c71630e7",
-    "coordinator_core/_engine_published_at": "47ad4584327a44f7103dbd4b74217e44405748dc",
-    "coordinator_core/_engine_stamp": "beeb11b1985b2c2a1885e10567b93fccd738504b",
+    "coordinator_core/_engine_published_at": "ebaed8f0123c2053838b5a526b63e9edff8a088d",
+    "coordinator_core/_engine_stamp": "bf8353da11ac338918447c05829ff9c8b97a5ba3",
     "coordinator_core/_fleet_names.py": "e81fc4247611fe486697f4707b28a1a3a008f392",
     "coordinator_core/_hook_envelope.py": "d98df967471c001593ab85960dc367f5ff5da056",
     "coordinator_core/_repo_root_probe.py": "2d8edfa8cd9343436a650584da430aa87ae0397d",
@@ -4939,6 +4939,7 @@
     "coordinator_core/ops/dispatch_emit/tests/test_inventory_default_out.py": "48a906422af2435350836708578c7e929051f988",
     "coordinator_core/ops/dispatch_emit/tests/test_inventory_delivered_elsewhere_skip.py": "27771ecc504a1ae35157cc0c47f79694c76ea17a",
     "coordinator_core/ops/dispatch_emit/tests/test_inventory_doe_shape_same_tranche_and_checkpoint_landed.py": "6b8893fa9c87323b4d781f11f8012c978c775f30",
+    "coordinator_core/ops/dispatch_emit/tests/test_inventory_emit_plan_edge_and_tranche_exit.py": "e4d69ab125c7e047ad36c0b03b7212a9ea777771",
     "coordinator_core/ops/dispatch_emit/tests/test_inventory_family_landed.py": "33e7d0e2761b95bcfcf836d02ef1ecc687691702",
     "coordinator_core/ops/dispatch_emit/tests/test_inventory_mint.py": "933f795373cd0202978ed4dcd67e34465ec90f6f",
     "coordinator_core/ops/dispatch_emit/tests/test_inventory_mint_accounting.py": "573b74388249efeefd4a4804017261fd94a68fe4",
@@ -8637,5 +8638,5 @@
     "scripts/unstick_claude.py": "5458a0f699f1793ff9fd32295b9d0b33635f1c06"
   },
   "schema": 1,
-  "source_head": "5c5439fbefc56815af5bfa42a8556ab010287654"
+  "source_head": "eae63d4d20b18ec2bec7188f0c5f1faac8f6f35f"
 }
