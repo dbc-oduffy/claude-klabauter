@@ -286,10 +286,26 @@ def test_unlinked_and_ambiguous_plan_fields_are_present_as_null_or_filled(root):
     baton(root, "none")
     batons = by_id(gate_v2.compute_gate_report(root))
     assert batons["amb"]["plan"] is None and batons["amb"]["ambiguous_plan_link"]["basis"] == "sizing_object"
-    assert batons["claim"]["unlinked_plan_claim"] == "docs/plans/gone.md"
+    assert batons["claim"]["unlinked_plan_claim"] == {
+        "path": "docs/plans/gone.md", "cause": "plan_absent", "status": None,
+    }
     assert batons["claim"]["plan"] is None
     assert batons["none"]["plan"] is None
     assert batons["none"]["unlinked_plan_claim"] is None and batons["none"]["ambiguous_plan_link"] is None
+
+
+def test_unlinked_claim_names_the_one_step_that_refused_it(root):
+    plan(root, "other", status="deferred", deliverable_id="d-plan", title="t")
+    (root / "docs/plans/review.md").write_text(_fm(kind="staff-eng-review", plan="x", status="draft"), encoding="utf-8")
+    baton(root, "contra", governing_plan="docs/plans/other.md", deliverable_id="d-baton")
+    baton(root, "sidecar", governing_plan="docs/plans/review.md")
+    baton(root, "gone", governing_plan="docs/plans/gone.md")
+    batons = by_id(gate_v2.compute_gate_report(root))
+    assert batons["contra"]["unlinked_plan_claim"] == {
+        "path": "docs/plans/other.md", "cause": "no_back_link", "status": "deferred",
+    }
+    assert batons["sidecar"]["unlinked_plan_claim"]["cause"] == "not_a_plan_record"
+    assert batons["gone"]["unlinked_plan_claim"]["cause"] == "plan_absent"
 
 
 def test_sidecar_in_docs_plans_is_not_a_plan(root):

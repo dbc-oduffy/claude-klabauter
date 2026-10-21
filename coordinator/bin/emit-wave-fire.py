@@ -529,6 +529,9 @@ def _baton_arg(record: dict) -> dict:
     }
 
 
+_SHELVED_PLAN_STATUSES = frozenset({"deferred", "abandoned", "superseded"})
+
+
 def _broken_link_reason(r: dict) -> str:
     """One baton's broken-link cause, read from the gate record: an ambiguous tie carries the
     gate's own `repair`; a present-but-unresolved `governing_plan` is named as not linking."""
@@ -537,11 +540,21 @@ def _broken_link_reason(r: dict) -> str:
         repair = amb.get("repair") if isinstance(amb, dict) else None
         return f"{r['id']}: " + (repair or "several plans tie; write `governing_plan:` to pick one")
     claim = r.get("unlinked_plan_claim")
-    path = (claim.get("path") if isinstance(claim, dict) else claim) or "(unnamed)"
-    return (
-        f"{r['id']}: declared plan {path} did not link (plan missing, status not linkable, "
-        "or no back-link to this baton); check the plan, not the baton's field"
-    )
+    claim = claim if isinstance(claim, dict) else {"path": claim}
+    path = claim.get("path") or "(unnamed)"
+    status = claim.get("status")
+    cause = claim.get("cause")
+    if cause == "plan_absent":
+        why = f"{path} does not exist"
+    elif cause == "not_a_plan_record":
+        why = f"{path} is not a plan record"
+    elif cause == "no_back_link" and status in _SHELVED_PLAN_STATUSES:
+        why = f"{path} is status {status}, not linkable"
+    elif cause == "no_back_link" and status:
+        why = f"{path} is status {status}, with no back-link to this baton"
+    else:
+        why = f"declared plan {path} did not link"
+    return f"{r['id']}: {why}; check the plan, not the baton's field"
 
 
 def _unlinked_split_line(records: list[dict]) -> str:

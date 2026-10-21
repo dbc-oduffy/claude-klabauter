@@ -48,7 +48,7 @@ class GateReadRefused(Exception):
 
 
 # Nested shapes: plan{path,status,link_basis}, planning_gate{open,blocking[]},
-# execution_gate{open,blocking[]}.
+# execution_gate{open,blocking[]}, unlinked_plan_claim{path,cause,status} | None.
 BATON_REPORT_KEYS = frozenset({
     "id", "path", "title", "stub_id", "status", "deployment_state", "candidate",
     "plan", "needs_plan", "execution_authorized", "sized", "sizing_objects",
@@ -419,6 +419,19 @@ def _link(g: _Gate, rec: _Rec) -> Tuple[Optional[dict], Optional[dict]]:
     return result
 
 
+def _unlinked_claim(g: _Gate, gp: str) -> dict:
+    """``{path, cause, status}`` for a ``governing_plan`` claim no link basis resolved: the one
+    step that refused it. ``plan_absent`` (no file), ``not_a_plan_record`` (a file that is not a
+    plan), or ``no_back_link`` (an indexed plan the baton's ``deliverable_id`` contradicts or
+    that another basis outranked); ``status`` is the plan's own, else None."""
+    path = gp.replace("\\", "/")
+    indexed = g.plans().get(path)
+    if indexed is not None:
+        return {"path": path, "cause": "no_back_link", "status": indexed["status"]}
+    cause = "not_a_plan_record" if (g.root / path).is_file() else "plan_absent"
+    return {"path": path, "cause": cause, "status": None}
+
+
 def _disposition(g: _Gate, rec: Optional[_Rec]) -> str:
     """Requirement 4: unresolved | unplanned | plan-drafted | plan-approved | coded."""
     if rec is None:
@@ -595,7 +608,7 @@ def _info(g: _Gate, rec: _Rec) -> _Info:
         "sizing_objects": resolved,
         "planning_gate": {"open": not planning, "blocking": planning},
         "execution_gate": {"open": not execution, "blocking": execution},
-        "unlinked_plan_claim": gp if gp and plan is None else None,
+        "unlinked_plan_claim": _unlinked_claim(g, gp) if gp and plan is None else None,
         "ambiguous_plan_link": ambiguity,
         "held": state == "held",
         "waiting_on_execution": waiting,

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from coordinator_core.ops._workflow_contract import Severity, run_checks
+from coordinator_core.ops.dispatch_emit import ask_compose
 from coordinator_core.ops.dispatch_emit.ask_compose import compose_ask_script
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
 
@@ -76,6 +77,20 @@ def test_baton_threads_into_size_and_gate():
     assert 'baton: "state/handoffs/b.md"' in with_baton
     plain = _compose()
     assert "--deliverable-id" not in plain and "baton: \"" not in plain
+
+
+def test_accept_prompt_stages_xs_after_regate(monkeypatch):
+    monkeypatch.setattr(ask_compose, "_known_arm", lambda *_: "xs")
+    kw = dict(prompt=None, sizing_rel="state/sizings/x.yaml", accept_pending=True, writes=["a.py"])
+    script = _compose(**kw)
+    section = _accept_section(script)
+    assert "dispatch.ask_stage" in section
+    assert "stage_reply" in section
+    assert "_adoptStageReply(_apm.stage_reply)" in script
+    assert "!_gate.halt && _gate.arm === 'xs'" in script
+    stopped = _compose(**kw, stop_after="plan")
+    assert "dispatch.ask_stage" not in _accept_section(stopped)
+    assert "_adoptStageReply(_apm.stage_reply)" not in stopped
 
 
 def test_contract_linter_stays_clean():

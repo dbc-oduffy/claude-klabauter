@@ -277,10 +277,33 @@ def test_handler_refuses_malformed_params_with_a_structured_error(repo, params):
     assert set(reply) == {"error"} and "dispatch.ask_gate" in reply["error"]
 
 
-def test_baton_given_at_xs_is_refused_naming_the_arm(repo):
+def _handoff(repo, sizing_object):
+    (repo / "state" / "handoffs").mkdir(parents=True, exist_ok=True)
+    (repo / "state" / "handoffs" / "x.md").write_text(
+        f"---\nhandoff_id: hnd-x-abc123\nsizing_object: {sizing_object}\n---\nbody\n", encoding="utf-8", newline="\n"
+    )
+    return "state/handoffs/x.md"
+
+
+def test_baton_given_at_xs_is_carried_when_it_is_the_sizings(repo):
+    from coordinator_core.ops.dispatch_emit.sizing_fire import ARM_XS
+
     _put(repo, tshirt="XS", route="dispatch", accepted=ACCEPTED)
-    v = gate(repo, REL, writes=["a.py"], baton="state/handoffs/x.md")
-    assert v.arm is None and v.halt["kind"] == "refusal" and "mints no baton" in v.halt["reason"]
+    v = gate(repo, REL, writes=["a.py"], baton=_handoff(repo, REL))
+    assert v.halt is None and v.arm == ARM_XS and v.baton is None
+
+
+def test_baton_given_at_xs_naming_another_sizing_is_refused(repo):
+    _put(repo, tshirt="XS", route="dispatch", accepted=ACCEPTED)
+    v = gate(repo, REL, writes=["a.py"], baton=_handoff(repo, "state/sizings/other.yaml"))
+    assert v.arm is None and v.halt["kind"] == "refusal" and "not this sizing's" in v.halt["reason"]
+    assert "state/handoffs/x.md" in v.halt["reason"]
+
+
+def test_baton_given_at_xs_missing_file_is_refused(repo):
+    _put(repo, tshirt="XS", route="dispatch", accepted=ACCEPTED)
+    v = gate(repo, REL, writes=["a.py"], baton="state/handoffs/none.md")
+    assert v.halt["kind"] == "refusal" and "not this sizing's" in v.halt["reason"]
 
 
 def test_missing_statement_halts_as_touchpoint_for_the_accept_stage(repo):

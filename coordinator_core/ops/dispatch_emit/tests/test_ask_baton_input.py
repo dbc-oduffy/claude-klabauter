@@ -81,11 +81,18 @@ def test_read_baton_ids_refuses_missing_null_and_mismatch(repo):
         _read_baton_ids(repo, None, "dlv-x-abc123")
 
 
-@pytest.mark.parametrize("tshirt", ["XS", "S"])
+@pytest.mark.parametrize("tshirt", ["S"])
 def test_gate_refuses_baton_at_arm_that_mints_none(repo, tshirt):
     _sizing(repo, tshirt, accepted={"pm_quote": "y", "on": "2026-10-06", "mode": "pm"})
     v = gate(repo, REL, writes=["a.py"], baton=BATON)
     assert v.halt["kind"] == "refusal" and "mints no baton" in v.halt["reason"]
+
+
+def test_gate_carries_xs_baton_named_by_the_sizings_own_baton_field(repo):
+    _baton(repo)
+    _sizing(repo, "XS", accepted={"pm_quote": "y", "on": "2026-10-06", "mode": "pm"}, baton=BATON)
+    v = gate(repo, REL, writes=["a.py"], baton=BATON)
+    assert v.halt is None and v.baton is None
 
 
 def test_unaccepted_pm_sizing_emit_gate_sets_accept_pending(repo, monkeypatch):

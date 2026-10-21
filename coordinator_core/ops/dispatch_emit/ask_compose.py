@@ -113,6 +113,7 @@ from coordinator_core.ops.dispatch_emit.sizing_fire import (
     load_sizing_effective,
     resolve_arm,
 )
+from coordinator_core.ops.dispatch_emit.ask_footprint import FOOTPRINT_SCHEMA, footprint_owed, footprint_prompt
 from coordinator_core.ops.dispatch_emit.terminal_commit_params_channel import PARAMS_BLOCK_JS, params_path
 from coordinator_core.ops.dispatch_emit.terminal_commit_reconcile import TERMINAL_COMMIT_RECONCILE_CLAUSE
 from coordinator_core.ops.dispatch_emit.wake_digest import (
@@ -1842,7 +1843,17 @@ def compose_ask_script(
                 "expected_when_true: _scouted.falsifier.expected_when_true, authored_by: 'sizing-scout' }; }"
             )
     else:
-        # An existing sizing has no scout to close for it.
+        # An existing sizing has no scout to close for it, so an XS one with no writes gets its footprint here.
+        if footprint_owed(arm=known_arm, writes=writes, sized_in_run=False):
+            fp_call = _agent(
+                footprint_prompt(sizing_rel=sizing_rel, baton_path=baton["path"] if baton else None),
+                label="footprint", phase="gate", agent_type=SIZING_SCOUT_AGENT_TYPE,
+                schema=FOOTPRINT_SCHEMA, run_id=run_id,
+            )
+            b.append(
+                f"  if (!_writes.length) {{ const _fp = await {fp_call}; "
+                "_writes = (Array.isArray(_fp?.writes) ? _fp.writes : []).filter((w) => typeof w === 'string' && w); }"
+            )
         b.append(f"  let _gate = await {_gate_agent_call('gate', 'gate', stage_act=True)};")
     if fold_stage:
         # Adopted only under the plan folds' guard (rows array, no error), for the arms the act covers.
@@ -1886,10 +1897,26 @@ def compose_ask_script(
                 "`apm_ruling` (your ruling, verbatim) and, only when you amended or authored a "
                 "statement, `statement` (that statement)",
             ),
+            *(
+                (
+                    " Here the gate reply is your record command's reply.",
+                    *_stage_act_parts(
+                        "js:JSON.stringify({ run_id: _runId, writes: _writes, cross_repo_approved: "
+                        "_crossRepoApproved, session_id: _SESSION_ID })",
+                        "js:JSON.stringify(_sizingRel)",
+                        "js:JSON.stringify(_gated)",
+                    ),
+                )
+                if fold_stage
+                else ()
+            ),
         )
+        accept_schema = _ruling_schema(_ACCEPT_SCHEMA)
+        if fold_stage:
+            accept_schema = {**accept_schema, "properties": {**accept_schema["properties"], **_STAGE_REPLY_PROP}}
         apm_call = _agent(
             apm_prompt, label="accept", phase="accept", agent_type=ADJUDICATOR_AGENT_TYPE,
-            schema=_ruling_schema(_ACCEPT_SCHEMA), run_id=run_id,
+            schema=accept_schema, run_id=run_id,
         )
         xl_prompt = _cat(
             f"{head}\n\n{anchor}\n\n",
@@ -1951,7 +1978,12 @@ def compose_ask_script(
             "    if (_apm && _apm.verdict === 'ruled' && _apm.pmOnly !== true && !_apmGated && _apm.ruling "
             "&& _apm.recorded && _apm.recorded.ok === true && 'arm' in _apm && 'halt' in _apm) {\n"
             f"      {take_gate % (('_apm',) * 8)}\n"
-            "      _progressed = true;\n"
+            + (
+                f"      if (!_gate.halt && _gate.arm === {_lit(ARM_XS)}) {{ await _adoptStageReply(_apm.stage_reply); }}\n"
+                if fold_stage
+                else ""
+            )
+            + "      _progressed = true;\n"
             "    }\n"
             f"    if (_gate.halt && _gate.halt.kind === {_lit(HALT_TOUCHPOINT)} && _apm) {{\n"
             "      _gate = { ..._gate, halt: { ..._gate.halt, apm: { verdict: _apm.verdict, "

@@ -60,6 +60,7 @@ from coordinator_core.ops.dispatch_emit.sizing_fire import (
     ALL_LANDED_NO_RUN,
     ARM_M_PLUS,
     ARM_ROADMAP,
+    ARM_XS,
     STATEMENT_ABSENT_PREFIX,
     COMMIT_HALT_KIND,
     RESUME_LEDGER_HALT_BLOCKING_FIELD,
@@ -146,8 +147,9 @@ def gate(
 ) -> GateVerdict:
     """Arm for the sizing at `sizing_rel`, or the single halt that stops it, naming every cause.
 
-    `baton` (repo-relative) goes to the mint at M+, which owns the baton checks; any other arm mints
-    no baton, so it refuses one. A non-halted verdict carries the design-registry brief for the
+    `baton` (repo-relative) goes to the mint at M+, which owns the baton checks; XS carries it when it
+    is this sizing's own (never in `GateVerdict.baton`) and refuses any other; S and roadmap mint no
+    baton, so they refuse one. A non-halted verdict carries the design-registry brief for the
     sizing's scope; a malformed registry with a non-empty scope halts `registry-unparseable`.
     `mint_design_rows` (a run-bound call) also appends one design row per hit to the register.
     `landed_sink`, when given, receives the row resume's `ResumePlan.landed_open`.
@@ -183,6 +185,27 @@ def gate(
     return replace(verdict, design_brief=brief) if brief else verdict
 
 
+def _baton_belongs_to_sizing(repo_root: Path, sizing: dict, sizing_rel: str, baton: str) -> bool:
+    """True when the sizing's `baton:` names `baton`, or the baton's `sizing_object:` names the sizing.
+
+    Both sides compare repo-relative paths with separators folded to `/`; a missing baton file is False.
+    """
+    from coordinator_core.frontmatter.primitives import read_fm_field_unquoted, split_frontmatter
+
+    def fold(p: object) -> str:
+        return str(p or "").strip().replace("\\", "/")
+
+    given = fold(baton)
+    if given and fold(sizing.get("baton")) == given:
+        return True
+    target = repo_root / given
+    if not given or not target.is_file():
+        return False
+    split = split_frontmatter(target.read_text(encoding="utf-8"))
+    owner = read_fm_field_unquoted(split.fm_text, "sizing_object") if split else None
+    return fold(owner) == fold(sizing_rel)
+
+
 def _arm_verdict(
     repo_root: Path, sizing_rel: str, *, writes: Sequence[str] = (), baton: Optional[str] = None,
     landed_sink: Optional[list] = None,
@@ -197,7 +220,13 @@ def _arm_verdict(
     except SizingFireRefused as exc:
         return _halt(HALT_REFUSAL, "; ".join(exc.fields))
 
-    if baton and arm != ARM_M_PLUS:
+    if baton and arm == ARM_XS:
+        if not _baton_belongs_to_sizing(repo_root, sizing, sizing_rel, baton):
+            return _halt(
+                HALT_REFUSAL,
+                f"baton {baton} is not this sizing's: neither its sizing_object nor the sizing's baton names the other",
+            )
+    elif baton and arm != ARM_M_PLUS:
         return _halt(HALT_REFUSAL, f"baton given but arm {arm} mints no baton")
 
     if sizing.get("xl_exit") == "split":
