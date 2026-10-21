@@ -80,7 +80,7 @@ def register_gate(
     or ``None`` when the gate does not apply or every claimed row passes. Reads the
     judge's returned ``criterion.register_rows`` and the register on disk; never inspects code.
     ``ledger_judged`` names rows the run's passed requirements ledger already judged: they are
-    not owed to a plan. Embedded PM turns are owed only when cited or timestamped after the run's
+    not owed to a plan, and a judge verdict of ``met`` on one needs no wired/observed_ref evidence. Embedded PM turns are owed only when cited or timestamped after the run's
     submission; ``run_id`` (else the sizing's ``resolution.run_id``) locates that submission.
     """
     criterion = inline_review.get("criterion")
@@ -128,7 +128,7 @@ def register_gate(
         if str(rid) in ruled_out:
             continue
         got = judged.get(str(rid))
-        if got is None and str(rid) in ledger_ids:
+        if str(rid) in ledger_ids and (got is None or got.get(rr.ROW_STATUS) == rr.STATUS_MET):
             continue
         # Trap: admits a self-declared met row the judge never saw; the refusal for a row short of
         # met, wired and attributed is pinned by test_claimed_row_not_fully_met_on_disk_still_reports_not_judged.

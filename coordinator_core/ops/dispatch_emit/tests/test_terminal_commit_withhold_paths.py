@@ -224,7 +224,10 @@ def test_the_peer_claim_text_names_withhold_paths_and_keeps_the_wait_clause(repo
     assert "session-claim-cli release-artifact artifact" in out["error"]
 
 
-def test_the_blob_drift_remedy_names_withhold_paths():
-    generic = "drift. " + terminal_commit._GENERIC_DRIFT_REMEDY
-    assert "withhold_paths" in terminal_commit._blob_drift_remedy(generic, "r1")
-    assert "withhold_paths" in terminal_commit._blob_drift_remedy("drift.", "r1")
+def test_the_blob_drift_remedy_names_withhold_paths(tmp_path):
+    from coordinator_core.ops.dispatch_emit import landing_remedy
+
+    generic = "drift. " + landing_remedy._GENERIC_DRIFT
+    for error in (generic, "drift."):
+        out = landing_remedy.blob_drift_remedy(error, tmp_path, "r1", "dispatch.terminal_commit", None, ["a.py"])
+        assert "withhold_paths" in out

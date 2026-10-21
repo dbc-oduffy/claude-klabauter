@@ -82,3 +82,18 @@ def test_existing_link_is_named_and_not_overwritten(tmp_path, monkeypatch, extra
     out = _call(tmp_path)
     assert out["exit_code"] == 1 and needle in out["error"]
     assert (tmp_path / "state/handoffs/2026-10-21_eet-22.md").read_text(encoding="utf-8") == before
+
+
+@pytest.mark.parametrize("wanted,near", [("roadmap-eet-22", "eet-22"), ("eet22", "eet-22")])
+def test_unknown_stub_id_names_the_closest_roadmap_baton(tmp_path, monkeypatch, wanted, near):
+    monkeypatch.setattr(op, "main_worktree_root", lambda r: tmp_path)
+    _setup(tmp_path)
+    out = _call(tmp_path, stub_id=wanted)
+    assert out["exit_code"] == 1 and f"closest roadmap baton: {near!r}" in out["error"]
+
+
+def test_unknown_stub_id_with_nothing_close_adds_no_hint(tmp_path, monkeypatch):
+    monkeypatch.setattr(op, "main_worktree_root", lambda r: tmp_path)
+    _setup(tmp_path)
+    out = _call(tmp_path, stub_id="zzzzzzzz")
+    assert out["exit_code"] == 1 and "closest" not in out["error"]

@@ -201,6 +201,8 @@ def test_a_session_write_after_the_review_wins(repo, monkeypatch):
     os.utime(repo / "a.py", (2500.0, 2500.0))
     _record_at(repo, "a.py", _sha("A\n"), 3000.0)
     _review(repo, {"a.py": _sha("B\n")}, 2000.0)
+    (repo / "state" / "warp" / "run-1").mkdir(parents=True)
+    (repo / "state" / "warp" / "run-1" / "run.json").write_text("{}", encoding="utf-8")
     out, seen = _fire(repo, monkeypatch, _WITH_BASE)
     assert out["refused"] == "blob-drift"
     assert seen[0]["expected_content_sha256"] == {"a.py": _sha("A\n")}

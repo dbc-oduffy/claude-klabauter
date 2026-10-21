@@ -629,7 +629,7 @@ def _land(
         message += "\nRemoves: " + ", ".join(deleted)
     if (worktree_root / record_dir_rel).is_dir():
         halted_run.record_withheld(worktree_root / record_dir_rel, withheld)
-    commit_params: dict = {"paths": paths, "message": message}
+    commit_params: dict = {"paths": paths, "message": message, "carry_stopped_runs": False}
     if deleted:
         commit_params["deleted_paths"] = deleted
         commit_params["declared_reverts"] = deleted

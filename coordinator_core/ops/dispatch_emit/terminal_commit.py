@@ -87,9 +87,9 @@ Negative-spec:
     commit passes ``carry_own_left_behind`` and commit_v2 carries it (``own_left_behind`` in the
     reply, relayed verbatim); a path a halted, unresumed in-window run declares it writes is
     never carried by either, and the dirty ones are named under ``held_by_halted_run``
-    (``{path: [run_id, ...]}``). The second is a stopped own run's residue that commit_v2 carries
-    (``stopped_run_residue`` in the reply, relayed verbatim): those paths count as landed, in
-    neither ``undeclared_dirty`` nor ``undeclared_dirty_peer_held``. A dirty file in a
+    (``{path: [run_id, ...]}``). The commit passes ``carry_stopped_runs: False``: another run's
+    residue is never swept into this run's commit, it stays dirty and is reported by
+    ``undeclared_dirty``. A dirty file in a
     declared directory that this run itself touched (its chunk reports, review ``slice_files``,
     run artifacts) and no live peer contests is ``run_owned`` and rides the one commit_v2 call
     (ask route and plan-route DAG); a sibling run's dirt of the same session in a shared
@@ -2388,7 +2388,7 @@ def _commit_siblings(
     out: list = []
     for root, paths in sibling_paths.items():
         message = subject + (f"\n\nCross-Repo-Of: {home_sha}" if home_sha else "")
-        params: dict = {"paths": list(paths), "message": message}
+        params: dict = {"paths": list(paths), "message": message, "carry_stopped_runs": False}
         if session_id is not None:
             params["session_id"] = session_id
         try:
@@ -4722,6 +4722,7 @@ def _terminal_commit_inner(
     commit_params: dict = {
         "paths": all_paths, "message": message,
         "carry_own_left_behind": not in_scope_left and not foreign_excluded,
+        "carry_stopped_runs": False,
     }
     if deleted_paths:
         commit_params["deleted_paths"] = deleted_paths

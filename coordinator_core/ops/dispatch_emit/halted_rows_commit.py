@@ -167,7 +167,9 @@ def commit_rows(root: Path, repo_root: Path, params: dict) -> dict:
         if not paths and not deleted:
             out["noop"].append(rid)
             continue
-        commit_params: dict = {"paths": paths, "message": row_message(rid, chunk.title, open_rows)}
+        commit_params: dict = {
+            "paths": paths, "message": row_message(rid, chunk.title, open_rows), "carry_stopped_runs": False,
+        }
         if staged:
             commit_params["prefer_staged"] = staged
         if deleted:

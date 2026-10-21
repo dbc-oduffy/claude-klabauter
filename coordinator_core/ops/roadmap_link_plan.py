@@ -21,6 +21,7 @@ the EM session's); never touches archive/handoffs/.
 
 from __future__ import annotations
 
+import difflib
 import logging
 import os
 from pathlib import Path
@@ -75,6 +76,34 @@ def _find_baton(worktree: Path, stub_id: str):
     return None
 
 
+def _closest_baton_name(worktree: Path, wanted: str) -> Optional[str]:
+    """The roadmap baton ``stub_id`` or file stem nearest ``wanted`` (substring either way, else
+    difflib ratio >= 0.5), preferring a ``stub_id`` over a stem; None when nothing is close."""
+    live = Path(home_dir(str(worktree), "handoffs"))
+    try:
+        entries = sorted((e for e in os.scandir(live) if e.name.endswith(".md")), key=lambda e: e.path)
+    except OSError:
+        return None
+    names: list = []
+    for entry in entries:
+        try:
+            fm = _head_fields(entry.path, _HEAD_BYTES, _BATON_WANT)
+        except OSError:
+            continue
+        if fm.get("kind") not in _ROADMAP_KINDS:
+            continue
+        sid = fm.get("stub_id")
+        if sid:
+            names.append(str(sid))
+        names.append(entry.name[:-3])
+    low = wanted.lower()
+    hits = [n for n in names if n.lower() in low or low in n.lower()]
+    if hits:
+        return max(hits, key=lambda n: (len(n) if n.lower() in low else -len(n)))
+    near = difflib.get_close_matches(wanted, names, n=1, cutoff=0.5)
+    return near[0] if near else None
+
+
 def _present(value: Any) -> list:
     return [str(v) for v in (value if isinstance(value, list) else [value]) if v]
 
@@ -83,7 +112,9 @@ def _link(*, stub_id: str, plan: str, reason: str, roadmap_id: str, repo_root: P
     worktree = Path(main_worktree_root(repo_root))
     found = _find_baton(worktree, stub_id)
     if found is None:
-        return _err(f"stub_id {stub_id!r} names no live baton under state/handoffs/")
+        near = _closest_baton_name(worktree, stub_id)
+        hint = f"; closest roadmap baton: {near!r}" if near else ""
+        return _err(f"stub_id {stub_id!r} names no live baton under state/handoffs/{hint}")
     path, fm = found
     if fm.get("kind") not in _ROADMAP_KINDS:
         return _err(f"{stub_id!r} is not a roadmap baton (kind {fm.get('kind')!r})")
