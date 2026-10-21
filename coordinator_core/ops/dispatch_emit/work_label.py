@@ -14,16 +14,6 @@ def build_work_label(row_id: str) -> str:
     return f"{WORK_LABEL_PREFIX}{row_id}"
 
 
-def continuation_label_prefix(row_id: str) -> str:
-    """The label of row `row_id`'s continuation executors up to the continuation number."""
-    return f"{build_work_label(row_id)}{CONTINUATION_SEP}"
-
-
-def continuation_label(row_id: str, n: int) -> str:
-    """The label of the n-th (1-based) continuation executor of row `row_id`."""
-    return f"{continuation_label_prefix(row_id)}{n}"
-
-
 def parse_work_label(label: str) -> str | None:
     if not label.startswith(WORK_LABEL_PREFIX):
         return None

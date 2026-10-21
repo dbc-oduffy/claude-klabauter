@@ -369,6 +369,8 @@ OP_MODULE_MAP: Dict[str, str] = {
     "dispatch.record_halted_run_landed":       "coordinator_core.ops.dispatch_emit.halted_run_landed",
     "dispatch.release_run_token":              "coordinator_core.ops.dispatch_emit.release_run_token",
     "workflow.revise":                        "coordinator_core.ops.dispatch_emit.requirements_ledger",
+    "workflow.pending_revisions":             "coordinator_core.ops.dispatch_emit.revise_absorb",
+    "plan.claim_register_rows":               "coordinator_core.ops.dispatch_emit.revise_absorb",
     "workflow.fire":                          "coordinator_core.ops.workflow_fire.op",
     "workflow.fire_status":                   "coordinator_core.ops.workflow_fire.op",
     "review_stamp.mint":                      "coordinator_core.ops.review_stamp",

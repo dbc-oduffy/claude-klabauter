@@ -45,7 +45,6 @@ from typing import Sequence
 from coordinator_core.ops.dispatch_emit.executor_economy import CHECKPOINT_STATUS
 
 __all__ = [
-    "is_landable_status",
     "FOOTPRINT_CONSTRAINT_TEMPLATE",
     "self_verify_constraint",
     "done_summary_constraint",
@@ -183,9 +182,3 @@ def done_summary_constraint(
         "`PARTIAL`, or `BLOCKED`."
         f"{reply_tail}{checkpoint_tail}"
     )
-
-
-def is_landable_status(status: str) -> bool:
-    """True when a reply status lands a row: DONE only. CHECKPOINT, PARTIAL
-    and BLOCKED never do."""
-    return status.strip().upper() == "DONE"

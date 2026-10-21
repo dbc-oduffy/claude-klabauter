@@ -164,7 +164,6 @@ def test_tail_js_carries_both_agent_calls_ops_and_the_round_cap():
     assert "if (!Array.isArray(_absorbPending.rows) || !_absorbPending.rows.length) break;" in js
 
 
-def test_tail_js_check_precedes_author_and_rows_and_round_cap_follows_argument():
-    js = ra.absorb_tail_js(plan_path=PLAN, run_id=RUN, rounds=3)
-    assert "_absorbRound < 3" in js
+def test_tail_js_check_precedes_author_and_rows():
+    js = ra.absorb_tail_js(plan_path=PLAN, run_id=RUN)
     assert js.index("absorb:check-") < js.index("absorb:plan-") < js.index("_runRow(")

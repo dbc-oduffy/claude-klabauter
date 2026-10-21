@@ -121,9 +121,8 @@ def _add(into: dict[str, Any], tokens: dict[str, int], usd: Optional[float]) -> 
 
 
 def _agent_row(run_dir: str, agent_id: str, label: str) -> dict[str, Any]:
-    # Imported here: workflow_watch/__init__ imports run_report, which imports this module.
+    # Lazy: stall's package init reaches run_report, which imports this module.
     from coordinator_core.workflow_watch.stall import _transcript_path
-
     path = _transcript_path(run_dir, agent_id)
     row: dict[str, Any] = {
         "agent_id": agent_id, "label": label, "model": None, "speed": None,
@@ -143,7 +142,6 @@ def _agent_row(run_dir: str, agent_id: str, label: str) -> dict[str, Any]:
             if name == "Read" and fp:
                 k = _norm_path(fp)
                 reads[k] = reads.get(k, 0) + 1
-        row["max_same_file_reads"] = max(reads.values(), default=0)
         tokens = {f: _num(usage, f) for f in TOKEN_FIELDS}
         model = m["model"] if isinstance(m["model"], str) and m["model"] else None
         speed = usage.get("speed") if isinstance(usage.get("speed"), str) else None
@@ -160,6 +158,7 @@ def _agent_row(run_dir: str, agent_id: str, label: str) -> dict[str, Any]:
             row["unpriced_tokens"] += sum(tokens.values())
         else:
             priced += 1
+    row["max_same_file_reads"] = max(reads.values(), default=0)
     if models:
         row["model"] = max(models, key=models.__getitem__)
     else:

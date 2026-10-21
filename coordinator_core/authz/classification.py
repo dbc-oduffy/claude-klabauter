@@ -2455,6 +2455,23 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #      The in-flight run's later stages read the appended revision.
     # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
     "workflow.revise": OpClass.MUTATING,
+    # workflow.pending_revisions — COMPUTE_ONLY: replies the unclaimed register rows of a run's
+    # plan; writes nothing (ops/dispatch_emit/revise_absorb.py).
+    "workflow.pending_revisions": OpClass.COMPUTE_ONLY,
+    # plan.claim_register_rows — MUTATING: stamps claimed register ids into the plan's own file
+    # (ops/dispatch_emit/revise_absorb.py).
+    # DR-208 five-question affirmation (citing plan.claim_register_rows handler):
+    #   1. Writes, deletes, or reorders any state file, queue, or git object?  YES.
+    #      The plan's claimed-rows record; no git object.
+    #   2. Writes into rag's relational store?                                 No.
+    #   3. Opens any file for write (including sentinel creation)?             YES.
+    #      The plan file, via the plan mutation seam.
+    #   4. Takes a lock or leaves a sentinel visible to other callers?         YES.
+    #      The plan mutation lock for the write's duration.
+    #   5. Persistent state changes observable across process boundaries?     YES.
+    #      The next pending_revisions read excludes the claimed rows.
+    # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
+    "plan.claim_register_rows": OpClass.MUTATING,
     # review_stamp.mint — MUTATING: writes `review_stamp:` into the plan's own
     # frontmatter, the record the implemented refusal and the close gate read.
     # DR-208 five-question affirmation:

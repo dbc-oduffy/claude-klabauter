@@ -15,8 +15,9 @@ Negative-spec:
   - Runs only the legs the record still lists as ``queued``, and none once its deadline passed.
   - One leg's exception is recorded ``failed`` and the next leg still runs.
   - A leg is not started once the job's cumulative process time reaches ``JOB_BUDGET_MS``; it is
-    recorded ``failed`` with that reason, never dropped. ``close-commit`` is exempt: a leg that ran
-    keeps its write only if the commit lands it.
+    recorded ``queued`` ("deferred#N"), and ``run_and_continue`` detaches one continuation job for
+    it. A leg deferred ``MAX_STALLED_DEFERRALS`` times by jobs that ran nothing is ``failed``.
+    ``close-commit`` is exempt, and is re-queued when a leg before it was deferred.
   - No leg globs ``state/sizings`` or scans transcripts: the cascade reads the records the run's own
     plan names (``deliverable_cascade.cascade_run``).
   - The close commit carries only the paths the legs wrote; a peer's dirty file is never staged.
@@ -73,6 +74,11 @@ BACKGROUND_LEGS: tuple[str, ...] = (
 
 UNBUDGETED_LEGS: frozenset[str] = frozenset({"close-commit"})
 """Legs the budget guard never stops: they land what the earlier legs already wrote."""
+
+MAX_STALLED_DEFERRALS = 2
+"""A leg deferred this many times in a row by jobs that ran nothing is recorded ``failed``."""
+
+_DEFER_TAG = "deferred#"
 
 CLOSE_COMMIT_CAS_RETRIES = 3
 """Re-seeds from the new HEAD after a lost compare-and-swap, before the close commit gives up."""
@@ -1127,18 +1133,65 @@ def run_background(
         sha = record.get("terminal_sha") if isinstance(record, dict) else None
         if isinstance(sha, str) and sha:
             ctx = replace(ctx, terminal_sha=sha)
+    ran_any = False
+    deferred: list[str] = []
     for leg in _queued_legs(ctx.root, ctx.run_id, record=record):
         spent = cpu_ms() - started
         if leg not in UNBUDGETED_LEGS and spent >= budget_ms:
-            result = LegResult("failed", f"not started: job process time {spent:.0f}ms reached {budget_ms:.0f}ms")
+            reason = f"job process time {spent:.0f}ms reached {budget_ms:.0f}ms"
+            count = _deferrals(record, leg) + 1
+            if count >= MAX_STALLED_DEFERRALS and not ran_any:
+                result = LegResult("failed", f"not started: {reason}; deferred {count}x with no progress")
+            else:
+                result = LegResult("queued", f"{_DEFER_TAG}{count}: {reason}")
+                deferred.append(leg)
         else:
             try:
                 result = table[leg](ctx)
             except Exception as exc:  # a raising leg is recorded; the others still run
                 result = _failed("", exc)
+            ran_any = True
         outcomes[leg] = result
         run_close.record_leg_outcome(ctx.root, ctx.run_id, leg, result.status, result.detail)
+    commit = outcomes.get("close-commit")
+    if deferred and commit is not None and commit.status != "queued" and any(
+        BACKGROUND_LEGS.index(d) < BACKGROUND_LEGS.index("close-commit") for d in deferred if d in BACKGROUND_LEGS
+    ):
+        again = LegResult("queued", f"{_DEFER_TAG}1: lands the deferred legs' writes")
+        run_close.record_leg_outcome(ctx.root, ctx.run_id, "close-commit", again.status, again.detail)
     _release_landed_claims(ctx)
+    return outcomes
+
+
+def _deferrals(record: Any, leg: str) -> int:
+    entry = record.get("legs", {}).get(leg) if isinstance(record, dict) else None
+    match = re.match(rf"{_DEFER_TAG}(\d+):", str(entry.get("detail", ""))) if isinstance(entry, dict) else None
+    return int(match.group(1)) if match else 0
+
+
+def _launch_continuation(ctx: JobContext) -> bool:
+    """Detach one new ``close_background.py`` job for the legs this job deferred."""
+    from coordinator_core.ops.ceremony.detached_spawn import spawn_detached
+
+    engine = Path(__file__).resolve().parents[3]
+    params = json.dumps({"claimed_batons": list(ctx.claimed_batons), "source_memo": ctx.source_memo})
+    return spawn_detached(
+        str(engine), str(Path(__file__).resolve()), [ctx.run_id, "--root", str(ctx.root), "--params", params]
+    )
+
+
+def run_and_continue(
+    ctx: JobContext, launch: Callable[[JobContext], bool] = _launch_continuation, **kwargs: Any
+) -> dict[str, LegResult]:
+    """``run_background``, then one detached continuation when it deferred legs after making progress."""
+    outcomes = run_background(ctx, **kwargs)
+    deferred = [leg for leg, r in outcomes.items() if r.status == "queued"]
+    progressed = any(r.status != "queued" for r in outcomes.values())
+    if deferred and progressed and not launch(ctx):
+        for leg in deferred:
+            reason = "continuation job did not start"
+            run_close.record_leg_outcome(ctx.root, ctx.run_id, leg, "failed", reason)
+            outcomes[leg] = LegResult("failed", reason)
     return outcomes
 
 
@@ -1187,7 +1240,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         return {"error": "close.background requires a repo root"}
     try:
         ctx = _context(main_worktree_root(Path(repo_root)), Path(repo_root), params or {})
-        return _summary(ctx.run_id, run_background(ctx))
+        return _summary(ctx.run_id, run_and_continue(ctx))
     except (ValueError, FileNotFoundError) as exc:
         return {"error": run_close.scrub_detail(f"{type(exc).__name__}: {exc}")}
 
@@ -1204,7 +1257,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     root = Path(args.root)
     try:
         params = {**json.loads(args.params), "run_id": args.run_id}
-        run_background(_context(root, resolve_git_common_dir(root), params))
+        run_and_continue(_context(root, resolve_git_common_dir(root), params))
     except (ValueError, FileNotFoundError) as exc:
         print(run_close.scrub_detail(f"close.background: {type(exc).__name__}: {exc}"), file=sys.stderr)
         return 1

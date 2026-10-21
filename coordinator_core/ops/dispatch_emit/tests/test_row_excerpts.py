@@ -40,7 +40,13 @@ def test_cache_scans_each_file_once(tmp_path, monkeypatch):
 def test_byte_cap_truncates(tmp_path):
     out = re_.excerpt_block("y" * 5000, [], tmp_path, "h", {})
     assert len(out.encode("utf-8")) <= EXCERPT_MAX_BYTES
-    assert out.endswith("(truncated)")
+    assert "(truncated)" in out
+
+
+def test_long_body_keeps_symbol_spans(tmp_path):
+    (tmp_path / "m.py").write_text(SAMPLE, encoding="utf-8")
+    out = re_.excerpt_block("y" * 5000, ["m.py"], tmp_path, "h", {})
+    assert "m.py: a L3-5" in out
 
 
 def test_symbol_cap(tmp_path):

@@ -22,6 +22,11 @@ from coordinator_core.ops.dispatch_emit import close_without_script as cws
 from coordinator_core.ops.dispatch_emit import run_close, terminal_commit
 from coordinator_core.win_portability import no_console_creationflags
 
+
+@pytest.fixture(autouse=True)
+def _no_continuation_spawn(monkeypatch):
+    monkeypatch.setattr(close_background, "_launch_continuation", lambda ctx: True)
+
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 MET = scripted.INLINE_REVIEW["criterion"]

@@ -213,7 +213,7 @@ def load_ratchet(path: Optional[str] = None) -> dict[str, int]:
         data = None
     if not isinstance(data, dict):
         return dict(MEASURED_BASELINE)
-    return {m: data[m] if isinstance(data.get(m), int) else MEASURED_BASELINE[m]
+    return {m: data[m] if type(data.get(m)) is int and data[m] > 0 else MEASURED_BASELINE[m]
             for m in RATCHET_METRICS}
 
 

@@ -396,8 +396,7 @@ def amend_close_job(
     if record is None:
         raise FileNotFoundError(close_job_path(run_id))
     for leg in settled_dict:
-        if leg in record["legs"]:
-            raise ValueError(f"leg both queued and settled: {leg!r}")
+        record["legs"].pop(leg, None)  # the new settlement supersedes a prior queued/failed entry
     if criterion is not None:
         record["criterion"] = dict(criterion)
     if falsifier_broken is not UNCHANGED:

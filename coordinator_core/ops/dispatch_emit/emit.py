@@ -360,8 +360,8 @@ from coordinator_core.ops.dispatch_emit.wake_digest import (
     stage_schema_literal,
 )
 from coordinator_core.ops.dispatch_emit.work_label import (
+    CONTINUATION_SEP,
     build_work_label,
-    continuation_label_prefix,
 )
 from coordinator_core.ops.dispatch_emit.executor_economy import (
     BATCHING_CLAUSE,
@@ -3027,8 +3027,7 @@ def _agent_call_over(
         prompt_literal = (
             f"{prompt_literal} + ({cont} ? {_continuation_clause_js(cont, checkpoint_prefix)} : '')"
         )
-        suffix = continuation_label_prefix(label_id).removeprefix(build_work_label(label_id))
-        label_js = f"{label_js} + ({cont} ? {_js_string_literal(suffix)} + {cont}.n : '')"
+        label_js = f"{label_js} + ({cont} ? {_js_string_literal(CONTINUATION_SEP)} + {cont}.n : '')"
     return (
         "agent("
         f"{prompt_literal}, "

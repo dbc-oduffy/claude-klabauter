@@ -6,7 +6,6 @@ import json
 import sys
 import time
 
-from coordinator_core.workflow_watch import run_report
 from coordinator_core.workflow_watch.render import JournalRenderer
 from coordinator_core.workflow_watch.stall import EXIT_HALTED_USAGE_LIMIT, scan_for_usage_limit
 from coordinator_core.workflow_watch.stamp import reconcile as _reconcile_run
@@ -118,6 +117,7 @@ def _emit_cost(journal_path: str) -> None:
     Never raises and prints nothing on failure: the terminal line and exit code are already final.
     """
     try:
+        from coordinator_core.workflow_watch import run_report  # lazy: run_report -> usage.agent_usage -> this package
         path = run_report.write_record(journal_path)
         with open(path, encoding="utf-8") as fh:
             ratchet = json.load(fh).get("ratchet") or {}

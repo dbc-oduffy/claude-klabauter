@@ -761,6 +761,10 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "dispatch.release_run_token":               "common_dir",
     # workflow.revise — appends to a warp run's ledger under the caller's own worktree's run dir.
     "workflow.revise":                          "common_dir",
+    # workflow.pending_revisions / plan.claim_register_rows — read and claim register rows of the
+    # caller's own worktree's sizing and plan.
+    "workflow.pending_revisions":               "common_dir",
+    "plan.claim_register_rows":                 "common_dir",
     # review_stamp.mint / review_stamp.check — MUTATING (mint only): both read
     # and mint writes only the caller's own worktree, keyed identically to
     # dispatch.terminal_commit (never a `params.repo_root` override).

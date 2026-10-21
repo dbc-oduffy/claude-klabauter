@@ -81,7 +81,7 @@ def test_only_legs_listed_queued_in_the_record_run(tmp_path):
     assert seen == ["baton-drain", "post-close"]
 
 
-def test_budget_spent_records_the_remaining_legs_failed_not_run(tmp_path):
+def test_budget_spent_records_the_remaining_legs_deferred_queued_not_run(tmp_path):
     _queue(tmp_path, legs=("baton-drain", "orientation-refresh", "memo-lifecycle", "post-close"))
     clock = iter([0.0, 10.0, 500.0, 500.0, 500.0])
     ran = []
@@ -92,8 +92,8 @@ def test_budget_spent_records_the_remaining_legs_failed_not_run(tmp_path):
     assert ran == ["baton-drain"]
     assert rec["baton-drain"]["status"] == "ran"
     for name in ("orientation-refresh", "memo-lifecycle", "post-close"):
-        assert rec[name]["status"] == "failed"
-        assert "not started" in rec[name]["detail"]
+        assert rec[name]["status"] == "queued"
+        assert rec[name]["detail"].startswith("deferred#1:")
 
 
 def test_past_deadline_runs_nothing(tmp_path):

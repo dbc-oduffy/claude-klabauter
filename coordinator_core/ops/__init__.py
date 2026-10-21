@@ -183,6 +183,7 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.dispatch_emit.halted_run_landed", 'registers "dispatch.record_halted_run_landed"'),
     ("coordinator_core.ops.dispatch_emit.release_run_token", 'registers "dispatch.release_run_token"'),
     ("coordinator_core.ops.dispatch_emit.requirements_ledger", 'registers "workflow.revise"'),
+    ("coordinator_core.ops.dispatch_emit.revise_absorb", 'registers "workflow.pending_revisions"'),
     ("coordinator_core.ops.handoff_backfill_claim_stamp", 'registers "handoff.backfill_claim_stamp"'),
     ("coordinator_core.ops.handoff_repoint_origin", 'registers "handoff.repoint_origin"'),
     ("coordinator_core.ops.baton_supersede", 'registers "baton.supersede"'),

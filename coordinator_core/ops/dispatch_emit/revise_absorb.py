@@ -258,20 +258,17 @@ def absorb_tail_js(
     *,
     plan_path: str,
     run_id: str,
-    mechanical_opts: str = _MECHANICAL_OPTS,
-    author_opts: str = _AUTHOR_OPTS,
     row_opts: str = _ROW_OPTS,
     phase_expr: str = _PHASE_VAR,
-    rounds: int = ABSORB_ROUNDS,
 ) -> str:
     """The JS statements run after the DAG settles and before the terminal commit.
 
-    Up to `rounds` rounds of: a mechanical agent runs `workflow.pending_revisions` (schema
+    Up to `ABSORB_ROUNDS` rounds of: a mechanical agent runs `workflow.pending_revisions` (schema
     `{rows, drift}`); empty `rows` stops; else a plan-author agent adds one spine row per register
     row through `plan.tasks.mutate add-task` and runs `plan.claim_register_rows`, replying
     `{added: [{id, title, writes}]}`; each added row then runs through the script's `_runRow` with
     `_absorbPrompt(id, title)`, which the emitting script defines. Drift ids are logged and left
-    to the pin-drift path. `*_opts` are JS object-literal fragments; `phase_expr` is a JS expression.
+    to the pin-drift path. `row_opts` is a JS object-literal fragment; `phase_expr` is a JS expression.
     """
     invoke = '"${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/bin/coordinator-invoke"'
     plan_js = _js_string_literal(plan_path)
@@ -293,11 +290,11 @@ def absorb_tail_js(
         "hand-edit the plan."
     )
     return "\n".join([
-        "  for (let _absorbRound = 0; _absorbRound < " + str(int(rounds)) + "; _absorbRound++) {",
+        "  for (let _absorbRound = 0; _absorbRound < " + str(ABSORB_ROUNDS) + "; _absorbRound++) {",
         "    let _absorbPending = null;",
         "    try {",
         "      _absorbPending = await agent(" + _js_string_literal(check) + ", { label: 'absorb:check-' + _absorbRound, "
-        f"phase: {phase_expr}, {mechanical_opts}, schema: {json.dumps(_PENDING_SCHEMA)} }});",
+        f"phase: {phase_expr}, {_MECHANICAL_OPTS}, schema: {json.dumps(_PENDING_SCHEMA)} }});",
         "    } catch (e) { _absorbPending = null; }",
         "    if (!_absorbPending) break;",
         "    if (Array.isArray(_absorbPending.drift) && _absorbPending.drift.length) {",
@@ -308,7 +305,7 @@ def absorb_tail_js(
         "    try {",
         "      _absorbAdded = await agent(" + _js_string_literal(author) + " + ' Rows: ' + JSON.stringify(_absorbPending.rows), "
         "{ label: 'absorb:plan-' + _absorbRound, "
-        f"phase: {phase_expr}, {author_opts}, schema: {json.dumps(_ADDED_SCHEMA)} }});",
+        f"phase: {phase_expr}, {_AUTHOR_OPTS}, schema: {json.dumps(_ADDED_SCHEMA)} }});",
         "    } catch (e) { _absorbAdded = null; }",
         "    if (!_absorbAdded || !Array.isArray(_absorbAdded.added) || !_absorbAdded.added.length) break;",
         "    log('absorb: round ' + _absorbRound + ' added ' + _absorbAdded.added.map((a) => a.id).join(', ') + ' to ' + "

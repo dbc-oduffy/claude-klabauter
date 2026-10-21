@@ -328,10 +328,44 @@ def close_landed_run(worktree_root: Path, repo_root: Path, params: dict) -> dict
         run_base = (_digest(task_output_path, run_id) or {}).get("run_base_sha")
     except CloseRefusal as exc:
         return _error(exc.message, refused=exc.reason)
-    return _pay(
+    reply = _pay(
         worktree_root, repo_root, session_id, plan_rel, run_id, record, plan_text, plan_fm, plan_id,
         review_path, review, verdict, run_base=run_base if isinstance(run_base, str) else None,
     )
+    _requeue_background(worktree_root, repo_root, run_id)
+    return reply
+
+
+def _requeue_background(worktree_root: Path, repo_root: Path, run_id: str) -> None:
+    """Re-queue the record's failed background legs (a queued leg past its deadline reads failed) with a fresh deadline and launch one
+    close job for them. Never raises: the re-close stands, the legs read as failed."""
+    try:
+        from datetime import datetime, timedelta
+
+        from coordinator_core.ops.ceremony import close_background
+        from coordinator_core.ops.dispatch_emit import run_close, terminal_commit as tc
+
+        record = run_close._load(worktree_root, run_id)
+        legs = record.get("legs") if record else None
+        resolved = run_close._resolve(record, run_id, datetime.now().astimezone()) if isinstance(legs, dict) else {}
+        owed = [leg for leg in close_background.BACKGROUND_LEGS if leg in resolved and resolved[leg].status == "failed"]
+        if not owed:
+            return
+        run_close.amend_close_job(
+            worktree_root, run_id, queue=owed,
+            deadline=datetime.now().astimezone() + timedelta(minutes=tc._CLOSE_JOB_WINDOW_MINUTES),
+        )
+        for leg in owed:
+            run_close.record_leg_outcome(worktree_root, run_id, leg, "queued", "requeued by re-close")
+        ctx = close_background._context(
+            worktree_root, Path(repo_root),
+            {"run_id": run_id, "claimed_batons": record.get("claimed_batons") or [], "source_memo": record.get("source_memo")},
+        )
+        if not close_background._launch_continuation(ctx):
+            for leg in owed:
+                run_close.record_leg_outcome(worktree_root, run_id, leg, "failed", "close job did not start")
+    except Exception:  # noqa: BLE001
+        return
 
 
 _GATE_REASON_PREFIXES = ("register row ", "PM turn ")

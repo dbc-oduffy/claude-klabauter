@@ -15,9 +15,8 @@ import pytest
 from coordinator_core.ops.dispatch_emit import emit
 from coordinator_core.ops.dispatch_emit.work_label import (
     WORK_LABEL_PREFIX,
+    CONTINUATION_SEP,
     build_work_label,
-    continuation_label,
-    continuation_label_prefix,
     parse_work_label,
 )
 
@@ -43,10 +42,8 @@ def test_a_bare_prefix_is_not_a_chunk():
 
 
 def test_continuation_label_round_trips_to_its_row_id():
-    assert continuation_label("C3", 2) == "work:C3#cont2"
-    assert continuation_label("C3", 2).startswith(continuation_label_prefix("C3"))
-    assert parse_work_label(continuation_label("C3", 2)) == "C3"
-    assert parse_work_label(continuation_label("row-with-dashes", 1)) == "row-with-dashes"
+    assert parse_work_label(f"work:C3{CONTINUATION_SEP}2") == "C3"
+    assert parse_work_label(f"work:row-with-dashes{CONTINUATION_SEP}1") == "row-with-dashes"
 
 
 def test_a_label_merely_containing_the_separator_is_not_a_continuation():

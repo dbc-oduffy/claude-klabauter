@@ -32,11 +32,11 @@ def symbol_spans(text: str) -> list[tuple[str, int, int]]:
     return spans
 
 
-def _cap(text: str) -> str:
+def _cap(text: str, limit: int = EXCERPT_MAX_BYTES) -> str:
     raw = text.encode("utf-8")
-    if len(raw) <= EXCERPT_MAX_BYTES:
+    if len(raw) <= limit:
         return text
-    room = EXCERPT_MAX_BYTES - len(_TRUNC.encode("utf-8")) - 1
+    room = limit - len(_TRUNC.encode("utf-8")) - 1
     head = raw[: max(room, 0)].decode("utf-8", errors="ignore")
     return head + "\n" + _TRUNC
 
@@ -61,7 +61,8 @@ def _file_line(path: str, repo_root: Path, row_body: str, cache: dict) -> str:
 
 def excerpt_block(row_body: str, paths, repo_root, head_sha: str, cache: dict) -> str:
     """EXCERPT_HEADING, the row body, per-path symbol spans and a staleness note, capped at EXCERPT_MAX_BYTES."""
-    parts = [EXCERPT_HEADING, row_body.rstrip("\n")]
+    # The body takes at most half the budget so a long row body cannot crowd out the symbol spans.
+    parts = [EXCERPT_HEADING, _cap(row_body.rstrip("\n"), EXCERPT_MAX_BYTES // 2)]
     for p in paths:
         parts.append(_file_line(p, Path(repo_root), row_body, cache))
     parts.append(

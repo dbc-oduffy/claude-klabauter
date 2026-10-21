@@ -232,8 +232,9 @@ def test_budget_stop_does_not_strand_the_writes_of_the_legs_that_ran(tmp_path, m
     outcomes = cb.run_background(_ctx(root), cpu_ms=lambda: next(clock))
 
     assert outcomes["review-stamp"].status == "ran"
-    assert outcomes["plan-reconciliation"].status == "failed" and "not started" in outcomes["plan-reconciliation"].detail
+    assert outcomes["plan-reconciliation"].status == "queued" and "deferred#1" in outcomes["plan-reconciliation"].detail
     assert outcomes["close-commit"].status == "ran"
+    assert _record(root)["close-commit"]["status"] == "queued"
     assert "review_stamp:" in _at_head(root, PLAN) and not _status(root)
 
 
