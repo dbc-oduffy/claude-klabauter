@@ -130,7 +130,10 @@ def memo_receiver_unregistered(receiver: object, classify: Optional[Callable[[st
     if classify is None:
         from coordinator_core.ops.fleet.memo_draft import _classify_receiver_for_draft as classify
 
-    verdict = classify(receiver.strip(), True)
+    from coordinator_core.ops.fleet._outbox_enum import quiet_setup_errors
+
+    with quiet_setup_errors():
+        verdict = classify(receiver.strip(), True)
     return isinstance(verdict, dict) and verdict.get("rejection_class") == REJECTION_CLASS_UNKNOWN_RECEIVER
 
 

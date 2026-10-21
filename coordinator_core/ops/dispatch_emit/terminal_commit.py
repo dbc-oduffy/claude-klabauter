@@ -193,6 +193,7 @@ _PARAM_FIELDS = (
     Field(TERMINAL_RESUME_LEDGER_PARAM, "dict"),
     Field("doc_paths", "str_list"),
     Field("allow_empty", "bool"),
+    Field("declared_reverts", "str_list"),
 )
 
 _PYTEST_NODE = re.compile(r"[\w./-]+\.py::[\w.\[\]-]+(?:::[\w.\[\]-]+)*")
@@ -3818,6 +3819,11 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                                              only: a run whose content already landed (every
                                              declared write equals HEAD) lands one marker commit
                                              and the close legs run against its sha.
+        declared_reverts (list[str], optional) -- a planned removal's restores: repo-relative paths
+                                             the run deliberately rolls back to an older blob.
+                                             Only those among the run's own staged paths reach
+                                             ``ceremony.commit_v2``; the rest are named in the
+                                             reply's ``declared_reverts_ignored``.
 
     Returns: ``ceremony.commit_v2``'s reply dict plus ``chunks_committed``
     (ids), ``dropped_absent`` (paths dropped as absent-and-untracked) and
@@ -5201,11 +5207,15 @@ def _terminal_commit_inner(
         commit_params["force_ignored"] = [bookkeeping_record_path]
     if deleted_paths:
         commit_params["deleted_paths"] = deleted_paths
-        # A DONE chunk's own declared write that is now absent is a planned
-        # deletion; when it removes a file added since the rollback window
-        # opened, commit_v2's staged-rollback check reads it as restoring the
-        # older absence and refuses the run.
-        commit_params["declared_reverts"] = deleted_paths
+    # A DONE chunk's own declared write that is now absent is a planned deletion; when it removes a
+    # file added since the rollback window opened, commit_v2's staged-rollback check reads it as
+    # restoring the older absence. Caller-named restores count only inside the run's own staged set.
+    asked_reverts = params.get("declared_reverts") or []
+    own_staged = set(all_paths) | set(deleted_paths)
+    declared_reverts_ignored = sorted({p for p in asked_reverts if p not in own_staged})
+    own_reverts = sorted({p for p in asked_reverts if p in own_staged} | set(deleted_paths))
+    if own_reverts:
+        commit_params["declared_reverts"] = own_reverts
     if params.get("allow_empty") is True:
         commit_params["allow_empty"] = True
     if session_id is not None:
@@ -5658,6 +5668,8 @@ def _terminal_commit_inner(
     reply["deleted_paths"] = deleted_paths
     if reverted_absent:
         reply["reverted_absent"] = reverted_absent
+    if declared_reverts_ignored:
+        reply["declared_reverts_ignored"] = declared_reverts_ignored
     reply["unmarked_incomplete"] = unmarked_incomplete
     if unsent_memos:
         reply["memo_unsent"] = dict(sorted(unsent_memos.items()))

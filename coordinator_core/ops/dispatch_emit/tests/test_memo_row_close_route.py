@@ -209,6 +209,26 @@ def test_unknown_receiver_verdict_counts_as_unregistered_via_injected_classifier
     assert seen == ["example-fleet-context-em"]
 
 
+def test_successful_resolve_of_unregistered_receiver_row_is_silent(monkeypatch, tmp_path, capsys):
+    from coordinator_core.ops.fleet import memo_draft
+
+    monkeypatch.undo()
+    warm: list = []
+    monkeypatch.setattr("coordinator_core.warm.entry_seam.emit_diagnostic", warm.append)
+    row = {**_memo_row(), "memo_to": "zz-no-such-receiver-quiet-probe"}
+    from coordinator_core.ops.plan_tasks_mutate import _DELIVERED_ELSEWHERE, _memo_receipt_refusal
+
+    r = {"id": "C10", "disposition": _DELIVERED_ELSEWHERE, "delivered_via": "other", "disposition_ref": _URL}
+    assert _memo_receipt_refusal([r], {"C10": row}, tmp_path) == {}
+    captured = capsys.readouterr()
+    assert captured.err == "" and captured.out == "" and warm == []
+
+    result = memo_draft._classify_receiver_for_draft("zz-no-such-receiver-quiet-probe", True)
+    assert result["rejection_class"] == "unknown_receiver"
+    assert "UNKNOWN RECEIVER" in capsys.readouterr().err
+    assert warm and "UNKNOWN RECEIVER" in warm[0]
+
+
 def test_read_spine_does_not_consult_the_receiver_registry(monkeypatch, tmp_path):
     def boom(to, dry_run):
         raise AssertionError("read_spine must not consult the receiver registry")

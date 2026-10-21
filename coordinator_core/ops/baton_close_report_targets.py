@@ -10,6 +10,7 @@ import os
 import re
 
 from coordinator_core.ops.baton_close_report_contract import BatonHeader, Evidence, EvidenceClass
+from coordinator_core.ops.baton_close_report_decide import STATUS_MISSING
 from coordinator_core.session.record_homes import home_dir
 
 PLAN_DONE = frozenset({"implemented", "landed", "complete"})
@@ -18,8 +19,8 @@ ROADMAP_DONE = frozenset({"shipped"})
 # No goal on disk carries a terminal status, so no value is a guess here.
 GOAL_DONE: frozenset[str] = frozenset()
 
-# Evidence.target_status for a cited target with no file; None means a file with no status line.
-STATUS_MISSING = "<missing>"
+# Evidence.target_status for a cited target with no file is the decide module's STATUS_MISSING
+# (one sentinel for both sides); None means a file with no status line.
 
 _HEAD_BYTES = 16384
 _PLAN_ID_BYTES = 2048
