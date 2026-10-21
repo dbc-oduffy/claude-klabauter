@@ -34,7 +34,7 @@ PARAMS_BLOCK_JS = (
     "}"
 )
 
-_REQUIRED_STR_KEYS = ("run_id", "run_token", "script_path")
+REQUIRED_STR_KEYS = ("run_id", "run_token", "script_path")
 
 
 def params_path(repo_root: object, run_id: object) -> Optional[Path]:
@@ -92,7 +92,7 @@ def prompt_params(prompt: object) -> Optional[dict]:
         return None
     if not isinstance(params, dict):
         return None
-    if not all(isinstance(params.get(k), str) for k in _REQUIRED_STR_KEYS):
+    if not all(isinstance(params.get(k), str) for k in REQUIRED_STR_KEYS):
         return None
     return params
 

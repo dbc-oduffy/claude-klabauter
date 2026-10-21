@@ -4433,6 +4433,7 @@ def _terminal_commit_inner(
     # (review_mint/wave_bookkeeping.py's own module docstring).
     bookkeeping_record_path: Optional[str] = None
     review_record_error: Optional[str] = None
+    own_evidence_write: Optional[tuple] = None
     if not anchor_only:
         _derive_judge_status(inline_review)
     register_failure = (
@@ -4495,12 +4496,21 @@ def _terminal_commit_inner(
                         f"differs from commit root {worktree_root}"
                     )
                 else:
+                    from coordinator_core.session import touch_record as _tr
+
+                    plan_pp = PurePosixPath(request.plan_path)
+                    ev_rel = str(plan_pp.with_name(plan_pp.stem + _EVIDENCE_SIDECAR_SUFFIX))
+                    ev_before = _tr.compute_content_hash(worktree_root / ev_rel)
                     written = _criterion_evidence_record(
                         {"plan_path": request.plan_path, "reviews": record["review_firings"]},
                         repo_root=worktree_root,
                     )
                     if isinstance(written, dict) and written.get("error"):
                         review_record_error = str(written["error"])
+                    else:
+                        ev_after = _tr.compute_content_hash(worktree_root / ev_rel)
+                        if ev_after and ev_after != ev_before:
+                            own_evidence_write = (ev_rel, ev_before, ev_after)
             except (OSError, ValueError) as exc:
                 review_record_error = f"review rows not written: {exc}"
 
@@ -5215,6 +5225,13 @@ def _terminal_commit_inner(
             note_hash = touch_record.compute_content_hash(worktree_root / note_committed)
             if note_hash:
                 expected[note_committed] = note_hash
+        if own_evidence_write is not None:
+            # (path, bytes before this call's append, bytes after): the expectation moves past
+            # the call's own append only when it sat at the pre-append bytes; any other value
+            # is a peer's and keeps refusing.
+            ev_path, ev_before, ev_after = own_evidence_write
+            if ev_path in all_paths and ev_path not in deleted_paths and expected.get(ev_path) == ev_before:
+                expected[ev_path] = ev_after
         if expected:
             commit_params["expected_content_sha256"] = expected
     if snapshot is not None:

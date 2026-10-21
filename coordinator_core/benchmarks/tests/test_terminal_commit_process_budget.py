@@ -37,30 +37,38 @@ BUDGET_MS = 500.0
 _DRIVER = "coordinator_core.benchmarks.terminal_commit_full_path"
 
 
-def _sample(workdir, *extra: str, driver: str = _DRIVER) -> dict:
-    result = batched_process_time_ms(
-        [sys.executable, "-m", driver, str(workdir), *extra], k=K_INVOCATIONS
-    )
+REAL_SHAPE_K = 1
+REAL_SHAPE_SAMPLES = 2
+REAL_SHAPE_PROCS_CEILING = 4.0
+
+
+def _sample(workdir, *extra: str, driver: str = _DRIVER, k: int = K_INVOCATIONS) -> dict:
+    result = batched_process_time_ms([sys.executable, "-m", driver, str(workdir), *extra], k=k)
     assert result["rc"] == 0, f"driver exited {result['rc']}: {result!r}"
     return result
 
 
-def _min_sample(workdir, *extra: str, driver: str = _DRIVER) -> dict:
+def _min_sample(
+    workdir, *extra: str, driver: str = _DRIVER, k: int = K_INVOCATIONS, samples: int = SAMPLES
+) -> dict:
     return min(
-        (_sample(workdir, *extra, driver=driver) for _ in range(SAMPLES)), key=lambda r: r["process_time_ms"]
+        (_sample(workdir, *extra, driver=driver, k=k) for _ in range(samples)),
+        key=lambda r: r["process_time_ms"],
     )
 
 
-def _measure(workdir, *extra: str, driver: str = _DRIVER) -> dict:
-    setup = _min_sample(workdir, "--setup-only", *extra, driver=driver)
-    full = _min_sample(workdir, *extra, driver=driver)
+def _measure(
+    workdir, *extra: str, driver: str = _DRIVER, k: int = K_INVOCATIONS, samples: int = SAMPLES
+) -> dict:
+    setup = _min_sample(workdir, "--setup-only", *extra, driver=driver, k=k, samples=samples)
+    full = _min_sample(workdir, *extra, driver=driver, k=k, samples=samples)
     net_ms = round(full["process_time_ms"] - setup["process_time_ms"], 3)
     net_procs = round(full["procs_per_call"] - setup["procs_per_call"], 3)
     detail = (
         f"terminal_commit full path, net tree process time: {net_ms}ms, "
         f"procs_per_call: {net_procs} (setup+call {full['process_time_ms']}ms / "
         f"{full['procs_per_call']} procs; setup-only {setup['process_time_ms']}ms / "
-        f"{setup['procs_per_call']} procs; k={K_INVOCATIONS}, min of {SAMPLES})"
+        f"{setup['procs_per_call']} procs; k={k}, min of {samples})"
     )
     print(f"TERMINAL-COMMIT-BUDGET {detail}")
     return {"net_ms": net_ms, "net_procs": net_procs, "detail": detail}
@@ -79,6 +87,18 @@ def mise_full_path_measurement(tmp_path_factory):
 @pytest.fixture(scope="module")
 def ask_full_path_measurement(tmp_path_factory):
     return _measure(tmp_path_factory.mktemp("terminal_commit_budget_ask"), "--kind", "ask")
+
+
+@pytest.fixture(scope="module")
+def real_shape_measurement(tmp_path_factory):
+    return _measure(
+        tmp_path_factory.mktemp("terminal_commit_budget_real_shape"),
+        "--kind",
+        "ask",
+        "--real-shape",
+        k=REAL_SHAPE_K,
+        samples=REAL_SHAPE_SAMPLES,
+    )
 
 
 @pytest.fixture(scope="module")
@@ -137,7 +157,16 @@ def test_terminal_commit_grind_mode_is_under_the_500ms_bar(grind_measurement):
     print(f"TERMINAL-COMMIT-GRIND {grind_measurement['detail']}")
 
 
-def test_terminal_commit_ask_full_path_cost_is_observed(ask_full_path_measurement):
-    m = ask_full_path_measurement
-    assert m["net_ms"] > 0 and m["net_procs"] >= 0, f"call cost not observed (full <= setup-only): {m['detail']}"
-    print(f"TERMINAL-COMMIT-ASK {m['detail']}")
+def test_terminal_commit_ask_full_path_is_under_the_500ms_bar(ask_full_path_measurement):
+    _assert_under_bar(ask_full_path_measurement)
+    print(f"TERMINAL-COMMIT-ASK {ask_full_path_measurement['detail']}")
+
+
+def test_terminal_commit_ask_real_shape_is_under_the_500ms_bar(real_shape_measurement):
+    """The incident shape: tracked tree, sizing/delivery corpus, stopped-run corpus over a large
+    transcript, populated launch dir. Red until the kill-bar rebuild lands (C0 verdict KILL)."""
+    _assert_under_bar(real_shape_measurement)
+    assert real_shape_measurement["net_procs"] <= REAL_SHAPE_PROCS_CEILING, (
+        f"spawn count over the {REAL_SHAPE_PROCS_CEILING} ceiling: {real_shape_measurement['detail']}"
+    )
+    print(f"TERMINAL-COMMIT-REAL-SHAPE {real_shape_measurement['detail']}")

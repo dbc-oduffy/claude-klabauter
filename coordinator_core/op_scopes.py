@@ -412,6 +412,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "deliverable.cascade_retract":              "common_dir",
     "deliverable.cascade_backstop_sweep":       "common_dir",
     "deliverable.cascade_divergence_report":    "common_dir",
+    "deliverable.baton_close_backstop":         "common_dir",
     "commit_ledger.join_divergence_report":     "common_dir",
     "goal.kr2_two_repo_rate":                   "common_dir",
     "deliverable.fork_detect":                  "common_dir",

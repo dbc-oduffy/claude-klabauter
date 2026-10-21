@@ -44,8 +44,10 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     EMPTY_REGISTER_REASON,
     EMPTY_REGISTER_REFUSAL_HEAD,
     EMPTY_REGISTER_REFUSAL_TAIL,
+    HALT_PARKED,
     HALT_PLAN_FIELD,
     HALTED_RECORD_PARAM,
+    PARKED_REPLY_KEY,
     PM_INTENT_FILE,
     RESUME_LEDGER_EM_DISCHARGED_FIELD,
     RESUME_LEDGER_HALT_SHA_FIELD,
@@ -540,6 +542,7 @@ _ADMIT_MANIFEST_JS = (
     "  let _stageRefusal = null;\n"
     "  let _stageOwedEm = null;\n"
     "  let _relayGap = null;\n"
+    "  let _parked = null;\n"
     "  let _diskHalt = null;\n"
     "  const _wholeManifestGap = (m) => {\n"
     "    const ne = (v) => typeof v === 'string' && v.trim() !== '';\n"
@@ -580,6 +583,7 @@ _ADOPT_STAGE_REPLY_JS = (
     "    if (r.error) { if (!soft && !_stageRefusal) { _stageRefusal = String(r.error); "
     "if (Array.isArray(r.owed_em_ids) && r.owed_em_ids.length) _stageOwedEm = { ids: r.owed_em_ids.map(String), "
     "plan: typeof r.owed_plan === 'string' ? r.owed_plan : null }; } return; }\n"
+    f"    if (r.{PARKED_REPLY_KEY} && !r.manifest_handle) {{ if (!_parked) _parked = String(r.{PARKED_REPLY_KEY}); return; }}\n"
     "    if (!r.manifest_handle) { if (!soft && !_relayGap) _relayGap = 'manifest_handle'; return; }\n"
     "    const got = await _readStageSidecar(r.manifest_handle, REPO_ROOT);\n"
     f"    if (got.fail) {{ if (!_diskHalt) _diskHalt = {_js_string_literal(_STAGE_SIDECAR_HALT)} + got.fail; return; }}\n"
@@ -2096,8 +2100,10 @@ def compose_ask_script(
             readyOp error of its own halts."""
             return (
                 f"{indent}if ({entry} && typeof {entry} === 'object' && _planRel && !_stagedManifest && !_stageRefusal "
-                f"&& !_diskHalt && !_relayGap) {{\n"
-                f"{indent}  if ({entry}.readyOpReply != null) {{ _relayGap = 'manifest_handle'; }}\n"
+                f"&& !_diskHalt && !_relayGap && !_parked) {{\n"
+                f"{indent}  if ({entry}.readyOpReply?.{PARKED_REPLY_KEY} && !{entry}.readyOpReply.manifest_handle "
+                f"&& !{entry}.readyOpReply.error) {{ _parked = String({entry}.readyOpReply.{PARKED_REPLY_KEY}); }}\n"
+                f"{indent}  else if ({entry}.readyOpReply != null) {{ _relayGap = 'manifest_handle'; }}\n"
                 f"{indent}  else if ({entry}.readyOpError == null || /did not run/.test(String({entry}.readyOpError))) "
                 "{ await _blitzStageRead(); }\n"
                 f"{indent}}}"
@@ -2423,6 +2429,11 @@ def compose_ask_script(
     # plan-blitz arm alone stages through `_blitzStageRead`, and only when readyOp never ran. The
     # falsifier is authored by the scout or the plan legs, never a leg of its own.
     b.append(
+        f"  if (_parked && !_halted) _halted = {{ halted: {_lit(HALT_PARKED)}, "
+        "reason: 'parked after plan: workflow.revise stop_after=plan', "
+        "plan: _planRel, sizing: _sizingRel, run_id: _runId };"
+    )
+    b.append(
         "  let _stageHalt = _stageRefusal ? 'stage refused: ' + _stageRefusal : "
         "(_diskHalt ?? (_relayGap ? 'stage manifest relay is not whole: ' + _relayGap : null));"
     )
@@ -2459,7 +2470,7 @@ def compose_ask_script(
         f"sizing: _sizingRel, plan: _planRel, run_id: _runId, next_action: {_design_next_action_js(sizing_rel)} }}; }}"
     )
     b.append(
-        "  else if (_manifest.error || (!(_manifest.rows ?? []).length && !_allLanded && !_resumeLedger)) { _halted = { halted: "
+        "  else if (!_parked && (_manifest.error || (!(_manifest.rows ?? []).length && !_allLanded && !_resumeLedger))) { _halted = { halted: "
         f"{_lit(HALT_REFUSAL)}, kind: {_lit(HALT_REFUSAL)}, reason: _manifest.error || 'stage staged no rows', "
         "sizing: _sizingRel, plan: _planRel, run_id: _runId, "
         f"...({_owed_handback_js(sizing_rel)} ? {{ next_action: {_owed_handback_js(sizing_rel)} }} : "

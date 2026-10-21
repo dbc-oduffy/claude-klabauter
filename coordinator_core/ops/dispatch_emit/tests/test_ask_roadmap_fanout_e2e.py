@@ -82,13 +82,13 @@ def _scripts_with_path(repo):
 
 @pytest.mark.parametrize("which", ["standalone", "in-run"])
 def test_the_commit_params_block_carries_every_key_the_run_token_hook_requires(repo, which):
-    from coordinator_core.ops.dispatch_emit.terminal_commit_params_channel import _REQUIRED_STR_KEYS
+    from coordinator_core.ops.dispatch_emit.terminal_commit_params_channel import REQUIRED_STR_KEYS
 
     script = _scripts(repo)[which]
     (call,) = [ln for ln in script.splitlines() if "_terminalCommitParamsBlock({" in ln and "..._nextAction.params" in ln]
     block = call[call.index("_terminalCommitParamsBlock({"):]
     assert "script_path: _nextAction.params.script_path ?? ''" in block, "an unknown path is '', never an absent key"
-    for key in _REQUIRED_STR_KEYS:
+    for key in REQUIRED_STR_KEYS:
         assert f"{key}:" in block, key
     assert block.index("..._nextAction.params") < block.index("script_path:") < block.index("run_id: _runId")
 

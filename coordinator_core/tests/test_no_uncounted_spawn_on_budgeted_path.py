@@ -1373,6 +1373,10 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
         "coordinator_core/ops/cascade_divergence_report.py",
         ("_handler",),
     ),
+    "deliverable.baton_close_backstop": (
+        "coordinator_core/ops/baton_close_backstop.py",
+        ("_handler",),
+    ),
     "queue.append": (
         "coordinator_core/ops/queue_append.py",
         ("_queue_append_handler",),
@@ -2057,6 +2061,20 @@ _LEGITIMIZED_SITES: dict[tuple[str, str, str, str, int], _Legitimation] = {
         "memo.send `receiver_signing_enabled`); the attribution is itself asserted on every run. "
         "Natural precondition: receiver repo's commit.gpgsign set true (git commit-tree -S "
         "attempted, counted as the spawn attempt regardless of DR-308's no-secret-key fallthrough).",
+    ),
+    (
+        "deliverable.baton_close_backstop",
+        "coordinator_core/git/run.py",
+        "run_git",
+        "git",
+        0,
+    ): _Legitimation(
+        counter=_GLOBAL_SUBPROCESS_SPAWN,
+        counted_by="coordinator_core/ops/tests/test_baton_close_backstop.py",
+        executed="Measured 2026-10-21: the one batched `for-each-ref --merged` reached via "
+        "baton_close_evidence_chain.merged_branches, counted under "
+        "`test_whole_call_spawns_at_most_one_process` (`assert spawn_count() - before <= 1`) "
+        "on a fixture repo with a main ref.",
     ),
     (
         "hooks.stop_dispatch",

@@ -39,6 +39,8 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     EMPTY_REGISTER_REASON,
     PLAN_ROW_ANCHOR_PREFIX,
     RECORD_DIR_ROOT,
+    STOP_AFTER_FILE,
+    STOP_AFTER_PLAN,
     empty_register_refusal,
     record_dir,
 )
@@ -79,6 +81,7 @@ _PARAMS = (
     Field("withhold_paths", "list"),
     Field("credit_chunks", "list"),
     Field("build_only", "bool"),
+    Field("stop_after", "str"),
     Field("from", "str"),
 )
 #: Separator between a revision anchor's UTC stamp and the peer session that sent it.
@@ -770,7 +773,7 @@ def revise(
     repo_root: Path, run_id: str, *, verbatim: Optional[str] = None, all_of_pm_ask: Optional[bool] = None,
     out_of_scope: Sequence[str] = (), note: Optional[str] = None, sender: Optional[str] = None,
     withhold_paths: Sequence = (), credit_chunks: Sequence = (), build_only: bool = False,
-    outcome: Optional[dict] = None,
+    outcome: Optional[dict] = None, stop_after: Optional[str] = None,
 ) -> tuple[Ledger, Path, Optional[str]]:
     """Append the EM's revision (and/or set the flag) on an emitted run: a register row when the
     run's sizing is bound, else a queued revision `bind` folds in. `note` is free text that is
@@ -793,6 +796,10 @@ def revise(
     block (`_research_sizing.drop_research_block`) so the ask gate stops reading it as a research sizing.
     It needs an emitted run bound to a sizing (else it refuses and writes nothing), adds no row, and
     alone satisfies the non-empty precondition; `outcome`, when given, receives `research_dropped`.
+    `stop_after` (only `STOP_AFTER_PLAN`; any other value refuses) parks the run after planning: it
+    needs an emitted run whose record dir holds no `manifest.json` (a staged run cannot be parked),
+    writes `STOP_AFTER_FILE` atomically, adds no row, and alone satisfies the non-empty precondition;
+    a repeat rewrites the marker.
     Returns (ledger, run dir, the new row id or None)."""
     text = verbatim.strip() if isinstance(verbatim, str) else ""
     named = [str(i) for i in out_of_scope]
@@ -813,13 +820,15 @@ def revise(
             credit_entries = run_credit.validate(credit_chunks)
         except ValueError as exc:
             raise LedgerRefused(str(exc)) from exc
+    if stop_after is not None and stop_after != STOP_AFTER_PLAN:
+        raise LedgerRefused(f"stop_after takes only {STOP_AFTER_PLAN!r}, got {stop_after!r}")
     if (
         not text and all_of_pm_ask is None and not has_note and not withheld_entries and not credit_entries
-        and not build_only
+        and not build_only and stop_after is None
     ):
         raise LedgerRefused(
             "workflow.revise needs a non-empty verbatim, note, all_of_pm_ask, withhold_paths, "
-            "credit_chunks, build_only, or a combination"
+            "credit_chunks, build_only, stop_after, or a combination"
         )
     if named and not text:
         raise LedgerRefused("out_of_scope needs a non-empty verbatim: the ruling carries its words")
@@ -829,7 +838,7 @@ def revise(
     dir_ = run_dir(root, run_id)
     run = read_run(dir_)
     if run is None:
-        if named or all_of_pm_ask is not None or withheld_entries or credit_entries or build_only:
+        if named or all_of_pm_ask is not None or withheld_entries or credit_entries or build_only or stop_after:
             raise LedgerRefused(
                 f"no ledger-bearing run {run_id!r} under {RECORD_DIR_ROOT}: emit it first "
                 "(a held run takes only a verbatim revision)"
@@ -851,6 +860,8 @@ def revise(
         declare_write(dir_ / INBOX_FILE)
         queued = _queued_ledger(dir_, False)
         return queued, dir_, f"Q{len(queued.items)}"
+    if stop_after and (dir_ / "manifest.json").exists():
+        raise LedgerRefused(f"the run has staged; stop_after={STOP_AFTER_PLAN} can no longer park it")
     if named and not run.get("sizing_rel"):
         raise LedgerRefused("out_of_scope needs a bound sizing: the run has no register yet")
     if build_only and not run.get("sizing_rel"):
@@ -872,6 +883,14 @@ def revise(
         _write_run(dir_, run)
         declare_write(dir_ / RUN_FILE)
     added: Optional[str] = None
+    if stop_after:
+        from coordinator_core.atomic_replace import atomic_write_bytes
+
+        marker = {"stop_after": stop_after, "at": _now(), "from": _clean_sender(sender) or None}
+        atomic_write_bytes(
+            dir_ / STOP_AFTER_FILE, (json.dumps(marker, sort_keys=True) + "\n").encode("utf-8"), preserve_mode=False
+        )
+        declare_write(dir_ / STOP_AFTER_FILE)
     if has_note:
         from coordinator_core.atomic_append import append_line
 
@@ -1161,7 +1180,9 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     `credit_chunks` (list of `{chunk, evidence}`: stranded chunks the EM rules complete, recorded to
     the run's `credit.jsonl` for the re-fired terminal commit to re-grade; needs an emitted run, no
     sizing, adds no row; replied as `credit_chunks`), `build_only` (bool: removes the bound sizing's
-    `research` block; needs an emitted run bound to a sizing; adds no row; replied as `research_dropped`).
+    `research` block; needs an emitted run bound to a sizing; adds no row; replied as `research_dropped`),
+    `stop_after` (str, only "plan": records the park marker so `dispatch.ask_stage` parks the run after
+    planning; needs an emitted run that has not staged; adds no row; replied as `stop_after`).
 
     Appends a stamped revision row to the run's requirements (its sizing's requirement_register),
     which every later stage of the run reads at its start. Replies `{ok, run_id, item, items,
@@ -1184,7 +1205,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             root, params["run_id"], build_only=bool(params.get("build_only")), outcome=outcome, verbatim=params.get("verbatim"), all_of_pm_ask=params.get("all_of_pm_ask"),
             out_of_scope=params.get("out_of_scope") or (), note=params.get("note"),
             sender=params.get("from"), withhold_paths=params.get("withhold_paths") or (),
-            credit_chunks=params.get("credit_chunks") or (),
+            credit_chunks=params.get("credit_chunks") or (), stop_after=params.get("stop_after"),
         )
     except LedgerRefused as exc:
         return {"error": str(exc)}
@@ -1211,6 +1232,8 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     }
     if "research_dropped" in outcome:
         out["research_dropped"] = outcome["research_dropped"]
+    if params.get("stop_after"):
+        out["stop_after"] = params["stop_after"]
     if params.get("withhold_paths"):
         from coordinator_core.ops.dispatch_emit import run_withhold
 

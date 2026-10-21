@@ -16,10 +16,10 @@ pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 _STALE_REASON = "resume staged no dispatchable rows"
 _LANDED_PREFIX = "  if (!_manifest.error && !(_manifest.rows ?? []).length && Array.isArray(_gate.resume_rows)"
-_HALT_PREFIX = "  else if (_manifest.error || (!(_manifest.rows ?? []).length && !_allLanded && !_resumeLedger)) {"
+_HALT_PREFIX = "  else if (!_parked && (_manifest.error || (!(_manifest.rows ?? []).length && !_allLanded && !_resumeLedger))) {"
 
 _HARNESS = """
-let _halted = null, _allLanded = false, _resumeLedger = false, _planRel = 'p.md', _sizingRel = 's.yaml', _runId = 'r';
+let _halted = null, _allLanded = false, _resumeLedger = false, _parked = null, _planRel = 'p.md', _sizingRel = 's.yaml', _runId = 'r';
 let _gate = %s, _manifest = %s;
 %s
 console.log(JSON.stringify({ halted: _halted, allLanded: _allLanded, arm: _gate.arm }));

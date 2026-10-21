@@ -26,10 +26,14 @@ from coordinator_core.ops.dispatch_emit import design_route, reply_sidecar
 from coordinator_core.ops.dispatch_emit.ask_contract import (
     ASK_TEXT_FILE,
     DELIVERY_NOTE_DIR,
+    HALT_PARKED,
+    PARKED_REPLY_KEY,
     PM_INTENT_FILE,
     RELAYED_ASK_FILE,
     RELAYED_ASK_HEADING,
     RUN_DIR_ROOT,
+    STOP_AFTER_FILE,
+    STOP_AFTER_PLAN,
     GatedRow,
     ManifestRow,
     OwedRow,
@@ -830,13 +834,41 @@ def manifest_payload(root: Path, manifest: StageManifest) -> dict:
     return {**manifest.to_json(), "head_sha": read_head_sha(root)}
 
 
+def _consume_park_marker(root: Path, run_id: str) -> bool:
+    """True when the run's record dir holds a `stop_after == "plan"` marker the run has not yet parked
+    on. The marker is unlinked only once `halted.json` records the park, so a parked reply lost in
+    relay parks again rather than staging past the revise. An absent, unreadable or malformed marker
+    is False."""
+    try:
+        dir_ = record_dir(root, run_id)
+        marker = dir_ / STOP_AFTER_FILE
+        data = json.loads(marker.read_text(encoding="utf-8"))
+    except (ValueError, OSError):
+        return False
+    if not isinstance(data, dict) or data.get("stop_after") != STOP_AFTER_PLAN:
+        return False
+    try:
+        halted = json.loads((dir_ / "halted.json").read_text(encoding="utf-8"))
+    except (ValueError, OSError):
+        halted = None
+    if not (isinstance(halted, dict) and halted.get("halted") == HALT_PARKED):
+        return True
+    try:
+        marker.unlink()
+    except OSError:
+        pass
+    return False
+
+
 @register_op("dispatch.ask_stage")
 def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "dispatch.ask_stage": params `run_id` (str), exactly one of `plan_path` / `sizing_path`, `writes`.
 
     Replies `{"manifest_handle": {path, sha256, bytes}}` over the `manifest.json` that `stage()` wrote
     (`StageManifest.to_json()` plus `head_sha`), never the manifest itself; read it with
-    `reply_sidecar.read_reply`. A refused request replies `{"error": str}`.
+    `reply_sidecar.read_reply`. A refused request replies `{"error": str}`. A run whose record dir
+    carries a `stop_after=plan` marker replies `{"parked": "plan", "plan_path": str|None}` and stages
+    nothing, until its `halted.json` records the park; the next call then consumes the marker and stages.
     """
     if repo_root is None:
         return {"error": "dispatch.ask_stage requires repo_root"}
@@ -846,6 +878,8 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     writes = params.get("writes") or []
     run_id = params["run_id"]
     root = main_worktree_root(Path(repo_root))
+    if _consume_park_marker(root, run_id):
+        return {PARKED_REPLY_KEY: STOP_AFTER_PLAN, "plan_path": params.get("plan_path") or None}
     try:
         stage(
             root,

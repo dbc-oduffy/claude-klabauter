@@ -224,7 +224,7 @@ def test_the_stage_op_runs_against_the_resume_ledger_plan_in_the_script_text(mon
 
 def test_the_no_rows_refusal_is_exempted_only_by_the_resume_ledger_flag(monkeypatch):
     script = _script(monkeypatch)
-    assert "!(_manifest.rows ?? []).length && !_allLanded && !_resumeLedger)) { _halted = { halted: " in script
+    assert "!(_manifest.rows ?? []).length && !_allLanded && !_resumeLedger))) { _halted = { halted: " in script
     assert "'stage staged no rows'" in script
 
 

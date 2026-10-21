@@ -66,7 +66,13 @@ HALT_RESEARCH = "research"
 #: Raised by the ask script when an ask_stage refusal starts with design_route.STAGE_REFUSAL_PREFIX;
 #: the PM's recorded design_approval clears it.
 HALT_DESIGN_REVIEW = "design-review"
+#: Halt kind of a run revised to stop after a phase: a clean terminal that commits the run artifacts.
+HALT_PARKED = "parked"
 STOP_AFTER_PLAN = "plan"
+#: Record-dir file holding a run's revised stop-after phase.
+STOP_AFTER_FILE = "stop-after.json"
+#: `dispatch.ask_stage` reply key marking a parked run (no manifest handle follows).
+PARKED_REPLY_KEY = "parked"
 SIZING_SCOUT_AGENT_TYPE = "coordinator:sizing-scout"
 NO_PLAN_HAND_OFF_FLAG = "--no-plan-hand-off"
 DOC_NEW_CMD = '"${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/bin/coordinator-doc-new"'

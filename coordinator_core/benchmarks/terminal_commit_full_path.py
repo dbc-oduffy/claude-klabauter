@@ -6,7 +6,10 @@ whole close: product commit, review-stamp mint, coded-stamp commit, implemented
 flip. `--setup-only` does everything except the handler call, so the cost of the
 call is `full - setup-only` (the run-close spike's method).
 
-    python -m coordinator_core.benchmarks.terminal_commit_full_path <dir> [--setup-only] [--kind plan|mise|ask]
+    python -m coordinator_core.benchmarks.terminal_commit_full_path <dir> [--setup-only] [--kind plan|mise|ask] [--real-shape]
+
+`--real-shape` (ask only) grows the fixture to the incident's tree, corpus and launch dir
+(`build_real_shape`); k stays small because every invocation rebuilds it.
 
 `--kind mise` rewires the same repo as an inventory-mode run: the emitted script's marker
 names a minted spine, whose sibling inventory record maps row `P1.C3` to the source plan.
@@ -272,6 +275,96 @@ def build_ask_fixture(parent: Path) -> tuple[Path, str]:
     return repo, script
 
 
+REAL_TREE_FILES = 41_500
+REAL_SIZING_RECORDS = 1_250
+REAL_DELIVERY_RECORDS = 120
+REAL_STOPPED_RUNS = 80
+REAL_TRANSCRIPT_MB = 20
+REAL_LAUNCH_ENTRIES = 3_000
+# Setup at real shape costs ~100s of tree process time, so the setup-only subtraction swings by
+# seconds. The handler's own (parent) process time carries no subtraction: over this bar the
+# driver exits 3, which the budget test reads as red whatever the net figure says.
+REAL_SHAPE_PARENT_BAR_MS = 500.0
+
+
+def _write_tree(repo: Path, files: int) -> None:
+    for i in range(files):
+        d = repo / "tree" / f"d{i // 100:03d}"
+        if i % 100 == 0:
+            d.mkdir(parents=True)
+        (d / f"f{i:05d}.txt").write_text(f"{i}\n", encoding="utf-8")
+
+
+def build_real_shape(repo: Path) -> None:
+    """Grow an ask fixture to the shape the 2026-10-21 incident ran at, sizes from
+    docs/research/2026-10-21-terminal-commit-real-shape-attribution.md: a tracked tree, a
+    `state/sizings` corpus, delivery-verdict records, stopped in-window own runs whose
+    submissions point at one large transcript lacking their `tool_use_id`, and a populated
+    launch dir. Everything lives under `repo` or its parent."""
+    import json
+    import tempfile
+    import time
+    from calendar import timegm
+
+    from coordinator_core import warp_live
+    from coordinator_core.ops.dispatch_emit.ask_contract import RUN_DIR_ROOT
+    from coordinator_core.ops.dispatch_emit.run_token import TTL_SECONDS
+
+    _write_tree(repo, REAL_TREE_FILES)
+    sizings = repo / "state" / "sizings"
+    for i in range(REAL_SIZING_RECORDS):
+        (sizings / f"20260102-s{i:05d}.yaml").write_text(
+            _ASK_SIZING.replace("Test intent", f"Intent {i}") + f"deliverable_id: dlv-s{i:05d}-aaaaaa\n",
+            encoding="utf-8",
+        )
+    verdicts = repo / "state" / "delivery-verdicts" / "plan-x"
+    verdicts.mkdir(parents=True)
+    for i in range(REAL_DELIVERY_RECORDS):
+        (verdicts / f"v{i:04d}.md").write_text(
+            f"---\nkind: delivery-verdict\nsupersedes: docs/other/r{i}.md\nrecorded_at: 2026-01-01T00:00:00Z\n"
+            "delivery:\n  verdict: PASS\n---\n\nbody\n",
+            encoding="utf-8",
+        )
+    _git(repo, "add", "tree", "state/sizings", "state/delivery-verdicts")
+    _git(repo, "commit", "-q", "-m", "real-shape corpus")
+
+    transcript = repo.parent / f"{repo.name}-transcript.jsonl"
+    block = (json.dumps({"type": "assistant", "text": "x" * 900}) + "\n") * 1000
+    with open(transcript, "w", encoding="utf-8", newline="\n") as handle:
+        for _ in range(REAL_TRANSCRIPT_MB):
+            handle.write(block)
+    now = time.time()
+    for i in range(REAL_STOPPED_RUNS):
+        t = time.gmtime(now - 60 - i)
+        run_id = time.strftime("%Y%m%dT%H%M%S", t) + f"-{i:06x}"
+        assert now - timegm(t) < TTL_SECONDS
+        sub = warp_live._submission_path(repo, run_id)
+        sub.parent.mkdir(parents=True)
+        sub.write_text(
+            json.dumps(
+                {
+                    "run_id": run_id,
+                    "session_id": SESSION_ID,
+                    "transcript_path": str(transcript),
+                    "script_path": f"{RUN_DIR_ROOT}/{run_id}/run.mjs",
+                    "sizing_rel": ASK_SIZING_REL,
+                    "tool_use_id": f"toolu_absent_{i:06d}",
+                    "submitted_at": now,
+                }
+            ),
+            encoding="utf-8",
+        )
+        (repo / "state" / "warp" / run_id).mkdir(parents=True)
+
+    launch = repo.parent / f"{repo.name}-tmp"
+    launch.mkdir()
+    for i in range(REAL_LAUNCH_ENTRIES):
+        (launch / f"launch-{i:05d}.txt").write_text("", encoding="utf-8")
+    for key in ("TMPDIR", "TEMP", "TMP"):
+        os.environ[key] = str(launch)
+    tempfile.tempdir = str(launch)
+
+
 def _prepare_close(repo: Path) -> None:
     """Point the lessons outbox and the close job at the fixture, and stub the session's baton claim.
 
@@ -344,19 +437,36 @@ def main(argv: list[str]) -> int:
         at = argv.index("--kind")
         kind = argv[at + 1] if at + 1 < len(argv) else ""
         del argv[at : at + 2]
+    real_shape = "--real-shape" in argv
     args = [a for a in argv if not a.startswith("--")]
-    unknown = [a for a in argv if a.startswith("--") and a != "--setup-only"]
+    unknown = [a for a in argv if a.startswith("--") and a not in ("--setup-only", "--real-shape")]
     builders = {"plan": build_fixture, "mise": build_mise_fixture, "ask": build_ask_fixture}
-    if len(args) != 1 or unknown or kind not in builders:
-        print("usage: terminal_commit_full_path <dir> [--setup-only] [--kind plan|mise|ask]", file=sys.stderr)
+    if len(args) != 1 or unknown or kind not in builders or (real_shape and kind != "ask"):
+        print(
+            "usage: terminal_commit_full_path <dir> [--setup-only] [--kind plan|mise|ask] [--real-shape (ask only)]",
+            file=sys.stderr,
+        )
         return 2
     repo, script = builders[kind](Path(args[0]))
+    if real_shape:
+        build_real_shape(repo)
     from coordinator_core.ops.dispatch_emit import terminal_commit  # noqa: F401  (loaded in both modes)
 
     _prepare_close(repo)
     if "--setup-only" in argv:
         return 0
+    import time
+
+    started = time.process_time()
     out = _run_full_path(repo, script, kind)
+    handler_ms = (time.process_time() - started) * 1000.0
+    if real_shape and handler_ms >= REAL_SHAPE_PARENT_BAR_MS:
+        print(
+            f"real-shape handler parent process time {handler_ms:.0f}ms is over the "
+            f"{REAL_SHAPE_PARENT_BAR_MS:.0f}ms bar",
+            file=sys.stderr,
+        )
+        return 3
     if kind == "mise":
         complete = bool(out.get("committed")) and "coded_sha" in out
     elif kind == "ask":

@@ -28,7 +28,7 @@ _COMMIT_AGENT = "coordinator:git-commit-agent"
 _SCRIPT = "scratch/warp/a.workflow.mjs"
 _RUN = "ask-1"
 _LEVELS = ["strict", "warn", "off"]
-_SHAPES = ["bare", "cd_and", "cd_semi", "mkdir_and", "mkdir_semi"]
+_SHAPES = ["bare", "cd_and", "cd_semi", "mkdir_and", "mkdir_semi", "cat_redirect", "tee_pipe"]
 
 
 @pytest.fixture
@@ -66,13 +66,23 @@ def _command(repo, shape: str) -> str:
         return f"mkdir -p {repo.as_posix()}/sidecar && {argv}"
     if shape == "mkdir_semi":
         return f"mkdir -p {repo.as_posix()}/sidecar; {argv}"
+    if shape == "cat_redirect":
+        params = chan.params_path(repo, _RUN).as_posix()
+        return f'mkdir -p {repo.as_posix()}/sidecar && cat > {params} 2>/dev/null; echo "---"; {argv}'
+    if shape == "tee_pipe":
+        params = chan.params_path(repo, _RUN).as_posix()
+        return f"mkdir -p {repo.as_posix()}/sidecar && echo x | tee {params}; {argv}"
     return argv
 
 
 def _verdict(repo, cmd: str, transcript: str, level: str, monkeypatch):
     monkeypatch.setenv("MACHINE_LOCAL_COORDINATOR_GUARD_LEVEL", level)
     machine_profile.reset_cache()
-    payload = {
+    return dispatch.evaluate_payload_json(json.dumps(_payload(repo, cmd, transcript)))
+
+
+def _payload(repo, cmd: str, transcript: str) -> dict:
+    return {
         "tool_name": "Bash",
         "tool_input": {"command": cmd},
         "session_id": "s",
@@ -81,7 +91,6 @@ def _verdict(repo, cmd: str, transcript: str, level: str, monkeypatch):
         "agent_type": _COMMIT_AGENT,
         "transcript_path": transcript,
     }
-    return dispatch.evaluate_payload_json(json.dumps(payload))
 
 
 def _is_deny(out) -> bool:
@@ -91,6 +100,15 @@ def _is_deny(out) -> bool:
         return False
     hso = out.get("hookSpecificOutput") or {}
     return hso.get("permissionDecision") == "deny" or out.get("permissionDecision") == "deny"
+
+
+def _reasons(out) -> list[str]:
+    if isinstance(out, list):
+        return [r for o in out for r in _reasons(o)]
+    if not isinstance(out, dict):
+        return []
+    hso = out.get("hookSpecificOutput") or {}
+    return [str(hso.get("permissionDecisionReason") or out.get("permissionDecisionReason") or "")]
 
 
 @pytest.mark.parametrize("shape", _SHAPES)
@@ -104,6 +122,28 @@ def test_a_non_deny_verdict_leaves_the_params_file_on_disk(repo, monkeypatch, le
         return
     assert canonical.exists(), f"{level}/{shape}: verdict {out!r} let the commit start without its params"
     assert json.loads(canonical.read_text(encoding="utf-8")) == params
+
+
+@pytest.mark.parametrize("shape", ["cat_redirect", "tee_pipe"])
+def test_a_command_writing_the_params_file_is_denied_naming_the_shape(repo, monkeypatch, shape):
+    """Incident run ask-20261021T115244-e3701d: the agent's own `cat >` truncated the params file.
+    The shell's truncation emptying the file is the case C2's empty-params refusal backstops."""
+    token = run_token.mint(repo, _RUN, _SCRIPT)
+    params = {"script_path": _SCRIPT, "run_id": _RUN, "run_token": token, "incomplete_chunks": []}
+    out = _verdict(repo, _command(repo, shape), _transcript(repo, params), "strict", monkeypatch)
+    assert _is_deny(out)
+    own = guard.check(_payload(repo, _command(repo, shape), _transcript(repo, params)))
+    assert "writes the run's params file" in "\n".join(_reasons(own))
+
+
+def test_a_redirect_to_another_file_is_not_the_params_write_leg(repo, monkeypatch):
+    token = run_token.mint(repo, _RUN, _SCRIPT)
+    params = {"script_path": _SCRIPT, "run_id": _RUN, "run_token": token, "incomplete_chunks": []}
+    argv = f"coordinator-invoke dispatch.terminal_commit --params-file {chan.params_path(repo, _RUN).as_posix()}"
+    cmd = f"echo hi > {repo.as_posix()}/other.txt; {argv}"
+    own = guard.check(_payload(repo, cmd, _transcript(repo, params)))
+    assert _is_deny(own)
+    assert "writes the run's params file" not in "\n".join(_reasons(own))
 
 
 @pytest.mark.parametrize("shape", _SHAPES)

@@ -6517,6 +6517,7 @@ _LEG_PARAMS_NO_BLOCK = "leg:run-token-params-no-block"
 _LEG_PARAMS_PATH = "leg:run-token-params-path"
 _LEG_PARAMS_TOKEN = "leg:run-token-params-token"
 _LEG_PARAMS_WRITE = "leg:run-token-params-write"
+_LEG_PARAMS_FILE_WRITTEN_BY_COMMAND = "leg:run-token-params-command-writes"
 
 #: Per-leg deny prose. Each names its OWN cause and the single edit that
 #: fixes it; none sends the reader to the pathspec-scope check unless the
@@ -6567,6 +6568,10 @@ _GIT_COMMIT_AGENT_LEG_MESSAGES = {
     _LEG_PARAMS_WRITE: (
         "BLOCKED: terminal_commit params not admitted -- the params file could "
         "not be written. Report it; do not edit the command."
+    ),
+    _LEG_PARAMS_FILE_WRITTEN_BY_COMMAND: (
+        "BLOCKED: terminal_commit command writes the run's params file -- the "
+        "hook writes it. Run the one coordinator-invoke command alone."
     ),
     _LEG_UNRESOLVABLE_GIT_ROOT: (
         "BLOCKED: git-commit-agent: no repo root at this cwd; pathspec "
@@ -6941,6 +6946,39 @@ def _prefixed_params_file_value(cmd_for_scan: str) -> Optional[str]:
     return path
 
 
+_REDIRECT_WRITE_TOKEN_RE = re.compile(r"^(?:&|\d+)?>>?\|?(.*)$")
+
+
+def _is_run_params_file_name(path: str) -> bool:
+    from coordinator_core.ops.dispatch_emit import terminal_commit_params_channel as chan
+
+    return path.replace("\\", "/").rsplit("/", 1)[-1] == chan.PARAMS_FILE_NAME
+
+
+def _params_file_write_target(cmd_for_scan: str) -> Optional[str]:
+    """The run's params-file path a segment redirects into (`>`, `>>`) or `tee`s into, else None.
+
+    Trap: matches on the params file's basename, not the canonical path, so a relative or
+    differently spelled path cannot slip past; the file is written only by the guard.
+    """
+    tokens = _tokenize_full_command(cmd_for_scan)
+    if tokens is None:
+        return None
+    for seg in (s for s in _segments_from_tokens(tokens) if s):
+        if _token_matches_binary(seg[0], "tee"):
+            for t in seg[1:]:
+                if not t.startswith("-") and _is_run_params_file_name(t):
+                    return t
+        for i, tok in enumerate(seg):
+            m = _REDIRECT_WRITE_TOKEN_RE.match(tok)
+            if m is None:
+                continue
+            target = m.group(1) or (seg[i + 1] if i + 1 < len(seg) else "")
+            if target and _is_run_params_file_name(target):
+                return target
+    return None
+
+
 #: `_warp_run_token_admits(params_leg=...)` default: the caller has not run the params admission.
 _PARAMS_LEG_UNSET: Any = object()
 
@@ -7158,28 +7196,34 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             if payload_legs or heredoc_stdin_import_hit or not git_root
             else _prefixed_params_file_value(cmd_for_scan)
         )
-        if typed_params_file is not None:
-            params_leg = _prompt_sourced_params_admit(
-                typed_params_file, git_root, _spawn_transcript(payload)
+        written_target = _params_file_write_target(cmd_for_scan) if git_root else None
+        if written_target is not None:
+            # A demoted deny still runs the command: the file must hold the prompt's params then.
+            _prompt_sourced_params_admit(written_target, git_root, _spawn_transcript(payload))
+            refusal = ownership_reason = _LEG_PARAMS_FILE_WRITTEN_BY_COMMAND
+        else:
+            if typed_params_file is not None:
+                params_leg = _prompt_sourced_params_admit(
+                    typed_params_file, git_root, _spawn_transcript(payload)
+                )
+            may_commit, ownership_reason = _git_commit_agent_may_commit(
+                cmd_for_scan, git_root, session_id, cwd
             )
-        may_commit, ownership_reason = _git_commit_agent_may_commit(
-            cmd_for_scan, git_root, session_id, cwd
-        )
-        if may_commit:
-            return None
-        refusal = (
-            _warp_run_token_admits(
-                cmd,
-                cmd_for_scan,
-                git_root,
-                payload_legs,
-                heredoc_stdin_import_hit,
-                transcript_path=_spawn_transcript(payload),
-                params_leg=params_leg,
+            if may_commit:
+                return None
+            refusal = (
+                _warp_run_token_admits(
+                    cmd,
+                    cmd_for_scan,
+                    git_root,
+                    payload_legs,
+                    heredoc_stdin_import_hit,
+                    transcript_path=_spawn_transcript(payload),
+                    params_leg=params_leg,
+                )
+                if git_root
+                else _LEG_RUN_TOKEN_PARAMS
             )
-            if git_root
-            else _LEG_RUN_TOKEN_PARAMS
-        )
         if refusal is None:
             return None
         if _is_terminal_commit_params_file_cmd(cmd_for_scan):

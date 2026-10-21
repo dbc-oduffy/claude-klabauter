@@ -814,6 +814,23 @@ def _dispatch_argv_body(argv: list, cwd: str, *, allow_warm: bool) -> None:
     else:
         params_json_str = "{}"
 
+    if args.op == "dispatch.terminal_commit" and params_json_str.strip() in ("", "{}"):
+        from coordinator_core.ops.dispatch_emit import terminal_commit_params_channel as _tcpc
+
+        message = (
+            "dispatch.terminal_commit params are empty; missing: "
+            + ", ".join(_tcpc.REQUIRED_STR_KEYS)
+            + ". Not dispatched; nothing committed."
+        )
+        if (
+            args.params_file not in (None, "-")
+            and _tcpc.missing_file_diagnosis(args.params_file) is not None
+        ):
+            message += (
+                f" The params file {args.params_file} is empty."
+            )
+        _fatal_stderr(message)
+
     # 2. Parse params JSON — must be a JSON object.
     try:
         params = _loads_params(params_json_str)

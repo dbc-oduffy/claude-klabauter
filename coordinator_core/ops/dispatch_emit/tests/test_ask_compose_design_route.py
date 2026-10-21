@@ -40,7 +40,7 @@ def test_stage_refusal_maps_to_a_design_review_halt_ahead_of_the_refusal_halt():
     assert "board_url: _gate?.design_route?.board?.url ?? null" in halt
     assert "design_route: _gate?.design_route ?? null" in halt
     assert ask_compose._lit(design_route.next_action("state/sizings/s.yaml")) in halt
-    assert at < script.index("else if (_manifest.error || (!(_manifest.rows ?? []).length")
+    assert at < script.index("else if (!_parked && (_manifest.error || (!(_manifest.rows ?? []).length")
 
 
 def test_manifest_error_quoting_the_prefix_mid_text_is_not_a_design_review_halt():
