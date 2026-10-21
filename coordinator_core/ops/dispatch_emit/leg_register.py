@@ -114,6 +114,7 @@ REGISTER: tuple[LegDecl, ...] = (
         "runs the manifest's scoped tests, writes the declared docs and note, then rules the criterion and the "
         "ledger; absorbed the terminal test, criterion-judge, docs and ledger-check legs and the reviewer rows' verdict-write",
     ),
+    _earns("ask", "footprint", "reads the baton for an XS sizing's write footprint when the sizing carries none"),
     _earns("ask", "size-retry", "re-runs the scout when its first pass did not assemble the sizing"),
     _earns("ask", "ledger-replan", "re-plans the rows a resumed ledger still owes"),
     _earns("ask", "ledger-remaining", "executes the rows a resumed ledger still owes"),

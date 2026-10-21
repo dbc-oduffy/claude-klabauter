@@ -21,9 +21,7 @@ Wire params:
                                   CONTRADICTED rows pull; UNCHECKABLE is a note on a ready reply.
                                   A CONTRADICTED row whose citation the plan's frontmatter
                                   ``corrects: [{citation, fixed_by}]`` names, with ``fixed_by`` an
-                                  open or coded spine row, is a note; a composite citation of
-                                  several sentences is a note when every sentence is touched by a
-                                  live entry, and pulls when any sentence is left uncited. A class-4 row whose optional
+                                  open or coded spine row, is a note. A class-4 row whose optional
                                   ``baseline_ref`` differs from the plan's current falsifier
                                   ``baseline_ref`` is stale and a note. An UNRESOLVED row is exempt
                                   only through the plan's ``declared_absent: [{citation,
@@ -137,11 +135,6 @@ def _norm(text: Any) -> str:
     return " ".join(text.split()) if isinstance(text, str) else ""
 
 
-# ``_norm`` collapses newlines to spaces, so a sentence ends only at terminal punctuation.
-_SENTENCE_BREAK = re.compile(r"[.;!?]+(?:\s+|$)")
-_HAS_WORD = re.compile(r"\w")
-
-
 def _covering_row(row: dict, corrects: Any, spine_rows: Optional[List[dict]]) -> Optional[tuple]:
     """(citation, row id) of the first ``corrects`` entry that covers this premise row, else None.
     ``fixed_by`` is a live (open/coded) row id or a comma list of commit shas; malformed entries,
@@ -154,36 +147,14 @@ def _covering_row(row: dict, corrects: Any, spine_rows: Optional[List[dict]]) ->
         if isinstance(r, dict) and str(r.get("disposition") or "").strip() in _LIVE_DISPOSITIONS
     }
     cited = _norm(row.get("citation"))
-    entries = []
     for entry in corrects:
         if not isinstance(entry, dict):
             continue
         citation, fixed_by = _norm(entry.get("citation")), entry.get("fixed_by")
         fix = fixed_by.strip() if isinstance(fixed_by, str) else ""
-        if citation and (fix in live or _SHA_LIST.fullmatch(fix)):
-            entries.append((citation, fix))
-    # Each live entry that occurs in the row covers every sentence its span touches; the row is
-    # covered when no sentence is left uncited.
-    spans = []
-    for citation, fix in entries:
-        start = cited.find(citation)
-        if start >= 0:
-            spans.append((start, start + len(citation), citation, fix))
-    if not spans:
-        return None
-    hits, begin = [], 0
-    for brk in [*_SENTENCE_BREAK.finditer(cited), None]:
-        end = brk.start() if brk else len(cited)
-        if _HAS_WORD.search(cited[begin:end]):
-            hit = next((s for s in spans if s[0] < end and s[1] > begin), None)
-            if hit is None:
-                return None
-            hits.append(hit[2:])
-        begin = brk.end() if brk else end
-    return (
-        " + ".join(dict.fromkeys(h[0] for h in hits)),
-        ", ".join(dict.fromkeys(h[1] for h in hits)),
-    )
+        if citation and citation in cited and (fix in live or _SHA_LIST.fullmatch(fix)):
+            return citation, fix
+    return None
 
 
 _OPEN_QUESTIONS = re.compile(r"^##[ \t]+Open questions[ \t]*$(.*?)(?=^##[ \t]|\Z)", re.M | re.S | re.I)

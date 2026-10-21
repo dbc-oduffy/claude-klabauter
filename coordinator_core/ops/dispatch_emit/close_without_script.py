@@ -77,7 +77,23 @@ def _digest(task_output_path: Optional[str], run_id: str) -> Optional[dict]:
             f"{task_output_path!r} is run {stem!r}'s output, not {run_id!r}. "
             "Pass the run's own task-output file, or omit task_output_path.",
         )
-    return found
+    return {**_digest_extras(task_output_path), **found}
+
+
+def _digest_extras(path_raw: str) -> dict:
+    """``inline_review``, ``falsifier_broken`` and ``run_base_sha`` the digest's result carries beside
+    ``next_action``: a ``close_job`` action's own params hold none of them."""
+    import json
+
+    try:
+        data = json.loads(Path(path_raw).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if isinstance(data, dict) and "next_action" not in data and isinstance(data.get("result"), dict):
+        data = data["result"]
+    if not isinstance(data, dict):
+        return {}
+    return {k: data[k] for k in ("inline_review", "falsifier_broken", "run_base_sha") if data.get(k) is not None}
 
 
 def _rejudge(repo_root: Path, plan_id: str, review: Optional[dict]) -> Optional[tuple]:
@@ -303,19 +319,21 @@ def close_landed_run(worktree_root: Path, repo_root: Path, params: dict) -> dict
         plan_id = str(plan_fm.get("plan_id") or "")
         review_path, review = _review_record(worktree_root, terminal_sha)
         verdict = read_verdict(worktree_root, record, review, task_output_path, run_id, plan_rel, plan_id)
+        run_base = (_digest(task_output_path, run_id) or {}).get("run_base_sha")
     except CloseRefusal as exc:
         return _error(exc.message, refused=exc.reason)
     return _pay(
         worktree_root, repo_root, session_id, plan_rel, run_id, record, plan_text, plan_fm, plan_id,
-        review_path, review, verdict,
+        review_path, review, verdict, run_base=run_base if isinstance(run_base, str) else None,
     )
 
 
 def _pay(
     worktree_root: Path, repo_root: Path, session_id: Optional[str], plan_rel: str, run_id: str,
     record: dict, plan_text: str, plan_fm: dict, plan_id: str, review_path: Optional[Path],
-    review: Optional[dict], verdict: Verdict,
+    review: Optional[dict], verdict: Verdict, run_base: Optional[str] = None,
 ) -> dict:
+    import re
     from datetime import datetime, timedelta
 
     from coordinator_core.ops.ceremony import close_background
@@ -508,6 +526,16 @@ def _pay(
     if shipped_here is not None and shipped_here.status in _PAID and not failed_commit:
         write["settled"] = {**write.get("settled", {}), "baton-ship": shipped_here}
     queue_review = receipted and (review_leg is None or review_leg.status == "failed")
+    if queue_review and not record.get("run_base_sha"):
+        if run_base and re.fullmatch(r"[0-9a-f]{40}", run_base):
+            write["run_base_sha"] = run_base
+        else:
+            queue_review = False
+            why = "close-job record and digest carry no run_base_sha; review range not computed"
+            if review_leg is None:
+                write["settled"] = {**write.get("settled", {}), "review": tc._leg("not-applicable", why)}
+            else:
+                run_close.record_leg_outcome(worktree_root, run_id, "review", "not-applicable", why)
     if queue_review:
         write["queue"] = ["review"]
         write["deadline"] = now + timedelta(minutes=tc._CLOSE_JOB_WINDOW_MINUTES)

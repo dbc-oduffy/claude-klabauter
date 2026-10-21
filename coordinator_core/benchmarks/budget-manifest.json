@@ -68,7 +68,7 @@
       "target_ms": 310,
       "tolerance": {"kind": "relative", "value": 0.2},
       "spawn_count_budget": {"prep_fire": 1, "wave_boundary": 2},
-      "_rationale": "Measured 2026-10-21, process time, over the real default set (449 approved plans, named_set false, 19804 findings; the target_ms below is the 2026-10-08 298-plan figure, kept because a target is never raised): first call after every plan was loaded once 985ms (HEAD before the rebuild: 1128ms), repeat calls in the same process 450ms (HEAD: 570ms), COLD fresh interpreter 3770ms. Over the 500ms bar: the first post-load call and the cold call, both inside read_spine, which this op consumes and does not own: the cold figure is the YAML parse of every spine, and the first-call excess (~530ms) is the depends_on_plan edge resolution of 7 plans (a pure-Python yaml load of each target plan, plus a first-parent checkpoint walk of up to 500 commits through a pack search that probes every pack index; this repo holds 4007 packs). This op's own share is ~150ms of the repeat call. One batched `git cat-file --batch-check` answers HEAD's sha and every tracked-at-HEAD question for the whole set; wave-boundary adds one name-only diff of the landed range. Counted by coordinator_core/ops/tests/test_plan_seam_check_spawn_count.py with exact equality."
+      "_rationale": "Measured 2026-10-08, process time, over the real default set (298 approved plans, named_set false, 18795 findings): warm 308ms, COLD 3197ms. The target is the warm figure; the cold figure is a standing breach of DR-344's 500ms bar, not a budget. The cold cost is the pure-Python YAML parse of every spine inside read_spine (scan_block_scalar/scan_plain dominate the profile), a module this op consumes and does not own. One batched `git cat-file --batch-check` answers HEAD's sha and every tracked-at-HEAD question for the whole set; wave-boundary adds one name-only diff of the landed range. Counted by coordinator_core/ops/tests/test_plan_seam_check_spawn_count.py with exact equality."
     },
     "plan.seam_fix": {
       "target_ms": 120,
@@ -90,7 +90,7 @@
       "target_ms": 760,
       "tolerance": {"kind": "relative", "value": 0.2},
       "spawn_count_budget": {"prep_fire": 1, "wave_boundary": 2},
-      "_rationale": "Target set 2026-10-08, process time, default set of 298 plans: the evaluation plus the sidecar write leg (298 atomic writes, CSafeDumper) measured separately at ~450ms warm; the sum, ~760ms, is itself over DR-344's 500ms bar and is a component sum, not one measurement. The evaluation is plan.seam_check's, re-measured 2026-10-21 over 449 plans (first call after load 985ms, repeat calls 450ms, cold 3770ms); the write leg was not re-measured and the target is unchanged. Counted by coordinator_core/ops/tests/test_plan_seam_check_spawn_count.py with exact equality."
+      "_rationale": "Measured 2026-10-08, process time, default set of 298 plans: the evaluation is plan.seam_check's (warm 308ms, cold 3197ms) plus the sidecar write leg (298 atomic writes, CSafeDumper) measured separately at ~450ms warm; the sum, ~760ms, is the target and is itself over DR-344's 500ms bar. The end-to-end op was not run against a scratch git repo here, so 760 is a component sum, not one measurement. The evaluation is plan.seam_check's. Counted by coordinator_core/ops/tests/test_plan_seam_check_spawn_count.py with exact equality."
     },
     "plan.stamp_prepped": {
       "target_ms": 300,

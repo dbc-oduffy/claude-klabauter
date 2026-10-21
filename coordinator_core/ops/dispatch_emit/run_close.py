@@ -365,6 +365,7 @@ def amend_close_job(
     settled: Optional[Mapping[str, LegResult]] = None,
     queue: Iterable[str] = (),
     deadline: Optional[datetime] = None,
+    run_base_sha: Optional[str] = None,
 ) -> None:
     """Change only the given fields of an existing record, in one atomic write.
 
@@ -403,6 +404,8 @@ def amend_close_job(
         record["falsifier_broken"] = None if falsifier_broken is None else list(falsifier_broken)
     if review_receipt is not None:
         record["review_receipt"] = review_receipt
+    if run_base_sha is not None:
+        record["run_base_sha"] = run_base_sha
     if settled_dict:
         merged = record.get("settled")
         record["settled"] = {**(merged if isinstance(merged, dict) else {}), **settled_dict}

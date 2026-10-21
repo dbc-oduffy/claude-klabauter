@@ -139,6 +139,35 @@ def test_unchanged_stranded_file_is_not_a_target(repo):
     assert "pkg/c3.py" in _git(["ls-files"], repo).split()
 
 
+def test_only_the_importer_of_a_stranded_file_is_withheld_among_many_done_rows(repo):
+    _write(repo, "gen/__init__.py", "")
+    _write(repo, "gen/done_a.py", "A = 1\n")
+    _write(repo, "gen/stranded.py", "S = 1\n")
+    _write(repo, "pkg/imports_done.py", "from gen.done_a import A\n")
+    _write(repo, "pkg/imports_stranded.py", "from gen.stranded import S\n")
+    _write(repo, "pkg/plain.py", "X = 2\n")
+    script = _emit(repo, [
+        ("C5", [], ["gen/"], "BLOCKED: x\ncreated-under-prefix: gen/stranded.py\n"),
+        ("C6", ["pkg/c6.py"], [], "BLOCKED: y\n"),
+        ("C7", ["pkg/c7.py"], [], "BLOCKED: z\n"),
+        ("D1", ["gen/done_a.py"], [], "DONE: ok\n"),
+        ("D2", ["pkg/imports_done.py"], [], "DONE: ok\n"),
+        ("D3", ["pkg/imports_stranded.py"], [], "DONE: ok\n"),
+        ("D4", ["pkg/plain.py"], [], "DONE: ok\n"),
+    ])
+    out = terminal_commit._handler(
+        {"script_path": script, "incomplete_chunks": ["C5", "C6", "C7"], "inline_review": _REVIEWED},
+        repo_root=repo / ".git",
+    )
+    assert out["committed"] is True, out
+    assert out["entangled"] == {"D3": ["C5"]}
+    assert {"D1", "D2", "D4"} <= set(out["chunks_committed"])
+    assert "D3" not in out["chunks_committed"]
+    tracked = set(_git(["ls-files"], repo).split())
+    assert {"gen/done_a.py", "pkg/imports_done.py", "pkg/plain.py"} <= tracked
+    assert "pkg/imports_stranded.py" not in tracked
+
+
 def test_importer_of_file_created_under_stranded_prefix_is_entangled(repo):
     _write(repo, "gen/made.py", "A = 1\n")
     _write(repo, "pkg/c3.py", "from gen.made import A\n")

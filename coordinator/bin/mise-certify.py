@@ -19,7 +19,8 @@ Exit status:
 The third leg runs once over the FIRE SET only (sha CERTIFIED and census not DRIFT):
 `plan.seam_record` at `phase: fire`, `named_set: true`. Its result rides each row as `seam`; a
 row outside the set carries verdict NOT-RUN, and an empty fire set issues no op. Checking
-unstamped or stale plans spends the seam op on plans nobody is about to fire.
+unstamped or stale plans spends the seam op on plans nobody is about to fire (EM ruling
+2026-10-21T18:52:18Z).
 """
 
 from __future__ import annotations

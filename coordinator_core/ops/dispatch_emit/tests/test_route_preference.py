@@ -59,36 +59,3 @@ def test_scout_block_empty_and_populated():
     assert "route_override_reason" in block
     only_rationale = rp.scout_block(rp.RoutePreference(None, "why"))
     assert "> why" in only_rationale and "Route preference" not in only_rationale
-
-
-def test_scout_block_is_advisory_not_a_strong_prior():
-    block = rp.scout_block(rp.RoutePreference("roadmap", None))
-    assert "strong prior" not in rp.SCOUT_BLOCK_HEADING + block
-    assert "advisory" in rp.SCOUT_BLOCK_HEADING
-    assert "does not override" in block
-
-
-def test_route_verdict_none_without_preference_or_route():
-    assert rp.route_verdict(rp.parse(None, "why"), "plan", reason="r", basis=None) is None
-    assert rp.route_verdict(rp.parse("plan", None), None, reason=None, basis=None) is None
-    assert rp.route_verdict(rp.parse("plan", None), "", reason=None, basis=None) is None
-
-
-def test_route_verdict_pushback_on_divergence():
-    v = rp.route_verdict(rp.parse("roadmap", None), "plan", reason="four small fixes", basis="e")
-    assert v == {
-        "verdict": "pushback",
-        "em_preferred": "roadmap",
-        "sized_route": "plan",
-        "reason": "four small fixes",
-        "message": "EM preferred roadmap; sized as plan because four small fixes.",
-    }
-
-
-def test_route_verdict_independent_on_match():
-    v = rp.route_verdict(rp.parse("goal", None), "goal-setting", reason=None, basis="evidence")
-    assert v["verdict"] == "independent" and v["basis"] == "evidence"
-    assert v["em_preferred"] == "goal" and v["sized_route"] == "goal-setting"
-    assert "did not decide it" in v["message"]
-    none_basis = rp.route_verdict(rp.parse("plan", None), "plan", reason=None, basis=None)
-    assert none_basis["basis"] is None

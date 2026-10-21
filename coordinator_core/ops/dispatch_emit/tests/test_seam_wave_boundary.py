@@ -361,8 +361,7 @@ def test_the_digest_renders_the_class_and_collapses_repeats():
     if node is None:
         pytest.skip("node is not installed")
     script = _compose(_two_plan_waves())
-    grouped = "(_seamDrift.length ? (() =>"
-    expr = grouped + script.split(grouped, 1)[1].split("})() : ", 1)[0] + "})() : '')"
+    expr = "(_seamDrift.length ? " + script.split("(_seamDrift.length ? ", 1)[1].split("})() : ", 1)[0] + "})() : '')"
     drift = [
         {"wave": 1, "class": "unpromised-export", "plans": [P2, P1], "path": "a.py"},
         {"wave": 1, "class": "unpromised-export", "plans": [P2, P1], "path": "b.py"},
@@ -388,9 +387,9 @@ def test_the_digest_names_a_refused_wave_commit_as_a_commit_failure_never_a_seam
         pytest.skip("node is not installed")
     script = _compose(_two_plan_waves())
     digest = script.split("decision_required:", 1)[1].splitlines()[0]
-    expr = "(Object.keys(_commitRefused).length ? " + digest.split("(Object.keys(_commitRefused).length ? ", 1)[1].split("(_seamDrift.length ? (() =>", 1)[0]
+    expr = "(Object.keys(_commitRefused).length ? " + digest.split("(Object.keys(_commitRefused).length ? ", 1)[1].split("(_seamDrift.length ? ", 1)[0]
     probe = (
-        "const _commitRefused = {'wave 1 commit': 'wave 1: attribution_gate refused'}; const _seamDrift = [];"
+        "const _commitRefused = {'wave 1 commit': 'wave 1: attribution_gate refused'};"
         f"const r = {expr} null);console.log(r);"
     )
     done = subprocess.run(

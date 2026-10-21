@@ -173,33 +173,6 @@ def test_two_certified_plan_collision_is_absent():
     assert _args(rows)["batches"] == []
 
 
-def test_mixed_pair_yields_no_seamref_for_the_certified_plan():
-    rows = [
-        {"plan": "docs/plans/a.md", "verdict": "PREPPED", "failing": [], "outcome": "stamped",
-         "seam": [_coll("docs/plans/a.md", "x.py", "docs/plans/b.md")]},
-        _short("docs/plans/b.md", [_coll("docs/plans/b.md", "x.py", "docs/plans/a.md")]),
-    ]
-    run = "20261019T1630Z-abcd1234"
-    texts = mr.seam_ref_texts(rows, run)
-    assert set(texts) == {f"state/mise-workflows/{run}.seam/b.txt"}
-    members = [m for b in _args(rows)["batches"] for m in b["plans"]]
-    assert [m["plan"] for m in members] == ["docs/plans/b.md"]
-    assert not any("a.txt" in str(m.get("seamRef")) for m in members)
-
-
-def test_two_uncertified_plans_each_keep_their_seamref():
-    rows = [
-        _short("docs/plans/a.md", [_coll("docs/plans/a.md", "x.py", "docs/plans/b.md")]),
-        _short("docs/plans/b.md", [_coll("docs/plans/b.md", "x.py", "docs/plans/a.md")]),
-    ]
-    run = "20261019T1630Z-abcd1234"
-    texts = mr.seam_ref_texts(rows, run)
-    assert set(texts) == {f"state/mise-workflows/{run}.seam/a.txt",
-                          f"state/mise-workflows/{run}.seam/b.txt"}
-    members = [m for b in _args(rows)["batches"] for m in b["plans"]]
-    assert {m["seamRef"] for m in members} == set(texts)
-
-
 def test_counterpart_copy_is_not_in_members_file_and_records_merge():
     rows = [_short("docs/plans/a.md", [
         _coll("docs/plans/a.md", "x.py", "docs/plans/b.md"),

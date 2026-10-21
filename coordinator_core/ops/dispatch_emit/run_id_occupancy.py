@@ -13,8 +13,6 @@ from typing import Optional
 
 
 _SCRIPT_SUFFIX = ".workflow.mjs"
-# Every filename tail an emit can leave beside a record: part cut, land/resume re-fire, then the
-# spine, script or receipt. A tail missing here lets its tranche number be re-minted.
 _OUTPUT_TAIL = r"(-p\d+)?(-(land|resume)[A-Za-z0-9]*)?(\.spine\.md|\.spine\.workflow\.mjs|\.workflow\.mjs)(\.emitted\.json)?"
 
 
@@ -45,7 +43,6 @@ def spent_run_reason(script_path: Path) -> Optional[str]:
     (receipt carries `landed`) or has run (a `<stem>-land*` / `<stem>-resume*` sibling
     script exists); None otherwise, including an unlanded receipt with no such sibling."""
     # Lazy: emission_receipt reaches inventory_mint through pathspec, which imports this module.
-    # `_read_receipt` is private to emission_receipt; a public reader there would drop the reach-in.
     from coordinator_core.ops.dispatch_emit.emission_receipt import _read_receipt
 
     receipt = _read_receipt(script_path)
@@ -56,7 +53,7 @@ def spent_run_reason(script_path: Path) -> Optional[str]:
     if not parent.is_dir():
         return None
     for kind in ("land", "resume"):
-        sibling_re = re.compile(rf"^{re.escape(stem)}(\.spine)?-{kind}[A-Za-z0-9]*\.workflow\.mjs$")
+        sibling_re = re.compile(rf"^{re.escape(stem)}-{kind}[A-Za-z0-9]*\.workflow\.mjs$")
         for child in sorted(parent.iterdir()):
             if sibling_re.match(child.name):
                 return f"{child.name} exists beside {script_path.name}"

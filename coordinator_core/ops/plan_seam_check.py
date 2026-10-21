@@ -76,6 +76,7 @@ from coordinator_core.ops.dispatch_emit.cross_plan_write_overlap import _write_p
 from coordinator_core.ops.dispatch_emit.spine_read import (
     UNDECLARED,
     SpineReadError,
+    frontmatter_plan_edges,
     load_frontmatter_doc,
     load_rows_memo,
     read_spine,
@@ -147,7 +148,6 @@ class _Plan:
         }
         self._live = None
         self._promised: Optional[tuple] = None
-        self._edges: Optional[set] = None
         self.unreadable: Optional[str] = None
 
     @property
@@ -183,18 +183,15 @@ class _Plan:
         return appended - in_place
 
     def edge_plans(self) -> set:
-        """Normalized plans this plan orders after, from frontmatter and row `depends_on_plan`."""
-        if self._edges is None:
-            edges = list(self.fm.get("depends_on_plan") or [])
-            for row in self.raw_rows:
-                edges.extend(row.get("depends_on_plan") or [])
-            targets = {
-                posixpath.normpath(str(e["plan"]).replace("\\", "/"))
-                for e in edges
-                if isinstance(e, dict) and isinstance(e.get("plan"), str) and e["plan"].strip()
-            }
-            self._edges = {t for t in targets if ".." not in t.split("/") and not t.startswith("/")}
-        return self._edges
+        edges = list(frontmatter_plan_edges(self.text) or [])
+        for row in self.raw_rows:
+            edges.extend(row.get("depends_on_plan") or [])
+        targets = {
+            posixpath.normpath(str(e["plan"]).replace("\\", "/"))
+            for e in edges
+            if isinstance(e, dict) and isinstance(e.get("plan"), str) and e["plan"].strip()
+        }
+        return {t for t in targets if ".." not in t.split("/") and not t.startswith("/")}
 
     def promised_paths(self) -> tuple:
         """(exact normalized paths, normalized prefixes) of every row not closed as wont_do/voided."""
@@ -286,16 +283,15 @@ def _raise_on_timeout(result, what: str) -> None:
         raise ValueError(f"engine failure: git {what} timed out")
 
 
-def _contained_rel(raw: str, root: Path, base: Optional[Path] = None) -> Optional[str]:
-    """``raw`` as a normalized repo-relative posix path, or None when it escapes ``root``.
-    ``base`` is ``root`` resolved, passed by a caller checking many paths."""
+def _contained_rel(raw: str, root: Path) -> Optional[str]:
+    """``raw`` as a normalized repo-relative posix path, or None when it escapes ``root``."""
     path = Path(raw.strip())
     if not path.is_absolute():
         path = root / path
     resolved = contained_path(path, [root])
     if resolved is None:
         return None
-    return resolved.relative_to(base or contained_path(root, [root]) or root).as_posix()
+    return resolved.relative_to(contained_path(root, [root]) or root).as_posix()
 
 
 def _parse_params(params: dict, root: Path, *, record: bool = False) -> dict:
@@ -306,16 +302,15 @@ def _parse_params(params: dict, root: Path, *, record: bool = False) -> dict:
         raise ValueError("plans must be a non-empty list of repo-relative plan paths")
     plans: List[str] = []
     passed: Dict[str, str] = {}
-    base = contained_path(root, [root]) or root
     for raw in plans_raw:
-        rel = _contained_rel(raw, root, base)
+        rel = _contained_rel(raw, root)
         if rel is None:
             raise ValueError(f"plan escapes the resolved worktree: {raw!r}")
         if not (root / rel).is_file() or not rel.endswith(".md"):
             raise ValueError(f"no such plan: {raw!r}")
         if record and posixpath.dirname(rel) != "docs/plans":
             raise ValueError(f"plan.seam_record writes beside docs/plans/ plans only: {raw!r}")
-        if rel not in passed:
+        if rel not in plans:
             plans.append(rel)
             passed[rel] = raw.strip()
     universe = params.get("universe", False)
@@ -564,8 +559,6 @@ def _declared_append_hubs(root: Path) -> set:
 
 
 def _collision_findings(pset: Dict[str, _Plan], ctx: dict) -> list:
-    """One record per (plan, path) naming the first other writer and counting the rest,
-    then one `undetermined` record per live row whose writes are undeclared."""
     findings: list = []
     sets = {rel: _paths_and_prefixes(p.live_rows) for rel, p in pset.items()}
     exact: Dict[str, set] = {}
@@ -577,41 +570,53 @@ def _collision_findings(pset: Dict[str, _Plan], ctx: dict) -> list:
             prefix.setdefault(p, set()).add(rel)
     ordered = _edge_closure(pset, ctx)
     appends = {rel: p.append_only_paths() for rel, p in pset.items()}
-    hubs = ctx["hubs"]
-    others: Dict[tuple, set] = {}
-    ancestors: Dict[str, tuple] = {}
+    seen: set = set()
     for rel, (paths, prefixes) in sets.items():
-        for item in paths | prefixes:
+        for item in sorted(paths | prefixes):
             hits = set(exact.get(item, ()))
-            chain = ancestors.get(item)
-            if chain is None:
-                chain = ancestors[item] = tuple(_ancestors_or_self(item))
-            for anc in chain:
-                found = prefix.get(anc)
-                if found:
-                    hits |= found
-            hits.discard(rel)
-            if not hits or item in hubs:
-                continue
-            for other in hits:
+            for anc in _ancestors_or_self(item):
+                hits |= prefix.get(anc, set())
+            if item in prefixes:
+                hits |= prefix.get(item, set())
+            for other in hits - {rel}:
                 if other in ordered[rel] or rel in ordered[other]:
                     continue
-                if item in appends[rel] and item in appends[other]:
+                if item in ctx["hubs"] or (item in appends[rel] and item in appends[other]):
                     continue
-                others.setdefault((rel, item), set()).add(other)
-                others.setdefault((other, item), set()).add(rel)
-    blocking = ctx["named_set"]
-    for (plan, path), peers in others.items():
-        writers = sorted(peers)
-        detail = f"{len(writers) + 1} plans declare writes to {path} with no depends_on_plan edge between them"
-        if len(writers) > 1:
-            detail += f"; also {', '.join(writers[1:])}"
-        findings.append(_finding(plan, COLLISION, blocking, detail, counterpart=writers[0], path=path))
+                key = (rel, other, item)
+                if key in seen:
+                    continue
+                seen.add(key)
+                seen.add((other, rel, item))
+                for a, b in ((rel, other), (other, rel)):
+                    findings.append(_finding(
+                        a, COLLISION, ctx["named_set"],
+                        f"{a} and {b} both declare writes to {item} with no depends_on_plan edge between them",
+                        counterpart=b, path=item))
     for rel, plan in pset.items():
         for row in plan.live_rows:
             if row.writes is UNDECLARED:
                 findings.append(_finding(rel, COLLISION, False, "undetermined", row=row.id))
     return findings
+
+
+def _grouped_collisions(findings: list, blocking: bool) -> list:
+    """One record per (plan, path), naming the first other writer and
+    counting the rest; ``blocking`` carries over from the pair records.
+
+    One finding per pair is quadratic in the writers of a shared file.
+    """
+    others: Dict[tuple, list] = {}
+    for f in findings:
+        others.setdefault((f["plan"], f["path"]), []).append(f["counterpart_plan"])
+    grouped = []
+    for (plan, path), writers in others.items():
+        writers = sorted(set(writers))
+        detail = f"{len(writers) + 1} plans declare writes to {path} with no depends_on_plan edge between them"
+        if len(writers) > 1:
+            detail += f"; also {', '.join(writers[1:])}"
+        grouped.append(_finding(plan, COLLISION, blocking, detail, counterpart=writers[0], path=path))
+    return grouped
 
 
 def _resolve_landed(ctx: dict, pset) -> list:
@@ -853,8 +858,7 @@ def _cap_seams(findings: list, plans: list) -> list:
     """The first MISSING_SEAM_CAP findings in sort order, then one summary naming the overflow."""
     if len(findings) <= MISSING_SEAM_CAP:
         return findings
-    order = {rel: i for i, rel in enumerate(plans)}
-    findings.sort(key=lambda f: (order[f["plan"]], f["path"] or "", f["row"] or "", f["counterpart_plan"] or ""))
+    findings.sort(key=lambda f: (plans.index(f["plan"]), f["path"] or "", f["row"] or "", f["counterpart_plan"] or ""))
     kept = findings[:MISSING_SEAM_CAP]
     kept.append(_finding(plans[0], MISSING_SEAM, False,
                          f"{len(findings) - MISSING_SEAM_CAP} further missing-seam findings omitted "
@@ -878,7 +882,10 @@ def _evaluate(params: dict, root: Path, *, record: bool = False) -> dict:
     for plan in pset.values():
         findings += _capability_findings(plan, pset, ctx, tree, deferred)
         _export_findings(plan, pset, ctx, tree, pending)
-    findings += _collision_findings(pset, ctx)
+    collisions = _collision_findings(pset, ctx)
+    findings += _grouped_collisions(
+        [f for f in collisions if f["path"] is not None], ctx["named_set"])
+    findings += [f for f in collisions if f["path"] is None]
     # A spine `read_spine` rejects leaves the plan's writes and consumes
     # unknown, the case the contract records as an undetermined collision.
     # It blocks only in a set someone chose; over the default backlog one
@@ -963,8 +970,7 @@ def _evaluate(params: dict, root: Path, *, record: bool = False) -> dict:
     blocked = {f["plan"] for f in findings if f["blocking"]}
     bad = "DRIFT" if ctx["phase"] == "wave-boundary" else "REFUSED"
     per_plan = {rel: (bad if rel in blocked else "CLEAN") for rel in ctx["plans"]}
-    order = {rel: i for i, rel in enumerate(ctx["plans"])}
-    findings.sort(key=lambda f: (order[f["plan"]], f["class"], f["path"] or "", f["row"] or ""))
+    findings.sort(key=lambda f: (ctx["plans"].index(f["plan"]), f["class"], f["path"] or "", f["row"] or ""))
     alias = ctx["passed"]
     for f in findings:
         f["plan"] = alias[f["plan"]]

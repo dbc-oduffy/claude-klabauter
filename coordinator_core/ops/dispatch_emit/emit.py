@@ -4660,6 +4660,7 @@ def _checkpoint_commit_js(
         "  const _commitFailures = [];",
         "  const _landed = {};",
         "  const _waveTriggers = [];",
+        "  const _carried = [];",
         "  let _commitChain = Promise.resolve();",
         "  function _waveCommit(n, ids) {",
         "    _waveTriggers.push(Promise.allSettled(ids.map((i) => _rows[i])).then(() => {",
@@ -4675,18 +4676,11 @@ def _checkpoint_commit_js(
         "  async function _commitWave(n, ids) {",
         "    const done = ids.filter((i) => _landed[i]);",
         (
-            "    if (!done.length) {\n"
-            "      if ((_seamHeldPlans[n] || []).length) {\n"
-            "        _commitFailures.push('wave ' + n + ': no row landed to commit');\n"
-            f"        {COMMIT_REFUSED_VAR}['wave ' + n + ' commit'] = 'wave ' + n + ': no row landed to commit';\n"
-            "        if (_seamGates[n]) _rowIdOf.set(_seamGates[n], 'wave ' + n + ' commit');\n"
-            "      }\n"
-            "      return;\n"
-            "    }"
+            "    if (!done.length) { if ((_seamHeldPlans[n] || []).length) _seamFail(n, 'no commit landed'); return; }"
             if seam is not None
             else "    if (!done.length) return;"
         ),
-        "    const paths = [...new Set(done.flatMap((i) => _landed[i].paths))];",
+        "    const paths = [...new Set([..._carried, ...done].flatMap((i) => _landed[i].paths))];",
         "    const id = 'wave ' + n;",
         "    const subject = 'checkpoint(wave ' + n + '): ' + done.length + ' rows \u2014 ' + done.join(', ');",
         f"    const owed = done.filter((i) => {GATE_OWED_VAR}[i]);",
@@ -4715,6 +4709,7 @@ def _checkpoint_commit_js(
         "    }",
         "    if (!r || r.outcome !== 'committed') {",
         "      _commitFailures.push(id + ': ' + ((r && r.reason) || 'no committer reply'));",
+        "      done.forEach((i) => { if (!_carried.includes(i)) _carried.push(i); });",
         *(
             [
                 f"      {COMMIT_REFUSED_VAR}['wave ' + n + ' commit'] = 'wave ' + n + ': ' + ((r && r.reason) || 'no committer reply');",
@@ -4725,6 +4720,7 @@ def _checkpoint_commit_js(
         ),
         "      return;",
         "    }",
+        "    _carried.length = 0;",
     ]
     if seam is not None:
         lines.append("    if (!r.sha) return;")

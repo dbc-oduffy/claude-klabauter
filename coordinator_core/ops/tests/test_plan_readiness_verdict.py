@@ -410,30 +410,6 @@ def test_corrects_entry_fixed_by_commit_shas_covers_the_row(tmp_path):
     assert reply["blocking"] == []
 
 
-_TWO = (
-    "corrects:\n  - citation: tree claim X\n    fixed_by: C2\n"
-    "  - citation: tree claim Y\n    fixed_by: C1\n"
-)
-_COMPOSITE = "tree claim X holds; tree claim Y is designed (...)"
-
-
-def test_composite_citation_with_every_sentence_corrected_is_a_note(tmp_path):
-    reply = _op_reply(_corrects_plan(tmp_path, _TWO), [_row(citation=_COMPOSITE)])
-    assert reply["blocking"] == []
-    assert "tree claim X + tree claim Y -> C2, C1" in reply["reason"]
-
-
-def test_composite_citation_with_an_uncited_sentence_still_blocks(tmp_path):
-    reply = _op_reply(_corrects_plan(tmp_path, _TWO), [_row(citation=_COMPOSITE + ". unrelated claim Z")])
-    assert reply["blocking"] != []
-
-
-def test_composite_cover_ignores_entries_without_a_live_fixer(tmp_path):
-    corrects = _TWO.replace("fixed_by: C1", "fixed_by: C9")
-    reply = _op_reply(_corrects_plan(tmp_path, corrects), [_row(citation=_COMPOSITE)])
-    assert reply["blocking"] != []
-
-
 @pytest.mark.parametrize(
     "corrects, disposition",
     [

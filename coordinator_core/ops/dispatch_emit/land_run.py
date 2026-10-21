@@ -218,13 +218,63 @@ def params_from_task_output(path_raw: str) -> dict:
     return found
 
 
-def _missing_run_outcome(params: object) -> Optional[dict]:
+def _reclose_params(root: Path, params: object) -> Optional[dict]:
+    """``close_landed_run`` params when the call re-pays a landed run's close legs, else None.
+
+    Two shapes: a ``task_output_path`` whose ``next_action.kind`` is ``close_job`` (its params carry
+    ``run_id``, never a run outcome), or a ``script_path`` with no run outcome and no task output whose
+    run already has a close-job record. Both need that record to name the plan; none -> None, so the
+    ordinary refusal answers. Product is never re-landed on this route."""
+    if not isinstance(params, dict) or params.get("incomplete_chunks") is not None:
+        return None
+    from coordinator_core.ops.dispatch_emit import run_close
+
+    run_id = None
+    task_output = params.get("task_output_path")
+    if isinstance(task_output, str):
+        try:
+            data = json.loads(Path(task_output).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        if isinstance(data, dict) and "next_action" not in data and isinstance(data.get("result"), dict):
+            data = data["result"]
+        action = data.get("next_action") if isinstance(data, dict) else None
+        if not isinstance(action, dict) or action.get("kind") != "close_job":
+            return None
+        found = action.get("params")
+        run_id = found.get("run_id") if isinstance(found, dict) else None
+    elif isinstance(params.get("script_path"), str) and params.get("inline_review") is None:
+        run_id = PurePosixPath(params["script_path"].replace("\\", "/")).stem
+    if not isinstance(run_id, str) or not run_id or "/" in run_id or "\\" in run_id:
+        return None
+    stem = run_close.resolve_close_job_stem(root, run_id)
+    record = run_close._load(root, stem) if stem else None
+    plan = params.get("plan_path") or (record or {}).get("plan_rel")
+    if not isinstance(plan, str) or not plan:
+        return None
+    out = {"plan_path": plan, "run_id": run_id}
+    for key in ("task_output_path", "session_id"):
+        if params.get(key) is not None:
+            out[key] = params[key]
+    return out
+
+
+def _missing_run_outcome(params: object, task_output: Optional[str] = None) -> Optional[dict]:
     """Refusal naming every run-outcome param the caller omitted, else None."""
     if not isinstance(params, dict) or not isinstance(params.get("script_path"), str):
         return None
     absent = [n for n in ("incomplete_chunks", "inline_review") if params.get(n) is None]
     if "incomplete_chunks" not in absent:
         return None
+    if task_output:
+        return _error(
+            f"params {absent} not passed and task_output_path {task_output!r} supplies none: its "
+            "next_action.params carries no run outcome (a close_job action names a landed run's close "
+            "legs; re-pay them with a run_id that has a close-job record, no incomplete_chunks). Pass "
+            "the run's own task-output file, or incomplete_chunks and inline_review from its digest",
+            refused="missing-run-outcome",
+            missing=absent,
+        )
     return _error(
         f"params {absent} not passed. The run outcome is not derivable from script_path "
         f"{params['script_path']!r} and no params.task_output_path was given. Pass "
@@ -1417,6 +1467,12 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
         review_only_anchor,
     )
 
+    task_output = params.get("task_output_path") if isinstance(params, dict) else None
+    reclose = _reclose_params(root, params)
+    if reclose is not None:
+        from coordinator_core.ops.dispatch_emit import close_without_script
+
+        return close_without_script.close_landed_run(root, repo_root, reclose)
     if isinstance(params, dict) and isinstance(params.get("task_output_path"), str):
         try:
             params = {
@@ -1425,7 +1481,7 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
             }
         except ValueError as exc:
             return _error(str(exc))
-    missing = _missing_run_outcome(params)
+    missing = _missing_run_outcome(params, task_output if isinstance(task_output, str) else None)
     if missing is not None:
         return missing
     refusal = validate_params(contract.OP_NAME, params, _PARAM_FIELDS)

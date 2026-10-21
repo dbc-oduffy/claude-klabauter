@@ -58,7 +58,7 @@ def test_one_committer_per_wave_not_per_row():
     assert "_waveCommit(1, ['C1', 'C2']);" in script
     assert "label: 'commit:wave-' + n" in script
     assert "'checkpoint(wave ' + n + '): ' + done.length + ' rows" in script
-    assert "const paths = [...new Set(done.flatMap((i) => _landed[i].paths))];" in script
+    assert "const paths = [...new Set([..._carried, ...done].flatMap((i) => _landed[i].paths))];" in script
     assert "_landed[id] = commit;" in script
 
 
