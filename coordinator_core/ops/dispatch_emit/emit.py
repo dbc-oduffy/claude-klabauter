@@ -354,6 +354,7 @@ from coordinator_core.ops.dispatch_emit.gate_owed import (
 )
 from coordinator_core.ops.dispatch_emit.wake_digest import (
     CHUNK_REASON_VAR,
+    COMMIT_REFUSED_VAR,
     PLAN_HELD_VAR,
     completion_return_js,
     stage_schema_literal,
@@ -4093,6 +4094,7 @@ def _run_row_helper_js(
         "  const _finished = new Set();\n"
         "  const _reviews = [];\n"
         "  const _heldBy = {};\n"
+        f"  const {COMMIT_REFUSED_VAR} = {{}};\n"
         "  const _rowIdOf = new WeakMap();\n"
         f"  const _DEP_NON_DONE_RE = {_NON_DONE_STATUS_JS_RE};\n"
         f"  const _DEP_ANY_STATUS_RE = {_ANY_STATUS_JS_RE};\n"
@@ -4195,6 +4197,10 @@ def _run_row_helper_js(
         "      _notStarted.push(id);\n"
         "      _blockedChunks.push(id);\n"
         "      _heldBy[id] = _blocker;\n"
+        f"      if ({COMMIT_REFUSED_VAR}[_blocker]) {{\n"
+        f"        {CHUNK_REASON_VAR}[id] = _planHeld[id] = 'commit-failed: ' + {COMMIT_REFUSED_VAR}[_blocker];\n"
+        "        return 'BLOCKED: held, ' + _planHeld[id];\n"
+        "      }\n"
         f"      {CHUNK_REASON_VAR}[id] = 'held: dependency ' + _blocker + ' did not finish DONE';\n"
         "      return 'BLOCKED: held, dependency ' + _blocker + ' did not finish DONE';\n"
         "    }\n"
@@ -4659,7 +4665,8 @@ def _checkpoint_commit_js(
         "    _waveTriggers.push(Promise.allSettled(ids.map((i) => _rows[i])).then(() => {",
         (
             "      _commitChain = _commitChain.then(() => _commitWave(n, ids))"
-            ".finally(() => _seamRelease[n]('DONE: seam leg of wave ' + n + ' settled'));"
+            f".finally(() => _seamRelease[n]({COMMIT_REFUSED_VAR}['wave ' + n + ' commit'] "
+            "? 'BLOCKED: commit of wave ' + n + ' did not land' : 'DONE: seam leg of wave ' + n + ' settled'));"
             if seam is not None
             else "      _commitChain = _commitChain.then(() => _commitWave(n, ids));"
         ),
@@ -4701,7 +4708,14 @@ def _checkpoint_commit_js(
         "    }",
         "    if (!r || r.outcome !== 'committed') {",
         "      _commitFailures.push(id + ': ' + ((r && r.reason) || 'no committer reply'));",
-        *(["      _seamFail(n, 'no commit landed');"] if seam is not None else []),
+        *(
+            [
+                f"      {COMMIT_REFUSED_VAR}['wave ' + n + ' commit'] = 'wave ' + n + ': ' + ((r && r.reason) || 'no committer reply');",
+                "      if (_seamGates[n]) _rowIdOf.set(_seamGates[n], 'wave ' + n + ' commit');",
+            ]
+            if seam is not None
+            else []
+        ),
         "      return;",
         "    }",
     ]

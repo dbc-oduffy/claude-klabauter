@@ -152,3 +152,72 @@ def test_nonempty_all_match_census_still_reports_match(mcr, monkeypatch):
     monkeypatch.setattr(mcr.Path, "read_text", fake_read)
     report = mcr.revalidate(plan, REPO_ROOT, 30)
     assert report["state"] == mcr.MATCH
+
+
+_TWO_ENTRY_PLAN = (
+    "---\nmise_prepped_sha: abc123\ncensus:\n"
+    "  - question: q1\n    command: ls\n    result: '1'\n"
+    "  - question: q2\n    command: ls\n    result: '1'\n---\n\nbody\n"
+)
+
+
+def test_a_spent_deadline_marks_every_entry_unrunnable_with_no_spawn(mcr, tmp_path, monkeypatch):
+    import time
+
+    def boom(*_a, **_k):
+        raise AssertionError("a spawn happened past a spent deadline")
+
+    monkeypatch.setattr(mcr.subprocess, "Popen", boom)
+    monkeypatch.setattr(mcr.subprocess, "run", boom)
+    plan = tmp_path / "plan.md"
+    plan.write_text(_TWO_ENTRY_PLAN, encoding="utf-8")
+    report = mcr.revalidate(plan, tmp_path, 30, deadline=time.monotonic() - 1)
+    assert report["state"] == mcr.UNDECIDABLE
+    assert [e["state"] for e in report["entries"]] == [mcr.UNRUNNABLE, mcr.UNRUNNABLE]
+    assert all("census deadline was spent" in e["detail"] for e in report["entries"])
+
+
+def test_no_deadline_gives_head_rows(mcr, tmp_path, monkeypatch):
+    calls = []
+
+    def fake(entry, repo_root, timeout, plan_rel=None):
+        calls.append(timeout)
+        return {"state": mcr.MATCH}
+
+    monkeypatch.setattr(mcr, "run_entry", fake)
+    plan = tmp_path / "plan.md"
+    plan.write_text(_TWO_ENTRY_PLAN, encoding="utf-8")
+    report = mcr.revalidate(plan, tmp_path, 30)
+    assert report["state"] == mcr.MATCH
+    assert calls == [30, 30]
+
+
+def test_each_entry_timeout_is_min_of_timeout_and_remaining(mcr, tmp_path, monkeypatch):
+    import time
+
+    calls = []
+    monkeypatch.setattr(
+        mcr, "run_entry",
+        lambda entry, repo_root, timeout, plan_rel=None: calls.append(timeout) or {"state": mcr.MATCH},
+    )
+    plan = tmp_path / "plan.md"
+    plan.write_text(_TWO_ENTRY_PLAN, encoding="utf-8")
+    mcr.revalidate(plan, tmp_path, 30, deadline=time.monotonic() + 5.5)
+    assert len(calls) == 2 and all(4 <= c <= 5 for c in calls)
+    calls.clear()
+    mcr.revalidate(plan, tmp_path, 3, deadline=time.monotonic() + 100)
+    assert calls == [3, 3]
+
+
+def test_a_pipeline_grandchild_cannot_hold_a_timed_out_entry_open(mcr, monkeypatch):
+    import time
+
+    if mcr.resolve_posix_shell() is None:
+        pytest.skip("no POSIX shell on this host")
+    monkeypatch.setattr(mcr, "screen", lambda *_a, **_k: None)
+    started = time.monotonic()
+    row = mcr.run_entry(
+        {"question": "q", "command": "sleep 5 | cat", "result": "1"}, REPO_ROOT, 1
+    )
+    assert time.monotonic() - started < 2.0
+    assert row["state"] == mcr.UNRUNNABLE and "timed out" in row["detail"]

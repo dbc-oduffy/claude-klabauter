@@ -247,11 +247,11 @@ def test_a_plan_outside_the_worktree_is_refused(tmp_path):
 CERTIFY = "plan.mise_certify_probe"
 
 
-def _stamped(root: Path, *, sha: str | None) -> str:
+def _stamped(root: Path, *, sha: str | None, frontmatter: str = _PREPPED_FM) -> str:
     """A plan whose stamp sha is the body's own (None: the live sha, else the given one)."""
     from coordinator_core.frontmatter.primitives import approval_body_sha
 
-    rel = _plan(root, frontmatter=_PREPPED_FM, spine=_SPINE)
+    rel = _plan(root, frontmatter=frontmatter, spine=_SPINE)
     path = root / rel
     text = path.read_text(encoding="utf-8")
     recorded = sha or approval_body_sha(text)
@@ -293,7 +293,7 @@ def test_certify_certified_plan_runs_the_census_with_the_default_stamp_rule(tmp_
     assert "sha_detail" not in reply
     assert len(stub.calls) == 1
     (_plan_arg, _root, timeout), kwargs = stub.calls[0]
-    assert timeout == 7 and kwargs == {}
+    assert timeout == 7 and set(kwargs) == {"deadline"}
 
 
 def test_certify_stale_plan_has_no_census_and_the_detail(tmp_path, monkeypatch):
@@ -356,3 +356,70 @@ def test_certify_census_timeout_must_be_a_positive_int(tmp_path, bad):
     rel = _plan(tmp_path, frontmatter=_PREPPED_FM, spine=_SPINE)
     with pytest.raises(ValueError, match="census_timeout must be a positive integer"):
         mod._certify_handler({"plan": rel, "census_timeout": bad}, common)
+
+
+_SLOW_CENSUS_FM = """census:
+  - question: first slow entry
+    command: ls
+    result: "1"
+  - question: second slow entry
+    command: ls
+    result: "1"
+prime_exit_criterion:
+  statement: the op reports per class
+  derived_from: state/sizings/2026-09-07-fixture.yaml
+"""
+
+
+@pytest.fixture
+def slow_shell(tmp_path_factory, monkeypatch):
+    """Every census command becomes a 10s sleep: the shell is named by the override knob."""
+    script = tmp_path_factory.mktemp("slowshell") / "slow.sh"
+    script.write_text("#!/bin/sh\nexec sleep 10\n", encoding="utf-8")
+    script.chmod(0o755)
+    monkeypatch.setenv("COORDINATOR_CENSUS_SHELL", str(script))
+    monkeypatch.setattr(ipc, "_timeout_for", lambda method, msg=None: 4.0)
+
+
+def _assert_deadline_census(census: dict) -> None:
+    assert census["state"] == "UNDECIDABLE"
+    assert [e["state"] for e in census["entries"]] == ["UNRUNNABLE", "UNRUNNABLE"]
+    assert "census deadline was spent" in census["entries"][1]["detail"]
+
+
+@pytest.mark.skipif(__import__("os").name == "nt", reason="needs a POSIX sh script as the shell")
+def test_probe_census_stops_at_the_deadline_under_the_ops_own_timeout(tmp_path, slow_shell):
+    import time
+
+    common = _repo(tmp_path)
+    rel = _plan(tmp_path, frontmatter=_SLOW_CENSUS_FM, spine=_SPINE)
+    started = time.monotonic()
+    reply = _probe({"plan": rel, "check_census": True}, common)
+    assert time.monotonic() - started < 3.0
+    assert reply["gate"]["verdict"] == pg.PREPPED
+    _assert_deadline_census(reply["census"])
+
+
+@pytest.mark.skipif(__import__("os").name == "nt", reason="needs a POSIX sh script as the shell")
+def test_certify_census_stops_at_the_deadline_under_the_ops_own_timeout(tmp_path, slow_shell):
+    import time
+
+    common = _repo(tmp_path)
+    rel = _stamped(tmp_path, sha=None, frontmatter=_SLOW_CENSUS_FM)
+    started = time.monotonic()
+    reply = mod._certify_handler({"plan": rel}, common)
+    assert time.monotonic() - started < 3.0
+    assert reply["sha"] == "CERTIFIED"
+    _assert_deadline_census(reply["census"])
+
+
+@pytest.mark.parametrize("op", [PROBE, CERTIFY])
+def test_the_deadline_is_read_through_timeout_for(monkeypatch, op):
+    seen = []
+    monkeypatch.setattr(ipc, "_timeout_for", lambda method, msg=None: seen.append(method) or 8.0)
+    import time
+
+    before = time.monotonic()
+    deadline = mod._census_deadline(op)
+    assert seen == [op]
+    assert deadline - before == pytest.approx(8.0 * mod._CENSUS_DEADLINE_SHARE, abs=0.5)

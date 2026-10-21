@@ -197,7 +197,7 @@ _HARNESS = textwrap.dedent(
       if (label.startsWith('seam:')) { seamParams.push(prompt); return reply; }
       return label.startsWith('work:') ? 'DONE: ok' : null;
     };
-    const body = src + '\\nreturn { notStarted: _notStarted, drift: _seamDrift, haltedPlans: [..._haltedPlans], failures: _seamFailures };';
+    const body = src + '\\nreturn { notStarted: _notStarted, drift: _seamDrift, haltedPlans: [..._haltedPlans], failures: _seamFailures, planHeld: _planHeld, commitFailures: _commitFailures, commitRefused: _commitRefused };';
     const out = await new Function('agent', 'phase', 'log', 'parallel', 'return (async () => {' + body + '})();')(
       agent, () => {}, () => {}, async (xs) => Promise.all(xs.map((f) => f())));
     console.log(JSON.stringify({ calls, seamParams, ...out }));
@@ -305,15 +305,26 @@ def test_a_commit_reporting_committed_without_a_sha_records_nothing_and_releases
 
 
 @_NODE
-def test_a_failed_wave_commit_fails_the_held_plans_closed(tmp_path):
+def test_a_failed_wave_commit_holds_only_its_dependents_and_records_no_seam_failure(tmp_path):
+    refusal = "attribution_gate: path not attributed"
     out = _run_script(
-        tmp_path, _compose(_two_plan_waves()), CLEAN_REPLY, {"outcome": "commit-failed", "reason": "refused"}
+        tmp_path, _compose(_two_plan_waves()), CLEAN_REPLY, {"outcome": "commit-failed", "reason": refusal}
     )
     assert not any(c.startswith("seam:") for c in out["calls"])
-    assert "work:P2-C1" not in out["calls"] and "work:P3-C2" in out["calls"]
-    assert out["haltedPlans"] == [P2]
-    assert out["failures"][0] == "wave 1: no commit landed"
-    assert out["drift"] == [{"wave": 1, "plans": [P2], "path": "", "failed": "no commit landed"}]
+    assert "work:P2-C1" not in out["calls"]
+    assert "work:P3-C2" in out["calls"]
+    assert out["failures"] == [] and out["drift"] == [] and out["haltedPlans"] == []
+    assert out["notStarted"] == ["P2-C1"]
+    assert out["planHeld"]["P2-C1"] == f"commit-failed: wave 1: {refusal}"
+    assert out["commitFailures"][0] == f"wave 1: {refusal}"
+    assert out["commitRefused"]["wave 1 commit"] == f"wave 1: {refusal}"
+
+
+@_NODE
+def test_a_failed_wave_commit_with_no_reply_names_it(tmp_path):
+    out = _run_script(tmp_path, _compose(_two_plan_waves()), CLEAN_REPLY, None)
+    assert out["planHeld"]["P2-C1"] == "commit-failed: wave 1: no committer reply"
+    assert out["failures"] == [] and out["drift"] == []
 
 
 @_NODE
@@ -367,6 +378,30 @@ def test_the_digest_renders_the_class_and_collapses_repeats():
     assert done.stdout.strip() == (
         f"unpromised-export: {P2} and {P1} at a.py x2 (wave 1); path-collision: {P2} and {P1} at c.py (wave 1)"
     )
+
+
+@_NODE
+def test_the_digest_names_a_refused_wave_commit_as_a_commit_failure_never_a_seam_failure():
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is not installed")
+    script = _compose(_two_plan_waves())
+    digest = script.split("decision_required:", 1)[1].splitlines()[0]
+    expr = "(Object.keys(_commitRefused).length ? " + digest.split("(Object.keys(_commitRefused).length ? ", 1)[1].split("(_seamDrift.length ? ", 1)[0]
+    probe = (
+        "const _commitRefused = {'wave 1 commit': 'wave 1: attribution_gate refused'};"
+        f"const r = {expr} null);console.log(r);"
+    )
+    done = subprocess.run(
+        [node, "-e", probe],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    assert done.returncode == 0, done.stderr
+    assert "wave commit failed" in done.stdout and "attribution_gate refused" in done.stdout
+    assert "seam check failed" not in done.stdout
 
 
 def _seed_plan(root, rel: str, with_sidecar: bool):

@@ -23,9 +23,9 @@ from coordinator_core.ops.baton_close_report_contract import (
     Verdict,
 )
 from coordinator_core.ops.baton_close_report_decide import decide, evidence_ship_ref
-from coordinator_core.ops.deliverable_cascade import _LIVE_DEPLOYMENT_STATES, handoff_state_refusal
 from coordinator_core.ops.baton_close_report_readers import read_baton_headers, successor_index
 from coordinator_core.ops.baton_close_report_targets import target_evidence
+from coordinator_core.ops.deliverable_cascade import _LIVE_DEPLOYMENT_STATES, handoff_state_refusal
 from coordinator_core.session import record_homes
 
 

@@ -70,6 +70,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Any, Optional
 
@@ -257,6 +258,7 @@ def drop_own_path(out: str, plan_rel: Optional[str]) -> str:
 
 
 def run_entry(entry: dict, repo_root: Path, timeout: int, plan_rel: Optional[str] = None) -> dict:
+    """One census entry's row. Four-argument signature is fixed: callers fake it."""
     command = str(entry.get("command") or "").strip()
     recorded = str(entry.get("result") or "")
     row: dict[str, Any] = {"question": str(entry.get("question") or ""), "command": command}
@@ -326,7 +328,38 @@ def run_entry(entry: dict, repo_root: Path, timeout: int, plan_rel: Optional[str
     return row
 
 
-def revalidate(plan: Path, repo_root: Path, timeout: int, *, require_stamp: bool = True) -> dict:
+_DEADLINE_SPENT = "not run: the op's census deadline was spent before this entry"
+
+
+def _deadline_bounded(
+    e: dict, repo_root: Path, timeout: int, plan_rel: Optional[str], deadline: Optional[float]
+) -> dict:
+    """`run_entry` under an optional `time.monotonic()` deadline.
+
+    `None` is the unbounded CLI path. Under a deadline an entry gets `min(timeout, remaining)`
+    seconds, and one reached with under a second left is UNRUNNABLE without a spawn.
+    """
+    if deadline is None:
+        return run_entry(e, repo_root, timeout, plan_rel)
+    remaining = deadline - time.monotonic()
+    if remaining < 1:
+        return {
+            "question": str(e.get("question") or ""),
+            "command": str(e.get("command") or "").strip(),
+            "state": UNRUNNABLE,
+            "detail": _DEADLINE_SPENT,
+        }
+    return run_entry(e, repo_root, min(timeout, int(remaining)), plan_rel)
+
+
+def revalidate(
+    plan: Path,
+    repo_root: Path,
+    timeout: int,
+    *,
+    require_stamp: bool = True,
+    deadline: Optional[float] = None,
+) -> dict:
     yaml = _load_yaml()
     text = plan.read_text(encoding="utf-8", errors="replace")
     parts = text.split("---", 2)
@@ -345,7 +378,11 @@ def revalidate(plan: Path, repo_root: Path, timeout: int, *, require_stamp: bool
     if not isinstance(census, list):
         return {"plan": str(plan), "state": REFUSED, "detail": "no census: key", "entries": []}
     plan_rel = plan_rel_path(plan, repo_root)
-    entries = [run_entry(e, repo_root, timeout, plan_rel) for e in census if isinstance(e, dict)]
+    entries = [
+        _deadline_bounded(e, repo_root, timeout, plan_rel, deadline)
+        for e in census
+        if isinstance(e, dict)
+    ]
     if not entries:
         # An empty census revalidates nothing, so it cannot be a pass. The roll-up below
         # decides on set difference, and `set() - {MATCH}` is empty, so a census carrying no

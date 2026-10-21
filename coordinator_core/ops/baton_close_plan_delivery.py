@@ -30,7 +30,6 @@ class PlanDelivery(NamedTuple):
     """`delivered` is True only for a terminal status, a non-MALFORMED spine and no open row."""
 
     status: str | None
-    located: bool
     open_rows: tuple[str, ...]
     ship_ref: str | None
     delivered: bool
@@ -82,7 +81,7 @@ def plan_delivery(text: str) -> PlanDelivery:
         and result.status is not LocateStatus.MALFORMED
         and not open_rows
     )
-    return PlanDelivery(status, True, tuple(open_rows), ship_ref, delivered)
+    return PlanDelivery(status, tuple(open_rows), ship_ref, delivered)
 
 
 class PlanDeliveryCache:
@@ -107,7 +106,7 @@ class PlanDeliveryCache:
     def _read(path: str) -> str | None:
         try:
             fd = os.open(path, os.O_RDONLY | getattr(os, "O_BINARY", 0))
-        except (FileNotFoundError, NotADirectoryError):
+        except OSError:
             return None
         try:
             chunks = []
@@ -116,6 +115,8 @@ class PlanDeliveryCache:
                 if not buf:
                     break
                 chunks.append(buf)
+        except OSError:
+            return None
         finally:
             os.close(fd)
         return b"".join(chunks).decode("utf-8", errors="replace")

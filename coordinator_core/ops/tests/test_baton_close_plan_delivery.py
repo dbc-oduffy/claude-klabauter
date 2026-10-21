@@ -25,7 +25,7 @@ def _plan(status, rows):
 
 def test_delivered_plan_takes_last_coded_ref():
     d = plan_delivery(_plan("implemented", [_row("C1", "coded", SHA1), _row("C2", "coded", SHA2)]))
-    assert d.delivered and d.open_rows == () and d.ship_ref == SHA2 and d.located
+    assert d.delivered and d.open_rows == () and d.ship_ref == SHA2
 
 
 def test_open_row_blocks_delivery():

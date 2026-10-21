@@ -59,7 +59,7 @@ indeterminate mutation. `seamFix` then reads "not run (dry run)".
 After every plan is probed, one seam check runs over the whole set (`plan.seam_record` at
 `phase: prep`; `plan.seam_check` under `--dry-run`, which writes no sidecar). A plan the check
 implicates is not stamped and reads SEAM-REFUSED with one `seam:` line per finding, each ending in
-its route. An op error is a refusal (exit 2), never a pass.
+its route. A seam or stamp op error is a refusal (exit 2), never a pass.
 
 RESIDUE WORKFLOW. After the report rows and the seam-fix reply exist (dry run or not),
 `mise_residue.residue_args` sorts what stayed short: plans to author go to Sonnet
@@ -78,7 +78,9 @@ only AFTER the full report prints (`--json`: `residueWorkflow: null` plus `resid
 the stamps are already written and the report is the record of which plans they covered.
 
 Exit 0 when every plan in the set ends CERTIFIED, 1 when at least one does not (the
-report names which and why), 2 on a refusal that stopped the run.
+report names which and why), 2 on a set-level refusal that stopped the run or a `plan.stamp_prepped`
+error. One plan's `plan.mise_prep_probe` error is that row's PROBE-FAILED outcome (exit 1): the plan
+is never stamped, never residue, and stays in the seam set.
 
 Landed here (`coordinator/bin/mise-prep-run.py`, claude-klabauter) from coordinator-content-repo
 `coordinator/bin/mise-prep-run.py`, docs/plans/2026-09-18-doe-holds-no-scripts.md chunk W2-C9.
@@ -214,6 +216,22 @@ _RESIDUE_DIR = ("state", "mise-workflows")
 
 def _bound_size(script: str) -> int:
     return len(script.encode("utf-8"))
+
+
+def _probe_failed_row(plan: str, error: str, upgraded: str | None = None) -> dict:
+    """The row for a plan whose probe op raised: reported, never stamped, never residue."""
+    return {
+        "plan": plan,
+        "verdict": "PROBE-FAILED",
+        "failing": [],
+        "detail": [error],
+        "withheld_rows": [],
+        "upgraded": upgraded,
+        "stamp_state": None,
+        "census": None,
+        "processMs": None,
+        "outcome": "PROBE-FAILED",
+    }
 
 
 def _emit_residue(repo_root: Path, rows: list[dict], seam_fix: dict) -> tuple[list[Path], int]:
@@ -650,7 +668,9 @@ def main(argv=None) -> int:
         try:
             probe = _probe(repo_root, plan, upgrade=args.upgrade, census_timeout=args.census_timeout)
         except ValueError as exc:
-            return refuse(f"{plan}: {exc}")
+            gates[plan] = {}
+            rows.append(_probe_failed_row(plan, str(exc)))
+            continue
         gate = probe["gate"]
 
         derivation = probe.get("upgrade")
@@ -671,7 +691,11 @@ def main(argv=None) -> int:
                         repo_root, plan, upgrade=False, census_timeout=args.census_timeout
                     )
                 except ValueError as exc:
-                    return refuse(f"{plan}: re-gate after upgrade: {exc}")
+                    gates[plan] = {}
+                    rows.append(
+                        _probe_failed_row(plan, f"re-gate after upgrade: {exc}", upgraded=upgraded)
+                    )
+                    continue
                 gate = probe["gate"]
 
         # The gate already carries the attest's own four-state read (`plan.prep_gate`
@@ -706,6 +730,8 @@ def main(argv=None) -> int:
     for row in rows:
         plan = row["plan"]
         row["seam"] = _seam_findings_for(seam, plan)
+        if row["outcome"] == "PROBE-FAILED":
+            continue
         if _seam_implicated(seam, plan):
             row["outcome"] = "SEAM-REFUSED"
         elif (row["census"] or {}).get("state") == "DRIFT":
@@ -713,12 +739,16 @@ def main(argv=None) -> int:
 
     for row in rows:
         plan, gate = row["plan"], gates[row["plan"]]
-        if row["outcome"] in ("SEAM-REFUSED", "CENSUS-DRIFT"):
+        # TRAP: a PROBE-FAILED row's `gates[plan]` is {} so it can never read PREPPED below; the
+        # `continue` keeps that true even if the gate dict ever carries a verdict.
+        if row["outcome"] in ("SEAM-REFUSED", "CENSUS-DRIFT", "PROBE-FAILED"):
             continue
         if gate.get("verdict") == "PREPPED" and not args.dry_run:
             try:
                 stamp = _invoke(repo_root, "plan.stamp_prepped", {"plan": plan})
             except ValueError as exc:
+                # The one MUTATING op in the loop: an error is an indeterminate mutation (a stamp
+                # may have landed), so the set is refused, not reported as if it had not.
                 return refuse(f"{plan}: {exc}")
             # A refusal is a REPLY here, not an exception — the per-class breakdown is
             # what tells an author where the fix lands, so it is carried, not raised.
@@ -745,7 +775,9 @@ def main(argv=None) -> int:
 
     residue_parts, residue_findings, residue_error = [], 0, None
     try:
-        residue_parts, residue_findings = _emit_residue(repo_root, rows, seam_fix)
+        residue_parts, residue_findings = _emit_residue(
+            repo_root, [r for r in rows if r["outcome"] != "PROBE-FAILED"], seam_fix
+        )
     except (ValueError, OSError) as exc:
         residue_error = str(exc)
 
@@ -794,6 +826,15 @@ def main(argv=None) -> int:
                 for f in r.get("seam") or []:
                     if not _is_missing_seam(f):
                         print(f"                     {_seam_line(f)}")
+            elif r["outcome"] == "PROBE-FAILED":
+                print(f"  PROBE-FAILED  {r['plan']} — {r['detail'][0]}")
+                if r["upgraded"]:
+                    print(f"                     upgrade: {r['upgraded']}")
+                print(
+                    f"                     re-run mise-prep-run --repo-root {repo_root.as_posix()} "
+                    f"{r['plan']} once the op answers; a census that ran out its deadline names "
+                    "the entry"
+                )
             else:
                 print(f"  {(r['outcome'] or r['verdict'] or 'NOT-PREPPED'):<18} {r['plan']}")
                 if r["failing"]:
@@ -837,8 +878,14 @@ def main(argv=None) -> int:
     if short:
         refused = [r for r in short if r["outcome"] == "SEAM-REFUSED"]
         drifted = [r for r in short if r["outcome"] == "CENSUS-DRIFT"]
-        unprepped = len(short) - len(refused) - len(drifted)
+        failed = [r for r in short if r["outcome"] == "PROBE-FAILED"]
+        unprepped = len(short) - len(refused) - len(drifted) - len(failed)
         lines = []
+        if failed:
+            lines.append(
+                f"\nmise-prep-run: {len(failed)} plan(s) are PROBE-FAILED. The op errored for "
+                "each; none was stamped or sent to residue. Re-run those plans."
+            )
         if unprepped:
             lines.append(
                 f"\nmise-prep-run: {unprepped} plan(s) are not certified. A plan that fails the "

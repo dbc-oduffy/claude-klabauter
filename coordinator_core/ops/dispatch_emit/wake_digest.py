@@ -40,6 +40,8 @@ CHUNK_REASON_VAR = "_chunkReason"
 
 #: Emitted only by a script composed with a seam leg: `[{wave, class, plans, path}]`, one per blocking finding; `failed` replaces `class` for a leg that returned no verdict.
 SEAM_DRIFT_VAR = "_seamDrift"
+#: {'wave N commit': 'wave N: <verbatim refusal>'} for a wave commit that did not land; the wave's dependents are held, no seam verdict exists.
+COMMIT_REFUSED_VAR = "_commitRefused"
 
 RUNTIME_VARS = (
     "_incompleteChunks",
@@ -600,6 +602,8 @@ def completion_return_js(
     completed_expr = f"({outcome_expr} === 'completed')"
 
     seam_drift_expr = (
+        f"(Object.keys({COMMIT_REFUSED_VAR}).length ? 'wave commit failed, dependents held (the terminal commit lands the wave): ' "
+        f"+ Object.values({COMMIT_REFUSED_VAR}).join('; ') : "
         f"({SEAM_DRIFT_VAR}.length ? (() => {{ const g = new Map(); {SEAM_DRIFT_VAR}.forEach(d => {{ "
         "const k = [d.wave, d.class || '', d.failed || '', d.plans.join(',')].join('|'); "
         "const e = g.get(k); if (e) e.n++; else g.set(k, { d, n: 1 }); }); "
@@ -638,7 +642,7 @@ def completion_return_js(
         + f"({owed_unverified_js} ? 'owed build gate unverified: ' + {owed_ids_js}.join(', ') : "
         + f"({RUNTIME_VARS[1]}.length ? 'unanswered briefs: ' + {RUNTIME_VARS[1]}.join(', ') : null)))"
         + "))))))))"
-        + (")" if seam else "")
+        + ("))" if seam else "")
     )
 
     # A row an executor reported PARTIAL/BLOCKED (or answered without a status)
