@@ -1348,7 +1348,7 @@ def mint_rows(
                     else:
                         pred_item = target.split(".", 1)[0]
                         targets = [target]
-                    if pred_item == row_id:
+                    if pred_item == row_id or not targets:
                         continue
                     if bound_out is not None:
                         bound_out.setdefault(row_id, set()).add(pred_item)
@@ -1804,10 +1804,12 @@ def _pick_groups(
         total = sum(size[i] for i in group)
         label = ""
         if len(group) > 1:
+            note = next((binding[i] for i in group if binding and i in binding), "")
             if shared.get(group[0]):
                 label = f"plans {', '.join(group)} write the same path {shared[group[0]]}; "
+                if note:
+                    label += f"bound by depends_on_plan {note}; "
             else:
-                note = next((binding[i] for i in group if binding and i in binding), "")
                 label = f"plans {', '.join(group)} are bound by depends_on_plan {note}".rstrip() + "; "
         if len(group) > 1 and total > row_budget:
             units.extend(

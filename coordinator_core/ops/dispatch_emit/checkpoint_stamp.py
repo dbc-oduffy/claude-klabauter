@@ -156,7 +156,9 @@ _HEAD_WALK_CAP = 500
 
 def rows_landed_at_head(repo_root: Path, plan_rel: str, wanted: frozenset) -> frozenset:
     """The ``wanted`` rows of ``plan_rel`` named by a same-plan checkpoint in HEAD's first-parent
-    history, minus gate-owed and stop-rule ids. In-process; empty on an unborn HEAD."""
+    history, minus gate-owed and stop-rule ids. In-process; empty on an unborn HEAD. The walk
+    reads at most ``_HEAD_WALK_CAP`` commits; a checkpoint older than that is not seen, so its
+    row stays held (fails closed)."""
     if not wanted or not plan_rel:
         return frozenset()
     from coordinator_core.git.git_state import head_sha

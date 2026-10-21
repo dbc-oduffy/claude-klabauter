@@ -117,8 +117,8 @@ def decide(
 
     `conflict` is a ConflictNote when done and contradicting evidence coexist, else None.
     Precedence: nothing cited, claimed-with-done (not when every run naming the baton has
-    ended), live successor (a done run, or a done `governing_plan` whose only contradiction is a
-    `plan.sizing_object` leg, wins a conflict), done-vs-contradicting conflict (a done run wins and the verdict
+    ended), live successor, done-vs-contradicting conflict (a done run, or a done
+    `governing_plan` whose only contradiction is a `plan.sizing_object` leg, wins and the verdict
     continues), header refusal (`close_refusal`), closable, then residue by target kind
     (unreadable, unstatused, missing), then no_evidence (cited targets all really not
     done). A missing, unreadable, unstatused, ended or live-run target never contradicts a
