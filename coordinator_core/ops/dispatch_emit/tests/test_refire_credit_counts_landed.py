@@ -59,7 +59,7 @@ def test_a_credited_only_open_row_gates_to_the_all_landed_ledger_resume(repo):  
     assert v.resume_ledger[RESUME_LEDGER_KIND_FIELD] == ALL_LANDED_HALT_KIND
     assert v.resume_ledger["blocking"] == ["R1"]
     out = _handler({"sizing_path": REL, "run_id": "ask-20261019T000000-cccccc"}, repo_root=repo)
-    assert "manifest_handle" in out and "error" not in out["manifest"], out  # interim: inline beside the handle
+    assert "manifest_handle" in out and "manifest" not in out, out
     assert read_reply(repo, out["manifest_handle"])["rows"] is not None
 
 

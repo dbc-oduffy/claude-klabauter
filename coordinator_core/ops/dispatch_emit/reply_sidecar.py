@@ -18,10 +18,70 @@ from coordinator_core.ops import _path_guard
 from coordinator_core.ops.dispatch_emit import grind_commit_contract as _contract
 
 HANDLE_KEYS = ("path", "sha256", "bytes")
-SIDECAR_ROOTS = ("state/warp", "scratch/warp", "scratch")
+SIDECAR_ROOTS = ("state/warp", "scratch")
 
 SIDECAR_CAUSE = "the sidecar changed after the engine wrote it"
 _FLAG = "reply-sidecar"
+
+OP_REPLY_PAGE = "dispatch.reply_page"
+# Bounds each page's JSON-escaped form, so a page relayed inside a JSON reply stays under the 12000-char capture cut.
+PAGE_CHARS = 6000
+
+HANDLE_SCHEMA = {
+    "type": "object",
+    "required": list(HANDLE_KEYS),
+    "additionalProperties": False,
+    "properties": {
+        "path": {"type": "string"},
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "bytes": {"type": "integer", "minimum": 0},
+    },
+}
+
+# No oneOf: one object with optional keys, so a validator that ignores oneOf still binds it.
+STAGE_REPLY_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "manifest_handle": HANDLE_SCHEMA,
+        "error": {"type": "string"},
+        "owed_em_ids": {"type": "array", "items": {"type": "string"}},
+        "owed_plan": {"type": ["string", "null"]},
+    },
+}
+
+PAGE_REPLY_SCHEMA = {
+    "type": "object",
+    "required": ["sha256", "bytes", "page", "pages", "chunk"],
+    "additionalProperties": False,
+    "properties": {
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "bytes": {"type": "integer", "minimum": 0},
+        "page": {"type": "integer", "minimum": 0},
+        "pages": {"type": "integer", "minimum": 1},
+        "chunk": {"type": "string"},
+    },
+}
+
+VERIFY_REPLY_JS = (
+    _contract.RELAY_SHA256_JS
+    + """
+function _canonJson(v) {
+  if (v === null || typeof v !== 'object') return JSON.stringify(v);
+  if (Array.isArray(v)) return '[' + v.map(_canonJson).join(',') + ']';
+  return '{' + Object.keys(v).sort().map((k) => JSON.stringify(k) + ':' + _canonJson(v[k])).join(',') + '}';
+}
+function _verifyReplyText(text, handle) {
+  if (typeof text !== 'string') return 'reply text is not a string';
+  let parsed;
+  try { parsed = JSON.parse(text); } catch (_e) { return 'reply text is not valid JSON'; }
+  const canon = _canonJson(parsed).replace(/[\\u0080-\\uffff]/g, (c) => '\\\\u' + ('0000' + c.charCodeAt(0).toString(16)).slice(-4));
+  if (canon.length !== handle.bytes) return 'reply canonical content is ' + canon.length + ' bytes, handle says ' + handle.bytes;
+  if (_sha256Ascii(canon) !== handle.sha256) return 'reply canonical content sha256 does not match the handle';
+  return null;
+}
+"""
+)
 
 
 class ReplySidecarError(ValueError):
@@ -61,15 +121,24 @@ def _relative_to_root(root: Path, path: Path) -> str:
         raise _refuse(f"path {p.as_posix()!r} is not under the repo root") from None
 
 
+def canonical_json(payload: object) -> str:
+    """Key-sorted, whitespace-free, ASCII-escaped JSON: the one form the handle's sha256 and bytes cover."""
+    return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+
+
 def _handle(rel: str, raw: bytes) -> dict:
     return {"path": rel, "sha256": hashlib.sha256(raw).hexdigest(), "bytes": len(raw)}
 
 
 def write_reply(root: Path, path: Path, payload: Mapping) -> dict:
-    """Write ``payload`` as ASCII JSON (indent 2, trailing newline) at ``path`` atomically; return its handle."""
+    """Write ``canonical_json(payload)`` at ``path`` atomically; return its handle.
+
+    Trap: an agent relaying a page may re-indent the JSON, so the reader never compares bytes; it
+    re-derives the canonical form from the parsed text and checks that against the handle.
+    """
     rel = _relative_to_root(root, path)
     target = _contain(root, rel)
-    raw = (json.dumps(payload, indent=2) + "\n").encode("ascii")
+    raw = canonical_json(payload).encode("ascii")
     target.parent.mkdir(parents=True, exist_ok=True)
     tmp = target.with_name(f"{target.name}.{os.getpid()}.tmp")
     try:
@@ -113,6 +182,37 @@ def read_text(root: Path, handle: Mapping) -> str:
     if message is not None:
         raise ReplySidecarError(message)
     return text
+
+
+def _pages(text: str) -> list[str]:
+    budget = PAGE_CHARS - 2
+    pages: list[str] = []
+    start = used = 0
+    costs: dict[str, int] = {}
+    for i, ch in enumerate(text):
+        cost = costs.get(ch)
+        if cost is None:
+            cost = costs[ch] = len(json.dumps(ch)) - 2
+        if used + cost > budget:
+            pages.append(text[start:i])
+            start, used = i, 0
+        used += cost
+    pages.append(text[start:])
+    return pages
+
+
+def page(text: str, index: int) -> tuple[str, int]:
+    """``(chunk, pages)``; each chunk's ``json.dumps`` form is at most ``PAGE_CHARS``. ``IndexError`` past the end."""
+    pages = _pages(text)
+    if not 0 <= index < len(pages):
+        raise IndexError(f"page {index} is outside 0..{len(pages) - 1}")
+    return pages[index], len(pages)
+
+
+def page_reply(handle: Mapping, text: str, index: int) -> dict:
+    """The success shape of ``dispatch.reply_page``; the reader joins the chunks and checks them against the handle."""
+    chunk, pages = page(text, index)
+    return {"sha256": handle["sha256"], "bytes": handle["bytes"], "page": index, "pages": pages, "chunk": chunk}
 
 
 def read_reply(root: Path, handle: Mapping) -> dict:

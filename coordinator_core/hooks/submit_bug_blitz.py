@@ -164,15 +164,7 @@ def _write_decisions(
         "suite": "not-run (targeted-runner)",
         "verify": "targeted-tests",
         "target": target_ref,
-        "parse": (
-            {
-                "parsed": len(parsed.tests),
-                "unparsed_count": parsed.unparsed_count,
-                "unparsed_sample": list(parsed.unparsed_sample),
-            }
-            if parsed is not None
-            else None
-        ),
+        "parse": {"parsed": len(parsed.tests)} if parsed is not None else None,
         # Repo-relative row paths: grind_rows.cmd_run_record reads this list under
         # grind_commit_contract.MINTED_KEY as land-set paths.
         "minted": [f"{QUEUE_DIR}/{row_id}.yaml" for row_id in minted],

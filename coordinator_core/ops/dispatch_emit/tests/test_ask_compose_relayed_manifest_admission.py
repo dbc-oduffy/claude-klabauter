@@ -78,16 +78,17 @@ def test_each_pinned_field_is_checked(patch, field):
 def test_every_adoption_site_admits_a_relay_only_through_the_wholeness_check():
     script = _compose()
     sites = re.findall(r"_stagedManifest\s*=\s*(?!null)[^;]*(?:readyOpReply|\.manifest)", script)
-    assert sites in ([], ["_stagedManifest = _r.manifest"]), sites
-    if sites:
-        helper = script[script.index("const _blitzStageRead"):script.index("_stagedManifest = _r.manifest")]
-        assert "_wholeManifestGap(_r.manifest)" in helper
-    assert "_diskRead" not in script
+    assert sites == ["_stagedManifest = got.manifest"], sites
+    helper = script[script.index("const _adoptStageReply"):script.index("_stagedManifest = got.manifest")]
+    assert "_wholeManifestGap(got.manifest)" in helper
+    assert "_readStageSidecar(r.manifest_handle)" in helper
+    assert "_verifyReplyText(text, h)" in script[script.index("const _readStageSidecar"):script.index("const _adoptStageReply")]
+    assert "_diskRead" not in script and "_adoptManifest" not in script
     assert "Array.isArray(_ready.readyOpReply?.rows)" not in script
-    for site in ("_spineReview.manifest", "_revised.manifest", "_authored.manifest"):
-        assert f"_adoptManifest({site})" in script, site
+    for site in ("_spineReview.stage_reply", "_revised.stage_reply", "_authored.stage_reply"):
+        assert f"await _adoptStageReply({site})" in script, site
     for site in ("_ready.readyOpReply", "_reready.readyOpReply"):
-        assert f"_adoptManifest({site}, true)" in script, site
+        assert f"await _adoptStageReply({site}, true)" in script, site
 
 
 def test_a_not_whole_relay_halts_with_the_named_reason_before_execute():
@@ -110,9 +111,14 @@ def _adopt(manifest, soft: bool) -> str | None:
     if node is None:
         pytest.skip("node not on PATH")
     js = (
-        ask_compose._ADMIT_MANIFEST_JS
-        + f"\nlet _stagedManifest = null;\n_adoptManifest({json.dumps(manifest)}, {json.dumps(soft)});\n"
-        "process.stdout.write(JSON.stringify(_stageRefusal));\n"
+        "const agent = async () => { throw new Error('a refusal reaches no page leg'); };\n"
+        "const parallel = (xs) => Promise.all(xs.map((f) => f()));\nconst _agentDefsClause = () => '';\n"
+        "(async () => {\nlet _stagedManifest = null;\n"
+        + ask_compose._ADMIT_MANIFEST_JS
+        + "\n"
+        + ask_compose._stage_reply_js(head="", anchor="", run_id="run-1")
+        + f"\nawait _adoptStageReply({json.dumps(manifest)}, {json.dumps(soft)});\n"
+        "process.stdout.write(JSON.stringify(_stageRefusal));\n})();\n"
     )
     return json.loads(
         subprocess.run([node, "-e", js], capture_output=True, text=True, check=True, **no_console_creationflags()).stdout

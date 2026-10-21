@@ -66,11 +66,9 @@ class TargetSpec:
 
 @dataclass(frozen=True)
 class ParseResult:
-    """Every non-blank input line is counted either in `tests` or in `unparsed_count`."""
+    """The failing tests of a fully parsed target; an unparsed target refuses, it is never carried here."""
 
     tests: tuple[FailingTest, ...]
-    unparsed_count: int = 0
-    unparsed_sample: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -112,7 +110,7 @@ class RunnerRecord:
 
 
 class ParseTargets(Protocol):
-    """Parse a resolved target into failing tests; raises `NoFailingTests` on zero parsed for non-backlog."""
+    """Parse a resolved target into failing tests; raises `NoFailingTests` on zero parsed for non-backlog and `UnparsedTargets` when any target line is unparsed."""
 
     def __call__(self, spec: TargetSpec) -> ParseResult: ...
 

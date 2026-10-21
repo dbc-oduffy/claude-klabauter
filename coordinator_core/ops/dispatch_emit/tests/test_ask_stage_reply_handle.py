@@ -34,8 +34,8 @@ def big_repo(tmp_path):
 
 def test_forty_row_reply_is_a_short_handle_and_the_manifest_reads_back_intact(big_repo):
     reply = _handler({"run_id": RUN, "plan_path": PLAN_REL}, repo_root=big_repo)
-    # Interim: the manifest rides inline beside the handle until the script reads the handle (plan C4/C5).
-    assert len(str(reply["manifest_handle"]).encode("ascii")) < 300
+    assert set(reply) == {"manifest_handle"}
+    assert len(str(reply)) < 300
     handle = reply["manifest_handle"]
     assert handle["path"] == f"{RECORD_DIR_ROOT}/{RUN}/manifest.json"
 

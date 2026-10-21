@@ -2,7 +2,7 @@
 
 Working files land under `RUN_DIR_ROOT/<run_id>/`: `briefs/<row>.md` (the plan route's row prompt) and
 `commit-request.txt` (the `render_marker` line, empty when no row declares a path). Run records land
-under `ask_contract.record_dir`: the minted spine, `pm-intent.md` and `manifest.json` (a `StageManifest` plus `head_sha`, ASCII JSON written by `_write`; the op replies `reply_sidecar.handle_for` over it). In-process file writes only; no git, no subprocess, so the
+under `ask_contract.record_dir`: the minted spine, `pm-intent.md` and `manifest.json` (a `StageManifest` plus `head_sha`, ASCII JSON written by `reply_sidecar.write_reply`; the op replies the `reply_sidecar.handle_for` handle over it, never the manifest). In-process file writes only; no git, no subprocess, so the
 op holds the 500ms bar. Trap: unlike `compose_script`, the per-row pathspec is not
 gitignore-filtered, because that filter spawns git.
 """
@@ -792,7 +792,7 @@ def stage(
         ledger_item_ids=ledger_item_ids,
         withheld_ids=withheld_ids,
     )
-    _write(record / "manifest.json", json.dumps(manifest_payload(root, manifest), indent=2) + "\n")
+    reply_sidecar.write_reply(root, record / "manifest.json", manifest_payload(root, manifest))
     if session_id:
         # Confined reviewers' Edits are admitted only for review-targets.txt
         # paths; the plan route registers them at compose time, the ask route
@@ -826,7 +826,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     run_id = params["run_id"]
     root = main_worktree_root(Path(repo_root))
     try:
-        manifest = stage(
+        stage(
             root,
             run_id=run_id,
             plan_rel=params.get("plan_path") or None,
@@ -838,15 +838,11 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             commit_sizing_rel=params.get("commit_sizing_path") or None,
             only_rows=params["only_rows"] if params.get("only_rows") is not None else None,
         )
-    except (AskStageError, SizingFireRefused) as exc:
+        handle = reply_sidecar.handle_for(root, record_dir(root, run_id) / "manifest.json")
+    except (AskStageError, SizingFireRefused, reply_sidecar.ReplySidecarError) as exc:
         reply = {"error": str(exc)}
         if getattr(exc, "owed_em_ids", None):
             reply["owed_em_ids"] = exc.owed_em_ids
             reply["owed_plan"] = exc.plan_path
         return reply
-    # Trap: the composed ask script still adopts `manifest` from this reply; drop it only with the
-    # script-side handle read (plan 2026-10-21-stage-reply-sidecar-handle, C4/C5).
-    return {
-        **manifest_payload(root, manifest),
-        "manifest_handle": reply_sidecar.handle_for(root, record_dir(root, run_id) / "manifest.json"),
-    }
+    return {"manifest_handle": handle}

@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+import json
+import shutil
+import subprocess
+
+import jsonschema
 import pytest
 
 from coordinator_core.ops.dispatch_emit import grind_commit_contract as gcc
@@ -33,11 +38,36 @@ def test_forty_row_payload_round_trips_with_tail_fields(sidecar):
     assert len(rs.read_reply(root, handle)["rows"]) == 40
 
 
-def test_sidecar_is_ascii_json_with_trailing_newline(sidecar):
+def test_sidecar_is_canonical_ascii_json(sidecar):
     _, path, handle = sidecar
     raw = path.read_bytes()
-    assert raw.isascii() and raw.endswith(b"}\n")
+    assert raw.isascii() and raw.endswith(b"}") and b"\n" not in raw
+    assert raw.decode("ascii") == rs.canonical_json(_manifest())
     assert handle["bytes"] == len(raw)
+
+
+def test_reindented_content_canonicalizes_to_the_written_text(sidecar):
+    _, path, _ = sidecar
+    m = {"z": {"b": 1, "a": ["café", " ", "q\"\\"]}, "a": None, "n": "中"}
+    reindented = json.dumps(m, indent=4)
+    assert rs.canonical_json(json.loads(reindented)) == rs.canonical_json(m)
+    assert rs.canonical_json(json.loads(json.dumps(_manifest(), indent=4))) == path.read_text("ascii")
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_reindented_manifest_verifies_and_changed_value_refuses(sidecar, tmp_path):
+    root, path, handle = sidecar
+    text = rs.read_text(root, handle)
+    reindented = json.dumps(json.loads(text), indent=4)
+    changed = json.loads(text)
+    changed["head_sha"] = "b" * 40
+    assert rs.canonical_json(json.loads(reindented)).encode("ascii") == path.read_bytes()
+    assert rs.canonical_json(changed) != text
+    if shutil.which("node") is None:
+        pytest.skip("node absent")
+    assert _verify_js(tmp_path, reindented, handle) is None
+    assert isinstance(_verify_js(tmp_path, json.dumps(changed, indent=4), handle), str)
 
 
 def test_handle_for_matches_write_handle(sidecar):
@@ -110,6 +140,82 @@ def test_malformed_handle_refused(tmp_path):
 def test_missing_sidecar_refused(tmp_path):
     with pytest.raises(rs.ReplySidecarError, match=gcc.RELAY_CORRUPT_HEAD):
         rs.read_text(tmp_path, {"path": "scratch/none.json", "sha256": "0" * 64, "bytes": 1})
+
+
+def _joined(text: str) -> str:
+    _, pages = rs.page(text, 0)
+    return "".join(rs.page(text, i)[0] for i in range(pages))
+
+
+def test_pages_join_to_text_and_fit_the_escaped_bound(sidecar):
+    root, _, handle = sidecar
+    text = rs.read_text(root, handle)
+    _, pages = rs.page(text, 0)
+    assert pages > 1
+    assert _joined(text) == text
+    assert all(len(json.dumps(rs.page(text, i)[0])) <= rs.PAGE_CHARS for i in range(pages))
+
+
+def test_empty_text_is_one_page_and_past_the_end_raises():
+    assert rs.page("", 0) == ("", 1)
+    with pytest.raises(IndexError):
+        rs.page("", 1)
+    with pytest.raises(IndexError):
+        rs.page("abc", -1)
+
+
+def test_pathological_quotes_page_under_eight_thousand():
+    text = '"' * 20000
+    handle = {"sha256": "0" * 64, "bytes": len(text)}
+    _, pages = rs.page(text, 0)
+    assert _joined(text) == text
+    for i in range(pages):
+        assert len(json.dumps(rs.page_reply(handle, text, i))) < 8000
+
+
+def test_page_reply_keys_and_schema(sidecar):
+    root, _, handle = sidecar
+    reply = rs.page_reply(handle, rs.read_text(root, handle), 1)
+    assert set(reply) == {"sha256", "bytes", "page", "pages", "chunk"}
+    jsonschema.validate(reply, rs.PAGE_REPLY_SCHEMA)
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate({**reply, "extra": 1}, rs.PAGE_REPLY_SCHEMA)
+
+
+def test_stage_reply_schema_accepts_both_shapes_and_refuses_manifest_key(sidecar):
+    _, _, handle = sidecar
+    jsonschema.validate({"manifest_handle": handle}, rs.STAGE_REPLY_SCHEMA)
+    jsonschema.validate({"error": "x", "owed_em_ids": ["a"], "owed_plan": None}, rs.STAGE_REPLY_SCHEMA)
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate({"manifest_handle": handle, "manifest": {}}, rs.STAGE_REPLY_SCHEMA)
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate({"manifest_handle": {**handle, "sha256": "zz"}}, rs.STAGE_REPLY_SCHEMA)
+
+
+def _verify_js(tmp_path, text: str, handle: dict):
+    script = tmp_path / "verify.js"
+    script.write_text(
+        rs.VERIFY_REPLY_JS + f"\nconsole.log(JSON.stringify(_verifyReplyText({json.dumps(text)}, {json.dumps(handle)})));\n",
+        encoding="ascii",
+    )
+    out = subprocess.run(
+        ["node", str(script)], capture_output=True, text=True, check=True,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    return json.loads(out.stdout)
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+@pytest.mark.skipif(shutil.which("node") is None, reason="node absent")
+def test_verify_reply_js_accepts_sidecar_and_refuses_damage(sidecar, tmp_path):
+    root, _, handle = sidecar
+    text = rs.read_text(root, handle)
+    assert _verify_js(tmp_path, text, handle) is None
+    flipped = text[:10] + chr(ord(text[10]) ^ 1) + text[11:]
+    assert isinstance(_verify_js(tmp_path, flipped, handle), str)
+    assert isinstance(_verify_js(tmp_path, text[:-50], handle), str)
+    assert "not valid JSON" in _verify_js(tmp_path, "café", {"sha256": "0" * 64, "bytes": 4})
 
 
 def test_check_relay_default_cause_unchanged():

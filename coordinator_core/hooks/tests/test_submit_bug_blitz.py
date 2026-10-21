@@ -68,7 +68,7 @@ def _resolve(raw: str, root: Path) -> TargetSpec:
 
 
 def _parse(spec: TargetSpec) -> ParseResult:
-    return ParseResult(tests=TESTS, unparsed_count=2, unparsed_sample=("junk",))
+    return ParseResult(tests=TESTS)
 
 
 def _mint(root: Path, run_id: str, tests: tuple, *, target_ref: str) -> list[str]:
@@ -107,7 +107,7 @@ def test_targets_submission_emits_the_grind_and_rewrites_the_call(repo, monkeypa
     decisions = json.loads((script.parent / mod.DECISIONS_FILE).read_text(encoding="utf-8"))
     assert decisions["commit_authority"] == {"basis": "submission"}
     assert decisions["verify"] == "targeted-tests"
-    assert decisions["parse"] == {"parsed": 2, "unparsed_count": 2, "unparsed_sample": ["junk"]}
+    assert decisions["parse"] == {"parsed": 2}
     assert decisions["minted"] == ["state/bug-backlog/TF-0.yaml", "state/bug-backlog/TF-1.yaml"]
     assert len(spawns) == _budget(), [s.argv for s in spawns]
     _no_grant_records(repo)
@@ -275,3 +275,17 @@ def test_non_workflow_tool_is_a_no_op(repo):
     payload = _payload(repo, {"targets": "x"})
     payload["tool_name"] = "Bash"
     assert mod.evaluate(payload) == mod.no_advisory()
+
+
+def test_real_parser_denies_a_bare_test_file_target_naming_it_and_mints_nothing(repo):
+    (repo / "red.txt").write_text(
+        "FAILED pkg/tests/test_a.py::test_one - AssertionError\npkg/tests/test_b.py\n", encoding="utf-8"
+    )
+
+    def mint(*a, **k):
+        raise AssertionError("must not mint")
+
+    env = _call(repo, {"targets": "red.txt"}, resolve=None, parse=None, mint=mint)
+    assert env["hookSpecificOutput"]["permissionDecision"] == "deny"
+    reason = _reason(env)
+    assert "pkg/tests/test_b.py" in reason and "file::test" in reason, reason

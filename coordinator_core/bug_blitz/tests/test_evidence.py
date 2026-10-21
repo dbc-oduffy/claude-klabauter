@@ -71,7 +71,6 @@ def test_redset_dir_groups_by_file_and_accounts_every_line():
     spec = evidence.resolve_target(str(FIX / "redset"), FIX)
     res = evidence.parse_targets(spec)
     assert len(res.tests) == 5
-    assert res.unparsed_count == 0
     grouped = evidence.group_by_file(res.tests)
     assert len(grouped) == 4
     assert len(grouped[("ddct", "test/on-box.test.ts")]) == 2
@@ -86,8 +85,6 @@ def test_pytest_log():
         ("pkg/tests/test_b.py", "test_three"),
     ]
     assert res.tests[0].message == "AssertionError: assert 1 == 2"
-    assert res.unparsed_count == 4
-    assert len(res.unparsed_sample) == 4
 
 
 def test_vitest_log_with_and_without_package():
@@ -96,7 +93,6 @@ def test_vitest_log_with_and_without_package():
         ("ddct", "test/on-box.test.ts"),
         ("", "src/solo.spec.ts"),
     ]
-    assert res.unparsed_count == 5
 
 
 def test_ansi_is_stripped(tmp_path):
@@ -108,21 +104,59 @@ def test_ansi_is_stripped(tmp_path):
 
 def test_bare_node_id_list(tmp_path):
     p = tmp_path / "ids.txt"
-    p.write_text("a/test_x.py::test_y\n\nnot a test\n")
+    p.write_text("a/test_x.py::test_y\n\n")
     res = evidence.parse_targets(TargetSpec(kind="file", path=str(p)))
     assert res.tests == (FailingTest("a/test_x.py", "test_y"),)
-    assert res.unparsed_count == 1
-    assert res.unparsed_sample == ("not a test",)
+    assert not hasattr(res, "unparsed_count")
 
 
-def test_json_failing_list():
-    res = evidence.parse_targets(TargetSpec(kind="file", path=str(FIX / "failing.json")))
+@pytest.mark.parametrize("name", ["failing-tests.txt", "ids.txt"])
+def test_list_mixing_node_ids_and_bare_path_refuses_naming_each_verbatim(tmp_path, name):
+    p = tmp_path / name
+    p.write_text("a/test_x.py::test_y\ncoordinator/tests/test_x.py\nnot a test\nb/test_z.py\n")
+    with pytest.raises(evidence.UnparsedTargets) as exc:
+        evidence.parse_targets(TargetSpec(kind="file", path=str(p)))
+    msg = str(exc.value)
+    for line in ("coordinator/tests/test_x.py", "not a test", "b/test_z.py"):
+        assert f"  {line}" in msg
+    assert "file::test" in msg
+    assert "a/test_x.py::test_y" not in msg
+
+
+def test_refusal_lists_every_target_not_a_sample(tmp_path):
+    p = tmp_path / "ids.txt"
+    bare = [f"t/test_{i}.py" for i in range(12)]
+    p.write_text("\n".join(["a/test_x.py::test_y", *bare]))
+    with pytest.raises(evidence.UnparsedTargets) as exc:
+        evidence.parse_targets(TargetSpec(kind="file", path=str(p)))
+    assert all(f"  {b}" in str(exc.value) for b in bare)
+
+
+def test_log_chatter_stays_usable_but_a_bare_test_path_refuses(tmp_path):
+    p = tmp_path / "run.log"
+    p.write_text("==== session ====\nFAILED a/test_x.py::test_y\n3 failed in 0.1s\n")
+    assert evidence.parse_targets(TargetSpec(kind="file", path=str(p))).tests == (FailingTest("a/test_x.py", "test_y"),)
+    p.write_text("==== session ====\nFAILED a/test_x.py::test_y\ncoordinator/tests/test_x.py\n")
+    with pytest.raises(evidence.UnparsedTargets, match="coordinator/tests/test_x.py"):
+        evidence.parse_targets(TargetSpec(kind="file", path=str(p)))
+
+
+def test_json_failing_list_with_unparseable_item_refuses():
+    with pytest.raises(evidence.UnparsedTargets, match="42"):
+        evidence.parse_targets(TargetSpec(kind="file", path=str(FIX / "failing.json")))
+
+
+def test_json_failing_list(tmp_path):
+    p = tmp_path / "ok.json"
+    p.write_text(
+        '{"failing": ["pkg/tests/test_a.py::test_one",'
+        ' {"file": "src/x.test.ts", "name": "x > y", "package": "web", "message": "boom"}]}'
+    )
+    res = evidence.parse_targets(TargetSpec(kind="file", path=str(p)))
     assert res.tests == (
         FailingTest("pkg/tests/test_a.py", "test_one"),
         FailingTest("src/x.test.ts", "x > y", "web", "boom"),
     )
-    assert res.unparsed_count == 1
-    assert res.unparsed_sample == ("42",)
 
 
 def test_json_without_failing_raises(tmp_path):
@@ -135,8 +169,12 @@ def test_json_without_failing_raises(tmp_path):
 def test_zero_parsed_raises_never_empty_run(tmp_path):
     p = tmp_path / "junk.txt"
     p.write_text("nothing here\n")
-    with pytest.raises(evidence.NoFailingTests):
+    with pytest.raises(evidence.UnparsedTargets, match="nothing here"):
         evidence.parse_targets(TargetSpec(kind="file", path=str(p)))
+    log = tmp_path / "quiet.log"
+    log.write_text("all passed\n")
+    with pytest.raises(evidence.NoFailingTests):
+        evidence.parse_targets(TargetSpec(kind="file", path=str(log)))
 
 
 def test_dir_falls_back_to_output_then_log_then_raises(tmp_path):

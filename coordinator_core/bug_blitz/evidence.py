@@ -2,7 +2,8 @@
 
 Implements `contract.ParseTargets`. Closed line grammars only: vitest workspace line, vitest
 `FAIL` line, pytest `FAILED` short-summary line, bare node id, and a JSON `failing: []` list.
-Every non-blank line lands in `ParseResult.tests` or the unparsed count.
+Every non-blank line of a list source lands in `ParseResult.tests` or refuses the whole parse; a log
+refuses on target-shaped lines and ignores chatter.
 """
 
 from __future__ import annotations
@@ -17,8 +18,6 @@ from coordinator_core.testing.suite_run_record import parse_failed_ids, strip_an
 
 BACKLOG = "backlog"
 BACKLOG_DIR = Path(home_dir("", "bug-backlog")).as_posix()
-UNPARSED_SAMPLE_MAX = 5
-_SAMPLE_WIDTH = 200
 _DIR_LIST = "failing-tests.txt"
 
 # `[FAIL] [<pkg>  ]<file> > <name>`: a package is separated from the file by 2+ spaces.
@@ -26,6 +25,7 @@ _VITEST_RE = re.compile(
     r"^\s*(?:FAIL\s+)?(?:(?P<pkg>\S+)\s{2,})?(?P<file>\S+\.(?:test|spec)\.\w+)\s+>\s+(?P<name>.+?)\s*$"
 )
 _NODE_ID_RE = re.compile(r"^(?P<file>[^\s:]+\.py)::(?P<name>\S+)$")
+_TARGET_SHAPE_RE = re.compile(r"^\S*(?:::\S*|\.py|\.(?:test|spec)\.\w+)$")
 _PYTEST_MSG_RE = re.compile(r"^FAILED \S+ - (?P<msg>.*)$")
 
 
@@ -35,6 +35,10 @@ class EvidenceError(ValueError):
 
 class TargetRefused(EvidenceError):
     """The target path is outside the repo and is not an existing absolute path."""
+
+
+class UnparsedTargets(EvidenceError):
+    """A target line could not be parsed; it is named in the message, never dropped."""
 
 
 class NoFailingTests(EvidenceError):
@@ -76,7 +80,10 @@ def parse_targets(spec: TargetSpec) -> ParseResult:
         return ParseResult(tests=())
     path = _source_file(Path(spec.path)) if spec.kind == "dir" else Path(spec.path)
     text = path.read_text(encoding="utf-8", errors="replace")
-    result = _parse_json(text) if path.suffix.lower() == ".json" else _parse_text(text)
+    if path.suffix.lower() == ".json":
+        result = _parse_json(text)
+    else:
+        result = _parse_text(text, noisy=_is_log(path))
     if not result.tests:
         raise NoFailingTests(f"no failing tests parsed from {path.name}")
     return result
@@ -117,18 +124,40 @@ def _parse_line(line: str) -> FailingTest | None:
     return None
 
 
-def _assemble(tests: list[FailingTest], unparsed: list[str]) -> ParseResult:
+def _looks_like_target(line: str) -> bool:
+    """A lone token naming a test file or node id: in a log it is a target, never noise."""
+    return bool(_TARGET_SHAPE_RE.match(line))
+
+
+def _assemble(tests: list[FailingTest], unparsed: list[str], *, noisy: bool = False) -> ParseResult:
+    """Dedupe `tests`; refuse when any input was not parsed.
+
+    Invariant: an unparsed line is never counted and dropped. A list source (`noisy=False`) refuses
+    on every unparsed line. A log (`noisy=True`) carries pytest/vitest chatter, so only target-shaped
+    lines refuse. Refusing needs no process: expanding a bare file to node ids would need a pytest
+    collection spawn, which the 500ms bar forbids.
+    """
+    refused = [u for u in unparsed if not noisy or _looks_like_target(u)]
+    if refused:
+        listed = "\n".join(f"  {u}" for u in refused)
+        raise UnparsedTargets(
+            f"{len(refused)} target(s) could not be parsed; nothing was run. "
+            f"Rewrite each in the `file::test` form (e.g. `path/test_x.py::test_name`):\n{listed}"
+        )
     seen: set[FailingTest] = set()
     unique = []
     for t in tests:
         if t not in seen:
             seen.add(t)
             unique.append(t)
-    sample = tuple(u[:_SAMPLE_WIDTH] for u in unparsed[:UNPARSED_SAMPLE_MAX])
-    return ParseResult(tests=tuple(unique), unparsed_count=len(unparsed), unparsed_sample=sample)
+    return ParseResult(tests=tuple(unique))
 
 
-def _parse_text(text: str) -> ParseResult:
+def _is_log(path: Path) -> bool:
+    return path.suffix.lower() == ".log" or path.name.endswith("-output.txt")
+
+
+def _parse_text(text: str, *, noisy: bool) -> ParseResult:
     tests: list[FailingTest] = []
     unparsed: list[str] = []
     for line in strip_ansi(text).splitlines():
@@ -139,7 +168,7 @@ def _parse_text(text: str) -> ParseResult:
             tests.append(found)
         else:
             unparsed.append(line.strip())
-    return _assemble(tests, unparsed)
+    return _assemble(tests, unparsed, noisy=noisy)
 
 
 def _parse_json(text: str) -> ParseResult:

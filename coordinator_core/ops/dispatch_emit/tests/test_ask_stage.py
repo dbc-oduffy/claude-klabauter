@@ -18,10 +18,8 @@ def read_stage_reply(root, reply: dict) -> dict:
     """A refusal reply as-is; a success reply's manifest read through its verified `manifest_handle`."""
     if "error" in reply:
         return reply
-    # Interim: the reply carries the manifest inline beside the handle until the script reads the handle.
-    manifest = reply_sidecar.read_reply(root, reply["manifest_handle"])
-    assert {k: v for k, v in reply.items() if k != "manifest_handle"} == manifest, reply
-    return manifest
+    assert set(reply) == {"manifest_handle"}, reply
+    return reply_sidecar.read_reply(root, reply["manifest_handle"])
 
 
 PLAN_REL = "docs/plans/2026-10-01-fixture.md"
