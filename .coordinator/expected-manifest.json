@@ -2095,8 +2095,8 @@
     "coordinator_core/_content_root_primitive.py": "f7fcd3083855a5e1dd53c09233fbfd64f8dffdf5",
     "coordinator_core/_data_root.py": "0c7c8524f25376ae49593f11334445539dc557f9",
     "coordinator_core/_engine_landing.py": "06dbb1273f3c36fdb6be08767ec75e73c71630e7",
-    "coordinator_core/_engine_published_at": "7bef0f860b638502357e4ae5671f5e9dd3bf687c",
-    "coordinator_core/_engine_stamp": "b5121cadb5a80113b4f1dd1545af4a377ed3f14a",
+    "coordinator_core/_engine_published_at": "9724f6d792a585a6c261779a04fbd351f9c0a324",
+    "coordinator_core/_engine_stamp": "57245b9b68d072e4149f019001556fb85028dc5b",
     "coordinator_core/_fleet_names.py": "e81fc4247611fe486697f4707b28a1a3a008f392",
     "coordinator_core/_hook_envelope.py": "d98df967471c001593ab85960dc367f5ff5da056",
     "coordinator_core/_repo_root_probe.py": "2d8edfa8cd9343436a650584da430aa87ae0397d",
@@ -4480,7 +4480,7 @@
     "coordinator_core/ops/dispatch_emit/ask_contract.py": "88a169e0e45958fc234a484c5ebd94287ebdc869",
     "coordinator_core/ops/dispatch_emit/ask_fanout.py": "b7a1049d4762aa33fb765f14fb1b5ff74d9a5855",
     "coordinator_core/ops/dispatch_emit/ask_fanout_contract.py": "1ee9c3264533df07dbf8cd79ae0d86ce4277748e",
-    "coordinator_core/ops/dispatch_emit/ask_footprint.py": "b548fe3f450b8b6cf19ec2d0c4e791c038b33ae7",
+    "coordinator_core/ops/dispatch_emit/ask_footprint.py": "933b7cc7f7a757cfadc28c7fb4ede3b30ea85506",
     "coordinator_core/ops/dispatch_emit/ask_gate.py": "d9e87e49a9db80e4192f9888764d9dcb66edea32",
     "coordinator_core/ops/dispatch_emit/ask_plan_blitz.py": "91eaf4b35c10a607c0ea089948236c874ba7e282",
     "coordinator_core/ops/dispatch_emit/ask_roadmap.py": "25ec3e21a58648e5bbacb03a808812891744fcf9",
@@ -4713,7 +4713,7 @@
     "coordinator_core/ops/dispatch_emit/tests/test_ask_fanout_entry_context.py": "da0b740d76a9311e90ad8f9cdbca6633ebab53e9",
     "coordinator_core/ops/dispatch_emit/tests/test_ask_fanout_sizings_arm.py": "2c383a3ca299ca1851f5c532a744f000d7b098eb",
     "coordinator_core/ops/dispatch_emit/tests/test_ask_fold_reads_disk_manifest_e2e.py": "ee7ed5a8f1a3626b1751b1edea476dd4fdfc1ce0",
-    "coordinator_core/ops/dispatch_emit/tests/test_ask_footprint.py": "d67d98b1c69de79969ce53759f88a0071350c349",
+    "coordinator_core/ops/dispatch_emit/tests/test_ask_footprint.py": "883aa2ef1e25391caf41068b2dc0909fedfd4021",
     "coordinator_core/ops/dispatch_emit/tests/test_ask_gate.py": "339412acc43636f3f02b59c5fe14cf2cf1a348be",
     "coordinator_core/ops/dispatch_emit/tests/test_ask_gate_ceo_xl_exit.py": "60a566c9dde964251351da6223f5c4cebf7baa29",
     "coordinator_core/ops/dispatch_emit/tests/test_ask_gate_design_approval.py": "d297e4345748697470498941b2bad36c57552116",
@@ -6992,7 +6992,7 @@
     "coordinator_core/reviewer_vocabulary.py": "de635855d80d9d07a85a27ef3162975e0c2a88bc",
     "coordinator_core/roadmap/__init__.py": "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391",
     "coordinator_core/roadmap/audit.py": "378e832d20eb9ac1f26563980f33ac593a302eff",
-    "coordinator_core/roadmap/blitz_land.py": "7ec61534e03ef3a900efe222391f722238b0960c",
+    "coordinator_core/roadmap/blitz_land.py": "2df38e927cd952d0232f26ec0ea09c4b4e15eb8a",
     "coordinator_core/roadmap/blitz_stage.py": "86c4a66e1f9bd6e6e4fc33985df4acb81f0b1386",
     "coordinator_core/roadmap/census.py": "0a0aa8969e6b55f959fe9b7f7779cf4b511d5b1f",
     "coordinator_core/roadmap/cluster_scout.py": "4f22f6aacfd497c324113dbe5afefed4cefbf4e8",
@@ -7016,7 +7016,7 @@
     "coordinator_core/roadmap/tests/test_blitz_land.py": "4e86040d8a4e9f58427f66efa95141db2ee82f16",
     "coordinator_core/roadmap/tests/test_blitz_land_commits_trail.py": "b44c2a48dd3074b16ecf11bac669fa38dd3585cb",
     "coordinator_core/roadmap/tests/test_blitz_land_fire_hold.py": "8e242abfe7fe50031715658017915976c354c119",
-    "coordinator_core/roadmap/tests/test_blitz_land_joins_xs_sizing_to_baton.py": "720f88c7ca2467c101fa46a4aab579f62bf9e3b6",
+    "coordinator_core/roadmap/tests/test_blitz_land_joins_xs_sizing_to_baton.py": "34b63e672bbca3d2cdfc0129829c951f6d4d1dbe",
     "coordinator_core/roadmap/tests/test_blitz_land_reconciles_sizing.py": "40bdc0634a0a90855ce881933f400be1323cd0b1",
     "coordinator_core/roadmap/tests/test_blitz_land_resolves_an_archived_baton.py": "026244533f8fbfbe972b6f651755f6bc224882a3",
     "coordinator_core/roadmap/tests/test_blitz_land_shipped_in_reachability.py": "6b483e378a6ffea70436d29c034ec715fed52f02",
@@ -8590,5 +8590,5 @@
     "scripts/unstick_claude.py": "5458a0f699f1793ff9fd32295b9d0b33635f1c06"
   },
   "schema": 1,
-  "source_head": "056c63ece46af7278fe7684a4eed2e34a0a25b26"
+  "source_head": "734b1de5e93178667e6dbc030a9a9ce8b476d7d4"
 }

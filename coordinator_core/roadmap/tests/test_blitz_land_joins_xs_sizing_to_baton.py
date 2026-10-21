@@ -122,6 +122,82 @@ def test_a_missing_sizing_is_refused_by_name_and_leaves_the_baton_untouched(tmp_
     assert (root / baton).read_text(encoding="utf-8") == before
 
 
+def _spec_plan(root: Path, **fields) -> str:
+    lines = ["title: the-spec", "status: draft"] + [f"{k}: {v}" for k, v in fields.items()]
+    p = root / "docs" / "plans" / "the-spec.md"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text("---\n" + "\n".join(lines) + "\n---\n\nbody\n", encoding="utf-8")
+    return "docs/plans/the-spec.md"
+
+
+def _land_spec(root: Path, stub_id: str, plan: str, **entry):
+    return bl.land_wave(
+        root,
+        {
+            "waveIndex": 0,
+            "ready": [{"batonId": stub_id, "planPath": plan, "route": "spec-dispatch", **entry}],
+        },
+    )
+
+
+def test_a_spec_dispatch_baton_is_joined_from_the_entry_sizing(tmp_path):
+    root = _repo(tmp_path)
+    baton = _baton(root, "s-1")
+    _sizing(root)
+    plan = _spec_plan(root)
+
+    out = _land_spec(root, "s-1", plan, sizingObject=SIZING, deliverableId=DLV)
+
+    assert not out["refused"]
+    assert out["execution_ready"][0]["join"]["stamped"] == [
+        "handoff_id", "deliverable_id", "sizing_object",
+    ]
+    assert re.fullmatch(r"hnd-[a-z0-9-]+-[0-9a-f]{6}", _fm(root, baton, "handoff_id"))
+    assert _fm(root, baton, "deliverable_id") == DLV
+    assert _fm(root, baton, "sizing_object") == SIZING
+    assert _fm(root, baton, "handoff_phase") == "execution"
+
+
+def test_a_spec_dispatch_sizing_is_found_on_the_plan_when_the_entry_names_none(tmp_path):
+    root = _repo(tmp_path)
+    baton = _baton(root, "s-2")
+    _sizing(root)
+    plan = _spec_plan(root, sizing_object=SIZING)
+
+    out = _land_spec(root, "s-2", plan)
+
+    assert not out["refused"]
+    assert _fm(root, baton, "sizing_object") == SIZING
+    assert _fm(root, baton, "deliverable_id") == DLV
+
+
+def test_a_spec_dispatch_keeps_existing_values_and_reports_a_conflict(tmp_path):
+    root = _repo(tmp_path)
+    baton = _baton(root, "s-3", handoff_id="hnd-mine-aaaaaa", deliverable_id="dlv-other-ffffff")
+    _sizing(root)
+    plan = _spec_plan(root)
+
+    out = _land_spec(root, "s-3", plan, sizingObject=SIZING)
+
+    join = out["execution_ready"][0]["join"]
+    assert any("deliverable_id" in c for c in join["conflicts"])
+    assert _fm(root, baton, "handoff_id") == "hnd-mine-aaaaaa"
+    assert _fm(root, baton, "deliverable_id") == "dlv-other-ffffff"
+
+
+def test_a_spec_dispatch_with_no_resolvable_sizing_is_refused_and_unstamped(tmp_path):
+    root = _repo(tmp_path)
+    baton = _baton(root, "s-4")
+    before = (root / baton).read_text(encoding="utf-8")
+    plan = _spec_plan(root)
+
+    out = _land_spec(root, "s-4", plan)
+
+    assert out["execution_ready"] == []
+    assert "names no sizingObject" in out["refused"][0]["reason"]
+    assert (root / baton).read_text(encoding="utf-8") == before
+
+
 def test_a_sizing_path_escaping_the_worktree_is_refused(tmp_path):
     root = _repo(tmp_path)
     baton = _baton(root, "b-5")

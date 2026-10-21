@@ -5,6 +5,8 @@ Pure: no I/O, no spawn. `ask_compose.compose_ask_script` wires the leg ahead of 
 
 from __future__ import annotations
 
+import json
+import re
 from typing import Optional, Sequence
 
 from coordinator_core.ops.dispatch_emit.sizing_fire import ARM_XS
@@ -15,6 +17,27 @@ FOOTPRINT_SCHEMA = {
     "required": ["writes"],
     "properties": {"writes": {"type": "array", "items": {"type": "string"}}},
 }
+
+
+#: One lexical rule for an admitted footprint write, written in the subset Python `re` and JS `RegExp`
+#: share so the composed script and the unit tests apply the same definition. Rejects: empty or
+#: blank, POSIX-absolute, `~`, Windows drive, any backslash, glob characters, a `..` segment, a
+#: trailing slash (directory), and any newline.
+ADMIT_WRITE_PATTERN = (
+    r"^(?!/|~|[A-Za-z]:)(?!.*[\\*?\[\]{}])(?!(?:.*/)?\.\.(?:/|$))[^\s/](?:.*[^/])?$"
+)
+
+_ADMIT_RE = re.compile(ADMIT_WRITE_PATTERN)
+
+
+def is_admitted_write(path: object) -> bool:
+    """True when `path` is a repo-relative, in-tree, glob-free file path (lexical; no I/O)."""
+    return isinstance(path, str) and _ADMIT_RE.fullmatch(path) is not None
+
+
+def admit_writes_js() -> str:
+    """JS predicate source `(w) => ...` equal to `is_admitted_write`, for the composed script's filter."""
+    return f"((w) => typeof w === 'string' && new RegExp({json.dumps(ADMIT_WRITE_PATTERN)}).test(w))"
 
 
 def footprint_owed(*, arm: Optional[str], writes: Sequence[str], sized_in_run: bool) -> bool:

@@ -1155,6 +1155,30 @@ def join_xs_sizing_to_baton(
     }
 
 
+def _spec_join_entry(
+    worktree_root: Path, entry: Dict[str, Any], plan_path: Optional[str]
+) -> Dict[str, Any]:
+    """The entry `join_xs_sizing_to_baton` takes, for a `spec-dispatch` ready entry.
+
+    A spec entry names its sizing on the entry's `sizingObject`, else on the
+    `sizing_object:` its plan cites. Raises LandingRefused when neither resolves, so
+    the refusal lands before the baton is stamped execution-ready.
+    """
+    if entry.get("sizingObject"):
+        return entry
+    cited = None
+    if plan_path:
+        plan_abs = worktree_root / plan_path
+        if plan_abs.is_file():
+            cited = _read_field(plan_abs.read_text(encoding="utf-8"), "sizing_object")
+    if _field_unset(cited):
+        raise LandingRefused(
+            "spec-dispatch entry names no sizingObject and its plan cites no sizing_object; "
+            "the baton cannot be joined to a sizing"
+        )
+    return dict(entry, sizingObject=cited)
+
+
 def _today() -> str:
     """Today's date, read from the clock the caller's records are dated against.
 
@@ -1465,6 +1489,7 @@ def land_wave(
                     row["sizing_reconciled"] = sizing_recon
                 approved.append(row)
             elif entry.get("route") == "spec-dispatch":
+                join_entry = _spec_join_entry(worktree_root, entry, plan_path)
                 row = authorize_execution(
                     worktree_root,
                     baton_path,
@@ -1479,6 +1504,7 @@ def land_wave(
                 if sizing_recon is not None:
                     row["sizing_reconciled"] = sizing_recon
                 if row.get("execution_ready"):
+                    row["join"] = join_xs_sizing_to_baton(worktree_root, baton_path, join_entry)
                     execution_ready.append(row)
                 else:
                     refused.append(
