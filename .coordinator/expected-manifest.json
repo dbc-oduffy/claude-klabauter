@@ -2096,8 +2096,8 @@
     "coordinator_core/_content_root_primitive.py": "f7fcd3083855a5e1dd53c09233fbfd64f8dffdf5",
     "coordinator_core/_data_root.py": "0c7c8524f25376ae49593f11334445539dc557f9",
     "coordinator_core/_engine_landing.py": "06dbb1273f3c36fdb6be08767ec75e73c71630e7",
-    "coordinator_core/_engine_published_at": "ebaed8f0123c2053838b5a526b63e9edff8a088d",
-    "coordinator_core/_engine_stamp": "bf8353da11ac338918447c05829ff9c8b97a5ba3",
+    "coordinator_core/_engine_published_at": "0969d57fb99a10f12b8c63d1d79693da4617a806",
+    "coordinator_core/_engine_stamp": "35c0ce768399a6a8118a910f2c2e2765f592fe18",
     "coordinator_core/_fleet_names.py": "e81fc4247611fe486697f4707b28a1a3a008f392",
     "coordinator_core/_hook_envelope.py": "d98df967471c001593ab85960dc367f5ff5da056",
     "coordinator_core/_repo_root_probe.py": "2d8edfa8cd9343436a650584da430aa87ae0397d",
@@ -4508,7 +4508,7 @@
     "coordinator_core/ops/dispatch_emit/dirty_write_set.py": "4021386b3c780c9557ac019ff952e9f0451e1082",
     "coordinator_core/ops/dispatch_emit/em_only_act.py": "dab5f92556e6ef96623c2d0cf52df30c3088c922",
     "coordinator_core/ops/dispatch_emit/emission_receipt.py": "f5e737c20c63155be2a88e33be382a23af182fa0",
-    "coordinator_core/ops/dispatch_emit/emit.py": "b29dd63adac1192556ed03c0755e77a92e2ec5d2",
+    "coordinator_core/ops/dispatch_emit/emit.py": "580d6b7a642e6842f3b74dc28037576d205a9ecc",
     "coordinator_core/ops/dispatch_emit/engine_owned_rows.py": "a519eb88100cf68b6d66f5a2933898ab5158c72f",
     "coordinator_core/ops/dispatch_emit/falsifier_integrity_phase.py": "4a7a9f24fd1d96a23fcdc467a832350cd99df7e8",
     "coordinator_core/ops/dispatch_emit/fanout_cost.py": "61c0d5ed6a4597fad15739b8f3d08188fb72d877",
@@ -5178,7 +5178,8 @@
     "coordinator_core/ops/dispatch_emit/tests/test_run_withhold.py": "0ae009416551dba2135e206c04f5cb28f8f62774",
     "coordinator_core/ops/dispatch_emit/tests/test_same_run_plan_edge_sequenced.py": "5df3cde39fbc35ae4cfb032315d239dfc8ecf74e",
     "coordinator_core/ops/dispatch_emit/tests/test_seam_leg_executes_declared_paths.py": "cf48586d2343a297344d6650213657d6bc4f2225",
-    "coordinator_core/ops/dispatch_emit/tests/test_seam_wave_boundary.py": "5b30466ab40ca803b45da515097d64adaf0f75fe",
+    "coordinator_core/ops/dispatch_emit/tests/test_seam_no_rows_landed_commit_failure.py": "4054e02cd9fadde838b2b89121ee5d6638fec111",
+    "coordinator_core/ops/dispatch_emit/tests/test_seam_wave_boundary.py": "afb3c8c6c9e4dd2b40c8b33877da5adbc098cf5d",
     "coordinator_core/ops/dispatch_emit/tests/test_segment_key_contract.py": "2260ef06cc1d2fba564a67fac562bcdf568f2812",
     "coordinator_core/ops/dispatch_emit/tests/test_self_dr_discharge.py": "37e80f78f60cec88cebe21a32bc97f4ff04dd727",
     "coordinator_core/ops/dispatch_emit/tests/test_shared_blocks_keep_prompts_byte_identical.py": "0b8147d2b5da117fca21b03298ffdb722fa18ba4",
@@ -5257,6 +5258,7 @@
     "coordinator_core/ops/dispatch_emit/tests/test_terminal_commit_landing_allowlist.py": "e4288cedbed2adbd60b0c3eb0b0f72be2dcf292c",
     "coordinator_core/ops/dispatch_emit/tests/test_terminal_commit_landing_integrity.py": "a4417c6c68f2c9045818d6c09c0c65051ed64168",
     "coordinator_core/ops/dispatch_emit/tests/test_terminal_commit_landing_remedies.py": "f703c4030f9fb1e34bd45e557889ed86182de7b1",
+    "coordinator_core/ops/dispatch_emit/tests/test_terminal_commit_lands_failed_wave_commit.py": "77bd55f5645bc34979bac4a149a9bee3e67b9007",
     "coordinator_core/ops/dispatch_emit/tests/test_terminal_commit_leaves_index_at_head.py": "ec5f4acffa1062512421301d10c81b95752ec92e",
     "coordinator_core/ops/dispatch_emit/tests/test_terminal_commit_ledger_met_stamp.py": "14f646a4a18304eb2a4d741fc1a3d497ff9dbc23",
     "coordinator_core/ops/dispatch_emit/tests/test_terminal_commit_ledger_routed_root.py": "aaebc2c7664e8e4e6f9a680f339e631b3cd71103",
@@ -8638,5 +8640,5 @@
     "scripts/unstick_claude.py": "5458a0f699f1793ff9fd32295b9d0b33635f1c06"
   },
   "schema": 1,
-  "source_head": "eae63d4d20b18ec2bec7188f0c5f1faac8f6f35f"
+  "source_head": "e313bd122dc640c0d9fc4f65846feee0f13e41af"
 }
