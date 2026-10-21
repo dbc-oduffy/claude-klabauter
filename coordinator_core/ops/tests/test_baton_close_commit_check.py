@@ -47,6 +47,8 @@ def _header(status="open"):
         (("residue", "live_successor", [_ev()]), R.LIVE_SUCCESSOR),
         (("residue", "evidence_conflict", [_ev()]), R.EVIDENCE_STALE),
         (("residue", "target_missing", [_ev(done=False, status="target_missing")]), R.EVIDENCE_STALE),
+        (("residue", "spinoff_kind", [_ev()]), R.PREDICATE_REFUSED),
+        (("residue", "no_deliverable_id", [_ev()]), R.NO_DELIVERABLE_ID),
         (("no_evidence",), R.EVIDENCE_STALE),
         (("closable", [_ev(target="docs/plans/other.md")]), R.EVIDENCE_STALE),
         (("closable", [_ev(cls="sizing")]), R.EVIDENCE_STALE),
@@ -165,6 +167,26 @@ def test_every_refusal_reason_in_one_batch(tmp_path):
     assert got[""] == "bad_row"
     assert [a["handoff_path"] for a in already] == [done]
     assert len(refused) + len(flips) + len(already) == len(rows) - 1  # duplicate dropped
+
+
+def test_non_dlv_spinoff_refuses_no_deliverable_id(tmp_path):
+    a = _baton(tmp_path, "a.md", kind="spinoff", did="legacy-1")
+    flips, refused, _ = _select(tmp_path, [a])
+    assert flips == [] and _reasons(refused) == {a: "no_deliverable_id"}
+
+
+def test_dlv_spinoff_with_continuation_successor_refuses_predicate_refused_naming_kind(tmp_path):
+    a = _baton(tmp_path, "a.md", kind="spinoff", did="dlv-spin-00001",
+               extra="handoff_id: hnd-spin-a1b2c3")
+    _edge_baton(tmp_path, "child.md", "predecessor_id", "hnd-spin-a1b2c3")
+    flips, refused, _ = _select(tmp_path, [a])
+    assert flips == []
+    assert _reasons(refused) == {a: "predicate_refused"}
+    assert "spinoff" in refused[0]["detail"]
+
+
+def test_handoff_kind_leg_d_applies_so_close_refusal_may_test_kind_unconditionally():
+    assert chk._HANDOFF_KIND.predicate_legs["d"].applies
 
 
 def test_unreadable_frontmatter_is_refused(tmp_path):

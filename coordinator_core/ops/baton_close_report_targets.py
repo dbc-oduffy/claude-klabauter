@@ -289,7 +289,7 @@ def target_evidence(worktree_root: str, headers: dict[str, BatonHeader]) -> dict
                 items.append(_item(EvidenceClass.GOAL, "origin_goal_id", found[0], True, found[1], GOAL_DONE))
         seen = {it["target_path"] for it in items}
         did = h.get("deliverable_id")
-        if did and h.get("kind") != "spinoff" and carriers.get(did, 0) == 1:
+        if did and carriers.get(did, 0) == 1:
             for p in rd.plans_for_deliverable(did):
                 if p not in seen:
                     seen.add(p)

@@ -176,7 +176,7 @@ import yaml
 
 from coordinator_core.claim_state import resolve_claim_state
 from coordinator_core.dag import _read_meta
-from coordinator_core.frontmatter.baton_class import canonical_kind, kind_values_for_canonical
+from coordinator_core.frontmatter.baton_class import SPINOFF_KINDS, is_spinoff_kind
 from coordinator_core.frontmatter.primitives import (
     insert_fm_field,
     read_fm_field,
@@ -216,18 +216,9 @@ _SCHEMA_PATH: Path = (
 
 _LIVE_DEPLOYMENT_STATES = frozenset({"ready_to_fire", "in_flight"})
 
-# Leg (d)'s excluded-kind set (this chunk, C2) — sourced from
-# `coordinator_core.frontmatter.baton_class`, the repo's single owning table
-# for `kind` membership (`test_baton_class_is_the_only_membership_set.py`
-# enforces at most one `kind` string literal per call site; a second literal
-# anywhere is a defect). Mirrors `deliverable_carry._ROADMAP_STUB_KINDS`'s own
-# `kind_values_for_canonical(...)` call shape exactly, so C3 and C4 can import
-# THIS constant rather than re-deriving it. `spinoff` carries no D1
-# pre-rename alias of its own (unlike `roadmap-baton`/`roadmap-seed`/
-# `goal-seed`) — `kind_values_for_canonical` returns a one-element set today
-# — but routing through the helper means a future alias, were one ever added,
-# is picked up here automatically rather than silently missed.
-_SPINOFF_KINDS: FrozenSet[str] = frozenset(kind_values_for_canonical("spinoff"))
+# Leg (d)'s excluded-kind set, owned by `baton_class.SPINOFF_KINDS`; the name
+# stays because test_handoff_transition_unclaim pins it against the backstop's set.
+_SPINOFF_KINDS: FrozenSet[str] = SPINOFF_KINDS
 
 # Vendored sizing-object schema path — the sizing kind's own validator, mirroring
 # `_SCHEMA_PATH` above's per-module-local-copy convention. x-schema-version 1.8.0
@@ -853,7 +844,7 @@ def _leg_d_refusal(fm: dict, kind: _KindDescriptor) -> Optional[str]:
     # re-deriving the same refusal each time.
     leg_d = kind.predicate_legs["d"]
     if leg_d.applies:
-        if canonical_kind(fm.get("kind")) in _SPINOFF_KINDS:
+        if is_spinoff_kind(fm.get("kind")):
             return (
                 f"kind={fm.get('kind')!r} is a spinoff — a spinoff's deliverable_id, "
                 "even when it exact-matches this join, is not its parent's deliverable"

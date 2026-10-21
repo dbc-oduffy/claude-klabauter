@@ -29,7 +29,7 @@ from coordinator_core.ops.baton_close_report_contract import (
     ResidueReason,
     Verdict,
 )
-from coordinator_core.ops.baton_close_report_decide import decide
+from coordinator_core.ops.baton_close_report_decide import close_refusal, decide
 from coordinator_core.ops.deliverable_cascade import (
     _HANDOFF_KIND,
     _leg_d_refusal,
@@ -38,7 +38,21 @@ from coordinator_core.ops.deliverable_cascade import (
 from coordinator_core.session import record_homes
 
 _CONTINUED = "continued"
-_DELIVERABLE_PREFIX = "dlv-"
+
+_SPINOFF_DETAIL = (
+    "kind is a spinoff — a spinoff's deliverable_id, even when it exact-matches this join, "
+    "is not its parent's deliverable"
+)
+_NO_ID_DETAIL = "baton carries no dlv- deliverable_id for advanced_by to join on"
+
+
+def _header_refusal(reason: ResidueReason) -> tuple[RefusalReason, str] | None:
+    """Map a `close_refusal` residue to the close_commit refusal that names it."""
+    if reason == ResidueReason.SPINOFF_KIND:
+        return RefusalReason.PREDICATE_REFUSED, _SPINOFF_DETAIL
+    if reason == ResidueReason.NO_DELIVERABLE_ID:
+        return RefusalReason.NO_DELIVERABLE_ID, _NO_ID_DETAIL
+    return None
 
 
 def _key(item: Any) -> tuple[Any, Any]:
@@ -71,6 +85,12 @@ def recheck(
             return RefusalReason.CLAIMED, "baton is claimed; refusing to close it out from under its claimant"
         if reason == ResidueReason.LIVE_SUCCESSOR.value:
             return RefusalReason.LIVE_SUCCESSOR, "a live baton names this one as its predecessor"
+        try:
+            mapped = _header_refusal(ResidueReason(reason))
+        except ValueError:
+            mapped = None
+        if mapped is not None:
+            return mapped
         return RefusalReason.EVIDENCE_STALE, f"close_report now reads this baton as residue: {reason}"
     return RefusalReason.EVIDENCE_STALE, "close_report now finds no done evidence for this baton"
 
@@ -207,10 +227,12 @@ def select(
 
         raw_id = fm.get("deliverable_id")
         did = raw_id.strip() if isinstance(raw_id, str) else ""
-        if not did.startswith(_DELIVERABLE_PREFIX):
-            refuse(i, rel, RefusalReason.NO_DELIVERABLE_ID,
-                   "baton carries no dlv- deliverable_id for advanced_by to join on", fresh_ev)
-            continue
+        header_refusal = close_refusal(fm.get("kind"), raw_id)
+        if header_refusal is not None:
+            mapped = _header_refusal(header_refusal)
+            if mapped is not None:
+                refuse(i, rel, mapped[0], mapped[1], fresh_ev)
+                continue
 
         early = _legs_c_a_refusal(
             worktree_root / rel, fm, repo_root, _HANDOFF_KIND, session_id

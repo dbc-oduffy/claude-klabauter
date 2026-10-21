@@ -23,6 +23,7 @@ def test_residue_reason_members():
     assert {m.value for m in c.ResidueReason} == {
         "target_unreadable", "target_unstatused", "target_missing", "live_successor",
         "claimed", "evidence_conflict", "unreadable_frontmatter",
+        "spinoff_kind", "no_deliverable_id",
     }
 
 

@@ -76,6 +76,7 @@ def test_unresolvable_sid_leaves_message_unchanged(tmp_path, monkeypatch):
 
 
 def test_trailer_path_does_not_import_content_root_or_temp_layout(tmp_path):
+    import os
     import sys
     from pathlib import Path
 
@@ -91,7 +92,7 @@ def test_trailer_path_does_not_import_content_root_or_temp_layout(tmp_path):
     )
     env = {
         "COORDINATOR_SESSION_ID": "11111111-2222-4333-8444-555555555555",
-        "PATH": __import__("os").environ.get("PATH", ""),
+        "PATH": os.environ.get("PATH", ""),
     }
     done = subprocess.run(
         [sys.executable, "-I", "-c", code, str(root), str(_repo(tmp_path))],

@@ -183,9 +183,16 @@ def test_reverse_predecessor_handoff_incl_backslash_and_crlf(tmp_path):
     assert B2 not in _batons(tmp_path, **{B2: {}})
 
 
-def test_reverse_spinoff_excluded_from_deliverable_join(tmp_path):
+def test_reverse_spinoff_gains_deliverable_item(tmp_path):
     _w(tmp_path, "docs/plans/a.md", "---\nstatus: implemented\ndeliverable_id: dlv-x\n---\n")
-    assert _batons(tmp_path, **{B1: {"deliverable_id": "dlv-x", "kind": "spinoff"}}) == {}
+    (ev,) = _batons(tmp_path, **{B1: {"deliverable_id": "dlv-x", "kind": "spinoff"}})[B1]
+    assert ev["field"] == "plan.deliverable_id" and ev["done"]
+
+
+def test_reverse_aliased_uppercase_spinoff_gains_deliverable_item(tmp_path):
+    _w(tmp_path, "docs/plans/a.md", "---\nstatus: implemented\ndeliverable_id: dlv-x\n---\n")
+    (ev,) = _batons(tmp_path, **{B1: {"deliverable_id": "dlv-x", "kind": "Spin-Off"}})[B1]
+    assert ev["field"] == "plan.deliverable_id" and ev["done"]
 
 
 def test_reverse_two_plans_one_deliverable_yield_two_items(tmp_path):

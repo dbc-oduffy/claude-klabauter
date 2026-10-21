@@ -31,6 +31,10 @@ class ResidueReason(str, Enum):
     CLAIMED = "claimed"
     EVIDENCE_CONFLICT = "evidence_conflict"
     UNREADABLE_FRONTMATTER = "unreadable_frontmatter"
+    # Mirrors close_commit's leg (d) predicate_refused: a spinoff's deliverable_id is not its parent's.
+    SPINOFF_KIND = "spinoff_kind"
+    # Mirrors close_commit's no_deliverable_id refusal: no dlv- join key for advanced_by.
+    NO_DELIVERABLE_ID = "no_deliverable_id"
 
 
 class Verdict(str, Enum):

@@ -18,6 +18,17 @@ def _git(repo, *args):
                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
 
 
+@pytest.fixture(autouse=True)
+def _restore_popen_hook():
+    """`build_report` patches `subprocess.Popen.__init__` process-wide; undo it per test."""
+    original = subprocess.Popen.__init__
+    hooked = clp._HOOKED
+    yield
+    subprocess.Popen.__init__ = original
+    clp._HOOKED = hooked
+    del clp._SPAWNS[:]
+
+
 @pytest.fixture
 def tiny_repo(tmp_path):
     repo = tmp_path / "r"
@@ -131,6 +142,7 @@ def test_commits_two_yields_two_distinct_commits(tiny_repo):
 def test_commits_two_with_memoise_does_not_serve_stale_head(tiny_repo):
     rep = clp.build_report(tiny_repo, "phased", 2, "off", memoise="commit.head_sha", commits=2)
     assert all(e["committed"] is True for e in rep["per_commit"])
+    assert rep["per_commit"][0]["sha"] != rep["per_commit"][1]["sha"]
 
 
 def test_rejects_zero_commits(tiny_repo):

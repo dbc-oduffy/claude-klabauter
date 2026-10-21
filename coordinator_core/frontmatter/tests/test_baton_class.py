@@ -8,8 +8,21 @@ from coordinator_core.frontmatter.baton_class import (
     _PRE_RENAME_ALIASES,
     _load_mapping,
     canonical_kind,
+    is_spinoff_kind,
     kind_values_for_canonical,
 )
+
+
+def test_is_spinoff_kind_true_for_every_spelling():
+    assert is_spinoff_kind("spinoff")
+    assert is_spinoff_kind(" Spinoff ")
+    for spelling in kind_values_for_canonical("spinoff"):
+        assert is_spinoff_kind(spelling)
+
+
+def test_is_spinoff_kind_false_for_other_kinds_and_empty():
+    for kind in ("session-handoff", "roadmap-baton", None, ""):
+        assert not is_spinoff_kind(kind)
 
 
 def test_canonical_kind_maps_each_retired_value_to_its_successor():

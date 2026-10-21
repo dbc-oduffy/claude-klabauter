@@ -7,8 +7,12 @@ import os
 import subprocess
 from pathlib import Path
 
+from coordinator_core import dag
+from coordinator_core.ops import baton_close_commit_check as chk
 from coordinator_core.ops import baton_close_report as op
 from coordinator_core.ops.baton_close_report_contract import OP_KEY, REPORT_KEYS
+from coordinator_core.ops.baton_close_report_readers import read_baton_headers, successor_index
+from coordinator_core.ops.baton_close_report_targets import target_evidence
 
 
 def _write(root: Path, rel: str, text: str) -> None:
@@ -17,8 +21,9 @@ def _write(root: Path, rel: str, text: str) -> None:
     p.write_bytes(text.encode("utf-8"))
 
 
-def _baton(status: str = "open", extra: str = "") -> str:
-    return f"---\ntitle: t\nstatus: {status}\n{extra}---\n\nbody\n"
+def _baton(status: str = "open", extra: str = "", did: str | None = "dlv-t") -> str:
+    did_line = f"deliverable_id: {did}\n" if did else ""
+    return f"---\ntitle: t\nstatus: {status}\n{did_line}{extra}---\n\nbody\n"
 
 
 def _fixture(root: Path) -> None:
@@ -113,7 +118,7 @@ def _by_name(items: list[dict]) -> dict[str, dict]:
 def test_reverse_implemented_plan_by_deliverable_id_is_closable(tmp_path: Path) -> None:
     root = _reverse_root(tmp_path)
     _write(root, "docs/plans/p.md", _plan("implemented", "deliverable_id: dlv-a\n"))
-    _write(root, "state/handoffs/b.md", _baton(extra="deliverable_id: dlv-a\n"))
+    _write(root, "state/handoffs/b.md", _baton(did="dlv-a"))
     rep = _run(root)
     assert [c["handoff_path"] for c in rep["closable"]] == ["state/handoffs/b.md"]
     ev = rep["closable"][0]["evidence"]
@@ -124,7 +129,7 @@ def test_reverse_implemented_plan_by_deliverable_id_is_closable(tmp_path: Path) 
 def test_reverse_landed_plan_stays_no_evidence(tmp_path: Path) -> None:
     root = _reverse_root(tmp_path)
     _write(root, "docs/plans/p.md", _plan("landed", "deliverable_id: dlv-a\n"))
-    _write(root, "state/handoffs/b.md", _baton(extra="deliverable_id: dlv-a\n"))
+    _write(root, "state/handoffs/b.md", _baton(did="dlv-a"))
     rep = _run(root)
     assert rep["closable"] == [] and rep["residue"] == []
     assert rep["no_evidence"] == 1
@@ -139,20 +144,95 @@ def test_reverse_predecessor_handoff_is_closable(tmp_path: Path) -> None:
     assert [e["field"] for e in rep["closable"][0]["evidence"]] == ["plan.predecessor_handoff"]
 
 
-def test_reverse_spinoff_baton_not_closed_by_deliverable_join(tmp_path: Path) -> None:
+def test_reverse_spinoff_baton_reads_spinoff_residue_with_join_evidence(tmp_path: Path) -> None:
     root = _reverse_root(tmp_path)
     _write(root, "docs/plans/p.md", _plan("implemented", "deliverable_id: dlv-a\n"))
-    _write(root, "state/handoffs/s.md", _baton(extra="deliverable_id: dlv-a\nkind: spinoff\n"))
+    _write(root, "state/handoffs/s.md", _baton(did="dlv-a", extra="kind: spinoff\n"))
     rep = _run(root)
-    assert rep["closable"] == [] and rep["residue"] == []
-    assert rep["no_evidence"] == 1
+    assert rep["closable"] == [] and rep["no_evidence"] == 0
+    assert [(r["handoff_path"], r["reason"]) for r in rep["residue"]] == [
+        ("state/handoffs/s.md", "spinoff_kind")
+    ]
+    assert [e["field"] for e in rep["residue"][0]["evidence"]] == ["plan.deliverable_id"]
+
+
+def test_spinoff_with_done_governing_plan_is_residue_not_closable(tmp_path: Path) -> None:
+    root = _reverse_root(tmp_path)
+    _write(root, "docs/plans/done.md", _plan("implemented"))
+    _write(root, "state/handoffs/s.md",
+           _baton(extra="kind: spinoff\ngoverning_plan: docs/plans/done.md\n"))
+    rep = _run(root)
+    assert rep["closable"] == []
+    assert [(r["handoff_path"], r["reason"]) for r in rep["residue"]] == [
+        ("state/handoffs/s.md", "spinoff_kind")
+    ]
+
+
+def test_non_dlv_baton_with_done_evidence_is_no_deliverable_id_residue(tmp_path: Path) -> None:
+    root = _reverse_root(tmp_path)
+    _write(root, "docs/plans/done.md", _plan("implemented"))
+    _write(root, "state/handoffs/n.md",
+           _baton(did=None, extra="governing_plan: docs/plans/done.md\n"))
+    rep = _run(root)
+    assert rep["closable"] == []
+    assert [(r["handoff_path"], r["reason"]) for r in rep["residue"]] == [
+        ("state/handoffs/n.md", "no_deliverable_id")
+    ]
+
+
+def test_shared_predicate_parity_with_close_commit(tmp_path: Path) -> None:
+    root = _reverse_root(tmp_path)
+    _write(root, "docs/plans/done.md", _plan("implemented"))
+    gp = "governing_plan: docs/plans/done.md\ndeployment_state: ready_to_fire\n"
+    _write(root, "state/handoffs/plain.md", _baton(did="dlv-plain-1", extra=gp))
+    _write(root, "state/handoffs/spin.md", _baton(did="dlv-spin-1", extra=gp + "kind: spinoff\n"))
+    _write(root, "state/handoffs/alias.md", _baton(did="dlv-alias-1", extra=gp + "kind: ' Spinoff '\n"))
+    _write(root, "state/handoffs/nodlv.md", _baton(did="abc-1", extra=gp))
+    _write(root, "state/handoffs/noid.md", _baton(did=None, extra=gp))
+    _write(root, "state/handoffs/spin-nodlv.md", _baton(did=None, extra=gp + "kind: spinoff\n"))
+    rep = _run(root)
+    assert [c["handoff_path"] for c in rep["closable"]] == ["state/handoffs/plain.md"]
+    assert len(rep["residue"]) == 5
+
+    headers, _ = read_baton_headers(str(root))
+    rels = sorted(headers)
+    fms = {r: dag._read_meta(str(root / r)) for r in rels}
+    texts = {
+        os.path.abspath(p): p.read_text(encoding="utf-8")
+        for p in (root / "state" / "handoffs").glob("*.md")
+    }
+    fresh = target_evidence(str(root), headers)
+    succ = successor_index(headers)
+
+    def _select(rows: list[dict]):
+        return chk.select(rows, headers, succ, fresh, fms, texts, root / ".git", root)
+
+    closable_rows = [
+        {"handoff_path": c["handoff_path"], "evidence": c["evidence"]} for c in rep["closable"]
+    ]
+    flips, refused, _ = _select(closable_rows)
+    assert refused == []
+    assert [f["path"] for f in flips] == ["state/handoffs/plain.md"]
+
+    residue_rows = [
+        {"handoff_path": r["handoff_path"], "evidence": r["evidence"]} for r in rep["residue"]
+    ]
+    flips, refused, _ = _select(residue_rows)
+    assert flips == []
+    assert {r["handoff_path"].rsplit("/", 1)[1]: r["reason"] for r in refused} == {
+        "spin.md": "predicate_refused",
+        "alias.md": "predicate_refused",
+        "nodlv.md": "no_deliverable_id",
+        "noid.md": "no_deliverable_id",
+        "spin-nodlv.md": "no_deliverable_id",
+    }
 
 
 def test_reverse_implemented_and_draft_plans_conflict(tmp_path: Path) -> None:
     root = _reverse_root(tmp_path)
     _write(root, "docs/plans/p1.md", _plan("implemented", "deliverable_id: dlv-a\n"))
     _write(root, "docs/plans/p2.md", _plan("draft", "deliverable_id: dlv-a\n"))
-    _write(root, "state/handoffs/b.md", _baton(extra="deliverable_id: dlv-a\n"))
+    _write(root, "state/handoffs/b.md", _baton(did="dlv-a"))
     rep = _run(root)
     assert rep["closable"] == []
     assert [(r["handoff_path"], r["reason"]) for r in rep["residue"]] == [
@@ -163,8 +243,8 @@ def test_reverse_implemented_and_draft_plans_conflict(tmp_path: Path) -> None:
 def test_reverse_shared_deliverable_id_across_batons_stays_no_evidence(tmp_path: Path) -> None:
     root = _reverse_root(tmp_path)
     _write(root, "docs/plans/p.md", _plan("implemented", "deliverable_id: dlv-a\n"))
-    _write(root, "state/handoffs/b1.md", _baton(extra="deliverable_id: dlv-a\n"))
-    _write(root, "state/handoffs/b2.md", _baton(extra="deliverable_id: dlv-a\n"))
+    _write(root, "state/handoffs/b1.md", _baton(did="dlv-a"))
+    _write(root, "state/handoffs/b2.md", _baton(did="dlv-a"))
     rep = _run(root)
     assert rep["closable"] == [] and rep["residue"] == []
     assert rep["no_evidence"] == 2

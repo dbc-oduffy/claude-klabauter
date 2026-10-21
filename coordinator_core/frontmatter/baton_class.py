@@ -216,3 +216,14 @@ def kind_values_for_canonical(canonical: str) -> list[str]:
         if target == canonical:
             values.append(retired)
     return values
+
+
+SPINOFF_KINDS: frozenset[str] = frozenset(kind_values_for_canonical("spinoff"))
+
+
+def is_spinoff_kind(kind: Optional[str]) -> bool:
+    """True when `kind` is a spinoff in any spelling (case/whitespace
+    normalised, retired aliases de-aliased). The one spinoff membership test
+    shared by close_commit's leg (d) and baton.close_report. No schema load.
+    """
+    return canonical_kind(kind) in SPINOFF_KINDS

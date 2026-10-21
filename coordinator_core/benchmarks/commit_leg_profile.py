@@ -13,7 +13,9 @@ signing configuration as git resolves it.
 Output is one JSON object: `mode, sign, paths, head, committed, sha, parent_ms, children_ms,
 spawns, phases, per_commit`. `--sub-phases` adds `sub_phases` and `sub_counts` (nested
 brackets, never summed into `parent_ms`); `--commits K` runs K sequential commits and
-`per_commit` carries one entry each, the base keys staying the first commit's. `parent_ms` brackets the `commit_paths` call in this process;
+`per_commit` carries one entry each, the base keys staying the first commit's. `--memoise` adds
+`memoised` and `memoise_served`; `--with-caller` adds `caller_phases`; a failed commit adds
+`error`. `parent_ms` brackets the `commit_paths` call in this process;
 `children_ms` is the process time of every descendant it spawned. Phases are
 `time.process_time` brackets, never cProfile (DR-368: cProfile inflates with call count);
 `cprofile` mode adds a `calls` key and is for call counts only.
@@ -307,13 +309,11 @@ def _instrument(acc: Dict[str, float], counts: Dict[str, int],
                         return cache[key]
                     finally:
                         acc[label] += time.process_time() - t
-                        counts[label] += 1
                 t = time.process_time()
                 try:
                     return fn(*a, **k)
                 finally:
                     acc[label] += time.process_time() - t
-                    counts[label] += 1
             return wrapper
 
         setattr(mod, attr, make())

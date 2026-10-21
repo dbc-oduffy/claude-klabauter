@@ -7,7 +7,7 @@ call in this process plus every descendant it spawned), process time via `time.p
 brackets and the descendant accountant, never wall clock.
 
 SHAPE. Five fresh clones per arm would be the exit evidence; this gate takes
-`_RUNS_PER_ARM` and asserts the median, because one commit consumes its clone. Each run is
+`_RUNS_PER_ARM` and asserts the median, because one commit consumes its clone (the plan's five-clone falsifier run is out of band). Each run is
 `python -I commit_leg_profile.py <clone> phased --paths 30 --sign <arm>`.
 
 ARMS. `off` writes `commit.gpgsign=false` into the clone and asserts the bound and

@@ -317,8 +317,6 @@ class _LazyOffsets(Sequence):
         return self._count
 
     def __getitem__(self, i):  # type: ignore[override]
-        if isinstance(i, slice):
-            return [self[j] for j in range(*i.indices(self._count))]
         if i < 0:
             i += self._count
         if not 0 <= i < self._count:
@@ -457,6 +455,8 @@ def _parse_pack_index_uncached(idx_path: Path) -> Optional[_PackIndex]:
     shas = data[pos : pos + count * 20]
     pos += count * 20
     pos += count * 4
+    if len(data) < pos + count * 4:
+        return None  # truncated: the lazy table would otherwise raise struct.error at lookup, not parse
     offsets = _LazyOffsets(data, pos, count)
     return _PackIndex(idx_path.with_suffix(".pack"), fanout, shas, offsets)
 
