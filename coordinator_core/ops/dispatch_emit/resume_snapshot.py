@@ -1,15 +1,17 @@
-"""Resume snapshot: the plan row ids the gate read as not to run on a re-fire.
+"""Resume snapshot: the gate's view of a row resume, as two row-id sets.
 
-The gate writes `<repo>/scratch/warp/<run_id>/resume-snapshot.json`; the stage reads it so a
-re-plan's added rows are staged while landed or closed rows stay dropped. Leaf module: no
-subprocess, no import from terminal_commit or ask_compose.
+`not_to_run` is the plan row ids the gate read as landed or closed; `resume_rows` is the ids it
+handed the stage to run. The gate writes `<repo>/scratch/warp/<run_id>/resume-snapshot.json`; the
+stage reads it so a re-plan's added rows are staged, landed or closed rows stay dropped, and a
+resume row the re-plan retired is told apart from an unknown id. Leaf module: no subprocess, no
+import from terminal_commit or ask_compose.
 """
 
 from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Iterable, Optional
+from typing import Iterable, NamedTuple, Optional
 
 from coordinator_core.ops._path_guard import contained_path, safe_id
 from coordinator_core.ops.dispatch_emit.ask_contract import RUN_DIR_ROOT
@@ -28,12 +30,26 @@ def _snapshot_path(repo_root: Path, run_id: str) -> Optional[Path]:
     return run_dir / SNAPSHOT_NAME
 
 
-def write(repo_root: Path, run_id: str, plan_rel: str, not_to_run: Iterable[str]) -> Optional[Path]:
+class Snapshot(NamedTuple):
+    """What the gate read in one file: `not_to_run` is the gate-time spine ids minus `resume_rows`;
+    `resume_rows` is the gate's own resume rows (empty for a snapshot written before the key existed)."""
+
+    not_to_run: frozenset
+    resume_rows: frozenset
+
+
+def write(
+    repo_root: Path, run_id: str, plan_rel: str, not_to_run: Iterable[str], resume_rows: Iterable[str]
+) -> Optional[Path]:
     """Write the snapshot; return its path, or None (nothing written) for an unsafe run_id or an unwritable run dir."""
     path = _snapshot_path(repo_root, run_id)
     if path is None:
         return None
-    body = {"plan": plan_rel, "not_to_run": sorted(set(not_to_run))}
+    body = {
+        "plan": plan_rel,
+        "not_to_run": sorted(set(not_to_run)),
+        "resume_rows": sorted(set(resume_rows)),
+    }
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(body, indent=2) + "\n", encoding="utf-8")
@@ -42,8 +58,9 @@ def write(repo_root: Path, run_id: str, plan_rel: str, not_to_run: Iterable[str]
     return path
 
 
-def read(repo_root: Path, run_id: str, plan_rel: str) -> Optional[frozenset]:
-    """The not-to-run row ids; None when absent, unreadable, malformed or naming another plan."""
+def read(repo_root: Path, run_id: str, plan_rel: str) -> Optional[Snapshot]:
+    """The snapshot; None when absent, unreadable, malformed or naming another plan. A body without
+    "resume_rows" reads `resume_rows=frozenset()`."""
     path = _snapshot_path(repo_root, run_id)
     if path is None:
         return None
@@ -56,7 +73,10 @@ def read(repo_root: Path, run_id: str, plan_rel: str) -> Optional[frozenset]:
     rows = body.get("not_to_run")
     if not isinstance(rows, list) or not all(isinstance(r, str) for r in rows):
         return None
-    return frozenset(rows)
+    resume = body.get("resume_rows", [])
+    if not isinstance(resume, list) or not all(isinstance(r, str) for r in resume):
+        return None
+    return Snapshot(frozenset(rows), frozenset(resume))
 
 
 def clear(repo_root: Path, run_id: str) -> None:

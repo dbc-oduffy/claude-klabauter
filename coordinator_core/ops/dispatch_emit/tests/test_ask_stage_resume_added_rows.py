@@ -53,7 +53,7 @@ def _replanned(extra_row: str = "") -> str:
 
 def test_added_rows_stage_and_dependant_waits(tmp_path):
     _plan(tmp_path, _replanned())
-    resume_snapshot.write(tmp_path, RUN, PLAN_REL, ["C20"])
+    resume_snapshot.write(tmp_path, RUN, PLAN_REL, ["C20"], ["C21"])
     reply = _stage(tmp_path, ["C21"])
     assert "error" not in reply
     rows = {r["id"]: r for r in reply["rows"]}
@@ -64,7 +64,7 @@ def test_added_rows_stage_and_dependant_waits(tmp_path):
 
 def test_not_to_run_row_is_never_staged_and_its_edge_is_stripped(tmp_path):
     _plan(tmp_path, _replanned())
-    resume_snapshot.write(tmp_path, RUN, PLAN_REL, ["C20"])
+    resume_snapshot.write(tmp_path, RUN, PLAN_REL, ["C20"], ["C21"])
     reply = _stage(tmp_path, ["C21"])
     assert "C20" not in {r["id"] for r in reply["rows"]}
     rows = {r["id"]: r for r in reply["rows"]}
@@ -73,7 +73,7 @@ def test_not_to_run_row_is_never_staged_and_its_edge_is_stripped(tmp_path):
 
 def test_added_em_row_appears_owed(tmp_path):
     _plan(tmp_path, _replanned(_row("E9", "  performer: em\n")))
-    resume_snapshot.write(tmp_path, RUN, PLAN_REL, ["C20"])
+    resume_snapshot.write(tmp_path, RUN, PLAN_REL, ["C20"], ["C21"])
     reply = _stage(tmp_path, ["C21"])
     assert [o["id"] for o in reply["owed"]] == ["E9"]
 
@@ -87,13 +87,13 @@ def test_without_snapshot_only_rows_is_an_exact_set(tmp_path):
 
 def test_snapshot_for_another_plan_is_ignored(tmp_path):
     _plan(tmp_path, _replanned())
-    resume_snapshot.write(tmp_path, RUN, "docs/plans/other.md", ["C20"])
+    resume_snapshot.write(tmp_path, RUN, "docs/plans/other.md", ["C20"], ["C21"])
     reply = _stage(tmp_path, ["C21"])
     assert [r["id"] for r in reply["rows"]] == ["C21"]
 
 
 def test_only_rows_id_missing_from_plan_still_refuses(tmp_path):
     _plan(tmp_path, _replanned())
-    resume_snapshot.write(tmp_path, RUN, PLAN_REL, ["C20"])
+    resume_snapshot.write(tmp_path, RUN, PLAN_REL, ["C20"], ["C21"])
     reply = _stage(tmp_path, ["C99"])
     assert "C99" in str(reply.get("error", reply))

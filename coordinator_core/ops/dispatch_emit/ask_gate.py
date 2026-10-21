@@ -596,7 +596,9 @@ def _record_resume_snapshot(root: Path, run_id: str, verdict: GateVerdict) -> No
             result = None
         if result is not None and result.status is LocateStatus.LOCATED:
             ids = {r["id"] for r in result.rows if isinstance(r, dict) and isinstance(r.get("id"), str)}
-            resume_snapshot.write(root, run_id, verdict.resume_plan, ids - set(verdict.resume_rows))
+            resume_snapshot.write(
+                root, run_id, verdict.resume_plan, ids - set(verdict.resume_rows), verdict.resume_rows
+            )
             return
     resume_snapshot.clear(root, run_id)
 

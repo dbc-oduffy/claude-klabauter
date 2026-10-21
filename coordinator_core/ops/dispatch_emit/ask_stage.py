@@ -392,17 +392,23 @@ def _sibling_owner_rows(plan_rows: Sequence[Mapping], sibling_roots: Mapping[str
 
 
 def _only_rows(
-    rows: list, exclusions: list, keep: frozenset, not_to_run: Optional[frozenset] = None
-) -> tuple[list, list]:
-    """The resume subset of a spine read: `keep` rows only, edges onto the dropped (landed) rows
-    stripped, and only `keep` rows among the owed/gated exclusions. With `not_to_run` (the gate's
-    snapshot), every known row outside it is kept, rows a re-plan added included."""
+    rows: list, exclusions: list, keep: frozenset, snap: Optional[resume_snapshot.Snapshot] = None
+) -> tuple[list, list, tuple[str, ...]]:
+    """The resume subset of a spine read, and the resume rows a re-plan retired: `keep` rows only,
+    edges onto the dropped (landed) rows stripped, and only `keep` rows among the owed/gated
+    exclusions. With `snap` (the gate's snapshot), every known row outside `snap.not_to_run` is
+    kept, rows a re-plan added included. A `keep` id the spine lacks but `snap.resume_rows` names
+    is retired: reported, never staged, never refused. Any other missing id refuses."""
     known = {r.id for r in rows} | {e.get("id") for e in exclusions}
-    unknown = keep - known
-    if unknown:
-        raise AskStageError(f"resume row id(s) not in the plan's spine: {sorted(unknown)}")
-    if not_to_run is not None:
-        keep = frozenset(known - not_to_run)
+    missing = keep - known
+    retired: tuple[str, ...] = ()
+    if snap is not None:
+        retired = tuple(sorted(missing & snap.resume_rows))
+        missing = missing - snap.resume_rows
+    if missing:
+        raise AskStageError(f"resume row id(s) not in the plan's spine: {sorted(missing)}")
+    if snap is not None:
+        keep = frozenset(known - snap.not_to_run)
     landed = known - keep
     kept = []
     for row in rows:
@@ -410,7 +416,7 @@ def _only_rows(
             continue
         edges = [e for e in row.depends_on if not (isinstance(e, dict) and e.get("chunk") in landed)]
         kept.append(row._replace(depends_on=edges) if len(edges) != len(row.depends_on) else row)
-    return kept, [e for e in exclusions if e.get("id") in keep]
+    return kept, [e for e in exclusions if e.get("id") in keep], retired
 
 
 def _memo_draft_steps(
@@ -565,7 +571,8 @@ def stage(
     """Stage the run for `plan_rel`, or for the XS sizing `sizing_rel` (minted to X1 over `writes`).
 
     `only_rows` (a resume: the halted plan's incomplete row ids) stages just those rows; the rest
-    are landed, so an edge onto one is satisfied. A resume whose rows are all owed or gated
+    are landed, so an edge onto one is satisfied. A resume row the re-plan retired is reported in the
+    manifest's `retired_resume_rows`, not refused. A resume whose rows are all owed or gated
     returns a manifest with no rows and the owed/gated lists.
     `ledger_resume=True` (an all-landed plan resumed at its ledger) admits a spine with zero
     dispatchable rows and returns a whole manifest with rows []; the default refuses it.
@@ -627,8 +634,9 @@ def stage(
         )
     except InvalidChangeKindError as exc:
         raise AskStageError(f"INVALID-CHANGE-KIND: {plan_posix}: {exc}") from exc
+    retired_resume: tuple[str, ...] = ()
     if only_rows is not None:
-        rows, exclusions = _only_rows(
+        rows, exclusions, retired_resume = _only_rows(
             rows, exclusions, frozenset(only_rows), resume_snapshot.read(root, run_id, plan_posix)
         )
     check_unschedulable_rows(rows, raw_by_id)
@@ -791,6 +799,7 @@ def stage(
         rulable_ids=rulable_ids(register_rows),
         ledger_item_ids=ledger_item_ids,
         withheld_ids=withheld_ids,
+        retired_resume_rows=retired_resume,
     )
     reply_sidecar.write_reply(root, record / "manifest.json", manifest_payload(root, manifest))
     if session_id:

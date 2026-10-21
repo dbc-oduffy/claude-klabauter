@@ -851,6 +851,9 @@ class StageManifest:
     #: (`requirements_ledger.ledger_ids`); an absent key reads as ``()``.
     ledger_item_ids: tuple[str, ...] = ()
     withheld_ids: tuple[str, ...] = ()
+    #: Sorted gate resume rows the re-planned spine no longer carries: reported, never staged;
+    #: an absent key reads as ``()``.
+    retired_resume_rows: tuple[str, ...] = ()
     #: The staged rows' `fanout_cost.FanoutCost.meta_dict()` (agents, basis, groups); None when unset.
     fanout: dict[str, Any] | None = None
 
@@ -865,6 +868,7 @@ class StageManifest:
             "rulable_ids": list(self.rulable_ids),
             "ledger_item_ids": list(self.ledger_item_ids),
             "withheld_ids": list(self.withheld_ids),
+            "retired_resume_rows": list(self.retired_resume_rows),
             "owed": [o.to_json() for o in self.owed],
             "engine_rows": [dict(r) for r in self.engine_rows],
             "plan_id": self.plan_id,
@@ -895,5 +899,6 @@ class StageManifest:
             rulable_ids=tuple(data.get("rulable_ids") or ()),
             ledger_item_ids=tuple(data.get("ledger_item_ids") or ()),
             withheld_ids=tuple(data.get("withheld_ids") or ()),
+            retired_resume_rows=tuple(data.get("retired_resume_rows") or ()),
             fanout=dict(data["fanout"]) if data.get("fanout") else None,
         )
