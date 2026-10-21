@@ -59,17 +59,16 @@ from __future__ import annotations
 import importlib.util
 import json
 import logging
-import subprocess
 import sys
 from functools import partial
 from pathlib import Path
 from typing import Dict, Iterable, List, Mapping, Optional, Tuple
 
 from coordinator_core.git.commit import checkin_sizes, hash_worktree_blobs_via_spawn
+from coordinator_core.git import published_tree_classification
 from coordinator_core.git.git_dir import resolve_git_common_dir
 from coordinator_core.git.git_objects import read_object
 from coordinator_core.git.git_state import _parse_tree_entries, head_blobs, read_tree_spine
-from coordinator_core.win_portability import no_console_creationflags
 from coordinator_core.hooks.claude_md_ledger import (
     GOVERNED_AUTHORING_SURFACES,
     admission_check_for_surface,
@@ -124,12 +123,8 @@ def governed_surface_refusal(root: Path, assembled: Mapping[str, object]) -> Opt
 
 
 #: Source dirs of the published rows whose field-7 allowlist is generated from
-#: the tracked top-level names (mirrors `_ROWS` in
-#: coordinator/bin/publish-allowlist-generate.py, which is hyphen-named and so
-#: not importable here).
+#: the tracked top-level names (the source dirs of `published_tree_classification._ROWS`).
 _PUBLISHED_ROW_SOURCE_DIRS = ("coordinator_core", "coordinator/bin")
-_ALLOWLIST_GENERATOR = "coordinator/bin/publish-allowlist-generate.py"
-_ALLOWLIST_TIMEOUT_S = 20
 
 
 def _new_top_level_names(root: Path, assembled: Mapping[str, object]) -> Dict[str, List[str]]:
@@ -160,50 +155,46 @@ def _new_top_level_names(root: Path, assembled: Mapping[str, object]) -> Dict[st
 
 def publish_allowlist_drift_refusal(root: Path, assembled: Mapping[str, object]) -> Optional[str]:
     """Refuse a commit that adds a top-level name under a published row's source
-    dir while the generated field-7 allowlist does not cover it.
+    dir while the landing allowlist (field 7 of its `publish-targets.portable`
+    row) neither lists nor denies it.
 
-    Spawns the generator's `--check` only when such a name is added, so the
-    ordinary commit pays nothing. Fails open on a plumbing failure (generator
-    absent, timeout, unreadable tree); only measured drift refuses."""
+    In-process and spawn-free: the same pure classifier `git.commit.commit_paths`
+    applies, reading landing bytes from the worktree for a path this commit
+    carries and from HEAD's blob otherwise. Fails open on a plumbing failure
+    (unreadable tree or blob); only a measured unclassified name refuses."""
     root = Path(root)
-    script = root / _ALLOWLIST_GENERATOR
-    if not script.is_file():
+    if not (root / published_tree_classification.DECLARATIONS_PATH).is_file():
         return None
     try:
         added = _new_top_level_names(root, assembled)
         if not added:
             return None
-        pending = [
-            arg
-            for p, entry in assembled.items()
-            if isinstance(entry, tuple) and p.split("/", 1)[0] in ("coordinator_core", "coordinator")
-            for arg in ("--pending", p)
-        ]
-        result = subprocess.run(
-            [sys.executable, str(script), "--check", *pending],
-            cwd=str(root),
-            capture_output=True,
-            text=True,
-            errors="replace",
-            timeout=_ALLOWLIST_TIMEOUT_S,
-            **no_console_creationflags(),
-        )
+        row_by_dir = {sub: row for row, sub in published_tree_classification._ROWS}
+        touched = {row_by_dir[src]: frozenset(names) for src, names in added.items()}
+
+        def _read_landing(rel: str) -> Optional[str]:
+            if rel in assembled:
+                return (root / rel).read_text(encoding="utf-8")
+            entry = head_blobs(root, [rel]).get(rel)
+            if entry is None:
+                return None
+            obj = read_object(resolve_git_common_dir(root), entry[1])
+            return None if obj is None else obj[1].decode("utf-8")
+
+        refused = published_tree_classification.unclassified(touched, _read_landing)
     except Exception as exc:  # noqa: BLE001 -- fail open, like the skill-weight leg.
         _LOG.warning("publish-allowlist drift check did not run: %s", exc)
         return None
-    if result.returncode == 0:
+    if not refused:
         return None
-    if "Traceback (most recent call last)" in (result.stderr or ""):
-        _LOG.warning("publish-allowlist generator crashed; drift not measured")
-        return None
-    names = ", ".join(f"{src}/{n}" for src, ns in added.items() for n in ns)
-    detail = (result.stderr or result.stdout).strip()
+    subdirs = dict(published_tree_classification._ROWS)
+    names = ", ".join(f"{subdirs[row]}/{name}" for row, name in refused)
     return (
         f"publish allowlist drift: this commit adds {names}, and field 7 of "
         "setup/publish-targets.portable does not cover it.\n"
-        f"{detail}\n"
         "Remedy: run coordinator/bin/publish-allowlist-generate.py (no --check), "
-        "and include setup/publish-targets.portable in the commit."
+        "and include setup/publish-targets.portable in the commit, or add the name "
+        "to the row's deny in setup/publish-allowlist-declarations.yaml."
     )
 
 

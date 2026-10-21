@@ -8,6 +8,7 @@ import pytest
 
 from coordinator_core import env_locality
 from coordinator_core.env_locality import Locality
+from coordinator_core.group_em import suite_grant
 from coordinator_core.session import grant, suite_authority as sa
 
 CLOUD = Locality("cloud", "high", "machine", "t")
@@ -72,6 +73,49 @@ def test_machine_rung_exception_reads_not_cloud(monkeypatch):
 
     monkeypatch.setattr(env_locality, "machine_rung", boom)
     assert sa.cloud_box_basis(REMOTE) is None
+
+
+@pytest.fixture(autouse=True)
+def _no_group_em_grant_by_default(monkeypatch):
+    monkeypatch.setattr(suite_grant, "check_group_em_suite_grant",
+                        lambda *a, **k: (False, None))
+
+
+def test_group_em_grant_basis(monkeypatch):
+    _rung(monkeypatch, ATTENDED)
+    rec = {"issuer_name": "g"}
+    monkeypatch.setattr(grant, "check_tier_u_grant", lambda *a, **k: (False, None))
+    monkeypatch.setattr(suite_grant, "check_group_em_suite_grant",
+                        lambda *a, **k: (True, rec))
+    assert sa.suite_authority(env={}) == (True, "group-em-grant", rec)
+    assert "BASIS_GROUP_EM" in sa.__all__
+
+
+def test_pm_grant_wins_over_group_em(monkeypatch):
+    _rung(monkeypatch, ATTENDED)
+    monkeypatch.setattr(grant, "check_tier_u_grant", lambda *a, **k: (True, {"p": 1}))
+    monkeypatch.setattr(suite_grant, "check_group_em_suite_grant",
+                        lambda *a, **k: (True, {"g": 1}))
+    assert sa.suite_authority(env={}) == (True, "grant", {"p": 1})
+
+
+def test_cloud_wins_over_both(monkeypatch):
+    _rung(monkeypatch, CLOUD)
+    monkeypatch.setattr(grant, "check_tier_u_grant", lambda *a, **k: (True, {"p": 1}))
+    monkeypatch.setattr(suite_grant, "check_group_em_suite_grant",
+                        lambda *a, **k: (True, {"g": 1}))
+    assert sa.suite_authority(env=REMOTE) == (True, "cloud-box", None)
+
+
+def test_group_em_exception_fails_closed(monkeypatch):
+    _rung(monkeypatch, ATTENDED)
+    monkeypatch.setattr(grant, "check_tier_u_grant", lambda *a, **k: (False, None))
+
+    def boom(*a, **k):
+        raise OSError("x")
+
+    monkeypatch.setattr(suite_grant, "check_group_em_suite_grant", boom)
+    assert sa.suite_authority(env={}) == (False, None, None)
 
 
 def test_suite_authority_cloud_no_grant(monkeypatch):

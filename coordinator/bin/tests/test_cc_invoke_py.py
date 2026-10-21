@@ -1106,6 +1106,23 @@ class TestRouteMutation(unittest.TestCase):
         self.assertIn("child stderr (may include non-fatal/succeeding-leg output):", message)
         self.assertNotIn("\n  op stderr:", message)
 
+    def test_repeated_op_stderr_reason_appears_once_in_the_message(self) -> None:
+        """One setup-error reason reaches stderr via the logger, a direct write and
+        the invoke wrapper's `FAILED in-band` restatement; the message names it once."""
+        reason = "fleet op setup error: memo.draft: summary is 300 chars, cap is 240"
+        raw = (
+            f"{reason}\n{reason}\n\n"
+            f"[invoke] memo.draft FAILED in-band: result exit_code=1 with process "
+            f"exit 0; the stdout JSON carries no reason. Reason: {reason}"
+        )
+
+        message = _mod.mutation_refusal_message(
+            "memo.draft", {"exit_code": 1, "failed": []}, op_stderr=raw
+        )
+
+        self.assertEqual(message.count("summary is 300 chars, cap is 240"), 1)
+        self.assertNotIn("FAILED in-band", message)
+
 
 # ---------------------------------------------------------------------------
 # _seam_present — direct unit tests (F4)

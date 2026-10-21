@@ -38,6 +38,14 @@ def _record(**extra) -> dict:
     return {"profile": "bug", "run_id": "r", "counts": {}, "spend": {}, "handed_back": [], "halted": False, **extra}
 
 
+def _relay_args(token_flag: str, prefix: str, token: str) -> list[str]:
+    """`--<token_flag> TOKEN --<prefix>-len N --<prefix>-sha256 H` as the drain sends it."""
+    from coordinator_core.ops.dispatch_emit import grind_commit_contract as contract
+
+    n, h = contract.relay_digest(token)
+    return [f"--{token_flag}", token, f"--{prefix}-len", str(n), f"--{prefix}-sha256", h]
+
+
 def _sha256(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
@@ -706,13 +714,75 @@ class TestRunRecordVerb:
         exit_code = grind_rows.main(
             [
                 "run-record", "--profile", "bug", "--run-id", "20260922T000000Z",
-                "--record-urlenc", quote(json.dumps(record), safe=""),
+                *_relay_args("record-urlenc", "record", quote(json.dumps(record), safe="")),
                 "--repo-root", str(tmp_path),
             ]
         )
         assert exit_code == grind_rows.EXIT_OK
         target = tmp_path / "state" / "queue-grind" / "bug" / "runs" / "20260922T000000Z.json"
         assert json.loads(target.read_text(encoding="utf-8")) == record
+
+    def _corrupt_token(self):
+        from urllib.parse import quote
+
+        token = quote(json.dumps(_record(note="x")), safe="")
+        assert "%7D%7D" in token or token.endswith("%7D")
+        pos = token.rindex("%7D")
+        return token, token[:pos] + token[pos + 1:]
+
+    def test_dropped_char_in_record_token_is_refused_before_any_write(self, tmp_path, capsys):
+        from coordinator_core.ops.dispatch_emit import grind_commit_contract as contract
+
+        good, bad = self._corrupt_token()
+        args = _relay_args("record-urlenc", "record", good)
+        args[1] = bad
+        exit_code = grind_rows.main(
+            ["run-record", "--profile", "p", "--run-id", "r", *args, "--repo-root", str(tmp_path)]
+        )
+        err = capsys.readouterr().err
+        assert exit_code == grind_rows.EXIT_RELAY_CORRUPT
+        assert err.startswith(contract.RELAY_CORRUPT_HEAD)
+        assert "--record-urlenc" in err
+        assert not (tmp_path / "state").exists()
+
+    def test_dropped_char_in_declared_token_is_refused_before_any_write(self, tmp_path, capsys):
+        from coordinator_core.ops.dispatch_emit import grind_commit_contract as contract
+
+        from urllib.parse import quote
+
+        good = contract.encode_declared_paths(["state/sizings/s.yaml"])
+        args = _relay_args(contract.DECLARED_FLAG, "declared", good)
+        args[1] = good[:-1]
+        exit_code = grind_rows.main(
+            [
+                "run-record", "--profile", "p", "--run-id", "r",
+                *_relay_args("record-urlenc", "record", quote(json.dumps(_record()), safe="")),
+                *args, "--repo-root", str(tmp_path),
+            ]
+        )
+        err = capsys.readouterr().err
+        assert exit_code == grind_rows.EXIT_RELAY_CORRUPT
+        assert err.startswith(contract.RELAY_CORRUPT_HEAD)
+        assert f"--{contract.DECLARED_FLAG}" in err
+        assert not (tmp_path / "state").exists()
+
+    def test_record_urlenc_without_digest_flags_is_usage_naming_both(self, tmp_path, capsys):
+        exit_code = grind_rows.main(
+            ["run-record", "--profile", "p", "--run-id", "r", "--record-urlenc", "%7B%7D", "--repo-root", str(tmp_path)]
+        )
+        err = capsys.readouterr().err
+        assert exit_code == grind_rows.EXIT_USAGE
+        assert "--record-len" in err and "--record-sha256" in err
+
+    def test_invalid_json_names_the_source_flag(self, tmp_path, capsys):
+        exit_code = grind_rows.main(
+            [
+                "run-record", "--profile", "p", "--run-id", "r",
+                *_relay_args("record-urlenc", "record", "%7Bnope"), "--repo-root", str(tmp_path),
+            ]
+        )
+        assert exit_code == grind_rows.EXIT_USAGE
+        assert "--record-urlenc is not valid JSON" in capsys.readouterr().err
 
     def test_record_file_and_urlenc_together_is_usage(self, tmp_path, capsys):
         exit_code = grind_rows.main(
@@ -1055,7 +1125,7 @@ class TestRunRecordLandsTheRunsBookkeeping:
         capsys.readouterr()
         code = grind_rows.main(
             ["run-record", "--profile", "bug", "--run-id", run_id,
-             "--record-urlenc", quote(json.dumps(record or _record()), safe=""),
+             *_relay_args("record-urlenc", "record", quote(json.dumps(record or _record()), safe="")),
              "--repo-root", str(repo), *extra]
         )
         captured = capsys.readouterr()
@@ -1179,7 +1249,11 @@ class TestRunRecordLandsTheRunsBookkeeping:
     def _widened_extra(self, repo, declared, decisions=()):
         from coordinator_core.ops.dispatch_emit.grind_commit_contract import encode_declared_paths
 
-        return ["--queue", "state/bug-backlog", "--declared-urlenc", encode_declared_paths(declared), *decisions]
+        return [
+            "--queue", "state/bug-backlog",
+            *_relay_args("declared-urlenc", "declared", encode_declared_paths(declared)),
+            *decisions,
+        ]
 
     def test_queue_edit_declared_sizing_baton_and_minted_row_land_in_one_commit(self, repo, capsys):
         self._write(repo, "state/bug-backlog/bug-1.yaml", "status: open\n", claim=False)

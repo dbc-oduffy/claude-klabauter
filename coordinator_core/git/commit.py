@@ -1759,11 +1759,16 @@ def commit_paths(
         sign_warning=sign_warning,
     )
     try:
-        try:
-            index_write.splice_index(repo, index_updates)
-        except index_write.IndexWriteLockBusy:
-            # One in-process re-splice: a peer's lock is held for the width of a splice.
-            index_write.splice_index(repo, index_updates)
+        for pause in (*_SPLICE_LOCK_BACKOFF_SECS, None):
+            try:
+                index_write.splice_index(repo, index_updates)
+                break
+            except index_write.IndexWriteLockBusy:
+                # A peer's lock is held for the width of its own write; sleeping costs
+                # wall clock, not process time. Past the schedule the commit reports stale.
+                if pause is None:
+                    raise
+                time.sleep(pause)
     except index_write.IndexWriteError as exc:
         stale = tuple(sorted(index_updates))
         raise index_write.IndexStaleAfterCommit(
@@ -1783,6 +1788,9 @@ def commit_paths(
         sign_warning=sign_warning,
     )
 
+
+#: Pause after each lock-busy post-ref splice attempt; one more attempt than entries.
+_SPLICE_LOCK_BACKOFF_SECS = (0.02, 0.04, 0.08, 0.16, 0.32)
 
 _HEX_RE = re.compile(r"[0-9a-f]+")
 

@@ -105,7 +105,7 @@ Each sub-module self-registers its op via `register_op()` at import time.
 | `research_archive_workdir.py` | `research.archive_workdir` | Idempotently archives a completed research run's workdir into `docs/research/archive/` (`os.rename` with EXDEV fallback) |
 | `research_dir_restructure.py` | `research.restructure_for_repeat_topic` | Resumable two-step restructure of `docs/research/` for a repeat-topic run (per-step already-done skip) |
 | `research_close.py` | `research.close` | Closes a research run: scouts writes one scratch digest and commits nothing; corpus and deep copy outputs to `docs/research/<date>-<slug>/` in exactly one `commit_paths` commit |
-| `research_reground.py` | `research.reground` | Moves a scouts run's stale `grounding.md` aside to `grounding.stale-<n>.md` and emits a grounding-only Workflow script over the same scratch; spawns and commits nothing |
+| `research_reground.py` | `research.reground` | Moves a scouts run's stale `grounding.md` aside to `grounding.stale-<n>.md` and emits a grounding-only Workflow script over the same scratch; re-grades only digests changed since `grounding.basis.json`, carries the rest via `grounding.carry.json`, and no-ops (`fresh: 0`) when none changed; spawns and commits nothing |
 | `research_shape.py` | `research.shape` | Maps a sizing research block to tier, reason and ordered pipelines (nlm-preflight first iff notebooklm) |
 | `resolve_baton_path.py` | `baton.resolve_path_and_repo` | Resolves a caller-supplied baton path to its absolute native form + owning git repo |
 | `resolve_mcp_server_cli_path.py` | `mcp.resolve_server_cli_path` | Resolves an MCP server's CLI path + project root from `~/.claude.json` |

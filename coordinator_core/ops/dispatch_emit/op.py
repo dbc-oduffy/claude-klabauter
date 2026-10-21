@@ -1125,6 +1125,16 @@ def _sizing_scout_questions(research: dict) -> list:
     return questions
 
 
+def _shape_or_refuse(research: dict) -> dict:
+    """`research_shape.shape`, its ValueError (spike, unknown class) surfaced as a pre-write refusal."""
+    from coordinator_core.ops import research_shape
+
+    try:
+        return research_shape.shape(research)
+    except ValueError as exc:
+        raise PipelineEmitRefused([str(exc)]) from exc
+
+
 def _research_route_setup(
     params: dict,
     repo_root: Optional[Path],
@@ -1213,7 +1223,7 @@ def _research_route_setup(
         else None
     )
     questions = research_emit.normalize_scout_questions(root, questions, allowlist)
-    shape = research_shape.shape(research)
+    shape = _shape_or_refuse(research)
     digest_parts = {
         "brief": brief_rel or str(ask), "research": research, "lists": lists,
         "flags": params.get("flags") or {}, "context": [str(c) for c in params.get("context") or ()],
@@ -1420,7 +1430,7 @@ def _emit_per_group(params: dict, repo_root: Optional[Path], from_sizing: object
     if not isinstance(research, dict) or not research:
         raise PipelineEmitRefused([f"sizing {sizing_rel} has no research block; set one with sizing-assemble --research-class"])
     selected = tuple(params.get(GROUPS_PARAM) or ())
-    reasons = per_group_refusals(research_shape.shape(research), research, selected)
+    reasons = per_group_refusals(_shape_or_refuse(research), research, selected)
     if reasons:
         raise PipelineEmitRefused(reasons)
     specs = groups_for(research, given_topic or research_emit.topic_slug("", sizing_rel))
@@ -1897,15 +1907,23 @@ def _dispatch_emit(
             if ask_source == ASK_SOURCE_PM:
                 from coordinator_core.ops import baton_pm_turns as _pm_turns
 
-                pm_verdict = _pm_turns.verify_pm_ask(
+                pm_check = _pm_turns.verify_pm_ask(
                     ask, session_id=_receipt_session_id(params) or None,
                     cwd=params.get("session_root") or str(ask_root),
-                )["verdict"]
+                )
+                pm_verdict = pm_check["verdict"]
                 if pm_verdict == "unmatched":
-                    raise ValueError(
-                        "dispatch.emit ask_source 'pm': the ask quotes no recorded PM turn of this session. "
-                        "Pass the PM's turn verbatim, or mark it relayed."
+                    msg = "dispatch.emit ask_source 'pm': the ask quotes no recorded PM turn of this session."
+                    nearest = pm_check.get("nearest")
+                    if nearest:
+                        msg += f" Nearest recorded turn {nearest['turn']}: {nearest['text'][:400]!r}."
+                        if pm_check.get("diff"):
+                            msg += f" Diff: {pm_check['diff']}."
+                    msg += (
+                        " Put one verbatim turn in `ask` and the others in `context`,"
+                        " or mark the ask relayed."
                     )
+                    raise ValueError(msg)
         run_stamp = f"{datetime.now().strftime('%Y%m%dT%H%M%S')}-{uuid.uuid4().hex[:6]}"
         run_id = f"warp-{Path(sizing_rel).stem}-{run_stamp}" if sizing_rel else f"ask-{run_stamp}"
         reserved_parent = None

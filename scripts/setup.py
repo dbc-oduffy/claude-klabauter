@@ -3483,6 +3483,36 @@ def refresh_group_em_home(repo_root: Path, args: Args) -> None:
     print(f"OK   [group-em] home refreshed from template: {home}")
 
 
+def migrate_group_em_inbox(repo_root: Path, args: Args) -> None:
+    """Move memos stranded in the group-em home inbox to the G-EM reroute target.
+
+    Calls `memo.migrate_group_em_inbox`'s in-process entry point (no interpreter spawn).
+    ADVISORY like its siblings: any failure prints WARN and returns.
+    """
+    if os.environ.get("COORDINATOR_DISABLE_MACHINE_MUTATION", "").strip() not in ("", "0"):
+        print("SKIP [group-em] inbox migration: COORDINATOR_DISABLE_MACHINE_MUTATION set")
+        return
+    try:
+        from coordinator_core.ops.fleet import memo_migrate_group_em_inbox as _migrate
+
+        result = _migrate.migrate_group_em_inbox()
+    except Exception as exc:  # advisory phase -- never fails the install
+        print(f"WARN [group-em] inbox migration skipped ({type(exc).__name__}: {exc})")
+        return
+    acted = result.get("acted") or []
+    failed = result.get("failed") or []
+    moved = sum(1 for item in acted if item.get("action") == "moved")
+    collisions = sum(1 for item in failed if str(item.get("reason", "")).startswith("collision"))
+    if result.get("exit_code") == 1:
+        print("WARN [group-em] inbox migration refused (setup error; see engine log)")
+    elif failed:
+        print(f"WARN [group-em] inbox migration: moved={moved} collisions={collisions} failed={len(failed)}")
+    elif not acted:
+        print("SKIP [group-em] inbox migration: nothing to move")
+    else:
+        print(f"OK   [group-em] inbox migration: moved={moved} collisions={collisions}")
+
+
 def repair_status_lines(claude_klabauter_root_resolved: Path) -> None:
     """Re-point an already-wired coordinator status line at the live plugin on every re-run.
 
@@ -4772,6 +4802,7 @@ def main(argv: list[str]) -> int:
         register_live_plugin_root(repo_root, claude_klabauter_root_resolved, args)
         repair_status_lines(claude_klabauter_root_resolved)
         refresh_group_em_home(repo_root, args)
+        migrate_group_em_inbox(repo_root, args)
         if not apply_settings_manifest_env(repo_root, claude_klabauter_root_resolved, args):
             return 1
         apply_transcript_retention_default(claude_klabauter_root_resolved, args)

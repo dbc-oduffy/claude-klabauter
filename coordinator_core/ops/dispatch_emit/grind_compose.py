@@ -468,7 +468,8 @@ def run_admission(
     adjudication) called once, in order, after that commit when the grind did not
     throw. An outer ``finally`` then runs the run close: one ``ledger-sweep`` call (retried once
     if it raises) whose reply is ``{"outcome": "recorded"|"record-failed", "swept", "sweep_reason"}``
-    -- the verb sweeps and writes the record whole; the record and declared paths it carries are
+    -- a record-failed reply whose reason holds ``RELAY_CORRUPT_HEAD`` re-drives the call once --
+    the verb sweeps and writes the record whole; the record and declared paths it carries are
     appended to ``run_close_sink`` before the call, with a ``swept: false`` reply's stage-dead
     appended to the sunk record. A non-landing row with reported writes runs ``verify`` and reads
     its ``undo``; each such call first appends ``{"row", "paths"}`` (the paths the undo receives) to
@@ -985,6 +986,15 @@ def run_admission(
                 break
             except Exception as err:  # noqa: BLE001 -- surfaced on the hand-back, never masks the grind's own error
                 threw = str(err)
+        if (
+            drained is not None
+            and drained.get("outcome") == "record-failed"
+            and contract.RELAY_CORRUPT_HEAD in str(drained.get("reason") or "")
+        ):
+            try:
+                drained = _record_call("ledger-sweep", "run") or {}
+            except Exception as err:  # noqa: BLE001 -- surfaced on the hand-back, never masks the grind's own error
+                drained, threw = None, str(err)
         if drained is None:
             _stage_dead(f"{sweep_dead}: {threw}")
             _stage_dead(f"run record may be missing or incomplete: {record_path}: {threw}")
@@ -1368,6 +1378,9 @@ def _run_close_block(
         "  try { _drained = await _drainCall(); } catch (err) {\n"
         "    try { _drained = await _drainCall(); } catch (err2) { _threw = err2 && err2.message ? err2.message : String(err2); }\n"
         "  }\n"
+        f"  if (_threw === undefined && _drained.outcome === 'record-failed' && String(_drained.reason || '').includes({_js_string_literal(contract.RELAY_CORRUPT_HEAD)})) {{\n"
+        "    try { _drained = await _drainCall(); } catch (err3) { _threw = err3 && err3.message ? err3.message : String(err3); }\n"
+        "  }\n"
         "  if (_threw !== undefined) {\n"
         f"    _handBack(RUN_ID, 'stage-dead', `{sweep_dead}: ${{_threw}}`);\n"
         f"    _handBack(RUN_ID, 'stage-dead', `run record may be missing or incomplete: {record_path}: ${{_threw}}`);\n"
@@ -1541,6 +1554,7 @@ def compose_grind_script(
         for bk in distinct_keys
     }
     pre_fix_nodes = sorted(pre_fix_verify_nodes(routing_table))
+    hand_back_nodes = [n for n in pre_fix_nodes if n in stages.ROUTING_VERIFY_HAND_BACK_NODES]
     verify_node_ids = [node_id for node_id, kind in node_kind.items() if kind == "verify"]
     verify_spec_by_node: dict[str, dict[str, dict[str, Any]]] = {
         node_id: {
@@ -1587,6 +1601,7 @@ def compose_grind_script(
     lines.append(f"const ARCHIVE_PATH = {_js_string_literal(profile.archive_path)};")
     lines.append(ARCHIVE_DESTINATION_JS)
     lines.append(stages.SHQ_JS)
+    lines.append(contract.RELAY_SHA256_JS)
     lines.append("const PROFILE_DIR = args.profile_dir;")
     # Every stage's cwd, `--repo-root` and commit `--repo` bind here, never to the
     # firing session's ambient cwd.
@@ -1621,6 +1636,7 @@ def compose_grind_script(
     lines.append("const TRIAGE_DEPTH_BY_KEY = " + json.dumps(triage_depth_by_key, sort_keys=True) + ";")
     lines.append("const VERIFY_SPEC = " + json.dumps(verify_spec_by_node, sort_keys=True) + ";")
     lines.append("const VERIFY_PRE_FIX = " + json.dumps(pre_fix_nodes) + ";")
+    lines.append("const VERIFY_HAND_BACK = " + json.dumps(hand_back_nodes) + ";")
 
     lines.append("let _callCount = 0;")
     lines.append("const _agentCallsByStageKind = {};")
@@ -1810,6 +1826,15 @@ def compose_grind_script(
         targeted_runner=targeted_runner, profile=profile.name, run_id_js="RUN_ID",
         routing=True, digest_js="row.digest",
     )
+    verify_routing_hand_back_raw = stages.compose_verify_agent_call(
+        models=stage_models,
+        label="verify-routing-hand-back", phase_title="Grind",
+        row_id_js="row.rowId", row_path_js="row.path", touched_files_js="row.touchedFiles",
+        evidence_js="row.evidence", fix_plan_js="row.fixPlan",
+        agent_type_host=agent_type_host, run_key=run_key, preamble_expr=preamble_expr,
+        targeted_runner=targeted_runner, profile=profile.name, run_id_js="RUN_ID",
+        routing=True, digest_js="row.digest", hand_back=True,
+    )
     _runner_fail = json.dumps([
         o for o in stages.RUNNER_FAIL_OUTCOMES if profile.name == "bug" or o != "no-runner"
     ])
@@ -1850,6 +1875,19 @@ def compose_grind_script(
         + "\n  }\n"
         + (
             "  if (VERIFY_PRE_FIX.includes(row.node)) {\n"
+            + (
+                "    if (VERIFY_HAND_BACK.includes(row.node)) {\n"
+                + _indent_block(
+                    _capture(
+                        verify_routing_hand_back_raw, "verify",
+                        tail=verify_agent_tail if targeted_runner else None,
+                    ),
+                    "    ",
+                )
+                + "\n    }\n"
+                if hand_back_nodes
+                else ""
+            )
             + _indent_block(
                 _capture(verify_routing_raw, "verify", tail=verify_agent_tail if targeted_runner else None),
                 "    ",

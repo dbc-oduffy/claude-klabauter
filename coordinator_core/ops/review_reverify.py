@@ -12,7 +12,10 @@ convention only; no ``review_prep`` import.
 
 List mode (no ``failing``): ``{"edited", "created", "snapshot", "error"}``. ``edited`` is every
 manifest path whose bytes now differ (a missing file counts); ``created`` is every path the
-session's review stage wrote that the manifest and its declared ``paths`` do not name.
+session's review stage wrote that the manifest and its declared ``paths`` do not name. ``foreign``
+is such a path another live run declared that is tracked in the snapshot's base commit, or that predates the snapshot: the session's write record
+spans concurrent runs, so it is reported, never reverted or removed. In revert mode ``foreign`` lists
+the failing node ids whose test file is foreign.
 
 Revert mode (``failing`` given): ``{"reverted", "unattributed", "record", "error"}``. A failing
 node id's test file implicates itself when edited or created, and every edited ``.py`` module it
@@ -33,9 +36,14 @@ import hashlib
 import json
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, Optional, Set, Tuple
 
 from coordinator_core.atomic_replace import atomic_write_bytes
+from coordinator_core.git.index_write import (
+    DROP_IF_PHANTOM_INTENT_TO_ADD,
+    IndexWriteError,
+    splice_index,
+)
 from coordinator_core.ipc import register_op
 from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.pyimports import collect_imports, module_name_for_file, resolve_relative_module
@@ -104,23 +112,67 @@ def _since(recorded_at: object) -> Optional[float]:
     return parsed.timestamp()
 
 
-def _created(repo_root: Path, session: str, manifest: dict, share: Path) -> List[str]:
+def _created(
+    repo_root: Path, session: str, manifest: dict, share: Path, slice_prefix: str = ""
+) -> Tuple[List[str], List[str]]:
+    """(created, foreign). The session's write record spans every run the session fired, so a
+    path is this run's only when no other live run declared it and it was written after the
+    snapshot; anything else is foreign and is never reverted."""
     from coordinator_core.ops.dispatch_emit import review_edits
 
-    writes = review_edits.review_writes(repo_root, session, _since(manifest.get("recorded_at")))
+    since = _since(manifest.get("recorded_at"))
+    writes = review_edits.review_writes(repo_root, session, since)
     if not writes:
-        return []
+        return [], []
+    sibling = {_norm(p) for p in review_edits.live_sibling_declared(repo_root, None, slice_prefix)}
+    tracked = _tracked_at_base(repo_root, manifest.get("base"), writes)
     known: Set[str] = {_norm(p) for p in manifest["files"]}
     known.update(_norm(p) for p in (manifest.get("paths") or []) if isinstance(p, str))
     share_rel = _rel(str(share), repo_root)
     out: Set[str] = set()
+    foreign: Set[str] = set()
     for raw in writes:
         rel = _rel(raw, repo_root)
         if rel in known or rel.startswith(_MACHINERY_PREFIXES) or rel.startswith(share_rel + "/"):
             continue
-        if (repo_root / rel).is_file():
+        target = repo_root / rel
+        if not target.is_file():
+            continue
+        if rel in sibling or rel in tracked or _predates(target, since):
+            foreign.add(rel)
+        else:
             out.add(rel)
-    return sorted(out)
+    return sorted(out), sorted(foreign)
+
+
+def _tracked_at_base(repo_root: Path, base: object, writes: dict) -> Set[str]:
+    """Write paths present in the tree of commit ``base``: tracked at the snapshot, so review
+    cannot have created them. Spawn-free (object reader); an unreadable base answers empty."""
+    if not isinstance(base, str) or len(base) != 40:
+        return set()
+    from coordinator_core.git import git_state
+
+    info = git_state.read_commit(repo_root, base)
+    if info is None:
+        return set()
+    rels = [_rel(raw, repo_root) for raw in writes]
+    spine = git_state.read_tree_spine(repo_root, rels, root_tree_sha=info.tree)
+    if spine is None:
+        return set()
+    out: Set[str] = set()
+    for rel in rels:
+        parent, _, name = rel.rpartition("/")
+        entry = spine.get(parent, {}).get(name)
+        if entry is not None and entry[0] != 0o40000:
+            out.add(rel)
+    return out
+
+
+def _predates(target: Path, since: Optional[float]) -> bool:
+    try:
+        return since is not None and target.stat().st_mtime < since
+    except OSError:
+        return False
 
 
 def _edited(repo_root: Path, manifest: dict) -> List[str]:
@@ -226,18 +278,19 @@ def review_reverify(
     if not _contained(repo_root, rels):
         return _fail("a snapshot path escapes the worktree", revert)
     edited = _edited(repo_root, manifest)
-    created = _created(repo_root, session, manifest, share)
+    created, foreign = _created(repo_root, session, manifest, share, slice_prefix)
     if not _contained(repo_root, created):
         return _fail("a review-written path escapes the worktree", revert)
     snapshot_rel = _rel(str(snapshot_dir / _MANIFEST), repo_root)
     if not revert:
-        return {"edited": edited, "created": created, "snapshot": snapshot_rel, "error": None}
+        return {"edited": edited, "created": created, "foreign": foreign, "snapshot": snapshot_rel, "error": None}
 
     ids = [str(i) for i in failing if isinstance(i, str) and i.strip()]
     edited_set, created_set = set(edited), set(created)
     edited_py = {p for p in edited if p.endswith(".py")}
     implicated: Dict[str, List[str]] = {}
     unattributed: List[str] = []
+    foreign_set, foreign_ids = set(foreign), []  # type: Set[str], List[str]
     record_path = snapshot_dir / _RECORD
     prior = _load_record(record_path)
     already = {t for entry in prior["reverted"] if isinstance(entry, dict) for t in entry.get("tests", [])}
@@ -252,6 +305,8 @@ def review_reverify(
             implicated.setdefault(target, []).append(node)
         if not targets and node not in already:
             unattributed.append(node)
+            if test_file in foreign_set:
+                foreign_ids.append(node)
 
     blobs: Dict[str, bytes] = {}
     for rel in implicated:
@@ -287,6 +342,16 @@ def review_reverify(
             "findings": _findings(repo_root, list(sidecars or []), rel),
         })
 
+    # A removed path an author `git add -N`'d leaves an empty-blob entry with no file; drop only
+    # intent-to-add entries for files now gone, never a real staged entry.
+    removed = [r["path"] for r in reverted if r["action"] == "removed"]
+    index_residue: List[str] = []
+    if removed:
+        try:
+            splice_index(repo_root, {rel: DROP_IF_PHANTOM_INTENT_TO_ADD for rel in removed})
+        except (IndexWriteError, OSError):
+            index_residue = removed
+
     merged = {
         "reverted": [*prior["reverted"], *reverted],
         "unattributed": sorted(set(prior["unattributed"]) | set(unattributed)),
@@ -296,6 +361,8 @@ def review_reverify(
     return {
         "reverted": reverted,
         "unattributed": unattributed,
+        "foreign": foreign_ids,
+        "index_residue": index_residue,
         "record": _rel(str(record_path), repo_root),
         "error": None,
     }

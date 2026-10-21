@@ -589,6 +589,21 @@ ALLOWLIST: dict[str, dict[str, object]] = {
         "exist there to release",
         "confirmed": True,
     },
+    # VERIFIED INELIGIBLE by reading the body: commits into
+    "ops/fleet/memo_migrate_group_em_inbox.py::_deliver": {
+        "reason": "ineligible: commits a migrated memo into the RECEIVER's "
+        "repo (same shape as memo_send's `to:`/`cc:` legs), never the "
+        "migrating session's worktree -- no session claims exist there "
+        "to release",
+        "confirmed": True,
+    },
+    # VERIFIED INELIGIBLE by reading the body: commits into
+    "ops/fleet/memo_migrate_group_em_inbox.py::_remove_home_copy": {
+        "reason": "ineligible: commits only the removal of one migrated "
+        "memo from the Group EM home's inbox; threads no session id and "
+        "carries no claim this session holds",
+        "confirmed": True,
+    },
     "ops/review_freeze_diff.py::freeze_diffs_batch": {
         "reason": "release",
         "confirmed": False,

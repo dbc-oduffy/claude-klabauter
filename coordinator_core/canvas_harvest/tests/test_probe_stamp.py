@@ -28,7 +28,11 @@ def _login(cfg, email):
 
 
 def _git(cwd, *args):
-    probe_stamp._git(cwd, "-c", "user.email=t@t", "-c", "user.name=t", "-c", "core.autocrlf=false", *args)
+    subprocess.run(
+        ["git", "-C", str(cwd), "-c", "user.email=t@t", "-c", "user.name=t", "-c", "core.autocrlf=false", *args],
+        capture_output=True,
+        check=True,
+    )
 
 
 def _committed_repo(tmp_path, account="a@x"):
@@ -126,19 +130,15 @@ def test_record_committed_false_when_file_untracked(tmp_path):
     assert _unreadable(out)["record_committed"] is False
 
 
-def test_record_committed_issues_no_git_write(tmp_path, monkeypatch):
+def test_record_committed_spawns_no_process(tmp_path, monkeypatch):
     out = _committed_repo(tmp_path)
-    seen = []
-    real = subprocess.run
 
-    def spy(cmd, *a, **k):
-        seen.append(cmd)
-        return real(cmd, *a, **k)
+    def boom(*a, **k):
+        raise AssertionError("record_committed must not spawn")
 
-    monkeypatch.setattr(subprocess, "run", spy)
+    monkeypatch.setattr(subprocess, "run", boom)
+    monkeypatch.setattr(subprocess, "Popen", boom)
     assert _unreadable(out)["record_committed"] is True
-    verbs = {c[3] for c in seen}
-    assert verbs <= {"ls-tree", "show"} and verbs
 
 
 def _record(probe=None, n_files=0):

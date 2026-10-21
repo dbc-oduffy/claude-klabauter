@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from coordinator_core.git import index_write
+from coordinator_core.git import commit, index_write
 from coordinator_core.ops.dispatch_emit import terminal_commit
 from coordinator_core.ops.dispatch_emit.commit_request import (
     ChunkCommit,
@@ -144,7 +144,7 @@ def test_persistent_splice_failure_reports_index_stale(repo, monkeypatch):
 
     monkeypatch.setattr(index_write, "splice_index", busy)
     out = _run_plain(repo)
-    assert calls["n"] == 2
+    assert calls["n"] == len(commit._SPLICE_LOCK_BACKOFF_SECS) + 1
     assert out["sha"]
     assert out["index_stale"] == ["a.py"]
     assert "git add" in " ".join(out["warnings"])

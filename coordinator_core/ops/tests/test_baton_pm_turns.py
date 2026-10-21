@@ -157,11 +157,45 @@ def test_verify_pm_ask_has_three_verdicts(tmp_path, monkeypatch):
     got = PT.verify_pm_ask(said, session_id="sid-ptf")
     assert got["verdict"] == "matched"
     assert got["turn"]["turn"] == 2 and got["turn"]["text"] == said + "!" and got["turn"]["ts"]
-    assert PT.verify_pm_ask("nothing like it at all", session_id="sid-ptf") == {"verdict": "unmatched", "turn": None}
+    miss = PT.verify_pm_ask("nothing like it at all", session_id="sid-ptf")
+    assert miss["verdict"] == "unmatched" and miss["turn"] is None and miss["nearest"] is None
     assert PT.verify_pm_ask("  ", session_id="sid-ptf")["verdict"] == "unmatched"
     _session(tmp_path, monkeypatch, "sid-empty")
     assert PT.verify_pm_ask(said, session_id="sid-empty") == {"verdict": "unverifiable", "turn": None}
     assert PT.verify_pm_ask(said, session_id="sid-nolog") == {"verdict": "unverifiable", "turn": None}
+
+
+def test_verify_pm_ask_matches_joined_verbatim_turns_per_piece(tmp_path, monkeypatch):
+    _session(tmp_path, monkeypatch, "sid-join")
+    first = "make the engine default unmarked asks to relayed"
+    second = "and never let the log make an unmarked ask pm"
+    PT.append_turn(first, session_id="sid-join")
+    PT.append_turn("chatter in between", session_id="sid-join")
+    PT.append_turn(second, session_id="sid-join")
+    got = PT.verify_pm_ask(f"{first} / {second}", session_id="sid-join")
+    assert got["verdict"] == "matched"
+    assert [t["turn"] for t in got["turns"]] == [0, 2] and got["turn"]["turn"] == 2
+
+
+def test_verify_pm_ask_one_bad_piece_is_unmatched_with_nearest_and_diff(tmp_path, monkeypatch):
+    _session(tmp_path, monkeypatch, "sid-bad1")
+    first = "make the engine default unmarked asks to relayed"
+    second = "and never let the log make an unmarked ask pm"
+    PT.append_turn(first, session_id="sid-bad1")
+    PT.append_turn(second, session_id="sid-bad1")
+    drifted = "and never let the log turn an unmarked ask pm"
+    got = PT.verify_pm_ask(f"{first} / {drifted}", session_id="sid-bad1")
+    assert got["verdict"] == "unmatched" and got["turn"] is None
+    assert got["piece"] == drifted
+    assert got["nearest"]["turn"] == 1 and got["nearest"]["text"] == second
+    assert "ask has 'turn' where turn has 'make'" in got["diff"]
+
+
+def test_nearest_turn_none_when_no_shared_word(tmp_path, monkeypatch):
+    _session(tmp_path, monkeypatch, "sid-nn")
+    PT.append_turn("alpha beta gamma", session_id="sid-nn")
+    got = PT.verify_pm_ask("zzz qqq", session_id="sid-nn")
+    assert got["verdict"] == "unmatched" and got["nearest"] is None and got["diff"] == ""
 
 
 def test_unicode_line_separators_stay_inside_one_turn(tmp_path, monkeypatch):

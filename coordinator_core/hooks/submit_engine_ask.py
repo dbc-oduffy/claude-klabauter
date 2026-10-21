@@ -17,8 +17,7 @@ or the fan-out, and either beside `{sizing}` is refused) (each ask a
 separate sibling run via `dispatch.ask_fanout`; the call fires the first ready run and the allow reason
 carries `{parent_id, runs}` plus the other ready runs' fire calls; a one-element array is an `ask`; a
 slice `{sizing}` is denied until its `after` predecessors land and while its parent is at budget), optional `repo` (absolute path; else the payload
-cwd's repo, or for an ask whose absolute `context` lies in another registered repo, that repo), optional `source: "pm" | "relayed"` (a chosen source is forwarded to the engine verbatim as `ask_source`; an unmarked single `ask` is denied before
-it fires, except on the session's first human turn, where it defaults to `pm` (the allow reason says so); only `source: "pm"` makes it the PM's
+cwd's repo, or for an ask whose absolute `context` lies in another registered repo, that repo), optional `source: "pm" | "relayed"` (a chosen source is forwarded to the engine verbatim as `ask_source`; an unmarked single `ask` defaults to `pm` on the session's first human turn and to `relayed` with one warning in the allow reason on any later turn; only `source: "pm"` makes it the PM's
 words, which the engine verifies against the session's recorded turns (refused when contradicted, flagged
 when no log resolves); on `asks` it is the default for items naming no `source` of their own; a redirected
 root passes `session_root`, the submitting session's repo, so the log is found for that verification), optional EM brief beside either arm
@@ -575,13 +574,12 @@ def evaluate(
             asks = None
 
     defaulted_pm = False
+    defaulted_relayed = False
     if ask is not None and source is None:
-        if not _is_first_turn(payload):
-            return _refuse(
-                "Unmarked ask: without `source` it runs as an AI-derived (relayed) ask. "
-                "Add `source: \"pm\"` for the PM's verbatim words, else `source: \"relayed\"`."
-            )
-        source, defaulted_pm = "pm", True
+        if _is_first_turn(payload):
+            source, defaulted_pm = "pm", True
+        else:
+            source, defaulted_relayed = "relayed", True
 
     supersedes, supersedes_refusal = _supersedes(payload["tool_input"])
     if supersedes_refusal:
@@ -785,6 +783,11 @@ def evaluate(
         if defaulted_pm
         else ""
     )
+    if defaulted_relayed:
+        derived += (
+            " Warning: unmarked ask ran as source relayed (AI-derived). "
+            "Add `source: \"pm\"` for the PM's verbatim words."
+        )
     if isinstance(result, dict) and result.get("pm_verification") == "unverifiable":
         derived += " source pm is unverified: no session turn log resolved."
     if asks is None and not (sizing_rel and _has_research_block(sizing_doc)):

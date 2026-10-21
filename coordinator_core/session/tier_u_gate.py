@@ -227,7 +227,7 @@ closed one layer up: the CLI-name identity deny in the suite authority
 contract (``suite_authority``), not this seam.
 
 Authority is ``suite_authority(...).authorized`` (cloud-box basis, else a live
-Tier-U grant); the own-suite refusal and the R6 ordering stay ahead of it.
+Tier-U grant, else a live Group EM grant); the own-suite refusal and the R6 ordering stay ahead of it.
 """
 
 from __future__ import annotations
@@ -474,7 +474,9 @@ def enforce_tier_u_gate(
             "exemption for Tier F.\n\n"
             f"{remediation}\n\n"
             "Ask the PM for a grant, then run: "
-            "tier-u-grant-cli grant pm \"<verbatim PM utterance>\"\n\n"
+            "tier-u-grant-cli grant pm \"<verbatim PM utterance>\"\n"
+            "Or ask the live Group EM: "
+            "tier-u-grant-cli group-em-grant <this session> \"<ruling>\"\n\n"
             "Unsure which session this is, or whether it is still live? "
             "session.whoami_live answers both in one call."
         )
@@ -518,7 +520,9 @@ def enforce_tier_u_gate(
         "(b) declare fast_tier_unscoped_reason in coordinator.local.md with "
         "a prose rationale (covers only the literal resolved fast_test_cmd "
         "string -- see DR-088 R6), or (c) run the suite through a granted "
-        "ceremony.\n\n"
+        "ceremony.\n"
+        "Or ask the live Group EM: "
+        "tier-u-grant-cli group-em-grant <this session> \"<ruling>\"\n\n"
         "Unsure which session this is, or whether it is still live? "
         "session.whoami_live answers both in one call."
     )

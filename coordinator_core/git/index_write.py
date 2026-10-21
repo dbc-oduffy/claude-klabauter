@@ -23,9 +23,12 @@ commit touches are constructed.
 
 NEGATIVE SPEC -- what this module deliberately does not do:
 
-- **It does not write index v3 or v4.** A v3 index (extended flags) or v4
-  (prefix-compressed names) is REFUSED, not guessed at, matching
-  `git_index.py`'s own refusal. v2 is what git writes for this repo.
+- **It does not write index v4.** v4 (prefix-compressed names) is REFUSED, not
+  guessed at, matching `git_index.py`'s own refusal. v2 and v3 are spliced: a
+  v3 index is what git writes the moment ANY entry carries extended flags
+  (intent-to-add, skip-worktree), so refusing v3 left every committed path's
+  entry at its pre-commit state after the ref had moved. Extended-flag entries
+  are copied verbatim; the header is v3 only while one survives.
 - **It does not preserve extensions.** The TREE cache and REUC/UNTR
   extensions are dropped on write. This is legal and is what git itself does
   when it cannot incrementally update the cache -- git regenerates TREE on the
@@ -57,7 +60,17 @@ from coordinator_core.lock_preflight import preflight_reap_stale_lock
 
 _SIGNATURE = b"DIRC"
 _ENTRY_FIXED_LEN = 62
-_SUPPORTED_VERSION = 2
+_EXT_FLAGS_LEN = 2
+_SUPPORTED_VERSIONS = (2, 3)
+_FLAG_EXTENDED = 0x4000
+_XFLAG_INTENT_TO_ADD = 0x2000
+
+
+class _DropIfIntentToAdd:
+    """Update value: remove the entry only if it is an intent-to-add entry whose file is gone."""
+
+
+DROP_IF_PHANTOM_INTENT_TO_ADD = _DropIfIntentToAdd()
 
 ABSENT = _ABSENT
 
@@ -126,6 +139,15 @@ class IndexStaleAfterCommit(IndexWriteError):
         self.paths = paths
 
 
+def _name_offset(raw: bytes, start: int) -> int:
+    return start + _ENTRY_FIXED_LEN + (_EXT_FLAGS_LEN if raw[start + 60] & 0x40 else 0)
+
+
+def _entry_name(raw: bytes, start: int) -> bytes:
+    begin = _name_offset(raw, start)
+    return raw[begin : raw.index(b"\x00", begin)]
+
+
 def _walk_entries(raw: bytes, entry_count: int) -> Tuple[list, int]:
     """Entry start offsets and the end of the entry block, reading each name
     length from the flags field (a 0xFFF length saturates and needs a NUL scan)."""
@@ -136,22 +158,21 @@ def _walk_entries(raw: bytes, entry_count: int) -> Tuple[list, int]:
         if offset + _ENTRY_FIXED_LEN > limit:
             raise IndexWriteError(f"truncated entry at offset {offset}")
         (flags,) = struct.unpack_from(">H", raw, offset + 60)
-        if flags & 0x4000:
-            raise IndexWriteError(
-                "extended-flags entry (index v3 shape) -- refused, not guessed at"
-            )
         if (flags >> 12) & 0x3:
             raise IndexWriteError(
                 "unmerged entry (stage != 0) -- refusing to splice a mid-conflict index"
             )
+        fixed = _ENTRY_FIXED_LEN + (_EXT_FLAGS_LEN if flags & _FLAG_EXTENDED else 0)
+        if offset + fixed > limit:
+            raise IndexWriteError(f"truncated entry at offset {offset}")
         name_len = flags & 0x0FFF
         if name_len == 0x0FFF:
-            nul = raw.find(b"\x00", offset + _ENTRY_FIXED_LEN)
+            nul = raw.find(b"\x00", offset + fixed)
             if nul < 0:
                 raise IndexWriteError(f"unterminated name at offset {offset}")
-            name_len = nul - offset - _ENTRY_FIXED_LEN
+            name_len = nul - offset - fixed
         starts.append(offset)
-        offset += (_ENTRY_FIXED_LEN + name_len + 8) & ~7
+        offset += (fixed + name_len + 8) & ~7
     if offset > limit:
         raise IndexWriteError(f"truncated entry at offset {starts[-1]}")
     return starts, offset
@@ -226,15 +247,17 @@ def _splice_locked(
 
     starts: list = []
     body_end = 12
+    in_version = _SUPPORTED_VERSIONS[0]
     if raw:
         if len(raw) < 12 or raw[0:4] != _SIGNATURE:
             raise IndexWriteError(f"{index_path}: not a DIRC index")
         version, entry_count = struct.unpack_from(">II", raw, 4)
-        if version != _SUPPORTED_VERSION:
+        if version not in _SUPPORTED_VERSIONS:
             raise IndexWriteError(
-                f"{index_path}: index v{version} -- only v2 is written, "
+                f"{index_path}: index v{version} -- only v2/v3 are written, "
                 "refused rather than guessed at"
             )
+        in_version = version
         starts, body_end = _walk_entries(raw, entry_count)
 
     replacements: Dict[bytes, Optional[bytes]] = {}
@@ -254,6 +277,18 @@ def _splice_locked(
         if value is ABSENT:
             replacements[key] = None
             continue
+        if value is DROP_IF_PHANTOM_INTENT_TO_ADD:
+            idx = bisect.bisect_left(starts, key, key=lambda st: _entry_name(raw, st))
+            if (
+                idx < len(starts)
+                and _entry_name(raw, starts[idx]) == key
+                and raw[starts[idx] + 60] & 0x40
+                and struct.unpack_from(">H", raw, starts[idx] + _ENTRY_FIXED_LEN)[0]
+                & _XFLAG_INTENT_TO_ADD
+                and not (root / path).exists()
+            ):
+                replacements[key] = None
+            continue
         mode, sha_hex = value  # type: ignore[misc]
         try:
             st = (root / path).stat()
@@ -268,11 +303,15 @@ def _splice_locked(
     bounds = starts + [body_end]
 
     def name_at(start: int) -> bytes:
-        return raw[start + _ENTRY_FIXED_LEN : raw.index(b"\x00", start + _ENTRY_FIXED_LEN)]
+        return _entry_name(raw, start)
 
     pieces: list = []
     lo = 0
     total = count
+    # Extended-flag entries still standing after the splice; only a v3 input can hold any.
+    extended = (
+        sum(1 for st in starts if raw[st + 60] & 0x40) if in_version == 3 else 0
+    )
     for key in sorted(replacements):
         new_bytes = replacements[key]
         idx = bisect.bisect_left(starts, key, lo=lo, key=name_at)
@@ -285,6 +324,7 @@ def _splice_locked(
             pieces.append(new_bytes)
         if present:
             lo = idx + 1
+            extended -= raw[starts[idx] + 60] & 0x40 != 0
             if new_bytes is None:
                 total -= 1
         else:
@@ -294,7 +334,7 @@ def _splice_locked(
         pieces.append(view[bounds[lo] : body_end])
 
     digest = hashlib.sha1()
-    head = struct.pack(">4sII", _SIGNATURE, _SUPPORTED_VERSION, total)
+    head = struct.pack(">4sII", _SIGNATURE, 3 if extended > 0 else 2, total)
     digest.update(head)
     for piece in pieces:
         digest.update(piece)

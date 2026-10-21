@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import copy
+import json
+import shutil
 import subprocess
 import sys
 
@@ -161,6 +163,74 @@ def test_declared_paths_round_trip(paths):
 def test_decode_refuses_malformed(token):
     with pytest.raises(ValueError):
         gcc.decode_declared_paths(token)
+
+
+def _token() -> str:
+    from urllib.parse import quote
+
+    return quote(json.dumps({"a": {"b": "x" * 40}}), safe="")
+
+
+def test_relay_digest_known_vector():
+    assert gcc.relay_digest("abc") == (
+        3, "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
+
+
+def test_relay_digest_refuses_non_ascii():
+    with pytest.raises(ValueError):
+        gcc.relay_digest("café")
+
+
+def test_check_relay_accepts_match():
+    tok = _token()
+    n, h = gcc.relay_digest(tok)
+    assert gcc.check_relay("record-urlenc", tok, str(n), h) is None
+
+
+def test_check_relay_refuses_dropped_char_in_closing_braces():
+    tok = _token()
+    assert tok.endswith("%7D%7D")
+    n, h = gcc.relay_digest(tok)
+    bad = tok[:-1]
+    msg = gcc.check_relay("record-urlenc", bad, str(n), h)
+    assert msg is not None and msg.startswith(gcc.RELAY_CORRUPT_HEAD)
+    assert "--record-urlenc" in msg and str(n) in msg and str(n - 1) in msg
+    assert h[:12] in msg and "\n" not in msg
+
+
+@pytest.mark.parametrize("length,sha", [("x", "0" * 64), ("-1", "0" * 64), ("", "0" * 64),
+                                        ("3", "ABC"), ("3", "g" * 64), ("3", "")])
+def test_check_relay_reports_malformed_digest_without_raising(length, sha):
+    msg = gcc.check_relay("declared-urlenc", "abc", length, sha)
+    assert msg is not None and msg.startswith(gcc.RELAY_CORRUPT_HEAD)
+
+
+def test_check_relay_reports_non_ascii_token_without_raising():
+    msg = gcc.check_relay("record-urlenc", "café", "4", "0" * 64)
+    assert msg is not None and msg.startswith(gcc.RELAY_CORRUPT_HEAD)
+
+
+@pytest.mark.parametrize("word", ["crypto", "Date", "Math.random", "require", "import"])
+def test_relay_sha256_js_uses_no_unsupplied_global(word):
+    assert word not in gcc.RELAY_SHA256_JS
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_relay_sha256_js_matches_hashlib_under_node():
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node not on PATH")
+    from urllib.parse import quote
+
+    samples = ["", "abc", quote(json.dumps({"k": "{}é" * 4000}), safe="")]
+    assert len(samples[2]) > 20000
+    js = gcc.RELAY_SHA256_JS + (
+        "\nconsole.log(JSON.stringify(JSON.parse(require('fs').readFileSync(0, 'utf8')).map(_sha256Ascii)));")
+    res = subprocess.run([node, "-e", js], input=json.dumps(samples), capture_output=True, text=True,
+                         check=False, **no_console_creationflags())
+    assert res.returncode == 0, res.stderr
+    assert json.loads(res.stdout) == [gcc.relay_digest(s)[1] for s in samples]
 
 
 @pytest.mark.spawns_process

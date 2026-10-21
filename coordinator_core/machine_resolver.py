@@ -840,7 +840,9 @@ def em_id_for_root(root: Optional[str], repo_key_paths: dict[str, str]) -> str:
          the key chosen by `canonical_repo_key_for_root` when
          several keys point at one repo (a canonical key plus its receive-only
          aliases) — never by whatever order the caller enumerated the registry in
-      4. unregistered git repo  → basename(root) + '-em'
+      4. the group-em home (`group_em.gem_home.is_home`)  → 'group-em-em'
+         (`gem_home.SENDER_ID`), never registered under repos.*
+      5. unregistered git repo  → basename(root) + '-em'
 
     Negative-spec: the old ~/.claude/home special-case is REMOVED — ~/.claude is no
     longer a memo-identity anchor. Central identity flows through repos.content_root only.
@@ -860,6 +862,10 @@ def em_id_for_root(root: Optional[str], repo_key_paths: dict[str, str]) -> str:
     key = canonical_repo_key_for_root(root, repo_key_paths)
     if key is not None:
         return repo_key_to_em_id(key)
+    from coordinator_core.group_em import gem_home  # lazy: gem_home imports this module
+
+    if gem_home.is_home(root):
+        return gem_home.SENDER_ID
     return os.path.basename(str(root).rstrip("/\\")) + "-em"
 
 

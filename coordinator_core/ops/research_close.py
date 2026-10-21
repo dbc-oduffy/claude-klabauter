@@ -34,7 +34,9 @@ always enforced, with or without the param: an ungrounded or contradicted claim,
 contradiction ruling, a digest with no section, or no graded claim refuses the close
 (``_research_grounding.grounding_problems``). When such a refusal finds a ``digest-*.md`` newer
 than ``grounding.md``, the error says so and the reply carries ``next_action`` naming
-``research.reground``.
+``research.reground``. With a ``grounding.carry.json`` the enforced report is the merged one
+(carried sections for digests unchanged since ``grounding.basis.json``), and with a basis the
+newer-digest check compares content, not mtimes; an unreadable carry or basis file refuses the close.
 Only a named segment is excused: a root-level ``require_claims`` entry has no segment prefix
 and is never excused (the research route puts ``nlm-preflight`` ahead of notebooklm, so the
 root never holds notebooklm's claims).
@@ -136,19 +138,73 @@ def _err(error: str, **extra) -> dict:
     return out
 
 
+def _blocking(what: str) -> str:
+    return f"- **ungrounded** {what}"
+
+
+def _json_file(path: Path, kind: type) -> tuple[Optional[object], Optional[str]]:
+    """``(None, None)`` when absent; ``(value, None)`` when it parses to ``kind``; else ``(None, blocking line)``. Twin of research_reground._load_json."""
+    if not path.is_file():
+        return None, None
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, ValueError) as exc:
+        return None, _blocking(f"{path.name} unreadable: {exc.__class__.__name__}")
+    if not isinstance(value, kind):
+        return None, _blocking(f"{path.name} is not a JSON {kind.__name__}")
+    return value, None
+
+
+def _digests_since_basis(scratch: Path, basis: dict) -> tuple[Optional[dict], Optional[str]]:
+    """``changed_digests`` of the current ``digest-*.md`` against ``basis``; an unreadable digest is a blocking line."""
+    try:
+        current = {
+            p.name: p.read_text(encoding="utf-8")
+            for p in sorted(scratch.glob("digest-*.md")) if p.is_file()
+        }
+    except (OSError, UnicodeDecodeError) as exc:
+        return None, _blocking(f"a digest is unreadable: {exc.__class__.__name__}")
+    return _research_grounding.changed_digests(basis, current), None
+
+
 def _grounding_text(scratch: Path) -> str:
-    """The grounding report's text, or "" when absent or whitespace-only; an unreadable report
-    yields a blocking ungrounded line so it refuses the close instead of passing unchecked."""
+    """The report the close enforces, or "" when absent or whitespace-only.
+
+    With a ``grounding.carry.json`` it is the merged report (``effective_report``): carried
+    sections for digests unchanged since ``grounding.basis.json``, fresh sections for the rest. An
+    unreadable report, carry file or basis file yields a blocking ungrounded line so it refuses the
+    close instead of passing unchecked."""
     path = scratch / _research_grounding.GROUNDING_REPORT
     try:
         text = path.read_text(encoding="utf-8") if path.is_file() else ""
     except (OSError, UnicodeDecodeError) as exc:
-        return f"- **ungrounded** {_research_grounding.GROUNDING_REPORT} unreadable: {exc.__class__.__name__}"
+        return _blocking(f"{_research_grounding.GROUNDING_REPORT} unreadable: {exc.__class__.__name__}")
+    basis, bad = _json_file(scratch / _research_grounding.BASIS_FILE, dict)
+    if bad:
+        return bad
+    carry, bad = _json_file(scratch / _research_grounding.CARRY_FILE, dict)
+    if bad:
+        return bad
+    if carry is not None:
+        changed: dict = {}
+        if basis is not None:
+            changed, bad = _digests_since_basis(scratch, basis)
+            if bad:
+                return bad
+        text = _research_grounding.effective_report(text, carry, set(changed))
     return text if text.strip() else ""
 
 
 def _grounding_predates_a_digest(scratch: Path) -> bool:
-    """True when some ``digest-*.md`` was modified after ``grounding.md``; an unstatable file is False."""
+    """True when the grading is stale against a ``digest-*.md``.
+
+    With a ``grounding.basis.json`` it is true iff some digest's content differs from the basis; a
+    touched-but-unchanged digest is current. Without one it is today's mtime comparison. An
+    unreadable or unstatable file is False."""
+    basis, _ = _json_file(scratch / _research_grounding.BASIS_FILE, dict)
+    if basis is not None:
+        changed, bad = _digests_since_basis(scratch, basis)
+        return not bad and bool(changed)
     try:
         grounded = (scratch / _research_grounding.GROUNDING_REPORT).stat().st_mtime
         digests = [p.stat().st_mtime for p in scratch.glob("digest-*.md") if p.is_file()]

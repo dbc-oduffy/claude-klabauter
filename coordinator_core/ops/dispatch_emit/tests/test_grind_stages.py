@@ -28,6 +28,7 @@ import pytest
 
 from coordinator_core.contract.grind_vocab import OP_RUNNER_AGENT_TYPE
 from coordinator_core.ops.dispatch_emit import grind_stages
+from coordinator_core.ops.dispatch_emit.grind_commit_contract import RELAY_SHA256_JS, relay_digest
 
 
 def _terminal_call(**kw) -> str:
@@ -169,6 +170,7 @@ def _emitted_run_record_argv(cwd, *, record: str, declared: list, decisions: str
     )
     script = (
         grind_stages.SHQ_JS
+        + "\n" + RELAY_SHA256_JS
         + "\nconst E = JSON.parse(process.env.T_BINDINGS);"
         + "\nconst PROFILE_DIR = E.profile_dir, REPO_ROOT = E.repo_root, RUN_ID = E.run_id,"
         + " REC = E.record, DECLARED = E.declared, DEC = E.decisions;"
@@ -858,6 +860,7 @@ def test_paths_reach_the_emitted_command_as_one_single_quoted_token():
     )
     script = (
         gs.SHQ_JS
+        + "\n" + RELAY_SHA256_JS
         + f"\nconst PROFILE_DIR = {json.dumps(profile_dir)}, REPO_ROOT = {json.dumps(repo_root)};\n"
         + f"(async () => {{ const agent = async (p) => console.log(p);\n{sweep}; }})();"
     )
@@ -886,11 +889,50 @@ def test_emitted_ledger_sweep_command_parses_and_round_trips_under_bash(tmp_path
         tmp_path, record=record, declared=declared, decisions="C:\\a b\\it's decisions.json",
         repo_root="/r o/it's", profile_dir="C:\\a b\\profiles",
     )
-    assert unquote(argv[argv.index("--record-urlenc") + 1]) == record
-    assert json.loads(unquote(argv[argv.index("--declared-urlenc") + 1])) == {"paths": declared}
+    rec_tok = argv[argv.index("--record-urlenc") + 1]
+    dec_tok = argv[argv.index("--declared-urlenc") + 1]
+    assert unquote(rec_tok) == record
+    assert json.loads(unquote(dec_tok)) == {"paths": declared}
+    n, h = relay_digest(rec_tok)
+    assert argv[argv.index("--record-len") + 1] == str(n)
+    assert argv[argv.index("--record-sha256") + 1] == h
+    n, h = relay_digest(dec_tok)
+    assert argv[argv.index("--declared-len") + 1] == str(n)
+    assert argv[argv.index("--declared-sha256") + 1] == h
     assert argv[argv.index("--profile-dir") + 1] == "C:\\a b\\profiles"
     assert argv[argv.index("--decisions-file") + 1] == "C:\\a b\\it's decisions.json"
     assert argv[argv.index("--repo-root") + 1] == "/r o/it's"
+
+
+def test_ledger_sweep_call_carries_both_digest_flags():
+    call_text = _sweep_call()
+    assert "--record-sha256" in call_text and "--declared-sha256" in call_text
+    assert "--record-len" in call_text and "--declared-len" in call_text
+    assert "relayed payload is corrupt" in call_text
+
+
+@pytest.mark.spawns_process
+def test_ledger_sweep_encodes_each_payload_once():
+    import shutil
+    import subprocess
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node not on PATH")
+    sweep = _sweep_call(record_js="(_n++, '{}')", declared_js="(_m++, [])")
+    script = (
+        grind_stages.SHQ_JS
+        + "\n" + RELAY_SHA256_JS
+        + "\nlet _n = 0, _m = 0; const RUN_ID = 'r', PROFILE_DIR = 'pd', REPO_ROOT = 'rr', DECISIONS = '';"
+        + f"\n(async () => {{ const agent = async (p) => console.log(p);\n{sweep}; "
+        + "console.log('COUNTS ' + _n + ' ' + _m); })();"
+    )
+    out = subprocess.run(
+        [node, "-e", script], capture_output=True, text=True, check=False,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    assert out.returncode == 0, out.stderr
+    assert "COUNTS 1 1" in out.stdout
 
 
 def test_every_evidence_file_flag_names_its_evidence_path():

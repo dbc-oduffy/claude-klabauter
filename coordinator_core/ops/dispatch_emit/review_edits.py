@@ -55,8 +55,11 @@ def review_writes(
     return review_edit_source.session_review_writes(worktree_root, session_id, since)
 
 
-def live_sibling_declared(worktree_root: Path, own_run_id: Optional[str]) -> dict[str, str]:
+def live_sibling_declared(
+    worktree_root: Path, own_run_id: Optional[str], own_prefix: Optional[str] = None
+) -> dict[str, str]:
     """path -> run id for every other live run's manifest ``review_declared_paths``.
+    ``own_prefix`` (a slice prefix) additionally marks any run whose id it contains as own.
     An unreadable manifest contributes nothing."""
     from coordinator_core.ops.dispatch_emit import abandoned_runs
 
@@ -67,7 +70,7 @@ def live_sibling_declared(worktree_root: Path, own_run_id: Optional[str]) -> dic
         return out
     for record in records:
         run_id = record.get("run_id")
-        if not isinstance(run_id, str) or run_id == own_run_id:
+        if not isinstance(run_id, str) or run_id == own_run_id or (own_prefix and run_id in own_prefix):
             continue
         manifest = Path(home_dir(str(worktree_root), "warp")) / run_id / "manifest.json"
         try:

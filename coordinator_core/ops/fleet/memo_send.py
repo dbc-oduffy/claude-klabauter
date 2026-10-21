@@ -166,6 +166,7 @@ from coordinator_core.git.commit import (
 )
 from coordinator_core.git.commit_trailers import apply_missing_trailers
 from coordinator_core.git.git_dir import resolve_git_common_dir
+from coordinator_core.git.ignore_match import IgnoreMatcher
 from coordinator_core.git import git_state
 from coordinator_core.git.git_objects import _read_object, read_ref_loose_or_packed, write_object
 from coordinator_core.git.index_write import (
@@ -2424,17 +2425,29 @@ def _memo_send(params: dict, repo_root=None) -> dict:
     # preserve, only stale blobs a widened default could hide.
     # state/bug-backlog/2026-08-27-commit-v2-cutover-silently-flips-whose-c-
     # 09cf57f3b909.yaml
+    # A receipt whose paths are git-ignored and untracked (a group-EM home
+    # ignores .coordinator-local/) has nothing to commit; force-adding it
+    # would put ignored bytes in history. A matcher gap (None) commits.
+    matcher = IgnoreMatcher(sender_worktree)
+    receipt_ignored = all(
+        matcher.ignored(rel, False) is True
+        and git_native._head_entry_for(sender_worktree, rel) is None
+        for rel in (sent_relpath, ledger_relpath)
+    )
     try:
-        outcome = commit_paths(
-            sender_worktree,
-            [sent_relpath, ledger_relpath],
-            sender_message,
-            deleted_paths=sender_deleted,
-            blob_fallback=partial(
-                hash_worktree_blobs_via_spawn, cwd=sender_worktree
-            ),
-        )
-        sender_commit = _SenderCommit(True, outcome.sha, "")
+        if receipt_ignored:
+            sender_commit = _SenderCommit(True, None, "")
+        else:
+            outcome = commit_paths(
+                sender_worktree,
+                [sent_relpath, ledger_relpath],
+                sender_message,
+                deleted_paths=sender_deleted,
+                blob_fallback=partial(
+                    hash_worktree_blobs_via_spawn, cwd=sender_worktree
+                ),
+            )
+            sender_commit = _SenderCommit(True, outcome.sha, "")
     except IndexStaleAfterCommit as exc:
         # THE RECEIPT LANDED; only the index is stale. This clause is the one
         # the sibling below said to add "at the same time as the raiser" --

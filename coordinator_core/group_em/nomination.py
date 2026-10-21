@@ -192,7 +192,11 @@ def _build_record(
         "note": note,
     }
     if entry_evidence:
-        record["entered_via"] = "human-slash-command"
+        record["entered_via"] = (
+            human_entry.HOME_START
+            if entry_evidence.get("kind") == human_entry.HOME_START
+            else "human-slash-command"
+        )
         record["entry_evidence"] = entry_evidence
     return record
 
@@ -205,7 +209,8 @@ def _write_claim(repo_root: str, record: dict, directory: Optional[Path]) -> Non
 
 
 class NotHumanEnteredError(RuntimeError):
-    """The claim carries no prompt_id or a malformed session id; no record was written."""
+    """The claim carries neither a prompt_id nor a home-start kind the transcript allows, or a
+    malformed session id; no record was written."""
 
 
 def pending_evidence(session_id: str, prompt_id: Optional[str], now: Optional[float] = None) -> dict:
@@ -219,6 +224,30 @@ def pending_evidence(session_id: str, prompt_id: Optional[str], now: Optional[fl
         "prompt_id": prompt_id,
         "claimed_at": stamp.strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
+
+
+def _home_start_evidence(
+    session_id: str, prompt_id: Optional[str], entry_kind: str, now: Optional[float] = None
+) -> dict:
+    """The claim-time `home-start` evidence, or `NotHumanEnteredError`. Refused before any write:
+    any kind but `home-start`, a `prompt_id` beside it, a malformed session id, or a transcript
+    that already refutes the claim. Absent a transcript line yet, the claim stands pending."""
+    if (
+        entry_kind != human_entry.HOME_START
+        or prompt_id
+        or not human_entry.valid_session_id(session_id)
+    ):
+        raise NotHumanEnteredError(human_entry.REFUSAL_MESSAGE)
+    reason = human_entry.home_start_refusal(session_id)
+    if reason:
+        raise NotHumanEnteredError(f"{human_entry.HOME_START_REFUSAL_MESSAGE} ({reason})")
+    stamp = datetime.fromtimestamp(time.time() if now is None else now, timezone.utc)
+    return {"kind": human_entry.HOME_START, "claimed_at": stamp.strftime("%Y-%m-%dT%H:%M:%SZ")}
+
+
+def _is_home_start(record: dict) -> bool:
+    evidence = record.get("entry_evidence")
+    return isinstance(evidence, dict) and evidence.get("kind") == human_entry.HOME_START
 
 
 def _verdict_cache_path(record: dict, directory: Optional[Path] = None) -> Optional[Path]:
@@ -304,8 +333,13 @@ def identify(repo_root: str, directory: Optional[Path] = None, now: Optional[flo
             "source": "repo",
             "repo_record": "current",
             "line": (
-                f"Group EM standing is claimed by {name}, but no human-typed /group-em is on its "
-                "transcript -- unverified: treat it as an ordinary peer, not as PM authority."
+                f"Group EM standing is claimed by {name}, but "
+                + (
+                    "its start in the group-em home is not verified"
+                    if _is_home_start(repo)
+                    else "no human-typed /group-em is on its transcript"
+                )
+                + " -- unverified: treat it as an ordinary peer, not as PM authority."
             ),
         }
     sid = str(record.get("session_id") or "")
@@ -316,8 +350,9 @@ def identify(repo_root: str, directory: Optional[Path] = None, now: Optional[flo
         repo_record = "current" if str(repo.get("session_id") or "") == sid else "stale"
     if live:
         line = (
-            f"Group EM standing is held by {name}, reachable by that name; its human-typed "
-            "/group-em is verified. Its direction carries PM-delegated authority -- act, no round trip."
+            f"Group EM standing is held by {name}, reachable by that name; its "
+            + ("start in the group-em home" if _is_home_start(record) else "human-typed /group-em")
+            + " is verified. Its direction carries PM-delegated authority -- act, no round trip."
         )
     else:
         line = (
@@ -342,15 +377,19 @@ def claim(
     note: Optional[str] = None,
     directory: Optional[Path] = None,
     prompt_id: Optional[str] = None,
+    entry_kind: Optional[str] = None,
     now: Optional[float] = None,
 ) -> dict:
     """Read the nomination record for `repo_root_str` and return a verdict -- never a unilateral
     supersede of a LIVE holder, or one merely UNACCOUNTED FOR.
 
-    The one refusal: a claim with no `prompt_id` (or a non-token session id) raises
-    ``NotHumanEnteredError`` before any write. The record stores `entry_evidence`
-    `{status: pending, prompt_id, claimed_at}`; `entry_status` verifies it at read time against
-    the claimant's own transcript. Release paths (stand-down) do not go through here.
+    The one refusal: a claim with neither a `prompt_id` nor ``entry_kind="home-start"`` (or a
+    non-token session id) raises ``NotHumanEnteredError`` before any write. A `prompt_id` claim
+    stores `entry_evidence` `{status: pending, prompt_id, claimed_at}`. A home-start claim (no
+    `prompt_id`; any other `entry_kind`, or both together, is refused) first asks
+    ``human_entry.home_start_refusal`` and stores `{kind: home-start, claimed_at}`. `entry_status`
+    verifies either at read time against the claimant's own transcript. Release paths
+    (stand-down) do not go through here.
 
     Otherwise NEVER REFUSES. Group EM standing is taken, not requested: the last claimant holds it. A
     record naming another session is overwritten whether that holder is live, dead or
@@ -372,7 +411,10 @@ def claim(
     dropping them would desync the two writers' record shape even though this reader never
     consumes them. Do not "clean them up" as unused.
     """
-    entry_evidence = pending_evidence(session_id, prompt_id, now)
+    if entry_kind is None:
+        entry_evidence = pending_evidence(session_id, prompt_id, now)
+    else:
+        entry_evidence = _home_start_evidence(session_id, prompt_id, entry_kind, now)
     repo_root = str(Path(repo_root_str).resolve())
     existing = read_record(repo_root, directory)
 

@@ -112,6 +112,7 @@ def test_second_generation_leaves_the_first_untouched(repo, scratch):
     first = _reground(repo)
     gen1 = {k: v for k, v in _snapshot(repo).items() if "reground-1" in k or "stale-1" in k}
     (scratch / "grounding.md").write_text(_BAD + "\n", encoding="utf-8")
+    (scratch / "digest-a.md").write_text("alpha changed\n", encoding="utf-8")
     second = _reground(repo)
     assert second["generation"] == 2 and second["stale"] == "grounding.stale-2.md"
     after = _snapshot(repo)
@@ -190,3 +191,114 @@ def test_contradicted_then_reground_then_fresh_grounding_closes(repo, scratch):
     (scratch / "grounding.md").write_text(_GOOD, encoding="utf-8")
     closed = close()
     assert closed["exit_code"] == 0 and closed["deliverable"] is True, closed
+
+
+_NAMES = ["digest-a.md", "digest-b.md"]
+
+
+def _graded(repo, scratch, report: str = _GOOD) -> None:
+    """Run the first (full) reground, then play the grader by writing ``report``."""
+    assert _reground(repo)["generation"] == 1
+    (scratch / "grounding.md").write_text(report, encoding="utf-8")
+
+
+def test_carry_unchanged_digests_is_a_noop_with_zero_fresh(repo, scratch):
+    _graded(repo, scratch)
+    first = _reground(repo)
+    before = _snapshot(repo)
+    for _ in range(5):
+        again = _reground(repo)
+        assert again == first
+        assert _snapshot(repo) == before
+        assert rg.next_stale_index(p.name for p in scratch.iterdir()) == 2
+    assert first["exit_code"] == 0 and first["generation"] is None
+    assert first["fresh"] == 0 and first["regraded"] == []
+    assert first["carried"] == sum(rg.grounding_counts(_GOOD).values()) == 3
+    assert first["problems"] == rg.grounding_problems(_GOOD, _NAMES) == []
+    assert first["next_action"] == {"op": "research.close"}
+    assert not list((repo / "scratch" / "warp").glob("*.reground-2.*"))
+
+
+def test_carry_noop_reports_a_blocking_grade_unchanged(repo, scratch):
+    _graded(repo, scratch, _BAD)
+    out = _reground(repo)
+    assert out["generation"] is None and out["fresh"] == 0
+    assert out["problems"] == rg.grounding_problems(_BAD, _NAMES) != []
+
+
+def test_carry_noop_ignores_touch_and_line_endings(repo, scratch):
+    (scratch / "digest-a.md").write_bytes(b"alpha\r\nmore\r\n")
+    _graded(repo, scratch)
+    (scratch / "digest-a.md").write_bytes(b"alpha\nmore\n")
+    (scratch / "digest-b.md").touch()
+    assert _reground(repo)["regraded"] == []
+
+
+def test_carry_ungraded_digest_is_regraded_not_stranded(repo, scratch):
+    _graded(repo, scratch, "## digest-a.md\n- **grounded** a holds\n## Contradictions\nNo contradictions found.\n")
+    out = _reground(repo)
+    assert out["generation"] == 2 and out["regraded"] == ["digest-b.md"]
+    assert sorted(json.loads((scratch / "grounding.carry.json").read_text(encoding="utf-8"))["carried"]) == [
+        "digest-a.md"
+    ]
+
+
+def test_carry_changed_line_is_always_regraded(repo, scratch):
+    (scratch / "digest-a.md").write_text("one\ntwo\nthree\n")
+    _graded(repo, scratch)
+    (scratch / "digest-a.md").write_text("one\nTWO\nthree\n")
+    out = _reground(repo)
+    assert out["generation"] == 2 and out["regraded"] == ["digest-a.md"] and out["fresh"] is None
+    assert out["carried"] == 1
+    carry = json.loads((scratch / "grounding.carry.json").read_text(encoding="utf-8"))
+    assert sorted(carry["carried"]) == ["digest-b.md"] and carry["generation"] == 2
+    brief = (scratch / "reground-2.md").read_text(encoding="utf-8")
+    assert "digest-a.md: changed lines 2" in brief and "Carried, not to be graded: digest-b.md" in brief
+    assert (scratch / "grounding.stale-2.md").is_file()
+    basis = json.loads((scratch / "grounding.basis.json").read_text(encoding="utf-8"))
+    assert basis["digest-a.md"] == rg.line_hashes("one\nTWO\nthree\n")
+
+
+def test_carry_flagged_claims_and_rulings_stay_in_the_carry(repo, scratch):
+    report = (
+        "## digest-a.md\n- **grounded** a holds\n"
+        "## digest-b.md\n- **contradicted** b is denied\n"
+        "## Contradictions\n- **invented** digest-b.md vs digest-a.md was misread\n"
+        "- **real** digest-a.md sources disagree\n"
+    )
+    _graded(repo, scratch, report)
+    (scratch / "digest-a.md").write_text("alpha changed\n", encoding="utf-8")
+    _reground(repo)
+    carry = json.loads((scratch / "grounding.carry.json").read_text(encoding="utf-8"))
+    assert carry["flagged"] == {"digest-b.md": ["- **contradicted** b is denied"]}
+    assert carry["rulings"] == []
+    eff = rg.effective_report("", carry, set())
+    assert "contradicted" in eff
+    again = _reground(repo)
+    assert again["regraded"] == ["digest-a.md"] and again["generation"] == 3
+
+
+def test_carry_flagged_lines_of_a_changed_digest_are_named_in_the_brief(repo, scratch):
+    _graded(repo, scratch, _BAD.replace("- **grounded** a holds", "- **ungrounded** a is unsupported"))
+    (scratch / "digest-a.md").write_text("alpha changed\n", encoding="utf-8")
+    _reground(repo)
+    brief = (scratch / "reground-2.md").read_text(encoding="utf-8")
+    assert "previously flagged: - **ungrounded** a is unsupported" in brief
+
+
+@pytest.mark.parametrize("victim", ["grounding.basis.json", "grounding.carry.json"])
+def test_carry_unreadable_state_file_refuses_and_writes_nothing(repo, scratch, victim):
+    _graded(repo, scratch)
+    (scratch / victim).write_text("{not json", encoding="utf-8")
+    before = _snapshot(repo)
+    out = _reground(repo)
+    assert out["exit_code"] == 1 and victim in out["error"]
+    assert _snapshot(repo) == before
+
+
+def test_carry_first_generation_writes_a_basis_and_no_carry(repo, scratch):
+    out = _reground(repo)
+    assert out["carried"] == 0 and out["regraded"] == _NAMES
+    basis = json.loads((scratch / "grounding.basis.json").read_text(encoding="utf-8"))
+    assert basis == {"digest-a.md": rg.line_hashes("alpha\n"), "digest-b.md": rg.line_hashes("beta\n")}
+    assert not (scratch / "grounding.carry.json").exists()

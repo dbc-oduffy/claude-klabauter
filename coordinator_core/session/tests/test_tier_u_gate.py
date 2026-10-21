@@ -16,6 +16,7 @@ from __future__ import annotations
 import ast
 import inspect
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -134,6 +135,40 @@ class TestEnforceTierUGate:
             )
         assert result.proceed is True
         assert result.refusal_message is None
+
+    def test_scoped_tier_f_command_proceeds_with_group_em_grant(self, tmp_path, monkeypatch):
+        import unittest.mock as mock
+
+        from coordinator_core.group_em import suite_grant
+
+        repo = _make_repo(tmp_path)
+        scoped_cmd = "pytest coordinator_core/sub/test_x.py"
+        monkeypatch.setattr(grant, "check_tier_u_grant", lambda *a, **k: (False, None))
+        monkeypatch.setattr(
+            suite_grant, "check_group_em_suite_grant", lambda *a, **k: (True, {"g": 1})
+        )
+        with mock.patch.object(guard, "resolve_git_root", lambda cwd: str(repo)), \
+             mock.patch.object(
+                 guard, "_configured_test_cmds",
+                 lambda root: [guard.ConfiguredCmd("fast_test_cmd", scoped_cmd, 0)],
+             ):
+            result = tier_u_gate.enforce_tier_u_gate(
+                scoped_cmd, repo_root=str(repo), session_id="s1"
+            )
+        assert result.proceed is True
+
+    def test_refusals_name_the_group_em_path(self, tmp_path, monkeypatch):
+        from coordinator_core.group_em import suite_grant
+
+        repo = _make_repo(tmp_path)
+        monkeypatch.setattr(
+            suite_grant, "check_group_em_suite_grant", lambda *a, **k: (False, None)
+        )
+        result = tier_u_gate.enforce_tier_u_gate(
+            "pytest", repo_root=str(repo), session_id="nobody"
+        )
+        assert result.proceed is False
+        assert "tier-u-grant-cli group-em-grant <this session>" in result.refusal_message
 
     def test_mixed_tier_u_and_tier_f_match_falls_through_to_tier_u_leg(
         self, tmp_path
@@ -545,11 +580,11 @@ class TestEnforceTierUGate:
 
 class TestGateCallSitesPinned:
     """AC2/AC3: the resolved-command path for BOTH resolve-and-execute
-    callers of ``enforce_tier_u_gate`` is pinned here, at both call sites
-    each caller has -- the primary (diff-scoped) call and the
-    zero-tests-collected ``gate_full`` fallback (unscoped) call. A future
-    refactor that bypasses this gate, or that hands either call site the
-    wrong command shape, fails loudly here rather than being caught only by
+    callers of ``enforce_tier_u_gate`` is pinned here at the one call site
+    each caller has -- the diff-scoped call (the zero-tests-collected
+    unscoped fallback was removed; a zero-test run is "skipped"). A future
+    refactor that bypasses this gate, or that hands it the wrong command
+    shape, fails loudly here rather than being caught only by
     a live PreToolUse denial in production.
 
     Both callers' on-disk filenames are hyphenated (bin/-resident CLIs, not
@@ -566,17 +601,21 @@ class TestGateCallSitesPinned:
 
     @staticmethod
     def _load_module(name, path):
-        """Load a `coordinator/bin` CLI by file path; the root `conftest.py`
-        has already bound its bare `import lib`."""
+        """Load a `coordinator/bin` CLI by file path. The bare `import lib`
+        is bound explicitly: under the `coordinator_core/pytest.ini` rootdir
+        the root `conftest.py` never loads, and on a pywin32 box a bare
+        `import lib` otherwise binds `site-packages/win32/lib`."""
         import importlib.util
+
+        from coordinator_core.bin_lib_binding import exec_module_bin_bound
 
         spec = importlib.util.spec_from_file_location(name, path)
         mod = importlib.util.module_from_spec(spec)
         assert spec.loader is not None
-        spec.loader.exec_module(mod)
+        exec_module_bin_bound(spec.loader, mod, os.path.dirname(path))
         return mod
 
-    def test_validate_fast_and_packageability_run_fast_pins_both_gate_call_sites(self):
+    def test_validate_fast_and_packageability_run_fast_pins_the_scoped_gate_call_site(self):
         from coordinator_core.diff_scoped_tests import PYTEST_NO_TESTS_COLLECTED, append_test_paths
 
         mod = self._load_module("_c1_pin_vfp", self._VFP_CLI)
@@ -605,19 +644,21 @@ class TestGateCallSitesPinned:
 
         def _fake_run_resolved_command(cmd: str) -> int:
             run_calls.append(cmd)
-            return PYTEST_NO_TESTS_COLLECTED if len(run_calls) == 1 else 0
+            return PYTEST_NO_TESTS_COLLECTED
 
         mod._run_resolved_command = _fake_run_resolved_command
 
         validation_result, exit_code = mod.run_fast("/tmp")
 
         expected_scoped_cmd = append_test_paths(resolved_cmd, ["pkg/test_changed.py"])
-        assert gate_calls == [expected_scoped_cmd, resolved_cmd]
-        assert run_calls == [expected_scoped_cmd, resolved_cmd]
+        # Strictly diff-scoped: a zero-tests-collected scoped run is "skipped",
+        # never a retry of the bare resolved command (no unscoped fallback).
+        assert gate_calls == [expected_scoped_cmd]
+        assert run_calls == [expected_scoped_cmd]
         assert exit_code == 0
-        assert validation_result == "0"
+        assert validation_result == "skipped"
 
-    def test_workday_complete_step1_validate_main_pins_both_gate_call_sites(
+    def test_workday_complete_step1_validate_main_pins_the_scoped_gate_call_site(
         self, monkeypatch, tmp_path
     ):
         from coordinator_core.diff_scoped_tests import PYTEST_NO_TESTS_COLLECTED, append_test_paths
@@ -648,15 +689,15 @@ class TestGateCallSitesPinned:
 
         def _fake_run_fast_test_cmd(cmd, env):
             run_calls.append(cmd)
-            return (PYTEST_NO_TESTS_COLLECTED, "") if len(run_calls) == 1 else (0, "")
+            return PYTEST_NO_TESTS_COLLECTED, ""
 
         mod._run_fast_test_cmd = _fake_run_fast_test_cmd
 
         rc = mod.main()
 
         expected_scoped_cmd = append_test_paths(resolved_cmd, ["pkg/test_changed.py"])
-        assert gate_calls == [expected_scoped_cmd, resolved_cmd]
-        assert run_calls == [expected_scoped_cmd, resolved_cmd]
+        assert gate_calls == [expected_scoped_cmd]
+        assert run_calls == [expected_scoped_cmd]
         assert rc == 0
 
 

@@ -40,6 +40,7 @@ NEGATIVE SPEC:
 
 from __future__ import annotations
 
+import difflib
 import json
 import re
 from pathlib import Path
@@ -292,23 +293,95 @@ def is_turn_excerpt(ask: str, turn_text: str) -> bool:
     return " " + " ".join(have) + " " in " " + " ".join(turn) + " "
 
 
+#: Separator between pieces of an ask made of several recorded turns.
+_PIECE_SEP = " / "
+#: Longest diff fragment (characters) and most fragments a refusal diff carries.
+_DIFF_FRAGMENT_CHARS = 80
+_DIFF_MAX_FRAGMENTS = 3
+#: Newest turns `nearest_turn` scans; bounds the refusal path's SequenceMatcher cost on long sessions.
+_NEAREST_SCAN_TURNS = 40
+
+
+def _turn_ref(entry: Dict[str, Any]) -> Dict[str, Any]:
+    return {"turn": entry["turn"], "ts": entry.get("ts"), "text": entry["prompt"]}
+
+
+def _newest_excerpt_turn(piece: str, turns: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    for entry in reversed(turns):
+        if is_turn_excerpt(piece, entry["prompt"]):
+            return entry
+    return None
+
+
+def _short(words: List[str]) -> str:
+    text = " ".join(words)
+    return text if len(text) <= _DIFF_FRAGMENT_CHARS else text[:_DIFF_FRAGMENT_CHARS - 3] + "..."
+
+
+def nearest_turn(piece: str, turns: List[Dict[str, Any]]) -> "tuple[Optional[Dict[str, Any]], str]":
+    """The recorded turn whose words are closest to `piece` (newest wins a tie), and a short
+    word-level diff ``ask has 'a' where turn has 'b'``. ``(None, "")`` when no turn shares a word.
+    Diagnostic only: a nearest turn is never a match."""
+    have = _words(piece)
+    best, best_ratio, best_matcher = None, 0.0, None
+    for entry in reversed(turns[-_NEAREST_SCAN_TURNS:]):
+        matcher = difflib.SequenceMatcher(None, have, _words(entry["prompt"]), autojunk=False)
+        ratio = matcher.ratio()
+        if ratio > best_ratio:
+            best, best_ratio, best_matcher = entry, ratio, matcher
+    if best is None:
+        return None, ""
+    fragments = []
+    for tag, a0, a1, b0, b1 in best_matcher.get_opcodes():
+        if tag == "equal":
+            continue
+        ask_part, turn_part = _short(have[a0:a1]), _short(_words(best["prompt"])[b0:b1])
+        if tag == "replace":
+            fragments.append(f"ask has '{ask_part}' where turn has '{turn_part}'")
+        elif tag == "delete":
+            fragments.append(f"ask adds '{ask_part}'")
+        else:
+            fragments.append(f"ask omits '{turn_part}'")
+    shown = fragments[:_DIFF_MAX_FRAGMENTS]
+    if len(fragments) > len(shown):
+        shown.append(f"+{len(fragments) - len(shown)} more")
+    return _turn_ref(best), "; ".join(shown)
+
+
 def verify_pm_ask(ask: str, session_id: Optional[str] = None,
                   cwd: Optional[str] = None) -> Dict[str, Any]:
     """Check a pm-marked `ask` against the session's turn log: ``{verdict, turn}``.
-    ``matched``: the newest recorded turn `ask` quotes verbatim (`is_turn_excerpt`), as
-    ``{turn, ts, text}``. ``unmatched``: turns exist and none is quoted. ``unverifiable``: no
-    session id, no log file, or no loaded turn (``turn`` is None for both non-matches)."""
+    ``matched``: the ask, or every ``" / "``-joined piece of it, quotes a recorded turn verbatim
+    (`is_turn_excerpt`); ``turn`` is the newest turn matched, as ``{turn, ts, text}``, and
+    ``turns`` lists the turn of each piece. ``unmatched``: turns exist and some piece quotes none;
+    ``turn`` is None and ``piece``, ``nearest`` (``{turn, ts, text}`` or None) and ``diff`` describe
+    the first unmatched piece. ``unverifiable``: no session id, no log file, or no loaded turn."""
     sid = session_id or resolve_current_session_id(Path(cwd) if cwd else None)
     path = log_path(sid, cwd) if sid else None
     turns = _load(path) if path is not None and path.is_file() else []
     if not turns:
         return {"verdict": "unverifiable", "turn": None}
+    pieces: List[str] = []
+    whole_checked: Optional[Dict[str, Any]] = None
     if isinstance(ask, str) and _words(ask):
-        for entry in reversed(turns):
-            if is_turn_excerpt(ask, entry["prompt"]):
-                return {"verdict": "matched",
-                        "turn": {"turn": entry["turn"], "ts": entry.get("ts"), "text": entry["prompt"]}}
-    return {"verdict": "unmatched", "turn": None}
+        whole = _newest_excerpt_turn(ask, turns)
+        whole_checked = whole
+        if whole is not None:
+            ref = _turn_ref(whole)
+            return {"verdict": "matched", "turn": ref, "turns": [ref]}
+        pieces = [p for p in (s.strip() for s in ask.split(_PIECE_SEP)) if _words(p)]
+    matched: List[Dict[str, Any]] = []
+    for piece in pieces:
+        hit = whole_checked if piece == ask.strip() else _newest_excerpt_turn(piece, turns)
+        if hit is None:
+            nearest, diff = nearest_turn(piece, turns)
+            return {"verdict": "unmatched", "turn": None, "piece": piece,
+                    "nearest": nearest, "diff": diff}
+        matched.append(_turn_ref(hit))
+    if matched:
+        return {"verdict": "matched", "turn": max(matched, key=lambda t: t["turn"]),
+                "turns": matched}
+    return {"verdict": "unmatched", "turn": None, "piece": "", "nearest": None, "diff": ""}
 
 
 def bound_window(intent: Optional[str], session_id: Optional[str] = None, cwd: Optional[str] = None,

@@ -3431,6 +3431,7 @@ _COMMITTING_OP_NAMES = frozenset(
         "session.safe_commit_offer",
         "housekeeping.cycle",
         "memo.heal_inbox",
+        "memo.migrate_group_em_inbox",
         "dispatch.terminal_commit",
     }
 )

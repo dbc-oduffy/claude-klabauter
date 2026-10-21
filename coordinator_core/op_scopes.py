@@ -109,6 +109,9 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "hooks.guard_host_subagent_bash_spawn_shapes": "none",
     "hooks.preuse_bash_dispatch":             "common_dir",
     "hooks.block_workflow_foreign_emission":  "none",
+    "hooks.guard_agent_route_admission":      "none",
+    "hooks.guard_brief_prescribed_method":    "none",
+    "hooks.guard_editor_python_direct":       "none",
     "hooks.block_workflow_unmodeled_agent":   "none",
     "hooks.allow_emitted_workflow_fire":      "none",
     "hooks.nudge_workflow_authoring_trampoline": "none",
@@ -336,6 +339,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # entry does not read as a harmless default — it makes the op unreachable.
     "memo.check_deliveries":                  "common_dir",
     "memo.heal_inbox":                        "common_dir",
+    "memo.migrate_group_em_inbox":            "none",
     "memo.draft":                             "common_dir",
     "memo.compose":                           "common_dir",
     "memo.list_outbox":                       "common_dir",

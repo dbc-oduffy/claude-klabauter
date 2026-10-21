@@ -206,6 +206,25 @@ def _str_param(params: Any, key: str) -> Optional[str]:
     return value if isinstance(value, str) and value else None
 
 
+class _Refused(str):
+    """Error text of a claim refused for missing entry evidence (maps to exit 8)."""
+
+
+def _refusal(result: dict[str, Any], caller_session_id: str, message: str) -> dict[str, Any]:
+    result["nomination"] = None
+    result["refusal"] = group_em_human_entry.REFUSAL
+    result["exit_code"] = EXIT_NOT_HUMAN_ENTERED
+    result["standing"] = {
+        "claimed": False,
+        "message": message,
+        "session_id": caller_session_id,
+        "record": None,
+        "source": "engine",
+        "refusal": group_em_human_entry.REFUSAL,
+    }
+    return result
+
+
 def _leg_error(exc: BaseException) -> str:
     return f"{type(exc).__name__}: {exc}"
 
@@ -223,15 +242,18 @@ def _run_nomination(
     note: Optional[str] = None,
     operator: Optional[str] = None,
     prompt_id: Optional[str] = None,
+    entry_kind: Optional[str] = None,
 ) -> tuple[Optional[dict], Optional[str]]:
+    """The nomination leg's outcome. A claim-time `NotHumanEnteredError` comes back as a
+    `_Refused` error text (an evidence refusal, not an engine fault); any other exception
+    degrades to its plain error string."""
+    kwargs: dict[str, Any] = {"note": note, "nominated_by": operator, "prompt_id": prompt_id}
+    if entry_kind is not None:
+        kwargs["entry_kind"] = entry_kind
     try:
-        return (
-            group_em_nomination.claim(
-                repo_root, caller_session_id, note=note, nominated_by=operator,
-                prompt_id=prompt_id,
-            ),
-            None,
-        )
+        return group_em_nomination.claim(repo_root, caller_session_id, **kwargs), None
+    except group_em_nomination.NotHumanEnteredError as exc:
+        return None, _Refused(str(exc))
     except Exception as exc:  # noqa: BLE001 -- degrade-never-raise per module docstring
         return None, _leg_error(exc)
 
@@ -480,8 +502,12 @@ def _group_em_enter(params: dict, repo_root: Optional[Path] = None) -> dict:
             Defaults to the CALLING process's own `os.getcwd()` when
             omitted, matching `session.peer_roster`'s own convention.
         note, operator (str, optional) -- recorded on the nomination (`note`, `nominated_by`).
-        prompt_id (str, required) -- the UserPromptExpansion payload's `prompt_id`; without it
-            the op refuses (exit 8). Verified at read time against the transcript `promptId`.
+        prompt_id (str, required unless entry_evidence is home-start) -- the
+            UserPromptExpansion payload's `prompt_id`; without it the op refuses (exit 8).
+            Verified at read time against the transcript `promptId`.
+        entry_evidence (str, optional) -- "home-start", in place of prompt_id: the session's own
+            transcript start must lie inside the group-em home. Any other value, or both proofs
+            together, refuses (exit 8), as does a claim-time refutation from the transcript.
         caller_session_id (str, optional) -- defaults to
             `read_pass.caller_session_id()` (the `CLAUDE_CODE_SESSION_ID`
             env var) when omitted.
@@ -537,30 +563,26 @@ def _group_em_enter(params: dict, repo_root: Optional[Path] = None) -> dict:
     result["as_of"] = group_em_watch_heartbeat.iso_instant(now_epoch)
 
     prompt_id = _str_param(params, "prompt_id")
+    entry_evidence = _str_param(params, "entry_evidence")
+    # Exactly one proof: a prompt_id, or entry_evidence "home-start".
+    one_proof = (prompt_id is None) != (entry_evidence is None)
     if caller_session_id and not (
-        prompt_id and group_em_human_entry.valid_session_id(caller_session_id)
+        one_proof
+        and entry_evidence in (None, group_em_human_entry.HOME_START)
+        and group_em_human_entry.valid_session_id(caller_session_id)
     ):
-        result["nomination"] = None
-        result["refusal"] = group_em_human_entry.REFUSAL
-        result["exit_code"] = EXIT_NOT_HUMAN_ENTERED
-        result["standing"] = {
-            "claimed": False,
-            "message": group_em_human_entry.REFUSAL_MESSAGE,
-            "session_id": caller_session_id,
-            "record": None,
-            "source": "engine",
-            "refusal": group_em_human_entry.REFUSAL,
-        }
-        return result
+        return _refusal(result, caller_session_id, group_em_human_entry.REFUSAL_MESSAGE)
 
     nomination_outcome = (
         _run_nomination(
             target_root, caller_session_id, _str_param(params, "note"), _str_param(params, "operator"),
-            prompt_id,
+            prompt_id, entry_evidence,
         )
         if caller_session_id
         else (None, "no-caller-session-id")
     )
+    if isinstance(nomination_outcome[1], _Refused):
+        return _refusal(result, caller_session_id, str(nomination_outcome[1]))
     _leg(result, "nomination", nomination_outcome)
     nomination_value = nomination_outcome[0]
 

@@ -3069,7 +3069,7 @@ def release_own_path_claims(
     stayed blocked, with the remedy sitting right there behind a name that
     misdescribed it (`state/bug-queue/2026-09-20-the-touch-record-cannot-
     distinguish-a-read-touch-from-a-write-touch.yaml`). Reachable from a
-    terminal as ``session-claim-cli release-my-path-claim <path>...``.
+    terminal as ``session-claim-cli release-artifact artifact <path>``.
 
     It is ALSO the whole of the pre-axis corpus migration. A kind-less
     ``T`` blocks by design and is never backfilled, so the only way one

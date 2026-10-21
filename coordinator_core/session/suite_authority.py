@@ -4,7 +4,8 @@ coordinator_core.session.suite_authority -- who may run the fast/full suite.
 AUTHORITY MATRIX (the one statement; other modules cite it, never restate it):
 
   Cloud EM    fast: ``cloud-box``    full: ``cloud-box``
-  Box EM      fast/full: a live Tier-U grant file (``check_tier_u_grant``)
+  Box EM      fast/full: a live Tier-U grant file (``check_tier_u_grant``), else a
+              live Group EM grant naming this session (``group-em-grant``)
   Subagent    denied by the bash guard's identity leg before any basis here
 
 ``cloud-box`` discharges the AUTHORITY leg only; the suite-mutex wrapper and
@@ -31,12 +32,21 @@ from __future__ import annotations
 from typing import Mapping, NamedTuple, Optional
 
 from coordinator_core import env_locality
+from coordinator_core.group_em import suite_grant
 from coordinator_core.session import grant
 
-__all__ = ["SuiteAuthority", "cloud_box_basis", "suite_authority"]
+__all__ = [
+    "BASIS_CLOUD",
+    "BASIS_GRANT",
+    "BASIS_GROUP_EM",
+    "SuiteAuthority",
+    "cloud_box_basis",
+    "suite_authority",
+]
 
 BASIS_CLOUD = "cloud-box"
 BASIS_GRANT = "grant"
+BASIS_GROUP_EM = "group-em-grant"
 
 
 class SuiteAuthority(NamedTuple):
@@ -67,7 +77,7 @@ def suite_authority(
     env: Optional[Mapping[str, str]] = None,
     session_id: Optional[str] = None,
 ) -> SuiteAuthority:
-    """Cloud basis first, then the live grant file. Fails closed."""
+    """Cloud basis, then the live grant file, then the Group EM grant. Fails closed."""
     if cloud_box_basis(env) is not None:
         return SuiteAuthority(True, BASIS_CLOUD, None)
     try:
@@ -76,4 +86,10 @@ def suite_authority(
         return SuiteAuthority(False, None, None)
     if granted:
         return SuiteAuthority(True, BASIS_GRANT, record)
+    try:
+        granted, record = suite_grant.check_group_em_suite_grant(cwd, session_id=session_id)
+    except Exception:
+        return SuiteAuthority(False, None, None)
+    if granted:
+        return SuiteAuthority(True, BASIS_GROUP_EM, record)
     return SuiteAuthority(False, None, None)

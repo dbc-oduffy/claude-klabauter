@@ -33,10 +33,10 @@ TIER_TABLE: Final[dict[str, dict[str, str]]] = {
     "scouts": {"small": "scouts", "medium": "scouts", "large": "corpus"},
     "corpus": {"small": "scouts", "medium": "corpus", "large": "deep"},
     "deep": {"small": "corpus", "medium": "deep", "large": "deep"},
-    # spike is DoE's binary-verdict class (procedure: the spike skill, run by the EM); the engine
-    # has no spike pipeline, so it takes the corpus row.
-    "spike": {"small": "scouts", "medium": "corpus", "large": "deep"},
 }
+# spike is its own verdict class (procedure: /coordinator:spike, run by the EM); the engine has no
+# spike pipeline, so it has no TIER_TABLE row and `research_shape.shape` refuses it.
+SPIKE_CLASS: Final = "spike"
 
 # A research block whose `sources` name any of these is raised from scouts to corpus. A scout
 # question's repo/local target is read by that scout and does not floor the tier.

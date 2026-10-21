@@ -2562,6 +2562,12 @@ def _ungranted_record_failing_gate(
         return "undetermined (the diagnostic itself failed; the deny stands)"
 
 
+_GROUP_EM_GRANT_LINE = (
+    "\nOr the live Group EM runs: "
+    "tier-u-grant-cli group-em-grant <session> \"<ruling>\""
+)
+
+
 def _deny_reason_grant(
     detected: str,
     cmd_safe: str,
@@ -2722,6 +2728,7 @@ def _deny_reason_grant(
                 "Grant detail: %s"
                 % (detected, cmd_safe, _GRANT_DETAIL_POINTER)
             )
+            + _GROUP_EM_GRANT_LINE
             + ("\n\n%s" % _override_note if _override_note else "")
         )
     return (
@@ -2736,6 +2743,7 @@ def _deny_reason_grant(
             "resource control): %s"
             % (detected, cmd_safe, _GRANT_DETAIL_POINTER)
         )
+        + _GROUP_EM_GRANT_LINE
         + ("\n\n%s" % _override_note if _override_note else "")
     )
 
@@ -3054,7 +3062,21 @@ def _tier_u_grant(cwd: Optional[str]) -> Tuple[bool, Optional[Dict[str, Any]]]:
     except ImportError:
         return True, None
 
-    return grant.check_tier_u_grant(cwd)
+    granted, record = grant.check_tier_u_grant(cwd)
+    if granted:
+        return granted, record
+    # Second basis: the live box Group EM's grant naming this session. Fail-CLOSED, unlike the
+    # import above -- an unreadable authority basis never authorizes. The pm-grant record is
+    # returned on a miss so the deny's diagnosis of that grant is unchanged.
+    try:
+        from coordinator_core.group_em.suite_grant import check_group_em_suite_grant
+
+        em_granted, em_record = check_group_em_suite_grant(cwd, repo_root=resolve_git_root(cwd) or cwd)
+    except Exception:
+        return granted, record
+    if em_granted:
+        return True, em_record
+    return granted, record
 
 
 def _fast_tier_unscoped_declaration(repo_root: Optional[str]) -> str:
@@ -3184,6 +3206,29 @@ _SUITE_CLI_PREFILTER_RE = re.compile(
     r"validate-fast-and-packageability|workday-complete-step1-validate"
 )
 _SUITE_CLI_SUFFIXES = (".py", ".cmd", ".ps1")
+_GROUP_EM_ISSUE_PREFILTER_RE = re.compile(r"tier-u-grant-cli.*group-em-grant")
+
+
+def _invokes_group_em_grant(cmd: str, dialect: Optional[_Dialect]) -> bool:
+    """Does a segment run ``tier-u-grant-cli group-em-grant`` (directly, or as an
+    interpreter's script)?"""
+    for raw_argv in _segment_argvs(cmd, dialect):
+        argv = _strip_command_prefix(raw_argv)
+        if not argv:
+            continue
+        toks = argv
+        if _base(argv[0]).lower().startswith(("python", "py", "pwsh", "powershell")):
+            toks = [t for t in argv[1:] if not t.startswith("-")]
+        if not toks:
+            continue
+        name = _base(toks[0])
+        for suffix in _SUITE_CLI_SUFFIXES:
+            if name.lower().endswith(suffix):
+                name = name[: -len(suffix)]
+                break
+        if name == "tier-u-grant-cli" and len(toks) > 1 and toks[1] == "group-em-grant":
+            return True
+    return False
 
 
 def _is_suite_cli_token(token: str) -> bool:
@@ -3267,6 +3312,16 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
                 "suite-running CLI " + cli, _sanitize(cmd), payload=payload,
                 git_root=resolve_git_root(cwd) or cwd,
             ))
+
+    if (
+        is_subagent
+        and _GROUP_EM_ISSUE_PREFILTER_RE.search(cmd)
+        and _invokes_group_em_grant(cmd, _dialect_from_tool_name(payload.get("tool_name")))
+    ):
+        return _deny(
+            "A subagent cannot issue a Group EM test-run grant -- the live Group EM "
+            "issues this grant itself.\n  Command:  %s" % _sanitize(cmd)
+        )
 
     if not _RUNNER_PREFILTER_RE.search(cmd):
         # Dynamic leg (2026-08-10): a repo whose configured test command

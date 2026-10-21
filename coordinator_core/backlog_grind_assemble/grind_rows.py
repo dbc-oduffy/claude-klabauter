@@ -134,6 +134,8 @@ EXIT_OK = 0
 EXIT_REFUSAL = 1
 EXIT_USAGE = 2
 EXIT_MANIFEST_STALE = 3
+#: A relayed urlenc token whose length or sha256 does not match what the sender computed.
+EXIT_RELAY_CORRUPT = 4
 
 #: The sentinel constant name `check` looks for in the emitted `.mjs` script.
 #: C7's composer must embed the frozen manifest under this exact name.
@@ -957,7 +959,12 @@ def cmd_run_record(rest: list[str]) -> int:
     under `--sweep`, which needs `--profile-dir` and a `--queue`); `commit` is null when
     nothing was left to land, and also when no session id resolves or the branch
     is unborn (the record is then written but left uncommitted). A commit refusal exits 1 with the verbatim
-    refusal on stderr, the record already written."""
+    refusal on stderr, the record already written.
+
+    `--record-urlenc` and `--declared-urlenc` arrive through an agent's piece-by-piece
+    copy, so each must carry its `--*-len`/`--*-sha256` pair; a token that does not match
+    is refused with `EXIT_RELAY_CORRUPT` before any decode, write or sweep
+    (A-RELAYED-BYTES-ARE-CHECKED-NOT-TRUSTED)."""
     from coordinator_core.ops.dispatch_emit import grind_commit_contract as contract
 
     queue: list[str] = []
@@ -972,15 +979,36 @@ def cmd_run_record(rest: list[str]) -> int:
         i += 1
     flags = _parse_flags(
         others, required=("profile", "run-id", "repo-root"),
-        optional=("record-file", "record-urlenc", contract.DECLARED_FLAG, contract.DECISIONS_FLAG, "profile-dir"),
+        optional=(
+            "record-file", "record-urlenc", contract.DECLARED_FLAG, contract.DECISIONS_FLAG, "profile-dir",
+            contract.RECORD_LEN_FLAG, contract.RECORD_SHA256_FLAG,
+            contract.DECLARED_LEN_FLAG, contract.DECLARED_SHA256_FLAG,
+        ),
         bare=(contract.SWEEP_FLAG,),
     )
     if flags is None:
         return _usage(
             "usage: grind-row run-record --profile P --run-id T "
-            "[--record-file F|- | --record-urlenc E] [--queue Q ...] "
-            "[--declared-urlenc E] [--decisions-file F] [--sweep --profile-dir D] --repo-root D"
+            "[--record-file F|- | --record-urlenc E --record-len N --record-sha256 H] [--queue Q ...] "
+            "[--declared-urlenc E --declared-len N --declared-sha256 H] [--decisions-file F] "
+            "[--sweep --profile-dir D] --repo-root D"
         )
+    relayed = (
+        ("record-urlenc", contract.RECORD_LEN_FLAG, contract.RECORD_SHA256_FLAG),
+        (contract.DECLARED_FLAG, contract.DECLARED_LEN_FLAG, contract.DECLARED_SHA256_FLAG),
+    )
+    if "record-urlenc" in flags and "record-file" in flags:
+        return _usage("grind-row run-record: pass --record-file or --record-urlenc, not both")
+    for token_flag, len_flag, sha_flag in relayed:
+        if token_flag not in flags:
+            continue
+        absent = [f"--{f}" for f in (len_flag, sha_flag) if f not in flags]
+        if absent:
+            return _usage(f"grind-row run-record: --{token_flag} needs {' and '.join(absent)}")
+        refusal = contract.check_relay(token_flag, flags[token_flag], flags[len_flag], flags[sha_flag])
+        if refusal:
+            print(refusal, file=sys.stderr)
+            return EXIT_RELAY_CORRUPT
     sweeping = contract.SWEEP_FLAG in flags
     if sweeping and ("profile-dir" not in flags or not queue):
         return _usage("grind-row run-record: --sweep needs --profile-dir and at least one --queue")
@@ -988,8 +1016,6 @@ def cmd_run_record(rest: list[str]) -> int:
     repo_root = Path(flags["repo-root"])
     record_file = flags.get("record-file", "-")
     if "record-urlenc" in flags:
-        if "record-file" in flags:
-            return _usage("grind-row run-record: pass --record-file or --record-urlenc, not both")
         from urllib.parse import unquote
 
         raw_text = unquote(flags["record-urlenc"])
@@ -1012,7 +1038,8 @@ def cmd_run_record(rest: list[str]) -> int:
     try:
         record = json.loads(raw_text)
     except json.JSONDecodeError as exc:
-        print(f"grind-row run-record: --record-file is not valid JSON: {exc}", file=sys.stderr)
+        source = "--record-urlenc" if "record-urlenc" in flags else ("stdin" if record_file == "-" else "--record-file")
+        print(f"grind-row run-record: {source} is not valid JSON: {exc}", file=sys.stderr)
         return EXIT_USAGE
 
     missing = [k for k in contract.RUN_RECORD_REQUIRED if not isinstance(record, dict) or k not in record]

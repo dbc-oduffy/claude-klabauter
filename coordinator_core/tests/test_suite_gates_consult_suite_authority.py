@@ -22,6 +22,7 @@ pytestmark = pytest.mark.cadence
 _REPO = Path(__file__).resolve().parents[2]
 _SCAN_ROOTS = ("coordinator_core", "coordinator/bin")
 _TARGET = "check_tier_u_grant"
+_TARGET_GROUP_EM = "check_group_em_suite_grant"
 _TRIPWIRE = "EVERY-SUITE-GATE-REACHES-SUITE-AUTHORITY"
 
 # (repo-relative path, enclosing function or None for "whole file")
@@ -29,6 +30,10 @@ _ALLOWED = {
     ("coordinator_core/session/grant.py", None),
     ("coordinator_core/session/suite_authority.py", None),
     ("coordinator_core/session/grant_scope.py", None),
+    ("coordinator_core/bash_guards/check_test_suite_invocation.py", "_tier_u_grant"),
+}
+_ALLOWED_GROUP_EM = {
+    ("coordinator_core/session/suite_authority.py", None),
     ("coordinator_core/bash_guards/check_test_suite_invocation.py", "_tier_u_grant"),
 }
 
@@ -46,7 +51,8 @@ def _calls_in(func) -> set:
     return {_callee_name(n) for n in ast.walk(func) if isinstance(n, ast.Call)}
 
 
-def _violations():
+def _violations(target=_TARGET, allowed=None):
+    allowed = _ALLOWED if allowed is None else allowed
     found = []
     for root in _SCAN_ROOTS:
         for path in sorted((_REPO / root).rglob("*.py")):
@@ -57,18 +63,18 @@ def _violations():
                 tree = ast.parse(path.read_text(encoding="utf-8"))
             except (SyntaxError, UnicodeDecodeError):
                 continue
-            if (rel, None) in _ALLOWED:
+            if (rel, None) in allowed:
                 continue
             for fn in ast.walk(tree):
                 if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
                     continue
                 own = [
                     n for n in ast.walk(fn)
-                    if isinstance(n, ast.Call) and _callee_name(n) == _TARGET
+                    if isinstance(n, ast.Call) and _callee_name(n) == target
                 ]
                 if not own:
                     continue
-                if (rel, fn.name) in _ALLOWED:
+                if (rel, fn.name) in allowed:
                     continue
                 # A gate that first consults suite_authority may read the grant
                 # record afterwards to explain a denial.
@@ -80,6 +86,11 @@ def _violations():
 
 def test_no_suite_gate_calls_check_tier_u_grant_directly():
     bad = _violations()
+    assert not bad, f"{_TRIPWIRE}: route through suite_authority(): " + "; ".join(bad)
+
+
+def test_no_suite_gate_calls_check_group_em_suite_grant_directly():
+    bad = _violations(_TARGET_GROUP_EM, _ALLOWED_GROUP_EM)
     assert not bad, f"{_TRIPWIRE}: route through suite_authority(): " + "; ".join(bad)
 
 
@@ -160,6 +171,27 @@ def test_cloud_subagent_denied_by_identity(repo, monkeypatch, cmd):
     _rung(monkeypatch, "cloud")
     monkeypatch.setattr(guard, "_tier_u_grant", lambda cwd: (True, {}))
     assert not _authority_passed(_run(cmd, repo, env=_CLOUD_ENV, agent_id=_AGENT))
+
+
+@pytest.fixture
+def group_em_grant(monkeypatch):
+    from coordinator_core.group_em import suite_grant
+    from coordinator_core.session import grant
+
+    monkeypatch.setattr(grant, "check_tier_u_grant", lambda cwd=None, **k: (False, None))
+    monkeypatch.setattr(suite_grant, "check_group_em_suite_grant", lambda *a, **k: (True, {"kind": "g"}))
+
+
+@pytest.mark.parametrize("cmd", [_FAST, _FULL], ids=["fast", "full"])
+def test_box_em_authorized_with_group_em_grant(repo, monkeypatch, group_em_grant, cmd):
+    _rung(monkeypatch, "attended")
+    assert _authority_passed(_run(cmd, repo, env={}))
+
+
+@pytest.mark.parametrize("cmd", [_FAST, _FULL], ids=["fast", "full"])
+def test_subagent_denied_despite_group_em_grant(repo, monkeypatch, group_em_grant, cmd):
+    _rung(monkeypatch, "attended")
+    assert not _authority_passed(_run(cmd, repo, env={}, agent_id=_AGENT))
 
 
 def test_forged_marker_on_attended_machine_denied(repo, monkeypatch):

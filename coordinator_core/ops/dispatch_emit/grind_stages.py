@@ -73,8 +73,13 @@ from coordinator_core.ops.dispatch_emit.grind_commit_contract import (
     ALREADY_LANDED_KEY,
     DECISIONS_FLAG,
     DECLARED_FLAG,
+    DECLARED_LEN_FLAG,
+    DECLARED_SHA256_FLAG,
     HISTORICAL_RECORD_PREFIXES,
     QUEUE_FLAG,
+    RECORD_LEN_FLAG,
+    RECORD_SHA256_FLAG,
+    RELAY_CORRUPT_HEAD,
     SWEEP_FLAG,
     UNLANDED_KEY,
 )
@@ -102,6 +107,17 @@ APM_AGENT_TYPE = "coordinator:apm"
 #: The routing verify judges a verdict and what the row cites, which the test-runner's role refuses
 #: as review work; the premise-checker resolves citations against the tree and can run the ledger command.
 ROUTING_VERIFY_AGENT_TYPE = "coordinator:premise-checker"
+
+#: Routing-verify nodes whose pass or fail is seen next by a human or a central run, so a cheaper model
+#: judges them; every other pre-fix verify node (fix, discard) stays on the premise-checker's pin.
+#: The one named carve-out from that pin; ``resolve_agent_model`` still refuses a run override for the type.
+ROUTING_VERIFY_HAND_BACK_NODES: frozenset[str] = frozenset({
+    "verify-routing-universal",
+    "verify-routing-doe-escalation",
+    "verify-routing-direction-call",
+    "verify-routing-malformed",
+})
+ROUTING_VERIFY_HAND_BACK_MODEL = "haiku"
 
 #: Stages that dispatch a DoE-defined agent type: their model is that type's
 #: ``emit._AGENT_MODELS`` entry and no run ``models`` entry may change it.
@@ -197,6 +213,7 @@ def _agent_call(
     schema: dict,
     is_expr: bool = False,
     run_key: str = DEFAULT_RUN_KEY,
+    carve_out_model: Optional[str] = None,
 ) -> str:
     """Compose one ``const ... = await agent(...)`` call's text. Shared by
     every ``compose_*`` function below -- the only thing that varies per
@@ -215,7 +232,8 @@ def _agent_call(
     entry naming another model raises ``MalformedAgentOverrideError``. Any
     other type takes ``models[stage]`` when present, else ``STAGE_MODELS[stage]``;
     ``ValueError`` names a ``stage`` or a ``models`` key that ``STAGE_MODELS``
-    lacks."""
+    lacks. ``carve_out_model`` names a model that replaces a pinned type's entry for this one call
+    (``ROUTING_VERIFY_HAND_BACK_MODEL``); the type's pin still refuses a ``models`` override."""
     if stage not in STAGE_MODELS:
         raise ValueError(f"unknown stage {stage!r}; known: {sorted(STAGE_MODELS)}")
     if models:
@@ -223,7 +241,10 @@ def _agent_call(
         if unknown:
             raise ValueError(f"unknown stage model key(s) {unknown}; known: {sorted(STAGE_MODELS)}")
     override = (models or {}).get(stage)
-    if agent_type in _AGENT_MODELS:
+    if carve_out_model:
+        resolve_agent_model(agent_type, override)  # called for its refusal of a run override; result unused
+        model = carve_out_model
+    elif agent_type in _AGENT_MODELS:
         model = resolve_agent_model(agent_type, override)
     else:
         model = override or STAGE_MODELS[stage]
@@ -913,13 +934,15 @@ def compose_verify_agent_call(
     undo_paths_js: Optional[str] = None,
     routing: bool = False,
     digest_js: Optional[str] = None,
+    hand_back: bool = False,
 ) -> str:
     """The `verify` agent call. With ``digest_js`` the verifier records every `fail` -- the check, what it
     expected, what it saw -- as a ledger line and returns the same text as `reason`. With ``undo_paths_js`` (and ``final_js``) the verifier also runs the undo
     op on the row's final verification when its own verdict is `fail`, and returns the result as `undo`.
     ``routing`` swaps the post-fix brief for the routing brief (no fix has run: judge the triage verdict and
     target, require nothing on disk, no undo) and dispatches ``ROUTING_VERIFY_AGENT_TYPE``; its reply may
-    carry ``covered_by`` (``path:line``), the structured "already covered" outcome."""
+    carry ``covered_by`` (``path:line``), the structured "already covered" outcome. ``hand_back`` (routing only)
+    runs the call on ``ROUTING_VERIFY_HAND_BACK_MODEL`` instead of the agent type's pinned model."""
     head: list[tuple[str, str]] = [
         *_preamble_parts(preamble_expr),
         ("lit", "You are the verify stage for row "),
@@ -1037,6 +1060,7 @@ def compose_verify_agent_call(
         effort="high",
         schema=schema,
         is_expr=True,
+        carve_out_model=ROUTING_VERIFY_HAND_BACK_MODEL if routing and hand_back else None,
     )
 
 
@@ -1428,9 +1452,12 @@ def compose_ledger_sweep_call(
     when it evaluates empty. ``queue_dirs`` must be the FULL queue set the manifest was selected from:
     a queue left out reads as closed and its live rows' ledgers are settled. With no ``queue_dirs`` the
     sweep flag is omitted and the reply reports ``swept: true``. Returns `recorded` or `record-failed`
-    plus ``swept`` and ``sweep_reason``. This op-runner stages and commits nothing. Trap: the final
-    command expands the whole urlenc record into argv, so a record past the host's command-line limit
-    (~32K chars on Windows) still fails there; only the Bash-call cap is enforced."""
+    plus ``swept`` and ``sweep_reason``. This op-runner stages and commits nothing. Each payload is
+    encoded once and the same token is pieced and digested; the run-record command carries its
+    ``--*-len``/``--*-sha256`` so the verb refuses a damaged relay. Needs `_shq` and `_sha256Ascii`
+    in scope. Trap: the final command expands the whole urlenc record into argv, so a record past
+    the host's command-line limit (~32K chars on Windows) still fails there; only the Bash-call cap
+    is enforced."""
     queue_flags = "".join(f" --{QUEUE_FLAG} {q}" for q in queue_dirs)
     sweep_flags = f" --{SWEEP_FLAG} --profile-dir " if queue_dirs else ""
     rec_file: list[tuple[str, str]] = [("lit", "scratch/run-record-"), ("expr", run_id_js), ("lit", ".rec")]
@@ -1449,10 +1476,8 @@ def compose_ledger_sweep_call(
         ("lit", " && : > "),
         *dec_file,
         ("lit", "\n```\n"),
-        _piece_blocks_part(f"encodeURIComponent({record_js}){_URLENC_SHELL_INERT_JS}", rec_file_js),
-        _piece_blocks_part(
-            f"encodeURIComponent(JSON.stringify({{paths: {declared_js}}})){_URLENC_SHELL_INERT_JS}", dec_file_js
-        ),
+        _piece_blocks_part("_recEnc", rec_file_js),
+        _piece_blocks_part("_decEnc", dec_file_js),
         ("lit", f"```\n{ASSEMBLE_CMD} grind-row run-record{sweep_flags}"),
     ]
     if queue_dirs:
@@ -1462,9 +1487,16 @@ def compose_ledger_sweep_call(
         ("expr", run_id_js),
         ("lit", ' --record-urlenc "$(cat '),
         *rec_file,
-        ("lit", f')" --{DECLARED_FLAG} "$(cat '),
+        ("lit", f')" --{RECORD_LEN_FLAG} '),
+        ("expr", "_recEnc.length"),
+        ("lit", f" --{RECORD_SHA256_FLAG} "),
+        ("expr", "_sha256Ascii(_recEnc)"),
+        ("lit", f' --{DECLARED_FLAG} "$(cat '),
         *dec_file,
-        ("lit", ')"'),
+        ("lit", f')" --{DECLARED_LEN_FLAG} '),
+        ("expr", "_decEnc.length"),
+        ("lit", f" --{DECLARED_SHA256_FLAG} "),
+        ("expr", "_sha256Ascii(_decEnc)"),
         ("expr", f"({decisions_js}) ? ' --{DECISIONS_FLAG} ' + _shq({decisions_js}) : ''"),
         ("lit", " --repo-root "),
         _shq_part(repo_root_js),
@@ -1475,7 +1507,8 @@ def compose_ledger_sweep_call(
             "\n```\nThe last command's JSON output carries `swept` and `sweep_reason`. Return "
             "`recorded` when it exits 0, else `record-failed` with the verbatim stderr in `reason`; return "
             "`swept` and `sweep_reason` from its JSON output (`swept` true and `sweep_reason` empty when it "
-            "prints none). " + _NO_STAGING_CLAUSE,
+            "prints none). If its stderr starts with `" + RELAY_CORRUPT_HEAD + "`, return `record-failed` "
+            "with that stderr verbatim in `reason` and do not retry by hand. " + _NO_STAGING_CLAUSE,
         ),
     ]
     schema = {
@@ -1488,8 +1521,10 @@ def compose_ledger_sweep_call(
             "reason": {"type": "string"},
         },
     }
+    rec_enc_js = f"encodeURIComponent({record_js}){_URLENC_SHELL_INERT_JS}"
+    dec_enc_js = f"encodeURIComponent(JSON.stringify({{paths: {declared_js}}})){_URLENC_SHELL_INERT_JS}"
     return _agent_call(
-        _join_prompt_parts(parts),
+        f"((_recEnc, _decEnc) => {_join_prompt_parts(parts)})({rec_enc_js}, {dec_enc_js})",
         stage="ledger-sweep",
         models=models,
         label=label,

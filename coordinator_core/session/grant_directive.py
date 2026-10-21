@@ -54,6 +54,84 @@ def parse_revoke_args(rest: list[str]):
     return ARGS_INVALID
 
 
+def parse_group_em_grant_args(rest: list[str]):
+    """`group-em-grant <grantee> <note> [--ttl-minutes N] [--repo <root>]` — two
+    positionals plus the two flags anywhere. Returns `(grantee, note, ttl, repo)`
+    (`ttl` is `None` for the default) or `ARGS_INVALID`. The issuer is never an
+    argument: a third positional is a usage error, not a smuggled identity."""
+    ttl: Optional[int] = None
+    repo: Optional[str] = None
+    positional: list[str] = []
+    i = 0
+    while i < len(rest):
+        flag = rest[i]
+        if flag in ("--ttl-minutes", "--repo"):
+            if i + 1 >= len(rest):
+                return ARGS_INVALID
+            value = rest[i + 1]
+            if flag == "--repo":
+                repo = value
+            else:
+                try:
+                    ttl = int(value)
+                except ValueError:
+                    return ARGS_INVALID
+            i += 2
+            continue
+        positional.append(flag)
+        i += 1
+    if len(positional) != 2:
+        return ARGS_INVALID
+    return positional[0], positional[1], ttl, repo
+
+
+def parse_group_em_revoke_args(rest: list[str]):
+    """`group-em-revoke <grantee>` — exactly one positional. Returns it or `ARGS_INVALID`."""
+    if len(rest) != 1 or not rest[0]:
+        return ARGS_INVALID
+    return rest[0]
+
+
+_GROUP_EM_REMEDY = {
+    "NOT_GROUP_EM": "only the live verified box Group EM issues this",
+    "GROUP_EM_NOT_LIVE": "the box Group EM session is not live; re-enter /group-em",
+    "ISSUER_UNRESOLVED": "calling session id unresolvable; run from inside a session",
+    "GRANTEE_UNRESOLVED": "grantee must be one live session id or a unique registry name (or pass --repo)",
+    "GRANTEE_NOT_LIVE": "grantee session is not live; name a live session",
+    "TTL_OUT_OF_RANGE": "--ttl-minutes must be 1..720",
+    "NOTE_EMPTY": "the note is the ruling, verbatim; pass it non-empty",
+}
+
+
+def _run_group_em_verb(verb: str, rest: list[str]) -> Tuple[int, str]:
+    from coordinator_core.group_em import suite_grant
+
+    if verb == "group-em-grant":
+        parsed = parse_group_em_grant_args(rest)
+        if not isinstance(parsed, tuple):
+            return EXIT_USAGE, "group-em-grant <grantee> <note> [--ttl-minutes N] [--repo <root>]"
+        grantee, note, ttl, repo = parsed
+        kwargs = {"repo": repo}
+        if ttl is not None:
+            kwargs["ttl_minutes"] = ttl
+        result = suite_grant.issue_suite_grant(grantee, note, **kwargs)
+        if not result.ok:
+            return EXIT_FALSE, f"{result.reason}: {_GROUP_EM_REMEDY.get(result.reason, 'refused')}"
+        rec = result.record or {}
+        return EXIT_OK, (
+            f"group-em-grant: grantee {rec.get('grantee_session_id')} "
+            f"expires {rec.get('expires_at')} issuer {rec.get('issuer_session_id')}"
+        )
+
+    parsed = parse_group_em_revoke_args(rest)
+    if parsed is ARGS_INVALID:
+        return EXIT_USAGE, "group-em-revoke <grantee>"
+    result = suite_grant.revoke_suite_grant(parsed)
+    if not result.ok:
+        return EXIT_FALSE, f"{result.reason}: {_GROUP_EM_REMEDY.get(result.reason, 'refused')}"
+    return EXIT_OK, ""
+
+
 def parse_check_args(rest: list[str]):
     """`check` — no arguments. Returns `None` on the legal empty argv, or
     `ARGS_INVALID` on anything else (mirrors the CLI's own `check`
@@ -106,6 +184,9 @@ def run_grant_directive(args: list[str], *, repo_root: Optional[str] = None) -> 
         except ValueError as exc:
             return EXIT_USAGE, f"grant: {exc}"
         return (EXIT_OK, "") if ok else (EXIT_FALSE, "grant: session id unresolvable")
+
+    if verb in ("group-em-grant", "group-em-revoke"):
+        return _run_group_em_verb(verb, rest)
 
     if verb == "check":
         parsed = parse_check_args(rest)

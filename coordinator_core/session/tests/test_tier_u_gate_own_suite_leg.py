@@ -10,7 +10,7 @@ import unittest.mock as mock
 import pytest
 
 from coordinator_core.bash_guards import check_test_suite_invocation as guard
-from coordinator_core.session import tier_u_gate
+from coordinator_core.session import suite_authority, tier_u_gate
 from coordinator_core.win_portability import no_console_passthrough_kwargs
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
@@ -39,9 +39,9 @@ def grant_calls(monkeypatch):
 
     def _spy(**kw):
         calls.append(kw)
-        return True, None
+        return suite_authority.SuiteAuthority(True, suite_authority.BASIS_GRANT, None)
 
-    monkeypatch.setattr(tier_u_gate, "check_tier_u_grant", _spy)
+    monkeypatch.setattr(tier_u_gate, "suite_authority", _spy)
     return calls
 
 

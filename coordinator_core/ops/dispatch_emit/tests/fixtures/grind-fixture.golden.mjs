@@ -124,6 +124,55 @@ function _archiveDestination(rowPath) {
 
 const _shq = (s) => "'" + String(s).replace(/'/g, "'\\''") + "'";
 
+function _sha256Ascii(s) {
+  var K = [], H = [], p = 2, n = 0, i, j;
+  while (n < 64) {
+    var q = true;
+    for (var d = 2; d * d <= p; d++) { if (p % d === 0) { q = false; break; } }
+    if (q) {
+      if (n < 8) { H[n] = (Math.pow(p, 1 / 2) % 1 * 4294967296) | 0; }
+      K[n] = (Math.pow(p, 1 / 3) % 1 * 4294967296) | 0;
+      n++;
+    }
+    p++;
+  }
+  var b = [];
+  for (i = 0; i < s.length; i++) { b.push(s.charCodeAt(i) & 255); }
+  var bits = b.length * 8;
+  b.push(128);
+  while (b.length % 64 !== 56) { b.push(0); }
+  var hi = Math.floor(bits / 4294967296), lo = bits >>> 0;
+  b.push((hi >>> 24) & 255, (hi >>> 16) & 255, (hi >>> 8) & 255, hi & 255);
+  b.push((lo >>> 24) & 255, (lo >>> 16) & 255, (lo >>> 8) & 255, lo & 255);
+  var w = [];
+  for (var off = 0; off < b.length; off += 64) {
+    for (i = 0; i < 16; i++) {
+      w[i] = (b[off + 4 * i] << 24) | (b[off + 4 * i + 1] << 16) | (b[off + 4 * i + 2] << 8) | b[off + 4 * i + 3];
+    }
+    for (i = 16; i < 64; i++) {
+      var x = w[i - 15], y = w[i - 2];
+      var s0 = ((x >>> 7) | (x << 25)) ^ ((x >>> 18) | (x << 14)) ^ (x >>> 3);
+      var s1 = ((y >>> 17) | (y << 15)) ^ ((y >>> 19) | (y << 13)) ^ (y >>> 10);
+      w[i] = (w[i - 16] + s0 + w[i - 7] + s1) | 0;
+    }
+    var a = H[0], bb = H[1], c = H[2], dd = H[3], e = H[4], f = H[5], g = H[6], h = H[7];
+    for (i = 0; i < 64; i++) {
+      var S1 = ((e >>> 6) | (e << 26)) ^ ((e >>> 11) | (e << 21)) ^ ((e >>> 25) | (e << 7));
+      var ch = (e & f) ^ (~e & g);
+      var t1 = (h + S1 + ch + K[i] + w[i]) | 0;
+      var S0 = ((a >>> 2) | (a << 30)) ^ ((a >>> 13) | (a << 19)) ^ ((a >>> 22) | (a << 10));
+      var mj = (a & bb) ^ (a & c) ^ (bb & c);
+      var t2 = (S0 + mj) | 0;
+      h = g; g = f; f = e; e = (dd + t1) | 0; dd = c; c = bb; bb = a; a = (t1 + t2) | 0;
+    }
+    H[0] = (H[0] + a) | 0; H[1] = (H[1] + bb) | 0; H[2] = (H[2] + c) | 0; H[3] = (H[3] + dd) | 0;
+    H[4] = (H[4] + e) | 0; H[5] = (H[5] + f) | 0; H[6] = (H[6] + g) | 0; H[7] = (H[7] + h) | 0;
+  }
+  var out = '';
+  for (j = 0; j < 8; j++) { out += ('00000000' + (H[j] >>> 0).toString(16)).slice(-8); }
+  return out;
+}
+
 const PROFILE_DIR = args.profile_dir;
 
 const REPO_ROOT = args.repo_root;
@@ -162,6 +211,8 @@ const TRIAGE_DEPTH_BY_KEY = {"P0": "standard"};
 const VERIFY_SPEC = {"verify": {"P0": {"mode": "op", "op": "lessons.verify_extraction"}}};
 
 const VERIFY_PRE_FIX = [];
+
+const VERIFY_HAND_BACK = [];
 
 let _callCount = 0;
 
@@ -627,7 +678,7 @@ async function _dispatchRow(rowId, batchState) {
 }
 
 async function _drainCall() {
-    const _result = (await agent('Your repo is `' + (REPO_ROOT) + '`: `cd` there before any command and resolve every relative path against it. ' + 'The Bash tool drops any command longer than 8000 characters, so the run record travels in pieces. Run each command below, in order, exactly as written, as its OWN Bash call:\n```\nmkdir -p scratch && : > ' + 'scratch/run-record-' + (RUN_ID) + '.rec' + ' && : > ' + 'scratch/run-record-' + (RUN_ID) + '.dec' + '\n```\n' + ((encodeURIComponent(JSON.stringify(_runCostRecord())).replace(/[!'()*~]/g, c => '%' + c.charCodeAt(0).toString(16).toUpperCase())).replace(/.{1,5000}/g, c => '```\nprintf %s ' + c + ' >> ' + ('scratch/run-record-' + (RUN_ID) + '.rec') + '\n```\n')) + ((encodeURIComponent(JSON.stringify({paths: _declaredWrites()})).replace(/[!'()*~]/g, c => '%' + c.charCodeAt(0).toString(16).toUpperCase())).replace(/.{1,5000}/g, c => '```\nprintf %s ' + c + ' >> ' + ('scratch/run-record-' + (RUN_ID) + '.dec') + '\n```\n')) + '```\n${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/bin/backlog-grind-assemble grind-row run-record --sweep --profile-dir ' + (_shq(PROFILE_DIR)) + ' --profile fixture --queue state/bug-backlog --run-id ' + (RUN_ID) + ' --record-urlenc "$(cat ' + 'scratch/run-record-' + (RUN_ID) + '.rec' + ')" --declared-urlenc "$(cat ' + 'scratch/run-record-' + (RUN_ID) + '.dec' + ')"' + ((args.decisions_file || '') ? ' --decisions-file ' + _shq(args.decisions_file || '') : '') + ' --repo-root ' + (_shq(REPO_ROOT)) + '\n```\nThe last command\'s JSON output carries `swept` and `sweep_reason`. Return `recorded` when it exits 0, else `record-failed` with the verbatim stderr in `reason`; return `swept` and `sweep_reason` from its JSON output (`swept` true and `sweep_reason` empty when it prints none). You do not stage or commit anything. Only the committer stage does that.' + '\n\nSidecar dir (yours, always writable): create it with `mkdir -p`; keep run notes there. If the harness denies the Write tool on a file your task declares or on a file in this dir ("Subagents should return findings as text"), write it with a Bash heredoc, `cat > <path> <<\'EOF\'` -- never skip it -- and name the path in your report. Use the heredoc only for a path the Write tool refused; once Write has written a path, keep editing it with Write/Edit, never overwrite it by heredoc (blob drift at commit). A coordinator guard\'s denial stays a stop; the cat-heredoc advisory is not a denial. Quote the delimiter; a frontmatter file written this way skips the write guard, so report it as unvalidated. No Bash tool: put the content in your reply. A provisioned `sidecar_path:` file, when you have one, is still where that report goes.\nsidecar_dir: .coordinator-local/workflow-sidecars/grind/run-1/ledger-sweep-drain/', { label: 'ledger-sweep:drain', phase: 'Grind', agentType: 'general-purpose', model: 'haiku', effort: 'low', schema: {"properties": {"outcome": {"enum": ["recorded", "record-failed"], "type": "string"}, "reason": {"type": "string"}, "sweep_reason": {"type": "string"}, "swept": {"type": "boolean"}}, "required": ["outcome"], "type": "object"} })) || {};
+    const _result = (await agent(((_recEnc, _decEnc) => 'Your repo is `' + (REPO_ROOT) + '`: `cd` there before any command and resolve every relative path against it. ' + 'The Bash tool drops any command longer than 8000 characters, so the run record travels in pieces. Run each command below, in order, exactly as written, as its OWN Bash call:\n```\nmkdir -p scratch && : > ' + 'scratch/run-record-' + (RUN_ID) + '.rec' + ' && : > ' + 'scratch/run-record-' + (RUN_ID) + '.dec' + '\n```\n' + ((_recEnc).replace(/.{1,5000}/g, c => '```\nprintf %s ' + c + ' >> ' + ('scratch/run-record-' + (RUN_ID) + '.rec') + '\n```\n')) + ((_decEnc).replace(/.{1,5000}/g, c => '```\nprintf %s ' + c + ' >> ' + ('scratch/run-record-' + (RUN_ID) + '.dec') + '\n```\n')) + '```\n${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/bin/backlog-grind-assemble grind-row run-record --sweep --profile-dir ' + (_shq(PROFILE_DIR)) + ' --profile fixture --queue state/bug-backlog --run-id ' + (RUN_ID) + ' --record-urlenc "$(cat ' + 'scratch/run-record-' + (RUN_ID) + '.rec' + ')" --record-len ' + (_recEnc.length) + ' --record-sha256 ' + (_sha256Ascii(_recEnc)) + ' --declared-urlenc "$(cat ' + 'scratch/run-record-' + (RUN_ID) + '.dec' + ')" --declared-len ' + (_decEnc.length) + ' --declared-sha256 ' + (_sha256Ascii(_decEnc)) + ((args.decisions_file || '') ? ' --decisions-file ' + _shq(args.decisions_file || '') : '') + ' --repo-root ' + (_shq(REPO_ROOT)) + '\n```\nThe last command\'s JSON output carries `swept` and `sweep_reason`. Return `recorded` when it exits 0, else `record-failed` with the verbatim stderr in `reason`; return `swept` and `sweep_reason` from its JSON output (`swept` true and `sweep_reason` empty when it prints none). If its stderr starts with `relayed payload is corrupt`, return `record-failed` with that stderr verbatim in `reason` and do not retry by hand. You do not stage or commit anything. Only the committer stage does that.')(encodeURIComponent(JSON.stringify(_runCostRecord())).replace(/[!'()*~]/g, c => '%' + c.charCodeAt(0).toString(16).toUpperCase()), encodeURIComponent(JSON.stringify({paths: _declaredWrites()})).replace(/[!'()*~]/g, c => '%' + c.charCodeAt(0).toString(16).toUpperCase())) + '\n\nSidecar dir (yours, always writable): create it with `mkdir -p`; keep run notes there. If the harness denies the Write tool on a file your task declares or on a file in this dir ("Subagents should return findings as text"), write it with a Bash heredoc, `cat > <path> <<\'EOF\'` -- never skip it -- and name the path in your report. Use the heredoc only for a path the Write tool refused; once Write has written a path, keep editing it with Write/Edit, never overwrite it by heredoc (blob drift at commit). A coordinator guard\'s denial stays a stop; the cat-heredoc advisory is not a denial. Quote the delimiter; a frontmatter file written this way skips the write guard, so report it as unvalidated. No Bash tool: put the content in your reply. A provisioned `sidecar_path:` file, when you have one, is still where that report goes.\nsidecar_dir: .coordinator-local/workflow-sidecars/grind/run-1/ledger-sweep-drain/', { label: 'ledger-sweep:drain', phase: 'Grind', agentType: 'general-purpose', model: 'haiku', effort: 'low', schema: {"properties": {"outcome": {"enum": ["recorded", "record-failed"], "type": "string"}, "reason": {"type": "string"}, "sweep_reason": {"type": "string"}, "swept": {"type": "boolean"}}, "required": ["outcome"], "type": "object"} })) || {};
     _recordCall('ledger-sweep');
     return _result;
 }
@@ -636,6 +687,9 @@ async function _runClose() {
   let _threw;
   try { _drained = await _drainCall(); } catch (err) {
     try { _drained = await _drainCall(); } catch (err2) { _threw = err2 && err2.message ? err2.message : String(err2); }
+  }
+  if (_threw === undefined && _drained.outcome === 'record-failed' && String(_drained.reason || '').includes('relayed payload is corrupt')) {
+    try { _drained = await _drainCall(); } catch (err3) { _threw = err3 && err3.message ? err3.message : String(err3); }
   }
   if (_threw !== undefined) {
     _handBack(RUN_ID, 'stage-dead', `drain sweep did not complete: state/queue-grind/fixture/runs/${RUN_ID}.json: ${_threw}`);

@@ -637,6 +637,30 @@ class TestNoReceiverHooksFire:
             "cannot tell which failure they hit"
         )
 
+    def test_git_ignored_receipt_paths_are_not_a_failed_receipt(
+        self, tmp_path, monkeypatch
+    ):
+        """Ignored sent/ + ledger paths have nothing to commit: no commit is
+        forced, and the CLI's "recover: ..." line (keyed off sender_committed)
+        stays silent."""
+        sender_repo = _make_sender_git_repo(tmp_path)
+        receiver_repo = _make_receiver_git_repo(tmp_path)
+        claude_home = _make_claude_home(tmp_path, {"project_rag": receiver_repo})
+        monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
+        (sender_repo / ".gitignore").write_text(".coordinator-local/\n", encoding="utf-8")
+        _write_draft(sender_repo, "ignored-receipt", track=False)
+
+        result = _memo_send(
+            {"dry_run": False, "topic": "ignored-receipt"}, repo_root=sender_repo
+        )
+
+        assert result["exit_code"] == 0, result
+        acted = result["acted"][0]
+        assert acted["sender_committed"] is True, acted
+        assert "sender_commit_stderr" not in acted
+        assert _git(sender_repo, "ls-files").stdout.decode("utf-8").split() == [".gitkeep"]
+        assert (sender_repo / ".coordinator-local" / "memo-outbox" / "sent-ledger.jsonl").is_file()
+
     def test_sender_receipt_lands_when_the_draft_was_never_committed(
         self, tmp_path, monkeypatch
     ):

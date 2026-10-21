@@ -1412,6 +1412,18 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
         "coordinator_core/hooks/block_workflow_foreign_emission.py",
         ("_handler",),
     ),
+    "hooks.guard_agent_route_admission": (
+        "coordinator_core/hooks/guard_agent_route_admission.py",
+        ("_handler",),
+    ),
+    "hooks.guard_brief_prescribed_method": (
+        "coordinator_core/hooks/guard_brief_prescribed_method.py",
+        ("_handler",),
+    ),
+    "hooks.guard_editor_python_direct": (
+        "coordinator_core/hooks/guard_editor_python_direct.py",
+        ("_handler",),
+    ),
     "hooks.block_workflow_unmodeled_agent": (
         "coordinator_core/hooks/block_workflow_unmodeled_agent.py",
         ("_handler",),
@@ -7156,6 +7168,10 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     "learn_lessons_pipeline.brief": 2,
     "memo.correct_note": 4,
     "memo.heal_inbox": 3,
+    # Reachable-site ceiling, not a per-call count: the delivery path is zero-hook; the sites are the
+    # removal commit of a git-tracked home copy (commit_scoped) and the commit seams' shared helpers.
+    # An empty or absent home inbox runs none (test_empty_or_absent_home_inbox_spawns_nothing).
+    "memo.migrate_group_em_inbox": 3,
     "p4.register_workspace": 1,
     # plan.gated_criteria_met: one batched rev-list plus commit_authored_content's sites.
     "plan.gated_criteria_met": 4,

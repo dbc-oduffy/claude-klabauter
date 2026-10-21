@@ -14,6 +14,7 @@ did not carry; the reason names the landed sha. Both keys are absent on a first 
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from typing import Optional
@@ -44,6 +45,96 @@ SWEEP_FLAG = "sweep"
 # Twinned by grind_rows run-record --sweep (the record) and grind_compose's run close (the hand-back).
 SWEEP_FAILED_HEAD = "drain sweep did not complete"
 RUN_RECORD_REQUIRED = ("profile", "run_id", "counts", "spend", "handed_back", "halted")
+
+# Relay-integrity contract: each printf-relayed urlenc token travels with its length and sha256.
+RECORD_LEN_FLAG = "record-len"
+RECORD_SHA256_FLAG = "record-sha256"
+DECLARED_LEN_FLAG = "declared-len"
+DECLARED_SHA256_FLAG = "declared-sha256"
+# Opens the stderr of a refused relay; grind_compose's run close matches it to re-drive the drain once.
+RELAY_CORRUPT_HEAD = "relayed payload is corrupt"
+
+_HEX64 = frozenset("0123456789abcdef")
+
+# Pure JS over an ASCII string. Callers pass only the shell-inert urlenc token, which is ASCII by
+# construction; a char above 0x7f would be masked to a byte and no longer match relay_digest.
+# The runtime supplies no hashing global, so the constants are derived from the first 64 primes.
+RELAY_SHA256_JS = """function _sha256Ascii(s) {
+  var K = [], H = [], p = 2, n = 0, i, j;
+  while (n < 64) {
+    var q = true;
+    for (var d = 2; d * d <= p; d++) { if (p % d === 0) { q = false; break; } }
+    if (q) {
+      if (n < 8) { H[n] = (Math.pow(p, 1 / 2) % 1 * 4294967296) | 0; }
+      K[n] = (Math.pow(p, 1 / 3) % 1 * 4294967296) | 0;
+      n++;
+    }
+    p++;
+  }
+  var b = [];
+  for (i = 0; i < s.length; i++) { b.push(s.charCodeAt(i) & 255); }
+  var bits = b.length * 8;
+  b.push(128);
+  while (b.length % 64 !== 56) { b.push(0); }
+  var hi = Math.floor(bits / 4294967296), lo = bits >>> 0;
+  b.push((hi >>> 24) & 255, (hi >>> 16) & 255, (hi >>> 8) & 255, hi & 255);
+  b.push((lo >>> 24) & 255, (lo >>> 16) & 255, (lo >>> 8) & 255, lo & 255);
+  var w = [];
+  for (var off = 0; off < b.length; off += 64) {
+    for (i = 0; i < 16; i++) {
+      w[i] = (b[off + 4 * i] << 24) | (b[off + 4 * i + 1] << 16) | (b[off + 4 * i + 2] << 8) | b[off + 4 * i + 3];
+    }
+    for (i = 16; i < 64; i++) {
+      var x = w[i - 15], y = w[i - 2];
+      var s0 = ((x >>> 7) | (x << 25)) ^ ((x >>> 18) | (x << 14)) ^ (x >>> 3);
+      var s1 = ((y >>> 17) | (y << 15)) ^ ((y >>> 19) | (y << 13)) ^ (y >>> 10);
+      w[i] = (w[i - 16] + s0 + w[i - 7] + s1) | 0;
+    }
+    var a = H[0], bb = H[1], c = H[2], dd = H[3], e = H[4], f = H[5], g = H[6], h = H[7];
+    for (i = 0; i < 64; i++) {
+      var S1 = ((e >>> 6) | (e << 26)) ^ ((e >>> 11) | (e << 21)) ^ ((e >>> 25) | (e << 7));
+      var ch = (e & f) ^ (~e & g);
+      var t1 = (h + S1 + ch + K[i] + w[i]) | 0;
+      var S0 = ((a >>> 2) | (a << 30)) ^ ((a >>> 13) | (a << 19)) ^ ((a >>> 22) | (a << 10));
+      var mj = (a & bb) ^ (a & c) ^ (bb & c);
+      var t2 = (S0 + mj) | 0;
+      h = g; g = f; f = e; e = (dd + t1) | 0; dd = c; c = bb; bb = a; a = (t1 + t2) | 0;
+    }
+    H[0] = (H[0] + a) | 0; H[1] = (H[1] + bb) | 0; H[2] = (H[2] + c) | 0; H[3] = (H[3] + dd) | 0;
+    H[4] = (H[4] + e) | 0; H[5] = (H[5] + f) | 0; H[6] = (H[6] + g) | 0; H[7] = (H[7] + h) | 0;
+  }
+  var out = '';
+  for (j = 0; j < 8; j++) { out += ('00000000' + (H[j] >>> 0).toString(16)).slice(-8); }
+  return out;
+}"""
+
+
+def relay_digest(token: str) -> tuple[int, str]:
+    """``(len(token), sha256 hex)`` of the ASCII ``token``; raises ``ValueError`` when it is not ASCII."""
+    try:
+        raw = token.encode("ascii")
+    except UnicodeEncodeError as exc:
+        raise ValueError(f"relay token is not ASCII: {exc}") from exc
+    return len(token), hashlib.sha256(raw).hexdigest()
+
+
+def check_relay(flag: str, token: str, length: str, sha256: str) -> Optional[str]:
+    """None when ``token`` matches the sender's ``length`` and ``sha256`` (both raw flag strings);
+    else one ``RELAY_CORRUPT_HEAD`` line naming ``--flag`` and both digests. Never raises."""
+    sent = f"sent as {length!r} chars sha256 {str(sha256)[:12]!r}"
+    try:
+        n, h = relay_digest(token)
+    except ValueError:
+        return f"{RELAY_CORRUPT_HEAD}: --{flag} is not ASCII, {sent}; the agent's copy of the pieces is damaged"
+    sent = f"sent as {length} chars sha256 {str(sha256)[:12]}"
+    got = f"--{flag} arrived as {n} chars sha256 {h[:12]}, {sent}; the agent's copy of the pieces is damaged"
+    if not (isinstance(length, str) and length.isascii() and length.isdigit()):
+        return f"{RELAY_CORRUPT_HEAD}: {got} (length is not a non-negative integer)"
+    if not (isinstance(sha256, str) and len(sha256) == 64 and set(sha256) <= _HEX64):
+        return f"{RELAY_CORRUPT_HEAD}: {got} (sha256 is not 64 lowercase hex)"
+    if int(length) != n or sha256 != h:
+        return f"{RELAY_CORRUPT_HEAD}: {got}"
+    return None
 
 # Records a fix stage must never write: history, not work product.
 HISTORICAL_RECORD_PREFIXES = (

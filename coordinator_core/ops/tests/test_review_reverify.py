@@ -14,6 +14,8 @@ from coordinator_core.ops import review_reverify as rr
 from coordinator_core.ops.dispatch_emit import review_edits
 from coordinator_core.session.machinery_paths import share_dir
 
+_REAL_POPEN = subprocess.Popen
+_NOWIN = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 SESSION = "sess-own"
 PREFIX = "prep-t"
 BASE = "abc1234"
@@ -171,3 +173,95 @@ def test_handler_requires_repo_root_and_dispatches(world):
     assert rr._handler({"base": BASE, "slice_prefix": PREFIX}, None)["error"]
     out = rr._handler({"base": BASE, "slice_prefix": PREFIX, "session_id": SESSION}, root)
     assert out["error"] is None and out["edited"] == []
+
+
+def test_concurrent_run_dirty_file_is_foreign_and_never_reverted(world, monkeypatch):
+    """Two runs share a session: run B's declared file and a pre-snapshot dirty file sit in the
+    tree beside run A's own created file. Reverify of A leaves B's bytes untouched."""
+    root, _orig, _ = world
+    b_declared = root / "tests/test_b_declared.py"
+    b_old = root / "tests/test_b_old.py"
+    a_new = root / "tests/test_a_new.py"
+    for f in (b_declared, b_old, a_new):
+        f.write_bytes(b"def test_x():\n    assert False\n")
+    import os
+    os.utime(b_old, (1.0, 1.0))
+    before = {f: f.read_bytes() for f in (b_declared, b_old)}
+    monkeypatch.setattr(
+        review_edits, "review_writes",
+        lambda *_a, **_k: {"tests/test_b_declared.py": "a1", "tests/test_b_old.py": "a2", "tests/test_a_new.py": "a3"},
+    )
+    monkeypatch.setattr(review_edits, "live_sibling_declared", lambda *_a, **_k: {"tests/test_b_declared.py": "run-b"})
+    listed = _list(root)
+    assert listed["created"] == ["tests/test_a_new.py"]
+    assert listed["foreign"] == ["tests/test_b_declared.py", "tests/test_b_old.py"]
+    out = _revert(root, [
+        "tests/test_b_declared.py::test_x", "tests/test_b_old.py::test_x", "tests/test_a_new.py::test_x",
+    ])
+    assert [r["path"] for r in out["reverted"]] == ["tests/test_a_new.py"]
+    assert out["foreign"] == ["tests/test_b_declared.py::test_x", "tests/test_b_old.py::test_x"]
+    assert {f: f.read_bytes() for f in (b_declared, b_old)} == before
+    assert not a_new.exists()
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_tracked_at_base_undeclared_foreign_file_is_not_removed(world, monkeypatch):
+    """A path tracked in the snapshot's base commit cannot be review-created, even when no sibling
+    declared it and its mtime is after the snapshot."""
+    root, _orig, _ = world
+    monkeypatch.setattr(subprocess, "Popen", _REAL_POPEN)
+    tracked = root / "tests/test_tracked_foreign.py"
+    tracked.write_bytes(b"def test_x():\n    assert True\n")
+    env = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
+    import os
+    full_env = {**os.environ, **env}
+    for argv in (["init", "-q"], ["add", "tests/test_tracked_foreign.py"], ["commit", "-q", "-m", "base"]):
+        subprocess.run(["git", "-C", str(root), *argv], check=True, env=full_env, capture_output=True, creationflags=_NOWIN)
+    base = subprocess.run(
+        ["git", "-C", str(root), "rev-parse", "HEAD"], check=True, capture_output=True, text=True
+    ).stdout.strip()
+    manifest = Path(share_dir(str(root), SESSION)) / f"{PREFIX}.pre-review" / "manifest.json"
+    data = json.loads(manifest.read_text(encoding="utf-8"))
+    data["base"] = base
+    manifest.write_text(json.dumps(data), encoding="utf-8")
+    tracked.write_bytes(b"def test_x():\n    assert False\n")
+    before = tracked.read_bytes()
+    monkeypatch.setattr(review_edits, "review_writes", lambda *_a, **_k: {"tests/test_tracked_foreign.py": "a1"})
+    monkeypatch.setattr(review_edits, "live_sibling_declared", lambda *_a, **_k: {})
+    monkeypatch.setattr(subprocess, "Popen", lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("spawn")))
+    out = rr.review_reverify(
+        root, base=base, slice_prefix=PREFIX, session_id=SESSION, failing=["tests/test_tracked_foreign.py::test_x"]
+    )
+    assert out["reverted"] == []
+    assert out["foreign"] == ["tests/test_tracked_foreign.py::test_x"]
+    assert tracked.read_bytes() == before
+
+
+def test_removed_created_path_leaves_no_intent_to_add_entry(world, monkeypatch):
+    root, _orig, _ = world
+    monkeypatch.setattr(subprocess, "Popen", _REAL_POPEN)
+
+    def git(*args):
+        return subprocess.run(
+            ["git", *args], cwd=str(root), capture_output=True, text=True, check=True, creationflags=_NOWIN
+        ).stdout
+
+    git("init", "-q")
+    git("config", "user.email", "t@t")
+    git("config", "user.name", "t")
+    git("add", "pkg", "tests/test_plain.py", "tests/test_mod.py")
+    git("commit", "-q", "-m", "seed")
+    new = root / "tests/test_new.py"
+    new.write_text("def test_n():\n    assert False\n", encoding="utf-8")
+    git("add", "-N", "tests/test_new.py")
+    (root / "pkg/other.py").write_text("OTHER = 2\n", encoding="utf-8")
+    git("add", "pkg/other.py")
+    monkeypatch.setattr(review_edits, "review_writes", lambda *_a, **_k: {"tests/test_new.py": "a1"})
+
+    out = _revert(root, ["tests/test_new.py::test_n"])
+
+    assert out["error"] is None and out["index_residue"] == []
+    assert not new.exists()
+    assert git("ls-files", "--", "tests/test_new.py") == ""
+    assert git("diff", "--cached", "--name-only").split() == ["pkg/other.py"]

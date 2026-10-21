@@ -37,9 +37,11 @@ def shape(research: Mapping) -> dict[str, Any]:
     `depth` reaches the repo manifest only: `deeper` runs Sonnet scouts, `deepest` adds the
     relay pass. Haiku scouts are the `standard` default and the documented failure on large repos.
 
-    Raises ValueError on an unknown value_class, appetite, source, seed kind or depth.
+    Raises ValueError on spike (own procedure, no tier) or an unknown value_class, appetite, source, seed kind or depth.
     """
     value_class = _choice(research, "value_class", rc.VALUE_CLASSES, None)
+    if value_class == rc.SPIKE_CLASS:
+        raise ValueError("research.value_class=spike has no engine pipeline; run /coordinator:spike with the sizing")
     appetite = _choice(research, "appetite", rc.APPETITES, _DEFAULT_APPETITE)
     seeds = research.get("seeds") or []
     seeded = rc.seed_sources(seeds)

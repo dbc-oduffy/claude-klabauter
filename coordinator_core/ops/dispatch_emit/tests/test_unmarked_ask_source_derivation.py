@@ -80,6 +80,32 @@ def test_pm_marked_ask_quoting_no_turn_is_refused_before_any_run_dir(repo):
     assert not list(repo.rglob("ask-*"))
 
 
+def test_pm_refusal_shows_nearest_turn_diff_and_working_form(repo):
+    _seed(repo)
+    near = TURN.replace("faster", "slower")
+    with pytest.raises(ValueError) as exc:
+        _emit(repo, ask=near, ask_source="pm")
+    text = str(exc.value)
+    assert TURN in text and "'slower'" in text and "'faster'" in text
+    assert "one verbatim turn in `ask`" in text and "`context`" in text
+    assert "relayed" in text and not list(repo.rglob("ask-*"))
+
+
+def test_pm_ask_of_joined_verbatim_turns_emits(repo):
+    other = "also remember the rollback plan before shipping"
+    _seed(repo)
+    _seed(repo, other)
+    out, records = _emit(repo, ask=f"{TURN} / {other}", ask_source="pm")
+    assert out["ask_source"] == "pm" and out["pm_verification"] == "matched"
+    assert (records / ASK_TEXT_FILE).is_file()
+
+
+def test_pm_joined_ask_with_one_bad_piece_is_refused(repo):
+    _seed(repo)
+    with pytest.raises(ValueError, match="quotes no recorded PM turn"):
+        _emit(repo, ask=f"{TURN} / words nobody said at all", ask_source="pm")
+
+
 def test_pm_marked_ask_with_no_log_runs_pm_unverifiable(repo):
     out, _ = _emit(repo, ask="unrecorded words", ask_source="pm")
     assert out["ask_source"] == "pm" and out["pm_verification"] == "unverifiable"

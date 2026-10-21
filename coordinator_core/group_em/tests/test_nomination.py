@@ -394,6 +394,54 @@ def test_claim_records_pending_entry_evidence(repo_root, record_dir):
     }
 
 
+def test_home_start_claim_writes_kind_and_claimed_at_only(repo_root, record_dir, monkeypatch):
+    monkeypatch.setattr(nomination.human_entry, "home_start_refusal", lambda sid: None)
+    _REAL_CLAIM(repo_root, "sid-new", directory=record_dir, entry_kind="home-start", now=1_700_000_000.0)
+    record = nomination.read_record(repo_root, record_dir)
+    assert record["entered_via"] == "home-start"
+    assert record["entry_evidence"] == {"kind": "home-start", "claimed_at": "2023-11-14T22:13:20Z"}
+
+
+def test_home_start_refusal_reason_raises_and_writes_nothing(repo_root, record_dir, monkeypatch):
+    monkeypatch.setattr(nomination.human_entry, "home_start_refusal", lambda sid: "cwd-outside-home")
+    with pytest.raises(nomination.NotHumanEnteredError, match="cwd-outside-home"):
+        _REAL_CLAIM(repo_root, "sid-new", directory=record_dir, entry_kind="home-start")
+    assert nomination.read_record(repo_root, record_dir) is None
+    assert not nomination._box_record_path(record_dir).exists()
+
+
+@pytest.mark.parametrize(
+    "kwargs", [{"entry_kind": "home-start", "prompt_id": "p-1"}, {"entry_kind": "bogus"}]
+)
+def test_entry_kind_with_prompt_id_or_unknown_kind_raises(kwargs, repo_root, record_dir, monkeypatch):
+    monkeypatch.setattr(nomination.human_entry, "home_start_refusal", lambda sid: None)
+    with pytest.raises(nomination.NotHumanEnteredError):
+        _REAL_CLAIM(repo_root, "sid-new", directory=record_dir, **kwargs)
+    assert nomination.read_record(repo_root, record_dir) is None
+
+
+def test_prompt_id_claim_record_is_unchanged_by_entry_kind_support(repo_root, record_dir):
+    _REAL_CLAIM(repo_root, "sid-new", directory=record_dir, prompt_id="p-9", now=1_700_000_000.0)
+    record = nomination.read_record(repo_root, record_dir)
+    assert record["entered_via"] == "human-slash-command"
+    assert set(record["entry_evidence"]) == {"status", "prompt_id", "claimed_at"}
+
+
+def test_identify_names_the_evidence_kind(repo_root, record_dir, monkeypatch):
+    _no_registry_name(monkeypatch)
+    _stub_live(monkeypatch, True, "live")
+    monkeypatch.setattr(nomination.human_entry, "home_start_refusal", lambda sid: None)
+    _REAL_CLAIM(repo_root, "sid-h", peer_name="gem-1", directory=record_dir, entry_kind="home-start")
+    live = nomination.identify(repo_root, record_dir)["line"]
+    assert "its start in the group-em home is verified" in live and "human-typed" not in live
+    monkeypatch.setattr(nomination, "entry_status", lambda *a, **k: {"status": "rejected"})
+    unverified = nomination.identify(repo_root, record_dir)["line"]
+    assert "its start in the group-em home is not verified" in unverified
+    _REAL_CLAIM(repo_root, "sid-h", peer_name="gem-1", directory=record_dir, prompt_id="p-1")
+    monkeypatch.setattr(nomination, "entry_status", lambda *a, **k: {"status": "verified"})
+    assert "its human-typed /group-em is verified" in nomination.identify(repo_root, record_dir)["line"]
+
+
 @pytest.mark.parametrize("sid", ["*", "a?c", "[ab]", "../x", "a/b", "a\\b", "", "a b"])
 def test_claim_rejects_non_token_session_ids(sid, repo_root, record_dir):
     with pytest.raises(nomination.NotHumanEnteredError):

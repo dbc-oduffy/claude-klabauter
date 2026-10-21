@@ -757,3 +757,111 @@ def test_reclose_of_a_landed_run_whose_sizing_kept_its_block_drops_and_commits(r
     assert second["sha"] != first["sha"] and _count(repo) == before + 1
     assert "research" not in p.read_text(), "the re-close must drop the stale block"
     assert _git(repo, "status", "--porcelain") == ""
+
+
+def _basis_and_carry(scratch: Path, carried: dict, rulings=(), basis_of=("digest-a.md", "digest-b.md")) -> None:
+    """Write grounding.basis.json from the digests on disk and a carry file holding `carried`."""
+    import json
+
+    from coordinator_core.ops import _research_grounding as rg
+
+    basis = {n: rg.line_hashes((scratch / n).read_text(encoding="utf-8")) for n in basis_of}
+    (scratch / rg.BASIS_FILE).write_text(json.dumps(basis), encoding="utf-8")
+    doc = {"generation": 1, "carried": carried, "rulings": list(rulings), "flagged": {}}
+    (scratch / rg.CARRY_FILE).write_text(json.dumps(doc), encoding="utf-8")
+
+
+_CARRIED_A = ["- **grounded** a holds"]
+_CARRIED_B = ["- **grounded** b holds"]
+
+
+def test_carried_clean_digests_close_with_the_merged_report_archived(repo, scratch):
+    _basis_and_carry(scratch, {"digest-a.md": _CARRIED_A, "digest-b.md": _CARRIED_B})
+    out = _close(repo, scratch, "scouts")
+    assert out["exit_code"] == 0, out
+    committed = _git(repo, "show", f"HEAD:{_digest_path()}")
+    assert "## Grounding" in committed and "- **grounded** a holds" in committed
+    assert "digest-b.md" in committed.split("## Grounding", 1)[1]
+
+
+@pytest.mark.parametrize(
+    "carried_a,rulings,verdict",
+    [
+        (["- **contradicted** a claim its source denies"], [], "contradicted"),
+        (_CARRIED_A, ["- **invented** digest-a.md vs digest-b.md nobody holds this"], "invented"),
+    ],
+)
+def test_carry_a_flagged_claim_keeps_blocking_the_close(repo, scratch, carried_a, rulings, verdict):
+    _basis_and_carry(scratch, {"digest-a.md": carried_a, "digest-b.md": _CARRIED_B}, rulings)
+    out = _refused(repo, scratch)
+    assert verdict in out["error"] and out["grounding"][verdict] == 1
+    _report(scratch, _GOOD)
+    again = _refused(repo, scratch)
+    assert verdict in again["error"], "a fresh report cannot clear a carried digest's flag"
+
+
+def test_carry_a_real_ruling_does_not_refuse_the_close(repo, scratch):
+    _basis_and_carry(
+        scratch,
+        {"digest-a.md": _CARRIED_A, "digest-b.md": _CARRIED_B},
+        ["- **real** digest-a.md and digest-b.md genuinely disagree"],
+    )
+    out = _close(repo, scratch, "scouts")
+    assert out["exit_code"] == 0 and out["deliverable"] is True, out
+
+
+def test_carry_discards_a_fresh_nit_under_a_carried_digest(repo, scratch):
+    _basis_and_carry(scratch, {"digest-a.md": _CARRIED_A, "digest-b.md": _CARRIED_B})
+    _report(scratch, "## digest-a.md\n- **contradicted** fresh nit\n## Contradictions\n- **invented** digest-a.md nit\n")
+    out = _close(repo, scratch, "scouts")
+    assert out["exit_code"] == 0, out
+
+
+def test_carry_a_digest_changed_after_the_basis_is_refused_as_ungraded(repo, scratch):
+    _basis_and_carry(scratch, {"digest-a.md": _CARRIED_A, "digest-b.md": _CARRIED_B})
+    (scratch / "digest-a.md").write_text("alpha edited\n", encoding="utf-8")
+    out = _refused(repo, scratch)
+    assert "digest-a.md" in out["error"] and "no grounding section" in out["error"]
+    assert out["next_action"]["op"] == "research.reground"
+
+
+def test_carry_a_regraded_digest_takes_its_fresh_section(repo, scratch):
+    _basis_and_carry(scratch, {"digest-b.md": _CARRIED_B}, basis_of=("digest-b.md",))
+    _report(scratch, "## digest-a.md\n- **grounded** a holds\n## digest-b.md\n- **contradicted** ignored\n")
+    out = _close(repo, scratch, "scouts")
+    assert out["exit_code"] == 0, out
+
+
+def test_carry_a_touched_but_unchanged_digest_does_not_name_reground(repo, scratch):
+    _basis_and_carry(scratch, {"digest-a.md": _CARRIED_A, "digest-b.md": ["- **contradicted** bad"]})
+    _report(scratch, _GOOD)
+    _age(scratch / "grounding.md", -100)
+    _age(scratch / "digest-a.md", 0)
+    out = _refused(repo, scratch)
+    assert "next_action" not in out and "reground" not in out["error"]
+
+
+def test_carry_a_changed_digest_with_a_basis_names_reground_even_when_older(repo, scratch):
+    _basis_and_carry(scratch, {"digest-a.md": _CARRIED_A, "digest-b.md": ["- **contradicted** bad"]})
+    (scratch / "digest-a.md").write_text("alpha edited\n", encoding="utf-8")
+    _report(scratch, _GOOD)
+    _age(scratch / "digest-a.md", -500)
+    out = _refused(repo, scratch)
+    assert out["next_action"]["op"] == "research.reground"
+
+
+@pytest.mark.parametrize("name", ["grounding.carry.json", "grounding.basis.json"])
+@pytest.mark.parametrize("body", ["{not json", "[]"])
+def test_carry_an_unreadable_carry_or_basis_file_refuses_naming_it(repo, scratch, name, body):
+    _basis_and_carry(scratch, {"digest-a.md": _CARRIED_A, "digest-b.md": _CARRIED_B})
+    (scratch / name).write_text(body, encoding="utf-8")
+    out = _refused(repo, scratch)
+    assert name in out["error"]
+
+
+def test_carry_a_basis_without_a_carry_file_still_closes_on_the_fresh_report(repo, scratch):
+    _basis_and_carry(scratch, {})
+    (scratch / "grounding.carry.json").unlink()
+    _report(scratch, _GOOD)
+    out = _close(repo, scratch, "scouts")
+    assert out["exit_code"] == 0, out

@@ -13,6 +13,7 @@ parse like LF):
   disagree; it never blocks.
 """
 
+import hashlib
 import re
 from collections.abc import Iterable
 from fnmatch import fnmatchcase
@@ -70,6 +71,141 @@ def grounding_predates_digest(grounding_mtime: float, digest_mtimes: Iterable[fl
 def _verdict(line: str) -> str | None:
     m = _VERDICT_RE.match(line)
     return m.group(1).lower() if m else None
+
+
+BASIS_FILE = "grounding.basis.json"
+CARRY_FILE = "grounding.carry.json"
+_DIGEST_GLOB = "digest-*.md"
+_HEADING_RE = re.compile(r"^##\s+(.*?)\s*$")
+_DIGEST_TOKEN_RE = re.compile(r"[\w.\-]+")
+_NO_CONTRADICTIONS = "No contradictions found."
+
+
+def line_hashes(text: str) -> list[str]:
+    """sha256 hexdigest of each ``str.splitlines()`` line after ``rstrip``; CRLF equals LF."""
+    return [hashlib.sha256(ln.rstrip().encode("utf-8")).hexdigest() for ln in text.splitlines()]
+
+
+def changed_digests(basis: dict[str, list[str]], current: dict[str, str]) -> dict[str, list[int]]:
+    """Digest name to its 1-based changed line numbers, for each ``current`` digest differing from ``basis``.
+
+    A digest absent from ``basis`` lists every line. A digest whose hash list differs only by
+    truncation or reordering still appears, possibly with an empty line list. Digests only in
+    ``basis`` are not reported.
+    """
+    out: dict[str, list[int]] = {}
+    for name, text in current.items():
+        now = line_hashes(text)
+        prior = basis.get(name)
+        if prior == now:
+            continue
+        prior = prior or []
+        out[name] = [i + 1 for i, h in enumerate(now) if i >= len(prior) or prior[i] != h]
+    return out
+
+
+def _trim_trailing_blank(lines: list[str]) -> list[str]:
+    end = len(lines)
+    while end and not lines[end - 1].strip():
+        end -= 1
+    return lines[:end]
+
+
+def report_sections(text: str) -> dict:
+    """Split a report into ``{"summary": [...], "digests": {name: [lines]}, "rulings": [...]}``.
+
+    ``summary`` holds the lines before the first ``##`` heading. ``digests`` holds each
+    ``## digest-*.md`` body verbatim (heading excluded, trailing blanks trimmed). ``rulings``
+    holds the ``real``/``invented`` verdict lines under ``## Contradictions``.
+    """
+    summary: list[str] = []
+    digests: dict[str, list[str]] = {}
+    rulings: list[str] = []
+    mode, current = "summary", ""
+    for raw in text.splitlines():
+        h = _HEADING_RE.match(raw.lstrip())
+        if h:
+            title = h.group(1)
+            if fnmatchcase(title, _DIGEST_GLOB):
+                mode, current = "digest", title
+                digests.setdefault(title, [])
+            elif title.lower() == "contradictions":
+                mode = "rulings"
+            else:
+                mode = "other"
+            continue
+        if mode == "summary":
+            summary.append(raw)
+        elif mode == "digest":
+            digests[current].append(raw)
+        elif mode == "rulings" and _verdict(raw.lstrip()) in RULINGS:
+            rulings.append(raw)
+    return {
+        "summary": _trim_trailing_blank(summary),
+        "digests": {k: _trim_trailing_blank(v) for k, v in digests.items()},
+        "rulings": rulings,
+    }
+
+
+def _ruling_digests(ruling: str) -> set[str]:
+    return {t for t in _DIGEST_TOKEN_RE.findall(ruling) if fnmatchcase(t, _DIGEST_GLOB)}
+
+
+def _ruling_survives(ruling: str, changed: set[str]) -> bool:
+    """A ruling naming digests survives when none changed; an unnamed ``invented`` one always does."""
+    named = _ruling_digests(ruling)
+    if not named:
+        return _verdict(ruling.lstrip()) == "invented"
+    return not (named & changed)
+
+
+def carry_forward(
+    effective_text: str, changed: set[str], digest_names: list[str], generation: int = 0
+) -> dict:
+    """The carry document: ``{"generation", "carried", "rulings", "flagged"}``.
+
+    ``carried`` keeps the whole prior section of each name in ``digest_names`` that is not in
+    ``changed`` and has a section in ``effective_text``. ``rulings`` keeps a ruling that names at
+    least one digest, every one unchanged. ``flagged`` lists the blocking claim lines per carried
+    digest that has any.
+    """
+    parts = report_sections(effective_text)
+    carried = {
+        n: parts["digests"][n] for n in digest_names if n not in changed and n in parts["digests"]
+    }
+    rulings = [r for r in parts["rulings"] if _ruling_survives(r, changed)]
+    flagged = {
+        n: blocked
+        for n, lines in carried.items()
+        if (blocked := [ln for ln in lines if _verdict(ln.lstrip()) in BLOCKING])
+    }
+    return {"generation": generation, "carried": carried, "rulings": rulings, "flagged": flagged}
+
+
+def effective_report(fresh_text: str, carry: dict | None, changed_since_basis: set[str]) -> str:
+    """The report the close enforces: carried sections for carried digests, fresh for the rest.
+
+    ``carry`` ``None`` returns ``fresh_text`` unchanged. A carried digest in
+    ``changed_since_basis`` gets no section at all, so it reads as ungraded; any fresh section
+    for a carried digest is discarded. A fresh ruling naming only carried digests is discarded.
+    """
+    if carry is None:
+        return fresh_text
+    carried = carry.get("carried", {})
+    fresh = report_sections(fresh_text)
+    sections = {n: ln for n, ln in carried.items() if n not in changed_since_basis}
+    regraded = {n: ln for n, ln in fresh["digests"].items() if n not in carried}
+    sections.update(regraded)
+    rulings = [r for r in carry.get("rulings", []) if _ruling_survives(r, changed_since_basis)]
+    for r in fresh["rulings"]:
+        named = _ruling_digests(r)
+        if not named or not named <= carried.keys():
+            rulings.append(r)
+    out = [f"Grounding report: {len(sections) - len(regraded)} digests carried, {len(regraded)} graded fresh.", ""]
+    for name in sorted(sections):
+        out += [f"## {name}", *sections[name], ""]
+    out += ["## Contradictions", *(rulings or [_NO_CONTRADICTIONS]), ""]
+    return "\n".join(out)
 
 
 def grounding_counts(text: str) -> dict[str, int]:

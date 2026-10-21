@@ -214,6 +214,27 @@ def test_revoke_listed_in_usage_string(stub_import_module):
     assert "revoke" in _cli._SUBCOMMANDS
 
 
+def test_group_em_verbs_listed_in_usage_string(stub_import_module):
+    stub_import_module(_StubGrant())
+    assert "group-em-grant" in _cli._SUBCOMMANDS
+    assert "group-em-revoke" in _cli._SUBCOMMANDS
+
+
+def test_group_em_verbs_route_through_directive(stub_import_module):
+    stub_import_module(_StubGrant())
+    seen = []
+    from coordinator_core.session import grant_directive
+
+    orig = grant_directive.run_grant_directive
+    grant_directive.run_grant_directive = lambda args, **k: seen.append(args) or (0, "")
+    try:
+        assert _cli.main(["group-em-grant", "peer", "note"]) == 0
+        assert _cli.main(["group-em-revoke", "peer"]) == 0
+    finally:
+        grant_directive.run_grant_directive = orig
+    assert seen == [["group-em-grant", "peer", "note"], ["group-em-revoke", "peer"]]
+
+
 def test_read_prints_json_when_present_and_exits_0(stub_import_module):
     record = {"granted_by": "pm", "note": "yes"}
     stub_import_module(_StubGrant(read_tier_u_grant=lambda *a, **k: record))

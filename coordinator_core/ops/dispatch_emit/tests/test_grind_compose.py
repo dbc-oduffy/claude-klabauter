@@ -287,7 +287,7 @@ def test_run_close_is_one_drain_call_retried_once_and_names_both_failures():
     script = _compose()
     close = script[script.index("async function _runClose()"):]
     close = close[: close.index("\n}\n")]
-    assert close.count("await _drainCall()") == 2
+    assert close.count("await _drainCall()") == 3
     assert "throw" not in close
     assert "_sweepCall" not in script and "_runRecordCall" not in script
     assert f"{grind_commit_contract.SWEEP_FAILED_HEAD}: state/queue-grind/fixture/runs/${{RUN_ID}}.json" in close
@@ -1234,7 +1234,7 @@ def test_finding9_refuted_to_commit_edge_now_refused():
 def test_every_while_loop_has_a_progress_guarantee_reference():
     """Every `while` loop in the golden sits next to a comment or a call
     naming the progress mechanism that prevents it spinning forever."""
-    script = _compose()
+    script = _compose().replace(grind_commit_contract.RELAY_SHA256_JS, "")
     while_lines = [i for i, line in enumerate(script.splitlines()) if re.search(r"\bwhile\s*\(", line)]
     assert while_lines
     lines = script.splitlines()
@@ -1997,6 +1997,53 @@ def test_a_failed_run_record_is_named_on_the_hand_back_and_never_masks_the_grind
     dead = [h for h in result["handed_back"] if h["type"] == "stage-dead"]
     assert len(dead) == 1 and "run record may be missing or incomplete" in dead[0]["reason"]
     assert "commit refused" in dead[0]["reason"]
+
+
+def _corrupt_then(second):
+    calls = {"n": 0}
+
+    def ledger_sweep(unit):
+        calls["n"] += 1
+        if calls["n"] == 1 or second is None:
+            return {
+                "outcome": "record-failed", "swept": False,
+                "reason": grind_commit_contract.RELAY_CORRUPT_HEAD + ": --record-urlenc arrived as 9 chars",
+            }
+        return second
+
+    return ledger_sweep
+
+
+def test_a_relay_corrupt_record_failed_is_redriven_once_and_a_good_second_reply_hands_nothing_back():
+    script = _fix_script(["r0"])
+    script["ledger-sweep"] = _corrupt_then({"outcome": "recorded", "swept": True})
+    result, kinds, _sink = _run_logged([("b0", ["r0"])], script)
+    assert kinds.count("ledger-sweep") == 2
+    assert [h for h in result["handed_back"] if h["type"] == "stage-dead"] == []
+
+
+def test_two_relay_corrupt_replies_make_two_calls_and_one_stage_dead_naming_the_head():
+    script = _fix_script(["r0"])
+    script["ledger-sweep"] = _corrupt_then(None)
+    result, kinds, _sink = _run_logged([("b0", ["r0"])], script)
+    assert kinds.count("ledger-sweep") == 2
+    dead = [h for h in result["handed_back"] if h["type"] == "stage-dead"]
+    assert len(dead) == 2 and any(grind_commit_contract.RELAY_CORRUPT_HEAD in h["reason"] for h in dead)
+
+
+def test_a_record_failed_without_the_relay_head_is_not_redriven():
+    script = _fix_script(["r0"])
+    script["ledger-sweep"] = lambda u: {"outcome": "record-failed", "swept": True, "reason": "commit refused"}
+    _result, kinds, _sink = _run_logged([("b0", ["r0"])], script)
+    assert kinds.count("ledger-sweep") == 1
+
+
+def test_the_composed_script_emits_the_sha256_helper_once_and_retries_on_the_contract_head():
+    script = _compose()
+    assert script.count("function _sha256Ascii(") == 1
+    run_close = script[script.index("async function _runClose()"):]
+    assert f".includes('{grind_commit_contract.RELAY_CORRUPT_HEAD}')" in run_close
+    assert run_close.index(".includes(") < run_close.index("_drained.swept === false")
 
 
 def test_a_halted_run_without_a_throw_runs_the_close_and_the_record_says_halted():

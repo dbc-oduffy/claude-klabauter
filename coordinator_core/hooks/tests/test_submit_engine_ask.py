@@ -603,15 +603,15 @@ def test_an_unmarked_first_turn_ask_defaults_to_pm_and_says_so(tmp_path):
     assert _hso(mod.evaluate(_payload(root, "bare", tool_use_id="t2"), emit=_Emit()))["permissionDecision"] == "allow"
 
 
-def test_an_unmarked_later_turn_ask_is_denied_before_it_fires(tmp_path, monkeypatch):
+def test_an_unmarked_later_turn_ask_runs_as_relayed_with_one_warning(tmp_path, monkeypatch):
     monkeypatch.setattr(mod, "_is_first_turn", lambda _payload: False)
     root = _repo(tmp_path)
     emit = _Emit()
-    for args in ({"ask": "a"}, "bare", {"asks": [{"ask": "a"}]}):
-        out = mod.evaluate(_payload(root, args), emit=emit)
-        assert _hso(out)["permissionDecision"] == "deny"
-        assert "Unmarked ask" in _hso(out)["permissionDecisionReason"]
-    assert emit.calls == []
+    for i, args in enumerate(({"ask": "a"}, "bare", {"asks": [{"ask": "a"}]})):
+        out = mod.evaluate(_payload(root, args, tool_use_id=f"t{i}"), emit=emit)
+        assert _hso(out)["permissionDecision"] == "allow"
+        assert _hso(out)["additionalContext"].count("Warning: unmarked ask ran as source relayed") == 1
+    assert [c[0]["ask_source"] for c in emit.calls] == ["relayed"] * 3
 
 
 def test_a_marked_ask_is_forwarded_verbatim_on_any_turn(tmp_path, monkeypatch):

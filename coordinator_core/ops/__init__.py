@@ -151,6 +151,7 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.fleet.archive_actioned_memos", 'registers "fleet.archive_actioned_memos"'),
     ("coordinator_core.ops.fleet.delete_superseded_decisions", 'registers "fleet.delete_superseded_decisions"'),
     ("coordinator_core.ops.fleet.memo_heal", 'registers "memo.heal_inbox"'),
+    ("coordinator_core.ops.fleet.memo_migrate_group_em_inbox", 'registers "memo.migrate_group_em_inbox"'),
     ("coordinator_core.ops.fleet.mode_control", 'registers "fleet.mode_set", "fleet.mode_show"'),
     ("coordinator_core.ops.commit_anchors", 'registers "commit.anchors"'),
     ("coordinator_core.ops.ceremony.commit_exec_bit", 'registers "commit.exec_bit_change"'),

@@ -657,11 +657,19 @@ def test_a_grind_that_throws_mid_run_leaves_the_run_write_roots_clean_and_the_re
 
     def drain(_unit):
         payload = sink[-1]
+        record_token = quote(json.dumps(payload["record"]), safe="")
+        record_digest = contract.relay_digest(record_token)
+        declared_token = contract.encode_declared_paths(payload["declared"])
+        declared_digest = contract.relay_digest(declared_token)
         argv = [
             "run-record", f"--{contract.SWEEP_FLAG}", "--profile-dir", str(profile_dir),
             "--profile", "bug", "--queue", "state/bug-backlog", "--run-id", run_id,
-            "--record-urlenc", quote(json.dumps(payload["record"]), safe=""),
-            f"--{contract.DECLARED_FLAG}", contract.encode_declared_paths(payload["declared"]),
+            "--record-urlenc", record_token,
+            f"--{contract.RECORD_LEN_FLAG}", str(record_digest[0]),
+            f"--{contract.RECORD_SHA256_FLAG}", record_digest[1],
+            f"--{contract.DECLARED_FLAG}", declared_token,
+            f"--{contract.DECLARED_LEN_FLAG}", str(declared_digest[0]),
+            f"--{contract.DECLARED_SHA256_FLAG}", declared_digest[1],
             f"--{contract.DECISIONS_FLAG}", str(decisions), "--repo-root", str(tmp_path),
         ]
         out = io.StringIO()

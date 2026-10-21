@@ -123,3 +123,68 @@ def test_sender_commit_failure_receipt_still_names_the_recovery_path(monkeypatch
         "non-finding scope: every ledger mention sits on this failure path)"
     )
     assert "fatal: could not lock config file" in captured.err
+
+
+def _send_raising(monkeypatch, capsys, exc):
+    mod = _load_cli_module()
+
+    def _raise(op, payload, sender_root, legacy):
+        raise exc
+
+    monkeypatch.setitem(sys.modules, "cc_invoke", types.SimpleNamespace(route_mutation=_raise))
+    monkeypatch.setattr(mod, "_current_repo_root", lambda: str(_BIN_DIR.parent.parent))
+    monkeypatch.setattr(mod, "_warn_if_unregistered_sender", lambda: None)
+    rc = mod._cmd_send(argparse.Namespace(topic="some-topic"))
+    return rc, capsys.readouterr()
+
+
+class _EngineRefusal(RuntimeError):
+    result = {"exit_code": 1}
+    op_stderr = ""
+
+
+def test_successful_send_prints_no_recover_line(monkeypatch, capsys):
+    mod = _load_cli_module()
+    monkeypatch.setitem(
+        sys.modules,
+        "cc_invoke",
+        types.SimpleNamespace(
+            route_mutation=lambda op, payload, sender_root, legacy: {
+                "exit_code": 0,
+                "acted": [{"id": "x/some-topic.md", "sender_committed": True}],
+            }
+        ),
+    )
+    monkeypatch.setattr(mod, "_current_repo_root", lambda: str(_BIN_DIR.parent.parent))
+    monkeypatch.setattr(mod, "_warn_if_unregistered_sender", lambda: None)
+    rc = mod._cmd_send(argparse.Namespace(topic="some-topic"))
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert "recover" not in captured.out + captured.err
+
+
+def test_local_precondition_refusal_omits_the_pr_comment_fallback(monkeypatch, capsys):
+    rc, captured = _send_raising(
+        monkeypatch, capsys,
+        _EngineRefusal("route_mutation: op='memo.send' refused (exit_code=1, failed=0)"),
+    )
+    assert rc == 1
+    assert "Fallback" not in captured.err
+
+
+def test_delivery_failure_keeps_the_pr_comment_fallback(monkeypatch, capsys):
+    rc, captured = _send_raising(
+        monkeypatch, capsys, RuntimeError("claude-klabauter engine seam not found")
+    )
+    assert rc == 1
+    assert captured.err.count("Fallback: post the memo as a comment") == 1
+
+
+def test_receiver_resolution_refusal_names_the_fallback_once(monkeypatch, capsys):
+    refusal = _EngineRefusal(
+        "route_mutation: refused\n  child stderr: memo.send: UNKNOWN RECEIVER "
+        "Fallback: post the memo as a comment on the session's PR."
+    )
+    rc, captured = _send_raising(monkeypatch, capsys, refusal)
+    assert rc == 1
+    assert captured.err.count("Fallback: post the memo as a comment") == 1

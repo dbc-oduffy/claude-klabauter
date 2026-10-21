@@ -416,6 +416,10 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     "hooks.guard_host_subagent_bash_spawn_shapes": OpClass.MUTATING,
     "hooks.preuse_bash_dispatch": OpClass.MUTATING,
     "hooks.block_workflow_foreign_emission": OpClass.MUTATING,
+    # Route-table guard bodies: pure payload evaluation, same envelope class as every hook op.
+    "hooks.guard_agent_route_admission": OpClass.MUTATING,
+    "hooks.guard_brief_prescribed_method": OpClass.MUTATING,
+    "hooks.guard_editor_python_direct": OpClass.MUTATING,
     "hooks.block_workflow_unmodeled_agent": OpClass.MUTATING,
     "hooks.allow_emitted_workflow_fire": OpClass.MUTATING,
     "hooks.nudge_workflow_authoring_trampoline": OpClass.MUTATING,
@@ -1749,6 +1753,10 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # dry_run plans and reports only; mutates nothing.
     # Spec: docs/plans/2026-09-11-memo-deliveries-survive-the-receiver-s-o.md § C5
     "memo.heal_inbox": OpClass.MUTATING,
+    # memo.migrate_group_em_inbox — MUTATING: moves memos from the group-em home's inbox into the
+    # G-EM reroute target's inbox (O_EXCL + commit_authored_new_file in the receiver repo) and
+    # removes the home copy. Spec: docs/plans/2026-10-21-group-em-memo-receive-reroute.md § C3.
+    "memo.migrate_group_em_inbox": OpClass.MUTATING,
     # memo.correct_note — MUTATING: rewrites a memo's note field and commits the memo
     # path (memo_transition._commit_terminal_write). Spec: ops/memo_correct_note.py.
     "memo.correct_note": OpClass.MUTATING,

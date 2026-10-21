@@ -1010,3 +1010,47 @@ def test_unresolved_error_names_canonical_id() -> None:
         mod._print_receiver_unresolved_error("nonesuch")
     assert "Did you mean" not in buf.getvalue()
 
+
+
+def test_topic_is_folded_to_lowercase_when_that_makes_a_valid_slug() -> None:
+    mod = _load_dispatcher_module()
+    assert mod._fold_topic("My-Topic") == "my-topic"
+    assert mod._fold_topic("ok-topic") == "ok-topic"
+    assert mod._fold_topic("Bad/Topic") == "Bad/Topic"
+    assert mod._fold_topic("../X") == "../X"
+    assert mod._fold_topic(None) is None
+
+
+def test_draft_body_file_composes_a_sendable_body() -> None:
+    name = "test_draft_body_file_composes_a_sendable_body"
+    claude_klabauter_root = _resolve_test_claude_klabauter_root()
+    if claude_klabauter_root is None:
+        skip_test(name, "the engine root is unresolvable on this machine")
+        return
+    with tempfile.TemporaryDirectory() as tmpdir:
+        sender_repo = _make_git_repo(tmpdir, "sender_repo")
+        claude_home = os.path.join(tmpdir, "claude_home")
+        os.makedirs(claude_home, exist_ok=True)
+        mock_impl = _make_mock_machine_local(tmpdir, None)
+        _write_registry_toml(claude_home, {_repo_key_for("claude-central-em"): claude_home, _repo_key_for("sender_repo-em"): sender_repo})
+        env = {
+            "MACHINE_LOCAL_IMPL": mock_impl,
+            "CLAUDE_HOME": claude_home,
+            "COORDINATOR_SETTINGS_HOME": claude_home,
+            "COORDINATOR_ENGINE_ROOT": claude_klabauter_root,
+        }
+        body_path = os.path.join(tmpdir, "body.md")
+        with open(body_path, "w", encoding="utf-8") as f:
+            f.write("Real body text for the memo.")
+        result = _run_dispatcher_in_repo(
+            sender_repo,
+            ["draft", "Body-File-Topic", "--kind", "fyi", "--to", "claude-central-em",
+             "--title", "Body file memo", "--body-file", body_path],
+            env=env,
+        )
+        assert result.returncode == 0, f"{name}: {result.returncode} {result.stdout!r} {result.stderr!r}"
+        outbox_path = os.path.join(sender_repo, ".coordinator-local", "memo-outbox", "body-file-topic.md")
+        with open(outbox_path, encoding="utf-8") as f:
+            content = f.read()
+        assert "Real body text for the memo." in content, content
+        assert "Compose your memo body here" not in content, content

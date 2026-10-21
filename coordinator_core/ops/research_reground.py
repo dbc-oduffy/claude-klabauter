@@ -12,9 +12,16 @@ Params: ``run_id`` (required, safe single path segment), ``scratch_dir`` (option
 default ``<worktree>/scratch/warp/<run_id>``), ``brief`` (optional, absolute or worktree-relative
 file; default ``<scratch>/brief.md`` when present, else ``<scratch>/ask.md``).
 
-Returns (exit_code 0): ``{run_id, generation, stale, brief, script, next_action, then}``;
-``stale`` is the moved report's scratch-relative name or null. Returns (exit_code 1): ``{error}``
-with nothing written.
+Incremental carry: each reground writes ``grounding.basis.json`` (line hashes per digest). A later
+reground re-grades only digests changed since that basis or lacking a section in the prior
+effective report, writes ``grounding.carry.json`` holding the other digests' prior sections, and
+scopes the brief to the changed digests. With no changed digest it is a no-op.
+
+Returns (exit_code 0): ``{run_id, generation, stale, carried, fresh, regraded, problems, brief,
+script, next_action, then}``; ``stale`` is the moved report's scratch-relative name or null,
+``fresh`` is null until the grader runs. The no-op returns ``{run_id, generation: null, carried,
+fresh: 0, regraded: [], problems, next_action}`` and writes nothing. Returns (exit_code 1):
+``{error}`` with nothing written, including an unreadable basis or carry file.
 
 Negative-spec:
   - Validates everything before the first write; a refusal leaves the scratch dir untouched.
@@ -26,6 +33,7 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import json
 import os
 from pathlib import Path
 from typing import Optional
@@ -81,6 +89,40 @@ def _resolve_brief(worktree: Path, scratch: Path, given: object) -> tuple[Option
     return None, f"no brief: neither brief.md nor ask.md under {scratch.as_posix()!r}"
 
 
+def _load_json(path: Path, kind: type) -> tuple[object, Optional[str]]:
+    """``(None, None)`` when ``path`` is absent; ``(value, None)`` when it parses to ``kind``; else an error."""
+    if not path.is_file():
+        return None, None
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, ValueError) as exc:
+        return None, f"{path.name} unreadable: {exc.__class__.__name__}"
+    if not isinstance(value, kind):
+        return None, f"{path.name} is not a JSON {kind.__name__}"
+    return value, None
+
+
+def _dump_json(value: object) -> str:
+    return json.dumps(value, indent=2, sort_keys=True) + "\n"
+
+
+def _scoped_note(
+    n: int, stale_name: str, has_report: bool, changed: dict[str, list[int]], flagged: dict[str, list[str]],
+    carried: list[str],
+) -> str:
+    note = f"\nRe-ground generation {n}: the earlier report is {stale_name if has_report else 'absent'}.\n"
+    if not carried:
+        return note
+    note += "Grade only these digests; the engine keeps the grades of the others and discards any section you write for them.\n"
+    for name in sorted(changed):
+        lines = ", ".join(str(i) for i in changed[name]) or "none"
+        note += f"- {name}: changed lines {lines}\n"
+        for ln in flagged.get(name, []):
+            note += f"  previously flagged: {ln.strip()}\n"
+    note += "Carried, not to be graded: " + ", ".join(carried) + "\n"
+    return note
+
+
 def _reground_sync(worktree: Path, params: dict) -> dict:
     run_id = params.get("run_id")
     if not isinstance(run_id, str) or not safe_id(run_id):
@@ -97,6 +139,42 @@ def _reground_sync(worktree: Path, params: dict) -> dict:
     if scratch_rel is None:
         return _err(problem)
 
+    names = sorted(p.name for p in scratch.glob("digest-*.md") if p.is_file())
+    try:
+        current = {nm: (scratch / nm).read_text(encoding="utf-8") for nm in names}
+    except (OSError, UnicodeDecodeError) as exc:
+        return _err(f"digest unreadable: {exc.__class__.__name__}")
+    basis, problem = _load_json(scratch / rg.BASIS_FILE, dict)
+    if problem:
+        return _err(problem)
+    carry, problem = _load_json(scratch / rg.CARRY_FILE, dict)
+    if problem:
+        return _err(problem)
+    report = scratch / rg.GROUNDING_REPORT
+    has_report = report.is_file()
+    try:
+        report_text = report.read_text(encoding="utf-8") if has_report else ""
+    except (OSError, UnicodeDecodeError) as exc:
+        return _err(f"{rg.GROUNDING_REPORT} unreadable: {exc.__class__.__name__}")
+
+    prior = ""
+    changed: dict[str, list[int]] = {nm: [] for nm in names}
+    if basis is not None:
+        since_basis = rg.changed_digests(basis, current)
+        prior = rg.effective_report(report_text, carry, set(since_basis))
+        graded = rg.report_sections(prior)["digests"]
+        changed = dict(since_basis)
+        for nm in names:
+            if nm not in graded:
+                changed.setdefault(nm, [])
+        if not changed:
+            return {
+                "exit_code": 0, "run_id": run_id, "generation": None,
+                "carried": sum(rg.grounding_counts(prior).values()), "fresh": 0, "regraded": [],
+                "problems": rg.grounding_problems(prior, names),
+                "next_action": {"op": "research.close"},
+            }
+
     from coordinator_core.ops.dispatch_emit.emission_receipt import _write_emission_receipt
     from coordinator_core.ops.dispatch_emit.emit import resolve_agent_type_host
     from coordinator_core.ops.dispatch_emit.op import _pipeline_content_root
@@ -108,8 +186,6 @@ def _reground_sync(worktree: Path, params: dict) -> dict:
     brief_name = rg.reground_brief_name(n)
     brief_rel = f"{scratch_rel}/{brief_name}"
     stale_name = rg.stale_report_name(n)
-    report = scratch / rg.GROUNDING_REPORT
-    has_report = report.is_file()
 
     try:
         content_root = _pipeline_content_root()
@@ -135,11 +211,25 @@ def _reground_sync(worktree: Path, params: dict) -> dict:
     except (OSError, UnicodeDecodeError) as exc:
         return _err(f"brief {brief_src.as_posix()!r} unreadable: {exc.__class__.__name__}")
     script_path = worktree / _RUN_DIR_ROOT / f"{run_id}.reground-{n}.workflow.mjs"
-    note = f"\nRe-ground generation {n}: the earlier report is {stale_name if has_report else 'absent'}.\n"
+    carry_doc = None
+    flagged: dict[str, list[str]] = {}
+    if basis is not None:
+        carry_doc = rg.carry_forward(prior, set(changed), names, generation=n)
+        old = {**(carry or {}).get("carried", {}), **rg.report_sections(report_text)["digests"]}
+        flagged = {
+            nm: [ln for ln in old.get(nm, []) if rg._verdict(ln.lstrip()) in rg.BLOCKING] for nm in changed
+        }
+    carried_names = sorted(carry_doc["carried"]) if carry_doc else []
+    note = _scoped_note(n, stale_name, has_report, changed, flagged, carried_names)
     try:
         script_path.parent.mkdir(parents=True, exist_ok=True)
         (scratch / brief_name).write_text(brief_text.rstrip("\n") + "\n" + note, encoding="utf-8", newline="")
         script_path.write_text(script, encoding="utf-8", newline="")
+        if carry_doc is not None:
+            (scratch / rg.CARRY_FILE).write_text(_dump_json(carry_doc), encoding="utf-8", newline="")
+        (scratch / rg.BASIS_FILE).write_text(
+            _dump_json({nm: rg.line_hashes(t) for nm, t in current.items()}), encoding="utf-8", newline=""
+        )
         if has_report:
             os.replace(report, scratch / stale_name)
     except OSError as exc:
@@ -155,6 +245,11 @@ def _reground_sync(worktree: Path, params: dict) -> dict:
         "run_id": run_id,
         "generation": n,
         "stale": stale_name if has_report else None,
+        "carried": sum(rg.grounding_counts("\n".join(ln for s in carry_doc["carried"].values() for ln in s)).values())
+        if carry_doc else 0,
+        "fresh": None,
+        "regraded": sorted(changed),
+        "problems": rg.grounding_problems(prior, names) if basis is not None else [],
         "brief": brief_rel,
         "script": script_posix,
         "next_action": {"tool": "Workflow", "scriptPath": script_posix},

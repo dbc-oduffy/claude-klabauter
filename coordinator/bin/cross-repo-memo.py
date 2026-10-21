@@ -1560,7 +1560,7 @@ def _guard_sender_identity_before_delivery() -> str | None:
 
     Scope (PM ruling 2026-07-11): fail-loud applies ONLY to the
     'unknown-sender-em' (root=None) case. The unregistered-repo basename
-    fallback (em_id_for_root case #4 — a real git repo that just isn't
+    fallback (em_id_for_root case #5 — a real git repo that just isn't
     registered in machine-local yet) is a WARNING, not a hard fail — see
     _warn_if_unregistered_sender below. Do not widen this guard to cover that
     case; it would break legitimate sends from a freshly-cloned, not-yet-
@@ -1587,7 +1587,7 @@ def _guard_sender_identity_before_delivery() -> str | None:
 
 def _warn_if_unregistered_sender() -> None:
     """Emit a one-line WARNING when the sender resolves via the unregistered-repo
-    basename fallback (em_id_for_root case #4) — a real git repo not yet
+    basename fallback (em_id_for_root case #5) — a real git repo not yet
     registered under repos.<name> in the machine-local registry.
 
     Non-fatal by design (PM ruling 2026-07-11) — flagged here for reviewer
@@ -1601,6 +1601,13 @@ def _warn_if_unregistered_sender() -> None:
 
     root = _current_repo_root()
     if root is None:
+        return
+    import cc_invoke
+
+    cc_invoke.ensure_engine_on_path(__file__)
+    from coordinator_core.group_em.gem_home import is_home
+
+    if is_home(root):
         return
     known_paths = _known_sender_paths()
     resolved = em_id_for_root(root, known_paths)
@@ -2273,6 +2280,14 @@ def _build_scoped_to(
     return result or None
 
 
+def _pr_comment_is_alternative(exc: BaseException) -> bool:
+    """True when `exc` is a delivery failure (seam absent, transport down) that
+    a PR comment can stand in for. An engine refusal (`RouteMutationError`,
+    carries `.result`) is a local precondition unless the engine's own text
+    names the fallback, as the receiver-resolution refusals do."""
+    return not hasattr(exc, "result") and _PR_COMMENT_FALLBACK not in str(exc)
+
+
 def _print_route_mutation_failure_reasons(exc: BaseException) -> None:
     """Print per-item engine 'reason' strings from a RouteMutationError, if any.
 
@@ -2527,6 +2542,13 @@ def _fanout_topics(sender_root: str, topic: str) -> list:
         return []
 
 
+def _fold_topic(topic: str | None) -> str | None:
+    """`topic` lowercased when that makes it a valid slug, else unchanged (the slug check refuses it)."""
+    if isinstance(topic, str) and topic != topic.lower() and _TOPIC_SLUG_RE.fullmatch(topic.lower()):
+        return topic.lower()
+    return topic
+
+
 def _cmd_draft(args: argparse.Namespace) -> int:
     """Handle: cross-repo-memo draft <topic> --to <em> --title <line> --kind <k> [--summary] [--in-reply-to]
 
@@ -2594,6 +2616,18 @@ def _cmd_draft(args: argparse.Namespace) -> int:
     except ArgvFidelityError as exc:
         print(f"cross-repo-memo draft: {exc}", file=sys.stderr)
         return 2
+
+    body_file = getattr(args, "body_file", None)
+    body_text = None
+    if body_file:
+        try:
+            body_text = sys.stdin.read() if body_file == "-" else Path(body_file).read_text(encoding="utf-8")
+        except OSError as exc:
+            print(f"cross-repo-memo draft: cannot read --body-file: {exc}", file=sys.stderr)
+            return 2
+        if not body_text.strip():
+            print("cross-repo-memo draft: --body-file is empty", file=sys.stderr)
+            return 2
 
     # Validate topic slug (reuse existing guard — path traversal prevention).
     if not _TOPIC_SLUG_RE.fullmatch(topic):
@@ -2794,6 +2828,19 @@ def _cmd_draft(args: argparse.Namespace) -> int:
         stage="draft",
         outbox_path=draft_path,
     )
+
+    if body_text is not None:
+        try:
+            composed = cc_invoke.route_mutation(
+                "memo.compose", {"dry_run": False, "topic": topic, "body": body_text}, sender_root, legacy_draft
+            )
+        except RuntimeError as exc:
+            print(f"cross-repo-memo draft: draft written, body NOT composed: {exc}", file=sys.stderr)
+            _print_route_mutation_failure_reasons(exc)
+            return 1
+        if not (isinstance(composed, dict) and composed.get("exit_code") == 0 and composed.get("acted")):
+            print("cross-repo-memo draft: draft written, body NOT composed (empty 'acted').", file=sys.stderr)
+            return 1
 
     # Print absolute path to stdout (the op's `id` is already the absolute
     # target_path — see memo_draft.py's build_act_result acted entry).
@@ -3349,7 +3396,8 @@ def _cmd_send(args: argparse.Namespace) -> int:
     except RuntimeError as exc:
         print(f"cross-repo-memo send: {exc}", file=sys.stderr)
         _print_route_mutation_failure_reasons(exc)
-        print(f"cross-repo-memo send: {_PR_COMMENT_FALLBACK}", file=sys.stderr)
+        if _pr_comment_is_alternative(exc):
+            print(f"cross-repo-memo send: {_PR_COMMENT_FALLBACK}", file=sys.stderr)
         first = str(exc).strip().splitlines()[0] if str(exc).strip() else "send failed"
         print(f"REFUSED: {topic}: {first}")
         return 1
@@ -3803,6 +3851,10 @@ def _build_combined_parser(for_help: bool = False) -> argparse.ArgumentParser:
     draft_p.add_argument("--title", required=True, metavar="ONE_LINE", help="One-line memo title")
     draft_p.add_argument("--summary", metavar="TEXT", default=None, help=f"One-line tl;dr (≤{_SUMMARY_MAX_CHARS} chars)")
     draft_p.add_argument(
+        "--body-file", metavar="PATH", default=None,
+        help="Write the memo body from PATH ('-' for stdin) in the same step, so the draft is sendable without a compose pass.",
+    )
+    draft_p.add_argument(
         "--summary-file", metavar="PATH", default=None,
         help="Read --summary from PATH instead ('-' for stdin) — lossless transport "
              "for a summary that legitimately carries a quote; mutually exclusive with --summary.",
@@ -4040,6 +4092,10 @@ def main(argv: list[str] | None = None) -> int:
         combined_parser = _build_combined_parser()
         args = combined_parser.parse_args(argv)
         verb = args.verb
+        folded_topic = _fold_topic(getattr(args, "topic", None))
+        if folded_topic != getattr(args, "topic", None):
+            print(f"cross-repo-memo {verb}: topic {args.topic!r} -> {folded_topic!r}", file=sys.stderr)
+            args.topic = folded_topic
         if verb == "draft":
             return _cmd_draft(args)
         elif verb == "list":
