@@ -7,6 +7,7 @@ import yaml
 from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
 from coordinator_core.ops.dispatch_emit.ask_contract import StageManifest
 from coordinator_core.ops.dispatch_emit.ask_stage import _handler
+from coordinator_core.ops.dispatch_emit.tests.test_ask_stage import read_stage_reply
 
 RUN = "ask-20261016T000000-abc124"
 PLAN_REL = "docs/plans/2026-10-16-ledger-ids.md"
@@ -51,7 +52,10 @@ def _stage(tmp_path, rows: list[dict]):
     (tmp_path / "state" / "sizings").mkdir(parents=True)
     (tmp_path / SIZING_REL).write_text(yaml.safe_dump(sizing, sort_keys=False), encoding="utf-8")
     rl.start(tmp_path, RUN, all_of_pm_ask=False)
-    return _handler({"run_id": RUN, "plan_path": PLAN_REL, "commit_sizing_path": SIZING_REL}, repo_root=tmp_path)
+    return read_stage_reply(
+        tmp_path,
+        _handler({"run_id": RUN, "plan_path": PLAN_REL, "commit_sizing_path": SIZING_REL}, repo_root=tmp_path),
+    )
 
 
 def test_every_row_ruled_out_stages_empty_items_and_all_withheld(tmp_path):

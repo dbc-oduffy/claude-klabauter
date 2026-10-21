@@ -10,6 +10,7 @@ import pytest
 from coordinator_core.ops.dispatch_emit import terminal_commit
 from coordinator_core.ops.dispatch_emit.ask_contract import ASK_MANIFEST_MARKER, RECORD_DIR_ROOT
 from coordinator_core.ops.dispatch_emit.ask_stage import _handler as stage
+from coordinator_core.ops.dispatch_emit.tests.test_ask_stage import read_stage_reply
 from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
@@ -62,7 +63,7 @@ def test_gated_em_row_is_withheld_and_listed_incomplete(tmp_path):
     _git(["add", "."], root)
     _git(["commit", "-q", "-m", "seed"], root)
 
-    manifest = stage({"run_id": "r1", "plan_path": PLAN_REL}, repo_root=root)
+    manifest = read_stage_reply(root, stage({"run_id": "r1", "plan_path": PLAN_REL}, repo_root=root))
     assert "error" not in manifest
     assert [r["id"] for r in manifest["rows"]] == ["N1"]
     assert [(g["id"], g["reason"], g["owner_repo"], g["closure_key"]) for g in manifest["gated"]] == [

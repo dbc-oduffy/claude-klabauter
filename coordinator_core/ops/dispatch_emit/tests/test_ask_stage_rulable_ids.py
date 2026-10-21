@@ -8,6 +8,7 @@ import yaml
 from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
 from coordinator_core.ops.dispatch_emit.ask_contract import StageManifest
 from coordinator_core.ops.dispatch_emit.ask_stage import _handler
+from coordinator_core.ops.dispatch_emit.tests.test_ask_stage import read_stage_reply
 
 RUN = "ask-20261016T000000-abc123"
 PLAN_REL = "docs/plans/2026-10-16-rulable.md"
@@ -65,7 +66,7 @@ def _stage(tmp_path, sizing: dict | None, *, run_token: bool = True):
         (tmp_path / SIZING_REL).write_text(yaml.safe_dump(sizing, sort_keys=False), encoding="utf-8")
         params["commit_sizing_path"] = SIZING_REL
         rl.start(tmp_path, RUN, all_of_pm_ask=False)
-    return _handler(params, repo_root=tmp_path)
+    return read_stage_reply(tmp_path, _handler(params, repo_root=tmp_path))
 
 
 @pytest.fixture

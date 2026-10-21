@@ -13,6 +13,14 @@ def _no_ambient_plugin_root(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _unhoisted_ask_scripts(monkeypatch):
+    """Composer tests assert on literal script text; hoisting is pinned by test_ask_compose_prompt_fragments."""
+    from coordinator_core.ops.dispatch_emit import prompt_fragments
+
+    monkeypatch.setattr(prompt_fragments, "HOIST_ENABLED", False)
+
+
+@pytest.fixture(autouse=True)
 def _no_ambient_box_terms(monkeypatch):
     """A box whose machine-local registry names box terms would preamble every
     CLI-driven brief here; tests that exercise the default patch it back in."""

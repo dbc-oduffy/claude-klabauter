@@ -24,6 +24,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     halted_record_message,
 )
 from coordinator_core.ops.dispatch_emit.halted_run import write_halt_marker
+from coordinator_core.ops.dispatch_emit.reply_sidecar import read_reply
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
 from coordinator_core.ops.dispatch_emit.tests.test_ask_gate import ACCEPTED, REL, _put, repo  # noqa: F401
 from coordinator_core.ops.dispatch_emit.tests.test_ask_gate_resume import PLAN_REL, _plan
@@ -170,7 +171,7 @@ def test_unlanded_gate_names_the_never_landed_row_and_stages_only_it(repo):  # n
     resume = reply["resume_ledger"]
     assert resume["run_id"] == HALTED_RUN and resume["blocking"] == ["R1"]
     assert resume[RESUME_LEDGER_UNLANDED_FIELD] == ["C1"]
-    assert [r["id"] for r in reply["manifest"]["rows"]] == ["C1"]
+    assert [r["id"] for r in read_reply(repo, reply["manifest_handle"])["rows"]] == ["C1"]
 
 
 def test_unlanded_composed_script_sets_ledger_exec_ahead_of_the_execute_phase(repo, monkeypatch):  # noqa: F811

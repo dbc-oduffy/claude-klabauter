@@ -28,6 +28,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     read_ledger_halt,
 )
 from coordinator_core.ops.dispatch_emit.ask_gate import _handler, gate
+from coordinator_core.ops.dispatch_emit.reply_sidecar import read_reply
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
 from coordinator_core.ops.dispatch_emit.tests.test_ask_gate import ACCEPTED, REL, _put, repo  # noqa: F401
 from coordinator_core.ops.dispatch_emit.tests.test_ask_gate_resume import PLAN_REL
@@ -142,8 +143,8 @@ def test_the_real_gate_resumes_the_example_game_repo_shape_with_a_manifest_of_th
     assert out.get("resume_rows") is None
     assert out["resume_ledger"][RESUME_LEDGER_KIND_FIELD] == ALL_LANDED_HALT_KIND
     assert out["resume_ledger"]["blocking"] == list(_RULABLE)
-    assert out["manifest"].get("error") is None, out["manifest"]
-    assert [r["id"] for r in out["manifest"]["rows"]] == ["A1", "A2"]
+    assert "manifest_handle" in out and "error" not in out["manifest"], out  # interim: inline beside the handle
+    assert [r["id"] for r in read_reply(repo, out["manifest_handle"])["rows"]] == ["A1", "A2"]
 
 
 def test_without_the_evidence_sidecar_the_gate_returns_the_row_resume_the_real_run_took(repo):  # noqa: F811

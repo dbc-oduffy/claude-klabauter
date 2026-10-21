@@ -42,6 +42,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     RUN_OUTCOME_FILE,
     GateVerdict,
     read_run_outcome,
+    record_dir,
     rulable_ids,
 )
 from coordinator_core.ops.sizing_acceptance import (
@@ -51,6 +52,7 @@ from coordinator_core.ops.sizing_acceptance import (
     sizing_acceptance_skipped,
 )
 from coordinator_core.ops.dispatch_emit.ask_stage import AskStageError, manifest_payload, stage
+from coordinator_core.ops.dispatch_emit import reply_sidecar
 from coordinator_core.ops.dispatch_emit.request_validation import Field, validate_params
 from coordinator_core.ops.dispatch_emit.sizing_fire import (
     ARM_S,
@@ -477,9 +479,10 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     design_approval, board_url, pm_ruling, ruling_ref: the canvas board link and the PM's verbatim approval,
     echoed in `recorded` and not stored),
     `run_id` (str: the warp run asking), `cross_repo_approved` (bool) and `session_id` (str): the stage params
-    for a ledger-resume verdict or an S verdict with `resume_plan`, which with `run_id` gains `manifest` (the
-    `dispatch.ask_stage` reply on `resume_ledger.plan`, or on `resume_plan` limited to `resume_rows`; or its
-    `{error}`); no other verdict carries the key.
+    for a ledger-resume verdict or an S verdict with `resume_plan`, which with `run_id` gains `manifest_handle` (the
+    `{path, sha256, bytes}` handle over the `manifest.json` that staging `resume_ledger.plan`, or `resume_plan`
+    limited to `resume_rows`, wrote) or, on a stage refusal, `manifest` = `{error}`; no other verdict carries
+    either key.
 
     `route_override_reason` (str): why the sizing routes against the run's `route-preference.json`; with a
     `run_id` whose record holds a preference it is written to `em_analysis`, and a divergence with no reason
@@ -536,7 +539,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         else:
             return out
         try:
-            out["manifest"] = manifest_payload(root, stage(
+            manifest = stage(
                 root,
                 run_id=params["run_id"],
                 plan_rel=plan_rel,
@@ -546,8 +549,11 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                 commit_sizing_rel=sizing_rel,
                 ledger_resume=ledger_resume,
                 only_rows=only_rows,
-            ))
-        except (AskStageError, SizingFireRefused) as exc:
+            )
+            # Trap: the composed script still adopts `manifest`; see ask_stage._handler.
+            out["manifest"] = manifest_payload(root, manifest)
+            out["manifest_handle"] = reply_sidecar.handle_for(root, record_dir(root, params["run_id"]) / "manifest.json")
+        except (AskStageError, SizingFireRefused, reply_sidecar.ReplySidecarError) as exc:
             out["manifest"] = {"error": str(exc)}
     return out
 

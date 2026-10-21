@@ -7,6 +7,7 @@ import subprocess
 import pytest
 
 from coordinator_core.ops.dispatch_emit.ask_gate import _handler
+from coordinator_core.ops.dispatch_emit.reply_sidecar import read_reply
 from coordinator_core.ops.dispatch_emit.tests.test_ask_gate import REL, _put, repo  # noqa: F401
 from coordinator_core.ops.dispatch_emit.tests.test_ask_gate_resume import PLAN_REL, _plan
 from coordinator_core.win_portability import no_console_creationflags
@@ -36,8 +37,8 @@ def test_s_resume_plan_verdict_carries_a_manifest_of_only_the_resume_rows(repo):
     out = _handler({"sizing_path": REL, "run_id": "r1", "writes": ["a.py"]}, repo_root=repo)
 
     assert out["halt"] is None and out["arm"] == "s" and out["resume_rows"] == ["A2", "A4"], out
-    manifest = out["manifest"]
-    assert "error" not in manifest, manifest
+    assert "manifest_handle" in out and "error" not in out["manifest"], out  # interim: inline beside the handle
+    manifest = read_reply(repo, out["manifest_handle"])
     assert manifest["run_dir"] and manifest["marker_path"] and "head_sha" in manifest
     assert sorted(r["id"] for r in manifest["rows"]) == ["A2", "A4"], manifest
 

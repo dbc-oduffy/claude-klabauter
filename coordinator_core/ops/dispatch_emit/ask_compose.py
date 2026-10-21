@@ -18,6 +18,7 @@ from typing import Callable, Optional, Sequence
 from coordinator_core.git.git_state import head_sha
 from coordinator_core.warp_fire import fire_command
 from coordinator_core.ops.dispatch_emit import agent_sidecar as _sidecar
+from coordinator_core.ops.dispatch_emit import prompt_fragments as _prompt_fragments
 from coordinator_core.ops.dispatch_emit import emit as _emit
 from coordinator_core.ops.dispatch_emit.fanout_cost import AGENT_CALL_RE, GROUP_HEADER_TAIL, GROUP_MEMBER_RESULT_JS, FanoutCost, with_fanout
 from coordinator_core.ops.dispatch_emit.falsifier_integrity_phase import REVIEWER_AGENT_TYPE
@@ -3018,6 +3019,7 @@ def _finish_script(b: list[str], manifest_rel: str, description: str, phase_titl
         + "\n".join(b)
         + "\n"
     )
+    script = _prompt_fragments.hoist_repeated_fragments(script, anchor=ASK_MANIFEST_MARKER)
     if len(script.encode("utf-8")) > _emit._WORKFLOW_SCRIPT_BYTE_CAP:
         raise AskComposeRefused(
             f"composed ask script is over the Workflow runner's {_emit._WORKFLOW_SCRIPT_BYTE_CAP}-byte cap"

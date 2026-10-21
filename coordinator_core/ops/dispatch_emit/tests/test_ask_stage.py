@@ -7,12 +7,22 @@ import json
 import pytest
 import yaml
 
-from coordinator_core.ops.dispatch_emit import emit
+from coordinator_core.ops.dispatch_emit import emit, reply_sidecar
 from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT, RUN_DIR_ROOT, StageManifest
 from coordinator_core.ops.dispatch_emit.ask_stage import AskStageError, _handler, stage
 from coordinator_core.ops.dispatch_emit.commit_request import parse_marker
 from coordinator_core.ops.dispatch_emit.spine_read import read_spine
 from coordinator_core.ops.dispatch_emit.wave_map import build_waves
+
+def read_stage_reply(root, reply: dict) -> dict:
+    """A refusal reply as-is; a success reply's manifest read through its verified `manifest_handle`."""
+    if "error" in reply:
+        return reply
+    # Interim: the reply carries the manifest inline beside the handle until the script reads the handle.
+    manifest = reply_sidecar.read_reply(root, reply["manifest_handle"])
+    assert {k: v for k, v in reply.items() if k != "manifest_handle"} == manifest, reply
+    return manifest
+
 
 PLAN_REL = "docs/plans/2026-10-01-fixture.md"
 SIZING_REL = "state/sizings/2026-10-01-xs-fixture.yaml"
@@ -132,10 +142,10 @@ def test_handler_resolves_the_sizing_from_the_common_dir_the_engine_passes(repo)
         "deliverable_id": "dlv-xs-abc123",
     }
     (repo / SIZING_REL).write_text(yaml.safe_dump(doc), encoding="utf-8", newline="\n")
-    reply = _handler(
+    reply = read_stage_reply(repo, _handler(
         {"run_id": "gitrun", "sizing_path": SIZING_REL, "writes": ["pkg/a.py"]},
         repo_root=repo / ".git",
-    )
+    ))
     assert "error" not in reply, reply
     assert [r["id"] for r in reply["rows"]] == ["X1"]
 

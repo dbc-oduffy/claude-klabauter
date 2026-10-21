@@ -10,7 +10,7 @@ import pytest
 
 from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
 from coordinator_core.ops.dispatch_emit.ask_stage import _handler
-from coordinator_core.ops.dispatch_emit.tests.test_ask_stage import PLAN, PLAN_REL
+from coordinator_core.ops.dispatch_emit.tests.test_ask_stage import PLAN, PLAN_REL, read_stage_reply
 from coordinator_core.win_portability import no_console_creationflags
 
 _RUN = "headrun"
@@ -19,7 +19,7 @@ _RUN = "headrun"
 def _stage(root):
     (root / PLAN_REL).parent.mkdir(parents=True, exist_ok=True)
     (root / PLAN_REL).write_text(PLAN, encoding="utf-8", newline="\n")
-    return _handler({"run_id": _RUN, "plan_path": PLAN_REL, "writes": []}, repo_root=root)
+    return read_stage_reply(root, _handler({"run_id": _RUN, "plan_path": PLAN_REL, "writes": []}, repo_root=root))
 
 
 def _manifest(root) -> dict:

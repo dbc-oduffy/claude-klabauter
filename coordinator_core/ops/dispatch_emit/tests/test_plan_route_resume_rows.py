@@ -9,6 +9,7 @@ import pytest
 
 from coordinator_core.ops.dispatch_emit import plan_route
 from coordinator_core.ops.dispatch_emit.ask_stage import _handler
+from coordinator_core.ops.dispatch_emit.tests.test_ask_stage import read_stage_reply
 from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
@@ -84,7 +85,9 @@ def _stage(tmp_path: Path, rows: str, only_rows: list[str]) -> dict:
     (tmp_path / ".git").mkdir()
     (tmp_path / "docs" / "plans").mkdir(parents=True)
     (tmp_path / PLAN_REL).write_text(_plan(rows), encoding="utf-8", newline="\n")
-    return _handler({"run_id": "r1", "plan_path": PLAN_REL, "only_rows": only_rows}, repo_root=tmp_path)
+    return read_stage_reply(
+        tmp_path, _handler({"run_id": "r1", "plan_path": PLAN_REL, "only_rows": only_rows}, repo_root=tmp_path)
+    )
 
 
 def test_resume_stages_only_incomplete_rows(tmp_path):

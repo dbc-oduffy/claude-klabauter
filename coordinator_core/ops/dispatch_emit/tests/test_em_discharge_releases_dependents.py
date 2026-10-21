@@ -8,6 +8,7 @@ import pytest
 import yaml
 
 from coordinator_core.ops.dispatch_emit.ask_stage import _handler
+from coordinator_core.ops.dispatch_emit.tests.test_ask_stage import read_stage_reply
 from coordinator_core.ops.dispatch_emit.spine_read import read_spine
 from coordinator_core.ops.plan_tasks_mutate import EM_DISCHARGE_KEY, evidence_sidecar_path
 
@@ -95,6 +96,8 @@ def test_uncleared_gate_beats_discharge(tmp_path):
 
 def test_resume_after_discharge_stages_dependent_and_knows_discharged_row(tmp_path):
     _plan(tmp_path, _em_rows(), ("E1",))
-    reply = _handler({"run_id": "r1", "plan_path": PLAN_REL, "only_rows": ["E1", "C2"]}, repo_root=tmp_path)
+    reply = read_stage_reply(
+        tmp_path, _handler({"run_id": "r1", "plan_path": PLAN_REL, "only_rows": ["E1", "C2"]}, repo_root=tmp_path)
+    )
     assert "error" not in reply
     assert [r["id"] for r in reply["rows"]] == ["C2"]

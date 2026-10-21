@@ -8,6 +8,7 @@ import coordinator_core.machine_resolver as mr
 import coordinator_core.ops.fleet._memo_resolver as memo
 import coordinator_core.ops.sibling_repo_provision_contract as contract
 from coordinator_core.ops.dispatch_emit.ask_stage import _handler
+from coordinator_core.ops.dispatch_emit.tests.test_ask_stage import read_stage_reply
 from coordinator_core.ops.dispatch_emit.cross_repo_write_refusal import (
     CrossRepoWriteError,
     check_cross_repo_writes,
@@ -67,7 +68,7 @@ def world(tmp_path, monkeypatch):
 
 def _stage(home, plan, **params):
     (home / PLAN_REL).write_text(plan, encoding="utf-8", newline="\n")
-    return _handler({"run_id": "r1", "plan_path": PLAN_REL, **params}, repo_root=home)
+    return read_stage_reply(home, _handler({"run_id": "r1", "plan_path": PLAN_REL, **params}, repo_root=home))
 
 
 def test_unapproved_run_stages_the_row_with_no_approval_touchpoint_and_no_grant(world):

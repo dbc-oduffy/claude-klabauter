@@ -118,16 +118,20 @@ def relay_digest(token: str) -> tuple[int, str]:
     return len(token), hashlib.sha256(raw).hexdigest()
 
 
-def check_relay(flag: str, token: str, length: str, sha256: str) -> Optional[str]:
+RELAY_DAMAGE_CAUSE = "the agent's copy of the pieces is damaged"
+
+
+def check_relay(flag: str, token: str, length: str, sha256: str, cause: str = RELAY_DAMAGE_CAUSE) -> Optional[str]:
     """None when ``token`` matches the sender's ``length`` and ``sha256`` (both raw flag strings);
-    else one ``RELAY_CORRUPT_HEAD`` line naming ``--flag`` and both digests. Never raises."""
+    else one ``RELAY_CORRUPT_HEAD`` line naming ``--flag`` and both digests, ending in ``cause``.
+    Never raises."""
     sent = f"sent as {length!r} chars sha256 {str(sha256)[:12]!r}"
     try:
         n, h = relay_digest(token)
     except ValueError:
-        return f"{RELAY_CORRUPT_HEAD}: --{flag} is not ASCII, {sent}; the agent's copy of the pieces is damaged"
+        return f"{RELAY_CORRUPT_HEAD}: --{flag} is not ASCII, {sent}; {cause}"
     sent = f"sent as {length} chars sha256 {str(sha256)[:12]}"
-    got = f"--{flag} arrived as {n} chars sha256 {h[:12]}, {sent}; the agent's copy of the pieces is damaged"
+    got = f"--{flag} arrived as {n} chars sha256 {h[:12]}, {sent}; {cause}"
     if not (isinstance(length, str) and length.isascii() and length.isdigit()):
         return f"{RELAY_CORRUPT_HEAD}: {got} (length is not a non-negative integer)"
     if not (isinstance(sha256, str) and len(sha256) == 64 and set(sha256) <= _HEX64):

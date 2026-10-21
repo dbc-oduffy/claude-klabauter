@@ -14,6 +14,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     RESUME_LEDGER_KIND_FIELD,
 )
 from coordinator_core.ops.dispatch_emit.ask_gate import _handler, gate
+from coordinator_core.ops.dispatch_emit.reply_sidecar import read_reply
 from coordinator_core.ops.dispatch_emit.tests.test_all_landed_refire_e2e import _MET, _run_composed
 from coordinator_core.ops.dispatch_emit.tests.test_ask_gate import ACCEPTED, REL, _put, repo  # noqa: F401
 from coordinator_core.ops.dispatch_emit.tests.test_ask_gate_resume import PLAN_REL
@@ -58,7 +59,8 @@ def test_a_credited_only_open_row_gates_to_the_all_landed_ledger_resume(repo):  
     assert v.resume_ledger[RESUME_LEDGER_KIND_FIELD] == ALL_LANDED_HALT_KIND
     assert v.resume_ledger["blocking"] == ["R1"]
     out = _handler({"sizing_path": REL, "run_id": "ask-20261019T000000-cccccc"}, repo_root=repo)
-    assert out["manifest"].get("error") is None, out["manifest"]
+    assert "manifest_handle" in out and "error" not in out["manifest"], out  # interim: inline beside the handle
+    assert read_reply(repo, out["manifest_handle"])["rows"] is not None
 
 
 def test_without_a_credit_the_gate_returns_the_row_resume_the_real_run_took(repo):  # noqa: F811

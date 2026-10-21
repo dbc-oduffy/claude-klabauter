@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from coordinator_core.ops.dispatch_emit.ask_stage import _handler
+from coordinator_core.ops.dispatch_emit.tests.test_ask_stage import read_stage_reply
 from coordinator_core.ops.dispatch_emit.spine_read import memo_draft_fields
 
 PLAN_REL = "docs/plans/2026-10-16-memo.md"
@@ -41,7 +42,7 @@ def _stage(tmp_path, plan: str):
     (tmp_path / ".git").mkdir(exist_ok=True)
     (tmp_path / "docs" / "plans").mkdir(parents=True, exist_ok=True)
     (tmp_path / PLAN_REL).write_text(plan, encoding="utf-8", newline="\n")
-    return _handler({"run_id": "r1", "plan_path": PLAN_REL}, repo_root=tmp_path)
+    return read_stage_reply(tmp_path, _handler({"run_id": "r1", "plan_path": PLAN_REL}, repo_root=tmp_path))
 
 
 def _owed(reply):

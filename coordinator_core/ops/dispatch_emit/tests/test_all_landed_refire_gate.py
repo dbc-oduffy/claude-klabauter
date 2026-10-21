@@ -10,6 +10,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     write_run_outcome,
 )
 from coordinator_core.ops.dispatch_emit.ask_gate import _handler, gate
+from coordinator_core.ops.dispatch_emit.reply_sidecar import read_reply
 from coordinator_core.ops.dispatch_emit.sizing_fire import ALL_LANDED_NO_RUN, SizingFireRefused, resumable_plan
 from coordinator_core.ops.dispatch_emit.tests.test_ask_gate import REL, _put, repo  # noqa: F401
 from coordinator_core.ops.dispatch_emit.tests.test_ask_gate_resume import PLAN_REL
@@ -44,8 +45,8 @@ def test_the_handler_stages_a_whole_zero_row_manifest(repo):  # noqa: F811
     _put_s(repo, requirement_register=OPEN_REGISTER)
     _landed_repo(repo, CODED)
     out = _handler({"sizing_path": REL, "run_id": "ask-20261018T000000-aaaaaa"}, repo_root=repo)
-    assert out["manifest"].get("error") is None, out["manifest"]
-    assert out["manifest"]["rows"] == []
+    assert "manifest_handle" in out and "error" not in out["manifest"], out  # interim: inline beside the handle
+    assert read_reply(repo, out["manifest_handle"])["rows"] == []
     assert out["resume_ledger"][RESUME_LEDGER_KIND_FIELD] == ALL_LANDED_HALT_KIND
 
 
@@ -119,7 +120,8 @@ def test_em_discharged_rows_count_landed_and_the_gate_resumes_at_the_ledger(repo
     assert v.resume_ledger[RESUME_LEDGER_KIND_FIELD] == ALL_LANDED_HALT_KIND
     assert v.resume_ledger["blocking"] == ["T2", "R2"]
     out = _handler({"sizing_path": REL, "run_id": "ask-20261018T000000-bbbbbb"}, repo_root=repo)
-    assert out["manifest"].get("error") is None, out["manifest"]
+    assert "manifest_handle" in out and "error" not in out["manifest"], out  # interim: inline beside the handle
+    assert read_reply(repo, out["manifest_handle"])["rows"] is not None
 
 
 def test_an_undischarged_em_row_keeps_the_row_resume(repo):  # noqa: F811

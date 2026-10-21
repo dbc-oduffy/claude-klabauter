@@ -27,6 +27,7 @@ from coordinator_core.ops.dispatch_emit import cli as cli_module
 from coordinator_core.ops.dispatch_emit.ask_compose import compose_ask_script
 from coordinator_core.ops.dispatch_emit.ask_stage import _handler as ask_stage
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
+from coordinator_core.ops.dispatch_emit.tests.test_ask_stage import read_stage_reply
 from coordinator_core.ops.dispatch_emit.tests.test_ask_stage_gated_rows import _patch_registry
 from coordinator_core.ops.review_prep import _handler as review_prep
 
@@ -174,7 +175,7 @@ def test_b2_the_targets_own_rows_are_staged_not_withheld(world, monkeypatch):
         "- id: G2\n  title: owned by a third repo\n  change_kind: code-edit\n  surface: pkg/h.py\n  writes:\n    - pkg/h.py\n"
         "  external_gate:\n    - owner_repo: third-repo\n      requires: landed-work\n```\n",
     )
-    reply = ask_stage({"run_id": "r1", "plan_path": _PLAN_REL}, repo_root=world.target)
+    reply = read_stage_reply(world.target, ask_stage({"run_id": "r1", "plan_path": _PLAN_REL}, repo_root=world.target))
     assert "error" not in reply, reply
     assert "G1" in [r["id"] for r in reply["rows"]], "the target's own row was withheld"
     assert [g["id"] for g in reply["gated"]] == ["G2"]

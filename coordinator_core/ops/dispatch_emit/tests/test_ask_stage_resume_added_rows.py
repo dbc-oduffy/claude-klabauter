@@ -6,6 +6,7 @@ from pathlib import Path
 
 from coordinator_core.ops.dispatch_emit import resume_snapshot
 from coordinator_core.ops.dispatch_emit.ask_stage import _handler
+from coordinator_core.ops.dispatch_emit.tests.test_ask_stage import read_stage_reply
 
 PLAN_REL = "docs/plans/p.md"
 RUN = "r1"
@@ -35,7 +36,9 @@ def _plan(tmp_path: Path, rows: str) -> None:
 
 
 def _stage(tmp_path: Path, only_rows: list[str]) -> dict:
-    return _handler({"run_id": RUN, "plan_path": PLAN_REL, "only_rows": only_rows}, repo_root=tmp_path)
+    return read_stage_reply(
+        tmp_path, _handler({"run_id": RUN, "plan_path": PLAN_REL, "only_rows": only_rows}, repo_root=tmp_path)
+    )
 
 
 def _replanned(extra_row: str = "") -> str:

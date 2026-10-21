@@ -2,7 +2,7 @@
 
 Working files land under `RUN_DIR_ROOT/<run_id>/`: `briefs/<row>.md` (the plan route's row prompt) and
 `commit-request.txt` (the `render_marker` line, empty when no row declares a path). Run records land
-under `ask_contract.record_dir`: the minted spine, `pm-intent.md` and `manifest.json` (a `StageManifest`). In-process file writes only; no git, no subprocess, so the
+under `ask_contract.record_dir`: the minted spine, `pm-intent.md` and `manifest.json` (a `StageManifest` plus `head_sha`, ASCII JSON written by `_write`; the op replies `reply_sidecar.handle_for` over it). In-process file writes only; no git, no subprocess, so the
 op holds the 500ms bar. Trap: unlike `compose_script`, the per-row pathspec is not
 gitignore-filtered, because that filter spawns git.
 """
@@ -22,7 +22,7 @@ from coordinator_core.ipc import register_op
 from coordinator_core.lifecycle import main_worktree_root
 from coordinator_core.testing.suite_run_record import read_head_sha
 from coordinator_core.ops._path_guard import contained_path, safe_id
-from coordinator_core.ops.dispatch_emit import design_route
+from coordinator_core.ops.dispatch_emit import design_route, reply_sidecar
 from coordinator_core.ops.dispatch_emit.ask_contract import (
     ASK_TEXT_FILE,
     DELIVERY_NOTE_DIR,
@@ -813,7 +813,9 @@ def manifest_payload(root: Path, manifest: StageManifest) -> dict:
 def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "dispatch.ask_stage": params `run_id` (str), exactly one of `plan_path` / `sizing_path`, `writes`.
 
-    Replies `StageManifest.to_json()` plus `head_sha`; a refused request replies `{"error": str}`.
+    Replies `{"manifest_handle": {path, sha256, bytes}}` over the `manifest.json` that `stage()` wrote
+    (`StageManifest.to_json()` plus `head_sha`), never the manifest itself; read it with
+    `reply_sidecar.read_reply`. A refused request replies `{"error": str}`.
     """
     if repo_root is None:
         return {"error": "dispatch.ask_stage requires repo_root"}
@@ -842,4 +844,9 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             reply["owed_em_ids"] = exc.owed_em_ids
             reply["owed_plan"] = exc.plan_path
         return reply
-    return manifest_payload(root, manifest)
+    # Trap: the composed ask script still adopts `manifest` from this reply; drop it only with the
+    # script-side handle read (plan 2026-10-21-stage-reply-sidecar-handle, C4/C5).
+    return {
+        **manifest_payload(root, manifest),
+        "manifest_handle": reply_sidecar.handle_for(root, record_dir(root, run_id) / "manifest.json"),
+    }

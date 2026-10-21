@@ -9,6 +9,7 @@ import pytest
 
 from coordinator_core.ops.dispatch_emit import ask_gate, ask_stage
 from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
+from coordinator_core.ops.dispatch_emit.tests.test_ask_stage import read_stage_reply
 from coordinator_core.ops.dispatch_emit.tests.test_ask_gate import ACCEPTED, REL, _put, repo  # noqa: F401
 from coordinator_core.win_portability import no_console_creationflags
 
@@ -76,8 +77,11 @@ def test_a_refire_whose_replan_adds_rows_stages_them_on_that_fire(repo):  # noqa
             _row("C24"),
         ],
     )
-    staged = ask_stage._handler(
-        {"run_id": RUN_ID, "plan_path": PLAN_REL, "only_rows": reply["resume_rows"]}, repo_root=repo
+    staged = read_stage_reply(
+        repo,
+        ask_stage._handler(
+            {"run_id": RUN_ID, "plan_path": PLAN_REL, "only_rows": reply["resume_rows"]}, repo_root=repo
+        ),
     )
     assert "error" not in staged, staged
     rows = {r["id"]: r for r in staged["rows"]}

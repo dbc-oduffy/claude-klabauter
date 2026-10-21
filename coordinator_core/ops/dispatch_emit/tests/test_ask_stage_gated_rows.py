@@ -5,6 +5,7 @@ from __future__ import annotations
 import time
 
 from coordinator_core.ops.dispatch_emit.ask_stage import _handler
+from coordinator_core.ops.dispatch_emit.tests.test_ask_stage import read_stage_reply
 
 PLAN_REL = "docs/plans/2026-10-03-gated.md"
 
@@ -47,7 +48,7 @@ def _stage(tmp_path, plan: str):
     (tmp_path / ".git").mkdir()
     (tmp_path / "docs" / "plans").mkdir(parents=True)
     (tmp_path / PLAN_REL).write_text(plan, encoding="utf-8", newline="\n")
-    return _handler({"run_id": "r1", "plan_path": PLAN_REL}, repo_root=tmp_path)
+    return read_stage_reply(tmp_path, _handler({"run_id": "r1", "plan_path": PLAN_REL}, repo_root=tmp_path))
 
 
 def _gate(requires: str, blocks: str | None = None) -> str:

@@ -9,6 +9,7 @@ import pytest
 from coordinator_core.ops.dispatch_emit import ask_compose, engine_owned_rows
 from coordinator_core.ops.dispatch_emit.ask_compose import compose_ask_script
 from coordinator_core.ops.dispatch_emit.ask_stage import _handler
+from coordinator_core.ops.dispatch_emit.tests.test_ask_stage import read_stage_reply
 from coordinator_core.ops.dispatch_emit.engine_owned_rows import engine_owner_rows, routed_roots
 from coordinator_core.ops.dispatch_emit.requirements_ledger import Item, Ledger, judge
 from coordinator_core.ops.dispatch_emit.tests.conftest import _V5_ROSTER_FRAGMENT, _V5_STAGE_SCHEMAS
@@ -77,7 +78,7 @@ def test_engine_owner_rows_routes_the_engine_row_with_root_and_class(world):
 
 def test_stage_manifest_carries_engine_rows_for_the_engine_row_only(world):
     cwd, root = world
-    reply = _handler({"run_id": "r1", "plan_path": PLAN_REL}, repo_root=cwd)
+    reply = read_stage_reply(cwd, _handler({"run_id": "r1", "plan_path": PLAN_REL}, repo_root=cwd))
     assert "error" not in reply
     assert [r["id"] for r in reply["engine_rows"]] == ["T8"]
     assert routed_roots(reply) == {"T8": root}

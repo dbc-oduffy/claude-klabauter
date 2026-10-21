@@ -9,6 +9,7 @@ import pytest
 from coordinator_core.benchmarks.spawn_counter import _count_spawns_attributed
 from coordinator_core.ops.dispatch_emit.ask_contract import RESUME_LEDGER_UNLANDED_FIELD
 from coordinator_core.ops.dispatch_emit.ask_gate import _handler
+from coordinator_core.ops.dispatch_emit.reply_sidecar import read_reply
 from coordinator_core.ops.dispatch_emit.tests.test_ask_ledger_resume_e2e import (  # noqa: F401
     PLAN,
     SIZING,
@@ -26,8 +27,8 @@ def test_ledger_resume_verdict_carries_a_whole_manifest(halted):  # noqa: F811
     out = _handler({"sizing_path": SIZING, "run_id": "newrun", "writes": ["a.py"]}, repo_root=halted)
 
     assert out["resume_ledger"]["plan"] == PLAN, out
-    manifest = out["manifest"]
-    assert "error" not in manifest, manifest
+    assert "manifest_handle" in out and "error" not in out["manifest"], out  # interim: inline beside the handle
+    manifest = read_reply(halted, out["manifest_handle"])
     assert manifest["run_dir"] and manifest["marker_path"] and "rows" in manifest
     assert "head_sha" in manifest
 
@@ -61,7 +62,8 @@ def test_staging_adds_no_spawn_to_the_ledger_resume_gate(halted, monkeypatch):  
     with _count_spawns_attributed(monkeypatch) as staged:
         out = _handler({"sizing_path": SIZING, "run_id": "newrun", "writes": ["a.py"]}, repo_root=halted)
 
-    assert "error" not in out["manifest"], out["manifest"]
+    assert "manifest_handle" in out and "error" not in out["manifest"], out  # interim: inline beside the handle
+    assert read_reply(halted, out["manifest_handle"])["rows"] is not None
     assert len(staged) == len(bare), [s.argv for s in staged]
 
 
@@ -71,7 +73,8 @@ def test_a_resume_whose_halt_landed_every_staged_row_has_no_unlanded_rows(halted
     out = _handler({"sizing_path": SIZING, "run_id": "newrun", "writes": ["a.py"]}, repo_root=halted)
 
     assert out["resume_ledger"][RESUME_LEDGER_UNLANDED_FIELD] == [], out["resume_ledger"]
-    assert "error" not in out["manifest"], out["manifest"]
+    assert "manifest_handle" in out and "error" not in out["manifest"], out  # interim: inline beside the handle
+    assert "manifest_handle" in out
 
 
 def test_a_halt_that_landed_no_chunk_names_its_staged_rows_unlanded_and_stages_exactly_them(repo):  # noqa: F811
@@ -119,4 +122,5 @@ def test_a_halt_that_landed_no_chunk_names_its_staged_rows_unlanded_and_stages_e
 
     assert out.get("halt") is None, out
     assert sorted(out["resume_ledger"][RESUME_LEDGER_UNLANDED_FIELD]) == ["C0", "C1"], out["resume_ledger"]
-    assert sorted(r["id"] for r in out["manifest"]["rows"]) == ["C0", "C1"], out["manifest"]
+    manifest = read_reply(repo, out["manifest_handle"])
+    assert sorted(r["id"] for r in manifest["rows"]) == ["C0", "C1"], manifest
