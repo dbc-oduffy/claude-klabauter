@@ -81,13 +81,10 @@ from __future__ import annotations
 import json
 import os
 import re
-import tempfile
 from pathlib import Path
 
-from coordinator_core.temp_layout import managed_tempdir
 from typing import List, Optional, Sequence, Union
 
-from coordinator_core.content_root import read_pointer_files
 from coordinator_core.git import repo_root as _repo_root_seam
 from coordinator_core.session import core as _session_core
 
@@ -173,6 +170,8 @@ def _resolve_content_root() -> str:
     # to ${CLAUDE_HOME:-$HOME}: this runs from a git hook, where CLAUDE_HOME may
     # be set to something unrelated to the pointer's home. Behavior-identical to
     # the inline read this replaced.
+    from coordinator_core.content_root import read_pointer_files
+
     return read_pointer_files(os.path.expanduser("~"))
 
 
@@ -1738,6 +1737,10 @@ def apply_missing_trailers(
     required, independent of session-id resolution). `None` (the default)
     is byte-identical to HEAD.
     """
+    import tempfile
+
+    from coordinator_core.temp_layout import managed_tempdir
+
     fd, msg_path = tempfile.mkstemp(prefix="commit-trailers-stage-", dir=managed_tempdir())
     try:
         with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:

@@ -86,6 +86,7 @@ def test_accept_prompt_stages_xs_after_regate(monkeypatch):
     section = _accept_section(script)
     assert "dispatch.ask_stage" in section
     assert "stage_reply" in section
+    assert script.index("_adoptStageReply(_apm.stage_reply)") > script.index("!_gate.halt && _gate.arm === 'xs'")
     assert "_adoptStageReply(_apm.stage_reply)" in script
     assert "!_gate.halt && _gate.arm === 'xs'" in script
     stopped = _compose(**kw, stop_after="plan")

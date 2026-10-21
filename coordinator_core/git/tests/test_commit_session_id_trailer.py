@@ -73,3 +73,28 @@ def test_unresolvable_sid_leaves_message_unchanged(tmp_path, monkeypatch):
     message = _last_message(repo)
     assert "Session-Id:" not in message
     assert message.strip() == "add new"
+
+
+def test_trailer_path_does_not_import_content_root_or_temp_layout(tmp_path):
+    import sys
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[3]
+    code = (
+        "import sys; sys.path.insert(0, sys.argv[1])\n"
+        "from coordinator_core.git import commit as c\n"
+        "out = c._attach_session_id_trailer('msg', sys.argv[2])\n"
+        "assert out == 'msg\\n\\nSession-Id: 11111111-2222-4333-8444-555555555555\\n', repr(out)\n"
+        "bad = [m for m in ('coordinator_core.content_root', 'coordinator_core.temp_layout')"
+        " if m in sys.modules]\n"
+        "assert not bad, bad\n"
+    )
+    env = {
+        "COORDINATOR_SESSION_ID": "11111111-2222-4333-8444-555555555555",
+        "PATH": __import__("os").environ.get("PATH", ""),
+    }
+    done = subprocess.run(
+        [sys.executable, "-I", "-c", code, str(root), str(_repo(tmp_path))],
+        capture_output=True, text=True, env=env, **_NOWIN,
+    )
+    assert done.returncode == 0, done.stdout + done.stderr

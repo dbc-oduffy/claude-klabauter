@@ -300,6 +300,13 @@ def test_baton_given_at_xs_naming_another_sizing_is_refused(repo):
     assert "state/handoffs/x.md" in v.halt["reason"]
 
 
+@pytest.mark.parametrize("baton", ["../x.md", "/etc/passwd", "d:x.md"])
+def test_baton_given_at_xs_escaping_the_repo_is_refused(repo, baton):
+    _put(repo, tshirt="XS", route="dispatch", accepted=ACCEPTED)
+    v = gate(repo, REL, writes=["a.py"], baton=baton)
+    assert v.halt["kind"] == "refusal" and "not this sizing's" in v.halt["reason"]
+
+
 def test_baton_given_at_xs_missing_file_is_refused(repo):
     _put(repo, tshirt="XS", route="dispatch", accepted=ACCEPTED)
     v = gate(repo, REL, writes=["a.py"], baton="state/handoffs/none.md")

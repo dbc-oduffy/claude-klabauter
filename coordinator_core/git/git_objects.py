@@ -45,6 +45,7 @@ import threading
 import time
 import zlib
 from collections import OrderedDict
+from collections.abc import Sequence
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Callable, NamedTuple, Optional
@@ -300,11 +301,40 @@ _PACK_TYPE_NUMS = {v: k for k, v in _PACK_TYPE_NAMES.items()}
 _MAX_DELTA_DEPTH = 200
 
 
+class _LazyOffsets(Sequence):
+    """Read-only view of a v2 `.idx` offset table; each entry is decoded on
+    access, so building one is O(1) in the object count. `table_pos` is the
+    byte position of the 32-bit table; the 64-bit table follows it."""
+
+    __slots__ = ("_data", "_table_pos", "_count")
+
+    def __init__(self, data: bytes, table_pos: int, count: int) -> None:
+        self._data = data
+        self._table_pos = table_pos
+        self._count = count
+
+    def __len__(self) -> int:
+        return self._count
+
+    def __getitem__(self, i):  # type: ignore[override]
+        if isinstance(i, slice):
+            return [self[j] for j in range(*i.indices(self._count))]
+        if i < 0:
+            i += self._count
+        if not 0 <= i < self._count:
+            raise IndexError(i)
+        (raw,) = struct.unpack_from(">I", self._data, self._table_pos + i * 4)
+        if raw & 0x80000000:
+            large_pos = self._table_pos + self._count * 4 + (raw & 0x7FFFFFFF) * 8
+            (raw,) = struct.unpack_from(">Q", self._data, large_pos)
+        return raw
+
+
 class _PackIndex(NamedTuple):
     pack_path: Path
     fanout: tuple
     shas: bytes
-    offsets: tuple
+    offsets: Sequence
 
 
 def _read_loose_object(common_dir: Path, sha: str) -> Optional[tuple[str, bytes]]:
@@ -427,19 +457,8 @@ def _parse_pack_index_uncached(idx_path: Path) -> Optional[_PackIndex]:
     shas = data[pos : pos + count * 20]
     pos += count * 20
     pos += count * 4
-    offsets32 = struct.unpack(f">{count}I", data[pos : pos + count * 4])
-    pos += count * 4
-    large_count = sum(1 for o in offsets32 if o & 0x80000000)
-    large_offsets = (
-        struct.unpack(f">{large_count}Q", data[pos : pos + large_count * 8]) if large_count else ()
-    )
-    offsets = []
-    for raw_offset in offsets32:
-        if raw_offset & 0x80000000:
-            offsets.append(large_offsets[raw_offset & 0x7FFFFFFF])
-        else:
-            offsets.append(raw_offset)
-    return _PackIndex(idx_path.with_suffix(".pack"), fanout, shas, tuple(offsets))
+    offsets = _LazyOffsets(data, pos, count)
+    return _PackIndex(idx_path.with_suffix(".pack"), fanout, shas, offsets)
 
 
 def _pack_index_find(pidx: _PackIndex, sha_hex: str) -> Optional[int]:

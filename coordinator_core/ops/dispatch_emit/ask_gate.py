@@ -190,6 +190,7 @@ def _baton_belongs_to_sizing(repo_root: Path, sizing: dict, sizing_rel: str, bat
 
     Both sides compare repo-relative paths with separators folded to `/`; a missing baton file is False.
     """
+    # Deferred to keep the frontmatter package off ask_gate's import path until a baton is checked.
     from coordinator_core.frontmatter.primitives import read_fm_field_unquoted, split_frontmatter
 
     def fold(p: object) -> str:
@@ -198,8 +199,10 @@ def _baton_belongs_to_sizing(repo_root: Path, sizing: dict, sizing_rel: str, bat
     given = fold(baton)
     if given and fold(sizing.get("baton")) == given:
         return True
+    if not given or given.startswith("/") or ":" in given or ".." in given.split("/"):
+        return False
     target = repo_root / given
-    if not given or not target.is_file():
+    if not target.is_file():
         return False
     split = split_frontmatter(target.read_text(encoding="utf-8"))
     owner = read_fm_field_unquoted(split.fm_text, "sizing_object") if split else None
