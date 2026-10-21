@@ -15,7 +15,14 @@ file; default ``<scratch>/brief.md`` when present, else ``<scratch>/ask.md``).
 Incremental carry: each reground writes ``grounding.basis.json`` (line hashes per digest). A later
 reground re-grades only digests changed since that basis or lacking a section in the prior
 effective report, writes ``grounding.carry.json`` holding the other digests' prior sections, and
-scopes the brief to the changed digests. With no changed digest it is a no-op.
+scopes the brief to the changed digests. With no changed digest it is a no-op. Carried rulings are
+keyed to the content sha of each digest they judged (fresh ones to the prior basis); only rulings
+whose digests are all unchanged survive, and the digests a retired ruling judged are regraded. A
+pre-keying string ruling never survives. A ruling is also keyed to the grader version of the brief
+that preceded it (the carry's ``grader``); a ruling of an older or unrecorded version is retired
+and regraded. Generation 1 writes a carry too (no carried digest), recording the version of the
+brief it writes. The brief always states the ruling words and asks for the
+judged digest names on each ruling line.
 
 Returns (exit_code 0): ``{run_id, generation, stale, carried, fresh, regraded, problems, brief,
 script, next_action, then}``; ``stale`` is the moved report's scratch-relative name or null,
@@ -111,16 +118,15 @@ def _scoped_note(
     carried: list[str],
 ) -> str:
     note = f"\nRe-ground generation {n}: the earlier report is {stale_name if has_report else 'absent'}.\n"
-    if not carried:
-        return note
-    note += "Grade only these digests; the engine keeps the grades of the others and discards any section you write for them.\n"
-    for name in sorted(changed):
-        lines = ", ".join(str(i) for i in changed[name]) or "none"
-        note += f"- {name}: changed lines {lines}\n"
-        for ln in flagged.get(name, []):
-            note += f"  previously flagged: {ln.strip()}\n"
-    note += "Carried, not to be graded: " + ", ".join(carried) + "\n"
-    return note
+    if carried:
+        note += "Grade only these digests; the engine keeps the grades of the others and discards any section you write for them.\n"
+        for name in sorted(changed):
+            lines = ", ".join(str(i) for i in changed[name]) or "none"
+            note += f"- {name}: changed lines {lines}\n"
+            for ln in flagged.get(name, []):
+                note += f"  previously flagged: {ln.strip()}\n"
+        note += "Carried, not to be graded: " + ", ".join(carried) + "\n"
+    return note + rg.RULING_NOTE
 
 
 def _reground_sync(worktree: Path, params: dict) -> dict:
@@ -157,16 +163,29 @@ def _reground_sync(worktree: Path, params: dict) -> dict:
     except (OSError, UnicodeDecodeError) as exc:
         return _err(f"{rg.GROUNDING_REPORT} unreadable: {exc.__class__.__name__}")
 
+    fresh_grader = (carry or {}).get("grader")
     prior = ""
     changed: dict[str, list[int]] = {nm: [] for nm in names}
     if basis is not None:
         since_basis = rg.changed_digests(basis, current)
-        prior = rg.effective_report(report_text, carry, set(since_basis))
+        current_sha = {nm: rg.digest_sha(t) for nm, t in current.items()}
+        judged = {nm: rg.basis_sha(h) for nm, h in basis.items() if isinstance(h, list)}
+        prior = rg.effective_report(report_text, carry, set(since_basis), current_sha)
+        carried_keys = (carry or {}).get("carried", {})
+        carried_rulings = (carry or {}).get("rulings", [])
+        pool = list(carried_rulings if isinstance(carried_rulings, list) else [])
+        for ln in rg.report_sections(report_text)["rulings"]:
+            named = rg._ruling_digests(ln)
+            if not named or not named <= carried_keys.keys():
+                pool.append(rg.key_ruling(ln, judged, grader=fresh_grader))
+        survivors = [r for r in pool if rg.ruling_survives(r, current_sha)]
         graded = rg.report_sections(prior)["digests"]
         changed = dict(since_basis)
         for nm in names:
             if nm not in graded:
                 changed.setdefault(nm, [])
+        for nm in rg.dropped_ruling_digests(pool, current_sha):
+            changed.setdefault(nm, [])
         if not changed:
             return {
                 "exit_code": 0, "run_id": run_id, "generation": None,
@@ -211,22 +230,24 @@ def _reground_sync(worktree: Path, params: dict) -> dict:
     except (OSError, UnicodeDecodeError) as exc:
         return _err(f"brief {brief_src.as_posix()!r} unreadable: {exc.__class__.__name__}")
     script_path = worktree / _RUN_DIR_ROOT / f"{run_id}.reground-{n}.workflow.mjs"
-    carry_doc = None
     flagged: dict[str, list[str]] = {}
-    if basis is not None:
-        carry_doc = rg.carry_forward(prior, set(changed), names, generation=n)
+    if basis is None:
+        carry_doc = rg.carry_forward("", set(names), names, generation=n, rulings=[], grader=rg.GRADER_VERSION)
+    else:
+        carry_doc = rg.carry_forward(
+            prior, set(changed), names, generation=n, rulings=survivors, grader=rg.GRADER_VERSION
+        )
         old = {**(carry or {}).get("carried", {}), **rg.report_sections(report_text)["digests"]}
         flagged = {
             nm: [ln for ln in old.get(nm, []) if rg._verdict(ln.lstrip()) in rg.BLOCKING] for nm in changed
         }
-    carried_names = sorted(carry_doc["carried"]) if carry_doc else []
+    carried_names = sorted(carry_doc["carried"])
     note = _scoped_note(n, stale_name, has_report, changed, flagged, carried_names)
     try:
         script_path.parent.mkdir(parents=True, exist_ok=True)
         (scratch / brief_name).write_text(brief_text.rstrip("\n") + "\n" + note, encoding="utf-8", newline="")
         script_path.write_text(script, encoding="utf-8", newline="")
-        if carry_doc is not None:
-            (scratch / rg.CARRY_FILE).write_text(_dump_json(carry_doc), encoding="utf-8", newline="")
+        (scratch / rg.CARRY_FILE).write_text(_dump_json(carry_doc), encoding="utf-8", newline="")
         (scratch / rg.BASIS_FILE).write_text(
             _dump_json({nm: rg.line_hashes(t) for nm, t in current.items()}), encoding="utf-8", newline=""
         )
@@ -245,8 +266,7 @@ def _reground_sync(worktree: Path, params: dict) -> dict:
         "run_id": run_id,
         "generation": n,
         "stale": stale_name if has_report else None,
-        "carried": sum(rg.grounding_counts("\n".join(ln for s in carry_doc["carried"].values() for ln in s)).values())
-        if carry_doc else 0,
+        "carried": sum(rg.grounding_counts("\n".join(ln for s in carry_doc["carried"].values() for ln in s)).values()),
         "fresh": None,
         "regraded": sorted(changed),
         "problems": rg.grounding_problems(prior, names) if basis is not None else [],

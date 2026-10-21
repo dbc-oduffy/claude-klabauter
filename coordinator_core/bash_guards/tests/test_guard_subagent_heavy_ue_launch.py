@@ -61,6 +61,29 @@ def test_allows_a_mention(command):
     assert check(_payload(command)) is None
 
 
+@pytest.mark.parametrize(
+    "command",
+    [
+        "python - <<'EOF'\nUnrealEditor-Cmd p.uproject -run=pythonscript\nEOF",
+        "python - <<-'EOF'\n\tUnrealEditor-Cmd p.uproject\n\tEOF\n",
+        'python - <<"EOF"\nUnrealEditor-Cmd p.uproject\nEOF\necho ok',
+    ],
+)
+def test_heredoc_data_is_not_a_launch(command):
+    assert check(_payload(command)) is None
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "UnrealEditor-Cmd p.uproject -run=pythonscript <<'EOF'\nx\nEOF",
+        "cat <<'EOF'\nsome data\nEOF\nUnrealEditor-Cmd p.uproject",
+    ],
+)
+def test_heredoc_opener_and_later_launch_still_denied(command):
+    assert check(_payload(command)) is not None
+
+
 @pytest.mark.parametrize("agent_id", [None, "", "   "])
 def test_main_loop_is_never_guarded(agent_id):
     assert check(_payload("Build.bat Foo Win64", agent_id=agent_id)) is None

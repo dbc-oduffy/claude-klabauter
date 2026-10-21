@@ -392,6 +392,12 @@ from coordinator_core.ops.review_mint.roster import (
 from coordinator_core.ops.review_mint.wave_bookkeeping import review_wave_bookkeeping_stem
 from coordinator_core.ops.review_mint.wave_not_run import WAVE_NOT_RUN_VAR
 from coordinator_core.ops.workflow_scaffold import _js_string_literal
+from coordinator_core.ops.dispatch_emit import agent_route as _agent_route
+from coordinator_core.ops.dispatch_emit.route_dispatch_js import (
+    literal_dispatch_js as _literal_dispatch_js,
+    route_object_literal as _route_object_literal,
+    routed_run_js as _routed_run_js,
+)
 from coordinator_core.write_guards.block_subagent_plan_body_write import _PLAN_BODY_RE
 
 # Back-compat alias: this module's own review-composition refusal surfaced
@@ -2932,6 +2938,40 @@ def _agent_call_over(
     )
 
 
+def _routed_agent_call_over(
+    prompt_literal: str,
+    row: WaveRow,
+    agent_type_host: Optional[str],
+    *,
+    label_id: str,
+    route: "_agent_route.Route",
+) -> str:
+    """``_routedRun(<route>, (t, extra) => t === '<a>' ? agent(...) : ...)``: one literal
+    ``agent()`` call per admissible target, so every call site carries a literal agentType.
+    The triage type is dispatchable though it is not a redirect target."""
+    dispatchable = dict(route.targets)
+    if route.triage is not None:
+        dispatchable.setdefault(route.triage[0], route.triage[1])
+
+    def call_for(agent_type: str, model: str) -> str:
+        return _agent_call_over(
+            f"{prompt_literal} + extra",
+            row._replace(agent_type=agent_type, agent_model=model),
+            agent_type_host,
+            label_id=label_id,
+        )
+
+    literal = _route_object_literal(
+        {
+            "workClass": route.work_class,
+            "triage": route.triage[0] if route.triage else None,
+            "primary": route.primary[0],
+            "targets": list(route.targets),
+        }
+    )
+    return f"_routedRun({literal}, {_literal_dispatch_js(dispatchable, call_for)})"
+
+
 def _escape_for_js_template_literal(text: str) -> str:
     """Escape ``text`` for splicing as LITERAL (non-code) content inside a
     JS template-literal (backtick-quoted) string.
@@ -5032,9 +5072,15 @@ def compose_script(
     prior_run_base: Optional[str] = None,
     prior_landed_rows: Sequence[WaveRow] = (),
     review_terminal_sha: Optional[str] = None,
+    routes: Optional[dict] = None,
+    route_notes: Sequence[str] = (),
 ) -> str:
     """Compose one Workflow ``.mjs`` script text from already-derived ``waves``
     (§ Design D4).
+
+    ``routes`` (``agent_route.route_rows``' per-row ``Route`` by row id; empty or ``None`` leaves
+    every emitted byte unchanged) dispatches each routed row through ``_routedRun`` and keeps it
+    out of shared-agent groups; ``route_notes`` are logged one line each.
 
     ``prior_run_base`` (a 40-hex sha) with ``prior_landed_rows`` is an
     ``--only-incomplete`` re-emit over a halted run: the test and review stages diff
@@ -5304,10 +5350,14 @@ def compose_script(
     row_group: dict[str, tuple[str, ...]] = {}
     if not review_only:
         phase_titles.append(_EXECUTE_PHASE_TITLE)
+        if routes:
+            body_blocks.append(_routed_run_js())
         body_blocks.append(f"  phase({_js_string_literal(_EXECUTE_PHASE_TITLE)});")
         body_blocks.append(
             f"  log({_js_string_literal(_dag_width_narration(dag, len(flat_rows), runtime_cap))});"
         )
+        for note in route_notes if routes else ():
+            body_blocks.append(f"  log({_js_string_literal('route: ' + note)});")
         if split_note:
             body_blocks.append(f"  log({_js_string_literal(_sibling_split.width_narration(split_note))});")
 
@@ -5344,7 +5394,7 @@ def compose_script(
                 preamble=preamble,
                 repo_root=repo_root,
                 predecessor_state=predecessor_state,
-                solo_ids=frozenset(slot_rows) | {rid for rid, _ in held_rows},
+                solo_ids=frozenset(slot_rows) | {rid for rid, _ in held_rows} | frozenset(routes or ()),
                 seam_held=frozenset(seam_leg.holds) if seam_leg is not None else frozenset(),
             )
         node_by_id = {n.row.id: n for n in dag.nodes}
@@ -5391,6 +5441,10 @@ def compose_script(
                 call_expr = (
                     f"_memberStatus(await (_groupRuns[{_js_string_literal(members[0])}] ??= "
                     f"_groupCalls[{_js_string_literal(members[0])}]()), {_js_string_literal(row.id)})"
+                )
+            elif roster is None and routes and row.id in routes:
+                call_expr = _routed_agent_call_over(
+                    row_exprs[row.id], row, agent_type_host, label_id=row.id, route=routes[row.id]
                 )
             elif roster is None:
                 call_expr = _agent_call_over(
@@ -6804,6 +6858,11 @@ def emit_script(
         if held_out is not None:
             held_out.update(rows=sorted(hold_rows), dependents=dependents, reason=hold_reason.strip())
 
+    routes: dict = {}
+    route_notes: list = []
+    if repo_root is not None and not review_only:
+        rows, routes, route_notes = _agent_route.route_rows(rows, repo_root)
+
     full_rows = rows
     commit_scope_rows: list = []
     if sibling is not None:
@@ -6958,6 +7017,8 @@ def emit_script(
         prior_run_base=prior_run_base,
         prior_landed_rows=prior_landed_rows,
         review_terminal_sha=review_terminal_sha,
+        routes=routes,
+        route_notes=route_notes,
         split_note=None if sibling is None else {
             k: sibling[k]
             for k in ("index", "count", "stage", "stages", "cap", "plan_width", "achieved_width")

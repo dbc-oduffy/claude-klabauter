@@ -3830,6 +3830,9 @@ from coordinator_core.hooks import block_ungranted_opus_subagent as _hook_block_
 from coordinator_core.hooks import block_workflow_foreign_emission as _hook_block_workflow_foreign_emission
 from coordinator_core.hooks import block_workflow_unmodeled_agent as _hook_block_workflow_unmodeled_agent
 from coordinator_core.hooks import block_worktree_tool as _hook_block_worktree_tool
+from coordinator_core.hooks import guard_agent_route_admission as _hook_guard_agent_route_admission
+from coordinator_core.hooks import guard_brief_prescribed_method as _hook_guard_brief_prescribed_method
+from coordinator_core.hooks import guard_editor_python_direct as _hook_guard_editor_python_direct
 from coordinator_core.hooks import check_claude_md_size as _hook_check_claude_md_size
 from coordinator_core.hooks import derive_global_doctrine_live_copy as _hook_derive_global_doctrine_live_copy
 from coordinator_core.hooks import derive_setup_copies as _hook_derive_setup_copies
@@ -4769,6 +4772,157 @@ def _fire_block_workflow_foreign_emission_control() -> Optional[Dict[str, Any]]:
         return _to_envelope_or_none(
             _run_maybe_async(_hook_block_workflow_foreign_emission._handler(payload))
         )
+
+
+_ROUTE_ADMISSION_TABLE = {
+    "schema_version": 1,
+    "default_agent_type": "coordinator:executor",
+    "work_classes": [
+        {
+            "id": "ue-editor",
+            "match": {"keywords": ["unreal"]},
+            "agent_type": "example-game-repo-control:ue-editor",
+            "required_tools": ["mcp__example_game_repo-control__"],
+            "on_mismatch": "refuse",
+        }
+    ],
+    "agent_tool_ranges": {
+        "example-game-repo-control:ue-editor": ["mcp__example_game_repo-control__execute_python_code"],
+        "coordinator:executor": ["Read", "Edit", "Write", "Bash"],
+    },
+    "brief_lint": {"prescribed_method_patterns": [r"\bue_\w+_job\.py\b"], "level": "warn"},
+    "editor_python": {
+        "tool_names": ["mcp__example_game_repo-control__execute_python_code"],
+        "preferred_agent_type": "example-game-repo-control:ue-python",
+        "level": "warn",
+    },
+}
+
+
+def _route_table_hook(prefix: str, hook: Any, payload_for: Any, table: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    with tempfile.TemporaryDirectory(prefix=prefix, dir=_neutral_scratch_parent()) as scratch:
+        root = Path(scratch)
+        if table is not None:
+            (root / ".claude").mkdir()
+            (root / ".claude" / "route-table.json").write_text(_json.dumps(table), encoding="utf-8")
+        return _to_envelope_or_none(_run_maybe_async(hook._handler(payload_for(str(root)))))
+
+
+_EDITOR_BASH_TABLE = {
+    **_ROUTE_ADMISSION_TABLE,
+    "editor_python": {
+        **_ROUTE_ADMISSION_TABLE["editor_python"],
+        "bash_patterns": [r"^(\S*[\\/])?UnrealEditor(-Cmd)?(\.exe)?\s"],
+        "level": "strict",
+    },
+}
+
+
+def _fire_guard_editor_python_direct_bash() -> Optional[Dict[str, Any]]:
+    return _route_table_hook(
+        "guard-message-corpus-gepd-bash-",
+        _hook_guard_editor_python_direct,
+        lambda cwd: {
+            "tool_name": "Bash",
+            "tool_input": {"command": "UnrealEditor-Cmd.exe Game.uproject -run=pythonscript -script=x.py"},
+            "cwd": cwd,
+        },
+        _EDITOR_BASH_TABLE,
+    )
+
+
+def _fire_guard_editor_python_direct_bash_heredoc_control() -> Optional[Dict[str, Any]]:
+    return _route_table_hook(
+        "guard-message-corpus-gepd-bash-ctrl-",
+        _hook_guard_editor_python_direct,
+        lambda cwd: {
+            "tool_name": "Bash",
+            "tool_input": {
+                "command": "cat > notes.txt <<'EOF'\nUnrealEditor-Cmd.exe Game.uproject -run=pythonscript\nEOF"
+            },
+            "cwd": cwd,
+        },
+        _EDITOR_BASH_TABLE,
+    )
+
+
+def _fire_guard_agent_route_admission() -> Optional[Dict[str, Any]]:
+    return _route_table_hook(
+        "guard-message-corpus-grra-",
+        _hook_guard_agent_route_admission,
+        lambda cwd: {
+            "tool_name": "Agent",
+            "tool_input": {"subagent_type": "coordinator:executor", "prompt": "import the unreal meshes"},
+            "cwd": cwd,
+        },
+        _ROUTE_ADMISSION_TABLE,
+    )
+
+
+def _fire_guard_agent_route_admission_control() -> Optional[Dict[str, Any]]:
+    return _route_table_hook(
+        "guard-message-corpus-grra-ctrl-",
+        _hook_guard_agent_route_admission,
+        lambda cwd: {
+            "tool_name": "Agent",
+            "tool_input": {"subagent_type": "example-game-repo-control:ue-editor", "prompt": "import the unreal meshes"},
+            "cwd": cwd,
+        },
+        _ROUTE_ADMISSION_TABLE,
+    )
+
+
+def _fire_guard_brief_prescribed_method() -> Optional[Dict[str, Any]]:
+    return _route_table_hook(
+        "guard-message-corpus-gbpm-",
+        _hook_guard_brief_prescribed_method,
+        lambda cwd: {
+            "tool_name": "Agent",
+            "tool_input": {"prompt": "run ue_build_job.py to import the meshes"},
+            "cwd": cwd,
+        },
+        _ROUTE_ADMISSION_TABLE,
+    )
+
+
+def _fire_guard_brief_prescribed_method_control() -> Optional[Dict[str, Any]]:
+    return _route_table_hook(
+        "guard-message-corpus-gbpm-ctrl-",
+        _hook_guard_brief_prescribed_method,
+        lambda cwd: {
+            "tool_name": "Agent",
+            "tool_input": {"prompt": "import the meshes into the level"},
+            "cwd": cwd,
+        },
+        _ROUTE_ADMISSION_TABLE,
+    )
+
+
+def _fire_guard_editor_python_direct() -> Optional[Dict[str, Any]]:
+    return _route_table_hook(
+        "guard-message-corpus-gepd-",
+        _hook_guard_editor_python_direct,
+        lambda cwd: {
+            "tool_name": "mcp__example_game_repo-control__execute_python_code",
+            "tool_input": {},
+            "cwd": cwd,
+        },
+        _ROUTE_ADMISSION_TABLE,
+    )
+
+
+def _fire_guard_editor_python_direct_control() -> Optional[Dict[str, Any]]:
+    return _route_table_hook(
+        "guard-message-corpus-gepd-ctrl-",
+        _hook_guard_editor_python_direct,
+        lambda cwd: {
+            "tool_name": "mcp__example_game_repo-control__execute_python_code",
+            "tool_input": {},
+            "cwd": cwd,
+            "agent_id": "sub-1",
+        },
+        _ROUTE_ADMISSION_TABLE,
+    )
 
 
 def _fire_block_workflow_unmodeled_agent() -> Optional[Dict[str, Any]]:
@@ -6274,6 +6428,34 @@ HOOK_ROWS: List[HookRow] = [
         "control-no-receipt",
         False,
         _fire_block_workflow_foreign_emission_control,
+    ),
+    HookRow("guard_agent_route_admission", "fire-lacks-required-tools", True, _fire_guard_agent_route_admission),
+    HookRow(
+        "guard_agent_route_admission",
+        "control-covering-agent",
+        False,
+        _fire_guard_agent_route_admission_control,
+    ),
+    HookRow("guard_brief_prescribed_method", "fire-prescribed-script", True, _fire_guard_brief_prescribed_method),
+    HookRow(
+        "guard_brief_prescribed_method",
+        "control-outcome-brief",
+        False,
+        _fire_guard_brief_prescribed_method_control,
+    ),
+    HookRow("guard_editor_python_direct", "fire-em-editor-python", True, _fire_guard_editor_python_direct),
+    HookRow(
+        "guard_editor_python_direct",
+        "control-subagent-call",
+        False,
+        _fire_guard_editor_python_direct_control,
+    ),
+    HookRow("guard_editor_python_direct", "fire-em-bash-editor-launch", True, _fire_guard_editor_python_direct_bash),
+    HookRow(
+        "guard_editor_python_direct",
+        "control-bash-launch-in-heredoc",
+        False,
+        _fire_guard_editor_python_direct_bash_heredoc_control,
     ),
     HookRow("block_workflow_unmodeled_agent", "fire-zero-modeled", True, _fire_block_workflow_unmodeled_agent),
     HookRow(

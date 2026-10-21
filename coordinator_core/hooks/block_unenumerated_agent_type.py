@@ -896,6 +896,50 @@ def resolve_model_pins(
     return pins, None
 
 
+def scan_agent_definitions(
+    *, content_root: Any = _UNSET, home: Any = _UNSET
+) -> Dict[str, dict]:
+    """Every readable agent definition's frontmatter, keyed by agent type
+    (`coordinator:<name>` and `<plugin>:<stem>`). One walk of each source.
+
+    Never raises: an unresolved content root or a missing agents directory
+    contributes nothing from that source, so a caller reading one type's
+    range sees `None` for it rather than a roster-load failure. On a key
+    collision the `coordinator:` source wins.
+    """
+    if content_root is _UNSET:
+        content_root = read_content_root()
+    if home is _UNSET:
+        home = _home_dir()
+
+    defs: Dict[str, dict] = {}
+    for key, (fm, _path) in _scan_plugin_agents_frontmatter(home).items():
+        defs[key] = fm
+    if content_root:
+        try:
+            for key, (fm, _path) in _scan_agents_frontmatter(content_root).items():
+                defs[key] = fm
+        except _RosterError:
+            pass
+    return defs
+
+
+def agent_definition_frontmatter(
+    agent_type: str, *, content_root: Any = _UNSET, home: Any = _UNSET
+) -> Optional[dict]:
+    """The frontmatter of `agent_type`'s definition, or `None` when none is
+    readable (a harness built-in, an uninstalled plugin, an unresolved root)."""
+    return scan_agent_definitions(content_root=content_root, home=home).get(agent_type)
+
+
+def declared_model_pin(frontmatter: dict) -> Optional[str]:
+    """The genuine `model:` pin in `frontmatter`, or `None` for an absent,
+    `inherit` or unrankable value (the same rule `resolve_model_pins` applies)."""
+    from coordinator_core.hooks.enforce_agent_model_pin import _MODEL_ORDER
+
+    return _declared_pin_value(frontmatter.get("model"), _MODEL_ORDER)
+
+
 def _has_override_marker(prompt_text: str) -> bool:
     for match in _OVERRIDE_MARKER_RE.finditer(prompt_text):
         reason = match.group(1)

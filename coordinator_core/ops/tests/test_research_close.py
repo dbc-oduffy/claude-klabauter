@@ -767,7 +767,9 @@ def _basis_and_carry(scratch: Path, carried: dict, rulings=(), basis_of=("digest
 
     basis = {n: rg.line_hashes((scratch / n).read_text(encoding="utf-8")) for n in basis_of}
     (scratch / rg.BASIS_FILE).write_text(json.dumps(basis), encoding="utf-8")
-    doc = {"generation": 1, "carried": carried, "rulings": list(rulings), "flagged": {}}
+    judged = {n: rg.basis_sha(h) for n, h in basis.items()}
+    keyed = [r if isinstance(r, dict) else rg.key_ruling(r, judged, grader=rg.GRADER_VERSION) for r in rulings]
+    doc = {"generation": 1, "carried": carried, "rulings": keyed, "flagged": {}, "grader": rg.GRADER_VERSION}
     (scratch / rg.CARRY_FILE).write_text(json.dumps(doc), encoding="utf-8")
 
 
@@ -857,6 +859,125 @@ def test_carry_an_unreadable_carry_or_basis_file_refuses_naming_it(repo, scratch
     (scratch / name).write_text(body, encoding="utf-8")
     out = _refused(repo, scratch)
     assert name in out["error"]
+
+
+_A_ONLY = {"digest-b.md": _CARRIED_B}
+_INVENTED_A = "- **invented** digest-a.md asserts a split the sources do not support"
+
+
+def test_ruling_rewritten_before_next_generation_does_not_count(repo, scratch):
+    _basis_and_carry(scratch, _A_ONLY, [_INVENTED_A])
+    (scratch / "digest-a.md").write_text("alpha rewritten\n", encoding="utf-8")
+    _report(scratch, _GOOD)
+    out = _close(repo, scratch, "scouts")
+    assert out["exit_code"] == 0 and out["deliverable"] is True, out
+
+
+def test_a_ruling_on_a_deleted_digest_does_not_count(repo, scratch):
+    _basis_and_carry(
+        scratch, {"digest-a.md": _CARRIED_A},
+        ["- **invented** digest-b.md asserts a split the sources do not support"],
+    )
+    (scratch / "digest-b.md").unlink()
+    _report(scratch, _GOOD)
+    out = _close(repo, scratch, "scouts")
+    assert out["exit_code"] == 0, out
+
+
+def test_a_keyed_invented_ruling_on_unchanged_digests_still_refuses(repo, scratch):
+    _basis_and_carry(scratch, _A_ONLY, [_INVENTED_A])
+    _report(scratch, _GOOD)
+    out = _refused(repo, scratch)
+    assert out["grounding"]["invented"] == 1
+
+
+def test_dismissed_only_report_closes(repo, scratch):
+    _report(
+        scratch,
+        "## digest-a.md\n- **grounded** a holds\n## digest-b.md\n- **grounded** b holds\n"
+        "## Contradictions\n- **dismissed** digest-a.md vs digest-b.md: no contradiction exists\n",
+    )
+    out = _close(repo, scratch, "scouts")
+    assert out["exit_code"] == 0 and out["deliverable"] is True, out
+
+
+def test_a_refusal_counts_dismissed_rulings(repo, scratch):
+    _report(
+        scratch,
+        "## digest-a.md\n- **ungrounded** nothing backs this\n## digest-b.md\n- **grounded** b holds\n"
+        "## Contradictions\n- **dismissed** digest-a.md vs digest-b.md: no contradiction exists\n",
+    )
+    out = _refused(repo, scratch)
+    assert out["grounding"]["dismissed"] == 1
+
+
+def _set_carry_rulings(scratch: Path, rulings: list, **doc_edits) -> None:
+    import json
+
+    path = scratch / "grounding.carry.json"
+    doc = json.loads(path.read_text(encoding="utf-8"))
+    doc["rulings"] = rulings
+    doc.update(doc_edits)
+    path.write_text(json.dumps(doc), encoding="utf-8")
+
+
+def _assert_reground_remedy(out: dict) -> None:
+    assert out["exit_code"] == 1 and out["deliverable"] is False, out
+    assert "research.reground" in out["error"]
+    assert out["next_action"]["op"] == "research.reground"
+
+
+def test_a_legacy_string_real_ruling_does_not_refuse(repo, scratch):
+    _basis_and_carry(scratch, {"digest-a.md": _CARRIED_A, "digest-b.md": _CARRIED_B})
+    _set_carry_rulings(scratch, ["- **real** digest-a.md and digest-b.md genuinely disagree"])
+    out = _close(repo, scratch, "scouts")
+    assert out["exit_code"] == 0, out
+
+
+def test_a_legacy_string_invented_ruling_refuses_with_the_reground_remedy(repo, scratch):
+    _basis_and_carry(scratch, {"digest-a.md": _CARRIED_A, "digest-b.md": _CARRIED_B})
+    _set_carry_rulings(scratch, [_INVENTED_A])
+    _assert_reground_remedy(_close(repo, scratch, "scouts"))
+
+
+def _stale(scratch: Path, line: str) -> dict:
+    from coordinator_core.ops import _research_grounding as rg
+
+    sha = rg.digest_sha((scratch / "digest-a.md").read_text(encoding="utf-8"))
+    return {"line": line, "digests": {"digest-a.md": sha}, "grader": "old"}
+
+
+def test_a_stale_version_invented_ruling_refuses_with_the_reground_remedy(repo, scratch):
+    _basis_and_carry(scratch, {"digest-a.md": _CARRIED_A, "digest-b.md": _CARRIED_B})
+    _set_carry_rulings(scratch, [_stale(scratch, _INVENTED_A)])
+    _assert_reground_remedy(_refused(repo, scratch))
+
+
+def test_a_stale_version_real_or_dismissed_ruling_does_not_refuse(repo, scratch):
+    _basis_and_carry(scratch, {"digest-a.md": _CARRIED_A, "digest-b.md": _CARRIED_B})
+    _set_carry_rulings(scratch, [
+        _stale(scratch, "- **real** digest-a.md sources disagree"),
+        _stale(scratch, "- **dismissed** digest-a.md no contradiction"),
+    ])
+    assert _close(repo, scratch, "scouts")["exit_code"] == 0
+
+
+def test_a_first_generation_invented_ruling_refuses_with_the_reground_remedy(repo, scratch):
+    _report(scratch, _GOOD + "- **invented** a contradiction nobody holds\n")
+    _assert_reground_remedy(_refused(repo, scratch))
+
+
+def test_a_current_grader_invented_ruling_refuses_without_the_remedy(repo, scratch):
+    _basis_and_carry(scratch, _A_ONLY)
+    _report(scratch, _GOOD + "- **invented** digest-a.md a contradiction nobody holds\n")
+    out = _refused(repo, scratch)
+    assert "next_action" not in out and "reground" not in out["error"]
+
+
+def test_a_first_generation_real_and_dismissed_only_report_closes(repo, scratch):
+    _report(scratch, _GOOD + "- **dismissed** digest-a.md no contradiction exists\n")
+    out = _close(repo, scratch, "scouts")
+    assert out["exit_code"] == 0 and out["deliverable"] is True, out
 
 
 def test_carry_a_basis_without_a_carry_file_still_closes_on_the_fresh_report(repo, scratch):

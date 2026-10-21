@@ -30,7 +30,7 @@ import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath, PureWindowsPath
-from typing import Any, NamedTuple
+from typing import Any, NamedTuple, Optional
 
 from coordinator_core.atomic_replace import atomic_write_bytes
 from coordinator_core.ops import _research_contract as _rc
@@ -739,6 +739,8 @@ class ManifestRow:
     deps: tuple[str, ...] = ()
     #: Rows sharing a non-empty `group` share one agent; each keeps its own `_runRow` entry.
     group: str = ""
+    #: Work-class route (`agent_route.Route.to_json()`); `None` for a row the routing table did not touch.
+    route: Optional[dict[str, Any]] = None
 
     def to_json(self) -> dict[str, Any]:
         out: dict[str, Any] = {
@@ -752,6 +754,8 @@ class ManifestRow:
         }
         if self.group:
             out["group"] = self.group
+        if self.route is not None:
+            out["route"] = self.route
         return out
 
     @classmethod
@@ -765,6 +769,7 @@ class ManifestRow:
             wave=data["wave"],
             deps=tuple(data.get("deps") or ()),
             group=data.get("group") or "",
+            route=data.get("route"),
         )
 
 

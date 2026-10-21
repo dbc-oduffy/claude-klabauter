@@ -11,10 +11,11 @@ same name as a grep pattern, `cat` operand, `echo` text, `git log --` pathspec o
 mention and allows. The command splits into segments on unquoted `; && || | & ( )` and newlines,
 and each segment's head is peeled through launch wrappers (`&`, `.`, `call`, `start`, `env`,
 `cmd /c`, `pwsh -File|-Command`, `bash -c`, `dotnet`) to the program actually run. The local
-tokenizer is cold's, kept byte-compatible so both paths judge a command alike.
+tokenizer is cold's, kept byte-compatible apart from heredoc stripping (see `launches_heavy`).
 
 KNOWN GAPS (fail open): a program reached through a variable, `Invoke-Expression`, `eval`, an
-`xargs`/`-exec` target, a concatenated name, and a script that itself launches UBT.
+`xargs`/`-exec` target, a concatenated name, a script that itself launches UBT, and a heredoc
+body fed to an interpreter as code (`bash <<EOF`): heredoc bodies are excluded as data.
 
 SCOPED TO SUBAGENTS: any non-empty `agent_id` string, cold's own membership test. The main loop
 holds the slot and is never guarded. Fails open on a malformed payload or any exception.
@@ -25,6 +26,7 @@ from __future__ import annotations
 from typing import Any, Callable, Dict, List, Optional
 
 from coordinator_core._hook_envelope import deny as _deny
+from coordinator_core.bash_guards._command_tokenizer import _strip_heredocs
 from coordinator_core.bash_guards._tool_names import COMMAND_TOOL_NAMES
 
 CLASS = "hard-deny"
@@ -180,6 +182,8 @@ def launches_heavy(cmd: str, depth: int = 0) -> bool:
         low = cmd.lower()
         if not any(s in low for s in _PREFILTER):
             return False
+        # The cold copy's byte-compatibility does not cover heredocs: bodies are data here.
+        cmd = _strip_heredocs(cmd)
     for tokens in _segments(cmd):
         if _segment_launches_heavy(tokens, depth):
             return True

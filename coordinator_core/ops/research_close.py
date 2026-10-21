@@ -31,11 +31,15 @@ has its ``require_claims`` entries dropped and may have no dir; an entry outside
 scouts only, default false: true refuses the close with ``deliverable: false`` before any write
 when ``grounding.md`` is absent or whitespace-only). A scouts ``grounding.md`` that has text is
 always enforced, with or without the param: an ungrounded or contradicted claim, an invented
-contradiction ruling, a digest with no section, or no graded claim refuses the close
+contradiction ruling (``real`` and ``dismissed`` rulings never refuse), a digest with no
+section, or no graded claim refuses the close
 (``_research_grounding.grounding_problems``). When such a refusal finds a ``digest-*.md`` newer
 than ``grounding.md``, the error says so and the reply carries ``next_action`` naming
-``research.reground``. With a ``grounding.carry.json`` the enforced report is the merged one
-(carried sections for digests unchanged since ``grounding.basis.json``), and with a basis the
+``research.reground``. An ``invented`` ruling graded under an older or unrecorded grader version
+(a carry whose ``grader`` is not current, or a carried bare-string or older-version ``invented``
+ruling) refuses the same way with that remedy. With a ``grounding.carry.json`` the enforced report is the merged one
+(carried sections for digests unchanged since ``grounding.basis.json``; a carried ruling counts
+only while the digest text it judged is unchanged), and with a basis the
 newer-digest check compares content, not mtimes; an unreadable carry or basis file refuses the close.
 Only a named segment is excused: a root-level ``require_claims`` entry has no segment prefix
 and is never excused (the research route puts ``nlm-preflight`` ahead of notebooklm, so the
@@ -155,44 +159,75 @@ def _json_file(path: Path, kind: type) -> tuple[Optional[object], Optional[str]]
     return value, None
 
 
-def _digests_since_basis(scratch: Path, basis: dict) -> tuple[Optional[dict], Optional[str]]:
-    """``changed_digests`` of the current ``digest-*.md`` against ``basis``; an unreadable digest is a blocking line."""
+def _read_digests(scratch: Path) -> tuple[Optional[dict], Optional[str]]:
+    """``{name: text}`` of the current ``digest-*.md``; an unreadable digest is a blocking line."""
     try:
-        current = {
+        return {
             p.name: p.read_text(encoding="utf-8")
             for p in sorted(scratch.glob("digest-*.md")) if p.is_file()
-        }
+        }, None
     except (OSError, UnicodeDecodeError) as exc:
         return None, _blocking(f"a digest is unreadable: {exc.__class__.__name__}")
+
+
+def _digests_since_basis(scratch: Path, basis: dict) -> tuple[Optional[dict], Optional[str]]:
+    """``changed_digests`` of the current ``digest-*.md`` against ``basis``; an unreadable digest is a blocking line."""
+    current, bad = _read_digests(scratch)
+    if bad:
+        return None, bad
     return _research_grounding.changed_digests(basis, current), None
 
 
-def _grounding_text(scratch: Path) -> str:
-    """The report the close enforces, or "" when absent or whitespace-only.
+def _grounding_state(scratch: Path) -> tuple[str, Optional[dict]]:
+    """``(enforced report, carry)``; the report is "" when absent or whitespace-only, the carry is None when absent or unreadable.
 
-    With a ``grounding.carry.json`` it is the merged report (``effective_report``): carried
-    sections for digests unchanged since ``grounding.basis.json``, fresh sections for the rest. An
-    unreadable report, carry file or basis file yields a blocking ungrounded line so it refuses the
-    close instead of passing unchecked."""
+    With a ``grounding.carry.json`` the report is the merged one (``effective_report``): carried
+    sections for digests unchanged since ``grounding.basis.json``, fresh sections for the rest. A
+    carried ruling counts only while every digest it judged is on disk with the sha it was keyed
+    to and it was graded under the current grader; ``invented`` refuses and ``real`` and
+    ``dismissed`` never do. An unreadable report, carry file, basis file or digest yields a
+    blocking ungrounded line so it refuses the close instead of passing unchecked."""
     path = scratch / _research_grounding.GROUNDING_REPORT
     try:
         text = path.read_text(encoding="utf-8") if path.is_file() else ""
     except (OSError, UnicodeDecodeError) as exc:
-        return _blocking(f"{_research_grounding.GROUNDING_REPORT} unreadable: {exc.__class__.__name__}")
+        return _blocking(f"{_research_grounding.GROUNDING_REPORT} unreadable: {exc.__class__.__name__}"), None
     basis, bad = _json_file(scratch / _research_grounding.BASIS_FILE, dict)
     if bad:
-        return bad
+        return bad, None
     carry, bad = _json_file(scratch / _research_grounding.CARRY_FILE, dict)
     if bad:
-        return bad
+        return bad, None
     if carry is not None:
-        changed: dict = {}
-        if basis is not None:
-            changed, bad = _digests_since_basis(scratch, basis)
-            if bad:
-                return bad
-        text = _research_grounding.effective_report(text, carry, set(changed))
-    return text if text.strip() else ""
+        digests, bad = _read_digests(scratch)
+        if bad:
+            return bad, carry
+        changed = _research_grounding.changed_digests(basis, digests) if basis is not None else {}
+        current = {n: _research_grounding.digest_sha(t) for n, t in digests.items()}
+        text = _research_grounding.effective_report(text, carry, set(changed), current)
+    return (text if text.strip() else ""), carry
+
+
+def _grounding_text(scratch: Path) -> str:
+    """The report the close enforces, or "" when absent or whitespace-only; see ``_grounding_state``."""
+    return _grounding_state(scratch)[0]
+
+
+def _stale_carried_invented(carry: Optional[dict]) -> bool:
+    """True iff the carry holds an ``invented`` ruling that is a bare string or graded under another grader version.
+
+    Deliberately ignores whether the judged digest has since changed: such a ruling cannot be
+    trusted or dropped silently, so the close refuses with the reground remedy.
+    """
+    rulings = (carry or {}).get("rulings")
+    for r in rulings if isinstance(rulings, list) else []:
+        if isinstance(r, dict) and r.get("grader") == _research_grounding.GRADER_VERSION:
+            continue
+        line = r.get("line") if isinstance(r, dict) else r
+        # _verdict is the package-internal verdict parser shared by the research ops.
+        if isinstance(line, str) and _research_grounding._verdict(line.lstrip()) == "invented":
+            return True
+    return False
 
 
 def _grounding_predates_a_digest(scratch: Path) -> bool:
@@ -655,7 +690,7 @@ def _close_sync(worktree: Path, params: dict) -> dict:
         return problem
     if tier == "scouts":
         report = _research_grounding.GROUNDING_REPORT
-        grounding = _grounding_text(scratch)
+        grounding, carry = _grounding_state(scratch)
         problem = None
         if require_grounding and not grounding:
             problem = _err(f"run is not deliverable: {report} is absent or empty", deliverable=False)
@@ -663,11 +698,20 @@ def _close_sync(worktree: Path, params: dict) -> dict:
             found = _research_grounding.grounding_problems(
                 grounding, [p.name for p in sorted(scratch.glob("digest-*.md")) if p.is_file()]
             )
-            if found:
+            stale_grader = _stale_carried_invented(carry) or (
+                any(f.startswith("invented:") for f in found)
+                and not _research_grounding.fresh_grader_current(carry)
+            )
+            if found or stale_grader:
                 message = f"run is not deliverable: {report}: " + "; ".join(found)
                 extra: dict = {}
+                remedies = []
+                if stale_grader:
+                    remedies.append("invented ruling(s) graded under an older or unrecorded grader prompt")
                 if _grounding_predates_a_digest(scratch):
-                    message += f"; {report} predates an edited digest; run {_research_grounding.REGROUND_OP}"
+                    remedies.append(f"{report} predates an edited digest")
+                if remedies:
+                    message += ("; " if found else "") + "; ".join(remedies) + f"; run {_research_grounding.REGROUND_OP}"
                     extra["next_action"] = {
                         "op": _research_grounding.REGROUND_OP,
                         "params": {"run_id": run_id, "scratch_dir": Path(os.path.abspath(scratch)).as_posix()},

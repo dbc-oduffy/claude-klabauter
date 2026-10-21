@@ -37,6 +37,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     record_dir,
     rulable_ids,
 )
+from coordinator_core.ops.dispatch_emit.agent_route import RouteAdmissionError, RouteTableError, route_rows
 from coordinator_core.ops.dispatch_emit.cross_repo_write_refusal import (
     CrossRepoWriteError,
     check_cross_repo_writes,
@@ -645,6 +646,10 @@ def stage(
         check_cross_repo_writes(rows, root, approved=cross_repo_approved, session_id=session_id)
     except CrossRepoWriteError as exc:
         raise AskStageError(str(exc)) from exc
+    try:
+        rows, routes, _route_notes = route_rows(rows, root)
+    except (RouteAdmissionError, RouteTableError) as exc:
+        raise AskStageError(f"route: {exc}") from exc
     # Split, not refuse: runtime_cap is CPU-dependent and a refusal would halt hands-off runs.
     waves = cap_waves(build_waves(rows), sibling_split.runtime_cap())
     if not waves and not ledger_resume and not (only_rows is not None and (owed or gated)):
@@ -717,6 +722,7 @@ def stage(
                     writes=tuple(paths),
                     wave=wave_no,
                     deps=after.get(row.id, ()),
+                    route=routes[row.id].to_json() if row.id in routes else None,
                 )
             )
             chunks.append(

@@ -79,6 +79,8 @@ from coordinator_core.ops.dispatch_emit.design_conformance import (
     DEFAULT_MET_BY_CLAUSE,
     DESIGN_BRIEF_KEY,
 )
+from coordinator_core.ops.dispatch_emit import agent_route as _agent_route
+from coordinator_core.ops.dispatch_emit import route_dispatch_js as _route_js
 from coordinator_core.ops.dispatch_emit import route_preference as _route_pref
 from coordinator_core.ops.dispatch_emit.design_route import DESIGN_ROUTE_KEY, STAGE_REFUSAL_PREFIX, next_action as _design_next_action
 from coordinator_core.ops.dispatch_emit.ask_fanout_contract import FANOUT_OP, run_parent_copy_rel
@@ -1118,6 +1120,32 @@ def _reviewer_row_js(anchor: str, label_prefix: str, run_id: str) -> list[str]:
         "        return 'DONE: ' + r.id + ' verdict ' + _v.verdict;",
         "      });",
     ]
+
+
+#: Adapter from a manifest row's `route` (`agent_route.Route.to_json`) to `_routedRun`'s route shape.
+_ROUTE_ADAPTER_JS = (
+    "  const _routeOf = (r) => ({ workClass: r.route.work_class, "
+    "triage: r.route.triage ? r.route.triage.agent_type : null, "
+    "primary: r.route.primary.agent_type, targets: Object.keys(r.route.targets) });"
+)
+
+
+def _routing_enabled(repo_root: str) -> bool:
+    """True when the repo carries a route table. The manifest is staged at run time, so the script
+    cannot see a row's `route` at compose time; a repo with no table emits no routing bytes."""
+    try:
+        return _agent_route.load_route_table(repo_root) is not None
+    except (_agent_route.RouteTableError, OSError):  # fail open: a malformed table was already refused at stage
+        return False
+
+
+def _routed_row_js(work_label: str, exec_phase: str) -> str:
+    """JS expression dispatching routed row `r` through `_routedRun` (never `_groupRun`)."""
+    return (
+        "_routedRun(_routeOf(r), (t, extra) => agent(_rowPrompt(r) + extra, "
+        f"{{ label: {work_label} + r.id, phase: {exec_phase}, agentType: t, "
+        f"model: r.route.targets[t] ?? (r.route.triage && r.route.triage.agent_type === t ? r.route.triage.model : r.model), stallMs: {_emit._EXECUTOR_STALL_MS} }}))"
+    )
 
 
 def _row_runner_js() -> str:
@@ -2494,11 +2522,16 @@ def compose_ask_script(
         "    return _memberResult(await _groups[r.group], r.id);\n"
         "  }"
     )
+    routed = _routing_enabled(repo_root)
+    if routed:
+        b.append(_route_js.routed_run_js())
+        b.append(_ROUTE_ADAPTER_JS)
     b.append("  for (const w of _waves) {")
     b.append("    for (const r of _manifest.rows.filter((x) => x.wave === w)) {")
     b.extend(_reviewer_row_js(anchor, work_label, run_id))
+    routed_arm = f"r.route ? {_routed_row_js(work_label, exec_phase)} : " if routed else ""
     b.append(
-        f"      else _rows[r.id] = _runRow(r.id, (r.deps ?? []).map((d) => _rows[d]), null, async () => r.group ? _groupRun(r) : agent(_rowPrompt(r), "
+        f"      else _rows[r.id] = _runRow(r.id, (r.deps ?? []).map((d) => _rows[d]), null, async () => {routed_arm}r.group ? _groupRun(r) : agent(_rowPrompt(r), "
         f"{{ label: {work_label} + r.id, phase: {exec_phase}, "
         f"agentType: r.agent_type, model: r.model, stallMs: {_emit._EXECUTOR_STALL_MS} }}), "
         "{ title: r.id, paths: r.writes ?? [], declared: r.writes ?? [] });"
