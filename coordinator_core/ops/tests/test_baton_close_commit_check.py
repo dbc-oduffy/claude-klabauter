@@ -153,7 +153,8 @@ def test_every_refusal_reason_in_one_batch(tmp_path):
              {"handoff_path": None}, {"handoff_path": ok, "evidence": [_ev()]}]
     flips, refused, already = _select(
         tmp_path, rels, rows=rows,
-        ev={stale: [_ev(done=False, status="draft")], claimed: [_ev()]},
+        ev={stale: [_ev(done=False, status="draft")], claimed: [_ev()],
+            spin: [{**_ev(), "field": "plan.deliverable_id"}]},
     )
     got = _reasons(refused)
     assert [f["path"] for f in flips] == [ok]
@@ -169,6 +170,21 @@ def test_every_refusal_reason_in_one_batch(tmp_path):
     assert len(refused) + len(flips) + len(already) == len(rows) - 1  # duplicate dropped
 
 
+def test_spinoff_closing_on_its_own_governing_plan_flips(tmp_path):
+    a = _baton(tmp_path, "a.md", kind="spinoff", did="dlv-spin-00001")
+    rows = [{"handoff_path": a, "evidence": [_ev()]}]
+    flips, refused, _ = _select(tmp_path, [a], rows=rows)
+    assert [f["path"] for f in flips] == [a], refused
+
+
+def test_spinoff_closing_only_via_deliverable_join_refuses(tmp_path):
+    a = _baton(tmp_path, "a.md", kind="spinoff", did="dlv-spin-00001")
+    join = {**_ev(), "field": "plan.deliverable_id"}
+    rows = [{"handoff_path": a, "evidence": [join]}]
+    flips, refused, _ = _select(tmp_path, [a], rows=rows, ev={a: [join]})
+    assert flips == [] and _reasons(refused) == {a: "predicate_refused"}
+
+
 def test_non_dlv_spinoff_refuses_no_deliverable_id(tmp_path):
     a = _baton(tmp_path, "a.md", kind="spinoff", did="legacy-1")
     flips, refused, _ = _select(tmp_path, [a])
@@ -179,10 +195,19 @@ def test_dlv_spinoff_with_continuation_successor_refuses_predicate_refused_namin
     a = _baton(tmp_path, "a.md", kind="spinoff", did="dlv-spin-00001",
                extra="handoff_id: hnd-spin-a1b2c3")
     _edge_baton(tmp_path, "child.md", "predecessor_id", "hnd-spin-a1b2c3")
-    flips, refused, _ = _select(tmp_path, [a])
+    join = {**_ev(), "field": "plan.deliverable_id"}
+    flips, refused, _ = _select(tmp_path, [a], ev={a: [join]})
     assert flips == []
     assert _reasons(refused) == {a: "predicate_refused"}
     assert "spinoff" in refused[0]["detail"]
+
+
+def test_spinoff_on_own_plan_with_continuation_successor_refuses_live_successor(tmp_path):
+    a = _baton(tmp_path, "a.md", kind="spinoff", did="dlv-spin-00001",
+               extra="handoff_id: hnd-spin-a1b2c3")
+    _edge_baton(tmp_path, "child.md", "predecessor_id", "hnd-spin-a1b2c3")
+    flips, refused, _ = _select(tmp_path, [a])
+    assert flips == [] and _reasons(refused) == {a: "live_successor"}
 
 
 def test_handoff_kind_leg_d_applies_so_close_refusal_may_test_kind_unconditionally():

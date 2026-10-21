@@ -518,6 +518,36 @@ def apply_derivable(path: Path, derivable: Dict[str, Any]) -> bool:
     return True
 
 
+def upgrade_plan(
+    path: Path,
+    *,
+    check: bool,
+    text: Optional[str] = None,
+    parsed: Optional[Parsed] = None,
+) -> Dict[str, Any]:
+    """One plan's upgrade as data, never printed: `derived` (sorted derivable
+    field names), `residue`, `error`, and `changed` — True when it wrote
+    (check=False) or would write (check=True, derivable non-empty)."""
+    report = plan_report(path, text, parsed)
+    if report["error"]:
+        return {
+            "plan": path,
+            "error": report["error"],
+            "derived": [],
+            "residue": report["residue"],
+            "changed": False,
+        }
+    derivable = report["derivable"]
+    changed = bool(derivable) if check else (bool(derivable) and apply_derivable(path, derivable))
+    return {
+        "plan": path,
+        "error": None,
+        "derived": sorted(derivable),
+        "residue": report["residue"],
+        "changed": changed,
+    }
+
+
 def main(argv: List[str]) -> int:
     parser = argparse.ArgumentParser(
         prog="mise-prep-upgrade",
@@ -559,27 +589,22 @@ def main(argv: List[str]) -> int:
     with_residue = 0
     errors = 0
     for path, text, parsed in targets:
-        report = plan_report(path, text, parsed)
-        if report["error"]:
+        result = upgrade_plan(path, check=args.check, text=text, parsed=parsed)
+        if result["error"]:
             errors += 1
             if not args.quiet:
-                print(f"  ERROR    {path.name}: {report['error']}")
+                print(f"  ERROR    {path.name}: {result['error']}")
             continue
-        derivable, residue = report["derivable"], report["residue"]
-        did = False
-        if derivable and not args.check:
-            did = apply_derivable(path, derivable)
-            if did:
-                changed += 1
-        elif derivable:
+        derived, residue = result["derived"], result["residue"]
+        if result["changed"]:
             changed += 1
         if residue:
             with_residue += 1
-        if not args.quiet and (derivable or residue):
-            verb = "would derive" if args.check else ("derived" if did else "no change")
+        if not args.quiet and (derived or residue):
+            verb = "would derive" if args.check else ("derived" if result["changed"] else "no change")
             print(f"  {path.name}")
-            if derivable:
-                print(f"    {verb}: {', '.join(sorted(derivable))}")
+            if derived:
+                print(f"    {verb}: {', '.join(derived)}")
             for item in residue:
                 print(f"    AUTHOR: {item}")
 

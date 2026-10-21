@@ -37,7 +37,11 @@ from pathlib import Path
 from typing import Iterator, Optional
 
 from coordinator_core.ops.dispatch_emit import run_token as _run_token
-from coordinator_core.ops.dispatch_emit.ask_contract import RUN_DIR_ROOT
+from coordinator_core.ops.dispatch_emit.ask_contract import RUN_DIR_ROOT, record_dir as _ask_record_dir
+from coordinator_core.ops.dispatch_emit.ask_fanout_contract import STATUS_HALTED as _STATUS_HALTED
+from coordinator_core.ops.dispatch_emit.halted_run import (
+    HALTED_FILE as _HALTED_FILE, STATUS_LANDED as _STATUS_LANDED,
+)
 from coordinator_core.temp_layout import legacy_top_level_path, managed_tempdir
 
 SUBMISSION_FILE = "submission.json"
@@ -422,6 +426,16 @@ def size_stage_run(
     return None
 
 
+def _holds_ended_marker(root: Path, run_id: str) -> bool:
+    """True when the run's record dir holds a `halted` or `landed` marker: such a run is never
+    working, whatever an unconsumed token says. A `resumed` marker is live again."""
+    try:
+        marker = _read_json(_ask_record_dir(root, run_id) / _HALTED_FILE)
+    except ValueError:
+        return False
+    return bool(marker) and marker.get("status") in (_STATUS_HALTED, _STATUS_LANDED)
+
+
 def _record_live(
     root: Path,
     record: dict,
@@ -435,6 +449,8 @@ def _record_live(
     """True while the run is live; with `ended_on_evidence`, True only when the run ended on the
     harness's evidence (the one site that consumes the token)."""
     run_id = record["run_id"]
+    if not ended_on_evidence and _holds_ended_marker(root, run_id):
+        return False
     submission = _read_json(_submission_path(root, run_id)) or {}
     run_session = submission.get("session_id") or record.get("session_id")
     transcript = submission.get("transcript_path") or (

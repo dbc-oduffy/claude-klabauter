@@ -229,6 +229,78 @@ def test_s_spec_dispatch_plan_with_a_deferred_row_is_not_held_to_the_harvest(bas
     assert close["outstanding"] == []
 
 
+def _did_not_run(close: dict) -> list:
+    return [
+        leg for leg, result in close["legs"].items()
+        if result["status"] == "failed" and "did not run" in result["detail"]
+    ]
+
+
+def test_landed_xs_s_run_never_reports_a_leg_as_did_not_run(base):
+    repo, script = base
+    (repo / driver.PLAN_REL).write_bytes(_spec_dispatch_plan("scope_mode: spec-dispatch"))
+    _git(repo, "add", "-A", "docs")
+    _git(repo, "commit", "-q", "-m", "s plan")
+
+    out = _fire(repo, script)
+
+    close = out["close"]
+    assert out.get("committed") is True, out
+    assert _did_not_run(close) == [], close["legs"]
+    for leg in ("sizing-ship", "deliverable-cascade", "close-commit"):
+        assert close["legs"][leg]["status"] in ("ran", "not-applicable"), (leg, close["legs"][leg])
+
+
+def _close_ctx(**legs):
+    return {
+        "applies": True, "kind": "xs-s-run", "run_id": "run", "presets": {}, "legs": legs,
+        "completion_entry": None, "root": "/nonexistent-root", "plan_rel": "p.md",
+    }
+
+
+def test_close_block_pays_inline_legs_as_ran_and_unpaid_land_only_legs_not_applicable(monkeypatch):
+    ctx = _close_ctx()
+    reply = {
+        "committed": True, "sha": "a" * 40, "coded_sha": "b" * 40,
+        "review_stamp": "minted", "plan_status": "implemented",
+        "sizing_shipped": {"sizing": "state/sizings/s.yaml", "sha": "a" * 40},
+    }
+    monkeypatch.setattr(run_close, "sibling_release", lambda *a, **k: None)
+
+    legs = terminal_commit._close_block(ctx, reply)["legs"]
+
+    assert legs["sizing-ship"]["status"] == "ran"
+    assert legs["coded-stamp"]["status"] == "ran"
+    assert legs["review-stamp"]["status"] == "ran"
+    assert legs["deliverable-cascade"]["status"] == "not-applicable"
+    assert legs["close-commit"]["status"] == "not-applicable"
+
+
+def test_close_block_keeps_a_failed_sizing_ship_failed(monkeypatch):
+    ctx = _close_ctx()
+    reply = {
+        "committed": True, "sha": "a" * 40, "plan_status": "implemented",
+        "sizing_ship_skipped": "register row open",
+    }
+    monkeypatch.setattr(run_close, "sibling_release", lambda *a, **k: None)
+
+    leg = terminal_commit._close_block(ctx, reply)["legs"]["sizing-ship"]
+
+    assert leg["status"] == "failed" and "register row open" in leg["detail"]
+
+
+def test_close_block_unlanded_commit_still_fails_unsettled_legs_with_the_refusal(monkeypatch):
+    ctx = _close_ctx()
+    reply = {"committed": False, "refused": "dirty-tree"}
+    monkeypatch.setattr(run_close, "sibling_release", lambda *a, **k: None)
+
+    legs = terminal_commit._close_block(ctx, reply)["legs"]
+
+    for leg in ("review-stamp", "coded-stamp", "sizing-ship", "deliverable-cascade", "close-commit"):
+        assert legs[leg]["status"] == "failed", leg
+        assert "terminal commit did not land (dirty-tree)" in legs[leg]["detail"]
+
+
 def test_plan_run_keeps_the_deferred_harvest(base):
     repo, script = base
     (repo / driver.PLAN_REL).write_bytes(_spec_dispatch_plan("scope_mode: standard", _DEFERRED_ROW))

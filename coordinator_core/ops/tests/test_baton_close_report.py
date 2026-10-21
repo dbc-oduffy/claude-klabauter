@@ -156,16 +156,24 @@ def test_reverse_spinoff_baton_reads_spinoff_residue_with_join_evidence(tmp_path
     assert [e["field"] for e in rep["residue"][0]["evidence"]] == ["plan.deliverable_id"]
 
 
-def test_spinoff_with_done_governing_plan_is_residue_not_closable(tmp_path: Path) -> None:
+def test_spinoff_with_done_governing_plan_is_closable(tmp_path: Path) -> None:
     root = _reverse_root(tmp_path)
     _write(root, "docs/plans/done.md", _plan("implemented"))
     _write(root, "state/handoffs/s.md",
            _baton(extra="kind: spinoff\ngoverning_plan: docs/plans/done.md\n"))
     rep = _run(root)
-    assert rep["closable"] == []
-    assert [(r["handoff_path"], r["reason"]) for r in rep["residue"]] == [
-        ("state/handoffs/s.md", "spinoff_kind")
-    ]
+    assert [c["handoff_path"] for c in rep["closable"]] == ["state/handoffs/s.md"]
+    assert rep["residue"] == []
+
+
+def test_spinoff_with_archived_implemented_governing_plan_is_closable(tmp_path: Path) -> None:
+    root = _reverse_root(tmp_path)
+    _write(root, "archive/specs/2026-09/done.md", _plan("implemented"))
+    _write(root, "state/handoffs/s.md",
+           _baton(extra="kind: spinoff\ngoverning_plan: docs/plans/done.md\n"))
+    rep = _run(root)
+    assert [c["handoff_path"] for c in rep["closable"]] == ["state/handoffs/s.md"]
+    assert rep["residue"] == []
 
 
 def test_non_dlv_baton_with_done_evidence_is_no_deliverable_id_residue(tmp_path: Path) -> None:
@@ -191,8 +199,9 @@ def test_shared_predicate_parity_with_close_commit(tmp_path: Path) -> None:
     _write(root, "state/handoffs/noid.md", _baton(did=None, extra=gp))
     _write(root, "state/handoffs/spin-nodlv.md", _baton(did=None, extra=gp + "kind: spinoff\n"))
     rep = _run(root)
-    assert [c["handoff_path"] for c in rep["closable"]] == ["state/handoffs/plain.md"]
-    assert len(rep["residue"]) == 5
+    own_plan_ok = ["state/handoffs/alias.md", "state/handoffs/plain.md", "state/handoffs/spin.md"]
+    assert sorted(c["handoff_path"] for c in rep["closable"]) == own_plan_ok
+    assert len(rep["residue"]) == 3
 
     headers, _ = read_baton_headers(str(root))
     rels = sorted(headers)
@@ -212,7 +221,7 @@ def test_shared_predicate_parity_with_close_commit(tmp_path: Path) -> None:
     ]
     flips, refused, _ = _select(closable_rows)
     assert refused == []
-    assert [f["path"] for f in flips] == ["state/handoffs/plain.md"]
+    assert sorted(f["path"] for f in flips) == own_plan_ok
 
     residue_rows = [
         {"handoff_path": r["handoff_path"], "evidence": r["evidence"]} for r in rep["residue"]
@@ -220,8 +229,6 @@ def test_shared_predicate_parity_with_close_commit(tmp_path: Path) -> None:
     flips, refused, _ = _select(residue_rows)
     assert flips == []
     assert {r["handoff_path"].rsplit("/", 1)[1]: r["reason"] for r in refused} == {
-        "spin.md": "predicate_refused",
-        "alias.md": "predicate_refused",
         "nodlv.md": "no_deliverable_id",
         "noid.md": "no_deliverable_id",
         "spin-nodlv.md": "no_deliverable_id",

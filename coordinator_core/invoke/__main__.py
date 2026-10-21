@@ -819,26 +819,14 @@ def _dispatch_argv_body(argv: list, cwd: str, *, allow_warm: bool) -> None:
     else:
         params_json_str = "{}"
 
-    if args.op == "dispatch.terminal_commit" and params_json_str.strip() in ("", "{}"):
-        from coordinator_core.ops.dispatch_emit import terminal_commit_params_channel as _tcpc
-
-        message = (
-            "dispatch.terminal_commit params are empty; missing: "
-            + ", ".join(_tcpc.REQUIRED_STR_KEYS)
-            + ". Not dispatched; nothing committed."
-        )
-        if (
-            args.params_file not in (None, "-")
-            and _tcpc.missing_file_diagnosis(args.params_file) is not None
-        ):
-            message += (
-                f" The params file {args.params_file} is empty."
-            )
-        _fatal_stderr(message)
-
-    # 2. Parse params JSON — must be a JSON object.
+    # 2. Parse params JSON — must be a JSON object. Blank text for
+    #    dispatch.terminal_commit is an empty dict, refused after the
+    #    --from-task-output merge below.
     try:
-        params = _loads_params(params_json_str)
+        if args.op == "dispatch.terminal_commit" and not params_json_str.strip():
+            params = {}
+        else:
+            params = _loads_params(params_json_str)
     except json.JSONDecodeError as exc:
         _fatal_stderr(f"Invalid params_json: {exc}")
 
@@ -861,6 +849,23 @@ def _dispatch_argv_body(argv: list, cwd: str, *, allow_warm: bool) -> None:
                 f"{existing!r}"
             )
         params["task_output_path"] = resolved_output
+
+    if args.op == "dispatch.terminal_commit" and not params:
+        from coordinator_core.ops.dispatch_emit import terminal_commit_params_channel as _tcpc
+
+        message = (
+            "dispatch.terminal_commit params are empty; missing: "
+            + ", ".join(_tcpc.REQUIRED_STR_KEYS)
+            + ". Not dispatched; nothing committed."
+        )
+        if (
+            args.params_file not in (None, "-")
+            and _tcpc.missing_file_diagnosis(args.params_file) is not None
+        ):
+            message += (
+                f" The params file {args.params_file} is empty."
+            )
+        _fatal_stderr(message)
 
     # 3. Determine op scope before resolving repo_root — none/central-scoped ops
     #    (e.g. ping, advisory hooks) must work outside any git working tree, so

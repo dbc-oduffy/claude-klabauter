@@ -32,7 +32,6 @@ from coordinator_core.ops.baton_close_report_contract import (
 from coordinator_core.ops.baton_close_report_decide import close_refusal, decide
 from coordinator_core.ops.deliverable_cascade import (
     _HANDOFF_KIND,
-    _leg_d_refusal,
     _legs_c_a_refusal,
 )
 from coordinator_core.session import record_homes
@@ -227,12 +226,11 @@ def select(
 
         raw_id = fm.get("deliverable_id")
         did = raw_id.strip() if isinstance(raw_id, str) else ""
-        header_refusal = close_refusal(fm.get("kind"), raw_id)
+        header_refusal = close_refusal(fm.get("kind"), raw_id, fresh_ev)
         if header_refusal is not None:
-            mapped = _header_refusal(header_refusal)
-            if mapped is not None:
-                refuse(i, rel, mapped[0], mapped[1], fresh_ev)
-                continue
+            reason, detail = _header_refusal(header_refusal)  # type: ignore[misc]  # total over close_refusal's range; a new residue value fails loud, not open
+            refuse(i, rel, reason, detail, fresh_ev)
+            continue
 
         early = _legs_c_a_refusal(
             worktree_root / rel, fm, repo_root, _HANDOFF_KIND, session_id
@@ -256,10 +254,6 @@ def select(
                 else RefusalReason.LIVE_SUCCESSOR
             )
             refuse(i, rel, reason, leg_b[rel], fresh_ev)
-            continue
-        late = _leg_d_refusal(fms[rel], _HANDOFF_KIND)
-        if late is not None:
-            refuse(i, rel, RefusalReason.PREDICATE_REFUSED, late, fresh_ev)
             continue
         flips_by_index[i] = FlipRequest(path=rel, deliverable_id=did)
 

@@ -252,6 +252,36 @@ def test_hook_scoped_boot_wait_is_scrubbed_from_the_child(
     assert parent_value == "0"
 
 
+def test_divergent_live_tree_override_is_pinned_to_repo_root(
+    repo_root: str, existing_script: str, tmp_path_factory: pytest.TempPathFactory
+) -> None:
+    other = str(tmp_path_factory.mktemp("other-tree"))
+    with mock.patch.dict(
+        detached_spawn.os.environ,
+        {"COORDINATOR_ENGINE_ROOT": other, "CLAUDE_KLABAUTER_ROOT": other},
+        clear=False,
+    ), mock.patch.object(detached_spawn.subprocess, "Popen") as mock_popen:
+        detached_spawn.spawn_detached(repo_root, existing_script)
+
+    env = mock_popen.call_args.kwargs["env"]
+    assert env["COORDINATOR_ENGINE_ROOT"] == repo_root
+    assert env["CLAUDE_KLABAUTER_ROOT"] == repo_root
+
+
+def test_matching_or_unset_engine_root_is_left_alone(
+    repo_root: str, existing_script: str
+) -> None:
+    with mock.patch.dict(
+        detached_spawn.os.environ, {"COORDINATOR_ENGINE_ROOT": repo_root}, clear=False
+    ), mock.patch.object(detached_spawn.subprocess, "Popen") as mock_popen:
+        os_environ = detached_spawn.os.environ
+        os_environ.pop("CLAUDE_KLABAUTER_ROOT", None)
+        detached_spawn.spawn_detached(repo_root, existing_script)
+    env = mock_popen.call_args.kwargs["env"]
+    assert env["COORDINATOR_ENGINE_ROOT"] == repo_root
+    assert "CLAUDE_KLABAUTER_ROOT" not in env
+
+
 def test_missing_script_is_logged_and_never_spawned(repo_root: str) -> None:
     """A `script_path` that resolves to nothing (repo_root-relative form,
     not the old cwd-relative one) must be caught BEFORE `Popen` -- the prior

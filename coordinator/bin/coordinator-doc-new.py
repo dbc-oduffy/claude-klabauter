@@ -6001,9 +6001,7 @@ _RESEARCH_QUESTION_PLACEHOLDER = (
 )
 
 
-def _scaffold_research_synthesis(
-    title: str, question: str | None = None, pipeline: str | None = None
-) -> str:
+def _scaffold_research_synthesis(title: str) -> str:
     """Generate validator-clean research-synthesis frontmatter + canonical section skeleton.
 
     Produces a conformant research-synthesis document against
@@ -6028,9 +6026,9 @@ def _scaffold_research_synthesis(
     lines = [
         "---",
         f"title: {_yaml_quote(title)}",
-        f"question: {_yaml_quote(question or _RESEARCH_QUESTION_PLACEHOLDER)}",
+        f"question: {_yaml_quote(_RESEARCH_QUESTION_PLACEHOLDER)}",
         f"created: {today}",  # fleet-canonical temporal key (query-records --since reads fm.created, not fm.date)
-        f"pipeline: {pipeline}" if pipeline else "pipeline: web  # one of: web | repo | structured | notebooklm",
+        "pipeline: web  # one of: web | repo | structured | notebooklm",
         "# source_count: 0  # fill with number of sources consulted",
         "topic_facets: []  # fill with list of topic facets/sub-themes covered",
         "# coverage_score: 0  # fill with 1-5 coverage score from gap-report",
@@ -9293,9 +9291,7 @@ def main(argv: "list[str] | None" = None) -> int:
     elif doc_type == "strategic-self-description":
         content = _scaffold_strategic_self_description(title=title)
     elif doc_type == "research-synthesis":
-        content = _scaffold_research_synthesis(
-            title=title, question=args.question, pipeline=args.pipeline
-        )
+        content = _scaffold_research_synthesis(title=title)
     elif doc_type in _SIDECAR_TYPES:
         content = _scaffold_sidecar(doc_type=doc_type, plan_stem=args.plan)
     elif doc_type == "run-report":
@@ -9364,8 +9360,14 @@ def main(argv: "list[str] | None" = None) -> int:
     if _adopt_existing is not None:
         content = _adopt_body(content, _adopt_existing)
 
+    if doc_type != "research-synthesis" and (args.question or args.pipeline):
+        print(
+            f"error: --question/--pipeline apply to --type research-synthesis, not {doc_type}.",
+            file=sys.stderr,
+        )
+        return 2
     if doc_type == "research-synthesis":
-        _rs_flags = {}
+        _rs_flags: dict[str, str] = {}
         if args.question:
             _rs_flags["question"] = _yaml_quote(args.question)
         if args.pipeline:
@@ -9374,8 +9376,7 @@ def main(argv: "list[str] | None" = None) -> int:
             content = _set_frontmatter_fields(content, _rs_flags)
         if _research_question_is_placeholder(content):
             print(
-                "error: research-synthesis question is a placeholder; pass --question. "
-                "Nothing was written.",
+                "error: research-synthesis question is a placeholder; pass --question.",
                 file=sys.stderr,
             )
             return 1

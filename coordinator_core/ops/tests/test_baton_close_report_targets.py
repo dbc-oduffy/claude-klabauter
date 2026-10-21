@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import builtins
 from pathlib import Path
 
 from coordinator_core.ops import baton_close_report_targets as t
@@ -45,13 +44,38 @@ def test_plan_landed_is_not_done(tmp_path):
     assert ev["target_status"] == "landed" and ev["done"] is False
 
 
+def test_archived_governing_plan_resolves_with_archived_status(tmp_path):
+    _w(tmp_path, "archive/specs/2026-09/a.md", "---\nstatus: implemented\n---\n")
+    (ev,) = _run(tmp_path, governing_plan="docs/plans/a.md")
+    assert (ev["target_path"], ev["target_status"], ev["done"]) == ("docs/plans/a.md", "implemented", True)
+
+
+def test_live_plan_wins_over_archived_copy(tmp_path):
+    _w(tmp_path, "docs/plans/a.md", "---\nstatus: draft\n---\n")
+    _w(tmp_path, "archive/specs/2026-09/a.md", "---\nstatus: implemented\n---\n")
+    (ev,) = _run(tmp_path, governing_plan="docs/plans/a.md")
+    assert ev["target_status"] == "draft" and ev["done"] is False
+
+
+def test_plan_in_neither_place_still_target_missing(tmp_path):
+    _w(tmp_path, "archive/specs/2026-09/other.md", "---\nstatus: implemented\n---\n")
+    (ev,) = _run(tmp_path, governing_plan="docs/plans/a.md")
+    assert ev["target_status"] == t.STATUS_MISSING and ev["done"] is False
+
+
+def test_archived_plan_resolved_by_origin_plan_id(tmp_path):
+    _w(tmp_path, "archive/specs/2026-09/a.md", "---\nplan_id: pln-a\nstatus: implemented\n---\n")
+    (ev,) = _run(tmp_path, origin_plan_id="pln-a")
+    assert (ev["target_path"], ev["done"]) == ("docs/plans/a.md", True)
+
+
 def test_open_permission_error_reads_unreadable_not_missing(tmp_path, monkeypatch):
     _w(tmp_path, "docs/plans/a.md", "---\nstatus: implemented\n---\n")
 
     def deny(file, *a, **k):
         raise PermissionError(13, "denied", str(file))
 
-    monkeypatch.setattr(t, "open", deny, raising=False)
+    monkeypatch.setattr(t, "_read_prefix", deny)
     (ev,) = _run(tmp_path, governing_plan="docs/plans/a.md")
     assert ev["target_status"] == t.STATUS_UNREADABLE == "target_unreadable"
     assert ev["done"] is False
@@ -136,13 +160,13 @@ def test_quoted_status_unquoted(tmp_path):
 def test_target_cited_by_two_batons_read_once(tmp_path, monkeypatch):
     _w(tmp_path, "docs/plans/a.md", "---\nstatus: implemented\n---\n")
     opened: list[str] = []
-    real = builtins.open
+    real = t._read_prefix
 
     def spy(file, *a, **k):
         opened.append(str(file))
         return real(file, *a, **k)
 
-    monkeypatch.setattr(t, "open", spy, raising=False)
+    monkeypatch.setattr(t, "_read_prefix", spy)
     heads = {"b1": _h(governing_plan="docs/plans/a.md"), "b2": _h(governing_plan="docs/plans/a.md")}
     out = t.target_evidence(str(tmp_path), heads)
     assert len(out["b1"]) == len(out["b2"]) == 1
@@ -205,13 +229,13 @@ def test_reverse_forward_and_reverse_to_same_plan_dedupe_and_open_once(tmp_path,
     _w(tmp_path, "docs/plans/a.md", "---\nplan_id: pln-1\nstatus: implemented\ndeliverable_id: dlv-x\n---\n")
     _w(tmp_path, "docs/plans/c.md", "---\nstatus: draft\n---\n")
     opened: list[str] = []
-    real = builtins.open
+    real = t._read_prefix
 
     def spy(file, *a, **k):
         opened.append(str(file))
         return real(file, *a, **k)
 
-    monkeypatch.setattr(t, "open", spy, raising=False)
+    monkeypatch.setattr(t, "_read_prefix", spy)
     out = _batons(tmp_path, **{B1: {"governing_plan": "docs/plans/a.md", "deliverable_id": "dlv-x",
                                     "origin_plan_id": "pln-1"}})
     assert len(out[B1]) == 1
@@ -224,6 +248,28 @@ def test_reverse_long_frontmatter_closing_fence_past_first_read(tmp_path):
     _w(tmp_path, "docs/plans/a.md", f"---\n{pad}status: implemented\ndeliverable_id: dlv-x\n---\n")
     (ev,) = _batons(tmp_path, **{B1: {"deliverable_id": "dlv-x"}})[B1]
     assert ev["done"]
+
+
+def test_plan_frontmatter_cuts_at_closing_fence_variants(tmp_path):
+    body = "status: x\n  ---\nbody ---\n"
+    cases = {
+        "crlf": ("---\r\nstatus: a\r\n---\r\nstatus: b\r\n", ["status: a"]),
+        "blank_padded_fence": ("---\nstatus: a\n --- \t\nstatus: b\n", ["status: a"]),
+        "dashes_inside_value": ("---\nnote: a --- b\nstatus: a\n---\nstatus: b\n", ["note: a --- b", "status: a"]),
+        "no_closing_fence": ("---\nstatus: a\nstatus: b\n", ["status: a", "status: b"]),
+        "unfenced": (body, ["status: x", "  ---", "body ---"]),
+    }
+    for name, (text, want) in cases.items():
+        _w(tmp_path, f"docs/plans/{name}.md", text)
+        assert t._plan_frontmatter(str(tmp_path / "docs/plans" / f"{name}.md")) == [
+            ln.rstrip("\r") for ln in want
+        ], name
+
+
+def test_plan_frontmatter_unfenced_keeps_first_window(tmp_path):
+    _w(tmp_path, "docs/plans/a.md", "# Plan\n" + "x\n" * 3000 + "status: implemented\n")
+    lines = t._plan_frontmatter(str(tmp_path / "docs/plans/a.md"))
+    assert "status: implemented" not in lines
 
 
 SZ = "state/sizings/s.yaml"

@@ -74,9 +74,9 @@ Landed here (`coordinator/bin/mise-prep-run.py`, claude-klabauter) from coordina
 one non-negotiable invocation tax this plan exists to remove. Both ops (`plan.prep_gate`,
 `plan.stamp_prepped`) are called IN-PROCESS via `coordinator_core.ipc.get_op_handler`, the same
 seam `coordinator_core/ops/cutover_advance.py` already uses to call `cutover.gate` from inside
-another op's own handler. `_upgrade`'s subprocess call to `mise-prep-upgrade` is unchanged: that
-is a separate CLI invocation, not a JSON-RPC op, and the plan body scopes the in-process rewrite
-to "per op" only. `_ENTRY` now points at the sibling `coordinator/bin/mise-prep-entry.py` this
+another op's own handler. The upgrade leg is in-process too: `_upgrade` loads
+`mise-prep-upgrade.py` by file path and calls its `upgrade_plan`, so the driver spawns no process
+per plan (docs/plans/2026-10-21-mise-prep-run-full-set-fits-its-op-budget.md). `_ENTRY` now points at the sibling `coordinator/bin/mise-prep-entry.py` this
 same chunk lands, not a DoE `skills/plan-blitz/` path.
 """
 
@@ -88,10 +88,7 @@ import functools
 import importlib.util
 import json
 import os
-import re
 import secrets
-import shutil
-import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -132,18 +129,21 @@ _CENSUS_ROUTE = (
 
 
 def _default_engine_root() -> Path | None:
-    """This driver ships INSIDE the engine checkout, so its own tree IS the engine root when
-    neither `--engine-root` nor `$COORDINATOR_ENGINE_ROOT` names one — the colocated resolution
-    class (§ Path resolution), replacing the DoE original's `_engine_root.resolve_claude_klabauter_root`
-    fence, which answered a question this file no longer has to ask.
+    """The engine root when neither `--engine-root` nor `$COORDINATOR_ENGINE_ROOT` names one:
+    `cc_invoke.resolve_engine_root`'s ladder (own enclosing checkout, then the settings-home
+    pointer file and registry) — the same answer `_invoke` and the entry query bind, so a copy
+    that is not itself the engine still resolves one.
 
     Returns `None` on any failure rather than raising: an unresolved engine root here is not
     fatal to this driver the way it is to a gate — `_invoke` already reports its own refusal
     when the op cannot be resolved.
     """
     try:
-        return _REPO_ROOT.resolve()
-    except OSError:
+        import lib  # noqa: F401 -- bootstraps coordinator/bin/lib onto sys.path
+        from cc_invoke import resolve_engine_root
+
+        return Path(resolve_engine_root(__file__)).resolve()
+    except Exception:  # noqa: BLE001 - unresolved is reported by the op call, not here
         return None
 
 
@@ -163,7 +163,10 @@ def _invoke(repo_root: Path, op: str, params: dict) -> dict:
         cc_invoke.require_engine_on_path(__file__)
         from coordinator_core.invoke.dispatch import dispatch_message
     except Exception as exc:
-        raise ValueError(f"{op}: coordinator_core unresolvable: {exc}")
+        raise ValueError(
+            f"{op}: coordinator_core unresolvable: {exc} — set COORDINATOR_ENGINE_ROOT to the "
+            "engine checkout or run the settings-home `mise-prep-run` launcher"
+        )
 
     msg = {
         "jsonrpc": "2.0",
@@ -479,138 +482,67 @@ def _repair_line(failing: list[str], plan: str) -> str:
     return f"repair: mise-prep-upgrade {plan}  (or --upgrade), then re-run"
 
 
-def _named_engine(engine_root: Path | None) -> bool:
-    """True when the operator NAMED this engine root (`--engine-root` or
-    `$COORDINATOR_ENGINE_ROOT`) rather than the default resolver finding it. A named root
-    outranks the settings-home launcher, which is baked to one engine root at install."""
-    named = os.environ.get("COORDINATOR_ENGINE_ROOT", "").strip()
-    return engine_root is not None and bool(named) and Path(named).resolve() == engine_root
+@functools.cache
+def _upgrader(engine_root: Path | None):
+    """`mise-prep-upgrade`'s module, loaded once per run from the driver's own `coordinator/bin/`.
 
-
-def _resolve_upgrade_cli(settings_home: str, engine_root: Path | None) -> list[str] | None:
-    """`mise-prep-upgrade` as an argv prefix, down the sanctioned rungs, or None.
-
-    Rung 2 is the settings-home launcher, then PATH; rung 3 is the engine's own
-    `coordinator/bin/` copy under the engine root this run already dispatches ops
-    through (`--engine-root`, else `$COORDINATOR_ENGINE_ROOT`). The same ladder
-    `snippets/resolve-coordinator-bin.md` names — a resolver that stops at rung 2 refuses on
-    boxes where the tool exists. The engine copy carries no shebang, so the interpreter is part
-    of the invocation.
+    A foreign `engine_root` is refused (returns a reason string, not a module): loading its
+    `mise-prep-upgrade.py` here would run that file's import-time `sys.path` insert against the
+    `coordinator_core` already cached in `sys.modules`, so the tree that answers would not be the
+    tree named. `None` and this driver's own tree are the same engine.
     """
-    if _named_engine(engine_root):
-        named_forwarder = engine_root / "coordinator" / "bin" / "mise-prep-upgrade.py"
-        if named_forwarder.is_file():
-            import lib  # noqa: F401 -- bootstraps coordinator/bin/lib onto sys.path
-            from python_interp import python_argv
-
-            return python_argv(str(named_forwarder))
-    launcher = Path(settings_home) / "bin" / "mise-prep-upgrade"
-    if launcher.is_file():
-        return [str(launcher)]
-    found = shutil.which("mise-prep-upgrade")
-    if found:
-        return [found]
-    if engine_root is not None:
-        forwarder = engine_root / "coordinator" / "bin" / "mise-prep-upgrade.py"
-        if forwarder.is_file():
-            import lib  # noqa: F401 -- bootstraps coordinator/bin/lib onto sys.path
-            from python_interp import python_argv
-
-            return python_argv(str(forwarder))
-    return None
-
-
-#: `mise-prep-upgrade`'s own per-plan lines — `  {verb}: {sorted(derivable)}` where verb
-#: is "derived" (a live run) or "would derive" (`--check`), and `    AUTHOR: {item}` for
-#: each residue entry. Read here rather than re-derived: this driver never guesses at what
-#: was written, it reads the tool's own report of it.
-_UPGRADE_DERIVED_RE = re.compile(r"^(?:derived|would derive):\s*(.+)$")
-_UPGRADE_AUTHOR_RE = re.compile(r"^AUTHOR:\s*(.+)$")
-#: The tool's one summary line: `mise-prep-upgrade: N plan(s); M changed|would change; ...`.
-#: `M` is the fact this driver actually needs — whether anything was (or would be)
-#: written — because the tool's exit code conflates "wrote what it could" with "residue
-#: remains" into the same EXIT_RESIDUE, its normal outcome even after a write.
-_UPGRADE_SUMMARY_RE = re.compile(
-    r"plan\(s\);\s*(\d+)\s+(?:changed|would change)\b"
-)
+    own = _HERE / "mise-prep-upgrade.py"
+    if engine_root is not None and engine_root != _REPO_ROOT:
+        return f"engine root {engine_root} is not the tree this driver runs from ({_REPO_ROOT})"
+    if not own.is_file():
+        return f"no mise-prep-upgrade.py at {own}"
+    spec = importlib.util.spec_from_file_location("mise_prep_upgrade", own)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
 
 
 def _upgrade(
     repo_root: Path, engine_root: Path | None, plan: str, dry_run: bool = False
 ) -> tuple[str, str]:
-    """Run `mise-prep-upgrade` over one plan. Returns (state, note).
+    """Upgrade one plan IN-PROCESS via `mise-prep-upgrade.upgrade_plan`. Returns (state, note).
 
-    `state` is "wrote", "declined", or "unavailable" — three outcomes, not two, and
-    classified from STDOUT, never from the exit code. `mise-prep-upgrade` exits 1
-    (EXIT_RESIDUE) whenever authoring residue remains, which is its NORMAL outcome even
-    on a run that just wrote every field it could derive — mapping that exit straight to
-    "declined" reports a write as a no-op. `wrote` fires whenever the summary line's
-    changed/would-change count is nonzero; `note` then carries the derived field(s) plus
-    any residue (`AUTHOR: ...`) lines, e.g. `wrote prime_exit_criterion.derived_from;
-    AUTHOR: prime_exit_criterion.statement: ...`. `declined` is reserved for a run that
-    wrote nothing — pure residue, or truly nothing to do. Only a launcher that is not on
-    disk at any resolution rung is `unavailable`.
+    `state` is "wrote" (the tool changed, or under `dry_run` would change, the plan),
+    "declined" (pure residue, nothing to derive, or not a plan), or "unavailable" (the upgrade
+    module could not be loaded). `note` carries the derived fields plus any residue, e.g.
+    `wrote prime_exit_criterion.derived_from; AUTHOR: prime_exit_criterion.statement: ...`.
 
-    `dry_run` passes `--check` through to the tool — a dry run must not let `--upgrade`
-    write to disk, and `mise-prep-upgrade` writes unless told `--check`.
+    `dry_run` is `check=True`: nothing is written. `plan` is repo-relative and resolved against
+    `repo_root`, never the process cwd.
 
-    Delegated, never reimplemented: what is derivable from a plan's own text is that
-    tool's judgment, and a second deriver here would author declarations it never
-    agreed to.
+    Delegated, never reimplemented: what is derivable from a plan's own text is that tool's
+    judgment, and a second deriver here would author declarations it never agreed to.
     """
-    settings_home = os.environ.get("COORDINATOR_SETTINGS_HOME") or str(
-        Path(os.environ.get("CLAUDE_HOME") or Path.home()) / ".coordinator-claude-settings"
-    )
-    cmd = _resolve_upgrade_cli(settings_home, engine_root)
-    if cmd is None:
-        engine_bin = (
-            engine_root / "coordinator" / "bin" / "mise-prep-upgrade.py"
-            if engine_root is not None
-            else "<no --engine-root>"
-        )
-        return "unavailable", (
-            f"no mise-prep-upgrade launcher at {Path(settings_home) / 'bin'}, none on "
-            f"PATH, and no copy under {engine_bin}"
-        )
-    env = dict(os.environ)
-    if engine_root is not None:
-        env.setdefault("COORDINATOR_ENGINE_ROOT", str(engine_root))
-    argv = cmd + [plan] + (["--check"] if dry_run else [])
-    proc = subprocess.run(
-        argv, capture_output=True, text=True, env=env, cwd=str(repo_root), timeout=300,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-    )
-    lines = (proc.stdout or proc.stderr).strip().splitlines()
-
-    derived_fields = ""
-    author_notes: list[str] = []
-    changed = 0
-    for raw in lines:
-        stripped = raw.strip()
-        m = _UPGRADE_DERIVED_RE.match(stripped)
-        if m:
-            derived_fields = m.group(1).strip()
-            continue
-        m = _UPGRADE_AUTHOR_RE.match(stripped)
-        if m:
-            author_notes.append(m.group(1).strip())
-            continue
-        m = _UPGRADE_SUMMARY_RE.search(stripped)
-        if m:
-            changed = int(m.group(1))
-
-    if changed > 0:
-        note = f"wrote {derived_fields}" if derived_fields else "wrote (fields unparsed)"
-        if author_notes:
-            note += "; AUTHOR: " + "; ".join(author_notes)
+    upgrader = _upgrader(engine_root)
+    if isinstance(upgrader, str):
+        return "unavailable", upgrader
+    path = repo_root / plan
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        return "declined", f"unreadable: {exc}"
+    parsed = upgrader.parse_frontmatter(text)
+    reason = upgrader.not_a_plan_reason(path, text, parsed)
+    if reason is not None:
+        return "declined", f"not a plan: {reason}"
+    result = upgrader.upgrade_plan(path, check=dry_run, text=text, parsed=parsed)
+    if result["error"]:
+        return "declined", result["error"]
+    residue = result["residue"]
+    if result["changed"]:
+        derived = ", ".join(result["derived"])
+        note = f"wrote {derived}" if derived else "wrote"
+        if residue:
+            note += "; AUTHOR: " + "; ".join(residue)
         return "wrote", note
-
-    last_line = lines[-1].strip() if lines else ""
-    if author_notes:
-        note = "AUTHOR: " + "; AUTHOR: ".join(author_notes)
-    else:
-        note = last_line or "nothing to derive"
-    return "declined", note
+    if residue:
+        return "declined", "AUTHOR: " + "; AUTHOR: ".join(residue)
+    return "declined", "nothing to derive"
 
 
 def main(argv=None) -> int:
@@ -701,16 +633,11 @@ def main(argv=None) -> int:
         upgraded = None
         if gate.get("verdict") != "PREPPED" and args.upgrade:
             state, note = _upgrade(repo_root, engine_root, plan, dry_run=args.dry_run)
-            # "ran" is kept alongside "wrote" so a test (or a caller) stubbing `_upgrade`
-            # with the pre-fix vocabulary still reads as a write — the real function only
-            # ever returns "wrote" now.
-            wrote = state in ("wrote", "ran")
+            wrote = state == "wrote"
             upgraded = note if wrote else f"{state}: {note}"
-            # Re-gate whenever the upgrade actually changed something, not only on a
-            # tidy "ran" — the ordinary outcome is a write alongside residue, which the
-            # old exit-code-keyed check reported as "declined" and never re-gated.
-            # Never under `--dry-run`: `_upgrade` already ran `--check` and wrote
-            # nothing, so a re-gate here would just repeat the same verdict.
+            # Re-gate whenever the upgrade changed something: the ordinary outcome is a write
+            # alongside residue. Never under `--dry-run`: `_upgrade` ran check-only and wrote
+            # nothing, so a re-gate would just repeat the same verdict.
             if wrote and not args.dry_run:
                 try:
                     gate = _invoke(repo_root, "plan.prep_gate", {"plan": plan})

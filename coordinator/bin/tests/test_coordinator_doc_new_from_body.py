@@ -146,6 +146,14 @@ def test_research_synthesis_placeholder_question_refused(repo, capsys):
     assert path.read_text(encoding="utf-8") == _RS_BODY
 
 
+def test_question_flag_refused_for_other_types(repo, capsys):
+    out = repo / "d.md"
+    rc = _MOD.main(["--type", "decision", "--title", "T", "--question", "Q?", "--out", str(out)])
+    assert rc != 0
+    assert "research-synthesis" in capsys.readouterr().err
+    assert not out.exists()
+
+
 def test_research_synthesis_unknown_pipeline_rejected(repo):
     with pytest.raises(SystemExit) as exc:
         _MOD.main([

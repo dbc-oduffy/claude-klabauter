@@ -132,6 +132,31 @@ def test_close_refusal(kind, did, expected):
     assert close_refusal(kind, did) is expected
 
 
+OWN_PLAN_DONE = {**DONE, "field": "governing_plan"}
+JOIN_DONE = {**DONE, "field": "plan.deliverable_id"}
+
+
+@pytest.mark.parametrize(
+    "evidence,expected",
+    [
+        ([OWN_PLAN_DONE], ("closable",)),
+        ([JOIN_DONE, OWN_PLAN_DONE], ("closable",)),
+        ([JOIN_DONE], ("residue", "spinoff_kind")),
+        ([{**OWN_PLAN_DONE, "done": False, "target_status": "draft"}, JOIN_DONE],
+         ("residue", "evidence_conflict")),
+    ],
+)
+def test_spinoff_closes_only_on_its_own_governing_plan(evidence, expected):
+    out = decide(_hk("spinoff", "dlv-x"), evidence, False)
+    assert out[: len(expected)] == expected
+
+
+def test_close_refusal_spinoff_with_own_plan_evidence_is_none():
+    assert close_refusal("spinoff", "dlv-x", [OWN_PLAN_DONE]) is None
+    assert close_refusal("spinoff", "dlv-x", [JOIN_DONE]) is ResidueReason.SPINOFF_KIND
+    assert close_refusal("spinoff", "nope", [OWN_PLAN_DONE]) is ResidueReason.NO_DELIVERABLE_ID
+
+
 def test_does_not_mutate_inputs():
     ev = [dict(DONE), dict(OPEN)]
     snapshot = [dict(e) for e in ev]

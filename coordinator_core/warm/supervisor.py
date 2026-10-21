@@ -106,7 +106,12 @@ from coordinator_core.warm.http_listener import (
     _collect_response,
     _frame_from_request,
 )
-from coordinator_core.warm.server import InFlightCounter, _declare_execution_route, _serve_line
+from coordinator_core.warm.server import (
+    InFlightCounter,
+    _declare_execution_route,
+    _serve_line,
+    engine_root_divergence_message,
+)
 
 __all__ = [
     "record_is_skewed",
@@ -1261,6 +1266,17 @@ def main() -> int:
        ends the process.
     """
     root = _default_engine_clone()
+
+    divergence = engine_root_divergence_message(root)
+    if divergence is not None:
+        print(f"[warm-http-supervisor] {divergence}", file=sys.stderr)
+        try:
+            from coordinator_core.ops.ceremony.detached_spawn import record_child_failure
+
+            record_child_failure(str(root), __file__, exc=RuntimeError(divergence))
+        except Exception:  # noqa: BLE001 -- the failure record must not mask the refusal
+            pass
+        return 2
 
     try:
         handle = _elect_supervisor_slot(root)

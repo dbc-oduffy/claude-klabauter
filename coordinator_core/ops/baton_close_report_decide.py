@@ -5,6 +5,8 @@ No I/O. Evidence arrives from the target readers; the live-successor flag from t
 
 from __future__ import annotations
 
+from collections.abc import Iterable
+
 from coordinator_core.frontmatter.baton_class import is_spinoff_kind
 from coordinator_core.ops.baton_close_report_contract import (
     BatonHeader,
@@ -36,19 +38,30 @@ def _kind(item: Evidence) -> str:
 
 
 _DELIVERABLE_PREFIX = "dlv-"
+_OWN_PLAN_FIELD = "governing_plan"
 
 
-def close_refusal(kind: object, deliverable_id: object) -> ResidueReason | None:
+def _closes_on_own_plan(evidence: Iterable[Evidence]) -> bool:
+    return any(e["done"] and e["field"] == _OWN_PLAN_FIELD for e in evidence)
+
+
+def close_refusal(
+    kind: object, deliverable_id: object, evidence: Iterable[Evidence] = ()
+) -> ResidueReason | None:
     """Why close_commit refuses a baton on header facts alone, or None.
 
     NO_DELIVERABLE_ID when the stripped id is not a str starting `dlv-`, else SPINOFF_KIND
-    when `kind` is a spinoff under any spelling. Shared by `decide` and close_commit's select.
+    when `kind` is a spinoff under any spelling, unless `evidence` carries a done
+    `governing_plan` item (the spinoff's own plan; a deliverable_id join to a parent never
+    qualifies). Shared by `decide` and close_commit's select.
     """
     if not isinstance(deliverable_id, str) or not deliverable_id.strip().startswith(
         _DELIVERABLE_PREFIX
     ):
         return ResidueReason.NO_DELIVERABLE_ID
-    if is_spinoff_kind(kind if isinstance(kind, str) else None):
+    if is_spinoff_kind(kind if isinstance(kind, str) else None) and not _closes_on_own_plan(
+        evidence
+    ):
         return ResidueReason.SPINOFF_KIND
     return None
 
@@ -74,7 +87,7 @@ def decide(
     if any_done:
         if "contradicts" in kinds:
             return (Verdict.RESIDUE.value, ResidueReason.EVIDENCE_CONFLICT.value, evidence)
-        refusal = close_refusal(header.get("kind"), header.get("deliverable_id"))
+        refusal = close_refusal(header.get("kind"), header.get("deliverable_id"), evidence)
         if refusal is not None:
             return (Verdict.RESIDUE.value, refusal.value, evidence)
         return (Verdict.CLOSABLE.value, evidence)

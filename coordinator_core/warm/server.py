@@ -446,6 +446,26 @@ def _engine_clone_root() -> Path:
     return current_engine_clone()
 
 
+def engine_root_divergence_message(stamped_root: Path) -> Optional[str]:
+    """One-line refusal when `COORDINATOR_ENGINE_ROOT` names a tree other than
+    `stamped_root`, else None. Pure path comparison: no git, no spawn. Shared
+    by `warm.supervisor.main`."""
+    raw = os.environ.get("COORDINATOR_ENGINE_ROOT", "").strip()
+    if not raw:
+        return None
+    try:
+        env_root = Path(raw).resolve()
+        stamped = Path(stamped_root).resolve()
+    except (OSError, RuntimeError):
+        return None
+    if os.path.normcase(str(env_root)) == os.path.normcase(str(stamped)):
+        return None
+    return (
+        f"refusing to boot: COORDINATOR_ENGINE_ROOT={env_root} diverges "
+        f"from the stamped engine root {stamped}"
+    )
+
+
 def _encode(response: dict) -> bytes:
     return json.dumps(response, ensure_ascii=False).encode("utf-8") + b"\n"
 
@@ -3137,6 +3157,18 @@ def main() -> int:
     would have before this guard existed -- per PM ruling, this must die
     audibly, not survive as a degraded no-op.
     """
+    divergence = engine_root_divergence_message(_engine_clone_root())
+    if divergence is not None:
+        print(f"[warm-server] {divergence}", file=sys.stderr)
+        try:
+            from coordinator_core.ops.ceremony.detached_spawn import record_child_failure
+
+            record_child_failure(
+                str(_engine_clone_root()), __file__, exc=RuntimeError(divergence)
+            )
+        except Exception:  # noqa: BLE001 -- the failure record must not mask the refusal
+            pass
+        return 2
     try:
         return _run_guarded()
     except Exception as exc:  # noqa: BLE001 -- log, then re-raise; see docstring's STEP 0

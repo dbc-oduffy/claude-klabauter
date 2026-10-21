@@ -16,8 +16,9 @@ handler calls in-process) -- the caller's own worktree, never a
 commit_v2).
 
 Negative-spec:
-  - Does NOT call ``ceremony.commit_v2`` more than once. Every DONE chunk's
-    paths and prefix-claimed files fold into ONE call.
+  - Does NOT call ``ceremony.commit_v2`` more than once, bar one exception: a lost ref
+    compare-and-swap is re-attempted (``git.ref_cas_retry``, bounded) while no peer commit touched a
+    landing path. Every DONE chunk's paths and prefix-claimed files fold into ONE call.
   - Does NOT infer prefix-claimed files from ``git status`` or prose -- only
     a DONE chunk's OWN report, read verbatim, under its OWN declared
     prefixes (mirrors emit.py's ``_prefix_commit_rule`` executor contract).
@@ -106,7 +107,8 @@ Negative-spec:
     ``blob_drift``, never drops paths.
   - Does NOT retry or catch commit_v2's structured refusals -- returned to
     the caller unmodified in substance, same posture commit_v2 itself takes
-    toward ``commit_paths``.
+    toward ``commit_paths``; the lost-ref-CAS re-attempt is the one exception, and a lost CAS whose
+    peer commit touched a landing path returns ``refused: ref-moved-overlap``.
 
 DR-208 five-question affirmation (MUTATING; citing this handler, modelled on
 ``ceremony.commit_v2``'s own affirmation, coordinator_core/authz/
@@ -3052,10 +3054,26 @@ def _settle_close(worktree_root: Path, ctx: dict, landed: bool) -> None:
     legs.update(_background_legs(worktree_root, ctx))
 
 
+def _inline_paid_legs(reply: dict, root) -> dict:
+    """The land-run-only legs a landed terminal commit paid inline, read off its reply:
+    ``ran`` for a minted review stamp, a coded-stamp commit and a shipped sizing; ``failed``
+    for a skipped sizing ship. A leg the reply is silent on is absent."""
+    paid: dict = {}
+    if reply.get("review_stamp") == "minted":
+        paid["review-stamp"] = _leg("ran", "review stamp minted")
+    if reply.get("coded_sha"):
+        paid["coded-stamp"] = _leg("ran", "coded-stamp commit landed")
+    if reply.get("sizing_shipped"):
+        paid["sizing-ship"] = _leg("ran", "sizing shipped")
+    elif reply.get("sizing_ship_skipped"):
+        paid["sizing-ship"] = _leg("failed", f"sizing ship skipped: {reply['sizing_ship_skipped']}", root)
+    return paid
+
+
 def _close_block(ctx: dict, reply: dict) -> dict:
     """The reply's ``close`` block: the settled inline and background legs, with ``review`` and
     ``plan-reconciliation`` read off the reply, and every leg nobody settled ``failed`` with why."""
-    from coordinator_core.ops.dispatch_emit.run_close import RUN_BOUND_LEGS, build_close_block
+    from coordinator_core.ops.dispatch_emit.run_close import LAND_RUN_ONLY_LEGS, RUN_BOUND_LEGS, build_close_block
 
     legs = dict(ctx["legs"])
     if ctx["applies"]:
@@ -3072,7 +3090,7 @@ def _close_block(ctx: dict, reply: dict) -> dict:
                     "failed", str(reply.get("review_stamp_refusal") or "review stamp refused"), ctx["root"]
                 )
             else:
-                legs["review"] = _leg("failed", f"no review stamp: {why}")
+                legs["review"] = _leg("failed", f"no review stamp minted: {why}" if why != "leg did not run" else "no review stamp minted")
         status = reply.get("plan_status")
         if "plan-reconciliation" not in ctx["presets"] and status == "implemented":
             deferred = (
@@ -3091,7 +3109,12 @@ def _close_block(ctx: dict, reply: dict) -> dict:
             )
         else:
             legs["plan-reconciliation"] = _leg("failed", f"plan not reconciled: {why}")
+        landed_whole = reply.get("committed") is True and "coded_stamp_error" not in reply
+        if landed_whole:
+            legs.update({leg: result for leg, result in _inline_paid_legs(reply, ctx["root"]).items() if leg not in legs})
         for leg in RUN_BOUND_LEGS:
+            if landed_whole and leg in LAND_RUN_ONLY_LEGS:
+                continue  # unpaid on a landed run: build_close_block reads it not-applicable
             legs.setdefault(leg, _leg("failed", why))
         legs.update(ctx["presets"])
     block = build_close_block(ctx["run_id"], ctx["applies"], legs, ctx["completion_entry"], kind=ctx["kind"])
@@ -3502,7 +3525,8 @@ def _redeem_or_answer(worktree_root: Path, run_id: object, token: str, script_pa
             )
     return _error(
         "params.run_token does not match a live, unspent token minted for params.run_id and "
-        "this script (a token admits one landed commit)",
+        "this script (a token admits one landed commit). A run that ended with its commit unlanded "
+        "recovers without run_token: coordinator-invoke dispatch.terminal_commit --from-task-output <file>",
         refused="run-token",
     )
 
@@ -4661,8 +4685,27 @@ def _terminal_commit_inner(
             **integrity_extra,
         )
 
+    from coordinator_core.git import ref_cas_retry
+
+    # Receipts are run-unique so no peer can touch them; the regenerated allowlist stays in the
+    # compared paths because a peer's change to it must refuse rather than be overwritten.
+    _own_receipts = set(receipt_paths)
+    _overlap_paths = [p for p in (*all_paths, *deleted_paths) if p not in _own_receipts]
+
+    def _attempt():
+        return commit_v2(commit_params, repo_root)
+
+    def _cas_lost(r) -> bool:
+        return (
+            isinstance(r, dict)
+            and not r.get("committed")
+            and ref_cas_retry.is_ref_moved_text(r.get("error"))
+        )
+
     try:
-        reply = commit_v2(commit_params, repo_root)
+        reply, overlap = ref_cas_retry.retry_ref_moved(
+            worktree_root, _overlap_paths, _attempt, _cas_lost
+        )
     except OpUnavailableError:
         _remove(worktree_root, receipt_paths)
         return _error("ceremony.commit_v2 is not registered")
@@ -4673,6 +4716,11 @@ def _terminal_commit_inner(
         reply = {"committed": False, "sha": None, "error": f"unexpected commit_v2 reply: {reply!r}"}
 
     reply = dict(reply)
+    if overlap and isinstance(reply.get("error"), str):
+        reply["refused"] = overlap
+        reply["error"] += (
+            ". A peer commit changed a path this landing writes; refire after the peer's commit"
+        )
     held_report = _dirty_held_by_halted_run(worktree_root, halted_held)
     if held_report:
         reply["held_by_halted_run"] = held_report

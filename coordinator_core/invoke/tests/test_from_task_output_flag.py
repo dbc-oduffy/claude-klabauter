@@ -40,6 +40,16 @@ def test_params_carry_the_absolute_path_resolved_against_cwd(captured, tmp_path)
     assert Path(captured[0]["task_output_path"]).is_absolute()
 
 
+def test_the_flag_with_empty_object_positional_params_is_admitted(captured, tmp_path):
+    _, stderr, code = _dispatch_argv(
+        ["dispatch.terminal_commit", "{}", "--from-task-output", "out.json"],
+        str(tmp_path),
+        allow_warm=False,
+    )
+    assert code == 0, stderr
+    assert captured == [{"task_output_path": str((tmp_path / "out.json").resolve())}]
+
+
 def test_a_matching_positional_task_output_path_is_accepted(captured, tmp_path):
     abs_path = str((tmp_path / "out.json").resolve())
     import json

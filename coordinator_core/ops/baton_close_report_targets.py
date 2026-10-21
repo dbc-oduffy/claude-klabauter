@@ -37,6 +37,9 @@ GOAL_DONE: frozenset[str] = frozenset()
 
 _HEAD_BYTES = 16384
 _PLAN_HEAD_BYTES = 4096
+_PLAN_KEYS_RE = re.compile(
+    r"^(status|plan_id|deliverable_id|sizing_object|predecessor_handoff):[ \t]*(.*)$"
+)
 _STATUS_RE = re.compile(r"^status:[ \t]*(.*)$")
 _PLAN_ID_RE = re.compile(r"^plan_id:[ \t]*(.*)$")
 _DELIVERABLE_RE = re.compile(r"^deliverable_id:[ \t]*(.*)$")
@@ -59,14 +62,26 @@ def _scalar(raw: str) -> str:
     return (raw[:cut] if cut >= 0 else raw).strip()
 
 
+def _read_prefix(path: str, nbytes: int) -> bytes:
+    """Up to `nbytes` leading bytes of `path` through bare descriptor calls.
+
+    OSError propagates, FileNotFoundError and NotADirectoryError included. Bare descriptor calls
+    cost about half of `open()` per file, which the full-plans index pays 1000+ times.
+    """
+    fd = os.open(path, os.O_RDONLY | getattr(os, "O_BINARY", 0))
+    try:
+        return os.read(fd, nbytes)
+    finally:
+        os.close(fd)
+
+
 def _head(path: str, nbytes: int) -> list[str] | None:
     """Leading lines of `path` (CRLF-tolerant), or None when the file does not exist.
 
     Any other OSError propagates: the caller decides what an unreadable file means.
     """
     try:
-        with open(path, "rb") as fh:
-            data = fh.read(nbytes)
+        data = _read_prefix(path, nbytes)
     except (FileNotFoundError, NotADirectoryError):
         return None
     return data.decode("utf-8", errors="replace").splitlines()
@@ -81,21 +96,39 @@ def _head_or_none(path: str, nbytes: int) -> list[str] | None:
 
 
 def _plan_frontmatter(path: str) -> list[str] | None:
-    """Frontmatter lines of a plan from one open; reads on only when the closing fence is cut off.
+    """Frontmatter lines of a plan from one open; None when the file is missing or unreadable.
 
-    None when the file is missing or unreadable.
+    A fenced plan is read to `_HEAD_BYTES` and cut at its closing fence before any line split,
+    so the many plans whose frontmatter outruns `_PLAN_HEAD_BYTES` cost one open, not two. An
+    unfenced file keeps the `_PLAN_HEAD_BYTES` window.
     """
     try:
-        with open(path, "rb") as fh:
-            data = fh.read(_PLAN_HEAD_BYTES)
-            lines = data.decode("utf-8", errors="replace").splitlines()
-            if (len(data) == _PLAN_HEAD_BYTES and lines and lines[0].strip() == "---"
-                    and not any(ln.strip() == "---" for ln in lines[1:])):
-                data += fh.read(_HEAD_BYTES - _PLAN_HEAD_BYTES)
-                lines = data.decode("utf-8", errors="replace").splitlines()
+        data = _read_prefix(path, _HEAD_BYTES)
     except OSError:
         return None
-    return _frontmatter(lines)
+    head = data[:_PLAN_HEAD_BYTES]
+    eol = head.find(b"\n")
+    first = head[:eol] if eol >= 0 else head
+    if first.decode("utf-8", errors="replace").strip() != "---":
+        return _frontmatter(head.decode("utf-8", errors="replace").splitlines())
+    close = _closing_fence(data, len(first) + 1)
+    if close >= 0:
+        data = data[:close]
+    return data.decode("utf-8", errors="replace").splitlines()[1:]
+
+
+def _closing_fence(data: bytes, start: int) -> int:
+    """Offset of the first line from `start` that is only `---` and blanks, or -1."""
+    pos = data.find(b"---", start)
+    while pos >= 0:
+        bol = data.rfind(b"\n", 0, pos) + 1
+        eol = data.find(b"\n", pos)
+        if eol < 0:
+            eol = len(data)
+        if not data[bol:pos].strip(b" \t") and not data[pos + 3:eol].strip(b" \t\r"):
+            return bol
+        pos = data.find(b"---", pos + 3)
+    return -1
 
 
 def _frontmatter(lines: list[str]) -> list[str]:
@@ -115,6 +148,16 @@ def _key_value(lines: list[str], pattern: re.Pattern[str]) -> str | None:
         if m:
             return _scalar(m.group(1))
     return None
+
+
+def _plan_keys(lines: list[str]) -> dict[str, str]:
+    """First column-zero value of each index key in one pass; same result as `_key_value` per key."""
+    out: dict[str, str] = {}
+    for line in lines:
+        m = _PLAN_KEYS_RE.match(line)
+        if m and m.group(1) not in out:
+            out[m.group(1)] = _scalar(m.group(2))
+    return out
 
 
 def _safe_join(root: str, rel: str) -> str | None:
@@ -138,6 +181,8 @@ class _Reader:
         self._by_sizing: dict[str, list[str]] = {}
         self._sizing_batons: dict[str, list[str]] | None = None
         self._goal_status: dict[str, str | None] | None = None
+        self._months: list[str] | None = None
+        self._archived_ids: dict[str, str] | None = None
 
     def status_of(self, rel: str, *, fenced: bool) -> tuple[bool, str | None]:
         """(file exists, status) for `rel`, read once per path."""
@@ -155,6 +200,8 @@ class _Reader:
         except OSError:
             result: tuple[bool, str | None] = (True, STATUS_UNREADABLE)
         else:
+            if lines is None and fenced and rel.startswith("docs/plans/") and rel.count("/") == 2:
+                lines = self._archived_head(rel.rsplit("/", 1)[1])
             if lines is None:
                 result = (False, None)
             else:
@@ -162,6 +209,49 @@ class _Reader:
                 result = (True, _key_value(body, _STATUS_RE))
         self._status[rel] = result
         return result
+
+    def _archive_months(self) -> list[str]:
+        """archive/specs/<yyyy-mm> dirs, newest first, listed once."""
+        if self._months is None:
+            base = os.path.join(self.root, "archive", "specs")
+            try:
+                names = sorted(os.listdir(base), reverse=True)
+            except OSError:
+                names = []
+            self._months = [os.path.join(base, n) for n in names]
+        return self._months
+
+    def _archived_head(self, name: str) -> list[str] | None:
+        """Head lines of docs/plans/`name` after the stamp archived it, or None.
+
+        Runs only after a docs/plans miss; one open per month dir, stops at the first hit.
+        """
+        for month in self._archive_months():
+            try:
+                lines = _head(os.path.join(month, name), _HEAD_BYTES)
+            except OSError:
+                continue
+            if lines is not None:
+                return lines
+        return None
+
+    def _archived_plan_id(self, plan_id: str) -> str | None:
+        """docs/plans rel of the archived plan carrying `plan_id`; scans archive heads once, on a live miss."""
+        if self._archived_ids is None:
+            self._archived_ids = {}
+            for month in self._archive_months():
+                try:
+                    names = sorted(os.listdir(month))
+                except OSError:
+                    continue
+                for name in names:
+                    if not name.endswith(".md"):
+                        continue
+                    fm = _plan_frontmatter(os.path.join(month, name))
+                    pid = _key_value(fm, _PLAN_ID_RE) if fm is not None else None
+                    if pid:
+                        self._archived_ids.setdefault(pid, "docs/plans/" + name)
+        return self._archived_ids.get(plan_id)
 
     def _plan_index(self) -> None:
         """One pass over docs/plans/*.md: plan_id, status, deliverable_id, predecessor_handoff.
@@ -184,24 +274,25 @@ class _Reader:
             if fm is None:
                 continue
             rel = "docs/plans/" + name
-            self._status.setdefault(rel, (True, _key_value(fm, _STATUS_RE)))
-            pid = _key_value(fm, _PLAN_ID_RE)
+            keys = _plan_keys(fm)
+            self._status.setdefault(rel, (True, keys.get("status")))
+            pid = keys.get("plan_id")
             if pid:
                 self._plan_ids.setdefault(pid, rel)
-            did = _key_value(fm, _DELIVERABLE_RE)
+            did = keys.get("deliverable_id")
             if did:
                 self._by_deliverable.setdefault(did, []).append(rel)
-            szo = _key_value(fm, _SIZING_OBJECT_RE)
+            szo = keys.get("sizing_object")
             if szo:
                 self._by_sizing.setdefault(szo.replace("\\", "/"), []).append(rel)
-            pre = _key_value(fm, _PREDECESSOR_RE)
+            pre = keys.get("predecessor_handoff")
             if pre:
                 self._by_predecessor.setdefault(pre.replace("\\", "/"), []).append(rel)
 
     def plan_path_for_id(self, plan_id: str) -> str | None:
         self._plan_index()
         assert self._plan_ids is not None
-        return self._plan_ids.get(plan_id)
+        return self._plan_ids.get(plan_id) or self._archived_plan_id(plan_id)
 
     def plans_for_deliverable(self, deliverable_id: str) -> list[str]:
         self._plan_index()

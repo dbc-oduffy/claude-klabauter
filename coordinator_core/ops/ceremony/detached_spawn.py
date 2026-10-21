@@ -186,6 +186,13 @@ def _log_spawn_failure(repo_root: str, script_path: str, args: Sequence[str], ex
         pass
 
 
+_LIVE_TREE_ENV_VARS = ("COORDINATOR_ENGINE_ROOT", "CLAUDE_KLABAUTER_ROOT")
+
+
+def _canonical(path: str) -> str:
+    return os.path.normcase(os.path.realpath(path))
+
+
 def _child_env(repo_root: str, env_extra: "dict | None" = None) -> dict:
     """Build the detached child's environment: `PYTHONPATH` with `repo_root` PREPENDED
     ahead of anything already there, everything else inherited from this process's own
@@ -234,9 +241,18 @@ def _child_env(repo_root: str, env_extra: "dict | None" = None) -> dict:
     at the setter -- `_hook_boot.py` lives in a repo claude-klabauter does not own, and
     this function's parent-dies/child-persists boundary is where the value
     stops being true.
+
+    Pins `_LIVE_TREE_ENV_VARS` to `repo_root` when the parent carries one naming a different
+    tree: the child runs `repo_root`'s script, so an inherited override pointing at the
+    publishing process's working tree makes every hook in the child's engine raise a
+    provenance divergence. An unset variable stays unset; unrelated variables are untouched.
     """
     env = dict(os.environ)
     env.pop("COORDINATOR_WARM_BOOT_WAIT_SECS", None)
+    for var in _LIVE_TREE_ENV_VARS:
+        inherited = env.get(var)
+        if inherited and _canonical(inherited) != _canonical(repo_root):
+            env[var] = repo_root
     existing = env.get("PYTHONPATH", "")
     env["PYTHONPATH"] = repo_root + (os.pathsep + existing if existing else "")
     if env_extra:
