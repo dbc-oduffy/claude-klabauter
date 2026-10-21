@@ -827,14 +827,16 @@ def _sign_commit_in_process(
     message: Union[str, bytes],
 ) -> Optional[str]:
     """Signed commit for ``gpg.format=ssh`` via the ssh-agent, 0 spawns; the loose
-    object is written here. None means "use the git path": not ssh format, a custom
-    ``gpg.ssh.program``, no resolvable public key, no agent, key not loaded, or refusal."""
+    object is written here. None means "use the git path": not ssh format, a
+    ``gpg.ssh.program`` other than 1Password's ``op-ssh-sign``, no resolvable public key,
+    no agent, key not loaded, or refusal."""
     from coordinator_core.git import sshsig
 
     if _env_overrides_signing_config():
         return None
     cfg = _signing_config(repo)
-    if cfg.get("gpg.format", "").lower() != "ssh" or cfg.get("gpg.ssh.program"):
+    program = cfg.get("gpg.ssh.program", "")
+    if cfg.get("gpg.format", "").lower() != "ssh" or (program and not sshsig.is_onepassword_signer(program)):
         return None
     if _CONFIG_HAS_INCLUDE in cfg:
         return None
@@ -853,8 +855,11 @@ def _sign_commit_in_process(
     budget = _signing_budget()
     # sign_via_agent joins its worker on 2 * timeout, so the per-exchange bound is half the budget.
     timeout = sshsig._DEFAULT_TIMEOUT_S if budget is None else min(sshsig._DEFAULT_TIMEOUT_S, budget / 2)
+    address = sshsig.agent_address_for(program, os.environ) if program else None
+    if program and address is None:
+        return None  # a 1Password signer on an OS with no documented socket: never SSH_AUTH_SOCK
     try:
-        armored = sshsig.sign_via_agent(head_b + b"\n" + msg, pub, timeout=timeout)
+        armored = sshsig.sign_via_agent(head_b + b"\n" + msg, pub, timeout=timeout, address=address)
     except sshsig.AgentUnavailable:
         return None
     gpgsig = "gpgsig " + armored.rstrip("\n").replace("\n", "\n ") + "\n"

@@ -1381,6 +1381,10 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
         "coordinator_core/ops/baton_close_report.py",
         ("_handler",),
     ),
+    "baton.close_commit": (
+        "coordinator_core/ops/baton_close_commit.py",
+        ("_handler",),
+    ),
     "baton.carry_forward": (
         "coordinator_core/ops/baton_carry_forward.py",
         ("_carry_forward",),

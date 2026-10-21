@@ -307,6 +307,12 @@ ALLOWLIST: dict[str, dict[str, object]] = {
         "function threads no session id to release one with",
         "confirmed": True,
     },
+    "benchmarks/commit_leg_profile.py::_commit": {
+        "reason": "ineligible: a benchmark fixture commit in a throwaway "
+        "clone -- no session holds a claim over these paths, and the "
+        "function threads no session id to release one with",
+        "confirmed": True,
+    },
     "ops/handoff_archive_transition.py::_commit_retained_supersede_flip": {
         "reason": "ineligible: threads no session id -- it commits a "
         "supersede flip on a predecessor it did not itself claim",

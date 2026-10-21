@@ -565,3 +565,130 @@ def test_absent_pipe_fails_fast():
     with pytest.raises(sshsig.AgentUnavailable, match="win32 error 2"):
         sshsig._exchange(name, [b"\x0b"], 1.0)
     assert time.perf_counter() - start < 0.05
+
+
+def _program_repo(tmp_path, keyfile, pub_text, program):
+    repo = _repo(tmp_path, keyfile, pub_text)
+    _git(repo, "config", "gpg.ssh.program", program)
+    return repo
+
+
+def _serve_as_onepassword(monkeypatch, address):
+    monkeypatch.setattr(sshsig, "onepassword_agent_address", lambda: address)
+
+
+@pytest.mark.skipif(not _HAS_UNIX, reason="no AF_UNIX in this Python")
+@pytest.mark.parametrize("program", [
+    "/Applications/1Password.app/Contents/MacOS/op-ssh-sign",
+    "C:\\Users\\x\\AppData\\Local\\1Password\\app\\8\\op-ssh-sign.exe",
+    "op-ssh-sign",
+])
+def test_onepassword_signer_signs_in_process_with_zero_spawns(tmp_path, key, monkeypatch, program):
+    keyfile, private, pub_text, blob = key
+    agent, other = FakeAgent(private, blob), FakeAgent(private, blob)
+    op_sock, env_sock = str(tmp_path / "op.sock"), str(tmp_path / "env.sock")
+    servers = [UnixServer(op_sock, agent), UnixServer(env_sock, other)]
+    try:
+        repo = _program_repo(tmp_path, keyfile, pub_text, program)
+        _serve_as_onepassword(monkeypatch, op_sock)
+        monkeypatch.setenv("SSH_AUTH_SOCK", env_sock)
+        popens, git_calls = _spawn_spies(monkeypatch)
+        outcome = commit_mod.commit_paths(repo, ["new.txt"], "add new, signed")
+        popens_snapshot, calls_snapshot = list(popens), list(git_calls)
+        assert agent.requests == [11, 13]
+        assert other.requests == []
+        _git(repo, "config", "--unset", "gpg.ssh.program")  # the stand-in program is not runnable
+        _assert_agent_commit(repo, outcome, keyfile, monkeypatch, popens_snapshot, calls_snapshot)
+    finally:
+        for server in servers:
+            server.close()
+
+
+@pytest.mark.skipif(not _HAS_UNIX, reason="no AF_UNIX in this Python")
+@pytest.mark.parametrize("program", ["/usr/local/bin/my-signer", "/opt/op-ssh-sign-wsl", "op-ssh-sign-wsl.exe"])
+def test_other_ssh_program_still_goes_to_git(tmp_path, key, monkeypatch, program):
+    keyfile, private, pub_text, blob = key
+    agent = FakeAgent(private, blob)
+    sock = str(tmp_path / "d.sock")
+    server = UnixServer(sock, agent)
+    try:
+        repo = _program_repo(tmp_path, keyfile, pub_text, program)
+        _serve_as_onepassword(monkeypatch, sock)
+        monkeypatch.setenv("SSH_AUTH_SOCK", sock)
+        monkeypatch.setattr(sshsig, "sign_via_agent", lambda *a, **k: pytest.fail("agent contacted"))
+        assert commit_mod._sign_commit_in_process(
+            repo, "0" * 40, None, "t", "t@l", "1 +0000", "m\n"
+        ) is None
+    finally:
+        server.close()
+
+
+def test_onepassword_agent_absent_falls_back_to_git(tmp_path, key, monkeypatch):
+    keyfile, _, pub_text, _ = key
+    repo = _program_repo(tmp_path, keyfile, pub_text, "op-ssh-sign")
+    _serve_as_onepassword(monkeypatch, str(tmp_path / "absent.sock"))
+    assert commit_mod._sign_commit_in_process(
+        repo, "0" * 40, None, "t", "t@l", "1 +0000", "m\n"
+    ) is None
+    assert sshsig._UNREACHABLE
+
+
+def test_onepassword_without_a_platform_socket_falls_back_to_git(tmp_path, key, monkeypatch):
+    keyfile, _, pub_text, _ = key
+    repo = _program_repo(tmp_path, keyfile, pub_text, "op-ssh-sign")
+    _serve_as_onepassword(monkeypatch, None)
+    monkeypatch.setenv("SSH_AUTH_SOCK", str(tmp_path / "ignored.sock"))
+    monkeypatch.setattr(sshsig, "_exchange", lambda *a, **k: pytest.fail("agent contacted"))
+    assert commit_mod._sign_commit_in_process(
+        repo, "0" * 40, None, "t", "t@l", "1 +0000", "m\n"
+    ) is None
+
+
+@pytest.mark.skipif(not _HAS_UNIX, reason="no AF_UNIX in this Python")
+def test_deadline_cut_timeout_reaches_the_exchange_on_the_onepassword_route(tmp_path, key, monkeypatch):
+    keyfile, private, pub_text, blob = key
+    agent = FakeAgent(private, blob)
+    sock = str(tmp_path / "e.sock")
+    server = UnixServer(sock, agent)
+    try:
+        repo = _program_repo(tmp_path, keyfile, pub_text, "op-ssh-sign")
+        _serve_as_onepassword(monkeypatch, sock)
+        monkeypatch.setattr(commit_mod, "_signing_budget", lambda: 6.0)
+        seen, real = [], sshsig._exchange
+
+        def spy(address, requests, timeout):
+            seen.append((address, timeout))
+            return real(address, requests, timeout)
+
+        monkeypatch.setattr(sshsig, "_exchange", spy)
+        assert commit_mod._sign_commit_in_process(
+            repo, "0" * 40, None, "t", "t@l", "1 +0000", "m\n"
+        ) is not None
+        assert seen and all(item == (sock, 3.0) for item in seen)
+    finally:
+        server.close()
+
+
+def test_onepassword_signer_recognition_and_platform_defaults(tmp_path, monkeypatch):
+    for yes in ("op-ssh-sign", "OP-SSH-SIGN.EXE", '"/a b/op-ssh-sign"', "C:\\x\\op-ssh-sign.exe"):
+        assert sshsig.is_onepassword_signer(yes)
+    for no in ("op-ssh-sign-wsl", "op-ssh-sign-wsl.exe", "ssh-keygen", "/x/op-ssh-sign.sh"):
+        assert not sshsig.is_onepassword_signer(no)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    home = str(tmp_path)
+    monkeypatch.setattr(sys, "platform", "darwin")
+    assert sshsig.onepassword_agent_address() == (
+        home + "/Library/Group Containers/2BUA8C4S2C.com.1password/t/agent.sock"
+    )
+    monkeypatch.setattr(sys, "platform", "linux")
+    assert sshsig.onepassword_agent_address() == home + "/.1password/agent.sock"
+    monkeypatch.setattr(sys, "platform", "win32")
+    assert sshsig.onepassword_agent_address() == sshsig.WINDOWS_PIPE
+    monkeypatch.setattr(sys, "platform", "freebsd14")
+    assert sshsig.onepassword_agent_address() is None
+    env = {"SSH_AUTH_SOCK": "/env.sock"}
+    assert sshsig.agent_address_for("/x/other", env) == "/env.sock"
+    assert sshsig.agent_address_for("", env) == "/env.sock"
+    monkeypatch.setattr(sys, "platform", "linux")
+    assert sshsig.agent_address_for("op-ssh-sign", env) == home + "/.1password/agent.sock"

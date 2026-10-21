@@ -459,6 +459,7 @@ OP_MODULE_MAP: Dict[str, str] = {
     "baton.carry_forward":                    "coordinator_core.ops.baton_carry_forward",
     "baton.carry_forward_read":               "coordinator_core.ops.baton_carry_forward",
     "baton.close_report":                     "coordinator_core.ops.baton_close_report",
+    "baton.close_commit":                     "coordinator_core.ops.baton_close_commit",
     "fanout.poll_scratch_dir":                "coordinator_core.ops.poll_scratch_dir",
     "fanout.compose":                         "coordinator_core.ops.fanout.ops",
     "fanout.census":                          "coordinator_core.ops.fanout.ops",

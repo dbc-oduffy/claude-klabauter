@@ -13,6 +13,7 @@ import hashlib
 import os
 import socket
 import struct
+import sys
 import threading
 from coordinator_core.temp_layout import managed_tempdir
 import time
@@ -107,6 +108,43 @@ def agent_address(env: "os._Environ[str] | dict") -> Optional[str]:
     if sock:
         return sock
     return WINDOWS_PIPE if os.name == "nt" else None
+
+
+_ONEPASSWORD_SIGNERS = frozenset({"op-ssh-sign", "op-ssh-sign.exe"})
+_ONEPASSWORD_DARWIN_SOCK = ("Library", "Group Containers", "2BUA8C4S2C.com.1password", "t", "agent.sock")
+_ONEPASSWORD_LINUX_SOCK = (".1password", "agent.sock")
+
+
+def is_onepassword_signer(program: str) -> bool:
+    """True when ``gpg.ssh.program`` names 1Password's ``op-ssh-sign`` (``.exe`` on Windows).
+    ``op-ssh-sign-wsl`` is not one: it relays to the Windows host, and no 1Password socket
+    exists inside the WSL guest."""
+    value = program.strip().strip('"').strip("'")
+    return value.replace("\\", "/").rsplit("/", 1)[-1].lower() in _ONEPASSWORD_SIGNERS
+
+
+def onepassword_agent_address() -> Optional[str]:
+    """1Password's own SSH agent endpoint for this OS, per its SSH-agent documentation
+    (developer.1password.com/docs/ssh/agent): macOS
+    ``~/Library/Group Containers/2BUA8C4S2C.com.1password/t/agent.sock``, Linux
+    ``~/.1password/agent.sock``, Windows the ``openssh-ssh-agent`` named pipe. None elsewhere."""
+    if sys.platform == "win32":
+        return WINDOWS_PIPE
+    home = os.path.expanduser("~")
+    if sys.platform == "darwin":
+        return os.path.join(home, *_ONEPASSWORD_DARWIN_SOCK)
+    if sys.platform.startswith("linux"):
+        return os.path.join(home, *_ONEPASSWORD_LINUX_SOCK)
+    return None
+
+
+def agent_address_for(program: str, env: "os._Environ[str] | dict") -> Optional[str]:
+    """The agent a signer ``program`` talks to. A 1Password signer answers 1Password's own
+    socket even when ``SSH_AUTH_SOCK`` names another agent, because op-ssh-sign never
+    consults it; any other program (or none) answers `agent_address`."""
+    if program and is_onepassword_signer(program):
+        return onepassword_agent_address()
+    return agent_address(env)
 
 
 _ERROR_PIPE_BUSY = 231
@@ -326,9 +364,13 @@ def sign_via_agent(
     pub_blob: bytes,
     env: "Optional[dict]" = None,
     timeout: float = _DEFAULT_TIMEOUT_S,
+    *,
+    address: Optional[str] = None,
 ) -> str:
-    """Armored SSHSIG over ``data`` (namespace ``git``, sha512) made by the agent holding ``pub_blob``."""
-    address = agent_address(os.environ if env is None else env)
+    """Armored SSHSIG over ``data`` (namespace ``git``, sha512) made by the agent holding ``pub_blob``.
+    ``address`` overrides the agent endpoint; None resolves it with `agent_address`."""
+    if address is None:
+        address = agent_address(os.environ if env is None else env)
     if address is None:
         raise AgentUnavailable("no ssh agent address (SSH_AUTH_SOCK unset)")
     if _UNREACHABLE.get(address, 0.0) > time.monotonic():

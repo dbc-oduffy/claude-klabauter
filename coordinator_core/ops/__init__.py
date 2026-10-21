@@ -616,6 +616,7 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.resolve_baton_path", 'registers "baton.resolve_path_and_repo"'),
     ("coordinator_core.ops.baton_carry_forward", 'registers "baton.carry_forward", "baton.carry_forward_read"'),
     ("coordinator_core.ops.baton_close_report", 'registers "baton.close_report"'),
+    ("coordinator_core.ops.baton_close_commit", 'registers "baton.close_commit"'),
     ("coordinator_core.ops.poll_scratch_dir", 'registers "fanout.poll_scratch_dir"'),
     (
         "coordinator_core.ops.fanout.ops",

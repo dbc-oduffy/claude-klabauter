@@ -490,6 +490,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "baton.carry_forward":                   "common_dir",
     "baton.carry_forward_read":              "common_dir",
     "baton.close_report":                    "common_dir",
+    "baton.close_commit":                    "common_dir",
     "baton.pm_turn_append":                  "common_dir",
     "baton.pm_turns":                        "common_dir",
     "session.reap":                          "common_dir",
