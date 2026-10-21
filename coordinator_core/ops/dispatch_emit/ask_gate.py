@@ -67,7 +67,22 @@ from coordinator_core.ops.dispatch_emit.sizing_fire import (
     load_sizing_effective,
     resolve_arm,
     resumable_plan,
+    set_fleet_mode_provider,
 )
+from coordinator_core.session.mode_resolution import resolve_mode
+
+
+def resolve_fleet_interaction_mode() -> Optional[str]:
+    """`resolve_mode("interaction_mode")` as `sizing-assemble` resolves it with no flag.
+
+    Installed as `sizing_fire`'s fleet-mode provider on import: this module is a sanctioned
+    fleet-record reader, so `sizing_fire` itself stays out of the reader closure. Every module that
+    reads a sizing through `load_sizing_effective` must import this one first.
+    """
+    return resolve_mode("interaction_mode", "sizing-assemble-cli", env=None)
+
+
+set_fleet_mode_provider(resolve_fleet_interaction_mode)
 
 _ACCEPT_TOUCHPOINTS = frozenset({"accept_sizing", "accept_exit_criterion"})
 _ACCEPTED_NULL_PREFIX = "`exit_criterion.accepted`"

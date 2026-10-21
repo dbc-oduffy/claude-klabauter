@@ -320,6 +320,7 @@ def _has_redirect_marker(text: str) -> bool:
 _TEE_RE = re.compile(r"\btee\b")
 _SED_INPLACE_RE = re.compile(r"\bsed\b.{0,120}?(-i\b|--in-place\b)", re.DOTALL)
 _PERL_INPLACE_RE = re.compile(r"\bperl\b.{0,120}?-i\b", re.DOTALL)
+_PERL_WRITE_OPEN_RE = re.compile(r"\bopen\s*\(\s*[\w$]+\s*,\s*['\"]\s*\+?>")
 _CP_MV_RE = re.compile(
     r"(?:^|[|&;(]|\|\||&&)\s*(?:\w+=\S*\s+)*(?:sudo\s+|command\s+|env\s+)*"
     r"\b(cp|mv|install|dd|truncate)\b"
@@ -403,6 +404,7 @@ def _has_non_redirect_write_marker(text: str) -> bool:
         _TEE_RE,
         _SED_INPLACE_RE,
         _PERL_INPLACE_RE,
+        _PERL_WRITE_OPEN_RE,
         _CP_MV_RE,
         _WRITE_MODE_OPEN_RE,
         _WRITE_METHOD_RE,

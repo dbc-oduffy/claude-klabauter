@@ -55,6 +55,27 @@ _PIPELINE = "scouts"
 _RUN_DIR_ROOT = "scratch/warp"
 
 
+def _pipeline_content_root() -> Path:
+    """Content root the scouts manifest lives under; refuses, never defaults.
+
+    Mirrors `dispatch_emit.op._pipeline_content_root` without importing `op`, which would put
+    this module in the fleet-record reader closure.
+    """
+    from coordinator_core._content_root_primitive import content_root_for
+    from coordinator_core.content_root import read_content_root
+    from coordinator_core.ops.dispatch_emit.pipeline_contract import PipelineEmitRefused
+
+    root = read_content_root()
+    if not root:
+        raise PipelineEmitRefused(["content root unresolved: read_content_root() returned empty"])
+    content_root = content_root_for(root)
+    if content_root is None:
+        raise PipelineEmitRefused(
+            [f"{Path(root).as_posix()} is neither a private clone (no coordinator/) nor a flat mirror"]
+        )
+    return Path(content_root)
+
+
 def _err(error: str) -> dict:
     return {"exit_code": 1, "error": error}
 
@@ -196,7 +217,6 @@ def _reground_sync(worktree: Path, params: dict) -> dict:
 
     from coordinator_core.ops.dispatch_emit.emission_receipt import _write_emission_receipt
     from coordinator_core.ops.dispatch_emit.emit import resolve_agent_type_host
-    from coordinator_core.ops.dispatch_emit.op import _pipeline_content_root
     from coordinator_core.ops.dispatch_emit.pipeline_compose import compose_pipeline_script
     from coordinator_core.ops.dispatch_emit.pipeline_contract import PipelineEmitRefused, PipelineInputs
     from coordinator_core.ops.dispatch_emit.pipeline_manifest import load_manifest, validate

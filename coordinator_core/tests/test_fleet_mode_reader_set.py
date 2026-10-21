@@ -322,7 +322,6 @@ EXPECTED_READERS = (
     "coordinator_core.hooks.session_start_announce_job_mode",
     "coordinator_core.hooks.sessionstart_dispatch",
     "coordinator_core.hooks.tests.test_arrival_w4_c10",
-    "coordinator_core.hooks.tests.test_arrival_w4_c14",
     "coordinator_core.hooks.tests.test_postuse_bash_commit_releases_claims",
     "coordinator_core.bash_guards.tests.guard_message_exemptions",
     "coordinator_core.benchmarks.shim_prototype_dispatcher",
@@ -448,7 +447,6 @@ EXPECTED_READERS = (
     # spawn count; they are the same class as the test modules listed above.
     "coordinator_core.bash_guards.tests.test_guard_message_size_claude_klabauter_corpus",
     "coordinator_core.bash_guards.tests.test_platform_conditioned_deny_reachability",
-    "coordinator_core.hooks.tests.test_guard_policy_stop_legs",
     "coordinator_core.hooks.tests.test_postuse_advisory_dispatch_spawn_count",
     "coordinator_core.hooks.tests.test_sessionstart_dispatch_leg_parity",
     "coordinator_core.hooks.tests.test_stop_dispatch_spawn_count",
@@ -695,6 +693,61 @@ EXPECTED_READERS = (
     "coordinator_core.ops.dispatch_emit.tests.test_terminal_commit_refuses_blob_drift",
     "coordinator_core.ops.review_mint.tests.test_review_prompts_name_sidecar_dir",
     "coordinator_core.sizing_assemble.test_design_route_flags",
+    #
+    # --- test modules added after the last sweep (measured by `reader_closure`) ---
+    #
+    # Each imports an already-allowlisted `dispatch_emit` module (`ask_gate`, `op`,
+    # `plan_route`, `cli`) or a sibling test that does: the same ONE existing edge
+    # (`ask_gate` -> `sizing_assemble` -> `mode_resolution`), counted per module.
+    # No production module is added. Restructure alternative: none per test -- a test
+    # that exercises `ask_gate`/`op` has to import it. The wider edge the ipc closure
+    # once rode (`sizing_fire` lazily importing `mode_resolution`, ~4,000 modules) is
+    # CUT, not allowlisted: the fleet mode now arrives through
+    # `sizing_fire.set_fleet_mode_provider`, installed by `dispatch_emit.cli.main`,
+    # which is already a reader. `ops.research_reground` was likewise cut (it now
+    # resolves the content root itself, not through `dispatch_emit.op`).
+    "coordinator_core.hooks.tests.test_submit_engine_ask_held_slice",
+    "coordinator_core.ops.dispatch_emit.tests.test_ask_commit_stage_reconcile_clause",
+    "coordinator_core.ops.dispatch_emit.tests.test_ask_compose_all_ruled_out_passes_ledger_check",
+    "coordinator_core.ops.dispatch_emit.tests.test_ask_compose_bound_sizing_path",
+    "coordinator_core.ops.dispatch_emit.tests.test_ask_compose_fanout_groups",
+    "coordinator_core.ops.dispatch_emit.tests.test_ask_compose_review_reverify",
+    "coordinator_core.ops.dispatch_emit.tests.test_ask_compose_routed_rows",
+    "coordinator_core.ops.dispatch_emit.tests.test_ask_compose_scout_values_assemble",
+    "coordinator_core.ops.dispatch_emit.tests.test_ask_compose_sizing_path_single_source",
+    "coordinator_core.ops.dispatch_emit.tests.test_ask_gate_echoes_bound_sizing",
+    "coordinator_core.ops.dispatch_emit.tests.test_ask_gate_s_resume_stages",
+    "coordinator_core.ops.dispatch_emit.tests.test_ask_source_help_text",
+    "coordinator_core.ops.dispatch_emit.tests.test_cli_inventory_accounting",
+    "coordinator_core.ops.dispatch_emit.tests.test_cli_research_per_group",
+    "coordinator_core.ops.dispatch_emit.tests.test_deviation_reason_end_to_end",
+    "coordinator_core.ops.dispatch_emit.tests.test_direct_sizing_inherits_interaction_mode",
+    "coordinator_core.ops.dispatch_emit.tests.test_dirty_write_set",
+    "coordinator_core.ops.dispatch_emit.tests.test_dispatch_emit_fanout_reply",
+    "coordinator_core.ops.dispatch_emit.tests.test_emit_artifact_naming_and_out",
+    "coordinator_core.ops.dispatch_emit.tests.test_emit_fanout_groups",
+    "coordinator_core.ops.dispatch_emit.tests.test_emit_inventory_accounting",
+    "coordinator_core.ops.dispatch_emit.tests.test_emit_work_class_routing",
+    "coordinator_core.ops.dispatch_emit.tests.test_fanout_exit_criterion",
+    "coordinator_core.ops.dispatch_emit.tests.test_grind_compose_fanout_meta",
+    "coordinator_core.ops.dispatch_emit.tests.test_grind_review_reverify",
+    "coordinator_core.ops.dispatch_emit.tests.test_grind_terminal_commit_reconcile_clause",
+    "coordinator_core.ops.dispatch_emit.tests.test_grind_verify_covered_flip",
+    "coordinator_core.ops.dispatch_emit.tests.test_grind_verify_dedupe_close",
+    "coordinator_core.ops.dispatch_emit.tests.test_grind_verify_mode",
+    "coordinator_core.ops.dispatch_emit.tests.test_halted_record_own_claims_landing",
+    "coordinator_core.ops.dispatch_emit.tests.test_halted_record_targeted_tests",
+    "coordinator_core.ops.dispatch_emit.tests.test_met_refire_lands_its_own_product_changes",
+    "coordinator_core.ops.dispatch_emit.tests.test_only_incomplete_row_subset",
+    "coordinator_core.ops.dispatch_emit.tests.test_op_research_per_group",
+    "coordinator_core.ops.dispatch_emit.tests.test_refire_credit_counts_landed",
+    "coordinator_core.ops.dispatch_emit.tests.test_research_spike_refusal",
+    "coordinator_core.ops.dispatch_emit.tests.test_resume_ledger_carries_ledger_ids",
+    "coordinator_core.ops.dispatch_emit.tests.test_stop_rule_refire_reemits_row_e2e",
+    "coordinator_core.ops.dispatch_emit.tests.test_stop_rule_row_not_landed",
+    "coordinator_core.ops.dispatch_emit.tests.test_stranded_run_reland",
+    "coordinator_core.ops.dispatch_emit.tests.test_terminal_commit_own_checkpoints_satisfy_since_halt",
+    "coordinator_core.ops.dispatch_emit.tests.test_unmarked_ask_source_derivation",
 )
 
 # The one allowlist addition the brief itself pre-disposed (see module

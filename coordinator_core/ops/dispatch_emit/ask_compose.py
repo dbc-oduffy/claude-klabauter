@@ -22,6 +22,7 @@ from coordinator_core.ops.dispatch_emit import emit as _emit
 from coordinator_core.ops.dispatch_emit.fanout_cost import AGENT_CALL_RE, GROUP_HEADER_TAIL, GROUP_MEMBER_RESULT_JS, FanoutCost, with_fanout
 from coordinator_core.ops.dispatch_emit.falsifier_integrity_phase import REVIEWER_AGENT_TYPE
 from coordinator_core.ops.dispatch_emit.ask_brief import EM_BRIEF_VAR, EmBrief, brief_decl_js
+from coordinator_core.ops.dispatch_emit import ask_gate as _ask_gate  # noqa: F401 -- installs the fleet-mode provider
 from coordinator_core.ops.dispatch_emit.sizing_fire import RESUME_LEDGER_HALT_BLOCKING_FIELD
 from coordinator_core.ops._workflow_contract import agent_options_phase_titles
 from coordinator_core.ops.dispatch_emit.ask_contract import (

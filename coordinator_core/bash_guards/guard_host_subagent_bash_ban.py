@@ -180,12 +180,12 @@ def _policy_is_deny(config: Path) -> bool:
     if not text.startswith("---"):
         return False
     end = text.find("\n---", 3)
-    front = text[3:end] if end != -1 else text[3:4000]
-    for line in front.splitlines():
-        stripped = line.strip()
-        if not stripped.startswith(_POLICY_KEY):
+    if end == -1:
+        return False
+    for line in text[3:end].splitlines():
+        key, sep, value = line.partition(":")
+        if not sep or key != _POLICY_KEY:
             continue
-        _, _, value = stripped.partition(":")
         return value.split("#", 1)[0].strip().strip("\"'").lower() == _DENY_VALUE
     return False
 

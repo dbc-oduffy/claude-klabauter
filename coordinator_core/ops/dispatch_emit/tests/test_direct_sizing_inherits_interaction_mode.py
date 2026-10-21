@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 import yaml
@@ -153,7 +154,55 @@ def test_fleet_mode_never_overrides_recorded_or_inherited_mode(repo, monkeypatch
 
 def test_real_fleet_resolution_yields_a_mode(repo, monkeypatch):
     monkeypatch.undo()
+    from coordinator_core.ops.dispatch_emit.ask_gate import resolve_fleet_interaction_mode
+
+    monkeypatch.setattr(sf, "_fleet_mode_provider", resolve_fleet_interaction_mode)
     assert isinstance(sf._fleet_interaction_mode(), str)
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_importing_the_op_installs_the_provider_and_it_resolves(repo, monkeypatch):
+    import subprocess, sys
+
+    code = (
+        "from coordinator_core.ops.dispatch_emit import op, sizing_fire as sf;"
+        "assert sf._fleet_mode_provider is None;"
+        "import inspect;"
+        "src = inspect.getsource(op._gate_sizing_at_emit);"
+        "assert src.index('ask_gate import gate') < src.index('load_sizing_effective(root');"
+        "from coordinator_core.ops.dispatch_emit.ask_gate import gate;"
+        "assert sf._fleet_mode_provider is not None;"
+        "print(sf._fleet_interaction_mode())"
+    )
+    out = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True, cwd=str(Path(sf.__file__).parents[3]),
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    assert out.returncode == 0, out.stderr
+    assert out.stdout.strip() in ("hands-on", "pm", "ceo")
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_ask_compose_import_installs_the_provider(repo):
+    import subprocess, sys
+
+    code = (
+        "from coordinator_core.ops.dispatch_emit import ask_compose, sizing_fire as sf;"
+        "assert sf._fleet_mode_provider is not None"
+    )
+    out = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True, cwd=str(Path(sf.__file__).parents[3]),
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    assert out.returncode == 0, out.stderr
+
+
+def test_no_provider_means_no_fleet_read(repo, monkeypatch):
+    monkeypatch.undo()
+    monkeypatch.setattr(sf, "_fleet_mode_provider", None)
+    assert sf._fleet_interaction_mode() is None
 
 
 def test_xl_exit_reader_and_roadmap_mode_see_the_inherited_mode(repo):

@@ -9,7 +9,7 @@ from __future__ import annotations
 import re
 from dataclasses import replace
 from pathlib import Path, PurePosixPath
-from typing import Mapping, Sequence
+from typing import Callable, Mapping, Sequence
 
 import yaml
 
@@ -142,12 +142,25 @@ def load_sizing_effective(repo_root: Path, sizing_rel: str) -> dict:
     return doc
 
 
-def _fleet_interaction_mode() -> str | None:
-    """`resolve_mode("interaction_mode")` as `sizing-assemble` resolves it with no flag; None if unresolvable."""
-    from coordinator_core.session.mode_resolution import resolve_mode
+_fleet_mode_provider: Callable[[], str | None] | None = None
 
+
+def set_fleet_mode_provider(provider: Callable[[], str | None] | None) -> None:
+    """Install the callable that resolves the fleet `interaction_mode`; None removes it.
+
+    The fleet record is read by the installing process (a sanctioned reader), never by this
+    module: importing `mode_resolution` here would make the engine's whole import closure a reader.
+    """
+    global _fleet_mode_provider
+    _fleet_mode_provider = provider
+
+
+def _fleet_interaction_mode() -> str | None:
+    """The installed provider's mode; None when no provider is installed or it cannot resolve."""
+    if _fleet_mode_provider is None:
+        return None
     try:
-        mode = resolve_mode("interaction_mode", "sizing-assemble-cli", env=None)
+        mode = _fleet_mode_provider()
     except Exception:
         return None
     return mode.strip() if isinstance(mode, str) and mode.strip() else None

@@ -11,14 +11,14 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.ops import _research_grounding as rg
-from coordinator_core.ops.dispatch_emit import op as op_module
+from coordinator_core.ops import research_reground as rr
 from coordinator_core.ops.research_close import _handler as close_handler
 from coordinator_core.ops.research_reground import _handler
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 _NOWIN = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-_FIXTURE = Path(op_module.__file__).parent / "tests" / "fixtures" / "pipeline_research"
+_FIXTURE = Path(rr.__file__).parent / "dispatch_emit" / "tests" / "fixtures" / "pipeline_research"
 _STAGE = """  - id: grounding
     phase: Ground
     agent_type: general-purpose
@@ -60,7 +60,7 @@ def repo(tmp_path: Path, monkeypatch) -> Path:
     (pdir / "grounding-template.md").write_text(
         "Your brief is the file `{{brief}}`. Ground the digests under `{{scratch_dir}}`.\n", encoding="utf-8"
     )
-    monkeypatch.setattr(op_module, "_pipeline_content_root", lambda: root)
+    monkeypatch.setattr(rr, "_pipeline_content_root", lambda: root)
     monkeypatch.setenv("COORDINATOR_SESSION_ID", "sess-reground")
     return r
 
@@ -164,7 +164,7 @@ def test_refusals_write_nothing(repo, scratch, tmp_path):
 
 
 def test_manifest_without_grounding_stage_refuses_naming_manifest(repo, scratch, monkeypatch):
-    monkeypatch.setattr(op_module, "_pipeline_content_root", lambda: _FIXTURE)
+    monkeypatch.setattr(rr, "_pipeline_content_root", lambda: _FIXTURE)
     before = _snapshot(repo)
     out = _reground(repo)
     assert out["exit_code"] == 1 and "grounding" in out["error"]
