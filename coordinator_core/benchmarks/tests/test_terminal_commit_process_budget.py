@@ -51,6 +51,7 @@ _GRIND_DRIVER = "coordinator_core.benchmarks.grind_terminal_commit_full_path"
 #                                  commit leave the landing path.
 # product landings (plan, mise, ask, ask real shape): hash-object fallback + close launch.
 # Ceilings are the worst-case allowance; the fixtures pin no path, so the typical net is 0 git spawns.
+# Trap: a regression adding spawns up to a ceiling still passes; tighten to measured nets.
 PROCS_CEILING_PLAN = 2.0
 PROCS_CEILING_MISE = 2.0
 PROCS_CEILING_ASK = 2.0

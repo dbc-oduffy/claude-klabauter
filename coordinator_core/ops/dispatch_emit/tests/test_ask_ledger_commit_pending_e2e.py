@@ -150,7 +150,7 @@ def test_a_commit_only_not_met_item_reaches_docs_and_commit():
 def test_the_verdict_handed_to_the_commit_carries_remaining():
     item = _item("R1", "not_met", remaining=["commit"])
     (out,) = _run([{"verdict": "fail", "items": [item], "conflicts": []}], in_run_commit=False)
-    assert out["next_action"]["op"] == "dispatch.land_run"
+    assert out["next_action"]["op"] == "dispatch.terminal_commit"
     handed = out["next_action"]["params"]["ledger_verdict"]["items"]
     assert [i["id"] for i in handed] == ["R1"]
     assert handed[0].get("remaining") == ["commit"]

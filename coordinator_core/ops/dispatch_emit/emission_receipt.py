@@ -16,7 +16,6 @@ from pathlib import Path
 from typing import Optional
 
 from coordinator_core.frontmatter.primitives import canonical_body_sha
-from coordinator_core.ops.dispatch_emit.emit import NoReviewStageError
 from coordinator_core.ops.review_mint import op as review_mint_op
 from coordinator_core.ops.review_mint.roster import RosterFragmentError, require_emit_route
 from coordinator_core.session.core import resolve_session_id
@@ -30,6 +29,8 @@ def _load_review_inputs(route: str) -> tuple:
     """Return ``(fragment, stage_schemas)`` for ``route``; raise
     ``NoReviewStageError`` when either input is unloadable or the fragment's
     ``required_for_emit`` omits the route."""
+    from coordinator_core.ops.dispatch_emit.emit import NoReviewStageError
+
     try:
         fragment = review_mint_op.load_fragment()
     except (FileNotFoundError, OSError, ValueError) as exc:

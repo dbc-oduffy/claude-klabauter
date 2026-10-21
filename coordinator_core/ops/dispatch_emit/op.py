@@ -257,11 +257,12 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     ASK_TEXT_FILE,
     RELAYED_ASK_FILE,
     RUN_DIR_ROOT,
+    STOP_AFTER_KEY,
+    STOP_AFTER_PLAN,
     record_dir,
 )
 from coordinator_core.ops.dispatch_emit import route_preference as _route_pref
 from coordinator_core.ops.dispatch_emit.ask_fanout_contract import slice_ask_source
-from coordinator_core.ops.dispatch_emit.run_id_occupancy import spent_run_reason
 from coordinator_core.ops.dispatch_emit.run_token import normalize_sizing_rel
 from coordinator_core.ops.dispatch_emit.cloud_spawn_brief import build_cloud_spawn
 from coordinator_core.ops.dispatch_emit.delivery_credit import rows_backed_before_base
@@ -480,25 +481,6 @@ def _repo_root_for_plan(plan_path: str) -> Optional[Path]:
         if (candidate / ".git").exists():
             return candidate
     return None
-
-
-class SpentRunOverwriteError(ValueError):
-    """Raised when an emit would rewrite a script or spine whose run id has landed or run."""
-
-
-def _refuse_spent_overwrite(target: Path, new_bytes: bytes, script_path: Path) -> None:
-    """Refuse to change `target` when `script_path`'s run id is spent (landed, or a
-    land/resume sibling exists). Identical bytes pass: nothing would change. `force` does
-    not bypass this refusal: it is checked before the foreign-emission guard."""
-    if not target.is_file():
-        return
-    reason = spent_run_reason(script_path)
-    if reason is None or target.read_bytes() == new_bytes:
-        return
-    raise SpentRunOverwriteError(
-        f"refusing to overwrite {target.name}: its run id is spent ({reason}). "
-        "Emit a new tranche, or give a fresh output path."
-    )
 
 
 def _refuse_foreign_emission(
@@ -1583,7 +1565,6 @@ def _emit_script_file(
     findings = [*run_checks(script), *plan_findings]
     # newline="" suppresses the platform line-ending translation: a CRLF-carrying .mjs is
     # rejected by the Workflow surface that fires it.
-    _refuse_spent_overwrite(path, script.encode("utf-8"), path)
     if not params.get("force"):
         _refuse_foreign_emission(path, script, session_id, _repo_root_for_plan(str(path)))
     before_write()
@@ -1994,7 +1975,18 @@ def _dispatch_emit(
                         "reason": blocker,
                     }
         prompt = ask if isinstance(ask, str) and ask else None
+        sizing_stop = (
+            intake_doc["em_analysis"].get(STOP_AFTER_KEY)
+            if intake_doc is not None and isinstance(intake_doc.get("em_analysis"), dict)
+            else None
+        )
+        effective_stop = params.get(STOP_AFTER_KEY) or sizing_stop
+        if effective_stop not in (None, STOP_AFTER_PLAN):
+            raise ValueError(
+                f"dispatch.emit {STOP_AFTER_KEY} takes only {STOP_AFTER_PLAN!r}, got {effective_stop!r}"
+            )
         ask_ctx = {
+            "stop_after": effective_stop,
             "root": ask_root, "prompt": prompt, "sizing_rel": sizing_rel, "run_id": run_id,
             "reserved_parent": reserved_parent, "rebound": rebound, "output_redirect": output_redirect,
             "inherited_base": inherited_base, "resumes_ask": resumes_ask,
@@ -2150,11 +2142,6 @@ def _dispatch_emit(
                     f"minted spine path escapes its inventory record's directory: "
                     f"{spine_path!r} not under {Path(inventory_path).resolve().parent!r}"
                 )
-            _refuse_spent_overwrite(
-                guarded_spine_path,
-                spine_text.encode("utf-8"),
-                guarded_spine_path.with_name(guarded_spine_path.name.removesuffix(".md") + ".workflow.mjs"),
-            )
             guarded_spine_path.write_text(spine_text, encoding="utf-8", newline="\n")
             plan_path = str(guarded_spine_path)
             # A review-only run executes nothing: no landed-flip writes to the
@@ -2367,7 +2354,7 @@ def _dispatch_emit(
             accept_pending=bool(ask_ctx.get("accept_pending")),
             preamble=preamble,
             em_brief=ask_ctx.get("em_brief"),
-            stop_after=params.get("stop_after"),
+            stop_after=ask_ctx.get("stop_after"),
             in_run_commit=ask_run_token is not None,
             ask_source=ask_ctx["ask_source"],
             route_preference=ask_ctx["route_preference"],

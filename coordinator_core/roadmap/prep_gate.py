@@ -473,7 +473,9 @@ def _spine(plan_path: Path, text: str, repo_root: Optional[Path] = None) -> Dict
     except SpineReadError as exc:
         return _defect(type(exc).__name__, str(exc).strip().splitlines()[0][:300])
     # Zero rows with nothing owed is a plan whose work is done, held or voided: it certifies.
-    # Zero rows with rows owed by the EM is what `ask.stage` refuses at fire time.
+    # Zero rows with rows owed by the EM is what `ask.stage` refuses at fire time. Roots held
+    # only by an unlanded `depends_on_plan`, and EM rows behind them, are dispatchable-later:
+    # `em_owned_rows` drops an owed row whose own predecessors are still blocked.
     owed = em_owned_rows(excluded)
     if not rows and owed:
         return _defect(

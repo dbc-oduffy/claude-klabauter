@@ -50,7 +50,7 @@ def _approved(**kw) -> str:
     return stamp_approved_body_sha(_plan(**kw))
 
 
-def test_terminal_commit_flip_keeps_the_stamp_valid():
+def test_land_run_flip_keeps_the_stamp_valid():
     from coordinator_core.ops.dispatch_emit.plan_row_coding import flip_rows_coded
 
     approved = _approved()
@@ -61,7 +61,7 @@ def test_terminal_commit_flip_keeps_the_stamp_valid():
     assert check_approved_body(flipped)[0] == APPROVED_BODY_OK
 
 
-def test_terminal_commit_noop_detail_keeps_the_stamp_valid():
+def test_land_run_noop_detail_keeps_the_stamp_valid():
     from coordinator_core.ops.dispatch_emit.plan_row_coding import NOOP_DETAIL, flip_rows_coded
 
     approved = _approved()
@@ -116,11 +116,11 @@ def test_legacy_stamp_over_canonical_body_sha_is_accepted():
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_terminal_commit_then_only_incomplete_emit_is_not_refused(tmp_path):
-    """Real terminal_commit on an incomplete approved plan, then the emit gate."""
+def test_land_run_then_only_incomplete_emit_is_not_refused(tmp_path, monkeypatch):
+    """Real dispatch.land_run on an incomplete approved plan, then the emit gate."""
     import subprocess
 
-    from coordinator_core.ops.dispatch_emit import terminal_commit
+    from coordinator_core.ops.dispatch_emit import land_run
     from coordinator_core.ops.dispatch_emit.commit_request import ChunkCommit, CommitRequest, render_marker
     from coordinator_core.ops.dispatch_emit.op import _refuse_unapproved_body
     from coordinator_core.win_portability import no_console_creationflags
@@ -147,7 +147,8 @@ def test_terminal_commit_then_only_incomplete_emit_is_not_refused(tmp_path):
     )
     (tmp_path / "run.mjs").write_text("// s\n" + render_marker(request) + "\n", encoding="utf-8")
 
-    out = terminal_commit._handler(
+    monkeypatch.setattr(land_run, "_launch_close_job", lambda *a, **k: True)
+    out = land_run._handler(
         {
             "script_path": "run.mjs",
             "incomplete_chunks": ["C5"],
@@ -156,7 +157,12 @@ def test_terminal_commit_then_only_incomplete_emit_is_not_refused(tmp_path):
         repo_root=tmp_path / ".git",
     )
 
-    assert out["rows_coded"] == {"docs/plan.md": ["C3"]}
+    assert not out.get("error") and not out.get("refused"), out
+    from coordinator_core.ops.ceremony import close_background
+    from coordinator_core.ops.dispatch_emit.run_close import close_job_path
+
+    close_background._handler({"run_id": out["close"]["run_id"]}, repo_root=tmp_path / ".git")
+    assert (tmp_path / close_job_path(out["close"]["run_id"])).is_file()
     after = plan.read_text(encoding="utf-8")
     assert "disposition_ref" in after
     _refuse_unapproved_body(str(plan))  # raises ValueError on "plan body changed since approval"

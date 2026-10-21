@@ -196,7 +196,8 @@ def test_stop_after_plan_composes_no_stage_execute_or_review():
     script = _compose(stop_after=STOP_AFTER_PLAN)
     for absent in ("phase('stage')", "phase('Execute')", "phase('Review wave')", "phase('Verify')", "_runRow(r.id", OP_NAME):
         assert absent not in script, absent
-    assert "planned: [_planRel]" in script and "route: 'dispatch'" in script
+    assert "planned: [_planRel]" not in script and "route: 'dispatch'" in script
+    assert "parked after plan: stop_after=plan" in script and "stop_after=plan but no plan landed" in script
     assert "phase('plan')" in script and "phase('size')" in script and "phase('gate')" in script
     assert script.rstrip().splitlines()[-1].startswith("  return _halted ? { halted_by: _halted")
     assert script.count("\n  return _halted ?") == 1

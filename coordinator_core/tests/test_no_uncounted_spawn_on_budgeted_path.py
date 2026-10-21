@@ -331,6 +331,12 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
         "coordinator_core/ops/plan_premise_carry.py",
         ("_record_handler",),
     ),
+    # Spawn-free dry run, entered at `_candidates`: `_handler`'s apply leg reaches commit_v2's
+    # git spawns, pinned by test_plan_backfill_warp_executing.py (2026-10-21).
+    "plan.backfill_warp_executing": (
+        "coordinator_core/ops/plan_backfill_warp_executing.py",
+        ("_candidates",),
+    ),
     "dispatch.release_run_token": (
         "coordinator_core/ops/dispatch_emit/release_run_token.py",
         ("_handler",),

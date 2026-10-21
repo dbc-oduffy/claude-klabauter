@@ -6551,27 +6551,27 @@ _GIT_COMMIT_AGENT_LEG_MESSAGES = {
         "each file relative to the repo root; path scope was never checked."
     ),
     _LEG_RUN_TOKEN_PARAMS: (
-        "BLOCKED: terminal_commit params not admitted -- the command is not "
+        "BLOCKED: land_run (terminal_commit) params not admitted -- the command is not "
         "one bare params-file segment in a resolvable repo. Report it; do not edit the command."
     ),
     _LEG_PARAMS_NO_BLOCK: (
-        "BLOCKED: terminal_commit params not admitted -- the spawn prompt is "
+        "BLOCKED: land_run (terminal_commit) params not admitted -- the spawn prompt is "
         "unreadable or holds no params block. Report it; do not edit the command."
     ),
     _LEG_PARAMS_PATH: (
-        "BLOCKED: terminal_commit params not admitted -- the typed path is not "
+        "BLOCKED: land_run (terminal_commit) params not admitted -- the typed path is not "
         "the run's own params file. Report it; do not edit the command."
     ),
     _LEG_PARAMS_TOKEN: (
-        "BLOCKED: terminal_commit params not admitted -- the run token is "
+        "BLOCKED: land_run (terminal_commit) params not admitted -- the run token is "
         "spent, expired or not the one minted. Report it; do not edit the command."
     ),
     _LEG_PARAMS_WRITE: (
-        "BLOCKED: terminal_commit params not admitted -- the params file could "
+        "BLOCKED: land_run (terminal_commit) params not admitted -- the params file could "
         "not be written. Report it; do not edit the command."
     ),
     _LEG_PARAMS_FILE_WRITTEN_BY_COMMAND: (
-        "BLOCKED: terminal_commit command writes the run's params file -- the "
+        "BLOCKED: land_run (terminal_commit) command writes the run's params file -- the "
         "hook writes it. Run the one coordinator-invoke command alone."
     ),
     _LEG_UNRESOLVABLE_GIT_ROOT: (
@@ -6843,7 +6843,7 @@ def _deny_reason(
     )
 
 
-#: The ops a run-scoped token admits, through the on-PATH door only (the legacy name until C20).
+#: The ops a run-scoped token admits, through the on-PATH door only; `dispatch.terminal_commit` stays while the op exists.
 _RUN_TOKEN_OPS = ("dispatch.terminal_commit", "dispatch.land_run")
 
 
@@ -6888,7 +6888,7 @@ def _prompt_sourced_params_admit(
 
 
 def _is_terminal_commit_params_file_cmd(cmd_for_scan: str) -> bool:
-    """True for one bare `coordinator-invoke dispatch.terminal_commit --params-file <path>` segment."""
+    """True for one bare `coordinator-invoke dispatch.terminal_commit|land_run --params-file <path>` segment."""
     tokens = _tokenize_full_command(cmd_for_scan)
     if tokens is None:
         return False

@@ -17,9 +17,9 @@ argv is neither counted nor denied. A ``-c`` importing
 only stdlib/third-party and an in-repo ``.py`` tool are not counted. Package
 detection is one ``os.scandir`` of the repo root, memoized per root for the
 process; a package added mid-process is not seen. The Write/Edit half (a ``.py`` file under
-``scratch/`` whose written text names a test runner and imports a repo package; a glob
-helper is not one) lives in ``hooks.nudge_em_code_dispatch.op`` and shares this
-module's ``after_executor_deny``.
+``scratch/``) lives in ``hooks.nudge_em_code_dispatch.op`` and shares this
+module's ``after_executor_deny``; it denies only when the written text itself names a test
+runner or the measure harness and the file imports repo code (``written_text_verifies``).
 
 Executor signal: only for a payload carrying its own ``session_id`` (the host-pid fallback
 id is shared by every session on a warm engine and never vouches for an executor); a ``coordinator:executor`` row in the session's
@@ -155,6 +155,7 @@ def _code_imports_repo(code: str, repo_root: str) -> bool:
 
 
 _RUNNER_RE = re.compile(r"\b(?:pytest|unittest|doctest)\b")
+_MEASURE_RE = re.compile(r"\bbenchmarks\.measure\b")
 
 
 def _code_verifies(code: str, repo_root: str) -> bool:
@@ -466,29 +467,44 @@ def _gate(payload: dict, subject: str):
     return session_id, repo_root, "deny"
 
 
-def written_code(tool_input: dict) -> str:
-    """The text a Write/Edit/MultiEdit puts on disk: ``content``, ``new_string``, each edit's ``new_string``."""
-    parts = [tool_input.get("content"), tool_input.get("new_string")]
+def _written_texts(tool_input: object) -> List[str]:
+    """The text a Write (``content``), Edit (``new_string``) or MultiEdit (``edits[].new_string``) adds."""
+    if not isinstance(tool_input, dict):
+        return []
+    texts = [tool_input.get("content"), tool_input.get("new_string")]
     edits = tool_input.get("edits")
     if isinstance(edits, list):
-        parts.extend(e.get("new_string") for e in edits if isinstance(e, dict))
-    return "\n".join(p for p in parts if isinstance(p, str))
+        texts.extend(e.get("new_string") for e in edits if isinstance(e, dict))
+    return [t for t in texts if isinstance(t, str)]
 
 
-def write_verifies(payload: dict, code: str) -> bool:
-    """A scratch ``.py`` write whose text names a test runner and imports a repo package."""
-    from coordinator_core.hooks import nudge_unrouted_sizing as sizing
-
-    repo_root = sizing._repo_root({"cwd": payload.get("cwd") or os.getcwd()})
-    return bool(repo_root) and _code_verifies(code, repo_root)
+def written_text_verifies(payload: dict, file_path: str, repo_root: str) -> bool:
+    """True iff the text this Write/Edit adds names a test runner or the measure harness and the
+    file (the added text plus, for an Edit, the file's existing source) imports repo code.
+    A write whose text carries no such call is configuration, not a verification run."""
+    tool_input = payload.get("tool_input")
+    added = "\n".join(_written_texts(tool_input))
+    if _RUNNER_RE.search(added) is None and _MEASURE_RE.search(added) is None:
+        return False
+    source = added
+    if isinstance(tool_input, dict) and "content" not in tool_input:
+        try:
+            with open(file_path, "r", encoding="utf-8", errors="replace") as fh:
+                source += "\n" + fh.read(_PROBE_READ_CAP)
+        except OSError:
+            pass
+    return _code_imports_repo(source, repo_root)
 
 
 def after_executor_deny(payload: dict, subject: str) -> Optional[dict]:
-    """Deny envelope when the EM has an executor behind it and no escape; else None."""
+    """Deny envelope when the EM has an executor behind it, the written text runs a test
+    runner or measurement against repo code, and no escape; else None."""
     from coordinator_core.hooks import dispatch_escape as nd
 
-    session_id, _repo_root, verdict = _gate(payload, subject)
-    if verdict != "deny" or nd._take_escape(payload, session_id, subject, GUARD_NAME):
+    session_id, repo_root, verdict = _gate(payload, subject)
+    if verdict != "deny" or not written_text_verifies(payload, subject, repo_root):
+        return None
+    if nd._take_escape(payload, session_id, subject, GUARD_NAME):
         return None
     from coordinator_core.session.dispatch_nudge_sentinel import sentinel_path
 

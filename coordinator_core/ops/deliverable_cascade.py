@@ -1654,6 +1654,9 @@ def cascade_run(
     `plan_path` is the plan the run implemented (the sizing `plan` FK);
     `ship_sha` is the handoff `ship-commit` fallback. Leg (b), the live-successor
     check, still reads the handoff corpus for a handoff-kind record.
+
+    The candidate loop restates `cascade_terminal_sync`'s; the only guard against drift between the two
+    is `test_cascade_run_outcome_equals_cascade_terminal_sync`.
     """
     worktree_root = Path(worktree_root)
     common_dir = Path(repo_root) if repo_root is not None else worktree_root / ".git"
@@ -1673,7 +1676,8 @@ def cascade_run(
         norm = rel.replace("\\", "/")
         kind = next((k for prefix, k in _RUN_KINDS if norm.startswith(prefix)), None)
         path = worktree_root / norm
-        if kind is None or path.suffix != kind.suffix:
+        kind_prefix = next((pre for pre, k in _RUN_KINDS if k is kind), "")
+        if kind is None or path.suffix != kind.suffix or contained_path(path, [worktree_root / kind_prefix]) is None:
             unreadable.append({"path": norm, "reason": "not a sizing or handoff record"})
             continue
         try:

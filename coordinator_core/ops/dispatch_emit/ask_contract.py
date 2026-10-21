@@ -37,7 +37,7 @@ from coordinator_core.ops import _research_contract as _rc
 from coordinator_core.ops import requirement_register as rr
 from coordinator_core.ops.dispatch_emit.design_route import DESIGN_ROUTE_KEY, ROUTES as DESIGN_ROUTES
 from coordinator_core.ops._path_guard import contained_path, safe_id
-from coordinator_core.ops.dispatch_emit.route_preference import ROUTE_PREFERENCE_FILE, ROUTE_VERDICT_KEY
+from coordinator_core.ops.dispatch_emit.route_preference import ROUTE_PREFERENCE_FILE
 from coordinator_core.session.record_homes import home_dir
 
 ASK_PHASES = ("size", "gate", "accept", "plan", "stage", "execute", "review")
@@ -69,6 +69,27 @@ HALT_DESIGN_REVIEW = "design-review"
 #: Halt kind of a run revised to stop after a phase: a clean terminal that commits the run artifacts.
 HALT_PARKED = "parked"
 STOP_AFTER_PLAN = "plan"
+#: The one name for a stop-after phase: the engine-ask `args` key, the `asks[i]` key, the emit param
+#: and the slice sizing's `em_analysis` key. Only `STOP_AFTER_PLAN` is a legal value.
+STOP_AFTER_KEY = "stop_after"
+_PARKED_NEXT_ACTION_HEAD = "Run /mise-prep on "
+_PARKED_NEXT_ACTION_TAIL = ", then /mise-en-place."
+_PARKED_NEXT_ACTION_NO_PLAN = "the run's plan"
+
+
+def parked_next_action(plan_rel: str | None) -> str:
+    """The `next_action` of a parked halt: what the EM runs on the landed plan."""
+    return f"{_PARKED_NEXT_ACTION_HEAD}{plan_rel or _PARKED_NEXT_ACTION_NO_PLAN}{_PARKED_NEXT_ACTION_TAIL}"
+
+
+def parked_next_action_js(plan_expr: str) -> str:
+    """A JS expression rendering `parked_next_action` over the runtime variable `plan_expr`."""
+    return (
+        f"({plan_expr} ? {json.dumps(_PARKED_NEXT_ACTION_HEAD)} + {plan_expr} + {json.dumps(_PARKED_NEXT_ACTION_TAIL)}"
+        f" : {json.dumps(_PARKED_NEXT_ACTION_HEAD + _PARKED_NEXT_ACTION_NO_PLAN + _PARKED_NEXT_ACTION_TAIL)})"
+    )
+
+
 #: Record-dir file holding a run's revised stop-after phase.
 STOP_AFTER_FILE = "stop-after.json"
 #: `dispatch.ask_stage` reply key marking a parked run (no manifest handle follows).
@@ -137,7 +158,6 @@ ASK_SCOUT_SCHEMA = {
         "spine_plan": {"type": ["string", "null"]},
         "route": _STR,
         "route_override_reason": {"type": ["string", "null"]},
-        ROUTE_VERDICT_KEY: {"type": ["object", "null"]},
         "design_route": {"type": "string", "enum": list(DESIGN_ROUTES)},
         "manifest": {"type": ["object", "null"]},
         "falsifier": {"type": ["object", "null"]},

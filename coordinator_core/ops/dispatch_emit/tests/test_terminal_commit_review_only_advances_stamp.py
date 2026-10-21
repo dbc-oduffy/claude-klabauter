@@ -61,10 +61,12 @@ def _review(base: str, files: int) -> dict:
     }
 
 
-def _land(repo: Path, request: CommitRequest, inline_review: dict, name: str, session: str = _SESSION) -> dict:
+def _land(
+    repo: Path, request: CommitRequest, inline_review: dict, name: str, session: str = _SESSION, **extra
+) -> dict:
     (repo / name).write_text(f"// emitted\n{render_marker(request)}\n", encoding="utf-8")
     return terminal_commit._handler(
-        {"script_path": name, "incomplete_chunks": [], "session_id": session, "inline_review": inline_review},
+        {"script_path": name, "incomplete_chunks": [], "session_id": session, "inline_review": inline_review, **extra},
         repo_root=repo / ".git",
     )
 
@@ -101,7 +103,7 @@ def test_a_review_only_close_moves_the_stamp_to_the_reviewed_head(repo):
     assert "later commit touches a declared write" in review_stamp.check(repo / _REL, repo, supersession=True)
 
     request = CommitRequest(chunks=(chunk,), plan_path=_REL, review_only=True, review_open_rows=(), review_run_base=old)
-    out = _land(repo, request, _review(old, 0), "run2.mjs", session="99999999-2222-3333-4444-555555555555")
+    out = _land(repo, request, _review(old, 0), "run2.mjs", session="99999999-2222-3333-4444-555555555555", allow_empty=True)
 
     stamp = _stamp(repo)
     assert out["committed"] is True, out

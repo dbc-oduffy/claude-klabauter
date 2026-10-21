@@ -7,7 +7,7 @@ import pytest
 from coordinator_core.ops._workflow_contract import Severity, run_checks
 from coordinator_core.ops.dispatch_emit import ask_compose
 from coordinator_core.ops.dispatch_emit.ask_compose import AskComposeRefused, compose_ask_script
-from coordinator_core.ops.dispatch_emit.land_run_contract import OP_NAME
+from coordinator_core.ops.dispatch_emit.land_run_contract import WAKE_DIGEST_COMMIT_OP
 from coordinator_core.ops.dispatch_emit.ask_contract import (
     ASK_MANIFEST_MARKER,
     ASK_PHASES,
@@ -188,7 +188,7 @@ def test_return_carries_the_plan_routes_terminal_commit_next_action():
     script = _compose(script_path="scratch/warp/ask.workflow.mjs", session_id="d7b9dc1a-1455-43e8-922f-87e734b5634e")
     ret = script[script.index("  _nextAction = "):]
     assert "_closeable ? { kind: (" in ret
-    assert f"? null : '{OP_NAME}'), params: " in ret
+    assert f"? null : '{WAKE_DIGEST_COMMIT_OP}'), params: " in ret
     assert "next_action: _nextAction" in ret[ret.rindex("  return { arm:"):]
     assert 'script_path: "scratch/warp/ask.workflow.mjs"' in ret
     assert 'session_id: "d7b9dc1a-1455-43e8-922f-87e734b5634e"' in ret
@@ -406,7 +406,7 @@ def _presized(monkeypatch, arm="xs", **over):
 
 def test_the_scout_runs_ask_stage_as_its_last_act_for_xs_only():
     scout = _scout_prompt(_compose())
-    assert OP_ASK_STAGE in scout and "plan_path" not in scout.split(OP_ASK_STAGE, 1)[1]
+    assert OP_ASK_STAGE in scout and "plan_path" not in scout.split(OP_ASK_STAGE, 1)[1].split('"properties"', 1)[0]
     assert scout.index(OP_ASK_GATE) < scout.index(OP_ASK_STAGE)
     assert scout.rindex(OP_ASK_STAGE) > scout.index("sizing-assemble")
     assert "stage_reply" in ask_compose._ASK_SCOUT_STAGED_SCHEMA["properties"]

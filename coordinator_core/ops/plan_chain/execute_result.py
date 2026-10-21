@@ -13,7 +13,7 @@ from coordinator_core.ops.plan_chain.contract import Halt, WorkflowResult, halt
 
 # ask_compose.HALT_USAGE_LIMIT: the execute script's _haltOnUsageLimit writes this token.
 USAGE_LIMIT_MARKER = "usage_limit"
-_TERMINAL_COMMIT_OP = land_run_contract.OP_NAME
+_TERMINAL_COMMIT_OP = land_run_contract.WAKE_DIGEST_COMMIT_OP
 
 
 def read_execute_result(result: WorkflowResult) -> dict[str, Any] | Halt:
@@ -49,7 +49,7 @@ def read_execute_result(result: WorkflowResult) -> dict[str, Any] | Halt:
             return params
     return halt(
         "child-no-digest",
-        "execute digest carries no dispatch.land_run next_action",
+        "execute digest carries no dispatch.terminal_commit next_action",
         running_stage="execute",
     )
 

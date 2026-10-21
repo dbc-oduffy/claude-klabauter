@@ -10,6 +10,9 @@ from typing import Final
 #: The literal ``land_run`` registers under; ``@register_op`` spells it out and a test pins the two equal.
 OP_NAME: Final = "dispatch.land_run"
 
+# Switched by C12 after DoE phase 1 widens the digest op enum.
+WAKE_DIGEST_COMMIT_OP: Final = "dispatch.terminal_commit"
+
 #: ``refused`` value of a reply to a call whose params select more than one record mode.
 REFUSED_MODE_AMBIGUOUS: Final = "mode-ambiguous"
 
@@ -21,8 +24,8 @@ MODE_MODULES: Final = {
     "fanout": "coordinator_core.ops.dispatch_emit.land_run_fanout",
 }
 
-#: Every key a caller may read from a reply. A key no caller reads is not here; a key a caller reads
-#: is never dropped.
+#: Keys a caller reads from a landed reply. Refusal replies add their own detail keys (``ledger_failures``,
+#: ``blob_drift``, ``integrity``, ``nothing_to_commit`` ...) that are not listed; no test bounds a reply to this set.
 REPLY_KEYS: Final = frozenset({
     "committed",
     "sha",
@@ -87,16 +90,16 @@ def _is_grind(params: dict) -> bool:
 def mode_of(params: object) -> str:
     """The landing mode of a call: ``fanout``, ``halted``, ``grind``, else ``product``.
 
-    Raises ``ModeAmbiguous`` when ``halted_by`` is carried with ``fanout`` or with ``grind``."""
+    Raises ``ModeAmbiguous`` when params select more than one of ``halted_by``, ``fanout`` and ``grind``."""
     if not isinstance(params, dict):
         return "product"
-    halted = _is_halted(params)
-    if halted and (_is_fanout(params) or _is_grind(params)):
+    halted, fanout, grind = _is_halted(params), _is_fanout(params), _is_grind(params)
+    if halted + fanout + grind > 1:
         raise ModeAmbiguous("params carry more than one of halted_by, fanout and grind")
-    if _is_fanout(params):
+    if fanout:
         return "fanout"
     if halted:
         return "halted"
-    if _is_grind(params):
+    if grind:
         return "grind"
     return "product"

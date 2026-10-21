@@ -208,6 +208,19 @@ def test_page_reply_keys_and_schema(sidecar):
         jsonschema.validate({k: v for k, v in reply.items() if k != "chunk_sha256"}, rs.PAGE_REPLY_SCHEMA)
 
 
+def test_stage_reply_schema_carries_the_parked_reply():
+    from coordinator_core.ops.dispatch_emit import ask_contract as ac
+
+    assert rs.STAGE_REPLY_SCHEMA["properties"]["parked"]["const"] == ac.STOP_AFTER_PLAN
+    assert ac.PARKED_REPLY_KEY in rs.STAGE_REPLY_SCHEMA["properties"]
+    for path in ("docs/plans/x.md", None):
+        jsonschema.validate({ac.PARKED_REPLY_KEY: ac.STOP_AFTER_PLAN, "plan_path": path}, rs.STAGE_REPLY_SCHEMA)
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate({"parked": "size", "plan_path": None}, rs.STAGE_REPLY_SCHEMA)
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate({"parked": "plan", "plan_path": 3}, rs.STAGE_REPLY_SCHEMA)
+
+
 def test_stage_reply_schema_accepts_both_shapes_and_refuses_manifest_key(sidecar):
     _, _, handle = sidecar
     jsonschema.validate({"manifest_handle": handle}, rs.STAGE_REPLY_SCHEMA)

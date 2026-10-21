@@ -16,7 +16,7 @@ import pytest
 from coordinator_core import sizing_assemble
 from coordinator_core.ops.dispatch_emit import ask_gate
 from coordinator_core.ops.dispatch_emit.ask_compose import compose_ask_script
-from coordinator_core.ops.dispatch_emit.ask_contract import NO_PLAN_HAND_OFF_FLAG, PM_EXIT_QUESTION_KEY, STOP_AFTER_PLAN
+from coordinator_core.ops.dispatch_emit.ask_contract import NO_PLAN_HAND_OFF_FLAG, PM_EXIT_QUESTION_KEY, STOP_AFTER_PLAN, parked_next_action
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
 from coordinator_core.win_portability import no_console_creationflags
 
@@ -170,8 +170,10 @@ def test_m_plan_route_runs_scout_through_plan_in_one_script(tmp_path, monkeypatc
     scout, decision, verdict, _rel = _fixture(tmp_path, monkeypatch, capsys, "M", "ceo", [])
     assert verdict["halt"] is None, verdict
     out = _run_script(_script(), _stub(scout, decision, verdict))
-    assert out["result"]["planned"] == [PLAN_PATH]
-    assert "halted_by" not in out["result"]
+    halted = out["result"]["halted_by"]
+    assert halted["halted"] == "parked" and halted["plan"] == PLAN_PATH
+    assert halted["next_action"] == parked_next_action(PLAN_PATH)
+    assert "planned" not in out["result"]
     assert out["seen"]["labels"] == ["size", "blitz"]
     assert [p for p in out["seen"]["phases"] if p in ("size", "gate", "plan")] == ["size", "gate", "plan"]
     assert not {"stage", "execute", "review"} & set(out["seen"]["phases"])

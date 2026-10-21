@@ -4675,14 +4675,7 @@ def _checkpoint_commit_js(
         "  async function _commitWave(n, ids) {",
         "    const done = ids.filter((i) => _landed[i]);",
         (
-            "    if (!done.length) {\n"
-            "      if ((_seamHeldPlans[n] || []).length) {\n"
-            "        _commitFailures.push('wave ' + n + ': no row landed to commit');\n"
-            f"        {COMMIT_REFUSED_VAR}['wave ' + n + ' commit'] = 'wave ' + n + ': no row landed to commit';\n"
-            "        if (_seamGates[n]) _rowIdOf.set(_seamGates[n], 'wave ' + n + ' commit');\n"
-            "      }\n"
-            "      return;\n"
-            "    }"
+            "    if (!done.length) { if ((_seamHeldPlans[n] || []).length) _seamFail(n, 'no commit landed'); return; }"
             if seam is not None
             else "    if (!done.length) return;"
         ),

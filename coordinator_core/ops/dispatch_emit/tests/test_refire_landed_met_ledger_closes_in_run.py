@@ -1,28 +1,27 @@
-"""A refire whose product is already at HEAD, with a met criterion, closes in-run.
+"""A run whose product is already at HEAD, with a met criterion, closes through `dispatch.land_run`.
 
 The run's reviewed diff holds zero files, so the review stamp mints only on a met criterion. The
 sizing is a sibling slice whose shared PM turn no slice row covers: the register gate must leave the
-judge's met criterion alone, so the close mints and stamps the plan implemented with no re-judge.
+judge's met criterion alone, so the close job mints and stamps the plan implemented with no re-judge.
 """
 
 from __future__ import annotations
 
 import copy
 import json
-import shutil
 import subprocess
 
 import pytest
 
 from coordinator_core.benchmarks import terminal_commit_full_path as driver
 from coordinator_core.ops.ceremony import close_background
-from coordinator_core.ops.dispatch_emit import terminal_commit
+from coordinator_core.ops.dispatch_emit import land_run
 from coordinator_core.ops.dispatch_emit.commit_request import ChunkCommit, CommitRequest, render_marker
+from coordinator_core.ops.dispatch_emit.run_close import close_job_path
 from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
-RUN_ID = "run"
 PLAN_REL = "docs/plans/plan.md"
 SIZING_REL = "state/sizings/2026-10-16-slice.yaml"
 
@@ -98,48 +97,36 @@ def _landed(tmp_path, monkeypatch, *, slice_sizing: bool) -> dict:
     (repo / SIZING_REL).parent.mkdir(parents=True)
     parent_line = "em_analysis:\n  ask_parent: ask-parent-x ask-x\n" if slice_sizing else ""
     (repo / SIZING_REL).write_text(_SIZING.format(parent=parent_line), encoding="utf-8")
-    _git(repo, "add", "-A", "docs", "state")
-    _git(repo, "commit", "-q", "-m", "slice sizing")
-    warp = repo / "scratch" / "warp"
-    warp.mkdir(parents=True)
-    (warp / "run.mjs").write_text((repo / script).read_text(encoding="utf-8"), encoding="utf-8")
+    _git(repo, "add", "-A", "docs", "state", "a.py")
+    _git(repo, "commit", "-q", "-m", "slice sizing and product")
     outbox = parent / "lessons-outbox"
     outbox.mkdir()
-    noop = parent / "noop.py"
-    noop.write_text("pass\n", encoding="utf-8")
     monkeypatch.setenv("LESSON_PROMOTE_OUTBOX_ROOT", str(outbox))
     monkeypatch.setenv("COORDINATOR_SESSION_ID", driver.SESSION_ID)
-    monkeypatch.setattr(terminal_commit, "CLOSE_JOB_SCRIPT", str(noop))
+    monkeypatch.setattr(land_run, "_launch_close_job", lambda *a, **k: True)
     monkeypatch.setattr(
         claims, "list_claims_by_session_checked", lambda sid, cwd=None: ([("handoff", "b.md")], [])
     )
     monkeypatch.setattr(close_background, "_launch_close_review", lambda ctx: True)
-
-    real_mint = terminal_commit._mint_review_stamp
-    state = {"refuse": True}
-
-    def mint_once_refused(*args, **kwargs):
-        if state["refuse"]:
-            state["refuse"] = False
-            return {"review_stamp": "refused", "review_stamp_refusal": "withheld for the fixture"}
-        return real_mint(*args, **kwargs)
-
-    monkeypatch.setattr(terminal_commit, "_mint_review_stamp", mint_once_refused)
-    first = terminal_commit._handler(
+    out = land_run._handler(
         {"script_path": script, "incomplete_chunks": [], "session_id": driver.SESSION_ID,
-         "inline_review": _review()},
+         "inline_review": _review(), "allow_empty": True},
         repo_root=repo / ".git",
     )
-    assert first["review_stamp"] == "refused" and first["sha"], first
-    shutil.rmtree(repo / "scratch")
-    return {"repo": repo}
+    assert out.get("committed") is True and out["sha"], out
+    return {"repo": repo, "out": out}
 
 
-def _refire(env) -> dict:
-    return terminal_commit._handler(
-        {"plan_path": PLAN_REL, "run_id": RUN_ID, "session_id": driver.SESSION_ID},
-        repo_root=env["repo"] / ".git",
+def _close(env) -> dict:
+    """Run the landing's close job in-process; return its settled leg statuses and details."""
+    repo, run_id = env["repo"], env["out"]["close"]["run_id"]
+    record = json.loads((repo / close_job_path(run_id)).read_text(encoding="utf-8"))
+    close_background._handler(
+        {"run_id": run_id, "claimed_batons": record["claimed_batons"], "source_memo": record.get("source_memo")},
+        repo_root=repo / ".git",
     )
+    settled = json.loads((repo / close_job_path(run_id)).read_text(encoding="utf-8"))
+    return {leg: (r["status"], r["detail"]) for leg, r in settled["legs"].items()}
 
 
 def _rejudge_records(repo) -> list:
@@ -149,26 +136,54 @@ def _rejudge_records(repo) -> list:
     return [p for p in root.rglob("*") if p.is_file() and "rejudge" in p.name]
 
 
-def test_refire_with_product_at_head_and_met_criterion_closes_in_run(tmp_path, monkeypatch):
+def test_run_with_product_at_head_and_met_criterion_closes_in_run(tmp_path, monkeypatch):
     env = _landed(tmp_path, monkeypatch, slice_sizing=True)
     repo = env["repo"]
 
-    out = _refire(env)
+    legs = _close(env)
 
-    assert out["review_stamp"] == "minted", out
-    assert out["plan_status"] == "implemented", out
+    assert legs["review-stamp"][0] == "ran", legs
     text = (repo / PLAN_REL).read_text(encoding="utf-8")
     assert "status: implemented" in text and "review_stamp:" in text
     assert "status: met" in text.split("review_stamp:", 1)[1]
     assert _rejudge_records(repo) == []
 
 
-def test_same_refire_without_ask_parent_refuses_on_the_zero_file_diff(tmp_path, monkeypatch):
+def test_same_run_without_ask_parent_leaves_the_plan_unimplemented_on_the_uncovered_turn(tmp_path, monkeypatch):
+    """Without an ask-parent no register row covers PM turn 29: the close job's plan-reconciliation leg
+    fails naming the turn and the plan stays unimplemented (the old refire refused at the stamp instead)."""
     env = _landed(tmp_path, monkeypatch, slice_sizing=False)
     repo = env["repo"]
 
-    out = _refire(env)
+    legs = _close(env)
 
-    assert out.get("review_stamp") != "minted", out
-    assert "zero files in the reviewed diff" in json.dumps(out)
+    assert legs["plan-reconciliation"][0] == "failed", legs
+    assert "PM turn 29 is covered by no register row" in legs["plan-reconciliation"][1]
     assert "status: implemented" not in (repo / PLAN_REL).read_text(encoding="utf-8")
+
+
+def test_zero_file_pass_anchor_lands_an_empty_delta_commit_carrying_the_review_trailer(tmp_path, monkeypatch):
+    import hashlib
+
+    env = _landed(tmp_path, monkeypatch, slice_sizing=True)
+    repo = env["repo"]
+    before = env["out"]["sha"]
+    (repo / "anchor.mjs").write_text("// emitted\n", encoding="utf-8")
+    review = _review()
+    review["integration_stem"] = f"{driver.PLAN_ID}.review-wave-bookkeeping"
+    review["prep_sidecar"] = None
+    review["wave_sidecar_paths"] = []
+
+    out = land_run._handler(
+        {"script_path": "anchor.mjs", "plan_path": PLAN_REL, "incomplete_chunks": [],
+         "session_id": "99999999-2222-3333-4444-555555555555", "inline_review": review},
+        repo_root=repo / ".git",
+    )
+
+    assert out.get("committed") is True and out["sha"] != before, out
+    body = subprocess.run(
+        ["git", "show", "-s", "--format=%B", out["sha"]], cwd=repo, capture_output=True, text=True, check=True,
+        **no_console_creationflags(),
+    ).stdout
+    record = next((repo / ".coordinator-local" / "subagent-share" / "99999999-2222-3333-4444-555555555555").glob("*.md"))
+    assert f"Review: {hashlib.sha256(record.read_bytes()).hexdigest()}" in body

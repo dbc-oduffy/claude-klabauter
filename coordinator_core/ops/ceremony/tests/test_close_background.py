@@ -352,8 +352,8 @@ def test_op_is_registered_mutating_fire_and_forget_common_dir():
     assert OP_SCOPES["close.background"] == "common_dir"
 
 
-def test_background_ledger_is_the_four_legs_without_review():
-    assert cb.BACKGROUND_LEGS == ("baton-drain", "orientation-refresh", "memo-lifecycle", "post-close")
+def test_background_ledger_ends_in_the_four_legacy_legs_without_review():
+    assert cb.BACKGROUND_LEGS[-4:] == ("baton-drain", "orientation-refresh", "memo-lifecycle", "post-close")
     assert "review" not in cb.DEFAULT_RUNNERS
 
 

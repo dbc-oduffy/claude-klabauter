@@ -141,6 +141,7 @@ from pathlib import Path, PurePosixPath
 from typing import Optional, Sequence
 
 from coordinator_core.git.git_state import head_branch
+from coordinator_core.git.machine_local_paths import machine_local_paths
 from coordinator_core.git.path_canon import canonical_repo_relative_path_refusal
 from coordinator_core.git.run import run_git
 from coordinator_core.ipc import register_op
@@ -4173,7 +4174,10 @@ def _terminal_commit_inner(
         all_paths.extend(list(chunk.paths) + own_prefix_files)
         prefix_files.extend(own_prefix_files)
 
-    if bookkeeping_record_path is not None and not product_only and bookkeeping_record_path not in all_paths:
+    if (
+        bookkeeping_record_path is not None and not product_only and bookkeeping_record_path not in all_paths
+        and not machine_local_paths([bookkeeping_record_path])
+    ):
         all_paths.append(bookkeeping_record_path)
 
     if record_dir_rel is not None and snapshot is not None:
@@ -4196,6 +4200,9 @@ def _terminal_commit_inner(
         return reply
 
     art_has_landing = art_landable is not None and bool(art_landable.present or art_landable.deleted)
+    if (not all_paths and not art_has_landing and (anchor_only or request.review_only) and record_abs is not None
+            and request.plan_path and (worktree_root / request.plan_path).is_file()):
+        all_paths.append(request.plan_path)
     if not all_paths and not art_has_landing:
         if close_ctx is not None:
             close_ctx.clear()
@@ -4592,6 +4599,14 @@ def _terminal_commit_inner(
     )
     if product_only:
         trailers.extend(_ask_trailers(worktree_root, request.plan_path, record_abs, receipts_built))
+    elif record_abs is not None:
+        import hashlib
+
+        try:
+            trailers.append(f"Review: {hashlib.sha256(record_abs.read_bytes()).hexdigest()}")
+        except OSError:
+            pass
+    review_trailed = any(t.startswith("Review: ") for t in trailers)
     paragraphs.append("\n".join(trailers))
     message = "\n\n".join(paragraphs)
 
@@ -4719,7 +4734,7 @@ def _terminal_commit_inner(
     own_reverts = sorted({p for p in asked_reverts if p in own_staged} | set(deleted_paths))
     if own_reverts:
         commit_params["declared_reverts"] = own_reverts
-    if params.get("allow_empty") is True or marker_anchor:
+    if params.get("allow_empty") is True or marker_anchor or ((anchor_only or request.review_only) and review_trailed):
         commit_params["allow_empty"] = True  # marker_anchor: the review anchor must land tree-equal
     if session_id is not None:
         commit_params["session_id"] = session_id

@@ -3039,6 +3039,37 @@ the former ``_release_from_touched_file``, for BOTH release planes.
 def release_own_path_claims(
     sid: str, paths: "Optional[List[str]]", cwd: Optional[str] = None
 ) -> None:
+    """Release *paths* (``None``: every claim) held by *sid*; see :func:`_release_own_path_claims`.
+    A recorded entry stored absolute may be re-normalised through ``git ls-files``."""
+    _release_own_path_claims(
+        sid, paths, cwd, lambda raw_path: normalize_touch_path(raw_path, cwd, root=cwd)
+    )
+
+
+def release_own_path_claims_in_process(
+    sid: str, paths: "Optional[List[str]]", cwd: Optional[str] = None
+) -> None:
+    """:func:`release_own_path_claims` with zero spawns: a recorded entry stored absolute is
+    resolved by the pure-Python relpath arm or left unmatched, so its claim is retained."""
+    _release_own_path_claims(sid, paths, cwd, lambda raw_path: _normalize_recorded_in_process(raw_path, cwd))
+
+
+def _normalize_recorded_in_process(raw_path: str, cwd: Optional[str]) -> Optional[str]:
+    fpath = _strip_extended_length_prefix(raw_path)
+    if not _is_absolute(fpath):
+        return canonicalize_relative_path(fpath)
+    if not cwd:
+        return None
+    candidate, _exc = _relpath_candidate(fpath, cwd)
+    return candidate if _touch_path_fast_arm_eligible(fpath, cwd, candidate) else None
+
+
+def _release_own_path_claims(
+    sid: str,
+    paths: "Optional[List[str]]",
+    cwd: Optional[str],
+    main_normalize: "Callable[[str], Optional[str]]",
+) -> None:
     """Append an ``R`` (release) event for each of *paths* this session
     itself claims, to THIS session's OWN ``touched.txt`` and to
     every ``.agents/<aid>/touched.txt`` back-pointed at *this* ``sid`` —
@@ -3236,7 +3267,7 @@ def release_own_path_claims(
             sid,
             release_set,
             when,
-            lambda raw_path: normalize_touch_path(raw_path, cwd, root=cwd),
+            main_normalize,
         )
 
     base = core.sessions_dir(cwd)
@@ -3427,6 +3458,21 @@ def release_committed_claims_or_retain(
             label,
             exc_info=True,
         )
+
+
+def release_committed_claims_in_process_or_retain(
+    worktree_root: "Path | str", paths: Iterable[str], sid: Optional[str], label: str
+) -> None:
+    """:func:`release_committed_claims_or_retain` over :func:`release_own_path_claims_in_process`:
+    the same skip-on-falsy-sid and swallow-any-failure rules, zero spawns."""
+    if not sid:
+        return
+    try:
+        release_paths = list(paths)
+        if release_paths:
+            release_own_path_claims_in_process(sid, release_paths, cwd=str(worktree_root))
+    except Exception:
+        _LOG.debug("%s: in-process claim release failed post-commit; claim(s) retained", label, exc_info=True)
 
 
 def release_all_committed_claims(sid: str, cwd: Optional[str] = None) -> None:

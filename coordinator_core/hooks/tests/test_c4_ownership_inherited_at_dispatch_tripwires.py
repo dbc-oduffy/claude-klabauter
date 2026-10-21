@@ -633,6 +633,13 @@ _EXPECTED_CLAIM_INDEX_LOOKUP_CALL_SITES = frozenset(
         # Review-stamp reverify: reports which frozen claims a live peer
         # still holds as `foreign_claims` evidence. Fail-closed toward
         # "held", read-only -- it never refuses or narrows a commit.
+        # dispatch.land_run (successor of terminal_commit): sets aside, from the run's own landing, the
+        # paths a live peer session or a senior peer run holds; a raising lookup holds nothing. It only
+        # subtracts from the run's candidate set, never adds a path to a pathspec.
+        (
+            "coordinator_core/ops/dispatch_emit/land_run.py",
+            "_peer_held",
+        ),
         (
             "coordinator_core/ops/dispatch_emit/reverify_delivery.py",
             "_claim_held",
@@ -747,6 +754,13 @@ _EXPECTED_CLAIM_INDEX_ANSWER_CALL_SITES = frozenset(
         (
             "classify_paths",
             "coordinator_core/ops/dispatch_emit/terminal_commit.py",
+            "_peer_held",
+        ),
+        # dispatch.land_run fanout mode: same role as terminal_commit._peer_held above -- sets aside
+        # peer-held paths from the fanout record landing; a raising classify holds nothing.
+        (
+            "classify_paths",
+            "coordinator_core/ops/dispatch_emit/land_run_fanout.py",
             "_peer_held",
         ),
         (

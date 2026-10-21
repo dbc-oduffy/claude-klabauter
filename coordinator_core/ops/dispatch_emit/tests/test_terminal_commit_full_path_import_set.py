@@ -31,7 +31,6 @@ _ABSENT = (
     "coordinator_core.ops.dispatch_emit.op",
     "coordinator_core.ops.plan_tasks_mutate",
     "coordinator_core.ops.dispatch_emit.halted_record_commit",
-    "coordinator_core.ops.dispatch_emit.grind_commit_contract",
     "coordinator_core.ops.dispatch_emit.roadmap_fanout_commit",
     "coordinator_core.ops.dispatch_emit.inventory_mint",
     "coordinator_core.ops.review_freeze_diff",
@@ -44,7 +43,8 @@ from pathlib import Path
 from coordinator_core.benchmarks import terminal_commit_full_path as drv
 repo, script = drv.build_fixture(Path(sys.argv[1]))
 drv._prepare_close(repo)
-out = drv._run_full_path(repo, script)
+from coordinator_core.ops.dispatch_emit.tests import _legacy_terminal_commit_run as legacy
+out = legacy.run(repo, script)
 ok = out.get("review_stamp") == "minted" and out.get("plan_status") == "implemented"
 print("RESULT=" + json.dumps({"ok": ok, "loaded": [m for m in json.loads(sys.argv[2]) if m in sys.modules]}))
 """

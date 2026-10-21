@@ -1,6 +1,6 @@
 """The real-shape fixture reaches the corpus-scaled scans the attribution convicted.
 
-Names no op: it holds `build_real_shape` to the shape of
+Op-agnostic: it holds `build_real_shape` to the shape of
 docs/research/2026-10-21-terminal-commit-real-shape-attribution.md (80 in-window stopped own
 runs, 1,250 sizing records) so whichever op the real-shape gate measures pays those costs.
 Neither scan reads the tracked tree, so it is monkeypatched small here.

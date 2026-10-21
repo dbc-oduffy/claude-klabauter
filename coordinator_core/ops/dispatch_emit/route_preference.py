@@ -1,7 +1,7 @@
 """An EM's route preference and rationale for an engine-ask: contract, validation, scout rendering.
 
 Stdlib-only leaf: it imports nothing from ask_contract so ask_contract may import it. The
-preference is advisory input to the sizing scout, never an input to route computation.
+preference is a prior for the sizing scout's judgement, never an input to route computation.
 """
 
 from __future__ import annotations
@@ -20,10 +20,7 @@ ROUTE_PREFERENCE_FILE = "route-preference.json"
 ROUTE_PREFERENCE_KEY = "route_preference"
 EM_RATIONALE_KEY = "em_rationale"
 ROUTE_OVERRIDE_REASON_KEY = "route_override_reason"
-ROUTE_VERDICT_KEY = "route_verdict"
-VERDICT_PUSHBACK = "pushback"
-VERDICT_INDEPENDENT = "independent"
-SCOUT_BLOCK_HEADING = "## EM route preference (advisory, not the PM's words)"
+SCOUT_BLOCK_HEADING = "## EM route preference (a strong prior, not the PM's words)"
 
 
 @dataclass(frozen=True)
@@ -116,41 +113,10 @@ def scout_block(pref: RoutePreference) -> str:
         lines.extend(f"> {row}" for row in pref.em_rationale.splitlines() or [""])
     lines.append("")
     lines.append(
-        f"This is the EM's suggestion; size from what you find in the substrate. It does not "
-        f"override your finding. When the route you assemble differs, state why as "
-        f"`{ROUTE_OVERRIDE_REASON_KEY}`."
+        f"Weigh this as a strong prior; size from the substrate. When the route you assemble "
+        f"differs, state why as `{ROUTE_OVERRIDE_REASON_KEY}`."
     )
     return "\n".join(lines) + "\n"
-
-
-def route_verdict(
-    pref: RoutePreference, route: object, *, reason: Optional[str], basis: Optional[str]
-) -> Optional[dict]:
-    """The EM-facing verdict on the preference; None without a preference or a sized route.
-
-    Reports on the route only; it never feeds route computation.
-    """
-    if pref.route_preference is None or not isinstance(route, str) or not route:
-        return None
-    if diverges(pref, route):
-        because = f" because {reason}" if reason else ""
-        return {
-            "verdict": VERDICT_PUSHBACK,
-            "em_preferred": pref.route_preference,
-            "sized_route": route,
-            "reason": reason,
-            "message": f"EM preferred {pref.route_preference}; sized as {route}{because}.",
-        }
-    return {
-        "verdict": VERDICT_INDEPENDENT,
-        "em_preferred": pref.route_preference,
-        "sized_route": route,
-        "basis": basis,
-        "message": (
-            f"Sized as {route} from the substrate; matches the EM preference, "
-            f"which did not decide it."
-        ),
-    }
 
 
 def _lenient(route_preference: object, em_rationale: object) -> RoutePreference:

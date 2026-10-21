@@ -425,7 +425,7 @@ def _composed_digest(ledger_js: str) -> dict:
 
 
 def _printed_params(digest: dict) -> dict:
-    assert digest["terminal_commit_cli"].startswith("coordinator-invoke dispatch.land_run --from-task-output ")
+    assert digest["terminal_commit_cli"].startswith("coordinator-invoke dispatch.terminal_commit --from-task-output ")
     return digest["next_action"]["params"]
 
 

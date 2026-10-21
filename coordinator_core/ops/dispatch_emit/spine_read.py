@@ -1008,7 +1008,7 @@ def em_owned_rows(exclusions: Optional[list]) -> list[str]:
     return [
         f"{e.get('id')} ({e.get('detail')})"
         for e in exclusions or []
-        if e.get("reason") in EM_OWNED_REASONS
+        if e.get("reason") in EM_OWNED_REASONS and not e.get("predecessors_unsatisfied")
     ]
 
 
@@ -1625,6 +1625,9 @@ def read_spine(
                 }
             )
 
+    if exclusions is not None:
+        _mark_not_yet_owed(exclusions, rows, blocked_ids)
+
     satisfied_ids -= keep_coded
     excluded_ids = satisfied_ids | blocked_ids
     dispatchable_rows = [row for row in rows if row.id not in excluded_ids]
@@ -1640,6 +1643,32 @@ def read_spine(
             dispatchable_rows[i] = row._replace(depends_on=stripped)
 
     return dispatchable_rows
+
+
+def _mark_not_yet_owed(exclusions: list, rows: list, blocked_ids: set) -> None:
+    """Flag ``predecessors_unsatisfied`` on each EM-owned exclusion that cannot be acted on yet.
+
+    An owed row (or a row withheld behind an owed root) is not owed now while its own
+    ``depends_on`` predecessors are still blocked: a close-out memo behind undelivered work
+    cannot be sent first. ``em_owned_rows`` skips flagged entries."""
+    preds = {
+        row.id: [
+            e.get("chunk")
+            for e in row.depends_on
+            if isinstance(e, dict) and isinstance(e.get("chunk"), str)
+        ]
+        for row in rows
+    }
+    for entry in exclusions:
+        reason = entry.get("reason")
+        if reason in _OWNED_ROOT_REASONS:
+            owner = entry.get("id")
+        elif reason == "withheld_by_owed_dependency":
+            owner = entry.get("root")
+        else:
+            continue
+        if any(p in blocked_ids for p in preds.get(owner, ())):
+            entry["predecessors_unsatisfied"] = True
 
 
 def _closure_root_tail(root_id: str, entry: Optional[dict]) -> str:

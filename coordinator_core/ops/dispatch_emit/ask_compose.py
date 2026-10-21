@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Callable, Optional, Sequence
 
 from coordinator_core.git.git_state import head_sha
-from coordinator_core.warp_fire import fire_command
+from coordinator_core.warp_fire import SUBMIT_WORKFLOW_NAME, fire_command
 from coordinator_core.ops.dispatch_emit import agent_sidecar as _sidecar
 from coordinator_core.ops.dispatch_emit import prompt_fragments as _prompt_fragments
 from coordinator_core.ops.dispatch_emit.reply_sidecar import (
@@ -45,6 +45,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     EMPTY_REGISTER_REFUSAL_HEAD,
     EMPTY_REGISTER_REFUSAL_TAIL,
     HALT_PARKED,
+    parked_next_action_js,
     HALT_PLAN_FIELD,
     HALTED_RECORD_PARAM,
     PARKED_REPLY_KEY,
@@ -154,9 +155,7 @@ _OWNER_ROWS_JS = "_crossRepoRows"
 _SCOUT_SCHEMA = SCOUT_SCHEMA  # tests/test_ask_compose.py reads this name
 _BLITZ_TRAIL = "blitz"
 _INVOKE = '"${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/bin/coordinator-invoke"'
-_ROUTE_VERDICT_KEY = _route_pref.ROUTE_VERDICT_KEY
-_VERDICT_RETURN = f", {_ROUTE_VERDICT_KEY}"
-_OVERRIDE_SLOT ="<why your assembled route differs from route_preference; omit when it matches>"
+_OVERRIDE_SLOT = "<why your assembled route differs from route_preference; omit when it matches>"
 _ANCHOR_CLAUSE = (
     "Repo root: {root} -- run `cd {root}` as its own standalone Bash call first; every "
     "repo-relative path below resolves against it."
@@ -528,12 +527,7 @@ _GATE_STAGED_SCHEMA = {
 #: gate reply (plus stage reply) it runs as closing acts.
 _REWORD_SCHEMA = _obj(
     ["exit_criterion"],
-    {
-        **_GATE_STAGED_SCHEMA["properties"],
-        **ASSEMBLE_SCHEMA["properties"],
-        _route_pref.ROUTE_VERDICT_KEY: {"type": ["object", "null"]},
-        "exit_criterion": _STR,
-    },
+    {**_GATE_STAGED_SCHEMA["properties"], **ASSEMBLE_SCHEMA["properties"], "exit_criterion": _STR},
 )
 #: The ask scout's return with its relayed stage reply held to the stage-reply schema.
 _ASK_SCOUT_STAGED_SCHEMA = {
@@ -1271,7 +1265,7 @@ def compose_ask_script(
     authoring. A raw ask sizes through the scout agent, whose closing acts run
     `sizing-assemble --write` and `dispatch.ask_gate`; a gate halt carries the assemble decision's `pm_exit_question`.
     `stop_after=STOP_AFTER_PLAN` ends the script at the plan wave with the single exit
-    `{planned, sizing, run_id}` (XS: `{route: 'dispatch', sizing}`); stage, execute and review
+    parked halt (`next_action` names /mise-prep on the plan; XS: `{route: 'dispatch', sizing}`); stage, execute and review
     are not composed.
     `in_run_commit` composes the docs and commit stages: the run lands its own terminal commit and
     reports the close-job record; without it the EM runs the commit. The run token is read at
@@ -1594,7 +1588,7 @@ def compose_ask_script(
             "with <name> filled as above and <your writes> replaced by the JSON array you return as writes:\n\n"
             + gate_template
             + "\n\nand return its JSON reply verbatim as arm, halt, baton, sizing_path and (when present) resume_plan, "
-            f"resume_rows, resume_ledger and spine_plan, plus design_brief and design_route{_VERDICT_RETURN if has_route_pref else ''} when present; then read estimate.tshirt and route from the sizing at {sizing_write_rel} "
+            f"resume_rows, resume_ledger and spine_plan, plus design_brief and design_route when present; then read estimate.tshirt and route from the sizing at {sizing_write_rel} "
             "and return them as tshirt and route (tshirt replaces your own judged value). "
             "On a non-zero exit_code run no gate command and return no arm or halt."
         )
@@ -1731,7 +1725,7 @@ def compose_ask_script(
             f"Do not edit, retry or repair it. (2) Only when exit_code is 0, run `{_INVOKE} {OP_ASK_GATE} '",
             _gate_payload(sizing_js=_reword_sizing_js),
             "'` and return its JSON reply verbatim as arm, halt, baton, sizing_path and (when present) resume_plan, resume_rows, resume_ledger, "
-            f"spine_plan, design_brief and design_route{_VERDICT_RETURN if has_route_pref else ''}; when the command is denied or fails, return halt {{kind: 'refusal', reason: <its error "
+            "spine_plan, design_brief and design_route; when the command is denied or fails, return halt {kind: 'refusal', reason: <its error "
             "text>}, never arm and halt both null. Also read the sizing at ",
             "js:" + _reword_sizing_js,
             " and return its estimate.tshirt as tshirt and its route as route. On a non-zero exit_code run no "
@@ -1795,7 +1789,6 @@ def compose_ask_script(
             "resume_plan: _reworded.resume_plan ?? null, resume_rows: _reworded.resume_rows ?? null, resume_ledger: _reworded.resume_ledger ?? null, spine_plan: _reworded.spine_plan ?? null, "
             f"{DESIGN_BRIEF_KEY}: _reworded.{DESIGN_BRIEF_KEY} ?? null, "
             f"{DESIGN_ROUTE_KEY}: _reworded.{DESIGN_ROUTE_KEY} ?? null, "
-            f"{_ROUTE_VERDICT_KEY}: _reworded.{_ROUTE_VERDICT_KEY} ?? null, "
             "stage_reply: _reworded.stage_reply ?? null });"
         )
         b.append("      _rewordStaged = !_scouted.halt && !!_scouted.arm;")
@@ -1844,8 +1837,7 @@ def compose_ask_script(
             "route: _scouted.route, resume_plan: _scouted.resume_plan ?? null, "
             "resume_rows: _scouted.resume_rows ?? null, resume_ledger: _scouted.resume_ledger ?? null, spine_plan: _scouted.spine_plan ?? null, "
             f"{DESIGN_BRIEF_KEY}: _scouted.{DESIGN_BRIEF_KEY} ?? null, "
-            f"{DESIGN_ROUTE_KEY}: _scouted.{DESIGN_ROUTE_KEY} ?? null, "
-            f"{_ROUTE_VERDICT_KEY}: _scouted.{_ROUTE_VERDICT_KEY} ?? null }};"
+            f"{DESIGN_ROUTE_KEY}: _scouted.{DESIGN_ROUTE_KEY} ?? null }};"
         )
         if fold_falsifier:
             b.append("  let _scoutFalsifier = null;")
@@ -2427,13 +2419,21 @@ def compose_ask_script(
         )
 
     if stop_after:
+        b.append(
+            f"  if (!_halted && _gate.arm !== {_lit(ARM_XS)} && _planRel) {{ _halted = {{ halted: {_lit(HALT_PARKED)}, "
+            "reason: 'parked after plan: stop_after=plan', "
+            f"plan: _planRel, sizing: _sizingRel, run_id: _runId, next_action: {parked_next_action_js('_planRel')} }}; }}"
+        )
+        b.append(
+            f"  if (!_halted && _gate.arm !== {_lit(ARM_XS)}) {{ _halted = {{ halted: {_lit(HALT_REFUSAL)}, "
+            "reason: 'stop_after=plan but no plan landed', sizing: _sizingRel, run_id: _runId }; }"
+        )
         if in_run_commit:
             _append_halt_record_commit(b)
         b.append(
             "  return _halted ? { halted_by: _halted, halt_commit: _haltCommit, sizing: _sizingRel, run_id: _runId, "
             f"{DESIGN_ROUTE_KEY}: _gate?.{DESIGN_ROUTE_KEY} ?? null }} : "
-            f"(_gate.arm === {_lit(ARM_XS)} ? {{ route: 'dispatch', sizing: _sizingRel, {DESIGN_ROUTE_KEY}: _gate?.{DESIGN_ROUTE_KEY} ?? null }} : "
-            f"{{ planned: [_planRel], sizing: _sizingRel, run_id: _runId, {DESIGN_ROUTE_KEY}: _gate?.{DESIGN_ROUTE_KEY} ?? null }});"
+            f"{{ route: 'dispatch', sizing: _sizingRel, {DESIGN_ROUTE_KEY}: _gate?.{DESIGN_ROUTE_KEY} ?? null }};"
         )
         return _finish_script(
             b,
@@ -2481,7 +2481,7 @@ def compose_ask_script(
     b.append(
         f"  if (_parked && !_halted) _halted = {{ halted: {_lit(HALT_PARKED)}, "
         "reason: 'parked after plan: workflow.revise stop_after=plan', "
-        "plan: _planRel, sizing: _sizingRel, run_id: _runId };"
+        f"plan: _planRel, sizing: _sizingRel, run_id: _runId, next_action: {parked_next_action_js('_planRel')} }};"
     )
     b.append(
         "  let _stageHalt = _stageRefusal ? 'stage refused: ' + _stageRefusal : "
@@ -2972,7 +2972,7 @@ def compose_ask_script(
         )
         _append_halt_record_commit(b)
     b.append(
-        f"  return {{ arm: _gate.arm, {DESIGN_ROUTE_KEY}: _gate?.{DESIGN_ROUTE_KEY} ?? null, {_ROUTE_VERDICT_KEY}: _gate?.{_ROUTE_VERDICT_KEY} ?? null, sizing: _sizingRel, plan: _planRel, run_id: _runId, "
+        f"  return {{ arm: _gate.arm, {DESIGN_ROUTE_KEY}: _gate?.{DESIGN_ROUTE_KEY} ?? null, sizing: _sizingRel, plan: _planRel, run_id: _runId, "
         "split: _splitExit ? _splitExit.split : null, fire: _splitExit ? _splitExit.fire : "
         f"(_halted && _halted.halted === {_lit(HALT_RESEARCH)} && Array.isArray(_halted.fire) ? _halted.fire : "
         "(_commit?.close?.siblings?.released ?? [])), "
@@ -3186,7 +3186,9 @@ def _append_docs_and_commit(
     earlier, by the verify agent. The commit lands the product plus the run's
     run_artifacts candidate set; the docs stage's `doc_paths` ride the params block.
     A landed commit turns `_nextAction` to the close-job record the reply carries: the EM has nothing to run
-    only when its `fire` list (the sibling slices the close released) is empty.
+    only when its `fire` list (the sibling slices the close released) is empty. When
+    `close.siblings.blocked_rows` is non-empty the record is `refire_after_sibling` instead: `op` is the
+    submit workflow name, `params.blocked_on` names the blocking sibling runs and `params.refire` the call.
 
     Trap: the commit command must stay one bare `coordinator-invoke` segment -- the
     `block_subagent_commit` run-token leg admits nothing else. The params ride in the prompt's
@@ -3201,8 +3203,19 @@ def _append_docs_and_commit(
     b.append("    phase('commit');")
     b.append(f"    try {{ _commit = await {commit_call}; }} catch (e) {{ _haltOnUsageLimit(e); }}")
     b.append(
-        "    if (_commit && _commit.committed === true) { _nextAction = { kind: 'close_job', op: null, "
-        "params: { run_id: _runId, close: _commit.close ?? null, fire: _commit.close?.siblings?.released ?? [] } }; }"
+        "    if (_commit && _commit.committed === true) { const _blockedRows = _commit.close?.siblings?.blocked_rows ?? [];"
+    )
+    b.append(
+        "      if (_blockedRows.length > 0) { _nextAction = { kind: 'refire_after_sibling', op: "
+        + _lit(SUBMIT_WORKFLOW_NAME)
+        + ", params: { run_id: _runId, sizing: _sizingRel, "
+        "blocked_on: _blockedRows.map((r) => ({ row: r.row, run_id: r.run_id, label: r.label, status: r.status })), "
+        "refire: _blockedRows[0].refire, close: _commit.close ?? null, "
+        "fire: _commit.close?.siblings?.released ?? [] } }; }"
+    )
+    b.append(
+        "      else { _nextAction = { kind: 'close_job', op: null, "
+        "params: { run_id: _runId, close: _commit.close ?? null, fire: _commit.close?.siblings?.released ?? [] } }; } }"
     )
     b.append(
         "    else { if (!_halted) _halted = { halted: 'commit', refused: _commit?.refused ?? null, "

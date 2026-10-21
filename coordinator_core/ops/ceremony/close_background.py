@@ -591,6 +591,22 @@ def _unsent_memos(ctx: JobContext, text: str) -> list:
     return out
 
 
+def _sibling_wait_notes(entries: Any) -> dict[str, str]:
+    """Row id -> ``" (waits on sibling run <id>, <status>; after it lands: <refire>)"`` from the close
+    input ``sibling_blocked``; first entry per row wins, malformed entries are skipped."""
+    notes: dict[str, str] = {}
+    if not isinstance(entries, list):
+        return notes
+    for entry in entries:
+        if not isinstance(entry, dict) or not entry.get("row") or not entry.get("run_id"):
+            continue
+        notes.setdefault(
+            str(entry["row"]),
+            f" (waits on sibling run {entry['run_id']}, {entry.get('status')}; after it lands: {entry.get('refire')})",
+        )
+    return notes
+
+
 def _plan_flip(ctx: JobContext) -> LegResult:
     """Write the plan's ``implemented`` status (uncommitted; ``close-commit`` lands it) once its minted
     review stamp records a met criterion, no cascade (the ``deliverable-cascade`` leg owns it)."""
@@ -638,7 +654,9 @@ def _plan_flip(ctx: JobContext) -> LegResult:
 
     open_rows = _open_spine_row_ids(ctx.root / plan_rel)
     if open_rows:
-        return _leg("failed", f"{len(open_rows)} spine row(s) still open: {', '.join(open_rows)}", ctx)
+        waits = _sibling_wait_notes(inputs.get("sibling_blocked"))
+        shown = [f"{row}{waits[row]}" if row in waits else row for row in open_rows]
+        return _leg("failed", f"{len(open_rows)} spine row(s) still open: {', '.join(shown)}", ctx)
     criterion = stamp.get("criterion") if isinstance(stamp.get("criterion"), dict) else {}
     status = criterion.get("status")
     ledger_met = inputs.get("ledger_met") if isinstance(inputs.get("ledger_met"), str) else None
@@ -1101,7 +1119,21 @@ def run_background(
                 result = _failed("", exc)
         outcomes[leg] = result
         run_close.record_leg_outcome(ctx.root, ctx.run_id, leg, result.status, result.detail)
+    _release_landed_claims(ctx)
     return outcomes
+
+
+def _release_landed_claims(ctx: JobContext) -> None:
+    """One in-process release of the landing session's claims on the paths the landing carried;
+    a failure retains the claims and never touches a leg outcome."""
+    record = ctx.record
+    sid = record.get("session_id")
+    landed = _inputs(ctx).get("landed_paths")
+    if not isinstance(sid, str) or not isinstance(landed, list):
+        return
+    from coordinator_core.session.scope import release_committed_claims_in_process_or_retain
+
+    release_committed_claims_in_process_or_retain(ctx.root, [p for p in landed if isinstance(p, str)], sid, "close_background")
 
 
 def _context(root: Path, common_dir: Path, params: Mapping[str, Any]) -> JobContext:

@@ -356,6 +356,7 @@ def test_asks_item_keys_pinned():
     assert c.ASKS_ITEM_KEYS == (
         "ask", "source", "sender", "relayed_text", "route_preference",
         "em_rationale", "em_context", "context", "label", "writes",
+        "stop_after",
     )
 
 

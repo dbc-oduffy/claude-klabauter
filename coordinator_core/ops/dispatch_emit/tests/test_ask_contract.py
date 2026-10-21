@@ -51,11 +51,29 @@ def test_route_preference_record_file_and_override_reason_slot():
     assert "route_override_reason" not in c.SCOUT_SCHEMA["properties"]
 
 
-def test_route_verdict_slot_is_ask_only_and_optional():
-    slot = c.ASK_SCOUT_SCHEMA["properties"]["route_verdict"]
-    assert slot["type"] == ["object", "null"]
-    assert "route_verdict" not in c.ASK_SCOUT_SCHEMA["required"]
-    assert "route_verdict" not in c.SCOUT_SCHEMA["properties"]
+def test_stop_after_key_and_value_domain():
+    assert c.STOP_AFTER_KEY == "stop_after"
+    assert c.STOP_AFTER_PLAN == "plan"
+    from coordinator_core.ops.dispatch_emit import ask_fanout_contract as fc
+
+    assert fc.ASKS_ITEM_KEYS[-2:] == ("writes", c.STOP_AFTER_KEY)
+
+
+def test_parked_next_action_text():
+    assert c.parked_next_action("docs/plans/x.md") == "Run /mise-prep on docs/plans/x.md, then /mise-en-place."
+    expected = "Run /mise-prep on the run's plan, then /mise-en-place."
+    assert c.parked_next_action(None) == expected
+    assert c.parked_next_action("") == expected
+
+
+def test_parked_next_action_js_matches_python_form():
+    js = c.parked_next_action_js("_planRel")
+    plan_branch, none_branch = js[1:-1].split(" ? ", 1)[1].split(" : ", 1)
+    assert plan_branch == '"Run /mise-prep on " + _planRel + ", then /mise-en-place."'
+    assert js.startswith("(_planRel ? ")
+    assert json.loads(none_branch) == c.parked_next_action(None)
+    head, tail = plan_branch.split(" + _planRel + ")
+    assert json.loads(head) + "X" + json.loads(tail) == c.parked_next_action("X")
 
 
 def test_phase_order_and_names():

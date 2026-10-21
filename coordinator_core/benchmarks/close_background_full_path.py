@@ -70,6 +70,7 @@ def build_fixture(parent: Path) -> Path:
     repo = parent / uuid.uuid4().hex[:12]
     repo.mkdir(parents=True)
     _git(repo, "init", "-q")
+    _git(repo, "symbolic-ref", "HEAD", "refs/heads/work/bench")
     _git(repo, "config", "user.email", "t@example.com")
     _git(repo, "config", "user.name", "t")
     for rel, text in (

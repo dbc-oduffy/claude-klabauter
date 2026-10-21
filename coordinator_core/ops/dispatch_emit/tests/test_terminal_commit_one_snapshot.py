@@ -14,6 +14,7 @@ import pytest
 
 from coordinator_core.benchmarks import terminal_commit_full_path as driver
 from coordinator_core.ops.dispatch_emit import terminal_commit
+from coordinator_core.ops.dispatch_emit.tests import _legacy_terminal_commit_run as legacy
 from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
@@ -33,6 +34,7 @@ def _status_line(repo) -> str:
 
 def test_the_full_path_spawns_one_status_read_and_commits_the_plan_once(tmp_path, monkeypatch):
     repo, script = driver.build_fixture(tmp_path)
+    legacy.prepare(repo, monkeypatch)
     spawned: list = []
     real_init = subprocess.Popen.__init__
 
@@ -41,7 +43,7 @@ def test_the_full_path_spawns_one_status_read_and_commits_the_plan_once(tmp_path
         real_init(self, args, *a, **kw)
 
     monkeypatch.setattr(subprocess.Popen, "__init__", counting_init)
-    out = driver._run_full_path(repo, script)
+    out = legacy.run(repo, script)
     monkeypatch.undo()
 
     assert out["review_stamp"] == "minted", out
@@ -63,6 +65,7 @@ def test_the_full_path_spawns_one_status_read_and_commits_the_plan_once(tmp_path
 
 def test_a_failed_coded_stamp_commit_leaves_the_plan_status_unflipped_on_disk(tmp_path, monkeypatch):
     repo, script = driver.build_fixture(tmp_path)
+    legacy.prepare(repo, monkeypatch)
     real_dispatch = terminal_commit.reentrant_dispatch
     calls: list = []
 
@@ -73,7 +76,7 @@ def test_a_failed_coded_stamp_commit_leaves_the_plan_status_unflipped_on_disk(tm
         return real_dispatch(op, params, repo_root=repo_root)
 
     monkeypatch.setattr(terminal_commit, "reentrant_dispatch", failing_second_commit)
-    out = driver._run_full_path(repo, script)
+    out = legacy.run(repo, script)
 
     assert len(calls) == 2, calls
     assert "coded_stamp_error" in out, out

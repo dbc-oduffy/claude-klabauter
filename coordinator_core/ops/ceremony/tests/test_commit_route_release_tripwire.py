@@ -414,9 +414,41 @@ ALLOWLIST: dict[str, dict[str, object]] = {
         "reason": "ineligible: benchmark fixture seeding a throwaway repo; no claims exist",
         "confirmed": True,
     },
+    "benchmarks/halted_record_commit_full_path.py::build_refire_fixture": {
+        "reason": "ineligible: benchmark fixture seeding a throwaway repo; no claims exist",
+        "confirmed": True,
+    },
+    "benchmarks/run_baton_cascade_full_path.py::build_corpus": {
+        "reason": "ineligible: benchmark fixture seeding a throwaway repo; no claims exist",
+        "confirmed": True,
+    },
+    "benchmarks/terminal_commit_full_path.py::build_real_shape": {
+        "reason": "ineligible: benchmark fixture seeding a throwaway repo; no claims exist",
+        "confirmed": True,
+    },
     "benchmarks/workstream_complete_brief_full_path.py::_build": {
         "reason": "ineligible: benchmark fixture seeding a throwaway repo; no claims exist",
         "confirmed": True,
+    },
+    "ops/dispatch_emit/land_run.py::_attempt": {
+        "reason": "release",
+        "confirmed": True,
+    },
+    "ops/ceremony/close_background.py::_close_commit": {
+        "reason": "ineligible: lands only the paths the close legs wrote, none of which the session claims; the landing's own claims are released once by close_background._release_landed_claims",
+        "confirmed": True,
+    },
+    "ops/dispatch_emit/land_run_fanout.py::_land_and_fan_out": {
+        "reason": "ineligible: lands the fanout run's record files only; the session holds no claim on them",
+        "confirmed": True,
+    },
+    "ops/dispatch_emit/land_run_halt.py::_land": {
+        "reason": "ineligible: lands the halted run's record files only; the session holds no claim on them",
+        "confirmed": True,
+    },
+    "ops/dispatch_emit/land_run_grind.py::_land": {
+        "reason": "release",
+        "confirmed": False,
     },
     "ops/ceremony/commit_v2.py::_attempt": {
         "reason": "release",

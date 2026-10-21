@@ -22,7 +22,8 @@ Invariants:
     index, which withholds nothing on ``untracked`` grounds and says nothing.
   - ``roadmap_id``, ``targets`` and ``subject`` narrow the report and the candidate set, never
     blocker reach: closure and wave numbering run over the whole corpus.
-  - Closure stops at a coded blocker: its own blockers are satisfied by definition.
+  - Closure stops at a coded blocker: its own blockers are satisfied by definition. A coded
+    baton itself reports both gates open, ``blocking`` empty and no unresolved ids.
   - No fuzzy plan link: ``plan_gate._PLAN_LINK_ORDER`` is the only basis order.
   - Per-field cleanup is the hot cost. Do not call ``plan_gate._strip_comment``/``_unquote`` on
     every header line; ``_val`` strips a comment only when a ``#`` is present.
@@ -580,7 +581,10 @@ def _info(g: _Gate, rec: _Rec) -> _Info:
     fm = g.fm(rec)
     state = _classify(g, rec) if rec.live else "not"
     plan, ambiguity = _link(g, rec)
-    planning, execution, unresolved = _gates(g, rec)
+    if _disposition(g, rec) == "coded":
+        planning, execution, unresolved = [], [], []
+    else:
+        planning, execution, unresolved = _gates(g, rec)
     cites = pg._as_list(fm.get("sizing_object")) + pg._as_list(fm.get("sizing_objects"))
     archive_index: Dict[str, str] = {}
     if any(not (g.root / c).is_file() for c in cites):

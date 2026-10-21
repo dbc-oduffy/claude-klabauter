@@ -6,7 +6,7 @@ import re
 
 from coordinator_core.ops.dispatch_emit import ask_compose, emit
 from coordinator_core.ops.dispatch_emit.ask_compose import compose_ask_script
-from coordinator_core.ops.dispatch_emit.land_run_contract import OP_NAME
+from coordinator_core.ops.dispatch_emit.land_run_contract import WAKE_DIGEST_COMMIT_OP
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
 from coordinator_core.ops.dispatch_emit.wake_digest import (
     CHUNK_REASON_VAR,
@@ -41,7 +41,7 @@ def _next_action(script: str) -> str:
 def test_next_action_is_none_without_a_clean_manifest(monkeypatch):
     na = _next_action(_script(monkeypatch))
     assert na.startswith("  _nextAction = _closeable ? { kind: (")
-    assert f"? null : '{OP_NAME}'), params: " in na.split("\n", 1)[0]
+    assert f"? null : '{WAKE_DIGEST_COMMIT_OP}'), params: " in na.split("\n", 1)[0]
     assert f"const _closeable = !!((!_halted && {_GUARD[1:-1]}" in _script(monkeypatch)
     # Semantics: no clean manifest -> kind none, unless the halt itself names a repin_register
     # next_action (6478788038); the fallback is not pinned to a literal tail.

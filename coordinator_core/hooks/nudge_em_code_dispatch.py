@@ -620,15 +620,9 @@ def op(payload: dict) -> dict | None:
         return None
 
     if _is_scratch_py(file_path):
-        from coordinator_core.bash_guards.guard_post_executor_verification import (
-            after_executor_deny,
-            write_verifies,
-            written_code,
-        )
+        from coordinator_core.bash_guards.guard_post_executor_verification import after_executor_deny
 
         if resolve_mode("autonomous", _resolve_session_id_op(payload)):
-            return None
-        if not write_verifies(payload, written_code(tool_input)):
             return None
         return after_executor_deny(payload, file_path)
 

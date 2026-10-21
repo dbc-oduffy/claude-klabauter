@@ -170,6 +170,46 @@ def test_scratch_py_write_denied_after_executor(repo) -> None:
     assert "test-runner" in out["hookSpecificOutput"]["permissionDecisionReason"]
 
 
+def test_scratch_launcher_config_edit_allowed_after_executor(repo, tmp_path) -> None:
+    _executor_ran(repo)
+    launcher = tmp_path / "other-repo" / "scratch" / "metahuman-affordance" / "mh-run-full.py"
+    launcher.parent.mkdir(parents=True)
+    launcher.write_text("import os\nimport pkg\n", encoding="utf-8")
+    payload = {
+        "tool_name": "Edit",
+        "session_id": SID,
+        "cwd": str(repo),
+        "tool_input": {
+            "file_path": str(launcher),
+            "old_string": "import os\n",
+            "new_string": 'import os\nos.environ["EXAMPLE_RETRIEVAL_REPO_MEM_CAP_GIB_DERIVE"] = "6"\n',
+        },
+    }
+    assert nd.op(payload) is None
+
+
+def test_scratch_non_test_probe_write_allowed_after_executor(repo) -> None:
+    _executor_ran(repo)
+    probe = "import pkg\nprint(pkg.__name__)\n"
+    assert nd.op(_write(repo, str(repo / "scratch" / "probe.py"), content=probe)) is None
+
+
+def test_scratch_edit_adding_runner_to_repo_importing_file_denied(repo) -> None:
+    _executor_ran(repo)
+    path = repo / "scratch" / "probe.py"
+    path.parent.mkdir()
+    path.write_text("import pkg\n", encoding="utf-8")
+    payload = _write(repo, str(path), tool="Edit")
+    payload["tool_input"] = {"file_path": str(path), "old_string": "import pkg\n", "new_string": "import pkg\nimport pytest\npytest.main([])\n"}
+    assert _denied(nd.op(payload))
+
+
+def test_scratch_write_running_measure_against_repo_denied(repo) -> None:
+    _executor_ran(repo)
+    content = "import pkg\nimport subprocess\nsubprocess.run(['python', '-m', 'pkg.benchmarks.measure', '--', 'x'])\n"
+    assert _denied(nd.op(_write(repo, str(repo / "scratch" / "probe.py"), content=content)))
+
+
 _GLOB_HELPER = "import glob, json\nprint(json.dumps(sorted(glob.glob('docs/plans/*.md'))))\n"
 
 

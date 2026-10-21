@@ -312,13 +312,21 @@ def test_zero_stage_inline_review_runs_bookkeep_wave_and_review_stamp_mints(repo
 
     record_path = share / f"{stem}.md"
     assert record_path.is_file()
+    import hashlib
+
+    body = subprocess.run(
+        ["git", "show", "-s", "--format=%B", "HEAD"],
+        cwd=str(repo), capture_output=True, text=True, check=True,
+        **no_console_creationflags(),
+    ).stdout
+    digest = hashlib.sha256(record_path.read_bytes()).hexdigest()
+    assert f"Review: {digest}" in body, "the commit does not carry the bookkeeping record's Review trailer"
     log = subprocess.run(
         ["git", "show", "--name-only", "--format=", "HEAD"],
         cwd=str(repo), capture_output=True, text=True, check=True,
         **no_console_creationflags(),
     ).stdout
     assert f"{stem}.md" not in log, "a subagent-share record must stay out of the terminal commit"
-    assert record_path.is_file(), "the bookkeeping record must stay on disk for the review stamp"
 
     plan_path = repo / "docs" / "plans" / "example.md"
     plan_path.parent.mkdir(parents=True)
@@ -1203,6 +1211,10 @@ def test_a_zero_file_pass_rerun_lands_a_fresh_review_anchor_and_stamps_the_plan(
         text=True, check=True, **no_console_creationflags(),
     ).stdout
     assert f"Inline-Review: applies {review_wave_bookkeeping_stem('pln-x-123456', s2)}" in body
+    import hashlib
+
+    record = next((repo / ".coordinator-local" / "subagent-share" / s2).glob("*.review-wave-bookkeeping.md"))
+    assert f"Review: {hashlib.sha256(record.read_bytes()).hexdigest()}" in body
 
     # Resolution follows the anchor's Session-Id, not mtime: touch the stale FAIL record newest.
     import os
@@ -1376,7 +1388,7 @@ _RR_SESSION = "11111111-2222-3333-4444-555555555555"
 _RR_PLAN_ID = "pln-review-record-abc123"
 
 
-def _review_record_call(repo: Path, *, with_plan: bool) -> dict:
+def _review_record_call(repo: Path, *, with_plan: bool, allow_empty: bool = False) -> dict:
     from coordinator_core.ops.review_mint.wave_bookkeeping import review_wave_bookkeeping_stem
 
     share = repo / ".coordinator-local" / "subagent-share" / _RR_SESSION
@@ -1419,6 +1431,7 @@ def _review_record_call(repo: Path, *, with_plan: bool) -> dict:
             "script_path": _write_script(repo, request),
             "incomplete_chunks": [],
             "session_id": _RR_SESSION,
+            "allow_empty": allow_empty,
             "inline_review": {
                 "integration_stem": review_wave_bookkeeping_stem(_RR_PLAN_ID, _RR_SESSION),
                 "slices": 1,
@@ -1470,7 +1483,7 @@ def test_review_firing_writer_error_is_reported_not_raised(repo, monkeypatch):
     monkeypatch.setattr(
         criterion_evidence, "_criterion_evidence_record", lambda *a, **k: {"error": "boom"}
     )
-    out = _review_record_call(repo, with_plan=True)
+    out = _review_record_call(repo, with_plan=True, allow_empty=True)
     assert out["committed"] is True, out
     assert out["review_record_error"] == "boom"
 

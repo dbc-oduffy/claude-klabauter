@@ -4,7 +4,7 @@
 that decides whether an in-process answer may be attempted at all.
 
 Contract: `scoped_worktree_status` returns `(changed, ignored)` equal to what
-`_worktree_snapshot` parses out of the spawn for the same arguments, or `None`
+`worktree_snapshot` parses out of the spawn for the same arguments, or `None`
 when ANY gap is hit; `None` means the caller spawns, argv unchanged, for the
 whole call. A snapshot is never part in-process and part spawned.
 

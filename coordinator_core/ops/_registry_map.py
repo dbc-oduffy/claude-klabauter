@@ -233,6 +233,7 @@ OP_MODULE_MAP: Dict[str, str] = {
     "plan.readiness_verdict":                 "coordinator_core.ops.plan_readiness_verdict",
     "plan.premise_scope":                     "coordinator_core.ops.plan_premise_carry",
     "plan.premise_record":                    "coordinator_core.ops.plan_premise_carry",
+    "plan.backfill_warp_executing":           "coordinator_core.ops.plan_backfill_warp_executing",
     "plan.repin_register":                    "coordinator_core.ops.plan_repin_register",
     "plan.stamp_prepped":                     "coordinator_core.ops.plan_stamp_prepped",
     # One bounded op per plan for mise-prep-run's client-side loop: probe reads

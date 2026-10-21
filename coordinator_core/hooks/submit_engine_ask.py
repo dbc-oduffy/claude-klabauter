@@ -12,7 +12,7 @@ the emitted run, in the background, under `claude -p` as interactively; its comp
 notification is the EM's one wake. The stub only ever runs when this hook did not: it returns a
 halt that names the gap, never a run.
 
-`args` shape: `{ask: str, em_context?, route_preference?, em_rationale?}` | `{sizing: str}` | `{asks: [{ask, source?, sender?, relayed_text?, em_context?, context?, route_preference?, em_rationale?, label?, writes?}], sender?, confirm_split?}` (an `args` key outside the accepted set, or an `asks` entry key outside `ASKS_ITEM_KEYS`, is refused naming it and the accepted keys; `em_context` is a string of the EM's own context, carried in the emit op's `ask_brief` under an EM marker, never merged into the ask text, so `source: "pm"` stays true for the verbatim `ask`; an entry's `context` (a string or list of path / prose strings) and `em_context` ride the fan-out items on a multi-item `asks`, and a one-element `asks` carries them as a top-level `context` does; a top-level `context` beside a multi-item `asks` is refused; `route_preference` is goal|roadmap|plan, `em_rationale` at most 2000 chars; both forward to the emit op
+`args` shape: `{ask: str, em_context?, route_preference?, em_rationale?, stop_after?}` | `{sizing: str, stop_after?}` | `{asks: [{ask, source?, sender?, relayed_text?, em_context?, context?, route_preference?, em_rationale?, label?, writes?, stop_after?}], sender?, confirm_split?, stop_after?}` (`stop_after` is `"plan"` only: the run parks after planning for `/mise-prep`; a top-level value beside `asks` applies to every entry naming none; an `args` key outside the accepted set, or an `asks` entry key outside `ASKS_ITEM_KEYS`, is refused naming it and the accepted keys; `em_context` is a string of the EM's own context, carried in the emit op's `ask_brief` under an EM marker, never merged into the ask text, so `source: "pm"` stays true for the verbatim `ask`; an entry's `context` (a string or list of path / prose strings) and `em_context` ride the fan-out items on a multi-item `asks`, and a one-element `asks` carries them as a top-level `context` does; a top-level `context` beside a multi-item `asks` is refused; `route_preference` is goal|roadmap|plan, `em_rationale` at most 2000 chars; both forward to the emit op
 or the fan-out, and either beside `{sizing}` is refused) (each ask a
 separate sibling run via `dispatch.ask_fanout`; the call fires the first ready run and the allow reason
 carries `{parent_id, runs}` plus the other ready runs' fire calls; a one-element array is an `ask`; a
@@ -65,7 +65,8 @@ from coordinator_core.warp_fire import SUBMIT_WORKFLOW_NAME, fire_command, is_su
 # Every `args` key this hook reads; a key outside it is refused by name. A key read below must be added here.
 _ARGS_KEYS: tuple[str, ...] = (
     "ask", "asks", "brief", "brief_file", "confirm_split", "context", "cross_repo_approved", "em_context",
-    "em_rationale", "repo", "route_preference", "sender", "sizing", "source", "supersedes", "writes",
+    "em_rationale", "repo", "route_preference", "sender", "sizing", "source", "stop_after", "supersedes",
+    "writes",
 )
 
 
@@ -154,6 +155,15 @@ def _call_preference(
     from coordinator_core.ops.dispatch_emit.route_preference import refusal
 
     return pref, rationale, refusal("route_preference", pref, rationale)
+
+
+def _stop_after_refusal(where: str, value: Any) -> Optional[str]:
+    """Refusal text for a `stop_after` value other than the one accepted; None when absent or `plan`."""
+    from coordinator_core.ops.dispatch_emit.ask_contract import STOP_AFTER_KEY, STOP_AFTER_PLAN
+
+    if value is None or value == STOP_AFTER_PLAN:
+        return None
+    return f'{where}.{STOP_AFTER_KEY} must be "{STOP_AFTER_PLAN}" (the only accepted value), got {value!r}.'
 
 
 def _brief_params(tool_input: Mapping[str, Any]) -> tuple[dict, Optional[str]]:
@@ -328,6 +338,9 @@ def _asks(tool_input: Mapping[str, Any]) -> tuple[Optional[list], Optional[str]]
         writes = item.get("writes")
         if writes is not None and not (isinstance(writes, list) and all(isinstance(w, str) for w in writes)):
             return None, f"asks[{i}].writes must be a list of repo-relative paths."
+        stop_why = _stop_after_refusal(f"asks[{i}]", item.get("stop_after"))
+        if stop_why:
+            return None, stop_why
     confirm = args.get("confirm_split")
     if confirm is not None and not isinstance(confirm, bool):
         return None, "confirm_split must be true or false."
@@ -581,6 +594,10 @@ def evaluate(
     route_pref, em_rationale, route_refusal = _call_preference(payload["tool_input"], sizing_rel, asks is not None)
     if route_refusal:
         return _refuse(route_refusal)
+    call_stop = call_args.get("stop_after") if isinstance(call_args, dict) else None
+    stop_why = _stop_after_refusal("args", call_stop)
+    if stop_why:
+        return _refuse(stop_why)
     if source is not None:
         if source not in ASK_SOURCES:
             return _refuse(f"source {source!r} is not one of: {', '.join(ASK_SOURCES)}.")
@@ -593,11 +610,14 @@ def evaluate(
             {**item, "source": item.get("source", source)} if item.get("source", source) is not None else dict(item)
             for item in asks
         ]
+        if call_stop is not None:
+            asks = [{**item, "stop_after": item.get("stop_after", call_stop)} for item in asks]
         if len(asks) == 1 and not (
             asks[0].get("sender") or asks[0].get("relayed_text") or payload["tool_input"]["args"].get("sender")
         ):
             ask, source = asks[0]["ask"], asks[0].get("source")
             route_pref, em_rationale = asks[0].get("route_preference"), asks[0].get("em_rationale")
+            call_stop = asks[0].get("stop_after")
             item_em_context = asks[0].get("em_context")
             item_context, _ = _context_items(asks[0].get("context") or [], "context")
             asks = None
@@ -744,6 +764,8 @@ def evaluate(
             if em_rationale is not None:
                 params["em_rationale"] = em_rationale
         params.update(brief)
+        if call_stop is not None:
+            params["stop_after"] = call_stop
     from coordinator_core.ops.dispatch_emit.cross_repo_write_refusal import is_remote_venue
 
     args = payload["tool_input"].get("args")

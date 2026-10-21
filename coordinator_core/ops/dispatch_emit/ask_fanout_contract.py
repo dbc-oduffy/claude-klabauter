@@ -10,8 +10,8 @@ write-once supersession marker. ``AskSlice.source`` is a slice's own ask source 
 ``SLICE_SOURCE_KEY`` is the ``em_analysis`` key a relayed slice sizing carries; ``slice_ask_source``
 reads it back. ``NOT_FIRED_REASONS`` / ``PLAN_BLITZ_UNFIRED_BUCKETS`` / ``not_fired_entry`` /
 ``not_fired_refusal`` are the roadmap fan-out's unfired-plan report vocabulary.
-``ASKS_ITEM_KEYS`` / ``unknown_keys_refusal`` are the accepted ``asks[]`` entry keys and the sentence
-refusing a key outside an accepted set.
+``ASKS_ITEM_KEYS`` / ``unknown_keys_refusal`` are the accepted ``asks[]`` entry keys (``stop_after``
+among them, value ``plan`` only) and the sentence refusing a key outside an accepted set.
 Reference: docs/reference/multi-ask-submission-contract.md.
 """
 
@@ -300,6 +300,7 @@ ASKS_ITEM_KEYS: tuple[str, ...] = (
     "context",
     "label",
     "writes",
+    "stop_after",
 )
 
 

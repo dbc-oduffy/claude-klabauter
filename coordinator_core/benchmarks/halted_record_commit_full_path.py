@@ -198,6 +198,8 @@ def build_refire_fixture(parent: Path) -> tuple[Path, str]:
 
 
 def _refire_failure(out: dict) -> str:
+    # Trap: checks the reply only, not the commit's tree; a git read here would be counted in the
+    # measured process tree, so the tree check belongs in the test that owns the fixture.
     if out.get("committed") is True and out.get("sha") and not out.get("error") and not out.get("refused"):
         return ""
     return f"refire did not land the withheld product: {out!r}"

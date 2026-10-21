@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 
 import coordinator_core.benchmarks.terminal_commit_full_path as fp
+from coordinator_core.ops.dispatch_emit.tests import _legacy_terminal_commit_run as legacy
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -30,9 +31,9 @@ BOUNDS = {
 RESOLVE_ROOT_BOUND = 9
 
 
-def _count_call(tmp_path):
+def _count_call(tmp_path, monkeypatch):
     repo, script = fp.build_fixture(tmp_path)
-    fp._prepare_close(repo)
+    legacy.prepare(repo, monkeypatch)
     opens = collections.Counter()
     real_open = io.open
     root = repo.resolve()
@@ -56,7 +57,7 @@ def _count_call(tmp_path):
     mp.setattr(io, "open", counting_open)
     mp.setattr(Path, "resolve", counting_resolve)
     try:
-        out = fp._run_full_path(repo, script)
+        out = legacy.run(repo, script)
     finally:
         mp.undo()
     return out, opens, resolves
@@ -70,12 +71,12 @@ def test_one_terminal_commit_call_io_counts(tmp_path, monkeypatch):
     warm = tmp_path / "warm"
     warm.mkdir()
     wrepo, wscript = fp.build_fixture(warm)
-    fp._prepare_close(wrepo)
-    fp._run_full_path(wrepo, wscript)
+    legacy.prepare(wrepo, monkeypatch)
+    legacy.run(wrepo, wscript)
 
     cold = tmp_path / "measured"
     cold.mkdir()
-    out, opens, resolves = _count_call(cold)
+    out, opens, resolves = _count_call(cold, monkeypatch)
     assert out.get("plan_status") == "implemented", out
     print("OPENS", dict(opens), "RESOLVES", len(resolves))
     for name, bound in BOUNDS.items():

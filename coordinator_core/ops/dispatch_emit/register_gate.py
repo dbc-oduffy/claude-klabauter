@@ -130,7 +130,8 @@ def register_gate(
         got = judged.get(str(rid))
         if got is None and str(rid) in ledger_ids:
             continue
-        # Trap: admits a self-declared met row the judge never saw; no test pins that it still refuses otherwise.
+        # Trap: admits a self-declared met row the judge never saw; the refusal for a row short of
+        # met, wired and attributed is pinned by test_claimed_row_not_fully_met_on_disk_still_reports_not_judged.
         if (
             got is None
             and row.get(rr.ROW_STATUS) == rr.STATUS_MET

@@ -32,6 +32,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     RELAYED_ASK_FILE,
     RELAYED_ASK_HEADING,
     RUN_DIR_ROOT,
+    SPINE_SUFFIX,
     STOP_AFTER_FILE,
     STOP_AFTER_PLAN,
     GatedRow,
@@ -874,6 +875,58 @@ def _consume_park_marker(root: Path, run_id: str) -> bool:
     return False
 
 
+PLAN_EXECUTING_STAMP_KEY = "plan_executing_stamp"
+
+
+def stamp_plan_executing(root: Path, plan_rel: str) -> dict:
+    """Advance the plan a warp run just staged from draft/reviewed/approved to `executing`; never raises.
+
+    Replies `{plan, outcome}`: `on-disk` (flipped; the run's next commit carries it, so the stage leg
+    spawns no git), `unchanged` (a minted spine, an unreadable plan, or any other status: left byte-identical) or
+    `refused` (+ `error`; the staging stands). A CRLF plan keeps CRLF.
+
+    Lives on the stage leg because staging is the one point every warp run passes, including a run that
+    halts before close; `roadmap.plan_gate` counts `executing` as plan-approved. Called by
+    `dispatch.ask_stage` and by `dispatch.ask_gate`'s resume legs, never inside `stage()`: its refusals
+    raise and a stamp failure must not turn a staged manifest into one. No process spawn.
+    """
+    out = {"plan": plan_rel, "outcome": "unchanged"}
+    if plan_rel.endswith(SPINE_SUFFIX):
+        return out
+    try:
+        from coordinator_core.frontmatter.primitives import rebuild, replace_fm_field, split_frontmatter
+        from coordinator_core.locked_write import MutateAbort, locked_rmw
+        from coordinator_core.ops.plan_status_transition import _FLIPPABLE_STATUSES_ORDER
+
+        plan = contained_path(root / plan_rel, [root])
+        if plan is None or not plan.is_file():
+            return out
+        raw = plan.read_bytes()
+        crlf = b"\r\n" in raw
+        pre = _FLIPPABLE_STATUSES_ORDER[: _FLIPPABLE_STATUSES_ORDER.index("executing")]
+        split = split_frontmatter(raw.decode("utf-8"))
+        if split is None or read_fm_field_unquoted(split.fm_text, "status") not in pre:
+            return out
+        def flip(old: str) -> str:
+            text = old.replace("\r\n", "\n")
+            parts = split_frontmatter(text)
+            if parts is None or read_fm_field_unquoted(parts.fm_text, "status") not in pre:
+                raise MutateAbort("status moved before the stamp")
+            fm = replace_fm_field(parts.fm_text, "status", "executing")
+            new = rebuild(parts, fm)
+            return new.replace("\n", "\r\n") if crlf else new
+
+        try:
+            locked_rmw(plan, flip, repo_root=root)
+        except MutateAbort:
+            return out
+        out["outcome"] = "on-disk"
+    except Exception as exc:  # noqa: BLE001 -- a stamp failure never halts a staged run
+        out["outcome"] = "refused"
+        out["error"] = f"{type(exc).__name__}: {exc}"
+    return out
+
+
 @register_op("dispatch.ask_stage")
 def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "dispatch.ask_stage": params `run_id` (str), exactly one of `plan_path` / `sizing_path`, `writes`.
@@ -894,6 +947,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     root = main_worktree_root(Path(repo_root))
     if _consume_park_marker(root, run_id):
         return {PARKED_REPLY_KEY: STOP_AFTER_PLAN, "plan_path": params.get("plan_path") or None}
+    stamp = None
     try:
         stage(
             root,
@@ -907,6 +961,8 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             commit_sizing_rel=params.get("commit_sizing_path") or None,
             only_rows=params["only_rows"] if params.get("only_rows") is not None else None,
         )
+        if params.get("plan_path"):
+            stamp = stamp_plan_executing(root, params["plan_path"])
         handle = reply_sidecar.handle_for(root, record_dir(root, run_id) / "manifest.json")
     except (AskStageError, SizingFireRefused, reply_sidecar.ReplySidecarError) as exc:
         reply = {"error": str(exc)}
@@ -914,4 +970,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             reply["owed_em_ids"] = exc.owed_em_ids
             reply["owed_plan"] = exc.plan_path
         return reply
-    return {"manifest_handle": handle}
+    reply = {"manifest_handle": handle}
+    if stamp is not None and stamp["outcome"] != "unchanged":
+        reply[PLAN_EXECUTING_STAMP_KEY] = stamp
+    return reply

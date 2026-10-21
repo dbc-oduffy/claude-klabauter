@@ -320,10 +320,12 @@ def write_close_job(
 #: ``ledger_met``: the passed requirements ledger's observation; ``ledger_judged``: the register row ids it
 #: already judged. ``incomplete``: row ids still unfinished
 #: (the plan is not flipped). ``review_only``: ``{open_rows, run_base, rows: [{id, paths}]}`` of a review-only run.
+#: ``sibling_blocked``: ``sibling_blockers`` entries, one per open row waiting on a non-landed sibling run.
+#: ``landed_paths``: the paths the landing commit carried; the close job releases the session's claims on them.
 CLOSE_INPUT_KEYS: frozenset[str] = frozenset(
     {
         "credited_rows", "resume_halt_sha", "review_record", "ledger_met", "ledger_judged",
-        "incomplete", "review_only",
+        "incomplete", "review_only", "sibling_blocked", "landed_paths",
     }
 )
 

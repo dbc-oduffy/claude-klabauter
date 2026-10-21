@@ -7,12 +7,14 @@ slice and the write-once parent record, and returns the frozen reply plus the re
 calls. Contract: docs/reference/multi-ask-submission-contract.md.
 
 Three arms:
-  - asks:   {asks: [{ask, source?, sender?, relayed_text?, route_preference?, em_rationale?, em_context?, context?, label?, writes?}],
+  - asks:   {asks: [{ask, source?, sender?, relayed_text?, route_preference?, em_rationale?, em_context?, context?, label?, writes?, stop_after?}],
             sender?, confirm_split?} -- the parent register is one row
             (R1..Rn) per ask, each slice claims its own. An entry key outside ASKS_ITEM_KEYS is
             refused by name. An entry's `em_context` and prose `context` land on its slice sizing as
             `em_analysis.em_brief`, its path-shaped `context` as `em_analysis.em_context_paths`
             (one string, one path per line); the ask, intent and pm_verbatims are never touched.
+            An entry's `stop_after` ("plan" only; else refused naming asks[i].stop_after) lands as
+            `em_analysis.stop_after` on its slice sizing alone; the top-level default is the hook's.
   - slices: {slices: [{label, ask, rows, writes?}], parent_sizing, confirm_split?} -- the parent
             register is the parent sizing's own rows; each slice carries its rows byte for byte.
   - sizings: {sizings: [{sizing, label?, writes?, wave?, ids?, blocked_by?}], interaction_mode?,
@@ -55,7 +57,13 @@ from coordinator_core.ops import baton_pm_turns
 from coordinator_core.ops import requirement_register as rr
 from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.ops.dispatch_emit import ask_fanout_contract as contract
-from coordinator_core.ops.dispatch_emit.ask_contract import ASK_SOURCE_PM, ASK_SOURCE_RELAYED, ASK_SOURCES
+from coordinator_core.ops.dispatch_emit.ask_contract import (
+    ASK_SOURCE_PM,
+    ASK_SOURCE_RELAYED,
+    ASK_SOURCES,
+    STOP_AFTER_KEY,
+    STOP_AFTER_PLAN,
+)
 from coordinator_core.ops.dispatch_emit.route_preference import RoutePreference, parse, refusal, to_em_analysis
 from coordinator_core.ops.fleet._common import main_worktree_root
 from coordinator_core.ops.session_context import resolve_current_session_id
@@ -207,6 +215,20 @@ def _route_fields(params: Mapping, count: int) -> list[RoutePreference]:
     return out
 
 
+def _stop_after_fields(params: Mapping, count: int) -> list[Optional[str]]:
+    """Per ask item its `stop_after` (asks arm only; other arms get None). Only `plan` is admitted."""
+    raw = params.get("asks")
+    if raw is None:
+        return [None] * count
+    out: list[Optional[str]] = []
+    for i, item in enumerate(raw):
+        value = item.get(STOP_AFTER_KEY)
+        if value is not None and value != STOP_AFTER_PLAN:
+            raise _Refused(f"asks[{i}].{STOP_AFTER_KEY}: {value!r} is not accepted; the one accepted value is {STOP_AFTER_PLAN!r}")
+        out.append(value)
+    return out
+
+
 def _load_parent(root: Path, rel: str) -> dict:
     from coordinator_core.session.record_homes import home_dir
 
@@ -253,6 +275,7 @@ def _slice_record(
     sender: Optional[str] = None, relayed_text: Optional[str] = None,
     route_pref: Optional[RoutePreference] = None,
     context: tuple[Optional[str], tuple[str, ...]] = (None, ()),
+    stop_after: Optional[str] = None,
 ) -> dict:
     """A slice sizing. A relayed or unmarked asks item (it arrives with no `turns`) is stamped relayed,
     carries its text and sender in `em_analysis`, and never gets a `pm_verbatims` row."""
@@ -281,6 +304,8 @@ def _slice_record(
         record["em_analysis"][EM_CONTEXT_PATHS_KEY] = paths_value
     if route_pref is not None:
         record["em_analysis"].update(to_em_analysis(route_pref))
+    if stop_after:
+        record["em_analysis"][STOP_AFTER_KEY] = stop_after
     if parent_rows is not None:
         record[rr.REGISTER_KEY] = {
             rr.SOURCES_KEY: sources,
@@ -468,6 +493,7 @@ def _fanout(params: Mapping, root: Path) -> dict:
     relay = _relay_fields(params, len(slices))
     route_prefs = _route_fields(params, len(slices))
     contexts = _context_fields(params, len(slices))
+    stop_afters = _stop_after_fields(params, len(slices))
 
     stamp = datetime.now().strftime("%Y%m%dT%H%M%S")
     parent_hex = uuid.uuid4().hex[:6]
@@ -492,7 +518,7 @@ def _fanout(params: Mapping, root: Path) -> dict:
             marker=contract.ask_parent_marker(parent_id, run_ids[i]),
             today=today, parent_rows=parent_rows, sources=sources,
             sender=relay[i][0], relayed_text=relay[i][1], route_pref=route_prefs[i],
-            context=contexts[i],
+            context=contexts[i], stop_after=stop_afters[i],
         )
         errors = validate_frontmatter(record, _SIZING_SCHEMA_PATH)
         if errors:

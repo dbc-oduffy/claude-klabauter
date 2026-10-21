@@ -128,34 +128,3 @@ def test_either_key_beside_a_non_intake_sizing_path_raises(repo):
     for extra in ({"route_preference": "goal"}, {"em_rationale": WHY}):
         with pytest.raises(ValueError, match="sizing_path"):
             _dispatch_emit({"sizing_path": REL, "repo_root": str(repo), **extra}, repo_root=repo)
-
-
-def _compose(route_preference=None):
-    kw = dict(repo_root="REPO", prompt="add a thing", sizing_rel=None, run_id="run-1", session_id=None,
-              wrap_stage=lambda _t: ("  async function planBlitz(args) {\n    return { ready: [] };\n  }", ["Size"]),
-              plan_blitz_text="stub", **REVIEW_KW)
-    return compose_ask_script(route_preference=route_preference, **kw)
-
-
-_KEY = rp.ROUTE_VERDICT_KEY
-_FOLD = f"{_KEY}: _reworded.{_KEY} ?? null"
-_INIT = f"{_KEY}: _scouted.{_KEY} ?? null"
-_RESULT = f"{_KEY}: _gate?.{_KEY} ?? null"
-
-
-def test_a_preference_tells_both_scout_tails_to_return_the_verdict():
-    script = _compose(rp.parse("goal", None))
-    assert f"design_route, {_KEY} when present" in script
-    assert script.count(f"design_route, {_KEY}; when the command is denied") == 1
-
-
-def test_no_preference_leaves_the_scout_tails_without_the_verdict():
-    assert f"design_route, {_KEY}" not in _compose()
-
-
-@pytest.mark.parametrize("pref", [rp.parse("goal", None), None])
-def test_the_verdict_fold_gate_initialiser_and_result_are_emitted_with_or_without_a_preference(pref):
-    script = _compose(pref)
-    assert _FOLD in script and _INIT in script
-    assert script.count(_RESULT) == 1
-    assert re.search(r"return \{ arm: _gate\.arm,[^\n]*" + re.escape(_RESULT), script)

@@ -37,6 +37,10 @@ _ALLOWED: dict[tuple[str, str], tuple[int, str]] = {
         1, "fan-out commit landed (landed set only on committed reply)"),
     ("ops/dispatch_emit/roadmap_fanout_commit.py", "commit_fanout_record"): (
         1, "fanout commit landed"),
+    ("ops/dispatch_emit/land_run_grind.py", "commit_grind_rows"): (
+        1, "grind commit landed"),
+    ("ops/dispatch_emit/land_run_fanout.py", "land"): (
+        1, "fanout commit landed"),
     ("ops/dispatch_emit/release_run_token.py", "_handler"): (
         1, "sanctioned peer release of an unclaimed record"),
 }

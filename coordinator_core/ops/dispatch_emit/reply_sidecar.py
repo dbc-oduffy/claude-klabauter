@@ -51,6 +51,9 @@ STAGE_REPLY_SCHEMA = {
         "error": {"type": "string"},
         "owed_em_ids": {"type": "array", "items": {"type": "string"}},
         "owed_plan": {"type": ["string", "null"]},
+        # Literal ask_contract.STOP_AFTER_PLAN, pinned equal by test_reply_sidecar.
+        "parked": {"const": "plan"},
+        "plan_path": {"type": ["string", "null"]},
     },
 }
 

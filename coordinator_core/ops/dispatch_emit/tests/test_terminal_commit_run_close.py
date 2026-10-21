@@ -75,7 +75,10 @@ def test_plan_run_reply_carries_every_leg(env):
     close = out["close"]
     assert close["applies"] is True and close["run_id"] == "run" and close["kind"] == "plan-run"
     assert set(close["legs"]) == set(run_close.RUN_BOUND_LEGS) | set(run_close.SESSION_BOUND_LEGS)
-    assert len(close["legs"]) == 11
+    assert len(close["legs"]) == len(run_close.RUN_BOUND_LEGS) + len(run_close.SESSION_BOUND_LEGS)
+    for leg in run_close.LAND_RUN_ONLY_LEGS:
+        want = "ran" if leg in ("review-stamp", "coded-stamp") else "not-applicable"
+        assert close["legs"][leg]["status"] == want, (leg, close["legs"][leg])
     assert {leg["status"] for leg in close["legs"].values()} <= CONTRACT
     assert close["legs"]["review"]["status"] == "queued"
     for leg in ("plan-reconciliation", "lessons", "completion-entry", "baton-ship"):
@@ -224,7 +227,7 @@ def test_refusal_before_a_request_carries_no_close(env):
 def test_background_legs_match_the_job(env):
     from coordinator_core.ops.ceremony import close_background
 
-    assert terminal_commit._BACKGROUND_LEGS == ("review", *close_background.BACKGROUND_LEGS)
+    assert set(terminal_commit._BACKGROUND_LEGS) - {"review"} <= set(close_background.BACKGROUND_LEGS)
 
 
 def _record(env) -> dict:

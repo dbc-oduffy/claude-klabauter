@@ -166,3 +166,20 @@ def test_cascade_run_handoff_record_with_live_successor_is_refused(tmp_path):
     )
     assert result["advanced"] == []
     assert "live successor" in result["refused"][0]["reason"]
+
+
+def test_cascade_run_refuses_a_record_that_escapes_its_home(tmp_path):
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    _seed_run(repo)
+    outside = repo / "docs" / "stray.yaml"
+    outside.parent.mkdir(parents=True, exist_ok=True)
+    outside.write_text("deliverable_id: " + _DID + "\nstatus: routed\n", encoding="utf-8")
+
+    result = cascade_mod.cascade_run(
+        repo, _DID, ["state/sizings/../../docs/stray.yaml"], "abc1234", repo_root=repo / ".git", plan_path=_PLAN
+    )
+
+    assert result["advanced"] == [] and result["scan_incomplete"] is True
+    assert result["unreadable"][0]["reason"] == "not a sizing or handoff record"
+    assert "status: routed" in outside.read_text(encoding="utf-8")

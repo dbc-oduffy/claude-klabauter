@@ -16,7 +16,7 @@ def _digest(**over):
         "deviations": [],
         "review": {"status": "integrated", "delivery": {"verdict": "PASS"}},
         "criterion": {"status": "met", "observation": None, "sidecar": None},
-        "next_action": {"kind": "terminal_commit", "op": "dispatch.land_run", "params": PARAMS},
+        "next_action": {"kind": "terminal_commit", "op": "dispatch.terminal_commit", "params": PARAMS},
     }
     d.update(over)
     return d

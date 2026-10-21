@@ -66,7 +66,7 @@ def test_wake_digest_names_a_reachable_inline_review_expression():
     assert expr is not None
     assert expr.group(1).strip() != "null"
     assert "integration_stem" in expr.group(1)
-    assert "next_action" in script and "dispatch.land_run" in script
+    assert "next_action" in script and "dispatch.terminal_commit" in script
 
 
 def test_review_prep_scopes_by_the_run_base_diff_so_an_unlanded_held_file_is_not_a_finding():

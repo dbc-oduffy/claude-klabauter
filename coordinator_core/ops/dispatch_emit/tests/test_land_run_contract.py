@@ -31,7 +31,7 @@ def test_mode_of_shapes(params, mode):
     assert c.mode_of(params) == mode
 
 
-@pytest.mark.parametrize("params", [{**_HALTED, **_FANOUT}, {**_HALTED, **_GRIND}])
+@pytest.mark.parametrize("params", [{**_HALTED, **_FANOUT}, {**_HALTED, **_GRIND}, {**_FANOUT, **_GRIND}])
 def test_mode_of_raises_on_ambiguous_mix(params):
     with pytest.raises(c.ModeAmbiguous) as exc:
         c.mode_of(params)

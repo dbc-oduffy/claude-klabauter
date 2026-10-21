@@ -39,6 +39,7 @@ import re
 from pathlib import Path, PurePosixPath
 from typing import Optional, Sequence
 
+from coordinator_core.git.machine_local_paths import machine_local_paths
 from coordinator_core.ipc import register_op
 from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.ops.dispatch_emit import land_run_contract as contract
@@ -1240,6 +1241,16 @@ def _reconcile_prep(
 # ---- trailers ---------------------------------------------------------------------------------
 
 
+def _review_trailer(record_abs: Optional[Path]) -> list:
+    """``["Review: <sha256 of the record>"]`` when the machine-local review record is readable, else ``[]``."""
+    if record_abs is None:
+        return []
+    try:
+        return [f"Review: {hashlib.sha256(record_abs.read_bytes()).hexdigest()}"]
+    except OSError:
+        return []
+
+
 def _ask_trailers(root: Path, plan_path: Optional[str], record_abs: Optional[Path], receipts: list) -> list:
     """The trailers an ask run's product commit carries in place of the process records it leaves
     out: ``Falsifier: <pytest node>``, ``Review: <sha256>`` of the review record and one
@@ -1253,11 +1264,7 @@ def _ask_trailers(root: Path, plan_path: Optional[str], record_abs: Optional[Pat
         node = _PYTEST_NODE.search(str(falsifier.get("how") or ""))
         if node:
             out.append(f"Falsifier: {node.group(0)}")
-    if record_abs is not None:
-        try:
-            out.append(f"Review: {hashlib.sha256(record_abs.read_bytes()).hexdigest()}")
-        except OSError:
-            pass
+    out.extend(_review_trailer(record_abs))
     if receipts:
         from coordinator_core.completion_receipts.model import RECEIPT_TRAILER
 
@@ -1663,7 +1670,6 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
     incomplete -= set(regraded)
     held_ids = held_now
     incomplete |= held_ids & known_ids
-    unmarked_incomplete = sorted(incomplete - known_ids)
     stranded.update({c.id: list(c.paths) for c in request.chunks if c.id in incomplete})
     blockers: dict = {}
     partial = [c for c in _partial_chunks(root, request, incomplete, blockers) if c.id not in held_ids]
@@ -1712,9 +1718,8 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
         literals.append(bookkeeping_path)
     changed, ignored, _head = _dirty_among(root, literals)
     superseded: tuple = ()
-    sizing_for_scan = cited_sizing or (next(iter(artifacts.by_class.get("sizing", ())), None) if artifacts else None)
-    if artifacts is not None and sizing_for_scan:
-        superseded, extra_changed = _superseded(root, art_run_id, sizing_for_scan, artifacts, run_token)
+    if artifacts is not None and sizing_for_credit:
+        superseded, extra_changed = _superseded(root, art_run_id, sizing_for_credit, artifacts, run_token)
         if superseded:
             artifacts = artifacts.with_superseded(superseded, RECORD_DIR_ROOT)
             changed |= extra_changed
@@ -1804,7 +1809,10 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
     paths = list(dict.fromkeys([*candidates, *art_present]))
     deleted = sorted(set(deleted) | set(art_deleted))
     paths = [p for p in paths if p not in deleted]
-    if bookkeeping_path and not product_only and bookkeeping_path not in paths and (root / bookkeeping_path).is_file():
+    if (
+        bookkeeping_path and not product_only and bookkeeping_path not in paths
+        and not machine_local_paths([bookkeeping_path]) and (root / bookkeeping_path).is_file()
+    ):
         paths.append(bookkeeping_path)
 
     # ---- credit gate and Row-Unlanded
@@ -1842,8 +1850,10 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
             stranded[row].append(p)
 
     if not paths and not deleted:
-        if params.get("allow_empty") is True:
+        if params.get("allow_empty") is True or ((anchor_only or request.review_only) and _review_trailer(record_abs)):
             paths = [p for p in declared if p not in absent_dropped and (root / p).is_file()]
+            if not paths and request.plan_path and (root / request.plan_path).is_file():
+                paths = [request.plan_path]
         if not paths and not deleted:
             return {
                 "committed": False, "nothing_to_commit": True,
@@ -1906,10 +1916,9 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
                 expected[ev_path] = ev_after
 
     # ---- the message
-    contributing_all = contributing
     subject = (
         f"review anchor: {request.plan_path} -- delivery PASS, no product files" if anchor_only
-        else _subject(contributing_all, f"review trail: {inline_review['integration_stem']}")
+        else _subject(contributing, f"review trail: {inline_review['integration_stem']}")
     )
     paragraphs = [subject]
     if deleted:
@@ -1940,6 +1949,9 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
     )
     if product_only:
         trailers.extend(_ask_trailers(root, request.plan_path, record_abs, receipts_built))
+    else:
+        trailers.extend(_review_trailer(record_abs))
+    review_trailed = any(t.startswith("Review: ") for t in trailers)
     paragraphs.append("\n".join(trailers))
     message = "\n\n".join(paragraphs)
 
@@ -1960,7 +1972,7 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
         try:
             return commit_paths(
                 root, paths, message, deleted_paths=deleted, expected_content_sha256=expected or None,
-                allow_empty=params.get("allow_empty") is True,
+                allow_empty=params.get("allow_empty") is True or ((anchor_only or request.review_only) and review_trailed),
                 blob_fallback=lambda ps: hash_worktree_blobs_via_spawn(ps, cwd=root),
             )
         except CommitRefused as lost_exc:
@@ -2097,6 +2109,17 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
                 "open_rows": list(request.review_open_rows), "run_base": request.review_run_base,
                 "rows": [{"id": c.id, "paths": list(c.paths)} for c in request.chunks if c.id in set(request.review_open_rows)],
             }
+        inputs["landed_paths"] = sorted({*paths, *deleted})
+        blocked_rows: list = []
+        if sibling_run_id and request.plan_path:
+            try:
+                from coordinator_core.ops.dispatch_emit.sibling_blockers import sibling_blockers
+
+                blocked_rows = sibling_blockers(root, sibling_run_id, request.plan_path)
+            except Exception:  # noqa: BLE001 -- the commit stands
+                blocked_rows = []
+        if blocked_rows:
+            inputs["sibling_blocked"] = blocked_rows
         ctx = {
             "key": PurePosixPath(script_path.replace("\\", "/")).stem, "sibling_run_id": sibling_run_id,
             "presets": presets, "plan_rel": request.plan_path, "session_id": session_id, "sha": sha,
@@ -2118,6 +2141,10 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
             reply["close"] = build_close_block(ctx["key"], True, legs, None, kind=kind)
             if siblings is not None:
                 reply["close"]["siblings"] = siblings
+            if blocked_rows and isinstance(reply["close"], dict):
+                close_siblings = dict(reply["close"].get("siblings") or {})
+                close_siblings["blocked_rows"] = blocked_rows
+                reply["close"]["siblings"] = close_siblings
     return reply
 
 

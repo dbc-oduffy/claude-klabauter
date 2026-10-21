@@ -301,6 +301,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "plan.readiness_verdict":                "common_dir",
     "plan.premise_scope":                    "common_dir",
     "plan.premise_record":                   "common_dir",
+    "plan.backfill_warp_executing":          "common_dir",
     "plan.repin_register":                   "common_dir",
     "plan.stamp_prepped":                    "common_dir",
     "plan.mise_prep_probe":                  "common_dir",

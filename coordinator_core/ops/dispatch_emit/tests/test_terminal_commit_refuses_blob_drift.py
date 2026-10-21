@@ -311,6 +311,28 @@ def test_a_separator_bearing_integration_stem_does_not_resolve(repo, monkeypatch
 NOTE = "docs/delivery/run1.md"
 
 
+def _call(repo: Path, **extra) -> dict:
+    """The ask-run call over `ask`'s fixture, driven through the retained `dispatch.terminal_commit`."""
+    params = {
+        "script_path": "run.mjs", "incomplete_chunks": [], "inline_review": ask._REVIEWED, "session_id": ask._SID,
+        "ledger_verdict": {"items": [{"id": "R1", "status": "met", "wired": True}]}, **extra,
+    }
+    return terminal_commit._handler(params, repo_root=repo / ".git")
+
+
+def _count_commit_v2(monkeypatch) -> list:
+    seen: list = []
+    real = terminal_commit.reentrant_dispatch
+
+    def counting(op, params, **kw):
+        if op == "ceremony.commit_v2":
+            seen.append(params)
+        return real(op, params, **kw)
+
+    monkeypatch.setattr(terminal_commit, "reentrant_dispatch", counting)
+    return seen
+
+
 def test_the_delivery_note_is_declared_at_the_bytes_its_verdicts_append_left(ask_repo, monkeypatch):
     ask._write(ask_repo, NOTE, "# delivered\n")
     ask._request(ask_repo, docs=(NOTE,))
@@ -319,8 +341,8 @@ def test_the_delivery_note_is_declared_at_the_bytes_its_verdicts_append_left(ask
         session_id=ask._SID, agent_id=None, verb="T", path=NOTE,
         content_hash=_sha("# delivered\n"), kind="w", timestamp=1000.0,
     )
-    calls = ask._count_commit_v2(monkeypatch)
-    out = ask._call(ask_repo)
+    calls = _count_commit_v2(monkeypatch)
+    out = _call(ask_repo)
     assert out["committed"] is True, out
     final = (ask_repo / NOTE).read_bytes()
     assert b"## Verdicts" in final
@@ -338,7 +360,7 @@ def test_a_foreign_edit_of_the_note_after_the_expectation_still_refuses(ask_repo
         return real(op, params, **kw)
 
     monkeypatch.setattr(terminal_commit, "reentrant_dispatch", foreign_edit_then_commit)
-    out = ask._call(ask_repo)
+    out = _call(ask_repo)
     assert out["committed"] is False
     assert out["refused"] == "blob-drift"
     assert out["blob_drift"][0]["path"] == NOTE
