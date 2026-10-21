@@ -2095,8 +2095,8 @@
     "coordinator_core/_content_root_primitive.py": "f7fcd3083855a5e1dd53c09233fbfd64f8dffdf5",
     "coordinator_core/_data_root.py": "0c7c8524f25376ae49593f11334445539dc557f9",
     "coordinator_core/_engine_landing.py": "06dbb1273f3c36fdb6be08767ec75e73c71630e7",
-    "coordinator_core/_engine_published_at": "a99715a38db15ab496c8cba365beacbeb57721f4",
-    "coordinator_core/_engine_stamp": "fc8d4ab795fa5b12498800fe5c4983d4ac004d10",
+    "coordinator_core/_engine_published_at": "473c1c7a8a749cabecc95a1bc550779376bbd62c",
+    "coordinator_core/_engine_stamp": "f70dad6721fe7902c6b5f0ab43bca9f5b1aa2553",
     "coordinator_core/_fleet_names.py": "e81fc4247611fe486697f4707b28a1a3a008f392",
     "coordinator_core/_hook_envelope.py": "d98df967471c001593ab85960dc367f5ff5da056",
     "coordinator_core/_repo_root_probe.py": "2d8edfa8cd9343436a650584da430aa87ae0397d",
@@ -2765,6 +2765,7 @@
     "coordinator_core/benchmarks/tests/test_close_background_process_budget.py": "586131be7ac5908c2775a4f63096dfdd5cce9cc0",
     "coordinator_core/benchmarks/tests/test_close_review_process_budget.py": "6d7dfa5eb562c81e3f0bb0a6c2f30d51c8815946",
     "coordinator_core/benchmarks/tests/test_close_without_script_process_budget.py": "67d9c07de4c398b4463c675b7d68b674f6c77a4c",
+    "coordinator_core/benchmarks/tests/test_commit_leg_process_budget.py": "2a0aa806c1db1095d3e778f460ec81fba3356e26",
     "coordinator_core/benchmarks/tests/test_commit_leg_profile.py": "f3e9af6a8840e40cd42e770a81319e1b04f833fa",
     "coordinator_core/benchmarks/tests/test_commit_op_wallclock_budget.py": "7b3e6349e155c4608bde8ef9681a943d874ad242",
     "coordinator_core/benchmarks/tests/test_commit_path_process_budget.py": "e225f09b3f2821a3368915b40c4c144412d9893f",
@@ -6978,7 +6979,7 @@
     "coordinator_core/reviewer_vocabulary.py": "de635855d80d9d07a85a27ef3162975e0c2a88bc",
     "coordinator_core/roadmap/__init__.py": "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391",
     "coordinator_core/roadmap/audit.py": "378e832d20eb9ac1f26563980f33ac593a302eff",
-    "coordinator_core/roadmap/blitz_land.py": "c351ba97679108cff12f1ddd401f185f9dcb762e",
+    "coordinator_core/roadmap/blitz_land.py": "7ec61534e03ef3a900efe222391f722238b0960c",
     "coordinator_core/roadmap/blitz_stage.py": "86c4a66e1f9bd6e6e4fc33985df4acb81f0b1386",
     "coordinator_core/roadmap/census.py": "0a0aa8969e6b55f959fe9b7f7779cf4b511d5b1f",
     "coordinator_core/roadmap/cluster_scout.py": "4f22f6aacfd497c324113dbe5afefed4cefbf4e8",
@@ -7002,6 +7003,7 @@
     "coordinator_core/roadmap/tests/test_blitz_land.py": "4e86040d8a4e9f58427f66efa95141db2ee82f16",
     "coordinator_core/roadmap/tests/test_blitz_land_commits_trail.py": "b44c2a48dd3074b16ecf11bac669fa38dd3585cb",
     "coordinator_core/roadmap/tests/test_blitz_land_fire_hold.py": "8e242abfe7fe50031715658017915976c354c119",
+    "coordinator_core/roadmap/tests/test_blitz_land_joins_xs_sizing_to_baton.py": "720f88c7ca2467c101fa46a4aab579f62bf9e3b6",
     "coordinator_core/roadmap/tests/test_blitz_land_reconciles_sizing.py": "40bdc0634a0a90855ce881933f400be1323cd0b1",
     "coordinator_core/roadmap/tests/test_blitz_land_resolves_an_archived_baton.py": "026244533f8fbfbe972b6f651755f6bc224882a3",
     "coordinator_core/roadmap/tests/test_blitz_land_shipped_in_reachability.py": "6b483e378a6ffea70436d29c034ec715fed52f02",
@@ -8575,5 +8577,5 @@
     "scripts/unstick_claude.py": "5458a0f699f1793ff9fd32295b9d0b33635f1c06"
   },
   "schema": 1,
-  "source_head": "97986acaace4e61ccd3aeeaec50e0826cc067006"
+  "source_head": "0d176192add3f45e611b8e300d98a6ade82f7c22"
 }

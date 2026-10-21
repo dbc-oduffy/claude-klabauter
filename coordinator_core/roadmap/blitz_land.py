@@ -1048,6 +1048,113 @@ def _continue_replanned_source(
         return {"exit_code": 1, "error": f"{type(exc).__name__}: {exc}"}
 
 
+def _field_unset(value: Optional[str]) -> bool:
+    return value is None or value in ("", "null", "~")
+
+
+def join_xs_sizing_to_baton(
+    worktree_root: Path, baton_path: str, entry: Dict[str, Any]
+) -> Dict[str, Any]:
+    """Stamp `handoff_id`, `deliverable_id` and `sizing_object` on the baton an `xsRuns` entry names.
+
+    These are the three fields `emit-dispatch-workflow --sizing --baton` refuses on in turn.
+    A field the baton already carries is kept; the sizing's `deliverable_id` (else the
+    entry's `deliverableId`) fills only a missing one, and a baton `deliverable_id` or
+    `sizing_object` that differs from the entry's is reported in `conflicts`, never
+    overwritten. The `handoff_id` is derived from the baton's file stem (deterministic, so a
+    re-land mints the same id) and matches `^hnd-<slug>-[0-9a-f]{6}$`.
+
+    Returns `{baton, sizing, stamped, handoff_id, deliverable_id, conflicts, note}`; raises
+    LandingRefused when the sizing citation is unusable or the baton is absent.
+    """
+    import hashlib
+
+    from coordinator_core.frontmatter.primitives import read_fm_field_unquoted
+
+    if baton_path.startswith("/") or ".." in baton_path.split("/"):
+        raise LandingRefused(f"baton path is outside the worktree: {baton_path}")
+    baton_abs = worktree_root / baton_path
+    if not baton_abs.is_file():
+        raise LandingRefused(f"baton does not exist on disk: {baton_path}")
+    sizing_rel = _rel(entry.get("sizingObject"), worktree_root)
+    if sizing_rel.startswith("/") or ".." in sizing_rel.split("/"):
+        raise LandingRefused(f"xsRuns sizingObject is outside the worktree: {sizing_rel}")
+    sizing_abs = worktree_root / sizing_rel
+    if not sizing_abs.is_file():
+        raise LandingRefused(f"xsRuns sizing does not exist on disk: {sizing_rel}")
+    try:
+        sizing = yaml.safe_load(sizing_abs.read_text(encoding="utf-8")) or {}
+    except (OSError, yaml.YAMLError) as exc:
+        raise LandingRefused(f"xsRuns sizing unreadable: {sizing_rel}: {exc}") from exc
+    dlv = str(
+        (sizing.get("deliverable_id") if isinstance(sizing, dict) else None)
+        or entry.get("deliverableId")
+        or ""
+    ).strip()
+    if _field_unset(dlv):
+        raise LandingRefused(
+            f"sizing {sizing_rel} carries no deliverable_id and the entry names none"
+        )
+
+    stem = Path(baton_path).stem
+    derived_hid = (
+        f"hnd-{id_slug(re.sub(r'[^a-z0-9]+', '-', stem.lower()), 40)}-"
+        f"{hashlib.sha1(baton_path.encode('utf-8')).hexdigest()[:6]}"
+    )
+    state: Dict[str, Any] = {"stamped": [], "conflicts": []}
+
+    def _join(old: str) -> str:
+        text = old
+        span = _frontmatter_span(old)
+        fm = old[span[0] : span[1]] if span else ""
+        state["stamped"], state["conflicts"] = [], []
+
+        hid = read_fm_field_unquoted(fm, "handoff_id")
+        state["handoff_id"] = derived_hid if _field_unset(hid) else hid
+        if _field_unset(hid):
+            text = _set_field(text, "handoff_id", json.dumps(derived_hid))
+            state["stamped"].append("handoff_id")
+
+        held = read_fm_field_unquoted(fm, "deliverable_id")
+        state["deliverable_id"] = dlv if _field_unset(held) else held
+        if _field_unset(held):
+            text = _set_field(text, "deliverable_id", json.dumps(dlv))
+            state["stamped"].append("deliverable_id")
+        elif held != dlv:
+            state["conflicts"].append(
+                f"deliverable_id: baton carries {held!r}, sizing {sizing_rel} carries {dlv!r}; kept the baton's"
+            )
+
+        owner = read_fm_field_unquoted(fm, "sizing_object")
+        if _field_unset(owner):
+            text = _set_field(text, "sizing_object", json.dumps(sizing_rel))
+            state["stamped"].append("sizing_object")
+        elif owner.replace("\\", "/") != sizing_rel:
+            state["conflicts"].append(
+                f"sizing_object: baton cites {owner!r}, entry names {sizing_rel!r}; kept the baton's"
+            )
+        if text == old:
+            raise MutateAbort("already joined")
+        return text
+
+    note = None
+    try:
+        locked_rmw(baton_abs, _join, repo_root=worktree_root)
+    except MutateAbort as exc:
+        note = str(exc)
+        if state.get("handoff_id") is None:
+            raise LandingRefused(f"baton {baton_path} could not be joined: {exc}") from exc
+    return {
+        "baton": baton_path,
+        "sizing": sizing_rel,
+        "stamped": state["stamped"],
+        "handoff_id": state.get("handoff_id"),
+        "deliverable_id": state.get("deliverable_id"),
+        "conflicts": state["conflicts"],
+        "note": note,
+    }
+
+
 def _today() -> str:
     """Today's date, read from the clock the caller's records are dated against.
 
@@ -1449,6 +1556,21 @@ def land_wave(
             except (LandingRefused, MutateAbort, OSError):
                 continue
 
+    xs_joined: List[Dict[str, Any]] = []
+    for entry in wave_result.get("xsRuns") or []:
+        if not isinstance(entry, dict):
+            continue
+        try:
+            try:
+                baton_path = _baton_path_for(entry, report)
+            except LandingRefused:
+                if not entry.get("record"):
+                    raise
+                baton_path = _rel(entry["record"], worktree_root)
+            xs_joined.append(join_xs_sizing_to_baton(worktree_root, baton_path, entry))
+        except (LandingRefused, MutateAbort, LockTimeout, OSError) as exc:
+            refused.append({"baton": entry.get("batonId"), "reason": str(exc)})
+
     minted: List[Dict[str, Any]] = []
     #: Repo-relative paths of the SOURCE batons whose replan was minted in THIS landing.
     #: Read by the `next_wave` build below — see `_without_replanned_sources`.
@@ -1519,6 +1641,8 @@ def land_wave(
         "execution_ready": execution_ready,
         "refused": refused,
         "minted": minted,
+        # xsRuns batons joined to their sizing (handoff_id/deliverable_id/sizing_object).
+        "xs_joined": xs_joined,
         "pulled": pulled,
         # Pulled batons on a plan-carrying route that named no plan: nothing was linked.
         "pulled_without_plan": pulled_without_plan,
@@ -1534,7 +1658,7 @@ def land_wave(
 
 #: The verdict keys a real wave result carries. A payload with none of them is not
 #: an empty wave — it is the wrong object.
-_VERDICT_KEYS = ("ready", "pulled", "replan", "surfacedToPm", "dispatched", "routedElsewhere")
+_VERDICT_KEYS = ("ready", "pulled", "replan", "surfacedToPm", "dispatched", "routedElsewhere", "xsRuns")
 
 #: The ONLY routes that produce a plan document — mirrors `PLANNABLE_ROUTES` in
 #: coordinator-content-repo `coordinator/workflows/plan-blitz.mjs`. Every other route is a different
