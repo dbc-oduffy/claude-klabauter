@@ -9,6 +9,7 @@ import pytest
 from coordinator_core.ops._workflow_contract import Severity, run_checks
 from coordinator_core.ops.dispatch_emit import ask_compose
 from coordinator_core.ops.dispatch_emit.ask_compose import AskComposeRefused, compose_ask_script
+from coordinator_core.ops.dispatch_emit.land_run_contract import OP_NAME
 from coordinator_core.ops.dispatch_emit.ask_contract import (
     NO_PLAN_HAND_OFF_FLAG,
     PM_EXIT_QUESTION_KEY,
@@ -193,7 +194,7 @@ def test_gate_refuses_an_absent_sizing(tmp_path):
 
 def test_stop_after_plan_composes_no_stage_execute_or_review():
     script = _compose(stop_after=STOP_AFTER_PLAN)
-    for absent in ("phase('stage')", "phase('Execute')", "phase('Review wave')", "phase('Verify')", "_runRow(r.id", "dispatch.terminal_commit"):
+    for absent in ("phase('stage')", "phase('Execute')", "phase('Review wave')", "phase('Verify')", "_runRow(r.id", OP_NAME):
         assert absent not in script, absent
     assert "planned: [_planRel]" in script and "route: 'dispatch'" in script
     assert "phase('plan')" in script and "phase('size')" in script and "phase('gate')" in script

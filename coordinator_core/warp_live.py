@@ -429,10 +429,7 @@ def size_stage_run(
 def _holds_ended_marker(root: Path, run_id: str) -> bool:
     """True when the run's record dir holds a `halted` or `landed` marker: such a run is never
     working, whatever an unconsumed token says. A `resumed` marker is live again."""
-    try:
-        marker = _read_json(_ask_record_dir(root, run_id) / _HALTED_FILE)
-    except ValueError:
-        return False
+    marker = _read_json(_ask_record_dir(root, run_id) / _HALTED_FILE)
     return bool(marker) and marker.get("status") in (_STATUS_HALTED, _STATUS_LANDED)
 
 

@@ -200,7 +200,7 @@ def test_the_checkpoint_step_spawns_no_process(tmp_path, monkeypatch, record_pro
     s = _example_game_repo_shape(tmp_path)
     text = (tmp_path / PLAN).read_text(encoding="utf-8")
     rows, _ = coas._parse_spine_rows(text, PLAN)
-    from coordinator_core.ops.dispatch_emit import terminal_commit  # noqa: F401 -- pre-import
+    from coordinator_core.ops.dispatch_emit import plan_row_coding  # noqa: F401 -- pre-import
 
     def _boom(*a, **kw):
         raise AssertionError("spawn")

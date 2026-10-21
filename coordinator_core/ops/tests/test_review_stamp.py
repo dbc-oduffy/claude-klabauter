@@ -855,7 +855,7 @@ def test_mint_succeeds_against_a_zero_integration_stage_bookkeeping_record(tmp_p
 
 def _stage_record_fixture(repo: Path, *, tests: dict, criterion: dict, plan_id: str = "pln-example-abc123"):
     """A run record carrying the stage returns themselves (what
-    `dispatch.terminal_commit` writes since 2026-10-01): no prep/delivery
+    `dispatch.land_run` writes since 2026-10-01): no prep/delivery
     sidecar frontmatter is read at all. The diff is state-only."""
     share = repo / ".coordinator-local" / "subagent-share" / "sess1"
     record = share / "pln-example-abc123.review-wave-bookkeeping.md"

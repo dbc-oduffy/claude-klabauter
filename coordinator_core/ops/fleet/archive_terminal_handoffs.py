@@ -1199,7 +1199,7 @@ def _move_for(
 def plan_in_run_move(
     worktree_root: Path, common_dir: Path, rel: str
 ) -> Tuple[Optional[Move], Optional[str]]:
-    """Single-target entry for ``dispatch.terminal_commit``: may the run's consumed baton
+    """Single-target entry for ``dispatch.land_run``: may the run's consumed baton
     ``rel`` move to ``archive/handoffs/YYYY-MM/`` now?
 
     Reads that one record and applies the sweep's terminality rule (``_classify_branch``,

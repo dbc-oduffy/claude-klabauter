@@ -64,6 +64,28 @@ def test_a_matching_positional_task_output_path_is_accepted(captured, tmp_path):
     assert captured == [{"task_output_path": abs_path, "k": 1}]
 
 
+def test_land_run_takes_the_flag_and_carries_the_absolute_path(captured, tmp_path):
+    _, stderr, code = _dispatch_argv(
+        ["dispatch.land_run", "--from-task-output", "out.json"],
+        str(tmp_path),
+        allow_warm=False,
+    )
+    assert code == 0, stderr
+    assert captured == [{"task_output_path": str((tmp_path / "out.json").resolve())}]
+
+
+def test_land_run_conflicting_task_output_path_is_refused(captured, tmp_path):
+    _, stderr, code = _dispatch_argv(
+        ["dispatch.land_run", '{"task_output_path": "other.json"}',
+         "--from-task-output", "out.json"],
+        str(tmp_path),
+        allow_warm=False,
+    )
+    assert code == 2
+    assert "conflicts" in stderr
+    assert captured == []
+
+
 def test_another_op_is_a_usage_error(captured, tmp_path):
     _, stderr, code = _dispatch_argv(
         ["ping", "--from-task-output", "out.json"], str(tmp_path), allow_warm=False

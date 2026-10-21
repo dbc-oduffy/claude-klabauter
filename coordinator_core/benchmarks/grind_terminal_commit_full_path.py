@@ -2,7 +2,7 @@
 
 Each invocation builds a fresh repo under a caller-given directory: two finished rows with product
 files, one row's ledger-root evidence path (dropped) and one untracked row deletion (dropped), beside
-an undeclared dirty file. It then calls `dispatch.terminal_commit`'s handler with `grind` params.
+an undeclared dirty file. It then calls `dispatch.land_run`'s handler with `grind` params.
 `--setup-only` does everything except that call, so the cost of the call is `full - setup-only`.
 
     python -m coordinator_core.benchmarks.grind_terminal_commit_full_path <dir> [--setup-only]
@@ -59,11 +59,11 @@ def main(argv: list[str]) -> int:
         return 2
     declare_benchmark_origin()
     repo = build_fixture(Path(args[0]))
-    from coordinator_core.ops.dispatch_emit import terminal_commit
+    from coordinator_core.ops.dispatch_emit import land_run
 
     if "--setup-only" in argv:
         return 0
-    out = terminal_commit._handler(
+    out = land_run._handler(
         {
             "script_path": "run.mjs", "run_id": RUN_ID,
             "grind": {

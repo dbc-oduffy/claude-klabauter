@@ -9,7 +9,7 @@ import pytest
 
 from coordinator_core.ops.dispatch_emit import delivery_credit
 from coordinator_core.ops.dispatch_emit import reverify_delivery as rd
-from coordinator_core.ops.dispatch_emit import terminal_commit
+from coordinator_core.ops.dispatch_emit import plan_row_coding
 from coordinator_core.ops.dispatch_emit.delivery_credit import (
     NOOP_DETAIL_PREFIX,
     coded_row_refs,
@@ -101,8 +101,8 @@ def test_no_noop_row_makes_no_extra_spawn(tmp_path, monkeypatch):
     assert calls == []
 
 
-def test_noop_prefix_heads_terminal_commit_detail():
-    assert terminal_commit._NOOP_DETAIL.startswith(NOOP_DETAIL_PREFIX)
+def test_noop_prefix_heads_the_coded_stamp_detail():
+    assert plan_row_coding.NOOP_DETAIL.startswith(NOOP_DETAIL_PREFIX)
 
 
 def test_credit_note_names_landing_sha(tmp_path):

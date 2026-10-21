@@ -8,7 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from coordinator_core.ops.dispatch_emit import terminal_commit
+from coordinator_core.ops.ceremony import close_background as cb
 from coordinator_core.ops.dispatch_emit.emit import emit_script
 from coordinator_core.ops.dispatch_emit.spine_read import MemoRowNoReceiptError, MemoRowNoReceiverError, read_spine
 
@@ -75,9 +75,9 @@ def test_declared_receipt_names_the_slug(tmp_path):
         f"  surface: {_OUTBOX}/topic.md\n", f"  surface: docs/x.md\n  receipt: {_OUTBOX}/sent/other.md\n"
     ).replace("change_kind: doc-edit", "change_kind: doc-edit\n  kind: memo-send")
     plan = _plan(tmp_path, row)
-    assert terminal_commit._memo_rows_without_receipt(tmp_path, _request("p.md")) == {"M1": "other"}
+    assert _unsent(tmp_path, plan) == ["M1 (other)"]
     _receipt(tmp_path, "other")
-    assert terminal_commit._memo_rows_without_receipt(tmp_path, _request("p.md")) == {}
+    assert _unsent(tmp_path, plan) == []
 
 
 def test_memo_row_naming_no_slug_is_refused(tmp_path):
@@ -121,53 +121,46 @@ def test_non_memo_empty_writes_row_is_unchanged(tmp_path):
     assert "memo-send row" not in script
 
 
-def _request(plan_rel):
-    return SimpleNamespace(plan_path=plan_rel)
+def _unsent(root, plan) -> list:
+    return cb._unsent_memos(SimpleNamespace(root=root), plan.read_text(encoding="utf-8"))
 
 
 def test_row_without_a_receipt_stays_open_and_names_the_slug(tmp_path):
-    _plan(tmp_path, _MEMO_ROW, _CODE_ROW)
-    assert terminal_commit._memo_rows_without_receipt(tmp_path, _request("p.md")) == {"M1": "topic"}
+    plan = _plan(tmp_path, _MEMO_ROW, _CODE_ROW)
+    assert _unsent(tmp_path, plan) == ["M1 (topic)"]
 
 
 def test_row_with_a_receipt_closes(tmp_path):
-    _plan(tmp_path, _MEMO_ROW, _CODE_ROW)
+    plan = _plan(tmp_path, _MEMO_ROW, _CODE_ROW)
     _receipt(tmp_path)
-    assert terminal_commit._memo_rows_without_receipt(tmp_path, _request("p.md")) == {}
+    assert _unsent(tmp_path, plan) == []
 
 
 def test_non_memo_rows_never_held_by_the_receipt_gate(tmp_path):
-    _plan(tmp_path, _EMPTY_ROW, _CODE_ROW)
-    assert terminal_commit._memo_rows_without_receipt(tmp_path, _request("p.md")) == {}
+    plan = _plan(tmp_path, _EMPTY_ROW, _CODE_ROW)
+    assert _unsent(tmp_path, plan) == []
 
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_terminal_commit_reply_names_the_unsent_memo(tmp_path):
-    import subprocess
-
-    from coordinator_core.ops.dispatch_emit.commit_request import ChunkCommit, CommitRequest, render_marker
-
-    for args in (["init", "-q"], ["config", "user.email", "t@example.com"], ["config", "user.name", "t"]):
-        subprocess.run(["git", *args], cwd=tmp_path, check=True, capture_output=True, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-    _plan(tmp_path, _MEMO_ROW, _CODE_ROW)
-    (tmp_path / "pkg").mkdir()
-    (tmp_path / "pkg" / "a.py").write_text("a\n", encoding="utf-8")
-    request = CommitRequest(
-        chunks=(ChunkCommit(id="C1", title="t", paths=("pkg/a.py",)),), plan_path="p.md"
+def test_the_implemented_flip_names_the_unsent_memo(tmp_path):
+    from coordinator_core.ops.ceremony.tests.test_close_background_land_run_legs import (
+        PLAN,
+        _build,
+        _fake_mint,
+        _flip_ctx,
     )
-    (tmp_path / "run.mjs").write_text("// e\n" + render_marker(request) + "\n", encoding="utf-8")
-    params = {
-        "script_path": "run.mjs",
-        "incomplete_chunks": [],
-        "inline_review": {"integration_stem": "s", "slices": 1, "fixes": 0},
-    }
-    out = terminal_commit._handler(params, repo_root=tmp_path / ".git")
-    assert out["memo_unsent"] == {"M1": "topic"}
-    _receipt(tmp_path)
-    (tmp_path / "pkg" / "a.py").write_text("a2\n", encoding="utf-8")
-    out = terminal_commit._handler(params, repo_root=tmp_path / ".git")
-    assert "memo_unsent" not in out
+
+    root = tmp_path / "repo"
+    sha = _build(root, spine=True)
+    _fake_mint(root / PLAN, root)
+    plan = root / PLAN
+    plan.write_text(plan.read_text(encoding="utf-8").replace("```\n", _MEMO_ROW + "```\n", 1), encoding="utf-8")
+    refused = cb._plan_flip(_flip_ctx(root, sha))
+    assert refused.status == "failed" and "memo not sent" in refused.detail and "M1 (topic)" in refused.detail
+    _receipt(root)
+    after = cb._plan_flip(_flip_ctx(root, sha))
+    assert "memo not sent" not in after.detail
 
 
 def _with_verifier_and_criterion(tmp_path, *rows):

@@ -11,7 +11,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     HALT_PLAN_FIELD,
     read_halt_record,
 )
-from coordinator_core.ops.dispatch_emit.halted_record_commit import _EVIDENCE_CAP_BYTES
+from coordinator_core.ops.dispatch_emit.land_run_halt import _EVIDENCE_CAP_BYTES
 from coordinator_core.ops.dispatch_emit.halted_run import write_halt_marker
 from coordinator_core.ops.dispatch_emit.tests.test_halted_marker_records_blocking import (  # noqa: F401
     PLAN,

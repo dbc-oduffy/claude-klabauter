@@ -8,7 +8,7 @@ path. Covers batching by `change_kind` and the profile's own
 
 Item 18's third leg -- "one post-batch index regeneration" -- is NOT
 exercised here: the grind commits once per run, through
-`dispatch.terminal_commit`, with no per-row commit stage left to carry an
+`dispatch.land_run`, with no per-row commit stage left to carry an
 index-regenerate hook, and no batch-end call site exists for one. Left
 unimplemented; reported, not silently dropped.
 
@@ -143,7 +143,7 @@ def test_fixture_and_improvement_profiles_each_compose_one_terminal_commit_and_n
     for profile in (fixture, improvement):
         script = _compose_for(profile)
         assert "@commit" not in script
-        assert script.count("coordinator-invoke dispatch.terminal_commit") == 1
+        assert script.count("coordinator-invoke dispatch.land_run") == 1
         assert script.count("async function _terminalCommit()") == 1
         assert f"const PROFILE_NAME = '{profile.name}';" in script
 

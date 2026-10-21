@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from coordinator_core.ops.dispatch_emit import ask_compose
 from coordinator_core.ops.dispatch_emit.ask_compose import _GATE_SCHEMA, compose_ask_script
-from coordinator_core.ops.dispatch_emit.terminal_commit_reconcile import TERMINAL_COMMIT_RECONCILE_CLAUSE
+from coordinator_core.ops.dispatch_emit.land_run_contract import RECONCILE_CLAUSE
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
 
 _BLITZ_FN = "  async function planBlitz(args) {\n    return { ready: [] };\n  }"
@@ -117,7 +117,7 @@ def test_the_verify_prompt_names_exactly_the_blocking_ids(monkeypatch):
 
 def test_the_clause_demands_work_changed_since_the_halt_and_lists_the_notes(monkeypatch):
     script = _script(monkeypatch)
-    ledger = script.replace(ask_compose._lit(" " + TERMINAL_COMMIT_RECONCILE_CLAUSE), "")
+    ledger = script.replace(ask_compose._lit(" " + RECONCILE_CLAUSE), "")
     assert ledger != script
     assert "already ran" not in ledger and "already landed" not in ledger
     assert "met only on work changed since the halt commit" in script

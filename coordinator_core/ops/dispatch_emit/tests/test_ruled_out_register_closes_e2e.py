@@ -1,5 +1,5 @@
-"""An ask run whose every register row a recorded revise ruling took out of scope commits and pays
-every close leg through `dispatch.terminal_commit`, whichever run recorded the ruling."""
+"""An ask run whose every register row a recorded revise ruling took out of scope commits through
+`dispatch.land_run` and its close job pays every close leg, whichever run recorded the ruling."""
 
 from __future__ import annotations
 
@@ -11,7 +11,8 @@ import yaml
 from coordinator_core.benchmarks import terminal_commit_full_path as driver
 from coordinator_core.ops import requirement_register as rr
 from coordinator_core.ops.ceremony import close_background
-from coordinator_core.ops.dispatch_emit import terminal_commit
+from coordinator_core.ops.dispatch_emit import land_run
+from coordinator_core.ops.dispatch_emit.tests.test_met_judge_reaches_close_legs_e2e import _run_close_job
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -43,11 +44,9 @@ def _fixture(tmp_path, monkeypatch, ruling_run):
 
     outbox = tmp_path / "lessons-outbox"
     outbox.mkdir()
-    noop = tmp_path / "noop.py"
-    noop.write_text("pass\n", encoding="utf-8")
     monkeypatch.setenv("LESSON_PROMOTE_OUTBOX_ROOT", str(outbox))
     monkeypatch.setenv("COORDINATOR_SESSION_ID", driver.SESSION_ID)
-    monkeypatch.setattr(terminal_commit, "CLOSE_JOB_SCRIPT", str(noop))
+    monkeypatch.setattr(land_run, "_launch_close_job", lambda *a, **k: True)
     monkeypatch.setattr(
         claims, "list_claims_by_session_checked", lambda sid, cwd=None: ([("handoff", "b.md")], [])
     )
@@ -56,7 +55,7 @@ def _fixture(tmp_path, monkeypatch, ruling_run):
 
 
 def _drive(repo, script, verdict):
-    return terminal_commit._handler(
+    return land_run._handler(
         {"script_path": script, "incomplete_chunks": [], "session_id": driver.SESSION_ID,
          "inline_review": copy.deepcopy(driver.INLINE_REVIEW), "ledger_verdict": verdict},
         repo_root=repo / ".git",
@@ -74,7 +73,9 @@ def _assert_closed(repo, out):
         check=True, **no_console_creationflags(),
     ).stdout
     assert OPEN_TRAILER in message, message
-    assert driver._close_failure(out) == "", out
+    legs = {leg: status for leg, (status, _detail) in _run_close_job(repo, out).items()}
+    owed = ("review-stamp", "plan-reconciliation", "completion-entry", "baton-ship", "lessons", "close-commit")
+    assert {leg: legs.get(leg) for leg in owed if legs.get(leg) != "ran"} == {}, legs
 
 
 @pytest.mark.parametrize("ruling_run", [OTHER_RUN, driver.ASK_RUN], ids=["re-fire-other-run", "same-run"])

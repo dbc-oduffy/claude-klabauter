@@ -1233,7 +1233,7 @@ def mint(
     `stage_returns`) and falls back to the prep/delivery sidecars' frontmatter
     only for a record that predates them. `resolved` is `(terminal_sha,
     record_path, record)` from a caller that just landed the terminal commit
-    itself (`dispatch.terminal_commit`): the trailer walk is skipped.
+    itself (`dispatch.land_run`): the trailer walk is skipped.
     `criterion_open_ok` mints over a `not_met`/`indeterminate` criterion, recording its
     status on the stamp (see `verdict.mint_refusal`). `terminal_tree_sha` is the
     tree of the terminal commit when the caller already holds it (the commit

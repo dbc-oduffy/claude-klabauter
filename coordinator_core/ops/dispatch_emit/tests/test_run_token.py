@@ -257,3 +257,5 @@ def test_command_params_parse_inline_and_heredoc():
     assert run_token.token_params_from_command(inline)["run_id"] == "a"
     heredoc = "coordinator-invoke dispatch.terminal_commit --params-file - <<'JSON'\n{\"run_id\": \"b\", \"run_token\": \"t\"}\nJSON"
     assert run_token.token_params_from_command(heredoc)["run_id"] == "b"
+    land = "coordinator-invoke dispatch.land_run --params-file - <<'JSON'\n{\"run_id\": \"c\", \"run_token\": \"t\"}\nJSON"
+    assert run_token.token_params_from_command(land)["run_id"] == "c"

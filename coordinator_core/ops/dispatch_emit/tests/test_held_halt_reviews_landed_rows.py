@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from coordinator_core.ops.dispatch_emit import terminal_commit
+from coordinator_core.ops.dispatch_emit import land_run
 from coordinator_core.ops.dispatch_emit.commit_request import ChunkCommit, CommitRequest, render_marker
 from coordinator_core.ops.dispatch_emit.emit import compose_script
 from coordinator_core.ops.dispatch_emit.wave_map import WaveRow
@@ -66,7 +66,7 @@ def test_wake_digest_names_a_reachable_inline_review_expression():
     assert expr is not None
     assert expr.group(1).strip() != "null"
     assert "integration_stem" in expr.group(1)
-    assert "next_action" in script and "dispatch.terminal_commit" in script
+    assert "next_action" in script and "dispatch.land_run" in script
 
 
 def test_review_prep_scopes_by_the_run_base_diff_so_an_unlanded_held_file_is_not_a_finding():
@@ -103,7 +103,7 @@ def test_terminal_commit_lands_the_done_rows_of_a_held_halt_outcome(tmp_path, mo
         )
     )
     (root / "run.mjs").write_text("// emitted\n" + render_marker(request) + "\n", encoding="utf-8")
-    out = terminal_commit._handler(
+    out = land_run._handler(
         {
             "script_path": "run.mjs",
             "incomplete_chunks": ["X0", "B"],

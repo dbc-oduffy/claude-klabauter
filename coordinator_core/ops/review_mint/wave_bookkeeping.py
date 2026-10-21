@@ -500,7 +500,7 @@ from coordinator_core.lifecycle import main_worktree_root  # noqa: E402 — the 
 @register_op("review_mint.bookkeep_wave")
 def _bookkeep_wave_handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """Op surface for the host driver to call post-run (the same "after the
-    run, from the return payload" seam `dispatch.terminal_commit` uses) --
+    run, from the return payload" seam `dispatch.land_run` uses) --
     NOT invoked from the emitted script itself; see module docstring.
     Params: wave_sidecar_paths (list[str]), session_id, plan_id,
     prep_sidecar, record_stem. `repo_root` param wins when the caller's own

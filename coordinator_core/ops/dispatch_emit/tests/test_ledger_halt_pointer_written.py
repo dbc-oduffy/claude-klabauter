@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 import subprocess
+from pathlib import Path
 
 import pytest
+
+from coordinator_core.ops.dispatch_emit import land_run
+from coordinator_core.win_portability import no_console_creationflags
 
 from coordinator_core.ops.dispatch_emit.ask_contract import (
     HALTED_RECORD_PARAM,
@@ -12,20 +16,44 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     ledger_halt_path,
     read_ledger_halt,
 )
-from coordinator_core.ops.dispatch_emit.tests.test_terminal_commit_halted_record import (  # noqa: F401
-    RUN,
-    _git,
-    _write_record,
-    repo,
-)
-from coordinator_core.ops.dispatch_emit import terminal_commit
-
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
+RUN = "ask-20261015T000000-aaaaaa"
+
+
+def _git(args, cwd: Path) -> str:
+    return subprocess.run(
+        ["git", *args], cwd=str(cwd), capture_output=True, text=True, check=True,
+        **no_console_creationflags(),
+    ).stdout
+
+
+@pytest.fixture
+def repo(tmp_path):
+    root = tmp_path / "repo"
+    root.mkdir()
+    _git(["init", "-q"], root)
+    _git(["config", "user.email", "t@example.com"], root)
+    _git(["config", "user.name", "t"], root)
+    (root / "docs").mkdir()
+    (root / "docs" / "guide.md").write_text("seed\n", encoding="utf-8")
+    _git(["add", "."], root)
+    _git(["commit", "-q", "-m", "seed"], root)
+    (root / "run.mjs").write_text("// script\n", encoding="utf-8")
+    return root
+
+
+def _write_record(root: Path, run_id: str, names=("ask.md", "pm-intent.md", "run.json")) -> Path:
+    rec = root / RECORD_DIR_ROOT / run_id
+    rec.mkdir(parents=True, exist_ok=True)
+    for name in names:
+        (rec / name).write_text(f"{name}\n", encoding="utf-8")
+    return rec
 
 
 def _call(root, **extra) -> dict:
     params = {"script_path": "run.mjs", "run_id": RUN, **extra}
-    return terminal_commit._handler(params, repo_root=root)
+    return land_run._handler(params, repo_root=root)
 
 
 PLAN = "docs/plans/2026-10-16-demo.md"

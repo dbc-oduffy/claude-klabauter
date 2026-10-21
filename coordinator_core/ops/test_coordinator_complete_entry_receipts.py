@@ -50,7 +50,7 @@ def _receipt_fm(rid: str, actual, dlv: str = "dlv-demo-222222") -> dict:
         "prose_ref": receipt_rel_path(rid, _NOW),
         "supersedes": None,
         "approved_by": None,
-        "provenance": {"observed_at": _NOW, "derivation": "dispatch.terminal_commit", "ref": {"branch": "main", "sha": "abc"}},
+        "provenance": {"observed_at": _NOW, "derivation": "dispatch.land_run", "ref": {"branch": "main", "sha": "abc"}},
     }
 
 

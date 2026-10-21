@@ -1,5 +1,5 @@
 """The 21fa0afd76 incident shape: a refire of a ledger-check halt carries the owed work and the revise
-note into the resume, composes a remaining-work leg, and the terminal commit refuses `met` on a tree
+note into the resume, composes a remaining-work leg, and land_run refuses `met` on a tree
 no declared product path changed in since the halt."""
 
 from __future__ import annotations
@@ -11,7 +11,7 @@ import pytest
 
 from coordinator_core.ops.dispatch_emit import ask_compose, ask_gate
 from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
-from coordinator_core.ops.dispatch_emit import terminal_commit as tc
+from coordinator_core.ops.dispatch_emit import land_run
 from coordinator_core.ops.dispatch_emit.ask_compose import compose_ask_script
 from coordinator_core.ops.dispatch_emit.ask_contract import (
     RECORD_DIR_ROOT,
@@ -38,13 +38,17 @@ pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 HALTED_RUN = "ask-20261017T014048-0c9cac"
 REFIRE_RUN = "warp-2026-10-17-refire-20261017T020238-a32fd8"
-NOTE = "R1 still owes the unchanged-since-halt refusal in terminal_commit"
+NOTE = "R1 still owes the unchanged-since-halt refusal in land_run"
 REMAINING = {"R1": {"remaining": ["add the unchanged-since-halt refusal"], "evidence": "falsifier still fails"}}
 REGISTER = {
     "sources": [{"doc": "ask", "ref": "ask"}],
     "rows": [{"id": "R1", "source_text": "refuse met on an unchanged diff", "surface": "internal", "status": "open"}],
 }
 MET = {"items": [{"id": "R1", "status": "met", "wired": True}]}
+
+
+def _gate(repo, run_dir, verdict, manifest, resume_ledger):
+    return land_run._ledger_gate(repo, run_dir, verdict, manifest, (), {}, None, {}, resume_ledger, None)
 
 
 def _head(repo):
@@ -115,7 +119,7 @@ def test_the_composed_resume_script_runs_a_remaining_work_leg_before_the_verify(
     assert f"_nextAction.params.{TERMINAL_RESUME_LEDGER_PARAM} = " in script
 
 
-def test_the_terminal_commit_refuses_met_on_an_unchanged_tree_and_passes_after_a_declared_edit(repo):  # noqa: F811
+def test_land_run_refuses_met_on_an_unchanged_tree_and_passes_after_a_declared_edit(repo):  # noqa: F811
     halt_sha = _halted_repo(repo)
     resume = ask_gate._handler({"sizing_path": REL, "run_id": REFIRE_RUN}, repo)["resume_ledger"]
     rl.start(repo, REFIRE_RUN)
@@ -125,15 +129,15 @@ def test_the_terminal_commit_refuses_met_on_an_unchanged_tree_and_passes_after_a
     param = {"run_id": REFIRE_RUN, "halt_sha": resume[RESUME_LEDGER_HALT_SHA_FIELD], "blocking": resume["blocking"]}
     assert param["halt_sha"] == halt_sha
 
-    refusal = tc._ledger_gate(repo, run_dir, MET, manifest, resume_ledger=param)[0]
+    refusal = _gate(repo, run_dir, MET, manifest, param)[0]
     assert refusal["refused"] == "ledger-unmet"
     assert refusal["ledger_failures"] == [{"id": "R1", "reason": UNCHANGED_SINCE_HALT_REASON}]
 
     (repo / "state" / "extra.yaml").write_text("a: 1\n", encoding="utf-8")
-    assert tc._ledger_gate(repo, run_dir, MET, manifest, resume_ledger=param)[0]["refused"] == "ledger-unmet"
+    assert _gate(repo, run_dir, MET, manifest, param)[0]["refused"] == "ledger-unmet"
 
     (repo / "some" / "C0.py").write_text("x = 2\n", encoding="utf-8")
-    after = tc._ledger_gate(repo, run_dir, MET, manifest, resume_ledger=param)[0]
+    after = _gate(repo, run_dir, MET, manifest, param)[0]
     assert after is None or UNCHANGED_SINCE_HALT_REASON not in json.dumps(after)
     assert after is None or after["refused"] == "ledger-unmet"
 
@@ -190,7 +194,7 @@ def test_unlanded_composed_script_sets_ledger_exec_ahead_of_the_execute_phase(re
     assert gate_if < leg and script.index("_ledgerExec = true", field) < gate_if
 
 
-def test_unlanded_terminal_commit_still_refuses_met_on_an_unchanged_tree(repo):  # noqa: F811
+def test_unlanded_land_run_still_refuses_met_on_an_unchanged_tree(repo):  # noqa: F811
     halt_sha = _unlanded_halted_repo(repo)
     resume = ask_gate._handler({"sizing_path": REL, "run_id": REFIRE_RUN}, repo)["resume_ledger"]
     rl.start(repo, REFIRE_RUN)
@@ -199,6 +203,6 @@ def test_unlanded_terminal_commit_still_refuses_met_on_an_unchanged_tree(repo): 
     manifest = repo / RECORD_DIR_ROOT / HALTED_RUN / "manifest.json"
     param = {"run_id": REFIRE_RUN, "halt_sha": resume[RESUME_LEDGER_HALT_SHA_FIELD], "blocking": resume["blocking"]}
     assert param["halt_sha"] == halt_sha
-    refusal = tc._ledger_gate(repo, run_dir, MET, manifest, resume_ledger=param)[0]
+    refusal = _gate(repo, run_dir, MET, manifest, param)[0]
     assert refusal["refused"] == "ledger-unmet"
     assert refusal["ledger_failures"] == [{"id": "R1", "reason": UNCHANGED_SINCE_HALT_REASON}]

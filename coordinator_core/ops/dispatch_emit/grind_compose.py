@@ -77,7 +77,7 @@ call over the union of the live touched and created paths; the drain's
 ledger sweep reads the live ``RUN_ID`` in scope. A finished row never
 commits on its own: it queues on ``_pendingCommit`` with its runtime
 ``touchedFiles``/``createdFiles``/``removedFiles``, and ONE terminal
-``dispatch.terminal_commit`` call lands every queued row after the grind
+``dispatch.land_run`` call lands every queued row after the grind
 (in a ``finally``, so a halted or throwing run still lands what finished).
 After review and adjudication an outer ``finally`` runs ``_runClose()``: one
 drain call whose verb sweeps, then writes the whole run record whatever the sweep did, so a throw
@@ -1541,7 +1541,7 @@ def compose_grind_script(
 
     ``commit_trailers`` are host-required trailer lines passed verbatim to
     the review-fix commit's prompt; empty leaves the prompt unchanged. The
-    terminal commit takes none: ``dispatch.terminal_commit`` writes each
+    terminal commit takes none: ``dispatch.land_run`` writes each
     row's own ``Grind-Row`` trailer.
 
     ``review_roster_fragment`` / ``review_stage_schemas`` carry the execute_review

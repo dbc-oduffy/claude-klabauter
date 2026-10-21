@@ -8,7 +8,7 @@ import pytest
 import yaml
 
 from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
-from coordinator_core.ops.dispatch_emit import terminal_commit as tc
+from coordinator_core.ops.dispatch_emit import land_run
 from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
 
 RUN = "ask-20261016T000000-c1c1c1"
@@ -29,6 +29,10 @@ def _repo(tmp_path, doc=None, sizing_rel=REL, write_sizing=True):
     dir_ = tmp_path / RECORD_DIR_ROOT / RUN
     rl._write_run(dir_, {"sizing_rel": sizing_rel, "all_of_pm_ask": False})
     return tmp_path, dir_
+
+
+def _gate(root, run_dir, verdict):
+    return land_run._ledger_gate(root, run_dir, verdict, None, (), {}, None, {}, None, None)
 
 
 @pytest.mark.parametrize("all_of", [False, True])
@@ -52,7 +56,7 @@ def test_the_unbound_empty_inbox_ledger_is_empty_and_fails(tmp_path):
 
 def test_gate_refuses_an_unreadable_sizing(tmp_path):
     root, dir_ = _repo(tmp_path, sizing_rel="state/sizings/absent.yaml", write_sizing=False)
-    out = tc._ledger_gate(root, dir_, {"items": []})[0]
+    out = _gate(root, dir_, {"items": []})[0]
     assert out["refused"] == "ledger-unreadable" and out["committed"] is False
 
 
@@ -63,7 +67,7 @@ def test_write_view_returns_none_on_an_unreadable_sizing(tmp_path):
 
 def test_gate_refuses_a_register_with_no_rows(tmp_path):
     root, dir_ = _repo(tmp_path)
-    out = tc._ledger_gate(root, dir_, {"items": []})[0]
+    out = _gate(root, dir_, {"items": []})[0]
     assert out["refused"] == "ledger-unmet"
     assert rl.EMPTY_REGISTER_REASON in out["error"] and "None:" not in out["error"]
 
@@ -74,7 +78,7 @@ def test_gate_passes_a_one_row_slice_register(tmp_path):
     rl.bind(root, RUN, REL)
     ledger = rl.read_ledger(root, dir_)
     assert len(ledger.items) == 1
-    assert tc._ledger_gate(root, dir_, {"items": [{"id": ledger.items[0].id, "status": "met"}]})[0] is None
+    assert _gate(root, dir_, {"items": [{"id": ledger.items[0].id, "status": "met"}]})[0] is None
 
 
 def test_refusal_names_every_non_register_id(tmp_path, monkeypatch):
@@ -84,7 +88,7 @@ def test_refusal_names_every_non_register_id(tmp_path, monkeypatch):
     rl.bind(root, RUN, REL)
     ghosts = [f"X{n}" for n in range(12)]
     verdict = {"items": [{"id": "R1", "status": "met"}] + [{"id": g, "status": "met"} for g in ghosts]}
-    out = tc._ledger_gate(root, dir_, verdict)[0]
+    out = _gate(root, dir_, verdict)[0]
     assert out["refused"] == "ledger-unmet"
     clause = out["error"].split("not register rows:")[1]
     assert all(g in clause for g in ghosts)

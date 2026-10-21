@@ -7162,6 +7162,13 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     # the close job (spawn_detached from _launch_close_job), which keeps the commit from waiting
     # on it. The launch is a single site; a second one is a budget increase.
     "dispatch.terminal_commit": 5,
+    # Static reachability, not the runtime ceiling. A landing runs at most 2 spawns (the budget test's
+    # per-shape ceilings): `git hash-object --stdin-paths` through run_git, only for a filter- or
+    # attribute-pinned path `commit_paths` cannot hash in process, and the one detached close-job
+    # launch (spawn_detached from _launch_close_job); typical landing: zero git. The walk also
+    # reaches archive_stamp._run_git, commit_signing.write_signed_commit_object and
+    # git_native._invoke through shared helpers: five sites, as the op it replaces reached.
+    "dispatch.land_run": 5,
     "dispatch.reap_abandoned_runs": 1,
     "dispatch.commit_halted_rows": 1,
     "docindex.emit": 1,

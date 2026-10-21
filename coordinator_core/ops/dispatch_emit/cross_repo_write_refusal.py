@@ -9,7 +9,7 @@ and not under ``repo_root``, when its normalised relative form escapes via
 Outside paths split two ways:
 
 - **Sibling-repo writes** -- the path resolves under a git checkout sitting
-  next to ``repo_root``. These are carried: ``dispatch.terminal_commit``
+  next to ``repo_root``. These are carried: ``dispatch.land_run``
   lands one ``ceremony.commit_v2`` per repo (``split_sibling_paths``). On a
   remote (cloud) venue the run proceeds; elsewhere it halts on the
   ``approve_cross_repo_write`` touchpoint until the PM approves, and that

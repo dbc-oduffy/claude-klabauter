@@ -1,6 +1,6 @@
 """
 coordinator_core.ops.tests.test_stamp_implemented_import_set -- import-set pin for
-the ``cs_stamp_plan_implemented`` flip that ``dispatch.terminal_commit`` runs.
+the ``cs_stamp_plan_implemented`` flip that ``dispatch.land_run`` runs.
 
 Purpose: the flip refuses a plan with open spine rows and stamps it implemented
 without loading the ``workstream_complete`` package (tens of ms of directive

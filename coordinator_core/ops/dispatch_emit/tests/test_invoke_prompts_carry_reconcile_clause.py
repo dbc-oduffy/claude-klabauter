@@ -7,7 +7,7 @@ import re
 import yaml
 
 from coordinator_core.ops.dispatch_emit.emit import _INDETERMINATE_RECONCILE_CLAUSE, compose_script
-from coordinator_core.ops.dispatch_emit.terminal_commit_reconcile import TERMINAL_COMMIT_RECONCILE_CLAUSE
+from coordinator_core.ops.dispatch_emit.land_run_contract import OP_NAME, RECONCILE_CLAUSE
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
 from coordinator_core.ops.dispatch_emit.tests.test_ask_compose import _compose as _compose_ask
 from coordinator_core.ops.dispatch_emit.tests.test_emit_dag import _write_row
@@ -15,7 +15,7 @@ from coordinator_core.ops.dispatch_emit.tests.test_grind_compose import _compose
 
 _INVOKE_PATH = "bin/coordinator-invoke"
 _INVOKE_ANY = "coordinator-invoke"
-_TERMINAL_OP = "dispatch.terminal_commit"
+_TERMINAL_OP = OP_NAME
 #: Review-stage prompts are composed by review_mint.execute_review, outside this guard's scope.
 _REVIEW_SIDECAR = "workflow-sidecars/review/"
 _STALE = "reconcile it against `git log`"
@@ -35,7 +35,7 @@ def _prompts(script: str) -> list[str]:
 def _assert_clause_everywhere(script: str, *, marker: str = _INVOKE_PATH) -> int:
     named = [p for p in _prompts(script) if marker in p and _REVIEW_SIDECAR not in p]
     for prompt in named:
-        want = TERMINAL_COMMIT_RECONCILE_CLAUSE if _TERMINAL_OP in prompt else _INDETERMINATE_RECONCILE_CLAUSE
+        want = RECONCILE_CLAUSE if _TERMINAL_OP in prompt else _INDETERMINATE_RECONCILE_CLAUSE
         assert want in prompt, prompt[:200]
     assert _STALE not in script
     return len(named)
@@ -75,7 +75,7 @@ def test_grind_script():
 def test_clause_appears_once_per_prompt():
     for prompt in _prompts(_compose_ask()):
         assert prompt.count(_INDETERMINATE_RECONCILE_CLAUSE) <= 1
-        assert prompt.count(TERMINAL_COMMIT_RECONCILE_CLAUSE) <= 1
+        assert prompt.count(RECONCILE_CLAUSE) <= 1
 
 
 def test_no_prompt_tells_the_agent_to_read_git_log():

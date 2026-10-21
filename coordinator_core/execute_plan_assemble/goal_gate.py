@@ -3,7 +3,7 @@ coordinator_core.execute_plan_assemble.goal_gate -- the goal-falsifier
 stamp-decision gate and the AC-table desync finding, as a light leaf.
 
 Purpose: `plan_status_transition._stamp_implemented` (the implemented flip
-`dispatch.terminal_commit` runs) needs `_evaluate_goal_falsifier_gate`,
+`dispatch.land_run` runs) needs `_evaluate_goal_falsifier_gate`,
 `_goal_refusal_next_move` and `_ac_table_desync_finding`, but
 `close_out_and_stamp` imports `plan_status_transition` at module scope and
 carries a heavy closure (git.commit, ceremony.*, the bin/lib bootstrap).

@@ -137,6 +137,7 @@ def _resolved_sid() -> Optional[str]:
 
 
 _CALLER = "coordinator_core.invoke.__main__"
+_TERMINAL_COMMIT_OPS = ("dispatch.land_run", "dispatch.terminal_commit")
 
 
 def _record_dispatch_process_time(msg: dict, t_start: float, process_start: float) -> None:
@@ -237,7 +238,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         metavar="PATH",
         default=None,
         help=(
-            "dispatch.terminal_commit only: a Workflow task-output file, "
+            "dispatch.land_run (or legacy dispatch.terminal_commit) only: a Workflow task-output file, "
             "resolved against the caller's cwd and passed as "
             "params.task_output_path."
         ),
@@ -819,6 +820,27 @@ def _dispatch_argv_body(argv: list, cwd: str, *, allow_warm: bool) -> None:
     else:
         params_json_str = "{}"
 
+    if (
+        args.op in _TERMINAL_COMMIT_OPS
+        and args.from_task_output is None
+        and params_json_str.strip() in ("", "{}")
+    ):
+        from coordinator_core.ops.dispatch_emit import terminal_commit_params_channel as _tcpc
+
+        message = (
+            f"{args.op} params are empty; missing: "
+            + ", ".join(_tcpc.REQUIRED_STR_KEYS)
+            + ". Not dispatched; nothing committed."
+        )
+        if (
+            args.params_file not in (None, "-")
+            and _tcpc.missing_file_diagnosis(args.params_file) is not None
+        ):
+            message += (
+                f" The params file {args.params_file} is empty."
+            )
+        _fatal_stderr(message)
+
     # 2. Parse params JSON — must be a JSON object. Blank text for
     #    dispatch.terminal_commit is an empty dict, refused after the
     #    --from-task-output merge below.
@@ -836,8 +858,11 @@ def _dispatch_argv_body(argv: list, cwd: str, *, allow_warm: bool) -> None:
         )
 
     if args.from_task_output is not None:
-        if args.op != "dispatch.terminal_commit":
-            parser.error("--from-task-output applies only to dispatch.terminal_commit")
+        if args.op not in _TERMINAL_COMMIT_OPS:
+            parser.error(
+                "--from-task-output applies only to dispatch.land_run "
+                "(or the legacy dispatch.terminal_commit)"
+            )
         resolved_output = str(Path(cwd, args.from_task_output).resolve())
         existing = params.get("task_output_path")
         if existing is not None and (

@@ -8,6 +8,7 @@ import subprocess
 
 import pytest
 
+from coordinator_core.ops.dispatch_emit.land_run_contract import OP_NAME
 from coordinator_core.ops.dispatch_emit.tests.test_ask_compose import _compose
 from coordinator_core.win_portability import no_console_creationflags
 
@@ -40,7 +41,7 @@ def _line(prefix: str) -> str:
 
 
 def _drive(js_line: str, *, incomplete=(), commit=None, resume=False, gate=None, na=None) -> dict:
-    na = na if na is not None else {"kind": "terminal_commit", "op": "dispatch.terminal_commit", "params": {"inline_review": _IR}}
+    na = na if na is not None else {"kind": "terminal_commit", "op": OP_NAME,"params": {"inline_review": _IR}}
     program = _HARNESS % (
         json.dumps(list(incomplete)), json.dumps(commit or {"refused": "since-base-overlap"}),
         json.dumps(resume), json.dumps(gate or {}), json.dumps(na), js_line,
@@ -83,7 +84,7 @@ def test_resume_ledger_inline_review_replaces_the_empty_review():
     recorded = {**_IR, "resumed_run_id": "old-run"}
     got = _drive(
         _line(_RESUME_PREFIX), resume=True, gate={"resume_ledger": {"inline_review": recorded}},
-        na={"kind": "terminal_commit", "op": "dispatch.terminal_commit", "params": {"inline_review": {}}},
+        na={"kind": "terminal_commit", "op": OP_NAME,"params": {"inline_review": {}}},
     )
     assert got["na"]["params"]["inline_review"] == recorded
 

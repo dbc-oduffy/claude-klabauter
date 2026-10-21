@@ -851,7 +851,7 @@ def approval_body_sha(file_text: str) -> Optional[str]:
     """The hash `approved_body_sha` binds: `canonical_body_sha` with the
     ENGINE-OWNED spine bookkeeping neutralised.
 
-    `dispatch.terminal_commit` flips rows open -> coded, writes `disposition_ref`,
+    `dispatch.land_run` flips rows open -> coded, writes `disposition_ref`,
     and re-sorts rows to honour the D5 open-before-coded order. None of that is a
     plan edit, so per `yaml plan-tasks` row this drops `disposition_ref:`, the no-op
     close prose `disposition_detail:` (with continuation lines; only on a row

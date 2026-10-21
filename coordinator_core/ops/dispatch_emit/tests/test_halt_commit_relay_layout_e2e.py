@@ -12,7 +12,7 @@ import pytest
 
 from coordinator_core.bash_guards import block_subagent_commit as guard
 from coordinator_core.bash_guards.tests.test_block_subagent_commit_run_token import _COMMIT_AGENT, _SCRIPT
-from coordinator_core.ops.dispatch_emit import ask_compose, run_token, terminal_commit
+from coordinator_core.ops.dispatch_emit import ask_compose, land_run, run_token
 from coordinator_core.ops.dispatch_emit import terminal_commit_params_channel as chan
 from coordinator_core.ops.dispatch_emit.ask_contract import HALTED_RECORD_PARAM, RECORD_DIR_ROOT
 from coordinator_core.win_portability import no_console_creationflags
@@ -60,7 +60,7 @@ def _halt_command(root: Path) -> str:
     js = ask_compose._halt_record_commit_fn(
         head="head", anchor="anchor", script_path="run.mjs", repo_root=root, run_id=RUN
     )
-    match = re.search(r"coordinator-invoke dispatch\.terminal_commit --params-file [^\s\\\"'`]+", js)
+    match = re.search(r"coordinator-invoke dispatch\.land_run --params-file [^\s\\\"'`]+", js)
     assert match, js
     return match.group(0)
 
@@ -111,17 +111,16 @@ def test_halt_commit_behind_a_relay_record_is_admitted_and_lands_with_its_sizing
     written = json.loads(chan.params_path(repo, RUN).read_text(encoding="utf-8"))
     assert written == _halt_params(token)
 
-    out = terminal_commit._handler(written, repo_root=repo / ".git")
+    out = land_run._handler(written, repo_root=repo / ".git")
     assert out["committed"] is True, out
-    shas = [out["sha"]] + ([out["process_sha"]] if out.get("process_sha") else [])
-    names = [n for sha in shas for n in _git(["diff-tree", "--no-commit-id", "--name-only", "-r", sha], repo).split()]
+    names = _git(["diff-tree", "--no-commit-id", "--name-only", "-r", out["sha"]], repo).split()
     assert SIZING in names
 
 
 def test_grind_shaped_block_behind_a_relay_record_is_admitted(repo):
     token = run_token.mint(repo, RUN, _SCRIPT)
     params = {"script_path": _SCRIPT, "run_id": RUN, "run_token": token, "rows": [{"id": "R1"}]}
-    command = f"coordinator-invoke dispatch.terminal_commit --params-file {chan.params_path(repo, RUN).as_posix()}"
+    command = f"coordinator-invoke dispatch.land_run --params-file {chan.params_path(repo, RUN).as_posix()}"
     assert _check(command, _relay_spawn(repo, params, command=command)) is None
 
 

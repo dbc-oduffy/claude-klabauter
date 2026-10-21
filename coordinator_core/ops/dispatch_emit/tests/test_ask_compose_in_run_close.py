@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from coordinator_core.ops.dispatch_emit import ask_compose
 from coordinator_core.ops.dispatch_emit.ask_compose import compose_ask_script
+from coordinator_core.ops.dispatch_emit.land_run_contract import OP_NAME
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
 from coordinator_core.warp_fire import fire_command
 
@@ -108,7 +109,7 @@ def test_roadmap_commit_halt_carries_blob_drift():
 def test_commit_prompt_carries_a_path_command_and_an_uncopied_params_block(monkeypatch):
     script = _script(monkeypatch, repo_root="C:/repo")  # abs-path-ok: drive-letter-shaped fixture root
     command = (
-        "coordinator-invoke dispatch.terminal_commit --params-file "
+        f"coordinator-invoke {OP_NAME} --params-file "
         "C:/repo/scratch/warp/run-1/terminal-commit-params.json"  # abs-path-ok: fixture root
     )
     # The product commit stage and the halt-record commit both run it.

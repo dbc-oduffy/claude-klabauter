@@ -13,7 +13,7 @@ rewritten on each write. Register writes go through `locked_rmw` and the sizing 
 only: no git, no subprocess, so the op holds the 500ms bar.
 
 `judge` is the one pass rule. The run's final checker applies it in its prompt and
-`dispatch.terminal_commit` re-applies it against the live register, so a revision that lands after
+`dispatch.land_run` re-applies it against the live register, so a revision that lands after
 the check, or a verdict that skips a row, cannot reach the product commit. It is a gate beside the
 delivery verifier, the terminal judge and the falsifier, never a stand-in for any of them.
 `apply_verdict` writes the passed verdict back onto the rows once the commit has landed.

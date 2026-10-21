@@ -67,6 +67,14 @@ def test_the_commit_stage_argv_is_admitted(repo, halted):
     assert _check(_emitted_argv(repo), _transcript(repo, params)) is None
 
 
+def test_the_land_run_argv_is_admitted(repo):
+    token = run_token.mint(repo, _RUN, _SCRIPT)
+    tp = _transcript(repo, {"script_path": _SCRIPT, "run_id": _RUN, "run_token": token})
+    argv = _emitted_argv(repo).replace("dispatch.terminal_commit", "dispatch.land_run")
+    assert _check(argv, tp) is None
+    assert json.loads(chan.params_path(repo, _RUN).read_text(encoding="utf-8"))["run_id"] == _RUN
+
+
 def _cd(repo, sep: str) -> str:
     return f"cd {repo.as_posix()} {sep} "
 

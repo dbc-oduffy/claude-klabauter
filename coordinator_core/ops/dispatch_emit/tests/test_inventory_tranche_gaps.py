@@ -296,6 +296,57 @@ def test_groups_holding_each_others_prerequisites_are_taken_as_one_unit():
     assert sorted(taken) == ["a", "b", "c", "d"] and deferred == {}
 
 
+def _edge_row(rid, *targets):
+    return {"id": rid, "depends_on": [{"chunk": t, "gate_kind": "output-consumption-runtime"} for t in targets]}
+
+
+def test_two_plan_uncoded_predecessor_defers_dependent_under_row_budget(tmp_path):
+    dep = [_chunk("D1", "src/d1.py", depends_on_plan=[{**_HELD, "chunk": "P1"}]), _chunk("D2", "src/d2.py")]
+    inv = _repo(
+        tmp_path,
+        {"pred": [_chunk("P1", "src/p1.py")], "dep": dep},
+        [("pred", "—"), ("dep", "—")],
+    )
+    report, _, _ = _tranche(inv, 1)
+    assert report["plans"] == ["pred"]
+    assert [d["plan"] for d in report["deferred"]] == ["dep"]
+
+
+def test_edge_onto_unemitted_chunk_of_in_set_item_defers_dependent():
+    rows = [_edge_row("a.A0"), _edge_row("b.B0", "pred.P1"), _edge_row("b.B1", "b.B0")]
+    selected, report = im.select_tranche(rows, ["a", "pred", "b"], 10)
+    assert report["plans"] == ["a"]
+    assert [d["plan"] for d in report["deferred"]] == ["b"]
+    assert "pred" in report["deferred"][0]["reason"]
+    assert [r["id"] for r in selected] == ["a.A0"]
+
+
+def test_edge_onto_unknown_item_is_not_deferred_so_read_spine_still_refuses():
+    rows = [_edge_row("b.B0", "ghost.G1")]
+    selected, report = im.select_tranche(rows, ["b"], 10)
+    assert report["plans"] == ["b"] and report["deferred"] == []
+    assert [r["id"] for r in selected] == ["b.B0"]
+
+
+def test_edge_onto_mistyped_chunk_of_in_set_item_defers_dependent():
+    rows = [_edge_row("a.A0"), _edge_row("b.B0", "pred.TYPO")]
+    selected, report = im.select_tranche(rows, ["a", "pred", "b"], 10)
+    assert [d["plan"] for d in report["deferred"]] == ["b"]
+    assert [r["id"] for r in selected] == ["a.A0"]
+
+
+def test_read_spine_still_refuses_an_unresolvable_predecessor(tmp_path):
+    from coordinator_core.ops.dispatch_emit.spine_read import SpineReadError
+
+    plan = tmp_path / "s.md"
+    plan.write_text(
+        _plan_text([_chunk("B0", "src/b0.py", depends_on=[{"chunk": "ghost.G1", "gate_kind": "output-consumption-runtime"}])]),
+        encoding="utf-8",
+    )
+    with pytest.raises(SpineReadError, match="unresolvable chunk"):
+        read_spine(plan)
+
+
 def test_an_over_budget_group_cycle_places_plan_by_plan():
     groups, size, prereqs, shared = _cyclic_groups()
     taken, deferred = im._pick_groups(groups, size, prereqs, shared, 4)

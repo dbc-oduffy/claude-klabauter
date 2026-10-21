@@ -173,20 +173,3 @@ def test_read_spine_cleared_gate_owners_are_per_call_not_shared(tmp_path: Path) 
     assert ids({"repo-a"}) == ["G1"]
     assert ids({"repo-b"}) == ["G2"]
     assert ids(set()) == []
-
-
-def test_commit_siblings_one_commit_per_repo(tmp_path: Path, monkeypatch) -> None:
-    from coordinator_core.ops.dispatch_emit import terminal_commit
-
-    calls = []
-
-    def fake(op, params, repo_root):
-        calls.append((op, params, repo_root))
-        return {"committed": True, "sha": "abc"}
-
-    monkeypatch.setattr(terminal_commit, "reentrant_dispatch", fake)
-    a, b = tmp_path / "a", tmp_path / "b"
-    out = terminal_commit._commit_siblings({a: ["x.py"], b: ["y.py"]}, "subj", "h0me", "sid")
-    assert [c[2] for c in calls] == [a / ".git", b / ".git"]
-    assert calls[0][1] == {"paths": ["x.py"], "message": "subj\n\nCross-Repo-Of: h0me", "session_id": "sid"}
-    assert [o["repo"] for o in out] == ["a", "b"] and all(o["committed"] for o in out)

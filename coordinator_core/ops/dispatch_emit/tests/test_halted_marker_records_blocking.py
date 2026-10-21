@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from coordinator_core.ops.dispatch_emit import terminal_commit
+from coordinator_core.ops.dispatch_emit import land_run
 from coordinator_core.ops.dispatch_emit.ask_contract import (
     HALT_BLOCKING_FIELD,
     HALT_PLAN_FIELD,
@@ -69,7 +69,7 @@ def repo(tmp_path):
 
 
 def _land(repo, halted: dict) -> dict:
-    out = terminal_commit._handler(
+    out = land_run._handler(
         {"script_path": "run.mjs", "run_id": RUN, HALTED_RECORD_PARAM: halted},
         repo_root=repo / ".git",
     )

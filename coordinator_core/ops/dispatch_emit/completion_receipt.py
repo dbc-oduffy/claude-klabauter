@@ -3,7 +3,7 @@ coordinator_core.ops.dispatch_emit.completion_receipt -- the run-end receipt bui
 
 Purpose: § Design D2-D4 of docs/plans/2026-10-01-completion-receipts.md. Composes one
 CompletionReceipt (frontmatter + prose) per baton a concluding execute-plan, warp or mise
-run claimed, and writes them for ``dispatch.terminal_commit`` to fold into its single
+run claimed, and writes them for ``dispatch.land_run`` to fold into its single
 commit. Pure-ish: reads claims, plans, batons, sizings and the emitted-script sidecar from
 disk; spawns no subprocess.
 
@@ -45,7 +45,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import SPINE_SUFFIX
 from coordinator_core.ops.dispatch_emit.plan_row_coding import MINTED_SPINE_ORIGIN, source_rows_by_plan
 from coordinator_core.ops.dispatch_emit.worktree_snapshot import read_rel
 
-_DERIVATION = "dispatch.terminal_commit"
+_DERIVATION = "dispatch.land_run"
 _HANDOFF_CLASS = "handoff"
 
 

@@ -6,7 +6,7 @@ Purpose: § Design D2 of docs/plans/2026-09-27-emitter-dag-terminal-commit-
 wake-digest.md. Emission (C12) no longer dispatches a
 ``coordinator:git-commit-agent`` per wave; instead it writes ONE marker
 line into the emitted script recording what the run promises the terminal
-commit (D3, ``dispatch.terminal_commit``, built in C10): which chunks
+commit (D3, ``dispatch.land_run``, built in C10): which chunks
 landed which paths, under which own-report-claimed prefixes, and which
 report file each chunk's own-prefix claim list lives in.
 

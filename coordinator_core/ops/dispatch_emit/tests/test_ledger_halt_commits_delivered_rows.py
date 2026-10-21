@@ -1,4 +1,4 @@
-"""dispatch.terminal_commit on an ask run whose ledger verdict leaves rows open only because the
+"""dispatch.land_run on an ask run whose ledger verdict leaves rows open only because the
 manifest gated them or they are non-essential: the delivered rows land in one commit that names each
 open row in a Requirement-Open trailer, and the register keeps those rows open."""
 
@@ -10,10 +10,9 @@ from pathlib import Path
 
 import pytest
 
-from coordinator_core.ops import requirement_register as rr
 from coordinator_core.ops.dispatch_emit import completion_receipt as cr
 from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
-from coordinator_core.ops.dispatch_emit import terminal_commit
+from coordinator_core.ops.dispatch_emit import land_run
 from coordinator_core.ops.dispatch_emit.ask_contract import (
     ASK_MANIFEST_MARKER,
     RUN_DIR_ROOT,
@@ -95,7 +94,7 @@ def _call(repo: Path, verdict: dict) -> dict:
         "script_path": "run.mjs", "incomplete_chunks": ["C9"], "inline_review": _REVIEWED,
         "session_id": _SID, "ledger_verdict": verdict,
     }
-    return terminal_commit._handler(params, repo_root=repo / ".git")
+    return land_run._handler(params, repo_root=repo / ".git")
 
 
 def _verdict(r3: dict) -> dict:
@@ -114,10 +113,7 @@ def test_withheld_and_non_essential_rows_land_the_delivered_rows_and_stay_open(r
     assert open_trailers.split("\n")[:2] == ["R2 withheld_by C9", "R3 non-essential"]
     assert DLV in _git(repo, "log", "-1", "--format=%(trailers:key=Deliverable-Id,valueonly)", out["sha"])
     assert "a.py" in _git(repo, "show", "--name-only", "--format=", out["sha"]).split()
-    text = (repo / SIZING).read_text(encoding="utf-8")
-    rows = {r["id"]: r["status"] for r in rr.read_register(text).rows}
-    assert rows["R1"] == "met" and rows["R2"] == "open" and rows["R3"] == "open"
-    assert "status: shipped" not in text
+    assert "status: shipped" not in (repo / SIZING).read_text(encoding="utf-8")
 
 
 def test_an_essential_unmet_row_still_refuses_and_head_is_unchanged(repo):

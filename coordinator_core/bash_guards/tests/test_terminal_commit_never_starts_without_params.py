@@ -156,3 +156,15 @@ def test_no_params_block_never_fabricates_the_file(repo, monkeypatch, level, sha
     run_token.mint(repo, _RUN, _SCRIPT)
     _verdict(repo, _command(repo, shape), _transcript(repo, None), level, monkeypatch)
     assert not chan.params_path(repo, _RUN).exists()
+
+
+@pytest.mark.parametrize("shape", _SHAPES)
+@pytest.mark.parametrize("level", _LEVELS)
+def test_land_run_non_deny_verdict_leaves_the_params_file_on_disk(repo, monkeypatch, level, shape):
+    token = run_token.mint(repo, _RUN, _SCRIPT)
+    params = {"script_path": _SCRIPT, "run_id": _RUN, "run_token": token, "incomplete_chunks": []}
+    cmd = _command(repo, shape).replace("dispatch.terminal_commit", "dispatch.land_run")
+    out = _verdict(repo, cmd, _transcript(repo, params), level, monkeypatch)
+    if _is_deny(out):
+        return
+    assert chan.params_path(repo, _RUN).exists()

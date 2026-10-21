@@ -177,7 +177,7 @@ def cmd_settle_run(rest: list[str]) -> int:
         )
         return grind_rows.EXIT_OK
 
-    from coordinator_core.ops.dispatch_emit.grind_terminal_commit import commit_grind_rows
+    from coordinator_core.ops.dispatch_emit.land_run_grind import commit_grind_rows
 
     params = {
         "run_id": run_id,

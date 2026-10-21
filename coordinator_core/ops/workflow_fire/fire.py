@@ -25,7 +25,7 @@ docs/research/spike-verdicts/2026-08-18-claude-klabauter-fires-an-emitted-workfl
     that flag stays fail-loud rather than optional.
   - probe 1 vs the driver-cost note: the driver calls at most two tools
     (``Workflow`` once, then one ``Bash`` relay of the returned digest's
-    ``next_action`` into ``dispatch.terminal_commit`` when present), so a
+    ``next_action`` into ``dispatch.land_run`` when present), so a
     cheap model (``haiku``) is still correct; the workflow's own agents'
     ``model:`` fields, not this driver, control the real work's cost tier.
 
@@ -109,6 +109,7 @@ from pathlib import Path
 from typing import Optional
 
 from coordinator_core.git.repo_root import show_toplevel
+from coordinator_core.ops.dispatch_emit import land_run_contract
 from coordinator_core.ops.workflow_fire.receipt import FIRE_TOKEN_ENV, stamp_fire_ownership
 from coordinator_core.session.core import sessions_dir
 from coordinator_core.warm import skew
@@ -162,18 +163,18 @@ _SESSION_ALLOWED_TOOLS = ("Workflow", "Read", "Write", "Edit", "Bash", "Grep", "
 #: this replaces the five-cap per-wave commit-agent dispatch with a single
 #: driver-side commit after the whole workflow returns (Standing Order 1:
 #: no agent, including this driver's own workflow, commits mid-run -- only
-#: this final relay, via ``dispatch.terminal_commit``, ever calls
+#: this final relay, via ``dispatch.land_run``, ever calls
 #: ``ceremony.commit_v2``). The digest's ``next_action.params`` is relayed
 #: VERBATIM plus ``script_path`` -- the driver never re-derives or edits it.
 _PROMPT_TEMPLATE = (
     "Call the Workflow tool exactly once, with scriptPath set to {script_path!r}. "
     "The tool's return value is the workflow's wake digest. "
-    "If the digest's next_action.op equals \"dispatch.terminal_commit\", run exactly "
+    "If the digest's next_action.op equals \"{op_name}\", run exactly "
     "two steps. (1) Write tool: create the file {params_path!r} whose content is the "
     "digest's next_action.params object, verbatim, with a \"script_path\" key added set to "
     "{script_path!r}, as JSON with no extra keys; keep every path string exactly as given "
     "(never retype backslashes in a shell). (2) one Bash command: coordinator-invoke "
-    "dispatch.terminal_commit --params-file {params_path} "
+    "{op_name} --params-file {params_path} "
     "Otherwise call no other tool. Never call more than these two tools, and never call "
     "either one more than once. Your final answer is that command's JSON reply, led by a "
     "line of its top-level criterion_status, plan_status and plan_status_reason values "
@@ -478,7 +479,9 @@ def render_prompt(script_path: str) -> str:
     quoted/inline shell argument is halved before the op parses it."""
     posix = str(script_path).replace("\\", "/")
     return _PROMPT_TEMPLATE.format(
-        script_path=posix, params_path=posix + ".terminal-params.json"
+        op_name=land_run_contract.OP_NAME,
+        script_path=posix,
+        params_path=posix + ".terminal-params.json",
     )
 
 

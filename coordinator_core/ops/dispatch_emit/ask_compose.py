@@ -120,7 +120,7 @@ from coordinator_core.ops.dispatch_emit.ask_footprint import (
     footprint_prompt,
 )
 from coordinator_core.ops.dispatch_emit.terminal_commit_params_channel import PARAMS_BLOCK_JS, params_path
-from coordinator_core.ops.dispatch_emit.terminal_commit_reconcile import TERMINAL_COMMIT_RECONCILE_CLAUSE
+from coordinator_core.ops.dispatch_emit.land_run_contract import OP_NAME as LAND_RUN_OP, RECONCILE_CLAUSE as LAND_RUN_RECONCILE_CLAUSE
 from coordinator_core.ops.dispatch_emit.wake_digest import (
     CAP_HELPER_JS,
     TERMINAL_COMMIT_CLI_HELPER_JS,
@@ -218,8 +218,8 @@ def _agent(
     clause = _lit(_sidecar.sidecar_clause(_sidecar.sidecar_dir("ask", run_id, label)))
     if "coordinator-invoke" in prompt_expr:
         reconcile = (
-            TERMINAL_COMMIT_RECONCILE_CLAUSE
-            if "dispatch.terminal_commit" in prompt_expr
+            LAND_RUN_RECONCILE_CLAUSE
+            if LAND_RUN_OP in prompt_expr
             else _emit._INDETERMINATE_RECONCILE_CLAUSE
         )
         if reconcile not in prompt_expr:
@@ -1250,7 +1250,7 @@ def compose_ask_script(
     The review roster and stage schemas load from DoE when not injected; `wrap_stage` and
     `plan_blitz_text` default to `ask_plan_blitz.wrap_stage` over the resolved plugin asset, which
     is embedded only when the arm can be M+. `script_path` is the repo-relative path the script
-    is written to, carried into `next_action.params` for `dispatch.terminal_commit`.
+    is written to, carried into `next_action.params` for `dispatch.land_run`.
     `plan_blitz_args` is spread first into the planBlitz call, so `mode`, `repoRoot` and `batons`
     always win; `writes` seeds the emit-time write set the gate and stage ops receive.
     `baton` ({"path", "deliverable_id"}) is passed to the size scaffold and the gate verb. The
@@ -3138,7 +3138,7 @@ def _docs_prompt_parts(*, run_id: str, manifest_rel: str) -> tuple[str, ...]:
     """Step 2 of the merged verify prompt, as `_cat` parts: the declared docs and the delivery note.
 
     It edits only `_manifest.doc_writes`; the delivery note's `## Verdicts` section is
-    `dispatch.terminal_commit`'s, so the prompt carries none of the tail's own results.
+    `dispatch.land_run`'s, so the prompt carries none of the tail's own results.
     """
     note_rel = f"{DELIVERY_NOTE_DIR}/{run_id}.md"
     return (
@@ -3173,7 +3173,7 @@ def _append_docs_and_commit(
     script_path: Optional[str] = None,
 ) -> None:
     """The run's commit stage, under a live terminal-commit `_nextAction` and no halt: a
-    git-commit-agent running `dispatch.terminal_commit` with the run token. The docs were written
+    git-commit-agent running `dispatch.land_run` with the run token. The docs were written
     earlier, by the verify agent. The commit lands the product plus the run's
     run_artifacts candidate set; the docs stage's `doc_paths` ride the params block.
     A landed commit turns `_nextAction` to the close-job record the reply carries: the EM has nothing to run
@@ -3243,7 +3243,7 @@ def roadmap_commit_lines(
 def _commit_stage_call(
     *, head: str, anchor: str, repo_root: str, run_id: str, script_path: Optional[str] = None
 ) -> str:
-    """The `commit` agent call (git-commit-agent, haiku) running `dispatch.terminal_commit`.
+    """The `commit` agent call (git-commit-agent, haiku) running `dispatch.land_run`.
 
     The params block always carries `script_path` (the `_nextAction.params` value wins, else
     `script_path`, else ''): `prompt_params` refuses a block without it, and the run-token hook then
@@ -3255,15 +3255,15 @@ def _commit_stage_call(
         f"{head}\n\n{anchor}\n\n",
         "phase: commit\n\nThis is a run's commit stage (`coordinator:git-commit-agent`, § A run's commit "
         "stage). Run exactly this one command as its own Bash call: no `cd &&`, no wrapper, no env "
-        "prefix, no edit to it. `dispatch.terminal_commit` derives the paths from the run's commit "
+        f"prefix, no edit to it. `{LAND_RUN_OP}` derives the paths from the run's commit "
         "request, so no `paths` array is owed.\n\n",
-        f"coordinator-invoke dispatch.terminal_commit --params-file {params_file.as_posix()}",
+        f"coordinator-invoke {LAND_RUN_OP} --params-file {params_file.as_posix()}",
         "\n\nThe engine reads the params block below. Do not copy, edit or pass it.\n\n",
         "js:_terminalCommitParamsBlock({ ..._nextAction.params, " + _TARGETED_TESTS_JS + " "
         f"script_path: _nextAction.params.script_path ?? {_lit(script_path or '')}, "
         "run_id: _runId, run_token: _RUN_TOKEN, "
         f"doc_paths: {_DOC_PATHS_JS} }})",
-        "\n\ndispatch.terminal_commit enumerates every file this run authored and lands it; you run the "
+        f"\n\n{LAND_RUN_OP} enumerates every file this run authored and lands it; you run the "
         "one command and return its reply.\n\nReturn from its JSON reply committed, sha, already_landed, error, refused, "
         "sizing_shipped, close, fanout, siblings, run_artifacts and run_artifact_residue, verbatim (null "
         "where absent). Run nothing else.",
@@ -3279,7 +3279,7 @@ def _commit_stage_call(
 def _halt_record_commit_fn(
     *, head: str, anchor: str, script_path: Optional[str], repo_root: object, run_id: str
 ) -> str:
-    """`async function _commitHaltRecord()`: a git-commit-agent runs `dispatch.terminal_commit` in
+    """`async function _commitHaltRecord()`: a git-commit-agent runs `dispatch.land_run` in
     `halted_by` mode, landing the run record dir plus the run_artifacts candidate set. Declared among the script's hoisted
     helpers so the commit stage's own label scan sees one `commit` agent after the tail.
 
@@ -3293,7 +3293,7 @@ def _halt_record_commit_fn(
         f"{head}\n\n{anchor}\n\n",
         "phase: commit\n\nThis run halted. Run exactly this one command as its own Bash call: no "
         "`cd &&`, no wrapper, no env prefix, no edit to it.\n\n",
-        f"coordinator-invoke dispatch.terminal_commit --params-file {params_file.as_posix()}",
+        f"coordinator-invoke {LAND_RUN_OP} --params-file {params_file.as_posix()}",
         "\n\nThe engine reads the params block below. Do not copy, edit or pass it.\n\n",
         f"js:_terminalCommitParamsBlock({{ script_path: {_lit(script_path or '')}, run_id: _runId, "
         f"run_token: _RUN_TOKEN, {HALTED_RECORD_PARAM}: _halted, doc_paths: {_DOC_PATHS_JS}, "
@@ -3304,7 +3304,7 @@ def _halt_record_commit_fn(
         "landed_chunks: _nextAction.params.landed_chunks ?? [], "
         "ledger_verdict: _nextAction.params.ledger_verdict ?? null, "
         "plan_path: _nextAction.params.plan_path ?? _planRel ?? null } } : {}) })",
-        "\n\ndispatch.terminal_commit enumerates every file this run authored and lands it; you run the "
+        f"\n\n{LAND_RUN_OP} enumerates every file this run authored and lands it; you run the "
         "one command and return its reply.\n\nReturn from its JSON reply committed, sha, already_landed, error, refused, "
         "run_artifacts and run_artifact_residue, verbatim (null where absent). Run nothing else.",
     )

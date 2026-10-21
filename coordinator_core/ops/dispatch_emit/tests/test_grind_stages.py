@@ -8,7 +8,7 @@ docs/plans/2026-09-21-bug-blitz-emitter-engine-leg.md, Tasks § C5) over
   1. Only the review-fix committer mentions staging, and no composer mentions
      `grind-row settle` -- every other composer's call text stays clear of both.
   2. The grind's terminal commit prompt (`compose_grind_terminal_commit_call`) runs one
-     bare `coordinator-invoke dispatch.terminal_commit --params-file <path>` segment and
+     bare `coordinator-invoke dispatch.land_run --params-file <path>` segment and
      carries the fenced params block, never JSON typed by the agent.
   3. The op-runner verify composer's `agentType` equals
      `grind_vocab.OP_RUNNER_AGENT_TYPE`.
@@ -303,7 +303,7 @@ def test_fix_prompt_names_every_historical_record_prefix():
 def test_terminal_commit_prompt_is_one_bare_invoke_segment_plus_the_params_block():
     call_text = _terminal_call(params_file_js="P", params_js="PARAMS")
     assert call_text.count("coordinator-invoke") == 1
-    assert "coordinator-invoke dispatch.terminal_commit --params-file ' + (P) + '" in call_text
+    assert "coordinator-invoke dispatch.land_run --params-file ' + (P) + '" in call_text
     assert "_terminalCommitParamsBlock(PARAMS)" in call_text
     assert "Do not copy, edit or pass it" in call_text
     assert "no `cd &&`, no wrapper, no env prefix" in call_text
@@ -736,7 +736,7 @@ def test_fix_prompt_close_gate_names_the_accepts_exception():
 def test_review_fix_commit_prompt_carries_an_explicit_subject_and_body():
     """Live-run defect 1: `coordinator:git-commit-agent` refuses a brief with
     no subject. The review-fix committer composes one at runtime; the terminal
-    commit's subject and body come from `dispatch.terminal_commit`."""
+    commit's subject and body come from `dispatch.land_run`."""
     commit_call = _review_fix_call()
     assert "Use commit subject `grind(p1): review fixes`" in commit_call
     assert "commit body naming the reviewed work" in commit_call

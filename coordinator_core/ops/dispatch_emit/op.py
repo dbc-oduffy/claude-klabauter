@@ -677,7 +677,7 @@ def _start_requirements(ask_ctx: dict, *, all_of_pm_ask: bool) -> Optional[objec
 
 def _script_path_under(guarded_path: Path, root: str) -> Optional[str]:
     """``guarded_path`` as the repo-relative forward-slash path
-    ``dispatch.terminal_commit`` takes as ``script_path``; None if not under ``root``."""
+    ``dispatch.land_run`` takes as ``script_path``; None if not under ``root``."""
     try:
         return guarded_path.resolve().relative_to(Path(root).resolve()).as_posix()
     except ValueError:
@@ -687,11 +687,11 @@ def _script_path_under(guarded_path: Path, root: str) -> Optional[str]:
 def _terminal_commit_script_path(
     guarded_path: Path, repo_root: Optional[Path], plan_path: str, target_root: str
 ) -> Optional[str]:
-    """Repo-root-relative ``script_path`` for ``dispatch.terminal_commit``.
+    """Repo-root-relative ``script_path`` for ``dispatch.land_run``.
 
     ``target_root`` defaults to the output's own parent directory when neither
     the request nor the caller names one, so relativising against it alone
-    emits a bare basename that terminal_commit (which resolves against the
+    emits a bare basename that land_run (which resolves against the
     repo root) cannot find. The plan's repo root is tried first; ``target_root``
     is the fallback for a script outside that tree.
     """
@@ -2028,6 +2028,10 @@ def _dispatch_emit(
             params = {**params, "output_path": str(default_out)}
         repo_root = repo_root or ask_root
         if sizing_path:
+            if ask_baton is not None:
+                from coordinator_core.ops.dispatch_emit.ask_contract import write_run_baton
+
+                write_run_baton(ask_root, run_id, ask_baton["path"])
             _repoint_fire_holds(ask_root, ask_sizing["batons"], Path(params["output_path"]))
 
     cloud_spawn = params.get("cloud_spawn")

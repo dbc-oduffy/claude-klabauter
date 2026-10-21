@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from coordinator_core.ops.dispatch_emit import terminal_commit
+from coordinator_core.ops.dispatch_emit import land_run
 from coordinator_core.ops.dispatch_emit.ask_contract import HALTED_RECORD_PARAM, RECORD_DIR_ROOT
 from coordinator_core.ops.dispatch_emit.halted_run import HALT_RUN_BASE_FIELD, HALTED_FILE
 from coordinator_core.win_portability import no_console_creationflags
@@ -47,7 +47,7 @@ def repo(tmp_path):
 
 
 def _halt(repo: Path, **extra) -> dict:
-    out = terminal_commit._handler(
+    out = land_run._handler(
         {
             "script_path": "run.mjs",
             "run_id": RUN,

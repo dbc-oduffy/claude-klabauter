@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from coordinator_core.ops.dispatch_emit import terminal_commit
+from coordinator_core.ops.dispatch_emit import land_run
 from coordinator_core.ops.dispatch_emit.ask_contract import (
     HALT_DEPENDENTS_UNSTARTED,
     HALTED_RECORD_PARAM,
@@ -58,7 +58,7 @@ def _baton(root: Path, text: str = BATON_TEXT) -> Path:
 
 def _call(root: Path, halted: dict) -> dict:
     params = {"script_path": "run.mjs", "run_id": RUN, HALTED_RECORD_PARAM: halted}
-    return terminal_commit._handler(params, repo_root=root / ".git")
+    return land_run._handler(params, repo_root=root / ".git")
 
 
 def test_halt_stamps_status_reason_keeps_status_and_lands_baton(repo):

@@ -7,6 +7,7 @@ import pytest
 from coordinator_core.ops._workflow_contract import Severity, run_checks
 from coordinator_core.ops.dispatch_emit import ask_compose
 from coordinator_core.ops.dispatch_emit.ask_compose import AskComposeRefused, compose_ask_script
+from coordinator_core.ops.dispatch_emit.land_run_contract import OP_NAME
 from coordinator_core.ops.dispatch_emit.ask_contract import (
     ASK_MANIFEST_MARKER,
     ASK_PHASES,
@@ -187,7 +188,7 @@ def test_return_carries_the_plan_routes_terminal_commit_next_action():
     script = _compose(script_path="scratch/warp/ask.workflow.mjs", session_id="d7b9dc1a-1455-43e8-922f-87e734b5634e")
     ret = script[script.index("  _nextAction = "):]
     assert "_closeable ? { kind: (" in ret
-    assert "? null : 'dispatch.terminal_commit'), params: " in ret
+    assert f"? null : '{OP_NAME}'), params: " in ret
     assert "next_action: _nextAction" in ret[ret.rindex("  return { arm:"):]
     assert 'script_path: "scratch/warp/ask.workflow.mjs"' in ret
     assert 'session_id: "d7b9dc1a-1455-43e8-922f-87e734b5634e"' in ret

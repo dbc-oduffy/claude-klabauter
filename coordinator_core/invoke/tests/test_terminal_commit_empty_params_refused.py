@@ -42,10 +42,10 @@ def test_empty_or_whitespace_params_file_refused(tmp_path, content):
         allow_warm=False,
     )
     message = _assert_refused(*out)
-    assert "is empty." not in message
+    assert "params file" not in message
 
 
-def test_canonical_params_path_adds_the_writer_fact(tmp_path):
+def test_canonical_params_path_names_the_empty_file(tmp_path):
     path = tmp_path / _CANONICAL
     path.parent.mkdir(parents=True)
     path.write_text("", encoding="utf-8")
@@ -55,7 +55,7 @@ def test_canonical_params_path_adds_the_writer_fact(tmp_path):
         allow_warm=False,
     )
     message = _assert_refused(*out)
-    assert "is empty." in message
+    assert f"params file {_CANONICAL} is empty." in message
 
 
 def test_empty_stdin_refused(monkeypatch, tmp_path):
@@ -91,6 +91,12 @@ def test_other_ops_keep_the_json_parse_failure(tmp_path):
 def test_empty_object_and_no_params_refused(tmp_path):
     for argv in (["dispatch.terminal_commit", "{}"], ["dispatch.terminal_commit"]):
         _assert_refused(*_dispatch_argv(argv, str(tmp_path), allow_warm=False))
+
+
+def test_land_run_empty_params_refused(tmp_path):
+    for argv in (["dispatch.land_run", "{}"], ["dispatch.land_run"], ["dispatch.land_run", "  "]):
+        message = _assert_refused(*_dispatch_argv(argv, str(tmp_path), allow_warm=False))
+        assert "dispatch.land_run params are empty" in message
 
 
 def test_non_empty_params_pass_the_refusal(tmp_path):

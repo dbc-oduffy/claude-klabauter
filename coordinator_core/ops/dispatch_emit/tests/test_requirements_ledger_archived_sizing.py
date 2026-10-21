@@ -7,7 +7,7 @@ import yaml
 
 from coordinator_core.ops import requirement_register as rr
 from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
-from coordinator_core.ops.dispatch_emit import terminal_commit
+from coordinator_core.ops.dispatch_emit import land_run
 from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
 
 RUN = "ask-20261013T000000-abc123"
@@ -76,7 +76,9 @@ def test_ledger_gate_over_an_archived_sizing_is_not_unreadable(repo):
     archived = repo / "archive" / "sizings" / "2026-10" / NAME
     archived.parent.mkdir(parents=True)
     (repo / REL).replace(archived)
-    refusal, ledger, _open = terminal_commit._ledger_gate(repo, repo / RECORD_DIR_ROOT / RUN, None)
+    refusal, ledger, _open = land_run._ledger_gate(
+        repo, repo / RECORD_DIR_ROOT / RUN, None, None, (), {}, None, {}, None, None
+    )
     assert (refusal or {}).get("refused") != "ledger-unreadable"
     assert ledger is not None
 

@@ -498,7 +498,7 @@ def _plan_move(
 
 
 def plan_in_run_move(worktree_root: Path, rel: str) -> Tuple[Optional[Move], Optional[str]]:
-    """Single-target entry for ``dispatch.terminal_commit``: may the run's own
+    """Single-target entry for ``dispatch.land_run``: may the run's own
     just-shipped sizing ``rel`` move to ``archive/sizings/YYYY-MM/`` now?
 
     Applies the sweep's classification (terminal status, forward-plan FK,

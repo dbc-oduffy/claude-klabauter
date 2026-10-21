@@ -511,9 +511,9 @@ EXPECTED_READERS = (
     # across the tree) used to import `hooks.submit_engine_ask` for
     # `sizing_scout_deny`, which put ~3,600 modules in the closure; it now
     # imports the leaf `hooks.sizing_scout_deny`. Likewise
-    # `dispatch_emit.terminal_commit` read `op._recorded_run_base` (pulling `op`
-    # into every `ops.review_stamp` importer); it now reads
-    # `ask_fanout_contract.recorded_run_base`.
+    # `dispatch_emit.land_run` reads `ask_fanout_contract.recorded_run_base`, never
+    # `op._recorded_run_base`, which would pull `op` into every `ops.review_stamp`
+    # importer.
     "coordinator_core.hooks.submit_bug_blitz",
     "coordinator_core.hooks.submit_engine_ask",
     "coordinator_core.hooks.tests.test_dispatch_escape_in_run_report",
@@ -578,7 +578,6 @@ EXPECTED_READERS = (
     "coordinator_core.ops.dispatch_emit.tests.test_held_halt_reviews_landed_rows",
     "coordinator_core.ops.dispatch_emit.tests.test_judge_reason_falls_back_to_observation",
     "coordinator_core.ops.dispatch_emit.tests.test_ledger_halt_names_only_register_rows",
-    "coordinator_core.ops.dispatch_emit.tests.test_ledger_halt_pointer_written",
     "coordinator_core.ops.dispatch_emit.tests.test_ledger_halt_recovery_text",
     "coordinator_core.ops.dispatch_emit.tests.test_ledger_halt_resume_gate",
     "coordinator_core.ops.dispatch_emit.tests.test_leg_register_ratchet",
@@ -664,7 +663,6 @@ EXPECTED_READERS = (
     "coordinator_core.ops.dispatch_emit.tests.test_ask_scout_design_route",
     "coordinator_core.ops.dispatch_emit.tests.test_ask_stage_folds_no_mechanical_leg",
     "coordinator_core.ops.dispatch_emit.tests.test_checkpoint_lines_on_every_emitted_checkpoint",
-    "coordinator_core.ops.dispatch_emit.tests.test_commit_halt_pointer_written",
     "coordinator_core.ops.dispatch_emit.tests.test_commit_halt_resume_gate",
     "coordinator_core.ops.dispatch_emit.tests.test_compose_script_front_end_wave_leg",
     "coordinator_core.ops.dispatch_emit.tests.test_composed_chunk_ids_are_strings",
@@ -748,6 +746,23 @@ EXPECTED_READERS = (
     "coordinator_core.ops.dispatch_emit.tests.test_stranded_run_reland",
     "coordinator_core.ops.dispatch_emit.tests.test_terminal_commit_own_checkpoints_satisfy_since_halt",
     "coordinator_core.ops.dispatch_emit.tests.test_unmarked_ask_source_derivation",
+    # `dispatch_emit.ask_compose` imports `ask_gate`, a sanctioned reader (the same
+    # edge as the `test_ask_compose*` entries above); each module below imports
+    # `ask_compose` and reaches the record through it alone. `test_land_run_contract`
+    # imports the successor's contract module, which `ask_compose` also names.
+    "coordinator_core.hooks.tests.test_submit_engine_ask_args_keys",
+    "coordinator_core.ops.dispatch_emit.tests.test_ask_compose_parked_after_plan",
+    "coordinator_core.ops.dispatch_emit.tests.test_ask_compose_prompt_fragments",
+    "coordinator_core.ops.dispatch_emit.tests.test_ask_compose_stage_handle",
+    "coordinator_core.ops.dispatch_emit.tests.test_ask_gate_records_run_baton",
+    "coordinator_core.ops.dispatch_emit.tests.test_ask_intake_slice_context",
+    "coordinator_core.ops.dispatch_emit.tests.test_land_run_contract",
+    "coordinator_core.ops.dispatch_emit.tests.test_ledger_check_empty_register_is_refusal",
+    "coordinator_core.ops.dispatch_emit.tests.test_ledger_halt_names_owed_rows",
+    "coordinator_core.ops.dispatch_emit.tests.test_refire_after_empty_ledger_halt_dispatches_open_row_incident",
+    "coordinator_core.ops.dispatch_emit.tests.test_refire_ledger_halt_split_checkpoint_incident",
+    "coordinator_core.ops.dispatch_emit.tests.test_research_emit_single_repo_target",
+    "coordinator_core.ops.dispatch_emit.tests.test_revise_stop_after_parks_run_e2e",
 )
 
 # The one allowlist addition the brief itself pre-disposed (see module

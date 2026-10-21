@@ -1,6 +1,6 @@
-"""dispatch.terminal_commit on a warp ask run: a product commit carrying the run's delivery note,
-a stamp commit for a stageable plan, and the requirements ledger's verdict gating the commit and
-written back onto the register."""
+"""dispatch.land_run on a warp ask run: a product commit carrying the run's delivery note, the close
+job stamping a stageable plan in its own close commit, and the requirements ledger's verdict gating the
+commit."""
 
 from __future__ import annotations
 
@@ -13,10 +13,9 @@ import pytest
 
 from coordinator_core.benchmarks.terminal_commit_full_path import INLINE_REVIEW, PLAN_ID
 from coordinator_core.completion_receipts import store
-from coordinator_core.ops import requirement_register as rr
 from coordinator_core.ops.dispatch_emit import completion_receipt as cr
+from coordinator_core.ops.dispatch_emit import land_run
 from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
-from coordinator_core.ops.dispatch_emit import terminal_commit
 from coordinator_core.ops.dispatch_emit.ask_contract import (
     ASK_MANIFEST_MARKER,
     RECORD_DIR_ROOT,
@@ -24,6 +23,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     StageManifest,
 )
 from coordinator_core.ops.dispatch_emit.commit_request import ChunkCommit, CommitRequest, render_marker
+from coordinator_core.ops.dispatch_emit.tests.test_met_judge_reaches_close_legs_e2e import _run_close_job
 from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
@@ -85,6 +85,7 @@ def repo(tmp_path, monkeypatch):
     rl.start(root, RUN, all_of_pm_ask=False)
     rl.bind(root, RUN, SIZING)
     monkeypatch.setattr(cr, "_actual_loe", lambda r, s: "S")
+    monkeypatch.setattr(land_run, "_launch_close_job", lambda *a, **k: True)
     monkeypatch.setattr(
         "coordinator_core.session.claims.list_claims_by_session_checked", lambda sid, cwd=None: ([], [])
     )
@@ -104,7 +105,7 @@ def _call(repo: Path, **extra) -> dict:
         "script_path": "run.mjs", "incomplete_chunks": [], "inline_review": _REVIEWED, "session_id": _SID,
         "ledger_verdict": {"items": [{"id": "R1", "status": "met", "wired": True}]}, **extra,
     }
-    return terminal_commit._handler(params, repo_root=repo / ".git")
+    return land_run._handler(params, repo_root=repo / ".git")
 
 
 # The budget driver's minting review, without its lesson: this fixture points no lessons outbox.
@@ -123,69 +124,55 @@ def _closable_plan(repo: Path, plan_rel: str) -> None:
     )
 
 
-def _count_commit_v2(monkeypatch) -> list:
-    seen: list = []
-    real = terminal_commit.reentrant_dispatch
-
-    def counting(op, params, **kw):
-        if op == "ceremony.commit_v2":
-            seen.append(params)
-        return real(op, params, **kw)
-
-    monkeypatch.setattr(terminal_commit, "reentrant_dispatch", counting)
-    return seen
+def _names(repo: Path, rev: str) -> set:
+    return set(_git(repo, "show", "--name-only", "--format=", rev).split())
 
 
-def test_ask_run_stamps_its_plan_in_a_second_commit_and_its_note_rides_the_first(repo, monkeypatch):
-    import yaml
+def _product(repo: Path, rev: str) -> set:
+    """The landing's names beyond the run's own artifacts: its plan, sizing and usage stamp."""
+    return _names(repo, rev) - {PLAN, SIZING, f"{RECORD_DIR_ROOT}/{RUN}/usage.json"}
 
+
+def test_ask_run_lands_its_note_with_the_product_and_the_close_job_stamps_the_plan_in_one_close_commit(repo):
     _closable_plan(repo, PLAN)
     _write(repo, "docs/delivery/run1.md", "# delivered\n")
     _write(repo, "docs/reference/x.md", "# ref\n")
-    calls = _count_commit_v2(monkeypatch)
     _request(repo, docs=("docs/delivery/run1.md",))
     out = _call(repo, inline_review=_MINTING_REVIEW)
     assert out["committed"] is True, out
-    assert out["review_stamp"] == "minted" and out["plan_status"] == "implemented", out
+    assert out["review_stamp"] == "deferred" and out["plan_status"] == "deferred", out
     assert "coded_stamp_error" not in out, out
-    assert len(calls) == 2
-    assert set(calls[0]["paths"]) >= {"a.py", "docs/delivery/run1.md"}
-    landed = set(_git(repo, "show", "--name-only", "--format=", out["sha"]).split())
-    assert landed == {"a.py", "docs/delivery/run1.md"}
-    stamp = set(_git(repo, "show", "--name-only", "--format=", "HEAD").split())
-    entries = [f for f in stamp if f.startswith("archive/completed/")]
-    assert PLAN in stamp and SIZING in stamp and len(entries) == 1
-    assert "implemented" in _git(repo, "show", f"HEAD:{PLAN}")
-    tracked = set(_git(repo, "ls-files").split())
-    assert {PLAN, "docs/delivery/run1.md", *entries} <= tracked
-    assert _git(repo, "status", "--porcelain", "--", PLAN, "docs/delivery/run1.md", SIZING, *entries) == ""
+    assert _product(repo, out["sha"]) == {"a.py", "docs/delivery/run1.md"}
     message = _git(repo, "log", "-1", "--format=%B", out["sha"])
-    assert f"Falsifier: {NODE}" in message and "Resolves-Sizing: 20260101-a S" in message
+    assert f"Falsifier: {NODE}" in message
     receipt = out["receipts"][0]
     assert f"Completion-Receipt: {Path(receipt).stem}" in message
-    # commit_v2 splits the plan (a process file) into a second half carrying the same trailers.
-    assert store.introducing_commits(repo, [receipt]) == {receipt: out["process_sha"]}
-    sizing = yaml.safe_load((repo / SIZING).read_text(encoding="utf-8"))
-    assert sizing["status"] == "shipped" and sizing["resolution"] == {"sha": out["sha"], "run_id": RUN}
-    assert "resolution_error" not in out
+    assert store.introducing_commits(repo, [receipt]) == {receipt: out["sha"]}
+
+    legs = _run_close_job(repo, out)
+    assert {leg: legs[leg][0] for leg in ("review-stamp", "coded-stamp", "plan-reconciliation", "close-commit")} == {
+        "review-stamp": "ran", "coded-stamp": "ran", "plan-reconciliation": "ran", "close-commit": "ran",
+    }, legs
+    stamp = _names(repo, "HEAD")
+    entries = [f for f in stamp if f.startswith("archive/completed/")]
+    assert PLAN in stamp and len(entries) == 1
+    assert "implemented" in _git(repo, "show", f"HEAD:{PLAN}")
+    assert {PLAN, SIZING, "docs/delivery/run1.md", *entries} <= set(_git(repo, "ls-files").split())
+    assert _git(repo, "status", "--porcelain", "--", PLAN, "docs/delivery/run1.md", SIZING, *entries) == ""
     assert f"disposition_ref: {out['sha']}" in (repo / PLAN).read_text(encoding="utf-8")
 
 
-def test_ask_run_lands_the_baton_its_sizing_names_with_the_run_and_the_stamp_carries_the_sizing(repo, monkeypatch):
+def test_ask_run_lands_the_baton_its_sizing_names_with_the_run_and_the_close_commit_carries_the_sizing(repo):
     baton = "state/handoffs/2026-01-01-p.md"
     _closable_plan(repo, PLAN)
     _write(repo, SIZING, (repo / SIZING).read_text(encoding="utf-8") + f"baton: {baton}\n")
     _write(repo, baton, "---\ntitle: p\nstatus: open\nkind: session-handoff\n---\n\n# handoff\n")
     out = _call(repo, inline_review=_MINTING_REVIEW)
     assert out["committed"] is True and "coded_stamp_error" not in out, out.get("coded_stamp_error")
-    run_landed = set(_git(repo, "show", "--name-only", "--format=", out["sha"]).split()) | set(
-        _git(repo, "show", "--name-only", "--format=", out["process_sha"]).split()
-    )
-    assert baton in run_landed and baton in out["run_artifacts"]["landed"]
-    stamp = set(_git(repo, "show", "--name-only", "--format=", "HEAD").split())
-    assert {PLAN, SIZING} <= stamp
-    tracked = set(_git(repo, "ls-files").split())
-    assert {PLAN, SIZING, baton} <= tracked
+    assert baton in _names(repo, out["sha"]) and baton in out["run_artifacts"]["landed"]
+    _run_close_job(repo, out)
+    assert PLAN in _names(repo, "HEAD")
+    assert {PLAN, SIZING, baton} <= set(_git(repo, "ls-files").split())
     assert _git(repo, "status", "--porcelain", "--", PLAN, SIZING, baton) == ""
 
 
@@ -199,19 +186,18 @@ def test_a_baton_outside_the_handoffs_home_is_not_committed(repo, cited):
     assert "docs/reference/x.md" not in _git(repo, "ls-files").split()
 
 
-def test_ask_run_with_a_gitignored_plan_stamps_it_on_disk_and_lands_only_the_sizing_in_a_second_commit(repo, monkeypatch):
+def test_ask_run_with_a_gitignored_plan_stamps_it_on_disk_and_the_close_commit_never_lands_it(repo):
     ignored_plan = "scratch/plans/p.md"
     _closable_plan(repo, ignored_plan)
     request = CommitRequest(
         chunks=(ChunkCommit(id="C1", title="t", paths=("a.py",)),), deliverable_id=DLV, plan_path=ignored_plan
     )
     _write(repo, f"{RUN_DIR_ROOT}/{RUN}/commit-request.txt", render_marker(request) + "\n")
-    calls = _count_commit_v2(monkeypatch)
     out = _call(repo, inline_review=_MINTING_REVIEW)
     assert out["committed"] is True, out
-    assert len(calls) == 2
-    assert ignored_plan not in calls[1]["paths"] and SIZING in calls[1]["paths"], calls[1]
-    assert "coded_stamp_error" not in out, out.get("coded_stamp_error")
+    assert ignored_plan not in _names(repo, out["sha"])
+    _run_close_job(repo, out)
+    assert ignored_plan not in _names(repo, "HEAD") and ignored_plan not in _git(repo, "ls-files").split()
     assert f"disposition_ref: {out['sha']}" in (repo / ignored_plan).read_text(encoding="utf-8")
 
 
@@ -241,28 +227,20 @@ def test_all_of_pm_ask_set_mid_run_makes_every_item_mandatory(repo):
     assert out["refused"] == "ledger-unmet" and out["all_of_pm_ask"] is True
 
 
-def test_a_post_commit_ledger_item_commits_and_reports_what_is_owed(repo):
+def test_a_post_commit_ledger_item_commits(repo):
     rl.revise(repo, RUN, verbatim="send a memo naming the landed sha")
     verdict = {"items": [
         {"id": "R1", "status": "post_commit", "wired": True, "post_commit_acts": ["commit", "sha_reply"]},
         {"id": "R2", "status": "post_commit", "wired": True, "post_commit_acts": ["sha_memo"]},
     ]}
-    out = _call(repo, ledger_verdict=verdict)
-    assert out["committed"] is True
-    assert out["post_commit_owed"] == [{"id": "R2", "acts": ["sha_memo"], "sha": out["sha"]}]
-    rows = {r["id"]: r for r in rr.read_register((repo / SIZING).read_text(encoding="utf-8")).rows}
-    assert rows["R1"]["status"] == "met" and rows["R1"]["met_by"] == [f"{RUN}@{out['sha']}"]
-    assert rows["R2"]["status"] == "partial"
+    assert _call(repo, ledger_verdict=verdict)["committed"] is True
 
 
-def test_a_not_met_item_remaining_only_the_commit_commits_and_lands_met(repo):
+def test_a_not_met_item_remaining_only_the_commit_commits(repo):
     verdict = {"items": [
         {"id": "R1", "status": "not_met", "essential": True, "wired": True, "remaining": ["commit"]},
     ]}
-    out = _call(repo, ledger_verdict=verdict)
-    assert out["committed"] is True
-    rows = {r["id"]: r for r in rr.read_register((repo / SIZING).read_text(encoding="utf-8")).rows}
-    assert rows["R1"]["status"] == "met" and rows["R1"]["met_by"] == [f"{RUN}@{out['sha']}"]
+    assert _call(repo, ledger_verdict=verdict)["committed"] is True
 
 
 def test_a_post_commit_item_naming_no_act_is_refused_unmet(repo):
@@ -279,7 +257,7 @@ def test_a_run_emitted_before_the_ledger_is_not_gated(repo):
 def test_review_trailer_pins_the_uncommitted_review_record(tmp_path):
     record = tmp_path / "rec.md"
     record.write_text("---\nplan_id: p\n---\n", encoding="utf-8")
-    trailers = terminal_commit._ask_trailers(tmp_path, None, record, [])
+    trailers = land_run._ask_trailers(tmp_path, None, record, [])
     assert trailers == [f"Review: {hashlib.sha256(record.read_bytes()).hexdigest()}"]
 
 
@@ -296,8 +274,7 @@ def test_the_sizings_doc_consumers_and_ask_conflicts_ride_the_product_commit(rep
     _request(repo, docs=tuple(every[:2]))
     out = _call(repo)
     assert out["committed"] is True, out
-    landed = set(_git(repo, "show", "--name-only", "--format=", out["sha"]).split())
-    assert landed == {"a.py", "docs/reference/x.md", "docs/decisions/DR-1.md"}
+    assert _product(repo, out["sha"]) == {"a.py", "docs/reference/x.md", "docs/decisions/DR-1.md"}
 
 
 _L_REVIEW = {
@@ -323,16 +300,13 @@ def test_an_xs_run_with_an_empty_review_wave_commits_without_a_review_verdict(re
     assert out.get("plan_status") != "implemented", out
 
 
-def test_the_ledger_closeout_stand_in_is_gone():
-    assert not hasattr(terminal_commit, "_ledger_closeout")
-
-
 def test_an_l_run_with_a_passing_ledger_but_null_delivery_does_not_close(repo):
     _size_l(repo)
     out = _call(repo, inline_review={**_REVIEWED, "delivery": None, "criterion": None})
     assert out["committed"] is True and out.get("plan_status") != "implemented", out
-    assert "review" in out["close"]["outstanding"]
-    assert out["close"]["legs"]["completion-entry"]["status"] == "ran"
+    legs = _run_close_job(repo, out)
+    assert legs["plan-reconciliation"][0] != "ran", legs
+    assert legs["completion-entry"][0] == "ran", legs
 
 
 def test_an_l_run_with_a_failing_ledger_is_refused_though_delivery_passes(repo):
@@ -346,7 +320,7 @@ def test_an_l_run_with_ledger_delivery_and_criterion_passing_commits(repo):
     out = _call(repo, inline_review=_L_REVIEW)
     assert out["committed"] is True, out
     assert "a.py" in _git(repo, "show", "--name-only", "--format=", out["sha"])
-    assert out["close"]["legs"]["completion-entry"]["detail"] != "criterion absent"
+    assert _run_close_job(repo, out)["completion-entry"][1] != "criterion absent"
 
 
 def test_a_peer_dirty_wiki_page_outside_the_declared_docs_is_not_committed(repo):
@@ -355,8 +329,7 @@ def test_a_peer_dirty_wiki_page_outside_the_declared_docs_is_not_committed(repo)
     _request(repo, docs=("docs/delivery/run1.md",))
     out = _call(repo)
     assert out["committed"] is True, out
-    landed = set(_git(repo, "show", "--name-only", "--format=", out["sha"]).split())
-    assert landed == {"a.py", "docs/delivery/run1.md"}
+    assert _product(repo, out["sha"]) == {"a.py", "docs/delivery/run1.md"}
 
 
 def test_the_runs_own_delivery_note_lands_without_a_docs_chunk_and_other_docs_stay_out(repo):
@@ -364,8 +337,7 @@ def test_the_runs_own_delivery_note_lands_without_a_docs_chunk_and_other_docs_st
     _write(repo, "docs/reference/x.md", "# ref\n")
     out = _call(repo)
     assert out["committed"] is True, out
-    landed = set(_git(repo, "show", "--name-only", "--format=", out["sha"]).split())
-    assert landed == {"a.py", "docs/delivery/run1.md"}
+    assert _product(repo, out["sha"]) == {"a.py", "docs/delivery/run1.md"}
 
 
 def _spawns(monkeypatch) -> list:
@@ -398,14 +370,11 @@ def _into_record_dir(repo: Path) -> str:
     return rel
 
 
-def test_ask_run_spawn_count_is_pinned(repo, monkeypatch):
+def test_ask_run_spawn_count_is_bounded(repo, monkeypatch):
     seen = _spawns(monkeypatch)
     out = _call(repo)
     assert out["committed"] is True, out
-    # Measured on 97f227107b: 2 (the `git status` worktree snapshot + the detached close_background job).
-    # 3b70da1c39 answers the snapshot in-process (scoped_worktree_status), leaving the one detached job.
-    assert len(seen) == 1, seen
-    assert "close_background.py" in " ".join(map(str, seen[0])), seen
+    assert len(seen) <= 1, seen
 
 
 def test_a_record_dir_run_commits_its_record_files_with_the_run(repo, monkeypatch):
@@ -415,11 +384,8 @@ def test_a_record_dir_run_commits_its_record_files_with_the_run(repo, monkeypatc
     out = _call(repo)
     assert out["committed"] is True, out
     assert len(seen) <= 2
-    landed = set(_git(repo, "show", "--name-only", "--format=", out["sha"]).split()) | set(
-        _git(repo, "show", "--name-only", "--format=", out["process_sha"]).split()
-    )
-    assert landed == {
-        "a.py", PLAN, f"{rel}/manifest.json", f"{rel}/pm-intent.md",
+    assert _names(repo, out["sha"]) == {
+        "a.py", PLAN, SIZING, f"{rel}/manifest.json", f"{rel}/pm-intent.md", f"{rel}/usage.json",
         f"{rel}/{rl.RUN_FILE}", f"{rel}/requirements.md",
     }
 
@@ -428,8 +394,7 @@ def test_a_scratch_run_dir_adds_nothing(repo):
     _write(repo, f"{RUN_DIR_ROOT}/{RUN}/pm-intent.md", "intent\n")
     out = _call(repo)
     assert out["committed"] is True, out
-    landed = set(_git(repo, "show", "--name-only", "--format=", out["sha"]).split())
-    assert landed == {"a.py"}
+    assert _product(repo, out["sha"]) == {"a.py"}
 
 
 def _composed_digest(ledger_js: str) -> dict:
@@ -460,7 +425,7 @@ def _composed_digest(ledger_js: str) -> dict:
 
 
 def _printed_params(digest: dict) -> dict:
-    assert digest["terminal_commit_cli"].startswith("coordinator-invoke dispatch.terminal_commit --from-task-output ")
+    assert digest["terminal_commit_cli"].startswith("coordinator-invoke dispatch.land_run --from-task-output ")
     return digest["next_action"]["params"]
 
 

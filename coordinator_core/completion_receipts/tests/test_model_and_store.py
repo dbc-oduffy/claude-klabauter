@@ -52,7 +52,7 @@ def _fm(receipt_id: str = "rcp-demo-a1b2c3", **over) -> dict:
         "approved_by": None,
         "provenance": {
             "observed_at": NOW,
-            "derivation": "dispatch.terminal_commit",
+            "derivation": "dispatch.land_run",
             "ref": {"branch": "main", "sha": "abc"},
         },
     }

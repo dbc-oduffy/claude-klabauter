@@ -1,9 +1,9 @@
 """A met judge whose recorded falsifier could not run reaches every close leg of the terminal commit.
 
 The judge result goes through the engine's verdict rules, lands in `inline_review.criterion` the way
-the run record carries it, and drives `dispatch.terminal_commit` over the full-path fixture: the
+the run record carries it, and drives `dispatch.land_run` over the full-path fixture and then its close job: the
 review stamp mints, the plan is stamped implemented, the completion entry is written and the baton
-ships, with no re-judge record. The same run with a falsifier `fail` closes none of them.
+ships, with no re-judge record. The legs are read from the close-job record, not the landing reply. The same run with a falsifier `fail` closes none of them.
 """
 
 from __future__ import annotations
@@ -17,8 +17,9 @@ import pytest
 
 from coordinator_core.benchmarks import terminal_commit_full_path as driver
 from coordinator_core.ops.ceremony import close_background
-from coordinator_core.ops.dispatch_emit import terminal_commit
+from coordinator_core.ops.dispatch_emit import land_run
 from coordinator_core.ops.dispatch_emit.emit import _JUDGE_VERDICT_RULES_JS
+from coordinator_core.ops.dispatch_emit.run_close import close_job_path
 from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
@@ -66,21 +67,32 @@ def _run(tmp_path, monkeypatch, judged: dict):
     repo, script = driver.build_fixture(tmp_path / "work")
     outbox = tmp_path / "lessons-outbox"
     outbox.mkdir()
-    noop = tmp_path / "noop.py"
-    noop.write_text("pass\n", encoding="utf-8")
     monkeypatch.setenv("LESSON_PROMOTE_OUTBOX_ROOT", str(outbox))
     monkeypatch.setenv("COORDINATOR_SESSION_ID", driver.SESSION_ID)
-    monkeypatch.setattr(terminal_commit, "CLOSE_JOB_SCRIPT", str(noop))
+    monkeypatch.setattr(land_run, "_launch_close_job", lambda *a, **k: True)
     monkeypatch.setattr(
         claims, "list_claims_by_session_checked", lambda sid, cwd=None: ([("handoff", "b.md")], [])
     )
     monkeypatch.setattr(close_background, "_launch_close_review", lambda ctx: True)
-    out = terminal_commit._handler(
+    out = land_run._handler(
         {"script_path": script, "incomplete_chunks": [], "session_id": driver.SESSION_ID,
          "inline_review": _review(judged)},
         repo_root=repo / ".git",
     )
-    return repo, out
+    assert out.get("committed") is True, out
+    return repo, out, _run_close_job(repo, out)
+
+
+def _run_close_job(repo, out) -> dict:
+    """Run the landing's close job in-process and return its recorded leg statuses."""
+    run_id = out["close"]["run_id"]
+    record = json.loads((repo / close_job_path(run_id)).read_text(encoding="utf-8"))
+    close_background._handler(
+        {"run_id": run_id, "claimed_batons": record["claimed_batons"], "source_memo": record.get("source_memo")},
+        repo_root=repo / ".git",
+    )
+    settled = json.loads((repo / close_job_path(run_id)).read_text(encoding="utf-8"))
+    return {leg: (r["status"], r["detail"]) for leg, r in settled["legs"].items()}
 
 
 def _rejudge_files(repo) -> list:
@@ -96,19 +108,18 @@ def test_a_met_over_an_unrun_falsifier_closes_every_leg_in_run(tmp_path, monkeyp
     judged = _judged("error")
     assert judged["status"] == "met" and judged["reason"].startswith("met; recorded falsifier did not run")
 
-    repo, out = _run(tmp_path, monkeypatch, judged)
+    repo, out, legs = _run(tmp_path, monkeypatch, judged)
 
-    assert out["review_stamp"] == "minted", out
     assert out["criterion_status"] == "met", out
-    assert out["plan_status"] == "implemented", out
+    assert legs["review-stamp"][0] == "ran", legs
+    assert legs["plan-reconciliation"][0] != "failed", legs
+    assert legs["completion-entry"][0] == "ran", legs
+    assert legs["baton-ship"][0] == "ran", legs
+    assert legs["close-commit"][0] == "ran", legs
     text = (repo / driver.PLAN_REL).read_text(encoding="utf-8")
     assert "status: implemented" in text and "review_stamp:" in text
     assert "status: met" in text.split("review_stamp:", 1)[1]
-    legs = (out.get("close") or {}).get("legs") or {}
-    assert (legs.get("plan-reconciliation") or {}).get("status") != "failed", legs
-    assert (legs.get("completion-entry") or {}).get("status") == "ran", legs
-    assert (legs.get("baton-ship") or {}).get("status") == "ran", legs
-    assert "shipped" in (repo / driver.BATON_REL).read_text(encoding="utf-8")
+    assert legs["baton-ship"][1].startswith("shipped at "), legs
     assert _rejudge_files(repo) == []
 
 
@@ -116,10 +127,9 @@ def test_the_same_run_with_a_falsifier_fail_closes_none_of_them(tmp_path, monkey
     judged = _judged("fail")
     assert judged["status"] == "indeterminate"
 
-    repo, out = _run(tmp_path, monkeypatch, judged)
+    repo, out, _legs = _run(tmp_path, monkeypatch, judged)
 
     assert out.get("criterion_status") != "met", out
-    assert out.get("plan_status") != "implemented", out
     stamp = (repo / driver.PLAN_REL).read_text(encoding="utf-8").partition("review_stamp:")[2]
     assert "status: met" not in stamp
     assert "status: implemented" not in (repo / driver.PLAN_REL).read_text(encoding="utf-8")

@@ -116,7 +116,7 @@ def _script_path_under(guarded_path: Path, root: str) -> Optional[str]:
 def _terminal_commit_script_path(
     guarded_path: Path, repo_root: Optional[Path], plan_path: str, target_root: str
 ) -> Optional[str]:
-    """Repo-root-relative script path for `dispatch.terminal_commit`: plan root first, `target_root` second."""
+    """Repo-root-relative script path for `dispatch.land_run`: plan root first, `target_root` second."""
     plan_root = repo_root or _repo_root_for_plan(plan_path)
     if plan_root is not None:
         rel = _script_path_under(guarded_path, str(plan_root))

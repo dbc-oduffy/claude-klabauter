@@ -61,7 +61,7 @@ EXEC_DIGEST = {
     "outcome": "complete",
     "review": {"status": "integrated", "slices": 1, "fixes_applied": 0},
     "criterion": {"status": "met", "observation": "ok", "sidecar": None},
-    "next_action": {"op": "dispatch.terminal_commit", "params": {"paths": ["a"]}},
+    "next_action": {"op": "dispatch.land_run", "params": {"paths": ["a"]}},
 }
 
 
@@ -251,7 +251,7 @@ def test_execute_halt_names_terminal_commit_as_the_next_action(world):
     digest = driver.run(manifest, runner=runner, invoke_terminal_commit=make_commit(calls))
 
     action = digest["next_action"]
-    assert action["kind"] == "terminal_commit" and action["op"] == "dispatch.terminal_commit"
+    assert action["kind"] == "terminal_commit" and action["op"] == "dispatch.land_run"
     assert action["params"]["paths"] == ["a"]
     assert action["params"]["script_path"].endswith("exec.mjs")
     assert action["params"]["task_output_path"] == "tasks/exec.output"

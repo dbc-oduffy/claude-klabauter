@@ -1,4 +1,4 @@
-"""The grind mode contract of ``dispatch.terminal_commit``: params key, row shape, row trailer.
+"""The grind mode contract of ``dispatch.land_run``: params key, row shape, row trailer.
 
 Shared by the op that lands a grind's finished rows and by the emitter that composes the call, so it
 imports nothing beyond the standard library and the stdlib-only ``session.record_homes``.

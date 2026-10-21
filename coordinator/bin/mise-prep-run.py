@@ -76,8 +76,8 @@ one non-negotiable invocation tax this plan exists to remove. Both ops (`plan.pr
 seam `coordinator_core/ops/cutover_advance.py` already uses to call `cutover.gate` from inside
 another op's own handler. The upgrade leg is in-process too: `_upgrade` loads
 `mise-prep-upgrade.py` by file path and calls its `upgrade_plan`, so the driver spawns no process
-per plan (docs/plans/2026-10-21-mise-prep-run-full-set-fits-its-op-budget.md). `_ENTRY` now points at the sibling `coordinator/bin/mise-prep-entry.py` this
-same chunk lands, not a DoE `skills/plan-blitz/` path.
+per plan (docs/plans/2026-10-21-mise-prep-run-full-set-fits-its-op-budget.md). `_ENTRY` points at
+the sibling `coordinator/bin/mise-prep-entry.py`, not a DoE `skills/plan-blitz/` path.
 """
 
 from __future__ import annotations
@@ -493,7 +493,10 @@ def _upgrader(engine_root: Path | None):
     """
     own = _HERE / "mise-prep-upgrade.py"
     if engine_root is not None and engine_root != _REPO_ROOT:
-        return f"engine root {engine_root} is not the tree this driver runs from ({_REPO_ROOT})"
+        return (
+            f"engine root {engine_root} is not the tree this driver runs from ({_REPO_ROOT}); "
+            f"run {engine_root / 'coordinator' / 'bin' / 'mise-prep-upgrade.py'} directly"
+        )
     if not own.is_file():
         return f"no mise-prep-upgrade.py at {own}"
     spec = importlib.util.spec_from_file_location("mise_prep_upgrade", own)

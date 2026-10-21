@@ -4,11 +4,11 @@ from __future__ import annotations
 
 from coordinator_core.ops.dispatch_emit import ask_compose
 from coordinator_core.ops.dispatch_emit.emit import _INDETERMINATE_RECONCILE_CLAUSE
-from coordinator_core.ops.dispatch_emit.terminal_commit_reconcile import TERMINAL_COMMIT_RECONCILE_CLAUSE
+from coordinator_core.ops.dispatch_emit.land_run_contract import OP_NAME, RECONCILE_CLAUSE
 from coordinator_core.ops.dispatch_emit.tests.test_ask_compose import _compose
 from coordinator_core.ops.dispatch_emit.tests.test_invoke_prompts_carry_reconcile_clause import _prompts
 
-_TERMINAL = "coordinator-invoke dispatch.terminal_commit --params-file"
+_TERMINAL = f"coordinator-invoke {OP_NAME} --params-file"
 
 
 def _commit_prompts(script: str) -> list[str]:
@@ -19,7 +19,7 @@ def _assert_terminal_clause_once(script: str) -> None:
     prompts = _commit_prompts(script)
     assert len(prompts) >= 2, "expected the commit stage and the halt commit"
     for prompt in prompts:
-        assert prompt.count(TERMINAL_COMMIT_RECONCILE_CLAUSE) == 1, prompt[:200]
+        assert prompt.count(RECONCILE_CLAUSE) == 1, prompt[:200]
         assert _INDETERMINATE_RECONCILE_CLAUSE not in prompt
 
 

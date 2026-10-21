@@ -15,7 +15,7 @@ def _wf(session: Path, wf_id, agents, settled=()):
     events = [{"type": "launched"}]
     for aid, (desc, run_id) in agents.items():
         (d / f"agent-{aid}.meta.json").write_text(json.dumps({"description": desc}), encoding="utf-8")
-        prompt = f"x coordinator-invoke dispatch.terminal_commit --params-file repo\\\\scratch/warp/{run_id}/terminal-commit-params.json" if run_id else "nothing"
+        prompt = f"x coordinator-invoke dispatch.land_run --params-file repo\\\\scratch/warp/{run_id}/terminal-commit-params.json" if run_id else "nothing"
         (d / f"agent-{aid}.jsonl").write_text(json.dumps({"message": {"content": prompt}}) + "\n", encoding="utf-8")
         events.append({"type": "started", "agentId": aid, "label": desc})
         if aid in settled:

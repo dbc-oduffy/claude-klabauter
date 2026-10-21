@@ -252,13 +252,13 @@ def test_no_per_row_commit_remains_and_the_mutex_key_is_gone():
     script = _compose()
     assert "@commit" not in script
     assert "_commitCall" not in script
-    assert script.count("coordinator-invoke dispatch.terminal_commit") == 1
+    assert script.count("coordinator-invoke dispatch.land_run") == 1
     assert "lockKeys = ['@commit'].concat(" not in script
 
 
 def test_the_terminal_commit_is_one_bare_invoke_segment_with_the_params_block():
     script = _compose()
-    assert script.count("coordinator-invoke dispatch.terminal_commit --params-file ' + (_paramsFile) + '") == 1
+    assert script.count("coordinator-invoke dispatch.land_run --params-file ' + (_paramsFile) + '") == 1
     assert "_terminalCommitParamsBlock(params)" in script
     assert "const RUN_TOKEN = args.run_token || null;" in script
     assert gc.PARAMS_BLOCK_JS in script

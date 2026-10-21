@@ -1,4 +1,4 @@
-"""`approved_body_sha` ignores the spine bookkeeping `dispatch.terminal_commit` writes
+"""`approved_body_sha` ignores the spine bookkeeping `dispatch.land_run` writes
 (open -> coded, disposition_ref, D5 re-sort) and still refuses a real plan edit."""
 
 from __future__ import annotations

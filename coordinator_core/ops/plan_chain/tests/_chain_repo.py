@@ -82,7 +82,7 @@ def chain(tmp_path, monkeypatch):
         "review": {"status": "integrated", "slices": 1, "fixes_applied": 0},
         "criterion": {"status": "met", "observation": "demo exists", "sidecar": None},
         "next_action": {
-            "op": "dispatch.terminal_commit",
+            "op": "dispatch.land_run",
             "params": {
                 "incomplete_chunks": [],
                 "inline_review": {"integration_stem": "demo-review", "slices": 1, "fixes": 0},

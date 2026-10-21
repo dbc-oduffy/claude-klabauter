@@ -389,7 +389,8 @@ def run_owns_sizing(repo_root: Path, session_id: str, sizing_rel: str) -> bool:
 
 
 def token_params_from_command(raw_cmd: str) -> Optional[dict]:
-    """`{run_id, run_token, script_path}` from a `dispatch.terminal_commit` command line's JSON
+    """`{run_id, run_token, script_path}` from a `dispatch.land_run` (or legacy
+    `dispatch.terminal_commit`) command line's JSON
     params (inline argument or `--params-file -` heredoc body), else None. Text parse only."""
     start = raw_cmd.find("{")
     end = raw_cmd.rfind("}")

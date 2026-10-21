@@ -19,7 +19,7 @@ This module owns the trap text every stage-kind prompt must carry:
   positive rule ("you do not stage; only the committer does") and never
   names the forbidden git verbs;
 - trap 3: the grind's terminal commit composer carries one bare
-  ``coordinator-invoke dispatch.terminal_commit --params-file`` segment and the
+  ``coordinator-invoke dispatch.land_run --params-file`` segment and the
   params block, never JSON typed by the agent; the review-fix committer never
   names a ``state/queue-grind/`` ledger in either path list;
 - trap 4: the review-fix committer's prompt carries the -32004 reconcile clause
@@ -92,7 +92,7 @@ from coordinator_core.ops.dispatch_emit.emit import (
     resolve_agent_model,
 )
 from coordinator_core.backlog_grind_assemble.grind_rows import evidence_rel
-from coordinator_core.ops.dispatch_emit.terminal_commit_reconcile import TERMINAL_COMMIT_RECONCILE_CLAUSE
+from coordinator_core.ops.dispatch_emit.land_run_contract import OP_NAME, RECONCILE_CLAUSE
 from coordinator_core.ops.dispatch_emit.agent_sidecar import sidecar_clause, sidecar_dir
 from coordinator_core.ops.workflow_scaffold import _js_string_literal
 
@@ -1342,7 +1342,7 @@ def compose_grind_terminal_commit_call(
     run_key: str = DEFAULT_RUN_KEY,
 ) -> str:
     """The grind's one terminal `commit` (`coordinator:git-commit-agent`, haiku, low): runs
-    `dispatch.terminal_commit --params-file <path>` and returns its reply verbatim.
+    `dispatch.land_run --params-file <path>` and returns its reply verbatim.
 
     Trap: the command stays one bare `coordinator-invoke` segment, which is all the
     `block_subagent_commit` run-token leg admits. The params ride in the prompt's fenced block,
@@ -1355,9 +1355,9 @@ def compose_grind_terminal_commit_call(
             "lit",
             "This is a queue grind's one terminal commit stage. Run exactly this one command as its "
             "own Bash call: no `cd &&`, no wrapper, no env prefix, no edit to it. "
-            "`dispatch.terminal_commit` derives the paths from the grind's finished rows, so no "
+            f"`{OP_NAME}` derives the paths from the grind's finished rows, so no "
             "`paths` array is owed.\n\n"
-            "coordinator-invoke dispatch.terminal_commit --params-file ",
+            f"coordinator-invoke {OP_NAME} --params-file ",
         ),
         ("expr", params_file_js),
         ("lit", "\n\nThe engine reads the params block below. Do not copy, edit or pass it.\n\n"),
@@ -1366,7 +1366,7 @@ def compose_grind_terminal_commit_call(
             "lit",
             "\n\nReturn from its JSON reply committed, sha, rows, dropped, error, refused, "
             f"{ALREADY_LANDED_KEY} and {UNLANDED_KEY}, verbatim (null where absent). "
-            + TERMINAL_COMMIT_RECONCILE_CLAUSE
+            + RECONCILE_CLAUSE
             + " Run nothing else.",
         ),
     ]

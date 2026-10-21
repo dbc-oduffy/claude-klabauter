@@ -14,6 +14,7 @@ import pytest
 
 from coordinator_core.ops.dispatch_emit import ask_compose
 from coordinator_core.ops.dispatch_emit.ask_compose import compose_ask_script
+from coordinator_core.ops.dispatch_emit.land_run_contract import OP_NAME
 from coordinator_core.ops.dispatch_emit.ask_contract import HALTED_RECORD_PARAM, OP_ASK_STAGE
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
 from coordinator_core.ops.dispatch_emit.tests.test_ask_compose_stage_handle import (  # noqa: F401
@@ -128,7 +129,7 @@ def test_a_resume_ledger_reply_carrying_the_gate_staged_manifest_reaches_the_com
 
     assert labels.index("verify") < labels.index("commit")
     assert res["plan"] == _PLAN and res["commit"]["committed"] is True
-    assert "dispatch.terminal_commit" in next(c for c in out["calls"] if c["label"] == "commit")["prompt"]
+    assert OP_NAME in next(c for c in out["calls"] if c["label"] == "commit")["prompt"]
     assert res["halt_commit"] is None
 
 

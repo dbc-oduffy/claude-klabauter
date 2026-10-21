@@ -26,12 +26,12 @@ Two commit-phase shapes exist in emitted scripts (module docstring of
     by `if (!commitWaveNResults || ...) { ... }` -- this module's target.
   - CURRENT DAG (`docs/plans/2026-09-27-emitter-dag-terminal-commit-wake-
     digest.md`): no per-phase commit agent() call at all. The one terminal
-    commit is `dispatch.terminal_commit`, fired by the DRIVER after the
+    commit is `dispatch.land_run`, fired by the DRIVER after the
     script returns its wake digest -- there is no in-script statement to
     splice. `mark_landed` raises `NoEmbeddedCommitPhaseError` rather than
     pretending to edit something that is not there; the honest fix for a
     halted DAG-shape run is to pass `incomplete_chunks` to the driver's own
-    `dispatch.terminal_commit` call, not to hand-edit the script.
+    `dispatch.land_run` call, not to hand-edit the script.
 """
 
 from __future__ import annotations
@@ -88,7 +88,7 @@ def mark_landed(script_text: str, phase_title: str, sha: str) -> str:
             "shape) and no per-phase commit agent() step -- the terminal commit "
             "is fired by the driver AFTER the run, never embedded in the script. "
             "Nothing here to mark landed; pass incomplete_chunks to the driver's "
-            "dispatch.terminal_commit call instead."
+            "dispatch.land_run call instead."
         )
 
     # An apostrophe inside `phase_title` is rendered JS-escaped (`\'`) when the

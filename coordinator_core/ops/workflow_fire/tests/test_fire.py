@@ -152,12 +152,13 @@ def test_build_fire_command_never_uses_dangerously_skip_permissions():
 
 
 def test_build_fire_command_prompt_relays_terminal_commit():
-    """AC20: the prompt names dispatch.terminal_commit, the script path and
+    """AC20: the prompt names dispatch.land_run, the script path and
     next_action.params, and -p is still carried."""
     command = fire.build_fire_command("plans/script.mjs", "/resolved/plugin/dir")
     assert "-p" in command
     prompt = command[command.index("-p") + 1]
-    assert "dispatch.terminal_commit" in prompt
+    assert "dispatch.land_run" in prompt
+    assert "dispatch.terminal_commit" not in prompt
     assert "plans/script.mjs" in prompt
     assert "next_action.params" in prompt
 

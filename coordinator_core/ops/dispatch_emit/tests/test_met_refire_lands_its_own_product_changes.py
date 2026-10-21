@@ -1,4 +1,4 @@
-"""A met ledger-check refire's terminal commit lands the product paths its own run declared and changed
+"""A met ledger-check refire's land_run call lands the product paths its own run declared and changed
 since the halt, instead of refusing `ledger-unmet` and leaving them to a halted-record commit that
 withholds them as `halt-record-only`."""
 
@@ -8,7 +8,7 @@ import json
 
 import pytest
 
-from coordinator_core.ops.dispatch_emit import terminal_commit
+from coordinator_core.ops.dispatch_emit import land_run, land_run_halt
 from coordinator_core.ops.dispatch_emit.ask_contract import (
     RUN_DIR_ROOT,
     UNCHANGED_SINCE_HALT_REASON,
@@ -75,7 +75,7 @@ def _refire(root, *, edit: bool = True) -> dict:
 
 
 def _terminal(root, token: str, resume: dict) -> dict:
-    return terminal_commit._handler(
+    return land_run._handler(
         {
             "script_path": "run2.mjs", "run_id": RUN2, "run_token": token, "incomplete_chunks": [],
             "inline_review": _REVIEWED, "session_id": _SID, "ledger_verdict": _MET,
@@ -104,8 +104,8 @@ def test_met_refire_lands_its_declared_product_and_withholds_nothing_as_halt_rec
     out = _terminal(halted, refire["token"], resume)
 
     assert out["committed"] is True, out
-    assert "refused" not in out, out
-    assert "halt-record-only" not in json.dumps(out.get("withheld", [])), out
+    assert out.get("refused") is None, out
+    assert land_run_halt.HALT_RECORD_ONLY not in json.dumps(out.get("withheld", [])), out
     assert _git(halted, "show", f"{out['sha']}:a.py") == "a = 2\n"
     assert _git(halted, "show", f"{out['sha']}:{B}") == "b = 2\n"
     landed = set(_git(halted, "diff", "--name-only", refire["head_sha"], out["sha"]).split())

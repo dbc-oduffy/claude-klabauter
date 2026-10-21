@@ -11,7 +11,7 @@ import textwrap
 
 import pytest
 
-from coordinator_core.ops.dispatch_emit import terminal_commit
+from coordinator_core.ops.dispatch_emit import run_artifacts
 from coordinator_core.ops.dispatch_emit.emit import SeamInputs, compose_script
 from coordinator_core.ops.dispatch_emit.wave_map import WaveRow
 
@@ -377,13 +377,18 @@ def _seed_plan(root, rel: str, with_sidecar: bool):
         plan.with_name(plan.stem + ".seam.yaml").write_text("schema: seam-check\n", encoding="utf-8")
 
 
+def _seams(root, plan) -> list:
+    """The run's seam sidecars as ``land_run`` enumerates them for its landing pathspec."""
+    return list(run_artifacts.candidate_paths(root, "ask-20261016T120000-aaaaaa", plan_rel=plan).by_class.get("seam-sidecar", ()))
+
+
 def test_seam_sidecars_join_the_terminal_pathspec(tmp_path):
     _seed_plan(tmp_path, "docs/plans/p1.md", True)
     _seed_plan(tmp_path, "docs/plans/p2.md", False)
-    found = terminal_commit._seam_sidecars(tmp_path, "docs/plans/p1.md", ["C1"])
+    found = _seams(tmp_path, "docs/plans/p1.md")
     assert found == ["docs/plans/p1.seam.yaml"]
-    assert terminal_commit._seam_sidecars(tmp_path, "docs/plans/p2.md", ["C1"]) == []
-    assert terminal_commit._seam_sidecars(tmp_path, None, []) == []
+    assert _seams(tmp_path, "docs/plans/p2.md") == []
+    assert _seams(tmp_path, None) == []
 
 
 def test_terminal_pathspec_carries_prep_and_wave_sidecars_only_of_its_own_plan(tmp_path):
@@ -392,14 +397,14 @@ def test_terminal_pathspec_carries_prep_and_wave_sidecars_only_of_its_own_plan(t
     d = tmp_path / "docs/plans"
     for name in ("p1.wave-2.seam.yaml", "p1.wave-1.seam.yaml", "p10.wave-1.seam.yaml"):
         (d / name).write_text("schema: seam-check\n", encoding="utf-8")
-    assert terminal_commit._seam_sidecars(tmp_path, "docs/plans/p1.md", ["C1"]) == [
+    assert _seams(tmp_path, "docs/plans/p1.md") == [
         "docs/plans/p1.seam.yaml",
         "docs/plans/p1.wave-1.seam.yaml",
         "docs/plans/p1.wave-2.seam.yaml",
     ]
     _seed_plan(tmp_path, "docs/plans/p3.md", False)
     (d / "p3.wave-1.seam.yaml").write_text("schema: seam-check\n", encoding="utf-8")
-    assert terminal_commit._seam_sidecars(tmp_path, "docs/plans/p3.md", ["C1"]) == ["docs/plans/p3.wave-1.seam.yaml"]
+    assert _seams(tmp_path, "docs/plans/p3.md") == ["docs/plans/p3.wave-1.seam.yaml"]
 
 
 def test_run_artifacts_enumerates_wave_sidecars_and_maps_them_to_the_plan_sizing(tmp_path):

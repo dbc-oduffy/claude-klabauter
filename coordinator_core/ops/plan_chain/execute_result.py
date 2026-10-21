@@ -8,15 +8,16 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Mapping
 
+from coordinator_core.ops.dispatch_emit import land_run_contract
 from coordinator_core.ops.plan_chain.contract import Halt, WorkflowResult, halt
 
 # ask_compose.HALT_USAGE_LIMIT: the execute script's _haltOnUsageLimit writes this token.
 USAGE_LIMIT_MARKER = "usage_limit"
-_TERMINAL_COMMIT_OP = "dispatch.terminal_commit"
+_TERMINAL_COMMIT_OP = land_run_contract.OP_NAME
 
 
 def read_execute_result(result: WorkflowResult) -> dict[str, Any] | Halt:
-    """``next_action.params`` for ``dispatch.terminal_commit``, unmodified, or the Halt."""
+    """``next_action.params`` for ``dispatch.land_run``, unmodified, or the Halt."""
     d = result.digest
     if not isinstance(d, dict):
         return halt("child-no-digest", "execute Workflow returned no digest", running_stage="execute")
@@ -48,13 +49,13 @@ def read_execute_result(result: WorkflowResult) -> dict[str, Any] | Halt:
             return params
     return halt(
         "child-no-digest",
-        "execute digest carries no dispatch.terminal_commit next_action",
+        "execute digest carries no dispatch.land_run next_action",
         running_stage="execute",
     )
 
 
 def resume_params(result: WorkflowResult, script_path: Path) -> dict[str, Any]:
-    """What the EM passes to ``dispatch.terminal_commit`` after an execute-stage halt.
+    """What the EM passes to ``dispatch.land_run`` after an execute-stage halt.
 
     The digest's own terminal_commit params when it carried them, always with ``script_path``
     and ``task_output_path`` set, so no one hunts the child's task file by session id.
@@ -68,7 +69,7 @@ def resume_params(result: WorkflowResult, script_path: Path) -> dict[str, Any]:
 
 
 def read_commit_reply(reply: Mapping[str, Any] | None) -> dict[str, str] | Halt:
-    """``{sha, receipt_path}`` from a ``dispatch.terminal_commit`` reply, or the refusal Halt.
+    """``{sha, receipt_path}`` from a ``dispatch.land_run`` reply, or the refusal Halt.
 
     The op's reply is ``{committed, sha, error, receipts: [...]}``; ``receipt_path`` is the
     first receipt, ``""`` when the commit wrote none.

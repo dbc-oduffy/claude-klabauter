@@ -9,7 +9,6 @@ import pytest
 
 from coordinator_core.ops.dispatch_emit import ask_gate
 from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
-from coordinator_core.ops.dispatch_emit import terminal_commit as tc
 from coordinator_core.ops.dispatch_emit.ask_contract import (
     RECORD_DIR_ROOT,
     RESUME_LEDGER_HALT_SHA_FIELD,
@@ -67,12 +66,12 @@ def test_a_met_row_the_halt_did_not_block_stays_met_and_the_blocking_row_stays_n
     }
     assert param["halt_sha"] == halt_sha
 
-    refusal = tc._ledger_gate(repo, run_dir, VERDICT, manifest, resume_ledger=param)[0]
+    refusal = inc._gate(repo, run_dir, VERDICT, manifest, param)[0]
     failures = refusal["ledger_failures"]
     assert all(f["reason"] != UNCHANGED_SINCE_HALT_REASON or f["id"] != "R2" for f in failures), failures
     assert "R2" not in json.dumps([f for f in failures if f["reason"] == UNCHANGED_SINCE_HALT_REASON])
     assert any(f["id"] == "R1" for f in failures), failures
 
     whole = {**param, "blocking": resume["blocking"]}
-    old = tc._ledger_gate(repo, run_dir, VERDICT, manifest, resume_ledger=whole)[0]
+    old = inc._gate(repo, run_dir, VERDICT, manifest, whole)[0]
     assert {"id": "R2", "reason": UNCHANGED_SINCE_HALT_REASON} in old["ledger_failures"]

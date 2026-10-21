@@ -1,4 +1,4 @@
-"""The commit stage and the halt commit carry the docs stage's doc_paths to dispatch.terminal_commit."""
+"""The commit stage and the halt commit carry the docs stage's doc_paths to dispatch.land_run."""
 
 from __future__ import annotations
 

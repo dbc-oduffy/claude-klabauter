@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from coordinator_core.ops.dispatch_emit.roadmap_fanout_commit import _resolve_plans
+from coordinator_core.ops.dispatch_emit.land_run_fanout import _resolve_plans
 
 
 def _plan(root, name, text):

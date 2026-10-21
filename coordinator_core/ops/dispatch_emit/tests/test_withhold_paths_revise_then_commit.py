@@ -1,4 +1,4 @@
-"""End to end: workflow.revise withhold_paths, then dispatch.terminal_commit leaves the path out."""
+"""End to end: workflow.revise withhold_paths, then dispatch.land_run leaves the path out."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
-from coordinator_core.ops.dispatch_emit import terminal_commit
+from coordinator_core.ops.dispatch_emit import land_run
 from coordinator_core.ops.dispatch_emit.commit_request import (
     ChunkCommit,
     CommitRequest,
@@ -65,7 +65,7 @@ def test_revise_withhold_then_terminal_commit_leaves_the_path_out(repo):
     assert revised["ok"] is True, revised
     assert revised["withhold_paths"] == [{"path": "shared.tsx", "reason": REASON}]
 
-    out = terminal_commit._handler(
+    out = land_run._handler(
         {
             "script_path": "run.mjs", "incomplete_chunks": [], "inline_review": _REVIEWED,
             "run_id": RUN,
@@ -78,8 +78,8 @@ def test_revise_withhold_then_terminal_commit_leaves_the_path_out(repo):
     assert "a.py" in landed
     assert "shared.tsx" not in landed
     assert "?? shared.tsx" in _git(["status", "--porcelain"], repo).splitlines()
-    assert out["run_artifacts"]["withheld"]["shared.tsx"] == f"withhold_paths: {REASON}"
-    assert out["withheld_chunks"] == {"C2": [{"path": "shared.tsx", "reason": REASON}]}
-    assert "C2" not in out["chunks_committed"]
-    assert "C2" not in out.get("no_product_hunk", [])
-    assert "C1" in out["chunks_committed"]
+    assert out["stranded"] == {"C2": ["shared.tsx"]}
+    message = _git(["log", "-1", "--format=%B", out["sha"]], repo)
+    assert "Row-Unlanded: C2 shared.tsx withheld" in message, message
+    lands = [ln for ln in message.splitlines() if ln.startswith("Lands-Chunks:")]
+    assert lands and "C1" in lands[0] and "C2" not in lands[0], message

@@ -7,8 +7,12 @@ import yaml
 
 from coordinator_core.ops.dispatch_emit import design_conformance as dc
 from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
-from coordinator_core.ops.dispatch_emit import terminal_commit as tc
+from coordinator_core.ops.dispatch_emit import land_run
 from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
+
+
+def _ledger_gate(root, run_dir, verdict, *, plan_text=None):
+    return land_run._ledger_gate(root, run_dir, verdict, None, (), {}, plan_text, {}, None, None)
 
 RUN = "ask-20261016T000000-abc123"
 REL = "state/sizings/2026-10-16-design.yaml"
@@ -117,11 +121,11 @@ def test_judge_wave_review_and_noted_path_meet_a_design_row(run):
 def test_ledger_gate_supplies_root_and_plan_text(run):
     root, ledger, design, _ = run
     run_dir = root / RECORD_DIR_ROOT / RUN
-    bad = tc._ledger_gate(root, run_dir, _verdict(ledger, design, status="met"))[0]
+    bad = _ledger_gate(root, run_dir, _verdict(ledger, design, status="met"))[0]
     assert bad is not None and bad["refused"] == "ledger-unmet"
     (root / "ratify.md").write_text("PM ratified\n", encoding="utf-8")
     plan = "```yaml design-deviation\n- entry: settings\n  ratified_by: ratify.md\n```\n"
-    ok = tc._ledger_gate(
+    ok = _ledger_gate(
         root, run_dir, _verdict(ledger, design, status="met", met_by="ratify.md"), plan_text=plan
     )[0]
     assert ok is None

@@ -301,10 +301,10 @@ RUN_RECORD_FILES = (
     RELAYED_ASK_FILE,
     ROUTE_PREFERENCE_FILE,
 )
-#: `dispatch.terminal_commit` params key whose dict value (a non-empty str `halted`) selects the
+#: `dispatch.land_run` params key whose dict value (a non-empty str `halted`) selects the
 #: halted-run record-only mode.
 HALTED_RECORD_PARAM = "halted_by"
-#: `dispatch.terminal_commit` params key for the roadmap fan-out record:
+#: `dispatch.land_run` params key for the roadmap fan-out record:
 #: `{plans: [repo-relative plan path, ...]}`.
 FANOUT_RECORD_PARAM = "fanout"
 #: `dispatch.emit` result key naming where an ask's script went when the halted run's path was not taken.
@@ -373,7 +373,7 @@ RESUME_LEDGER_CARRIED_MET_FIELD = "carried_met"
 RESUME_LEDGER_UNLANDED_FIELD = "unlanded"
 #: halted.json key a ledger-check halt records `[{id, remaining, evidence}]` for its blocking rows under.
 HALT_BLOCKING_ITEMS_FIELD = "blocking_items"
-#: `dispatch.terminal_commit` param carrying `{run_id, halt_sha, blocking}` on a ledger resume.
+#: `dispatch.land_run` param carrying `{run_id, halt_sha, blocking}` on a ledger resume.
 TERMINAL_RESUME_LEDGER_PARAM = "resume_ledger"
 #: Ledger failure reason for a blocking row judged met when no declared product path changed since the halt.
 UNCHANGED_SINCE_HALT_REASON = "no declared product path changed since the halt commit"

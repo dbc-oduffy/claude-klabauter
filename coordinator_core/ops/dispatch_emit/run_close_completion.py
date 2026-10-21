@@ -2,7 +2,7 @@
 coordinator_core.ops.dispatch_emit.run_close_completion -- the inline ``completion-entry`` leg.
 
 Purpose: write the run's completion entry from the terminal judge's ``completion_summary``,
-once per run id, for ``dispatch.terminal_commit``'s close block.
+once per run id, for ``dispatch.land_run``'s close block.
 
 Negative-spec:
   - No process spawn. File writes only, through ``completion_entry``'s locked helpers.

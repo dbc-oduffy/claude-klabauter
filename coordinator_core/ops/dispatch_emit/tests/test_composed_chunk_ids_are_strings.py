@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from coordinator_core.ops.dispatch_emit.emit import _run_row_helper_js, compose_script
+from coordinator_core.ops.dispatch_emit.land_run_contract import OP_NAME
 from coordinator_core.ops.dispatch_emit.wake_digest import BAD_CHUNK_ID_REASON
 
 from .conftest import REVIEW_KW
@@ -50,5 +51,5 @@ def test_terminal_commit_params_are_refused_not_thrown_on_a_non_string_id():
 def test_next_action_is_none_and_decision_required_names_the_refusal():
     script = _script()
     assert "? 'none' : 'terminal_commit'" in script
-    assert "? null : 'dispatch.terminal_commit'" in script
+    assert f"? null : '{OP_NAME}'" in script
     assert BAD_CHUNK_ID_REASON in script

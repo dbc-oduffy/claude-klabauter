@@ -7,7 +7,7 @@ import subprocess
 
 import pytest
 
-from coordinator_core.ops.dispatch_emit import terminal_commit
+from coordinator_core.ops.dispatch_emit import land_run
 from coordinator_core.ops.dispatch_emit.ask_contract import ASK_MANIFEST_MARKER, RECORD_DIR_ROOT
 from coordinator_core.ops.dispatch_emit.ask_stage import _handler as stage
 from coordinator_core.ops.dispatch_emit.tests.test_ask_stage import read_stage_reply
@@ -75,7 +75,7 @@ def test_gated_em_row_is_withheld_and_listed_incomplete(tmp_path):
     (root / "run.mjs").write_text(
         f"// emitted\n{ASK_MANIFEST_MARKER}{RECORD_DIR_ROOT}/r1/manifest.json\n", encoding="utf-8"
     )
-    out = terminal_commit._handler(
+    out = land_run._handler(
         {
             "script_path": "run.mjs",
             "incomplete_chunks": ["V1-gate"],
@@ -84,8 +84,12 @@ def test_gated_em_row_is_withheld_and_listed_incomplete(tmp_path):
         repo_root=root / ".git",
     )
     assert out["committed"] is True
-    assert out["chunks_committed"] == ["N1"]
-    assert out["unmarked_incomplete"] == ["V1-gate"]
+    message = subprocess.run(
+        ["git", "log", "-1", "--format=%B", out["sha"]], cwd=str(root), capture_output=True, text=True,
+        check=True, **no_console_creationflags(),
+    ).stdout
+    lands = [ln for ln in message.splitlines() if ln.startswith("Lands-Chunks:")]
+    assert lands and "N1" in lands[0] and "V1-gate" not in lands[0], message
     assert out["incomplete_reasons"] == {"V1-gate": "external_gate"}
     assert out["stranded"] == {}
     json.dumps(out)

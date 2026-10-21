@@ -9,10 +9,9 @@ from pathlib import Path
 
 import pytest
 
-from coordinator_core.ops import requirement_register as rr
 from coordinator_core.ops.dispatch_emit import completion_receipt as cr
 from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
-from coordinator_core.ops.dispatch_emit import terminal_commit
+from coordinator_core.ops.dispatch_emit import land_run
 from coordinator_core.ops.dispatch_emit.ask_contract import ASK_MANIFEST_MARKER, RUN_DIR_ROOT, OwedRow, StageManifest
 from coordinator_core.ops.dispatch_emit.commit_request import ChunkCommit, CommitRequest, render_marker
 from coordinator_core.win_portability import no_console_creationflags
@@ -112,11 +111,9 @@ def test_delivered_row_commits_and_the_operator_row_reads_awaiting_operator_with
         "script_path": "run.mjs", "incomplete_chunks": ["C2"], "inline_review": _REVIEWED,
         "session_id": _SID, "ledger_verdict": verdict,
     }
-    out = terminal_commit._handler(params, repo_root=repo / ".git")
+    out = land_run._handler(params, repo_root=repo / ".git")
     assert out["committed"] is True, out
-    assert out["awaiting_operator"] == [{"id": "R2", "row": "C2", "command": COMMAND}]
+    assert "awaiting_operator" not in out
     assert "a.py" in _git(repo, "show", "--name-only", "--format=", out["sha"]).split()
     trailers = _git(repo, "log", "-1", "--format=%(trailers:key=Requirement-Open,valueonly)", out["sha"])
     assert trailers.strip() == "R2 awaiting_operator C2"
-    rows = {r["id"]: r["status"] for r in rr.read_register((repo / SIZING).read_text(encoding="utf-8")).rows}
-    assert rows["R1"] == "met" and rows["R2"] == "open"

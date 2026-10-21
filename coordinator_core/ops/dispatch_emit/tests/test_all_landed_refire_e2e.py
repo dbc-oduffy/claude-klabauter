@@ -16,7 +16,7 @@ import subprocess
 
 import pytest
 
-from coordinator_core.ops.dispatch_emit import terminal_commit
+from coordinator_core.ops.dispatch_emit import land_run
 from coordinator_core.ops.dispatch_emit.ask_compose import compose_ask_script
 from coordinator_core.ops.dispatch_emit.ask_contract import (
     ALL_LANDED_HALT_KIND,
@@ -187,7 +187,7 @@ def test_a_not_met_judge_lands_a_ledger_check_halt_and_the_next_gate_resumes_it_
     rec = repo / RECORD_DIR_ROOT / _RUN
     rec.mkdir(parents=True, exist_ok=True)
     (rec / "run.json").write_text(json.dumps({"sizing_rel": REL}) + "\n", encoding="utf-8")
-    landed = terminal_commit._handler(
+    landed = land_run._handler(
         {"script_path": "run.mjs", "run_id": _RUN, HALTED_RECORD_PARAM: halted_by}, repo_root=repo
     )
     assert landed["committed"] is True, landed

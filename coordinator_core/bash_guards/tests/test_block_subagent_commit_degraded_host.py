@@ -162,3 +162,25 @@ def test_subagent_invoking_terminal_commit_op_is_denied(monkeypatch):
 
 def test_terminal_commit_op_name_is_a_committing_op():
     assert "dispatch.terminal_commit" in guard._COMMITTING_OP_NAMES
+
+
+def test_land_run_op_name_is_a_committing_op():
+    assert "dispatch.land_run" in guard._COMMITTING_OP_NAMES
+
+
+def test_subagent_invoking_land_run_op_is_denied(monkeypatch):
+    monkeypatch.setattr(guard, "resolve_git_root", lambda cwd: _FAKE_REPO_ROOT)
+    monkeypatch.setattr(
+        guard, "_resolve_subagent_identity", lambda raw, session: "deadbeef0123"
+    )
+    monkeypatch.setattr(
+        guard, "_read_backpointer_subagent_type", lambda git_root, agent_id: ""
+    )
+    result = guard.check(
+        _payload(
+            "coordinator-invoke dispatch.land_run '{\"script_path\": \"x\"}'",
+            agent_type="general-purpose",
+        )
+    )
+    assert result is not None
+    assert result["hookSpecificOutput"]["permissionDecision"] == "deny"

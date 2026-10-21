@@ -1,9 +1,9 @@
-"""Driver for the dispatch.terminal_commit full path, measured as a process tree.
+"""Driver for the dispatch.land_run full path, measured as a process tree.
 
 Each invocation builds a fresh repo under a caller-given directory (a one-row
-plan with a met criterion, one DONE chunk), then drives the handler through the
-whole close: product commit, review-stamp mint, coded-stamp commit, implemented
-flip. `--setup-only` does everything except the handler call, so the cost of the
+plan with a met criterion, one DONE chunk), then drives `land_run._handler`
+through the landing: one scoped commit, with the close legs queued to the close
+job. `--setup-only` does everything except the handler call, so the cost of the
 call is `full - setup-only` (the run-close spike's method).
 
     python -m coordinator_core.benchmarks.terminal_commit_full_path <dir> [--setup-only] [--kind plan|mise|ask] [--real-shape]
@@ -11,12 +11,14 @@ call is `full - setup-only` (the run-close spike's method).
 `--real-shape` (ask only) grows the fixture to the incident's tree, corpus, launch dir and a live
 run token (`build_real_shape`); the call then carries `run_id` and `run_token` as a field call does.
 
-    python -m coordinator_core.benchmarks.terminal_commit_full_path <dir> --kind ask --real-shape --build-only
+    python -m coordinator_core.benchmarks.terminal_commit_full_path <dir> --kind ask|fanout --real-shape --build-only
     python -m coordinator_core.benchmarks.terminal_commit_full_path --prebuilt <dir> [--setup-only]
 
 `--build-only` builds the real-shape repo under `<dir>` and exits; `--prebuilt` imports and calls
-against it, so the measured process pays no fixture build. `--setup-only --prebuilt` is the
-import-only baseline the net subtracts, and it never mutates the repo. A full `--prebuilt` run
+against it, so the measured process pays no fixture build. `--kind fanout` adds two plans with their
+sizings and batons to that repo and drives `land_run`'s fanout mode (the `ask_fanout` relay is
+stubbed: it is the next op, not the landing). `--setup-only --prebuilt` is the import-only baseline
+the net subtracts, and it never mutates the repo. A full `--prebuilt` run
 writes `handler.json` (parent handler process ms) beside the manifest and exits 0 when the path
 completed, whatever the time: the caller gates on it.
 
@@ -417,8 +419,11 @@ def _prepare_close(repo: Path) -> None:
 
     Runs in both modes, so its cost cancels out of the net figure. The outbox is per
     fixture repo: a shared one would answer a later invocation `discharged`.
+    Trap: `land_run._launch_close_job` is replaced here by a launch of the no-op script; renaming
+    it would silently measure the real close job.
     """
-    from coordinator_core.ops.dispatch_emit import terminal_commit
+    from coordinator_core.ops.ceremony.detached_spawn import spawn_detached
+    from coordinator_core.ops.dispatch_emit import land_run
     from coordinator_core.session import claims
 
     outbox = repo.parent / f"{repo.name}-lessons-outbox"
@@ -427,7 +432,15 @@ def _prepare_close(repo: Path) -> None:
     os.environ["COORDINATOR_SESSION_ID"] = SESSION_ID
     noop = repo.parent / "close_job_noop.py"
     noop.write_text("pass\n", encoding="utf-8")
-    terminal_commit.CLOSE_JOB_SCRIPT = str(noop)
+    if not hasattr(land_run, "_launch_close_job"):
+        raise RuntimeError("land_run._launch_close_job renamed: this driver would measure the real close job")
+
+    engine = Path(__file__).resolve().parents[2]
+
+    def launch_noop(root: Path, key: str, batons: list, memo: Optional[str]) -> bool:
+        return spawn_detached(str(engine), str(noop), [key, "--root", str(root)], site_free=True)
+
+    land_run._launch_close_job = launch_noop
     claims.list_claims_by_session_checked = lambda sid, cwd=None: ([("handoff", "b.md")], [])
 
 
@@ -443,28 +456,77 @@ def _mise_close_failure(out: dict) -> str:
         )
         if (legs.get(leg) or {}).get("status") != want
     }
-    if close.get("kind") != "mise-run" or out.get("review_receipt") != INVENTORY_REL or wrong:
-        return (
-            f"mise close block wrong: kind={close.get('kind')!r} "
-            f"receipt={out.get('review_receipt')!r} legs={wrong!r}"
-        )
+    if close.get("kind") != "mise-run" or wrong:
+        return f"mise close block wrong: kind={close.get('kind')!r} legs={wrong!r}"
     return ""
 
 
 def _close_failure(out: dict) -> str:
+    """Every leg the landing defers is queued to the close job; none ran inline."""
     close = out.get("close") or {}
     legs = close.get("legs") or {}
-    ran = ("plan-reconciliation", "lessons", "completion-entry", "baton-ship")
-    bad = {leg: legs.get(leg) for leg in ran if (legs.get(leg) or {}).get("status") != "ran"}
-    queued = [leg for leg in ("review", "baton-drain", "orientation-refresh", "post-close") if (legs.get(leg) or {}).get("status") != "queued"]
-    if bad or queued or close.get("outstanding"):
-        return f"close block did not pay the legs: {bad!r} not-queued={queued!r} outstanding={close.get('outstanding')!r}"
+    owed = (
+        "plan-reconciliation", "lessons", "completion-entry", "baton-ship",
+        "review", "baton-drain", "orientation-refresh", "post-close",
+    )
+    not_queued = {leg: legs.get(leg) for leg in owed if (legs.get(leg) or {}).get("status") != "queued"}
+    if not_queued or close.get("outstanding"):
+        return f"close legs not queued: {not_queued!r} outstanding={close.get('outstanding')!r}"
     return ""
 
 
-def _run_full_path(repo: Path, script: str, kind: str = "plan", run_token: Optional[str] = None) -> dict:
-    from coordinator_core.ops.dispatch_emit import terminal_commit
+FANOUT_PLANS = ("docs/plans/2026-10-21-fan-a.md", "docs/plans/2026-10-21-fan-b.md")
 
+
+def build_fanout(repo: Path) -> None:
+    """Two plans on a real-shape ask repo, each citing a sizing that cites a baton, plus the
+    fanout run's two record files: the dirt `land_run`'s fanout mode lands."""
+    import yaml
+
+    from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
+    from coordinator_core.ops.sizing_intake_contract import intake_record
+
+    for name, plan_rel in zip(("a", "b"), FANOUT_PLANS):
+        sizing = f"state/sizings/2026-10-21-fan-{name}.yaml"
+        baton = f"state/handoffs/2026-10-21-fan-{name}.md"
+        (repo / plan_rel).write_text(
+            f"---\nsizing_object: {sizing}\n---\n\n## Tasks\n\n```yaml plan-tasks\n"
+            f"- id: {name.upper()}1\n  title: T\n  disposition: open\n  writes:\n    - pkg/{name}.py\n```\n",
+            encoding="utf-8", newline="\n",
+        )
+        rec = intake_record(name=name, turn={"text": "do the thing", "turn": 1}, today="2026-10-21")
+        rec["plan"] = plan_rel
+        rec["baton"] = baton
+        rec.setdefault("interaction_mode", "pm")
+        (repo / sizing).write_text(yaml.safe_dump(rec, sort_keys=False), encoding="utf-8", newline="\n")
+        (repo / baton).write_text(
+            f"---\ntitle: b\nstatus: claimed\nkind: session-handoff\n---\n\n# baton {name}\n", encoding="utf-8"
+        )
+    record = repo / RECORD_DIR_ROOT / ASK_RUN
+    record.mkdir(parents=True, exist_ok=True)
+    for fname in ("ask.md", "run.json"):
+        (record / fname).write_text(f"{fname}\n", encoding="utf-8")
+
+
+def _stub_fanout_relay() -> None:
+    """The `ask_fanout` relay is the next op, not the landing: it answers ready and fires nothing."""
+    from coordinator_core.ops.dispatch_emit import ask_fanout
+
+    ask_fanout.fanout = lambda params, root: {"exit_code": 0, "ready": [], "runs": []}
+
+
+def _run_full_path(repo: Path, script: str, kind: str = "plan", run_token: Optional[str] = None) -> dict:
+    from coordinator_core.ops.dispatch_emit import land_run
+
+    if kind == "fanout":
+        _stub_fanout_relay()
+        return land_run._handler(
+            {
+                "script_path": script, "run_id": ASK_RUN, "run_token": run_token, "session_id": SESSION_ID,
+                "fanout": {"plans": list(FANOUT_PLANS)},
+            },
+            repo_root=repo / ".git",
+        )
     params = {
         "script_path": script,
         "incomplete_chunks": [],
@@ -476,25 +538,42 @@ def _run_full_path(repo: Path, script: str, kind: str = "plan", run_token: Optio
     if run_token is not None:
         params["run_id"] = ASK_RUN
         params["run_token"] = run_token
-    return terminal_commit._handler(params, repo_root=repo / ".git")
+    return land_run._handler(params, repo_root=repo / ".git")
 
 
 PREBUILT_MANIFEST = "prebuilt.json"
 HANDLER_RESULT = "handler.json"
 
 
-def _build_only(parent: Path) -> int:
-    """Build the real-shape ask repo under `parent` and record what the measured process needs."""
+def _build_only(parent: Path, kind: str) -> int:
+    """Build the real-shape repo (`ask`, or `fanout` with its two plans) under `parent` and record
+    what the measured process needs."""
     import json
 
     repo, script = build_ask_fixture(parent)
     token = build_real_shape(repo)
+    if kind == "fanout":
+        build_fanout(repo)
     launch = repo.parent / f"{repo.name}-tmp"
     (parent / PREBUILT_MANIFEST).write_text(
-        json.dumps({"repo": str(repo), "script": script, "launch": str(launch), "run_token": token}),
+        json.dumps(
+            {"repo": str(repo), "script": script, "launch": str(launch), "run_token": token, "kind": kind}
+        ),
         encoding="utf-8",
     )
     return 0
+
+
+def _landed_failure(out: dict, kind: str) -> str:
+    """Why `out` is not a landing that queued its close legs, else the empty string."""
+    if out.get("committed") is not True or not out.get("sha") or out.get("error"):
+        return f"land_run did not land: {out!r}"
+    if kind == "fanout":
+        fan = out.get("fanout") or {}
+        return "" if fan.get("exit_code") == 0 else f"fanout relay not reached: {out!r}"
+    if out.get("review_stamp") != "deferred":
+        return f"review stamp not deferred to the close job: {out.get('review_stamp')!r}"
+    return ""
 
 
 def main(argv: list[str]) -> int:
@@ -516,10 +595,13 @@ def main(argv: list[str]) -> int:
     unknown = [a for a in argv if a.startswith("--") and a not in flags]
     builders = {"plan": build_fixture, "mise": build_mise_fixture, "ask": build_ask_fixture}
     build_only = "--build-only" in argv
-    bad_shape = (real_shape and kind != "ask") or (build_only and not (real_shape and kind == "ask"))
+    bad_shape = (build_only and not (real_shape and kind in ("ask", "fanout"))) or (
+        real_shape and not build_only and kind != "ask"
+    )
     if (
         unknown
-        or kind not in builders
+        or (kind not in builders and kind != "fanout")
+        or (kind == "fanout" and not build_only and prebuilt is None)
         or bad_shape
         or prebuilt == ""
         or len(args) != (0 if prebuilt is not None else 1)
@@ -527,26 +609,26 @@ def main(argv: list[str]) -> int:
     ):
         print(
             "usage: terminal_commit_full_path <dir> [--setup-only] [--kind plan|mise|ask] "
-            "[--real-shape (ask only)] [--build-only (with --kind ask --real-shape)]\n"
+            "[--real-shape (ask only)] [--build-only (with --kind ask|fanout --real-shape)]\n"
             "       terminal_commit_full_path --prebuilt <dir> [--setup-only]",
             file=sys.stderr,
         )
         return 2
     if build_only:
-        return _build_only(Path(args[0]))
+        return _build_only(Path(args[0]), kind)
     token: Optional[str] = None
     if prebuilt is not None:
         import json
 
         manifest = json.loads((Path(prebuilt) / PREBUILT_MANIFEST).read_text(encoding="utf-8"))
         repo, script, token = Path(manifest["repo"]), manifest["script"], manifest["run_token"]
-        kind, real_shape = "ask", True
+        kind, real_shape = manifest.get("kind", "ask"), True
         point_temp_at(Path(manifest["launch"]))
     else:
         repo, script = builders[kind](Path(args[0]))
         if real_shape:
             token = build_real_shape(repo)
-    from coordinator_core.ops.dispatch_emit import terminal_commit  # noqa: F401  (loaded in both modes)
+    from coordinator_core.ops.dispatch_emit import land_run  # noqa: F401  (loaded in both modes)
 
     _prepare_close(repo)
     if "--setup-only" in argv:
@@ -567,24 +649,10 @@ def main(argv: list[str]) -> int:
             file=sys.stderr,
         )
         return 3
-    if kind == "mise":
-        complete = bool(out.get("committed")) and "coded_sha" in out
-    elif kind == "ask":
-        complete = (
-            out.get("committed") is True
-            and out.get("review_stamp") == "minted"
-            and not out.get("coded_stamp_error")
-        )
-    else:
-        complete = out.get("review_stamp") == "minted" and out.get("plan_status") == "implemented"
-    if not complete:
-        print(f"full path did not complete: {out!r}", file=sys.stderr)
-        return 1
-    if kind == "mise":
+    failure = _landed_failure(out, kind)
+    if not failure and kind == "mise":
         failure = _mise_close_failure(out)
-    elif kind == "ask":
-        failure = ""
-    else:
+    elif not failure and kind == "plan":
         failure = _close_failure(out)
     if failure:
         print(failure, file=sys.stderr)

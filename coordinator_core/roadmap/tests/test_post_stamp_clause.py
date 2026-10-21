@@ -14,7 +14,7 @@ from coordinator_core.roadmap.post_stamp_clause import (
 )
 
 FOLLOW_ONS = (
-    "A warp run on this sizing reaches dispatch.terminal_commit with the DoE-gated row "
+    "A warp run on this sizing reaches dispatch.land_run with the DoE-gated row "
     "listed incomplete; after terminal_commit the index equals HEAD; a warp-minted baton "
     "carries a cascade-eligible kind and the sizing reaches shipped through the cascade; "
     "cascade_terminal measures under 200ms process time"

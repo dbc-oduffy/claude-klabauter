@@ -51,6 +51,11 @@ def test_minted_token_admits_the_commit_agents_terminal_commit(repo):
     assert _check(_cmd(_params(token))) is None
 
 
+def test_minted_token_admits_the_commit_agents_land_run(repo):
+    token = run_token.mint(repo, "ask-1", _SCRIPT)
+    assert _check(_cmd(_params(token), head="coordinator-invoke dispatch.land_run")) is None
+
+
 def test_heredoc_params_form_is_admitted(repo):
     token = run_token.mint(repo, "ask-1", _SCRIPT)
     cmd = "coordinator-invoke dispatch.terminal_commit --params-file - <<'JSON'\n" + json.dumps(_params(token)) + "\nJSON"

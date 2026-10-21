@@ -43,7 +43,7 @@ def test_exactly_one_haiku_commit_leg_fires_the_fanout(repo, which):
     spec = script[script.index(head):]
     spec = spec[: spec.index(tail) + len(tail)]
     assert script.count(head) == 1 and spec.count("interaction_mode") <= 1
-    assert "dispatch.terminal_commit --params-file" in script
+    assert "dispatch.land_run --params-file" in script
     assert "fanout: _commit?.fanout ?? null" in script
 
 
@@ -118,7 +118,7 @@ import yaml  # noqa: E402
 
 from coordinator_core.ops.dispatch_emit import ask_compose, ask_fanout  # noqa: E402
 from coordinator_core.ops.dispatch_emit import ask_fanout_contract as _fc  # noqa: E402
-from coordinator_core.ops.dispatch_emit import roadmap_fanout_commit as rfc  # noqa: E402
+from coordinator_core.ops.dispatch_emit import land_run_contract, land_run_fanout  # noqa: E402
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW  # noqa: E402
 from coordinator_core.ops.dispatch_emit.tests.test_ask_fanout_sizings_arm import _sizing  # noqa: E402
 
@@ -154,15 +154,15 @@ def _stages(script):
     labels = [leg.label for leg in lr.emitted_legs(script)]
     return {
         "review": "phase('Review wave')" in script or "phase('Review prep')" in script,
-        "commit": "commit" in labels and "dispatch.terminal_commit --params-file" in script,
+        "commit": "commit" in labels and "dispatch.land_run --params-file" in script,
     }
 
 
 def test_fanout_record_drives_a_sibling_whose_script_reviews_and_commits(fan_repo):
     repo, sizing = fan_repo
     params = {FANOUT_RECORD_PARAM: {"plans": [_PLAN], "waves": {_PLAN: 0}}}
-    assert rfc.is_fanout_record_call(params)
-    resolved, refusal = rfc._resolve_plans(repo, params[FANOUT_RECORD_PARAM]["plans"])
+    assert land_run_contract.mode_of(params) == "fanout"
+    resolved, refusal = land_run_fanout._resolve_plans(repo, params[FANOUT_RECORD_PARAM]["plans"])
     assert refusal is None and resolved[0][1] == sizing
     plan, sz, _baton, writes = resolved[0]
     out = ask_fanout.fanout({"sizings": [{"sizing": sz, "label": "a", "wave": 0, "writes": writes}]}, repo)
@@ -170,6 +170,6 @@ def test_fanout_record_drives_a_sibling_whose_script_reviews_and_commits(fan_rep
     run = out["ready"][0]
     script = _sibling_script(repo, run["sizing"], run["run_id"])
     assert _stages(script) == {"review": True, "commit": True}
-    assert _stages(script.replace("dispatch.terminal_commit --params-file", "x")) == {"review": True, "commit": False}
+    assert _stages(script.replace("dispatch.land_run --params-file", "x")) == {"review": True, "commit": False}
     stripped = script.replace("phase('Review wave')", "phase('x')").replace("phase('Review prep')", "phase('y')")
     assert _stages(stripped)["review"] is False

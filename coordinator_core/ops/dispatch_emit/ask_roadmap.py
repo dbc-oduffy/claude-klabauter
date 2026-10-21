@@ -27,6 +27,7 @@ from coordinator_core.ops.dispatch_emit.ask_fanout_contract import (
     PARENT_SIZING_KEY,
     PLAN_BLITZ_UNFIRED_BUCKETS,
 )
+from coordinator_core.ops.dispatch_emit.land_run_contract import OP_NAME as LAND_RUN_OP
 from coordinator_core.ops.dispatch_emit.ask_plan_blitz import (
     AskPlanBlitzRefused,
     _meta_span,
@@ -78,7 +79,7 @@ def roadmap_next_action_js(script_path: Optional[str] = None, interaction_mode: 
     path = f"script_path: {ac._lit(script_path)}, " if script_path else ""
     mode = f"{INTERACTION_MODE_PARAM}: {ac._lit(interaction_mode)}, " if isinstance(interaction_mode, str) and interaction_mode else ""
     return (
-        "{ kind: 'terminal_commit', op: 'dispatch.terminal_commit', "
+        f"{{ kind: 'terminal_commit', op: '{LAND_RUN_OP}', "
         f"params: {{ run_id: _runId, {path}{FANOUT_RECORD_PARAM}: {{ plans: _ready.map((r) => r.planPath), "
         "waves: Object.fromEntries(_ready.map((r) => [r.planPath, r.wave])), "
         f"{mode}{PARENT_SIZING_KEY}: _sizingRel, {NOT_FIRED_KEY}: _unfired }} }} }}"

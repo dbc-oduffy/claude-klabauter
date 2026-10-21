@@ -82,7 +82,7 @@ def test_plugin_register_rows_shape_is_kept():
 
 
 def test_the_judge_judges_the_uncommitted_tree_as_the_state_to_commit():
-    # The judge runs before dispatch.terminal_commit; an untracked deliverable is expected.
+    # The judge runs before dispatch.land_run; an untracked deliverable is expected.
     from coordinator_core.ops.review_mint.execute_review import _JUDGE_PREAMBLE
 
     assert "uncommitted by design" in _JUDGE_PREAMBLE

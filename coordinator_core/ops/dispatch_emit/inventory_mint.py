@@ -1824,6 +1824,21 @@ def _pick_groups(
     return taken, {i: r for i, r in reasons.items() if i not in taken}
 
 
+def _edge_prerequisite_item(
+    chunk: str, owner_of: Dict[str, str], item_ids: List[str]
+) -> Optional[str]:
+    """The inventory item a `depends_on` edge waits on. A chunk some minted row
+    owns names its owner. A chunk no row owns but whose `<item>.` prefix is an
+    inventory item (the item's chunk was withheld or not emitted) names that
+    item, which then defers the dependent. Any other chunk is `None`: left for
+    `read_spine` to refuse as unresolvable."""
+    owner = owner_of.get(chunk)
+    if owner is not None:
+        return owner
+    item = chunk.split(".", 1)[0] if "." in chunk else None
+    return item if item in item_ids else None
+
+
 def select_tranche(
     rows: List[dict],
     item_ids: List[str],
@@ -1862,7 +1877,7 @@ def select_tranche(
     prereqs: Dict[str, set] = {item: set() for item in items}
     for row, owner in zip(rows, owners):
         for edge in row.get("depends_on", []):
-            target = owner_of.get(edge["chunk"])
+            target = _edge_prerequisite_item(edge["chunk"], owner_of, item_ids)
             if target is not None and target != owner:
                 prereqs[owner].add(target)
     groups, shared = _shared_path_groups(rows, owners, items)

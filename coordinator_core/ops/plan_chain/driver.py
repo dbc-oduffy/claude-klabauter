@@ -1,4 +1,4 @@
-"""plan_chain driver: the five-stage main loop from an accepted sizing to ``dispatch.terminal_commit``.
+"""plan_chain driver: the five-stage main loop from an accepted sizing to ``dispatch.land_run``.
 
 Cold process, never a registered op. Each Workflow runs in its own pre-named headless child;
 the one commit is issued from this frame. Every exit, normal or halt, writes the final digest
@@ -14,6 +14,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
+from coordinator_core.ops.dispatch_emit import land_run_contract
 from coordinator_core.ops.plan_chain import digest as digest_mod
 from coordinator_core.ops.plan_chain import emit_leg, execute_result, phase1_checks, phase1_gates, plan_stage
 from coordinator_core.ops.plan_chain.contract import (
@@ -124,7 +125,7 @@ def _engine_terminal_commit(repo_root: str) -> TerminalCommit:
         msg = {
             "jsonrpc": "2.0",
             "id": 1,
-            "method": "dispatch.terminal_commit",
+            "method": land_run_contract.OP_NAME,
             "params": params,
             "_origin_worktree": repo_root,
         }

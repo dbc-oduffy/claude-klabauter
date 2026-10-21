@@ -1,6 +1,6 @@
 """End to end: an emitted run revised `stop_after="plan"` before stage answers parked from `dispatch.ask_stage`
 (no manifest.json), the composed ask script ends that reply as a `halted_by` parked terminal, and the halt-record
-`dispatch.terminal_commit` lands the record dir and the run's plan."""
+`dispatch.land_run` lands the record dir and the run's plan."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from coordinator_core.ops.dispatch_emit import ask_compose, ask_stage, halted_run, requirements_ledger as rl, terminal_commit
+from coordinator_core.ops.dispatch_emit import ask_compose, ask_stage, halted_run, land_run, requirements_ledger as rl
 from coordinator_core.ops.dispatch_emit.ask_compose import compose_ask_script
 from coordinator_core.ops.dispatch_emit.ask_contract import (
     HALT_PARKED,
@@ -99,7 +99,7 @@ def test_revised_run_parks_at_stage_halts_parked_and_commits_its_artifacts(repo,
     assert "not whole" not in str(halt)
     assert "halt-commit" in [c["label"] for c in out["calls"]]
 
-    landed = terminal_commit._handler(
+    landed = land_run._handler(
         {"script_path": "run.mjs", "run_id": RUN, HALTED_RECORD_PARAM: halt}, repo_root=repo / ".git"
     )
     assert landed["committed"] is True, landed

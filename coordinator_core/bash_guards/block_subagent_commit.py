@@ -3433,6 +3433,7 @@ _COMMITTING_OP_NAMES = frozenset(
         "memo.heal_inbox",
         "memo.migrate_group_em_inbox",
         "dispatch.terminal_commit",
+        "dispatch.land_run",
     }
 )
 _CEREMONY_INVOKE_MODULE = "coordinator_core.invoke"
@@ -6842,8 +6843,8 @@ def _deny_reason(
     )
 
 
-#: The one op a run-scoped token admits, through the on-PATH door only.
-_RUN_TOKEN_OP = "dispatch.terminal_commit"
+#: The ops a run-scoped token admits, through the on-PATH door only (the legacy name until C20).
+_RUN_TOKEN_OPS = ("dispatch.terminal_commit", "dispatch.land_run")
 
 
 def _bare_params_file_value(args: List[str]) -> Optional[str]:
@@ -6898,7 +6899,7 @@ def _is_terminal_commit_params_file_cmd(cmd_for_scan: str) -> bool:
     op_idx = _first_positional_after_invoke_module(seg, 1)
     return (
         op_idx is not None
-        and seg[op_idx] == _RUN_TOKEN_OP
+        and seg[op_idx] in _RUN_TOKEN_OPS
         and _bare_params_file_value(seg[op_idx + 1:]) is not None
     )
 
@@ -6936,7 +6937,7 @@ def _prefixed_params_file_value(cmd_for_scan: str) -> Optional[str]:
     if not _token_matches_binary(last[0], _COORDINATOR_INVOKE_BINARY):
         return None
     op_idx = _first_positional_after_invoke_module(last, 1)
-    if op_idx is None or last[op_idx] != _RUN_TOKEN_OP:
+    if op_idx is None or last[op_idx] not in _RUN_TOKEN_OPS:
         return None
     if any(t.split("=", 1)[0] == "--repo" for t in last[1:op_idx]):
         return None
@@ -7025,7 +7026,7 @@ def _warp_run_token_admits(
         return refused
     seg = segments[0]
     op_idx = _first_positional_after_invoke_module(seg, 1)
-    if op_idx is None or seg[op_idx] != _RUN_TOKEN_OP:
+    if op_idx is None or seg[op_idx] not in _RUN_TOKEN_OPS:
         return refused
     if any(t.split("=", 1)[0] == "--repo" for t in seg[1:op_idx]):
         return refused

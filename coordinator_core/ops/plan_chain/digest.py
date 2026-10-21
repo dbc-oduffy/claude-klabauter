@@ -11,6 +11,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Mapping
 
+from coordinator_core.ops.dispatch_emit import land_run_contract
 from coordinator_core.ops.plan_chain.contract import ChainManifest, ChainState, STAGES
 
 _SCHEMA_PATH = Path(__file__).resolve().parents[2] / "contract" / "doe-wake-digest.schema.json"
@@ -116,7 +117,7 @@ def assemble_final_digest(
         kind = "close"
         outcome = "indeterminate" if halt is not None else "complete"
         if halt is not None and state.resume is not None:
-            next_action = {"kind": "terminal_commit", "op": "dispatch.terminal_commit", "params": dict(state.resume)}
+            next_action = {"kind": "terminal_commit", "op": land_run_contract.OP_NAME, "params": dict(state.resume)}
         else:
             next_action = {"kind": "none", "op": None, "params": None}
 
