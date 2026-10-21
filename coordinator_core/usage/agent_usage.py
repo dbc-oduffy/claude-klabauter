@@ -14,7 +14,6 @@ from typing import Any, Optional
 
 from coordinator_core.usage.price_table import TOKEN_FIELDS, estimate_usd
 from coordinator_core.usage.session_cost import usage_line
-from coordinator_core.workflow_watch.stall import _transcript_path
 
 UNKNOWN = "unknown"
 
@@ -122,6 +121,9 @@ def _add(into: dict[str, Any], tokens: dict[str, int], usd: Optional[float]) -> 
 
 
 def _agent_row(run_dir: str, agent_id: str, label: str) -> dict[str, Any]:
+    # Imported here: workflow_watch/__init__ imports run_report, which imports this module.
+    from coordinator_core.workflow_watch.stall import _transcript_path
+
     path = _transcript_path(run_dir, agent_id)
     row: dict[str, Any] = {
         "agent_id": agent_id, "label": label, "model": None, "speed": None,

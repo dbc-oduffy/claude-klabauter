@@ -2097,8 +2097,8 @@
     "coordinator_core/_content_root_primitive.py": "f7fcd3083855a5e1dd53c09233fbfd64f8dffdf5",
     "coordinator_core/_data_root.py": "0c7c8524f25376ae49593f11334445539dc557f9",
     "coordinator_core/_engine_landing.py": "06dbb1273f3c36fdb6be08767ec75e73c71630e7",
-    "coordinator_core/_engine_published_at": "28cf5c8f1398722c3ae6ea9815995d2a2c4ad85f",
-    "coordinator_core/_engine_stamp": "bff3866101c4df47b4d128e23b7b5d16a72d424c",
+    "coordinator_core/_engine_published_at": "ff7786ea89cedb5741c62b3f0a0a5cf282581c75",
+    "coordinator_core/_engine_stamp": "780654109708e2817e54fa28c373f73341db04f2",
     "coordinator_core/_fleet_names.py": "e81fc4247611fe486697f4707b28a1a3a008f392",
     "coordinator_core/_hook_envelope.py": "d98df967471c001593ab85960dc367f5ff5da056",
     "coordinator_core/_repo_root_probe.py": "2d8edfa8cd9343436a650584da430aa87ae0397d",
@@ -7964,7 +7964,7 @@
     "coordinator_core/updatedocs/tests/test_plan_prune.py": "7ca608c9f8d80a84f5cc71699046048fd58fa70e",
     "coordinator_core/updatedocs/tests/test_readme_index.py": "65f0fc895919ca942951bf397d08ff2c9d73114a",
     "coordinator_core/usage/__init__.py": "f2a37d7f4c7becf36f22b345aff064baf0182c62",
-    "coordinator_core/usage/agent_usage.py": "51c59b8e2f3b7b20dbfa2038517290cb35fbbf50",
+    "coordinator_core/usage/agent_usage.py": "c2a943c89d4c5647c53d46e3fa2669832ce242dd",
     "coordinator_core/usage/price_table.json": "6d8c5ddb34c329bb397aafbe1087e9e8e96fc747",
     "coordinator_core/usage/price_table.py": "ab44888adaa3af060123cad29e4b1772ed5bda7c",
     "coordinator_core/usage/run_locate.py": "1f6908e0d9bc53b347ca28c4f931264414a064a6",
@@ -8698,5 +8698,5 @@
     "scripts/unstick_claude.py": "5458a0f699f1793ff9fd32295b9d0b33635f1c06"
   },
   "schema": 1,
-  "source_head": "128211a9de6ef0dd65025f5cd69f93bcec845d76"
+  "source_head": "3f419ab9c0b9db4660d7796014351324dd18e687"
 }
