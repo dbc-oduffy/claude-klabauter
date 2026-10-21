@@ -1,0 +1,5 @@
+{
+  "executor_max_same_file_reads": 32,
+  "executor_peak_context": 366000,
+  "executor_tool_calls": 254
+}

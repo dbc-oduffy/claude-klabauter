@@ -359,7 +359,18 @@ from coordinator_core.ops.dispatch_emit.wake_digest import (
     completion_return_js,
     stage_schema_literal,
 )
-from coordinator_core.ops.dispatch_emit.work_label import build_work_label
+from coordinator_core.ops.dispatch_emit.work_label import (
+    build_work_label,
+    continuation_label_prefix,
+)
+from coordinator_core.ops.dispatch_emit.executor_economy import (
+    BATCHING_CLAUSE,
+    CHECKPOINT_STATUS,
+    EXCERPT_HEADING,
+    MAX_CONTINUATIONS,
+    checkpoint_path,
+)
+from coordinator_core.ops.dispatch_emit.row_excerpts import excerpt_block
 from coordinator_core.ops.dispatch_emit import fanout_cost as _fanout
 from coordinator_core.ops.dispatch_emit.agent_sidecar import (
     sidecar_clause as _sidecar_clause,
@@ -2561,6 +2572,18 @@ def _declared_scope_block(row: WaveRow) -> str:
     return f"## Files you may write (declared `writes:` scope)\n\n{block}"
 
 
+def _checkpoint_path_for(plan_path: Optional[str], row_id: str, n: int) -> str:
+    """The n-th checkpoint file of row `row_id`, inside the row's own sidecar dir (already in its fence)."""
+    return checkpoint_path(
+        _sidecar_dir(_SIDECAR_WORKFLOW, _sidecar_run_key(plan_path), row_id), row_id, n
+    )
+
+
+def _checkpoint_prefix_for(plan_path: Optional[str], row_id: str) -> str:
+    """Row `row_id`'s checkpoint path up to its number: ``_checkpoint_path_for(.., n)`` is this plus ``f"{n}.md"``."""
+    return _checkpoint_path_for(plan_path, row_id, 0).removesuffix("0.md")
+
+
 def _row_return_contract(
     row: WaveRow,
     plan_path: str,
@@ -2643,6 +2666,7 @@ def _row_return_contract(
             output_path_template=report_path,
             extra_fields=extra_fields,
             gate_owed_reply=gate_owed_reply,
+            checkpoint_path_template=_checkpoint_path_for(plan_path, row.id, 1),
         )
     )
     parts.append(_stop_rule_clause())
@@ -2724,6 +2748,29 @@ def _prefix_claim_field(prefixes) -> str:
     )
 
 
+def _bare_excerpts(row: WaveRow) -> str:
+    """The excerpt block for a row composed with no repo to scan: the row body alone."""
+    return excerpt_block(row.body, (), ".", "unrecorded", {})
+
+
+def _row_excerpts_for(repo_root, head: Optional[str], cache: dict):
+    """A ``WaveRow -> excerpt block`` provider sharing one span cache across a compose.
+
+    Scans each distinct written or read ``.py`` file once. Without a ``repo_root`` there is no
+    file to scan and the provider yields ``None`` (the body-only block)."""
+    if repo_root is None:
+        return lambda row: None
+
+    def provide(row: WaveRow) -> str:
+        paths: list = []
+        for p in [*(() if row.writes is UNDECLARED else row.writes), *row.reads]:
+            if isinstance(p, str) and p and p not in paths:
+                paths.append(p)
+        return excerpt_block(row.body, paths, repo_root, (head or "unrecorded")[:12], cache)
+
+    return provide
+
+
 def _row_prompt(
     row: WaveRow,
     plan_path: Optional[str] = None,
@@ -2733,8 +2780,14 @@ def _row_prompt(
     preamble: Optional[str] = None,
     new_module_paths: tuple = (),
     predecessor_state: Optional[str] = None,
+    excerpts: Optional[str] = None,
 ) -> str:
     """Compose one executor row's dispatch prompt.
+
+    ``excerpts`` (optional) is the pre-rendered ``## Row excerpts`` block
+    (``row_excerpts.excerpt_block``); omitted, the block carries the row body
+    alone. The prompt pins the row inline and points at the plan's ``## Problem``
+    and ``## Anti-scope`` rather than sending the executor to read the whole plan.
 
     ``predecessor_state`` (optional) is the pre-rendered ``## Predecessor
     handoff state`` section (``predecessor_state.predecessor_state_section``),
@@ -2799,19 +2852,19 @@ def _row_prompt(
     )
     body = (
         f"{head}\n\n"
-        f"The plan is {plan_path}. Read all of it: you are a collaborator on "
-        "this plan, not a hand given one line of it. Your focus is the row "
-        f"with `id: {row.id}` in its `## Tasks` plan-spine, a fenced ```yaml "
-        "plan-tasks block. Its `body`, `writes` and `depends_on` are yours to "
-        "deliver, and the body carries negative specs, prior-art citations and "
-        "constraints this title does not. The goal, the exit criterion, the "
-        "rows around yours, and the baton, research and evidence the plan "
-        "cites are there so your row serves the plan: read them. If the row "
-        "and the plan's goal disagree, or you cannot read the row, report "
-        "BLOCKED with what you found; your judgment is wanted, not a guess "
-        "dressed as compliance. Anything you do beyond your row, report under "
-        "`Beyond brief:` with your reason. Never take another row (a peer "
-        "holds it) and never edit the plan (it is every peer's instructions)."
+        f"The plan is {plan_path}. Your focus is the row with `id: {row.id}` in "
+        "its `## Tasks` plan-spine. Its `body`, `writes` and `depends_on` are "
+        "pinned below and are yours to deliver; the body carries negative specs "
+        "and constraints this title does not. For the goal and the fences read "
+        "the plan's `## Problem` and `## Anti-scope` sections, and read nothing "
+        "else of it unless the row names it. If the row and the plan's goal "
+        "disagree, or you cannot read the row, report BLOCKED with what you "
+        "found; your judgment is wanted, not a guess dressed as compliance. "
+        "Anything you do beyond your row, report under `Beyond brief:` with "
+        "your reason. Never take another row (a peer holds it) and never edit "
+        "the plan (it is every peer's instructions)."
+        f"\n\n{excerpts if excerpts is not None else _bare_excerpts(row)}"
+        f"\n\n{BATCHING_CLAUSE}"
         f"\n\n{_row_return_contract(row, plan_path, shared=shared, gate_owed_reply=(bool(gate_commands) or criterion_routed or plan_context is not None) and not is_slot_row)}"
     )
     if new_module_paths:
@@ -2857,6 +2910,8 @@ def _row_agent_call_expr(
     chatty_brief: Optional[str] = None,
     chatty_nonce_var: Optional[str] = None,
     predecessor_state: Optional[str] = None,
+    excerpts: Optional[str] = None,
+    checkpoint_prefix: Optional[str] = None,
 ) -> str:
     """Compose one row's ``agent(...)`` call expression -- the per-node body
     of the DAG's own ``_rows[id] = _runRow(...)`` registration (§ Design D4).
@@ -2880,8 +2935,11 @@ def _row_agent_call_expr(
         chatty_brief=chatty_brief,
         chatty_nonce_var=chatty_nonce_var,
         predecessor_state=predecessor_state,
+        excerpts=excerpts,
     )
-    return _agent_call_over(prompt_literal, row, agent_type_host, label_id=row.id)
+    return _agent_call_over(
+        prompt_literal, row, agent_type_host, label_id=row.id, checkpoint_prefix=checkpoint_prefix
+    )
 
 
 def _row_prompt_expr(
@@ -2895,6 +2953,7 @@ def _row_prompt_expr(
     chatty_brief: Optional[str] = None,
     chatty_nonce_var: Optional[str] = None,
     predecessor_state: Optional[str] = None,
+    excerpts: Optional[str] = None,
 ) -> str:
     """The JS string expression of one row's filled prompt, the first argument of its ``agent()`` call."""
     prompt = _row_prompt(
@@ -2905,6 +2964,7 @@ def _row_prompt_expr(
         preamble=preamble,
         new_module_paths=new_module_paths,
         predecessor_state=predecessor_state,
+        excerpts=excerpts,
     )
     if shared is None:
         prompt_literal = _resolve_markers_plus(prompt)
@@ -2929,16 +2989,51 @@ def _row_prompt_expr(
     return prompt_literal
 
 
+#: The script-scope ``_contText(cont, prefix)`` the continuable row calls build their clause from.
+_CONT_TEXT_JS = (
+    "  function _contText(c, prefix) {\n"
+    "    return '\\n\\nContinue from ' + c.path + '; the work it records is done; do not redo it. "
+    "Read that checkpoint first. If you too reach the context ceiling, write the next checkpoint at ' "
+    f"+ prefix + (c.n + 1) + '.md and reply `{CHECKPOINT_STATUS}: <that path>`.';\n"
+    "  }\n"
+)
+
+
+def _continuation_clause_js(cont: str, checkpoint_prefix: str) -> str:
+    """JS expression of the text appended to a row prompt for its n-th continuation executor.
+
+    ``cont`` is the JS expression of the row's ``{n, path}`` continuation record;
+    ``checkpoint_prefix`` is the checkpoint path up to its number."""
+    return f"_contText({cont}, {_js_string_literal(checkpoint_prefix)})"
+
+
 def _agent_call_over(
-    prompt_literal: str, row: WaveRow, agent_type_host: Optional[str], *, label_id: str
+    prompt_literal: str,
+    row: WaveRow,
+    agent_type_host: Optional[str],
+    *,
+    label_id: str,
+    checkpoint_prefix: Optional[str] = None,
 ) -> str:
-    """``agent(<prompt>, {...})`` run as ``row``'s agent type and model, labelled ``work:<label_id>``."""
+    """``agent(<prompt>, {...})`` run as ``row``'s agent type and model, labelled ``work:<label_id>``.
+
+    ``checkpoint_prefix`` makes the call continuable: ``_runRow`` sets ``_contOf[<label_id>]`` to
+    ``{n, path}`` before it re-runs the closure, and a call that finds it set appends the
+    continuation clause and is labelled as the row's n-th continuation."""
     row_agent_type = _row_agent_type(row)
+    label_js = _js_string_literal(build_work_label(label_id))
+    if checkpoint_prefix is not None:
+        cont = f"_contOf[{_js_string_literal(label_id)}]"
+        prompt_literal = (
+            f"{prompt_literal} + ({cont} ? {_continuation_clause_js(cont, checkpoint_prefix)} : '')"
+        )
+        suffix = continuation_label_prefix(label_id).removeprefix(build_work_label(label_id))
+        label_js = f"{label_js} + ({cont} ? {_js_string_literal(suffix)} + {cont}.n : '')"
     return (
         "agent("
         f"{prompt_literal}, "
         "{ "
-        f"label: {_js_string_literal(build_work_label(label_id))}, "
+        f"label: {label_js}, "
         f"phase: {_js_string_literal(_EXECUTE_PHASE_TITLE)}, "
         f"agentType: {_js_string_literal(_degrade_agent_type(row_agent_type, agent_type_host))}, "
         f"{_model_opt(row_agent_type, row.agent_model)}, "
@@ -3867,6 +3962,7 @@ def _plan_row_groups(
     predecessor_state: Optional[str],
     solo_ids: frozenset,
     seam_held: frozenset,
+    excerpts_for=None,
 ) -> tuple[dict[str, str], dict[str, tuple[str, ...]]]:
     """Each DAG row's prompt expression, and the multi-row groups sharing one agent.
 
@@ -3887,6 +3983,7 @@ def _plan_row_groups(
             preamble=preamble,
             new_module_paths=tuple(_new_module_paths(row, repo_root)),
             predecessor_state=predecessor_state,
+            excerpts=excerpts_for(row) if excerpts_for else None,
         )
         agent_type = _row_agent_type(row)
         solo = (
@@ -4104,6 +4201,9 @@ def _run_row_helper_js(
         f"  const _DEP_ANY_STATUS_RE = {_ANY_STATUS_JS_RE};\n"
         f"  const _DEP_BLOCKED_RE = {_BLOCKED_STATUS_JS_RE};\n"
         f"  const _GATE_OWED_RE = {GATE_OWED_JS_RE};\n"
+        f"  const _CHECKPOINT_RE = {_CHECKPOINT_JS_RE};\n"
+        "  const _contOf = {};\n"
+        f"{_CONT_TEXT_JS}"
         # The structured reply line is the only gate-owed signal; a BLOCKED reply
         # carrying it is still BLOCKED.
         "  function _gateOwedOf(t) {\n"
@@ -4211,6 +4311,19 @@ def _run_row_helper_js(
         "    let result;\n"
         "    try {\n"
         "      result = await run();\n"
+        "      let _ckpts = 0;\n"
+        "      for (;;) {\n"
+        "        const _ck = _CHECKPOINT_RE.exec(typeof result === 'string' ? result : JSON.stringify(result ?? null));\n"
+        "        if (!_ck) break;\n"
+        f"        if (!(id in _contOf) || _ckpts >= {MAX_CONTINUATIONS}) {{\n"
+        "          result = 'PARTIAL: executor checkpointed ' + _ckpts + ' continuation(s) without finishing; last checkpoint ' + _ck[1];\n"
+        "          break;\n"
+        "        }\n"
+        "        _ckpts++;\n"
+        "        log(id + ': checkpoint ' + _ck[1] + ', continuation ' + _ckpts);\n"
+        "        _contOf[id] = { n: _ckpts, path: _ck[1] };\n"
+        "        result = await run();\n"
+        "      }\n"
         "    } catch (e) {\n"
         "      result = null;\n"
         "    }\n"
@@ -4869,6 +4982,69 @@ def _pre_phase_blocks(
     ]
 
 
+_ABSORB_ID_TOKEN = "ABSORBROWID"
+_ABSORB_TITLE_TOKEN = "ABSORBROWTITLE"
+_ABSORB_EXCERPTS = (
+    f"{EXCERPT_HEADING}\n"
+    "No excerpts: this row was absorbed into the plan after the run composed. Read your row's "
+    "`body`, `writes` and `depends_on` in the plan's `## Tasks` spine; its `writes` are your footprint."
+)
+
+
+def _absorb_prompt_js(
+    plan_path: str,
+    plan_context: Optional[PlanContext],
+    preamble: Optional[str],
+) -> str:
+    """The ``_absorbPrompt(id, title)`` JS function: ``_row_prompt``'s template with the row id and
+    title spliced in at run time and the excerpt block replaced by a read-your-row note."""
+    probe = WaveRow(_ABSORB_ID_TOKEN, _ABSORB_TITLE_TOKEN, "", UNDECLARED, [], [])
+    text = _row_prompt(
+        probe,
+        plan_path,
+        plan_context,
+        preamble=preamble,
+        excerpts=_ABSORB_EXCERPTS,
+    )
+    parts = re.split(f"({_ABSORB_ID_TOKEN}|{_ABSORB_TITLE_TOKEN})", text)
+    expr = " + ".join(
+        "id" if part == _ABSORB_ID_TOKEN else "title" if part == _ABSORB_TITLE_TOKEN
+        else _resolve_markers_plus(part)
+        for part in parts
+        if part
+    )
+    return f"  function _absorbPrompt(id, title) {{ return {expr}; }}"
+
+
+def _absorb_block(
+    plan_path: str,
+    run_id: str,
+    *,
+    plan_context: Optional[PlanContext],
+    preamble: Optional[str],
+    agent_type_host: Optional[str],
+) -> str:
+    """``_absorbPrompt`` plus the absorb tail, guarded so a halted run absorbs nothing."""
+    from coordinator_core.ops.dispatch_emit.revise_absorb import absorb_tail_js
+
+    row_opts = (
+        f"agentType: {_js_string_literal(_degrade_agent_type(_EXECUTOR_AGENT_TYPE, agent_type_host))}, "
+        f"{_model_opt(_EXECUTOR_AGENT_TYPE)}, stallMs: {_EXECUTOR_STALL_MS}"
+    )
+    tail = absorb_tail_js(
+        plan_path=plan_path,
+        run_id=run_id,
+        row_opts=row_opts,
+        phase_expr=_js_string_literal(_EXECUTE_PHASE_TITLE),
+    )
+    return "\n".join([
+        "  if (!_halted) {",
+        _absorb_prompt_js(plan_path, plan_context, preamble),
+        tail,
+        "  }",
+    ])
+
+
 def row_block_bytes(rows, *, predispatch: bool, **compose_context) -> dict[str, int]:
     """Estimated emitted UTF-8 bytes per row id: its registration and prompt.
     ``predispatch`` gates only the falsifier-integrity review phase, which is
@@ -4882,6 +5058,7 @@ def row_block_bytes(rows, *, predispatch: bool, **compose_context) -> dict[str, 
     shared = SharedBlocks()
     repo_root = compose_context.get("repo_root")
     out: dict[str, int] = {}
+    excerpts_for = _row_excerpts_for(repo_root, None, {})
     for row in rows:
         call_expr = _row_agent_call_expr(
             row,
@@ -4891,6 +5068,8 @@ def row_block_bytes(rows, *, predispatch: bool, **compose_context) -> dict[str, 
             agent_type_host=compose_context.get("agent_type_host"),
             preamble=compose_context.get("preamble"),
             new_module_paths=tuple(_new_module_paths(row, repo_root)),
+            excerpts=excerpts_for(row),
+            checkpoint_prefix=_checkpoint_prefix_for(compose_context.get("plan_path"), row.id),
         )
         deps = ", ".join(f"_rows[{_js_string_literal(d)}]" for d in row.depends_on)
         text = (
@@ -5134,9 +5313,15 @@ def compose_script(
     review_terminal_sha: Optional[str] = None,
     routes: Optional[dict] = None,
     route_notes: Sequence[str] = (),
+    absorb_run_id: Optional[str] = None,
 ) -> str:
     """Compose one Workflow ``.mjs`` script text from already-derived ``waves``
     (§ Design D4).
+
+    ``absorb_run_id`` (a warp run id; needs ``plan_path``) splices
+    ``revise_absorb.absorb_tail_js`` once, after the DAG and its verifications settle and
+    before the terminal commit, together with the ``_absorbPrompt(id, title)`` it dispatches
+    absorbed rows through. ``None`` composes no tail.
 
     ``routes`` (``agent_route.route_rows``' per-row ``Route`` by row id; empty or ``None`` leaves
     every emitted byte unchanged) dispatches each routed row through ``_routedRun`` and keeps it
@@ -5446,6 +5631,7 @@ def compose_script(
                     f"  _seamGates[{n}] = new Promise((res) => {{ _seamRelease[{n}] = res; }});"
                 )
         row_exprs: dict[str, str] = {}
+        excerpts_for = _row_excerpts_for(repo_root, run_base_sha, {})
         if roster is None:
             row_exprs, row_group = _plan_row_groups(
                 dag,
@@ -5457,6 +5643,7 @@ def compose_script(
                 predecessor_state=predecessor_state,
                 solo_ids=frozenset(slot_rows) | {rid for rid, _ in held_rows} | frozenset(routes or ()),
                 seam_held=frozenset(seam_leg.holds) if seam_leg is not None else frozenset(),
+                excerpts_for=excerpts_for,
             )
         node_by_id = {n.row.id: n for n in dag.nodes}
         if row_group:
@@ -5497,6 +5684,7 @@ def compose_script(
                 if verify_scope
                 else "null"
             )
+            continuable = False
             if row.id in row_group:
                 members = row_group[row.id]
                 call_expr = (
@@ -5508,8 +5696,13 @@ def compose_script(
                     row_exprs[row.id], row, agent_type_host, label_id=row.id, route=routes[row.id]
                 )
             elif roster is None:
+                continuable = True
                 call_expr = _agent_call_over(
-                    row_exprs[row.id], row, agent_type_host, label_id=row.id
+                    row_exprs[row.id],
+                    row,
+                    agent_type_host,
+                    label_id=row.id,
+                    checkpoint_prefix=_checkpoint_prefix_for(plan_path, row.id),
                 )
             else:
                 call_expr = _row_agent_call_expr(
@@ -5522,6 +5715,7 @@ def compose_script(
                     new_module_paths=tuple(_new_module_paths(row, repo_root)),
                     predecessor_state=predecessor_state,
                     chatty_brief=_chatty.member_brief(row.id, _chatty.member_nonce(roster, row.id)),
+                    excerpts=excerpts_for(row),
                 )
             row_paths = row_pathspecs.get(row.id) or []
             if row.id in checkpoint_over:
@@ -5544,7 +5738,8 @@ def compose_script(
                 else "null"
             )
             body_blocks.append(
-                f"  _rows[{_js_string_literal(row.id)}] = _runRow("
+                (f"  _contOf[{_js_string_literal(row.id)}] = null;\n" if continuable else "")
+                + f"  _rows[{_js_string_literal(row.id)}] = _runRow("
                 f"{_js_string_literal(row.id)}, {deps_expr}, "
                 f"{verify_expr}, async () => ({call_expr}), {commit_expr});"
             )
@@ -5621,6 +5816,16 @@ def compose_script(
             body_blocks.append(
                 "  if (_seamFailures.length) log('Seam legs that returned no verdict (their "
                 "waves were not checked): ' + _seamFailures.join('; '));"
+            )
+        if absorb_run_id and plan_path:
+            body_blocks.append(
+                _absorb_block(
+                    plan_path,
+                    absorb_run_id,
+                    plan_context=plan_context,
+                    preamble=preamble,
+                    agent_type_host=agent_type_host,
+                )
             )
 
     marker_rows = flat_rows
@@ -6076,6 +6281,11 @@ _NON_DONE_STATUS_JS_RE = (
     rf'/{_LINE_START_JS}\s*[*_`]{{0,2}}(?:PARTIAL|BLOCKED)[*_`]{{0,2}}:'
     rf'|{_LINE_START_JS}{_STATUS_FIELD_JS}(?:PARTIAL|BLOCKED)\b'
     r'|<exit-status>(?:PARTIAL|BLOCKED)<\/exit-status>/'
+)
+
+#: A ``CHECKPOINT: <path>`` status line leading the reply or any line of it; group 1 is the path.
+_CHECKPOINT_JS_RE = (
+    rf'/{_LINE_START_JS}\s*[*_`]{{0,2}}{CHECKPOINT_STATUS}[*_`]{{0,2}}:\s*`?([^\s`"*\\]+)/'
 )
 
 #: The BLOCKED subset of ``_NON_DONE_STATUS_JS_RE``: a chunk matching it goes
@@ -6781,8 +6991,12 @@ def emit_script(
     certified_plans: Sequence[str] = (),
     auto_split: bool = False,
     sibling: Optional[dict] = None,
+    absorb_run_id: Optional[str] = None,
 ) -> str:
     """Read ``plan_path``'s task spine and compose one Workflow script text.
+
+    ``absorb_run_id`` forwards to ``compose_script``: the warp run whose late
+    ``workflow.revise`` rows the composed script absorbs after its DAG settles.
 
     ``certified_plans`` is the full certified set a tranche spine was cut from; it rides
     into the wave-boundary seam leg so a consumer plan of another tranche still counts
@@ -7107,6 +7321,7 @@ def emit_script(
         commit_scope=commit_scope_rows,
         prior_run_base=prior_run_base,
         prior_landed_rows=prior_landed_rows,
+        absorb_run_id=absorb_run_id if sibling is None or sibling.get("terminal_commit", True) else None,
         review_terminal_sha=review_terminal_sha,
         routes=routes,
         route_notes=route_notes,

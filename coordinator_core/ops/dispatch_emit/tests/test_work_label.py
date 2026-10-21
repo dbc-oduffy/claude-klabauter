@@ -16,6 +16,8 @@ from coordinator_core.ops.dispatch_emit import emit
 from coordinator_core.ops.dispatch_emit.work_label import (
     WORK_LABEL_PREFIX,
     build_work_label,
+    continuation_label,
+    continuation_label_prefix,
     parse_work_label,
 )
 
@@ -38,6 +40,18 @@ def test_a_bare_prefix_is_not_a_chunk():
     """The emitter never emits an empty id, so a consumer meeting one has
     found drift. Returning "" would let it pass as a row id downstream."""
     assert parse_work_label("work:") is None
+
+
+def test_continuation_label_round_trips_to_its_row_id():
+    assert continuation_label("C3", 2) == "work:C3#cont2"
+    assert continuation_label("C3", 2).startswith(continuation_label_prefix("C3"))
+    assert parse_work_label(continuation_label("C3", 2)) == "C3"
+    assert parse_work_label(continuation_label("row-with-dashes", 1)) == "row-with-dashes"
+
+
+def test_a_label_merely_containing_the_separator_is_not_a_continuation():
+    assert parse_work_label("work:C3#contx") == "C3#contx"
+    assert parse_work_label("work:#cont1") is None
 
 
 def test_the_emitter_builds_its_label_through_the_grammar():

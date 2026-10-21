@@ -42,7 +42,10 @@ standalone constant.
 
 from typing import Sequence
 
+from coordinator_core.ops.dispatch_emit.executor_economy import CHECKPOINT_STATUS
+
 __all__ = [
+    "is_landable_status",
     "FOOTPRINT_CONSTRAINT_TEMPLATE",
     "self_verify_constraint",
     "done_summary_constraint",
@@ -131,6 +134,7 @@ def done_summary_constraint(
     output_path_template: str,
     extra_fields: Sequence[str] = (),
     gate_owed_reply: bool = False,
+    checkpoint_path_template: str | None = None,
 ) -> str:
     """Render the DONE-summary constraint: a one-screen summary at
     `output_path_template` carrying the invariant spine (status enum and
@@ -162,6 +166,14 @@ def done_summary_constraint(
         if gate_owed_reply
         else ""
     )
+    checkpoint_tail = (
+        f" At the context ceiling, stop, write the checkpoint file at "
+        f"`{checkpoint_path_template}`, and reply EXACTLY "
+        f"`{CHECKPOINT_STATUS}: {checkpoint_path_template}`; a "
+        f"{CHECKPOINT_STATUS} reply lands no row and is never a DONE."
+        if checkpoint_path_template
+        else ""
+    )
     return (
         f"Write a one-screen summary to `{output_path_template}` with: "
         f"status (DONE | BLOCKED | PARTIAL), {fields_text}. Do not include "
@@ -169,5 +181,11 @@ def done_summary_constraint(
         f"this summary. Reply EXACTLY `<STATUS>: {output_path_template}`, "
         "where <STATUS> is the status your summary records — `DONE`, "
         "`PARTIAL`, or `BLOCKED`."
-        f"{reply_tail}"
+        f"{reply_tail}{checkpoint_tail}"
     )
+
+
+def is_landable_status(status: str) -> bool:
+    """True when a reply status lands a row: DONE only. CHECKPOINT, PARTIAL
+    and BLOCKED never do."""
+    return status.strip().upper() == "DONE"

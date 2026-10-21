@@ -272,7 +272,7 @@ def test_part_review_specs_cover_only_that_parts_plans(tmp_path, monkeypatch, _r
     )
     seen: list = []
     monkeypatch.setattr(
-        op_mod, "_inventory_review_specs", lambda inventory, only: seen.append(only) or []
+        op_mod, "_inventory_review_specs", lambda inventory, only, writes=None: seen.append(only) or []
     )
     _dispatch_emit(
         {"inventory_path": str(inv), "target_root": str(tmp_path), "inventory_part": [1, 2]}

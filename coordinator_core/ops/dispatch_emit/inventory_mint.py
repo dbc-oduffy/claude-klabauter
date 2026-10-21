@@ -1918,7 +1918,7 @@ def _pick_groups(
                 progress = True
                 continue
             if blocking:
-                why =f"{label}prerequisite {', '.join(blocking)} not in this tranche"
+                why = f"{label}prerequisite {', '.join(blocking)} not in this tranche"
             elif total > row_budget:
                 why = f"{label}{total} rows exceed row_budget {row_budget} alone"
                 undecided.remove(unit)
@@ -1991,6 +1991,13 @@ def _edge_prerequisite_item(
     owner = owner_of.get(chunk)
     if owner is not None:
         return owner
+    return _unemitted_chunk_item(chunk, item_ids)
+
+
+def _unemitted_chunk_item(chunk: str, item_ids: List[str]) -> Optional[str]:
+    """The inventory item named by `chunk`'s `<item>.` prefix, else `None`. For a
+    chunk no minted row owns, the chunk is not in the emitted set even when its
+    item is: such an edge defers the dependent rather than reaching `read_spine`."""
     item = chunk.split(".", 1)[0] if "." in chunk else None
     return item if item in item_ids else None
 
@@ -2035,14 +2042,29 @@ def select_tranche(
     size = {item: owners.count(item) for item in items}
     owner_of = {row["id"]: o for row, o in zip(rows, owners)}
     prereqs: Dict[str, set] = {item: set() for item in items}
+    emitted_edge: Dict[str, set] = {item: set() for item in items}
+    unemitted_edge: Dict[str, set] = {item: set() for item in items}
     for row, owner in zip(rows, owners):
         for edge in row.get("depends_on", []):
-            target = _edge_prerequisite_item(edge["chunk"], owner_of, item_ids)
-            if target is not None and target != owner:
-                prereqs[owner].add(target)
+            chunk = edge["chunk"]
+            target = _edge_prerequisite_item(chunk, owner_of, item_ids)
+            if target is None or target == owner:
+                continue
+            prereqs[owner].add(target)
+            if chunk in owner_of:
+                emitted_edge[owner].add(target)
+            else:
+                # The chunk is in no emitted row: the dependent waits on it, and a
+                # `depends_on_plan` binding onto its item would place both together.
+                prereqs[owner].add(chunk)
+                unemitted_edge[owner].add(target)
     groups, shared = _shared_path_groups(rows, owners, items)
     binding: Dict[str, str] = {}
     if bound:
+        bound = {
+            dep: preds - (unemitted_edge.get(dep, set()) - emitted_edge.get(dep, set()))
+            for dep, preds in bound.items()
+        }
         groups, shared, binding = _bind_groups(groups, shared, bound)
     taken, deferred = _pick_groups(groups, size, prereqs, shared, row_budget, binding)
     if not taken:

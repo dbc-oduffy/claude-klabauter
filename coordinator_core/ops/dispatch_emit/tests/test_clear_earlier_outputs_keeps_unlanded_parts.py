@@ -45,6 +45,23 @@ def test_unlanded_part_survives_sibling_tranche_emit(tmp_path, capsys):
     assert f"kept unlanded part {p1}" not in err
 
 
+def test_unlanded_spine_without_script_survives_and_landed_one_goes(tmp_path):
+    t3 = tmp_path / f"{_BASE}-t3.md"
+    t3.write_text("rec", encoding="utf-8")
+    unlanded = tmp_path / f"{_BASE}-t2.spine.md"
+    unlanded.write_text("spine", encoding="utf-8")
+    landed = tmp_path / f"{_BASE}-t1.spine.md"
+    landed.write_text("spine", encoding="utf-8")
+    (tmp_path / f"{_BASE}-t1.workflow.mjs.emitted.json").write_text(
+        json.dumps({"sha256": "a", "landed": {"sha": "abc", "at": "t"}}), encoding="utf-8"
+    )
+
+    cli_module._clear_earlier_outputs(str(t3), [])
+
+    assert unlanded.is_file()
+    assert not landed.exists()
+
+
 def test_resume_sibling_spends_a_receiptless_part(tmp_path, capsys):
     t2 = tmp_path / f"{_BASE}-t2.md"
     t2.write_text("rec", encoding="utf-8")

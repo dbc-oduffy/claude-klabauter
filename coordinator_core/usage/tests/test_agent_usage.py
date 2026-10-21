@@ -98,6 +98,40 @@ def test_missing_transcript_and_journal_do_not_crash(tmp_path):
     assert empty["agents"] == [] and empty["run_total"]["total_tokens"] == 0
 
 
+def _tool_msg(mid, rid, blocks, usage):
+    return {"type": "assistant", "requestId": rid,
+            "message": {"id": mid, "model": OPUS, "usage": usage, "content": blocks}}
+
+
+def _tu(tid, name, path=None):
+    return {"type": "tool_use", "id": tid, "name": name,
+            "input": {"file_path": path} if path else {"command": "x"}}
+
+
+def test_tool_calls_peak_context_and_same_file_reads(tmp_path):
+    lines = [
+        _tool_msg("m1", "r1", [_tu("t1", "Read", "/a/File.py")], _u(10, 1, 100, 5)),
+        _tool_msg("m1", "r1", [_tu("t1", "Read", "/a/File.py"), _tu("t2", "Bash")],
+                  _u(10, 9, 100, 5)),
+        _tool_msg("m2", "r2", [_tu("t3", "Read", "\\a\\file.py"), _tu("t4", "Read", "/a/b.py")],
+                  _u(20, 1, 300, 40)),
+        _tool_msg("m3", "r3", [{"type": "text", "text": "hi"}], _u(1, 1, 0, 0)),
+    ]
+    (tmp_path / "agent-a.jsonl").write_text(
+        "\n".join(json.dumps(x) for x in lines) + "\n", encoding="utf-8")
+    _journal(tmp_path, [("a", "a")])
+    row = scan_run(str(tmp_path))["agents"][0]
+    assert row["tool_calls"] == 4
+    assert row["peak_context"] == 360
+    assert row["max_same_file_reads"] == 2
+
+
+def test_missing_transcript_zeroes_new_fields(tmp_path):
+    _journal(tmp_path, [("ghost", "g")])
+    row = scan_run(str(tmp_path))["agents"][0]
+    assert (row["tool_calls"], row["peak_context"], row["max_same_file_reads"]) == (0, 0, 0)
+
+
 def test_messages_and_session_cost_advance_agree(tmp_path):
     from coordinator_core.usage import session_cost
     from coordinator_core.usage.agent_usage import _messages

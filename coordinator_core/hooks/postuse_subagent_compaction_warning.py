@@ -30,6 +30,8 @@ from coordinator_core._settings_home import settings_home
 from coordinator_core.hooks._envelope import context_only
 from coordinator_core.hooks._payload import field
 from coordinator_core.ipc import register_op
+from coordinator_core.ops.dispatch_emit.executor_economy import CONTEXT_CEILING_TOKENS, ceiling_message
+from coordinator_core.usage.agent_usage import agent_meta
 
 # Writes warned-band marker files under settings home state, outside the tracked tree.
 GENERATES = []
@@ -138,6 +140,32 @@ def _reap_old_markers(directory: Path, max_age_s: float = 86400.0) -> None:
             continue
 
 
+def _write_marker(agent_id: str, band: str) -> bool:
+    """Create the once-only marker; False when it already exists or cannot be written."""
+    marker = settings_home() / "state" / "compaction-warned" / f"{_safe(agent_id)}.{band}"
+    if marker.exists():
+        return False
+    try:
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        _reap_old_markers(marker.parent)
+        marker.write_text("1", encoding="utf-8", newline="\n")
+    except OSError:
+        return False
+    return True
+
+
+def _ceiling_advisory(payload: dict, agent_id: str, transcript: str, tokens: int) -> str | None:
+    """CEILING_MESSAGE once for a coordinator:executor at or past the absolute ceiling."""
+    if tokens < CONTEXT_CEILING_TOKENS:
+        return None
+    meta = agent_meta(str(Path(transcript).parent), agent_id, transcript)
+    if meta.get("agentType") != "coordinator:executor":
+        return None
+    if not _write_marker(agent_id, "ceiling"):
+        return None
+    return ceiling_message(tokens)
+
+
 def _evaluate(payload: dict) -> str | None:
     agent_id = payload.get("agent_id")
     transcript = payload.get("agent_transcript_path") or payload.get("transcript_path")
@@ -146,6 +174,9 @@ def _evaluate(payload: dict) -> str | None:
     tokens, model = _context_tokens(Path(transcript))
     if tokens is None:
         return None
+    ceiling = _ceiling_advisory(payload, agent_id, transcript, tokens)
+    if ceiling:
+        return ceiling
     threshold = _threshold_tokens(_window(model, tokens), payload)
     if not threshold or threshold <= 0:
         return None
@@ -153,14 +184,7 @@ def _evaluate(payload: dict) -> str | None:
     band = max((i + 1 for i, edge in enumerate(WARN_BANDS) if ratio >= edge), default=0)
     if not band:
         return None
-    marker = settings_home() / "state" / "compaction-warned" / f"{_safe(agent_id)}.{band}"
-    if marker.exists():
-        return None
-    try:
-        marker.parent.mkdir(parents=True, exist_ok=True)
-        _reap_old_markers(marker.parent)
-        marker.write_text("1", encoding="utf-8", newline="\n")
-    except OSError:
+    if not _write_marker(agent_id, str(band)):
         return None
     return MESSAGE.format(pct=min(100, round(ratio * 100)), tokens=f"{tokens / 1000:.0f}k")
 

@@ -1631,6 +1631,35 @@ def _emit_script_file(
     }
 
 
+class _EmitWrites:
+    """The files one inventory emit wrote, with what each held before, so a refused emit
+    restores the tree: a created file is removed, an overwritten one gets its bytes back."""
+
+    def __init__(self) -> None:
+        self._prior: dict = {}
+        self._made_dirs: list = []
+
+    def write(self, path: Path, text: str) -> None:
+        if path not in self._prior:
+            self._prior[path] = path.read_bytes() if path.is_file() else None
+        missing = [d for d in reversed(path.parents) if not d.exists()]
+        path.parent.mkdir(parents=True, exist_ok=True)
+        self._made_dirs.extend(missing)
+        path.write_text(text, encoding="utf-8", newline="\n")
+
+    def rollback(self) -> None:
+        for path, prior in self._prior.items():
+            if prior is None:
+                path.unlink(missing_ok=True)
+            else:
+                path.write_bytes(prior)
+        for made in reversed(self._made_dirs):
+            try:
+                made.rmdir()
+            except OSError:
+                pass
+
+
 @register_op("dispatch.emit")
 def _dispatch_emit(
     params: dict,
@@ -1639,7 +1668,35 @@ def _dispatch_emit(
     only_review_plans: Optional[frozenset] = None,
     _research_ready: Optional[tuple] = None,
 ) -> dict:
+    writes = _EmitWrites()
+    try:
+        return _dispatch_emit_body(
+            params,
+            repo_root,
+            only_review_plans=only_review_plans,
+            _research_ready=_research_ready,
+            _writes=writes,
+        )
+    except ScriptOverCapError:
+        # The over-cap re-entry cuts parts from the tranche record this emit minted.
+        raise
+    except BaseException:
+        writes.rollback()
+        raise
+
+
+def _dispatch_emit_body(
+    params: dict,
+    repo_root: Optional[Path] = None,
+    *,
+    only_review_plans: Optional[frozenset] = None,
+    _research_ready: Optional[tuple] = None,
+    _writes: _EmitWrites,
+) -> dict:
     """JSON-RPC "dispatch.emit" handler.
+
+    ``_writes`` ledgers every file the inventory route writes before the script emit; the
+    caller rolls it back when the emit refuses.
 
     ``_research_ready`` is the per-group seam's own (never a request param): a research route
     context already set up by ``_emit_per_group``.
@@ -2157,7 +2214,7 @@ def _dispatch_emit(
                 # The tranche is its own inventory record from here on: its
                 # landed-reconcile and review specs must see only its plans.
                 inventory_path = str(tranche_inventory["path"])
-                Path(inventory_path).write_text(tranche_inventory["text"], encoding="utf-8", newline="\n")
+                _writes.write(Path(inventory_path), tranche_inventory["text"])
             guarded_spine_path = contained_path(
                 spine_path, [Path(inventory_path).resolve().parent]
             )
@@ -2171,7 +2228,7 @@ def _dispatch_emit(
                 spine_text.encode("utf-8"),
                 guarded_spine_path.with_name(guarded_spine_path.name.removesuffix(".md") + ".workflow.mjs"),
             )
-            guarded_spine_path.write_text(spine_text, encoding="utf-8", newline="\n")
+            _writes.write(guarded_spine_path, spine_text)
             plan_path = str(guarded_spine_path)
             # A review-only run executes nothing: no landed-flip writes to the
             # plans and no pre-dispatch checks or falsifier reviews.
@@ -2180,7 +2237,7 @@ def _dispatch_emit(
             inventory_review_specs = (
                 []
                 if review_only_run
-                else _inventory_review_specs(Path(inventory_path), only_review_plans)
+                else _inventory_review_specs(Path(inventory_path), only_review_plans, _writes)
             )
 
         if not plan_path:
@@ -2675,7 +2732,9 @@ def _existing_plans(spec_paths, root: Path) -> list:
     return [p for p in spec_paths if (root / p).is_file()]
 
 
-def _inventory_review_specs(inventory: Path, only: Optional[frozenset]) -> list:
+def _inventory_review_specs(
+    inventory: Path, only: Optional[frozenset], writes: Optional[_EmitWrites] = None
+) -> list:
     """Blinded falsifier-integrity review specs for the plans the live rows of
     ``inventory`` cite; writes each plan's can-report-red JSON beside the record."""
     root = _inventory_repo_root(inventory)
@@ -2696,8 +2755,11 @@ def _inventory_review_specs(inventory: Path, only: Optional[frozenset]) -> list:
         target = contained_path(root / item.report_path, [root])
         if target is None:
             raise PathEscapeError(f"can-report-red path escapes the repo root: {item.report_path!r}")
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(item.report_json, encoding="utf-8", newline="\n")
+        if writes is not None:
+            writes.write(target, item.report_json)
+        else:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(item.report_json, encoding="utf-8", newline="\n")
     return review_specs(inputs)
 
 
@@ -3123,6 +3185,9 @@ def _resolve_plan_blitz_args(sizing_abs: Optional[str]) -> dict:
             ]
         )
     return args
+
+
+_dispatch_emit.__doc__ = _dispatch_emit_body.__doc__
 
 
 def _gate_sizing_at_emit(

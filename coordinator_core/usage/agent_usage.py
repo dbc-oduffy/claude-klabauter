@@ -69,10 +69,39 @@ def _messages(path: str) -> list[dict]:
                 parsed = usage_line(raw, n)
                 if parsed is not None:
                     key, model, usage, _speed = parsed
-                    latest[key] = {"model": model, "usage": usage}
+                    prior = latest.get(key)
+                    tools = prior["tools"] if prior else {}
+                    if '"tool_use"' in raw:
+                        tools = {**tools, **_tool_uses(raw, n)}
+                    latest[key] = {"model": model, "usage": usage, "tools": tools}
     except OSError:
         return []
     return list(latest.values())
+
+
+def _tool_uses(raw: str, n: int) -> dict[Any, tuple[str, Optional[str]]]:
+    """{tool_use id: (name, input.file_path)} of one transcript line's tool_use blocks."""
+    try:
+        event = json.loads(raw)
+    except ValueError:
+        return {}
+    msg = event.get("message") if isinstance(event, dict) else None
+    content = msg.get("content") if isinstance(msg, dict) else None
+    out: dict[Any, tuple[str, Optional[str]]] = {}
+    if not isinstance(content, list):
+        return out
+    for i, block in enumerate(content):
+        if not isinstance(block, dict) or block.get("type") != "tool_use":
+            continue
+        inp = block.get("input")
+        path = inp.get("file_path") if isinstance(inp, dict) else None
+        out[block.get("id") or ("line", n, i)] = (
+            str(block.get("name") or ""), path if isinstance(path, str) else None)
+    return out
+
+
+def _norm_path(path: str) -> str:
+    return path.replace("\\", "/").lower()
 
 
 def _num(usage: dict, field: str) -> int:
@@ -97,11 +126,22 @@ def _agent_row(run_dir: str, agent_id: str, label: str) -> dict[str, Any]:
     row: dict[str, Any] = {
         "agent_id": agent_id, "label": label, "model": None, "speed": None,
         **_zero(), "unpriced": False, "unpriced_tokens": 0,
+        "tool_calls": 0, "peak_context": 0, "max_same_file_reads": 0,
     }
     priced = 0
     models: dict[str, int] = {}
+    reads: dict[str, int] = {}
     for m in (_messages(path) if path else []):
         usage = m["usage"]
+        row["peak_context"] = max(row["peak_context"], sum(
+            _num(usage, f) for f in
+            ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens")))
+        for name, fp in m["tools"].values():
+            row["tool_calls"] += 1
+            if name == "Read" and fp:
+                k = _norm_path(fp)
+                reads[k] = reads.get(k, 0) + 1
+        row["max_same_file_reads"] = max(reads.values(), default=0)
         tokens = {f: _num(usage, f) for f in TOKEN_FIELDS}
         model = m["model"] if isinstance(m["model"], str) and m["model"] else None
         speed = usage.get("speed") if isinstance(usage.get("speed"), str) else None

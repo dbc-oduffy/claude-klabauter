@@ -98,7 +98,7 @@ def test_minted_spine_derives_lightweight_review_tier(tmp_path):
 
 def test_declared_gated_row_is_minted_withheld_never_dropped(tmp_path):
     from coordinator_core.ops.dispatch_emit.cross_repo_write_refusal import gated_rows
-    from coordinator_core.ops.dispatch_emit.spine_read import load_rows
+    from coordinator_core.ops.plan_tasks_render import load_rows
 
     gated = [{"title": "DoE dead-op prose", "owner_repo": "coordinator-content-repo", "requires": "landed-work"}]
     text, path = mint_xs_spine(

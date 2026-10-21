@@ -163,6 +163,27 @@ def test_done_summary_constraint_reply_rule_names_own_path():
     assert "`DONE`, `PARTIAL`, or `BLOCKED`" in rendered
 
 
+def test_done_summary_constraint_checkpoint_is_additive_and_default_off():
+    base = done_summary_constraint(output_path_template="p.md", extra_fields=("f",))
+    on = done_summary_constraint(
+        output_path_template="p.md",
+        extra_fields=("f",),
+        checkpoint_path_template="c.md",
+    )
+    assert "CHECKPOINT" not in base
+    assert on.startswith(base)
+    assert "reply EXACTLY `CHECKPOINT: c.md`" in on
+    assert "never a DONE" in on
+
+
+def test_checkpoint_is_not_landable():
+    from coordinator_core.executor_return_contract import is_landable_status
+
+    assert is_landable_status("DONE")
+    assert not is_landable_status("CHECKPOINT")
+    assert not is_landable_status("PARTIAL")
+
+
 def test_done_summary_constraint_gate_owed_reply_is_additive_and_default_off():
     base = done_summary_constraint(output_path_template="p.md", extra_fields=("f",))
     off = done_summary_constraint(

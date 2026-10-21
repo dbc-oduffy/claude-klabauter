@@ -137,3 +137,103 @@ def test_forty_agent_report_is_fast_and_spawns_nothing(tmp_path, monkeypatch):
     run_report.render(report)
     assert time.process_time() - began < 0.5
     assert len(report["rows"]) == 40
+
+
+def _exec_agent(run_dir, agent_id, *, ctxs, reads=(), calls_per_turn=1):
+    (run_dir / f"agent-{agent_id}.meta.json").write_text(
+        json.dumps({"agentType": "coordinator:executor", "model": "sonnet"}), encoding="utf-8")
+    lines = []
+    for i, ctx in enumerate(ctxs):
+        blocks = [{"type": "tool_use", "id": f"{agent_id}-{i}-{j}", "name": "Read",
+                   "input": {"file_path": reads[i % len(reads)] if reads else "x.py"}}
+                  for j in range(calls_per_turn)]
+        lines.append({"type": "assistant", "timestamp": "2026-10-16T10:00:00Z", "requestId": f"r{i}",
+                      "message": {"id": f"m{i}", "usage": _usage(ctx, 0, 0, 1), "content": blocks}})
+    (run_dir / f"agent-{agent_id}.jsonl").write_text(
+        "\n".join(json.dumps(x) for x in lines) + "\n", encoding="utf-8")
+
+
+def _phase_journal(run_dir, agents):
+    lines = [{"type": "launched"}]
+    for agent_id, label, phase in agents:
+        event = {"type": "started", "agentId": agent_id, "label": label}
+        if phase is not None:
+            event["phase"] = phase
+        lines.append(event)
+    path = run_dir / "journal.jsonl"
+    path.write_text("\n".join(json.dumps(x) for x in lines) + "\n", encoding="utf-8")
+    return str(path)
+
+
+def _fixture_run(tmp_path):
+    _write_agent(tmp_path, "p1", agent_type="t", model="m", start_min=0, end_min=1,
+                 usages=[_usage(100, 0, 0, 0)])
+    _write_agent(tmp_path, "p2", agent_type="t", model="m", start_min=0, end_min=1,
+                 usages=[_usage(100, 0, 0, 0)])
+    _exec_agent(tmp_path, "e1", ctxs=[1000, 5000, 3000], reads=["A.py", "a.py", "b.py"])
+    return _phase_journal(tmp_path, [("p1", "plan", "Plan"), ("p2", "x", "plan"),
+                                     ("e1", "work:C1", "Execute")])
+
+
+def test_phase_split_groups_case_insensitively_and_unknown(tmp_path):
+    _write_agent(tmp_path, "p1", agent_type="t", model="m", start_min=0, end_min=1,
+                 usages=[_usage(300, 0, 0, 0)])
+    _write_agent(tmp_path, "p2", agent_type="t", model="m", start_min=0, end_min=1,
+                 usages=[_usage(100, 0, 0, 0)])
+    _write_agent(tmp_path, "p3", agent_type="t", model="m", start_min=0, end_min=1,
+                 usages=[_usage(600, 0, 0, 0)])
+    journal = _phase_journal(tmp_path, [("p1", "a", "Plan"), ("p2", "b", "plan"), ("p3", "c", None)])
+    split = run_report.build_report(journal)["phase_split"]
+    assert split["plan"]["total_tokens"] == 400 and split["plan"]["share"] == 0.4
+    assert split["unknown"]["total_tokens"] == 600 and split["unknown"]["share"] == 0.6
+
+
+def test_executors_carry_full_read_counts(tmp_path):
+    report = run_report.build_report(_fixture_run(tmp_path))
+    assert [e["label"] for e in report["executors"]] == ["work:C1"]
+    e = report["executors"][0]
+    assert e["tool_calls"] == 3 and e["peak_context"] == 5000
+    assert e["max_same_file_reads"] == 2 and e["partial"] is False
+
+
+def test_write_record_ratchet_ok_and_breach(tmp_path):
+    journal = _fixture_run(tmp_path)
+    ratchet = tmp_path / "ratchet.json"
+    ratchet.write_text(json.dumps({"executor_peak_context": 4000, "executor_tool_calls": 10,
+                                   "executor_max_same_file_reads": 10}), encoding="utf-8")
+    out = run_report.write_record(journal, str(ratchet))
+    assert out == str(tmp_path / "run-cost.json")
+    record = json.loads((tmp_path / "run-cost.json").read_text(encoding="utf-8"))
+    assert {"phase_split", "executors", "run_total", "ratchet"} <= set(record)
+    assert record["ratchet"]["executor_peak_context"] == {
+        "ceiling": 4000, "observed": 5000, "verdict": "breach"}
+    assert record["ratchet"]["executor_tool_calls"]["verdict"] == "ok"
+    assert not list(tmp_path.glob("*.tmp-*"))
+
+
+def test_tighten_lowers_and_never_raises(tmp_path):
+    ratchet = tmp_path / "ratchet.json"
+    ratchet.write_text(json.dumps({"executor_peak_context": 4000, "executor_tool_calls": 10,
+                                   "executor_max_same_file_reads": 1}), encoding="utf-8")
+    block = {"executor_peak_context": {"ceiling": 4000, "observed": 5000, "verdict": "breach"},
+             "executor_tool_calls": {"ceiling": 10, "observed": 3, "verdict": "ok"},
+             "executor_max_same_file_reads": {"ceiling": 1, "observed": 0, "verdict": "ok"}}
+    after = run_report.tighten(block, str(ratchet))
+    assert after == {"executor_peak_context": 4000, "executor_tool_calls": 3,
+                     "executor_max_same_file_reads": 1}
+    assert json.loads(ratchet.read_text(encoding="utf-8")) == after
+
+
+def test_tracked_ratchet_at_or_below_measured_baseline():
+    from coordinator_core.ops.dispatch_emit.executor_economy import MEASURED_BASELINE, RATCHET_METRICS
+
+    ceilings = run_report.load_ratchet()
+    assert set(ceilings) == set(RATCHET_METRICS)
+    assert all(ceilings[m] <= MEASURED_BASELINE[m] for m in RATCHET_METRICS)
+
+
+def test_main_record_writes_run_cost(tmp_path, capsys):
+    journal = _fixture_run(tmp_path)
+    assert run_report.main(["--journal", journal, "--record"]) == 0
+    assert capsys.readouterr().out.strip() == str(tmp_path / "run-cost.json")
+    assert (tmp_path / "run-cost.json").is_file()

@@ -96,6 +96,42 @@ def test_process_environ_is_ignored(sh, tmp_path, monkeypatch):
     assert not _text(mod._handler(_payload(_transcript(tmp_path, 100000))))
 
 
+def _with_meta(transcript, agent_type):
+    meta = transcript.with_name(transcript.stem + ".meta.json")
+    meta.write_text(json.dumps({"agentType": agent_type}), encoding="utf-8")
+
+
+def test_executor_over_ceiling_gets_checkpoint_order_once(sh, tmp_path):
+    t = _transcript(tmp_path, 160000)
+    _with_meta(t, "coordinator:executor")
+    first = _text(mod._handler(_payload(t)))
+    assert "150000-token ceiling" in first and "CHECKPOINT" in first
+    assert (sh / "state" / "compaction-warned" / f"{AGENT}.ceiling").exists()
+    second = _text(mod._handler(_payload(t)))
+    assert "ceiling" not in second  # band 1 still fires on its own marker
+    assert "Context compaction is near" in second
+    assert not _text(mod._handler(_payload(t)))
+
+
+def test_executor_under_ceiling_gets_no_ceiling_order(sh, tmp_path):
+    t = _transcript(tmp_path, 149999)
+    _with_meta(t, "coordinator:executor")
+    assert "ceiling" not in _text(mod._handler(_payload(t)))
+    assert not (sh / "state" / "compaction-warned" / f"{AGENT}.ceiling").exists()
+
+
+def test_non_executor_over_ceiling_unchanged(sh, tmp_path):
+    t = _transcript(tmp_path, 160000)
+    _with_meta(t, "coordinator:reviewer")
+    assert "Context compaction is near" in _text(mod._handler(_payload(t)))
+    assert not (sh / "state" / "compaction-warned" / f"{AGENT}.ceiling").exists()
+
+
+def test_missing_meta_is_not_an_executor(sh, tmp_path):
+    t = _transcript(tmp_path, 160000)
+    assert "CHECKPOINT" not in _text(mod._handler(_payload(t)))
+
+
 def test_hook_port_budget(sh, tmp_path):
     t = _transcript(tmp_path, 150000, filler=1500)
     assert t.stat().st_size > mod._TAIL_BYTES

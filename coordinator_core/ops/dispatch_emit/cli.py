@@ -957,6 +957,17 @@ def _clear_earlier_outputs(inventory_path: str, live: "list[Path]") -> None:
                 else f"emit-dispatch-workflow: kept unlanded part {stale} (its receipt carries no landed stamp)",
                 file=sys.stderr,
             )
+    spine_suffix = ".spine.md"
+    for stale in derived:
+        if stale.resolve() in keep or not stale.name.endswith(spine_suffix):
+            continue
+        script = stale.with_name(stale.name[: -len(spine_suffix)] + suffix)
+        if not script.exists() and not spent_run_reason(script):
+            keep.add(stale.resolve())
+            print(
+                f"emit-dispatch-workflow: kept unlanded spine {stale} (no script and no landed stamp)",
+                file=sys.stderr,
+            )
     for stale in derived:
         if stale.resolve() in keep:
             continue

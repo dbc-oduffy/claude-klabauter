@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 import time
 
+from coordinator_core.workflow_watch import run_report
 from coordinator_core.workflow_watch.render import JournalRenderer
 from coordinator_core.workflow_watch.stall import EXIT_HALTED_USAGE_LIMIT, scan_for_usage_limit
 from coordinator_core.workflow_watch.stamp import reconcile as _reconcile_run
@@ -110,6 +112,23 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def _emit_cost(journal_path: str) -> None:
+    """Write run-cost.json after the terminal line; print `cost: breach <metrics>` on a breach.
+
+    Never raises and prints nothing on failure: the terminal line and exit code are already final.
+    """
+    try:
+        path = run_report.write_record(journal_path)
+        with open(path, encoding="utf-8") as fh:
+            ratchet = json.load(fh).get("ratchet") or {}
+        breaches = sorted(m for m, b in ratchet.items() if b.get("verdict") == "breach")
+        if breaches:
+            print(f"cost: breach {' '.join(breaches)}")
+            sys.stdout.flush()
+    except Exception:
+        pass
+
+
 def _watch(
     transcript_path: str,
     journal_path: str,
@@ -144,6 +163,7 @@ def _watch(
                 pass
             print(f"terminal: {record.status}")
             sys.stdout.flush()
+            _emit_cost(journal_path)
             return 0
 
         if time.monotonic() >= next_stall_scan:
