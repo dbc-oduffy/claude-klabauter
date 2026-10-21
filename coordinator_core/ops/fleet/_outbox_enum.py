@@ -14,6 +14,8 @@ Negative-spec:
 
 from __future__ import annotations
 
+import contextlib
+import contextvars
 import logging
 import sys
 from pathlib import Path
@@ -31,7 +33,24 @@ __all__ = [
     "main_worktree_root",
     "merged_outbox_drafts",
     "outbox_dir",
+    "quiet_setup_errors",
 ]
+
+_QUIET = contextvars.ContextVar("fleet_setup_error_quiet", default=False)
+
+
+@contextlib.contextmanager
+def quiet_setup_errors():
+    """Within this context `_setup_error` returns its envelope and emits no diagnostic.
+
+    For a probe that asks a refusing classifier "would you refuse?" and is not itself refusing.
+    Context-local, so it neither leaks to other threads nor touches `sys.stderr`.
+    """
+    token = _QUIET.set(True)
+    try:
+        yield
+    finally:
+        _QUIET.reset(token)
 
 
 def outbox_dir(caller_worktree: Path) -> Path:
@@ -86,9 +105,10 @@ def _setup_error(mode, dry_run, reason: str) -> dict:
     cannot divert it. `_emit_warm_diagnostic` is the warm half of the same channel.
     Pinned by tests/test_setup_error_stderr_channel.py.
     """
-    _LOG.error("fleet op setup error: %s", reason)
-    print(f"fleet op setup error: {reason}", file=sys.stderr, flush=True)
-    _emit_warm_diagnostic(f"fleet op setup error: {reason}")
+    if not _QUIET.get():
+        _LOG.error("fleet op setup error: %s", reason)
+        print(f"fleet op setup error: {reason}", file=sys.stderr, flush=True)
+        _emit_warm_diagnostic(f"fleet op setup error: {reason}")
     return {
         "exit_code": 1,
         "mode": mode,
