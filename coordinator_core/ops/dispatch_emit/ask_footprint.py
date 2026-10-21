@@ -22,9 +22,9 @@ FOOTPRINT_SCHEMA = {
 #: One lexical rule for an admitted footprint write, written in the subset Python `re` and JS `RegExp`
 #: share so the composed script and the unit tests apply the same definition. Rejects: empty or
 #: blank, POSIX-absolute, `~`, Windows drive, any backslash, glob characters, a `..` segment, a
-#: trailing slash (directory), and any newline.
+#: bare `.`, a trailing slash (directory), leading or trailing whitespace, and any CR or LF.
 ADMIT_WRITE_PATTERN = (
-    r"^(?!/|~|[A-Za-z]:)(?!.*[\\*?\[\]{}])(?!(?:.*/)?\.\.(?:/|$))[^\s/](?:.*[^/])?$"
+    r"^(?!/|~|[A-Za-z]:|\.$)(?!.*[\\*?\[\]{}\n\r])(?!(?:.*/)?\.\.(?:/|$))[^\s/](?:.*[^/\s])?$"
 )
 
 _ADMIT_RE = re.compile(ADMIT_WRITE_PATTERN)

@@ -5995,7 +5995,15 @@ def _scaffold_strategic_self_description(title: str) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _scaffold_research_synthesis(title: str) -> str:
+_RESEARCH_PIPELINES = ("web", "repo", "structured", "notebooklm")
+_RESEARCH_QUESTION_PLACEHOLDER = (
+    "PLACEHOLDER — replace with the research question this synthesis addresses"
+)
+
+
+def _scaffold_research_synthesis(
+    title: str, question: str | None = None, pipeline: str | None = None
+) -> str:
     """Generate validator-clean research-synthesis frontmatter + canonical section skeleton.
 
     Produces a conformant research-synthesis document against
@@ -6020,9 +6028,9 @@ def _scaffold_research_synthesis(title: str) -> str:
     lines = [
         "---",
         f"title: {_yaml_quote(title)}",
-        "question: \"PLACEHOLDER — replace with the research question this synthesis addresses\"",
+        f"question: {_yaml_quote(question or _RESEARCH_QUESTION_PLACEHOLDER)}",
         f"created: {today}",  # fleet-canonical temporal key (query-records --since reads fm.created, not fm.date)
-        "pipeline: web  # one of: web | repo | structured | notebooklm",
+        f"pipeline: {pipeline}" if pipeline else "pipeline: web  # one of: web | repo | structured | notebooklm",
         "# source_count: 0  # fill with number of sources consulted",
         "topic_facets: []  # fill with list of topic facets/sub-themes covered",
         "# coverage_score: 0  # fill with 1-5 coverage score from gap-report",
@@ -6972,6 +6980,34 @@ def _adopt_body(generated: str, existing: str) -> str:
     return "---\n" + "\n".join(out) + "\n---\n" + body
 
 
+def _set_frontmatter_fields(content: str, fields: dict[str, str]) -> str:
+    """Replace the whole block of each top-level key in `fields` with the given
+    one-line value; a key the frontmatter lacks is appended."""
+    fm, body = _split_frontmatter(content)
+    if fm is None:
+        raise ValueError("content has no frontmatter to edit")
+    out: list[str] = []
+    seen: set[str] = set()
+    for key, lines in _frontmatter_blocks(fm):
+        if key in fields:
+            out.append(f"{key}: {fields[key]}")
+            seen.add(key)
+        else:
+            out.extend(lines)
+    out.extend(f"{k}: {v}" for k, v in fields.items() if k not in seen)
+    return "---\n" + "\n".join(out) + "\n---\n" + body
+
+
+def _research_question_is_placeholder(content: str) -> bool:
+    """True when the frontmatter `question:` is absent, empty or the scaffold placeholder."""
+    fm, _ = _split_frontmatter(content)
+    for key, lines in _frontmatter_blocks(fm) if fm is not None else []:
+        if key == "question":
+            value = lines[0].split(":", 1)[1].strip().strip("\"'").strip()
+            return not value or value.startswith("PLACEHOLDER")
+    return True
+
+
 # ---------------------------------------------------------------------------
 # Argument parsing
 # ---------------------------------------------------------------------------
@@ -7083,6 +7119,18 @@ Spec backlink (workflow): pln-workflow-skeleton-stamper-maki-adab0d
             "conformed through the same generator (its values win per field). "
             "Writes back to PATH unless --out names another file."
         ),
+    )
+
+    parser.add_argument(
+        "--question",
+        default=None,
+        help="research-synthesis: the research question (required; a placeholder is refused).",
+    )
+    parser.add_argument(
+        "--pipeline",
+        default=None,
+        choices=_RESEARCH_PIPELINES,
+        help="research-synthesis: pipeline that produced the synthesis (default web).",
     )
 
     # Handoff / spinoff fields.
@@ -9245,7 +9293,9 @@ def main(argv: "list[str] | None" = None) -> int:
     elif doc_type == "strategic-self-description":
         content = _scaffold_strategic_self_description(title=title)
     elif doc_type == "research-synthesis":
-        content = _scaffold_research_synthesis(title=title)
+        content = _scaffold_research_synthesis(
+            title=title, question=args.question, pipeline=args.pipeline
+        )
     elif doc_type in _SIDECAR_TYPES:
         content = _scaffold_sidecar(doc_type=doc_type, plan_stem=args.plan)
     elif doc_type == "run-report":
@@ -9313,6 +9363,22 @@ def main(argv: "list[str] | None" = None) -> int:
 
     if _adopt_existing is not None:
         content = _adopt_body(content, _adopt_existing)
+
+    if doc_type == "research-synthesis":
+        _rs_flags = {}
+        if args.question:
+            _rs_flags["question"] = _yaml_quote(args.question)
+        if args.pipeline:
+            _rs_flags["pipeline"] = args.pipeline
+        if _rs_flags:
+            content = _set_frontmatter_fields(content, _rs_flags)
+        if _research_question_is_placeholder(content):
+            print(
+                "error: research-synthesis question is a placeholder; pass --question. "
+                "Nothing was written.",
+                file=sys.stderr,
+            )
+            return 1
 
     # Resolve output path.
     out_path = args.out

@@ -681,6 +681,11 @@ def _dispatch_argv_body(argv: list, cwd: str, *, allow_warm: bool) -> None:
         if handler is None:
             _fatal_stderr(f"--describe: op {args.op!r} is not registered (see --list)")
         doc = inspect.getdoc(handler) or inspect.getdoc(inspect.unwrap(handler))
+        if doc is None or "module docstring" in doc:
+            mod = sys.modules.get(getattr(inspect.unwrap(handler), "__module__", ""))
+            mod_doc = inspect.getdoc(mod) if mod is not None else None
+            if mod_doc:
+                doc = f"{doc}\n\n{mod_doc}" if doc else mod_doc
         sys.stdout.write((doc or f"{args.op}: handler has no docstring") + "\n")
         sys.stdout.flush()
         raise SystemExit(0)

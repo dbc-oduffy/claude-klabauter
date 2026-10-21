@@ -185,16 +185,41 @@ def test_a_spec_dispatch_keeps_existing_values_and_reports_a_conflict(tmp_path):
     assert _fm(root, baton, "deliverable_id") == "dlv-other-ffffff"
 
 
-def test_a_spec_dispatch_with_no_resolvable_sizing_is_refused_and_unstamped(tmp_path):
+def test_a_spec_dispatch_naming_no_sizing_skips_the_join_and_lands_as_before(tmp_path):
     root = _repo(tmp_path)
     baton = _baton(root, "s-4")
-    before = (root / baton).read_text(encoding="utf-8")
     plan = _spec_plan(root)
 
     out = _land_spec(root, "s-4", plan)
 
+    assert not out["refused"]
+    assert "join" not in out["execution_ready"][0]
+    assert _fm(root, baton, "sizing_object") in (None, "", "null")
+
+
+def test_a_spec_dispatch_naming_a_missing_sizing_file_is_refused_and_not_execution_ready(tmp_path):
+    root = _repo(tmp_path)
+    baton = _baton(root, "s-5")
+    before = (root / baton).read_text(encoding="utf-8")
+    plan = _spec_plan(root)
+
+    out = _land_spec(root, "s-5", plan, sizingObject="state/sizings/absent.yaml")
+
     assert out["execution_ready"] == []
-    assert "names no sizingObject" in out["refused"][0]["reason"]
+    assert "does not exist on disk" in out["refused"][0]["reason"]
+    assert (root / baton).read_text(encoding="utf-8") == before
+
+
+def test_a_spec_dispatch_plan_citing_a_missing_sizing_is_refused(tmp_path):
+    root = _repo(tmp_path)
+    baton = _baton(root, "s-6")
+    before = (root / baton).read_text(encoding="utf-8")
+    plan = _spec_plan(root, sizing_object="state/sizings/absent.yaml")
+
+    out = _land_spec(root, "s-6", plan)
+
+    assert out["execution_ready"] == []
+    assert "does not exist on disk" in out["refused"][0]["reason"]
     assert (root / baton).read_text(encoding="utf-8") == before
 
 

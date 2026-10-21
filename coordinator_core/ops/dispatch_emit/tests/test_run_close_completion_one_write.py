@@ -56,8 +56,9 @@ def test_leg_bytes_equal_four_write_golden_with_one_replace(pair, monkeypatch):
     result, paths = rcc.completion_entry_leg(leg_root, "r1", PLAN, CRIT)
     monkeypatch.setattr(os, "replace", real)
 
-    assert result.status == "ran" and paths == [golden_rel]
-    entry_name = Path(golden_rel).name
+    # The leg writes the per-run path; the golden's four writes land at the bare slug.
+    assert result.status == "ran" and paths == [rcc._run_entry_rel("Shipped the thing", "r1")]
+    entry_name = Path(paths[0]).name
     assert hits.count(entry_name) == 1
     assert (leg_root / paths[0]).read_bytes() == (golden_root / golden_rel).read_bytes()
 

@@ -120,10 +120,34 @@ def test_second_call_same_run_is_discharged(root):
     assert again_paths == [] and len(_entries(root)) == 1
 
 
-def test_other_run_with_taken_path_fails_without_clobber(root):
+def test_same_slug_runs_each_get_own_entry(root):
+    """Two runs with one title slug each own a distinct, run-suffixed entry."""
     crit = {"status": "met", "completion_summary": "Shipped X."}
-    _, paths = rcc.completion_entry_leg(root, "r1", PLAN, crit)
-    before = (root / paths[0]).read_text(encoding="utf-8")
-    result, written = rcc.completion_entry_leg(root, "r2", PLAN, crit)
-    assert result.status == "failed" and written == []
-    assert (root / paths[0]).read_text(encoding="utf-8") == before
+    _, first = rcc.completion_entry_leg(root, "ask-1-2800c4", PLAN, crit)
+    before = (root / first[0]).read_text(encoding="utf-8")
+    result, second = rcc.completion_entry_leg(root, "ask-2-0eb709", PLAN, crit)
+    assert result.status == "ran" and len(second) == 1 and second != first
+    assert second[0].endswith("-0eb709.md") and first[0].endswith("-2800c4.md")
+    assert (root / first[0]).read_text(encoding="utf-8") == before
+    again, _ = rcc.completion_entry_leg(root, "ask-2-0eb709", PLAN, crit)
+    assert again.status == "discharged" and second[0] in again.detail
+
+
+def test_legacy_unsuffixed_entry_stamped_with_run_id_is_discharged(root):
+    from coordinator_core.ops.ceremony.completion_entry import _completion_entry_rel_path
+
+    legacy = root / _completion_entry_rel_path("Shipped the thing")
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text("---\ntitle: x\nrun_id: ask-9-abc123\n---\n\nbody\n", encoding="utf-8")
+    crit = {"status": "met", "completion_summary": "Shipped X."}
+    result, written = rcc.completion_entry_leg(root, "ask-9-abc123", PLAN, crit)
+    assert result.status == "discharged" and written == []
+    assert len(_entries(root)) == 1
+
+
+def test_truncated_slug_with_trailing_dash_has_no_double_dash(root):
+    long_plan = "docs/plans/long.md"
+    (root / long_plan).write_text('---\ntitle: "' + "word " * 8 + 'tail"\n---\n', encoding="utf-8")
+    crit = {"status": "met", "completion_summary": "Shipped X."}
+    _, paths = rcc.completion_entry_leg(root, "ask-1-0eb709", long_plan, crit)
+    assert "--" not in paths[0] and paths[0].endswith("-0eb709.md")

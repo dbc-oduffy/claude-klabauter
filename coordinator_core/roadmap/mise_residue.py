@@ -175,8 +175,10 @@ def residue_args(
     """The `args` object for `workflow.bind_args`, exactly the pinned `mise-prep-residue-args/1`.
 
     `rows` are the dicts `mise-prep-run.main` builds (plan, verdict, failing, detail, seam,
-    outcome). A row enters a batch when it is short and has bar classes to author, an
-    author-routed seam finding, or a rewritable census entry; leftover census entries and
+    outcome). A PREPPED row is skipped entirely: no batch member and no census apmItem (its
+    cross-plan seams belong to seam_fix; a census refusal the gate does not reproduce is not
+    residue). Any other row enters a batch when it has bar classes to author, an author-routed
+    seam finding, or a rewritable census entry. Leftover census entries of non-PREPPED rows and
     `seam_fix_reply["skipped_cycles"]` become `apmItems`. Both lists empty means no workflow.
     """
     root = Path(repo_root)
@@ -196,6 +198,8 @@ def residue_args(
     members: list[dict] = []
     apm_items: list[dict] = []
     for row in short:
+        if row.get("verdict") == "PREPPED":
+            continue
         plan = row["plan"]
         entries = census_entries(texts[plan], root, tracked)
         rewrite = [e for e in entries if e["class"] == "rewrite"]
@@ -206,8 +210,7 @@ def residue_args(
                     "question": e["question"], "command": e["command"], "refusal": e["refusal"],
                 })
         author = _author_seam(row)
-        authored_bar = row.get("verdict") != "PREPPED" and bool(row.get("failing"))
-        if not (authored_bar or author or rewrite):
+        if not (row.get("failing") or author or rewrite):
             continue
         bar = ([f"bar: {', '.join(row['failing'])}"] if row.get("failing") else [])
         bar += [f"said: {line}" for line in row.get("detail") or []]

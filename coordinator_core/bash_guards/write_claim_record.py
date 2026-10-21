@@ -548,7 +548,45 @@ def resolve_read_targets(command_text: str) -> List[str]:
 
         targets.extend(positional)
 
-    return targets
+    if not targets:
+        return targets
+    written = _redirect_write_operands(segments)
+    if not written:
+        return targets
+    return [t for t in targets if os.path.normpath(t) not in written]
+
+
+_REDIRECT_WRITE_RE = re.compile(r"^\d*>\|?(.*)$")
+
+
+def _redirect_write_operands(segments) -> "set[str]":
+    """Normalized operands of every whole-file `>` redirect or bare `tee` in
+    `segments`. A read of such a path in the SAME command is dropped by
+    `resolve_read_targets`: its baseline hash is taken before the command
+    runs, so it would go stale the moment the command's own write lands."""
+    from coordinator_core.bash_guards._command_tokenizer import (
+        ResolutionConfidence,
+        normalize_executable_basename,
+    )
+
+    out: set = set()
+    for seg in segments:
+        if seg.confidence == ResolutionConfidence.UNRESOLVED or not seg.tokens:
+            continue
+        tokens = seg.tokens
+        for i, tok in enumerate(tokens):
+            m = _REDIRECT_WRITE_RE.match(tok)
+            if not m or tok.startswith(">>"):
+                continue
+            operand = m.group(1) or (tokens[i + 1] if i + 1 < len(tokens) else "")
+            if operand and not operand.startswith("&"):
+                out.add(os.path.normpath(operand))
+        if normalize_executable_basename(tokens[0]) == "tee":
+            if not any(a in ("-a", "--append") for a in tokens[1:]):
+                out.update(
+                    os.path.normpath(a) for a in tokens[1:] if not a.startswith("-")
+                )
+    return out
 
 
 def record_write_claims(

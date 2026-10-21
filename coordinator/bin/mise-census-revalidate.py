@@ -119,6 +119,11 @@ def screen(command: str, repo_root: Optional[Path] = None) -> Optional[dict]:
     return None if reason is None else {"state": REFUSED, "detail": reason}
 
 
+#: One `grep -c` line over several files: any path (a Windows drive letter's colon included, since
+#: the match anchors on the TRAILING `:N`), then the count.
+_PER_FILE_COUNT = re.compile(r"^.+:(\d+)$")
+
+
 def compare(recorded: str, stdout: str) -> dict:
     """MATCH on positive evidence, DRIFT on positive counter-evidence, UNDECIDABLE otherwise.
 
@@ -157,6 +162,18 @@ def compare(recorded: str, stdout: str) -> dict:
         lines = [ln for ln in out.splitlines() if ln.strip()]
         if len(lines) == want:
             return {"state": MATCH, "basis": f"line count={want}"}
+        # Multi-file `grep -c` prints `path:N` per file, so the recorded figure is the SUM.
+        per_file = [_PER_FILE_COUNT.match(ln.strip()) for ln in lines]
+        if per_file and all(per_file) and sum(int(m.group(1)) for m in per_file) == want:
+            return {"state": MATCH, "basis": f"per-file count sum={want}"}
+        # A bare recorded value is a VALUE (`grep -n` of a limit), not a count: present as a
+        # whole token in the output means it still holds. Absence falls through to the bare-number
+        # DRIFT rule below, so prose rows gain no new DRIFT source. The `path:LINE:` prefix of
+        # `grep -n` output is stripped first: a line number equal to a recorded COUNT is not
+        # evidence the count holds.
+        body = "\n".join(re.sub(r"^.*?:\d+:", "", ln) for ln in out.splitlines())
+        if re.fullmatch(r"-?\d+", rec) and re.search(rf"(?<![\w.]){re.escape(rec)}(?![\w.])", body):
+            return {"state": MATCH, "basis": f"recorded value {want} present in output"}
         # DRIFT ONLY WHERE THE RECORDED TEXT IS NOTHING BUT THE NUMBER. A bare `3799` can only
         # be the answer, so a different answer is counter-evidence. A number followed by prose
         # is not reliably a count at all: measured across this corpus it is as often a LINE
@@ -218,7 +235,28 @@ def _no_console_kw() -> dict:
     return {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
 
 
-def run_entry(entry: dict, repo_root: Path, timeout: int) -> dict:
+def plan_rel_path(plan: Path, repo_root: Path) -> Optional[str]:
+    """The plan's repo-relative POSIX path, or `None` when it lies outside `repo_root`."""
+    try:
+        return plan.resolve().relative_to(repo_root.resolve()).as_posix()
+    except (ValueError, OSError):
+        return None
+
+
+def drop_own_path(out: str, plan_rel: Optional[str]) -> str:
+    """Remove output lines that are exactly the revalidated plan's own path.
+
+    A plan-scoped `git grep -l` census lists the plan itself once committed, so the count drifts
+    by one by construction. Only a whole line equal to the plan path is dropped; any other path,
+    and any line that merely contains it, is left to the comparison.
+    """
+    if not plan_rel or plan_rel not in out:
+        return out
+    own = {plan_rel, "./" + plan_rel}
+    return "".join(ln for ln in out.splitlines(keepends=True) if ln.strip() not in own)
+
+
+def run_entry(entry: dict, repo_root: Path, timeout: int, plan_rel: Optional[str] = None) -> dict:
     command = str(entry.get("command") or "").strip()
     recorded = str(entry.get("result") or "")
     row: dict[str, Any] = {"question": str(entry.get("question") or ""), "command": command}
@@ -261,7 +299,7 @@ def run_entry(entry: dict, repo_root: Path, timeout: int) -> dict:
     except OSError as exc:
         row.update({"state": UNRUNNABLE, "detail": str(exc)})
         return row
-    out = proc.stdout
+    out = drop_own_path(proc.stdout, plan_rel)
     # A non-zero exit with NO output is a command that could not answer; a non-zero exit WITH
     # output is ordinary (`grep` exits 1 on no match, which is itself an answer of "zero").
     if proc.returncode != 0 and not out.strip():
@@ -306,7 +344,8 @@ def revalidate(plan: Path, repo_root: Path, timeout: int, *, require_stamp: bool
     census = fm.get("census")
     if not isinstance(census, list):
         return {"plan": str(plan), "state": REFUSED, "detail": "no census: key", "entries": []}
-    entries = [run_entry(e, repo_root, timeout) for e in census if isinstance(e, dict)]
+    plan_rel = plan_rel_path(plan, repo_root)
+    entries = [run_entry(e, repo_root, timeout, plan_rel) for e in census if isinstance(e, dict)]
     if not entries:
         # An empty census revalidates nothing, so it cannot be a pass. The roll-up below
         # decides on set difference, and `set() - {MATCH}` is empty, so a census carrying no

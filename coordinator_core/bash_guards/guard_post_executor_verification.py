@@ -17,7 +17,8 @@ argv is neither counted nor denied. A ``-c`` importing
 only stdlib/third-party and an in-repo ``.py`` tool are not counted. Package
 detection is one ``os.scandir`` of the repo root, memoized per root for the
 process; a package added mid-process is not seen. The Write/Edit half (a ``.py`` file under
-``scratch/``) lives in ``hooks.nudge_em_code_dispatch.op`` and shares this
+``scratch/`` whose written text names a test runner and imports a repo package; a glob
+helper is not one) lives in ``hooks.nudge_em_code_dispatch.op`` and shares this
 module's ``after_executor_deny``.
 
 Executor signal: only for a payload carrying its own ``session_id`` (the host-pid fallback
@@ -463,6 +464,23 @@ def _gate(payload: dict, subject: str):
     if not executor_reported(payload, session_id, repo_root):
         return session_id, repo_root, "exempt"
     return session_id, repo_root, "deny"
+
+
+def written_code(tool_input: dict) -> str:
+    """The text a Write/Edit/MultiEdit puts on disk: ``content``, ``new_string``, each edit's ``new_string``."""
+    parts = [tool_input.get("content"), tool_input.get("new_string")]
+    edits = tool_input.get("edits")
+    if isinstance(edits, list):
+        parts.extend(e.get("new_string") for e in edits if isinstance(e, dict))
+    return "\n".join(p for p in parts if isinstance(p, str))
+
+
+def write_verifies(payload: dict, code: str) -> bool:
+    """A scratch ``.py`` write whose text names a test runner and imports a repo package."""
+    from coordinator_core.hooks import nudge_unrouted_sizing as sizing
+
+    repo_root = sizing._repo_root({"cwd": payload.get("cwd") or os.getcwd()})
+    return bool(repo_root) and _code_verifies(code, repo_root)
 
 
 def after_executor_deny(payload: dict, subject: str) -> Optional[dict]:

@@ -51,7 +51,7 @@ def test_admits_repo_relative_files(path):
     [
         "", " ", "/etc/passwd", "\\srv\\x", "C" + ":\\x\\y.py", "c" + ":/x/y.py", "~/x.py", "a\\b.py",
         "../x.py", "a/../b.py", "a/..", "..", "src/*.py", "src/**/x.py", "a?.py", "a[1].py", "{a,b}.py",
-        "src/", "a/b/", "a\nb.py", None, 3, ["a.py"],
+        "src/", "a/b/", "a\nb.py", "a.py\n", "a.py\r", "a.py ", ".", None, 3, ["a.py"],
     ],
 )
 def test_rejects_unsafe_or_non_file_writes(path):

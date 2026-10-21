@@ -125,6 +125,31 @@ def test_empty_when_all_certified():
     assert not mr.has_work(args)
 
 
+def test_prepped_row_with_seam_and_census_yields_no_batch():
+    rows = [{"plan": "a.md", "verdict": "PREPPED", "failing": [], "detail": [],
+             "outcome": "NOT-PREPPED",
+             "seam": [{"class": "writes-collision", "blocking": True, "path": "x"}]}]
+    args = _args(rows, texts={"a.md": PLAN})
+    assert args["batches"] == []
+    assert args["apmItems"] == []
+
+
+def test_has_work_false_for_prepped_seam_only_rows():
+    rows = [{"plan": "a.md", "verdict": "PREPPED", "failing": [], "detail": [],
+             "outcome": "NOT-PREPPED",
+             "seam": [{"class": "writes-collision", "blocking": True}]}]
+    assert not mr.has_work(_args(rows))
+
+
+def test_non_prepped_row_with_only_seam_still_batches():
+    rows = [{"plan": "a.md", "verdict": "NOT-PREPPED", "failing": [], "detail": [],
+             "outcome": "NOT-PREPPED",
+             "seam": [{"class": "writes-collision", "blocking": True}]}]
+    (batch,) = _args(rows)["batches"]
+    assert [m["plan"] for m in batch["plans"]] == ["a.md"]
+    assert batch["plans"][0]["seam"][0].startswith("seam: writes-collision")
+
+
 def test_apm_only_when_cycle_alone():
     args = _args([], {"skipped_cycles": [{"plans": ["b", "a"], "path": "p", "detail": "d"}]})
     assert args["batches"] == [] and len(args["apmItems"]) == 1

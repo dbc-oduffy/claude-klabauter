@@ -327,6 +327,40 @@ def _seam_findings_for(reply: dict, plan: str) -> list[dict]:
     return out
 
 
+_COLLISION = "writes-collision"
+_MISSING_SEAM = "missing-seam"
+_MISSING_SEAM_SHOWN = 10
+
+
+def _only_collisions_block(findings: list[dict]) -> bool:
+    """True when `findings` hold at least one blocking `writes-collision` and no other blocking
+    finding: a converged seam-fix's edges order exactly those, so the refusal would clear."""
+    blocking = [f for f in findings if f.get("blocking")]
+    return bool(blocking) and all(f.get("class") == _COLLISION for f in blocking)
+
+
+def _is_missing_seam(finding: dict) -> bool:
+    return finding.get("class") == _MISSING_SEAM and not finding.get("blocking")
+
+
+def _missing_seam_section(rows: list[dict]) -> list[str]:
+    """One bounded block of the non-blocking `missing-seam` findings, deduplicated across rows,
+    kept apart from the per-plan verdict lines."""
+    seen: dict[str, None] = {}
+    for r in rows:
+        for f in r.get("seam") or []:
+            if _is_missing_seam(f):
+                seen.setdefault(_seam_line(f), None)
+    lines = list(seen)
+    if not lines:
+        return []
+    out = [f"missing-seam: {len(lines)} non-blocking finding(s)"]
+    out += [f"  {line}" for line in lines[:_MISSING_SEAM_SHOWN]]
+    if len(lines) > _MISSING_SEAM_SHOWN:
+        out.append(f"  … {len(lines) - _MISSING_SEAM_SHOWN} further finding(s) omitted")
+    return out
+
+
 def _seam_route(finding: dict) -> str:
     return _ROUTE_AUTHOR if finding.get("class") == "capabilities-undeclared" else _ROUTE_APM
 
@@ -708,11 +742,15 @@ def main(argv=None) -> int:
     except ValueError as exc:
         return refuse(f"seam check: {exc}")
 
+    projecting = args.dry_run and seam_fix["converged"] and not seam_fix["skippedCycles"]
     for row in rows:
         plan = row["plan"]
         row["seam"] = _seam_findings_for(seam, plan)
         if _seam_implicated(seam, plan):
-            row["outcome"] = "SEAM-REFUSED"
+            if projecting and _only_collisions_block(row["seam"]):
+                row["seam_cleared_by_fix"] = True
+            else:
+                row["outcome"] = "SEAM-REFUSED"
 
     # Census leg: runs only on rows about to be stamped. A stamped, refused or non-PREPPED row
     # writes no stamp, and the fire-time leg owns already-certified plans. Only DRIFT blocks, the
@@ -800,13 +838,22 @@ def main(argv=None) -> int:
         )
         for c in seam_fix["skippedCycles"]:
             print(f"seam-fix: skipped cycle {c.get('plans')} path={c.get('path')} — {c.get('detail')}")
+        if projecting:
+            remain = [r["plan"] for r in rows if r["outcome"] == "SEAM-REFUSED"]
+            cleared = sum(1 for r in rows if r.get("seam_cleared_by_fix"))
+            print(
+                f"seam-fix: once the edges land, {len(remain)} plan(s) would remain SEAM-REFUSED"
+                f" ({cleared} writes-collision refusal(s) cleared)"
+                + (f": {', '.join(remain)}" if remain else "")
+            )
         for r in rows:
             if r in certified:
                 held = r.get("mise_prepped_findings") or []
                 tail = f"  [{len(held)} row(s) withheld: {', '.join(held)}]" if held else ""
                 print(f"  {r['outcome']:<18} {r['plan']}{tail}")
                 for f in r.get("seam") or []:
-                    print(f"                     {_seam_line(f)}")
+                    if not _is_missing_seam(f):
+                        print(f"                     {_seam_line(f)}")
             else:
                 print(f"  {(r['outcome'] or r['verdict'] or 'NOT-PREPPED'):<18} {r['plan']}")
                 if r["failing"]:
@@ -818,7 +865,8 @@ def main(argv=None) -> int:
                 elif r["verdict"] != "PREPPED":
                     print(f"                     {_repair_line(r['failing'], r['plan'])}")
                 for f in r.get("seam") or []:
-                    print(f"                     {_seam_line(f)}")
+                    if not _is_missing_seam(f):
+                        print(f"                     {_seam_line(f)}")
                 if r["outcome"] == "CENSUS-DRIFT":
                     for e in (r["census"] or {}).get("entries") or []:
                         if e.get("state") == "DRIFT":
@@ -827,6 +875,10 @@ def main(argv=None) -> int:
                                 f"— {e.get('basis')}"
                             )
                     print(f"                     {_CENSUS_ROUTE}")
+
+    if not args.json:
+        for line in _missing_seam_section(rows):
+            print(line)
 
     if residue_path:
         sys.stdout.flush()

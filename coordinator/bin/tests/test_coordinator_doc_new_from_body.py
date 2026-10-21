@@ -78,6 +78,83 @@ def test_partial_frontmatter_is_conformed_and_its_values_win(repo):
     assert sum(1 for line in lines if line.startswith("status:")) == 1
 
 
+_RS_BODY = "# Synth\n\n## Findings\n\nreal prose\n"
+
+
+def _fm_lines(path):
+    fm, _ = _split(path.read_text(encoding="utf-8"))
+    return fm.splitlines()
+
+
+def test_research_synthesis_flags_land_in_frontmatter(repo):
+    out = repo / "docs" / "research" / "fresh.md"
+    rc = _MOD.main([
+        "--type", "research-synthesis", "--title", "T", "--out", str(out),
+        "--question", "Does X hold?", "--pipeline", "repo",
+    ])
+    assert rc == 0
+    lines = _fm_lines(out)
+    assert 'question: "Does X hold?"' in lines or "question: Does X hold?" in lines
+    assert "pipeline: repo" in lines
+
+
+def test_research_synthesis_flags_land_under_from_body(repo):
+    path = repo / "docs" / "research" / "adopt.md"
+    path.parent.mkdir(parents=True)
+    path.write_text(_RS_BODY, encoding="utf-8")
+    rc = _MOD.main([
+        "--type", "research-synthesis", "--from-body", str(path),
+        "--question", "Why Y?", "--pipeline", "structured",
+    ])
+    assert rc == 0
+    lines = _fm_lines(path)
+    assert any(line.startswith("question:") and "Why Y?" in line for line in lines)
+    assert "pipeline: structured" in lines
+    assert sum(1 for line in lines if line.startswith("pipeline:")) == 1
+    assert path.read_text(encoding="utf-8").endswith(_RS_BODY)
+
+
+def test_research_synthesis_body_values_kept_without_flags_and_flags_override(repo):
+    path = repo / "docs" / "research" / "kept.md"
+    path.parent.mkdir(parents=True)
+    src = '---\ntitle: K\nquestion: "Body question?"\npipeline: notebooklm\n---\n' + _RS_BODY
+    path.write_text(src, encoding="utf-8")
+    assert _MOD.main(["--type", "research-synthesis", "--from-body", str(path)]) == 0
+    lines = _fm_lines(path)
+    assert any("Body question?" in line for line in lines)
+    assert "pipeline: notebooklm" in lines
+
+    assert _MOD.main([
+        "--type", "research-synthesis", "--from-body", str(path), "--pipeline", "web",
+    ]) == 0
+    lines = _fm_lines(path)
+    assert any("Body question?" in line for line in lines)
+    assert "pipeline: web" in lines
+
+
+def test_research_synthesis_placeholder_question_refused(repo, capsys):
+    out = repo / "docs" / "research" / "nope.md"
+    rc = _MOD.main(["--type", "research-synthesis", "--title", "T", "--out", str(out)])
+    assert rc != 0
+    assert "--question" in capsys.readouterr().err
+    assert not out.exists()
+
+    path = repo / "docs" / "research" / "nope-body.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(_RS_BODY, encoding="utf-8")
+    assert _MOD.main(["--type", "research-synthesis", "--from-body", str(path)]) != 0
+    assert path.read_text(encoding="utf-8") == _RS_BODY
+
+
+def test_research_synthesis_unknown_pipeline_rejected(repo):
+    with pytest.raises(SystemExit) as exc:
+        _MOD.main([
+            "--type", "research-synthesis", "--title", "T", "--question", "Q?",
+            "--pipeline", "bogus", "--out", str(repo / "x.md"),
+        ])
+    assert exc.value.code != 0
+
+
 def test_unreadable_from_body_fails_loud(repo, capsys):
     rc = _MOD.main(["--type", "decision", "--from-body", str(repo / "missing.md")])
     assert rc == 1

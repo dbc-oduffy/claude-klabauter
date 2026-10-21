@@ -1157,12 +1157,13 @@ def join_xs_sizing_to_baton(
 
 def _spec_join_entry(
     worktree_root: Path, entry: Dict[str, Any], plan_path: Optional[str]
-) -> Dict[str, Any]:
+) -> Optional[Dict[str, Any]]:
     """The entry `join_xs_sizing_to_baton` takes, for a `spec-dispatch` ready entry.
 
     A spec entry names its sizing on the entry's `sizingObject`, else on the
-    `sizing_object:` its plan cites. Raises LandingRefused when neither resolves, so
-    the refusal lands before the baton is stamped execution-ready.
+    `sizing_object:` its plan cites. Returns None when it names no sizing (the ordinary
+    S-lane shape: no join, lands as before). A named sizing that does not resolve is
+    refused by the join itself.
     """
     if entry.get("sizingObject"):
         return entry
@@ -1172,10 +1173,7 @@ def _spec_join_entry(
         if plan_abs.is_file():
             cited = _read_field(plan_abs.read_text(encoding="utf-8"), "sizing_object")
     if _field_unset(cited):
-        raise LandingRefused(
-            "spec-dispatch entry names no sizingObject and its plan cites no sizing_object; "
-            "the baton cannot be joined to a sizing"
-        )
+        return None
     return dict(entry, sizingObject=cited)
 
 
@@ -1490,6 +1488,11 @@ def land_wave(
                 approved.append(row)
             elif entry.get("route") == "spec-dispatch":
                 join_entry = _spec_join_entry(worktree_root, entry, plan_path)
+                join_row = (
+                    join_xs_sizing_to_baton(worktree_root, baton_path, join_entry)
+                    if join_entry is not None
+                    else None
+                )
                 row = authorize_execution(
                     worktree_root,
                     baton_path,
@@ -1504,7 +1507,8 @@ def land_wave(
                 if sizing_recon is not None:
                     row["sizing_reconciled"] = sizing_recon
                 if row.get("execution_ready"):
-                    row["join"] = join_xs_sizing_to_baton(worktree_root, baton_path, join_entry)
+                    if join_row is not None:
+                        row["join"] = join_row
                     execution_ready.append(row)
                 else:
                     refused.append(

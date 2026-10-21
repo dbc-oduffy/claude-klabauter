@@ -44,12 +44,15 @@ def _bash(repo, cmd: str) -> dict:
     return {"tool_name": "Bash", "session_id": SID, "cwd": str(repo), "tool_input": {"command": cmd}}
 
 
-def _write(repo, path: str, tool="Write") -> dict:
+_VERIFYING = "import pkg, pytest\npytest.main(['pkg'])\n"
+
+
+def _write(repo, path: str, tool="Write", content: str = _VERIFYING) -> dict:
     return {
         "tool_name": tool,
         "session_id": SID,
         "cwd": str(repo),
-        "tool_input": {"file_path": path, "content": "print(1)\n"},
+        "tool_input": {"file_path": path, "content": content},
     }
 
 
@@ -165,6 +168,26 @@ def test_scratch_py_write_denied_after_executor(repo) -> None:
     out = nd.op(_write(repo, str(repo / "scratch" / "probe.py")))
     assert _denied(out)
     assert "test-runner" in out["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+_GLOB_HELPER = "import glob, json\nprint(json.dumps(sorted(glob.glob('docs/plans/*.md'))))\n"
+
+
+@pytest.mark.parametrize("content", [
+    _GLOB_HELPER,
+    "import pkg\nprint(pkg)\n",
+    "import pytest\nprint(pytest)\n",
+])
+def test_scratch_py_write_not_naming_runner_and_repo_allowed_after_executor(repo, content) -> None:
+    _executor_ran(repo)
+    assert nd.op(_write(repo, str(repo / "scratch" / "mise-plans.py"), content=content)) is None
+
+
+def test_scratch_py_edit_adding_verification_denied_after_executor(repo) -> None:
+    _executor_ran(repo)
+    payload = _write(repo, str(repo / "scratch" / "probe.py"), tool="Edit")
+    payload["tool_input"] = {"file_path": str(repo / "scratch" / "probe.py"), "new_string": _VERIFYING}
+    assert _denied(nd.op(payload))
 
 
 def test_scratch_py_write_allowed_before_executor(repo) -> None:

@@ -1223,21 +1223,56 @@ _SIZING_WRITER_BASENAMES = frozenset(
 )
 
 
-def _is_sanctioned_sizing_writer_shape(segment: str) -> bool:
-    """A sanctioned writer as the segment's command, with no shell write of
-    its own. Its operands are data -- an interpreter name in ``--intent`` or
-    in the record's filename runs nothing -- so the only execution left in
-    the segment is a substitution: a live ``$(``/backtick or ``<(``."""
-    token = _segment_command_token(segment)
-    if token is None:
-        return False
-    basename = _CMD_SUFFIX_RE.sub("", _command_token_basename(token)).lower()
-    if basename not in _SIZING_WRITER_BASENAMES:
+_SCRIPT_SUFFIX_RE = re.compile(r"\.(?:py|cmd|ps1)$", re.IGNORECASE)
+
+
+def _segment_program_basename(segment: str) -> Optional[str]:
+    """Lower-cased basename (no ``.py``/``.cmd``/``.ps1``) of the program the
+    segment runs: its command word, or the script operand when the command
+    word is a bare ``python``/``python3``. ``python -c``/``-m`` names no
+    script, so it yields the interpreter basename itself."""
+    tokens = segment.split()
+    idx = 0
+    while idx < len(tokens) and _ASSIGN_RE.match(tokens[idx]):
+        idx += 1
+    if idx >= len(tokens):
+        return None
+    first = _command_token_basename(tokens[idx])
+    if first.lower() in _PYTHON_BASENAMES and idx + 1 < len(tokens):
+        script = tokens[idx + 1]
+        if not script.startswith("-"):
+            first = _command_token_basename(script)
+    return _SCRIPT_SUFFIX_RE.sub("", _CMD_SUFFIX_RE.sub("", first)).lower()
+
+
+def _runs_only_named_program_operands(
+    segment: str, basenames: "frozenset[str]"
+) -> bool:
+    """The segment runs one of ``basenames`` and carries no shell write, heredoc,
+    process or command substitution of its own: every governed-path mention in
+    it is an operand of that program, never a write sink."""
+    if _segment_program_basename(segment) not in basenames:
         return False
     if "<<" in segment or _has_live_command_substitution(segment):
         return False
     bare = _strip_quoted_spans(segment)
     return "<(" not in bare and not _has_write_marker(bare)
+
+
+def _is_sanctioned_sizing_writer_shape(segment: str) -> bool:
+    """A sanctioned writer as the segment's command, with no shell write of
+    its own. Its operands are data -- an interpreter name in ``--intent`` or
+    in the record's filename runs nothing -- so the only execution left in
+    the segment is a substitution: a live ``$(``/backtick or ``<(``."""
+    return _runs_only_named_program_operands(segment, _SIZING_WRITER_BASENAMES)
+
+
+def _is_commit_cli_argument_shape(segment: str) -> bool:
+    """A commit CLI (``coordinator-safe-commit`` and kin, bare or run through
+    ``python``) whose governed-path mention is a pathspec operand. A redirect,
+    ``tee``, ``cp``/``mv`` or heredoc in the same segment still declines, and a
+    chained write is its own segment, judged on its own."""
+    return _runs_only_named_program_operands(segment, _COMMIT_WRAPPER_BASENAMES)
 
 
 _GIT_RESET_WORKTREE_FLAGS = frozenset({"--hard", "--merge", "--keep"})
@@ -1861,6 +1896,7 @@ def is_denied_bash_write(cmd: str, identifiers_lower: Tuple[str, ...]) -> bool:
             or _is_file_test_read_shape(segment)
             or _is_commit_wrapper_read_shape(segment)
             or _is_sanctioned_sizing_writer_shape(segment)
+            or _is_commit_cli_argument_shape(segment)
             or _is_claude_md_grant_read_shape(segment)
             or _is_interpreter_read_shape(segment, identifiers_lower)
             or _is_assignment_captured_substitution_read_shape(segment, identifiers_lower)

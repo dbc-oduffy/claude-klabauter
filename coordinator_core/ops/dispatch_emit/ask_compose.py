@@ -113,7 +113,12 @@ from coordinator_core.ops.dispatch_emit.sizing_fire import (
     load_sizing_effective,
     resolve_arm,
 )
-from coordinator_core.ops.dispatch_emit.ask_footprint import FOOTPRINT_SCHEMA, footprint_owed, footprint_prompt
+from coordinator_core.ops.dispatch_emit.ask_footprint import (
+    FOOTPRINT_SCHEMA,
+    admit_writes_js,
+    footprint_owed,
+    footprint_prompt,
+)
 from coordinator_core.ops.dispatch_emit.terminal_commit_params_channel import PARAMS_BLOCK_JS, params_path
 from coordinator_core.ops.dispatch_emit.terminal_commit_reconcile import TERMINAL_COMMIT_RECONCILE_CLAUSE
 from coordinator_core.ops.dispatch_emit.wake_digest import (
@@ -1852,7 +1857,7 @@ def compose_ask_script(
             )
             b.append(
                 f"  if (!_writes.length) {{ const _fp = await {fp_call}; "
-                "_writes = (Array.isArray(_fp?.writes) ? _fp.writes : []).filter((w) => typeof w === 'string' && w); }"
+                f"_writes = (Array.isArray(_fp?.writes) ? _fp.writes : []).filter({admit_writes_js()}); }}"
             )
         b.append(f"  let _gate = await {_gate_agent_call('gate', 'gate', stage_act=True)};")
     if fold_stage:

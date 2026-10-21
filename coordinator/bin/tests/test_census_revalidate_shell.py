@@ -141,7 +141,7 @@ def test_nonempty_all_match_census_still_reports_match(mcr, monkeypatch):
     monkeypatch.setattr(
         mcr,
         "run_entry",
-        lambda entry, repo_root, timeout: {**entry, "state": mcr.MATCH},
+        lambda entry, *_a, **_k: {**entry, "state": mcr.MATCH},
     )
     plan = REPO_ROOT / "plan.md"
     text = (

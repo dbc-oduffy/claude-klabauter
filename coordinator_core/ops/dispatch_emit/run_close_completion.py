@@ -17,6 +17,7 @@ Negative-spec:
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any, Mapping, Optional
 
@@ -28,6 +29,21 @@ _COMPLETED_DIR = "archive/completed"
 
 def _posix(path: str) -> str:
     return path.replace("\\", "/")
+
+
+def _run_short_id(run_id: str) -> str:
+    """Filename-safe trailing segment of *run_id* (``ask-...-0eb709`` -> ``0eb709``)."""
+    tail =run_id.rsplit("-", 1)[-1].lower()
+    return re.sub(r"[^a-z0-9]+", "", tail) or "run"
+
+
+def _run_entry_rel(title: str, run_id: str) -> str:
+    """Per-run entry path: the title slug plus the run short id, so same-slug titles never collide."""
+    from coordinator_core.ops.ceremony.completion_entry import _completion_entry_rel_path
+
+    base = _completion_entry_rel_path(title)
+    stem = base.stem.rstrip("-")
+    return _posix(str(base.with_name(f"{stem}-{_run_short_id(run_id)}.md")))
 
 
 def _plan_title(root: Path, plan_rel: str, run_id: str) -> str:
@@ -57,7 +73,8 @@ def _existing_entry(root: Path, run_id: str, title: str) -> Optional[str]:
 
     marker = f"\nrun_id: {run_id}\n"
     slug = _slug_from_title(title)
-    for path in sorted((Path(root) / _COMPLETED_DIR).glob(f"*/*-{slug}.md")):
+    stem = slug.rstrip("-")
+    for path in sorted((Path(root) / _COMPLETED_DIR).glob(f"*/*-{stem}*.md")):
         try:
             if marker in path.read_text(encoding="utf-8"):
                 return path.relative_to(root).as_posix()
@@ -130,14 +147,13 @@ def completion_entry_leg(
     from coordinator_core.ops.ceremony.completion_entry import (
         _COMPLETION_NATURE_DEFAULT,
         AuthoredSurfaceMissing,
-        _completion_entry_rel_path,
         _scaffold_text,
         authored_surfaces_mutator,
         residue_mutator,
         scaffold_apply,
     )
 
-    entry_rel = _posix(str(_completion_entry_rel_path(title)))
+    entry_rel = _run_entry_rel(title, run_id)
     entry_abs = Path(root) / entry_rel
     if entry_abs.exists():
         return LegResult("failed", f"entry path {entry_rel} taken by another run"), []

@@ -171,6 +171,52 @@ class TestStaleWriteDeny:
         assert dispatch_checks.check_stale_write("", "sess-A", repo) is None
         assert dispatch_checks.check_stale_write("cat > F.txt", "", repo) is None
 
+    def _run_through_recorder(self, repo, sid, cmd, effect):
+        """Record `cmd` as the PreToolUse seam does (before it runs), then
+        apply `effect` as the command's own disk write."""
+        import json
+
+        from coordinator_core.bash_guards import dispatch
+
+        raw = json.dumps(
+            {"tool_input": {"command": cmd}, "session_id": sid, "cwd": repo}
+        )
+        dispatch._record_bash_write_claims(raw, None)
+        effect()
+
+    def test_own_redirect_then_read_in_one_command_is_not_stale(self, repo):
+        """A command that redirects onto a file and reads it back records its
+        read baseline before the redirect runs; that pre-write hash must not
+        make the session's own output stale to its next redirect."""
+        os.makedirs(os.path.join(repo, "scratch"))
+        target = os.path.join(repo, "scratch", "r2.txt")
+        cmd = "echo hi > scratch/r2.txt && head scratch/r2.txt"
+
+        self._run_through_recorder(
+            repo, "sess-A", cmd, lambda: _write_file(repo, "scratch/r2.txt", "one\n")
+        )
+        self._run_through_recorder(
+            repo, "sess-A", cmd, lambda: _write_file(repo, "scratch/r2.txt", "two\n")
+        )
+        assert os.path.exists(target)
+
+        assert dispatch_checks.check_stale_write(cmd, "sess-A", repo) is None
+
+    def test_foreign_change_after_read_still_denies_in_scratch(self, repo):
+        os.makedirs(os.path.join(repo, "scratch"))
+        _write_file(repo, "scratch/r2.txt", "one\n")
+        self._run_through_recorder(
+            repo, "sess-A", "head scratch/r2.txt", lambda: None
+        )
+        _write_file(repo, "scratch/r2.txt", "peer changed this\n")
+
+        result = dispatch_checks.check_stale_write(
+            "echo hi > scratch/r2.txt", "sess-A", repo
+        )
+
+        assert result is not None
+        assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+
     def test_override_env_allows(self, repo):
         abs_path = _write_file(repo, "F.txt", "original\n")
         _record_baseline(repo, "sess-A", "F.txt", abs_path)
