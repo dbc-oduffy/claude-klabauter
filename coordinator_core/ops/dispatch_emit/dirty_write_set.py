@@ -112,7 +112,7 @@ def _matches_any(path: str, globs: list[str], ignorecase: bool) -> bool:
 
 def guard_against_dirty_write_set(
     plan_path, repo_root: Path, *, run=None, ignorecase=None, hold=frozenset(), landed=frozenset(),
-    own=frozenset(),
+    own=frozenset(), done=frozenset(),
 ) -> Optional[dict]:
     """Refuse emission when a path the dispatchable rows will write and commit
     is already dirty or untracked — before any script or brief reaches disk.
@@ -125,7 +125,11 @@ def guard_against_dirty_write_set(
     is carried prior draft: it does not refuse and returns under `own_leftover`
     as `{row_id: [paths]}`, attributed to the one row whose `writes:` names it
     exactly, else the first declarer in sorted order. A path any row outside
-    `own` also declares, or no row declares, still refuses. The result is `None` only when
+    `own` also declares, or no row declares, still refuses. `done` (row ids a prior run
+    finished but did not land) widens `own` for ownership only: a dirty path every declarer of
+    which is in `own | done` is carried, so a done sibling's uncommitted outputs do not refuse
+    the re-emit; a path no row declares still refuses. Callers pass `done` only for an
+    `--only-incomplete` re-emit whose task output named the incomplete rows. The result is `None` only when
     there is neither regenerable dirt nor own leftover.
 
     Rows this emit will not dispatch are out of the write set: `hold` rows and
@@ -155,10 +159,10 @@ def guard_against_dirty_write_set(
             regenerable = [d for d in dirty if _matches_any(_norm(d), globs, fold)]
             dirty = [d for d in dirty if d not in set(regenerable)]
     own_leftover: dict[str, list[str]] = {}
-    if dirty and own:
+    if dirty and (own or done):
         fold_own = _default_ignorecase() if ignorecase is None else ignorecase
         fo = (lambda s: s.lower()) if fold_own else (lambda s: s)
-        own_set = set(own)
+        own_set = set(own) | set(done)
         declared = {
             row.id: [fo(_norm(d)) for d in (*_declared_paths(row), *row.writes_under) if _norm(d)]
             for row in rows

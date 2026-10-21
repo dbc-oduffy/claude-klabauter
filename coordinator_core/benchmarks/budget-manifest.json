@@ -108,6 +108,11 @@
       "tolerance": {"kind": "relative", "value": 0.2},
       "_rationale": "One plan per call, the unit mise-prep-run's client loop issues. Bound from plan.prep_gate's measured worst case (182ms over the real plan corpus, process time) with the per-corpus re-derivation removed by the HEAD-keyed CorpusInputs cache, plus upgrade_plan(check=True) on a failing plan (one frontmatter parse of the same bytes). Census shell children are separate processes and are not in process_ms; the census cost lives in each plan's authored census commands. No spawn_count_budget row: the op starts no process of its own. The C8 per-plan measurement of the full set replaces this figure."
     },
+    "plan.mise_certify_probe": {
+      "target_ms": 250,
+      "tolerance": {"kind": "relative", "value": 0.2},
+      "_rationale": "One plan per call, the unit mise-certify's client loop issues. Same target register as plan.mise_prep_probe: one plan read, read_stamp over the same bytes, and (on CERTIFIED only) the census revalidation, whose shell children are separate processes and not in process_ms. No spawn_count_budget row: the op starts no process of its own."
+    },
     "plan.mise_upgrade_apply": {
       "target_ms": 300,
       "tolerance": {"kind": "relative", "value": 0.2},

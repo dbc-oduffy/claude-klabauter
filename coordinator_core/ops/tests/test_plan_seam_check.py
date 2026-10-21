@@ -561,7 +561,8 @@ def test_default_set_collisions_are_one_record_per_plan_and_path(tmp_path, git):
     root = _root(tmp_path)
     plans = [_plan(root, n, _row("R1", "[s/x.py]")) for n in ("a", "b", "c")]
     named = _check(root, plans, named=True)
-    assert len([f for f in named["findings"] if f["class"] == "writes-collision"]) == 6
+    nrec = [f for f in named["findings"] if f["class"] == "writes-collision"]
+    assert len(nrec) == 3 and all(f["blocking"] for f in nrec)
     r = _check(root, plans, named=False)
     records = [f for f in r["findings"] if f["class"] == "writes-collision"]
     assert r["verdict"] == "CLEAN"
@@ -570,6 +571,23 @@ def test_default_set_collisions_are_one_record_per_plan_and_path(tmp_path, git):
         assert f["blocking"] is False and f["path"] == "s/x.py"
         assert f["counterpart_plan"] in plans and f["counterpart_plan"] != f["plan"]
         assert f["detail"].startswith("3 plans declare writes to s/x.py")
+
+
+def test_three_named_writers_of_one_path_refuse_every_plan(tmp_path, git):
+    root = _root(tmp_path)
+    plans = [_plan(root, n, _row("R1", "[s/x.py]")) for n in ("a", "b", "c")]
+    r = _check(root, plans, named=True)
+    records = [f for f in r["findings"] if f["class"] == "writes-collision"]
+    assert len(records) == 3 and r["verdict"] == "REFUSED"
+    assert r["per_plan"] == {p: "REFUSED" for p in plans}
+
+
+def test_forty_named_writers_give_forty_records_not_pairs(tmp_path, git):
+    root = _root(tmp_path)
+    plans = [_plan(root, f"p{i:02d}", _row("R1", "[s/x.py]")) for i in range(40)]
+    r = _check(root, plans, named=True)
+    records = [f for f in r["findings"] if f["class"] == "writes-collision"]
+    assert len(records) == 40 and all(f["blocking"] for f in records)
 
 
 def test_unreadable_spine_implicates_only_its_plan_in_a_named_set(tmp_path, git):

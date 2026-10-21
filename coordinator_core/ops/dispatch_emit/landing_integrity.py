@@ -22,7 +22,7 @@ TARGETED_TESTS_FAILED = "targeted-tests-failed"
 TARGETED_TESTS_PARAM = "targeted_tests"
 
 RETEST_DIR = ".coordinator-local/retest"
-RETEST_MODULE = "python -m coordinator_core.ops.dispatch_emit.retest_targeted"
+RETEST_LAUNCHER = "emit-dispatch-workflow --retest-targeted"
 FAILED_TESTS_PARAM = "failed_tests"
 
 _SHA_RE = re.compile(r"^[0-9a-fA-F]{7,40}$")
@@ -101,18 +101,55 @@ def targeted_test_verdict(params: Mapping) -> Optional[Mapping]:
 
 
 def _node_file(node_id: str) -> str:
-    head = str(node_id).split("::", 1)[0].strip().replace("\\", "/")
+    head = re.split(r"::| > ", str(node_id), maxsplit=1)[0].strip().replace("\\", "/")
     return head[2:] if head.startswith("./") else head
 
 
-def retest_remedy(params: Optional[Mapping]) -> str:
-    """The retest command for a refusal detail: the exact line when ``params.task_output_path``
-    names the run's task-output file, else the module plus the flag to give it. No placeholder."""
+_FILE_LIKE = re.compile(r"^[\w@./+-]+\.\w+$")
+_GATE_BLOCKER = re.compile(r"gate-blocker:\s*outside-footprint:\s*(\S.*)$")
+
+
+def named_failures(task_output_path: object) -> list[str]:
+    """Failing test ids a task-output digest names: ``gate-blocker: outside-footprint: <id>`` in
+    ``result.deviations[]`` and ``tests.per_row.failed[]`` anchors. Empty for an unreadable file
+    or a digest naming none; ids whose file part is not a path are dropped."""
+    if not isinstance(task_output_path, str) or not task_output_path.strip():
+        return []
+    try:
+        data = json.loads(Path(task_output_path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    if isinstance(data, dict) and "deviations" not in data and isinstance(data.get("result"), dict):
+        data = data["result"]
+    if not isinstance(data, dict):
+        return []
+    tests = data.get("tests")
+    per_row = tests.get("per_row") if isinstance(tests, Mapping) else None
+    failed = per_row.get("failed") if isinstance(per_row, Mapping) else None
+    entries = [*(data.get("deviations") or []), *(failed if isinstance(failed, list) else [])]
+    out: list[str] = []
+    for entry in entries:
+        if not isinstance(entry, Mapping):
+            continue
+        for field in ("anchor", "reason"):
+            found = _GATE_BLOCKER.search(str(entry.get(field) or ""))
+            if found and _FILE_LIKE.match(_node_file(found.group(1))):
+                out.append(found.group(1).strip())
+    return list(dict.fromkeys(out))
+
+
+def retest_remedy(params: Optional[Mapping], files: Sequence[str] = ()) -> str:
+    """The retest command for a refusal detail, runnable as printed on any OS: the settings-home
+    ``emit-dispatch-workflow --retest-targeted`` launcher (no PYTHONPATH), with the exact
+    ``--from-task-output`` line when ``params.task_output_path`` names the run's task-output file,
+    and one ``--tests`` per file in ``files``."""
     raw = params.get("task_output_path") if isinstance(params, Mapping) else None
     if isinstance(raw, str) and raw.strip():
         path = raw.strip().replace("\\", "/")
-        return f'{RETEST_MODULE} --from-task-output {json.dumps(path) if " " in path else path}'
-    return f"{RETEST_MODULE} --from-task-output with the run's task-output file"
+        line = f'{RETEST_LAUNCHER} --from-task-output {json.dumps(path) if " " in path else path}'
+    else:
+        line = f"{RETEST_LAUNCHER} --from-task-output with the run's task-output file"
+    return line + "".join(f" --tests {f}" for f in files)
 
 
 def failed_targeted_tests(
@@ -176,7 +213,11 @@ def landing_fingerprint(worktree_root: Path, paths: Sequence[str]) -> dict[str, 
 def fresh_targeted_verdict(worktree_root: Path, run_id: str) -> Optional[Mapping]:
     """The retest verdict for ``run_id``, only while it still describes the tree: ``run_id`` and
     HEAD match and every ``covered`` file hashes as recorded. None otherwise, including for an
-    unreadable or malformed file."""
+    unreadable or malformed file.
+
+    A ``stale`` verdict (no test ran: it records only that the run carries no targeted set) needs
+    the ``run_id`` match alone, since HEAD and tree drift cannot outdate a result nothing measured;
+    a pass or fail verdict keeps the full tree match."""
     from coordinator_core.git.git_state import head_sha
 
     try:
@@ -185,6 +226,8 @@ def fresh_targeted_verdict(worktree_root: Path, run_id: str) -> Optional[Mapping
         return None
     if not isinstance(record, dict) or record.get("run_id") != run_id or not isinstance(record.get("status"), str):
         return None
+    if record.get("stale") is True or record["status"] == "stale":
+        return record
     covered = record.get("covered")
     if not isinstance(covered, dict) or not record.get("head") or record["head"] != head_sha(worktree_root):
         return None
@@ -201,32 +244,61 @@ def landing_test_gate(
     ``failed_targeted_tests``. A None ``run_id`` skips the fresh read.
 
     A fresh verdict with ``stale: true`` (or status ``"stale"``) is ``"stale-non-blocking"``: no
-    findings. A recorded fail with no baseline whose ``failed_tests`` files are unchanged since
-    the run base is ``"pre-existing-only"``; without ``failed_tests`` the refusal names the param."""
-    remedy = retest_remedy(params)
+    findings. A recorded fail with no baseline names its failing ids from ``failed_tests`` (top
+    level or under ``params.params``), the verdict's, and the task output's digest
+    (``params.task_output_path``); each id's file unchanged since the run base is pre-existing
+    (``"pre-existing-only"`` when all are), and each other file is its own refusal whose remedy
+    retests that file. With no id known the refusal names the ``failed_tests`` param."""
     fresh = fresh_targeted_verdict(worktree_root, run_id) if run_id else None
     if fresh is None:
         verdict = targeted_test_verdict(params)
-        findings, check = failed_targeted_tests(verdict, remedy)
-        if check == "failed" and not verdict.get("baseline") and _preexisting(
-            worktree_root, params, run_id, verdict
-        ):
+        nodes = _failed_nodes(params, verdict)
+        files = list(dict.fromkeys(f for f in (_node_file(n) for n in nodes) if f))
+        findings, check = failed_targeted_tests(verdict, retest_remedy(params, files))
+        if check != "failed" or verdict.get("baseline"):
+            return findings, check
+        if not files:
+            return [Finding(findings[0].path, findings[0].reason,
+                            f"{findings[0].detail}; or pass params.{FAILED_TESTS_PARAM} (failing node ids)")], check
+        changed = _changed_since_base(worktree_root, params, run_id, files)
+        if not changed:
             return [], "pre-existing-only"
-        if check == "failed" and findings and not findings[0].path and not _failed_files(params, verdict):
-            findings = [Finding(findings[0].path, findings[0].reason,
-                                f"{findings[0].detail}; or pass params.{FAILED_TESTS_PARAM} (failing node ids)")]
-        return findings, check
+        return [
+            Finding(f, TARGETED_TESTS_FAILED,
+                    "; ".join([n for n in nodes if _node_file(n) == f][:3])
+                    + f"; not proven pre-existing (changed since the run base, or no base); "
+                    f"re-run: {retest_remedy(params, [f])}")
+            for f in changed
+        ], "failed"
     if fresh.get("stale") is True or fresh.get("status") == "stale":
         return [], "stale-non-blocking"
-    findings, check = failed_targeted_tests(fresh, remedy)
+    findings, check = failed_targeted_tests(fresh, retest_remedy(params))
     return findings, "pass-on-retest" if check == "pass" else check
 
 
-def _failed_files(params: Mapping, verdict: Mapping) -> list[str]:
-    nodes = params.get(FAILED_TESTS_PARAM) or verdict.get(FAILED_TESTS_PARAM) or []
-    if not isinstance(nodes, (list, tuple)):
+def _failed_nodes(params: Mapping, verdict: Optional[Mapping]) -> list[str]:
+    """Failing node ids from every source the gate trusts, in order, deduplicated: the caller's
+    ``failed_tests`` (top level, then ``params.params``), the verdict's, the digest's named ones."""
+    nested = params.get("params")
+    holders = (params, nested if isinstance(nested, Mapping) else {}, verdict if isinstance(verdict, Mapping) else {})
+    out: list[str] = []
+    for holder in holders:
+        raw = holder.get(FAILED_TESTS_PARAM)
+        out += [str(n) for n in raw] if isinstance(raw, (list, tuple)) else [raw] if isinstance(raw, str) else []
+    out += named_failures(params.get("task_output_path"))
+    return list(dict.fromkeys(n.strip() for n in out if n.strip()))
+
+
+def _changed_since_base(worktree_root: Path, params: Mapping, run_id: Optional[str], files: list[str]) -> list[str]:
+    """The ``files`` not proven unchanged since the run base (all of them when no base is known)."""
+    base = run_base_for(worktree_root, run_id, params)
+    if not base:
+        return files
+    if _unchanged_since_base(worktree_root, base, files):
         return []
-    return list(dict.fromkeys(f for f in (_node_file(str(n)) for n in nodes) if f))
+    if len(files) == 1:
+        return files
+    return [f for f in files if not _unchanged_since_base(worktree_root, base, [f])]
 
 
 def _unchanged_since_base(worktree_root: Path, base: str, paths: Sequence[str]) -> bool:
@@ -247,12 +319,6 @@ def _unchanged_since_base(worktree_root: Path, base: str, paths: Sequence[str]) 
         if entry is None or hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest() != entry[1]:
             return False
     return True
-
-
-def _preexisting(worktree_root: Path, params: Mapping, run_id: Optional[str], verdict: Mapping) -> bool:
-    files = _failed_files(params, verdict)
-    base = run_base_for(worktree_root, run_id, params) if files else None
-    return bool(files and base and _unchanged_since_base(worktree_root, base, files))
 
 
 def since_base_findings(

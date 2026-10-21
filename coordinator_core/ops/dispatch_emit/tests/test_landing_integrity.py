@@ -179,7 +179,7 @@ def test_invalid_fresh_verdict_falls_back_to_recorded(tmp_path, breakage):
         li.fresh_verdict_path(root, "r1").write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
     findings, check = li.landing_test_gate(root, _RECORDED_FAIL, "r1")
     assert check == "failed"
-    assert "retest_targeted" in findings[0].detail
+    assert li.RETEST_LAUNCHER in findings[0].detail
 
 
 def test_fresh_fail_refuses(tmp_path):
@@ -197,14 +197,14 @@ def test_none_run_id_skips_fresh_read(tmp_path):
 
 def test_no_baseline_detail_names_retest_command():
     findings, _ = li.failed_targeted_tests({"status": "fail", "baseline": None})
-    assert "python -m coordinator_core.ops.dispatch_emit.retest_targeted --from-task-output" in findings[0].detail
-    assert "<" not in findings[0].detail
+    assert "emit-dispatch-workflow --retest-targeted --from-task-output" in findings[0].detail
+    assert "PYTHONPATH" not in findings[0].detail and "<" not in findings[0].detail
 
 
 def test_remedy_names_the_task_output_path_as_printed():
     params = {**_RECORDED_FAIL, "task_output_path": "tasks\\a.output"}
     findings, _ = li.landing_test_gate(Path("."), params, None)
-    assert f"{li.RETEST_MODULE} --from-task-output tasks/a.output" in findings[0].detail
+    assert f"{li.RETEST_LAUNCHER} --from-task-output tasks/a.output" in findings[0].detail
     spaced = li.retest_remedy({"task_output_path": "/a b/c.output"})
     assert spaced.endswith('--from-task-output "/a b/c.output"')
 
@@ -255,4 +255,102 @@ def test_stale_fresh_verdict_is_non_blocking(tmp_path, marker):
     record = {**json.loads(path.read_text(encoding="utf-8")), **marker}
     path.write_text(json.dumps(record), encoding="utf-8")
     assert li.landing_test_gate(root, _RECORDED_FAIL, "r1") == ([], "stale-non-blocking")
+
+
+def _digest(tmp_path, deviations, wrap=True):
+    body = {"deviations": deviations, "tests": {"status": "fail", "per_row": {"failed": []}}}
+    path = tmp_path / "task.output"
+    path.write_text(json.dumps({"result": body} if wrap else body), encoding="utf-8")
+    return str(path)
+
+
+_NAMED = [
+    {"kind": "gate_owed", "anchor": "gate-blocker: outside-footprint: src/lib/mcp/tool-manifest.test.ts > records the env gate"},
+    {"kind": "partial", "anchor": ""},
+    {"kind": "gate_owed", "anchor": "gate-blocker: outside-footprint: a/test_y.py::test_z"},
+    {"kind": "gate_owed", "anchor": "gate-blocker: outside-footprint: none"},
+]
+
+
+@pytest.mark.parametrize("wrap", [True, False])
+def test_named_failures_reads_digest_deviations(tmp_path, wrap):
+    got = li.named_failures(_digest(tmp_path, _NAMED, wrap))
+    assert got == ["src/lib/mcp/tool-manifest.test.ts > records the env gate", "a/test_y.py::test_z"]
+    assert li.named_failures(str(tmp_path / "missing")) == []
+    assert li.named_failures(None) == []
+
+
+def test_node_file_splits_vitest_style_ids():
+    assert li._node_file("src/a.test.ts > suite > case") == "src/a.test.ts"
+
+
+def test_digest_named_failure_reaches_the_gate_and_is_retested_by_remedy(tmp_path, monkeypatch):
+    root = _repo(tmp_path)
+    seen = []
+    monkeypatch.setattr(li, "_unchanged_since_base", lambda r, b, paths: seen.append(list(paths)) or False)
+    out = _digest(tmp_path, _NAMED)
+    params = {**_RECORDED_FAIL, "run_base_sha": B, "task_output_path": out}
+    findings, check = li.landing_test_gate(root, params, None)
+    assert check == "failed"
+    assert [f.path for f in findings] == ["src/lib/mcp/tool-manifest.test.ts", "a/test_y.py"]
+    assert "--tests src/lib/mcp/tool-manifest.test.ts" in findings[0].detail
+    assert seen[0] == ["src/lib/mcp/tool-manifest.test.ts", "a/test_y.py"]
+
+
+def test_digest_named_failure_unchanged_since_base_is_pre_existing(tmp_path, monkeypatch):
+    root = _repo(tmp_path)
+    monkeypatch.setattr(li, "_unchanged_since_base", lambda *a: True)
+    params = {**_RECORDED_FAIL, "run_base_sha": B, "task_output_path": _digest(tmp_path, _NAMED)}
+    assert li.landing_test_gate(root, params, None) == ([], "pre-existing-only")
+
+
+def test_only_the_changed_failing_file_refuses(tmp_path, monkeypatch):
+    root = _repo(tmp_path)
+    monkeypatch.setattr(li, "_unchanged_since_base", lambda r, b, paths: paths == ["t/test_old.py"])
+    params = {**_RECORDED_FAIL, "run_base_sha": B, "failed_tests": ["t/test_old.py::a", "t/test_new.py::b"]}
+    findings, check = li.landing_test_gate(root, params, None)
+    assert check == "failed" and [f.path for f in findings] == ["t/test_new.py"]
+    assert "--tests t/test_new.py" in findings[0].detail
+
+
+def test_failed_tests_nested_under_params_is_honoured(tmp_path, monkeypatch):
+    root = _repo(tmp_path)
+    monkeypatch.setattr(li, "_unchanged_since_base", lambda *a: True)
+    params = {**_RECORDED_FAIL, "run_base_sha": B, "params": {"failed_tests": ["t/test_x.py::a"]}}
+    assert li.landing_test_gate(root, params, None) == ([], "pre-existing-only")
+
+
+def test_failed_test_with_no_base_still_refuses(tmp_path, monkeypatch):
+    root = _repo(tmp_path)
+    monkeypatch.setattr(li, "_unchanged_since_base", lambda *a: True)
+    params = {**_RECORDED_FAIL, "failed_tests": ["t/test_x.py::a"]}
+    findings, check = li.landing_test_gate(root, params, None)
+    assert check == "failed" and findings[0].path == "t/test_x.py"
+
+
+def test_stale_verdict_survives_head_and_tree_drift(tmp_path):
+    root = _repo(tmp_path)
+    path = _write_fresh(root, head="b" * 40)
+    record = {**json.loads(path.read_text(encoding="utf-8")), "status": "stale"}
+    path.write_text(json.dumps(record), encoding="utf-8")
+    (root / "t.py").write_text("x = 2\n", encoding="utf-8")
+    assert li.landing_test_gate(root, _RECORDED_FAIL, "r1") == ([], "stale-non-blocking")
+
+
+def test_drifted_stale_verdict_of_another_run_is_ignored(tmp_path):
+    root = _repo(tmp_path)
+    path = _write_fresh(root, run_id="other")
+    record = {**json.loads(path.read_text(encoding="utf-8")), "status": "stale"}
+    path.write_text(json.dumps(record), encoding="utf-8")
+    li.fresh_verdict_path(root, "r1").write_text(json.dumps(record), encoding="utf-8")
+    assert li.landing_test_gate(root, _RECORDED_FAIL, "r1")[1] == "failed"
+
+
+def test_retest_launcher_runs_through_emit_cli(monkeypatch):
+    from coordinator_core.ops.dispatch_emit import cli, retest_targeted
+
+    seen = {}
+    monkeypatch.setattr(retest_targeted, "main", lambda argv=None: seen.setdefault("argv", argv) and 0)
+    assert cli.main(["--retest-targeted", "--from-task-output", "x.output", "--tests", "t/test_a.py"]) == 0
+    assert seen["argv"] == ["--from-task-output", "x.output", "--tests", "t/test_a.py"]
 

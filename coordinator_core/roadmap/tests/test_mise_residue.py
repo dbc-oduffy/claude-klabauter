@@ -103,7 +103,7 @@ def test_residue_args_shape_roundtrips_json():
     reply = {"skipped_cycles": [{"class": "seam-fix-cycle", "plans": ["b", "a"], "path": "p", "detail": "d"}]}
     args = _args(rows, reply, {"a.md": PLAN})
     assert json.loads(json.dumps(args)) == args
-    assert args["schema"] == "mise-prep-residue-args/1"
+    assert args["schema"] == "mise-prep-residue-args/2"
     assert args["residue"] == {"agentType": mr.RESIDUE_AGENT_TYPE, "model": "sonnet"}
     assert args["apm"] == {"agentType": "coordinator:apm", "model": "opus"}
     (batch,) = args["batches"]
@@ -147,7 +147,70 @@ def test_non_prepped_row_with_only_seam_still_batches():
              "seam": [{"class": "writes-collision", "blocking": True}]}]
     (batch,) = _args(rows)["batches"]
     assert [m["plan"] for m in batch["plans"]] == ["a.md"]
-    assert batch["plans"][0]["seam"][0].startswith("seam: writes-collision")
+    member = batch["plans"][0]
+    assert member["seam"] == []
+    assert member["seamRefLines"] == 1
+
+
+def _coll(plan, path, cp, **kw):
+    return {"class": "writes-collision", "blocking": True, "plan": plan, "path": path,
+            "counterpart_plan": cp, **kw}
+
+
+def _short(plan, seam):
+    return {"plan": plan, "verdict": "NOT-PREPPED", "failing": [], "detail": [],
+            "outcome": "NOT-PREPPED", "seam": seam}
+
+
+def test_two_certified_plan_collision_is_absent():
+    rows = [
+        {"plan": "docs/plans/a.md", "verdict": "PREPPED", "failing": [], "outcome": "stamped",
+         "seam": [_coll("docs/plans/a.md", "x.py", "docs/plans/b.md")]},
+        {"plan": "docs/plans/b.md", "verdict": "PREPPED", "failing": [], "outcome": "NOT-PREPPED",
+         "seam": [_coll("docs/plans/b.md", "x.py", "docs/plans/a.md")]},
+    ]
+    assert mr.seam_ref_texts(rows, "r1") == {}
+    assert _args(rows)["batches"] == []
+
+
+def test_counterpart_copy_is_not_in_members_file_and_records_merge():
+    rows = [_short("docs/plans/a.md", [
+        _coll("docs/plans/a.md", "x.py", "docs/plans/b.md"),
+        _coll("docs/plans/a.md", "x.py", "docs/plans/c.md"),
+        _coll("docs/plans/a.md", "x.py", "docs/plans/d.md"),
+        _coll("docs/plans/z.md", "y.py", "docs/plans/a.md"),
+    ])]
+    texts = mr.seam_ref_texts(rows, "r1")
+    (path, text), = texts.items()
+    assert path == "state/mise-workflows/r1.seam/a.txt"
+    assert text.endswith("\n") and len(text.splitlines()) == 1
+    assert "y.py" not in text and "path=x.py" in text
+    assert "also docs/plans/c.md, docs/plans/d.md" in text
+
+
+def test_args_and_texts_agree_and_no_inline_collision():
+    rows = [
+        _short("docs/plans/a.md", [_coll("docs/plans/a.md", "x.py", "docs/plans/b.md"),
+                                   _coll("docs/plans/a.md", "w.py", "docs/plans/b.md"),
+                                   {"class": "capabilities-undeclared", "blocking": True}]),
+        _short("docs/plans/b.md", [_coll("docs/plans/b.md", "x.py", "docs/plans/a.md")]),
+    ]
+    args = _args(rows)
+    texts = mr.seam_ref_texts(rows, "20261019T1630Z-abcd1234")
+    members = [m for b in args["batches"] for m in b["plans"]]
+    assert {m["seamRef"] for m in members} == set(texts)
+    for m in members:
+        assert m["seamRefLines"] == len(texts[m["seamRef"]].splitlines())
+        assert not any(s.startswith("seam: writes-collision") for s in m["seam"])
+    assert [len(m["seam"]) for m in members] == [1, 0]
+    assert [m["seamRefLines"] for m in members] == [2, 1]
+
+
+def test_stem_collision_raises():
+    rows = [_short("docs/plans/a.md", [_coll("docs/plans/a.md", "x", "q")]),
+            _short("other/a.md", [_coll("other/a.md", "x", "q")])]
+    with pytest.raises(ValueError):
+        mr.seam_ref_texts(rows, "r1")
 
 
 def test_apm_only_when_cycle_alone():

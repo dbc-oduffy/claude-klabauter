@@ -25,7 +25,7 @@ APM_TYPE = "coordinator:apm"
 
 def _args(*, apm_items: bool = True, batches: int = 2) -> dict:
     return {
-        "schema": "mise-prep-residue-args/1",
+        "schema": "mise-prep-residue-args/2",
         "repoRoot": "REPO",
         "runId": "20261019T1630Z-deadbeef",
         "gateCommand": "mise-prep-gate --repo-root REPO",
@@ -100,6 +100,45 @@ def test_bound_literal_round_trips_the_args(tmp_path):
     start = reply["script"].index("const args = ") + len("const args = ")
     literal = reply["script"][start : reply["script"].index("\n}\n", start) + 2]
     assert json.loads(literal) == args
+
+
+def test_plan_block_renders_seam_reference_only_when_set():
+    text = SOURCE.read_text(encoding="utf-8")
+    assert "if (p.seamRef)" in text
+    assert "' writes-collision line(s) in ' + p.seamRef + ' -- read that file; each line is one seam finding'" in text
+    assert "p.seamRefLines" in text
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not on PATH")
+def test_member_with_seam_ref_renders_read_that_file_line(tmp_path):
+    args = _args(apm_items=False, batches=2)
+    args["batches"][0]["plans"][0].update(seamRef="state/mise-workflows/r.seam/p0.txt", seamRefLines=3)
+    bound = _bind(tmp_path, args)
+    body = bound.read_text(encoding="utf-8").replace("export const meta", "const meta", 1)
+    harness = tmp_path / "run.cjs"
+    harness.write_text(
+        "const prompts = [];\n"
+        "const agent = async (p, o) => { prompts.push(p); return { plans: [] }; };\n"
+        "const phase = async () => {};\n"
+        "const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;\n"
+        f"const body = {json.dumps(body)};\n"
+        "new AsyncFunction('agent', 'phase', body)(agent, phase).then(() => {\n"
+        "  console.log(JSON.stringify(prompts));\n"
+        "});\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    out = subprocess.run(
+        ["node", str(harness)], capture_output=True, text=True, timeout=30,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    assert out.returncode == 0, out.stderr
+    prompts = json.loads(out.stdout.strip().splitlines()[-1])
+    line = "seam: 3 writes-collision line(s) in state/mise-workflows/r.seam/p0.txt -- read that file"
+    assert sum(line in p for p in prompts) == 1
+    assert sum("writes-collision line(s) in" in p for p in prompts) == 1
 
 
 def test_apm_call_is_guarded_by_non_empty_items():

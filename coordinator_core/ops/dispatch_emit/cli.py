@@ -1324,8 +1324,13 @@ def _report_close_route_emit(result: dict, args: argparse.Namespace) -> int:
 
 
 def main(argv: "Optional[list[str]]" = None) -> int:
+    argv = list(argv if argv is not None else sys.argv[1:])
+    if argv[:1] == ["--retest-targeted"]:
+        from coordinator_core.ops.dispatch_emit import retest_targeted
+
+        return retest_targeted.main(argv[1:])
     parser = _build_parser()
-    args = parser.parse_args(argv if argv is not None else sys.argv[1:])
+    args = parser.parse_args(argv)
 
     if args.merge_digests:
         return _merge_digests_main(args.merge_digests)

@@ -242,3 +242,117 @@ def test_a_plan_outside_the_worktree_is_refused(tmp_path):
     outside.write_text("---\ntitle: x\n---\n", encoding="utf-8")
     with pytest.raises(ValueError, match="escapes the resolved worktree"):
         _probe({"plan": str(outside)}, common)
+
+
+CERTIFY = "plan.mise_certify_probe"
+
+
+def _stamped(root: Path, *, sha: str | None) -> str:
+    """A plan whose stamp sha is the body's own (None: the live sha, else the given one)."""
+    from coordinator_core.frontmatter.primitives import approval_body_sha
+
+    rel = _plan(root, frontmatter=_PREPPED_FM, spine=_SPINE)
+    path = root / rel
+    text = path.read_text(encoding="utf-8")
+    recorded = sha or approval_body_sha(text)
+    stamp = (
+        f"mise_prepped_by: fixture\nmise_prepped_at: 2026-09-07T00:00:00Z\n"
+        f"mise_prepped_sha: {recorded}\nmise_prepped_findings: []\n"
+    )
+    path.write_text(text.replace("---\n", "---\n" + stamp, 1), encoding="utf-8")
+    return rel
+
+
+class _StubRevalidator:
+    def __init__(self):
+        self.calls = []
+
+    def revalidate(self, *args, **kwargs):
+        self.calls.append((args, kwargs))
+        return {"state": "MATCH", "entries": []}
+
+
+def test_certify_is_compute_only_keyed_and_budgeted():
+    assert classify(CERTIFY) is OpClass.COMPUTE_ONLY
+    assert ipc.OP_KEY_SCOPE.get(CERTIFY) == "common_dir"
+    assert resolve_budget(CERTIFY, classify(CERTIFY))["target_ms"] > 0
+    handler = ipc._REGISTRY.get(CERTIFY) or ipc._lazy_import_and_lookup(CERTIFY)
+    assert callable(handler)
+
+
+def test_certify_certified_plan_runs_the_census_with_the_default_stamp_rule(tmp_path, monkeypatch):
+    common = _repo(tmp_path)
+    rel = _stamped(tmp_path, sha=None)
+    stub = _StubRevalidator()
+    monkeypatch.setattr(mod, "_revalidator", lambda: stub)
+    reply = mod._certify_handler({"plan": rel, "census_timeout": 7}, common)
+    assert reply["sha"] == "CERTIFIED"
+    assert reply["plan"] == rel
+    assert reply["census"] == {"state": "MATCH", "entries": []}
+    assert reply["stamp"]["state"] == "CERTIFIED"
+    assert "sha_detail" not in reply
+    assert len(stub.calls) == 1
+    (_plan_arg, _root, timeout), kwargs = stub.calls[0]
+    assert timeout == 7 and kwargs == {}
+
+
+def test_certify_stale_plan_has_no_census_and_the_detail(tmp_path, monkeypatch):
+    common = _repo(tmp_path)
+    rel = _stamped(tmp_path, sha="b" * 64)
+    stub = _StubRevalidator()
+    monkeypatch.setattr(mod, "_revalidator", lambda: stub)
+    reply = mod._certify_handler({"plan": rel}, common)
+    assert reply["sha"] == "STALE"
+    assert reply["census"] is None and not stub.calls
+    assert reply["sha_detail"].startswith("recorded " + "b" * 64 + ", body ")
+
+
+def test_certify_unstamped_plan_has_no_census(tmp_path):
+    common = _repo(tmp_path)
+    rel = _plan(tmp_path, frontmatter=_PREPPED_FM, spine=_SPINE)
+    reply = mod._certify_handler({"plan": rel}, common)
+    assert reply["sha"] == "UNSTAMPED"
+    assert reply["census"] is None
+
+
+def test_certify_partial_stamp_is_malformed_with_the_missing_fields(tmp_path):
+    common = _repo(tmp_path)
+    rel = _plan(tmp_path, frontmatter=_PREPPED_FM + "mise_prepped_by: x\n", spine=_SPINE)
+    reply = mod._certify_handler({"plan": rel}, common)
+    assert reply["sha"] == "MALFORMED"
+    assert reply["sha_detail"].startswith("stamp fields missing: ")
+    assert reply["census"] is None
+
+
+def test_certify_unreadable_plan_is_malformed_with_the_oserror(tmp_path, monkeypatch):
+    common = _repo(tmp_path)
+    rel = _plan(tmp_path, frontmatter=_PREPPED_FM, spine=_SPINE)
+
+    def boom(self, *a, **k):
+        raise OSError("disk gone")
+
+    monkeypatch.setattr(Path, "read_text", boom)
+    reply = mod._certify_handler({"plan": rel}, common)
+    assert reply["sha"] == "MALFORMED" and reply["sha_detail"] == "disk gone"
+    assert reply["census"] is None
+
+
+def test_certify_missing_file_is_refused_for_the_client_to_map(tmp_path):
+    common = _repo(tmp_path)
+    with pytest.raises(ValueError, match="no such plan"):
+        mod._certify_handler({"plan": "docs/plans/absent.md"}, common)
+
+
+@pytest.mark.parametrize("bad", [["docs/plans/a.md"], ["a", "b"], None, ""])
+def test_certify_refuses_a_list_or_empty_plan(tmp_path, bad):
+    common = _repo(tmp_path)
+    with pytest.raises(ValueError, match="must be a non-empty string"):
+        mod._certify_handler({"plan": bad}, common)
+
+
+@pytest.mark.parametrize("bad", [0, -1, True, "5"])
+def test_certify_census_timeout_must_be_a_positive_int(tmp_path, bad):
+    common = _repo(tmp_path)
+    rel = _plan(tmp_path, frontmatter=_PREPPED_FM, spine=_SPINE)
+    with pytest.raises(ValueError, match="census_timeout must be a positive integer"):
+        mod._certify_handler({"plan": rel, "census_timeout": bad}, common)

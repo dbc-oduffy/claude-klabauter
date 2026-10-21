@@ -142,6 +142,38 @@ def test_shared_dirty_path_refuses_when_a_declarer_is_not_incomplete(repo, tmp_p
     assert "docs/x/C2.md" in capsys.readouterr().err
 
 
+def test_guard_carries_a_done_siblings_dirty_output_as_own_leftover(repo):
+    (repo / "docs" / "x" / "C1.md").write_text("done output\n", encoding="utf-8")
+    (repo / "docs" / "x" / "C2.md").write_text("draft\n", encoding="utf-8")
+
+    out = _REAL_GUARD(repo / _PLAN, repo, own=frozenset({"C2"}), done=frozenset({"C1"}))
+
+    assert out == {"own_leftover": {"C1": ["docs/x/C1.md"], "C2": ["docs/x/C2.md"]}}
+
+
+def test_guard_without_done_still_refuses_the_done_siblings_dirt(repo):
+    (repo / "docs" / "x" / "C1.md").write_text("done output\n", encoding="utf-8")
+
+    with pytest.raises(dirty_write_set.DirtyWriteSetError, match="docs/x/C1.md"):
+        _REAL_GUARD(repo / _PLAN, repo, own=frozenset({"C2"}))
+
+
+def test_guard_with_done_still_refuses_a_path_no_row_declares(repo):
+    (repo / "docs" / "x" / "C1.md").write_text("done output\n", encoding="utf-8")
+    (repo / "docs" / "x" / "C4.md").write_text("stray\n", encoding="utf-8")
+    _git(repo, "add", "-N", "docs/x/C4.md")
+    plan = (repo / _PLAN).read_text(encoding="utf-8").replace(
+        "  writes:\n    - docs/x/C3.md\n", "  writes:\n    - docs/x/C3.md\n    - docs/x/C4.md\n"
+    )
+    (repo / _PLAN).write_text(plan, encoding="utf-8")
+
+    with pytest.raises(dirty_write_set.DirtyWriteSetError) as exc:
+        _REAL_GUARD(repo / _PLAN, repo, own=frozenset({"C2"}), done=frozenset({"C1"}))
+
+    assert "docs/x/C4.md" in str(exc.value)
+    assert "docs/x/C1.md" not in str(exc.value)
+
+
 def test_only_incomplete_leaves_a_landed_rows_dirt_outside_the_write_set(repo, tmp_path, capsys):
     (repo / "docs" / "x" / "C1.md").write_text("stray\n", encoding="utf-8")
     run_text = _run_text(tmp_path, "abc1234 checkpoint(wave 1): 1 rows — C1\n")

@@ -6,7 +6,8 @@ This module answers three questions and does nothing else:
 
   batch_plans      which plans share one residue agent (1..RESIDUE_BATCH_MAX, each plan once)
   classify_census  which unscreenable census entry no read-only rewrite can carry ("leftover")
-  residue_args     what the workflow needs to run with no EM relay (`mise-prep-residue-args/1`)
+  residue_args     what the workflow needs to run with no EM relay (`mise-prep-residue-args/2`)
+  seam_ref_texts   the per-plan writes-collision findings files the args reference
 
 Caller: `coordinator/bin/mise-prep-run.py :: _emit_residue` calls `residue_args`/`has_work` and passes
 `RESIDUE_AGENT_TYPE`.
@@ -24,7 +25,7 @@ from typing import Any, Callable, Iterable, Optional
 
 from coordinator_core.roadmap import census as _census  # uses its private _split_stages/_PY_HEADS
 
-SCHEMA = "mise-prep-residue-args/1"
+SCHEMA = "mise-prep-residue-args/2"
 RESIDUE_BATCH_MAX = 8
 APM_AGENT_TYPE = "coordinator:apm"
 #: The DoE agent that authors residue; callers pass it as `residue_agent_type`.
@@ -153,6 +154,56 @@ def _author_seam(row: dict) -> list[dict]:
     return [f for f in row.get("seam") or [] if f.get("class") in AUTHOR_SEAM_CLASSES]
 
 
+def _certified(row: dict) -> bool:
+    """True for a row that is certified or PREPPED: it contributes nothing to the residue."""
+    return row.get("outcome") in _CERTIFIED_OUTCOMES or row.get("verdict") == "PREPPED"
+
+
+def _collision_refs(short_rows: Iterable[dict], run_id: str) -> dict[str, dict]:
+    """`{plan: {"path": <repo-relative POSIX findings file>, "lines": [seam_line...]}}`.
+
+    The one builder behind both the args reference and the file text. Only writes-collision
+    findings the row owns (its own `plan`, or no `plan` key) count, one line per path; records
+    sharing a path merge, keeping the first line and appending the others' counterparts. A row
+    with no such line has no entry. Two plans sharing a stem raise ValueError.
+    """
+    out: dict[str, dict] = {}
+    stems: dict[str, str] = {}
+    for row in short_rows:
+        plan = row["plan"]
+        if plan in out:
+            continue
+        by_path: dict[str, list[dict]] = {}
+        for f in row.get("seam") or []:
+            if f.get("class") != "writes-collision" or f.get("plan") not in (None, plan):
+                continue
+            by_path.setdefault(str(f.get("path") or ""), []).append(f)
+        if not by_path:
+            continue
+        lines = []
+        for path in sorted(by_path):
+            recs = by_path[path]
+            line = seam_line(recs[0])
+            others = [str(r["counterpart_plan"]) for r in recs[1:] if r.get("counterpart_plan")]
+            if others:
+                line += f"; also {', '.join(others)}"
+            lines.append(line)
+        stem = Path(plan).stem
+        if stems.setdefault(stem, plan) != plan:
+            raise ValueError(f"plan stem {stem!r} names both {stems[stem]} and {plan}")
+        out[plan] = {"path": f"state/mise-workflows/{run_id}.seam/{stem}.txt", "lines": lines}
+    return out
+
+
+def seam_ref_texts(rows: Iterable[dict], run_id: str) -> dict[str, str]:
+    """`{findings file path: text}` for the members `residue_args` binds by reference.
+
+    Newline-joined lines with a trailing newline. Pure: it writes nothing; the caller writes.
+    """
+    refs = _collision_refs([r for r in rows if not _certified(r)], run_id)
+    return {ref["path"]: "\n".join(ref["lines"]) + "\n" for ref in refs.values()}
+
+
 def _read(repo_root: Path, plan: str) -> str:
     try:
         return (repo_root / plan).read_text(encoding="utf-8", errors="replace")
@@ -172,18 +223,21 @@ def residue_args(
     apm_model: str,
     read_text: Optional[Callable[[Path, str], str]] = None,
 ) -> dict:
-    """The `args` object for `workflow.bind_args`, exactly the pinned `mise-prep-residue-args/1`.
+    """The `args` object for `workflow.bind_args`, exactly the pinned `mise-prep-residue-args/2`.
 
     `rows` are the dicts `mise-prep-run.main` builds (plan, verdict, failing, detail, seam,
-    outcome). A PREPPED row is skipped entirely: no batch member and no census apmItem (its
-    cross-plan seams belong to seam_fix; a census refusal the gate does not reproduce is not
-    residue). Any other row enters a batch when it has bar classes to author, an author-routed
-    seam finding, or a rewritable census entry. Leftover census entries of non-PREPPED rows and
+    outcome). A certified or PREPPED row is skipped entirely: no batch member and no census
+    apmItem (its cross-plan seams belong to seam_fix; a census refusal the gate does not
+    reproduce is not residue). Any other row enters a batch when it has bar classes to author,
+    an author-routed seam finding, or a rewritable census entry. A member's `seam` carries only
+    its capabilities-undeclared lines; its owned writes-collision lines (one per path) live in
+    the findings file named by `seamRef` (`seamRefLines` lines), whose text is `seam_ref_texts`. Leftover census entries of non-PREPPED rows and
     `seam_fix_reply["skipped_cycles"]` become `apmItems`. Both lists empty means no workflow.
     """
     root = Path(repo_root)
     reader = read_text or _read
-    short = [r for r in rows if r.get("outcome") not in _CERTIFIED_OUTCOMES]
+    short = [r for r in rows if not _certified(r)]
+    refs = _collision_refs(short, run_id)
 
     texts = {r["plan"]: reader(root, r["plan"]) for r in short}
     candidates = [
@@ -198,8 +252,6 @@ def residue_args(
     members: list[dict] = []
     apm_items: list[dict] = []
     for row in short:
-        if row.get("verdict") == "PREPPED":
-            continue
         plan = row["plan"]
         entries = census_entries(texts[plan], root, tracked)
         rewrite = [e for e in entries if e["class"] == "rewrite"]
@@ -210,19 +262,25 @@ def residue_args(
                     "question": e["question"], "command": e["command"], "refusal": e["refusal"],
                 })
         author = _author_seam(row)
-        if not (row.get("failing") or author or rewrite):
+        ref = refs.get(plan)
+        inline = [f for f in author if f.get("class") != "writes-collision"]
+        if not (row.get("failing") or inline or ref or rewrite):
             continue
         bar = ([f"bar: {', '.join(row['failing'])}"] if row.get("failing") else [])
         bar += [f"said: {line}" for line in row.get("detail") or []]
-        members.append({
+        member = {
             "plan": plan,
             "bar": bar,
-            "seam": [seam_line(f) for f in author],
+            "seam": [seam_line(f) for f in inline],
             "census": [
                 {"index": e["index"], "command": e["command"], "refusal": e["refusal"]}
                 for e in rewrite
             ],
-        })
+        }
+        if ref:
+            member["seamRef"] = ref["path"]
+            member["seamRefLines"] = len(ref["lines"])
+        members.append(member)
 
     for cycle in (seam_fix_reply or {}).get("skipped_cycles") or []:
         apm_items.append({

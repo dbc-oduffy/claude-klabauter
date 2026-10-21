@@ -10,6 +10,7 @@ from collections.abc import Iterable
 from coordinator_core.frontmatter.baton_class import is_spinoff_kind
 from coordinator_core.ops.baton_close_report_contract import (
     CONFLICT_RULE_OWN_PLAN,
+    REVERSE_FIELD_DELIVERABLE,
     REVERSE_FIELD_SIZING,
     RUN_LIVE,
     BatonHeader,
@@ -50,6 +51,10 @@ def _kind(item: Evidence) -> str:
 
 _DELIVERABLE_PREFIX = "dlv-"
 _OWN_PLAN_FIELD = "governing_plan"
+_ROADMAP = EvidenceClass.ROADMAP.value
+_RULE_PLAN_BACKLINK = (
+    "a done plan back-link to the baton outranks a roadmap rollup leg, which lags the plan"
+)
 
 
 def _closes_on_own_claim(evidence: Iterable[Evidence]) -> bool:
@@ -62,6 +67,7 @@ def _conflict_note(evidence: list[Evidence], kinds: list[str]) -> ConflictNote:
     """A committed run beats contradicting status even when the run joined only by shared sizing.
 
     A done `governing_plan` also wins when every contradicting item is an inferred sizing-join leg.
+    A done `plan.deliverable_id` back-link wins when every contradicting item is a roadmap rollup.
     """
     done = [e for e, k in zip(evidence, kinds) if k == "done"]
     contra = [e for e, k in zip(evidence, kinds) if k == "contradicts"]
@@ -80,6 +86,17 @@ def _conflict_note(evidence: list[Evidence], kinds: list[str]) -> ConflictNote:
             "contradicting": contra,
             "winner": "done",
             "rule": CONFLICT_RULE_OWN_PLAN,
+        }
+    if (
+        contra
+        and any(e["field"] == REVERSE_FIELD_DELIVERABLE for e in done)
+        and all(e["class"] == _ROADMAP for e in contra)
+    ):
+        return {
+            "done": done,
+            "contradicting": contra,
+            "winner": "done",
+            "rule": _RULE_PLAN_BACKLINK,
         }
     return {
         "done": done,

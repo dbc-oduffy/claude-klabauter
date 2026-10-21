@@ -242,6 +242,38 @@ def test_governing_plan_does_not_outrank_deliverable_join():
     )
 
 
+def _re(status: str) -> dict:
+    return {
+        "class": "roadmap",
+        "field": "roadmap_id",
+        "target_path": "docs/roadmaps/r/OVERVIEW.md",
+        "target_status": status,
+        "done": False,
+    }
+
+
+def test_done_plan_backlink_outranks_roadmap_rollup_leg():
+    link = _fe("plan.deliverable_id", "implemented", True)
+    out = decide(_h(), [link, _re("final-approved")], False)
+    assert out[0] == "closable"
+    assert out[2]["winner"] == "done"
+    assert out[2]["done"] == [link]
+
+
+def test_done_plan_backlink_loses_to_a_non_roadmap_contradiction():
+    link = _fe("plan.deliverable_id", "implemented", True)
+    other = _fe("plan.predecessor_handoff", "approved", False)
+    goal = dict(_e("goal", "active", False))
+    for contra in (other, goal):
+        out = decide(_h(), [link, _re("final-approved"), contra], False)
+        assert out[:2] == ("residue", "evidence_conflict")
+
+
+def test_roadmap_rollup_alone_still_contradicts_a_non_plan_done_leg():
+    out = decide(_h(), [DONE, _re("final-approved")], False)
+    assert out[:2] == ("residue", "evidence_conflict")
+
+
 def test_run_won_conflict_still_yields_to_a_live_successor():
     out = decide(_h(), [RUN_DONE, PLAN_APPROVED], True)
     assert out[:2] == ("residue", "live_successor")

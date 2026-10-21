@@ -593,8 +593,6 @@ def _collision_findings(pset: Dict[str, _Plan], ctx: dict) -> list:
                         a, COLLISION, ctx["named_set"],
                         f"{a} and {b} both declare writes to {item} with no depends_on_plan edge between them",
                         counterpart=b, path=item))
-    if not ctx["named_set"]:
-        findings = _grouped_collisions(findings)
     for rel, plan in pset.items():
         for row in plan.live_rows:
             if row.writes is UNDECLARED:
@@ -602,12 +600,11 @@ def _collision_findings(pset: Dict[str, _Plan], ctx: dict) -> list:
     return findings
 
 
-def _grouped_collisions(findings: list) -> list:
-    """One record per (plan, path) over the default set, naming the first
-    other writer and counting the rest.
+def _grouped_collisions(findings: list, blocking: bool) -> list:
+    """One record per (plan, path), naming the first other writer and
+    counting the rest; ``blocking`` carries over from the pair records.
 
-    Nothing blocks there, and one finding per pair is quadratic in the
-    writers of a shared file: ~45k records over a 300-plan backlog.
+    One finding per pair is quadratic in the writers of a shared file.
     """
     others: Dict[tuple, list] = {}
     for f in findings:
@@ -618,7 +615,7 @@ def _grouped_collisions(findings: list) -> list:
         detail = f"{len(writers) + 1} plans declare writes to {path} with no depends_on_plan edge between them"
         if len(writers) > 1:
             detail += f"; also {', '.join(writers[1:])}"
-        grouped.append(_finding(plan, COLLISION, False, detail, counterpart=writers[0], path=path))
+        grouped.append(_finding(plan, COLLISION, blocking, detail, counterpart=writers[0], path=path))
     return grouped
 
 
@@ -885,7 +882,10 @@ def _evaluate(params: dict, root: Path, *, record: bool = False) -> dict:
     for plan in pset.values():
         findings += _capability_findings(plan, pset, ctx, tree, deferred)
         _export_findings(plan, pset, ctx, tree, pending)
-    findings += _collision_findings(pset, ctx)
+    collisions = _collision_findings(pset, ctx)
+    findings += _grouped_collisions(
+        [f for f in collisions if f["path"] is not None], ctx["named_set"])
+    findings += [f for f in collisions if f["path"] is None]
     # A spine `read_spine` rejects leaves the plan's writes and consumes
     # unknown, the case the contract records as an undetermined collision.
     # It blocks only in a set someone chose; over the default backlog one

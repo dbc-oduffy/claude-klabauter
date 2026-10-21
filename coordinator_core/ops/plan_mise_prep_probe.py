@@ -1,9 +1,9 @@
 """
-coordinator_core.ops.plan_mise_prep_probe — JSON-RPC "plan.mise_prep_probe" and
-"plan.mise_upgrade_apply" operations.
+coordinator_core.ops.plan_mise_prep_probe — JSON-RPC "plan.mise_prep_probe",
+"plan.mise_upgrade_apply" and "plan.mise_certify_probe" operations.
 
-Purpose: the two per-plan ops a client-side ``mise-prep-run`` loop issues, so a full-set
-run is N short ops and never one long one. Each is a thin composition of reads that
+Purpose: the three per-plan ops a client-side ``mise-prep-run`` / ``mise-certify`` loop
+issues, so a full-set run is N short ops and never one long one. Each is a thin composition of reads that
 already exist; this module's only original code is param validation, the HEAD-keyed
 corpus cache and the census/upgrade gating rules.
 
@@ -23,6 +23,14 @@ Reply, probe:
 
 Wire params, apply: ``plan`` (str, required).
 Reply, apply: ``{"plan", "error", "derived", "residue", "changed"}`` — ``upgrade_plan``'s dict.
+
+``plan.mise_certify_probe`` (COMPUTE_ONLY) is ``mise-certify.py :: certify`` for ONE plan:
+the sha leg, then the census leg only when the stamp reads CERTIFIED (the opposite of the
+probe's PREPPED-and-not-CERTIFIED census rule, hence a separate op).
+Wire params, certify: ``plan`` (str, required), ``census_timeout`` (int, default 30).
+Reply, certify: ``{"plan", "sha", "sha_detail"?, "stamp": <read_stamp dict>|None,
+"census": <revalidate outcome>|None, "process_ms"}``. An unreadable plan replies sha
+MALFORMED with the OSError text; a plan absent from the worktree raises ValueError.
 
 Negative-spec:
   - Takes ONE plan, never a list. ``roadmap.prep_gate.gate_plan`` records one-plan-per-call
@@ -218,3 +226,37 @@ def _apply_handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     return _upgrade_dict(
         upgrader.upgrade_plan(plan_path, check=False, text=text, parsed=parsed), worktree_root
     )
+
+
+@register_op("plan.mise_certify_probe")
+def _certify_handler(params: dict, repo_root: Optional[Path] = None) -> dict:
+    """JSON-RPC "plan.mise_certify_probe" handler. See module docstring."""
+    plan_path = _plan_param(params, "plan.mise_certify_probe", repo_root)
+    timeout = params.get("census_timeout", 30)
+    if not isinstance(timeout, int) or isinstance(timeout, bool) or timeout <= 0:
+        raise ValueError("census_timeout must be a positive integer")
+
+    started = time.process_time()
+    worktree_root = Path(main_worktree_root(repo_root))
+    rel = _rel(plan_path, worktree_root)
+    try:
+        text = plan_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        return {
+            "plan": rel, "sha": "MALFORMED", "sha_detail": str(exc), "stamp": None,
+            "census": None, "process_ms": round((time.process_time() - started) * 1000.0, 3),
+        }
+    stamp = read_stamp(text)
+    reply: dict = {"plan": rel, "sha": stamp["state"]}
+    if stamp["state"] == "STALE":
+        reply["sha_detail"] = f"recorded {stamp['recorded_sha']}, body {stamp['body_sha']}"
+    elif stamp["state"] == "MALFORMED":
+        reply["sha_detail"] = f"stamp fields missing: {', '.join(stamp.get('missing') or [])}"
+    reply["stamp"] = stamp
+    reply["census"] = (
+        _revalidator().revalidate(plan_path, worktree_root, timeout)
+        if stamp["state"] == CERTIFIED
+        else None
+    )
+    reply["process_ms"] = round((time.process_time() - started) * 1000.0, 3)
+    return reply

@@ -305,6 +305,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "plan.stamp_prepped":                    "common_dir",
     "plan.mise_prep_probe":                  "common_dir",
     "plan.mise_upgrade_apply":               "common_dir",
+    "plan.mise_certify_probe":               "common_dir",
     "artifact.adopt":                        "common_dir",
     "plan.gated_criteria_met":               "common_dir",
     "plan.cross_plan_gate":                  "common_dir",
