@@ -8,6 +8,7 @@ Everything is in-process: no spawn, and no test is run here, only the verdict th
 from __future__ import annotations
 
 import ast
+import hashlib
 import json
 import re
 from dataclasses import dataclass
@@ -18,6 +19,9 @@ PY_UNPARSEABLE = "py-unparseable"
 SINCE_BASE_OVERLAP = "since-base-overlap"
 TARGETED_TESTS_FAILED = "targeted-tests-failed"
 TARGETED_TESTS_PARAM = "targeted_tests"
+
+RETEST_DIR = ".coordinator-local/retest"
+RETEST_CMD = "python -m coordinator_core.ops.dispatch_emit.retest_targeted --from-task-output <file>"
 
 _SHA_RE = re.compile(r"^[0-9a-fA-F]{7,40}$")
 
@@ -120,7 +124,10 @@ def failed_targeted_tests(verdict: Optional[Mapping]) -> tuple[list[Finding], st
     if not isinstance(baseline, Mapping):
         count = verdict.get("tests_failed")
         shown = f"{count} " if isinstance(count, int) else ""
-        return [Finding("", TARGETED_TESTS_FAILED, f"{shown}tests {status}, no baseline to attribute them")], "failed"
+        return [Finding(
+            "", TARGETED_TESTS_FAILED,
+            f"{shown}tests {status}, no baseline to attribute them; re-run: {RETEST_CMD}",
+        )], "failed"
     caused = [str(n) for n in (baseline.get("caused") or [])]
     if not caused:
         return [], "pre-existing-only"
@@ -131,6 +138,57 @@ def failed_targeted_tests(verdict: Optional[Mapping]) -> tuple[list[Finding], st
         Finding(path, TARGETED_TESTS_FAILED, "; ".join(nodes[:3]))
         for path, nodes in by_file.items()
     ], "failed"
+
+
+def fresh_verdict_path(worktree_root: Path, run_id: str) -> Path:
+    """Where the retest step writes a run's fresh test verdict."""
+    return Path(worktree_root) / RETEST_DIR / f"{run_id}.json"
+
+
+def landing_fingerprint(worktree_root: Path, paths: Sequence[str]) -> dict[str, str]:
+    """Repo-relative POSIX path to the sha256 hex of its bytes, or ``"absent"`` when unreadable.
+    In-process; no spawn."""
+    out: dict[str, str] = {}
+    for rel in paths:
+        key = str(rel).replace("\\", "/")
+        try:
+            out[key] = hashlib.sha256((Path(worktree_root) / key).read_bytes()).hexdigest()
+        except OSError:
+            out[key] = "absent"
+    return out
+
+
+def fresh_targeted_verdict(worktree_root: Path, run_id: str) -> Optional[Mapping]:
+    """The retest verdict for ``run_id``, only while it still describes the tree: ``run_id`` and
+    HEAD match and every ``covered`` file hashes as recorded. None otherwise, including for an
+    unreadable or malformed file."""
+    from coordinator_core.git.git_state import head_sha
+
+    try:
+        record = json.loads(fresh_verdict_path(worktree_root, run_id).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(record, dict) or record.get("run_id") != run_id or not isinstance(record.get("status"), str):
+        return None
+    covered = record.get("covered")
+    if not isinstance(covered, dict) or not record.get("head") or record["head"] != head_sha(worktree_root):
+        return None
+    if landing_fingerprint(worktree_root, list(covered)) != covered:
+        return None
+    return record
+
+
+def landing_test_gate(
+    worktree_root: Path, params: Mapping, run_id: Optional[str]
+) -> tuple[list[Finding], str]:
+    """``(findings, check)`` for a landing path: a valid fresh verdict replaces the recorded one.
+    ``check`` is ``"pass-on-retest"`` when a fresh pass cleared it; otherwise as
+    ``failed_targeted_tests``. A None ``run_id`` skips the fresh read."""
+    fresh = fresh_targeted_verdict(worktree_root, run_id) if run_id else None
+    if fresh is None:
+        return failed_targeted_tests(targeted_test_verdict(params))
+    findings, check = failed_targeted_tests(fresh)
+    return findings, "pass-on-retest" if check == "pass" else check
 
 
 def since_base_findings(

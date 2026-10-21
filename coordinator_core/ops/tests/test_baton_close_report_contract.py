@@ -15,8 +15,17 @@ def test_op_key_and_version():
 
 def test_evidence_class_members():
     assert {m.value for m in c.EvidenceClass} == {
-        "plan", "sizing", "roadmap", "goal", "successor",
+        "plan", "sizing", "roadmap", "goal", "successor", "run",
     }
+
+
+def test_run_constants_and_conflict_note():
+    assert (c.RUN_FIELD_BATON, c.RUN_FIELD_SIZING, c.RUN_FIELD_CLAIMED) == (
+        "run.baton", "run.sizing_rel", "run.claimed_batons",
+    )
+    assert (c.RUN_COMMITTED, c.RUN_ENDED, c.RUN_LIVE) == ("committed", "ended", "live")
+    assert c.CONFLICT_WINNERS == ("done", "contradicting")
+    assert set(c.ConflictNote.__annotations__) == {"done", "contradicting", "winner", "rule"}
 
 
 def test_residue_reason_members():
@@ -50,8 +59,10 @@ def test_header_keys_pinned_order_and_reverse_fields():
 
 def test_result_keys():
     assert set(c.CloseReport.__annotations__) == set(c.REPORT_KEYS)
-    assert set(c.ClosableItem.__annotations__) == {"handoff_path", "evidence"}
-    assert set(c.ResidueItem.__annotations__) == {"handoff_path", "reason", "evidence"}
+    assert set(c.ClosableItem.__annotations__) == {"handoff_path", "evidence", "conflict"}
+    assert set(c.ResidueItem.__annotations__) == {
+        "handoff_path", "reason", "evidence", "conflict",
+    }
 
 
 def test_module_has_no_io_imports():

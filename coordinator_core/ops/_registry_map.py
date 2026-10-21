@@ -235,6 +235,10 @@ OP_MODULE_MAP: Dict[str, str] = {
     "plan.premise_record":                    "coordinator_core.ops.plan_premise_carry",
     "plan.repin_register":                    "coordinator_core.ops.plan_repin_register",
     "plan.stamp_prepped":                     "coordinator_core.ops.plan_stamp_prepped",
+    # One bounded op per plan for mise-prep-run's client-side loop: probe reads
+    # (gate + census + upgrade derivation), apply writes the derivable fields.
+    "plan.mise_prep_probe":                   "coordinator_core.ops.plan_mise_prep_probe",
+    "plan.mise_upgrade_apply":                "coordinator_core.ops.plan_mise_prep_probe",
     "plan.gated_criteria_met":                "coordinator_core.ops.plan_gated_criteria_met",
     "plan.cross_plan_gate":                   "coordinator_core.ops.plan_cross_plan_gate",
     "plan.seam_check":                        "coordinator_core.ops.plan_seam_check",

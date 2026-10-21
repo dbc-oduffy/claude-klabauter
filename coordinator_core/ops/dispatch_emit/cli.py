@@ -1201,6 +1201,22 @@ def _do_resume(args: argparse.Namespace) -> int:
     return EXIT_OK if all(r.get("ok", True) for r in results) else EXIT_DATA_ERROR
 
 
+def _incomplete_chunks_of(run_path: str) -> "Optional[frozenset]":
+    """The task output's `incomplete_chunks` (at `params` or `params.run_outcome`), or None when
+    `run_path` is not a task output carrying a list there (a git-log dump)."""
+    from coordinator_core.ops.dispatch_emit.terminal_commit import _params_from_task_output
+
+    try:
+        params = _params_from_task_output(run_path)
+    except ValueError:
+        return None
+    for home in (params, params.get("run_outcome")):
+        listed = home.get("incomplete_chunks") if isinstance(home, dict) else None
+        if isinstance(listed, list):
+            return frozenset(str(x) for x in listed)
+    return None
+
+
 def _only_subset_holds(args, params: dict, repo_root) -> "Optional[str]":
     """Express ``--only`` as ``hold_rows`` over the other incomplete rows, or return the one-line
     refusal. Landed rows are the run text's plus the plan's checkpoint trailers, as ``emit_script``
@@ -2089,6 +2105,9 @@ def main(argv: "Optional[list[str]]" = None) -> int:
                     if hold_set:
                         held.update(transitive_dependents(spine, set(hold_set)))
                     own_rows = frozenset(r.id for r in spine) - landed_set - held
+                    incomplete = _incomplete_chunks_of(args.only_incomplete)
+                    if incomplete is not None:
+                        own_rows &= incomplete
                 regenerable_dirty = guard_against_dirty_write_set(
                     Path(args.plan), guard_root,
                     hold=hold_set, landed=landed_set, own=own_rows,

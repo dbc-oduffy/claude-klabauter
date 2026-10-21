@@ -120,11 +120,12 @@ def guard_against_dirty_write_set(
     Dirty paths matching a declared `generated_outputs` glob do not refuse;
     they come back as `{"count", "examples", "note"}`.
 
-    With `own` (row ids), a dirty path declared by exactly one dispatchable row
-    (hold/landed rows are already out of the ownership count), that
-    row in `own`, is that row's carried prior draft: it does not refuse and returns under
-    `own_leftover` as `{row_id: [paths]}`. A path declared by two rows, by a row
-    outside `own`, or by none still refuses. The result is `None` only when
+    With `own` (row ids), a dirty path whose every dispatchable declarer
+    (hold/landed rows are already out of the ownership count) is in `own`
+    is carried prior draft: it does not refuse and returns under `own_leftover`
+    as `{row_id: [paths]}`, attributed to the one row whose `writes:` names it
+    exactly, else the first declarer in sorted order. A path any row outside
+    `own` also declares, or no row declares, still refuses. The result is `None` only when
     there is neither regenerable dirt nor own leftover.
 
     Rows this emit will not dispatch are out of the write set: `hold` rows and
@@ -157,20 +158,28 @@ def guard_against_dirty_write_set(
     if dirty and own:
         fold_own = _default_ignorecase() if ignorecase is None else ignorecase
         fo = (lambda s: s.lower()) if fold_own else (lambda s: s)
+        own_set = set(own)
         declared = {
             row.id: [fo(_norm(d)) for d in (*_declared_paths(row), *row.writes_under) if _norm(d)]
+            for row in rows
+            if row.id not in skipped
+        }
+        exact = {
+            row.id: {fo(_norm(d)) for d in _declared_paths(row) if _norm(d)}
             for row in rows
             if row.id not in skipped
         }
         remaining = []
         for d in dirty:
             f = fo(_norm(d))
-            owners = [
+            owners = sorted(
                 rid for rid, decl in declared.items()
                 if any(f == q or f.startswith(q + "/") for q in decl)
-            ]
-            if len(owners) == 1 and owners[0] in own:
-                own_leftover.setdefault(owners[0], []).append(d)
+            )
+            if owners and set(owners) <= own_set:
+                exact_owners = [rid for rid in owners if f in exact[rid]]
+                owner = exact_owners[0] if len(exact_owners) == 1 else owners[0]
+                own_leftover.setdefault(owner, []).append(d)
             else:
                 remaining.append(d)
         dirty = remaining

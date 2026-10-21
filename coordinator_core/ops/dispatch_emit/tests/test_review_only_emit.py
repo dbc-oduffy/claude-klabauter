@@ -118,6 +118,18 @@ def test_keep_landed_refuses_an_unknown_id():
         _keep_landed_rows([_row("A")], frozenset({"Z"}))
 
 
+def test_keep_landed_names_an_excluded_rows_reason_and_detail():
+    exc = [{"id": "Z", "reason": "external_gate", "detail": "waits on memo"}]
+    with pytest.raises(ValueError) as e:
+        _keep_landed_rows([_row("A")], frozenset({"Z"}), exc)
+    assert "Z: external_gate (waits on memo)" in str(e.value)
+
+
+def test_keep_landed_names_an_absent_id_as_no_such_row():
+    with pytest.raises(ValueError, match="Y: no such row in this spine"):
+        _keep_landed_rows([_row("A")], frozenset({"Y"}), [])
+
+
 def _run(args, capsys):
     code = cli.main(args)
     return code, capsys.readouterr().err

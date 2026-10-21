@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from coordinator_core.git import ref_cas_retry
 from coordinator_core.ops.dispatch_emit import checkpoint_stamp
 from coordinator_core.ops.dispatch_emit.checkpoint_stamp import (
     is_stamp_commit,
@@ -210,7 +211,7 @@ def test_cas_retries_are_bounded_then_stamp_error_and_restore(tmp_path, monkeypa
     out = stamp_checkpoint(root, _message(), sha)
 
     assert "stamp_error" in out
-    assert calls["n"] == checkpoint_stamp.STAMP_CAS_ATTEMPTS
+    assert calls["n"] == ref_cas_retry.REF_CAS_ATTEMPTS
     assert (root / PLAN).read_bytes() == before
 
 

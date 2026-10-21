@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import json
 from pathlib import Path
 
 from coordinator_core.ops import baton_close_report_readers as readers
@@ -123,3 +124,98 @@ def test_module_imports_neither_yaml_nor_subprocess() -> None:
         elif isinstance(node, ast.ImportFrom) and node.module:
             names.add(node.module.split(".")[0])
     assert not names & {"yaml", "subprocess"}
+
+
+# --- run_claims -------------------------------------------------------------
+
+SHA = "a" * 40
+SIZ = "state/sizings/s.yaml"
+
+
+def _hdr(path="state/handoffs/b.md", status="open", kind="spinoff", sizing=SIZ):
+    return {"path": path, "status": status, "predecessor": None, "governing_plan": None,
+            "origin_plan_id": None, "sizing_object": sizing, "roadmap_id": None,
+            "origin_goal_id": [], "deliverable_id": None, "kind": kind}
+
+
+def _warp(root, run_id, *, baton=None, sizing=None):
+    d = root / "state" / "warp" / run_id
+    d.mkdir(parents=True, exist_ok=True)
+    if baton is not None:
+        (d / "run-baton.json").write_text(json.dumps({"baton": baton}))
+    if sizing is not None:
+        (d / "run.json").write_text(json.dumps({"sizing_rel": sizing}))
+
+
+def _job(root, name, **payload):
+    d = root / ".coordinator-local" / "close-jobs"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / name).write_text(json.dumps(payload))
+
+
+def _claims(root, *headers):
+    return readers.run_claims(str(root), {h["path"]: h for h in headers})
+
+
+def test_run_claims_sizing_join_committed(tmp_path):
+    _warp(tmp_path, "r1", sizing=SIZ)
+    _job(tmp_path, "r1.workflow.json", terminal_sha=SHA)
+    got = _claims(tmp_path, _hdr())["state/handoffs/b.md"]
+    assert got == [{"class": "run", "field": "run.sizing_rel",
+                    "target_path": ".coordinator-local/close-jobs/r1.workflow.json",
+                    "target_status": "committed", "done": True}]
+
+
+def test_run_claims_baton_field_backslash_joins_and_bare_job_name(tmp_path):
+    _warp(tmp_path, "r1", baton="state\\handoffs\\b.md")
+    _job(tmp_path, "r1.json", terminal_sha=SHA)
+    got = _claims(tmp_path, _hdr(sizing=None))["state/handoffs/b.md"]
+    assert got[0]["field"] == "run.baton" and got[0]["done"] is True
+    assert got[0]["target_path"].endswith("close-jobs/r1.json")
+
+
+def test_run_claims_ended_without_sha_and_short_sha(tmp_path):
+    _warp(tmp_path, "r1", sizing=SIZ)
+    _job(tmp_path, "r1.workflow.json", terminal_sha=None)
+    _warp(tmp_path, "r2", baton="state/handoffs/b.md")
+    _job(tmp_path, "r2.workflow.json", terminal_sha="abc123")
+    got = _claims(tmp_path, _hdr())["state/handoffs/b.md"]
+    assert [g["target_status"] for g in got] == ["ended", "ended"]
+    assert not any(g["done"] for g in got)
+
+
+def test_run_claims_live_when_no_close_job(tmp_path):
+    _warp(tmp_path, "r1", sizing=SIZ)
+    got = _claims(tmp_path, _hdr())["state/handoffs/b.md"]
+    assert got[0]["target_status"] == "live" and got[0]["target_path"] == "state/warp/r1"
+    assert got[0]["done"] is False
+
+
+def test_run_claims_ambiguous_sizing_join_yields_nothing(tmp_path):
+    _warp(tmp_path, "r1", sizing=SIZ)
+    _job(tmp_path, "r1.workflow.json", terminal_sha=SHA)
+    assert _claims(tmp_path, _hdr(), _hdr(path="state/handoffs/c.md")) == {}
+
+
+def test_run_claims_claimed_batons_join(tmp_path):
+    _warp(tmp_path, "r1", sizing=SIZ)
+    _job(tmp_path, "r1.workflow.json", terminal_sha=SHA, claimed_batons=["state/handoffs/c.md"])
+    got = _claims(tmp_path, _hdr(), _hdr(path="state/handoffs/c.md", sizing="state/sizings/o.yaml"))
+    assert got["state/handoffs/c.md"][0]["field"] == "run.claimed_batons"
+
+
+def test_run_claims_missing_dirs_and_malformed_json_yield_nothing(tmp_path):
+    assert _claims(tmp_path, _hdr()) == {}
+    d = tmp_path / "state" / "warp" / "r1"
+    d.mkdir(parents=True)
+    (d / "run.json").write_text("{not json")
+    (d / "run-baton.json").write_text("[1]")
+    assert _claims(tmp_path, _hdr()) == {}
+
+
+def test_run_claims_reads_nothing_when_no_header_qualifies(tmp_path, monkeypatch):
+    def boom(*a, **k):
+        raise AssertionError("listdir called")
+    with monkeypatch.context() as m:
+        m.setattr(readers.os, "listdir", boom)
+        assert readers.run_claims(str(tmp_path), {"x": _hdr(kind=None)}) == {}

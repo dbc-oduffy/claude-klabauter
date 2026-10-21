@@ -1494,11 +1494,12 @@ def test_yaml_load_uses_libyaml_loader_when_present(monkeypatch):
 
 def test_read_rel_serves_memo_until_file_changes(tmp_path, monkeypatch):
     from coordinator_core.ops.dispatch_emit import terminal_commit as tc
+    from coordinator_core.ops.dispatch_emit import worktree_snapshot as ws
 
     (tmp_path / "plan.md").write_text("one", encoding="utf-8")
     calls = []
-    real = tc.contained_path
-    monkeypatch.setattr(tc, "contained_path", lambda *a, **k: (calls.append(1), real(*a, **k))[1])
+    real = ws.contained_path
+    monkeypatch.setattr(ws, "contained_path", lambda *a, **k: (calls.append(1), real(*a, **k))[1])
     assert tc._read_rel(tmp_path, "plan.md") == "one"
     assert tc._read_rel(tmp_path, "plan.md") == "one"
     assert len(calls) == 1

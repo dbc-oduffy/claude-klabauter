@@ -356,12 +356,48 @@ def test_sole_declared_own_path_is_admitted_and_returned(tmp_path) -> None:
     assert len(run.calls) == 1
 
 
-def test_path_declared_by_two_rows_still_refuses_under_own(tmp_path) -> None:
+def test_path_declared_by_two_own_rows_is_carried_under_the_first_sorted(tmp_path) -> None:
+    out = tool.guard_against_dirty_write_set(
+        _plan(tmp_path, ROWS_OVERLAP), tmp_path, run=FakeRun(" M src/shared.py\n"),
+        ignorecase=False, own=frozenset({"C1", "C2"}),
+    )
+    assert out == {"own_leftover": {"C1": ["src/shared.py"]}}
+
+
+def test_path_declared_by_an_own_row_and_a_foreign_row_still_refuses(tmp_path) -> None:
     with pytest.raises(tool.DirtyWriteSetError, match="src/shared.py"):
         tool.guard_against_dirty_write_set(
             _plan(tmp_path, ROWS_OVERLAP), tmp_path, run=FakeRun(" M src/shared.py\n"),
-            ignorecase=False, own=frozenset({"C1", "C2"}),
+            ignorecase=False, own=frozenset({"C2"}),
         )
+
+
+def test_exact_writes_declarer_wins_over_a_writes_under_declarer(tmp_path) -> None:
+    rows = """\
+- id: C1
+  title: one
+  change_kind: code-edit
+  surface: src/a.py
+  writes_under:
+    - src/
+  disposition: open
+  body: |
+    do a
+- id: C2
+  title: two
+  change_kind: code-edit
+  surface: src/b.py
+  writes:
+    - src/b.py
+  disposition: open
+  body: |
+    do b
+"""
+    out = tool.guard_against_dirty_write_set(
+        _plan(tmp_path, rows), tmp_path, run=FakeRun(" M src/b.py\n"),
+        ignorecase=False, own=frozenset({"C1", "C2"}),
+    )
+    assert out == {"own_leftover": {"C2": ["src/b.py"]}}
 
 
 def test_dirty_path_of_a_row_outside_own_still_refuses(tmp_path) -> None:

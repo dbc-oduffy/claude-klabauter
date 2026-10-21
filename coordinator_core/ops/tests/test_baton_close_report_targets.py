@@ -325,3 +325,20 @@ def test_module_imports_no_yaml_or_subprocess():
         elif isinstance(n, ast.ImportFrom) and n.module:
             mods.add(n.module.split(".")[0])
     assert not mods & {"yaml", "subprocess"}
+
+
+def test_target_evidence_appends_run_item_after_sizing_item(tmp_path):
+    import json
+    _w(tmp_path, "state/sizings/s.yaml", "status: draft\n")
+    _w(tmp_path, "state/warp/r1/run.json", json.dumps({"sizing_rel": "state/sizings/s.yaml"}))
+    _w(tmp_path, ".coordinator-local/close-jobs/r1.workflow.json", json.dumps({"terminal_sha": "b" * 40}))
+    got = _run(tmp_path, kind="spinoff", sizing_object="state/sizings/s.yaml")
+    assert [i["class"] for i in got] == ["sizing", "run"]
+    assert got[1]["done"] is True and got[1]["target_status"] == "committed"
+
+
+def test_target_evidence_open_non_spinoff_gets_no_run_item(tmp_path):
+    import json
+    _w(tmp_path, "state/warp/r1/run.json", json.dumps({"sizing_rel": "state/sizings/s.yaml"}))
+    got = _run(tmp_path, sizing_object="state/sizings/s.yaml", kind="build")
+    assert all(i["class"] != "run" for i in got)

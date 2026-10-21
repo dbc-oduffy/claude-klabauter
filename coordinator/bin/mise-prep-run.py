@@ -20,20 +20,26 @@ of them and this module never prints it:
   UNSTAMPED    never certified. Gate and stamp.
   MALFORMED    a hand-written stamp. Repair the frontmatter; do not stamp over it.
 
-CENSUS LEG. After the seam pass and before any stamp, each plan this run is about to stamp (gate
-PREPPED, not SEAM-REFUSED, not already CERTIFIED) has its `census[]` commands re-run through the
-sibling `mise-census-revalidate` executor (`require_stamp=False`: the plan is not stamped yet). A
-DRIFT refuses the stamp and reads CENSUS-DRIFT; MATCH, UNDECIDABLE, REFUSED and UNRUNNABLE do not
-block, the same rule the fire-time leg uses. Other rows are never measured. It runs under
-`--dry-run` too, being read-only.
+CLIENT-SIDE DRIVER. This file is a client: it loops over the set and sends the engine one bounded op
+per plan (`plan.mise_prep_probe`: gate, census and upgrade derivation for that plan), so a whole-set
+run is N short ops and never one long one. Each op travels the warm client transport
+(`cc_invoke.cc_invoke`) under its own budget. The set-level ops (`plan.seam_fix`, the seam check,
+residue bind/validate) are one call each.
+
+CENSUS LEG. The probe re-runs a plan's `census[]` commands through the `mise-census-revalidate`
+executor (`require_stamp=False`: the plan is not stamped yet) when its gate is PREPPED and it is not
+already CERTIFIED. A DRIFT refuses the stamp and reads CENSUS-DRIFT; MATCH, UNDECIDABLE, REFUSED and
+UNRUNNABLE do not block, the same rule the fire-time leg uses. A SEAM-REFUSED row keeps that verdict
+over a census one. The census runs under `--dry-run` too, being read-only.
 
 WHAT IT DOES NOT DO. It does not decide what to fire, does not refresh a plan's recorded
 `result:` values, and does not author anything into a plan beyond the `depends_on_plan`
 edges `plan.seam_fix` writes. A plan that fails the bar is REPORTED with its failing
 classes and the upgrade command that writes the declarations derivable from the plan's own text —
-`mise-prep-upgrade` never invents one, and neither does this. `--upgrade` runs it for
-you and re-gates; without the flag nothing under `docs/plans/` is written except an
-attest the gate has just passed.
+`mise-prep-upgrade` never invents one, and neither does this. `--upgrade` has the probe derive them
+(`upgrade_plan`, check-only); without `--dry-run` a derivable plan then gets `plan.mise_upgrade_apply`
+and a re-probe. Without the flag nothing under `docs/plans/` is written except an attest the gate
+has just passed.
 
 Usage:
 
@@ -43,12 +49,14 @@ With no plan arguments the set is every APPROVED plan the engine's plan gate rep
 mise-prep's own entry set, taken from the same seam `mise-prep-entry.py` reads, never
 re-derived from plan frontmatter.
 
-Before any plan is gated, `plan.seam_fix` runs once over the set (`dry_run` under `--dry-run`),
-minting the `depends_on_plan` edges that order in-set writes collisions. It is the one op here that
-edits plan bodies, and it runs first so every stamp is computed over the edged body. Pairs it
-cannot order without a cycle come back as `skippedCycles` on the report.
+Before any plan is probed, `plan.seam_fix` runs once over the set, minting the `depends_on_plan`
+edges that order in-set writes collisions. It is the one op here that edits plan bodies, and it runs
+first so every stamp is computed over the edged body. Pairs it cannot order without a cycle come
+back as `skippedCycles` on the report. Under `--dry-run` it does NOT run: it is MUTATING even with
+`dry_run: true`, and a dry run issues only COMPUTE_ONLY ops, so a timeout on one is never an
+indeterminate mutation. `seamFix` then reads "not run (dry run)".
 
-After every plan is gated, one seam check runs over the whole set (`plan.seam_record` at
+After every plan is probed, one seam check runs over the whole set (`plan.seam_record` at
 `phase: prep`; `plan.seam_check` under `--dry-run`, which writes no sidecar). A plan the check
 implicates is not stamped and reads SEAM-REFUSED with one `seam:` line per finding, each ending in
 its route. An op error is a refusal (exit 2), never a pass.
@@ -70,21 +78,16 @@ report names which and why), 2 on a refusal that stopped the run.
 
 Landed here (`coordinator/bin/mise-prep-run.py`, claude-klabauter) from coordinator-content-repo
 `coordinator/bin/mise-prep-run.py`, docs/plans/2026-09-18-doe-holds-no-scripts.md chunk W2-C9.
-`_invoke` no longer spawns `sys.executable coordinator-invoke.py` per op — the DoE original's
-one non-negotiable invocation tax this plan exists to remove. Both ops (`plan.prep_gate`,
-`plan.stamp_prepped`) are called IN-PROCESS via `coordinator_core.ipc.get_op_handler`, the same
-seam `coordinator_core/ops/cutover_advance.py` already uses to call `cutover.gate` from inside
-another op's own handler. The upgrade leg is in-process too: `_upgrade` loads
-`mise-prep-upgrade.py` by file path and calls its `upgrade_plan`, so the driver spawns no process
-per plan (docs/plans/2026-10-21-mise-prep-run-full-set-fits-its-op-budget.md). `_ENTRY` points at
-the sibling `coordinator/bin/mise-prep-entry.py`, not a DoE `skills/plan-blitz/` path.
+`_invoke` never spawns `sys.executable coordinator-invoke.py` per op. It reaches the warm engine
+through `cc_invoke.cc_invoke`, the library form of the client transport, so the driver itself spawns
+no process per plan and no op carries the whole set
+(docs/plans/2026-10-21-mise-prep-run-full-set-fits-its-op-budget.md). `_ENTRY` points at the sibling
+`coordinator/bin/mise-prep-entry.py`, not a DoE `skills/plan-blitz/` path.
 """
 
 from __future__ import annotations
 
 import argparse
-import asyncio
-import functools
 import importlib.util
 import json
 import os
@@ -98,7 +101,6 @@ EXIT_NOT_ALL_CERTIFIED = 1
 EXIT_REFUSED = 2
 
 _HERE = Path(__file__).resolve().parent
-_REPO_ROOT = _HERE.parent.parent
 #: mise-prep's entry query, now a sibling bin CLI (this chunk lands both). Imported rather than
 #: re-implemented: re-deriving the approved set from plan frontmatter would be a second answer to
 #: a question the engine's gate settles.
@@ -112,85 +114,33 @@ def _load_entry():
     return mod
 
 
-@functools.cache
-def _revalidator():
-    """The census leg, loaded from its sibling file so prep, certify and fire share one executor."""
-    path = _HERE / "mise-census-revalidate.py"
-    spec = importlib.util.spec_from_file_location("mise_census_revalidate", path)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
-
-
 _CENSUS_ROUTE = (
     "route: the premise moved — re-plan the census and the body resting on it; a format-only or "
     "benign-growth ruling is coordinator:apm's, never a hand edit of result:"
 )
 
 
-def _default_engine_root() -> Path | None:
-    """The engine root when neither `--engine-root` nor `$COORDINATOR_ENGINE_ROOT` names one:
-    `cc_invoke.resolve_engine_root`'s ladder (own enclosing checkout, then the settings-home
-    pointer file and registry) — the same answer `_invoke` and the entry query bind, so a copy
-    that is not itself the engine still resolves one.
-
-    Returns `None` on any failure rather than raising: an unresolved engine root here is not
-    fatal to this driver the way it is to a gate — `_invoke` already reports its own refusal
-    when the op cannot be resolved.
-    """
-    try:
-        import lib  # noqa: F401 -- bootstraps coordinator/bin/lib onto sys.path
-        from cc_invoke import resolve_engine_root
-
-        return Path(resolve_engine_root(__file__)).resolve()
-    except Exception:  # noqa: BLE001 - unresolved is reported by the op call, not here
-        return None
-
-
 def _invoke(repo_root: Path, op: str, params: dict) -> dict:
-    """One op call, IN-PROCESS — never a `coordinator-invoke.py` subprocess.
+    """One op call over the warm client transport — a bounded op under its own budget, never a
+    `coordinator-invoke.py` subprocess and never an in-process dispatch.
 
-    Dispatched via `coordinator_core.invoke.dispatch.dispatch_message` — the same JSON-RPC
-    envelope the subprocess route parsed, minus the process hop — against `repo_root` via
-    `_origin_worktree`. Raises `ValueError` on any failure — unresolvable
-    engine, an error envelope, or a malformed reply — so callers keep treating a refusal as a
-    reply, never a crash.
+    `cc_invoke.cc_invoke` is the library form of `coordinator_core.invoke`'s warm preamble: it
+    reaches the warm engine, and only on a miss falls to its own stamped in-process rung. Raises
+    `ValueError` on any failure — unresolvable transport, an error envelope, or a malformed
+    reply — so callers keep treating a refusal as a reply, never a crash.
     """
     try:
         import lib  # noqa: F401 -- bootstraps coordinator/bin/lib onto sys.path
         import cc_invoke
-
-        cc_invoke.require_engine_on_path(__file__)
-        from coordinator_core.invoke.dispatch import dispatch_message
     except Exception as exc:
         raise ValueError(
-            f"{op}: coordinator_core unresolvable: {exc} — set COORDINATOR_ENGINE_ROOT to the "
+            f"{op}: client transport unresolvable: {exc} — set COORDINATOR_ENGINE_ROOT to the "
             "engine checkout or run the settings-home `mise-prep-run` launcher"
         )
-
-    msg = {
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": op,
-        "params": params,
-        "_origin_worktree": str(repo_root),
-    }
     try:
-        reply = asyncio.run(
-            dispatch_message(msg, caller="coordinator_core.roadmap.mise_prep_run")
-        )
+        result = cc_invoke.cc_invoke(op, params, str(repo_root))
     except Exception as exc:
-        raise ValueError(f"{op} failed: {exc}") from exc
-
-    if not isinstance(reply, dict):
-        raise ValueError(f"{op} failed: dispatch returned no reply envelope")
-    if "error" in reply:
-        err = reply["error"]
-        message = str((err or {}).get("message") or err) if isinstance(err, dict) else str(err)
-        raise ValueError(f"{op} refused: {message}")
-    if "result" not in reply:
-        raise ValueError(f"{op} returned a reply carrying neither `result` nor `error`")
-    result = reply["result"]
+        raise ValueError(f"{op} refused: {exc}") from exc
     if not isinstance(result, dict):
         raise ValueError(f"{op} returned a non-dict result: {result!r}")
     return result
@@ -226,14 +176,26 @@ def _seam_call(repo_root: Path, plans: list[str], phase: str, named_set: bool, r
     return reply
 
 
+_SEAM_FIX_NOT_RUN = "not run (dry run)"
+
+
 def _seam_fix(repo_root: Path, plans: list[str], dry_run: bool) -> dict:
     """One `plan.seam_fix` call over the set, normalized to the report's `seamFix` shape.
 
-    Runs before any gate so every stamp is computed over the edged body. The reply is returned
+    Runs before any probe so every stamp is computed over the edged body. The reply is returned
     once for the report and the downstream APM stage; callers never re-call the op. Raises
     `ValueError` on an op error.
+
+    `plan.seam_fix` is MUTATING even with `dry_run: true`, and a dry run issues COMPUTE_ONLY ops
+    only, so under `dry_run` no op is called: the shape comes back empty with `notRun` set and
+    `converged` False. `plan.seam_check` carries no edges to read in its place.
     """
-    reply = _invoke(repo_root, "plan.seam_fix", {"plans": list(plans), "dry_run": dry_run})
+    if dry_run:
+        return {
+            "edgesAdded": [], "skippedCycles": [], "converged": False, "files": [],
+            "notRun": _SEAM_FIX_NOT_RUN,
+        }
+    reply = _invoke(repo_root, "plan.seam_fix", {"plans": list(plans), "dry_run": False})
     return {
         "edgesAdded": list(reply.get("edges_added") or []),
         "skippedCycles": list(reply.get("skipped_cycles") or []),
@@ -330,16 +292,8 @@ def _seam_findings_for(reply: dict, plan: str) -> list[dict]:
     return out
 
 
-_COLLISION = "writes-collision"
 _MISSING_SEAM = "missing-seam"
 _MISSING_SEAM_SHOWN = 10
-
-
-def _only_collisions_block(findings: list[dict]) -> bool:
-    """True when `findings` hold at least one blocking `writes-collision` and no other blocking
-    finding: a converged seam-fix's edges order exactly those, so the refusal would clear."""
-    blocking = [f for f in findings if f.get("blocking")]
-    return bool(blocking) and all(f.get("class") == _COLLISION for f in blocking)
 
 
 def _is_missing_seam(finding: dict) -> bool:
@@ -482,70 +436,54 @@ def _repair_line(failing: list[str], plan: str) -> str:
     return f"repair: mise-prep-upgrade {plan}  (or --upgrade), then re-run"
 
 
-@functools.cache
-def _upgrader(engine_root: Path | None):
-    """`mise-prep-upgrade`'s module, loaded once per run from the driver's own `coordinator/bin/`.
+def _probe(repo_root: Path, plan: str, *, upgrade: bool, census_timeout: int) -> dict:
+    """One `plan.mise_prep_probe` call: this plan's gate, census and upgrade derivation.
 
-    A foreign `engine_root` is refused (returns a reason string, not a module): loading its
-    `mise-prep-upgrade.py` here would run that file's import-time `sys.path` insert against the
-    `coordinator_core` already cached in `sys.modules`, so the tree that answers would not be the
-    tree named. `None` and this driver's own tree are the same engine.
+    The census is always requested; the op runs it only for a PREPPED, not-CERTIFIED gate. Raises
+    `ValueError` on an op error or a reply without a `gate` object, so a probe that did not answer
+    is never read as a verdict.
     """
-    own = _HERE / "mise-prep-upgrade.py"
-    if engine_root is not None and engine_root != _REPO_ROOT:
-        return (
-            f"engine root {engine_root} is not the tree this driver runs from ({_REPO_ROOT}); "
-            f"run {engine_root / 'coordinator' / 'bin' / 'mise-prep-upgrade.py'} directly"
-        )
-    if not own.is_file():
-        return f"no mise-prep-upgrade.py at {own}"
-    spec = importlib.util.spec_from_file_location("mise_prep_upgrade", own)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
+    reply = _invoke(
+        repo_root,
+        "plan.mise_prep_probe",
+        {"plan": plan, "check_census": True, "upgrade": upgrade, "census_timeout": census_timeout},
+    )
+    if not isinstance(reply.get("gate"), dict):
+        raise ValueError("plan.mise_prep_probe returned a reply without a `gate` object")
+    return reply
 
 
-def _upgrade(
-    repo_root: Path, engine_root: Path | None, plan: str, dry_run: bool = False
-) -> tuple[str, str]:
-    """Upgrade one plan IN-PROCESS via `mise-prep-upgrade.upgrade_plan`. Returns (state, note).
+def _derivable(derivation) -> bool:
+    """True when a probe's `upgrade` dict says `upgrade_plan` would change the plan."""
+    return isinstance(derivation, dict) and not derivation.get("error") and bool(derivation.get("changed"))
 
-    `state` is "wrote" (the tool changed, or under `dry_run` would change, the plan),
-    "declined" (pure residue, nothing to derive, or not a plan), or "unavailable" (the upgrade
-    module could not be loaded). `note` carries the derived fields plus any residue, e.g.
-    `wrote prime_exit_criterion.derived_from; AUTHOR: prime_exit_criterion.statement: ...`.
 
-    `dry_run` is `check=True`: nothing is written. `plan` is repo-relative and resolved against
-    `repo_root`, never the process cwd.
+def _upgrade_note(derivation) -> str | None:
+    """The row's `upgraded` text from an `upgrade_plan` dict (a probe's `upgrade` or an apply reply).
 
-    Delegated, never reimplemented: what is derivable from a plan's own text is that tool's
-    judgment, and a second deriver here would author declarations it never agreed to.
+    `None` for no derivation or `{"skipped": ...}`: the plan fails only a class the upgrade cannot
+    reach, and `_repair_line` says so more precisely than a note would. Otherwise `wrote <fields>;
+    AUTHOR: ...` when the tool changed (or under check-only would change) the plan, and
+    `declined: ...` for an error, pure residue, or nothing to derive.
+
+    Delegated, never reimplemented: what is derivable from a plan's own text is
+    `mise-prep-upgrade`'s judgment, and a second deriver here would author declarations it never
+    agreed to.
     """
-    upgrader = _upgrader(engine_root)
-    if isinstance(upgrader, str):
-        return "unavailable", upgrader
-    path = repo_root / plan
-    try:
-        text = path.read_text(encoding="utf-8", errors="replace")
-    except OSError as exc:
-        return "declined", f"unreadable: {exc}"
-    parsed = upgrader.parse_frontmatter(text)
-    reason = upgrader.not_a_plan_reason(path, text, parsed)
-    if reason is not None:
-        return "declined", f"not a plan: {reason}"
-    result = upgrader.upgrade_plan(path, check=dry_run, text=text, parsed=parsed)
-    if result["error"]:
-        return "declined", result["error"]
-    residue = result["residue"]
-    if result["changed"]:
-        derived = ", ".join(result["derived"])
+    if not isinstance(derivation, dict) or "skipped" in derivation:
+        return None
+    if derivation.get("error"):
+        return f"declined: {derivation['error']}"
+    residue = list(derivation.get("residue") or [])
+    if derivation.get("changed"):
+        derived = ", ".join(derivation.get("derived") or [])
         note = f"wrote {derived}" if derived else "wrote"
         if residue:
             note += "; AUTHOR: " + "; ".join(residue)
-        return "wrote", note
+        return note
     if residue:
-        return "declined", "AUTHOR: " + "; AUTHOR: ".join(residue)
-    return "declined", "nothing to derive"
+        return "declined: AUTHOR: " + "; AUTHOR: ".join(residue)
+    return "declined: nothing to derive"
 
 
 def main(argv=None) -> int:
@@ -560,7 +498,8 @@ def main(argv=None) -> int:
     ap.add_argument(
         "--upgrade",
         action="store_true",
-        help="run mise-prep-upgrade over a plan that fails the bar, then re-gate. Writes "
+        help="derive what mise-prep-upgrade would write for a plan that fails the bar and, "
+        "outside --dry-run, write it and re-probe. Writes "
         "only the declarations derivable from the plan's own text; it invents none, so a "
         "plan needing real authoring still comes back NOT-PREPPED with its classes named.",
     )
@@ -573,10 +512,8 @@ def main(argv=None) -> int:
     args = ap.parse_args(argv)
 
     repo_root = Path(args.repo_root).resolve()
-    _er = args.engine_root or os.environ.get("COORDINATOR_ENGINE_ROOT") or ""
-    engine_root = Path(_er).resolve() if _er.strip() else _default_engine_root()
     if args.engine_root:
-        os.environ["COORDINATOR_ENGINE_ROOT"] = str(engine_root)
+        os.environ["COORDINATOR_ENGINE_ROOT"] = str(Path(args.engine_root).resolve())
 
     def refuse(msg: str) -> int:
         print(f"mise-prep-run: REFUSED — {msg}", file=sys.stderr)
@@ -629,23 +566,31 @@ def main(argv=None) -> int:
     gates: dict[str, dict] = {}
     for plan in plans:
         try:
-            gate = _invoke(repo_root, "plan.prep_gate", {"plan": plan})
+            probe = _probe(repo_root, plan, upgrade=args.upgrade, census_timeout=args.census_timeout)
         except ValueError as exc:
             return refuse(f"{plan}: {exc}")
+        gate = probe["gate"]
 
-        upgraded = None
-        if gate.get("verdict") != "PREPPED" and args.upgrade:
-            state, note = _upgrade(repo_root, engine_root, plan, dry_run=args.dry_run)
-            wrote = state == "wrote"
-            upgraded = note if wrote else f"{state}: {note}"
-            # Re-gate whenever the upgrade changed something: the ordinary outcome is a write
-            # alongside residue. Never under `--dry-run`: `_upgrade` ran check-only and wrote
-            # nothing, so a re-gate would just repeat the same verdict.
-            if wrote and not args.dry_run:
+        derivation = probe.get("upgrade")
+        upgraded = _upgrade_note(derivation)
+        # Apply only a derivable plan, and only outside `--dry-run`: the probe's derivation is
+        # check-only, so a dry run never issues the MUTATING apply op. A written plan is
+        # re-probed: the ordinary outcome is a write alongside residue, and the re-probe is the
+        # re-gate. The re-probe skips the derivation (the apply reply is the new note).
+        if args.upgrade and not args.dry_run and _derivable(derivation):
+            try:
+                applied = _invoke(repo_root, "plan.mise_upgrade_apply", {"plan": plan})
+            except ValueError as exc:
+                upgraded = f"declined: {exc}"
+            else:
+                upgraded = _upgrade_note(applied)
                 try:
-                    gate = _invoke(repo_root, "plan.prep_gate", {"plan": plan})
+                    probe = _probe(
+                        repo_root, plan, upgrade=False, census_timeout=args.census_timeout
+                    )
                 except ValueError as exc:
                     return refuse(f"{plan}: re-gate after upgrade: {exc}")
+                gate = probe["gate"]
 
         # The gate already carries the attest's own four-state read (`plan.prep_gate`
         # returns `read_stamp`'s answer). Carrying it here is what makes a dry run
@@ -662,6 +607,8 @@ def main(argv=None) -> int:
             "withheld_rows": gate.get("withheld_rows") or [],
             "upgraded": upgraded,
             "stamp_state": (gate.get("stamp") or {}).get("state"),
+            "census": probe.get("census"),
+            "processMs": probe.get("process_ms"),
             "outcome": None,
         }
         rows.append(row)
@@ -672,32 +619,15 @@ def main(argv=None) -> int:
     except ValueError as exc:
         return refuse(f"seam check: {exc}")
 
-    projecting = args.dry_run and seam_fix["converged"] and not seam_fix["skippedCycles"]
+    # Only DRIFT blocks, the same rule the fire leg uses: an UNDECIDABLE or UNRUNNABLE census is
+    # not evidence of movement. A seam refusal keeps its verdict over a census one.
     for row in rows:
         plan = row["plan"]
         row["seam"] = _seam_findings_for(seam, plan)
         if _seam_implicated(seam, plan):
-            if projecting and _only_collisions_block(row["seam"]):
-                row["seam_cleared_by_fix"] = True
-            else:
-                row["outcome"] = "SEAM-REFUSED"
-
-    # Census leg: runs only on rows about to be stamped. A stamped, refused or non-PREPPED row
-    # writes no stamp, and the fire-time leg owns already-certified plans. Only DRIFT blocks, the
-    # same rule the fire leg uses: an UNDECIDABLE or UNRUNNABLE census is not evidence of movement.
-    for row in rows:
-        row["census"] = None
-        if (
-            row["outcome"] is None
-            and row["verdict"] == "PREPPED"
-            and row["stamp_state"] != "CERTIFIED"
-        ):
-            rep = _revalidator().revalidate(
-                repo_root / row["plan"], repo_root, args.census_timeout, require_stamp=False
-            )
-            row["census"] = rep
-            if rep.get("state") == "DRIFT":
-                row["outcome"] = "CENSUS-DRIFT"
+            row["outcome"] = "SEAM-REFUSED"
+        elif (row["census"] or {}).get("state") == "DRIFT":
+            row["outcome"] = "CENSUS-DRIFT"
 
     for row in rows:
         plan, gate = row["plan"], gates[row["plan"]]
@@ -761,21 +691,15 @@ def main(argv=None) -> int:
         pending = sum(1 for r in rows if r["outcome"] == "would-stamp")
         work = f" — {pending} would be written" if args.dry_run else ""
         print(f"mise-prep-run: {len(certified)} of {len(rows)} plan(s) {verb}{mode}{work}")
-        n_edges = len(seam_fix["edgesAdded"])
-        print(
-            f"seam-fix: {n_edges} edge(s) {'would be added' if args.dry_run else 'added'}; "
-            f"converged={seam_fix['converged']}"
-        )
+        if seam_fix.get("notRun"):
+            print(f"seam-fix: {seam_fix['notRun']}")
+        else:
+            print(
+                f"seam-fix: {len(seam_fix['edgesAdded'])} edge(s) added; "
+                f"converged={seam_fix['converged']}"
+            )
         for c in seam_fix["skippedCycles"]:
             print(f"seam-fix: skipped cycle {c.get('plans')} path={c.get('path')} — {c.get('detail')}")
-        if projecting:
-            remain = [r["plan"] for r in rows if r["outcome"] == "SEAM-REFUSED"]
-            cleared = sum(1 for r in rows if r.get("seam_cleared_by_fix"))
-            print(
-                f"seam-fix: once the edges land, {len(remain)} plan(s) would remain SEAM-REFUSED"
-                f" ({cleared} writes-collision refusal(s) cleared)"
-                + (f": {', '.join(remain)}" if remain else "")
-            )
         for r in rows:
             if r in certified:
                 held = r.get("mise_prepped_findings") or []

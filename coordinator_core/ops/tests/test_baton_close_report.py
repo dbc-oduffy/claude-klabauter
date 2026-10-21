@@ -257,6 +257,108 @@ def test_reverse_shared_deliverable_id_across_batons_stays_no_evidence(tmp_path:
     assert rep["no_evidence"] == 2
 
 
+_SHA = "a" * 40
+_SIZING = "state/sizings/s.yaml"
+
+
+def _run_record(root: Path, run_id: str, *, sizing: str | None = None, baton: str | None = None,
+                sha: str | None = _SHA, job: bool = True) -> None:
+    import json
+
+    if sizing is not None:
+        _write(root, f"state/warp/{run_id}/run.json", json.dumps({"sizing_rel": sizing}))
+    if baton is not None:
+        _write(root, f"state/warp/{run_id}/run-baton.json", json.dumps({"baton": baton}))
+    if job:
+        _write(root, f".coordinator-local/close-jobs/{run_id}.workflow.json",
+               json.dumps({"terminal_sha": sha, "claimed_batons": []}))
+
+
+def test_run_evidence_spinoff_via_sizing_rel_is_closable(tmp_path: Path) -> None:
+    root = _reverse_root(tmp_path)
+    _write(root, "state/handoffs/s.md", _baton(extra=f"kind: spinoff\nsizing_object: {_SIZING}\n"))
+    _run_record(root, "r1", sizing=_SIZING)
+    rep = _run(root)
+    assert [c["handoff_path"] for c in rep["closable"]] == ["state/handoffs/s.md"]
+    ev = rep["closable"][0]["evidence"]
+    assert [(e["class"], e["field"], e["target_status"], e["done"]) for e in ev
+            if e["class"] == "run"] == [("run", "run.sizing_rel", "committed", True)]
+    assert rep["closable"][0]["conflict"] is None and rep["residue"] == []
+
+
+def test_run_evidence_spinoff_via_run_baton_backslash_value(tmp_path: Path) -> None:
+    root = _reverse_root(tmp_path)
+    _write(root, "state/handoffs/s.md", _baton(extra="kind: spinoff\n"))
+    _run_record(root, "r1", baton="state\\handoffs\\s.md")
+    rep = _run(root)
+    assert [c["handoff_path"] for c in rep["closable"]] == ["state/handoffs/s.md"]
+    assert [e["field"] for e in rep["closable"][0]["evidence"]] == ["run.baton"]
+
+
+def test_run_evidence_parent_join_alone_stays_spinoff_residue(tmp_path: Path) -> None:
+    root = _reverse_root(tmp_path)
+    _write(root, "docs/plans/p.md", _plan("implemented", "deliverable_id: dlv-a\n"))
+    _write(root, "state/handoffs/s.md", _baton(did="dlv-a", extra="kind: spinoff\n"))
+    rep = _run(root)
+    assert rep["closable"] == []
+    assert [r["reason"] for r in rep["residue"]] == ["spinoff_kind"]
+    assert rep["residue"][0]["conflict"] is None
+
+
+def test_run_evidence_claimed_with_ended_run_is_released(tmp_path: Path) -> None:
+    root = _reverse_root(tmp_path)
+    _write(root, "docs/plans/done.md", _plan("implemented"))
+    _write(root, "state/handoffs/c.md",
+           _baton("claimed", "governing_plan: docs/plans/done.md\nsizing_object: " + _SIZING + "\n"))
+    _run_record(root, "r1", sizing=_SIZING, sha=None)
+    rep = _run(root)
+    assert [c["handoff_path"] for c in rep["closable"]] == ["state/handoffs/c.md"]
+    assert rep["residue"] == []
+
+
+def test_run_evidence_claimed_with_live_run_stays_claimed(tmp_path: Path) -> None:
+    root = _reverse_root(tmp_path)
+    _write(root, "docs/plans/done.md", _plan("implemented"))
+    _write(root, "state/handoffs/c.md",
+           _baton("claimed", "governing_plan: docs/plans/done.md\nsizing_object: " + _SIZING + "\n"))
+    _run_record(root, "r1", sizing=_SIZING, sha=None)
+    _run_record(root, "r2", baton="state/handoffs/c.md", job=False)
+    rep = _run(root)
+    assert rep["closable"] == []
+    assert [r["reason"] for r in rep["residue"]] == ["claimed"]
+
+
+def _conflict_fixture(root: Path, with_run: bool) -> None:
+    _write(root, "docs/plans/appr.md", _plan("approved"))
+    _write(root, "state/sizings/s.yaml", "status: shipped\n")
+    _write(root, "state/handoffs/x.md",
+           _baton(extra=f"kind: spinoff\ngoverning_plan: docs/plans/appr.md\nsizing_object: {_SIZING}\n"))
+    if with_run:
+        _run_record(root, "r1", sizing=_SIZING)
+
+
+def test_run_evidence_conflict_won_by_committed_run(tmp_path: Path) -> None:
+    root = _reverse_root(tmp_path)
+    _conflict_fixture(root, with_run=True)
+    rep = _run(root)
+    assert [c["handoff_path"] for c in rep["closable"]] == ["state/handoffs/x.md"]
+    note = rep["closable"][0]["conflict"]
+    assert note["winner"] == "done"
+    assert any(e["class"] == "run" for e in note["done"])
+    assert [e["target_status"] for e in note["contradicting"]] == ["approved"]
+
+
+def test_run_evidence_conflict_without_run_names_both_and_contradicting_wins(tmp_path: Path) -> None:
+    root = _reverse_root(tmp_path)
+    _conflict_fixture(root, with_run=False)
+    rep = _run(root)
+    assert rep["closable"] == []
+    assert [r["reason"] for r in rep["residue"]] == ["evidence_conflict"]
+    note = rep["residue"][0]["conflict"]
+    assert note["winner"] == "contradicting"
+    assert note["done"] and note["contradicting"]
+
+
 def test_writes_nothing(tmp_path: Path) -> None:
     _fixture(tmp_path)
     before = _snapshot(tmp_path)

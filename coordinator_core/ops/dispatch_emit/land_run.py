@@ -428,6 +428,12 @@ def already_landed_reply(root: Path, run_id: object, token: object, script_path:
     }
 
 
+_OVERLAP_REMEDY = (
+    "A peer commit changed a path this landing writes; refire after the peer's commit, since the "
+    "run's paths changed under it."
+)
+
+
 def _redeem_or_answer(root: Path, run_id: object, token: str, script_path: object) -> Optional[dict]:
     """None when this call holds the claim; else the reply that ends it: ``already_landed`` from the
     spent receipt, ``run-token-in-flight`` for a claim a first call still holds, else ``run-token``."""
@@ -446,7 +452,9 @@ def _redeem_or_answer(root: Path, run_id: object, token: str, script_path: objec
         )
     return _error(
         "params.run_token does not match a live, unspent token minted for params.run_id and this "
-        "script (a token admits one landed commit)",
+        "script (a token admits one landed commit); a run that ended with its commit unlanded is "
+        "recovered by a tokenless EM call: the invoke CLI's --from-task-output <the run's task-output file>, "
+        "which sets params.task_output_path",
         refused="run-token",
     )
 
@@ -1908,14 +1916,34 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
         hash_worktree_blobs_via_spawn,
     )
     from coordinator_core.git.index_write import IndexStaleAfterCommit
+    from coordinator_core.git.ref_cas_retry import is_ref_moved, retry_ref_moved
 
     index_stale: list = []
+
+    def _attempt():
+        try:
+            return commit_paths(
+                root, paths, message, deleted_paths=deleted, expected_content_sha256=expected or None,
+                allow_empty=params.get("allow_empty") is True,
+                blob_fallback=lambda ps: hash_worktree_blobs_via_spawn(ps, cwd=root),
+            )
+        except CommitRefused as lost_exc:
+            if is_ref_moved(lost_exc):
+                return lost_exc
+            raise
+
     try:
-        outcome = commit_paths(
-            root, paths, message, deleted_paths=deleted, expected_content_sha256=expected or None,
-            allow_empty=params.get("allow_empty") is True,
-            blob_fallback=lambda ps: hash_worktree_blobs_via_spawn(ps, cwd=root),
+        # Receipt files are run-unique, so no peer commit can have touched them.
+        own_receipts = set(receipt_paths)
+        overlap_paths = [p for p in [*paths, *deleted] if p not in own_receipts]
+        outcome, overlap = retry_ref_moved(
+            root, overlap_paths, _attempt, lambda r: isinstance(r, CommitRefused)
         )
+        if isinstance(outcome, CommitRefused):
+            if overlap:
+                _remove(root, receipt_paths)
+                return _error(f"{outcome} {_OVERLAP_REMEDY}", refused=overlap)
+            raise outcome
     except BlobDriftRefused as exc:
         _remove(root, receipt_paths)
         return _error(
@@ -2189,5 +2217,5 @@ def _integrity(
     base = li.run_base_for(root, run_id, params)
     if base is not None:
         findings += li.since_base_findings(root, live, base, run_id=run_id, plan=plan)
-    tested, _check = li.failed_targeted_tests(li.targeted_test_verdict(params))
+    tested, _check = li.landing_test_gate(root, params, run_id)
     return findings + tested

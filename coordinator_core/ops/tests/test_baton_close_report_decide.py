@@ -157,6 +157,69 @@ def test_close_refusal_spinoff_with_own_plan_evidence_is_none():
     assert close_refusal("spinoff", "nope", [OWN_PLAN_DONE]) is ResidueReason.NO_DELIVERABLE_ID
 
 
+RUN_DONE = {**_e("run", "committed", True), "field": "run.sizing_rel"}
+RUN_ENDED = _e("run", "ended", False)
+RUN_LIVE_ITEM = _e("run", "live", False)
+PLAN_APPROVED = _e("plan", "approved", False)
+
+
+def test_spinoff_closes_on_a_done_run():
+    out = decide(_hk("spinoff", "dlv-x"), [RUN_DONE], False)
+    assert out == ("closable", [RUN_DONE], None)
+    assert close_refusal("spinoff", "dlv-x", [RUN_DONE]) is None
+
+
+def test_spinoff_parent_join_still_refused_beside_an_ended_run():
+    out = decide(_hk("spinoff", "dlv-x"), [JOIN_DONE, RUN_ENDED], False)
+    assert out[:2] == ("residue", "spinoff_kind")
+
+
+def test_ended_or_live_run_never_contradicts():
+    assert decide(_h(), [DONE, RUN_ENDED], False)[0] == "closable"
+    assert decide(_h(), [DONE, RUN_LIVE_ITEM], False)[0] == "closable"
+    assert decide(_h(), [RUN_ENDED], False) == ("no_evidence",)
+
+
+def test_claimed_released_when_every_naming_run_ended():
+    out = decide(_h("claimed"), [DONE, RUN_ENDED], False)
+    assert out[0] == "closable"
+    assert decide(_h("claimed"), [RUN_DONE], False)[0] == "closable"
+
+
+def test_claimed_held_when_a_naming_run_is_live():
+    out = decide(_h("claimed"), [DONE, RUN_ENDED, RUN_LIVE_ITEM], False)
+    assert out[:2] == ("residue", "claimed")
+
+
+def test_conflict_won_by_a_done_run():
+    out = decide(_h(), [RUN_DONE, PLAN_APPROVED], False)
+    assert out[0] == "closable"
+    note = out[2]
+    assert note["winner"] == "done"
+    assert note["done"] == [RUN_DONE]
+    assert note["contradicting"] == [PLAN_APPROVED]
+    assert note["rule"]
+
+
+def test_conflict_won_by_contradicting_without_a_done_run():
+    out = decide(_h(), [DONE, PLAN_APPROVED], False)
+    assert out[:2] == ("residue", "evidence_conflict")
+    note = out[3]
+    assert note["winner"] == "contradicting"
+    assert note["done"] == [DONE]
+    assert note["contradicting"] == [PLAN_APPROVED]
+
+
+def test_run_won_conflict_still_yields_to_a_live_successor():
+    out = decide(_h(), [RUN_DONE, PLAN_APPROVED], True)
+    assert out[:2] == ("residue", "live_successor")
+
+
+def test_no_conflict_note_when_evidence_agrees():
+    assert decide(_h(), [DONE], False)[2] is None
+    assert decide(_h(), [MISSING], False)[3] is None
+
+
 def test_does_not_mutate_inputs():
     ev = [dict(DONE), dict(OPEN)]
     snapshot = [dict(e) for e in ev]

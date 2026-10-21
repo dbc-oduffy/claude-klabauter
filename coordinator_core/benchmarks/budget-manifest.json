@@ -103,6 +103,16 @@
       },
       "_rationale": "Copies the MUTATING tier default verbatim; the override exists to carry the spawn budget. The stamp runs the same gate as plan.prep_gate, so a plan's python census targets cost the same ONE batched `git ls-files` (census.py::tracked_targets via git/run.py::run_git). Counted by coordinator_core/ops/tests/test_plan_prep_spawn_count.py with exact equality."
     },
+    "plan.mise_prep_probe": {
+      "target_ms": 250,
+      "tolerance": {"kind": "relative", "value": 0.2},
+      "_rationale": "One plan per call, the unit mise-prep-run's client loop issues. Bound from plan.prep_gate's measured worst case (182ms over the real plan corpus, process time) with the per-corpus re-derivation removed by the HEAD-keyed CorpusInputs cache, plus upgrade_plan(check=True) on a failing plan (one frontmatter parse of the same bytes). Census shell children are separate processes and are not in process_ms; the census cost lives in each plan's authored census commands. No spawn_count_budget row: the op starts no process of its own. The C8 per-plan measurement of the full set replaces this figure."
+    },
+    "plan.mise_upgrade_apply": {
+      "target_ms": 300,
+      "tolerance": {"kind": "relative", "value": 0.2},
+      "_rationale": "Copies the MUTATING tier default: one plan read, upgrade_plan(check=False) and at most one in-place write. Spawn-free. The override exists so the per-plan write op carries its own row beside the probe."
+    },
     "ceremony.session_instructions": {
       "target_ms": 86,
       "tolerance": {

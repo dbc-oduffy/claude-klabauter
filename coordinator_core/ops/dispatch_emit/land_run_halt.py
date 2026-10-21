@@ -567,7 +567,7 @@ def _land(
     tfind: list = []
     tcheck = ""
     if kind == "ledger-check":
-        tfind, tcheck = landing_integrity.failed_targeted_tests(landing_integrity.targeted_test_verdict(params))
+        tfind, tcheck = landing_integrity.landing_test_gate(root, params, run_id)
         targeted = {
             "check": tcheck,
             "findings": [{"path": f.path, "reason": f.reason, "detail": f.detail} for f in tfind],

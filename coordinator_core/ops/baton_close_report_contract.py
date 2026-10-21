@@ -2,12 +2,16 @@
 
 Pure declarations, no I/O. Readers, target readers, the decision function and the handler
 all build against these names.
+
+Run evidence is produced by the spawn-free reader in baton_close_report_readers:
+`run_claims(worktree_root: str, headers: dict[str, BatonHeader]) -> dict[str, list[Evidence]]`,
+keyed by baton path.
 """
 
 from __future__ import annotations
 
 from enum import Enum
-from typing import TypedDict
+from typing import Literal, TypedDict
 
 OP_KEY = "baton.close_report"
 SCHEMA_VERSION = 1
@@ -19,6 +23,7 @@ class EvidenceClass(str, Enum):
     ROADMAP = "roadmap"
     GOAL = "goal"
     SUCCESSOR = "successor"
+    RUN = "run"
 
 
 class ResidueReason(str, Enum):
@@ -71,15 +76,26 @@ class BatonHeader(TypedDict):
     kind: str | None
 
 
+class ConflictNote(TypedDict):
+    """Done and contradicting evidence that coexist, and which side governs."""
+
+    done: list[Evidence]
+    contradicting: list[Evidence]
+    winner: Literal["done", "contradicting"]  # CONFLICT_WINNERS
+    rule: str
+
+
 class ClosableItem(TypedDict):
     handoff_path: str
     evidence: list[Evidence]
+    conflict: ConflictNote | None
 
 
 class ResidueItem(TypedDict):
     handoff_path: str
     reason: str
     evidence: list[Evidence]
+    conflict: ConflictNote | None
 
 
 class CloseReport(TypedDict):
@@ -109,6 +125,15 @@ HEADER_KEYS = (
 # Evidence `field` values for plan-to-baton (reverse) links.
 REVERSE_FIELD_DELIVERABLE = "plan.deliverable_id"
 REVERSE_FIELD_PREDECESSOR = "plan.predecessor_handoff"
+# Run-evidence `field` values: how a run was joined to the baton.
+RUN_FIELD_BATON = "run.baton"
+RUN_FIELD_SIZING = "run.sizing_rel"
+RUN_FIELD_CLAIMED = "run.claimed_batons"
+# Run-evidence `target_status` values.
+RUN_COMMITTED = "committed"
+RUN_ENDED = "ended"
+RUN_LIVE = "live"
+CONFLICT_WINNERS = ("done", "contradicting")
 REPORT_KEYS = (
     "exit_code",
     "schema_version",

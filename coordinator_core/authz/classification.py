@@ -1410,6 +1410,29 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #   D2(v) (no git commit): this op does not commit; the EM retains that.
     # Spec backlink: coordinator-content-repo coordinator/docs/wiki/mise-prepped-attest.md
     "plan.stamp_prepped": OpClass.MUTATING,
+    # plan.mise_prep_probe — COMPUTE_ONLY: ONE plan's gate verdict, census revalidation and
+    # upgrade derivation (upgrade_plan check=True), returned in one reply. Writes nothing; the
+    # census commands run as read-only shell children whose outcome it reports.
+    # DR-208 five-question affirmation (citing ops/plan_mise_prep_probe.py):
+    #   1. Writes, deletes, or reorders any state file, queue, or git object?  No.
+    #   2. Writes into rag's relational store?                                 No.
+    #   3. Opens any file for write (including sentinel creation)?             No.
+    #   4. Mutates shared mutable state outside its own module?                No.
+    #   5. Persistent state changes observable across process boundaries?      No.
+    "plan.mise_prep_probe": OpClass.COMPUTE_ONLY,
+    # plan.mise_upgrade_apply — MUTATING: writes the fields mise-prep-upgrade derives from ONE
+    # caller-named docs/plans/*.md (upgrade_plan check=False, in place). The only upgrade writer
+    # the mise-prep-run driver uses outside --dry-run.
+    # DR-208 five-question affirmation (citing ops/plan_mise_prep_probe.py):
+    #   1. Writes, deletes, or reorders any state file, queue, or git object?  YES.
+    #   2. Writes into rag's relational store?                                 No.
+    #   3. Opens any file for write (including sentinel creation)?             YES.
+    #   4. Mutates shared mutable state outside its own module?                YES.
+    #   5. Persistent state changes observable across process boundaries?      YES.
+    # DR-216 D2: per-record idempotent (a second run derives nothing), git-reversible,
+    # content-additive (declarations derivable from the plan's own text), confined to the
+    # one worktree-contained plan, no git commit.
+    "plan.mise_upgrade_apply": OpClass.MUTATING,
     # plan.gated_criteria_met — MUTATING: flips met/evidence on named gated_exit_criteria
     # rows of one caller-named docs/plans/*.md under locked_rmw, then commits that file via
     # git_native.commit_authored_content (ops/plan_gated_criteria_met.py).

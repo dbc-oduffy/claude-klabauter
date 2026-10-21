@@ -773,7 +773,7 @@ _RESOLVER_FAMILY_BY_FILE = {
     "lib/workday_ceremony_lib.py": frozenset({"env_first"}),
     "merge-gate-and-pr.py": frozenset({"env_first"}),
     "merge-recovery-and-tag-cut.py": frozenset({"env_first"}),
-    "mise-prep-entry.py": frozenset({"self_location"}),
+    "mise-prep-entry.py": frozenset({"env_first"}),
     "mise-prep-gate.py": frozenset({"env_first"}),
     "mise-prep-run.py": frozenset({"env_first"}),
     "parallel-review-orthogonality-guard.py": frozenset({"env_first"}),

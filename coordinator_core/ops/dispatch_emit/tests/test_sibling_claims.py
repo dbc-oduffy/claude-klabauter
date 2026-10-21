@@ -129,3 +129,13 @@ def test_reland_remedy_names_the_literal_refire_call():
     assert "dispatch.ask_gate" in line
     assert "docs/sizings/x.yaml" in line
     assert "\n" not in line
+
+
+def test_reland_remedy_params_are_only_the_sizing_path():
+    """The gate derives an XS run's writes from its manifest, so the line must not carry them."""
+    import json
+    import re
+
+    line = sibling_claims.reland_remedy("state/sizings/x.yaml")
+    params = json.loads(re.search(r"dispatch\.ask_gate '(\{.*?\})'", line).group(1))
+    assert params == {"sizing_path": "state/sizings/x.yaml"}

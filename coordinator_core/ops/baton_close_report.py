@@ -62,7 +62,7 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             continue
         scanned += 1
         residue.append(
-            {"handoff_path": rel, "reason": ResidueReason.UNREADABLE_FRONTMATTER.value, "evidence": []}
+            {"handoff_path": rel, "reason": ResidueReason.UNREADABLE_FRONTMATTER.value, "evidence": [], "conflict": None}
         )
 
     for rel, header in headers.items():
@@ -71,9 +71,11 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         scanned += 1
         verdict = decide(header, evidence.get(rel, []), rel in live_successor)
         if verdict[0] == Verdict.CLOSABLE.value:
-            closable.append({"handoff_path": rel, "evidence": verdict[1]})
+            closable.append({"handoff_path": rel, "evidence": verdict[1], "conflict": verdict[2]})
         elif verdict[0] == Verdict.RESIDUE.value:
-            residue.append({"handoff_path": rel, "reason": verdict[1], "evidence": verdict[2]})
+            residue.append(
+                {"handoff_path": rel, "reason": verdict[1], "evidence": verdict[2], "conflict": verdict[3]}
+            )
         else:
             no_evidence += 1
 

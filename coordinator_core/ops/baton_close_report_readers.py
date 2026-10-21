@@ -6,10 +6,22 @@ line scan, and builds the successor index in memory. No YAML parse, no subproces
 
 from __future__ import annotations
 
+import json
 import os
 import re
 
-from coordinator_core.ops.baton_close_report_contract import BatonHeader
+from coordinator_core.frontmatter.baton_class import is_spinoff_kind
+from coordinator_core.ops.baton_close_report_contract import (
+    RUN_COMMITTED,
+    RUN_ENDED,
+    RUN_FIELD_BATON,
+    RUN_FIELD_CLAIMED,
+    RUN_FIELD_SIZING,
+    RUN_LIVE,
+    BatonHeader,
+    Evidence,
+    EvidenceClass,
+)
 from coordinator_core.session import record_homes
 
 LIVE_STATUSES = frozenset({"open", "claimed"})
@@ -146,6 +158,94 @@ def read_baton_headers(worktree_root: str) -> tuple[dict[str, BatonHeader], list
         elif header["status"] in LIVE_STATUSES:
             headers[rel] = header
     return headers, unreadable
+
+
+_JOBS_REL = ".coordinator-local/close-jobs"
+_FULL_SHA = re.compile(r"[0-9a-f]{40}")
+_RUN_JSON_BYTES = 64 * 1024  # a larger file is truncated, fails to parse, and reads as no evidence
+
+
+def _read_json(path: str) -> dict | None:
+    """Parsed JSON object at `path` through bare descriptor calls; None when absent or malformed."""
+    try:
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_BINARY", 0))
+        try:
+            data = os.read(fd, _RUN_JSON_BYTES)
+        finally:
+            os.close(fd)
+        doc = json.loads(data)
+    except (OSError, ValueError):
+        return None
+    return doc if isinstance(doc, dict) else None
+
+
+def _norm(rel: object) -> str | None:
+    return rel.replace("\\", "/") if isinstance(rel, str) and rel else None
+
+
+def run_claims(worktree_root: str, headers: dict[str, BatonHeader]) -> dict[str, list[Evidence]]:
+    """Run evidence per baton rel: the warp runs that name it, and how far each got.
+
+    A run joins a baton through its `run-baton.json` `baton`, through its `run.json` `sizing_rel`
+    when exactly one live baton carries that `sizing_object`, or through its close-job
+    `claimed_batons`. `target_status` is `committed` for a close-job with a full-hex
+    `terminal_sha`, `ended` for a close-job without one, `live` for no close-job. Reads nothing
+    unless some baton is a spinoff or non-open; a close-job is read only for a run that joined,
+    so `claimed_batons` adds batons only to runs already joined to another.
+    """
+    if not any(is_spinoff_kind(h.get("kind")) or h["status"] != "open" for h in headers.values()):
+        return {}
+    by_sizing: dict[str, list[str]] = {}
+    for rel, h in headers.items():
+        so = _norm(h.get("sizing_object"))
+        if so:
+            by_sizing.setdefault(so, []).append(rel)
+    live = {rel.replace("\\", "/"): rel for rel in headers}
+    warp = record_homes.home_dir(worktree_root, "warp")
+    try:
+        run_ids = sorted(os.listdir(warp))
+    except OSError:
+        return {}
+    try:
+        jobs = set(os.listdir(os.path.join(worktree_root, *_JOBS_REL.split("/"))))
+    except OSError:
+        jobs = set()
+    warp_rel = os.path.relpath(warp, worktree_root).replace(os.sep, "/")
+    out: dict[str, list[Evidence]] = {}
+    for run_id in run_ids:
+        rdir = os.path.join(warp, run_id)
+        direct = _read_json(os.path.join(rdir, "run-baton.json"))
+        run = _read_json(os.path.join(rdir, "run.json"))
+        joins: dict[str, str] = {}
+        named = _norm(direct.get("baton")) if direct else None
+        if named in live:
+            joins[live[named]] = RUN_FIELD_BATON
+        sizing = _norm(run.get("sizing_rel")) if run else None
+        carriers = by_sizing.get(sizing or "", [])
+        if len(carriers) == 1:
+            joins.setdefault(carriers[0], RUN_FIELD_SIZING)
+        if not joins:
+            continue
+        job_name = next((n for n in (f"{run_id}.workflow.json", f"{run_id}.json") if n in jobs), None)
+        job = _read_json(os.path.join(worktree_root, *_JOBS_REL.split("/"), job_name)) if job_name else None
+        for c in (job.get("claimed_batons") if job else None) or ():
+            if _norm(c) in live:
+                joins.setdefault(live[_norm(c)], RUN_FIELD_CLAIMED)
+        if job_name is None:
+            path, status = f"{warp_rel}/{run_id}", RUN_LIVE
+        else:
+            path = f"{_JOBS_REL}/{job_name}"
+            sha = job.get("terminal_sha") if job else None
+            status = RUN_COMMITTED if isinstance(sha, str) and _FULL_SHA.fullmatch(sha) else RUN_ENDED
+        for baton, field in joins.items():
+            out.setdefault(baton, []).append({
+                "class": EvidenceClass.RUN.value,
+                "field": field,
+                "target_path": path,
+                "target_status": status,
+                "done": status == RUN_COMMITTED,
+            })
+    return out
 
 
 def successor_index(headers: dict[str, BatonHeader]) -> set[str]:

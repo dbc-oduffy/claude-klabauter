@@ -136,6 +136,37 @@ def test_closable_rows_flip_and_one_scoped_commit_lands_them(tmp_path: Path) -> 
     assert _changed(repo) == set()
 
 
+def test_run_evidence_report_rows_flip_through_close_commit(tmp_path: Path) -> None:
+    import json
+
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    sha = "b" * 40
+    h = "state/handoffs/"
+    _write(repo, "docs/plans/appr.md", "---\nstatus: approved\n---\n")
+    _write(repo, "state/sizings/conf.yaml", "status: shipped\n")
+    _write(repo, h + "spin.md", _baton("dlv-spin-000001", plan=None).replace(
+        "status: open", "status: open\nkind: spinoff\nsizing_object: state/sizings/spin.yaml"))
+    _write(repo, h + "conf.md", _baton("dlv-conf-000002", plan="docs/plans/appr.md").replace(
+        "status: open", "status: open\nkind: spinoff\nsizing_object: state/sizings/conf.yaml"))
+    for run_id, sizing in (("r-spin", "state/sizings/spin.yaml"), ("r-conf", "state/sizings/conf.yaml")):
+        _write(repo, f"state/warp/{run_id}/run.json", json.dumps({"sizing_rel": sizing}))
+        _write(repo, f".coordinator-local/close-jobs/{run_id}.workflow.json",
+               json.dumps({"terminal_sha": sha}))
+    _commit_all(repo)
+
+    report = asyncio.run(report_op._handler({}, repo))
+    rows = {c["handoff_path"]: c for c in report["closable"]}
+    assert set(rows) == {h + "spin.md", h + "conf.md"}
+    assert rows[h + "conf.md"]["conflict"]["winner"] == "done"
+
+    res = _call(repo, list(rows.values()))
+    assert res["exit_code"] == 0 and res["refused"] == []
+    assert sorted(a["handoff_path"] for a in res["applied"]) == sorted(rows)
+    for rel in rows:
+        assert _fm(repo, rel, "deployment_state") == "shipped"
+
+
 def test_every_refusal_reason_leaves_the_file_byte_identical(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     paths = _fixture(repo)

@@ -171,19 +171,6 @@ def _plan_state(worktree_root: Path, rel: str, sha: str, data: bytes) -> str:
     return "clean" if content_matches_index_sha(worktree_root, rel, blob) is True else "dirty"
 
 
-# Each re-call of commit_paths re-reads HEAD, so a retry after a peer's commit is rebase-safe.
-# Retry keys on the "compare-and-swap failed" text emitted by coordinator_core.git.commit.
-STAMP_CAS_ATTEMPTS = 4
-
-
-def _is_ref_moved(exc: Exception) -> bool:
-    """True only for the plain ``CommitRefused`` of a lost ref compare-and-swap; the
-    drift, nothing-to-commit and guard subclasses are never retried."""
-    from coordinator_core.git.commit import CommitRefused
-
-    return type(exc) is CommitRefused and "compare-and-swap failed" in str(exc)
-
-
 def stamp_checkpoint(
     worktree_root: Path, message: str, sha: str, *, session_id: Optional[str] = None
 ) -> dict:
@@ -240,11 +227,14 @@ def stamp_checkpoint(
 
         from coordinator_core.git.commit import CommitRefused, commit_paths, hash_worktree_blobs_via_spawn
         from coordinator_core.git.commit_trailers import apply_missing_trailers
+        from coordinator_core.git.ref_cas_retry import REF_CAS_ATTEMPTS, is_ref_moved
 
         n = sum(len(rows_coded[p]) for p in commit_rels)
         body = f"mark {n} rows coded ({sha[:7]})\n\n{STAMP_TRAILER}: {sha}"
         body = apply_missing_trailers(body, worktree_root, commit_rels, session_id_override=session_id)
-        for attempt in range(STAMP_CAS_ATTEMPTS):
+        # Trap: unlike terminal_commit and land_run this loop does not refuse when the peer commit
+        # touched ``commit_rels``; ``ref_cas_retry.retry_ref_moved`` would add that check.
+        for attempt in range(REF_CAS_ATTEMPTS):
             try:
                 outcome = commit_paths(
                     worktree_root, commit_rels, body, prefer_deliberate_stage=True,
@@ -252,7 +242,7 @@ def stamp_checkpoint(
                 )
                 break
             except CommitRefused as exc:
-                if not _is_ref_moved(exc) or attempt == STAMP_CAS_ATTEMPTS - 1:
+                if not is_ref_moved(exc) or attempt == REF_CAS_ATTEMPTS - 1:
                     raise
         out["stamp_sha"] = outcome.sha
         if outcome.sha:

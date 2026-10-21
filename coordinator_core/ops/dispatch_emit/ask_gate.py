@@ -223,6 +223,12 @@ def _arm_verdict(
     except SizingFireRefused as exc:
         return _halt(HALT_REFUSAL, "; ".join(exc.fields))
 
+    if arm == ARM_XS and not writes:
+        # The printed re-land line carries no `writes`: the halted run's manifest recorded them.
+        from coordinator_core.ops.dispatch_emit.sizing_xs_mint import recorded_xs_writes
+
+        writes = recorded_xs_writes(repo_root, sizing_rel)
+
     if baton and arm == ARM_XS:
         if not _baton_belongs_to_sizing(repo_root, sizing, sizing_rel, baton):
             return _halt(

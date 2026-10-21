@@ -129,3 +129,73 @@ def test_recorded_base_branch_does_not_import_dispatch_emit_op(tmp_path):
     )
     assert done.returncode == 0, done.stderr
 
+
+_HEAD = "a" * 40
+_RECORDED_FAIL = {"targeted_tests": {"status": "fail", "tests_failed": 1, "baseline": None}}
+
+
+def _repo(tmp_path):
+    (tmp_path / ".git").mkdir()
+    (tmp_path / ".git" / "HEAD").write_text(_HEAD + "\n", encoding="utf-8")
+    (tmp_path / "t.py").write_text("x = 1\n", encoding="utf-8")
+    return tmp_path
+
+
+def _write_fresh(root, *, status="pass", run_id="r1", head=_HEAD, covered=None):
+    if covered is None:
+        covered = li.landing_fingerprint(root, ["t.py"])
+    path = li.fresh_verdict_path(root, run_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps({"run_id": run_id, "head": head, "tests": ["t.py"], "covered": covered, "status": status}),
+        encoding="utf-8",
+    )
+    return path
+
+
+def test_fingerprint_hashes_bytes_and_marks_absent(tmp_path):
+    root = _repo(tmp_path)
+    fp = li.landing_fingerprint(root, ["t.py", "gone.py"])
+    assert len(fp["t.py"]) == 64
+    assert fp["gone.py"] == "absent"
+
+
+def test_fresh_pass_over_recorded_fail_is_pass_on_retest(tmp_path):
+    root = _repo(tmp_path)
+    _write_fresh(root)
+    assert li.landing_test_gate(root, _RECORDED_FAIL, "r1") == ([], "pass-on-retest")
+
+
+@pytest.mark.parametrize("breakage", ["head", "covered", "run_id", "corrupt"])
+def test_invalid_fresh_verdict_falls_back_to_recorded(tmp_path, breakage):
+    root = _repo(tmp_path)
+    path = _write_fresh(root, head="b" * 40 if breakage == "head" else _HEAD,
+                        run_id="other" if breakage == "run_id" else "r1")
+    if breakage == "covered":
+        (root / "t.py").write_text("x = 2\n", encoding="utf-8")
+    if breakage == "corrupt":
+        path.write_text("{not json", encoding="utf-8")
+    if breakage == "run_id":
+        li.fresh_verdict_path(root, "r1").write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
+    findings, check = li.landing_test_gate(root, _RECORDED_FAIL, "r1")
+    assert check == "failed"
+    assert "retest_targeted" in findings[0].detail
+
+
+def test_fresh_fail_refuses(tmp_path):
+    root = _repo(tmp_path)
+    _write_fresh(root, status="fail")
+    findings, check = li.landing_test_gate(root, _RECORDED_FAIL, "r1")
+    assert check == "failed" and findings[0].reason == li.TARGETED_TESTS_FAILED
+
+
+def test_none_run_id_skips_fresh_read(tmp_path):
+    root = _repo(tmp_path)
+    _write_fresh(root)
+    assert li.landing_test_gate(root, _RECORDED_FAIL, None)[1] == "failed"
+
+
+def test_no_baseline_detail_names_retest_command():
+    findings, _ = li.failed_targeted_tests({"status": "fail", "baseline": None})
+    assert "python -m coordinator_core.ops.dispatch_emit.retest_targeted --from-task-output" in findings[0].detail
+

@@ -94,6 +94,54 @@ def test_same_tree_without_only_incomplete_still_refuses(repo, tmp_path, capsys)
     assert "docs/x/C2.md" in capsys.readouterr().err
 
 
+def _plan_shared() -> str:
+    """C2 writes docs/x/C2.md; C3 owns the whole docs/x/ prefix."""
+    c1 = (
+        "- id: C2\n  title: t\n  change_kind: doc-edit\n  surface: docs/x/C2.md\n"
+        "  writes:\n    - docs/x/C2.md\n  queue_scope: project\n  disposition: open\n"
+        "  body: |\n    Do C2.\n"
+    )
+    c3 = (
+        "- id: C3\n  title: t\n  change_kind: doc-edit\n  surface: docs/x/C3.md\n"
+        "  writes_under:\n    - docs/x/\n  queue_scope: project\n  disposition: open\n"
+        "  body: |\n    Do C3.\n"
+    )
+    return (
+        '---\ntitle: "p"\nsizing_object: null\n---\n\n# p\n\n## Goal\n\ng\n\n'
+        f"## Tasks\n\n```yaml plan-tasks\n{c1}{c3}```\n"
+    )
+
+
+def _task_output(tmp_path: Path, incomplete: list[str]) -> str:
+    body = {"next_action": {"params": {"incomplete_chunks": incomplete}}}
+    return _run_text(tmp_path, json.dumps(body))
+
+
+def test_shared_dirty_path_of_two_incomplete_rows_is_carried(repo, tmp_path, capsys):
+    (repo / _PLAN).write_text(_plan_shared(), encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "plan")
+    (repo / "docs" / "x" / "C2.md").write_text("draft\n", encoding="utf-8")
+
+    code = _emit(repo, tmp_path, "--only-incomplete", _task_output(tmp_path, ["C2", "C3"]))
+
+    captured = capsys.readouterr()
+    assert code == cli.EXIT_OK, captured.err
+    assert "C2: 1 uncommitted path(s) in its own writes carried as its prior draft" in captured.err
+
+
+def test_shared_dirty_path_refuses_when_a_declarer_is_not_incomplete(repo, tmp_path, capsys):
+    (repo / _PLAN).write_text(_plan_shared(), encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "plan")
+    (repo / "docs" / "x" / "C2.md").write_text("draft\n", encoding="utf-8")
+
+    code = _emit(repo, tmp_path, "--only-incomplete", _task_output(tmp_path, ["C2"]))
+
+    assert code == cli.EXIT_DATA_ERROR
+    assert "docs/x/C2.md" in capsys.readouterr().err
+
+
 def test_only_incomplete_leaves_a_landed_rows_dirt_outside_the_write_set(repo, tmp_path, capsys):
     (repo / "docs" / "x" / "C1.md").write_text("stray\n", encoding="utf-8")
     run_text = _run_text(tmp_path, "abc1234 checkpoint(wave 1): 1 rows — C1\n")

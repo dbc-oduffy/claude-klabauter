@@ -21,6 +21,7 @@ from coordinator_core.ops.baton_close_report_contract import (
     EvidenceClass,
 )
 from coordinator_core.ops.baton_close_report_decide import STATUS_MISSING, STATUS_UNREADABLE
+from coordinator_core.ops.baton_close_report_readers import run_claims
 from coordinator_core.session.record_homes import home_dir
 
 # `landed` is non-terminal per plan.schema.json's status description (spine rows still open):
@@ -379,6 +380,7 @@ def target_evidence(worktree_root: str, headers: dict[str, BatonHeader]) -> dict
         d = h.get("deliverable_id")
         if d:
             carriers[d] = carriers.get(d, 0) + 1
+    runs = run_claims(worktree_root, headers)
     for rel, h in headers.items():
         items: list[Evidence] = []
         gp = h.get("governing_plan")
@@ -423,6 +425,10 @@ def target_evidence(worktree_root: str, headers: dict[str, BatonHeader]) -> dict
             if p not in seen:
                 seen.add(p)
                 items.append(_path_item(rd, EvidenceClass.PLAN, REVERSE_FIELD_SIZING, p, True, PLAN_DONE))
+        for it in runs.get(rel, ()):
+            if it["target_path"] not in seen:
+                seen.add(it["target_path"])
+                items.append(it)
         if items:
             out[rel] = items
     return out

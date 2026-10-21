@@ -6432,12 +6432,21 @@ def _drop_landed_rows(rows: list, landed: frozenset, closed: frozenset = frozens
     return kept
 
 
-def _keep_landed_rows(rows: list, landed: frozenset) -> list:
+def _keep_landed_rows(rows: list, landed: frozenset, exclusions=()) -> list:
     """The inverse of ``_drop_landed_rows``: only the named rows, with edges
-    onto every dropped row stripped."""
+    onto every dropped row stripped. An id with no row names its first
+    ``exclusions`` reason and detail, or that the spine has no such row."""
     unknown = set(landed) - {r.id for r in rows}
     if unknown:
-        raise ValueError(f"review-only row id(s) not dispatchable in this spine: {sorted(unknown)}")
+        parts = []
+        for rid in sorted(unknown):
+            exc = next((e for e in exclusions if e.get("id") == rid), None)
+            parts.append(
+                f"{rid}: {exc.get('reason')} ({exc.get('detail')})"
+                if exc
+                else f"{rid}: no such row in this spine"
+            )
+        raise ValueError(f"review-only row(s) not reviewable: {'; '.join(parts)}")
     kept = []
     for row in rows:
         if row.id not in landed:
@@ -6825,7 +6834,7 @@ def emit_script(
             raise ValueError("review_only_rows and landed_rows are mutually exclusive")
         if not run_base_sha or not _RUN_BASE_RE.fullmatch(run_base_sha):
             raise ValueError("review-only requires run_base_sha matching ^[0-9a-f]{7,40}$")
-        rows = _keep_landed_rows(rows, review_only_rows)
+        rows = _keep_landed_rows(rows, review_only_rows, exclusions)
         review_terminal_sha = _pin_review_terminal(run_base_sha, repo_root)
     elif run_base_sha is not None or review_only_rows is not None:
         raise ValueError("run_base_sha and review_only_rows are accepted only together")
