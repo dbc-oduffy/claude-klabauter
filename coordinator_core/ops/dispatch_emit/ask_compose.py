@@ -21,7 +21,7 @@ from coordinator_core.ops.dispatch_emit import agent_sidecar as _sidecar
 from coordinator_core.ops.dispatch_emit import prompt_fragments as _prompt_fragments
 from coordinator_core.ops.dispatch_emit.reply_sidecar import (
     OP_REPLY_PAGE,
-    PAGE_CHARS,
+    PAGE_RAW_CHARS,
     PAGE_REPLY_SCHEMA,
     STAGE_REPLY_SCHEMA,
     VERIFY_REPLY_JS,
@@ -577,9 +577,11 @@ _ADMIT_MANIFEST_JS = (
     "    if (!_stagedManifest && !_stageRefusal && _re !== '' && !/did not run/.test(_re)) _stageRefusal = _re;\n"
     "  };"
 )
-#: Every page holds at least this many characters but the last: PAGE_CHARS minus the quotes, over the
-#: six-character `\uXXXX` escape. It bounds the `pages` a reply may claim for a handle.
-_PAGE_MIN_CHARS = (PAGE_CHARS - 2) // 6
+#: Every page but the last holds exactly this many sidecar characters; it bounds the `pages` a reply may
+#: claim for a handle.
+_PAGE_MIN_CHARS = PAGE_RAW_CHARS
+#: Page legs one page may cost before the run halts; a clean page costs one. Emitted into the script as a literal.
+PAGE_ATTEMPTS = 3
 _STAGE_SIDECAR_HALT = "stage reply sidecar does not match its handle: "
 _ADOPT_STAGE_REPLY_JS = (
     "  const _readStageSidecar = async (h) => {\n"
@@ -587,21 +589,31 @@ _ADOPT_STAGE_REPLY_JS = (
     "|| !Number.isInteger(h.bytes) || h.bytes < 0) return { fail: 'the handle is malformed' };\n"
     "    const echoes = (p, i) => !!p && !p.error && p.sha256 === h.sha256 && p.bytes === h.bytes && p.page === i "
     "&& typeof p.chunk === 'string';\n"
-    "    const p0 = await _pageLeg(h, 0);\n"
-    "    if (p0 && p0.error) return { fail: String(p0.error) };\n"
-    "    if (!echoes(p0, 0) || !Number.isInteger(p0.pages) || p0.pages < 1 "
-    f"|| p0.pages > Math.floor(h.bytes / {_PAGE_MIN_CHARS}) + 1) "
-    "return { fail: 'page 0 is missing or does not echo the handle' };\n"
+    "    const fetchPage = async (i, pagesWant) => {\n"
+    "      let last = 'no reply';\n"
+    f"      for (let a = 0; a < {PAGE_ATTEMPTS}; a++) {{\n"
+    "        const p = await _pageLeg(h, i);\n"
+    "        if (p && p.error) return { fail: String(p.error) };\n"
+    "        if (!echoes(p, i)) { last = 'reply is missing or does not echo the handle'; continue; }\n"
+    "        if (pagesWant !== null && p.pages !== pagesWant) { last = 'reply claims ' + p.pages + ' pages, expected ' + pagesWant; continue; }\n"
+    f"        if (pagesWant === null && (!Number.isInteger(p.pages) || p.pages < 1 || p.pages > Math.floor(h.bytes / {_PAGE_MIN_CHARS}) + 1)) "
+    "{ last = 'reply claims an impossible page count'; continue; }\n"
+    "        if (p.encoding !== 'base64') { last = 'reply encoding is not base64'; continue; }\n"
+    "        const v = _verifyPageChunk(p);\n"
+    "        if (v.fail) { last = v.fail; continue; }\n"
+    "        return { text: v.text, pages: p.pages };\n"
+    "      }\n"
+    f"      return {{ fail: 'page ' + i + ' did not verify after {PAGE_ATTEMPTS} attempts: ' + last }};\n"
+    "    };\n"
+    "    const p0 = await fetchPage(0, null);\n"
+    "    if (p0.fail) return { fail: p0.fail };\n"
     "    const idx = [];\n"
     "    for (let i = 1; i < p0.pages; i++) idx.push(i);\n"
-    "    const more = idx.length ? await parallel(idx.map((i) => () => _pageLeg(h, i))) : [];\n"
-    "    let text = p0.chunk;\n"
+    "    const more = idx.length ? await parallel(idx.map((i) => () => fetchPage(i, p0.pages))) : [];\n"
+    "    let text = p0.text;\n"
     "    for (let k = 0; k < idx.length; k++) {\n"
-    "      const p = more[k];\n"
-    "      if (p && p.error) return { fail: String(p.error) };\n"
-    "      if (!echoes(p, idx[k]) || p.pages !== p0.pages) "
-    "return { fail: 'page ' + idx[k] + ' is missing or does not echo the handle' };\n"
-    "      text += p.chunk;\n"
+    "      if (more[k].fail) return { fail: more[k].fail };\n"
+    "      text += more[k].text;\n"
     "    }\n"
     "    const why = _verifyReplyText(text, h);\n"
     "    if (why) return { fail: why };\n"
@@ -633,7 +645,7 @@ def _stage_reply_js(*, head: str, anchor: str, run_id: str) -> str:
         f"{head}\n\n{anchor}\n\n",
         f"Run `{_INVOKE} {OP_REPLY_PAGE} '",
         "js:JSON.stringify({ handle: _h, page: _i })",
-        "'` once and return its JSON reply verbatim, every field and the chunk unchanged. "
+        "'` once and return its JSON reply verbatim, every field and the chunk unchanged; the chunk is base64, copy it character for character. "
         "If it replies {\"error\": ...}, return that message as error. Commit nothing.",
     )
     leg = _agent(

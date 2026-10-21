@@ -534,6 +534,34 @@ def apply_git_perf_config(claude_klabauter_root: Path) -> None:
         print(f"[ADVISORY] git performance config not applied: {exc}", file=sys.stderr)
 
 
+def apply_merge_driver_config(claude_klabauter_root: Path) -> None:
+    """WARN-only, non-blocking: sets the DoE rule-class-register merge driver in
+    each registered repo that is a DoE clone (the registry walk `git_perf_config`
+    uses for its fleet sweep). Non-DoE repos are skipped silently; a differing
+    value is reported and left alone.
+    """
+    try:
+        if str(claude_klabauter_root) not in sys.path:
+            sys.path.insert(0, str(claude_klabauter_root))
+        from coordinator_core.install.git_perf_config import iter_fleet_worktrees
+        from coordinator_core.install.merge_driver_config import apply as apply_driver, is_doe_clone
+
+        walk = iter_fleet_worktrees(claude_klabauter_root / "coordinator" / "bin")
+        if not walk.ok:
+            print(f"     merge-driver: no registered repos to sweep ({walk.reason})")
+            return
+        for item in walk.items:
+            if item[0] != "worktree":
+                continue
+            root = Path(item[2])
+            if not is_doe_clone(root):
+                continue
+            for line in apply_driver(root):
+                print(f"     merge-driver: {item[1]}: {line}")
+    except Exception as exc:  # noqa: BLE001 — advisory step, never fails the install
+        print(f"[ADVISORY] merge driver config not applied: {exc}", file=sys.stderr)
+
+
 def check_git_version() -> None:
     """WARN-only, non-blocking: coordinator_core's commit ceremony (git_native.py)
     and the prepare-commit-msg hook both call `git interpret-trailers
@@ -4732,6 +4760,7 @@ def main(argv: list[str]) -> int:
         print(f"PASS [hard] python — {py_version} ({py})")
         check_git_version()
         apply_git_perf_config(claude_klabauter_root_resolved)
+        apply_merge_driver_config(claude_klabauter_root_resolved)
 
     if args.register_only:
         # `--register-only` is "registration + verification only", and PROVISIONING is

@@ -11,14 +11,14 @@ from coordinator_core.ops.fleet.tests.test_memo_send import (
     _make_receiver_git_repo,
     _make_sender_git_repo,
     _write_draft,
-    _write_ledger_rows,
+    _write_sent_records,
 )
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
 def _seed_prior_reply_row(sender_repo: Path, *, in_reply_to: str, sent_by: str):
-    _write_ledger_rows(sender_repo, [{
+    _write_sent_records(sender_repo, [{
         "sent_at": "2026-09-11T10:00:00Z",
         "to": "example-retrieval-repo-em",
         "topic": "the-original-topic",

@@ -310,6 +310,83 @@ def test_commit_false_leaves_writes_uncommitted(tmp_path):
     assert _status(root).strip() == "M d0/f0.txt"
 
 
+posix_only = pytest.mark.skipif(os.name == "nt", reason="no disk exec bit on Windows")
+
+
+def _seed_exec(tmp_path, disk_mode, head_mode="100755"):
+    root = _dest(tmp_path, 2)
+    tool = root / "bin" / "tool"
+    tool.write_bytes(b"#!/bin/sh\n")
+    _git(root, "update-index", "--add", "--cacheinfo", head_mode, _git(root, "hash-object", "-w", "bin/tool").strip(), "bin/tool")
+    _git(root, "commit", "-q", "-m", "tool")
+    tool.chmod(disk_mode)
+    return root, tool
+
+
+@posix_only
+def test_unchanged_path_with_drifted_disk_bit_is_promoted_without_a_commit(tmp_path):
+    root, tool = _seed_exec(tmp_path, 0o644)
+    head = _git(root, "rev-parse", "HEAD")
+    out = land_diff(root, [DestWrite("bin/tool", b"#!/bin/sh\n", 0o100755)], [], "m", commit=True)
+    assert out.commit_sha is None and out.written == () and out.remoded == ("bin/tool",)
+    assert tool.stat().st_mode & 0o111 and _git(root, "rev-parse", "HEAD") == head
+    assert _status(root) == ""
+
+
+@posix_only
+def test_unchanged_path_with_exec_disk_bit_is_demoted(tmp_path):
+    root, tool = _seed_exec(tmp_path, 0o755, head_mode="100644")
+    out = land_diff(root, [DestWrite("bin/tool", b"#!/bin/sh\n", 0o100644)], [], "m", commit=True)
+    assert out.remoded == ("bin/tool",) and not tool.stat().st_mode & 0o111
+    assert _status(root) == ""
+
+
+@posix_only
+def test_remoded_rides_a_round_that_also_writes(tmp_path):
+    root, tool = _seed_exec(tmp_path, 0o644)
+    writes = [DestWrite("bin/tool", b"#!/bin/sh\n", 0o100755), _w(0, "new\n")]
+    out = land_diff(root, writes, [], "m", commit=True)
+    assert out.written == ("d0/f0.txt",) and out.remoded == ("bin/tool",)
+    assert tool.stat().st_mode & 0o111 and _status(root) == ""
+
+
+@posix_only
+def test_unchanged_path_with_hand_edited_bytes_is_not_chmodded(tmp_path):
+    root, tool = _seed_exec(tmp_path, 0o644)
+    tool.write_bytes(b"#!/bin/sh\necho hand\n")
+    out = land_diff(root, [DestWrite("bin/tool", b"#!/bin/sh\n", 0o100755)], [], "m", commit=True)
+    assert out.remoded == () and not tool.stat().st_mode & 0o111
+
+
+@posix_only
+def test_a_written_path_lands_at_its_declared_mode(tmp_path):
+    root = _dest(tmp_path, 2)
+    out = land_diff(root, [DestWrite("bin/new", b"#!/bin/sh\n", 0o100755)], [], "m", commit=True)
+    assert out.written == ("bin/new",) and out.remoded == ()
+    assert (root / "bin" / "new").stat().st_mode & 0o111 and _status(root) == ""
+
+
+@posix_only
+def test_converge_worktree_modes_skips_missing_links_and_reports_only_changes(tmp_path):
+    (tmp_path / "a").write_bytes(b"x")
+    (tmp_path / "a").chmod(0o644)
+    (tmp_path / "b").write_bytes(b"x")
+    (tmp_path / "b").chmod(0o755)
+    modes = {"a": 0o100755, "b": 0o100755, "gone": 0o100755, "l": 0o120000}
+    assert diff_commit.converge_worktree_modes(tmp_path, modes) == ("a",)
+
+
+def test_converge_worktree_modes_is_a_noop_on_nt(tmp_path, monkeypatch):
+    import types
+
+    (tmp_path / "a").write_bytes(b"x")
+    before = (tmp_path / "a").stat().st_mode
+    monkeypatch.setattr(diff_commit, "os", types.SimpleNamespace(**{**vars(os), "name": "nt"}))
+    assert diff_commit.converge_worktree_modes(tmp_path, {"a": 0o100755}) == ()
+    monkeypatch.undo()
+    assert (tmp_path / "a").stat().st_mode == before
+
+
 def test_crlf_checkout_of_an_lf_blob_is_clean(tmp_path):
     root = _dest(tmp_path, 5)
     (root / "d1" / "f1.txt").write_bytes(b"v0 1\r\n")

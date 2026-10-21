@@ -3,7 +3,7 @@
 Cross-repo report: `cross-repo/inbox/2026-08-29-coordinator-content-repo-em-session-identity-
 resolves-three-ways-one-lands-on-your-session.md` and its addendum. A DoE session
 dispatching through `coordinator-invoke.exe` had thirteen `handoff.correct_body`
-writes and one `memo.send` sent-ledger receipt stamped with a LIVE claude-klabauter
+writes and one `memo.send` sent-ledger receipt (now a per-send record) stamped with a LIVE claude-klabauter
 session id -- and `handoff.correct_body` passed its possession gate with
 `basis=author` on that stranger. Misattribution in a marker is a paper-trail
 defect; a possession gate that passes because the resolver handed it a stranger's

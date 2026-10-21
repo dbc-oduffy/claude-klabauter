@@ -103,7 +103,31 @@ def test_the_report_names_the_pathspec_that_completes_the_receipt(repo):
 
     note = _reports(result)[0]["note"]
     assert ".coordinator-local/memo-outbox/sent/lost.md" in note
-    assert ".coordinator-local/memo-outbox/sent-ledger.jsonl" in note
+    assert "sent-ledger" not in note
+    assert "sent-records" not in note
+
+
+def test_the_report_names_the_matching_sent_record(repo):
+    import datetime
+
+    from coordinator_core.ops.fleet import memo_sent_records
+
+    stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    _tracked_archive(repo)
+    _archive(repo, "lost.md")
+    other = memo_sent_records.write_record(
+        repo, {"sent_at": stamp, "topic": "other", "sent_by": "abcdef123"}
+    )
+    mine = memo_sent_records.write_record(
+        repo, {"sent_at": stamp, "topic": "lost", "sent_by": "abcdef123"}
+    )
+
+    result = _memo_reconcile_outbox({"dry_run": True}, repo_root=repo)
+
+    note = _reports(result)[0]["note"]
+    assert mine.relative_to(repo).as_posix() in note
+    assert other.relative_to(repo).as_posix() not in note
 
 
 def test_act_mode_reports_it_and_moves_nothing(repo):

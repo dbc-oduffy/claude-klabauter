@@ -334,8 +334,8 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "memo.reconcile_outbox":                  "common_dir",
     # memo.check_deliveries — "common_dir", the scope its own handler docstring
     # already declares (`ops/fleet/memo_send.py :: _memo_check_deliveries`). It is a
-    # sender-side COMPUTE_ONLY sweep over the CALLING repo's own sent-ledger, whose
-    # path is derived by main_worktree_root(common_dir) exactly as memo.send does, so
+    # sender-side COMPUTE_ONLY sweep over the CALLING repo's own sent records, whose
+    # directory is derived by main_worktree_root(common_dir) exactly as memo.send does, so
     # it keys the same way. "none" would be wrong on the one axis that matters: the
     # handler fails loud on a missing repo_root rather than degrading, so an omitted
     # entry does not read as a harmless default — it makes the op unreachable.

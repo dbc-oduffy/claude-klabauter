@@ -15,7 +15,7 @@ CLAUDE.md § brightline "kill means kill forever").
 Covers:
   - `send <topic>` delivers a staged draft: receiver-side file lands committed in
     the receiver repo, the sender-side draft moves to .coordinator-local/memo-outbox/sent/,
-    the sent-ledger gains a row, and stdout names the receiver-side path.
+    one sent record is written (no shared ledger), and stdout names the receiver-side path.
   - `send <topic>` with no staged draft hard-errors (no direct-write fallback —
     DR-210) and does not touch either repo.
   - `send` topic-slug validation happens before any engine call (exit 2, no
@@ -34,6 +34,7 @@ Run with: python3 -m pytest coordinator/bin/test_cross_repo_memo_roundtrip.py
 
 from __future__ import annotations
 
+import glob
 import json
 import os
 import subprocess
@@ -296,13 +297,16 @@ def test_send_delivers_staged_draft() -> None:
         if not os.path.isfile(sent_path):
             raise AssertionError(f"{name}: sent/ copy missing: {sent_path}")
 
-        ledger_path = os.path.join(sender_repo, ".coordinator-local", "memo-outbox", "sent-ledger.jsonl")
-        if not os.path.isfile(ledger_path):
-            raise AssertionError(f"{name}: sent-ledger.jsonl missing: {ledger_path}")
-        with open(ledger_path, encoding="utf-8") as f:
-            rows = [json.loads(line) for line in f if line.strip()]
-        if not any(r.get("topic") == "roundtrip-topic" for r in rows):
-            raise AssertionError(f"{name}: sent-ledger.jsonl has no row for roundtrip-topic: {rows}")
+        outbox_dir = os.path.join(sender_repo, ".coordinator-local", "memo-outbox")
+        if os.path.exists(os.path.join(outbox_dir, "sent-ledger.jsonl")):
+            raise AssertionError(f"{name}: a shared sent-ledger.jsonl must not be written")
+        records = glob.glob(os.path.join(outbox_dir, "sent-records", "*", "*-roundtrip-topic-*.json"))
+        if len(records) != 1:
+            raise AssertionError(f"{name}: expected one sent record for roundtrip-topic, found: {records}")
+        with open(records[0], encoding="utf-8") as f:
+            row = json.load(f)
+        if row.get("topic") != "roundtrip-topic":
+            raise AssertionError(f"{name}: sent record has the wrong topic: {row}")
 
         sender_log = subprocess.run(
             ["git", "-C", sender_repo, "log", "--oneline", "-1"],

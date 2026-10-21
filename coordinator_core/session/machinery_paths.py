@@ -261,6 +261,10 @@ def memo_outbox_sent_dir(repo_root: str) -> str:
     return os.path.join(memo_outbox_dir(repo_root), "sent")
 
 
+def memo_outbox_sent_records_dir(repo_root: str) -> str:
+    return os.path.join(memo_outbox_dir(repo_root), "sent-records")
+
+
 def memo_outbox_sent_ledger_path(repo_root: str) -> str:
     return os.path.join(memo_outbox_dir(repo_root), "sent-ledger.jsonl")
 

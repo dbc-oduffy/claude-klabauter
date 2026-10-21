@@ -7,6 +7,7 @@ The helpers below are the shared fake the other composed-script tests bind their
 
 from __future__ import annotations
 
+import base64
 import copy
 import hashlib
 import json
@@ -34,6 +35,11 @@ const fakePage = (cfg, prompt) => {
   const want = JSON.parse(m[1]);
   const pages = (cfg.pages || {})[want.handle.sha256];
   if (!pages || pages[want.page] === undefined) return { error: 'no such page' };
+  globalThis.__pageCalls = globalThis.__pageCalls || {};
+  const key = want.handle.sha256 + ':' + want.page;
+  const n = globalThis.__pageCalls[key] = (globalThis.__pageCalls[key] || 0) + 1;
+  const tries = ((cfg.attempts || {})[want.handle.sha256] || {})[want.page];
+  if (tries && tries[n - 1] !== undefined) return tries[n - 1];
   return pages[want.page];
 };
 """
@@ -136,7 +142,7 @@ def _script(monkeypatch) -> str:
     )
 
 
-def _run(script: str, reply: dict | None, *, pages=None, relay=None) -> dict:
+def _run(script: str, reply: dict | None, *, pages=None, relay=None, attempts=None) -> dict:
     node = shutil.which("node")
     if node is None:
         pytest.skip("node not on PATH")
@@ -147,6 +153,7 @@ def _run(script: str, reply: dict | None, *, pages=None, relay=None) -> dict:
     cfg = {
         "token": _TOKEN, "verify": {**{"items": _MET["items"]}}, "commit": _LANDED,
         "replies": {"gate": gate, "gate-stage": gate}, "pages": pages if pages is not None else pages_cfg(),
+        "attempts": attempts or {},
     }
     proc = subprocess.run(
         [node, "-e", _NODE_PROGRAM], capture_output=True, text=True, encoding="utf-8", timeout=60,
@@ -253,3 +260,74 @@ def test_the_page_leg_is_the_mechanical_agent_and_makes_one_engine_call(monkeypa
     assert "agentType: 'general-purpose'" in opts and "model: 'haiku'" in opts
     assert script.count(reply_sidecar.OP_REPLY_PAGE) == 1
     assert "_MANIFEST_READ_SCHEMA" not in script and "_adoptManifest" not in script
+
+
+def _damaged(reply: dict, page: int, *, reencode: bool) -> dict:
+    """Page `page` as a relay agent mangled it: every bare quote re-escaped, in the chunk or in the text it encodes."""
+    sha = reply["manifest_handle"]["sha256"]
+    good = copy.deepcopy(_PAGES[sha][page])
+    raw = reply_sidecar.page(_TEXTS[sha], page)[0]
+    bad = raw.replace('"', '\\"')
+    if reencode:
+        good["chunk"] = base64.b64encode(bad.encode("ascii")).decode("ascii")
+    else:
+        good["chunk"] = bad
+    return good
+
+
+_TEXTS: dict[str, str] = {}
+
+
+def _stage_big(rows: int = 40) -> tuple[dict, dict, int]:
+    manifest = big_manifest(rows)
+    reply = stage_reply(manifest)
+    sha = reply["manifest_handle"]["sha256"]
+    _TEXTS[sha] = sidecar_text(manifest)
+    return manifest, reply, len(_PAGES[sha])
+
+
+@pytest.mark.parametrize("reencode", [False, True])
+def test_a_re_escaped_relayed_page_is_retried_to_the_handle_matching_manifest(monkeypatch, reencode):
+    manifest, reply, pages = _stage_big()
+    sha = reply["manifest_handle"]["sha256"]
+    attempts = {sha: {"1": [_damaged(reply, 1, reencode=reencode)]}}
+    out = _run(_script(monkeypatch), reply, attempts=attempts)
+    res = out["result"]
+    assert res["halted_by"] is None, res["halted_by"]
+    assert res["rows"] == [r["id"] for r in manifest["rows"]]
+    assert _labels(out).count(PAGE_LABEL) == pages + 1
+
+
+def test_a_clean_multi_page_reply_costs_exactly_its_pages(monkeypatch):
+    _, reply, pages = _stage_big()
+    out = _run(_script(monkeypatch), reply)
+    assert out["result"]["halted_by"] is None
+    assert _labels(out).count(PAGE_LABEL) == pages
+
+
+def test_a_null_page_leg_is_retried(monkeypatch):
+    _, reply, pages = _stage_big()
+    sha = reply["manifest_handle"]["sha256"]
+    out = _run(_script(monkeypatch), reply, attempts={sha: {"1": [None]}})
+    assert out["result"]["halted_by"] is None
+    assert _labels(out).count(PAGE_LABEL) == pages + 1
+
+
+def test_a_page_altered_on_every_attempt_halts_naming_the_page(monkeypatch):
+    _, reply, pages = _stage_big()
+    sha = reply["manifest_handle"]["sha256"]
+    bad = _flip(pages_cfg(), reply, 1)[sha][1]
+    attempts = {sha: {"1": [bad] * ask_compose.PAGE_ATTEMPTS}}
+    out = _run(_script(monkeypatch), reply, attempts=attempts)
+    assert _halt_reason(out).startswith("stage reply sidecar does not match its handle: page 1 ")
+    assert _labels(out).count(PAGE_LABEL) == pages - 1 + ask_compose.PAGE_ATTEMPTS
+    labels = _labels(out)
+    assert "verify" not in labels and not [lab for lab in labels if lab and lab.startswith(("work:", "C"))], labels
+
+
+def test_a_page_the_op_refuses_is_not_retried(monkeypatch):
+    _, reply, pages = _stage_big()
+    sha = reply["manifest_handle"]["sha256"]
+    out = _run(_script(monkeypatch), reply, attempts={sha: {"1": [{"error": "out of range"}]}})
+    assert _halt_reason(out).endswith("out of range")
+    assert _labels(out).count(PAGE_LABEL) == pages

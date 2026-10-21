@@ -165,15 +165,13 @@ def read_staged_to(sender_worktree: Path, topic: str) -> Optional[str]:
 
 
 def memo_send_performed_paths(topic: str) -> tuple[str, ...]:
-    """Repo-relative forward-slash sender-side paths `memo.send` writes for
-    `topic`: the `sent/<topic>.md` copy and the sent-ledger."""
+    """Repo-relative forward-slash sender-side paths derivable from `topic`
+    alone: the `sent/<topic>.md` copy. The sent record's name carries the
+    send's timestamp, so it is not derivable here; the memo-send op reports
+    it on its own `sent_record` envelope field."""
     anchor = "anchor"
     sent_copy = os.path.join(_machinery_paths.memo_outbox_sent_dir(anchor), f"{topic}.md")
-    ledger = _machinery_paths.memo_outbox_sent_ledger_path(anchor)
-    return tuple(
-        os.path.relpath(path, anchor).replace(os.sep, "/")
-        for path in (sent_copy, ledger)
-    )
+    return (os.path.relpath(sent_copy, anchor).replace(os.sep, "/"),)
 
 
 def delivered_filename_pattern(from_id: str, topic: str) -> str:

@@ -148,3 +148,4 @@ def test_an_overlap_on_the_runs_own_path_still_refuses_with_the_reland_remedy(re
     out = _run_a(repo, own_paths=("src/a.py", "README.md"), run_base_sha=base, doc_paths=[])
     assert out.get("refused") == "since-base-overlap", out
     assert "re-land: coordinator-invoke dispatch.ask_gate" in out["error"]
+    assert B_DOC not in out["error"]

@@ -428,3 +428,52 @@ def test_warm_round_cost_does_not_scale_with_the_destination_or_the_delta_size(t
         assert spawns.scandirs < 400, spawns.scandirs
     assert _trailer(w.dest_head_message(), "Percolate-Source-Head") == w.src_head
     assert len(_git(w.dest, "ls-tree", "-r", "--name-only", "HEAD").split()) >= 3000
+
+
+def _src_set_mode(world, rel: str, exec_bit: bool) -> str:
+    _git(world.src_repo, "update-index", "--add", f"--chmod={'+x' if exec_bit else '-x'}", "--", rel)
+    _git(world.src_repo, "commit", "-q", "-m", "src: mode")
+    world.src_head = _git(world.src_repo, "rev-parse", "HEAD").strip()
+    return world.src_head
+
+
+def _dest_mode(world, rel: str) -> str:
+    return _git(world.dest, "ls-tree", "HEAD", "--", rel).split()[0]
+
+
+def test_a_source_demotion_with_identical_bytes_lands_as_a_mode_only_commit(world):
+    _write(world.plugin / "demoted.py", "demoted = 1\n")
+    _git(world.src_repo, "add", "-A")
+    _git(world.src_repo, "update-index", "--chmod=+x", "--", "plugin/demoted.py")
+    _git(world.src_repo, "commit", "-q", "-m", "src: demoted.py exec")
+    world.run()
+    assert _dest_mode(world, "out/demoted.py") == "100755"
+    _src_set_mode(world, "plugin/demoted.py", False)
+    before = world.dest_commits()
+
+    rc, out = world.run()
+
+    assert rc == 0, out
+    assert _dest_mode(world, "out/demoted.py") == "100644"
+    assert world.dest_commits() == before + 1
+    assert world.dest_file("out/demoted.py") == "demoted = 1\n"
+    assert _git(world.dest, "status", "--porcelain").strip() == ""
+
+
+def test_a_mode_only_survivor_leaves_the_expected_manifest_bytes_unchanged(tmp_path):
+    from percolate.diff_commit import DestWrite
+
+    publish._bootstrap_engine()
+    dest = tmp_path / "dest-repo"
+    _init_repo(dest, self_origin=False)
+    _write(dest / "a.py", "a = 1\n")
+    _git(dest, "add", "-A")
+    _git(dest, "update-index", "--chmod=+x", "--", "a.py")
+    _git(dest, "commit", "-q", "-m", "seed")
+    head_paths = publish._head_tree_blob_shas(dest)
+    plain = {"a.py": DestWrite("a.py", b"a = 1\n", 0o100644)}
+
+    with_mode_only = publish._expected_manifest_bytes(dest, plain, [], "s" * 40, head_paths=head_paths)
+    without = publish._expected_manifest_bytes(dest, {}, [], "s" * 40, head_paths=head_paths)
+
+    assert with_mode_only == without

@@ -17,7 +17,6 @@ from coordinator_core.machine_resolver import registry_get
 from coordinator_core.ops.fleet._memo_resolver import receiver_em_to_repo_key
 
 OP_KEY = "repo.provision_local"
-OP_MODULE = "coordinator_core.ops.sibling_repo_provision"
 ROUTE_REMEDY = (
     "Alternative: author the file under this repo, declare it in a sibling-repo manifest, "
     "run repo.provision_local."
@@ -26,6 +25,11 @@ MARKER_NAME = "coordinator-provision.json"
 MANIFEST_SCHEMA = "sibling-repo-manifest"
 
 _REMOTE_SECTION = re.compile(r'^\s*\[remote\s+"', re.MULTILINE | re.IGNORECASE)
+
+
+_WINDOWS_RESERVED = frozenset(
+    {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)), *(f"LPT{i}" for i in range(1, 10))}
+)
 
 
 class ManifestError(ValueError):
@@ -54,7 +58,12 @@ def _one_segment(value: object, field: str) -> str:
         raise ManifestError(f"{field}: must be a non-empty string")
     if "/" in value or "\\" in value or value in (".", "..") or ":" in value:
         raise ManifestError(f"{field}: must be one path segment, got {value!r}")
-    if value.lower() == ".git" or value != value.strip() or value.endswith("."):
+    if (
+        value.lower() == ".git"
+        or value != value.strip()
+        or value.endswith(".")
+        or value.split(".")[0].upper() in _WINDOWS_RESERVED
+    ):
         raise ManifestError(f"{field}: not a usable directory name, got {value!r}")
     return value
 

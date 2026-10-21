@@ -22,7 +22,7 @@ RECEIPT. `memo.send` writes its `sent/<topic>.md` copy only after reading the
 receiver's own object store back and confirming the delivery commit is really
 there, and only then attempts the sender-side commit. So a `sent/` copy that
 HEAD does not know is a memo the receiver demonstrably has and this repo has
-no committed record of: the ledger append, the index lock, or the commit
+no committed record of: the sent-record write, the index lock, or the commit
 itself failed after the point of no return, and `memo.send` said so on an
 envelope that is gone by the next session. Symmetrically, a `status: draft`
 entry whose `sent/<name>` already exists is the stale duplicate the send's
@@ -104,6 +104,7 @@ from coordinator_core.ops.fleet._common import (
     build_setup_error_result,
     main_worktree_root,
 )
+from coordinator_core.ops.fleet import memo_sent_records
 from coordinator_core.ops.fleet.memo_draft import merged_outbox_drafts
 from coordinator_core.session import machinery_paths as _machinery_paths
 
@@ -208,15 +209,29 @@ def _uncommitted_receipts(worktree_root: Path, sent_dir: Path) -> list:
     if not any(name in in_head for name in names):
         return []
 
-    ledger_relpath = _relpath(
-        Path(_machinery_paths.memo_outbox_sent_ledger_path(str(worktree_root))),
-        worktree_root,
-    )
+    outbox_dir = Path(_machinery_paths.memo_outbox_dir(str(worktree_root)))
+    record_relpaths: dict = {}
+    for row in memo_sent_records.iter_view(worktree_root):
+        topic = row.get("topic")
+        if not isinstance(topic, str):
+            continue
+        try:
+            rel = memo_sent_records.record_relpath(row)
+        except ValueError:
+            continue
+        record_file = outbox_dir / rel
+        if record_file.is_file():
+            record_relpaths.setdefault(topic, []).append(
+                _relpath(record_file, worktree_root)
+            )
     reports: list = []
     for name in names:
         if name in in_head:
             continue
         path = sent_dir / name
+        pathspec = " ".join(
+            [_relpath(path, worktree_root), *record_relpaths.get(path.stem, [])]
+        )
         reports.append(
             _candidate(
                 path,
@@ -226,7 +241,7 @@ def _uncommitted_receipts(worktree_root: Path, sent_dir: Path) -> list:
                 f"memo.send writes this copy only after confirming the "
                 f"delivery commit in the receiver's own object store, and "
                 f"nothing in HEAD records it. Complete the receipt with "
-                f"`git add -- {_relpath(path, worktree_root)} {ledger_relpath}` "
+                f"`git add -- {pathspec}` "
                 f"and a scoped commit, or delete this copy if the delivery "
                 f"was itself rolled back",
             )

@@ -8,6 +8,7 @@ Handle paths are repo-relative POSIX strings, contained under ``SIDECAR_ROOTS``.
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import os
@@ -24,8 +25,10 @@ SIDECAR_CAUSE = "the sidecar changed after the engine wrote it"
 _FLAG = "reply-sidecar"
 
 OP_REPLY_PAGE = "dispatch.reply_page"
-# Bounds each page's JSON-escaped form, so a page relayed inside a JSON reply stays under the 12000-char capture cut.
+# Bounds each page's JSON-quoted form, so a page relayed inside a JSON reply stays under the 12000-char capture cut.
 PAGE_CHARS = 6000
+# Sidecar characters per page: base64 of a full page is 4 * PAGE_RAW_CHARS / 3 chars, quotes included within PAGE_CHARS.
+PAGE_RAW_CHARS = ((PAGE_CHARS - 2) // 4) * 3
 
 HANDLE_SCHEMA = {
     "type": "object",
@@ -52,32 +55,64 @@ STAGE_REPLY_SCHEMA = {
 
 PAGE_REPLY_SCHEMA = {
     "type": "object",
-    "required": ["sha256", "bytes", "page", "pages", "chunk"],
+    "required": ["sha256", "bytes", "page", "pages", "encoding", "chunk", "chunk_sha256"],
     "additionalProperties": False,
     "properties": {
         "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
         "bytes": {"type": "integer", "minimum": 0},
         "page": {"type": "integer", "minimum": 0},
         "pages": {"type": "integer", "minimum": 1},
-        "chunk": {"type": "string"},
+        "encoding": {"const": "base64"},
+        "chunk": {"type": "string", "pattern": "^[A-Za-z0-9+/]*={0,2}$"},
+        "chunk_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     },
 }
 
 VERIFY_REPLY_JS = (
     _contract.RELAY_SHA256_JS
     + """
-function _canonJson(v) {
-  if (v === null || typeof v !== 'object') return JSON.stringify(v);
-  if (Array.isArray(v)) return '[' + v.map(_canonJson).join(',') + ']';
-  return '{' + Object.keys(v).sort().map((k) => JSON.stringify(k) + ':' + _canonJson(v[k])).join(',') + '}';
+function _b64DecodeAscii(s) {
+  if (typeof s !== 'string' || s.length % 4 !== 0) return null;
+  const A = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+  let out = '';
+  for (let i = 0; i < s.length; i += 4) {
+    let v = 0, pad = 0;
+    for (let j = 0; j < 4; j++) {
+      const c = s.charAt(i + j);
+      if (c === '=') {
+        if (i + 4 !== s.length || j < 2) return null;
+        pad++;
+        v = v * 64;
+      } else {
+        if (pad > 0) return null;
+        const k = A.indexOf(c);
+        if (k < 0) return null;
+        v = v * 64 + k;
+      }
+    }
+    const b = [Math.floor(v / 65536) % 256, Math.floor(v / 256) % 256, v % 256];
+    for (let n = 0; n < 3 - pad; n++) {
+      if (b[n] > 127) return null;
+      out += String.fromCharCode(b[n]);
+    }
+  }
+  return out;
+}
+function _verifyPageChunk(p) {
+  if (p === null || typeof p !== 'object') return { fail: 'page reply is not an object' };
+  const text = _b64DecodeAscii(p.chunk);
+  if (text === null) return { fail: 'page chunk is not base64 of ASCII text' };
+  if (_sha256Ascii(text) !== p.chunk_sha256) return { fail: 'page chunk sha256 does not match chunk_sha256' };
+  return { text: text };
 }
 function _verifyReplyText(text, handle) {
   if (typeof text !== 'string') return 'reply text is not a string';
-  let parsed;
-  try { parsed = JSON.parse(text); } catch (_e) { return 'reply text is not valid JSON'; }
-  const canon = _canonJson(parsed).replace(/[\\u0080-\\uffff]/g, (c) => '\\\\u' + ('0000' + c.charCodeAt(0).toString(16)).slice(-4));
-  if (canon.length !== handle.bytes) return 'reply canonical content is ' + canon.length + ' bytes, handle says ' + handle.bytes;
-  if (_sha256Ascii(canon) !== handle.sha256) return 'reply canonical content sha256 does not match the handle';
+  for (let i = 0; i < text.length; i++) {
+    if (text.charCodeAt(i) > 127) return 'reply text is not ASCII';
+  }
+  if (text.length !== handle.bytes) return 'reply text is ' + text.length + ' bytes, handle says ' + handle.bytes;
+  if (_sha256Ascii(text) !== handle.sha256) return 'reply text sha256 does not match the handle';
+  try { JSON.parse(text); } catch (_e) { return 'reply text is not valid JSON'; }
   return null;
 }
 """
@@ -133,8 +168,8 @@ def _handle(rel: str, raw: bytes) -> dict:
 def write_reply(root: Path, path: Path, payload: Mapping) -> dict:
     """Write ``canonical_json(payload)`` at ``path`` atomically; return its handle.
 
-    Trap: an agent relaying a page may re-indent the JSON, so the reader never compares bytes; it
-    re-derives the canonical form from the parsed text and checks that against the handle.
+    Trap: pages relay as base64, so the reader compares bytes; ``canonical_json`` is the one form
+    the handle covers and a re-indented copy is refused.
     """
     rel = _relative_to_root(root, path)
     target = _contain(root, rel)
@@ -185,24 +220,11 @@ def read_text(root: Path, handle: Mapping) -> str:
 
 
 def _pages(text: str) -> list[str]:
-    budget = PAGE_CHARS - 2
-    pages: list[str] = []
-    start = used = 0
-    costs: dict[str, int] = {}
-    for i, ch in enumerate(text):
-        cost = costs.get(ch)
-        if cost is None:
-            cost = costs[ch] = len(json.dumps(ch)) - 2
-        if used + cost > budget:
-            pages.append(text[start:i])
-            start, used = i, 0
-        used += cost
-    pages.append(text[start:])
-    return pages
+    return [text[i : i + PAGE_RAW_CHARS] for i in range(0, len(text), PAGE_RAW_CHARS)] or [""]
 
 
 def page(text: str, index: int) -> tuple[str, int]:
-    """``(chunk, pages)``; each chunk's ``json.dumps`` form is at most ``PAGE_CHARS``. ``IndexError`` past the end."""
+    """``(raw slice, pages)``; every slice but the last is ``PAGE_RAW_CHARS`` long. ``IndexError`` past the end."""
     pages = _pages(text)
     if not 0 <= index < len(pages):
         raise IndexError(f"page {index} is outside 0..{len(pages) - 1}")
@@ -210,9 +232,21 @@ def page(text: str, index: int) -> tuple[str, int]:
 
 
 def page_reply(handle: Mapping, text: str, index: int) -> dict:
-    """The success shape of ``dispatch.reply_page``; the reader joins the chunks and checks them against the handle."""
-    chunk, pages = page(text, index)
-    return {"sha256": handle["sha256"], "bytes": handle["bytes"], "page": index, "pages": pages, "chunk": chunk}
+    """The success shape of ``dispatch.reply_page``: the page as base64 plus the sha256 of its decoded text.
+
+    The reader decodes and checks each chunk, joins the decoded text, and checks it against the handle.
+    """
+    raw, pages = page(text, index)
+    data = raw.encode("ascii")
+    return {
+        "sha256": handle["sha256"],
+        "bytes": handle["bytes"],
+        "page": index,
+        "pages": pages,
+        "encoding": "base64",
+        "chunk": base64.b64encode(data).decode("ascii"),
+        "chunk_sha256": hashlib.sha256(data).hexdigest(),
+    }
 
 
 def read_reply(root: Path, handle: Mapping) -> dict:

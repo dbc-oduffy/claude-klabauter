@@ -1166,10 +1166,10 @@
     "verdict": "MUTATES_DECLARED"
   },
   {
-    "detail": "coordinator_core/ops/fleet/memo_send.py declares MUTATES = ['state/memo-outbox/*.md', 'cross-repo/inbox/*.md', 'state/cross-repo/inbox/*.md']; MUTATES_APPEND = ['.coordinator-local/memo-outbox/sent-ledger.jsonl'] (append-only ledger or surgical edit) (no staleness contract)",
+    "detail": "coordinator_core/ops/fleet/memo_send.py declares MUTATES = ['.coordinator-local/memo-outbox/sent-records/*/*.json', 'state/memo-outbox/*.md', 'cross-repo/inbox/*.md', 'state/cross-repo/inbox/*.md'] (corpus mutator, no staleness contract)",
     "generator": "coordinator_core/ops/fleet/memo_send.py",
     "mutates": [
-      ".coordinator-local/memo-outbox/sent-ledger.jsonl",
+      ".coordinator-local/memo-outbox/sent-records/*/*.json",
       "state/memo-outbox/*.md",
       "cross-repo/inbox/*.md",
       "state/cross-repo/inbox/*.md"

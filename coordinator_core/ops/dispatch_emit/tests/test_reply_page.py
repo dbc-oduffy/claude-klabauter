@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
 import subprocess
 import time
@@ -30,9 +32,12 @@ def sidecar(tmp_path):
 
 def _join(root, handle):
     first = reply_page._handler({"handle": handle}, repo_root=root)
-    chunks = [first["chunk"]]
-    for i in range(1, first["pages"]):
-        chunks.append(reply_page._handler({"handle": handle, "page": i}, repo_root=root)["chunk"])
+    replies = [first] + [reply_page._handler({"handle": handle, "page": i}, repo_root=root) for i in range(1, first["pages"])]
+    chunks = []
+    for r in replies:
+        raw = base64.b64decode(r["chunk"])
+        assert hashlib.sha256(raw).hexdigest() == r["chunk_sha256"]
+        chunks.append(raw.decode("ascii"))
     return "".join(chunks), first
 
 

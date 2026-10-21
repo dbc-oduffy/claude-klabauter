@@ -87,6 +87,26 @@ def test_message_caps_the_list_but_reports_the_true_count(tmp_path):
     assert "... and 5 more" in msg
 
 
+def test_a_routed_removal_is_checked_against_its_source_map_root_not_the_default(tmp_path):
+    import importlib.util
+    from types import SimpleNamespace
+
+    spec = importlib.util.spec_from_file_location("publish_live_refusal_under_test", _PUBLISH)
+    publish = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = publish
+    spec.loader.exec_module(publish)
+    default, routed = tmp_path / "default", tmp_path / "routed"
+    (routed / "bin").mkdir(parents=True)
+    default.mkdir()
+    (routed / "bin" / "live.py").write_text("x = 1\n", encoding="utf-8")
+    target = SimpleNamespace(name="row", source_dir=default, allowlist="", source_map=f"{routed}=bin")
+
+    assert publish._removal_source_root(target, "bin/live.py") == routed
+    assert publish._removal_source_root(target, "README.md") == default
+    with pytest.raises(RemovalSourceLiveError):
+        refuse_removals_with_live_source(publish._removal_source_root(target, "bin/live.py"), ["bin/live.py"], "row")
+
+
 def test_the_round_union_calls_the_refusal_per_staged_row():
     tree = ast.parse(_PUBLISH.read_text(encoding="utf-8"))
     union = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "_assemble_root_union")

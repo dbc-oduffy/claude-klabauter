@@ -56,7 +56,6 @@ from coordinator_core.ceremony_common.json_payload_flag import (
     resolve_json_payload_flag,
 )
 from coordinator_core.contract import apply_base
-from coordinator_core.git.run import run_git
 from coordinator_core.consolidate_assemble import brief
 from coordinator_core.telemetry.composition_record import (
     flush_composition_record,
@@ -237,71 +236,13 @@ def _dispatch_cherry_pick_only(args: list[str], repo_root: Path) -> dict[str, An
     return {"cli": "cherry-pick-only", "commits": _cherry_pick_unique(args[1], repo_root)}
 
 
-#: Append-only ledgers a merge conflict may be resolved on by union. Closed,
-#: hand-written; a path off this list is never auto-resolved.
-_UNION_LEDGERS = frozenset({".coordinator-local/memo-outbox/sent-ledger.jsonl"})
-
-
-def _stage_blobs(specs: list[str], repo_root: Path) -> "Optional[list[bytes]]":
-    """Every spec's blob in one `cat-file --batch` spawn; None if any is missing."""
-    res = run_git(
-        ["cat-file", "--batch"],
-        cwd=str(repo_root),
-        input="".join(f"{spec}\n" for spec in specs).encode("utf-8"),
-    )
-    data, blobs, pos = res.stdout_bytes, [], 0
-    if res.returncode != 0:
-        return None
-    for _ in specs:
-        end = data.find(b"\n", pos)
-        header = data[pos:end].split(b" ") if end >= 0 else []
-        if len(header) != 3 or header[1] != b"blob":
-            return None
-        size = int(header[2])
-        blobs.append(data[end + 1 : end + 1 + size])
-        pos = end + 1 + size + 1
-    return blobs
-
-
-def _union_resolve_ledgers(repo_root: Path) -> bool:
-    """Resolve the in-progress merge's conflicts by line union and commit.
-
-    True only when EVERY unmerged path is in `_UNION_LEDGERS` and both sides
-    exist as files (a delete/modify conflict is not a ledger append). Returns
-    False before touching anything otherwise, leaving the abort to the caller.
-    Union = ours lines in order, then theirs lines not already present.
-    """
-    proc = _run_git(["diff", "--name-only", "--diff-filter=U", "-z"], repo_root)
-    paths = [p for p in proc.stdout.split("\0") if p] if proc.returncode == 0 else []
-    if not paths or any(p not in _UNION_LEDGERS for p in paths):
-        return False
-    stages = [f":{stage}:{path}" for path in paths for stage in (2, 3)]
-    sides = _stage_blobs(stages, repo_root)
-    if sides is None:
-        return False
-    merged: dict[str, str] = {}
-    for path, (ours_b, theirs_b) in zip(paths, zip(sides[::2], sides[1::2])):
-        ours, theirs = (b.decode("utf-8").splitlines() for b in (ours_b, theirs_b))
-        seen: set[str] = set()
-        lines = [ln for ln in ours + theirs if not (ln in seen or seen.add(ln))]
-        merged[path] = "".join(ln + "\n" for ln in lines)
-    for path, text in merged.items():
-        (repo_root / path).write_text(text, encoding="utf-8", newline="\n")
-    if _run_git(["add", "--", *merged], repo_root).returncode != 0:
-        return False
-    return _run_git(["-c", "core.editor=true", "merge", "--continue"], repo_root).returncode == 0
-
-
 def _merge_ref(ref: str, repo_root: Path) -> None:
     # `--no-edit`: with no terminal the message editor fails AFTER the merge
     # result is staged, stranding MERGE_HEAD in a shared tree for the next
     # committer to consume. Any failure aborts, so no in-progress merge is left.
     merge_proc = _run_git(["merge", "--no-ff", "--no-edit", ref], repo_root)
     if merge_proc.returncode != 0:
-        if _union_resolve_ledgers(repo_root):
-            merge_proc = subprocess.CompletedProcess(merge_proc.args, 0, "", "")
-        else:
-            _run_git(["merge", "--abort"], repo_root)
+        _run_git(["merge", "--abort"], repo_root)
     _fail("merge", merge_proc)
 
 

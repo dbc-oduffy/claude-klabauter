@@ -27,15 +27,11 @@ three-write requirement:
      sent-copy's `status: sent` / `sent_at:` / `delivered_to:` stamp from
      the draft's OWN frontmatter (never re-authored).
   3. Sender commit: one `git.commit.commit_paths` call over the three
-     sender-side paths (new `sent/` file, deleted outbox original, appended
-     ledger row) — zero git spawns, and it commits WORKTREE bytes. That
-     second property is load-bearing, not incidental: the sent-ledger is a
-     fleet-shared bounded ring (`_SENT_LEDGER_MAX_ROWS`) whose worktree copy
-     `locked_rmw` keeps as the union of every session's appends, while a
-     staged blob for it goes
-     stale the moment a peer appends. `commit_scoped`, which this replaced,
-     committed the STAGED blob and so replayed stale ledger snapshots — see
-     the call site's own note for the 2026-08-30 measurement.
+     sender-side paths (new `sent/` file, deleted outbox original, new
+     sent record) — zero git spawns. The sent record is a write-once JSON
+     file (`memo_sent_records.write_record`): no shared file is appended, no
+     lock is taken, and readers derive the bounded ledger view from the
+     records (`memo_sent_records.iter_view`).
 
 Ordering is load-bearing: the receiver-side commit lands BEFORE the anchor
 write (C4), which lands BEFORE the sender's receipt is written. A receipt
@@ -129,7 +125,6 @@ Negative-spec:
 from __future__ import annotations
 
 import datetime
-import json
 import logging
 import os
 import re
@@ -176,11 +171,11 @@ from coordinator_core.git.index_write import (
     splice_index,
 )
 from coordinator_core.ipc import register_op
-from coordinator_core.locked_write import LockTimeout, locked_rmw
 from coordinator_core.machine_profile import feature_refusal
 from coordinator_core.ops.ceremony import git_native
 from coordinator_core.ops.fleet.archive_actioned_memos import memo_archive_dest
 from coordinator_core.ops.fleet import _receiver_landing
+from coordinator_core.ops.fleet import memo_sent_records
 from coordinator_core.warm import push_cadence
 from coordinator_core.ops.fleet._common import (
     build_act_result,
@@ -296,49 +291,6 @@ def _delivery_commit_message(topic: str, from_id: str, sent_by: str) -> str:
 # being silently dropped (mirrors the pre-kill C9/A11 fix's discipline).
 _KNOWN_PARAM_KEYS = frozenset({"dry_run", "topic"})
 
-_SENT_LEDGER_FILENAME = "sent-ledger.jsonl"
-
-#: Rows the sent-ledger retains. It is a BOUNDED RING, not a record of
-#: truth: the newest row evicts the oldest, so the file's size and the cost
-#: of appending to it are constant instead of tracking every memo this fleet
-#: has ever sent. At 2,405 rows / 725KB (2026-08-30) each send read the file
-#: whole, rewrote it whole, then hashed and zlib-compressed it whole to add
-#: one line -- ~100ms of memo.send's ~125ms, growing without limit.
-#:
-#: WHAT SURVIVES EVICTION, so nothing here is load-bearing for a record.
-#: The durable record of a send is threefold and none of it lives in this
-#: file: the delivered memo in the receiver's own tree, the delivery commit
-#: in the receiver's history, and this repo's own never-evicted
-#: `.coordinator-local/memo-outbox/sent/<topic>.md` copy. The one production reader that
-#: treated a row as a permanent registration --
-#: `fact_contract_gate.engine_gap_marker.memo_exists` -- now falls through
-#: to that sent copy (`_sent_copy_has`), so an evicted row cannot turn a
-#: registered engine-gap ask into rot. A new reader that needs history
-#: older than this window must read one of those three, never widen this.
-#:
-#: 250 rows is ~2.5 days at this fleet's 2026-08 rate (~92 sends/day) and
-#: ~120KB at the current ~470B/row -- sized for the question this file is
-#: actually asked ("did my send land"), which is same-day. Raising it costs
-#: linearly on EVERY send, in a file read, rewritten, hashed and compressed
-#: whole each time; a reader needing a longer window should take one of the
-#: three durable records above instead of paying for it here.
-_SENT_LEDGER_MAX_ROWS = 250
-
-#: The OTHER half of the bound, and the half that bites in most repos.
-#: claude-klabauter and coordinator-content-repo are two halves of one delivery system and send
-#: constantly, so the row cap above evicts for them every few days. Almost
-#: every other repo sends a handful of memos a month: 250 rows there is not
-#: 2.5 days, it is a year or more, and a row cap alone would leave those
-#: ledgers unbounded in TIME while looking bounded. A rare sender's file
-#: stays small either way -- what an age bound buys is that nothing left in
-#: it is old enough to be mistaken for current.
-#:
-#: Applied only to rows carrying a parseable `sent_at`; a row without one is
-#: left to the row cap rather than dropped on a field it never had (rows
-#: predating the field, and any hand-written line). Both bounds run on every
-#: append, so neither can be the one that quietly stopped applying.
-_SENT_LEDGER_MAX_AGE_DAYS = 30
-
 # Generator-provenance: writes+commits into a registry-enumerated RECEIVER
 # repo's cross-repo/inbox/ tree (a different repo, not fixed), and moves
 # +ledgers into the CALLING repo's own outbox tree (new
@@ -353,8 +305,8 @@ _SENT_LEDGER_MAX_AGE_DAYS = 30
 # `cross-repo/inbox/`, a migrated one to `state/cross-repo/inbox/` — both
 # patterns are named here rather than the stale single legacy literal, since
 # either can be the actual write target depending on the receiver probed.
-MUTATES_APPEND = [f"{MEMO_OUTBOX_RELDIR}/sent-ledger.jsonl"]
 MUTATES = [
+    f"{MEMO_OUTBOX_RELDIR}/sent-records/*/*.json",
     f"{LEGACY_MEMO_OUTBOX_RELDIR}/*.md",
     "cross-repo/inbox/*.md",
     "state/cross-repo/inbox/*.md",
@@ -418,11 +370,6 @@ def _draft_path(sender_worktree: Path, topic: str) -> Path:
 def _sent_path(sender_worktree: Path, topic: str) -> Path:
     """The sender-side sent-copy WRITE target — always the new root."""
     return Path(_machinery_paths.memo_outbox_sent_dir(str(sender_worktree))) / f"{topic}.md"
-
-
-def _sent_ledger_path(sender_worktree: Path) -> Path:
-    """The sent-ledger WRITE target — always the new root."""
-    return Path(_machinery_paths.memo_outbox_sent_ledger_path(str(sender_worktree)))
 
 
 def _portable_delivered_to_form(
@@ -781,7 +728,7 @@ def _stamp_sent_copy(draft_text: str, *, sent_at: str, delivered_to: str) -> str
 
 
 # ---------------------------------------------------------------------------
-# Sender-side sent-ledger row
+# Sender-side sent record row
 # ---------------------------------------------------------------------------
 
 def _ledger_row(
@@ -1129,49 +1076,6 @@ class _SenderCommit(NamedTuple):
     stderr: str
 
 
-def _row_is_older_than_cutoff_dict(row: dict, cutoff: datetime.datetime) -> bool:
-    """True iff this ALREADY-PARSED ledger row carries a `sent_at` older than
-    `cutoff`. Shared with this module's own line-based wrapper below (the
-    row cap's read-modify-write only has raw lines in hand) — one comparator,
-    not two.
-
-    UNDATABLE ROWS ARE NEVER EVICTED BY AGE -- a row with no `sent_at`, or
-    one this cannot parse, returns False and lives until the row cap
-    reaches it (or, for the surfacer, is never surfaced on a guess).
-    Dropping a row for failing to prove its own age would delete the oldest
-    rows in the file (the ones predating the field) on the first append
-    after this shipped, which is the opposite of what an age bound is for.
-
-    `sent_at` is written by `_ledger_row` as `%Y-%m-%dT%H:%M:%SZ`. Parsed
-    with `fromisoformat` after swapping the `Z`, which Python's parser did
-    not accept before 3.11 and this repo's floor is 3.11; a value in any
-    other shape is undatable by the rule above, not an error.
-    """
-    sent_at = row.get("sent_at")
-    if not isinstance(sent_at, str) or not sent_at:
-        return False
-    try:
-        stamp = datetime.datetime.fromisoformat(sent_at.replace("Z", "+00:00"))
-    except ValueError:
-        return False
-    if stamp.tzinfo is None:
-        stamp = stamp.replace(tzinfo=datetime.timezone.utc)
-    return stamp < cutoff
-
-
-def _row_is_older_than_cutoff(line: str, cutoff: datetime.datetime) -> bool:
-    """True iff this RAW ledger line carries a `sent_at` older than
-    `cutoff` -- parses, then delegates to `_row_is_older_than_cutoff_dict`.
-    See that function for the undatable-rows discipline this shares."""
-    try:
-        row = json.loads(line)
-    except json.JSONDecodeError:
-        return False
-    if not isinstance(row, dict):
-        return False
-    return _row_is_older_than_cutoff_dict(row, cutoff)
-
-
 def _write_msg_file(text: str) -> Path:
     fd, name = tempfile.mkstemp(prefix="memo-send-msg-", suffix=".txt", dir=managed_tempdir())
     try:
@@ -1463,7 +1367,7 @@ def _validate_check_deliveries_params(params: dict):
         return build_setup_error_result(
             "check_deliveries", dry_run,
             "memo.check_deliveries: dry_run must be true — this op has no "
-            "act mode, it only reads the sent-ledger and each receiver's "
+            "act mode, it only reads the sent records and each receiver's "
             "own object store.",
         )
     unknown_keys = set(params.keys()) - _CHECK_DELIVERIES_KNOWN_PARAM_KEYS
@@ -1476,51 +1380,28 @@ def _validate_check_deliveries_params(params: dict):
     return dry_run
 
 
-def _iter_ledger_rows(ledger_path: Path):
-    """Yield each parseable dict row from the sent-ledger JSONL, in file order.
-
-    A line that is not JSON, or not a JSON object, is skipped rather than
-    raising — same discipline as `_row_is_older_than_cutoff`: a malformed or
-    hand-edited line must not sink the whole sweep.
-    """
-    try:
-        text = ledger_path.read_text(encoding="utf-8")
-    except OSError:
-        return
-    for line in text.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            row = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(row, dict):
-            yield row
-
-
 def _prior_reply_from_another_session(
-    ledger_path: Path, in_reply_to: str, sent_by: str,
+    sender_worktree: Path, in_reply_to: str, sent_by: str,
 ) -> Optional[dict]:
-    """The newest sent-ledger row that already answered `in_reply_to` from
+    """The newest sent record that already answered `in_reply_to` from
     a DIFFERENT session than `sent_by` — evidence this send would be a
     second reply to a memo this repo already answered once.
 
-    Walks `_iter_ledger_rows` (outbox drafts and `sent/` copies are never
-    read — the ledger is the one place a completed send is durably
-    recorded across sessions, and the only one this reads). A row counts
+    Walks `memo_sent_records.iter_view` (outbox drafts and `sent/` copies
+    are never read — the sent records are the one place a completed send is
+    durably recorded across sessions, and the only one this reads). A row counts
     as a match when its own `_normalize_in_reply_to` equals this send's,
     and as a DIFFERENT session whenever either `sent_by` is missing or the
     `_SENT_BY_UNRESOLVED` sentinel — an unresolved sender cannot be
     assumed to BE this session, so it must never read as a same-session
     repeat.
 
-    Negative-spec: never raises. A `ledger_path` that cannot be read
-    yields no rows via `_iter_ledger_rows`, so this returns `None`.
+    Negative-spec: never raises. An unreadable records dir yields no rows
+    via `iter_view`, so this returns `None`.
     """
     target = _normalize_in_reply_to(in_reply_to)
     newest = None
-    for row in _iter_ledger_rows(ledger_path):
+    for row in memo_sent_records.iter_view(sender_worktree):
         row_in_reply_to = row.get("in_reply_to")
         if not isinstance(row_in_reply_to, str) or not row_in_reply_to:
             continue
@@ -1602,7 +1483,7 @@ def _anchor_is_live(receiver_repo_path: Path, filename: str, sha: str) -> bool:
 
 
 def _check_ledger_row(row: dict) -> dict:
-    """Classify one sent-ledger row: verified / restorable / gone /
+    """Classify one sent record: verified / restorable / gone /
     not_checkable — "delivered" means present in the receiver's own tree OR
     anchored there, never merely "the delivery commit object still exists"
     (C7; that narrower rule is now only the pre-anchor fallback below).
@@ -1708,7 +1589,7 @@ def _check_ledger_row(row: dict) -> dict:
 def _memo_check_deliveries(params: dict, repo_root=None) -> dict:
     """JSON-RPC 'memo.check_deliveries' COMPUTE_ONLY op handler.
 
-    A sender-side, read-only sweep over this repo's own sent-ledger,
+    A sender-side, read-only sweep over this repo's own sent records,
     classifying each row verified / restorable / gone / not_checkable
     (`_check_ledger_row`, C7) — "delivered" means the memo is present in
     the receiver's own inbox/archive tree OR anchored under
@@ -1725,7 +1606,7 @@ def _memo_check_deliveries(params: dict, repo_root=None) -> dict:
     repo_root: git common dir (`_OP_KEY_SCOPE = "common_dir"`) — the
     SENDER's own worktree, same derivation memo.send uses.
 
-    Reads only: the sender's own ledger file, and the working trees +
+    Reads only: the sender's own sent records, and the working trees +
     object stores of registered receiver repos present on this machine.
     Never writes into a receiver, never re-sends — see module docstring's
     C5 negative-spec.
@@ -1739,13 +1620,14 @@ def _memo_check_deliveries(params: dict, repo_root=None) -> dict:
         return build_setup_error_result(
             "check_deliveries", dry_run,
             "memo.check_deliveries: no repo_root supplied — reads the "
-            "CALLING repo's own sent-ledger and requires a resolved "
+            "CALLING repo's own sent records and requires a resolved "
             "worktree (common_dir-keyed op).",
         )
     sender_worktree = main_worktree_root(Path(repo_root))
-    ledger_path = _sent_ledger_path(sender_worktree)
 
-    candidates = [_check_ledger_row(row) for row in _iter_ledger_rows(ledger_path)]
+    candidates = [
+        _check_ledger_row(row) for row in memo_sent_records.iter_view(sender_worktree)
+    ]
     return build_dry_run_result("check_deliveries", candidates)
 
 
@@ -1925,7 +1807,7 @@ def _memo_send(params: dict, repo_root=None) -> dict:
     today = datetime.date.today().isoformat()
     # Resolved ONCE and threaded to all three carriers: the delivered memo's
     # frontmatter, the delivery commit's Session-Id: trailer, and the
-    # sent-ledger row. Three independent calls could disagree, leaving a
+    # sent record. Three independent calls could disagree, leaving a
     # reader who joins them with three answers to one question -- and the
     # sender_unattributed flag below has to describe the value actually
     # stamped, not a fourth resolution of it.
@@ -1969,7 +1851,7 @@ def _memo_send(params: dict, repo_root=None) -> dict:
     reply_to = fm.get("in_reply_to")
     if not dry_run and isinstance(reply_to, str) and reply_to.strip():
         prior_reply = _prior_reply_from_another_session(
-            _sent_ledger_path(sender_worktree), reply_to, sent_by,
+            sender_worktree, reply_to, sent_by,
         )
         if prior_reply is not None:
             duplicate_warning = _warn_once(
@@ -2268,7 +2150,7 @@ def _memo_send(params: dict, repo_root=None) -> dict:
                 cc_name, topic, cc_result["reason"],
             )
 
-    # ── sender-side receipt: sent/ copy + ledger row + one commit ──────────
+    # ── sender-side receipt: sent/ copy + sent record + one commit ─────────
     sent_at = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     try:
         draft_text = draft_path.read_text(encoding="utf-8")
@@ -2306,7 +2188,6 @@ def _memo_send(params: dict, repo_root=None) -> dict:
             draft_path, exc,
         )
 
-    ledger_path = _sent_ledger_path(sender_worktree)
     row = _ledger_row(
         topic=topic, to=to, kind=fm.get("kind"), summary=delivered_fm.get("summary"),
         delivered_to=delivered_to, in_reply_to=fm.get("in_reply_to"),
@@ -2315,48 +2196,18 @@ def _memo_send(params: dict, repo_root=None) -> dict:
         sent_by=sent_by,
         anchor_ref=anchor_ref,
     )
-    appended_line = json.dumps(row, ensure_ascii=False) + "\n"
-    cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(
-        days=_SENT_LEDGER_MAX_AGE_DAYS
-    )
-
-    def _mutate(old_text: str) -> str:
-        """Append this send's row, evicting the oldest rows past
-        `_SENT_LEDGER_MAX_ROWS`.
-
-        Safe to trim HERE and only here: `locked_rmw` holds the
-        cross-process exclusive lock across this whole read-modify-write, so
-        the text being trimmed is the union of every completed append and no
-        peer can be mid-append inside it (see the commit call's own
-        WORKTREE-BYTES note below for why that union is what gets
-        committed).
-
-        Rows are re-emitted rather than sliced out of `old_text` so a file
-        left without a trailing newline -- by a truncated write, or a hand
-        edit -- cannot silently glue this row onto the last one.
-
-        Both bounds apply, age first: the row cap governs a prolific sender
-        (claude-klabauter/DoE), the age cap governs every other repo, and which one
-        bites is a property of the repo, never of this code.
-        """
-        rows = [line for line in old_text.splitlines() if line.strip()]
-        rows = [line for line in rows if not _row_is_older_than_cutoff(line, cutoff)]
-        kept = rows[-(_SENT_LEDGER_MAX_ROWS - 1):] if _SENT_LEDGER_MAX_ROWS > 1 else []
-        return "".join(line + "\n" for line in kept) + appended_line
-
-    ledger_path.parent.mkdir(parents=True, exist_ok=True)
     try:
-        locked_rmw(ledger_path, _mutate, repo_root=sender_worktree, missing_ok=True)
-    except (OSError, LockTimeout, RuntimeError) as exc:
+        record_path = memo_sent_records.write_record(sender_worktree, row)
+    except (OSError, ValueError) as exc:
         return build_act_result(
             _MODE,
             [{"id": str(target_file), "written": True, "committed": True,
               "delivery_commit_sha": delivery_commit_sha}],
             [], [{
-                "id": str(ledger_path),
+                "id": str(sent_path),
                 "reason": (
                     f"delivery landed and the sent/ copy was staged, but the "
-                    f"ledger append failed: {exc} — the receiver already has "
+                    f"sent record write failed: {exc} — the receiver already has "
                     f"the memo; the sender-side commit did not run."
                 ),
             }],
@@ -2364,19 +2215,19 @@ def _memo_send(params: dict, repo_root=None) -> dict:
 
     # Relative to `sender_worktree` from the ACTUAL resolved locations, not
     # a fixed root: `draft_path` may be under either outbox root
-    # (`_draft_path`'s dual-root resolution), while `sent_path`/`ledger_path`
+    # (`_draft_path`'s dual-root resolution), while `sent_path`/`record_path`
     # are always the new root (their own accessors never resolve legacy).
     def _relpath(p: Path) -> str:
         return os.path.relpath(str(p), str(sender_worktree)).replace(os.sep, "/")
 
     sent_relpath = _relpath(sent_path)
     outbox_relpath = _relpath(draft_path)
-    ledger_relpath = _relpath(ledger_path)
+    record_relpath = _relpath(record_path)
     sender_message = apply_missing_trailers(
         f"memo.send: {topic} delivered to {to}\n\n"
-        f"Moves the outbox draft to sent/ and appends the sent-ledger row.\n",
+        f"Moves the outbox draft to sent/ and writes the sent record.\n",
         sender_worktree,
-        [sent_relpath, ledger_relpath, outbox_relpath],
+        [sent_relpath, record_relpath, outbox_relpath],
     )
     # THE OUTBOX PATH IS NAMED ONLY IF HEAD KNOWS IT.
     # It is named so the MOVE's deletion leg lands -- but a draft staged by
@@ -2403,28 +2254,6 @@ def _memo_send(params: dict, repo_root=None) -> dict:
         else []
     )
 
-    # WORKTREE BYTES, NOT THE STAGED BLOB, AND THAT IS THE WHOLE POINT HERE.
-    # `ledger_relpath` names a fleet-shared file: every sending session appends
-    # its row to the same file (a bounded ring -- see
-    # `_SENT_LEDGER_MAX_ROWS`), and the `locked_rmw` above
-    # holds a cross-process exclusive lock across the read-modify-write, so
-    # the WORKTREE copy is always the union of every completed append. The
-    # staged blob is not: an index entry for this path goes stale the moment
-    # a peer appends, and `commit_scoped` -- which this call replaces --
-    # commits the STAGED blob. Measured on this tree 2026-08-30: ten
-    # consecutive memo.send commits landed the byte-identical stale blob
-    # b2a5f7d9d (2376 rows) while every one of their parents held a richer
-    # one, so each row appended in between vanished from HEAD, the sender's
-    # own included. Committing the worktree commits the union, and this arm
-    # then cannot drop a peer's row.
-    #
-    # `prefer_staged` is deliberately NOT passed: naming the ledger there
-    # selects the losing arm. `prefer_deliberate_stage` stays False for the
-    # neighbouring reason its own contract gives -- the other two paths are
-    # authored by this pass, so there is no third party's partial stage to
-    # preserve, only stale blobs a widened default could hide.
-    # state/bug-backlog/2026-08-27-commit-v2-cutover-silently-flips-whose-c-
-    # 09cf57f3b909.yaml
     # A receipt whose paths are git-ignored and untracked (a group-EM home
     # ignores .coordinator-local/) has nothing to commit; force-adding it
     # would put ignored bytes in history. A matcher gap (None) commits.
@@ -2432,7 +2261,7 @@ def _memo_send(params: dict, repo_root=None) -> dict:
     receipt_ignored = all(
         matcher.ignored(rel, False) is True
         and git_native._head_entry_for(sender_worktree, rel) is None
-        for rel in (sent_relpath, ledger_relpath)
+        for rel in (sent_relpath, record_relpath)
     )
     try:
         if receipt_ignored:
@@ -2440,7 +2269,7 @@ def _memo_send(params: dict, repo_root=None) -> dict:
         else:
             outcome = commit_paths(
                 sender_worktree,
-                [sent_relpath, ledger_relpath],
+                [sent_relpath, record_relpath],
                 sender_message,
                 deleted_paths=sender_deleted,
                 blob_fallback=partial(
@@ -2494,7 +2323,7 @@ def _memo_send(params: dict, repo_root=None) -> dict:
         "sender_committed": bool(sender_commit.ok),
         # A DELIVERY THAT CANNOT NAME ITS SENDER SAYS SO, AT SEND TIME.
         # The sentinel is otherwise write-only: it lands in the delivered
-        # memo's frontmatter and the ledger row, and nothing reads either
+        # memo's frontmatter and the sent record, and nothing reads either
         # again, so the sender learns nothing and the receiver learns only
         # when it tries to reply. That is exactly how the 2026-08-25 rebuild
         # shipped 67 unattributed memos over three days before the RECEIVING
@@ -2503,6 +2332,7 @@ def _memo_send(params: dict, repo_root=None) -> dict:
         # memo, a sizing, and two sessions' investigation.
         "sender_unattributed": sent_by == _SENT_BY_UNRESOLVED,
         "sent_receipt": sent_relpath,
+        "sent_record": record_relpath,
     }
     if citations_unresolved:
         acted_item["citations_unresolved"] = citations_unresolved
@@ -2524,11 +2354,11 @@ def _memo_send(params: dict, repo_root=None) -> dict:
         acted_item["sender_commit_stderr"] = (sender_commit.stderr or "").strip()
         _LOG.warning(
             "memo_send: delivery to %s landed and committed (%s), but the "
-            "sender-side receipt commit failed: %s — sent/ copy and ledger "
-            "row are staged on disk, uncommitted.",
+            "sender-side receipt commit failed: %s — sent/ copy and sent "
+            "record are staged on disk, uncommitted.",
             to, delivery_commit_sha, sender_commit.stderr,
         )
 
     result = build_act_result(_MODE, [acted_item], [], list(cc_failed))
-    result["_scope_touch_paths"] = [str(sent_path), str(ledger_path)]
+    result["_scope_touch_paths"] = [str(sent_path), str(record_path)]
     return result

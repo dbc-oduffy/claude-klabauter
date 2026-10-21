@@ -2,7 +2,7 @@
 Tests for `memo.send` and `memo.reconcile_outbox` declaring their written
 paths through `ipc.py`'s `_SCOPE_TOUCH_PATHS_KEY` contract.
 
-Both handlers write into `state/memo-outbox/` (sent/ copies, ledger rows,
+Both handlers write into `state/memo-outbox/` (sent/ copies, sent records,
 and reconciled moves) without going through the commit-pipeline's normal
 staged-write bookkeeping, so their outputs land unowned unless each handler
 self-reports the paths it actually touched via `result["_scope_touch_paths"]`
@@ -18,7 +18,7 @@ Negative-spec:
     that path lives in a DIFFERENT repo (the registry-resolved receiver's
     tree), never this session's own scope, and is committed independently
     via `git_native.commit_authored_new_file`. Only the SENDER-side
-    `sent/` copy and ledger append are this session's own writes.
+    `sent/` copy and sent record are this session's own writes.
   - Does NOT run on a dry_run call — dry_run performs no writes, so no
     `_scope_touch_paths` key is expected on that envelope.
 """
@@ -31,7 +31,7 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.ops.fleet.memo_reconcile_outbox import _memo_reconcile_outbox
-from coordinator_core.ops.fleet.memo_send import _SENT_LEDGER_FILENAME, _memo_send
+from coordinator_core.ops.fleet.memo_send import _memo_send
 from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
@@ -113,7 +113,7 @@ def _write_draft(sender_repo: Path, topic: str, *, to: str = "example-retrieval-
 
 
 class TestMemoSendDeclaresTouches:
-    def test_act_run_declares_sent_copy_and_ledger(self, tmp_path, monkeypatch):
+    def test_act_run_declares_sent_copy_and_record(self, tmp_path, monkeypatch):
         sender_repo = _make_sender_git_repo(tmp_path)
         receiver_repo = _make_receiver_git_repo(tmp_path)
         claude_home = _make_claude_home(tmp_path, {"project_rag": receiver_repo})
@@ -127,9 +127,12 @@ class TestMemoSendDeclaresTouches:
         touched = {Path(p) for p in result["_scope_touch_paths"]}
 
         sent_path = sender_repo / ".coordinator-local" / "memo-outbox" / "sent" / "declare-topic.md"
-        ledger_path = sender_repo / ".coordinator-local" / "memo-outbox" / _SENT_LEDGER_FILENAME
+        records = list(
+            (sender_repo / ".coordinator-local" / "memo-outbox" / "sent-records").glob("*/*.json")
+        )
+        assert len(records) == 1
         assert sent_path in touched
-        assert ledger_path in touched
+        assert records[0] in touched
         receiver_inbox = receiver_repo / "cross-repo" / "inbox"
         assert not any(receiver_inbox in p.parents for p in touched)
 

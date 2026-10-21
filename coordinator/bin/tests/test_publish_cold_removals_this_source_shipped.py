@@ -67,6 +67,31 @@ def test_deleted_paths_query_is_one_spawn_over_the_row_dirs(monkeypatch):
     assert calls[0][-2:] == ("coordinator/bin", "coordinator/lib")
 
 
+def _routed_row(source_dir: Path, routed_root: Path) -> SimpleNamespace:
+    return SimpleNamespace(name="row", source_dir=source_dir, allowlist="", source_map=f"{routed_root}=bin")
+
+
+def test_a_source_map_entry_routes_the_removal_to_its_root(tmp_path):
+    routed = publish._REPO_ROOT / "coordinator"
+    target = _routed_row(tmp_path, routed)
+    shipped = frozenset({"coordinator/bin/gone.py", "other/foreign.py"})
+
+    kept = publish._removals_this_source_shipped(target, {"bin/gone.py", "bin/foreign.py", "other/foreign.py"}, shipped)
+
+    assert kept == {"bin/gone.py"}
+
+
+def test_deleted_paths_query_widens_its_pathspec_by_source_map_entries(monkeypatch, tmp_path):
+    calls = []
+    monkeypatch.setattr(publish, "_git_capture", lambda path, *args: calls.append(args) or "")
+    target = _routed_row(tmp_path, publish._REPO_ROOT / "coordinator")
+
+    publish._source_deleted_paths([target])
+
+    assert len(calls) == 1
+    assert calls[0][-1:] == ("coordinator/bin",)
+
+
 def test_a_failed_query_removes_nothing(monkeypatch):
     monkeypatch.setattr(publish, "_git_capture", lambda path, *args: None)
 

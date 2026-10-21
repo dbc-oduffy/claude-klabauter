@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
 import shutil
 import subprocess
@@ -66,7 +68,8 @@ def test_reindented_manifest_verifies_and_changed_value_refuses(sidecar, tmp_pat
     assert rs.canonical_json(changed) != text
     if shutil.which("node") is None:
         pytest.skip("node absent")
-    assert _verify_js(tmp_path, reindented, handle) is None
+    assert _verify_js(tmp_path, text, handle) is None
+    assert isinstance(_verify_js(tmp_path, reindented, handle), str)
     assert isinstance(_verify_js(tmp_path, json.dumps(changed, indent=4), handle), str)
 
 
@@ -147,13 +150,27 @@ def _joined(text: str) -> str:
     return "".join(rs.page(text, i)[0] for i in range(pages))
 
 
-def test_pages_join_to_text_and_fit_the_escaped_bound(sidecar):
+def _decoded(handle: dict, text: str) -> list[str]:
+    _, pages = rs.page(text, 0)
+    return [base64.b64decode(rs.page_reply(handle, text, i)["chunk"]).decode("ascii") for i in range(pages)]
+
+
+def test_pages_join_to_text_and_fit_the_quoted_bound(sidecar):
     root, _, handle = sidecar
     text = rs.read_text(root, handle)
     _, pages = rs.page(text, 0)
     assert pages > 1
     assert _joined(text) == text
-    assert all(len(json.dumps(rs.page(text, i)[0])) <= rs.PAGE_CHARS for i in range(pages))
+    assert "".join(_decoded(handle, text)) == text
+    assert all(len(json.dumps(rs.page_reply(handle, text, i)["chunk"])) <= rs.PAGE_CHARS for i in range(pages))
+    assert all(len(rs.page(text, i)[0]) == rs.PAGE_RAW_CHARS for i in range(pages - 1))
+
+
+def test_a_full_quote_page_stays_within_the_bound():
+    text = '"' * (rs.PAGE_RAW_CHARS * 3)
+    handle = {"sha256": "0" * 64, "bytes": len(text)}
+    assert len(json.dumps(rs.page_reply(handle, text, 0)["chunk"])) <= rs.PAGE_CHARS
+    assert rs.PAGE_RAW_CHARS == 4497
 
 
 def test_empty_text_is_one_page_and_past_the_end_raises():
@@ -175,11 +192,20 @@ def test_pathological_quotes_page_under_eight_thousand():
 
 def test_page_reply_keys_and_schema(sidecar):
     root, _, handle = sidecar
-    reply = rs.page_reply(handle, rs.read_text(root, handle), 1)
-    assert set(reply) == {"sha256", "bytes", "page", "pages", "chunk"}
+    text = rs.read_text(root, handle)
+    reply = rs.page_reply(handle, text, 1)
+    assert set(reply) == {"sha256", "bytes", "page", "pages", "encoding", "chunk", "chunk_sha256"}
+    assert reply["encoding"] == "base64"
+    assert reply["chunk_sha256"] == hashlib.sha256(rs.page(text, 1)[0].encode("ascii")).hexdigest()
     jsonschema.validate(reply, rs.PAGE_REPLY_SCHEMA)
     with pytest.raises(jsonschema.ValidationError):
         jsonschema.validate({**reply, "extra": 1}, rs.PAGE_REPLY_SCHEMA)
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate({**reply, "chunk": 'ab"cd'}, rs.PAGE_REPLY_SCHEMA)
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate({**reply, "encoding": "raw"}, rs.PAGE_REPLY_SCHEMA)
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate({k: v for k, v in reply.items() if k != "chunk_sha256"}, rs.PAGE_REPLY_SCHEMA)
 
 
 def test_stage_reply_schema_accepts_both_shapes_and_refuses_manifest_key(sidecar):
@@ -215,7 +241,44 @@ def test_verify_reply_js_accepts_sidecar_and_refuses_damage(sidecar, tmp_path):
     flipped = text[:10] + chr(ord(text[10]) ^ 1) + text[11:]
     assert isinstance(_verify_js(tmp_path, flipped, handle), str)
     assert isinstance(_verify_js(tmp_path, text[:-50], handle), str)
-    assert "not valid JSON" in _verify_js(tmp_path, "café", {"sha256": "0" * 64, "bytes": 4})
+    assert "not ASCII" in _verify_js(tmp_path, "café", {"sha256": "0" * 64, "bytes": 4})
+    notjson = "abcd"
+    assert "not valid JSON" in _verify_js(
+        tmp_path, notjson, {"sha256": hashlib.sha256(notjson.encode()).hexdigest(), "bytes": 4}
+    )
+
+
+def _node_eval(tmp_path, expr: str):
+    script = tmp_path / "eval.js"
+    script.write_text(rs.VERIFY_REPLY_JS + f"\nconsole.log(JSON.stringify({expr}));\n", encoding="ascii")
+    out = subprocess.run(
+        ["node", str(script)], capture_output=True, text=True, check=True,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    return json.loads(out.stdout)
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+@pytest.mark.skipif(shutil.which("node") is None, reason="node absent")
+def test_js_b64_decoder_and_page_verify(sidecar, tmp_path):
+    root, _, handle = sidecar
+    text = rs.read_text(root, handle)
+    reply = rs.page_reply(handle, text, 1)
+    raw = rs.page(text, 1)[0]
+    assert _node_eval(tmp_path, f"_b64DecodeAscii({json.dumps(reply['chunk'])})") == raw
+    assert _node_eval(tmp_path, "_b64DecodeAscii('ab\"d')") is None
+    assert _node_eval(tmp_path, f"_b64DecodeAscii({json.dumps(base64.b64encode('café'.encode()).decode())})") is None
+    assert _node_eval(tmp_path, "_b64DecodeAscii('abc')") is None
+    assert _node_eval(tmp_path, f"_verifyPageChunk({json.dumps(reply)})") == {"text": raw}
+    bad = reply["chunk"][:5] + ("A" if reply["chunk"][5] != "A" else "B") + reply["chunk"][6:]
+    assert "fail" in _node_eval(tmp_path, f"_verifyPageChunk({json.dumps({**reply, 'chunk': bad})})")
+    assert "fail" in _node_eval(tmp_path, f"_verifyPageChunk({json.dumps({**reply, 'chunk_sha256': '0' * 64})})")
+
+
+def test_js_names_no_runtime_decoder():
+    for banned in ("atob", "Buffer", "TextDecoder", "_canonJson"):
+        assert banned not in rs.VERIFY_REPLY_JS
 
 
 def test_check_relay_default_cause_unchanged():

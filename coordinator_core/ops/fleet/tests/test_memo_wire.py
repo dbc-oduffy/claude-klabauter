@@ -240,7 +240,6 @@ def test_read_staged_to_none_cases(tmp_path):
 def test_performed_paths_are_relative_forward_slash():
     assert memo_send_performed_paths("my-topic") == (
         ".coordinator-local/memo-outbox/sent/my-topic.md",
-        ".coordinator-local/memo-outbox/sent-ledger.jsonl",
     )
 
 

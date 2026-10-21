@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 import subprocess
 from pathlib import Path
 
@@ -223,6 +224,23 @@ def test_an_in_pathspec_shebang_is_not_appended_to_the_sink(dest_repo):
     )
     assert count == 1
     assert sink == ["hook.py"]
+
+
+@pytest.mark.skipif(os.name == "nt", reason="no disk exec bit on Windows")
+def test_a_staged_exec_path_converges_its_disk_bit_under_filemode_true(dest_repo):
+    _git(dest_repo, "config", "core.fileMode", "true")
+    hook = dest_repo / "hook.py"
+    hook.write_text(_SHEBANG, encoding="utf-8")
+    os.chmod(hook, 0o644)
+    sink: "list[str]" = []
+    assert _mod._stage_shebang_exec_bits(
+        dest_repo, ["hook.py"], converged_sink=sink
+    ) == 1
+    assert sink == ["hook.py"]
+    assert _mode(dest_repo, "hook.py") == "100755"
+    assert os.stat(hook).st_mode & 0o111
+    _git(dest_repo, "commit", "-q", "-m", "publish")
+    assert _git(dest_repo, "status", "--porcelain", "hook.py").stdout == ""
 
 
 def test_an_unexpected_error_never_reaches_the_round(dest_repo, monkeypatch, capsys):

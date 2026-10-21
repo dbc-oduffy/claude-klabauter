@@ -2421,7 +2421,7 @@ class TestMemoSendDeclaresOutboxWrites:
     # refusal text). This test passed to/title/body/kind/summary as params and
     # was refused before it reached the behaviour it guards. Staging a real
     # draft is what the op actually asks for.
-    def test_sent_ledger_write_lands_in_compute_offer_safe_paths(
+    def test_sent_record_write_lands_in_compute_offer_safe_paths(
         self, tmp_path, monkeypatch
     ):
         sender = tmp_path / "sender-repo"
@@ -2459,11 +2459,14 @@ class TestMemoSendDeclaresOutboxWrites:
         assert "error" not in d, d
         assert d["result"]["exit_code"] == 0
 
-        ledger_rel = ".coordinator-local/memo-outbox/sent-ledger.jsonl"
-        assert (sender / ledger_rel).is_file(), "sanity: the ledger must have actually been written"
+        records = list(
+            (sender / ".coordinator-local" / "memo-outbox" / "sent-records").glob("*/*.json")
+        )
+        assert len(records) == 1, "sanity: the sent record must have actually been written"
+        record_rel = records[0].relative_to(sender).as_posix()
 
         offer = safe_commit_offer.compute_offer("mine", cwd=str(sender))
-        assert ledger_rel in offer["safe_paths"]
+        assert record_rel in offer["safe_paths"]
 
 
 # ---------------------------------------------------------------------------
