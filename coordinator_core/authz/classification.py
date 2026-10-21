@@ -2259,6 +2259,20 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
     # Spec: docs/plans/2026-09-27-emitter-dag-terminal-commit-wake-digest.md § D3
     "dispatch.terminal_commit": OpClass.MUTATING,
+    # dispatch.land_run — MUTATING: lands a run's product and record in one scoped commit through
+    # `git.commit.commit_paths` (ops/dispatch_emit/land_run.py).
+    # DR-208 five-question affirmation (citing the dispatch.land_run handler):
+    #   1. Writes, deletes, or reorders any state file, queue, or git object?  YES.
+    #      Writes git objects and moves the branch ref; spends the run token.
+    #   2. Writes into rag's relational store?                                 No.
+    #   3. Opens any file for write (including sentinel creation)?             YES.
+    #      usage.json, the completion receipts, the review record, the close-job record.
+    #   4. Mutates shared mutable state outside its own module?                YES.
+    #      The landed commit and moved ref are read by every subsequent dispatch.
+    #   5. Persistent state changes observable across process boundaries?     YES.
+    #      The commit sha, the ref move and the close-job record persist across the box.
+    # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
+    "dispatch.land_run": OpClass.MUTATING,
     # close.background — MUTATING: pays a run's queued close legs off the critical path
     # (ops/ceremony/close_background.py). DR-208 five-question affirmation:
     #   1. Writes, deletes, or reorders any state file, queue, or git object?  YES.

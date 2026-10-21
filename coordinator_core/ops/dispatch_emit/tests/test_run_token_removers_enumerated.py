@@ -27,6 +27,8 @@ _ALLOWED: dict[tuple[str, str], tuple[int, str]] = {
         1, "write-overlap refusal ending this run"),
     ("ops/dispatch_emit/terminal_commit.py", "_settle_token"): (
         1, "commit landed (sha present)"),
+    ("ops/dispatch_emit/land_run.py", "_settle_token"): (
+        1, "commit landed (sha present)"),
     ("ops/dispatch_emit/grind_terminal_commit.py", "commit_grind_rows"): (
         1, "grind commit landed"),
     ("ops/dispatch_emit/roadmap_fanout_commit.py", "commit_fanout_record"): (

@@ -2,14 +2,14 @@
 coordinator_core.ops.dispatch_emit.run_close -- the run-close leg vocabulary, close-block
 builder and close-job record.
 
-Purpose: the shared interface of ``dispatch.terminal_commit``'s ``close`` block. The inline
+Purpose: the shared interface of a landing op's ``close`` block. The inline
 leg modules and ``close.background`` both speak ``LegResult``; the close-job record is how a
-queued leg's outcome reaches the reader. The record also carries ``review_receipt`` and the
-range endpoints ``run_base_sha`` / ``terminal_sha``; ``render_unreceipted`` words the
-``review`` leg's detail.
+queued leg's outcome reaches the reader. The record also carries ``review_receipt``, the
+range endpoints ``run_base_sha`` / ``terminal_sha`` and the ``inputs`` the deferred legs read;
+``render_unreceipted`` words the ``review`` leg's detail.
 
 Negative-spec:
-  - No git, no subprocess, no heavy import: terminal_commit has an 80ms cold-import bar.
+  - No git, no subprocess, no heavy import: the landing op has an 80ms cold-import bar.
   - A run-bound leg nobody reported is ``failed`` ("leg did not run"), never absent.
   - A ``queued`` leg is not ``outstanding`` at reply time; ``read_close_job`` is what turns
     an unfinished one into ``failed``.
@@ -26,12 +26,26 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Optional, Sequence, Union
 
+#: Legs only a deferred close job pays: a close block that does not carry one reads it ``not-applicable``.
+LAND_RUN_ONLY_LEGS: tuple[str, ...] = (
+    "review-stamp",
+    "coded-stamp",
+    "sizing-ship",
+    "deliverable-cascade",
+    "close-commit",
+)
+
 RUN_BOUND_LEGS: tuple[str, ...] = (
     "review",
+    "review-stamp",
+    "coded-stamp",
+    "sizing-ship",
     "plan-reconciliation",
+    "deliverable-cascade",
     "lessons",
     "completion-entry",
     "baton-ship",
+    "close-commit",
     "baton-drain",
     "orientation-refresh",
     "memo-lifecycle",
@@ -154,6 +168,8 @@ def build_close_block(
     for leg in RUN_BOUND_LEGS:
         if not applies:
             result = LegResult("not-applicable", "run does not land code")
+        elif leg in LAND_RUN_ONLY_LEGS and leg not in legs:
+            result = LegResult("not-applicable", "paid only by a deferred close job")
         else:
             result = legs.get(leg) or LegResult("failed", "leg did not run")
         out[leg] = result.to_dict()
@@ -240,8 +256,12 @@ def write_close_job(
     terminal_sha: Optional[str] = None,
     criterion: Optional[Mapping[str, Any]] = None,
     falsifier_broken: Optional[Sequence[str]] = None,
+    inputs: Optional[Mapping[str, Any]] = None,
 ) -> str:
     """Write the record in one atomic write; return its repo-relative path.
+
+    *inputs* is the JSON-plain mapping the close job's legs read beyond the fields below; its keys
+    are ``CLOSE_INPUT_KEYS`` (an unknown key is refused).
 
     Beyond the queued legs and deadline it carries the session attribution
     ``session_run_closes`` reads and the inline legs *settled* at write time. *review_receipt*
@@ -252,6 +272,7 @@ def write_close_job(
     """
     _check_criterion(criterion)
     _check_falsifier_broken(falsifier_broken)
+    _check_inputs(inputs)
     for name, sha in (("run_base_sha", run_base_sha), ("terminal_sha", terminal_sha)):
         if sha is not None and not _FULL_SHA.match(sha):
             raise ValueError(f"{name} is not a full 40-hex sha: {sha!r}")
@@ -287,9 +308,34 @@ def write_close_job(
             "terminal_sha": terminal_sha,
             "criterion": None if criterion is None else dict(criterion),
             "falsifier_broken": None if falsifier_broken is None else list(falsifier_broken),
+            "inputs": {} if inputs is None else dict(inputs),
         },
     )
     return close_job_path(run_id)
+
+
+#: What a landing hands the close job's legs. ``credited_rows``: spine row ids the landing credited
+#: (default: the terminal commit's ``Lands-Chunks:`` ids). ``resume_halt_sha``: the halt commit a ledger
+#: resume continues. ``review_record``: repo-relative run record the review stamp is minted from.
+#: ``ledger_met``: the passed requirements ledger's observation; ``ledger_judged``: the register row ids it
+#: already judged. ``incomplete``: row ids still unfinished
+#: (the plan is not flipped). ``review_only``: ``{open_rows, run_base, rows: [{id, paths}]}`` of a review-only run.
+CLOSE_INPUT_KEYS: frozenset[str] = frozenset(
+    {
+        "credited_rows", "resume_halt_sha", "review_record", "ledger_met", "ledger_judged",
+        "incomplete", "review_only",
+    }
+)
+
+
+def _check_inputs(inputs: Any) -> None:
+    if inputs is None:
+        return
+    if not isinstance(inputs, Mapping):
+        raise ValueError(f"inputs is not a mapping: {type(inputs).__name__}")
+    unknown = sorted(set(inputs) - CLOSE_INPUT_KEYS)
+    if unknown:
+        raise ValueError(f"unknown close input(s): {', '.join(unknown)}")
 
 
 UNCHANGED: Any = object()

@@ -735,6 +735,9 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # ONE in-process ceremony.commit_v2 call. Keyed identically to commit_v2
     # itself (D3) -- the caller's own worktree, never a params override.
     "dispatch.terminal_commit":                 "common_dir",
+    # dispatch.land_run — MUTATING: lands a run's product and record in one scoped commit via
+    # git.commit.commit_paths; the caller's own worktree, never a params override.
+    "dispatch.land_run":                        "common_dir",
     # close.background — MUTATING: pays the run's queued close legs; the caller's own worktree.
     "close.background":                         "common_dir",
     # close.review — MUTATING: pays the run's queued review leg; the caller's own worktree.

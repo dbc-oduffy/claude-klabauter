@@ -732,3 +732,33 @@ def test_kept_stamp_with_a_register_failure_withholds_the_flip(env, monkeypatch)
 
     assert out["plan_status"] == "not-stamped" and out["plan_status_reason"] == "register row R1: not wired"
     assert env.plan()["status"] == "executing"
+
+
+def test_run_baton_recorded_at_emit_is_claimed_reviewed_and_shipped(env):
+    from coordinator_core.ops.dispatch_emit import ask_contract
+
+    env.new_record()
+    env.set_record(claimed_batons=[], settled={})
+    ask_contract.write_run_baton(env.repo, RUN, scripted.BATON_REL)
+
+    out = env.call()
+
+    assert env.launches[0].claimed_batons == (scripted.BATON_REL,)
+    legs = out["close"]["legs"]
+    assert legs["baton-drain"]["detail"] != "run claims no baton"
+    assert legs["baton-ship"]["status"] in ("ran", "discharged")
+    assert legs["review"]["status"] != "failed"
+    assert env.record()["settled"]["baton-ship"]["status"] in ("ran", "discharged")
+    assert "shipped_in" in (env.repo / scripted.BATON_REL).read_text(encoding="utf-8")
+    assert _status(env, scripted.BATON_REL) == ""
+
+
+def test_run_with_no_recorded_baton_still_claims_none(env):
+    env.new_record()
+    env.set_record(claimed_batons=[], settled={})
+
+    out = env.call()
+
+    assert env.launches[0].claimed_batons == ()
+    assert out["close"]["legs"]["baton-drain"]["detail"] == "run claims no baton"
+    assert "baton-ship" not in env.record()["settled"]

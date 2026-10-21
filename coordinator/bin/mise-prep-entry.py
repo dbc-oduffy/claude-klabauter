@@ -180,6 +180,13 @@ def _load_rollup():
 def _engine_plan_gate():
     """SEAM 1's gate read: `gate_v2.compute_gate_report`, in process. A `GateReadRefused` becomes
     a `SeamError`: a read that cannot answer never yields a fire set, empty or otherwise."""
+    import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
+    from cc_invoke import require_colocated_engine_on_path
+
+    try:
+        require_colocated_engine_on_path(__file__)
+    except RuntimeError as exc:
+        raise SeamError(f"engine root resolution failed: {exc}")
     from coordinator_core.roadmap.gate_v2 import GateReadRefused, compute_gate_report
 
     def read(repo_root, roadmap_id=None):

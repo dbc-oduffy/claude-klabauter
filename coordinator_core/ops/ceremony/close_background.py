@@ -1,19 +1,27 @@
 """
 coordinator_core.ops.ceremony.close_background -- JSON-RPC "close.background": pays the run
-close legs that cannot fit inside ``dispatch.terminal_commit`` and records each outcome in the
-run's close-job record.
+close legs that cannot fit inside the landing op and records each outcome in the run's
+close-job record.
 
-Purpose: ``terminal_commit`` writes the close-job record (``run_close.write_close_job``), launches
+Purpose: the landing op writes the close-job record (``run_close.write_close_job``), launches
 this module by ``detached_spawn.spawn_detached`` (``python close_background.py ...``) and returns.
-This job pays ``baton-drain``, ``orientation-refresh``, ``memo-lifecycle`` and ``post-close`` in that
-order and rewrites the record through ``run_close.record_leg_outcome``; the reader
-(``run_close.read_close_job``) turns a leg this job never recorded into ``failed``.
+This job pays ``BACKGROUND_LEGS`` in order and rewrites the record through
+``run_close.record_leg_outcome``; the reader (``run_close.read_close_job``) turns a leg this job
+never recorded into ``failed``. The landing's deferred legs (review-stamp mint, coded stamp, sizing
+ship, implemented flip, deliverable cascade, completion entry, baton ship, lessons) write tracked
+records; ``close-commit`` then lands exactly the paths those legs wrote in one commit.
 
 Negative-spec:
   - Runs only the legs the record still lists as ``queued``, and none once its deadline passed.
   - One leg's exception is recorded ``failed`` and the next leg still runs.
   - A leg is not started once the job's cumulative process time reaches ``JOB_BUDGET_MS``; it is
-    recorded ``failed`` with that reason, never dropped.
+    recorded ``failed`` with that reason, never dropped. ``close-commit`` is exempt: a leg that ran
+    keeps its write only if the commit lands it.
+  - No leg globs ``state/sizings`` or scans transcripts: the cascade reads the records the run's own
+    plan names (``deliverable_cascade.cascade_run``).
+  - The close commit carries only the paths the legs wrote; a peer's dirty file is never staged.
+    A lost compare-and-swap re-seeds from the new HEAD up to ``CLOSE_COMMIT_CAS_RETRIES`` times, then
+    the leg is ``failed`` naming the still-dirty paths.
   - ``sweep-terminal-sizings`` (638ms cold) is over the job's budget
     (docs/research/2026-10-13-run-close-ws1-headroom-spike.md) and is left out of ``baton-drain``.
   - ``post-close`` runs an index launcher only when ``post_close_admission.admit`` admits it (peak +
@@ -30,9 +38,10 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import re
 import sys
 import time
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Mapping, Optional, Sequence
@@ -47,11 +56,26 @@ JOB_BUDGET_MS = 400.0
 """Cumulative process time (this process, not its git children) after which no leg starts."""
 
 BACKGROUND_LEGS: tuple[str, ...] = (
+    "review-stamp",
+    "coded-stamp",
+    "sizing-ship",
+    "plan-reconciliation",
+    "deliverable-cascade",
+    "completion-entry",
+    "baton-ship",
+    "lessons",
+    "close-commit",
     "baton-drain",
     "orientation-refresh",
     "memo-lifecycle",
     "post-close",
 )
+
+UNBUDGETED_LEGS: frozenset[str] = frozenset({"close-commit"})
+"""Legs the budget guard never stops: they land what the earlier legs already wrote."""
+
+CLOSE_COMMIT_CAS_RETRIES = 3
+"""Re-seeds from the new HEAD after a lost compare-and-swap, before the close commit gives up."""
 
 _HANDOFF_SWEEP_CAP = 150
 _SIZINGS_SWEEP_NOTE = "sweep-terminal-sizings not run: 638ms cold, over the 500ms bar"
@@ -72,6 +96,11 @@ class JobContext:
     claimed_batons: tuple[str, ...]
     source_memo: Optional[str]
     terminal_sha: Optional[str] = None
+    record: Mapping[str, Any] = field(default_factory=dict)
+    written: list = field(default_factory=list)
+    trailers: list = field(default_factory=list)
+    """``record`` is the parsed close-job record; ``written`` the repo-relative paths the legs wrote
+    (what ``close-commit`` lands); ``trailers`` the lines the close commit's message carries."""
 
 
 Runner = Callable[[JobContext], LegResult]
@@ -143,7 +172,14 @@ def _baton_drain(ctx: JobContext) -> LegResult:
 def _fire_cascade(ctx: JobContext, ids: Sequence[str]) -> tuple[str, bool]:
     """Fire deliverable.cascade_terminal for the run's terminal batons; returns (detail clause, failed).
 
-    A raise or a commit_error marks the clause failed; the caller still archives."""
+    A raise or a commit_error marks the clause failed; the caller still archives. A run whose
+    ``deliverable-cascade`` leg already ran skips the corpus op: that leg advanced the run's own records."""
+    try:
+        paid = (_load_record(ctx.root, ctx.run_id).get("legs") or {}).get("deliverable-cascade")
+        if isinstance(paid, dict) and paid.get("status") in ("ran", "discharged"):
+            return "cascade: paid by deliverable-cascade", False
+    except FileNotFoundError:
+        pass
     try:
         from coordinator_core.ops.dispatch_emit.run_baton_cascade import fire_for_batons
 
@@ -194,6 +230,712 @@ def _memo_lifecycle(ctx: JobContext) -> LegResult:
     if int(result.get("exit_code", 1)) != 0:
         return LegResult("failed", run_close.scrub_detail(f"resolve refused: {result.get('error', 'exit non-zero')}"))
     return LegResult("ran", run_close.scrub_detail(f"source memo {name} resolved"))
+
+
+# --------------------------------------------------------------------------------------------
+# Deferred landing legs. Each reads the close-job record (``ctx.record``), the plan on disk and
+# the terminal commit's object, writes tracked records in place and notes the paths in
+# ``ctx.written`` for ``close-commit``. None runs git, globs a corpus or scans a transcript.
+# --------------------------------------------------------------------------------------------
+
+_FULL_SHA = re.compile(r"^[0-9a-f]{40}$")
+_RESOLUTION_SHA = re.compile(r"^[0-9a-f]{7,64}$")
+_LANDS_CHUNKS = re.compile(r"^Lands-Chunks:[ \t]*(?P<v>.+?)\s*$", re.M)
+_HALTED_WALK_CAP = 500
+SIZING_LEDGER_REL = ".coordinator-local/sizings.jsonl"
+
+
+def _leg(status: str, text: str, ctx: Optional[JobContext] = None) -> LegResult:
+    return LegResult(status, run_close.scrub_detail(text, ctx.root if ctx is not None else None))
+
+
+def _inputs(ctx: JobContext) -> Mapping[str, Any]:
+    value = ctx.record.get("inputs")
+    return value if isinstance(value, dict) else {}
+
+
+def _plan_rel(ctx: JobContext) -> Optional[str]:
+    value = ctx.record.get("plan_rel")
+    return value if isinstance(value, str) and value else None
+
+
+def _criterion(ctx: JobContext) -> Optional[dict]:
+    value = ctx.record.get("criterion")
+    return value if isinstance(value, dict) else None
+
+
+def _note_written(ctx: JobContext, *rels: str) -> None:
+    for rel in rels:
+        if rel and rel not in ctx.written:
+            ctx.written.append(rel)
+
+
+def _read(ctx: JobContext, rel: str) -> Optional[str]:
+    from coordinator_core.ops.dispatch_emit.worktree_snapshot import read_rel
+
+    return read_rel(ctx.root, rel)
+
+
+def _plan_fm(text: str) -> dict:
+    from coordinator_core.frontmatter.primitives import split_frontmatter
+    from coordinator_core.ops.dispatch_emit.plan_row_coding import yaml_load
+
+    split = split_frontmatter(text.replace("\r\n", "\n"))
+    try:
+        fm = (yaml_load(split.fm_text) or {}) if split is not None else {}
+    except Exception:  # noqa: BLE001 -- an unparseable frontmatter reads as empty
+        return {}
+    return fm if isinstance(fm, dict) else {}
+
+
+def _spine_rows(text: str) -> list:
+    from coordinator_core.frontmatter.body_blocks import LocateStatus, locate_fenced_block
+    from coordinator_core.ops.dispatch_emit.plan_row_coding import yaml_load
+
+    located = locate_fenced_block(text.replace("\r\n", "\n"))
+    if located.status != LocateStatus.LOCATED:
+        return []
+    try:
+        rows = yaml_load(located.body) or []
+    except Exception:  # noqa: BLE001
+        return []
+    return [r for r in rows if isinstance(r, dict) and r.get("id")] if isinstance(rows, list) else []
+
+
+def _open_ids(rows: Sequence[dict]) -> set:
+    from coordinator_core.execute_plan_assemble.row_spans import _row_disposition
+
+    return {str(r["id"]) for r in rows if _row_disposition(r) == "open"}
+
+
+def _meta(ctx: JobContext, sha: Optional[str]) -> Optional[dict]:
+    from coordinator_core.git.commit_walk import commit_meta
+
+    return commit_meta(ctx.common_dir, sha) if sha else None
+
+
+def _blob(ctx: JobContext, sha: Optional[str], rel: str) -> Any:
+    from coordinator_core.git.rollback_check import _blob_at_commit
+
+    return _blob_at_commit(ctx.common_dir, sha, rel) if sha else None
+
+
+def _lands_chunk_ids(message: str) -> list:
+    return sorted({
+        i for m in _LANDS_CHUNKS.finditer(message) for i in re.split(r"[,\s]+", m.group("v")) if i
+    })
+
+
+def _close_kind(text: str) -> tuple:
+    """``(close kind, plan_governs)`` off the plan frontmatter, as ``run_close.CLOSE_KINDS`` names them;
+    the landing op's own classifier, so the two cannot disagree."""
+    from coordinator_core.ops.dispatch_emit.land_run import _close_kind as landing_close_kind
+
+    return landing_close_kind(text)
+
+
+def _queue_review(ctx: JobContext, receipt_rel: str) -> None:
+    """Point the record at the stamped file and queue the ``review`` leg ``post-close`` launches."""
+    try:
+        record = _load_record(ctx.root, ctx.run_id)
+        if "review" in (record.get("legs") or {}):
+            return
+        deadline = datetime.fromisoformat(str(record.get("deadline", "")))
+        run_close.amend_close_job(
+            ctx.root, ctx.run_id, review_receipt=receipt_rel, queue=("review",), deadline=deadline
+        )
+    except Exception:  # noqa: BLE001 -- the stamp stands; the review leg then reads absent
+        pass
+
+
+def _review_stamp(ctx: JobContext) -> LegResult:
+    """Mint the plan's ``review_stamp`` (a mise run: the receipt on its inventory record) against the
+    terminal commit. A refusal is the leg's ``failed`` detail; the landed commit stands."""
+    plan_rel, sha = _plan_rel(ctx), ctx.terminal_sha
+    if not plan_rel or not sha:
+        return _leg("not-applicable", "run has no plan or terminal commit")
+    from coordinator_core.ops import review_stamp as rs
+    from coordinator_core.ops._path_guard import contained_path
+    from coordinator_core.ops.dispatch_emit import plan_row_coding
+    from coordinator_core.ops.dispatch_emit.ask_contract import SPINE_SUFFIX
+
+    if contained_path(ctx.root / plan_rel, [ctx.root]) is None:
+        return _leg("failed", "plan path escapes the worktree")
+    resolved = None
+    record_rel = _inputs(ctx).get("review_record")
+    if isinstance(record_rel, str) and record_rel:
+        data = rs._load_sidecar(ctx.root / record_rel)
+        if data is None:
+            return _leg("failed", f"review record {record_rel} is unreadable", ctx)
+        resolved = (sha, ctx.root / record_rel, data)
+    try:
+        if plan_rel.endswith(SPINE_SUFFIX):
+            found = plan_row_coding.inventory_record_rel(ctx.root, plan_rel)
+            if found is None:
+                return _leg("not-applicable", "minted spine has no inventory record")
+            rs.mint_receipt(ctx.root / found[0], ctx.root, resolved=resolved)
+            stamped = found[0]
+        else:
+            rs.mint(
+                ctx.root / plan_rel, ctx.root, build_test_path=None, resolved=resolved, criterion_open_ok=True
+            )
+            stamped = plan_rel
+    except rs.MintRefusal as exc:
+        return _leg("failed", str(exc), ctx)
+    _note_written(ctx, stamped)
+    _queue_review(ctx, stamped)
+    return _leg("ran", f"review stamp minted on {stamped}", ctx)
+
+
+def _checkpoint_rows_from(ctx: JobContext, plan_rel: str, text: str, start: Any, exclude: frozenset) -> dict:
+    """``{checkpoint sha: {plan: {row id}}}`` of still-open rows same-plan checkpoints landed, walking
+    first parents in-process from *start*."""
+    if not isinstance(start, str) or not _FULL_SHA.fullmatch(start):
+        return {}
+    wanted = frozenset(_open_ids(_spine_rows(text)) - set(exclude))
+    if not wanted:
+        return {}
+    from coordinator_core.ops.dispatch_emit import plan_row_coding
+    from coordinator_core.ops.dispatch_emit.checkpoint_stamp import checkpoint_rows_landed, plan_created_floor
+
+    walk = checkpoint_rows_landed(
+        ctx.root, plan_rel, start, wanted, floor_epoch=plan_created_floor(text), cap=_HALTED_WALK_CAP
+    )
+    landed: dict = {}
+    for csha, ids in walk.landed.items():
+        by_plan = plan_row_coding.source_rows_by_plan(ctx.root, plan_rel, sorted(ids))
+        if by_plan:
+            landed[csha] = by_plan
+    return landed
+
+
+def _checkpoint_of(ctx: JobContext, plan_rel: str, sha: str, chunks: list) -> dict:
+    """Chunk id -> sha of the run's own ``checkpoint(wave N)`` commit that landed its writes, walking
+    first parents from the terminal commit's parent while the subject is a checkpoint of this plan."""
+    from coordinator_core.ops.dispatch_emit.checkpoint_stamp import (
+        CHECKPOINT_PLAN_LINE,
+        CHECKPOINT_SUBJECT,
+        is_stamp_commit,
+    )
+
+    parents = (_meta(ctx, sha) or {}).get("parents") or []
+    cur = parents[0] if parents else None
+    checkpoints: list = []  # newest first: (sha, parent, named ids)
+    for _ in range(_HALTED_WALK_CAP):
+        meta = _meta(ctx, cur)
+        if meta is None:
+            break
+        message = meta.get("message") or ""
+        if is_stamp_commit(message) and meta.get("parents"):
+            cur = meta["parents"][0]
+            continue
+        subject = CHECKPOINT_SUBJECT.match((message.splitlines() or [""])[0].strip())
+        plan = CHECKPOINT_PLAN_LINE.search(message)
+        if not subject or not meta.get("parents") or not plan or plan.group("v") != plan_rel:
+            break
+        named = {i.strip() for i in subject.group("ids").split(",") if i.strip()}
+        checkpoints.append((cur, meta["parents"][0], named))
+        cur = meta["parents"][0]
+    out: dict = {}
+    for chunk in chunks:
+        hits = [
+            (csha, named) for csha, parent, named in reversed(checkpoints)
+            if any(_blob(ctx, csha, p) != _blob(ctx, parent, p) for p in chunk.paths)
+        ]
+        if hits:
+            out[chunk.id] = next((h[0] for h in hits if chunk.id in h[1]), hits[0][0])
+    return out
+
+
+def _review_only_hits(ctx: JobContext, sha: str, review_only: Mapping[str, Any], open_ids: set) -> tuple:
+    """``({row id: sha}, [row ids with no delta])`` for a review-only run: the newest commit in
+    ``run_base..sha`` changing a blob in the row's writes closes it."""
+    base = review_only.get("run_base")
+    wanted = {str(i) for i in review_only.get("open_rows") or []} & open_ids
+    rows = [r for r in review_only.get("rows") or [] if isinstance(r, dict) and str(r.get("id")) in wanted]
+    if not isinstance(base, str) or not base or not rows:
+        return {}, []
+    delta: list = []  # newest first: (sha, parent)
+    cur, reached = sha, False
+    for _ in range(_HALTED_WALK_CAP):
+        if cur.startswith(base):
+            reached = True
+            break
+        meta = _meta(ctx, cur)
+        if meta is None or not meta.get("parents"):
+            break
+        delta.append((cur, meta["parents"][0]))
+        cur = meta["parents"][0]
+    if not reached:
+        delta = []
+    hits: dict = {}
+    no_delta: list = []
+    for row in rows:
+        paths = [p for p in row.get("paths") or [] if isinstance(p, str)]
+        hit = next((c for c, parent in delta if any(_blob(ctx, c, p) != _blob(ctx, parent, p) for p in paths)), None)
+        if hit is None:
+            no_delta.append(str(row["id"]))
+        else:
+            hits[str(row["id"])] = hit
+    return hits, no_delta
+
+
+def _coded_stamp(ctx: JobContext) -> LegResult:
+    """Stamp the run's credited rows ``coded`` in the plan, each against the commit that landed it: the
+    terminal commit, the run's own checkpoint, an outside landing, or (no change) the terminal commit with
+    a no-op detail. Rows an earlier fire, a halt commit or a review-only run landed close at that commit."""
+    plan_rel, sha = _plan_rel(ctx), ctx.terminal_sha
+    if not plan_rel or not sha:
+        return _leg("not-applicable", "run has no plan or terminal commit")
+    text = _read(ctx, plan_rel)
+    if text is None:
+        return _leg("failed", f"plan {plan_rel} is unreadable", ctx)
+    from types import SimpleNamespace
+
+    from coordinator_core.ops.dispatch_emit import plan_row_coding as prc
+
+    inputs = _inputs(ctx)
+    rows = {str(r["id"]): r for r in _spine_rows(text)}
+    given = inputs.get("credited_rows")
+    credited = [str(i) for i in given] if isinstance(given, list) else _lands_chunk_ids((_meta(ctx, sha) or {}).get("message") or "")
+    parents = (_meta(ctx, sha) or {}).get("parents") or []
+    parent = parents[0] if parents else None
+
+    groups: dict = {}  # (sha, detail or None) -> {run-plan row id}
+    undecided: list = []
+    for cid in credited:
+        paths = [w for w in (rows.get(cid, {}).get("writes") or []) if isinstance(w, str) and w]
+        if not paths:
+            groups.setdefault((sha, prc.NOOP_DETAIL), set()).add(cid)
+        elif any(_blob(ctx, sha, p) != _blob(ctx, parent, p) for p in paths):
+            groups.setdefault((sha, None), set()).add(cid)
+        else:
+            undecided.append(SimpleNamespace(id=cid, paths=paths))
+    attributed = _checkpoint_of(ctx, plan_rel, sha, undecided) if undecided else {}
+    for cid, csha in attributed.items():
+        groups.setdefault((csha, None), set()).add(cid)
+    rest = [c for c in undecided if c.id not in attributed]
+    outside = prc.outside_landings(ctx.root, sha, plan_rel, rest) if rest else {}
+    for cid, shas in outside.items():
+        groups.setdefault((shas[0], prc.outside_landing_detail(shas)), set()).add(cid)
+    for c in rest:
+        if c.id not in outside:
+            groups.setdefault((sha, prc.NOOP_DETAIL), set()).add(c.id)
+
+    no_delta: list = []
+    review_only = inputs.get("review_only")
+    criterion = _criterion(ctx)
+    if isinstance(review_only, dict) and not (criterion or {}).get("status") == "not_met":
+        hits, no_delta = _review_only_hits(ctx, sha, review_only, _open_ids(list(rows.values())))
+        for rid, csha in hits.items():
+            groups.setdefault((csha, None), set()).add(rid)
+
+    coding: dict = {}  # plan -> [(sha, ids, details)]
+    own = {i for ids in groups.values() for i in ids}
+    for (csha, detail), ids in groups.items():
+        for plan, mapped in prc.source_rows_by_plan(ctx.root, plan_rel, sorted(ids)).items():
+            coding.setdefault(plan, []).append((csha, set(mapped), {r: detail for r in mapped} if detail else {}))
+    resume = inputs.get("resume_halt_sha")
+    predecessor: dict = {}
+    if isinstance(resume, str) and _FULL_SHA.fullmatch(resume):
+        halt_ids = _lands_chunk_ids((_meta(ctx, resume) or {}).get("message") or "")
+        predecessor = prc.source_rows_by_plan(ctx.root, plan_rel, halt_ids) if halt_ids else {}
+        for plan, ids in predecessor.items():
+            coding.setdefault(plan, []).append((resume, set(ids), {}))
+    earlier = _checkpoint_rows_from(
+        ctx, plan_rel, text, resume if isinstance(resume, str) else (parents[0] if parents else None), frozenset(own)
+    )
+    for csha, by_plan in earlier.items():
+        for plan, ids in by_plan.items():
+            fresh = set(ids) - set(predecessor.get(plan, ()))
+            if fresh:
+                coding.setdefault(plan, []).append((csha, fresh, {}))
+
+    from coordinator_core.frontmatter.schema_validate import check_plan_tasks_source
+    from coordinator_core.session.claimed_write import replace_text
+
+    coded = 0
+    for plan, steps in sorted(coding.items()):
+        original = _read(ctx, plan)
+        if original is None:
+            continue
+        updated, flipped_all = original, set()
+        for csha, ids, details in steps:
+            updated, flipped = prc.flip_rows_coded(updated, set(ids) - flipped_all, csha, details)
+            flipped_all.update(flipped)
+        if not flipped_all:
+            continue
+        invalid = check_plan_tasks_source(updated)
+        if invalid is not None and check_plan_tasks_source(original) is None:
+            return _leg("failed", f"{plan}: stamped spine fails schema: {invalid}", ctx)
+        replace_text(ctx.root / plan, updated)
+        _note_written(ctx, plan)
+        coded += len(flipped_all)
+    detail = f"{coded} row(s) coded ({sha[:7]})"
+    if no_delta:
+        detail += f"; review-only rows with no delta left open: {', '.join(no_delta)}"
+    return _leg("ran", detail, ctx)
+
+
+def _unsent_memos(ctx: JobContext, text: str) -> list:
+    """``row id (slug)`` of the plan's open memo-send rows whose sender-side receipt is absent."""
+    from coordinator_core.ops.dispatch_emit.memo_rows import _is_memo_send_row, memo_receipt_exists, memo_row_slug
+
+    out: list = []
+    for row in _spine_rows(text):
+        if row.get("performer") == "em" or (row.get("disposition") or "open") != "open" or not _is_memo_send_row(row):
+            continue
+        slug = memo_row_slug(row)
+        if slug is None or not memo_receipt_exists(ctx.root, slug):
+            out.append(f"{row['id']} ({slug or 'no slug'})")
+    return out
+
+
+def _plan_flip(ctx: JobContext) -> LegResult:
+    """Write the plan's ``implemented`` status (uncommitted; ``close-commit`` lands it) once its minted
+    review stamp records a met criterion, no cascade (the ``deliverable-cascade`` leg owns it)."""
+    plan_rel, sha = _plan_rel(ctx), ctx.terminal_sha
+    if not plan_rel or not sha:
+        return _leg("not-applicable", "run has no plan or terminal commit")
+    text = _read(ctx, plan_rel)
+    if text is None:
+        return _leg("failed", f"plan {plan_rel} is unreadable", ctx)
+    kind, governs = _close_kind(text)
+    preset = run_close.kind_presets(kind, plan_governs=governs).get("plan-reconciliation")
+    if preset is not None:
+        return preset
+    tells = ctx.record.get("falsifier_broken")
+    if isinstance(tells, list):
+        return _leg(
+            "failed",
+            "falsifier integrity BROKEN at pre-dispatch (" + (", ".join(tells) or "no tell named")
+            + "): not self-stamped; close through the EM re-judge route",
+            ctx,
+        )
+    inputs = _inputs(ctx)
+    if inputs.get("incomplete"):
+        return _leg("failed", f"incomplete chunks remain: {sorted(inputs['incomplete'])}", ctx)
+    fm = _plan_fm(text)
+    stamp = fm.get("review_stamp")
+    if not isinstance(stamp, dict):
+        return _leg("failed", "no review stamp minted")
+    unsent = _unsent_memos(ctx, text)
+    if unsent:
+        return _leg("failed", "memo not sent (no sender-side receipt): " + ", ".join(unsent), ctx)
+    import copy
+
+    from coordinator_core.ops.dispatch_emit import register_gate
+
+    judged = _criterion(ctx)
+    if judged is not None:
+        reason = register_gate.register_gate(
+            ctx.root, plan_rel, {"criterion": copy.deepcopy(judged)}, tuple(inputs.get("ledger_judged") or ()),
+            run_id=ctx.run_id,
+        )
+        if reason:
+            return _leg("failed", reason, ctx)
+    from coordinator_core.archive_stamp import _open_spine_row_ids
+
+    open_rows = _open_spine_row_ids(ctx.root / plan_rel)
+    if open_rows:
+        return _leg("failed", f"{len(open_rows)} spine row(s) still open: {', '.join(open_rows)}", ctx)
+    criterion = stamp.get("criterion") if isinstance(stamp.get("criterion"), dict) else {}
+    status = criterion.get("status")
+    ledger_met = inputs.get("ledger_met") if isinstance(inputs.get("ledger_met"), str) else None
+    if status == "met":
+        observation = str(criterion.get("observation") or "").strip()
+        source = criterion.get("sidecar") or "the run's criterion leg"
+    elif ledger_met and ledger_met.strip() and status != "not_met":
+        observation, source = ledger_met.strip(), "requirements ledger"
+    else:
+        return _leg("failed", "review_stamp criterion is not met")
+    if not observation:
+        return _leg("failed", "criterion observation is empty")
+    from coordinator_core.ops import plan_status_transition
+
+    import contextlib
+    import io
+
+    why = (judged or {}).get("reason")
+    recorded = fm.get("exit_criterion_met") is not None
+    err = io.StringIO()
+    with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+        rc = plan_status_transition.stamp_implemented(
+            str(ctx.root / plan_rel),
+            **(
+                {}
+                if recorded
+                else {
+                    "falsifier_verdict": "pass",
+                    "falsifier_output": observation[: plan_status_transition._FALSIFIER_OUTPUT_MAX],
+                    "prose": f"criterion met at {sha} per {source}"
+                    + (f"; {why.strip()}" if isinstance(why, str) and why.strip() else ""),
+                }
+            ),
+            no_commit=True,
+            ship_sha=sha,
+            ledger_met=ledger_met if status != "met" else None,
+            cascade=False,
+        )
+    if rc != 0:
+        return _leg("failed", err.getvalue().strip(), ctx)
+    _note_written(ctx, plan_rel)
+    deferred = [] if kind == "xs-s-run" else sorted(
+        str(r["id"]) for r in _spine_rows(_read(ctx, plan_rel) or "") if r.get("deferred") is True
+    )
+    if deferred:
+        return _leg("failed", "deferred rows unharvested: " + ", ".join(deferred), ctx)
+    return _leg("ran", "plan implemented")
+
+
+def _cited(ctx: JobContext, plan_rel: str) -> tuple:
+    """``(sizing rel, baton rel)`` the plan's ``sizing_object`` and that sizing's ``baton`` name, each
+    ``None`` when absent or not an existing file in its records home."""
+    from coordinator_core.ops._path_guard import contained_path
+    from coordinator_core.ops.dispatch_emit import register_gate
+    from coordinator_core.ops.dispatch_emit.plan_row_coding import yaml_load
+    from coordinator_core.session.record_homes import home_dir
+
+    text = _read(ctx, plan_rel)
+    cited = _plan_fm(text).get("sizing_object") if text is not None else None
+    sizing_rel = register_gate.sizing_file_rel(ctx.root, cited) if isinstance(cited, str) and cited else None
+    if sizing_rel is None:
+        return None, None
+    body = _read(ctx, sizing_rel)
+    try:
+        doc = yaml_load(body) if body is not None else None
+    except Exception:  # noqa: BLE001
+        doc = None
+    baton = doc.get("baton") if isinstance(doc, dict) else None
+    if not isinstance(baton, str) or not baton:
+        return sizing_rel, None
+    guarded = contained_path(ctx.root / baton, [Path(home_dir(str(ctx.root), "handoffs"))])
+    if guarded is None or not guarded.is_file():
+        return sizing_rel, None
+    return sizing_rel, guarded.relative_to(ctx.root.resolve()).as_posix()
+
+
+def _write_resolution(ctx: JobContext, sizing_rel: str, sha: str) -> Optional[str]:
+    """Write ``resolution: {sha, run_id}`` beside the shipped sizing's status; an error text or None."""
+    from coordinator_core.frontmatter.primitives import write_fm_nested_field
+    from coordinator_core.frontmatter.schema_validate import format_validation_errors, validate_frontmatter
+    from coordinator_core.locked_write import MutateAbort, locked_rmw
+    from coordinator_core.ops.dispatch_emit.plan_row_coding import yaml_load
+    from coordinator_core.ops.dispatch_emit.register_gate import RESOLUTION_RUN_ID
+
+    if not _RESOLUTION_SHA.match(sha or "") or not RESOLUTION_RUN_ID.match(ctx.run_id or ""):
+        return f"unrecordable resolution sha={sha!r} run_id={ctx.run_id!r}"
+    schema_path = Path(__file__).resolve().parents[2] / "frontmatter" / "schemas" / "sizing-object.schema.json"
+
+    def mutate(old: str) -> str:
+        new = write_fm_nested_field(old, "resolution", f'  sha: "{sha}"\n  run_id: "{ctx.run_id}"\n')
+        errors = validate_frontmatter(yaml_load(new) or {}, schema_path)
+        if errors:
+            raise MutateAbort(f"resolution write refused: {format_validation_errors(errors)}")
+        return new
+
+    try:
+        locked_rmw(ctx.root / sizing_rel, mutate, repo_root=ctx.root)
+    except MutateAbort as exc:
+        return str(exc.args[0]) if exc.args else "resolution write refused"
+    except Exception as exc:  # noqa: BLE001 -- lock timeout, I/O
+        return f"resolution write refused: {type(exc).__name__}"
+    return None
+
+
+def _record_resolution(ctx: JobContext, sizing_rel: str, sha: str) -> None:
+    """Append the sizing's row to the local resolution ledger (never committed); failures are dropped."""
+    import hashlib
+    import json as _json
+    from datetime import timezone
+
+    from coordinator_core.atomic_append import append_line
+    from coordinator_core.ops.dispatch_emit.plan_row_coding import yaml_load
+
+    try:
+        doc = yaml_load(_read(ctx, sizing_rel) or "") or {}
+        estimate = doc.get("estimate") if isinstance(doc.get("estimate"), dict) else {}
+        words = "\n\n".join(
+            str(v.get("text")) for v in doc.get("pm_verbatims") or [] if isinstance(v, dict) and v.get("text")
+        ) or str(doc.get("intent") or "")
+        row = {
+            "id": doc.get("deliverable_id") or Path(sizing_rel).stem,
+            "tshirt": estimate.get("tshirt") or "?",
+            "route": doc.get("route"),
+            "ask_sha256": hashlib.sha256(words.encode("utf-8")).hexdigest(),
+            "resolved_sha": sha,
+            "ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "sizing": sizing_rel,
+        }
+        sink = ctx.root / SIZING_LEDGER_REL
+        sink.parent.mkdir(parents=True, exist_ok=True)
+        append_line(sink, (_json.dumps(row, sort_keys=True) + "\n").encode("utf-8"))
+    except Exception:  # noqa: BLE001 -- a local ledger row is a report, never a gate
+        pass
+
+
+def _sizing_ship(ctx: JobContext) -> LegResult:
+    """Write the judged register rows back onto the cited sizing, then ship it through ``sizing.ship``;
+    an applied ship stamps the resolution and adds the ``Sizing-Shipped`` trailer to the close commit."""
+    plan_rel, sha = _plan_rel(ctx), ctx.terminal_sha
+    if not plan_rel or not sha:
+        return _leg("not-applicable", "run has no plan or terminal commit")
+    if _inputs(ctx).get("incomplete"):
+        return _leg("not-applicable", "run incomplete: sizing stays live")
+    sizing_rel, _ = _cited(ctx, plan_rel)
+    if sizing_rel is None:
+        return _leg("not-applicable", "plan cites no sizing")
+    from coordinator_core.ops.dispatch_emit import register_gate
+    from coordinator_core.warm.entry_seam import reentrant_dispatch
+
+    notes: list = []
+    criterion = _criterion(ctx)
+    wrote = register_gate.register_writeback(ctx.root, plan_rel, {"criterion": criterion} if criterion else None, sha)
+    if wrote.get("register_sizing"):
+        _note_written(ctx, wrote["register_sizing"])
+        notes.append("register rows written")
+    elif wrote.get("register_writeback_error"):
+        notes.append("register write-back refused")
+    try:
+        reply = reentrant_dispatch("sizing.ship", {"sizing_path": sizing_rel}, repo_root=ctx.common_dir)
+    except Exception as exc:  # noqa: BLE001 -- recorded; the landing stands
+        return _leg("failed", f"sizing.ship raised {type(exc).__name__}", ctx)
+    if not isinstance(reply, dict) or reply.get("exit_code") != 0:
+        refusal = reply.get("error") if isinstance(reply, dict) else reply
+        return _leg("not-applicable", f"ship skipped: {refusal}", ctx)
+    if not reply.get("applied"):
+        return _leg("ran", "; ".join([*notes, "sizing already shipped"]), ctx)
+    error = _write_resolution(ctx, sizing_rel, sha)
+    _note_written(ctx, sizing_rel)
+    ctx.trailers.append(f"Sizing-Shipped: {sizing_rel} {sha}")
+    _record_resolution(ctx, sizing_rel, sha)
+    notes.append(f"sizing {sizing_rel} shipped" + (f"; resolution not written: {error}" if error else ""))
+    return _leg("failed" if error else "ran", "; ".join(notes), ctx)
+
+
+def _deliverable_cascade(ctx: JobContext) -> LegResult:
+    """Advance the sizing and baton records the run's own plan names, via ``cascade_run`` -- never the corpus."""
+    plan_rel, sha = _plan_rel(ctx), ctx.terminal_sha
+    if not plan_rel or not sha:
+        return _leg("not-applicable", "run has no plan or terminal commit")
+    text = _read(ctx, plan_rel)
+    fm = _plan_fm(text) if text is not None else {}
+    if fm.get("status") != "implemented":
+        return _leg("not-applicable", "plan is not implemented")
+    sizing_rel, baton_rel = _cited(ctx, plan_rel)
+    rels = list(dict.fromkeys(
+        r for r in (sizing_rel, baton_rel, *(Path(b).as_posix() for b in ctx.claimed_batons)) if r
+    ))
+    if not rels:
+        return _leg("not-applicable", "run names no sizing or baton record")
+    from coordinator_core.ops.deliverable_cascade import cascade_run
+
+    did = fm.get("deliverable_id")
+    session = ctx.record.get("session_id")
+    reply = cascade_run(
+        ctx.root, did.strip() if isinstance(did, str) else "", rels, sha,
+        repo_root=ctx.common_dir, plan_path=plan_rel, caller_session_id=session if isinstance(session, str) else "",
+    )
+    _note_written(ctx, *reply.get("mutated_paths", ()))
+    return _leg(
+        "ran",
+        f"cascade over {len(rels)} record(s): {len(reply['advanced'])} advanced, "
+        f"{len(reply['already_advanced'])} already, {len(reply['refused'])} refused, "
+        f"{len(reply['unreadable'])} unreadable",
+        ctx,
+    )
+
+
+def _completion_entry(ctx: JobContext) -> LegResult:
+    plan_rel = _plan_rel(ctx)
+    if not plan_rel:
+        return _leg("not-applicable", "run has no plan")
+    from coordinator_core.ops.dispatch_emit.run_close_completion import completion_entry_leg
+
+    ledger_met = _inputs(ctx).get("ledger_met")
+    result, written = completion_entry_leg(
+        ctx.root, ctx.run_id, plan_rel, _criterion(ctx), ledger_met=ledger_met if isinstance(ledger_met, str) else None
+    )
+    if result.status in ("ran", "discharged"):
+        _note_written(ctx, *written)
+    return result
+
+
+def _baton_ship(ctx: JobContext) -> LegResult:
+    if not ctx.claimed_batons:
+        return _leg("not-applicable", "run claims no baton")
+    if not ctx.terminal_sha:
+        return _leg("failed", "no terminal commit to ship the batons at")
+    criterion = _criterion(ctx)
+    status = criterion.get("status") if criterion else None
+    ledger_met = _inputs(ctx).get("ledger_met")
+    if not (status == "met" or (bool(ledger_met) and status != "not_met")):
+        return _leg("failed", f"criterion {status or 'absent'}: batons not shipped")
+    from coordinator_core.ops.dispatch_emit.run_close_baton_ship import baton_ship_leg
+
+    result = baton_ship_leg(ctx.root, ctx.run_id, list(ctx.claimed_batons), ctx.terminal_sha)
+    if result.status == "ran":
+        _note_written(ctx, *ctx.claimed_batons)
+    return result
+
+
+def _lessons(ctx: JobContext) -> LegResult:
+    from coordinator_core.ops.dispatch_emit.run_close_lessons import lessons_leg
+
+    return lessons_leg(ctx.root, ctx.run_id, _criterion(ctx))
+
+
+def _close_commit(ctx: JobContext) -> LegResult:
+    """Land exactly the paths the legs wrote in one Form 4 commit, never a peer's dirty file. A lost
+    compare-and-swap re-seeds from the new HEAD (``CLOSE_COMMIT_CAS_RETRIES`` times), then the leg fails
+    naming the paths still dirty."""
+    paths = list(dict.fromkeys(ctx.written))
+    if not paths:
+        return _leg("not-applicable", "no leg wrote a tracked path")
+    from functools import partial
+
+    from coordinator_core.git.commit import (
+        CommitRefused,
+        FilterUnsupported,
+        NothingToCommit,
+        commit_paths,
+        hash_worktree_blobs_via_spawn,
+    )
+    from coordinator_core.git.commit_trailers import apply_missing_trailers
+    from coordinator_core.git.index_write import IndexStaleAfterCommit, IndexWriteError
+    from coordinator_core.ops.dispatch_emit.worktree_snapshot import worktree_snapshot
+
+    snapshot = worktree_snapshot(ctx.root, paths, [], [])
+    if snapshot is not None:
+        ignored = set(snapshot.ignored_among(paths))
+        paths = [p for p in paths if p in snapshot.changed and p not in ignored]
+    if not paths:
+        return _leg("ran", "no written path differs from HEAD")
+    message = f"close: {len(paths)} path(s) for run {ctx.run_id}"
+    if ctx.trailers:
+        message += "\n\n" + "\n".join(ctx.trailers)
+    message = apply_missing_trailers(message, ctx.root, paths)
+    reason = ""
+    for _attempt in range(CLOSE_COMMIT_CAS_RETRIES + 1):
+        try:
+            outcome = commit_paths(
+                ctx.root, paths, message, prefer_deliberate_stage=True,
+                blob_fallback=partial(hash_worktree_blobs_via_spawn, cwd=ctx.root),
+            )
+        except NothingToCommit:
+            return _leg("ran", "nothing differs from HEAD")
+        except IndexStaleAfterCommit:
+            return _leg("ran", f"{len(paths)} path(s) landed; index stale")
+        except (FilterUnsupported, IndexWriteError) as exc:
+            reason = str(exc)
+            break
+        except CommitRefused as exc:
+            reason = str(exc)
+            if "compare-and-swap failed" not in reason:
+                break
+            continue
+        return _leg("ran", f"{len(paths)} path(s) landed at {outcome.sha[:10]}")
+    return _leg("failed", f"close commit not landed; still dirty: {', '.join(paths)} ({reason})", ctx)
 
 
 def _launch_close_review(ctx: JobContext) -> bool:
@@ -286,6 +1028,15 @@ def _chain_closure_note(ctx: JobContext, problems: list[str]) -> str:
 
 
 DEFAULT_RUNNERS: Mapping[str, Runner] = {
+    "review-stamp": _review_stamp,
+    "coded-stamp": _coded_stamp,
+    "sizing-ship": _sizing_ship,
+    "plan-reconciliation": _plan_flip,
+    "deliverable-cascade": _deliverable_cascade,
+    "completion-entry": _completion_entry,
+    "baton-ship": _baton_ship,
+    "lessons": _lessons,
+    "close-commit": _close_commit,
     "baton-drain": _baton_drain,
     "orientation-refresh": _orientation_refresh,
     "memo-lifecycle": _memo_lifecycle,
@@ -334,13 +1085,14 @@ def run_background(
     started = cpu_ms()
     outcomes: dict[str, LegResult] = {}
     record = _load_record(ctx.root, ctx.run_id)
+    ctx = replace(ctx, record=record if isinstance(record, dict) else {})
     if ctx.terminal_sha is None:
         sha = record.get("terminal_sha") if isinstance(record, dict) else None
         if isinstance(sha, str) and sha:
             ctx = replace(ctx, terminal_sha=sha)
     for leg in _queued_legs(ctx.root, ctx.run_id, record=record):
         spent = cpu_ms() - started
-        if spent >= budget_ms:
+        if leg not in UNBUDGETED_LEGS and spent >= budget_ms:
             result = LegResult("failed", f"not started: job process time {spent:.0f}ms reached {budget_ms:.0f}ms")
         else:
             try:

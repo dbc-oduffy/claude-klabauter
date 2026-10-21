@@ -427,7 +427,7 @@ class _Opts:
     __slots__ = (
         "verb", "plan", "by", "override_reason", "reason", "findings",
         "falsifier_verdict", "falsifier_output", "prose", "no_commit", "ship_sha",
-        "ledger_met",
+        "ledger_met", "cascade",
     )
 
     def __init__(
@@ -444,7 +444,9 @@ class _Opts:
         no_commit: bool = False,
         ship_sha: Optional[str] = None,
         ledger_met: Optional[str] = None,
+        cascade: bool = True,
     ) -> None:
+        self.cascade = cascade
         self.no_commit = no_commit
         self.ship_sha = ship_sha
         self.ledger_met = ledger_met
@@ -539,6 +541,8 @@ def _parse_args(argv: List[str]) -> _Opts:
             opts.findings = argv[i]
         elif a == "--no-commit":
             opts.no_commit = True
+        elif a == "--no-cascade":
+            opts.cascade = False
         elif a == "--ship-sha":
             if i + 1 >= len(argv):
                 raise _CliError(f"flag requires a value: {a}")
@@ -610,7 +614,7 @@ def _cascade_if_implemented(plan_path: str, state: dict) -> int:
     A plan stamped by a hand or bulk edit never passed through the flip branch, so its
     sizing and baton stay open. Every other repeat stamp stays a genuine no-op (AC6i).
     """
-    if state.get("prior_status") != "implemented" or not _cited_sizing_open(plan_path):
+    if not state.get("cascade", True) or state.get("prior_status") != "implemented" or not _cited_sizing_open(plan_path):
         return 0
     return _run_cascade(plan_path, state.get("deliverable_id"))
 
@@ -1662,6 +1666,7 @@ def _stamp_implemented(opts: _Opts) -> int:
         "deliverable_id": None,
         "override_applied": False,
         "cleared_stale_marker": False,
+        "cascade": opts.cascade,
     }
 
     def mutate(old_text: str) -> str:
@@ -2122,7 +2127,11 @@ def _stamp_implemented(opts: _Opts) -> int:
 
     # Under --no-commit no stamp sha exists; without the caller's sha the cascade refuses
     # every baton and the flip reports as failed while the baton strands at ready_to_fire.
-    cascade_exit = _run_cascade(opts.plan, _state["deliverable_id"], stamp_sha or opts.ship_sha or "")
+    cascade_exit = (
+        _run_cascade(opts.plan, _state["deliverable_id"], stamp_sha or opts.ship_sha or "")
+        if opts.cascade
+        else 0
+    )
 
     # Archival occasion (see _archive_stamped_plan docstring): only attempted
     # when the flip itself was actually committed (worktree resolved, not
@@ -3742,6 +3751,40 @@ def _stamp_review_verified(opts: _Opts) -> int:
     return 0
 
 
+def stamp_implemented(
+    plan_path: str,
+    *,
+    falsifier_verdict: Optional[str] = None,
+    falsifier_output: Optional[str] = None,
+    prose: Optional[str] = None,
+    no_commit: bool = False,
+    ship_sha: Optional[str] = None,
+    ledger_met: Optional[str] = None,
+    cascade: bool = True,
+) -> int:
+    """Run the ``stamp-implemented`` verb in-process with the CLI's own argv contract; returns its exit code.
+
+    ``cascade=False`` skips the terminal-state cascade (the deliverable and goal fan-out) and
+    leaves it to the caller; the default keeps the CLI's behaviour. ``ship_sha`` and
+    ``ledger_met`` need ``no_commit``, as on the command line.
+    """
+    argv = ["stamp-implemented", "--plan", plan_path]
+    for flag, value in (
+        ("--falsifier-verdict", falsifier_verdict),
+        ("--falsifier-output", falsifier_output),
+        ("--prose", prose),
+        ("--ship-sha", ship_sha),
+        ("--ledger-met", ledger_met),
+    ):
+        if value is not None:
+            argv += [flag, value]
+    if no_commit:
+        argv.append("--no-commit")
+    if not cascade:
+        argv.append("--no-cascade")
+    return main(argv)
+
+
 def main(argv: List[str]) -> int:
     """CLI entry: dispatch on the verb (``stamp-implemented`` / ``stamp-superseded``).
 
@@ -3773,6 +3816,10 @@ def main(argv: List[str]) -> int:
             "(only stamp-implemented can leave its write to a caller's commit)",
             file=sys.stderr,
         )
+        return 1
+
+    if not opts.cascade and opts.verb != "stamp-implemented":
+        print(f"{_PROG}: {opts.verb} does not accept --no-cascade (only stamp-implemented cascades)", file=sys.stderr)
         return 1
 
     if opts.ship_sha is not None and not opts.no_commit:

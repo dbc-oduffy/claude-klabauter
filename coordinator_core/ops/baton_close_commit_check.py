@@ -4,7 +4,7 @@
 "may this baton become terminal": the cascade's own legs (c), (a), (d), with leg (b) answered
 from one reverse-edge index built once per call over the corpus texts the caller read.
 No write, no spawn. The only I/O is leg (a)'s claim-ledger read inside `_legs_c_a_refusal`
-and `dag._read_meta` on the corpus texts that can reference a candidate.
+and a frontmatter parse of the corpus texts that can reference a candidate.
 """
 
 from __future__ import annotations
@@ -117,7 +117,7 @@ def _corpus_metas(
         if path_str in candidates:
             metas[path_str] = candidates[path_str]
         elif pattern is not None and pattern.search(text):
-            metas[path_str] = dag._read_meta(path_str)
+            metas[path_str] = dag._parse_frontmatter(text)
         else:
             metas[path_str] = {}
     return metas

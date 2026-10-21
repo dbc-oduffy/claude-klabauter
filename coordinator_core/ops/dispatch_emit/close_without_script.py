@@ -327,6 +327,7 @@ def _pay(
     terminal_sha = record["terminal_sha"]
     judged = verdict.criterion["status"]
     now = datetime.now().astimezone()
+    batons = _claimed_batons(worktree_root, run_id, record)
     try:
         held = run_close._parse_close(record, run_id, now)
     except ValueError:
@@ -396,11 +397,30 @@ def _pay(
         except Exception as exc:  # noqa: BLE001 -- a leg failure is reported, never raised
             entry_result, entry_paths = tc._leg("failed", f"completion-entry raised {type(exc).__name__}"), []
 
+    ship_state = held_legs.get("baton-ship")
+    ship_paid = ship_state is not None and ship_state.status in _PAID
+    ship_paths: list = []
+    ship_saved: dict = {}
+    ship_result = None
+    if batons and not ship_paid and minted and judged == "met":
+        from coordinator_core.ops.dispatch_emit.run_close_baton_ship import baton_ship_leg
+
+        ship_saved = {rel: tc._read_rel(worktree_root, rel) for rel in batons}
+        try:
+            ship_result = baton_ship_leg(worktree_root, run_id, batons, terminal_sha)
+        except Exception as exc:  # noqa: BLE001 -- a leg failure is reported, never raised
+            ship_result = tc._leg("failed", f"baton-ship raised {type(exc).__name__}")
+        if ship_result.status == "ran":
+            ship_paths = list(batons)
+        else:
+            tc._restore_texts(worktree_root, ship_saved)
+
     also_commit = tuple(
         p for p in (
             plan_rel if fresh else None,
             writeback.get("register_sizing"),
             *entry_paths,
+            *ship_paths,
         ) if p
     )
     withheld = None
@@ -431,6 +451,8 @@ def _pay(
     if failed_commit:
         _remove(worktree_root, entry_paths)
         entry_paths = []
+        if ship_paths:
+            tc._restore_texts(worktree_root, ship_saved)
     coded_sha = stamped_result.get("coded_sha")
     reply["committed"] = bool(coded_sha)
     reply["sha"] = coded_sha
@@ -465,6 +487,8 @@ def _pay(
     legs: dict = {}
     if not entry_paid:
         legs["completion-entry"] = tc._leg("failed", tc._NOT_LANDED) if written_entries and failed_commit else entry_result
+    if ship_result is not None:
+        legs["baton-ship"] = tc._leg("failed", tc._NOT_LANDED) if ship_paths and failed_commit else ship_result
     if failed_commit:
         legs["lessons"] = tc._leg("failed", tc._NOT_LANDED)
     else:
@@ -480,6 +504,9 @@ def _pay(
     paid_here = legs.get("completion-entry")
     if paid_here is not None and not entry_paid and paid_here.status in _PAID and not failed_commit:
         write["settled"] = {"completion-entry": paid_here}
+    shipped_here = legs.get("baton-ship")
+    if shipped_here is not None and shipped_here.status in _PAID and not failed_commit:
+        write["settled"] = {**write.get("settled", {}), "baton-ship": shipped_here}
     queue_review = receipted and (review_leg is None or review_leg.status == "failed")
     if queue_review:
         write["queue"] = ["review"]
@@ -487,7 +514,6 @@ def _pay(
     if write:
         run_close.amend_close_job(worktree_root, run_id, **write)
     if queue_review:
-        batons = [str(b) for b in record.get("claimed_batons") or []]
         launch = close_background._context(
             worktree_root, Path(repo_root),
             {"run_id": run_id, "claimed_batons": batons, "source_memo": record.get("source_memo")},
@@ -495,13 +521,24 @@ def _pay(
         if not close_background._launch_close_review(launch):
             run_close.record_leg_outcome(worktree_root, run_id, "review", "failed", "close.review did not start")
 
-    reply["close"] = _close(worktree_root, run_id, plan_rel, plan_text, reply, legs, entry_paths, now)
+    reply["close"] = _close(worktree_root, run_id, plan_rel, plan_text, reply, legs, entry_paths, now, batons)
     return reply
+
+
+def _claimed_batons(worktree_root: Path, run_id: str, record: dict) -> list:
+    """The close-job record's claimed batons, else the one baton the run's gate recorded at emit."""
+    recorded = [str(b) for b in record.get("claimed_batons") or []]
+    if recorded:
+        return recorded
+    from coordinator_core.ops.dispatch_emit.terminal_commit import _run_own_baton
+
+    own = _run_own_baton(worktree_root, run_id)
+    return [own] if own else []
 
 
 def _close(
     worktree_root: Path, run_id: str, plan_rel: str, plan_text: str, reply: dict, paid: dict,
-    entry_paths: list, now: Any,
+    entry_paths: list, now: Any, batons: list,
 ) -> dict:
     from coordinator_core.ops.dispatch_emit import run_close, terminal_commit as tc
 
@@ -511,7 +548,7 @@ def _close(
     except ValueError:
         legs = {}
     legs.update(paid)
-    if not record.get("claimed_batons"):
+    if not batons:
         legs["baton-drain"] = tc._leg("not-applicable", "run claims no baton")
     if not record.get("source_memo"):
         legs["memo-lifecycle"] = tc._leg("not-applicable", "plan names no source memo")

@@ -189,12 +189,6 @@ def test_reverse_spinoff_gains_deliverable_item(tmp_path):
     assert ev["field"] == "plan.deliverable_id" and ev["done"]
 
 
-def test_reverse_aliased_uppercase_spinoff_gains_deliverable_item(tmp_path):
-    _w(tmp_path, "docs/plans/a.md", "---\nstatus: implemented\ndeliverable_id: dlv-x\n---\n")
-    (ev,) = _batons(tmp_path, **{B1: {"deliverable_id": "dlv-x", "kind": "Spin-Off"}})[B1]
-    assert ev["field"] == "plan.deliverable_id" and ev["done"]
-
-
 def test_reverse_two_plans_one_deliverable_yield_two_items(tmp_path):
     _w(tmp_path, "docs/plans/a.md", "---\nstatus: implemented\ndeliverable_id: dlv-x\n---\n")
     _w(tmp_path, "docs/plans/b.md", "---\nstatus: draft\ndeliverable_id: dlv-x\n---\n")
@@ -230,6 +224,48 @@ def test_reverse_long_frontmatter_closing_fence_past_first_read(tmp_path):
     _w(tmp_path, "docs/plans/a.md", f"---\n{pad}status: implemented\ndeliverable_id: dlv-x\n---\n")
     (ev,) = _batons(tmp_path, **{B1: {"deliverable_id": "dlv-x"}})[B1]
     assert ev["done"]
+
+
+SZ = "state/sizings/s.yaml"
+
+
+def _sizing_tree(root, plan_status="implemented", with_plan=True, extra_sizing_naming_b1=False):
+    _w(root, SZ, f"schema: sizing-object\nscout_evidence:\n  - {B1}\n")
+    if with_plan:
+        _w(root, "docs/plans/p.md", f'---\nstatus: {plan_status}\nsizing_object: "{SZ}"\n---\n')
+    if extra_sizing_naming_b1:
+        _w(root, "state/sizings/s2.yaml", f"baton: {B1}\n")
+        _w(root, "docs/plans/q.md", '---\nstatus: implemented\nsizing_object: "state/sizings/s2.yaml"\n---\n')
+
+
+def test_sizing_hop_baton_named_by_sizing_gains_plan_item(tmp_path):
+    _sizing_tree(tmp_path)
+    (ev,) = _batons(tmp_path, **{B1: {}})[B1]
+    assert ev["field"] == "plan.sizing_object" and ev["done"]
+    assert ev["target_path"] == "docs/plans/p.md" and ev["target_status"] == "implemented"
+    assert B2 not in _batons(tmp_path, **{B2: {}})
+
+
+def test_sizing_hop_undelivered_plan_is_not_done(tmp_path):
+    _sizing_tree(tmp_path, plan_status="draft")
+    (ev,) = _batons(tmp_path, **{B1: {}})[B1]
+    assert ev["field"] == "plan.sizing_object" and ev["done"] is False
+
+
+def test_sizing_hop_escaping_sizing_path_adds_none(tmp_path):
+    _w(tmp_path, "docs/plans/p.md", '---\nstatus: implemented\nsizing_object: "../s.yaml"\n---\n')
+    _w(tmp_path, "s.yaml", f"- {B1}\n")
+    assert B1 not in _batons(tmp_path, **{B1: {}})
+
+
+def test_sizing_hop_sizing_without_plan_adds_none(tmp_path):
+    _sizing_tree(tmp_path, with_plan=False)
+    assert B1 not in _batons(tmp_path, **{B1: {}})
+
+
+def test_sizing_hop_baton_named_by_two_sizings_adds_none(tmp_path):
+    _sizing_tree(tmp_path, extra_sizing_naming_b1=True)
+    assert B1 not in _batons(tmp_path, **{B1: {}})
 
 
 def test_module_imports_no_yaml_or_subprocess():

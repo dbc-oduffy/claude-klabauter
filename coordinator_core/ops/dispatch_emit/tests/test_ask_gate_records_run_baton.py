@@ -81,6 +81,30 @@ def test_halted_verdict_with_run_id_records_no_baton(repo):
     assert not (record_dir(repo, RUN) / RUN_BATON_FILE).exists()
 
 
+def test_xs_verdict_with_baton_records_the_given_baton(repo):
+    _put(repo, "XS", "dispatch", ACCEPTED)
+    doc = yaml.safe_load((repo / REL).read_text(encoding="utf-8"))
+    doc["baton"] = BATON
+    (repo / REL).write_text(yaml.safe_dump(doc), encoding="utf-8", newline="\n")
+    out = ask_gate._handler({"sizing_path": REL, "run_id": RUN, "baton": BATON, "writes": ["a.py"]}, repo_root=repo)
+    assert out["arm"] == "xs" and not out.get("halt")
+    assert read_run_baton(repo, RUN) == BATON
+
+
+def test_xs_verdict_without_baton_records_nothing(repo):
+    _put(repo, "XS", "dispatch", ACCEPTED)
+    out = ask_gate._handler({"sizing_path": REL, "run_id": RUN, "writes": ["a.py"]}, repo_root=repo)
+    assert out["arm"] == "xs"
+    assert not (record_dir(repo, RUN) / RUN_BATON_FILE).exists()
+
+
+def test_xs_foreign_baton_halts_and_records_nothing(repo):
+    _put(repo, "XS", "dispatch", ACCEPTED)
+    out = ask_gate._handler({"sizing_path": REL, "run_id": RUN, "baton": BATON, "writes": ["a.py"]}, repo_root=repo)
+    assert out["halt"]["kind"]
+    assert not (record_dir(repo, RUN) / RUN_BATON_FILE).exists()
+
+
 def test_refused_write_leaves_the_verdict_standing(repo, monkeypatch):
     def boom(*a, **k):
         raise OSError("disk")

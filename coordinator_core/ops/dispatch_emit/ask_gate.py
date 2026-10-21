@@ -558,9 +558,13 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         _stamp_landed_rows(root, verdict.resume_plan, landed)
     if params.get("run_id"):
         _record_resume_snapshot(root, params["run_id"], verdict)
-        if verdict.halt is None and verdict.baton:
+        # XS carries the caller's baton (validated in _arm_verdict) instead of minting one.
+        claimed = verdict.baton["path"] if verdict.baton else (
+            params.get("baton") if verdict.arm == ARM_XS else None
+        )
+        if verdict.halt is None and claimed:
             try:
-                write_run_baton(root, params["run_id"], verdict.baton["path"])
+                write_run_baton(root, params["run_id"], claimed)
             except (OSError, ValueError):
                 pass
     out =(replace(verdict, recorded=recorded) if recorded is not None else verdict).to_json()

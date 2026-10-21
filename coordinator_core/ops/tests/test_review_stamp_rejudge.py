@@ -112,13 +112,15 @@ def test_met_stamp_keeps_the_falsifier_flag_path(tmp_path):
 
 
 def test_auto_flip_accepts_a_rejudged_met(tmp_path):
-    from coordinator_core.ops.dispatch_emit.terminal_commit import _stamp_plan_implemented
+    from coordinator_core.ops.ceremony import close_background as cb
 
     p = _seeded(tmp_path, "not_met")
     _judge(tmp_path, "met")
     m.rejudge(p, tmp_path)
-    reply = _stamp_plan_implemented(tmp_path, "plan.md", "abc1234")
-    assert reply["plan_status"] == "implemented", reply
+    ctx = cb.JobContext(tmp_path, tmp_path / ".git", "run-rejudge", (), None, terminal_sha="abc1234",
+                        record={"plan_rel": "plan.md", "terminal_sha": "abc1234"})
+    result = cb._plan_flip(ctx)
+    assert result.status == "ran" and "status: implemented" in p.read_text(encoding="utf-8"), result
 
 
 def test_a_judge_sidecar_in_the_share_dir_is_not_a_source(tmp_path):
@@ -167,11 +169,35 @@ def test_emit_rejudge_fires_only_the_criterion_judge(tmp_path):
     assert script.count("agent(") == 1 and "exit-criterion-judge" in script and '"rejudge": true' in script
 
 
-from coordinator_core.ops.dispatch_emit.tests.test_terminal_commit_register_cascade import (  # noqa: E402
-    _SIZING,
-    _row as _cascade_row,
-    _sizing_text,
-)
+_SIZING = "state/sizings/2026-10-09-x.yaml"
+_SIZING_HEAD = """schema: sizing-object
+intent: "x"
+estimate:
+  tshirt: S
+  provisional: true
+route: spec-dispatch
+detents: []
+fork: null
+xl_exit: null
+status: routed
+premise:
+  provenance: read
+  evidence: e
+"""
+
+
+def _cascade_row(rid, claimed=True, **kw):
+    row = {"id": rid, "source_text": f"t {rid}", "surface": "ui", "status": "open",
+           "claimed_by": ["docs/plans/p.md"] if claimed else [], "wired": False}
+    row.update(kw)
+    return row
+
+
+def _sizing_text(rows):
+    block = yaml.safe_dump(
+        {"requirement_register": {"sources": [{"doc": "brief.md", "ref": "r@abc"}], "rows": rows}}, sort_keys=False
+    )
+    return _SIZING_HEAD + block + "# trailer outside the register\n"
 
 _ROW = {"id": "r1", "claim": "this-plan", "status": "met", "wired": True, "surface": "ui", "observed_ref": "x.py::f"}
 
@@ -384,11 +410,11 @@ def test_judge_only_mint_admits_a_deferred_open_row(tmp_path):
 
 
 def test_judge_only_mint_refuses_a_register_gap(tmp_path, monkeypatch):
-    from coordinator_core.ops.dispatch_emit import terminal_commit
+    from coordinator_core.ops.dispatch_emit import register_gate
 
     plan, head = _hand_worked(tmp_path)
     _record(tmp_path, head)
-    monkeypatch.setattr(terminal_commit, "_register_gate", lambda *_a: "register row r1 not judged")
+    monkeypatch.setattr(register_gate, "register_gate", lambda *_a: "register row r1 not judged")
     before = plan.read_bytes()
     with pytest.raises(m.MintRefusal, match="register row r1"):
         _mint(plan, tmp_path)

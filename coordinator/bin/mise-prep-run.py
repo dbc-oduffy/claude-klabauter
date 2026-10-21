@@ -614,6 +614,7 @@ def main(argv=None) -> int:
         return EXIT_REFUSED
 
     plans = list(args.plans)
+    skipped: list[str] = []
     if not plans:
         try:
             entry = _load_entry()
@@ -621,6 +622,15 @@ def main(argv=None) -> int:
         except Exception as exc:  # noqa: BLE001 - the entry query owns its own errors
             return refuse(f"could not read the approved-plan set: {exc}")
         plans = [r["plan"] for r in rows]
+        # `plan.seam_fix` writes docs/plans/ plans only and raises on anything else, which would
+        # take the whole run down; an out-of-tree plan (an archived spec) is reported, not fired.
+        skipped = [p for p in plans if not p.replace("\\", "/").startswith("docs/plans/")]
+        plans = [p for p in plans if p not in skipped]
+        for p in skipped:
+            print(
+                f"mise-prep-run: SKIPPED-OUT-OF-TREE {p} — outside docs/plans/, not certifiable",
+                file=sys.stderr,
+            )
         if not plans:
             print("mise-prep-run: no approved plans — nothing to certify")
             return EXIT_OK
@@ -766,6 +776,7 @@ def main(argv=None) -> int:
                     "plans": rows,
                     "certified": len(certified),
                     "dryRun": args.dry_run,
+                    "skipped": [{"plan": p, "outcome": "SKIPPED-OUT-OF-TREE"} for p in skipped],
                     "seam": _seam_spell(seam["verdict"]),
                     "seamFix": seam_fix,
                     "residueWorkflow": (

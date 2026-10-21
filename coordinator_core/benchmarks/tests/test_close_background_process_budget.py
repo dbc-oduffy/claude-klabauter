@@ -62,3 +62,44 @@ def test_close_background_job_is_under_the_500ms_bar(job_measurement):
     m = job_measurement
     assert m["net_ms"] > 0 and m["net_procs"] > 0, f"job cost not observed (full <= setup-only): {m['detail']}"
     assert m["net_ms"] < BUDGET_MS, f"over the {BUDGET_MS}ms bar: {m['detail']}"
+
+
+def test_deferred_close_legs_over_a_1250_sizing_corpus_stay_under_the_job_budget(tmp_path, monkeypatch):
+    """Every deferred landing leg, corpus padded to the real-shape sizing count: in-process time
+    (children excluded) under JOB_BUDGET_MS and the 500ms bar. Spawns are printed, not asserted.
+    The mint is stubbed (its cost is the mint's own gate)."""
+    import subprocess
+    import time
+
+    from coordinator_core.benchmarks.terminal_commit_full_path import REAL_SIZING_RECORDS
+    from coordinator_core.ops import review_stamp
+    from coordinator_core.ops.ceremony import close_background as cb
+    from coordinator_core.ops.ceremony.tests import test_close_background_land_run_legs as legs_fx
+    from coordinator_core.ops.tests.test_deliverable_cascade_kinds import _sizing_body
+
+    root = tmp_path / "repo"
+    sha = legs_fx._build(root)
+    for i in range(REAL_SIZING_RECORDS):
+        legs_fx._write(root, f"state/sizings/20250101-pad-{i:04d}.yaml", _sizing_body(deliverable_id=f"dlv-pad-{i:06d}"))
+    monkeypatch.setattr(review_stamp, "mint", legs_fx._fake_mint)
+    names = tuple(leg for leg in legs_fx.LAND_LEGS if leg != "baton-ship")
+    legs_fx._job(root, sha, names)
+
+    spawns = []
+    real = subprocess.Popen
+
+    class Counting(real):
+        def __init__(self, *a, **k):
+            spawns.append(1)
+            super().__init__(*a, **k)
+
+    monkeypatch.setattr(subprocess, "Popen", Counting)
+    start = time.process_time()
+    outcomes = cb.run_background(legs_fx._ctx(root))
+    spent_ms = (time.process_time() - start) * 1000
+
+    failed = {leg: r.detail for leg, r in outcomes.items() if r.status == "failed"}
+    assert not failed, failed
+    assert outcomes["close-commit"].status == "ran" and outcomes["deliverable-cascade"].status == "ran"
+    print(f"DEFERRED-LEGS-BUDGET {spent_ms:.1f}ms in-process, {len(spawns)} spawn(s)")
+    assert spent_ms < cb.JOB_BUDGET_MS and spent_ms < BUDGET_MS, f"{spent_ms:.1f}ms over budget"

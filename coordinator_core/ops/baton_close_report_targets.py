@@ -42,6 +42,11 @@ _PLAN_ID_RE = re.compile(r"^plan_id:[ \t]*(.*)$")
 _DELIVERABLE_RE = re.compile(r"^deliverable_id:[ \t]*(.*)$")
 _PREDECESSOR_RE = re.compile(r"^predecessor_handoff:[ \t]*(.*)$")
 _GOAL_ID_RE = re.compile(r"^id:[ \t]*(.*)$")
+_SIZING_OBJECT_RE = re.compile(r"^sizing_object:[ \t]*(.*)$")
+_BATON_PATH_RE = re.compile(r"state/handoffs/[^\s\"',()#]+\.md")
+
+# Evidence.field of the sizing hop: baton named by a sizing, plan produced by that sizing.
+REVERSE_FIELD_SIZING = "plan.sizing_object"
 
 
 def _scalar(raw: str) -> str:
@@ -130,6 +135,8 @@ class _Reader:
         self._plan_ids: dict[str, str] | None = None
         self._by_deliverable: dict[str, list[str]] = {}
         self._by_predecessor: dict[str, list[str]] = {}
+        self._by_sizing: dict[str, list[str]] = {}
+        self._sizing_batons: dict[str, list[str]] | None = None
         self._goal_status: dict[str, str | None] | None = None
 
     def status_of(self, rel: str, *, fenced: bool) -> tuple[bool, str | None]:
@@ -184,6 +191,9 @@ class _Reader:
             did = _key_value(fm, _DELIVERABLE_RE)
             if did:
                 self._by_deliverable.setdefault(did, []).append(rel)
+            szo = _key_value(fm, _SIZING_OBJECT_RE)
+            if szo:
+                self._by_sizing.setdefault(szo.replace("\\", "/"), []).append(rel)
             pre = _key_value(fm, _PREDECESSOR_RE)
             if pre:
                 self._by_predecessor.setdefault(pre.replace("\\", "/"), []).append(rel)
@@ -200,6 +210,25 @@ class _Reader:
     def plans_for_predecessor(self, baton_rel: str) -> list[str]:
         self._plan_index()
         return self._by_predecessor.get(baton_rel, [])
+
+    def sizing_hop(self, baton_rel: str) -> list[tuple[str, str]]:
+        """(sizing rel, plan rel) pairs for sizings that name `baton_rel` and have a producing plan.
+
+        Only sizings some plan cites as `sizing_object` are read (head bytes, once each); a baton
+        named by more than one such sizing yields nothing.
+        """
+        self._plan_index()
+        if self._sizing_batons is None:
+            self._sizing_batons = {}
+            for szo in self._by_sizing:
+                full = _safe_join(self.root, szo)
+                lines = _head_or_none(full, _HEAD_BYTES) if full else None
+                for b in {m.replace("\\", "/") for ln in lines or () for m in _BATON_PATH_RE.findall(ln)}:
+                    self._sizing_batons.setdefault(b, []).append(szo)
+        sizings = self._sizing_batons.get(baton_rel, [])
+        if len(sizings) != 1:
+            return []
+        return [(sizings[0], p) for p in self._by_sizing[sizings[0]]]
 
     def goal_status(self, goal_id: str) -> tuple[str, str | None] | None:
         """(goal file rel path, status) for a goal id, or None when no goal file carries it."""
@@ -294,10 +323,15 @@ def target_evidence(worktree_root: str, headers: dict[str, BatonHeader]) -> dict
                 if p not in seen:
                     seen.add(p)
                     items.append(_path_item(rd, EvidenceClass.PLAN, REVERSE_FIELD_DELIVERABLE, p, True, PLAN_DONE))
-        for p in rd.plans_for_predecessor(rel.replace("\\", "/")):
+        brel = rel.replace("\\", "/")
+        for p in rd.plans_for_predecessor(brel):
             if p not in seen:
                 seen.add(p)
                 items.append(_path_item(rd, EvidenceClass.PLAN, REVERSE_FIELD_PREDECESSOR, p, True, PLAN_DONE))
+        for _sz, p in rd.sizing_hop(brel):
+            if p not in seen:
+                seen.add(p)
+                items.append(_path_item(rd, EvidenceClass.PLAN, REVERSE_FIELD_SIZING, p, True, PLAN_DONE))
         if items:
             out[rel] = items
     return out
