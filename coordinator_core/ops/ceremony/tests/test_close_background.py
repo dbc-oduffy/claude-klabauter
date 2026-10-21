@@ -415,3 +415,87 @@ def test_close_review_still_imports_its_close_background_names():
     import importlib
 
     importlib.import_module("coordinator_core.ops.ceremony.close_review")
+
+
+_DID = "dlv-close-cascade-000000"
+_SESSION_ID = "11111111-1111-1111-1111-111111111111"
+
+
+def _cascade_repo(tmp_path, baton_state):
+    from coordinator_core.ops.tests.test_deliverable_cascade_kinds import _git, _init_repo, _seed_handoff
+
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    name = "2026-10-21-run-baton.md"
+    path = _seed_handoff(repo, name, deployment_state=baton_state, deliverable_id=_DID)
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            f"deployment_state: {baton_state}\n", f"deployment_state: {baton_state}\nshipped_in: abc1234\n", 1
+        ),
+        encoding="utf-8",
+    )
+    if baton_state == "shipped":
+        dest = repo / "archive" / "handoffs" / name[:7] / name
+        dest.parent.mkdir(parents=True)
+        path.rename(dest)
+    _seed_handoff(repo, "2026-10-21-peer.md", deliverable_id=_DID)
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-m", f"seed\n\nSession-Id: {_SESSION_ID}")
+    return repo, f"state/handoffs/{name}", _git
+
+
+def _drain(repo, rel):
+    run_close.write_close_job(repo, RUN, ("baton-drain",), datetime.now().astimezone() + timedelta(minutes=10))
+    ctx = cb.JobContext(repo, repo / ".git", RUN, (rel,), None, "a" * 40)
+    return cb.run_background(ctx, {"baton-drain": cb._baton_drain})["baton-drain"]
+
+
+def test_baton_drain_fires_the_cascade_for_an_archived_shipped_baton(tmp_path, monkeypatch):
+    import asyncio
+
+    from coordinator_core.ops.cascade_backstop_sweep import _handler as sweep_handler
+
+    monkeypatch.setenv("CLAUDE_SESSION_ID", _SESSION_ID)
+    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+    repo, rel, git = _cascade_repo(tmp_path, "shipped")
+    before = git(repo, "rev-list", "--count", "HEAD").stdout.strip()
+    assert asyncio.run(sweep_handler({"deliverable_id": _DID}, repo_root=repo / ".git"))["divergences"]
+
+    result = _drain(repo, rel)
+
+    assert result.status == "ran", result.detail
+    assert "cascade: 1 fired, 1 advanced, 0 refused, 0 skipped" in result.detail
+    peer = (repo / "state" / "handoffs" / "2026-10-21-peer.md").read_text(encoding="utf-8")
+    assert "deployment_state: shipped" in peer and f"advanced_by: {_DID}" in peer
+    assert int(git(repo, "rev-list", "--count", "HEAD").stdout.strip()) == int(before) + 1
+    assert asyncio.run(sweep_handler({"deliverable_id": _DID}, repo_root=repo / ".git"))["divergences"] == []
+
+
+def test_baton_drain_skips_non_terminal_batons_without_calling_the_op(tmp_path, monkeypatch):
+    import coordinator_core.warm.entry_seam as entry_seam
+
+    def boom(*a, **k):
+        raise AssertionError("reentrant_dispatch must not be called")
+
+    monkeypatch.setattr(entry_seam, "reentrant_dispatch", boom)
+    repo, rel, _ = _cascade_repo(tmp_path, "ready_to_fire")
+
+    result = _drain(repo, rel)
+
+    assert result.status == "ran", result.detail
+    assert "cascade: 0 fired, 0 advanced, 0 refused, 1 skipped" in result.detail
+
+
+def test_baton_drain_cascade_error_fails_the_leg_after_the_archive_step_ran(tmp_path, monkeypatch):
+    import coordinator_core.ops.dispatch_emit.run_baton_cascade as rbc
+
+    def bad(*a, **k):
+        raise RuntimeError("secret")
+
+    monkeypatch.setattr(rbc, "fire_for_batons", bad)
+    repo, rel, _ = _cascade_repo(tmp_path, "ready_to_fire")
+
+    result = _drain(repo, rel)
+
+    assert result.status == "failed" and "cascade: failed RuntimeError" in result.detail
+    assert "archived 0 of 1 claimed baton(s)" in result.detail

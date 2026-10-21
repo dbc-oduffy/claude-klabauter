@@ -1,13 +1,13 @@
 import subprocess
 from pathlib import Path
 
-from coordinator_core.git import machine_local_paths as mlp
-
 import pytest
+
+from coordinator_core.git import machine_local_paths as mlp
 
 pytestmark = pytest.mark.spawns_process
 
-_NOWIN =getattr(subprocess, "CREATE_NO_WINDOW", 0)
+_NOWIN = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
 def _git(repo, *args):

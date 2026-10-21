@@ -81,8 +81,8 @@ def test_every_adoption_site_admits_a_relay_only_through_the_wholeness_check():
     assert sites == ["_stagedManifest = got.manifest"], sites
     helper = script[script.index("const _adoptStageReply"):script.index("_stagedManifest = got.manifest")]
     assert "_wholeManifestGap(got.manifest)" in helper
-    assert "_readStageSidecar(r.manifest_handle)" in helper
-    assert "_verifyReplyText(text, h)" in script[script.index("const _readStageSidecar"):script.index("const _adoptStageReply")]
+    assert "_readStageSidecar(r.manifest_handle, REPO_ROOT)" in helper
+    assert "_verifyReplyText(text, h)" in script[script.index("async function _readStageSidecar"):script.index("const _adoptStageReply")]
     assert "_diskRead" not in script and "_adoptManifest" not in script
     assert "Array.isArray(_ready.readyOpReply?.rows)" not in script
     for site in ("_spineReview.stage_reply", "_revised.stage_reply", "_authored.stage_reply"):
@@ -116,7 +116,7 @@ def _adopt(manifest, soft: bool) -> str | None:
         "(async () => {\nlet _stagedManifest = null;\n"
         + ask_compose._ADMIT_MANIFEST_JS
         + "\n"
-        + ask_compose._stage_reply_js(head="", anchor="", run_id="run-1")
+        + ask_compose._stage_reply_js()
         + f"\nawait _adoptStageReply({json.dumps(manifest)}, {json.dumps(soft)});\n"
         "process.stdout.write(JSON.stringify(_stageRefusal));\n})();\n"
     )

@@ -39,6 +39,8 @@ def _install_failing_merge_run(monkeypatch, recorder: list[str] | None = None, s
             return _proc(1)
         if args[:2] == ["diff", "--cached"]:
             return _proc(0, stdout=staged_stdout)
+        if args[:2] == ["diff", "--name-only"]:
+            return _proc(0)
         if args[:2] == ["merge", "--ff-only"]:
             return _proc(1)
         if args[:2] == ["merge", "--no-ff"]:
@@ -96,7 +98,8 @@ def test_discrimination_adds_no_spawn(monkeypatch):
     abort_calls = [entry for entry in recorder if entry == "run:merge"]
     assert len(abort_calls) == 3
     total_run_calls = len(recorder)
-    assert total_run_calls == 7
+    # 8 = the 7 reconcile spawns plus the one machine-local diff that must precede the ff.
+    assert total_run_calls == 8
 
 
 def test_staged_read_is_one_zero_flag_spawn_before_the_merges(monkeypatch):

@@ -46,7 +46,6 @@ _RUNTIME_FLOOR: frozenset[Key] = frozenset(
         ("ask", "halt-commit"),
         ("ask", "commit:wave-"),
         ("ask", "blitz-stage-read"),
-        ("ask", "stage-reply-page"),
         ("emit", "commit:wave-"),
         ("grind", "commit"),
         ("grind", "review-fix-commit"),

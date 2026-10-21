@@ -1,19 +1,18 @@
-"""The composed ask script takes a stage reply from every stage leg and assembles the manifest from
-verified `dispatch.reply_page` pages, never from a manifest an agent relayed. The whole composed script
-runs under node with every agent leg stubbed by label; the page leg answers with
-`reply_sidecar.page_reply`, the function the engine op returns.
+"""The composed ask script takes a stage reply from every stage leg and assembles the manifest from the sidecar
+the engine's reader script returns through `workflow({scriptPath})`, never from bytes an agent relayed. The whole
+composed script runs under node with every agent leg stubbed by label and `workflow` evaluating the reader file
+`reply_sidecar.write_reply` really wrote.
 
 The helpers below are the shared fake the other composed-script tests bind their stage replies with."""
 
 from __future__ import annotations
 
-import base64
-import copy
 import hashlib
 import json
 import os
 import shutil
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -24,64 +23,81 @@ from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
-PAGE_LABEL = "stage-reply-page"
-_PAGES: dict[str, list[dict]] = {}
+_STAGED: dict[str, tuple[str, dict]] = {}
+_ROOT: list[Path] = []
 
-#: Prepended to a node program that defines `agent`; its stub returns `fakePage(cfg, prompt)` for the page label.
-PAGE_FAKE_JS = r"""
-const fakePage = (cfg, prompt) => {
-  const m = /dispatch\.reply_page '([^']*)'/.exec(prompt);
-  if (!m) return { error: 'page leg prompt names no reply_page call' };
-  const want = JSON.parse(m[1]);
-  const pages = (cfg.pages || {})[want.handle.sha256];
-  if (!pages || pages[want.page] === undefined) return { error: 'no such page' };
-  globalThis.__pageCalls = globalThis.__pageCalls || {};
-  const key = want.handle.sha256 + ':' + want.page;
-  const n = globalThis.__pageCalls[key] = (globalThis.__pageCalls[key] || 0) + 1;
-  const tries = ((cfg.attempts || {})[want.handle.sha256] || {})[want.page];
-  if (tries && tries[n - 1] !== undefined) return tries[n - 1];
-  return pages[want.page];
+#: Prepended to a node program: `makeWorkflow(cfg)` is a `workflow` global that reads the reader at
+#: `cfg.root` + the script's `REPO/`-relative scriptPath, drops a leading `export const meta` line (the
+#: runner strips it) and evaluates the rest as an AsyncFunction body. `workflowCalls` records each scriptPath.
+WORKFLOW_FAKE_JS = r"""
+const fs = require('fs');
+const workflowCalls = [];
+const makeWorkflow = (cfg) => async (spec) => {
+  const p = String(spec && spec.scriptPath);
+  workflowCalls.push(p);
+  if (!p.startsWith('REPO/')) throw new Error('Workflow script file not found: ' + p);
+  let body;
+  try { body = fs.readFileSync(cfg.root + '/' + p.slice(5), 'utf8'); }
+  catch (_e) { throw new Error('Workflow script file not found: ' + p); }
+  body = body.replace(/^export const meta[^\n]*\n/, '');
+  const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+  return await new AsyncFunction(body)();
 };
 """
+
+
+@pytest.fixture(autouse=True)
+def stage_root(tmp_path):
+    """The directory `readers_cfg()` writes every staged sidecar and its reader under."""
+    _ROOT[:] = [tmp_path]
+    yield tmp_path
+    _ROOT.clear()
 
 
 def sidecar_text(manifest: dict) -> str:
     return reply_sidecar.canonical_json(manifest)
 
 
-def register(handle: dict, text: str) -> None:
-    """Record every page the engine op would return for `handle`, under the handle's sha256."""
-    pages = reply_sidecar.page(text, 0)[1]
-    _PAGES[handle["sha256"]] = [reply_sidecar.page_reply(handle, text, i) for i in range(pages)]
-
-
 def stage_reply(manifest: dict | None) -> dict | None:
-    """The stage op's reply for `manifest`: a handle over its sidecar text, or the refusal `{error}`."""
+    """The stage op's reply for `manifest`: a handle over its sidecar text, or the refusal `{error}`.
+
+    The sidecar and its reader reach disk when `readers_cfg()` runs, through the real `write_reply`.
+    """
     if manifest is None:
         return None
     if manifest.get("error"):
         return {k: manifest[k] for k in ("error", "owed_em_ids", "owed_plan") if k in manifest}
-    text = sidecar_text(manifest)
-    raw = text.encode("ascii")
-    handle = {"path": "state/warp/fixture/manifest.json", "sha256": hashlib.sha256(raw).hexdigest(), "bytes": len(raw)}
-    register(handle, text)
-    return {"manifest_handle": handle}
+    raw = sidecar_text(manifest).encode("ascii")
+    sha = hashlib.sha256(raw).hexdigest()
+    rel = f"state/warp/fixture/{sha[:16]}.json"
+    _STAGED[sha] = (rel, manifest)
+    return {"manifest_handle": {"path": rel, "sha256": sha, "bytes": len(raw)}}
 
 
 def agent_gate_reply(root, reply: dict) -> dict:
     """What the gate agent returns for a real `dispatch.ask_gate` reply: its stage as `stage_reply`."""
     out = {k: v for k, v in reply.items() if k not in ("manifest", "manifest_handle")}
     if "manifest_handle" in reply:
-        handle = reply["manifest_handle"]
-        register(handle, reply_sidecar.read_text(root, handle))
-        out["stage_reply"] = {"manifest_handle": handle}
+        out["stage_reply"] = {"manifest_handle": reply["manifest_handle"]}
     elif "manifest" in reply:
         out["stage_reply"] = reply["manifest"]
     return out
 
 
-def pages_cfg() -> dict[str, list[dict]]:
-    return copy.deepcopy(_PAGES)
+def readers_cfg(root: Path | None = None) -> dict:
+    """The node config naming the root the reader scripts live under.
+
+    With no `root`, every `stage_reply` manifest is written under the test's tmp_path first.
+    """
+    if root is None:
+        root = _ROOT[0]
+        for sha, (rel, manifest) in _STAGED.items():
+            assert reply_sidecar.write_reply(root, root / rel, manifest)["sha256"] == sha
+    return {"root": str(root)}
+
+
+def reader_file(handle: dict) -> Path:
+    return _ROOT[0] / reply_sidecar.reader_rel(handle["sha256"])
 
 
 _ROW = {
@@ -110,24 +126,24 @@ def big_manifest(rows: int = 40) -> dict:
 
 
 _NODE_PROGRAM = (
-    PAGE_FAKE_JS
+    WORKFLOW_FAKE_JS
     + r"""
 const src = process.env.SRC.replace(/^export const meta/m, 'const meta');
 const cfg = JSON.parse(process.env.CFG);
+const workflow = makeWorkflow(cfg);
 const calls = [];
 const agent = async (prompt, opts) => {
   const label = opts && opts.label;
   calls.push({ label, prompt: String(prompt) });
-  if (label === 'stage-reply-page') return fakePage(cfg, String(prompt));
   if (label === 'halt-commit' || label === 'commit') return cfg.commit;
   if (label === 'verify') return cfg.verify;
   if (cfg.replies[label] !== undefined) return cfg.replies[label];
   return {};
 };
 const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
-const run = new AsyncFunction('args', 'agent', 'parallel', 'pipeline', 'phase', src);
-run({ runToken: cfg.token }, agent, async (xs) => Promise.all(xs.map((f) => f())), async () => ({}), () => {})
-  .then((result) => console.log(JSON.stringify({ calls, result })))
+const run = new AsyncFunction('args', 'agent', 'parallel', 'pipeline', 'phase', 'workflow', src);
+run({ runToken: cfg.token }, agent, async (xs) => Promise.all(xs.map((f) => f())), async () => ({}), () => {}, workflow)
+  .then((result) => console.log(JSON.stringify({ calls, result, workflowCalls })))
   .catch((e) => { console.error(String((e && e.stack) || e)); process.exit(1); });
 """
 )
@@ -142,7 +158,7 @@ def _script(monkeypatch) -> str:
     )
 
 
-def _run(script: str, reply: dict | None, *, pages=None, relay=None, attempts=None) -> dict:
+def _run(script: str, reply: dict | None, *, relay=None, tamper=None) -> dict:
     node = shutil.which("node")
     if node is None:
         pytest.skip("node not on PATH")
@@ -152,9 +168,10 @@ def _run(script: str, reply: dict | None, *, pages=None, relay=None, attempts=No
     }
     cfg = {
         "token": _TOKEN, "verify": {**{"items": _MET["items"]}}, "commit": _LANDED,
-        "replies": {"gate": gate, "gate-stage": gate}, "pages": pages if pages is not None else pages_cfg(),
-        "attempts": attempts or {},
+        "replies": {"gate": gate, "gate-stage": gate}, **readers_cfg(),
     }
+    if tamper is not None:
+        tamper()
     proc = subprocess.run(
         [node, "-e", _NODE_PROGRAM], capture_output=True, text=True, encoding="utf-8", timeout=60,
         env={**os.environ, "SRC": script, "CFG": json.dumps(cfg)}, **no_console_creationflags(),
@@ -167,80 +184,80 @@ def _labels(out: dict) -> list[str]:
     return [c["label"] for c in out["calls"]]
 
 
-def test_a_forty_row_manifest_is_assembled_whole_from_more_than_one_verified_page(monkeypatch):
-    manifest = big_manifest(40)
-    reply = stage_reply(manifest)
-    pages = len(_PAGES[reply["manifest_handle"]["sha256"]])
-    assert pages > 1
-    out = _run(_script(monkeypatch), reply)
-    res = out["result"]
-    assert res["halted_by"] is None, res["halted_by"]
-    assert res["rows"] == [r["id"] for r in manifest["rows"]]
-    assert _labels(out).count(PAGE_LABEL) == pages
-    tail = next(c for c in out["calls"] if c["label"] == "ledger-remaining")
-    assert "pkg/f39.py" in tail["prompt"]
-
-
-def test_a_one_page_manifest_costs_one_page_leg(monkeypatch):
-    reply = stage_reply(big_manifest(2))
-    out = _run(_script(monkeypatch), reply)
-    assert out["result"]["halted_by"] is None
-    assert _labels(out).count(PAGE_LABEL) == 1
-
-
-def _flip(pages: dict, reply: dict, page: int) -> dict:
-    sha = reply["manifest_handle"]["sha256"]
-    chunk = pages[sha][page]["chunk"]
-    pages[sha][page]["chunk"] = chunk[:10] + ("X" if chunk[10] != "X" else "Y") + chunk[11:]
-    return pages
-
-
 def _halt_reason(out: dict) -> str:
     return out["result"]["halted_by"]["reason"]
 
 
-def test_a_tampered_sidecar_halts_and_dispatches_no_executor(monkeypatch):
-    reply = stage_reply(big_manifest(40))
-    out = _run(_script(monkeypatch), reply, pages=_flip(pages_cfg(), reply, 1))
-    assert _halt_reason(out).startswith("stage reply sidecar does not match its handle:")
+def _no_executor(out: dict) -> bool:
     labels = _labels(out)
-    assert "verify" not in labels and not [lab for lab in labels if lab and lab.startswith(("work:", "C"))], labels
+    return "verify" not in labels and not [lab for lab in labels if lab and lab.startswith(("work:", "C"))]
 
 
-def test_a_dropped_page_halts(monkeypatch):
+def _edit_reader(handle: dict, old: str, new: str) -> None:
+    path = reader_file(handle)
+    body = path.read_text(encoding="ascii")
+    assert old in body
+    path.write_text(body.replace(old, new, 1), encoding="ascii")
+
+
+def test_a_forty_row_manifest_is_assembled_whole_from_the_reader_with_no_agent_leg(monkeypatch):
+    manifest = big_manifest(120)
+    reply = stage_reply(manifest)
+    sha = reply["manifest_handle"]["sha256"]
+    assert len(sidecar_text(manifest)) > 3 * 4497
+    out = _run(_script(monkeypatch), reply)
+    res = out["result"]
+    assert res["halted_by"] is None, res["halted_by"]
+    assert res["rows"] == [r["id"] for r in manifest["rows"]]
+    assert out["workflowCalls"] == [f"REPO/{reply_sidecar.reader_rel(sha)}"]
+    assert not [lab for lab in _labels(out) if lab and "reply" in lab and lab != "gate-stage"], _labels(out)
+    tail = next(c for c in out["calls"] if c["label"] == "ledger-remaining")
+    assert "pkg/f119.py" in tail["prompt"]
+
+
+def test_a_one_row_manifest_is_read_by_one_workflow_call(monkeypatch):
+    reply = stage_reply(big_manifest(2))
+    out = _run(_script(monkeypatch), reply)
+    assert out["result"]["halted_by"] is None
+    assert len(out["workflowCalls"]) == 1
+
+
+def test_a_reader_one_byte_off_the_handle_halts_and_dispatches_no_executor(monkeypatch):
     reply = stage_reply(big_manifest(40))
-    pages = pages_cfg()
-    del pages[reply["manifest_handle"]["sha256"]][1]
-    out = _run(_script(monkeypatch), reply, pages=pages)
-    assert _halt_reason(out).startswith("stage reply sidecar does not match its handle:")
-    assert "verify" not in _labels(out)
+    handle = reply["manifest_handle"]
+    out = _run(_script(monkeypatch), reply, tamper=lambda: _edit_reader(handle, '\\"C1\\"', '\\"C9\\"'))
+    assert _halt_reason(out).startswith("stage reply sidecar does not match its handle: ")
+    assert _no_executor(out), _labels(out)
 
 
-def test_a_page_whose_sha256_echo_differs_halts(monkeypatch):
+def test_a_reader_returning_a_shorter_text_halts(monkeypatch):
     reply = stage_reply(big_manifest(40))
-    pages = pages_cfg()
-    pages[reply["manifest_handle"]["sha256"]][1]["sha256"] = "0" * 64
-    out = _run(_script(monkeypatch), reply, pages=pages)
-    assert _halt_reason(out).startswith("stage reply sidecar does not match its handle:")
-    assert "verify" not in _labels(out)
+    handle = reply["manifest_handle"]
+    out = _run(_script(monkeypatch), reply, tamper=lambda: _edit_reader(handle, '\\"marker_path\\"', '\\"marker\\"'))
+    assert _halt_reason(out).startswith("stage reply sidecar does not match its handle: ")
+    assert _no_executor(out)
 
 
-def test_a_page_the_op_refuses_halts_with_the_ops_reason(monkeypatch):
+def test_a_missing_reader_halts_naming_the_reader(monkeypatch):
     reply = stage_reply(big_manifest(40))
-    out = _run(_script(monkeypatch), reply, pages={})
-    assert _halt_reason(out).startswith("stage reply sidecar does not match its handle:")
+    handle = reply["manifest_handle"]
+    out = _run(_script(monkeypatch), reply, tamper=lambda: reader_file(handle).unlink())
+    reason = _halt_reason(out)
+    assert reason.startswith("stage reply sidecar does not match its handle: ")
+    assert reply_sidecar.reader_rel(handle["sha256"]) in reason
+    assert _no_executor(out)
 
 
 def test_a_manifest_an_agent_relays_under_manifest_is_ignored(monkeypatch):
     out = _run(_script(monkeypatch), None, relay=big_manifest(3))
     assert _halt_reason(out).startswith("no folded stage manifest")
-    assert PAGE_LABEL not in _labels(out)
+    assert out["workflowCalls"] == []
 
 
-def test_a_stage_refusal_still_halts_by_name_with_no_page_leg(monkeypatch):
+def test_a_stage_refusal_still_halts_by_name_with_no_reader_read(monkeypatch):
     out = _run(_script(monkeypatch), {"error": "boom"})
     assert _halt_reason(out) == "stage refused: boom"
-    assert PAGE_LABEL not in _labels(out)
+    assert out["workflowCalls"] == []
 
 
 def test_a_reply_carrying_both_an_error_and_a_handle_is_not_adopted(monkeypatch):
@@ -254,80 +271,9 @@ def test_a_reply_carrying_neither_is_not_whole(monkeypatch):
     assert _halt_reason(out) == "stage manifest relay is not whole: manifest_handle"
 
 
-def test_the_page_leg_is_the_mechanical_agent_and_makes_one_engine_call(monkeypatch):
+def test_the_script_reads_the_reader_through_workflow_and_composes_no_page_leg(monkeypatch):
     script = _script(monkeypatch)
-    opts = script[script.index("label: 'stage-reply-page'"):].split("schema:", 1)[0]
-    assert "agentType: 'general-purpose'" in opts and "model: 'haiku'" in opts
-    assert script.count(reply_sidecar.OP_REPLY_PAGE) == 1
+    assert "workflow({ scriptPath: reader })" in script
+    assert "await _readStageSidecar(r.manifest_handle, REPO_ROOT)" in script
+    assert "stage-reply-page" not in script and "reply_page" not in script
     assert "_MANIFEST_READ_SCHEMA" not in script and "_adoptManifest" not in script
-
-
-def _damaged(reply: dict, page: int, *, reencode: bool) -> dict:
-    """Page `page` as a relay agent mangled it: every bare quote re-escaped, in the chunk or in the text it encodes."""
-    sha = reply["manifest_handle"]["sha256"]
-    good = copy.deepcopy(_PAGES[sha][page])
-    raw = reply_sidecar.page(_TEXTS[sha], page)[0]
-    bad = raw.replace('"', '\\"')
-    if reencode:
-        good["chunk"] = base64.b64encode(bad.encode("ascii")).decode("ascii")
-    else:
-        good["chunk"] = bad
-    return good
-
-
-_TEXTS: dict[str, str] = {}
-
-
-def _stage_big(rows: int = 40) -> tuple[dict, dict, int]:
-    manifest = big_manifest(rows)
-    reply = stage_reply(manifest)
-    sha = reply["manifest_handle"]["sha256"]
-    _TEXTS[sha] = sidecar_text(manifest)
-    return manifest, reply, len(_PAGES[sha])
-
-
-@pytest.mark.parametrize("reencode", [False, True])
-def test_a_re_escaped_relayed_page_is_retried_to_the_handle_matching_manifest(monkeypatch, reencode):
-    manifest, reply, pages = _stage_big()
-    sha = reply["manifest_handle"]["sha256"]
-    attempts = {sha: {"1": [_damaged(reply, 1, reencode=reencode)]}}
-    out = _run(_script(monkeypatch), reply, attempts=attempts)
-    res = out["result"]
-    assert res["halted_by"] is None, res["halted_by"]
-    assert res["rows"] == [r["id"] for r in manifest["rows"]]
-    assert _labels(out).count(PAGE_LABEL) == pages + 1
-
-
-def test_a_clean_multi_page_reply_costs_exactly_its_pages(monkeypatch):
-    _, reply, pages = _stage_big()
-    out = _run(_script(monkeypatch), reply)
-    assert out["result"]["halted_by"] is None
-    assert _labels(out).count(PAGE_LABEL) == pages
-
-
-def test_a_null_page_leg_is_retried(monkeypatch):
-    _, reply, pages = _stage_big()
-    sha = reply["manifest_handle"]["sha256"]
-    out = _run(_script(monkeypatch), reply, attempts={sha: {"1": [None]}})
-    assert out["result"]["halted_by"] is None
-    assert _labels(out).count(PAGE_LABEL) == pages + 1
-
-
-def test_a_page_altered_on_every_attempt_halts_naming_the_page(monkeypatch):
-    _, reply, pages = _stage_big()
-    sha = reply["manifest_handle"]["sha256"]
-    bad = _flip(pages_cfg(), reply, 1)[sha][1]
-    attempts = {sha: {"1": [bad] * ask_compose.PAGE_ATTEMPTS}}
-    out = _run(_script(monkeypatch), reply, attempts=attempts)
-    assert _halt_reason(out).startswith("stage reply sidecar does not match its handle: page 1 ")
-    assert _labels(out).count(PAGE_LABEL) == pages - 1 + ask_compose.PAGE_ATTEMPTS
-    labels = _labels(out)
-    assert "verify" not in labels and not [lab for lab in labels if lab and lab.startswith(("work:", "C"))], labels
-
-
-def test_a_page_the_op_refuses_is_not_retried(monkeypatch):
-    _, reply, pages = _stage_big()
-    sha = reply["manifest_handle"]["sha256"]
-    out = _run(_script(monkeypatch), reply, attempts={sha: {"1": [{"error": "out of range"}]}})
-    assert _halt_reason(out).endswith("out of range")
-    assert _labels(out).count(PAGE_LABEL) == pages

@@ -31,7 +31,11 @@ from coordinator_core.ops.dispatch_emit.ask_gate import _handler, gate
 from coordinator_core.ops.dispatch_emit.reply_sidecar import read_reply
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
 from coordinator_core.ops.dispatch_emit.tests.test_ask_gate import ACCEPTED, REL, _put, repo  # noqa: F401
-from coordinator_core.ops.dispatch_emit.tests.test_ask_compose_stage_handle import PAGE_FAKE_JS, agent_gate_reply, pages_cfg
+from coordinator_core.ops.dispatch_emit.tests.test_ask_compose_stage_handle import (
+    WORKFLOW_FAKE_JS,
+    agent_gate_reply,
+    readers_cfg,
+)
 from coordinator_core.ops.dispatch_emit.tests.test_ask_gate_resume import PLAN_REL
 from coordinator_core.ops.dispatch_emit.tests.test_ledger_halt_resume_gate import ALREADY_RAN, _landed_repo
 from coordinator_core.win_portability import no_console_creationflags
@@ -47,22 +51,22 @@ _EM_ROWS = ("E1", "E2")
 _LANDED = {"committed": True, "sha": "abc1234", "error": None, "refused": None}
 _MET = {"items": [{"id": i, "status": "met", "wired": True} for i in _RULABLE]}
 _UNMET = {"items": [{"id": "T2", "status": "not_met", "essential": True, "remaining": ["the criterion is red"]}]}
-_NODE_PROGRAM = PAGE_FAKE_JS + r"""
+_NODE_PROGRAM = WORKFLOW_FAKE_JS + r"""
 const src = process.env.SRC.replace(/^export const meta/m, 'const meta');
 const cfg = JSON.parse(process.env.CFG);
+const workflow = makeWorkflow(cfg);
 const calls = [];
 const agent = async (prompt, opts) => {
   const label = opts && opts.label;
   calls.push({ label, prompt: String(prompt) });
-  if (label === 'stage-reply-page') return fakePage(cfg, String(prompt));
   if (label === 'halt-commit' || label === 'commit') return cfg.commit;
   if (label === 'verify') return cfg.verify;
   if (cfg.replies[label] !== undefined) return cfg.replies[label];
   return {};
 };
 const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
-const run = new AsyncFunction('args', 'agent', 'parallel', 'pipeline', 'phase', src);
-run({ runToken: cfg.token }, agent, async (xs) => Promise.all(xs.map((f) => f())), async () => ({}), () => {})
+const run = new AsyncFunction('args', 'agent', 'parallel', 'pipeline', 'phase', 'workflow', src);
+run({ runToken: cfg.token }, agent, async (xs) => Promise.all(xs.map((f) => f())), async () => ({}), () => {}, workflow)
   .then((result) => console.log(JSON.stringify({ calls, result })))
   .catch((e) => { console.error(String((e && e.stack) || e)); process.exit(1); });
 """
@@ -127,7 +131,7 @@ def _run_composed(root, verify) -> dict:
         script_path="scratch/warp/x.mjs", in_run_commit=True, **REVIEW_KW,
     )
     cfg = {
-        "token": _TOKEN, "verify": verify, "commit": _LANDED, "pages": pages_cfg(),
+        "token": _TOKEN, "verify": verify, "commit": _LANDED, **readers_cfg(root),
         "replies": {"gate": gate_reply, "gate-stage": gate_reply},
     }
     proc = subprocess.run(

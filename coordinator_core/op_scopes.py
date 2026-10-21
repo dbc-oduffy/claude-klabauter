@@ -740,7 +740,6 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # dispatch.ask_gate / dispatch.ask_stage — keyed like dispatch.terminal_commit: the caller's own worktree.
     "dispatch.ask_gate":                        "common_dir",
     "dispatch.ask_stage":                       "common_dir",
-    "dispatch.reply_page":                      "common_dir",
     # dispatch.ask_fanout — writes slice sizings and the parent record under the caller's own worktree.
     "dispatch.ask_fanout":                      "common_dir",
     # dispatch.sibling_status — reads the same parent record and status files under the caller's own worktree.

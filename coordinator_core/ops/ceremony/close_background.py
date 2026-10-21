@@ -28,6 +28,7 @@ Negative-spec:
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import sys
 import time
@@ -107,15 +108,15 @@ def _baton_drain(ctx: JobContext) -> LegResult:
     """Archive the run's claimed batons that have reached a terminal state."""
     if not ctx.claimed_batons:
         return LegResult("not-applicable", "run claims no baton")
-    from coordinator_core.ops.dispatch_emit.run_close_baton_ship import _run
     from coordinator_core.ops.fleet._common import archive_and_commit
     from coordinator_core.ops.fleet.archive_terminal_handoffs import plan_sweep
 
     ids = [Path(b).as_posix() for b in ctx.claimed_batons]
+    cascade_note, cascade_failed = _fire_cascade(ctx, ids)
     moves, skipped = plan_sweep(ctx.root, ctx.common_dir, _HANDOFF_SWEEP_CAP, candidate_ids=ids)
     archived = 0
     if moves:
-        acted, failed = _run(
+        acted, failed = asyncio.run(
             archive_and_commit(
                 worktree_root=ctx.root,
                 moves=moves,
@@ -125,15 +126,36 @@ def _baton_drain(ctx: JobContext) -> LegResult:
         archived = len(acted)
         if failed:
             return LegResult(
-                "failed", run_close.scrub_detail(f"{len(failed)} of {len(moves)} move(s) failed; {_SIZINGS_SWEEP_NOTE}")
+                "failed",
+                run_close.scrub_detail(
+                    f"{len(failed)} of {len(moves)} move(s) failed; {cascade_note}; {_SIZINGS_SWEEP_NOTE}"
+                ),
             )
     return LegResult(
-        "ran",
+        "failed" if cascade_failed else "ran",
         run_close.scrub_detail(
             f"archived {archived} of {len(ids)} claimed baton(s), "
-            f"{len(skipped)} retained; {_SIZINGS_SWEEP_NOTE}"
+            f"{len(skipped)} retained; {cascade_note}; {_SIZINGS_SWEEP_NOTE}"
         ),
     )
+
+
+def _fire_cascade(ctx: JobContext, ids: Sequence[str]) -> tuple[str, bool]:
+    """Fire deliverable.cascade_terminal for the run's terminal batons; returns (detail clause, failed).
+
+    A raise or a commit_error marks the clause failed; the caller still archives."""
+    try:
+        from coordinator_core.ops.dispatch_emit.run_baton_cascade import fire_for_batons
+
+        reply = fire_for_batons(ctx.root, ctx.common_dir, ids, ctx.terminal_sha)
+    except Exception as exc:  # a cascade failure never strands the archive step
+        return f"cascade: failed {type(exc).__name__}", True
+    fired = reply.get("fired") or []
+    advanced = sum(len(f.get("advanced") or []) for f in fired)
+    refused = sum(len(f.get("refused") or []) for f in fired)
+    errored = any(f.get("commit_error") for f in fired)
+    note = f"cascade: {len(fired)} fired, {advanced} advanced, {refused} refused, {len(reply.get('skipped') or [])} skipped"
+    return (f"{note}, commit error" if errored else note), errored
 
 
 def _orientation_refresh(ctx: JobContext) -> LegResult:

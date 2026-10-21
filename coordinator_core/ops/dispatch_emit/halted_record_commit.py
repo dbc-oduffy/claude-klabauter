@@ -372,6 +372,23 @@ def _stamp_run_baton(
     return rel, None
 
 
+def _baton_cascade(worktree_root: Path, repo_root: Path, run_id: str) -> dict:
+    """``{"run_baton_cascade": ...}`` for the run's recorded baton, ``{}`` when it recorded none.
+    The op fires only for a baton already terminal; no headroom before the dispatch deadline
+    records ``op-unavailable`` and calls nothing."""
+    from coordinator_core.ops.dispatch_emit.ask_contract import read_run_baton
+
+    rel = read_run_baton(worktree_root, run_id)
+    if rel is None:
+        return {}
+    left = dispatch_abandon.remaining()
+    if left is not None and left - dispatch_abandon.REPLY_MARGIN_SECS <= 0:
+        return {"run_baton_cascade": {"fired": [], "skipped": [{"baton": rel, "reason": "op-unavailable"}]}}
+    from coordinator_core.ops.dispatch_emit.run_baton_cascade import fire_for_batons
+
+    return {"run_baton_cascade": fire_for_batons(worktree_root, repo_root, [rel], None)}
+
+
 def _land(
     worktree_root: Path, repo_root: Path, params: dict, run_id: str, record_dir_rel: str, halted: dict
 ) -> dict:
@@ -610,7 +627,7 @@ def _land(
             "committed": False, "sha": None, "nothing_to_commit": True,
             **({"withheld": withheld} if withheld else {}), **peer_held_by,
             **({"targeted_tests": targeted} if targeted is not None else {}), **review_reply,
-            **baton_reply, **base,
+            **baton_reply, **_baton_cascade(worktree_root, repo_root, run_id), **base,
         }
 
     message = halted_record_message(run_id, halted)
@@ -648,6 +665,7 @@ def _land(
     extra: dict = {**review_reply, **peer_held_by, **baton_reply}
     if not reply.get("error"):
         _settle_ledger_pointer(repo_root, run_id, halted, sizing_rel, outcome_rel)
+        extra.update(_baton_cascade(worktree_root, repo_root, run_id))
         left = run_artifacts.residue(
             artifacts, set(snapshot.changed) - set(paths) - set(deleted), paths + deleted, withheld
         )

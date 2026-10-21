@@ -122,11 +122,6 @@ REGISTER: tuple[LegDecl, ...] = (
         "stages when readyOp did not run and returns the stage op's reply (a manifest handle), only when plan-blitz "
         "did not run readyOp; no judgment agent precedes it",
     ),
-    _floor(
-        "ask", "stage-reply-page",
-        "runs dispatch.reply_page for one page of a stage reply sidecar and returns it, because the runtime gives a "
-        "script no file read and no agent precedes it; retired when the runtime gains a file primitive",
-    ),
     _floor("ask", "gate", "runs the gate op where no agent precedes it; a preceding size agent absorbs it"),
     _floor("ask", "commit", _COMMIT_FLOOR),
     _floor("ask", "halt-commit", _COMMIT_FLOOR),

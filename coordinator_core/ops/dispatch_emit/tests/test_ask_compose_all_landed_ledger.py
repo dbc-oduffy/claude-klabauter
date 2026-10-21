@@ -19,7 +19,12 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     RESUME_LEDGER_KIND_FIELD,
 )
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
-from coordinator_core.ops.dispatch_emit.tests.test_ask_compose_stage_handle import PAGE_FAKE_JS, pages_cfg, stage_reply
+from coordinator_core.ops.dispatch_emit.tests.test_ask_compose_stage_handle import (  # noqa: F401
+    WORKFLOW_FAKE_JS,
+    readers_cfg,
+    stage_reply,
+    stage_root,
+)
 from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
@@ -39,22 +44,22 @@ _DISK = {
 _LANDED = {"committed": True, "sha": "abc1234", "error": None, "refused": None}
 _MET = {"items": [{"id": "R1", "status": "met", "wired": True}]}
 _UNMET = {"items": [{"id": "R1", "status": "not_met", "essential": True, "remaining": ["still red"]}]}
-_NODE_PROGRAM = PAGE_FAKE_JS + r"""
+_NODE_PROGRAM = WORKFLOW_FAKE_JS + r"""
 const src = process.env.SRC.replace(/^export const meta/m, 'const meta');
 const cfg = JSON.parse(process.env.CFG);
+const workflow = makeWorkflow(cfg);
 const calls = [];
 const agent = async (prompt, opts) => {
   const label = opts && opts.label;
   calls.push({ label, prompt: String(prompt) });
-  if (label === 'stage-reply-page') return fakePage(cfg, String(prompt));
   if (label === 'halt-commit' || label === 'commit') return cfg.commit;
   if (label === 'verify') return cfg.verify;
   if (cfg.replies[label] !== undefined) return cfg.replies[label];
   return {};
 };
 const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
-const run = new AsyncFunction('args', 'agent', 'parallel', 'pipeline', 'phase', src);
-run({ runToken: cfg.token }, agent, async (xs) => Promise.all(xs.map((f) => f())), async () => ({}), () => {})
+const run = new AsyncFunction('args', 'agent', 'parallel', 'pipeline', 'phase', 'workflow', src);
+run({ runToken: cfg.token }, agent, async (xs) => Promise.all(xs.map((f) => f())), async () => ({}), () => {}, workflow)
   .then((result) => console.log(JSON.stringify({ calls, result })))
   .catch((e) => { console.error(String((e && e.stack) || e)); process.exit(1); });
 """
@@ -78,7 +83,7 @@ def _run(script: str, *, verify=_MET, resume=_RESUME) -> dict:
         "tshirt": "M", "route": "spec-dispatch", "stage_reply": stage_reply(_DISK),
     }
     cfg = {
-        "token": _TOKEN, "verify": verify, "commit": _LANDED, "pages": pages_cfg(),
+        "token": _TOKEN, "verify": verify, "commit": _LANDED, **readers_cfg(),
         "replies": {"gate": gate_reply, "gate-stage": gate_reply},
     }
     proc = subprocess.run(

@@ -13,6 +13,7 @@ import pytest
 
 from coordinator_core.ops.dispatch_emit import ask_compose
 from coordinator_core.ops.dispatch_emit.ask_contract import STOP_AFTER_PLAN
+from coordinator_core.ops.dispatch_emit.tests.test_ask_compose_stage_handle import stage_root  # noqa: F401
 from coordinator_core.ops.dispatch_emit.tests.test_leg_register_ratchet import _ask, _ask_scripts
 from coordinator_core.win_portability import no_console_creationflags
 
@@ -98,4 +99,4 @@ def test_a_trimmed_engine_manifest_halts_by_name_and_a_whole_one_proceeds():
     out = fold_manifest(_TRIMMED)
     assert out["halted"]["reason"] == "stage manifest relay is not whole: review_declared_paths"
     out = fold_manifest(_WHOLE)
-    assert out["halted"] is None and out["manifest"] == _WHOLE and set(out["seen"]) == {"stage-reply-page"}
+    assert out["halted"] is None and out["manifest"] == _WHOLE and out["seen"] == []

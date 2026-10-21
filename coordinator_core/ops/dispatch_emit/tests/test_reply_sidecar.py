@@ -281,6 +281,122 @@ def test_js_names_no_runtime_decoder():
         assert banned not in rs.VERIFY_REPLY_JS
 
 
+_NODE_PRELUDE = """
+const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+let agentCalls = 0;
+const agent = () => { agentCalls++; throw new Error('agent called'); };
+"""
+
+
+def _node_json(tmp_path, source: str):
+    script = tmp_path / "run.js"
+    script.write_text(source, encoding="ascii")
+    out = subprocess.run(
+        ["node", str(script)], capture_output=True, text=True, check=True,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    return json.loads(out.stdout)
+
+
+def _read_with(tmp_path, handle: dict, workflow_js: str):
+    src = (
+        _NODE_PRELUDE
+        + rs.VERIFY_REPLY_JS
+        + rs.READ_STAGE_SIDECAR_JS
+        + f"\nconst workflow = {workflow_js};\n"
+        + f"_readStageSidecar({json.dumps(handle)}, 'ROOT').then(r => console.log(JSON.stringify({{r: r, agentCalls: agentCalls}})));\n"
+    )
+    return _node_json(tmp_path, src)
+
+
+def _reader_file(root, handle):
+    return root / rs.reader_rel(handle["sha256"])
+
+
+def test_reader_rel_refuses_bad_sha_before_any_filesystem_access():
+    for bad in ("", "abc", "A" * 64, "g" * 64, "a" * 63, "a" * 65, None, 5):
+        with pytest.raises(rs.ReplySidecarError):
+            rs.reader_rel(bad)
+    assert rs.reader_rel("a" * 64) == f"scratch/stage-readers/{'a' * 64}.js"
+
+
+def test_reader_script_is_pure_ascii_single_return():
+    text = 'q"\\   café\n'
+    body = rs.reader_script(text)
+    assert body.startswith(rs.READER_META)
+    body = body[len(rs.READER_META):]
+    assert body.isascii() and body.startswith("return ") and body.endswith(";\n")
+    assert json.loads(body[len("return "):-2]) == text
+
+
+def test_write_reply_leaves_reader_and_handle_for_remints_it(sidecar):
+    root, path, handle = sidecar
+    reader = _reader_file(root, handle)
+    assert reader.read_bytes() == rs.reader_script(path.read_text("ascii")).encode("ascii")
+    reader.unlink()
+    assert rs.handle_for(root, path) == handle
+    assert reader.read_bytes() == rs.reader_script(path.read_text("ascii")).encode("ascii")
+    assert not list(reader.parent.glob("*.tmp"))
+
+
+def test_second_write_of_same_payload_leaves_reader_mtime_unchanged(sidecar):
+    root, path, handle = sidecar
+    reader = _reader_file(root, handle)
+    before = reader.stat().st_mtime_ns
+    assert rs.write_reply(root, path, _manifest()) == handle
+    assert rs.handle_for(root, path) == handle
+    assert reader.stat().st_mtime_ns == before
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+@pytest.mark.skipif(shutil.which("node") is None, reason="node absent")
+def test_reader_script_returns_the_sidecar_text(sidecar, tmp_path):
+    root = tmp_path / "big"
+    path = root / "state" / "warp" / "run1" / "big.json"
+    handle = rs.write_reply(root, path, _manifest(150))
+    text = path.read_text("ascii")
+    assert len(text) > 3 * 4497
+    src = (
+        _NODE_PRELUDE
+        + f"const fs = require('fs');\nconst body = fs.readFileSync({json.dumps(str(_reader_file(root, handle)))}, 'ascii').slice({len(rs.READER_META)});\n"
+        + "new AsyncFunction(body)().then(v => console.log(JSON.stringify(v)));\n"
+    )
+    assert _node_json(tmp_path, src) == text
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+@pytest.mark.skipif(shutil.which("node") is None, reason="node absent")
+def test_read_stage_sidecar_js_adopts_and_refuses_damage(sidecar, tmp_path):
+    root, path, handle = sidecar
+    body = json.dumps(_reader_file(root, handle).read_text("ascii")[len(rs.READER_META):])
+    runner = (
+        "async ({ scriptPath }) => { if (scriptPath !== 'ROOT/scratch/stage-readers/" + handle["sha256"] + ".js') "
+        "throw new Error('bad path ' + scriptPath); return new AsyncFunction(%s)(); }"
+    )
+    ok = _read_with(tmp_path, handle, runner % body)
+    assert ok["agentCalls"] == 0
+    assert ok["r"] == {"manifest": _manifest()}
+
+    text = path.read_text("ascii")
+    flipped = text[:10] + chr(ord(text[10]) ^ 1) + text[11:]
+    for bad in (flipped, text[:-5]):
+        res = _read_with(tmp_path, handle, runner % json.dumps(rs.reader_script(bad)))
+        assert "fail" in res["r"] and res["agentCalls"] == 0
+
+    thrown = _read_with(tmp_path, handle, "async () => { throw new Error('no such file'); }")
+    assert "fail" in thrown["r"] and handle["sha256"] in thrown["r"]["fail"] and thrown["agentCalls"] == 0
+
+    for bad_handle in ({**handle, "sha256": "zz"}, {**handle, "bytes": -1}, {**handle, "bytes": "3"}, {**handle, "path": ""}):
+        assert "fail" in _read_with(tmp_path, bad_handle, "async () => ''")["r"]
+
+
+def test_read_stage_sidecar_js_names_no_runtime_decoder():
+    for banned in ("atob", "Buffer", "TextDecoder", "agent("):
+        assert banned not in rs.READ_STAGE_SIDECAR_JS
+
+
 def test_check_relay_default_cause_unchanged():
     msg = gcc.check_relay("record-urlenc", "abc", "9", "0" * 64)
     assert msg.endswith("the agent's copy of the pieces is damaged")

@@ -20,9 +20,7 @@ from coordinator_core.warp_fire import fire_command
 from coordinator_core.ops.dispatch_emit import agent_sidecar as _sidecar
 from coordinator_core.ops.dispatch_emit import prompt_fragments as _prompt_fragments
 from coordinator_core.ops.dispatch_emit.reply_sidecar import (
-    OP_REPLY_PAGE,
-    PAGE_RAW_CHARS,
-    PAGE_REPLY_SCHEMA,
+    READ_STAGE_SIDECAR_JS,
     STAGE_REPLY_SCHEMA,
     VERIFY_REPLY_JS,
 )
@@ -483,15 +481,9 @@ _MANIFEST_SCHEMA = _obj(
     },
 )
 
-#: A stage act's reply is a handle or a refusal; `_adoptStageReply` pages the sidecar and verifies it
+#: A stage act's reply is a handle or a refusal; `_adoptStageReply` reads the sidecar through its reader and verifies it
 #: against the handle before the manifest is adopted. `_STAGE_REPLY_OR_NULL` is for a conditional act.
 _STAGE_REPLY_OR_NULL = {**STAGE_REPLY_SCHEMA, "type": ["object", "null"]}
-#: The page leg may relay the op's `{error}` refusal, so no key is required; the script checks the echo.
-_PAGE_LEG_SCHEMA = {
-    **PAGE_REPLY_SCHEMA,
-    "required": [],
-    "properties": {**PAGE_REPLY_SCHEMA["properties"], "error": {"type": "string"}},
-}
 _STAGE_REPLY_PROP = {"stage_reply": _STAGE_REPLY_OR_NULL}
 
 _PLAN_STAGED_SCHEMA = _obj(
@@ -541,7 +533,7 @@ _LEDGER_PREFIX_VAR = "_LEDGER_PREFIX"
 _DESIGN_PREFIX_JS = f"(_gate?.{DESIGN_BRIEF_KEY} ? String(_gate.{DESIGN_BRIEF_KEY}) + '\\n\\n' : '')"
 
 #: An engine-owned fold site returns the stage reply under `STAGE_REPLY_SCHEMA`; `_adoptStageReply`
-#: (see `_stage_reply_js`) admits a manifest only when its paged sidecar matches the handle and
+#: (see `_stage_reply_js`) admits a manifest only when its sidecar matches the handle and
 #: `_wholeManifestGap` finds no gap. A refused stage lands in `_stageRefusal`; a sidecar that does not
 #: match its handle lands in `_diskHalt`; a not-whole manifest lands in `_relayGap` (halts by name).
 _ADMIT_MANIFEST_JS = (
@@ -577,48 +569,8 @@ _ADMIT_MANIFEST_JS = (
     "    if (!_stagedManifest && !_stageRefusal && _re !== '' && !/did not run/.test(_re)) _stageRefusal = _re;\n"
     "  };"
 )
-#: Every page but the last holds exactly this many sidecar characters; it bounds the `pages` a reply may
-#: claim for a handle.
-_PAGE_MIN_CHARS = PAGE_RAW_CHARS
-#: Page legs one page may cost before the run halts; a clean page costs one. Emitted into the script as a literal.
-PAGE_ATTEMPTS = 3
 _STAGE_SIDECAR_HALT = "stage reply sidecar does not match its handle: "
 _ADOPT_STAGE_REPLY_JS = (
-    "  const _readStageSidecar = async (h) => {\n"
-    "    if (!h || typeof h !== 'object' || typeof h.path !== 'string' || !/^[0-9a-f]{64}$/.test(String(h.sha256)) "
-    "|| !Number.isInteger(h.bytes) || h.bytes < 0) return { fail: 'the handle is malformed' };\n"
-    "    const echoes = (p, i) => !!p && !p.error && p.sha256 === h.sha256 && p.bytes === h.bytes && p.page === i "
-    "&& typeof p.chunk === 'string';\n"
-    "    const fetchPage = async (i, pagesWant) => {\n"
-    "      let last = 'no reply';\n"
-    f"      for (let a = 0; a < {PAGE_ATTEMPTS}; a++) {{\n"
-    "        const p = await _pageLeg(h, i);\n"
-    "        if (p && p.error) return { fail: String(p.error) };\n"
-    "        if (!echoes(p, i)) { last = 'reply is missing or does not echo the handle'; continue; }\n"
-    "        if (pagesWant !== null && p.pages !== pagesWant) { last = 'reply claims ' + p.pages + ' pages, expected ' + pagesWant; continue; }\n"
-    f"        if (pagesWant === null && (!Number.isInteger(p.pages) || p.pages < 1 || p.pages > Math.floor(h.bytes / {_PAGE_MIN_CHARS}) + 1)) "
-    "{ last = 'reply claims an impossible page count'; continue; }\n"
-    "        if (p.encoding !== 'base64') { last = 'reply encoding is not base64'; continue; }\n"
-    "        const v = _verifyPageChunk(p);\n"
-    "        if (v.fail) { last = v.fail; continue; }\n"
-    "        return { text: v.text, pages: p.pages };\n"
-    "      }\n"
-    f"      return {{ fail: 'page ' + i + ' did not verify after {PAGE_ATTEMPTS} attempts: ' + last }};\n"
-    "    };\n"
-    "    const p0 = await fetchPage(0, null);\n"
-    "    if (p0.fail) return { fail: p0.fail };\n"
-    "    const idx = [];\n"
-    "    for (let i = 1; i < p0.pages; i++) idx.push(i);\n"
-    "    const more = idx.length ? await parallel(idx.map((i) => () => fetchPage(i, p0.pages))) : [];\n"
-    "    let text = p0.text;\n"
-    "    for (let k = 0; k < idx.length; k++) {\n"
-    "      if (more[k].fail) return { fail: more[k].fail };\n"
-    "      text += more[k].text;\n"
-    "    }\n"
-    "    const why = _verifyReplyText(text, h);\n"
-    "    if (why) return { fail: why };\n"
-    "    try { return { manifest: JSON.parse(text) }; } catch (_e) { return { fail: 'the sidecar is not valid JSON' }; }\n"
-    "  };\n"
     # A soft (plan-blitz readyOp) reply's `error` is the pass-through's prose: `_adoptReadyError` owns
     # the refusal there. The manifest is only ever the sidecar text that matched its handle.
     "  const _adoptStageReply = async (r, soft) => {\n"
@@ -629,7 +581,7 @@ _ADOPT_STAGE_REPLY_JS = (
     "if (Array.isArray(r.owed_em_ids) && r.owed_em_ids.length) _stageOwedEm = { ids: r.owed_em_ids.map(String), "
     "plan: typeof r.owed_plan === 'string' ? r.owed_plan : null }; } return; }\n"
     "    if (!r.manifest_handle) { if (!soft && !_relayGap) _relayGap = 'manifest_handle'; return; }\n"
-    "    const got = await _readStageSidecar(r.manifest_handle);\n"
+    "    const got = await _readStageSidecar(r.manifest_handle, REPO_ROOT);\n"
     f"    if (got.fail) {{ if (!_diskHalt) _diskHalt = {_js_string_literal(_STAGE_SIDECAR_HALT)} + got.fail; return; }}\n"
     "    const gap = _wholeManifestGap(got.manifest);\n"
     "    if (gap) { if (!_relayGap) _relayGap = gap; return; }\n"
@@ -638,25 +590,10 @@ _ADOPT_STAGE_REPLY_JS = (
 )
 
 
-def _stage_reply_js(*, head: str, anchor: str, run_id: str) -> str:
-    """The script block that turns a stage reply into `_stagedManifest`: one mechanical page leg per page of
-    the sidecar `dispatch.reply_page` reads, joined and verified against the handle before `JSON.parse`."""
-    prompt = _cat(
-        f"{head}\n\n{anchor}\n\n",
-        f"Run `{_INVOKE} {OP_REPLY_PAGE} '",
-        "js:JSON.stringify({ handle: _h, page: _i })",
-        "'` once and return its JSON reply verbatim, every field and the chunk unchanged; the chunk is base64, copy it character for character. "
-        "If it replies {\"error\": ...}, return that message as error. Commit nothing.",
-    )
-    leg = _agent(
-        prompt, label="stage-reply-page", phase="plan", agent_type=_MECHANICAL_AGENT_TYPE,
-        agent_model=_MECHANICAL_MODEL, schema=_PAGE_LEG_SCHEMA, effort=_MECHANICAL_EFFORT, run_id=run_id,
-    )
-    return (
-        VERIFY_REPLY_JS
-        + f"\n  const _pageLeg = async (_h, _i) => {{ try {{ return await {leg}; }} catch (_e) {{ return null; }} }};\n"
-        + _ADOPT_STAGE_REPLY_JS
-    )
+def _stage_reply_js() -> str:
+    """The script block that turns a stage reply into `_stagedManifest`: the runtime reads the sidecar's reader
+    with no agent, and the text is verified against the handle before `JSON.parse`."""
+    return VERIFY_REPLY_JS + READ_STAGE_SIDECAR_JS + _ADOPT_STAGE_REPLY_JS
 
 
 #: The run reads its commit token from the Workflow `args` the emit's fire args carry, so the
@@ -1480,7 +1417,7 @@ def compose_ask_script(
     b.append("  let _manifest = null;")
     b.append("  let _stagedManifest = null;")
     b.append(_ADMIT_MANIFEST_JS)
-    b.append(_stage_reply_js(head=head, anchor=anchor, run_id=run_id))
+    b.append(_stage_reply_js())
     b.append(f"  let {_OWNER_ROWS_JS} = [];")
     b.append("  let _viaRoadmap = false;")
     b.append("  let _splitExit = null;")

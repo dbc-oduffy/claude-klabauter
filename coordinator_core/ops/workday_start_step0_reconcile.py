@@ -223,16 +223,6 @@ def main(argv: list[str]) -> int:
         _print_staged_paths(staged)
         return 3
 
-    ff_env = dict(os.environ)
-    ff_env["COORDINATOR_OVERRIDE_BRANCH"] = "1"
-    ff_env["COORDINATOR_OVERRIDE_BRANCH_REASON"] = (
-        "workday-start step 0 reconcile origin/main (ff)"
-    )
-    ff_merge = _run(["merge", "--ff-only", "origin/main"], env=ff_env)
-    if ff_merge.returncode == 0:
-        print(f"RECONCILED-FF branch={current}")
-        return 0
-
     added = _run(
         ["diff", "--name-only", "-z", "--no-renames", "--diff-filter=AM",
          "HEAD...origin/main", "--", MACHINE_LOCAL_PATHSPEC]
@@ -245,6 +235,16 @@ def main(argv: list[str]) -> int:
             for path in hits:
                 print(path, file=sys.stderr)
             return 3
+
+    ff_env = dict(os.environ)
+    ff_env["COORDINATOR_OVERRIDE_BRANCH"] = "1"
+    ff_env["COORDINATOR_OVERRIDE_BRANCH_REASON"] = (
+        "workday-start step 0 reconcile origin/main (ff)"
+    )
+    ff_merge = _run(["merge", "--ff-only", "origin/main"], env=ff_env)
+    if ff_merge.returncode == 0:
+        print(f"RECONCILED-FF branch={current}")
+        return 0
 
     merge_env = dict(os.environ)
     merge_env["COORDINATOR_OVERRIDE_BRANCH"] = "1"

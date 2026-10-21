@@ -12,6 +12,7 @@ import base64
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 from typing import Mapping
 
@@ -119,6 +120,33 @@ function _verifyReplyText(text, handle) {
 )
 
 
+READER_ROOT = "scratch/stage-readers"
+
+# Trap: depends on _verifyReplyText, so VERIFY_REPLY_JS must be emitted ahead of this block.
+READ_STAGE_SIDECAR_JS = """
+async function _readStageSidecar(h, root) {
+  if (h === null || typeof h !== 'object') return { fail: 'handle is not an object' };
+  if (typeof h.path !== 'string' || h.path === '') return { fail: 'handle path is not a non-empty string' };
+  if (typeof h.sha256 !== 'string' || !/^[0-9a-f]{64}$/.test(h.sha256)) return { fail: 'handle sha256 is not 64 lowercase hex' };
+  if (typeof h.bytes !== 'number' || !Number.isInteger(h.bytes) || h.bytes < 0) return { fail: 'handle bytes is not a non-negative integer' };
+  const reader = String(root) + '/' + 'scratch/stage-readers/' + h.sha256 + '.js';
+  let text;
+  try {
+    text = await workflow({ scriptPath: reader });
+  } catch (e) {
+    return { fail: 'reader ' + reader + ' did not run: ' + String(e && e.message ? e.message : e) };
+  }
+  const bad = _verifyReplyText(text, h);
+  if (bad !== null) return { fail: bad };
+  try {
+    return { manifest: JSON.parse(text) };
+  } catch (e) {
+    return { fail: 'reply text is not valid JSON' };
+  }
+}
+"""
+
+
 class ReplySidecarError(ValueError):
     """A handle or its sidecar failed verification; the message starts with ``RELAY_CORRUPT_HEAD``."""
 
@@ -165,6 +193,42 @@ def _handle(rel: str, raw: bytes) -> dict:
     return {"path": rel, "sha256": hashlib.sha256(raw).hexdigest(), "bytes": len(raw)}
 
 
+def reader_rel(sha256: str) -> str:
+    """``scratch/stage-readers/<sha256>.js``; ``ReplySidecarError`` unless ``sha256`` is 64 lowercase hex."""
+    if not isinstance(sha256, str) or not re.fullmatch(r"[0-9a-f]{64}", sha256):
+        raise _refuse(f"reader sha256 {sha256!r} is not 64 lowercase hex")
+    return f"{READER_ROOT}/{sha256}.js"
+
+
+READER_META = "export const meta = { name: 'stage-reply-reader', description: 'Returns one stage reply' }\n"
+
+
+def reader_script(text: str) -> str:
+    """The whole Workflow script that returns ``text``; ASCII-escaped so it is a valid JS string literal.
+
+    The runner refuses a script whose first statement is not the meta block
+    (docs/research/spike-verdicts/2026-10-21-workflow-scriptpath-reader.md)."""
+    return READER_META + "return " + json.dumps(text, ensure_ascii=True) + ";\n"
+
+
+def _ensure_reader(root: Path, raw: bytes) -> None:
+    """Leave the content-addressed reader for ``raw`` under ``root``; no write when it is already identical."""
+    target = _contain(root, reader_rel(hashlib.sha256(raw).hexdigest()))
+    body = reader_script(raw.decode("ascii")).encode("ascii")
+    try:
+        if target.read_bytes() == body:
+            return
+    except OSError:
+        pass
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp = target.with_name(f"{target.name}.{os.getpid()}.tmp")
+    try:
+        tmp.write_bytes(body)
+        os.replace(tmp, target)
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
 def write_reply(root: Path, path: Path, payload: Mapping) -> dict:
     """Write ``canonical_json(payload)`` at ``path`` atomically; return its handle.
 
@@ -181,6 +245,7 @@ def write_reply(root: Path, path: Path, payload: Mapping) -> dict:
         os.replace(tmp, target)
     finally:
         tmp.unlink(missing_ok=True)
+    _ensure_reader(root, raw)
     return _handle(rel, raw)
 
 
@@ -191,6 +256,10 @@ def handle_for(root: Path, path: Path) -> dict:
         raw = _contain(root, rel).read_bytes()
     except OSError as exc:
         raise _refuse(f"sidecar {rel!r} is unreadable: {exc}") from exc
+    try:
+        _ensure_reader(root, raw)
+    except UnicodeDecodeError:
+        pass
     return _handle(rel, raw)
 
 

@@ -175,7 +175,6 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.dispatch_emit.ask_gate", 'registers "dispatch.ask_gate"'),
     ("coordinator_core.ops.dispatch_emit.ask_stage", 'registers "dispatch.ask_stage"'),
     ("coordinator_core.ops.dispatch_emit.ask_fanout", 'registers "dispatch.ask_fanout"'),
-    ("coordinator_core.ops.dispatch_emit.reply_page", 'registers "dispatch.reply_page"'),
     ("coordinator_core.ops.dispatch_emit.sibling_status", 'registers "dispatch.sibling_status"'),
     ("coordinator_core.ops.dispatch_emit.abandoned_runs", 'registers "dispatch.reap_abandoned_runs"'),
     ("coordinator_core.ops.dispatch_emit.halted_rows_commit", 'registers "dispatch.commit_halted_rows"'),

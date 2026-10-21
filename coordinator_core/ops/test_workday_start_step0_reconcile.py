@@ -318,7 +318,7 @@ def test_origin_adding_machine_local_path_is_refused_before_merge(tmp_path, caps
     assert captured.out.splitlines()[-1] == "RECONCILE-MACHINE-LOCAL-REFUSED branch=work/testmachine/2026-01-01"
     assert ".coordinator-local/subagent-share/x/report.md" in captured.err
     assert _git(clone, "rev-parse", "HEAD").stdout == head_before
-    assert not (resolve_git_dir_for(clone) / "MERGE_HEAD").exists()
+    assert not (clone / ".git" / "MERGE_HEAD").exists()
 
     run_dir = tmp_path / "run"
     run_dir.mkdir()
@@ -329,10 +329,26 @@ def test_origin_adding_machine_local_path_is_refused_before_merge(tmp_path, caps
 
 def test_origin_state_subagent_share_path_still_merges(tmp_path, monkeypatch):
     origin, clone = _make_origin_and_clone(tmp_path)
-    _diverge(tmp_path, origin, clone, "state-subagent-share.txt", "ok\n")
+    _diverge(tmp_path, origin, clone, "state/subagent-share/legacy.txt", "ok\n")
     monkeypatch.chdir(clone)
     assert main([]) == 0
 
 
-def resolve_git_dir_for(root: Path) -> Path:
-    return root / ".git"
+def test_fast_forward_adding_machine_local_path_is_refused(tmp_path, capsys, monkeypatch):
+    origin, clone = _make_origin_and_clone(tmp_path)
+    other = tmp_path / "ff-other"
+    _git(tmp_path, "clone", "-q", str(origin), str(other))
+    _git(other, "config", "user.email", "test@example.com")
+    _git(other, "config", "user.name", "Test")
+    share = other / ".coordinator-local" / "subagent-share" / "ff.md"
+    share.parent.mkdir(parents=True)
+    share.write_text("telemetry\n")
+    _git(other, "add", "-f", "--", ".coordinator-local/subagent-share/ff.md")
+    _git(other, "commit", "-q", "-m", "ff share")
+    _git(other, "push", "-q", "origin", "HEAD:main")
+    head_before = _git(clone, "rev-parse", "HEAD").stdout
+
+    monkeypatch.chdir(clone)
+    assert main([]) == 3
+    assert capsys.readouterr().out.splitlines()[-1].startswith("RECONCILE-MACHINE-LOCAL-REFUSED")
+    assert _git(clone, "rev-parse", "HEAD").stdout == head_before

@@ -387,10 +387,6 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
         "coordinator_core/ops/dispatch_emit/ask_fanout.py",
         ("_handler",),
     ),
-    "dispatch.reply_page": (
-        "coordinator_core/ops/dispatch_emit/reply_page.py",
-        ("_handler",),
-    ),
     # Enrolled 2026-10-05: each now measures an EMPTY function-granular reachable spawn set.
     "install.probe_skill_frontmatter_valid": (
         "coordinator_core/install/prereq_probe.py",

@@ -35,11 +35,10 @@ Never for a pulled, replan or judgment plan.
 The reply is returned verbatim as `readyOpReply` on that plan's entry in `ready`, and nowhere else:
 never on a pulled, replan or judgment entry. plan-blitz never interprets the reply. Claude-klabauter adopts
 the reply's `manifest_handle` as the stage manifest when the sidecar it names is whole, and only then.
-Claude-klabauter reads that sidecar through `dispatch.reply_page` pages (`stage-reply-page` legs), joins them,
-and checks the text's length and sha256 against the handle before parsing it. Each page's chunk is
-base64 with its own `chunk_sha256`; a page that fails its check is re-fetched up to `PAGE_ATTEMPTS`
-legs. A page set that does not match halts the run with
-`stage reply sidecar does not match its handle: <reason>`. The parsed
+The engine leaves `scratch/stage-readers/<sha256>.js` beside every handle; the script reads it with
+`workflow({scriptPath})` and checks the text's length and sha256 against the handle before parsing
+it. A mismatch halts the run with `stage reply sidecar does not match its handle: <reason>`. The
+`readyOpReply` shape is unchanged: nothing on the plan-blitz side moves. The parsed
 manifest must be:
 
 - an object with no `error`;
