@@ -195,6 +195,7 @@ class ManifestEntry:
     digest: str
     batch_key: str
     skip_stages: tuple[str, ...] = ()
+    pm_ruling: str = ""
 
 
 @dataclass(frozen=True)
@@ -696,7 +697,8 @@ def select_rows(
     repo_root = Path(repo_root)
 
     seen_stems: dict[str, Path] = {}
-    rows: list[tuple[str, Path, str, dict[str, Any]]] = []  # (row_id, path, digest, normalised)
+    # (row_id, path, digest, normalised, pm_ruling)
+    rows: list[tuple[str, Path, str, dict[str, Any], str]] = []
 
     source_result: Optional[SourceOpResult] = None
     row_files: list[Path] = []
@@ -743,7 +745,9 @@ def select_rows(
         seen_stems[row_id] = row_path
 
         normalised = _normalise_sentinels(parsed, absent_sentinels)
-        rows.append((row_id, row_path, digest, normalised))
+        raw_ruling = parsed.get("pm_ruling")
+        pm_ruling = raw_ruling.strip() if isinstance(raw_ruling, str) else ""
+        rows.append((row_id, row_path, digest, normalised, pm_ruling))
 
     checked_where = _check_where(where, absent_sentinels)
     filtered = [r for r in rows if _matches_where(r[3], checked_where)]
@@ -808,7 +812,7 @@ def select_rows(
     entries: list[ManifestEntry] = []
     declined: list[DeclinedEntry] = []
     resolved_dirs: dict = {}
-    for row_id, row_path, digest, normalised in filtered:
+    for row_id, row_path, digest, normalised, pm_ruling in filtered:
         rel_path = _repo_relative(row_path, repo_root, resolved_dirs)
         mark = handback_marks.get(row_id, "")
         if mark.startswith("route-to-"):
@@ -859,6 +863,7 @@ def select_rows(
                 digest=digest,
                 batch_key=_coalesce_batch_key(normalised, batch_key),
                 skip_stages=skip_stages,
+                pm_ruling=pm_ruling,
             )
         )
 
@@ -881,7 +886,11 @@ def _manifest_digest(
     source_result: Optional[SourceOpResult],
     declined: Sequence[DeclinedEntry],
 ) -> str:
-    """The one canonical-JSON digest `select_rows` and `restrict_manifest` share."""
+    """The one canonical-JSON digest `select_rows` and `restrict_manifest` share.
+
+    Invariant: `ManifestEntry.pm_ruling` is deliberately absent; the row's own `digest`
+    already covers the ruling bytes, and adding it would change every existing digest.
+    """
     canonical = {
         "entries": [
             {

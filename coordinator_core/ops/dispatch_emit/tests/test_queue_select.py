@@ -1,6 +1,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import subprocess
 from pathlib import Path
@@ -16,6 +17,7 @@ from coordinator_core.ops.dispatch_emit.queue_select import (
     MissingRowIdError,
     RouteToRefusedError,
     WhereTermError,
+    _manifest_digest,
     live_row_ids,
     select_rows,
 )
@@ -466,6 +468,30 @@ def test_manifest_digest_is_deterministic(tmp_path):
     m2 = _select(queue=[queue_dir], repo_root=tmp_path)
     assert m1.digest == m2.digest
     assert isinstance(m1, Manifest)
+
+
+def test_pm_ruling_is_carried_per_entry(tmp_path):
+    queue_dir = tmp_path / "state" / "lessons"
+    queue_dir.mkdir(parents=True)
+    _write_row(queue_dir / "ruled.yaml", **_base_row(pm_ruling="apm accepts the tradeoff"))
+    _write_row(queue_dir / "plain.yaml", **_base_row())
+    _write_row(queue_dir / "listy.yaml", **_base_row(pm_ruling=["not", "a", "string"]))
+    manifest = _select(queue=[queue_dir], repo_root=tmp_path)
+    by_id = {e.row_id: e.pm_ruling for e in manifest.entries}
+    assert by_id == {"ruled": "apm accepts the tradeoff", "plain": "", "listy": ""}
+
+
+def test_pm_ruling_is_outside_the_manifest_digest(tmp_path):
+    queue_dir = tmp_path / "state" / "lessons"
+    queue_dir.mkdir(parents=True)
+    _write_row(queue_dir / "ruled.yaml", **_base_row(pm_ruling="apm accepts the tradeoff"))
+    manifest = _select(queue=[queue_dir], repo_root=tmp_path)
+    stripped = tuple(dataclasses.replace(e, pm_ruling="") for e in manifest.entries)
+    assert manifest.entries[0].pm_ruling
+    assert (
+        _manifest_digest(stripped, manifest.batch_sizes, manifest.source, manifest.declined)
+        == manifest.digest
+    )
 
 
 @pytest.fixture

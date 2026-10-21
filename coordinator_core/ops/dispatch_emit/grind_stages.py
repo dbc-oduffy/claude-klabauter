@@ -96,6 +96,10 @@ from coordinator_core.ops.dispatch_emit.terminal_commit_reconcile import TERMINA
 from coordinator_core.ops.dispatch_emit.agent_sidecar import sidecar_clause, sidecar_dir
 from coordinator_core.ops.workflow_scaffold import _js_string_literal
 
+#: Agent-reported stance of a row's ``pm_ruling`` on the tradeoff; routing reads it only
+#: alongside an engine-read ruling.
+RULING_ON_TRADEOFF = ("accepts", "rejects", "silent", "no-ruling")
+
 #: ``OP_RUNNER_AGENT_TYPE`` (imported above) is the op-runner type: its spec runs
 #: ``coordinator-invoke <op>`` and refuses any other command, so a call that also carries a
 #: ``backlog-grind-assemble`` command (undo, drain) never rides it.
@@ -440,6 +444,10 @@ def compose_triage_call(
             "when the fix genuinely carries a tradeoff, and describe it in "
             "`tradeoff`; otherwise set `has_tradeoff` to false and leave "
             "`tradeoff` empty. "
+            "Set `ruling_on_tradeoff` to `no-ruling` when the row carries no "
+            "`pm_ruling`; otherwise `accepts`, `rejects`, or `silent` by whether "
+            "that ruling accepts, rejects, or does not address the tradeoff you "
+            "report. "
             "A row's `pm_ruling` field, when present, is a binding APM/PM ruling: "
             "read it before the row body, cite it in `evidence`, and never issue "
             "a fresh park or no-action verdict against it. If the ruled step "
@@ -491,7 +499,7 @@ def compose_triage_call(
         parts.append(("lit", _JUDGE_AGAINST_HEAD_CLAUSE + " " + _NO_STAGING_CLAUSE))
     row_schema = {
         "type": "object",
-        "required": list(TRIAGE_RECORD_FIELDS) + ["has_tradeoff"],
+        "required": list(TRIAGE_RECORD_FIELDS) + ["has_tradeoff", "ruling_on_tradeoff"],
         "properties": {
             "row": {
                 "type": "string",
@@ -503,6 +511,7 @@ def compose_triage_call(
             "sizing_evidence": {"type": "string"},
             "has_tradeoff": {"type": "boolean"},
             "tradeoff": {"type": "string"},
+            "ruling_on_tradeoff": {"type": "string", "enum": list(RULING_ON_TRADEOFF)},
             "declared_files": {"type": "array", "items": {"type": "string"}},
             "fix_plan": {"type": "string"},
         },
@@ -810,6 +819,10 @@ def compose_fix_call(
             "true only when your fix genuinely carries a tradeoff triage did "
             "not catch, and describe it in `tradeoff`; otherwise set "
             "`has_tradeoff` to false and leave `tradeoff` empty. "
+            "Set `ruling_on_tradeoff` to `no-ruling` when the row carries no "
+            "`pm_ruling`; otherwise `accepts`, `rejects`, or `silent` by whether "
+            "that ruling accepts, rejects, or does not address the tradeoff you "
+            "report. "
             "Never write the published mirror (any publish destination) or "
             "`publish.mirrors.*` config for an engine-subject row: both are out "
             "of bounds, and a fix that needs them is NEEDS_WIDER_SCOPE. "
@@ -848,7 +861,8 @@ def compose_fix_call(
         f"`close_result`.{_manifest_stale_note} When `has_tradeoff` is true, "
         "do not run `backlog-grind-assemble grind-row close`: the row must stay "
         "at its path for the adjudicator, and a subagent cannot edit a row once "
-        "it is archived.",
+        "it is archived. Exception: when the row carries a `pm_ruling` and "
+        "`ruling_on_tradeoff` is `accepts`, run that close command.",
     ))
     if targeted_runner:
         parts.append(("lit", " Run the row's tests only through "))
@@ -874,7 +888,7 @@ def compose_fix_call(
     parts.append(("lit", " " + _JUDGE_AGAINST_HEAD_CLAUSE + " " + _NO_STAGING_CLAUSE))
     schema = {
         "type": "object",
-        "required": ["outcome", "has_tradeoff"],
+        "required": ["outcome", "has_tradeoff", "ruling_on_tradeoff"],
         "properties": {
             "outcome": {
                 "type": "string",
@@ -896,6 +910,7 @@ def compose_fix_call(
             },
             "has_tradeoff": {"type": "boolean"},
             "tradeoff": {"type": "string"},
+            "ruling_on_tradeoff": {"type": "string", "enum": list(RULING_ON_TRADEOFF)},
         },
     }
     return _agent_call(

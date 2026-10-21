@@ -29,7 +29,9 @@ it to ``fix``, and at or above it the row is handed back as ``baton`` naming
 its sizing, which the scout's own closing command writes (with the baton
 and the row's ``route-to-plan`` ledger mark). A row
 below plan weight with a non-empty tradeoff
-routes to ``needs-judgment`` (checked at triage-exit AND fix-exit, since a
+routes to ``needs-judgment`` unless the row carries an engine-read ``pm_ruling``: the ruling accepted
+(``tradeoff_disposition``) continues to fix, and a ruling that rejects it is handed back
+``repeat-refused`` naming the ruling (checked at triage-exit AND fix-exit, since a
 fixer can surface a tradeoff triage missed); ``NEEDS_PLAN`` maps to
 ``baton``; ``NEEDS_WIDER_SCOPE`` gets exactly one release-and-reacquire
 retry over the union of its locked files plus every extra file, then
@@ -238,13 +240,39 @@ def _out_of_root_paths(paths: Optional[Sequence[str]]) -> list[str]:
     return out
 
 
+_REPEAT_REFUSED_HEAD = "repeat hand-back refused: this row's earlier ruling already answered this tradeoff: "
+
+
+def tradeoff_disposition(tradeoff: str, pm_ruling: str, ruling_on_tradeoff: str) -> str:
+    """How a reported tradeoff is handled: ``none`` (no tradeoff), ``accepted`` (the row's engine-read
+    ``pm_ruling`` accepts it), ``needs-judgment`` (unruled, or the ruling is silent on it) or
+    ``repeat-refused`` (ruled and not accepted: fails closed, never re-asks). An agent's claim alone never
+    accepts: ``pm_ruling`` must be non-empty. Twin: ``_tradeoffDisposition``."""
+    if not tradeoff:
+        return "none"
+    if not pm_ruling:
+        return "needs-judgment"
+    if ruling_on_tradeoff == "accepts":
+        return "accepted"
+    if ruling_on_tradeoff == "silent":
+        return "needs-judgment"
+    return "repeat-refused"
+
+
 def route_after_triage(
-    routing: Mapping[str, dict], triage_node_id: str, verdict: str, tshirt_size: Optional[str], tradeoff: str
+    routing: Mapping[str, dict],
+    triage_node_id: str,
+    verdict: str,
+    tshirt_size: Optional[str],
+    tradeoff: str,
+    pm_ruling: str = "",
+    ruling_on_tradeoff: str = "",
 ) -> tuple[str, str]:
     if verdict not in vocab.RETIRE_VERDICTS and _tshirt_rank(tshirt_size) >= _PLAN_WEIGHT_FLOOR_RANK:
         return ("handback", "baton")
-    if tradeoff:
-        return ("handback", "needs-judgment")
+    disposition = tradeoff_disposition(tradeoff, pm_ruling, ruling_on_tradeoff)
+    if disposition in ("needs-judgment", "repeat-refused"):
+        return ("handback", disposition)
     node = routing[triage_node_id]
     target = node["edges"].get(verdict)
     if target is None or target not in routing:
@@ -291,6 +319,8 @@ _SIZE_CHECK_KEYS = (
     "fix_needs_plan",
     "fix_not_reproduced",
     "fix_late_tradeoff",
+    "ruled_tradeoff",
+    "repeat_refused",
 )
 
 
@@ -399,6 +429,7 @@ class Row:
     fix_reported: bool = False
     sizing_path: str = ""
     evidence: str = ""
+    pm_ruling: str = ""
 
 @dataclass
 class _Batch:
@@ -433,6 +464,7 @@ def run_admission(
     post_stages: Sequence[str] = (),
     run_close_sink: Optional[list] = None,
     undo_paths_sink: Optional[list] = None,
+    pm_rulings: Optional[Mapping[str, str]] = None,
 ) -> dict:
     """Drive the admission policy over ``batches`` (``(batch_id,
     [row_id, ...])`` pairs, in queue order).
@@ -497,7 +529,10 @@ def run_admission(
         batch_objs[batch_id] = _Batch(batch_id=batch_id, row_ids=list(row_ids))
         queue.append(batch_id)
         for rid in row_ids:
-            rows[rid] = Row(row_id=rid, path=rid, batch_id=batch_id, declared_files=[rid])
+            rows[rid] = Row(
+                row_id=rid, path=rid, batch_id=batch_id, declared_files=[rid],
+                pm_ruling=(pm_rulings or {}).get(rid, ""),
+            )
             order.append(rid)
 
     call_log: list[tuple[str, str]] = []
@@ -525,7 +560,7 @@ def run_admission(
         calls_by_kind[kind] = calls_by_kind.get(kind, 0) + 1
         return result
 
-    def _handback(row: Row, htype: str, reason: str, tradeoff: str = "") -> None:
+    def _handback(row: Row, htype: str, reason: str, tradeoff: str = "", ruling: str = "") -> None:
         row.done = True
         if row.refute_note:
             reason = f"{reason} (revived from a refuted close proposal, origin {row.origin!r}: {row.refute_note!r})"
@@ -534,23 +569,25 @@ def run_admission(
         entry = {"row": row.row_id, "type": htype, "reason": reason}
         if tradeoff:
             entry["tradeoff"] = tradeoff
+        if ruling:
+            entry["ruling"] = ruling
         handed_back.append(entry)
 
-    def _apply_route(row: Row, action: tuple[str, str], reason: str, tradeoff: str = "") -> None:
+    def _apply_route(row: Row, action: tuple[str, str], reason: str, tradeoff: str = "", ruling: str = "") -> None:
         kind, value = action
         if kind == "handback":
-            _handback(row, value, reason, tradeoff)
+            _handback(row, value, reason, tradeoff, ruling)
         else:
             row.node = value
 
-    def _handback_row(row: Row, htype: str, reason: str, tradeoff: str = "") -> None:
+    def _handback_row(row: Row, htype: str, reason: str, tradeoff: str = "", ruling: str = "") -> None:
         """Hand back a non-landing row, undoing its writes first unless its type is exempt. Twin: ``_handBackRow``."""
         row.done = True
         undo_set = _undo_paths(row)
         if htype in _UNDO_EXEMPT or not _has_writes(row) or not undo_set:
             if htype == "peer-dirty" and _has_writes(row) and undo_set:
                 reason = f"{reason}; {_NOT_UNDONE_PEER}: {', '.join(undo_set)}"
-            _handback(row, htype, reason, tradeoff)
+            _handback(row, htype, reason, tradeoff, ruling)
             return
         if undo_paths_sink is not None:
             undo_paths_sink.append({"row": row.row_id, "paths": list(undo_set)})
@@ -561,7 +598,7 @@ def run_admission(
         if undo_result.get("outcome") != "undone":
             _handback(row, "stage-dead", _undo_failed_reason(undo_result, _nonlanding_undo_failed_head(htype)))
             return
-        _handback(row, htype, f"{reason}; undone", tradeoff)
+        _handback(row, htype, f"{reason}; undone", tradeoff, ruling)
 
     def _apply_route_row(row: Row, action: tuple[str, str], reason: str) -> None:
         kind, value = action
@@ -693,17 +730,24 @@ def run_admission(
                 row.declared_files = list(rec["declared_files"])
             row.origin = f"triage:{rec['verdict']}"
             tradeoff = rec.get("tradeoff", "") if rec.get("has_tradeoff") else ""
+            on_tradeoff = rec.get("ruling_on_tradeoff", "")
             action = route_after_triage(
-                routing, triage_node_id, rec["verdict"], rec.get("tshirt_size"), tradeoff
+                routing, triage_node_id, rec["verdict"], rec.get("tshirt_size"), tradeoff,
+                row.pm_ruling, on_tradeoff,
             )
             if action == ("handback", "baton"):
                 to_size.append(row)
                 continue
             if action[0] == "handback":
                 by_triage_check["triage_handback"] += 1
-            if tradeoff and action == ("handback", "needs-judgment"):
+            if tradeoff and action == ("handback", "repeat-refused"):
+                by_triage_check["repeat_refused"] += 1
+                _apply_route(row, action, _REPEAT_REFUSED_HEAD + row.pm_ruling, tradeoff, row.pm_ruling)
+            elif tradeoff and action == ("handback", "needs-judgment"):
                 _apply_route(row, action, f"triage reported a tradeoff: {tradeoff}", tradeoff)
             else:
+                if tradeoff:
+                    by_triage_check["ruled_tradeoff"] += 1
                 _apply_route(row, action, f"triage verdict {rec['verdict']!r}")
         for rid in batch.row_ids:
             row = rows[rid]
@@ -796,10 +840,17 @@ def run_admission(
         if outcome == "done" and close_result:
             row.removed_files = list(row.removed_files) + [close_result.get("old", row.path)]
             row.touched_files = list(row.touched_files) + [close_result.get("new", "")]
-        if tradeoff:
+        disposition = tradeoff_disposition(tradeoff, row.pm_ruling, result.get("ruling_on_tradeoff", ""))
+        if disposition == "repeat-refused":
+            by_triage_check["repeat_refused"] += 1
+            _handback_row(row, "repeat-refused", _REPEAT_REFUSED_HEAD + row.pm_ruling, tradeoff, row.pm_ruling)
+            return
+        if disposition == "needs-judgment":
             by_triage_check["fix_late_tradeoff"] += 1
             _handback_row(row, "needs-judgment", f"fix reported a tradeoff: {tradeoff}", tradeoff)
             return
+        if disposition == "accepted":
+            by_triage_check["ruled_tradeoff"] += 1
         if outcome == "NEEDS_PLAN":
             by_triage_check["fix_needs_plan"] += 1
             _handback_row(row, "baton", "fix reported NEEDS_PLAN")
@@ -1135,9 +1186,17 @@ _ROUTING_HELPERS = (
     "  }\n"
     "  return out;\n"
     "}\n"
-    "function routeAfterTriage(verdict, size, tradeoff) {\n"
+    "function _tradeoffDisposition(tradeoff, pmRuling, onTradeoff) {\n"
+    "  if (!tradeoff) return 'none';\n"
+    "  if (!pmRuling) return 'needs-judgment';\n"
+    "  if (onTradeoff === 'accepts') return 'accepted';\n"
+    "  if (onTradeoff === 'silent') return 'needs-judgment';\n"
+    "  return 'repeat-refused';\n"
+    "}\n"
+    "function routeAfterTriage(verdict, size, tradeoff, pmRuling, onTradeoff) {\n"
     "  if (!RETIRE_VERDICTS.includes(verdict) && _tshirtRank(size) >= PLAN_WEIGHT_FLOOR_RANK) return { kind: 'handback', value: 'baton' };\n"
-    "  if (tradeoff) return { kind: 'handback', value: 'needs-judgment' };\n"
+    "  const _disp = _tradeoffDisposition(tradeoff, pmRuling, onTradeoff);\n"
+    "  if (_disp === 'needs-judgment' || _disp === 'repeat-refused') return { kind: 'handback', value: _disp };\n"
     "  const target = ROUTING[TRIAGE_NODE_ID].edges[verdict];\n"
     "  if (!target || !ROUTING[target]) return { kind: 'handback', value: target || 'stage-dead' };\n"
     "  return { kind: 'node', value: target };\n"
@@ -1153,8 +1212,8 @@ _ROUTING_HELPERS = (
     "  if (!ROUTING[target]) return { kind: 'handback', value: target };\n"
     "  return { kind: 'node', value: target };\n"
     "}\n"
-    "function applyRoute(row, rowId, route, reason, tradeoff) {\n"
-    "  if (route.kind === 'handback') { row.done = true; _handBack(rowId, route.value, reason, tradeoff); }\n"
+    "function applyRoute(row, rowId, route, reason, tradeoff, ruling) {\n"
+    "  if (route.kind === 'handback') { row.done = true; _handBack(rowId, route.value, reason, tradeoff, ruling); }\n"
     "  else { row.node = route.value; }\n"
     "}\n"
     "function _lockKeysFor(row, rowId) { return row.declaredFiles.concat([`ledger:${rowId}`]); }\n"
@@ -1316,7 +1375,8 @@ _TERMINAL_COMMIT_JS = (
 
 def _manifest_const(manifest: Manifest) -> str:
     entries = [
-        {"row_id": e.row_id, "path": e.path, "digest": e.digest, "batch_key": e.batch_key}
+        {"row_id": e.row_id, "path": e.path, "digest": e.digest, "batch_key": e.batch_key,
+         **({"pm_ruling": e.pm_ruling} if e.pm_ruling else {})}
         for e in manifest.entries
     ]
     declined = [
@@ -1678,13 +1738,16 @@ def compose_grind_script(
         "}"
     )
     lines.append(
-        "function _handBack(rowId, type, reason, tradeoff) {\n"
+        f"const REPEAT_REFUSED_HEAD = {json.dumps(_REPEAT_REFUSED_HEAD)};\n"
+        "function _handBack(rowId, type, reason, tradeoff, ruling) {\n"
         "  const _row = _rows[rowId];\n"
         "  if (_row && _row.refuteNote) {\n"
         "    reason = `${reason} (revived from a refuted close proposal, origin ${_row.origin}: ${_row.refuteNote})`;\n"
         "  }\n"
         "  if (_handedBack.some((h) => h.row === rowId && h.type === type)) return;\n"
-        "  _handedBack.push(tradeoff ? { row: rowId, type, reason, tradeoff } : { row: rowId, type, reason });\n"
+        "  const _entry = tradeoff ? { row: rowId, type, reason, tradeoff } : { row: rowId, type, reason };\n"
+        "  if (ruling) { _entry.ruling = ruling; }\n"
+        "  _handedBack.push(_entry);\n"
         "}\n"
         "function _normalizeRowRef(items, ref) {\n"
         "  const hit = items.find((it) => it.path === ref);\n"
@@ -1776,13 +1839,13 @@ def compose_grind_script(
         "async function _rejectUndoCall(row) {\n" + _indent_block(_capture(reject_raw, "verify"), "  ") + "\n}"
     )
     lines.append(
-        "async function _handBackRow(rowId, type, reason, tradeoff) {\n"
+        "async function _handBackRow(rowId, type, reason, tradeoff, ruling) {\n"
         "  const row = _rows[rowId];\n"
         "  row.done = true;\n"
         "  if (_UNDO_EXEMPT.includes(type) || !_hasWrites(row) || _undoPaths(row).length === 0) {\n"
         "    const _left = _undoPaths(row);\n"
         f"    if (type === 'peer-dirty' && _hasWrites(row) && _left.length > 0) {{ reason = reason + '; ' + {json.dumps(_NOT_UNDONE_PEER)} + ': ' + _left.join(', '); }}\n"
-        "    _handBack(rowId, type, reason, tradeoff); return;\n"
+        "    _handBack(rowId, type, reason, tradeoff, ruling); return;\n"
         "  }\n"
         "  row.undoReason = `the row was handed back ${type}: ${reason}`;\n"
         "  let _undone;\n"
@@ -1793,7 +1856,7 @@ def compose_grind_script(
         " + (_undone.reason ? ` (${_undone.reason})` : (_undone.outcome ? '' : ' (the verify stage returned no undo reply)')) + '" + _UNDO_FAILED_TAIL + "');\n"
         "    return;\n"
         "  }\n"
-        "  _handBack(rowId, type, reason + '; undone', tradeoff);\n"
+        "  _handBack(rowId, type, reason + '; undone', tradeoff, ruling);\n"
         "}\n"
         "async function _applyRouteRow(row, rowId, route, reason) {\n"
         "  if (route.kind === 'handback') { await _handBackRow(rowId, route.value, reason); }\n"
@@ -1928,7 +1991,7 @@ def compose_grind_script(
         "  for (const r of b.rows) {\n"
         "    const _entry = QUEUE_GRIND_MANIFEST.entries.find((e) => e.row_id === r);\n"
         "    const _path = _entry.path;\n"
-        "    _rows[r] = { rowId: r, batchId: b.id, batchKey: b.batch_key, path: _path, digest: _entry.digest, node: null, "
+        "    _rows[r] = { rowId: r, batchId: b.id, batchKey: b.batch_key, path: _path, digest: _entry.digest, pmRuling: _entry.pm_ruling || '', node: null, "
         "declaredFiles: [_path], touchedFiles: [_path], removedFiles: [], createdFiles: [], "
         "evidence: '', verifyFeedback: '', fixPlan: '', fixNode: null, closeResult: null, lastOutcome: '', "
         "origin: '', refuteNote: '', fixReported: false, sizingPath: '', undoReason: '', "
@@ -1968,11 +2031,12 @@ def compose_grind_script(
         "    _byTriageCheck.triaged += 1;\n"
         "    row.origin = `triage:${rec.verdict}`;\n"
         "    const tradeoff = rec.has_tradeoff ? (rec.tradeoff || '') : '';\n"
-        "    const route = routeAfterTriage(rec.verdict, rec.tshirt_size, tradeoff);\n"
+        "    const route = routeAfterTriage(rec.verdict, rec.tshirt_size, tradeoff, row.pmRuling, rec.ruling_on_tradeoff);\n"
         "    if (route.kind === 'handback' && route.value === 'baton') { _toSize.push(recRow); continue; }\n"
         "    if (route.kind === 'handback') { _byTriageCheck.triage_handback += 1; }\n"
-        "    if (tradeoff && route.kind === 'handback' && route.value === 'needs-judgment') { applyRoute(row, recRow, route, `triage reported a tradeoff: ${tradeoff}`, tradeoff); }\n"
-        "    else { applyRoute(row, recRow, route, `triage verdict ${rec.verdict}`); }\n"
+        "    if (tradeoff && route.kind === 'handback' && route.value === 'repeat-refused') { _byTriageCheck.repeat_refused += 1; applyRoute(row, recRow, route, REPEAT_REFUSED_HEAD + row.pmRuling, tradeoff, row.pmRuling); }\n"
+        "    else if (tradeoff && route.kind === 'handback' && route.value === 'needs-judgment') { applyRoute(row, recRow, route, `triage reported a tradeoff: ${tradeoff}`, tradeoff); }\n"
+        "    else { if (tradeoff) { _byTriageCheck.ruled_tradeoff += 1; } applyRoute(row, recRow, route, `triage verdict ${rec.verdict}`); }\n"
         "  }\n"
         "  for (const staleRef of (_out.stale || [])) {\n"
         "    const staleId = _normalizeRowRef(rowsMeta, staleRef);\n"
@@ -2084,7 +2148,10 @@ def compose_grind_script(
         "    row.touchedFiles = row.touchedFiles.concat([_archived]);\n"
         "    row.closeResult = { old: row.path, new: _archived };\n"
         "  }\n"
-        "  if (tradeoff) { _byTriageCheck.fix_late_tradeoff += 1; await _handBackRow(rowId, 'needs-judgment', 'fix reported a tradeoff: ' + tradeoff, tradeoff); return; }\n"
+        "  const _disp = _tradeoffDisposition(tradeoff, row.pmRuling, result.ruling_on_tradeoff);\n"
+        "  if (_disp === 'repeat-refused') { _byTriageCheck.repeat_refused += 1; await _handBackRow(rowId, 'repeat-refused', REPEAT_REFUSED_HEAD + row.pmRuling, tradeoff, row.pmRuling); return; }\n"
+        "  if (_disp === 'needs-judgment') { _byTriageCheck.fix_late_tradeoff += 1; await _handBackRow(rowId, 'needs-judgment', 'fix reported a tradeoff: ' + tradeoff, tradeoff); return; }\n"
+        "  if (_disp === 'accepted') { _byTriageCheck.ruled_tradeoff += 1; }\n"
         "  if (outcome === 'NEEDS_PLAN') { _byTriageCheck.fix_needs_plan += 1; await _handBackRow(rowId, 'baton', 'fix reported NEEDS_PLAN'); return; }\n"
         "  if (outcome === 'PEER_DIRTY') { await _handBackRow(rowId, 'peer-dirty', 'fix reported PEER_DIRTY'); return; }\n"
         "  if (outcome === 'MANIFEST_STALE') { await _handBackRow(rowId, 'manifest-stale', 'fix reported MANIFEST_STALE'); return; }\n"

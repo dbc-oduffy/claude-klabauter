@@ -1508,6 +1508,8 @@ def test_by_triage_check_counts_each_branch_and_a_straight_hand_back():
         "fix_needs_plan": 1,
         "fix_not_reproduced": 0,
         "fix_late_tradeoff": 1,
+        "ruled_tradeoff": 0,
+        "repeat_refused": 0,
     }
 
 
@@ -2166,7 +2168,7 @@ def test_a_triage_tradeoff_is_handed_back_verbatim_and_rides_the_run_record():
 
 def test_the_emitted_script_carries_the_tradeoff_on_both_handbacks():
     script = _compose()
-    assert "_handedBack.push(tradeoff ? { row: rowId, type, reason, tradeoff } : { row: rowId, type, reason });" in script
+    assert "const _entry = tradeoff ? { row: rowId, type, reason, tradeoff } : { row: rowId, type, reason };" in script
     assert "'fix reported a tradeoff: ' + tradeoff, tradeoff)" in script
     assert "`triage reported a tradeoff: ${tradeoff}`, tradeoff)" in script
 

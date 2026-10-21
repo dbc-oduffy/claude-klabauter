@@ -701,6 +701,38 @@ def test_fix_and_triage_schemas_gate_tradeoff_on_a_boolean():
     assert '"enum": ["confirmed-bug", "not-reproduced"]' in triage_call
 
 
+_RULING_ENUM = ["accepts", "rejects", "silent", "no-ruling"]
+
+
+_RULING_PROP = '"ruling_on_tradeoff": {"enum": ["accepts", "rejects", "silent", "no-ruling"], "type": "string"}'
+
+
+def test_triage_and_fix_schemas_require_ruling_on_tradeoff_with_the_exact_enum():
+    fix_call = grind_stages.compose_fix_call(
+        label="fix:row1", phase_title="Fix", row_id="row1", locked_files=["a.py"],
+    )
+    triage_call = grind_stages.compose_triage_call(
+        label="triage:b1", phase_title="Triage", run_dir="state/queue-grind/run1",
+        batch_id="b1", triage_depth="standard", verdicts=["confirmed-bug", "not-reproduced"],
+    )
+    for call in (fix_call, triage_call):
+        assert _RULING_PROP in call
+        assert '"has_tradeoff", "ruling_on_tradeoff"]' in call
+        assert "`ruling_on_tradeoff`" in call
+    assert grind_stages.RULING_ON_TRADEOFF == tuple(_RULING_ENUM)
+
+
+def test_fix_prompt_close_gate_names_the_accepts_exception():
+    fix_call = grind_stages.compose_fix_call(
+        label="fix:row1", phase_title="Fix", row_id="row1", locked_files=["a.py"],
+    )
+    assert "When `has_tradeoff` is true, do not run" in fix_call
+    assert (
+        "Exception: when the row carries a `pm_ruling` and `ruling_on_tradeoff` "
+        "is `accepts`, run that close command." in fix_call
+    )
+
+
 def test_review_fix_commit_prompt_carries_an_explicit_subject_and_body():
     """Live-run defect 1: `coordinator:git-commit-agent` refuses a brief with
     no subject. The review-fix committer composes one at runtime; the terminal
