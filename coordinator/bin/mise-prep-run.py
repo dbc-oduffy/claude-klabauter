@@ -99,6 +99,7 @@ import json
 import os
 import secrets
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -216,6 +217,16 @@ _RESIDUE_DIR = ("state", "mise-workflows")
 
 def _bound_size(script: str) -> int:
     return len(script.encode("utf-8"))
+
+
+# Census commands are plan-authored shells (seconds each); one set run cannot afford all of them
+# inside an op budget, so the run spends this much wall on them and reports the rest UNRUNNABLE.
+_CENSUS_BUDGET_S = 10
+_CENSUS_SKIPPED = {
+    "state": "UNRUNNABLE",
+    "entries": [],
+    "detail": "set census budget spent; re-run this plan alone for its census",
+}
 
 
 def _probe_failed_row(plan: str, error: str, upgraded: str | None = None) -> dict:
@@ -536,7 +547,9 @@ def _repair_line(failing: list[str], plan: str) -> str:
     return f"repair: mise-prep-upgrade {plan}  (or --upgrade), then re-run"
 
 
-def _probe(repo_root: Path, plan: str, *, upgrade: bool, census_timeout: int) -> dict:
+def _probe(
+    repo_root: Path, plan: str, *, upgrade: bool, census_timeout: int, check_census: bool = True
+) -> dict:
     """One `plan.mise_prep_probe` call: this plan's gate, census and upgrade derivation.
 
     The census is always requested; the op runs it only for a PREPPED, not-CERTIFIED gate. Raises
@@ -546,7 +559,12 @@ def _probe(repo_root: Path, plan: str, *, upgrade: bool, census_timeout: int) ->
     reply = _invoke(
         repo_root,
         "plan.mise_prep_probe",
-        {"plan": plan, "check_census": True, "upgrade": upgrade, "census_timeout": census_timeout},
+        {
+            "plan": plan,
+            "check_census": check_census,
+            "upgrade": upgrade,
+            "census_timeout": census_timeout,
+        },
     )
     if not isinstance(reply.get("gate"), dict):
         raise ValueError("plan.mise_prep_probe returned a reply without a `gate` object")
@@ -607,6 +625,12 @@ def main(argv=None) -> int:
         "--census-timeout", type=int, default=30,
         help="seconds one census command may run before it reads UNRUNNABLE (default 30)",
     )
+    ap.add_argument(
+        "--census-budget", type=int, default=_CENSUS_BUDGET_S,
+        help="seconds of wall the whole run spends on census commands (default "
+        f"{_CENSUS_BUDGET_S}; 0 = unbounded). Plans reached after it is spent are probed without "
+        "a census and read UNRUNNABLE, which never blocks a stamp",
+    )
     ap.add_argument("--dry-run", action="store_true", help="gate and report; stamp nothing")
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args(argv)
@@ -664,14 +688,35 @@ def main(argv=None) -> int:
 
     rows = []
     gates: dict[str, dict] = {}
-    for plan in plans:
+    census_spent = 0.0
+    for index, plan in enumerate(plans, 1):
+        remaining = args.census_budget - census_spent
+        out_of_budget = args.census_budget > 0 and remaining < 1
+        began = time.monotonic()
         try:
-            probe = _probe(repo_root, plan, upgrade=args.upgrade, census_timeout=args.census_timeout)
+            probe = _probe(
+                repo_root, plan, upgrade=args.upgrade,
+                census_timeout=args.census_timeout if args.census_budget <= 0
+                else max(1, min(args.census_timeout, int(remaining))),
+                check_census=not out_of_budget,
+            )
         except ValueError as exc:
             gates[plan] = {}
             rows.append(_probe_failed_row(plan, str(exc)))
+            print(f"mise-prep-run: [{index}/{len(plans)}] {plan} PROBE-FAILED", file=sys.stderr)
             continue
         gate = probe["gate"]
+        if out_of_budget:
+            if gate.get("verdict") == "PREPPED" and (gate.get("stamp") or {}).get("state") != "CERTIFIED":
+                probe["census"] = _CENSUS_SKIPPED
+        else:
+            census_spent += time.monotonic() - began
+        # A set run is minutes long; a silent stderr reads as a hang.
+        print(
+            f"mise-prep-run: [{index}/{len(plans)}] {plan} {gate.get('verdict')} "
+            f"{probe.get('process_ms')}ms",
+            file=sys.stderr,
+        )
 
         derivation = probe.get("upgrade")
         upgraded = _upgrade_note(derivation)

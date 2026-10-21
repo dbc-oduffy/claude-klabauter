@@ -260,7 +260,6 @@ def drop_own_path(out: str, plan_rel: Optional[str]) -> str:
 def run_entry(entry: dict, repo_root: Path, timeout: int, plan_rel: Optional[str] = None) -> dict:
     """One census entry's row. Four-argument signature is fixed: callers fake it."""
     command = str(entry.get("command") or "").strip()
-    recorded = str(entry.get("result") or "")
     row: dict[str, Any] = {"question": str(entry.get("question") or ""), "command": command}
     census = _census()
     if census.is_typed(entry):
@@ -275,16 +274,25 @@ def run_entry(entry: dict, repo_root: Path, timeout: int, plan_rel: Optional[str
     if refusal:
         row.update(refusal)
         return row
+    ran = _spawn(command, repo_root, timeout)
+    if isinstance(ran, dict):
+        row.update(ran)
+        return row
+    return _judge(entry, row, ran, plan_rel)
+
+
+def _spawn(command: str, repo_root: Path, timeout: int):
+    """Run one screened command. A completed run is `(returncode, stdout, stderr)`; a run that
+    could not complete (no shell, timeout, OSError) is an UNRUNNABLE `{state, detail}` dict."""
     shell = resolve_posix_shell()
     if not shell:
-        row.update({
+        return {
             "state": UNRUNNABLE,
             "detail": (
                 "no POSIX shell on PATH (tried bash, sh); set "
                 f"{_SHELL_ENV_OVERRIDE} to one"
             ),
-        })
-        return row
+        }
     try:
         proc = subprocess.run(
             [shell, "-c", command],
@@ -296,18 +304,23 @@ def run_entry(entry: dict, repo_root: Path, timeout: int, plan_rel: Optional[str
             **_no_console_kw(),
         )
     except subprocess.TimeoutExpired:
-        row.update({"state": UNRUNNABLE, "detail": f"timed out after {timeout}s"})
-        return row
+        return {"state": UNRUNNABLE, "detail": f"timed out after {timeout}s"}
     except OSError as exc:
-        row.update({"state": UNRUNNABLE, "detail": str(exc)})
-        return row
-    out = drop_own_path(proc.stdout, plan_rel)
+        return {"state": UNRUNNABLE, "detail": str(exc)}
+    return proc.returncode, proc.stdout, proc.stderr
+
+
+def _judge(entry: dict, row: dict, ran: tuple, plan_rel: Optional[str]) -> dict:
+    """Fold a completed run's output into `row` against the entry's own recorded result."""
+    returncode, stdout, stderr = ran
+    recorded = str(entry.get("result") or "")
+    out = drop_own_path(stdout, plan_rel)
     # A non-zero exit with NO output is a command that could not answer; a non-zero exit WITH
     # output is ordinary (`grep` exits 1 on no match, which is itself an answer of "zero").
-    if proc.returncode != 0 and not out.strip():
+    if returncode != 0 and not out.strip():
         row.update({
             "state": UNRUNNABLE,
-            "detail": f"exit {proc.returncode}: {(proc.stderr or '').strip()[:200]}",
+            "detail": f"exit {returncode}: {(stderr or '').strip()[:200]}",
         })
         return row
     count = entry.get("count")
@@ -329,6 +342,47 @@ def run_entry(entry: dict, repo_root: Path, timeout: int, plan_rel: Optional[str
 
 
 _DEADLINE_SPENT = "not run: the op's census deadline was spent before this entry"
+_CANNOT_DRIFT = "not run: recorded result cannot drift"
+
+
+def can_drift(entry: dict) -> bool:
+    """True iff some observed output could make this entry DRIFT.
+
+    Derived from the DRIFT branches of `compare`, `census.same_value` and `census.compare_count`;
+    a fourth DRIFT branch added to any of them must update this. `compare` drifts only on a
+    recorded result that is a bare integer, `same_value` only when the recorded result carries
+    a `count N;` prefix, and `compare_count` only for a declared `count` (int, not bool). A typed
+    entry is evaluated in-process and is never skipped.
+    """
+    census = _census()
+    if census.is_typed(entry):
+        return True
+    count = entry.get("count")
+    if isinstance(count, int) and not isinstance(count, bool):
+        return True
+    recorded = str(entry.get("result") or "")
+    if census.split_count(recorded)[0] is not None:
+        return True
+    return re.fullmatch(r"-?\d+", recorded.strip()) is not None
+
+
+def _remaining_timeout(timeout: int, deadline: Optional[float]) -> Optional[int]:
+    """The spawn timeout under an optional deadline; `None` when the deadline is spent."""
+    if deadline is None:
+        return timeout
+    remaining = deadline - time.monotonic()
+    if remaining < 1:
+        return None
+    return min(timeout, int(remaining))
+
+
+def _deadline_row(e: dict) -> dict:
+    return {
+        "question": str(e.get("question") or ""),
+        "command": str(e.get("command") or "").strip(),
+        "state": UNRUNNABLE,
+        "detail": _DEADLINE_SPENT,
+    }
 
 
 def _deadline_bounded(
@@ -339,17 +393,54 @@ def _deadline_bounded(
     `None` is the unbounded CLI path. Under a deadline an entry gets `min(timeout, remaining)`
     seconds, and one reached with under a second left is UNRUNNABLE without a spawn.
     """
-    if deadline is None:
-        return run_entry(e, repo_root, timeout, plan_rel)
-    remaining = deadline - time.monotonic()
-    if remaining < 1:
-        return {
-            "question": str(e.get("question") or ""),
-            "command": str(e.get("command") or "").strip(),
-            "state": UNRUNNABLE,
-            "detail": _DEADLINE_SPENT,
-        }
-    return run_entry(e, repo_root, min(timeout, int(remaining)), plan_rel)
+    bounded = _remaining_timeout(timeout, deadline)
+    if bounded is None:
+        return _deadline_row(e)
+    return run_entry(e, repo_root, bounded, plan_rel)
+
+
+def _entry_row(
+    e: dict,
+    repo_root: Path,
+    timeout: int,
+    plan_rel: Optional[str],
+    deadline: Optional[float],
+    decidable_only: bool,
+    memo: Optional[dict],
+) -> dict:
+    """One entry's row under the skip and memo. Order: typed, empty and refused entries go
+    through `_deadline_bounded` as before; then the cannot-drift skip; then a memo hit; then a
+    deadline-bounded spawn whose completed run is stored. Neither a skip nor a memo hit spends
+    anything, so neither consults the deadline."""
+    census = _census()
+    command = str(e.get("command") or "").strip()
+    if census.is_typed(e) or not command:
+        return _deadline_bounded(e, repo_root, timeout, plan_rel, deadline)
+    refusal = screen(command, repo_root)
+    if refusal:
+        return _deadline_bounded(e, repo_root, timeout, plan_rel, deadline)
+    row: dict[str, Any] = {"question": str(e.get("question") or ""), "command": command}
+    if decidable_only and not can_drift(e):
+        recorded = str(e.get("result") or "")
+        row.update({
+            "state": UNDECIDABLE,
+            "basis": _CANNOT_DRIFT,
+            "recorded": recorded[:400],
+            "observed": "",
+        })
+        return row
+    if memo is not None and command in memo:
+        return _judge(e, row, memo[command], plan_rel)
+    bounded = _remaining_timeout(timeout, deadline)
+    if bounded is None:
+        return _deadline_row(e)
+    ran = _spawn(command, repo_root, bounded)
+    if isinstance(ran, dict):
+        row.update(ran)
+        return row
+    if memo is not None:
+        memo[command] = ran
+    return _judge(e, row, ran, plan_rel)
 
 
 def revalidate(
@@ -359,7 +450,13 @@ def revalidate(
     *,
     require_stamp: bool = True,
     deadline: Optional[float] = None,
+    decidable_only: bool = False,
+    memo: Optional[dict] = None,
 ) -> dict:
+    """Revalidate one plan's census. `decidable_only` skips (no spawn) every command entry whose
+    recorded result `can_drift` rules out DRIFT. `memo` is a caller-owned map of command string
+    to a completed `(returncode, stdout, stderr)`; a hit spawns nothing and is judged against
+    the entry's own result. The reply carries `spent_ms`, the entry loop's monotonic wall."""
     yaml = _load_yaml()
     text = plan.read_text(encoding="utf-8", errors="replace")
     parts = text.split("---", 2)
@@ -378,11 +475,20 @@ def revalidate(
     if not isinstance(census, list):
         return {"plan": str(plan), "state": REFUSED, "detail": "no census: key", "entries": []}
     plan_rel = plan_rel_path(plan, repo_root)
-    entries = [
-        _deadline_bounded(e, repo_root, timeout, plan_rel, deadline)
-        for e in census
-        if isinstance(e, dict)
-    ]
+    started = time.monotonic()
+    if decidable_only or memo is not None:
+        entries = [
+            _entry_row(e, repo_root, timeout, plan_rel, deadline, decidable_only, memo)
+            for e in census
+            if isinstance(e, dict)
+        ]
+    else:
+        entries = [
+            _deadline_bounded(e, repo_root, timeout, plan_rel, deadline)
+            for e in census
+            if isinstance(e, dict)
+        ]
+    spent_ms = int(round((time.monotonic() - started) * 1000))
     if not entries:
         # An empty census revalidates nothing, so it cannot be a pass. The roll-up below
         # decides on set difference, and `set() - {MATCH}` is empty, so a census carrying no
@@ -399,7 +505,7 @@ def revalidate(
         state = UNDECIDABLE
     else:
         state = MATCH
-    return {"plan": str(plan), "state": state, "entries": entries}
+    return {"plan": str(plan), "state": state, "entries": entries, "spent_ms": spent_ms}
 
 
 def main(argv: list[str]) -> int:
@@ -416,6 +522,7 @@ def main(argv: list[str]) -> int:
                for p in args.plans]
 
     if args.json:
+        reports = [{k: v for k, v in r.items() if k != "spent_ms"} for r in reports]
         json.dump(reports, sys.stdout, indent=1)
         print()
     else:

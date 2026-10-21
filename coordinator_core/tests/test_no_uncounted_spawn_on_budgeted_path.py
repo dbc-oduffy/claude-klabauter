@@ -426,6 +426,17 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
         "coordinator_core/ops/plan_seam_fix.py",
         ("_handler",),
     ),
+    # Enrolled 2026-10-21: statically spawn-free (empty function-granular reachable set). The
+    # census leg's shell entries run in `mise-census-revalidate.py`, loaded by file path, so they
+    # are outside this walker; they are bounded by the op's `_census_deadline`, not by a count.
+    "plan.mise_upgrade_apply": (
+        "coordinator_core/ops/plan_mise_prep_probe.py",
+        ("_apply_handler",),
+    ),
+    "plan.mise_certify_probe": (
+        "coordinator_core/ops/plan_mise_prep_probe.py",
+        ("_certify_handler",),
+    ),
     "plan.overlap_edges": (
         "coordinator_core/ops/plan_overlap_edges.py",
         ("_handler",),
@@ -6834,6 +6845,9 @@ def _measure_static_spawn_counts(op_names, entrypoints) -> dict[str, int]:
 #: transcribed here without this file's own re-derivation, which is what these two entries are.
 #: Both pinned at their freshly measured 1.
 _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
+    # plan.mise_prep_probe: one reachable git site (HEAD sha read in `_head_sha`); the census
+    # leg's per-entry shell spawns are the counted carve-out, bounded by `_census_deadline`.
+    "plan.mise_prep_probe": 1,
     # Enrolled 2026-08-30 (second reconciliation pass): both entered the live
     # registry mid-close from concurrent peer work, measured at their live
     # reachable-site counts.

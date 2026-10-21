@@ -263,6 +263,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
 )
 from coordinator_core.ops.dispatch_emit import route_preference as _route_pref
 from coordinator_core.ops.dispatch_emit.ask_fanout_contract import slice_ask_source
+from coordinator_core.ops.dispatch_emit.run_id_occupancy import spent_run_reason
 from coordinator_core.ops.dispatch_emit.run_token import normalize_sizing_rel
 from coordinator_core.ops.dispatch_emit.cloud_spawn_brief import build_cloud_spawn
 from coordinator_core.ops.dispatch_emit.delivery_credit import rows_backed_before_base
@@ -481,6 +482,25 @@ def _repo_root_for_plan(plan_path: str) -> Optional[Path]:
         if (candidate / ".git").exists():
             return candidate
     return None
+
+
+class SpentRunOverwriteError(ValueError):
+    """Raised when an emit would rewrite a script or spine whose run id has landed or run."""
+
+
+def _refuse_spent_overwrite(target: Path, new_bytes: bytes, script_path: Path) -> None:
+    """Refuse to change `target` when `script_path`'s run id is spent (landed, or a
+    land/resume sibling exists). Identical bytes pass: nothing would change. `force` does
+    not bypass this refusal: it is checked before the foreign-emission guard."""
+    if not target.is_file():
+        return
+    reason = spent_run_reason(script_path)
+    if reason is None or target.read_bytes() == new_bytes:
+        return
+    raise SpentRunOverwriteError(
+        f"refusing to overwrite {target.name}: its run id is spent ({reason}). "
+        "Emit a new tranche, or give a fresh output path."
+    )
 
 
 def _refuse_foreign_emission(
@@ -1565,6 +1585,7 @@ def _emit_script_file(
     findings = [*run_checks(script), *plan_findings]
     # newline="" suppresses the platform line-ending translation: a CRLF-carrying .mjs is
     # rejected by the Workflow surface that fires it.
+    _refuse_spent_overwrite(path, script.encode("utf-8"), path)
     if not params.get("force"):
         _refuse_foreign_emission(path, script, session_id, _repo_root_for_plan(str(path)))
     before_write()
@@ -2142,6 +2163,11 @@ def _dispatch_emit(
                     f"minted spine path escapes its inventory record's directory: "
                     f"{spine_path!r} not under {Path(inventory_path).resolve().parent!r}"
                 )
+            _refuse_spent_overwrite(
+                guarded_spine_path,
+                spine_text.encode("utf-8"),
+                guarded_spine_path.with_name(guarded_spine_path.name.removesuffix(".md") + ".workflow.mjs"),
+            )
             guarded_spine_path.write_text(spine_text, encoding="utf-8", newline="\n")
             plan_path = str(guarded_spine_path)
             # A review-only run executes nothing: no landed-flip writes to the

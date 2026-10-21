@@ -16,10 +16,16 @@ Wire params, probe:
     check_census   (bool, default F) — re-run the plan's census commands.
     upgrade        (bool, default F) — derive what ``mise-prep-upgrade`` would write.
     census_timeout (int, default 30) — seconds one census command may run.
+    census_run     (str, 1..64 chars, optional) — one set run's token; commands repeat at most
+                     once per (root, HEAD, token). Absent = no memo.
 
 Reply, probe:
     {"gate": <plan.prep_gate reply, same shape>, "census": <revalidate outcome>|None,
-     "upgrade": <upgrade_plan dict>|{"skipped": "not upgradeable"}|None, "process_ms": float}
+     "upgrade": <upgrade_plan dict>|{"skipped": "not upgradeable"}|None,
+     "census_spent_ms": int (the census loop's spent_ms; 0 when census did not run),
+     "process_ms": float}
+The probe's census runs ``decidable_only``: an entry whose recorded result cannot DRIFT is not
+spawned (UNDECIDABLE, "not run: recorded result cannot drift").
 
 Wire params, apply: ``plan`` (str, required).
 Reply, apply: ``{"plan", "error", "derived", "residue", "changed"}`` — ``upgrade_plan``'s dict.
@@ -40,6 +46,7 @@ returns at the deadline is still over 500ms; that cost is the plan's authored ce
 bound stops the op dying, it does not make that plan fit.
 
 Negative-spec:
+  - The census memo is per run, never persisted; a ``census_run`` reused across HEADs is a new memo.
   - Takes ONE plan, never a list. ``roadmap.prep_gate.gate_plan`` records one-plan-per-call
     as a measured budget decision; a batch probe would reopen it.
   - Does NOT write. The probe runs ``upgrade_plan(check=True)``; only
@@ -50,8 +57,9 @@ Negative-spec:
     (repo_root, HEAD sha); an unreadable HEAD is never cached. A top-level directory
     created without a commit, or a ``.gitignore`` edit made without one, is therefore not seen
     until HEAD moves.
-  - ``process_ms`` is this process's CPU time over the op body. Census shell children are
-    separate processes and report their own cost in the census outcome.
+  - ``process_ms`` is this process's CPU time over the op body, an upper bound: concurrent ops
+    in one warm server share the clock. Census shell children are separate processes and
+    report their own cost in the census outcome.
 """
 
 from __future__ import annotations
@@ -90,6 +98,9 @@ _NOT_UPGRADEABLE = ("schema",)
 _BIN_DIR = ENGINE_CHECKOUT_ROOT / "coordinator" / "bin"
 
 _CORPUS_CACHE: dict = {}
+
+#: At most one entry: {(worktree root, HEAD sha, census_run): {command: completed run}}.
+_CENSUS_MEMO: dict = {}
 
 #: Share of the op's own wall guard the census leg may spend. It leaves the gate leg, the
 #: upgrade leg and the transport inside the guard under load; the guard is a runaway catch,
@@ -136,17 +147,32 @@ def _head_sha(worktree_root: Path) -> Optional[str]:
         return None
 
 
-def _corpus(worktree_root: Path) -> CorpusInputs:
-    """``CorpusInputs`` for the root, derived once per (root, HEAD sha)."""
+def _corpus(worktree_root: Path) -> tuple[CorpusInputs, Optional[str]]:
+    """``(CorpusInputs, head)`` for the root, derived once per (root, HEAD sha).
+
+    ``head`` is the sha the cache keyed on (None when unreadable), returned so the census
+    memo key costs no second HEAD read.
+    """
     head = _head_sha(worktree_root)
     if head is None:
-        return corpus_inputs(worktree_root)
+        return corpus_inputs(worktree_root), None
     key = (str(worktree_root), head)
     cached = _CORPUS_CACHE.get(key)
     if cached is None:
         _CORPUS_CACHE.clear()
         cached = _CORPUS_CACHE[key] = corpus_inputs(worktree_root)
-    return cached
+    return cached, head
+
+
+def _census_memo(worktree_root: Path, head: Optional[str], census_run: Optional[str]) -> Optional[dict]:
+    """The command memo for one (root, HEAD, census_run) key; a new key replaces the old."""
+    if census_run is None or head is None:
+        return None
+    key = (str(worktree_root), head, census_run)
+    if key not in _CENSUS_MEMO:
+        _CENSUS_MEMO.clear()
+        _CENSUS_MEMO[key] = {}
+    return _CENSUS_MEMO[key]
 
 
 def _rel(plan_path: Path, worktree_root: Path) -> str:
@@ -197,12 +223,18 @@ def _probe_handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     timeout = params.get("census_timeout", 30)
     if not isinstance(timeout, int) or isinstance(timeout, bool) or timeout <= 0:
         raise ValueError("census_timeout must be a positive integer")
+    census_run = params.get("census_run")
+    if census_run is not None and (
+        not isinstance(census_run, str) or not 1 <= len(census_run) <= 64
+    ):
+        raise ValueError("census_run must be a string of 1 to 64 characters")
 
     deadline = _census_deadline("plan.mise_prep_probe")
     started = time.process_time()
     worktree_root = Path(main_worktree_root(repo_root))
     text = plan_path.read_text(encoding="utf-8", errors="replace")
-    report = gate_plan_with_corpus(plan_path, _corpus(worktree_root), text=text)
+    corpus, head = _corpus(worktree_root)
+    report = gate_plan_with_corpus(plan_path, corpus, text=text)
     stamp = read_stamp(text)
     gate = {
         "plan": _rel(plan_path, worktree_root),
@@ -217,7 +249,8 @@ def _probe_handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     census = None
     if check_census and report["verdict"] == PREPPED and stamp["state"] != CERTIFIED:
         census = _revalidator().revalidate(
-            plan_path, worktree_root, timeout, require_stamp=False, deadline=deadline
+            plan_path, worktree_root, timeout, require_stamp=False, deadline=deadline,
+            decidable_only=True, memo=_census_memo(worktree_root, head, census_run),
         )
 
     derivation = None
@@ -233,6 +266,7 @@ def _probe_handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         "gate": gate,
         "census": census,
         "upgrade": derivation,
+        "census_spent_ms": int(census.get("spent_ms", 0)) if census else 0,
         "process_ms": round((time.process_time() - started) * 1000.0, 3),
     }
 
@@ -242,6 +276,9 @@ def _apply_handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "plan.mise_upgrade_apply" handler. See module docstring."""
     plan_path = _plan_param(params, "plan.mise_upgrade_apply", repo_root)
     worktree_root = Path(main_worktree_root(repo_root))
+    # Writes are confined to docs/plans/ (the seam_record sibling rule); other plan paths are refused.
+    if not _rel(plan_path, worktree_root).startswith("docs/plans/"):
+        raise ValueError(f"plan.mise_upgrade_apply writes docs/plans/ plans only: {params!r}")
     upgrader = _upgrader()
     text = plan_path.read_text(encoding="utf-8", errors="replace")
     parsed = upgrader.parse_frontmatter(text)

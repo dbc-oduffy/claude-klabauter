@@ -798,3 +798,85 @@ def test_consume_nobody_writes_stays_a_blocking_export_with_universe(tmp_path, g
     r = _check(root, [a], universe=True)
     assert r["verdict"] != "CLEAN"
     assert [f["class"] for f in r["findings"] if f["blocking"]] == ["unpromised-export"]
+
+
+_HUB = "  appends: [hub.md]\n"
+_CAP_NO_CONSUMER = "capabilities:\n  - id: cap1\n    statement: s\n    role: admin\n    click_path: A > B\n"
+
+
+def _golden_set(root: Path) -> list:
+    """Collisions (exact, prefix, append pair, ordered), an export, a capability finding,
+    an undetermined row and an unreadable spine, in one set."""
+    return [
+        _plan(root, "a", _row("R1", "[s/x.py]") + _row("R2", "[lib/a.py]", consumes="[lib/missing.py]")),
+        _plan(root, "b", _row("R1", "[s/x.py]") + _row("R2", "[x.py]", extra="  writes_under: [pkg/]\n")),
+        _plan(root, "c", _row("R1", "[s/x.py]") + _row("R2", "[hub.md]", extra=_HUB)),
+        _plan(root, "d", _row("R1", "[pkg/inner.py]") + _row("R2", "[hub.md]", extra=_HUB)),
+        _plan(root, "e", _row("R1", "[s/x.py]"),
+              fm="capabilities: []\ndepends_on_plan:\n  - plan: docs/plans/a.md\n    status: approved\n"),
+        _plan(root, "f", _row("R1", "[f.py]"), fm=_CAP_NO_CONSUMER),
+        _plan(root, "g", _row("R1")),
+        _plan(root, "h", _row("R1", "[h.py]") + _row("R1", "[h2.py]")),
+    ]
+
+
+def _golden_replies(root: Path) -> dict:
+    plans = _golden_set(root)
+    return {"named": _check(root, plans, named=True), "default": _check(root, plans, named=False)}
+
+
+_FINDING_KEYS = ("plan", "class", "blocking", "counterpart_plan", "capability", "missing_consumer",
+                 "path", "row", "detail")
+_EXPORT_DETAIL = ("row R2 consumes lib/missing.py, which no row of its plan or of another plan in the set "
+                  "writes and which is not tracked at HEAD")
+_CAP_MISSING = "A > B (role admin): no ui_consumer or ui_carve_out"
+_CAP_DETAIL = "capability declares neither ui_consumer nor ui_carve_out"
+_WRITES_X = "plans declare writes to s/x.py with no depends_on_plan edge between them"
+_WRITES_PKG = "2 plans declare writes to pkg/inner.py with no depends_on_plan edge between them"
+_UNREADABLE = "undetermined: spine unreadable: duplicate row id 'R1' in spine"
+_PLANS_SHORT = "abcdefgh"
+
+
+def _golden_findings(blocking: bool) -> list:
+    """The golden findings, in order, with plans as `@<name>.md` and `blocking` for a collision."""
+    c = blocking
+    return [
+        ("@a.md", "unpromised-export", True, None, None, None, "lib/missing.py", "R2", _EXPORT_DETAIL),
+        ("@a.md", "writes-collision", c, "@b.md", None, None, "s/x.py", None, f"3 {_WRITES_X}; also @c.md"),
+        ("@b.md", "writes-collision", c, "@d.md", None, None, "pkg/inner.py", None, _WRITES_PKG),
+        ("@b.md", "writes-collision", c, "@a.md", None, None, "s/x.py", None, f"4 {_WRITES_X}; also @c.md, @e.md"),
+        ("@c.md", "writes-collision", c, "@a.md", None, None, "s/x.py", None, f"4 {_WRITES_X}; also @b.md, @e.md"),
+        ("@d.md", "writes-collision", c, "@b.md", None, None, "pkg/inner.py", None, _WRITES_PKG),
+        ("@e.md", "writes-collision", c, "@b.md", None, None, "s/x.py", None, f"3 {_WRITES_X}; also @c.md"),
+        ("@f.md", "capability-without-ui-consumer", True, None, "cap1", _CAP_MISSING, None, None, _CAP_DETAIL),
+        ("@g.md", "writes-collision", False, None, None, None, None, "R1", "undetermined"),
+        ("@h.md", "writes-collision", c, None, None, None, None, None, _UNREADABLE),
+    ]
+
+
+def _short(reply: dict) -> tuple:
+    """(verdict, per_plan, findings) with `docs/plans/` shortened to `@`; every finding carries exactly the contract keys."""
+    def at(v):
+        return v.replace("docs/plans/", "@") if isinstance(v, str) else v
+
+    assert all(tuple(f) == _FINDING_KEYS for f in reply["findings"])
+    return (reply["verdict"], {at(k): v for k, v in reply["per_plan"].items()},
+            [tuple(at(f[k]) for k in _FINDING_KEYS) for f in reply["findings"]])
+
+
+def test_reply_over_a_multi_plan_set_is_pinned(tmp_path, git):
+    """The reply is the contract: the values below are what the pre-rebuild evaluation returned."""
+    root = _root(tmp_path)
+    replies = _golden_replies(root)
+    assert replies["named"]["set"] == [f"docs/plans/{n}.md" for n in _PLANS_SHORT]
+    assert replies["named"]["checked_at_sha"] == HEAD and replies["named"]["phase"] == "prep"
+    assert _short(replies["named"]) == (
+        "REFUSED",
+        {"@a.md": "REFUSED", "@b.md": "REFUSED", "@c.md": "REFUSED", "@d.md": "REFUSED",
+         "@e.md": "REFUSED", "@f.md": "REFUSED", "@g.md": "CLEAN", "@h.md": "REFUSED"},
+        _golden_findings(True))
+    assert _short(replies["default"]) == (
+        "REFUSED",
+        {"@a.md": "REFUSED", "@b.md": "CLEAN", "@c.md": "CLEAN", "@d.md": "CLEAN",
+         "@e.md": "CLEAN", "@f.md": "REFUSED", "@g.md": "CLEAN", "@h.md": "CLEAN"},
+        _golden_findings(False))

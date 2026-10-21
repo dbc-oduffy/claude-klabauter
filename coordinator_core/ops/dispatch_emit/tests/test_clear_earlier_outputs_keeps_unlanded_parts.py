@@ -36,12 +36,27 @@ def test_unlanded_part_survives_sibling_tranche_emit(tmp_path, capsys):
     cli_module._clear_earlier_outputs(str(t3), [live])
 
     assert p2.is_file() and spines["p2"].is_file()
-    assert not p1.exists() and not spines["p1"].exists()
+    assert p1.is_file() and spines["p1"].is_file()
     assert not bare.exists() and not spines["p3"].exists()
     assert live.is_file()
     err = capsys.readouterr().err
     assert f"kept unlanded part {p2}" in err
+    assert f"kept spent part {p1}" in err
     assert f"kept unlanded part {p1}" not in err
+
+
+def test_resume_sibling_spends_a_receiptless_part(tmp_path, capsys):
+    t2 = tmp_path / f"{_BASE}-t2.md"
+    t2.write_text("rec", encoding="utf-8")
+    part = _make(tmp_path, f"{_BASE}-t1-p1.workflow.mjs", None)
+    spine = tmp_path / f"{_BASE}-t1-p1.spine.md"
+    spine.write_text("spine", encoding="utf-8")
+    resume = _make(tmp_path, f"{_BASE}-t1-p1-resume.workflow.mjs", None)
+
+    cli_module._clear_earlier_outputs(str(t2), [])
+
+    assert part.is_file() and spine.is_file() and resume.is_file()
+    assert f"kept spent part {part}" in capsys.readouterr().err
 
 
 def test_unlanded_tranche_script_is_kept_too(tmp_path):

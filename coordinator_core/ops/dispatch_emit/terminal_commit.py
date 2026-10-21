@@ -899,6 +899,7 @@ def _recorded_fingerprints(
     deleted_paths: Sequence[str], *, excluded: set,
     reviewed: Optional[dict] = None, reviewed_at: Optional[float] = None,
     fixes_integrated_at: Optional[float] = None, wave_paths: frozenset = frozenset(),
+    review_events: Optional[dict] = None,
 ) -> dict:
     """``{path: sha256}`` the run's expectation for the commit's candidate paths; one batched sink
     read. Per path the newer of the session's last recorded write and the run's newest review
@@ -912,6 +913,9 @@ def _recorded_fingerprints(
     ``reviewed_at``) and whose file mtime is no earlier than that event is declared at its current
     bytes: the run left them after review; a peer rewrite after that write is not detected. Candidates are DONE-chunk and run-owned paths; a live
     peer's claim on either already refused the call upstream, so no contest check runs here.
+    ``review_events`` (``{path: (sha256, epoch)}``, ``_review_write_events``) is a review fix-pass
+    agent's own newest write; it supplies the hash for a path whose session event is older or absent,
+    so the run's own fix-pass write is the expectation and a later foreign edit still refuses.
     A hashless newest session event, or an unrecorded path outside the review, carries no entry."""
     from coordinator_core.session import touch_record
 
@@ -950,6 +954,45 @@ def _recorded_fingerprints(
             out[p] = review_hash
         elif event is not None and event[0]:
             out[p] = event[0]
+        agent_event = (review_events or {}).get(p)
+        if agent_event is not None and agent_event[0] and (event is None or agent_event[1] > event[1]):
+            out[p] = agent_event[0]
+    return out
+
+
+def _review_write_events(worktree_root: Path, review_writes: Optional[dict]) -> dict:
+    """``{path: (sha256, epoch)}`` of the newest hashed write event, in the sink of the agent
+    ``review_writes`` names for that path, per path of ``review_writes``; one sink walk per
+    distinct agent. A path whose agent's newest write is hashless, or whose sink is unreadable,
+    has no entry."""
+    if not review_writes:
+        return {}
+    from coordinator_core.session import core, touch_record
+
+    hub = core.sessions_dir(str(worktree_root))
+    if not hub:
+        return {}
+    by_agent: dict = {}
+    for path, agent_id in review_writes.items():
+        by_agent.setdefault(agent_id, set()).add(path)
+    out: dict = {}
+    for agent_id, paths in by_agent.items():
+        newest: dict = {}
+        try:
+            for member in touch_record.discover_family(touch_record.sink_path(Path(hub) / ".agents" / agent_id)):
+                for line in touch_record.iter_complete_lines(member.read_bytes()):
+                    try:
+                        ev = touch_record.decode_line(line)
+                    except touch_record.MalformedRecordLine:
+                        continue
+                    if (
+                        ev.verb == touch_record.VERB_TOUCH and ev.kind != touch_record.KIND_READ
+                        and ev.path in paths and ev.timestamp >= newest.get(ev.path, (None, float("-inf")))[1]
+                    ):
+                        newest[ev.path] = (ev.content_hash, ev.timestamp)
+        except OSError:
+            continue
+        out.update({p: v for p, v in newest.items() if v[0]})
     return out
 
 
@@ -4115,6 +4158,9 @@ def _terminal_commit_inner(
         return [p for p in paths if p not in dropped]
 
     held_paths = _held_write_paths(worktree_root, request, held_ids) if held_ids else {}
+    for held_path, held_by in held_paths.items():
+        for held_cid in held_by:
+            barred[held_cid] = [*barred.get(held_cid, ()), held_path]
     if held_paths:
         overlap: dict = {}
         for chunk in done_chunks + partial_chunks:
@@ -4614,12 +4660,17 @@ def _terminal_commit_inner(
 
     halted_held: dict = {}
 
+    def _claimed_or_held(candidates):
+        """Sibling-claimed candidates plus any a held chunk declares: commit_v2's left-behind carry never takes them."""
+        claimed = _live_run_claims(worktree_root, candidates, sibling_run_id, halted_held)
+        if claimed is None or not held_paths:
+            return claimed
+        return {*claimed, *(p for p in candidates if p in held_paths)}
+
     def commit_v2(params: dict, root: Path):
         from coordinator_core.ops.ceremony import commit_companion
 
-        with commit_companion.excluding_sibling_claims(
-            lambda candidates: _live_run_claims(worktree_root, candidates, sibling_run_id, halted_held)
-        ):
+        with commit_companion.excluding_sibling_claims(_claimed_or_held):
             return reentrant_dispatch("ceremony.commit_v2", params, repo_root=root)
 
     allowlist_path = _regenerate_landing_allowlist(worktree_root, all_paths)
@@ -4749,6 +4800,7 @@ def _terminal_commit_inner(
             excluded={*receipt_paths, allowlist_path, bookkeeping_record_path, note_committed},
             reviewed=reviewed_bytes, reviewed_at=reviewed_at,
             fixes_integrated_at=fixes_at, wave_paths=wave_paths,
+            review_events=_review_write_events(worktree_root, review_writes),
         )
         if note_committed and note_committed not in deleted_paths:
             from coordinator_core.session import touch_record
