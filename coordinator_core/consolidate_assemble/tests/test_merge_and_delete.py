@@ -68,3 +68,29 @@ def test_a_merge_stopped_after_staging_is_aborted(repo):
     assert _git(repo, "rev-parse", "HEAD").stdout.strip() == head
     assert _git(repo, "status", "--porcelain").stdout.strip() == ""
 
+
+@pytest.fixture()
+def share_repo(repo: Path) -> Path:
+    _git(repo, "checkout", "-q", "work/sibling")
+    share = repo / ".coordinator-local" / "subagent-share" / "s1"
+    share.mkdir(parents=True)
+    (share / "r.md").write_text("x\n", encoding="utf-8", newline="\n")
+    _git(repo, "add", "-f", ".coordinator-local/subagent-share/s1/r.md")
+    _git(repo, "commit", "-q", "-m", "adds share")
+    _git(repo, "checkout", "-q", "work/me")
+    return repo
+
+
+def test_merge_only_refuses_a_ref_adding_machine_local_paths(share_repo):
+    head = _git(share_repo, "rev-parse", "HEAD").stdout.strip()
+    with pytest.raises(RuntimeError, match="machine-local path"):
+        apply_mod._dispatch_merge_only(["work/sibling", "work/sibling"], share_repo)
+    assert _git(share_repo, "rev-parse", "HEAD").stdout.strip() == head
+    assert not (share_repo / ".git" / "MERGE_HEAD").exists()
+
+
+def test_merge_and_delete_refusal_keeps_the_branch(share_repo, monkeypatch):
+    monkeypatch.setenv("COORDINATOR_OVERRIDE_BRANCH", "work/sibling")
+    with pytest.raises(RuntimeError, match="machine-local path"):
+        apply_mod._dispatch_merge_and_delete(["work/sibling", "work/sibling"], share_repo)
+    assert _git(share_repo, "rev-parse", "--verify", "work/sibling").returncode == 0

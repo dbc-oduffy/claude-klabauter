@@ -175,6 +175,7 @@ def _diverge(tmp_path: Path, origin: Path, clone: Path, filename: str, upstream:
     _git(other, "config", "user.email", "test@example.com")
     _git(other, "config", "user.name", "Test")
     _git(other, "checkout", "-q", "-B", "main", "origin/main")
+    (other / filename).parent.mkdir(parents=True, exist_ok=True)
     (other / filename).write_text(upstream)
     _git(other, "add", filename)
     _git(other, "commit", "-q", "-m", "upstream advance")
@@ -296,3 +297,42 @@ def test_reconcile_merge_commit_refused_by_hook_aborts_and_exits_3(tmp_path, cap
     assert status.stdout.strip() == ""
     merge_head = clone / ".git" / "MERGE_HEAD"
     assert not merge_head.exists()
+
+
+def test_origin_adding_machine_local_path_is_refused_before_merge(tmp_path, capsys, monkeypatch):
+    from types import SimpleNamespace
+
+    from coordinator_core.workday_start import rules
+
+    origin, clone = _make_origin_and_clone(tmp_path)
+    _diverge(
+        tmp_path, origin, clone,
+        ".coordinator-local/subagent-share/x/report.md", "telemetry\n",
+    )
+    head_before = _git(clone, "rev-parse", "HEAD").stdout
+
+    monkeypatch.chdir(clone)
+    rc = main([])
+    captured = capsys.readouterr()
+    assert rc == 3
+    assert captured.out.splitlines()[-1] == "RECONCILE-MACHINE-LOCAL-REFUSED branch=work/testmachine/2026-01-01"
+    assert ".coordinator-local/subagent-share/x/report.md" in captured.err
+    assert _git(clone, "rev-parse", "HEAD").stdout == head_before
+    assert not (resolve_git_dir_for(clone) / "MERGE_HEAD").exists()
+
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    result = SimpleNamespace(stdout=captured.out, stderr=captured.err)
+    assert rules.step0_reconcile_outcome(None, result, repo_root=clone, run_dir=run_dir) is False
+    assert list(run_dir.iterdir()) == []
+
+
+def test_origin_state_subagent_share_path_still_merges(tmp_path, monkeypatch):
+    origin, clone = _make_origin_and_clone(tmp_path)
+    _diverge(tmp_path, origin, clone, "state-subagent-share.txt", "ok\n")
+    monkeypatch.chdir(clone)
+    assert main([]) == 0
+
+
+def resolve_git_dir_for(root: Path) -> Path:
+    return root / ".git"

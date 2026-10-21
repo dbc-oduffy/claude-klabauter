@@ -43,6 +43,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     GateVerdict,
     read_run_outcome,
     record_dir,
+    write_run_baton,
     rulable_ids,
 )
 from coordinator_core.ops.sizing_acceptance import (
@@ -490,7 +491,8 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
 
     With `run_id`, the run is bound to the sizing first (`_bind_run`), whatever the verdict, and a bound
     run's reply carries `sizing_path`: the sizing the run is bound to, repo-relative and forward-slash
-    (absent without `run_id` and on a refused bind). With
+    (absent without `run_id` and on a refused bind). A non-halted verdict that minted a baton records its
+    path in the run's `run-baton.json` (a refused write leaves the run unrecorded, the verdict standing). With
     `record`, writes that ruling through its single writer, then gates the sizing as it stands and
     adds `recorded` {ok, error?, pm_ruling?, ruling_ref?} to the reply; a refused write still returns the verdict. Replies
     `GateVerdict.to_json()`; a malformed request replies `{"error": str}` and writes nothing.
@@ -524,7 +526,12 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         _stamp_landed_rows(root, verdict.resume_plan, landed)
     if params.get("run_id"):
         _record_resume_snapshot(root, params["run_id"], verdict)
-    out = (replace(verdict, recorded=recorded) if recorded is not None else verdict).to_json()
+        if verdict.halt is None and verdict.baton:
+            try:
+                write_run_baton(root, params["run_id"], verdict.baton["path"])
+            except (OSError, ValueError):
+                pass
+    out =(replace(verdict, recorded=recorded) if recorded is not None else verdict).to_json()
     if params.get("run_id"):
         from coordinator_core.ops.dispatch_emit import run_token
 

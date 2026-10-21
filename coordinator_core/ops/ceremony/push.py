@@ -77,6 +77,7 @@ def condense_git_diagnostic(text: str, *, limit: int = _MAX_DIAGNOSTIC_CHARS) ->
 from coordinator_core.ipc import CEREMONY_BUDGET_SECS, DISPATCH_TIMEOUT_SECS
 from coordinator_core.lifecycle import git_common_dir
 from coordinator_core.git.git_state import head_sha as head_sha_local
+from coordinator_core.git.machine_local_paths import machine_local_refusal, tree_machine_local_additions
 from coordinator_core.ops.ceremony import git_native
 
 PUSH_MODE_SYNC = "sync"
@@ -889,6 +890,12 @@ def _rebase_onto_fetched_ref(
         reason = condense_git_diagnostic(merge_result.stderr) or "empty output"
         return merge_result.returncode or 1, f"git merge-tree: {reason}"
     tree_sha = first_line
+
+    refusal = machine_local_refusal(
+        tree_machine_local_additions(git_common_dir(worktree_root), old_sha, tree_sha)
+    )
+    if refusal:
+        return 1, "merge recovery declined, nothing touched: " + refusal
 
     message = f"merge {upstream_ref} into {branch} (push ladder)"
     commit_result = git_native.commit_tree_merge(

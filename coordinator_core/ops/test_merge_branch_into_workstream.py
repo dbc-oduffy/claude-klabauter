@@ -202,3 +202,45 @@ def test_handler_without_repo_root_fails_loud():
         asyncio.run(
             mbw._merge_branch_into_workstream_handler({"branch": "x", "reason": "r"}, None)
         )
+
+
+_SHARE = ".coordinator-local/subagent-share/s1/x.jsonl"
+
+
+def _commit_share_file(repo: Path) -> None:
+    (repo / _SHARE).parent.mkdir(parents=True)
+    (repo / _SHARE).write_text("{}\n")
+    _git(repo, "add", "-f", _SHARE)
+    _git(repo, "commit", "-q", "-m", "share")
+
+
+def test_branch_adding_machine_local_path_is_refused(tmp_path):
+    repo = _init_repo(tmp_path)
+    branch = "work/other/2026-07-21"
+    _git(repo, "checkout", "-q", "-b", branch)
+    _commit_share_file(repo)
+    _git(repo, "checkout", "-q", "main")
+    (repo / "main.txt").write_text("main work\n")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-q", "-m", "main work")
+    head = _git(repo, "rev-parse", "HEAD").stdout
+    with pytest.raises(ValueError, match="refused -- machine-local"):
+        mbw.merge_branch_into_workstream(branch, "r", repo)
+    assert not mbw._merge_head_path(repo).exists()
+    assert _git(repo, "rev-parse", "HEAD").stdout == head
+
+
+def test_branch_carrying_untracked_machine_local_files_merges(tmp_path):
+    repo = _init_repo(tmp_path)
+    _commit_share_file(repo)
+    branch = "work/other/2026-07-21"
+    _git(repo, "checkout", "-q", "-b", branch)
+    (repo / "branch.txt").write_text("branch work\n")
+    _git(repo, "add", "branch.txt")
+    _git(repo, "commit", "-q", "-m", "branch work")
+    _git(repo, "checkout", "-q", "main")
+    _git(repo, "rm", "-q", "--cached", _SHARE)
+    _git(repo, "commit", "-q", "-m", "untrack share")
+    out = mbw.merge_branch_into_workstream(branch, "r", repo)
+    assert out["merged"] is True
+    assert _git(repo, "ls-files", ".coordinator-local/subagent-share").stdout.strip() == ""

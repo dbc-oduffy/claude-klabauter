@@ -57,6 +57,7 @@ from coordinator_core.ceremony_common.json_payload_flag import (
 )
 from coordinator_core.contract import apply_base
 from coordinator_core.consolidate_assemble import brief
+from coordinator_core.git.machine_local_paths import MACHINE_LOCAL_PATHSPEC, machine_local_refusal
 from coordinator_core.telemetry.composition_record import (
     flush_composition_record,
     make_fleet_budget,
@@ -212,7 +213,22 @@ def _clean_cherry_pick_conflict(repo_root: Path) -> None:
         )
 
 
+def _refuse_machine_local_additions(ref: str, repo_root: Path) -> None:
+    """Raise before any merge or pick when `ref` adds a machine-local path HEAD lacks.
+    One three-dot diff per directive."""
+    proc = _run_git(
+        ["diff", "--no-renames", "--diff-filter=AM", "--name-only", "-z", f"HEAD...{ref}",
+         "--", MACHINE_LOCAL_PATHSPEC],
+        repo_root,
+    )
+    _fail("diff-machine-local", proc)
+    refusal = machine_local_refusal(p for p in proc.stdout.split("\0") if p)
+    if refusal is not None:
+        raise RuntimeError(f"{ref}: {refusal}")
+
+
 def _cherry_pick_unique(ref: str, repo_root: Path) -> list[str]:
+    _refuse_machine_local_additions(ref, repo_root)
     current = _current_branch(repo_root)
     shas = _unique_commit_shas(repo_root, current, ref)
     if shas:
@@ -240,6 +256,7 @@ def _merge_ref(ref: str, repo_root: Path) -> None:
     # `--no-edit`: with no terminal the message editor fails AFTER the merge
     # result is staged, stranding MERGE_HEAD in a shared tree for the next
     # committer to consume. Any failure aborts, so no in-progress merge is left.
+    _refuse_machine_local_additions(ref, repo_root)
     merge_proc = _run_git(["merge", "--no-ff", "--no-edit", ref], repo_root)
     if merge_proc.returncode != 0:
         _run_git(["merge", "--abort"], repo_root)

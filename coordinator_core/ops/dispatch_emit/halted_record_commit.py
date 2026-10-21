@@ -3,7 +3,8 @@
 A halted engine-ask run leaves its ``state/warp/<run_id>/`` record directory behind; this lands it
 as one ``ceremony.commit_v2`` call carrying that directory's top-level files, the run's
 ``run_artifacts`` candidate set (sizing, baton, plan, evidence sidecar, slice sizings, superseded
-record dirs, claimed docs-stage paths), the declared writes of every chunk the run finished, and
+record dirs, claimed docs-stage paths), the baton the run recorded (left open, ``status_reason``
+stamped with the halt), the declared writes of every chunk the run finished, and
 the halt reason in the message. Candidates are named paths, never the dirty tree. A finished chunk's tracked
 deletion is declared, a deletion git cannot see is dropped, and a path a live peer's claim holds
 is withheld and named. Only a ``ledger-check`` halt carrying a test verdict lands chunk product, because a resumed run counts
@@ -332,6 +333,45 @@ def _integrity_findings(
     return found
 
 
+def _stamp_run_baton(
+    worktree_root: Path, run_id: str, kind: str, reason: Optional[str]
+) -> tuple[Optional[str], Optional[dict]]:
+    """Stamp the baton the run recorded with ``status_reason`` naming the halt; ``status`` and
+    ``deployment_state`` stay as they are, so a refire still picks it up. Returns
+    ``(baton_rel, error)``: ``baton_rel`` is the stamped path (None when the run recorded no
+    readable baton inside the handoffs home), ``error`` is ``{path, error}`` for a refused write."""
+    from coordinator_core.frontmatter.primitives import rebuild, split_frontmatter
+    from coordinator_core.frontmatter.primitives import insert_fm_field, read_fm_field, replace_fm_field
+    from coordinator_core.locked_write import LockTimeout, locked_rmw
+    from coordinator_core.ops.dispatch_emit.ask_contract import read_run_baton
+    from coordinator_core.session.record_homes import home_dir
+
+    rel = read_run_baton(worktree_root, run_id)
+    if rel is None:
+        return None, None
+    abs_path = contained_path(worktree_root / rel, [Path(home_dir(str(worktree_root), "handoffs"))])
+    if abs_path is None or not abs_path.is_file():
+        return None, None
+    value = f"run {run_id} halted: {kind}" + (f": {reason}" if reason else "")
+
+    def compose(old: str) -> str:
+        split = split_frontmatter(old)
+        if split is None:
+            raise ValueError("baton has no frontmatter")
+        fm = split.fm_text
+        if read_fm_field(fm, "status_reason") is None:
+            fm = insert_fm_field(fm, "status_reason", value)
+        else:
+            fm = replace_fm_field(fm, "status_reason", value)
+        return old if fm == split.fm_text else rebuild(split, fm)
+
+    try:
+        locked_rmw(abs_path, compose, repo_root=worktree_root)
+    except (LockTimeout, OSError, ValueError) as exc:
+        return rel, {"path": rel, "error": str(exc)}
+    return rel, None
+
+
 def _land(
     worktree_root: Path, repo_root: Path, params: dict, run_id: str, record_dir_rel: str, halted: dict
 ) -> dict:
@@ -345,6 +385,7 @@ def _land(
     from coordinator_core.ops.dispatch_emit import landing_integrity
 
     base = {"record_dir": record_dir_rel, "halted": halted["halted"]}
+    halt_reason = _held_reason(halted) if halted["halted"] == HALT_DEPENDENTS_UNSTARTED else None
     run_base = landing_integrity.run_base_for(worktree_root, run_id, params)
     session_id: Optional[str] = params.get("session_id")
     if not (isinstance(session_id, str) and _UUID_RE.fullmatch(session_id)):
@@ -383,7 +424,7 @@ def _land(
             blocking=blocking if plan_rel else None,
             blocking_items=blocking_items if plan_rel else None,
             run_base_sha=run_base,
-            reason=_held_reason(halted) if halted["halted"] == HALT_DEPENDENTS_UNSTARTED else None,
+            reason=halt_reason,
         )
     raw_docs = params.get(run_artifacts.DOC_PATHS_PARAM)
     artifacts = within_handoffs_home(worktree_root, run_artifacts.candidate_paths(
@@ -392,6 +433,10 @@ def _land(
         plan_rel=halted.get(HALT_PLAN_FIELD) if isinstance(halted.get(HALT_PLAN_FIELD), str) else None,
         doc_paths=[d for d in raw_docs if isinstance(d, str)] if isinstance(raw_docs, list) else (),
     ))
+    baton_rel, baton_error = _stamp_run_baton(worktree_root, run_id, halted["halted"], halt_reason)
+    if baton_rel is not None and baton_rel not in artifacts.by_class.get("baton", ()) and baton_rel not in declared:
+        declared.append(baton_rel)
+    baton_reply: dict = {"run_baton": baton_error} if baton_error is not None else {}
     review_written = _review_written(worktree_root, session_id, run_id)
     review_literals = [] if review_written is None else [
         p for p in review_written if not review_edits._out_of_worktree(review_edits._norm(p))
@@ -564,7 +609,8 @@ def _land(
         return {
             "committed": False, "sha": None, "nothing_to_commit": True,
             **({"withheld": withheld} if withheld else {}), **peer_held_by,
-            **({"targeted_tests": targeted} if targeted is not None else {}), **review_reply, **base,
+            **({"targeted_tests": targeted} if targeted is not None else {}), **review_reply,
+            **baton_reply, **base,
         }
 
     message = halted_record_message(run_id, halted)
@@ -599,7 +645,7 @@ def _land(
         return _error("ceremony.commit_v2 is not registered", **base)
     if not isinstance(reply, dict):
         return _error(f"unexpected commit_v2 reply: {reply!r}", **base)
-    extra: dict = {**review_reply, **peer_held_by}
+    extra: dict = {**review_reply, **peer_held_by, **baton_reply}
     if not reply.get("error"):
         _settle_ledger_pointer(repo_root, run_id, halted, sizing_rel, outcome_rel)
         left = run_artifacts.residue(

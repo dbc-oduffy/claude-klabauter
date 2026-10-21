@@ -15,6 +15,7 @@ import sys
 from pathlib import Path
 
 from coordinator_core.git import reconcile_manifest as rm
+from coordinator_core.git.machine_local_paths import machine_local_paths
 from coordinator_core.git.run import GitResult, run_git
 from coordinator_core.git.repo_root import show_toplevel
 from coordinator_core.git_lock_retry import run_with_lock_retry
@@ -96,6 +97,10 @@ def main(argv: list[str]) -> int:
     unmerged = sorted({p for s, ps in entries if s == "U" for p in ps})
     if unmerged:
         return _refuse(rm.REFUSAL_UNMERGED, unmerged)
+
+    local = machine_local_paths(ps[-1] for s, ps in entries if s in "AMRC")
+    if local:
+        return _refuse(rm.REFUSAL_MACHINE_LOCAL, local)
 
     merged = _git(["diff", "--name-only", "-z", "HEAD...MERGE_HEAD"], repo_root)
     if merged.returncode != 0:

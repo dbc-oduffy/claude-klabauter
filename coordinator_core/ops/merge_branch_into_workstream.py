@@ -69,6 +69,7 @@ from coordinator_core.win_portability import no_console_creationflags
 from pathlib import Path
 from typing import Optional, Union
 
+from coordinator_core.git.machine_local_paths import MACHINE_LOCAL_PATHSPEC, machine_local_refusal
 from coordinator_core.ipc import register_op
 from coordinator_core.ops.orphan_branch_sweep import _is_ancestor
 
@@ -137,6 +138,22 @@ def merge_branch_into_workstream(
 
     if _branch_is_ancestor(branch_sha, head_sha, repo):
         return {"merged": False, "already_ancestor": True, "conflict": False}
+
+    added = _git(
+        [
+            "diff", "--name-only", "-z", "--no-renames", "--diff-filter=AM",
+            f"HEAD...{branch}", "--", MACHINE_LOCAL_PATHSPEC,
+        ],
+        cwd=repo,
+    )
+    if added.returncode != 0:
+        raise RuntimeError(
+            f"branch.merge_into_workstream: machine-local pre-check failed for {branch!r}: "
+            f"{added.stderr.strip()}"
+        )
+    refusal = machine_local_refusal(p for p in added.stdout.split("\0") if p)
+    if refusal is not None:
+        raise ValueError(f"branch.merge_into_workstream: refused -- {refusal}")
 
     env = {
         **os.environ,

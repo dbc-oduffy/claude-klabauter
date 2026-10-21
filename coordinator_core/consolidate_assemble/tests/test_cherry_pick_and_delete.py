@@ -311,3 +311,24 @@ def test_branch_with_one_uncherry_picked_commit_is_refused(tmp_path: Path) -> No
         apply_mod._delete_branch("feat", True, root)
 
     assert _git(root, "ls-remote", "origin", "feat").stdout.strip()
+
+
+def test_cherry_pick_only_refuses_a_ref_adding_machine_local_paths(tmp_path: Path) -> None:
+    """Both cherry-pick verbs refuse before picking, and the branch survives."""
+    root = _init_repo(tmp_path)
+    _write(root, "a.txt", "base\n")
+    _commit_all(root, "seed")
+    _git(root, "checkout", "-q", "-b", "feat")
+    _write(root, ".coordinator-local/subagent-share/s1/r.md", "x\n")
+    _git(root, "add", "-f", ".coordinator-local/subagent-share/s1/r.md")
+    _git(root, "commit", "-q", "-m", "adds share")
+    _git(root, "checkout", "-q", "work")
+    head = _git(root, "rev-parse", "HEAD").stdout.strip()
+
+    with pytest.raises(RuntimeError, match="machine-local path"):
+        apply_mod._dispatch_cherry_pick_only(["feat", "feat"], root)
+    with pytest.raises(RuntimeError, match="machine-local path"):
+        apply_mod._dispatch_cherry_pick_and_delete(["feat", "feat"], root)
+
+    assert _git(root, "rev-parse", "HEAD").stdout.strip() == head
+    assert _git(root, "rev-parse", "--verify", "feat").returncode == 0

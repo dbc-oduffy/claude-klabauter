@@ -22,7 +22,7 @@ Exit codes (parity-critical, preserved from the bash oracle):
     0 — already-includes (`ALREADY-CURRENT`) / fast-forward
         (`RECONCILED-FF`) / non-ff merge succeeded (`RECONCILED-MERGE`).
     3 — a failed `--no-ff` merge, discriminated by `_classify_failed_merge`
-        into one of four outcome strings: a genuine content conflict
+        into one of five outcome strings: a genuine content conflict
         (`RECONCILE-CONFLICT-OPEN`, merge held open with a manifest; or
         `RECONCILE-CONFLICT` when no conflicted path was parsed, merge
         aborted, PM resolves via the A/B/C Branch Reconciliation
@@ -30,7 +30,10 @@ Exit codes (parity-critical, preserved from the bash oracle):
         refused (`RECONCILE-MERGE-COMMIT-REFUSED`, commonly a commit hook —
         not an A/B/C decision), or the merge never starting at all
         (`RECONCILE-MERGE-NOT-STARTED` — dirty worktree, unrelated
-        histories, or a bad ref; also not an A/B/C decision).
+        histories, or a bad ref; also not an A/B/C decision). A fifth,
+        `RECONCILE-MACHINE-LOCAL-REFUSED`, is printed before any merge starts
+        when origin/main would add a path under `.coordinator-local/subagent-share/`;
+        the paths go to stderr and nothing is merged.
     1 — unexpected error (git not a repo, fetch failure, etc. — the bash
         oracle's `set -euo pipefail` propagates the failing git command's
         own exit code; this port does the same).
@@ -74,6 +77,11 @@ from pathlib import Path
 
 from coordinator_core.git import reconcile_manifest
 from coordinator_core.git.git_dir import resolve_git_dir
+from coordinator_core.git.machine_local_paths import (
+    MACHINE_LOCAL_PATHSPEC,
+    machine_local_paths,
+    machine_local_refusal,
+)
 from coordinator_core.git.git_state import (
     IndexParseError,
     UnmergedIndexEntryError,
@@ -224,6 +232,19 @@ def main(argv: list[str]) -> int:
     if ff_merge.returncode == 0:
         print(f"RECONCILED-FF branch={current}")
         return 0
+
+    added = _run(
+        ["diff", "--name-only", "-z", "--no-renames", "--diff-filter=AM",
+         "HEAD...origin/main", "--", MACHINE_LOCAL_PATHSPEC]
+    )
+    if added.returncode == 0:
+        hits = machine_local_paths(p for p in added.stdout.split("\0") if p)
+        if hits:
+            print(f"RECONCILE-MACHINE-LOCAL-REFUSED branch={current}")
+            print(machine_local_refusal(hits), file=sys.stderr)
+            for path in hits:
+                print(path, file=sys.stderr)
+            return 3
 
     merge_env = dict(os.environ)
     merge_env["COORDINATOR_OVERRIDE_BRANCH"] = "1"

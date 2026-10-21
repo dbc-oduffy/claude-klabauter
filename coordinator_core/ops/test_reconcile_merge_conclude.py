@@ -101,6 +101,22 @@ def test_foreign_staged_refused(repo, capsys):
     assert rm.live_merge_head(repo) is not None
 
 
+def test_machine_local_staged_refused(repo, capsys):
+    (repo / "a.txt").write_text("resolved\n")
+    share = repo / ".coordinator-local" / "subagent-share"
+    share.mkdir(parents=True)
+    (share / "x.md").write_text("telemetry\n")
+    _g(repo, "add", "-f", ".coordinator-local/subagent-share/x.md")
+    _open_manifest(repo)
+    head = _g(repo, "rev-parse", "HEAD").stdout
+    assert conclude.main([]) == 3
+    err = capsys.readouterr().err
+    assert rm.REFUSAL_MACHINE_LOCAL in err
+    assert ".coordinator-local/subagent-share/x.md" in err
+    assert _g(repo, "rev-parse", "HEAD").stdout == head
+    assert rm.live_merge_head(repo) is not None
+
+
 def test_success_commits_merge_and_removes_manifest(repo, capsys):
     (repo / "a.txt").write_text("resolved\n")
     _open_manifest(repo)

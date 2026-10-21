@@ -105,6 +105,8 @@ EXCLUDED_MODULES = {
     "coordinator_core/git/run.py":
         "18 marker lines; non-roster module under coordinator_core/git/; unsized by this plan's "
         "scope:.",
+    "coordinator_core/git/machine_local_paths.py":
+        "pure path predicate with no narration; non-roster module under coordinator_core/git/.",
     "coordinator_core/git/tree_spine.py":
         "non-roster module under coordinator_core/git/; unsized by this plan's scope:.",
     "coordinator_core/ops/ceremony/__init__.py":

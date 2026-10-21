@@ -98,6 +98,7 @@ from coordinator_core.ops.ceremony.commit_admission import (
     publish_allowlist_drift_refusal,
     skill_weight_check,
 )
+from coordinator_core.git.machine_local_paths import machine_local_refusal
 from coordinator_core.ops.ceremony.commit_path_legality import illegal_path_refusal
 from coordinator_core.git.commit_signing import (
     commit_signing_enabled,
@@ -4827,6 +4828,11 @@ def _commit_via_head_spine(
             stdout="",
             stderr=f"{caller}: refused -- this commit lands a path Windows cannot check out:\n{legality_refusal}",
         )
+    machine_local = machine_local_refusal(
+        p for p, entry in assembled.items() if isinstance(entry, tuple) and len(entry) == 2
+    )
+    if machine_local is not None:
+        return GitResult(returncode=1, stdout="", stderr=f"{caller}: refused -- {machine_local}")
     # Canonical-path gate before any tree write; git/commit.py::commit_paths applies the same gate.
     canonical_refusal = first_non_canonical_path_refusal(assembled.keys())
     if canonical_refusal is not None:

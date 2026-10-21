@@ -679,6 +679,44 @@ def read_run_outcome(repo_root: Path, run_id: str) -> dict[str, Any] | None:
     return {k: data[k] for k in RUN_OUTCOME_KEYS if k in data}
 
 
+#: Names the baton an M+ run minted. Its own file, not a `run.json` key: `requirements_ledger.start`
+#: rewrites `run.json` with two keys, dropping any other, and its presence marks a run ledger-bearing.
+RUN_BATON_FILE = "run-baton.json"
+
+
+def _safe_baton_rel(baton_rel: Any) -> str | None:
+    """``baton_rel`` as a forward-slash repo-relative path, or None when empty, absolute or climbing."""
+    if not isinstance(baton_rel, str):
+        return None
+    posix = baton_rel.replace("\\", "/")
+    if not posix.strip() or PurePosixPath(posix).is_absolute() or PureWindowsPath(posix).drive:
+        return None
+    if ".." in posix.split("/"):
+        return None
+    return posix
+
+
+def write_run_baton(repo_root: Path, run_id: str, baton_rel: str) -> Path:
+    """Atomically write the minted baton's repo-relative path to `<record_dir>/run-baton.json` and
+    return the path. Raises ValueError on an unsafe run id or an empty, absolute or `..` baton path."""
+    rel = _safe_baton_rel(baton_rel)
+    if rel is None:
+        raise ValueError(f"baton path {baton_rel!r} is not a repo-relative path")
+    path = record_dir(repo_root, run_id) / RUN_BATON_FILE
+    atomic_write_bytes(path, (json.dumps({"baton": rel}) + "\n").encode("utf-8"))
+    return path
+
+
+def read_run_baton(repo_root: Path, run_id: str) -> str | None:
+    """The run's recorded baton path (forward-slash, repo-relative), or None on an unsafe run id, an
+    unreadable or malformed file, or a non-str or unsafe `baton`. One read."""
+    try:
+        data = _read_json_object(record_dir(repo_root, run_id) / RUN_BATON_FILE)
+    except ValueError:
+        return None
+    return None if data is None else _safe_baton_rel(data.get("baton"))
+
+
 def write_ledger_halt(path: Path, halt: LedgerHalt) -> None:
     """Atomically write ``halt`` to ``path``."""
     atomic_write_bytes(path, (json.dumps(halt.to_json(), indent=2) + "\n").encode("utf-8"))

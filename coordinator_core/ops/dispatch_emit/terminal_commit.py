@@ -3526,6 +3526,18 @@ def _deferred_rows(worktree_root: Path, plan_rel: str) -> list:
     ) if isinstance(rows, list) else []
 
 
+def _run_own_baton(worktree_root: Path, run_id: str) -> Optional[str]:
+    """The baton the run's gate minted and recorded, when it is a file inside the handoffs home."""
+    from coordinator_core.ops.dispatch_emit.ask_contract import read_run_baton
+
+    rel = read_run_baton(worktree_root, run_id)
+    if rel is None:
+        return None
+    home = [Path(home_dir(str(worktree_root), "handoffs"))]
+    target = contained_path(worktree_root / rel, home)
+    return rel if target is not None and target.is_file() else None
+
+
 def _pay_inline_legs(
     worktree_root: Path, ctx: dict, work_sha: str, session_id: Optional[str],
     snapshot: Optional[_Snapshot],
@@ -3549,11 +3561,15 @@ def _pay_inline_legs(
         ctx["completion_entry"] = (entry_paths or [result.detail.removeprefix("entry ")])[0]
 
     batons = _handoff_claims(worktree_root, session_id)
-    ctx["batons"] = batons
     status = criterion.get("status") if criterion else None
     saved: dict = {}
     written = list(entry_paths)
     discharged = status == "met" or (bool(ctx.get("ledger_met")) and status != "not_met")
+    if discharged:
+        own = _run_own_baton(worktree_root, run_id)
+        if own and own not in batons:
+            batons = [*batons, own]
+    ctx["batons"] = batons
     if batons and not discharged:
         legs["baton-ship"] = _leg("failed", f"criterion {status or 'absent'}: batons not shipped")
     else:

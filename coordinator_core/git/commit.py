@@ -80,6 +80,7 @@ from typing import Callable, Dict, Mapping, NamedTuple, Optional, Sequence, Tupl
 from coordinator_core import dispatch_abandon
 from coordinator_core.git import index_write
 from coordinator_core.git.git_dir import resolve_git_dir, resolve_git_common_dir
+from coordinator_core.git.machine_local_paths import machine_local_refusal
 from coordinator_core.git.path_canon import first_non_canonical_path_refusal
 from coordinator_core.git import checkin_attrs
 from coordinator_core.git.content_hash import (
@@ -1174,6 +1175,9 @@ def commit_paths(
     canonical_refusal = first_non_canonical_path_refusal(path_list)
     if canonical_refusal is not None:
         raise CommitRefused(canonical_refusal)
+    machine_local = machine_local_refusal(path_list)
+    if machine_local is not None:
+        raise CommitRefused(machine_local)
     for p in (*delete_list, *untrack_list):
         # A tracked .git/... entry makes GitHub's fsck (hasDotgit) reject every later push.
         if any(part.casefold() == ".git" for part in p.replace("\\", "/").split("/")):
