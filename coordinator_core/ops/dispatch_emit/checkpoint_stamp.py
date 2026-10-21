@@ -67,6 +67,21 @@ class CheckpointWalk(NamedTuple):
 
 _PROCESS_HALF_SUFFIX = "(process files)"
 _FULL_SHA = re.compile(r"^[0-9a-f]{40}$")
+
+
+def is_process_half(subject: str) -> bool:
+    """True for the ``(process files)`` child of a split checkpoint. The stamp writer and
+    ``emit.resume_landed_state`` share this rule, so the sha a row is stamped with and the sha the
+    gate reads for it cannot drift."""
+    return subject.strip().endswith(_PROCESS_HALF_SUFFIX)
+
+
+def without_process_half(subject: str) -> str:
+    """``subject`` minus a trailing ``(process files)``, so the last row id parses cleanly."""
+    s = subject.strip()
+    return s[: -len(_PROCESS_HALF_SUFFIX)].rstrip() if is_process_half(s) else s
+
+
 _CREATED_LINE = re.compile(r"^created:[ \t]*[\"']?(\d{4})-(\d{2})-(\d{2})", re.M)
 _DAY_SECONDS = 86400
 
@@ -128,7 +143,7 @@ def checkpoint_rows_landed(
         if cp is not None and cp.plan_rel == plan_rel:
             subject = (message.splitlines() or [""])[0].strip()
             ids = (cp.row_ids - cp.gate_owed - cp.stop_rule) & remaining
-            if ids and not subject.endswith(_PROCESS_HALF_SUFFIX):
+            if ids and not is_process_half(subject):
                 landed[sha] = frozenset(ids)
                 remaining -= ids
         parents = meta.get("parents") or []

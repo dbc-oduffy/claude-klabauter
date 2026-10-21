@@ -20,6 +20,40 @@ _INBOX_ROW = (
 )
 
 
+_DRAFT = "coordinator_core.ops.fleet.memo_draft._classify_receiver_for_draft"
+_UNKNOWN = {"rejection_class": "unknown_receiver"}
+_URL = "https://github.com/dbc-oduffy/example-fleet-context/issues/3"
+
+
+@pytest.fixture(autouse=True)
+def _registered_receivers(monkeypatch):
+    """Registry-independent: every receiver resolves unless a test says otherwise."""
+    monkeypatch.setattr(_DRAFT, lambda to, dry_run: None)
+
+
+@pytest.fixture
+def unregistered(monkeypatch):
+    monkeypatch.setattr(_DRAFT, lambda to, dry_run: dict(_UNKNOWN))
+
+
+def _memo_row(task_id="C10"):
+    return {
+        "id": task_id,
+        "performer": "em",
+        "kind": "memo-send",
+        "memo_to": "example-fleet-context-em",
+        "surface": "docs/x.md",
+        "receipt": f"{_SENT}/topic.md",
+    }
+
+
+def _resolve(tmp_path, **fields):
+    from coordinator_core.ops.plan_tasks_mutate import _DELIVERED_ELSEWHERE, _memo_receipt_refusal
+
+    r = {"id": "C10", "disposition": _DELIVERED_ELSEWHERE, **fields}
+    return _memo_receipt_refusal([r], {"C10": _memo_row()}, tmp_path)
+
+
 def _plan(tmp_path, *rows):
     (tmp_path / ".git").mkdir(exist_ok=True)
     path = tmp_path / "p.md"
@@ -120,3 +154,71 @@ def test_close_route_names_the_receipt_or_the_placeholder():
     assert f"disposition_ref {_SENT}/topic.md" in memo_close_route("C6", "topic")
     assert "id C6" in memo_close_route("C6", "topic")
     assert "sent/<slug>.md" in memo_close_route("C6", None)
+
+
+def test_unregistered_receiver_closes_with_other_and_url(unregistered, tmp_path):
+    assert _resolve(tmp_path, delivered_via="other", disposition_ref=_URL) == {}
+    assert _resolve(tmp_path, delivered_via="other", disposition_ref="http://example.com/x") == {}
+
+
+@pytest.mark.parametrize("ref", ["", "abc123", "ftp://example.com/x", "https://", "https://a b/c", f"{_SENT}/topic.md"])
+def test_unregistered_receiver_non_url_ref_still_refuses(unregistered, tmp_path, ref):
+    from coordinator_core.locked_write import MutateAbort
+
+    with pytest.raises(MutateAbort) as exc:
+        _resolve(tmp_path, delivered_via="other", disposition_ref=ref)
+    assert "closes on a sent receipt with delivered_via memo" in str(exc.value)
+    assert "receiver is unregistered" in str(exc.value)
+
+
+def test_unregistered_receiver_url_with_other_via_still_refuses(unregistered, tmp_path):
+    from coordinator_core.locked_write import MutateAbort
+
+    with pytest.raises(MutateAbort):
+        _resolve(tmp_path, delivered_via="pr", disposition_ref=_URL)
+
+
+def test_registered_receiver_url_close_still_refuses(tmp_path):
+    from coordinator_core.locked_write import MutateAbort
+
+    with pytest.raises(MutateAbort) as exc:
+        _resolve(tmp_path, delivered_via="other", disposition_ref=_URL)
+    assert "closes on a sent receipt with delivered_via memo" in str(exc.value)
+    assert "receiver is unregistered" not in str(exc.value)
+
+
+@pytest.mark.parametrize(
+    "verdict", [None, "example-retrieval-repo-em", {"rejection_class": "registry_error"}, {"rejection_class": "ambiguous_receiver"}]
+)
+def test_only_unknown_receiver_verdict_counts_as_unregistered(verdict):
+    from coordinator_core.ops.dispatch_emit.memo_rows import memo_receiver_unregistered
+
+    assert memo_receiver_unregistered("example-fleet-context-em", lambda to, dry_run: verdict) is False
+
+
+def test_unknown_receiver_verdict_counts_as_unregistered_via_injected_classifier():
+    from coordinator_core.ops.dispatch_emit.memo_rows import memo_receiver_unregistered
+
+    seen: list = []
+
+    def classify(to, dry_run):
+        seen.append(to)
+        return dict(_UNKNOWN)
+
+    assert memo_receiver_unregistered(" example-fleet-context-em ", classify) is True
+    assert seen == ["example-fleet-context-em"]
+
+
+def test_read_spine_does_not_consult_the_receiver_registry(monkeypatch, tmp_path):
+    def boom(to, dry_run):
+        raise AssertionError("read_spine must not consult the receiver registry")
+
+    monkeypatch.setattr(_DRAFT, boom)
+    row = (
+        "- id: M1\n  title: send\n  change_kind: verification\n  performer: em\n  kind: memo-send\n"
+        f"  memo_to: example-fleet-context-em\n  surface: docs/x.md\n  writes: []\n  receipt: {_SENT}/topic.md\n"
+        "  disposition: open\n  body: |\n    Send.\n"
+    )
+    exclusions: list = []
+    read_spine(_plan(tmp_path, row), exclusions=exclusions)
+    assert [e["reason"] for e in exclusions] == ["memo-send"]

@@ -312,11 +312,6 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
         "plan already owns, docs/plans/2026-09-23-cascade-write-provenance.md C2)",
     ),
     (
-        "coordinator_core.ops.baton_close_backstop",
-        'registers "deliverable.baton_close_backstop" (read-only evidence report of open '
-        "batons whose work already finished: divergences for a closer, residue for review)",
-    ),
-    (
         "coordinator_core.ops.commit_join_divergence_report",
         'registers "commit_ledger.join_divergence_report" (read-only, one-git-spawn report of '
         "ledger vs Deliverable-Id join divergence; never gates)",

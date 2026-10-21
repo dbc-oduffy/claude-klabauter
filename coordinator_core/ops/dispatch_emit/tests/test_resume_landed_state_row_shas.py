@@ -66,5 +66,42 @@ def test_other_plan_commits_and_unreadable_git_give_empty_map(repo):  # noqa: F8
     assert dict(resume_landed_state(repo, PLAN_REL).row_shas) == {}
 
 
+def test_split_checkpoint_row_sha_is_content_half_and_landing_shas_holds_both(repo):  # noqa: F811
+    _init(repo)
+    trailer = f"Checkpoint-Plan: {PLAN_REL}"
+    content = _commit(repo, "a.txt", "checkpoint(wave 0): 1 rows — C1", trailer)
+    process = _commit(repo, "b.txt", "checkpoint(wave 0): 1 rows — C1 (process files)", trailer)
+    state = resume_landed_state(repo, PLAN_REL)
+    assert dict(state.row_shas) == {"C1": content}
+    assert state.landing_shas["C1"] == frozenset({content, process})
+    assert set(state.row_shas) == set(state.rows)
+
+
+def test_lone_process_half_still_yields_row_sha(repo):  # noqa: F811
+    _init(repo)
+    process = _commit(
+        repo, "a.txt", "checkpoint(wave 0): 1 rows — C1 (process files)",
+        f"Checkpoint-Plan: {PLAN_REL}",
+    )
+    state = resume_landed_state(repo, PLAN_REL)
+    assert dict(state.row_shas) == {"C1": process}
+    assert state.landing_shas["C1"] == frozenset({process})
+
+
+@pytest.mark.parametrize(
+    "subject,expected",
+    [
+        ("checkpoint(wave 0): 1 rows — C1 (process files)", True),
+        ("checkpoint(wave 0): 1 rows — C1 (process files)  \n", True),
+        ("checkpoint(wave 0): 1 rows — C1", False),
+        ("(process files) checkpoint", False),
+    ],
+)
+def test_is_process_half(subject, expected):
+    from coordinator_core.ops.dispatch_emit.checkpoint_stamp import is_process_half
+
+    assert is_process_half(subject) is expected
+
+
 def test_resume_plan_landed_open_defaults_empty():
     assert ResumePlan("p.md", ("C1",)).landed_open == ()

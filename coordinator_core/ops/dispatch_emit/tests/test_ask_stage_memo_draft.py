@@ -45,6 +45,40 @@ def _stage(tmp_path, plan: str):
     return read_stage_reply(tmp_path, _handler({"run_id": "r1", "plan_path": PLAN_REL}, repo_root=tmp_path))
 
 
+_DRAFT = "coordinator_core.ops.fleet.memo_draft._classify_receiver_for_draft"
+
+
+@pytest.fixture(autouse=True)
+def _registered_receivers(monkeypatch):
+    """Registry-independent: every receiver resolves unless a test says otherwise."""
+    monkeypatch.setattr(_DRAFT, lambda to, dry_run: None)
+
+
+def test_unregistered_receiver_stages_no_draft_step_and_names_the_close_route(monkeypatch, tmp_path):
+    monkeypatch.setattr(_DRAFT, lambda to, dry_run: {"rejection_class": "unknown_receiver"})
+    reply = _stage(tmp_path, _plan())
+    assert [r["id"] for r in reply["rows"]] == ["C1"]
+    assert _owed(reply) == [("M1", "memo-send")]
+    detail = reply["owed"][0]["detail"]
+    assert "'other-em'" in detail
+    assert "delivered_via other" in detail
+    assert "http(s) disposition_ref" in detail
+
+
+def test_injected_classifier_decides_the_refusal(tmp_path):
+    from coordinator_core.ops.dispatch_emit.ask_stage import OwedRow, _memo_draft_steps
+
+    raw = {"id": "M1", "surface": f"{OUTBOX}/topic.md", "memo_to": "ghost-em", "title": "T"}
+    owed = [OwedRow(id="M1", reason="memo-send", detail="d")]
+    unknown = lambda to, dry_run: {"rejection_class": "unknown_receiver"} if to == "ghost-em" else None
+    out, steps = _memo_draft_steps(tmp_path, tmp_path / "run", owed, {"M1": raw}, "", classify_receiver=unknown)
+    assert steps == [] and "'ghost-em'" in out[0].detail
+    out, steps = _memo_draft_steps(
+        tmp_path, tmp_path / "run", owed, {"M1": raw}, "", classify_receiver=lambda to, dry_run: None
+    )
+    assert [s.id for s in steps] == ["M1-memo-draft"]
+
+
 def _owed(reply):
     return [(o["id"], o["reason"]) for o in reply["owed"]]
 

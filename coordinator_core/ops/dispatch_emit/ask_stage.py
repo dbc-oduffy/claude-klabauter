@@ -14,7 +14,7 @@ import re
 import shlex
 from dataclasses import replace
 from pathlib import Path, PurePosixPath
-from typing import Mapping, Optional, Sequence
+from typing import Callable, Mapping, Optional, Sequence
 
 from coordinator_core.frontmatter.primitives import read_fm_field_unquoted, split_frontmatter
 from coordinator_core.git.git_state import head_branch
@@ -434,6 +434,7 @@ def _memo_draft_steps(
     raw_by_id: Mapping[str, Mapping],
     intent: str,
     staged: Sequence[ManifestRow] = (),
+    classify_receiver: Optional[Callable[[str, bool], object]] = None,
 ) -> tuple[list[OwedRow], list[ManifestRow]]:
     """Does the outbox hold the draft each owed `memo-send` row's send needs? One dispatched draft
     step per row whose draft is absent and whose receiver is named; the row stays owed for the EM's
@@ -441,6 +442,7 @@ def _memo_draft_steps(
 
     The step inherits the owed row's `depends_on` edges that name a `staged` row, and sits one wave
     after the latest of them: the draft carries content those rows produce."""
+    from coordinator_core.ops.dispatch_emit.memo_rows import memo_receiver_unregistered
     from coordinator_core.ops.dispatch_emit.spine_read import memo_draft_fields
     from coordinator_core.session.machinery_paths import LEGACY_MEMO_OUTBOX_RELDIR, MEMO_OUTBOX_RELDIR
 
@@ -454,6 +456,18 @@ def _memo_draft_steps(
         fields, why = memo_draft_fields(dict(raw))
         if fields is None:
             out_owed.append(replace(o, detail=f"{o.detail} (no draft step staged: {why})"))
+            continue
+        if memo_receiver_unregistered(fields["to"], classify_receiver):
+            out_owed.append(
+                replace(
+                    o,
+                    detail=(
+                        f"{o.detail} (no draft step staged: receiver {fields['to']!r} is unknown to the "
+                        "registry, memo.draft refuses it as UNKNOWN RECEIVER; post it as a PR/issue "
+                        "comment and close the row with delivered_via other and an http(s) disposition_ref)"
+                    ),
+                )
+            )
             continue
         slug = fields["slug"]
         draft_rel = f"{MEMO_OUTBOX_RELDIR}/{slug}.md"

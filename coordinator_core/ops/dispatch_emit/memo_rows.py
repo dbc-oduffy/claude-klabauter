@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 _MEMO_SEND_BRIEF_RE = re.compile(r"\bcross-repo-memo(?:\.py)?\s+send\b|\bmemo\.send\b")
 
@@ -114,6 +114,37 @@ def memo_row_slug(raw: dict) -> Optional[str]:
             if topic:
                 return topic
     return None
+
+
+def memo_receiver_unregistered(receiver: object, classify: Optional[Callable[[str, bool], object]] = None) -> bool:
+    """True when ``memo.draft`` would refuse ``receiver`` as UNKNOWN RECEIVER.
+
+    Answered by memo.draft's own classifier (``classify`` overrides it, for a caller that
+    injects the registry), so the registry has one reader. Any other outcome (resolved,
+    rerouted, auto-accepted, registry error, ambiguous) is ``False``.
+    """
+    if not isinstance(receiver, str) or not receiver.strip():
+        return False
+    from coordinator_core.ops.fleet.memo_draft import REJECTION_CLASS_UNKNOWN_RECEIVER
+
+    if classify is None:
+        from coordinator_core.ops.fleet.memo_draft import _classify_receiver_for_draft as classify
+
+    verdict = classify(receiver.strip(), True)
+    return isinstance(verdict, dict) and verdict.get("rejection_class") == REJECTION_CLASS_UNKNOWN_RECEIVER
+
+
+def is_http_url_ref(ref: object) -> bool:
+    """True when ``ref`` is an ``http(s)://<host>...`` URL with no whitespace. Shape only, no I/O."""
+    if not isinstance(ref, str):
+        return False
+    from urllib.parse import urlsplit
+
+    text = ref.strip()
+    if not text or any(c.isspace() for c in text):
+        return False
+    parts = urlsplit(text)
+    return parts.scheme in ("http", "https") and bool(parts.netloc)
 
 
 def memo_receipt_exists(repo_root: Optional[Path], slug: str) -> bool:

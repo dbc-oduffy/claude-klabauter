@@ -1871,6 +1871,7 @@ def _memo_receipt_refusal(resolutions: list, rows_by_id: dict, worktree: Path) -
         memo_receipt_slug,
         memo_row_slug,
     )
+    from coordinator_core.ops.dispatch_emit.memo_rows import is_http_url_ref, memo_receiver_unregistered
 
     checked: dict = {}
     for r in resolutions:
@@ -1883,8 +1884,16 @@ def _memo_receipt_refusal(resolutions: list, rows_by_id: dict, worktree: Path) -
         route = memo_close_route(tid, declared)
         slug = memo_receipt_slug(ref)
         if r.get("delivered_via") != "memo" or slug is None:
+            unregistered = memo_receiver_unregistered(row.get("memo_to"))
+            if unregistered and r.get("delivered_via") == "other" and is_http_url_ref(ref):
+                continue
+            hint = (
+                "; receiver is unregistered: close with delivered_via other and an http(s) URL disposition_ref"
+                if unregistered
+                else ""
+            )
             raise MutateAbort(
-                f"resolve: row {tid}: a memo-send row closes on a sent receipt with delivered_via memo; {route}"
+                f"resolve: row {tid}: a memo-send row closes on a sent receipt with delivered_via memo; {route}{hint}"
             )
         if declared is not None and declared != slug:
             raise MutateAbort(f"resolve: row {tid}: receipt names {slug!r}, row declares {declared!r}; {route}")

@@ -3639,7 +3639,6 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     "deliverable.cascade_retract": OpClass.MUTATING,
     "deliverable.cascade_backstop_sweep": OpClass.COMPUTE_ONLY,
     "deliverable.cascade_divergence_report": OpClass.COMPUTE_ONLY,
-    "deliverable.baton_close_backstop": OpClass.COMPUTE_ONLY,
     "commit_ledger.join_divergence_report": OpClass.COMPUTE_ONLY,
     "goal.kr2_two_repo_rate": OpClass.COMPUTE_ONLY,
     # ceremony.chunk_commits — COMPUTE_ONLY: pure git-log read (resolve_chunk_commits

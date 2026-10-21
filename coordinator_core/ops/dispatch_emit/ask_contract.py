@@ -439,15 +439,57 @@ def _read_json_object(path: Path) -> dict | None:
     return data if isinstance(data, dict) else None
 
 
-def read_halt_record(repo_root: Path, run_id: str) -> HaltRecord | None:
+_FULL_SHA_RE = re.compile(r"[0-9a-f]{40}")
+
+
+def _json_object_from_bytes(data: bytes) -> dict | None:
+    try:
+        parsed = json.loads(data.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _read_json_at_commit(repo_root: Path, sha: str, rel: str) -> dict | None:
+    """The JSON object at ``rel`` in commit ``sha``'s tree, read in-process; None when the blob
+    is absent, unreadable or not a JSON object."""
+    from coordinator_core.git.git_dir import resolve_git_common_dir
+    from coordinator_core.git.git_objects import read_object
+    from coordinator_core.git.rollback_check import ABSENT, _blob_at_commit
+
+    try:
+        common_dir = resolve_git_common_dir(repo_root)
+        blob = _blob_at_commit(common_dir, sha, rel)
+        if blob is None or blob is ABSENT:
+            return None
+        obj = read_object(common_dir, blob)
+    except (OSError, ValueError):
+        return None
+    if obj is None or obj[0] != "blob":
+        return None
+    return _json_object_from_bytes(obj[1])
+
+
+def read_halt_record(repo_root: Path, run_id: str, at_sha: str | None = None) -> HaltRecord | None:
     """Read `halted.json` and `manifest.json` from the run's record dir. None on an unsafe run id,
-    an unreadable or malformed file, or a halt that is not `ledger-check`. Two file reads."""
+    an unreadable or malformed file, or a halt that is not `ledger-check`. Two file reads.
+
+    A refire that rebinds the halted run id rewrites `halted.json` on its own halt, so the
+    ledger-check record survives only in its halt commit. When the worktree record is not a
+    ledger-check halt and ``at_sha`` is a 40-hex sha, both files are read from that commit's tree
+    instead: at most two extra blob reads, no spawn. Scratch records are never committed."""
     try:
         base = record_dir(repo_root, run_id)
     except ValueError:
         return None
     halted = _read_json_object(base / "halted.json")
     manifest = _read_json_object(base / "manifest.json")
+    if (halted is None or manifest is None or halted.get("halted") != "ledger-check") and (
+        isinstance(at_sha, str) and _FULL_SHA_RE.fullmatch(at_sha)
+    ):
+        rel = f"{RECORD_DIR_ROOT}/{run_id}"
+        halted = _read_json_at_commit(Path(repo_root), at_sha, f"{rel}/halted.json")
+        manifest = _read_json_at_commit(Path(repo_root), at_sha, f"{rel}/manifest.json")
     if halted is None or manifest is None or halted.get("halted") != "ledger-check":
         return None
     sizing_rel = halted.get("sizing_rel")

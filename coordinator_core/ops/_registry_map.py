@@ -275,7 +275,6 @@ OP_MODULE_MAP: Dict[str, str] = {
     "deliverable.cascade_retract":             "coordinator_core.ops.cascade_retract",
     "deliverable.cascade_backstop_sweep":      "coordinator_core.ops.cascade_backstop_sweep",
     "deliverable.cascade_divergence_report":   "coordinator_core.ops.cascade_divergence_report",
-    "deliverable.baton_close_backstop":        "coordinator_core.ops.baton_close_backstop",
     "deliverable.cascade_terminal":            "coordinator_core.ops.cascade_terminal_op",
     "commit_ledger.join_divergence_report":    "coordinator_core.ops.commit_join_divergence_report",
     "goal.kr2_two_repo_rate":                  "coordinator_core.ops.audit_two_repo_rate",

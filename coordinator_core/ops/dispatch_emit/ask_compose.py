@@ -376,6 +376,7 @@ _LEDGER_CHECK_SCHEMA = _obj(
                     "status": {"type": "string", "enum": list(LEDGER_STATUSES)},
                     "essential": {"type": "boolean"},
                     "withheld_by": _STR,
+                    "owed_by": {"type": "array", "items": _STR},
                     "root_read": {"type": ["string", "array"], "items": _STR},
                     "wired": {"type": "boolean"},
                     "superseded_by": _STR,
@@ -415,7 +416,9 @@ _LEDGER_ITEMS_RULES = (
 )
 _LEDGER_GATED_RULE = (
     ". An item whose only undelivered part is a gated chunk is 'not_met' with withheld_by set to "
-    "that chunk id exactly; set withheld_by on no other item. The commit stage runs after this check, so an uncommitted "
+    "that chunk id exactly; set withheld_by on no other item. An item whose only undelivered parts are "
+    "owed rows (the stage manifest's owed ids, named beside the gated chunks) is 'not_met' with owed_by set to exactly those row ids; an item with any other gap "
+    "carries no owed_by. The commit stage runs after this check, so an uncommitted "
     "change is expected here and 'commit' alone in remaining is not a reason to block. Return "
     "all_of_pm_ask as the ledger states it, and list any in-repo memo or doctrine that conflicts "
     "with the ask as conflicts."
@@ -426,6 +429,7 @@ _LEDGER_DOC_WRITES_RULE = (
     "report."
 )
 _GATED_IDS_JS = "(((_manifest?.gated ?? []).map((g) => g.id).join(', ')) || 'none')"
+_OWED_IDS_JS = "(((_manifest?.owed ?? []).map((o) => o.id).join(', ')) || 'none')"
 #: The stage-start read every judgment-bearing stage makes: the EM can revise the ask mid-run
 #: (`workflow.revise`), so a stage that read the ask only at emit would act on a stale one.
 _LEDGER_CLAUSE = (
@@ -2622,6 +2626,8 @@ def compose_ask_script(
             "js:" + _FALSIFIER_SUFFIX_JS,
             "\n\nThe stage manifest withheld these chunks (gated): ",
             "js:" + _GATED_IDS_JS,
+            "; owed rows: ",
+            "js:" + _OWED_IDS_JS,
         )
     else:
         verdict_parts = (
@@ -2637,6 +2643,8 @@ def compose_ask_script(
             f"), and the briefs under {run_dir}/briefs. " + _LEDGER_ITEMS_RULES
             + "The stage manifest withheld these chunks (gated): ",
             "js:" + _GATED_IDS_JS,
+            "; owed rows: ",
+            "js:" + _OWED_IDS_JS,
             _LEDGER_GATED_RULE,
             *((_LEDGER_DOC_WRITES_RULE,) if in_run_commit else ()),
         )
@@ -2789,19 +2797,33 @@ def compose_ask_script(
         f"sizing: _sizingRel, run_id: _runId, {HALT_PLAN_FIELD}: _planRel }}; }}"
     )
     b.append(
+        "    const _owedById = new Map((_manifest?.owed ?? []).map((o) => [o.id, o]));\n"
+        "    const _blkItems = (_emptyVerdict || !_ledger) ? [] : _ledgerBlocking(_ledger);\n"
+        "    const _allOwed = _blkItems.length > 0 "
+        "&& _blkItems.every((i) => Array.isArray(i.owed_by) && i.owed_by.length > 0 && i.owed_by.every((id) => _owedById.has(id))) "
+        "&& _blockedChunks.length === 0 && _incompleteChunks.every((id) => _owedById.has(id));\n"
+        "    const _owedNamed = [...new Set(_blkItems.flatMap((i) => i.owed_by ?? []))]"
+        ".map((id) => id + ' (' + (_owedById.get(id)?.reason ?? '') + '): ' + (_owedById.get(id)?.detail ?? ''));"
+    )
+    b.append(
         "    if (!_halted && (!_ledger || _emptyVerdict || _ledgerBlocking(_ledger).length)) "
         "{ _halted = { halted: 'ledger-check', "
         "items: _emptyVerdict ? _owedIds.map((id) => ({ id, status: 'not_met' })) : (_ledger ? _ledgerBlocking(_ledger) : []), "
         f"conflicts: _ledger?.conflicts ?? [], ledger: {_lit(ledger_rel)}, sizing: _sizingRel, run_id: _runId, "
         f"{HALT_PLAN_FIELD}: _planRel, "
-        "next_action: (_blkIds.length ? 'Ledger rows ' + _blkIds.join(', ') + (_emptyVerdict ? ' were owed a verdict and the verify leg returned none' : '') + ' block the commit.' "
+        "next_action: _allOwed ? 'Everything left is EM or operator work: ' + _owedNamed.join('; ') "
+        "+ '. Perform each, record it (em-performed: plan.tasks.mutate verb em-discharge; operator: verb resolve, "
+        "disposition coded, disposition_ref <sha>), then refire to re-judge ' + _blkIds.join(', ') + '.' "
+        "+ (_blkRulable.length ? ' Run coordinator-invoke workflow.revise with run_id ' + _runId "
+        "+ ' with out_of_scope: [' + _blkRulable.join(', ') + '] for the rows ruled out; `verbatim` carries the PM words ruling them out, recorded as the ruling and adding no row.' : '') "
+        ": ((_blkIds.length ? 'Ledger rows ' + _blkIds.join(', ') + (_emptyVerdict ? ' were owed a verdict and the verify leg returned none' : '') + ' block the commit.' "
         ": !_ledger ? 'The verify leg returned no items list, so the ledger holds no verdict: fix the verify leg before re-running.' "
         ": 'The verify leg returned an empty items list and no ledger row ids are on record to hold it against: fix the verify leg before re-running.') "
         "+ (_blkRulable.length ? ' Run coordinator-invoke workflow.revise with run_id ' + _runId "
         "+ ' with out_of_scope: [' + _blkRulable.join(', ') + '] for the rows ruled out; `verbatim` carries the PM words ruling them out, recorded as the ruling and adding no row. The re-fire resumes at the ledger check.' : '') "
         "+ (_blkForeign.length ? ' ' + _blkForeign.join(', ') + ' are not in the stage manifest rulable_ids: re-run the ledger check.' : '') "
         "+ (_blkIds.length ? ' Re-fire the same sizing: it executes the remaining work of the rows it keeps, briefed with the revise notes, '"
-        "+ 'and a row is met only on work changed since this halt.' : '') }; }"
+        "+ 'and a row is met only on work changed since this halt.' : '')) }; }"
     )
     b.append("  }")
     b.append("  }")

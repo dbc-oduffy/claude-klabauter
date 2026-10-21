@@ -302,13 +302,14 @@ def _sha_coded(rows: Sequence) -> bool:
 
 def _terminal_coded(rows: Sequence, state=None) -> bool:
     """True when a row is `coded` other than by the gate's resume stamp: a `coded` row whose
-    `disposition_ref` is the sha `state.row_shas` reports for it was landed by a checkpoint or
-    ledger-check commit, so the terminal commit has not run. With no `state`, any `coded` row counts.
+    `disposition_ref` is in `state.landing_shas` for it (either half of a split checkpoint, or a
+    ledger-check commit) was stamped by the gate, so the terminal commit has not run. With no
+    `state`, any `coded` row counts.
     Trap: the terminal commit also stamps checkpoint-landed rows with their checkpoint sha, so a run
     whose every row landed by checkpoint reads here as not yet terminal-committed."""
-    shas = state.row_shas if state is not None else {}
+    shas = state.landing_shas if state is not None else {}
     return any(
-        not (r.get("disposition_ref") and shas.get(r.get("id")) == r.get("disposition_ref"))
+        not (r.get("disposition_ref") and r.get("disposition_ref") in shas.get(r.get("id"), ()))
         for r in _coded_rows(rows)
     )
 
@@ -343,7 +344,8 @@ def _all_landed_halt(
 
         state = resume_landed_state(root, plan_rel)
         run = state.ledger_run
-    record = read_halt_record(root, run) if run else None
+    at_sha = state.ledger_sha if state is not None and run == state.ledger_run else None
+    record = read_halt_record(root, run, at_sha=at_sha) if run else None
     remaining = {k: v for k, v in record.remaining.items() if k in rulable} if record is not None else {}
     return LedgerHalt(
         run or ALL_LANDED_NO_RUN, plan_rel, sizing_rel, tuple(rulable), remaining=remaining, halted=ALL_LANDED_HALT_KIND
@@ -407,7 +409,7 @@ def _ledger_halt_for(
             if set(open_ids) <= landed:
                 return _carry(root, plan_rel, replace(pointer, halt_sha=sha), state.run_halts)
         return None
-    record = read_halt_record(root, state.ledger_run)
+    record = read_halt_record(root, state.ledger_run, at_sha=state.ledger_sha)
     if (
         record is None
         or record.sizing_rel != sizing_rel
@@ -441,7 +443,7 @@ def _carry(
 
     if halt.halted != LEDGER_HALT_KIND:
         return halt
-    newest = read_halt_record(root, halt.run_id)
+    newest = read_halt_record(root, halt.run_id, at_sha=halt.halt_sha)
     if newest is None:
         return halt
     chain = [(run, bool(landed), sha) for run, (landed, sha) in run_halts.items()]
@@ -450,8 +452,8 @@ def _carry(
     head_lands = any(e[0] == halt.run_id and e[1] for e in chain)
     earlier: list = []
     if not head_lands:
-        for run, lands, _ in after:
-            record = read_halt_record(root, run)
+        for run, lands, sha in after:
+            record = read_halt_record(root, run, at_sha=sha)
             if (
                 record is None
                 or record.sizing_rel != halt.sizing_rel
