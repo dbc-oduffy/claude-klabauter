@@ -37,6 +37,8 @@ def _emit(monkeypatch, tmp_path, capsys, content_root, sources, count, *, questi
     flags = ["--research-class", "corpus", "--research-depth", "deepest"]
     for source in sources:
         flags += ["--research-source", source]
+    if "repo" in sources:
+        flags += ["--research-target", f"repo={tmp_path / 'target-repo'}"]
     for i in range(count):
         flags += ["--research-target", f"notebooklm=T{i}"]
         if questions:

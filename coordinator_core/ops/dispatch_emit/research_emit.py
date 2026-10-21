@@ -33,7 +33,7 @@ from coordinator_core.ops.dispatch_emit.pipeline_contract import (
     FAN_OUT_OVER, FanOut, HaltCount, Manifest, PipelineEmitRefused, PipelineInputs,
 )
 
-__all__ = ["bind_seed_briefs", "REPO_PIPELINE", "REPO_COMPARE_PIPELINE", "bind_repo_targets", "compare_output", "ASK_FILE", "BRIEF_FILE", "CORPUS_DEFAULT_LISTS", "LIST_KEY_SHAPES", "corpus_default_lists", "list_key_refusals", "MAX_SLUG_LEN", "multi_ask_preamble", "normalize_scout_questions", "probe_allowlist", "ask_digest", "run_id_for", "bind_context", "claims_output", "gate_notebooklm", "halt_legs", "scout_slugs", "segments_for", "write_ask"]
+__all__ = ["bind_seed_briefs", "REPO_PIPELINE", "REPO_COMPARE_PIPELINE", "bind_repo_targets", "compare_output", "ASK_FILE", "BRIEF_FILE", "CORPUS_DEFAULT_LISTS", "LIST_KEY_SHAPES", "corpus_default_lists", "list_key_refusals", "MAX_SLUG_LEN", "multi_ask_preamble", "normalize_scout_questions", "probe_allowlist", "ask_digest", "run_id_for", "bind_context", "claims_output", "gate_notebooklm", "halt_legs", "scout_slugs", "segments_for", "write_ask", "research_block"]
 
 ASK_FILE = "ask.md"
 BRIEF_FILE = "brief.md"
@@ -323,6 +323,19 @@ def scout_slugs(questions: Sequence[str | rc.ScoutQuestion]) -> list[str]:
     return slugs
 
 
+def research_block(research: Mapping | None) -> str:
+    """The `## Research` section naming a sizing's depth and repo targets; "" when it has neither."""
+    if not research:
+        return ""
+    lines = []
+    if research.get("depth"):
+        lines.append(f"depth: {research['depth']}\n")
+    for t in research.get("targets") or ():
+        if isinstance(t, Mapping) and t.get("source") == REPO_PIPELINE and t.get("ref"):
+            lines.append(f"repo target: {t['ref']}\n")
+    return "## Research\n\n" + "".join(lines) if lines else ""
+
+
 def write_ask(
     root: Path,
     scratch_rel: str,
@@ -330,8 +343,13 @@ def write_ask(
     questions: Sequence[str | Mapping] = (),
     mode: str = rc.DEFAULT_SCOUT_MODE,
     allowlist: Mapping[str, bool] | None = None,
+    research: Mapping | None = None,
 ) -> str:
     """Write `<root>/<scratch_rel>/ask.md` and return its repo-relative POSIX path.
+
+    Given `research` (a sizing's research block), a `## Research` section follows the ask: the depth
+    and one `repo target:` line per repo target, ref verbatim, so a repo scope stage that reads only
+    this file still sees what to study (`research_block`).
 
     No questions: the file is the ask verbatim. Otherwise the ask, then (two or more questions)
     `multi_ask_preamble`, then sections. Split: each question under a `## <slug>` heading, the
@@ -346,9 +364,10 @@ def write_ask(
         raise PipelineEmitRefused([f"scout mode {mode!r} is not one of {', '.join(rc.SCOUT_MODES)}"])
     normalized = normalize_scout_questions(root, questions, allowlist)
     slugs = scout_slugs(normalized)
-    text = ask
+    block = research_block(research)
+    text = ask.rstrip("\n") + "\n\n" + block if block else ask
     if slugs:
-        head = ask.rstrip("\n")
+        head = ask.rstrip("\n") + ("\n\n" + block.rstrip("\n") if block else "")
         if len(normalized) >= 2:
             head += "\n\n" + multi_ask_preamble(normalized)
         if mode == "combine":

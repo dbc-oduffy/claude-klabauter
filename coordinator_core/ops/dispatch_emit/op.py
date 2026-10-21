@@ -1246,7 +1246,7 @@ def _research_route_setup(
         ask_text = str(ask or "")
         if (raw_questions or from_sizing) and not ask_text.strip():
             ask_text = questions[0]["text"]
-        brief_rel = research_emit.write_ask(root, scratch_rel, ask_text, questions, mode, allowlist)
+        brief_rel = research_emit.write_ask(root, scratch_rel, ask_text, questions, mode, allowlist, research)
     members_brief = research_emit.bind_context(
         root, scratch_rel, brief_rel, [str(c) for c in params.get("context") or ()]
     )
@@ -1259,6 +1259,11 @@ def _research_route_setup(
     seed_briefs = research_emit.bind_seed_briefs(root, scratch_rel, members_brief, seeds)
     repo_seeds = [s for s in seeds if rc.SEED_KIND_SOURCE.get(s.get("kind")) == research_emit.REPO_PIPELINE]
     repo_refs = sum(1 for t in targets if t.get("source") == research_emit.REPO_PIPELINE) + len(repo_seeds)
+    if research_emit.REPO_PIPELINE in shape["pipelines"] and repo_refs == 0 and (targets or questions):
+        raise PipelineEmitRefused([
+            f"sizing {sizing_rel or '(research route)'}: the repo pipeline has no resolved repo target; "
+            "record one with sizing-assemble --research-target repo=<path> or a repo seed"
+        ])
     if research_emit.REPO_PIPELINE in shape["pipelines"] and repo_refs >= (1 if repo_seeds else 2):
         compare_name = research_emit.REPO_COMPARE_PIPELINE + MANIFEST_SUFFIX
         if repo_refs < 2 or any(p.is_file() for p in (content_root / PIPELINES_DIR).rglob(compare_name)):
