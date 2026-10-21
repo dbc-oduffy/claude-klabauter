@@ -1,4 +1,4 @@
-"""The warp ask route's stage leg advances the plan it staged to `executing` and commits only that plan."""
+"""The warp ask route's stage leg flips the plan it staged to `executing` in process: no commit, no spawn."""
 
 from __future__ import annotations
 
@@ -7,7 +7,6 @@ import time
 
 import pytest
 
-from coordinator_core.benchmarks.budget import load_manifest
 from coordinator_core.benchmarks.spawn_counter import _count_spawns_attributed
 from coordinator_core.ops.dispatch_emit import ask_stage
 from coordinator_core.ops.dispatch_emit.ask_gate import _handler as gate_handler
@@ -62,21 +61,21 @@ def tree(tmp_path):
 
 
 @pytest.mark.parametrize("status", ["draft", "reviewed", "approved"])
-def test_ask_stage_handler_flips_the_plan_executing_on_disk_without_a_commit(tree, status):
+def test_ask_stage_handler_flips_the_plan_executing_without_a_commit(tree, status):
     _put_plan(tree, status)
     _init(tree)
     head = _git(tree, "rev-parse", "HEAD")
 
     reply = _handler({"run_id": "r1", "plan_path": PLAN_REL}, repo_root=tree)
 
-    assert reply[PLAN_EXECUTING_STAMP_KEY] == {"plan": PLAN_REL, "outcome": "on-disk"}, reply
+    assert reply[PLAN_EXECUTING_STAMP_KEY] == {"plan": PLAN_REL, "outcome": "stamped"}, reply
     assert "manifest_handle" in reply
     assert _status_on_disk(tree, PLAN_REL) == "executing"
     assert _git(tree, "rev-parse", "HEAD") == head
 
 
 @pytest.mark.parametrize("status", ["draft", "reviewed", "approved"])
-def test_ask_gate_s_resume_flips_the_plan_executing_on_disk_without_a_commit(repo, status):  # noqa: F811
+def test_ask_gate_s_resume_flips_the_plan_executing_without_a_commit(repo, status):  # noqa: F811
     _put(repo, tshirt="S", route="spec-dispatch")
     _plan(repo, rows=[("A1", "open"), ("A2", "open")])
     plan = repo / GATE_PLAN_REL
@@ -87,7 +86,7 @@ def test_ask_gate_s_resume_flips_the_plan_executing_on_disk_without_a_commit(rep
     out = gate_handler({"sizing_path": REL, "run_id": "r1", "writes": ["a.py"]}, repo_root=repo)
 
     assert out["halt"] is None and "manifest_handle" in out, out
-    assert out[PLAN_EXECUTING_STAMP_KEY] == {"plan": GATE_PLAN_REL, "outcome": "on-disk"}, out
+    assert out[PLAN_EXECUTING_STAMP_KEY] == {"plan": GATE_PLAN_REL, "outcome": "stamped"}, out
     assert _status_on_disk(repo, GATE_PLAN_REL) == "executing"
     assert _git(repo, "rev-parse", "HEAD") == head
 
@@ -114,25 +113,25 @@ def test_a_minted_spine_is_never_stamped(tree):
     assert (tree / rel).read_bytes() == before
 
 
-def test_a_plan_dirty_against_head_is_flipped_on_disk_only(tree):
+def test_a_plan_dirty_against_head_is_flipped_and_its_edits_kept(tree):
     _put_plan(tree, "reviewed")
     _init(tree)
     path = tree / PLAN_REL
     path.write_bytes(path.read_bytes() + b"\nedited after the base commit\n")
     head = _git(tree, "rev-parse", "HEAD")
 
-    assert stamp_plan_executing(tree, PLAN_REL) == {"plan": PLAN_REL, "outcome": "on-disk"}
+    assert stamp_plan_executing(tree, PLAN_REL) == {"plan": PLAN_REL, "outcome": "stamped"}
     assert b"status: executing" in path.read_bytes() and b"edited after" in path.read_bytes()
     assert _git(tree, "rev-parse", "HEAD") == head
 
 
-def test_an_untracked_plan_is_flipped_on_disk_only(tree):
+def test_an_untracked_plan_is_flipped(tree):
     _put_plan(tree, "reviewed", rel="docs/plans/other.md")
     (tree / "keep.txt").write_text("x\n", encoding="utf-8")
     _init(tree)
     _put_plan(tree, "approved")
 
-    assert stamp_plan_executing(tree, PLAN_REL)["outcome"] == "on-disk"
+    assert stamp_plan_executing(tree, PLAN_REL)["outcome"] == "stamped"
     assert b"status: executing" in (tree / PLAN_REL).read_bytes()
 
 
@@ -140,7 +139,7 @@ def test_a_crlf_plan_keeps_crlf(tree):
     _put_plan(tree, "reviewed", newline="\r\n")
     _init(tree)
 
-    assert stamp_plan_executing(tree, PLAN_REL)["outcome"] == "on-disk"
+    assert stamp_plan_executing(tree, PLAN_REL)["outcome"] == "stamped"
     raw = (tree / PLAN_REL).read_bytes()
     assert b"status: executing\r\n" in raw
     assert raw.count(b"\n") == raw.count(b"\r\n")
@@ -162,16 +161,15 @@ def test_a_failed_stamp_does_not_abort_the_stage(tree, monkeypatch):
     assert "manifest_handle" in reply and "error" not in reply
 
 
-def test_the_stamp_spawns_exactly_the_budgeted_count_and_stays_under_50ms(tree, monkeypatch):
+def test_the_stamp_spawns_nothing_and_stays_under_50ms(tree, monkeypatch):
     _put_plan(tree, "reviewed")
     _init(tree)
-    budget = load_manifest()["overrides"]["dispatch.ask_gate"]["spawn_count_budget"]["stage_executing_stamp"]
 
     with _count_spawns_attributed(monkeypatch) as spawns:
         start = time.process_time()
         out = ask_stage.stamp_plan_executing(tree, PLAN_REL)
         elapsed = time.process_time() - start
 
-    assert out["outcome"] == "on-disk", out
-    assert len(spawns) == budget, [s.argv for s in spawns]
+    assert out["outcome"] == "stamped", out
+    assert len(spawns) == 0, [s.argv for s in spawns]
     assert elapsed < 0.05, f"stamp_plan_executing process time {elapsed * 1000:.1f}ms"

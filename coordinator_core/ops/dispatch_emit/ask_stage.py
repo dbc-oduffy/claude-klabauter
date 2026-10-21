@@ -881,8 +881,8 @@ PLAN_EXECUTING_STAMP_KEY = "plan_executing_stamp"
 def stamp_plan_executing(root: Path, plan_rel: str) -> dict:
     """Advance the plan a warp run just staged from draft/reviewed/approved to `executing`; never raises.
 
-    Replies `{plan, outcome}`: `on-disk` (flipped; the run's next commit carries it, so the stage leg
-    spawns no git), `unchanged` (a minted spine, an unreadable plan, or any other status: left byte-identical) or
+    Replies `{plan, outcome}`: `stamped` (flipped in process; the run's next checkpoint or terminal commit
+    carries it, so the stage leg spawns no git and makes no commit), `unchanged` (a minted spine, an unreadable plan, or any other status: left byte-identical) or
     `refused` (+ `error`; the staging stands). A CRLF plan keeps CRLF.
 
     Lives on the stage leg because staging is the one point every warp run passes, including a run that
@@ -920,7 +920,7 @@ def stamp_plan_executing(root: Path, plan_rel: str) -> dict:
             locked_rmw(plan, flip, repo_root=root)
         except MutateAbort:
             return out
-        out["outcome"] = "on-disk"
+        out["outcome"] = "stamped"
     except Exception as exc:  # noqa: BLE001 -- a stamp failure never halts a staged run
         out["outcome"] = "refused"
         out["error"] = f"{type(exc).__name__}: {exc}"

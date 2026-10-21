@@ -2,7 +2,9 @@
 coordinator_core.ops.plan_backfill_warp_executing — JSON-RPC "plan.backfill_warp_executing".
 
 Purpose: advance, once, the plans a warp run coded rows from but left at ``draft``, ``reviewed``
-or ``approved``. A run halting before close never stamps its plan, and ``roadmap.plan_gate``
+or ``approved``. A plan whose every open row is withheld (uncleared ``external_gate`` or
+``needs_slot``) and that has a coded row advances to ``landed`` instead, the rung the gate counts
+as coded; an ``executing`` plan of that shape is advanced to ``landed`` too. A run halting before close never stamps its plan, and ``roadmap.plan_gate``
 reads such a plan as ``plan-drafted`` for good. The warp stage leg now advances the plan it
 stages; this op clears the plans stranded before that leg existed. The receiving repo runs it
 in its own tree.
@@ -13,9 +15,9 @@ Wire params (all optional):
                         list stays complete.
 
 Reply fields:
-    candidates   [{plan, plan_id, status, coded_rows, runs}] — every pre-executing plan that a
+    candidates   [{plan, plan_id, status, target_status, coded_rows, runs}] — every pre-executing plan that a
                  warp manifest names and whose spine carries a coded row with a disposition_ref.
-    applied      [plan] — plans flipped to ``executing`` (empty on a dry run).
+    applied      [plan] — plans flipped to their ``target_status`` (empty on a dry run).
     skipped      [{plan, reason}] — apply-narrowed-in candidates left alone (dirty or untracked
                  against HEAD, or no longer pre-executing at write time).
     unmatched_plan_ids  [plan_id] — ``plan_ids`` entries naming no candidate.
@@ -27,7 +29,7 @@ need not appear in the manifest: a resume manifest can carry ``rows: []`` and st
 
 Negative-spec:
   - Never reads git history and never verifies that a ``disposition_ref`` is an ancestor of HEAD.
-  - Never touches a plan at or past ``executing``, or in any other status.
+  - Never touches a plan past ``executing``, or in any other status; ``executing`` only advances to ``landed``.
   - Never runs from the gate: ``roadmap.plan_gate`` stays a header-only read.
   - Never spawns on the dry-run leg; the apply leg adds only the scoped commit's own spawns.
   - Never overwrites a plan whose bytes differ from HEAD, or that HEAD does not track.
@@ -56,6 +58,7 @@ _HEAD_BYTES = 2048
 _SCAN_BYTES = 8192
 _HEAD_PLAN_ID_RE = re.compile(r"^plan_id:[ \t]*[\"']?([^\s\"'#]+)", re.MULTILINE)
 _TARGET_STATUS = "executing"
+_LANDED_STATUS = "landed"
 
 
 def _pre_executing_statuses() -> frozenset:
@@ -108,7 +111,7 @@ def _pre_executing_plans(root: Path, linked: Dict[str, List[str]]) -> List[tuple
         except OSError:
             continue
         plan_id, status = fm.get("plan_id"), fm.get("status")
-        if isinstance(plan_id, str) and plan_id in linked and status in pre:
+        if isinstance(plan_id, str) and plan_id in linked and (status in pre or status == _TARGET_STATUS):
             found.append((f"{_PLANS_DIR}/{entry.name}", plan_id, status))
     return found
 
@@ -149,10 +152,17 @@ def _candidates(root: Path) -> List[Dict[str, Any]]:
         except OSError:
             continue
         coded = _coded_rows(text)
-        if coded:
-            out.append(
-                {"plan": rel, "plan_id": plan_id, "status": status, "coded_rows": coded, "runs": linked[plan_id]}
-            )
+        if not coded:
+            continue
+        from coordinator_core.ops.dispatch_emit.spine_read import coded_or_withheld
+
+        target = _LANDED_STATUS if coded_or_withheld(text) else _TARGET_STATUS
+        if status == _TARGET_STATUS and target != _LANDED_STATUS:
+            continue
+        out.append(
+            {"plan": rel, "plan_id": plan_id, "status": status, "target_status": target,
+             "coded_rows": coded, "runs": linked[plan_id]}
+        )
     return out
 
 
@@ -180,20 +190,20 @@ def _clean_against_head(root: Path, rels: List[str]) -> Dict[str, Optional[str]]
     return verdict
 
 
-def _flip(root: Path, rel: str) -> Optional[str]:
-    """Set the plan's status to ``executing`` under ``locked_rmw``, keeping CRLF. A skip reason or None."""
+def _flip(root: Path, rel: str, target_status: str = _TARGET_STATUS) -> Optional[str]:
+    """Set the plan's status to ``target_status`` under ``locked_rmw``, keeping CRLF. A skip reason or None."""
     from coordinator_core.locked_write import MutateAbort, locked_rmw
     from coordinator_core.roadmap.blitz_land import LandingRefused, _read_field, _set_field
 
     target = root / rel
     crlf = b"\r\n" in target.read_bytes()
-    pre = _pre_executing_statuses()
+    pre = _pre_executing_statuses() | ({_TARGET_STATUS} if target_status == _LANDED_STATUS else frozenset())
 
     def _stamp(old: str) -> str:
         current = (_read_field(old, "status") or "").lower()
         if current not in pre:
-            raise MutateAbort(f"status is now {current or 'absent'}, no longer pre-executing")
-        new = _set_field(old, "status", _TARGET_STATUS)
+            raise MutateAbort(f"status is now {current or 'absent'}, no longer advanceable")
+        new = _set_field(old, "status", target_status)
         return new.replace("\n", "\r\n") if crlf else new
 
     try:
@@ -203,11 +213,11 @@ def _flip(root: Path, rel: str) -> Optional[str]:
     return None
 
 
-def _commit(root: Path, rels: List[str]) -> Dict[str, Any]:
+def _commit(root: Path, rels: List[str], noun_status: str = _TARGET_STATUS) -> Dict[str, Any]:
     from coordinator_core.roadmap.blitz_stage import _commit_paths
 
     noun = "plan" if len(rels) == 1 else "plans"
-    message = f"plan.backfill_warp_executing: advance {len(rels)} warp-coded {noun} to executing"
+    message = f"plan.backfill_warp_executing: advance {len(rels)} warp-coded {noun} to {noun_status}"
     try:
         reply = _commit_paths(root, rels, message)
     except Exception as exc:  # noqa: BLE001 -- the flips stand on disk; the failure is reported
@@ -251,16 +261,19 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     if not apply:
         return reply
 
-    chosen = [c["plan"] for c in candidates if plan_ids is None or c["plan_id"] in plan_ids]
+    picked = [c for c in candidates if plan_ids is None or c["plan_id"] in plan_ids]
+    chosen = [c["plan"] for c in picked]
+    targets = {c["plan"]: c["target_status"] for c in picked}
     verdicts = _clean_against_head(root, chosen) if chosen else {}
     flipped: List[str] = []
     for rel in chosen:
-        reason = verdicts[rel] or _flip(root, rel)
+        reason = verdicts[rel] or _flip(root, rel, targets[rel])
         if reason:
             reply["skipped"].append({"plan": rel, "reason": reason})
         else:
             flipped.append(rel)
     reply["applied"] = flipped
     if flipped:
-        reply.update(_commit(root, flipped))
+        kinds = {targets[r] for r in flipped}
+        reply.update(_commit(root, flipped, kinds.pop() if len(kinds) == 1 else "executing/landed"))
     return reply

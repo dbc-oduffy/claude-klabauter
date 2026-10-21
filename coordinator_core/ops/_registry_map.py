@@ -223,6 +223,7 @@ OP_MODULE_MAP: Dict[str, str] = {
     "handoff.match_candidates":               "coordinator_core.ops.handoff_match",
     "initiative.serve_set":                   "coordinator_core.ops.initiatives_serve",
     "roadmap.link_stubs":                     "coordinator_core.ops.roadmap_link_stubs",
+    "roadmap.link_plan":                      "coordinator_core.ops.roadmap_link_plan",
     "roadmap.plan_gate":                      "coordinator_core.ops.roadmap_plan_gate",
     "roadmap.blitz_land":                     "coordinator_core.ops.roadmap_blitz_land",
     "roadmap.blitz_stage":                    "coordinator_core.ops.roadmap_blitz_stage",

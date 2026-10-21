@@ -290,3 +290,30 @@ def test_spawn_count_flat_across_distinct_plan_counts(tmp_path):
     assert small_calls == 1
     assert large_calls == 1
     assert small_calls == large_calls
+
+
+_WITHHELD_SPINE = (
+    "\n## Tasks\n\n```yaml plan-tasks\n- id: C1\n  title: a\n  disposition: coded\n  disposition_ref: abc1234\n"
+    "- id: C9\n  title: b\n  disposition: open\n  needs_slot: true\n```\n"
+)
+_CODED_SPINE = (
+    "\n## Tasks\n\n```yaml plan-tasks\n- id: C1\n  title: a\n  disposition: coded\n  disposition_ref: abc1234\n```\n"
+)
+
+
+def test_landed_plan_with_open_withheld_rows_keeps_its_baton_and_fully_coded_ships(tmp_path):
+    repo = _init_repo(tmp_path)
+    for name, spine in (("held", _WITHHELD_SPINE), ("done", _CODED_SPINE)):
+        _write_plan(repo, f"docs/plans/{name}.md", status="draft")
+        with open(repo / f"docs/plans/{name}.md", "a", encoding="utf-8") as fh:
+            fh.write(spine)
+        _write_baton(repo, f"state/handoffs/2026-09-28-{name}.md", governing_plan=f"docs/plans/{name}.md")
+    _commit_all(repo, "seed")
+    _flip_plan_status(repo, "docs/plans/held.md", "landed")
+    _flip_plan_status(repo, "docs/plans/done.md", "implemented")
+
+    result = mod._handler({}, repo_root=repo / ".git")
+
+    assert result["skipped"] == [{"plan": "docs/plans/held.md", "reason": "open withheld rows", "rows": ["C9"]}]
+    assert [d["id"] for d in result["discharged"]] == ["state/handoffs/2026-09-28-done.md"]
+    assert (repo / "state/handoffs/2026-09-28-held.md").exists()

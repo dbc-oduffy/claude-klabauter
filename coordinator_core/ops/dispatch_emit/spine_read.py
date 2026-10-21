@@ -985,6 +985,47 @@ def coded_row_ids(plan_path) -> frozenset:
     )
 
 
+def open_row_ids(plan_text: str) -> list:
+    """Ids of spine rows neither coded nor in a closed (NON_DISPATCHABLE) disposition; empty when
+    the spine is absent or unparseable."""
+    result = load_rows_memo(plan_text)
+    if result.status is not LocateStatus.LOCATED:
+        return []
+    return [
+        str(r["id"])
+        for r in map(with_canonical_disposition, result.rows)
+        if isinstance(r, dict) and r.get("id") and r.get("disposition") not in NON_DISPATCHABLE_DISPOSITIONS
+    ]
+
+
+def coded_or_withheld(plan_text: str) -> bool:
+    """True when the plan has at least one coded row and every other row is closed or open but
+    withheld (an uncleared execution ``external_gate``, or ``needs_slot: true``): the plan counts
+    as coded for its dependents. False for an absent/unparseable spine or an ambiguous gate."""
+    result = load_rows_memo(plan_text)
+    if result.status is not LocateStatus.LOCATED:
+        return False
+    rows = [with_canonical_disposition(r) for r in result.rows]
+    if not rows or not all(isinstance(r, dict) and isinstance(r.get("id"), str) for r in rows):
+        return False
+    try:
+        gates = _frontmatter_external_gates(plan_text, {r["id"] for r in rows})
+    except AmbiguousExternalGateError:
+        return False
+    coded = False
+    for r in rows:
+        disposition = r.get("disposition")
+        if disposition == "coded":
+            coded = True
+        elif disposition in NON_DISPATCHABLE_DISPOSITIONS:
+            continue
+        elif r.get("needs_slot") is True:
+            continue
+        elif not _has_uncleared_execution_gate(r, tuple(gates.get(r["id"], ()))):
+            return False
+    return coded
+
+
 def contradictory_read_paths(reads, reads_at_head) -> list:
     """Sorted paths a row names in both the ordering set (``reads:`` /
     ``consumes:``) and ``reads_at_head:``. Non-list or unhashable input yields

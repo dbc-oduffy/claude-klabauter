@@ -290,6 +290,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "handoff.normalize":                     "common_dir",
     "initiative.serve_set":                  "common_dir",
     "roadmap.link_stubs":                    "common_dir",
+    "roadmap.link_plan":                     "common_dir",
     "roadmap.plan_gate":                     "common_dir",
     "roadmap.blitz_land":                    "common_dir",
     "roadmap.blitz_stage":                   "common_dir",

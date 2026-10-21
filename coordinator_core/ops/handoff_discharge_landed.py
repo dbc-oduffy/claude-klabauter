@@ -385,8 +385,24 @@ def _discharge(worktree_root: Path, plan_ids_param: Optional[List[str]]) -> dict
     already_done: List[dict] = []
     refused: List[dict] = []
 
+    skipped: List[dict] = []
+    from coordinator_core.ops.dispatch_emit.spine_read import open_row_ids
+
+    for rel in sorted(target_meta):
+        try:
+            text = (worktree_root / rel).read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        rows = open_row_ids(text)
+        if rows:
+            skipped.append({"plan": rel, "reason": "open withheld rows", "rows": rows})
+            del target_meta[rel]
+
     if not target_meta:
-        return {"exit_code": 0, "discharged": discharged, "already_done": already_done, "refused": refused}
+        return {
+            "exit_code": 0, "discharged": discharged, "already_done": already_done,
+            "refused": refused, "skipped": skipped,
+        }
 
     # A plan's matchable identifiers: its repo-relative path and its own
     # `plan_id:` value — either is legal in a baton's strong link fields.
@@ -508,4 +524,5 @@ def _discharge(worktree_root: Path, plan_ids_param: Optional[List[str]]) -> dict
         "discharged": discharged,
         "already_done": already_done,
         "refused": refused,
+        "skipped": skipped,
     }

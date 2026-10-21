@@ -1775,6 +1775,9 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #            docs/decisions/DR-208-invoke-op-authz-model.md § 5
     # Spec: docs/plans/2026-08-05-roadmap-graph-enforcement-gap.md § C4
     "roadmap.link_stubs": OpClass.MUTATING,
+    # roadmap.link_plan — MUTATING: writes the single frontmatter field `governing_plan` onto one live
+    # roadmap baton; no git, no body write, no archive/ write (roadmap_link_plan.py module docstring).
+    "roadmap.link_plan": OpClass.MUTATING,
     # ---------------------------------------------------------------------------
     # memo.send DR-214 (send-class) cross-tree write op — classified MUTATING
     # (DR-214-send-class D2 bounds affirmed per handler code; DR-208 § 5 affirmation below)

@@ -480,6 +480,24 @@ def _review_only_hits(ctx: JobContext, sha: str, review_only: Mapping[str, Any],
     return hits, no_delta
 
 
+def _land_if_withheld(text: str) -> str:
+    """``text`` with the plan's status advanced to ``landed`` when every open row is withheld behind an
+    uncleared gate or ``needs_slot`` (the rung ``roadmap.plan_gate`` counts as coded); else unchanged."""
+    from coordinator_core.ops.dispatch_emit.spine_read import coded_or_withheld
+    from coordinator_core.roadmap.blitz_land import LandingRefused, _read_field, _set_field
+
+    if (_read_field(text, "status") or "").lower() not in ("draft", "reviewed", "approved", "executing"):
+        return text
+    if not coded_or_withheld(text):
+        return text
+    crlf = "\r\n" in text
+    try:
+        new = _set_field(text.replace("\r\n", "\n"), "status", "landed")
+    except LandingRefused:
+        return text
+    return new.replace("\n", "\r\n") if crlf else new
+
+
 def _coded_stamp(ctx: JobContext) -> LegResult:
     """Stamp the run's credited rows ``coded`` in the plan, each against the commit that landed it: the
     terminal commit, the run's own checkpoint, an outside landing, or (no change) the terminal commit with
@@ -565,6 +583,7 @@ def _coded_stamp(ctx: JobContext) -> LegResult:
             flipped_all.update(flipped)
         if not flipped_all:
             continue
+        updated = _land_if_withheld(updated)
         invalid = check_plan_tasks_source(updated)
         if invalid is not None and check_plan_tasks_source(original) is None:
             return _leg("failed", f"{plan}: stamped spine fails schema: {invalid}", ctx)
