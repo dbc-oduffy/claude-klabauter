@@ -270,7 +270,7 @@ def resumable_plan(
         open_ids = [i for i in open_ids if i not in state.rows]
         pending = list(open_ids)
         if open_ids:
-            from coordinator_core.ops.dispatch_emit.terminal_commit import rows_landed_outside_executor
+            from coordinator_core.ops.dispatch_emit.plan_row_coding import rows_landed_outside_executor
 
             outside = rows_landed_outside_executor(root, plan_rel, [r for r in rows if r.get("id") in open_ids])
             landed_open += tuple((i, outside[i]) for i in open_ids if i in outside)

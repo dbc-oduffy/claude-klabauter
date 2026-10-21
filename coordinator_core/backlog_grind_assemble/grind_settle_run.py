@@ -136,9 +136,9 @@ def _load_rows(
 def _unclaimed_dirty(main_root: Path, rows: list) -> list[str]:
     """Dirty paths no row names, from the one status read; ledger-root dirt is not reported."""
     from coordinator_core.ops.dispatch_emit.grind_commit_contract import LEDGER_ROOT
-    from coordinator_core.ops.dispatch_emit.terminal_commit import _worktree_snapshot
+    from coordinator_core.ops.dispatch_emit.worktree_snapshot import worktree_snapshot
 
-    snapshot = _worktree_snapshot(main_root, [], [], [":/"])
+    snapshot = worktree_snapshot(main_root, [], [], [":/"])
     if snapshot is None:
         return []
     named = {p for row in rows if isinstance(row, dict) for p in (row.get("paths") or []) + (row.get("deleted_paths") or [])}

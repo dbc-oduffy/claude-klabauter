@@ -228,7 +228,7 @@ def test_inventory_outside_the_repo_is_refused(tmp_path, monkeypatch):
 
 
 def test_terminal_commit_maps_a_part_spine_back_to_its_inventory(tmp_path):
-    from coordinator_core.ops.dispatch_emit.terminal_commit import _source_rows_by_plan
+    from coordinator_core.ops.dispatch_emit.plan_row_coding import source_rows_by_plan
 
     inventory = _repo_with_inventory(tmp_path)
     plans = tmp_path / "docs" / "plans"
@@ -240,7 +240,7 @@ def test_terminal_commit_maps_a_part_spine_back_to_its_inventory(tmp_path):
     text, spine = im.mint_spine(str(inventory), part=(2, 2))
     spine.write_text(text, encoding="utf-8")
 
-    mapped = _source_rows_by_plan(
+    mapped = source_rows_by_plan(
         tmp_path, spine.relative_to(tmp_path).as_posix(), ["I8"]
     )
 

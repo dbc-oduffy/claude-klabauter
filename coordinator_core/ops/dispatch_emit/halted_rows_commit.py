@@ -71,7 +71,7 @@ def commit_rows(root: Path, repo_root: Path, params: dict) -> dict:
     from coordinator_core.git.commit_trailers import _UUID_RE
     from coordinator_core.ops._path_guard import contained_path
     from coordinator_core.ops.dispatch_emit.commit_request import MalformedCommitRequestError, parse_marker
-    from coordinator_core.ops.dispatch_emit.terminal_commit import _tracked_at_head, _worktree_snapshot
+    from coordinator_core.ops.dispatch_emit.worktree_snapshot import tracked_at_head, worktree_snapshot
     from coordinator_core.warm.entry_seam import OpUnavailableError, reentrant_dispatch
 
     out: dict = {"ok": True, "landed": [], "noop": [], "refused": []}
@@ -116,7 +116,7 @@ def commit_rows(root: Path, repo_root: Path, params: dict) -> dict:
     withheld_ids = [str(r["id"]) for r in open_rows]
     withheld_paths = {p for rid in withheld_ids if rid in chunks for p in chunks[rid].paths}
     wanted = [p for rid in delivered for p in chunks[rid].paths]
-    snapshot = _worktree_snapshot(root, wanted, [], [])
+    snapshot = worktree_snapshot(root, wanted, [], [])
     if snapshot is None:
         return fail("git status over the delivered rows' paths failed")
 
@@ -152,7 +152,7 @@ def commit_rows(root: Path, repo_root: Path, params: dict) -> dict:
             out["refused"].append({"row": rid, "reason": reason})
             continue
         paths = [p for p in dirty if p not in hunk_noop and (root / p).exists()]
-        deleted = _tracked_at_head(root, [p for p in dirty if not (root / p).exists()])
+        deleted = tracked_at_head(root, [p for p in dirty if not (root / p).exists()])
         if not paths and not deleted:
             out["noop"].append(rid)
             continue

@@ -2,6 +2,10 @@
 
 Each distinct target is read once, header bytes only, `status:` taken by line scan. No YAML
 parse, no subprocess, no write.
+
+Plans are also read plan to baton, from the same one pass over docs/plans that resolves
+`plan_id`. Join rules: docs/plans/2026-10-21-2026-10-21-close-report-reverse-plan-link.md,
+section Problem.
 """
 
 from __future__ import annotations
@@ -9,7 +13,13 @@ from __future__ import annotations
 import os
 import re
 
-from coordinator_core.ops.baton_close_report_contract import BatonHeader, Evidence, EvidenceClass
+from coordinator_core.ops.baton_close_report_contract import (
+    REVERSE_FIELD_DELIVERABLE,
+    REVERSE_FIELD_PREDECESSOR,
+    BatonHeader,
+    Evidence,
+    EvidenceClass,
+)
 from coordinator_core.ops.baton_close_report_decide import STATUS_MISSING, STATUS_UNREADABLE
 from coordinator_core.session.record_homes import home_dir
 
@@ -26,9 +36,11 @@ GOAL_DONE: frozenset[str] = frozenset()
 # sides); None means a file read with no status line.
 
 _HEAD_BYTES = 16384
-_PLAN_ID_BYTES = 2048
+_PLAN_HEAD_BYTES = 4096
 _STATUS_RE = re.compile(r"^status:[ \t]*(.*)$")
 _PLAN_ID_RE = re.compile(r"^plan_id:[ \t]*(.*)$")
+_DELIVERABLE_RE = re.compile(r"^deliverable_id:[ \t]*(.*)$")
+_PREDECESSOR_RE = re.compile(r"^predecessor_handoff:[ \t]*(.*)$")
 _GOAL_ID_RE = re.compile(r"^id:[ \t]*(.*)$")
 
 
@@ -61,6 +73,24 @@ def _head_or_none(path: str, nbytes: int) -> list[str] | None:
         return _head(path, nbytes)
     except OSError:
         return None
+
+
+def _plan_frontmatter(path: str) -> list[str] | None:
+    """Frontmatter lines of a plan from one open; reads on only when the closing fence is cut off.
+
+    None when the file is missing or unreadable.
+    """
+    try:
+        with open(path, "rb") as fh:
+            data = fh.read(_PLAN_HEAD_BYTES)
+            lines = data.decode("utf-8", errors="replace").splitlines()
+            if (len(data) == _PLAN_HEAD_BYTES and lines and lines[0].strip() == "---"
+                    and not any(ln.strip() == "---" for ln in lines[1:])):
+                data += fh.read(_HEAD_BYTES - _PLAN_HEAD_BYTES)
+                lines = data.decode("utf-8", errors="replace").splitlines()
+    except OSError:
+        return None
+    return _frontmatter(lines)
 
 
 def _frontmatter(lines: list[str]) -> list[str]:
@@ -98,6 +128,8 @@ class _Reader:
         self.root = root
         self._status: dict[str, tuple[bool, str | None]] = {}
         self._plan_ids: dict[str, str] | None = None
+        self._by_deliverable: dict[str, list[str]] = {}
+        self._by_predecessor: dict[str, list[str]] = {}
         self._goal_status: dict[str, str | None] | None = None
 
     def status_of(self, rel: str, *, fenced: bool) -> tuple[bool, str | None]:
@@ -105,6 +137,11 @@ class _Reader:
         hit = self._status.get(rel)
         if hit is not None:
             return hit
+        if fenced and rel.startswith("docs/plans/") and rel.count("/") == 2:
+            self._plan_index()
+            hit = self._status.get(rel)
+            if hit is not None:
+                return hit
         full = _safe_join(self.root, rel)
         try:
             lines = _head(full, _HEAD_BYTES) if full else None
@@ -119,25 +156,50 @@ class _Reader:
         self._status[rel] = result
         return result
 
+    def _plan_index(self) -> None:
+        """One pass over docs/plans/*.md: plan_id, status, deliverable_id, predecessor_handoff.
+
+        Each file is opened once; `_status` is seeded so a forward cite of the same plan is
+        not reread.
+        """
+        if self._plan_ids is not None:
+            return
+        self._plan_ids = {}
+        plans = os.path.join(self.root, "docs", "plans")
+        try:
+            names = sorted(os.listdir(plans))
+        except OSError:
+            names = []
+        for name in names:
+            if not name.endswith(".md"):
+                continue
+            fm = _plan_frontmatter(os.path.join(plans, name))
+            if fm is None:
+                continue
+            rel = "docs/plans/" + name
+            self._status.setdefault(rel, (True, _key_value(fm, _STATUS_RE)))
+            pid = _key_value(fm, _PLAN_ID_RE)
+            if pid:
+                self._plan_ids.setdefault(pid, rel)
+            did = _key_value(fm, _DELIVERABLE_RE)
+            if did:
+                self._by_deliverable.setdefault(did, []).append(rel)
+            pre = _key_value(fm, _PREDECESSOR_RE)
+            if pre:
+                self._by_predecessor.setdefault(pre.replace("\\", "/"), []).append(rel)
+
     def plan_path_for_id(self, plan_id: str) -> str | None:
-        if self._plan_ids is None:
-            index: dict[str, str] = {}
-            plans = os.path.join(self.root, "docs", "plans")
-            try:
-                names = sorted(os.listdir(plans))
-            except OSError:
-                names = []
-            for name in names:
-                if not name.endswith(".md"):
-                    continue
-                lines = _head_or_none(os.path.join(plans, name), _PLAN_ID_BYTES)
-                if lines is None:
-                    continue
-                pid = _key_value(_frontmatter(lines), _PLAN_ID_RE)
-                if pid:
-                    index.setdefault(pid, "docs/plans/" + name)
-            self._plan_ids = index
+        self._plan_index()
+        assert self._plan_ids is not None
         return self._plan_ids.get(plan_id)
+
+    def plans_for_deliverable(self, deliverable_id: str) -> list[str]:
+        self._plan_index()
+        return self._by_deliverable.get(deliverable_id, [])
+
+    def plans_for_predecessor(self, baton_rel: str) -> list[str]:
+        self._plan_index()
+        return self._by_predecessor.get(baton_rel, [])
 
     def goal_status(self, goal_id: str) -> tuple[str, str | None] | None:
         """(goal file rel path, status) for a goal id, or None when no goal file carries it."""
@@ -192,6 +254,11 @@ def target_evidence(worktree_root: str, headers: dict[str, BatonHeader]) -> dict
     """
     rd = _Reader(worktree_root)
     out: dict[str, list[Evidence]] = {}
+    carriers: dict[str, int] = {}
+    for h in headers.values():
+        d = h.get("deliverable_id")
+        if d:
+            carriers[d] = carriers.get(d, 0) + 1
     for rel, h in headers.items():
         items: list[Evidence] = []
         gp = h.get("governing_plan")
@@ -220,6 +287,17 @@ def target_evidence(worktree_root: str, headers: dict[str, BatonHeader]) -> dict
                 items.append(_item(EvidenceClass.GOAL, "origin_goal_id", gid, False, None, GOAL_DONE))
             else:
                 items.append(_item(EvidenceClass.GOAL, "origin_goal_id", found[0], True, found[1], GOAL_DONE))
+        seen = {it["target_path"] for it in items}
+        did = h.get("deliverable_id")
+        if did and h.get("kind") != "spinoff" and carriers.get(did, 0) == 1:
+            for p in rd.plans_for_deliverable(did):
+                if p not in seen:
+                    seen.add(p)
+                    items.append(_path_item(rd, EvidenceClass.PLAN, REVERSE_FIELD_DELIVERABLE, p, True, PLAN_DONE))
+        for p in rd.plans_for_predecessor(rel.replace("\\", "/")):
+            if p not in seen:
+                seen.add(p)
+                items.append(_path_item(rd, EvidenceClass.PLAN, REVERSE_FIELD_PREDECESSOR, p, True, PLAN_DONE))
         if items:
             out[rel] = items
     return out

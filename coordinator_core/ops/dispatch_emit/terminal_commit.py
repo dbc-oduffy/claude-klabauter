@@ -176,6 +176,33 @@ from coordinator_core.ops.dispatch_emit.checkpoint_stamp import (
     is_stamp_commit,
 )
 from coordinator_core.ops.dispatch_emit.request_validation import Field, validate_params
+from coordinator_core.ops.dispatch_emit.plan_row_coding import (  # noqa: F401 -- re-exported to the family and old tests
+    MINTED_SPINE_ORIGIN as _MINTED_SPINE_ORIGIN,
+    NOOP_DETAIL as _NOOP_DETAIL,
+    REVIEW_WALK_CAP as _REVIEW_WALK_CAP,
+    flip_rows_coded as _flip_rows_coded,
+    inventory_record_rel as _inventory_record_rel,
+    outside_landing_attribution as _outside_landing_attribution,
+    outside_landing_detail as _outside_landing_detail,
+    outside_landings as _outside_landings,
+    rows_landed_outside_executor,
+    source_rows_by_plan as _source_rows_by_plan,
+    yaml_load as _yaml_load,
+)
+from coordinator_core.ops.dispatch_emit.register_gate import (  # noqa: F401 -- re-exported to the family and old tests
+    RESOLUTION_RUN_ID as _RESOLUTION_RUN_ID,
+    register_gate as _register_gate,
+    register_target as _register_target,
+    register_writeback as _register_writeback,
+    run_started_at as _run_started_at,
+    sizing_file_rel as _sizing_file_rel,
+)
+from coordinator_core.ops.dispatch_emit.worktree_snapshot import (  # noqa: F401 -- re-exported to the family and old tests
+    Snapshot as _Snapshot,
+    read_rel as _read_rel,
+    tracked_at_head as _tracked_at_head,
+    worktree_snapshot as _worktree_snapshot,
+)
 
 
 _PARAM_FIELDS = (
@@ -341,49 +368,6 @@ def _missing_run_outcome(params: object) -> Optional[dict]:
     )
 
 
-_MINTED_SPINE_ORIGIN = "mise inventory record"
-
-
-def _yaml_load(text):
-    """``yaml.safe_load`` on libyaml when present: same resolvers, same ``yaml.YAMLError``."""
-    import yaml
-
-    return yaml.load(text, Loader=getattr(yaml, "CSafeLoader", yaml.SafeLoader))
-
-
-_READ_REL_MEMO: dict = {}
-_READ_REL_LIMIT = 256
-
-
-def _read_rel(worktree_root: Path, rel: str) -> Optional[str]:
-    """Guarded text of ``worktree_root/rel``, or None. Re-reads when the file's
-    (mtime_ns, size, inode) differs from the memoised read, so a write is never served stale."""
-    target = worktree_root / rel
-    try:
-        st = os.stat(target)
-        stamp = (st.st_mtime_ns, st.st_size, st.st_ino)
-    except OSError:
-        stamp = None
-    key = str(target)
-    if stamp is not None:
-        hit = _READ_REL_MEMO.get(key)
-        if hit is not None and hit[0] == stamp:
-            return hit[1]
-    guarded = contained_path(target, [worktree_root])
-    if guarded is None:
-        return None
-    try:
-        with guarded.open("r", encoding="utf-8", newline="") as fh:
-            text = fh.read()
-    except OSError:
-        return None
-    if stamp is not None:
-        if len(_READ_REL_MEMO) >= _READ_REL_LIMIT:
-            _READ_REL_MEMO.clear()
-        _READ_REL_MEMO[key] = (stamp, text)
-    return text
-
-
 _XS_SPINE_ORIGIN = "sizing object"
 _KIND_FIELD = re.compile(r"^(derived_from|scope_mode)[ \t]*:[ \t]*(.*?)[ \t]*$", re.M)
 
@@ -459,37 +443,6 @@ def _cited_baton(worktree_root: Path, sizing_rel: Optional[str]) -> Optional[str
     return guarded.relative_to(worktree_root.resolve()).as_posix()
 
 
-def _sizing_file_rel(worktree_root: Path, cited: str) -> Optional[str]:
-    guarded = contained_path(worktree_root / cited, [Path(home_dir(str(worktree_root), "sizings"))])
-    if guarded is None or not guarded.is_file():
-        return None
-    return guarded.relative_to(worktree_root.resolve()).as_posix()
-
-
-def _register_target(
-    worktree_root: Path, plan_path: Optional[str]
-) -> tuple[Optional[str], frozenset, bool, dict]:
-    """``(register_sizing_rel, claimed_row_ids, is_own, pins)``: the register sizing is the plan's
-    ``register_claims.sizing`` when it names an existing sizing, else the cited ``sizing_object``;
-    ``is_own`` is True when that is the plan's own ``sizing_object``; ``pins`` is the plan's
-    ``register_claims.pins`` (empty when absent)."""
-    text = _read_rel(worktree_root, plan_path) if plan_path else None
-    if text is None:
-        return None, frozenset(), True, {}
-    from coordinator_core.frontmatter.primitives import read_fm_field_unquoted, split_frontmatter
-    from coordinator_core.ops import requirement_register as rr
-
-    split = split_frontmatter(text)
-    cited = read_fm_field_unquoted(split.fm_text, "sizing_object") if split else None
-    own = _sizing_file_rel(worktree_root, cited) if cited else None
-    claims_rel, ids = rr.plan_claims(split.fm_text) if split else (None, frozenset())
-    target = _sizing_file_rel(worktree_root, claims_rel) if claims_rel else None
-    pins = rr.plan_pins(split.fm_text) if split else {}
-    if target is None:
-        return own, ids, True, pins
-    return target, ids, target == own, pins
-
-
 def _derive_judge_status(inline_review: object) -> Optional[str]:
     """Re-derive ``inline_review.criterion.status`` from its structured ``clauses``, in place.
 
@@ -525,220 +478,6 @@ def _derive_judge_status(inline_review: object) -> Optional[str]:
     return note
 
 
-def _run_started_at(worktree_root: Path, run_id: Optional[str]) -> Optional[float]:
-    """Epoch seconds the run was submitted (``submitted_at`` of its ``submission.json``), else None."""
-    if not run_id or not _RESOLUTION_RUN_ID.match(run_id):
-        return None
-    from coordinator_core.ops.warp_run_deliverable import SUBMISSION_FILE
-
-    text = _read_rel(worktree_root, f"{RUN_DIR_ROOT}/{run_id}/{SUBMISSION_FILE}")
-    if text is None:
-        return None
-    try:
-        at = json.loads(text).get("submitted_at")
-    except (ValueError, AttributeError):
-        return None
-    return float(at) if isinstance(at, (int, float)) and not isinstance(at, bool) and at > 0 else None
-
-
-def _register_gate(
-    worktree_root: Path, plan_path: Optional[str], inline_review: dict, ledger_judged: Sequence[str] = (),
-    *, run_id: Optional[str] = None,
-) -> Optional[str]:
-    """Demote a ``met`` criterion to ``not_met`` when a row this plan claims in its
-    cited register-bearing sizing is not judged met, wired, on its register surface
-    with an observed entry point. Returns the failure reason (also set on the criterion),
-    or ``None`` when the gate does not apply or every claimed row passes. Reads the
-    judge's returned ``criterion.register_rows`` and the register on disk; never inspects code.
-    ``ledger_judged`` names rows the run's passed requirements ledger already judged: they are
-    not owed to a plan. Embedded PM turns are owed only when cited or timestamped after the run's
-    submission; ``run_id`` (else the sizing's ``resolution.run_id``) locates that submission.
-    """
-    criterion = inline_review.get("criterion")
-    if not plan_path or not isinstance(criterion, dict) or criterion.get("status") != "met":
-        return None
-    sizing_rel, claim_ids, is_own, pins = _register_target(worktree_root, plan_path)
-    if sizing_rel is None:
-        return None
-    from coordinator_core.ops import requirement_register as rr
-
-    sizing_text = _read_rel(worktree_root, sizing_rel)
-    register = rr.read_register(sizing_text) if sizing_text is not None else None
-    gaps: list = []
-    if is_own and sizing_text is not None and "pm_verbatims" in sizing_text:
-        if not run_id:
-            try:
-                resolution = rr._load(sizing_text).get("resolution")
-                run_id = resolution.get("run_id") if isinstance(resolution, dict) else None
-            except Exception:  # noqa: BLE001 -- no run start: only cited turns are owed
-                run_id = None
-        gaps = rr.uncovered_turns(sizing_text, run_started_at=_run_started_at(worktree_root, run_id))
-    if register is None and not gaps:
-        return None
-    claimed = rr.claimed_rows(register, plan_path, claim_ids) if register is not None else []
-    drift = rr.pin_drift(register, pins) if register is not None and pins else []
-    if drift:
-        reason = rr.pin_drift_reason(drift)
-        criterion["status"] = "not_met"
-        criterion["reason"] = reason
-        criterion["observation"] = reason
-        return reason
-    judged = {
-        str(r.get(rr.ROW_ID)): r
-        for r in (criterion.get(rr.JUDGE_ROWS_KEY) or [])
-        if isinstance(r, dict) and r.get(rr.JUDGE_CLAIM, rr.CLAIM_THIS_PLAN) == rr.CLAIM_THIS_PLAN
-    }
-    ledger_ids = {str(i) for i in ledger_judged}
-    ruled_out: frozenset = frozenset()
-    if register is not None:
-        from coordinator_core.ops.dispatch_emit import requirements_ledger
-
-        ruled_out = frozenset(requirements_ledger.ruled_out_ids(register.rows))
-    for row in claimed:
-        rid, surface = row.get(rr.ROW_ID), row.get(rr.ROW_SURFACE)
-        if str(rid) in ruled_out:
-            continue
-        got = judged.get(str(rid))
-        if got is None and str(rid) in ledger_ids:
-            continue
-        # Trap: admits a self-declared met row the judge never saw; no test pins that it still refuses otherwise.
-        if (
-            got is None
-            and row.get(rr.ROW_STATUS) == rr.STATUS_MET
-            and row.get(rr.ROW_WIRED) is True
-            and any(isinstance(m, str) and m.strip() for m in (row.get(rr.ROW_MET_BY) or []))
-        ):
-            continue
-        if got is None:
-            why = "not judged"
-        elif got.get(rr.ROW_STATUS) != rr.STATUS_MET:
-            why = f"judged status {got.get(rr.ROW_STATUS)!r}, not met"
-        elif got.get(rr.ROW_WIRED) is not True:
-            why = "judged wired: false"
-        elif not str(got.get(rr.JUDGE_OBSERVED_REF) or "").strip():
-            why = "no observed entry point (observed_ref is empty)"
-        else:
-            if got.get(rr.ROW_SURFACE) != surface:
-                note = (
-                    f"register row {rid}: judged surface {got.get(rr.ROW_SURFACE)!r} "
-                    f"differs from register surface {surface!r} (met and wired; reported, not refused)"
-                )
-                prior = criterion.get("observation") or ""
-                if note not in prior:
-                    criterion["observation"] = f"{prior}\n{note}".strip()
-            continue
-        reason = f"register row {rid} (surface {surface}): {why}"
-        criterion["status"] = "not_met"
-        criterion["reason"] = reason
-        criterion["observation"] = reason
-        return reason
-    if gaps:
-        turn, head = gaps[0]
-        reason = f"PM turn {turn} is covered by no register row or unrelated_turns entry: {head}"
-        criterion["status"] = "not_met"
-        criterion["reason"] = reason
-        criterion["observation"] = reason
-        return reason
-    if is_own and register is not None:
-        orphan = rr.blocking_unclaimed(register, [r.get(rr.ROW_ID) for r in claimed] + list(ledger_judged))
-        if orphan is not None:
-            reason = f"register row {orphan}: owed and claimed by no plan"
-            criterion["status"] = "not_met"
-            criterion["reason"] = reason
-            criterion["observation"] = reason
-            return reason
-    return None
-
-
-def _register_writeback(
-    worktree_root: Path, plan_path: Optional[str], inline_review: Optional[dict], sha: str,
-) -> dict:
-    """Cascade the judge's per-row verdicts into the cited sizing's register and recompute its
-    rollup, in place; the caller adds ``sizing`` to the coded-stamp commit's paths.
-
-    Returns ``{}`` when nothing applies, ``{"register_sizing": rel}`` on a write, or
-    ``{"register_writeback_error": reason}`` when the result fails the sizing schema (the file is
-    left untouched). Never raises: the run's own commit has already landed.
-    """
-    criterion = inline_review.get("criterion") if isinstance(inline_review, dict) else None
-    if not plan_path or not isinstance(criterion, dict):
-        return {}
-    from coordinator_core.ops import requirement_register as rr
-
-    judged = [
-        r for r in (criterion.get(rr.JUDGE_ROWS_KEY) or [])
-        if isinstance(r, dict) and r.get(rr.JUDGE_CLAIM, rr.CLAIM_THIS_PLAN) == rr.CLAIM_THIS_PLAN
-    ]
-    sizing_rel, claim_ids, _, _ = (
-        _register_target(worktree_root, plan_path) if judged else (None, frozenset(), True, {})
-    )
-    if sizing_rel is None:
-        return {}
-    from datetime import datetime, timezone
-
-    import yaml
-
-    from coordinator_core.frontmatter.schema_validate import format_validation_errors, validate_frontmatter
-    from coordinator_core.locked_write import MutateAbort, locked_rmw
-
-    schema_path = Path(__file__).parent.parent.parent / "frontmatter" / "schemas" / "sizing-object.schema.json"
-    now = datetime.now(timezone.utc)
-
-    def mutate(old: str) -> str:
-        if rr.read_register(old) is None:
-            raise MutateAbort("")
-        new = rr.apply_verdicts(old, judged, plan_path, sha, now, claim_ids)
-        if new == old:
-            raise MutateAbort("")
-        try:
-            errors = validate_frontmatter(_yaml_load(new) or {}, schema_path)
-        except Exception as exc:  # noqa: BLE001 -- surfaced as a refusal
-            raise MutateAbort(f"register write-back refused: {exc}")
-        if errors:
-            raise MutateAbort(f"register write-back refused: {format_validation_errors(errors)}")
-        return new
-
-    try:
-        locked_rmw(worktree_root / sizing_rel, mutate, repo_root=worktree_root)
-    except MutateAbort as exc:
-        reason = str(exc.args[0]) if exc.args else ""
-        return {"register_writeback_error": reason} if reason else {}
-    except Exception as exc:  # noqa: BLE001 -- lock timeout, I/O: refuse, keep the commit
-        return {"register_writeback_error": f"register write-back refused: {exc!r}"}
-    return {"register_sizing": sizing_rel}
-
-
-def _spine_row_ids(plan_text: str) -> Optional[set]:
-    import yaml
-
-    from coordinator_core.frontmatter.body_blocks import LocateStatus, locate_fenced_block
-
-    located = locate_fenced_block(plan_text)
-    if located.status != LocateStatus.LOCATED:
-        return None
-    try:
-        rows = _yaml_load(located.body) or []
-    except yaml.YAMLError:
-        return None
-    if not isinstance(rows, list):
-        return None
-    return {str(r["id"]) for r in rows if isinstance(r, dict) and r.get("id")}
-
-
-def _inventory_record_rel(worktree_root: Path, spine_rel: str) -> Optional[tuple]:
-    """``(inventory record rel, its text)`` for a minted spine, else None. A part spine
-    (``-pN``) falls back to the unsplit record."""
-    if not spine_rel.endswith(_SPINE_SUFFIX):
-        return None
-    stem = spine_rel[: -len(_SPINE_SUFFIX)]
-    inventory_rel = stem + ".md"
-    text = _read_rel(worktree_root, inventory_rel)
-    if text is None and re.search(r"-p\d+$", stem):
-        inventory_rel = re.sub(r"-p\d+$", "", stem) + ".md"
-        text = _read_rel(worktree_root, inventory_rel)
-    return None if text is None else (inventory_rel, text)
-
-
 def _mint_mise_receipt(
     worktree_root: Path, spine_rel: str, sha: str, record_abs: Path, record: dict,
     tree: Optional[str] = None,
@@ -762,80 +501,6 @@ def _mint_mise_receipt(
     except Exception as exc:  # noqa: BLE001 -- surfaced; product commit stands
         return {"review_stamp": "refused", "review_stamp_refusal": repr(exc)}
     return {"review_receipt": inventory_rel}
-
-
-def _source_rows_by_plan(
-    worktree_root: Path, plan_path: Optional[str], chunk_ids: list
-) -> dict:
-    """Committed chunk ids -> ``{source plan (worktree-relative): {row id}}``.
-
-    A plan-mode marker names the plan itself, and a chunk id IS its row id. An
-    inventory-mode marker names the minted spine (``derived_from: mise
-    inventory record``), which must never be stamped -- the next mint
-    overwrites it; its rows map back through the sibling inventory record's
-    Chunk table: ``<item>.<row>`` is row ``<row>`` of item's spec plan, and a
-    bare ``<item>`` is a single-row reference only when it (or its
-    prefix-stripped form) names a row of that plan -- a whole-plan item names
-    no row, so nothing flips for it. Unresolvable pieces are skipped: the
-    commit itself never fails over plan bookkeeping.
-    """
-    if not plan_path or not chunk_ids:
-        return {}
-    from coordinator_core.frontmatter.primitives import read_fm_field_unquoted, split_frontmatter
-
-    marker_text = _read_rel(worktree_root, plan_path)
-    if marker_text is None:
-        return {}
-    # Read-only parses below are LF-shaped; a CRLF checkout must map the same.
-    marker_text = marker_text.replace("\r\n", "\n")
-    split = split_frontmatter(marker_text)
-    origin = read_fm_field_unquoted(split.fm_text, "derived_from") if split else None
-    if origin != _MINTED_SPINE_ORIGIN:
-        return {plan_path: set(chunk_ids)}
-
-    from coordinator_core.ops.dispatch_emit.inventory_mint import (
-        InventoryMintError,
-        _bare_plan_row_id,
-        _resolve_spec_plan_path,
-        parse_chunk_table,
-    )
-
-    found = _inventory_record_rel(worktree_root, plan_path)
-    if found is None:
-        return {}
-    inventory_rel, inventory_text = found
-    try:
-        table = parse_chunk_table(inventory_text.replace("\r\n", "\n"))
-    except InventoryMintError:
-        return {}
-    spec_by_item = {
-        row.get("id", "").strip(): row.get("spec path", "").strip().strip("`")
-        for row in table
-    }
-
-    out: dict = {}
-    row_ids_cache: dict = {}
-    for chunk_id in chunk_ids:
-        item, _, row = chunk_id.partition(".")
-        spec = spec_by_item.get(item)
-        if not spec:
-            continue
-        abs_plan = _resolve_spec_plan_path(worktree_root / inventory_rel, spec)
-        guarded = contained_path(abs_plan, [worktree_root])
-        if guarded is None:
-            continue
-        rel = guarded.relative_to(worktree_root.resolve()).as_posix()
-        if rel not in row_ids_cache:
-            text = _read_rel(worktree_root, rel)
-            row_ids_cache[rel] = _spine_row_ids(text.replace("\r\n", "\n")) if text is not None else None
-        spine_ids = row_ids_cache[rel]
-        if not spine_ids:
-            continue
-        if not row:
-            row = item if item in spine_ids else _bare_plan_row_id(item)
-        if row in spine_ids:
-            out.setdefault(rel, set()).add(row)
-    return out
 
 
 #: Per-plan seam-check sidecar suffix; `plan.seam_record` writes `<plan-stem>` + this beside the plan
@@ -914,105 +579,6 @@ def _memo_rows_without_receipt(worktree_root: Path, request: CommitRequest) -> d
         elif not memo_receipt_exists(worktree_root, slug):
             out[str(row["id"])] = slug
     return out
-
-
-def _row_rank(row: dict) -> int:
-    from coordinator_core.frontmatter.schema_validate import (
-        _PLAN_TASKS_GROUPING_ORDER,
-        _plan_tasks_row_grouping,
-    )
-
-    return _PLAN_TASKS_GROUPING_ORDER.index(_plan_tasks_row_grouping(row))
-
-
-_NOOP_DETAIL = (
-    "resolved as a no-op: the row's files carry no change from this run "
-    "(already landed, or a conditional no-change outcome); closed against the run's commit"
-)
-
-
-def _outside_landing_detail(shas: list) -> str:
-    return (
-        "resolved as a no-op: the row's declared writes landed outside this run's executor at "
-        + ", ".join(s[:10] for s in shas)
-        + "; the run's executor changed nothing"
-    )
-
-
-def _flip_rows_coded(plan_text: str, row_ids: set, sha: str, details: Optional[dict] = None) -> tuple:
-    """Line-level ``open`` -> ``coded`` + ``disposition_ref: <sha>`` on
-    ``row_ids`` (``row_spans._stamp_rows_in_body``), then a stable D5 re-sort
-    of row spans (an open row may not follow a coded one).
-
-    Never a YAML round-trip: every untouched line survives byte-identical.
-    ``details`` (row id -> ``disposition_detail`` prose) rides the same stamp.
-    Only rows currently ``open`` flip; any other disposition is left alone.
-    Returns ``(new_text, flipped_ids)``; ``flipped_ids`` empty means no edit.
-    """
-    import yaml
-
-    from coordinator_core.execute_plan_assemble.row_spans import (
-        _find_row_spans,
-        _line_ending,
-        _row_disposition,
-        _stamp_rows_in_body,
-    )
-
-    # The row-span stamper matches LF lines only; a uniformly CRLF plan (any
-    # Windows checkout) matched nothing and silently flipped no row.
-    if "\r\n" in plan_text and "\n" not in plan_text.replace("\r\n", ""):
-        new_text, flipped = _flip_rows_coded(plan_text.replace("\r\n", "\n"), row_ids, sha, details)
-        return (new_text.replace("\n", "\r\n"), flipped) if flipped else (plan_text, [])
-    from coordinator_core.frontmatter.body_blocks import LocateStatus, locate_fenced_block
-
-    located = locate_fenced_block(plan_text)
-    if located.status != LocateStatus.LOCATED or located.span is None:
-        return plan_text, []
-    try:
-        rows = _yaml_load(located.body) or []
-    except yaml.YAMLError:
-        return plan_text, []
-    if not isinstance(rows, list) or not all(isinstance(r, dict) for r in rows):
-        return plan_text, []
-    row_by_id = {str(r.get("id")): r for r in rows}
-    targets = {
-        rid for rid in row_ids
-        if rid in row_by_id and _row_disposition(row_by_id[rid]) == "open"
-    }
-    if not targets:
-        return plan_text, []
-
-    start, end = located.span
-    body = plan_text[start:end]
-    stamped, err = _stamp_rows_in_body(
-        body, {rid: sha for rid in targets},
-        {rid: d for rid, d in (details or {}).items() if rid in targets},
-    )
-    if stamped is None:
-        return plan_text, []
-    ended_with_newline = stamped.endswith(("\n", "\r"))
-    lines = stamped.splitlines(keepends=True)
-    if lines and not lines[-1].endswith(("\n", "\r")):
-        lines[-1] += _line_ending(lines[0])
-
-    spans = _find_row_spans(lines)
-    if spans:
-        head = lines[: spans[0][0]]
-        chunks = [(chunk_id, lines[s:e]) for s, e, chunk_id in spans]
-
-        def rank(item: tuple) -> int:
-            row = dict(row_by_id.get(item[0], {}))
-            if item[0] in targets:
-                row["disposition"] = "coded"
-            return _row_rank(row)
-
-        chunks = sorted(chunks, key=rank)
-        lines = head + [line for _cid, chunk in chunks for line in chunk]
-
-    new_body = "".join(lines)
-    if not ended_with_newline:
-        new_body = new_body[:-2] if new_body.endswith("\r\n") else new_body[:-1]
-    return plan_text[:start] + new_body + plan_text[end:], sorted(targets)
 
 
 _LANDS_CHUNKS_LINE = re.compile(r"^Lands-Chunks:[ \t]*(?P<v>.+?)\s*$", re.M)
@@ -1138,117 +704,6 @@ def _checkpoint_attribution(worktree_root: Path, terminal_sha: str, plan_path: O
         if hits:
             out[chunk.id] = next((h[0] for h in hits if chunk.id in h[1]), hits[0][0])
     return out
-
-
-def _outside_landings(
-    worktree_root: Path, terminal_sha: str, plan_path: Optional[str], chunks: list, *,
-    include_start: bool = False, after_creation: bool = False,
-) -> dict:
-    """Chunk id -> landing shas (newest first) of commits outside this run that landed every declared write.
-
-    One in-process first-parent walk (zero spawns) from the terminal commit's parent,
-    stepping over stamp commits and checkpoint commits of ``plan_path``. It stops at
-    ``_REVIEW_WALK_CAP`` or at the first commit without the plan file, so nothing older
-    than the plan counts. A commit lands a path when its blob differs from its first
-    parent's. A chunk is present only when every entry of ``paths`` has a landing commit.
-    """
-    from coordinator_core.git.commit_walk import commit_meta
-    from coordinator_core.git.git_dir import resolve_git_common_dir
-    from coordinator_core.git.rollback_check import ABSENT, _blob_at_commit as _resolve_blob
-
-    wanted = [c for c in chunks if c.paths]
-    if not wanted or not plan_path:
-        return {}
-    blobs: dict = {}  # (sha, path) -> blob; scoped to this call so it never outlives the walk
-
-    def _blob_at_commit(cdir, csha, path):
-        key = (csha, path)
-        if key not in blobs:
-            blobs[key] = _resolve_blob(cdir, csha, path)
-        return blobs[key]
-
-    common_dir = resolve_git_common_dir(worktree_root)
-    meta = commit_meta(common_dir, terminal_sha)
-    parents = (meta or {}).get("parents") or []
-    sha = terminal_sha if include_start else (parents[0] if parents else None)
-    walked: list = []  # newest first: (sha, first parent or None)
-    for _ in range(_REVIEW_WALK_CAP):
-        meta = commit_meta(common_dir, sha) if sha else None
-        if meta is None:
-            break
-        blob = _blob_at_commit(common_dir, sha, plan_path)
-        if blob is None or blob is ABSENT:
-            break
-        message = meta.get("message") or ""
-        parent = (meta.get("parents") or [None])[0]
-        if after_creation:
-            parent_blob = _blob_at_commit(common_dir, parent, plan_path) if parent else ABSENT
-            if parent_blob is None or parent_blob is ABSENT:
-                break
-        stepped_over = is_stamp_commit(message) or (
-            CHECKPOINT_SUBJECT.match((message.splitlines() or [""])[0].strip())
-            and (m := CHECKPOINT_PLAN_LINE.search(message)) is not None and m.group("v") == plan_path
-        )
-        if not stepped_over:
-            walked.append((sha, parent))
-        if parent is None:
-            break
-        sha = parent
-    out: dict = {}
-    for chunk in wanted:
-        shas: list = []
-        for path in chunk.paths:
-            hit = next(
-                (
-                    csha for csha, parent in walked
-                    if _blob_at_commit(common_dir, csha, path)
-                    != (_blob_at_commit(common_dir, parent, path) if parent else ABSENT)
-                ),
-                None,
-            )
-            if hit is None:
-                break
-            shas.append(hit)
-        else:
-            out[chunk.id] = sorted(set(shas), key=lambda s: [w[0] for w in walked].index(s))
-    return out
-
-
-def _outside_landing_attribution(
-    worktree_root: Path, terminal_sha: str, plan_path: Optional[str], chunks: list,
-) -> dict:
-    """Chunk id -> newest sha of the commit outside this run that landed its declared writes."""
-    return {
-        cid: shas[0] for cid, shas in _outside_landings(worktree_root, terminal_sha, plan_path, chunks).items()
-    }
-
-
-def rows_landed_outside_executor(worktree_root: Path, plan_path: str, rows: list) -> dict:
-    """Row id -> newest landing sha for each ``open`` row of ``plan_path`` whose every declared write
-    a commit at or before HEAD already landed. The walk is in-process (zero spawns) and bounded by the
-    plan file's creation commit, itself excluded, so a write at or before the plan never counts. A row with no ``writes`` is absent."""
-    from types import SimpleNamespace
-
-    from coordinator_core.git.git_state import head_sha
-
-    chunks = [
-        SimpleNamespace(id=r["id"], paths=[w for w in r["writes"] if isinstance(w, str) and w])
-        for r in rows
-        if isinstance(r, dict) and isinstance(r.get("id"), str) and isinstance(r.get("writes"), list)
-    ]
-    head = head_sha(worktree_root)
-    if not head or not chunks:
-        return {}
-    return {
-        cid: shas[0]
-        for cid, shas in _outside_landings(
-            worktree_root, head, plan_path, chunks, include_start=True, after_creation=True,
-        ).items()
-    }
-
-
-# Commits a review-only run walks back from the terminal sha to reach its run base.
-_REVIEW_WALK_CAP = 500
 
 
 def _open_row_ids(worktree_root: Path, plan_rel: str) -> set:
@@ -1668,7 +1123,6 @@ def _write_usage(worktree_root: Path, session_id: Optional[str], run_id: str) ->
 
 
 _RESOLUTION_SHA = re.compile(r"^[0-9a-f]{7,64}$")
-_RESOLUTION_RUN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,200}$")
 
 
 def _run_id_of(params: dict, ask_run_dir: Optional[Path], script_path_raw: str) -> str:
@@ -1833,17 +1287,6 @@ def _differs_from_commit(worktree_root: Path, sha: str, rel: str) -> bool:
         if hashlib.sha1(b"blob %d\0" % len(body) + body).hexdigest() == head:
             return False
     return True
-
-
-def _tracked_at_head(worktree_root: Path, rels: list) -> list:
-    """The subset of ``rels`` HEAD tracks: the deletions ``commit_v2`` accepts as declared. An
-    unreadable tree answers every path, leaving the refusal to the committer."""
-    if not rels:
-        return []
-    from coordinator_core.git.commit import partition_declared_deletions
-
-    split = partition_declared_deletions(worktree_root, rels)
-    return list(rels) if split is None else split[0]
 
 
 def _stamp_coded_commit(
@@ -3225,82 +2668,6 @@ def _changed_paths(worktree_root: Path, paths: list) -> Optional[set]:
         for entry in result.stdout_bytes.split(b"\0")
         if len(entry) > 3
     }
-
-
-class _Snapshot:
-    """One scoped ``git status`` read of the worktree: ``changed`` (modified, added,
-    untracked, deleted or unmerged) and ``ignored`` (untracked and gitignored; an
-    ignored directory is one entry with a trailing ``/``). It answers only for paths
-    it ``covers``: a requested literal path, or a path at or under a requested root."""
-
-    __slots__ = ("changed", "ignored", "literals", "roots")
-
-    def __init__(self, changed: set, ignored: list, literals: set, roots: list) -> None:
-        self.changed = changed
-        self.ignored = ignored
-        self.literals = literals
-        self.roots = roots
-
-    def covers(self, path: str) -> bool:
-        return path in self.literals or any(path == r or path.startswith(r + "/") for r in self.roots)
-
-    def note_written(self, paths: list) -> None:
-        """Record files this run just wrote (they differ from HEAD by construction)."""
-        self.literals.update(paths)
-        self.changed.update(paths)
-
-    def changed_among(self, specs: list) -> set:
-        bounds = [(s, s.rstrip("/") + "/") for s in specs]
-        return {p for p in self.changed if any(p == s or p.startswith(under) for s, under in bounds)}
-
-    def ignored_among(self, paths: list) -> list:
-        dirs = [e for e in self.ignored if e.endswith("/")]
-        files = set(self.ignored)
-        return [p for p in paths if p in files or any(p.startswith(d) for d in dirs)]
-
-
-def _worktree_snapshot(
-    worktree_root: Path, literals: list, roots: list, scope_specs: list
-) -> Optional[_Snapshot]:
-    """The run's one worktree read; ``None`` when git could not answer or nothing was asked."""
-    literals = list(dict.fromkeys(literals))
-    roots = [r.rstrip("/") for r in dict.fromkeys(roots)]
-    specs = [f":(literal){p}" for p in literals] + [f":(literal){r}/" for r in roots] + list(scope_specs)
-    if not specs:
-        return None
-    from coordinator_core.git.scoped_worktree_status import scoped_worktree_status
-
-    try:
-        local = scoped_worktree_status(worktree_root, literals, roots, scope_specs)
-    except Exception:  # noqa: BLE001 -- an in-process fault is a gap: the spawn answers
-        local = None
-    if local is not None:
-        return _Snapshot(local[0], local[1], set(literals), roots)
-    result = run_git(
-        [
-            "-C", str(worktree_root), "--no-optional-locks", "status",
-            "--porcelain=v2", "-z", "--no-renames", "--untracked-files=all",
-            "--ignored=matching", "--", *specs,
-        ],
-        binary=True,
-    )
-    if not result.ok:
-        return None
-    changed: set = set()
-    ignored: list = []
-    for raw in result.stdout_bytes.split(b"\0"):
-        if len(raw) < 3:
-            continue
-        kind = raw[:1]
-        fields = {b"1": 8, b"u": 10, b"?": 1, b"!": 1}.get(kind)
-        if fields is None:
-            continue
-        path = raw.split(b" ", fields)[fields].decode("utf-8", "surrogateescape")
-        if kind == b"!":
-            ignored.append(path)
-        else:
-            changed.add(path)
-    return _Snapshot(changed, ignored, set(literals), roots)
 
 
 def _changed(snapshot: Optional[_Snapshot], worktree_root: Path, paths: list) -> Optional[set]:

@@ -22,11 +22,14 @@ hook figure belongs beside this one, never folded into it.
 
 from __future__ import annotations
 
+import json
+import subprocess
 import sys
 
 import pytest
 
 from coordinator_core.benchmarks.process_time import batched_process_time_ms
+from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -89,16 +92,60 @@ def ask_full_path_measurement(tmp_path_factory):
     return _measure(tmp_path_factory.mktemp("terminal_commit_budget_ask"), "--kind", "ask")
 
 
+def _build_prebuilt(parent) -> None:
+    """One fresh real-shape repo under `parent`, built in its own unmeasured process."""
+    parent.mkdir(parents=True)
+    built = subprocess.run(
+        [sys.executable, "-m", _DRIVER, str(parent), "--kind", "ask", "--real-shape", "--build-only"],
+        capture_output=True,
+        text=True,
+        **no_console_creationflags(),
+    )
+    assert built.returncode == 0, f"real-shape build failed: {built.stderr[-2000:]}"
+
+
 @pytest.fixture(scope="module")
 def real_shape_measurement(tmp_path_factory):
-    return _measure(
-        tmp_path_factory.mktemp("terminal_commit_budget_real_shape"),
-        "--kind",
-        "ask",
-        "--real-shape",
-        k=REAL_SHAPE_K,
-        samples=REAL_SHAPE_SAMPLES,
+    """Net = full minus the import-only baseline. Every full sample drives its own freshly built
+    repo (the call mutates it); the baseline never mutates, so it re-reads the first one."""
+    root = tmp_path_factory.mktemp("terminal_commit_budget_real_shape")
+    dirs = [root / f"sample{i}" for i in range(REAL_SHAPE_SAMPLES)]
+    for d in dirs:
+        _build_prebuilt(d)
+
+    def run(d, *extra):
+        result = batched_process_time_ms(
+            [sys.executable, "-m", _DRIVER, "--prebuilt", str(d), *extra], k=REAL_SHAPE_K
+        )
+        assert result["rc"] == 0, f"driver exited {result['rc']}: {result!r}"
+        return result
+
+    setups = [run(dirs[0], "--setup-only") for _ in range(REAL_SHAPE_SAMPLES)]
+    fulls = [run(d) for d in dirs]
+    setup = min(setups, key=lambda r: r["process_time_ms"])
+    full = min(fulls, key=lambda r: r["process_time_ms"])
+    handler_ms = [
+        json.loads((d / "handler.json").read_text(encoding="utf-8"))["handler_ms"] for d in dirs
+    ]
+    net_ms = round(full["process_time_ms"] - setup["process_time_ms"], 3)
+    net_procs = round(full["procs_per_call"] - setup["procs_per_call"], 3)
+    spread = round(
+        max(r["process_time_ms"] for r in setups) - min(r["process_time_ms"] for r in setups), 3
     )
+    detail = (
+        f"terminal_commit full path at real shape, net tree process time: {net_ms}ms, "
+        f"procs_per_call: {net_procs} (parent handler ms per sample {handler_ms}; "
+        f"setup-only {setup['process_time_ms']}ms spread {spread}ms across {len(setups)} samples; "
+        f"full {full['process_time_ms']}ms; k={REAL_SHAPE_K}, min of {REAL_SHAPE_SAMPLES})"
+    )
+    print(f"TERMINAL-COMMIT-BUDGET {detail}")
+    return {
+        "net_ms": net_ms,
+        "net_procs": net_procs,
+        "detail": detail,
+        "handler_ms": min(handler_ms),
+        "setup_spread_ms": spread,
+    }
 
 
 @pytest.fixture(scope="module")
@@ -162,10 +209,17 @@ def test_terminal_commit_ask_full_path_is_under_the_500ms_bar(ask_full_path_meas
     print(f"TERMINAL-COMMIT-ASK {ask_full_path_measurement['detail']}")
 
 
+@pytest.mark.designed_red(
+    reason="terminal-commit-kill-successor-71f736: red against the killed dispatch.terminal_commit "
+    "(attribution 17,195ms net tree); C17 retargets this gate at the successor and removes the marker"
+)
 def test_terminal_commit_ask_real_shape_is_under_the_500ms_bar(real_shape_measurement):
     """The incident shape: tracked tree, sizing/delivery corpus, stopped-run corpus over a large
-    transcript, populated launch dir. Red until the kill-bar rebuild lands (C0 verdict KILL)."""
+    transcript, populated launch dir, a live run token. Red until the kill-bar rebuild lands."""
     _assert_under_bar(real_shape_measurement)
+    assert real_shape_measurement["handler_ms"] < BUDGET_MS, (
+        f"handler parent process time over the {BUDGET_MS}ms bar: {real_shape_measurement['detail']}"
+    )
     assert real_shape_measurement["net_procs"] <= REAL_SHAPE_PROCS_CEILING, (
         f"spawn count over the {REAL_SHAPE_PROCS_CEILING} ceiling: {real_shape_measurement['detail']}"
     )

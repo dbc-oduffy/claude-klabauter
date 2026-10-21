@@ -8,7 +8,7 @@ import subprocess
 import pytest
 
 from coordinator_core.ops.dispatch_emit.spine_read import resolve_plan_edge
-from coordinator_core.ops.dispatch_emit.terminal_commit import _flip_rows_coded
+from coordinator_core.ops.dispatch_emit.plan_row_coding import flip_rows_coded
 from coordinator_core.ops.plan_tasks_mutate import _handler
 from coordinator_core.ops.plan_tasks_render import load_rows
 from coordinator_core.ops.tests.test_plan_tasks_mutate import _make_git_repo, _seed_plan
@@ -121,7 +121,7 @@ def test_resolve_coded_leaves_the_row_the_terminal_commit_stamp_leaves(tmp_path)
     assert reply["exit_code"] == 0, reply
     by_hand = load_rows(plan.read_text(encoding="utf-8")).rows[0]
 
-    stamped_text, flipped = _flip_rows_coded(original, {"C1"}, sha, {"C1": "landed in-run"})
+    stamped_text, flipped = flip_rows_coded(original, {"C1"}, sha, {"C1": "landed in-run"})
     assert flipped == ["C1"]
     in_run = load_rows(stamped_text).rows[0]
 

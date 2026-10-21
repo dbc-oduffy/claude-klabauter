@@ -36,6 +36,7 @@ from coordinator_core.ops._path_guard import contained_path, safe_id
 from coordinator_core.ops.dispatch_emit import review_edits, run_artifacts
 from coordinator_core.ops.warp_run_deliverable import record_sizing_rel
 from coordinator_core.ops.dispatch_emit import halted_run
+from coordinator_core.ops.dispatch_emit.worktree_snapshot import record_dir_changes
 from coordinator_core.ops.dispatch_emit.halted_run import write_halt_marker
 from coordinator_core.ops.dispatch_emit.ask_contract import (
     HALT_DEPENDENTS_UNSTARTED,
@@ -75,19 +76,6 @@ def within_handoffs_home(worktree_root: Path, artifacts: run_artifacts.RunArtifa
         record_dirs=artifacts.record_dirs,
         root=artifacts.root,
     )
-
-
-def record_dir_changes(worktree_root: Path, record_dir_rel: str, changed: set) -> tuple[list, list]:
-    """The record dir's changed top-level files from one status read: ``(present, deleted)``.
-    ``present`` are files on disk; ``deleted`` are changed entries gone from disk."""
-    prefix = record_dir_rel.rstrip("/") + "/"
-    present: list = []
-    deleted: list = []
-    for rel in sorted(changed):
-        if not rel.startswith(prefix) or "/" in rel[len(prefix):]:
-            continue
-        (present if (worktree_root / rel).is_file() else deleted).append(rel)
-    return present, deleted
 
 
 def _run_request(worktree_root: Path, script_path: object):

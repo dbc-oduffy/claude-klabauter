@@ -16,6 +16,7 @@ from coordinator_core.ops.dispatch_emit.commit_request import (
     CommitRequest,
     render_marker,
 )
+from coordinator_core.ops.dispatch_emit.worktree_snapshot import Snapshot
 from coordinator_core.session import core as session_core
 from coordinator_core.session import scope as session_scope
 from coordinator_core.win_portability import no_console_creationflags
@@ -207,7 +208,7 @@ def test_an_unreadable_head_spine_joins_no_run_owned_deletions(repo, monkeypatch
         ChunkCommit(id="C1", title="t1", paths=("src/a.py",)),
         ChunkCommit(id="C2", title="t2", paths=("src/gone.py",)),
     ))
-    snap = terminal_commit._Snapshot({"src/gone.py", "src/a.py"}, [], {"src/gone.py"}, [])
+    snap = Snapshot({"src/gone.py", "src/a.py"}, [], {"src/gone.py"}, [])
     files, deletions = terminal_commit._run_owned_dirt(
         repo, request, snap, SELF, ["src/a.py"], [], frozenset({"src/gone.py"})
     )

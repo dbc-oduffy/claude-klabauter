@@ -29,6 +29,8 @@ _SCALAR_KEYS = frozenset(
         "origin_plan_id",
         "sizing_object",
         "roadmap_id",
+        "deliverable_id",
+        "kind",
     }
 )
 _NULLS = frozenset({"", "none", "null", "~"})
@@ -108,6 +110,8 @@ def _parse(rel: str, lines: list[str]) -> BatonHeader | None:
         origin_plan_id=scalars.get("origin_plan_id"),
         sizing_object=scalars.get("sizing_object"),
         roadmap_id=scalars.get("roadmap_id"),
+        deliverable_id=scalars.get("deliverable_id"),
+        kind=scalars.get("kind"),
         origin_goal_id=list(dict.fromkeys(goals)),
     )
 

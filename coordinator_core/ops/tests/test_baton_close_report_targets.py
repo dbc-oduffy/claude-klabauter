@@ -155,6 +155,76 @@ def test_no_citation_absent_and_path_escape_not_read(tmp_path):
     assert ev["target_status"] == t.STATUS_MISSING
 
 
+def _batons(root, **by_rel):
+    heads = {rel: _h(path=rel, **kw) for rel, kw in by_rel.items()}
+    return t.target_evidence(str(root), heads)
+
+
+B1 = "state/handoffs/b1.md"
+B2 = "state/handoffs/b2.md"
+
+
+def test_reverse_deliverable_implemented_and_landed(tmp_path):
+    _w(tmp_path, "docs/plans/a.md", '---\nstatus: implemented\ndeliverable_id: "dlv-x"\n---\n')
+    out = _batons(tmp_path, **{B1: {"deliverable_id": "dlv-x"}})
+    (ev,) = out[B1]
+    assert ev["field"] == "plan.deliverable_id" and ev["done"] and ev["target_path"] == "docs/plans/a.md"
+    _w(tmp_path, "docs/plans/a.md", '---\nstatus: landed\ndeliverable_id: "dlv-x"\n---\n')
+    (ev,) = _batons(tmp_path, **{B1: {"deliverable_id": "dlv-x"}})[B1]
+    assert ev["target_status"] == "landed" and ev["done"] is False
+
+
+def test_reverse_predecessor_handoff_incl_backslash_and_crlf(tmp_path):
+    backslashed = B1.replace("/", chr(92))
+    _w(tmp_path, "docs/plans/a.md",
+       f"---\nstatus: implemented\npredecessor_handoff: {backslashed}\n---\n", crlf=True)
+    (ev,) = _batons(tmp_path, **{B1: {}})[B1]
+    assert ev["field"] == "plan.predecessor_handoff" and ev["done"]
+    assert B2 not in _batons(tmp_path, **{B2: {}})
+
+
+def test_reverse_spinoff_excluded_from_deliverable_join(tmp_path):
+    _w(tmp_path, "docs/plans/a.md", "---\nstatus: implemented\ndeliverable_id: dlv-x\n---\n")
+    assert _batons(tmp_path, **{B1: {"deliverable_id": "dlv-x", "kind": "spinoff"}}) == {}
+
+
+def test_reverse_two_plans_one_deliverable_yield_two_items(tmp_path):
+    _w(tmp_path, "docs/plans/a.md", "---\nstatus: implemented\ndeliverable_id: dlv-x\n---\n")
+    _w(tmp_path, "docs/plans/b.md", "---\nstatus: draft\ndeliverable_id: dlv-x\n---\n")
+    evs = _batons(tmp_path, **{B1: {"deliverable_id": "dlv-x"}})[B1]
+    assert sorted(e["done"] for e in evs) == [False, True]
+
+
+def test_reverse_deliverable_shared_by_two_batons_gives_no_item(tmp_path):
+    _w(tmp_path, "docs/plans/a.md", "---\nstatus: implemented\ndeliverable_id: dlv-x\n---\n")
+    assert _batons(tmp_path, **{B1: {"deliverable_id": "dlv-x"}, B2: {"deliverable_id": "dlv-x"}}) == {}
+
+
+def test_reverse_forward_and_reverse_to_same_plan_dedupe_and_open_once(tmp_path, monkeypatch):
+    _w(tmp_path, "docs/plans/a.md", "---\nplan_id: pln-1\nstatus: implemented\ndeliverable_id: dlv-x\n---\n")
+    _w(tmp_path, "docs/plans/c.md", "---\nstatus: draft\n---\n")
+    opened: list[str] = []
+    real = builtins.open
+
+    def spy(file, *a, **k):
+        opened.append(str(file))
+        return real(file, *a, **k)
+
+    monkeypatch.setattr(t, "open", spy, raising=False)
+    out = _batons(tmp_path, **{B1: {"governing_plan": "docs/plans/a.md", "deliverable_id": "dlv-x",
+                                    "origin_plan_id": "pln-1"}})
+    assert len(out[B1]) == 1
+    plan_opens = [p for p in opened if p.replace("\\", "/").endswith(".md")]
+    assert len(plan_opens) == len(set(plan_opens)) == 2
+
+
+def test_reverse_long_frontmatter_closing_fence_past_first_read(tmp_path):
+    pad = "".join(f"k{i}: {'x' * 60}\n" for i in range(80))
+    _w(tmp_path, "docs/plans/a.md", f"---\n{pad}status: implemented\ndeliverable_id: dlv-x\n---\n")
+    (ev,) = _batons(tmp_path, **{B1: {"deliverable_id": "dlv-x"}})[B1]
+    assert ev["done"]
+
+
 def test_module_imports_no_yaml_or_subprocess():
     import ast
 

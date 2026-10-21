@@ -28,7 +28,7 @@ from coordinator_core.ipc import register_op
 from coordinator_core.lifecycle import main_worktree_root
 from coordinator_core.ops.dispatch_emit import run_artifacts, run_token
 from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT, halted_record_message
-from coordinator_core.ops.dispatch_emit.halted_record_commit import record_dir_changes
+from coordinator_core.ops.dispatch_emit.worktree_snapshot import record_dir_changes
 from coordinator_core.ops.dispatch_emit.halted_run import _STAMP, HALTED_FILE, STATUS_RESUMED
 from coordinator_core.ops.dispatch_emit.ask_fanout_contract import STATUS_HALTED
 from coordinator_core.session.record_homes import home_dir
@@ -129,7 +129,7 @@ def _run_sizing(run_dir: Path) -> Optional[str]:
 def _status(root: Path):
     """One scoped status read over ``STATUS_ROOTS``: ``(snapshot, tracked)`` where ``tracked`` is
     the changed paths git already knows (modified, added, unmerged), or ``None`` on failure."""
-    from coordinator_core.ops.dispatch_emit.terminal_commit import _Snapshot
+    from coordinator_core.ops.dispatch_emit.worktree_snapshot import Snapshot
 
     roots = [r.rstrip("/") for r in STATUS_ROOTS]
     result = run_git(
@@ -159,7 +159,7 @@ def _status(root: Path):
         changed.add(path)
         if kind != b"?":
             tracked.add(path)
-    return _Snapshot(changed, ignored, set(), roots), tracked
+    return Snapshot(changed, ignored, set(), roots), tracked
 
 
 def _top_level_run(rel: str) -> Optional[str]:

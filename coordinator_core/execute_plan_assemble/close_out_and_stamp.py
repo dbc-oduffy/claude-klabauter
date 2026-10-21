@@ -1950,12 +1950,12 @@ def _code_rows_from_checkpoints(
         return text, {}, walk_info
 
     from coordinator_core.frontmatter.schema_validate import check_plan_tasks_source
-    from coordinator_core.ops.dispatch_emit.terminal_commit import _flip_rows_coded
+    from coordinator_core.ops.dispatch_emit.plan_row_coding import flip_rows_coded
 
     updated = text
     coded: dict[str, list[str]] = {}
     for sha, ids in walk.landed.items():
-        updated, flipped = _flip_rows_coded(updated, set(ids), sha)
+        updated, flipped = flip_rows_coded(updated, set(ids), sha)
         if flipped:
             coded[sha] = sorted(flipped)
     if not coded:

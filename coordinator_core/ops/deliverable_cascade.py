@@ -1629,6 +1629,172 @@ def cascade_terminal_sync(params: dict, repo_root: Optional[Path] = None) -> dic
     return result
 
 
+_RUN_KINDS = (("state/sizings/", _SIZING_KIND), ("state/handoffs/", _HANDOFF_KIND))
+
+
+def cascade_run(
+    worktree_root: Path,
+    deliverable_id: str,
+    record_rels: List[str],
+    ship_sha: str,
+    *,
+    repo_root: Optional[Path] = None,
+    plan_path: str = "",
+    at: str = "",
+    caller_session_id: str = "",
+) -> dict:
+    """The terminal cascade over exactly `record_rels` -- the sizing and baton
+    records a run's own manifest names -- never a corpus scan.
+
+    Same predicate, same per-kind advance, same result shape as
+    `cascade_terminal_sync` (minus the follow-up commit: the caller commits the
+    paths in `mutated_paths`). A record outside `state/sizings/` and
+    `state/handoffs/`, or an unreadable one, is named in `unreadable` and sets
+    `scan_incomplete`. A record that is terminal or names another deliverable
+    is skipped, as the corpus scan would skip it.
+
+    `repo_root` is the git COMMON dir (defaults to `<worktree_root>/.git`).
+    `plan_path` is the plan the run implemented (the sizing `plan` FK);
+    `ship_sha` is the handoff `ship-commit` fallback. Leg (b), the live-successor
+    check, still reads the handoff corpus for a handoff-kind record.
+    """
+    worktree_root = Path(worktree_root)
+    common_dir = Path(repo_root) if repo_root is not None else worktree_root / ".git"
+    at = at or _iso_now()
+    sizing_plan_fk = ""
+    if plan_path:
+        try:
+            p = Path(plan_path)
+            resolved = p if p.is_absolute() else worktree_root / p
+            sizing_plan_fk = resolved.resolve().relative_to(worktree_root.resolve()).as_posix()
+        except (OSError, ValueError):
+            sizing_plan_fk = ""
+
+    candidates: List[dict] = []
+    unreadable: List[dict] = []
+    for rel in record_rels:
+        norm = rel.replace("\\", "/")
+        kind = next((k for prefix, k in _RUN_KINDS if norm.startswith(prefix)), None)
+        path = worktree_root / norm
+        if kind is None or path.suffix != kind.suffix:
+            unreadable.append({"path": norm, "reason": "not a sizing or handoff record"})
+            continue
+        try:
+            fm = kind.reader(str(path))
+        except Exception as exc:  # noqa: BLE001 -- named in `unreadable`, never a silent zero
+            unreadable.append({"path": norm, "reason": str(exc)})
+            continue
+        if not fm:
+            unreadable.append({"path": norm, "reason": "empty or unparseable record"})
+            continue
+        artifact_did = fm.get("deliverable_id")
+        did_match = bool(deliverable_id) and isinstance(artifact_did, str) and artifact_did.strip() == deliverable_id
+        if not did_match and not (
+            kind is _SIZING_KIND and sizing_plan_fk and _plan_fk_matches(fm.get("plan"), sizing_plan_fk)
+        ):
+            continue
+        if fm.get(kind.lifecycle_field) in kind.terminal_values:
+            continue
+        candidates.append({"path": path, "fm": fm, "kind": kind})
+
+    advanced: List[dict] = []
+    already_advanced: List[dict] = []
+    refused_reason: Dict[str, str] = {}
+    resolved_this_run: List[str] = []
+    pending = list(candidates)
+    progressed = True
+    passes = 0
+    while pending and progressed and passes < len(candidates):
+        progressed = False
+        passes += 1
+        still_pending: List[dict] = []
+        for cand in pending:
+            path: Path = cand["path"]
+            kind = cand["kind"]
+            fm = cand["fm"]
+            if passes > 1:
+                try:
+                    fm = kind.reader(str(path)) or fm
+                except Exception:  # noqa: BLE001 -- fall back to the snapshot read above
+                    pass
+            refusal = _predicate_refusal_sync(
+                path, fm, common_dir,
+                exclude_children_check=resolved_this_run,
+                kind=kind,
+                caller_session_id=caller_session_id,
+            )
+            if refusal is None:
+                if kind is _SIZING_KIND:
+                    did_advance, write_refusal = _advance_one_sizing(path, sizing_plan_fk, common_dir)
+                else:
+                    did_advance, write_refusal = _advance_one(
+                        path, deliverable_id, at, common_dir, plan_path, "plan", ship_sha,
+                    )
+            else:
+                did_advance, write_refusal = False, refusal
+            if did_advance:
+                entry = {
+                    "handoff_path": str(path),
+                    "path": str(path),
+                    "message": (
+                        f"advanced (status: shipped{', plan: ' + sizing_plan_fk if sizing_plan_fk else ''})"
+                        if kind is _SIZING_KIND
+                        else f"advanced (deployment_state: shipped, advanced_by: {deliverable_id})"
+                    ),
+                }
+                if kind is _HANDOFF_KIND:
+                    baton_rows = resolve_baton_rows(path, deliverable_id, at, common_dir)
+                    entry["baton_rows_advanced"] = baton_rows["advanced"]
+                    entry["baton_rows_unresolved"] = baton_rows["unresolved"]
+                    if baton_rows.get("error"):
+                        entry["baton_rows_error"] = baton_rows["error"]
+                advanced.append(entry)
+                refused_reason.pop(str(path), None)
+                resolved_this_run.append(str(path.resolve()))
+                progressed = True
+            elif refusal is None and write_refusal == _ALREADY_ADVANCED_MARKER:
+                already_advanced.append(
+                    {"handoff_path": str(path), "path": str(path), "reason": write_refusal}
+                )
+                refused_reason.pop(str(path), None)
+                resolved_this_run.append(str(path.resolve()))
+                progressed = True
+            else:
+                refused_reason[str(path)] = write_refusal or "not advanced"
+                still_pending.append(cand)
+        pending = still_pending
+
+    refused = [
+        {
+            "handoff_path": str(c["path"]),
+            "path": str(c["path"]),
+            "reason": refused_reason.get(str(c["path"]), "not advanced"),
+        }
+        for c in pending
+    ]
+    mutated_paths: List[str] = []
+    for entry in advanced:
+        try:
+            mutated_paths.append(
+                Path(entry["path"]).resolve().relative_to(worktree_root.resolve()).as_posix()
+            )
+        except ValueError:
+            mutated_paths.append(entry["path"])
+    return {
+        "exit_code": 0 if advanced else 1,
+        "deliverable_id": deliverable_id,
+        "source_kind": "plan",
+        "source_path": plan_path,
+        "candidates_matched": len(candidates),
+        "advanced": advanced,
+        "refused": refused,
+        "already_advanced": already_advanced,
+        "scan_incomplete": bool(unreadable),
+        "unreadable": unreadable,
+        "mutated_paths": mutated_paths,
+    }
+
+
 async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """Awaitable form of `cascade_terminal_sync` (see its docstring for params and result).
 

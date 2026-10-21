@@ -37,6 +37,18 @@ def test_lf_and_crlf_parse_identically(tmp_path: Path) -> None:
     assert set(a) == set(HEADER_KEYS)
 
 
+def test_deliverable_id_and_kind_read_and_default_none(tmp_path: Path) -> None:
+    _write(tmp_path, "d.md", _baton(extra='deliverable_id: "dlv-x"\nkind: spinoff\n'))
+    _write(tmp_path, "n.md", _baton(extra="deliverable_id: null\n"))
+    _write(tmp_path, "z.md", _baton())
+    headers, _ = readers.read_baton_headers(str(tmp_path))
+    d = headers[f"{REL}/d.md"]
+    assert (d["deliverable_id"], d["kind"]) == ("dlv-x", "spinoff")
+    for name in ("n", "z"):
+        h = headers[f"{REL}/{name}.md"]
+        assert (h["deliverable_id"], h["kind"]) == (None, None)
+
+
 def test_goal_ids_scalar_inline_list_and_block_list(tmp_path: Path) -> None:
     _write(tmp_path, "s.md", _baton(extra='origin_goal_id: "goal-one"\n'))
     _write(tmp_path, "i.md", _baton(extra="origin_goal_id: [goal-a, goal-b]\n"))

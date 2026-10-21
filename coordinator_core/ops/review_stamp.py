@@ -396,14 +396,14 @@ def _mint_judge_only(
     if open_rows:
         raise MintRefusal(f"review-stamp: refusing to mint: spine rows not coded: {', '.join(open_rows)}")
 
-    from coordinator_core.ops.dispatch_emit.terminal_commit import _register_gate, _register_writeback
+    from coordinator_core.ops.dispatch_emit.register_gate import register_gate, register_writeback
 
     try:
         plan_rel = Path(plan_path).resolve().relative_to(Path(repo_root).resolve()).as_posix()
     except ValueError:
         raise MintRefusal(f"review-stamp: {plan_path} is outside {repo_root}; register gate cannot run") from None
     judged = {"criterion": dict(criterion)}
-    gap = _register_gate(repo_root, plan_rel, judged)
+    gap = register_gate(repo_root, plan_rel, judged)
     if gap is not None:
         raise MintRefusal(f"review-stamp: refusing to mint: judge result {rel}: {gap}")
 
@@ -433,7 +433,7 @@ def _mint_judge_only(
         criterion_block={"status": "met", "observation": observation, "sidecar": rel},
         with_delivery=False,
     )
-    written = _register_writeback(repo_root, plan_rel, judged, head)
+    written = register_writeback(repo_root, plan_rel, judged, head)
     if "register_writeback_error" in written:
         raise MintRefusal(f"review-stamp: refusing to mint: register write-back failed: {written['register_writeback_error']}")
     _write_stamp(plan_path, split, stamp)
@@ -1592,16 +1592,16 @@ def refresh_register_rows(plan_path: Path, repo_root: Path, record: Optional[Dic
     stamp whose criterion is already met. `None` when nothing was written."""
     if record is None or record["criterion"].get("status") != "met":
         return None
-    from coordinator_core.ops.dispatch_emit.terminal_commit import _register_gate, _register_writeback
+    from coordinator_core.ops.dispatch_emit.register_gate import register_gate, register_writeback
 
     try:
         plan_rel = Path(plan_path).resolve().relative_to(Path(repo_root).resolve()).as_posix()
     except ValueError:
         return None
     judged = {"criterion": dict(record["criterion"])}
-    if _register_gate(repo_root, plan_rel, judged) is not None:
+    if register_gate(repo_root, plan_rel, judged) is not None:
         return None
-    written = _register_writeback(repo_root, plan_rel, judged, str(record.get("head_sha") or ""))
+    written = register_writeback(repo_root, plan_rel, judged, str(record.get("head_sha") or ""))
     if "register_sizing" not in written:
         return None
     rel = record["record_path"]
@@ -1656,14 +1656,14 @@ def rejudge(plan_path: Path, repo_root: Path) -> Dict[str, Any]:
     observation = str(result.get("observation") or "").strip()
     if not observation:
         return {"status": "unchanged", "reason": f"judge result {rel} records no observation"}
-    from coordinator_core.ops.dispatch_emit.terminal_commit import _register_gate, _register_writeback
+    from coordinator_core.ops.dispatch_emit.register_gate import register_gate, register_writeback
 
     try:
         plan_rel = Path(plan_path).resolve().relative_to(Path(repo_root).resolve()).as_posix()
     except ValueError:
         return {"status": "unchanged", "reason": f"{plan_path} is outside {repo_root}; register gate cannot run"}
     judged = {"criterion": dict(result)}
-    gap = _register_gate(repo_root, plan_rel, judged)
+    gap = register_gate(repo_root, plan_rel, judged)
     if gap is not None:
         return {"status": "unchanged", "reason": f"judge result {rel}: {gap}"}
 
@@ -1672,7 +1672,7 @@ def rejudge(plan_path: Path, repo_root: Path) -> Dict[str, Any]:
     stamp["criterion"] = {"status": "met", "observation": observation, "sidecar": rel}
     _write_stamp(plan_path, split, stamp)
     out = {"status": "rejudged", "reason": f"criterion met per {rel}"}
-    out.update(_register_writeback(repo_root, plan_rel, judged, str(record.get("head_sha") or "")))
+    out.update(register_writeback(repo_root, plan_rel, judged, str(record.get("head_sha") or "")))
     return out
 
 

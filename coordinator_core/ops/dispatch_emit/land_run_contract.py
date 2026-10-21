@@ -1,0 +1,102 @@
+"""Caller-facing contract of ``dispatch.land_run``: op name, mode discriminator, reply keys.
+
+Imports nothing beyond the stdlib so a caller can read the contract without loading a mode module.
+"""
+
+from __future__ import annotations
+
+from typing import Final
+
+#: The literal ``land_run`` registers under; ``@register_op`` spells it out and a test pins the two equal.
+OP_NAME: Final = "dispatch.land_run"
+
+#: ``refused`` value of a reply to a call whose params select more than one record mode.
+REFUSED_MODE_AMBIGUOUS: Final = "mode-ambiguous"
+
+#: Mode -> module exposing ``land(worktree_root, repo_root, params)``; ``land_run`` imports it lazily.
+#: ``product`` has no entry: it is ``land_run`` itself.
+MODE_MODULES: Final = {
+    "halted": "coordinator_core.ops.dispatch_emit.land_run_halt",
+    "grind": "coordinator_core.ops.dispatch_emit.land_run_grind",
+    "fanout": "coordinator_core.ops.dispatch_emit.land_run_fanout",
+}
+
+#: Every key a caller may read from a reply. A key no caller reads is not here; a key a caller reads
+#: is never dropped.
+REPLY_KEYS: Final = frozenset({
+    "committed",
+    "sha",
+    "already_landed",
+    "error",
+    "refused",
+    "run_artifacts",
+    "run_artifact_residue",
+    "close",
+    "fanout",
+    "siblings",
+    "sizing_shipped",
+    "stranded",
+    "incomplete_reasons",
+    "next",
+    "receipts",
+    "review_stamp",
+    "review_stamp_refusal",
+    "criterion_status",
+    "plan_status",
+    "plan_status_reason",
+    "index_stale",
+})
+
+#: Commit-message trailer key; one line per credited row and path the landing leaves out:
+#: ``Row-Unlanded: <row-id> <path> <reason>``.
+UNLANDED_ROW_TRAILER: Final = "Row-Unlanded"
+
+RECONCILE_CLAUSE: Final = (
+    f"If the {OP_NAME} command replies with error code -32004 and its error.data "
+    "carries reconcile_command, run reconcile_command once: a status whose state is finished with "
+    "outcome result is the commit's reply, and finished without a retained result means the commit "
+    f"landed. In every other -32004 case, run the same {OP_NAME} command exactly once "
+    "more and return its reply verbatim; the engine reports a commit this run already landed as "
+    "already_landed and never lands twice. A -32004 is never itself the commit's failure. A re-run "
+    "refused run-token-in-flight is reported as that refusal, because the first call is still running."
+)
+
+
+class ModeAmbiguous(ValueError):
+    """``params`` select more than one record mode; ``refused`` is the reply's ``refused`` value."""
+
+    refused = REFUSED_MODE_AMBIGUOUS
+
+
+def _is_halted(params: dict) -> bool:
+    halted = params.get("halted_by")
+    return isinstance(halted, dict) and isinstance(halted.get("halted"), str) and bool(halted["halted"])
+
+
+def _is_fanout(params: dict) -> bool:
+    spec = params.get("fanout")
+    plans = spec.get("plans") if isinstance(spec, dict) else None
+    return isinstance(plans, list) and bool(plans) and all(isinstance(p, str) and p for p in plans)
+
+
+def _is_grind(params: dict) -> bool:
+    grind = params.get("grind")
+    return isinstance(grind, dict) and isinstance(grind.get("rows"), list)
+
+
+def mode_of(params: object) -> str:
+    """The landing mode of a call: ``fanout``, ``halted``, ``grind``, else ``product``.
+
+    Raises ``ModeAmbiguous`` when ``halted_by`` is carried with ``fanout`` or with ``grind``."""
+    if not isinstance(params, dict):
+        return "product"
+    halted = _is_halted(params)
+    if halted and (_is_fanout(params) or _is_grind(params)):
+        raise ModeAmbiguous("params carry more than one of halted_by, fanout and grind")
+    if _is_fanout(params):
+        return "fanout"
+    if halted:
+        return "halted"
+    if _is_grind(params):
+        return "grind"
+    return "product"

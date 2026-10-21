@@ -51,10 +51,10 @@ def _approved(**kw) -> str:
 
 
 def test_terminal_commit_flip_keeps_the_stamp_valid():
-    from coordinator_core.ops.dispatch_emit.terminal_commit import _flip_rows_coded
+    from coordinator_core.ops.dispatch_emit.plan_row_coding import flip_rows_coded
 
     approved = _approved()
-    flipped, ids = _flip_rows_coded(approved, {"C3", "C4"}, "a" * 40)
+    flipped, ids = flip_rows_coded(approved, {"C3", "C4"}, "a" * 40)
     assert ids == ["C3", "C4"]
     assert "disposition_ref" in flipped and flipped != approved
     assert flipped.index("id: C3") < flipped.index("id: C5")  # coding a row never moves it
@@ -62,10 +62,10 @@ def test_terminal_commit_flip_keeps_the_stamp_valid():
 
 
 def test_terminal_commit_noop_detail_keeps_the_stamp_valid():
-    from coordinator_core.ops.dispatch_emit.terminal_commit import _NOOP_DETAIL, _flip_rows_coded
+    from coordinator_core.ops.dispatch_emit.plan_row_coding import NOOP_DETAIL, flip_rows_coded
 
     approved = _approved()
-    flipped, ids = _flip_rows_coded(approved, {"C3"}, "a" * 40, {"C3": _NOOP_DETAIL})
+    flipped, ids = flip_rows_coded(approved, {"C3"}, "a" * 40, {"C3": NOOP_DETAIL})
     assert ids == ["C3"] and "disposition_detail" in flipped
     assert check_approved_body(flipped)[0] == APPROVED_BODY_OK
     assert check_approved_body(flipped.replace("t5", "t5 edited"))[0] == APPROVED_BODY_CHANGED

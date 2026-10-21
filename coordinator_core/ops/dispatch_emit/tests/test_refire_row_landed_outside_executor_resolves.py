@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.ops.dispatch_emit.sizing_fire import resumable_plan
-from coordinator_core.ops.dispatch_emit.terminal_commit import rows_landed_outside_executor
+from coordinator_core.ops.dispatch_emit.plan_row_coding import rows_landed_outside_executor
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 

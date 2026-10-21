@@ -10,7 +10,7 @@ disk; spawns no subprocess.
 Negative-spec:
   - Never writes ``commit_range.head``: a file cannot name the commit that contains it;
     readers recover it with ``store.introducing_commits``.
-  - Never copies ``_source_rows_by_plan`` / ``_MINTED_SPINE_ORIGIN``; they are imported.
+  - Never copies ``source_rows_by_plan`` / ``MINTED_SPINE_ORIGIN``; they are imported.
   - Never decides ``agent-delivered`` itself: ``verdict.judge_verdict`` does.
   - An empty ``build_run_receipts`` result means the run could not be tied to any baton or
     deliverable (``receipt_coverage: "unidentified"``); it is not an error.
@@ -41,12 +41,9 @@ from coordinator_core.ops.dispatch_emit.commit_request import (
     plan_deliverable_id,
     valid_deliverable_id,
 )
-from coordinator_core.ops.dispatch_emit.terminal_commit import (
-    _MINTED_SPINE_ORIGIN,
-    _SPINE_SUFFIX,
-    _read_rel,
-    _source_rows_by_plan,
-)
+from coordinator_core.ops.dispatch_emit.ask_contract import SPINE_SUFFIX
+from coordinator_core.ops.dispatch_emit.plan_row_coding import MINTED_SPINE_ORIGIN, source_rows_by_plan
+from coordinator_core.ops.dispatch_emit.worktree_snapshot import read_rel
 
 _DERIVATION = "dispatch.terminal_commit"
 _HANDOFF_CLASS = "handoff"
@@ -56,7 +53,7 @@ def _fm(worktree_root: Path, rel: Optional[str]) -> dict:
     """Frontmatter mapping of a repo-relative file; ``{}`` when absent or unparseable."""
     if not rel:
         return {}
-    text = _read_rel(worktree_root, rel)
+    text = read_rel(worktree_root, rel)
     split = split_frontmatter(text.replace("\r\n", "\n")) if text is not None else None
     if split is None:
         return {}
@@ -126,7 +123,7 @@ def _actual_loe(worktree_root: Path, session_id: Optional[str]) -> Optional[str]
 
 def _started_at(worktree_root: Path, script_path: str) -> Optional[str]:
     rel = script_path + ".emitted.json"
-    text = _read_rel(worktree_root, rel)
+    text = read_rel(worktree_root, rel)
     if text is None:
         return None
     try:
@@ -154,7 +151,7 @@ def _plan_rows_landed(
     worktree_root: Path, plan_rel: Optional[str], landed: set
 ) -> bool:
     """Every spine row of the plan is closed (not ``open``) or in ``landed``."""
-    text = _read_rel(worktree_root, plan_rel) if plan_rel else None
+    text = read_rel(worktree_root, plan_rel) if plan_rel else None
     if text is None:
         return False
     located = locate_fenced_block(text.replace("\r\n", "\n"))
@@ -290,7 +287,7 @@ def build_run_receipts(
 
     claims = _handoff_claims(worktree_root, session_id)
 
-    if plan_fm.get("derived_from") == _MINTED_SPINE_ORIGIN:
+    if plan_fm.get("derived_from") == MINTED_SPINE_ORIGIN:
         return _build_inventory(
             worktree_root, request, claims, done_ids, incomplete_ids, record, loe_for, common
         )
@@ -298,7 +295,7 @@ def build_run_receipts(
     deliverable = request.deliverable_id or valid_deliverable_id(plan_fm.get("deliverable_id"))
     sizing_rel = _str(plan_fm.get("sizing_object"))
     landed = (
-        _source_rows_by_plan(worktree_root, plan_rel, list(done_ids)).get(plan_rel, set())
+        source_rows_by_plan(worktree_root, plan_rel, list(done_ids)).get(plan_rel, set())
         if plan_rel
         else set()
     )
@@ -312,7 +309,7 @@ def build_run_receipts(
             batons.append((baton_rel, fm))
     if not batons:
         sized_baton = _str(_fm_sizing(worktree_root, sizing_rel).get("baton"))
-        if sized_baton and _read_rel(worktree_root, sized_baton) is not None:
+        if sized_baton and read_rel(worktree_root, sized_baton) is not None:
             batons.append((sized_baton, _fm(worktree_root, sized_baton)))
     if not batons and not deliverable:
         return []
@@ -340,7 +337,7 @@ def build_run_receipts(
 
 
 def _fm_sizing(worktree_root: Path, sizing_rel: Optional[str]) -> dict:
-    text = _read_rel(worktree_root, sizing_rel) if sizing_rel else None
+    text = read_rel(worktree_root, sizing_rel) if sizing_rel else None
     if text is None:
         return {}
     try:
@@ -362,7 +359,7 @@ def _build_inventory(
 ) -> list[tuple[dict, str]]:
     plan_rel = request.plan_path
     inventory_rel = (
-        plan_rel[: -len(_SPINE_SUFFIX)] + ".md" if plan_rel.endswith(_SPINE_SUFFIX) else None
+        plan_rel[: -len(SPINE_SUFFIX)] + ".md" if plan_rel.endswith(SPINE_SUFFIX) else None
     )
     batons = list(claims)
     source = _str(_fm(worktree_root, inventory_rel).get("source_baton")) if inventory_rel else None
@@ -371,13 +368,13 @@ def _build_inventory(
         if source_rel and source_rel not in batons:
             batons.append(source_rel)
 
-    planned = _source_rows_by_plan(
+    planned = source_rows_by_plan(
         worktree_root, plan_rel, list(done_ids) + list(incomplete_ids)
     )
-    landed = _source_rows_by_plan(worktree_root, plan_rel, list(done_ids))
+    landed = source_rows_by_plan(worktree_root, plan_rel, list(done_ids))
     plans_by_deliverable: dict = {}
     for source_plan in planned:
-        text = _read_rel(worktree_root, source_plan)
+        text = read_rel(worktree_root, source_plan)
         did = plan_deliverable_id(text) if text is not None else None
         if did:
             plans_by_deliverable.setdefault(did, []).append(source_plan)
@@ -421,7 +418,7 @@ def _resolve_source_baton(
     except ValueError:
         return None
     rel_posix = rel.as_posix()
-    return rel_posix if _read_rel(worktree_root, rel_posix) is not None else None
+    return rel_posix if read_rel(worktree_root, rel_posix) is not None else None
 
 
 def write_run_receipts(worktree_root: Path, built: list[tuple[dict, str]]) -> list[str]:

@@ -164,6 +164,33 @@ def mkdtemp_for_clone(source_root: Path, *, prefix: str) -> Path:
     return Path(tempfile.mkdtemp(prefix=prefix, dir=str(scratch)))
 
 
+@contextlib.contextmanager
+def fresh_git_clone(source_root: Path, *, prefix: str, label: str) -> Iterator[Path]:
+    """Yield the path of a throwaway full clone of `source_root`'s HEAD; take it back down on exit.
+
+    The checkout is a local bulk copy (`--local`), not a remote contact; `remote=True` only
+    lifts the seam's ceiling to fit a full-tree checkout. Teardown reaps processes rooted
+    in the clone before removing it, and raises `CloneTeardownLeak` if anything survives.
+    """
+    from coordinator_core.git.run import run_git
+
+    tmp = mkdtemp_for_clone(source_root, prefix=prefix)
+    try:
+        dest = tmp / "clone"
+        result = run_git(
+            ["clone", "-q", "--local", str(source_root), str(dest)], cwd=str(tmp), remote=True
+        )
+        if not result.ok:
+            raise RuntimeError(
+                f"{label}: git clone of {source_root} failed rc={result.returncode}: "
+                f"{result.stderr.strip()}"
+            )
+        yield dest
+    finally:
+        reaped = reap_processes_under(tmp)
+        rmtree_or_raise(tmp, label=label, reaped=reaped)
+
+
 def _normalized(path: Path) -> str:
     resolved = os.path.realpath(str(path))
     return resolved.casefold() if sys.platform in ("win32", "darwin") else resolved

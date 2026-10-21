@@ -8,8 +8,17 @@ call is `full - setup-only` (the run-close spike's method).
 
     python -m coordinator_core.benchmarks.terminal_commit_full_path <dir> [--setup-only] [--kind plan|mise|ask] [--real-shape]
 
-`--real-shape` (ask only) grows the fixture to the incident's tree, corpus and launch dir
-(`build_real_shape`); k stays small because every invocation rebuilds it.
+`--real-shape` (ask only) grows the fixture to the incident's tree, corpus, launch dir and a live
+run token (`build_real_shape`); the call then carries `run_id` and `run_token` as a field call does.
+
+    python -m coordinator_core.benchmarks.terminal_commit_full_path <dir> --kind ask --real-shape --build-only
+    python -m coordinator_core.benchmarks.terminal_commit_full_path --prebuilt <dir> [--setup-only]
+
+`--build-only` builds the real-shape repo under `<dir>` and exits; `--prebuilt` imports and calls
+against it, so the measured process pays no fixture build. `--setup-only --prebuilt` is the
+import-only baseline the net subtracts, and it never mutates the repo. A full `--prebuilt` run
+writes `handler.json` (parent handler process ms) beside the manifest and exits 0 when the path
+completed, whatever the time: the caller gates on it.
 
 `--kind mise` rewires the same repo as an inventory-mode run: the emitted script's marker
 names a minted spine, whose sibling inventory record maps row `P1.C3` to the source plan.
@@ -32,6 +41,7 @@ import subprocess
 import sys
 import uuid
 from pathlib import Path
+from typing import Optional
 
 from coordinator_core.win_portability import no_console_creationflags
 from coordinator_core.benchmarks import declare_benchmark_origin
@@ -39,6 +49,7 @@ from coordinator_core.benchmarks import declare_benchmark_origin
 SESSION_ID = "11111111-2222-3333-4444-555555555555"
 PLAN_ID = "pln-x-123456"
 PLAN_REL = "docs/plan.md"
+SCRIPT_REL = "run.mjs"
 
 _PLAN = f"""---
 title: p
@@ -150,7 +161,7 @@ def build_fixture(parent: Path) -> tuple[Path, str]:
     request = CommitRequest(
         chunks=(ChunkCommit(id="C3", title="t3", paths=("a.py",)),), plan_path=PLAN_REL
     )
-    script = "run.mjs"
+    script = SCRIPT_REL
     (repo / script).write_text("// emitted script\n" + render_marker(request) + "\n", encoding="utf-8")
     return repo, script
 
@@ -279,7 +290,11 @@ REAL_TREE_FILES = 41_500
 REAL_SIZING_RECORDS = 1_250
 REAL_DELIVERY_RECORDS = 120
 REAL_STOPPED_RUNS = 80
-REAL_TRANSCRIPT_MB = 20
+REAL_TRANSCRIPT_MB = 34
+REAL_TRANSCRIPT_LINE_BYTES = 1_000_000
+# A field sizing record parses in ~1.6ms (the live corpus, whole-document yaml); a bare fixture
+# record parses in ~0.3ms, so the cascade's whole-corpus read under-pays by 5x without a log.
+REAL_SIZING_LOG_ENTRIES = 14
 REAL_LAUNCH_ENTRIES = 3_000
 # Setup at real shape costs ~100s of tree process time, so the setup-only subtraction swings by
 # seconds. The handler's own (parent) process time carries no subtraction: over this bar the
@@ -295,26 +310,34 @@ def _write_tree(repo: Path, files: int) -> None:
         (d / f"f{i:05d}.txt").write_text(f"{i}\n", encoding="utf-8")
 
 
-def build_real_shape(repo: Path) -> None:
+def build_real_shape(repo: Path) -> str:
     """Grow an ask fixture to the shape the 2026-10-21 incident ran at, sizes from
     docs/research/2026-10-21-terminal-commit-real-shape-attribution.md: a tracked tree, a
     `state/sizings` corpus, delivery-verdict records, stopped in-window own runs whose
-    submissions point at one large transcript lacking their `tool_use_id`, and a populated
-    launch dir. Everything lives under `repo` or its parent."""
+    submissions point at one large transcript that holds each one's refused submit ahead of
+    its tail window, a populated launch dir, and a live token for the fixture run itself.
+    Everything lives under `repo` or its parent. Returns the run token a field call carries
+    as `run_token`."""
     import json
-    import tempfile
     import time
     from calendar import timegm
 
     from coordinator_core import warp_live
+    from coordinator_core.ops.dispatch_emit import run_token
     from coordinator_core.ops.dispatch_emit.ask_contract import RUN_DIR_ROOT
     from coordinator_core.ops.dispatch_emit.run_token import TTL_SECONDS
 
     _write_tree(repo, REAL_TREE_FILES)
     sizings = repo / "state" / "sizings"
     for i in range(REAL_SIZING_RECORDS):
+        log = "".join(
+            f"  - at: 2026-01-02T00:{k % 60:02d}:00Z\n    by: sizing-agent\n"
+            f"    note: Premise check {k} on record {i} against the plan evidence trail.\n"
+            for k in range(REAL_SIZING_LOG_ENTRIES)
+        )
         (sizings / f"20260102-s{i:05d}.yaml").write_text(
-            _ASK_SIZING.replace("Test intent", f"Intent {i}") + f"deliverable_id: dlv-s{i:05d}-aaaaaa\n",
+            _ASK_SIZING.replace("Test intent", f"Intent {i}")
+            + f"deliverable_id: dlv-s{i:05d}-aaaaaa\nevidence_log:\n{log}",
             encoding="utf-8",
         )
     verdicts = repo / "state" / "delivery-verdicts" / "plan-x"
@@ -329,10 +352,27 @@ def build_real_shape(repo: Path) -> None:
     _git(repo, "commit", "-q", "-m", "real-shape corpus")
 
     transcript = repo.parent / f"{repo.name}-transcript.jsonl"
-    block = (json.dumps({"type": "assistant", "text": "x" * 900}) + "\n") * 1000
+    line = json.dumps({"type": "assistant", "text": "x" * REAL_TRANSCRIPT_LINE_BYTES}) + "\n"
     with open(transcript, "w", encoding="utf-8", newline="\n") as handle:
-        for _ in range(REAL_TRANSCRIPT_MB):
-            handle.write(block)
+        # Each run's refused-submit result sits ahead of the tail window, so the run reads as
+        # ended only after `_earlier_lines` streams the head window for its tool_use_id.
+        for i in range(REAL_STOPPED_RUNS):
+            handle.write(
+                json.dumps(
+                    {
+                        "type": "user",
+                        "message": {
+                            "content": [
+                                {"type": "tool_result", "tool_use_id": f"toolu_absent_{i:06d}", "content": "refused"}
+                            ]
+                        },
+                        "toolUseResult": "refused",
+                    }
+                )
+                + "\n"
+            )
+        for _ in range(REAL_TRANSCRIPT_MB * 1024 * 1024 // len(line)):
+            handle.write(line)
     now = time.time()
     for i in range(REAL_STOPPED_RUNS):
         t = time.gmtime(now - 60 - i)
@@ -360,6 +400,13 @@ def build_real_shape(repo: Path) -> None:
     launch.mkdir()
     for i in range(REAL_LAUNCH_ENTRIES):
         (launch / f"launch-{i:05d}.txt").write_text("", encoding="utf-8")
+    point_temp_at(launch)
+    return run_token.mint(repo, ASK_RUN, SCRIPT_REL, session_id=SESSION_ID, sizing_rel=ASK_SIZING_REL)
+
+
+def point_temp_at(launch: Path) -> None:
+    import tempfile
+
     for key in ("TMPDIR", "TEMP", "TMP"):
         os.environ[key] = str(launch)
     tempfile.tempdir = str(launch)
@@ -375,7 +422,7 @@ def _prepare_close(repo: Path) -> None:
     from coordinator_core.session import claims
 
     outbox = repo.parent / f"{repo.name}-lessons-outbox"
-    outbox.mkdir()
+    outbox.mkdir(exist_ok=True)
     os.environ["LESSON_PROMOTE_OUTBOX_ROOT"] = str(outbox)
     os.environ["COORDINATOR_SESSION_ID"] = SESSION_ID
     noop = repo.parent / "close_job_noop.py"
@@ -415,7 +462,7 @@ def _close_failure(out: dict) -> str:
     return ""
 
 
-def _run_full_path(repo: Path, script: str, kind: str = "plan") -> dict:
+def _run_full_path(repo: Path, script: str, kind: str = "plan", run_token: Optional[str] = None) -> dict:
     from coordinator_core.ops.dispatch_emit import terminal_commit
 
     params = {
@@ -426,7 +473,28 @@ def _run_full_path(repo: Path, script: str, kind: str = "plan") -> dict:
     }
     if kind == "ask":
         params["ledger_verdict"] = {"items": [{"id": "R1", "status": "met"}]}
+    if run_token is not None:
+        params["run_id"] = ASK_RUN
+        params["run_token"] = run_token
     return terminal_commit._handler(params, repo_root=repo / ".git")
+
+
+PREBUILT_MANIFEST = "prebuilt.json"
+HANDLER_RESULT = "handler.json"
+
+
+def _build_only(parent: Path) -> int:
+    """Build the real-shape ask repo under `parent` and record what the measured process needs."""
+    import json
+
+    repo, script = build_ask_fixture(parent)
+    token = build_real_shape(repo)
+    launch = repo.parent / f"{repo.name}-tmp"
+    (parent / PREBUILT_MANIFEST).write_text(
+        json.dumps({"repo": str(repo), "script": script, "launch": str(launch), "run_token": token}),
+        encoding="utf-8",
+    )
+    return 0
 
 
 def main(argv: list[str]) -> int:
@@ -437,19 +505,47 @@ def main(argv: list[str]) -> int:
         at = argv.index("--kind")
         kind = argv[at + 1] if at + 1 < len(argv) else ""
         del argv[at : at + 2]
+    prebuilt: Optional[str] = None
+    if "--prebuilt" in argv:
+        at = argv.index("--prebuilt")
+        prebuilt = argv[at + 1] if at + 1 < len(argv) else ""
+        del argv[at : at + 2]
     real_shape = "--real-shape" in argv
     args = [a for a in argv if not a.startswith("--")]
-    unknown = [a for a in argv if a.startswith("--") and a not in ("--setup-only", "--real-shape")]
+    flags = ("--setup-only", "--real-shape", "--build-only")
+    unknown = [a for a in argv if a.startswith("--") and a not in flags]
     builders = {"plan": build_fixture, "mise": build_mise_fixture, "ask": build_ask_fixture}
-    if len(args) != 1 or unknown or kind not in builders or (real_shape and kind != "ask"):
+    build_only = "--build-only" in argv
+    bad_shape = (real_shape and kind != "ask") or (build_only and not (real_shape and kind == "ask"))
+    if (
+        unknown
+        or kind not in builders
+        or bad_shape
+        or prebuilt == ""
+        or len(args) != (0 if prebuilt is not None else 1)
+        or (prebuilt is not None and (build_only or real_shape))
+    ):
         print(
-            "usage: terminal_commit_full_path <dir> [--setup-only] [--kind plan|mise|ask] [--real-shape (ask only)]",
+            "usage: terminal_commit_full_path <dir> [--setup-only] [--kind plan|mise|ask] "
+            "[--real-shape (ask only)] [--build-only (with --kind ask --real-shape)]\n"
+            "       terminal_commit_full_path --prebuilt <dir> [--setup-only]",
             file=sys.stderr,
         )
         return 2
-    repo, script = builders[kind](Path(args[0]))
-    if real_shape:
-        build_real_shape(repo)
+    if build_only:
+        return _build_only(Path(args[0]))
+    token: Optional[str] = None
+    if prebuilt is not None:
+        import json
+
+        manifest = json.loads((Path(prebuilt) / PREBUILT_MANIFEST).read_text(encoding="utf-8"))
+        repo, script, token = Path(manifest["repo"]), manifest["script"], manifest["run_token"]
+        kind, real_shape = "ask", True
+        point_temp_at(Path(manifest["launch"]))
+    else:
+        repo, script = builders[kind](Path(args[0]))
+        if real_shape:
+            token = build_real_shape(repo)
     from coordinator_core.ops.dispatch_emit import terminal_commit  # noqa: F401  (loaded in both modes)
 
     _prepare_close(repo)
@@ -458,9 +554,13 @@ def main(argv: list[str]) -> int:
     import time
 
     started = time.process_time()
-    out = _run_full_path(repo, script, kind)
+    out = _run_full_path(repo, script, kind, token)
     handler_ms = (time.process_time() - started) * 1000.0
-    if real_shape and handler_ms >= REAL_SHAPE_PARENT_BAR_MS:
+    if prebuilt is not None:
+        import json
+
+        (Path(prebuilt) / HANDLER_RESULT).write_text(json.dumps({"handler_ms": handler_ms}), encoding="utf-8")
+    elif real_shape and handler_ms >= REAL_SHAPE_PARENT_BAR_MS:
         print(
             f"real-shape handler parent process time {handler_ms:.0f}ms is over the "
             f"{REAL_SHAPE_PARENT_BAR_MS:.0f}ms bar",

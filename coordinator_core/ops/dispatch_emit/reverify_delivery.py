@@ -1056,15 +1056,15 @@ def _hand_worked_run_base(repo_root: Path, plan_path: str, fm: Any) -> Optional[
 
 
 def _register_gate_demotes(repo_root: Path, plan_path: str, criterion: dict) -> bool:
-    """True when `terminal_commit._register_gate` would demote this met stamp criterion to
+    """True when `register_gate.register_gate` would demote this met stamp criterion to
     `not_met`; the gate runs on a copy, so nothing is written."""
-    from coordinator_core.ops.dispatch_emit.terminal_commit import _register_gate
+    from coordinator_core.ops.dispatch_emit.register_gate import register_gate
 
     try:
         plan_rel = Path(plan_path).resolve().relative_to(Path(repo_root).resolve()).as_posix()
     except ValueError:
         return False
-    return _register_gate(repo_root, plan_rel, {"criterion": dict(criterion)}) is not None
+    return register_gate(repo_root, plan_rel, {"criterion": dict(criterion)}) is not None
 
 
 def _rejudge_subject(repo_root: Path, plan_path: str) -> "tuple[Optional[str], Optional[str]]":
@@ -1191,7 +1191,7 @@ def record_criterion_rejudge(
     }
     rows = criterion.get("register_rows")
     if isinstance(rows, list):
-        # review_stamp.rejudge runs terminal_commit's register gate over these.
+        # review_stamp.rejudge runs the register gate over these.
         fm["criterion"]["register_rows"] = [r for r in rows if isinstance(r, dict)]
     target = repo_root / rel
     target.parent.mkdir(parents=True, exist_ok=True)

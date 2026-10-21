@@ -1,10 +1,12 @@
-"""The terminal commit's register gate demotes a met criterion unless every claimed row passes."""
+"""The register gate demotes a met criterion unless every claimed row passes; the write-back cascades verdicts into the sizing."""
 
 from __future__ import annotations
 
 import pytest
+import yaml
 
-from coordinator_core.ops.dispatch_emit.terminal_commit import _register_gate
+from coordinator_core.ops.dispatch_emit.register_gate import register_gate as _register_gate
+from coordinator_core.ops.dispatch_emit.register_gate import register_writeback
 
 _SIZING = "state/sizings/2026-10-09-x.yaml"
 _PLAN = "docs/plans/p.md"
@@ -389,3 +391,126 @@ def test_plan_without_pins_ignores_a_source_text_edit(repo):
     _set_register(repo, _ROW_T.replace("shape back", "edited"))
     _own_plan(repo, f"register_claims:\n  sizing: {_SIZING}\n  rows: [z]\n")
     assert _register_gate(repo, _PLAN, _review([_good(id="z")])) is None
+
+
+_WB_HEAD = """schema: sizing-object
+intent: "x"
+estimate:
+  tshirt: S
+  provisional: true
+route: spec-dispatch
+detents: []
+fork: null
+xl_exit: null
+status: routed
+premise:
+  provenance: read
+  evidence: e
+"""
+_WB_TAIL = "# trailer outside the register\n"
+_WB_SOURCES = [{"doc": "brief.md", "ref": "r@abc"}]
+
+
+def _wb_row(rid, claimed=True, **kw):
+    row = {"id": rid, "source_text": f"t {rid}", "surface": "ui", "status": "open",
+           "claimed_by": [_PLAN] if claimed else [], "wired": False}
+    row.update(kw)
+    return row
+
+
+def _wb_sizing_text(rows):
+    block = yaml.safe_dump({"requirement_register": {"sources": _WB_SOURCES, "rows": rows}}, sort_keys=False)
+    return _WB_HEAD + block + _WB_TAIL
+
+
+@pytest.fixture
+def wb_repo(tmp_path):
+    """A bare-bones git dir: ``locked_rmw`` locks under the git common dir, resolved in-process."""
+    git_dir = tmp_path / ".git"
+    (git_dir / "refs").mkdir(parents=True)
+    (git_dir / "objects").mkdir()
+    (git_dir / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
+    (tmp_path / "state" / "sizings").mkdir(parents=True)
+    (tmp_path / "docs" / "plans").mkdir(parents=True)
+    (tmp_path / _SIZING).write_text(
+        _wb_sizing_text([_wb_row("r1"), _wb_row("r2"), _wb_row("r3", claimed=False)]), encoding="utf-8"
+    )
+    (tmp_path / _PLAN).write_text(f"---\nsizing_object: {_SIZING}\n---\nbody\n", encoding="utf-8")
+    return tmp_path
+
+
+def _wb_judged(rid, status="met", wired=True):
+    return {"id": rid, "claim": "this-plan", "status": status, "wired": wired, "surface": "ui",
+            "observed_ref": "x.py::f"}
+
+
+def _wb_review(rows, status="met"):
+    return {"integration_stem": "s", "slices": 1, "fixes": 0,
+            "criterion": {"status": status, "observation": "ok", "register_rows": rows}}
+
+
+def _wb_register(root):
+    return yaml.safe_load((root / _SIZING).read_text(encoding="utf-8"))["requirement_register"]
+
+
+def test_writeback_met_rows_get_status_wired_met_by_progress_and_rollup(wb_repo):
+    out = register_writeback(wb_repo, _PLAN, _wb_review([_wb_judged("r1"), _wb_judged("r2")]), "abc1234")
+
+    assert out == {"register_sizing": _SIZING}
+    reg = _wb_register(wb_repo)
+    r1, r2, r3 = reg["rows"]
+    assert (r1["status"], r1["wired"], r1["met_by"]) == ("met", True, [f"{_PLAN}@abc1234"])
+    assert r1["last_progress_at"] and r2["status"] == "met"
+    assert r3["status"] == "open" and "met_by" not in r3
+    assert reg["rollup"]["coverage"] == {"met": 2, "total": 3}
+    assert reg["rollup"]["met"] == 2 and reg["rollup"]["unclaimed"] == 1
+    assert reg["sources"] == _WB_SOURCES
+
+
+def test_writeback_moves_row_claimed_only_through_register_claims(wb_repo):
+    (wb_repo / _PLAN).write_text(
+        f"---\nsizing_object: {_SIZING}\nregister_claims:\n  sizing: {_SIZING}\n  rows: [r3]\n---\nbody\n",
+        encoding="utf-8",
+    )
+
+    out = register_writeback(wb_repo, _PLAN, _wb_review([_wb_judged("r3")]), "abc1234")
+
+    assert out == {"register_sizing": _SIZING}
+    r3 = _wb_register(wb_repo)["rows"][2]
+    assert (r3["status"], r3["wired"], r3["met_by"]) == ("met", True, [f"{_PLAN}@abc1234"])
+
+
+def test_writeback_not_met_run_appends_no_met_by_and_advances_progress(wb_repo):
+    register_writeback(
+        wb_repo, _PLAN, _wb_review([_wb_judged("r1", "partial", False)], status="not_met"), "abc1234"
+    )
+
+    r1 = _wb_register(wb_repo)["rows"][0]
+    assert r1["status"] == "open" and "met_by" not in r1
+    assert r1["last_progress_at"]
+
+
+def test_writeback_leaves_bytes_outside_the_register_block_unchanged(wb_repo):
+    register_writeback(wb_repo, _PLAN, _wb_review([_wb_judged("r1")]), "abc1234")
+
+    text = (wb_repo / _SIZING).read_text(encoding="utf-8")
+    assert text.startswith(_WB_HEAD) and text.endswith(_WB_TAIL)
+
+
+def test_schema_invalid_writeback_is_refused_and_named_and_file_untouched(wb_repo):
+    bad = _wb_sizing_text([_wb_row("r1", surface="nope")])
+    (wb_repo / _SIZING).write_text(bad, encoding="utf-8")
+
+    out = register_writeback(wb_repo, _PLAN, _wb_review([_wb_judged("r1")]), "abc1234")
+
+    assert "register write-back refused" in out["register_writeback_error"]
+    assert (wb_repo / _SIZING).read_text(encoding="utf-8") == bad
+
+
+def test_no_judged_rows_or_no_register_writeback_is_a_noop(wb_repo):
+    before = (wb_repo / _SIZING).read_text(encoding="utf-8")
+    assert register_writeback(wb_repo, _PLAN, _wb_review([]), "abc1234") == {}
+    assert (wb_repo / _SIZING).read_text(encoding="utf-8") == before
+    (wb_repo / _SIZING).write_text(_WB_HEAD, encoding="utf-8")
+    assert register_writeback(wb_repo, _PLAN, _wb_review([_wb_judged("r1")]), "abc1234") == {}
+    assert (wb_repo / _SIZING).read_text(encoding="utf-8") == _WB_HEAD

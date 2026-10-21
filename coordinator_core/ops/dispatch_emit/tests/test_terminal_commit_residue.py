@@ -13,6 +13,7 @@ from coordinator_core.ops.dispatch_emit.commit_request import (
     CommitRequest,
     render_marker,
 )
+from coordinator_core.ops.dispatch_emit.worktree_snapshot import worktree_snapshot
 from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
@@ -54,7 +55,7 @@ def _run(repo: Path, request: CommitRequest, **params) -> dict:
 
 def _residue(repo: Path, request: CommitRequest, carried: set, **kw) -> dict:
     paths = [p for c in request.chunks for p in c.paths]
-    snap = terminal_commit._worktree_snapshot(repo, paths, [], [])
+    snap = worktree_snapshot(repo, paths, [], [])
     from coordinator_core.ops.ceremony import commit_v2 as commit_v2_mod
 
     return terminal_commit._commit_residue(

@@ -529,6 +529,21 @@ def _baton_arg(record: dict) -> dict:
     }
 
 
+def _broken_link_reason(r: dict) -> str:
+    """One baton's broken-link cause, read from the gate record: an ambiguous tie carries the
+    gate's own `repair`; a present-but-unresolved `governing_plan` is named as not linking."""
+    amb = r.get("ambiguous_plan_link")
+    if amb:
+        repair = amb.get("repair") if isinstance(amb, dict) else None
+        return f"{r['id']}: " + (repair or "several plans tie; write `governing_plan:` to pick one")
+    claim = r.get("unlinked_plan_claim")
+    path = (claim.get("path") if isinstance(claim, dict) else claim) or "(unnamed)"
+    return (
+        f"{r['id']}: declared plan {path} did not link (plan missing, status not linkable, "
+        "or no back-link to this baton); check the plan, not the baton's field"
+    )
+
+
 def _unlinked_split_line(records: list[dict]) -> str:
     """Why each unlinked baton has no `planPath`, and whether any of it needs the driver.
 
@@ -555,10 +570,8 @@ def _unlinked_split_line(records: list[dict]) -> str:
         f"{len(buckets['held'])} held, {len(buckets['broken'])} broken link. "
     )
     if buckets["broken"]:
-        return (
-            split + f"Action: {buckets['broken']} name a plan no link basis resolves; "
-            "write `governing_plan:` onto each, re-freeze."
-        )
+        reasons = "; ".join(_broken_link_reason(r) for r in records if r["id"] in buckets["broken"])
+        return split + f"Action: {buckets['broken']} -- {reasons}"
     return split + "No action: the wave plans the rest."
 
 

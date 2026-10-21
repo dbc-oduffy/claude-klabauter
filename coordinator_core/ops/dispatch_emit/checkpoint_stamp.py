@@ -202,22 +202,19 @@ def stamp_checkpoint(
         if cp is None:
             return {}
         from coordinator_core.frontmatter.schema_validate import check_plan_tasks_source
-        from coordinator_core.ops.dispatch_emit.terminal_commit import (
-            _flip_rows_coded,
-            _read_rel,
-            _source_rows_by_plan,
-        )
+        from coordinator_core.ops.dispatch_emit.plan_row_coding import flip_rows_coded, source_rows_by_plan
+        from coordinator_core.ops.dispatch_emit.worktree_snapshot import read_rel
         from coordinator_core.session.claimed_write import replace_text
 
         ids = sorted(cp.row_ids - cp.gate_owed - cp.stop_rule)
-        by_plan = _source_rows_by_plan(worktree_root, cp.plan_rel, ids)
+        by_plan = source_rows_by_plan(worktree_root, cp.plan_rel, ids)
         rows_coded: dict = {}
         state: dict = {}
         for plan_rel in sorted(by_plan):
-            original = _read_rel(worktree_root, plan_rel)
+            original = read_rel(worktree_root, plan_rel)
             if original is None:
                 continue
-            updated, flipped = _flip_rows_coded(original, set(by_plan[plan_rel]), sha)
+            updated, flipped = flip_rows_coded(original, set(by_plan[plan_rel]), sha)
             if not flipped:
                 continue
             invalid = check_plan_tasks_source(updated)

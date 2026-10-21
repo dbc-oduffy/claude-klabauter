@@ -9,7 +9,7 @@ import yaml
 
 from coordinator_core.frontmatter.schema_validate import parse_frontmatter, validate_frontmatter
 from coordinator_core.ops import plan_status_transition as pst
-from coordinator_core.ops.dispatch_emit import terminal_commit
+from coordinator_core.ops.dispatch_emit import register_gate
 from coordinator_core.ops.tests.test_plan_status_transition_goal_refusal import _init_repo, _run_git
 from coordinator_core.ops.tests.test_plan_status_transition_records_exit_criterion import (
     _FLAGS,
@@ -130,7 +130,7 @@ def test_judge_writeback_ahead_of_the_stamp_yields_the_all_zero_block(tmp_path):
         {"id": "R1", "claim": "this-plan", "status": "met", "wired": True, "surface": "ui",
          "observed_ref": "x.py::f"}]}}
 
-    assert terminal_commit._register_writeback(tmp_path, "plan.md", judged, "abc1234") == {
+    assert register_gate.register_writeback(tmp_path, "plan.md", judged, "abc1234") == {
         "register_sizing": _REGISTER_SIZING}
     assert _stamp(plan) in (0, 2)
 

@@ -54,6 +54,34 @@ def test_sign_off_writes_clone_local_config(tiny_repo):
     assert out.strip() == "false"
 
 
+def test_memoised_report_commits_and_names_label(tiny_repo):
+    rep = clp.build_report(tiny_repo, "phased", 2, "off", memoise="commit._identity")
+    assert rep["memoised"] == "commit._identity"
+    assert rep["memoise_served"] >= 0
+    assert rep["committed"] is True
+    assert _KEYS <= set(rep)
+    assert "caller_phases" not in rep
+
+
+def test_memoise_refuses_non_allowlisted_label(tiny_repo, capsys):
+    with pytest.raises(ValueError, match="allowlist"):
+        clp.build_report(tiny_repo, "phased", 1, "off", memoise="commit.cas_ref")
+    with pytest.raises(SystemExit) as exc:
+        clp.main([str(tiny_repo), "phased", "--memoise", "commit.cas_ref"])
+    assert exc.value.code == 2
+    assert "commit._identity" in capsys.readouterr().err
+
+
+def test_with_caller_brackets_both_callers(tiny_repo):
+    rep = clp.build_report(tiny_repo, "phased", 2, "off", with_caller=True)
+    assert _KEYS <= set(rep) and rep["committed"] is True
+    assert set(rep["caller_phases"]) == {"caller.compose_message", "caller.apply_missing_trailers"}
+    for v in rep["caller_phases"].values():
+        assert isinstance(v, float) and v >= 0
+    assert not any(k.startswith("caller.") for k in rep["phases"])
+    assert "memoised" not in rep
+
+
 def test_rejects_unknown_arms(tiny_repo):
     with pytest.raises(ValueError):
         clp.build_report(tiny_repo, "bogus", 1, "off")

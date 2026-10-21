@@ -5,7 +5,7 @@ Purpose: a Chunk-table row whose disposition says the work is already in the
 tree never reaches the minted spine, so nothing else ever marks its plan's
 rows. This closes that gap at emit time: each such item's `open` rows go to
 `coded` with `disposition_ref: <HEAD sha>` through
-`terminal_commit._flip_rows_coded`, the same line-level stamper the terminal
+`plan_row_coding.flip_rows_coded`, the same line-level stamper the terminal
 commit uses. A row already in any other disposition is left alone.
 
 Writes plan documents and commits nothing; the caller reports the files.
@@ -31,7 +31,7 @@ from coordinator_core.ops.dispatch_emit.inventory_mint import (
     _strip_backtick,
     parse_chunk_table,
 )
-from coordinator_core.ops.dispatch_emit.terminal_commit import _flip_rows_coded
+from coordinator_core.ops.dispatch_emit.plan_row_coding import flip_rows_coded
 from coordinator_core.ops.plan_tasks_render import load_rows
 from coordinator_core.session.claimed_write import replace_text
 
@@ -80,7 +80,7 @@ def reconcile_landed(inventory_path: Path) -> Dict[str, List[str]]:
                 targets.add(single)
             else:
                 targets |= ids
-        updated, flipped = _flip_rows_coded(text, targets, sha)
+        updated, flipped = flip_rows_coded(text, targets, sha)
         if not flipped:
             continue
         if check_plan_tasks_source(updated) is not None and check_plan_tasks_source(text) is None:

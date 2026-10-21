@@ -38,6 +38,15 @@ def test_header_keys():
     assert set(c.BatonHeader.__annotations__) == set(c.HEADER_KEYS)
 
 
+def test_header_keys_pinned_order_and_reverse_fields():
+    assert c.HEADER_KEYS == (
+        "path", "status", "predecessor", "governing_plan", "origin_plan_id",
+        "sizing_object", "roadmap_id", "origin_goal_id", "deliverable_id", "kind",
+    )
+    assert c.REVERSE_FIELD_DELIVERABLE == "plan.deliverable_id"
+    assert c.REVERSE_FIELD_PREDECESSOR == "plan.predecessor_handoff"
+
+
 def test_result_keys():
     assert set(c.CloseReport.__annotations__) == set(c.REPORT_KEYS)
     assert set(c.ClosableItem.__annotations__) == {"handoff_path", "evidence"}

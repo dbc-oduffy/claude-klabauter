@@ -1,6 +1,6 @@
 """coordinator_core.git.scoped_worktree_status -- the in-process stand-in for the
 `git status --porcelain=v2 --untracked-files=all --ignored=matching` spawn that
-`dispatch_emit.terminal_commit._worktree_snapshot` issues, plus the cheap gate
+`dispatch_emit.worktree_snapshot.worktree_snapshot` issues, plus the cheap gate
 that decides whether an in-process answer may be attempted at all.
 
 Contract: `scoped_worktree_status` returns `(changed, ignored)` equal to what

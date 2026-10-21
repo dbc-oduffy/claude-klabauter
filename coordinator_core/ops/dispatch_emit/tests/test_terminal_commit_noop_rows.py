@@ -46,18 +46,6 @@ def _rows(text: str) -> dict:
     return {r["id"]: r for r in yaml.safe_load(locate_fenced_block(text).body)}
 
 
-def test_flip_stamps_noop_rows_with_the_no_change_detail():
-    text, flipped = terminal_commit._flip_rows_coded(
-        _PLAN, {"C1", "C2"}, _SHA, {"C2": terminal_commit._NOOP_DETAIL}
-    )
-    rows = _rows(text)
-    assert flipped == ["C1", "C2"]
-    assert rows["C2"]["disposition"] == "coded"
-    assert rows["C2"]["disposition_ref"] == _SHA
-    assert rows["C2"]["disposition_detail"] == terminal_commit._NOOP_DETAIL
-    assert "disposition_detail" not in rows["C1"]
-
-
 def test_coded_stamp_closes_noop_rows_beside_hunk_rows(tmp_path, monkeypatch):
     rel = "docs/plan.md"
     (tmp_path / rel).parent.mkdir()

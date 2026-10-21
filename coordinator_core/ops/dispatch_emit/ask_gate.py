@@ -569,7 +569,7 @@ def _stamp_landed_rows(root: Path, plan_rel: str, landed: Sequence) -> None:
     A stamp that would break the spine's source check, or an unreadable plan, is not written. No
     git spawn."""
     from coordinator_core.frontmatter.schema_validate import check_plan_tasks_source
-    from coordinator_core.ops.dispatch_emit.terminal_commit import _flip_rows_coded
+    from coordinator_core.ops.dispatch_emit.plan_row_coding import flip_rows_coded
     from coordinator_core.session.claimed_write import replace_text
 
     plan = root / plan_rel
@@ -579,7 +579,7 @@ def _stamp_landed_rows(root: Path, plan_rel: str, landed: Sequence) -> None:
         return
     updated = text
     for sha in dict.fromkeys(s for _, s in landed):
-        updated, _ = _flip_rows_coded(updated, {i for i, s in landed if s == sha}, sha)
+        updated, _ = flip_rows_coded(updated, {i for i, s in landed if s == sha}, sha)
     if updated == text:
         return
     if check_plan_tasks_source(updated) is not None and check_plan_tasks_source(text) is None:

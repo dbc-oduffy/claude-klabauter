@@ -46,6 +46,18 @@ _PHASE_TARGETS = (
     ("coordinator_core.git.commit", "cas_ref"),
     ("coordinator_core.git.index_write", "splice_index"),
 )
+
+# Phase labels `--memoise` accepts: read-only calls whose repeat result is the first result
+# within one commit. Anything else (writers, ref movers, signers) exits 2.
+_MEMOISE_ALLOWLIST = (
+    "commit._identity",
+    "commit._gpgsign_enabled",
+    "commit.head_sha",
+    "commit.read_tree_spine",
+    "commit.parse_index_identity",
+    "checkpoint_guard.checkpoint_refusal",
+    "action_guard.assert_pathspec_shape_permitted",
+)
 _IMPORT_PHASES = (
     "coordinator_core.git.action_guard",
     "coordinator_core.git.rollback_check",
@@ -132,8 +144,15 @@ class _ChildMeter:
         return _ms((r.ru_utime + r.ru_stime) - self._child0)
 
 
-def _instrument(acc: Dict[str, float], counts: Dict[str, int]) -> Callable[[], None]:
-    """Wrap every available phase target in a process_time bracket; return the restorer."""
+def _instrument(acc: Dict[str, float], counts: Dict[str, int],
+                memoise: Optional[str] = None) -> Callable[[], None]:
+    """Wrap every available phase target in a process_time bracket; return the restorer.
+
+    `memoise` is the removal-check variant "cache on the first call inside the bracket and
+    serve later calls": the first call per argument repr is timed as usual, repeats return the
+    cached result untimed, so the drop in `parent_ms` against an unmemoised run is the repeat
+    calls' share of that phase.
+    """
     undo = []
     for modname, attr in _PHASE_TARGETS:
         try:
@@ -146,8 +165,22 @@ def _instrument(acc: Dict[str, float], counts: Dict[str, int]) -> Callable[[], N
         label = f"{modname.rsplit('.', 1)[-1]}.{attr}"
 
         def make(fn=fn, label=label):
+            cache: Dict[str, object] = {}
+
             @functools.wraps(fn)
             def wrapper(*a, **k):
+                if label == memoise:
+                    key = repr((a, sorted(k.items())))
+                    if key in cache:
+                        counts[label + ".served"] += 1
+                        return cache[key]
+                    t = time.process_time()
+                    try:
+                        cache[key] = fn(*a, **k)
+                        return cache[key]
+                    finally:
+                        acc[label] += time.process_time() - t
+                        counts[label] += 1
                 t = time.process_time()
                 try:
                     return fn(*a, **k)
@@ -176,12 +209,35 @@ def _commit(repo: Path, paths: List[str], message: str):
     )
 
 
-def build_report(repo, mode: str = "phased", n_paths: int = 30, sign: str = "config") -> dict:
-    """Make one commit of `n_paths` touched tracked files in `repo` and return the report."""
+def _bracket_callers(repo: Path, paths: List[str]) -> Dict[str, float]:
+    """Time one `compose_message` and one `apply_missing_trailers`, shaped as the pipeline probe."""
+    from coordinator_core.git.commit_trailers import apply_missing_trailers
+    from coordinator_core.ops.ceremony.commit_message import compose_message
+    t = time.process_time()
+    message = compose_message(subject="commit-leg-profile")
+    compose = time.process_time() - t
+    t = time.process_time()
+    apply_missing_trailers(message, repo, paths)
+    trailers = time.process_time() - t
+    return {"caller.compose_message": _ms(compose),
+            "caller.apply_missing_trailers": _ms(trailers)}
+
+
+def build_report(repo, mode: str = "phased", n_paths: int = 30, sign: str = "config",
+                 memoise: Optional[str] = None, with_caller: bool = False) -> dict:
+    """Make one commit of `n_paths` touched tracked files in `repo` and return the report.
+
+    `memoise` (an allowlisted phase label) adds `memoised`; `with_caller` adds `caller_phases`.
+    Both are additive: the ten base report keys and `parent_ms` keep their meaning.
+    """
     if mode not in ("phased", "cprofile"):
         raise ValueError(f"mode must be phased or cprofile, got {mode!r}")
     if sign not in ("config", "off"):
         raise ValueError(f"sign must be config or off, got {sign!r}")
+    if memoise is not None and memoise not in _MEMOISE_ALLOWLIST:
+        raise ValueError(
+            f"memoise label {memoise!r} not allowed; read-only allowlist: "
+            + ", ".join(_MEMOISE_ALLOWLIST))
     repo = Path(repo)
     _install_spawn_counter()
     if sign == "off":
@@ -196,7 +252,8 @@ def build_report(repo, mode: str = "phased", n_paths: int = 30, sign: str = "con
         t = time.process_time()
         importlib.import_module(modname)
         acc[f"import.{modname.rsplit('.', 1)[-1]}"] += time.process_time() - t
-    restore = _instrument(acc, counts)
+    caller_phases = _bracket_callers(repo, paths) if with_caller else None
+    restore = _instrument(acc, counts, memoise)
 
     del _SPAWNS[:]
     meter = _ChildMeter()
@@ -235,6 +292,11 @@ def build_report(repo, mode: str = "phased", n_paths: int = 30, sign: str = "con
         "spawns": len(_SPAWNS),
         "phases": {k: _ms(v) for k, v in sorted(acc.items())},
     }
+    if memoise is not None:
+        report["memoised"] = memoise
+        report["memoise_served"] = counts.get(memoise + ".served", 0)
+    if caller_phases is not None:
+        report["caller_phases"] = caller_phases
     if error is not None:
         report["error"] = error
     if profiler is not None:
@@ -251,14 +313,20 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("mode", choices=("phased", "cprofile"))
     ap.add_argument("--paths", type=int, default=30)
     ap.add_argument("--sign", choices=("config", "off"), default="config")
+    ap.add_argument("--memoise", metavar="LABEL", default=None)
+    ap.add_argument("--with-caller", action="store_true")
     args = ap.parse_args(argv)
+    if args.memoise is not None and args.memoise not in _MEMOISE_ALLOWLIST:
+        ap.error(f"--memoise {args.memoise!r} not allowed; read-only allowlist: "
+                 + ", ".join(_MEMOISE_ALLOWLIST))
 
     clone = Path(args.clone).resolve()
     sys.path.insert(0, str(clone))
     os.chdir(clone)
     from coordinator_core.benchmarks import declare_benchmark_origin
     declare_benchmark_origin()
-    print(json.dumps(build_report(clone, args.mode, args.paths, args.sign), indent=1))
+    print(json.dumps(build_report(clone, args.mode, args.paths, args.sign,
+                                    args.memoise, args.with_caller), indent=1))
     return 0
 
 

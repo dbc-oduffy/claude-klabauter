@@ -86,69 +86,6 @@ def _register(repo):
     return yaml.safe_load((repo / _SIZING).read_text(encoding="utf-8"))["requirement_register"]
 
 
-def test_writeback_met_rows_get_status_wired_met_by_progress_and_rollup(repo):
-    out = terminal_commit._register_writeback(repo, _PLAN, _review([_judged("r1"), _judged("r2")]), "abc1234")
-
-    assert out == {"register_sizing": _SIZING}
-    reg = _register(repo)
-    r1, r2, r3 = reg["rows"]
-    assert (r1["status"], r1["wired"], r1["met_by"]) == ("met", True, [f"{_PLAN}@abc1234"])
-    assert r1["last_progress_at"] and r2["status"] == "met"
-    assert r3["status"] == "open" and "met_by" not in r3
-    assert reg["rollup"]["coverage"] == {"met": 2, "total": 3}
-    assert reg["rollup"]["met"] == 2 and reg["rollup"]["unclaimed"] == 1
-    assert reg["sources"] == _SOURCES
-
-
-def test_writeback_moves_row_claimed_only_through_register_claims(repo):
-    (repo / _PLAN).write_text(
-        f"---\nsizing_object: {_SIZING}\nregister_claims:\n  sizing: {_SIZING}\n  rows: [r3]\n---\nbody\n",
-        encoding="utf-8",
-    )
-
-    out = terminal_commit._register_writeback(repo, _PLAN, _review([_judged("r3")]), "abc1234")
-
-    assert out == {"register_sizing": _SIZING}
-    r3 = _register(repo)["rows"][2]
-    assert (r3["status"], r3["wired"], r3["met_by"]) == ("met", True, [f"{_PLAN}@abc1234"])
-
-
-def test_writeback_not_met_run_appends_no_met_by_and_advances_progress(repo):
-    terminal_commit._register_writeback(
-        repo, _PLAN, _review([_judged("r1", "partial", False)], status="not_met"), "abc1234"
-    )
-
-    r1 = _register(repo)["rows"][0]
-    assert r1["status"] == "open" and "met_by" not in r1
-    assert r1["last_progress_at"]
-
-
-def test_writeback_leaves_bytes_outside_the_register_block_unchanged(repo):
-    terminal_commit._register_writeback(repo, _PLAN, _review([_judged("r1")]), "abc1234")
-
-    text = (repo / _SIZING).read_text(encoding="utf-8")
-    assert text.startswith(_HEAD) and text.endswith(_TAIL)
-
-
-def test_schema_invalid_result_is_refused_and_named_and_file_untouched(repo):
-    bad = _sizing_text([_row("r1", surface="nope")])
-    (repo / _SIZING).write_text(bad, encoding="utf-8")
-
-    out = terminal_commit._register_writeback(repo, _PLAN, _review([_judged("r1")]), "abc1234")
-
-    assert "register write-back refused" in out["register_writeback_error"]
-    assert (repo / _SIZING).read_text(encoding="utf-8") == bad
-
-
-def test_no_judged_rows_or_no_register_is_a_noop(repo):
-    before = (repo / _SIZING).read_text(encoding="utf-8")
-    assert terminal_commit._register_writeback(repo, _PLAN, _review([]), "abc1234") == {}
-    assert (repo / _SIZING).read_text(encoding="utf-8") == before
-    (repo / _SIZING).write_text(_HEAD, encoding="utf-8")
-    assert terminal_commit._register_writeback(repo, _PLAN, _review([_judged("r1")]), "abc1234") == {}
-    assert (repo / _SIZING).read_text(encoding="utf-8") == _HEAD
-
-
 def test_terminal_commit_lands_writeback_in_coded_stamp_commit_with_product_sha(repo):
     (repo / "a.py").write_text("a\n", encoding="utf-8")
     request = CommitRequest(chunks=(ChunkCommit(id="C1", title="t1", paths=("a.py",)),), plan_path=_PLAN)

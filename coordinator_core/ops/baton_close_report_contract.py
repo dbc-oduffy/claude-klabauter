@@ -26,7 +26,7 @@ class ResidueReason(str, Enum):
     # Cited file was read but carries no top-level `status:` line (e.g. a pre-frontmatter
     # legacy plan); distinct from TARGET_UNREADABLE, where the file could not be read.
     TARGET_UNSTATUSED = "target_unstatused"
-    TARGET_MISSING ="target_missing"
+    TARGET_MISSING = "target_missing"
     LIVE_SUCCESSOR = "live_successor"
     CLAIMED = "claimed"
     EVIDENCE_CONFLICT = "evidence_conflict"
@@ -63,6 +63,8 @@ class BatonHeader(TypedDict):
     sizing_object: str | None
     roadmap_id: str | None
     origin_goal_id: list[str]
+    deliverable_id: str | None
+    kind: str | None
 
 
 class ClosableItem(TypedDict):
@@ -97,7 +99,12 @@ HEADER_KEYS = (
     "sizing_object",
     "roadmap_id",
     "origin_goal_id",
+    "deliverable_id",
+    "kind",
 )
+# Evidence `field` values for plan-to-baton (reverse) links.
+REVERSE_FIELD_DELIVERABLE = "plan.deliverable_id"
+REVERSE_FIELD_PREDECESSOR = "plan.predecessor_handoff"
 REPORT_KEYS = (
     "exit_code",
     "schema_version",
