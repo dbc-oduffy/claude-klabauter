@@ -37,7 +37,7 @@ def test_s_resume_plan_verdict_carries_a_manifest_of_only_the_resume_rows(repo):
     out = _handler({"sizing_path": REL, "run_id": "r1", "writes": ["a.py"]}, repo_root=repo)
 
     assert out["halt"] is None and out["arm"] == "s" and out["resume_rows"] == ["A2", "A4"], out
-    assert "manifest_handle" in out and "error" not in out["manifest"], out  # interim: inline beside the handle
+    assert "manifest_handle" in out and "manifest" not in out, out
     manifest = read_reply(repo, out["manifest_handle"])
     assert manifest["run_dir"] and manifest["marker_path"] and "head_sha" in manifest
     assert sorted(r["id"] for r in manifest["rows"]) == ["A2", "A4"], manifest

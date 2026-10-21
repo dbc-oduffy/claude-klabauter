@@ -75,10 +75,10 @@ def test_the_re_plan_adds_rows_that_are_staged_by_id_and_dispatched(monkeypatch)
     prompt = script[leg - 4200 : leg]
     assert "with only_rows set to the ids of exactly the rows you added" in prompt
     assert "' together with these unlanded rows: '" in prompt
-    assert "if (_ledgerAdded.length) { _ledgerExec = true; _adoptManifest(" in script
+    assert "if (_ledgerAdded.length) { _ledgerExec = true; await _adoptStageReply(" in script
     assert (
         "else { if (!_ledgerUnlanded.length) { _gate = { ..._gate, arm: 'xs' }; } "
-        "_stagedManifest = _gateStaged; _relayGap = _gateGap; }"
+        "_stagedManifest = _gateStaged; _relayGap = _gateGap; _diskHalt = _gateDisk; }"
     ) in script
     assert script.count("if (!_halted && (!_resumeLedger || _ledgerExec)) {") == 2
     assert "if (_resumeLedger && !_ledgerExec && ((_gate.resume_ledger.blocking ?? []).length || _reviseNoted)) {" in script

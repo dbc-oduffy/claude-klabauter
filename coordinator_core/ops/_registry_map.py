@@ -354,6 +354,7 @@ OP_MODULE_MAP: Dict[str, str] = {
     "dispatch.ask_gate":                       "coordinator_core.ops.dispatch_emit.ask_gate",
     "dispatch.ask_stage":                      "coordinator_core.ops.dispatch_emit.ask_stage",
     "dispatch.ask_fanout":                     "coordinator_core.ops.dispatch_emit.ask_fanout",
+    "dispatch.reply_page":                     "coordinator_core.ops.dispatch_emit.reply_page",
     "dispatch.sibling_status":                 "coordinator_core.ops.dispatch_emit.sibling_status",
     "dispatch.reap_abandoned_runs":            "coordinator_core.ops.dispatch_emit.abandoned_runs",
     "dispatch.commit_halted_rows":             "coordinator_core.ops.dispatch_emit.halted_rows_commit",

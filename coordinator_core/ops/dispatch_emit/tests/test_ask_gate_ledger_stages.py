@@ -27,7 +27,7 @@ def test_ledger_resume_verdict_carries_a_whole_manifest(halted):  # noqa: F811
     out = _handler({"sizing_path": SIZING, "run_id": "newrun", "writes": ["a.py"]}, repo_root=halted)
 
     assert out["resume_ledger"]["plan"] == PLAN, out
-    assert "manifest_handle" in out and "error" not in out["manifest"], out  # interim: inline beside the handle
+    assert "manifest_handle" in out and "manifest" not in out, out
     manifest = read_reply(halted, out["manifest_handle"])
     assert manifest["run_dir"] and manifest["marker_path"] and "rows" in manifest
     assert "head_sha" in manifest
@@ -62,7 +62,7 @@ def test_staging_adds_no_spawn_to_the_ledger_resume_gate(halted, monkeypatch):  
     with _count_spawns_attributed(monkeypatch) as staged:
         out = _handler({"sizing_path": SIZING, "run_id": "newrun", "writes": ["a.py"]}, repo_root=halted)
 
-    assert "manifest_handle" in out and "error" not in out["manifest"], out  # interim: inline beside the handle
+    assert "manifest_handle" in out and "manifest" not in out, out
     assert read_reply(halted, out["manifest_handle"])["rows"] is not None
     assert len(staged) == len(bare), [s.argv for s in staged]
 
@@ -73,7 +73,7 @@ def test_a_resume_whose_halt_landed_every_staged_row_has_no_unlanded_rows(halted
     out = _handler({"sizing_path": SIZING, "run_id": "newrun", "writes": ["a.py"]}, repo_root=halted)
 
     assert out["resume_ledger"][RESUME_LEDGER_UNLANDED_FIELD] == [], out["resume_ledger"]
-    assert "manifest_handle" in out and "error" not in out["manifest"], out  # interim: inline beside the handle
+    assert "manifest_handle" in out and "manifest" not in out, out
     assert "manifest_handle" in out
 
 

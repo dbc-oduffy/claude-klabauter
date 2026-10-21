@@ -823,7 +823,7 @@ class OwedRow:
 
 @dataclass(frozen=True)
 class StageManifest:
-    """dispatch.ask_stage reply, also written as manifest.json in the run dir.
+    """The manifest.json payload in the run dir, which the dispatch.ask_stage reply's manifest_handle points at.
     ``gated`` lists rows withheld, never staged; an absent key reads as ``()``.
     ``owed`` lists rows the run excluded because the EM or an operator performs them, and the
     run never performs them; an absent key reads as ``()``.

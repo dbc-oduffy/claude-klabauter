@@ -31,6 +31,7 @@ from coordinator_core.ops.dispatch_emit.ask_gate import _handler, gate
 from coordinator_core.ops.dispatch_emit.reply_sidecar import read_reply
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
 from coordinator_core.ops.dispatch_emit.tests.test_ask_gate import ACCEPTED, REL, _put, repo  # noqa: F401
+from coordinator_core.ops.dispatch_emit.tests.test_ask_compose_stage_handle import PAGE_FAKE_JS, agent_gate_reply, pages_cfg
 from coordinator_core.ops.dispatch_emit.tests.test_ask_gate_resume import PLAN_REL
 from coordinator_core.ops.dispatch_emit.tests.test_ledger_halt_resume_gate import ALREADY_RAN, _landed_repo
 from coordinator_core.win_portability import no_console_creationflags
@@ -46,13 +47,14 @@ _EM_ROWS = ("E1", "E2")
 _LANDED = {"committed": True, "sha": "abc1234", "error": None, "refused": None}
 _MET = {"items": [{"id": i, "status": "met", "wired": True} for i in _RULABLE]}
 _UNMET = {"items": [{"id": "T2", "status": "not_met", "essential": True, "remaining": ["the criterion is red"]}]}
-_NODE_PROGRAM = r"""
+_NODE_PROGRAM = PAGE_FAKE_JS + r"""
 const src = process.env.SRC.replace(/^export const meta/m, 'const meta');
 const cfg = JSON.parse(process.env.CFG);
 const calls = [];
 const agent = async (prompt, opts) => {
   const label = opts && opts.label;
   calls.push({ label, prompt: String(prompt) });
+  if (label === 'stage-reply-page') return fakePage(cfg, String(prompt));
   if (label === 'halt-commit' || label === 'commit') return cfg.commit;
   if (label === 'verify') return cfg.verify;
   if (cfg.replies[label] !== undefined) return cfg.replies[label];
@@ -118,14 +120,14 @@ def _run_composed(root, verify) -> dict:
     node = shutil.which("node")
     if node is None:
         pytest.skip("node not on PATH")
-    gate_reply = _handler({"sizing_path": REL, "run_id": _RUN}, repo_root=root)
+    gate_reply = agent_gate_reply(root, _handler({"sizing_path": REL, "run_id": _RUN}, repo_root=root))
     script = compose_ask_script(
         repo_root="REPO", prompt=None, sizing_rel=REL, run_id=_RUN, session_id=None,
         wrap_stage=lambda _t: (_BLITZ_FN, ["Size", "Plan"]), plan_blitz_text="stub",
         script_path="scratch/warp/x.mjs", in_run_commit=True, **REVIEW_KW,
     )
     cfg = {
-        "token": _TOKEN, "verify": verify, "commit": _LANDED,
+        "token": _TOKEN, "verify": verify, "commit": _LANDED, "pages": pages_cfg(),
         "replies": {"gate": gate_reply, "gate-stage": gate_reply},
     }
     proc = subprocess.run(
@@ -143,7 +145,7 @@ def test_the_real_gate_resumes_the_example_game_repo_shape_with_a_manifest_of_th
     assert out.get("resume_rows") is None
     assert out["resume_ledger"][RESUME_LEDGER_KIND_FIELD] == ALL_LANDED_HALT_KIND
     assert out["resume_ledger"]["blocking"] == list(_RULABLE)
-    assert "manifest_handle" in out and "error" not in out["manifest"], out  # interim: inline beside the handle
+    assert "manifest_handle" in out and "manifest" not in out, out
     assert [r["id"] for r in read_reply(repo, out["manifest_handle"])["rows"]] == ["A1", "A2"]
 
 

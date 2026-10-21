@@ -51,7 +51,7 @@ from coordinator_core.ops.sizing_acceptance import (
     lacks_human_acceptance,
     sizing_acceptance_skipped,
 )
-from coordinator_core.ops.dispatch_emit.ask_stage import AskStageError, manifest_payload, stage
+from coordinator_core.ops.dispatch_emit.ask_stage import AskStageError, stage
 from coordinator_core.ops.dispatch_emit import reply_sidecar
 from coordinator_core.ops.dispatch_emit.request_validation import Field, validate_params
 from coordinator_core.ops.dispatch_emit.sizing_fire import (
@@ -550,8 +550,6 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                 ledger_resume=ledger_resume,
                 only_rows=only_rows,
             )
-            # Trap: the composed script still adopts `manifest`; see ask_stage._handler.
-            out["manifest"] = manifest_payload(root, manifest)
             out["manifest_handle"] = reply_sidecar.handle_for(root, record_dir(root, params["run_id"]) / "manifest.json")
         except (AskStageError, SizingFireRefused, reply_sidecar.ReplySidecarError) as exc:
             out["manifest"] = {"error": str(exc)}
