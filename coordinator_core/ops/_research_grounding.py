@@ -10,9 +10,11 @@ parse like LF):
 - Claim line: ``- **grounded**``, ``- **ungrounded**`` or ``- **contradicted**``, then the claim
   and its evidence.
 - Contradiction ruling: ``- **real**``, ``- **invented**`` or ``- **dismissed**``. ``real`` means
-  the sources themselves disagree; ``invented`` means the digest asserts a contradiction the
-  sources do not support; ``dismissed`` means on re-reading no contradiction exists. ``real`` and
-  ``dismissed`` never block; ``invented`` does.
+  the sources themselves disagree; ``invented`` means the digest's own text claims a source
+  disagreement the sources do not support; ``dismissed`` is every other tension that does not
+  hold, including one the grader raised itself. ``real`` and ``dismissed`` never block;
+  ``invented`` does. Trap: graders read "invented" as "this tension is invented", which is
+  ``dismissed`` -- ``RULING_NOTE`` says so explicitly.
 
 A carried ruling is keyed to the content sha of every digest it judged and counts only while each
 of those digests is present with the same sha, and is also keyed to the grader version.
@@ -30,8 +32,11 @@ BLOCKING = ("ungrounded", "contradicted", "invented")
 
 RULING_NOTE = (
     "Name the digest file(s) each ruling line judges.\n"
-    "Rulings: real = the sources themselves disagree; invented = the digest asserts a contradiction "
-    "the sources do not support; dismissed = on re-reading, no contradiction exists.\n"
+    "Rulings: real = the sources themselves disagree; invented = the digest's own text claims two "
+    "sources disagree, and they do not; dismissed = every other tension that does not hold, "
+    "including one you raised yourself or a digest that is consistent with itself.\n"
+    "If your ruling says the digest does not contradict itself or no contradiction exists, it is "
+    "dismissed, never invented.\n"
 )
 # The first-generation grader is DoE's template, which the engine cannot version: a report with
 # no recorded version is always stale.

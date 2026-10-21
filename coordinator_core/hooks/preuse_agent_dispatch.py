@@ -115,6 +115,7 @@ def _handler(params: dict, repo_root=None) -> dict:
     params = payload_of(params)
 
     skipped: List[str] = []
+    leg_advisory = None
 
     for leg_name, leg_fn in (
         ("block_dispatch_suite_invocation", _call_suite_invocation_leg),
@@ -136,6 +137,8 @@ def _handler(params: dict, repo_root=None) -> dict:
                 except Exception:
                     pass
             return out
+        if leg_advisory is None and isinstance(out, dict) and out.get("hookSpecificOutput"):
+            leg_advisory = out
 
     if skipped:
         try:
@@ -149,5 +152,5 @@ def _handler(params: dict, repo_root=None) -> dict:
 
     out = _call_enforce_dispatch_mode_leg(params)
     if not isinstance(out, dict):
-        return no_advisory()
-    return out
+        return leg_advisory or no_advisory()
+    return out or leg_advisory or out

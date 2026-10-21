@@ -264,8 +264,9 @@ def test_brief_states_the_ruling_vocabulary(repo, scratch):
     brief = (scratch / "reground-1.md").read_text(encoding="utf-8")
     assert "Name the digest file(s) each ruling line judges." in brief
     assert "real = the sources themselves disagree" in brief
-    assert "invented = the digest asserts a contradiction the sources do not support" in brief
-    assert "dismissed = on re-reading, no contradiction exists" in brief
+    assert "invented = the digest's own text claims two sources disagree, and they do not" in brief
+    assert "dismissed = every other tension that does not hold" in brief
+    assert "it is dismissed, never invented." in brief
 
 
 def test_carry_unchanged_digests_is_a_noop_with_zero_fresh(repo, scratch):

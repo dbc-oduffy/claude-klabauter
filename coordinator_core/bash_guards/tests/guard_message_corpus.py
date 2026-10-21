@@ -1481,6 +1481,15 @@ CONFINEMENT_ROWS: List[CorpusRow] = [
         setup=_subagent_heavy_ue_launch_setup,
     ),
     CorpusRow(
+        "guard-subagent-heavy-ue-launch",
+        "guard-subagent-heavy-ue-launch-control-heredoc-data",
+        "cat <<'EOF'" + chr(10) + "pwsh -File scripts/build-plugin.ps1 -EngineVersion 5.8" + chr(10) + "EOF",
+        False,
+        _DENY,
+        False,
+        setup=_subagent_heavy_ue_launch_setup,
+    ),
+    CorpusRow(
         "deploy-dirty-tree",
         "deploy-dirty-tree-fire",
         "firebase deploy",
@@ -3803,6 +3812,9 @@ from coordinator_core.hooks import example_retrieval_repo_detect as _hook_exampl
 from coordinator_core.hooks import flag_em_poll_in_flight as _hook_flag_em_poll_in_flight
 from coordinator_core.hooks import submit_engine_ask as _hook_submit_engine_ask
 from coordinator_core.hooks import guard_terminal_review as _hook_guard_terminal_review
+from coordinator_core.hooks import guard_agent_route_admission as _hook_guard_agent_route_admission
+from coordinator_core.hooks import guard_brief_prescribed_method as _hook_guard_brief_prescribed_method
+from coordinator_core.hooks import guard_editor_python_direct as _hook_guard_editor_python_direct
 from coordinator_core.hooks import preuse_search_dispatch as _hook_preuse_search_dispatch
 from coordinator_core.hooks import receiver_state_sensor as _hook_receiver_state_sensor
 from coordinator_core.hooks import subagent_sidecar_fill_check as _hook_subagent_sidecar_fill_check
@@ -4426,8 +4438,8 @@ def _fire_guard_terminal_review_with(commit_path: str) -> Optional[Dict[str, Any
             check=True,
             **no_console_passthrough_kwargs(),
         )
-        payload = {"payload": {"session_id": "sess-gtr", "cwd": scratch, "stop_hook_active": False}}
-        return _to_envelope_or_none(_run_maybe_async(_hook_guard_terminal_review._guard_terminal_review_handler(payload)))
+        payload = {"session_id": "sess-gtr", "cwd": scratch, "stop_hook_active": False}
+        return _hook_envelope_from_message(_hook_guard_terminal_review.op(payload))
 
 
 def _fire_guard_terminal_review() -> Optional[Dict[str, Any]]:
@@ -4436,6 +4448,100 @@ def _fire_guard_terminal_review() -> Optional[Dict[str, Any]]:
 
 def _fire_guard_terminal_review_control() -> Optional[Dict[str, Any]]:
     return _fire_guard_terminal_review_with("notes.md")
+
+
+_ROUTE_TABLE_UE = {
+    "schema_version": 1,
+    "default_agent_type": "coordinator:executor",
+    "work_classes": [
+        {
+            "id": "ue-editor",
+            "match": {"keywords": ["unreal"]},
+            "agent_type": "example-game-repo-control:ue-editor",
+            "triage_agent_type": "example-game-repo-control:ue-triage",
+            "required_tools": ["mcp__example_game_repo-control__"],
+            "on_mismatch": "refuse",
+        }
+    ],
+    "agent_tool_ranges": {
+        "example-game-repo-control:ue-editor": ["mcp__example_game_repo-control__execute_python_code"],
+        "example-game-repo-control:ue-triage": ["Read"],
+        "coordinator:executor": ["Read", "Edit", "Write", "Bash"],
+    },
+}
+
+
+def _fire_in_route_table_repo(table: Dict[str, Any], fire: Callable[[str], Optional[Dict[str, Any]]]) -> Optional[Dict[str, Any]]:
+    with tempfile.TemporaryDirectory(prefix="guard-message-corpus-rt-", dir=_neutral_scratch_parent()) as scratch:
+        (Path(scratch) / ".claude").mkdir()
+        (Path(scratch) / ".claude" / "route-table.json").write_text(_json.dumps(table), encoding="utf-8")
+        return _to_envelope_or_none(fire(scratch))
+
+
+def _fire_guard_agent_route_admission_with(subagent_type: str) -> Optional[Dict[str, Any]]:
+    from coordinator_core import machine_profile
+
+    def _fire(scratch: str) -> Optional[Dict[str, Any]]:
+        payload = {
+            "tool_name": "Agent",
+            "tool_input": {"subagent_type": subagent_type, "prompt": "import the unreal meshes"},
+            "cwd": scratch,
+        }
+        return _hook_guard_agent_route_admission.evaluate(payload)
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(machine_profile, "guard_level", lambda name: "strict")
+        return _fire_in_route_table_repo(_ROUTE_TABLE_UE, _fire)
+
+
+def _fire_guard_agent_route_admission() -> Optional[Dict[str, Any]]:
+    return _fire_guard_agent_route_admission_with("coordinator:executor")
+
+
+def _fire_guard_agent_route_admission_control() -> Optional[Dict[str, Any]]:
+    return _fire_guard_agent_route_admission_with("example-game-repo-control:ue-editor")
+
+
+def _fire_guard_brief_prescribed_method_with(prompt: str) -> Optional[Dict[str, Any]]:
+    table = dict(_ROUTE_TABLE_UE)
+    table["brief_lint"] = {"prescribed_method_patterns": [r"ue_\w+_job\.py"], "level": "warn"}
+
+    def _fire(scratch: str) -> Optional[Dict[str, Any]]:
+        payload = {"tool_name": "Agent", "tool_input": {"prompt": prompt}, "cwd": scratch}
+        return _hook_guard_brief_prescribed_method.evaluate(payload)
+
+    return _fire_in_route_table_repo(table, _fire)
+
+
+def _fire_guard_brief_prescribed_method() -> Optional[Dict[str, Any]]:
+    return _fire_guard_brief_prescribed_method_with("run ue_build_job.py to import the meshes")
+
+
+def _fire_guard_brief_prescribed_method_control() -> Optional[Dict[str, Any]]:
+    return _fire_guard_brief_prescribed_method_with("import the meshes into the level")
+
+
+def _fire_guard_editor_python_direct_with(tool_name: str) -> Optional[Dict[str, Any]]:
+    table = dict(_ROUTE_TABLE_UE)
+    table["editor_python"] = {
+        "preferred_agent_type": "example-game-repo-control:ue-python",
+        "level": "warn",
+        "tool_names": ["mcp__example_game_repo-control__execute_python_code"],
+    }
+
+    def _fire(scratch: str) -> Optional[Dict[str, Any]]:
+        payload = {"tool_name": tool_name, "tool_input": {}, "cwd": scratch}
+        return _hook_guard_editor_python_direct.evaluate(payload)
+
+    return _fire_in_route_table_repo(table, _fire)
+
+
+def _fire_guard_editor_python_direct() -> Optional[Dict[str, Any]]:
+    return _fire_guard_editor_python_direct_with("mcp__example_game_repo-control__execute_python_code")
+
+
+def _fire_guard_editor_python_direct_control() -> Optional[Dict[str, Any]]:
+    return _fire_guard_editor_python_direct_with("Read")
 
 
 def _fire_preuse_search_dispatch_with(tool_name: str) -> Optional[Dict[str, Any]]:
@@ -6332,6 +6438,12 @@ HOOK_ROWS: List[HookRow] = [
     HookRow("submit_bug_blitz", "control-other-workflow", False, _fire_submit_bug_blitz_control),
     HookRow("guard_terminal_review", "fire-unreviewed-code-commit", True, _fire_guard_terminal_review),
     HookRow("guard_terminal_review", "control-doc-only-commit", False, _fire_guard_terminal_review_control),
+    HookRow("guard_agent_route_admission", "fire-uncovered-subagent-type", True, _fire_guard_agent_route_admission),
+    HookRow("guard_agent_route_admission", "control-covering-subagent-type", False, _fire_guard_agent_route_admission_control),
+    HookRow("guard_brief_prescribed_method", "fire-prescribed-method", True, _fire_guard_brief_prescribed_method),
+    HookRow("guard_brief_prescribed_method", "control-outcome-brief", False, _fire_guard_brief_prescribed_method_control),
+    HookRow("guard_editor_python_direct", "fire-em-editor-python-call", True, _fire_guard_editor_python_direct),
+    HookRow("guard_editor_python_direct", "control-non-editor-tool", False, _fire_guard_editor_python_direct_control),
     HookRow("preuse_search_dispatch", "fire-first-grep", True, _fire_preuse_search_dispatch),
     HookRow("preuse_search_dispatch", "control-non-search-tool", False, _fire_preuse_search_dispatch_control),
     HookRow("example_retrieval_repo_detect", "fire-uninitialized", True, _fire_example_retrieval_repo_detect),
