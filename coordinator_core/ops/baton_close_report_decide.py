@@ -59,9 +59,9 @@ def decide(
     """Return ("closable", evidence), ("residue", reason, evidence) or ("no_evidence",).
 
     Precedence: nothing cited, claimed-with-done, live successor, done-vs-contradicting
-    conflict, header refusal (`close_refusal`), closable, then residue by target kind (unreadable, unstatused, missing), then
-    no_evidence (cited targets all really not done). A missing, unreadable or unstatused
-    target never contradicts a done one.
+    conflict, header refusal (`close_refusal`), closable, then residue by target kind
+    (unreadable, unstatused, missing), then no_evidence (cited targets all really not
+    done). A missing, unreadable or unstatused target never contradicts a done one.
     """
     if not evidence:
         return (Verdict.NO_EVIDENCE.value,)

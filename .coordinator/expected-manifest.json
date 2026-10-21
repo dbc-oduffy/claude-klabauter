@@ -2095,8 +2095,8 @@
     "coordinator_core/_content_root_primitive.py": "f7fcd3083855a5e1dd53c09233fbfd64f8dffdf5",
     "coordinator_core/_data_root.py": "0c7c8524f25376ae49593f11334445539dc557f9",
     "coordinator_core/_engine_landing.py": "06dbb1273f3c36fdb6be08767ec75e73c71630e7",
-    "coordinator_core/_engine_published_at": "f31fdd2f9c7f43a97e83b2d3954a7f7fb0b6448f",
-    "coordinator_core/_engine_stamp": "48d55929235e31c459e4024221e78fb08d4768af",
+    "coordinator_core/_engine_published_at": "da3fcadd17d8315aca8d2b558e1b7b51844ed228",
+    "coordinator_core/_engine_stamp": "0ac8352c4ce5a59b4339de3ba5b4348893a5c0a9",
     "coordinator_core/_fleet_names.py": "e81fc4247611fe486697f4707b28a1a3a008f392",
     "coordinator_core/_hook_envelope.py": "d98df967471c001593ab85960dc367f5ff5da056",
     "coordinator_core/_repo_root_probe.py": "2d8edfa8cd9343436a650584da430aa87ae0397d",
@@ -4222,7 +4222,7 @@
     "coordinator_core/ops/baton_close_commit_write.py": "f25ea8c9378267251a584743d14839615a981d06",
     "coordinator_core/ops/baton_close_report.py": "eb9228343f029584dad52959fbd8e9f56057703c",
     "coordinator_core/ops/baton_close_report_contract.py": "69b875c14ffce635be14546c92102976d747f05a",
-    "coordinator_core/ops/baton_close_report_decide.py": "8d6cd8538f1fa31cb02c5b1f85b1899a6e43585f",
+    "coordinator_core/ops/baton_close_report_decide.py": "9c8d5a834319a445efeb27b6f7d468089354e607",
     "coordinator_core/ops/baton_close_report_readers.py": "c8c7970b6a6f72c64048c75ad8cfb53d59a2718a",
     "coordinator_core/ops/baton_close_report_targets.py": "1935a46215103f8da14ae841882e281602e145ad",
     "coordinator_core/ops/baton_drift_sweep.py": "e9697dcad95a1a2584b2c02a490a1d52644b9bd5",
@@ -8577,5 +8577,5 @@
     "scripts/unstick_claude.py": "5458a0f699f1793ff9fd32295b9d0b33635f1c06"
   },
   "schema": 1,
-  "source_head": "251888efa95963849ddafb874b99ebd5accecc40"
+  "source_head": "ef394a5220be2f2f782f3219cc0f42b64bf722a4"
 }
