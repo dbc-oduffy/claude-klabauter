@@ -65,6 +65,20 @@ class CheckpointWalk(NamedTuple):
     capped: bool  # the cap ended the walk with wanted ids still unfound
 
 
+def _walk_commit_meta(common_dir: Path, sha: str) -> Optional[dict]:
+    """``commit_meta`` for a first-parent walk from HEAD. Trap: ``commit_meta`` probes every pack
+    index (twice) before it tries a loose object, and the recent commits a walk reads are loose, so
+    a cold 500-commit walk costs ~450ms on a many-pack repo; a loose read costs ~0.04ms. A
+    commit absent loose falls through to ``commit_meta`` unchanged."""
+    from coordinator_core.git.commit_walk import commit_meta, parse_commit
+    from coordinator_core.git.git_objects import _read_loose_object
+
+    obj = _read_loose_object(common_dir, sha)
+    if obj is not None and obj[0] == "commit":
+        return parse_commit(obj[1])
+    return commit_meta(common_dir, sha)
+
+
 _PROCESS_HALF_SUFFIX = "(process files)"
 _FULL_SHA = re.compile(r"^[0-9a-f]{40}$")
 
@@ -122,7 +136,6 @@ def checkpoint_rows_landed(
     empty = CheckpointWalk({}, 0, False)
     if not wanted or not plan_rel or not isinstance(start_sha, str) or not _FULL_SHA.fullmatch(start_sha):
         return empty
-    from coordinator_core.git.commit_walk import commit_meta
     from coordinator_core.git.git_dir import resolve_git_common_dir
 
     common_dir = resolve_git_common_dir(Path(worktree_root))
@@ -131,7 +144,7 @@ def checkpoint_rows_landed(
     read = 0
     sha: Optional[str] = start_sha
     while remaining and sha is not None and read < cap:
-        meta = commit_meta(common_dir, sha)
+        meta = _walk_commit_meta(common_dir, sha)
         if meta is None:
             break
         epoch = meta.get("committer_epoch")
@@ -197,7 +210,6 @@ def inventory_family_landed(
     """
     if not item_rows or not family_base:
         return {}
-    from coordinator_core.git.commit_walk import commit_meta
     from coordinator_core.git.git_dir import resolve_git_common_dir
     from coordinator_core.git.git_state import head_sha
 
@@ -215,7 +227,7 @@ def inventory_family_landed(
     while sha is not None and read < _HEAD_WALK_CAP:
         if stop_sha and sha == stop_sha:
             break
-        meta = commit_meta(common_dir, sha)
+        meta = _walk_commit_meta(common_dir, sha)
         if meta is None:
             break
         read += 1

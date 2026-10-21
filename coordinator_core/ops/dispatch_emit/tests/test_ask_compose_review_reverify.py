@@ -7,16 +7,14 @@ import subprocess
 
 import pytest
 
+from coordinator_core.ops.dispatch_emit import ask_compose
 from coordinator_core.ops.dispatch_emit.ask_compose import compose_ask_script
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
 from coordinator_core.win_portability import no_console_creationflags
 
 _BLITZ_FN = "  async function planBlitz(args) {\n    return { ready: [] };\n  }"
 
-_TARGETED_TESTS = (
-    "targeted_tests: (_testResult && typeof _testResult.status === 'string') ? { status: _testResult.status, "
-    "tests_failed: _testResult.tests_failed ?? null, baseline: _testResult.baseline ?? null } : null,"
-)
+_TARGETED_TESTS = ask_compose._TARGETED_TESTS_JS
 
 
 def _compose(**over):

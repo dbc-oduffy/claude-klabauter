@@ -1861,6 +1861,10 @@ def _pick_groups(
     and only if all of it fits; passes repeat so a group whose prerequisite
     sits later in the table still lands.
 
+    A shared-path group (no depends_on_plan binding) with a member whose own
+    outside prerequisite is untaken, while another member is unblocked, splits
+    into single plans: the blocked member defers and the rest are taken.
+
     A shared-path group over the budget is exploded into single-plan units,
     packed plan-by-plan in dependency order across sequential tranches. That is
     safe because tranches fire strictly in sequence: two writers of one path in
@@ -1868,6 +1872,7 @@ def _pick_groups(
     the same tranche are ordered or withheld by the emitter. Only a single plan
     whose own rows exceed the budget can never be placed."""
     units: List[Tuple[List[str], str]] = []
+    splittable: set = set()
     for group in groups:
         total = sum(size[i] for i in group)
         label = ""
@@ -1877,6 +1882,8 @@ def _pick_groups(
                 label = f"plans {', '.join(group)} write the same path {shared[group[0]]}; "
                 if note:
                     label += f"bound by depends_on_plan {note}; "
+                else:
+                    splittable.add(id(group))
             else:
                 label = f"plans {', '.join(group)} are bound by depends_on_plan {note}".rstrip() + "; "
         if len(group) > 1 and total > row_budget:
@@ -1900,8 +1907,18 @@ def _pick_groups(
             external = set().union(*(prereqs[i] for i in group)) - members
             blocking = sorted(p for p in external if p not in taken)
             total = sum(size[i] for i in group)
+            if blocking and id(group) in splittable and any(
+                not (prereqs[i] - members) - set(taken) for i in group
+            ):
+                # Pure shared-path group: the blocked members defer alone.
+                at = undecided.index(unit)
+                undecided[at : at + 1] = [
+                    ([i], f"{label}split so blocked members defer alone; ") for i in group
+                ]
+                progress = True
+                continue
             if blocking:
-                why = f"{label}prerequisite {', '.join(blocking)} not in this tranche"
+                why =f"{label}prerequisite {', '.join(blocking)} not in this tranche"
             elif total > row_budget:
                 why = f"{label}{total} rows exceed row_budget {row_budget} alone"
                 undecided.remove(unit)

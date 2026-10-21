@@ -168,6 +168,9 @@ class CommitRequest:
     # marker without them codes no row.
     review_open_rows: tuple = ()
     review_run_base: Optional[str] = None
+    # Sorted repo-relative paths dirty at a review-only emit: the review never read their bytes, so
+    # the landing withholds them.
+    review_carried: tuple = ()
 
 
 def _chunk_to_dict(chunk: ChunkCommit) -> dict:
@@ -235,6 +238,8 @@ def render_marker(req: CommitRequest) -> Optional[str]:
         if req.review_open_rows and req.review_run_base:
             payload["review_open_rows"] = sorted(req.review_open_rows)
             payload["review_run_base"] = req.review_run_base
+        if req.review_carried:
+            payload["review_carried"] = sorted(p.replace("\\", "/") for p in req.review_carried)
     body = json.dumps(payload, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
     return f"{MARKER_PREFIX}{body}"
 
@@ -262,6 +267,12 @@ def _open_rows_from(value) -> tuple:
     if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
         return ()
     return tuple(value)
+
+
+def _carried_from(value) -> tuple:
+    if not isinstance(value, list):
+        return ()
+    return tuple(v for v in value if isinstance(v, str))
 
 
 def parse_marker(script_text: str) -> Optional[CommitRequest]:
@@ -308,6 +319,7 @@ def parse_marker(script_text: str) -> Optional[CommitRequest]:
             review_run_base=(
                 payload["review_run_base"] if isinstance(payload.get("review_run_base"), str) else None
             ),
+            review_carried=_carried_from(payload.get("review_carried")),
         )
     except (KeyError, TypeError) as exc:
         raise MalformedCommitRequestError(

@@ -686,7 +686,9 @@ def _start_requirements(ask_ctx: dict, *, all_of_pm_ask: bool) -> Optional[objec
     if ask_ctx.get("sizing_rel") and not ask_ctx.get("reserved_parent"):
         _seed_run_base(root, ask_ctx["run_id"], ask_ctx.get("inherited_base"))
         _record_run_base(root, ask_ctx["run_id"])
-    ledger.start(root, ask_ctx["run_id"], all_of_pm_ask=all_of_pm_ask)
+    ledger.start(
+        root, ask_ctx["run_id"], all_of_pm_ask=all_of_pm_ask, resumed_from=ask_ctx.get("resumes_ask"),
+    )
     if ask_ctx.get("sizing_rel"):
         prompt = ask_ctx.get("prompt")
         relayed = ask_ctx.get("ask_source") == ASK_SOURCE_RELAYED
@@ -913,6 +915,7 @@ _PARAM_FIELDS = (
     Field("stage_models", "dict"),
     Field("writes", "str_list"),
     Field("review_only_rows", "str_list"),
+    Field("review_carried_paths", "str_list"),
     Field("context", "str_list"),
     Field("ask_brief", "str"),
     Field("ask_brief_file", "str"),
@@ -2440,6 +2443,7 @@ def _dispatch_emit(
                 landed_rows=frozenset(params["landed_rows"]) if params.get("landed_rows") is not None else None,
                 review_only_rows=frozenset(params["review_only_rows"]) if params.get("review_only_rows") is not None else None,
                 run_base_sha=params.get("run_base_sha"),
+                review_carried_paths=tuple(params.get("review_carried_paths") or ()),
                 chatty=bool(params.get("chatty")),
                 cross_repo_approved=bool(params.get("cross_repo_approved")),
                 predispatch=bool(inventory_path) and params.get("review_only_rows") is None,

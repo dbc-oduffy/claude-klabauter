@@ -1337,6 +1337,18 @@ def test_extract_failure_cause_fallbacks():
     assert _mod._extract_failure_cause("", "  Error: " + "x" * 500).__len__() == _mod._CAUSE_MAX_CHARS
 
 
+def test_extract_failure_cause_fatal_prefixed():
+    line = (
+        "[publish.py] FATAL: origin/candidate carries a peer publish of source abc "
+        "that ... HEAD does not contain; publishing now reverts it."
+    )
+    assert _mod._extract_failure_cause("noise\n" + line + "\n", "") == line
+    refused = "  [timing]   row-a: REFUSED: x: 1.0s wall / 0.0s cpu\n"
+    assert _mod._extract_failure_cause(refused, "") == "row-a: REFUSED: x"
+    mixed = "  Error: first\n" + line + "\n"
+    assert _mod._extract_failure_cause(mixed, "") == "Error: first"
+
+
 def test_generic_commit_failure_returns_fail(tmp_path, monkeypatch):
     """RETIRED BY C3 (docs/plans/2026-08-29-the-push-subsystem-leaves-and-
     then-the-pipeline-can-go.md): the commit leg used to run through

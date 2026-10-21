@@ -55,6 +55,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     RESUME_LEDGER_KEY,
     RESUME_LEDGER_KIND_FIELD,
     RESUME_LEDGER_NOTES_FIELD,
+    RESUME_LEDGER_REVISED_FIELD,
     RESUME_LEDGER_REMAINING_FIELD,
     RESUME_LEDGER_UNLANDED_FIELD,
     TERMINAL_RESUME_LEDGER_PARAM,
@@ -2761,6 +2762,8 @@ def compose_ask_script(
         f"js:JSON.stringify({_rl}.{RESUME_LEDGER_REMAINING_FIELD} ?? {{}})",
         ". Revise notes, oldest first: ",
         f"js:JSON.stringify({_rl}.{RESUME_LEDGER_NOTES_FIELD} ?? [])",
+        ". Rows a revise added after the earlier run (new requirements, owed work you must do now):",
+        f"js:JSON.stringify({_rl}.{RESUME_LEDGER_REVISED_FIELD} ?? [])",
         f". Also read {record_dir}/{NOTES_FILE} when it exists: the notes of this refire, newer than the ones above. "
         "Do the owed work now. Your writes are exactly these declared paths: ",
         "js:(_manifest?.rows ?? []).flatMap((r) => r.writes ?? []).join(', ')",
@@ -2775,8 +2778,9 @@ def compose_ask_script(
     )
     verify_lines[2:2] = [
         f"    const _reviseNoted = _resumeLedger && ({_rl}.{RESUME_LEDGER_NOTES_FIELD} ?? []).length > 0;\n"
+        f"    const _revisedRows = _resumeLedger && ({_rl}.{RESUME_LEDGER_REVISED_FIELD} ?? []).length > 0;\n"
         f"    if (_resumeLedger && !_ledgerExec && (({_rl}.blocking ?? []).length || _reviseNoted)) {{\n"
-        f"      if (!_allLandedResume || _reviseNoted) {{ try {{ await {remaining_call}; }} catch (e) {{ const _m = String((e && e.message) ?? e); "
+        f"      if (!_allLandedResume || _reviseNoted || _revisedRows) {{ try {{ await {remaining_call}; }} catch (e) {{ const _m = String((e && e.message) ?? e); "
         "if (_USAGE_LIMIT_RE.test(_m)) { _haltOnUsageLimit(e); } else { log('ledger-remaining leg threw: ' + _m); } } }\n"
         "    }"
     ]

@@ -17,6 +17,7 @@ _UNQUOTABLE = "<>&'\r\n"
 _PLACEHOLDER = "TASK_OUTPUT_PATH"
 _GENERIC_DRIFT = "Re-review the current bytes and pass their blob, or leave the path out."
 _DRIFT_REASON = "blob-drift: bytes changed after the run's review"
+REVIEW_CARRIED_REASON = "review-only carried: uncommitted at emit, outside the committed range the review read"
 _RECORDED_AT = re.compile(r"^recorded_at:\s*['\"]?([0-9T:.\-+Z]+)", re.MULTILINE)
 
 
@@ -63,10 +64,12 @@ def blob_drift_remedy(
     else:
         withheld = [{"path": p, "reason": _DRIFT_REASON} for p in drift_paths]
         remedy = (
-            "Real drift on a run with no ledger record: re-emit it review-only "
-            "(emit-dispatch-workflow --inventory <inv> --review-only --rows <DONE ids> --run-base <sha>) "
-            "and land that run. "
-            f"Or leave the path out: {invoke_call(op, task_output_path, {WITHHOLD_PARAM: withheld})}"
+            "Real drift on a run with no ledger record. Order: (1) leave the drifted paths out with the "
+            "withhold call below; (2) commit them with ceremony.commit_v2; (3) re-emit review-only over the "
+            "committed range to review them "
+            "(emit-dispatch-workflow --plan <plan> | --inventory <inv> --review-only --rows <DONE ids> "
+            "--run-base <sha>); review-only reviews committed shas only. "
+            f"Withhold call: {invoke_call(op, task_output_path, {WITHHOLD_PARAM: withheld})}"
         )
     return error.replace(_GENERIC_DRIFT, remedy) if _GENERIC_DRIFT in error else f"{error} {remedy}"
 
@@ -80,6 +83,14 @@ def param_withholds(params: dict) -> dict:
     from coordinator_core.ops.dispatch_emit import run_withhold
 
     return {e["path"]: e["reason"] for e in run_withhold.validate(raw)}
+
+
+def review_carried_withholds(request) -> dict:
+    """``{path: REVIEW_CARRIED_REASON}`` for a review-only request's ``review_carried``; ``{}``
+    for any other request."""
+    if not getattr(request, "review_only", False):
+        return {}
+    return {p: REVIEW_CARRIED_REASON for p in getattr(request, "review_carried", ())}
 
 
 def _epoch(stamp: str) -> Optional[float]:

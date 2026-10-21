@@ -55,6 +55,21 @@ def test_refuses_added_attribution_line_in_py_file(tmp_path):
     assert any("adds reviewer attribution" in d for d in outcome.diagnostics)
 
 
+def test_refusal_lists_every_hit_then_remedy(tmp_path):
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "foo.py", "x = 1\n")
+    _commit(repo, ["foo.py"])
+    _seed_file(repo, "foo.py", "x = 1\n" + (_ATTR_LINE + "\n") * 9)
+
+    outcome = attribution_gate(repo, ["foo.py"])
+
+    assert not outcome.passed
+    hits = [d for d in outcome.diagnostics if "adds reviewer attribution" in d]
+    assert {d.split(":")[1] for d in hits} == {str(n) for n in range(2, 11)}
+    assert len(outcome.diagnostics) == len(hits) + 1
+    assert "adds reviewer attribution" not in outcome.diagnostics[-1]
+
+
 def test_exempt_paths_skip_without_reading(tmp_path):
     repo = _init_repo(tmp_path)
     _seed_file(repo, "state/handoffs/x.md", "seed\n")

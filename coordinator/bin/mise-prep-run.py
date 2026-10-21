@@ -554,12 +554,10 @@ def _probe(
     upgrade: bool,
     census_timeout: int,
     check_census: bool = True,
-    census_run: str | None = None,
 ) -> dict:
     """One `plan.mise_prep_probe` call: this plan's gate, census and upgrade derivation.
 
-    `census_run` is the set run's token; the op memoises census commands under it. The census is
-    always requested; the op runs it only for a PREPPED, not-CERTIFIED gate. Raises
+    The census is always requested; the op runs it only for a PREPPED, not-CERTIFIED gate. Raises
     `ValueError` on an op error or a reply without a `gate` object, so a probe that did not answer
     is never read as a verdict.
     """
@@ -569,8 +567,6 @@ def _probe(
         "upgrade": upgrade,
         "census_timeout": census_timeout,
     }
-    if census_run:
-        params["census_run"] = census_run
     reply = _invoke(repo_root, "plan.mise_prep_probe", params)
     if not isinstance(reply.get("gate"), dict):
         raise ValueError("plan.mise_prep_probe returned a reply without a `gate` object")
@@ -696,11 +692,14 @@ def main(argv=None) -> int:
     gates: dict[str, dict] = {}
     census_spent = 0.0
     census_spent_ms = 0
-    census_run = secrets.token_hex(16)
+    census_memo_hits = 0
 
     def _charge(probe: dict, wall_s: float) -> float:
         """Seconds this probe spent on census: the engine's own figure, else the wall delta."""
-        nonlocal census_spent_ms
+        nonlocal census_spent_ms, census_memo_hits
+        hits = probe.get("census_memo_hits")
+        if isinstance(hits, int) and not isinstance(hits, bool):
+            census_memo_hits += hits
         ms = probe.get("census_spent_ms")
         if isinstance(ms, int) and not isinstance(ms, bool):
             census_spent_ms += ms
@@ -718,7 +717,6 @@ def main(argv=None) -> int:
                 census_timeout=args.census_timeout if args.census_budget <= 0
                 else max(1, min(args.census_timeout, int(remaining))),
                 check_census=not out_of_budget,
-                census_run=census_run,
             )
         except ValueError as exc:
             gates[plan] = {}
@@ -759,7 +757,6 @@ def main(argv=None) -> int:
                         census_timeout=args.census_timeout if args.census_budget <= 0
                         else max(1, min(args.census_timeout, int(reprobe_left))),
                         check_census=args.census_budget <= 0 or reprobe_left >= 1,
-                        census_run=census_run,
                     )
                     census_spent += _charge(probe, time.monotonic() - reprobed_at)
                 except ValueError as exc:
@@ -861,6 +858,7 @@ def main(argv=None) -> int:
                     "certified": len(certified),
                     "dryRun": args.dry_run,
                     "censusSpentMs": census_spent_ms,
+                    "censusMemoHits": census_memo_hits,
                     "skipped": [{"plan": p, "outcome": "SKIPPED-OUT-OF-TREE"} for p in skipped],
                     "seam": _seam_spell(seam["verdict"]),
                     "seamFix": seam_fix,

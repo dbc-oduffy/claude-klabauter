@@ -86,3 +86,15 @@ def test_own_plan_path_resolved_once_per_path(tmp_path):
         spine_read._route_own_plan_body_write(writes, tmp_path / "docs" / "plans" / "one.md")
     info = spine_read._absolute_plan_key.cache_info()
     assert (info.misses, info.hits) == (1, 4)
+
+
+def test_evaluate_plan_reads_each_predecessor_plan_once(tmp_path, monkeypatch):
+    """The prep gate shares one edge cache across its spine reads and EXTERNAL_DEPS."""
+    from coordinator_core.roadmap import prep_gate
+
+    one, _ = _fixture(tmp_path)
+    seen = _spy(monkeypatch)
+    prep_gate.evaluate_plan(
+        one, root_names=frozenset(), siblings=[], repo_root=tmp_path, nested_names={}
+    )
+    assert sum("pred-target" in s for s in seen) == 1

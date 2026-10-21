@@ -610,7 +610,11 @@ def _pre_commit_gates(
     ):
         outcome = gate(worktree_root, gate_paths)
         if not outcome.passed:
-            return f"{name}: " + "; ".join(outcome.diagnostics[:5])
+            shown = (
+                outcome.diagnostics if name == "attribution_gate"
+                else outcome.diagnostics[:5]
+            )
+            return f"{name}: " + "; ".join(shown)
 
     return None
 

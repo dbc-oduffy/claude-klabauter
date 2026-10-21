@@ -146,7 +146,17 @@ def test_a_revise_note_runs_the_remaining_leg_even_when_no_row_blocks(monkeypatc
     assert "const _reviseNoted = _resumeLedger && (_gate.resume_ledger.revise_notes ?? []).length > 0;" in script
     assert script.index("const _reviseNoted") < script.index(guard) < script.index("label: 'ledger-remaining'")
     # An all-landed resume still skips the leg unless a note asks for work.
-    assert "if (!_allLandedResume || _reviseNoted) { try {" in script
+    assert "if (!_allLandedResume || _reviseNoted || _revisedRows) { try {" in script
+
+
+def test_revised_rows_bind_before_the_guard_and_reach_the_prompt(monkeypatch):
+    script = _script(monkeypatch)
+    bind = "const _revisedRows = _resumeLedger && (_gate.resume_ledger.revised ?? []).length > 0;"
+    assert bind in script
+    assert script.index(bind) < script.index("if (!_allLandedResume || _reviseNoted || _revisedRows)")
+    label_at = script.index("label: 'ledger-remaining'")
+    leg = script[script.rindex("Ledger-resume remaining-work leg", 0, label_at) : label_at]
+    assert "JSON.stringify(_gate.resume_ledger.revised ?? [])" in leg
 
 
 def test_the_terminal_commit_params_carry_the_resume_block(monkeypatch):

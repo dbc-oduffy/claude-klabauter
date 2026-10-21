@@ -129,7 +129,8 @@ def guard_against_dirty_write_set(
     finished but did not land) widens `own` for ownership only: a dirty path every declarer of
     which is in `own | done` is carried, so a done sibling's uncommitted outputs do not refuse
     the re-emit; a path no row declares still refuses. Callers pass `done` only for an
-    `--only-incomplete` re-emit whose task output named the incomplete rows. The result is `None` only when
+    `--only-incomplete` re-emit whose task output named the incomplete rows. `own` is passed by
+    `--only-incomplete` and by `--review-only` (the named review rows). The result is `None` only when
     there is neither regenerable dirt nor own leftover.
 
     Rows this emit will not dispatch are out of the write set: `hold` rows and

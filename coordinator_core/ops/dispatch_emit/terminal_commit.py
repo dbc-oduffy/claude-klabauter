@@ -104,7 +104,9 @@ Negative-spec:
     the run session wrote after that review is declared at its current bytes), never the receipts, allowlist or
     bookkeeping record this call writes. The delivery note is declared at the sha256 of the bytes
     this call just left after its ``## Verdicts`` append. A drift refuses the run's commit with
-    ``blob_drift``, never drops paths.
+    ``blob_drift``, never drops paths; a drifted ``.py`` path whose bytes are AST-equal (docstrings
+    kept) to the review's pre-review snapshot is re-landed once with a ``Comment-Only-Drift``
+    trailer, and anything unprovable refuses.
   - Does NOT retry or catch commit_v2's structured refusals -- returned to
     the caller unmodified in substance, same posture commit_v2 itself takes
     toward ``commit_paths``; the lost-ref-CAS re-attempt is the one exception, and a lost CAS whose
@@ -4367,7 +4369,11 @@ def _terminal_commit_inner(
     all_paths = [p for p in all_paths if canonical_repo_relative_path_refusal(p) is None]
     deleted_paths = [p for p in deleted_paths if canonical_repo_relative_path_refusal(p) is None]
 
-    wh_reasons = {**_withhold_reasons(worktree_root, artifacts, record_dir_rel), **param_withheld}
+    wh_reasons = {
+        **_withhold_reasons(worktree_root, artifacts, record_dir_rel),
+        **param_withheld,
+        **_remedy.review_carried_withholds(request),
+    }
     wh_map: dict = {}
     wh_unmatched: list = []
     wh_chunks: dict = {}
@@ -4891,8 +4897,40 @@ def _terminal_commit_inner(
     if not isinstance(reply, dict):
         reply = {"committed": False, "sha": None, "error": f"unexpected commit_v2 reply: {reply!r}"}
 
+    tolerated: list = []
+    real_drift: Optional[list] = None
+    if reply.get("refused") == "blob-drift" and not overlap and isinstance(reply.get("blob_drift"), list):
+        from coordinator_core.ops.dispatch_emit.comment_only_drift import tolerated_drift
+
+        tolerated, real_drift = tolerated_drift(
+            worktree_root, inline_review.get("prep_sidecar") if isinstance(inline_review, dict) else None,
+            reply["blob_drift"],
+        )
+        if tolerated and not real_drift:
+            moved = dict(commit_params["expected_content_sha256"])
+            trailers = []
+            for t in tolerated:
+                moved[t["path"]] = t["actual"]
+                trailers.append(f"Comment-Only-Drift: {t['path']} {t['expected'][:12]}->{t['actual'][:12]}")
+            commit_params["expected_content_sha256"] = moved
+            commit_params["message"] = commit_params["message"].rstrip("\n") + "\n" + "\n".join(trailers) + "\n"
+            try:
+                reply, overlap = ref_cas_retry.retry_ref_moved(
+                    worktree_root, _overlap_paths, _attempt, _cas_lost
+                )
+            except OpUnavailableError:
+                _remove(worktree_root, receipt_paths)
+                return _error("ceremony.commit_v2 is not registered")
+            except BaseException:
+                _remove(worktree_root, receipt_paths)
+                raise
+            if not isinstance(reply, dict):
+                reply = {"committed": False, "sha": None, "error": f"unexpected commit_v2 reply: {reply!r}"}
+
     reply = dict(reply)
     reply["script_source"] = script_source
+    if tolerated:
+        reply["comment_only_drift"] = tolerated
     if overlap and isinstance(reply.get("error"), str):
         reply["refused"] = overlap
         reply["error"] += (
@@ -4908,7 +4946,8 @@ def _terminal_commit_inner(
     if reply.get("refused") == "blob-drift" and isinstance(reply.get("error"), str):
         reply["error"] = _remedy.blob_drift_remedy(
             reply["error"], worktree_root, _run_id_of(params, ask_run_dir, script_path_raw),
-            "dispatch.terminal_commit", task_output_raw, _drift_paths(reply.get("blob_drift")),
+            "dispatch.terminal_commit", task_output_raw,
+            real_drift if real_drift is not None else _drift_paths(reply.get("blob_drift")),
         )
     if reply.get("committed") and reply.get("sha"):
         token_state["landed"] = True

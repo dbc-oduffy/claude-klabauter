@@ -737,7 +737,7 @@ def attribution_gate(
     `vacated` (declared deletions), when given, is the rename-source pool and skips the
     `read_index` rename scan; an attribution line moved into an unrelated new file then passes.
 
-    Diagnostics are `<path>:<line_no>: adds reviewer attribution ("<match>")`, capped at 5, then one
+    Diagnostics are `<path>:<line_no>: adds reviewer attribution ("<match>")`, every hit uncapped, then one
     remedy line. No override key, no bypass.
     """
     root = Path(worktree_root)
@@ -826,9 +826,8 @@ def attribution_gate(
     if not diagnostics:
         return GateOutcome(passed=True, skipped=False, diagnostics=[])
 
-    capped = diagnostics[:5]
-    capped.append(_ATTRIBUTION_GATE_REMEDY)
-    return GateOutcome(passed=False, skipped=False, diagnostics=capped)
+    diagnostics.append(_ATTRIBUTION_GATE_REMEDY)
+    return GateOutcome(passed=False, skipped=False, diagnostics=diagnostics)
 
 
 # `.coordinator-local/` is process residue (advisory), not never-commit: the engine force-tracks it.

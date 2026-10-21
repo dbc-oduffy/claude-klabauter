@@ -37,6 +37,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     RESUME_LEDGER_KIND_FIELD,
     RESUME_LEDGER_NOTES_FIELD,
     RESUME_LEDGER_REMAINING_FIELD,
+    RESUME_LEDGER_REVISED_FIELD,
     RESUME_LEDGER_UNLANDED_FIELD,
     RESUMED_RUN_ID_KEY,
     RUN_OUTCOME_FILE,
@@ -149,6 +150,7 @@ def gate(
     baton: Optional[str] = None,
     mint_design_rows: bool = False,
     landed_sink: Optional[list] = None,
+    run_id: Optional[str] = None,
 ) -> GateVerdict:
     """Arm for the sizing at `sizing_rel`, or the single halt that stops it, naming every cause.
 
@@ -158,6 +160,8 @@ def gate(
     sizing's scope; a malformed registry with a non-empty scope halts `registry-unparseable`.
     `mint_design_rows` (a run-bound call) also appends one design row per hit to the register.
     `landed_sink`, when given, receives the row resume's `ResumePlan.landed_open`.
+    `run_id` (a run-bound call) carries the run's and its `resumed_from` predecessor's revise notes into
+    `resume_ledger`, and refuses a predecessor note no leg of a non-ledger resume reads.
     """
     from coordinator_core import design_registry as dr
     from coordinator_core.ops.dispatch_emit import design_conformance as dc
@@ -178,7 +182,7 @@ def gate(
         shown = None
     if error:
         return replace(_halt(HALT_REFUSAL, f"{error}: repair {shown or registry}"), design_route=route_payload)
-    verdict = _arm_verdict(root, sizing_rel, writes=writes, baton=baton, landed_sink=landed_sink)
+    verdict = _arm_verdict(root, sizing_rel, writes=writes, baton=baton, landed_sink=landed_sink, run_id=run_id)
     if route_payload is not None and verdict.design_route is None:
         verdict = replace(verdict, design_route=route_payload)
     if verdict.halt is not None or not scope:
@@ -216,7 +220,7 @@ def _baton_belongs_to_sizing(repo_root: Path, sizing: dict, sizing_rel: str, bat
 
 def _arm_verdict(
     repo_root: Path, sizing_rel: str, *, writes: Sequence[str] = (), baton: Optional[str] = None,
-    landed_sink: Optional[list] = None,
+    landed_sink: Optional[list] = None, run_id: Optional[str] = None,
 ) -> GateVerdict:
     """The arm-or-halt verdict, before the design-registry leg."""
     from coordinator_core import sizing_assemble as sa
@@ -336,9 +340,18 @@ def _arm_verdict(
     if refusals:
         return _halt(HALT_REFUSAL, "; ".join(refusals))
     try:
-        resume_ledger = _resume_ledger(sizing, resume.ledger, repo_root) if resume else None
+        resume_ledger = _resume_ledger(sizing, resume.ledger, repo_root, run_id=run_id) if resume else None
     except SizingFireRefused as exc:
         return _halt(HALT_REFUSAL, "; ".join(exc.fields))
+    if run_id and resume_ledger is None:
+        unread = _unread_predecessor_notes(sizing, repo_root, run_id)
+        if unread:
+            prev = unread[0]["run"]
+            return _halt(
+                HALT_REFUSAL,
+                f"run {prev} carries {len(unread)} revise note(s) no leg of this refire reads: "
+                f"workflow.revise with verbatim on {prev} for each requirement, then refire",
+            )
     resume_plan = resume.plan_rel if resume and resume_ledger is None else None
     resume_rows = list(resume.incomplete) if resume and resume_ledger is None else None
     if landed_sink is not None and resume_rows:
@@ -378,14 +391,34 @@ def _arm_verdict(
     )
 
 
-def _resume_ledger(sizing: dict, halt, repo_root: Path) -> Optional[dict]:
+def _unread_predecessor_notes(sizing: dict, repo_root: Path, run_id: str) -> list[dict]:
+    """The `resumed_from` predecessor's notes that no `revision@` register row acknowledges. The run's
+    own notes are excluded: a rebound run's row legs already read them."""
+    from coordinator_core.ops.dispatch_emit.requirements_ledger import carried_notes, unacknowledged_notes
+
+    prior = [n for n in carried_notes(Path(repo_root), run_id) if n["run"] != run_id]
+    if not prior:
+        return []
+    rows = [r for r in (sizing.get("requirement_register") or {}).get("rows") or [] if isinstance(r, dict)]
+    return unacknowledged_notes(prior, rows)
+
+
+def _resume_ledger(sizing: dict, halt, repo_root: Path, run_id: Optional[str] = None) -> Optional[dict]:
     """The verdict's `resume_ledger` for a ledger-halt resume: run, plan, blocking ids, the
     sizing's rulable register ids and the plan's em-discharged rows as `{row_id: text}`; None when
     the resume carries no halt. `blocking` is the halt's blocking ids followed by every other rulable
     row (neither met nor waived), so rows recorded or left unjudged after the halt are judged too."""
     if halt is None:
         return None
-    from coordinator_core.ops.dispatch_emit.requirements_ledger import ledger_ids, read_notes, ruled_out_ids, run_dir
+    from coordinator_core.ops.dispatch_emit.requirements_ledger import (
+        ORIGIN_REVISION,
+        _origin,
+        carried_notes,
+        ledger_ids,
+        read_notes,
+        ruled_out_ids,
+        run_dir,
+    )
     from coordinator_core.ops.plan_tasks_mutate import read_em_discharges
 
     rows = (sizing.get("requirement_register") or {}).get("rows") or []
@@ -403,6 +436,13 @@ def _resume_ledger(sizing: dict, halt, repo_root: Path) -> Optional[dict]:
         *(r for r in rulable if r not in halt.blocking and r not in carried),
     ]
     all_landed = halt.halted == ALL_LANDED_HALT_KIND
+    notes = [] if all_landed and halt.run_id == ALL_LANDED_NO_RUN else read_notes(run_dir(Path(repo_root), halt.run_id))
+    if run_id:
+        notes = list(dict.fromkeys([*notes, *(n["note"] for n in carried_notes(Path(repo_root), run_id))]))
+    revision_ids = {
+        str(r.get("id")) for r in rows
+        if isinstance(r, dict) and _origin(r.get("anchor"))[0] == ORIGIN_REVISION
+    }
     verdict = {
         "run_id": halt.run_id,
         "plan": halt.plan_rel,
@@ -416,10 +456,11 @@ def _resume_ledger(sizing: dict, halt, repo_root: Path) -> Optional[dict]:
         RESUME_LEDGER_HALT_SHA_FIELD: halt.halt_sha,
         RESUME_LEDGER_REMAINING_FIELD: {k: v for k, v in halt.remaining.items() if k in blocking},
         RESUME_LEDGER_UNLANDED_FIELD: list(halt.unlanded),
-        RESUME_LEDGER_NOTES_FIELD: (
-            [] if all_landed and halt.run_id == ALL_LANDED_NO_RUN else read_notes(run_dir(Path(repo_root), halt.run_id))
-        ),
+        RESUME_LEDGER_NOTES_FIELD: notes,
     }
+    revised = [b for b in blocking if b in revision_ids]
+    if revised:
+        verdict[RESUME_LEDGER_REVISED_FIELD] = revised
     if all_landed:
         verdict[RESUME_LEDGER_KIND_FIELD] = ALL_LANDED_HALT_KIND
     if halt.halted == COMMIT_HALT_KIND:
@@ -567,7 +608,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     landed: list = []
     verdict = gate(
         root, sizing_rel, writes=writes, baton=params.get("baton"),
-        mint_design_rows=bool(params.get("run_id")), landed_sink=landed,
+        mint_design_rows=bool(params.get("run_id")), landed_sink=landed, run_id=params.get("run_id"),
     )
     if landed and verdict.halt is None and verdict.resume_plan and verdict.resume_rows:
         _stamp_landed_rows(root, verdict.resume_plan, landed)

@@ -429,7 +429,12 @@ def _refuse(kind: str, detail: str, withheld: Optional[List[str]] = None) -> Dic
 ZERO_DISPATCHABLE_KIND = "zero-dispatchable-rows"
 
 
-def _spine(plan_path: Path, text: str, repo_root: Optional[Path] = None) -> Dict[str, Any]:
+def _spine(
+    plan_path: Path,
+    text: str,
+    repo_root: Optional[Path] = None,
+    plan_edge_cache: Optional[dict] = None,
+) -> Dict[str, Any]:
     """``read_spine()`` + ``build_waves()``, EXECUTED. Never a review of shape.
 
     The absent-block case is reported separately from a parse error because the
@@ -473,7 +478,7 @@ def _spine(plan_path: Path, text: str, repo_root: Optional[Path] = None) -> Dict
         )
     excluded: list = []
     try:
-        rows = read_spine(plan_path, exclusions=excluded)
+        rows = read_spine(plan_path, exclusions=excluded, plan_edge_cache=plan_edge_cache)
     except DanglingPlanDependencyError:
         return _defect(
             "predecessor-plan-dangling",
@@ -1582,6 +1587,7 @@ def _external_deps(
     *,
     repo_root: Optional[Path] = None,
     plan_edges: Any = None,
+    plan_edge_cache: Optional[dict] = None,
 ) -> Dict[str, Any]:
     """The three-way split, at the granularity each leg earns.
 
@@ -1613,7 +1619,7 @@ def _external_deps(
     commit_gated: List[str] = []
     unkeyed_landed: List[str] = []
     withheld: List[str] = []
-    cache: dict = {}
+    cache: dict = {} if plan_edge_cache is None else plan_edge_cache
     dangling: List[str] = _frontmatter_edge_dangling(plan_edges, repo_root, cache)
     waiting: List[str] = []
 
@@ -1997,7 +2003,7 @@ def _prime_exit(
 
 
 def _em_owned_exit_warnings(
-    plan_path: Path, text: str, fm: Dict[str, Any]
+    plan_path: Path, text: str, fm: Dict[str, Any], plan_edge_cache: Optional[dict] = None
 ) -> List[str]:
     """Non-verdict warning when every row delivering the prime exit criterion is EM-owned.
 
@@ -2020,7 +2026,7 @@ def _em_owned_exit_warnings(
         ):
             return []
         exclusions: List[Dict[str, Any]] = []
-        rows = read_spine(plan_path, exclusions=exclusions)
+        rows = read_spine(plan_path, exclusions=exclusions, plan_edge_cache=plan_edge_cache)
         skipped = {
             e["id"]: e.get("reason") for e in exclusions if e.get("reason") != "disposition"
         }
@@ -2392,10 +2398,11 @@ def evaluate_plan(
         from coordinator_core.ops.dispatch_emit.spine_read import _repo_root_of
 
         edge_root = repo_root if repo_root is not None else _repo_root_of(plan_path)
+        plan_edge_cache: dict = {}
         prime_exit = _prime_exit(fm, repo_root, text)
-        prime_exit["warnings"] = _em_owned_exit_warnings(plan_path, text, fm)
+        prime_exit["warnings"] = _em_owned_exit_warnings(plan_path, text, fm, plan_edge_cache)
         classes = {
-            "SPINE": _spine(plan_path, text, repo_root),
+            "SPINE": _spine(plan_path, text, repo_root, plan_edge_cache),
             "CENSUS": _census(fm, edge_root),
             "EXTERNAL_DEPS": _external_deps(
                 raw_spine_rows(text),
@@ -2405,6 +2412,7 @@ def evaluate_plan(
                 gitignored_roots,
                 repo_root=edge_root,
                 plan_edges=fm.get("depends_on_plan"),
+                plan_edge_cache=plan_edge_cache,
             ),
             "PRIME_EXIT": prime_exit,
             "CI_RETIRED": _ci_retired(raw_spine_rows(text)),

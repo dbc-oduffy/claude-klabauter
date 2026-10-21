@@ -1,7 +1,8 @@
 """Names shared by the warp --ask seam: phases, op names, halt kinds, gate verdict, stage manifest.
 
 Signatures implemented in their own modules:
-  ask_gate.gate(repo_root: Path, sizing_rel: str, *, writes: Sequence[str] = ()) -> GateVerdict
+  ask_gate.gate(repo_root: Path, sizing_rel: str, *, writes: Sequence[str] = (),
+                 run_id: str | None = None) -> GateVerdict
   ask_stage.stage(repo_root: Path, *, run_id: str, plan_rel: str | None = None,
                   sizing_rel: str | None = None, writes: Sequence[str] = (),
                   ledger_resume: bool = False) -> StageManifest
@@ -388,6 +389,8 @@ RESUME_LEDGER_HALT_SHA_FIELD = "halt_sha"
 RESUME_LEDGER_REMAINING_FIELD = "remaining"
 #: `resume_ledger` verdict key carrying the revise note texts, oldest first.
 RESUME_LEDGER_NOTES_FIELD = "revise_notes"
+#: `resume_ledger` verdict key carrying the blocking ids whose register anchor is a `revision@` anchor.
+RESUME_LEDGER_REVISED_FIELD = "revised"
 #: `resume_ledger` verdict key carrying the ids an earlier halt judged met that a later no-landing halt re-listed.
 RESUME_LEDGER_CARRIED_MET_FIELD = "carried_met"
 #: `resume_ledger` verdict key carrying the open plan rows the halted run staged that no checkpoint

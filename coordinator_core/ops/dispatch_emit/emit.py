@@ -4949,6 +4949,7 @@ def _terminal_commit_marker(
     row_prefixes: dict[str, tuple[str, ...]],
     review_only: bool = False,
     review_open_rows: Sequence[str] = (),
+    review_carried: Sequence[str] = (),
     run_base_sha: Optional[str] = None,
 ) -> Optional[str]:
     """§ Design D2/D4's terminal-commit-request marker: one JS comment line
@@ -4985,6 +4986,7 @@ def _terminal_commit_marker(
             expected_branch=expected_branch,
             review_only=review_only,
             review_open_rows=tuple(review_open_rows),
+            review_carried=tuple(review_carried),
             review_run_base=run_base_sha if review_only else None,
         )
     )
@@ -5117,6 +5119,7 @@ def compose_script(
     precredited_rows: Optional[Sequence[str]] = None,
     review_only: bool = False,
     review_open_rows: Sequence[str] = (),
+    review_carried: Sequence[str] = (),
     box_terms: Sequence[str] = (),
     held_rows: Sequence[tuple[str, str]] = (),
     slot_rows: Sequence[str] = (),
@@ -5638,6 +5641,7 @@ def compose_script(
             row_prefixes=marker_prefixes,
             review_only=review_only,
             review_open_rows=review_open_rows,
+            review_carried=review_carried,
             run_base_sha=run_base_sha,
         )
         if terminal_commit
@@ -6763,6 +6767,7 @@ def emit_script(
     findings_out: Optional[list] = None,
     landed_rows: Optional[frozenset] = None,
     review_only_rows: Optional[frozenset] = None,
+    review_carried_paths: Sequence[str] = (),
     run_base_sha: Optional[str] = None,
     chatty: bool = False,
     cross_repo_approved: bool = False,
@@ -6894,6 +6899,8 @@ def emit_script(
         review_terminal_sha = _pin_review_terminal(run_base_sha, repo_root)
     elif run_base_sha is not None or review_only_rows is not None:
         raise ValueError("run_base_sha and review_only_rows are accepted only together")
+    if review_carried_paths and not review_only:
+        raise ValueError("review_carried_paths is accepted only with review_only_rows")
     # `landed_rows is not None` is the --only-incomplete request: a run text naming no rows
     # still excludes the rows this plan's checkpoints landed.
     carried_gate_owed: tuple = ()
@@ -7088,6 +7095,7 @@ def emit_script(
             r.id for r in rows
             if review_only and (raw_by_id.get(r.id, {}).get("disposition") or "open") == "open"
         ],
+        review_carried=tuple(review_carried_paths),
         carried_gate_owed=carried_owed_gates,
         held_rows=held_rows,
         slot_rows=slot_rows,

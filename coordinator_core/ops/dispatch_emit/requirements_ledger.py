@@ -33,7 +33,7 @@ from coordinator_core.ipc import register_op
 from coordinator_core.lifecycle import main_worktree_root
 from coordinator_core.locked_write import MutateAbort
 from coordinator_core.ops import requirement_register as rr
-from coordinator_core.ops._path_guard import contained_path
+from coordinator_core.ops._path_guard import contained_path, safe_id
 from coordinator_core.ops.dispatch_emit.ask_contract import (
     ASK_SOURCE_RELAYED,
     EMPTY_REGISTER_REASON,
@@ -54,6 +54,8 @@ GENERATES = []
 RUN_FILE = "run.json"
 INBOX_FILE = "revisions.jsonl"
 NOTES_FILE = "notes.jsonl"
+#: run.json key naming the halted run a fresh fire resumed.
+RESUMED_FROM_FIELD = "resumed_from"
 LEDGER_VIEW_FILE = "requirements.md"
 ORIGIN_PM_VERBATIMS, ORIGIN_ASK, ORIGIN_REVISION = "pm_verbatims", "ask", "revision"
 ORIGIN_RELAYED = "relayed"
@@ -652,16 +654,73 @@ def _write_view(repo_root: Path, dir_: Path, run_id: str) -> Optional[Ledger]:
     return ledger
 
 
-def start(repo_root: Path, run_id: str, *, all_of_pm_ask: bool = False) -> Path:
-    """Make the run ledger-bearing (emit time). Returns the run dir."""
+def start(
+    repo_root: Path, run_id: str, *, all_of_pm_ask: bool = False, resumed_from: Optional[str] = None,
+) -> Path:
+    """Make the run ledger-bearing (emit time). Returns the run dir. `resumed_from` names the halted
+    run this one resumes; omitted, a rebound run keeps the link its run.json already carries."""
     dir_ = run_dir(repo_root, run_id)
     prior = read_run(dir_) or {}
-    _write_run(dir_, {
+    data = {
         "sizing_rel": prior.get("sizing_rel"),
         "all_of_pm_ask": bool(all_of_pm_ask) or bool(prior.get("all_of_pm_ask")),
-    })
+    }
+    if resumed_from is not None:
+        if not safe_id(resumed_from) or resumed_from == run_id:
+            raise LedgerRefused(f"resumed_from {resumed_from!r} is not a safe run id distinct from {run_id!r}")
+        data[RESUMED_FROM_FIELD] = resumed_from
+    elif isinstance(prior.get(RESUMED_FROM_FIELD), str):
+        data[RESUMED_FROM_FIELD] = prior[RESUMED_FROM_FIELD]
+    _write_run(dir_, data)
     _write_view(repo_root, dir_, run_id)
     return dir_
+
+
+def _note_entries(dir_: Path, run_id: str) -> list[dict]:
+    try:
+        raw = (Path(dir_) / NOTES_FILE).read_text(encoding="utf-8")
+    except OSError:
+        return []
+    out: list[dict] = []
+    for line in raw.splitlines():
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            continue  # a torn tail line from a crashed writer; the rest stands
+        note = entry.get("note") if isinstance(entry, dict) else None
+        if isinstance(note, str):
+            at = entry.get("at")
+            out.append({"note": note, "at": at if isinstance(at, str) else "", "run": run_id})
+    return out
+
+
+def carried_notes(repo_root: Path, run_id: str) -> list[dict]:
+    """`{note, at, run}` entries of this run's `NOTES_FILE` and of its `resumed_from` run's, oldest
+    first, de-duplicated on (note, at). One hop: the predecessor's own link is not followed."""
+    own_dir = run_dir(repo_root, run_id)
+    entries = _note_entries(own_dir, run_id)
+    prev = (read_run(own_dir) or {}).get(RESUMED_FROM_FIELD)
+    if isinstance(prev, str) and safe_id(prev) and prev != run_id:
+        entries = _note_entries(run_dir(repo_root, prev), prev) + entries
+    seen: set[tuple[str, str]] = set()
+    out: list[dict] = []
+    for e in sorted(entries, key=lambda e: e["at"]):
+        key = (e["note"], e["at"])
+        if key not in seen:
+            seen.add(key)
+            out.append(e)
+    return out
+
+
+def unacknowledged_notes(notes: Sequence[Mapping], rows: Sequence[Mapping]) -> list[dict]:
+    """The notes no revision register row acknowledges: none of `rows` has a `revision@` anchor
+    stamped at or after the note's `at`. Both stamps are `_now()` UTC `%Y-%m-%dT%H:%M:%SZ` strings,
+    so string order is time order."""
+    stamps = [
+        at for r in rows
+        if (o := _origin(r.get(rr.ROW_ANCHOR)))[0] == ORIGIN_REVISION and (at := o[1])
+    ]
+    return [dict(n) for n in notes if not any(s >= str(n.get("at") or "") for s in stamps)]
 
 
 def _seedable_words(sizing: Mapping, foreign: Mapping[int, str]) -> list[str]:

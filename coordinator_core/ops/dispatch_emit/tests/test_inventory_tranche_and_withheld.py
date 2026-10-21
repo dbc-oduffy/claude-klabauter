@@ -166,3 +166,25 @@ def test_unspent_tranche_record_with_nonbinding_budget_keeps_its_run_id(tmp_path
     _, spine_path = im.mint_spine(str(t1), row_budget=50, tranche_inventory_out=out)
     assert spine_path.name == "20261008T000000-tr-t1.spine.md"
     assert not out
+
+
+def test_shared_path_group_with_untaken_external_prerequisite_keeps_fireable_members():
+    groups = [["a", "b", "c"], ["z"]]
+    size = {"a": 1, "b": 1, "c": 1, "z": 5}
+    prereqs = {"a": set(), "b": {"z"}, "c": {"b"}, "z": set()}
+    shared = {"a": "s/one.json"}
+    taken, deferred = im._pick_groups(groups, size, prereqs, shared, 3)
+    assert taken == ["a"]
+    assert "prerequisite z" in deferred["b"]
+    assert "prerequisite b" in deferred["c"]
+
+
+def test_bound_shared_path_group_still_defers_whole():
+    groups = [["a", "b"], ["z"]]
+    size = {"a": 1, "b": 1, "z": 5}
+    prereqs = {"a": set(), "b": {"z"}, "z": set()}
+    shared = {"a": "s/one.json"}
+    taken, deferred = im._pick_groups(
+        groups, size, prereqs, shared, 3, {"a": "b (depends_on_plan of a)"}
+    )
+    assert taken == [] and {"a", "b"} <= set(deferred)

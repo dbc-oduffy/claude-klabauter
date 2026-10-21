@@ -1462,8 +1462,10 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
     )
     from coordinator_core.ops.dispatch_emit.landing_remedy import (
         blob_drift_remedy,
+        REVIEW_CARRIED_REASON,
         param_withholds,
         release_held_call,
+        review_carried_withholds,
         review_only_anchor,
     )
 
@@ -1806,6 +1808,8 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
     em_withheld = _withhold_reasons(root, artifacts, record_dir_rel)
     try:
         em_withheld.update(param_withholds(params))
+        carried_paths = review_carried_withholds(request)
+        em_withheld.update(carried_paths)
     except ValueError as exc:
         return _error(f"withhold_paths refused: {exc}")
     from coordinator_core.ops.ceremony.commit_gates import is_never_commit
@@ -1818,7 +1822,7 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
         elif sibling_write(p, root) is not None:
             withhold_reason[p] = "sibling-repo"
         elif p in em_withheld:
-            withhold_reason[p] = "withheld"
+            withhold_reason[p] = REVIEW_CARRIED_REASON if p in carried_paths else "withheld"
     candidates = [p for p in declared_changed if p not in withhold_reason]
     art_present = [p for p in (art_landable.present if art_landable else ()) if p not in candidates]
     art_deleted = list(art_landable.deleted) if art_landable else []

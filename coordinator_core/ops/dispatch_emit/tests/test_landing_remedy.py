@@ -56,6 +56,7 @@ def test_blob_drift_remedy_ledgerless_names_reemit_and_runnable_withhold(tmp_pat
     out = lr.blob_drift_remedy(f"blob-drift. {GENERIC}", tmp_path, "inv-t1-p1-land.workflow", "dispatch.land_run", "t.output", ["a.py"])
     assert "workflow.revise" not in out
     assert "--review-only" in out
+    assert out.index("ceremony.commit_v2") < out.index("--review-only")
     assert GENERIC not in out
     params = _json_of(out[out.index("coordinator-invoke"):])
     assert lr.param_withholds(params) == {"a.py": lr._DRIFT_REASON}

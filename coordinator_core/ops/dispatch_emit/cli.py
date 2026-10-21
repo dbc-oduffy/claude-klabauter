@@ -2131,18 +2131,34 @@ def main(argv: "Optional[list[str]]" = None) -> int:
                     if incomplete is not None:
                         done_rows = own_rows - incomplete
                         own_rows &= incomplete
+                if args.review_only is not None:
+                    own_rows = frozenset(params.get("review_only_rows") or ())
                 regenerable_dirty = guard_against_dirty_write_set(
                     Path(args.plan), guard_root,
                     hold=hold_set, landed=landed_set, own=own_rows, done=done_rows,
                 )
                 if regenerable_dirty and "own_leftover" in regenerable_dirty:
                     regenerable_dirty = dict(regenerable_dirty)
-                    for row_id, paths in sorted(regenerable_dirty.pop("own_leftover").items()):
+                    own_leftover = regenerable_dirty.pop("own_leftover")
+                    carried: set = set()
+                    for row_id, paths in sorted(own_leftover.items()):
+                        if args.review_only is not None:
+                            carried.update(paths)
+                            print(
+                                f"emit-dispatch-workflow: {row_id}: {len(paths)} uncommitted path(s) "
+                                "in its own writes carried, withheld from this review-only landing "
+                                "(it reviews committed shas only): commit them, then re-emit to "
+                                "review them",
+                                file=sys.stderr,
+                            )
+                            continue
                         print(
                             f"emit-dispatch-workflow: {row_id}: {len(paths)} uncommitted path(s) "
                             "in its own writes carried as its prior draft",
                             file=sys.stderr,
                         )
+                    if carried:
+                        params["review_carried_paths"] = sorted(carried)
                     if "count" not in regenerable_dirty:
                         regenerable_dirty = None
         if params.get("plan_path") and not args.inventory and args.review_only is None:
