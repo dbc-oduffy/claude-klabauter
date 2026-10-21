@@ -570,3 +570,35 @@ def test_fixture_roster_allows_via_check_not_just_resolve_roster(
         assert envelope is None or decision == "allow", (
             f"check() emitted {envelope!r} for enumerated type {subagent_type!r}"
         )
+
+
+def _plugin_agent(root: Path, rel: str, body: str) -> Path:
+    path = root / ".claude" / "plugins" / rel
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(body, encoding="utf-8")
+    return path
+
+
+def test_plugin_agent_model_reads_the_manifest_install_path(tmp_path: Path) -> None:
+    install = tmp_path / "elsewhere" / "game-dev"
+    path = install / "agents" / "staff-game-dev.md"
+    path.parent.mkdir(parents=True)
+    path.write_text("---\nmodel: opus\n---\n", encoding="utf-8")
+    plugins = tmp_path / ".claude" / "plugins"
+    plugins.mkdir(parents=True)
+    (plugins / "installed_plugins.json").write_text(
+        json.dumps({"plugins": {"game-dev@m": [{"installPath": str(install)}]}}), encoding="utf-8"
+    )
+    assert mod.plugin_agent_model("game-dev:staff-game-dev", home=tmp_path) == ("opus", path)
+
+
+def test_plugin_agent_model_skips_a_pre_refresh_snapshot(tmp_path: Path) -> None:
+    _plugin_agent(tmp_path, "_pre-refresh-snapshots/game-dev/agents/staff-game-dev.md", "---\nmodel: opus\n---\n")
+    model, path = mod.plugin_agent_model("game-dev:staff-game-dev", home=tmp_path)
+    assert model is None
+    assert path == tmp_path / ".claude" / "plugins" / "game-dev" / "agents" / "staff-game-dev.md"
+
+
+@pytest.mark.parametrize("agent_type", ["no-colon", ":stem", "plugin:", "a/b:c", r"a:..\c"])
+def test_plugin_agent_model_rejects_malformed_types(tmp_path: Path, agent_type: str) -> None:
+    assert mod.plugin_agent_model(agent_type, home=tmp_path) == (None, None)

@@ -310,11 +310,47 @@ def test_mixed_writes_row_still_raises_even_with_explicit_agent_type():
         compose_script(waves, name="wf", description="mixed row, explicit agent_type", **REVIEW_KW)
 
 
-def test_unmodellable_agent_type_alone_raises_malformed_agent_override_error():
+def _plugin_home(tmp_path, monkeypatch, plugin, stem, text):
+    agents = tmp_path / ".claude" / "plugins" / plugin / "agents"
+    agents.mkdir(parents=True)
+    path = agents / f"{stem}.md"
+    if text is not None:
+        path.write_text(text, encoding="utf-8")
+    monkeypatch.setenv("CLAUDE_HOME", str(tmp_path))
+    return path
+
+
+def test_resolve_agent_model_reads_plugin_definition_frontmatter(tmp_path, monkeypatch):
+    _plugin_home(tmp_path, monkeypatch, "game-dev", "staff-game-dev", "---\nname: staff-game-dev\nmodel: opus\n---\nbody\n")
+    assert emit.resolve_agent_model("game-dev:staff-game-dev") == "opus"
+    assert emit._model_opt("game-dev:staff-game-dev") == "model: 'opus'"
+
+
+def test_resolve_agent_model_refuses_naming_looked_for_path(tmp_path, monkeypatch):
+    path = _plugin_home(tmp_path, monkeypatch, "game-dev", "staff-game-dev", None)
+    with pytest.raises(MalformedAgentOverrideError) as exc:
+        emit.resolve_agent_model("game-dev:staff-game-dev")
+    assert str(path) in str(exc.value)
+
+
+def test_resolve_agent_model_override_wins_over_definition(tmp_path, monkeypatch):
+    _plugin_home(tmp_path, monkeypatch, "game-dev", "staff-game-dev", "---\nmodel: opus\n---\n")
+    assert emit.resolve_agent_model("game-dev:staff-game-dev", "sonnet") == "sonnet"
+
+
+def test_resolve_agent_model_refuses_when_definition_pin_is_inherit(tmp_path, monkeypatch):
+    path = _plugin_home(tmp_path, monkeypatch, "game-dev", "staff-game-dev", "---\nmodel: inherit\n---\n")
+    with pytest.raises(MalformedAgentOverrideError) as exc:
+        emit.resolve_agent_model("game-dev:staff-game-dev")
+    assert str(path) in str(exc.value)
+
+
+def test_unmodellable_agent_type_alone_raises_malformed_agent_override_error(tmp_path, monkeypatch):
     """An explicit agent_type absent from _AGENT_MODELS, with no agent_model
     supplied, refuses rather than silently downgrading to a default model
     (Ruling 2: the field that closes the silent-Sonnet-downgrade hole is the
     refusal itself, not agent_model alone)."""
+    monkeypatch.setenv("CLAUDE_HOME", str(tmp_path))
     waves = [
         [
             _wave_row(

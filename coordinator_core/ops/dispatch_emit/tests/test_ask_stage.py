@@ -244,3 +244,28 @@ def test_audit_and_scratch_only_rows_declare_no_reviewable_path(repo):
     m = stage(repo, run_id="r2", plan_rel=PLAN_REL)
     assert [r.id for r in m.rows] == ["C1"]
     assert m.review_declared_paths == ()
+
+
+def test_plugin_agent_row_without_agent_model_stages_with_frontmatter_model(repo, tmp_path_factory, monkeypatch):
+    home = tmp_path_factory.mktemp("home")
+    agents = home / ".claude" / "plugins" / "game-dev" / "agents"
+    agents.mkdir(parents=True)
+    (agents / "staff-game-dev.md").write_text(
+        "---\nname: staff-game-dev\nmodel: opus\n---\nbody\n", encoding="utf-8", newline="\n"
+    )
+    monkeypatch.setenv("CLAUDE_HOME", str(home))
+    plan = PLAN.split("```yaml plan-tasks")[0] + """```yaml plan-tasks
+- id: C1
+  title: plugin agent row
+  change_kind: code-edit
+  surface: pkg/a.py
+  agent_type: game-dev:staff-game-dev
+  writes:
+    - pkg/a.py
+```
+"""
+    (repo / PLAN_REL).write_text(plan, encoding="utf-8", newline="\n")
+    m = stage(repo, run_id="r3", plan_rel=PLAN_REL)
+    row = next(r for r in m.rows if r.id == "C1")
+    assert (row.agent_type, row.model) == ("game-dev:staff-game-dev", "opus")
+    assert row.brief_path

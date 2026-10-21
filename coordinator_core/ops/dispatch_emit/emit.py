@@ -506,17 +506,25 @@ def resolve_agent_model(agent_type: str, override: Optional[str] = None) -> str:
 
     A type in ``_AGENT_MODELS`` is pinned: an ``override`` equal to its entry is
     accepted, any other raises ``MalformedAgentOverrideError``. An unpinned type
-    takes ``override`` as given and refuses when none is supplied.
+    takes ``override`` as given; with none, it takes the ``model:`` pin of its one
+    installed plugin definition (``plugin_agent_model``) and refuses, naming the
+    definition path looked for, when that file gives no pin.
     """
     pinned = _AGENT_MODELS.get(agent_type)
     if pinned is None:
-        if not override:
-            raise MalformedAgentOverrideError(
-                f"agent_type {agent_type!r} has no entry in _AGENT_MODELS and no "
-                "agent_model override was supplied -- supply agent_model to name "
-                "this agent's model explicitly"
-            )
-        return override
+        if override:
+            return override
+        from coordinator_core.hooks.block_unenumerated_agent_type import plugin_agent_model
+
+        model, path = plugin_agent_model(agent_type)
+        if model:
+            return model
+        looked = f"; looked for its definition at {path}" if path else ""
+        raise MalformedAgentOverrideError(
+            f"agent_type {agent_type!r} has no entry in _AGENT_MODELS, no agent_model "
+            f"override was supplied and no definition frontmatter model was found{looked} "
+            "-- supply agent_model or add `model:` to the definition"
+        )
     if override and override != pinned:
         raise MalformedAgentOverrideError(
             f"agent_model {override!r} would change {agent_type!r}, pinned to "
@@ -552,12 +560,9 @@ def _model_opt(agent_type: str, agent_model: Optional[str] = None) -> str:
     left to the grammar check alone.
 
     Absent ``agent_model``, an ``agent_type`` with no ``_AGENT_MODELS`` row
+    takes the ``model:`` of its installed plugin definition; with neither it
     REFUSES (``MalformedAgentOverrideError``) rather than silently falling
-    back to a default model: a row naming an unregistered persona and
-    omitting ``agent_model`` used to downgrade to a silent Sonnet dispatch,
-    closing the hole only for an author who already knew the second key
-    existed. Refusing here closes it for everyone -- the fix the refusal
-    names is supplying ``agent_model``.
+    back to a default model, naming the definition path looked for.
     """
     if agent_model:
         if not _AGENT_MODEL_GRAMMAR_RE.match(agent_model):

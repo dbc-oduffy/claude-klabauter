@@ -940,6 +940,66 @@ def declared_model_pin(frontmatter: dict) -> Optional[str]:
     return _declared_pin_value(frontmatter.get("model"), _MODEL_ORDER)
 
 
+def _plugin_definition_candidates(plugins_root: Path, plugin: str, stem: str) -> "list[Path]":
+    """Existing-or-not definition paths for one `<plugin>:<stem>`, in probe order:
+    manifest `installPath` (+ `plugin/` nesting), cache, marketplaces, repo-style.
+    Directory globs only, every pattern pinned to `plugin` and `stem`."""
+    found: "list[Path]" = []
+    manifest = plugins_root / "installed_plugins.json"
+    try:
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+        section = data.get("plugins") if isinstance(data, dict) else None
+    except (OSError, ValueError):
+        section = None
+    if isinstance(section, dict):
+        for key, entries in section.items():
+            if not (isinstance(key, str) and key.split("@", 1)[0] == plugin and isinstance(entries, list)):
+                continue
+            for entry in entries:
+                install = entry.get("installPath") if isinstance(entry, dict) else None
+                if isinstance(install, str) and install:
+                    root = Path(install)
+                    found += [root / "agents" / f"{stem}.md", root / "plugin" / "agents" / f"{stem}.md"]
+    try:
+        found += sorted((plugins_root / "cache").glob(f"*/{plugin}/*/agents/{stem}.md"), reverse=True)
+        found += sorted((plugins_root / "marketplaces").glob(f"*/plugins/{plugin}/agents/{stem}.md"))
+        found += [
+            p
+            for p in sorted(plugins_root.glob(f"*/{plugin}/agents/{stem}.md"))
+            if p.relative_to(plugins_root).parts[0] not in _PLUGIN_ROSTER_EXCLUDED_TOP_DIRS
+        ]
+        found.append(plugins_root / plugin / "agents" / f"{stem}.md")
+    except OSError:
+        pass
+    return found
+
+
+def plugin_agent_model(
+    agent_type: str, *, home: Any = _UNSET
+) -> Tuple[Optional[str], Optional[Path]]:
+    """`(model, path)` for one `<plugin>:<stem>` agent type: `path` is the one
+    definition file read (or, when none exists, the canonical location looked
+    for), `model` its genuine `model:` pin per `declared_model_pin` or `None`.
+
+    Reads at most one definition file, spawns nothing, never raises. A type
+    without a `<plugin>:<stem>` shape or an unresolved home gives `(None, None)`.
+    """
+    if home is _UNSET:
+        home = _home_dir()
+    plugin, sep, stem = agent_type.partition(":")
+    if not (home and sep and plugin and stem) or "/" in agent_type or "\\" in agent_type:
+        return None, None
+    plugins_root = Path(home) / ".claude" / "plugins"
+    for candidate in _plugin_definition_candidates(plugins_root, plugin, stem):
+        try:
+            text = candidate.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        fm = _extract_frontmatter(text)
+        return (declared_model_pin(fm) if fm else None), candidate
+    return None, plugins_root / plugin / "agents" / f"{stem}.md"
+
+
 def _has_override_marker(prompt_text: str) -> bool:
     for match in _OVERRIDE_MARKER_RE.finditer(prompt_text):
         reason = match.group(1)
