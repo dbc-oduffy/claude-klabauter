@@ -4,8 +4,9 @@ Each distinct target is read once, header bytes only, `status:` taken by line sc
 parse, no subprocess, no write.
 
 Plans are also read plan to baton, from the same one pass over docs/plans that resolves
-`plan_id`. Join rules: docs/plans/2026-10-21-2026-10-21-close-report-reverse-plan-link.md,
-section Problem.
+`plan_id`, plus one pass over archive/specs for plans the stamp archived. Join rules:
+docs/plans/2026-10-21-2026-10-21-close-report-reverse-plan-link.md and
+docs/plans/2026-10-21-close-report-plan-backlink-sizing-join-cascade-msg-4734e5.md, section Problem.
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ import re
 from coordinator_core.ops.baton_close_report_contract import (
     REVERSE_FIELD_DELIVERABLE,
     REVERSE_FIELD_PREDECESSOR,
+    REVERSE_FIELD_SIZING,
     BatonHeader,
     Evidence,
     EvidenceClass,
@@ -48,9 +50,6 @@ _PREDECESSOR_RE = re.compile(r"^predecessor_handoff:[ \t]*(.*)$")
 _GOAL_ID_RE = re.compile(r"^id:[ \t]*(.*)$")
 _SIZING_OBJECT_RE = re.compile(r"^sizing_object:[ \t]*(.*)$")
 _BATON_PATH_RE = re.compile(r"state/handoffs/[^\s\"',()#]+\.md")
-
-# Evidence.field of the sizing hop: baton named by a sizing, plan produced by that sizing.
-REVERSE_FIELD_SIZING = "plan.sizing_object"
 
 
 def _scalar(raw: str) -> str:
@@ -172,6 +171,26 @@ def _safe_join(root: str, rel: str) -> str | None:
     return os.path.join(root, *parts)
 
 
+def _sizing_named_batons(lines) -> set[str]:
+    """Batons a sizing names: a column-zero `baton:` value, or a line that is only `- <baton path>`.
+
+    A path inside prose, another mapping value or a quoted `finding:` string is not a naming.
+    """
+    out: set[str] = set()
+    for ln in lines:
+        if ln.startswith("baton:"):
+            value = _scalar(ln[len("baton:"):])
+        else:
+            text = ln.strip()
+            if not text.startswith("- "):
+                continue
+            value = _scalar(text[2:])
+        value = value.replace("\\", "/")
+        if _BATON_PATH_RE.fullmatch(value):
+            out.add(value)
+    return out
+
+
 class _Reader:
     def __init__(self, root: str) -> None:
         self.root = root
@@ -180,6 +199,10 @@ class _Reader:
         self._by_deliverable: dict[str, list[str]] = {}
         self._by_predecessor: dict[str, list[str]] = {}
         self._by_sizing: dict[str, list[str]] = {}
+        self._live_names: set[str] = set()
+        self._arch_by_deliverable: dict[str, list[str]] = {}
+        self._arch_by_predecessor: dict[str, list[str]] = {}
+        self._arch_by_sizing: dict[str, list[str]] = {}
         self._sizing_batons: dict[str, list[str]] | None = None
         self._goal_status: dict[str, str | None] | None = None
         self._months: list[str] | None = None
@@ -236,23 +259,53 @@ class _Reader:
                 return lines
         return None
 
-    def _archived_plan_id(self, plan_id: str) -> str | None:
-        """docs/plans rel of the archived plan carrying `plan_id`; scans archive heads once, on a live miss."""
-        if self._archived_ids is None:
-            self._archived_ids = {}
-            for month in self._archive_months():
-                try:
-                    names = sorted(os.listdir(month))
-                except OSError:
+    def _archive_index(self) -> dict[str, str]:
+        """One pass over archive/specs/<yyyy-mm>/*.md, at most once per op.
+
+        Fills the archived plan_id map and the archived deliverable / predecessor / sizing
+        reverse maps. A basename present in docs/plans contributes no reverse entry, so a plan
+        is never counted twice; the newest month wins a basename archived twice. `_status` is
+        seeded from the archived header, keyed by the docs/plans rel.
+        """
+        if self._archived_ids is not None:
+            return self._archived_ids
+        self._plan_index()
+        self._archived_ids = ids = {}
+        seen: set[str] = set()
+        for month in self._archive_months():
+            try:
+                names = sorted(os.listdir(month))
+            except OSError:
+                continue
+            for name in names:
+                if not name.endswith(".md"):
                     continue
-                for name in names:
-                    if not name.endswith(".md"):
-                        continue
-                    fm = _plan_frontmatter(os.path.join(month, name))
-                    pid = _key_value(fm, _PLAN_ID_RE) if fm is not None else None
-                    if pid:
-                        self._archived_ids.setdefault(pid, "docs/plans/" + name)
-        return self._archived_ids.get(plan_id)
+                fm = _plan_frontmatter(os.path.join(month, name))
+                if fm is None:
+                    continue
+                keys = _plan_keys(fm)
+                rel = "docs/plans/" + name
+                pid = keys.get("plan_id")
+                if pid:
+                    ids.setdefault(pid, rel)
+                if name in self._live_names or name in seen:
+                    continue
+                seen.add(name)
+                self._status.setdefault(rel, (True, keys.get("status")))
+                did = keys.get("deliverable_id")
+                if did:
+                    self._arch_by_deliverable.setdefault(did, []).append(rel)
+                szo = keys.get("sizing_object")
+                if szo:
+                    self._arch_by_sizing.setdefault(szo.replace("\\", "/"), []).append(rel)
+                pre = keys.get("predecessor_handoff")
+                if pre:
+                    self._arch_by_predecessor.setdefault(pre.replace("\\", "/"), []).append(rel)
+        return ids
+
+    def _archived_plan_id(self, plan_id: str) -> str | None:
+        """docs/plans rel of the archived plan carrying `plan_id`."""
+        return self._archive_index().get(plan_id)
 
     def _plan_index(self) -> None:
         """One pass over docs/plans/*.md: plan_id, status, deliverable_id, predecessor_handoff.
@@ -275,6 +328,7 @@ class _Reader:
             if fm is None:
                 continue
             rel = "docs/plans/" + name
+            self._live_names.add(name)
             keys = _plan_keys(fm)
             self._status.setdefault(rel, (True, keys.get("status")))
             pid = keys.get("plan_id")
@@ -296,31 +350,33 @@ class _Reader:
         return self._plan_ids.get(plan_id) or self._archived_plan_id(plan_id)
 
     def plans_for_deliverable(self, deliverable_id: str) -> list[str]:
-        self._plan_index()
-        return self._by_deliverable.get(deliverable_id, [])
+        self._archive_index()
+        return self._by_deliverable.get(deliverable_id, []) + self._arch_by_deliverable.get(deliverable_id, [])
 
     def plans_for_predecessor(self, baton_rel: str) -> list[str]:
-        self._plan_index()
-        return self._by_predecessor.get(baton_rel, [])
+        self._archive_index()
+        return self._by_predecessor.get(baton_rel, []) + self._arch_by_predecessor.get(baton_rel, [])
 
     def sizing_hop(self, baton_rel: str) -> list[tuple[str, str]]:
         """(sizing rel, plan rel) pairs for sizings that name `baton_rel` and have a producing plan.
 
-        Only sizings some plan cites as `sizing_object` are read (head bytes, once each); a baton
-        named by more than one such sizing yields nothing.
+        Only sizings some plan, live or archived, cites as `sizing_object` are read (head bytes,
+        once each). A sizing names a baton only by `_sizing_named_batons`; a baton named by more
+        than one such sizing yields nothing.
         """
-        self._plan_index()
+        self._archive_index()
         if self._sizing_batons is None:
             self._sizing_batons = {}
-            for szo in self._by_sizing:
+            for szo in dict.fromkeys([*self._by_sizing, *self._arch_by_sizing]):
                 full = _safe_join(self.root, szo)
                 lines = _head_or_none(full, _HEAD_BYTES) if full else None
-                for b in {m.replace("\\", "/") for ln in lines or () for m in _BATON_PATH_RE.findall(ln)}:
+                for b in _sizing_named_batons(lines or ()):
                     self._sizing_batons.setdefault(b, []).append(szo)
         sizings = self._sizing_batons.get(baton_rel, [])
         if len(sizings) != 1:
             return []
-        return [(sizings[0], p) for p in self._by_sizing[sizings[0]]]
+        szo = sizings[0]
+        return [(szo, p) for p in self._by_sizing.get(szo, []) + self._arch_by_sizing.get(szo, [])]
 
     def goal_status(self, goal_id: str) -> tuple[str, str | None] | None:
         """(goal file rel path, status) for a goal id, or None when no goal file carries it."""

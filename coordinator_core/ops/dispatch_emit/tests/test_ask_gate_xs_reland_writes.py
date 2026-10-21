@@ -55,7 +55,7 @@ def test_the_printed_xs_reland_line_resumes_the_commit_halt_without_writes(halte
     assert out["resume_ledger"]["inline_review"][RESUMED_RUN_ID_KEY] == RUN
 
 
-def test_explicit_writes_win_over_the_recorded_footprint(halted):
+def test_explicit_writes_win_over_the_recorded_footprint(halted, monkeypatch):
     _make_xs(halted, record_writes=True)
     seen: list = []
     real = ask_gate.collect_fire_refusals
@@ -64,11 +64,8 @@ def test_explicit_writes_win_over_the_recorded_footprint(halted):
         seen.append(list(kw["writes"]))
         return real(sizing, **kw)
 
-    ask_gate.collect_fire_refusals = spy
-    try:
-        ask_gate._handler({"sizing_path": SIZING, "writes": ["z.py"]}, repo_root=halted)
-    finally:
-        ask_gate.collect_fire_refusals = real
+    monkeypatch.setattr(ask_gate, "collect_fire_refusals", spy)
+    ask_gate._handler({"sizing_path": SIZING, "writes": ["z.py"]}, repo_root=halted)
     assert seen == [["z.py"]]
 
 

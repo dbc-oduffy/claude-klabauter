@@ -60,6 +60,7 @@ _PARAM_FIELDS = (
     Field("plan_path", "nonempty_str"),
     Field("falsifier_broken", "list"),
     Field("held", "list"),
+    Field("release_held", "list"),
     Field("run_id", "nonempty_str"),
     Field("run_token", "nonempty_str"),
     Field("ledger_verdict", "dict"),
@@ -889,16 +890,25 @@ def _partial_chunks(root: Path, request, incomplete: set, blockers: dict) -> lis
     return out
 
 
+def _released_ids(params: dict) -> set:
+    """Chunk ids named in ``params.release_held``: held entries dropped from the withholding."""
+    rel = params.get("release_held")
+    return {r for r in (rel if isinstance(rel, list) else []) if isinstance(r, str)}
+
+
 def _held_ids(params: dict) -> set:
     held = params.get("held")
-    return {h["chunk"] for h in (held if isinstance(held, list) else []) if isinstance(h, dict) and isinstance(h.get("chunk"), str)}
+    ids = {h["chunk"] for h in (held if isinstance(held, list) else []) if isinstance(h, dict) and isinstance(h.get("chunk"), str)}
+    return ids - _released_ids(params)
 
 
 def _held_reasons(params: dict) -> dict:
     held = params.get("held")
+    released = _released_ids(params)
     return {
         h["chunk"]: h.get("reason") or ""
-        for h in (held if isinstance(held, list) else []) if isinstance(h, dict) and isinstance(h.get("chunk"), str)
+        for h in (held if isinstance(held, list) else [])
+        if isinstance(h, dict) and isinstance(h.get("chunk"), str) and h["chunk"] not in released
     }
 
 
@@ -1657,7 +1667,8 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
             )
             return _error(
                 f"path(s) declared by both a held chunk and a landed chunk cannot be committed consistently: "
-                f"{shown}. Re-fire with the landed chunk listed in params.held, or release the held chunk first",
+                f"{shown}. Re-fire with params.release_held={json.dumps(sorted({h for e in overlap.values() for h in e['held']}))} "
+                "to land the landed chunks and release the held chunk(s), or list the landed chunk in params.held",
                 refused="held-landed-overlap", overlap=overlap,
             )
 

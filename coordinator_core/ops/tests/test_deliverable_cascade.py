@@ -218,6 +218,39 @@ def test_ac1_spinoff_candidate_is_not_advanced_end_to_end(tmp_path):
     assert result["exit_code"] == 1
 
 
+def test_matched_none_advanced_error_states_counts_not_every_refused(tmp_path):
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    _seed_handoff(
+        repo,
+        "20260101-spinoff-counts.md",
+        deliverable_id="dlv-counts-000000",
+        kind="spinoff",
+        commit=True,
+    )
+
+    result = _run(
+        {
+            "deliverable_id": "dlv-counts-000000",
+            "source_kind": "plan",
+            "source_path": "docs/plans/dummy.md",
+        },
+        repo_root=repo / ".git",
+    )
+
+    assert "every one was refused" not in result["error"]
+    refused, already, unreadable = (
+        len(result["refused"]),
+        len(result["already_advanced"]),
+        len(result["unreadable"]),
+    )
+    assert (
+        f"none advanced: {refused} refused, {already} already advanced, {unreadable} unreadable"
+        in result["error"]
+    )
+    assert ("see 'refused'" in result["error"]) == (refused > 0)
+
+
 def test_ac1_non_spinoff_kind_with_same_shape_is_unaffected(tmp_path, monkeypatch):
     """Regression companion to AC1: an otherwise-identical candidate that is
     NOT kind: spinoff must still advance — leg (d) must discriminate on

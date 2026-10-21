@@ -9,6 +9,8 @@ from collections.abc import Iterable
 
 from coordinator_core.frontmatter.baton_class import is_spinoff_kind
 from coordinator_core.ops.baton_close_report_contract import (
+    CONFLICT_RULE_OWN_PLAN,
+    REVERSE_FIELD_SIZING,
     RUN_LIVE,
     BatonHeader,
     ConflictNote,
@@ -57,7 +59,10 @@ def _closes_on_own_claim(evidence: Iterable[Evidence]) -> bool:
 
 
 def _conflict_note(evidence: list[Evidence], kinds: list[str]) -> ConflictNote:
-    """A committed run beats contradicting status even when the run joined only by shared sizing."""
+    """A committed run beats contradicting status even when the run joined only by shared sizing.
+
+    A done `governing_plan` also wins when every contradicting item is an inferred sizing-join leg.
+    """
     done = [e for e, k in zip(evidence, kinds) if k == "done"]
     contra = [e for e, k in zip(evidence, kinds) if k == "contradicts"]
     if any(e["class"] == _RUN for e in done):
@@ -66,6 +71,15 @@ def _conflict_note(evidence: list[Evidence], kinds: list[str]) -> ConflictNote:
             "contradicting": contra,
             "winner": "done",
             "rule": "a committed run is ground truth; a contradicting status line lags it",
+        }
+    if any(e["field"] == _OWN_PLAN_FIELD for e in done) and all(
+        e["field"] == REVERSE_FIELD_SIZING for e in contra
+    ):
+        return {
+            "done": done,
+            "contradicting": contra,
+            "winner": "done",
+            "rule": CONFLICT_RULE_OWN_PLAN,
         }
     return {
         "done": done,
@@ -103,7 +117,8 @@ def decide(
 
     `conflict` is a ConflictNote when done and contradicting evidence coexist, else None.
     Precedence: nothing cited, claimed-with-done (not when every run naming the baton has
-    ended), live successor, done-vs-contradicting conflict (a done run wins and the verdict
+    ended), live successor (a done run, or a done `governing_plan` whose only contradiction is a
+    `plan.sizing_object` leg, wins a conflict), done-vs-contradicting conflict (a done run wins and the verdict
     continues), header refusal (`close_refusal`), closable, then residue by target kind
     (unreadable, unstatused, missing), then no_evidence (cited targets all really not
     done). A missing, unreadable, unstatused, ended or live-run target never contradicts a

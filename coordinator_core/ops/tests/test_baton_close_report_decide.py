@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from coordinator_core.ops.baton_close_report_contract import ResidueReason
+from coordinator_core.ops.baton_close_report_contract import CONFLICT_RULE_OWN_PLAN, ResidueReason
 from coordinator_core.ops.baton_close_report_decide import (
     STATUS_MISSING,
     STATUS_UNREADABLE,
@@ -208,6 +208,38 @@ def test_conflict_won_by_contradicting_without_a_done_run():
     assert note["winner"] == "contradicting"
     assert note["done"] == [DONE]
     assert note["contradicting"] == [PLAN_APPROVED]
+
+
+def _fe(field: str, status: str, done: bool) -> dict:
+    return {
+        "class": "plan",
+        "field": field,
+        "target_path": f"docs/plans/{field}.md",
+        "target_status": status,
+        "done": done,
+    }
+
+
+def test_governing_plan_outranks_sizing_join():
+    own = _fe("governing_plan", "implemented", True)
+    join = _fe("plan.sizing_object", "approved", False)
+    out = decide(_h(), [own, join], False)
+    assert out[0] == "closable"
+    assert out[2]["winner"] == "done"
+    assert out[2]["rule"] == CONFLICT_RULE_OWN_PLAN
+
+
+def test_governing_plan_does_not_outrank_deliverable_join():
+    own = _fe("governing_plan", "implemented", True)
+    sizing_done = _fe("plan.deliverable_id", "implemented", True)
+    sizing_open = _fe("plan.sizing_object", "approved", False)
+    deliverable_open = _fe("plan.deliverable_id", "approved", False)
+    assert decide(_h(), [sizing_done, sizing_open], False)[:2] == ("residue", "evidence_conflict")
+    assert decide(_h(), [own, deliverable_open], False)[:2] == ("residue", "evidence_conflict")
+    assert decide(_h(), [own, sizing_open, deliverable_open], False)[:2] == (
+        "residue",
+        "evidence_conflict",
+    )
 
 
 def test_run_won_conflict_still_yields_to_a_live_successor():

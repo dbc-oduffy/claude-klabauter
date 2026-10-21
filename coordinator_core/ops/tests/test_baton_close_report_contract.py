@@ -55,6 +55,10 @@ def test_header_keys_pinned_order_and_reverse_fields():
     )
     assert c.REVERSE_FIELD_DELIVERABLE == "plan.deliverable_id"
     assert c.REVERSE_FIELD_PREDECESSOR == "plan.predecessor_handoff"
+    assert c.REVERSE_FIELD_SIZING == "plan.sizing_object"
+    assert c.CONFLICT_RULE_OWN_PLAN == (
+        "the baton's own governing_plan is done; a sizing-join leg is inferred and yields to it"
+    )
 
 
 def test_result_keys():

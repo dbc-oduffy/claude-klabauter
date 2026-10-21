@@ -314,6 +314,43 @@ def test_sizing_hop_baton_named_by_two_sizings_adds_none(tmp_path):
     assert B1 not in _batons(tmp_path, **{B1: {}})
 
 
+def test_archived_reverse_deliverable_gains_item(tmp_path):
+    _w(tmp_path, "archive/specs/2026-09/a.md", "---\nstatus: implemented\ndeliverable_id: dlv-x\n---\n")
+    (ev,) = _batons(tmp_path, **{B1: {"deliverable_id": "dlv-x"}})[B1]
+    assert (ev["field"], ev["target_path"], ev["done"]) == ("plan.deliverable_id", "docs/plans/a.md", True)
+
+
+def test_archived_reverse_predecessor_and_sizing_join(tmp_path):
+    _w(tmp_path, SZ, f"baton: {B1}\n")
+    _w(tmp_path, "archive/specs/2026-09/a.md", f"---\nstatus: implemented\npredecessor_handoff: {B2}\n---\n")
+    _w(tmp_path, "archive/specs/2026-09/p.md", f'---\nstatus: implemented\nsizing_object: "{SZ}"\n---\n')
+    (ev,) = _batons(tmp_path, **{B2: {}})[B2]
+    assert ev["field"] == "plan.predecessor_handoff" and ev["done"]
+    (ev,) = _batons(tmp_path, **{B1: {}})[B1]
+    assert ev["field"] == "plan.sizing_object" and ev["target_path"] == "docs/plans/p.md" and ev["done"]
+
+
+def test_archived_reverse_live_copy_wins(tmp_path):
+    _w(tmp_path, "docs/plans/a.md", "---\nstatus: draft\ndeliverable_id: dlv-x\n---\n")
+    _w(tmp_path, "archive/specs/2026-09/a.md", "---\nstatus: implemented\ndeliverable_id: dlv-x\n---\n")
+    (ev,) = _batons(tmp_path, **{B1: {"deliverable_id": "dlv-x"}})[B1]
+    assert ev["target_status"] == "draft" and ev["done"] is False
+
+
+def test_sizing_prose_mention_adds_none(tmp_path):
+    _w(tmp_path, SZ, f"schema: sizing-object\npremise:\n  evidence: |\n    see {B1} for context\n"
+                     f"finding: \"the baton {B1} is stale\"\n  note: {B1}\n")
+    _w(tmp_path, "docs/plans/p.md", f'---\nstatus: implemented\nsizing_object: "{SZ}"\n---\n')
+    assert B1 not in _batons(tmp_path, **{B1: {}})
+
+
+def test_sizing_baton_key_still_joins(tmp_path):
+    _w(tmp_path, SZ, f'schema: sizing-object\nbaton: "{B1}"\n')
+    _w(tmp_path, "docs/plans/p.md", f'---\nstatus: implemented\nsizing_object: "{SZ}"\n---\n')
+    (ev,) = _batons(tmp_path, **{B1: {}})[B1]
+    assert ev["field"] == "plan.sizing_object" and ev["done"]
+
+
 def test_module_imports_no_yaml_or_subprocess():
     import ast
 

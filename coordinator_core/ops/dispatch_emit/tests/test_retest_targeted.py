@@ -81,14 +81,31 @@ def test_caused_node_ids_name_the_tests(repo, tmp_path):
     assert seen and seen[0][-1] == "test_a.py"
 
 
-def test_no_test_to_run_exits_2_naming_tests_flag(repo, tmp_path, capsys):
+def test_no_targeted_set_writes_stale_note_the_gate_does_not_block_on(repo, tmp_path, capsys):
     rc = retest_targeted.main(
         ["--from-task-output", str(_task_output(tmp_path)), "--repo-root", str(repo)],
         run=lambda argv, cwd: pytest.fail("must not run"),
     )
-    assert rc == 2
-    assert "--tests" in capsys.readouterr().err
-    assert not li.fresh_verdict_path(repo, RUN_ID).exists()
+    assert rc == 0
+    record = li.fresh_targeted_verdict(repo, RUN_ID)
+    assert record["status"] == "stale" and "stale" in record["note"]
+    assert "stale" in capsys.readouterr().out
+    findings, check = li.landing_test_gate(repo, {"targeted_tests": {"status": "fail", "baseline": None}}, RUN_ID)
+    assert findings == []
+
+
+def test_pathless_failure_reruns_recorded_targeted_set(repo, tmp_path):
+    out = _task_output(tmp_path)
+    data = json.loads(out.read_text(encoding="utf-8"))
+    data["next_action"]["params"]["targeted_tests"]["tests"] = ["test_a.py::test_a"]
+    out.write_text(json.dumps(data), encoding="utf-8")
+    seen = []
+    rc = retest_targeted.main(
+        ["--from-task-output", str(out), "--repo-root", str(repo)],
+        run=lambda argv, cwd: seen.append(argv) or 0,
+    )
+    assert rc == 0 and seen[0][-1] == "test_a.py"
+    assert li.fresh_targeted_verdict(repo, RUN_ID)["status"] == "pass"
 
 
 def test_dirty_paths_reads_untracked_and_modified(repo):

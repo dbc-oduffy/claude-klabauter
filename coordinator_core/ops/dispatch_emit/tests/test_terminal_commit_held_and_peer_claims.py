@@ -119,6 +119,21 @@ def test_a_path_declared_by_held_and_landed_chunks_refuses(repo):
     assert _git(["rev-parse", "HEAD"], repo) == head
 
 
+def test_the_overlap_refusal_prints_a_release_param_that_lands(repo):
+    import re
+
+    request = _two_chunks(repo, second_paths=("b.py", "a.py"))
+    held = [{"chunk": "C2", "reason": "halted"}]
+    refused = _run(repo, request, held=held)
+    assert refused["refused"] == "held-landed-overlap"
+    printed = re.search(r"params\.release_held=(\[[^\]]*\])", refused["error"])
+    assert printed is not None, refused["error"]
+    assert json.loads(printed.group(1)) == ["C2"]
+    out = _run(repo, request, held=held, release_held=json.loads(printed.group(1)))
+    assert out["committed"] is True, out
+    assert "a.py" in _committed(repo)
+
+
 def test_a_live_peer_write_claim_refuses_the_commit(repo):
     request = _two_chunks(repo)
     session_core.init(PEER, cwd=str(repo))

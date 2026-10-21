@@ -1615,7 +1615,9 @@ def cascade_terminal_sync(params: dict, repo_root: Optional[Path] = None) -> dic
         else:
             result["error"] = (
                 f"deliverable.cascade_terminal: {len(candidates)} candidate(s) matched "
-                f"deliverable_id={deliverable_id!r} but every one was refused — see 'refused'"
+                f"deliverable_id={deliverable_id!r}, none advanced: {len(refused)} refused, "
+                f"{len(already_advanced)} already advanced, {len(unreadable)} unreadable"
+                + (" — see 'refused'" if refused else "")
             )
     return result
 

@@ -198,4 +198,61 @@ def test_none_run_id_skips_fresh_read(tmp_path):
 def test_no_baseline_detail_names_retest_command():
     findings, _ = li.failed_targeted_tests({"status": "fail", "baseline": None})
     assert "python -m coordinator_core.ops.dispatch_emit.retest_targeted --from-task-output" in findings[0].detail
+    assert "<" not in findings[0].detail
+
+
+def test_remedy_names_the_task_output_path_as_printed():
+    params = {**_RECORDED_FAIL, "task_output_path": "tasks\\a.output"}
+    findings, _ = li.landing_test_gate(Path("."), params, None)
+    assert f"{li.RETEST_MODULE} --from-task-output tasks/a.output" in findings[0].detail
+    spaced = li.retest_remedy({"task_output_path": "/a b/c.output"})
+    assert spaced.endswith('--from-task-output "/a b/c.output"')
+
+
+def test_unattributable_refusal_names_the_failed_tests_param():
+    findings, check = li.landing_test_gate(Path("."), _RECORDED_FAIL, None)
+    assert check == "failed" and "params.failed_tests" in findings[0].detail
+
+
+def test_unchanged_failing_files_since_base_are_pre_existing(tmp_path, monkeypatch):
+    root = _repo(tmp_path)
+    seen = {}
+
+    def fake(worktree_root, base, paths):
+        seen["args"] = (base, list(paths))
+        return True
+
+    monkeypatch.setattr(li, "_unchanged_since_base", fake)
+    params = {**_RECORDED_FAIL, "run_base_sha": B, "failed_tests": ["./t/test_x.py::test_a", "t/test_x.py::test_b"]}
+    assert li.landing_test_gate(root, params, None) == ([], "pre-existing-only")
+    assert seen["args"] == (B, ["t/test_x.py"])
+
+
+def test_changed_failing_files_since_base_still_refuse(tmp_path, monkeypatch):
+    root = _repo(tmp_path)
+    monkeypatch.setattr(li, "_unchanged_since_base", lambda *a: False)
+    params = {**_RECORDED_FAIL, "run_base_sha": B, "failed_tests": ["t/test_x.py::test_a"]}
+    findings, check = li.landing_test_gate(root, params, None)
+    assert check == "failed" and findings[0].reason == li.TARGETED_TESTS_FAILED
+
+
+def test_failed_tests_without_a_run_base_still_refuse(tmp_path, monkeypatch):
+    root = _repo(tmp_path)
+    monkeypatch.setattr(li, "_unchanged_since_base", lambda *a: True)
+    params = {**_RECORDED_FAIL, "failed_tests": ["t/test_x.py::test_a"]}
+    assert li.landing_test_gate(root, params, None)[1] == "failed"
+
+
+def test_unchanged_since_base_real_tree_check(tmp_path):
+    root = _repo(tmp_path)
+    assert li._unchanged_since_base(root, B, ["t.py"]) is False
+
+
+@pytest.mark.parametrize("marker", [{"stale": True, "note": "no targeted set recorded"}, {"status": "stale"}])
+def test_stale_fresh_verdict_is_non_blocking(tmp_path, marker):
+    root = _repo(tmp_path)
+    path = _write_fresh(root)
+    record = {**json.loads(path.read_text(encoding="utf-8")), **marker}
+    path.write_text(json.dumps(record), encoding="utf-8")
+    assert li.landing_test_gate(root, _RECORDED_FAIL, "r1") == ([], "stale-non-blocking")
 

@@ -1,10 +1,11 @@
 """Re-run a finished run's failing targeted tests and write the fresh verdict the landing gate reads.
 
 Runs outside any engine op: ``python -m coordinator_core.ops.dispatch_emit.retest_targeted
---from-task-output FILE [--tests PATH ...]``. Exit 0 on pass, 1 on fail, 2 when nothing can run.
+--from-task-output FILE [--tests PATH ...]``. Exit 0 on pass or stale, 1 on fail, 2 on a read error.
 
-Trap: a recorded failure with no baseline names no test, so ``--tests`` alone decides what the
-fresh pass covers; the gate trusts it as the run's whole verdict.
+A failure with no baseline names its tests from ``--tests``, else the run's recorded targeted set;
+with neither, a ``stale`` verdict with a ``note`` is written and the gate reads it as non-blocking.
+Trap: the gate trusts a fresh pass as the run's whole verdict.
 """
 from __future__ import annotations
 
@@ -55,7 +56,49 @@ def _tests_to_run(explicit: Sequence[str], params: dict) -> list[str]:
     if isinstance(baseline, dict):
         for node in baseline.get("caused") or []:
             tests.append(li._node_file(str(node)))
+    if not tests:
+        tests = _recorded_targeted_set(params, verdict)
     return list(dict.fromkeys(t for t in tests if t))
+
+
+def _recorded_targeted_set(params: dict, verdict: object) -> list[str]:
+    """Test paths the run recorded as its targeted set: ``tests`` or ``test_paths`` on the verdict,
+    else ``params["targeted_test_paths"]``. Empty when none is recorded."""
+    holders = [verdict if isinstance(verdict, dict) else {}, params]
+    keys = (("tests", "test_paths"), ("targeted_test_paths",))
+    for holder, names in zip(holders, keys):
+        for name in names:
+            raw = holder.get(name)
+            if isinstance(raw, list):
+                found = [li._node_file(str(n)) for n in raw if isinstance(n, str)]
+                if any(found):
+                    return found
+    return []
+
+
+def _write_stale(root: Path, run_id: str, dirty: Callable[[Path], list[str]], head_sha: Callable) -> int:
+    """Write a ``stale`` verdict (non-blocking to the landing gate) with a named note when no
+    targeted set is recorded and no ``--tests`` was given."""
+    try:
+        covered_paths = dirty(root)
+    except RuntimeError as exc:
+        print(f"retest_targeted: {exc}", file=sys.stderr)
+        return 2
+    note = "no targeted test set recorded for this run and no --tests given; recorded failure treated as stale"
+    record = {
+        "run_id": run_id,
+        "head": head_sha(root),
+        "tests": [],
+        "covered": li.landing_fingerprint(root, covered_paths),
+        "status": "stale",
+        "note": note,
+        "at": datetime.now(timezone.utc).isoformat(),
+    }
+    path = li.fresh_verdict_path(root, run_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(record, indent=2), encoding="utf-8")
+    print(f"{path} stale: {note}")
+    return 0
 
 
 def main(
@@ -84,8 +127,7 @@ def main(
 
     tests = _tests_to_run(args.tests, params)
     if not tests:
-        print("retest_targeted: no test to run; pass --tests PATH", file=sys.stderr)
-        return 2
+        return _write_stale(root, run_id, dirty, head_sha)
 
     resolved = resolve_validation_cmd.resolve_fast_test_cmd(str(root))
     if resolved.returncode != 0:

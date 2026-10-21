@@ -216,6 +216,7 @@ _PARAM_FIELDS = (
     Field("plan_path", "nonempty_str"),
     Field("falsifier_broken", "list"),
     Field("held", "list"),
+    Field("release_held", "list"),
     Field("run_id", "nonempty_str"),
     Field("run_token", "nonempty_str"),
     Field("ledger_verdict", "dict"),
@@ -3359,6 +3360,7 @@ def _handler_body(params: dict, repo_root: Optional[Path] = None) -> dict:
         h["chunk"]: h.get("reason") or ""
         for h in (held if isinstance(held, list) else [])
         if isinstance(h, dict) and isinstance(h.get("chunk"), str)
+        and h["chunk"] not in _released_ids(params if isinstance(params, dict) else {})
     }
     if (landed or regraded) and isinstance(incomplete, list) and isinstance(landed, list):
         reply["incomplete_chunks"] = sorted(set(incomplete) - set(landed) - set(regraded))
@@ -3402,12 +3404,18 @@ def _resume_hint(stranded: dict, scope: dict, params: dict) -> str:
     return f"re-emit the incomplete rows with {command}"
 
 
+def _released_ids(params: dict) -> set:
+    """Chunk ids named in ``params.release_held``: held entries dropped from the withholding."""
+    rel = params.get("release_held") if isinstance(params, dict) else None
+    return {r for r in (rel if isinstance(rel, list) else []) if isinstance(r, str)}
+
+
 def _held_ids(params: dict) -> set:
     held = params.get("held")
     return {
         h["chunk"] for h in (held if isinstance(held, list) else [])
         if isinstance(h, dict) and isinstance(h.get("chunk"), str)
-    }
+    } - _released_ids(params)
 
 
 def _held_write_paths(worktree_root: Path, request: CommitRequest, held_ids: set) -> dict:
@@ -4097,8 +4105,9 @@ def _terminal_commit_inner(
             )
             return _error(
                 f"path(s) declared by both a held chunk and a landed chunk cannot be committed "
-                f"consistently: {shown}. Re-fire with the landed chunk listed in params.held, or "
-                "release the held chunk first",
+                f"consistently: {shown}. Re-fire with params.release_held="
+                f"{json.dumps(sorted({h for e in overlap.values() for h in e['held']}))} "
+                "to land the landed chunks and release the held chunk(s), or list the landed chunk in params.held",
                 refused="held-landed-overlap",
                 overlap=overlap,
             )
@@ -4245,6 +4254,23 @@ def _terminal_commit_inner(
     if left_out_map:
         scope["peer_held_left"] = left_out_map
     run_owned = _bar_stranded(run_owned)
+    # Trap: a slice file is any file changed since the run base, a concurrent run's included; an
+    # own-dir file whose blob drops lines a foreign commit added since the base is that run's dirt.
+    run_owned_foreign: list = []
+    if run_owned:
+        from coordinator_core.ops.dispatch_emit import landing_integrity as _li
+
+        owned_run_id = _run_id_of(params, ask_run_dir, script_path_raw)
+        owned_base = _li.run_base_for(worktree_root, owned_run_id, params)
+        if owned_base is not None:
+            overlapped = {
+                f.path for f in _li.since_base_findings(
+                    worktree_root, list(run_owned), owned_base,
+                    run_id=owned_run_id, plan=request.plan_path,
+                )
+            }
+            run_owned_foreign = sorted(overlapped)
+            run_owned = [p for p in run_owned if p not in overlapped]
     owned_deletions = [p for p in _bar_stranded(list(owned_deletions)) if p not in reverted]
     all_paths.extend(run_owned)
     deleted_paths = sorted(set(deleted_paths) | set(owned_deletions))
@@ -4608,6 +4634,44 @@ def _terminal_commit_inner(
                 "sibling_withheld": dict(sibling_withheld),
             }))
 
+    # Allow-list over every admission arm: only the run's declared writes, the files its reports
+    # claim under declared prefixes, and the artifacts the op itself adds reach the integrity
+    # gate. Anything else stays dirty and is reported, never refused.
+    from coordinator_core.ops.dispatch_emit import landing_scope as _ls
+
+    own_artifacts = {
+        *(artifacts.paths() if artifacts is not None else ()),
+        *(art_landable.present if art_landable is not None else ()),
+        *(art_landable.deleted if art_landable is not None else ()),
+        *receipt_paths, *companions, *seam_own, *review_land, *run_owned,
+        *(p for p in (note_rel, ask_note_rel, bookkeeping_record_path, cited_sizing,
+                      allowlist_path, request.plan_path) if p),
+    }
+    own_prefixes = [
+        *(prefix for c in done_chunks + partial_chunks for prefix in c.prefixes),
+        *((record_dir_rel,) if record_dir_rel else ()),
+        *(artifacts.record_dirs if artifacts is not None else ()),
+    ]
+    all_paths, foreign_now = _ls.own_landing_set(
+        all_paths, declared=declared_writes, declared_prefixes=own_prefixes,
+        own_artifacts=own_artifacts,
+    )
+    deleted_paths, foreign_deleted = _ls.own_landing_set(
+        deleted_paths, declared=declared_writes, declared_prefixes=own_prefixes,
+        own_artifacts=own_artifacts,
+    )
+    foreign_excluded = sorted({*foreign_now, *foreign_deleted, *run_owned_foreign})
+    if foreign_excluded:
+        review_land = tuple(p for p in review_land if p not in foreign_excluded)
+        if not all_paths and not deleted_paths:
+            _remove(worktree_root, receipt_paths)
+            if close_ctx is not None:
+                close_ctx.clear()
+            return _with_withheld(_with_siblings({
+                "committed": False, "nothing_to_commit": not sibling_paths,
+                _ls.FOREIGN_EXCLUDED_KEY: foreign_excluded,
+            }))
+
     # commit_v2 carries every path the session holds a claim on, so it is asked only when no dirty
     # file sits unlanded in the run's declared scope: such a file may be a sibling run's of the
     # same session, which `undeclared_dirty` reports and the commit must not widen to.
@@ -4617,7 +4681,8 @@ def _terminal_commit_inner(
         if p not in all_paths and p not in deleted_paths
     )
     commit_params: dict = {
-        "paths": all_paths, "message": message, "carry_own_left_behind": not in_scope_left,
+        "paths": all_paths, "message": message,
+        "carry_own_left_behind": not in_scope_left and not foreign_excluded,
     }
     if deleted_paths:
         commit_params["deleted_paths"] = deleted_paths
@@ -4733,6 +4798,8 @@ def _terminal_commit_inner(
         reply["held_by_halted_run"] = held_report
     if sibling_withheld:
         reply["sibling_withheld"] = dict(sibling_withheld)
+    if foreign_excluded:
+        reply[_ls.FOREIGN_EXCLUDED_KEY] = foreign_excluded
     if reply.get("refused") == "blob-drift" and isinstance(reply.get("error"), str):
         reply["error"] = _blob_drift_remedy(
             reply["error"], _run_id_of(params, ask_run_dir, script_path_raw)

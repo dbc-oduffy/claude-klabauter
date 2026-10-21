@@ -1453,7 +1453,7 @@ def main(argv=None) -> int:
         "--wave-index",
         type=int,
         default=0,
-        help="0-based index into the frozen gate's `waves` list, NOT the run's wave number "
+        help="0-based index into the frozen gate's `waves` list, NOT this wave's label in the run "
         "(use --wave-number for that). The frozen gate report numbers `waves` from the READ, so "
         "this is almost always 0; out of range is refused.",
     )
@@ -1461,8 +1461,9 @@ def main(argv=None) -> int:
         "--wave-number",
         type=int,
         help=(
-            "this run's own wave count, used for `waveIndex` in the bound args, the fire "
-            "filename and the trail slot. Defaults to --wave-index. They are different "
+            "this wave's absolute label in the run (0-based), NOT the run's total number of "
+            "waves: --wave-number 6 emits fire-6-1.mjs with `waveIndex` 6 in the bound args "
+            "and the wave-6 trail slot. Defaults to --wave-index. They are different "
             "questions: --wave-index indexes the frozen report, which renumbers from 0 on "
             "every read, while the trail and the landing want the run's absolute wave. "
             "Without this the run's second wave emits over its first's archived fire, and "
@@ -1651,8 +1652,8 @@ def main(argv=None) -> int:
     if not 0 <= args.wave_index < len(waves):
         return refuse(
             f"the frozen gate has {len(waves)} wave(s); --wave-index {args.wave_index} is a "
-            "0-based index into it, not the run's wave number. Use --wave-number for the run's "
-            "wave."
+            "0-based index into it, not this wave's label in the run. Use --wave-number for that "
+            "label."
         )
     wave_ids = list(waves[args.wave_index])
     if not wave_ids:
@@ -1918,8 +1919,8 @@ def main(argv=None) -> int:
                     f"{sorted(fresh_ids)}. Emitting over it would destroy the archived "
                     "fire, which is the reason these are written to disk at all. "
                     "the frozen gate report numbers waves from the read, so a run's second "
-                    "wave also arrives as wave 0: pass --wave-number matching this run's "
-                    "own wave count, or --trail-dir a fresh directory for this wave."
+                    "wave also arrives as wave 0: pass --wave-number set to this wave's "
+                    "absolute label in the run, or --trail-dir a fresh directory for this wave."
                 )
         # LF on every host: Windows newline translation writes a CR per line, and the harness
         # refuses a Workflow script carrying control characters its approval dialog would hide.

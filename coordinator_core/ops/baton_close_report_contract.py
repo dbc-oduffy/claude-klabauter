@@ -125,6 +125,9 @@ HEADER_KEYS = (
 # Evidence `field` values for plan-to-baton (reverse) links.
 REVERSE_FIELD_DELIVERABLE = "plan.deliverable_id"
 REVERSE_FIELD_PREDECESSOR = "plan.predecessor_handoff"
+REVERSE_FIELD_SIZING = "plan.sizing_object"
+# Conflict rule: a done governing_plan outranks an inferred sizing-join leg.
+CONFLICT_RULE_OWN_PLAN = "the baton's own governing_plan is done; a sizing-join leg is inferred and yields to it"
 # Run-evidence `field` values: how a run was joined to the baton.
 RUN_FIELD_BATON = "run.baton"
 RUN_FIELD_SIZING = "run.sizing_rel"

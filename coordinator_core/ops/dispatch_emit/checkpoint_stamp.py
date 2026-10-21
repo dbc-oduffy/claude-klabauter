@@ -151,6 +151,30 @@ def checkpoint_rows_landed(
     return CheckpointWalk(landed, read, bool(remaining) and sha is not None and read >= cap)
 
 
+_HEAD_WALK_CAP = 500
+
+
+def rows_landed_at_head(repo_root: Path, plan_rel: str, wanted: frozenset) -> frozenset:
+    """The ``wanted`` rows of ``plan_rel`` named by a same-plan checkpoint in HEAD's first-parent
+    history, minus gate-owed and stop-rule ids. In-process; empty on an unborn HEAD."""
+    if not wanted or not plan_rel:
+        return frozenset()
+    from coordinator_core.git.git_state import head_sha
+
+    head = head_sha(repo_root)
+    if not head:
+        return frozenset()
+    floor = None
+    try:
+        floor = plan_created_floor((Path(repo_root) / plan_rel).read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError):
+        pass
+    walk = checkpoint_rows_landed(
+        repo_root, plan_rel, head, frozenset(wanted), floor_epoch=floor, cap=_HEAD_WALK_CAP
+    )
+    return frozenset().union(*walk.landed.values())
+
+
 def _plan_state(worktree_root: Path, rel: str, sha: str, data: bytes) -> str:
     """``clean`` (tracked at ``sha``, blob identical to ``data``), ``untracked`` (absent at
     ``sha``) or ``dirty`` (differs, or the tree cannot answer)."""

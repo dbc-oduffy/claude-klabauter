@@ -270,9 +270,14 @@ def _unlanded_plan_edge(
 
 
 def in_run_edge_key(edge) -> Optional[tuple]:
-    """``(plan, chunk)`` of a chunk-form ``depends_on_plan`` edge, else ``None``."""
-    if isinstance(edge, dict) and edge.get("plan") and edge.get("chunk"):
-        return (str(edge["plan"]).replace("\\", "/"), str(edge["chunk"]))
+    """``(plan, chunk)`` of a chunk-form ``depends_on_plan`` edge; ``(plan, "*")`` of a
+    status-form edge (names a whole in-run plan); else ``None``."""
+    if isinstance(edge, dict) and edge.get("plan"):
+        plan = str(edge["plan"]).replace("\\", "/")
+        if edge.get("chunk"):
+            return (plan, str(edge["chunk"]))
+        if edge.get("status"):
+            return (plan, "*")
     return None
 
 

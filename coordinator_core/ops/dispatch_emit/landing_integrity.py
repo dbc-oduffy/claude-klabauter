@@ -2,7 +2,8 @@
 
 Three named refusal reasons: a landed ``.py`` that fails to parse, a landing blob that drops
 lines a foreign commit added since the run's base, and a targeted-test failure the run caused.
-Everything is in-process: no spawn, and no test is run here, only the verdict the run carries.
+Everything is in-process: no spawn, and no test is run here, only the verdict the run carries
+(or the fresh one ``retest_targeted`` wrote).
 """
 
 from __future__ import annotations
@@ -21,7 +22,8 @@ TARGETED_TESTS_FAILED = "targeted-tests-failed"
 TARGETED_TESTS_PARAM = "targeted_tests"
 
 RETEST_DIR = ".coordinator-local/retest"
-RETEST_CMD = "python -m coordinator_core.ops.dispatch_emit.retest_targeted --from-task-output <file>"
+RETEST_MODULE = "python -m coordinator_core.ops.dispatch_emit.retest_targeted"
+FAILED_TESTS_PARAM = "failed_tests"
 
 _SHA_RE = re.compile(r"^[0-9a-fA-F]{7,40}$")
 
@@ -103,7 +105,19 @@ def _node_file(node_id: str) -> str:
     return head[2:] if head.startswith("./") else head
 
 
-def failed_targeted_tests(verdict: Optional[Mapping]) -> tuple[list[Finding], str]:
+def retest_remedy(params: Optional[Mapping]) -> str:
+    """The retest command for a refusal detail: the exact line when ``params.task_output_path``
+    names the run's task-output file, else the module plus the flag to give it. No placeholder."""
+    raw = params.get("task_output_path") if isinstance(params, Mapping) else None
+    if isinstance(raw, str) and raw.strip():
+        path = raw.strip().replace("\\", "/")
+        return f'{RETEST_MODULE} --from-task-output {json.dumps(path) if " " in path else path}'
+    return f"{RETEST_MODULE} --from-task-output with the run's task-output file"
+
+
+def failed_targeted_tests(
+    verdict: Optional[Mapping], remedy: Optional[str] = None
+) -> tuple[list[Finding], str]:
     """``(findings, check)`` for a carried test verdict; ``check`` is ``"no-verdict"``, ``"pass"``,
     ``"pre-existing-only"`` or ``"failed"``.
 
@@ -112,7 +126,8 @@ def failed_targeted_tests(verdict: Optional[Mapping]) -> tuple[list[Finding], st
     fail/error verdict whose baseline is present with nothing caused is ``"pre-existing-only"``.
     Trap: a fail/error verdict with no baseline yields one Finding with ``path=""`` (unattributed,
     fail-closed), so a pre-existing failure with no baseline export refuses by design; the remedy
-    is the test-runner's baseline export."""
+    is ``remedy`` (default ``retest_remedy(None)``), or a ``failed_tests`` node-id list that
+    ``landing_test_gate`` attributes against the run base."""
     if not isinstance(verdict, Mapping):
         return [], "no-verdict"
     status = verdict.get("status")
@@ -126,7 +141,7 @@ def failed_targeted_tests(verdict: Optional[Mapping]) -> tuple[list[Finding], st
         shown = f"{count} " if isinstance(count, int) else ""
         return [Finding(
             "", TARGETED_TESTS_FAILED,
-            f"{shown}tests {status}, no baseline to attribute them; re-run: {RETEST_CMD}",
+            f"{shown}tests {status}, no baseline to attribute them; re-run: {remedy or retest_remedy(None)}",
         )], "failed"
     caused = [str(n) for n in (baseline.get("caused") or [])]
     if not caused:
@@ -183,12 +198,61 @@ def landing_test_gate(
 ) -> tuple[list[Finding], str]:
     """``(findings, check)`` for a landing path: a valid fresh verdict replaces the recorded one.
     ``check`` is ``"pass-on-retest"`` when a fresh pass cleared it; otherwise as
-    ``failed_targeted_tests``. A None ``run_id`` skips the fresh read."""
+    ``failed_targeted_tests``. A None ``run_id`` skips the fresh read.
+
+    A fresh verdict with ``stale: true`` (or status ``"stale"``) is ``"stale-non-blocking"``: no
+    findings. A recorded fail with no baseline whose ``failed_tests`` files are unchanged since
+    the run base is ``"pre-existing-only"``; without ``failed_tests`` the refusal names the param."""
+    remedy = retest_remedy(params)
     fresh = fresh_targeted_verdict(worktree_root, run_id) if run_id else None
     if fresh is None:
-        return failed_targeted_tests(targeted_test_verdict(params))
-    findings, check = failed_targeted_tests(fresh)
+        verdict = targeted_test_verdict(params)
+        findings, check = failed_targeted_tests(verdict, remedy)
+        if check == "failed" and not verdict.get("baseline") and _preexisting(
+            worktree_root, params, run_id, verdict
+        ):
+            return [], "pre-existing-only"
+        if check == "failed" and findings and not findings[0].path and not _failed_files(params, verdict):
+            findings = [Finding(findings[0].path, findings[0].reason,
+                                f"{findings[0].detail}; or pass params.{FAILED_TESTS_PARAM} (failing node ids)")]
+        return findings, check
+    if fresh.get("stale") is True or fresh.get("status") == "stale":
+        return [], "stale-non-blocking"
+    findings, check = failed_targeted_tests(fresh, remedy)
     return findings, "pass-on-retest" if check == "pass" else check
+
+
+def _failed_files(params: Mapping, verdict: Mapping) -> list[str]:
+    nodes = params.get(FAILED_TESTS_PARAM) or verdict.get(FAILED_TESTS_PARAM) or []
+    if not isinstance(nodes, (list, tuple)):
+        return []
+    return list(dict.fromkeys(f for f in (_node_file(str(n)) for n in nodes) if f))
+
+
+def _unchanged_since_base(worktree_root: Path, base: str, paths: Sequence[str]) -> bool:
+    """True when every path is byte-identical in the worktree, HEAD and ``base``; in-process."""
+    from coordinator_core.git import ref_cas_retry
+    from coordinator_core.git.git_state import head_blobs, head_sha
+
+    head = head_sha(worktree_root)
+    if not head or ref_cas_retry.paths_unchanged_between(worktree_root, base, head, paths) is not True:
+        return False
+    blobs = head_blobs(worktree_root, paths)
+    for rel in paths:
+        entry = blobs.get(rel)
+        try:
+            data = (Path(worktree_root) / rel).read_bytes()
+        except OSError:
+            return entry is None
+        if entry is None or hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest() != entry[1]:
+            return False
+    return True
+
+
+def _preexisting(worktree_root: Path, params: Mapping, run_id: Optional[str], verdict: Mapping) -> bool:
+    files = _failed_files(params, verdict)
+    base = run_base_for(worktree_root, run_id, params) if files else None
+    return bool(files and base and _unchanged_since_base(worktree_root, base, files))
 
 
 def since_base_findings(

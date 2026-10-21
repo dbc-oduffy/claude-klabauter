@@ -768,15 +768,32 @@ def _run_cascade(plan_path: str, deliverable_id: Optional[str], ship_sha: str = 
 
     for target_kind, result in results:
         if result.get("exit_code") != 0:
+            refused = result.get("refused") or []
+            detail = result.get("error")
+            if refused:
+                detail = f"{detail}; " + "; ".join(
+                    f"{a.get('path') or a.get('handoff_path')}: {a.get('reason')}"
+                    for a in refused
+                )
+            elif result.get("candidates_matched", 0):
+                detail = (
+                    f"{target_kind}: {len(result.get('already_advanced') or [])} already "
+                    f"advanced, {len(result.get('unreadable') or [])} unreadable"
+                    + ("; scan incomplete" if result.get("scan_incomplete") else "")
+                )
             print(
                 f"{_PROG}: cascade resolved no downstream artifact for {plan_path}: "
-                f"{result.get('error')}",
+                f"{detail}",
                 file=sys.stderr,
             )
     # Trap: a re-stamp of an implemented plan is a no-op and never re-cascades,
     # and archival moves the plan next, so this line is the only retry route.
     for target_kind, result in results:
-        if result.get("candidates_matched", 0) and not result.get("advanced"):
+        if (
+            result.get("candidates_matched", 0)
+            and not result.get("advanced")
+            and result.get("refused")
+        ):
             params = json.dumps({
                 "deliverable_id": deliverable_id,
                 "source_kind": "plan",

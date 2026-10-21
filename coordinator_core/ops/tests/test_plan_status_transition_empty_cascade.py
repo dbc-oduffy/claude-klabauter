@@ -115,3 +115,69 @@ def test_matched_but_all_refused_still_exits_2(tmp_path, monkeypatch, capsys) ->
     assert "deliverable.cascade_terminal" in retries[0]
     assert '"target_kind": "handoff"' in retries[0]
     assert '"deliverable_id": "dlv-refused-cascade-000"' in retries[0]
+
+
+def _plan(tmp_path, slug):
+    (tmp_path / "docs" / "plans").mkdir(parents=True)
+    return _write(
+        tmp_path,
+        f"docs/plans/2026-10-21-{slug}.md",
+        "---\ntitle: T\nstatus: executing\n---\n\nBody.\n",
+    )
+
+
+def test_nothing_refused_no_retry(tmp_path, monkeypatch, capsys) -> None:
+    from coordinator_core.ops import deliverable_cascade as cascade_mod
+    from coordinator_core.ops import plan_status_transition as pst
+
+    p = _plan(tmp_path, "nothing-refused")
+
+    def _fake_handler(params, repo_root=None):
+        return {
+            "exit_code": 1,
+            "candidates_matched": 1,
+            "advanced": [],
+            "refused": [],
+            "already_advanced": [{"path": "state/handoffs/y.md"}],
+            "unreadable": [],
+            "scan_incomplete": True,
+            "error": "deliverable.cascade_terminal: 1 candidate(s) matched, none advanced",
+        }
+
+    monkeypatch.setattr(cascade_mod, "cascade_terminal_sync", _fake_handler)
+
+    rc = pst._run_cascade(str(p), "dlv-nothing-refused-0")
+    err = capsys.readouterr().err
+
+    assert rc == 2
+    assert "retry once the refusal clears" not in err
+    assert "every one was refused" not in err
+    assert "1 already advanced, 0 unreadable; scan incomplete" in err
+
+
+def test_refused_reason_named_with_retry(tmp_path, monkeypatch, capsys) -> None:
+    from coordinator_core.ops import deliverable_cascade as cascade_mod
+    from coordinator_core.ops import plan_status_transition as pst
+
+    p = _plan(tmp_path, "refused-named")
+
+    def _fake_handler(params, repo_root=None):
+        return {
+            "exit_code": 1,
+            "candidates_matched": 1,
+            "advanced": [],
+            "refused": [{"path": "state/handoffs/x.md", "reason": "stale successor"}],
+            "error": "deliverable.cascade_terminal: 1 candidate(s) matched, none advanced",
+        }
+
+    monkeypatch.setattr(cascade_mod, "cascade_terminal_sync", _fake_handler)
+
+    rc = pst._run_cascade(str(p), "dlv-refused-named-00")
+    err = capsys.readouterr().err
+
+    assert rc == 2
+    summary = [
+        line for line in err.splitlines() if "cascade resolved no downstream artifact for" in line
+    ]
+    assert any("state/handoffs/x.md: stale successor" in line for line in summary)
+    assert "retry once the refusal clears" in err
