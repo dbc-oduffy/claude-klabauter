@@ -119,13 +119,8 @@ REGISTER: tuple[LegDecl, ...] = (
     _earns("ask", "ledger-remaining", "executes the rows a resumed ledger still owes"),
     _floor(
         "ask", "blitz-stage-read",
-        "stages when readyOp did not run and returns the stage op's reply (a manifest handle), only when plan-blitz "
-        "did not run readyOp; no judgment agent precedes it",
-    ),
-    _floor(
-        "ask", "stage-reply-page",
-        "runs dispatch.reply_page for one page of a stage reply sidecar and returns it, because the runtime gives a "
-        "script no file read and no agent precedes it; retired when the runtime gains a file primitive",
+        "stages when readyOp did not run and returns manifest.json, only when plan-blitz's schema-less readyOpReply "
+        "arrives trimmed; no judgment agent precedes it. Cut when DoE's readyOp takes a caller reply schema",
     ),
     _floor("ask", "gate", "runs the gate op where no agent precedes it; a preceding size agent absorbs it"),
     _floor("ask", "commit", _COMMIT_FLOOR),

@@ -19,7 +19,6 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     RESUME_LEDGER_KIND_FIELD,
 )
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
-from coordinator_core.ops.dispatch_emit.tests.test_ask_compose_stage_handle import PAGE_FAKE_JS, pages_cfg, stage_reply
 from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
@@ -39,14 +38,13 @@ _DISK = {
 _LANDED = {"committed": True, "sha": "abc1234", "error": None, "refused": None}
 _MET = {"items": [{"id": "R1", "status": "met", "wired": True}]}
 _UNMET = {"items": [{"id": "R1", "status": "not_met", "essential": True, "remaining": ["still red"]}]}
-_NODE_PROGRAM = PAGE_FAKE_JS + r"""
+_NODE_PROGRAM = r"""
 const src = process.env.SRC.replace(/^export const meta/m, 'const meta');
 const cfg = JSON.parse(process.env.CFG);
 const calls = [];
 const agent = async (prompt, opts) => {
   const label = opts && opts.label;
   calls.push({ label, prompt: String(prompt) });
-  if (label === 'stage-reply-page') return fakePage(cfg, String(prompt));
   if (label === 'halt-commit' || label === 'commit') return cfg.commit;
   if (label === 'verify') return cfg.verify;
   if (cfg.replies[label] !== undefined) return cfg.replies[label];
@@ -75,10 +73,10 @@ def _run(script: str, *, verify=_MET, resume=_RESUME) -> dict:
         pytest.skip("node not on PATH")
     gate_reply = {
         "arm": "m_plus", "halt": None, "baton": None, "resume_ledger": resume,
-        "tshirt": "M", "route": "spec-dispatch", "stage_reply": stage_reply(_DISK),
+        "tshirt": "M", "route": "spec-dispatch", "manifest": _DISK,
     }
     cfg = {
-        "token": _TOKEN, "verify": verify, "commit": _LANDED, "pages": pages_cfg(),
+        "token": _TOKEN, "verify": verify, "commit": _LANDED,
         "replies": {"gate": gate_reply, "gate-stage": gate_reply},
     }
     proc = subprocess.run(

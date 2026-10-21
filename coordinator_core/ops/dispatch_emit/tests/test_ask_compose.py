@@ -386,7 +386,7 @@ def test_stage_is_folded_into_the_plan_agent_s_last_act():
     script = _compose()
     plan_end = script.index("label: 'plan'")
     plan_prompt = script[script.rindex("agent(", 0, plan_end) : plan_end]
-    assert OP_ASK_STAGE in plan_prompt and "as `stage_reply`" in plan_prompt
+    assert OP_ASK_STAGE in plan_prompt and "as `manifest`" in plan_prompt
 
 
 def _scout_prompt(script):
@@ -408,7 +408,7 @@ def test_the_scout_runs_ask_stage_as_its_last_act_for_xs_only():
     assert OP_ASK_STAGE in scout and "plan_path" not in scout.split(OP_ASK_STAGE, 1)[1]
     assert scout.index(OP_ASK_GATE) < scout.index(OP_ASK_STAGE)
     assert scout.rindex(OP_ASK_STAGE) > scout.index("sizing-assemble")
-    assert "stage_reply" in ask_compose._ASK_SCOUT_STAGED_SCHEMA["properties"]
+    assert "manifest" in ask_compose.ASK_SCOUT_SCHEMA["properties"]
 
 
 def test_the_presized_gate_agent_runs_ask_stage_after_the_gate_op(monkeypatch):
@@ -420,16 +420,14 @@ def test_the_gate_prompt_stages_xs_only_and_passes_an_s_resume_manifest_through(
     gate = _gate_prompt(_presized(monkeypatch))
     stage_act = gate.split("As your very last act", 1)[1]
     assert "arm is XS" in stage_act and "plan_path" not in stage_act and "resume_plan is non-null" not in gate
-    assert "an S resume stages itself" in gate and "stage_reply" in gate
-    assert "stage_reply" in ask_compose._GATE_STAGED_SCHEMA["properties"]
-    assert "stage_reply" in ask_compose._ASK_SCOUT_STAGED_SCHEMA["properties"]
-    assert "stage_error" not in ask_compose._GATE_STAGED_SCHEMA["properties"]
+    assert "an S resume stages itself" in gate and "stage_error" in gate
+    assert "stage_error" in ask_compose._GATE_STAGED_SCHEMA["properties"]
+    assert "stage_error" in ask_compose._ASK_SCOUT_STAGED_SCHEMA["properties"]
 
 
 def test_a_gate_stage_error_halts_by_name_not_as_a_missing_manifest(monkeypatch):
     script = _presized(monkeypatch)
-    assert "{ await _adoptStageReply(_gate.stage_reply); }" in script
-    assert "stage_error" not in script
+    assert "_gate.stage_error) { _adoptManifest({ error: _gate.stage_error })" in script
 
 
 def test_a_stop_after_script_carries_no_stage_or_falsifier_act(monkeypatch):
@@ -442,8 +440,8 @@ def test_a_stop_after_script_carries_no_stage_or_falsifier_act(monkeypatch):
 
 def test_folded_manifest_is_adopted_behind_the_rows_guard_and_the_fallback_stays():
     script = _compose()
-    assert "{ await _adoptStageReply(_scouted.stage_reply); }" in script
-    assert "_scoutClean" in script.split("_adoptStageReply(_scouted.stage_reply)", 1)[0].splitlines()[-1]
+    assert "{ _adoptManifest(_scouted.manifest); }" in script
+    assert "_scoutClean" in script.split("_adoptManifest(_scouted.manifest)", 1)[0].splitlines()[-1]
     assert "phase('stage')" not in script and "label: 'stage'" not in script
     assert "if (_stagedManifest) { _manifest = _stagedManifest; }" in script
     assert _NO_FOLD in script
@@ -591,7 +589,7 @@ def test_size_reword_runs_assemble_gate_and_stage_itself_with_no_wrapper_agent()
     reword = _reword_prompt(script)
     assert "<your reworded exit_criterion>" in reword
     assert OP_ASK_GATE in reword and OP_ASK_STAGE in reword
-    for field in ("exit_code", "stdout", "arm", "halt", "stage_reply"):
+    for field in ("exit_code", "stdout", "arm", "halt", "manifest"):
         assert field in ask_compose._REWORD_SCHEMA["properties"]
     assert "_rewordStaged = !_scouted.halt && !!_scouted.arm;" in script
     assert "(_scoutClean || _rewordStaged)" in script

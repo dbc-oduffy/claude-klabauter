@@ -1,7 +1,7 @@
-"""A plan-blitz ready entry whose readyOpReply carries a verifiable manifest handle is adopted with no stage
-leg; one with no reply and no error composes the one `blitz-stage-read` leg (it stages, because readyOp never
-ran) and reaches execute; a reply with neither a handle nor a refusal halts as not whole; a readyOpError
-still halts. The composed script runs under node with every agent leg stubbed by label."""
+"""A plan-blitz ready entry whose readyOpReply is whole is adopted with no leg; one with no reply and no
+error, or a trimmed reply, composes the one `blitz-stage-read` leg (staging first only when readyOp never
+ran) and reaches execute; a readyOpError still halts. The composed script runs under node with every
+agent leg stubbed by label."""
 
 from __future__ import annotations
 
@@ -16,7 +16,6 @@ from coordinator_core.ops.dispatch_emit import ask_compose
 from coordinator_core.ops.dispatch_emit.ask_compose import compose_ask_script
 from coordinator_core.ops.dispatch_emit.ask_contract import OP_ASK_STAGE
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
-from coordinator_core.ops.dispatch_emit.tests.test_ask_compose_stage_handle import PAGE_FAKE_JS, pages_cfg, stage_reply
 from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
@@ -35,14 +34,13 @@ _DISK = {
 _LANDED = {"committed": True, "sha": "abc1234", "error": None, "refused": None}
 _GATE = {"arm": "m_plus", "halt": None, "baton": None, "tshirt": "M", "route": "spec-dispatch"}
 
-_NODE_PROGRAM = PAGE_FAKE_JS + r"""
+_NODE_PROGRAM = r"""
 const src = process.env.SRC.replace(/^export const meta/m, 'const meta');
 const cfg = JSON.parse(process.env.CFG);
 const calls = [];
 const agent = async (prompt, opts) => {
   const label = opts && opts.label;
   calls.push({ label, prompt: String(prompt) });
-  if (label === 'stage-reply-page') return fakePage(cfg, String(prompt));
   if (label === 'halt-commit' || label === 'commit') return cfg.commit;
   if (cfg.replies[label] !== undefined) return cfg.replies[label];
   if (label === 'blitz-stage-read') return cfg.read;
@@ -69,15 +67,14 @@ def _script(monkeypatch, ready: dict) -> str:
     )
 
 
-def _run(script: str, *, read=None, pages=None) -> dict:
+def _run(script: str, *, read=None) -> dict:
     node = shutil.which("node")
     if node is None:
         pytest.skip("node not on PATH")
-    read = {"stage_reply": stage_reply(_DISK)} if read is None else read
     cfg = {
-        "token": _TOKEN, "commit": _LANDED, "pages": pages if pages is not None else pages_cfg(),
+        "token": _TOKEN, "commit": _LANDED,
         "replies": {"gate": _GATE, "gate-stage": _GATE},
-        "read": read,
+        "read": {"manifest": _DISK} if read is None else read,
     }
     proc = subprocess.run(
         [node, "-e", _NODE_PROGRAM], capture_output=True, text=True, encoding="utf-8", timeout=60,
@@ -116,41 +113,30 @@ def test_the_emitted_script_parses_as_the_workflow_runner_parses_it(monkeypatch)
 _RETIRED = {"ready-restage", "manifest-read", "ledger-restage", "run-base"}
 
 
-def test_a_ready_entry_without_readyop_reply_is_staged_by_the_one_leg_and_its_pages_reach_execute(monkeypatch):
+def test_a_ready_entry_without_readyop_reply_is_staged_and_read_by_the_one_leg_and_reaches_execute(monkeypatch):
     out = _run(_script(monkeypatch, {"planPath": _PLAN}))
     labels = _labels(out)
     assert labels.count("blitz-stage-read") == 1, labels
     leg = next(c for c in out["calls"] if c["label"] == "blitz-stage-read")
     assert OP_ASK_STAGE in leg["prompt"] and _PLAN in leg["prompt"]
-    assert "manifest.json" not in leg["prompt"]
-    assert labels.index("blitz-stage-read") < labels.index("stage-reply-page")
+    assert "manifest.json" in leg["prompt"]
     assert not _RETIRED & set(labels)
     assert _past_stage(out), out["result"]["halted_by"]
 
 
-def test_a_ready_entry_carrying_a_verifiable_readyop_reply_composes_no_stage_leg(monkeypatch):
-    out = _run(_script(monkeypatch, {"planPath": _PLAN, "readyOpReply": stage_reply(_DISK)}))
+def test_a_ready_entry_carrying_a_whole_readyop_reply_composes_no_leg(monkeypatch):
+    out = _run(_script(monkeypatch, {"planPath": _PLAN, "readyOpReply": _DISK}))
     assert "blitz-stage-read" not in _labels(out)
-    assert "stage-reply-page" in _labels(out)
     assert not _RETIRED & set(_labels(out))
     assert _past_stage(out), out["result"]["halted_by"]
 
 
-def test_a_readyop_reply_with_neither_a_handle_nor_a_refusal_halts_as_not_whole_without_a_leg(monkeypatch):
+def test_a_trimmed_readyop_reply_is_re_read_from_disk_without_re_staging(monkeypatch):
     trimmed = {"rows": [{"id": "C1", "wave": 0, "deps": []}]}
     out = _run(_script(monkeypatch, {"planPath": _PLAN, "readyOpReply": trimmed}))
-    assert "blitz-stage-read" not in _labels(out) and "stage-reply-page" not in _labels(out)
-    assert out["result"]["halted_by"]["reason"] == "stage manifest relay is not whole: manifest_handle"
-
-
-def test_a_readyop_reply_whose_sidecar_does_not_match_its_handle_halts(monkeypatch):
-    reply = stage_reply(_DISK)
-    script = _script(monkeypatch, {"planPath": _PLAN, "readyOpReply": reply})
-    pages = pages_cfg()
-    pages[reply["manifest_handle"]["sha256"]][0]["chunk"] = "{}"
-    out = _run(script, pages=pages)
-    assert out["result"]["halted_by"]["reason"].startswith("stage reply sidecar does not match its handle:")
-    assert "blitz-stage-read" not in _labels(out)
+    leg = next(c for c in out["calls"] if c["label"] == "blitz-stage-read")
+    assert OP_ASK_STAGE not in leg["prompt"] and "manifest.json" in leg["prompt"]
+    assert _past_stage(out), out["result"]["halted_by"]
 
 
 def test_plan_blitz_did_not_run_error_is_staged_by_the_one_leg(monkeypatch):
@@ -179,31 +165,28 @@ def test_a_zero_rows_readyop_error_halts_carrying_the_real_reason(monkeypatch):
 
 
 def test_a_refused_stage_in_the_leg_halts_naming_it(monkeypatch):
-    out = _run(_script(monkeypatch, {"planPath": _PLAN}), read={"stage_reply": {"error": "stage broke"}})
+    out = _run(_script(monkeypatch, {"planPath": _PLAN}), read={"manifest": None, "stage_error": "stage broke"})
     assert out["result"]["halted_by"]["kind"] == "refusal"
     assert "stage broke" in out["result"]["halted_by"]["reason"]
     assert "C1" not in _labels(out)
 
 
-def test_a_stage_leg_that_returns_no_reply_halts_naming_the_manifest_path(monkeypatch):
-    out = _run(_script(monkeypatch, {"planPath": _PLAN}), read={"stage_reply": None})
+def test_an_absent_disk_manifest_halts_naming_the_path(monkeypatch):
+    out = _run(_script(monkeypatch, {"planPath": _PLAN}), read={"manifest": None})
     assert out["result"]["halted_by"]["reason"].startswith("no stage manifest on disk: ")
 
 
-def test_a_not_whole_staged_manifest_halts_naming_the_field(monkeypatch):
-    out = _run(
-        _script(monkeypatch, {"planPath": _PLAN}), read={"stage_reply": stage_reply({**_DISK, "head_sha": None})}
-    )
-    assert out["result"]["halted_by"]["reason"] == "stage manifest relay is not whole: head_sha"
+def test_a_not_whole_disk_manifest_halts_naming_the_field(monkeypatch):
+    out = _run(_script(monkeypatch, {"planPath": _PLAN}), read={"manifest": {**_DISK, "head_sha": None}})
+    assert out["result"]["halted_by"]["reason"] == "stage manifest on disk is not whole: head_sha"
 
 
-def test_the_leg_composes_only_in_the_plan_blitz_arm_behind_the_readyop_did_not_run_predicate(monkeypatch):
+def test_the_leg_composes_only_in_the_plan_blitz_arm_behind_the_not_whole_predicate(monkeypatch):
     script = _script(monkeypatch, {"planPath": _PLAN})
     assert script.count("label: 'blitz-stage-read'") == 1
-    assert script.count("await _blitzStageRead()") == 2
+    assert script.count("await _blitzStageRead(") == 2
     for entry in ("_ready", "_reready"):
-        assert f"if ({entry}.readyOpReply != null) {{ _relayGap = 'manifest_handle'; }}" in script
         assert (
-            f"else if ({entry}.readyOpError == null || /did not run/.test(String({entry}.readyOpError)))"
+            f"{entry}.readyOpReply != null || {entry}.readyOpError == null || /did not run/.test(String({entry}.readyOpError))"
         ) in script
-    assert script.index("const _blitzStageRead") < script.index("await _blitzStageRead()")
+    assert script.index("const _blitzStageRead") < script.index("await _blitzStageRead(")

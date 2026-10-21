@@ -1,4 +1,4 @@
-"""A resume_ledger gate reply carries the gate op's own stage of the resumed plan as `manifest_handle`; the fold
+"""A resume_ledger gate reply carries the gate op's own stage of the resumed plan as `manifest`; the fold
 adopts it with no restage leg, reaches the ledger check and the terminal commit with no plan author,
 executor or review wave, and a halt there lands its halt commit. The whole composed script runs under
 node with every agent leg stubbed by label."""
@@ -16,7 +16,6 @@ from coordinator_core.ops.dispatch_emit import ask_compose
 from coordinator_core.ops.dispatch_emit.ask_compose import compose_ask_script
 from coordinator_core.ops.dispatch_emit.ask_contract import HALTED_RECORD_PARAM, OP_ASK_STAGE
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
-from coordinator_core.ops.dispatch_emit.tests.test_ask_compose_stage_handle import PAGE_FAKE_JS, pages_cfg, stage_reply
 from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
@@ -39,14 +38,13 @@ _DISK = {
 _LANDED = {"committed": True, "sha": "abc1234", "error": None, "refused": None}
 _MET = {"items": [{"id": "T6", "status": "met", "wired": True}, {"id": "R2", "status": "met", "wired": True}]}
 _UNMET = {"items": [{"id": "T6", "status": "not_met", "essential": True, "remaining": ["still red"]}]}
-_NODE_PROGRAM = PAGE_FAKE_JS + r"""
+_NODE_PROGRAM = r"""
 const src = process.env.SRC.replace(/^export const meta/m, 'const meta');
 const cfg = JSON.parse(process.env.CFG);
 const calls = [];
 const agent = async (prompt, opts) => {
   const label = opts && opts.label;
   calls.push({ label, prompt: String(prompt) });
-  if (label === 'stage-reply-page') return fakePage(cfg, String(prompt));
   if (label === 'halt-commit' || label === 'commit') return cfg.commit;
   if (label === 'verify') return cfg.verify;
   if (cfg.replies[label] !== undefined) return cfg.replies[label];
@@ -77,10 +75,10 @@ def _run(script: str, *, verify=_MET, commit=_LANDED, manifest=_DISK, gate=None,
         pytest.skip("node not on PATH")
     gate_reply = gate or {
         "arm": "m_plus", "halt": None, "baton": None, "resume_ledger": _RESUME,
-        "tshirt": "M", "route": "spec-dispatch", "stage_reply": stage_reply(manifest),
+        "tshirt": "M", "route": "spec-dispatch", "manifest": manifest,
     }
     cfg = {
-        "token": _TOKEN, "verify": verify, "commit": commit, "pages": pages_cfg(),
+        "token": _TOKEN, "verify": verify, "commit": commit,
         "replies": {"gate": gate_reply, "gate-stage": gate_reply, **(replies or {})},
     }
     proc = subprocess.run(
@@ -175,13 +173,13 @@ def test_the_no_folded_manifest_and_wholeness_halts_stay_for_every_arm(monkeypat
 _OWED = {**_RESUME, "remaining": {"T6": {"remaining": ["still red"]}}}
 _OWES_GATE = {
     "arm": "m_plus", "halt": None, "baton": None, "resume_ledger": _OWED, "tshirt": "M",
-    "route": "spec-dispatch", "stage_reply": stage_reply(_DISK),
+    "route": "spec-dispatch", "manifest": _DISK,
 }
 
 
 def test_a_resume_that_owes_work_stages_through_the_replan_agent_over_the_rows_it_added(monkeypatch):
     out = _run(_script(monkeypatch), gate=_OWES_GATE, replies={
-        "ledger-replan": {"plan_rel": _PLAN, "added_rows": [], "stage_reply": None},
+        "ledger-replan": {"plan_rel": _PLAN, "added_rows": [], "manifest": None},
     })
     calls = [c for c in out["calls"] if c["label"] == "ledger-replan"]
     assert len(calls) == 1
@@ -192,14 +190,14 @@ def test_a_resume_that_owes_work_stages_through_the_replan_agent_over_the_rows_i
 
 def test_a_replan_that_added_rows_but_returned_no_manifest_halts(monkeypatch):
     out = _run(_script(monkeypatch), gate=_OWES_GATE, replies={
-        "ledger-replan": {"plan_rel": _PLAN, "added_rows": ["R9"], "stage_reply": None},
+        "ledger-replan": {"plan_rel": _PLAN, "added_rows": ["R9"], "manifest": None},
     })
     assert out["result"]["halted_by"]["reason"].startswith("no folded stage manifest")
 
 
 def test_the_no_folded_manifest_halt_names_the_refire_as_its_resume_route(monkeypatch):
     out = _run(_script(monkeypatch), gate=_OWES_GATE, replies={
-        "ledger-replan": {"plan_rel": _PLAN, "added_rows": ["R9"], "stage_reply": None},
+        "ledger-replan": {"plan_rel": _PLAN, "added_rows": ["R9"], "manifest": None},
     })
     halted = out["result"]["halted_by"]
     assert halted["reason"].startswith("no folded stage manifest")
@@ -234,13 +232,13 @@ def _s_script(monkeypatch) -> str:
 def _s_gate(resume_ledger, manifest=_DISK) -> dict:
     return {
         "arm": "s", "halt": None, "baton": None, "resume_ledger": resume_ledger, "resume_plan": None,
-        "tshirt": "S", "route": "spec-dispatch", "stage_reply": stage_reply(manifest),
+        "tshirt": "S", "route": "spec-dispatch", "manifest": manifest,
     }
 
 
 def test_an_s_arm_ledger_refire_that_owes_work_never_authors_a_new_plan(monkeypatch):
     out = _run(_s_script(monkeypatch), gate=_s_gate(_OWED), replies={
-        "ledger-replan": {"plan_rel": _PLAN, "added_rows": ["R9"], "stage_reply": stage_reply(_DISK)},
+        "ledger-replan": {"plan_rel": _PLAN, "added_rows": ["R9"], "manifest": _DISK},
     })
     labels = _labels(out)
     assert "plan" not in labels, labels

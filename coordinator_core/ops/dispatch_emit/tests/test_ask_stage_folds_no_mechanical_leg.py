@@ -1,6 +1,6 @@
 """The ask route composes no standalone read, restage or run-base leg: each engine-owned stage agent returns the
-stage reply itself, the run base is the manifest's head_sha, and the one conditional `blitz-stage-read` leg exists
-only on the plan-blitz arm behind the readyOp-did-not-run predicate."""
+manifest itself, the run base is the manifest's head_sha, and the one conditional `blitz-stage-read` leg exists
+only on the plan-blitz arm behind the not-whole / readyOp-did-not-run predicate."""
 
 from __future__ import annotations
 
@@ -31,7 +31,7 @@ def test_no_ask_script_composes_a_retired_mechanical_leg(tmp_path):
         assert "rev-parse HEAD" not in script
 
 
-def test_the_blitz_stage_read_leg_composes_only_with_the_plan_blitz_fold(tmp_path):  # noqa: D103
+def test_the_blitz_stage_read_leg_composes_only_with_the_plan_blitz_fold(tmp_path):
     scripts = _ask_scripts(tmp_path)
     with_leg = [s for s in scripts if _BLITZ_LEG in _labels(s)]
     assert with_leg, "no composed ask script carries the plan-blitz arm's leg"
@@ -42,30 +42,29 @@ def test_the_blitz_stage_read_leg_composes_only_with_the_plan_blitz_fold(tmp_pat
     assert _BLITZ_LEG not in _labels(_ask(stop_after=STOP_AFTER_PLAN))
 
 
-def test_the_leg_is_called_only_when_readyop_never_ran(tmp_path):
+def test_the_leg_is_called_only_behind_the_not_whole_or_not_run_predicate(tmp_path):
     for script in _ask_scripts(tmp_path):
-        for call in re.finditer(r"await _blitzStageRead\(\)", script):
-            lines = script[: call.end()].splitlines()
-            guard, branch = lines[-3], lines[-1]
-            assert "!_stagedManifest && !_stageRefusal && !_diskHalt && !_relayGap" in guard, guard
-            assert "readyOpReply != null" in lines[-2], lines[-2]
+        for call in re.finditer(r"await _blitzStageRead\((\w+)\)", script):
+            entry = call.group(1)
+            line = script[script.rindex("\n", 0, call.start()) + 1:script.index("\n", call.end())]
+            assert "!_stagedManifest && !_stageRefusal" in line, line
             assert (
-                "readyOpError == null || /did not run/.test(String(" in branch and branch.lstrip().startswith("else if")
-            ), branch
+                f"{entry}.readyOpReply != null || {entry}.readyOpError == null "
+                f"|| /did not run/.test(String({entry}.readyOpError))"
+            ) in line, line
 
 
-def test_every_engine_owned_fold_site_returns_the_stage_reply_under_the_stage_reply_schema():
-    schema_of = ask_compose.STAGE_REPLY_SCHEMA
-    assert set(schema_of["properties"]) == {"manifest_handle", "error", "owed_em_ids", "owed_plan"}
+def test_every_engine_owned_fold_site_returns_the_manifest_under_the_strict_schema():
+    strict = ask_compose._MANIFEST_READ_SCHEMA
+    assert {"head_sha", "test_targets", "rows", "review_declared_paths"} <= set(strict["required"])
     for schema in (ask_compose._GATE_STAGED_SCHEMA, ask_compose._REWORD_SCHEMA, ask_compose._REVISE_STAGED_SCHEMA,
                    ask_compose._SPINE_REVIEW_STAGED_SCHEMA, ask_compose._REPLAN_STAGED_SCHEMA,
                    ask_compose._ASK_SCOUT_STAGED_SCHEMA, ask_compose._BLITZ_STAGE_READ_SCHEMA):
-        reply = schema["properties"]["stage_reply"]
-        assert {k: v for k, v in reply.items() if k != "type"} == {k: v for k, v in schema_of.items() if k != "type"}
-        assert "null" in reply["type"]
-        assert "manifest" not in schema["properties"] and "stage_error" not in schema["properties"]
-    assert ask_compose._PLAN_STAGED_SCHEMA["properties"]["stage_reply"] == schema_of
-    assert "stage_reply" in ask_compose._PLAN_STAGED_SCHEMA["required"]
+        manifest = schema["properties"]["manifest"]
+        assert manifest["required"] == strict["required"], schema
+        assert manifest["properties"] == strict["properties"], schema
+        assert "null" in manifest["type"]
+    assert ask_compose._PLAN_STAGED_SCHEMA["properties"]["manifest"] == strict
 
 
 def _node(program: str) -> dict:
@@ -90,12 +89,12 @@ def test_the_run_base_is_the_relayed_manifests_head_sha_and_a_missing_one_is_emp
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_a_trimmed_engine_manifest_halts_by_name_and_a_whole_one_proceeds():
+def test_a_trimmed_engine_relay_halts_by_name_and_a_whole_one_proceeds():
     from coordinator_core.ops.dispatch_emit.tests.test_ask_fold_reads_disk_manifest_e2e import (
-        _TRIMMED, _WHOLE, fold_manifest,
+        _TRIMMED_RELAY, _WHOLE, _fold,
     )
 
-    out = fold_manifest(_TRIMMED)
+    out = _fold(_TRIMMED_RELAY)
     assert out["halted"]["reason"] == "stage manifest relay is not whole: review_declared_paths"
-    out = fold_manifest(_WHOLE)
-    assert out["halted"] is None and out["manifest"] == _WHOLE and set(out["seen"]) == {"stage-reply-page"}
+    out = _fold(_WHOLE)
+    assert out["halted"] is None and out["manifest"] == _WHOLE and out["seen"] == []

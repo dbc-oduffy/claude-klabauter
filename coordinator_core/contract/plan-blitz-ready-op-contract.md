@@ -17,11 +17,9 @@ the op's params without `plan_path`. Claude-klabauter sends `op: 'dispatch.ask_s
 `{run_id, writes, cross_repo_approved, session_id, commit_sizing_path?}`. The key is omitted when
 the plan is already staged and in a `stop_after` script, which never stages.
 
-`args.readyOp.schema` is optional and already sent (c1480cbe72): the JSON schema of the stage reply
-(`reply_sidecar.STAGE_REPLY_SCHEMA`), which is a `manifest_handle` (`{path, sha256, bytes}`) or a
-refusal (`error`, `owed_em_ids`, `owed_plan`), never the manifest. A producer should use it as the
-`readyOpReply` property schema in place of `{}`, so StructuredOutput enforces the reply shape on the
-relaying agent. A producer that predates this ignores it.
+`args.readyOp.schema` is optional and already sent (c1480cbe72): the JSON schema of the stage manifest (`ask_compose._MANIFEST_SCHEMA`).
+A producer should use it as the `readyOpReply` property schema in place of `{}`, so StructuredOutput
+enforces the manifest shape on the relaying agent. A producer that predates this ignores it.
 
 ## 3. When the op runs
 
@@ -34,11 +32,7 @@ Never for a pulled, replan or judgment plan.
 
 The reply is returned verbatim as `readyOpReply` on that plan's entry in `ready`, and nowhere else:
 never on a pulled, replan or judgment entry. plan-blitz never interprets the reply. Claude-klabauter adopts
-the reply's `manifest_handle` as the stage manifest when the sidecar it names is whole, and only then.
-Claude-klabauter reads that sidecar through `dispatch.reply_page` pages (`stage-reply-page` legs), joins them,
-and checks the text's length and sha256 against the handle before parsing it. A page set that does
-not match halts the run with `stage reply sidecar does not match its handle: <reason>`. The parsed
-manifest must be:
+the reply as the stage manifest when it is whole, and only then:
 
 - an object with no `error`;
 - `rows`, `review_declared_paths` and `test_targets` are arrays;
@@ -47,13 +41,13 @@ manifest must be:
 - every `gated[]` and `owed[]` entry present carries a non-empty string `id`;
 - `head_sha` is 40 lowercase hex.
 
-When the reply is absent and the op did not run (no error, or the `did not run` error), claude-klabauter composes
-one conditional haiku leg, `blitz-stage-read`: it runs the stage op and returns the op's reply as
-`stage_reply`, which is adopted by the rule above. A reply that is present but carries neither a
-refusal nor a handle halts with `stage manifest relay is not whole: manifest_handle`, and a stage leg
-that returns no reply with `no stage manifest on disk: <manifest_rel>`; both carry the refire
-`next_action`; no executor dispatches. A ready entry that is a bare string carries none. A producer
-that puts a caller-supplied reply schema on `readyOpReply` removes the leg.
+When the reply is absent, or present and not whole, claude-klabauter composes one conditional haiku leg,
+`blitz-stage-read`: it runs the stage op only when the op did not run (no reply and no error, or the
+`did not run` error), then reads `state/warp/<run_id>/manifest.json` and returns it under the same
+rule. A disk manifest that fails it halts the run with `stage manifest on disk is not whole: <first
+failing field>`, and an absent one with `no stage manifest on disk: <manifest_rel>`; both carry the
+refire `next_action`; no executor dispatches. A ready entry that is a bare string carries none. A
+producer that puts a caller-supplied reply schema on `readyOpReply` removes the leg.
 
 ## 5. Absent arg and old plan-blitz
 

@@ -18,63 +18,10 @@ from coordinator_core.ops import _path_guard
 from coordinator_core.ops.dispatch_emit import grind_commit_contract as _contract
 
 HANDLE_KEYS = ("path", "sha256", "bytes")
-SIDECAR_ROOTS = ("state/warp", "scratch")
+SIDECAR_ROOTS = ("state/warp", "scratch/warp", "scratch")
 
 SIDECAR_CAUSE = "the sidecar changed after the engine wrote it"
 _FLAG = "reply-sidecar"
-
-OP_REPLY_PAGE = "dispatch.reply_page"
-# Bounds each page's JSON-escaped form, so a page relayed inside a JSON reply stays under the 12000-char capture cut.
-PAGE_CHARS = 6000
-
-HANDLE_SCHEMA = {
-    "type": "object",
-    "required": list(HANDLE_KEYS),
-    "additionalProperties": False,
-    "properties": {
-        "path": {"type": "string"},
-        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
-        "bytes": {"type": "integer", "minimum": 0},
-    },
-}
-
-# No oneOf: one object with optional keys, so a validator that ignores oneOf still binds it.
-STAGE_REPLY_SCHEMA = {
-    "type": "object",
-    "additionalProperties": False,
-    "properties": {
-        "manifest_handle": HANDLE_SCHEMA,
-        "error": {"type": "string"},
-        "owed_em_ids": {"type": "array", "items": {"type": "string"}},
-        "owed_plan": {"type": ["string", "null"]},
-    },
-}
-
-PAGE_REPLY_SCHEMA = {
-    "type": "object",
-    "required": ["sha256", "bytes", "page", "pages", "chunk"],
-    "additionalProperties": False,
-    "properties": {
-        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
-        "bytes": {"type": "integer", "minimum": 0},
-        "page": {"type": "integer", "minimum": 0},
-        "pages": {"type": "integer", "minimum": 1},
-        "chunk": {"type": "string"},
-    },
-}
-
-VERIFY_REPLY_JS = (
-    _contract.RELAY_SHA256_JS
-    + """
-function _verifyReplyText(text, handle) {
-  if (typeof text !== 'string') return 'reply text is not a string';
-  if (!/^[\\x00-\\x7f]*$/.test(text)) return 'reply text is not ASCII';
-  if (text.length !== handle.bytes) return 'reply text is ' + text.length + ' bytes, handle says ' + handle.bytes;
-  if (_sha256Ascii(text) !== handle.sha256) return 'reply text sha256 does not match the handle';
-  return null;
-}
-"""
-)
 
 
 class ReplySidecarError(ValueError):
@@ -166,37 +113,6 @@ def read_text(root: Path, handle: Mapping) -> str:
     if message is not None:
         raise ReplySidecarError(message)
     return text
-
-
-def _pages(text: str) -> list[str]:
-    budget = PAGE_CHARS - 2
-    pages: list[str] = []
-    start = used = 0
-    costs: dict[str, int] = {}
-    for i, ch in enumerate(text):
-        cost = costs.get(ch)
-        if cost is None:
-            cost = costs[ch] = len(json.dumps(ch)) - 2
-        if used + cost > budget:
-            pages.append(text[start:i])
-            start, used = i, 0
-        used += cost
-    pages.append(text[start:])
-    return pages
-
-
-def page(text: str, index: int) -> tuple[str, int]:
-    """``(chunk, pages)``; each chunk's ``json.dumps`` form is at most ``PAGE_CHARS``. ``IndexError`` past the end."""
-    pages = _pages(text)
-    if not 0 <= index < len(pages):
-        raise IndexError(f"page {index} is outside 0..{len(pages) - 1}")
-    return pages[index], len(pages)
-
-
-def page_reply(handle: Mapping, text: str, index: int) -> dict:
-    """The success shape of ``dispatch.reply_page``; the reader joins the chunks and checks them against the handle."""
-    chunk, pages = page(text, index)
-    return {"sha256": handle["sha256"], "bytes": handle["bytes"], "page": index, "pages": pages, "chunk": chunk}
 
 
 def read_reply(root: Path, handle: Mapping) -> dict:

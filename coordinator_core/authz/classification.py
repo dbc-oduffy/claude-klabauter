@@ -2309,19 +2309,6 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
     # Spec: docs/plans/2026-10-01-warp-ask.md § C3, C10
     "dispatch.ask_stage": OpClass.MUTATING,
-    # dispatch.reply_page — COMPUTE_ONLY: reads one reply sidecar under state/warp or scratch,
-    # verifies it against the caller's handle and returns one page (ops/dispatch_emit/reply_page.py).
-    # DR-208 five-question affirmation (citing dispatch.reply_page handler):
-    #   1. Writes, deletes, or reorders any state file, queue, or git object?  No.
-    #   2. Writes into rag's relational store?                                 No.
-    #   3. Opens any file for write (including sentinel creation)?             No.
-    #      One read_bytes of the handle's path, contained by _path_guard.contained_path.
-    #   4. Mutates shared mutable state outside its own module?                No.
-    #      No cache; each call re-reads the sidecar.
-    #   5. Persistent state changes observable across process boundaries?      No.
-    # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
-    # Spec: docs/plans/2026-10-21-stage-reply-sidecar-handle.md § C4
-    "dispatch.reply_page": OpClass.COMPUTE_ONLY,
     # dispatch.ask_fanout — MUTATING: writes draft slice sizings under state/sizings/ and the write-once
     # parent record under scratch/warp/<parent_id>/, then raises sized_through_turn; spawns no process
     # (ops/dispatch_emit/ask_fanout.py).

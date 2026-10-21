@@ -19,13 +19,6 @@ from coordinator_core.git.git_state import head_sha
 from coordinator_core.warp_fire import fire_command
 from coordinator_core.ops.dispatch_emit import agent_sidecar as _sidecar
 from coordinator_core.ops.dispatch_emit import prompt_fragments as _prompt_fragments
-from coordinator_core.ops.dispatch_emit.reply_sidecar import (
-    OP_REPLY_PAGE,
-    PAGE_CHARS,
-    PAGE_REPLY_SCHEMA,
-    STAGE_REPLY_SCHEMA,
-    VERIFY_REPLY_JS,
-)
 from coordinator_core.ops.dispatch_emit import emit as _emit
 from coordinator_core.ops.dispatch_emit.fanout_cost import AGENT_CALL_RE, GROUP_HEADER_TAIL, GROUP_MEMBER_RESULT_JS, FanoutCost, with_fanout
 from coordinator_core.ops.dispatch_emit.falsifier_integrity_phase import REVIEWER_AGENT_TYPE
@@ -480,67 +473,77 @@ _MANIFEST_SCHEMA = _obj(
     },
 )
 
-#: A stage act's reply is a handle or a refusal; `_adoptStageReply` pages the sidecar and verifies it
-#: against the handle before the manifest is adopted. `_STAGE_REPLY_OR_NULL` is for a conditional act.
-_STAGE_REPLY_OR_NULL = {**STAGE_REPLY_SCHEMA, "type": ["object", "null"]}
-#: The page leg may relay the op's `{error}` refusal, so no key is required; the script checks the echo.
-_PAGE_LEG_SCHEMA = {
-    **PAGE_REPLY_SCHEMA,
-    "required": [],
-    "properties": {**PAGE_REPLY_SCHEMA["properties"], "error": {"type": "string"}},
-}
-_STAGE_REPLY_PROP = {"stage_reply": _STAGE_REPLY_OR_NULL}
+#: Requires every field `_wholeManifestGap` checks, so a trimmed relay fails the agent's own output
+#: validation instead of reaching the fold. `head_sha` is the stage reply's execute-start HEAD
+#: (null only when the op could not resolve it).
+_MANIFEST_READ_SCHEMA = _obj(
+    [*_MANIFEST_SCHEMA["required"], "test_targets", "head_sha"],
+    {**_MANIFEST_SCHEMA["properties"], "head_sha": {"type": ["string", "null"]}},
+)
+#: `_MANIFEST_READ_SCHEMA` for an agent whose stage act is conditional: null passes (`required` and
+#: `properties` bind only an object), a relayed object must be whole.
+_RELAYED_MANIFEST_SCHEMA = {**_MANIFEST_READ_SCHEMA, "type": ["object", "null"]}
 
 _PLAN_STAGED_SCHEMA = _obj(
-    ["plan_rel", "stage_reply"], {"plan_rel": _STR, "stage_reply": STAGE_REPLY_SCHEMA, **_FALSIFIER_PROP}
+    ["plan_rel", "manifest"], {"plan_rel": _STR, "manifest": _MANIFEST_READ_SCHEMA, **_FALSIFIER_PROP}
 )
 _REVISE_STAGED_SCHEMA = _obj(
     ["plan_rel"],
-    {"plan_rel": _STR, "pull_class": _STR, "verdict": _STR, **_STAGE_REPLY_PROP},
+    {"plan_rel": _STR, "pull_class": _STR, "verdict": _STR, "manifest": _RELAYED_MANIFEST_SCHEMA},
 )
 _SPINE_REVIEW_STAGED_SCHEMA = _obj(
     ["plan_rel"],
     {
-        "plan_rel": _STR, "pull_class": _STR, "verdict": _STR, **_STAGE_REPLY_PROP,
+        "plan_rel": _STR, "pull_class": _STR, "verdict": _STR, "manifest": _RELAYED_MANIFEST_SCHEMA,
         **_REVIEW_SIGNALS_PROP, **_FALSIFIER_PROP,
     },
 )
 #: The ledger-resume re-plan agent's return: the rows it added, and the stage it runs over exactly those.
 _REPLAN_STAGED_SCHEMA = _obj(
     ["plan_rel", "added_rows"],
-    {"plan_rel": _STR, "added_rows": {"type": "array", "items": _STR}, **_STAGE_REPLY_PROP},
+    {
+        "plan_rel": _STR, "added_rows": {"type": "array", "items": _STR}, "manifest": _RELAYED_MANIFEST_SCHEMA,
+        "error": {"type": ["string", "null"]},
+    },
 )
 #: The pre-sized gate agent's return: the gate reply plus the stage it runs as its closing act.
 _GATE_STAGED_SCHEMA = {
     **_GATE_SCHEMA,
-    "properties": {**_GATE_SCHEMA["properties"], **_STAGE_REPLY_PROP},
+    "properties": {
+        **_GATE_SCHEMA["properties"],
+        "manifest": _RELAYED_MANIFEST_SCHEMA,
+        "stage_error": {"type": ["string", "null"]},
+    },
 }
 #: The size-reword agent's return: the reworded criterion, its own sizing-assemble result, and the
-#: gate reply (plus stage reply) it runs as closing acts.
+#: gate reply (plus stage manifest) it runs as closing acts.
 _REWORD_SCHEMA = _obj(
     ["exit_criterion"],
     {**_GATE_STAGED_SCHEMA["properties"], **ASSEMBLE_SCHEMA["properties"], "exit_criterion": _STR},
 )
-#: The ask scout's return with its relayed stage reply held to the stage-reply schema.
+#: The ask scout's return with its relayed stage manifest held to the strict schema.
 _ASK_SCOUT_STAGED_SCHEMA = {
     **ASK_SCOUT_SCHEMA,
     "properties": {
-        **{k: v for k, v in ASK_SCOUT_SCHEMA["properties"].items() if k != "manifest"},
-        **_STAGE_REPLY_PROP,
+        **ASK_SCOUT_SCHEMA["properties"],
+        "manifest": _RELAYED_MANIFEST_SCHEMA,
+        "stage_error": {"type": ["string", "null"]},
     },
 }
-#: The blitz-stage-read leg's return: the stage op's reply, run only when readyOp never ran.
-_BLITZ_STAGE_READ_SCHEMA = _obj([], dict(_STAGE_REPLY_PROP))
+#: The blitz-stage-read leg's return: the manifest read from disk, or the stage op's own refusal.
+_BLITZ_STAGE_READ_SCHEMA = _obj(
+    [], {"manifest": _RELAYED_MANIFEST_SCHEMA, "stage_error": {"type": ["string", "null"]}}
+)
 
 
 _LEDGER_PREFIX_VAR = "_LEDGER_PREFIX"
 #: JS expression: the gate's design brief ahead of an agent's task text; '' when the gate carried none.
 _DESIGN_PREFIX_JS = f"(_gate?.{DESIGN_BRIEF_KEY} ? String(_gate.{DESIGN_BRIEF_KEY}) + '\\n\\n' : '')"
 
-#: An engine-owned fold site returns the stage reply under `STAGE_REPLY_SCHEMA`; `_adoptStageReply`
-#: (see `_stage_reply_js`) admits a manifest only when its paged sidecar matches the handle and
-#: `_wholeManifestGap` finds no gap. A refused stage lands in `_stageRefusal`; a sidecar that does not
-#: match its handle lands in `_diskHalt`; a not-whole manifest lands in `_relayGap` (halts by name).
+#: An engine-owned fold site returns the stage reply under `_MANIFEST_READ_SCHEMA`, so a trimmed relay
+#: fails the agent's own output validation; `_adoptManifest` admits a relay only when
+#: `_wholeManifestGap` finds no gap. A refused stage lands in `_stageRefusal`; a not-whole relay
+#: lands in `_relayGap` (halts by name) unless `soft` (the plan-blitz arm, which re-reads on a gap).
 _ADMIT_MANIFEST_JS = (
     "  let _stageRefusal = null;\n"
     "  let _stageOwedEm = null;\n"
@@ -566,6 +569,17 @@ _ADMIT_MANIFEST_JS = (
     "    if (!/^[0-9a-f]{40}$/.test(String(m.head_sha ?? ''))) return 'head_sha';\n"
     "    return null;\n"
     "  };\n"
+    "  const _adoptManifest = (m, soft) => {\n"
+    "    if (m === null || m === undefined || typeof m !== 'object' || Array.isArray(m)) return;\n"
+    # A soft (relayed) reply's `error` is agent prose -- a relay that shortens an oversized
+    # manifest writes its note there -- so it never refuses; the disk read that follows decides.
+    "    if (m.error) { if (!soft && !_stageRefusal) { _stageRefusal = String(m.error); "
+    "if (Array.isArray(m.owed_em_ids) && m.owed_em_ids.length) _stageOwedEm = { ids: m.owed_em_ids.map(String), "
+    "plan: typeof m.owed_plan === 'string' ? m.owed_plan : null }; } return; }\n"
+    "    const gap = _wholeManifestGap(m);\n"
+    "    if (gap) { if (!soft && !_relayGap) _relayGap = gap; return; }\n"
+    "    _stagedManifest = m;\n"
+    "  };\n"
     "  // Any non-empty readyOpError is the stage op's own refusal, except plan-blitz's 'did not run'\n"
     "  // sentinel (the op never ran; the one stage leg decides). The design-review prefix is matched\n"
     "  // later, on the adopted text.\n"
@@ -574,76 +588,6 @@ _ADMIT_MANIFEST_JS = (
     "    if (!_stagedManifest && !_stageRefusal && _re !== '' && !/did not run/.test(_re)) _stageRefusal = _re;\n"
     "  };"
 )
-#: Every page holds at least this many characters but the last: PAGE_CHARS minus the quotes, over the
-#: six-character `\uXXXX` escape. It bounds the `pages` a reply may claim for a handle.
-_PAGE_MIN_CHARS = (PAGE_CHARS - 2) // 6
-_STAGE_SIDECAR_HALT = "stage reply sidecar does not match its handle: "
-_ADOPT_STAGE_REPLY_JS = (
-    "  const _readStageSidecar = async (h) => {\n"
-    "    if (!h || typeof h !== 'object' || typeof h.path !== 'string' || !/^[0-9a-f]{64}$/.test(String(h.sha256)) "
-    "|| !Number.isInteger(h.bytes) || h.bytes < 0) return { fail: 'the handle is malformed' };\n"
-    "    const echoes = (p, i) => !!p && !p.error && p.sha256 === h.sha256 && p.bytes === h.bytes && p.page === i "
-    "&& typeof p.chunk === 'string';\n"
-    "    const p0 = await _pageLeg(h, 0);\n"
-    "    if (p0 && p0.error) return { fail: String(p0.error) };\n"
-    "    if (!echoes(p0, 0) || !Number.isInteger(p0.pages) || p0.pages < 1 "
-    f"|| p0.pages > Math.floor(h.bytes / {_PAGE_MIN_CHARS}) + 1) "
-    "return { fail: 'page 0 is missing or does not echo the handle' };\n"
-    "    const idx = [];\n"
-    "    for (let i = 1; i < p0.pages; i++) idx.push(i);\n"
-    "    const more = idx.length ? await parallel(idx.map((i) => () => _pageLeg(h, i))) : [];\n"
-    "    let text = p0.chunk;\n"
-    "    for (let k = 0; k < idx.length; k++) {\n"
-    "      const p = more[k];\n"
-    "      if (p && p.error) return { fail: String(p.error) };\n"
-    "      if (!echoes(p, idx[k]) || p.pages !== p0.pages) "
-    "return { fail: 'page ' + idx[k] + ' is missing or does not echo the handle' };\n"
-    "      text += p.chunk;\n"
-    "    }\n"
-    "    const why = _verifyReplyText(text, h);\n"
-    "    if (why) return { fail: why };\n"
-    "    try { return { manifest: JSON.parse(text) }; } catch (_e) { return { fail: 'the sidecar is not valid JSON' }; }\n"
-    "  };\n"
-    # A soft (plan-blitz readyOp) reply's `error` is the pass-through's prose: `_adoptReadyError` owns
-    # the refusal there. The manifest is only ever the sidecar text that matched its handle.
-    "  const _adoptStageReply = async (r, soft) => {\n"
-    "    if (r === null || r === undefined || typeof r !== 'object' || Array.isArray(r)) return;\n"
-    "    if (r.error && r.manifest_handle) { if (!soft && !_relayGap) _relayGap = "
-    "'stage reply carries both error and manifest_handle'; return; }\n"
-    "    if (r.error) { if (!soft && !_stageRefusal) { _stageRefusal = String(r.error); "
-    "if (Array.isArray(r.owed_em_ids) && r.owed_em_ids.length) _stageOwedEm = { ids: r.owed_em_ids.map(String), "
-    "plan: typeof r.owed_plan === 'string' ? r.owed_plan : null }; } return; }\n"
-    "    if (!r.manifest_handle) { if (!soft && !_relayGap) _relayGap = 'manifest_handle'; return; }\n"
-    "    const got = await _readStageSidecar(r.manifest_handle);\n"
-    f"    if (got.fail) {{ if (!_diskHalt) _diskHalt = {_js_string_literal(_STAGE_SIDECAR_HALT)} + got.fail; return; }}\n"
-    "    const gap = _wholeManifestGap(got.manifest);\n"
-    "    if (gap) { if (!_relayGap) _relayGap = gap; return; }\n"
-    "    _stagedManifest = got.manifest;\n"
-    "  };"
-)
-
-
-def _stage_reply_js(*, head: str, anchor: str, run_id: str) -> str:
-    """The script block that turns a stage reply into `_stagedManifest`: one mechanical page leg per page of
-    the sidecar `dispatch.reply_page` reads, joined and verified against the handle before `JSON.parse`."""
-    prompt = _cat(
-        f"{head}\n\n{anchor}\n\n",
-        f"Run `{_INVOKE} {OP_REPLY_PAGE} '",
-        "js:JSON.stringify({ handle: _h, page: _i })",
-        "'` once and return its JSON reply verbatim, every field and the chunk unchanged. "
-        "If it replies {\"error\": ...}, return that message as error. Commit nothing.",
-    )
-    leg = _agent(
-        prompt, label="stage-reply-page", phase="plan", agent_type=_MECHANICAL_AGENT_TYPE,
-        agent_model=_MECHANICAL_MODEL, schema=_PAGE_LEG_SCHEMA, effort=_MECHANICAL_EFFORT, run_id=run_id,
-    )
-    return (
-        VERIFY_REPLY_JS
-        + f"\n  const _pageLeg = async (_h, _i) => {{ try {{ return await {leg}; }} catch (_e) {{ return null; }} }};\n"
-        + _ADOPT_STAGE_REPLY_JS
-    )
-
-
 #: The run reads its commit token from the Workflow `args` the emit's fire args carry, so the
 #: script's bytes never hold it (any agent or peer can read the script).
 _RUN_TOKEN_DECL_JS = (
@@ -1465,7 +1409,6 @@ def compose_ask_script(
     b.append("  let _manifest = null;")
     b.append("  let _stagedManifest = null;")
     b.append(_ADMIT_MANIFEST_JS)
-    b.append(_stage_reply_js(head=head, anchor=anchor, run_id=run_id))
     b.append(f"  let {_OWNER_ROWS_JS} = [];")
     b.append("  let _viaRoadmap = false;")
     b.append("  let _splitExit = null;")
@@ -1536,9 +1479,8 @@ def compose_ask_script(
         ``js:`` expression.
         """
         return (
-            " When the gate reply carries its own `manifest_handle` (a ledger resume or an S resume stages itself), "
-            "return {manifest_handle: <it verbatim>} as stage_reply; when it carries `manifest` holding an `error`, return "
-            "{error: <that text>} as stage_reply; either way run no stage command. "
+            " When the gate reply carries its own `manifest` (a ledger resume or an S resume stages itself), "
+            "return it verbatim as manifest, every field and every row, trimming nothing, and run no stage command. "
             "As your very last act otherwise, stage the run, but only when the gate reply's halt is null and its arm "
             f"is XS: run `{_INVOKE} {OP_ASK_STAGE} '<params>'` once, <params> being the JSON object ",
             base,
@@ -1546,8 +1488,9 @@ def compose_ask_script(
             sizing,
             " and gated ",
             gated,
-            " added. Return its JSON reply verbatim as stage_reply (a manifest_handle, or the {\"error\": ...} refusal). "
-            "On any other arm run no stage command and return no stage_reply.",
+            " added. Return the JSON reply verbatim as manifest, every field and every row, trimming nothing; "
+            "when it replies {\"error\": ...}, return that message as stage_error with manifest null. On any "
+            "other arm run no stage command and return no manifest.",
         )
 
     def _gate_agent_call(label: str, phase_title: str, stage_act: bool = False) -> str:
@@ -1822,7 +1765,7 @@ def compose_ask_script(
             "resume_plan: _reworded.resume_plan ?? null, resume_rows: _reworded.resume_rows ?? null, resume_ledger: _reworded.resume_ledger ?? null, spine_plan: _reworded.spine_plan ?? null, "
             f"{DESIGN_BRIEF_KEY}: _reworded.{DESIGN_BRIEF_KEY} ?? null, "
             f"{DESIGN_ROUTE_KEY}: _reworded.{DESIGN_ROUTE_KEY} ?? null, "
-            "stage_reply: _reworded.stage_reply ?? null });"
+            "manifest: _reworded.manifest ?? null });"
         )
         b.append("      _rewordStaged = !_scouted.halt && !!_scouted.arm;")
         b.append("    }")
@@ -1890,7 +1833,10 @@ def compose_ask_script(
         reply_js = "_scouted" if sized_in_run else "_gate"
         b.append(
             f"  if ({clean_js} && (_gate.arm === {_lit(ARM_XS)} || (_gate.arm === {_lit(ARM_S)} && _gate.resume_plan) "
-            f"|| _gate.{RESUME_LEDGER_KEY})) {{ await _adoptStageReply({reply_js}.stage_reply); }}"
+            f"|| _gate.{RESUME_LEDGER_KEY})) {{ _adoptManifest({reply_js}.manifest); }}"
+        )
+        b.append(
+            f"  if ({clean_js} && {reply_js}.stage_error) {{ _adoptManifest({{ error: {reply_js}.stage_error }}); }}"
         )
 
     def _record_clause(record_js: str, fields: str) -> list[str]:
@@ -2094,8 +2040,9 @@ def compose_ask_script(
             " with only_rows set to the ids of exactly the rows you added",
             "js:(_ledgerUnlanded.length ? ' together with these unlanded rows: ' + JSON.stringify(_ledgerUnlanded) : '')",
             ", and return its JSON reply "
-            "verbatim as stage_reply (a manifest_handle, or the {\"error\": ...} refusal). When you added no row, "
-            f"stage nothing and return stage_reply null.{session_tail}",
+            "verbatim as manifest, every field and every row, trimming nothing. If it replies "
+            "{\"error\": ...}, return that message as error and manifest null. When you added no row, "
+            f"stage nothing and return manifest null.{session_tail}",
         )
         replan_call = _agent(
             replan_prompt, label="ledger-replan", phase="plan", agent_type=_PLAN_AUTHOR_AGENT_TYPE,
@@ -2103,52 +2050,61 @@ def compose_ask_script(
         )
         b.append(
             "  if (_ledgerOwes && !_stageRefusal) { const _gateStaged = _stagedManifest; const _gateGap = _relayGap; "
-            "const _gateDisk = _diskHalt; _stagedManifest = null; _relayGap = null; _diskHalt = null; "
+            "_stagedManifest = null; _relayGap = null; "
             f"const _replanned = await {replan_call}; "
             "_ledgerAdded = (Array.isArray(_replanned?.added_rows) ? _replanned.added_rows : [])"
             ".filter((s) => typeof s === 'string' && s.trim()); "
             "if (_ledgerAdded.length) { _ledgerExec = true; "
-            "await _adoptStageReply(_replanned?.stage_reply); } "
+            "_adoptManifest(_replanned?.manifest ?? (_replanned?.error ? { error: _replanned.error } : null)); } "
             f"else {{ if (!_ledgerUnlanded.length) {{ _gate = {{ ..._gate, arm: {_lit(ARM_XS)} }}; }} "
-            "_stagedManifest = _gateStaged; _relayGap = _gateGap; _diskHalt = _gateDisk; } }"
+            "_stagedManifest = _gateStaged; _relayGap = _gateGap; } }"
         )
 
         if blitz_fn:
-            # The one stage leg of the plan-blitz arm: it runs only when readyOp never ran, and the
-            # sidecar it names is paged and verified like any other stage reply.
+            # The plan-blitz arm's readyOpReply has no engine schema, so DoE's reviewer can still trim it:
+            # this is the only leg that re-reads, and it stages first only when readyOp never ran.
             blitz_read_prompt = _cat(
                 f"{head}\n\n{anchor}\n\n",
-                f"Run `{_INVOKE} {OP_ASK_STAGE} '",
-                "js:JSON.stringify({ run_id: _runId, plan_path: _planRel, writes: _writes, "
+                "js:(entry.readyOpReply == null ? "
+                + _lit(f"Run `{_INVOKE} {OP_ASK_STAGE} '")
+                + " + JSON.stringify({ run_id: _runId, plan_path: _planRel, writes: _writes, "
                 "cross_repo_approved: _crossRepoApproved, session_id: _SESSION_ID, "
-                "...(_sizingRel ? { commit_sizing_path: _sizingRel } : {}) })",
-                "'` once and return its JSON reply verbatim as stage_reply (a manifest_handle, or the "
-                "{\"error\": ...} refusal). Commit nothing.",
+                "...(_sizingRel ? { commit_sizing_path: _sizingRel } : {}) }) + "
+                + _lit(
+                    "'` once. If it replies {\"error\": ...}, return that message as stage_error with "
+                    "manifest null and read nothing. Otherwise "
+                )
+                + " : '')",
+                f"Read the file {manifest_rel} with the Read tool and return its JSON content verbatim as "
+                "manifest, every field and every row, trimming nothing. When the file is absent or "
+                "unreadable, return manifest null and no stage_error. Commit nothing.",
             )
             blitz_read_call = _agent(
                 blitz_read_prompt, label="blitz-stage-read", phase="plan", agent_type=_MECHANICAL_AGENT_TYPE,
                 agent_model=_MECHANICAL_MODEL, schema=_BLITZ_STAGE_READ_SCHEMA, effort=_MECHANICAL_EFFORT,
                 run_id=run_id,
             )
-            b.append("  const _blitzStageRead = async () => {")
+            b.append("  const _blitzStageRead = async (entry) => {")
             b.append(f"    const _r = await {blitz_read_call};")
+            b.append("    if (_r?.stage_error) { _adoptManifest({ error: _r.stage_error }); return; }")
             b.append(
-                f"    if (!_r?.stage_reply) {{ _diskHalt = 'no stage manifest on disk: ' + {_lit(manifest_rel)}; return; }}"
+                f"    if (!_r?.manifest) {{ _diskHalt = 'no stage manifest on disk: ' + {_lit(manifest_rel)}; return; }}"
             )
-            b.append("    await _adoptStageReply(_r.stage_reply);")
+            b.append("    const _g = _wholeManifestGap(_r.manifest);")
+            b.append(
+                "    if (_g) { _diskHalt = 'stage manifest on disk is not whole: ' + _g; return; }"
+            )
+            b.append("    _stagedManifest = _r.manifest;")
             b.append("  };")
 
         def blitz_stage_read(entry: str, indent: str) -> str:
-            """Stage a ready entry whose readyOp never ran (no reply and no error, or plan-blitz's own 'did not
-            run' error). A reply that carried neither a refusal nor a verifiable handle halts as not whole; a
-            readyOp error of its own halts."""
+            """Read the staged manifest on a ready entry whose relay was not whole, staging first when
+            readyOp never ran (no reply and no error, or plan-blitz's own 'did not run' error). A readyOp
+            error of its own halts."""
             return (
                 f"{indent}if ({entry} && typeof {entry} === 'object' && _planRel && !_stagedManifest && !_stageRefusal "
-                f"&& !_diskHalt && !_relayGap) {{\n"
-                f"{indent}  if ({entry}.readyOpReply != null) {{ _relayGap = 'manifest_handle'; }}\n"
-                f"{indent}  else if ({entry}.readyOpError == null || /did not run/.test(String({entry}.readyOpError))) "
-                "{ await _blitzStageRead(); }\n"
-                f"{indent}}}"
+                f"&& ({entry}.readyOpReply != null || {entry}.readyOpError == null "
+                f"|| /did not run/.test(String({entry}.readyOpError)))) {{ await _blitzStageRead({entry}); }}"
             )
 
     if xl_possible:
@@ -2157,14 +2113,17 @@ def compose_ask_script(
     fold_stage = not stop_after
 
     def stage_fold(lead: str) -> tuple[str, ...]:
-        """Prompt parts that make the plan agent stage its own plan and return the reply as `stage_reply`."""
+        """Prompt parts that make the plan agent stage its own plan and return the reply as `manifest`."""
         return (
             f"{lead} run `{_INVOKE} {OP_ASK_STAGE} '",
             "js:JSON.stringify({ run_id: _runId, plan_path: '<plan_rel>', writes: _writes, "
             "cross_repo_approved: _crossRepoApproved, session_id: _SESSION_ID, " + _ONLY_ROWS_JS +
             "...(_sizingRel ? { commit_sizing_path: _sizingRel } : {}) })",
             "'` with <plan_rel> replaced by the plan's repo-relative path, and return its JSON reply "
-            "verbatim as `stage_reply` (a `manifest_handle`, or the `{\"error\": ...}` refusal).",
+            "verbatim as `manifest`, every field and every row, trimming nothing. If it replies "
+            "`{\"error\": ...}`, return a `manifest` holding that message as its `error`, run_dir and "
+            "marker_path empty, rows, review_declared_paths and test_targets empty, plan_id and head_sha "
+            "null -- never an empty manifest without the error.",
         )
 
     # A raw ask's scout folds the falsifier itself; the plan legs author it only when the scout returned none.
@@ -2209,7 +2168,7 @@ def compose_ask_script(
     if fold_stage:
         b.append(f"    const _authored = await {plan_call};")
         b.append("    _planRel = _authored.plan_rel;")
-        b.append("    await _adoptStageReply(_authored.stage_reply);")
+        b.append("    _adoptManifest(_authored.manifest);")
         if fold_falsifier:
             b.append("    _planFalsifier = _asPlanFalsifier(_authored.falsifier);")
     else:
@@ -2241,7 +2200,7 @@ def compose_ask_script(
             *(plan_falsifier_parts if fold_falsifier else ()),
             *(
                 stage_fold(" When the final verdict is `ready`, also stage the plan:")
-                + (" Otherwise leave `stage_reply` null.",)
+                + (" Otherwise leave `manifest` null.",)
                 if fold_stage
                 else ()
             ),
@@ -2268,7 +2227,7 @@ def compose_ask_script(
         b.append("      if (_spineReview?.verdict === 'ready') {")
         b.append("        _planRel = _spineFallback;")
         if fold_stage:
-            b.append("        await _adoptStageReply(_spineReview.stage_reply);")
+            b.append("        _adoptManifest(_spineReview.manifest);")
         b.append("      } else {")
         b.append(
             "        _halted = { halted: " + _lit(HALT_REFUSAL) + ", reason: 'spine plan review verdict ' + "
@@ -2286,7 +2245,7 @@ def compose_ask_script(
             "writes: _writes, cross_repo_approved: _crossRepoApproved, session_id: _SESSION_ID, "
             + _ONLY_ROWS_JS
             + "...(_sizingRel ? { commit_sizing_path: _sizingRel } : {}) }, "
-            + f"schema: {json.dumps(STAGE_REPLY_SCHEMA, sort_keys=True)} }} }} : {{}}), "
+            + f"schema: {json.dumps(_MANIFEST_READ_SCHEMA, sort_keys=True)} }} }} : {{}}), "
             if fold_stage
             else ""
         )
@@ -2304,7 +2263,7 @@ def compose_ask_script(
         b.append("    const _ready = (_blitz?.ready ?? [])[0];")
         if fold_stage:
             b.append(
-                "    if (_ready && typeof _ready === 'object' && !_stagedManifest) { await _adoptStageReply(_ready.readyOpReply, true); _adoptReadyError(_ready); }"
+                "    if (_ready && typeof _ready === 'object' && !_stagedManifest) { _adoptManifest(_ready.readyOpReply, true); _adoptReadyError(_ready); }"
             )
         b.append("    _planRel = (_ready && typeof _ready === 'object') ? _ready.planPath : _ready;")
         if fold_stage:
@@ -2337,7 +2296,7 @@ def compose_ask_script(
                 stage_fold(
                     " When the final verdict is `ready` and pull_class is `mechanical`, also stage the plan:"
                 )
-                + (" Otherwise leave `stage_reply` null.",)
+                + (" Otherwise leave `manifest` null.",)
                 if fold_stage
                 else ()
             ),
@@ -2349,7 +2308,7 @@ def compose_ask_script(
             "      if (_revised?.pull_class === 'mechanical' && _revised?.verdict === 'ready') "
             "{ _planRel = _revised.plan_rel || _pulledEntry.planPath;"
             + (
-                " if (_planRel === _revised.plan_rel) { await _adoptStageReply(_revised.stage_reply); }"
+                " if (_planRel === _revised.plan_rel) { _adoptManifest(_revised.manifest); }"
                 if fold_stage
                 else ""
             )
@@ -2359,7 +2318,7 @@ def compose_ask_script(
         b.append("      const _reready = (_reblitz?.ready ?? [])[0];")
         if fold_stage:
             b.append(
-                "      if (_reready && typeof _reready === 'object' && !_stagedManifest) { await _adoptStageReply(_reready.readyOpReply, true); _adoptReadyError(_reready); }"
+                "      if (_reready && typeof _reready === 'object' && !_stagedManifest) { _adoptManifest(_reready.readyOpReply, true); _adoptReadyError(_reready); }"
             )
         b.append("      _planRel = (_reready && typeof _reready === 'object') ? _reready.planPath : _reready;")
         if fold_stage:
@@ -2465,11 +2424,11 @@ def compose_ask_script(
     b.append("  if (!_viaRoadmap) {")
     b.append("  if (!_halted) {")
     # Stage is folded into the last act of the agent that closes the gate, plan or plan-blitz ready
-    # path; there is no standalone stage or read leg. Each fold site returns the stage op's reply (a
-    # handle or a refusal) as `stage_reply`; `_adoptStageReply` adopts the manifest only from sidecar
-    # pages that match the handle and pass `_wholeManifestGap`, and a mismatch halts by name. The
-    # plan-blitz arm alone stages through `_blitzStageRead`, and only when readyOp never ran. The
-    # falsifier is authored by the scout or the plan legs, never a leg of its own.
+    # path; there is no standalone stage or read leg. Each engine-owned fold site returns its relay under
+    # `_MANIFEST_READ_SCHEMA` and `_adoptManifest` admits it only when `_wholeManifestGap` finds no gap;
+    # a not-whole relay halts by name. The plan-blitz arm alone re-reads the disk manifest through
+    # `_blitzStageRead` when DoE's schema-less readyOpReply arrives trimmed. The falsifier is authored
+    # by the scout or the plan legs, never a leg of its own.
     b.append(
         "  let _stageHalt = _stageRefusal ? 'stage refused: ' + _stageRefusal : "
         "(_diskHalt ?? (_relayGap ? 'stage manifest relay is not whole: ' + _relayGap : null));"

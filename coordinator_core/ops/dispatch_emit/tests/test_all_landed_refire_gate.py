@@ -45,7 +45,7 @@ def test_the_handler_stages_a_whole_zero_row_manifest(repo):  # noqa: F811
     _put_s(repo, requirement_register=OPEN_REGISTER)
     _landed_repo(repo, CODED)
     out = _handler({"sizing_path": REL, "run_id": "ask-20261018T000000-aaaaaa"}, repo_root=repo)
-    assert "manifest_handle" in out and "manifest" not in out, out
+    assert "manifest_handle" in out and "error" not in out["manifest"], out  # interim: inline beside the handle
     assert read_reply(repo, out["manifest_handle"])["rows"] == []
     assert out["resume_ledger"][RESUME_LEDGER_KIND_FIELD] == ALL_LANDED_HALT_KIND
 
@@ -120,7 +120,7 @@ def test_em_discharged_rows_count_landed_and_the_gate_resumes_at_the_ledger(repo
     assert v.resume_ledger[RESUME_LEDGER_KIND_FIELD] == ALL_LANDED_HALT_KIND
     assert v.resume_ledger["blocking"] == ["T2", "R2"]
     out = _handler({"sizing_path": REL, "run_id": "ask-20261018T000000-bbbbbb"}, repo_root=repo)
-    assert "manifest_handle" in out and "manifest" not in out, out
+    assert "manifest_handle" in out and "error" not in out["manifest"], out  # interim: inline beside the handle
     assert read_reply(repo, out["manifest_handle"])["rows"] is not None
 
 

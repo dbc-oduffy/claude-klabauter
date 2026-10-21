@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import re
 import shutil
 import subprocess
@@ -420,7 +419,7 @@ def test_m_plus_adopts_the_ready_op_reply_as_the_staged_manifest_behind_a_rows_g
     script = _compose()
     assert "readyOp:" in script
     for entry in ("_ready", "_reready"):
-        assert f"await _adoptStageReply({entry}.readyOpReply, true)" in script
+        assert f"_adoptManifest({entry}.readyOpReply, true)" in script
     assert _NO_FOLD in script and "label: 'stage'" not in script
 
 
@@ -443,19 +442,17 @@ _WHOLE_ROW = {
     ],
 )
 def test_a_relayed_manifest_whose_rows_lack_brief_path_halts_instead_of_briefing_undefined(rows, error):
-    from coordinator_core.ops.dispatch_emit.tests.test_ask_fold_reads_disk_manifest_e2e import fold_manifest
+    from coordinator_core.ops.dispatch_emit.tests.test_ask_fold_reads_disk_manifest_e2e import _fold
 
     relay = {"rows": rows, "review_declared_paths": [], "test_targets": [], "head_sha": "a" * 40}
-    out = fold_manifest(relay)
+    out = _fold(relay)
     if error is None:
         assert out["manifest"] == relay
     else:
         assert error in out["manifest"]["error"]
 
 
-def test_the_ready_op_carries_the_stage_reply_schema_so_the_relay_is_typed():
+def test_the_ready_op_carries_the_manifest_schema_so_the_relay_is_typed():
     script = _compose()
     ready = script.split("readyOp: {", 1)[1].split("} } : {})", 1)[0]
-    schema = json.loads(ready.split("schema:", 1)[1])
-    assert schema == ask_compose.STAGE_REPLY_SCHEMA and "manifest_handle" in schema["properties"]
-    assert '"brief_path"' not in ready
+    assert '"brief_path"' in ready.split("schema:", 1)[1]
