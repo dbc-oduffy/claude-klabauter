@@ -1641,11 +1641,9 @@ def _audit6_write_set_disjointness(
         )
 
 
-#: Allowed `loe:` values (docs/plans/2026-09-11-roadmap-audits-readiness-
-#: views-and-recor.md C3). Mirrors `_cf_loe_band`'s allow-list in
-#: schema_validate.py one-for-one — keep both in sync by hand, the same way
-#: `_cf_cost_enum`'s T0-T3 list and any future audit-side mirror of it would
-#: have to be.
+#: Roadmap-stub fold band for audit 7 (docs/plans/2026-09-11-roadmap-audits-
+#: readiness-views-and-recor.md C3): M-XL only. Independent of the wider
+#: `_cf_loe_band` schema allow-list, which also admits XS and S.
 _LOE_BAND = frozenset({"M", "L", "XL"})
 _UNFOLDABLE_LOE = frozenset({"XS", "S"})
 

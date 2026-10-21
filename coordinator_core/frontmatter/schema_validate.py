@@ -1503,14 +1503,14 @@ def _cf_cost_enum(fm: dict) -> ErrorDict | None:
 
 
 def _cf_loe_band(fm: dict) -> ErrorDict | None:
-    """Mirrors `_cf_cost_enum` one-for-one: present-only, M-XL band. `cost:`
-    stays valid and validated separately (`_cf_cost_enum`) — 8 handoff
+    """Present-only `loe:` size band XS, S, M, L, XL (sizing emits all five).
+    `cost:` stays valid and validated separately (`_cf_cost_enum`) — 8 handoff
     records carry `cost:` (docs/plans/2026-09-11-roadmap-audits-readiness-
     views-and-recor.md census row 6) and that file's leniency is contract."""
     loe = fm.get('loe')
     if loe is None:
         return None
-    allowed = ['M', 'L', 'XL']
+    allowed = ['XS', 'S', 'M', 'L', 'XL']
     if str(loe) not in allowed:
         return {
             'field': 'loe',

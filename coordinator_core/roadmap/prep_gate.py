@@ -41,6 +41,12 @@ dependency falls on. The four report classes are a routing aid, not four bars.
                  commit; the fix is to split at an EM-owned commit boundary (the
                  executor row writes, a ``performer: em`` row depending on it
                  commits, then deploys). Body code spans only, never prose.
+  EXECUTOR_HEAVY No schedulable row routed to ``coordinator:executor`` has a
+                 ``body`` code span or a ``verification`` string that
+                 ``bash_guards._heavy_command_class.classify`` reports heavy
+                 (the guard-heavy-command-admission predicate; a lone
+                 ``tsc --noEmit`` is the guard's executor carve-out and passes).
+                 The fix is ``agent_type: coordinator:test-runner`` on the row.
   PRIME_EXIT     ``prime_exit_criterion`` with a non-empty ``statement`` and a
                  non-empty ``derived_from``, at EVERY size — not only M/L/XL.
   REGISTER       A plan carrying ``register_claims`` names a sizing that carries
@@ -163,7 +169,8 @@ ENGINE_ERROR = "ENGINE-ERROR"
 #: message whose line order varies per plan is harder to diff than one that does
 #: not.
 CLASS_ORDER = (
-    "SPINE", "CENSUS", "EXTERNAL_DEPS", "PRIME_EXIT", "CI_RETIRED", "EXECUTOR_COMMIT", "SCHEMA", "REGISTER",
+    "SPINE", "CENSUS", "EXTERNAL_DEPS", "PRIME_EXIT", "CI_RETIRED", "EXECUTOR_COMMIT",
+    "EXECUTOR_HEAVY", "SCHEMA", "REGISTER",
 )
 
 #: ``external_gate[].requires`` — the discriminant the three-way split turns on.
@@ -1313,6 +1320,68 @@ def _executor_commit(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     )
 
 
+EXECUTOR_HEAVY_FIX = (
+    "guard-heavy-command-admission denies a heavy command to coordinator:executor. "
+    "Fix: declare `agent_type: coordinator:test-runner` on the row."
+)
+
+
+def _routes_to_executor(row: Dict[str, Any]) -> bool:
+    """True when the emitter would hand this row to ``coordinator:executor``."""
+    from coordinator_core.ops.dispatch_emit.emit import _is_immutable_body_path
+
+    declared = row.get("agent_type")
+    if isinstance(declared, str) and declared.strip():
+        return declared.strip() == "coordinator:executor"
+    writes = row.get("writes")
+    return not (
+        isinstance(writes, list) and writes and any(
+            isinstance(p, str) and _is_immutable_body_path(p) for p in writes
+        )
+    )
+
+
+def _executor_heavy(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Refuse a plan whose executor-routed rows run a command the heavy-admission guard denies.
+
+    Predicate is ``_heavy_command_class.classify``, the guard's own classifier, over each
+    body code span and the row's ``verification`` string.
+    """
+    from coordinator_core.bash_guards._heavy_command_class import classify
+    from coordinator_core.ops.dispatch_emit.em_only_act import _code_spans, row_is_em_performed
+    from coordinator_core.ops.dispatch_emit.spine_read import _is_memo_send_row, _is_operator_row
+
+    hits: List[str] = []
+    ids: List[str] = []
+    for row in rows:
+        if not isinstance(row, dict) or _row_is_unschedulable(row):
+            continue
+        if _is_operator_row(row) or _is_memo_send_row(row) or row_is_em_performed(row):
+            continue
+        if not _routes_to_executor(row):
+            continue
+        spans: List[str] = []
+        if isinstance(row.get("body"), str):
+            spans.extend(_code_spans(row["body"]))
+        if isinstance(row.get("verification"), str):
+            spans.append(row["verification"])
+        for span in spans:
+            span = span.strip()
+            cls = classify(span, None, str(Path.cwd())) if span else None
+            if cls is not None and cls.heavy_class is not None and not cls.noemit_tsc:
+                row_id = str(row.get("id") or "<row with no id>")
+                ids.append(row_id)
+                hits.append(f"{row_id} (`{span[:60]}`)")
+                break
+    if not hits:
+        return _pass("no executor row runs a heavy command")
+    return _defect(
+        "executor-heavy-command-row",
+        f"executor rows running a heavy command: {', '.join(hits)[:260]} — {EXECUTOR_HEAVY_FIX}",
+        withheld=sorted(set(ids)),
+    )
+
+
 def _sibling_plan_edges(
     row: Dict[str, Any], row_id: str, repo_root: Optional[Path], cache: dict
 ) -> "tuple[frozenset, List[str], List[str]]":
@@ -2201,6 +2270,7 @@ def evaluate_plan(
             "PRIME_EXIT": prime_exit,
             "CI_RETIRED": _ci_retired(raw_spine_rows(text)),
             "EXECUTOR_COMMIT": _executor_commit(raw_spine_rows(text)),
+            "EXECUTOR_HEAVY": _executor_heavy(raw_spine_rows(text)),
             "SCHEMA": _schema(fm, prime_exit, parse_error),
             "REGISTER": _register(fm, repo_root),
         }
@@ -2340,6 +2410,8 @@ def _authoring_fix_lines(failing_classes: "Sequence[str] | set") -> List[str]:
         )
     if "EXECUTOR_COMMIT" in failing_classes:
         lines.append(f"  fix: {EXECUTOR_COMMIT_FIX}")
+    if "EXECUTOR_HEAVY" in failing_classes:
+        lines.append(f"  fix: {EXECUTOR_HEAVY_FIX}")
     if "REGISTER" in failing_classes:
         lines.append(_REGISTER_FIX)
     return lines
@@ -2457,7 +2529,8 @@ def refusal_message(
         )) and not (register_failing and all(
             k == "REGISTER" or v["status"] == "PASS" for k, v in classes.items()
         )) and not all(
-            k == "EXECUTOR_COMMIT" or v["status"] == "PASS" for k, v in classes.items()
+            k in ("EXECUTOR_COMMIT", "EXECUTOR_HEAVY") or v["status"] == "PASS"
+            for k, v in classes.items()
         ):
             lines.append(_upgrade_fix_line())
     return "\n".join(lines)

@@ -10,6 +10,7 @@ from coordinator_core.ops.baton_close_report_decide import (
     STATUS_UNREADABLE,
     close_refusal,
     decide,
+    evidence_ship_ref,
 )
 
 
@@ -289,3 +290,59 @@ def test_does_not_mutate_inputs():
     snapshot = [dict(e) for e in ev]
     decide(_h(), ev, False)
     assert ev == snapshot
+
+
+STATE_REFUSAL = "deployment_state='awaiting_gate' is not consistent with terminal"
+
+
+def test_state_refusal_with_done_evidence_is_not_advanceable():
+    out = decide(_h(), [DONE], False, STATE_REFUSAL)
+    assert out[:2] == ("residue", "not_advanceable")
+    assert out[2] == [DONE]
+
+
+def test_state_refusal_without_done_evidence_changes_nothing():
+    assert decide(_h(), [OPEN], False, STATE_REFUSAL) == ("no_evidence",)
+    assert decide(_h(), [MISSING], False, STATE_REFUSAL)[:2] == ("residue", "target_missing")
+
+
+def test_state_refusal_yields_to_earlier_precedence():
+    assert decide(_h("claimed"), [DONE], False, STATE_REFUSAL)[:2] == ("residue", "claimed")
+    assert decide(_h(), [DONE], True, STATE_REFUSAL)[:2] == ("residue", "live_successor")
+    assert decide(_h(), [DONE, OPEN], False, STATE_REFUSAL)[:2] == ("residue", "evidence_conflict")
+
+
+def test_state_refusal_outranks_header_refusal():
+    out = decide(_hk("spinoff", "dlv-x"), [DONE], False, STATE_REFUSAL)
+    assert out[:2] == ("residue", "not_advanceable")
+
+
+def test_default_state_refusal_is_byte_identical():
+    assert decide(_h(), [DONE], False) == decide(_h(), [DONE], False, None)
+    assert decide(_h(), [DONE], False)[0] == "closable"
+
+
+def _ref(cls: str, ref: str | None, done: bool = True) -> dict:
+    e = _e(cls, "implemented" if done else "open", done)
+    e["ship_ref"] = ref
+    return e
+
+
+def test_evidence_ship_ref_prefers_run_class_over_earlier_plan():
+    assert evidence_ship_ref([_ref("plan", "a" * 40), _ref("run", "b" * 40)]) == "b" * 40
+
+
+def test_evidence_ship_ref_plan_items_in_evidence_order():
+    assert evidence_ship_ref([_ref("plan", "a" * 40), _ref("roadmap", "c" * 40)]) == "a" * 40
+
+
+def test_evidence_ship_ref_skips_not_done_and_refless_items():
+    ev = [_ref("run", "b" * 40, done=False), _ref("run", None), _e("plan", "implemented", True),
+          _ref("plan", "d" * 40)]
+    assert evidence_ship_ref(ev) == "d" * 40
+
+
+def test_evidence_ship_ref_none_when_no_done_item_carries_one():
+    assert evidence_ship_ref([]) is None
+    assert evidence_ship_ref([DONE, _ref("plan", None)]) is None
+    assert evidence_ship_ref([_ref("run", "b" * 40, done=False)]) is None

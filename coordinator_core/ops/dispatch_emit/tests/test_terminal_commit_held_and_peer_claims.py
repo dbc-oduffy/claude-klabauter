@@ -126,10 +126,11 @@ def test_the_overlap_refusal_prints_a_release_param_that_lands(repo):
     held = [{"chunk": "C2", "reason": "halted"}]
     refused = _run(repo, request, held=held)
     assert refused["refused"] == "held-landed-overlap"
-    printed = re.search(r"params\.release_held=(\[[^\]]*\])", refused["error"])
+    printed = re.search(r"coordinator-invoke \S+ --from-task-output \S+ '(\{[^']*\})'", refused["error"])
     assert printed is not None, refused["error"]
-    assert json.loads(printed.group(1)) == ["C2"]
-    out = _run(repo, request, held=held, release_held=json.loads(printed.group(1)))
+    params = json.loads(printed.group(1))
+    assert params == {"release_held": ["C2"]}
+    out = _run(repo, request, held=held, **params)
     assert out["committed"] is True, out
     assert "a.py" in _committed(repo)
 

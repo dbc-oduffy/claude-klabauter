@@ -1207,13 +1207,13 @@ class TestCostEnum:
 
 class TestLoeBand:
     def test_valid_loe_values(self):
-        for loe in ['M', 'L', 'XL']:
+        for loe in ['XS', 'S', 'M', 'L', 'XL']:
             fm = _valid_handoff(loe=loe)
             errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
             assert not any(e['field'] == 'loe' for e in errors), f'loe={loe} should be valid'
 
     def test_invalid_loe_value(self):
-        fm = _valid_handoff(loe='S')
+        fm = _valid_handoff(loe='T1')
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert any(e['field'] == 'loe' for e in errors)
 

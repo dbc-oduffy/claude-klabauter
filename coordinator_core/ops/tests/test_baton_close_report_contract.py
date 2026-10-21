@@ -32,8 +32,19 @@ def test_residue_reason_members():
     assert {m.value for m in c.ResidueReason} == {
         "target_unreadable", "target_unstatused", "target_missing", "live_successor",
         "claimed", "evidence_conflict", "unreadable_frontmatter",
-        "spinoff_kind", "no_deliverable_id",
+        "spinoff_kind", "no_deliverable_id", "not_advanceable", "no_evidence_sha",
     }
+
+
+def test_new_residue_reasons_values():
+    assert c.ResidueReason.NOT_ADVANCEABLE.value == "not_advanceable"
+    assert c.ResidueReason.NO_EVIDENCE_SHA.value == "no_evidence_sha"
+
+
+def test_ship_ref_and_deployment_state_are_optional_keys():
+    assert "ship_ref" in c.Evidence.__optional_keys__
+    assert "NotRequired[" in str(c.BatonHeader.__annotations__["deployment_state"])
+    assert "ship_ref" in c.EVIDENCE_KEYS and "deployment_state" in c.HEADER_KEYS
 
 
 def test_verdict_members():
@@ -52,6 +63,7 @@ def test_header_keys_pinned_order_and_reverse_fields():
     assert c.HEADER_KEYS == (
         "path", "status", "predecessor", "governing_plan", "origin_plan_id",
         "sizing_object", "roadmap_id", "origin_goal_id", "deliverable_id", "kind",
+        "deployment_state",
     )
     assert c.REVERSE_FIELD_DELIVERABLE == "plan.deliverable_id"
     assert c.REVERSE_FIELD_PREDECESSOR == "plan.predecessor_handoff"

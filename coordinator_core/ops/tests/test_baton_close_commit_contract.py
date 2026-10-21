@@ -18,8 +18,12 @@ def test_refusal_reason_members():
     assert {m.value for m in c.RefusalReason} == {
         "bad_row", "not_live", "unreadable_frontmatter", "claimed", "continued",
         "live_successor", "evidence_stale", "predicate_refused",
-        "no_deliverable_id", "write_failed",
+        "no_deliverable_id", "no_evidence_sha", "write_failed",
     }
+
+
+def test_flip_request_carries_shipped_in():
+    assert c.FLIP_REQUEST_KEYS == ("path", "deliverable_id", "shipped_in")
 
 
 def test_result_keys_match_typeddict():

@@ -78,6 +78,65 @@ def _script_sha256(guarded_script_path: Path) -> str:
     return hashlib.sha256(guarded_script_path.read_bytes()).hexdigest()
 
 
+def _landing_marker_lines(script_bytes: bytes) -> list:
+    """The script's commit-request and ask-manifest marker lines, verbatim and in order.
+
+    Negative-spec: imports both prefixes lazily; this module is a leaf and must not load
+    ``commit_request`` or ``ask_contract`` at import.
+    """
+    from coordinator_core.ops.dispatch_emit.ask_contract import ASK_MANIFEST_MARKER
+    from coordinator_core.ops.dispatch_emit.commit_request import MARKER_PREFIX
+
+    prefixes = (MARKER_PREFIX, ASK_MANIFEST_MARKER)
+    text = script_bytes.decode("utf-8", errors="replace")
+    return [ln for ln in text.splitlines() if ln.startswith(prefixes)]
+
+
+def _read_receipt(guarded_script_path: Path) -> Optional[dict]:
+    try:
+        data = json.loads(emission_receipt_path(guarded_script_path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def receipt_landing_text(guarded_script_path: Path) -> Optional[str]:
+    """The receipt's ``landing_markers`` joined by newlines, or ``None`` when the receipt is
+    absent, unreadable, or carries no non-empty marker list."""
+    receipt = _read_receipt(guarded_script_path)
+    markers = receipt.get("landing_markers") if receipt else None
+    if not isinstance(markers, list) or not markers:
+        return None
+    return "\n".join(str(m) for m in markers)
+
+
+def receipt_unlanded(guarded_script_path: Path) -> bool:
+    """True when a readable receipt exists and carries no ``landed`` stamp."""
+    receipt = _read_receipt(guarded_script_path)
+    return receipt is not None and not receipt.get("landed")
+
+
+def stamp_landed(guarded_script_path: Path, sha: str) -> None:
+    """Rewrite the receipt whole with ``landed: {sha, at}``. Best-effort: narrates on OSError,
+    never raises, and does nothing when the receipt is absent."""
+    receipt = _read_receipt(guarded_script_path)
+    if receipt is None:
+        return
+    receipt["landed"] = {"sha": sha, "at": datetime.now().isoformat(timespec="seconds")}
+    receipt_path = emission_receipt_path(guarded_script_path)
+    try:
+        receipt_path.write_text(
+            json.dumps(receipt, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+    except (OSError, TypeError, ValueError) as exc:
+        print(
+            f"dispatch.emit: could not stamp {receipt_path} landed ({exc}).",
+            file=sys.stderr,
+        )
+
+
 def _receipt_session_id(params: dict) -> str:
     """Who to record as the emitter: the caller's claim, or the fleet-canonical
     resolution, or "".
@@ -177,17 +236,18 @@ def _write_emission_receipt(
     Negative-spec:
       - Does NOT re-raise. Every ``OSError`` (and an unserialisable value) is
         swallowed after narration.
-      - Does NOT mutate or re-read the script. On a ``force`` overwrite the
-        sidecar is rewritten whole, so its ``sha256`` names the bytes now on
-        disk rather than a superseded emission's.
-      - Does NOT let ``extras`` shadow the receipt's own core keys
-        (``sha256``/``session_id``/``emitted_at``/``plan``) -- those are set
-        first and ``extras`` is merged in after, but ``queue_emit`` never
-        emits those key names in its own extras dict, so no collision occurs
-        in practice.
+      - Does NOT mutate the script, and reads it once for ``landing_markers``
+        (plus the digest's own read when the caller supplied no ``sha256``). On a ``force`` overwrite
+        the sidecar is rewritten whole, so its ``sha256`` names the bytes now on
+        disk rather than a superseded emission's, and a prior ``landed`` stamp
+        is dropped.
+      - Does NOT let ``extras`` shadow ``landing_markers`` or ``landed``;
+        ``landing_markers`` is always the script's own, and ``landed`` is only
+        ever written by ``stamp_landed``.
     """
     receipt_path = emission_receipt_path(guarded_script_path)
     try:
+        script_bytes = guarded_script_path.read_bytes()
         receipt = {
             "sha256": sha256 if sha256 is not None else _script_sha256(guarded_script_path),
             "session_id": _receipt_session_id(params),
@@ -197,6 +257,8 @@ def _write_emission_receipt(
         receipt.update(_plan_body_provenance(plan_path))
         if extras:
             receipt.update(extras)
+        receipt.pop("landed", None)
+        receipt["landing_markers"] = _landing_marker_lines(script_bytes)
         receipt_path.write_text(
             json.dumps(receipt, indent=2, sort_keys=True) + "\n",
             encoding="utf-8",

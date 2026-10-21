@@ -127,8 +127,22 @@ def close_refusal(
     return None
 
 
+def evidence_ship_ref(evidence: Iterable[Evidence]) -> str | None:
+    """The delivery commit that justifies a close, or None.
+
+    The first done item carrying a `ship_ref`: run-class items first, then the rest in
+    evidence order.
+    """
+    done = [e for e in evidence if e["done"] and e.get("ship_ref")]
+    done.sort(key=lambda e: e["class"] != _RUN)
+    return done[0]["ship_ref"] if done else None
+
+
 def decide(
-    header: BatonHeader, evidence: list[Evidence], has_live_successor: bool
+    header: BatonHeader,
+    evidence: list[Evidence],
+    has_live_successor: bool,
+    state_refusal: str | None = None,
 ) -> tuple:
     """Return ("closable", evidence, conflict), ("residue", reason, evidence, conflict) or ("no_evidence",).
 
@@ -136,7 +150,8 @@ def decide(
     Precedence: nothing cited, claimed-with-done (not when every run naming the baton has
     ended), live successor, done-vs-contradicting conflict (a done run, or a done
     `governing_plan` whose only contradiction is a `plan.sizing_object` leg, wins and the verdict
-    continues), header refusal (`close_refusal`), closable, then residue by target kind
+    continues), `state_refusal` (the cascade's deployment_state refusal text, done evidence only,
+    gives not_advanceable), header refusal (`close_refusal`), closable, then residue by target kind
     (unreadable, unstatused, missing), then no_evidence (cited targets all really not
     done). A missing, unreadable, unstatused, ended or live-run target never contradicts a
     done one.
@@ -160,6 +175,8 @@ def decide(
                 evidence,
                 conflict,
             )
+        if state_refusal is not None:
+            return (Verdict.RESIDUE.value, ResidueReason.NOT_ADVANCEABLE.value, evidence, conflict)
         refusal = close_refusal(header.get("kind"), header.get("deliverable_id"), evidence)
         if refusal is not None:
             return (Verdict.RESIDUE.value, refusal.value, evidence, conflict)

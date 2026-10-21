@@ -61,6 +61,7 @@ _PARAM_FIELDS = (
     Field("falsifier_broken", "list"),
     Field("held", "list"),
     Field("release_held", "list"),
+    Field("withhold_paths", "list"),
     Field("run_id", "nonempty_str"),
     Field("run_token", "nonempty_str"),
     Field("ledger_verdict", "dict"),
@@ -971,9 +972,19 @@ def _own_run_seniority(root: Path, run_id: object, script_path: object) -> Optio
         return None
     script = Path(script_path)
     script = script if script.is_absolute() else root / script
+    key = run_id if isinstance(run_id, str) else script.stem
     try:
-        return (script.stat().st_mtime, run_id if isinstance(run_id, str) else script.stem)
+        return (script.stat().st_mtime, key)
     except OSError:
+        pass
+    from datetime import datetime
+
+    from coordinator_core.ops.dispatch_emit.emission_receipt import emission_receipt_path
+
+    try:
+        receipt = json.loads(emission_receipt_path(script).read_text(encoding="utf-8"))
+        return (datetime.fromisoformat(receipt["emitted_at"]).timestamp(), key)
+    except (OSError, ValueError, KeyError, TypeError):
         return None
 
 
@@ -1226,18 +1237,6 @@ def _reconcile_prep(
     return (reviewed if isinstance(reviewed, dict) else {}), _epoch_of(reply.get("recorded_at"))
 
 
-def _blob_drift_remedy(error: str, run_id: str) -> str:
-    from coordinator_core.ops.dispatch_emit.peer_claim_contract import WITHHOLD_CALL
-
-    generic = "Re-review the current bytes and pass their blob, or leave the path out."
-    remedy = (
-        f"Real drift: call workflow.revise run_id={run_id} with a note, then make the refire call "
-        "its reply's next.call returns; the refire's review re-reads the current bytes. "
-        f"Or leave the path out: {WITHHOLD_CALL.format(run_id=run_id)}"
-    )
-    return error.replace(generic, remedy) if generic in error else f"{error} {remedy}"
-
-
 # ---- trailers ---------------------------------------------------------------------------------
 
 
@@ -1404,6 +1403,12 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
         plan_trailer_deliverable_ids,
         valid_deliverable_id,
     )
+    from coordinator_core.ops.dispatch_emit.landing_remedy import (
+        blob_drift_remedy,
+        param_withholds,
+        release_held_call,
+        review_only_anchor,
+    )
 
     if isinstance(params, dict) and isinstance(params.get("task_output_path"), str):
         try:
@@ -1438,8 +1443,21 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
     script = contained_path(root / script_path, [root])
     if script is None:
         return _error(f"params.script_path {script_path!r} does not resolve under the caller's own worktree")
+    script_source = "script"
     try:
         script_text = script.read_text(encoding="utf-8")
+    except FileNotFoundError as exc:
+        from coordinator_core.ops.dispatch_emit.emission_receipt import receipt_landing_text
+
+        script_text = receipt_landing_text(script)
+        if not script_text:
+            return _error(
+                f"script-missing: {script_path!r} is gone and its receipt carries no landing markers "
+                f"({exc}); run: python -m coordinator_core.ops.dispatch_emit.stranded_part_rebuild "
+                f"--script {script_path} --task-output <task output path> --inventory <tranche record>",
+                refused="script-missing",
+            )
+        script_source = "receipt"
     except OSError as exc:
         return _error(f"cannot read params.script_path {script_path!r}: {exc}")
 
@@ -1667,8 +1685,9 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
             )
             return _error(
                 f"path(s) declared by both a held chunk and a landed chunk cannot be committed consistently: "
-                f"{shown}. Re-fire with params.release_held={json.dumps(sorted({h for e in overlap.values() for h in e['held']}))} "
-                "to land the landed chunks and release the held chunk(s), or list the landed chunk in params.held",
+                f"{shown}. Re-fire to land the landed chunks and release the held chunk(s): "
+                f"{release_held_call(contract.OP_NAME, params.get('task_output_path'), {h for e in overlap.values() for h in e['held']})}"
+                "; or list the landed chunk in params.held",
                 refused="held-landed-overlap", overlap=overlap,
             )
 
@@ -1724,6 +1743,10 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
     reverted = _reverted_paths(params, inline_review)
     withhold_reason: dict = {}  # declared path -> reason it stays out
     em_withheld = _withhold_reasons(root, artifacts, record_dir_rel)
+    try:
+        em_withheld.update(param_withholds(params))
+    except ValueError as exc:
+        return _error(f"withhold_paths refused: {exc}")
     from coordinator_core.ops.ceremony.commit_gates import is_never_commit
     from coordinator_core.ops.dispatch_emit.cross_repo_write_refusal import sibling_write
 
@@ -1869,6 +1892,8 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
     expected: dict = {}
     if session_id is not None:
         fixes_at, wave_paths = _fixes_integrated_at(root, inline_review)
+        if fixes_at is None:
+            fixes_at, wave_paths = review_only_anchor(root, request, inline_review)
         note_rel = f"{DELIVERY_NOTE_DIR}/{art_run_id}.md" if isinstance(art_run_id, str) and art_run_id else None
         expected = _recorded_fingerprints(
             root, session_id, [p for c in done for p in c.paths], [*paths],
@@ -1958,7 +1983,10 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
     except BlobDriftRefused as exc:
         _remove(root, receipt_paths)
         return _error(
-            _blob_drift_remedy(str(exc), sibling_run_id),
+            blob_drift_remedy(
+                str(exc), root, sibling_run_id, contract.OP_NAME, params.get("task_output_path"),
+                [d.path for d in exc.drift],
+            ),
             refused="blob-drift",
             blob_drift=[
                 {"path": d.path, "basis": d.basis, "expected": d.expected, "actual": d.actual} for d in exc.drift
@@ -1999,6 +2027,11 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
         "receipts": receipt_paths,
         "review_stamp": "deferred", "plan_status": "deferred", "sizing_shipped": None,
     }
+    if script_source == "receipt":
+        reply["script_source"] = script_source
+    from coordinator_core.ops.dispatch_emit.emission_receipt import stamp_landed
+
+    stamp_landed(script, sha)
     if index_stale:
         reply["index_stale"] = sorted(index_stale)
     if siblings is not None:

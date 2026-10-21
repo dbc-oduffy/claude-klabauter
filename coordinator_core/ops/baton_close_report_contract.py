@@ -11,7 +11,7 @@ keyed by baton path.
 from __future__ import annotations
 
 from enum import Enum
-from typing import Literal, TypedDict
+from typing import Literal, NotRequired, TypedDict
 
 OP_KEY = "baton.close_report"
 SCHEMA_VERSION = 1
@@ -40,6 +40,10 @@ class ResidueReason(str, Enum):
     SPINOFF_KIND = "spinoff_kind"
     # Mirrors close_commit's no_deliverable_id refusal: no dlv- join key for advanced_by.
     NO_DELIVERABLE_ID = "no_deliverable_id"
+    # Mirrors close_commit's predicate_refused from handoff leg (c): deployment_state is not terminal-consistent.
+    NOT_ADVANCEABLE = "not_advanceable"
+    # Done evidence carries no delivery commit to stamp as shipped_in.
+    NO_EVIDENCE_SHA = "no_evidence_sha"
 
 
 class Verdict(str, Enum):
@@ -49,6 +53,7 @@ class Verdict(str, Enum):
 
 
 # Functional form: "class" is a keyword and cannot be a class-body attribute.
+# `ship_ref` is the delivery commit the item's target carries (full 40-hex), absent or None when it has none.
 Evidence = TypedDict(
     "Evidence",
     {
@@ -57,6 +62,7 @@ Evidence = TypedDict(
         "target_path": str,
         "target_status": str | None,
         "done": bool,
+        "ship_ref": NotRequired[str | None],
     },
 )
 
@@ -74,6 +80,7 @@ class BatonHeader(TypedDict):
     origin_goal_id: list[str]
     deliverable_id: str | None
     kind: str | None
+    deployment_state: NotRequired[str | None]
 
 
 class ConflictNote(TypedDict):
@@ -109,7 +116,7 @@ class CloseReport(TypedDict):
     scan_incomplete: bool
 
 
-EVIDENCE_KEYS = ("class", "field", "target_path", "target_status", "done")
+EVIDENCE_KEYS = ("class", "field", "target_path", "target_status", "done", "ship_ref")
 HEADER_KEYS = (
     "path",
     "status",
@@ -121,6 +128,7 @@ HEADER_KEYS = (
     "origin_goal_id",
     "deliverable_id",
     "kind",
+    "deployment_state",
 )
 # Evidence `field` values for plan-to-baton (reverse) links.
 REVERSE_FIELD_DELIVERABLE = "plan.deliverable_id"

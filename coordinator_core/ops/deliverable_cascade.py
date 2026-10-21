@@ -689,6 +689,22 @@ def _predicate_refusal_sync(
     return _leg_d_refusal(fm, kind)
 
 
+def handoff_state_refusal(fm: dict) -> Optional[str]:
+    """Leg (c) for a handoff: the refusal text when `deployment_state` is not
+    live (`ready_to_fire`/`in_flight`) and not an ungated `awaiting_gate`, else
+    None. The one deployment_state predicate the cascade, close_report and
+    close_commit all call."""
+    state = fm.get(_HANDOFF_KIND.lifecycle_field)
+    if state in _LIVE_DEPLOYMENT_STATES or (
+        state == "awaiting_gate" and _awaiting_gate_is_ungated(fm)
+    ):
+        return None
+    return (
+        f"own work-state ({_HANDOFF_KIND.lifecycle_field}={state!r}) is not "
+        "consistent with terminal — live-but-blocked-on-something-else, not simply idle"
+    )
+
+
 def _legs_c_a_refusal(
     candidate_path: Path,
     fm: dict,
@@ -705,24 +721,12 @@ def _legs_c_a_refusal(
     # leg (c) and was flipped straight to `shipped`.
     leg_c = kind.predicate_legs["c"]
     if leg_c.applies:
-        lifecycle_value = fm.get(kind.lifecycle_field)
-        if lifecycle_value not in kind.live_values and not (
-            kind is _HANDOFF_KIND
-            and lifecycle_value == "awaiting_gate"
-            and _awaiting_gate_is_ungated(fm)
-        ):
-            # Unifying the two kinds'
-            # branches into one POSITIVE `live_values` check (Finding 1)
-            # collapsed the handoff-specific wording into a single generic
-            # string, losing operator-facing signal the handoff kind used to
-            # carry (live-but-blocked reads differently from already-shipped).
-            # That collapse was never required by Finding 1 — restored here,
-            # kind-specific wording only, predicate logic unchanged.
-            if kind is _HANDOFF_KIND:
-                return (
-                    f"own work-state ({kind.lifecycle_field}={lifecycle_value!r}) is not "
-                    "consistent with terminal — live-but-blocked-on-something-else, not simply idle"
-                )
+        if kind is _HANDOFF_KIND:
+            refusal_c = handoff_state_refusal(fm)
+            if refusal_c is not None:
+                return refusal_c
+        elif fm.get(kind.lifecycle_field) not in kind.live_values:
+            lifecycle_value = fm.get(kind.lifecycle_field)
             # `already terminal` was inaccurate for the not-live-but-not-terminal
             # values (`superseded` is neither in `_SIZING_TERMINAL_STATUS` nor in
             # `live_values`), so the message asserted a lifecycle fact that was

@@ -27,6 +27,7 @@ class RefusalReason(str, Enum):
     EVIDENCE_STALE = "evidence_stale"
     PREDICATE_REFUSED = "predicate_refused"
     NO_DELIVERABLE_ID = "no_deliverable_id"
+    NO_EVIDENCE_SHA = "no_evidence_sha"
     WRITE_FAILED = "write_failed"
 
 
@@ -35,6 +36,7 @@ class FlipRequest(TypedDict):
 
     path: str
     deliverable_id: str
+    shipped_in: str
 
 
 class AppliedItem(TypedDict):
@@ -81,4 +83,4 @@ RESULT_KEYS = (
 APPLIED_KEYS = ("handoff_path", "advanced_by", "advanced_at", "shipped_in")
 ALREADY_TERMINAL_KEYS = ("handoff_path",)
 REFUSED_KEYS = ("handoff_path", "reason", "detail", "evidence")
-FLIP_REQUEST_KEYS = ("path", "deliverable_id")
+FLIP_REQUEST_KEYS = ("path", "deliverable_id", "shipped_in")

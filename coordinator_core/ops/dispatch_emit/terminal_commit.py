@@ -217,6 +217,7 @@ _PARAM_FIELDS = (
     Field("falsifier_broken", "list"),
     Field("held", "list"),
     Field("release_held", "list"),
+    Field("withhold_paths", "list"),
     Field("run_id", "nonempty_str"),
     Field("run_token", "nonempty_str"),
     Field("ledger_verdict", "dict"),
@@ -1079,23 +1080,6 @@ def _withhold_reasons(worktree_root: Path, artifacts, record_dir_rel: Optional[s
     if record_dir_rel and record_dir_rel not in dirs:
         dirs.insert(0, record_dir_rel)
     return run_withhold.read(worktree_root / d for d in reversed(dirs))
-
-
-from coordinator_core.ops.dispatch_emit.peer_claim_contract import WITHHOLD_CALL as _WITHHOLD_REMEDY  # noqa: E402
-_GENERIC_DRIFT_REMEDY = "Re-review the current bytes and pass their blob, or leave the path out."
-
-
-def _blob_drift_remedy(error: str, run_id: str) -> str:
-    """``error`` with commit_v2's generic trailing remedy replaced by the op that re-reviews:
-    ``workflow.revise`` (a ``note`` is required), then the refire call its reply returns."""
-    remedy = (
-        f"Real drift: call workflow.revise run_id={run_id} with a note, then make the refire call "
-        "its reply's next.call returns; the refire's review re-reads the current bytes. "
-        f"Or leave the path out: {_WITHHOLD_REMEDY.format(run_id=run_id)}"
-    )
-    if _GENERIC_DRIFT_REMEDY in error:
-        return error.replace(_GENERIC_DRIFT_REMEDY, remedy)
-    return f"{error} {remedy}"
 
 
 USAGE_FILE = "usage.json"
@@ -3207,6 +3191,8 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                                              the sizing's register rows
                                              (``refused`` is ``ledger-unjudged``
                                              / ``ledger-unmet``).
+        withhold_paths (list, optional)  -- ``[{path, reason}]`` left unstaged and dirty; the
+                                             withhold route for a run with no record dir.
         run_id, run_token (str, optional) -- a warp run's in-run commit:
                                              the token is redeemed once, here
                                              (``refused="run-token"`` otherwise).
@@ -3404,6 +3390,12 @@ def _resume_hint(stranded: dict, scope: dict, params: dict) -> str:
     return f"re-emit the incomplete rows with {command}"
 
 
+def _drift_paths(blob_drift: object) -> list:
+    """Paths named by a commit_v2 ``blob_drift`` list."""
+    return sorted({d["path"] for d in blob_drift if isinstance(d, dict) and isinstance(d.get("path"), str)}) \
+        if isinstance(blob_drift, list) else []
+
+
 def _released_ids(params: dict) -> set:
     """Chunk ids named in ``params.release_held``: held entries dropped from the withholding."""
     rel = params.get("release_held") if isinstance(params, dict) else None
@@ -3598,6 +3590,7 @@ def _terminal_commit_inner(
 
         return close_without_script.close_landed_run(main_worktree_root(repo_root), repo_root, params)
 
+    task_output_raw = params.get("task_output_path") if isinstance(params, dict) else None
     if isinstance(params, dict) and isinstance(params.get("task_output_path"), str):
         try:
             params = {**_params_from_task_output(params["task_output_path"]), **{
@@ -3612,6 +3605,13 @@ def _terminal_commit_inner(
     refusal = validate_params("dispatch.terminal_commit", params, _PARAM_FIELDS)
     if refusal is not None:
         return _error(refusal["error"])
+
+    from coordinator_core.ops.dispatch_emit import landing_remedy as _remedy
+
+    try:
+        param_withheld = _remedy.param_withholds(params)
+    except ValueError as exc:
+        return _error(f"params.withhold_paths: {exc}")
 
     script_path_raw = params["script_path"]
     incomplete_chunks = set(params["incomplete_chunks"]) - set(params.get("landed_chunks") or [])
@@ -4105,9 +4105,9 @@ def _terminal_commit_inner(
             )
             return _error(
                 f"path(s) declared by both a held chunk and a landed chunk cannot be committed "
-                f"consistently: {shown}. Re-fire with params.release_held="
-                f"{json.dumps(sorted({h for e in overlap.values() for h in e['held']}))} "
-                "to land the landed chunks and release the held chunk(s), or list the landed chunk in params.held",
+                f"consistently: {shown}. Land the landed chunks and release the held chunk(s): "
+                f"{_remedy.release_held_call('dispatch.terminal_commit', task_output_raw, sorted({h for e in overlap.values() for h in e['held']}))}"
+                "; or list the landed chunk in params.held",
                 refused="held-landed-overlap",
                 overlap=overlap,
             )
@@ -4280,7 +4280,7 @@ def _terminal_commit_inner(
     all_paths = [p for p in all_paths if canonical_repo_relative_path_refusal(p) is None]
     deleted_paths = [p for p in deleted_paths if canonical_repo_relative_path_refusal(p) is None]
 
-    wh_reasons = _withhold_reasons(worktree_root, artifacts, record_dir_rel)
+    wh_reasons = {**_withhold_reasons(worktree_root, artifacts, record_dir_rel), **param_withheld}
     wh_map: dict = {}
     wh_unmatched: list = []
     wh_chunks: dict = {}
@@ -4700,6 +4700,8 @@ def _terminal_commit_inner(
     if session_id is not None:
         commit_params["session_id"] = session_id
         fixes_at, wave_paths = _fixes_integrated_at(worktree_root, inline_review)
+        if fixes_at is None and request.review_only:
+            fixes_at, wave_paths = _remedy.review_only_anchor(worktree_root, request, inline_review)
         expected = _recorded_fingerprints(
             worktree_root, session_id,
             [p for c in done_chunks for p in c.paths] + list(run_owned),
@@ -4801,8 +4803,9 @@ def _terminal_commit_inner(
     if foreign_excluded:
         reply[_ls.FOREIGN_EXCLUDED_KEY] = foreign_excluded
     if reply.get("refused") == "blob-drift" and isinstance(reply.get("error"), str):
-        reply["error"] = _blob_drift_remedy(
-            reply["error"], _run_id_of(params, ask_run_dir, script_path_raw)
+        reply["error"] = _remedy.blob_drift_remedy(
+            reply["error"], worktree_root, _run_id_of(params, ask_run_dir, script_path_raw),
+            "dispatch.terminal_commit", task_output_raw, _drift_paths(reply.get("blob_drift")),
         )
     if reply.get("committed") and reply.get("sha"):
         token_state["landed"] = True
@@ -5126,6 +5129,8 @@ def _terminal_commit_inner(
                     + ", ".join(f"{p} ({cls})" for p, cls in art_residue.items())
                     + ". The run token is spent: commit them through ceremony.commit_v2"
                 )
+        elif wh_map:
+            reply["run_artifacts"] = {"landed": [], "withheld": dict(sorted(wh_map.items()))}
         if review_land:
             reply["review_residue"] = sorted(review_land)
             still = _changed_paths(worktree_root, list(review_land))
