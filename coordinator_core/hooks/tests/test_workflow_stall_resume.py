@@ -100,6 +100,38 @@ def test_other_tasks_no_task_found_leaves_live_run_advised(tmp_path, tdir):
     assert "abandoned" not in text and 'TaskStop({"task_id": "t1"})' in text
 
 
+def test_paused_task_yields_nothing(tmp_path, tdir):
+    _record(tdir, _run(tmp_path, "r1"))
+    tp = _transcript(tmp_path, json.dumps({"content": "Task t1 is not running, status: paused"}))
+    assert mod.workflow_stall_resume_text(SID, tp, NOW) == ""
+
+
+def test_other_tasks_paused_leaves_live_run_advised(tmp_path, tdir):
+    _record(tdir, _run(tmp_path, "r1"))
+    tp = _transcript(tmp_path, json.dumps({"content": "Task zzz is not running, status: paused"}))
+    assert 'TaskStop({"task_id": "t1"})' in mod.workflow_stall_resume_text(SID, tp, NOW)
+
+
+def test_run_superseded_by_newer_live_run_yields_nothing(tmp_path, tdir):
+    _record(tdir, _run(tmp_path, "r1"), task="old", run="wf_old", fired_at=NOW - 5000)
+    _record(tdir, _run(tmp_path, "r2", transcript_age=10), task="new", run="wf_new",
+            fired_at=NOW - 4000)
+    assert mod.workflow_stall_resume_text(SID, "", NOW) == ""
+
+
+def test_newer_run_of_other_script_does_not_supersede(tmp_path, tdir):
+    _record(tdir, _run(tmp_path, "r1"), task="old", run="wf_old", fired_at=NOW - 5000)
+    _record(tdir, _run(tmp_path, "r2", transcript_age=10), task="new", run="wf_new",
+            fired_at=NOW - 4000, args={"other": 1})
+    assert 'TaskStop({"task_id": "old"})' in mod.workflow_stall_resume_text(SID, "", NOW)
+
+
+def test_newer_stalled_rerun_does_not_supersede(tmp_path, tdir):
+    _record(tdir, _run(tmp_path, "r1"), task="old", run="wf_old", fired_at=NOW - 5000)
+    _record(tdir, _run(tmp_path, "r2"), task="new", run="wf_new", fired_at=NOW - 4000)
+    assert "Workflow run" in mod.workflow_stall_resume_text(SID, "", NOW)
+
+
 def test_another_sessions_record_yields_nothing(tmp_path, tdir):
     _record(tdir, _run(tmp_path, "r1"), session="other")
     assert mod.workflow_stall_resume_text(SID, "", NOW) == ""

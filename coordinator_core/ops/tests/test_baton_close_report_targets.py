@@ -368,10 +368,31 @@ def test_target_evidence_appends_run_item_after_sizing_item(tmp_path):
     import json
     _w(tmp_path, "state/sizings/s.yaml", "status: draft\n")
     _w(tmp_path, "state/warp/r1/run.json", json.dumps({"sizing_rel": "state/sizings/s.yaml"}))
-    _w(tmp_path, ".coordinator-local/close-jobs/r1.workflow.json", json.dumps({"terminal_sha": "b" * 40}))
+    _w(tmp_path, "docs/plans/p.md", _delivered_plan("implemented"))
+    _w(tmp_path, ".coordinator-local/close-jobs/r1.workflow.json",
+       json.dumps({"terminal_sha": "b" * 40, "plan_rel": "docs/plans/p.md"}))
     got = _run(tmp_path, kind="spinoff", sizing_object="state/sizings/s.yaml")
     assert [i["class"] for i in got] == ["sizing", "run"]
     assert got[1]["done"] is True and got[1]["target_status"] == "committed"
+    assert got[1]["ship_ref"] == "d" * 40
+
+
+def _delivered_plan(status, extra_row=""):
+    return (f"---\nstatus: {status}\n---\n\n## Tasks\n\n```yaml plan-tasks\n"
+            f"- id: C1\n  title: t\n  disposition: coded\n  disposition_ref: {'d' * 40}\n{extra_row}```\n")
+
+
+def test_implemented_plan_with_open_row_is_not_done_whichever_field_cites_it(tmp_path):
+    _w(tmp_path, "docs/plans/a.md",
+       _delivered_plan("implemented", "- id: C2\n  title: u\n  disposition: open\n"))
+    (ev,) = _run(tmp_path, governing_plan="docs/plans/a.md")
+    assert ev["target_status"] == "implemented" and ev["done"] is False and ev["ship_ref"] is None
+
+
+def test_delivered_plan_item_carries_ship_ref(tmp_path):
+    _w(tmp_path, "docs/plans/a.md", _delivered_plan("implemented"))
+    (ev,) = _run(tmp_path, governing_plan="docs/plans/a.md")
+    assert ev["done"] is True and ev["ship_ref"] == "d" * 40
 
 
 def test_target_evidence_open_non_spinoff_gets_no_run_item(tmp_path):

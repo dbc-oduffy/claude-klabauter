@@ -502,6 +502,7 @@ _DISPOSITIONS: Dict[str, Tuple[str, str]] = {
     'coordinator_core/ops/dev_sync.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: _sync_plugin'),
     'coordinator_core/ops/dispatch_emit/queue_select.py': ('ignored-target', 'raw-write site(s): _materialise_source_rows writes source-op rows under the run dir (state/scratch/..., gitignored scratch/)'),
     'coordinator_core/ops/dispatch_emit/emission_receipt.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: the emission receipt, extracted from op.py'),
+    'coordinator_core/ops/dispatch_emit/stranded_part_rebuild.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: the emission receipt and part spine of a stranded split part, caller-named'),
     'coordinator_core/ops/dispatch_emit/op.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: <module-level>, _dispatch_emit, _write_emission_receipt, restamp'),
     'coordinator_core/ops/distill_apply_disposal.py': ('outside-repo', 'raw-write site(s) near tempdir/home/settings-home construct: _delete_tracked_and_append_log, _write_denormalizations, write_apply_receipt'),
     'coordinator_core/ops/distill_disposal_manifest.py': ('outside-repo', 'raw-write site(s) near tempdir/home/settings-home construct: write_disposal_manifest'),

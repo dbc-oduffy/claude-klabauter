@@ -69,6 +69,39 @@ def test_row_writing_only_an_immutable_plan_body_is_not_executor_routed(tmp_path
     assert _gate(tmp_path, spine)["classes"]["EXECUTOR_HEAVY"]["status"] == "PASS"
 
 
+def test_single_file_node_test_is_admitted(tmp_path):
+    spine = _ROW.replace("`pnpm vitest run`", "`node --test test/x.test.js`")
+    assert _gate(tmp_path, spine)["classes"]["EXECUTOR_HEAVY"]["status"] == "PASS"
+
+
+def test_writing_row_running_heavy_command_gets_the_split_remedy(tmp_path):
+    result = _gate(tmp_path, _ROW)
+    detail = result["classes"]["EXECUTOR_HEAVY"]["detail"]
+    assert "split it into" in detail
+    assert "authoring row" in detail and "coordinator:test-runner" in detail
+    assert "split it into" in result["message"]
+
+
+def test_row_without_writes_keeps_the_declare_test_runner_remedy(tmp_path):
+    spine = _ROW.replace("writes: [src/a.py]", "writes: []")
+    detail = _gate(tmp_path, spine)["classes"]["EXECUTOR_HEAVY"]["detail"]
+    assert "Fix: declare `agent_type: coordinator:test-runner` on the row." in detail
+    assert "split it into" not in detail
+
+
+def test_classification_root_is_the_plan_root_not_process_cwd(tmp_path, monkeypatch):
+    seen = []
+    from coordinator_core.bash_guards import _heavy_command_class as hcc
+
+    real = hcc.classify
+    monkeypatch.setattr(hcc, "classify", lambda c, t=None, cwd=None, *a: seen.append(cwd) or real(c, t, cwd, *a))
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+    _gate(tmp_path, _ROW)
+    assert seen and all(c == str(tmp_path) for c in seen)
+
+
 def test_class_order(tmp_path):
     result = _gate(tmp_path, _ROW)
     assert tuple(result["classes"]) == pg.CLASS_ORDER

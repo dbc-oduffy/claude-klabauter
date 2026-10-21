@@ -128,3 +128,41 @@ def test_max_rows_refusal_names_the_tranche_option(tmp_path):
     inv = _tranche_inventory(tmp_path)
     with pytest.raises(im.InventoryTooLargeError, match="--row-budget N"):
         im.mint_spine(str(inv), max_rows=2)
+
+
+def test_tranche_number_continues_past_outputs_without_a_record(tmp_path):
+    """Numbering reads emitted outputs, not just `-tN.md` records."""
+    inv = _tranche_inventory(tmp_path)
+    run = "20261008T000000-tr"
+    (inv.parent / f"{run}-t1-p1.workflow.mjs").write_text("x", encoding="utf-8")
+    out: dict = {}
+    im.mint_spine(str(inv), row_budget=5, tranche_inventory_out=out)
+    assert Path(out["path"]).name == "inv-t2.md"
+    assert f"run_id: {run}-t2" in out["text"]
+
+
+def test_spent_tranche_record_with_nonbinding_budget_mints_next_n(tmp_path):
+    inv = _tranche_inventory(tmp_path)
+    t1_out: dict = {}
+    im.mint_spine(str(inv), row_budget=5, tranche_inventory_out=t1_out)
+    t1 = Path(t1_out["path"])
+    t1.write_text(t1_out["text"], encoding="utf-8")
+    run = "20261008T000000-tr"
+    (inv.parent / f"{run}-t1.workflow.mjs").write_text("x", encoding="utf-8")
+    (inv.parent / f"{run}-t1-resume.workflow.mjs").write_text("x", encoding="utf-8")
+    out: dict = {}
+    _, spine_path = im.mint_spine(str(t1), row_budget=50, tranche_inventory_out=out)
+    assert spine_path.name == f"{run}-t2.spine.md"
+    assert Path(out["path"]).name == "inv-t2.md"
+
+
+def test_unspent_tranche_record_with_nonbinding_budget_keeps_its_run_id(tmp_path):
+    inv = _tranche_inventory(tmp_path)
+    t1_out: dict = {}
+    im.mint_spine(str(inv), row_budget=5, tranche_inventory_out=t1_out)
+    t1 = Path(t1_out["path"])
+    t1.write_text(t1_out["text"], encoding="utf-8")
+    out: dict = {}
+    _, spine_path = im.mint_spine(str(t1), row_budget=50, tranche_inventory_out=out)
+    assert spine_path.name == "20261008T000000-tr-t1.spine.md"
+    assert not out

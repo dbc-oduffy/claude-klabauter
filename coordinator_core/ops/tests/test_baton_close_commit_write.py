@@ -22,6 +22,8 @@ from coordinator_core.ops.tests.test_deliverable_cascade_kinds import (
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
+EVIDENCE_SHA = "c0ffee1234567890abcdef1234567890abcdef12"
+
 
 def _fm(path: Path, key: str):
     split = split_frontmatter(path.read_text(encoding="utf-8", newline=""))
@@ -51,7 +53,7 @@ def _seed(tmp_path: Path, n: int = 3) -> tuple[Path, list[Path]]:
 
 
 def _req(repo: Path, path: Path) -> dict:
-    return {"path": str(path), "deliverable_id": _fm(path, "deliverable_id")}
+    return {"path": str(path), "deliverable_id": _fm(path, "deliverable_id"), "shipped_in": EVIDENCE_SHA[:8]}
 
 
 def test_every_flip_carries_provenance_and_pathspec_equals_changed_set(tmp_path):
@@ -64,7 +66,7 @@ def test_every_flip_carries_provenance_and_pathspec_equals_changed_set(tmp_path)
         assert _fm(p, "shipped_in_kind") == "successor"
         assert _fm(p, "advanced_by") == _fm(p, "deliverable_id")
         assert _fm(p, "advanced_at") == out.applied[0]["advanced_at"]
-        assert _fm(p, "shipped_in") == head[:8]
+        assert _fm(p, "shipped_in") == EVIDENCE_SHA[:8] != head[:8]
     assert set(out.pathspec) == _changed(repo)
     assert out.pathspec == sorted(out.pathspec)
     assert out.commit_subject == "baton.close_commit: 3 baton(s) terminal"
@@ -97,8 +99,10 @@ def test_write_failed_row_is_absent_from_pathspec_and_others_apply(tmp_path):
     bad = repo / "state" / "handoffs" / "20260102-nofm.md"
     bad.write_text("no frontmatter\n", encoding="utf-8")
     missing = repo / "state" / "handoffs" / "20260102-missing.md"
-    flips = [_req(repo, paths[0]), {"path": str(bad), "deliverable_id": "dlv-x-000000"},
-             {"path": str(missing), "deliverable_id": "dlv-y-000000"}, _req(repo, paths[1])]
+    flips = [_req(repo, paths[0]),
+             {"path": str(bad), "deliverable_id": "dlv-x-000000", "shipped_in": "c0ffee12"},
+             {"path": str(missing), "deliverable_id": "dlv-y-000000", "shipped_in": "c0ffee12"},
+             _req(repo, paths[1])]
     out = flip_batch(flips, repo / ".git", repo)
     assert [a["handoff_path"] for a in out.applied] == [str(paths[0]), str(paths[1])]
     assert [r["reason"] for r in out.refused] == ["write_failed", "write_failed"]
@@ -121,20 +125,26 @@ def test_baton_made_terminal_between_select_and_flip_is_already_terminal(tmp_pat
 def test_all_refused_batch_returns_empty_pathspec_and_no_subject(tmp_path):
     repo, _paths = _seed(tmp_path, 1)
     out = flip_batch(
-        [{"path": str(repo / "state" / "handoffs" / "nope.md"), "deliverable_id": "dlv-n-000000"}],
+        [{"path": str(repo / "state" / "handoffs" / "nope.md"), "deliverable_id": "dlv-n-000000",
+          "shipped_in": "c0ffee12"}],
         repo / ".git", repo,
     )
     assert out.pathspec == [] and out.commit_subject is None and len(out.refused) == 1
 
 
-def test_unreadable_head_flips_nothing(tmp_path, monkeypatch):
+def test_flip_without_shipped_in_is_refused_and_writes_nothing(tmp_path):
     repo, paths = _seed(tmp_path)
     before = [p.read_bytes() for p in paths]
-    monkeypatch.setattr(write_mod, "head_sha", lambda *_a, **_k: None)
-    out = flip_batch([_req(repo, p) for p in paths], repo / ".git", repo)
+    flips = [{"path": str(p), "deliverable_id": _fm(p, "deliverable_id")} for p in paths]
+    out = flip_batch(flips, repo / ".git", repo)
     assert not out.applied and out.pathspec == [] and out.commit_subject is None
-    assert [r["detail"] for r in out.refused] == ["HEAD unreadable"] * 3
+    assert [r["reason"] for r in out.refused] == ["no_evidence_sha"] * 3
     assert [p.read_bytes() for p in paths] == before
+
+
+def test_write_module_never_reads_head():
+    source = Path(write_mod.__file__).read_text(encoding="utf-8")
+    assert "head_sha" not in source
 
 
 def test_flip_batch_spawns_nothing_and_imports_no_commit_helper(tmp_path, monkeypatch):

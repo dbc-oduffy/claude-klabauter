@@ -117,6 +117,8 @@ from coordinator_core.ops.dispatch_emit.inventory_mint import (
     spine_path_for,
 )
 from coordinator_core.ops.dispatch_emit.ask_contract import ASK_SOURCES, STOP_AFTER_PLAN
+from coordinator_core.ops.dispatch_emit.emission_receipt import receipt_unlanded
+from coordinator_core.ops.dispatch_emit.run_id_occupancy import spent_run_reason
 from coordinator_core.ops.dispatch_emit.sizing_fire import SizingFireRefused, SizingHandBack
 from coordinator_core.ops.dispatch_emit.mark_landed import (
     NoEmbeddedCommitPhaseError,
@@ -937,10 +939,24 @@ def _clear_earlier_outputs(inventory_path: str, live: "list[Path]") -> None:
     """Delete this inventory's regenerable spine and script files that this emit did not write.
 
     Matches only `earlier_outputs` names (this run id, its tranches and parts) beside the
-    record; tranche records are inputs and are named, never deleted. Sibling tranche spines
-    of the same base are deleted too: only this emit's spines survive."""
+    record; tranche records are inputs and are named, never deleted. A script whose receipt
+    is unlanded, or whose run id is spent (`spent_run_reason`), is kept with its spine."""
     keep = {p.resolve() for p in live}
     derived, records = earlier_outputs(Path(inventory_path))
+    suffix = ".workflow.mjs"
+    for stale in derived:
+        if stale.resolve() in keep or not stale.name.endswith(suffix) or stale.name.endswith(".spine.workflow.mjs"):
+            continue
+        spent = spent_run_reason(stale)
+        if spent or receipt_unlanded(stale):
+            keep.add(stale.resolve())
+            keep.add(stale.with_name(stale.name[: -len(suffix)] + ".spine.md").resolve())
+            print(
+                f"emit-dispatch-workflow: kept spent part {stale} ({spent})"
+                if spent
+                else f"emit-dispatch-workflow: kept unlanded part {stale} (its receipt carries no landed stamp)",
+                file=sys.stderr,
+            )
     for stale in derived:
         if stale.resolve() in keep:
             continue

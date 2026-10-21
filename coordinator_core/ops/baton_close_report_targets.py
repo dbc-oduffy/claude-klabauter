@@ -22,13 +22,11 @@ from coordinator_core.ops.baton_close_report_contract import (
     Evidence,
     EvidenceClass,
 )
+from coordinator_core.ops.baton_close_plan_delivery import PLAN_DONE, PlanDeliveryCache
 from coordinator_core.ops.baton_close_report_decide import STATUS_MISSING, STATUS_UNREADABLE
 from coordinator_core.ops.baton_close_report_readers import run_claims
 from coordinator_core.session.record_homes import home_dir
 
-# `landed` is non-terminal per plan.schema.json's status description (spine rows still open):
-# do not re-add it. `complete` stays as defensive tolerance.
-PLAN_DONE = frozenset({"implemented", "complete"})
 SIZING_DONE = frozenset({"shipped"})
 ROADMAP_DONE = frozenset({"shipped"})
 # No goal on disk carries a terminal status, so no value is a guess here.
@@ -422,6 +420,19 @@ def _path_item(rd: _Reader, cls: EvidenceClass, field: str, rel: str, fenced: bo
     return _item(cls, field, rel, exists, status, done_set)
 
 
+def _plan_item(rd: _Reader, cache: PlanDeliveryCache, field: str, rel: str) -> Evidence:
+    """PLAN item: done only for a delivered plan; `ship_ref` is its last coded commit."""
+    item = _path_item(rd, EvidenceClass.PLAN, field, rel, True, PLAN_DONE)
+    item["ship_ref"] = None
+    if item["done"]:
+        delivery = cache.get(item["target_path"])
+        if delivery is None or not delivery.delivered:
+            item["done"] = False
+        else:
+            item["ship_ref"] = delivery.ship_ref
+    return item
+
+
 def target_evidence(worktree_root: str, headers: dict[str, BatonHeader]) -> dict[str, list[Evidence]]:
     """Evidence items per baton rel path; batons citing nothing are absent from the result.
 
@@ -430,25 +441,28 @@ def target_evidence(worktree_root: str, headers: dict[str, BatonHeader]) -> dict
     reads `None`. None of the three is done.
     """
     rd = _Reader(worktree_root)
+    cache = PlanDeliveryCache(worktree_root)
     out: dict[str, list[Evidence]] = {}
     carriers: dict[str, int] = {}
     for h in headers.values():
         d = h.get("deliverable_id")
         if d:
             carriers[d] = carriers.get(d, 0) + 1
-    runs = run_claims(worktree_root, headers)
+    runs = run_claims(worktree_root, headers, cache)
     for rel, h in headers.items():
         items: list[Evidence] = []
         gp = h.get("governing_plan")
         if gp:
-            items.append(_path_item(rd, EvidenceClass.PLAN, "governing_plan", gp, True, PLAN_DONE))
+            items.append(_plan_item(rd, cache, "governing_plan", gp))
         pid = h.get("origin_plan_id")
         if pid:
             path = rd.plan_path_for_id(pid)
             if path is None:
-                items.append(_item(EvidenceClass.PLAN, "origin_plan_id", pid, False, None, PLAN_DONE))
+                missing = _item(EvidenceClass.PLAN, "origin_plan_id", pid, False, None, PLAN_DONE)
+                missing["ship_ref"] = None
+                items.append(missing)
             elif not (gp and gp.replace("\\", "/") == path):
-                items.append(_path_item(rd, EvidenceClass.PLAN, "origin_plan_id", path, True, PLAN_DONE))
+                items.append(_plan_item(rd, cache, "origin_plan_id", path))
         so = h.get("sizing_object")
         if so:
             items.append(_path_item(rd, EvidenceClass.SIZING, "sizing_object", so, False, SIZING_DONE))
@@ -471,16 +485,16 @@ def target_evidence(worktree_root: str, headers: dict[str, BatonHeader]) -> dict
             for p in rd.plans_for_deliverable(did):
                 if p not in seen:
                     seen.add(p)
-                    items.append(_path_item(rd, EvidenceClass.PLAN, REVERSE_FIELD_DELIVERABLE, p, True, PLAN_DONE))
+                    items.append(_plan_item(rd, cache, REVERSE_FIELD_DELIVERABLE, p))
         brel = rel.replace("\\", "/")
         for p in rd.plans_for_predecessor(brel):
             if p not in seen:
                 seen.add(p)
-                items.append(_path_item(rd, EvidenceClass.PLAN, REVERSE_FIELD_PREDECESSOR, p, True, PLAN_DONE))
+                items.append(_plan_item(rd, cache, REVERSE_FIELD_PREDECESSOR, p))
         for _sz, p in rd.sizing_hop(brel):
             if p not in seen:
                 seen.add(p)
-                items.append(_path_item(rd, EvidenceClass.PLAN, REVERSE_FIELD_SIZING, p, True, PLAN_DONE))
+                items.append(_plan_item(rd, cache, REVERSE_FIELD_SIZING, p))
         for it in runs.get(rel, ()):
             if it["target_path"] not in seen:
                 seen.add(it["target_path"])

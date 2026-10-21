@@ -23,11 +23,12 @@ from coordinator_core.ops.baton_close_report_readers import (
 )
 
 PLAN = "docs/plans/p.md"
+SHA = "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678"
 
 
-def _ev(done=True, status="implemented", cls="plan", target=PLAN):
+def _ev(done=True, status="implemented", cls="plan", target=PLAN, ship_ref=SHA):
     return {"class": cls, "field": "governing_plan", "target_path": target,
-            "target_status": status, "done": done}
+            "target_status": status, "done": done, "ship_ref": ship_ref}
 
 
 def _header(status="open"):
@@ -122,8 +123,52 @@ def _reasons(refused):
 def test_closable_baton_flips_with_its_own_deliverable_id(tmp_path):
     a = _baton(tmp_path, "a.md", did="dlv-own-111111")
     flips, refused, already = _select(tmp_path, [a])
-    assert flips == [{"path": a, "deliverable_id": "dlv-own-111111"}]
+    assert flips == [{"path": a, "deliverable_id": "dlv-own-111111", "shipped_in": SHA[:8]}]
     assert refused == [] and already == []
+
+
+def test_shipped_in_is_the_fresh_evidence_prefix_not_the_callers(tmp_path):
+    a = _baton(tmp_path, "a.md")
+    fresh = "f" * 40
+    rows = [{"handoff_path": a, "evidence": [_ev(ship_ref="0" * 40)]}]
+    flips, refused, _ = _select(tmp_path, [a], rows=rows, ev={a: [_ev(ship_ref=fresh)]})
+    assert [f["shipped_in"] for f in flips] == ["f" * 8], refused
+
+
+def test_run_ship_ref_wins_over_plan_ship_ref(tmp_path):
+    a = _baton(tmp_path, "a.md")
+    run = {**_ev(cls="run", target="state/warp/r/run.json", ship_ref="9" * 40)}
+    flips, _, _ = _select(tmp_path, [a], ev={a: [_ev(), run]})
+    assert [f["shipped_in"] for f in flips] == ["9" * 8]
+
+
+def test_done_evidence_without_ship_ref_is_refused_no_evidence_sha(tmp_path):
+    a = _baton(tmp_path, "a.md")
+    flips, refused, _ = _select(tmp_path, [a], ev={a: [_ev(ship_ref=None)]})
+    assert flips == [] and _reasons(refused) == {a: "no_evidence_sha"}
+
+
+def test_gated_awaiting_gate_baton_is_predicate_refused_with_leg_c_text(tmp_path):
+    from coordinator_core.ops.deliverable_cascade import handoff_state_refusal
+
+    a = _baton(tmp_path, "a.md", state="awaiting_gate", extra="gate_dependency: some-gate")
+    flips, refused, _ = _select(tmp_path, [a])
+    assert flips == [] and _reasons(refused) == {a: "predicate_refused"}
+    assert refused[0]["detail"] == handoff_state_refusal(dag._read_meta(str(tmp_path / a)))
+    assert "not consistent with terminal" in refused[0]["detail"]
+
+
+def test_ungated_awaiting_gate_baton_flips(tmp_path):
+    a = _baton(tmp_path, "a.md", state="awaiting_gate")
+    flips, refused, _ = _select(tmp_path, [a])
+    assert [f["path"] for f in flips] == [a], refused
+
+
+def test_recheck_maps_not_advanceable_and_no_evidence_sha():
+    got = chk.recheck([_ev()], ("residue", "not_advanceable", [_ev()]), "leg c text")
+    assert got == (R.PREDICATE_REFUSED, "leg c text")
+    got = chk.recheck([_ev()], ("residue", "no_evidence_sha", [_ev()]))
+    assert got is not None and got[0] == R.NO_EVIDENCE_SHA
 
 
 def test_crlf_baton_flips(tmp_path):

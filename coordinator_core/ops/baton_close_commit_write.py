@@ -2,13 +2,12 @@
 cascade's own `_flip_handoff` and names exactly the files it rewrote.
 
 Never commits and spawns nothing; the caller lands `pathspec` with `commit_subject` as one
-scoped commit. HEAD is read in-process.
+scoped commit. Each flip carries the `shipped_in` its evidence justified; HEAD is never read.
 """
 
 from pathlib import Path
 from typing import NamedTuple, Optional
 
-from coordinator_core.git.git_state import head_sha
 from coordinator_core.ops.baton_close_commit_contract import (
     AlreadyTerminalItem,
     AppliedItem,
@@ -20,8 +19,6 @@ from coordinator_core.ops.cascade_terminal_op import _flip_handoff
 from coordinator_core.ops.deliverable_cascade import _ALREADY_ADVANCED_MARKER, _iso_now
 
 _SHIPPED_IN_KIND = "successor"
-_SHA_WIDTH = 8
-_HEAD_UNREADABLE = "HEAD unreadable"
 
 
 class FlipOutcome(NamedTuple):
@@ -53,14 +50,8 @@ def _relative_posix(path: Path, worktree: Path) -> str:
 def flip_batch(flips: list[FlipRequest], common_dir: Path, worktree: Path) -> FlipOutcome:
     """Make every requested baton terminal (`shipped`, kind `successor`, `advanced_by` its own
     deliverable_id). `pathspec` holds only files `_flip_handoff` reported advanced; a peer-won
-    race is `already_terminal`, any other failure a `write_failed` refusal. An unreadable HEAD
-    flips nothing."""
-    ship_sha = head_sha(worktree)
-    if not ship_sha:
-        return FlipOutcome(
-            [], [_refusal(f["path"], _HEAD_UNREADABLE) for f in flips], [], None, []
-        )
-    shipped_in = ship_sha[:_SHA_WIDTH]
+    race is `already_terminal`, any other failure a `write_failed` refusal. A flip without a
+    `shipped_in` is refused and writes nothing."""
     advanced_at = _iso_now()
 
     applied: list[AppliedItem] = []
@@ -68,6 +59,17 @@ def flip_batch(flips: list[FlipRequest], common_dir: Path, worktree: Path) -> Fl
     already_terminal: list[AlreadyTerminalItem] = []
     changed: set[str] = set()
     for flip in flips:
+        shipped_in = flip.get("shipped_in")
+        if not shipped_in:
+            refused.append(
+                {
+                    "handoff_path": flip["path"],
+                    "reason": RefusalReason.NO_EVIDENCE_SHA.value,
+                    "detail": "flip carries no shipped_in",
+                    "evidence": [],
+                }
+            )
+            continue
         path = Path(flip["path"])
         if not path.is_absolute():
             path = worktree / path

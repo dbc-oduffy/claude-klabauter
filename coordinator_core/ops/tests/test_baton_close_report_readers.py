@@ -157,18 +157,67 @@ def _claims(root, *headers):
     return readers.run_claims(str(root), {h["path"]: h for h in headers})
 
 
+REF = "c" * 40
+PLAN = "docs/plans/p.md"
+
+
+def _plan(root, status="implemented", disposition="coded", extra_row=""):
+    d = root / "docs" / "plans"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "p.md").write_text(
+        f"---\nstatus: {status}\n---\n\n## Tasks\n\n```yaml plan-tasks\n"
+        f"- id: C1\n  title: t\n  disposition: {disposition}\n  disposition_ref: {REF}\n{extra_row}```\n",
+        encoding="utf-8",
+    )
+
+
 def test_run_claims_sizing_join_committed(tmp_path):
     _warp(tmp_path, "r1", sizing=SIZ)
-    _job(tmp_path, "r1.workflow.json", terminal_sha=SHA)
+    _plan(tmp_path)
+    _job(tmp_path, "r1.workflow.json", terminal_sha=SHA, plan_rel=PLAN)
     got = _claims(tmp_path, _hdr())["state/handoffs/b.md"]
     assert got == [{"class": "run", "field": "run.sizing_rel",
                     "target_path": ".coordinator-local/close-jobs/r1.workflow.json",
-                    "target_status": "committed", "done": True}]
+                    "target_status": "committed", "done": True, "ship_ref": REF}]
+
+
+def test_run_claims_planning_run_is_not_done(tmp_path):
+    _warp(tmp_path, "r1", sizing=SIZ)
+    _plan(tmp_path, status="reviewed", disposition="open")
+    _job(tmp_path, "r1.workflow.json", terminal_sha=SHA, plan_rel=PLAN)
+    (got,) = _claims(tmp_path, _hdr())["state/handoffs/b.md"]
+    assert got["target_status"] == "committed" and got["done"] is False and got["ship_ref"] is None
+
+
+def test_run_claims_implemented_plan_with_open_row_is_not_done(tmp_path):
+    _warp(tmp_path, "r1", sizing=SIZ)
+    _plan(tmp_path, extra_row="- id: C2\n  title: u\n  disposition: open\n")
+    _job(tmp_path, "r1.workflow.json", terminal_sha=SHA, plan_rel=PLAN)
+    (got,) = _claims(tmp_path, _hdr())["state/handoffs/b.md"]
+    assert got["done"] is False
+
+
+def test_run_claims_no_plan_rel_or_missing_plan_is_not_done(tmp_path):
+    _warp(tmp_path, "r1", sizing=SIZ)
+    _job(tmp_path, "r1.workflow.json", terminal_sha=SHA)
+    _warp(tmp_path, "r2", baton="state/handoffs/b.md")
+    _job(tmp_path, "r2.workflow.json", terminal_sha=SHA, plan_rel="docs/plans/gone.md")
+    got = _claims(tmp_path, _hdr())["state/handoffs/b.md"]
+    assert [g["done"] for g in got] == [False, False]
+
+
+def test_terminal_deployment_state_baton_is_excluded(tmp_path):
+    _write(tmp_path, "s.md", _baton(extra="deployment_state: shipped\n"))
+    _write(tmp_path, "g.md", _baton(extra="deployment_state: awaiting_gate  # x\n"))
+    headers, unreadable = readers.read_baton_headers(str(tmp_path))
+    assert list(headers) == [f"{REL}/g.md"] and unreadable == []
+    assert headers[f"{REL}/g.md"]["deployment_state"] == "awaiting_gate"
 
 
 def test_run_claims_baton_field_backslash_joins_and_bare_job_name(tmp_path):
     _warp(tmp_path, "r1", baton="state\\handoffs\\b.md")
-    _job(tmp_path, "r1.json", terminal_sha=SHA)
+    _plan(tmp_path)
+    _job(tmp_path, "r1.json", terminal_sha=SHA, plan_rel=PLAN)
     got = _claims(tmp_path, _hdr(sizing=None))["state/handoffs/b.md"]
     assert got[0]["field"] == "run.baton" and got[0]["done"] is True
     assert got[0]["target_path"].endswith("close-jobs/r1.json")

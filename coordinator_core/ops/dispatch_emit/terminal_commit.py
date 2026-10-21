@@ -2155,9 +2155,19 @@ def _own_run_seniority(worktree_root: Path, run_id: object, script_path_raw: obj
         return None
     script = Path(script_path_raw)
     script = script if script.is_absolute() else worktree_root / script
+    key = run_id if isinstance(run_id, str) else script.stem
     try:
-        return (script.stat().st_mtime, run_id if isinstance(run_id, str) else script.stem)
+        return (script.stat().st_mtime, key)
     except OSError:
+        pass
+    from datetime import datetime
+
+    from coordinator_core.ops.dispatch_emit.emission_receipt import _read_receipt
+
+    receipt = _read_receipt(script)
+    try:
+        return (datetime.fromisoformat(receipt["emitted_at"]).timestamp(), key)
+    except (TypeError, KeyError, ValueError):
         return None
 
 
@@ -3644,8 +3654,22 @@ def _terminal_commit_inner(
             "caller's own worktree"
         )
 
+    script_source = "script"
     try:
         script_text = guarded_script.read_text(encoding="utf-8")
+    except FileNotFoundError as exc:
+        from coordinator_core.ops.dispatch_emit.emission_receipt import receipt_landing_text
+
+        script_text = receipt_landing_text(guarded_script)
+        if not script_text:
+            return _error(
+                f"script-missing: {script_path_raw!r} is gone and its receipt carries no landing "
+                f"markers ({exc}); run: python -m coordinator_core.ops.dispatch_emit."
+                f"stranded_part_rebuild --script {script_path_raw} --task-output <task output "
+                "path> --inventory <tranche record>",
+                refused="script-missing",
+            )
+        script_source = "receipt"
     except OSError as exc:
         return _error(f"cannot read params.script_path {script_path_raw!r}: {exc}")
 
@@ -4790,6 +4814,7 @@ def _terminal_commit_inner(
         reply = {"committed": False, "sha": None, "error": f"unexpected commit_v2 reply: {reply!r}"}
 
     reply = dict(reply)
+    reply["script_source"] = script_source
     if overlap and isinstance(reply.get("error"), str):
         reply["refused"] = overlap
         reply["error"] += (
@@ -4814,6 +4839,9 @@ def _terminal_commit_inner(
             "sha": str(reply["sha"]), "rows": [c.id for c in contributing_chunks], "paths": list(all_paths),
         })
         _release_siblings_at_landing(close_ctx, str(reply["sha"]))
+        from coordinator_core.ops.dispatch_emit.emission_receipt import stamp_landed
+
+        stamp_landed(guarded_script, str(reply["sha"]))
     if not reply.get("committed"):
         _remove(worktree_root, receipt_paths)
         receipt_paths = []

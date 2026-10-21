@@ -21,6 +21,12 @@ from coordinator_core.ops.tests.test_deliverable_cascade_kinds import _git, _ini
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 _PLAN = "docs/plans/done.md"
+_REF = "d3adbeef" + "0" * 32
+
+
+def _plan_text(status: str = "implemented") -> str:
+    return (f"---\nstatus: {status}\n---\n\n## Tasks\n\n```yaml plan-tasks\n"
+            f"- id: C1\n  title: t\n  disposition: coded\n  disposition_ref: {_REF}\n```\n")
 
 
 def _baton(deliverable_id: str | None, *, status: str = "open", state: str = "ready_to_fire",
@@ -70,7 +76,7 @@ def _commit_all(repo: Path) -> None:
 
 def _fixture(repo: Path) -> dict[str, str]:
     _init_repo(repo)
-    _write(repo, _PLAN, "---\nstatus: implemented\n---\n")
+    _write(repo, _PLAN, _plan_text())
     _write(repo, "docs/plans/live.md", "---\nstatus: reviewed\n---\n")
     h = "state/handoffs/"
     _write(repo, h + "ok1.md", _baton("dlv-ok1-000001"))
@@ -83,7 +89,7 @@ def _fixture(repo: Path) -> dict[str, str]:
     _write(repo, h + "nodlv.md", _baton(None))
     _write(repo, h + "terminal.md", _baton("dlv-terminal-7", state="shipped"))
     _write(repo, h + "stale.md", _baton("dlv-stale-000008", plan="docs/plans/stale.md"))
-    _write(repo, "docs/plans/stale.md", "---\nstatus: implemented\n---\n")
+    _write(repo, "docs/plans/stale.md", _plan_text())
     _commit_all(repo)
     return {p.name: f"state/handoffs/{p.name}" for p in (repo / "state/handoffs").glob("*.md")}
 
@@ -130,6 +136,7 @@ def test_closable_rows_flip_and_one_scoped_commit_lands_them(tmp_path: Path) -> 
         assert _fm(repo, rel, "shipped_in_kind") == "successor"
         assert _fm(repo, rel, "advanced_by") == item["advanced_by"] == _fm(repo, rel, "deliverable_id")
         assert _fm(repo, rel, "advanced_at") == item["advanced_at"]
+        assert _fm(repo, rel, "shipped_in") == item["shipped_in"] == _REF[:8] != head[:8]
 
     assert _git(repo, "add", "--", *res["pathspec"]).returncode == 0
     assert _git(repo, "commit", "-m", res["commit_subject"], "--", *res["pathspec"]).returncode == 0
@@ -143,6 +150,7 @@ def test_run_evidence_report_rows_flip_through_close_commit(tmp_path: Path) -> N
     _init_repo(repo)
     sha = "b" * 40
     h = "state/handoffs/"
+    _write(repo, _PLAN, _plan_text())
     _write(repo, "docs/plans/appr.md", "---\nstatus: approved\n---\n")
     _write(repo, "state/sizings/conf.yaml", "status: shipped\n")
     _write(repo, h + "spin.md", _baton("dlv-spin-000001", plan=None).replace(
@@ -152,7 +160,7 @@ def test_run_evidence_report_rows_flip_through_close_commit(tmp_path: Path) -> N
     for run_id, sizing in (("r-spin", "state/sizings/spin.yaml"), ("r-conf", "state/sizings/conf.yaml")):
         _write(repo, f"state/warp/{run_id}/run.json", json.dumps({"sizing_rel": sizing}))
         _write(repo, f".coordinator-local/close-jobs/{run_id}.workflow.json",
-               json.dumps({"terminal_sha": sha}))
+               json.dumps({"terminal_sha": sha, "plan_rel": _PLAN}))
     _commit_all(repo)
 
     report = asyncio.run(report_op._handler({}, repo))
@@ -165,6 +173,7 @@ def test_run_evidence_report_rows_flip_through_close_commit(tmp_path: Path) -> N
     assert sorted(a["handoff_path"] for a in res["applied"]) == sorted(rows)
     for rel in rows:
         assert _fm(repo, rel, "deployment_state") == "shipped"
+        assert _fm(repo, rel, "shipped_in") == _REF[:8]
 
 
 def test_every_refusal_reason_leaves_the_file_byte_identical(tmp_path: Path) -> None:
@@ -231,6 +240,31 @@ def test_terminal_baton_outside_the_open_scan_is_already_terminal(tmp_path: Path
     res = _call(repo, [_row("state/handoffs/done.md")])
     assert res["already_terminal"] == [{"handoff_path": "state/handoffs/done.md"}]
     assert res["refused"] == [] and res["pathspec"] == []
+
+
+def test_gated_awaiting_gate_baton_is_predicate_refused_and_untouched(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    _fixture(repo)
+    gated = "state/handoffs/gated.md"
+    _write(repo, gated, _baton("dlv-gated-000010", state="awaiting_gate").replace(
+        "status: open", "status: open\ngate_dependency: some-gate"))
+    _commit_all(repo)
+    before = _snapshot(repo, [gated])
+    res = _call(repo, [_row(gated)])
+    assert _reasons(res) == {gated: "predicate_refused"}
+    assert "not consistent with terminal" in res["refused"][0]["detail"]
+    assert _snapshot(repo, [gated]) == before
+
+
+def test_plan_without_a_coded_ref_is_refused_no_evidence_sha(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    paths = _fixture(repo)
+    _write(repo, _PLAN, "---\nstatus: implemented\n---\n")
+    _commit_all(repo)
+    before = _snapshot(repo, [paths["ok1.md"]])
+    res = _call(repo, [_row(paths["ok1.md"])])
+    assert _reasons(res) == {paths["ok1.md"]: "no_evidence_sha"}
+    assert res["pathspec"] == [] and _snapshot(repo, [paths["ok1.md"]]) == before
 
 
 def test_empty_or_missing_rows_is_a_named_error(tmp_path: Path) -> None:

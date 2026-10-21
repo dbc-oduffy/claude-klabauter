@@ -15,6 +15,13 @@ from coordinator_core.ops.baton_close_report_readers import read_baton_headers, 
 from coordinator_core.ops.baton_close_report_targets import target_evidence
 
 
+_SHA = "a" * 40
+_SPINE = (
+    "\n## Tasks\n\n```yaml plan-tasks\n- id: C1\n  title: t\n  disposition: coded\n"
+    f"  disposition_ref: {_SHA}\n```\n"
+)
+
+
 def _write(root: Path, rel: str, text: str) -> None:
     p = root / rel
     p.parent.mkdir(parents=True, exist_ok=True)
@@ -23,12 +30,14 @@ def _write(root: Path, rel: str, text: str) -> None:
 
 def _baton(status: str = "open", extra: str = "", did: str | None = "dlv-t") -> str:
     did_line = f"deliverable_id: {did}\n" if did else ""
+    if "deployment_state:" not in extra:
+        extra += "deployment_state: ready_to_fire\n"
     return f"---\ntitle: t\nstatus: {status}\n{did_line}{extra}---\n\nbody\n"
 
 
 def _fixture(root: Path) -> None:
     (root / ".git").mkdir()
-    _write(root, "docs/plans/done.md", "---\nstatus: implemented\n---\n")
+    _write(root, "docs/plans/done.md", "---\nstatus: implemented\n---\n" + _SPINE)
     _write(root, "docs/plans/live.md", "---\nstatus: reviewed\n---\n")
     _write(root, "state/handoffs/closable.md", _baton(extra="governing_plan: docs/plans/done.md\n"))
     _write(root, "state/handoffs/claimed.md", _baton("claimed", "governing_plan: docs/plans/done.md\n"))
@@ -103,7 +112,7 @@ def test_no_repo_root_is_an_error() -> None:
 
 
 def _plan(status: str, extra: str = "") -> str:
-    return f"---\nstatus: {status}\n{extra}---\n"
+    return f"---\nstatus: {status}\n{extra}---\n" + _SPINE
 
 
 def _reverse_root(tmp_path: Path) -> Path:
@@ -257,7 +266,6 @@ def test_reverse_shared_deliverable_id_across_batons_stays_no_evidence(tmp_path:
     assert rep["no_evidence"] == 2
 
 
-_SHA = "a" * 40
 _SIZING = "state/sizings/s.yaml"
 
 
@@ -270,8 +278,9 @@ def _run_record(root: Path, run_id: str, *, sizing: str | None = None, baton: st
     if baton is not None:
         _write(root, f"state/warp/{run_id}/run-baton.json", json.dumps({"baton": baton}))
     if job:
+        _write(root, "docs/plans/exec.md", _plan("implemented"))
         _write(root, f".coordinator-local/close-jobs/{run_id}.workflow.json",
-               json.dumps({"terminal_sha": sha, "claimed_batons": []}))
+               json.dumps({"terminal_sha": sha, "claimed_batons": [], "plan_rel": "docs/plans/exec.md"}))
 
 
 def test_run_evidence_spinoff_via_sizing_rel_is_closable(tmp_path: Path) -> None:
@@ -378,3 +387,56 @@ def test_zero_subprocess_spawns(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(os, "system", _count)
     _run(tmp_path)
     assert calls == []
+
+
+def _gp() -> str:
+    return "governing_plan: docs/plans/done.md\n"
+
+
+def test_shipped_baton_is_absent(tmp_path: Path) -> None:
+    root = _reverse_root(tmp_path)
+    _write(root, "docs/plans/done.md", _plan("implemented"))
+    _write(root, "state/handoffs/s.md", _baton(extra=_gp() + "deployment_state: shipped\n"))
+    rep = _run(root)
+    assert rep["closable"] == [] and rep["residue"] == [] and rep["no_evidence"] == 0
+
+
+def test_gated_awaiting_gate_is_not_advanceable_with_route(tmp_path: Path) -> None:
+    root = _reverse_root(tmp_path)
+    _write(root, "docs/plans/done.md", _plan("implemented"))
+    _write(root, "state/handoffs/g.md",
+           _baton(extra=_gp() + "deployment_state: awaiting_gate\ngate_dependency: x\n"))
+    rep = _run(root)
+    assert rep["closable"] == []
+    (item,) = rep["residue"]
+    assert item["reason"] == "not_advanceable"
+    assert "not consistent with terminal" in item["detail"]
+    assert "handoff.transition to ready_to_fire" in item["detail"]
+
+
+def test_ungated_awaiting_gate_is_closable_with_ship_ref(tmp_path: Path) -> None:
+    root = _reverse_root(tmp_path)
+    _write(root, "docs/plans/done.md", _plan("implemented"))
+    _write(root, "state/handoffs/u.md", _baton(extra=_gp() + "deployment_state: awaiting_gate\n"))
+    rep = _run(root)
+    assert [c["handoff_path"] for c in rep["closable"]] == ["state/handoffs/u.md"]
+    assert rep["closable"][0]["ship_ref"] == _SHA
+
+
+def test_legacy_plan_without_spine_is_no_evidence_sha(tmp_path: Path) -> None:
+    root = _reverse_root(tmp_path)
+    _write(root, "docs/plans/done.md", "---\nstatus: implemented\n---\n")
+    _write(root, "state/handoffs/l.md", _baton(extra=_gp()))
+    rep = _run(root)
+    assert rep["closable"] == []
+    (item,) = rep["residue"]
+    assert item["reason"] == "no_evidence_sha" and item["detail"]
+
+
+def test_planning_run_is_not_done_evidence(tmp_path: Path) -> None:
+    root = _reverse_root(tmp_path)
+    _write(root, "state/handoffs/s.md", _baton(extra=f"kind: spinoff\nsizing_object: {_SIZING}\n"))
+    _run_record(root, "r1", sizing=_SIZING)
+    _write(root, "docs/plans/exec.md", _plan("reviewed"))
+    rep = _run(root)
+    assert rep["closable"] == []

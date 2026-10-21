@@ -1324,6 +1324,15 @@ EXECUTOR_HEAVY_FIX = (
     "guard-heavy-command-admission denies a heavy command to coordinator:executor. "
     "Fix: declare `agent_type: coordinator:test-runner` on the row."
 )
+EXECUTOR_HEAVY_SPLIT_FIX = (
+    "Fix: a row that writes files cannot be re-typed (test-runner has no Write tool); "
+    "split it into a `coordinator:executor` authoring row plus a "
+    "`agent_type: coordinator:test-runner` verify row."
+)
+_EXECUTOR_HEAVY_CATALOGUE_FIX = (
+    f"{EXECUTOR_HEAVY_FIX} A row that also writes files: "
+    "split it into an executor authoring row plus a `coordinator:test-runner` verify row."
+)
 
 
 def _routes_to_executor(row: Dict[str, Any]) -> bool:
@@ -1341,11 +1350,13 @@ def _routes_to_executor(row: Dict[str, Any]) -> bool:
     )
 
 
-def _executor_heavy(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+def _executor_heavy(rows: List[Dict[str, Any]], repo_root: Path) -> Dict[str, Any]:
     """Refuse a plan whose executor-routed rows run a command the heavy-admission guard denies.
 
     Predicate is ``_heavy_command_class.classify``, the guard's own classifier, over each
-    body code span and the row's ``verification`` string.
+    body code span and the row's ``verification`` string, classified against ``repo_root``
+    (the gated plan's tree, never process cwd). A refused row that declares ``writes`` gets
+    the split remedy; one that does not gets the declare-test-runner remedy.
     """
     from coordinator_core.bash_guards._heavy_command_class import classify
     from coordinator_core.ops.dispatch_emit.em_only_act import _code_spans, row_is_em_performed
@@ -1353,6 +1364,7 @@ def _executor_heavy(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
 
     hits: List[str] = []
     ids: List[str] = []
+    fixes: set = set()
     for row in rows:
         if not isinstance(row, dict) or _row_is_unschedulable(row):
             continue
@@ -1367,17 +1379,24 @@ def _executor_heavy(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
             spans.append(row["verification"])
         for span in spans:
             span = span.strip()
-            cls = classify(span, None, str(Path.cwd())) if span else None
+            cls = classify(span, None, str(repo_root)) if span else None
             if cls is not None and cls.heavy_class is not None and not cls.noemit_tsc:
                 row_id = str(row.get("id") or "<row with no id>")
                 ids.append(row_id)
                 hits.append(f"{row_id} (`{span[:60]}`)")
+                writes = row.get("writes")
+                fixes.add(
+                    EXECUTOR_HEAVY_SPLIT_FIX
+                    if isinstance(writes, list) and writes
+                    else EXECUTOR_HEAVY_FIX
+                )
                 break
     if not hits:
         return _pass("no executor row runs a heavy command")
     return _defect(
         "executor-heavy-command-row",
-        f"executor rows running a heavy command: {', '.join(hits)[:260]} — {EXECUTOR_HEAVY_FIX}",
+        f"executor rows running a heavy command: {', '.join(hits)[:260]} — "
+        f"{' '.join(sorted(fixes, reverse=True))}",
         withheld=sorted(set(ids)),
     )
 
@@ -2270,7 +2289,7 @@ def evaluate_plan(
             "PRIME_EXIT": prime_exit,
             "CI_RETIRED": _ci_retired(raw_spine_rows(text)),
             "EXECUTOR_COMMIT": _executor_commit(raw_spine_rows(text)),
-            "EXECUTOR_HEAVY": _executor_heavy(raw_spine_rows(text)),
+            "EXECUTOR_HEAVY": _executor_heavy(raw_spine_rows(text), Path(edge_root)),
             "SCHEMA": _schema(fm, prime_exit, parse_error),
             "REGISTER": _register(fm, repo_root),
         }
@@ -2411,7 +2430,7 @@ def _authoring_fix_lines(failing_classes: "Sequence[str] | set") -> List[str]:
     if "EXECUTOR_COMMIT" in failing_classes:
         lines.append(f"  fix: {EXECUTOR_COMMIT_FIX}")
     if "EXECUTOR_HEAVY" in failing_classes:
-        lines.append(f"  fix: {EXECUTOR_HEAVY_FIX}")
+        lines.append(f"  fix: {_EXECUTOR_HEAVY_CATALOGUE_FIX}")
     if "REGISTER" in failing_classes:
         lines.append(_REGISTER_FIX)
     return lines

@@ -144,6 +144,7 @@ from coordinator_core.frontmatter.body_blocks import LocateStatus
 from coordinator_core.ops.plan_tasks_render import load_rows
 from coordinator_core.ops.read_frontmatter_field import read_frontmatter_field
 from coordinator_core.ops.dispatch_emit.inventory_accounting import IN_ANOTHER_PART
+from coordinator_core.ops.dispatch_emit.run_id_occupancy import family_spent_reason, next_tranche_number
 from coordinator_core.ops.dispatch_emit.spine_read import (
     NON_DISPATCHABLE_DISPOSITIONS,
     SpineReadError,
@@ -2101,9 +2102,7 @@ def _tranche_inventory(
 
     base_stem = _TRANCHE_SUFFIX_RE.sub("", path.stem)
     base_run = _TRANCHE_SUFFIX_RE.sub("", run_id)
-    n = 1
-    while (path.parent / f"{base_stem}-t{n}.md").exists():
-        n += 1
+    n = next_tranche_number(path.parent, base_stem, base_run)
     new_run = f"{base_run}-t{n}"
     drop = {
         _strip_backtick(r["id"])
@@ -2233,7 +2232,20 @@ def mint_spine(
             _is_live_disposition(r["disposition"]) and _strip_backtick(r["id"]) not in planned
             for r in chunk_rows
         )
-        if not binding or (part is not None and _TRANCHE_SUFFIX_RE.search(path.stem)):
+        is_tranche_record = bool(_TRANCHE_SUFFIX_RE.search(path.stem))
+        spent_tranche = (
+            not binding
+            and part is None
+            and is_tranche_record
+            and family_spent_reason(path.parent, run_id) is not None
+        )
+        if spent_tranche:
+            # The record's own run id has run or landed: continue the family at the next N.
+            tranche_path, tranche_text, run_id = _tranche_inventory(
+                path, text, chunk_rows, set(report["plans"]), run_id
+            )
+            path = tranche_path
+        elif not binding or (part is not None and is_tranche_record):
             # Budget not binding, or already a tranche record (its parts share its N):
             # no tranche record is minted.
             tranche_text = None

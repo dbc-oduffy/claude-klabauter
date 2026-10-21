@@ -979,12 +979,12 @@ def _own_run_seniority(root: Path, run_id: object, script_path: object) -> Optio
         pass
     from datetime import datetime
 
-    from coordinator_core.ops.dispatch_emit.emission_receipt import emission_receipt_path
+    from coordinator_core.ops.dispatch_emit.emission_receipt import _read_receipt
 
+    receipt = _read_receipt(script)
     try:
-        receipt = json.loads(emission_receipt_path(script).read_text(encoding="utf-8"))
         return (datetime.fromisoformat(receipt["emitted_at"]).timestamp(), key)
-    except (OSError, ValueError, KeyError, TypeError):
+    except (TypeError, KeyError, ValueError):
         return None
 
 

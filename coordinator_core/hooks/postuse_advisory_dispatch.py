@@ -1482,9 +1482,51 @@ def _task_gone_in_tail(transcript_path: str, task_id: str) -> bool:
     return f"No task found with ID: {task_id}" in (text or "")
 
 
+def _task_paused_in_tail(transcript_path: str, task_id: str) -> bool:
+    """True when one tail line holds `<task_id>` and the harness's `not running, status: paused`
+    (a TaskStop refused on a paused task). Reads the tail only; never raises."""
+    try:
+        from coordinator_core.workflow_watch.tail import TailReader
+
+        text = TailReader(transcript_path, seek_to_tail=True).poll()
+    except Exception:
+        return False
+    return any(
+        task_id in line and "not running, status: paused" in line
+        for line in (text or "").splitlines()
+    )
+
+
+def _superseded_by_live_run(record: dict, records: list, now: float) -> bool:
+    """True when a newer record of the same scriptPath and args (a fresh re-fire; same-run_id
+    records are already collapsed to the newest by the caller) has a journal that is not
+    stalled: settled or progressing. Reads journal stats only."""
+    from coordinator_core.workflow_watch import stall
+
+    fired_at = record.get("fired_at")
+    for other in records:
+        other_fired = other.get("fired_at")
+        if (other is record or other.get("pending")
+                or not isinstance(other_fired, (int, float)) or other_fired <= fired_at
+                or other.get("task_id") == record.get("task_id")):
+            continue
+        same_run = (other.get("scriptPath") == record.get("scriptPath")
+                    and other.get("args") == record.get("args"))
+        other_dir = other.get("transcript_dir")
+        if not same_run or not isinstance(other_dir, str):
+            continue
+        journal = os.path.join(other_dir, "journal.jsonl")
+        if os.path.isfile(journal) and stall.scan_for_stall(journal, now) is None:
+            return True
+    return False
+
+
 def workflow_stall_resume_text(session_id: str, transcript_path: str, now: float) -> str:
     """One register-shaped line naming this session's first stalled Workflow run
     and the exact resume call, or "" when none is stalled.
+
+    A run whose task the tail shows paused, or that a newer live record of the
+    same run supersedes, yields no advisory.
 
     Reads the session's run records, one journal tail and file stats; spawns
     nothing and never writes the journal. Its only writes are
@@ -1534,6 +1576,10 @@ def workflow_stall_resume_text(session_id: str, transcript_path: str, now: float
                 continue
             stalled = stall.scan_for_stall(os.path.join(transcript_dir, "journal.jsonl"), now)
             if stalled is None:
+                continue
+            if transcript_path and _task_paused_in_tail(transcript_path, task_id):
+                continue
+            if _superseded_by_live_run(record, records, now):
                 continue
             if transcript_path and _task_gone_in_tail(transcript_path, task_id):
                 with open(marker, "a", encoding="utf-8"):

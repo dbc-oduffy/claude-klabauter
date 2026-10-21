@@ -29,10 +29,15 @@ from coordinator_core.ops.baton_close_report_contract import (
     ResidueReason,
     Verdict,
 )
-from coordinator_core.ops.baton_close_report_decide import close_refusal, decide
+from coordinator_core.ops.baton_close_report_decide import (
+    close_refusal,
+    decide,
+    evidence_ship_ref,
+)
 from coordinator_core.ops.deliverable_cascade import (
     _HANDOFF_KIND,
     _legs_c_a_refusal,
+    handoff_state_refusal,
 )
 from coordinator_core.session import record_homes
 
@@ -43,6 +48,8 @@ _SPINOFF_DETAIL = (
     "is not its parent's deliverable"
 )
 _NO_ID_DETAIL = "baton carries no dlv- deliverable_id for advanced_by to join on"
+_NO_SHA_DETAIL = "no delivery commit in the evidence that justifies this close"
+_SHIPPED_IN_WIDTH = 8
 
 
 def _header_refusal(reason: ResidueReason) -> tuple[RefusalReason, str] | None:
@@ -61,11 +68,14 @@ def _key(item: Any) -> tuple[Any, Any]:
 
 
 def recheck(
-    row_evidence: list[Evidence], fresh_verdict: tuple
+    row_evidence: list[Evidence],
+    fresh_verdict: tuple,
+    state_refusal: str | None = None,
 ) -> tuple[RefusalReason, str] | None:
     """None when the caller's evidence still holds, else (reason, detail).
 
-    `fresh_verdict` is `baton_close_report_decide.decide`'s output for this baton now.
+    `fresh_verdict` is `baton_close_report_decide.decide`'s output for this baton now;
+    `state_refusal` is the leg (c) text it was given, reported as the `not_advanceable` detail.
     """
     kind = fresh_verdict[0] if fresh_verdict else None
     if kind == Verdict.CLOSABLE.value:
@@ -84,6 +94,10 @@ def recheck(
             return RefusalReason.CLAIMED, "baton is claimed; refusing to close it out from under its claimant"
         if reason == ResidueReason.LIVE_SUCCESSOR.value:
             return RefusalReason.LIVE_SUCCESSOR, "a live baton names this one as its predecessor"
+        if reason == ResidueReason.NOT_ADVANCEABLE.value:
+            return RefusalReason.PREDICATE_REFUSED, state_refusal or "deployment_state is not advanceable to terminal"
+        if reason == ResidueReason.NO_EVIDENCE_SHA.value:
+            return RefusalReason.NO_EVIDENCE_SHA, _NO_SHA_DETAIL
         try:
             mapped = _header_refusal(ResidueReason(reason))
         except ValueError:
@@ -182,6 +196,7 @@ def select(
     outcome: dict[int, Any] = {}
     survivors: list[tuple[int, str, str]] = []
     seen: set[str] = set()
+    shipped_in: dict[str, str] = {}
 
     def refuse(i: int, rel: str, reason: RefusalReason, detail: str, ev: list) -> None:
         outcome[i] = RefusedItem(handoff_path=rel, reason=reason.value, detail=detail, evidence=ev)
@@ -219,7 +234,8 @@ def select(
             continue
 
         fresh_ev = evidence.get(rel, [])
-        stale = recheck(row_ev, decide(header, fresh_ev, rel in successors))
+        state_refusal = handoff_state_refusal(fm)
+        stale = recheck(row_ev, decide(header, fresh_ev, rel in successors, state_refusal), state_refusal)
         if stale is not None:
             refuse(i, rel, stale[0], stale[1], fresh_ev)
             continue
@@ -232,6 +248,11 @@ def select(
             refuse(i, rel, reason, detail, fresh_ev)
             continue
 
+        ship_ref = evidence_ship_ref(fresh_ev)
+        if not ship_ref:
+            refuse(i, rel, RefusalReason.NO_EVIDENCE_SHA, _NO_SHA_DETAIL, fresh_ev)
+            continue
+
         early = _legs_c_a_refusal(
             worktree_root / rel, fm, repo_root, _HANDOFF_KIND, session_id
         )
@@ -239,6 +260,7 @@ def select(
             refuse(i, rel, RefusalReason.PREDICATE_REFUSED, early, fresh_ev)
             continue
         survivors.append((i, rel, did))
+        shipped_in[rel] = ship_ref[:_SHIPPED_IN_WIDTH]
 
     leg_b: dict[str, str] = {}
     if survivors and _HANDOFF_KIND.predicate_legs["b"].applies:
@@ -255,7 +277,7 @@ def select(
             )
             refuse(i, rel, reason, leg_b[rel], fresh_ev)
             continue
-        flips_by_index[i] = FlipRequest(path=rel, deliverable_id=did)
+        flips_by_index[i] = FlipRequest(path=rel, deliverable_id=did, shipped_in=shipped_in[rel])
 
     flips = [flips_by_index[i] for i in sorted(flips_by_index)]
     refused = [outcome[i] for i in sorted(outcome) if "reason" in outcome[i]]

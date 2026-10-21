@@ -98,6 +98,17 @@ def commit_rows(root: Path, repo_root: Path, params: dict) -> dict:
     if guarded is not None:
         try:
             text = guarded.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            from coordinator_core.ops.dispatch_emit.emission_receipt import receipt_landing_text
+
+            text = receipt_landing_text(guarded)
+            if not text:
+                out["refused_code"] = "script-missing"
+                return fail(
+                    f"script-missing: {script_rel!r} is gone and its receipt carries no landing markers; "
+                    "run: python -m coordinator_core.ops.dispatch_emit.stranded_part_rebuild "
+                    f"--script {script_rel} --task-output <task output path> --inventory <tranche record>"
+                )
         except OSError:
             text = None
     if text is None:

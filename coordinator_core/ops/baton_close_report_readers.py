@@ -11,6 +11,8 @@ import os
 import re
 
 from coordinator_core.frontmatter.baton_class import is_spinoff_kind
+from coordinator_core.lifecycle_constants import HANDOFF_TERMINAL_DEPLOYMENT
+from coordinator_core.ops.baton_close_plan_delivery import PlanDeliveryCache
 from coordinator_core.ops.baton_close_report_contract import (
     RUN_COMMITTED,
     RUN_ENDED,
@@ -43,6 +45,7 @@ _SCALAR_KEYS = frozenset(
         "roadmap_id",
         "deliverable_id",
         "kind",
+        "deployment_state",
     }
 )
 _NULLS = frozenset({"", "none", "null", "~"})
@@ -124,6 +127,7 @@ def _parse(rel: str, lines: list[str]) -> BatonHeader | None:
         roadmap_id=scalars.get("roadmap_id"),
         deliverable_id=scalars.get("deliverable_id"),
         kind=scalars.get("kind"),
+        deployment_state=scalars.get("deployment_state"),
         origin_goal_id=list(dict.fromkeys(goals)),
     )
 
@@ -132,7 +136,8 @@ def read_baton_headers(worktree_root: str) -> tuple[dict[str, BatonHeader], list
     """Return ({rel: header} for open|claimed batons, [rel of unreadable frontmatter]).
 
     `rel` is the repo-relative posix path. A missing handoffs directory yields two empties.
-    Terminal-status batons are neither returned nor listed as unreadable.
+    Terminal-status batons and batons at a terminal `deployment_state` are neither returned nor
+    listed as unreadable.
     """
     home = record_homes.home_dir(worktree_root, "handoffs")
     rel_home = os.path.relpath(home, worktree_root).replace(os.sep, "/")
@@ -155,7 +160,7 @@ def read_baton_headers(worktree_root: str) -> tuple[dict[str, BatonHeader], list
         header = _parse(rel, lines) if lines is not None else None
         if header is None:
             unreadable.append(rel)
-        elif header["status"] in LIVE_STATUSES:
+        elif header["status"] in LIVE_STATUSES and header["deployment_state"] not in HANDOFF_TERMINAL_DEPLOYMENT:
             headers[rel] = header
     return headers, unreadable
 
@@ -183,7 +188,11 @@ def _norm(rel: object) -> str | None:
     return rel.replace("\\", "/") if isinstance(rel, str) and rel else None
 
 
-def run_claims(worktree_root: str, headers: dict[str, BatonHeader]) -> dict[str, list[Evidence]]:
+def run_claims(
+    worktree_root: str,
+    headers: dict[str, BatonHeader],
+    plans: PlanDeliveryCache | None = None,
+) -> dict[str, list[Evidence]]:
     """Run evidence per baton rel: the warp runs that name it, and how far each got.
 
     A run joins a baton through its `run-baton.json` `baton`, through its `run.json` `sizing_rel`
@@ -192,6 +201,10 @@ def run_claims(worktree_root: str, headers: dict[str, BatonHeader]) -> dict[str,
     `terminal_sha`, `ended` for a close-job without one, `live` for no close-job. Reads nothing
     unless some baton is a spinoff or non-open; a close-job is read only for a run that joined,
     so `claimed_batons` adds batons only to runs already joined to another.
+
+    A committed run is `done` only when its close-job `plan_rel` names a delivered plan (status
+    terminal, every dispatchable row coded), and its `ship_ref` is that plan's last coded commit;
+    a planning run, or a close-job with no `plan_rel`, is never done.
     """
     if not any(is_spinoff_kind(h.get("kind")) or h["status"] != "open" for h in headers.values()):
         return {}
@@ -237,13 +250,22 @@ def run_claims(worktree_root: str, headers: dict[str, BatonHeader]) -> dict[str,
             path = f"{_JOBS_REL}/{job_name}"
             sha = job.get("terminal_sha") if job else None
             status = RUN_COMMITTED if isinstance(sha, str) and _FULL_SHA.fullmatch(sha) else RUN_ENDED
+        done, ship_ref = False, None
+        plan_rel = _norm(job.get("plan_rel")) if job else None
+        if status == RUN_COMMITTED and plan_rel:
+            if plans is None:
+                plans = PlanDeliveryCache(worktree_root)
+            delivery = plans.get(plan_rel)
+            if delivery is not None and delivery.delivered:
+                done, ship_ref = True, delivery.ship_ref
         for baton, field in joins.items():
             out.setdefault(baton, []).append({
                 "class": EvidenceClass.RUN.value,
                 "field": field,
                 "target_path": path,
                 "target_status": status,
-                "done": status == RUN_COMMITTED,
+                "done": done,
+                "ship_ref": ship_ref,
             })
     return out
 
