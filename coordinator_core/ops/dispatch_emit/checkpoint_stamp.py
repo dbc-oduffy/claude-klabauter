@@ -13,7 +13,7 @@ from __future__ import annotations
 import hashlib
 import re
 from pathlib import Path
-from typing import NamedTuple, Optional
+from typing import Mapping, NamedTuple, Optional
 
 CHECKPOINT_SUBJECT = re.compile(r"^checkpoint\(wave [^)]*\): \d+ rows? — (?P<ids>.+)$")
 CHECKPOINT_PLAN_LINE = re.compile(r"^Checkpoint-Plan: (?P<v>\S.*?)\s*$", re.M)
@@ -175,6 +175,64 @@ def rows_landed_at_head(repo_root: Path, plan_rel: str, wanted: frozenset) -> fr
         repo_root, plan_rel, head, frozenset(wanted), floor_epoch=floor, cap=_HEAD_WALK_CAP
     )
     return frozenset().union(*walk.landed.values())
+
+
+def inventory_family_landed(
+    repo_root: Path,
+    inventory_dir_rel: str,
+    family_base: str,
+    item_rows: Mapping[str, tuple],
+    stop_sha: Optional[str],
+) -> dict:
+    """``{(source plan rel, chunk id): checkpoint sha}`` for the chunks that checkpoints of one
+    inventory family landed, newest checkpoint winning.
+
+    One in-process first-parent walk from HEAD, ended at ``stop_sha`` or ``_HEAD_WALK_CAP``. A
+    checkpoint counts when its ``Checkpoint-Plan`` is a minted spine
+    ``<inventory_dir_rel>/<family_base>[-tN][-pN].spine.md``; ``<item>.<chunk>`` maps through
+    ``item_rows[item][0]``, a bare ``<item>`` through ``item_rows[item]``, and an item absent from
+    ``item_rows`` is skipped. Gate-owed and stop-rule ids, stamp commits and ``(process files)``
+    halves land nothing. Trap: item ids repeat across inventories, so the family regex anchors
+    on ``family_base``.
+    """
+    if not item_rows or not family_base:
+        return {}
+    from coordinator_core.git.commit_walk import commit_meta
+    from coordinator_core.git.git_dir import resolve_git_common_dir
+    from coordinator_core.git.git_state import head_sha
+
+    head = head_sha(repo_root)
+    if not head:
+        return {}
+    spine = re.compile(
+        re.escape(f"{inventory_dir_rel.replace(chr(92), '/').rstrip('/')}/{family_base}")
+        + r"(?:-t\d+)?(?:-p\d+)?\.spine\.md"
+    )
+    common_dir = resolve_git_common_dir(Path(repo_root))
+    landed: dict = {}
+    read = 0
+    sha: Optional[str] = head
+    while sha is not None and read < _HEAD_WALK_CAP:
+        if stop_sha and sha == stop_sha:
+            break
+        meta = commit_meta(common_dir, sha)
+        if meta is None:
+            break
+        read += 1
+        message = meta.get("message") or ""
+        cp = None if is_stamp_commit(message) else parse_checkpoint(message)
+        if cp is not None and spine.fullmatch(cp.plan_rel):
+            if not is_process_half((message.splitlines() or [""])[0]):
+                for ident in cp.row_ids - cp.gate_owed - cp.stop_rule:
+                    item, dot, chunk = ident.partition(".")
+                    target = item_rows.get(item)
+                    if target is None:
+                        continue
+                    key = (target[0], chunk) if dot else (target[0], target[1])
+                    landed.setdefault(key, sha)
+        parents = meta.get("parents") or []
+        sha = parents[0] if parents else None
+    return landed
 
 
 def _plan_state(worktree_root: Path, rel: str, sha: str, data: bytes) -> str:

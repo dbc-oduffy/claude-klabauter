@@ -147,7 +147,7 @@ import posixpath
 import re
 from pathlib import Path
 from types import MappingProxyType
-from typing import NamedTuple, Optional
+from typing import Mapping, NamedTuple, Optional
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -209,6 +209,9 @@ _UNDECLARED_GATE_KEY = "awaiting_gate"
 
 
 _TERMINAL_NON_CODED = NON_DISPATCHABLE_DISPOSITIONS - {"coded"}
+
+#: ``plan_cache`` slot carrying ``read_spine``'s ``landed_plan_chunks`` into ``resolve_plan_edge``.
+_LANDED_PLAN_CHUNKS_KEY = "landed-plan-chunks"
 
 
 def _repo_root_of(plan_path) -> Optional[Path]:
@@ -383,6 +386,8 @@ def resolve_plan_edge(
         if disposition == "coded"
         else f"depends_on_plan {label}: predecessor not yet coded"
     )
+    if hold is not None and (plan_cache.get(_LANDED_PLAN_CHUNKS_KEY) or {}).get((rel, chunk)) is not None:
+        hold = None
     if hold is not None and chunk in _checkpoint_landed(repo_root, rel, target, rows_by_id, plan_cache):
         hold = None
     return PlanEdgeResolution(named, hold)
@@ -1015,8 +1020,14 @@ def read_spine(
     schema_preflight: bool = True,
     cleared_gate_owners: frozenset = frozenset(),
     in_run_plan_chunks: frozenset = frozenset(),
+    landed_plan_chunks: Optional[Mapping[tuple, str]] = None,
 ) -> list[EmitterRow]:
     """Read `plan_path`'s task-spine and return normalized ``EmitterRow`` objects.
+
+    ``landed_plan_chunks`` maps ``(repo-relative plan path, chunk id)`` to the checkpoint sha
+    that landed it. An ``open`` row of this plan keyed there is excluded as
+    ``checkpoint-landed`` and counts as satisfied, so its in-plan dependents are not held;
+    a ``depends_on_plan`` chunk edge onto a keyed pair resolves unheld. ``None`` is empty.
 
     ``in_run_plan_chunks`` names ``(repo-relative plan path, chunk id)`` pairs minted in
     the same run: a row-level ``depends_on_plan`` chunk edge onto one of them orders
@@ -1306,6 +1317,16 @@ def read_spine(
     deferred_ids: set[str] = set()
     plan_edge_root: Optional[Path] = None
     plan_edge_cache: dict = {}
+    landed_map = dict(landed_plan_chunks or {})
+    own_plan_rel: Optional[str] = None
+    if landed_map:
+        plan_edge_cache[_LANDED_PLAN_CHUNKS_KEY] = landed_map
+        _own_root = _repo_root_of(plan_path)
+        if _own_root is not None:
+            try:
+                own_plan_rel = Path(plan_path).resolve().relative_to(_own_root.resolve()).as_posix()
+            except ValueError:
+                own_plan_rel = None
     plan_level_edges = frontmatter_plan_edges(source)
     if plan_level_edges or any(
         isinstance(raw, dict) and raw.get("depends_on_plan") for raw in raw_rows
@@ -1369,9 +1390,15 @@ def read_spine(
                 em_discharged = (
                     entry.get("recorded_at") if isinstance(entry, dict) else None
                 ) or "(no timestamp)"
+        own_landed_sha = (
+            landed_map.get((own_plan_rel, raw.get("id")))
+            if own_plan_rel is not None and disposition in (None, "open")
+            else None
+        )
         plan_hold = None
         if not (
             disposition in NON_DISPATCHABLE_DISPOSITIONS
+            or own_landed_sha is not None
             or deferred is True
             or em_performed
         ):
@@ -1393,6 +1420,8 @@ def read_spine(
             _reason = None
             if disposition in NON_DISPATCHABLE_DISPOSITIONS:
                 _reason = ("disposition", "disposition: %s" % disposition)
+            elif own_landed_sha is not None:
+                _reason = ("checkpoint-landed", "landed by checkpoint %s" % str(own_landed_sha)[:10])
             elif _has_uncleared_execution_gate(raw, tuple(frontmatter_gates.get(raw.get("id"), ()))):
                 # Ahead of deferred/em-performed/operator: a gated row of any
                 # mode must reach the gate ledger (StageManifest.gated).
@@ -1473,7 +1502,12 @@ def read_spine(
                     {"id": raw.get("id"), "reason": _reason[0], "detail": _reason[1]}
                 )
 
-        if disposition in NON_DISPATCHABLE_DISPOSITIONS or memo_delivered or em_discharged is not None:
+        if (
+            disposition in NON_DISPATCHABLE_DISPOSITIONS
+            or own_landed_sha is not None
+            or memo_delivered
+            or em_discharged is not None
+        ):
             satisfied_ids.add(raw.get("id"))
         elif em_performed:
             # Not dispatched, and not done: an open EM row (a premise probe, a

@@ -187,6 +187,12 @@ _LIVE_DISPOSITION_PREFIXES = ("in_progress", "queued", "pending")
 #: conflating the two was the exact trap the issue names ("routing out a
 #: chunk whose only deps were already-fixed").
 _BLOCKING_CLOSED_DISPOSITION_PREFIXES = ("routed-out", "routed out")
+#: Trap: mise-en-place tells a scout to write `routed-out: <reason>` for ANY
+#: deferral, so an in-set ordering deferral arrives spelled like a premise
+#: withdrawal. A `next tranche` stamp is a deferral the engine now orders
+#: itself (`depends_on_plan` sequencing), so it reads LIVE; every other
+#: `routed-out` reason keeps blocking. Matched before the blocking prefixes.
+_TRANCHE_DEFERRAL_PREFIXES = ("routed-out: next tranche", "routed out: next tranche")
 #: The closed-but-satisfied vocabulary this module recognizes by name (see
 #: module docstring's disposition column and `_resolve_dep_kinds`'s own
 #: docstring for the free-text examples this set is drawn from). A
@@ -423,7 +429,7 @@ def _is_live_disposition(raw: str) -> bool:
     instead, closing the vocabulary-drift hole this function's docstring
     used to flag as deliberate."""
     text = raw.strip().lower()
-    return any(text.startswith(prefix) for prefix in _LIVE_DISPOSITION_PREFIXES)
+    return text.startswith(_LIVE_DISPOSITION_PREFIXES + _TRANCHE_DEFERRAL_PREFIXES)
 
 
 def _strip_backtick(cell: str) -> str:
@@ -952,11 +958,47 @@ class _LandedSpine:
     would re-run landed work."""
 
 
+def _family_landed_map(
+    chunk_rows: List[Dict[str, str]], inventory_path: Optional[Path]
+) -> Dict[Tuple[str, str], str]:
+    """`{(source plan rel, chunk id): checkpoint sha}` for chunks that checkpoints of this
+    inventory's family landed since the base record's `start_sha`: one in-process walk per mint.
+    Empty without an `inventory_path`, a git HEAD, or any plan-sourced item."""
+    if inventory_path is None:
+        return {}
+    from coordinator_core.ops.dispatch_emit.checkpoint_stamp import inventory_family_landed
+
+    resolved = inventory_path.resolve()
+    root = resolved.parents[2]  # Trap: assumes `<root>/state/<dir>/<inv>.md`; a shallower path mis-roots.
+    item_rows: Dict[str, Tuple[str, str]] = {}
+    for row in chunk_rows:
+        spec_path = _strip_backtick(row["spec path"])
+        if not spec_path:
+            continue
+        try:
+            rel = _resolve_spec_plan_path(inventory_path, spec_path).resolve().relative_to(root).as_posix()
+        except ValueError:
+            continue
+        row_id = _strip_backtick(row["id"])
+        item_rows[row_id] = (rel, _bare_plan_row_id(row_id))
+    if not item_rows:
+        return {}
+    family_base = inventory_family_base(inventory_path)
+    base_record = resolved.parent / f"{family_base}.md"
+    stop_sha = None
+    if base_record.is_file():
+        stop_sha = read_frontmatter_field(str(base_record), "start_sha") or None
+    return inventory_family_landed(
+        root, resolved.parent.relative_to(root).as_posix(), family_base, item_rows, stop_sha
+    )
+
+
 def _plan_sub_rows(
     inventory_path: Optional[Path],
     spec_path: str,
     spine_cache: Dict[Path, object],
     in_run: frozenset = frozenset(),
+    landed: Optional[Dict[Tuple[str, str], str]] = None,
 ):
     """`spec_path` (a Chunk-table row's spec cell) -> the LIST of dispatchable
     ``EmitterRow`` objects `spine_read.read_spine` derives from it, or
@@ -988,10 +1030,12 @@ def _plan_sub_rows(
     if plan_path not in spine_cache:
         exclusions: list = []
         try:
-            rows = read_spine(plan_path, exclusions=exclusions, in_run_plan_chunks=in_run)
+            rows = read_spine(
+                plan_path, exclusions=exclusions, in_run_plan_chunks=in_run, landed_plan_chunks=landed
+            )
         except (OSError, SpineReadError):
             rows = None
-        held = [e for e in exclusions if e.get("reason") != "disposition"]
+        held = [e for e in exclusions if e.get("reason") not in ("disposition", "checkpoint-landed")]
         if rows == [] and exclusions and not held:
             spine_cache[plan_path] = _LandedSpine()
         elif rows == [] and held:
@@ -1007,6 +1051,7 @@ def _in_run_plan_chunks(
     live: List[Tuple[str, Dict[str, str], List[str]]],
     inventory_path: Optional[Path],
     plan_cache: Dict[Path, Dict[str, dict]],
+    landed: Optional[Dict[Tuple[str, str], str]] = None,
 ) -> Dict[Tuple[str, str], str]:
     """`{(repo-relative plan path, chunk id): minted id}` for every open,
     dispatchable chunk of a whole-plan item in this run -- what a same-run
@@ -1035,7 +1080,8 @@ def _in_run_plan_chunks(
         out[(rel, "*")] = row_id
         for chunk, raw in raw_rows.items():
             if (
-                with_canonical_disposition(raw).get("disposition") in NON_DISPATCHABLE_DISPOSITIONS
+                (rel, chunk) in (landed or {})
+                or with_canonical_disposition(raw).get("disposition") in NON_DISPATCHABLE_DISPOSITIONS
                 or raw.get("deferred") is True
                 or raw.get("deferred_until")
                 or raw.get("execution_mode") == "operator"
@@ -1056,6 +1102,7 @@ def mint_rows(
     withheld_rows_out: Optional[Dict[str, int]] = None,
     accounting_out: Optional[Dict[str, str]] = None,
     bound_out: Optional[Dict[str, set]] = None,
+    landed_chunks_out: Optional[Dict[str, str]] = None,
 ) -> List[dict]:
     """`## Chunk table` rows (as `parse_chunk_table` returns) -> a list of
     schema-valid plan-tasks row dicts, LIVE rows only. See module docstring's
@@ -1090,6 +1137,10 @@ def mint_rows(
     `bound_out`, when given, is filled `{dependent item id: {predecessor item
     ids}}` for every `depends_on_plan` edge (chunk or status form) resolved
     in-run: what `select_tranche` binds into one tranche unit.
+
+    `landed_chunks_out`, when given, is filled `{<item>.<chunk>: "checkpoint-landed
+    (<sha10>)"}` for each open plan chunk a checkpoint of this inventory's family
+    landed: done for emission, minted nowhere, never holding a dependent.
 
     `accounting_out`, when given, is filled `{item id: reason}` for EVERY item
     that mints no row: routed out (its own disposition text, or `dependency X
@@ -1168,7 +1219,8 @@ def mint_rows(
         live.append((row_id, row, writes))
 
     spine_cache: Dict[Path, object] = {}
-    in_run_map = _in_run_plan_chunks(live, inventory_path, plan_cache)
+    family_landed = _family_landed_map(chunk_rows, inventory_path)
+    in_run_map = _in_run_plan_chunks(live, inventory_path, plan_cache, family_landed)
     withheld_items: Dict[str, str] = {}
     minted: List[dict] = []
     preceding_ids: set = set()
@@ -1261,11 +1313,27 @@ def mint_rows(
 
         sub_rows = (
             _plan_sub_rows(
-                inventory_path, spec_path, spine_cache, frozenset(in_run_map)
+                inventory_path, spec_path, spine_cache, frozenset(in_run_map), family_landed
             )
             if spec_path
             else None
         )
+        if family_landed and landed_chunks_out is not None and spec_path and sub_rows is not None:
+            raw_ids = _plan_raw_rows_by_id(inventory_path, spec_path, plan_cache)
+            if row_id not in raw_ids and _bare_plan_row_id(row_id) not in raw_ids:
+                try:
+                    plan_rel = (
+                        _resolve_spec_plan_path(inventory_path, spec_path)
+                        .resolve()
+                        .relative_to(inventory_path.resolve().parents[2])
+                        .as_posix()
+                    )
+                except ValueError:
+                    plan_rel = ""
+                for chunk, raw in raw_ids.items():
+                    sha = family_landed.get((plan_rel, chunk))
+                    if sha and with_canonical_disposition(raw).get("disposition") not in NON_DISPATCHABLE_DISPOSITIONS:
+                        landed_chunks_out[f"{row_id}.{chunk}"] = f"checkpoint-landed ({sha[:10]})"
         if isinstance(sub_rows, _LandedSpine):
             raw_ids = _plan_raw_rows_by_id(inventory_path, spec_path, plan_cache)
             if row_id in raw_ids or _bare_plan_row_id(row_id) in raw_ids:
