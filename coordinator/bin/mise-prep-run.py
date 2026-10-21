@@ -68,8 +68,12 @@ RESIDUE WORKFLOW. After the report rows and the seam-fix reply exist (dry run or
 `workflows/mise-prep-residue.mjs` with those args (`workflow.bind_args`), validates it
 (`workflow.validate`) and writes `state/mise-workflows/<runId>.residue.mjs` plus its receipt, then
 prints a `Workflow({scriptPath})` line for the EM to fire (`--dry-run` still writes the script
-and receipt: it withholds stamps, not files). Nothing is fired from here; `--json`
-carries `residueWorkflow` (repo-relative path or null). A bind or validate refusal is exit 2, taken
+and receipt: it withholds stamps, not files). A script over the Workflow byte cap is split into
+`<runId>-pN.residue.mjs` parts, each a complete args object, one printed line each, `apmItems` in
+part 1 only. The per-plan writes-collision findings files the args reference by `seamRef` sit in
+`state/mise-workflows/<runId>.seam/`, written under `--dry-run` too. Nothing is fired from here;
+`--json` carries `residueWorkflow` (repo-relative path of part 1, or null),
+`residueWorkflowParts` (every part) and `residueFindings` (findings-file count). A bind or validate refusal is exit 2, taken
 only AFTER the full report prints (`--json`: `residueWorkflow: null` plus `residueError`), because
 the stamps are already written and the report is the record of which plans they covered.
 
@@ -208,13 +212,21 @@ _RESIDUE_SOURCE_NAME = "mise-prep-residue.mjs"
 _RESIDUE_DIR = ("state", "mise-workflows")
 
 
-def _emit_residue(repo_root: Path, rows: list[dict], seam_fix: dict) -> Path | None:
-    """Build, bind, validate and write the residue workflow for this round; `None` when no
+def _bound_size(script: str) -> int:
+    return len(script.encode("utf-8"))
+
+
+def _emit_residue(repo_root: Path, rows: list[dict], seam_fix: dict) -> tuple[list[Path], int]:
+    """Build, bind, validate and write the residue workflow for this round: `([], 0)` when no
     plan needs authoring and no census or seam-fix item needs a ruling.
 
-    Contract: writes `state/mise-workflows/<runId>.residue.mjs` and its emission receipt; fires
-    nothing, spawns nothing of its own. Raises `ValueError` on a bind or validate refusal, so the
-    caller exits 2 rather than printing a path to a script that would not run.
+    Contract: returns `(part paths, findings-file count)`. Writes the per-plan findings files
+    under `state/mise-workflows/<runId>.seam/`, then `<runId>.residue.mjs` (one part) or
+    `<runId>-pN.residue.mjs` (each at most `emit._WORKFLOW_SCRIPT_BYTE_CAP` bytes, `apmItems` in
+    part 1 only), each with its emission receipt; fires nothing, spawns nothing of its own.
+    Raises `ValueError` on a bind or validate refusal or a single over-cap batch, after removing
+    every file it wrote, so the caller exits 2 rather than printing a path to a script that
+    would not run.
     """
     try:
         import lib  # noqa: F401 -- bootstraps coordinator/bin/lib onto sys.path
@@ -241,29 +253,99 @@ def _emit_residue(repo_root: Path, rows: list[dict], seam_fix: dict) -> Path | N
         apm_model=emit.resolve_agent_model(mise_residue.APM_AGENT_TYPE),
     )
     if not mise_residue.has_work(args):
-        return None
+        return [], 0
 
+    cap = emit._WORKFLOW_SCRIPT_BYTE_CAP
     source = Path(mise_residue.__file__).resolve().parent / "workflows" / _RESIDUE_SOURCE_NAME
-    script = _invoke(
-        repo_root, "workflow.bind_args", {"script_path": str(source), "args": args}
-    ).get("script")
-    if not isinstance(script, str) or not script:
-        raise ValueError("workflow.bind_args returned no script text")
-
     out_dir = repo_root.joinpath(*_RESIDUE_DIR)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    path = out_dir / f"{run_id}.residue.mjs"
-    path.write_text(script, encoding="utf-8", newline="\n")
+    written: list[Path] = []
 
-    verdict = _invoke(repo_root, "workflow.validate", {"script_path": str(path)})
-    if not verdict.get("ok"):
-        messages = "; ".join(str(f.get("message")) for f in verdict.get("findings") or [])
-        raise ValueError(f"workflow.validate refused {path.name}: {messages}")
+    def cleanup() -> None:
+        for f in written:
+            f.unlink(missing_ok=True)
+            f.with_name(f.name + ".emitted.json").unlink(missing_ok=True)
+        for d in {f.parent for f in written if f.parent != out_dir}:
+            try:
+                d.rmdir()
+            except OSError:
+                pass
 
-    _write_emission_receipt(
-        path, None, {}, extras={"batches": len(args["batches"]), "apmItems": len(args["apmItems"])}
-    )
-    return path
+    def bind(part_args: dict) -> str:
+        script = _invoke(
+            repo_root, "workflow.bind_args", {"script_path": str(source), "args": part_args}
+        ).get("script")
+        if not isinstance(script, str) or not script:
+            raise ValueError("workflow.bind_args returned no script text")
+        return script
+
+    parts: list[Path] = []
+    try:
+        findings = mise_residue.seam_ref_texts(rows, run_id)
+        for rel, text in findings.items():
+            target = repo_root / rel
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(text, encoding="utf-8", newline="\n")
+            written.append(target)
+
+        batches = args["batches"]
+        scripts: list[tuple[dict, str]] = []
+        start = 0
+        while start < len(batches) or (not scripts and not batches):
+            part_apm = args["apmItems"] if not scripts else []
+            rest = len(batches) - start
+
+            def part_args(k: int) -> dict:
+                return {**args, "batches": batches[start:start + k], "apmItems": part_apm}
+
+            best = None
+            if rest:
+                script = bind(part_args(rest))
+                if _bound_size(script) <= cap:
+                    best = (rest, script)
+                else:
+                    lo, hi = 1, rest - 1
+                    while lo <= hi:
+                        mid = (lo + hi) // 2
+                        script = bind(part_args(mid))
+                        if _bound_size(script) <= cap:
+                            best, lo = (mid, script), mid + 1
+                        else:
+                            hi = mid - 1
+            else:
+                script = bind(part_args(0))
+                if _bound_size(script) <= cap:
+                    best = (0, script)
+            if best is None:
+                named = ", ".join(p["plan"] for p in batches[start]["plans"]) if rest else "apmItems"
+                raise ValueError(
+                    f"residue workflow: {'batch ' + batches[start]['id'] if rest else 'part 1'} "
+                    f"({named}) alone exceeds the {cap}-byte Workflow script cap"
+                )
+            k, script = best
+            scripts.append((part_args(k), script))
+            start += k
+            if not rest:
+                break
+
+        out_dir.mkdir(parents=True, exist_ok=True)
+        for n, (part, script) in enumerate(scripts, 1):
+            name = f"{run_id}.residue.mjs" if len(scripts) == 1 else f"{run_id}-p{n}.residue.mjs"
+            path = out_dir / name
+            path.write_text(script, encoding="utf-8", newline="\n")
+            written.append(path)
+            verdict = _invoke(repo_root, "workflow.validate", {"script_path": str(path)})
+            if not verdict.get("ok"):
+                messages = "; ".join(str(f.get("message")) for f in verdict.get("findings") or [])
+                raise ValueError(f"workflow.validate refused {path.name}: {messages}")
+            _write_emission_receipt(
+                path, None, {},
+                extras={"batches": len(part["batches"]), "apmItems": len(part["apmItems"])},
+            )
+            parts.append(path)
+    except BaseException:
+        cleanup()
+        raise
+    return parts, len(findings)
 
 
 def _seam_spell(verdict: str | None) -> str | None:
@@ -661,9 +743,9 @@ def main(argv=None) -> int:
     certified = [r for r in rows if r["outcome"] in passing]
     short = [r for r in rows if r not in certified]
 
-    residue_path, residue_error = None, None
+    residue_parts, residue_findings, residue_error = [], 0, None
     try:
-        residue_path = _emit_residue(repo_root, rows, seam_fix)
+        residue_parts, residue_findings = _emit_residue(repo_root, rows, seam_fix)
     except (ValueError, OSError) as exc:
         residue_error = str(exc)
 
@@ -678,8 +760,12 @@ def main(argv=None) -> int:
                     "seam": _seam_spell(seam["verdict"]),
                     "seamFix": seam_fix,
                     "residueWorkflow": (
-                        residue_path.relative_to(repo_root).as_posix() if residue_path else None
+                        residue_parts[0].relative_to(repo_root).as_posix() if residue_parts else None
                     ),
+                    "residueWorkflowParts": [
+                        p.relative_to(repo_root).as_posix() for p in residue_parts
+                    ],
+                    "residueFindings": residue_findings,
                     **({"residueError": residue_error} if residue_error else {}),
                 },
                 indent=2,
@@ -734,14 +820,15 @@ def main(argv=None) -> int:
         for line in _missing_seam_section(rows):
             print(line)
 
-    if residue_path:
+    if residue_parts:
         sys.stdout.flush()
-        print(
-            f"\nmise-prep-run: residue workflow written — "
-            f"{residue_path.relative_to(repo_root).as_posix()}\n"
-            f'Workflow({{scriptPath: "{residue_path.as_posix()}"}})',
-            file=sys.stderr if args.json else sys.stdout,
-        )
+        for part in residue_parts:
+            print(
+                f"\nmise-prep-run: residue workflow written — "
+                f"{part.relative_to(repo_root).as_posix()}\n"
+                f'Workflow({{scriptPath: "{part.as_posix()}"}})',
+                file=sys.stderr if args.json else sys.stdout,
+            )
 
     if residue_error:
         sys.stdout.flush()
@@ -758,7 +845,7 @@ def main(argv=None) -> int:
                 "bar needs authoring, not a stamp — the classes above name where. "
                 + (
                     "Fire the residue workflow printed above, then re-run."
-                    if residue_path
+                    if residue_parts
                     else "Author it via /mise-prep, then re-run."
                 )
             )

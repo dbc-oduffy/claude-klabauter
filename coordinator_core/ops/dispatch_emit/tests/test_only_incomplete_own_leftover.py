@@ -130,7 +130,9 @@ def test_shared_dirty_path_of_two_incomplete_rows_is_carried(repo, tmp_path, cap
     assert "C2: 1 uncommitted path(s) in its own writes carried as its prior draft" in captured.err
 
 
-def test_shared_dirty_path_refuses_when_a_declarer_is_not_incomplete(repo, tmp_path, capsys):
+def test_shared_dirty_path_with_a_done_declarer_is_own_leftover(repo, tmp_path, capsys):
+    # The other declarer is a DONE sibling (neither landed nor held), so the shared path is
+    # this run's own output and the re-emit carries it instead of refusing.
     (repo / _PLAN).write_text(_plan_shared(), encoding="utf-8")
     _git(repo, "add", "-A")
     _git(repo, "commit", "-q", "-m", "plan")
@@ -138,8 +140,7 @@ def test_shared_dirty_path_refuses_when_a_declarer_is_not_incomplete(repo, tmp_p
 
     code = _emit(repo, tmp_path, "--only-incomplete", _task_output(tmp_path, ["C2"]))
 
-    assert code == cli.EXIT_DATA_ERROR
-    assert "docs/x/C2.md" in capsys.readouterr().err
+    assert code == 0, capsys.readouterr().err
 
 
 def test_guard_carries_a_done_siblings_dirty_output_as_own_leftover(repo):

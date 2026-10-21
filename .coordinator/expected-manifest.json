@@ -772,7 +772,7 @@
     "coordinator/bin/mise-census-revalidate.py": "ce6d0c050a4be993feefde296b56d4b2878bfe39",
     "coordinator/bin/mise-certify.cmd": "c774776d7c053eb145e4f575a7bada48a18bd994",
     "coordinator/bin/mise-certify.ps1": "3e319edb4e68934a8d63414e46e5c050cec6b9a3",
-    "coordinator/bin/mise-certify.py": "0183ce6ef8629ef8f77d040df30a7439b90297e9",
+    "coordinator/bin/mise-certify.py": "4bf044865de9a3c1f5279c0ed31d5a25d7ea19f4",
     "coordinator/bin/mise-prep-entry.cmd": "b73d4f19eca7bf8705ddd8dc535bfa67f2a42e36",
     "coordinator/bin/mise-prep-entry.ps1": "50a7f260553719487a1dd50aa73ae4297c880b00",
     "coordinator/bin/mise-prep-entry.py": "c411d9b1992e7120cfdc5f30a64853d6b885f41b",
@@ -781,7 +781,7 @@
     "coordinator/bin/mise-prep-gate.py": "b0d2ffba97cfce0f671202a6e1a80cb145657c35",
     "coordinator/bin/mise-prep-run.cmd": "7c942a8a8790a9ab8b204ba8cb57a07a9bcdd0f3",
     "coordinator/bin/mise-prep-run.ps1": "e5fa0e0945c35c8dcaf08842017af3c091670079",
-    "coordinator/bin/mise-prep-run.py": "aa66b1c2d2fcd0a82bb9dfe23c9129768c2d7f7a",
+    "coordinator/bin/mise-prep-run.py": "e4107ec8df697d95b814d125bb9230457e35db10",
     "coordinator/bin/mise-prep-upgrade.cmd": "44e5d8c73106099227597582031a555c85267ed9",
     "coordinator/bin/mise-prep-upgrade.py": "ef34f69ac804e746448647a96b419ee59c2fb6f3",
     "coordinator/bin/navi-singleton.cmd": "0d081c83d2cef745cb177d9b9c2b173fd33669d6",
@@ -2096,8 +2096,8 @@
     "coordinator_core/_content_root_primitive.py": "f7fcd3083855a5e1dd53c09233fbfd64f8dffdf5",
     "coordinator_core/_data_root.py": "0c7c8524f25376ae49593f11334445539dc557f9",
     "coordinator_core/_engine_landing.py": "06dbb1273f3c36fdb6be08767ec75e73c71630e7",
-    "coordinator_core/_engine_published_at": "df6bcf590e6ab4a124fb3f022405651566e5d0af",
-    "coordinator_core/_engine_stamp": "f7f27b573b16dc664647b8defc50168915ef80a1",
+    "coordinator_core/_engine_published_at": "a8ec3250c8eb6208c0b6714fb6538f784882abbf",
+    "coordinator_core/_engine_stamp": "5b666e73345e27372730beac0ab4a6960cbad926",
     "coordinator_core/_fleet_names.py": "e81fc4247611fe486697f4707b28a1a3a008f392",
     "coordinator_core/_hook_envelope.py": "d98df967471c001593ab85960dc367f5ff5da056",
     "coordinator_core/_repo_root_probe.py": "2d8edfa8cd9343436a650584da430aa87ae0397d",
@@ -4491,7 +4491,7 @@
     "coordinator_core/ops/dispatch_emit/ask_stage.py": "f202cd6d3f7b563d94c233b076befc206aac84c7",
     "coordinator_core/ops/dispatch_emit/chatty.py": "b02a96b78faa7e2f4f81bbd92231f001e8fe36a6",
     "coordinator_core/ops/dispatch_emit/checkpoint_stamp.py": "d7ac01870bf98e4fea7b2955459211d6f59ea3f4",
-    "coordinator_core/ops/dispatch_emit/cli.py": "fdb2caf626d36b68437caebfd29abfa6ab0e7116",
+    "coordinator_core/ops/dispatch_emit/cli.py": "cca9f448b4b5cd84613697fc674499df2a7baed0",
     "coordinator_core/ops/dispatch_emit/close_without_script.py": "80ab559ce2f4f4cd66379d19225130e5cfdeea00",
     "coordinator_core/ops/dispatch_emit/cloud_spawn_brief.py": "aaeb10a599c5847969407f00b7341ed6bf54839f",
     "coordinator_core/ops/dispatch_emit/commit_request.py": "5c872c2eece7f20909231d949870851f717bb940",
@@ -4993,7 +4993,7 @@
     "coordinator_core/ops/dispatch_emit/tests/test_non_done_row_holds_dependents.py": "37b336847c9562614823a81ef7a397386964821f",
     "coordinator_core/ops/dispatch_emit/tests/test_noop_row_closes_at_outside_landing.py": "4ed670058c605a0335f6794849e336d54c2ead45",
     "coordinator_core/ops/dispatch_emit/tests/test_one_turn_register_excludes_other_runs.py": "0b7c02f8d73a22f4c6be05f6d78a9fa7caaba861",
-    "coordinator_core/ops/dispatch_emit/tests/test_only_incomplete_own_leftover.py": "63755b1da3a7c928184dc7febded744660f7e224",
+    "coordinator_core/ops/dispatch_emit/tests/test_only_incomplete_own_leftover.py": "53df61db4d6220fcd56f9606c6bb2110f9290158",
     "coordinator_core/ops/dispatch_emit/tests/test_only_incomplete_review_base.py": "717b31d94a61013c19c2d64ecf422e2e0917b63b",
     "coordinator_core/ops/dispatch_emit/tests/test_only_incomplete_row_subset.py": "4cd791388010a03cb3133d9ab7ff4cdd17a8e79c",
     "coordinator_core/ops/dispatch_emit/tests/test_op.py": "31578c6924bfd213d69c400f865d965966058c58",
@@ -8615,5 +8615,5 @@
     "scripts/unstick_claude.py": "5458a0f699f1793ff9fd32295b9d0b33635f1c06"
   },
   "schema": 1,
-  "source_head": "d863098f7b07ce1461e62239db976850155b5f09"
+  "source_head": "03c00c1c9955dde12196083fc871a63ad7de6763"
 }

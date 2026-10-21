@@ -2101,6 +2101,7 @@ def main(argv: "Optional[list[str]]" = None) -> int:
                 hold_set = frozenset(params.get("hold_rows") or ())
                 landed_set = frozenset(params.get("landed_rows") or ())
                 own_rows: frozenset = frozenset()
+                done_rows: frozenset = frozenset()
                 if args.only_incomplete:
                     from coordinator_core.ops.dispatch_emit.spine_read import read_spine
                     from coordinator_core.ops.dispatch_emit.wave_map import transitive_dependents
@@ -2112,10 +2113,11 @@ def main(argv: "Optional[list[str]]" = None) -> int:
                     own_rows = frozenset(r.id for r in spine) - landed_set - held
                     incomplete = _incomplete_chunks_of(args.only_incomplete)
                     if incomplete is not None:
+                        done_rows = own_rows - incomplete
                         own_rows &= incomplete
                 regenerable_dirty = guard_against_dirty_write_set(
                     Path(args.plan), guard_root,
-                    hold=hold_set, landed=landed_set, own=own_rows,
+                    hold=hold_set, landed=landed_set, own=own_rows, done=done_rows,
                 )
                 if regenerable_dirty and "own_leftover" in regenerable_dirty:
                     regenerable_dirty = dict(regenerable_dirty)

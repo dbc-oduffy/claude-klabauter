@@ -1,10 +1,11 @@
 """mise-certify -- Phase 0 fire-time certification, both legs, one command. Writes nothing.
 
-Per plan, in the order `coordinator-content-repo coordinator/docs/wiki/lesson-triage/mise-prepped-attest.md`
+Per plan, ONE `plan.mise_certify_probe` op (a client loop, so a full set is N short ops), in the
+order `coordinator-content-repo coordinator/docs/wiki/lesson-triage/mise-prepped-attest.md`
 § "Fire-time revalidation is ONE step, not two" fixes:
 
-  1. sha leg     `prep_gate.read_stamp` -- CERTIFIED / STALE / UNSTAMPED / MALFORMED, from the
-                 recomputed `canonical_body_sha` against `mise_prepped_sha`. Spawn-free.
+  1. sha leg     CERTIFIED / STALE / UNSTAMPED / MALFORMED, from the recomputed
+                 `canonical_body_sha` against `mise_prepped_sha`. Spawn-free.
   2. census leg  `mise-census-revalidate`'s `revalidate`, run ONLY on a CERTIFIED plan: it spawns
                  per entry, and re-measuring the premises of a document that is no longer the
                  certified one spends the box on an answer nobody can use.
@@ -15,8 +16,11 @@ Exit status:
   2  the seam op errored (never a pass)
   3  usage
 
-When at least one plan is CERTIFIED, a third leg runs once over the plans given:
-`plan.seam_record` at `phase: fire`, `named_set: true`. Its result rides each row as `seam`.
+The third leg runs once over the FIRE SET only (sha CERTIFIED and census not DRIFT):
+`plan.seam_record` at `phase: fire`, `named_set: true`. Its result rides each row as `seam`; a
+row outside the set carries verdict NOT-RUN, and an empty fire set issues no op. Checking
+unstamped or stale plans spends the seam op on plans nobody is about to fire (EM ruling
+2026-10-21T18:52:18Z).
 """
 
 from __future__ import annotations
@@ -38,7 +42,8 @@ EXIT_USAGE = 3
 _FAILING_SHA = frozenset({"STALE", "MALFORMED"})
 
 
-def _prep_gate():
+def _bootstrap_engine() -> None:
+    """Put the engine on `sys.path` (env-first) before the in-tree fallback transport runs."""
     own_dir = str(Path(__file__).resolve().parent)
     if own_dir not in sys.path:
         sys.path.insert(0, own_dir)
@@ -46,18 +51,6 @@ def _prep_gate():
     import cc_invoke
 
     cc_invoke.require_engine_on_path(__file__)
-    from coordinator_core.roadmap import prep_gate
-
-    return prep_gate
-
-
-def _revalidator():
-    """The census leg, loaded from its sibling file so the two commands share one executor."""
-    path = Path(__file__).resolve().parent / "mise-census-revalidate.py"
-    spec = importlib.util.spec_from_file_location("mise_census_revalidate", path)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
 
 
 @functools.cache
@@ -83,12 +76,25 @@ def _repo_relative(plan: str, root: Path) -> str:
         return plan
 
 
+def _in_fire_set(row: dict) -> bool:
+    return row["sha"] == "CERTIFIED" and (row["census"] or {}).get("state") != "DRIFT"
+
+
 def _seam_leg(rows: list[dict], root: Path) -> None:
-    """Attach `seam` to every row. Raises `ValueError` when the op errors."""
+    """Attach `seam` to every row; the op sees the fire set only. Raises `ValueError` when the
+    op errors."""
     pr = _prep_run()
-    rel = {r["plan"]: _repo_relative(r["plan"], root) for r in rows}
-    reply = _seam_record(root, list(rel.values()))
+    fire = [r for r in rows if _in_fire_set(r)]
     for r in rows:
+        if not _in_fire_set(r):
+            census = (r["census"] or {}).get("state") or "not run"
+            r["seam"] = {"verdict": "NOT-RUN", "findings": [], "blocking": False,
+                         "reason": f"not in fire set (sha {r['sha']} / census {census})"}
+    if not fire:
+        return
+    rel = {r["plan"]: _repo_relative(r["plan"], root) for r in fire}
+    reply = _seam_record(root, list(rel.values()))
+    for r in fire:
         key = rel[r["plan"]]
         implicated = pr._seam_implicated(reply, key)
         findings = pr._seam_findings_for(reply, key)
@@ -139,25 +145,25 @@ def _attribution(repo_root: Path, since: str, timeout: int, cache: dict) -> list
 
 def certify(plan: Path, repo_root: Path, timeout: int, attribute: bool = False,
             cache: dict | None = None) -> dict:
+    """One `plan.mise_certify_probe` for `plan`; attribution stays here, on the op's census."""
     try:
-        text = plan.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError) as exc:
+        reply = _prep_run()._invoke(
+            repo_root, "plan.mise_certify_probe",
+            {"plan": _repo_relative(str(plan), repo_root), "census_timeout": timeout})
+    except ValueError as exc:
         return {"plan": str(plan), "sha": "MALFORMED", "sha_detail": str(exc), "census": None,
                 "seam": None}
-    stamp = _prep_gate().read_stamp(text)
-    row = {"plan": str(plan), "sha": stamp["state"], "census": None, "seam": None}
-    if stamp["state"] == "STALE":
-        row["sha_detail"] = f"recorded {stamp['recorded_sha']}, body {stamp['body_sha']}"
-    elif stamp["state"] == "MALFORMED":
-        row["sha_detail"] = f"stamp fields missing: {', '.join(stamp.get('missing') or [])}"
-    if stamp["state"] == "CERTIFIED":
-        row["census"] = _revalidator().revalidate(plan, repo_root, timeout)
-        since = str(stamp.get("recorded_at") or "").strip()
-        if attribute and since:
-            cache = {} if cache is None else cache
-            for e in row["census"]["entries"]:
-                if e["state"] == "DRIFT":
-                    e["attribution"] = list(_attribution(repo_root, since, timeout, cache))
+    row = {"plan": str(plan), "sha": reply["sha"], "census": reply.get("census"), "seam": None}
+    if reply.get("sha_detail"):
+        row["sha_detail"] = reply["sha_detail"]
+    if reply.get("process_ms") is not None:
+        row["processMs"] = reply["process_ms"]
+    since = str((reply.get("stamp") or {}).get("recorded_at") or "").strip()
+    if attribute and since and row["census"]:
+        cache = {} if cache is None else cache
+        for e in row["census"]["entries"]:
+            if e["state"] == "DRIFT":
+                e["attribution"] = list(_attribution(repo_root, since, timeout, cache))
     return row
 
 
@@ -201,6 +207,9 @@ def _print_seam(row: dict) -> None:
     seam = row.get("seam")
     if seam is None:
         return
+    if seam["verdict"] == "NOT-RUN":
+        print(f"  seam    not run ({seam['reason']})")
+        return
     print(f"  seam    {seam['verdict']}")
     pr = _prep_run()
     for f in seam["findings"]:
@@ -220,6 +229,7 @@ def main(argv: list[str]) -> int:
     except SystemExit as exc:
         return EXIT_USAGE if exc.code else EXIT_OK
 
+    _bootstrap_engine()
     root = Path(args.repo_root).resolve()
     cache: dict = {}
     rows = [certify(Path(p) if Path(p).is_absolute() else root / p, root, args.timeout,
