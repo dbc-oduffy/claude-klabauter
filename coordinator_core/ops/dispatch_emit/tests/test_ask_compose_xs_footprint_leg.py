@@ -53,3 +53,10 @@ def test_non_xs_or_unknown_arm_composes_no_footprint_leg(arm):
     for value in ("m_plus", "s", None):
         arm(value)
         assert "label: 'footprint'" not in _compose(writes=())
+
+
+def test_footprint_prompt_is_a_quoted_string_literal(arm):
+    arm("xs")
+    script = _compose(writes=(), baton={"path": "state/handoffs/b.md", "deliverable_id": "dlv-1"})
+    call = script[script.index("const _fp = await agent(") + len("const _fp = await agent(") :]
+    assert call[:2] in ("('", '("', "(`"), call[:80]

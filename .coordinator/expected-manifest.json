@@ -2095,8 +2095,8 @@
     "coordinator_core/_content_root_primitive.py": "f7fcd3083855a5e1dd53c09233fbfd64f8dffdf5",
     "coordinator_core/_data_root.py": "0c7c8524f25376ae49593f11334445539dc557f9",
     "coordinator_core/_engine_landing.py": "06dbb1273f3c36fdb6be08767ec75e73c71630e7",
-    "coordinator_core/_engine_published_at": "f5a8aa0178db31a61e99a4ee0a0e5ec116927792",
-    "coordinator_core/_engine_stamp": "6aeddfa9bbbaf4bc3e54ea2e5d5622b4353c5f73",
+    "coordinator_core/_engine_published_at": "a99715a38db15ab496c8cba365beacbeb57721f4",
+    "coordinator_core/_engine_stamp": "fc8d4ab795fa5b12498800fe5c4983d4ac004d10",
     "coordinator_core/_fleet_names.py": "e81fc4247611fe486697f4707b28a1a3a008f392",
     "coordinator_core/_hook_envelope.py": "d98df967471c001593ab85960dc367f5ff5da056",
     "coordinator_core/_repo_root_probe.py": "2d8edfa8cd9343436a650584da430aa87ae0397d",
@@ -4474,7 +4474,7 @@
     "coordinator_core/ops/dispatch_emit/agent_route.py": "2ffe505fd425740ff4acc300138489898b4b0f8b",
     "coordinator_core/ops/dispatch_emit/agent_sidecar.py": "0716c951f5c45355aeb1a3339c0b1b8a9b9b6f5f",
     "coordinator_core/ops/dispatch_emit/ask_brief.py": "cf2be379e4f266cf49a5e5287ae4fe3ee6ee8a5c",
-    "coordinator_core/ops/dispatch_emit/ask_compose.py": "93b63306dc5cc5f4512637a2cd0a589a8ac37901",
+    "coordinator_core/ops/dispatch_emit/ask_compose.py": "19d7aaa8920d91bf41fca46b5c36fa3519d3593e",
     "coordinator_core/ops/dispatch_emit/ask_contract.py": "88a169e0e45958fc234a484c5ebd94287ebdc869",
     "coordinator_core/ops/dispatch_emit/ask_fanout.py": "b7a1049d4762aa33fb765f14fb1b5ff74d9a5855",
     "coordinator_core/ops/dispatch_emit/ask_fanout_contract.py": "1ee9c3264533df07dbf8cd79ae0d86ce4277748e",
@@ -4699,7 +4699,7 @@
     "coordinator_core/ops/dispatch_emit/tests/test_ask_compose_usage_limit.py": "7b8e20b79ae29d46114fd2b8dc5d8c0e4431c23a",
     "coordinator_core/ops/dispatch_emit/tests/test_ask_compose_verify_only_skips_review.py": "14d12b4aebd1e7d6d0f88b0f135eceacfd4ed31a",
     "coordinator_core/ops/dispatch_emit/tests/test_ask_compose_wave_barrier.py": "1a90049925eb2b87f57ff5efc2cd84ccc14c422f",
-    "coordinator_core/ops/dispatch_emit/tests/test_ask_compose_xs_footprint_leg.py": "64718b4b287fe0c0949255819807ef7b59a8fe83",
+    "coordinator_core/ops/dispatch_emit/tests/test_ask_compose_xs_footprint_leg.py": "60be159ab3e5edb87e902fcca57a7fd2797217fa",
     "coordinator_core/ops/dispatch_emit/tests/test_ask_contract.py": "7aba40da2d20b4566e641ac0c2357f847eeb5a39",
     "coordinator_core/ops/dispatch_emit/tests/test_ask_contract_run_baton.py": "48cc3010f30b5a68ced3c4b9f75bed9eed626cd4",
     "coordinator_core/ops/dispatch_emit/tests/test_ask_fanout.py": "90d3770949980dd171c823a78949ed51d75b587b",
@@ -8575,5 +8575,5 @@
     "scripts/unstick_claude.py": "5458a0f699f1793ff9fd32295b9d0b33635f1c06"
   },
   "schema": 1,
-  "source_head": "9d757476316a23db97c84b5cceeb22ac47a1182d"
+  "source_head": "97986acaace4e61ccd3aeeaec50e0826cc067006"
 }

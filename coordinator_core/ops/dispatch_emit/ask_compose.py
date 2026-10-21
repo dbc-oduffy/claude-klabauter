@@ -1846,7 +1846,7 @@ def compose_ask_script(
         # An existing sizing has no scout to close for it, so an XS one with no writes gets its footprint here.
         if footprint_owed(arm=known_arm, writes=writes, sized_in_run=False):
             fp_call = _agent(
-                footprint_prompt(sizing_rel=sizing_rel, baton_path=baton["path"] if baton else None),
+                _lit(footprint_prompt(sizing_rel=sizing_rel, baton_path=baton["path"] if baton else None)),
                 label="footprint", phase="gate", agent_type=SIZING_SCOUT_AGENT_TYPE,
                 schema=FOOTPRINT_SCHEMA, run_id=run_id,
             )
