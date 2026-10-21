@@ -10,9 +10,13 @@ mark rides `em_analysis.intake` instead.
 
 from __future__ import annotations
 
-from typing import Mapping, Optional
+import re
+from typing import Iterable, Mapping, Optional
 
 EM_BRIEF_KEY = "em_brief"
+EM_CONTEXT_PATHS_KEY = "em_context_paths"
+EM_CONTEXT_MARKER = "EM context (not the PM's words):"
+_LINE_REF = re.compile(r":\d+$")
 INTAKE_MARK_KEY = "intake"
 INTAKE_MARK = "sizing.intake_mint"
 
@@ -30,6 +34,35 @@ def read_em_brief(doc: Mapping) -> Optional[str]:
     if not isinstance(value, str):
         return None
     return value.strip() or None
+
+
+def with_em_context(brief: Optional[str], text: str) -> str:
+    """`brief` with the EM's context appended under its own marker; the ask text is never touched."""
+    block = f"{EM_CONTEXT_MARKER}\n{text.strip()}"
+    return f"{brief}\n\n{block}" if brief else block
+
+
+def is_path_shaped(item: str) -> bool:
+    """A single whitespace-free token carrying a separator or an extension; anything else is prose.
+    A URL or a `file:LINE` reference names no file on disk, so it is prose: the emit refuses a context path that is missing."""
+    text = item.strip()
+    if not text or any(ch.isspace() for ch in text) or "://" in text or _LINE_REF.search(text):
+        return False
+    return "/" in text or "\\" in text or "." in text
+
+
+def em_context_paths_value(paths: Iterable[str]) -> Optional[str]:
+    """The stripped non-empty paths, one per line, as the single string the sizing schema admits; None when none remain."""
+    kept = [p.strip() for p in paths if isinstance(p, str) and p.strip()]
+    return "\n".join(kept) or None
+
+
+def read_em_context_paths(doc: Mapping) -> tuple[str, ...]:
+    """The context paths on `em_analysis.em_context_paths`; () when the key is absent or not a string."""
+    value = _em_analysis(doc).get(EM_CONTEXT_PATHS_KEY)
+    if not isinstance(value, str):
+        return ()
+    return tuple(line.strip() for line in value.split("\n") if line.strip())
 
 
 def is_intake(doc: Mapping) -> bool:

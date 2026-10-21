@@ -10,6 +10,8 @@ write-once supersession marker. ``AskSlice.source`` is a slice's own ask source 
 ``SLICE_SOURCE_KEY`` is the ``em_analysis`` key a relayed slice sizing carries; ``slice_ask_source``
 reads it back. ``NOT_FIRED_REASONS`` / ``PLAN_BLITZ_UNFIRED_BUCKETS`` / ``not_fired_entry`` /
 ``not_fired_refusal`` are the roadmap fan-out's unfired-plan report vocabulary.
+``ASKS_ITEM_KEYS`` / ``unknown_keys_refusal`` are the accepted ``asks[]`` entry keys and the sentence
+refusing a key outside an accepted set.
 Reference: docs/reference/multi-ask-submission-contract.md.
 """
 
@@ -18,7 +20,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from pathlib import PurePosixPath
-from typing import Any, Callable, Mapping, Optional, Sequence
+from typing import Any, Callable, Iterable, Mapping, Optional, Sequence
 
 from coordinator_core.session.record_homes import home_dir
 
@@ -284,6 +286,29 @@ def not_fired_refusal(value: Any) -> Optional[str]:
             return f"{NOT_FIRED_KEY}[{i}] reason {item.get('reason')!r} is not in NOT_FIRED_REASONS"
         if not any(isinstance(item.get(k), str) and item.get(k) for k in ("plan", "baton")):
             return f"{NOT_FIRED_KEY}[{i}] needs a non-empty str plan or baton"
+    return None
+
+
+ASKS_ITEM_KEYS: tuple[str, ...] = (
+    "ask",
+    "source",
+    "sender",
+    "relayed_text",
+    "route_preference",
+    "em_rationale",
+    "em_context",
+    "context",
+    "label",
+    "writes",
+)
+
+
+def unknown_keys_refusal(where: str, supplied: Iterable[str], accepted: Sequence[str]) -> Optional[str]:
+    """None when every supplied key is accepted, else one sentence naming the first unknown key
+    (supplied order) and the accepted keys (declared order)."""
+    for key in supplied:
+        if key not in accepted:
+            return f"{where}: unknown key {key!r}. Accepted: {', '.join(accepted)}"
     return None
 
 

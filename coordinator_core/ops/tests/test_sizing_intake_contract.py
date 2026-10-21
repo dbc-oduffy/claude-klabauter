@@ -76,3 +76,44 @@ def test_is_intake_true_only_for_the_mints_shape():
         mutate(other)
         assert not c.is_intake(other)
     assert not c.is_intake({"route": "plan", "status": "draft"})
+
+
+def test_read_em_context_paths_splits_strips_and_drops_blanks():
+    doc = {"em_analysis": {"em_context_paths": " a.md \n\nb/c.md"}}
+    assert c.read_em_context_paths(doc) == ("a.md", "b/c.md")
+
+
+@pytest.mark.parametrize("doc", [
+    {}, {"em_analysis": {}}, {"em_analysis": {"em_context_paths": ["a.md"]}},
+    {"em_analysis": {"em_context_paths": None}}, "not a mapping",
+])
+def test_read_em_context_paths_absent_or_non_string_is_empty(doc):
+    assert c.read_em_context_paths(doc) == ()
+
+
+def test_em_context_paths_value_joins_stripped_nonblank_lines():
+    assert c.em_context_paths_value([" a.md ", "", "b/c.md"]) == "a.md\nb/c.md"
+    assert c.em_context_paths_value([]) is None
+    assert c.em_context_paths_value(["  ", ""]) is None
+
+
+def test_em_context_paths_round_trip():
+    value = c.em_context_paths_value([" a.md ", "b/c.md"])
+    assert c.read_em_context_paths({"em_analysis": {c.EM_CONTEXT_PATHS_KEY: value}}) == ("a.md", "b/c.md")
+
+
+def test_with_em_context_starts_with_marker_and_keeps_brief_first():
+    assert c.with_em_context(None, " x ") == f"{c.EM_CONTEXT_MARKER}\nx"
+    assert c.with_em_context("b", "x") == f"b\n\n{c.EM_CONTEXT_MARKER}\nx"
+    assert c.EM_CONTEXT_MARKER == "EM context (not the PM's words):"
+
+
+def test_is_path_shaped():
+    assert c.is_path_shaped("docs/a.md")
+    assert c.is_path_shaped("a\\b")
+    assert not c.is_path_shaped("a bug in x")
+    assert not c.is_path_shaped("  ")
+    assert not c.is_path_shaped("word")
+    assert not c.is_path_shaped("process_util.py:266")
+    assert not c.is_path_shaped("https://example.com/a.md")
+    assert c.is_path_shaped("C:\\repo\\a.md")

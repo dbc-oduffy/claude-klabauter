@@ -1883,7 +1883,9 @@ def _dispatch_emit(
                 ask_root, params.get("baton"), params.get("deliverable_id")
             )
             from coordinator_core.ops.dispatch_emit.sizing_fire import load_sizing as _load_ask_sizing
-            from coordinator_core.ops.sizing_intake_contract import is_intake, read_em_brief
+            from coordinator_core.ops.sizing_intake_contract import (
+                is_intake, read_em_brief, read_em_context_paths,
+            )
 
             intake_doc = _load_ask_sizing(ask_root, sizing_rel)
             sizing_doc = intake_doc
@@ -1989,7 +1991,8 @@ def _dispatch_emit(
                 ask_root,
                 brief=params.get("ask_brief"),
                 brief_file=params.get("ask_brief_file"),
-                context=params.get("ask_context") or (),
+                context=params.get("ask_context")
+                or (read_em_context_paths(intake_doc) if intake_doc is not None else ()),
                 session_id=_receipt_session_id(params),
             )
         except _ask_brief.EmBriefRefused as exc:

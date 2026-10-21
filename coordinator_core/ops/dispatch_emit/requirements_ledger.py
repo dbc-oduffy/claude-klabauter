@@ -44,6 +44,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
 )
 from coordinator_core.ops.dispatch_emit.ask_fanout_contract import slice_ask_source
 from coordinator_core.ops.dispatch_emit.request_validation import Field, validate_params
+from coordinator_core.ops.sizing_intake_contract import read_em_brief, read_em_context_paths
 from coordinator_core.session.declared_writes import declare_write
 
 GENERATES = []
@@ -696,13 +697,21 @@ def _unbound_followups(
 def _slice_entries(sizing: Mapping) -> list[tuple[str, str]]:
     """A sibling slice shares its `pm_verbatims` with every other slice, so it seeds none of them:
     its register already holds the rows the split assigned it, else its `intent` is its one row,
-    anchored `relayed` when the slice's `em_analysis.ask_source` is relayed and `ask` otherwise."""
+    anchored `relayed` when the slice's `em_analysis.ask_source` is relayed and `ask` otherwise.
+    Context stamped on the slice (`em_brief`, `em_context_paths`) is the relayer's words: it adds a
+    second row anchored `relayed` whatever the slice's own source."""
     register = sizing.get(rr.REGISTER_KEY)
     if isinstance(register, Mapping) and register.get(rr.ROWS_KEY):
         return []
     intent = sizing.get("intent")
     origin = ORIGIN_RELAYED if slice_ask_source(sizing) == ASK_SOURCE_RELAYED else ORIGIN_ASK
-    return [(intent, origin)] if isinstance(intent, str) and intent.strip() else []
+    entries = [(intent, origin)] if isinstance(intent, str) and intent.strip() else []
+    brief = read_em_brief(sizing)
+    paths = read_em_context_paths(sizing)
+    if brief or paths:
+        lines = ([brief] if brief else []) + [f"Context files: {p}" for p in paths]
+        entries.append(("\n".join(lines), ORIGIN_RELAYED))
+    return entries
 
 
 def bind(

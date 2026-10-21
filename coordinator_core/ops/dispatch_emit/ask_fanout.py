@@ -7,9 +7,12 @@ slice and the write-once parent record, and returns the frozen reply plus the re
 calls. Contract: docs/reference/multi-ask-submission-contract.md.
 
 Three arms:
-  - asks:   {asks: [{ask, source?, sender?, relayed_text?, route_preference?, em_rationale?, label?, writes?}],
+  - asks:   {asks: [{ask, source?, sender?, relayed_text?, route_preference?, em_rationale?, em_context?, context?, label?, writes?}],
             sender?, confirm_split?} -- the parent register is one row
-            (R1..Rn) per ask, each slice claims its own.
+            (R1..Rn) per ask, each slice claims its own. An entry key outside ASKS_ITEM_KEYS is
+            refused by name. An entry's `em_context` and prose `context` land on its slice sizing as
+            `em_analysis.em_brief`, its path-shaped `context` as `em_analysis.em_context_paths`
+            (one string, one path per line); the ask, intent and pm_verbatims are never touched.
   - slices: {slices: [{label, ask, rows, writes?}], parent_sizing, confirm_split?} -- the parent
             register is the parent sizing's own rows; each slice carries its rows byte for byte.
   - sizings: {sizings: [{sizing, label?, writes?, wave?, ids?, blocked_by?}], interaction_mode?,
@@ -56,7 +59,14 @@ from coordinator_core.ops.dispatch_emit.ask_contract import ASK_SOURCE_PM, ASK_S
 from coordinator_core.ops.dispatch_emit.route_preference import RoutePreference, parse, refusal, to_em_analysis
 from coordinator_core.ops.fleet._common import main_worktree_root
 from coordinator_core.ops.session_context import resolve_current_session_id
-from coordinator_core.ops.sizing_intake_contract import intake_record
+from coordinator_core.ops.sizing_intake_contract import (
+    EM_BRIEF_KEY,
+    EM_CONTEXT_PATHS_KEY,
+    em_context_paths_value,
+    intake_record,
+    is_path_shaped,
+    with_em_context,
+)
 from coordinator_core.session import claimed_write
 from coordinator_core.session.record_homes import home_dir
 from coordinator_core.warp_fire import fire_command
@@ -103,6 +113,10 @@ def _read_slices(params: Mapping) -> tuple[list[contract.AskSlice], Optional[str
         where = f"{'asks' if asks is not None else 'slices'}[{i}]"
         if not isinstance(item, Mapping):
             raise _Refused(f"{where}: must be an object")
+        if asks is not None:
+            unknown = contract.unknown_keys_refusal(where, item, contract.ASKS_ITEM_KEYS)
+            if unknown:
+                raise _Refused(unknown)
         ask = item.get("ask")
         if not isinstance(ask, str) or not ask.strip():
             raise _Refused(f"{where}: ask must be a non-empty string")
@@ -143,6 +157,38 @@ def _relay_fields(params: Mapping, count: int) -> list[tuple[Optional[str], Opti
             if val is not None and (not isinstance(val, str) or not val.strip()):
                 raise _Refused(f"asks[{i}]: {key} must be a non-empty string")
         out.append((sender.strip() if sender else None, text.strip() if text else None))
+    return out
+
+
+def _context_fields(params: Mapping, count: int) -> list[tuple[Optional[str], tuple[str, ...]]]:
+    """Per ask item (prose block, context paths) from its `em_context` and `context`; asks arm only.
+
+    The prose block is `em_context` then the prose `context` entries under one EM-context marker;
+    path-shaped `context` entries are returned stripped. Both None/() when the item carries neither."""
+    raw = params.get("asks")
+    if raw is None:
+        return [(None, ())] * count
+    out = []
+    for i, item in enumerate(raw):
+        prose: list[str] = []
+        paths: list[str] = []
+        em_context = item.get("em_context")
+        if em_context is not None:
+            if not isinstance(em_context, str):
+                raise _Refused(f"asks[{i}]: em_context must be a string")
+            if em_context.strip():
+                prose.append(em_context.strip())
+        context = item.get("context")
+        if context is not None:
+            entries = [context] if isinstance(context, str) else context
+            if not isinstance(entries, list) or not all(isinstance(e, str) for e in entries):
+                raise _Refused(f"asks[{i}]: context must be a string or a list of strings")
+            for entry in entries:
+                if not entry.strip():
+                    continue
+                (paths if is_path_shaped(entry) else prose).append(entry.strip())
+        block = with_em_context(None, "\n".join(prose)) if prose else None
+        out.append((block, tuple(paths)))
     return out
 
 
@@ -206,6 +252,7 @@ def _slice_record(
     parent_rows: Optional[dict[str, dict]], sources: Optional[list] = None,
     sender: Optional[str] = None, relayed_text: Optional[str] = None,
     route_pref: Optional[RoutePreference] = None,
+    context: tuple[Optional[str], tuple[str, ...]] = (None, ()),
 ) -> dict:
     """A slice sizing. A relayed or unmarked asks item (it arrives with no `turns`) is stamped relayed,
     carries its text and sender in `em_analysis`, and never gets a `pm_verbatims` row."""
@@ -226,6 +273,12 @@ def _slice_record(
             for t in turns
         ]
     record["em_analysis"][ASK_PARENT_KEY] = marker
+    prose_block, context_paths = context
+    if prose_block:
+        record["em_analysis"][EM_BRIEF_KEY] = prose_block
+    paths_value = em_context_paths_value(context_paths)
+    if paths_value is not None:
+        record["em_analysis"][EM_CONTEXT_PATHS_KEY] = paths_value
     if route_pref is not None:
         record["em_analysis"].update(to_em_analysis(route_pref))
     if parent_rows is not None:
@@ -414,6 +467,7 @@ def _fanout(params: Mapping, root: Path) -> dict:
         )
     relay = _relay_fields(params, len(slices))
     route_prefs = _route_fields(params, len(slices))
+    contexts = _context_fields(params, len(slices))
 
     stamp = datetime.now().strftime("%Y%m%dT%H%M%S")
     parent_hex = uuid.uuid4().hex[:6]
@@ -438,6 +492,7 @@ def _fanout(params: Mapping, root: Path) -> dict:
             marker=contract.ask_parent_marker(parent_id, run_ids[i]),
             today=today, parent_rows=parent_rows, sources=sources,
             sender=relay[i][0], relayed_text=relay[i][1], route_pref=route_prefs[i],
+            context=contexts[i],
         )
         errors = validate_frontmatter(record, _SIZING_SCHEMA_PATH)
         if errors:

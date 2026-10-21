@@ -299,6 +299,47 @@ def test_a_mixed_relayed_and_pm_submission_records_each_slice_origin(repo):
     assert anchors == {"relay job": [ledger.ORIGIN_RELAYED], "pm job": [ledger.ORIGIN_ASK]}
 
 
+def test_an_entry_context_reaches_only_its_own_slice_run_record_ledger_and_script(repo):
+    ctx = "concrete host bug: X"
+    env = _submit(repo, {"asks": [{"ask": "first job", "source": "relayed", "writes": ["a.py"]},
+                                  {"ask": "second job", "source": "relayed", "writes": ["b.py"], "context": [ctx]}]})
+    assert _hso(env)["permissionDecision"] == "allow", env
+    first, second = _parent(repo, _reply_json(env)["parent_id"]).runs
+
+    fired = _fire_slice(repo, second.slice_sizing)
+    assert _hso(fired)["permissionDecision"] == "allow", fired
+    second_script = Path(_hso(fired)["updatedInput"]["scriptPath"]).read_text(encoding="utf-8")
+    first_script = Path(_hso(env)["updatedInput"]["scriptPath"]).read_text(encoding="utf-8")
+
+    second_dir, first_dir = record_dir(repo, second.run_id), record_dir(repo, first.run_id)
+    second_ask = (second_dir / "relayed-ask.md").read_text(encoding="utf-8")
+    assert "second job" in second_ask
+
+    _bind(repo, first)
+    _bind(repo, second)
+    second_rows = ledger.read_ledger(repo, ledger.run_dir(repo, second.run_id)).items
+    first_rows = ledger.read_ledger(repo, ledger.run_dir(repo, first.run_id)).items
+    assert [i.anchor for i in second_rows if ctx in i.text] == [ledger.ORIGIN_RELAYED]
+    assert not any(ctx in i.text for i in first_rows)
+    view = (ledger.run_dir(repo, second.run_id) / ledger.LEDGER_VIEW_FILE).read_text(encoding="utf-8")
+    assert ctx in view
+
+    assert ctx in second_script
+    assert ctx not in first_script
+    assert "first job" in (first_dir / "relayed-ask.md").read_text(encoding="utf-8")
+    assert ctx not in (first_dir / "relayed-ask.md").read_text(encoding="utf-8")
+
+
+def test_an_unknown_asks_entry_key_is_denied_naming_it_and_writes_nothing(repo):
+    env = _submit(repo, {"asks": [{"ask": "one"}, {"ask": "x", "contxt": ["a bug"]}]})
+
+    assert _hso(env)["permissionDecision"] == "deny"
+    reason = _hso(env)["permissionDecisionReason"]
+    assert "contxt" in reason and "context" in reason
+    assert not (repo / "scratch" / "warp").exists()
+    assert list((repo / "state" / "sizings").iterdir()) == []
+
+
 def test_a_malformed_asks_element_is_denied_before_anything_is_written(repo):
     env = _submit(repo, {"asks": [{"ask": ""}, {"ask": "two"}]})
     assert _hso(env)["permissionDecision"] == "deny"

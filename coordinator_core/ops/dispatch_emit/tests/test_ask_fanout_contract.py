@@ -352,6 +352,27 @@ def test_not_fired_refusal_accepts_valid_and_names_first_bad_index():
     assert c.not_fired_refusal("x") is not None
 
 
+def test_asks_item_keys_pinned():
+    assert c.ASKS_ITEM_KEYS == (
+        "ask", "source", "sender", "relayed_text", "route_preference",
+        "em_rationale", "em_context", "context", "label", "writes",
+    )
+
+
+def test_unknown_keys_refusal_names_key_and_every_accepted_key():
+    msg = c.unknown_keys_refusal("asks[1]", ["ask", "contxt"], c.ASKS_ITEM_KEYS)
+    assert msg is not None and msg.startswith("asks[1]: unknown key 'contxt'")
+    assert all(k in msg for k in c.ASKS_ITEM_KEYS)
+    assert msg.endswith(", ".join(c.ASKS_ITEM_KEYS))
+
+
+def test_unknown_keys_refusal_none_for_subset_and_names_first_unknown():
+    assert c.unknown_keys_refusal("asks[0]", ["ask", "context"], c.ASKS_ITEM_KEYS) is None
+    assert c.unknown_keys_refusal("asks[0]", [], c.ASKS_ITEM_KEYS) is None
+    msg = c.unknown_keys_refusal("args", iter(["zz", "yy"]), ("a",))
+    assert "'zz'" in msg and "'yy'" not in msg
+
+
 def test_superseded_marker_path_and_reader(tmp_path):
     assert c.superseded_rel("r") == "scratch/warp/r/superseded.json"
     assert c.read_superseded_by(tmp_path, "r") is None

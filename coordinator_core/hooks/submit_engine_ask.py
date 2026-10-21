@@ -12,7 +12,7 @@ the emitted run, in the background, under `claude -p` as interactively; its comp
 notification is the EM's one wake. The stub only ever runs when this hook did not: it returns a
 halt that names the gap, never a run.
 
-`args` shape: `{ask: str, em_context?, route_preference?, em_rationale?}` | `{sizing: str}` | `{asks: [{ask, source?, sender?, relayed_text?, em_context?, route_preference?, em_rationale?, label?, writes?}], confirm_split?}` (`em_context` is a string of the EM's own context, carried in the emit op's `ask_brief` under an EM marker, never merged into the ask text, so `source: "pm"` stays true for the verbatim `ask`; on a multi-item `asks` the items' `em_context` rides the fan-out items, which has no brief slot; `route_preference` is goal|roadmap|plan, `em_rationale` at most 2000 chars; both forward to the emit op
+`args` shape: `{ask: str, em_context?, route_preference?, em_rationale?}` | `{sizing: str}` | `{asks: [{ask, source?, sender?, relayed_text?, em_context?, context?, route_preference?, em_rationale?, label?, writes?}], sender?, confirm_split?}` (an `args` key outside the accepted set, or an `asks` entry key outside `ASKS_ITEM_KEYS`, is refused naming it and the accepted keys; `em_context` is a string of the EM's own context, carried in the emit op's `ask_brief` under an EM marker, never merged into the ask text, so `source: "pm"` stays true for the verbatim `ask`; an entry's `context` (a string or list of path / prose strings) and `em_context` ride the fan-out items on a multi-item `asks`, and a one-element `asks` carries them as a top-level `context` does; a top-level `context` beside a multi-item `asks` is refused; `route_preference` is goal|roadmap|plan, `em_rationale` at most 2000 chars; both forward to the emit op
 or the fan-out, and either beside `{sizing}` is refused) (each ask a
 separate sibling run via `dispatch.ask_fanout`; the call fires the first ready run and the allow reason
 carries `{parent_id, runs}` plus the other ready runs' fire calls; a one-element array is an `ask`; a
@@ -58,7 +58,15 @@ from coordinator_core.hooks.sizing_scout_deny import (
     sizing_scout_deny as _scout_deny,
 )
 from coordinator_core.ipc import register_op
+from coordinator_core.ops.dispatch_emit.ask_fanout_contract import ASKS_ITEM_KEYS, unknown_keys_refusal
+from coordinator_core.ops.sizing_intake_contract import is_path_shaped, with_em_context
 from coordinator_core.warp_fire import SUBMIT_WORKFLOW_NAME, fire_command, is_submit_name
+
+# Every `args` key this hook reads; a key outside it is refused by name. A key read below must be added here.
+_ARGS_KEYS: tuple[str, ...] = (
+    "ask", "asks", "brief", "brief_file", "confirm_split", "context", "cross_repo_approved", "em_context",
+    "em_rationale", "repo", "route_preference", "sender", "sizing", "source", "supersedes", "writes",
+)
 
 
 _ARGS_SHAPE = ARGS_SHAPE.replace(
@@ -166,31 +174,32 @@ def _brief_params(tool_input: Mapping[str, Any]) -> tuple[dict, Optional[str]]:
     if em_context is not None and not isinstance(em_context, str):
         return {}, "em_context must be a string."
     if isinstance(em_context, str) and em_context.strip():
-        params["ask_brief"] = _with_em_context(params.get("ask_brief"), em_context)
+        params["ask_brief"] = with_em_context(params.get("ask_brief"), em_context)
     context = args.get("context")
     if context is not None:
-        items = [context] if isinstance(context, str) else context
-        if not isinstance(items, list) or not all(isinstance(c, str) for c in items):
-            return {}, "context must be a string (a path or inline prose) or a list of them."
-        paths = [c.strip() for c in items if _is_path_shaped(c)]
-        prose = [c.strip() for c in items if c.strip() and not _is_path_shaped(c)]
-        if paths:
-            params["ask_context"] = paths
-        if prose:
-            params["ask_brief"] = "\n\n".join(([params["ask_brief"]] if "ask_brief" in params else []) + prose)
+        items, bad = _context_items(context, "context")
+        if bad:
+            return {}, bad
+        _add_context(params, items)
     return params, None
 
 
-def _with_em_context(brief: Optional[str], em_context: str) -> str:
-    """`brief` with the EM's context appended under its own marker; the ask text is never touched."""
-    block = f"EM context (not the PM's words):\n{em_context.strip()}"
-    return f"{brief}\n\n{block}" if brief else block
+def _context_items(context: Any, where: str) -> tuple[list[str], Optional[str]]:
+    """(items, refusal): `context` is a string (a path or inline prose) or a list of them."""
+    items = [context] if isinstance(context, str) else context
+    if not isinstance(items, list) or not all(isinstance(c, str) for c in items):
+        return [], f"{where} must be a string (a path or inline prose) or a list of them."
+    return items, None
 
 
-def _is_path_shaped(item: str) -> bool:
-    """A single whitespace-free token carrying a separator or an extension; anything else is prose."""
-    text = item.strip()
-    return bool(text) and not any(ch.isspace() for ch in text) and ("/" in text or "\\" in text or "." in text)
+def _add_context(params: dict, items: list[str]) -> None:
+    """Path-shaped items join `ask_context`; prose items are appended to `ask_brief`."""
+    paths = [c.strip() for c in items if is_path_shaped(c)]
+    prose = [c.strip() for c in items if c.strip() and not is_path_shaped(c)]
+    if paths:
+        params["ask_context"] = [*params.get("ask_context", []), *paths]
+    if prose:
+        params["ask_brief"] = "\n\n".join(([params["ask_brief"]] if "ask_brief" in params else []) + prose)
 
 
 def _missing_context(root: Path, paths: list[str]) -> Optional[str]:
@@ -281,13 +290,24 @@ def _asks(tool_input: Mapping[str, Any]) -> tuple[Optional[list], Optional[str]]
         return None, None
     asks = args["asks"]
     if not isinstance(asks, list) or not asks:
-        return None, "asks must be a non-empty list of {ask, source?, route_preference?, em_rationale?, label?, writes?}."
+        return None, f"asks must be a non-empty list of {{{', '.join(ASKS_ITEM_KEYS)}}}."
     from coordinator_core.ops.dispatch_emit.ask_contract import ASK_SOURCES
     from coordinator_core.ops.dispatch_emit.route_preference import refusal as route_refusal
 
+    if len(asks) > 1 and args.get("context") is not None:
+        return None, "context rides each asks item (asks[i].context), not the call."
+    if args.get("sender") is not None and not isinstance(args["sender"], str):
+        return None, "sender must be a string."
     for i, item in enumerate(asks):
         if not isinstance(item, dict) or not isinstance(item.get("ask"), str) or not item["ask"].strip():
             return None, f"asks[{i}] carries no ask text."
+        unknown = unknown_keys_refusal(f"asks[{i}]", item, ASKS_ITEM_KEYS)
+        if unknown:
+            return None, unknown
+        if item.get("context") is not None:
+            _, bad = _context_items(item["context"], f"asks[{i}].context")
+            if bad:
+                return None, bad
         item_source = item.get("source")
         if item_source is not None and item_source not in ASK_SOURCES:
             return None, f"asks[{i}].source must be one of: {', '.join(ASK_SOURCES)}."
@@ -545,6 +565,11 @@ def evaluate(
     if payload.get("agent_id"):
         return deny("PreToolUse", "Only the EM submits an ask to the engine; return it in your report.")
 
+    call_args = payload["tool_input"].get("args")
+    if isinstance(call_args, dict):
+        unknown_arg = unknown_keys_refusal("args", call_args, _ARGS_KEYS)
+        if unknown_arg:
+            return _refuse(unknown_arg)
     ask, sizing_rel, repo_arg, source = _request(payload["tool_input"])
     asks, asks_refusal = _asks(payload["tool_input"])
     if asks_refusal:
@@ -562,15 +587,19 @@ def evaluate(
         if sizing_rel is not None:
             return _refuse("source marks an ask's text; a sizing submission carries none.")
     item_em_context: Optional[str] = None
+    item_context: list[str] = []
     if asks is not None:
         asks = [
             {**item, "source": item.get("source", source)} if item.get("source", source) is not None else dict(item)
             for item in asks
         ]
-        if len(asks) == 1 and not (asks[0].get("sender") or asks[0].get("relayed_text")):
+        if len(asks) == 1 and not (
+            asks[0].get("sender") or asks[0].get("relayed_text") or payload["tool_input"]["args"].get("sender")
+        ):
             ask, source = asks[0]["ask"], asks[0].get("source")
             route_pref, em_rationale = asks[0].get("route_preference"), asks[0].get("em_rationale")
             item_em_context = asks[0].get("em_context")
+            item_context, _ = _context_items(asks[0].get("context") or [], "context")
             asks = None
 
     defaulted_pm = False
@@ -588,7 +617,8 @@ def evaluate(
     if brief_refusal:
         return _refuse(brief_refusal)
     if isinstance(item_em_context, str) and item_em_context.strip():
-        brief["ask_brief"] = _with_em_context(brief.get("ask_brief"), item_em_context)
+        brief["ask_brief"] = with_em_context(brief.get("ask_brief"), item_em_context)
+    _add_context(brief, item_context)
     if asks is not None:
         if "ask_brief" in brief or "ask_brief_file" in brief:
             return _refuse("A brief rides one run, not a set of sibling runs. Put each run's directives in its ask text.")
@@ -609,6 +639,11 @@ def evaluate(
     missing = _missing_context(root, brief.get("ask_context", []))
     if missing:
         return _refuse(f"context {missing}: no such file. Pass inline prose as brief or context text, or fix the path.")
+    for i, item in enumerate(asks or ()):
+        entry_paths = [c.strip() for c in _context_items(item.get("context") or [], "context")[0] if is_path_shaped(c)]
+        missing = _missing_context(root, entry_paths)
+        if missing:
+            return _refuse(f"asks[{i}].context {missing}: no such file. Pass inline prose as context text, or fix the path.")
 
     if supersedes:
         from coordinator_core.ops.dispatch_emit.sibling_hold import supersede_refusal
@@ -628,6 +663,8 @@ def evaluate(
         fan_params: dict = {"asks": asks, "session_id": session_id or ""}
         if session_root:
             fan_params["session_root"] = session_root
+        if isinstance(payload["tool_input"]["args"].get("sender"), str):
+            fan_params["sender"] = payload["tool_input"]["args"]["sender"]
         if payload["tool_input"]["args"].get("confirm_split") is True:
             fan_params["confirm_split"] = True
         try:
