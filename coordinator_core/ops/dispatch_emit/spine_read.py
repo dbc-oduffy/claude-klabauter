@@ -260,7 +260,8 @@ def _unlanded_plan_edge(
 ) -> Optional[str]:
     """The first ``depends_on_plan`` edge of ``raw`` not yet satisfied, as a
     detail string; ``None`` when every edge is satisfied or the row declares
-    none. An edge is ``{plan, chunk}`` (named row ``coded``) or ``{plan, status}``
+    none. An edge is ``{plan, chunk}`` (named row ``coded``, or landed by a
+    same-plan checkpoint at HEAD) or ``{plan, status}``
     (plan reached that lifecycle status). Raises ``DanglingPlanDependencyError``
     for an edge that can never be satisfied. With no repo root to resolve
     against, an edge cannot be shown satisfied and withholds the row."""
@@ -303,7 +304,9 @@ def resolve_plan_edge(
     owner: str, edge, repo_root: Optional[Path], plan_cache: dict
 ) -> PlanEdgeResolution:
     """One ``depends_on_plan`` edge: raises ``MalformedDependencyEdgeError`` or
-    ``DanglingPlanDependencyError`` for a bad edge, else reports hold state."""
+    ``DanglingPlanDependencyError`` for a bad edge, else reports hold state. A chunk
+    edge is satisfied by the named row ``coded``, or landed by a same-plan checkpoint
+    at HEAD (gate-owed and stop-rule rows excluded)."""
     if (
         not isinstance(edge, dict)
         or not edge.get("plan")
@@ -380,7 +383,25 @@ def resolve_plan_edge(
         if disposition == "coded"
         else f"depends_on_plan {label}: predecessor not yet coded"
     )
+    if hold is not None and chunk in _checkpoint_landed(repo_root, rel, target, rows_by_id, plan_cache):
+        hold = None
     return PlanEdgeResolution(named, hold)
+
+
+def _checkpoint_landed(
+    repo_root: Path, rel: str, target: Path, rows_by_id: dict, plan_cache: dict
+) -> frozenset:
+    """Open rows of plan ``rel`` landed by a same-plan checkpoint at HEAD, walked once
+    per plan per ``plan_cache``."""
+    key = (target, "checkpoint-landed")
+    if key not in plan_cache:
+        from coordinator_core.ops.dispatch_emit.checkpoint_stamp import rows_landed_at_head
+
+        open_ids = frozenset(
+            i for i, r in rows_by_id.items() if r.get("disposition", "open") == "open"
+        )
+        plan_cache[key] = rows_landed_at_head(repo_root, rel, open_ids)
+    return plan_cache[key]
 
 
 def unlanded_plan_edges(

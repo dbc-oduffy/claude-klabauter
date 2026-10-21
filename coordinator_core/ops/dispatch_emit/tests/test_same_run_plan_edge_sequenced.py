@@ -1,5 +1,6 @@
 """A `depends_on_plan` edge whose target plan and chunk are minted in the same
-inventory run orders as a `depends_on` edge; an edge outside the run withholds."""
+inventory run orders as a `depends_on` edge and binds both items into one tranche
+unit; an edge outside the run withholds."""
 
 from __future__ import annotations
 
@@ -119,3 +120,66 @@ def test_tranche_keeps_the_dependent_with_its_in_run_predecessor(tmp_path):
     ids = [r["id"] for r in taken]
     assert "PB.B1" not in ids
     assert ids == ["PA.A1"]
+
+
+_PLAN_C = _PLAN_A.replace("A1", "C1").replace("plan-a", "plan-c").replace("some/a.py", "some/c.py")
+
+_PLAN_B_STATUS = _PLAN_B.replace("chunk: A1", "status: coded")
+
+_PLAN_A_TWO = _PLAN_A.replace(
+    "  writes: [some/a.py]\n", "  writes: [some/a.py]\n- id: A2\n  title: Second\n  writes: [some/a2.py]\n"
+)
+
+
+def test_budget_one_still_splits_the_two_row_pair(tmp_path):
+    inv = _repo(tmp_path, {"plan-a": _PLAN_A, "plan-b": _PLAN_B}, [("PB", "plan-b"), ("PA", "plan-a")])
+
+    taken, report = im.select_tranche(_mint(inv), ["PB", "PA"], 1, bound={"PB": {"PA"}})
+
+    assert [r["id"] for r in taken] == ["PA.A1"]
+    assert "split across tranches" in report["deferred"][0]["reason"]
+
+
+def test_squeeze_takes_the_bound_pair_together_and_defers_the_unrelated_item(tmp_path):
+    inv = _repo(
+        tmp_path,
+        {"plan-a": _PLAN_A, "plan-b": _PLAN_B, "plan-c": _PLAN_C},
+        [("PB", "plan-b"), ("PA", "plan-a"), ("PC", "plan-c")],
+    )
+    bound: dict = {}
+    rows = _mint(inv, bound_out=bound)
+    assert bound == {"PB": {"PA"}}
+
+    taken, report = im.select_tranche(rows, ["PB", "PA", "PC"], 2, bound=bound)
+
+    assert sorted(r["id"] for r in taken) == ["PA.A1", "PB.B1"]
+    assert [d["plan"] for d in report["deferred"]] == ["PC"]
+    unbound_taken, _ = im.select_tranche(rows, ["PB", "PA", "PC"], 2)
+    assert sorted(r["id"] for r in unbound_taken) == ["PA.A1", "PC.C1"]
+
+
+def test_mint_spine_tranche_keeps_the_pair_in_one_tranche(tmp_path):
+    inv = _repo(
+        tmp_path,
+        {"plan-a": _PLAN_A, "plan-b": _PLAN_B, "plan-c": _PLAN_C},
+        [("PB", "plan-b"), ("PA", "plan-a"), ("PC", "plan-c")],
+    )
+    report: dict = {}
+
+    im.mint_spine(str(inv), row_budget=2, tranche_out=report)
+
+    assert report["plans"] == ["PB", "PA"]
+    assert [d["plan"] for d in report["deferred"]] == ["PC"]
+
+
+def test_status_form_edge_orders_on_every_minted_chunk_of_the_in_run_plan(tmp_path):
+    inv = _repo(tmp_path, {"plan-a": _PLAN_A_TWO, "plan-b": _PLAN_B_STATUS}, [("PB", "plan-b"), ("PA", "plan-a")])
+    withheld: dict = {}
+    bound: dict = {}
+
+    by_id = {r["id"]: r for r in _mint(inv, withheld_out=withheld, bound_out=bound)}
+
+    assert withheld == {}
+    assert set(by_id) == {"PA.A1", "PA.A2", "PB.B1"}
+    assert sorted(e["chunk"] for e in by_id["PB.B1"]["depends_on"]) == ["PA.A1", "PA.A2"]
+    assert bound == {"PB": {"PA"}}

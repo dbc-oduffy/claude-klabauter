@@ -5,7 +5,8 @@ Purpose: reports whether a plan's cross-plan execution preconditions are
 satisfied, so a wakeup or loop can poll one cheap read instead of re-deriving it.
 A precondition is a ``depends_on_plan`` edge — in the plan's frontmatter (the
 whole plan waits) or on a spine row (that row waits) — shaped
-``{plan, chunk}`` (the named row is ``coded``) or ``{plan, status}`` (the plan
+``{plan, chunk}`` (the named row is ``coded``, or landed by a same-plan
+checkpoint commit in HEAD's first-parent history) or ``{plan, status}`` (the plan
 reached that lifecycle status). The evaluation is ``spine_read``'s own, the
 same one ``read_spine`` withholds rows on.
 
@@ -21,7 +22,7 @@ Reply fields:
     ``satisfied`` is False.
 
 Negative-spec:
-  - Does NOT write anything, spawn, or invoke git.
+  - Does NOT write anything, spawn, or invoke the git CLI; reads git objects in-process.
   - Does NOT accept a caller-supplied root or fall back to cwd.
 """
 

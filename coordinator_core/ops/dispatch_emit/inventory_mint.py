@@ -1011,7 +1011,9 @@ def _in_run_plan_chunks(
     """`{(repo-relative plan path, chunk id): minted id}` for every open,
     dispatchable chunk of a whole-plan item in this run -- what a same-run
     `depends_on_plan` edge resolves to. A row-id reference (one specific chunk)
-    is not a whole-plan item and contributes nothing."""
+    is not a whole-plan item and contributes nothing. `(plan path, "*")` maps
+    to the item id: the key a status-form edge onto the whole plan resolves
+    through."""
     if inventory_path is None:
         return {}
     root = inventory_path.resolve().parents[2]
@@ -1030,6 +1032,7 @@ def _in_run_plan_chunks(
         if rel in seen or not raw_rows or row_id in raw_rows or _bare_plan_row_id(row_id) in raw_rows:
             continue
         seen.add(rel)
+        out[(rel, "*")] = row_id
         for chunk, raw in raw_rows.items():
             if (
                 with_canonical_disposition(raw).get("disposition") in NON_DISPATCHABLE_DISPOSITIONS
@@ -1052,6 +1055,7 @@ def mint_rows(
     landed_out: Optional[Dict[str, str]] = None,
     withheld_rows_out: Optional[Dict[str, int]] = None,
     accounting_out: Optional[Dict[str, str]] = None,
+    bound_out: Optional[Dict[str, set]] = None,
 ) -> List[dict]:
     """`## Chunk table` rows (as `parse_chunk_table` returns) -> a list of
     schema-valid plan-tasks row dicts, LIVE rows only. See module docstring's
@@ -1082,6 +1086,10 @@ def mint_rows(
     `withheld_rows_out` is filled `{item id: open plan rows}` for the same
     withheld items -- what is still owed behind them, not what this mint
     dispatches.
+
+    `bound_out`, when given, is filled `{dependent item id: {predecessor item
+    ids}}` for every `depends_on_plan` edge (chunk or status form) resolved
+    in-run: what `select_tranche` binds into one tranche unit.
 
     `accounting_out`, when given, is filled `{item id: reason}` for EVERY item
     that mints no row: routed out (its own disposition text, or `dependency X
@@ -1328,17 +1336,31 @@ def mint_rows(
                     # transitively via those predecessors' own roots.
                     depends_on.extend(inter_item_targets)
                 for plan_edge in (plan_raw_rows.get(r.id) or {}).get("depends_on_plan") or []:
-                    target = in_run_map.get(in_run_edge_key(plan_edge))
-                    if target is None or target.split(".", 1)[0] == row_id:
+                    edge_key = in_run_edge_key(plan_edge)
+                    target = in_run_map.get(edge_key)
+                    if target is None:
                         continue
-                    if not any(e["chunk"] == target for e in depends_on):
-                        depends_on.append(
-                            {
-                                "chunk": target,
-                                "gate_kind": plan_edge.get("gate_kind")
-                                or "output-consumption-runtime",
-                            }
-                        )
+                    if edge_key[1] == "*":
+                        pred_item = target
+                        targets = [
+                            v for (p, c), v in in_run_map.items() if p == edge_key[0] and c != "*"
+                        ]
+                    else:
+                        pred_item = target.split(".", 1)[0]
+                        targets = [target]
+                    if pred_item == row_id:
+                        continue
+                    if bound_out is not None:
+                        bound_out.setdefault(row_id, set()).add(pred_item)
+                    for chunk_target in targets:
+                        if not any(e["chunk"] == chunk_target for e in depends_on):
+                            depends_on.append(
+                                {
+                                    "chunk": chunk_target,
+                                    "gate_kind": plan_edge.get("gate_kind")
+                                    or "output-consumption-runtime",
+                                }
+                            )
 
                 r_writes = r.writes if isinstance(r.writes, list) else []
                 writes_set = set(r_writes)
@@ -1764,6 +1786,7 @@ def _pick_groups(
     prereqs: Dict[str, set],
     shared: Dict[str, str],
     row_budget: int,
+    binding: Optional[Dict[str, str]] = None,
 ) -> Tuple[List[str], Dict[str, str]]:
     """Greedy fill in table order: `(taken items, {item: why deferred})`. A
     group is taken only when every prerequisite outside it is already taken,
@@ -1781,7 +1804,11 @@ def _pick_groups(
         total = sum(size[i] for i in group)
         label = ""
         if len(group) > 1:
-            label = f"plans {', '.join(group)} write the same path {shared.get(group[0], '')}; "
+            if shared.get(group[0]):
+                label = f"plans {', '.join(group)} write the same path {shared[group[0]]}; "
+            else:
+                note = next((binding[i] for i in group if binding and i in binding), "")
+                label = f"plans {', '.join(group)} are bound by depends_on_plan {note}".rstrip() + "; "
         if len(group) > 1 and total > row_budget:
             units.extend(
                 ([i], f"{label}{total} rows exceed row_budget {row_budget}, split across tranches; ")
@@ -1824,6 +1851,48 @@ def _pick_groups(
     return taken, {i: r for i, r in reasons.items() if i not in taken}
 
 
+def _bind_groups(
+    groups: List[List[str]], shared: Dict[str, str], bound: Dict[str, set]
+) -> Tuple[List[List[str]], Dict[str, str], Dict[str, str]]:
+    """`groups` with each bound dependent/predecessor pair merged into one
+    group (first-appearance table order inside and across groups). A merged
+    group's first member keys its shared path in `shared` and, when a binding
+    joined it, the binding's text in the third return value."""
+    index = {i: n for n, g in enumerate(groups) for i in g}
+    parent = list(range(len(groups)))
+
+    def find(x: int) -> int:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    reason: Dict[int, str] = {}
+    for dependent, preds in bound.items():
+        for pred in preds:
+            if dependent in index and pred in index:
+                a, b = find(index[dependent]), find(index[pred])
+                if a != b:
+                    lo, hi = min(a, b), max(a, b)
+                    parent[hi] = lo
+                    reason.setdefault(lo, f"{pred} (depends_on_plan of {dependent})")
+    merged: Dict[int, List[str]] = {}
+    for n, g in enumerate(groups):
+        merged.setdefault(find(n), []).extend(g)
+    out: List[List[str]] = []
+    out_shared: Dict[str, str] = {}
+    binding: Dict[str, str] = {}
+    for root in sorted(merged):
+        members = merged[root]
+        out.append(members)
+        if len(members) > 1:
+            path = next((shared[g[0]] for g in groups if g[0] in shared and g[0] in members), "")
+            out_shared[members[0]] = path
+            if root in reason:
+                binding[members[0]] = reason[root]
+    return out, out_shared, binding
+
+
 def _edge_prerequisite_item(
     chunk: str, owner_of: Dict[str, str], item_ids: List[str]
 ) -> Optional[str]:
@@ -1848,6 +1917,7 @@ def select_tranche(
     landed: Optional[Dict[str, str]] = None,
     withheld_rows: Optional[Dict[str, int]] = None,
     reasons: Optional[Dict[str, str]] = None,
+    bound: Optional[Dict[str, set]] = None,
 ) -> Tuple[List[dict], dict]:
     """The next tranche of `rows`: whole plan items, in table order, whose
     rows sum to <= `row_budget`, plus a report `{"row_budget", "rows",
@@ -1860,7 +1930,10 @@ def select_tranche(
     what remains is a live prerequisite. Items whose rows write one path
     (`_shared_path_groups`) are taken or deferred together while the group
     fits the budget; an oversize group is split plan-by-plan across sequential
-    tranches (`_pick_groups`). Only a single plan over the budget is
+    tranches (`_pick_groups`). `bound` (`{dependent: {predecessors}}`, mint's
+    `bound_out`) joins an item with each in-run `depends_on_plan` predecessor
+    into one such unit, so the emitter orders the dependent in a later wave of
+    the same tranche. Only a single plan over the budget is
     `unplaceable`. A plan is never split; later
     items that fit are still taken. Every table item with no minted rows
     (withheld, routed out, closed, fully landed) is `skipped`, never counted;
@@ -1881,7 +1954,10 @@ def select_tranche(
             if target is not None and target != owner:
                 prereqs[owner].add(target)
     groups, shared = _shared_path_groups(rows, owners, items)
-    taken, deferred = _pick_groups(groups, size, prereqs, shared, row_budget)
+    binding: Dict[str, str] = {}
+    if bound:
+        groups, shared, binding = _bind_groups(groups, shared, bound)
+    taken, deferred = _pick_groups(groups, size, prereqs, shared, row_budget, binding)
     if not taken:
         raise InventoryTooLargeError(
             f"no plan item fits row_budget {row_budget}: smallest dispatchable group "
@@ -1896,7 +1972,7 @@ def select_tranche(
         sub_groups = [[i for i in g if i in pending] for g in groups]
         sub_groups = [g for g in sub_groups if g]
         sub_prereqs = {i: prereqs[i] & pending for i in pending}
-        got, _ = _pick_groups(sub_groups, size, sub_prereqs, shared, row_budget)
+        got, _ = _pick_groups(sub_groups, size, sub_prereqs, shared, row_budget, binding)
         if not got:
             break
         pending -= set(got)
@@ -2049,6 +2125,7 @@ def mint_spine(
     landed: Dict[str, str] = {}
     withheld_rows: Dict[str, int] = {}
     ledger: Dict[str, str] = {}
+    bound: Dict[str, set] = {}
     rows = mint_rows(
         chunk_rows,
         inventory_path=path,
@@ -2058,6 +2135,7 @@ def mint_spine(
         landed_out=landed,
         withheld_rows_out=withheld_rows,
         accounting_out=ledger,
+        bound_out=bound,
     )
     if accounting_out is not None:
         accounting_out.update(ledger)
@@ -2075,6 +2153,7 @@ def mint_spine(
             dispositions={_strip_backtick(r["id"]): r["disposition"] for r in chunk_rows},
             withheld_rows=withheld_rows,
             reasons=ledger,
+            bound=bound,
         )
         if accounting_out is not None:
             for entry in report["deferred"]:

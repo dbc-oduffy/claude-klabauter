@@ -249,3 +249,78 @@ def test_plan_absent_everywhere_stays_dangling(tmp_path):
 
     with pytest.raises(DanglingPlanDependencyError):
         resolve_plan_edge("row 'D1'", _EDGE, repo, {})
+
+
+_PRED = "docs/plans/pred.md"
+
+
+def _git_repo(tmp_path):
+    from coordinator_core.ops.dispatch_emit.tests.test_checkpoint_rows_landed import _commit, _git
+
+    _git(tmp_path, "init", "-q")
+    _commit(tmp_path, "seed")
+    _predecessor(tmp_path, "open")
+    return tmp_path
+
+
+def _checkpoint(repo, trailers: str = ""):
+    from coordinator_core.ops.dispatch_emit.tests.test_checkpoint_rows_landed import _commit
+
+    _commit(repo, "checkpoint(wave 0): 1 rows — P1", f"Checkpoint-Plan: {_PRED}{trailers}")
+
+
+@pytest.mark.spawns_process
+def test_open_predecessor_landed_by_checkpoint_is_unheld(tmp_path):
+    repo = _git_repo(tmp_path)
+    _checkpoint(repo)
+
+    res = resolve_plan_edge("row 'D1'", _EDGE, repo, {})
+
+    assert res.named_row["id"] == "P1"
+    assert res.hold is None
+
+
+@pytest.mark.spawns_process
+@pytest.mark.parametrize("trailer", ["Checkpoint-Gate-Owed: P1", "Checkpoint-Stop-Rule: P1"])
+def test_gate_owed_or_stop_rule_checkpoint_still_holds(tmp_path, trailer):
+    repo = _git_repo(tmp_path)
+    _checkpoint(repo, "\n" + trailer)
+
+    assert "not yet coded" in resolve_plan_edge("row 'D1'", _EDGE, repo, {}).hold
+
+
+@pytest.mark.spawns_process
+def test_open_predecessor_in_no_checkpoint_still_holds(tmp_path):
+    repo = _git_repo(tmp_path)
+
+    assert "not yet coded" in resolve_plan_edge("row 'D1'", _EDGE, repo, {}).hold
+
+
+@pytest.mark.spawns_process
+def test_checkpoint_walk_runs_once_per_predecessor_plan(tmp_path, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import checkpoint_stamp as cs
+
+    repo = _git_repo(tmp_path)
+    _checkpoint(repo)
+    calls: list = []
+    real = cs.rows_landed_at_head
+    monkeypatch.setattr(cs, "rows_landed_at_head", lambda *a: calls.append(a) or real(*a))
+    cache: dict = {}
+
+    resolve_plan_edge("row 'D1'", _EDGE, repo, cache)
+    resolve_plan_edge("row 'D2'", _EDGE, repo, cache)
+
+    assert len(calls) == 1
+
+
+def test_coded_predecessor_pays_no_walk(tmp_path, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import checkpoint_stamp as cs
+
+    repo = _repo(tmp_path)
+    _predecessor(repo, "coded")
+
+    def _boom(*a):
+        raise AssertionError("walked")
+
+    monkeypatch.setattr(cs, "rows_landed_at_head", _boom)
+    assert resolve_plan_edge("row 'D1'", _EDGE, repo, {}).hold is None
