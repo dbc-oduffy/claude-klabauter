@@ -261,12 +261,14 @@ def resumable_plan(
         open_ids = [i for i in open_ids if i not in credited]
     state = None
     landed_open: tuple = ()
+    pending = list(open_ids)
     if open_ids or not _terminal_coded(rows) or _sha_coded(rows):
         from coordinator_core.ops.dispatch_emit.emit import resume_landed_state
 
         state = resume_landed_state(root, plan_rel)
         landed_open = tuple((i, state.row_shas[i]) for i in open_ids if i in state.rows and state.row_shas.get(i))
         open_ids = [i for i in open_ids if i not in state.rows]
+        pending = list(open_ids)
         if open_ids:
             from coordinator_core.ops.dispatch_emit.terminal_commit import rows_landed_outside_executor
 
@@ -275,11 +277,11 @@ def resumable_plan(
             open_ids = [i for i in open_ids if i not in outside]
     halt = _ledger_halt_for(root, plan_rel, sizing_rel, rows, open_ids, state)
     if halt is not None:
-        return ResumePlan(plan_rel, (), ledger=halt)
+        return ResumePlan(plan_rel, (), ledger=replace(halt, unlanded=tuple(pending)))
     if not open_ids:
         halt = _all_landed_halt(root, plan_rel, sizing, sizing_rel, state)
         if halt is not None:
-            return ResumePlan(plan_rel, (), ledger=halt)
+            return ResumePlan(plan_rel, (), ledger=replace(halt, unlanded=tuple(pending)))
         raise SizingFireRefused(
             [f"{plan_rel} already ran: every row is landed and nothing is left to judge; residue is a new sizing naming it"]
         )

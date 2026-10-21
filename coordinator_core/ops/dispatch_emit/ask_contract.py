@@ -526,6 +526,28 @@ RUN_OUTCOME_KEYS = ("inline_review", "incomplete_chunks", "landed_chunks", "ledg
 RESUMED_RUN_ID_KEY = "resumed_run_id"
 
 
+#: Anchor prefix of a register row minted from plan row `<id>`: `plan-row:<id>`.
+PLAN_ROW_ANCHOR_PREFIX = "plan-row:"
+#: Ledger failure reason when the register holds no row to judge.
+EMPTY_REGISTER_REASON = "the register holds no requirement row: nothing was judged"
+#: `empty_register_refusal(path)` is `EMPTY_REGISTER_REASON + head + path + tail`; the composed ask
+#: script splices its runtime sizing path between the two.
+EMPTY_REGISTER_REFUSAL_HEAD = " -- the requirement_register of "
+EMPTY_REGISTER_REFUSAL_TAIL = " has no row; record the requirement with workflow.revise verbatim, then re-fire"
+_EMPTY_REGISTER_UNNAMED_SIZING = "this run's sizing"
+
+
+def empty_register_refusal(sizing_rel: Optional[str]) -> str:
+    """The refusal text for a run whose register has no row: `EMPTY_REGISTER_REASON`, then the
+    register named by ``sizing_rel`` (the run's sizing when None) and the remedy. Pure."""
+    return (
+        EMPTY_REGISTER_REASON
+        + EMPTY_REGISTER_REFUSAL_HEAD
+        + (sizing_rel or _EMPTY_REGISTER_UNNAMED_SIZING)
+        + EMPTY_REGISTER_REFUSAL_TAIL
+    )
+
+
 def rulable_ids(rows: Any) -> tuple[str, ...]:
     """Ids of the register rows whose status is neither met nor waived and that no recorded
     out-of-scope ruling withholds, in register order; a row that is not a mapping is skipped. Pure."""
@@ -563,7 +585,7 @@ class LedgerHalt:
     outcome: str | None = None
     #: Derived from the halt chain at resume; never persisted in the pointer.
     carried_met: tuple[str, ...] = ()
-    #: Open plan rows the halted run staged that no commit landed; derived at resume, never persisted.
+    #: Open plan rows that no checkpoint or halt commit of this plan landed; derived at resume, never persisted.
     unlanded: tuple[str, ...] = ()
 
     def to_json(self) -> dict[str, Any]:

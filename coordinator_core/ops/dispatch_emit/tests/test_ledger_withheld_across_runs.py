@@ -102,4 +102,6 @@ def test_truly_empty_register_still_fails(tmp_path):
     repo = _repo(tmp_path, {**_DOC, "pm_verbatims": []})
     got = rl.judge(_ledger_under(repo, RUN_B), {"items": []})
     assert got["pass"] is False
-    assert got["failures"] == [{"id": None, "reason": rl.EMPTY_REGISTER_REASON}]
+    assert len(got["failures"]) == 1 and got["failures"][0]["id"] is None
+    assert rl.EMPTY_REGISTER_REASON in got["failures"][0]["reason"]
+    assert REL in got["failures"][0]["reason"]

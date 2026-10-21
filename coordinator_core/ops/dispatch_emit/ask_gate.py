@@ -532,7 +532,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     if params.get("run_id") and verdict.halt is None:
         if verdict.resume_ledger is not None:
             unlanded = list(verdict.resume_ledger.get(RESUME_LEDGER_UNLANDED_FIELD) or [])
-            plan_rel, ledger_resume, only_rows = verdict.resume_ledger["plan"], True, unlanded or None
+            plan_rel, ledger_resume, only_rows = verdict.resume_ledger["plan"], True, unlanded
         elif verdict.arm == ARM_S and verdict.resume_plan and verdict.resume_rows is not None:
             # An empty resume_rows stages no rows (all landed); None would re-stage every row.
             plan_rel, ledger_resume, only_rows = verdict.resume_plan, False, list(verdict.resume_rows)

@@ -176,6 +176,10 @@ def _run_sizing_rel(sizing_rel: Optional[str], plan_text: str) -> Optional[str]:
     return read_fm_field_unquoted(split.fm_text, "sizing_object") if split else None
 
 
+#: Plan-row dispositions that are this run's requirement (the plan's `do` grouping).
+_MINTED_DISPOSITIONS = ("open", "coded", "delivered_elsewhere")
+
+
 def _run_sizing(root: Path, rel: Optional[str]) -> Optional[dict]:
     if not rel:
         return None
@@ -688,9 +692,17 @@ def stage(
     if run_sizing_rel:
         # The gate bound it already; idempotent, and it folds in a revision queued since.
         try:
-            requirements_ledger.bind(root, run_id, run_sizing_rel, ask_text=ask_text, relayed_text=relayed_text)
+            requirements_ledger.bind(
+                root, run_id, run_sizing_rel, ask_text=ask_text, relayed_text=relayed_text,
+                plan_rows=[
+                    (rid, str(raw.get("title") or ""))
+                    for rid, raw in raw_by_id.items()
+                    if raw.get("disposition", "open") in _MINTED_DISPOSITIONS
+                ],
+            )
         except requirements_ledger.LedgerRefused as exc:
             raise AskStageError(f"requirements: {exc}") from exc
+        run_sizing = _run_sizing(root, run_sizing_rel) or run_sizing
     test_targets, no_test_target = _test_scope(waves, root)
 
     after = {node.row.id: tuple(node.after) for node in dag_from_waves(waves).nodes}

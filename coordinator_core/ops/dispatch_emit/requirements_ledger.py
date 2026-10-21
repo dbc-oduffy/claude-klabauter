@@ -34,7 +34,14 @@ from coordinator_core.lifecycle import main_worktree_root
 from coordinator_core.locked_write import MutateAbort
 from coordinator_core.ops import requirement_register as rr
 from coordinator_core.ops._path_guard import contained_path
-from coordinator_core.ops.dispatch_emit.ask_contract import ASK_SOURCE_RELAYED, RECORD_DIR_ROOT, record_dir
+from coordinator_core.ops.dispatch_emit.ask_contract import (
+    ASK_SOURCE_RELAYED,
+    EMPTY_REGISTER_REASON,
+    PLAN_ROW_ANCHOR_PREFIX,
+    RECORD_DIR_ROOT,
+    empty_register_refusal,
+    record_dir,
+)
 from coordinator_core.ops.dispatch_emit.ask_fanout_contract import slice_ask_source
 from coordinator_core.ops.dispatch_emit.request_validation import Field, validate_params
 from coordinator_core.session.declared_writes import declare_write
@@ -58,8 +65,8 @@ VERBATIM_BYTE_CAP = 16 * 1024
 #: Every seeded row's surface: a PM sentence names no entry kind, so the checker judges `wired`
 #: as reachable from the product at all.
 ROW_SURFACE = "internal"
-#: `judge` failure reasons the terminal gate also keys on.
-EMPTY_REGISTER_REASON = "the register holds no requirement row: nothing was judged"
+#: Item origin of a register row minted from a plan row (anchor `plan-row:<id>`).
+ORIGIN_PLAN_ROW = "plan-row"
 NOT_A_ROW_REASON = "names no requirement row"
 
 _PARAMS = (
@@ -169,6 +176,8 @@ def _origin(anchor: object) -> tuple[str, str]:
         return ORIGIN_REVISION, text[len(ORIGIN_REVISION) + 1:].partition(SENDER_SEP)[0]
     if text in (ORIGIN_PM_VERBATIMS, ORIGIN_ASK, ORIGIN_RELAYED):
         return text, ""
+    if text.startswith(PLAN_ROW_ANCHOR_PREFIX):
+        return ORIGIN_PLAN_ROW, text[len(PLAN_ROW_ANCHOR_PREFIX):]
     return "", ""
 
 
@@ -497,6 +506,7 @@ FOREIGN_TURN_REASON = "another run's PM turn: the run's ask neither quotes nor a
 def _append_rows(
     root: Path, sizing_rel: str, entries: Sequence[tuple[str, str]], *, drop_turns: Optional[Mapping[int, str]] = None,
     withhold: Optional[Mapping] = None, list_turns: Optional[Mapping[int, str]] = None,
+    plan_rows: Sequence[tuple[str, str]] = (),
 ) -> list[dict]:
     """Append one open row per `(text, anchor)`; a PM-word or ask row already on the register
     (same verbatim text) is not added twice, a revision always is. `drop_turns` (`{turn: text}`)
@@ -541,6 +551,13 @@ def _append_rows(
                 rr.ROW_ID: _next_id(rows), rr.ROW_TEXT: t, rr.ROW_ANCHOR: anchor,
                 rr.ROW_SURFACE: ROW_SURFACE, rr.ROW_STATUS: rr.STATUS_OPEN, rr.ROW_CLAIMED_BY: [],
             })
+        if plan_rows and ledger_ids(rows) == ((), ()):
+            for pid, title in plan_rows:
+                rows.append({
+                    rr.ROW_ID: _next_id(rows), rr.ROW_TEXT: f"Plan row {pid}: {title}".strip(),
+                    rr.ROW_ANCHOR: f"{PLAN_ROW_ANCHOR_PREFIX}{pid}",
+                    rr.ROW_SURFACE: ROW_SURFACE, rr.ROW_STATUS: rr.STATUS_OPEN, rr.ROW_CLAIMED_BY: [],
+                })
         if named:
             ruling = {
                 rr.RULING_SOURCE: "pm", rr.RULING_QUOTE: str(withhold["verbatim"]),
@@ -690,10 +707,12 @@ def _slice_entries(sizing: Mapping) -> list[tuple[str, str]]:
 
 def bind(
     repo_root: Path, run_id: str, sizing_rel: str, *, ask_text: Optional[str] = None,
-    relayed_text: Optional[str] = None,
+    relayed_text: Optional[str] = None, plan_rows: Sequence[tuple[str, str]] = (),
 ) -> Optional[Ledger]:
     """Bind a ledger-bearing run to its sizing and seed that sizing's register: the PM's words,
-    the raw ask, then every queued revision. Idempotent; a run without run.json is left alone
+    the raw ask, then every queued revision. `plan_rows` (`(row id, title)`, spine order) seed one
+    `plan-row:<id>` row each, only when the register would otherwise hold no judged or withheld
+    row. Idempotent; a run without run.json is left alone
     (None). Raises LedgerRefused when the run names another sizing or the write is refused."""
     root = Path(repo_root)
     dir_ = run_dir(root, run_id)
@@ -729,8 +748,8 @@ def bind(
             entries.append((text, f"{ORIGIN_REVISION}@{_now()}" if fresh else origin))
     queued = _inbox(dir_)
     entries.extend((e["text"], _revision_anchor(str(e.get("at") or _now()), e.get("from"))) for e in queued)
-    if entries or foreign or unbound:
-        _append_rows(root, sizing_rel, entries, drop_turns=foreign, list_turns=unbound)
+    if entries or foreign or unbound or plan_rows:
+        _append_rows(root, sizing_rel, entries, drop_turns=foreign, list_turns=unbound, plan_rows=plan_rows)
     if not bound:
         _write_run(dir_, {**run, "sizing_rel": sizing_rel})
     if queued:
@@ -984,7 +1003,10 @@ def judge(
     by_id: dict[str, Mapping] = {}
     failures: list[dict] = []
     if not ledger.items and not ledger.withheld:
-        failures.append({"id": None, "reason": EMPTY_REGISTER_REASON})
+        failures.append({
+            "id": None,
+            "reason": empty_register_refusal(ledger.sizing_rel) if ledger.sizing_rel else EMPTY_REGISTER_REASON,
+        })
     open_rows: list[dict] = []
     for row in rows:
         rid = row.get("id") if isinstance(row, Mapping) else None

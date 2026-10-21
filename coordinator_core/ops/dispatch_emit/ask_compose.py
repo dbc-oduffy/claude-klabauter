@@ -43,6 +43,9 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     ASK_VERIFY_LABEL,
     ASK_VERIFY_PHASE,
     DELIVERY_NOTE_DIR,
+    EMPTY_REGISTER_REASON,
+    EMPTY_REGISTER_REFUSAL_HEAD,
+    EMPTY_REGISTER_REFUSAL_TAIL,
     HALT_PLAN_FIELD,
     HALTED_RECORD_PARAM,
     PM_INTENT_FILE,
@@ -2817,6 +2820,13 @@ def compose_ask_script(
         ".map((i) => (i && typeof i === 'object') ? i.id : i).filter(Boolean);\n"
         "    const _blkRulable = _blkIds.filter((id) => _rulable.includes(id));\n"
         "    const _blkForeign = _blkIds.filter((id) => !_rulable.includes(id));"
+    )
+    b.append(
+        "    if (!_halted && _emptyVerdict && Array.isArray(_ledgerIds) && !_ledgerIds.length "
+        "&& Array.isArray(_withheldIds) && !_withheldIds.length) "
+        f"{{ _halted = {{ halted: {_lit(HALT_REFUSAL)}, "
+        f"reason: {_lit(EMPTY_REGISTER_REASON + EMPTY_REGISTER_REFUSAL_HEAD)} + _sizingRel + {_lit(EMPTY_REGISTER_REFUSAL_TAIL)}, "
+        f"sizing: _sizingRel, run_id: _runId, {HALT_PLAN_FIELD}: _planRel }}; }}"
     )
     b.append(
         "    if (!_halted && (!_ledger || _emptyVerdict || _ledgerBlocking(_ledger).length)) "
