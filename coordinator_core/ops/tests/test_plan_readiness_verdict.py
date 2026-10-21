@@ -478,6 +478,72 @@ def test_blocking_is_sorted_deduplicated_and_empty_on_ready():
     assert op.readiness_verdict(_gate(PASS, verdict="PREPPED"), None, [])["blocking"] == []
 
 
+def _absent_plan(root: Path, tracked_by: str, open_questions: str = "") -> Path:
+    block = f'declared_absent:\n  - citation: bin/verify-routing-table.sh\n    tracked_by: "{tracked_by}"\n'
+    common = _corrects_plan(root, block)
+    if open_questions:
+        plan = root / REL
+        plan.write_text(
+            plan.read_text(encoding="utf-8") + f"\n## Open questions\n\n{open_questions}\n\n## Later\n",
+            encoding="utf-8",
+        )
+    return common
+
+
+def _absent_row(verdict="UNRESOLVED") -> dict:
+    return _row(verdict, citation="`bin/verify-routing-table.sh` exists")
+
+
+def test_declared_absent_unresolved_row_with_filed_ask_is_a_note(tmp_path):
+    ask = tmp_path / "state" / "asks" / "routing-table.md"
+    ask.parent.mkdir(parents=True)
+    ask.write_text("ask\n", encoding="utf-8")
+    common = _absent_plan(tmp_path, "state/asks/routing-table.md")
+    reply = _op_reply(common, [_absent_row()])
+    assert reply["verdict"] == "ready"
+    assert reply["blocking"] == []
+    assert (
+        "1 UNRESOLVED premise row(s) the plan declares absent: "
+        "bin/verify-routing-table.sh -> state/asks/routing-table.md"
+    ) in reply["reason"]
+
+
+def test_declared_absent_covers_through_an_open_question_or_an_https_url(tmp_path):
+    common = _absent_plan(tmp_path, "routing table script not yet built", "- routing table script not yet built?")
+    assert _op_reply(common, [_absent_row()])["verdict"] == "ready"
+    url = tmp_path / "other"
+    url.mkdir()
+    common = _absent_plan(url, "https://example.invalid/issues/7")
+    assert _op_reply(common, [_absent_row()])["blocking"] == []
+
+
+def test_declared_absent_with_unresolvable_tracked_by_still_blocks(tmp_path):
+    common = _absent_plan(tmp_path, "state/asks/never-filed.md", "- something else entirely")
+    reply = _op_reply(common, [_absent_row()])
+    assert reply["verdict"] == "judgment"
+    assert reply["blocking"] == ["premise-check: UNRESOLVED `bin/verify-routing-table.sh` exists"]
+
+
+def test_declared_absent_tracked_by_outside_the_repo_does_not_cover(tmp_path):
+    (tmp_path / "outside.md").write_text("x", encoding="utf-8")
+    root = tmp_path / "repo"
+    assert _op_reply(_absent_plan(root, "../outside.md"), [_absent_row()])["verdict"] == "judgment"
+
+
+def test_declared_absent_never_covers_a_contradicted_row(tmp_path):
+    common = _absent_plan(tmp_path, "https://example.invalid/issues/7")
+    reply = _op_reply(common, [_absent_row("CONTRADICTED")])
+    assert reply["verdict"] == "judgment"
+    assert reply["blocking"] == ["premise-check: CONTRADICTED `bin/verify-routing-table.sh` exists"]
+
+
+def test_plan_whose_only_blocker_is_declared_absent_reads_ready_beside_other_rows(tmp_path):
+    common = _absent_plan(tmp_path, "https://example.invalid/issues/7")
+    reply = _op_reply(common, [_absent_row(), _row("RESOLVES", citation="other")])
+    assert reply["verdict"] == "ready"
+    assert reply["blocking"] == []
+
+
 def test_blocking_is_not_truncated_by_the_reason_tail():
     out = _premise(_rows(*["UNRESOLVED"] * 10, citation="x" * 190))
     assert len(out["blocking"]) == 10

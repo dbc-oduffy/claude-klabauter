@@ -1313,6 +1313,11 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #   5. Persistent state changes observable across processes? No.
     # Spec: coordinator_core/contract/readiness-verdict-producer-contract.md
     "plan.readiness_verdict": OpClass.COMPUTE_ONLY,
+    # plan.premise_scope — COMPUTE_ONLY: reads one plan and its premise-carry file and RETURNS which
+    # citations a refire owes a fresh check. Spec: coordinator_core/contract/premise-carry-contract.md
+    "plan.premise_scope": OpClass.COMPUTE_ONLY,
+    # plan.premise_record — MUTATING: atomically rewrites the plan's gitignored premise-carry file.
+    "plan.premise_record": OpClass.MUTATING,
     # plan.repin_register — MUTATING: rewrites `register_claims.pins` on ONE docs/plans/*.md, gated on a clear premise-check.
     "plan.repin_register": OpClass.MUTATING,
     # plan.cross_plan_gate — COMPUTE_ONLY: reads one plan plus the predecessor plans

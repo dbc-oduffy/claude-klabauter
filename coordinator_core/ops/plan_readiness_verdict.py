@@ -23,7 +23,11 @@ Wire params:
                                   ``corrects: [{citation, fixed_by}]`` names, with ``fixed_by`` an
                                   open or coded spine row, is a note. A class-4 row whose optional
                                   ``baseline_ref`` differs from the plan's current falsifier
-                                  ``baseline_ref`` is stale and a note. UNRESOLVED never exempts.
+                                  ``baseline_ref`` is stale and a note. An UNRESOLVED row is exempt
+                                  only through the plan's ``declared_absent: [{citation,
+                                  tracked_by}]``, with ``tracked_by`` an existing repo-relative path,
+                                  an http(s) URL, or text in the plan's ``## Open questions``;
+                                  CONTRADICTED rows are never exempted by it.
                                   When passed, a ``premise-check`` reviews entry is dropped: the
                                   rows carry that verdict, and refusing the pair would hand the
                                   caller an unusable reply.
@@ -153,8 +157,53 @@ def _covering_row(row: dict, corrects: Any, spine_rows: Optional[List[dict]]) ->
     return None
 
 
+_OPEN_QUESTIONS = re.compile(r"^##[ \t]+Open questions[ \t]*$(.*?)(?=^##[ \t]|\Z)", re.M | re.S | re.I)
+
+
+def _open_questions_body(text: str) -> str:
+    match = _OPEN_QUESTIONS.search(text)
+    return match.group(1) if match else ""
+
+
+def _tracked(tracked_by: str, open_questions: str, repo_root: Optional[Path]) -> bool:
+    """True when ``tracked_by`` names a filed record: an http(s) URL, a repo-relative path that
+    exists under ``repo_root``, or text verbatim in the plan's ``## Open questions`` body."""
+    if re.match(r"https?://\S", tracked_by):
+        return True
+    if len(tracked_by) >= 8 and tracked_by in open_questions:
+        return True
+    rel = Path(tracked_by)
+    if repo_root is None or rel.is_absolute() or ".." in rel.parts:
+        return False
+    from coordinator_core.lifecycle import main_worktree_root
+
+    try:
+        return (Path(main_worktree_root(repo_root)) / rel).exists()
+    except OSError:
+        return False
+
+
+def _declared_absent_entry(
+    row: dict, declared_absent: Any, open_questions: str, repo_root: Optional[Path]
+) -> Optional[tuple]:
+    """(citation, tracked_by) of the first ``declared_absent`` entry that covers this UNRESOLVED
+    premise row, else None. Malformed entries and an unresolvable ``tracked_by`` cover nothing."""
+    if not isinstance(declared_absent, list):
+        return None
+    cited = _norm(row.get("citation"))
+    for entry in declared_absent:
+        if not isinstance(entry, dict):
+            continue
+        citation, tracked_by = _norm(entry.get("citation")), entry.get("tracked_by")
+        tracked = tracked_by.strip() if isinstance(tracked_by, str) else ""
+        if citation and citation in cited and tracked and _tracked(tracked, open_questions, repo_root):
+            return citation, tracked
+    return None
+
+
 def _plan_inputs(prep_gate: dict, repo_root: Path) -> tuple:
-    """(corrects, spine rows, falsifier baseline_ref) read from the plan file the prep gate resolved."""
+    """(corrects, spine rows, falsifier baseline_ref, declared_absent, open-questions body) read
+    from the plan file the prep gate resolved."""
     from coordinator_core.lifecycle import main_worktree_root
     from coordinator_core.roadmap.prep_gate import plan_frontmatter, raw_spine_rows
 
@@ -164,7 +213,13 @@ def _plan_inputs(prep_gate: dict, repo_root: Path) -> tuple:
     pec = fm.get("prime_exit_criterion")
     falsifier = pec.get("falsifier") if isinstance(pec, dict) else None
     ref = falsifier.get("baseline_ref") if isinstance(falsifier, dict) else None
-    return fm.get("corrects"), raw_spine_rows(text), ref.strip() if isinstance(ref, str) and ref.strip() else None
+    return (
+        fm.get("corrects"),
+        raw_spine_rows(text),
+        ref.strip() if isinstance(ref, str) and ref.strip() else None,
+        fm.get("declared_absent"),
+        _open_questions_body(text),
+    )
 
 
 def _repair(kind: str, target: str, instruction: str) -> dict:
@@ -218,12 +273,15 @@ def readiness_verdict(
     corrects: Optional[Any] = None,
     spine_rows: Optional[List[dict]] = None,
     falsifier_baseline_ref: Optional[str] = None,
+    declared_absent: Optional[Any] = None,
+    open_questions: str = "",
 ) -> dict:
     """Verdict over a prep-gate reply plus coverage and reviewer values; the only read beyond
     them is a review's ledger sidecar, resolved against ``repo_root``. Only UNRESOLVED and
     CONTRADICTED premise rows block; UNCHECKABLE and RESOLVES rows never do. A CONTRADICTED row
     covered by ``corrects`` (a spine row in ``spine_rows`` that is open or coded fixes it) and a
-    row whose ``baseline_ref`` differs from ``falsifier_baseline_ref`` are notes, not blockers."""
+    row whose ``baseline_ref`` differs from ``falsifier_baseline_ref`` are notes, not blockers, as
+    is an UNRESOLVED row a ``declared_absent`` entry covers through a resolvable ``tracked_by``."""
     notes: List[str] = []
     repairs: List[dict] = []
     substantive: List[str] = []
@@ -265,6 +323,7 @@ def readiness_verdict(
     uncheckable = 0
     premise_blocking: List[str] = []
     covered: List[str] = []
+    absent_notes: List[str] = []
     stale_refs: List[str] = []
     for row in premise_rows or []:
         ref = row.get("baseline_ref")
@@ -273,8 +332,15 @@ def readiness_verdict(
             continue
         if row["verdict"] in _PREMISE_BLOCKING:
             fixer = _covering_row(row, corrects, spine_rows) if row["verdict"] == "CONTRADICTED" else None
+            absent = (
+                _declared_absent_entry(row, declared_absent, open_questions, repo_root)
+                if row["verdict"] == "UNRESOLVED"
+                else None
+            )
             if fixer is not None:
                 covered.append(f"{fixer[0]} -> {fixer[1]}")
+            elif absent is not None:
+                absent_notes.append(f"{absent[0]} -> {absent[1]}")
             else:
                 premise_blocking.append(f"{_PREMISE_REVIEWER}: {row['verdict']} {row['citation'][:200]}")
         elif row["verdict"] == "UNCHECKABLE":
@@ -291,6 +357,11 @@ def readiness_verdict(
         notes.append(f"{uncheckable} UNCHECKABLE premise row(s) left to reviewer judgment")
     if covered:
         notes.append(f"{len(covered)} CONTRADICTED premise row(s) the plan corrects: " + "; ".join(covered))
+    if absent_notes:
+        notes.append(
+            f"{len(absent_notes)} UNRESOLVED premise row(s) the plan declares absent: "
+            + "; ".join(absent_notes)
+        )
     if stale_refs:
         notes.append(
             f"{len(stale_refs)} premise row(s) read against superseded baseline "
@@ -327,8 +398,11 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         raise ValueError("plan.readiness_verdict requires a resolved repo_root")
     raw_plan, coverage, reviews, premise_rows = _check_params(params)
     prep_gate = _prep_gate_handler({"plan": raw_plan}, repo_root)
-    corrects, spine_rows, ref = _plan_inputs(prep_gate, repo_root) if premise_rows else (None, None, None)
+    corrects, spine_rows, ref, absent, questions = (
+        _plan_inputs(prep_gate, repo_root) if premise_rows else (None, None, None, None, "")
+    )
     out = readiness_verdict(
-        prep_gate, coverage, reviews, repo_root, premise_rows, corrects, spine_rows, ref
+        prep_gate, coverage, reviews, repo_root, premise_rows, corrects, spine_rows, ref,
+        absent, questions,
     )
     return {"plan": prep_gate["plan"], **out, "prep_gate": prep_gate}

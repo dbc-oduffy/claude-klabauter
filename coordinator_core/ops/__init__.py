@@ -206,6 +206,7 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.seam_baton_mint", 'registers "seam.mint_batons"'),
     ("coordinator_core.ops.plan_prep_gate", 'registers "plan.prep_gate"'),
     ("coordinator_core.ops.plan_readiness_verdict", 'registers "plan.readiness_verdict"'),
+    ("coordinator_core.ops.plan_premise_carry", 'registers "plan.premise_scope", "plan.premise_record"'),
     (
         "coordinator_core.ops.plan_repin_register",
         'registers "plan.repin_register" (2026-10-16, re-pins one plan\'s '

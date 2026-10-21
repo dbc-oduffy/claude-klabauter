@@ -44,9 +44,19 @@ DoE's `PREMISE_SCHEMA`, passed through unchanged.
   compared after whitespace normalisation, case-sensitively. `fixed_by` is a spine row id. An entry
   **covers** a `CONTRADICTED` row only when its citation matches and `fixed_by` names a row in the
   plan's spine whose disposition is `open` or `coded`. A malformed entry, an unknown row id, or a
-  deferred, spun-off or won't-do row covers nothing. `UNRESOLVED` rows are never covered. A covered
+  deferred, spun-off or won't-do row covers nothing. `corrects:` never covers an `UNRESOLVED` row (see `declared_absent:`). A covered
   row is a note (`<n> CONTRADICTED premise row(s) the plan corrects: <citation> -> <row id>`), never
   blocking.
+- **Plan frontmatter `declared_absent:` (optional input, read by the op from the plan file).** A
+  list of `{citation: str, tracked_by: str}`, both non-empty. An entry **covers** an `UNRESOLVED`
+  row when its whitespace-normalised `citation` occurs in the row's citation (case-sensitive, the
+  same match as `corrects:`) and `tracked_by` is one of: a repo-relative path that exists under the
+  repo root (a filed ask, memo or bug record); an `http(s)://` URL (a filed issue); or text that
+  occurs verbatim in the body of the plan's `## Open questions` section. A covered row is a note
+  (`<n> UNRESOLVED premise row(s) the plan declares absent: <citation> -> <tracked_by>`), **never in
+  `blocking`**. `CONTRADICTED` rows are never covered by `declared_absent` (that is `corrects:`'s
+  job), and an entry with an unresolvable `tracked_by`, or a malformed entry, covers nothing. The
+  carry that lets a refire skip unchanged citations is in `premise-carry-contract.md`.
 - `premise` together with a `reviews[]` entry whose `reviewer` is `premise-check` is refused: the
   rows are passed once.
 - An empty `rows` list adds nothing to the verdict (the `premise-check` exclusion still applies). With `premise` absent, the reply is unchanged.

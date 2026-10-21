@@ -2143,10 +2143,25 @@ def _routed_from_manifest(manifest_path: Optional[Path]) -> dict:
 _FULL_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 
 
+# Closed list: a corpus the run machinery writes must be named here, or a declared write into it counts as product.
+_PROCESS_STATE_CORPORA = frozenset({"sizings", "warp", "handoffs", "apm-rulings", "queue-grind"})
+
+
+def _is_process_state(rel: str) -> bool:
+    """True for a ``state/`` path the run machinery itself writes: a file directly under
+    ``state/`` or anything under a process corpus. Any other ``state/<corpus>/...`` record is
+    product the chunk produced."""
+    if not rel.startswith("state/"):
+        return False
+    parts = rel.split("/")
+    return len(parts) < 3 or parts[1] in _PROCESS_STATE_CORPORA
+
+
 def _manifest_declared(manifest_path: Optional[Path]) -> tuple:
     """``(declared product paths, manifest head_sha)`` from one read of the manifest: the `writes`
-    of its rows minus run-record and state paths, and the staging HEAD (None when absent or not a
-    full sha). ``([], None)`` when the manifest is unreadable."""
+    of its rows minus run-record paths and the run's own process state (``_is_process_state``), and
+    the staging HEAD (None when absent or not a full sha). A write into a state corpus such as
+    ``state/bug-backlog/`` is product. ``([], None)`` when the manifest is unreadable."""
     if manifest_path is None:
         return [], None
     try:
@@ -2154,12 +2169,12 @@ def _manifest_declared(manifest_path: Optional[Path]) -> tuple:
         rows = data.get("rows")
     except (OSError, ValueError, AttributeError):
         return [], None
-    skip = (RECORD_DIR_ROOT.rstrip("/") + "/", RUN_DIR_ROOT.rstrip("/") + "/", "state/")
+    skip = (RECORD_DIR_ROOT.rstrip("/") + "/", RUN_DIR_ROOT.rstrip("/") + "/")
     paths: list = []
     for row in rows if isinstance(rows, list) else ():
         writes = row.get("writes") if isinstance(row, dict) else None
         for w in writes if isinstance(writes, list) else ():
-            if isinstance(w, str) and w and not w.startswith(skip) and w not in paths:
+            if isinstance(w, str) and w and not w.startswith(skip) and not _is_process_state(w) and w not in paths:
                 paths.append(w)
     head = data.get("head_sha")
     return paths, head if isinstance(head, str) and _FULL_SHA_RE.fullmatch(head) else None

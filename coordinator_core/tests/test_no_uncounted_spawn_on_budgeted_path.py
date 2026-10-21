@@ -322,6 +322,15 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
         "coordinator_core/ops/design_registry_lookup.py",
         ("_handler",),
     ),
+    # Spawn-free on landing (one plan read, one carry-file read/write), 2026-10-21.
+    "plan.premise_scope": (
+        "coordinator_core/ops/plan_premise_carry.py",
+        ("_scope_handler",),
+    ),
+    "plan.premise_record": (
+        "coordinator_core/ops/plan_premise_carry.py",
+        ("_record_handler",),
+    ),
     "dispatch.release_run_token": (
         "coordinator_core/ops/dispatch_emit/release_run_token.py",
         ("_handler",),
