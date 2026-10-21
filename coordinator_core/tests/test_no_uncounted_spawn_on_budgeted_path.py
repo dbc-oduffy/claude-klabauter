@@ -1377,6 +1377,10 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
         "coordinator_core/ops/queue_append.py",
         ("_queue_append_handler",),
     ),
+    "baton.close_report": (
+        "coordinator_core/ops/baton_close_report.py",
+        ("_handler",),
+    ),
     "baton.carry_forward": (
         "coordinator_core/ops/baton_carry_forward.py",
         ("_carry_forward",),

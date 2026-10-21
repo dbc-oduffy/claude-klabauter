@@ -4961,6 +4961,9 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # path.
     "baton.carry_forward": OpClass.MUTATING,
     "baton.carry_forward_read": OpClass.COMPUTE_ONLY,
+    # baton.close_report — COMPUTE_ONLY: ops/baton_close_report.py reads batons and cited
+    # targets by header scan; no write primitive, no spawn.
+    "baton.close_report": OpClass.COMPUTE_ONLY,
 
     # baton.pm_turn_append — MUTATING: ops/baton_pm_turns.py `append_turn`
     # appends one line to `.git/coordinator-sessions/<sid>/pm_turns.jsonl`
