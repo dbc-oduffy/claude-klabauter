@@ -37,7 +37,7 @@ from coordinator_core.ops import _research_contract as _rc
 from coordinator_core.ops import requirement_register as rr
 from coordinator_core.ops.dispatch_emit.design_route import DESIGN_ROUTE_KEY, ROUTES as DESIGN_ROUTES
 from coordinator_core.ops._path_guard import contained_path, safe_id
-from coordinator_core.ops.dispatch_emit.route_preference import ROUTE_PREFERENCE_FILE
+from coordinator_core.ops.dispatch_emit.route_preference import ROUTE_PREFERENCE_FILE, ROUTE_VERDICT_KEY
 from coordinator_core.session.record_homes import home_dir
 
 ASK_PHASES = ("size", "gate", "accept", "plan", "stage", "execute", "review")
@@ -137,6 +137,7 @@ ASK_SCOUT_SCHEMA = {
         "spine_plan": {"type": ["string", "null"]},
         "route": _STR,
         "route_override_reason": {"type": ["string", "null"]},
+        ROUTE_VERDICT_KEY: {"type": ["object", "null"]},
         "design_route": {"type": "string", "enum": list(DESIGN_ROUTES)},
         "manifest": {"type": ["object", "null"]},
         "falsifier": {"type": ["object", "null"]},

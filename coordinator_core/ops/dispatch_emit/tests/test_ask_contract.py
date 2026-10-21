@@ -51,6 +51,13 @@ def test_route_preference_record_file_and_override_reason_slot():
     assert "route_override_reason" not in c.SCOUT_SCHEMA["properties"]
 
 
+def test_route_verdict_slot_is_ask_only_and_optional():
+    slot = c.ASK_SCOUT_SCHEMA["properties"]["route_verdict"]
+    assert slot["type"] == ["object", "null"]
+    assert "route_verdict" not in c.ASK_SCOUT_SCHEMA["required"]
+    assert "route_verdict" not in c.SCOUT_SCHEMA["properties"]
+
+
 def test_phase_order_and_names():
     assert c.ASK_PHASES == ("size", "gate", "accept", "plan", "stage", "execute", "review")
     assert (c.OP_ASK_GATE, c.OP_ASK_STAGE) == ("dispatch.ask_gate", "dispatch.ask_stage")

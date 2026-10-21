@@ -91,6 +91,65 @@ def test_no_record_file_leaves_sizing_untouched(repo):  # noqa: F811
     assert (repo / REL).read_bytes() == before
 
 
+def test_divergence_with_reason_replies_pushback_verdict(repo):  # noqa: F811
+    _put(repo, route="plan")
+    _pref(repo, "roadmap")
+    reply = _call(repo, route_override_reason="four fixes of 1-2 files each")
+    v = reply[rp.ROUTE_VERDICT_KEY]
+    assert v["verdict"] == rp.VERDICT_PUSHBACK
+    assert v["em_preferred"] == "roadmap" and v["sized_route"] == "plan"
+    assert v["reason"] == "four fixes of 1-2 files each"
+    assert "four fixes of 1-2 files each" in v["message"]
+
+
+def test_divergence_with_held_reason_only_replies_pushback_with_it(repo):  # noqa: F811
+    _put(repo, route="plan", em_analysis={"route_override_reason": "earlier call"})
+    _pref(repo, "roadmap")
+    v = _call(repo)[rp.ROUTE_VERDICT_KEY]
+    assert v["verdict"] == rp.VERDICT_PUSHBACK and v["reason"] == "earlier call"
+
+
+def test_repeat_call_still_replies_the_verdict(repo):  # noqa: F811
+    _put(repo, route="plan")
+    _pref(repo, "roadmap")
+    _call(repo, route_override_reason="why")
+    again = _call(repo, route_override_reason="why")
+    assert again[rp.ROUTE_VERDICT_KEY]["verdict"] == rp.VERDICT_PUSHBACK
+
+
+def test_match_replies_independent_verdict_with_basis(repo):  # noqa: F811
+    _put(repo, route="plan")
+    _pref(repo, "plan")
+    v = _call(repo)[rp.ROUTE_VERDICT_KEY]
+    assert v["verdict"] == rp.VERDICT_INDEPENDENT
+    assert v["sized_route"] == "plan" and v["basis"] == "fixture"
+
+
+def test_no_preference_file_replies_no_verdict(repo):  # noqa: F811
+    _put(repo, route="plan")
+    assert rp.ROUTE_VERDICT_KEY not in _call(repo)
+
+
+def test_no_run_id_replies_no_verdict(repo):  # noqa: F811
+    _put(repo, route="plan")
+    _pref(repo, "plan")
+    reply = ask_gate._handler({"sizing_path": REL}, repo_root=repo / ".git")
+    assert rp.ROUTE_VERDICT_KEY not in reply
+
+
+def test_rationale_only_preference_replies_no_verdict(repo):  # noqa: F811
+    _put(repo, route="plan")
+    _pref(repo, None, "just context")
+    assert rp.ROUTE_VERDICT_KEY not in _call(repo)
+
+
+def test_refusal_halt_carries_no_verdict(repo):  # noqa: F811
+    _put(repo, route="plan")
+    _pref(repo, "roadmap")
+    reply = _call(repo)
+    assert _override_refused(reply) and rp.ROUTE_VERDICT_KEY not in reply
+
+
 def test_rationale_only_preference_needs_no_reason(repo):  # noqa: F811
     _put(repo, route="plan")
     _pref(repo, None, "just context")
