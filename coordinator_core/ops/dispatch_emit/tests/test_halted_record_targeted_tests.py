@@ -101,6 +101,18 @@ def test_no_verdict_withholds_chunks_as_record_only_and_says_so(repo):
     assert "good.py" not in names and "c1.py" not in names
 
 
+def test_not_run_verdict_is_record_only_and_never_targeted_tests_failed(repo):
+    _setup(repo)
+
+    out = _call(repo, LEDGER, targeted_tests={"status": "error", "tests_run": 0, "tests_failed": 0, "baseline": None})
+
+    assert out["committed"] is True, out
+    assert set(out["withheld"]) == {"c1.py", TESTS, "good.py"}
+    assert set(out["withheld"].values()) == {"halt-record-only"}
+    assert "landed_chunks" not in out
+    assert out["targeted_tests"] == {"check": "not-run", "findings": []}
+
+
 def test_non_ledger_check_halt_is_unchanged(repo):
     _setup(repo)
 

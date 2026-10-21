@@ -58,6 +58,7 @@ from coordinator_core.ops.dispatch_emit.verdict_supersession import (  # noqa: F
     latest_foreign_claims_supersession,
     latest_tests_supersession,
 )
+from coordinator_core.ops.dispatch_emit.test_interpreter import interpreter_clause
 from coordinator_core.ops.dispatch_emit.wake_digest import stage_schema_literal
 from coordinator_core.ops.workflow_scaffold import _js_string_literal
 
@@ -86,12 +87,14 @@ def _sidecar(call: str, plan_path: str, label: str) -> str:
     return with_sidecar_clause(call, "reverify", Path(plan_path.replace("\\", "/")).stem or "run", label)
 
 
-def _tests_prompt(head_sha: str, plan_path: str, base: str, *, write_record: bool = False) -> str:
-    """The scoped-test brief. `write_record` adds the test-runner's sidecar clause, which an agent
-    without Write cannot honour."""
+def _tests_prompt(
+    head_sha: str, plan_path: str, base: str, repo_root: Optional[Path] = None, *, write_record: bool = False
+) -> str:
+    """The scoped-test brief. `repo_root` is the repo whose pinned interpreter the clause names.
+    `write_record` adds the test-runner's sidecar clause, which an agent without Write cannot honour."""
     return (
         f"Run the plan's scoped tests at HEAD {head_sha}: {plan_path}, run_base_sha {base}. "
-        "Run Python as `python3`, falling back to `python` when `python3` is absent. "
+        f"{interpreter_clause(repo_root)} "
         "Report raw evidence; do not gate. "
         + (
             "Write your record and return sidecar_path -- required. "
@@ -426,7 +429,7 @@ def compose_reverify_script(
         }
         verify_prompt = (
             "Verify in two steps, in order, in one run.\n\n"
-            "Step 1 -- scoped tests. " + _tests_prompt(head_sha, plan_path, base)
+            "Step 1 -- scoped tests. " + _tests_prompt(head_sha, plan_path, base, repo_root)
             + "\n\nStep 2 -- criterion verdict. Only once the step 1 result is in, rule the criterion below. "
             "A failing, errored or degraded test result is evidence for your verdict, never the verdict itself. "
             "Return the verdict under `judge`.\n\n"
@@ -457,7 +460,7 @@ def compose_reverify_script(
         tests_ident["tests_agent_type"] = parts.agent_type
     elif rerun_tests:
         phases.append(_js_string_literal(_TESTS_PHASE))
-        tests_prompt = _tests_prompt(head_sha, plan_path, base, write_record=True)
+        tests_prompt = _tests_prompt(head_sha, plan_path, base, repo_root, write_record=True)
         tests_type, tests_role = _host_native(review.prep.agent_type, host_degraded)
         tests_ident["tests_agent_type"] = tests_type
         tests_call = _sidecar(

@@ -3,10 +3,14 @@ superseding `tests` in place of the frozen one."""
 
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
 import pytest
 
 from coordinator_core.ops import review_stamp as m
 from coordinator_core.ops.dispatch_emit import reverify_delivery as rd
+from coordinator_core.ops.dispatch_emit.test_interpreter import PORTABLE_CLAUSE, interpreter_clause
 from coordinator_core.ops.tests.test_review_stamp_superseding_record import _git, _plan, _record, _repo
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
@@ -26,8 +30,24 @@ def test_tests_only_staleness_allows_reverify_and_emits_tests_stage(tmp_path, mo
     out = repo / "docs" / "plans" / "p.reverify.workflow.mjs"
     rd.emit_reverify(repo_root=repo, plan_path=str(plan), run_record=str(record), out_path=str(out))
     text = out.read_text(encoding="utf-8")
-    assert "python3" in text and "tests_run" in text
+    assert interpreter_clause(None) in text and "tests_run" in text
     assert ("Verify" in text) != ("Tests re-run" in text), "one tests leg: merged into the judge or standalone"
+
+
+def test_pinned_interpreter_clause_replaces_python3_sentence(tmp_path, monkeypatch):
+    repo = _repo(tmp_path)
+    pin = Path(sys.executable)
+    (repo / "coordinator.local.md").write_text(f"---\ntargeted_test_python: {pin}\n---\n", encoding="utf-8")
+    record = _record(repo, _git(repo, "rev-parse", "HEAD"), delivery=_PASS, tests=_ERR)
+    plan = repo / "docs" / "plans" / "p.md"
+    plan.parent.mkdir(parents=True, exist_ok=True)
+    plan.write_text("---\nplan_id: pln-x\nstatus: executing\n---\nbody\n", encoding="utf-8")
+    monkeypatch.setattr(rd, "_head_sha", lambda root: "b" * 40)
+    out = repo / "docs" / "plans" / "p.reverify.workflow.mjs"
+    rd.emit_reverify(repo_root=repo, plan_path=str(plan), run_record=str(record), out_path=str(out))
+    text = out.read_text(encoding="utf-8")
+    assert str(pin) in text and "pinned interpreter" in text
+    assert PORTABLE_CLAUSE not in text
 
 
 def test_old_shape_record_emits_no_tests_stage(tmp_path, monkeypatch):

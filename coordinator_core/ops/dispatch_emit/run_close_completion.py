@@ -21,7 +21,7 @@ import re
 from pathlib import Path
 from typing import Any, Mapping, Optional
 
-from coordinator_core.ops.dispatch_emit.run_close import LegResult
+from coordinator_core.ops.dispatch_emit.run_close import LegResult, bare_run_id
 
 AUTHORED_BY = "terminal-judge"
 _COMPLETED_DIR = "archive/completed"
@@ -33,7 +33,7 @@ def _posix(path: str) -> str:
 
 def _run_short_id(run_id: str) -> str:
     """Filename-safe trailing segment of *run_id* (``ask-...-0eb709`` -> ``0eb709``)."""
-    tail =run_id.rsplit("-", 1)[-1].lower()
+    tail = bare_run_id(run_id).rsplit("-", 1)[-1].lower()
     return re.sub(r"[^a-z0-9]+", "", tail) or "run"
 
 

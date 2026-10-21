@@ -113,6 +113,12 @@ def test_ran_writes_summary_verbatim_with_provenance(root):
     assert "ONE paragraph" not in text
 
 
+def test_workflow_suffixed_run_id_names_entry_from_bare_tail(root):
+    crit = {"status": "met", "completion_summary": "Shipped X."}
+    _, paths = rcc.completion_entry_leg(root, "warp-x-20261021T1-d68efd.workflow", PLAN, crit)
+    assert paths[0].endswith("-d68efd.md") and "workflow" not in paths[0]
+
+
 def test_second_call_same_run_is_discharged(root):
     crit = {"status": "met", "completion_summary": "Shipped X."}
     first, paths = rcc.completion_entry_leg(root, "r1", PLAN, crit)

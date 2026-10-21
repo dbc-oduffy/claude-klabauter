@@ -47,6 +47,14 @@ dependency falls on. The four report classes are a routing aid, not four bars.
                  (the guard-heavy-command-admission predicate; a lone
                  ``tsc --noEmit`` is the guard's executor carve-out and passes).
                  The fix is ``agent_type: coordinator:test-runner`` on the row.
+  TEST_RUNNER_OUT_OF_ROLE No schedulable row declaring ``agent_type:
+                 coordinator:test-runner`` has a timing-measurement
+                 ``change_kind`` or a code span / ``verification`` running a full
+                 or broad suite. The fix is ``performer: em``.
+  GITIGNORED_WRITES No schedulable row whose every declared ``writes:`` path lies
+                 under a root the gated tree's ``.gitignore`` declares untracked
+                 (a coded resolve is commit-proven, so it could never close). The
+                 fix is a committed evidence path in ``writes:``.
   PRIME_EXIT     ``prime_exit_criterion`` with a non-empty ``statement`` and a
                  non-empty ``derived_from``, at EVERY size — not only M/L/XL.
   REGISTER       A plan carrying ``register_claims`` names a sizing that carries
@@ -170,7 +178,8 @@ ENGINE_ERROR = "ENGINE-ERROR"
 #: not.
 CLASS_ORDER = (
     "SPINE", "CENSUS", "EXTERNAL_DEPS", "PRIME_EXIT", "CI_RETIRED", "EXECUTOR_COMMIT",
-    "EXECUTOR_HEAVY", "SCHEMA", "REGISTER",
+    "EXECUTOR_HEAVY", "TEST_RUNNER_OUT_OF_ROLE", "GITIGNORED_WRITES", "SCHEMA",
+    "REGISTER",
 )
 
 #: ``external_gate[].requires`` — the discriminant the three-way split turns on.
@@ -1403,6 +1412,115 @@ def _executor_heavy(rows: List[Dict[str, Any]], repo_root: Path) -> Dict[str, An
     )
 
 
+TEST_RUNNER_OUT_OF_ROLE_FIX = (
+    "coordinator:test-runner refuses a timing measurement and a full or broad suite at its tool "
+    "seam. Fix: declare `performer: em` on the row; a timing measurement runs "
+    "`python -m coordinator_core.benchmarks.measure`."
+)
+_TIMING_CHANGE_KIND = re.compile(r"\b(?:timing|measure\w*|benchmark\w*)\b", re.IGNORECASE)
+_BROAD_SUITE_WORKER_CAP = 1 << 30
+
+
+def _test_runner_out_of_role(rows: List[Dict[str, Any]], repo_root: Path) -> Dict[str, Any]:
+    """Refuse a row declaring ``coordinator:test-runner`` whose act test-runner cannot perform.
+
+    Out of role: a ``change_kind`` naming a timing measurement, or a body code span /
+    ``verification`` string that ``classify`` reports TEST_TIER with every worker-capped
+    explicit-test-file run admitted (so only a full or broad suite trips). Targeted verify rows
+    pass. Pure over the parsed row; ``repo_root`` is the gated plan's tree, never process cwd.
+    """
+    from coordinator_core.bash_guards._heavy_command_class import HeavyClass, classify
+    from coordinator_core.ops.dispatch_emit.em_only_act import _code_spans, row_is_em_performed
+    from coordinator_core.ops.dispatch_emit.spine_read import _is_memo_send_row, _is_operator_row
+
+    hits: List[str] = []
+    ids: List[str] = []
+    for row in rows:
+        if not isinstance(row, dict) or _row_is_unschedulable(row):
+            continue
+        if _is_operator_row(row) or _is_memo_send_row(row) or row_is_em_performed(row):
+            continue
+        declared = row.get("agent_type")
+        if not (isinstance(declared, str) and declared.strip() == "coordinator:test-runner"):
+            continue
+        act: Optional[str] = None
+        kind = row.get("change_kind")
+        if isinstance(kind, str) and _TIMING_CHANGE_KIND.search(kind):
+            act = f"change_kind `{kind.strip()[:40]}`"
+        else:
+            spans: List[str] = []
+            if isinstance(row.get("body"), str):
+                spans.extend(_code_spans(row["body"]))
+            if isinstance(row.get("verification"), str):
+                spans.append(row["verification"])
+            for span in spans:
+                span = span.strip()
+                cls = (
+                    classify(span, None, str(repo_root), _BROAD_SUITE_WORKER_CAP) if span else None
+                )
+                if cls is not None and cls.heavy_class is HeavyClass.TEST_TIER:
+                    act = f"`{span[:60]}`"
+                    break
+        if act is None:
+            continue
+        row_id = str(row.get("id") or "<row with no id>")
+        ids.append(row_id)
+        hits.append(f"{row_id} ({act})")
+    if not hits:
+        return _pass("no test-runner row measures timing or runs a broad suite")
+    return _defect(
+        "test-runner-out-of-role-row",
+        f"test-runner rows doing work it refuses: {', '.join(hits)[:260]} — "
+        f"{TEST_RUNNER_OUT_OF_ROLE_FIX}",
+        withheld=sorted(set(ids)),
+    )
+
+
+GITIGNORED_WRITES_FIX = (
+    "`plan.tasks.mutate resolve` with `disposition: coded` proves a row by a commit touching a "
+    "declared write, and a gitignored path is never committed. Fix: declare a committed "
+    "evidence path in `writes:` (e.g. `<plan-slug>.evidence.yaml` beside the plan) and keep the "
+    "scratch output as a byproduct."
+)
+
+
+def _gitignored_writes(rows: List[Dict[str, Any]], gitignored_roots: frozenset) -> Dict[str, Any]:
+    """Refuse a row whose every declared write lies under a root the gated tree's ``.gitignore`` ignores.
+
+    A coded resolve is commit-proven, so a row declaring only untracked writes can never close
+    as coded. One tracked write is enough to pass. Roots are ``repo_gitignored_roots``' literal
+    top-level names (no glob or negation); segments compare posix-normalised. Pure, no spawn.
+    """
+    if not gitignored_roots:
+        return _pass("no gitignored roots declared")
+    hits: List[str] = []
+    ids: List[str] = []
+    for row in rows:
+        if not isinstance(row, dict) or _row_is_unschedulable(row):
+            continue
+        writes = row.get("writes")
+        if not isinstance(writes, list):
+            continue
+        paths = [w for w in writes if isinstance(w, str) and w.strip()]
+        if not paths:
+            continue
+        firsts = [
+            next((s for s in p.strip().replace("\\", "/").split("/") if s not in ("", ".")), "")
+            for p in paths
+        ]
+        if all(f in gitignored_roots for f in firsts):
+            row_id = str(row.get("id") or "<row with no id>")
+            ids.append(row_id)
+            hits.append(f"{row_id} ({', '.join(sorted(set(firsts)))}/)")
+    if not hits:
+        return _pass("no row declares only gitignored writes")
+    return _defect(
+        "gitignored-writes-row",
+        f"rows whose every write is gitignored: {', '.join(hits)[:260]} — {GITIGNORED_WRITES_FIX}",
+        withheld=sorted(set(ids)),
+    )
+
+
 def _sibling_plan_edges(
     row: Dict[str, Any], row_id: str, repo_root: Optional[Path], cache: dict
 ) -> "tuple[frozenset, List[str], List[str]]":
@@ -2292,6 +2410,10 @@ def evaluate_plan(
             "CI_RETIRED": _ci_retired(raw_spine_rows(text)),
             "EXECUTOR_COMMIT": _executor_commit(raw_spine_rows(text)),
             "EXECUTOR_HEAVY": _executor_heavy(raw_spine_rows(text), Path(edge_root)),
+            "TEST_RUNNER_OUT_OF_ROLE": _test_runner_out_of_role(
+                raw_spine_rows(text), Path(edge_root)
+            ),
+            "GITIGNORED_WRITES": _gitignored_writes(raw_spine_rows(text), gitignored_roots),
             "SCHEMA": _schema(fm, prime_exit, parse_error),
             "REGISTER": _register(fm, repo_root),
         }
@@ -2433,6 +2555,10 @@ def _authoring_fix_lines(failing_classes: "Sequence[str] | set") -> List[str]:
         lines.append(f"  fix: {EXECUTOR_COMMIT_FIX}")
     if "EXECUTOR_HEAVY" in failing_classes:
         lines.append(f"  fix: {_EXECUTOR_HEAVY_CATALOGUE_FIX}")
+    if "TEST_RUNNER_OUT_OF_ROLE" in failing_classes:
+        lines.append(f"  fix: {TEST_RUNNER_OUT_OF_ROLE_FIX}")
+    if "GITIGNORED_WRITES" in failing_classes:
+        lines.append(f"  fix: {GITIGNORED_WRITES_FIX}")
     if "REGISTER" in failing_classes:
         lines.append(_REGISTER_FIX)
     return lines
@@ -2550,7 +2676,10 @@ def refusal_message(
         )) and not (register_failing and all(
             k == "REGISTER" or v["status"] == "PASS" for k, v in classes.items()
         )) and not all(
-            k in ("EXECUTOR_COMMIT", "EXECUTOR_HEAVY") or v["status"] == "PASS"
+            k in (
+                "EXECUTOR_COMMIT", "EXECUTOR_HEAVY", "TEST_RUNNER_OUT_OF_ROLE", "GITIGNORED_WRITES",
+            )
+            or v["status"] == "PASS"
             for k, v in classes.items()
         ):
             lines.append(_upgrade_fix_line())

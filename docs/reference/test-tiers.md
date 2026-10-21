@@ -154,6 +154,24 @@ pass — a full-tier re-run buys no new information over the prior run.
 The DR-088 R9 guard refuses directory arguments outright. Briefing a dispatched agent with a
 directory-scoped pytest invocation costs a truncated verification and an EM round trip when the
 guard denies it — brief with explicit file or node-id targets instead.
+## The interpreter targeted tests run under — `targeted_test_python`
+
+Engine-composed scoped-test and ledger-check prompts name the target repo's pinned interpreter
+instead of bare `python3`. `coordinator_core/ops/dispatch_emit/test_interpreter.py ::
+resolve_targeted_test_python` resolves it, first hit wins:
+
+1. `targeted_test_python:` in the target repo's `coordinator.local.md` frontmatter.
+2. The leading token of `fast_test_cmd:`, only when it is an explicit interpreter: an absolute path
+   or a versioned name such as `python3.14`. Bare `python`/`python3` is not a pin.
+3. None: the prompt keeps the portable text (`python3`, falling back to `python`).
+
+Accepted value forms: an absolute path (`/usr/local/bin/python3.14`) or a bare name resolved on
+`PATH`. Resolution is in-process (`os.access`, `shutil.which`); no process is spawned.
+
+A declared pin that does not resolve on the host is an `interpreter-resolution-defect:`, not a test
+failure: the agent runs nothing and reports `status: error`, `tests_run: 0`. A verdict with
+`tests_run: 0` is recorded as `not-run` and withholds no file as `targeted-tests-failed`.
+
 ## Perf ratchets measure process time, not wall clock
 
 An upper-bound assertion on an elapsed-time value is process time by default; wall clock is a

@@ -1345,7 +1345,6 @@ def mint_rows(
                 if accounting_out is not None:
                     accounting_out[row_id] = "no live rows (every plan chunk is closed)"
                 item_all_ids[row_id] = []
-                preceding_ids.add(row_id)
                 continue
         if isinstance(sub_rows, _WithheldSpine):
             raw_ids = _plan_raw_rows_by_id(inventory_path, spec_path, plan_cache)
@@ -2247,7 +2246,9 @@ def mint_spine(
             path = tranche_path
         elif not binding or (part is not None and is_tranche_record):
             # Budget not binding, or already a tranche record (its parts share its N):
-            # no tranche record is minted.
+            # no tranche record is minted. A part of a spent tranche record keeps the spent
+            # run id; the emit's overwrite refusal (op._refuse_spent_overwrite) stops it
+            # rather than renumbering.
             tranche_text = None
         else:
             tranche_path, tranche_text, run_id = _tranche_inventory(

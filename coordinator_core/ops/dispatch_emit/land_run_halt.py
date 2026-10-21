@@ -572,8 +572,9 @@ def _land(
             "check": tcheck,
             "findings": [{"path": f.path, "reason": f.reason, "detail": f.detail} for f in tfind],
         }
-    if kind != "ledger-check" or tcheck == "no-verdict":
-        # Trap: with no verdict the scoped-test leg never ran; a resumed run re-runs the withheld
+    if kind != "ledger-check" or tcheck in ("no-verdict", landing_integrity.NOT_RUN_CHECK):
+        # Trap: with no verdict, or a verdict where no test executed (not-run), the scoped-test leg
+        # never ran, so landing would ship untested product; a resumed run re-runs the withheld
         # chunks and its terminal commit carries the verdict.
         withheld.update({p: HALT_RECORD_ONLY for p in product + removed if p in owner})
     else:

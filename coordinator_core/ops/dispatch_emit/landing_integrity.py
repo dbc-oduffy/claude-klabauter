@@ -20,6 +20,7 @@ PY_UNPARSEABLE = "py-unparseable"
 SINCE_BASE_OVERLAP = "since-base-overlap"
 TARGETED_TESTS_FAILED = "targeted-tests-failed"
 TARGETED_TESTS_PARAM = "targeted_tests"
+NOT_RUN_CHECK = "not-run"
 
 RETEST_DIR = ".coordinator-local/retest"
 RETEST_LAUNCHER = "emit-dispatch-workflow --retest-targeted"
@@ -87,7 +88,7 @@ def run_base_for(worktree_root: Path, run_id: Optional[str], params: Mapping) ->
 def targeted_test_verdict(params: Mapping) -> Optional[Mapping]:
     """The test verdict a commit's params carry: ``params["targeted_tests"]``, else
     ``params["inline_review"]["tests"]`` or ``params["run_outcome"]["inline_review"]["tests"]``
-    mapped to ``{status, tests_failed: failed, baseline: None}``; None when none is carried."""
+    mapped to ``{status, tests_failed: failed, tests_run: run, baseline: None}``; None when none is carried."""
     direct = params.get(TARGETED_TESTS_PARAM)
     if isinstance(direct, Mapping) and isinstance(direct.get("status"), str):
         return direct
@@ -96,7 +97,10 @@ def targeted_test_verdict(params: Mapping) -> Optional[Mapping]:
         review = holder.get("inline_review")
         tests = review.get("tests") if isinstance(review, Mapping) else None
         if isinstance(tests, Mapping) and isinstance(tests.get("status"), str):
-            return {"status": tests["status"], "tests_failed": tests.get("failed"), "baseline": None}
+            return {
+                "status": tests["status"], "tests_failed": tests.get("failed"),
+                "tests_run": tests.get("run"), "baseline": None,
+            }
     return None
 
 
@@ -156,7 +160,10 @@ def failed_targeted_tests(
     verdict: Optional[Mapping], remedy: Optional[str] = None
 ) -> tuple[list[Finding], str]:
     """``(findings, check)`` for a carried test verdict; ``check`` is ``"no-verdict"``, ``"pass"``,
-    ``"pre-existing-only"`` or ``"failed"``.
+    ``"not-run"``, ``"pre-existing-only"`` or ``"failed"``.
+
+    A fail/error verdict whose ``tests_run`` is the integer 0 executed nothing: ``([], NOT_RUN_CHECK)``,
+    checked before the baseline, never a TARGETED_TESTS_FAILED finding.
 
     A fail/error verdict with ``baseline.caused`` yields one Finding(TARGETED_TESTS_FAILED) per
     distinct caused test file (repo-relative POSIX), the detail naming up to three node ids. A
@@ -172,6 +179,9 @@ def failed_targeted_tests(
         return [], "pass"
     if status not in ("fail", "error"):
         return [], "no-verdict"
+    tests_run = verdict.get("tests_run")
+    if isinstance(tests_run, int) and not isinstance(tests_run, bool) and tests_run == 0:
+        return [], NOT_RUN_CHECK
     baseline = verdict.get("baseline")
     if not isinstance(baseline, Mapping):
         count = verdict.get("tests_failed")
@@ -241,7 +251,8 @@ def landing_test_gate(
 ) -> tuple[list[Finding], str]:
     """``(findings, check)`` for a landing path: a valid fresh verdict replaces the recorded one.
     ``check`` is ``"pass-on-retest"`` when a fresh pass cleared it; otherwise as
-    ``failed_targeted_tests``. A None ``run_id`` skips the fresh read.
+    ``failed_targeted_tests`` (including ``"not-run"``, returned before any failure attribution).
+    A None ``run_id`` skips the fresh read.
 
     A fresh verdict with ``stale: true`` (or status ``"stale"``) is ``"stale-non-blocking"``: no
     findings. A recorded fail with no baseline names its failing ids from ``failed_tests`` (top
@@ -252,6 +263,8 @@ def landing_test_gate(
     fresh = fresh_targeted_verdict(worktree_root, run_id) if run_id else None
     if fresh is None:
         verdict = targeted_test_verdict(params)
+        if failed_targeted_tests(verdict)[1] == NOT_RUN_CHECK:
+            return [], NOT_RUN_CHECK
         nodes = _failed_nodes(params, verdict)
         files = list(dict.fromkeys(f for f in (_node_file(n) for n in nodes) if f))
         findings, check = failed_targeted_tests(verdict, retest_remedy(params, files))

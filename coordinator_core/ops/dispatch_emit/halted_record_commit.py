@@ -19,7 +19,8 @@ and so is a chunk any of whose changed declared writes is withheld for another r
 (``chunk-write-set-partial``): a chunk lands whole or not at all. A carried test verdict naming a
 run-caused failure withholds the chunk owning the failing test file, or every chunk when the
 failure is unattributed or in a file no landing chunk owns (``targeted-tests-failed``); the reply's
-``targeted_tests.check`` says ``no-verdict`` when none was carried.
+``targeted_tests.check`` says ``no-verdict`` when none was carried, and ``not-run`` (halt-record-only
+too) when the carried verdict executed no test.
 With no finished chunk the commit is record-only. No receipt, sizing ship,
 plan stamp or close job runs, and the run token is only checked (``run_token.admits``), never
 claimed: no branch, raise or killed op can strand it, so a halt never spends the token the
@@ -546,10 +547,10 @@ def _land(
         from coordinator_core.authoring_leaks import import_closure, ts_import_closure
         from coordinator_core.ops.dispatch_emit import halt_closure
 
-        # Trap: no verdict on a ledger-check halt means the scoped-test leg never ran, so landing
-        # would ship untested product; a resumed run re-runs the withheld chunks and its terminal
-        # commit carries the verdict.
-        if tcheck == "no-verdict":
+        # Trap: no verdict, or a not-run verdict (no test executed), on a ledger-check halt means the
+        # scoped-test leg never ran, so landing would ship untested product; a resumed run re-runs
+        # the withheld chunks and its terminal commit carries the verdict.
+        if tcheck in ("no-verdict", landing_integrity.NOT_RUN_CHECK):
             withheld.update({p: "halt-record-only" for p in product + gone if p in owner})
             product = [p for p in product if p not in withheld]
             gone = [p for p in gone if p not in withheld]

@@ -433,6 +433,12 @@ def _load(root: Path, run_id: str) -> Optional[dict[str, Any]]:
     return data if isinstance(data, dict) and isinstance(data.get("legs"), dict) else None
 
 
+def bare_run_id(stem: str) -> str:
+    """A run id without the emitted script's ``.workflow`` suffix: the close-job record's key keeps it,
+    a digest's ``run_id`` does not."""
+    return stem[: -len(".workflow")] if stem.endswith(".workflow") else stem
+
+
 def resolve_close_job_stem(root: Path, run_id: str) -> Optional[str]:
     """Return the stem of the run's on-disk close-job record, or None when neither exists.
 

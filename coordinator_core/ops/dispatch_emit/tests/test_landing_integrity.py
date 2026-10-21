@@ -88,6 +88,38 @@ def test_error_without_baseline_is_one_unattributed_finding():
     assert [(f.path, f.reason) for f in findings] == [("", li.TARGETED_TESTS_FAILED)]
 
 
+@pytest.mark.parametrize("status", ["error", "fail"])
+def test_zero_tests_run_is_not_run_never_a_finding(status):
+    verdict = {"status": status, "tests_run": 0, "tests_failed": 0, "baseline": None}
+    assert li.failed_targeted_tests(verdict) == ([], li.NOT_RUN_CHECK) == ([], "not-run")
+
+
+@pytest.mark.parametrize("run", [None, "0", False, 3])
+def test_non_zero_or_non_int_tests_run_keeps_unattributed_failure(run):
+    findings, check = li.failed_targeted_tests({"status": "error", "tests_run": run, "baseline": None})
+    assert check == "failed" and findings[0].path == ""
+
+
+def test_inline_review_run_zero_is_not_run():
+    params = {"inline_review": {"tests": {"status": "error", "run": 0, "failed": 0}}}
+    assert li.targeted_test_verdict(params)["tests_run"] == 0
+    assert li.landing_test_gate(Path("."), params, None) == ([], "not-run")
+
+
+def test_recorded_not_run_skips_failure_attribution():
+    params = {"targeted_tests": {"status": "error", "tests_run": 0, "baseline": None},
+              "failed_tests": ["a/test_x.py::t1"]}
+    assert li.landing_test_gate(Path("."), params, None) == ([], "not-run")
+
+
+def test_fresh_retest_verdict_with_zero_run_is_not_run(tmp_path):
+    root = _repo(tmp_path)
+    path = _write_fresh(root, status="error")
+    record = json.loads(path.read_text(encoding="utf-8"))
+    path.write_text(json.dumps({**record, "tests_run": 0}), encoding="utf-8")
+    assert li.landing_test_gate(root, _RECORDED_FAIL, "r1") == ([], "not-run")
+
+
 def test_absent_verdict_is_no_verdict():
     assert li.failed_targeted_tests(None) == ([], "no-verdict")
 
@@ -101,7 +133,7 @@ def test_verdict_prefers_targeted_tests_over_both_inline_review_locations():
 
 def test_verdict_falls_back_to_inline_review_then_run_outcome():
     tests = {"status": "fail", "failed": 3}
-    expected = {"status": "fail", "tests_failed": 3, "baseline": None}
+    expected = {"status": "fail", "tests_failed": 3, "tests_run": None, "baseline": None}
     assert li.targeted_test_verdict({"inline_review": {"tests": tests}}) == expected
     assert li.targeted_test_verdict({"run_outcome": {"inline_review": {"tests": tests}}}) == expected
     assert li.targeted_test_verdict({"targeted_tests": None}) is None

@@ -1518,3 +1518,56 @@ def test_a_stamp_minted_over_the_raw_body_hash_still_certifies():
     from coordinator_core.frontmatter.primitives import canonical_body_sha
 
     assert pg.read_stamp(_certified_text(canonical_body_sha))["state"] == pg.CERTIFIED
+
+
+# ---------------------------------------------------------------------------
+# GITIGNORED_WRITES
+# ---------------------------------------------------------------------------
+
+
+def _gitignored_gate(tmp_path, writes: str, disposition: str = "open") -> dict:
+    (tmp_path / ".gitignore").write_text("scratch/\n", encoding="utf-8")
+    (tmp_path / "coordinator_core").mkdir(exist_ok=True)
+    spine = f"""- id: C0
+  title: Measure
+  body: Measure the thing and record it.
+  change_kind: verification
+  surface: coordinator_core/x.py
+  writes: {writes}
+  queue_scope: project
+  disposition: {disposition}
+"""
+    return _gate(tmp_path, _write_plan(tmp_path, frontmatter=_CLEAN_FM, spine=spine))["classes"][
+        "GITIGNORED_WRITES"
+    ]
+
+
+def test_a_row_writing_only_gitignored_paths_is_refused_naming_evidence(tmp_path):
+    cls = _gitignored_gate(tmp_path, "[scratch/a.txt, scratch/b/c.txt]")
+    assert cls["status"] == "DEFECT"
+    assert cls["kind"] == "gitignored-writes-row"
+    assert cls["withheld"] == ["C0"]
+    assert "evidence" in cls["detail"]
+
+
+def test_a_backslash_gitignored_write_is_refused(tmp_path):
+    assert _gitignored_gate(tmp_path, "['scratch\\a.txt']")["status"] == "DEFECT"
+
+
+def test_a_row_with_one_tracked_write_passes(tmp_path):
+    cls = _gitignored_gate(tmp_path, "[scratch/a.txt, docs/plans/x.evidence.yaml]")
+    assert cls["status"] == "PASS"
+
+
+def test_an_unschedulable_gitignored_row_passes(tmp_path):
+    assert _gitignored_gate(tmp_path, "[scratch/a.txt]", "wont_do")["status"] == "PASS"
+
+
+def test_no_gitignore_means_no_refusal(tmp_path):
+    (tmp_path / "coordinator_core").mkdir()
+    spine = _CLEAN_SPINE.replace(
+        "writes: [coordinator_core/roadmap/prep_gate.py]", "writes: [scratch/a.txt]"
+    )
+    report = _gate(tmp_path, _write_plan(tmp_path, frontmatter=_CLEAN_FM, spine=spine))
+    assert report["classes"]["GITIGNORED_WRITES"]["status"] == "PASS"
+    assert report["classes"]["GITIGNORED_WRITES"]["withheld"] == []

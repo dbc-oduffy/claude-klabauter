@@ -2399,10 +2399,13 @@ def _vitest_cap_clause() -> str:
     return _VITEST_CAP_CLAUSE.format(cap=cap) if cap else ""
 
 
-def _test_runner_clause() -> str:
-    """The skip-report rule plus, when the box sets one, the vitest cap."""
+def _test_runner_clause(repo_root: Optional[str | Path] = None) -> str:
+    """The skip-report rule, the vitest cap when the box sets one, and the target repo's interpreter clause."""
+    from coordinator_core.ops.dispatch_emit.test_interpreter import interpreter_clause
+
     cap = _vitest_cap_clause()
-    return f"{_SKIP_REPORT_CLAUSE} {cap}" if cap else _SKIP_REPORT_CLAUSE
+    base = f"{_SKIP_REPORT_CLAUSE} {cap}" if cap else _SKIP_REPORT_CLAUSE
+    return f"{base} {interpreter_clause(repo_root)}"
 
 
 # Clones, venvs, wheels and exports an executor builds outside the repo
@@ -3271,7 +3274,7 @@ def _scoped_test_steps(
         run_clause
         + (f"{typecheck_prompt_clause(typecheck)} " if typecheck is not None else "")
         + (f"{_review_edits_clause(review_edits_base, surface, review_terminal)} " if review_edits_base else "")
-        + f"{_test_runner_clause()} "
+        + f"{_test_runner_clause(repo_root)} "
         + (f"{_owed_gates_clause(owed_gates)} " if owed_gates else "")
         + (
             f"{_baseline_context_clause(review_edits_base, surface, review_terminal)} "
@@ -4034,6 +4037,7 @@ def _run_row_helper_js(
     verify_wanted_js: str = "true",
     sidecar_workflow: str = _SIDECAR_WORKFLOW,
     sidecar_run_key: Optional[str] = None,
+    repo_root: Optional[str | Path] = None,
 ) -> str:
     """The ONE shared ``_runRow`` async function every DAG node's own
     ``_rows[id] = _runRow(...)`` registration calls (§ Design D4).
@@ -4078,7 +4082,7 @@ def _run_row_helper_js(
             "      _verifications.push(agent(\n"
             "        `Run and report on the scoped test target(s) for ${id}: ` + "
             "verifyScope.join(', ') + '. ' + "
-            f"{_js_string_literal(_test_runner_clause())} + "
+            f"{_js_string_literal(_test_runner_clause(repo_root))} + "
             f"{_emit_sidecar_clause_js(None, _VERIFY_LABEL_JS, workflow=sidecar_workflow, run_key=sidecar_run_key)},\n"
             "        { "
             f"label: 'verify:' + id, phase: {_js_string_literal(_EXECUTE_PHASE_TITLE)}, "
@@ -4700,7 +4704,14 @@ def _checkpoint_commit_js(
         "  async function _commitWave(n, ids) {",
         "    const done = ids.filter((i) => _landed[i]);",
         (
-            "    if (!done.length) { if ((_seamHeldPlans[n] || []).length) _seamFail(n, 'no commit landed'); return; }"
+            "    if (!done.length) {\n"
+            "      if ((_seamHeldPlans[n] || []).length) {\n"
+            "        _commitFailures.push('wave ' + n + ': no row landed to commit');\n"
+            f"        {COMMIT_REFUSED_VAR}['wave ' + n + ' commit'] = 'wave ' + n + ': no row landed to commit';\n"
+            "        if (_seamGates[n]) _rowIdOf.set(_seamGates[n], 'wave ' + n + ' commit');\n"
+            "      }\n"
+            "      return;\n"
+            "    }"
             if seam is not None
             else "    if (!done.length) return;"
         ),
@@ -5372,7 +5383,10 @@ def compose_script(
         row_helper_index = len(body_blocks)
         body_blocks.append(
             _run_row_helper_js(
-                agent_type_host, plan_path if seam_leg else None, sidecar_run_key=_sidecar_run_key(plan_path)
+                agent_type_host,
+                plan_path if seam_leg else None,
+                sidecar_run_key=_sidecar_run_key(plan_path),
+                repo_root=repo_root,
             )
         )
 
@@ -5948,7 +5962,7 @@ def compose_script(
     if not review_only:
         if test_var is not None:
             body_blocks[row_helper_index] = _run_row_helper_js(
-                agent_type_host, plan_path if seam_leg else None, "false"
+                agent_type_host, plan_path if seam_leg else None, "false", repo_root=repo_root
             )
         body_blocks.append(
             "  if (!_halted) { const _r = _heldDependentsReason(); if (_r) { _halted = _r; _haltedByHold = true; } }"

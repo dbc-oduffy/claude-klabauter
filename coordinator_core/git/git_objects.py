@@ -390,10 +390,27 @@ def _iter_pack_files(common_dir: Path, *, revalidate: bool = True) -> list[tuple
                 result.append((idx_path, pack_path))
     _PACK_LISTING_CACHE[key] = (generation, result)
     _PACK_INDEXES_BY_LISTING.pop(key, None)
+    _LAST_HIT_PACK.pop(key, None)
     return result
 
 
 _PACK_INDEXES_BY_LISTING: "dict[str, list[tuple[Path, Path, _PackIndex]]]" = {}
+# Position in the `_pack_indexes` list of the pack that answered the previous
+# hit, per `str(common_dir)`; cleared whenever that list is rebuilt.
+_LAST_HIT_PACK: "dict[str, int]" = {}
+
+
+def _probe_order(key: str, indexes: list):
+    """Yields positions of `indexes` lazily: the last-hit pack first, then the
+    rest in listing order; each position appears exactly once."""
+    last = _LAST_HIT_PACK.get(key)
+    if last is not None and last < len(indexes):
+        yield last
+    else:
+        last = -1
+    for i in range(len(indexes)):
+        if i != last:
+            yield i
 
 
 def _pack_indexes(
@@ -630,16 +647,23 @@ def _read_pack_object_at(
 
 def packed_contains(common_dir: Path, sha: str) -> bool:
     """Index-only membership: no pack bytes are read or inflated."""
-    return any(
-        _pack_index_find(pidx, sha) is not None
-        for _idx_path, _pack_path, pidx in _pack_indexes(Path(common_dir), revalidate=False)
-    )
+    common_dir = Path(common_dir)
+    key = str(common_dir)
+    indexes = _pack_indexes(common_dir, revalidate=False)
+    for i in _probe_order(key, indexes):
+        if _pack_index_find(indexes[i][2], sha) is not None:
+            _LAST_HIT_PACK[key] = i
+            return True
+    return False
 
 
 def _search_packs_for_sha(
     common_dir: Path, sha: str, *, revalidate: bool
 ) -> Optional[tuple[Optional[tuple[str, bytes]]]]:
-    for _idx_path, pack_path, pidx in _pack_indexes(common_dir, revalidate=revalidate):
+    key = str(common_dir)
+    indexes = _pack_indexes(common_dir, revalidate=revalidate)
+    for i in _probe_order(key, indexes):
+        _idx_path, pack_path, pidx = indexes[i]
         offset = _pack_index_find(pidx, sha)
         if offset is None:
             continue
@@ -647,6 +671,7 @@ def _search_packs_for_sha(
             pack_bytes = _read_pack_bytes(pack_path)
         except OSError:
             continue
+        _LAST_HIT_PACK[key] = i
         type_num, content = _read_pack_object_at(common_dir, pack_path, pack_bytes, offset)
         type_name = _PACK_TYPE_NAMES.get(type_num)
         if type_name is None:

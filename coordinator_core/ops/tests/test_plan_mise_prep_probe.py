@@ -236,6 +236,15 @@ def test_apply_refuses_a_non_plan(tmp_path):
         mod._apply_handler({"plan": "docs/plans/not-a-plan.md"}, common)
 
 
+def test_apply_refuses_a_plan_outside_docs_plans(tmp_path):
+    common = _repo(tmp_path)
+    rel = _plan(tmp_path, frontmatter=_DERIVABLE_FM, spine=None, name="archive/x.md")
+    before = (tmp_path / rel).read_bytes()
+    with pytest.raises(ValueError, match="docs/plans/ plans only"):
+        mod._apply_handler({"plan": rel}, common)
+    assert (tmp_path / rel).read_bytes() == before
+
+
 def test_a_plan_outside_the_worktree_is_refused(tmp_path):
     common = _repo(tmp_path)
     outside = tmp_path.parent / "elsewhere-probe.md"

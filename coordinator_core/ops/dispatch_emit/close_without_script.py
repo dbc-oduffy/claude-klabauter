@@ -43,9 +43,9 @@ def _norm(path: Any) -> str:
 
 
 def _run_key(stem: str) -> str:
-    """A run id without the emitted script's ``.workflow`` suffix: the close-job record's key keeps it,
-    a digest's ``run_id`` does not."""
-    return stem[: -len(".workflow")] if stem.endswith(".workflow") else stem
+    from coordinator_core.ops.dispatch_emit.run_close import bare_run_id
+
+    return bare_run_id(stem)
 
 
 def _bare_stem(text: Any) -> bool:

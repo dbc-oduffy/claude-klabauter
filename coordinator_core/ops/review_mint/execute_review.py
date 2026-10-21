@@ -34,6 +34,7 @@ from coordinator_core.ops.review_mint.wave_not_run import (
     WAVE_NOT_RUN_VAR,
     not_run_entry_js as _not_run_entry_js,
 )
+from coordinator_core.ops.dispatch_emit.test_interpreter import interpreter_clause
 from coordinator_core.ops.review_slice_limits import MAX_SLICES
 from coordinator_core.ops.review_prep import REVIEW_PREP_BUSY_PREFIX
 from coordinator_core.ops.workflow_scaffold import _js_string_literal
@@ -1410,8 +1411,6 @@ _JUDGE_PREAMBLE = (
     "Do not read executor reports, review sidecars or their prose: the run does not "
     "certify itself. Every 'met' names the command you ran or the path you read. When "
     "the plan records a falsifier, run it as recorded; it is not yours to replace. "
-    "Run Python as `python3`, falling back to `python` when `python3` is absent, rather "
-    "than running a falsifier's bare `python` verbatim. "
     "Return 'indeterminate' when the evidence does not settle the criterion. Report "
     "the REQUIRED boolean `differs_from_baseline`: true only if what you observed "
     "differs from the baseline in the way the criterion describes, false otherwise "
@@ -1626,6 +1625,17 @@ def delivery_supersession_clause(criterion: Optional[OperativeCriterion]) -> str
     )
 
 
+def _plan_repo_root(plan_path: str) -> Optional[Path]:
+    """The nearest ancestor of the plan file holding `coordinator.local.md`; `None` when there is none."""
+    path = Path(plan_path.replace("\\", "/"))
+    if not path.is_absolute():
+        path = Path.cwd() / path
+    for parent in path.parents:
+        if (parent / "coordinator.local.md").is_file():
+            return parent
+    return None
+
+
 def _criterion_judge_prompt(
     review: ExecuteReview,
     *,
@@ -1649,8 +1659,12 @@ def _criterion_judge_prompt(
             + (f"; baseline_output={falsifier['baseline_output']!r}" if falsifier.get("baseline_output") else "")
         )
     judge_type, judge_role = _host_native(review.judge.agent_type, host_degraded)
+    interpreter = (
+        f"{interpreter_clause(_plan_repo_root(plan_path))} "
+        "Run a falsifier under that rather than running its bare `python` verbatim. "
+    )
     prompt = (
-        f"{prompt_head}\n\n{judge_role}{_JUDGE_PREAMBLE}\n"
+        f"{prompt_head}\n\n{judge_role}{_JUDGE_PREAMBLE}{interpreter}\n"
         f"{_tier1_clause(evidence)}\n"
         f"plan_path: {plan_path} (its sizing_object field names the sizing)\n"
         f"run_base_sha: {run_base_sha}\n"

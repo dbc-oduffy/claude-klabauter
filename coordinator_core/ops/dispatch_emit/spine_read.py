@@ -157,7 +157,7 @@ from coordinator_core.frontmatter.body_blocks import LocateStatus, locate_fenced
 from coordinator_core.frontmatter.primitives import split_frontmatter
 from coordinator_core.frontmatter.schema_validate import check_plan_tasks_source
 from coordinator_core.ops.dispatch_emit.em_only_act import em_only_capability, forbidden_sole_act, row_is_em_performed
-from coordinator_core.ops.plan_tasks_render import RowsResult, load_rows
+from coordinator_core.ops.plan_tasks_render import RowsResult
 
 
 class _Undeclared:
@@ -346,7 +346,7 @@ def resolve_plan_edge(
         return PlanEdgeResolution(None, _status_edge_hold(owner, label, str(edge["status"]), actual))
     if target not in plan_cache:
         try:
-            loaded = load_rows(target.read_text(encoding="utf-8"))
+            loaded = load_rows_memo(target.read_text(encoding="utf-8"))
         except OSError:
             plan_cache[target] = None
         else:
@@ -425,6 +425,19 @@ def unlanded_plan_edges(
     return held
 
 
+@functools.lru_cache(maxsize=64)
+def _absolute_plan_key(plan_path: str) -> str:
+    return Path(plan_path).resolve().as_posix().lower()
+
+
+def _own_plan_key(plan_path: str) -> str:
+    """`plan_path` resolved, posix, lower-cased; one resolve per absolute path, not per row.
+    A relative path resolves against the cwd, so it is never cached."""
+    if Path(plan_path).is_absolute():
+        return _absolute_plan_key(plan_path)
+    return Path(plan_path).resolve().as_posix().lower()
+
+
 def _route_own_plan_body_write(writes: list, plan_path) -> list:
     """``writes`` with the plan's own body entry replaced by its evidence sidecar
     when the row also writes a non-body path.
@@ -436,7 +449,7 @@ def _route_own_plan_body_write(writes: list, plan_path) -> list:
     from coordinator_core.ops.plan_tasks_mutate import evidence_sidecar_path
     from coordinator_core.write_guards.block_subagent_plan_body_write import _PLAN_BODY_RE
 
-    own = Path(plan_path).resolve().as_posix().lower()
+    own = _own_plan_key(str(plan_path))
 
     def is_body(entry) -> bool:
         return isinstance(entry, str) and bool(
@@ -1062,8 +1075,15 @@ def read_spine(
     cleared_gate_owners: frozenset = frozenset(),
     in_run_plan_chunks: frozenset = frozenset(),
     landed_plan_chunks: Optional[Mapping[tuple, str]] = None,
+    plan_edge_cache: Optional[dict] = None,
 ) -> list[EmitterRow]:
     """Read `plan_path`'s task-spine and return normalized ``EmitterRow`` objects.
+
+    ``plan_edge_cache`` is a caller-owned dict used in place of the per-call one. Every
+    slot ``resolve_plan_edge`` and ``_checkpoint_landed`` store is keyed by the target
+    plan's absolute path and holds a value of (target text, repo root, HEAD) alone --
+    never of the plan being read. The caller's window is ONE set-wide call at ONE HEAD.
+    ``landed_plan_chunks`` is a per-call slot, so passing both raises ``ValueError``.
 
     ``landed_plan_chunks`` maps ``(repo-relative plan path, chunk id)`` to the checkpoint sha
     that landed it. An ``open`` row of this plan keyed there is excluded as
@@ -1357,7 +1377,10 @@ def read_spine(
     blocked_ids: set[str] = set()
     deferred_ids: set[str] = set()
     plan_edge_root: Optional[Path] = None
-    plan_edge_cache: dict = {}
+    if plan_edge_cache is None:
+        plan_edge_cache = {}
+    elif landed_plan_chunks:
+        raise ValueError("plan_edge_cache cannot be shared with landed_plan_chunks")
     landed_map = dict(landed_plan_chunks or {})
     own_plan_rel: Optional[str] = None
     if landed_map:

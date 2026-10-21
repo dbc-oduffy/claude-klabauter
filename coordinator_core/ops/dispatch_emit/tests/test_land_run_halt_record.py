@@ -133,6 +133,18 @@ def test_a_wrong_token_is_refused_before_any_write(repo):
     assert not (repo / RECORD_DIR_ROOT / RUN / "halted.json").exists()
 
 
+def test_a_not_run_verdict_withholds_record_only_and_records_not_run(repo):
+    _record(repo)
+    _chunks(repo, {"C1": ["done.py"]})
+
+    out = _call(repo, targeted_tests={"status": "error", "tests_run": 0, "tests_failed": 0, "baseline": None})
+
+    assert out["withheld"] == {"done.py": land_run_halt.HALT_RECORD_ONLY}
+    assert out["targeted_tests"]["check"] == "not-run"
+    assert "targeted-tests-failed" not in out["withheld"].values()
+    assert "done.py" not in _names(repo, out["sha"])
+
+
 def test_a_halt_other_than_ledger_check_lands_the_record_only(repo):
     _record(repo)
     _chunks(repo, {"C1": ["done.py"]})

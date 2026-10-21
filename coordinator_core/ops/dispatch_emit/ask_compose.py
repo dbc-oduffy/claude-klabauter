@@ -155,7 +155,9 @@ _OWNER_ROWS_JS = "_crossRepoRows"
 _SCOUT_SCHEMA = SCOUT_SCHEMA  # tests/test_ask_compose.py reads this name
 _BLITZ_TRAIL = "blitz"
 _INVOKE = '"${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/bin/coordinator-invoke"'
-_OVERRIDE_SLOT = "<why your assembled route differs from route_preference; omit when it matches>"
+_ROUTE_VERDICT_KEY = _route_pref.ROUTE_VERDICT_KEY
+_VERDICT_RETURN = f", {_ROUTE_VERDICT_KEY}"
+_OVERRIDE_SLOT ="<why your assembled route differs from route_preference; omit when it matches>"
 _ANCHOR_CLAUSE = (
     "Repo root: {root} -- run `cd {root}` as its own standalone Bash call first; every "
     "repo-relative path below resolves against it."
@@ -368,7 +370,7 @@ _DOC_PATHS_JS = (
 # The scoped-test verdict as a params key; null before the test leg has run (a pre-test halt).
 _TARGETED_TESTS_JS = (
     "targeted_tests: (_testResult && typeof _testResult.status === 'string') ? { status: _testResult.status, "
-    "tests_failed: _testResult.tests_failed ?? null, baseline: _testResult.baseline ?? null } : null,"
+    "tests_run: _testResult.tests_run ?? null, tests_failed: _testResult.tests_failed ?? null, baseline: _testResult.baseline ?? null } : null,"
 )
 _LEDGER_CHECK_SCHEMA = _obj(
     ["items"],
@@ -527,7 +529,12 @@ _GATE_STAGED_SCHEMA = {
 #: gate reply (plus stage reply) it runs as closing acts.
 _REWORD_SCHEMA = _obj(
     ["exit_criterion"],
-    {**_GATE_STAGED_SCHEMA["properties"], **ASSEMBLE_SCHEMA["properties"], "exit_criterion": _STR},
+    {
+        **_GATE_STAGED_SCHEMA["properties"],
+        **ASSEMBLE_SCHEMA["properties"],
+        _route_pref.ROUTE_VERDICT_KEY: {"type": ["object", "null"]},
+        "exit_criterion": _STR,
+    },
 )
 #: The ask scout's return with its relayed stage reply held to the stage-reply schema.
 _ASK_SCOUT_STAGED_SCHEMA = {
@@ -655,7 +662,7 @@ def _ledger_shadowed(blitz_fn: str, *, em_brief: bool) -> str:
 _ROW_VERIFY_PROMPT_OPEN = "`Run and report on the scoped test target(s) for ${id}: `"
 
 
-def _test_instruction_js(review_edits_base: str) -> str:
+def _test_instruction_js(review_edits_base: str, repo_root: Optional[str] = None) -> str:
     """JS expression for the verify agent's scoped-test instructions, scoped at run time to the manifest's test targets.
 
     The plan is authored inside the run, so the scope cannot resolve at compose time; the stage
@@ -668,7 +675,7 @@ def _test_instruction_js(review_edits_base: str) -> str:
         "]. "
         + _emit._review_edits_clause(review_edits_base)
         + " "
-        + _emit._test_runner_clause()
+        + _emit._test_runner_clause(repo_root)
         + " "
         + (_emit._baseline_context_clause(review_edits_base) + " " if _emit._is_full_sha(review_edits_base) else "")
         + "Report raw evidence; do not gate. Write your record and return its path as sidecar_path -- required.",
@@ -1588,7 +1595,7 @@ def compose_ask_script(
             "with <name> filled as above and <your writes> replaced by the JSON array you return as writes:\n\n"
             + gate_template
             + "\n\nand return its JSON reply verbatim as arm, halt, baton, sizing_path and (when present) resume_plan, "
-            f"resume_rows, resume_ledger and spine_plan, plus design_brief and design_route when present; then read estimate.tshirt and route from the sizing at {sizing_write_rel} "
+            f"resume_rows, resume_ledger and spine_plan, plus design_brief and design_route{_VERDICT_RETURN if has_route_pref else ''} when present; then read estimate.tshirt and route from the sizing at {sizing_write_rel} "
             "and return them as tshirt and route (tshirt replaces your own judged value). "
             "On a non-zero exit_code run no gate command and return no arm or halt."
         )
@@ -1725,7 +1732,7 @@ def compose_ask_script(
             f"Do not edit, retry or repair it. (2) Only when exit_code is 0, run `{_INVOKE} {OP_ASK_GATE} '",
             _gate_payload(sizing_js=_reword_sizing_js),
             "'` and return its JSON reply verbatim as arm, halt, baton, sizing_path and (when present) resume_plan, resume_rows, resume_ledger, "
-            "spine_plan, design_brief and design_route; when the command is denied or fails, return halt {kind: 'refusal', reason: <its error "
+            f"spine_plan, design_brief and design_route{_VERDICT_RETURN if has_route_pref else ''}; when the command is denied or fails, return halt {{kind: 'refusal', reason: <its error "
             "text>}, never arm and halt both null. Also read the sizing at ",
             "js:" + _reword_sizing_js,
             " and return its estimate.tshirt as tshirt and its route as route. On a non-zero exit_code run no "
@@ -1789,6 +1796,7 @@ def compose_ask_script(
             "resume_plan: _reworded.resume_plan ?? null, resume_rows: _reworded.resume_rows ?? null, resume_ledger: _reworded.resume_ledger ?? null, spine_plan: _reworded.spine_plan ?? null, "
             f"{DESIGN_BRIEF_KEY}: _reworded.{DESIGN_BRIEF_KEY} ?? null, "
             f"{DESIGN_ROUTE_KEY}: _reworded.{DESIGN_ROUTE_KEY} ?? null, "
+            f"{_ROUTE_VERDICT_KEY}: _reworded.{_ROUTE_VERDICT_KEY} ?? null, "
             "stage_reply: _reworded.stage_reply ?? null });"
         )
         b.append("      _rewordStaged = !_scouted.halt && !!_scouted.arm;")
@@ -1837,7 +1845,8 @@ def compose_ask_script(
             "route: _scouted.route, resume_plan: _scouted.resume_plan ?? null, "
             "resume_rows: _scouted.resume_rows ?? null, resume_ledger: _scouted.resume_ledger ?? null, spine_plan: _scouted.spine_plan ?? null, "
             f"{DESIGN_BRIEF_KEY}: _scouted.{DESIGN_BRIEF_KEY} ?? null, "
-            f"{DESIGN_ROUTE_KEY}: _scouted.{DESIGN_ROUTE_KEY} ?? null }};"
+            f"{DESIGN_ROUTE_KEY}: _scouted.{DESIGN_ROUTE_KEY} ?? null, "
+            f"{_ROUTE_VERDICT_KEY}: _scouted.{_ROUTE_VERDICT_KEY} ?? null }};"
         )
         if fold_falsifier:
             b.append("  let _scoutFalsifier = null;")
@@ -2697,7 +2706,7 @@ def compose_ask_script(
     verify_call = _verify_call(
         head=head,
         anchor=anchor,
-        test_js=_test_instruction_js(run_base_sha or "HEAD"),
+        test_js=_test_instruction_js(run_base_sha or "HEAD", repo_root),
         docs_parts=_docs_prompt_parts(run_id=run_id, manifest_rel=manifest_rel) if in_run_commit else (),
         verdict_parts=(*verdict_parts, DEFAULT_MET_BY_CLAUSE, "js:" + _SFE_WAVE_SIDECARS_JS, "js:" + _RESUME_LEDGER_CLAUSE_JS),
         judged=judged,
@@ -2972,7 +2981,7 @@ def compose_ask_script(
         )
         _append_halt_record_commit(b)
     b.append(
-        f"  return {{ arm: _gate.arm, {DESIGN_ROUTE_KEY}: _gate?.{DESIGN_ROUTE_KEY} ?? null, sizing: _sizingRel, plan: _planRel, run_id: _runId, "
+        f"  return {{ arm: _gate.arm, {DESIGN_ROUTE_KEY}: _gate?.{DESIGN_ROUTE_KEY} ?? null, {_ROUTE_VERDICT_KEY}: _gate?.{_ROUTE_VERDICT_KEY} ?? null, sizing: _sizingRel, plan: _planRel, run_id: _runId, "
         "split: _splitExit ? _splitExit.split : null, fire: _splitExit ? _splitExit.fire : "
         f"(_halted && _halted.halted === {_lit(HALT_RESEARCH)} && Array.isArray(_halted.fire) ? _halted.fire : "
         "(_commit?.close?.siblings?.released ?? [])), "
