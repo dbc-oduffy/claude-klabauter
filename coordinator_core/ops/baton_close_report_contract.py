@@ -23,7 +23,10 @@ class EvidenceClass(str, Enum):
 
 class ResidueReason(str, Enum):
     TARGET_UNREADABLE = "target_unreadable"
-    TARGET_MISSING = "target_missing"
+    # Cited file was read but carries no top-level `status:` line (e.g. a pre-frontmatter
+    # legacy plan); distinct from TARGET_UNREADABLE, where the file could not be read.
+    TARGET_UNSTATUSED = "target_unstatused"
+    TARGET_MISSING ="target_missing"
     LIVE_SUCCESSOR = "live_successor"
     CLAIMED = "claimed"
     EVIDENCE_CONFLICT = "evidence_conflict"

@@ -188,10 +188,15 @@ def _flip_handoff(
     advanced_at: str,
     ship_sha: str,
     common_dir: Path,
+    *,
+    shipped_in_kind: str = "ship-commit",
 ) -> tuple[bool, Optional[str]]:
     """Flip one handoff to shipped in a single locked write: `shipped_in`,
     `shipped_in_kind`, `deployment_state`, `pickup_ready`, `advanced_by`, `advanced_at`,
-    validated once. Returns (advanced, refusal_reason); never raises."""
+    validated once. Returns (advanced, refusal_reason); never raises.
+
+    `shipped_in_kind` must be a member of the handoff schema's shipped_in_kind enum;
+    validate-before-write rejects any other value."""
     state = {"applied": False}
 
     def mutate(old_text: str) -> str:
@@ -205,7 +210,7 @@ def _flip_handoff(
         ship_anchor = "claimed_at" if read_fm_field(fm, "claimed_at") is not None else "consumed_at"
         for key, value, anchor, numeric in (
             ("shipped_in", ship_sha, ship_anchor, True),
-            ("shipped_in_kind", "ship-commit", "shipped_in", False),
+            ("shipped_in_kind", shipped_in_kind, "shipped_in", False),
             ("deployment_state", "shipped", "status", False),
             ("pickup_ready", "false", "deployment_state", False),
             ("advanced_by", deliverable_id, "deployment_state", False),

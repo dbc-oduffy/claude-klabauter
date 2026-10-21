@@ -138,4 +138,6 @@ def test_a_generator_failure_leaves_the_commit_refused(repo):
     out = _fire(repo, "coordinator/bin/newtool.py")
 
     assert out["committed"] is False
-    assert "landing allowlist does not classify" in out["error"]
+    # The publish-allowlist drift check refuses ahead of the landing classifier
+    # when the generator cannot run; either refusal must name the unlisted path.
+    assert "allowlist" in out["error"] and "coordinator/bin/newtool.py" in out["error"]

@@ -12,7 +12,8 @@ from coordinator_core.ops.baton_close_report_contract import (
     Verdict,
 )
 
-# Evidence.target_status sentinels for a target that could not be read. None counts as unreadable.
+# Evidence.target_status sentinels for a target that could not be read. None is a readable
+# target with no status line (unstatused), a third case distinct from both.
 STATUS_MISSING = ResidueReason.TARGET_MISSING.value
 STATUS_UNREADABLE = ResidueReason.TARGET_UNREADABLE.value
 
@@ -20,14 +21,16 @@ _OPEN = "open"
 
 
 def _kind(item: Evidence) -> str:
-    """done | contradicts | missing | unreadable. Only a real non-done status contradicts."""
+    """done | contradicts | missing | unreadable | unstatused. Only a real non-done status contradicts."""
     if item["done"]:
         return "done"
     status = item["target_status"]
+    if status is None:
+        return "unstatused"
+    if status == STATUS_UNREADABLE:
+        return "unreadable"
     if status == STATUS_MISSING:
         return "missing"
-    if status is None or status == STATUS_UNREADABLE:
-        return "unreadable"
     return "contradicts"
 
 
@@ -37,8 +40,9 @@ def decide(
     """Return ("closable", evidence), ("residue", reason, evidence) or ("no_evidence",).
 
     Precedence: nothing cited, claimed-with-done, live successor, done-vs-contradicting
-    conflict, closable, unreadable/missing target, no_evidence (cited targets all really not
-    done). A missing or unreadable target never contradicts a done one.
+    conflict, closable, then residue by target kind (unreadable, unstatused, missing), then
+    no_evidence (cited targets all really not done). A missing, unreadable or unstatused
+    target never contradicts a done one.
     """
     if not evidence:
         return (Verdict.NO_EVIDENCE.value,)
@@ -54,6 +58,8 @@ def decide(
         return (Verdict.CLOSABLE.value, evidence)
     if "unreadable" in kinds:
         return (Verdict.RESIDUE.value, ResidueReason.TARGET_UNREADABLE.value, evidence)
+    if "unstatused" in kinds:
+        return (Verdict.RESIDUE.value, ResidueReason.TARGET_UNSTATUSED.value, evidence)
     if "missing" in kinds:
         return (Verdict.RESIDUE.value, ResidueReason.TARGET_MISSING.value, evidence)
     return (Verdict.NO_EVIDENCE.value,)

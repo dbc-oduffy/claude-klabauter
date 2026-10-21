@@ -10,17 +10,20 @@ import os
 import re
 
 from coordinator_core.ops.baton_close_report_contract import BatonHeader, Evidence, EvidenceClass
-from coordinator_core.ops.baton_close_report_decide import STATUS_MISSING
+from coordinator_core.ops.baton_close_report_decide import STATUS_MISSING, STATUS_UNREADABLE
 from coordinator_core.session.record_homes import home_dir
 
-PLAN_DONE = frozenset({"implemented", "landed", "complete"})
+# `landed` is non-terminal per plan.schema.json's status description (spine rows still open):
+# do not re-add it. `complete` stays as defensive tolerance.
+PLAN_DONE = frozenset({"implemented", "complete"})
 SIZING_DONE = frozenset({"shipped"})
 ROADMAP_DONE = frozenset({"shipped"})
 # No goal on disk carries a terminal status, so no value is a guess here.
 GOAL_DONE: frozenset[str] = frozenset()
 
-# Evidence.target_status for a cited target with no file is the decide module's STATUS_MISSING
-# (one sentinel for both sides); None means a file with no status line.
+# Evidence.target_status is the decide module's STATUS_MISSING for a cited target with no file,
+# STATUS_UNREADABLE for a file that exists but cannot be opened (one sentinel set for both
+# sides); None means a file read with no status line.
 
 _HEAD_BYTES = 16384
 _PLAN_ID_BYTES = 2048
@@ -40,13 +43,24 @@ def _scalar(raw: str) -> str:
 
 
 def _head(path: str, nbytes: int) -> list[str] | None:
-    """Leading lines of `path` (CRLF-tolerant), or None when the file cannot be read."""
+    """Leading lines of `path` (CRLF-tolerant), or None when the file does not exist.
+
+    Any other OSError propagates: the caller decides what an unreadable file means.
+    """
     try:
         with open(path, "rb") as fh:
             data = fh.read(nbytes)
-    except OSError:
+    except (FileNotFoundError, NotADirectoryError):
         return None
     return data.decode("utf-8", errors="replace").splitlines()
+
+
+def _head_or_none(path: str, nbytes: int) -> list[str] | None:
+    """`_head` for index scans, where an unreadable file is skipped like a missing one."""
+    try:
+        return _head(path, nbytes)
+    except OSError:
+        return None
 
 
 def _frontmatter(lines: list[str]) -> list[str]:
@@ -92,12 +106,16 @@ class _Reader:
         if hit is not None:
             return hit
         full = _safe_join(self.root, rel)
-        lines = _head(full, _HEAD_BYTES) if full else None
-        if lines is None:
-            result: tuple[bool, str | None] = (False, None)
+        try:
+            lines = _head(full, _HEAD_BYTES) if full else None
+        except OSError:
+            result: tuple[bool, str | None] = (True, STATUS_UNREADABLE)
         else:
-            body = _frontmatter(lines) if fenced else lines
-            result = (True, _key_value(body, _STATUS_RE))
+            if lines is None:
+                result = (False, None)
+            else:
+                body = _frontmatter(lines) if fenced else lines
+                result = (True, _key_value(body, _STATUS_RE))
         self._status[rel] = result
         return result
 
@@ -112,7 +130,7 @@ class _Reader:
             for name in names:
                 if not name.endswith(".md"):
                     continue
-                lines = _head(os.path.join(plans, name), _PLAN_ID_BYTES)
+                lines = _head_or_none(os.path.join(plans, name), _PLAN_ID_BYTES)
                 if lines is None:
                     continue
                 pid = _key_value(_frontmatter(lines), _PLAN_ID_RE)
@@ -134,7 +152,7 @@ class _Reader:
             for name in names:
                 if not name.endswith((".yaml", ".yml")):
                     continue
-                lines = _head(os.path.join(gdir, name), _HEAD_BYTES)
+                lines = _head_or_none(os.path.join(gdir, name), _HEAD_BYTES)
                 if lines is None:
                     continue
                 gid = _key_value(lines, _GOAL_ID_RE)
@@ -148,7 +166,7 @@ class _Reader:
 
 def _item(cls: EvidenceClass, field: str, path: str, exists: bool, status: str | None,
           done_set: frozenset[str]) -> Evidence:
-    shown = status if exists else STATUS_MISSING
+    shown = status if exists else STATUS_MISSING  # exists + STATUS_UNREADABLE passes through
     return {
         "class": cls.value,
         "field": field,
@@ -168,8 +186,9 @@ def _path_item(rd: _Reader, cls: EvidenceClass, field: str, rel: str, fenced: bo
 def target_evidence(worktree_root: str, headers: dict[str, BatonHeader]) -> dict[str, list[Evidence]]:
     """Evidence items per baton rel path; batons citing nothing are absent from the result.
 
-    A cited target with no file reads `target_status == STATUS_MISSING`; a file with no
-    top-level `status:` line reads `None`. Neither is done.
+    A cited target with no file reads `target_status == STATUS_MISSING`; a file that exists but
+    cannot be opened reads `STATUS_UNREADABLE`; a file read with no top-level `status:` line
+    reads `None`. None of the three is done.
     """
     rd = _Reader(worktree_root)
     out: dict[str, list[Evidence]] = {}

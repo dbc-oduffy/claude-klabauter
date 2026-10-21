@@ -5163,6 +5163,25 @@ def _terminal_commit_inner(
     if allowlist_path is not None and allowlist_path not in all_paths:
         all_paths.append(allowlist_path)
 
+    # Machine-local share paths (the bookkeeping record, review sidecars) are review references,
+    # never part of the commit's pathspec: the commit guard refuses them.
+    from coordinator_core.git.machine_local_paths import machine_local_paths as _machine_local
+
+    _local = set(_machine_local([*all_paths, *deleted_paths]))
+    record_dropped = bookkeeping_record_path in _local
+    if _local:
+        all_paths = [p for p in all_paths if p not in _local]
+        deleted_paths = [p for p in deleted_paths if p not in _local]
+    # A record-only commit still anchors the review stamp: it lands as a marker on the plan path.
+    marker_anchor = record_dropped and (bool(request.review_only) or not request.chunks)
+    if record_dropped and not all_paths and not deleted_paths and request.plan_path:
+        all_paths = [request.plan_path]
+        marker_anchor = True
+    # With the record dropped, a review that applied fixes still lands its trailer when the
+    # product paths match HEAD.
+    if record_dropped and request.plan_path and inline_review.get("fixes"):
+        marker_anchor = True
+
     # One choke point for every admission arm: a path an unlanded sibling run claims and this run
     # does not declare never reaches the integrity gate or the commit.
     from coordinator_core.ops.dispatch_emit import sibling_claims as _sc
@@ -5202,9 +5221,6 @@ def _terminal_commit_inner(
     commit_params: dict = {
         "paths": all_paths, "message": message, "carry_own_left_behind": not in_scope_left,
     }
-    if bookkeeping_record_path is not None and bookkeeping_record_path in all_paths:
-        # The review record lives under the gitignored subagent-share dir and is tracked by design.
-        commit_params["force_ignored"] = [bookkeeping_record_path]
     if deleted_paths:
         commit_params["deleted_paths"] = deleted_paths
     # A DONE chunk's own declared write that is now absent is a planned deletion; when it removes a
@@ -5216,8 +5232,8 @@ def _terminal_commit_inner(
     own_reverts = sorted({p for p in asked_reverts if p in own_staged} | set(deleted_paths))
     if own_reverts:
         commit_params["declared_reverts"] = own_reverts
-    if params.get("allow_empty") is True:
-        commit_params["allow_empty"] = True
+    if params.get("allow_empty") is True or marker_anchor:
+        commit_params["allow_empty"] = True  # marker_anchor: the review anchor must land tree-equal
     if session_id is not None:
         commit_params["session_id"] = session_id
         fixes_at, wave_paths = _fixes_integrated_at(worktree_root, inline_review)

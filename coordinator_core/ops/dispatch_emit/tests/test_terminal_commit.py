@@ -317,7 +317,8 @@ def test_zero_stage_inline_review_runs_bookkeep_wave_and_review_stamp_mints(repo
         cwd=str(repo), capture_output=True, text=True, check=True,
         **no_console_creationflags(),
     ).stdout
-    assert f"{stem}.md" in log, "the bookkeeping record did not land in the terminal commit"
+    assert f"{stem}.md" not in log, "a subagent-share record must stay out of the terminal commit"
+    assert record_path.is_file(), "the bookkeeping record must stay on disk for the review stamp"
 
     plan_path = repo / "docs" / "plans" / "example.md"
     plan_path.parent.mkdir(parents=True)

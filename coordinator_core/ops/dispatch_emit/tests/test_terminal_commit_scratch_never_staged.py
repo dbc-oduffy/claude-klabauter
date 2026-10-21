@@ -116,3 +116,28 @@ def test_run_with_only_scratch_declared_commits_nothing(repo):
     assert out["committed"] is False
     assert out["never_commit_dropped"] == ["scratch/only.txt"]
     assert not [p for p in _tree(repo) if p.startswith("scratch/")]
+
+
+_SHARE = ".coordinator-local/subagent-share"
+
+
+def test_subagent_share_paths_never_reach_the_commit_pathspec(repo):
+    (repo / _SHARE / "sess").mkdir(parents=True)
+    (repo / _SHARE / "sess" / "review.md").write_text("review\n", encoding="utf-8")
+    (repo / "a.py").write_text("a\n", encoding="utf-8")
+    request = CommitRequest(
+        chunks=(ChunkCommit(id="C1", title="t", paths=("a.py", f"{_SHARE}/sess/review.md")),)
+    )
+    out = _run(repo, request)
+    assert out["committed"] is True, out
+    assert "machine-local" not in str(out.get("error", ""))
+    assert "a.py" in _tree(repo)
+    assert not [p for p in _tree(repo) if p.startswith(_SHARE)]
+    assert (repo / _SHARE / "sess" / "review.md").is_file()
+
+
+def test_the_machine_local_guard_still_refuses_a_subagent_share_add():
+    from coordinator_core.git.commit import CommitRefused, commit_paths
+
+    with pytest.raises(CommitRefused, match="machine-local path"):
+        commit_paths(Path("."), [f"{_SHARE}/sess/review.md"], "m")

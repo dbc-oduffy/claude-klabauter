@@ -39,6 +39,30 @@ def test_plan_done_not_done_missing_unreadable(tmp_path):
     assert ev["target_status"] == t.STATUS_MISSING and not ev["done"]
 
 
+def test_plan_landed_is_not_done(tmp_path):
+    _w(tmp_path, "docs/plans/a.md", "---\nstatus: landed\n---\n")
+    (ev,) = _run(tmp_path, governing_plan="docs/plans/a.md")
+    assert ev["target_status"] == "landed" and ev["done"] is False
+
+
+def test_open_permission_error_reads_unreadable_not_missing(tmp_path, monkeypatch):
+    _w(tmp_path, "docs/plans/a.md", "---\nstatus: implemented\n---\n")
+
+    def deny(file, *a, **k):
+        raise PermissionError(13, "denied", str(file))
+
+    monkeypatch.setattr(t, "open", deny, raising=False)
+    (ev,) = _run(tmp_path, governing_plan="docs/plans/a.md")
+    assert ev["target_status"] == t.STATUS_UNREADABLE == "target_unreadable"
+    assert ev["done"] is False
+
+
+def test_legacy_unfenced_prose_status_is_none_not_done(tmp_path):
+    _w(tmp_path, "docs/plans/a.md", "# Plan\n\n> **Status:** SHIPPED\n\nbody\n")
+    (ev,) = _run(tmp_path, governing_plan="docs/plans/a.md")
+    assert ev["target_status"] is None and ev["done"] is False
+
+
 def test_plan_status_outside_frontmatter_ignored(tmp_path):
     _w(tmp_path, "docs/plans/a.md", "---\ntitle: x\n---\nstatus: landed\n")
     (ev,) = _run(tmp_path, governing_plan="docs/plans/a.md")
@@ -84,7 +108,7 @@ def test_goal_done_when_vocabulary_names_it(tmp_path, monkeypatch):
 
 
 def test_origin_plan_id_resolved_through_plan_id_pass(tmp_path):
-    _w(tmp_path, "docs/plans/a.md", '---\nplan_id: "pln-1"\nstatus: landed\n---\n')
+    _w(tmp_path, "docs/plans/a.md", '---\nplan_id: "pln-1"\nstatus: implemented\n---\n')
     (ev,) = _run(tmp_path, origin_plan_id="pln-1")
     assert ev["field"] == "origin_plan_id" and ev["target_path"] == "docs/plans/a.md" and ev["done"]
     (ev,) = _run(tmp_path, origin_plan_id="pln-missing")
@@ -92,13 +116,13 @@ def test_origin_plan_id_resolved_through_plan_id_pass(tmp_path):
 
 
 def test_same_plan_by_both_fields_yields_one_item(tmp_path):
-    _w(tmp_path, "docs/plans/a.md", '---\nplan_id: pln-1\nstatus: landed\n---\n')
+    _w(tmp_path, "docs/plans/a.md", '---\nplan_id: pln-1\nstatus: implemented\n---\n')
     evs = _run(tmp_path, governing_plan="docs/plans/a.md", origin_plan_id="pln-1")
     assert len(evs) == 1
 
 
 def test_crlf_records(tmp_path):
-    _w(tmp_path, "docs/plans/a.md", "---\nstatus: landed\n---\n", crlf=True)
+    _w(tmp_path, "docs/plans/a.md", "---\nstatus: implemented\n---\n", crlf=True)
     _w(tmp_path, "state/sizings/a.yaml", "status: shipped\n", crlf=True)
     assert _run(tmp_path, governing_plan="docs/plans/a.md")[0]["done"]
     assert _run(tmp_path, sizing_object="state/sizings/a.yaml")[0]["done"]
@@ -110,7 +134,7 @@ def test_quoted_status_unquoted(tmp_path):
 
 
 def test_target_cited_by_two_batons_read_once(tmp_path, monkeypatch):
-    _w(tmp_path, "docs/plans/a.md", "---\nstatus: landed\n---\n")
+    _w(tmp_path, "docs/plans/a.md", "---\nstatus: implemented\n---\n")
     opened: list[str] = []
     real = builtins.open
 

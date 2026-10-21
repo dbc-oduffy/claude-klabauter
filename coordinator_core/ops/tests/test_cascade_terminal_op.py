@@ -365,3 +365,16 @@ def test_plan_fk_join_resolves_an_archived_plan_path(value, plan_fk):
 
     assert _plan_fk_matches(value, plan_fk)
     assert not _plan_fk_matches(value, "archive/specs/2026-10/q.md")
+
+
+def test_flip_handoff_writes_the_given_shipped_in_kind(tmp_path):
+    repo, handoff, _sizing, base = _seed_run(tmp_path, pad=3)
+    advanced, refusal = op_mod._flip_handoff(
+        handoff, _DID, "2026-10-21T00:00:00Z", base[:8], repo / ".git",
+        shipped_in_kind="successor",
+    )
+    assert (advanced, refusal) == (True, None)
+    assert _fm(handoff, "shipped_in_kind") == "successor"
+    assert _fm(handoff, "deployment_state") == "shipped"
+    assert _fm(handoff, "pickup_ready") == "false"
+    assert _fm(handoff, "advanced_by") == _DID
