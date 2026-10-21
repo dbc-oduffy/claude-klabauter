@@ -82,3 +82,42 @@ def test_peer_uncommitted_import_is_still_refused(tmp_path: Path):
     assert "import_closure" in out["error"]
     assert "pkg/contract.py is uncommitted in the worktree" in out["error"]
     assert _git(["rev-parse", "HEAD"], repo) == before
+
+
+def _wide_chain_script() -> str:
+    wide = [f"pkg/wide_{i}.py" for i in range(25)]
+    waves = [
+        [_write_row("C1", writes=wide), _write_row("C2", writes=["pkg/two.py"])],
+        [_write_row("C3", writes=["pkg/three.py"], depends_on=[{"chunk": "C2"}])],
+        [
+            _write_row("C4", writes=["pkg/four.py"], depends_on=[{"chunk": "C1"}]),
+            _write_row("C5", writes=["pkg/five.py"], depends_on=[{"chunk": "C3"}]),
+        ],
+    ]
+    return compose_script(
+        waves, name="wf", description="d", session_id=_SESSION, expected_branch="work/run", **REVIEW_KW,
+    )
+
+
+def test_a_row_depending_on_an_uncheckpointed_row_gets_no_checkpoint():
+    script = _wide_chain_script()
+
+    assert "_waveCommit(1, ['C2']);" in script
+    assert "_waveCommit(2, ['C3']);" in script
+    assert "_waveCommit(3, ['C5']);" in script
+    notice = next(ln for ln in script.splitlines() if "No checkpoint commit" in ln)
+    assert "C1" in notice and "depends on an un-checkpointed row" in notice and "C4" in notice
+    assert "C5" not in notice
+
+
+def test_a_wave_whose_every_row_drops_out_emits_no_commit_and_no_seam_gate():
+    waves = [
+        [_write_row("C1", writes=[f"pkg/wide_{i}.py" for i in range(25)])],
+        [_write_row("C4", writes=["pkg/four.py"], depends_on=[{"chunk": "C1"}])],
+    ]
+    script = compose_script(
+        waves, name="wf", description="d", session_id=_SESSION, expected_branch="work/run", **REVIEW_KW,
+    )
+
+    assert "_waveCommit(" not in script.replace("function _waveCommit(", "")
+    assert "_seamRelease[" not in script

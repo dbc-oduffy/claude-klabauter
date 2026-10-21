@@ -594,3 +594,12 @@ def test_constraint_row_recorded_honoured_unblocks_ship(tmp_path):
         {"sizing": rel, "register": honoured, "amend": True}, repo_root=tmp_path / ".git")
     assert reply["exit_code"] == 0, reply
     assert rr.ship_refusal(rr.read_register(path.read_text(encoding="utf-8"))) is None
+
+
+def test_apply_verdicts_repeat_for_the_same_sha_is_byte_identical():
+    rows = [_row("a", claimed_by=[P1])]
+    once = rr.apply_verdicts(_sizing(rows), [{"id": "a", "status": "met", "wired": True}], P1, "sha1", NOW)
+    again = rr.apply_verdicts(once, [{"id": "a", "status": "met", "wired": True}], P1, "sha1", NOW + timedelta(minutes=5))
+    assert again == once
+    newer = rr.apply_verdicts(once, [{"id": "a", "status": "met", "wired": True}], P1, "sha2", NOW + timedelta(minutes=5))
+    assert newer != once

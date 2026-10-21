@@ -58,13 +58,14 @@ def _plan_title(root: Path, plan_rel: str, run_id: str) -> str:
     return title or run_id
 
 
-def _remedy(reason: str, title: str) -> str:
+def _remedy(reason: str, title: str, plan_rel: str) -> str:
     from coordinator_core.ops.ceremony.completion_entry import _completion_entry_rel_path
 
     entry = _posix(str(_completion_entry_rel_path(title)))
     return (
-        f"{reason}; no entry written at {entry}; write it by hand: "
-        f"python coordinator/bin/coordinator-complete-entry.py"
+        f"{reason}; no entry written at {entry}; re-close the landed run "
+        f"(dispatch.land_run with its script_path and task_output_path), or re-judge: "
+        f"emit-dispatch-workflow --plan {plan_rel} --rejudge --out <x>.workflow.mjs"
     )
 
 
@@ -131,13 +132,13 @@ def completion_entry_leg(
     title = _plan_title(root, plan_rel, run_id)
     ledger_prose = ledger_met if isinstance(ledger_met, str) and ledger_met.strip() else None
     if status != "met" and not (ledger_prose and status != "not_met"):
-        return LegResult("failed", _remedy(f"criterion {status}", title)), []
+        return LegResult("failed", _remedy(f"criterion {status}", title, plan_rel)), []
     if status != "met":
         summary = ledger_prose
     if not isinstance(summary, str) or not summary.strip():
         summary = criterion.get("observation")
     if not isinstance(summary, str) or not summary.strip():
-        return LegResult("failed", _remedy("no judge summary", title)), []
+        return LegResult("failed", _remedy("no judge summary", title, plan_rel)), []
 
     existing = _existing_entry(root, run_id, title)
     if existing:

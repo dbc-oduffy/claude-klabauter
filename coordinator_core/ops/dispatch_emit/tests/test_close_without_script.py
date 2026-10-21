@@ -446,7 +446,7 @@ def test_register_failure_withholds_the_flip_and_the_demotion_sticks(env, monkey
     seen: list = []
     real_mint, real_gate = terminal_commit._mint_review_stamp, terminal_commit._register_gate
 
-    def gate(root, plan, inline):
+    def gate(root, plan, inline, ledger=()):
         inline["criterion"]["status"] = "not_met"
         return "register row R1: not wired"
 
@@ -726,7 +726,7 @@ def test_kept_stamp_with_a_register_failure_withholds_the_flip(env, monkeypatch)
     text = (env.repo / PLAN).read_text(encoding="utf-8")
     (env.repo / PLAN).write_text(text.replace("status: implemented", "status: executing", 1), encoding="utf-8")
     _forbid_mint(monkeypatch)
-    monkeypatch.setattr(terminal_commit, "_register_gate", lambda root, plan, inline: "register row R1: not wired")
+    monkeypatch.setattr(terminal_commit, "_register_gate", lambda root, plan, inline, ledger=(): "register row R1: not wired")
 
     out = env.call()
 

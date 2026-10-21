@@ -4373,6 +4373,30 @@ def _plan_of(row_plan: Optional[str], plan_path: Optional[str]) -> Optional[str]
     return row_plan or plan_path
 
 
+def _checkpointable_rows(dag, row_pathspecs: dict) -> tuple:
+    """``(committable ids, over-cap ids, dependent ids)``: a row checkpoints only when it declares
+    1..``_SHARED_PATH_ARRAY_THRESHOLD`` paths and no row it depends on, transitively, declares paths
+    yet goes without a checkpoint -- its files may import that row's, and the wave commit would stage
+    them without it. Dropped rows land in the terminal commit."""
+    over = {
+        n.row.id for n in dag.nodes if len(row_pathspecs.get(n.row.id) or []) > _SHARED_PATH_ARRAY_THRESHOLD
+    }
+    ok = {n.row.id for n in dag.nodes if 0 < len(row_pathspecs.get(n.row.id) or []) <= _SHARED_PATH_ARRAY_THRESHOLD}
+    gone = set(over)
+    dependent: set = set()
+    grew = True
+    while grew:
+        grew = False
+        for n in dag.nodes:
+            rid = n.row.id
+            if rid in ok and any(d in gone for d in n.after):
+                ok.discard(rid)
+                gone.add(rid)
+                dependent.add(rid)
+                grew = True
+    return frozenset(ok), frozenset(over), frozenset(dependent)
+
+
 def seam_leg_for(
     waves: list,
     row_plans: dict,
@@ -5331,11 +5355,7 @@ def compose_script(
             _row_plans,
             plan_path,
             seam,
-            frozenset(
-                rid
-                for rid, paths in row_pathspecs.items()
-                if paths and len(paths) <= _SHARED_PATH_ARRAY_THRESHOLD
-            ),
+            _checkpointable_rows(dag, row_pathspecs)[0],
             run_base_sha,
         )
         body_blocks.append(
@@ -5400,7 +5420,9 @@ def compose_script(
                 "});"
             )
         unchecked_rows: list[str] = []
+        dependent_rows: list[str] = []
         committable_rows: set[str] = set()
+        _, checkpoint_over, checkpoint_dependent = _checkpointable_rows(dag, row_pathspecs)
         if seam_leg is not None:
             for n in seam_leg.gated:
                 body_blocks.append(
@@ -5485,8 +5507,11 @@ def compose_script(
                     chatty_brief=_chatty.member_brief(row.id, _chatty.member_nonce(roster, row.id)),
                 )
             row_paths = row_pathspecs.get(row.id) or []
-            if len(row_paths) > _SHARED_PATH_ARRAY_THRESHOLD:
+            if row.id in checkpoint_over:
                 unchecked_rows.append(row.id)
+                row_paths = []
+            elif row.id in checkpoint_dependent:
+                dependent_rows.append(row.id)
                 row_paths = []
             if row_paths:
                 committable_rows.add(row.id)
@@ -5514,16 +5539,16 @@ def compose_script(
                     f"  _waveCommit({n}, [" + ", ".join(_js_string_literal(i) for i in ids) + "]);"
                 )
 
-        if unchecked_rows:
-            body_blocks.append(
-                "  log("
-                + _js_string_literal(
-                    f"No checkpoint commit for rows declaring more than "
-                    f"{_SHARED_PATH_ARRAY_THRESHOLD} paths (the terminal commit covers them): "
-                    + ", ".join(unchecked_rows)
-                )
-                + ");"
+        if unchecked_rows or dependent_rows:
+            notice = "No checkpoint commit for rows " + "; ".join(
+                part for part in (
+                    f"declaring more than {_SHARED_PATH_ARRAY_THRESHOLD} paths (the terminal commit covers them): "
+                    + ", ".join(unchecked_rows) if unchecked_rows else "",
+                    "depends on an un-checkpointed row (the terminal commit covers them): "
+                    + ", ".join(dependent_rows) if dependent_rows else "",
+                ) if part
             )
+            body_blocks.append("  log(" + _js_string_literal(notice) + ");")
         body_blocks.append("  await Promise.all(Object.values(_rows));")
         if roster is not None:
             overseer_opts = (

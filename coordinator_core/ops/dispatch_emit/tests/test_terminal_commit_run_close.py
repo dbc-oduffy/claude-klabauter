@@ -144,7 +144,7 @@ def test_judge_without_summary_fails_completion_entry_and_writes_none(env):
     leg = close["legs"]["completion-entry"]
     assert leg["status"] == "failed"
     assert leg["detail"].startswith("no judge summary")
-    assert "coordinator-complete-entry.py" in leg["detail"]
+    assert "dispatch.land_run" in leg["detail"] and "by hand" not in leg["detail"]
     assert "completion-entry" in close["outstanding"]
     assert _entries(env["repo"]) == [] and close["completion_entry"] is None
 

@@ -43,7 +43,8 @@ def test_unmet_detail_names_entry_path_and_runnable_cli(root, crit):
     entry = _completion_entry_rel_path("Shipped the thing").as_posix()
     assert result.status == "failed" and paths == []
     assert entry in result.detail
-    assert "coordinator/bin/coordinator-complete-entry.py" in result.detail
+    assert "dispatch.land_run" in result.detail and "--rejudge" in result.detail
+    assert "by hand" not in result.detail and "coordinator-complete-entry" not in result.detail
     assert "/" not in result.detail.split(";")[0] and "\n" not in result.detail
     assert _entries(root) == []
 

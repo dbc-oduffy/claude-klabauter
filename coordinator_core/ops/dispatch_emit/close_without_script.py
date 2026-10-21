@@ -42,6 +42,12 @@ def _norm(path: Any) -> str:
     return text[2:] if text.startswith("./") else text
 
 
+def _run_key(stem: str) -> str:
+    """A run id without the emitted script's ``.workflow`` suffix: the close-job record's key keeps it,
+    a digest's ``run_id`` does not."""
+    return stem[: -len(".workflow")] if stem.endswith(".workflow") else stem
+
+
 def _bare_stem(text: Any) -> bool:
     return isinstance(text, str) and bool(text) and text != ".." and "/" not in text and "\\" not in text
 
@@ -71,7 +77,7 @@ def _digest(task_output_path: Optional[str], run_id: str) -> Optional[dict]:
                 "Pass the run's own task-output file, or omit task_output_path.",
             )
         stem = bound
-    if stem != run_id:
+    if _run_key(stem) != _run_key(run_id):
         raise CloseRefusal(
             "task-output-run-mismatch",
             f"{task_output_path!r} is run {stem!r}'s output, not {run_id!r}. "
@@ -328,6 +334,54 @@ def close_landed_run(worktree_root: Path, repo_root: Path, params: dict) -> dict
     )
 
 
+_GATE_REASON_PREFIXES = ("register row ", "PM turn ")
+
+
+def _ledger_judged(worktree_root: Path, run_id: str, record: dict) -> list:
+    """Register row ids the run's requirements ledger judged: the record's stored inputs, else the
+    ledger read off the run's record directory."""
+    inputs = record.get("inputs") if isinstance(record.get("inputs"), dict) else {}
+    stored = inputs.get("ledger_judged")
+    if isinstance(stored, list):
+        return [str(i) for i in stored]
+    from coordinator_core.ops.dispatch_emit import requirements_ledger
+
+    try:
+        ledger = requirements_ledger.read_ledger(
+            worktree_root, requirements_ledger.run_dir(worktree_root, _run_key(run_id))
+        )
+    except (requirements_ledger.LedgerRefused, OSError):
+        return []
+    return [str(i.id) for i in ledger.items] if ledger is not None else []
+
+
+def _regated(worktree_root: Path, plan_rel: str, run_id: str, record: dict, criterion: dict) -> tuple:
+    """``(criterion, register_failure, status before the gate)``: a ``not_met`` the register gate itself wrote (reason equal to
+    observation, a gate reason prefix, the judge's ``register_rows`` still on the criterion) is
+    re-judged from those rows through today's gate with the ledger's judged ids, never read back as
+    the stored status. Any other criterion is gated as it stands."""
+    from coordinator_core.ops import requirement_register as rr
+    from coordinator_core.ops.dispatch_emit import terminal_commit as tc
+
+    gated = copy.deepcopy(criterion)
+    reason = gated.get("reason")
+    from_gate = (
+        gated.get("status") == "not_met"
+        and isinstance(reason, str) and reason == gated.get("observation")
+        and reason.startswith(_GATE_REASON_PREFIXES)
+        and isinstance(gated.get(rr.JUDGE_ROWS_KEY), list)
+    )
+    if from_gate:
+        gated["status"] = "met"
+        gated.pop("reason", None)
+        gated.pop("observation", None)
+    ahead = gated["status"]
+    failure = tc._register_gate(
+        worktree_root, plan_rel, {"criterion": gated}, _ledger_judged(worktree_root, run_id, record)
+    )
+    return gated, failure, ahead
+
+
 def _pay(
     worktree_root: Path, repo_root: Path, session_id: Optional[str], plan_rel: str, run_id: str,
     record: dict, plan_text: str, plan_fm: dict, plan_id: str, review_path: Optional[Path],
@@ -343,7 +397,7 @@ def _pay(
     from coordinator_core.ops.dispatch_emit.run_close_lessons import lessons_leg
 
     terminal_sha = record["terminal_sha"]
-    judged = verdict.criterion["status"]
+    gated, register_failure, judged = _regated(worktree_root, plan_rel, run_id, record, verdict.criterion)
     now = datetime.now().astimezone()
     batons = _claimed_batons(worktree_root, run_id, record)
     try:
@@ -371,8 +425,6 @@ def _pay(
             "review_stamp": "minted", "plan_status": "implemented",
         }
 
-    gated = copy.deepcopy(verdict.criterion)
-    register_failure = tc._register_gate(worktree_root, plan_rel, {"criterion": gated})
     amend: dict = {}
     if gated != record.get("criterion"):
         amend["criterion"] = gated
@@ -411,7 +463,9 @@ def _pay(
         entry_result = tc._leg("failed", "review stamp refused; no completion entry written")
     elif not entry_paid:
         try:
-            entry_result, entry_paths = completion_entry_leg(worktree_root, run_id, plan_rel, gated)
+            entry_result, entry_paths = completion_entry_leg(
+                worktree_root, run_id, plan_rel, gated, ledger_met=(record.get("inputs") or {}).get("ledger_met"),
+            )
         except Exception as exc:  # noqa: BLE001 -- a leg failure is reported, never raised
             entry_result, entry_paths = tc._leg("failed", f"completion-entry raised {type(exc).__name__}"), []
 
@@ -587,4 +641,7 @@ def _close(
         "legs": {**presets, **legs}, "kind": kind, "presets": presets,
         "completion_entry": (entry_paths or [record.get("completion_entry")])[0],
     }
-    return tc._close_block(ctx, reply)
+    # A kept stamp whose plan flip leaves the tree equal to HEAD has nothing to commit: the close is
+    # already landed there, not "the terminal commit did not land".
+    settled = reply.get("nothing_to_commit") and reply.get("review_stamp") == "minted" and "coded_stamp_error" not in reply
+    return tc._close_block(ctx, {**reply, "committed": True} if settled else reply)

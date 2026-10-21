@@ -579,22 +579,26 @@ def apply_verdicts(
         return sizing_text
     verdicts = {str(j.get("id")): j for j in judge_rows if isinstance(j, Mapping)}
     stamp = _iso_utc(now)
+    changed = False
     for row in claimed_rows(register, plan_path, claim_ids):
         verdict = verdicts.get(str(row.get(ROW_ID)))
         if verdict is None or row.get(ROW_STATUS) in (STATUS_DEFERRED, STATUS_WAIVED):
             continue
         met = verdict.get(ROW_STATUS) == STATUS_MET
         wired = verdict.get(ROW_WIRED) is True
+        ref = f"{_plan_key(plan_path)}@{sha}"
+        met_by = [m for m in row.get(ROW_MET_BY) or [] if isinstance(m, str)]
+        target = STATUS_MET if met and wired else STATUS_PARTIAL if met or wired else row.get(ROW_STATUS)
+        if met and wired and ref in met_by and row.get(ROW_WIRED) is True and row.get(ROW_STATUS) == STATUS_MET:
+            continue  # already met at this sha: a repeat bumps no timestamp and writes nothing
+        changed = True
         row[ROW_WIRED] = wired
         if met and wired:
-            met_by = [m for m in row.get(ROW_MET_BY) or [] if isinstance(m, str)]
-            ref = f"{_plan_key(plan_path)}@{sha}"
             row[ROW_MET_BY] = met_by + ([ref] if ref not in met_by else [])
         row[ROW_LAST_PROGRESS_AT] = stamp
-        if met and wired:
-            row[ROW_STATUS] = STATUS_MET
-        elif met or wired:
-            row[ROW_STATUS] = STATUS_PARTIAL
+        row[ROW_STATUS] = target
+    if not changed:
+        return sizing_text
     return write_register_text(
         sizing_text, {**register.raw, ROWS_KEY: register.rows}, now
     )
