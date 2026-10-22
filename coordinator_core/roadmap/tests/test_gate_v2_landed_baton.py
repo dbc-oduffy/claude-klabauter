@@ -45,6 +45,25 @@ def test_non_coded_baton_with_the_same_blockers_stays_closed(root):
     assert {e["blocker"] for e in row["planning_gate"]["blocking"]} == {"drafted", "no-such-record"}
 
 
+def test_coding_a_row_of_a_reviewed_plan_clears_needs_plan(root):
+    from coordinator_core.ops.dispatch_emit.plan_row_coding import flip_rows_coded
+
+    rows = "- id: C1\n  title: t\n  change_kind: code-edit\n  surface: a.py\n  disposition: open\n  deferred: false\n"
+    plan_file = root / "docs/plans/rp.md"
+    plan_file.parent.mkdir(parents=True, exist_ok=True)
+    plan_file.write_text(
+        f"---\nstatus: reviewed\ntitle: rp\n---\n\n## Tasks\n\n```yaml plan-tasks\n{rows}```\n", encoding="utf-8"
+    )
+    baton(root, "a", governing_plan="docs/plans/rp.md")
+    before = _row(root, "a")
+    assert before["needs_plan"] is True and before["plan"]["status"] == "reviewed"
+    text, flipped = flip_rows_coded(plan_file.read_text(encoding="utf-8"), {"C1"}, "a" * 40)
+    assert flipped == ["C1"]
+    plan_file.write_text(text, encoding="utf-8")
+    after = _row(root, "a")
+    assert after["needs_plan"] is False and after["plan"]["status"] == "executing"
+
+
 def test_blocker_with_executing_plan_opens_planning_and_closes_execution(root):
     plan(root, "run-plan", status="executing", deliverable_id="d-run", title="run")
     baton(root, "running", deliverable_id="d-run")

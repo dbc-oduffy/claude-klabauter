@@ -163,6 +163,39 @@ def test_research_synthesis_unknown_pipeline_rejected(repo):
     assert exc.value.code != 0
 
 
+_SZ = ["--type", "sizing-object", "--title", "T", "--premise", "not-applicable", "--premise-evidence", "x"]
+_YAML_BODY = "# kept comment\ntitle: Adopted sizing\nextra_key: kept\n"
+
+
+def test_sizing_object_yaml_body_adopted_without_fence(repo, capsys):
+    path = repo / "sz.yaml"
+    path.write_text(_YAML_BODY, encoding="utf-8")
+    rc = _MOD.main(_SZ + ["--from-body", str(path)])
+    err = capsys.readouterr().err
+    assert "no frontmatter to adopt" not in err
+    assert rc == 0, err
+    text = path.read_text(encoding="utf-8")
+    assert not text.startswith("---")
+    assert "# kept comment" in text
+    assert text.rstrip().endswith("extra_key: kept")
+    assert sum(1 for ln in text.splitlines() if ln.startswith("title:")) == 1
+
+
+def test_yaml_adopt_merges_body_keys_over_defaults():
+    gen = "title: default\nkind: gen\n"
+    out = _MOD._adopt_yaml_body(gen, "extra: 1\ntitle: mine\n")
+    assert out == "title: mine\nkind: gen\nextra: 1\n"
+
+
+def test_non_mapping_yaml_body_refused_exit_2(repo, capsys):
+    path = repo / "bad.yaml"
+    path.write_text("- a\n- b\n", encoding="utf-8")
+    rc = _MOD.main(_SZ + ["--from-body", str(path)])
+    assert rc == 2
+    assert "sizing-object" in capsys.readouterr().err
+    assert path.read_text(encoding="utf-8") == "- a\n- b\n"
+
+
 def test_unreadable_from_body_fails_loud(repo, capsys):
     rc = _MOD.main(["--type", "decision", "--from-body", str(repo / "missing.md")])
     assert rc == 1

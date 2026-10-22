@@ -1009,7 +1009,7 @@ def stamp_plan_executing(root: Path, plan_rel: str) -> dict:
     if plan_rel.endswith(SPINE_SUFFIX):
         return out
     try:
-        from coordinator_core.frontmatter.primitives import rebuild, replace_fm_field, split_frontmatter
+        from coordinator_core.ops.dispatch_emit.plan_row_coding import advance_to_executing
         from coordinator_core.locked_write import MutateAbort, locked_rmw
         from coordinator_core.ops.plan_status_transition import _FLIPPABLE_STATUSES_ORDER
 
@@ -1024,11 +1024,9 @@ def stamp_plan_executing(root: Path, plan_rel: str) -> dict:
             return out
         def flip(old: str) -> str:
             text = old.replace("\r\n", "\n")
-            parts = split_frontmatter(text)
-            if parts is None or read_fm_field_unquoted(parts.fm_text, "status") not in pre:
+            new = advance_to_executing(text)
+            if new is text:
                 raise MutateAbort("status moved before the stamp")
-            fm = replace_fm_field(parts.fm_text, "status", "executing")
-            new = rebuild(parts, fm)
             return new.replace("\n", "\r\n") if crlf else new
 
         try:

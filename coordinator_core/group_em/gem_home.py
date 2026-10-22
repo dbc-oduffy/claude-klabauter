@@ -16,13 +16,14 @@ from pathlib import Path
 
 from coordinator_core import machine_resolver
 from coordinator_core._settings_home import settings_home
+from coordinator_core.session import record_homes
 
 KEY = "coordinator.group_em_home"
 LEGACY_KEY = "coordinator.general_work_home"
 DEFAULT_DIRNAME = "group-em"
 LEGACY_DIRNAME = "general-work"
 SENDER_ID = "group-em-em"
-RECEIVER_IDS = frozenset({SENDER_ID, "general-work-em"})
+RECEIVER_IDS = frozenset({SENDER_ID})
 
 
 class HomeRefused(Exception):
@@ -95,4 +96,7 @@ def is_group_em_receiver(receiver: str) -> bool:
 
 def home_inbox_dirs(home: Path) -> tuple[Path, ...]:
     """The home's inbox directories: current layout first, then the legacy one."""
-    return (home / "state" / "cross-repo" / "inbox", home / "cross-repo" / "inbox")
+    return (
+        Path(record_homes.home_dir(str(home), "cross-repo")) / "inbox",
+        home / "cross-repo" / "inbox",
+    )

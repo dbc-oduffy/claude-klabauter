@@ -907,9 +907,10 @@ class TestCheckStagedPathspecDivergence:
         # Pure untrack: the working form is the bare commit, verified by
         # `ls-files --error-unmatch` (exit code alone cannot tell the two
         # outcomes apart).
-        assert "with no pathspec" in result
+        assert "git -c coordinator.staged=tracked.txt commit" in result
+        assert "with no pathspec" not in result
         assert "git ls-files --error-unmatch -- tracked.txt" in result
-        assert "A bare no-pathspec commit is NOT the fix" not in result
+        assert "NOT the fix" not in result
 
     def test_index_only_removal_mixed_with_divergence_keeps_generic_offer(self, tmp_path):
         """A genuine staged-vs-worktree divergence alongside the untrack keeps
@@ -932,7 +933,10 @@ class TestCheckStagedPathspecDivergence:
         assert result is not None
         assert "INDEX-ONLY removal" in result
         assert "git reset -q -- " in result
-        assert "A bare no-pathspec commit is NOT the fix" in result
+        assert "-c coordinator.staged=" in result
+        assert "prefer_staged" in result
+        assert "private GIT_INDEX_FILE" in result
+        assert "NOT the fix" not in result
 
     def test_index_only_removal_of_deleted_file_not_flagged(self, tmp_path):
         """A `D` staged-removal whose worktree copy is ALSO gone (an ordinary

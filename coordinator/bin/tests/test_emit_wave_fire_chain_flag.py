@@ -103,6 +103,16 @@ def test_chain_writes_manifest_and_prints_the_call(tmp_path, capsys):
     assert not list((tmp_path / "trail").glob("*.mjs"))
 
 
+def test_chain_fire_carries_the_sizings_plan_path(tmp_path, capsys):
+    (tmp_path / "docs" / "plans").mkdir(parents=True)
+    (tmp_path / "docs" / "plans" / "p1.md").write_text("---\nstatus: reviewed\n---\n", encoding="utf-8")
+    sizing = _sizing()
+    sizing["plan"] = "docs/plans/p1.md"
+    assert _fire(tmp_path, sizing, "--chain") == ewf.EXIT_OK
+    data = json.loads((tmp_path / "trail" / "chain-0-hnd-1.json").read_text(encoding="utf-8"))
+    assert data["wave_args"]["batons"][0]["planPath"] == "docs/plans/p1.md"
+
+
 def test_chain_json_shape(tmp_path, capsys):
     assert _fire(tmp_path, _sizing(), "--chain", "--json") == ewf.EXIT_OK
     out = json.loads(capsys.readouterr().out)

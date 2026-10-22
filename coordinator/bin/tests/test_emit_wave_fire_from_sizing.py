@@ -129,6 +129,55 @@ def test_m_sizing_binds_the_minted_baton(tmp_path, monkeypatch):
     assert b["sizingObject"] == SIZING_REL
 
 
+PLAN_REL = "docs/plans/p1.md"
+
+
+def _write_plan(tmp_path):
+    (tmp_path / "docs" / "plans").mkdir(parents=True)
+    (tmp_path / PLAN_REL).write_text("---\nstatus: reviewed\n---\n", encoding="utf-8")
+
+
+def test_sizing_plan_binds_as_plan_path_and_receipt(tmp_path, monkeypatch, capsys):
+    _stub_mint(monkeypatch)
+    _write_plan(tmp_path)
+    _setup(tmp_path, _sizing("M", plan="docs\\plans\\p1.md"))
+    assert _fire(tmp_path) == ewf.EXIT_OK
+    assert _bound(tmp_path)["planPath"] == PLAN_REL
+    assert f"  plan: {PLAN_REL} (revise in place)" in capsys.readouterr().out
+    receipt = (tmp_path / "trail" / "fire-0-1.mjs.emitted.json").read_text(encoding="utf-8")
+    assert json.loads(receipt)["plan"] == "p1.md"
+
+
+@pytest.mark.parametrize("over", [{"plan": None}, {}])
+def test_no_sizing_plan_binds_null_plan_path(tmp_path, monkeypatch, capsys, over):
+    _stub_mint(monkeypatch)
+    sizing = _sizing("M")
+    if over:
+        sizing["plan"] = None
+    _setup(tmp_path, sizing)
+    assert _fire(tmp_path) == ewf.EXIT_OK
+    assert _bound(tmp_path)["planPath"] is None
+    assert "(revise in place)" not in capsys.readouterr().out
+
+
+def test_sizing_plan_naming_no_file_refuses_before_any_write(tmp_path, monkeypatch, capsys):
+    calls = []
+    _stub_mint(monkeypatch, calls)
+    _setup(tmp_path, _sizing("M", plan="docs/plans/missing.md"))
+    assert _fire(tmp_path) == ewf.EXIT_REFUSED
+    assert "docs/plans/missing.md" in capsys.readouterr().err
+    assert calls == []
+    assert not (tmp_path / "trail" / "fire-0-1.mjs").exists()
+    assert "plan_blitz_hold_reason" not in (tmp_path / BATON_REL).read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("plan", ["/etc/hosts", "../outside.md"])
+def test_sizing_plan_escaping_the_repo_refuses(tmp_path, monkeypatch, plan):
+    _stub_mint(monkeypatch)
+    _setup(tmp_path, _sizing("M", plan=plan))
+    assert _fire(tmp_path) == ewf.EXIT_REFUSED
+
+
 def test_absent_trail_dir_inside_the_repo_is_scaffolded(tmp_path, monkeypatch):
     _stub_mint(monkeypatch)
     _setup(tmp_path, _sizing("M"))
@@ -243,6 +292,9 @@ def test_real_mint_binds_and_holds(tmp_path, monkeypatch):
 def _real_fire_baton_text(tmp_path, monkeypatch, sizing):
     monkeypatch.chdir(tmp_path)
     _setup(tmp_path, sizing, baton=None)
+    if sizing.get("plan"):
+        (tmp_path / sizing["plan"]).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / sizing["plan"]).write_text("---\nstatus: reviewed\n---\n", encoding="utf-8")
     assert ewf.main([
         "--repo-root", str(tmp_path), "--trail-dir", str(tmp_path / "trail"),
         "--plugin-root", str(_plugin(tmp_path)), "--live-engine-tree",

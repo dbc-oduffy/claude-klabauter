@@ -56,6 +56,11 @@ from coordinator_core.bash_guards._command_tokenizer import (
     token_matches_binary as _bt_token_matches_binary,
     tokenize_full_command as _bt_tokenize_full_command,
 )
+from coordinator_core.bash_guards._dc_commit_named_stage import (
+    named_set_refusal,
+    named_stage_paths,
+    unnamed_staged_paths,
+)
 from coordinator_core.bash_guards._dc_git_probe import (
     _BULK_FOREIGN_INDEX_PATHS,
     _NOTE_CORRECTION,
@@ -1980,17 +1985,18 @@ def _bt_head_commit_amend_provenance(
     return (short_sha, subject, owned)
 
 
-def _bt_solo_bare_commit_index_nonempty(
+def _bt_solo_bare_commit_staged_paths(
     seg_tokens: List[str],
     segments: List[Tuple[List[str], bool]],
     seg_index: int,
     payload: Optional[Dict[str, Any]] = None,
-) -> bool:
-    """True iff `seg_tokens` is a solo bare `git commit` -- no preceding
+) -> Optional[List[str]]:
+    """The staged paths (both sides of a rename) iff `seg_tokens` is a solo
+    bare `git commit` -- no preceding
     `git add` anywhere earlier in the same command (that shape is
     `_bt_compound_add_bare_commit`'s, and denies unconditionally without
-    probing) -- AND the index it would commit currently holds ANY staged
-    path.
+    probing) -- AND the index it would commit is probed. `None` when the
+    command is not that shape or the probe failed; `[]` for an empty index.
 
     Unlike a set-difference against the command's own `add` pathspec, a
     solo bare
@@ -2015,11 +2021,13 @@ def _bt_solo_bare_commit_index_nonempty(
     that amend always reuses HEAD's tree; corrected 2026-08-15 (P1,
     coordinator:code-reviewer) -- on a shared dirty index, bare `--amend`
     sweeps a peer's staged work into the amended commit exactly like the
-    bare-commit shape this check exists to deny. Fails OPEN on any probe
+    bare-commit shape this check exists to deny. A commit that names its
+    set (`git -c coordinator.staged=<path> commit`) is verifiable up to the
+    guard-to-commit race; one that names nothing stays unverifiable. Fails OPEN on any probe
     failure, same posture as C7's own probe.
     """
     if _bt_commit_has_sweep_all_flag(seg_tokens):
-        return False
+        return None
     for prior_tokens, _pipe in segments[:seg_index]:
         # ANY preceding `git add` segment -- scoped or not (`-A`/`-u`/
         # `--pathspec-from-file` included) -- takes this command out of
@@ -2031,19 +2039,30 @@ def _bt_solo_bare_commit_index_nonempty(
         # wrongly read `git add -A && git commit` as a SOLO bare commit --
         # an unscoped add still means the caller staged something here.
         if _bt_git_resolved_subcommand(prior_tokens) == "add":
-            return False  # compound shape -- `_bt_compound_add_bare_commit`'s
+            return None  # compound shape -- `_bt_compound_add_bare_commit`'s
     cwd = _bt_probe_cwd(seg_tokens, payload)
     extra_env: Optional[Dict[str, str]] = None
     index_file = _bt_git_index_file_env(seg_tokens)
     if index_file:
         extra_env = {"GIT_INDEX_FILE": index_file}
-    rc, out = _dc_git_probe._run_git(["diff", "--cached", "--name-only"], cwd=cwd, extra_env=extra_env)
+    rc, out = _dc_git_probe._run_git(["diff", "--cached", "--name-only", "--no-renames"], cwd=cwd, extra_env=extra_env)
     if rc != 0:
         _dc_git_probe._record_probe_fail_open(
-            "solo-bare-commit index probe", "diff --cached --name-only", rc
+            "solo-bare-commit index probe", "diff --cached --name-only --no-renames", rc
         )
-        return False
-    return bool([ln for ln in out.splitlines() if ln])
+        return None
+    return [ln for ln in out.splitlines() if ln]
+
+
+def _bt_solo_bare_commit_index_nonempty(
+    seg_tokens: List[str],
+    segments: List[Tuple[List[str], bool]],
+    seg_index: int,
+    payload: Optional[Dict[str, Any]] = None,
+) -> bool:
+    """True iff `_bt_solo_bare_commit_staged_paths` reports a non-empty
+    index; fails OPEN (False) on any probe failure."""
+    return bool(_bt_solo_bare_commit_staged_paths(seg_tokens, segments, seg_index, payload))
 
 
 def _bt_sweep_all_holds_unverifiable_paths(
@@ -2529,9 +2548,30 @@ def check_git_commit_safe_commit_advise(
                 )
                 + ("\n\n%s" % _commit_bare_note if _commit_bare_note else "")
             )
-        if _bt_solo_bare_commit_index_nonempty(
+        _solo_staged = _bt_solo_bare_commit_staged_paths(
             seg_tokens, segments, seg_index, payload
-        ):
+        )
+        if _solo_staged:
+            _carrier = named_stage_paths(seg_tokens)
+            if _carrier is not None and not is_amend and not _scope_swept:
+                _refusal = named_set_refusal(_carrier)
+                if _refusal is not None:
+                    return _deny(
+                        "Deny: %s." % _refusal
+                        + ("\n\n%s" % _commit_bare_note if _commit_bare_note else "")
+                    )
+                _unnamed = unnamed_staged_paths(_solo_staged, _carrier)
+                if not _unnamed:
+                    return None
+                return _deny(
+                    "Deny: staged but not named: %s — this commit would sweep "
+                    "them under your subject.\n\n"
+                    "Use instead:\n"
+                    "  add a -c coordinator.staged operand for your own path, "
+                    "or unstage the foreign one"
+                    % ", ".join(_unnamed)
+                    + ("\n\n%s" % _commit_bare_note if _commit_bare_note else "")
+                )
             return _deny(
                 (
                     "Deny: " + _body_override
@@ -2542,8 +2582,11 @@ def check_git_commit_safe_commit_advise(
                         "content this command cannot prove is its own, on a "
                         "shared branch a peer's.\n\n"
                         "Use instead:\n"
-                        "  git commit -m %s -- <paths>"
-                        % (subject_operand,)
+                        "  git commit -m %s -- <paths>\n"
+                        "A staged partial hunk commits as staged via:\n"
+                        "  git -c coordinator.staged=<path> commit -m %s\n"
+                        "or ceremony.commit_v2 `prefer_staged`."
+                        % (subject_operand, subject_operand)
                     )
                 )
                 + ("\n\n%s" % _commit_bare_note if _commit_bare_note else "")

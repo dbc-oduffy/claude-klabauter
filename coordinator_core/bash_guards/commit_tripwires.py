@@ -138,7 +138,7 @@ _INDETERMINATE_DIVERGENCE_OFFER = (
 #: Emitted when EVERY path the trailing pathspec covers is an index-only removal
 #: (`git rm --cached`, file kept on disk) and nothing else diverges. The generic
 #: offer's remedies all assume staged content to preserve; here the staged side
-#: is a deletion, and a bare no-pathspec commit is the one form that commits it.
+#: is a deletion, and the named-carrier form is the one that commits it.
 #: Exit code proves nothing (the wrong form also exits 0), so the offer ends on
 #: the `ls-files --error-unmatch` check that does.
 _INDEX_ONLY_REMOVAL_OFFER = (
@@ -148,8 +148,9 @@ _INDEX_ONLY_REMOVAL_OFFER = (
     "silently reverts the untrack -- exit 0, subject line claiming the opposite "
     "(SC-DR-015).\n\n"
     "Commit the index as staged instead: `git diff --cached --name-only` to "
-    "confirm only your paths are staged, then `git commit -m ...` with no "
-    "pathspec. If a peer's files are staged too, isolate the commit in a private "
+    "confirm only your paths are staged, then name them: `git -c "
+    "coordinator.staged={paths} commit -m ...` (one `-c coordinator.staged=<path>` "
+    "per path). If a peer's files are staged too, isolate the commit in a private "
     "GIT_INDEX_FILE (read-tree HEAD, `git rm --cached -- {paths}`, write-tree + "
     "commit-tree) rather than the shared index.\n\n"
     "Verify afterwards: `git ls-files --error-unmatch -- {paths}` must exit "
@@ -852,10 +853,11 @@ def check_staged_pathspec_divergence(
         "trailing pathspec reads the worktree, so this commit would silently "
         "discard what you staged there and substitute the worktree instead "
         "(SC-DR-015).{untrack_note}\n"
-        "A bare no-pathspec commit is NOT the fix -- the shared index can gain a "
-        "peer's staged file between your check and your commit (that TOCTOU has "
-        "hit for real -- 7 files swept, including another "
-        "session's in-flight agent definitions). Usually simplest: don't "
+        "To commit the index as staged, name the staged paths in the carrier: "
+        "`git -c coordinator.staged={paths} commit -m ...` (one `-c "
+        "coordinator.staged=<path>` per path; the guard refuses it if anything "
+        "unnamed is staged), or ceremony.commit_v2 with `prefer_staged`. "
+        "Usually simplest: don't "
         "partial-stage on a shared "
         "tree at all -- make the worktree at {paths} match only your change, "
         "then commit normally. Staged an index-only removal you meant to keep? "

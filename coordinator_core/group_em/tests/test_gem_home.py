@@ -115,7 +115,8 @@ def test_is_home(env):
 
 def test_is_group_em_receiver_case_and_whitespace_insensitive():
     assert gem_home.is_group_em_receiver("group-em-em")
-    assert gem_home.is_group_em_receiver("  GENERAL-WORK-EM ")
+    assert gem_home.is_group_em_receiver("  GROUP-EM-EM ")
+    assert not gem_home.is_group_em_receiver("  GENERAL-WORK-EM ")
     assert not gem_home.is_group_em_receiver("coordinator-content-repo-em")
     assert gem_home.SENDER_ID in gem_home.RECEIVER_IDS
 

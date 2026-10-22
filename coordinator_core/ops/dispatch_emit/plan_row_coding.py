@@ -162,12 +162,39 @@ def outside_landing_detail(shas: list) -> str:
     )
 
 
+def advance_to_executing(plan_text: str) -> str:
+    """Return ``plan_text`` with a draft/reviewed/approved ``status`` advanced to ``executing``.
+
+    A plan whose rows are coded is executing; ``roadmap.plan_gate`` counts ``executing`` as
+    plan-approved and stays header-only. Trap: a coded row on a reviewed plan otherwise re-offers
+    the baton as ``needs_plan`` forever. Any other status, or no frontmatter, returns the same
+    object. Pure text, LF input.
+    """
+    from coordinator_core.frontmatter.primitives import (
+        read_fm_field_unquoted,
+        rebuild,
+        replace_fm_field,
+        split_frontmatter,
+    )
+    from coordinator_core.ops.plan_status_transition import _FLIPPABLE_STATUSES_ORDER
+
+    parts = split_frontmatter(plan_text)
+    if parts is None:
+        return plan_text
+    if read_fm_field_unquoted(parts.fm_text, "status") not in _FLIPPABLE_STATUSES_ORDER[
+        : _FLIPPABLE_STATUSES_ORDER.index("executing")
+    ]:
+        return plan_text
+    return rebuild(parts, replace_fm_field(parts.fm_text, "status", "executing"))
+
+
 def flip_rows_coded(plan_text: str, row_ids: set, sha: str, details: Optional[dict] = None) -> tuple:
     """Line-level ``open`` -> ``coded`` + ``disposition_ref: <sha>`` on
     ``row_ids`` (``row_spans._stamp_rows_in_body``), then a stable D5 re-sort
     of row spans (an open row may not follow a coded one).
 
-    Never a YAML round-trip: every untouched line survives byte-identical.
+    Never a YAML round-trip: every untouched line survives byte-identical except the
+    frontmatter ``status`` line, which ``advance_to_executing`` may advance.
     ``details`` (row id -> ``disposition_detail`` prose) rides the same stamp.
     Only rows currently ``open`` flip; any other disposition is left alone.
     Returns ``(new_text, flipped_ids)``; ``flipped_ids`` empty means no edit.
@@ -238,7 +265,7 @@ def flip_rows_coded(plan_text: str, row_ids: set, sha: str, details: Optional[di
     new_body = "".join(lines)
     if not ended_with_newline:
         new_body = new_body[:-2] if new_body.endswith("\r\n") else new_body[:-1]
-    return plan_text[:start] + new_body + plan_text[end:], sorted(targets)
+    return advance_to_executing(plan_text[:start] + new_body + plan_text[end:]), sorted(targets)
 
 
 def close_memo_rows_delivered(plan_text: str, receipts: dict) -> tuple:

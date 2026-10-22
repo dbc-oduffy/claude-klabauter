@@ -852,7 +852,7 @@ def resolve_receiver_inbox(
 ) -> Tuple[Optional[Path], Optional[Path], dict[str, str]]:
     """Resolve receiver EM identity → (inbox_dir, receiver_repo_path, all_repos_registry).
 
-    The Group EM never receives: a G-EM id (`group-em-em`, legacy `general-work-em`) or a
+    The Group EM never receives: a G-EM id (`group-em-em`) or a
     receiver path inside the G-EM home resolves to the central receiver's inbox, else to the
     claude-config-dir inbox (`_group_em_target`).
 

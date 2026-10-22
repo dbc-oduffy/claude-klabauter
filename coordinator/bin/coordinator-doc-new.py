@@ -6949,6 +6949,41 @@ def _adopted_title_and_id(text: str) -> tuple[str | None, str | None, str]:
     return title, doc_id, body
 
 
+def _is_top_level_mapping(text: str) -> bool:
+    import yaml  # noqa: PLC0415
+
+    try:
+        return isinstance(yaml.safe_load(text), dict)
+    except yaml.YAMLError:
+        return False
+
+
+def _adopt_yaml_body(generated: str, existing: str) -> str:
+    """Merge a bare-YAML scaffold with a bare-YAML document: document keys win,
+    generator-only keys keep defaults, document-only keys trail. No fence."""
+    if not (_is_top_level_mapping(generated) and _is_top_level_mapping(existing)):
+        raise ValueError("--from-body needs a top-level YAML mapping for a YAML-bodied type")
+    old_blocks = {
+        key: lines
+        for key, lines in _frontmatter_blocks(existing.replace("\r\n", "\n").rstrip("\n"))
+        if key
+    }
+    old_all = _frontmatter_blocks(existing.replace("\r\n", "\n").rstrip("\n"))
+    out: list[str] = (
+        list(old_all[0][1]) if old_all and old_all[0][0] is None else []
+    )
+    used: set[str] = set()
+    for key, lines in _frontmatter_blocks(generated.replace("\r\n", "\n").rstrip("\n")):
+        if key and key in old_blocks:
+            lines = old_blocks[key]
+            used.add(key)
+        out.extend(lines)
+    for key, lines in old_blocks.items():
+        if key not in used:
+            out.extend(lines)
+    return "\n".join(out) + "\n"
+
+
 def _adopt_body(generated: str, existing: str) -> str:
     """Wrap `existing`'s body in the generator's canonical frontmatter.
 
@@ -6960,7 +6995,7 @@ def _adopt_body(generated: str, existing: str) -> str:
     """
     gen_fm, _skeleton = _split_frontmatter(generated)
     if gen_fm is None:
-        raise ValueError("generated scaffold has no frontmatter to adopt around")
+        return _adopt_yaml_body(generated, existing)
     old_fm, body = _split_frontmatter(existing)
     old_blocks = {
         key: lines for key, lines in (_frontmatter_blocks(old_fm) if old_fm else []) if key
@@ -9358,7 +9393,11 @@ def main(argv: "list[str] | None" = None) -> int:
         raise AssertionError(f"unreachable doc_type: {doc_type!r}")
 
     if _adopt_existing is not None:
-        content = _adopt_body(content, _adopt_existing)
+        try:
+            content = _adopt_body(content, _adopt_existing)
+        except ValueError as _adopt_err:
+            print(f"error: {doc_type}: {_adopt_err}", file=sys.stderr)
+            return 2
 
     if doc_type != "research-synthesis" and (args.question or args.pipeline):
         print(

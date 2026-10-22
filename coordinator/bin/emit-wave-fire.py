@@ -1338,6 +1338,16 @@ def _emit_single_from_sizing(
         return _refuse_from_sizing(
             f"{sizing_rel} cannot be fired: " + "; ".join(refusals)
         )
+    plan_rel = sizing.get("plan")
+    plan_rel = plan_rel.replace("\\", "/") if isinstance(plan_rel, str) and plan_rel else ""
+    if plan_rel and (
+        plan_rel.startswith("/") or ".." in plan_rel.split("/") or ":" in plan_rel.split("/")[0]
+        or not (repo_root / plan_rel).is_file()
+    ):
+        return _refuse_from_sizing(
+            f"{sizing_rel} names plan {plan_rel}, which is not a file under {repo_root}. "
+            "Fix the sizing's plan: edge, or clear it to author a new plan."
+        )
     exit_criterion = sizing["exit_criterion"]
     interaction_mode = sizing["interaction_mode"]
     route = _effective_route(sizing)
@@ -1364,6 +1374,7 @@ def _emit_single_from_sizing(
         "path": minted["path"],
         "title": str(minted["title"]),
         "sized": True,
+        "planPath": plan_rel or None,
         "sizingObject": sizing_rel,
         "tshirt": tshirt,
         "route": route,
@@ -1418,7 +1429,7 @@ def _emit_single_from_sizing(
 
     out = trail_dir / f"fire-{wave_number}-1.mjs"
     out.write_text(text, encoding="utf-8", newline="\n")
-    _write_fire_receipt(out)
+    _write_fire_receipt(out, baton["planPath"])
     _stamp_fire_hold(baton_path, repo_root, out)
     if args.json:
         _report_pair(repo_root, baton, sizing_rel, deliverable_id or None, as_json=True)
@@ -1427,6 +1438,8 @@ def _emit_single_from_sizing(
         ]}, indent=2))
         return EXIT_OK
     print(f"emit-wave-fire: single-plan fire for {baton['id']} (mode=single).")
+    if baton["planPath"]:
+        print(f"  plan: {baton['planPath']} (revise in place)")
     _report_pair(repo_root, baton, sizing_rel, deliverable_id or None)
     print(f'\n  Workflow({{ scriptPath: "{out}" }})   # no args — they are bound')
     return EXIT_OK
