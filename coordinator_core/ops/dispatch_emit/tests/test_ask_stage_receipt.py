@@ -36,6 +36,13 @@ def test_missing_receipt_is_none_and_partial(tmp_path):
     assert r.partial(tmp_path) is True
 
 
+def test_halted_run_without_receipt_is_not_partial(tmp_path):
+    # A run that halted before receipts existed (691c75) must stay refireable.
+    _stage(tmp_path)
+    (tmp_path / "halted.json").write_text("{}", encoding="utf-8")
+    assert r.partial(tmp_path) is False
+
+
 def test_manifest_edited_after_receipt(tmp_path):
     h = _stage(tmp_path)
     r.write(tmp_path, "d1", h)

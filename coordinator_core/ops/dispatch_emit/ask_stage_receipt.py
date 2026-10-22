@@ -19,6 +19,7 @@ from coordinator_core.ops.dispatch_emit import reply_sidecar
 ALREADY_STAGED_KEY = "already_staged"
 RECEIPT_NAME = "stage-receipt.json"
 MANIFEST_NAME = "manifest.json"
+HALTED_NAME = "halted.json"
 _DIGEST_EXCLUDED = ("session_id",)
 
 
@@ -71,8 +72,10 @@ def partial(record_dir: Path) -> bool:
     """True when a manifest is on disk and no receipt vouches for its current bytes.
 
     A receipt with another digest that still matches the manifest is a landed stage of different
-    params (a revise), not a partial one."""
-    if not (Path(record_dir) / MANIFEST_NAME).is_file():
+    params (a revise), not a partial one. A run that halted after staging (`halted.json` beside it)
+    finished its stage: its manifest predates the receipt or was rewritten by later legs, and a
+    refire must re-stage it rather than be refused forever."""
+    if not (Path(record_dir) / MANIFEST_NAME).is_file() or (Path(record_dir) / HALTED_NAME).is_file():
         return False
     data = _read_receipt(record_dir)
     return data is None or not _manifest_matches(record_dir, data["manifest_handle"])
