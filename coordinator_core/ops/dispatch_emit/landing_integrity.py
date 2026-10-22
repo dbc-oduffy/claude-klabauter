@@ -186,6 +186,16 @@ def failed_targeted_tests(
     if not isinstance(baseline, Mapping):
         count = verdict.get("tests_failed")
         shown = f"{count} " if isinstance(count, int) else ""
+        if status == "error" and count == 0:
+            cause = next((str(verdict[k]) for k in ("reason", "summary", "error") if verdict.get(k)), None)
+            ran = verdict.get("tests_run")
+            return [Finding(
+                "", TARGETED_TESTS_FAILED,
+                f"the test run errored with 0 failing tests"
+                f"{f' of {ran} run' if isinstance(ran, int) and not isinstance(ran, bool) else ''} and named no "
+                f"erroring node (collection or runner error); "
+                f"{f'recorded cause: {cause}; ' if cause else ''}re-run: {remedy or retest_remedy(None)}",
+            )], "failed"
         return [Finding(
             "", TARGETED_TESTS_FAILED,
             f"{shown}tests {status}, no baseline to attribute them; re-run: {remedy or retest_remedy(None)}",

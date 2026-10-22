@@ -408,3 +408,17 @@ def test_retest_launcher_runs_through_emit_cli(monkeypatch):
     assert cli.main(["--retest-targeted", "--from-task-output", "x.output", "--tests", "t/test_a.py"]) == 0
     assert seen["argv"] == ["--from-task-output", "x.output", "--tests", "t/test_a.py"]
 
+
+
+def test_error_with_zero_failures_names_the_runner_error_not_a_blank_count():
+    verdict = {"status": "error", "tests_failed": 0, "tests_run": 10, "reason": "collection error in t.py"}
+    findings, check = li.landing_test_gate(Path("."), {"targeted_tests": verdict}, None)
+    assert check == "failed"
+    detail = findings[0].detail
+    assert "errored with 0 failing tests of 10 run" in detail and "collection error in t.py" in detail
+    assert "params.failed_tests" in detail
+
+
+def test_fail_with_nonzero_failures_keeps_the_count_wording():
+    findings, _ = li.failed_targeted_tests({"status": "fail", "tests_failed": 2})
+    assert findings[0].detail.startswith("2 tests fail, no baseline")

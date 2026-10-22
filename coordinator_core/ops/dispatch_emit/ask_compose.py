@@ -1043,6 +1043,26 @@ def _source_memo_clause(repo_root: str, prompt: Optional[str], sizing_rel: Optio
     )
 
 
+def _em_context_row_ids(repo_root: str, sizing_rel: Optional[str]) -> list[str]:
+    """Ids of the sizing's register rows `requirements_ledger.judge` treats as EM context (non-blocking)."""
+    from coordinator_core.ops.dispatch_emit.requirements_ledger import _is_design
+    from coordinator_core.ops.sizing_intake_contract import EM_CONTEXT_MARKER
+
+    if not sizing_rel:
+        return []
+    try:
+        register = load_sizing_effective(Path(repo_root), sizing_rel).get("requirement_register")
+    except (SizingFireRefused, OSError, ValueError, KeyError):
+        return []
+    rows = register.get("rows") if isinstance(register, dict) else None
+    return [
+        r["id"] for r in rows or []
+        if isinstance(r, dict) and isinstance(r.get("id"), str)
+        and str(r.get("source_text") or "").lstrip().startswith(EM_CONTEXT_MARKER)
+        and not _is_design(r.get("anchor"))
+    ]
+
+
 def _xl_exit_open(repo_root: str, sizing_rel: Optional[str]) -> bool:
     """An existing sizing whose XL exit the APM picks in-run: `pm-decision`, no `xl_exit`, ceo mode."""
     if not sizing_rel:
@@ -1471,7 +1491,7 @@ def compose_ask_script(
         plan_path=manifest_rel,
         run_base_sha=run_base_sha,
         repo_root=repo_root,
-        declared_paths_js="_manifest.review_declared_paths",
+        declared_paths_js="_reviewPaths",
         prompt_head=review_head,
         run_key=run_id,
         prep_suffix_js="' plan: ' + (_planRel ?? _sizingRel) + ' session_id: ' + _SESSION_ID",
@@ -2785,7 +2805,9 @@ def compose_ask_script(
         [_emit._unconst(block, _REVIEW_RESULT_NAMES) for _, block in review_blocks]
     )
     b.append(
-        "  const _noReviewPaths = !(_manifest?.review_declared_paths ?? []).length;"
+        "  const _reviewPaths = [...(_manifest?.review_declared_paths ?? []), "
+        f"...(_gate.{RESUME_LEDGER_KEY}?.remaining_leg?.writes ?? [])];\n"
+        "  const _noReviewPaths = !_reviewPaths.length;"
     )
     # The review wave shadows `agent` inside its own block (design brief prefix only) rather than
     # renaming its call sites: the leg register, phase-title and brief checks find legs by the
@@ -2992,8 +3014,9 @@ def compose_ask_script(
         )
     b.append(
         f"    const _postCommitActs = {json.dumps(list(POST_COMMIT_ACTS))};\n"
+        f"    const _emContextIds = {json.dumps(_em_context_row_ids(repo_root, sizing_rel))};\n"
         "    const _ledgerBlocking = (l) => (l?.items ?? []).filter((i) => {\n"
-        "      if (!i) return false;\n"
+        "      if (!i || _emContextIds.includes(i.id)) return false;\n"
         "      const rem = Array.isArray(i.remaining) ? i.remaining : [];\n"
         "      const status = i.status === 'not_met' && rem.length && rem.every((a) => _postCommitActs.includes(a)) "
         "? 'post_commit' : i.status;\n"

@@ -26,7 +26,7 @@ def _script(monkeypatch) -> str:
 
 def test_review_block_gated_on_declared_paths(monkeypatch):
     script = _script(monkeypatch)
-    assert "const _noReviewPaths = !(_manifest?.review_declared_paths ?? []).length;" in script
+    assert "const _noReviewPaths = !_reviewPaths.length;" in script
     assert "!!((_manifest?.rows ?? []).length &&" not in script
     assert "if (!_halted && _gate.arm !== 'xs' && !_noReviewPaths) {\n  phase('Review wave');" in script
 
@@ -37,3 +37,14 @@ def test_no_path_run_logs_and_empties_wave(monkeypatch):
     skip_line = script.split("execute_review skipped")[0].rsplit("\n", 1)[-1]
     assert "!_halted && _noReviewPaths && _gate.arm !== 'xs'" in skip_line
     assert script.split("execute_review skipped")[1].split("\n", 1)[0].endswith("_reviewWave = []; }")
+
+
+def test_refire_remaining_leg_writes_count_as_review_paths(monkeypatch):
+    script = _script(monkeypatch)
+    assert (
+        "const _reviewPaths = [...(_manifest?.review_declared_paths ?? []), "
+        "...(_gate.resume_ledger?.remaining_leg?.writes ?? [])];"
+    ) in script
+    assert script.index("const _reviewPaths") < script.index("const _noReviewPaths")
+    assert script.index("const _noReviewPaths") < script.index("phase('Review wave')")
+    assert "_manifest.review_declared_paths" not in script.split("const _noReviewPaths")[1].split("execute_review skipped")[0]
