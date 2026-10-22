@@ -327,13 +327,36 @@ def gated_rows(
             continue
         gate_row = entry.get("root") if reason == "transitive_gate_closure" and entry.get("root") else row_id
         raw = raw_by_id.get(gate_row)
+        own = raw_by_id.get(row_id)
+        regs = own.get("register_rows") if isinstance(own, Mapping) else None
         out.append(
             GatedRow(
                 id=row_id, reason=reason, gate=gate,
                 owner_repo=str(_first_gate_field(raw, "owner_repo") or ""),
                 closure_key=_first_gate_field(raw, "closure_key"),
+                title=str(own.get("title") or "")[:200] if isinstance(own, Mapping) else "",
+                register_rows=tuple(str(r) for r in regs) if isinstance(regs, list) else (),
             )
         )
+    return out
+
+
+def slot_withheld_rows(raw_by_id: Mapping[str, Mapping]) -> list[dict]:
+    """``{id, title, register_rows}`` of each open ``needs_slot`` row: its process leg waits on a
+    slot, so the clauses it delivers are withheld from the run's judge like a gated row's."""
+    from coordinator_core.ops.dispatch_emit.spine_read import NON_DISPATCHABLE_DISPOSITIONS
+
+    out: list[dict] = []
+    for rid, raw in raw_by_id.items():
+        if not isinstance(raw, Mapping) or raw.get("needs_slot") is not True:
+            continue
+        if raw.get("disposition") in NON_DISPATCHABLE_DISPOSITIONS:
+            continue
+        regs = raw.get("register_rows")
+        out.append({
+            "id": str(rid), "title": str(raw.get("title") or "")[:200],
+            "register_rows": [str(r) for r in regs] if isinstance(regs, list) else [],
+        })
     return out
 
 

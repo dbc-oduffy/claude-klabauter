@@ -390,6 +390,18 @@
                               "maxItems": 5,
                               "items": { "$ref": "#/$defs/lesson_candidate" }
                             },
+                            "withheld_clauses": {
+                              "type": ["array", "null"],
+                              "items": {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "properties": {
+                                  "clause": { "type": "string" },
+                                  "rows": { "type": "array", "items": { "type": "string" } },
+                                  "register_rows": { "type": "array", "items": { "type": "string" } }
+                                }
+                              }
+                            },
                             "register_rows": {
                               "type": ["array", "null"],
                               "items": {

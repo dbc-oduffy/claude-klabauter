@@ -424,7 +424,8 @@ def next_action_parts(
                     f"sidecar: {falsifier_var}.sidecar_path ?? null, "
                     f"completion_summary: {judge_summary_js}, "
                     f"lesson_candidates: {judge_lessons_js}, "
-                    f"register_rows: {falsifier_var}.register_rows ?? null }} "
+                    f"register_rows: {falsifier_var}.register_rows ?? null, "
+                    f"withheld_clauses: {falsifier_var}.withheld_clauses ?? null }} "
                     ": { status: 'not_run', observation: null, reason: null, sidecar: null, "
                     "completion_summary: null, lesson_candidates: null })"
                     if falsifier_present

@@ -70,6 +70,32 @@ def run_started_at(worktree_root: Path, run_id: Optional[str]) -> Optional[float
     return float(at) if isinstance(at, (int, float)) and not isinstance(at, bool) and at > 0 else None
 
 
+def withheld_register_rows(worktree_root: Path, plan_path: Optional[str], criterion: dict) -> frozenset:
+    """Register row ids the judge carried open in ``criterion.withheld_clauses`` and the plan confirms:
+    each is traced (``register_rows``) by a plan row the clause names that is not coded and still
+    holds an uncleared ``external_gate`` or is ``needs_slot``. A row the plan does not confirm stays owed."""
+    clauses = criterion.get("withheld_clauses")
+    text = read_rel(worktree_root, plan_path) if plan_path and isinstance(clauses, list) and clauses else None
+    if text is None:
+        return frozenset()
+    from coordinator_core.ops.plan_tasks_render import load_rows
+
+    named = {
+        str(r) for c in clauses if isinstance(c, dict) and isinstance(c.get("rows"), list) for r in c["rows"]
+    }
+    out: set = set()
+    for row in load_rows("\n".join(text.splitlines())).rows:
+        if not isinstance(row, dict) or str(row.get("id")) not in named or row.get("disposition") == "coded":
+            continue
+        gates = row.get("external_gate")
+        if row.get("needs_slot") is not True and not any(
+            isinstance(g, dict) and g.get("cleared") is not True for g in gates or ()
+        ):
+            continue
+        out.update(str(r) for r in row.get("register_rows") or ())
+    return frozenset(out)
+
+
 def register_gate(
     worktree_root: Path, plan_path: Optional[str], inline_review: dict, ledger_judged: Sequence[str] = (),
     *, run_id: Optional[str] = None,
@@ -79,7 +105,7 @@ def register_gate(
     with an observed entry point. Returns the failure reason (also set on the criterion),
     or ``None`` when the gate does not apply or every claimed row passes. Reads the
     judge's returned ``criterion.register_rows`` and the register on disk; never inspects code.
-    ``ledger_judged`` names rows the run's passed requirements ledger already judged: they are
+    A claimed row in ``withheld_register_rows`` stays open and never demotes. ``ledger_judged`` names rows the run's passed requirements ledger already judged: they are
     not owed to a plan, and a judge verdict of ``met`` on one needs no wired/observed_ref evidence. Embedded PM turns are owed only when cited or timestamped after the run's
     submission; ``run_id`` (else the sizing's ``resolution.run_id``) locates that submission.
     """
@@ -118,6 +144,7 @@ def register_gate(
         if isinstance(r, dict) and r.get(rr.JUDGE_CLAIM, rr.CLAIM_THIS_PLAN) == rr.CLAIM_THIS_PLAN
     }
     ledger_ids = {str(i) for i in ledger_judged}
+    withheld_open = withheld_register_rows(worktree_root, plan_path, criterion)
     ruled_out: frozenset = frozenset()
     if register is not None:
         from coordinator_core.ops.dispatch_emit import requirements_ledger
@@ -125,7 +152,7 @@ def register_gate(
         ruled_out = frozenset(requirements_ledger.ruled_out_ids(register.rows))
     for row in claimed:
         rid, surface = row.get(rr.ROW_ID), row.get(rr.ROW_SURFACE)
-        if str(rid) in ruled_out:
+        if str(rid) in ruled_out or str(rid) in withheld_open:
             continue
         got = judged.get(str(rid))
         if str(rid) in ledger_ids and (got is None or got.get(rr.ROW_STATUS) == rr.STATUS_MET):

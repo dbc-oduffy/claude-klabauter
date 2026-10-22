@@ -47,6 +47,7 @@ from coordinator_core.ops.dispatch_emit.cross_repo_write_refusal import (
     CrossRepoWriteError,
     check_cross_repo_writes,
     gated_rows,
+    slot_withheld_rows,
     own_gate_owners,
     provisioned_sibling_roots,
 )
@@ -831,6 +832,7 @@ def stage(
         ledger_item_ids=ledger_item_ids,
         withheld_ids=withheld_ids,
         retired_resume_rows=retired_resume,
+        slot_withheld=tuple(slot_withheld_rows(raw_by_id)),
     )
     reply_sidecar.write_reply(root, record / "manifest.json", manifest_payload(root, manifest))
     if session_id:

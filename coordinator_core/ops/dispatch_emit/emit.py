@@ -3286,7 +3286,16 @@ _UNJUDGED_CAUSE_JS = (
 #: `differs_from_baseline` is nulled on demotion -- wake_digest reads it ahead
 #: of `status`.
 _JUDGE_VERDICT_RULES_JS = (
-    "((r) => { if (!r || typeof r !== 'object') return r; "
+    "((r, g) => { if (!r || typeof r !== 'object') return r; "
+    # Clauses only a withheld row delivers stay open beside a met criterion; any other
+    # unmet clause keeps the verdict not_met.
+    "if (r.status === 'not_met' && Array.isArray(g) && g.length && Array.isArray(r.withheld_clauses) "
+    "&& r.withheld_clauses.length && Array.isArray(r.clauses) && r.clauses.length "
+    "&& r.clauses.every(c => c && c.status === 'met') "
+    "&& r.withheld_clauses.every(w => w && Array.isArray(w.rows) && w.rows.length && w.rows.every(id => g.includes(id))) "
+    "&& !String(r.reason ?? '').startsWith('not wired up: ') "
+    "&& [undefined, 'pass', 'not_present'].includes(r.falsifier && r.falsifier.verdict)) "
+    "{ r = { ...r, status: 'met', reconciled_from: 'not_met' }; } "
     # DoE C1 (judge-reachability-check): a met judge naming an unreachable entry
     # or a broken click path is not_met; `undecidable` never moves the status.
     "if (r.status === 'met' && r.reachability) { const rc = r.reachability; "
@@ -3310,7 +3319,9 @@ _JUDGE_VERDICT_RULES_JS = (
 )
 
 
-def _never_stranding_criterion(call_expr: str, *, judge: bool = False, verify: bool = False) -> str:
+def _never_stranding_criterion(
+    call_expr: str, *, judge: bool = False, verify: bool = False, withheld_ids: Sequence[str] = ()
+) -> str:
     """Wrap the criterion leg so a throw (an agentType the firing session
     cannot resolve, a schema refusal) yields ``indeterminate`` instead of
     killing the run after every executor has written: the run must still
@@ -3319,12 +3330,13 @@ def _never_stranding_criterion(call_expr: str, *, judge: bool = False, verify: b
     ``judge`` applies DoE's verdict rules to a returned judge result.
     ``verify`` wraps the merged call: it resolves ``{test, judge}``, with a
     ``null`` test (``not_run``) on a throw."""
+    gated = f", {json.dumps(list(withheld_ids))}" if withheld_ids else ""
     if verify:
         returned = (
-            f"((r) => ({{ test: r.test ?? null, judge: {_JUDGE_VERDICT_RULES_JS}(r.judge) }}))(await {call_expr})"
+            f"((r) => ({{ test: r.test ?? null, judge: {_JUDGE_VERDICT_RULES_JS}(r.judge{gated}) }}))(await {call_expr})"
         )
     elif judge:
-        returned = f"{_JUDGE_VERDICT_RULES_JS}(await {call_expr})"
+        returned = f"{_JUDGE_VERDICT_RULES_JS}(await {call_expr}{gated})"
     else:
         returned = f"await {call_expr}"
     indeterminate = (
@@ -3733,6 +3745,22 @@ def _judge_engine_clause(
         cwd_root,
     )
     return owner_repo_clause(rows, {})
+
+
+def _withheld_judge_rows(plan_text: Optional[str], excluded_rows: Optional[list]) -> list:
+    """``{id, title, register_rows}`` of each row held behind an execution gate, for the judge."""
+    if not plan_text:
+        return []
+    from coordinator_core.ops.dispatch_emit.cross_repo_write_refusal import gated_rows, slot_withheld_rows
+    from coordinator_core.ops.plan_tasks_render import load_rows
+
+    raw_by_id = {r.get("id"): r for r in load_rows(plan_text).rows if isinstance(r, dict)}
+    gated = [
+        {"id": g.id, "title": g.title, "register_rows": list(g.register_rows)}
+        for g in gated_rows(excluded_rows or [], raw_by_id)
+    ]
+    seen = {g["id"] for g in gated}
+    return gated + [r for r in slot_withheld_rows(raw_by_id) if r["id"] not in seen]
 
 
 def _falsifier_schema_literal() -> str:
@@ -5987,7 +6015,9 @@ def compose_script(
         judge_register = plan_judge_evidence(
             plan_path, Path(repo_root) if repo_root is not None else _REPO_ROOT, plan_text=plan_text
         )
+    judge_withheld = _withheld_judge_rows(plan_text, excluded_rows)
     judge_brief_kwargs = dict(
+        withheld_rows=judge_withheld,
         stage_schemas=review_stage_schemas,
         plan_path=plan_path or "",
         run_base_sha=_run_base_marker() if runtime_base else (run_base_sha or ""),
@@ -6047,7 +6077,9 @@ def compose_script(
         else None
     )
     if criterion_expr is not None:
-        criterion_expr = _never_stranding_criterion(criterion_expr, judge=bool(judge_expr))
+        criterion_expr = _never_stranding_criterion(
+            criterion_expr, judge=bool(judge_expr), withheld_ids=[w["id"] for w in judge_withheld]
+        )
     criterion_block = (
         f"  phase({_js_string_literal(_TEST_PHASE_TITLE)});\n"
         f"  {_FALSIFIER_RESULT_VAR} = await {criterion_expr};"
@@ -6137,6 +6169,7 @@ def compose_script(
                     _stage_edits_base, owed_gates, _plan_surface, _review_terminal,
                 ),
                 verify=True,
+                withheld_ids=[w["id"] for w in judge_withheld],
             )
             guarded_blocks.append(
                 f"  phase({_js_string_literal(_VERIFY_PHASE_TITLE)});\n"

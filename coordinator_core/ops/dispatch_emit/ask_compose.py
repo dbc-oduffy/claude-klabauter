@@ -137,6 +137,7 @@ from coordinator_core.ops.review_mint.execute_review import (
     REVIEW_MISSING_HALT,
     SLICE_ID_UNKNOWN_HALT,
     compose_execute_review,
+    WITHHELD_RULE,
     criterion_judge_brief,
     owner_repo_clause_js,
 )
@@ -440,6 +441,14 @@ _LEDGER_DOC_WRITES_RULE = (
 )
 _GATED_IDS_JS = "(((_manifest?.gated ?? []).map((g) => g.id).join(', ')) || 'none')"
 _OWED_IDS_JS = "(((_manifest?.owed ?? []).map((o) => o.id).join(', ')) || 'none')"
+_WITHHELD_SET_JS = "[...(_manifest?.gated ?? []), ...(_manifest?.slot_withheld ?? [])]"
+_GATED_LIST_JS = _WITHHELD_SET_JS + ".map((g) => g.id)"
+_WITHHELD_ROWS_JS = (
+    "(" + _WITHHELD_SET_JS + ".length ? '\\nWithheld rows: ' + " + _WITHHELD_SET_JS + ".map((g) => g.id + ' (' + (g.title || 'untitled') + ')' "
+    "+ ((g.register_rows ?? []).length ? ' [register ' + g.register_rows.join(', ') + ']' : '')).join('; ') + '. ' + "
+    + json.dumps(WITHHELD_RULE)
+    + " : '')"
+)
 #: The stage-start read every judgment-bearing stage makes: the EM can revise the ask mid-run
 #: (`workflow.revise`), so a stage that read the ask only at emit would act on a stale one.
 _LEDGER_CLAUSE = (
@@ -491,7 +500,8 @@ _MANIFEST_SCHEMA = _obj(
         "rulable_ids": {"type": "array", "items": _STR},
         "ledger_item_ids": {"type": "array", "items": _STR},
         "withheld_ids": {"type": "array", "items": _STR},
-        "gated": {"type": "array", "items": _obj(["id"], {"id": _STR, "reason": _STR, "gate": _STR, "owner_repo": _STR, "owner_root": _STR, "closure_key": {}})},
+        "slot_withheld": {"type": "array", "items": _obj(["id"], {"id": _STR, "title": _STR, "register_rows": {"type": "array", "items": _STR}})},
+        "gated": {"type": "array", "items": _obj(["id"], {"id": _STR, "reason": _STR, "gate": _STR, "owner_repo": _STR, "owner_root": _STR, "closure_key": {}, "title": _STR, "register_rows": {"type": "array", "items": _STR}})},
         "owed": {"type": "array", "items": _obj(["id"], {"id": _STR, "reason": _STR, "detail": _STR})},
         "engine_rows": {"type": "array", "items": _obj(["id"], {"id": _STR, "owner_repo": _STR, "owner_root": _STR, "root_class": _STR, "engine": {"type": "boolean"}})},
     },
@@ -2684,6 +2694,7 @@ def compose_ask_script(
             "js:" + _GATED_IDS_JS,
             "; owed rows: ",
             "js:" + _OWED_IDS_JS,
+            "js:" + _WITHHELD_ROWS_JS,
         )
     else:
         verdict_parts = (
@@ -2740,7 +2751,7 @@ def compose_ask_script(
         *(
             [
                 f"    {_emit._FALSIFIER_RESULT_VAR} = (_verify && _verify.judge) ? "
-                f"{_emit._JUDGE_VERDICT_RULES_JS}(_verify.judge) : {unjudged};"
+                f"{_emit._JUDGE_VERDICT_RULES_JS}(_verify.judge, {_GATED_LIST_JS}) : {unjudged};"
             ]
             if judged
             else []

@@ -911,7 +911,8 @@ class GatedRow:
     """A row withheld from the run; ``reason`` is ``external_gate`` or
     ``transitive_gate_closure`` and ``gate`` describes the blocking gate.
     ``owner_root`` is the owner repo's checkout on this box, filled at stage time;
-    ``""`` when the box's registry has no entry for it."""
+    ``""`` when the box's registry has no entry for it. ``title`` and ``register_rows`` are the
+    row's own, so a judge can name the clauses the withheld row delivers."""
 
     id: str
     reason: str
@@ -919,13 +920,20 @@ class GatedRow:
     owner_repo: str = ""
     closure_key: Any = None
     owner_root: str = ""
+    title: str = ""
+    register_rows: tuple[str, ...] = ()
 
     def to_json(self) -> dict[str, Any]:
-        return {
+        out: dict[str, Any] = {
             "id": self.id, "reason": self.reason, "gate": self.gate,
             "owner_repo": self.owner_repo, "closure_key": self.closure_key,
             "owner_root": self.owner_root,
         }
+        if self.title:
+            out["title"] = self.title
+        if self.register_rows:
+            out["register_rows"] = list(self.register_rows)
+        return out
 
     @classmethod
     def from_json(cls, data: dict[str, Any]) -> "GatedRow":
@@ -933,6 +941,8 @@ class GatedRow:
             id=data["id"], reason=data["reason"], gate=data["gate"],
             owner_repo=data.get("owner_repo") or "", closure_key=data.get("closure_key"),
             owner_root=data.get("owner_root") or "",
+            title=data.get("title") or "",
+            register_rows=tuple(str(r) for r in data.get("register_rows") or ()),
         )
 
 
@@ -989,9 +999,14 @@ class StageManifest:
     retired_resume_rows: tuple[str, ...] = ()
     #: The staged rows' `fanout_cost.FanoutCost.meta_dict()` (agents, basis, groups); None when unset.
     fanout: dict[str, Any] | None = None
+    #: Open `needs_slot` rows as `{id, title, register_rows}`: withheld from the judge beside
+    #: `gated`, without widening `gated`; an absent key reads as ``()``.
+    slot_withheld: tuple[dict[str, Any], ...] = ()
 
     def to_json(self) -> dict[str, Any]:
         out = self._base_json()
+        if self.slot_withheld:
+            out["slot_withheld"] = [dict(r) for r in self.slot_withheld]
         if self.fanout is not None:
             out["fanout"] = dict(self.fanout)
         return out
@@ -1034,4 +1049,5 @@ class StageManifest:
             withheld_ids=tuple(data.get("withheld_ids") or ()),
             retired_resume_rows=tuple(data.get("retired_resume_rows") or ()),
             fanout=dict(data["fanout"]) if data.get("fanout") else None,
+            slot_withheld=tuple(dict(r) for r in data.get("slot_withheld") or ()),
         )

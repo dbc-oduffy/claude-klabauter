@@ -293,6 +293,28 @@ def em_owned_clause(em_owned_rows: Optional[List[str]]) -> str:
     )
 
 
+WITHHELD_RULE = (
+    "Withheld rows are not deliverable in this run: an external gate holds each. Grade the exit "
+    "criterion WITHOUT the clauses only a withheld row delivers. Such a clause is never `not_met` "
+    "and never counts as met: leave it out of `clauses` and return it in `withheld_clauses` as "
+    "{clause, rows (the withheld row ids), register_rows (the register row ids they trace to)}. "
+    "A clause a non-withheld row delivers is graded as usual; if it is unmet, the criterion is `not_met`."
+)
+
+
+def withheld_rows_clause(rows: Optional[List[dict]]) -> str:
+    """The prompt clause naming withheld rows (``{id, title, register_rows}``) and the rule for
+    grading the criterion without their clauses; empty when no row is withheld."""
+    if not rows:
+        return ""
+    named = "; ".join(
+        f"{r.get('id')} ({r.get('title') or 'untitled'})"
+        + (f" [register {', '.join(r['register_rows'])}]" if r.get("register_rows") else "")
+        for r in rows
+    )
+    return f"\nWithheld rows: {named}. {WITHHELD_RULE}"
+
+
 _OWNER_HEAD = (
     "\nOwner-repo rows (delivered in another repo; this run's diff holds no hunk for them):"
 )
@@ -1457,6 +1479,9 @@ def _tier1_clause(evidence: Optional[JudgeEvidence]) -> str:
     return "\n".join(out)
 
 
+#: The criterion-block key carrying clauses a withheld row delivers: open, never met.
+WITHHELD_CLAUSES_KEY = "withheld_clauses"
+
 ROOTS_READ_SCHEMA = {
     "type": "array",
     "items": {
@@ -1523,6 +1548,22 @@ def _widen_judge_schema(schema_literal: str) -> str:
         },
     )
     properties.setdefault("authored_by", {"type": "string", "enum": ["terminal-judge"]})
+    properties.setdefault(
+        WITHHELD_CLAUSES_KEY,
+        {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["clause", "rows"],
+                "properties": {
+                    "clause": {"type": "string", "maxLength": 200},
+                    "rows": {"type": "array", "items": {"type": "string", "maxLength": 100}},
+                    "register_rows": {"type": "array", "items": {"type": "string", "maxLength": 100}},
+                },
+            },
+        },
+    )
     schema["required"] = sorted(
         {*schema.get("required", []), "differs_from_baseline", "baseline_output"}
     )
@@ -1649,6 +1690,7 @@ def _criterion_judge_prompt(
     evidence: Optional[JudgeEvidence],
     em_owned_rows: Optional[List[str]],
     ledger_charter: Optional[str],
+    withheld_rows: Optional[List[dict]] = None,
 ) -> Tuple[str, str]:
     """``(emitted agent type, prompt)`` of the roster judge; ``review.judge`` must be set."""
     falsifier_clause = ""
@@ -1692,6 +1734,7 @@ def criterion_judge_brief(
     evidence_path: Optional[str] = None,
     evidence: Optional[JudgeEvidence] = None,
     em_owned_rows: Optional[List[str]] = None,
+    withheld_rows: Optional[List[dict]] = None,
 ) -> Optional[Tuple[str, dict]]:
     """The roster judge's ``(prompt, widened result schema)`` for a caller that runs the judging
     inside another agent, or ``None`` when the roster declares no judge. The prompt is the judge's
@@ -1702,7 +1745,7 @@ def criterion_judge_brief(
     _, prompt = _criterion_judge_prompt(
         review, plan_path=plan_path, run_base_sha=run_base_sha, falsifier=falsifier, prompt_head=prompt_head,
         criterion=criterion, host_degraded=False, evidence_path=evidence_path, evidence=evidence,
-        em_owned_rows=em_owned_rows, ledger_charter=ledger_charter,
+        em_owned_rows=em_owned_rows, ledger_charter=ledger_charter, withheld_rows=withheld_rows,
     )
     schema = json.loads(_widen_judge_schema(_schema_literal(review.judge.schema, stage_schemas)))
     return prompt, schema
@@ -1739,6 +1782,7 @@ def criterion_judge_parts(
     em_owned_rows: Optional[List[str]] = None,
     ledger_charter: Optional[str] = None,
     ledger_schema: Optional[dict] = None,
+    withheld_rows: Optional[List[dict]] = None,
 ) -> Optional[CriterionJudgeParts]:
     """The roster judge's call parts, or ``None`` when the roster declares no judge. The one
     source both ``compose_criterion_judge`` and an Agent-tool brief render from."""
@@ -1748,7 +1792,7 @@ def criterion_judge_parts(
         review, plan_path=plan_path, run_base_sha=run_base_sha, falsifier=falsifier,
         prompt_head=prompt_head, criterion=criterion, host_degraded=host_degraded,
         evidence_path=evidence_path, evidence=evidence, em_owned_rows=em_owned_rows,
-        ledger_charter=ledger_charter,
+        ledger_charter=ledger_charter, withheld_rows=withheld_rows,
     )
     schema_literal = _widen_judge_schema(_schema_literal(review.judge.schema, stage_schemas))
     if ledger_schema is not None:
@@ -1777,6 +1821,7 @@ def compose_criterion_judge(
     ledger_schema: Optional[dict] = None,
     sidecar_workflow: str = "review",
     sidecar_run_key: Optional[str] = None,
+    withheld_rows: Optional[List[dict]] = None,
 ) -> Optional[str]:
     """The roster's ``judge`` agent as one ``agent(...)`` call EXPRESSION, or
     ``None`` when the roster declares no judge. ``evidence_path`` names the
@@ -1794,7 +1839,7 @@ def compose_criterion_judge(
         review, stage_schemas=stage_schemas, plan_path=plan_path, run_base_sha=run_base_sha,
         falsifier=falsifier, prompt_head=prompt_head, criterion=criterion, host_degraded=host_degraded,
         evidence_path=evidence_path, evidence=evidence, em_owned_rows=em_owned_rows,
-        ledger_charter=ledger_charter, ledger_schema=ledger_schema,
+        ledger_charter=ledger_charter, ledger_schema=ledger_schema, withheld_rows=withheld_rows,
     )
     if parts is None:
         return None
