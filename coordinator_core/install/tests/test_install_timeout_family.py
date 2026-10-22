@@ -140,15 +140,26 @@ def test_install_surface_carries_no_bare_over_a_minute_timeout(path: Path) -> No
     )
 
 
+def _repo_py_files_pruned() -> List[Path]:
+    """Every .py under the repo, pruning untracked/ephemeral trees at the directory
+    level (rglob descends into scratch/ and .coordinator-local/ before any filter runs)."""
+    import os
+
+    skip = {".git", "state", "archive", "scratch", ".coordinator-local", ".project-rag", "node_modules", ".venv", "__pycache__"}
+    out: List[Path] = []
+    for dirpath, dirnames, filenames in os.walk(_REPO_ROOT):
+        dirnames[:] = sorted(d for d in dirnames if d not in skip)
+        out.extend(Path(dirpath) / f for f in sorted(filenames) if f.endswith(".py"))
+    return out
+
+
 def test_the_family_stays_quarantined_to_the_install_chain() -> None:
     """`install/timeouts.py` is not a timeout vocabulary for the tree. An
     importer outside the install chain is a carve-out taken rather than
     granted — DR-349's exact failure mode."""
     leaks: List[str] = []
-    for path in sorted(_REPO_ROOT.rglob("*.py")):
+    for path in _repo_py_files_pruned():
         rel = path.relative_to(_REPO_ROOT).as_posix()
-        if rel.startswith((".git/", "state/", "archive/", "scratch/")):
-            continue
         if rel.startswith(_QUARANTINE_PREFIXES):
             continue
         try:

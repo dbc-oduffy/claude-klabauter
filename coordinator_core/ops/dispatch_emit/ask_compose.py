@@ -19,7 +19,9 @@ from coordinator_core.git.git_state import head_sha
 from coordinator_core.warp_fire import SUBMIT_WORKFLOW_NAME, fire_command
 from coordinator_core.ops.dispatch_emit import agent_sidecar as _sidecar
 from coordinator_core.ops.dispatch_emit import prompt_fragments as _prompt_fragments
+from coordinator_core.ops.dispatch_emit.nested_run_contract import STAGE_PENDING_KEY
 from coordinator_core.ops.dispatch_emit.reply_sidecar import (
+    ADOPT_STAGED_ARG_JS,
     READ_STAGE_SIDECAR_JS,
     STAGE_REPLY_SCHEMA,
     VERIFY_REPLY_JS,
@@ -661,6 +663,7 @@ _ADMIT_MANIFEST_JS = (
 )
 _STAGE_SIDECAR_HALT = "stage reply sidecar does not match its handle: "
 _ADOPT_STAGE_REPLY_JS = (
+    "  let _stagePending = null;\n"
     # A soft (plan-blitz readyOp) reply's `error` is the pass-through's prose: `_adoptReadyError` owns
     # the refusal there. The manifest is only ever the sidecar text that matched its handle.
     "  const _adoptStageReply = async (r, soft) => {\n"
@@ -672,7 +675,11 @@ _ADOPT_STAGE_REPLY_JS = (
     "plan: typeof r.owed_plan === 'string' ? r.owed_plan : null }; } return; }\n"
     f"    if (r.{PARKED_REPLY_KEY} && !r.manifest_handle) {{ if (!_parked) _parked = String(r.{PARKED_REPLY_KEY}); return; }}\n"
     "    if (!r.manifest_handle) { if (!soft && !_relayGap) _relayGap = 'manifest_handle'; return; }\n"
-    "    const got = await _readStageSidecar(r.manifest_handle, REPO_ROOT);\n"
+    "    let got;\n"
+    "    if (_LAUNCHER_CHILD) {\n"
+    "      got = _adoptStagedArg(r.manifest_handle);\n"
+    "      if (got === null) { if (!_stagePending) _stagePending = { handle: r.manifest_handle }; return; }\n"
+    "    } else { got = await _readStageSidecar(r.manifest_handle, REPO_ROOT); }\n"
     f"    if (got.fail) {{ if (!_diskHalt) _diskHalt = {_js_string_literal(_STAGE_SIDECAR_HALT)} + got.fail; return; }}\n"
     "    const gap = _wholeManifestGap(got.manifest);\n"
     "    if (gap) { if (!_relayGap) _relayGap = gap; return; }\n"
@@ -684,7 +691,7 @@ _ADOPT_STAGE_REPLY_JS = (
 def _stage_reply_js() -> str:
     """The script block that turns a stage reply into `_stagedManifest`: the runtime reads the sidecar's reader
     with no agent, and the text is verified against the handle before `JSON.parse`."""
-    return VERIFY_REPLY_JS + READ_STAGE_SIDECAR_JS + _ADOPT_STAGE_REPLY_JS
+    return VERIFY_REPLY_JS + READ_STAGE_SIDECAR_JS + ADOPT_STAGED_ARG_JS + _ADOPT_STAGE_REPLY_JS
 
 
 #: The run reads its commit token from the Workflow `args` the emit's fire args carry, so the
@@ -2673,6 +2680,9 @@ def compose_ask_script(
     b.append(
         "  let _stageHalt = _stageRefusal ? 'stage refused: ' + _stageRefusal : "
         "(_diskHalt ?? (_relayGap ? 'stage manifest relay is not whole: ' + _relayGap : null));"
+    )
+    b.append(
+        f"  if (_LAUNCHER_CHILD && _stagePending && !_stagedManifest) {{ return {{ {STAGE_PENDING_KEY}: _stagePending }}; }}"
     )
     b.append("  if (_stagedManifest) { _manifest = _stagedManifest; }")
     if judged and fold_falsifier:

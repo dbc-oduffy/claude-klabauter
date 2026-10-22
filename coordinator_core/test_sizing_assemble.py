@@ -786,6 +786,14 @@ _INVARIANCE_CASES = list(
 )
 
 
+# Fast tier keeps every 7th cell of the 432-cell product (stride 7 is coprime to the 8 bool combos, so
+# every tshirt/appetite/probe/bool value is hit); the full product runs on cadence.
+_INVARIANCE_PARAMS = [
+    pytest.param(*case, marks=() if i % 7 == 0 else pytest.mark.cadence)
+    for i, case in enumerate(_INVARIANCE_CASES)
+]
+
+
 def test_invariance_cases_count_rises_360_to_432_with_xxl_notch():
     # AC10: _INVARIANCE_CASES derives from sa.TSHIRT_ORDER, so it
     # auto-expands the moment a notch is appended/removed. Assert the count
@@ -798,7 +806,7 @@ def test_invariance_cases_count_rises_360_to_432_with_xxl_notch():
 
 @pytest.mark.parametrize(
     "tshirt,appetite,probe_signal,jtbd_unclear,well_trodden_step_change,express_lane",
-    _INVARIANCE_CASES,
+    _INVARIANCE_PARAMS,
 )
 def test_provenance_invariance_read_vs_executed(
     tshirt, appetite, probe_signal, jtbd_unclear, well_trodden_step_change, express_lane
@@ -848,7 +856,7 @@ def _without_premise_args(directives):
 
 @pytest.mark.parametrize(
     "tshirt,appetite,probe_signal,jtbd_unclear,well_trodden_step_change,express_lane",
-    _INVARIANCE_CASES,
+    _INVARIANCE_PARAMS,
 )
 def test_provenance_invariance_not_applicable_vs_executed(
     tshirt, appetite, probe_signal, jtbd_unclear, well_trodden_step_change, express_lane

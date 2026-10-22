@@ -17,6 +17,7 @@ from typing import Mapping
 
 from coordinator_core.ops import _path_guard
 from coordinator_core.ops.dispatch_emit import grind_commit_contract as _contract
+from coordinator_core.ops.dispatch_emit import nested_run_contract as _nested
 from coordinator_core.session import record_homes
 
 HANDLE_KEYS = ("path", "sha256", "bytes")
@@ -94,6 +95,30 @@ async function _readStageSidecar(h, root) {
     return { fail: 'reply text is not valid JSON' };
   }
 }
+"""
+
+# A launcher child never calls workflow(): the launcher reads the sidecar and hands the verified text back
+# in args.stagedManifest. Trap: depends on _verifyReplyText; text still passes it before JSON.parse.
+ADOPT_STAGED_ARG_JS = f"""
+const _LAUNCHER_ARGS = (() => {{
+  try {{
+    const a = (typeof args === 'string') ? JSON.parse(args) : (typeof args === 'undefined' ? null : args);
+    return (a && typeof a === 'object') ? a : null;
+  }} catch (_e) {{ return null; }}
+}})();
+const _LAUNCHER_CHILD = !!(_LAUNCHER_ARGS && _LAUNCHER_ARGS.{_nested.LAUNCHER_CHILD_ARG} === true);
+function _adoptStagedArg(h) {{
+  const s = _LAUNCHER_ARGS ? _LAUNCHER_ARGS.{_nested.STAGED_MANIFEST_ARG} : null;
+  if (!s || typeof s !== 'object' || !s.handle || typeof s.handle !== 'object' || h === null || typeof h !== 'object') return null;
+  if (s.handle.path !== h.path || s.handle.sha256 !== h.sha256 || s.handle.bytes !== h.bytes) return null;
+  const bad = _verifyReplyText(s.text, h);
+  if (bad !== null) return {{ fail: bad }};
+  try {{
+    return {{ manifest: JSON.parse(s.text) }};
+  }} catch (e) {{
+    return {{ fail: 'reply text is not valid JSON' }};
+  }}
+}}
 """
 
 

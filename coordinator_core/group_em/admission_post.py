@@ -22,11 +22,22 @@ PHASES = ("START", "END")
 MAX_PIDS = 64
 MAX_TEXT = 512
 MAX_VERIFY_SPAN = 65536
+MAX_PEAK_MB = 1048576.0
 
 
 def admission_path(directory: Optional[Path] = None) -> Path:
     base = Path(directory) if directory is not None else settings_home() / "state" / "group-em"
     return base / "box" / "admission.jsonl"
+
+
+def valid_peak_mb(value: object) -> Optional[float]:
+    """Return ``value`` as a finite non-negative float of MB no larger than ``MAX_PEAK_MB``, else None."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    peak = float(value)
+    if not (0.0 <= peak <= MAX_PEAK_MB):
+        return None
+    return peak
 
 
 def _append_verified(path: Path, data: bytes) -> Optional[str]:
@@ -66,6 +77,7 @@ def post(
     directory: Optional[Path] = None,
     now: Optional[float] = None,
     require_holder: bool = True,
+    declared_peak_mb: Optional[float] = None,
 ) -> dict:
     """Append one admission line for the box Group EM; return a structured reply.
 
@@ -73,6 +85,8 @@ def post(
     written. ``delivered`` is True only when this call's line was verified present at
     ``path``; otherwise ``posted`` and ``delivered`` are False, ``reason`` names the failure
     (``write_failed:*``, ``short_write``, ``not_found_at_path``) and a stderr line is printed.
+    ``declared_peak_mb`` (MB the run expects its process tree to reach) is written on START
+    lines only, as ``declared_peak_mb``; an absent or invalid value omits the field.
     A non-live holder still receives the line: it is tailed once the holder is back.
     With ``require_holder=False`` a holderless box is still written (``holder_session`` null,
     ``holder_live`` False) so a governor reading the file sees the line.
@@ -103,6 +117,9 @@ def post(
         "note": note[:MAX_TEXT],
         "holder_session": holder.get("session_id"),
     }
+    peak = valid_peak_mb(declared_peak_mb)
+    if phase == "START" and peak is not None:
+        line["declared_peak_mb"] = peak
     path = admission_path(directory)
     path.parent.mkdir(parents=True, exist_ok=True)
     data = (json.dumps(line, separators=(",", ":")) + "\n").encode("utf-8")

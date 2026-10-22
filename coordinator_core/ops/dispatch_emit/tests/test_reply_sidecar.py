@@ -350,6 +350,34 @@ def test_read_stage_sidecar_js_names_no_runtime_decoder():
         assert banned not in rs.READ_STAGE_SIDECAR_JS
 
 
+def test_adopt_staged_arg_js_names_no_workflow_or_agent_call():
+    for banned in ("workflow(", "agent(", "atob", "Buffer", "TextDecoder"):
+        assert banned not in rs.ADOPT_STAGED_ARG_JS
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+@pytest.mark.skipif(shutil.which("node") is None, reason="node absent")
+def test_adopt_staged_arg_js_adopts_only_a_matching_verified_handle(sidecar, tmp_path):
+    root, path, handle = sidecar
+    text = path.read_text("ascii")
+
+    def adopt(args: dict, h: dict, txt: str | None = None):
+        a = {**args, "stagedManifest": {"handle": handle, "text": text if txt is None else txt}} if args else {}
+        src = (
+            "const args = " + json.dumps(a) + ";\n" + rs.VERIFY_REPLY_JS + rs.ADOPT_STAGED_ARG_JS
+            + f"\nconsole.log(JSON.stringify({{child: _LAUNCHER_CHILD, r: _adoptStagedArg({json.dumps(h)})}}));\n"
+        )
+        return _node_json(tmp_path, src)
+
+    ok = adopt({"launcherChild": True}, handle)
+    assert ok == {"child": True, "r": {"manifest": _manifest()}}
+    assert adopt({"launcherChild": True}, {**handle, "bytes": handle["bytes"] + 1})["r"] is None
+    assert "fail" in adopt({"launcherChild": True}, handle, text[:-5])["r"]
+    top = adopt({}, handle)
+    assert top["child"] is False and top["r"] is None
+
+
 def test_check_relay_default_cause_unchanged():
     msg = gcc.check_relay("record-urlenc", "abc", "9", "0" * 64)
     assert msg.endswith("the agent's copy of the pieces is damaged")

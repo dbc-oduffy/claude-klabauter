@@ -45,7 +45,8 @@ from coordinator_core import locked_write
 from coordinator_core.group_em import watch_heartbeat
 from coordinator_core.session import day_branch_cut_lock
 
-pytestmark = [pytest.mark.slow, pytest.mark.spawns_process]
+# cadence: a measurement driver (forced two-process collision pairs, ~33s); `slow` alone does not leave the fast tier.
+pytestmark = [pytest.mark.slow, pytest.mark.spawns_process, pytest.mark.cadence]
 
 _FORCED_PAIRS = 20
 

@@ -14,8 +14,9 @@ halt that names the gap, never a run.
 
 `args` shape: `{ask: str, em_context?, route_preference?, em_rationale?, stop_after?}` | `{sizing: str, stop_after?}` | `{asks: [{ask, source?, sender?, relayed_text?, em_context?, context?, route_preference?, em_rationale?, label?, writes?, stop_after?}], sender?, confirm_split?, stop_after?}` (`stop_after` is `"plan"` only: the run parks after planning for `/mise-prep`; a top-level value beside `asks` applies to every entry naming none; an `args` key outside the accepted set, or an `asks` entry key outside `ASKS_ITEM_KEYS`, is refused naming it and the accepted keys; `em_context` is a string of the EM's own context, carried in the emit op's `ask_brief` under an EM marker, never merged into the ask text, so `source: "pm"` stays true for the verbatim `ask`; an entry's `context` (a string or list of path / prose strings) and `em_context` ride the fan-out items on a multi-item `asks`, and a one-element `asks` carries them as a top-level `context` does; a top-level `context` beside a multi-item `asks` is refused; `route_preference` is goal|roadmap|plan, `em_rationale` at most 2000 chars; both forward to the emit op
 or the fan-out, and either beside `{sizing}` is refused) (each ask a
-separate sibling run via `dispatch.ask_fanout`; the call fires the first ready run and the allow reason
-carries `{parent_id, runs}` plus the other ready runs' fire calls; a one-element array is an `ask`; a
+separate sibling run via `dispatch.ask_fanout`; with two or more ready runs the call is rewritten to one
+lazy-emit launcher (`fan_launcher.write_launcher`) that emits and starts each, with one ready run it fires
+that run directly; the allow reason carries `{parent_id, runs}` and the runs waiting; a one-element array is an `ask`; a
 slice `{sizing}` is denied until its `after` predecessors land), optional `repo` (absolute path; else the payload
 cwd's repo, or for an ask whose absolute `context` lies in another registered repo, that repo), optional `source: "pm" | "relayed"` (a chosen source is forwarded to the engine verbatim as `ask_source`; an unmarked single `ask` defaults to `pm` on the session's first human turn and to `relayed` with one warning in the allow reason on any later turn; only `source: "pm"` makes it the PM's
 words, which the engine verifies against the session's recorded turns (refused when contradicted, flagged
@@ -48,7 +49,7 @@ from __future__ import annotations
 import os
 import re
 from pathlib import Path
-from typing import Any, Callable, Mapping, Optional
+from typing import Any, Callable, Mapping, Optional, Sequence
 
 from coordinator_core.hooks._envelope import deny, no_advisory, payload_of, rewrite_input
 from coordinator_core.hooks.sizing_scout_deny import (
@@ -60,7 +61,7 @@ from coordinator_core.hooks.sizing_scout_deny import (
 from coordinator_core.ipc import register_op
 from coordinator_core.ops.dispatch_emit.ask_fanout_contract import ASKS_ITEM_KEYS, unknown_keys_refusal
 from coordinator_core.ops.sizing_intake_contract import is_path_shaped, with_em_context
-from coordinator_core.warp_fire import SUBMIT_WORKFLOW_NAME, fire_command, is_submit_name
+from coordinator_core.warp_fire import SUBMIT_WORKFLOW_NAME, is_submit_name
 
 # Every `args` key this hook reads; a key outside it is refused by name. A key read below must be added here.
 _ARGS_KEYS: tuple[str, ...] = (
@@ -452,8 +453,8 @@ def _revise_hint(run_id: str) -> str:
     )
 
 
-def _fan_tail(root: Path, reply: Mapping[str, Any], fired_run: str) -> str:
-    """The allow reason's tail for an asks submission: the frozen reply and the other ready runs' fire calls."""
+def _fan_tail(root: Path, reply: Mapping[str, Any], started: Sequence[str], launcher: bool = False) -> str:
+    """The allow reason's tail for an asks submission: the frozen reply, the runs started, the runs waiting."""
     import json
 
     from coordinator_core.ops.dispatch_emit.ask_fanout_contract import FanoutReply
@@ -461,17 +462,26 @@ def _fan_tail(root: Path, reply: Mapping[str, Any], fired_run: str) -> str:
     parent = _read_parent(root, str(reply["parent_id"]))
     runs = parent.runs if parent else ()
     frozen = FanoutReply(parent_id=str(reply["parent_id"]), runs=runs).to_json()
-    others = [
-        fire_command(r.slice_sizing) for r in runs if r.run_id != fired_run and r.status == "ready" and r.slice_sizing
-    ]
-    parts = [f"Reply: {json.dumps(frozen)}."]
-    if others:
-        parts.append("Fire the listed runs now, one call each, this turn: " + " ".join(others))
-    after = [r.run_id for r in runs if r.status == "after"]
-    if after:
-        parts.append(f"Waiting on a predecessor ({', '.join(after)}): named by the close of the run that frees them.")
-    parts.append("Each run's completion is its own wake.")
+    parts = [f"Reply: {json.dumps(frozen)}.", f"Started: {', '.join(started)}."]
+    waiting = [f"{r.run_id} ({r.status})" for r in runs if r.run_id not in started and r.status != "ready"]
+    if waiting:
+        parts.append(
+            f"Waiting ({', '.join(waiting)}): a run waiting on a predecessor is named by the close of the run that frees it."
+        )
+    if launcher:
+        parts.append(
+            "The launcher's completion is your one wake; it carries each run's result, and an emit "
+            "refused at a child's start is named there with its reason."
+        )
+    else:
+        parts.append("Each run's completion is its own wake.")
     return " ".join(parts)
+
+
+def _default_launch(root: Path, parent_id: str, children: Sequence[Any], session_id: Optional[str]) -> Path:
+    from coordinator_core.ops.dispatch_emit.fan_launcher import write_launcher
+
+    return write_launcher(root, parent_id, children, session_id)
 
 
 def _default_fanout(params: dict, repo_root: Path) -> dict:
@@ -564,8 +574,90 @@ def _refuse(text: str) -> dict:
     return deny("PreToolUse", f"{text}\nInstead: `Workflow({{name: \"{SUBMIT_WORKFLOW_NAME}\", {_ARGS_SHAPE}}})`.")
 
 
+def _child_params(
+    root: Path, tool_input: Mapping[str, Any], session_id: Optional[str], run: Any, call_stop: Any, cross_repo: bool
+) -> dict:
+    """The `dispatch.emit` params the direct path sends for one fan-out slice; the launcher's emit leg sends these."""
+    params: dict = {"session_id": session_id or ""}
+    if _has_research_block(_load_sizing_doc(root, run.slice_sizing)):
+        params["from_sizing"] = run.slice_sizing
+    else:
+        params.update({"ask": True, "sizing_path": run.slice_sizing, "reserved_run_id": run.run_id})
+        args = tool_input.get("args")
+        writes = args.get("writes") if isinstance(args, dict) else None
+        if isinstance(writes, list) and writes and all(isinstance(w, str) and w.strip() for w in writes):
+            params["writes"] = [w.strip() for w in writes]
+        if call_stop is not None:
+            params["stop_after"] = call_stop
+    if cross_repo:
+        params["cross_repo_approved"] = True
+    return params
+
+
+def _launch_all(
+    root: Path,
+    payload: Mapping[str, Any],
+    fan_reply: Mapping[str, Any],
+    ready: Sequence[Any],
+    call_stop: Any,
+    launch: Optional[Callable[..., Path]],
+) -> dict:
+    """The rewrite to one launcher script that emits and starts every ready run of an asks submission."""
+    from coordinator_core import warp_live
+    from coordinator_core.ops.dispatch_emit.cross_repo_write_refusal import is_remote_venue
+    from coordinator_core.ops.dispatch_emit.fan_launcher import LaunchChild
+
+    tool_input = payload["tool_input"]
+    args = tool_input.get("args")
+    session_id = payload.get("session_id") if isinstance(payload.get("session_id"), str) else None
+    transcript = payload.get("transcript_path") if isinstance(payload.get("transcript_path"), str) else None
+    cross_repo = is_remote_venue() or (isinstance(args, dict) and args.get("cross_repo_approved") is True)
+    children = [
+        LaunchChild(
+            run_id=r.run_id,
+            sizing_rel=r.slice_sizing,
+            emit_params=_child_params(root, tool_input, session_id, r, call_stop, cross_repo),
+        )
+        for r in ready
+    ]
+    parent_id = str(fan_reply["parent_id"])
+    try:
+        script = (launch or _default_launch)(root, parent_id, children, session_id)
+    except Exception as exc:  # the launcher's refusal text is the whole message
+        return _refuse(f"The engine wrote no launcher: {exc}")
+    call_id = payload.get("tool_use_id")
+    for r in ready:
+        try:
+            warp_live.record_submission(
+                root,
+                r.run_id,
+                session_id=session_id,
+                transcript_path=transcript,
+                script_path=str(script),
+                sizing_rel=r.slice_sizing,
+                tool_use_id=call_id if isinstance(call_id, str) else None,
+            )
+        except OSError:
+            pass  # liveness then reads the run token alone
+    started = [r.run_id for r in ready]
+    tail = _fan_tail(root, fan_reply, started, launcher=True)
+    envelope = rewrite_input(
+        "PreToolUse",
+        {"scriptPath": str(script)},
+        f"Submitted to the engine as runs {', '.join(started)} under one launcher. {tail} {_revise_hint(started[0])}",
+    )
+    hso = envelope["hookSpecificOutput"]
+    hso["permissionDecision"] = "allow"
+    hso["permissionDecisionReason"] = f"Engine submission: wrote {Path(script).name} this call."
+    return envelope
+
+
 def evaluate(
-    payload: Mapping[str, Any], *, emit: Optional[EmitFn] = None, fanout: Optional[FanoutFn] = None
+    payload: Mapping[str, Any],
+    *,
+    emit: Optional[EmitFn] = None,
+    fanout: Optional[FanoutFn] = None,
+    launch: Optional[Callable[..., Path]] = None,
 ) -> dict:
     """The PreToolUse envelope for a Workflow call: the fire rewrite for a submission, else nothing."""
     if not is_submission(payload):
@@ -691,9 +783,12 @@ def evaluate(
         if fan_reply.get("error") or fan_reply.get("exit_code") or fan_reply.get("applied") is False:
             return deny("PreToolUse", str(fan_reply.get("error") or "The fan-out was refused."))
         parent = _read_parent(root, str(fan_reply.get("parent_id")))
-        first = next((r for r in (parent.runs if parent else ()) if r.status == "ready"), None)
-        if first is None:
+        ready = [r for r in (parent.runs if parent else ()) if r.status == "ready"]
+        if not ready:
             return deny("PreToolUse", "The fan-out produced no ready run to fire.")
+        if len(ready) >= 2:
+            return _launch_all(root, payload, fan_reply, ready, call_stop, launch)
+        first = ready[0]
         sizing_rel, reserved_run_id = first.slice_sizing, first.run_id
 
     sizing_doc = _load_sizing_doc(root, sizing_rel) if sizing_rel else {}
@@ -817,7 +912,7 @@ def evaluate(
         else ""
     )
     if fan_reply is not None:
-        tail = _fan_tail(root, fan_reply, str(reserved_run_id))
+        tail = _fan_tail(root, fan_reply, [str(reserved_run_id)])
     else:
         tail = (
             "It runs to its commit in the background; its completion notification is your one wake. "

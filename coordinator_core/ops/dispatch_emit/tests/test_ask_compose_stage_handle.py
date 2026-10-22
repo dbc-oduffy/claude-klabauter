@@ -143,7 +143,7 @@ const agent = async (prompt, opts) => {
 };
 const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
 const run = new AsyncFunction('args', 'agent', 'parallel', 'pipeline', 'phase', 'workflow', src);
-run({ runToken: cfg.token }, agent, async (xs) => Promise.all(xs.map((f) => f())), async () => ({}), () => {}, workflow)
+run(cfg.args ?? { runToken: cfg.token }, agent, async (xs) => Promise.all(xs.map((f) => f())), async () => ({}), () => {}, workflow)
   .then((result) => console.log(JSON.stringify({ calls, result, workflowCalls })))
   .catch((e) => { console.error(String((e && e.stack) || e)); process.exit(1); });
 """
@@ -159,7 +159,7 @@ def _script(monkeypatch) -> str:
     )
 
 
-def _run(script: str, reply: dict | None, *, relay=None, tamper=None) -> dict:
+def _run(script: str, reply: dict | None, *, relay=None, tamper=None, args: dict | None = None) -> dict:
     node = shutil.which("node")
     if node is None:
         pytest.skip("node not on PATH")
@@ -170,6 +170,7 @@ def _run(script: str, reply: dict | None, *, relay=None, tamper=None) -> dict:
     cfg = {
         "token": _TOKEN, "verify": {**{"items": _MET["items"]}}, "commit": _LANDED,
         "replies": {"gate": gate, "gate-stage": gate}, **readers_cfg(),
+        **({"args": {"runToken": _TOKEN, **args}} if args is not None else {}),
     }
     if tamper is not None:
         tamper()
@@ -270,6 +271,62 @@ def test_a_reply_carrying_both_an_error_and_a_handle_is_not_adopted(monkeypatch)
 def test_a_reply_carrying_neither_is_not_whole(monkeypatch):
     out = _run(_script(monkeypatch), {})
     assert _halt_reason(out) == "stage manifest relay is not whole: manifest_handle"
+
+
+def _child(handle: dict, text: str) -> dict:
+    return {"launcherChild": True, "stagedManifest": {"handle": handle, "text": text}}
+
+
+def test_a_launcher_child_without_a_staged_manifest_returns_stage_pending_and_never_calls_workflow(monkeypatch):
+    reply = stage_reply(big_manifest(3))
+    out = _run(_script(monkeypatch), reply, args={"launcherChild": True})
+    assert out["result"] == {"stage_pending": {"handle": reply["manifest_handle"]}}
+    assert out["workflowCalls"] == []
+    assert _no_executor(out)
+
+
+def test_a_launcher_child_adopts_the_matching_staged_manifest_with_no_workflow_call(monkeypatch):
+    manifest = big_manifest(3)
+    reply = stage_reply(manifest)
+    out = _run(_script(monkeypatch), reply, args=_child(reply["manifest_handle"], sidecar_text(manifest)))
+    assert out["result"]["halted_by"] is None, out["result"]["halted_by"]
+    assert out["result"]["rows"] == [r["id"] for r in manifest["rows"]]
+    assert out["workflowCalls"] == []
+
+
+def test_a_launcher_child_refuses_staged_text_that_does_not_match_its_handle(monkeypatch):
+    manifest = big_manifest(3)
+    reply = stage_reply(manifest)
+    bad = sidecar_text(manifest).replace('"C1"', '"C9"', 1)
+    out = _run(_script(monkeypatch), reply, args=_child(reply["manifest_handle"], bad))
+    assert _halt_reason(out).startswith("stage reply sidecar does not match its handle: ")
+    assert _no_executor(out)
+    assert out["workflowCalls"] == []
+
+
+def test_a_staged_manifest_for_another_handle_is_pending_not_adopted(monkeypatch):
+    other = stage_reply(big_manifest(2))["manifest_handle"]
+    manifest = big_manifest(3)
+    reply = stage_reply(manifest)
+    out = _run(_script(monkeypatch), reply, args=_child(other, sidecar_text(big_manifest(2))))
+    assert "stage_pending" in out["result"]
+
+
+def test_a_top_level_run_ignores_a_staged_manifest_arg_and_reads_the_reader(monkeypatch):
+    manifest = big_manifest(3)
+    reply = stage_reply(manifest)
+    args = {"stagedManifest": {"handle": reply["manifest_handle"], "text": sidecar_text(manifest)}}
+    out = _run(_script(monkeypatch), reply, args=args)
+    assert out["result"]["halted_by"] is None
+    assert len(out["workflowCalls"]) == 1
+
+
+def test_the_reader_workflow_call_sits_behind_the_launcher_child_guard(monkeypatch):
+    script = _script(monkeypatch)
+    guard = script.index("if (_LAUNCHER_CHILD) {")
+    call = script.index("} else { got = await _readStageSidecar(r.manifest_handle, REPO_ROOT); }")
+    assert guard < script.index("_adoptStagedArg(r.manifest_handle)") < call
+    assert script.count("_readStageSidecar(r.manifest_handle") == 1
 
 
 def test_the_script_reads_the_reader_through_workflow_and_composes_no_page_leg(monkeypatch):

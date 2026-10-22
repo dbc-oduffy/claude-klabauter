@@ -29,6 +29,7 @@ Negative-spec:
 """
 from __future__ import annotations
 
+import functools
 from pathlib import Path
 
 import yaml
@@ -42,9 +43,11 @@ from coordinator_core.frontmatter.primitives import split_frontmatter
 # coordinator_core/frontmatter/tests/test_roadmap_approval_identity.py's convention.
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 
-_SKIP_DIR_NAMES = SKIP_DIR_NAMES | {"state", "archive", "tasks"}
+# scratch and .coordinator-local are untracked session ephemera (tens of thousands of files); no index doc lives there.
+_SKIP_DIR_NAMES = SKIP_DIR_NAMES | {"state", "archive", "tasks", "scratch", ".coordinator-local", ".project-rag"}
 
 
+@functools.lru_cache(maxsize=1)
 def _discover_self_declaring_index_docs() -> list[Path]:
     """Walk the repo tree statically (no git spawn) and return every markdown
     document whose own leading frontmatter block declares `index_source_dir:`.
@@ -52,7 +55,7 @@ def _discover_self_declaring_index_docs() -> list[Path]:
     Frontmatter-parsed discovery only — never a text/grep scan — matching
     C4a's DISCOVERY WITHOUT GIT paragraph and C3's exclusion convention.
     """
-    found: list[Path] = []
+    found: list[Path] = []  # cached: the whole-repo walk is shared by both tests
     stack = [_REPO_ROOT]
     while stack:
         current = stack.pop()
@@ -74,6 +77,11 @@ def _discover_self_declaring_index_docs() -> list[Path]:
                 continue
             split = split_frontmatter(text)
             if split is None:
+                continue
+            if "index_source_dir" not in split.fm_text:
+                # Cheap prefilter (superset of the key check below): pure-Python
+                # yaml parsing of every repo markdown's frontmatter was the
+                # dominant cost of this walk.
                 continue
             try:
                 fm = yaml.safe_load(split.fm_text)

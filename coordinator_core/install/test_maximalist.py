@@ -283,6 +283,21 @@ def stub_env(tmp_path, monkeypatch):
     monkeypatch.setattr(_singularity_module, "main", _fake_check_install_singularity)
     monkeypatch.setattr(_threshold_module, "main", _fake_capture_fan_out_threshold)
     monkeypatch.setattr(_platform_localize_module, "main", _fake_platform_localize)
+    # Hide powershell from the Defender offer so the run skips it instead of spawning the admin probe (~0.2s/run);
+    # the offer's own tests call `_defender_offer` directly under their own monkeypatching.
+    _real_which = maximalist.shutil.which
+    monkeypatch.setattr(
+        maximalist.shutil,
+        "which",
+        lambda cmd, *a, **kw: None if str(cmd).lower() in ("powershell.exe", "pwsh") else _real_which(cmd, *a, **kw),
+    )
+    # compileall is a real interpreter spawn over the whole package (~0.6s per run);
+    # the tests that assert on it install their own fake over this default.
+    monkeypatch.setattr(
+        maximalist,
+        "_run_compileall",
+        lambda interp, pkg_root: subprocess.CompletedProcess([interp], 0, stdout="", stderr=""),
+    )
     receipts = []
     monkeypatch.setattr(
         _setup_state_module, "record_setup_concluded", _make_recording_record_setup_concluded(receipts)

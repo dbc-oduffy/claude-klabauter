@@ -991,23 +991,66 @@ def _asks(*names, **extra):
     return {"asks": [{"ask": f"ask {n}", "label": n} for n in names], **extra}
 
 
-def test_asks_fire_the_first_ready_run_and_list_the_rest(tmp_path):
+class _Launch:
+    """Stands in for `fan_launcher.write_launcher`: records the children, returns a fixed script path."""
+
+    def __init__(self, root: Path):
+        self.calls: list = []
+        self.script = root / "scratch" / "warp" / f"{PARENT}.launcher.workflow.mjs"
+
+    def __call__(self, root, parent_id, children, session_id):
+        self.calls.append((root, parent_id, list(children), session_id))
+        return self.script
+
+
+def test_asks_launch_every_ready_run(tmp_path):
     root = _repo(tmp_path)
     fan = _Fanout([("r1", "a", (), "ready"), ("r2", "b", (), "ready"), ("r3", "c", ("r1",), "after")])
-    emit = _Emit()
-    out = mod.evaluate(_payload(root, _asks("a", "b", "c", confirm_split=True)), emit=emit, fanout=fan)
+    emit, launch = _Emit(), _Launch(root)
+    out = mod.evaluate(
+        _payload(root, _asks("a", "b", "c", confirm_split=True), tool_use_id="toolu_1"),
+        emit=emit, fanout=fan, launch=launch,
+    )
     hso = _hso(out)
     assert hso["permissionDecision"] == "allow"
     assert fan.calls[0][0]["confirm_split"] is True and len(fan.calls[0][0]["asks"]) == 3
-    params = emit.calls[0][0]
-    assert params["sizing_path"] == "state/sizings/r1.yaml" and params["reserved_run_id"] == "r1"
-    assert "ask" in params and params["ask"] is True
-    assert out["hookSpecificOutput"]["updatedInput"]["scriptPath"] == emit.script
+    assert emit.calls == []
+    assert len(launch.calls) == 1
+    _, parent_id, children, session_id = launch.calls[0]
+    assert parent_id == PARENT and session_id == "sess-1"
+    assert [c.run_id for c in children] == ["r1", "r2"]
+    assert children[1].emit_params == {
+        "session_id": "sess-1", "ask": True, "sizing_path": "state/sizings/r2.yaml", "reserved_run_id": "r2",
+    }
+    assert hso["updatedInput"] == {"scriptPath": str(launch.script)}
     reason = json.dumps(out)
-    assert PARENT in reason and "state/sizings/r2.yaml" in reason
-    assert "state/sizings/r1.yaml" not in reason.split("Fire the listed")[-1]
-    assert "state/sizings/r3.yaml" not in reason and "r3" in reason
-    assert "Fire the listed runs now" in reason and "End the turn" not in reason
+    assert "Fire the listed" not in reason and "r3 (after)" in reason and "launcher's completion" in reason
+    for run_id in ("r1", "r2"):
+        rec = json.loads(warp_live._submission_path(root, run_id).read_text("utf-8"))
+        assert rec["script_path"] == str(launch.script) and rec["tool_use_id"] == "toolu_1"
+    assert not warp_live._submission_path(root, "r3").exists()
+
+
+def test_one_ready_run_plus_a_held_run_emits_directly(tmp_path):
+    root = _repo(tmp_path)
+    fan = _Fanout([("r1", "a", (), "ready"), ("r2", "b", (), "held")])
+    emit, launch = _Emit(), _Launch(root)
+    out = mod.evaluate(_payload(root, _asks("a", "b")), emit=emit, fanout=fan, launch=launch)
+    assert launch.calls == []
+    assert emit.calls[0][0]["reserved_run_id"] == "r1"
+    assert _hso(out)["updatedInput"]["scriptPath"] == emit.script
+    assert "r2 (held)" in json.dumps(out) and "Fire the listed" not in json.dumps(out)
+
+
+def test_a_launcher_the_engine_refuses_denies_with_its_reason(tmp_path):
+    root = _repo(tmp_path)
+    fan = _Fanout([("r1", "a", (), "ready"), ("r2", "b", (), "ready")])
+
+    def boom(*_a):
+        raise FileExistsError("launcher exists")
+
+    out = mod.evaluate(_payload(root, _asks("a", "b")), emit=_Emit(), fanout=fan, launch=boom)
+    assert _hso(out)["permissionDecision"] == "deny" and "launcher exists" in json.dumps(out)
 
 
 def test_a_queued_run_is_not_listed_as_fireable(tmp_path):
@@ -1100,15 +1143,14 @@ def test_the_reported_three_ask_relayed_shape_fires_one_and_orders_the_overlap(t
         ("r2", "revise-pinned-plan-warn", ("r1",), "after"),
         ("r3", "venv-creation-guard", (), "ready"),
     ])
-    emit = _Emit()
-    out = mod.evaluate(_payload(root, args), emit=emit, fanout=fan)
+    emit, launch = _Emit(), _Launch(root)
+    out = mod.evaluate(_payload(root, args), emit=emit, fanout=fan, launch=launch)
     assert _hso(out)["permissionDecision"] == "allow"
     assert _sources(fan) == ["relayed"] * 3
     assert [a["writes"] for a in fan.calls[0][0]["asks"]][1] == ["requirements_ledger.py"]
-    assert emit.calls[0][0]["reserved_run_id"] == "r1"
-    reason = json.dumps(out)
-    assert "state/sizings/r3.yaml" in reason and "state/sizings/r2.yaml" not in reason
-    assert "Waiting on a predecessor (r2)" in reason
+    assert emit.calls == []
+    assert [c.run_id for c in launch.calls[0][2]] == ["r1", "r3"]
+    assert "r2 (after)" in json.dumps(out)
 
 
 def test_the_reported_shape_partitions_into_two_firable_runs_and_one_ordered_after():
