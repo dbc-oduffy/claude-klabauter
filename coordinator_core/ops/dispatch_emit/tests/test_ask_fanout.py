@@ -277,7 +277,7 @@ def test_pm_item_with_no_recorded_turn_refuses_before_any_write(tmp_path, monkey
     (tmp_path / ".git").mkdir()
     (tmp_path / "hub" / SID).mkdir(parents=True)
     monkeypatch.setattr(store, "baton_dir", lambda s, cwd=None: tmp_path / "hub" / s)
-    before =_snapshot(tmp_path)
+    before = _snapshot(tmp_path)
     out = mod.fanout({"asks": [{"ask": "x", "writes": ["a"]}, {"ask": "y", "source": "pm", "writes": ["b"]}], "session_id": SID}, tmp_path)
     assert out["exit_code"] == 1 and out["applied"] is False
     assert "asks[1]" in out["error"] and "relayed" in out["error"]

@@ -16,7 +16,6 @@ from coordinator_core.ops.ceremony import close_background as cb
 from coordinator_core.ops.ceremony import commit_v2
 from coordinator_core.ops.ceremony.tests import test_close_background_land_run_legs as legs
 from coordinator_core.ops.dispatch_emit import ask_fanout, land_run, land_run_contract, stopped_runs
-from coordinator_core.ops.dispatch_emit import ask_fanout_contract as fanout_contract
 from coordinator_core.ops.dispatch_emit.ask_contract import (
     FANOUT_RECORD_PARAM,
     HALTED_RECORD_PARAM,

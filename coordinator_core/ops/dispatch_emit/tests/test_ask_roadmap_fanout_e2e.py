@@ -117,7 +117,6 @@ def test_both_scripts_lint_clean(repo, which):
 import yaml  # noqa: E402
 
 from coordinator_core.ops.dispatch_emit import ask_compose, ask_fanout  # noqa: E402
-from coordinator_core.ops.dispatch_emit import ask_fanout_contract as _fc  # noqa: E402
 from coordinator_core.ops.dispatch_emit import land_run_contract, land_run_fanout  # noqa: E402
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW  # noqa: E402
 from coordinator_core.ops.dispatch_emit.tests.test_ask_fanout_sizings_arm import _sizing  # noqa: E402

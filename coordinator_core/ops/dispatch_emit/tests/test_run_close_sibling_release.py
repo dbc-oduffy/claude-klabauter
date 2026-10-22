@@ -45,7 +45,7 @@ def test_landed_release_names_successor_fire_call(tmp_path):
     assert _status(tmp_path, "A") == {"status": "landed", "sha": SHA}
 
 
-def test_halted_predecessor_blocks_successor_but_frees_queued_slot(tmp_path):
+def test_halted_predecessor_blocks_successor_but_releases_queued_run(tmp_path):
     runs = [_run("A"), _run("B", ["A"], c.STATUS_AFTER), _run("C", (), c.STATUS_QUEUED)]
     _seed(tmp_path, runs, bound=["A"])
     out = run_close.sibling_release(tmp_path, "A", None)
@@ -78,7 +78,7 @@ def test_halted_with_an_uncommitted_row_still_blocks_successor(tmp_path):
     assert [b["run_id"] for b in out["blocked"]] == ["B"]
 
 
-def test_queued_run_drains_when_slot_frees(tmp_path):
+def test_legacy_queued_run_is_released_by_a_landed_close(tmp_path):
     runs = [_run("A"), _run("B", (), c.STATUS_QUEUED)]
     _seed(tmp_path, runs, bound=["A"])
     out = run_close.sibling_release(tmp_path, "A", SHA)

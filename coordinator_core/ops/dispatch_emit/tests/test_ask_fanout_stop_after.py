@@ -7,7 +7,6 @@ import yaml
 
 from coordinator_core.ops import baton_pm_turns as PT
 from coordinator_core.ops.dispatch_emit import ask_fanout as mod
-from coordinator_core.ops.dispatch_emit import ask_fanout_contract as c
 from coordinator_core.session_baton import store
 
 SID = "sid-stop-after"
