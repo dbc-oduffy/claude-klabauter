@@ -734,6 +734,21 @@ def _ast_parse_whole_or_fragment(content: str) -> Optional[ast.AST]:
         return None
 
 
+def _call_passes_detached_process(node: ast.Call) -> bool:
+    """True when a call's literal ``creationflags=`` value names DETACHED_PROCESS.
+
+    Independent of argv0: a launcher whose child fans out (multiprocessing
+    spawn workers) leaves every console-subsystem grandchild a visible console,
+    and the launcher's own argv0 says nothing about that. Only a literal
+    ``creationflags=`` expression is read; the sanctioned leaf route splats
+    ``**leaf_spawn_creationflags()`` and so never reaches this leg.
+    """
+    for kw in node.keywords:
+        if kw.arg == "creationflags" and "DETACHED_PROCESS" in _ast_expr_source(kw.value):
+            return True
+    return False
+
+
 def _analyze_py_call_sites(content: str) -> Tuple[str, bool]:
     """Decide per SPAWN CALL SITE whether a console spawn is unsuppressed.
 
@@ -782,6 +797,8 @@ def _analyze_py_call_sites(content: str) -> Tuple[str, bool]:
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
+        if _call_passes_detached_process(node):
+            fires = True
         kind = _ast_spawn_kind(node.func)
         if kind is None:
             # An UNRECOGNIZED call carrying ``creationflags=`` is a spawn this

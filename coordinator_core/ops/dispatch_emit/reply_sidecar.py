@@ -8,7 +8,6 @@ Handle paths are repo-relative POSIX strings, contained under ``SIDECAR_ROOTS``.
 
 from __future__ import annotations
 
-import base64
 import hashlib
 import json
 import os
@@ -24,12 +23,6 @@ SIDECAR_ROOTS = ("state/warp", "scratch")
 
 SIDECAR_CAUSE = "the sidecar changed after the engine wrote it"
 _FLAG = "reply-sidecar"
-
-OP_REPLY_PAGE = "dispatch.reply_page"
-# Bounds each page's JSON-quoted form, so a page relayed inside a JSON reply stays under the 12000-char capture cut.
-PAGE_CHARS = 6000
-# Sidecar characters per page: base64 of a full page is 4 * PAGE_RAW_CHARS / 3 chars, quotes included within PAGE_CHARS.
-PAGE_RAW_CHARS = ((PAGE_CHARS - 2) // 4) * 3
 
 HANDLE_SCHEMA = {
     "type": "object",
@@ -57,58 +50,9 @@ STAGE_REPLY_SCHEMA = {
     },
 }
 
-PAGE_REPLY_SCHEMA = {
-    "type": "object",
-    "required": ["sha256", "bytes", "page", "pages", "encoding", "chunk", "chunk_sha256"],
-    "additionalProperties": False,
-    "properties": {
-        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
-        "bytes": {"type": "integer", "minimum": 0},
-        "page": {"type": "integer", "minimum": 0},
-        "pages": {"type": "integer", "minimum": 1},
-        "encoding": {"const": "base64"},
-        "chunk": {"type": "string", "pattern": "^[A-Za-z0-9+/]*={0,2}$"},
-        "chunk_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
-    },
-}
-
 VERIFY_REPLY_JS = (
     _contract.RELAY_SHA256_JS
     + """
-function _b64DecodeAscii(s) {
-  if (typeof s !== 'string' || s.length % 4 !== 0) return null;
-  const A = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
-  let out = '';
-  for (let i = 0; i < s.length; i += 4) {
-    let v = 0, pad = 0;
-    for (let j = 0; j < 4; j++) {
-      const c = s.charAt(i + j);
-      if (c === '=') {
-        if (i + 4 !== s.length || j < 2) return null;
-        pad++;
-        v = v * 64;
-      } else {
-        if (pad > 0) return null;
-        const k = A.indexOf(c);
-        if (k < 0) return null;
-        v = v * 64 + k;
-      }
-    }
-    const b = [Math.floor(v / 65536) % 256, Math.floor(v / 256) % 256, v % 256];
-    for (let n = 0; n < 3 - pad; n++) {
-      if (b[n] > 127) return null;
-      out += String.fromCharCode(b[n]);
-    }
-  }
-  return out;
-}
-function _verifyPageChunk(p) {
-  if (p === null || typeof p !== 'object') return { fail: 'page reply is not an object' };
-  const text = _b64DecodeAscii(p.chunk);
-  if (text === null) return { fail: 'page chunk is not base64 of ASCII text' };
-  if (_sha256Ascii(text) !== p.chunk_sha256) return { fail: 'page chunk sha256 does not match chunk_sha256' };
-  return { text: text };
-}
 function _verifyReplyText(text, handle) {
   if (typeof text !== 'string') return 'reply text is not a string';
   for (let i = 0; i < text.length; i++) {
@@ -124,6 +68,8 @@ function _verifyReplyText(text, handle) {
 
 
 READER_ROOT = "scratch/stage-readers"
+# The Workflow runner's script-size limit; not ours to raise.
+READER_MAX_BYTES = 524288
 
 # Trap: depends on _verifyReplyText, so VERIFY_REPLY_JS must be emitted ahead of this block.
 READ_STAGE_SIDECAR_JS = """
@@ -214,10 +160,17 @@ def reader_script(text: str) -> str:
     return READER_META + "return " + json.dumps(text, ensure_ascii=True) + ";\n"
 
 
-def _ensure_reader(root: Path, raw: bytes) -> None:
-    """Leave the content-addressed reader for ``raw`` under ``root``; no write when it is already identical."""
-    target = _contain(root, reader_rel(hashlib.sha256(raw).hexdigest()))
+def _reader_body(raw: bytes) -> bytes:
+    """The reader script bytes for ``raw``; ``ReplySidecarError`` when they exceed ``READER_MAX_BYTES``."""
     body = reader_script(raw.decode("ascii")).encode("ascii")
+    if len(body) > READER_MAX_BYTES:
+        raise _refuse(f"reader script is {len(body)} bytes, over the Workflow runner's {READER_MAX_BYTES}-byte cap")
+    return body
+
+
+def _ensure_reader(root: Path, raw: bytes, body: bytes) -> None:
+    """Leave the content-addressed reader ``body`` for ``raw`` under ``root``; no write when it is already identical."""
+    target = _contain(root, reader_rel(hashlib.sha256(raw).hexdigest()))
     try:
         if target.read_bytes() == body:
             return
@@ -235,12 +188,13 @@ def _ensure_reader(root: Path, raw: bytes) -> None:
 def write_reply(root: Path, path: Path, payload: Mapping) -> dict:
     """Write ``canonical_json(payload)`` at ``path`` atomically; return its handle.
 
-    Trap: pages relay as base64, so the reader compares bytes; ``canonical_json`` is the one form
-    the handle covers and a re-indented copy is refused.
+    Trap: ``canonical_json`` is the one form the handle covers and a re-indented copy is refused.
+    Refuses before writing anything when the reader script would exceed ``READER_MAX_BYTES``.
     """
     rel = _relative_to_root(root, path)
     target = _contain(root, rel)
     raw = canonical_json(payload).encode("ascii")
+    body = _reader_body(raw)
     target.parent.mkdir(parents=True, exist_ok=True)
     tmp = target.with_name(f"{target.name}.{os.getpid()}.tmp")
     try:
@@ -248,7 +202,7 @@ def write_reply(root: Path, path: Path, payload: Mapping) -> dict:
         os.replace(tmp, target)
     finally:
         tmp.unlink(missing_ok=True)
-    _ensure_reader(root, raw)
+    _ensure_reader(root, raw, body)
     return _handle(rel, raw)
 
 
@@ -260,7 +214,7 @@ def handle_for(root: Path, path: Path) -> dict:
     except OSError as exc:
         raise _refuse(f"sidecar {rel!r} is unreadable: {exc}") from exc
     try:
-        _ensure_reader(root, raw)
+        _ensure_reader(root, raw, _reader_body(raw))
     except UnicodeDecodeError:
         pass
     return _handle(rel, raw)
@@ -289,36 +243,6 @@ def read_text(root: Path, handle: Mapping) -> str:
     if message is not None:
         raise ReplySidecarError(message)
     return text
-
-
-def _pages(text: str) -> list[str]:
-    return [text[i : i + PAGE_RAW_CHARS] for i in range(0, len(text), PAGE_RAW_CHARS)] or [""]
-
-
-def page(text: str, index: int) -> tuple[str, int]:
-    """``(raw slice, pages)``; every slice but the last is ``PAGE_RAW_CHARS`` long. ``IndexError`` past the end."""
-    pages = _pages(text)
-    if not 0 <= index < len(pages):
-        raise IndexError(f"page {index} is outside 0..{len(pages) - 1}")
-    return pages[index], len(pages)
-
-
-def page_reply(handle: Mapping, text: str, index: int) -> dict:
-    """The success shape of ``dispatch.reply_page``: the page as base64 plus the sha256 of its decoded text.
-
-    The reader decodes and checks each chunk, joins the decoded text, and checks it against the handle.
-    """
-    raw, pages = page(text, index)
-    data = raw.encode("ascii")
-    return {
-        "sha256": handle["sha256"],
-        "bytes": handle["bytes"],
-        "page": index,
-        "pages": pages,
-        "encoding": "base64",
-        "chunk": base64.b64encode(data).decode("ascii"),
-        "chunk_sha256": hashlib.sha256(data).hexdigest(),
-    }
 
 
 def read_reply(root: Path, handle: Mapping) -> dict:

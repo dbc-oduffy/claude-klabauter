@@ -40,6 +40,8 @@ def test_existing_dir_entry_returned(reg, tmp_path):
         "kind": "external-readonly",
         "vcs": "p4",
         "p4_client": "c1",
+        "purpose": "",
+        "topic": "",
     }
     assert mr.external_workspace_registry_readable() is True
 

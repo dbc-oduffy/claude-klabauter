@@ -36,8 +36,7 @@ one contiguous balanced group at ``group_index`` of ``min(slices, group_count)``
 them ``slices`` is the full list.
 
 Negative-spec: a single-reviewer-ok verdict over product files returns ONE whole-diff slice,
-never an empty list; zero product files returns no slices. Empty ``paths`` returns the zero-file
-reply (no slices, ``product_files`` 0, no sidecar, lock or git) rather than a refusal. A refusal from either composed op is
+never an empty list; zero product files returns no slices. A refusal from either composed op is
 returned as ``error`` with no slices, never raised. ``basis`` is ``"worktree"`` in worktree
 mode and ``"range"`` in range mode. A group past the last populated one returns no slices; that
 is not an error. ``stored_reply_for_run`` reads a run's stored reply back: it never computes, never
@@ -340,7 +339,7 @@ def review_prep(
 ) -> dict:
     """Freeze, partition and claim-check one run's diff once per ``slice_prefix``; see the module
     docstring."""
-    if not base or not slice_prefix or not plan_path:
+    if not base or not paths or not slice_prefix or not plan_path:
         return _fail("base, paths, slice_prefix and plan_path are required")
     if not _SHA_RE.match(base):
         return _fail("base must be a lowercase commit sha")
@@ -348,17 +347,6 @@ def review_prep(
         return _fail("group_index and group_count go together")
     if group_count is not None and not (group_count >= 1 and 0 <= group_index < group_count):
         return _fail("group_index must be in [0, group_count) and group_count at least 1")
-    if not paths:
-        # A pathspec-less `git diff <base>` would diff the whole tree: answer before any git, lock or sidecar.
-        zero = _fail("")
-        zero.update(
-            plan_id=_plan_id(repo_root, plan_path),
-            share_dir=_rel(Path(share_dir(str(repo_root), session_id)), repo_root) if session_id else "",
-            basis="range" if head else "worktree",
-            run_base_sha=base,
-            error=None,
-        )
-        return _for_group(zero, group_index, group_count)
     session = session_id or resolve_session_id(str(repo_root))
     if not session:
         return _fail("no session id: pass session_id or run under a session")

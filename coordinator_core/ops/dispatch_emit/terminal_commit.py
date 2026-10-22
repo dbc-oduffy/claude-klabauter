@@ -185,7 +185,6 @@ from coordinator_core.ops.dispatch_emit.plan_row_coding import (  # noqa: F401 -
     MINTED_SPINE_ORIGIN as _MINTED_SPINE_ORIGIN,
     NOOP_DETAIL as _NOOP_DETAIL,
     REVIEW_WALK_CAP as _REVIEW_WALK_CAP,
-    close_memo_rows_delivered as _close_memo_rows_delivered,
     flip_rows_coded as _flip_rows_coded,
     inventory_record_rel as _inventory_record_rel,
     outside_landing_attribution as _outside_landing_attribution,
@@ -553,9 +552,9 @@ _MEMO_NO_SLUG = "no slug: declare receipt:"
 def _memo_rows_without_receipt(worktree_root: Path, request: CommitRequest) -> dict:
     """``{row id: slug}`` of the plan's open memo-send rows whose sender-side receipt is absent.
 
-    A memo row may be dispatched to an executor; it closes on
-    ``memo-outbox/sent/<slug>.md`` existing, when ``_stamp_coded_commit`` resolves the row
-    ``delivered_elsewhere`` with ``disposition_ref`` naming that receipt (a non-open row is not reported).
+    A memo row is an EM act, never dispatched; it closes on
+    ``memo-outbox/sent/<slug>.md`` existing, by resolving the row ``delivered_elsewhere``
+    with ``disposition_ref`` naming that receipt (a non-open row is not reported).
     An open row naming no slug maps to ``"no slug: declare receipt:"``, never dropped.
     Unreadable plan or spine: empty.
     """
@@ -591,48 +590,6 @@ def _memo_rows_without_receipt(worktree_root: Path, request: CommitRequest) -> d
             out[str(row["id"])] = _MEMO_NO_SLUG
         elif not memo_receipt_exists(worktree_root, slug):
             out[str(row["id"])] = slug
-    return out
-
-
-def _memo_rows_to_close(worktree_root: Path, request: CommitRequest) -> dict:
-    """``{plan: {row id: (receipt ref, receiver)}}`` of the run's chunk rows that are open
-    memo-send rows with a sender-side receipt on disk. One stat per memo row, no spawn."""
-    if not request.plan_path:
-        return {}
-    text = _read_rel(worktree_root, request.plan_path)
-    if text is None:
-        return {}
-    import yaml
-
-    from coordinator_core.frontmatter.body_blocks import LocateStatus, locate_fenced_block
-    from coordinator_core.ops.dispatch_emit.memo_rows import (
-        _is_memo_send_row,
-        memo_receipt_exists,
-        memo_row_slug,
-    )
-    from coordinator_core.session.machinery_paths import MEMO_OUTBOX_RELDIR
-
-    located = locate_fenced_block(text.replace("\r\n", "\n"))
-    if located.status != LocateStatus.LOCATED:
-        return {}
-    try:
-        rows = _yaml_load(located.body) or []
-    except yaml.YAMLError:
-        return {}
-    ids = {c.id for c in request.chunks}
-    out: dict = {}
-    for row in rows if isinstance(rows, list) else ():
-        if not isinstance(row, dict) or str(row.get("id")) not in ids:
-            continue
-        if (row.get("disposition") or "open") != "open" or not _is_memo_send_row(row):
-            continue
-        slug = memo_row_slug(row)
-        if slug is not None and memo_receipt_exists(worktree_root, slug):
-            to = row.get("memo_to")
-            out.setdefault(request.plan_path, {})[str(row["id"])] = (
-                f"{MEMO_OUTBOX_RELDIR}/sent/{slug}.md",
-                to.strip() if isinstance(to, str) and to.strip() else "its receiver",
-            )
     return out
 
 
@@ -1380,7 +1337,6 @@ def _stamp_coded_commit(
     flip_reason: Optional[str] = None,
     outside_rows: Optional[dict] = None,
     ledger_met: Optional[str] = None,
-    memo_closes: Optional[dict] = None,
 ) -> dict:
     """Second, plan-only ``commit_v2`` call stamping the product commit's
     rows ``coded`` with ``disposition_ref: <sha>`` -- a SHA only exists once
@@ -1394,8 +1350,6 @@ def _stamp_coded_commit(
     writes commits outside the run landed: they close ``coded`` at the newest landing sha
     with a no-op detail naming every landing sha. An edit that would make a schema-valid plan invalid
     is refused before any write; on any failure every plan edit is restored.
-    ``memo_closes`` (``{plan: {row id: (receipt ref, receiver)}}``) are receipted memo-send rows:
-    they close ``delivered_elsewhere`` via ``memo``, never ``coded``, in the same commit.
     ``flip_plan`` names the plan whose ``implemented`` status is written to disk without
     committing (``_stamp_plan_implemented`` reads the rows just written ``coded``), so
     the one commit below carries rows, minted stamp and status together; its reply
@@ -1425,8 +1379,7 @@ def _stamp_coded_commit(
     noop_rows = noop_rows or {}
     checkpoint_rows = checkpoint_rows or {}
     outside_rows = outside_rows or {}
-    memo_closes = memo_closes or {}
-    plans = set(source_rows) | set(noop_rows) | set(outside_rows) | set(memo_closes)
+    plans = set(source_rows) | set(noop_rows) | set(outside_rows)
     for by_plan in checkpoint_rows.values():
         plans |= set(by_plan)
     for plan_rel in sorted(plans):
@@ -1444,9 +1397,6 @@ def _stamp_coded_commit(
                 flipped = sorted(set(flipped) | set(more))
         for rid, shas in sorted(outside_rows.get(plan_rel, {}).items()):
             updated, more = _flip_rows_coded(updated, {rid}, shas[0], {rid: _outside_landing_detail(shas)})
-            flipped = sorted(set(flipped) | set(more))
-        if plan_rel in memo_closes:
-            updated, more = _close_memo_rows_delivered(updated, memo_closes[plan_rel])
             flipped = sorted(set(flipped) | set(more))
         if not flipped:
             continue
@@ -1950,7 +1900,6 @@ def _ledger_gate(
     )
     since_halt: dict = {}
     if resume_ledger is not None:
-        resume_ledger = pre_halt_credit.with_notes(resume_ledger, requirements_ledger.read_notes(run_dir))
         stale = _unchanged_since_halt_failures(
             worktree_root, resume_ledger, verdict, manifest_path, plan_rel, since_halt
         )
@@ -2753,6 +2702,31 @@ def _credit_regrades(
     return {cid: f"credited: {evidence}"[:_UNDONE_CAP] for cid, evidence in got.items()}
 
 
+def _own_evidence_append_chunks(
+    worktree_root: Path, request: CommitRequest, stranded_ids: set, carried: set,
+    changed: Optional[set],
+) -> set:
+    """Stranded chunk ids whose own deliverable is the plan evidence append this commit carries.
+
+    A chunk qualifies when its report is DONE, none of its declared paths differs from HEAD (the
+    work its footprint forbids is the append itself) and the plan or its evidence sidecar is changed
+    and in the commit. Unanswerable change state (``changed`` None) credits nothing."""
+    if not request.plan_path or changed is None:
+        return set()
+    plan_pp = PurePosixPath(request.plan_path)
+    evidence_rel = str(plan_pp.with_name(plan_pp.stem + _EVIDENCE_SIDECAR_SUFFIX))
+    if not ({request.plan_path, evidence_rel} & carried & changed):
+        return set()
+    out: set = set()
+    for chunk in request.chunks:
+        if chunk.id not in stranded_ids or not chunk.report or set(chunk.paths) & changed:
+            continue
+        text = _read_rel(worktree_root, chunk.report)
+        if text is not None and _is_delivered_report(text):
+            out.add(chunk.id)
+    return out
+
+
 def _changed_paths(worktree_root: Path, paths: list) -> Optional[set]:
     """The subset of ``paths`` whose worktree bytes differ from HEAD (modified,
     added, untracked or deleted): the files a commit over them can carry. One
@@ -3192,6 +3166,23 @@ def _close_block(ctx: dict, reply: dict) -> dict:
 
     legs = dict(ctx["legs"])
     if ctx["applies"]:
+        already_landed = (
+            reply.get("committed") is not True
+            and bool(reply.get("nothing_to_commit"))
+            and not reply.get("refused")
+        )
+        if already_landed:
+            na = _leg("not-applicable", "already landed: no fresh diff to commit")
+            if "review" not in legs and reply.get("review_stamp") != "refused":
+                legs["review"] = na
+            if (
+                "plan-reconciliation" not in ctx["presets"]
+                and "plan-reconciliation" not in legs
+                and not reply.get("plan_status")
+            ):
+                legs["plan-reconciliation"] = na
+            for leg in RUN_BOUND_LEGS:
+                legs.setdefault(leg, na)
         if reply.get("committed") is not True:
             why = f"terminal commit did not land ({reply['refused']})" if reply.get("refused") else "terminal commit did not land"
         elif "coded_stamp_error" in reply:
@@ -3216,8 +3207,10 @@ def _close_block(ctx: dict, reply: dict) -> dict:
                 if deferred
                 else _leg("ran", "plan implemented")
             )
-        elif "plan-reconciliation" in ctx["presets"]:
-            pass  # the preset is applied below
+        elif "plan-reconciliation" in ctx["presets"] or (
+            already_landed and "plan-reconciliation" in legs
+        ):
+            pass  # the preset is applied below / the already-landed leg stands
         elif status:
             legs["plan-reconciliation"] = _leg(
                 "failed", str(reply.get("plan_status_reason") or status), ctx["root"]
@@ -4609,6 +4602,9 @@ def _terminal_commit_inner(
         c.id for c in done_chunks
         if c not in contributing_chunks and not (c.paths and set(c.paths) <= absent_dropped)
     }
+    landed_ids |= _own_evidence_append_chunks(
+        worktree_root, request, set(stranded) - set(wh_chunks), final_paths_set, changed
+    )
     if credit_gate.no_credited_landing(
         set(stranded) - set(wh_chunks), {c.id for c in contributing_chunks + contributing_partial}, landed_ids
     ):
@@ -4618,9 +4614,10 @@ def _terminal_commit_inner(
         why = "".join(f" {cid} blocker: {text}." for cid, text in sorted(withheld_partial.items()) if cid in stranded)
         return _error(
             f"no product chunk lands in this commit; stranded work stays uncommitted: {shown}.{why} "
-            "Finish or land the stranded chunks, then re-fire; or credit one: workflow.revise "
+            "Credit one: workflow.revise "
             f"run_id={_run_id_of(params, ask_run_dir, script_path_raw)} "
-            "credit_chunks=[{chunk, evidence}], then re-fire",
+            "credit_chunks=[{chunk, evidence}], then re-fire; or finish or land the stranded chunks, "
+            "then re-fire",
             refused=credit_gate.REFUSED_NO_CREDITED_LANDING,
         )
 
@@ -4730,6 +4727,14 @@ def _terminal_commit_inner(
         f"Inline-Review: applies {inline_review['integration_stem']} -- execute-review: "
         f"{inline_review['slices']} slices, {inline_review.get('fixes')} fixes"
     )
+    from coordinator_core.ops.dispatch_emit import landing_integrity as _li_close
+
+    close_base = _li_close.run_base_for(worktree_root, _run_id_of(params, ask_run_dir, script_path_raw), params)
+    if close_base is not None:
+        trailers.append(f"Checkpoint-Run-Closed: {close_base}")
+    review_base = request.review_run_base
+    if isinstance(review_base, str) and review_base and review_base != close_base:
+        trailers.append(f"Checkpoint-Run-Closed: {review_base}")
     if product_only:
         trailers.extend(_ask_trailers(worktree_root, request.plan_path, record_abs, receipts_built))
     elif record_abs is not None:
@@ -5251,7 +5256,6 @@ def _terminal_commit_inner(
                 trailers=(f"Sizing-Shipped: {shipped_sizing} {reply['sha']}",) if shipped_sizing else (),
                 commit=stamp_commit,
                 archive_after_flip=archive_targets,
-                memo_closes=_memo_rows_to_close(worktree_root, request),
             )
         )
         flipped = reply.pop("_flip", None)

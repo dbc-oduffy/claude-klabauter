@@ -581,7 +581,11 @@ def _mtime_ns(path: Path) -> int:
 
 
 def _external_workspace_state() -> tuple:
-    """``(roots, readable)``, cached per process on registry_dir and both files' mtimes."""
+    """``(roots, readable, posix_paths)``, cached per process on registry_dir and both files' mtimes.
+
+    ``posix_paths`` maps key to the case-preserved posix realpath, kept apart from the
+    normcased ``roots[key]["path"]``.
+    """
     try:
         reg_dir = registry_dir()
         key = (
@@ -590,11 +594,12 @@ def _external_workspace_state() -> tuple:
             _mtime_ns(reg_dir / "registry.local.toml"),
         )
     except Exception:  # noqa: BLE001 — an unresolvable settings home must not raise out of a guard
-        return {}, False
+        return {}, False, {}
     hit = _external_ws_cache.get(key)
     if hit is not None and hit[2] == _external_ws_dir_signature(hit[0]):
-        return hit[0], hit[1]
+        return hit[0], hit[1], hit[3]
     roots: dict = {}
+    posix_paths: dict = {}
     readable = True
     flat: dict = {}
     for name in ("registry.toml", "registry.local.toml"):
@@ -619,19 +624,25 @@ def _external_workspace_state() -> tuple:
                 if not os.path.isdir(raw):
                     continue
                 canon = _canon_path(raw)
+                posix = Path(os.path.realpath(raw)).as_posix()
             except Exception:  # noqa: BLE001
                 continue
             vcs = f.get("vcs")
             p4c = f.get("p4_client")
+            purpose = f.get("purpose")
+            topic = f.get("topic")
             roots[name] = {
                 "path": canon,
                 "kind": _EXTERNAL_WS_DEFAULT_KIND,
                 "vcs": vcs.strip() if isinstance(vcs, str) else "",
                 "p4_client": p4c.strip() if isinstance(p4c, str) else "",
+                "purpose": purpose.strip() if isinstance(purpose, str) else "",
+                "topic": topic.strip() if isinstance(topic, str) else "",
             }
+            posix_paths[name] = posix
     _external_ws_cache.clear()
-    _external_ws_cache[key] = (roots, readable, _external_ws_dir_signature(roots))
-    return roots, readable
+    _external_ws_cache[key] = (roots, readable, _external_ws_dir_signature(roots), posix_paths)
+    return roots, readable, posix_paths
 
 
 def _external_ws_dir_signature(roots: dict) -> tuple:
@@ -641,13 +652,60 @@ def _external_ws_dir_signature(roots: dict) -> tuple:
 
 
 def external_workspace_roots() -> dict:
-    """``{key: {"path": canon_path, "kind", "vcs", "p4_client"}}`` over the merged registry.
+    """``{key: {"path": canon_path, "kind", "vcs", "p4_client", "purpose", "topic"}}`` over the merged registry.
 
     An entry counts only when ``path`` is a non-empty existing directory; an absent or
-    unknown ``kind`` reads as ``external-readonly`` (fail closed); ``vcs``/``p4_client``
-    are ``""`` when absent. Zero spawns; never raises; ``{}`` on any read failure.
+    unknown ``kind`` reads as ``external-readonly`` (fail closed); ``vcs``/``p4_client``/
+    ``purpose``/``topic`` are the registered strings, stripped, ``""`` when absent.
+    Zero spawns; never raises; ``{}`` on any read failure.
     """
     return dict(_external_workspace_state()[0])
+
+
+def research_targets() -> list:
+    """Rows ``{key, path, purpose, topic, topic_source}`` for research clones, sorted by key.
+
+    An entry is a research target when ``purpose == "research"`` or its key starts with
+    ``research_``. ``path`` is the case-preserved posix realpath (what a sizing ref carries).
+    ``purpose`` is the registered value, else ``"research"``; ``topic`` is the registered
+    value (``topic_source`` ``"registered"``), else the entry path's parent directory name
+    (``"path"``). Reads only ``external_workspaces.*``; zero spawns; never raises.
+    """
+    try:
+        roots, _readable, posix_paths = _external_workspace_state()
+        rows = []
+        for key in sorted(roots):
+            entry = roots[key]
+            if entry["purpose"] != "research" and not key.startswith("research_"):
+                continue
+            path = posix_paths[key]
+            if entry["topic"]:
+                topic, source = entry["topic"], "registered"
+            else:
+                topic, source = Path(path).parent.name, "path"
+            rows.append(
+                {
+                    "key": key,
+                    "path": path,
+                    "purpose": entry["purpose"] or "research",
+                    "topic": topic,
+                    "topic_source": source,
+                }
+            )
+        return rows
+    except Exception:  # noqa: BLE001 — a view must not raise
+        return []
+
+
+def resolve_research_target(name: str) -> Optional[str]:
+    """The ``path`` of the research target keyed ``name``, else keyed ``"research_" + name``, else ``None``."""
+    try:
+        by_key = {row["key"]: row["path"] for row in research_targets()}
+        if name in by_key:
+            return by_key[name]
+        return by_key.get("research_" + name)
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def external_workspace_registry_readable() -> bool:

@@ -5,10 +5,8 @@ Usage: box-launch-windowless.py [--log PATH] [--cwd DIR] -- CMD...
 Prints `LAUNCHED pid=N log=PATH` and exits 0 without waiting. Exit codes: 0 launched,
 1 launch failed (one stderr line), 2 usage. Runs on every host.
 
-Windows: the child gets CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP | CREATE_BREAKAWAY_FROM_JOB,
-never DETACHED_PROCESS (a detached child gets a fresh console the moment it spawns a console
-grandchild). Breakaway is best-effort: when the parent's job forbids it Popen raises OSError and
-the launch is retried once without breakaway; a second OSError is the exit-1 failure. A
+Windows: the child gets CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP, never DETACHED_PROCESS
+(a detached child gets a fresh console the moment it spawns a console grandchild). A
 pythonw.exe CMD[0] is swapped for the sibling python.exe for the same reason. Never point
 multiprocessing.set_executable at pythonw. POSIX: start_new_session=True.
 
@@ -24,7 +22,6 @@ from pathlib import Path
 
 _NO_CONSOLE_WINDOW = 0x08000000
 _CREATE_NEW_PROCESS_GROUP = 0x00000200
-_CREATE_BREAKAWAY_FROM_JOB = 0x01000000
 
 _USAGE = "usage: box-launch-windowless.py [--log PATH] [--cwd DIR] -- CMD..."
 
@@ -106,33 +103,22 @@ def main(argv: list[str] | None = None, *, popen=None, platform: str | None = No
     kwargs: dict = {}
     if plat == "win32":
         cmd = _swap_pythonw(cmd)
-        base_flags = _NO_CONSOLE_WINDOW | _CREATE_NEW_PROCESS_GROUP
-        kwargs["creationflags"] = base_flags | _CREATE_BREAKAWAY_FROM_JOB
+        kwargs["creationflags"] = _NO_CONSOLE_WINDOW | _CREATE_NEW_PROCESS_GROUP
     else:
-        base_flags = 0
         kwargs["start_new_session"] = True
     if cwd_arg:
         kwargs["cwd"] = str(cwd)
     try:
         log.parent.mkdir(parents=True, exist_ok=True)
         with open(log, "ab") as sink:
-            def spawn():
-                return popen(
-                    cmd,
-                    stdin=subprocess.DEVNULL,
-                    stdout=sink,
-                    stderr=sink,
-                    close_fds=True,
-                    **kwargs,
-                )
-
-            try:
-                proc = spawn()
-            except OSError:
-                if plat != "win32":
-                    raise
-                kwargs["creationflags"] = base_flags
-                proc = spawn()
+            proc = popen(
+                cmd,
+                stdin=subprocess.DEVNULL,
+                stdout=sink,
+                stderr=sink,
+                close_fds=True,
+                **kwargs,
+            )
     except OSError as exc:
         print(f"box-launch-windowless: launch failed: {exc}", file=sys.stderr)
         return 1

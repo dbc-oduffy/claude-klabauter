@@ -1882,10 +1882,7 @@ def _shared_path_groups(
     covering a path makes that path an ordinary write. The second return value
     names one shared path per multi-item group (its first member's key).
     """
-    from coordinator_core.ops.dispatch_emit.wave_map import _is_ancestor, _normalize_path as _norm
-
-    def _normalize_path(path: str) -> str:
-        return _norm(path.replace("\\", "/"))
+    from coordinator_core.ops.dispatch_emit.wave_map import _is_ancestor, _normalize_path
 
     in_place: set = set()
     appended: set = set()

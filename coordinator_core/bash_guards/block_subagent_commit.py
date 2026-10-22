@@ -3324,6 +3324,7 @@ _COMMITTING_OP_NAMES = frozenset(
         "ceremony.scoped_git_commit",
         "session.boot_sweep",
         "distill.apply_disposal",
+        "memo.send",
         "commit.exec_bit_change",
         "ceremony.post_commit_tail",
         # "fleet.archive_shipped_handoffs" REMOVED (op key SUBSUMED, not
@@ -3435,12 +3436,6 @@ _COMMITTING_OP_NAMES = frozenset(
         "dispatch.land_run",
     }
 )
-# Purpose: memo.send commits only its own receipt and the receiver-side
-# delivery, and delivery is EM-autonomous by DoE doctrine. PM 2026-10-22:
-# "sending memos shouldn't be limited to the EM, that's odd".
-# Trap: a compound command that also runs a git commit is still denied by
-# the other matchers. Disjoint from _COMMITTING_OP_NAMES.
-_SUBAGENT_PERMITTED_COMMITTING_OPS = frozenset({"memo.send"})
 _CEREMONY_INVOKE_MODULE = "coordinator_core.invoke"
 _PYTHON_INTERPRETER_NAMES = ("python3", "python")
 
@@ -5216,7 +5211,7 @@ def _prefilter_mentions_commit(cmd: str) -> bool:
     their match), but ``_has_committing_op_invoke`` was generalized from
     checking only ``ceremony.scoped_git_commit`` (which DOES contain
     ``commit``) to checking every name in ``_COMMITTING_OP_NAMES`` --
-    ``session.boot_sweep`` and ``distill.apply_disposal``
+    ``session.boot_sweep``, ``distill.apply_disposal``, and ``memo.send``
     contain no ``commit`` substring at all, and ``ceremony.wsc_tail``
     doesn't either. A bare ``"commit" in cmd`` check alone is therefore no
     longer a superset of the full matcher set: fixed by ALSO checking for

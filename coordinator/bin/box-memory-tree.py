@@ -24,7 +24,6 @@ def _load_host():
     path = Path(__file__).resolve().parent / "lib" / "box_memory_host.py"
     spec = importlib.util.spec_from_file_location("box_memory_host", path)
     module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module  # the host's @dataclass classes resolve annotations through it
     spec.loader.exec_module(module)
     return module
 

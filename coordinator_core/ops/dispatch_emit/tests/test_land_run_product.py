@@ -368,6 +368,18 @@ def test_nothing_credited_landing_refuses_and_names_the_stranded_work(repo):
     assert _git(["rev-parse", "HEAD"], repo).strip() == head
 
 
+def test_no_credited_landing_halt_names_credit_chunks_before_finish_or_land(repo):
+    _author(repo, "src/a.py", "a = 1\n")
+    _declare(repo, "src/a.py")
+    _record_dir(repo)
+
+    out = _land(repo, held=[{"chunk": "C1", "reason": "waiting"}])
+
+    msg = out["error"]
+    assert "credit_chunks" in msg and "Finish or land" not in msg
+    assert msg.index("credit_chunks") < msg.index("finish or land")
+
+
 def test_mode_ambiguous_params_are_refused(repo):
     out = land_run._handler(
         {"halted_by": {"halted": "x"}, "grind": {"rows": []}}, repo_root=repo / ".git"

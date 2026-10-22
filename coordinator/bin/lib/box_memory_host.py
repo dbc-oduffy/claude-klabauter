@@ -49,13 +49,7 @@ def load_governor(path: Path | None = None) -> types.ModuleType:
     if spec is None or spec.loader is None:
         raise ImportError(f"cannot load governor from {path}")
     module = importlib.util.module_from_spec(spec)
-    # @dataclass resolves string annotations through sys.modules[cls.__module__].
-    sys.modules[spec.name] = module
-    try:
-        spec.loader.exec_module(module)
-    except BaseException:
-        sys.modules.pop(spec.name, None)
-        raise
+    spec.loader.exec_module(module)
     return module
 
 
@@ -165,11 +159,10 @@ def admit(
     peak: int,
     status: MemoryStatus,
     cushion_pct: float = 25.0,
-    cushion_cap: int = 8 * GIB,
     commit_limit: int | None = None,
 ) -> AdmitVerdict:
     """Pure admission check for a declared peak against a memory snapshot."""
-    need_avail = peak + min(peak * cushion_pct / 100, cushion_cap)
+    need_avail = peak + min(peak * cushion_pct / 100, 8 * GIB)
     avail_ok = need_avail <= status.avail_phys
     commit_ok = status.commit_used + peak <= (status.commit_limit if commit_limit is None else commit_limit)
     return AdmitVerdict(

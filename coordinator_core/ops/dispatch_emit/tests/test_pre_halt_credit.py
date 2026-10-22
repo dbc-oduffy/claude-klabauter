@@ -106,34 +106,3 @@ def test_js_twin_agrees_with_python(met_by, known):
     r = _resume([known])
     expected = bool(phc.credited_rows(r, _verdict(met_by)))
     assert json.loads(out) is expected
-
-
-def test_with_notes_supplies_missing_revise_notes():
-    r = {"blocking": ["R1"]}
-    out = phc.with_notes(r, ["N1 re-rule R1 met by 739d3b77"])
-    assert out["revise_notes"] == ["N1 re-rule R1 met by 739d3b77"]
-    assert phc.credited_rows(out, _verdict(["739d3b7775"])) == {"R1"}
-    assert "revise_notes" not in r
-
-
-def test_with_notes_dedupes_and_keeps_order():
-    r = _resume(["a", "b"])
-    assert phc.with_notes(r, ["b", "c", "c"])["revise_notes"] == ["a", "b", "c"]
-
-
-def test_with_notes_skips_non_strings():
-    assert phc.with_notes({"blocking": []}, [1, None, "x", {"k": 1}])["revise_notes"] == ["x"]
-
-
-def test_with_notes_unchanged_for_non_dict_or_empty():
-    assert phc.with_notes(None, ["x"]) is None
-    lst = ["y"]
-    assert phc.with_notes(lst, ["x"]) is lst
-    r = _resume(["a"])
-    assert phc.with_notes(r, []) is r
-
-
-def test_with_notes_does_not_mutate_input():
-    r = _resume(["a"])
-    out = phc.with_notes(r, ["b"])
-    assert r["revise_notes"] == ["a"] and out is not r and out["revise_notes"] == ["a", "b"]

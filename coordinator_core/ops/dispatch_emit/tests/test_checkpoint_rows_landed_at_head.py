@@ -45,6 +45,18 @@ def test_gate_owed_and_stop_rule_rows_are_not_landed(repo):
     assert _at_head(repo, {"A1", "A2", "A3"}) == {"A1"}
 
 
+def test_open_run_checkpoint_waits_for_its_close(repo):
+    base = "d" * 40
+    _commit(
+        repo,
+        "checkpoint(wave 0): 1 rows — A1",
+        f"Checkpoint-Plan: {PLAN}\nCheckpoint-Base: {base}\nCheckpoint-Not-Landed: run-open",
+    )
+    assert _at_head(repo, {"A1"}) == frozenset()
+    _commit(repo, "terminal", f"Checkpoint-Run-Closed: {base}")
+    assert _at_head(repo, {"A1"}) == {"A1"}
+
+
 def test_another_plans_checkpoint_does_not_land(repo):
     _cp(repo, ["A1"], plan=OTHER)
     assert _at_head(repo, {"A1"}) == frozenset()

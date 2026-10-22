@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import base64
 import hashlib
 import json
 import shutil
@@ -145,67 +144,36 @@ def test_missing_sidecar_refused(tmp_path):
         rs.read_text(tmp_path, {"path": "scratch/none.json", "sha256": "0" * 64, "bytes": 1})
 
 
-def _joined(text: str) -> str:
-    _, pages = rs.page(text, 0)
-    return "".join(rs.page(text, i)[0] for i in range(pages))
+def _payload_with_reader_bytes(target: int) -> dict:
+    base = len(rs.reader_script(rs.canonical_json({"k": ""})))
+    return {"k": "x" * (target - base)}
 
 
-def _decoded(handle: dict, text: str) -> list[str]:
-    _, pages = rs.page(text, 0)
-    return [base64.b64decode(rs.page_reply(handle, text, i)["chunk"]).decode("ascii") for i in range(pages)]
+def test_reader_over_cap_is_refused_before_any_file_is_written(tmp_path):
+    payload = _payload_with_reader_bytes(rs.READER_MAX_BYTES + 1)
+    assert len(rs.reader_script(rs.canonical_json(payload))) == rs.READER_MAX_BYTES + 1
+    path = tmp_path / "state" / "warp" / "run1" / "big.json"
+    with pytest.raises(rs.ReplySidecarError, match=gcc.RELAY_CORRUPT_HEAD):
+        rs.write_reply(tmp_path, path, payload)
+    assert list(tmp_path.rglob("*")) == []
 
 
-def test_pages_join_to_text_and_fit_the_quoted_bound(sidecar):
-    root, _, handle = sidecar
-    text = rs.read_text(root, handle)
-    _, pages = rs.page(text, 0)
-    assert pages > 1
-    assert _joined(text) == text
-    assert "".join(_decoded(handle, text)) == text
-    assert all(len(json.dumps(rs.page_reply(handle, text, i)["chunk"])) <= rs.PAGE_CHARS for i in range(pages))
-    assert all(len(rs.page(text, i)[0]) == rs.PAGE_RAW_CHARS for i in range(pages - 1))
+def test_reader_exactly_at_cap_is_written(tmp_path):
+    assert rs.READER_MAX_BYTES == 524288
+    payload = _payload_with_reader_bytes(rs.READER_MAX_BYTES)
+    path = tmp_path / "state" / "warp" / "run1" / "big.json"
+    handle = rs.write_reply(tmp_path, path, payload)
+    assert (tmp_path / rs.reader_rel(handle["sha256"])).stat().st_size == rs.READER_MAX_BYTES
+    assert rs.read_reply(tmp_path, handle) == payload
 
 
-def test_a_full_quote_page_stays_within_the_bound():
-    text = '"' * (rs.PAGE_RAW_CHARS * 3)
-    handle = {"sha256": "0" * 64, "bytes": len(text)}
-    assert len(json.dumps(rs.page_reply(handle, text, 0)["chunk"])) <= rs.PAGE_CHARS
-    assert rs.PAGE_RAW_CHARS == 4497
-
-
-def test_empty_text_is_one_page_and_past_the_end_raises():
-    assert rs.page("", 0) == ("", 1)
-    with pytest.raises(IndexError):
-        rs.page("", 1)
-    with pytest.raises(IndexError):
-        rs.page("abc", -1)
-
-
-def test_pathological_quotes_page_under_eight_thousand():
-    text = '"' * 20000
-    handle = {"sha256": "0" * 64, "bytes": len(text)}
-    _, pages = rs.page(text, 0)
-    assert _joined(text) == text
-    for i in range(pages):
-        assert len(json.dumps(rs.page_reply(handle, text, i))) < 8000
-
-
-def test_page_reply_keys_and_schema(sidecar):
-    root, _, handle = sidecar
-    text = rs.read_text(root, handle)
-    reply = rs.page_reply(handle, text, 1)
-    assert set(reply) == {"sha256", "bytes", "page", "pages", "encoding", "chunk", "chunk_sha256"}
-    assert reply["encoding"] == "base64"
-    assert reply["chunk_sha256"] == hashlib.sha256(rs.page(text, 1)[0].encode("ascii")).hexdigest()
-    jsonschema.validate(reply, rs.PAGE_REPLY_SCHEMA)
-    with pytest.raises(jsonschema.ValidationError):
-        jsonschema.validate({**reply, "extra": 1}, rs.PAGE_REPLY_SCHEMA)
-    with pytest.raises(jsonschema.ValidationError):
-        jsonschema.validate({**reply, "chunk": 'ab"cd'}, rs.PAGE_REPLY_SCHEMA)
-    with pytest.raises(jsonschema.ValidationError):
-        jsonschema.validate({**reply, "encoding": "raw"}, rs.PAGE_REPLY_SCHEMA)
-    with pytest.raises(jsonschema.ValidationError):
-        jsonschema.validate({k: v for k, v in reply.items() if k != "chunk_sha256"}, rs.PAGE_REPLY_SCHEMA)
+def test_handle_for_refuses_an_over_cap_reader_and_writes_no_reader(tmp_path):
+    path = tmp_path / "state" / "warp" / "run1" / "big.json"
+    path.parent.mkdir(parents=True)
+    path.write_bytes(rs.canonical_json(_payload_with_reader_bytes(rs.READER_MAX_BYTES + 1)).encode("ascii"))
+    with pytest.raises(rs.ReplySidecarError, match=gcc.RELAY_CORRUPT_HEAD):
+        rs.handle_for(tmp_path, path)
+    assert not (tmp_path / rs.READER_ROOT).exists()
 
 
 def test_stage_reply_schema_carries_the_parked_reply():
@@ -259,34 +227,6 @@ def test_verify_reply_js_accepts_sidecar_and_refuses_damage(sidecar, tmp_path):
     assert "not valid JSON" in _verify_js(
         tmp_path, notjson, {"sha256": hashlib.sha256(notjson.encode()).hexdigest(), "bytes": 4}
     )
-
-
-def _node_eval(tmp_path, expr: str):
-    script = tmp_path / "eval.js"
-    script.write_text(rs.VERIFY_REPLY_JS + f"\nconsole.log(JSON.stringify({expr}));\n", encoding="ascii")
-    out = subprocess.run(
-        ["node", str(script)], capture_output=True, text=True, check=True,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-    )
-    return json.loads(out.stdout)
-
-
-@pytest.mark.spawns_process
-@pytest.mark.cadence
-@pytest.mark.skipif(shutil.which("node") is None, reason="node absent")
-def test_js_b64_decoder_and_page_verify(sidecar, tmp_path):
-    root, _, handle = sidecar
-    text = rs.read_text(root, handle)
-    reply = rs.page_reply(handle, text, 1)
-    raw = rs.page(text, 1)[0]
-    assert _node_eval(tmp_path, f"_b64DecodeAscii({json.dumps(reply['chunk'])})") == raw
-    assert _node_eval(tmp_path, "_b64DecodeAscii('ab\"d')") is None
-    assert _node_eval(tmp_path, f"_b64DecodeAscii({json.dumps(base64.b64encode('café'.encode()).decode())})") is None
-    assert _node_eval(tmp_path, "_b64DecodeAscii('abc')") is None
-    assert _node_eval(tmp_path, f"_verifyPageChunk({json.dumps(reply)})") == {"text": raw}
-    bad = reply["chunk"][:5] + ("A" if reply["chunk"][5] != "A" else "B") + reply["chunk"][6:]
-    assert "fail" in _node_eval(tmp_path, f"_verifyPageChunk({json.dumps({**reply, 'chunk': bad})})")
-    assert "fail" in _node_eval(tmp_path, f"_verifyPageChunk({json.dumps({**reply, 'chunk_sha256': '0' * 64})})")
 
 
 def test_js_names_no_runtime_decoder():

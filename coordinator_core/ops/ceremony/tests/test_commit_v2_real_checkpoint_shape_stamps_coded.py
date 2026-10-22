@@ -73,7 +73,7 @@ def _checkpoint_message(base: str) -> str:
     # the Session-Id / Deliverable-Id trailers the committer route attaches.
     return (
         "checkpoint(wave 0): 2 rows — C1, C2"
-        f"\n\nCheckpoint-Plan: {_PLAN}\nCheckpoint-Base: {base}"
+        f"\n\nCheckpoint-Plan: {_PLAN}\nCheckpoint-Base: {base}\nCheckpoint-Not-Landed: run-open"
         f"\nSession-Id: {_SESSION}\nDeliverable-Id: {_DELIVERABLE}\n"
     )
 
@@ -97,11 +97,11 @@ def test_a_real_shape_checkpoint_reads_coded_and_close_finds_no_open_row(repo, r
     sha = out["sha"]
     assert _git(repo, "show", "--name-only", "--format=", sha).split() == [_PRODUCT]
     assert _git(repo, "log", "-1", "--format=%s", "HEAD").endswith("(process files)")
-    assert out["checkpoint_stamp"]["stamp_skipped"] == "plan_untracked", out["checkpoint_stamp"]
+    assert out["checkpoint_stamp"] == {"stamp_deferred": "run-open"}, out["checkpoint_stamp"]
 
     on_disk = (repo / _PLAN).read_bytes().decode("utf-8")
     for row in _spine(on_disk):
-        assert row["disposition"] == "coded" and row["disposition_ref"] == sha, row
+        assert row["disposition"] == "open", row
     assert ("\r\n" in on_disk) == (repo_eol == "crlf")
 
     halt = commit_v2._handler(
@@ -117,4 +117,4 @@ def test_a_real_shape_checkpoint_reads_coded_and_close_finds_no_open_row(repo, r
     assert halt["committed"] is True, halt
 
     committed = _git(repo, "show", f"{halt['sha']}:{_PLAN}")
-    assert _open_blocking_chunk_ids(_spine(committed)) == []
+    assert _open_blocking_chunk_ids(_spine(committed)) == ["C1", "C2"]

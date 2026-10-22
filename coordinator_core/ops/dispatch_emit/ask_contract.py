@@ -958,8 +958,7 @@ class GatedRow:
 @dataclass(frozen=True)
 class OwedRow:
     """A row the run excluded because the EM or an operator performs it. ``reason`` is one of
-    ``spine_read.EM_OWNED_REASONS``: ``em-performed``, ``memo-send`` (a memo-send row the EM still sends: performer: em, no slug, or an
-    unregistered receiver), ``operator``, or
+    ``spine_read.EM_OWNED_REASONS``: ``em-performed``, ``memo-send``, ``operator``, or
     ``withheld_by_owed_dependency`` (a row transitively behind one of those)."""
 
     id: str

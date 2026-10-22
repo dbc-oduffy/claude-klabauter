@@ -6,8 +6,7 @@ no-obfuscation holes named in
 Hole (a) -- ``_prefilter_mentions_commit`` was a bare ``"commit" in cmd``,
 so it short-circuited ``check()`` to ALLOW, before identity resolution ever
 ran, for committing ops whose names contain no ``commit`` substring at all
-(``session.boot_sweep``, ``distill.apply_disposal``; ``memo.send`` was one
-until it moved to ``_SUBAGENT_PERMITTED_COMMITTING_OPS``; a
+(``session.boot_sweep``, ``distill.apply_disposal``, ``memo.send``; a
 fourth, ``ceremony.wsc_tail``, was pinned here too until the op itself was
 killed 2026-08-23 -- see ``block_subagent_commit.py``'s own
 ``_COMMITTING_OP_NAMES`` removal note -- and its denial case below removed
@@ -107,17 +106,9 @@ def test_prefilter_admits_distill_apply_disposal(monkeypatch):
 
 
 def test_prefilter_admits_memo_send(monkeypatch):
-    _subagent(monkeypatch)
-    payload = _payload(
+    _denies(
+        monkeypatch,
         "python3 -m coordinator_core.invoke memo.send '{}'",
-        agent_type=_SUBAGENT_TYPE,
-    )
-    assert guard.check(payload) is None
-
-
-def test_subagent_permitted_ops_disjoint_from_committing_ops():
-    assert not (
-        guard._SUBAGENT_PERMITTED_COMMITTING_OPS & guard._COMMITTING_OP_NAMES
     )
 
 
@@ -499,9 +490,7 @@ def test_committing_op_names_covers_registry_sink_scan():
     missing = []
     module_sources: dict = {}
     for op_name, module_path in OP_MODULE_MAP.items():
-        if op_name in (
-            guard._COMMITTING_OP_NAMES | guard._SUBAGENT_PERMITTED_COMMITTING_OPS
-        ):
+        if op_name in guard._COMMITTING_OP_NAMES:
             continue
         if op_name in _KNOWN_DELEGATION_ONLY_COMMITTING_OPS:
             continue

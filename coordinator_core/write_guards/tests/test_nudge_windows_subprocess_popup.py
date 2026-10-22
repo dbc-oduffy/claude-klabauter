@@ -476,6 +476,41 @@ class TestDetachedProcessIsNotSuppression:
         assert guard.check(payload) is None
 
 
+class TestDetachedProcessNudgeIsArgv0Independent:
+    """A bare DETACHED_PROCESS nudges whatever the launcher's argv0 is."""
+
+    @pytest.mark.parametrize(
+        "call",
+        [
+            'subprocess.Popen([launcher, "run"], creationflags=subprocess.DETACHED_PROCESS)',
+            'subprocess.Popen(["worker-launcher", "run"], creationflags=subprocess.DETACHED_PROCESS)',
+            'subprocess.Popen(cmd, creationflags=getattr(subprocess, "DETACHED_PROCESS", 0))',
+        ],
+    )
+    def test_unresolved_or_non_console_launcher_is_nudged_toward_the_primitive(self, call):
+        content = "import subprocess\n" + call + "\n"
+        result = guard.check(_payload("Write", {"file_path": "launch.py", "content": content}))
+        assert result is not None
+        assert _is_advisory_envelope(result)
+        assert "no_console_creationflags()" in result["hookSpecificOutput"]["additionalContext"]
+
+    def test_leaf_spawn_creationflags_splat_stays_quiet(self):
+        content = (
+            "import subprocess\n"
+            "from coordinator_core.win_portability import leaf_spawn_creationflags\n"
+            'subprocess.Popen([launcher, "run"], **leaf_spawn_creationflags())\n'
+        )
+        assert guard.check(_payload("Write", {"file_path": "launch.py", "content": content})) is None
+
+    def test_no_console_creationflags_splat_stays_quiet(self):
+        content = (
+            "import subprocess\n"
+            "from coordinator_core.win_portability import no_console_creationflags\n"
+            'subprocess.Popen([launcher, "run"], **no_console_creationflags())\n'
+        )
+        assert guard.check(_payload("Write", {"file_path": "launch.py", "content": content})) is None
+
+
 class TestSuppressionDocstringProseFalseNegative:
     """Spinoff 2026-08-07-windows-popup-guard-blind-to-git-and-asyncio.md
     review finding [P2] -- ``_PY_SUPPRESSION_RE`` searched raw content, so a

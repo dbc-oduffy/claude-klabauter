@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import time
 from pathlib import Path
 from typing import Iterable, Optional
@@ -20,11 +21,39 @@ from coordinator_core.group_em import nomination, session_registry
 PHASES = ("START", "END")
 MAX_PIDS = 64
 MAX_TEXT = 512
+MAX_VERIFY_SPAN = 65536
 
 
 def admission_path(directory: Optional[Path] = None) -> Path:
     base = Path(directory) if directory is not None else settings_home() / "state" / "group-em"
     return base / "box" / "admission.jsonl"
+
+
+def _append_verified(path: Path, data: bytes) -> Optional[str]:
+    """Append ``data`` and confirm it is present whole in the span appended at ``path``.
+
+    Returns None on verified delivery, else a reason: ``write_failed:<exc>``, ``short_write``
+    or ``not_found_at_path``. Reads at most ``MAX_VERIFY_SPAN`` bytes past the pre-write size.
+    """
+    flags = os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_BINARY", 0)
+    try:
+        fd = os.open(path, flags, 0o644)
+        try:
+            before = os.fstat(fd).st_size
+            written = os.write(fd, data)
+        finally:
+            os.close(fd)
+    except OSError as exc:
+        return f"write_failed:{type(exc).__name__}:{exc}"
+    if written != len(data):
+        return "short_write"
+    try:
+        with open(path, "rb") as fh:
+            fh.seek(before)
+            span = fh.read(len(data) + MAX_VERIFY_SPAN)
+    except OSError:
+        return "not_found_at_path"
+    return None if data in span else "not_found_at_path"
 
 
 def post(
@@ -40,7 +69,9 @@ def post(
     """Append one admission line for the box Group EM; return a structured reply.
 
     ``posted`` is False with ``reason`` ``bad_phase`` or ``no_box_holder`` when nothing was
-    written. A non-live holder still receives the line: it is tailed once the holder is back.
+    written. ``delivered`` is True only when this call's line was verified present at
+    ``path``; otherwise ``posted`` and ``delivered`` are False, ``reason`` names the failure
+    (``write_failed:*``, ``short_write``, ``not_found_at_path``) and a stderr line is printed. A non-live holder still receives the line: it is tailed once the holder is back.
     With ``require_holder=False`` a holderless box is still written (``holder_session`` null,
     ``holder_live`` False) so a governor reading the file sees the line.
     """
@@ -73,13 +104,13 @@ def post(
     path = admission_path(directory)
     path.parent.mkdir(parents=True, exist_ok=True)
     data = (json.dumps(line, separators=(",", ":")) + "\n").encode("utf-8")
-    fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_BINARY", 0), 0o644)
-    try:
-        os.write(fd, data)
-    finally:
-        os.close(fd)
+    reason = _append_verified(path, data)
+    if reason:
+        print(f"admission_post: {phase} NOT delivered to {path}: {reason}", file=sys.stderr)
     return {
-        "posted": True,
+        "posted": reason is None,
+        "delivered": reason is None,
+        **({"reason": reason} if reason else {}),
         "path": str(path),
         "phase": phase,
         "pids": live,

@@ -688,6 +688,7 @@ def _close_sync(worktree: Path, params: dict) -> dict:
         if halted_segments is not None:
             problem["halted_segments"] = halted_segments
         return problem
+    open_claims = 0
     if tier == "scouts":
         report = _research_grounding.GROUNDING_REPORT
         grounding, carry = _grounding_state(scratch)
@@ -730,6 +731,8 @@ def _close_sync(worktree: Path, params: dict) -> dict:
         if problem:
             return _err(problem)
         outputs, segment_dirs = ["digest.md"], []
+        if grounding:
+            open_claims = _research_grounding.grounding_counts(grounding)[_research_grounding.OPEN]
     group_runs = params.get("group_runs")
     if group_runs is not None:
         if (
@@ -752,10 +755,13 @@ def _close_sync(worktree: Path, params: dict) -> dict:
         "group_runs": group_runs,
     }
     local_root_raw = params.get("local_root")
-    return _close_committed(
+    result = _close_committed(
         worktree, scratch, run_id, topic_slug, outputs, segment_dirs, meta,
         str(local_root_raw) if local_root_raw else None, halted_segments,
     )
+    if open_claims and result.get("exit_code") == 0:
+        result["open"] = open_claims
+    return result
 
 
 @register_op("research.close")
@@ -764,7 +770,8 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
 
     Params: see the module docstring; ``run_id`` and ``topic_slug`` are required for every tier.
 
-    Returns (exit_code 0): ``{committed: true, deliverable: true, sha, paths, trail}``;
+    Returns (exit_code 0): ``{committed: true, deliverable: true, sha, paths, trail}`` plus
+    ``open`` (count of ``## Open questions`` grounding lines, passed not graded) when non-zero;
     local-only adds ``local_only``, ``destination``, ``claims_out``. Returns (exit_code 1):
     ``{committed: false, error}``; a ``require_claims``, ``require_outputs`` or ``require_grounding``
     refusal adds ``deliverable: false``; a grounding-verdict refusal also adds ``grounding`` (the

@@ -75,4 +75,7 @@ def test_zero_resolved_repo_targets_refuse_naming_the_sizing(repo):
     rel = _write_sizing(repo, "--research-class", "corpus", "--research-source", "repo", *_questions())
     with pytest.raises(PipelineEmitRefused) as exc:
         op_module._research_route_setup({}, repo, rel, None)
-    assert any(rel in r and "no resolved repo target" in r for r in exc.value.reasons)
+    assert any(
+        rel in r and "no resolved repo target" in r and "registered key" in r
+        for r in exc.value.reasons
+    )

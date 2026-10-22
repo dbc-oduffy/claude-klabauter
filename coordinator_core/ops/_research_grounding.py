@@ -9,6 +9,8 @@ parse like LF):
 - Digest section: ``## <name>`` where ``<name>`` matches ``digest-*.md``.
 - Claim line: ``- **grounded**``, ``- **ungrounded**`` or ``- **contradicted**``, then the claim
   and its evidence.
+- Open section: ``## Open questions``. A claim line under it is listed as ``open``: never graded,
+  never blocking, not a graded claim. Any other ``##`` heading ends it.
 - Contradiction ruling: ``- **real**``, ``- **invented**`` or ``- **dismissed**``. ``real`` means
   the sources themselves disagree; ``invented`` means the digest's own text claims a source
   disagreement the sources do not support; ``dismissed`` is every other tension that does not
@@ -29,6 +31,8 @@ GROUNDING_REPORT = "grounding.md"
 CLAIM_VERDICTS = ("grounded", "ungrounded", "contradicted")
 RULINGS = ("real", "invented", "dismissed")
 BLOCKING = ("ungrounded", "contradicted", "invented")
+OPEN = "open"
+OPEN_SECTION = "Open questions"
 
 RULING_NOTE = (
     "Name the digest file(s) each ruling line judges.\n"
@@ -295,13 +299,29 @@ def effective_report(
     return "\n".join(out)
 
 
-def grounding_counts(text: str) -> dict[str, int]:
-    """Count each of the six verdicts over the report's verdict lines."""
-    counts = dict.fromkeys(CLAIM_VERDICTS + RULINGS, 0)
+def _verdicts(text: str) -> Iterable[tuple[str, str]]:
+    """Yield ``(verdict, line)`` per verdict line; a claim verdict under ``## Open questions`` is ``open``."""
+    in_open = False
     for raw in text.splitlines():
-        v = _verdict(raw.lstrip())
-        if v:
-            counts[v] += 1
+        line = raw.lstrip()
+        h = _HEADING_RE.match(line)
+        if h:
+            in_open = h.group(1).lower() == OPEN_SECTION.lower()
+            continue
+        v = _verdict(line)
+        if v is None:
+            continue
+        yield (OPEN if in_open and v in CLAIM_VERDICTS else v), line
+
+
+def grounding_counts(text: str) -> dict[str, int]:
+    """Count each verdict (the three claim verdicts, three rulings and ``open``) over the report's verdict lines.
+
+    A claim line under ``## Open questions`` counts ``open`` and none of the claim verdicts.
+    """
+    counts = dict.fromkeys(CLAIM_VERDICTS + RULINGS + (OPEN,), 0)
+    for v, _ in _verdicts(text):
+        counts[v] += 1
     return counts
 
 
@@ -309,18 +329,18 @@ def grounding_problems(text: str, digest_names: list[str]) -> list[str]:
     """Messages naming what keeps the report from clearing the digest; ``[]`` clears it.
 
     One message per blocking verdict line (verdict plus the line, truncated), one per name in
-    ``digest_names`` with no ``## <name>`` section, and one when no claim line exists.
+    ``digest_names`` with no ``## <name>`` section, and one when no graded claim line exists.
+    Lines under ``## Open questions`` are open: neither blocking nor a graded claim.
     """
     problems: list[str] = []
     sections: set[str] = set()
     claims = 0
     for raw in text.splitlines():
-        line = raw.lstrip()
-        v = _verdict(line)
-        if v is None:
-            m = _SECTION_RE.match(line)
-            if m and fnmatchcase(m.group(1), "digest-*.md"):
-                sections.add(m.group(1))
+        m = _SECTION_RE.match(raw.lstrip())
+        if m and fnmatchcase(m.group(1), "digest-*.md"):
+            sections.add(m.group(1))
+    for v, line in _verdicts(text):
+        if v == OPEN:
             continue
         if v in CLAIM_VERDICTS:
             claims += 1

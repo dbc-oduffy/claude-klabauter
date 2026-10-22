@@ -1253,8 +1253,6 @@ def _row_agent_type(row: WaveRow) -> str:
             )
         return row.agent_type
 
-    if getattr(row, "memo_send", None):
-        return _EXECUTOR_AGENT_TYPE
     if row.writes is UNDECLARED:
         return _EXECUTOR_AGENT_TYPE
     if immutable_body:
@@ -2891,11 +2889,6 @@ def _row_prompt(
             "(verb evidence-append, plan_path, id, text); never edit the "
             "evidence sidecar by hand."
         )
-    memo_send = getattr(row, "memo_send", None)
-    if memo_send:
-        from coordinator_core.ops.dispatch_emit.memo_rows import memo_send_step_block
-
-        body += f"\n\n{memo_send_step_block(row.id, memo_send)}"
     if plan_context is not None:
         if is_slot_row:
             body += f"\n\n{_slot_row_clause(gate_commands)}"
@@ -4444,6 +4437,10 @@ def _run_base_marker() -> str:
     return f"{_SHARED_PATH_MARKER_DELIM}{_RUN_BASE_VAR}{_SHARED_PATH_MARKER_DELIM}"
 
 
+#: Trailer marking a mid-run checkpoint commit as not landed until the run closes.
+_NOT_LANDED_TRAILER = "\nCheckpoint-Not-Landed: run-open"
+
+
 def _checkpoint_trailer_js(
     plan_path: Optional[str],
     run_base_sha: Optional[str],
@@ -4461,7 +4458,8 @@ def _checkpoint_trailer_js(
             _js_string_literal("\n\nCheckpoint-Plan: ")
             + f" + {runtime_plan_js} + "
             + _js_string_literal("\nCheckpoint-Base: ")
-            + f" + {_RUN_BASE_VAR}"
+            + f" + {_RUN_BASE_VAR} + "
+            + _js_string_literal(_NOT_LANDED_TRAILER)
         )
     if not plan_path:
         return "''"
@@ -4471,7 +4469,7 @@ def _checkpoint_trailer_js(
     )
     if prior_run_base:
         expr += " + " + _js_string_literal(f"\nCheckpoint-Review-Base: {prior_run_base}")
-    return expr
+    return expr + " + " + _js_string_literal(_NOT_LANDED_TRAILER)
 
 
 def _emit_run_base_blocks(emit_sha: str) -> list[str]:

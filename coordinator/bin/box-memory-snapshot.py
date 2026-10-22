@@ -24,7 +24,6 @@ _UNAVAILABLE = "unavailable"
 def _load(name: str):
     spec = importlib.util.spec_from_file_location(name, _LIB / f"{name}.py")
     module = importlib.util.module_from_spec(spec)
-    sys.modules[name] = module  # the host's @dataclass classes resolve annotations through it
     spec.loader.exec_module(module)
     return module
 

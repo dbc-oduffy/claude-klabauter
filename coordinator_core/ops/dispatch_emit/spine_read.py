@@ -479,11 +479,10 @@ def _is_operator_row(raw: dict) -> bool:
 
 from coordinator_core.ops.dispatch_emit.memo_rows import (  # noqa: E402,F401  (re-exports)
     _RECEIVER_INBOX_SEGMENT,
+    _MEMO_SEND_BRIEF_RE,
     _is_memo_send_row,
     _is_receiver_inbox_surface,
     inbound_close_path,
-    memo_row_dispatchable,
-    memo_send_step_block,
     memo_receipt_exists,
     memo_receipt_slug,
     memo_row_slug,
@@ -864,7 +863,6 @@ class EmitterRow(NamedTuple):
     change_kind: Optional[str] = None
     reads_at_head: tuple = ()
     appends: tuple = ()
-    memo_send: Optional[Mapping] = None
 
 
 _YAML_LOADER = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
@@ -1377,7 +1375,6 @@ def read_spine(
                     if isinstance(raw.get("appends"), list)
                     else ()
                 ),
-                memo_send=memo_draft_fields(raw)[0] if memo_row_dispatchable(raw) else None,
             )
         )
 
@@ -1429,7 +1426,7 @@ def read_spine(
         em_capability = em_only_capability(raw)
         em_performed = (
             row_is_em_performed(raw)
-            or (_is_memo_send_row(raw) and not memo_row_dispatchable(raw))
+            or _is_memo_send_row(raw)
             or inbound_close is not None
         )
         memo_slug = None
@@ -1459,8 +1456,6 @@ def read_spine(
                         f"row {raw.get('id')!r} is a memo-send row but names no memo_to: "
                         "add `memo_to: <receiver>` to the row"
                     )
-                if not memo_delivered and memo_row_dispatchable(raw):
-                    memo_slug = None
         em_discharged = None
         if em_discharge_eligible(raw, tuple(frontmatter_gates.get(raw.get("id"), ()))):
             if discharges is None:

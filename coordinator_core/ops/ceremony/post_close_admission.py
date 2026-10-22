@@ -10,6 +10,7 @@ deferred index refresh costs staleness until the next close, a wrong admit costs
 
 from __future__ import annotations
 
+import sys
 from dataclasses import dataclass
 from typing import Mapping, Optional, Sequence
 
@@ -58,7 +59,9 @@ def admit(
 
 
 def notice(verdict: Verdict, run_id: str, pids: Optional[Sequence[int]] = None) -> bool:
-    """Post one START line for an admitted verdict; False when deferred, not posted, or on error.
+    """Post one START line for an admitted verdict; False when deferred, undelivered, or on error.
+
+    An admitted launch whose line did not land writes one stderr line with the reason.
 
     ``pids`` names the launched child processes and is forwarded to the post only when given.
 
@@ -83,6 +86,21 @@ def notice(verdict: Verdict, run_id: str, pids: Optional[Sequence[int]] = None) 
             require_holder=False,
             **extra,
         )
-        return bool(reply.get("posted"))
-    except Exception:
+        if reply.get("delivered", reply.get("posted")):
+            return True
+        _report_failure(verdict.label, run_id, str(reply.get("reason") or "not delivered"))
         return False
+    except Exception as exc:
+        _report_failure(verdict.label, run_id, f"post raised {type(exc).__name__}")
+        return False
+
+
+def _report_failure(label: str, run_id: str, reason: str) -> None:
+    """One stderr line naming an admitted launch whose START line did not land; never raises."""
+    try:
+        print(
+            f"post_close_admission: START for {label} run {run_id} not delivered: {reason}",
+            file=sys.stderr,
+        )
+    except Exception:
+        pass

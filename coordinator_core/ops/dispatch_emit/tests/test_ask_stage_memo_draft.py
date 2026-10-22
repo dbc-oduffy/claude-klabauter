@@ -12,7 +12,7 @@ PLAN_REL = "docs/plans/2026-10-16-memo.md"
 OUTBOX = ".coordinator-local/memo-outbox"
 
 
-def _plan(extra: str = "  memo_to: other-em\n  performer: em\n") -> str:
+def _plan(extra: str = "  memo_to: other-em\n") -> str:
     return f"""---
 title: fixture
 ---
@@ -135,27 +135,6 @@ def test_draft_step_inherits_the_owed_rows_staged_dependency(tmp_path):
     step = next(r for r in reply["rows"] if r["id"] == "M1-memo-draft")
     assert step["deps"] == ["C1"]
     assert step["wave"] == code["wave"] + 1
-
-
-def test_registered_memo_row_stages_as_an_executor_row_not_owed(tmp_path):
-    reply = _stage(tmp_path, _plan(extra="  memo_to: other-em\n"))
-    assert {r["id"] for r in reply["rows"]} == {"C1", "M1"}
-    assert reply["owed"] == []
-
-
-def test_unregistered_dispatchable_memo_row_is_demoted_with_its_dependents(monkeypatch, tmp_path):
-    monkeypatch.setattr(_DRAFT, lambda to, dry_run: {"rejection_class": "unknown_receiver"})
-    plan = _plan(extra="  memo_to: ghost-em\n").replace(
-        "    Please do the thing.\n",
-        "    Please do the thing.\n- id: D1\n  title: after memo\n  change_kind: code-edit\n"
-        "  surface: pkg/d.py\n  writes:\n    - pkg/d.py\n  depends_on:\n    - chunk: M1\n"
-        "      gate_kind: output-consumption-runtime\n",
-    )
-    reply = _stage(tmp_path, plan)
-    assert [r["id"] for r in reply["rows"]] == ["C1"]
-    assert _owed(reply) == [("M1", "memo-send"), ("D1", "withheld_by_owed_dependency")]
-    assert "delivered_via other" in reply["owed"][0]["detail"]
-    assert "M1" in reply["owed"][1]["detail"]
 
 
 def test_draft_step_without_dependencies_stays_at_wave_zero(tmp_path):

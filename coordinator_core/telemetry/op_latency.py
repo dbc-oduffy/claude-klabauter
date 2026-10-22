@@ -560,7 +560,7 @@ def _write_entry(entry: dict, repo_root: Optional[Path]) -> None:
 
 
 def _append_line(sink: Path, encoded: bytes) -> None:
-    atomic_append.append_line(sink, encoded)
+    atomic_append.append_line_bounded(sink, encoded)
 
 
 def record_op_latency(

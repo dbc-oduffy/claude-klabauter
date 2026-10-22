@@ -92,6 +92,11 @@ _COUNTS_FILENAME = "engine-provenance-counts.jsonl"
 
 _OWN_REPO_ROOT = Path(__file__).resolve().parents[1]
 
+#: `match` is the expected state and is counted only while the sink is small;
+#: divergent/unresolved/unimported are always kept until the hard cap.
+_MATCH_CAP_BYTES = 64 * 1024
+_HARD_CAP_BYTES = 1024 * 1024
+
 MUTATES = ["state/engine-provenance-counts.jsonl"]
 
 
@@ -181,6 +186,12 @@ def record_engine_provenance(
     if not _may_write(git_root):
         return
     path = Path(git_root) / "state" / _COUNTS_FILENAME
+    try:
+        size = path.stat().st_size
+    except OSError:
+        size = 0
+    if size >= _HARD_CAP_BYTES or (verdict == "match" and size >= _MATCH_CAP_BYTES):
+        return
     path.parent.mkdir(parents=True, exist_ok=True)
     record = {
         "caller": caller,
@@ -190,6 +201,8 @@ def record_engine_provenance(
         "engine_root": engine_root,
         "at": datetime.now(timezone.utc).isoformat(),
     }
-    from coordinator_core.session.claimed_write import append_claimed_line
+    from coordinator_core.atomic_append import append_line_bounded
+    from coordinator_core.session.declared_writes import declare_write
 
-    append_claimed_line(path, (json.dumps(record) + "\n").encode("utf-8"))
+    append_line_bounded(path, (json.dumps(record) + "\n").encode("utf-8"))
+    declare_write(str(path))

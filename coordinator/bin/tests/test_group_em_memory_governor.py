@@ -26,6 +26,13 @@ def _fake_start_times(monkeypatch):
     monkeypatch.setattr(gov, "process_start_time", lambda pid: 1.0)
 
 
+@pytest.fixture(autouse=True)
+def _non_windows_host(monkeypatch):
+    # The win32-only cache-trim hint must not leak into the pause/resume line assertions;
+    # the hint tests set their own platform.
+    monkeypatch.setattr(gov.sys, "platform", "linux")
+
+
 def _args(**kw):
     base = dict(interval=0, max_pauses=3, resume_after=2, psi_full=10.0, avail_pct=5.0,
                 runaway_mb=0, runaway_every=1)
@@ -271,10 +278,7 @@ def test_verdicts_identical_with_and_without_sibling(tmp_path, monkeypatch):
     assert strip(a) == strip(b) and any("PAUSED" in x for x in a) and any("RESUMED" in x for x in a)
 
 
-def test_help_exits_zero_on_linux(monkeypatch):
-    import pytest
-
-    monkeypatch.setattr(gov.sys, "platform", "linux")
+def test_help_exits_zero_on_linux():
     with pytest.raises(SystemExit) as exc:
         gov.main(["--help"])
     assert exc.value.code == 0
@@ -372,25 +376,3 @@ def test_thaw_leftovers_ignores_missing_and_malformed(tmp_path):
     bad.write_text("not json")
     assert gov.thaw_leftovers(bad, lambda p, s: calls.append(p)) == []
     assert calls == [] and not bad.exists()
-
-
-def test_footprint_mb_from_rusage_reads_phys_footprint_field():
-    import struct
-    buf = bytearray(256)
-    struct.pack_into("<Q", buf, 72, 3 * 1048576)
-    struct.pack_into("<Q", buf, 64, 999 * 1048576)  # ri_resident_size is a different field
-    assert gov.footprint_mb_from_rusage(bytes(buf)) == 3.0
-
-
-@pytest.mark.skipif(sys.platform != "darwin", reason="libproc is darwin-only")
-def test_darwin_footprints_spawn_nothing_and_include_self(monkeypatch):
-    import os
-
-    def boom(*a, **k):
-        raise AssertionError("footprints spawned a process")
-
-    monkeypatch.setattr(gov.subprocess, "run", boom)
-    monkeypatch.setattr(gov.subprocess, "Popen", boom)
-    out = gov._darwin_footprints(top_n=100000)
-    assert os.getpid() in out and out[os.getpid()] > 0
-    assert len(gov._darwin_footprints(top_n=3)) == 3

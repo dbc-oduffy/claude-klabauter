@@ -68,6 +68,48 @@ def test_bad_phase_refused(tmp_path, monkeypatch):
     assert not admission_post.admission_path(tmp_path).exists()
 
 
+def test_success_reply_reports_delivered_and_keeps_keys(tmp_path, monkeypatch):
+    _holder(monkeypatch, {"session_id": "gem", "live": True})
+    r = admission_post.post("START", "s1", [os.getpid()], directory=tmp_path)
+    assert r["delivered"] is True and "reason" not in r
+    for key in ("posted", "path", "phase", "pids", "dead_pids", "holder_live"):
+        assert key in r
+
+
+def test_short_write_reports_not_delivered_loudly(tmp_path, monkeypatch, capsys):
+    _holder(monkeypatch, {"session_id": "gem", "live": True})
+    real = os.write
+    monkeypatch.setattr(os, "write", lambda fd, d: real(fd, d[: len(d) // 2]))
+    r = admission_post.post("START", "s1", [], directory=tmp_path)
+    assert r["delivered"] is False and r["posted"] is False and r["reason"] == "short_write"
+    assert "NOT delivered" in capsys.readouterr().err
+
+
+def test_write_oserror_reports_not_delivered(tmp_path, monkeypatch):
+    _holder(monkeypatch, {"session_id": "gem", "live": True})
+
+    def boom(fd, d):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(os, "write", boom)
+    r = admission_post.post("START", "s1", [], directory=tmp_path)
+    assert r["delivered"] is False and r["reason"].startswith("write_failed")
+
+
+def test_line_absent_at_path_reports_not_delivered(tmp_path, monkeypatch):
+    _holder(monkeypatch, {"session_id": "gem", "live": True})
+    real = os.write
+
+    def write_elsewhere(fd, d):
+        real(fd, d)
+        admission_post.admission_path(tmp_path).write_bytes(b"")
+        return len(d)
+
+    monkeypatch.setattr(os, "write", write_elsewhere)
+    r = admission_post.post("START", "s1", [], directory=tmp_path)
+    assert r["delivered"] is False and r["reason"] == "not_found_at_path"
+
+
 def test_oversize_note_and_pid_list_are_capped(tmp_path, monkeypatch):
     _holder(monkeypatch, {"session_id": "gem", "live": True})
     monkeypatch.setattr(admission_post.session_registry, "pid_alive", lambda pid: True)

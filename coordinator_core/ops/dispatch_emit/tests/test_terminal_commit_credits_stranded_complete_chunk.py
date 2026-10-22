@@ -203,6 +203,49 @@ def test_done_chunk_is_unaffected(repo):
     assert out["partial_committed"] == ["C1"]
 
 
+def test_refusal_leads_with_credit_chunks(repo):
+    _stage(repo, "BLOCKED: no runtime\n")
+    error = _call(repo, _review())["error"]
+    assert error.index("workflow.revise") < error.index("finish or land")
+
+
+PLAN = "docs/plans/p.md"
+EVIDENCE = "docs/plans/p.evidence.yaml"
+
+
+def _stage_evidence_only(repo: Path, report_text: str) -> None:
+    _git(repo, "add", "a.py")
+    _git(repo, "commit", "-q", "-m", "a")
+    _write(repo, REPORT, report_text)
+    _write(repo, PLAN, "plan\n")
+    _write(repo, EVIDENCE, "rows: []\n")
+    request = CommitRequest(
+        chunks=(ChunkCommit(id="C1", title="t", paths=("a.py",), report=REPORT),),
+        plan_path=PLAN,
+    )
+    _write(repo, f"{RUN_DIR_ROOT}/{RUN}/commit-request.txt", render_marker(request) + "\n")
+
+
+def test_own_evidence_append_lands_without_the_halt(repo):
+    _stage_evidence_only(repo, "DONE: evidence appended\n")
+    out = _call(repo, _review(slice_files=("other.py",)))
+    assert out.get("refused") != "no-credited-chunk-landed", out
+
+
+def test_evidence_append_with_a_blocked_report_still_halts(repo):
+    _stage_evidence_only(repo, "BLOCKED: no runtime\n")
+    out = _call(repo, _review(slice_files=("other.py",)))
+    assert out.get("refused") == "no-credited-chunk-landed", out
+
+
+def test_done_report_with_no_plan_change_still_halts(repo):
+    _stage_evidence_only(repo, "DONE: evidence appended\n")
+    _git(repo, "add", PLAN, EVIDENCE)
+    _git(repo, "commit", "-q", "-m", "plan")
+    out = _call(repo, _review(slice_files=("other.py",)))
+    assert out.get("refused") == "no-credited-chunk-landed", out
+
+
 def test_ledger_unjudged_refuses_before_any_regrade(repo):
     _stage(repo)
     out = _call(repo, _review(), ledger_verdict=None)

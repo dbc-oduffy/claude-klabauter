@@ -836,9 +836,6 @@ def _ledger_gate(
     )
     since_halt: dict = {}
     if resume_ledger is not None:
-        from coordinator_core.ops.dispatch_emit.pre_halt_credit import with_notes
-
-        resume_ledger = with_notes(resume_ledger, requirements_ledger.read_notes(run_dir))
         stale = _unchanged_since_halt(root, resume_ledger, verdict, manifest_abs, plan_rel, since_halt)
         if stale:
             result = {**result, "pass": False, "failures": [*result["failures"], *stale]}
@@ -2044,13 +2041,19 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
     }
     from coordinator_core.ops.dispatch_emit import credit_gate
 
+    if own_evidence_write:
+        evidence_rows = {c.id for c in request.chunks if c.paths and set(c.paths) <= {own_evidence_write[0]}}
+        landed_ids |= evidence_rows
+        for cid in evidence_rows:
+            stranded.pop(cid, None)
+
     if credit_gate.no_credited_landing(set(stranded), {c.id for c in contributing}, landed_ids):
         shown = "; ".join(f"{cid}: {', '.join(ps)}" for cid, ps in sorted(stranded.items()))
         why = "".join(f" {cid} blocker: {text}." for cid, text in sorted(blockers.items()) if cid in stranded)
         return _error(
             f"no product chunk lands in this commit; stranded work stays uncommitted: {shown}.{why} "
-            "Finish or land the stranded chunks, then re-fire; or credit one: workflow.revise "
-            f"run_id={sibling_run_id} credit_chunks=[{{chunk, evidence}}], then re-fire",
+            f"Credit one: workflow.revise run_id={sibling_run_id} credit_chunks=[{{chunk, evidence}}], "
+            "then re-fire; or finish or land the stranded chunks, then re-fire",
             refused="no-credited-chunk-landed",
         )
     for row, p, _reason in unlanded:

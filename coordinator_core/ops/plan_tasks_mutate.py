@@ -2091,16 +2091,6 @@ def _keys_added_after(key: str, orig: dict, row: dict) -> list:
     return out
 
 
-def _chunk_parses_to(chunk: str, orig: dict) -> bool:
-    # A row whose alias points at an anchor in another row cannot be parsed
-    # alone; it is not independently re-serializable, so the caller must take
-    # the whole-body fallback rather than crash.
-    try:
-        return yaml.safe_load(chunk) == [orig]
-    except yaml.YAMLError:
-        return False
-
-
 def _patch_body(body: str, original_rows: list, rows: list) -> str:
     """The spine body with only the rows that changed re-serialized; every
     untouched row keeps its on-disk bytes. Falls back to a whole-body dump
@@ -2111,7 +2101,7 @@ def _patch_body(body: str, original_rows: list, rows: list) -> str:
         len(chunks) != len(original_rows)
         or None in ids
         or len(set(ids)) != len(ids)
-        or any(not _chunk_parses_to(chunk, orig) for chunk, orig in zip(chunks, original_rows))
+        or any(yaml.safe_load(chunk) != [orig] for chunk, orig in zip(chunks, original_rows))
     ):
         return _dump_rows(rows)
     by_id = dict(zip(ids, zip(original_rows, chunks)))
