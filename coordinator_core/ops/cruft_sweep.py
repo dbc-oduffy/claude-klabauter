@@ -175,6 +175,7 @@ import time
 from pathlib import Path, PurePath
 from typing import Callable, Iterable, List, Optional, Sequence, Tuple
 
+from coordinator_core.bash_guards._unborn_scratch_repo import scratch_clone_failures
 from coordinator_core.git.repo_root import git_dir, show_toplevel
 from coordinator_core.ipc import register_op
 from coordinator_core.session.declared_writes import declare_write
@@ -1788,6 +1789,12 @@ def _resolve_repo_root(repo_root: Optional[Path]) -> Path:
     return Path.cwd()
 
 
+def _is_scratch_clone_root(path: Path, scratch_root: Path) -> bool:
+    """True for a direct child of `scratch_root` holding a `.git` DIRECTORY (a linked
+    worktree's `.git` file and a deeper clone do not qualify). One stat, no spawn."""
+    return path.parent == scratch_root and (path / ".git").is_dir()
+
+
 def sweep_scratch(
     repo_root: Path,
     scratch_age_days: int,
@@ -1850,9 +1857,12 @@ def sweep_scratch(
     # design (a dir later skipped by an earlier gate, or dropped by the
     # watchdog, still has an entry here) — that costs nothing beyond a dict
     # lookup, and keeps this a single query shape independent of loop state.
+    scratch_root = repo_root / "scratch"
     untracked_by_dir = _batch_is_untracked_dirs(
-        repo_root, [d for d in all_dirs if _is_auto_prune_name(d.name)]
+        repo_root,
+        [d for d in all_dirs if _is_auto_prune_name(d.name) or _is_scratch_clone_root(d, scratch_root)],
     )
+    clone_candidates: set = set()
 
     for dir_path in all_dirs:
         if not wd.check():
@@ -1872,6 +1882,42 @@ def sweep_scratch(
 
         if _has_git_boundary(dir_str):
             continue
+
+        if _is_scratch_clone_root(dir_path, scratch_root):
+            # No 24h mtime floor: scratch_clone_failures is the safety proof. A directory's
+            # mtime ignores nested edits, so the age gate is a coarse hint, not a use signal.
+            mtime = _get_mtime(dir_path)
+            if mtime == 0:
+                _banner(f"[cruft-sweep] mtime-resolution-failed skip: {dir_str}", quiet=quiet)
+                continue
+            age_sec = now - mtime
+            if age_sec <= threshold_sec:
+                if json_mode:
+                    emit_jsonl("scratch", dir_str, dir_name, _dir_size_bytes(dir_path), mtime,
+                               "skip", f"mtime {age_sec}s <= threshold {threshold_sec}s (age-threshold)",
+                               emit_fn=emit_fn)
+                pruned_parents.append(dir_str)
+                continue
+            if not untracked_by_dir.get(dir_str, True):
+                if json_mode:
+                    emit_jsonl("scratch", dir_str, dir_name, _dir_size_bytes(dir_path), mtime,
+                               "skip", "tracked by git", emit_fn=emit_fn)
+                pruned_parents.append(dir_str)
+                continue
+            failures = scratch_clone_failures(dir_str)
+            if failures is not None:
+                pruned_parents.append(dir_str)
+                if failures:
+                    if json_mode:
+                        emit_jsonl("scratch", dir_str, dir_name, _dir_size_bytes(dir_path), mtime,
+                                   "skip", "scratch clone not recoverable: " + "; ".join(failures),
+                                   emit_fn=emit_fn)
+                    continue
+                scratch_candidates.append(
+                    (dir_path, dir_name, mtime, age_sec, _dir_size_bytes(dir_path), threshold_sec)
+                )
+                clone_candidates.add(dir_str)
+                continue
         if _has_negative_spec_component(dir_str):
             continue
 
@@ -1945,13 +1991,14 @@ def sweep_scratch(
 
     for cand_path, cand_name, cand_mtime, cand_age_sec, cand_size_bytes, cand_threshold in scratch_candidates:
         cand_str = str(cand_path)
+        why = "recoverable scratch clone" if cand_str in clone_candidates else "name in auto-prune list"
         if apply:
             if not scratch_delete_results.get(cand_str, False):
                 _banner(f"[cruft-sweep] WARNING: delete failed, not counted as pruned: {cand_str}", quiet=quiet)
                 if json_mode:
                     emit_jsonl("scratch", cand_str, cand_name, cand_size_bytes, cand_mtime,
                                "prune-failed",
-                               f"name in auto-prune list; mtime {cand_age_sec}s > effective_threshold {cand_threshold}s; delete did not confirm removal",
+                               f"{why}; mtime {cand_age_sec}s > effective_threshold {cand_threshold}s; delete did not confirm removal",
                                emit_fn=emit_fn)
                 continue
 
@@ -1961,7 +2008,7 @@ def sweep_scratch(
         if json_mode:
             emit_jsonl("scratch", cand_str, cand_name, cand_size_bytes, cand_mtime,
                        "auto-prune",
-                       f"name in auto-prune list; mtime {cand_age_sec}s > effective_threshold {cand_threshold}s",
+                       f"{why}; mtime {cand_age_sec}s > effective_threshold {cand_threshold}s",
                        emit_fn=emit_fn)
 
     total_mb = total_bytes // 1048576

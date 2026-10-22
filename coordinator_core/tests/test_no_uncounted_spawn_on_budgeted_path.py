@@ -4722,6 +4722,8 @@ _FROZEN_UNENROLLED_SPAWN_SITES: frozenset = frozenset(
         ("coordinator_core/install/prereq_probe.py", "probe_uv", "uv", 0),
         ("coordinator_core/install/prereq_probe.py", "shell_login_env_reconstruction_source", "zsh", 0),
         ("coordinator_core/ops/app_session.py", "_launch", "<dynamic>", 0),
+        ("coordinator_core/ops/app_session.py", "_spawn_runner", "<dynamic>", 0),
+        ("coordinator_core/ops/app_session.py", "_validate", "<dynamic>", 0),
         ("coordinator_core/ops/bootstrap_repo.py", "_git._invoke", "<dynamic>", 0),
         ("coordinator_core/ops/bootstrap_repo.py", "_which_git", "git", 0),
         ("coordinator_core/ops/bootstrap_repo.py", "main", "<dynamic>", 0),
@@ -5060,6 +5062,26 @@ _DYNAMIC_ARGV0_DISPOSITIONS: dict[tuple[str, str, str, int], str] = {
         "resolved via `_resolve_argv(root, key, target_config)` off the "
         "consuming repo's own `coordinator.local.md` config target, which "
         "varies per `key`."
+    ),
+    (
+        "coordinator_core/ops/app_session.py",
+        "_spawn_runner",
+        "<dynamic>",
+        0,
+    ): (
+        "dynamic argv0 -- the detached validate runner is launched as "
+        "`[sys.executable, -m, _app_session_validate_run, --run-dir, ...]` "
+        "built by `_validate`; the interpreter path is only known at runtime."
+    ),
+    (
+        "coordinator_core/ops/app_session.py",
+        "_validate",
+        "<dynamic>",
+        0,
+    ): (
+        "dynamic argv0 -- `_validate` reaches the runner spawn through "
+        "`_spawn_runner`; the runner's own build and server spawns run "
+        "detached in `_app_session_validate_run`, off the op's path."
     ),
     (
         "coordinator_core/ops/bootstrap_repo.py",
@@ -6990,7 +7012,9 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     "distill.apply_disposal": 10,
     "memo.transition": 4,
     "merge_assemble.apply": 1,
-    "cruft_sweep.run": 8,
+    # 8 -> 9, 2026-10-22: sweep_scratch asks `_unborn_scratch_repo.scratch_clone_failures` per
+    # scratch clone root (two git reads, one reachable subprocess site), never per scratch dir.
+    "cruft_sweep.run": 9,
     # "memo.send": 2, removed 2026-09-24 (docs/plans/2026-09-12-memo-send-enrolled-in-the-
     # composition-gate.md, C2) -- the op is now enrolled in _BUDGETED_ENTRYPOINTS with an
     # execution-backed _LEGITIMIZED_SITES entry per reachable site; a COUNT-tier pin beside
@@ -7060,6 +7084,7 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     "repo_setup.copy_console_subprocess_tripwire": 1,
     "session.guard_settings_integrity": 2,
     "app_session.launch": 1,
+    "app_session.validate": 2,
     "commit_ledger.join_divergence_report": 1,
     "baton.resolve_path_and_repo": 1,
     "baton.resolve_swept_in_archive": 1,

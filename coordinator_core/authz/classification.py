@@ -352,6 +352,8 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     "hooks.subagent_zero_tool_use_surface": OpClass.COMPUTE_ONLY,
     "hooks.subagent_zero_tool_use_resolve": OpClass.COMPUTE_ONLY,
     "hooks.subagent_arrival_check": OpClass.COMPUTE_ONLY,
+    "hooks.subagent_arrival_record": OpClass.MUTATING,
+    "session.poll_share": OpClass.COMPUTE_ONLY,
     "hooks.subagent_fabrication_check": OpClass.COMPUTE_ONLY,
     # hooks.subagent_sidecar_fill_check — MUTATING despite being an advisory op,
     # same reasoning as hooks.nudge_foreground_agent_dispatch above: it writes
@@ -1433,15 +1435,17 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #   4. Mutates shared mutable state outside its own module?                No.
     #   5. Persistent state changes observable across process boundaries?      No.
     "plan.mise_certify_probe": OpClass.COMPUTE_ONLY,
-    # plan.census_order — COMPUTE_ONLY: orders a caller's plan set by the engine's in-memory
-    # census cost estimates (plan_mise_prep_probe._CENSUS_MEMO). Reads memory only.
-    # DR-208 five-question affirmation (citing ops/plan_census_order.py):
-    #   1. Writes, deletes, or reorders any state file, queue, or git object?  No.
+    # plan.census_set — COMPUTE_ONLY: revalidates a caller's whole plan set's census under one set
+    # budget (revalidate_set). Census commands run as read-only shell children whose outcome it
+    # reports; its only write is the derived CensusStore cache file under .coordinator-local/cache/,
+    # rebuildable by running the census and never a source of truth.
+    # DR-208 five-question affirmation (citing ops/plan_mise_prep_probe.py):
+    #   1. Writes, deletes, or reorders any state file, queue, or git object?  No (cache file only).
     #   2. Writes into rag's relational store?                                 No.
-    #   3. Opens any file for write (including sentinel creation)?             No.
+    #   3. Opens any file for write (including sentinel creation)?             Cache file only.
     #   4. Mutates shared mutable state outside its own module?                No.
-    #   5. Persistent state changes observable across process boundaries?      No.
-    "plan.census_order": OpClass.COMPUTE_ONLY,
+    #   5. Persistent state changes observable across process boundaries?      Cache file only.
+    "plan.census_set": OpClass.COMPUTE_ONLY,
     # plan.mise_upgrade_apply — MUTATING: writes the fields mise-prep-upgrade derives from ONE
     # caller-named docs/plans/*.md (upgrade_plan check=False, in place). The only upgrade writer
     # the mise-prep-run driver uses outside --dry-run.
@@ -4681,6 +4685,10 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #   app_session.teardown — ops/app_session.py `_teardown`: signals
     #     (terminates) a spawned process and deletes its persisted handle
     #     file (`_remove_handle`).
+    #   app_session.validate — ops/app_session.py `_validate`: spawns a
+    #     detached runner and writes a validate lock, spec.json and a
+    #     `<key>@validate` handle; the runner writes logs, result.json,
+    #     report.json and screenshots under a scratch run dir.
     #   fleet.backfill_reference_edges — ops/backfill_reference_edges.py:
     #     stamps a `references:` frontmatter field via `locked_rmw` on every
     #     live handoff/plan match (dry_run defaults True, but `dry_run: false`
@@ -4717,6 +4725,7 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     "app_session.census": OpClass.COMPUTE_ONLY,
     "app_session.launch": OpClass.MUTATING,
     "app_session.teardown": OpClass.MUTATING,
+    "app_session.validate": OpClass.MUTATING,
     "fleet.backfill_reference_edges": OpClass.MUTATING,
     "install.clone_idempotent": OpClass.MUTATING,
     "install.probe_skill_frontmatter_valid": OpClass.COMPUTE_ONLY,

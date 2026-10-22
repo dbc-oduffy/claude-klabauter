@@ -52,6 +52,8 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "invoke.from_argv":                      "none",
     "hooks.suggest_sonnet_research":         "none",
     "hooks.subagent_arrival_check":          "none",
+    "hooks.subagent_arrival_record":         "common_dir",
+    "session.poll_share":                    "none",
     "hooks.cater_subagent_start":            "none",
     "hooks.flag_em_poll_in_flight":          "none",
     "hooks.submit_engine_ask":               "none",
@@ -172,6 +174,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "app_session.launch":                    "common_dir",
     "app_session.census":                    "common_dir",
     "app_session.teardown":                  "common_dir",
+    "app_session.validate":                  "common_dir",
     # plugin_health.scan — no repo state accessed: read-only reader of the
     # OPERATOR's OWN machine-local plugin/consumer sentinel roots
     # (COORDINATOR_PLUGINS_ROOT / COORDINATOR_CONSUMER_HEALTH_ROOT env-resolved,
@@ -308,7 +311,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "plan.mise_prep_probe":                  "common_dir",
     "plan.mise_upgrade_apply":               "common_dir",
     "plan.mise_certify_probe":               "common_dir",
-    "plan.census_order":                     "common_dir",
+    "plan.census_set":                       "common_dir",
     "artifact.adopt":                        "common_dir",
     "plan.gated_criteria_met":               "common_dir",
     "plan.cross_plan_gate":                  "common_dir",

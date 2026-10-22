@@ -237,6 +237,16 @@ period: week
 period_value: "2026-W28"
 """
 
+FIXTURE_STATUS_CLOSED = """schema: goal
+id: goal-status-closed
+title: "Test Goal: Status Closed"
+status: closed
+objective: "Closed goal"
+created: "2026-07-07"
+period: week
+period_value: "2026-W28"
+"""
+
 FIXTURE_KR_STATUS = """schema: goal
 id: goal-kr-status
 title: "Test Goal: KR Status Projection"
@@ -356,6 +366,7 @@ def test_emit_goal_from_artifact(tmp_path):
     _write_goal(repo_status, "goal-status-active.yaml", FIXTURE_STATUS_ACTIVE)
     _write_goal(repo_status, "goal-status-achieved.yaml", FIXTURE_STATUS_ACHIEVED)
     _write_goal(repo_status, "goal-status-abandoned.yaml", FIXTURE_STATUS_ABANDONED)
+    _write_goal(repo_status, "goal-status-closed.yaml", FIXTURE_STATUS_CLOSED)
     log18 = os.path.join(tmp_base, "log18.log")
     _run_emitter(repo_status, shim, log18)
     events18 = _events(log18)
@@ -368,6 +379,9 @@ def test_emit_goal_from_artifact(tmp_path):
 
     ev_abandoned = next((e for e in events18 if "goal-status-abandoned" in e["text"]), {})
     assert ev_abandoned.get("status") == "dropped", "artifact status 'abandoned' maps to wire status 'dropped'"
+
+    ev_closed = next((e for e in events18 if "goal-status-closed" in e["text"]), {})
+    assert ev_closed.get("status") == "dropped", "artifact status 'closed' maps to wire status 'dropped'"
 
 
 def test_help_flag_prints_usage_and_exits_zero():

@@ -144,6 +144,7 @@ def test_the_new_plan_rule_set_does_not_reach_other_schemas():
     assert sv._CROSS_FIELD_RULES_BY_SCHEMA["plan"] == [
         sv._cf_mise_prepped_stamp_quartet,
         sv._cf_execution_restamp_quartet,
+        sv._cf_status_closed_reason_required,
     ]
     for name, rules in sv._CROSS_FIELD_RULES_BY_SCHEMA.items():
         if name != "plan":

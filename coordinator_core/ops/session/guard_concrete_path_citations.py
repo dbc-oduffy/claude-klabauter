@@ -1220,7 +1220,7 @@ def _is_evidence_artifact(filename: str) -> bool:
 #: A plan in one of these statuses is a historical record: its paths describe
 #: the tree it ran against, and rewriting them would falsify it. Live plans
 #: (draft through executing) stay gated.
-_TERMINAL_PLAN_STATUSES = frozenset({"implemented", "closed_partial", "abandoned", "superseded"})
+_TERMINAL_PLAN_STATUSES = frozenset({"implemented", "closed_partial", "abandoned", "closed", "superseded"})
 _FRONTMATTER_STATUS = re.compile(r"^status:\s*['\"]?([A-Za-z_-]+)", re.MULTILINE)
 
 

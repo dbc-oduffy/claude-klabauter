@@ -249,7 +249,7 @@ def _status_edge_hold(owner: str, label: str, wanted: str, actual: Optional[str]
         raise MalformedDependencyEdgeError(
             f"{owner} depends_on_plan {label}: status {wanted!r} is not a plan status"
         )
-    if actual in ("abandoned", "superseded"):
+    if actual in ("abandoned", "closed", "superseded"):
         raise DanglingPlanDependencyError(
             f"{owner} depends_on_plan {label}: plan is {actual}, never {wanted}"
         )
@@ -341,7 +341,7 @@ def resolve_plan_edge(
             target, archived = moved, True
     if not chunk:
         actual = _plan_status(target)
-        if archived and actual not in ("abandoned", "superseded"):
+        if archived and actual not in ("abandoned", "closed", "superseded"):
             actual = str(edge["status"])
         return PlanEdgeResolution(None, _status_edge_hold(owner, label, str(edge["status"]), actual))
     if target not in plan_cache:
@@ -361,7 +361,7 @@ def resolve_plan_edge(
             )
     rows_by_id = plan_cache[target]
     if archived:
-        if _plan_status(target) in ("abandoned", "superseded"):
+        if _plan_status(target) in ("abandoned", "closed", "superseded"):
             raise DanglingPlanDependencyError(
                 f"{owner} depends_on_plan {label}: archived plan is {_plan_status(target)}, never coded"
             )

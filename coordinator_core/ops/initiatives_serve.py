@@ -42,7 +42,7 @@ from coordinator_core.yaml_flat import simple_yaml_load
 
 _LOG = logging.getLogger(__name__)
 
-_VALID_STATUS = frozenset({"active", "paused", "shipped", "abandoned"})
+_VALID_STATUS = frozenset({"active", "paused", "shipped", "abandoned", "closed"})
 
 
 def _collect_initiatives(initiatives_dir: Path) -> List[dict]:

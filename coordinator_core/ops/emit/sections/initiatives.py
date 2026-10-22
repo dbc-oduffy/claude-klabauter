@@ -41,9 +41,9 @@ from coordinator_core.yaml_flat import parse_goal_ids as _parse_goal_ids
 from coordinator_core.yaml_flat import simple_yaml_load as _simple_yaml_load
 from coordinator_core.yaml_flat import unquote as _unquote  # noqa: F401 — re-exported for tests
 
-# Valid Zod InitiativeStatus values (D9 — ONLY these four canonical values; other on-disk values
+# Valid Zod InitiativeStatus values (D9 — ONLY these five canonical values; other on-disk values
 # coerce to null). PM-ratified 2026-07-04 per cross-repo/inbox/2026-07-05-initiative-govern-sweep-shape-outcome.md § Ask 1.
-_VALID_ZOD_STATUS = frozenset({"active", "paused", "shipped", "abandoned"})
+_VALID_ZOD_STATUS = frozenset({"active", "paused", "shipped", "abandoned", "closed"})
 
 
 def collect(ctx: EmitContext) -> tuple[list[dict], list[dict]]:

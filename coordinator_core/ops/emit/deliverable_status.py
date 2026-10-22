@@ -24,7 +24,7 @@ def _plan_phase(r: dict) -> str:
     status = r.get("status") or ""
     if status == "implemented":
         return "shipped"
-    if status in ("abandoned", "superseded", "deferred"):
+    if status in ("abandoned", "superseded", "deferred", "closed"):
         return "abandoned"
     if status == "landed":
         return "in-review"

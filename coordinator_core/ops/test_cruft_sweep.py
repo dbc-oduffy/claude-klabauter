@@ -8,6 +8,7 @@ import os
 import sys
 import time
 from pathlib import Path
+from typing import Sequence
 
 import pytest
 
@@ -1370,3 +1371,118 @@ def test_size_cap_dry_run_matches_apply_when_whole_dir_pass_has_candidates(tmp_p
     for uuid in (_UUID_A, _UUID_B):
         f = dry_root / "repo" / uuid / "tool-results" / "blob.json"
         assert f.exists(), "dry-run must delete nothing, including the whole-dir pass's own candidates"
+
+
+# ---------------------------------------------------------------------------
+# sweep_scratch: a recoverable scratch git clone (shared guard predicate)
+# ---------------------------------------------------------------------------
+
+
+def _git(cwd: Path, *args: str) -> None:
+    import subprocess as _subprocess
+
+    _subprocess.run(
+        ["git", "-C", str(cwd), "-c", "user.email=t@example.com", "-c", "user.name=T", *args],
+        check=True, **no_console_passthrough_kwargs(),
+    )
+
+
+def _scratch_clone_fixture(tmp_path: Path, names: Sequence[str]):
+    import subprocess as _subprocess
+
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    _init_git_repo(repo_root)
+    seed = tmp_path / "seed"
+    seed.mkdir()
+    _init_git_repo(seed)
+    _write(seed / "a.txt", "a\n")
+    _git(seed, "add", "a.txt")
+    _git(seed, "commit", "-q", "-m", "seed")
+    remote = tmp_path / "remote.git"
+    _subprocess.run(
+        ["git", "clone", "-q", "--bare", str(seed), str(remote)],
+        check=True, **no_console_passthrough_kwargs(),
+    )
+    clones = {}
+    for name in names:
+        dest = repo_root / "scratch" / name
+        dest.parent.mkdir(exist_ok=True)
+        _subprocess.run(
+            ["git", "clone", "-q", str(remote), str(dest)],
+            check=True, **no_console_passthrough_kwargs(),
+        )
+        clones[name] = dest
+    return repo_root, clones
+
+
+def _age_clones(clones, secs: int = 2 * 86400) -> None:
+    for c in clones.values():
+        _age_path(c, secs)
+
+
+def test_sweep_scratch_prunes_pushed_clean_clone_and_spares_unrecoverable(tmp_path):
+    repo_root, clones = _scratch_clone_fixture(
+        tmp_path, ["pushed", "unpushed", "stashed", "untracked", "modified"]
+    )
+    _write(clones["unpushed"] / "b.txt", "b\n")
+    _git(clones["unpushed"], "add", "b.txt")
+    _git(clones["unpushed"], "commit", "-q", "-m", "local")
+    _write(clones["stashed"] / "a.txt", "changed\n")
+    _git(clones["stashed"], "stash")
+    _write(clones["untracked"] / "new.txt", "n\n")
+    _write(clones["modified"] / "a.txt", "changed\n")
+    _age_clones(clones)
+
+    records = []
+    _bytes, items = cruft_sweep.sweep_scratch(
+        repo_root, 0, apply=False, json_mode=True, quiet=True, emit_fn=records.append,
+    )
+    assert items == 1
+    by_name = {Path(r["path"]).name: r for r in records if Path(r["path"]).name in clones}
+    assert by_name["pushed"]["disposition"] == "auto-prune"
+    assert "recoverable scratch clone" in by_name["pushed"]["evidence"]
+    for name, needle in [
+        ("unpushed", "unpushed local ref"),
+        ("stashed", "stash present"),
+        ("untracked", "untracked files"),
+        ("modified", "modified files"),
+    ]:
+        assert by_name[name]["disposition"] == "skip"
+        assert needle in by_name[name]["evidence"]
+    assert not any(Path(r["path"]).parent.name in clones for r in records), "clone contents are never walked"
+    assert all(c.exists() for c in clones.values()), "dry-run deletes nothing"
+
+    _bytes, items = cruft_sweep.sweep_scratch(
+        repo_root, 0, apply=True, json_mode=False, quiet=True,
+    )
+    assert items == 1
+    assert not clones["pushed"].exists()
+    for name in ("unpushed", "stashed", "untracked", "modified"):
+        assert clones[name].exists()
+
+
+def test_sweep_scratch_spares_clone_younger_than_threshold(tmp_path):
+    repo_root, clones = _scratch_clone_fixture(tmp_path, ["fresh"])
+    _age_clones(clones, 3600)
+
+    records = []
+    _bytes, items = cruft_sweep.sweep_scratch(
+        repo_root, 1, apply=True, json_mode=True, quiet=True, emit_fn=records.append,
+    )
+    assert items == 0
+    assert clones["fresh"].exists()
+    rec = next(r for r in records if Path(r["path"]).name == "fresh")
+    assert rec["disposition"] == "skip"
+    assert "age-threshold" in rec["evidence"]
+
+
+def test_sweep_scratch_clone_with_zero_threshold_ignores_mtime_floor(tmp_path):
+    repo_root, clones = _scratch_clone_fixture(tmp_path, ["fresh"])
+    _age_clones(clones, 3600)
+
+    _bytes, items = cruft_sweep.sweep_scratch(
+        repo_root, 0, apply=True, json_mode=False, quiet=True,
+    )
+    assert items == 1
+    assert not clones["fresh"].exists()

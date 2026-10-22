@@ -2385,7 +2385,7 @@ def _scratchpad_dir_of(path: str, session_id: str) -> Optional[str]:
             parts = real[len(base) + 1 :].split(os.sep)
             if (
                 len(parts) >= 5
-                and parts[0] == "claude"
+                and (parts[0] == "claude" or parts[0].startswith("claude-"))
                 and parts[3] == "scratchpad"
                 and parts[2] == os.path.normcase(session_id).casefold()
             ):

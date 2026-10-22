@@ -842,3 +842,34 @@ def test_the_servers_own_session_env_is_restored_after_the_call(tmp_path, monkey
         "CLAUDE_SESSION_ID": None,
         "CLAUDE_CODE_SESSION_ID": _SERVER_OWNER_SID,
     }
+
+
+def test_loader_registers_module_so_dataclass_with_future_annotations_loads(tmp_path):
+    script = tmp_path / "dc-entry.py"
+    script.write_text(
+        "from __future__ import annotations\n"
+        "from dataclasses import dataclass\n"
+        "\n"
+        "\n"
+        "@dataclass\n"
+        "class Row:\n"
+        "    name: str\n"
+        "\n"
+        "\n"
+        "def main(argv=None):\n"
+        "    return 0\n",
+        encoding="utf-8",
+    )
+    main_fn = invoke_from_argv._load_entrypoint_main(script, "dc-entry")
+    assert main_fn([]) == 0, "the loaded main must be callable and return 0"
+    sys.modules.pop("_invoke_from_argv_entrypoint_dc_entry", None)
+
+
+def test_loader_leaves_no_sys_modules_entry_when_the_body_raises(tmp_path):
+    script = tmp_path / "boom-entry.py"
+    script.write_text("raise RuntimeError('boom')\n", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="boom"):
+        invoke_from_argv._load_entrypoint_main(script, "boom-entry")
+    assert "_invoke_from_argv_entrypoint_boom_entry" not in sys.modules, (
+        "a failed exec must not leave a half-initialised module registered"
+    )

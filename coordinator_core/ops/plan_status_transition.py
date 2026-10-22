@@ -385,7 +385,7 @@ def _strip_unquoted_trailing_comment(raw: Optional[str]) -> Optional[str]:
 #     BLOCKED there, not into a single terminal/non-terminal bucket.
 # Three defensible, independent answers to three different questions about a
 # plan's status, not a bug. Plan: 2026-07-27-plan-line-item-resolution-model.md § C8b.
-_FROZEN_STATUSES = frozenset({"implemented", "superseded", "abandoned", "deferred"})
+_FROZEN_STATUSES = frozenset({"implemented", "superseded", "abandoned", "closed", "deferred"})
 # `blocked` (C1, docs/plans/2026-09-23-plan-blocked-state.md) is deliberately
 # in NEITHER this set NOR `_FLIPPABLE_STATUSES` below: it is non-terminal (an
 # approved plan held by something outside it), and `stamp-unblocked` is its

@@ -1646,6 +1646,33 @@ def _cf_closed_reason_required(fm: dict) -> ErrorDict | None:
     return None
 
 
+def _cf_status_closed_reason_required(fm: dict) -> ErrorDict | None:
+    """status=closed <=> closed_reason present (bidirectional), for plan/initiative/goal.
+
+    Presence only: the closed_reason value enum is owned by DoE, not checked here.
+    Returns None or an error; never the `__skip__` sentinel. No grandfather cutoff.
+    """
+    status = fm.get('status')
+    closed_reason = fm.get('closed_reason')
+    has_closed_reason = closed_reason is not None and str(closed_reason).strip() != ''
+    if status == 'closed' and not has_closed_reason:
+        return {
+            'field': 'closed_reason',
+            'error': 'required when status=closed',
+            'hint': (
+                'Set closed_reason to why this record was deliberately closed. '
+                'Its value vocabulary is owned by DoE; this rule checks presence only.'
+            ),
+        }
+    if has_closed_reason and status != 'closed':
+        return {
+            'field': 'closed_reason',
+            'error': 'permitted only when status=closed',
+            'hint': 'closed_reason is coupled to status=closed; clear it or set status=closed.',
+        }
+    return None
+
+
 def _cf_continued_into_required(fm: dict) -> ErrorDict | None:
     """DR-084 (plan C5): deployment_state=continued => continued_into required.
 
@@ -5112,11 +5139,22 @@ _QUEUE_CROSS_FIELD_RULES = [
 _PLAN_CROSS_FIELD_RULES = [
     _cf_mise_prepped_stamp_quartet,
     _cf_execution_restamp_quartet,
+    _cf_status_closed_reason_required,
+]
+
+_INITIATIVE_CROSS_FIELD_RULES = [
+    _cf_status_closed_reason_required,
+]
+
+_GOAL_CROSS_FIELD_RULES = [
+    _cf_status_closed_reason_required,
 ]
 
 _CROSS_FIELD_RULES_BY_SCHEMA: dict[str, list] = {
     'handoff': _HANDOFF_CROSS_FIELD_RULES,
     'plan': _PLAN_CROSS_FIELD_RULES,
+    'initiative': _INITIATIVE_CROSS_FIELD_RULES,
+    'goal': _GOAL_CROSS_FIELD_RULES,
     'handoff-archived': [],
     'cross-repo-memo': _MEMO_CROSS_FIELD_RULES,
     'cutover': _CUTOVER_CROSS_FIELD_RULES,

@@ -271,7 +271,7 @@ def _phase8_lineage_backstop(worktree_root: Path) -> list[dict[str, Any]]:
             continue
         successor_rel = plan_path.relative_to(worktree_root).as_posix()
         successor_status = fields.get("status")
-        blocked = successor_status != "abandoned"
+        blocked = successor_status not in ("abandoned", "closed")
         edges.append(
             {
                 "predecessor": Path(predecessor).as_posix(),

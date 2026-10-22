@@ -296,6 +296,10 @@ _TOUCHED_MODULE_FILES = [
     Path(app_session.__file__),
     Path(runtime_mod.__file__),
     Path(_git_root_util.__file__),
+    Path(app_session.__file__).with_name("_app_session_validate_contract.py"),
+    Path(app_session.__file__).with_name("_app_session_build_guard.py"),
+    Path(app_session.__file__).with_name("_app_session_browser.py"),
+    Path(app_session.__file__).with_name("_app_session_validate_run.py"),
 ]
 
 
@@ -318,9 +322,23 @@ def test_ac7_no_hand_rolled_create_no_window():
     `subprocess.` or a bare assignment), which would mean a hand-rolled flag
     slipped past no_console_creationflags().
     """
+    import ast
+
     for path in _TOUCHED_MODULE_FILES:
-        for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
-            if "CREATE_NO_WINDOW" not in line:
+        source = path.read_text(encoding="utf-8")
+        docstring_lines = set()
+        for node in ast.walk(ast.parse(source)):
+            if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+                body = node.body
+                if (
+                    body
+                    and isinstance(body[0], ast.Expr)
+                    and isinstance(body[0].value, ast.Constant)
+                    and isinstance(body[0].value.value, str)
+                ):
+                    docstring_lines.update(range(body[0].lineno, body[0].end_lineno + 1))
+        for lineno, line in enumerate(source.splitlines(), start=1):
+            if "CREATE_NO_WINDOW" not in line or lineno in docstring_lines:
                 continue
             # Prose naming it as the thing NOT to hand-roll is allowed
             # (app_session.py's own negative-spec docstring does this);
@@ -391,7 +409,7 @@ def test_ac8_dp2_absent_key_never_raises_via_launch(consuming_repo):
 
 @pytest.mark.parametrize(
     "op_name",
-    ["app_session.launch", "app_session.census", "app_session.teardown"],
+    ["app_session.launch", "app_session.census", "app_session.teardown", "app_session.validate"],
 )
 def test_ac9_registered_in_registry_map(op_name):
     assert _registry_map.OP_MODULE_MAP.get(op_name) == "coordinator_core.ops.app_session"

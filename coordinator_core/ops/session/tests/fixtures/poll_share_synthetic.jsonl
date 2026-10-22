@@ -1,0 +1,23 @@
+{"type":"user","sessionId":"S1","message":{"role":"user","content":"go"}}
+{"type":"assistant","sessionId":"S1","requestId":"r1","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_A","name":"Agent","input":{"prompt":"x"}}]}}
+{"type":"user","sessionId":"S1","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_A","content":"started"}]}}
+{"type":"assistant","sessionId":"S1","requestId":"r2","message":{"role":"assistant","content":[{"type":"text","text":"checking"}]}}
+{"type":"assistant","sessionId":"S1","requestId":"r2","message":{"role":"assistant","content":[{"type":"tool_use","id":"t2","name":"ListAgents","input":{}}]}}
+{"type":"user","sessionId":"S1","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t2","content":"[]"}]}}
+{"type":"assistant","sessionId":"S1","requestId":"r3","message":{"role":"assistant","content":[{"type":"tool_use","id":"t3","name":"ListAgents","input":{}}]}}
+{"type":"user","sessionId":"S1","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t3","content":"[]"}]}}
+{"type":"assistant","sessionId":"S1","requestId":"r4","message":{"role":"assistant","content":[{"type":"tool_use","id":"t4","name":"ListAgents","input":{}}]}}
+{"type":"user","sessionId":"S1","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t4","content":"[]"}]}}
+{"type":"assistant","sessionId":"S1","requestId":"r5","isSidechain":true,"message":{"role":"assistant","content":[{"type":"tool_use","id":"t5","name":"ListAgents","input":{}}]}}
+{"type":"assistant","sessionId":"S1","requestId":"r6","message":{"role":"assistant","content":[{"type":"tool_use","id":"t6","name":"Read","input":{"file_path":"f"}}]}}
+{"type":"user","sessionId":"S1","message":{"role":"user","content":"<task-notification>\n<task-id>a</task-id>\n<tool-use-id>toolu_A</tool-use-id>\n<status>completed</status>\n</task-notification>"}}
+{"type":"assistant","sessionId":"S1","requestId":"r7","message":{"role":"assistant","content":[{"type":"tool_use","id":"t7","name":"ListAgents","input":{}}]}}
+{"type":"assistant","sessionId":"S1","requestId":"r8","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_B","name":"Agent","input":{"prompt":"y"}}]}}
+{"type":"assistant","sessionId":"S1","requestId":"r9","message":{"role":"assistant","content":[{"type":"tool_use","id":"t9","name":"Monitor","input":{"command":"tail"}},{"type":"tool_use","id":"t9b","name":"Bash","input":{"command":"sleep 30"}}]}}
+{"type":"user","sessionId":"S1","message":{"role":"user","content":"<monitor-event>tick</monitor-event>"}}
+{"type":"assistant","sessionId":"S1","requestId":"r10","message":{"role":"assistant","content":[{"type":"text","text":"ok"}]}}
+{"type":"assistant","sessionId":"S1","requestId":"r11","message":{"role":"assistant","content":[{"type":"tool_use","id":"t11","name":"Edit","input":{}}]}}
+{"type":"user","sessionId":"S1","message":{"role":"user","content":"<task-notification>\n<tool-use-id>toolu_B</tool-use-id>\n</task-notification>"}}
+{"type":"assistant","sessionId":"S1","requestId":"r12","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_C","name":"Agent","input":{"prompt":"z"}}]}}
+{"type":"assistant","sessionId":"S1","requestId":"r13","message":{"role":"assistant","content":[{"type":"tool_use","id":"t13","name":"Bash","input":{"command":"ls"}}]}}
+{"type":"user","sessionId":"S1","message":{"role":"user","content":"<task-notification>\n<tool-use-id>toolu_C</tool-use-id>\n</task-notification>"}}

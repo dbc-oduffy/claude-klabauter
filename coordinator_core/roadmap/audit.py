@@ -1288,7 +1288,7 @@ def _audit5_dependency_order(r: _Reporter, run_id: str, data_root: Path) -> None
 #: check, because its declared writes are work that has not happened yet and
 #: can still collide. Inverting an approval set would silence exactly the
 #: early-roadmap plans this audit is for.
-_PLAN_TERMINAL_STATUSES = frozenset({"deferred", "abandoned", "superseded"})
+_PLAN_TERMINAL_STATUSES = frozenset({"deferred", "abandoned", "closed", "superseded"})
 
 
 def _normalize_declared_path(value: str, *, directory: bool = False) -> str:

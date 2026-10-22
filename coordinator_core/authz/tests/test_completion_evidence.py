@@ -53,6 +53,7 @@ def test_evidence_class_declared_ops() -> None:
     assert evidence_class("push.outstanding") is EvidenceClass.FIRE_AND_FORGET
     assert evidence_class("app_session.launch") is EvidenceClass.FIRE_AND_FORGET
     assert evidence_class("app_session.teardown") is EvidenceClass.FIRE_AND_FORGET
+    assert evidence_class("app_session.validate") is EvidenceClass.FIRE_AND_FORGET
 
 
 def test_evidence_class_undeclared_op_is_fail_closed() -> None:

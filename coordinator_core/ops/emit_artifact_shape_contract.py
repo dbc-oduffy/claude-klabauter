@@ -326,6 +326,9 @@ preserved there as the historical record; this port carries only the CURRENT pin
     `pm_approved: true` on a deferred row. A const is a narrowing — a document 11.1.0
     accepted can now fail — so MAJOR. Constant-moves-first — DoE regenerates against
     this stamp.
+  12.1.0 (2026-10-22) MINOR: additive enum widen of the `plan` liveness mapping by the
+    terminal `closed` status (DONE, beside `abandoned`). Constant-moves-first — DoE
+    regenerates against this stamp.
 Bump rule (unchanged from JS): additive $defs/enum-widen changes stay minor; any
 non-additive change (enum-narrow, field/required removal) bumps MAJOR regardless of
 whether a vendored consumer version-asserts yet — two different bundle bodies must
@@ -387,7 +390,7 @@ from coordinator_core.ops.records_query import liveness as _records_liveness
 from coordinator_core.session.declared_writes import declare_write
 
 
-CONTRACT_VERSION = "12.0.0"
+CONTRACT_VERSION = "12.1.0"
 
 GENERATES = []
 
@@ -672,7 +675,7 @@ LIVENESS_MAPPING: dict = {
             # check the way a bare regex match on a literal dict would have.
             "mapping": _derive_status_mapping(
                 "plan",
-                ["draft", "reviewed", "approved", "blocked", "executing", "landed", "implemented", "closed_partial", "deferred", "abandoned", "superseded"],
+                ["draft", "reviewed", "approved", "blocked", "executing", "landed", "implemented", "closed_partial", "deferred", "abandoned", "closed", "superseded"],
             ),
             "default": "LIVE",
         },

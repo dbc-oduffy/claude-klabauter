@@ -526,7 +526,12 @@ GENERATES_EXTERNAL = True
 # window: `ops/emit/tests/test_vendor_pin_version_consistency.py`, and any emit path
 # reaching `validate.assert_version_consistency`, until DoE regenerates the bundle and
 # claude-klabauter re-vendors.
-CONTRACT_VERSION = "4.13.0"
+#
+# MINOR bump 4.13.0 -> 4.14.0: `closed` joins PlanStatus and InitiativeStatus as a terminal
+# member. Additive enum widen only: no key removed, renamed or retyped, and no value valid
+# today becomes invalid. Expected red window: `test_committed_emit_drift.py` until DoE
+# regenerates the bundle at 4.14.0.
+CONTRACT_VERSION = "4.14.0"
 
 # ---------------------------------------------------------------------------
 # ProvenanceEnvelope conditional injection — ported verbatim from

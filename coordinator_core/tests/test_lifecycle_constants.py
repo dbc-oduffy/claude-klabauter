@@ -66,8 +66,12 @@ def test_handoff_archival_terminal_statuses_widens_with_terminal_status() -> Non
 # PLAN_*/SPEC_* axes
 # ---------------------------------------------------------------------------
 
+# I32: plan `closed` is a terminal plan status by design; no shared reader crosses the axes.
+_PLAN_AXIS_SANCTIONED_SHARED_TOKENS = frozenset({"closed"})
+
+
 def test_plan_terminal_status_free_of_handoff_vocabulary_tokens() -> None:
-    assert PLAN_TERMINAL_STATUS.isdisjoint(_HANDOFF_NEW_VOCAB_TOKENS)
+    assert PLAN_TERMINAL_STATUS & _HANDOFF_NEW_VOCAB_TOKENS <= _PLAN_AXIS_SANCTIONED_SHARED_TOKENS
 
 
 # ---------------------------------------------------------------------------

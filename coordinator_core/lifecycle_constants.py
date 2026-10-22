@@ -67,7 +67,7 @@ HANDOFF_ANCHOR_EXCLUDED_STATUSES = frozenset({"consumed", "archived", "abandoned
 # frozen/flippability-terminal at the plan_status_transition site and maps to
 # BLOCKED (not DONE) at the liveness site — three defensible, independent
 # answers, not a bug. Plan: 2026-07-27-plan-line-item-resolution-model.md § C8b.
-PLAN_ARCHIVABLE_STATUS = frozenset({"implemented", "closed_partial", "superseded", "abandoned"})
+PLAN_ARCHIVABLE_STATUS = frozenset({"implemented", "closed_partial", "superseded", "abandoned", "closed"})
 
 PLAN_TERMINAL_STATUS = PLAN_ARCHIVABLE_STATUS
 
@@ -103,6 +103,7 @@ PLAN_ORPHAN_TERMINAL_STATUS = frozenset(
         "executed",
         "superseded",
         "abandoned",
+        "closed",
         "deferred",
     }
 )

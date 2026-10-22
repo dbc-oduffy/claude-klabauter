@@ -7,10 +7,11 @@ from pydantic import BaseModel, ConfigDict, Field
 from coordinator_core.contract.cockpit_schema.entities.goal import Goal
 from coordinator_core.contract.cockpit_schema.provenance import ContentHash, ProvenanceEnvelope
 
-InitiativeStatus = Literal["active", "paused", "shipped", "abandoned"]
+InitiativeStatus = Literal["active", "paused", "shipped", "abandoned", "closed"]
 """
-Initiative lifecycle — canonical-4 set.
-active=in flight, paused=temporarily blocked, shipped=done, abandoned=cancelled.
+Initiative lifecycle — canonical-5 set.
+active=in flight, paused=temporarily blocked, shipped=done, abandoned=cancelled,
+closed=terminal, closed_reason required.
 """
 
 

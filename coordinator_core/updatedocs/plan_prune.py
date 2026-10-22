@@ -47,7 +47,7 @@ from coordinator_core.updatedocs import _common, _stamp_cache
 from coordinator_core.updatedocs._common import UpdatedocsTargetMissing, read_head
 from coordinator_core.updatedocs._stamp_cache import MISS, StampCache
 
-TERMINAL_PLAN_STATUSES = frozenset({"implemented", "deferred", "abandoned", "superseded"})
+TERMINAL_PLAN_STATUSES = frozenset({"implemented", "deferred", "abandoned", "superseded", "closed"})
 
 DEFAULT_AGE_FLOOR_DAYS = 14
 

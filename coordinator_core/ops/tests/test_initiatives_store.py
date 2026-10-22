@@ -8,7 +8,7 @@ Coverage:
                            cleanly and satisfies the required-field + enum constraints
   (b) required_fields    — id and label are present and non-empty strings
   (c) target_date        — is either None (burn-down shape) or a valid ISO YYYY-MM-DD string
-  (d) status_enum        — status is in canonical-4 {active, paused, shipped, abandoned}
+  (d) status_enum        — status is in canonical-5 {active, paused, shipped, abandoned, closed}
   (e) gate_b_constraint  — ALL currently seeded files use status: active (Gate-B constraint;
                            non-active is reserved until DoE InitiativeStatus source widen lands)
   (f) id_filename_match  — id field matches the YAML filename stem
@@ -33,8 +33,8 @@ from coordinator_core.ops.emit.sections.initiatives import _simple_yaml_load
 # Constants
 # ---------------------------------------------------------------------------
 
-# Canonical-4 status values; DR-207 D2 amended 2026-07-05.
-_CANONICAL_4 = frozenset({"active", "paused", "shipped", "abandoned"})
+# Canonical-5 status values; DR-207 D2 amended 2026-07-05, `closed` added by I32.
+_CANONICAL_5 = frozenset({"active", "paused", "shipped", "abandoned", "closed"})
 
 # ISO date pattern — YYYY-MM-DD
 _ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -126,12 +126,12 @@ def test_target_date_nullable(initiative_file: tuple[Path, dict]) -> None:
     )
 
 
-def test_status_in_canonical_4(initiative_file: tuple[Path, dict]) -> None:
-    """(d) status must be one of the canonical-4 values."""
+def test_status_in_canonical_5(initiative_file: tuple[Path, dict]) -> None:
+    """(d) status must be one of the canonical-5 values."""
     path, data = initiative_file
     status = data.get("status")
-    assert status in _CANONICAL_4, (
-        f"{path.name}: status {status!r} not in canonical-4 {sorted(_CANONICAL_4)}"
+    assert status in _CANONICAL_5, (
+        f"{path.name}: status {status!r} not in canonical-5 {sorted(_CANONICAL_5)}"
     )
 
 
@@ -230,21 +230,21 @@ def test_fixture_roundtrip_optional_fields(tmp_path: Path) -> None:
     assert data["status_reason"] is None
 
 
-def test_fixture_roundtrip_all_canonical_4(tmp_path: Path) -> None:
-    """(g) Each canonical-4 status value is accepted by the schema enum check.
+def test_fixture_roundtrip_all_canonical_5(tmp_path: Path) -> None:
+    """(g) Each canonical-5 status value is accepted by the schema enum check.
 
-    NOTE: This confirms the parser accepts all four values.  The Gate-B constraint
+    NOTE: This confirms the parser accepts all five values.  The Gate-B constraint
     (test_gate_b_constraint_status_active) separately enforces that the production
     seeded files ONLY use 'active' until Gate B lands.  These are different concerns:
-    the schema admits canonical-4; the gate constrains the current production set.
+    the schema admits canonical-5; the gate constrains the current production set.
     """
-    for status in _CANONICAL_4:
+    for status in _CANONICAL_5:
         fpath = tmp_path / f"test-{status}.yaml"
         fpath.write_text(
             f"id: test-{status}\nlabel: Test {status}\nstatus: {status}\ntarget_date: null\n",
             encoding="utf-8",
         )
         data = _load_initiative_file(fpath)
-        assert data["status"] in _CANONICAL_4, (
-            f"Status {status!r} parsed as {data['status']!r} — not in canonical-4"
+        assert data["status"] in _CANONICAL_5, (
+            f"Status {status!r} parsed as {data['status']!r} — not in canonical-5"
         )

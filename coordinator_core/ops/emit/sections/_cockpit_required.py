@@ -21,6 +21,7 @@ PLAN_STATUS_ENUM = frozenset({
     "closed_partial",
     "deferred",
     "abandoned",
+    "closed",
     "superseded",
 })
 

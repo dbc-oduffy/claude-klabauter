@@ -2636,15 +2636,15 @@ def _dispatch_has_live_children(root: Path, candidate: str) -> dict[str, Any]:
 # makes the omission load-bearing (those 4 plans would otherwise flip from
 # correctly-terminal to falsely-`open`).
 _LEG_A_TERMINAL_PLAN_STATUS = frozenset(
-    {"implemented", "shipped", "superseded", "deferred", "abandoned", "complete"}
+    {"implemented", "shipped", "superseded", "deferred", "abandoned", "closed", "complete"}
 )
 
 
 # ---------------------------------------------------------------------------
 # C4 (docs/plans/2026-08-27-the-review-gate-measures-the-whole-session.md,
 # AC2b/AC3/AC4/AC5/AC7): the review-receipt gate. Reaching any
-# `_LEG_A_TERMINAL_PLAN_STATUS` member other than `superseded`/`abandoned`
-# (constraint 2's total mapping — `_status_requires_review_receipt` below)
+# `_LEG_A_TERMINAL_PLAN_STATUS` member other than `superseded`/`abandoned`/
+# `closed` (constraint 2's total mapping — `_status_requires_review_receipt` below)
 # requires at least one COUNTING receipt: a sidecar under this session's own
 # `state/subagent-share/<sid>/` directory whose `agent_type` frontmatter
 # (namespace-stripped) names a `coordinator_core.reviewer_vocabulary.
@@ -2666,8 +2666,8 @@ _LEG_A_TERMINAL_PLAN_STATUS = frozenset(
 class ReviewReceiptGate(NamedTuple):
     #: True whenever `target_status` is a member of the mapping this gate
     #: covers at all (i.e. every `_LEG_A_TERMINAL_PLAN_STATUS` member and
-    #: any unrecognised value) — `False` only for the two escape-hatch
-    #: statuses (`superseded`/`abandoned`), which this gate never blocks.
+    #: any unrecognised value) — `False` only for the three escape-hatch
+    #: statuses (`superseded`/`abandoned`/`closed`), which this gate never blocks.
     applies: bool
     #: True iff `applies` and no counting receipt was found — the fact
     #: promoted into `jp-review-receipt-block-stamp` (constraint 2: never
@@ -2679,15 +2679,16 @@ class ReviewReceiptGate(NamedTuple):
 
 
 def _status_requires_review_receipt(status: Any) -> bool:
-    """Constraint 2's total mapping: `False` for `superseded`/`abandoned`
-    only (the PM's own escape hatch — `abandoned` is the terminal-status
-    equivalent of the spine-row disposition `wont_do`); `True` for every
-    other `_LEG_A_TERMINAL_PLAN_STATUS` member AND any unrecognised value.
-    The mapping is total, not partial: an unclassified status resolves
-    toward requiring review (constraint 4), never toward silently passing
-    it through. Never raises — a non-string `status` is simply not one of
-    the two named exceptions."""
-    return status not in ("superseded", "abandoned")
+    """Constraint 2's total mapping: `False` for `superseded`/`abandoned`/
+    `closed` only (the PM's own escape hatch — `abandoned` is the
+    terminal-status equivalent of the spine-row disposition `wont_do`;
+    `closed` is a deliberate close that delivered nothing to review); `True`
+    for every other `_LEG_A_TERMINAL_PLAN_STATUS` member AND any
+    unrecognised value. The mapping is total, not partial: an unclassified
+    status resolves toward requiring review (constraint 4), never toward
+    silently passing it through. Never raises — a non-string `status` is
+    simply not one of the three named exceptions."""
+    return status not in ("superseded", "abandoned", "closed")
 
 
 def _parse_review_receipt_timestamp(value: Any) -> Optional[datetime]:

@@ -220,7 +220,7 @@ class TestInitiativeServeSet:
         common_dir = _make_git_repo(repo_root)
         ini_dir = repo_root / "state" / "initiatives"
 
-        for status in ("active", "paused", "shipped", "abandoned"):
+        for status in ("active", "paused", "shipped", "abandoned", "closed"):
             _seed_initiative(
                 ini_dir,
                 f"{status}.yaml",
@@ -232,7 +232,7 @@ class TestInitiativeServeSet:
         result = _handler({}, repo_root=common_dir)
 
         returned_statuses = {e["id"]: e["status"] for e in result["initiatives"]}
-        for status in ("active", "paused", "shipped", "abandoned"):
+        for status in ("active", "paused", "shipped", "abandoned", "closed"):
             assert returned_statuses[status] == status
 
     def test_repo_root_none_returns_empty(self):

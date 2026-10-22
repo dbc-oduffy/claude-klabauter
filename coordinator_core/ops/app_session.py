@@ -514,3 +514,196 @@ def _teardown(params: dict, repo_root: Optional[Path] = None) -> dict:
         "was_live": was_live,
         "reaped": was_live and not denied,
     }
+
+
+# --- app_session.validate ---------------------------------------------------
+
+
+def _probe_browser_import():
+    """Indirection over `_app_session_browser.probe_import`; imported lazily so the
+    engine stays importable without the browser extra. Tests patch this name."""
+    from coordinator_core.ops import _app_session_browser
+
+    return _app_session_browser.probe_import()
+
+
+def _port_accepting(port: int) -> bool:
+    import socket
+
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=0.25):
+            return True
+    except OSError:
+        return False
+
+
+def _spawn_runner(argv: list, cwd: str, log_path: Path):
+    """Spawn the detached validate runner; output goes to `log_path`."""
+    import os
+    import subprocess
+
+    from coordinator_core.ops.ceremony.detached_spawn import _windows_detached_flags
+
+    kwargs: dict = {}
+    if hasattr(os, "fork"):
+        kwargs["start_new_session"] = True
+    else:
+        kwargs["creationflags"] = _windows_detached_flags()
+    with open(log_path, "ab") as log:
+        return subprocess.Popen(
+            argv,
+            cwd=cwd,
+            stdin=subprocess.DEVNULL,
+            stdout=log,
+            stderr=subprocess.STDOUT,
+            **kwargs,
+        )
+
+
+def _create_epoch(pid: int) -> Optional[int]:
+    try:
+        import psutil
+
+        return int(psutil.Process(pid).create_time())
+    except Exception:
+        return None
+
+
+def _pid_is_live(pid, epoch) -> bool:
+    # The guard passes epochs as floats; stable_pid_alive parses the stored value with int().
+    return _handle_is_live({"pid": pid, "start_epoch": int(epoch)})
+
+
+def _validate_refusal(stage: str, error: str, **extra) -> dict:
+    return {"ok": False, "configured": True, "stage": stage, "error": error, **extra}
+
+
+@register_op("app_session.validate")
+def _validate(params: dict, repo_root: Optional[Path] = None) -> dict:
+    """JSON-RPC "app_session.validate" handler.
+
+    Params: key (required), variant, out_dir, repo_root. Runs only the cheap
+    stages (config, browser import probe, tree lock + launch-conflict guard,
+    port check) and spawns the detached runner, which owns build, start, ready,
+    sweep, report and teardown. Never blocks or sleeps: one lock attempt.
+    """
+    import os
+    from datetime import datetime, timezone
+
+    from coordinator_core.ops import _app_session_build_guard as guard
+    from coordinator_core.ops import _app_session_validate_contract as contract
+
+    key = params.get("key")
+    if not key:
+        return {"ok": False, "error": "app_session.validate requires 'key'"}
+
+    root = _resolve_repo_root(params.get("repo_root") or (str(repo_root) if repo_root else None))
+    if root is None:
+        return {"ok": False, "error": "could not resolve consuming repo root"}
+
+    target = _resolve_target_config(root, key)
+    if target is None:
+        return _absent_key_result(
+            "app_session.validate", key, f"no app_session.{key} entry in coordinator.local.md"
+        )
+
+    variant = params.get("variant") or None
+    config = contract.parse_validate_config(target, variant)
+    if isinstance(config, contract.ConfigError):
+        return _validate_refusal("config", f"{config.field}: {config.reason}")
+
+    availability = _probe_browser_import()
+    if not availability.ok:
+        return _validate_refusal(
+            "browser",
+            availability.reason or "browser driver unavailable",
+            install_hint=availability.install_hint,
+        )
+
+    handle_dir = _handle_dir(root)
+    my_pid = os.getpid()
+    my_epoch = _create_epoch(my_pid) or 0
+    lock = guard.acquire_tree_lock(
+        handle_dir, root, my_pid, my_epoch, _pid_is_live
+    )
+    if not lock.acquired:
+        holder = lock.holder or {}
+        return _validate_refusal(
+            "guard",
+            f"worktree validate lock held by pid {holder.get('pid')}",
+            holder=holder,
+        )
+
+    def _release() -> None:
+        guard.release_tree_lock(lock.path, my_pid)
+
+    try:
+        handles = {h.get("key"): h for h in _list_handles(root) if h.get("key")}
+        conflicts = guard.check_launch_conflicts(
+            handles, root, config.build_isolated, _pid_is_live
+        )
+        if conflicts:
+            _release()
+            return _validate_refusal(
+                "guard",
+                "live launch handle on this worktree: "
+                + ", ".join(str(c.get("key")) for c in conflicts),
+                conflicts=[{"key": c.get("key"), "pid": c.get("pid")} for c in conflicts],
+            )
+
+        if _port_accepting(config.port):
+            _release()
+            return _validate_refusal("start", f"127.0.0.1:{config.port} is already accepting connections")
+
+        now = datetime.now(timezone.utc)
+        out_dir = params.get("out_dir")
+        if out_dir:
+            run_dir = Path(out_dir)
+        else:
+            run_dir = (
+                Path(root) / "scratch" / "app-session-validate" / str(key)
+                / (variant or "default") / now.strftime("%Y%m%dT%H%M%SZ")
+            )
+        handle_key = f"{key}@validate"
+        spec = contract.RunSpec(
+            key=key,
+            variant=variant,
+            repo_root=root,
+            worktree=root,
+            config=contract.config_spec_dict(config),
+            lock_path=str(lock.path),
+            handle_key=handle_key,
+            created_at=now.isoformat(),
+        )
+        run_dir.mkdir(parents=True, exist_ok=True)
+        contract.write_run_spec(run_dir, spec)
+        argv = contract.runner_argv(run_dir)
+        proc = _spawn_runner(argv, root, run_dir / "runner.log")
+    except Exception as exc:
+        _release()
+        return _validate_refusal("start", redact_for_diag(f"{type(exc).__name__}: {exc}"))
+
+    runner_epoch = _create_epoch(proc.pid)
+    guard.transfer_tree_lock(lock.path, proc.pid, runner_epoch or 0)
+    _write_handle(
+        root,
+        handle_key,
+        {
+            "key": handle_key,
+            "pid": proc.pid,
+            "start_epoch": runner_epoch,
+            "argv": argv,
+            "cwd": root,
+            "launched_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        },
+    )
+    return {
+        "ok": True,
+        "configured": True,
+        "started": True,
+        "key": key,
+        "variant": variant,
+        "run_dir": str(run_dir),
+        "runner_pid": proc.pid,
+        "wait_budget_s": contract.wait_budget_s(config),
+    }

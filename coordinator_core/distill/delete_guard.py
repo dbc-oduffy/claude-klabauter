@@ -800,7 +800,7 @@ def check_harvest_provenance(frontmatter_text: str, path: Path, repo_root: Path)
 #: Plan statuses the plan class can clear. A delivered plan must also be harvested; a plan
 #: that was never delivered is never harvested, so it carries no harvest condition.
 PLAN_DELIVERED_STATUSES = frozenset({"implemented"})
-PLAN_NEVER_DELIVERED_STATUSES = frozenset({"superseded", "abandoned", "cancelled"})
+PLAN_NEVER_DELIVERED_STATUSES = frozenset({"superseded", "abandoned", "closed", "cancelled"})
 
 #: `scratch`/`scratch-hold` hold stale tree copies: `rg` searches an explicitly named path even
 #: when it is gitignored, and a copy's citation is not a dependency.

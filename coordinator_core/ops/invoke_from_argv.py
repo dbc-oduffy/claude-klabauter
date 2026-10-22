@@ -345,7 +345,17 @@ def _load_entrypoint_main(script: Path, entrypoint: str) -> Callable[[Optional[l
             f"invoke.from_argv: could not load entrypoint {entrypoint!r} from {script}"
         )
     module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    # TRAP: dataclasses (and `from __future__ import annotations`) resolve the
+    # defining module through sys.modules[cls.__module__]; unregistered, they
+    # raise AttributeError on None.__dict__. The same generated name is
+    # overwritten on every load, so a warm server that outlives a publish
+    # re-execs the fresh source -- keep it that way (no "already loaded" skip).
+    sys.modules[module_name] = module
+    try:
+        spec.loader.exec_module(module)
+    except BaseException:
+        sys.modules.pop(module_name, None)
+        raise
 
     main_fn = getattr(module, "main", None)
     if not callable(main_fn):

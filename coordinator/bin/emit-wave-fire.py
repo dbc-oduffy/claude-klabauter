@@ -529,7 +529,7 @@ def _baton_arg(record: dict) -> dict:
     }
 
 
-_SHELVED_PLAN_STATUSES = frozenset({"deferred", "abandoned", "superseded"})
+_SHELVED_PLAN_STATUSES = frozenset({"deferred", "abandoned", "closed", "superseded"})
 
 
 def _broken_link_reason(r: dict) -> str:

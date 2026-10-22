@@ -35,7 +35,7 @@ def _write_initiative(initiatives_dir: Path, stem: str, status: str | None) -> N
     (initiatives_dir / f"{stem}.yaml").write_text(content, encoding="utf-8")
 
 
-@pytest.mark.parametrize("canonical_status", ["active", "paused", "shipped", "abandoned"])
+@pytest.mark.parametrize("canonical_status", ["active", "paused", "shipped", "abandoned", "closed"])
 def test_canonical_status_passes_through(tmp_path: Path, canonical_status: str) -> None:
     ini_dir = tmp_path / "initiatives"
     ini_dir.mkdir()

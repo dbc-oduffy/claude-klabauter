@@ -220,9 +220,8 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     (
         "coordinator_core.ops.plan_mise_prep_probe",
         'registers "plan.mise_prep_probe", "plan.mise_upgrade_apply", '
-        '"plan.mise_certify_probe"',
+        '"plan.mise_certify_probe", "plan.census_set"',
     ),
-    ("coordinator_core.ops.plan_census_order", 'registers "plan.census_order"'),
     ("coordinator_core.ops.plan_gated_criteria_met", 'registers "plan.gated_criteria_met"'),
     ("coordinator_core.ops.queue_append", 'registers "queue.append"'),
     ("coordinator_core.ops.decision_record_mint",
@@ -733,7 +732,7 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     (
         "coordinator_core.ops.app_session",
         'registers "app_session.launch", "app_session.census", '
-        '"app_session.teardown" (docs/plans/2026-08-15-app-session-launch-'
+        '"app_session.teardown", "app_session.validate" (docs/plans/2026-08-15-app-session-launch-'
         "census-teardown-ops.md § C3)",
     ),
     (

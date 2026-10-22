@@ -141,5 +141,161 @@ class TestTransportFailure(unittest.TestCase):
         self.assertIn("transport down", stderr)
 
 
+class _Clock:
+    def __init__(self):
+        self.now = 0.0
+        self.sleeps = []
+
+    def monotonic(self):
+        return self.now
+
+    def sleep(self, s):
+        self.sleeps.append(s)
+        self.now += s
+
+
+def _started(run_dir, budget=10):
+    return {
+        "ok": True,
+        "configured": True,
+        "started": True,
+        "key": "web",
+        "variant": None,
+        "run_dir": str(run_dir),
+        "runner_pid": 1,
+        "wait_budget_s": budget,
+    }
+
+
+def _run_validate(argv, route_side_effect, tmp_path, result=None):
+    import json
+
+    if result is not None:
+        (Path(tmp_path) / "result.json").write_text(json.dumps(result), encoding="utf-8")
+    clock = _Clock()
+    with mock.patch.object(_cli_mod, "_sleep", clock.sleep), mock.patch.object(
+        _cli_mod, "_monotonic", clock.monotonic
+    ), mock.patch.object(
+        _cli_mod.cc_invoke, "route", side_effect=route_side_effect
+    ) as route_mock:
+        code, out, err = _run(argv)
+    return code, out, err, route_mock, clock
+
+
+class TestValidateVerb(unittest.TestCase):
+    def setUp(self):
+        import tempfile
+
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.run_dir = Path(self._tmp.name)
+
+    def test_help_lists_validate(self):
+        code, out, _ = _run(["--help"])
+        self.assertEqual(code, 0)
+        self.assertIn("validate", out)
+
+    def test_missing_key_exits_2(self):
+        with mock.patch.object(_cli_mod.cc_invoke, "route") as route_mock:
+            code, _, err = _run(["validate"])
+        self.assertEqual(code, 2)
+        self.assertIn("--key", err)
+        route_mock.assert_not_called()
+
+    def test_wait_non_integer_exits_2(self):
+        with mock.patch.object(_cli_mod.cc_invoke, "route") as route_mock:
+            code, _, _ = _run(["validate", "--key", "web", "--wait", "abc"])
+        self.assertEqual(code, 2)
+        route_mock.assert_not_called()
+
+    def test_clean_result_exits_0_and_params_carry_variant_and_out(self):
+        final = {"ok": True, "configured": True, "defect_count": 0}
+        code, out, _, route_mock, _ = _run_validate(
+            ["validate", "--key", "web", "--variant", "v1", "--out", "/o"],
+            [_started(self.run_dir)],
+            self.run_dir,
+            final,
+        )
+        self.assertEqual(code, 0)
+        self.assertEqual(__import__("json").loads(out), final)
+        op, params, _ = route_mock.call_args.args[:3]
+        self.assertEqual(op, "app_session.validate")
+        self.assertEqual(
+            params,
+            {"repo_root": "/repo/root", "key": "web", "variant": "v1", "out_dir": "/o"},
+        )
+
+    def test_defects_exit_4(self):
+        final = {"ok": True, "configured": True, "defect_count": 3}
+        code, *_ = _run_validate(
+            ["validate", "--key", "web"], [_started(self.run_dir)], self.run_dir, final
+        )
+        self.assertEqual(code, 4)
+
+    def test_refusal_exits_5(self):
+        refusal = {"ok": False, "configured": True, "stage": "config", "error": "x"}
+        code, out, _, route_mock, _ = _run_validate(
+            ["validate", "--key", "web"], [refusal], self.run_dir
+        )
+        self.assertEqual(code, 5)
+        self.assertEqual(__import__("json").loads(out), refusal)
+        route_mock.assert_called_once()
+
+    def test_incomplete_result_exits_5(self):
+        final = {"ok": False, "configured": True, "stage": "build", "error": "e"}
+        code, *_ = _run_validate(
+            ["validate", "--key", "web"], [_started(self.run_dir)], self.run_dir, final
+        )
+        self.assertEqual(code, 5)
+
+    def test_not_configured_exits_0(self):
+        nc = {"ok": True, "configured": False}
+        code, out, *_ = _run_validate(["validate", "--key", "web"], [nc], self.run_dir)
+        self.assertEqual(code, 0)
+        self.assertEqual(__import__("json").loads(out), nc)
+
+    def test_lapse_exits_5_and_tears_down(self):
+        code, out, _, route_mock, _ = _run_validate(
+            ["validate", "--key", "web"], [_started(self.run_dir, budget=3), {"ok": True}], self.run_dir
+        )
+        self.assertEqual(code, 5)
+        parsed = __import__("json").loads(out)
+        self.assertFalse(parsed["ok"])
+        self.assertEqual(parsed["stage"], "sweep")
+        self.assertEqual(route_mock.call_count, 2)
+        op, params, _ = route_mock.call_args.args[:3]
+        self.assertEqual(op, "app_session.teardown")
+        self.assertEqual(params["key"], "web@validate")
+
+    def test_wait_recalls_op_on_guard_refusal(self):
+        guard = {"ok": False, "configured": True, "stage": "guard", "error": "held"}
+        final = {"ok": True, "configured": True, "defect_count": 0}
+        code, _, _, route_mock, clock = _run_validate(
+            ["validate", "--key", "web", "--wait", "30"],
+            [guard, guard, _started(self.run_dir)],
+            self.run_dir,
+            final,
+        )
+        self.assertEqual(code, 0)
+        self.assertEqual(route_mock.call_count, 3)
+        self.assertEqual(clock.sleeps[:2], [2, 2])
+
+    def test_guard_refusal_without_wait_is_not_retried(self):
+        guard = {"ok": False, "configured": True, "stage": "guard", "error": "held"}
+        code, _, _, route_mock, _ = _run_validate(
+            ["validate", "--key", "web"], [guard], self.run_dir
+        )
+        self.assertEqual(code, 5)
+        route_mock.assert_called_once()
+
+    def test_wait_lapses_on_persistent_guard(self):
+        guard = {"ok": False, "configured": True, "stage": "guard", "error": "held"}
+        code, _, _, route_mock, _ = _run_validate(
+            ["validate", "--key", "web", "--wait", "5"], [guard] * 10, self.run_dir
+        )
+        self.assertEqual(code, 5)
+        self.assertEqual(route_mock.call_count, 3)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -58,6 +58,9 @@ OP_COMPLETION_EVIDENCE: "types.MappingProxyType[str, EvidenceClass]" = types.Map
         "close.review": EvidenceClass.FIRE_AND_FORGET,
         "app_session.launch": EvidenceClass.FIRE_AND_FORGET,
         "app_session.teardown": EvidenceClass.FIRE_AND_FORGET,
+        # validate returns once the detached runner is spawned; the sweep
+        # outcome lands later in result.json, so the op cannot observe it.
+        "app_session.validate": EvidenceClass.FIRE_AND_FORGET,
     }
 )
 

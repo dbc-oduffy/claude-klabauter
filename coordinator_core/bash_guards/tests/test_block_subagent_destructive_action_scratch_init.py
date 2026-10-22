@@ -45,6 +45,18 @@ def test_init_under_the_session_scratchpad_is_allowed(world):
     assert _run("git init", pad / "fixture") is None
 
 
+def test_init_under_a_uid_suffixed_claude_root_is_allowed(world):
+    _pad, repo, temp = world
+    uid_pad = temp / "claude-501" / "proj" / SESSION / "scratchpad"
+    uid_pad.mkdir(parents=True)
+    assert _run(f"git init {uid_pad / 'fixture'}", repo) is None
+    assert _run("git init fixture", uid_pad) is None
+    other = temp / "claude-501" / "proj" / "other-sess" / "scratchpad"
+    other.mkdir(parents=True)
+    assert _run(f"git init {other / 'f'}", repo) is not None
+    assert _run(f"git init {temp / 'claudex' / 'proj' / SESSION / 'scratchpad' / 'f'}", repo) is not None
+
+
 def test_init_inside_the_tracked_tree_is_denied(world):
     _pad, repo, _ = world
     assert _run(f"git init {repo / 'tracked' / 'x'}", repo) is not None
