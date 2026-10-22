@@ -336,7 +336,7 @@ _DECLARATIVE_STALL_PATTERNS = [
     # A claimed block that names no blocker: "blocked"/"waiting" not followed
     # by what it is blocked on.
     re.compile(
-        r"\bI(?:'m|\s+am)\s+(?:currently\s+|now\s+)?(?:blocked|stuck|waiting)\b"
+        r"\bI(?:['’]m|\s+am)\s+(?:currently\s+|now\s+)?(?:blocked|stuck|waiting)\b"
         r"(?!\s+(?:on|by|because|until|for|from|at|due|in)\b)",
         re.IGNORECASE,
     ),

@@ -211,7 +211,8 @@ def _git_root_walk(start: str) -> "Optional[str]":
 
 def _turn_intent_step(payload: dict, text: str) -> bool:
     """Record this stop's turn intent; True iff the stop must be blocked for a
-    missing tail. Blocks only with a role marker and a durable counter."""
+    missing tail. Blocks only with a durable counter, and only with a role marker
+    or a final turn that announces unrun work."""
     session_id = payload.get("session_id")
     cwd = payload.get("cwd")
     if not text.strip() or not isinstance(cwd, str) or not cwd:
