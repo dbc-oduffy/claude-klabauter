@@ -20,7 +20,6 @@ PLAN_B = "docs/plans/2026-10-16-b.md"
 @pytest.fixture
 def repo(tmp_path, monkeypatch):
     (tmp_path / ".git").mkdir()
-    monkeypatch.setattr(c, "concurrent_run_budget", lambda physical_cores=None: 4)
     return tmp_path
 
 

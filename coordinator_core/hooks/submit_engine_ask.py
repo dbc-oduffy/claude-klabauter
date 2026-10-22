@@ -16,7 +16,7 @@ halt that names the gap, never a run.
 or the fan-out, and either beside `{sizing}` is refused) (each ask a
 separate sibling run via `dispatch.ask_fanout`; the call fires the first ready run and the allow reason
 carries `{parent_id, runs}` plus the other ready runs' fire calls; a one-element array is an `ask`; a
-slice `{sizing}` is denied until its `after` predecessors land and while its parent is at budget), optional `repo` (absolute path; else the payload
+slice `{sizing}` is denied until its `after` predecessors land), optional `repo` (absolute path; else the payload
 cwd's repo, or for an ask whose absolute `context` lies in another registered repo, that repo), optional `source: "pm" | "relayed"` (a chosen source is forwarded to the engine verbatim as `ask_source`; an unmarked single `ask` defaults to `pm` on the session's first human turn and to `relayed` with one warning in the allow reason on any later turn; only `source: "pm"` makes it the PM's
 words, which the engine verifies against the session's recorded turns (refused when contradicted, flagged
 when no log resolves); on `asks` it is the default for items naming no `source` of their own; a redirected
@@ -392,10 +392,9 @@ def _read_parent(root: Path, parent_id: str):
 
 
 def _slice_deny(root: Path, marker: tuple[str, str]) -> Optional[str]:
-    """Why a slice sizing may not start now: an unlanded `after` predecessor, or a full budget."""
+    """Why a slice sizing may not start now: an unlanded `after` predecessor."""
     from coordinator_core.ops.dispatch_emit.ask_fanout_contract import (
-        STATUS_AFTER, STATUS_HALTED, STATUS_HELD, STATUS_LANDED, STATUS_QUEUED, STATUS_RUNNING,
-        concurrent_run_budget,
+        STATUS_HALTED, STATUS_HELD, STATUS_LANDED,
     )
 
     from coordinator_core.ops.dispatch_emit.ask_fanout_contract import read_superseded_by
@@ -428,10 +427,6 @@ def _slice_deny(root: Path, marker: tuple[str, str]) -> Optional[str]:
                 f'fresh {{ask, supersedes: "{run_id}"}}.'
             )
         return f"Predecessor {pred} has not landed ({state or 'not started'}); its close names this run's fire call."
-    if mine.status in (STATUS_QUEUED, STATUS_AFTER):
-        running = [r.run_id for r in parent.runs if r.run_id != run_id and _status_of(root, r.run_id) == STATUS_RUNNING]
-        if len(running) >= concurrent_run_budget():
-            return f"Parent {parent_id} is at its run budget; running: {', '.join(running)}. A close names this run's fire call."
     return None
 
 
@@ -473,18 +468,8 @@ def _fan_tail(root: Path, reply: Mapping[str, Any], fired_run: str) -> str:
     if others:
         parts.append("Fire the listed runs now, one call each, this turn: " + " ".join(others))
     after = [r.run_id for r in runs if r.status == "after"]
-    queued = [r.run_id for r in runs if r.status == "queued"]
     if after:
         parts.append(f"Waiting on a predecessor ({', '.join(after)}): named by the close of the run that frees them.")
-    if queued:
-        from coordinator_core.ops.dispatch_emit.ask_fanout_contract import concurrent_run_budget
-
-        # A queued run has no predecessor; the only thing holding it is this per-submission budget.
-        parts.append(
-            f"Queued by the per-submission run budget ({', '.join(queued)}): "
-            f"{concurrent_run_budget()} concurrent runs per submission (physical_cores // 4, "
-            "ask_fanout_contract.concurrent_run_budget); each sibling's close frees a slot and names the run it frees."
-        )
     parts.append("Each run's completion is its own wake.")
     return " ".join(parts)
 

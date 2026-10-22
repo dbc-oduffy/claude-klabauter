@@ -123,7 +123,7 @@ def test_asks_submission_through_the_real_fanout_and_emit(repo, monkeypatch):
     hub.mkdir(parents=True)
     monkeypatch.setattr(store, "baton_dir", lambda s, cwd=None: repo.parent / "hub" / s)
     assert PT.append_turn("do these budget-many separable jobs", session_id="sess-real-emit")["ok"]
-    count = max(2, contract.concurrent_run_budget())
+    count = 4
     asks = [{"ask": f"job {i}", "label": f"job-{i}", "writes": [f"pkg/m{i}.py"]} for i in range(count)]
 
     with _count_spawns_attributed(monkeypatch) as spawns:

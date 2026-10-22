@@ -128,7 +128,6 @@ _PLAN = "docs/plans/2026-10-16-a.md"
 @pytest.fixture
 def fan_repo(tmp_path, monkeypatch):
     (tmp_path / ".git").mkdir()
-    monkeypatch.setattr(_fc, "concurrent_run_budget", lambda physical_cores=None: 4)
     sizing = _sizing(tmp_path, "a", _PLAN)
     (tmp_path / _PLAN).parent.mkdir(parents=True, exist_ok=True)
     (tmp_path / _PLAN).write_text(

@@ -569,3 +569,15 @@ class TestShapesProjection:
 
         assert index["shapes"] == []
         assert validate_frontmatter(index, cap_index._INDEX_SCHEMA_PATH) == []
+
+    def test_duplicate_shape_id_skipped_first_wins(
+        self, tmp_path: Path, monkeypatch,
+    ) -> None:
+        first = _shape("dup-shape", "host-repo")
+        second = {**_shape("dup-shape", "host-repo"), "shape_label": "second"}
+        index, skipped = _build_with_shapes(tmp_path, monkeypatch, [first, second])
+
+        assert index["shapes"] == [first]
+        assert len(skipped) == 1
+        assert skipped[0].endswith(": shape dup-shape: duplicate shape_id")
+        assert validate_frontmatter(index, cap_index._INDEX_SCHEMA_PATH) == []

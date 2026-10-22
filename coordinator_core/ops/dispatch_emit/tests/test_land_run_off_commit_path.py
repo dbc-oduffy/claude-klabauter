@@ -143,7 +143,6 @@ DRIVERS = {
 
 @pytest.mark.parametrize("mode", sorted(DRIVERS))
 def test_no_corpus_scan_or_commit_v2_handler_runs_during_a_landing(repo, monkeypatch, mode):
-    monkeypatch.setattr(fanout_contract, "concurrent_run_budget", lambda physical_cores=None: 4)
     monkeypatch.setattr(ask_fanout, "fanout", lambda p, r: {"exit_code": 0, "ready": [], "runs": []})
     params = {"run_id": RUN, "session_id": None, **DRIVERS[mode](repo)}
     assert land_run_contract.mode_of(params) == mode

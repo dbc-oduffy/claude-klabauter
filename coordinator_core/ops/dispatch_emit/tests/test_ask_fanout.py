@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 
 import pytest
 import yaml
@@ -23,7 +24,6 @@ def repo(tmp_path, monkeypatch):
     (tmp_path / "hub" / SID).mkdir(parents=True)
     monkeypatch.setattr(store, "baton_dir", lambda s, cwd=None: tmp_path / "hub" / s)
     assert PT.append_turn(VERBATIM, session_id=SID)["ok"]
-    monkeypatch.setattr(c, "concurrent_run_budget", lambda physical_cores=None: 2)
     return tmp_path
 
 
@@ -93,7 +93,6 @@ def test_overlapping_declared_slices_are_sequenced_and_undeclared_runs_parallel(
 
 
 def test_three_undeclared_asks_are_sibling_runs_with_no_after_edges(repo, monkeypatch):
-    monkeypatch.setattr(c, "concurrent_run_budget", lambda physical_cores=None: 3)
     out = _go(repo, {"asks": [{"ask": f"job {i}"} for i in range(3)]})
     assert out["exit_code"] == 0, out
     assert len(out["runs"]) == 3
@@ -101,12 +100,13 @@ def test_three_undeclared_asks_are_sibling_runs_with_no_after_edges(repo, monkey
     assert len(out["ready"]) == 3
 
 
-def test_overflow_is_queued_in_submission_order_never_refused(repo):
-    out = _go(repo, {"asks": [{"ask": f"job {i}", "writes": [f"d{i}"]} for i in range(4)]})
+def test_many_disjoint_asks_are_all_ready_in_submission_order(repo):
+    n = (os.cpu_count() or 1) * 2 + 1
+    out = _go(repo, {"asks": [{"ask": f"job {i}", "writes": [f"d{i}"]} for i in range(n)]})
     assert out["exit_code"] == 0
     parent = json.loads((repo / c.parent_record_rel(out["parent_id"])).read_text(encoding="utf-8"))
-    assert [r["status"] for r in parent["runs"]] == ["ready", "ready", "queued", "queued"]
-    assert [r["run_id"] for r in out["ready"]] == [r["run_id"] for r in parent["runs"][:2]]
+    assert [r["status"] for r in parent["runs"]] == ["ready"] * n
+    assert [r["run_id"] for r in out["ready"]] == [r["run_id"] for r in parent["runs"]]
     assert c.ParentRecord.from_json(parent).parent_id == out["parent_id"]
 
 
@@ -183,7 +183,6 @@ def test_no_recorded_pm_turn_proceeds_stamped_relayed(tmp_path, monkeypatch):
     (tmp_path / ".git").mkdir()
     (tmp_path / "hub" / SID).mkdir(parents=True)
     monkeypatch.setattr(store, "baton_dir", lambda s, cwd=None: tmp_path / "hub" / s)
-    monkeypatch.setattr(c, "concurrent_run_budget", lambda physical_cores=None: 2)
     out = mod.fanout({"asks": [{"ask": "fix x", "sender": "peer-a", "writes": ["x"]}], "session_id": SID}, tmp_path)
     assert out["exit_code"] == 0, out
     doc = _sizing(tmp_path, out["ready"][0]["sizing"])
@@ -278,8 +277,7 @@ def test_pm_item_with_no_recorded_turn_refuses_before_any_write(tmp_path, monkey
     (tmp_path / ".git").mkdir()
     (tmp_path / "hub" / SID).mkdir(parents=True)
     monkeypatch.setattr(store, "baton_dir", lambda s, cwd=None: tmp_path / "hub" / s)
-    monkeypatch.setattr(c, "concurrent_run_budget", lambda physical_cores=None: 2)
-    before = _snapshot(tmp_path)
+    before =_snapshot(tmp_path)
     out = mod.fanout({"asks": [{"ask": "x", "writes": ["a"]}, {"ask": "y", "source": "pm", "writes": ["b"]}], "session_id": SID}, tmp_path)
     assert out["exit_code"] == 1 and out["applied"] is False
     assert "asks[1]" in out["error"] and "relayed" in out["error"]

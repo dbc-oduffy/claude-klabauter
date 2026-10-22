@@ -36,7 +36,8 @@ Behaviour (see ``build_fleet_index`` for the full algorithm):
      probe is performed; the rule is a fully static, from-the-read-alone check).
   5b. Each manifest's optional ``shapes[]`` is projected verbatim (maturity and
      provenance never downgraded) into the index's top-level ``shapes`` list, always
-     emitted; a shape whose source_repo != the manifest's host_repo is skipped-with-reason.
+     emitted; a shape whose source_repo != the manifest's host_repo, or whose shape_id repeats within
+     one manifest (first wins), is skipped-with-reason.
   6. OSS-safe degrade: registry absent, zero active siblings, or zero manifests
      found still produces a schema-valid EMPTY index and the op call succeeds
      (no exception) — DoE's review pre-flight must never be blocked by this.
@@ -372,11 +373,15 @@ def build_fleet_index(
         for cap in manifest.get("capabilities", []):
             entries.append(_project_entry(cap, manifest, build_time))
         manifest_path = repo_path.joinpath(*_MANIFEST_REL_PATH)
+        seen_shape_ids: set = set()
         for shape in manifest.get("shapes", []):
             projected, reason = _project_shape(shape, manifest, manifest_path)
+            if reason is None and shape["shape_id"] in seen_shape_ids:
+                reason = f"{manifest_path}: shape {shape['shape_id']}: duplicate shape_id"
             if reason:
                 skipped.append(reason)
             else:
+                seen_shape_ids.add(shape["shape_id"])
                 shapes.append(projected)
 
     index = {

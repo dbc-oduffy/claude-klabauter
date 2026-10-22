@@ -517,7 +517,6 @@ def sibling_release(
     root: Path,
     run_id: str,
     landed_sha: Optional[str],
-    budget: Optional[int] = None,
     rows_committed: bool = False,
     closed_by: Optional[str] = None,
 ) -> Optional[dict[str, Any]]:
@@ -526,7 +525,7 @@ def sibling_release(
     ``None`` unless the run's own status file exists (the slice bind wrote it). Otherwise rewrites only
     that file (``landed`` with *landed_sha*, or ``halted`` when it is ``None``), reads the write-once
     parent record and every sibling's status file, and returns ``{parent_id, released: [fire call],
-    blocked: [{run_id, slice_sizing}]}``. A halted run frees its budget slot but releases no ``after``
+    blocked: [{run_id, slice_sizing}]}``. A halted run releases no ``after``
     successor, unless it halted with *rows_committed* (every row's work landed) or *closed_by* (the plan
     or other evidence that closed it outside the engine): either mark is stored in its status file, survives
     a later halted rewrite, and such a predecessor releases its successors as a landed one does. ``blocked``
@@ -570,14 +569,13 @@ def sibling_release(
         parent = contract.ParentRecord.from_json(parent_data)
     except (ValueError, KeyError, TypeError):
         return None
-    _, reply = release_view(base, parent, budget, own_run_id=run_id, reconcile=True)
+    _, reply = release_view(base, parent, own_run_id=run_id, reconcile=True)
     return reply
 
 
 def release_view(
     base: Path,
     parent: Any,
-    budget: Optional[int] = None,
     *,
     own_run_id: Optional[str] = None,
     reconcile: bool = False,
@@ -610,7 +608,6 @@ def release_view(
             data.get(ROWS_COMMITTED_KEY) is True or data.get(contract.CLOSED_BY_KEY)
         ):
             complete.add(run.run_id)
-    budget = contract.concurrent_run_budget() if budget is None else budget
     as_landed = {rid: (contract.STATUS_LANDED if rid in complete else st) for rid, st in statuses.items()}
     waiting = (contract.STATUS_AFTER, contract.STATUS_QUEUED)
     superseded: list[dict[str, str]] = []
@@ -620,7 +617,7 @@ def release_view(
             if by is not None:
                 superseded.append({"run_id": run.run_id, "superseded_by": by})
     skip = frozenset(item["run_id"] for item in superseded)
-    freed = contract.release(parent, as_landed, budget, skip)
+    freed = contract.release(parent, as_landed, skip)
     by_id = {r.run_id: r for r in parent.runs}
     dead = {rid for rid, st in statuses.items() if st == contract.STATUS_HALTED and rid not in complete}
     blocked: list[dict[str, str]] = []

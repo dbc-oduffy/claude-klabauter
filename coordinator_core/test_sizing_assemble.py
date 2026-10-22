@@ -415,10 +415,8 @@ def test_xxl_infra_check_owed_absent_at_xl():
 
 def test_xxl_infra_check_owed_leaves_route_and_xl_exit_identical():
     with_it = sa.route(estimate={"tshirt": "XXL"}, scout_evidence=[])
-    without = dict(with_it)
-    without["detents"] = [d for d in with_it["detents"] if d != "xxl_infra_check_owed"]
     assert "xxl_infra_check_owed" in with_it["detents"]
-    assert with_it["route"] == without["route"] == "goal-setting"
+    assert with_it["route"] == "goal-setting"
     assert with_it["xl_exit"] is None
 
 

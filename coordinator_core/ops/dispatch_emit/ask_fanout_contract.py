@@ -2,9 +2,8 @@
 
 Leaf module, stdlib only. ``ledger_partition`` answers whether every parent row is claimed by exactly
 one slice; ``after_edges`` which slice pairs must be sequenced; ``blocked_by_edges`` the same from
-stub ``blocked_by`` (plus holds for out-of-batch blockers); ``concurrent_run_budget`` how many
-sibling runs of one parent may run at once; ``admit`` which ready runs wait; ``release`` which runs a
-close frees (never one in ``skip``). ``CLOSED_BY_KEY`` is the halted status-file key naming the
+stub ``blocked_by`` (plus holds for out-of-batch blockers); ``release`` which waiting runs a close
+frees on their ``after`` predecessors alone (never one in ``skip``). ``CLOSED_BY_KEY`` is the halted status-file key naming the
 evidence that closed the run; ``superseded_rel`` / ``read_superseded_by`` are a held slice's
 write-once supersession marker. ``AskSlice.source`` is a slice's own ask source (None reads as ``pm``);
 ``SLICE_SOURCE_KEY`` is the ``em_analysis`` key a relayed slice sizing carries; ``slice_ask_source``
@@ -30,7 +29,7 @@ PARENT_VERSION = 1
 
 STATUS_READY = "ready"
 STATUS_AFTER = "after"
-STATUS_QUEUED = "queued"
+STATUS_QUEUED = "queued"  # legacy status: read, never written
 STATUS_RUNNING = "running"
 STATUS_LANDED = "landed"
 STATUS_HALTED = "halted"
@@ -448,61 +447,21 @@ def blocked_by_edges(
     return {i: tuple(sorted(follows[i])) for i in range(n)}, holds
 
 
-def concurrent_run_budget(physical_cores: Optional[int] = None) -> int:
-    """``max(1, physical_cores // 4)``; reads the box only when the argument is None."""
-    if physical_cores is None:
-        from coordinator_core.benchmarks.concurrency_probe import default_physical_cores
-
-        physical_cores = default_physical_cores()
-    return max(1, physical_cores // 4)
-
-
-def admit(runs: Sequence[SiblingRun], budget: int) -> tuple[SiblingRun, ...]:
-    """Mark ready runs beyond the budget ``queued``, in submission order; never drops a run.
-
-    Running runs occupy slots first; `after` runs wait on predecessors, not on the budget.
-    """
-    slots = max(0, budget - sum(1 for r in runs if r.status == STATUS_RUNNING))
-    out = []
-    for run in runs:
-        if run.status in (STATUS_READY, STATUS_QUEUED):
-            if slots > 0:
-                slots -= 1
-                run = _with_status(run, STATUS_READY)
-            else:
-                run = _with_status(run, STATUS_QUEUED)
-        out.append(run)
-    return tuple(out)
-
-
-def _with_status(run: SiblingRun, status: str) -> SiblingRun:
-    return SiblingRun(run.run_id, run.label, run.after, run.slice_sizing, status, run.hold_reason)
-
-
 def release(
     parent: ParentRecord,
     statuses: Mapping[str, str],
-    budget: int,
     skip: frozenset[str] = frozenset(),
 ) -> tuple[str, ...]:
     """Run ids a close frees, in submission order.
 
-    A run is released when it is waiting (`after` or `queued`), every `after`
-    predecessor reads `landed`, and a budget slot is free. A halted predecessor never releases its
-    successors. A run in *skip* is never freed and occupies no slot.
+    A run is released when it is waiting (`after` or `queued`) and every `after` predecessor reads
+    `landed`. A halted predecessor never releases its successors. A run in *skip* is never freed.
     """
-    def status_of(run: SiblingRun) -> str:
-        return statuses.get(run.run_id, run.status)
-
-    slots = budget - sum(1 for r in parent.runs if status_of(r) == STATUS_RUNNING)
     freed = []
     for run in parent.runs:
-        if status_of(run) not in (STATUS_AFTER, STATUS_QUEUED) or run.run_id in skip:
+        if statuses.get(run.run_id, run.status) not in (STATUS_AFTER, STATUS_QUEUED) or run.run_id in skip:
             continue
         if any(statuses.get(p) != STATUS_LANDED for p in run.after):
             continue
-        if slots <= 0:
-            break
-        slots -= 1
         freed.append(run.run_id)
     return tuple(freed)

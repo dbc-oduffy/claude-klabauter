@@ -1107,7 +1107,7 @@ def test_the_reported_three_ask_relayed_shape_fires_one_and_orders_the_overlap(t
     assert emit.calls[0][0]["reserved_run_id"] == "r1"
     reason = json.dumps(out)
     assert "state/sizings/r3.yaml" in reason and "state/sizings/r2.yaml" not in reason
-    assert "Held runs (r2)" in reason
+    assert "Waiting on a predecessor (r2)" in reason
 
 
 def test_the_reported_shape_partitions_into_two_firable_runs_and_one_ordered_after():
@@ -1266,16 +1266,19 @@ def test_supersedes_is_refused_on_asks_and_on_a_non_string(tmp_path, args):
     assert "supersedes" in _hso(out)["permissionDecisionReason"]
 
 
-def test_a_queued_slice_is_denied_while_the_parent_is_at_budget(tmp_path, monkeypatch):
-    monkeypatch.setattr(contract, "concurrent_run_budget", lambda physical_cores=None: 1)
+def test_a_queued_slice_is_not_held_by_a_running_sibling(tmp_path):
     root = _fanned(tmp_path, [("r1", "a", (), "ready"), ("r2", "b", (), "queued")])
     _status(root, "r1", "running")
     out, emit = _submit_slice(root, "r2")
-    assert _hso(out)["permissionDecision"] == "deny"
-    assert "r1" in _hso(out)["permissionDecisionReason"] and emit.calls == []
-    _status(root, "r1", "landed")
-    out, emit = _submit_slice(root, "r2")
     assert _hso(out)["permissionDecision"] == "allow" and emit.calls[0][0]["reserved_run_id"] == "r2"
+
+
+def test_a_slice_is_still_denied_while_its_after_predecessor_runs(tmp_path):
+    root = _fanned(tmp_path, [("r1", "a", (), "ready"), ("r2", "b", ("r1",), "after")])
+    _status(root, "r1", "running")
+    out, emit = _submit_slice(root, "r2")
+    assert _hso(out)["permissionDecision"] == "deny" and "r1" in _hso(out)["permissionDecisionReason"]
+    assert emit.calls == []
 
 
 def test_a_sizing_without_a_parent_marker_binds_nothing(tmp_path):

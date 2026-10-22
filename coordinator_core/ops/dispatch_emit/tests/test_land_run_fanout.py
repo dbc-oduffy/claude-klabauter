@@ -35,7 +35,6 @@ def _git(args, cwd: Path) -> str:
 
 @pytest.fixture
 def repo(tmp_path, monkeypatch):
-    monkeypatch.setattr(c, "concurrent_run_budget", lambda physical_cores=None: 4)
     root = tmp_path / "repo"
     root.mkdir()
     _git(["init", "-q"], root)

@@ -38,7 +38,7 @@ def _status(root, rid):
 
 def test_landed_release_names_successor_fire_call(tmp_path):
     _seed(tmp_path, [_run("A"), _run("B", ["A"], c.STATUS_AFTER)], bound=["A"])
-    out = run_close.sibling_release(tmp_path, "A", SHA, budget=2)
+    out = run_close.sibling_release(tmp_path, "A", SHA)
     assert out["parent_id"] == PARENT
     assert out["released"] == [fire_command("state/sizings/B.yaml")]
     assert out["blocked"] == []
@@ -48,7 +48,7 @@ def test_landed_release_names_successor_fire_call(tmp_path):
 def test_halted_predecessor_blocks_successor_but_frees_queued_slot(tmp_path):
     runs = [_run("A"), _run("B", ["A"], c.STATUS_AFTER), _run("C", (), c.STATUS_QUEUED)]
     _seed(tmp_path, runs, bound=["A"])
-    out = run_close.sibling_release(tmp_path, "A", None, budget=1)
+    out = run_close.sibling_release(tmp_path, "A", None)
     assert _status(tmp_path, "A")["status"] == "halted"
     assert out["released"] == [fire_command("state/sizings/C.yaml")]
     assert out["blocked"] == [{"run_id": "B", "slice_sizing": "state/sizings/B.yaml"}]
@@ -56,7 +56,7 @@ def test_halted_predecessor_blocks_successor_but_frees_queued_slot(tmp_path):
 
 def test_halted_with_every_row_committed_releases_successor(tmp_path):
     _seed(tmp_path, [_run("A"), _run("B", ["A"], c.STATUS_AFTER)], bound=["A"])
-    out = run_close.sibling_release(tmp_path, "A", None, budget=2, rows_committed=True)
+    out = run_close.sibling_release(tmp_path, "A", None, rows_committed=True)
     assert _status(tmp_path, "A") == {"status": "halted", "rows_committed": True}
     assert out["released"] == [fire_command("state/sizings/B.yaml")]
     assert out["blocked"] == []
@@ -64,15 +64,15 @@ def test_halted_with_every_row_committed_releases_successor(tmp_path):
 
 def test_rows_committed_mark_survives_a_later_plain_halt(tmp_path):
     _seed(tmp_path, [_run("A"), _run("B", ["A"], c.STATUS_AFTER)], bound=["A"])
-    run_close.sibling_release(tmp_path, "A", None, budget=2, rows_committed=True)
-    out = run_close.sibling_release(tmp_path, "A", None, budget=2)
+    run_close.sibling_release(tmp_path, "A", None, rows_committed=True)
+    out = run_close.sibling_release(tmp_path, "A", None)
     assert _status(tmp_path, "A")["rows_committed"] is True
     assert out["released"] == [fire_command("state/sizings/B.yaml")]
 
 
 def test_halted_with_an_uncommitted_row_still_blocks_successor(tmp_path):
     _seed(tmp_path, [_run("A"), _run("B", ["A"], c.STATUS_AFTER)], bound=["A"])
-    out = run_close.sibling_release(tmp_path, "A", None, budget=2, rows_committed=False)
+    out = run_close.sibling_release(tmp_path, "A", None, rows_committed=False)
     assert "rows_committed" not in _status(tmp_path, "A")
     assert out["released"] == []
     assert [b["run_id"] for b in out["blocked"]] == ["B"]
@@ -81,15 +81,17 @@ def test_halted_with_an_uncommitted_row_still_blocks_successor(tmp_path):
 def test_queued_run_drains_when_slot_frees(tmp_path):
     runs = [_run("A"), _run("B", (), c.STATUS_QUEUED)]
     _seed(tmp_path, runs, bound=["A"])
-    out = run_close.sibling_release(tmp_path, "A", SHA, budget=1)
+    out = run_close.sibling_release(tmp_path, "A", SHA)
     assert out["released"] == [fire_command("state/sizings/B.yaml")]
 
 
-def test_queued_run_stays_while_budget_full(tmp_path):
-    runs = [_run("A"), _run("B"), _run("C", (), c.STATUS_QUEUED)]
+def test_landed_close_frees_every_waiting_run_with_no_unlanded_predecessor(tmp_path):
+    runs = [_run("A"), _run("B"), _run("C", (), c.STATUS_QUEUED), _run("D", ["A"], c.STATUS_AFTER),
+            _run("E", ["B"], c.STATUS_AFTER)]
     _seed(tmp_path, runs, bound=["A", "B"])
-    out = run_close.sibling_release(tmp_path, "A", SHA, budget=1)
-    assert out["released"] == [] and out["blocked"] == []
+    out = run_close.sibling_release(tmp_path, "A", SHA)
+    assert out["released"] == [fire_command("state/sizings/C.yaml"), fire_command("state/sizings/D.yaml")]
+    assert out["blocked"] == []
 
 
 def test_halt_never_rewrites_a_landed_status(tmp_path):
@@ -97,7 +99,7 @@ def test_halt_never_rewrites_a_landed_status(tmp_path):
     own = tmp_path / c.status_rel("A")
     own.write_text(json.dumps({"status": "landed", "sha": SHA}), encoding="utf-8")
     before = own.read_bytes()
-    assert run_close.sibling_release(tmp_path, "A", None, budget=2) is None
+    assert run_close.sibling_release(tmp_path, "A", None) is None
     assert own.read_bytes() == before
 
 
@@ -105,17 +107,17 @@ def test_halt_of_running_status_keeps_parent_id(tmp_path):
     _seed(tmp_path, [_run("A")], bound=["A"])
     own = tmp_path / c.status_rel("A")
     own.write_text(json.dumps({"status": "running", "parent_id": PARENT}), encoding="utf-8")
-    run_close.sibling_release(tmp_path, "A", None, budget=2)
+    run_close.sibling_release(tmp_path, "A", None)
     assert _status(tmp_path, "A") == {"status": "halted", "parent_id": PARENT}
 
 
 def test_halt_with_no_status_file_writes_nothing(tmp_path):
-    assert run_close.sibling_release(tmp_path, "solo", None, budget=1) is None
+    assert run_close.sibling_release(tmp_path, "solo", None) is None
     assert not (tmp_path / "scratch").exists()
 
 
 def test_non_sibling_run_returns_none(tmp_path):
-    assert run_close.sibling_release(tmp_path, "solo", SHA, budget=1) is None
+    assert run_close.sibling_release(tmp_path, "solo", SHA) is None
     assert not (tmp_path / "scratch").exists()
 
 
@@ -127,7 +129,7 @@ def test_sequential_closes_write_only_own_status_and_leave_parent_copies(tmp_pat
     results: dict = {}
 
     def close(rid):
-        results[rid] = run_close.sibling_release(tmp_path, rid, SHA, budget=2)
+        results[rid] = run_close.sibling_release(tmp_path, rid, SHA)
 
     close("A")
     assert (tmp_path / c.status_rel("B")).read_bytes() == other_before
@@ -142,11 +144,11 @@ def test_sequential_closes_write_only_own_status_and_leave_parent_copies(tmp_pat
 
 def test_closed_by_halted_predecessor_releases_successor_and_persists(tmp_path):
     _seed(tmp_path, [_run("A"), _run("B", ["A"], c.STATUS_AFTER)], bound=["A"])
-    out = run_close.sibling_release(tmp_path, "A", None, budget=2, closed_by="docs/plans/p.md")
+    out = run_close.sibling_release(tmp_path, "A", None, closed_by="docs/plans/p.md")
     assert out["released"] == [fire_command("state/sizings/B.yaml")]
     assert out["blocked"] == [] and "superseded" not in out
     assert _status(tmp_path, "A") == {"status": "halted", "closed_by": "docs/plans/p.md"}
-    run_close.sibling_release(tmp_path, "A", None, budget=2)
+    run_close.sibling_release(tmp_path, "A", None)
     assert _status(tmp_path, "A")["closed_by"] == "docs/plans/p.md"
 
 
@@ -155,10 +157,10 @@ def test_superseded_successor_is_reported_not_released_or_blocked(tmp_path):
     marker = tmp_path / c.superseded_rel("B")
     marker.parent.mkdir(parents=True, exist_ok=True)
     marker.write_text(json.dumps({"superseded_by": "N"}), encoding="utf-8")
-    out = run_close.sibling_release(tmp_path, "A", None, budget=2, closed_by="docs/plans/p.md")
+    out = run_close.sibling_release(tmp_path, "A", None, closed_by="docs/plans/p.md")
     assert out["released"] == [] and out["blocked"] == []
     assert out["superseded"] == [{"run_id": "B", "superseded_by": "N"}]
-    plain = run_close.sibling_release(tmp_path, "A", None, budget=2)
+    plain = run_close.sibling_release(tmp_path, "A", None)
     assert plain["blocked"] == [] and plain["superseded"] == out["superseded"]
 
 
@@ -167,7 +169,7 @@ def test_superseded_halted_open_successor_is_not_blocked(tmp_path):
     marker = tmp_path / c.superseded_rel("B")
     marker.parent.mkdir(parents=True, exist_ok=True)
     marker.write_text(json.dumps({"superseded_by": "N"}), encoding="utf-8")
-    out = run_close.sibling_release(tmp_path, "A", None, budget=2)
+    out = run_close.sibling_release(tmp_path, "A", None)
     assert out["blocked"] == [] and out["released"] == []
 
 
@@ -197,7 +199,7 @@ def test_close_halted_runs_for_plan_skips_run_without_status(tmp_path, monkeypat
 
 def test_details_carry_no_absolute_path(tmp_path):
     _seed(tmp_path, [_run("A"), _run("B", ["A"], c.STATUS_AFTER)], bound=["A"])
-    out = run_close.sibling_release(tmp_path, "A", SHA, budget=2)
+    out = run_close.sibling_release(tmp_path, "A", SHA)
     for call in out["released"]:
         run_close.check_path_hygiene(call)
     assert str(tmp_path) not in json.dumps(out)

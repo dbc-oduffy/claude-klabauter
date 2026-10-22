@@ -78,10 +78,7 @@ def test_running_without_record_at_head_still_holds(repo):
     assert _read_status(repo, A)["status"] == "running"
 
 
-def test_reconciled_landed_run_is_not_counted_against_budget(repo, monkeypatch):
+def test_running_sibling_does_not_hold_a_queued_run(repo):
     _parent(repo, [c.SiblingRun(A, "a", status=c.STATUS_RUNNING), c.SiblingRun(B, "b", status=c.STATUS_QUEUED)])
     _write(repo, c.status_rel(A), json.dumps({"status": "running", "parent_id": PARENT}))
-    monkeypatch.setattr(c, "concurrent_run_budget", lambda *a, **k: 1)
-    assert "run budget" in (sea._slice_deny(repo, (PARENT, B)) or "")
-    _terminal_record_at_head(repo, A)
     assert sea._slice_deny(repo, (PARENT, B)) is None

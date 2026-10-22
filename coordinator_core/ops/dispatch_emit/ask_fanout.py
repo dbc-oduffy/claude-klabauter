@@ -435,7 +435,6 @@ def _fanout_sizings(params: Mapping, worktree: Path, confirm: bool) -> dict:
         )
         for i, (rel, label, *_rest) in enumerate(items)
     )
-    runs = contract.admit(runs, contract.concurrent_run_budget())
     for path, text in stamped:
         claimed_write.replace_text(path, text)
     parent_path = worktree / contract.parent_record_rel(parent_id)
@@ -535,7 +534,6 @@ def _fanout(params: Mapping, root: Path) -> dict:
         )
         for i, sl in enumerate(slices)
     )
-    runs = contract.admit(runs, contract.concurrent_run_budget())
 
     for rel, text in records:
         target = worktree / rel

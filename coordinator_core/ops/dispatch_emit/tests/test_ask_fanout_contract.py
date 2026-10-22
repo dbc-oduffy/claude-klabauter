@@ -1,4 +1,4 @@
-"""Pins the multi-ask contract: partition, after edges, budget, admit, release, paths, reply shape."""
+"""Pins the multi-ask contract: partition, after edges, release, paths, reply shape."""
 
 from __future__ import annotations
 
@@ -83,38 +83,8 @@ def test_no_wave_slices_keep_overlap_rule():
     assert c.after_edges([_waved("a", 0, ("a.py",)), _slice("b", writes=("b.py",))])[1] == ()
 
 
-@pytest.mark.parametrize("cores,expected", [(1, 1), (3, 1), (4, 1), (24, 6)])
-def test_budget_from_cores(cores, expected):
-    assert c.concurrent_run_budget(cores) == expected
-
-
-def test_budget_reads_box_when_none(monkeypatch):
-    from coordinator_core.benchmarks import concurrency_probe
-
-    monkeypatch.setattr(concurrency_probe, "default_physical_cores", lambda: 16)
-    assert c.concurrent_run_budget() == 4
-
-
-def test_admit_queues_overflow_in_order_and_drops_none():
-    budget = 2
-    runs = tuple(c.SiblingRun(run_id=f"r{i}", label=f"l{i}") for i in range(budget + 2))
-    out = c.admit(runs, budget)
-    assert [r.run_id for r in out] == [r.run_id for r in runs]
-    assert [r.status for r in out] == ["ready", "ready", "queued", "queued"]
-
-
-def test_admit_leaves_after_runs_and_counts_running():
-    runs = (
-        c.SiblingRun("r0", "a", status=c.STATUS_RUNNING),
-        c.SiblingRun("r1", "b", after=("r0",), status=c.STATUS_AFTER),
-        c.SiblingRun("r2", "c"),
-    )
-    out = c.admit(runs, 1)
-    assert [r.status for r in out] == ["running", "after", "queued"]
-
-
-def test_release_after_landed_and_queue_slot():
-    parent = c.ParentRecord(
+def _chain_parent():
+    return c.ParentRecord(
         "p",
         (
             c.SiblingRun("r0", "a"),
@@ -122,32 +92,37 @@ def test_release_after_landed_and_queue_slot():
             c.SiblingRun("r2", "c", status=c.STATUS_QUEUED),
         ),
     )
-    assert c.release(parent, {"r0": "landed", "r1": "after", "r2": "queued"}, 2) == ("r1", "r2")
-    assert c.release(parent, {"r0": "running", "r1": "after", "r2": "queued"}, 1) == ()
-    assert c.release(parent, {"r0": "running", "r1": "after", "r2": "queued"}, 2) == ("r2",)
 
 
-def test_halted_predecessor_frees_slot_but_not_successor():
+def test_release_frees_waiting_runs_whose_predecessors_landed():
+    parent = _chain_parent()
+    assert c.release(parent, {"r0": "landed", "r1": "after", "r2": "queued"}) == ("r1", "r2")
+
+
+def test_release_frees_waiting_run_while_two_siblings_run():
     parent = c.ParentRecord(
         "p",
         (
-            c.SiblingRun("r0", "a"),
-            c.SiblingRun("r1", "b", after=("r0",), status=c.STATUS_AFTER),
-            c.SiblingRun("r2", "c", status=c.STATUS_QUEUED),
+            c.SiblingRun("r0", "a", status=c.STATUS_RUNNING),
+            c.SiblingRun("r1", "b", status=c.STATUS_RUNNING),
+            c.SiblingRun("r2", "c", after=("r3",), status=c.STATUS_AFTER),
+            c.SiblingRun("r3", "d", status=c.STATUS_LANDED),
         ),
     )
-    assert c.release(parent, {"r0": "halted", "r1": "after", "r2": "queued"}, 1) == ("r2",)
+    statuses = {"r0": "running", "r1": "running", "r2": "after", "r3": "landed"}
+    assert c.release(parent, statuses) == ("r2",)
 
 
-def test_budget_plus_two_asks_yield_two_queued_no_refusal():
-    budget = c.concurrent_run_budget(8)
-    slices = [_slice(f"s{i}", writes=(f"d{i}/f",)) for i in range(budget + 2)]
-    edges = c.after_edges(slices)
-    assert all(not e for e in edges.values())
-    runs = tuple(c.SiblingRun(f"r{i}", s.label) for i, s in enumerate(slices))
-    out = c.admit(runs, budget)
-    assert sum(r.status == "queued" for r in out) == 2
-    assert len(out) == len(slices)
+def test_release_withholds_successor_of_unlanded_predecessor():
+    parent = _chain_parent()
+    assert c.release(parent, {"r0": "running", "r1": "after", "r2": "queued"}) == ("r2",)
+    assert c.release(parent, {"r0": "halted", "r1": "after", "r2": "queued"}) == ("r2",)
+
+
+def test_fanout_contract_defines_no_run_count_budget():
+    assert not hasattr(c, "concurrent_run_budget")
+    assert not hasattr(c, "admit")
+    assert c.STATUS_QUEUED in c.RUN_STATUSES
 
 
 def test_reply_json_omits_empty_after():
@@ -199,7 +174,7 @@ def test_slice_ask_source_none_for_absent_or_malformed(sizing):
     assert c.slice_ask_source(sizing) is None
 
 
-def test_release_skip_frees_nothing_skipped_and_leaves_slot_free():
+def test_release_skip_frees_nothing_skipped():
     parent = c.ParentRecord(
         "p",
         (
@@ -208,8 +183,8 @@ def test_release_skip_frees_nothing_skipped_and_leaves_slot_free():
         ),
     )
     statuses = {"r1": "queued", "r2": "queued"}
-    assert c.release(parent, statuses, 1, frozenset({"r1"})) == ("r2",)
-    assert c.release(parent, statuses, 1) == ("r1",)
+    assert c.release(parent, statuses, frozenset({"r1"})) == ("r2",)
+    assert c.release(parent, statuses) == ("r1", "r2")
 
 
 def _hq_batch():
@@ -298,11 +273,10 @@ def test_held_run_parent_record_round_trips_and_non_held_json_is_unchanged():
     assert c.SiblingRun("r", "l", (), "s", "ready").hold_reason == ""
 
 
-def test_held_run_is_never_released_and_keeps_reason_through_admit():
+def test_held_run_is_never_released():
     held = c.SiblingRun("r1", "a", (), "s1", c.STATUS_HELD, "why")
     parent = c.ParentRecord("p", (held,))
-    assert c.release(parent, {"r1": "held"}, 4) == ()
-    assert c.admit((held,), 4) == (held,)
+    assert c.release(parent, {"r1": "held"}) == ()
     assert c.STATUS_HELD in c.RUN_STATUSES
 
 

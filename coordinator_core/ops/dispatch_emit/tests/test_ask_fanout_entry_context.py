@@ -21,7 +21,6 @@ def repo(tmp_path, monkeypatch):
     (tmp_path / "hub" / SID).mkdir(parents=True)
     monkeypatch.setattr(store, "baton_dir", lambda s, cwd=None: tmp_path / "hub" / s)
     assert PT.append_turn(VERBATIM, session_id=SID)["ok"]
-    monkeypatch.setattr(c, "concurrent_run_budget", lambda physical_cores=None: 2)
     return tmp_path
 
 

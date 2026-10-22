@@ -36,7 +36,7 @@ def test_fanout_is_under_the_bar_with_zero_spawns(tmp_path, monkeypatch):
     monkeypatch.setattr(subprocess, "Popen", counting_popen)
     monkeypatch.setattr(os, "system", lambda *a, **k: spawns.append(a))
 
-    size = contract.concurrent_run_budget()
+    size = 4
     asks = [{"ask": f"job {i}", "label": f"j{i}", "writes": [f"d{i}"]} for i in range(size + 1)]
 
     start = time.process_time()
