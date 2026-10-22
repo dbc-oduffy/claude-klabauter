@@ -407,11 +407,11 @@ LEG_DISPATCH, LEG_SKIP, LEG_REFUSE = "dispatch", "skip", "refuse"
 LEG_REFUSAL_HEAD = "ledger-remaining leg refused: "
 #: halted.json key a ledger-check halt records `[{id, remaining, evidence}]` for its blocking rows under.
 HALT_BLOCKING_ITEMS_FIELD = "blocking_items"
-#: `workflow.revise` param naming the register row ids a ruling claims.
+#: Speculative, no non-test consumer yet: `workflow.revise` param naming the register row ids a ruling claims.
 CLAIM_PARAM = "claim"
-#: Filename of the remaining-leg footprint artifact inside `RECORD_DIR_ROOT/<run_id>/`.
+#: Speculative, no non-test consumer yet: filename of the remaining-leg footprint artifact inside `RECORD_DIR_ROOT/<run_id>/`.
 LEG_FOOTPRINT_FILE = "leg-footprint.json"
-#: Landing withheld reason for a write outside the ledger-resume row's footprint.
+#: Speculative, no non-test consumer yet: landing withheld reason for a write outside the ledger-resume row's footprint.
 OUTSIDE_ROW_FOOTPRINT = "outside-row-footprint"
 #: `dispatch.land_run` param carrying `{run_id, halt_sha, blocking}` on a ledger resume.
 TERMINAL_RESUME_LEDGER_PARAM = "resume_ledger"
@@ -974,8 +974,8 @@ class GatedRow:
 @dataclass(frozen=True)
 class OwedRow:
     """A row the run excluded because the EM or an operator performs it. ``reason`` is one of
-    ``spine_read.EM_OWNED_REASONS``: ``em-performed``, ``memo-send`` (a memo-send row the EM still sends: performer: em, no slug, or an
-    unregistered receiver), ``operator``, or
+    ``spine_read.EM_OWNED_REASONS``: ``em-performed``, ``memo-send`` (a memo-send row the EM still
+    sends: ``performer: em``, no slug, or an unregistered receiver), ``operator``, or
     ``withheld_by_owed_dependency`` (a row transitively behind one of those)."""
 
     id: str

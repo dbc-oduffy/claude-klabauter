@@ -727,7 +727,8 @@ def stage(
         _refuse_unapproved_design(sizing, sizing_rel)
         _refuse_misrouted_xs_mint(sizing, sizing_rel, writes)
         spine_text, spine_path = mint_xs_spine(
-            sizing, sizing_rel=sizing_rel, writes=writes, out_dir=record, gated=gated
+            sizing, sizing_rel=sizing_rel, writes=writes, out_dir=record, gated=gated,
+            repo_root=root,
         )
         _write(spine_path, spine_text)
         plan_path = spine_path

@@ -333,6 +333,13 @@ _DECLARATIVE_STALL_PATTERNS = [
     ),
     re.compile(r"\bnext\s+(?:up\b|I'?ll\b)", re.IGNORECASE),
     re.compile(r"\bI'?ll\s+stop\s+\w+ing\b", re.IGNORECASE),
+    # A claimed block that names no blocker: "blocked"/"waiting" not followed
+    # by what it is blocked on.
+    re.compile(
+        r"\bI(?:'m|\s+am)\s+(?:currently\s+|now\s+)?(?:blocked|stuck|waiting)\b"
+        r"(?!\s+(?:on|by|because|until|for|from|at|due|in)\b)",
+        re.IGNORECASE,
+    ),
 ]
 
 _DECLARATIVE_STALL_CORRECTION_TEXT = (

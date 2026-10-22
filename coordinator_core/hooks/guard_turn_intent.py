@@ -231,6 +231,7 @@ def _turn_intent_step(payload: dict, text: str) -> bool:
         # A session started under Cockpit and resumed in a terminal keeps its marker, so the marker alone is not the gate.
         _turn_intent.role_marker_present(directory) and under_cockpit(),
         _heuristic_turn_intent,
+        _turn_intent.announces_unexecuted_work(text),
     )
     if decision.block:
         count = _turn_intent.bump_blocks(directory)
@@ -255,7 +256,12 @@ def _handler(params: dict, repo_root=None) -> dict:
             has_transcript = isinstance(transcript_path, str) and bool(transcript_path)
             text = _final_assistant_text(transcript_path) if has_transcript else ""
         if _turn_intent_step(payload, text):
-            return apply_guard_level("guard-turn-intent", deny("Stop", _turn_intent.BLOCK_REASON)) or no_advisory()
+            reason = (
+                _turn_intent.ANNOUNCE_BLOCK_REASON
+                if _turn_intent.announces_unexecuted_work(text)
+                else _turn_intent.BLOCK_REASON
+            )
+            return apply_guard_level("guard-turn-intent", deny("Stop", reason)) or no_advisory()
         return _go_ask_advisory(payload, text)
     except Exception:
         pass
