@@ -38,7 +38,7 @@ WRITE_PROFILE_MODULES = ("torch", "sentence_transformers", "transformers", "eino
 #: skill, Step 3 "lite pass").
 LITE_PRODUCERS = (
     "structural_index_lite_python,structural_index_treesitter,structural_index_typescript,"
-    "doc_links_producer,config_cvar_extractor,cpp_cvar_extractor"
+    "doc_links_producer"
 )
 
 

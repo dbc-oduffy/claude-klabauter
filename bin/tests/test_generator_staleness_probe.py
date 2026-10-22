@@ -295,6 +295,8 @@ class TestGeneratorStalenessProbe:
 
         assert overall == mod._PASS
 
+    # cadence: ~6s whole-repo walk; test_compute_raising_still_yields_parseable_result covers the result contract fast.
+    @pytest.mark.cadence
     def test_live_run_against_real_tree_never_raises(self) -> None:
         """Unpatched, end-to-end against this machine's real tree: always a parseable result."""
         mod = _require_module()
