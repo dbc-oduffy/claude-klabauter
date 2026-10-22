@@ -2144,8 +2144,8 @@
     "coordinator_core/_content_root_primitive.py": "f7fcd3083855a5e1dd53c09233fbfd64f8dffdf5",
     "coordinator_core/_data_root.py": "0c7c8524f25376ae49593f11334445539dc557f9",
     "coordinator_core/_engine_landing.py": "06dbb1273f3c36fdb6be08767ec75e73c71630e7",
-    "coordinator_core/_engine_published_at": "94fbc0c34c8a1221b850b07dcdab0843c9ad1392",
-    "coordinator_core/_engine_stamp": "016efaab0962b8aa09118ec3ee22a15b8fc7ca1e",
+    "coordinator_core/_engine_published_at": "f5c1d6360750521ee97db08b66568f61fac32da5",
+    "coordinator_core/_engine_stamp": "6569190cdb79a12331ad5340ba2c369b2f7c89e1",
     "coordinator_core/_fleet_names.py": "e81fc4247611fe486697f4707b28a1a3a008f392",
     "coordinator_core/_hook_envelope.py": "d98df967471c001593ab85960dc367f5ff5da056",
     "coordinator_core/_repo_root_probe.py": "2d8edfa8cd9343436a650584da430aa87ae0397d",
@@ -6117,7 +6117,7 @@
     "coordinator_core/ops/plan_status_transition.py": "c898b6519f631af5e8fcb29dce5575dd08b7a491",
     "coordinator_core/ops/plan_suggest_completion_steps.py": "ec250924543c54cd824244121d391d5466238fd4",
     "coordinator_core/ops/plan_tasks_grouping_digest.py": "1224a4f27fd22114c9c35965bc73fad1d410eff0",
-    "coordinator_core/ops/plan_tasks_mutate.py": "78f7bfd8e771b077f999cb4618eb0b5d0e839d8d",
+    "coordinator_core/ops/plan_tasks_mutate.py": "33087674c9a8d5499ee57a15f08ceb70b78265cf",
     "coordinator_core/ops/plan_tasks_render.py": "5eea213089b62975fc0a17b900bdb9e18b09cebc",
     "coordinator_core/ops/plan_tasks_spine_drift_check.py": "f1e4648056991384d11634a47531e89c8abbe3eb",
     "coordinator_core/ops/plan_writes_lean.py": "720b6bc86f7de7e0eb5b0e06fddf84d0ac2a9d11",
@@ -8903,5 +8903,5 @@
     "scripts/unstick_claude.py": "5458a0f699f1793ff9fd32295b9d0b33635f1c06"
   },
   "schema": 1,
-  "source_head": "5b18a2e8db59aab808b4be6f6e41845813a858e4"
+  "source_head": "e72ae60a7af4f5ee6c546efcf18f776622744331"
 }

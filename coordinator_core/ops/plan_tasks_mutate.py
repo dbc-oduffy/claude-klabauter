@@ -1332,7 +1332,7 @@ def _frontmatter_gate_items(fm_lines: list) -> Optional[tuple]:
 
 
 def _clearance_fields(evidence: str) -> dict:
-    """The gate keys clear-gate writes; test_clear_gate_writes_only_shared_set_keys pins them to GATE_CLEARANCE_KEYS."""
+    """The gate keys clear-gate writes; test_clear_gate_writes_only_shared_set_keys pins them as a subset of GATE_CLEARANCE_KEYS."""
     return {"cleared": True, "closure_evidence": evidence}
 
 
