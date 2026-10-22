@@ -56,7 +56,7 @@ def plan_terminality(
             plans = build_plan_index(worktree_root)
         hits, basis = link_plans(dict(baton_fm), plans)
         reverse = plans_naming_predecessor(plans, baton_basename)
-    except Exception:
+    except Exception:  # an unreadable corpus reads as no-plan-linked; callers cannot tell the two apart
         return PlanTerminality(PLAN_TERMINALITY_NO_PLAN, (), None)
 
     linked = {}

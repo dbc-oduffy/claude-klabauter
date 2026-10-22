@@ -1,0 +1,361 @@
+"""group-em-memory-governor — pause the command that pushed the box into critical memory pressure.
+
+Runs as the Group EM's session-long `run_in_background` shell, `python -u` appending to a log;
+`group-em-memory-governor-wait.py <log>` is the one-shot wake on that log. Never run it under a
+`Monitor`: the Monitor's 30-minute expiry kills the governor, wakes the Group EM for nothing, and
+re-arming costs a turn. It samples the kernel's own pressure verdict and
+stays silent while the box is anything short of critical. On critical it suspends the youngest
+heavy command (a test runner, typecheck, build, dev server, browser run) together with its
+descendants, then prints one line. If the box stays critical it suspends the next youngest, up to
+`--max-pauses`. Once the verdict has been non-critical for `--resume-after` consecutive samples it
+resumes everything it paused, newest first, and prints one line. Every printed line is an action
+the Group EM relays to the command's owner; nothing else is printed, so the waiter wakes nobody
+for a warn and its output is never filtered.
+
+Independently of pressure, every `--runaway-every` samples it reads each process's full footprint
+(resident plus compressed plus swapped) and prints one RUNAWAY line, once per pid, for any process
+over `--runaway-mb`. Pausing never frees memory, and a process paging itself out reads as a tiny
+RSS, so a single runaway shows up only here. The Group EM decides whether to kill it.
+
+Critical, per OS: macOS `kern.memorystatus_vm_pressure_level == 4`; Linux PSI
+`/proc/pressure/memory` `full avg10 >= --psi-full`; elsewhere (Windows) available memory under
+`--avail-pct` percent of total, read through psutil.
+
+On a critical sample only, it also reads the tail of the box admission channel
+(`admission.jsonl`, the engine's `admission_path()`): a live pid named by a START line is a pause
+candidate whatever HEAVY or MIN_RSS_MB say, and its tree loses the example-retrieval-repo exemption.
+
+Never suspended: harness and editor processes (claude, tsserver, language servers), example-retrieval-repo
+servers (unless launched and noticed on the admission channel), anything in a deploy (Firebase
+CLI, `deploy-from-snapshot`, `deploy:`, a `scratch/deploy-` snapshot tree), and this process. Suspending a deploy mid-upload could leave prod half-released;
+suspending a language server hangs every LSP call in its session.
+
+On win32 only, the first critical sample of an episode also prints one GOVERNOR CACHE-TRIM-HINT line
+naming the elevated `trim-file-cache.py --apply` command; a calm verdict re-arms it.
+
+NEGATIVE SPEC: suspends and resumes only; never runs a cache trim; never kills, never signals a protected process; reads the
+box admission channel but never writes outside stdout. A suspended process it can no longer find
+(exited) is dropped silently.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import signal
+import subprocess
+import sys
+import time
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Callable, Optional
+
+try:
+    import psutil  # type: ignore
+except ImportError:  # POSIX falls back to ps/kill; Windows needs psutil
+    psutil = None
+
+HEAVY = re.compile(
+    r"vitest|\btsc\b|next build|next-server|next dev|playwright|\btsx\b|jest|turbo run"
+    r"|pnpm (?:-r|--recursive|build|test|typecheck)|build:[\w-]+"
+)
+PROTECTED_HARD = re.compile(
+    r"(?:^|/)claude(?:\.exe)?(?:\s|$)|tsserver|language-server|firebase"
+    r"|deploy-from-snapshot|deploy:"
+    r"|scratch/deploy-|group-em-memory-governor"
+)
+EXAMPLE_RETRIEVAL_REPO = re.compile(r"project_rag")
+MIN_RSS_MB = 300
+NOTICE_TAIL_BYTES = 65536
+
+
+@dataclass(frozen=True)
+class Proc:
+    pid: int
+    ppid: int
+    age_s: float
+    rss_mb: float
+    cmd: str
+
+
+def is_protected(p: Proc, noticed_tree: frozenset = frozenset()) -> bool:
+    """Harness, language-server, deploy and self are always protected; example-retrieval-repo is protected
+    unless the process belongs to a launch noticed on the admission channel."""
+    if PROTECTED_HARD.search(p.cmd):
+        return True
+    return bool(EXAMPLE_RETRIEVAL_REPO.search(p.cmd)) and p.pid not in noticed_tree
+
+
+def is_candidate(p: Proc, self_pid: int, noticed: frozenset = frozenset(),
+                 noticed_tree: frozenset = frozenset()) -> bool:
+    if p.pid == self_pid or is_protected(p, noticed_tree):
+        return False
+    return p.pid in noticed or (p.rss_mb >= MIN_RSS_MB and bool(HEAVY.search(p.cmd)))
+
+
+def choose_victim(procs: list[Proc], paused: set[int], self_pid: int,
+                  noticed: frozenset = frozenset(), tree: frozenset = frozenset()) -> Optional[Proc]:
+    """Youngest heavy-or-noticed, unprotected, not-yet-paused command: the likeliest cause of the spike.
+
+    A worker whose parent is itself a candidate is never chosen alone; its parent's tree covers it.
+    """
+    heavy = {p.pid for p in procs if is_candidate(p, self_pid, noticed, tree)}
+    pool = [p for p in procs if p.pid in heavy and p.pid not in paused and p.ppid not in heavy]
+    return min(pool, key=lambda p: p.age_s) if pool else None
+
+
+def noticed_tree(noticed: frozenset, procs: list[Proc]) -> frozenset:
+    return frozenset(t for root in noticed for t in descendants(root, procs))
+
+
+def read_noticed_pids(path: Optional[Path], procs: list[Proc]) -> frozenset:
+    """Live pids named by START lines in the tail of the box admission channel; empty on any fault."""
+    if path is None:
+        return frozenset()
+    try:
+        with open(path, "rb") as fh:
+            size = fh.seek(0, os.SEEK_END)
+            fh.seek(max(0, size - NOTICE_TAIL_BYTES))
+            raw = fh.read()
+        lines = raw.decode("utf-8", errors="replace").splitlines()
+        if size > NOTICE_TAIL_BYTES:
+            lines = lines[1:]  # first line of a mid-file tail is cut
+        live = {p.pid for p in procs}
+        out: set[int] = set()
+        for line in lines:
+            try:
+                rec = json.loads(line)
+                phase = rec.get("phase")
+                ids = {int(x) for x in rec.get("pids") or []}
+                if phase == "START":
+                    out.update(i for i in ids if i in live)
+                elif phase == "END":
+                    out.difference_update(ids)
+            except (ValueError, TypeError, AttributeError):
+                continue
+        return frozenset(out)
+    except OSError:
+        return frozenset()
+
+
+def resolve_notice_path() -> Optional[Path]:
+    """The engine's admission channel path, or None when the engine is unresolvable."""
+    try:
+        hooks = Path(__file__).resolve().parents[1] / "hooks" / "scripts"
+        if str(hooks) not in sys.path:
+            sys.path.insert(0, str(hooks))
+        import _engine_root  # type: ignore
+        root = _engine_root.resolve_claude_klabauter_root()
+        if not root:
+            return None
+        _engine_root.place_engine_root_on_path(root)
+        from coordinator_core.group_em.admission_post import admission_path  # type: ignore
+        return Path(admission_path())
+    except Exception:  # fail open: no notice input, behaviour unchanged
+        return None
+
+
+def descendants(root: int, procs: list[Proc]) -> list[int]:
+    kids: dict[int, list[int]] = {}
+    for p in procs:
+        kids.setdefault(p.ppid, []).append(p.pid)
+    out, stack = [], [root]
+    while stack:
+        pid = stack.pop()
+        out.append(pid)
+        stack.extend(kids.get(pid, []))
+    return out
+
+
+def protected_pids(procs: list[Proc], noticed_tree: frozenset = frozenset()) -> set[int]:
+    return {p.pid for p in procs if is_protected(p, noticed_tree)}
+
+
+def _etime_seconds(etime: str) -> float:
+    days, _, rest = etime.rpartition("-")
+    parts = [int(x) for x in rest.split(":")]
+    while len(parts) < 3:
+        parts.insert(0, 0)
+    h, m, s = parts
+    return (int(days) if days else 0) * 86400 + h * 3600 + m * 60 + s
+
+
+def list_procs() -> list[Proc]:
+    if psutil is not None:
+        now = time.time()
+        out = []
+        for pr in psutil.process_iter(["pid", "ppid", "create_time", "memory_info", "cmdline"]):
+            info = pr.info
+            if info.get("memory_info") is None:
+                continue
+            out.append(Proc(info["pid"], info["ppid"] or 0, now - (info["create_time"] or now),
+                            info["memory_info"].rss / 1048576, " ".join(info["cmdline"] or [])))
+        return out
+    raw = subprocess.run(["ps", "-axo", "pid=,ppid=,etime=,rss=,command="],
+                         capture_output=True, text=True, check=False).stdout
+    out = []
+    for line in raw.splitlines():
+        f = line.split(None, 4)
+        if len(f) == 5:
+            out.append(Proc(int(f[0]), int(f[1]), _etime_seconds(f[2]), int(f[3]) / 1024, f[4]))
+    return out
+
+
+def critical(psi_full: float, avail_pct: float) -> bool:
+    if sys.platform == "darwin":
+        lv = subprocess.run(["sysctl", "-n", "kern.memorystatus_vm_pressure_level"],
+                            capture_output=True, text=True, check=False).stdout.strip()
+        return lv == "4"
+    psi = Path("/proc/pressure/memory")
+    if psi.exists():
+        for line in psi.read_text().splitlines():
+            if line.startswith("full"):
+                return float(re.search(r"avg10=([\d.]+)", line).group(1)) >= psi_full
+    if psutil is not None:
+        vm = psutil.virtual_memory()
+        return vm.available * 100 / vm.total < avail_pct
+    raise SystemExit("group-em-memory-governor: no pressure source on this host (install psutil)")
+
+
+_TOP_UNITS = {"B": 1 / 1048576, "K": 1 / 1024, "M": 1.0, "G": 1024.0, "T": 1048576.0}
+
+
+def footprints() -> dict[int, float]:
+    """pid -> MB of resident + compressed + swapped memory, for the largest processes."""
+    out: dict[int, float] = {}
+    if sys.platform == "darwin":
+        raw = subprocess.run(["top", "-l", "1", "-o", "mem", "-n", "15", "-stats", "pid,mem"],
+                             capture_output=True, text=True, check=False).stdout
+        for m in re.finditer(r"^\s*(\d+)\s+(\d+(?:\.\d+)?)([BKMGT])\+?\s*$", raw, re.M):
+            out[int(m.group(1))] = float(m.group(2)) * _TOP_UNITS[m.group(3)]
+        return out
+    if psutil is None:
+        return out
+    for pr in psutil.process_iter(["pid"]):
+        try:
+            if sys.platform.startswith("linux"):
+                full = pr.memory_full_info()
+                out[pr.pid] = (full.uss + full.swap) / 1048576
+            else:  # Windows: private commit covers resident and paged-out pages
+                out[pr.pid] = getattr(pr.memory_info(), "private", 0) / 1048576
+        except Exception:  # exited or access denied
+            pass
+    return out
+
+
+def signal_tree(pids: list[int], stop: bool) -> None:
+    for pid in pids:
+        try:
+            if psutil is not None:
+                proc = psutil.Process(pid)
+                proc.suspend() if stop else proc.resume()
+            else:
+                os.kill(pid, signal.SIGSTOP if stop else signal.SIGCONT)
+        except Exception:  # exited between listing and signalling
+            pass
+
+
+def cache_trim_hint(bin_dir: Path) -> str:
+    """The hint line for the elevated cache trim; the unavailable form when the sibling is absent."""
+    sibling = Path(bin_dir) / "trim-file-cache.py"
+    if not sibling.is_file():
+        return "GOVERNOR CACHE-TRIM-HINT unavailable: trim-file-cache.py not beside the governor"
+    return f'GOVERNOR CACHE-TRIM-HINT run elevated: python "{sibling.as_posix()}" --apply'
+
+
+def run(args: argparse.Namespace, emit: Callable[[str], None] = print,
+        sample: Optional[Callable[[], bool]] = None, procs_fn: Callable[[], list[Proc]] = list_procs,
+        signal_fn: Callable[[list[int], bool], None] = signal_tree,
+        sleep: Callable[[float], None] = time.sleep, max_ticks: Optional[int] = None,
+        footprint_fn: Callable[[], dict[int, float]] = footprints,
+        notice_path: Optional[Path] = None,
+        notice_fn: Callable[[Optional[Path], list[Proc]], frozenset] = read_noticed_pids,
+        bin_dir: Optional[Path] = None) -> None:
+    bin_dir = bin_dir if bin_dir is not None else Path(__file__).resolve().parent
+    hint_armed = True
+    sample = sample or (lambda: critical(args.psi_full, args.avail_pct))
+    self_pid = os.getpid()
+    paused: list[tuple[Proc, list[int]]] = []
+    flagged: set[int] = set()
+    calm = crit_streak = ticks = 0
+    gave_up = False
+    # A governor that exits (session end, SIGTERM) must never leave a peer's command frozen.
+    try:
+        while max_ticks is None or ticks < max_ticks:
+            ticks += 1
+            if args.runaway_mb > 0 and ticks % args.runaway_every == 1 % args.runaway_every:
+                over = {pid: mb for pid, mb in footprint_fn().items()
+                        if mb >= args.runaway_mb and pid not in flagged and pid != self_pid}
+                if over:
+                    cmds = {p.pid: p.cmd for p in procs_fn()}
+                    for pid, mb in sorted(over.items(), key=lambda kv: -kv[1]):
+                        flagged.add(pid)
+                        emit(f"GOVERNOR RUNAWAY pid={pid} footprint={mb:.0f}MB "
+                             f"cmd={cmds.get(pid, '?')[:160]}")
+            if sample():
+                calm = 0
+                crit_streak += 1
+                if hint_armed and sys.platform == "win32":
+                    emit(cache_trim_hint(bin_dir))
+                hint_armed = False
+                # First pause on the first critical sample; each further pause waits two more.
+                due = not paused or crit_streak >= 3
+                if due and len(paused) < args.max_pauses:
+                    procs = procs_fn()
+                    noticed = notice_fn(notice_path, procs)
+                    ntree = noticed_tree(noticed, procs)
+                    victim = choose_victim(procs, {p.pid for p, _ in paused}, self_pid, noticed, ntree)
+                    if victim:
+                        prot = protected_pids(procs, ntree)
+                        tree = [t for t in descendants(victim.pid, procs) if t not in prot]
+                        signal_fn(tree, True)
+                        paused.append((victim, tree))
+                        crit_streak = 0
+                        emit(f"GOVERNOR PAUSED pid={victim.pid} rss={victim.rss_mb:.0f}MB "
+                             f"tree={len(tree)} cmd={victim.cmd[:160]}")
+                elif due and not gave_up:
+                    gave_up = True
+                    emit(f"GOVERNOR STILL-CRITICAL after {len(paused)} pause(s); nothing left it may pause")
+            else:
+                crit_streak = 0
+                hint_armed = True
+                calm += 1
+                if paused and calm >= args.resume_after:
+                    for victim, tree in reversed(paused):
+                        signal_fn(tree, False)
+                    emit("GOVERNOR RESUMED " + " ".join(f"pid={v.pid}" for v, _ in reversed(paused)))
+                    paused.clear()
+                    gave_up = False
+            sleep(args.interval)
+    finally:
+        if paused:
+            for _, tree in reversed(paused):
+                signal_fn(tree, False)
+            try:
+                emit("GOVERNOR RESUMED-ON-EXIT " + " ".join(f"pid={v.pid}" for v, _ in reversed(paused)))
+            except Exception:  # stdout's reader may already be gone
+                pass
+
+
+def main(argv: Optional[list[str]] = None) -> None:
+    ap = argparse.ArgumentParser(description=(__doc__ or "").split("\n", 1)[0])
+    ap.add_argument("--interval", type=float, default=10.0, help="seconds between samples")
+    ap.add_argument("--max-pauses", type=int, default=3)
+    ap.add_argument("--resume-after", type=int, default=6, help="non-critical samples before resume")
+    ap.add_argument("--psi-full", type=float, default=10.0, help="Linux PSI full avg10 threshold")
+    ap.add_argument("--avail-pct", type=float, default=5.0, help="fallback available-memory floor")
+    ap.add_argument("--runaway-mb", type=float, default=12288.0,
+                    help="footprint that flags one process as a runaway; 0 disables")
+    ap.add_argument("--runaway-every", type=int, default=6, help="samples between footprint reads")
+    args = ap.parse_args(argv)
+    getattr(sys.stdout, "reconfigure", lambda **_: None)(line_buffering=True)
+    for sig in (signal.SIGTERM, getattr(signal, "SIGHUP", None)):
+        if sig is not None:
+            signal.signal(sig, lambda *_: sys.exit(0))
+    run(args, notice_path=resolve_notice_path())
+
+
+if __name__ == "__main__":
+    main()

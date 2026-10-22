@@ -169,10 +169,11 @@ def _make_mock_machine_local(tmpdir: str, return_value: str | None) -> str:
     return stub_path
 
 
-def _make_git_repo(parent_dir: str, name: str) -> str:
+def _make_git_repo(parent_dir: str, name: str, branch: str | None = None) -> str:
     repo_dir = os.path.join(parent_dir, name)
     os.makedirs(repo_dir)
-    subprocess.run(["git", "init", repo_dir], capture_output=True, check=False)
+    init = ["git", "init"] + (["-b", branch] if branch else []) + [repo_dir]
+    subprocess.run(init, capture_output=True, check=False)
     subprocess.run(
         ["git", "-C", repo_dir, "config", "user.email", "test@test.com"],
         capture_output=True, check=False,
@@ -234,7 +235,11 @@ def test_send_delivers_staged_draft() -> None:
 
     with tempfile.TemporaryDirectory() as tmpdir:
         sender_repo = _make_git_repo(tmpdir, "sender_repo")
-        receiver_repo = _make_git_repo(tmpdir, "receiver_repo")
+        # A receiver on a clean `main` is switched onto its day branch, so the memo lands in
+        # its working tree; any other branch takes the ref-direct landing (commit 29cb67cd66,
+        # `_receiver_landing`), which leaves the working tree untouched. A bare `git init`
+        # branch follows the host's init.defaultBranch, so pin it.
+        receiver_repo = _make_git_repo(tmpdir, "receiver_repo", branch="main")
         env, _ = _fixture_envs(tmpdir, sender_repo, receiver_repo)
         env["COORDINATOR_ENGINE_ROOT"] = claude_klabauter_root
 

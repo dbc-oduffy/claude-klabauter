@@ -830,7 +830,9 @@ _PRUNE_FAILED_MARKER = "delete failed, not counted as pruned: "
 
 def _record_prune_failures() -> List[str]:
     """Wrap the engine's banner sink so each failed-delete banner also lands in the
-    returned list, even under --quiet. Every sweep's failure path emits the marker."""
+    returned list, even under --quiet. Depends on every engine delete-failure site emitting
+    _PRUNE_FAILED_MARKER verbatim; only the scratch-clone site is pinned
+    (test_cruft_sweep_apply_prune_failure)."""
     import coordinator_core.ops.cruft_sweep as engine
 
     failures: List[str] = []

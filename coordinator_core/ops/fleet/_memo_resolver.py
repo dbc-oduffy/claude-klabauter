@@ -193,6 +193,7 @@ from coordinator_core._settings_home import (
 from coordinator_core.data_root import content_root_for
 from coordinator_core.content_root import read_content_root
 from coordinator_core.group_em import gem_home
+from coordinator_core.session import record_homes
 from coordinator_core.machine_resolver import (
     canonical_repo_key_for_root,
     external_workspace_containing,
@@ -842,7 +843,7 @@ def _group_em_target() -> Tuple[Optional[Path], Optional[Path], dict[str, str]]:
     config_dir = claude_config_dir()
     corpus_root = Path(receiver_inbox_root(str(config_dir))[0])
     if not (config_dir / "cross-repo").is_dir():
-        corpus_root = config_dir / "state" / "cross-repo"
+        corpus_root = Path(record_homes.home_dir(str(config_dir), "cross-repo"))
     return corpus_root / "inbox", config_dir, all_repos
 
 

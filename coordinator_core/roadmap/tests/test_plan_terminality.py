@@ -43,7 +43,7 @@ def test_deferred_and_out_of_enum_are_non_terminal(tmp_path):
         assert v.outcome == "non-terminal" and v.plans == ((rel, status),)
 
 
-def test_empty_status_prints_none_token(tmp_path):
+def test_empty_status_prints_none_token():
     v = pt.PlanTerminality("non-terminal", (("p.md", ""),), "x")
     assert pt.format_terminality_line(v) == "plan-terminality=non-terminal plan=p.md status=<none>"
 

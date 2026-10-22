@@ -1,0 +1,64 @@
+"""group-em-memory-governor-wait: starts at end, wakes on the first new complete line."""
+
+from __future__ import annotations
+
+import importlib.util
+import sys
+from pathlib import Path
+
+_SRC = Path(__file__).resolve().parents[1] / "group-em-memory-governor-wait.py"
+_spec = importlib.util.spec_from_file_location("group_em_memory_governor_wait", _SRC)
+assert _spec is not None and _spec.loader is not None
+w = importlib.util.module_from_spec(_spec)
+sys.modules[_spec.name] = w
+_spec.loader.exec_module(w)
+
+
+def _appender(path: Path, writes: list[bytes]):
+    def sleep(_s: float) -> None:
+        if writes:
+            with path.open("ab") as fh:
+                fh.write(writes.pop(0))
+    return sleep
+
+
+def test_existing_lines_do_not_wake(tmp_path):
+    log = tmp_path / "governor.log"
+    log.write_bytes(b"GOVERNOR PAUSED pid=1\n")
+    assert w.wait_for_line(log, 0, sleep=lambda _s: None, max_polls=3) is None
+
+
+def test_first_new_line_wakes_including_runaway(tmp_path):
+    log = tmp_path / "governor.log"
+    log.write_bytes(b"old\n")
+    sleep = _appender(log, [b"GOVERNOR RUNAWAY pid=7 footprint=13000MB\nGOVERNOR PAUSED pid=8\n"])
+    assert w.wait_for_line(log, 0, sleep=sleep, max_polls=3) == "GOVERNOR RUNAWAY pid=7 footprint=13000MB"
+
+
+def test_partial_line_waits_for_newline(tmp_path):
+    log = tmp_path / "governor.log"
+    log.write_bytes(b"")
+    sleep = _appender(log, [b"GOVERNOR RES", b"UMED pid=3\r\n"])
+    assert w.wait_for_line(log, 0, sleep=sleep, max_polls=4) == "GOVERNOR RESUMED pid=3"
+
+
+def test_missing_then_truncated_log(tmp_path):
+    log = tmp_path / "governor.log"
+    calls = []
+
+    def sleep(_s: float) -> None:
+        calls.append(1)
+        if len(calls) == 1:
+            log.write_bytes(b"a long first line that sets the offset\n")
+        elif len(calls) == 2:
+            log.write_bytes(b"short\n")
+    # Created after start: the first write is new. Truncation then resets to 0.
+    assert w.wait_for_line(log, 0, sleep=sleep, max_polls=3) == "a long first line that sets the offset"
+
+
+def test_help_exits_zero():
+    import pytest
+
+    with pytest.raises(SystemExit) as exc:
+        w.main(["--help"])
+    assert exc.value.code == 0

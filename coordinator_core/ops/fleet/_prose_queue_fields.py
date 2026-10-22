@@ -42,6 +42,11 @@ _HEADER_ROLES: Dict[str, str] = {
     "found": "created",
     "added": "created",
     "why blocked": "why_blocked",
+    # DSR-led grammar keys (_prose_queue_grammars._dsr_cells): embedded date, free text, schema-declared names.
+    "date": "created",
+    "body": "description",
+    "one-line description": "description",
+    "file:line": "surface",
 }
 
 _CLOSED_SYNONYMS = frozenset({"closed", "resolved", "fixed", "done"})
@@ -291,7 +296,11 @@ def fill_fields(family: str, row: RawRow) -> CandidateEntry:
         else:
             constant("source")
         constant("risk")
-        constant("proposed_action")
+        proposed = pipe["proposed_action"] if pipe is not None else ""
+        if proposed:
+            fields["proposed_action"] = proposed
+        else:
+            constant("proposed_action")
 
     evidence: List[str] = []
     if legacy_id:

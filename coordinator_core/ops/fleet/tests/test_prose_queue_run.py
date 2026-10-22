@@ -89,11 +89,11 @@ def test_debt_row_gets_constants_and_incomplete_count(tmp_path):
     text = "- 2026-06-02 | self | a/b.py | Debt thing. Detail. | proposed target: z\n"
     root = _repo(tmp_path, "debt-backlog", text)
     rep = run.run_migration(root, ["debt-backlog"], False)["files"]["debt-backlog"]
-    assert rep["to-migrate"] + sum(rep["skipped"].values()) + rep["unmigrated-parse-error"] == 1
-    if rep["to-migrate"]:
-        assert rep["migrated-incomplete"] == 1
-        (out,) = _created(root)
-        assert "(not recorded in legacy source)" in out.read_text(encoding="utf-8")
+    assert rep["to-migrate"] == 1 and rep["migrated-incomplete"] == 1
+    (out,) = _created(root)
+    content = out.read_text(encoding="utf-8")
+    assert "(not recorded in legacy source)" in content
+    assert "proposed_action: z" in content
 
 
 def test_prose_file_is_unparseable_on_both_runs(tmp_path):

@@ -182,7 +182,6 @@ from __future__ import annotations
 
 import os
 import re
-import subprocess
 import sys
 import tempfile
 from coordinator_core.temp_layout import managed_tempdir
@@ -193,6 +192,7 @@ from typing import Optional, Sequence
 
 from coordinator_core.dag import _read_meta
 from coordinator_core.git import repo_root as _repo_root_seam
+from coordinator_core.git.run import run_git
 from coordinator_core.frontmatter.primitives import (
     insert_fm_field,
     read_fm_field,
@@ -215,11 +215,6 @@ from coordinator_core.reconcile.commit_reality import (
 from coordinator_core.reconcile.policy_loader import load_policy
 from coordinator_core.session.shape import session_shape_set
 from coordinator_core.shipped_in_tokens import _NO_COMMIT_TOKEN_RE, _SHA_HEX_RE
-from coordinator_core.win_portability import no_console_creationflags
-
-# Windows console-flash suppression (DR-054) — routes through the canonical
-# primitive.
-_NO_CONSOLE = no_console_creationflags()
 
 # shipped_in value grammar (DR-096, 2026-07-26 ruling) — the shape a
 # `shipped_in` value may ever take (a resolvable git SHA, or the sanctioned
@@ -264,20 +259,6 @@ def handoff_archive_dest(worktree: Path, src: Path) -> Path:
 # ---------------------------------------------------------------------------
 # Shared git/repo-root helpers
 # ---------------------------------------------------------------------------
-
-def _run_git(args: list[str], cwd: Optional[Path] = None, timeout: int = _SUBPROCESS_TIMEOUT_SEC) -> subprocess.CompletedProcess:
-    """subprocess.run wrapper for git — timeout + stdin=DEVNULL on every call (A2)."""
-    return subprocess.run(
-        ["git", *args],
-        cwd=str(cwd) if cwd else None,
-        capture_output=True,
-        encoding="utf-8",
-        errors="replace",
-        timeout=timeout,
-        stdin=subprocess.DEVNULL,
-        **_NO_CONSOLE,
-    )
-
 
 def _worktree_root(start_path: Path) -> Optional[Path]:
     """git rev-parse --show-toplevel, resolved from start_path's directory."""
@@ -426,13 +407,13 @@ def _scope_commit_candidates(
     fmt = _SCOPE_LOG_FIELD_SEP.join(
         ("%H", "%cI", "%(trailers:key=Session-Id,valueonly)", "%s")
     ) + _SCOPE_LOG_RECORD_SEP
-    try:
-        proc = _run_git(
-            ["log", f"--pretty=format:{fmt}", "--no-color", f"-n{limit}", "--", *scope_paths],
-            cwd=worktree,
-        )
-    except (subprocess.TimeoutExpired, OSError) as exc:
-        print(f"_scope_commit_candidates: git log failed for {scope_paths} in {worktree}: {exc}", file=sys.stderr)
+    proc = run_git(
+        ["log", f"--pretty=format:{fmt}", "--no-color", f"-n{limit}", "--", *scope_paths],
+        cwd=str(worktree) if worktree else None,
+        timeout=_SUBPROCESS_TIMEOUT_SEC,
+    )
+    if proc.timed_out or proc.returncode in (-1, 127):
+        print(f"_scope_commit_candidates: git log failed for {scope_paths} in {worktree}: rc={proc.returncode}", file=sys.stderr)
         return []
     if proc.returncode != 0:
         return []
@@ -558,10 +539,13 @@ def _commit_committer_date(
     ordering on commit recency rather than authorship."""
     if facts is not None and sha in facts:
         return _parse_iso_timestamp(facts[sha][0])
-    try:
-        proc = _run_git(["log", "-1", "--format=%cI", sha], cwd=worktree)
-    except (subprocess.TimeoutExpired, OSError) as exc:
-        print(f"_commit_committer_date: git log failed for {sha} in {worktree}: {exc}", file=sys.stderr)
+    proc = run_git(
+        ["log", "-1", "--format=%cI", sha],
+        cwd=str(worktree) if worktree else None,
+        timeout=_SUBPROCESS_TIMEOUT_SEC,
+    )
+    if proc.timed_out or proc.returncode in (-1, 127):
+        print(f"_commit_committer_date: git log failed for {sha} in {worktree}: rc={proc.returncode}", file=sys.stderr)
         return None
     if proc.returncode != 0:
         return None
@@ -660,10 +644,13 @@ def _scope_sha_predates_creation(
 
 
 def _resolve_branch_tip_sha(worktree: Path) -> Optional[str]:
-    try:
-        proc = _run_git(["log", "--format=%H", "-n1"], cwd=worktree)
-    except (subprocess.TimeoutExpired, OSError) as exc:
-        print(f"_resolve_branch_tip_sha: git log failed in {worktree}: {exc}", file=sys.stderr)
+    proc = run_git(
+        ["log", "--format=%H", "-n1"],
+        cwd=str(worktree) if worktree else None,
+        timeout=_SUBPROCESS_TIMEOUT_SEC,
+    )
+    if proc.timed_out or proc.returncode in (-1, 127):
+        print(f"_resolve_branch_tip_sha: git log failed in {worktree}: rc={proc.returncode}", file=sys.stderr)
         return None
     if proc.returncode != 0:
         return None
@@ -695,12 +682,12 @@ def _commit_session_id(
         if not sid or not _SESSION_ID_UUID_RE.match(sid):
             return None
         return sid
-    try:
-        proc = _run_git(
-            ["log", "-1", "--format=%(trailers:key=Session-Id,valueonly)", sha],
-            cwd=worktree,
-        )
-    except (subprocess.TimeoutExpired, OSError):
+    proc = run_git(
+        ["log", "-1", "--format=%(trailers:key=Session-Id,valueonly)", sha],
+        cwd=str(worktree) if worktree else None,
+        timeout=_SUBPROCESS_TIMEOUT_SEC,
+    )
+    if proc.timed_out or proc.returncode in (-1, 127):
         return None
     if proc.returncode != 0:
         return None
@@ -1651,7 +1638,7 @@ def _cs_ship_handoff_core(
         return 1, False
     worktree, _ = _resolve_repo_root_for(Path(handoff_path))
     basename = Path(handoff_path).name
-    twin = _archived_shipped_twin(handoff_path, worktree)
+    twin = None if force else _archived_shipped_twin(handoff_path, worktree)
     _print_terminality_line(twin if twin is not None else Path(handoff_path), basename, worktree)
     if twin is not None:
         return _release_and_report(handoff_path, basename, worktree), False
@@ -2271,14 +2258,17 @@ def _record_pickup_best_effort(handoff_path: str, worktree: Path, sid: str) -> b
     per-write landed/failed signal, read by `cs_claim_handoff`. Still
     best-effort and non-fatal: never raises into the caller.
     """
-    try:
-        proc = _run_git(["rev-parse", "--show-prefix"], cwd=worktree)
-        prefix = proc.stdout.strip() if proc.returncode == 0 else ""
-    except (subprocess.TimeoutExpired, OSError) as exc:
-        # Best-effort per this function's docstring — a prefix-resolution
-        # failure degrades to a bare-basename handoff path, never aborts.
-        print(f"_record_pickup_best_effort: git rev-parse --show-prefix failed: {exc}", file=sys.stderr)
+    proc = run_git(
+        ["rev-parse", "--show-prefix"],
+        cwd=str(worktree) if worktree else None,
+        timeout=_SUBPROCESS_TIMEOUT_SEC,
+    )
+    if proc.timed_out or proc.returncode in (-1, 127):
+        # A prefix-resolution failure degrades to a bare-basename handoff path, never aborts.
+        print(f"_record_pickup_best_effort: git rev-parse --show-prefix failed: rc={proc.returncode}", file=sys.stderr)
         prefix = ""
+    else:
+        prefix = proc.stdout.strip() if proc.returncode == 0 else ""
     hp_rec = f"{prefix}{Path(handoff_path).name}" if prefix else Path(handoff_path).name
 
     # Cheap single-field frontmatter read (mirrors the deployment_state read

@@ -2840,7 +2840,7 @@ def compose_ask_script(
         "      for (const i of (_ledger?.items ?? [])) {\n"
         "        if (!i || i.status !== 'met' || !_blk.includes(i.id)) continue;\n"
         "        const _rec = _hr[i.id] ?? {};\n"
-        "        const _known = _hex(JSON.stringify([_rec.evidence ?? '', _rec.remaining ?? []]));\n"
+        f"        const _known = _hex(JSON.stringify([_rec.evidence ?? '', _rec.remaining ?? [], _gate.{RESUME_LEDGER_KEY}.{RESUME_LEDGER_NOTES_FIELD} ?? []]));\n"
         "        const _named = _hex((Array.isArray(i.met_by) ? i.met_by : [i.met_by]).join(' '));\n"
         "        const _ok = _named.some((n) => _known.some((k) => k.startsWith(n) || n.startsWith(k)));\n"
         "        if (!_ok) { i.status = 'not_met'; i.essential = true; "

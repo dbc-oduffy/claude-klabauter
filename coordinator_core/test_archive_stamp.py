@@ -133,6 +133,11 @@ def _init_repo(repo: Path) -> None:
     seeded_repo(repo, email="t@t", name="test")
 
 
+def _init_memo_repo(repo: Path) -> None:
+    # memo.transition refuses a default-branch HEAD (1dccb23c3d), so these repos sit on a work branch.
+    seeded_repo(repo, branch="work/test", email="t@t", name="test")
+
+
 def _seed_handoff(repo: Path, name: str, status: str, deployment_state: str, extra: str = "") -> Path:
     path = repo / "state" / "handoffs" / name
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -2774,7 +2779,7 @@ class TestSupersedeArchiveHandoff:
 class TestMemoTransitionWrappers:
     def test_claim(self, tmp_path, monkeypatch):
         repo = tmp_path / "repo"
-        _init_repo(repo)
+        _init_memo_repo(repo)
         mp = _seed_memo(repo, "m1.md", "open")
         monkeypatch.setenv("CLAUDE_SESSION_ID", "sess-abc")
         rc = arstamp.cs_claim_memo_stamp(str(mp))
@@ -2785,7 +2790,7 @@ class TestMemoTransitionWrappers:
 
     def test_claim_requires_session_id(self, tmp_path, monkeypatch):
         repo = tmp_path / "repo"
-        _init_repo(repo)
+        _init_memo_repo(repo)
         mp = _seed_memo(repo, "m2.md", "open")
         monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
         monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
@@ -2794,7 +2799,7 @@ class TestMemoTransitionWrappers:
 
     def test_release(self, tmp_path):
         repo = tmp_path / "repo"
-        _init_repo(repo)
+        _init_memo_repo(repo)
         mp = _seed_memo(
             repo, "m3.md", "in_progress",
             extra="picked_up_at: '2026-01-01T00:00:00Z'\npicked_up_by: sess-x\n",
@@ -2808,7 +2813,7 @@ class TestMemoTransitionWrappers:
     def test_action_no_claim_dir_proceeds(self, tmp_path, monkeypatch):
         """Guard 1: claim dir absent -> PROCEED (no ownership infra to check)."""
         repo = tmp_path / "repo"
-        _init_repo(repo)
+        _init_memo_repo(repo)
         mp = _seed_memo(repo, "m4.md", "in_progress")
         monkeypatch.setenv("CLAUDE_SESSION_ID", "sess-abc")
         rc = arstamp.cs_action_memo(str(mp), "--decision", "declined", "--decision-note", "no")
@@ -2818,7 +2823,7 @@ class TestMemoTransitionWrappers:
     def test_action_owner_closing_own_claim(self, tmp_path, monkeypatch):
         """Guard 3: holder == caller -> PROCEED, even with a live claim dir."""
         repo = tmp_path / "repo"
-        _init_repo(repo)
+        _init_memo_repo(repo)
         mp = _seed_memo(repo, "m5.md", "in_progress")
         claim_dir = repo / ".git" / "coordinator-sessions" / "memo-claims" / "m5.md"
         claim_dir.mkdir(parents=True)
@@ -2830,7 +2835,7 @@ class TestMemoTransitionWrappers:
 
     def test_action_disposition_flag_parsing(self, tmp_path, monkeypatch):
         repo = tmp_path / "repo"
-        _init_repo(repo)
+        _init_memo_repo(repo)
         mp = _seed_memo(repo, "m6.md", "in_progress")
         monkeypatch.setenv("CLAUDE_SESSION_ID", "sess-abc")
         rc = arstamp.cs_action_memo(
@@ -2847,7 +2852,7 @@ class TestMemoTransitionWrappers:
         distinct from the value-taking _DISPOSITION_FLAGS. Corrects realized_by on
         an already-actioned memo whose decision: is unchanged."""
         repo = tmp_path / "repo"
-        _init_repo(repo)
+        _init_memo_repo(repo)
         mp = _seed_memo(
             repo, "m7.md", "actioned",
             extra=(
@@ -2878,7 +2883,7 @@ class TestMemoTransitionWrappers:
         join returns rc=0 (wrongly proceeds); the fix returns rc=1 (correctly
         refuses)."""
         repo = tmp_path / "repo"
-        _init_repo(repo)
+        _init_memo_repo(repo)
         worktree = tmp_path / "wt1"
         _git(repo, "worktree", "add", "-q", str(worktree), "-b", "wt1-branch")
         mp = _seed_memo(worktree, "m7.md", "in_progress")
@@ -2899,7 +2904,7 @@ class TestMemoTransitionWrappers:
         path must also let the actual claim owner proceed (Guard 3) from
         inside a linked worktree."""
         repo = tmp_path / "repo"
-        _init_repo(repo)
+        _init_memo_repo(repo)
         worktree = tmp_path / "wt1"
         _git(repo, "worktree", "add", "-q", str(worktree), "-b", "wt1-branch")
         mp = _seed_memo(worktree, "m8.md", "in_progress")
@@ -2918,7 +2923,7 @@ class TestMemoTransitionWrappers:
         """Guard 6: a claim held by a DIFFERENT but dead session is stale --
         warn on stderr and proceed with the flip (no refusal)."""
         repo = tmp_path / "repo"
-        _init_repo(repo)
+        _init_memo_repo(repo)
         mp = _seed_memo(repo, "m9dead.md", "in_progress")
         claim_dir = repo / ".git" / "coordinator-sessions" / "memo-claims" / "m9dead.md"
         claim_dir.mkdir(parents=True)
@@ -2942,7 +2947,7 @@ class TestMemoTransitionWrappers:
         one locked_rmw closure (through the memo.transition op this wrapper
         calls)."""
         repo = tmp_path / "repo"
-        _init_repo(repo)
+        _init_memo_repo(repo)
         mp = _seed_memo(repo, "m9.md", "in_progress")
         # The pointer must resolve — seed the named memo in cross-repo/inbox/.
         _seed_memo(repo, "successor.md", "open")
@@ -2957,7 +2962,7 @@ class TestMemoTransitionWrappers:
         """AC2: --superseded-by and --decision together fail loud (exit 1),
         memo byte-unchanged — no op call is even made."""
         repo = tmp_path / "repo"
-        _init_repo(repo)
+        _init_memo_repo(repo)
         mp = _seed_memo(repo, "m10.md", "in_progress")
         _seed_memo(repo, "successor2.md", "open")
         before = mp.read_bytes()
@@ -2971,7 +2976,7 @@ class TestMemoTransitionWrappers:
     def test_action_superseded_by_and_actioned_note_mutually_exclusive(self, tmp_path, monkeypatch):
         """AC2 sibling: --superseded-by + --actioned-note also refused."""
         repo = tmp_path / "repo"
-        _init_repo(repo)
+        _init_memo_repo(repo)
         mp = _seed_memo(repo, "m11.md", "in_progress")
         _seed_memo(repo, "successor3.md", "open")
         before = mp.read_bytes()
@@ -2994,7 +2999,7 @@ class TestMemoTransitionWrappers:
 class TestResolveMemo:
     def test_open_to_actioned_in_one_call(self, tmp_path, monkeypatch):
         repo = tmp_path / "repo"
-        _init_repo(repo)
+        _init_memo_repo(repo)
         mp = _seed_memo(repo, "r1.md", "open")
         monkeypatch.setenv("CLAUDE_SESSION_ID", "sess-abc")
         rc = arstamp.cs_resolve_memo(str(mp), "--actioned-note", "done")
@@ -3009,7 +3014,7 @@ class TestResolveMemo:
 
     def test_requires_session_id(self, tmp_path, monkeypatch):
         repo = tmp_path / "repo"
-        _init_repo(repo)
+        _init_memo_repo(repo)
         mp = _seed_memo(repo, "r2.md", "open")
         monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
         monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
@@ -3018,7 +3023,7 @@ class TestResolveMemo:
 
     def test_disposition_flag_parsing(self, tmp_path, monkeypatch):
         repo = tmp_path / "repo"
-        _init_repo(repo)
+        _init_memo_repo(repo)
         mp = _seed_memo(repo, "r3.md", "open")
         monkeypatch.setenv("CLAUDE_SESSION_ID", "sess-abc")
         rc = arstamp.cs_resolve_memo(
@@ -3033,7 +3038,7 @@ class TestResolveMemo:
         """resolve's own disposition validation (shared with action) still fires —
         cs_resolve_memo does not loosen the exactly-one-disposition-field rule."""
         repo = tmp_path / "repo"
-        _init_repo(repo)
+        _init_memo_repo(repo)
         mp = _seed_memo(repo, "r4.md", "open")
         monkeypatch.setenv("CLAUDE_SESSION_ID", "sess-abc")
 
@@ -3056,7 +3061,7 @@ class TestResolveMemo:
         --correct-realization route named; following it amends decision_note only,
         leaving decision and realized_by intact and appending a correction clause."""
         repo = tmp_path / "repo"
-        _init_repo(repo)
+        _init_memo_repo(repo)
         mp = _seed_memo(repo, "r5.md", "open")
         monkeypatch.setenv("CLAUDE_SESSION_ID", "sess-abc")
         base = ["--decision", "accepted", "--realized-by", "commit-abc123"]
@@ -3093,7 +3098,7 @@ class TestCorrectMemoNote:
 
     def _actioned(self, tmp_path, monkeypatch, name="c1.md", note="raised with the author"):
         repo = tmp_path / "repo"
-        _init_repo(repo)
+        _init_memo_repo(repo)
         mp = _seed_memo(repo, name, "open")
         monkeypatch.setenv("CLAUDE_SESSION_ID", "sess-author")
         assert arstamp.cs_resolve_memo(str(mp), *self._BASE, "--decision-note", note) == 0
@@ -3184,7 +3189,7 @@ class TestCorrectMemoNote:
         self, tmp_path, monkeypatch, capsys
     ):
         repo = tmp_path / "repo"
-        _init_repo(repo)
+        _init_memo_repo(repo)
         mp = _seed_memo(repo, "c2.md", "open")
         monkeypatch.setenv("CLAUDE_SESSION_ID", "sess-author")
         assert arstamp.cs_resolve_memo(str(mp), "--actioned-note", "done") == 0
@@ -3194,7 +3199,7 @@ class TestCorrectMemoNote:
 
     def test_unactioned_memo_is_refused(self, tmp_path, monkeypatch, capsys):
         repo = tmp_path / "repo"
-        _init_repo(repo)
+        _init_memo_repo(repo)
         mp = _seed_memo(repo, "c3.md", "open")
         assert arstamp.cs_correct_memo_note(str(mp), "new") == 1
         assert "expected actioned or closed" in capsys.readouterr().err
@@ -3237,7 +3242,7 @@ def _commit_file(repo: Path, rel: str, content: str, message: str) -> str:
 class TestSurfaceAdvisoryStderrLine:
     def _run_action(self, tmp_path, monkeypatch, extra: str, realized_by: str, capsys):
         repo = tmp_path / "repo"
-        _init_repo(repo)
+        _init_memo_repo(repo)
         mp = _seed_memo(repo, "m.md", "in_progress", extra=extra)
         monkeypatch.setenv("CLAUDE_SESSION_ID", _DEFAULT_TEST_SESSION_ID)
         rc = arstamp.cs_action_memo(
@@ -3247,7 +3252,7 @@ class TestSurfaceAdvisoryStderrLine:
 
     def test_no_declared_surface_prints_nothing(self, tmp_path, monkeypatch, capsys):
         repo = tmp_path / "repo"
-        _init_repo(repo)
+        _init_memo_repo(repo)
         sha = _commit_file(repo, "other.py", "z", "realize")
         _, _, rc, captured = self._run_action(
             tmp_path, monkeypatch, extra="", realized_by=sha, capsys=capsys
@@ -3257,7 +3262,7 @@ class TestSurfaceAdvisoryStderrLine:
 
     def test_out_of_surface_prints_one_line(self, tmp_path, monkeypatch, capsys):
         repo = tmp_path / "repo"
-        _init_repo(repo)
+        _init_memo_repo(repo)
         _commit_file(repo, "declared_thing.py", "x", "declared")
         sha = _commit_file(repo, "other.py", "z", "realize")
         extra = "scoped_to:\n  artifact: declared_thing.py\n"
@@ -3273,7 +3278,7 @@ class TestSurfaceAdvisoryStderrLine:
 
     def test_paper_realization_prints_one_line(self, tmp_path, monkeypatch, capsys):
         repo = tmp_path / "repo"
-        _init_repo(repo)
+        _init_memo_repo(repo)
         _commit_file(repo, "real_file.py", "x", "declared")
         sha = _commit_file(repo, "docs/plans/x.md", "y", "planning")
         extra = "scoped_to:\n  artifact: real_file.py\n"
@@ -3290,7 +3295,7 @@ class TestSurfaceAdvisoryStderrLine:
         self, tmp_path, monkeypatch, capsys
     ):
         repo = tmp_path / "repo"
-        _init_repo(repo)
+        _init_memo_repo(repo)
         extra = "scoped_to:\n  artifact: real_file.py\n"
         _, _, rc, captured = self._run_action(
             tmp_path, monkeypatch, extra=extra, realized_by="abcdef01234",
@@ -3311,7 +3316,7 @@ class TestSurfaceAdvisoryStderrLine:
         --correct-realization clause (nothing for the agent to correct on an
         internal failure)."""
         repo = tmp_path / "repo"
-        _init_repo(repo)
+        _init_memo_repo(repo)
         sha = _commit_file(repo, "real_file.py", "x", "c")
         extra = "scoped_to:\n  artifact: real_file.py\n"
         mp = _seed_memo(repo, "m.md", "in_progress", extra=extra)
@@ -3346,7 +3351,7 @@ class TestSurfaceAdvisoryStderrLine:
         untouched_declared, and exactly one stderr line naming the untouched
         path (coordinator/bin/session-claim-cli)."""
         repo = tmp_path / "repo"
-        _init_repo(repo)
+        _init_memo_repo(repo)
         (repo / "coordinator" / "bin").mkdir(parents=True, exist_ok=True)
         (repo / "coordinator" / "bin" / "session-claim-cli").write_text("x", encoding="utf-8")
         _git(repo, "add", "--", "coordinator/bin/session-claim-cli")
@@ -3379,7 +3384,7 @@ class TestSurfaceAdvisoryStderrLine:
         self, tmp_path, monkeypatch, capsys
     ):
         repo = tmp_path / "repo"
-        _init_repo(repo)
+        _init_memo_repo(repo)
         _commit_file(repo, "real_file.py", "x", "declared")
         sha = _commit_file(repo, "real_file.py", "y", "realize")
         extra = "scoped_to:\n  artifact: real_file.py\n"
@@ -3396,7 +3401,7 @@ class TestSurfaceAdvisoryStderrLine:
         key can exist), and the wrapper never reads the key unguarded -- it
         must not crash, and it prints nothing beyond its own refusal line."""
         repo = tmp_path / "repo"
-        _init_repo(repo)
+        _init_memo_repo(repo)
         mp = _seed_memo(repo, "held.md", "in_progress")
         claim_dir = repo / ".git" / "coordinator-sessions" / "memo-claims" / "held.md"
         claim_dir.mkdir(parents=True)
@@ -3415,7 +3420,7 @@ class TestSurfaceAdvisoryStderrLine:
     def test_resolve_memo_out_of_surface_prints_one_line(self, tmp_path, monkeypatch, capsys):
         """Same AC6 contract on cs_resolve_memo's own wrapper."""
         repo = tmp_path / "repo"
-        _init_repo(repo)
+        _init_memo_repo(repo)
         _commit_file(repo, "declared_thing.py", "x", "declared")
         sha = _commit_file(repo, "other.py", "z", "realize")
         extra = "scoped_to:\n  artifact: declared_thing.py\n"

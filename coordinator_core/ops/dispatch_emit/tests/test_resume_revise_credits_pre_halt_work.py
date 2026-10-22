@@ -48,6 +48,22 @@ def test_a_met_verdict_without_a_halt_recorded_sha_halts_not_met(monkeypatch, me
     assert "commit" not in _labels(out)
 
 
+def test_a_met_verdict_naming_a_sha_only_the_revise_note_names_reaches_the_commit_leg(monkeypatch):
+    noted = dict(_REVISED, remaining={"R1": {"remaining": ["update the sizing"], "evidence": "no sha here"}},
+                 revise_notes=["R1 met by the work committed in 134841934b and cd96cb412a"])
+    out = _run(_script(monkeypatch), verify=_met(["134841934b", "cd96cb412a"]), resume=noted)
+    assert out["result"]["halted_by"] is None, out["result"]["halted_by"]
+    assert "commit" in _labels(out)
+
+
+def test_a_met_verdict_naming_a_sha_no_note_or_record_names_still_halts(monkeypatch):
+    noted = dict(_REVISED, remaining={"R1": {"remaining": ["x"], "evidence": "none"}},
+                 revise_notes=["R1 met by 134841934b"])
+    out = _run(_script(monkeypatch), verify=_met("fedcba9876"), resume=noted)
+    assert out["result"]["halted_by"]["items"][0]["status"] == "not_met"
+    assert "commit" not in _labels(out)
+
+
 def test_the_judge_prompt_credits_work_before_the_halt_only_when_a_note_re_rules(monkeypatch):
     out = _run(_script(monkeypatch), verify=_met(_SHA), resume=_REVISED)
     verify = next(c for c in out["calls"] if c["label"] == "verify")["prompt"]

@@ -167,6 +167,24 @@ def test_dsr_closure_token_in_any_cell_or_text():
     assert fill_fields("debt-backlog", row).bucket_hint == BUCKET_SKIPPED
 
 
+def test_dsr_grammar_cells_map_to_roles_without_leaking_into_body():
+    cells = {"ID": "DSR-2026-05-27-1", "date": "2026-05-27", "file:line": "core/x.py",
+             "one-line description": "Description here", "severity": "P2"}
+    seg = "- DSR-2026-05-27-1 | core/x.py | Description here | P2"
+    f = fill_fields("debt-backlog", RawRow("dsr-led", 1, 1, seg, cells)).fields
+    assert (f["title"], f["body"], f["surface"], f["created"]) == (
+        "Description here", "Description here", "core/x.py", "2026-05-27")
+    bold = {"ID": "DSR-2026-06-16-1", "date": "2026-06-16", "body": "Bold text. More."}
+    g = fill_fields("debt-backlog", RawRow("dsr-led", 1, 1, "- **DSR-2026-06-16-1** Bold text. More.", bold)).fields
+    assert g["title"] == "Bold text." and g["body"] == "Bold text. More."
+
+
+def test_debt_pipe_row_keeps_its_proposed_target():
+    c = fill_fields("debt-backlog", pipe_row())
+    assert c.fields["proposed_action"] == "do x"
+    assert c.fields["risk"] == NOT_RECORDED
+
+
 def test_pipe_improvement_body_starting_with_done_is_not_closed():
     assert fill_fields("improvement-queue", pipe_row(body="Done tracking is broken.")).bucket_hint == BUCKET_TO_MIGRATE
 

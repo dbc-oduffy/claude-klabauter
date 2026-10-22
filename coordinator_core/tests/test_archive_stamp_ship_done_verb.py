@@ -153,7 +153,7 @@ def test_ac4_ac12_status_and_claim_fields_are_byte_unchanged(repo):
 
     rc = arstamp.cs_ship_handoff(str(hp), archive=True, sha=_head(repo))
 
-    assert rc in (0, arstamp.SHIP_RC_CLAIM_NOT_RELEASED)
+    assert rc == 0
     (twin,) = _archived(repo, "bytes1.md")
     assert {k: _fm_line(twin, k) for k in before} == before
 

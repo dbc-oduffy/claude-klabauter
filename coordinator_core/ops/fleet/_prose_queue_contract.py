@@ -10,7 +10,8 @@ FAMILIES: Tuple[str, ...] = ("improvement-queue", "bug-backlog", "debt-backlog")
 
 OUTCOME_PARSED = "parsed"
 OUTCOME_FILE_UNPARSEABLE = "file-unparseable"
-FILE_OUTCOMES: Tuple[str, ...] = (OUTCOME_PARSED, OUTCOME_FILE_UNPARSEABLE)
+OUTCOME_SOURCE_ABSENT = "source-absent"
+FILE_OUTCOMES: Tuple[str, ...] = (OUTCOME_PARSED, OUTCOME_FILE_UNPARSEABLE, OUTCOME_SOURCE_ABSENT)
 
 BUCKET_TO_MIGRATE = "to-migrate"
 BUCKET_AMBIGUOUS = "ambiguous"
@@ -18,13 +19,6 @@ BUCKET_MIGRATED_INCOMPLETE = "migrated-incomplete"
 BUCKET_PARSE_ERROR = "unmigrated-parse-error"
 BUCKET_UNIVERSAL_LEFTOVER = "unmigrated-universal-leftover"
 BUCKET_SKIPPED = "skipped"
-BUCKETS: Tuple[str, ...] = (
-    BUCKET_TO_MIGRATE,
-    BUCKET_PARSE_ERROR,
-    BUCKET_UNIVERSAL_LEFTOVER,
-    BUCKET_SKIPPED,
-)
-TO_MIGRATE_SUBCOUNTS: Tuple[str, ...] = (BUCKET_AMBIGUOUS, BUCKET_MIGRATED_INCOMPLETE)
 
 # Evaluation order per candidate entry; the order is part of the contract.
 SKIP_REASONS: Tuple[str, ...] = (
@@ -77,10 +71,10 @@ class CandidateEntry:
     source_row: Optional[RawRow] = None
 
 
-# Signatures implemented by later rows (grammars, field fill, run):
-#   parse_file(text: str) -> FileParse
-#   fill_fields(family: str, row: RawRow) -> CandidateEntry
-#   run_migration(repo_root: Path, families: list[str], dry_run: bool) -> dict
+# Pipeline signatures:
+#   _prose_queue_grammars.parse_file(text: str) -> FileParse
+#   _prose_queue_fields.fill_fields(family: str, row: RawRow) -> CandidateEntry
+#   _prose_queue_run.run_migration(repo_root: Path, families: list[str], dry_run: bool) -> dict
 #
 # Report shape of run_migration:
 #   {"dry_run": bool,
