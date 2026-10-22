@@ -11,7 +11,7 @@ from coordinator_core.ops.dispatch_emit.spine_read import _is_memo_send_row
 
 
 def test_memo_send_row_is_detected_by_brief_kind_and_outbox_write():
-    assert _is_memo_send_row({"brief": "run `cross-repo-memo send` to the peer"})
+    assert not _is_memo_send_row({"brief": "run `cross-repo-memo send` to the peer"})
     assert _is_memo_send_row({"kind": "memo-send"})
     assert not _is_memo_send_row({"brief": "edit a module", "writes": ["a.py"]})
 
@@ -106,3 +106,35 @@ def test_a_blocked_status_after_prose_is_not_read_as_done():
         assert non_done.search(json.dumps(reply)) and blocked.search(json.dumps(reply)), reply
     for reply in ("DONE: a.py; PREFLIGHT-BLOCKED fine, no PARTIAL chunks", "DONE: a.py\n- blocked nothing"):
         assert not non_done.search(json.dumps(reply)), reply
+
+
+_MEMO_FIELDS = {"slug": "peer-note", "to": "peer-repo", "title": "A title", "kind": "note"}
+
+
+def _memo_row(**kw):
+    from coordinator_core.ops.dispatch_emit.wave_map import WaveRow
+
+    return WaveRow("C9", "send the memo", "s", (), [], [], body="send it", **kw)
+
+
+def test_a_memo_send_row_routes_to_the_executor_whatever_its_change_kind():
+    for kind in ("doc-edit", "wiki-new", None):
+        row = _memo_row(memo_send=_MEMO_FIELDS, change_kind=kind)
+        assert emit._row_agent_type(row) == "coordinator:executor"
+
+
+def test_a_memo_send_row_declared_agent_type_wins():
+    row = _memo_row(memo_send=_MEMO_FIELDS, agent_type="coordinator:workflow-maker")
+    assert emit._row_agent_type(row) == "coordinator:workflow-maker"
+
+
+def test_a_memo_send_row_prompt_names_the_send_verb_slug_and_receipt():
+    prompt = emit._row_prompt(_memo_row(memo_send=_MEMO_FIELDS), "docs/plans/p.md")
+    assert "cross-repo-memo send peer-note" in prompt
+    assert "sent/peer-note.md" in prompt
+
+
+def test_a_row_without_memo_send_prompts_byte_identically():
+    plain = emit._row_prompt(_memo_row(), "docs/plans/p.md")
+    assert plain == emit._row_prompt(_memo_row(memo_send=None), "docs/plans/p.md")
+    assert "Memo send for row" not in plain

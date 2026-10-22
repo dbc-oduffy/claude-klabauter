@@ -1317,7 +1317,8 @@ def _executor_commit(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
 
     Reads each schedulable row's ``body`` code spans through
     ``em_only_act.executor_commit_act`` (prose never flags). Operator and
-    memo-send rows are the EM's already and are skipped.
+    memo-send rows are skipped: the send is the send op's own commit, and the executor's
+    fixed brief is composed by ``memo_send_step_block``, not from the row body.
     """
     from coordinator_core.ops.dispatch_emit.em_only_act import executor_commit_act
     from coordinator_core.ops.dispatch_emit.spine_read import _is_memo_send_row, _is_operator_row
@@ -1550,7 +1551,11 @@ def _sibling_plan_edges(
     from coordinator_core.ops.dispatch_emit.em_only_act import row_is_em_performed
 
     edges = row.get("depends_on_plan")
-    if not edges or row_is_em_performed(row) or spine_read._is_memo_send_row(row):
+    if (
+        not edges
+        or row_is_em_performed(row)
+        or (spine_read._is_memo_send_row(row) and not spine_read.memo_row_dispatchable(row))
+    ):
         return frozenset(), [], []
     if not isinstance(edges, list):
         return frozenset(), [], [f"row {row_id!r} depends_on_plan is {edges!r}, not a list"]

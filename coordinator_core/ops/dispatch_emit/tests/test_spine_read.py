@@ -716,7 +716,7 @@ def test_closure_detail_names_em_owed_root_not_gated(tmp_path):
 
 
 def test_closure_detail_names_memo_send_root_not_gated(tmp_path):
-    entry = _closure_detail(tmp_path, "  kind: memo-send\n  memo_to: coordinator-content-repo\n  receipt: .coordinator-local/memo-outbox/sent/slug-x.md\n")
+    entry = _closure_detail(tmp_path, "  kind: memo-send\n  performer: em\n  memo_to: coordinator-content-repo\n  receipt: .coordinator-local/memo-outbox/sent/slug-x.md\n")
     assert entry["reason"] == "withheld_by_owed_dependency"
     assert (entry["root"], entry["root_reason"]) == ("C1", "memo-send")
     assert "; root C1 is owed by the EM (" in entry["detail"]

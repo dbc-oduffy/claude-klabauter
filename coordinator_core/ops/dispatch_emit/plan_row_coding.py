@@ -198,9 +198,12 @@ def flip_rows_coded(plan_text: str, row_ids: set, sha: str, details: Optional[di
     if not isinstance(rows, list) or not all(isinstance(r, dict) for r in rows):
         return plan_text, []
     row_by_id = {str(r.get("id")): r for r in rows}
+    from coordinator_core.ops.dispatch_emit.memo_rows import _is_memo_send_row
+
     targets = {
         rid for rid in row_ids
         if rid in row_by_id and _row_disposition(row_by_id[rid]) == "open"
+        and not _is_memo_send_row(row_by_id[rid])
     }
     if not targets:
         return plan_text, []
@@ -232,6 +235,97 @@ def flip_rows_coded(plan_text: str, row_ids: set, sha: str, details: Optional[di
         chunks = sorted(chunks, key=rank)
         lines = head + [line for _cid, chunk in chunks for line in chunk]
 
+    new_body = "".join(lines)
+    if not ended_with_newline:
+        new_body = new_body[:-2] if new_body.endswith("\r\n") else new_body[:-1]
+    return plan_text[:start] + new_body + plan_text[end:], sorted(targets)
+
+
+def close_memo_rows_delivered(plan_text: str, receipts: dict) -> tuple:
+    """Line-level close of open memo-send rows as ``delivered_elsewhere`` via ``memo``.
+
+    ``receipts`` maps row id -> ``(receipt_ref, receiver)``; each open row named there gets
+    ``disposition_ref: <receipt_ref>``, ``delivered_via: memo`` and a ``disposition_detail``
+    naming the receiver (the fields ``plan.tasks.mutate`` resolve writes). Untouched lines stay
+    byte-identical. Returns ``(new_text, closed_ids)``; empty ``closed_ids`` means no edit.
+    """
+    import yaml
+
+    from coordinator_core.execute_plan_assemble.row_spans import (
+        _find_row_spans,
+        _line_ending,
+        _measure_row_content_indent,
+        _row_disposition,
+        _row_key_line_indices,
+    )
+    from coordinator_core.frontmatter.body_blocks import LocateStatus, locate_fenced_block
+    from coordinator_core.frontmatter.primitives import serialize_yaml_scalar
+
+    if "\r\n" in plan_text and "\n" not in plan_text.replace("\r\n", ""):
+        new_text, closed = close_memo_rows_delivered(plan_text.replace("\r\n", "\n"), receipts)
+        return (new_text.replace("\n", "\r\n"), closed) if closed else (plan_text, [])
+    located = locate_fenced_block(plan_text)
+    if located.status != LocateStatus.LOCATED or located.span is None:
+        return plan_text, []
+    try:
+        rows = yaml_load(located.body) or []
+    except yaml.YAMLError:
+        return plan_text, []
+    if not isinstance(rows, list) or not all(isinstance(r, dict) for r in rows):
+        return plan_text, []
+    row_by_id = {str(r.get("id")): r for r in rows}
+    targets = {
+        rid for rid in receipts
+        if rid in row_by_id and _row_disposition(row_by_id[rid]) == "open"
+    }
+    if not targets:
+        return plan_text, []
+
+    start, end = located.span
+    body = plan_text[start:end]
+    ended_with_newline = body.endswith(("\n", "\r"))
+    lines = body.splitlines(keepends=True)
+    for s, e, rid in sorted(_find_row_spans(lines), key=lambda t: t[0], reverse=True):
+        if rid not in targets:
+            continue
+        ref, receiver = receipts[rid]
+        newline = _line_ending(lines[s])
+        dash_indent = len(lines[s]) - len(lines[s].lstrip(" \t"))
+        pad = " " * _measure_row_content_indent(lines, s, e, dash_indent)
+        keys = _row_key_line_indices(lines, s + 1, e, len(pad))
+        wanted = {
+            "disposition": "delivered_elsewhere",
+            "delivered_via": "memo",
+            "disposition_ref": serialize_yaml_scalar(ref, numeric_quoting=True),
+            "disposition_detail": serialize_yaml_scalar(f"memo sent to {receiver}; receipt {ref}"),
+        }
+        fresh = []
+        for key, value in wanted.items():
+            line = f"{pad}{key}: {value}{newline}"
+            if key in keys:
+                lines[keys[key]] = line
+            else:
+                fresh.append(line)
+        if fresh:
+            at = keys["deferred"] + 1 if "deferred" in keys else e
+            if at > 0 and not lines[at - 1].endswith(("\n", "\r\n")):
+                lines[at - 1] += newline
+            lines[at:at] = fresh
+    if lines and not lines[-1].endswith(("\n", "\r")):
+        lines[-1] += _line_ending(lines[0])
+
+    spans = _find_row_spans(lines)
+    if spans:
+        head = lines[: spans[0][0]]
+        chunks = [(cid, lines[s:e]) for s, e, cid in spans]
+
+        def rank(item: tuple) -> int:
+            row = dict(row_by_id.get(item[0], {}))
+            if item[0] in targets:
+                row["disposition"] = "delivered_elsewhere"
+            return row_rank(row)
+
+        lines = head + [line for _cid, chunk in sorted(chunks, key=rank) for line in chunk]
     new_body = "".join(lines)
     if not ended_with_newline:
         new_body = new_body[:-2] if new_body.endswith("\r\n") else new_body[:-1]

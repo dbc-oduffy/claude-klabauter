@@ -1377,6 +1377,7 @@ def read_spine(
                     if isinstance(raw.get("appends"), list)
                     else ()
                 ),
+                memo_send=memo_draft_fields(raw)[0] if memo_row_dispatchable(raw) else None,
             )
         )
 
@@ -1428,7 +1429,7 @@ def read_spine(
         em_capability = em_only_capability(raw)
         em_performed = (
             row_is_em_performed(raw)
-            or _is_memo_send_row(raw)
+            or (_is_memo_send_row(raw) and not memo_row_dispatchable(raw))
             or inbound_close is not None
         )
         memo_slug = None
@@ -1458,6 +1459,8 @@ def read_spine(
                         f"row {raw.get('id')!r} is a memo-send row but names no memo_to: "
                         "add `memo_to: <receiver>` to the row"
                     )
+                if not memo_delivered and memo_row_dispatchable(raw):
+                    memo_slug = None
         em_discharged = None
         if em_discharge_eligible(raw, tuple(frontmatter_gates.get(raw.get("id"), ()))):
             if discharges is None:

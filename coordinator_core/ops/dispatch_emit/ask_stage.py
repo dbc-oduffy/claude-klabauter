@@ -430,6 +430,69 @@ def _only_rows(
     return kept, [e for e in exclusions if e.get("id") in keep], retired
 
 
+_UNKNOWN_RECEIVER_MARK = "UNKNOWN RECEIVER"
+
+
+def _unknown_receiver_detail(to: str) -> str:
+    return (
+        f"receiver {to!r} is unknown to the registry, memo.draft refuses it as {_UNKNOWN_RECEIVER_MARK}; "
+        "post it as a PR/issue comment and close the row with delivered_via other and an http(s) "
+        "disposition_ref"
+    )
+
+
+def _demote_unregistered_memo_rows(
+    rows: list,
+    owed: list,
+    raw_by_id: Mapping[str, Mapping],
+    classify_receiver: Optional[Callable[[str, bool], object]] = None,
+) -> tuple[list, list]:
+    """Rows that stay dispatchable, and `owed` plus every memo-send row whose receiver the registry
+    refuses and every row transitively behind one. One classification per memo row."""
+    from coordinator_core.ops.dispatch_emit.memo_rows import memo_receiver_unregistered
+
+    root_to: dict[str, str] = {}
+    for row in rows:
+        fields = getattr(row, "memo_send", None)
+        to = fields.get("to") if isinstance(fields, Mapping) else None
+        if to and memo_receiver_unregistered(to, classify_receiver):
+            root_to[row.id] = to
+    if not root_to:
+        return rows, owed
+
+    def _preds(row) -> list[str]:
+        return [e.get("chunk") if isinstance(e, Mapping) else e for e in row.depends_on]
+
+    root_of: dict[str, str] = dict(zip(root_to, root_to))
+    changed = True
+    while changed:
+        changed = False
+        for row in rows:
+            if row.id in root_of:
+                continue
+            for pred in _preds(row):
+                if pred in root_of:
+                    root_of[row.id] = root_of[pred]
+                    changed = True
+                    break
+    new_owed = list(owed)
+    for row in rows:
+        root = root_of.get(row.id)
+        if root is None:
+            continue
+        if row.id == root:
+            new_owed.append(OwedRow(id=row.id, reason="memo-send", detail=_unknown_receiver_detail(root_to[root])))
+        else:
+            new_owed.append(
+                OwedRow(
+                    id=row.id,
+                    reason="withheld_by_owed_dependency",
+                    detail=f"behind memo-send row {root}, whose receiver {root_to[root]!r} the registry refuses",
+                )
+            )
+    return [r for r in rows if r.id not in root_of], new_owed
+
+
 def _memo_draft_steps(
     root: Path,
     run_dir: Path,
@@ -441,7 +504,8 @@ def _memo_draft_steps(
 ) -> tuple[list[OwedRow], list[ManifestRow]]:
     """Does the outbox hold the draft each owed `memo-send` row's send needs? One dispatched draft
     step per row whose draft is absent and whose receiver is named; the row stays owed for the EM's
-    send either way, its detail saying why no step was staged. No subagent sends.
+    send either way, its detail saying why no step was staged. It stages a draft for a row the EM
+    still sends: `performer: em`, or a receiver the registry refuses.
 
     The step inherits the owed row's `depends_on` edges that name a `staged` row, and sits one wave
     after the latest of them: the draft carries content those rows produce."""
@@ -452,7 +516,7 @@ def _memo_draft_steps(
     out_owed: list[OwedRow] = []
     steps: list[ManifestRow] = []
     for o in owed:
-        if o.reason != "memo-send":
+        if o.reason != "memo-send" or _UNKNOWN_RECEIVER_MARK in o.detail:
             out_owed.append(o)
             continue
         raw = raw_by_id.get(o.id) or {}
@@ -464,11 +528,7 @@ def _memo_draft_steps(
             out_owed.append(
                 replace(
                     o,
-                    detail=(
-                        f"{o.detail} (no draft step staged: receiver {fields['to']!r} is unknown to the "
-                        "registry, memo.draft refuses it as UNKNOWN RECEIVER; post it as a PR/issue "
-                        "comment and close the row with delivered_via other and an http(s) disposition_ref)"
-                    ),
+                    detail=f"{o.detail} (no draft step staged: {_unknown_receiver_detail(fields['to'])})",
                 )
             )
             continue
@@ -626,6 +686,7 @@ def stage(
     only_rows: Optional[Sequence[str]] = None,
     ledger_resume: bool = False,
     claim_register_rows: bool = False,
+    classify_receiver: Optional[Callable[[str, bool], object]] = None,
 ) -> StageManifest:
     """Stage the run for `plan_rel`, or for the XS sizing `sizing_rel` (minted to X1 over `writes`).
 
@@ -714,6 +775,7 @@ def stage(
         for e in exclusions
         if e.get("reason") in EM_OWNED_REASONS
     ]
+    rows, owed = _demote_unregistered_memo_rows(rows, owed, raw_by_id, classify_receiver)
     try:
         check_cross_repo_writes(rows, root, approved=cross_repo_approved, session_id=session_id)
     except CrossRepoWriteError as exc:
@@ -816,7 +878,7 @@ def stage(
             )
 
     manifest_rows, row_groups = _group_rows(manifest_rows, brief_sizes, raw_by_id)
-    owed, draft_rows = _memo_draft_steps(root, run_dir, owed, raw_by_id, intent, manifest_rows)
+    owed, draft_rows = _memo_draft_steps(root, run_dir, owed, raw_by_id, intent, manifest_rows, classify_receiver)
     manifest_rows.extend(draft_rows)
     fanout = FanoutCost(
         units=len(manifest_rows),

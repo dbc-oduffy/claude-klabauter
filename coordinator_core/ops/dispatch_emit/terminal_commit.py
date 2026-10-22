@@ -185,6 +185,7 @@ from coordinator_core.ops.dispatch_emit.plan_row_coding import (  # noqa: F401 -
     MINTED_SPINE_ORIGIN as _MINTED_SPINE_ORIGIN,
     NOOP_DETAIL as _NOOP_DETAIL,
     REVIEW_WALK_CAP as _REVIEW_WALK_CAP,
+    close_memo_rows_delivered as _close_memo_rows_delivered,
     flip_rows_coded as _flip_rows_coded,
     inventory_record_rel as _inventory_record_rel,
     outside_landing_attribution as _outside_landing_attribution,
@@ -552,9 +553,9 @@ _MEMO_NO_SLUG = "no slug: declare receipt:"
 def _memo_rows_without_receipt(worktree_root: Path, request: CommitRequest) -> dict:
     """``{row id: slug}`` of the plan's open memo-send rows whose sender-side receipt is absent.
 
-    A memo row is an EM act, never dispatched; it closes on
-    ``memo-outbox/sent/<slug>.md`` existing, by resolving the row ``delivered_elsewhere``
-    with ``disposition_ref`` naming that receipt (a non-open row is not reported).
+    A memo row may be dispatched to an executor; it closes on
+    ``memo-outbox/sent/<slug>.md`` existing, when ``_stamp_coded_commit`` resolves the row
+    ``delivered_elsewhere`` with ``disposition_ref`` naming that receipt (a non-open row is not reported).
     An open row naming no slug maps to ``"no slug: declare receipt:"``, never dropped.
     Unreadable plan or spine: empty.
     """
@@ -590,6 +591,48 @@ def _memo_rows_without_receipt(worktree_root: Path, request: CommitRequest) -> d
             out[str(row["id"])] = _MEMO_NO_SLUG
         elif not memo_receipt_exists(worktree_root, slug):
             out[str(row["id"])] = slug
+    return out
+
+
+def _memo_rows_to_close(worktree_root: Path, request: CommitRequest) -> dict:
+    """``{plan: {row id: (receipt ref, receiver)}}`` of the run's chunk rows that are open
+    memo-send rows with a sender-side receipt on disk. One stat per memo row, no spawn."""
+    if not request.plan_path:
+        return {}
+    text = _read_rel(worktree_root, request.plan_path)
+    if text is None:
+        return {}
+    import yaml
+
+    from coordinator_core.frontmatter.body_blocks import LocateStatus, locate_fenced_block
+    from coordinator_core.ops.dispatch_emit.memo_rows import (
+        _is_memo_send_row,
+        memo_receipt_exists,
+        memo_row_slug,
+    )
+    from coordinator_core.session.machinery_paths import MEMO_OUTBOX_RELDIR
+
+    located = locate_fenced_block(text.replace("\r\n", "\n"))
+    if located.status != LocateStatus.LOCATED:
+        return {}
+    try:
+        rows = _yaml_load(located.body) or []
+    except yaml.YAMLError:
+        return {}
+    ids = {c.id for c in request.chunks}
+    out: dict = {}
+    for row in rows if isinstance(rows, list) else ():
+        if not isinstance(row, dict) or str(row.get("id")) not in ids:
+            continue
+        if (row.get("disposition") or "open") != "open" or not _is_memo_send_row(row):
+            continue
+        slug = memo_row_slug(row)
+        if slug is not None and memo_receipt_exists(worktree_root, slug):
+            to = row.get("memo_to")
+            out.setdefault(request.plan_path, {})[str(row["id"])] = (
+                f"{MEMO_OUTBOX_RELDIR}/sent/{slug}.md",
+                to.strip() if isinstance(to, str) and to.strip() else "its receiver",
+            )
     return out
 
 
@@ -1337,6 +1380,7 @@ def _stamp_coded_commit(
     flip_reason: Optional[str] = None,
     outside_rows: Optional[dict] = None,
     ledger_met: Optional[str] = None,
+    memo_closes: Optional[dict] = None,
 ) -> dict:
     """Second, plan-only ``commit_v2`` call stamping the product commit's
     rows ``coded`` with ``disposition_ref: <sha>`` -- a SHA only exists once
@@ -1350,6 +1394,8 @@ def _stamp_coded_commit(
     writes commits outside the run landed: they close ``coded`` at the newest landing sha
     with a no-op detail naming every landing sha. An edit that would make a schema-valid plan invalid
     is refused before any write; on any failure every plan edit is restored.
+    ``memo_closes`` (``{plan: {row id: (receipt ref, receiver)}}``) are receipted memo-send rows:
+    they close ``delivered_elsewhere`` via ``memo``, never ``coded``, in the same commit.
     ``flip_plan`` names the plan whose ``implemented`` status is written to disk without
     committing (``_stamp_plan_implemented`` reads the rows just written ``coded``), so
     the one commit below carries rows, minted stamp and status together; its reply
@@ -1379,7 +1425,8 @@ def _stamp_coded_commit(
     noop_rows = noop_rows or {}
     checkpoint_rows = checkpoint_rows or {}
     outside_rows = outside_rows or {}
-    plans = set(source_rows) | set(noop_rows) | set(outside_rows)
+    memo_closes = memo_closes or {}
+    plans = set(source_rows) | set(noop_rows) | set(outside_rows) | set(memo_closes)
     for by_plan in checkpoint_rows.values():
         plans |= set(by_plan)
     for plan_rel in sorted(plans):
@@ -1397,6 +1444,9 @@ def _stamp_coded_commit(
                 flipped = sorted(set(flipped) | set(more))
         for rid, shas in sorted(outside_rows.get(plan_rel, {}).items()):
             updated, more = _flip_rows_coded(updated, {rid}, shas[0], {rid: _outside_landing_detail(shas)})
+            flipped = sorted(set(flipped) | set(more))
+        if plan_rel in memo_closes:
+            updated, more = _close_memo_rows_delivered(updated, memo_closes[plan_rel])
             flipped = sorted(set(flipped) | set(more))
         if not flipped:
             continue
@@ -5201,6 +5251,7 @@ def _terminal_commit_inner(
                 trailers=(f"Sizing-Shipped: {shipped_sizing} {reply['sha']}",) if shipped_sizing else (),
                 commit=stamp_commit,
                 archive_after_flip=archive_targets,
+                memo_closes=_memo_rows_to_close(worktree_root, request),
             )
         )
         flipped = reply.pop("_flip", None)

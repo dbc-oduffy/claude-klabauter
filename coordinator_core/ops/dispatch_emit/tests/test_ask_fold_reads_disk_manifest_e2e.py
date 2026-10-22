@@ -145,12 +145,17 @@ def test_a_missing_reader_halts_naming_the_sidecar():
     assert out["halted"]["reason"].startswith("stage reply sidecar does not match its handle: reader ")
 
 
+def _compose_for_sizing() -> str:
+    """The composed script for an existing XS sizing (no scout): the gate agent closes with the stage act."""
+    return _compose(prompt=None, sizing_rel="state/sizings/x.yaml")
+
+
 def _gate_fold(gate) -> dict:
     """Run the composed XS gate-adoption lines on a gate agent reply `gate`, then the fold segment."""
     node = shutil.which("node")
     if node is None:
         pytest.skip("node not on PATH")
-    script = ask_compose_script_for_sizing()
+    script = _compose_for_sizing()
     a0 = script.index("  if (_gate && typeof _gate.arm === 'string')")
     a1 = script.index("\n", script.index("await _adoptStageReply(_gate.stage_reply)"))
     f0 = script.index("  let _stageHalt")
@@ -179,11 +184,6 @@ def _gate_fold(gate) -> dict:
     )
     assert proc.returncode == 0, proc.stderr
     return json.loads(proc.stdout.strip().splitlines()[-1])
-
-
-def ask_compose_script_for_sizing() -> str:
-    """The composed script for an existing XS sizing (no scout): the gate agent closes with the stage act."""
-    return _compose(prompt=None, sizing_rel="state/sizings/x.yaml")
 
 
 @pytest.mark.parametrize("arm", ["xs", "XS", " Xs "])
