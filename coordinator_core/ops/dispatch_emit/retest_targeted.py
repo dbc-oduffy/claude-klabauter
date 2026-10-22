@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import shlex
 import subprocess
 import sys
@@ -50,7 +51,7 @@ def _repo_root(raw: Optional[str]) -> Path:
 
 
 def _tests_to_run(explicit: Sequence[str], params: dict) -> list[str]:
-    tests = [t.replace("\\", "/") for t in explicit]
+    tests = [p.replace("\\", "/") for t in explicit for p in re.split(r"[,\s]+", t) if p]
     verdict = li.targeted_test_verdict(params)
     baseline = verdict.get("baseline") if isinstance(verdict, dict) else None
     if isinstance(baseline, dict):
@@ -128,6 +129,14 @@ def main(
     tests = _tests_to_run(args.tests, params)
     if not tests:
         return _write_stale(root, run_id, dirty, head_sha)
+
+    missing = [t for t in tests if not (root / t.split("::")[0]).exists()]
+    if missing:
+        print(
+            "retest_targeted: test path does not exist (target absent, nothing run): " + ", ".join(missing),
+            file=sys.stderr,
+        )
+        return 2
 
     resolved = resolve_validation_cmd.resolve_fast_test_cmd(str(root))
     if resolved.returncode != 0:

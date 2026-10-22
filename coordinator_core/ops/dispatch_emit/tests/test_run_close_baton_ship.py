@@ -73,6 +73,24 @@ def test_ran_stamps_and_appends_one_parseable_row_per_baton(tmp_path, session_en
         assert unparseable_ledger_rows("## Session Ledger\n\n" + row + "\n") == []
 
 
+def test_open_baton_is_shipped_with_its_ledger_row_without_correct_body(tmp_path, session_env):
+    repo = _make_git_repo(tmp_path)
+    rel = _baton(repo, "a.md")
+    path = repo / rel
+    text = path.read_text(encoding="utf-8")
+    assert "status: claimed" in text
+    path.write_text(text.replace("status: claimed", "status: open").replace(f"claimed_by: {_AUTHOR_SESSION}\n", ""),
+                    encoding="utf-8")
+
+    result = baton_ship_leg(repo, "run-1", [rel], SHA)
+
+    assert result.status == "ran", result.detail
+    shipped = path.read_text(encoding="utf-8")
+    assert "status: open" in shipped and "deployment_state: shipped" in shipped
+    assert shipped.count(MARKER) == 1 and "Correction Log" not in shipped
+    assert baton_ship_leg(repo, "run-1", [rel], SHA).status == "discharged"
+
+
 def test_rerun_is_discharged_and_adds_no_second_row(tmp_path, session_env, monkeypatch):
     repo = _make_git_repo(tmp_path)
     batons = [_baton(repo, "a.md")]

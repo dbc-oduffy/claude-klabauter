@@ -400,6 +400,19 @@ def test_flip_refuses_without_a_minted_stamp_or_with_incomplete_rows(tmp_path):
     assert refused.status == "failed" and "incomplete chunks remain" in refused.detail
 
 
+def test_flip_does_not_count_an_incomplete_row_the_plan_has_since_resolved(tmp_path):
+    root = tmp_path / "repo"
+    sha = _build(root, spine=True)
+    _fake_mint(root / PLAN, root)
+    plan = root / PLAN
+    plan.write_text(plan.read_text(encoding="utf-8").replace(
+        "  writes: [src/b.py]\n  disposition: open", "  writes: [src/b.py]\n  disposition: voided"), encoding="utf-8")
+    result = cb._plan_flip(_flip_ctx(root, sha, inputs={"incomplete": ["C2"]}))
+    assert "incomplete chunks remain" not in result.detail
+    still = cb._plan_flip(_flip_ctx(root, sha, inputs={"incomplete": ["C1", "C2"]}))
+    assert still.status == "failed" and "['C1']" in still.detail
+
+
 def test_flip_refuses_a_plan_with_open_spine_rows(tmp_path):
     root = tmp_path / "repo"
     sha = _build(root, spine=True)

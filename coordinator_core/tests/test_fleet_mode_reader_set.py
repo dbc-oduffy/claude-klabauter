@@ -725,7 +725,6 @@ EXPECTED_READERS = (
     "coordinator_core.ops.dispatch_emit.tests.test_emit_artifact_naming_and_out",
     "coordinator_core.ops.dispatch_emit.tests.test_emit_fanout_groups",
     "coordinator_core.ops.dispatch_emit.tests.test_emit_inventory_accounting",
-    "coordinator_core.ops.dispatch_emit.tests.test_emit_inventory_done_unlanded",
     "coordinator_core.ops.dispatch_emit.tests.test_emit_work_class_routing",
     "coordinator_core.ops.dispatch_emit.tests.test_fanout_exit_criterion",
     "coordinator_core.ops.dispatch_emit.tests.test_grind_compose_fanout_meta",

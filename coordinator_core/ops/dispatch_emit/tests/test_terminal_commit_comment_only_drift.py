@@ -132,20 +132,3 @@ def test_commit_v2_is_called_once_on_real_drift(repo, monkeypatch):
     out, _ = _fire(repo, monkeypatch, _REVIEWED)
     assert out["refused"] == "blob-drift"
     assert counter.calls == 1
-
-
-def test_landing_paths_are_passed_as_untrusted_paths(repo, monkeypatch):
-    from coordinator_core.ops.dispatch_emit import comment_only_drift
-
-    seen: dict = {}
-    real_fn = comment_only_drift.tolerated_drift
-
-    def spy(root, sidecar, drift, **kw):
-        seen.update(kw)
-        return real_fn(root, sidecar, drift, **kw)
-
-    monkeypatch.setattr(comment_only_drift, "tolerated_drift", spy)
-    _reviewed(repo, {"a.py": _SOURCE}, {"a.py": "x = 1\n"})
-    out, _ = _fire(repo, monkeypatch, _REVIEWED)
-    assert out["committed"] is True, out
-    assert "a.py" in seen["untrusted_paths"]

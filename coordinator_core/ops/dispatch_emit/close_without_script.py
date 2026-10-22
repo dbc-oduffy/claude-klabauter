@@ -349,6 +349,7 @@ def _requeue_background(worktree_root: Path, repo_root: Path, run_id: str) -> No
         legs = record.get("legs") if record else None
         resolved = run_close._resolve(record, run_id, datetime.now().astimezone()) if isinstance(legs, dict) else {}
         owed = [leg for leg in close_background.BACKGROUND_LEGS if leg in resolved and resolved[leg].status == "failed"]
+        owed = close_background.owed_on_reclose({leg: ("failed" if leg in owed else "-" if r.status == "queued" else r.status) for leg, r in resolved.items()})
         if not owed:
             return
         run_close.amend_close_job(

@@ -665,7 +665,6 @@ _DISPOSITIONS: Dict[str, Tuple[str, str]] = {
     'coordinator_core/workday_start/rules.py': ('in-repo-non-state', 'stale-branch deferral line in tasks/.deferred-branches.md'),
     'coordinator_core/ceremony_common/run/single_flight.py': ('git-internal', 'single-flight lock.json under <git-common-dir>/coordinator-sessions/'),
     'coordinator_core/workday_complete/autonomous_verb.py':('in-repo-non-state', 'raw-write site(s), no state/-component signal: main'),
-    'coordinator_core/workflow_watch/run_report.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: _atomic_write (run-cost.json beside the journal, cost ratchet)'),
     'coordinator_core/workflow_watch/stamp.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: stamp_terminal'),
     'coordinator_core/workstream_complete/directives_lessons_plan.py': ('outside-repo', 'raw-write site(s) near tempdir/home/settings-home construct: _spool_body_to_file'),
     'coordinator_core/workstream_complete/directives_review.py': ('outside-repo', 'raw-write site(s) near tempdir/home/settings-home construct: record_gate_memo'),

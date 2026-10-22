@@ -108,6 +108,29 @@ def test_pathless_failure_reruns_recorded_targeted_set(repo, tmp_path):
     assert li.fresh_targeted_verdict(repo, RUN_ID)["status"] == "pass"
 
 
+@pytest.mark.parametrize("value", ["test_a.py test_b.py", "test_a.py,test_b.py", "test_a.py, test_b.py"])
+def test_combined_tests_value_is_split_into_paths(repo, tmp_path, value):
+    (repo / "test_b.py").write_text("def test_b():\n    pass\n", encoding="utf-8")
+    seen = []
+    rc = retest_targeted.main(
+        ["--from-task-output", str(_task_output(tmp_path)), "--tests", value, "--repo-root", str(repo)],
+        run=lambda argv, cwd: seen.append(argv) or 0,
+    )
+    assert rc == 0 and seen[0][-2:] == ["test_a.py", "test_b.py"]
+    assert li.fresh_targeted_verdict(repo, RUN_ID)["tests"] == ["test_a.py", "test_b.py"]
+
+
+def test_missing_test_path_is_refused_by_name_before_running(repo, tmp_path, capsys):
+    rc = retest_targeted.main(
+        ["--from-task-output", str(_task_output(tmp_path)), "--tests", "test_a.py,nope.py", "--repo-root", str(repo)],
+        run=lambda argv, cwd: pytest.fail("must not run"),
+    )
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "nope.py" in err and "test_a.py," not in err and "does not exist" in err
+    assert li.fresh_targeted_verdict(repo, RUN_ID) is None
+
+
 def test_dirty_paths_reads_untracked_and_modified(repo):
     (repo / "new.txt").write_text("x", encoding="utf-8")
     (repo / "test_a.py").write_text("changed\n", encoding="utf-8")

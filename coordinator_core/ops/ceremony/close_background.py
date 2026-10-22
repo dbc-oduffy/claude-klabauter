@@ -72,6 +72,15 @@ BACKGROUND_LEGS: tuple[str, ...] = (
     "post-close",
 )
 
+def owed_on_reclose(statuses: Mapping[str, str]) -> list[str]:
+    """The background legs a re-close re-runs: those ``queued`` or ``failed``, plus a ``not-applicable``
+    ``sizing-ship`` when ``plan-reconciliation`` is owed again -- it settles the register that gates it."""
+    owed = {leg for leg in BACKGROUND_LEGS if statuses.get(leg) in ("queued", "failed")}
+    if "plan-reconciliation" in owed and statuses.get("sizing-ship") == "not-applicable":
+        owed.add("sizing-ship")
+    return [leg for leg in BACKGROUND_LEGS if leg in owed]
+
+
 UNBUDGETED_LEGS: frozenset[str] = frozenset({"close-commit"})
 """Legs the budget guard never stops: they land what the earlier legs already wrote."""
 
@@ -245,6 +254,8 @@ def _memo_lifecycle(ctx: JobContext) -> LegResult:
 # --------------------------------------------------------------------------------------------
 
 _FULL_SHA = re.compile(r"^[0-9a-f]{40}$")
+# A row in one of these dispositions is settled in the plan, whatever the run record's incomplete list says.
+_RESOLVED_DISPOSITIONS = frozenset({"coded", "spun_off", "backlogged", "wont_do", "voided", "delivered_elsewhere"})
 _RESOLUTION_SHA = re.compile(r"^[0-9a-f]{7,64}$")
 _LANDS_CHUNKS = re.compile(r"^Lands-Chunks:[ \t]*(?P<v>.+?)\s*$", re.M)
 _HALTED_WALK_CAP = 500
@@ -654,8 +665,13 @@ def _plan_flip(ctx: JobContext) -> LegResult:
             ctx,
         )
     inputs = _inputs(ctx)
-    if inputs.get("incomplete"):
-        return _leg("failed", f"incomplete chunks remain: {sorted(inputs['incomplete'])}", ctx)
+    resolved = {
+        str(r.get("id")) for r in _spine_rows(text)
+        if (r.get("disposition") or "open") in _RESOLVED_DISPOSITIONS
+    }
+    remaining = [c for c in (inputs.get("incomplete") or ()) if str(c) not in resolved]
+    if remaining:
+        return _leg("failed", f"incomplete chunks remain: {sorted(remaining)}", ctx)
     fm = _plan_fm(text)
     stamp = fm.get("review_stamp")
     if not isinstance(stamp, dict):
@@ -817,14 +833,27 @@ def _record_resolution(ctx: JobContext, sizing_rel: str, sha: str) -> None:
         pass
 
 
+def _ledger_met_rows(ctx: JobContext) -> list:
+    """Judge rows for the register ids the passed requirements ledger judged met (``ledger_met`` is
+    set only when the ledger passed with nothing open); an unmet row is absent, so it stays open."""
+    inputs = _inputs(ctx)
+    text = inputs.get("ledger_met")
+    if not isinstance(text, str) or ":" not in text:
+        return []
+    judged = {str(i) for i in inputs.get("ledger_judged") or ()}
+    ids = [i.strip() for i in text.split(":", 1)[1].split(",") if i.strip()]
+    return [
+        {"id": i, "claim": "this-plan", "status": "met", "wired": True, "observed_ref": "requirements ledger"}
+        for i in ids if i in judged
+    ]
+
+
 def _sizing_ship(ctx: JobContext) -> LegResult:
     """Write the judged register rows back onto the cited sizing, then ship it through ``sizing.ship``;
     an applied ship stamps the resolution and adds the ``Sizing-Shipped`` trailer to the close commit."""
     plan_rel, sha = _plan_rel(ctx), ctx.terminal_sha
     if not plan_rel or not sha:
         return _leg("not-applicable", "run has no plan or terminal commit")
-    if _inputs(ctx).get("incomplete"):
-        return _leg("not-applicable", "run incomplete: sizing stays live")
     sizing_rel, _ = _cited(ctx, plan_rel)
     if sizing_rel is None:
         return _leg("not-applicable", "plan cites no sizing")
@@ -833,6 +862,17 @@ def _sizing_ship(ctx: JobContext) -> LegResult:
 
     notes: list = []
     criterion = _criterion(ctx)
+    ledger_rows = _ledger_met_rows(ctx)
+    if ledger_rows:
+        merged = {**(criterion or {}), "register_rows": [*((criterion or {}).get("register_rows") or []), *ledger_rows]}
+        settled = register_gate.register_writeback(ctx.root, plan_rel, {"criterion": merged}, sha)
+        if settled.get("register_sizing"):
+            _note_written(ctx, settled["register_sizing"])
+            notes.append("ledger-met register rows written")
+        elif settled.get("register_writeback_error"):
+            notes.append("ledger register write-back refused")
+    if _inputs(ctx).get("incomplete"):
+        return _leg("ran" if notes else "not-applicable", "; ".join([*notes, "run incomplete: sizing stays live"]), ctx)
     wrote = register_gate.register_writeback(ctx.root, plan_rel, {"criterion": criterion} if criterion else None, sha)
     if wrote.get("register_sizing"):
         _note_written(ctx, wrote["register_sizing"])

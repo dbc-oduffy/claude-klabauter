@@ -579,6 +579,7 @@ def apply_verdicts(
         return sizing_text
     verdicts = {str(j.get("id")): j for j in judge_rows if isinstance(j, Mapping)}
     stamp = _iso_utc(now)
+    key = _plan_key(plan_path)
     changed = False
     for row in claimed_rows(register, plan_path, claim_ids):
         verdict = verdicts.get(str(row.get(ROW_ID)))
@@ -589,9 +590,14 @@ def apply_verdicts(
         ref = f"{_plan_key(plan_path)}@{sha}"
         met_by = [m for m in row.get(ROW_MET_BY) or [] if isinstance(m, str)]
         target = STATUS_MET if met and wired else STATUS_PARTIAL if met or wired else row.get(ROW_STATUS)
-        if met and wired and ref in met_by and row.get(ROW_WIRED) is True and row.get(ROW_STATUS) == STATUS_MET:
+        if (
+            met and wired and ref in met_by and row.get(ROW_WIRED) is True and row.get(ROW_STATUS) == STATUS_MET
+            and key in claimants(row)
+        ):
             continue  # already met at this sha: a repeat bumps no timestamp and writes nothing
         changed = True
+        if key not in claimants(row):
+            row[ROW_CLAIMED_BY] = [*(row.get(ROW_CLAIMED_BY) or []), key]
         row[ROW_WIRED] = wired
         if met and wired:
             row[ROW_MET_BY] = met_by + ([ref] if ref not in met_by else [])

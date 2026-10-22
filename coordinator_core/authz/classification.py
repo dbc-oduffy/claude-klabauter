@@ -1433,15 +1433,6 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #   4. Mutates shared mutable state outside its own module?                No.
     #   5. Persistent state changes observable across process boundaries?      No.
     "plan.mise_certify_probe": OpClass.COMPUTE_ONLY,
-    # plan.census_order — COMPUTE_ONLY: orders a caller's plan set by the engine's in-memory
-    # census cost estimates (plan_mise_prep_probe._CENSUS_MEMO). Reads memory only.
-    # DR-208 five-question affirmation (citing ops/plan_census_order.py):
-    #   1. Writes, deletes, or reorders any state file, queue, or git object?  No.
-    #   2. Writes into rag's relational store?                                 No.
-    #   3. Opens any file for write (including sentinel creation)?             No.
-    #   4. Mutates shared mutable state outside its own module?                No.
-    #   5. Persistent state changes observable across process boundaries?      No.
-    "plan.census_order": OpClass.COMPUTE_ONLY,
     # plan.mise_upgrade_apply — MUTATING: writes the fields mise-prep-upgrade derives from ONE
     # caller-named docs/plans/*.md (upgrade_plan check=False, in place). The only upgrade writer
     # the mise-prep-run driver uses outside --dry-run.

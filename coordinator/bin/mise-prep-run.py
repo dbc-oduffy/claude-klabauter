@@ -707,16 +707,7 @@ def main(argv=None) -> int:
         census_spent_ms += int(wall_s * 1000)
         return wall_s
 
-    probe_order, census_order = list(plans), "input"
-    if args.census_budget > 0:
-        try:
-            ordered = _invoke(repo_root, "plan.census_order", {"plans": list(plans)}).get("plans")
-        except Exception:  # ordering is advisory; any failure keeps input order
-            ordered = None
-        if isinstance(ordered, list) and sorted(map(str, ordered)) == sorted(plans):
-            probe_order, census_order = [str(p) for p in ordered], "engine"
-
-    for index, plan in enumerate(probe_order, 1):
+    for index, plan in enumerate(plans, 1):
         remaining = args.census_budget - census_spent
         out_of_budget = args.census_budget > 0 and remaining < 1
         began = time.monotonic()
@@ -797,16 +788,6 @@ def main(argv=None) -> int:
         }
         rows.append(row)
 
-    position = {p: i for i, p in reversed(list(enumerate(plans)))}
-    rows.sort(key=lambda r: position.get(r["plan"], len(plans)))
-    census_rows = [r for r in rows if r["census"] is not None]
-    census_covered = sum(
-        1
-        for r in census_rows
-        if r["census"].get("detail") != _CENSUS_SKIPPED["detail"]
-        and not any(e.get("state") == "UNRUNNABLE" for e in r["census"].get("entries") or [])
-    )
-
     named_set = bool(args.plans or args.roadmap_id)
     try:
         seam = _seam_call(repo_root, plans, "prep", named_set, read_only=args.dry_run)
@@ -878,9 +859,6 @@ def main(argv=None) -> int:
                     "dryRun": args.dry_run,
                     "censusSpentMs": census_spent_ms,
                     "censusMemoHits": census_memo_hits,
-                    "censusOrder": census_order,
-                    "censusPlans": len(census_rows),
-                    "censusCovered": census_covered,
                     "skipped": [{"plan": p, "outcome": "SKIPPED-OUT-OF-TREE"} for p in skipped],
                     "seam": _seam_spell(seam["verdict"]),
                     "seamFix": seam_fix,
@@ -903,7 +881,6 @@ def main(argv=None) -> int:
         work = f" — {pending} would be written" if args.dry_run else ""
         print(f"mise-prep-run: {len(certified)} of {len(rows)} plan(s) {verb}{mode}{work}")
         print(f"census: {census_spent_ms}ms spent over the set")
-        print(f"census: {census_covered} of {len(census_rows)} plans covered")
         if seam_fix.get("notRun"):
             print(f"seam-fix: {seam_fix['notRun']}")
         else:

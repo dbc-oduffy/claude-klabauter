@@ -250,11 +250,12 @@ def inventory_family_landed(
 def _plan_state(worktree_root: Path, rel: str, sha: str, data: bytes) -> str:
     """``clean`` (tracked at ``sha``, blob identical to ``data``), ``untracked`` (absent at
     ``sha``) or ``dirty`` (differs, or the tree cannot answer)."""
+    from coordinator_core.git.commit_walk import commit_meta
     from coordinator_core.git.git_dir import resolve_git_common_dir
     from coordinator_core.git.rollback_check import ABSENT, _blob_at_commit
 
     common_dir = resolve_git_common_dir(worktree_root)
-    blob = _blob_at_commit(common_dir, sha, rel) if _walk_commit_meta(common_dir, sha) else None
+    blob = _blob_at_commit(common_dir, sha, rel) if commit_meta(common_dir, sha) else None
     if blob is None:
         return "dirty"
     if blob is ABSENT:

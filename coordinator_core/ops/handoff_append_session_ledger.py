@@ -455,6 +455,27 @@ def append_apply(
     return new_text
 
 
+def append_apply_unclaimed(text: str, params: dict, *, repo_root: Optional[Path]) -> str:
+    """Ledger-row insertion for a baton `handoff.correct_body` refuses (status
+    open): same row, same checks, applied as a plain body edit with no
+    ownership gate or correction note, since nothing holds an open baton.
+    A refusal raises `MutateAbort` carrying the reply dict."""
+    from coordinator_core.ops.handoff_correct_body import _split_frontmatter_raw_bytes
+
+    prepared = _prepare(params, repo_root, text)
+    if "correct_body_params" not in prepared:
+        raise MutateAbort(prepared)
+    cb = prepared["correct_body_params"]
+    split = split_frontmatter(text)
+    raw = _split_frontmatter_raw_bytes(text)
+    if split is None or raw is None:
+        raise MutateAbort(_err(f"no valid YAML frontmatter block in: {cb['handoff_path']}"))
+    body = split.body_with_leading_newline
+    if body.count(cb["old_string"]) != 1:
+        raise MutateAbort(_err("Session Ledger insertion point is not unique in the body"))
+    return raw[0] + body.replace(cb["old_string"], cb["new_string"], 1)
+
+
 def append_reply(info: dict, repo_root: Optional[Path]) -> dict:
     """The applied reply for an `append_apply` call, once its text is on disk."""
     return _with_row_fields(_correct_body_success_reply(info["plan"], repo_root), info["prepared"])

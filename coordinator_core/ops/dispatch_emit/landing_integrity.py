@@ -271,8 +271,11 @@ def landing_test_gate(
         if check != "failed" or verdict.get("baseline"):
             return findings, check
         if not files:
+            if _explicit_empty_failed_tests(params) and _retest_record_status(worktree_root, run_id) == "pass":
+                return [], "pre-existing-only"
             return [Finding(findings[0].path, findings[0].reason,
-                            f"{findings[0].detail}; or pass params.{FAILED_TESTS_PARAM} (failing node ids)")], check
+                            f"{findings[0].detail}; or pass params.{FAILED_TESTS_PARAM} (failing node ids)"
+                            f"{_stale_retest_note(worktree_root, run_id)}")], check
         changed = _changed_since_base(worktree_root, params, run_id, files)
         if not changed:
             return [], "pre-existing-only"
@@ -287,6 +290,40 @@ def landing_test_gate(
         return [], "stale-non-blocking"
     findings, check = failed_targeted_tests(fresh, retest_remedy(params))
     return findings, "pass-on-retest" if check == "pass" else check
+
+
+def _explicit_empty_failed_tests(params: Mapping) -> bool:
+    """True when the caller passed ``failed_tests`` as an empty list (top level or ``params.params``)
+    and no non-empty one."""
+    nested = params.get("params")
+    lists = [h.get(FAILED_TESTS_PARAM) for h in (params, nested if isinstance(nested, Mapping) else {})]
+    lists = [x for x in lists if isinstance(x, (list, tuple))]
+    return bool(lists) and not any(lists)
+
+
+def _retest_record_status(worktree_root: Path, run_id: Optional[str]) -> Optional[str]:
+    """Status in the run's retest record on disk, valid or not; None when absent or unreadable."""
+    if not run_id:
+        return None
+    try:
+        record = json.loads(fresh_verdict_path(worktree_root, run_id).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    status = record.get("status") if isinstance(record, dict) else None
+    return status if isinstance(status, str) else None
+
+
+def _stale_retest_note(worktree_root: Path, run_id: Optional[str]) -> str:
+    """Refusal suffix naming a retest record the tree has drifted from (HEAD moved or a covered
+    file changed), with the route that clears it."""
+    status = _retest_record_status(worktree_root, run_id)
+    if status is None:
+        return ""
+    return (
+        f"; the run's retest record ({status}) no longer matches the tree (HEAD or a covered file "
+        f"changed since it was written), so it is ignored: re-run {RETEST_LAUNCHER}, "
+        f"or pass params.{FAILED_TESTS_PARAM}=[] after a passing retest"
+    )
 
 
 def _failed_nodes(params: Mapping, verdict: Optional[Mapping]) -> list[str]:

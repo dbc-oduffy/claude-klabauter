@@ -437,10 +437,6 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
         "coordinator_core/ops/plan_mise_prep_probe.py",
         ("_certify_handler",),
     ),
-    "plan.census_order": (
-        "coordinator_core/ops/plan_census_order.py",
-        ("_handler",),
-    ),
     "plan.overlap_edges": (
         "coordinator_core/ops/plan_overlap_edges.py",
         ("_handler",),

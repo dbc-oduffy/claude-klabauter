@@ -1418,10 +1418,9 @@ def _requeue_close(root: Path, reply: dict, params: dict) -> None:
         review = params.get("inline_review")
         criterion = review.get("criterion") if isinstance(review, dict) else None
         criterion = criterion if isinstance(criterion, dict) else None
-        unfinished = [
-            leg for leg in close_background.BACKGROUND_LEGS
-            if leg in legs and isinstance(legs[leg], dict) and legs[leg].get("status") in ("queued", "failed")
-        ]
+        unfinished = close_background.owed_on_reclose(
+            {leg: v.get("status") for leg, v in legs.items() if isinstance(v, dict)}
+        )
         newer = criterion is not None and criterion != record.get("criterion")
         if not unfinished and not newer:
             return

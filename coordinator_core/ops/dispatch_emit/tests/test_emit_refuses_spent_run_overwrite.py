@@ -36,6 +36,7 @@ def test_landed_script_refuses_changed_bytes_naming_evidence(tmp_path):
     with pytest.raises(op_module.SpentRunOverwriteError) as exc:
         op_module._refuse_spent_overwrite(script, b"new", script)
     assert ".emitted.json" in str(exc.value)
+    assert "--row-budget" in str(exc.value)
     assert script.read_text(encoding="utf-8") == "old"
 
 

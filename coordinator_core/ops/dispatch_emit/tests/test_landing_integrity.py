@@ -246,6 +246,28 @@ def test_unattributable_refusal_names_the_failed_tests_param():
     assert check == "failed" and "params.failed_tests" in findings[0].detail
 
 
+def test_explicit_empty_failed_tests_after_a_passing_retest_clears_a_drifted_record(tmp_path):
+    root = _repo(tmp_path)
+    _write_fresh(root, status="pass", head="f" * 40)  # HEAD moved since the retest: record is stale
+    params = {**_RECORDED_FAIL, "failed_tests": []}
+    assert li.landing_test_gate(root, params, "r1") == ([], "pre-existing-only")
+
+
+def test_empty_failed_tests_without_a_retest_record_still_refuses(tmp_path):
+    root = _repo(tmp_path)
+    findings, check = li.landing_test_gate(root, {**_RECORDED_FAIL, "failed_tests": []}, "r1")
+    assert check == "failed" and findings
+
+
+def test_refusal_names_a_drifted_retest_record_and_its_route(tmp_path):
+    root = _repo(tmp_path)
+    _write_fresh(root, status="pass", head="f" * 40)
+    findings, check = li.landing_test_gate(root, _RECORDED_FAIL, "r1")
+    assert check == "failed"
+    assert "retest record (pass) no longer matches the tree" in findings[0].detail
+    assert li.RETEST_LAUNCHER in findings[0].detail
+
+
 def test_unchanged_failing_files_since_base_are_pre_existing(tmp_path, monkeypatch):
     root = _repo(tmp_path)
     seen = {}

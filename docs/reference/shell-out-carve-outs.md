@@ -523,25 +523,6 @@ These four are publish-mirror content (`dist/mirror-native/claude-klabauter/`), 
 without editing mirror content. Any conversion or site-specific gate entry these sites might someday
 need is that repo's own call, made there.
 
-## Recorded — repo-declared comment-only verifier, PLAIN_SPAWN, no register entry — 2026-10-22
-
-`dispatch.terminal_commit` tolerates a drifted non-`.py` path when the consumer repo's own
-comment-only verifier exits zero. The spawn is recorded here, not registered:
-
-- `coordinator_core/ops/dispatch_emit/comment_only_verifier.py` `verify_pairs()` — argv0 `<dynamic>` (the repo-declared command), `PLAIN_SPAWN`
-
-**Outside classes (a)-(h) and the register:** the call is `shell=False` with an argv list, so it is
-not shell-shaped (`SHELL_BINARY`/`SHELL_TRUE`) and `test_no_unsanctioned_shell_spawn.py` does not
-see it. Nothing here is a shell-out to sanction.
-
-**Why `external-tool-carve-outs.md` grants it nothing:** the verifier is consumer-owned code, and the
-trigger is the commit path. No carve-out relaxes a spawn on that path.
-
-It is therefore held to `terminal_commit`'s 500ms bar. The C0 spike is the evidence: max process
-time 359ms at 20 pairs, 149ms at 1 pair
-(`docs/research/2026-10-22-comment-only-verifier-spike.md`). Contract:
-`docs/reference/comment-only-verifier-contract.md`.
-
 ## Related, not a carve-out
 
 The polyglot trampoline blessing ("~1-line polyglot trampoline inside an otherwise-Python CLI")

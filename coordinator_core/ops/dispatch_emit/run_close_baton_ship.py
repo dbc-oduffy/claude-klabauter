@@ -70,7 +70,7 @@ def _ship_baton(root: Path, rel: str, run_id: str, sha: str, text: str) -> Optio
     stage = ["stamp"]
 
     def compose(old: str) -> str:
-        from coordinator_core.ops.handoff_append_session_ledger import append_apply
+        from coordinator_core.ops.handoff_append_session_ledger import append_apply, append_apply_unclaimed
         from coordinator_core.ops.handoff_stamp import stamp_apply
         from coordinator_core.ops.handoff_transition import ship_apply
 
@@ -84,7 +84,10 @@ def _ship_baton(root: Path, rel: str, run_id: str, sha: str, text: str) -> Optio
             new = ship_apply(new, {"handoff_path": rel, "verb": "ship"}, repo_root=root)
         if need_row:
             stage[0] = "ledger row"
-            new = append_apply(
+            split = split_frontmatter(new)
+            status = read_fm_field_unquoted(split.fm_text, "status") if split else None
+            append = append_apply if status in ("claimed", "consumed") else append_apply_unclaimed
+            new = append(
                 new,
                 {"handoff_path": rel, "summary": _marker(run_id, sha), "closing_ceremony": _CEREMONY},
                 repo_root=root,
