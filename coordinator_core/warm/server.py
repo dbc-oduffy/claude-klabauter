@@ -198,6 +198,7 @@ from coordinator_core.ipc import (
     INVALID_REQUEST,
     PARSE_ERROR,
     _timeout_error_envelope,
+    _timeout_for,
 )
 from coordinator_core.telemetry import op_latency
 from coordinator_core.telemetry import spawn_counter as _spawn_counter
@@ -287,7 +288,16 @@ _NOT_DISPATCHED_MARKER = "_ack_not_dispatched"
 # in a SEPARATE process and cannot see this object at all (contract § 1,
 # § 2) -- only the accept process that owns this module instance admits,
 # stamps, or answers a poll.
-_ack_store = dispatch_ack.AckStore()
+def _executing_bound_secs(method: Optional[str]) -> float:
+    """Seconds an admitted `method` may read `executing`: the pool deadline, or
+    the op's own budget when that is longer (the in-process `_run_dispatch` leg
+    is bounded by `_timeout_for`, e.g. `push.outstanding`). Read at call time."""
+    if method is None:
+        return _POOL_RESULT_DEADLINE_SECS
+    return max(_POOL_RESULT_DEADLINE_SECS, _timeout_for(method))
+
+
+_ack_store = dispatch_ack.AckStore(executing_bound=_executing_bound_secs)
 
 # How often the idle watchdog re-checks `idle.should_demote` -- independent
 # of request arrival (module docstring's "idle demotion" ownership note).

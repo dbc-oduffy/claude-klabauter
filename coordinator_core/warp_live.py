@@ -433,6 +433,26 @@ def _holds_ended_marker(root: Path, run_id: str) -> bool:
     return bool(marker) and marker.get("status") in (_STATUS_HALTED, _STATUS_LANDED)
 
 
+def _has_launch(record: dict, dirs: list[str]) -> bool:
+    """True when a launch record joins the token's session and script. A token with no submission
+    record and no launch was emitted and never fired: the Workflow call writes the submission
+    before it launches, so an in-flight call is never read as unfired."""
+    session_id = record.get("session_id")
+    script = record.get("script_path")
+    if not (isinstance(session_id, str) and session_id and isinstance(script, str) and script):
+        return False
+    return bool(_launch_records(session_id, script, dirs))
+
+
+def _unfired(root: Path, record: dict, dirs: list[str]) -> bool:
+    """True for a token with no submission record and no launch, whether or not `run.json` was
+    written: nothing ever fired it, so it holds no claim on its sizing. Never spends the token."""
+    run_id = record["run_id"]
+    if _read_json(_submission_path(root, run_id)):
+        return False
+    return not _has_launch(record, dirs)
+
+
 def _record_live(
     root: Path,
     record: dict,
@@ -498,7 +518,8 @@ def live_run_for_sizing(
     """The run id of a live run whose token names `sizing_rel`, else None.
 
     `session_id`/`transcript_path` are the asking session's: they stand in for a run emitted
-    without a submission record (a CLI emit) when that run is this session's own."""
+    without a submission record (a CLI emit) when that run is this session's own. A token whose
+    emitted run has no submission record and no launch is unfired and reads not live (never spent)."""
     root = Path(repo_root)
     rel = _run_token.normalize_sizing_rel(root, sizing_rel)
     if not rel:
@@ -507,6 +528,8 @@ def live_run_for_sizing(
     for record in _token_records(root):
         named = record.get("sizing_rel")
         if not isinstance(named, str) or _run_token.normalize_sizing_rel(root, named) != rel:
+            continue
+        if _unfired(root, record, dirs):
             continue
         if _record_live(root, record, session_id, transcript_path, dirs):
             return record["run_id"]
@@ -527,6 +550,8 @@ def live_run_for_session(
     dirs = _launch_dirs(tmpdir)
     for record in _token_records(root):
         if record.get("session_id") != session_id:
+            continue
+        if _unfired(root, record, dirs):
             continue
         if _record_live(root, record, session_id, transcript_path, dirs):
             return record["run_id"]

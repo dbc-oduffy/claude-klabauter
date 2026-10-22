@@ -248,6 +248,9 @@ def close_memo_rows_delivered(plan_text: str, receipts: dict) -> tuple:
     ``disposition_ref: <receipt_ref>``, ``delivered_via: memo`` and a ``disposition_detail``
     naming the receiver (the fields ``plan.tasks.mutate`` resolve writes). Untouched lines stay
     byte-identical. Returns ``(new_text, closed_ids)``; empty ``closed_ids`` means no edit.
+
+    Trap: shares its row-span, indent, CRLF and re-rank walk with ``flip_rows_coded``; a fix to
+    one walk belongs in both until they are extracted.
     """
     import yaml
 

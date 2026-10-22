@@ -24,12 +24,15 @@ SIBLING_WITHHELD_REASON = "sibling-claimed"
 
 
 def reland_remedy(sizing_rel: str) -> str:
-    """One register line naming the existing commit-halt refire for the run bound to `sizing_rel`:
-    the call resumes from the run's recorded run-outcome.json and lands only its own claimed
-    paths. `sizing_rel` is forward-slash normalised; no new op."""
+    """One register line naming `warp_fire.fire_command`'s refire Workflow call for the run bound
+    to `sizing_rel`: the engine resumes the halted run from its run-outcome.json and lands only
+    its own claimed paths. `sizing_rel` is forward-slash normalised; no new op. `dispatch.ask_gate`
+    only returns the gate acceptance and fires nothing, so it is never the remedy."""
+    from coordinator_core import warp_fire
+
     path = _norm(sizing_rel) or "<sizing>"
     return (
-        f"re-land: coordinator-invoke dispatch.ask_gate '{{\"sizing_path\": \"{path}\"}}' "
+        f"re-land: {warp_fire.fire_command(path)} "
         "-- re-fires the halted run from its run-outcome.json."
     )
 

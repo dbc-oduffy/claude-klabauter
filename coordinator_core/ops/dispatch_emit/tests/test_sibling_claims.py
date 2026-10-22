@@ -124,18 +124,20 @@ def test_filter_own_keeps_a_path_the_run_declares_and_withholds_the_rest():
     assert withheld == {"other/b.py": "run-b"}
 
 
-def test_reland_remedy_names_the_literal_refire_call():
+def test_reland_remedy_names_the_refire_workflow_line():
+    from coordinator_core import warp_fire
+
     line = sibling_claims.reland_remedy("docs\\sizings/x.yaml")
-    assert "dispatch.ask_gate" in line
-    assert "docs/sizings/x.yaml" in line
+    assert warp_fire.fire_command("docs/sizings/x.yaml") in line
+    assert "dispatch.ask_gate" not in line
     assert "\n" not in line
 
 
-def test_reland_remedy_params_are_only_the_sizing_path():
+def test_reland_remedy_args_are_only_the_sizing():
     """The gate derives an XS run's writes from its manifest, so the line must not carry them."""
     import json
     import re
 
     line = sibling_claims.reland_remedy("state/sizings/x.yaml")
-    params = json.loads(re.search(r"dispatch\.ask_gate '(\{.*?\})'", line).group(1))
-    assert params == {"sizing_path": "state/sizings/x.yaml"}
+    args = json.loads(re.search(r"args: (\{.*?\})\}\)", line).group(1))
+    assert args == {"sizing": "state/sizings/x.yaml"}

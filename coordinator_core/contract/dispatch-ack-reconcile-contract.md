@@ -94,7 +94,11 @@ Five outcomes are stamped, never more:
 
 A -32004 that `_pool_dispatch`'s timeout branch returns to the connection is never itself a
 terminal stamp — `abandoned` is stamped later, by the done-callback, once the future actually
-resolves. Likewise a -32004 from `ipc._dispatch_message_impl`'s op-timeout stamps `abandoned`,
+resolves. A worker blocked in its handler never resolves its future, because
+`_run_joining_handler` joins without a bound, so that stamp may never come; the derived
+past-bound answer (§ 4) is what bounds the poll.
+
+Likewise a -32004 from `ipc._dispatch_message_impl`'s op-timeout stamps `abandoned`,
 which reads as unknowable-final (§ 4), never as finished.
 
 `_pool_dispatch_worker` runs in a different process and cannot reach the accept process's store
@@ -118,9 +122,15 @@ The poll answers exactly one of four states, always:
 | Poll state | Reached from | What it licenses |
 |---|---|---|
 | `not_received` | Outcome `not-dispatched`, OR an absent key tombstoned by `status` itself (§ 5) | The **only** state that licenses a re-run: "this key has not run and never will." |
-| `executing` | Key admitted, not yet stamped, engine still the one that admitted it | No re-run. Wait or poll again. |
+| `executing` | Key admitted, not yet stamped, engine still the one that admitted it, and within its executing bound: `max(_POOL_RESULT_DEADLINE_SECS, ipc._timeout_for(method))` measured from admit | No re-run. Wait or poll again. |
 | `finished` | Outcome `result` or `error` | No re-run. The outcome and its evidence class (sibling contract, § "What this is" above) describe what happened. |
-| `unknowable` | Outcome `abandoned` or `worker-lost`, OR a detectable record-loss case (§ 5) | No re-run. The engine cannot say. |
+| `unknowable` | Outcome `abandoned` or `worker-lost`, OR a detectable record-loss case (§ 5), OR an admitted record past its executing bound (reason `abandoned`) | No re-run. The engine cannot say. |
+
+The past-bound `unknowable/abandoned` is derived at read time from the record's age and is not a
+stamp: the record stays admitted, so a later stamp moves the key to that stamp's state (a late
+`result` reads `finished`). A poll that reads it just before `_pool_dispatch` withdraws the
+request may later read `not_received`; that only adds a licence, and the reverse order cannot
+happen.
 
 Both routes to `not_received` — the tombstoned-absent-key route and the stamped
 `not-dispatched` route — exist because `admit` refuses any key already in the store (§ 2); that
@@ -201,7 +211,7 @@ Every answer carries:
 | Field | Present when | Meaning |
 |---|---|---|
 | `state` | always | One of `not_received`, `executing`, `finished`, `unknowable` (§ 4). |
-| `reason` | `state == unknowable` | `engine-restarted`, `expired`, or `no-resident-engine` (§ 6). |
+| `reason` | `state == unknowable` | `engine-restarted`, `expired`, `no-resident-engine` (§ 6), or `abandoned` (past the executing bound, § 4). |
 | `outcome` | `state == finished` | `result` or `error`, plus the error code for `error` (§ 3). Names the sibling contract's evidence class for the method; makes no claim of its own about the mutation. |
 | `result` | `state == finished`, outcome `result`, and the result was retained (§ 3a) | The handler's original reply. For an `invoke.from_argv` dispatch, a door-form poll replays its `{stdout, stderr, exit_code}`. |
 | `result_retained` | `state == finished`, a result was stamped but not kept | `false`. The op landed; its reply is gone. |

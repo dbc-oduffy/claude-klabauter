@@ -1382,7 +1382,8 @@ def _executor_heavy(rows: List[Dict[str, Any]], repo_root: Path) -> Dict[str, An
     Predicate is ``_heavy_command_class.classify``, the guard's own classifier, over each
     body code span and the row's ``verification`` string, classified against ``repo_root``
     (the gated plan's tree, never process cwd). A refused row that declares ``writes`` gets
-    the split remedy; one that does not gets the declare-test-runner remedy.
+    the split remedy; one that does not gets the declare-test-runner remedy. Memo-send rows
+    are skipped: the send is the send op's own commit, and the executor's brief is fixed.
     """
     from coordinator_core.bash_guards._heavy_command_class import classify
     from coordinator_core.ops.dispatch_emit.em_only_act import _code_spans, row_is_em_performed
@@ -1442,7 +1443,8 @@ def _test_runner_out_of_role(rows: List[Dict[str, Any]], repo_root: Path) -> Dic
     Out of role: a ``change_kind`` naming a timing measurement, or a body code span /
     ``verification`` string that ``classify`` reports TEST_TIER with every worker-capped
     explicit-test-file run admitted (so only a full or broad suite trips). Targeted verify rows
-    pass. Pure over the parsed row; ``repo_root`` is the gated plan's tree, never process cwd.
+    pass. Memo-send rows are skipped: the send is the send op's own commit, and the executor's
+    brief is fixed. Pure over the parsed row; ``repo_root`` is the gated plan's tree, never process cwd.
     """
     from coordinator_core.bash_guards._heavy_command_class import HeavyClass, classify
     from coordinator_core.ops.dispatch_emit.em_only_act import _code_spans, row_is_em_performed

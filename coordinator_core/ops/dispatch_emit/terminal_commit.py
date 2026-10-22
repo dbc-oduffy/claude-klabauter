@@ -82,10 +82,13 @@ Negative-spec:
     files only, admitted by a review-stage touch record; ``Review-Residue:`` trailers), or refuses
     ``review-edit-unlanded`` naming the files; never leaves it silently dirty.
   - Does NOT commit a dirty file no chunk declares and the run does not own: ``undeclared_dirty``
-    reports it, because widening the pathspec would hide a wrong spine. The one exception is a
-    path the committing session itself holds a write-claim on and no live peer holds: the product
-    commit passes ``carry_own_left_behind`` and commit_v2 carries it (``own_left_behind`` in the
-    reply, relayed verbatim); a path a halted, unresumed in-window run declares it writes is
+    reports it, because widening the pathspec would hide a wrong spine. The product commit
+    is declared-only (``carry_own_left_behind: False``, no landing-set exception). A path the
+    committing session itself holds a write-claim on and no live peer holds lands in a follow-on
+    commit after it (parent is the product sha, ``Own-Left-Behind-Of:`` trailer; reply key
+    ``own_left_behind_commit`` ``{sha, paths}`` or ``{error}``; a refusal never un-lands the
+    product commit); the follow-on is skipped without a session_id and on an anchor-only
+    call; a path a halted, unresumed in-window run declares it writes is
     never carried by either, and the dirty ones are named under ``held_by_halted_run``
     (``{path: [run_id, ...]}``). The commit passes ``carry_stopped_runs: False``: another run's
     residue is never swept into this run's commit, it stays dirty and is reported by
@@ -2269,6 +2272,37 @@ def _own_run_seniority(worktree_root: Path, run_id: object, script_path_raw: obj
         return None
 
 
+def _land_own_left_behind(
+    reply: dict, product_sha: str, session_id: str, worktree_root: Path, repo_root: Optional[Path],
+) -> None:
+    """Land the session's uncontested left-behind claims (``reply["own_left_behind"]["left"]``) in
+    a follow-on commit and record it under ``own_carry.REPLY_KEY``. A refusal is recorded as
+    ``{"error": ...}`` and never un-lands the product commit; nothing left makes no call."""
+    from coordinator_core.ops.dispatch_emit import own_carry
+    from coordinator_core.session import scope as session_scope
+
+    info = reply.get("own_left_behind")
+    left = info.get("left") if isinstance(info, dict) else None
+    if not left:
+        return
+    contested = session_scope.contested_by_live_peers(list(left), session_id, cwd=str(worktree_root))
+    if contested is None:
+        return
+    try:
+        carry = own_carry.own_carry_params(list(left), contested, product_sha, session_id)
+        if carry is None:
+            return
+        out = reentrant_dispatch("ceremony.commit_v2", {**carry, "session_id": session_id}, repo_root=repo_root)
+    except Exception as exc:
+        reply[own_carry.REPLY_KEY] = {"error": f"{type(exc).__name__}: {exc}"}
+        return
+    if isinstance(out, dict) and out.get("committed") and out.get("sha"):
+        reply[own_carry.REPLY_KEY] = {"sha": str(out["sha"]), "paths": list(carry["paths"])}
+    else:
+        err = out.get("error") if isinstance(out, dict) else None
+        reply[own_carry.REPLY_KEY] = {"error": str(err or f"unexpected commit_v2 reply: {out!r}")}
+
+
 def _in_scope(path: str, request: CommitRequest) -> bool:
     """Whether ``path`` matches one of ``_scope_pathspecs(request)``."""
     parent = path.rpartition("/")[0]
@@ -3439,8 +3473,8 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     dirty files (modified or untracked) in the directories of the run's declared
     writes, or under its declared prefixes, that no chunk declares: work the
     commit could never see. Reported, never committed, except a path the committing session
-    itself claimed and no live peer holds: commit_v2 carries it (reply ``own_left_behind``
-    ``{carried, left}``), so it leaves this list. ``None`` when git could
+    itself claimed and no live peer holds: the follow-on commit lands it (reply
+    ``own_left_behind_commit``), though it stays in this list. ``None`` when git could
     not answer; ``undeclared_dirty_total`` appears when the list is capped.
     A file the run's review stage wrote (per-agent touch records since the run began) that is still
     dirty, uncontested and declared by no sibling run rides the one commit as ``review_residue``
@@ -4905,17 +4939,11 @@ def _terminal_commit_inner(
                 _ls.FOREIGN_EXCLUDED_KEY: foreign_excluded,
             }))
 
-    # commit_v2 carries every path the session holds a claim on, so it is asked only when no dirty
-    # file sits unlanded in the run's declared scope: such a file may be a sibling run's of the
-    # same session, which `undeclared_dirty` reports and the commit must not widen to.
-    in_scope_left = snapshot is None or any(
-        _in_scope(p, request)
-        for p in snapshot.changed
-        if p not in all_paths and p not in deleted_paths
-    )
+    # The product commit never carries the session's claimed leftovers: commit_v2 would widen the
+    # pathspec past the declared set. They land in the follow-on commit after this one.
     commit_params: dict = {
         "paths": all_paths, "message": message,
-        "carry_own_left_behind": not in_scope_left and not foreign_excluded,
+        "carry_own_left_behind": False,
         "carry_stopped_runs": False,
     }
     if deleted_paths:
@@ -5086,6 +5114,8 @@ def _terminal_commit_inner(
         from coordinator_core.ops.dispatch_emit.emission_receipt import stamp_landed
 
         stamp_landed(guarded_script, str(reply["sha"]))
+        if session_id is not None and not anchor_only:
+            _land_own_left_behind(reply, str(reply["sha"]), session_id, worktree_root, repo_root)
     if not reply.get("committed"):
         _remove(worktree_root, receipt_paths)
         receipt_paths = []

@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import json
 import re
-import shlex
 
 import pytest
 import yaml
@@ -39,8 +38,8 @@ def _make_xs(root, *, record_writes: bool) -> None:
 
 def _printed_params(sizing: str) -> dict:
     line = sibling_claims.reland_remedy(sizing)
-    quoted = re.search(r"dispatch\.ask_gate\s+('.*?')\s+--", line).group(1)
-    return json.loads(shlex.split(quoted)[0])
+    args = json.loads(re.search(r"args: (\{.*?\})\}\)", line).group(1))
+    return {"sizing_path": args["sizing"]}
 
 
 def test_the_printed_xs_reland_line_resumes_the_commit_halt_without_writes(halted):
