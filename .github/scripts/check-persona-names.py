@@ -269,6 +269,7 @@ PROTECTED_LITERALS = (
     "repos.project_rag_plugin",
     "mcp__project-rag__",
     "project_rag_scripts/",
+    '"project_rag_scripts"',
     '"project-rag"',
     '"project_rag"',
     "'project_rag'",

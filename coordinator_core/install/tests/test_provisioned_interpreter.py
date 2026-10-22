@@ -7,7 +7,7 @@ from coordinator_core.install.provisioned_interpreter import resolve_provisioned
 
 
 def _fake_rag(tmp_path, body):
-    reader = tmp_path / "example_retrieval_repo_scripts" / "lib" / "read_claude_pin.py"
+    reader = tmp_path / "project_rag_scripts" / "lib" / "read_claude_pin.py"
     reader.parent.mkdir(parents=True)
     reader.write_text(body)
     return str(tmp_path)

@@ -187,7 +187,7 @@ def run(keys: list[str], rag_root: str, known: dict[str, str] | None = None) -> 
             started = time.monotonic()
             rc = _run(
                 [sys.executable, "-m", "pip", "install", "-q", "-e", f"{rag_root}[write]",
-                 "-c", str(Path(rag_root) / "example_retrieval_repo_scripts" / "constraints.txt"),
+                 "-c", str(Path(rag_root) / "project_rag_scripts" / "constraints.txt"),
                  "--extra-index-url", "https://download.pytorch.org/whl/cpu"],
                 log,
             )

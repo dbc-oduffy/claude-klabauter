@@ -9,7 +9,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-_READER_REL = Path("example_retrieval_repo_scripts") / "lib" / "read_claude_pin.py"
+_READER_REL = Path("project_rag_scripts") / "lib" / "read_claude_pin.py"
 _READ_TIMEOUT_SECS = 5
 _CLAUDE_KLABAUTER_ROOT = Path(__file__).resolve().parents[2]
 

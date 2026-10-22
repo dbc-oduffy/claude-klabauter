@@ -10,7 +10,7 @@
     ".github/scripts/_repo.py": "17f04df370ff4daf411af9038f8bcc971e198d9b",
     ".github/scripts/check-exec-bit.py": "257b3862441880f968e7ff13df02e00f8ce9c7bd",
     ".github/scripts/check-no-staging-leftovers.py": "1bc495e33a315c64729679bb5177220066e52f3b",
-    ".github/scripts/check-persona-names.py": "4c33bc82033f76716c3531d5f7a4f9efdff6bab5",
+    ".github/scripts/check-persona-names.py": "68f3d191ebe1a76dbafe87b2c108bd0638632a8e",
     ".github/scripts/check-python-syntax.py": "eeb83727f083dbd120d4f384b601c4590a98694d",
     ".github/scripts/check-secrets.py": "9ada961b1e606c8bde1129024713cedc7992b204",
     ".github/scripts/run-all-checks.py": "358a943c29756e0d03da260a5edfcbd16c3c8fae",
@@ -2185,7 +2185,7 @@
     "coordinator_core/_content_root_primitive.py": "f7fcd3083855a5e1dd53c09233fbfd64f8dffdf5",
     "coordinator_core/_data_root.py": "0c7c8524f25376ae49593f11334445539dc557f9",
     "coordinator_core/_engine_landing.py": "06dbb1273f3c36fdb6be08767ec75e73c71630e7",
-    "coordinator_core/_engine_published_at": "13a159eff3f218310401e60830065492c7fc8477",
+    "coordinator_core/_engine_published_at": "39cfc63e132d3c739aa7c383c9d57ec66fde5550",
     "coordinator_core/_engine_stamp": "5b5f4a8860d0b7f9bd2ed2675934df0b50df95b3",
     "coordinator_core/_fleet_names.py": "e81fc4247611fe486697f4707b28a1a3a008f392",
     "coordinator_core/_hook_envelope.py": "7e70aa3f56bfcea2cc146eab698c57469159691b",
@@ -4110,7 +4110,7 @@
     "coordinator_core/install/path_resolution_report.py": "0d3ff8873b86b9b3762b5835190542494580ffd5",
     "coordinator_core/install/plugin_cache_sessions.py": "7bc89c6bb0c45279069325d3b9ccff1368f1f9f9",
     "coordinator_core/install/prereq_probe.py": "9b6bb9509b73218d3432ec6f9f2384da0345d87b",
-    "coordinator_core/install/provisioned_interpreter.py": "78cd595b23728cf8a2d3d5f459b485e8f1d0c327",
+    "coordinator_core/install/provisioned_interpreter.py": "928a577b42480e48b1b472821f0f2883559083a6",
     "coordinator_core/install/receipt.py": "28258dfa4c85bc91d34f91bb113ca307d8e748ac",
     "coordinator_core/install/resolution_journal.py": "70a73d32573fdf359bc6067c637b117cd06a42d1",
     "coordinator_core/install/run_platform_localize.py": "08b511546614f0ff534d3d10906eff351231ab24",
@@ -4229,7 +4229,7 @@
     "coordinator_core/install/tests/test_no_venv_dependency_resolution.py": "cacbe08ff8ce6a4e18cf63722dbdfae2db97ddcb",
     "coordinator_core/install/tests/test_plugin_cache_sessions.py": "bbff4ccf6ee8b6a9c17b6952077821adabf79fd8",
     "coordinator_core/install/tests/test_process_replacing_entrypoints_get_no_door.py": "e5d9c9c03b973fea9d9a0a79c7e0050848dbe6a8",
-    "coordinator_core/install/tests/test_provisioned_interpreter.py": "c583ce97ee17d0081cbd8d51c4e0ced4f12c32f7",
+    "coordinator_core/install/tests/test_provisioned_interpreter.py": "8605ff2fe643193edd5584ece13b06c4fee759d6",
     "coordinator_core/install/tests/test_publisher_only_names_get_no_door_image.py": "8ea8d3e2289d2db54da1653c6bfd38ae72e964e5",
     "coordinator_core/install/tests/test_receipt.py": "628e8ff32c60057409e3941862124f08381a8ee5",
     "coordinator_core/install/tests/test_report_reads_a_cut_over_bin_correctly.py": "b971acd8c51beb7b2c973588f9414597c3dcc7d5",
@@ -9064,7 +9064,7 @@
     "lib/trusted-root-guard-cli.py": "213d00854fb28d0d6b2dba26f1d8e72a26f3779b",
     "pyproject.toml": "a4f3e09bff8d9df55a22eb8b451e8c3d3ad89757",
     "scripts/cloud_setup.py": "f6df1cab82efcf5c6f893b8a46b5b6ac8efc8fa7",
-    "scripts/rag_work_target_index.py": "e27e7407ae96204ce8b54fc4720d048307cf851c",
+    "scripts/rag_work_target_index.py": "f5334fa4756990bc8d837e271c6f831e79db1f52",
     "scripts/setup.cmd": "f5f0e35b567d66f649e66124671b7a6e7f837942",
     "scripts/setup.py": "ae382947533953589451e11d05e60d9599154522",
     "scripts/test_cloud_setup.py": "b8c2271a1d47fcbad8b161b093d705c75219abc1",
@@ -9073,5 +9073,5 @@
     "scripts/unstick_claude.py": "5458a0f699f1793ff9fd32295b9d0b33635f1c06"
   },
   "schema": 1,
-  "source_head": "312bd321c688a4af027242a34bd137922464d3ef"
+  "source_head": "6ea040abdc904de01ad57401b0cf0e08518e66a5"
 }
