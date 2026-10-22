@@ -2142,8 +2142,8 @@
     "coordinator_core/_content_root_primitive.py": "f7fcd3083855a5e1dd53c09233fbfd64f8dffdf5",
     "coordinator_core/_data_root.py": "0c7c8524f25376ae49593f11334445539dc557f9",
     "coordinator_core/_engine_landing.py": "06dbb1273f3c36fdb6be08767ec75e73c71630e7",
-    "coordinator_core/_engine_published_at": "509bd66756b2fa18981948c4fce0130894c07885",
-    "coordinator_core/_engine_stamp": "eee9518e8d0441ca728a2e8189c0d5f6f925771f",
+    "coordinator_core/_engine_published_at": "e0d1164e595588f8486ea3c5eccc39b2e1fb2475",
+    "coordinator_core/_engine_stamp": "a150c3424ab21c040c7b9f40db310e480b684cd7",
     "coordinator_core/_fleet_names.py": "e81fc4247611fe486697f4707b28a1a3a008f392",
     "coordinator_core/_hook_envelope.py": "d98df967471c001593ab85960dc367f5ff5da056",
     "coordinator_core/_repo_root_probe.py": "2d8edfa8cd9343436a650584da430aa87ae0397d",
@@ -4573,7 +4573,7 @@
     "coordinator_core/ops/dispatch_emit/agent_route.py": "2ffe505fd425740ff4acc300138489898b4b0f8b",
     "coordinator_core/ops/dispatch_emit/agent_sidecar.py": "0716c951f5c45355aeb1a3339c0b1b8a9b9b6f5f",
     "coordinator_core/ops/dispatch_emit/ask_brief.py": "cf2be379e4f266cf49a5e5287ae4fe3ee6ee8a5c",
-    "coordinator_core/ops/dispatch_emit/ask_compose.py": "05c61ea1dfdb28af2f5a521f337aef5efa7f6fb0",
+    "coordinator_core/ops/dispatch_emit/ask_compose.py": "de2d4779dcee80b0d83e5fcc4cb1112db1291589",
     "coordinator_core/ops/dispatch_emit/ask_contract.py": "4d574a21d7d7b0b968d4a6d794d69a6fc17bb501",
     "coordinator_core/ops/dispatch_emit/ask_fanout.py": "f22e9761e6382a1c184d7b32d06d1727e3e7cf81",
     "coordinator_core/ops/dispatch_emit/ask_fanout_contract.py": "fcf8cbd2431e2a37c72ab89a687de2fe33739293",
@@ -6099,7 +6099,7 @@
     "coordinator_core/ops/plan_status_transition.py": "c898b6519f631af5e8fcb29dce5575dd08b7a491",
     "coordinator_core/ops/plan_suggest_completion_steps.py": "ec250924543c54cd824244121d391d5466238fd4",
     "coordinator_core/ops/plan_tasks_grouping_digest.py": "1224a4f27fd22114c9c35965bc73fad1d410eff0",
-    "coordinator_core/ops/plan_tasks_mutate.py": "1e1533d49c8d8100226008454db2bd55866d1915",
+    "coordinator_core/ops/plan_tasks_mutate.py": "8c3c30a19d5a68cc573e6f1bfca4b16fa982fd08",
     "coordinator_core/ops/plan_tasks_render.py": "5eea213089b62975fc0a17b900bdb9e18b09cebc",
     "coordinator_core/ops/plan_tasks_spine_drift_check.py": "f1e4648056991384d11634a47531e89c8abbe3eb",
     "coordinator_core/ops/plan_writes_lean.py": "720b6bc86f7de7e0eb5b0e06fddf84d0ac2a9d11",
@@ -6802,6 +6802,7 @@
     "coordinator_core/ops/tests/test_plan_tasks_mutate.py": "0805628bbd4434509cb3b15b01d5b86156cc57ea",
     "coordinator_core/ops/tests/test_plan_tasks_mutate_authorization.py": "dd60536dd7ce3373e6b3bfdd6e46406b9a5106a8",
     "coordinator_core/ops/tests/test_plan_tasks_mutate_clear_gate.py": "e0b252a8b3e8d2ec8afdef754965d0746e59e87b",
+    "coordinator_core/ops/tests/test_plan_tasks_mutate_cross_row_alias.py": "18b5dc63ac9bc84d9f43e8dc3a61b6b32650083a",
     "coordinator_core/ops/tests/test_plan_tasks_mutate_delivered_elsewhere.py": "d190648737dc69b8b65cbdca3e39f9aeae1e80e8",
     "coordinator_core/ops/tests/test_plan_tasks_mutate_em_discharge.py": "bd47f123d241dd559d95972f48c2f690eec6e4a9",
     "coordinator_core/ops/tests/test_plan_tasks_mutate_evidence_append.py": "58babc749dcd86bf7ac5621e4f2f9ffd3996522a",
@@ -8877,5 +8878,5 @@
     "scripts/unstick_claude.py": "5458a0f699f1793ff9fd32295b9d0b33635f1c06"
   },
   "schema": 1,
-  "source_head": "b0e48dd97ce6b9e09c1978a7021b7e326b0c801d"
+  "source_head": "94c5215747f426df21bbf0da8ba1540ced99d1b8"
 }

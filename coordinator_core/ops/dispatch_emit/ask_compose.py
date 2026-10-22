@@ -1914,11 +1914,17 @@ def compose_ask_script(
     if fold_stage:
         # Adopted only under the plan folds' guard (rows array, no error), for the arms the act covers.
         clean_js = "(_scoutClean || _rewordStaged)" if sized_in_run else "!_gate.halt"
-        reply_js = "_scouted" if sized_in_run else "_gate"
-        b.append(
-            f"  if ({clean_js} && (_gate.arm === {_lit(ARM_XS)} || (_gate.arm === {_lit(ARM_S)} && _gate.resume_plan) "
-            f"|| _gate.{RESUME_LEDGER_KEY})) {{ await _adoptStageReply({reply_js}.stage_reply); }}"
+        arms_js = (
+            f"(_gate.arm === {_lit(ARM_XS)} || (_gate.arm === {_lit(ARM_S)} && _gate.resume_plan) "
+            f"|| _gate.{RESUME_LEDGER_KEY})"
         )
+        if sized_in_run:
+            b.append(f"  if ({clean_js} && {arms_js}) {{ await _adoptStageReply(_scouted.stage_reply); }}")
+        else:
+            b.append(
+                "  if (_gate && typeof _gate.arm === 'string') { _gate = { ..._gate, arm: _gate.arm.trim().toLowerCase() }; "
+                f"if ({clean_js} && {arms_js}) {{ await _adoptStageReply(_gate.stage_reply); }} }}"
+            )
 
     def _record_clause(record_js: str, fields: str) -> list[str]:
         """The ruling agent's own record call; the engine refuses a gated ruling before it writes."""
