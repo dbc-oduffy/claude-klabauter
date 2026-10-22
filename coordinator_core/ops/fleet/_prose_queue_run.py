@@ -22,13 +22,14 @@ from coordinator_core.ops.fleet._prose_queue_contract import (
     BUCKET_UNIVERSAL_LEFTOVER,
     EXAMPLE_CAP,
     OUTCOME_FILE_UNPARSEABLE,
-    OUTCOME_SOURCE_ABSENT,
     SKIP_REASONS,
     CandidateEntry,
 )
 from coordinator_core.ops.fleet._prose_queue_fields import FLAG_CLOSED, fill_fields
 from coordinator_core.ops.fleet._prose_queue_grammars import parse_file
 from coordinator_core.ops.queue_append import prepare_queue_entry, write_prepared_entry
+
+OUTCOME_SOURCE_ABSENT = "source-absent"
 
 REASON_CLOSED, REASON_ALREADY, REASON_DUPLICATE, REASON_TITLE_MATCH = SKIP_REASONS
 

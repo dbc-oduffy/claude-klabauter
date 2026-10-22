@@ -53,6 +53,21 @@ def test_product_path_outside_writes_refuses(tmp_path):
     assert plan["unwritable"] == ["pkg/mod.py"]
 
 
+def test_sha_bearing_note_lifts_unwritable_refusal(tmp_path):
+    root = _repo(tmp_path)
+    notes = ["R1 is met by 2fd9d96c (both parity tests green)"]
+    plan = remaining_leg_plan(_rem("fix pkg/mod.py"), notes, [], [], SIZING, root)
+    assert plan["action"] == LEG_SKIP
+    assert plan["unwritable"] == ["pkg/mod.py"]
+
+
+def test_note_without_sha_still_refuses_unwritable(tmp_path):
+    root = _repo(tmp_path)
+    notes = ["R1 is met, trust me; ran 20261022 and defaced nothing"]
+    plan = remaining_leg_plan(_rem("fix pkg/mod.py"), notes, [], [], SIZING, root)
+    assert plan["action"] == LEG_REFUSE
+
+
 def test_product_path_in_manifest_writes_dispatches(tmp_path):
     root = _repo(tmp_path)
     plan = remaining_leg_plan(_rem("fix pkg/mod.py"), [], ["pkg/mod.py"], [], SIZING, root)

@@ -31,6 +31,8 @@ _SENTENCE_END_RE = re.compile(r"(?<=[.!?])\s+")
 _PROPOSED_TARGET_RE = re.compile(r"^proposed target:\s*", re.IGNORECASE)
 
 # Header name (casefolded) -> field role. Columns not listed append to body.
+# Must cover every key of _prose_queue_grammars.CANONICAL_COLUMNS (casefolded): a header
+# added there and missing here is silently demoted to a body line.
 _HEADER_ROLES: Dict[str, str] = {
     "id": "id",
     "system": "surface",
@@ -212,8 +214,9 @@ def fill_fields(family: str, row: RawRow) -> CandidateEntry:
     if pipe is None and "status" in roles:
         closure_candidates = [status_cell]
     elif pipe is None and legacy_id.startswith("DSR-"):
-        closure_candidates = [v for v in row.cells.values()] if row.cells else []
-        if not row.cells:
+        if row.cells:
+            closure_candidates = list(row.cells.values())
+        else:
             closure_candidates = [row.segment.split(legacy_id, 1)[-1].lstrip("* |-:")]
     else:
         closure_candidates = []

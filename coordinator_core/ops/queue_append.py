@@ -389,26 +389,26 @@ def _output_dir_for_schema(schema_name: str) -> str:
     return os.path.normpath(os.path.dirname(applies_to))
 
 
-_SCHEMAS_CACHE: dict | None = None
-
-
+@functools.lru_cache(maxsize=1)
 def _vendored_schemas() -> dict:
-    """Vendored schemas, parsed once per process; validation never mutates them."""
-    global _SCHEMAS_CACHE
-    if _SCHEMAS_CACHE is None:
-        _SCHEMAS_CACHE = schema_validate.load_schemas(schema_validate._SCHEMAS_DIR)
-    return _SCHEMAS_CACHE
+    """Vendored schemas, loaded once per process; callers never mutate them."""
+    return schema_validate.load_schemas(schema_validate._SCHEMAS_DIR)
+
+
+def _validate_vendored(schema_name: str, fields: dict) -> dict:
+    """schema_validate.validate over the cached schema set (same errors, no reload)."""
+    schemas = _vendored_schemas()
+    if schema_name not in schemas or schema_name in ("_byGlob", "_byKind"):
+        available = ", ".join(k for k in schemas if k not in ("_byGlob", "_byKind"))
+        raise ValueError(f'unknown schema "{schema_name}". Available: {available}')
+    return schema_validate._dispatch_validate(schemas[schema_name], fields)
 
 
 def _schema_cli_validate(
     schema_name: str, fields: dict
 ) -> tuple[bool, list[schema_validate.ErrorDict]]:
     try:
-        schemas = _vendored_schemas()
-        if schema_name not in schemas or schema_name in ("_byGlob", "_byKind"):
-            available = ", ".join(k for k in schemas if k not in ("_byGlob", "_byKind"))
-            raise ValueError(f'unknown schema "{schema_name}". Available: {available}')
-        result = schema_validate._dispatch_validate(schemas[schema_name], fields)
+        result = _validate_vendored(schema_name, fields)
     except ValueError as exc:
         raise RuntimeError(
             f"queue.append: schema validation failed for {schema_name!r}: {exc}"
@@ -980,7 +980,7 @@ def prepare_queue_entry(
     caller_worktree: Optional[Path] = None,
     session_id: Optional[str] = None,
     **schema_fields: object,
-) -> PreparedEntry:
+) -> dict:
     """Finalise, validate and digest one queue entry; resolve its path; write nothing.
 
     Shared by ``append_queue_entry`` (writes) and dry-run callers, so preview and act
@@ -1179,13 +1179,14 @@ def prepare_queue_entry(
 def append_queue_entry(schema: str, **kwargs: object) -> dict:
     """Prepare one entry (see ``prepare_queue_entry`` for kwargs) and write it.
 
-    Returns {out_path: str, schema: str, slug: str, title: str}.
+    Returns {out_path: str, schema: str, slug: str, title: str}. Byte output and
+    filename equal what the pre-split single function produced.
     """
     return write_prepared_entry(prepare_queue_entry(schema, **kwargs))
 
 
-def write_prepared_entry(prepared: PreparedEntry) -> dict:
-    """Write an already-prepared entry; callers that prepared it themselves avoid a second validation pass."""
+def write_prepared_entry(prepared: "PreparedEntry") -> dict:
+    """Write an entry already returned by ``prepare_queue_entry``; same result shape as ``append_queue_entry``."""
     schema = prepared.schema
     out_path = prepared.out_path
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
