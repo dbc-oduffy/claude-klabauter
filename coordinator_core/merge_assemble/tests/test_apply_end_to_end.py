@@ -15,6 +15,7 @@ from pathlib import Path
 
 import pytest
 
+from coordinator_core.merge_assemble import apply as merge_apply
 from coordinator_core.merge_assemble import ops as ma_ops
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
@@ -80,6 +81,26 @@ _DECISIONS = {
     "ship_verdict": {"disposition": "ship"},
     "version_bump_final": {"disposition": "confirmed"},
 }
+
+
+def test_apply_without_version_bump_final_halts_before_d4(
+    feature_repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("COORDINATOR_SESSION_ID", raising=False)
+    result = asyncio.run(
+        ma_ops._merge_assemble_apply(
+            {
+                "session_id": "k10-e2e-nobump",
+                "decisions": {"ship_verdict": {"disposition": "ship"}},
+            },
+            feature_repo,
+        )
+    )
+    report = result["report"]
+    assert result["exit_code"] == merge_apply.APPLY_EXIT_HALTED_AT_JUDGMENT, report
+    assert "d4" not in report["landed"]
+    assert "version_bump_final" in report["unresolved_judgment_points"]
+    assert _git(feature_repo, "status", "--porcelain") == ""
 
 
 def test_apply_runs_every_directive_to_completion(

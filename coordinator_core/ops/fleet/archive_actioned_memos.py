@@ -138,6 +138,9 @@ _TERMINAL_MEMO_STATUSES = frozenset({"actioned", "superseded", "closed", "withdr
 _SCAN_REASON_NOT_TERMINAL = "not-terminal"
 _SCAN_REASON_WORKTREE_DIRTY = "worktree-dirty: uncommitted changes, retained pending commit"
 _SCAN_REASON_LIVE_CLAIM = "live-claim-holder: claim dir holds a live session"
+_SCAN_REASON_OPEN_COMMITMENT = (
+    "open-commitment: named by an open state/cross-repo-commitments row:"
+)
 
 # Recommended cap VALUE for a future caller of this op — a CHOICE, not a
 # fallback this module substitutes. Mirrors the handoff precedent's own
@@ -195,6 +198,44 @@ def _terminal_since(meta: dict, memo_path: Path) -> Optional[str]:
 
 def _sort_key(terminal_since: Optional[str]) -> str:
     return terminal_since if terminal_since else "9999-99-99T99:99:99Z"
+
+
+def _norm_memo_ref(ref: str) -> str:
+    """Repo-prefix- and separator-insensitive memo path key."""
+    s = str(ref).strip().strip("'\"").replace("\\", "/")
+    while s.startswith("./"):
+        s = s[2:]
+    if s.startswith("state/"):
+        s = s[len("state/"):]
+    return s
+
+
+def _open_commitment_memos(worktree_root: Path) -> Dict[str, str]:
+    """Map normalised memo path -> ledger filename for every
+    `state/cross-repo-commitments/*.yaml` row with top-level `status: open`.
+    One pass over the ledger per call; a line scan, no YAML parse."""
+    ledger = worktree_root / "state" / "cross-repo-commitments"
+    named: Dict[str, str] = {}
+    if not ledger.is_dir():
+        return named
+    try:
+        rows = sorted(ledger.glob("*.yaml"))
+    except OSError:
+        return named
+    for row in rows:
+        status = memo = None
+        try:
+            with open(row, encoding="utf-8") as fh:
+                for line in fh:
+                    if line.startswith("status:"):
+                        status = line[7:].strip().strip("'\"").lower()
+                    elif line.startswith("memo:"):
+                        memo = line[5:].strip()
+        except OSError:
+            continue
+        if status == "open" and memo:
+            named.setdefault(_norm_memo_ref(memo), row.name)
+    return named
 
 
 def _scan_terminal_memos(
@@ -274,7 +315,12 @@ def _scan_terminal_memos(
             continue
         remaining.append((p, rel, meta, status))
 
+    open_rows = _open_commitment_memos(worktree_root)
     for p, rel, meta, status in remaining:
+        row_name = open_rows.get(_norm_memo_ref(rel))
+        if row_name is not None:
+            _refuse(rel, f"{_SCAN_REASON_OPEN_COMMITMENT} {row_name}")
+            continue
         claim_dir = _memo_claim_dir(common_dir, p)
         holder_live = False
         if claim_dir.is_dir():

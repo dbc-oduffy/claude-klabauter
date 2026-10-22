@@ -24,10 +24,18 @@ def _plan(root, *, stamp: bool, status: str, rel: str = PLAN):
     path.write_text(f"---\n{fm}---\n\n# p\n", encoding="utf-8")
 
 
+def _entry(root, rel, *, run_id, authored_by=SID):
+    path = root / rel
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(f"---\nrun_id: {run_id}\nauthored_by: {authored_by}\n---\n\nProse.\n", encoding="utf-8")
+
+
 def _record(root, run_id=RUN, *, plan_rel=PLAN, memo=None, batons=("b.md",), entry="archive/completed/202610/e.md",
             legs=("review", "plan-reconciliation", "completion-entry", "baton-ship", "baton-drain",
                   "memo-lifecycle", "post-close"), session=SID):
     settled = {leg: LegResult("ran", "") for leg in legs}
+    if entry:
+        _entry(root, entry, run_id=run_id)
     rc.write_close_job(
         root, run_id, [], NOW + timedelta(minutes=5), session_id=session, plan_rel=plan_rel,
         source_memo=memo, claimed_batons=batons, completion_entry=entry, settled=settled,
@@ -123,6 +131,23 @@ def test_completion_entry_needs_a_named_entry(tmp_path):
     ds = _ds("d-complete-entry")
     _run(tmp_path, ds)
     assert _stamps(ds) == {"d-complete-entry": None}
+
+
+def test_completion_entry_of_a_foreign_run_never_discharges(tmp_path):
+    foreign = "archive/completed/202610/foreign.md"
+    _record(tmp_path, entry=foreign)
+    _entry(tmp_path, foreign, run_id="ask-other-run")
+    ds = _ds("d-complete-entry")
+    _run(tmp_path, ds)
+    assert _stamps(ds) == {"d-complete-entry": None}
+    _entry(tmp_path, foreign, run_id=RUN, authored_by="another-session")
+    ds = _ds("d-complete-entry")
+    _run(tmp_path, ds)
+    assert _stamps(ds) == {"d-complete-entry": None}
+    _entry(tmp_path, foreign, run_id=RUN)
+    ds = _ds("d-complete-entry")
+    _run(tmp_path, ds)
+    assert _stamps(ds) == {"d-complete-entry": RUN}
 
 
 def test_ship_directive_needs_its_basename_in_claimed_batons(tmp_path):

@@ -4327,6 +4327,10 @@ def test_resolve_coded_sha_touching_a_write_passes_and_empty_writes_are_exempt(t
         (".coordinator-local/memo-outbox/m.md", ".coordinator-local/memo-outbox/m.md", True),
         (".coordinator-local/memo-outbox/sent/other.md", ".coordinator-local/memo-outbox/m.md", False),
         ("docs/sent/m.md", "docs/m.md", False),
+        ("src/api/[personId]/route.ts", "src/api/[personId]/route.ts", True),
+        ("src/api/[personId]/route.ts", "src/api/[personId]", True),
+        ("src/api/x/route.ts","src/api/[personId]/route.ts", False),
+        ("src/a/x.py", "src/*/x.py", True),
     ],
 )
 def test_memo_send_row_matches_its_sent_receipt(changed, write, hit):

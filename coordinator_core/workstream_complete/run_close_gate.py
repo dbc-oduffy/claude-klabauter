@@ -83,6 +83,32 @@ def _plan_facts(root: Path, plan_rel: Optional[str], cache: dict[str, dict[str, 
     return facts
 
 
+def _entry_is_own(root: Path, sid: Optional[str], close: Any) -> bool:
+    """True only when *close*'s completion entry is provably the closing session's own run's.
+
+    A run-less close is keyed on an entry already verified ``authored_by == sid``. A plan-run
+    entry must be readable and carry no ``run_id`` other than the close's and no
+    ``authored_by`` other than *sid*; an unreadable entry proves nothing. A readable entry
+    carrying neither field is accepted (not provably foreign).
+    """
+    entry = close.completion_entry
+    if not entry:
+        return False
+    if entry == close.run_id:
+        return True
+    try:
+        from coordinator_core.frontmatter.schema_validate import parse_frontmatter
+
+        text = (Path(root) / entry).read_text(encoding="utf-8", errors="replace")
+        fm = parse_frontmatter(text).get("frontmatter") or {}
+    except Exception:  # noqa: BLE001 - an unreadable entry proves nothing
+        return False
+    run_id, author = fm.get("run_id"), fm.get("authored_by")
+    if run_id and str(run_id) != close.run_id:
+        return False
+    return not (author and str(author) != sid)
+
+
 def session_birth_floor(root: Path, sid: str) -> Optional[float]:
     """Epoch seconds of the session claim dir's creation, or ``None`` when it cannot be read
     without a git spawn. A directory mtime is never used: it advances on every claim added."""
@@ -147,7 +173,7 @@ def compute_run_close_gate(
                 return False
             return _plan_facts(root, close.plan_rel, plan_cache).get("status") == "implemented"
         if leg == "completion-entry":
-            return bool(close.completion_entry)
+            return _entry_is_own(root, sid, close)
         if leg == "baton-ship":
             return _ship_eligible(directive, close)
         if leg == "baton-drain":

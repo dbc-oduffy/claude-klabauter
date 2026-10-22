@@ -203,3 +203,58 @@ def test_live_run_means_not_landed(landed, monkeypatch):
     result = mod.op(_edit(root, "a.py", "l1\n", "v1 = f(1)\n"))
     assert result is not None and not _is_deny(result)
     assert xb.read_lane(root, SID) is None
+
+
+# Captured at import, before the `env` fixture stubs the seam out.
+_REAL_SEAM = mod._is_bootstrap_or_out_of_repo
+
+
+def _declare_general_work_root(monkeypatch, value):
+    monkeypatch.setattr(mod, "_is_bootstrap_or_out_of_repo", _REAL_SEAM)
+    monkeypatch.setattr(
+        mod.machine_resolver,
+        "registry_get",
+        lambda key: value if key == "coordinator.general_work_root" else None,
+    )
+
+
+def _over_budget_edit(root):
+    big = "".join(f"x{i}\n" for i in range(40))
+    return mod.op(_edit(root, "a.py", _lines(10), big))
+
+
+def test_general_work_root_target_is_not_denied(landed, monkeypatch):
+    monkeypatch.setattr(mod, "_COORDINATOR_PATH_MARKERS", [])
+    root, _ = landed
+    _declare_general_work_root(monkeypatch, str(root.parent))
+    assert not _is_deny(_over_budget_edit(root))
+    assert xb.read_lane(root, SID) is None
+
+
+def test_checkout_outside_general_work_root_still_denied(landed, tmp_path, monkeypatch):
+    monkeypatch.setattr(mod, "_COORDINATOR_PATH_MARKERS", [])
+    root, _ = landed
+    other = tmp_path / "elsewhere"
+    other.mkdir()
+    _declare_general_work_root(monkeypatch, str(other))
+    assert _is_deny(_over_budget_edit(root))
+
+
+def test_unreadable_general_work_root_still_denied(landed, monkeypatch):
+    monkeypatch.setattr(mod, "_COORDINATOR_PATH_MARKERS", [])
+    root, _ = landed
+    _declare_general_work_root(monkeypatch, None)
+
+    def _boom(key):
+        raise OSError("registry unreadable")
+
+    monkeypatch.setattr(mod.machine_resolver, "registry_get", _boom)
+    assert _is_deny(_over_budget_edit(root))
+
+
+@pytest.mark.parametrize("unset", [None, ""])
+def test_unset_general_work_root_still_denied(landed, monkeypatch, unset):
+    monkeypatch.setattr(mod, "_COORDINATOR_PATH_MARKERS", [])
+    root, _ = landed
+    _declare_general_work_root(monkeypatch, unset)
+    assert _is_deny(_over_budget_edit(root))

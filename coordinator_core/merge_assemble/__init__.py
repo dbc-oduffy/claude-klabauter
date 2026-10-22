@@ -395,20 +395,22 @@ def build_judgment_points(
                 "(a bare string of that shape is also accepted and normalized "
                 "the same way), or decline to cut any tag this merge via "
                 "decisions[\"version_bump_final\"] = {\"disposition\": \"decline\"} "
-                "(or the bare string \"decline\") — merges, but does not resolve d2"
+                "(or the bare string \"decline\") — decline composes the PR "
+                "body (d4) but plans no tag (d2); an unanswered point blocks "
+                "the PR body"
             ),
             dispositions=[
-                build_disposition("confirmed", resolves=["d2"]),
-                build_disposition("override", resolves=["d2"]),
-                build_disposition("decline"),
+                build_disposition("confirmed", resolves=["d2", "d4"]),
+                build_disposition("override", resolves=["d2", "d4"]),
+                build_disposition("decline", resolves=["d4"]),
             ],
             evidence=(
                 "version_bump is a PROPOSAL only (patch-bump default, "
                 "compute_version_bump_proposal) — the PM/EM confirms the "
                 "final released number, overrides it outright, or declines to "
                 "cut a tag this merge via this judgment point's own decisions "
-                "entry; a decline leaves d2 blocked, "
-                "exactly as an unanswered point does, but reports itself under "
+                "entry; with no entry d4 and d2 are both blocked; with decline "
+                "only d2 is, and it reports under "
                 "declined_judgment_points rather than unresolved_judgment_points"
             ),
             reason="insufficient-evidence",
@@ -543,6 +545,12 @@ def build_directives(
     SAME resolved `decisions`/`cut_tag` this function already threads into
     `d2`'s `cut-tag` arg — argument threading, not new behaviour.
 
+    **`d4` depends on `version_bump_final`:** "no tag" must be a recorded
+    decision before the PR body exists (memo
+    2026-10-22-coordinator-content-repo-em-doe-version-bump-final-merge-guard). Trap:
+    `decline` must resolve `d4` (not `d2`), or a declined run can never
+    reach a PR.
+
     **`d5` is presence-conditional on `portability_sweep_entrypoint()`
     (D5 fix).** `coordinator/bin/portability-sweep.py` has never existed in
     this repo (confirmed via git history) — dispatching it unconditionally
@@ -631,7 +639,7 @@ def build_directives(
                 "--commit-range",
                 "main..HEAD",
             ],
-            "depends_on": ["ship_verdict"],
+            "depends_on": ["ship_verdict", "version_bump_final"],
             "already_satisfied": False,
         },
         portability_gate,

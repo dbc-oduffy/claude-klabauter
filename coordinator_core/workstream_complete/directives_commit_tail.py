@@ -1609,6 +1609,28 @@ def _held_handoff_basenames(worktree_root: "Union[Path, str]", session_id: str) 
     return [basename for class_, basename in matches if class_ == "handoff-claims"]
 
 
+def _held_for_dispositions(
+    worktree_root: "Union[Path, str]", session_id: str, names: "Sequence[str]"
+) -> "set[str]":
+    """Ledger-held basenames plus any named active handoff whose frontmatter
+    `claimed_by` equals `session_id` exactly. Reads only the named files (no
+    corpus scan, no git); a `claimed_by` naming another session never counts."""
+    from coordinator_core.ops._fm_util import extract_frontmatter_scalar
+
+    held = set(_held_handoff_basenames(worktree_root, session_id))
+    root = Path(worktree_root)
+    for name in names:
+        if name in held:
+            continue
+        try:
+            text = (root / "state" / "handoffs" / name).read_text(encoding="utf-8")
+        except OSError:
+            continue
+        if extract_frontmatter_scalar(text, "claimed_by") == session_id:
+            held.add(name)
+    return held
+
+
 def resolve_ship_stamp_candidates(
     worktree_root: "Union[Path, str]",
     session_id: Optional[str],
@@ -1645,7 +1667,7 @@ def resolve_ship_stamp_candidates(
     dispositions = decisions.get(_KEY_HANDOFF_DISPOSITIONS) or {}
     if not dispositions:
         return []
-    held = set(_held_handoff_basenames(worktree_root, session_id))
+    held = _held_for_dispositions(worktree_root, session_id, dispositions)
     root = Path(worktree_root)
     candidates: "list[tuple[str, str]]" = []
     for basename, entry in dispositions.items():
@@ -1860,7 +1882,7 @@ def resolve_close_stamp_candidates(
     dispositions = decisions.get(_KEY_HANDOFF_DISPOSITIONS) or {}
     if not dispositions:
         return []
-    held = set(_held_handoff_basenames(worktree_root, session_id))
+    held = _held_for_dispositions(worktree_root, session_id, dispositions)
     root = Path(worktree_root)
     candidates: "list[tuple[str, str, Optional[str]]]" = []
     for basename, entry in dispositions.items():
@@ -1906,7 +1928,9 @@ def dropped_disposition_diagnostics(
             *resolve_close_stamp_candidates(worktree_root, session_id, decisions),
         )
     }
-    held = set(_held_handoff_basenames(worktree_root, session_id)) if session_id else set()
+    held = (
+        _held_for_dispositions(worktree_root, session_id, dispositions) if session_id else set()
+    )
     root = Path(worktree_root)
     out: "list[str]" = []
     for name, entry in dispositions.items():

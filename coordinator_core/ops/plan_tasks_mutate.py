@@ -1815,10 +1815,11 @@ def _writes_match(changed: str, write: str) -> bool:
     write = write.strip().replace("\\", "/").rstrip("/")
     if not write:
         return False
-    if any(ch in write for ch in "*?["):
-        return fnmatch.fnmatchcase(changed, write)
+    # Literal first: a Next.js `[param]` path is a literal write, not an fnmatch character class.
     if changed == write or changed.startswith(write + "/"):
         return True
+    if any(ch in write for ch in "*?["):
+        return fnmatch.fnmatchcase(changed, write)
     # memo.send moves an outbox draft into sent/, so the commit that delivers a memo-send
     # row touches the receipt, never the draft path the row declares.
     head, _, name = write.rpartition("/")

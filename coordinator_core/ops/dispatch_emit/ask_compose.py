@@ -2269,6 +2269,8 @@ def compose_ask_script(
                 f"&& !_diskHalt && !_relayGap && !_parked) {{\n"
                 f"{indent}  if ({entry}.readyOpReply?.{PARKED_REPLY_KEY} && !{entry}.readyOpReply.manifest_handle "
                 f"&& !{entry}.readyOpReply.error) {{ _parked = String({entry}.readyOpReply.{PARKED_REPLY_KEY}); }}\n"
+                f"{indent}  else if ({entry}.readyOpReply?.error && !{entry}.readyOpReply.manifest_handle) "
+                f"{{ await _adoptStageReply({entry}.readyOpReply, false); }}\n"
                 f"{indent}  else if ({entry}.readyOpReply != null) {{ _relayGap = 'manifest_handle'; }}\n"
                 f"{indent}  else if ({entry}.readyOpError == null || /did not run/.test(String({entry}.readyOpError))) "
                 "{ await _blitzStageRead(); }\n"

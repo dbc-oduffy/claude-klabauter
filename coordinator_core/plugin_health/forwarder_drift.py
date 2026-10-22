@@ -658,6 +658,27 @@ def _derive_names(agent_bin: Path) -> Set[str]:
     return set(_derive_agent_helper_target_map(agent_bin))
 
 
+def _expected_residue(running_root: Path) -> "tuple[Set[str], Set[str]]":
+    """(retire_pending, expected_residue) for the real install. retire_pending is
+    the live tree's no-launcher set on a dual-tree box; expected_residue is the
+    resolver's PUBLISHER_ONLY_LAUNCHABLE names on a single-tree box, where the
+    derive step cannot see them. Best-effort: any failure yields empty sets."""
+    try:
+        from coordinator_core.install import substrate
+
+        live_source_root = substrate.engine_source_root()
+        if live_source_root and Path(live_source_root).resolve() != running_root.resolve():
+            live_root = Path(live_source_root)
+            live_bin = live_root / "coordinator" / "bin"
+            if live_bin.is_dir() and substrate._live_source_tree_resolver(live_root) is not None:
+                return set(substrate._split_live_source_tree_map(live_root, live_bin)[1]), set()
+            return set(), set()
+        launchable = substrate._publisher_only_names(running_root, "PUBLISHER_ONLY_LAUNCHABLE")
+        return set(), {n[:-3] if n.endswith(".py") else n for n in launchable}
+    except Exception:
+        return set(), set()
+
+
 def _diff_one_location(
     label: str,
     bin_dir: Path,
@@ -665,8 +686,15 @@ def _diff_one_location(
     *,
     check_missing: bool = True,
     cited_sites: Optional[Dict[str, List[str]]] = None,
+    retire_pending: Optional[Set[str]] = None,
+    expected_residue: Optional[Set[str]] = None,
 ) -> ForwarderDriftResult:
-    """``check_missing=False`` suppresses the derived-but-not-installed
+    """``retire_pending``: installed names the install retires on its next
+    non-check run (the live tree's no-launcher set) — named in an ``[info]``
+    line, never reported as orphaned. ``expected_residue``: publisher-only
+    launchable names legitimately installed on a single-tree host.
+
+    ``check_missing=False`` suppresses the derived-but-not-installed
     direction for a location that no producer writes to any more (the
     retired ``~/.claude/bin`` compat mirror — see ``_COMPAT_BIN_LABEL``).
     Without this, that leg reports EVERY derived CLI as "missing" on EVERY
@@ -686,7 +714,16 @@ def _diff_one_location(
     since there is nothing to differentiate against."""
     installed = _installed_forwarder_names(bin_dir)
     missing = sorted(derived - installed) if check_missing else []  # stale install (incident shape)
-    orphaned = sorted(installed - derived)  # deleted CLI, forwarder left behind
+    underived = installed - derived
+    retire_set = set(retire_pending or ())
+    pending = sorted(underived & retire_set)
+    orphaned = sorted(underived - retire_set - set(expected_residue or ()))  # deleted CLI, forwarder left behind
+    pending_lines: List[str] = []
+    if pending:
+        pending_lines.append(
+            f"[info] {_PROG} ({label}): {len(pending)} installed forwarder(s) are retire-pending "
+            f"(the next install removes them; not orphaned): {', '.join(pending)}"
+        )
 
     if not missing and not orphaned:
         if check_missing:
@@ -697,9 +734,9 @@ def _diff_one_location(
             # location (nothing populates it any more), so asserting equality
             # would be as misleading as the suppressed missing-check itself.
             ok_line = f"[ok] {_PROG} ({label}): {len(installed)} installed, 0 orphaned (missing-check not applicable)"
-        return ForwarderDriftResult(ok=True, lines=[ok_line])
+        return ForwarderDriftResult(ok=True, lines=[ok_line, *pending_lines])
 
-    lines: List[str] = []
+    lines: List[str] = list(pending_lines)
     cited_missing_sites: Dict[str, List[str]] = {}
     if missing:
         cited_missing = [n for n in missing if cited_sites and n in cited_sites] if cited_sites is not None else []
@@ -734,6 +771,8 @@ def check_forwarder_drift(
     compat_bin: Optional[Path] = None,
     agent_bin: Optional[Path] = None,
     content_root: Optional[Path] = None,
+    retire_pending: Optional[Set[str]] = None,
+    expected_residue: Optional[Set[str]] = None,
 ) -> ForwarderDriftResult:
     """Core scan — used by both `main()` (CLI) and the `plugin_health.
     forwarder_drift` op. Every param is an explicit override for tests; a
@@ -762,6 +801,11 @@ def check_forwarder_drift(
         from coordinator_core.install.substrate import live_source_tree_forwarder_names
 
         derived |= live_source_tree_forwarder_names(resolved_agent_bin.parent.parent)
+        auto_pending, auto_expected = _expected_residue(resolved_agent_bin.parent.parent)
+        retire_pending = auto_pending if retire_pending is None else retire_pending
+        expected_residue = auto_expected if expected_residue is None else expected_residue
+    retire_pending = set(retire_pending or ())
+    expected_residue = set(expected_residue or ())
 
     # CITED-VS-UNCITED SPLIT (see module docstring) — best-effort, only for
     # settings-home/bin (the compat mirror's missing direction is already
@@ -787,7 +831,8 @@ def check_forwarder_drift(
             lines.append(f"[skip] {_PROG} ({label}): '{bin_dir}' does not exist — no install at this location yet")
             continue
         result = _diff_one_location(
-            label, bin_dir, derived, check_missing=check_missing, cited_sites=location_cited_sites
+            label, bin_dir, derived, check_missing=check_missing, cited_sites=location_cited_sites,
+            retire_pending=retire_pending, expected_residue=expected_residue,
         )
         lines.extend(result.lines)
         stderr_lines.extend(result.stderr_lines)

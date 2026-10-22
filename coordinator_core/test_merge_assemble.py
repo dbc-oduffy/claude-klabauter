@@ -435,6 +435,47 @@ class TestVersionBumpDecline:
             d2["args"], tmp_path
         ) == {"tag_planned": d2["args"][1], "cut": False}
 
+    def _apply_recording(self, tmp_path, monkeypatch, decisions):
+        monkeypatch.setenv("COORDINATOR_SESSION_ID", "test-session")
+        self._stub_git(monkeypatch)
+        calls = []
+        for name in merge_apply._CLI_DISPATCH:
+            monkeypatch.setitem(
+                merge_apply._CLI_DISPATCH,
+                name,
+                lambda args, repo_root, _n=name: calls.append((_n, list(args))) or {"cli": _n},
+            )
+        exit_code, report = merge_apply.apply(repo_root=tmp_path, decisions=decisions, force=True)
+        return exit_code, report, calls
+
+    def test_version_bump_final_absent_refuses_pr_body(self, tmp_path, monkeypatch):
+        decisions = {"ship_verdict": {"disposition": "ship"}}
+        exit_code, report, calls = self._apply_recording(tmp_path, monkeypatch, decisions)
+        assert exit_code == merge_apply.APPLY_EXIT_HALTED_AT_JUDGMENT
+        assert "d4" not in report["landed"]
+        assert "d2" not in report["landed"]
+        assert not [c for c in calls if c[0] == "merge-gate-and-pr"]
+        assert "version_bump_final" in report["unresolved_judgment_points"]
+
+    def test_declined_version_bump_still_composes_pr_body(self, tmp_path, monkeypatch):
+        decisions = {
+            "ship_verdict": {"disposition": "ship"},
+            "version_bump_final": {"disposition": "decline"},
+        }
+        _exit, report, _calls = self._apply_recording(tmp_path, monkeypatch, decisions)
+        assert "d4" in report["landed"]
+        assert "d2" not in report["landed"]
+        assert "version_bump_final" in report["declined_judgment_points"]
+
+    def test_confirmed_version_bump_lands_tag_plan_and_pr_body(self, tmp_path, monkeypatch):
+        decisions = {
+            "ship_verdict": {"disposition": "ship"},
+            "version_bump_final": {"disposition": "confirmed"},
+        }
+        _exit, report, _calls = self._apply_recording(tmp_path, monkeypatch, decisions)
+        assert "d2" in report["landed"]
+        assert "d4" in report["landed"]
+
     def test_bare_string_decline_normalizes_to_disposition_not_override(self, tmp_path, monkeypatch):
         self._stub_git(monkeypatch)
         decisions = {"version_bump_final": "decline"}

@@ -64,7 +64,8 @@ def test_plan_without_inbound_close_row_resolves_with_zero_dispatch(tmp_path, mo
     order = _setup(tmp_path, monkeypatch)
 
     result = cb._memo_lifecycle(_ctx(tmp_path, memo="state/cross-repo/inbox/other.md"))
-    assert result.status in ("failed", "discharged")  # other.md is absent from the inbox
+    assert result.status != "ran"  # other.md is absent from the inbox
+    assert order == []
 
     (tmp_path / "state" / "cross-repo" / "inbox" / "other.md").write_text("---\nstatus: open\n---\n", encoding="utf-8")
     result = cb._memo_lifecycle(_ctx(tmp_path, memo="state/cross-repo/inbox/other.md"))

@@ -206,6 +206,52 @@ def test_live_claim_holder_retains_the_memo(tmp_path):
     assert reasons[cid] == _SCAN_REASON_LIVE_CLAIM
 
 
+def _seed_commitment(repo: Path, name: str, status: str, memo: str) -> None:
+    _write(
+        repo / "state" / "cross-repo-commitments" / name,
+        f"created: 2026-01-01\nstatus: {status}\nmemo: {memo}\ncommitment: x\n",
+    )
+
+
+@pytest.mark.parametrize(
+    "memo_ref",
+    [
+        "cross-repo/inbox/2026-01-01-actioned.md",
+        "state/cross-repo/inbox/2026-01-01-actioned.md",
+        "cross-repo\\inbox\\2026-01-01-actioned.md",
+    ],
+)
+def test_open_commitment_row_blocks_archive_with_named_reason(tmp_path, memo_ref):
+    repo = tmp_path / "r"
+    _init_repo(repo)
+    memo_path = _seed_memo(repo, "2026-01-01-actioned.md", "status: actioned\n")
+    _seed_memo(repo, "2026-01-02-free.md", "status: actioned\n")
+    _seed_commitment(repo, "row-open.yaml", "open", memo_ref)
+
+    scan_skipped: list = []
+    moves, skipped = plan_sweep(repo, _common_dir(repo), cap=150, scan_skipped=scan_skipped)
+
+    cid = rel_id(memo_path, repo)
+    assert cid not in {m.candidate_id for m in moves}
+    reasons = {s["id"]: s["reason"] for s in skipped + scan_skipped}
+    assert reasons[cid].startswith("open-commitment")
+    assert "row-open.yaml" in reasons[cid]
+    assert len(moves) == 1
+
+
+def test_fulfilled_commitment_row_does_not_block_archive(tmp_path):
+    repo = tmp_path / "r"
+    _init_repo(repo)
+    memo_path = _seed_memo(repo, "2026-01-01-actioned.md", "status: actioned\n")
+    _seed_commitment(
+        repo, "row-done.yaml", "fulfilled", "cross-repo/inbox/2026-01-01-actioned.md",
+    )
+
+    moves, _skipped = plan_sweep(repo, _common_dir(repo), cap=150)
+
+    assert {m.candidate_id for m in moves} == {rel_id(memo_path, repo)}
+
+
 def test_worktree_dirty_memo_is_retained(tmp_path):
     repo = tmp_path / "r"
     _init_repo(repo)

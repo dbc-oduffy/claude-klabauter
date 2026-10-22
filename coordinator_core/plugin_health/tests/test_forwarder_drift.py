@@ -671,3 +671,115 @@ def test_shape_w_citation_trailing_period_is_stripped(tmp_path: Path, two_bin_di
 def test_remedy_no_longer_names_install_substrate():
     assert "install.substrate" not in fd._REMEDY
     assert "setup.py --i-am-agent" in fd._REMEDY
+
+
+def test_retire_pending_is_named_info_not_orphaned(tmp_path: Path, two_bin_dirs):
+    agent_bin = tmp_path / "claude-klabauter-coordinator-bin"
+    settings_bin, compat_bin = two_bin_dirs
+    _write_cli(agent_bin, "foo")
+    for b in (settings_bin, compat_bin):
+        _write_forwarder(b, "foo")
+        _write_forwarder(b, "stale-publisher")
+        _write_forwarder(b, "truly-gone")
+
+    result = fd.check_forwarder_drift(
+        settings_bin=settings_bin, compat_bin=compat_bin, agent_bin=agent_bin,
+        content_root=tmp_path / "no-content-root", retire_pending={"stale-publisher"},
+    )
+
+    assert any(l.startswith("[info]") and "retire-pending" in l and "stale-publisher" in l for l in result.lines)
+    orphan = [l for l in result.lines if "orphaned" in l and l.startswith("[warn]")]
+    assert orphan and all("truly-gone" in l and "stale-publisher" not in l for l in orphan)
+
+
+def test_retire_pending_alone_is_clean(tmp_path: Path, two_bin_dirs):
+    agent_bin = tmp_path / "claude-klabauter-coordinator-bin"
+    settings_bin, compat_bin = two_bin_dirs
+    _write_cli(agent_bin, "foo")
+    for b in (settings_bin, compat_bin):
+        _write_forwarder(b, "foo")
+        _write_forwarder(b, "stale-publisher")
+
+    result = fd.check_forwarder_drift(
+        settings_bin=settings_bin, compat_bin=compat_bin, agent_bin=agent_bin,
+        content_root=tmp_path / "no-content-root", retire_pending={"stale-publisher"},
+    )
+
+    assert result.ok is True
+    assert not [l for l in result.lines if l.startswith("[warn]") and "orphaned" in l]
+
+
+def test_expected_residue_is_not_orphaned_but_other_names_still_are(tmp_path: Path, two_bin_dirs):
+    agent_bin = tmp_path / "claude-klabauter-coordinator-bin"
+    settings_bin, compat_bin = two_bin_dirs
+    _write_cli(agent_bin, "foo")
+    for b in (settings_bin, compat_bin):
+        _write_forwarder(b, "foo")
+        _write_forwarder(b, "klabauter-promote")
+        _write_forwarder(b, "retired-cli")
+
+    result = fd.check_forwarder_drift(
+        settings_bin=settings_bin, compat_bin=compat_bin, agent_bin=agent_bin,
+        content_root=tmp_path / "no-content-root", expected_residue={"klabauter-promote"},
+    )
+
+    orphan = [l for l in result.lines if l.startswith("[warn]") and "orphaned" in l]
+    assert orphan and all("retired-cli" in l and "klabauter-promote" not in l for l in orphan)
+
+
+def test_expected_residue_reads_launchable_names_on_single_tree(tmp_path: Path, monkeypatch):
+    from coordinator_core.install import substrate
+
+    monkeypatch.setattr(substrate, "engine_source_root", lambda: None)
+    lib = tmp_path / "coordinator" / "lib" / "resolve-x"
+    lib.mkdir(parents=True)
+    (lib / "_resolve_x.py").write_text('PUBLISHER_ONLY_LAUNCHABLE = frozenset({"klabauter-promote.py"})\n')
+
+    pending, expected = fd._expected_residue(tmp_path)
+
+    assert pending == set()
+    assert expected == {"klabauter-promote"}
+
+
+def test_expected_residue_dual_tree_returns_live_no_launcher_set(tmp_path: Path, monkeypatch):
+    from coordinator_core.install import substrate
+
+    running, live = tmp_path / "mirror", tmp_path / "live"
+    (live / "coordinator" / "bin").mkdir(parents=True)
+    monkeypatch.setattr(substrate, "engine_source_root", lambda: str(live))
+    monkeypatch.setattr(substrate, "_live_source_tree_resolver", lambda root: root / "r.py")
+    monkeypatch.setattr(substrate, "_split_live_source_tree_map", lambda root, bin_: ({"a": "a.py"}, {"stale-publisher"}))
+
+    assert fd._expected_residue(running) == ({"stale-publisher"}, set())
+
+
+def test_expected_residue_failure_degrades_to_empty(tmp_path: Path, monkeypatch):
+    from coordinator_core.install import substrate
+
+    def _boom():
+        raise RuntimeError("registry unreadable")
+
+    monkeypatch.setattr(substrate, "engine_source_root", _boom)
+
+    assert fd._expected_residue(tmp_path) == (set(), set())
+
+
+def test_check_forwarder_drift_resolves_retire_pending_when_agent_bin_omitted(tmp_path: Path, two_bin_dirs, monkeypatch):
+    from coordinator_core.install import substrate
+
+    agent_bin = tmp_path / "root" / "coordinator" / "bin"
+    settings_bin, compat_bin = two_bin_dirs
+    _write_cli(agent_bin, "foo")
+    for b in (settings_bin, compat_bin):
+        _write_forwarder(b, "foo")
+        _write_forwarder(b, "stale-publisher")
+    monkeypatch.setattr(fd, "_resolve_agent_bin", lambda: agent_bin)
+    monkeypatch.setattr(substrate, "live_source_tree_forwarder_names", lambda root: frozenset())
+    monkeypatch.setattr(fd, "_expected_residue", lambda root: ({"stale-publisher"}, set()))
+
+    result = fd.check_forwarder_drift(
+        settings_bin=settings_bin, compat_bin=compat_bin, content_root=tmp_path / "no-content-root",
+    )
+
+    assert result.ok is True
+    assert any(l.startswith("[info]") and "stale-publisher" in l for l in result.lines)

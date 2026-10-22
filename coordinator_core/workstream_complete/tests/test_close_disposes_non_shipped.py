@@ -63,6 +63,30 @@ def test_non_shipped_disposition_is_a_candidate(tmp_path, monkeypatch, dispositi
     assert candidates == [("state/handoffs/foo.md", disposition, expected_reason)]
 
 
+def test_frontmatter_claimed_by_closing_session_is_a_candidate(tmp_path, monkeypatch):
+    path = _write_handoff(tmp_path, "fm.md")
+    path.write_text(
+        "---\nclaimed_by: sid\ndeployment_state: in_flight\n---\nbody\n", encoding="utf-8"
+    )
+    monkeypatch.setattr(directives_commit_tail, "_held_handoff_basenames", lambda *_a, **_k: [])
+    decisions = {"handoff_dispositions": {"fm.md": {"disposition": "closed", "closed_reason": "displaced"}}}
+
+    assert directives_commit_tail.resolve_close_stamp_candidates(tmp_path, "sid", decisions) == [
+        ("state/handoffs/fm.md", "closed", "displaced")
+    ]
+
+
+def test_frontmatter_claimed_by_other_session_is_not_a_candidate(tmp_path, monkeypatch):
+    path = _write_handoff(tmp_path, "fm.md")
+    path.write_text(
+        "---\nclaimed_by: other\ndeployment_state: in_flight\n---\nbody\n", encoding="utf-8"
+    )
+    monkeypatch.setattr(directives_commit_tail, "_held_handoff_basenames", lambda *_a, **_k: [])
+    decisions = {"handoff_dispositions": {"fm.md": {"disposition": "closed", "closed_reason": "displaced"}}}
+
+    assert directives_commit_tail.resolve_close_stamp_candidates(tmp_path, "sid", decisions) == []
+
+
 def test_shipped_disposition_is_not_a_close_stamp_candidate(tmp_path, monkeypatch):
     # Regression guard on the predecessor plan: `shipped` still belongs
     # exclusively to `resolve_ship_stamp_candidates` — this sibling resolver

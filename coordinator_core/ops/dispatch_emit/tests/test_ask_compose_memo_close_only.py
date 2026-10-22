@@ -86,7 +86,6 @@ def test_the_verify_prompt_clause_is_gated_on_memo_close_only():
     ],
     ids=["sha_reply", "sha_reply+commit", "real-work", "no-remaining"],
 )
-@pytest.mark.skipif(shutil.which("node") is None, reason="node absent")
 def test_a_not_met_row_remaining_only_post_commit_acts_does_not_block_the_commit(item, blocking):
     script = _compose()
     start = script.index("    const _postCommitActs = ")

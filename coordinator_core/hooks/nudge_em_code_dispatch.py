@@ -64,7 +64,9 @@ import tokenize
 from pathlib import PurePosixPath
 
 from coordinator_core._hook_envelope import deny
+from coordinator_core import machine_resolver
 from coordinator_core._settings_home import settings_home
+from coordinator_core.group_em.gem_home import contains as _path_contains
 from coordinator_core.hooks._envelope import context_only, no_advisory, payload_of
 from coordinator_core.hooks._payload import field, present
 from coordinator_core.hooks.doc_data_extensions import _DOC_DATA_EXTENSIONS
@@ -302,12 +304,22 @@ def _is_outside_git_work_tree(file_path: str) -> bool:
     return True
 
 
+def _is_under_general_work_root(file_path: str) -> bool:
+    """Target is under the registry-declared `coordinator.general_work_root`; an unset or unreadable key exempts nothing."""
+    try:
+        root = machine_resolver.registry_get("coordinator.general_work_root") or machine_resolver.registry_get("repos.general_work")
+    except Exception as exc:
+        print(f"nudge_em_code_dispatch: general_work_root unreadable: {exc} (not exempting)", file=sys.stderr)
+        return False
+    return bool(root) and _path_contains(root, file_path)
+
+
 def _is_bootstrap_or_out_of_repo(file_path: str) -> bool:
     if _is_under_bootstrap_dir(file_path):
         return True
     if _is_outside_git_work_tree(file_path):
         return True
-    return False
+    return _is_under_general_work_root(file_path)
 
 
 def _derive_executor_info(file_path: str) -> tuple[str, bool]:

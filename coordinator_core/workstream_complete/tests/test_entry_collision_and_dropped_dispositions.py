@@ -105,3 +105,34 @@ def test_every_dropped_disposition_names_its_reason(monkeypatch, tmp_path):
         tmp_path, "sid", decisions, skipped_reason="close commit not attempted (missing decisions.subject)"
     )
     assert len(skipped) == 6 and all("missing decisions.subject" in d for d in skipped)
+
+
+def _handoff_claimed_by(tmp_path, name, claimed_by):
+    d = tmp_path / "state" / "handoffs"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / name).write_text(f"---\nclaimed_by: {claimed_by}\n---\n", encoding="utf-8")
+
+
+def test_frontmatter_claimed_by_closing_session_is_held_no_dropped_diagnostic(monkeypatch, tmp_path):
+    _handoff_claimed_by(tmp_path, "mine.md", "sid")
+    monkeypatch.setattr(tail, "_held_handoff_basenames", lambda *_a, **_k: [])
+    decisions = {
+        "handoff_dispositions": {"mine.md": {"disposition": "closed", "closed_reason": "displaced"}}
+    }
+    assert tail.resolve_close_stamp_candidates(tmp_path, "sid", decisions) == [
+        ("state/handoffs/mine.md", "closed", "displaced")
+    ]
+    assert tail.resolve_ship_stamp_candidates(tmp_path, "sid", decisions) == []
+    assert tail.dropped_disposition_diagnostics(tmp_path, "sid", decisions) == []
+
+
+def test_frontmatter_claimed_by_other_session_is_not_held(monkeypatch, tmp_path):
+    _handoff_claimed_by(tmp_path, "theirs.md", "other-sid")
+    monkeypatch.setattr(tail, "_held_handoff_basenames", lambda *_a, **_k: [])
+    decisions = {
+        "handoff_dispositions": {"theirs.md": {"disposition": "shipped", "shipped_in": "abc"}}
+    }
+    assert tail.resolve_ship_stamp_candidates(tmp_path, "sid", decisions) == []
+    assert tail.resolve_close_stamp_candidates(tmp_path, "sid", decisions) == []
+    diags = tail.dropped_disposition_diagnostics(tmp_path, "sid", decisions)
+    assert len(diags) == 1 and "no handoff claim held" in diags[0]

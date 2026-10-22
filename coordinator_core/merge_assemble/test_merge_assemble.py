@@ -111,6 +111,20 @@ def test_d4_pr_body_args_carry_ship_verdict_and_release_notes() -> None:
     assert args[args.index("--release-notes") + 1] == "Release v1.2.3: fixes A, B, C."
 
 
+def test_d4_depends_on_version_bump_final() -> None:
+    directives = build_directives(Path("."), tag_prefix="v", proposed_tag="v1.2.3")
+    d4 = next(d for d in directives if d["id"] == "d4")
+    assert {"ship_verdict", "version_bump_final"} <= set(d4["depends_on"])
+
+
+def test_version_bump_final_dispositions_resolve_d4() -> None:
+    point = next(p for p in build_judgment_points() if p["id"] == "version_bump_final")
+    by_value = {d["value"]: d["resolves"] for d in point["dispositions"]}
+    assert set(by_value["confirmed"]) == {"d2", "d4"}
+    assert set(by_value["override"]) == {"d2", "d4"}
+    assert list(by_value["decline"]) == ["d4"]
+
+
 def test_d4_pr_body_args_default_when_no_text_supplied() -> None:
     directives = build_directives(Path("."), tag_prefix="v", proposed_tag="v1.2.3")
     d4 = next(d for d in directives if d["id"] == "d4")
