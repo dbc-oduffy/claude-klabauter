@@ -29,8 +29,9 @@ def test_legacy_placeholder_on_existing_drafts_is_still_a_placeholder():
 
 
 def test_refusal_states_actual_length_and_cap():
-    message = validate_explicit_summary("send", "x" * 130)
-    assert "130 chars" in message and f"cap is {_SUMMARY_MAX_CHARS}" in message
+    over_cap = _SUMMARY_MAX_CHARS + 10
+    message = validate_explicit_summary("send", "x" * over_cap)
+    assert f"{over_cap} chars" in message and f"cap is {_SUMMARY_MAX_CHARS}" in message
 
 
 def test_lint_notice_names_the_sender_repo_it_qualified_against():

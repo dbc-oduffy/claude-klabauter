@@ -10,6 +10,7 @@ from coordinator_core.session.grant import (
 )
 from coordinator_core.session import core as _session_core
 from coordinator_core.session.suite_authority import suite_authority
+from coordinator_core import timestamps as _timestamps
 
 ARGS_INVALID = object()
 
@@ -103,6 +104,21 @@ _GROUP_EM_REMEDY = {
 }
 
 
+def _with_remaining(stamp) -> str:
+    """A grant expiry as stored, followed by how long until it lapses.
+
+    `timestamps.with_age` clamps a future instant to "0 seconds ago", which is
+    false for an expiry; the stored bytes stay verbatim and a stamp that does
+    not parse is marked rather than guessed at.
+    """
+    age = _timestamps.age_seconds(stamp)
+    if age is None:
+        return f"{stamp} ({_timestamps.UNREADABLE_AGE})"
+    if age >= 0:
+        return f"{stamp} (expired {_timestamps.age_phrase(age)} ago)"
+    return f"{stamp} (in {_timestamps.age_phrase(-age)})"
+
+
 def _run_group_em_verb(verb: str, rest: list[str]) -> Tuple[int, str]:
     from coordinator_core.group_em import suite_grant
 
@@ -120,7 +136,7 @@ def _run_group_em_verb(verb: str, rest: list[str]) -> Tuple[int, str]:
         rec = result.record or {}
         return EXIT_OK, (
             f"group-em-grant: grantee {rec.get('grantee_session_id')} "
-            f"expires {rec.get('expires_at')} issuer {rec.get('issuer_session_id')}"
+            f"expires {_with_remaining(rec.get('expires_at'))} issuer {rec.get('issuer_session_id')}"
         )
 
     parsed = parse_group_em_revoke_args(rest)

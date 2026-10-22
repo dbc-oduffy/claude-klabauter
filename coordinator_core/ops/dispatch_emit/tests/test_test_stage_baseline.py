@@ -96,8 +96,10 @@ def test_the_digest_relays_every_register_row_key_the_judge_returns():
     judge_keys = set(judge["properties"]["register_rows"]["items"]["properties"])
     def rows(node):
         if isinstance(node, dict):
+            # `withheld_clauses[].register_rows` is a list of id strings, a different
+            # thing from the judge's per-row objects; only object-row schemas are compared.
             items = ((node.get("properties") or {}).get("register_rows") or {}).get("items") or {}
-            if "properties" in items:  # row objects only; a clause's register_rows is a list of ids
+            if "properties" in items:
                 yield items["properties"]
             for v in node.values():
                 yield from rows(v)

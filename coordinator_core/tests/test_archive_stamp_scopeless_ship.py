@@ -119,5 +119,7 @@ def test_cs_ship_handoff_threads_resolved_sha(monkeypatch, tmp_path):
         archive_stamp, "_call_handoff_archive_transition",
         lambda p, params: sent.append(params) or {"exit_code": 0, "retained": False},
     )
+    # retained=False reaches the claim release; stub it so the test never touches live claim state.
+    monkeypatch.setattr(archive_stamp, "_release_and_report", lambda *a, **k: 0)
     assert archive_stamp.cs_ship_handoff(str(tmp_path / "h.md")) == 0
     assert sent[0]["sha"] == "abcdef1234"

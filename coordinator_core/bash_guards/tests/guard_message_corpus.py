@@ -832,6 +832,56 @@ def _heavy_tree_repo_root_setup(
     return {_CWD_OVERRIDE_KEY: str(scratch_dir)}
 
 
+def _perforce_submit_armed_setup(
+    scratch_dir: Path, mp: pytest.MonkeyPatch
+) -> Dict[str, str]:
+    """`block-perforce-submit` speaks only on an armed box; arming is a host policy read."""
+    from coordinator_core.bash_guards import block_perforce_submit as guard
+
+    mp.setattr(guard, "_armed", lambda: True)
+    return {}
+
+
+def _external_workspace_vcs_write_setup(
+    scratch_dir: Path, mp: pytest.MonkeyPatch
+) -> Dict[str, str]:
+    """Registers `scratch_dir/slice` as an external workspace and fires from inside it."""
+    from coordinator_core import machine_resolver as mr
+
+    registry = scratch_dir / "ml"
+    registry.mkdir()
+    root = scratch_dir / "slice"
+    root.mkdir()
+    (registry / "registry.local.toml").write_text(
+        '[external_workspaces.p4_x]\npath = "%s"\nvcs = "p4"\n' % root.as_posix(),
+        encoding="utf-8",
+    )
+    mp.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(registry))
+    mp.setattr(mr, "_external_ws_cache", {})
+    return {_CWD_OVERRIDE_KEY: str(root)}
+
+
+def _push_pr_non_owned_remote_setup(
+    scratch_dir: Path, mp: pytest.MonkeyPatch
+) -> Dict[str, str]:
+    """A repo whose `upstream` remote is declared non-owned in the machine registry."""
+    repo = scratch_dir / "repo"
+    (repo / ".git").mkdir(parents=True)
+    (repo / ".git" / "config").write_text(
+        '[remote "origin"]\n\turl = git@github.com:mine/engine.git\n'
+        '[remote "upstream"]\n\turl = https://github.com/Theirs/Repo.git\n',
+        encoding="utf-8",
+    )
+    (repo / ".git" / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
+    registry = scratch_dir / "registry"
+    registry.mkdir()
+    (registry / "registry.local.toml").write_text(
+        '[policy]\nnon_owned_remotes = ["github.com/theirs"]\n', encoding="utf-8"
+    )
+    mp.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(registry))
+    return {_CWD_OVERRIDE_KEY: str(repo)}
+
+
 CONFINEMENT_ROWS: List[CorpusRow] = [
     CorpusRow(
         "no-verify",
@@ -1644,6 +1694,66 @@ CONFINEMENT_ROWS: List[CorpusRow] = [
         False,
         setup=_p4_verb_fence_setup,
     ),
+    # S3C: speaking rows for the EM-reachable guards that carried only a control row.
+    CorpusRow(
+        "block-stash-destruction",
+        "block-stash-destruction-fire",
+        "git stash drop",
+        True,
+        _DENY,
+        False,
+    ),
+    CorpusRow(
+        "block-topic-branch",
+        "block-topic-branch-fire",
+        "git checkout -b fix/foo",
+        True,
+        _DENY,
+        False,
+    ),
+    CorpusRow(
+        "block-perforce-submit",
+        "block-perforce-submit-fire",
+        "p4 submit -d x",
+        True,
+        _DENY,
+        False,
+        setup=_perforce_submit_armed_setup,
+    ),
+    CorpusRow(
+        "block-external-workspace-vcs-write",
+        "block-external-workspace-vcs-write-fire",
+        "git commit -m x",
+        True,
+        _DENY,
+        False,
+        setup=_external_workspace_vcs_write_setup,
+    ),
+    CorpusRow(
+        "block-push-pr-non-owned-remote",
+        "block-push-pr-non-owned-remote-fire",
+        "git push upstream main",
+        True,
+        _DENY,
+        False,
+        setup=_push_pr_non_owned_remote_setup,
+    ),
+    CorpusRow(
+        "block-unreal-engine-resave",
+        "block-unreal-engine-resave-fire",
+        "UnrealEditor.exe G.uproject -run=resavepackages -unattended",
+        True,
+        _DENY,
+        False,
+    ),
+    CorpusRow(
+        "block-editor-kill-by-name",
+        "block-editor-kill-by-name-fire",
+        "taskkill /IM UnrealEditor-Cmd.exe",
+        True,
+        _DENY,
+        False,
+    ),
 ]
 
 #: Sanity invariant this module itself relies on -- every one of
@@ -2170,7 +2280,7 @@ ADVISORY_REWRITE_ROWS: List[CorpusRow] = [
     CorpusRow(
         "grep-via-bash-guard",
         "grep-via-bash-guard-fire",
-        "grep -rnP TODO src/ | wc -l",
+        "grep -rnP 'TODO|FIXME' src/ | wc -l",
         True,
         _REWRITE,
         False,

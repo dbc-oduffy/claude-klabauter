@@ -1,0 +1,180 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://coordinator.local/schemas/plan-merge-delta.schema.json",
+  "x-schema-name": "plan-merge-delta",
+  "x-schema-version": "1.0.0",
+  "title": "plan-merge-delta",
+  "description": "The EM-authored delta file a plan-merge op applies to N source plans. Declarative data only: every entry is applied mechanically, and no key admits code, an expression, or a free-form escape hatch. A drop with no reason, a new row with no anchor, an id or body rewrite, and a second `## Consolidation delta` section are unrepresentable.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["sources", "frontmatter"],
+  "properties": {
+    "sources": {
+      "description": "Ordered source plan paths. Source order is output order.",
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path"],
+        "properties": {
+          "path": {"type": "string", "minLength": 1},
+          "origin_label": {
+            "description": "Prefix applied to this source's carried prose sections.",
+            "type": "string",
+            "minLength": 1
+          },
+          "spine_heading": {
+            "description": "The `## ` heading the source's spine fence sits under; passed through as the spine locator's heading hint. Defaults to `Tasks`.",
+            "type": "string",
+            "minLength": 1,
+            "default": "Tasks"
+          }
+        }
+      }
+    },
+    "frontmatter": {
+      "description": "The merged plan's own scalar frontmatter values, EM-chosen. Authorization and stamp keys are refused: each source's own stamp governs, and `status: approved` may not be asserted by a merge.",
+      "type": "object",
+      "propertyNames": {
+        "not": {"pattern": "^execution_authorized"}
+      },
+      "properties": {
+        "status": {"not": {"const": "approved"}}
+      },
+      "additionalProperties": {
+        "type": ["string", "number", "boolean", "null"]
+      }
+    },
+    "preamble": {
+      "description": "Literal Markdown for the merged plan's own H1 and intro, emitted before the first `## ` heading. A source's preamble is carried or declared dropped via the reserved heading `(preamble)` in `dropped_sections`.",
+      "type": "string",
+      "minLength": 1
+    },
+    "rekey": {
+      "description": "Per-source id remapping. Required only when the op reports a cross-source id collision. Keys are source ids; values are merged ids.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["source", "ids"],
+        "properties": {
+          "source": {"type": "string", "minLength": 1},
+          "ids": {
+            "type": "object",
+            "minProperties": 1,
+            "additionalProperties": {"type": "string", "minLength": 1}
+          }
+        }
+      }
+    },
+    "rows": {
+      "description": "Per-row entries addressed by merged id (the post-rekey id). An existing row is edited by key block only; its id and body are never rewritten and `note` is the only way a body grows. A `new` row carries its own fields and body and an `after` anchor.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id"],
+        "properties": {
+          "id": {"type": "string", "minLength": 1},
+          "fields": {
+            "description": "Field -> new value. May not name `id` or `body`.",
+            "type": "object",
+            "minProperties": 1,
+            "propertyNames": {"not": {"enum": ["id", "body"]}}
+          },
+          "drop_fields": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": {"type": "string", "minLength": 1, "not": {"enum": ["id", "body"]}}
+          },
+          "deferred": {"type": "boolean"},
+          "note": {
+            "description": "Appended, clearly-marked consolidation note.",
+            "type": "string",
+            "minLength": 1
+          },
+          "reason": {
+            "description": "Why the EM made this edit. Rendered in the op's `## Consolidation delta` table; never enters the row.",
+            "type": "string",
+            "minLength": 1
+          },
+          "new": {
+            "description": "True when this entry adds a row that came from no source.",
+            "type": "boolean"
+          },
+          "after": {
+            "description": "Merged id of the row a new row follows.",
+            "type": "string",
+            "minLength": 1
+          },
+          "body": {
+            "description": "Body of a new row. Valid only with `new: true`.",
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "if": {
+          "properties": {"new": {"const": true}},
+          "required": ["new"]
+        },
+        "then": {
+          "required": ["after", "fields", "body"],
+          "not": {
+            "anyOf": [
+              {"required": ["drop_fields"]},
+              {"required": ["deferred"]},
+              {"required": ["note"]}
+            ]
+          }
+        },
+        "else": {
+          "not": {
+            "anyOf": [
+              {"required": ["after"]},
+              {"required": ["body"]}
+            ]
+          },
+          "anyOf": [
+            {"required": ["fields"]},
+            {"required": ["drop_fields"]},
+            {"required": ["deferred"]},
+            {"required": ["note"]}
+          ]
+        }
+      }
+    },
+    "dropped_sections": {
+      "description": "Sections the merge does not carry. Heading, source and reason are all required: a drop with no reason is unrepresentable. The reserved heading `(preamble)` names a source's pre-`## ` text.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["heading", "source", "reason"],
+        "properties": {
+          "heading": {"type": "string", "minLength": 1},
+          "source": {"type": "string", "minLength": 1},
+          "reason": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "new_sections": {
+      "description": "Sections the output adds that came from no source, in output order. Content is literal Markdown. The op renders `## Consolidation delta` itself, so that heading is refused here.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["heading", "content"],
+        "properties": {
+          "heading": {
+            "type": "string",
+            "pattern": "^## \\S",
+            "not": {"pattern": "^##\\s+Consolidation delta\\s*$"}
+          },
+          "content": {"type": "string"}
+        }
+      }
+    }
+  }
+}

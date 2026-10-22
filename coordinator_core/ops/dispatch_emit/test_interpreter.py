@@ -66,6 +66,7 @@ def _unresolved(command: str) -> Optional[str]:
     """None when `command` resolves on this host; else the reason it does not."""
     if _is_absolute(command):
         if os.path.isfile(command):
+            # X_OK degrades to F_OK on Windows; the exec bit is checked only where it exists.
             if os.name != "nt":
                 if os.access(command, os.X_OK):
                     return None

@@ -1,0 +1,186 @@
+{
+  "sources": [
+    {
+      "path": "docs/plans/merged-execution-shape.md",
+      "origin_label": "merged-shape",
+      "spine_heading": "Open for the PM — one stamp, three questions inside it"
+    },
+    {
+      "path": "docs/plans/typed-alternative-record-seam.md",
+      "origin_label": "typed-seam"
+    }
+  ],
+  "frontmatter": {
+    "title": "Bash-guard consolidated execution — the confinement band split, the duty-of-care ladder, and the typed alternative record as one plan",
+    "created": "2026-07-29",
+    "author": "EM",
+    "status": "draft",
+    "branch": "work/machine-b/2026-07-21to26",
+    "plan_id": "pln-bash-guard-consolidated-execution-c51bda",
+    "deliverable_id": null,
+    "initiative": null,
+    "scope_mode": "architecture",
+    "problem_set": "inline",
+    "predecessor_handoff": "state/handoffs/2026-07-29_213341_bash-guard-merged-shape-wave-one-landed.md",
+    "reviewer": "the Director of Engineering/eng-director (typed-seam plan, standalone primary); EM-as-second-reviewer (merged-shape plan); consolidation review pending"
+  },
+  "preamble": "# Bash-guard consolidated execution\n\nTwo sessions spent a four-document memo thread negotiating a boundary between them. The PM\nhanded both batons to one session so the boundary could be dissolved instead of negotiated.\nThis plan is that dissolution: one owner, one package, one wave order.\n\nThe engineering content of the consolidation is **ordering**, not new work. Both source\nplans rewrite messages in the same guard modules — one by promoting prose up the rung\nladder, one by replacing prose with a typed record. Run in either order without\ncoordination, the same message gets authored twice. The thread existed to prevent that\nacross a session boundary; § Consolidated wave order prevents it inside one plan.\n",
+  "rows": [
+    {
+      "id": "M1",
+      "fields": {
+        "disposition": "coded",
+        "disposition_ref": "061134b1"
+      },
+      "note": "CONSOLIDATION: **LANDED** (claude-klabauter `061134b1`, with `M0`). Stamped `coded`\nduring consolidation -- the row shipped with no disposition, so it read as pending.\nVerified on disk rather than taken from the handoff: `dispatch.py` carries the `band` field,\n`guard_offer_git_c.py` and `guard_head_tail_rewrite.py` both exist as extracted modules,\n`test_hard_denies_precede_rewrites.py` is deleted (the invariant is held by construction\nnow), and `test_guard_band_membership.py` is present."
+    },
+    {
+      "id": "M2",
+      "fields": {
+        "disposition": "coded",
+        "disposition_ref": "2e6820d4"
+      },
+      "note": "CONSOLIDATION: **LANDED** (claude-klabauter `2e6820d4`, with `M3`). Stamped `coded`\nduring consolidation. Verified on disk: `find_git_segment` is defined at\n`_command_tokenizer.py:921`."
+    },
+    {
+      "id": "M3",
+      "fields": {
+        "disposition": "coded",
+        "disposition_ref": "2e6820d4"
+      },
+      "note": "CONSOLIDATION: **LANDED** (claude-klabauter `2e6820d4`, with `M2`). Stamped `coded`\nduring consolidation.\nCarry forward one correction the landing produced, because it bounds what the liveness gate\ncan prove: this row's alternative was described as removing the head/tail fork. It does not\n-- for `git log | head -n 3` the original spawns 2 processes and the alternative spawns 3,\none an interpreter startup. The real win is the platform the guard is banded for, a Windows\ncaller with no `head`, and the message now says that. **The liveness gate structurally\ncannot catch this class**: it proves an alternative runs, never that it is cheaper than what\nit replaces."
+    },
+    {
+      "id": "M4",
+      "fields": {
+        "disposition": "coded",
+        "disposition_ref": "29665cd57"
+      },
+      "note": "CONSOLIDATION: **LANDED** (coordinator-content-repo `29665cd57`,\n`state/audits/2026-07-29-grep-guard-target-class-residue.md`). Stamped `coded` during\nconsolidation. Returned verdict **(c)** against the plan's own (b) leaning: rewriting only\nthe grep segment of a composed pipeline saves ZERO forks in exactly the cases\n`search.answer` declines, so the composed-pipeline row is strictly dominated rather than\nmerely superseded. `M10` no longer carries it."
+    },
+    {
+      "id": "M11",
+      "fields": {
+        "disposition": "wont_do",
+        "case_against": "Cut as a scope decision during consolidation: the row's resolution state was a non-enum value that no tool could read as cut, and the work it described is not being done."
+      },
+      "drop_fields": [
+        "disposition_ref"
+      ],
+      "note": "CONSOLIDATION: schema fix, carried back to the source plan as well.\n`disposition: struck` is **not a member of the plan-tasks disposition enum**\n(`open`/`coded`/`spun_off`/`backlogged`/`wont_do`), so this row's resolution state routed\nnowhere on harvest -- a cut row that no tool could see as cut. Corrected to `wont_do`,\nwhich is the enum's name for \"explicitly declined\". No change of meaning: the row is\nstruck exactly as `disposition_detail` describes.\n`disposition_ref` is dropped for two independent reasons: the schema FORBIDS it on\n`wont_do` (detail required, ref forbidden), and its value\n(`state/2026-07-29-typed-alternative-record-band-reconciliation-response.md`) is a dead\npath -- the four-document thread was archived to `archive/memos/` on settlement. The live\nlocation is\n`archive/memos/2026-07-29-typed-alternative-record-band-reconciliation-response.md`,\nrecorded here so the pointer survives its own deletion.\nThe strike itself is unchanged and correct: this row's work is done by `S2` in this plan.",
+      "reason": "`disposition: struck` is not a member of the plan-tasks disposition enum (`open`/`coded`/`spun_off`/`backlogged`/`wont_do`), so the row's resolution state routed nowhere on harvest. Its `disposition_ref` was *also* schema-forbidden on a declined row, *and* a dead path — the thread it named was archived to `archive/memos/`. Fix: `disposition: wont_do`; `disposition_ref` dropped with the live archive location folded into `disposition_detail`. The strike itself is unchanged."
+    },
+    {
+      "id": "M12",
+      "fields": {
+        "disposition": "wont_do",
+        "pm_approved": true,
+        "case_against": "Cut by PM ruling: the typed seam supersedes the prose baselines this row would pin, so building it concurrently is negative work.",
+        "disposition_detail": "CUT by PM ruling 2026-07-29 (merge finding F6 accepted). Its own retirement condition was the typed seam landing, and the seam is now rows S0-S6 of this same plan -- its per-guard baselines are pinned from prose extraction and must be DISCARDED rather than migrated once the typed record replaces the prose, so building it concurrently with the thing that throws its baselines away is negative work. Re-raise only if the typed seam slips materially. Body retained as the rationale record, not a work instruction. Disposition added during consolidation: the row carried `deferred: true` with NO disposition, so a cut row read to the deferred-harvest as future work still pending."
+      },
+      "note": "CONSOLIDATION: schema/bookkeeping fix, carried back to the source plan as well.\nThis row was CUT by PM ruling, and its body says so plainly -- but it carried\n`deferred: true` and **no `disposition` at all**, so every mechanical reader saw a deferred\nrow awaiting future work rather than a declined one. `disposition: wont_do` plus the\nrequired `disposition_detail` now match what the body already said. Nothing about the\ndecision changes; only its machine-readable record.",
+      "reason": "Cut by PM ruling, and its body says so — but it carried `deferred: true` with **no `disposition` at all**, so the deferred-harvest read a declined row as future work still pending. Fix: `disposition: wont_do` plus the required `disposition_detail`, matching what the body already said."
+    },
+    {
+      "id": "M14",
+      "fields": {
+        "disposition": "wont_do",
+        "pm_approved": true,
+        "case_against": "Struck during consolidation: one session now holds both batons, so the collision it guarded against is unreachable.",
+        "disposition_detail": "STRUCK during consolidation 2026-07-29. Its stated rationale was preventing two concurrent sessions colliding in dispatch_checks.py -- making ownership of every function answerable by filename. One session now holds both batons, so the collision is unreachable and the filename handoff it existed to enable does not happen. Striking it also retires the only row in either source plan still awaiting PM ratification, rather than asking the PM to ratify a row whose motivation has evaporated. The one non-collision-motivated piece -- removing M1's deferred-import shim -- is re-homed to the new row M14S. Restore condition: the by-guard cut being re-split across sessions.",
+        "deferred": true
+      },
+      "note": "CONSOLIDATION: **STRUCK.** This row's stated rationale was a two-session collision\nhazard: \"a bare filename handoff would still land two concurrent sessions in the same\nfile -- the exact collision the by-guard cut exists to prevent,\" and \"ownership of every\nfunction in that file is answerable by reading a filename.\" Both batons are now held by\none session, so there is no second session to collide with and no filename handoff to\nmake answerable. The row's own body also recorded it as \"Not yet PM-ratified ... should be\nconfirmed in the same breath as [M1's] precedent\" -- striking it retires that open\nratification rather than asking the PM to ratify a row whose motivation has evaporated.\nKept as a rationale record, not a work instruction, per this workstream's convention for\ncut rows. The one piece of M14 that was NOT collision-motivated -- removing M1's\ndeferred-import shim -- is re-homed to M14S below. If the by-guard cut is ever re-split\nacross sessions, restore this row; the reasoning above is the whole restore condition.",
+      "reason": "Its rationale was preventing two concurrent sessions colliding in `dispatch_checks.py`. One session now owns both batons, so the collision is unreachable. This also retires the only row in either plan that was still awaiting PM ratification — it is cut, not ratified."
+    },
+    {
+      "id": "M15",
+      "fields": {
+        "deferred": false
+      },
+      "note": "CONSOLIDATION: **ABSORBED INTO S4.** Two changes, both consequences of one session\nholding both batons.\n(1) UN-DEFERRED. This row's named deferral reason was that \"S1 is gated on a PM execution\nauthorization that the typed-seam plan does not yet hold and that neither session\ncontrols.\" That plan now holds it (`execution_authorized_by: PM`,\n`execution_authorized_at: 2026-07-29`). The named gate has cleared, so the named reason is\ndischarged -- this is not an appetite-based un-deferral.\n(2) ABSORBED. S4 migrates all ~94 message sites package-wide. This row is the same edit on\nthe modules S4's own scope note had excluded as \"owned end-to-end by the peer session.\"\nWith one owner there is one population and one row: S4 executes it, and S4's scope note is\namended accordingly (see S4's consolidation note). The row body is retained because its\ntwo inherited obligations (the construction-time invariant, the differential-render\nobligation) and its verdict-behaviour-must-not-change constraint bind S4's execution and\nare stated more sharply here than in S4.\nThe cross-plan commitment this row recorded does not need to survive as a commitment --\nit is now internal ordering.",
+      "reason": "Its named deferral reason was that `S1` sat behind a PM authorization neither session controlled. The typed-seam plan holds that authorization, so the named gate has cleared. `S4` already migrates the package; `M15` is the same edit on the modules `S4` had excluded as peer-owned."
+    },
+    {
+      "id": "M10",
+      "note": "CONSOLIDATION: the SETTLE-NOTE OBLIGATION at the end of this row is **discharged\nstructurally, not performed.** There is no peer session to publish a one-line note to.\nThe obligation existed only to let the other session know when it was safe to capture\nthis side's message branches; that is now an ordering constraint inside one plan -- S3C\ncaptures after this row lands, enforced by wave order (§ Consolidated wave order), not by\na note anyone has to remember to send. Do not send a note; do not treat its absence as an\noutstanding obligation.\nThe M4 residue this row declines to build (`_STAGE_BUILDERS`, ~0.6-0.9% of grep-shaped\ntraffic) was declined on the grounds that it \"is the peer's surface: file it as a\ncoordination ask, do not build it here.\" That surface is now this session's. The decline\nSTANDS on its other stated ground -- M4 returned verdict (c), the row is strictly\ndominated -- so this is recorded as available-and-not-taken, not as newly in scope. No new\nrow."
+    },
+    {
+      "id": "M14S",
+      "new": true,
+      "after": "M14",
+      "fields": {
+        "title": "Delete M1's deferred-import shim in dispatch_checks.py and repoint its importers",
+        "change_kind": "code-edit",
+        "surface": "<CLAUDE_KLABAUTER_ROOT>/coordinator_core/bash_guards/dispatch_checks.py",
+        "queue_scope": "project",
+        "deferred": false
+      },
+      "body": "CONSOLIDATION: NEW row, carrying the one part of the struck M14 that was not\nmotivated by two-session collision-avoidance. Verbatim from the merged plan's\npredecessor handoff, § Findings recorded but not fixed:\n\n  \"**`M1` left one deferred-import shim** in `dispatch_checks.py` for the two\n  extracted names, because a module-level re-export caused a genuine circular\n  import and ~40 call sites across three test files still reach them by the old\n  path. A permanent shim defeats the extraction -- fold the repointing into `M14`,\n  which is already touching that file.\"\n\nM14 is struck, so this needs its own row or the finding is lost. Scope is exactly\nthe shim and its importers -- NOT the advisory-tail extraction M14 carried.\n\nSame constraints as M1, and they are the expensive ones: pure move, behaviour\nunchanged, every importer enumerated BEFORE the change and repointed in the same\npass, tree importable at every step. Read\nstate/lessons/2026-07-29-a-dispatch-onto-a-live-shared-surface-needs-the-whole-importer-set.yaml\nfirst -- it was written from this workstream wedging every session on the machine\non exactly this operation.\n\nVerify differentially, not by running it: confirm the chain entries are in\nbyte-identical order against HEAD, which is the bar M1's \"pure move\" claim was\nheld to.\n",
+      "reason": "The one piece of `M14` that was not collision-motivated: delete `M1`'s deferred-import shim and repoint its ~40 importers. Named in the merged plan's own § Findings recorded but not fixed; would have been lost with `M14`."
+    },
+    {
+      "id": "S1",
+      "note": "CONSOLIDATION: the **schedule urgency on this row is void.** Both the predecessor\nhandoff and the reconciliation thread made S1 time-critical -- \"publish its signature to\nthe reconciliation thread the moment it exists ... but only if the signature lands before\nthat wave dispatches. If the window has already closed, say so to them.\" There is no peer\nwave and no window. S1 still lands EARLY, for a different and purely internal reason: it\npins the field set and import path that S4's fan-out and M15's absorbed conversion both\nconsume, so landing it before the wide waves avoids re-shaping converted sites. See\n§ Consolidated wave order. Nothing is published anywhere."
+    },
+    {
+      "id": "S3C",
+      "note": "CONSOLIDATION: two changes.\n(1) ORDERING -- this row now runs **before S3B**, which is a constraint neither source plan\ncarried, because neither could see the other's row as its own to sequence. S3B narrows\n`check()` across 18 envelope-construction sites and claims rendered output is unchanged;\ncapturing this baseline first gives that claim a differential proof instead of an\nassertion. That is this workstream's own ratified bar --\nstate/lessons/2026-07-29-verify-a-rewrite-differentially-not-by-running-it.yaml, universal\nscope -- and M1 was already held to it. S3B is the largest refactor in either plan still\nlacking such a proof; this ordering supplies one for free.\n(2) The **staged-per-band capture mechanism still applies, but the trigger is now wave\norder rather than a peer's settle note.** The reconciliation-close text below is correct\nand unchanged in substance: capture after M10, never after M3, because M10 touches\n`guard_plumbing_and_loops.py` a second time. What changes is only how settlement is known\n-- by this plan's own wave boundary, not by a note published to a thread. The\nkey-on-chain-entry-name requirement is UNCHANGED and remains load-bearing: M1 already\nmoved two guards between modules, so a module-path-keyed corpus would still go silently\nmissing.",
+      "reason": "`S3C` captures the rendered baseline; `S3B` is an 18-site refactor claiming rendered output is unchanged. Capturing first turns that claim into a differential proof, which is this workstream's own ratified bar. Neither plan could sequence the other's row."
+    },
+    {
+      "id": "S3B",
+      "note": "CONSOLIDATION: **runs after S3C, not before.** See S3C's consolidation note -- this\nrow's byte-identical-rendering claim is proven against S3C's committed baseline rather\nthan asserted. No scope change; ordering only.",
+      "reason": "`S3C` captures the rendered baseline; `S3B` is an 18-site refactor claiming rendered output is unchanged. Capturing first turns that claim into a differential proof, which is this workstream's own ratified bar. Neither plan could sequence the other's row."
+    },
+    {
+      "id": "S4",
+      "note": "CONSOLIDATION: **scope amended -- this row now covers the whole package, including\nthe three modules its own SUPERSEDED READING block below excludes as peer-owned.**\n`guard_grep_via_bash.py`, `guard_multiprobe_banner.py` and `guard_plumbing_and_loops.py`\n(the third band, `platform-conditioned-deny`) were excluded on ownership grounds only --\n\"owned end-to-end by the peer session (merged plan rows M3, M10). No conversion-ownership\nquestion remains for them from this plan's side.\" One session now owns them, so they enter\nthis row's population. The absorbed M15 (above) is the record of what that conversion\nmust satisfy; read M15's body as part of this row's instructions.\nThis is NOT an aggregate scope increase: M15 already carried these modules under the\nmerged plan's authorized scope. The work moves rows; it does not appear.\nTwo things in this row's body are now MOOT, and are kept rather than deleted so a later\nreader does not re-derive them:\n  - The whole cross-band coordination paragraph -- \"a FIRST-WAVE, concretely specified ask\n    carried into the PM's stated reconciliation step ... so the confinement-band session\n    can accept, decline, or counter-propose in one round-trip,\" and \"What happens if the\n    peer band declines is an open dependency.\" There is no counterparty; nothing is asked,\n    nothing can be declined, and that open dependency is closed by consolidation.\n  - The prohibition \"coordinator-content-repo's standing direct-commit grant into claude-klabauter would\n    technically permit converting the confinement band's guards unilaterally; do NOT use\n    it that way here.\" the Director of Engineering's ruling was against splitting one guard's ownership down the\n    middle -- end-to-end by-guard ownership includes the message. With a single owner there\n    is no split to make, so the ruling is satisfied rather than overridden. The grant is\n    still the authority under which these commits land, exactly as it was for waves 1-2.\n  - `commit_tripwires.py`'s function-list split and `dispatch_checks.py`'s\n    extraction-based resolution were both mixed-file OWNERSHIP answers. Ownership is no\n    longer contested; both files are converted whole by this row.\nThe row's real risk is unchanged and is the reason S3C exists: a silent downgrade of the\n33 messages already at rung A or B.",
+      "reason": "Excluded from `S4` on ownership grounds only. Not an aggregate increase — `M15` already carried them under the merged plan's authorized scope."
+    },
+    {
+      "id": "S5",
+      "note": "CONSOLIDATION: the **completion condition is unchanged in substance and simpler in\nmechanism.** Condition (a) -- \"both bands' guards construct records\" -- was to be signalled\nby the peer with \"a NAMED TEST asserting that no guard module in its ownership constructs\na message envelope by the prose path (a test, not a report, so the signal cannot rot).\"\nThe named-test requirement STANDS and is the right artifact; what changes is that it is\none test over every guard in the package, authored once by this session, rather than two\ntests scoped by ownership. Condition (b) -- differential-render baseline green across all\nmessage branches -- is unchanged.\nThe M15 provenance block below (the peer's deferred row, its unblock condition, its\nsurvival past a plan close-out) is now historical: M15 is un-deferred and absorbed into\nS4. Read it as the record of why the two plans were sequenced as they were, not as a live\ndependency. Likewise \"the sooner S1's signature lands the sooner the peer's half of\ncondition (a) can start\" -- the critical path still runs through S1, but there is no\nsecond party waiting on it.\nEverything else binds unchanged, and these are the parts that matter: delete the extractor\nrather than retaining it behind a flag; key rung by (message, caller class) per TA4; and\nhandle T12 explicitly, because `guard_inprocess_search` returns DENY as its SUCCESS shape,\nso grading on verdict class would report the best-behaved guard in the package as a hard\nrefusal."
+    }
+  ],
+  "dropped_sections": [
+    {
+      "heading": "## Authorization state — the one thing that blocks",
+      "source": "docs/plans/merged-execution-shape.md",
+      "reason": "Resolved. It blocked on a PM stamp; the stamp landed (`execution_authorized_sha: e66d5ce3a3b43ebedb3c982c227854a5fe72271a`, `execution_authorized_by: PM`) and waves 1-2 executed under it. A section describing a cleared gate as blocking would misreport this plan's state."
+    },
+    {
+      "heading": "## Open for the PM — one stamp, three questions inside it",
+      "source": "docs/plans/merged-execution-shape.md",
+      "reason": "All three answered, so the section is dropped rather than carried as open. (1) The merged scope was authorized. (2) F9's widening was assented to — M1 landed with BOTH extractions (`061134b1`), which is the widened form. (3) F5 and F6 were accepted: the audience split routed to the typed seam (now S2, in this plan), and the rung ratchet was cut (M12). Only the three questions are dropped; the section's task spine is carried in full, and its anti-scope bullets live in § Carried unchanged from both plans, which is carried whole."
+    },
+    {
+      "heading": "(preamble)",
+      "source": "docs/plans/merged-execution-shape.md",
+      "reason": "The source's H1 and its blockquote introduction are superseded by the merged plan's own preamble. The prototype dropped it without declaring it."
+    },
+    {
+      "heading": "(preamble)",
+      "source": "docs/plans/typed-alternative-record-seam.md",
+      "reason": "The source's H1 and its blockquote introduction are superseded by the merged plan's own preamble. The prototype dropped it without declaring it."
+    }
+  ],
+  "new_sections": [
+    {
+      "heading": "## How this artifact was made",
+      "content": "**This is a structural merge, not a rewrite.** It was produced by a transform\n(`scratchpad/merge-bash-guard-plans.py`, committed alongside it and re-runnable) that:\n\n1. concatenates the two source task spines — no re-keying was needed, because the `M*` and\n   `S*` id namespaces are disjoint (unlike the two plans the `M*` spine itself merged, which\n   both used `C1`–`C5` for different things);\n2. applies the delta in § Consolidation delta as explicit per-row field edits plus an\n   appended `CONSOLIDATION:` note, leaving every original row body byte-for-byte intact;\n3. carries each source plan's prose sections through unmodified, dropping exactly two\n   (listed in § Consolidation delta with the reason each is resolved).\n\nSo every instruction below was written by the session that reviewed it and got it\nauthorized. Nothing was re-authored from a summary, and nothing was silently dropped: the\nsections that did not come across are named, and the rows that changed disposition say so\nin their own bodies. Superseded and moot passages are kept in place rather than deleted —\nthis workstream's own convention, so a later reader does not re-derive a settled question\nfrom the evidence alone.\n\n**Read the row bodies as the work instructions and the `CONSOLIDATION:` notes as the\namendments to them.** Where the two disagree, the note wins; it is younger and it knows\nabout both plans.\n"
+    },
+    {
+      "heading": "## Consolidation notes",
+      "content": "### Obligations discharged structurally rather than performed\n\nEach of these was a real commitment between two sessions. None is being dropped on\nconvenience; each one's *mechanism* was a cross-session signal, and there is no longer a\nsecond session for the signal to reach.\n\n| Obligation | Was | Now |\n|-----------|-----|-----|\n| `M10`'s settle note | a one-line note published to the reconciliation thread when `M10` lands, from which the peer infers it is safe to capture | a wave boundary: `S3C` runs after `M10`. Enforced by § Consolidated wave order. **Do not send a note; its absence is not an outstanding obligation.** |\n| `S1`'s signature publication | time-critical — publish before the peer's wave 3 dispatches or the window closes | void. `S1` still lands early, to pin the field set `S4` consumes, not to hit a window. |\n| `S5` condition (a)'s named test | the peer signals its half with a named test scoped to its ownership | one named test over every guard in the package. **The named-test requirement stands** — a test, not a report, so the signal cannot rot. |\n| `S3C`'s per-band staged capture | capture this band before conversion, the peer's band after their `M10` settles | same ordering, one population. Capture after `M10`, before `S4`. |\n| `S4`'s cross-band ask | a concretely specified first-wave ask the peer could accept, decline, or counter-propose | nothing is asked. The \"what if the peer declines\" open dependency is closed. |\n| the Director of Engineering's jurisdiction ruling — do not use the claude-klabauter grant to convert the peer's guards | authority existed, jurisdiction did not | **satisfied, not overridden.** The ruling was against splitting one guard's ownership down the middle; end-to-end by-guard ownership includes the message. One owner ⇒ no split. The grant remains the authority these commits land under, as in waves 1–2. |\n| `commit_tripwires.py` function-list split; `dispatch_checks.py` extraction-as-resolution | mixed-file ownership agreements | moot. Both files convert whole. |\n\n### Recorded, deliberately not acted on\n\n- **`M4`'s residue** (`_STAGE_BUILDERS`, ~0.6–0.9% of grep-shaped traffic). `M10` declined it\n  partly because it was the peer's surface — that ground is gone — but its other ground\n  stands: `M4` returned verdict **(c)**, the composed-pipeline row is strictly dominated.\n  Available and not taken. No new row.\n- **`security-audit-worker`'s unenforced read-only-Bash claim** (carried forward,\n  `cf-security-audit-worker-policy-c41d08`). It claims read-only Bash but is absent from the\n  `bash_policy` table, so nothing enforces the claim. Both sources call this a PM call and\n  out of scope, and it stays out of scope here. Noting the disagreement rather than burying\n  it: the fix is mechanical — one table row mirroring `code-reviewer`'s — and an unenforced\n  safety claim is break-class. It is left alone because narrowing an agent's actual Bash\n  reach is a policy change with its own blast radius, which is a genuine direction-class\n  tradeoff, not because it is hard.\n- **Windows validation** (`cf-windows-validation-9a3e17`). PM-deferred, blocked on a Windows\n  host, until after this plan succeeds. Every measurement in this workstream is\n  macOS-observed and the cross-platform branching is reasoned but unverified. **Deferred, not\n  cancelled — must never be reported as covered.**\n- **The reviewer pipe-denial leg** (`cf-reviewer-pipe-denial-7b2f04`). `git show | sed` denying\n  is correct; `git show | head` denying is not explained by the message text and could not be\n  settled empirically, because `check()` fail-opens on an unresolvable agent id. Unresolved.\n"
+    },
+    {
+      "heading": "## What the two sessions were coordinating, and what dissolved",
+      "content": "Worth stating plainly, because the memo thread is archived and a later reader will find six\ncitations into it: **both sides were right, and the coordination was necessary while the\nboundary existed.** The thread found real defects in both plans' in-flight work — it is not\nan example of wasted process. What it could not do is make the boundary cheap.\n\nThe boundary was the PM-ratified by-guard band cut: each session owned its guards end to\nend, message included. Under that cut, a type that every guard must construct is\ninherently a joint surface, so the thread had to negotiate a type signature, a conversion\nschedule, a baseline-capture point, a deletion condition, and a settlement signal — five\nagreements, each with a rot risk, to land one dataclass.\n\nConsolidation replaces all five with wave ordering. That is the entire win, and it is\nlarge: the surviving constraint is one that a single owner can simply *schedule*.\n\n**What did NOT dissolve** — do not read consolidation as a licence here:\n\n- The **three-band chain structure** (`M1`) stands. Bands are how the chain orders its\n  guards, unrelated to who owns them.\n- The **band cut as doctrine** stands. It is ratified, it is in the threat-model wiki, and\n  `S6` amends that wiki. Consolidation is one session holding both sides today, not a repeal.\n- The **differential-render obligation** stands and gets stricter (`S3C` now also proves\n  `S3B`). It never depended on there being two parties.\n- The **named-test completion signal** stands. Its point was that a test cannot rot the way\n  a report can — true regardless of audience.\n"
+    },
+    {
+      "heading": "## Consolidated wave order",
+      "content": "Supersedes the four-wave shape in § The wave shape (below, kept as record). Two reasons for\na new order: `M*` rows and `S*` rows touch the same modules and neither plan could sequence\nthe other's; and waves 1–2 have already landed, so the remaining graph is different.\n\n**The governing constraint, stated once:** every row that rewrites message *prose* (`M7`,\n`M10`) must land before `S3C` captures the rendered baseline, and `S3C` must land before\n`S4` converts anything. Violating this authors the same message twice — the exact failure\nthe memo thread existed to prevent.\n\n**Wave width is capped at two lanes.** Not an efficiency choice: six of seven agents died on\ntransient API errors on the first wide attempt, and one died mid-extraction leaving the\nguard package unimportable for every session on the machine. Two-lane waves have been\nreliable since. Fleet-critical rows run solo.\n\n| Wave | Lanes | Rows | Files | Why these together |\n|------|-------|------|-------|--------------------|\n| **A** | 2 | `M5`, `M7` | `dispatch_checks.py` · `guard_head_tail_rewrite.py` | Disjoint only because `M1` extracted `M7`'s guard into its own file. Do not re-serialize. |\n| **B** | 2 | `M6`, `S0` | `guard_offer_git_c.py` · `_alternative_liveness.py` + new capability manifest | Disjoint. `S0` starts early because `S1` blocks on it. |\n| **C** | 1 | `M8` | 5 wrapper-walk copies + `block_subagent_destructive_action.py` | **Solo — fleet-critical.** Deletes shared symbols across five modules and re-applies the captured ladder-tail diff. Enumerate the full importer set before touching anything. |\n| **D** | 1 | `M14S` | `dispatch_checks.py` | **Solo — fleet-critical.** Moves shared symbols; same file as `M8`, so it follows rather than parallels. |\n| **E** | 2 | `M10`, `S1` | 3 advisory guard modules · new `coordinator_core/guard_messages/` | Disjoint: `S1` creates a new package. **This is the last prose-promotion row** — after `M10`, message text stops moving. |\n| **F** | 2 | `S2`, `S3` | `guard_messages/` + dispatcher · `_alternative_liveness.py` | `S2` needs `S1`'s record to exist (audience is a field, never a filter over rendered text). |\n| **G** | 1 | `S3C` | `LIVE_TRIGGERS` + new baseline fixture | **Solo.** Extends the trigger corpus from ~25 to ~94 branches and captures the rendered baseline. Key on **chain-entry name**, never module path — `M1` and `M8` both move message-bearing functions between modules, and a path-keyed corpus goes silently *missing* rather than failing loudly. |\n| **H** | 1 | `S3B` | 18 envelope sites + dispatcher + `write_guards/INTERFACE.md` | **Solo — package-wide.** Narrows `check()` to `AlternativeRecord \\| None`. Prove rendered output byte-identical against wave G's baseline. |\n| **I** | 2/wave | `S4` (absorbing `M15`) | ~94 sites, fanned out by disjoint file | The big one. Per-file executor dispatch, EM-serial commits, differential render green after each. Real risk is a silent downgrade of the 33 messages already at rung A or B. |\n| **J** | 1 | `S5` | rung computation + prose-extractor deletion | Needs `S4` complete for the population being graded. Delete the extractor; do not retain it behind a flag. |\n| **K** | 2 | `S6`, `M13` | threat-model wiki · combined diff | `M13` is the closing gate: **no `code-reviewer` pass has run on any of this workstream's diff, on either side of the merge.** One pass over the combined diff. Do not let these commits read as reviewed. |\n\n### Gate that binds every wave, restated because it has already bitten\n\n**Verify a restructure differentially, never by running it.** `M1`'s \"pure move\" claim was\nchecked by confirming all 28 chain entries were byte-identical in order against `HEAD` —\nthat is the bar. Two rows in the source workstreams shipped a correction because someone ran\nnew code and liked the output.\n\n**Brief every symbol move with its full importer set, enumerated before dispatch.** This is\nthe single most expensive lesson of the workstream and it wedged the whole fleet once. It\nbinds `M8` and `M14S` specifically. Read\n`state/lessons/2026-07-29-a-dispatch-onto-a-live-shared-surface-needs-the-whole-importer-set.yaml`\nbefore dispatching either.\n\n**Promotion means adding a working alternative.** It never means making the override line\nclearer or more prominent. Binds `M10`, and the reason is empirical: a read-only Explore\nsubagent with no knowledge of any plan spontaneously reported this package's own advisories\nas prompt injection and discarded them.\n\n**Baseline you inherit:** guard suite green at 2107 passed, 12 xfailed, 0 failed;\nalternative-liveness gate 67/67. Any failure you see is yours.\n"
+    }
+  ]
+}

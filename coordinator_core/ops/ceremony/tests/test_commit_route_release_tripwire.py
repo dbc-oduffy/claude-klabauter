@@ -110,6 +110,18 @@ _NATIVE_COMMITTER_API_NAMES = {
     "commit_authored_content",
 }
 
+# The SEVENTH mechanism (`fast_import_landing`): a committer that lands a
+# commit through `git fast-import` rather than `git commit`. Unlike every
+# other row it keys on no callee name -- fixtures reach git through `_git`,
+# `run_git`, `_git_checked`, `subprocess.run` and more -- only on the exact
+# `"fast-import"` argv constant anywhere in the call's argument tree. Because
+# that makes every call in a file a candidate, the scan runs only on files whose
+# bytes contain the constant (see `_iter_tracked_calls`). A module-level call
+# never counts: `bash_guards/block_external_workspace_vcs_write.py` names the
+# subcommand in a frozenset of verbs it denies, which lands nothing.
+_FAST_IMPORT_CONSTANT = "fast-import"
+_FAST_IMPORT_MECHANISM = "fast_import_landing"
+
 _ALL_TRACKED_CALLEE_NAMES = (
     _ASYNCIO_EXEC_NAMES
     | _RUN_GIT_HELPER_NAMES
@@ -177,7 +189,8 @@ def _iter_py_files():
 
 class _EnclosingFunctionTracker(ast.NodeVisitor):
 
-    def __init__(self):
+    def __init__(self, scan_fast_import: bool = False):
+        self.scan_fast_import = scan_fast_import
         self.stack: list[str] = ["<module>"]
         self.found: list[tuple[str, str, ast.Call]] = []
 
@@ -207,6 +220,12 @@ class _EnclosingFunctionTracker(ast.NodeVisitor):
                 if required_constant in constants:
                     self.found.append((self.stack[-1], mechanism, node))
                     break
+        if (
+            self.scan_fast_import
+            and self.stack[-1] != "<module>"
+            and _FAST_IMPORT_CONSTANT in set(_string_constants(node))
+        ):
+            self.found.append((self.stack[-1], _FAST_IMPORT_MECHANISM, node))
         self.generic_visit(node)
 
 
@@ -216,7 +235,10 @@ def _iter_tracked_calls():
             raw = path.read_bytes()
         except OSError:
             continue
-        if not any(name.encode("ascii") in raw for name in _ALL_TRACKED_CALLEE_NAMES):
+        has_fast_import = _FAST_IMPORT_CONSTANT.encode("ascii") in raw
+        if not has_fast_import and not any(
+            name.encode("ascii") in raw for name in _ALL_TRACKED_CALLEE_NAMES
+        ):
             continue
         try:
             source = raw.decode("utf-8")
@@ -229,7 +251,7 @@ def _iter_tracked_calls():
                 f"{path}: failed to parse -- {exc}. This tripwire cannot "
                 f"certify a file it cannot read."
             ) from exc
-        tracker = _EnclosingFunctionTracker()
+        tracker = _EnclosingFunctionTracker(scan_fast_import=has_fast_import)
         tracker.visit(tree)
         if not tracker.found:
             continue
@@ -363,6 +385,34 @@ ALLOWLIST: dict[str, dict[str, object]] = {
         "confirmed": True,
     },
     "benchmarks/run_baton_cascade_full_path.py::build_corpus": {
+        "reason": "ineligible: benchmark fixture seeding a throwaway repo; no claims exist",
+        "confirmed": True,
+    },
+    # `fast_import_landing` (the SEVENTH mechanism): benchmark fixtures that seed
+    # a throwaway repo's history through `git fast-import`. `build_real_shape`
+    # moved its fixture commit to `_commit_dirs_fast_import` (cc8a14fbfe), so
+    # the live site is the helper, not the caller.
+    "benchmarks/terminal_commit_full_path.py::_commit_dirs_fast_import": {
+        "reason": "ineligible: benchmark fixture seeding a throwaway repo; no claims exist",
+        "confirmed": True,
+    },
+    "benchmarks/doc_staleness_full_path.py::_build": {
+        "reason": "ineligible: benchmark fixture seeding a throwaway repo; no claims exist",
+        "confirmed": True,
+    },
+    "benchmarks/maintenance_tier_budget.py::add_small_packs_and_loose": {
+        "reason": "ineligible: benchmark fixture seeding a throwaway repo; no claims exist",
+        "confirmed": True,
+    },
+    "benchmarks/maintenance_tier_budget.py::_churn": {
+        "reason": "ineligible: benchmark fixture seeding a throwaway repo; no claims exist",
+        "confirmed": True,
+    },
+    "benchmarks/probe_since_base_overlap.py::_fast_import": {
+        "reason": "ineligible: benchmark fixture seeding a throwaway repo; no claims exist",
+        "confirmed": True,
+    },
+    "benchmarks/workweek_complete_brief_full_path.py::_build": {
         "reason": "ineligible: benchmark fixture seeding a throwaway repo; no claims exist",
         "confirmed": True,
     },
@@ -726,6 +776,7 @@ def test_enumerator_catches_all_four_mechanisms():
         "_run_git_helper",
         "git_native._git",
         "cas_ref_landing",
+        "fast_import_landing",
     }
     missing = expected_mechanisms - set(by_mechanism)
     assert not missing, (

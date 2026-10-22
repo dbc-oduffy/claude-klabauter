@@ -35,6 +35,26 @@ def test_strips_line_suffix(tmp_path):
     assert named_paths(["docs/plans/x.md:12"], root) == ["docs/plans/x.md"]
 
 
+def test_spelling_called_once_canonicalizes_and_dedupes(tmp_path):
+    calls = []
+
+    def spelling(paths):
+        calls.append(list(paths))
+        return {"a/Pub.py": "a/pub.py", "a/pub.py": "a/pub.py", "a/gone.py": None}
+
+    out = named_paths(["a/Pub.py a/gone.py", "a/pub.py"], tmp_path, spelling=spelling)
+    assert out == ["a/pub.py"]
+    assert len(calls) == 1 and calls[0] == ["a/Pub.py", "a/gone.py", "a/pub.py"]
+
+
+def test_spelling_ignores_disk_and_parent_dir_leg(tmp_path):
+    root = _repo(tmp_path)
+    (root / "docs/plans/y.md").write_text("x")
+    backed = {"docs/plans/y.md": "docs/plans/y.md"}
+    out = named_paths(["docs/plans/x.md docs/plans/y.md"], root, spelling=lambda ps: {p: backed.get(p) for p in ps})
+    assert out == ["docs/plans/y.md"]
+
+
 def test_gated_paths_selects_claude_md_class():
     assert gated_paths(["CLAUDE.md", "docs/plans/x.md", "coordinator/CLAUDE.md", "docs/CLAUDE.md.bak"]) == [
         "CLAUDE.md",

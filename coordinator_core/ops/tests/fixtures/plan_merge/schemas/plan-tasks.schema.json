@@ -1,0 +1,158 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://coordinator.local/schemas/plan-tasks.schema.json",
+  "x-schema-name": "plan-tasks",
+  "x-schema-version": "1.1.1",
+  "title": "plan-tasks",
+  "description": "Per-row schema for the plan `## Tasks` task-spine YAML block (one task object per row). Full authoring contract, parser-locate rule, malformed-row disposition, and harvest routing: docs/wiki/writing-plans.md § Machine-Parseable Task Spine and docs/wiki/canonical-artifact-shapes.md § Addressable-Section Convention.\n\nSpec backlink: docs/plans/2026-07-09-plan-full-coverage-and-deferred-harvest.md § C1 (pinned task-spine contract).",
+  "type": "object",
+  "required": ["id", "title", "change_kind", "surface"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Chunk id (e.g. C1, D1). Unique within the plan. Deferred rows conventionally use the D<n> prefix, but the prefix is a convention, not a schema-enforced discriminator — `deferred: true` is the actual signal."
+    },
+    "title": {
+      "type": "string",
+      "description": "One-line brief. Becomes the queue-entry title on harvest (coordinator-queue-append --schema improvement-queue, or the lessons-outbox title on the doctrine-edit/snippet-sync-update path)."
+    },
+    "change_kind": {
+      "type": "string",
+      "enum": [
+        "doctrine-edit",
+        "agent-prompt-edit",
+        "hook-edit",
+        "script-edit",
+        "snippet-sync-update",
+        "wiki-new",
+        "wiki-append",
+        "skill-edit",
+        "doc-edit",
+        "test-edit",
+        "code-edit",
+        "config-edit",
+        "verification"
+      ],
+      "description": "WIDER UNIVERSAL change-kind enum. SSOT: docs/wiki/lessons-outbox-schema.md § Change-kind enum (do NOT duplicate the enum values elsewhere — point there instead). Harvest routing: the project-tier subset (script-edit, skill-edit, wiki-append, wiki-new, hook-edit, agent-prompt-edit, doc-edit, test-edit, code-edit, config-edit, verification) routes to coordinator-queue-append --schema improvement-queue; doctrine-edit and snippet-sync-update route to coordinator-lesson-promote (lessons-outbox) instead — the improvement-queue schema rejects those two kinds at project scope. These values name the SURFACE changed, not the flavour of the change — do not coin a work-shape token (a bash-to-Python port of a bin/ utility is script-edit); an unrecognized value routes nowhere on harvest."
+    },
+    "surface": {
+      "type": "string",
+      "description": "Harvest/coverage PRIMARY-TARGET field — a single path or subsystem. Maps to the queue entry's `surface` field ONLY. See docs/wiki/writing-plans.md § Machine-Parseable Task Spine for the surface-vs-write-files-set distinction."
+    },
+    "queue_scope": {
+      "type": "string",
+      "enum": ["project", "central"],
+      "default": "project",
+      "description": "Which improvement-queue the harvest writes into. Default 'project' writes to the plan's own repo-local state/improvement-queue/. 'central' is a per-deferral opt-in that maps to `coordinator-queue-append --queue-scope central`."
+    },
+    "deferred": {
+      "type": "boolean",
+      "default": false,
+      "description": "true => this row is NOT shipped by this plan; it is a harvest candidate for coordinator-harvest-deferrals. false (default) => the row is shipped in-plan and is not a harvest target."
+    },
+    "pm_approved": {
+      "type": "boolean",
+      "description": "Required when deferred is true (cross-field rule — see the allOf conditional below). Records that the PM ratified the scope cut. false or absent on a deferred:true row is a plan-coverage-checker flag. Only deferred:true AND pm_approved:true rows are harvest candidates; a deferred row with pm_approved:false or absent is NOT harvested."
+    },
+    "body": {
+      "type": "string",
+      "description": "Optional multi-line detail block. Maps to the queue entry's `body` field on harvest."
+    },
+    "disposition": {
+      "type": "string",
+      "enum": ["open", "coded", "spun_off", "backlogged", "wont_do"],
+      "default": "open",
+      "description": "Row resolution state. 'open' (default) => not yet resolved. 'coded' => shipped in a specific commit (disposition_ref is a single hex SHA). 'spun_off' => moved to a new plan (disposition_ref is a single repo-relative path). 'backlogged' => deferred to the improvement/debt backlog (disposition_ref is a single repo-relative path). 'wont_do' => explicitly declined (disposition_ref forbidden; disposition_detail required). Mirrors the shape of `carried_items[].disposition` (D1). Cross-field enforcement matrix: D2/D3/D4 in the originating plan; hard rejection happens in schema_validate.py (C2), not here — see the allOf $comments below for what this schema itself does and does not hard-fail."
+    },
+    "disposition_ref": {
+      "type": "string",
+      "description": "Forward pointer/evidence for a non-open disposition — semantics depend on `disposition` (SHA for coded, repo-relative path for spun_off/backlogged, forbidden for wont_do). Separate from `disposition_detail`, which carries rationale prose (D2)."
+    },
+    "disposition_detail": {
+      "type": "string",
+      "description": "Rationale/detail prose for a CLOSED disposition (spun_off/backlogged/wont_do — D2/D4). Required for wont_do (in place of disposition_ref) and for spun_off/backlogged alongside their disposition_ref. NOT required for coded: per D3, coded is evidence of work done, not a scope decision, so it carries no PM rationale to record — see the allOf conditionals below for the exact per-disposition requirement."
+    }
+  },
+  "allOf": [
+    {
+      "$comment": "Cross-field rule: pm_approved is required-when-deferred. JSON Schema if/then encodes this — when deferred is true, pm_approved MUST be present (and, per the field's semantics, true) for the row to be a valid harvest candidate. A deferred:true row with pm_approved absent or false remains structurally valid JSON (this schema does not hard-fail it — see the malformed-row-disposition note in the top-level description) but is flagged by plan-coverage-checker, the enforcement surface for this cross-field rule.",
+      "if": {
+        "properties": { "deferred": { "const": true } },
+        "required": ["deferred"]
+      },
+      "then": {
+        "$comment": "Presence, not truthiness — this only checks that pm_approved is a key on the row. A deferred:true row with pm_approved:false still validates here (schema does not hard-fail it); the truthiness check (pm_approved must equal literal true) is flagged by plan-coverage-checker, not schema-rejected.",
+        "required": ["pm_approved"]
+      }
+    },
+    {
+      "$comment": "Cross-field rule: disposition: coded requires disposition_ref matching a single hex SHA (7-40 hex chars) — DR-096's singular-referent constraint (D2): no ranges, comma-lists, or branch names.",
+      "if": {
+        "properties": { "disposition": { "const": "coded" } },
+        "required": ["disposition"]
+      },
+      "then": {
+        "required": ["disposition_ref"],
+        "properties": {
+          "disposition_ref": { "type": "string", "pattern": "^[0-9a-f]{7,40}$" }
+        }
+      }
+    },
+    {
+      "$comment": "Cross-field rule: disposition: spun_off requires disposition_ref as a single repo-relative path (DR-096 singular-referent — one path, not a list).",
+      "if": {
+        "properties": { "disposition": { "const": "spun_off" } },
+        "required": ["disposition"]
+      },
+      "then": {
+        "required": ["disposition_ref"]
+      }
+    },
+    {
+      "$comment": "Cross-field rule: disposition: backlogged requires disposition_ref as a single repo-relative path (DR-096 singular-referent — one path, not a list).",
+      "if": {
+        "properties": { "disposition": { "const": "backlogged" } },
+        "required": ["disposition"]
+      },
+      "then": {
+        "required": ["disposition_ref"]
+      }
+    },
+    {
+      "$comment": "Cross-field rule: disposition: wont_do requires disposition_detail and FORBIDS disposition_ref (there is no forward pointer for a declined row).",
+      "if": {
+        "properties": { "disposition": { "const": "wont_do" } },
+        "required": ["disposition"]
+      },
+      "then": {
+        "required": ["disposition_detail"],
+        "not": { "required": ["disposition_ref"] }
+      }
+    },
+    {
+      "$comment": "Cross-field rule: the three CLOSED dispositions (spun_off/backlogged/wont_do) require pm_approved (D4 — widens the existing deferred=>pm_approved trigger above to every closed disposition). `coded` is deliberately NOT gated: per D3 it is evidence of work done, not a scope decision, so it needs no PM authorization. Presence-only / NON-hard-failing at this schema layer, exactly like the deferred=>pm_approved rule's own $comment above: this only checks that pm_approved is a key on the row, not that it equals literal true. Hard rejection of `pm_approved is not True` on a closed disposition is schema_validate.py's job (C2's _cf_disposition_shape), not this file's.",
+      "if": {
+        "properties": {
+          "disposition": { "enum": ["spun_off", "backlogged", "wont_do"] }
+        },
+        "required": ["disposition"]
+      },
+      "then": {
+        "required": ["pm_approved"]
+      }
+    },
+    {
+      "$comment": "Cross-field rule: the CLOSED dispositions other than wont_do (spun_off/backlogged) also require disposition_detail — rationale prose alongside the evidence pointer (D2/D4: 'the verbatim PM reasoning ... goes in disposition_detail — which is already required on every CLOSED disposition'). wont_do's disposition_detail requirement is already covered by its own conditional above. `coded` is deliberately excluded here: per D3 it is evidence of work done, not a scope decision, and is therefore NOT a CLOSED disposition — close_out_and_stamp's auto-resolution to coded writes only disposition + disposition_ref (the commit SHA) and must remain schema-valid with no detail.",
+      "if": {
+        "properties": {
+          "disposition": { "enum": ["spun_off", "backlogged"] }
+        },
+        "required": ["disposition"]
+      },
+      "then": {
+        "required": ["disposition_detail"]
+      }
+    }
+  ]
+}

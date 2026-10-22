@@ -1,7 +1,8 @@
 """Pins that the Stop detectors `hooks.guard_turn_intent` and `hooks.guard_manufactured_blocker`
 fire on the turns they exist to catch: a final turn announcing work with no tool call, and a
 final turn claiming to be blocked. Fixtures are built under tmp_path; the payload shape is the
-one hook-run pipes (strict level, stop_hook_active false, no role marker; the announce leg additionally needs the Cockpit signal)."""
+one hook-run pipes (strict level, stop_hook_active false, no role marker). The turn-intent
+announce block applies only inside Cockpit, so that test sets the Cockpit signal itself."""
 
 from __future__ import annotations
 

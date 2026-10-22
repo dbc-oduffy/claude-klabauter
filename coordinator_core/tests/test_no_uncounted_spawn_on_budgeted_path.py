@@ -472,6 +472,10 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
         "coordinator_core/ops/plan_overlap_edges.py",
         ("_handler",),
     ),
+    "plan.merge": (
+        "coordinator_core/ops/plan_merge.py",
+        ("_handler",),
+    ),
     "plan.record_residue_rulings": (
         "coordinator_core/ops/plan_record_residue_rulings.py",
         ("_handler",),

@@ -91,6 +91,10 @@
     "blob": "9f4a4b3f0de7218dd0ea47bf7c422b0fc7290d0d",
     "doe_commit": "33a89a443a9e6377f7c5222a3e988437c375984e"
   },
+  "plan-merge-delta.schema.json": {
+    "blob": "80aafde5f3c7ae10273a189b17d1ac8200f3d5f9",
+    "doe_commit": "596ef82bb0f05877b13e8a46944b4faa4def8afc"
+  },
   "plan-tasks.schema.json": {
     "blob": "95d4591f6b1c2f4e404d5375f68ce0bdfa794bc2",
     "doe_commit": "b00ee0a0e5a46e0c07aef430da8f5a5db707bb90"

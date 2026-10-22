@@ -679,6 +679,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                     plan_rows_serving,
                     remaining_leg_plan,
                 )
+                from coordinator_core.git.tracked_case import tracked_spelling
 
                 resume_out = out["resume_ledger"]
                 try:
@@ -695,6 +696,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                     root,
                     plan_writes=plan_writes,
                     arm=verdict.arm,
+                    spelling=functools.partial(tracked_spelling, root),
                 )
                 import json
 
@@ -726,6 +728,7 @@ def _derive_resume_rows(root: Path, plan_rel: str, resume_out: dict) -> list[str
     rewrite `plan_tasks_mutate._add_task` applies.
     """
     from coordinator_core.frontmatter.body_blocks import LocateStatus
+    from coordinator_core.git.tracked_case import tracked_spelling
     from coordinator_core.ops.dispatch_emit import ledger_remaining_paths as lrp
     from coordinator_core.ops.plan_tasks_render import load_rows
 
@@ -752,6 +755,7 @@ def _derive_resume_rows(root: Path, plan_rel: str, resume_out: dict) -> list[str
         serving,
         [str(r.get("id")) for r in spine],
         root,
+        spelling=functools.partial(tracked_spelling, root),
     )
     if underivable:
         raise AskStageError(

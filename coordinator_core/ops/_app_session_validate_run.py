@@ -158,11 +158,10 @@ def _start_server(
     if not config.start:
         raise _Stage("start", "no start command configured")
     log_path = run_dir / SERVER_LOG
-    kwargs: Dict[str, Any] = {}
     if os.name == "nt":
-        kwargs["creationflags"] = no_console_creationflags().get("creationflags", 0)
+        kwargs: Dict[str, Any] = no_console_creationflags()
     else:
-        kwargs["start_new_session"] = True
+        kwargs = {"start_new_session": True}
     with open(log_path, "wb") as log:
         try:
             proc = subprocess.Popen(

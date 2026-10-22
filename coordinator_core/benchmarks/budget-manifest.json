@@ -81,6 +81,12 @@
       "spawn_count_budget": 0,
       "_rationale": "Measured 2026-10-19, process time, cold first call (C5 of 2026-10-19-plan-write-overlap-edges-spiked): 187.5ms max over repo200, 171.9ms example-game-repo (183 plans), 156.2ms synthetic 200. Bound is 200 plans (MAX_PLANS); the 200ms test bar is APM-ruled. Spawn-free: lean in-process reader, no git, no write."
     },
+    "plan.merge": {
+      "target_ms": 63,
+      "tolerance": {"kind": "relative", "value": 0.2},
+      "spawn_count_budget": 0,
+      "_rationale": "Measured 2026-10-22, process time, cold first call in a fresh interpreter, 5 runs: 46.9ms max (31.3 to 46.9ms) merging a synthetic 14 + 9 row pair with preambles and prose and writing the result. Windows process_time ticks at 15.6ms, so the target is the next tick above the max (4 ticks), not a headroom pad. Spawn-free: in-process read, validate, one atomic write; no git."
+    },
     "seam.mint_batons": {
       "target_ms": 200,
       "tolerance": {"kind": "relative", "value": 0.2},
@@ -408,7 +414,7 @@
         "value": 0.2
       },
       "spawn_count_budget": {},
-      "_rationale": "Staging a plan reads the spine, sizing and live run footprints and writes the briefs and manifest in process; no git and no process is started. The empty figure is counted over the size-L fixture by coordinator_core/ops/dispatch_emit/tests/test_ask_stage_spawn_count.py with exact equality."
+      "_rationale": "Staging a plan reads the spine, sizing and live run footprints and writes the briefs and manifest in process; no git and no process is started. The empty figure is counted over the size-L fixture and over a 26-row, 253-dirty-file repo by coordinator_core/ops/dispatch_emit/tests/test_ask_stage_spawn_count.py with exact equality; coordinator_core/ops/dispatch_emit/tests/test_ask_stage_26_row_budget.py holds stage() and the handler under 500ms process time on the 26-row dirty repo."
     },
     "dispatch.sibling_status": {
       "target_ms": 300,

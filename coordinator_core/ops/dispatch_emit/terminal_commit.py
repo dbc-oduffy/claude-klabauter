@@ -3671,6 +3671,8 @@ def _handler_body(params: dict, repo_root: Optional[Path] = None) -> dict:
         from coordinator_core.ops.dispatch_emit import peer_claim_contract
 
         reply["peer_held_left"] = peer_claim_contract.left_out(scope["peer_held_left"])
+    if scope.get("case_canonicalized"):
+        reply["case_canonicalized"] = scope["case_canonicalized"]
     if scope:
         if scope.get("run_owned") is not None:
             reply["run_owned"] = scope["run_owned"]
@@ -4533,6 +4535,17 @@ def _terminal_commit_inner(
 
     all_paths, sibling_paths = split_sibling_paths(all_paths, worktree_root)
 
+    # A case-variant of a tracked path would pass the existence check on a case-insensitive
+    # filesystem and reach the landing allowlist unclassified; land git's own spelling instead.
+    from coordinator_core.git.tracked_case import tracked_spelling
+
+    spelled = tracked_spelling(worktree_root, all_paths) if all_paths else {}
+    case_map = {p: s for p, s in spelled.items() if s is not None and s != p}
+    if case_map:
+        all_paths = list(dict.fromkeys(case_map.get(p, p) for p in all_paths))
+        held_paths = {case_map.get(p, p): ids for p, ids in held_paths.items()}
+        scope["case_canonicalized"] = dict(case_map)
+
     def _with_siblings(reply: dict) -> dict:
         if sibling_paths:
             reply["sibling_commits"] = _commit_siblings(
@@ -4576,7 +4589,7 @@ def _terminal_commit_inner(
         all_paths = [p for p in all_paths if p not in held_paths]
     note_committed = note_rel if note_rel is not None and note_rel in all_paths else None
 
-    declared_writes = {p for c in done_chunks + partial_chunks for p in c.paths}
+    declared_writes = {case_map.get(p, p) for c in done_chunks + partial_chunks for p in c.paths}
     absent = [p for p in all_paths if not (worktree_root / p).exists()]
     dropped_absent: list = []
     deleted_paths: list = []

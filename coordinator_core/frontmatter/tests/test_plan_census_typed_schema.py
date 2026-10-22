@@ -23,8 +23,10 @@ def _errors(census: list) -> list:
     return [] if out.get("ok") else out.get("errors", [])
 
 
-def test_schema_version_is_2_40_0():
-    assert json.loads(_SCHEMA.read_text(encoding="utf-8"))["x-schema-version"] == "2.40.0"
+def test_schema_version_is_at_least_2_40_0():
+    # Floor, not an exact pin: later minor bumps keep the typed census form this file guards.
+    raw = json.loads(_SCHEMA.read_text(encoding="utf-8"))["x-schema-version"]
+    assert tuple(int(p) for p in raw.split(".")) >= (2, 40, 0)
 
 
 def test_command_form_validates():

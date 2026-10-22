@@ -6,6 +6,7 @@ from coordinator_core.win_portability import no_console_creationflags
 from pathlib import Path
 
 from coordinator_core.ops.verify_orientation_cache_sync import main, verify
+from coordinator_core.win_portability import no_console_creationflags
 
 import pytest
 

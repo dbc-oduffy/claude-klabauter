@@ -10,6 +10,7 @@ from coordinator_core.win_portability import no_console_creationflags
 import pytest
 
 from coordinator_core.ops.dispatch_emit import pre_halt_credit as phc
+from coordinator_core.win_portability import no_console_creationflags
 
 
 def _resume(notes, blocking=("R1",), remaining=None):
@@ -113,8 +114,9 @@ def test_malformed_never_raises(resume, verdict):
 )
 def test_js_twin_agrees_with_python(met_by, known):
     src = f"console.log(JSON.stringify(({phc.CREDIT_MATCH_JS})({json.dumps(met_by)}, {json.dumps(known)})))"
-    out = subprocess.run(["node", "-"], input=src, capture_output=True, text=True, check=True,
-                         **no_console_creationflags()).stdout.strip()
+    out = subprocess.run(
+        ["node", "-"], input=src, capture_output=True, text=True, check=True, **no_console_creationflags()
+    ).stdout.strip()
     r = _resume([known])
     expected = bool(phc.credited_rows(r, _verdict(met_by)))
     assert json.loads(out) is expected

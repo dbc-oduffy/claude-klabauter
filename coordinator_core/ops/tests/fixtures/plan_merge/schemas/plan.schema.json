@@ -1,0 +1,146 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://coordinator.local/schemas/plan.schema.json",
+  "x-schema-name": "plan",
+  "x-schema-version": "1.4.0",
+  "x-bump-class": "nested-field-additive",
+  "x-bump-note": "1.3.0 -> 1.4.0 added `landed` to the `status` enum (C8a, plan-line-item-resolution-model, D9) — a new non-terminal lifecycle value between `executing` and `implemented` marking 'all chunk code is on the branch, spine rows not yet fully dispositioned'. Additive to the value domain of an existing field (no closed-vocabulary term exists specifically for an enum-value widen; classified `nested-field-additive` because it carries the same holding/bilateral-sequencing risk shape — a mirrored consumer that enumerates the old value set exhaustively, e.g. a `Literal[...]` or a closed dict mapping, silently breaks on the new value until it is updated, exactly as `coordinator/tests/test_plan_status_enum_parity.py`'s claude-klabauter-side assertions demonstrate for this very bump). Every document that validated under 1.3.0 still validates under 1.4.0, and no existing consumer's terminal-status handling changed (see coordinator/lib/check-provisional-expiry.py, whose _TERMINAL_STATUSES deliberately does NOT include `landed`) — but downstream enumerating consumers (claude-klabauter's PlanStatus Literal, _PLAN_STATUS_ENUM, and the emit_artifact_shape_contract.py liveness mapping) require a companion update before this value is safe to emit end-to-end; that companion update is a separate chunk (C8b et al.), not bundled here. 1.2.0 -> 1.3.0 dropped the `null` arm from `suggested_priority` (was `anyOf: [enum, null]`, now a plain closed enum) — review finding: the field's own description already argues absence covers 'no suggestion', so `null` was a second, redundant representation of that state. Classified MAJOR because a document that previously set `suggested_priority: null` explicitly now fails validation; no on-disk corpus was found using that value as of this bump (grepped state/ and docs/ 2026-07-27), so the practical blast radius is believed zero, but the schema's stated domain narrowed. 1.1.0 -> 1.2.0 added an allOf cross-field rule rejecting a plan that sets both `provisional_until` and `revisit_by` (they are synonym keys; prose already said 'at most one' but nothing enforced it — review finding). Classified major because the rule is newly ENFORCED here: a document with both fields non-null previously validated and now does not. Prior bump 1.0.0 -> 1.1.0 added the optional top-level `suggested_priority` scalar (advisory EM priority signal, C2).",
+  "applies_to": "docs/plans/*.md",
+  "description": "Plan frontmatter schema. The active-execution value is 'executing', NOT the intuitive 'execution'. 'implemented' means work is done on the working branch — whether it merged to main is tracked in completion log + handoff deployment_state, NOT here.",
+  "type": "object",
+  "required": ["title", "created", "author", "status"],
+  "properties": {
+    "title": {
+      "type": "string",
+      "description": "Human-readable title for the plan."
+    },
+    "created": {
+      "type": "string",
+      "format": "date",
+      "description": "Date the plan was authored (YYYY-MM-DD)."
+    },
+    "author": {
+      "type": "string",
+      "description": "Agent or person who authored this plan."
+    },
+    "status": {
+      "type": "string",
+      "enum": ["draft", "reviewed", "approved", "executing", "landed", "implemented", "deferred", "abandoned", "superseded"],
+      "description": "Lifecycle state. Common slip: active-execution value is 'executing', NOT 'execution'. 'landed' sits between 'executing' and 'implemented': every chunk's code is on the branch, but not every spine row has reached a disposition yet. It is NOT terminal — a plan in 'landed' still has outstanding row-level work to close out before it can move to 'implemented'."
+    },
+    "branch": {
+      "type": "string",
+      "description": "Working branch this plan is being executed on."
+    },
+    "reviewer": {
+      "type": "string",
+      "description": "Reviewer(s) who approved this plan."
+    },
+    "source": {
+      "type": "string",
+      "description": "Origin reference (e.g. a handoff slug, memo path, or external prompt)."
+    },
+    "superseded_by": {
+      "type": "string",
+      "description": "Path or slug of the plan that supersedes this one."
+    },
+    "scope_mode": {
+      "type": "string",
+      "description": "Planning posture (e.g. 'architecture', 'implementation', 'spike')."
+    },
+    "problem_set": {
+      "type": "string",
+      "description": "Ratified problem-set slug or inline statement (from /shape)."
+    },
+    "predecessor_handoff": {
+      "type": "string",
+      "description": "The handoff that spawned this plan (distinct from parent_plan)."
+    },
+    "prerequisite_of": {
+      "type": "string",
+      "description": "Downstream plan(s) that depend on this plan completing first."
+    },
+    "source_memo": {
+      "anyOf": [
+        { "type": "string" },
+        { "type": "array", "items": { "type": "string" } }
+      ],
+      "description": "Cross-repo memo(s) that initiated this plan. May be a single path or a list."
+    },
+    "scope": {
+      "anyOf": [
+        { "type": "string" },
+        { "type": "array", "items": { "type": "string" } }
+      ],
+      "description": "In-scope items for this plan (list-of-string preferred; legacy string values accepted)."
+    },
+    "agent_sessions": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Sessions that executed this plan. Runtime-appended by append-plan-session.sh after a successful plan claim (execute-plan Phase 1.5 Step 0); NOT scaffolded onto new plans. Each entry is the encoded string \"<session_id>|<status>|<created_at>\": session_id is UUID-shaped (contains no '|'); status is an OPEN string ('working' at the Phase-0 fire point, not a closed enum); created_at is ISO-8601 UTC. All three fields are non-empty at write time — consumers must NOT use `IFS='|' read -ra` if a future field could be empty (read -ra silently drops trailing empty fields). Append-only: never rewrite or reorder peer entries."
+    },
+    "deliverable_id": {
+      "anyOf": [{"type": "string"}, {"type": "null"}],
+      "description": "Durable deliverable join key. Minted once at the earliest artifact and carried verbatim by every downstream artifact. dlv-<stub_id> for roadmap-stub origins; dlv-<slug>-<6hex> for standalone plan origins. Cross-field rule enforces 'dlv-' prefix when non-null. Null for pre-backfill plans. Spec backlink: docs/plans/2026-07-03-fleet-deliverable-spine-identity-and-facets.md § D1"
+    },
+    "plan_id": {
+      "anyOf": [{"type": "string"}, {"type": "null"}],
+      "description": "Stable non-path plan identity (pln-<slug>-<6hex>). Minted by coordinator-doc-new at plan creation time. Allows the board to join on a stable key independent of file path/rename. Distinct from deliverable_id (which spans the full deliverable chain). Spec backlink: docs/plans/2026-07-03-fleet-deliverable-spine-identity-and-facets.md § D3"
+    },
+    "initiative": {
+      "anyOf": [{"type": "string"}, {"type": "null"}],
+      "description": "FK to the initiative entity (state/initiatives/<id>.yaml). Nullable — not all work belongs to a named initiative. Cross-field rule enforces non-empty string when non-null. Spec backlink: docs/plans/2026-07-03-fleet-deliverable-spine-identity-and-facets.md § D2"
+    },
+    "caption": {
+      "anyOf": [{"type": "string"}, {"type": "null"}],
+      "description": "One-sentence business-legible outcome line. NOT an engineering title or filename — authored for CEO-board legibility. Optional; authored at creation time."
+    },
+    "status_reason": {
+      "anyOf": [{"type": "string"}, {"type": "null"}],
+      "description": "Free-text one-liner explaining the current plan status (e.g. 'deferred — blocked on cockpit reader-first gate'). Optional authored field; carried into the cockpit emission as a product-legibility facet."
+    },
+    "owner": {
+      "anyOf": [{"type": "string"}, {"type": "null"}],
+      "description": "Authoring workstream or EM identifier. Nullable; carried forward from the earliest artifact for the deliverable."
+    },
+    "suggested_priority": {
+      "enum": ["urgent", "high", "medium", "low"],
+      "description": "Advisory execution-priority signal an EM may attach to this plan at authoring time. Optional (not nullable — absence already covers 'no suggestion'; a redundant null representation was reviewed out, see Finding 4 / review-integrator 2026-07-27). Enum is the priority-ledger domain (priority-ledger.schema.json's urgent|high|medium|low|none) MINUS 'none' — an EM has no reason to author an explicit clear; absence of the field already covers that case. Advisory only: the PM-owned priority ledger (state/priority-ledger/) is the authoritative tier and lives on a deliberately separate surface — this field never overrides it, and that separation (not memory) is what keeps 'advisory never overrides authoritative' structural. Do NOT add a pm_priority field to this frontmatter to compensate; the tier split is the point. NEGATIVE-SPEC: no inherited_from / priority_predecessor field is permitted on this frontmatter either — priority does not chain plan-to-plan. No backfill of pre-existing plans, consistent with the handoff schema's origin_* no-backfill policy."
+    },
+    "provisional_until": {
+      "anyOf": [{ "type": "string", "format": "date" }, { "type": "null" }],
+      "description": "Expiry date (YYYY-MM-DD) for a decision this plan stages but does not yet execute — e.g. a ratification, a second stage of a two-stage rollout, or a hold pending a future condition. `revisit_by` is an accepted synonym key (same semantics, same format); a plan carries one or the other, never both. Read by the outstanding-provisional-decisions ceremony check (`coordinator/docs/wiki/provisional-decision-expiry.md`) against every non-terminal-status plan (`status` not in implemented/deferred/abandoned/superseded) — a date on or before today with the plan still non-terminal is surfaced as expired. Motivating case: the 2026-07-13 adopt spec's stage-2 ratification sat unexecuted for 13 days with nothing tracking that it was owed (archive/specs/2026-07/2026-07-13-doe-auto-reconcile-adopt.md). Optional; null/absent for plans that stage no provisional decision. Spec backlink: docs/plans/2026-07-26-push-side-write-discipline.md § D1b."
+    },
+    "revisit_by": {
+      "anyOf": [{ "type": "string", "format": "date" }, { "type": "null" }],
+      "description": "Synonym key for `provisional_until` — same semantics, same format, same consumer. Use whichever name reads more naturally at the call site (`revisit_by` for a park_note-style hold; `provisional_until` for a staged-decision expiry); a plan sets at most one of the two. See `provisional_until` for the full description."
+    },
+    "tasks": {
+      "type": "array",
+      "items": { "$ref": "https://coordinator.local/schemas/plan-tasks.schema.json" },
+      "description": "NOT a frontmatter key — the ## Tasks task-spine lives BODY-RESIDENT in a single fenced ```yaml plan-tasks``` code block directly under the ## Tasks heading (parser-locate rule: exactly one such block; zero or >1 is a defined error). This 'tasks' property exists to WIRE the per-row shape (schemas/plan-tasks.schema.json) into the plan schema family for validators that parse the fenced block's YAML list and want the item schema, per the canonical body-resident-machine-block pattern (docs/wiki/canonical-artifact-shapes.md § Addressable-Section Convention, rule 4 — cf. the ## Session Ledger precedent in handoffs). Full authoring contract: docs/wiki/writing-plans.md § Machine-Parseable Task Spine. Spec backlink: docs/plans/2026-07-09-plan-full-coverage-and-deferred-harvest.md § C1."
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "required": ["provisional_until"],
+        "properties": {
+          "provisional_until": { "not": { "type": "null" } }
+        }
+      },
+      "then": {
+        "not": {
+          "allOf": [
+            { "required": ["revisit_by"] },
+            {
+              "properties": {
+                "revisit_by": { "not": { "type": "null" } }
+              }
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

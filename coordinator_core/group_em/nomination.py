@@ -287,15 +287,50 @@ def read_authoritative(
 def box_holder(directory: Optional[Path] = None, now: Optional[float] = None) -> Optional[dict]:
     """The box-wide holder, verified exactly as `read_authoritative` verifies a per-repo record,
     plus ``live``/``live_reason``; None for no record, a pending claim or a rejected one. A
-    per-repo record whose ``session_id`` differs from this holder's is stale."""
+    per-repo record whose ``session_id`` differs from this holder's is stale.
+
+    A box record whose entry evidence is *rejected* (a claim that can never verify) does not erase
+    a verified holder: the most recent verified per-repo record answers instead. A pending box
+    record, or none, stays None. Read-only; scans only this directory's top-level records."""
     try:
         record = json.loads(_box_record_path(directory).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
-    if not isinstance(record, dict) or entry_status(record, now, directory)["status"] != "verified":
+    if not isinstance(record, dict):
+        return None
+    status = entry_status(record, now, directory)["status"]
+    if status == "rejected":
+        record = _newest_verified_repo_record(directory, now, str(record.get("session_id") or ""))
+    elif status != "verified":
+        record = None
+    if record is None:
         return None
     liveness = is_live(record)
     return {**record, "live": liveness.live, "live_reason": liveness.live_reason}
+
+
+def _newest_verified_repo_record(
+    directory: Optional[Path], now: Optional[float], skip_sid: str
+) -> Optional[dict]:
+    """The most recently nominated verified per-repo record not naming `skip_sid`, else None."""
+    base = directory if directory is not None else settings_home() / "state" / "group-em"
+    candidates = []
+    try:
+        paths = list(base.glob("*.json"))
+    except OSError:
+        return None
+    for path in paths:
+        data = atomic_record.read_json_tolerant(path)
+        if not isinstance(data, dict) or not data.get("repo_root"):
+            continue
+        sid = str(data.get("session_id") or "")
+        if sid and sid != skip_sid:
+            candidates.append(data)
+    candidates.sort(key=lambda d: str(d.get("nominated_at") or ""), reverse=True)
+    for data in candidates:
+        if entry_status(data, now, directory)["status"] == "verified":
+            return data
+    return None
 
 
 def _holder_name(record: dict) -> str:

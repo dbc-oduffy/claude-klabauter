@@ -122,7 +122,7 @@ ROUTING_VERIFY_HAND_BACK_NODES: frozenset[str] = frozenset({
     "verify-routing-direction-call",
     "verify-routing-malformed",
 })
-ROUTING_VERIFY_HAND_BACK_MODEL = "haiku"
+ROUTING_VERIFY_HAND_BACK_MODEL = _AGENT_MODELS[_TEST_AGENT_TYPE]
 
 #: Stages that dispatch a DoE-defined agent type: their model is that type's
 #: ``emit._AGENT_MODELS`` entry and no run ``models`` entry may change it.

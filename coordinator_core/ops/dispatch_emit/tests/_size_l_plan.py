@@ -8,6 +8,7 @@ reads each as live; the caller isolates `warp_live`'s launch dirs (see `isolate_
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 
 import yaml
@@ -18,6 +19,9 @@ from coordinator_core.ops.dispatch_emit import run_token
 DEFAULT_ROWS = 14
 DEFAULT_LIVE_TOKENS = 50
 DEFAULT_PLAN_BYTES = 74_000
+TWENTY_SIX_ROWS = 26
+TWENTY_SIX_PLAN_BYTES = 140_000
+RELAYED_DIRTY_FILES = 253
 PLAN_REL = "docs/plans/2026-10-22-size-l-fixture.md"
 SIZING_REL = "state/sizings/2026-10-22-size-l-fixture.yaml"
 RUN_ID = "size-l-run"
@@ -65,11 +69,19 @@ def build_size_l_plan(
     *,
     rows: int = DEFAULT_ROWS,
     live_tokens: int = DEFAULT_LIVE_TOKENS,
-    plan_bytes: int = DEFAULT_PLAN_BYTES,
+    plan_bytes: int | None = None,
+    dirty_files: int = 0,
+    session_id: str | None = None,
 ) -> tuple[Path, str, str]:
     """Write a `rows`-row plan of about `plan_bytes`, its sizing, and `live_tokens` live peer runs
     (each staged, with a manifest footprint disjoint from the plan's). The run's own token is minted
-    too. Returns `(repo_root, plan_rel, run_id)`."""
+    too. Returns `(repo_root, plan_rel, run_id)`.
+
+    `plan_bytes=None` means 74_000, or 140_000 (the live plan's size) at 26 rows. `dirty_files > 0`
+    makes the root a real repository with that many `git status --porcelain` entries; `session_id`
+    seeds that session's `review-targets.txt`."""
+    if plan_bytes is None:
+        plan_bytes = TWENTY_SIX_PLAN_BYTES if rows == TWENTY_SIX_ROWS else DEFAULT_PLAN_BYTES
     root = Path(repo_root)
     (root / ".git").mkdir(exist_ok=True)
     (root / "docs" / "plans").mkdir(parents=True, exist_ok=True)
@@ -137,4 +149,42 @@ def build_size_l_plan(
             json.dumps({"rows": [{"id": f"P{j}", "writes": [footprint[j]]} for j in range(rows)]}),
             encoding="utf-8",
         )
+    if dirty_files > 0:
+        _make_dirty_repo(root, dirty_files)
+    if session_id:
+        seed = root / ".git" / "coordinator-sessions" / session_id
+        seed.mkdir(parents=True, exist_ok=True)
+        (seed / "review-targets.txt").write_text("", encoding="utf-8", newline="\n")
     return root, PLAN_REL, RUN_ID
+
+
+def _make_dirty_repo(root: Path, dirty_files: int) -> None:
+    """Turn `root` into a real repository whose `git status --porcelain` lists `dirty_files` paths:
+    all committed, half modified, the rest untracked. Runs at fixture setup only."""
+    ident = ["-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false"]
+
+    def git(*args: str) -> None:
+        subprocess.run(
+            ["git", *ident, *args],
+            cwd=root,
+            check=True,
+            capture_output=True,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+
+    tracked_n = (dirty_files + 1) // 2
+    untracked_n = dirty_files - tracked_n
+    dirty_dir = root / "dirty"
+    dirty_dir.mkdir(exist_ok=True)
+    for n in range(tracked_n):
+        (dirty_dir / f"tracked_{n:04d}.txt").write_text(f"base {n}\n", encoding="utf-8", newline="\n")
+    git("init", "-q")
+    exclude = root / ".git" / "info" / "exclude"
+    exclude.parent.mkdir(parents=True, exist_ok=True)
+    exclude.write_text("scratch/\n", encoding="utf-8", newline="\n")
+    git("add", "--", PLAN_REL, SIZING_REL, "dirty")
+    git("commit", "-q", "-m", "fixture baseline")
+    for n in range(tracked_n):
+        (dirty_dir / f"tracked_{n:04d}.txt").write_text(f"changed {n}\n", encoding="utf-8", newline="\n")
+    for n in range(untracked_n):
+        (dirty_dir / f"untracked_{n:04d}.txt").write_text(f"new {n}\n", encoding="utf-8", newline="\n")

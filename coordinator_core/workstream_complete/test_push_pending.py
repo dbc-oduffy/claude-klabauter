@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.ops.push_outstanding import _upstream_sha
+from coordinator_core.win_portability import no_console_creationflags
 from coordinator_core.workstream_complete import push_pending as pp
 
 

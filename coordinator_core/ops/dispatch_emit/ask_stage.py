@@ -1075,11 +1075,18 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         recorded = ask_stage_receipt.landed(prior_dir, digest)
         if recorded is not None:
             return {"manifest_handle": recorded, ask_stage_receipt.ALREADY_STAGED_KEY: True}
+        running = ask_stage_receipt.in_flight(prior_dir, digest)
+        if running is not None:
+            return {ask_stage_receipt.STAGE_IN_FLIGHT_KEY: running}
         if ask_stage_receipt.partial(prior_dir):
             return {
                 "error": f"{STAGE_RECEIPT_MISSING}: manifest.json landed for run {run_id} with no matching "
                 "stage receipt. Reconcile the run; nothing was written."
             }
+        prior_dir.mkdir(parents=True, exist_ok=True)
+        if not ask_stage_receipt.claim(prior_dir, digest):
+            # A racing claim of other params has no matching digest, so `in_flight` is None; the key still answers.
+            return {ask_stage_receipt.STAGE_IN_FLIGHT_KEY: ask_stage_receipt.in_flight(prior_dir, digest) or {}}
     stamp = None
     try:
         stage(
@@ -1105,6 +1112,9 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             reply["owed_em_ids"] = exc.owed_em_ids
             reply["owed_plan"] = exc.plan_path
         return reply
+    finally:
+        if prior_dir is not None:
+            ask_stage_receipt.release(prior_dir)
     reply = {"manifest_handle": handle}
     if stamp is not None and stamp["outcome"] != "unchanged":
         reply[PLAN_EXECUTING_STAMP_KEY] = stamp

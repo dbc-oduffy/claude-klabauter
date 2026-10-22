@@ -10,6 +10,7 @@ import pytest
 
 from coordinator_core.canvas_harvest import model, probe_stamp
 from coordinator_core.session import declared_writes
+from coordinator_core.win_portability import no_console_creationflags
 
 AID = "abc123"
 T_HARVEST = "2026-01-01T10:00:00Z"

@@ -40,7 +40,7 @@ def _record(repo_root, session_id: str, agent_id: str, agent_type: str) -> None:
 
 @register_op("hooks.subagent_arrival_record")
 async def _handler(params: dict, repo_root=None) -> dict:
-    params = payload_of(params)
+    params = payload_of(params)  # total (never raises), so safe outside the try
     try:
         session_id = field(params, "session_id")
         agent_id = field(params, "agent_id")

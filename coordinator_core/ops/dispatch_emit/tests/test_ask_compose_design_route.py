@@ -23,6 +23,7 @@ def test_gate_schema_carries_the_key():
 def test_pre_sized_script_names_the_key_on_prompts_and_both_returns():
     script = _compose(stop_after="plan")
     assert script.count("design_brief and design_route when present") >= 1
+    # halted_by return + XS dispatch return; the parked-plan arm halts, it has no separate planned return.
     assert script.count(_CARRY) == 2
     full = _compose()
     assert full.count("design_brief and design_route when present") >= 1

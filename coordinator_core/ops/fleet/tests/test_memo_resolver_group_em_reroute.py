@@ -15,7 +15,7 @@ from coordinator_core.ops.fleet._memo_resolver import (
 )
 from coordinator_core.ops.fleet.memo_check_addressee import compute_check_addressee_candidate
 
-GEM_IDS = ("group-em-em", "GENERAL-WORK-EM ")
+GEM_IDS = ("group-em-em", "  GROUP-EM-EM ")
 
 
 @pytest.fixture

@@ -135,7 +135,7 @@ from coordinator_core.ops.dispatch_emit.ask_footprint import (
 )
 from coordinator_core.ops.dispatch_emit.terminal_commit_params_channel import PARAMS_BLOCK_JS, params_path
 from coordinator_core.ops.dispatch_emit.land_run_contract import OP_NAME as LAND_RUN_OP, RECONCILE_CLAUSE as LAND_RUN_RECONCILE_CLAUSE
-from coordinator_core.ops.dispatch_emit.ask_stage_receipt import ALREADY_STAGED_KEY
+from coordinator_core.ops.dispatch_emit.ask_stage_receipt import ALREADY_STAGED_KEY, STAGE_IN_FLIGHT_KEY
 from coordinator_core.ops.dispatch_emit.wake_digest import (
     CAP_HELPER_JS,
     TERMINAL_COMMIT_CLI_HELPER_JS,
@@ -223,13 +223,18 @@ def _cat(*parts: str) -> str:
 _UNKEYED_RUN = "unkeyed"
 
 #: Reconcile clause for prompts that run `dispatch.ask_stage`; its re-run is idempotent through the
-#: stage receipt, whose `already_staged` reply is the landed manifest.
+#: stage receipt, whose `already_staged` reply is the landed manifest; a `stage_in_flight` reply
+#: means the first call still runs, so the wait-and-re-run is bounded by `ASK_STAGE_IN_FLIGHT_ROUNDS`.
+ASK_STAGE_IN_FLIGHT_ROUNDS = 3
 ASK_STAGE_RECONCILE_CLAUSE = (
     f"If the {OP_ASK_STAGE} command replies with error code -32004 and its error.data carries "
     "reconcile_command, run reconcile_command once: a status whose state is finished with outcome "
     "result is the stage's reply. In every other -32004 case, run the same "
     f"{OP_ASK_STAGE} command exactly once more and return its reply verbatim; a reply carrying "
-    f"{ALREADY_STAGED_KEY} is the landed manifest. A -32004 is never itself the stage's failure."
+    f"{ALREADY_STAGED_KEY} is the landed manifest. A reply carrying {STAGE_IN_FLIGHT_KEY} means the "
+    "first call still runs: run the -32004's reconcile_command once with its wait_secs, then re-run "
+    f"the stage command once more, at most {ASK_STAGE_IN_FLIGHT_ROUNDS} times, then return the last "
+    "reply verbatim. A -32004 is never itself the stage's failure."
 )
 
 

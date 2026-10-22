@@ -26,6 +26,7 @@ HARVESTED_AT = datetime(2026, 10, 13, 12, 0, 0, tzinfo=timezone.utc)
 PROBED_AT = datetime(2026, 10, 14, 12, 0, 0, tzinfo=timezone.utc)
 PROBE_SHIFT = timedelta(days=1)
 SESSION = "sid-fixture-round-trip"
+LOGIN = "fixture-harvester@example.com"
 
 _SESSION_ENV = ("COORDINATOR_SESSION_ID", "CLAUDE_SESSION_ID", "CLAUDE_CODE_SESSION_ID")
 
@@ -68,9 +69,15 @@ def tree_bytes(root: Path) -> dict:
 
 
 @pytest.fixture(autouse=True)
-def _no_ambient_session(monkeypatch):
+def _no_ambient_session(monkeypatch, tmp_path_factory):
     for name in _SESSION_ENV:
         monkeypatch.delenv(name, raising=False)
+    # harvest stamps the ambient claude.ai login into harvest.json; pin it so the record is box-independent.
+    config_dir = tmp_path_factory.mktemp("claude-config")
+    (config_dir / ".claude.json").write_text(
+        json.dumps({"oauthAccount": {"emailAddress": LOGIN}}), encoding="utf-8"
+    )
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config_dir))
 
 
 @pytest.fixture
@@ -138,6 +145,7 @@ def test_harvest_writes_every_frame_and_thread(oracle, raw, tmp_path):
     stamps = [c["created_at"] for t in oracle["threads"] for c in t["comments"]]
     assert record["harvest"] == {
         "harvested_at": "2026-10-13T12:00:00Z",
+        "account": LOGIN,
         "version": read["ver"],
         "thread_ids": thread_ids,
         "latest_comment_at": max(stamps),

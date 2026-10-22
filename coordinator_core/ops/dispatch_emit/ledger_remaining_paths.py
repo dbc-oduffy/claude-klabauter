@@ -6,7 +6,7 @@ Stdlib only: no subprocess, no git.
 from __future__ import annotations
 
 import re
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import Any, Optional
 
@@ -52,15 +52,45 @@ def _exists(rel: str, repo_root: Path) -> bool:
     return p.is_file() or ("/" in rel and p.parent.is_dir())
 
 
-def named_paths(texts: Iterable[str], repo_root: Path) -> list[str]:
-    """Ordered, de-duplicated repo-relative paths the whitespace tokens of `texts` name and that exist."""
+Spelling = Callable[[Sequence[str]], Mapping[str, Optional[str]]]
+
+
+def _named_split(
+    texts: Iterable[str], repo_root: Path, spelling: Optional[Spelling]
+) -> tuple[list[str], list[str]]:
+    """`(admitted, dropped)` named paths; `dropped` is empty when `spelling` is None."""
     out: list[str] = []
+    if spelling is None:
+        for text in texts:
+            for tok in str(text).split():
+                rel = _clean(tok)
+                if rel and rel not in out and _exists(rel, repo_root):
+                    out.append(rel)
+        return out, []
+    cands: list[str] = []
     for text in texts:
         for tok in str(text).split():
             rel = _clean(tok)
-            if rel and rel not in out and _exists(rel, repo_root):
-                out.append(rel)
-    return out
+            if rel and rel not in cands:
+                cands.append(rel)
+    resolved = spelling(cands) if cands else {}
+    dropped: list[str] = []
+    for c in cands:
+        s = resolved.get(c)
+        if s is None:
+            dropped.append(c)
+        elif s not in out:
+            out.append(s)
+    return out, dropped
+
+
+def named_paths(texts: Iterable[str], repo_root: Path, *, spelling: Optional[Spelling] = None) -> list[str]:
+    """Ordered, de-duplicated repo-relative paths the whitespace tokens of `texts` name and that exist.
+
+    With `spelling`, a path is admitted iff the resolver backs it, and is returned in the
+    resolver's spelling.
+    """
+    return _named_split(texts, repo_root, spelling)[0]
 
 
 def gated_paths(paths: Iterable[str]) -> list[str]:
@@ -118,7 +148,9 @@ def plan_rows_serving(plan_path: Path, blocking: Sequence[str]) -> list[str]:
     return out
 
 
-def _module_paths(texts: Iterable[str], serving: Sequence[str], repo_root: Path) -> list[str]:
+def _module_paths(
+    texts: Iterable[str], serving: Sequence[str], repo_root: Path, *, spelling: Optional[Spelling] = None
+) -> list[str]:
     dirs = list(dict.fromkeys(p.rsplit("/", 1)[0] for p in serving if "/" in p))
     mods: list[str] = []
     for text in texts:
@@ -126,7 +158,11 @@ def _module_paths(texts: Iterable[str], serving: Sequence[str], repo_root: Path)
             m = _MODULE_TOKEN.match(tok.strip(_STRIP_EDGES).rstrip(_TRAILING))
             if m and m.group(1) not in mods:
                 mods.append(m.group(1))
-    return [f"{d}/{m}.py" for m in mods for d in dirs if (repo_root / d / f"{m}.py").is_file()]
+    cands = [f"{d}/{m}.py" for m in mods for d in dirs]
+    if spelling is None:
+        return [c for c in cands if (repo_root / c).is_file()]
+    resolved = spelling(cands) if cands else {}
+    return [c for c in cands if resolved.get(c) == c]
 
 
 def derive_ledger_rows(
@@ -136,6 +172,8 @@ def derive_ledger_rows(
     serving_writes: Mapping[str, Sequence[str]],
     existing_ids: Iterable[str],
     repo_root: Path,
+    *,
+    spelling: Optional[Spelling] = None,
 ) -> tuple[list[dict[str, Any]], list[str]]:
     """Return `(rows, underivable)`: one dispatchable row per open ledger item.
 
@@ -143,6 +181,9 @@ def derive_ledger_rows(
     note exists. A re-ruling note derives nothing. `writes` = named paths, then module tokens
     resolved beside the item's serving writes, then the serving writes; CLAUDE.md-class paths
     are excluded. An open item with no resolved write is returned in `underivable`.
+
+    With `spelling`, every write is in the resolver's spelling: a named path it does not back is
+    dropped and named in the row body, a serving write it does not back is kept as declared.
     """
     from coordinator_core.ops.dispatch_emit.ask_contract import LEDGER_DERIVED_ROW_PREFIX
 
@@ -157,10 +198,15 @@ def derive_ledger_rows(
             continue
         texts = [*steps, *(str(n) for n in notes)]
         serving = [str(w) for w in serving_writes.get(item) or []]
+        named, dropped = _named_split(texts, repo_root, spelling)
+        if spelling is not None and serving:
+            resolved = spelling(serving)
+            serving = [resolved.get(s) or s for s in serving]
         writes: list[str] = []
-        for p in [*named_paths(texts, repo_root), *_module_paths(texts, serving, repo_root), *serving]:
+        for p in [*named, *_module_paths(texts, serving, repo_root, spelling=spelling), *serving]:
             if p not in writes and p not in gated_paths([p]):
                 writes.append(p)
+        dropped = [d for d in dropped if d not in writes]
         if not writes:
             underivable.append(item)
             continue
@@ -173,6 +219,8 @@ def derive_ledger_rows(
         lines = [f"Ledger item {item} is open. Remaining steps:", *(f"- {s}" for s in steps)]
         if notes:
             lines += ["Revise notes:", *(f"- {n_}" for n_ in notes)]
+        if dropped:
+            lines.append("Not declared (no tracked or present path): " + ", ".join(dropped))
         lines.append(f"Done when: the ledger check judges {item} met.")
         rows.append({
             "id": rid,
@@ -186,8 +234,12 @@ def derive_ledger_rows(
     return rows, underivable
 
 
-def _named(remaining: Mapping[str, Mapping[str, Any]], repo_root: Path) -> list[str]:
-    return named_paths((t for row in remaining.values() for t in row.get("remaining") or []), repo_root)
+def _named(
+    remaining: Mapping[str, Mapping[str, Any]], repo_root: Path, *, spelling: Optional[Spelling] = None
+) -> list[str]:
+    return named_paths(
+        (t for row in remaining.values() for t in row.get("remaining") or []), repo_root, spelling=spelling
+    )
 
 
 def remaining_leg_plan(
@@ -201,6 +253,7 @@ def remaining_leg_plan(
     *,
     plan_writes: Sequence[str] = (),
     arm: Optional[str] = None,
+    spelling: Optional[Spelling] = None,
 ) -> dict[str, Any]:
     """Return `{action, writes, unwritable, em_owed, reason}` for the ledger-remaining leg.
 
@@ -215,7 +268,7 @@ def remaining_leg_plan(
     xs nothing re-plans, so the leg refuses (`test_ask_compose_xs_empty_footprint_leg`). The sha is not resolved against
     git: the verify leg judges.
     """
-    named = _named(remaining, repo_root)
+    named = _named(remaining, repo_root, spelling=spelling)
     em_owed = gated_paths(named)
     allowed = set(doc_writes) | ({sizing_rel} if sizing_rel else set())
     blocked = set(blocking)

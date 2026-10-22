@@ -234,10 +234,12 @@ def test_guard_against_fired_drift_is_a_noop_on_a_missing_script(tmp_path):
 
 
 def test_refuse_foreign_emission_is_called_from_the_registered_op():
-    """Confirms ``_refuse_foreign_emission`` is wired into ``_dispatch_emit``
-    itself (the ``@register_op("dispatch.emit")`` production handler), not
+    """Confirms ``_refuse_foreign_emission`` is wired into the registered
+    ``dispatch.emit`` handler's write path (``_dispatch_emit`` delegates to
+    ``_dispatch_emit_body``, which writes through ``_emit_script_file``), not
     exercised only by test_queue_emit.py's direct unit calls."""
     import inspect
 
+    assert "_dispatch_emit_body(" in inspect.getsource(dispatch_op._dispatch_emit)
     assert "_emit_script_file(" in inspect.getsource(dispatch_op._dispatch_emit_body)
     assert "_refuse_foreign_emission(" in inspect.getsource(dispatch_op._emit_script_file)

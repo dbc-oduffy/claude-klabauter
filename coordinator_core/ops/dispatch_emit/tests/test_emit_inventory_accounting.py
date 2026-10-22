@@ -91,8 +91,9 @@ def test_already_fixed_plan_edit_is_reported_beside_the_accounting(tmp_path, mon
 
     reply = _emit(tmp_path, monkeypatch, inv)
 
+    # A whole-plan "landed at HEAD" item with no landing evidence is reported, not flipped.
     assert reply["landed_reconciled"] == {}
-    assert reply["landed_unevidenced"] == {"docs/plans/p1.md": ["C1", "C2"]}  # whole-plan item, no landing evidence
+    assert reply["landed_unevidenced"] == {"docs/plans/p1.md": ["C1", "C2"]}
     acc = reply["inventory_accounting"]
     assert acc["emitted"] == ["P3"]
     assert [e["id"] for e in acc["skipped"]] == ["P1"]

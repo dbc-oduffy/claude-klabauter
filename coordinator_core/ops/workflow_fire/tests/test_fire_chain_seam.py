@@ -113,7 +113,7 @@ def test_spawn_failure_with_session_id_raises_and_discards(tmp_path, monkeypatch
 
 
 def test_prompt_never_inlines_json_and_forward_slashes_windows_paths():
-    prompt = fire.render_prompt("E:\coordinator-content-repo\scratch\wf.js")
+    prompt = fire.render_prompt(r"E:\coordinator-content-repo\scratch\wf.js")
     assert "\\" not in prompt
     assert "'<json>'" not in prompt
     assert "--params-file E:/coordinator-content-repo/scratch/wf.js.terminal-params.json" in prompt

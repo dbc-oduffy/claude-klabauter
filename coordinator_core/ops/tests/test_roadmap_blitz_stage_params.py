@@ -23,7 +23,8 @@ def _run(**extra):
 
 def test_absent_approval_passes_nothing_new(calls):
     _run()
-    assert set(calls[0]) == {"edges_path", "branch", "commit"}
+    assert set(calls[0]) == {"edges_path", "branch", "commit", "interaction_mode"}
+    assert calls[0]["interaction_mode"] is None
 
 
 def test_well_formed_approval_passes_through(calls):

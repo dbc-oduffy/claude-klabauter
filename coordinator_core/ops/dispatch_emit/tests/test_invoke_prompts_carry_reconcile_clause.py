@@ -8,7 +8,7 @@ import yaml
 
 from coordinator_core.ops.dispatch_emit.ask_compose import ASK_STAGE_RECONCILE_CLAUSE
 from coordinator_core.ops.dispatch_emit.ask_contract import OP_ASK_STAGE
-from coordinator_core.ops.dispatch_emit.ask_stage_receipt import ALREADY_STAGED_KEY
+from coordinator_core.ops.dispatch_emit.ask_stage_receipt import ALREADY_STAGED_KEY, STAGE_IN_FLIGHT_KEY
 from coordinator_core.ops.dispatch_emit.emit import _INDETERMINATE_RECONCILE_CLAUSE, compose_script
 from coordinator_core.ops.dispatch_emit.land_run_contract import OP_NAME, RECONCILE_CLAUSE
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
@@ -63,6 +63,7 @@ def test_ask_stage_prompts_carry_the_stage_clause_marker():
     assert stage
     for prompt in stage:
         assert ALREADY_STAGED_KEY in prompt, prompt[:200]
+        assert STAGE_IN_FLIGHT_KEY in prompt, prompt[:200]
         assert _INDETERMINATE_RECONCILE_CLAUSE not in prompt
 
 

@@ -86,7 +86,7 @@ def test_one_scoped_landing_of_the_pathspec_carries_every_flip(tmp_path):
 def test_crlf_baton_is_flipped(tmp_path):
     repo, paths = _seed(tmp_path, 1)
     crlf = paths[0]
-    crlf.write_bytes(crlf.read_bytes().replace(b"\n", b"\r\n"))
+    crlf.write_bytes(crlf.read_bytes().replace(b"\r\n", b"\n").replace(b"\n", b"\r\n"))
     _git(repo, "add", "-A")
     _git(repo, "commit", "-m", "crlf")
     out = flip_batch([_req(repo, crlf)], repo / ".git", repo)

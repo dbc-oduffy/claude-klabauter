@@ -13,6 +13,9 @@ def _ok(stdout=""):
 def _wire(monkeypatch):
     gn = push.git_native
     monkeypatch.setattr(push, "head_sha_local", lambda _r: "a" * 40)
+    # The machine-local-path refusal reads the object database; tmp_path is no repo.
+    monkeypatch.setattr(push, "git_common_dir", lambda _r: None)
+    monkeypatch.setattr(push, "tree_machine_local_additions", lambda *a, **k: [])
     monkeypatch.setattr(gn, "merge_tree_write_tree", lambda *a, **k: _ok("t" * 40 + "\n"))
     monkeypatch.setattr(gn, "commit_tree_merge", lambda *a, **k: _ok("b" * 40 + "\n"))
     monkeypatch.setattr(gn, "read_tree_merge_update", lambda *a, **k: _ok())

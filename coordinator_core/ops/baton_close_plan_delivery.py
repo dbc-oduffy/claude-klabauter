@@ -119,7 +119,9 @@ class PlanDeliveryCache:
             return None
         finally:
             os.close(fd)
-        return b"".join(chunks).decode("utf-8", errors="replace")
+        # The fenced-block locator is LF-only; a CRLF checkout would parse as "no spine" and
+        # silently drop ship_ref and open rows.
+        return b"".join(chunks).decode("utf-8", errors="replace").replace("\r\n", "\n")
 
     def get(self, plan_rel: str) -> PlanDelivery | None:
         """PlanDelivery for a docs/plans/<name> rel path; None when the plan is missing everywhere."""

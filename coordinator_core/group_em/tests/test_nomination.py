@@ -485,6 +485,40 @@ def test_box_holder_none_without_record_or_unverified(repo_root, record_dir, mon
     assert nomination.box_holder(record_dir) is None
 
 
+def _reject_sid(monkeypatch, bad_sid):
+    monkeypatch.setattr(
+        nomination,
+        "entry_status",
+        lambda rec, *a, **k: {"status": "rejected" if rec.get("session_id") == bad_sid else "verified"},
+    )
+
+
+def test_rejected_box_claim_over_verified_holder_leaves_the_verified_holder(tmp_path, record_dir, monkeypatch):
+    repo_real, repo_probe = tmp_path / "real", tmp_path / "probe"
+    repo_real.mkdir()
+    repo_probe.mkdir()
+    _no_registry_name(monkeypatch)
+    _stub_live(monkeypatch, True, "live")
+    nomination.claim(str(repo_real), "sid-real", peer_name="gem", directory=record_dir)
+    monkeypatch.setattr(nomination.human_entry, "home_start_refusal", lambda sid: None)
+    _REAL_CLAIM(str(repo_probe), "sid-probe", directory=record_dir, entry_kind="home-start")
+    assert nomination._box_record_path(record_dir).read_text(encoding="utf-8").count("sid-probe")
+    _reject_sid(monkeypatch, "sid-probe")
+
+    box = nomination.box_holder(record_dir)
+    assert box["session_id"] == "sid-real" and box["live"] is True
+    out = nomination.identify(str(repo_real), record_dir)
+    assert out["state"] == "live" and out["holder"]["session_id"] == "sid-real"
+    probe_view = nomination.identify(str(repo_probe), record_dir)
+    assert probe_view["holder"]["session_id"] == "sid-real" and probe_view["repo_record"] == "stale"
+
+
+def test_rejected_box_claim_with_no_verified_repo_record_is_none(repo_root, record_dir, monkeypatch):
+    nomination.claim(repo_root, "sid-probe", directory=record_dir)
+    _reject_sid(monkeypatch, "sid-probe")
+    assert nomination.box_holder(record_dir) is None
+
+
 def _no_registry_name(monkeypatch):
     monkeypatch.setattr(_liveness, "_cached_registry_lookup", lambda sid: None)
 

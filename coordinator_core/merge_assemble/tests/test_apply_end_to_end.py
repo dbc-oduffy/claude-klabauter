@@ -50,7 +50,9 @@ def feature_repo(tmp_path: Path) -> Path:
     _git(repo, "tag", "v0.1.0")
     _git(repo, "checkout", "-q", "-b", "feature/x")
     (repo / "feature.txt").write_text("feature\n", encoding="utf-8")
-    _git(repo, "add", "feature.txt")
+    # cut_tag refuses a version with no bracketed section at the merge commit.
+    (repo / "CHANGELOG.md").write_text("# Changelog\n\n## [0.1.1]\n\n- feature work\n", encoding="utf-8")
+    _git(repo, "add", "feature.txt", "CHANGELOG.md")
     _git(repo, "commit", "-q", "-m", "feature work")
     origin = tmp_path / "origin.git"
     subprocess.run(

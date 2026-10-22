@@ -114,6 +114,7 @@ def _eval_reason(pulled_json: str) -> str:
     from coordinator_core.win_portability import no_console_creationflags
 
     from coordinator_core.ops.dispatch_emit.ask_roadmap import no_ready_reason_js
+    from coordinator_core.win_portability import no_console_creationflags
 
     node = shutil.which("node")
     if not node:
@@ -121,7 +122,8 @@ def _eval_reason(pulled_json: str) -> str:
     expr = no_ready_reason_js("_pulled")
     done = subprocess.run(
         [node, "-"], input=f"const _pulled = {pulled_json}; process.stdout.write({expr});",
-        capture_output=True, text=True, check=True, timeout=30, **no_console_creationflags(),
+        capture_output=True, text=True, check=True, timeout=30,
+        **no_console_creationflags(),
     )
     return done.stdout
 

@@ -294,6 +294,21 @@ def test_plan_body_named_by_writes_and_register_stays_as_itself(tmp_path):
     assert "evidence.yaml" not in text
 
 
+def test_case_variant_of_existing_file_mints_the_tracked_spelling(tmp_path):
+    repo = _repo_with(tmp_path / "repo", "src/x.py", "src/blocked.py")
+    sizing = _ledger_sizing(("fix SRC/BLOCKED.py", "open"))
+    _, rows = _rows_by_id(tmp_path, sizing, ["src/x.py"], repo)
+    assert "src/blocked.py" in rows["X1"]["writes"]
+    assert "SRC/BLOCKED.py" not in rows["X1"]["writes"]
+
+
+def test_unbacked_path_in_existing_directory_mints_nothing(tmp_path):
+    repo = _repo_with(tmp_path / "repo", "src/x.py")
+    sizing = _ledger_sizing(("add src/test_missing.py", "open"))
+    _, rows = _rows_by_id(tmp_path, sizing, ["src/x.py"], repo)
+    assert rows["X1"]["writes"] == ["src/x.py"]
+
+
 def test_plans_only_ledger_body_stays_in_x1(tmp_path):
     repo = _repo_with(tmp_path / "repo", "docs/plans/p.md")
     _, rows = _rows_by_id(tmp_path, _ledger_sizing(("docs/plans/p.md", "open")), ["docs/plans/p.md"], repo)

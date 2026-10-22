@@ -7,6 +7,7 @@ Writes come from the operator because a sizing carries no footprint.
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import posixpath
 import re
@@ -23,6 +24,7 @@ from coordinator_core.ops.dispatch_emit.inventory_mint import (
     _refuse_if_glob,
 )
 from coordinator_core.ops import requirement_register as rr
+from coordinator_core.git.tracked_case import tracked_spelling
 from coordinator_core.ops.dispatch_emit.ledger_remaining_paths import gated_paths, named_paths
 from coordinator_core.ops.dispatch_emit.source_memo_ref import sizing_source_memo
 
@@ -132,7 +134,7 @@ def _ledger_named_paths(sizing: Mapping, repo_root: Path | None) -> list[str]:
         for r in rows or ()
         if isinstance(r, Mapping) and r.get(rr.ROW_STATUS) not in (rr.STATUS_DEFERRED, rr.STATUS_WAIVED)
     ]
-    return named_paths(texts, Path(repo_root))
+    return named_paths(texts, Path(repo_root), spelling=functools.partial(tracked_spelling, Path(repo_root)))
 
 
 class MemoReceiverUnresolvedError(ValueError):

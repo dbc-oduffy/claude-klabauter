@@ -69,10 +69,14 @@ def test_both_planblitz_calls_carry_the_stage_ready_op_without_plan_path():
         assert "readyOp: { op: 'dispatch.ask_stage'" in call
         assert "!_stagedManifest" in call
         ready = call.split("readyOp:", 1)[1].split("repoRoot:", 1)[0]
-        assert "plan_path" not in ready.split(", schema:", 1)[0]
-        assert "writes" not in ready.split(", schema:", 1)[0]  # plan-branch stage params carry no sizing-time writes
+        # The reply schema legitimately declares plan_path (the owed-plan reply field); only the op params must not.
+        params = ready.split("schema:", 1)[0]
+        assert "plan_path" not in params
+        assert "plan_path" in ready.split("schema:", 1)[1]
+        # The plan branch omits the sizing-time writes (test_ask_compose_plan_stage_omits_writes).
+        assert "writes" not in params
         for key in ("run_id", "cross_repo_approved", "session_id", "commit_sizing_path"):
-            assert key in ready
+            assert key in params
 
 
 def test_a_stop_after_script_carries_no_ready_op():

@@ -88,6 +88,34 @@ def test_a_second_gate_call_never_duplicates_the_derived_row(repo):  # noqa: F81
     assert (repo / PLAN_REL).read_text(encoding="utf-8").count("id: LR1") == 1
 
 
+def test_case_variant_writes_derive_in_the_tracked_spelling_and_uncreated_paths_are_refused(repo):  # noqa: F811
+    _halted(repo, ["fix coordinator/bin/BLOCKED.py and coordinator/bin/tests/test_BLOCKED.py"])
+    (repo / "coordinator" / "bin").mkdir(parents=True)
+    (repo / "coordinator" / "bin" / "blocked.py").write_text("b = 1\n", encoding="utf-8")
+    (repo / "coordinator" / "bin" / "publish.py").write_text("p = 1\n", encoding="utf-8")
+    plan = repo / PLAN_REL
+    plan.write_text(
+        "---\nrun_id: fixture\n---\n\n## Tasks\n\n```yaml plan-tasks\n"
+        "- id: C1\n  title: TC1\n  disposition: open\n  register_rows:\n    - R1\n  writes:\n"
+        "    - coordinator/bin/Publish.py\n```\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "track bin")
+
+    out = ask_gate._handler({"sizing_path": REL, "run_id": REFIRE_RUN}, repo)
+
+    staged = [r for r in _manifest_rows(repo) if r["id"] == "LR1"]
+    assert len(staged) == 1, out
+    writes = staged[0]["writes"]
+    assert "coordinator/bin/publish.py" in writes, writes
+    assert not any(w in writes for w in (
+        "coordinator/bin/Publish.py", "coordinator/bin/BLOCKED.py", "coordinator/bin/tests/test_BLOCKED.py",
+    )), writes
+    assert "coordinator/bin/tests/test_BLOCKED.py" in (repo / PLAN_REL).read_text(encoding="utf-8")
+
+
 def test_an_underivable_item_refuses_naming_the_item_and_remedy(repo):  # noqa: F811
     _halted(repo, ["do the thing"])
 

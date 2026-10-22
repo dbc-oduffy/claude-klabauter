@@ -24,7 +24,7 @@ def _resolve_plugin_root():
 
 
 _PLUGIN_ROOT = _resolve_plugin_root()  # resolved at import, before conftest clears the env var
-_ALLOWED_PRE_EXECUTE_HALTS = {"usage_limit", "refusal", "design-review", "parked", "split"}  # design-review: the PM-requested canvas halt; parked: workflow.revise stop_after=plan; split: plan-blitz pulled the plan
+_ALLOWED_PRE_EXECUTE_HALTS = {"usage_limit", "refusal", "design-review", "parked", "split"}  # design-review: the PM-requested canvas halt; parked: workflow.revise stop_after=plan; split: a resumed pull whose revise leg recommends splitting
 
 
 @pytest.fixture

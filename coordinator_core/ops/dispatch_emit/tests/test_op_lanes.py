@@ -257,10 +257,15 @@ def test_a_part_that_composes_over_the_cap_is_resplit_in_place_with_later_parts_
                 ("H1", "shared/hot.py", "-", "pending"),
                 ("H2", "shared/hot.py", "H1", "pending"),
                 ("H3", "shared/hot.py", "H2", "pending"),
+                ("H4", "shared/hot.py", "H3", "pending"),
+                ("H5", "shared/hot.py", "H4", "pending"),
             ]
         ),
     )
-    monkeypatch.setattr(emit, "_WORKFLOW_SCRIPT_BYTE_CAP", one_row + 14000)
+    # The 3000-byte row stub understates the real ~9.7 KB per row, so the first estimate packs
+    # [H1..H4] | [H5]; a composed 3-row script (~85 KB) is over this cap and a 2-row one (~75 KB)
+    # fits, so exactly one split happens, and it must renumber the pre-existing later part H5.
+    monkeypatch.setattr(emit, "_WORKFLOW_SCRIPT_BYTE_CAP", one_row + 11000)
     monkeypatch.setattr(emit, "row_block_bytes", lambda rows, **kw: {r.id: 3000 for r in rows})
 
     reply = _lanes(inv, root, hot_files=0)
@@ -269,10 +274,10 @@ def test_a_part_that_composes_over_the_cap_is_resplit_in_place_with_later_parts_
     assert [p["part"] for p in reply["parts"]] == ["a-p1"]
     lane_map = json.loads((root / reply["lane_map"]).read_text(encoding="utf-8"))
     (lane,) = lane_map["lanes"]
-    assert [p["id"] for p in lane["parts"]] == ["a-p1", "a-p2"]
-    assert lane["parts"][1]["after"] == ["a-p1"]
-    assert [r for p in lane["parts"] for r in p["rows"]] == ["H1", "H2", "H3"]
-    assert lane["parts"][0]["script"] and not lane["parts"][1]["script"]
+    assert [p["id"] for p in lane["parts"]] == ["a-p1", "a-p2", "a-p3"]
+    assert [p["rows"] for p in lane["parts"]] == [["H1", "H2"], ["H3", "H4"], ["H5"]]
+    assert [p["after"] for p in lane["parts"]] == [[], ["a-p1"], ["a-p2"]]
+    assert lane["parts"][0]["script"] and not any(p["script"] for p in lane["parts"][1:])
     assert Path(reply["parts"][0]["path"]).stat().st_size <= emit._WORKFLOW_SCRIPT_BYTE_CAP
     names = {p.name for p in Path(home_dir(str(root), "mise-inventory")).iterdir()}
     assert f"{RUN}-a.md" not in names and f"{RUN}-a-p1.md" in names
