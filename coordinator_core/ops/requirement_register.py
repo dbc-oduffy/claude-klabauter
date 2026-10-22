@@ -560,6 +560,20 @@ def _iso_utc(moment: datetime) -> str:
     return moment.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+_CLAIM_PATH_RE = re.compile(r"^docs/plans/.+\.md$")
+
+
+def _claim_key(plan_path: Any, sizing_text: str) -> str:
+    """The `claimed_by` entry for `plan_path`: itself when a docs/plans path (the sizing schema's
+    only accepted shape), else the sizing's own `plan:` edge when that is one, else "" (no claim
+    is written; a run with no docs/plans plan, such as an XS spine under state/warp)."""
+    key = _plan_key(plan_path)
+    if _CLAIM_PATH_RE.match(key):
+        return key
+    edge = _plan_key(_fm_scalar(sizing_text, "plan"))
+    return edge if _CLAIM_PATH_RE.match(edge) else ""
+
+
 def apply_verdicts(
     sizing_text: str,
     judge_rows: Sequence[Mapping[str, Any]],
@@ -579,7 +593,7 @@ def apply_verdicts(
         return sizing_text
     verdicts = {str(j.get("id")): j for j in judge_rows if isinstance(j, Mapping)}
     stamp = _iso_utc(now)
-    key = _plan_key(plan_path)
+    key = _claim_key(plan_path, sizing_text)
     changed = False
     for row in claimed_rows(register, plan_path, claim_ids):
         verdict = verdicts.get(str(row.get(ROW_ID)))
@@ -592,11 +606,11 @@ def apply_verdicts(
         target = STATUS_MET if met and wired else STATUS_PARTIAL if met or wired else row.get(ROW_STATUS)
         if (
             met and wired and ref in met_by and row.get(ROW_WIRED) is True and row.get(ROW_STATUS) == STATUS_MET
-            and key in claimants(row)
+            and (not key or key in claimants(row))
         ):
             continue  # already met at this sha: a repeat bumps no timestamp and writes nothing
         changed = True
-        if key not in claimants(row):
+        if key and key not in claimants(row):
             row[ROW_CLAIMED_BY] = [*(row.get(ROW_CLAIMED_BY) or []), key]
         row[ROW_WIRED] = wired
         if met and wired:

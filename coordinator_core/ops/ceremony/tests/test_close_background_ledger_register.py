@@ -105,3 +105,58 @@ def test_reclose_requeues_a_not_applicable_sizing_ship_only_with_plan_reconcilia
         "sizing-ship", "plan-reconciliation",
     ]
     assert cb.owed_on_reclose({"sizing-ship": "not-applicable", "plan-reconciliation": "ran"}) == []
+
+
+WARP_PLAN = "state/warp/warp-x-20261022T000000-abc123/plan.md"
+
+
+def _warp_close(tmp_path: Path, sizing_text: str) -> dict:
+    _init_repo(tmp_path)
+    (tmp_path / "state" / "warp" / "warp-x-20261022T000000-abc123").mkdir(parents=True)
+    (tmp_path / "state" / "sizings").mkdir(parents=True)
+    (tmp_path / WARP_PLAN).write_text(f"---\nplan_id: p\nsizing_object: {SIZING}\n---\nbody\n", encoding="utf-8")
+    (tmp_path / SIZING).write_text(sizing_text, encoding="utf-8")
+    run_close.write_close_job(
+        tmp_path, RUN, ("sizing-ship",), datetime.now().astimezone() + timedelta(minutes=10),
+        plan_rel=WARP_PLAN, terminal_sha=SHA, criterion=None,
+        inputs={"ledger_met": "ledger-met: T22", "ledger_judged": ["T22"]},
+    )
+    ctx = cb.JobContext(tmp_path, tmp_path / ".git", RUN, (), None, SHA, run_close._load(tmp_path, RUN))
+    result = cb._sizing_ship(ctx)
+    text = (tmp_path / SIZING).read_text(encoding="utf-8")
+    return {"result": result, "rows": {r["id"]: r for r in rr.read_register(text).rows}}
+
+
+def test_warp_run_plan_claims_under_the_sizings_docs_plans_edge(tmp_path):
+    text = _wb_sizing_text([_wb_row("T22", claimed=False, anchor="relayed")]).replace(
+        "status: routed\n", f"status: routed\nplan: {PLAN}\n", 1
+    )
+    out = _warp_close(tmp_path, text)
+
+    assert out["result"].status == "ran", out["result"].detail
+    assert out["rows"]["T22"]["status"] == "met"
+    assert out["rows"]["T22"]["claimed_by"] == [PLAN]
+
+
+def test_warp_run_without_a_docs_plans_edge_writes_no_claim_and_still_lands(tmp_path):
+    out = _warp_close(tmp_path, _wb_sizing_text([_wb_row("T22", claimed=False, anchor="relayed")]))
+
+    assert out["result"].status == "ran", out["result"].detail
+    assert out["rows"]["T22"]["status"] == "met"
+    assert not out["rows"]["T22"].get("claimed_by")
+
+
+def test_refusal_detail_keeps_field_value_and_reason_past_the_clip(tmp_path, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import register_gate
+
+    reason = (
+        "register write-back refused: requirement_register.rows[0].claimed_by[0]: value "
+        '"' + "state/warp/" + "x" * 200 + '" does not match pattern "^docs/plans/.+\\.md$"'
+    )
+    monkeypatch.setattr(register_gate, "register_writeback", lambda *a, **k: {"register_writeback_error": reason})
+    out = _warp_close(tmp_path, _wb_sizing_text([_wb_row("T22", claimed=False, anchor="relayed")]))
+
+    detail = out["result"].detail
+    assert out["result"].status == "failed"
+    assert len(detail) > run_close.DETAIL_CAP
+    assert "claimed_by[0]" in detail and "x" * 200 in detail and "does not match pattern" in detail

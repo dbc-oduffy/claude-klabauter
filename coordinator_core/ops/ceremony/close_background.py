@@ -266,6 +266,16 @@ def _leg(status: str, text: str, ctx: Optional[JobContext] = None) -> LegResult:
     return LegResult(status, run_close.scrub_detail(text, ctx.root if ctx is not None else None))
 
 
+def _leg_full(status: str, text: str, ctx: Optional[JobContext] = None) -> LegResult:
+    """``_leg`` without the ``DETAIL_CAP`` clip: each whitespace token is scrubbed on its own (a path
+    token never spans whitespace), so a refusal's field, value and reason survive whole."""
+    root = ctx.root if ctx is not None else None
+    cap = run_close.DETAIL_CAP
+    tokens = ["".join(run_close.scrub_detail(tok[i:i + cap], root) for i in range(0, len(tok), cap))
+              for tok in str(text).split()]
+    return LegResult(status, " ".join(tokens))
+
+
 def _inputs(ctx: JobContext) -> Mapping[str, Any]:
     value = ctx.record.get("inputs")
     return value if isinstance(value, dict) else {}
@@ -872,9 +882,11 @@ def _sizing_ship(ctx: JobContext) -> LegResult:
             _note_written(ctx, settled["register_sizing"])
             notes.append("ledger-met register rows written")
         elif settled.get("register_writeback_error"):
-            return _leg("failed", f"ledger-met rows: {settled['register_writeback_error']}", ctx)
+            return _leg_full("failed", f"ledger-met rows: {settled['register_writeback_error']}", ctx)
     if _inputs(ctx).get("incomplete"):
-        return _leg("ran" if notes else "not-applicable", "; ".join([*notes, "run incomplete: sizing stays live"]), ctx)
+        return _leg_full(
+            "ran" if notes else "not-applicable", "; ".join([*notes, "run incomplete: sizing stays live"]), ctx
+        )
     wrote = register_gate.register_writeback(ctx.root, plan_rel, {"criterion": criterion} if criterion else None, sha)
     if wrote.get("register_sizing"):
         _note_written(ctx, wrote["register_sizing"])
@@ -887,15 +899,15 @@ def _sizing_ship(ctx: JobContext) -> LegResult:
         return _leg("failed", f"sizing.ship raised {type(exc).__name__}", ctx)
     if not isinstance(reply, dict) or reply.get("exit_code") != 0:
         refusal = reply.get("error") if isinstance(reply, dict) else reply
-        return _leg("failed", "; ".join([*notes, f"ship skipped: {refusal}"]), ctx)
+        return _leg_full("failed", "; ".join([*notes, f"ship skipped: {refusal}"]), ctx)
     if not reply.get("applied"):
-        return _leg("ran", "; ".join([*notes, "sizing already shipped"]), ctx)
+        return _leg_full("ran", "; ".join([*notes, "sizing already shipped"]), ctx)
     error = _write_resolution(ctx, sizing_rel, sha)
     _note_written(ctx, sizing_rel)
     ctx.trailers.append(f"Sizing-Shipped: {sizing_rel} {sha}")
     _record_resolution(ctx, sizing_rel, sha)
     notes.append(f"sizing {sizing_rel} shipped" + (f"; resolution not written: {error}" if error else ""))
-    return _leg("failed" if error else "ran", "; ".join(notes), ctx)
+    return _leg_full("failed" if error else "ran", "; ".join(notes), ctx)
 
 
 def _deliverable_cascade(ctx: JobContext) -> LegResult:
@@ -1156,13 +1168,52 @@ def _queued_legs(
     return [leg for leg in legs if leg in resolved and resolved[leg].status == "queued"]
 
 
+def _sizing_unshipped(ctx: JobContext) -> bool:
+    """True when the plan cites a sizing whose on-disk ``status`` is still ``sized`` or ``routed``."""
+    plan_rel = _plan_rel(ctx)
+    if not plan_rel or not ctx.terminal_sha or _inputs(ctx).get("incomplete"):
+        return False
+    from coordinator_core.frontmatter.primitives import read_fm_field_unquoted
+
+    sizing_rel, _ = _cited(ctx, plan_rel)
+    text = _read(ctx, sizing_rel) if sizing_rel else None
+    return text is not None and read_fm_field_unquoted(text, "status") in ("sized", "routed")
+
+
+def _legs_owed(ctx: JobContext, record: Any) -> list[str]:
+    """The queued legs, plus ``sizing-ship`` and the ``close-commit`` landing its write when the leg was
+    recorded ``not-applicable`` or ``failed`` yet the cited sizing is still unshipped on disk."""
+    owed = set(_queued_legs(ctx.root, ctx.run_id, record=record))
+    legs = record.get("legs") if isinstance(record, dict) else None
+    entry = legs.get("sizing-ship") if isinstance(legs, dict) else None
+    if (
+        isinstance(entry, dict)
+        and entry.get("status") in ("not-applicable", "failed")
+        and _sizing_unshipped(ctx)
+    ):
+        owed.update(("sizing-ship", "close-commit"))
+    return [leg for leg in BACKGROUND_LEGS if leg in owed]
+
+
+def _no_legs_cause(root: Path, run_id: str) -> str:
+    """Why a record that exists owes nothing: each leg's recorded status, as one line."""
+    record = _load_record(root, run_id)
+    legs = record.get("legs") if isinstance(record, dict) else None
+    if not isinstance(legs, dict) or not legs:
+        return "close-job record lists no legs"
+    statuses = ", ".join(
+        f"{leg}={entry.get('status') if isinstance(entry, dict) else '?'}" for leg, entry in legs.items()
+    )
+    return f"no leg is queued and no sizing-ship is owed (cited sizing shipped or none cited): {statuses}"
+
+
 def run_background(
     ctx: JobContext,
     runners: Optional[Mapping[str, Runner]] = None,
     budget_ms: float = JOB_BUDGET_MS,
     cpu_ms: Callable[[], float] = lambda: time.process_time() * 1000.0,
 ) -> dict[str, LegResult]:
-    """Pay each queued background leg in ledger order and record its outcome.
+    """Pay each owed background leg (``_legs_owed``) in ledger order and record its outcome.
 
     Raises FileNotFoundError when the run has no close-job record. Returns leg -> outcome.
     """
@@ -1177,7 +1228,7 @@ def run_background(
             ctx = replace(ctx, terminal_sha=sha)
     ran_any = False
     deferred: list[str] = []
-    for leg in _queued_legs(ctx.root, ctx.run_id, record=record):
+    for leg in _legs_owed(ctx, record):
         spent = cpu_ms() - started
         if leg not in UNBUDGETED_LEGS and spent >= budget_ms:
             reason = f"job process time {spent:.0f}ms reached {budget_ms:.0f}ms"
@@ -1282,7 +1333,11 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         return {"error": "close.background requires a repo root"}
     try:
         ctx = _context(main_worktree_root(Path(repo_root)), Path(repo_root), params or {})
-        return _summary(ctx.run_id, run_and_continue(ctx))
+        outcomes = run_and_continue(ctx)
+        if not outcomes:
+            cause = _no_legs_cause(ctx.root, ctx.run_id)
+            return {"error": run_close.scrub_detail(f"no legs paid for run {ctx.run_id}: {cause}")}
+        return _summary(ctx.run_id, outcomes)
     except (ValueError, FileNotFoundError) as exc:
         return {"error": run_close.scrub_detail(f"{type(exc).__name__}: {exc}")}
 
