@@ -73,10 +73,17 @@ def _named_split(
             rel = _clean(tok)
             if rel and rel not in cands:
                 cands.append(rel)
-    resolved = spelling(cands) if cands else {}
+    resolved = dict(spelling(cands)) if cands else {}
+    parents = list(dict.fromkeys(c.rsplit("/", 1)[0] for c in cands if resolved.get(c) is None and "/" in c))
+    parent_spelled = spelling(parents) if parents else {}
     dropped: list[str] = []
     for c in cands:
         s = resolved.get(c)
+        if s is None and "/" in c:
+            parent, base = c.rsplit("/", 1)
+            ps = parent_spelled.get(parent)
+            if ps is not None and (repo_root / ps).is_dir():
+                s = f"{ps}/{base}"
         if s is None:
             dropped.append(c)
         elif s not in out:
@@ -87,8 +94,8 @@ def _named_split(
 def named_paths(texts: Iterable[str], repo_root: Path, *, spelling: Optional[Spelling] = None) -> list[str]:
     """Ordered, de-duplicated repo-relative paths the whitespace tokens of `texts` name and that exist.
 
-    With `spelling`, a path is admitted iff the resolver backs it, and is returned in the
-    resolver's spelling.
+    With `spelling`, a path is admitted iff the resolver backs it, or its parent directory exists
+    (a new file); it is returned in the resolver's spelling.
     """
     return _named_split(texts, repo_root, spelling)[0]
 

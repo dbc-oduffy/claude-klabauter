@@ -245,6 +245,13 @@ def _home_start_evidence(
     return {"kind": human_entry.HOME_START, "claimed_at": stamp.strftime("%Y-%m-%dT%H:%M:%SZ")}
 
 
+def _session_is_real(session_id: str) -> bool:
+    """True when the harness knows `session_id`: a registry row or a transcript file."""
+    return bool(
+        session_registry.find_registry_row(session_id) or human_entry.transcript_paths(session_id)
+    )
+
+
 def _is_home_start(record: dict) -> bool:
     evidence = record.get("entry_evidence")
     return isinstance(evidence, dict) and evidence.get("kind") == human_entry.HOME_START
@@ -450,6 +457,10 @@ def claim(
         entry_evidence = pending_evidence(session_id, prompt_id, now)
     else:
         entry_evidence = _home_start_evidence(session_id, prompt_id, entry_kind, now)
+    if not _session_is_real(session_id):
+        raise NotHumanEnteredError(
+            f"session {session_id!r} has no registry row or transcript; nothing written"
+        )
     repo_root = str(Path(repo_root_str).resolve())
     existing = read_record(repo_root, directory)
 

@@ -111,3 +111,16 @@ def test_an_exact_spelling_is_left_alone_and_reports_no_mapping(repo):
 
     assert out["committed"] is True, out
     assert "case_canonicalized" not in out
+
+
+def test_a_new_file_in_an_existing_dir_lands_beside_a_canonicalized_variant(repo):
+    (repo / _TRACKED).write_text("x = 2\n", encoding="utf-8")
+    new = "coordinator/bin/fresh.py"
+    (repo / new).write_text("y = 1\n", encoding="utf-8")
+
+    out = _fire(repo, [_VARIANT, new])
+
+    assert out["committed"] is True, out
+    landed = _git(["show", "--name-only", "--format=", out["sha"]], repo).split()
+    assert _TRACKED in landed and new in landed
+    assert _VARIANT not in landed

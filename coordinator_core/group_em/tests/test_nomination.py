@@ -19,6 +19,7 @@ from coordinator_core.session import liveness as _liveness
 
 
 _REAL_CLAIM = nomination.claim
+_SESSION_IS_REAL = nomination._session_is_real
 
 
 @pytest.fixture(autouse=True)
@@ -28,6 +29,7 @@ def _human_entered(monkeypatch):
         nomination, "claim", lambda *a, **k: _REAL_CLAIM(*a, **{"prompt_id": "p-1", **k})
     )
     monkeypatch.setattr(nomination, "entry_status", lambda *a, **k: {"status": "verified"})
+    monkeypatch.setattr(nomination, "_session_is_real", lambda sid: True)
 
 
 @pytest.fixture
@@ -586,3 +588,23 @@ def test_every_identify_line_fits_the_doe_head_leg_budget(tmp_path, record_dir, 
     assert all(name in line and len(line.encode("utf-8")) <= 250 for line in lines), [
         len(line.encode("utf-8")) for line in lines
     ]
+
+
+def test_claim_with_a_fabricated_session_id_writes_nothing(repo_root, record_dir, monkeypatch):
+    monkeypatch.setattr(nomination, "_session_is_real", _SESSION_IS_REAL)
+    monkeypatch.setattr(nomination.session_registry, "find_registry_row", lambda sid: None)
+    monkeypatch.setattr(nomination.human_entry, "transcript_paths", lambda sid: [])
+    with pytest.raises(nomination.NotHumanEnteredError):
+        _REAL_CLAIM(repo_root, "sid-fabricated", directory=record_dir, prompt_id="p-1")
+    assert list(record_dir.rglob("*.json")) == []
+
+
+@pytest.mark.parametrize("known", ["registry", "transcript"])
+def test_claim_with_a_known_session_id_is_accepted(known, repo_root, record_dir, monkeypatch):
+    monkeypatch.setattr(nomination, "_session_is_real", _SESSION_IS_REAL)
+    row = object() if known == "registry" else None
+    monkeypatch.setattr(nomination.session_registry, "find_registry_row", lambda sid: row)
+    paths = ["t.jsonl"] if known == "transcript" else []
+    monkeypatch.setattr(nomination.human_entry, "transcript_paths", lambda sid: paths)
+    _REAL_CLAIM(repo_root, "sid-known", directory=record_dir, prompt_id="p-1")
+    assert nomination.read_record(repo_root, record_dir)["session_id"] == "sid-known"

@@ -138,6 +138,7 @@ Spec: docs/plans/2026-09-27-emitter-dag-terminal-commit-wake-digest.md § D3
 from __future__ import annotations
 
 import ast
+import dataclasses
 import glob as _glob
 import json
 import os
@@ -4545,6 +4546,15 @@ def _terminal_commit_inner(
         all_paths = list(dict.fromkeys(case_map.get(p, p) for p in all_paths))
         held_paths = {case_map.get(p, p): ids for p, ids in held_paths.items()}
         scope["case_canonicalized"] = dict(case_map)
+
+        def _respelled(chunks):
+            return type(chunks)(
+                dataclasses.replace(c, paths=tuple(dict.fromkeys(case_map.get(p, p) for p in c.paths)))
+                for c in chunks
+            )
+
+        done_chunks = _respelled(done_chunks)
+        partial_chunks = _respelled(partial_chunks)
 
     def _with_siblings(reply: dict) -> dict:
         if sibling_paths:

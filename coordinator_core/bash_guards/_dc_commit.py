@@ -66,14 +66,12 @@ from coordinator_core.bash_guards._dc_git_probe import (
     _NOTE_CORRECTION,
     _SAFE_COMMIT_ROUTE_CLAUSE,
     _bulk_foreign_index_refusal,
+    _deny,
     _format_batched_scope_denial,
     _format_owner_sentence,
     _format_owner_token,
-    _offer,
     _owner_name_provenance_note,
     _piped_exit_code_chain,
-    _ready,
-    _rec,
     _run_git,
     _truncate_to_budget,
 )
@@ -94,10 +92,13 @@ from coordinator_core.bash_guards._dialect import (
     expand_start_process_invocations,
     tokenize_command,
 )
+from coordinator_core.bash_guards._helpers import operator_override_note
 from coordinator_core.bash_guards._merge_incoming import merge_incoming_paths
 from coordinator_core.bash_guards._rewrite_support import (
     _ENV_ASSIGNMENT_TOKEN_RE,
     _GIT_WRAPPER_PREFIX_WORDS,
+    _advisory,
+    _allow_rewrite,
     _bt_git_resolved_subcommand,
     _crlf_strip,
     _override,
@@ -109,20 +110,6 @@ from coordinator_core.bash_guards.block_subagent_commit import (
 
 if TYPE_CHECKING:
     from coordinator_core.session.scope import OwnerFact
-
-
-def _vc(summary, members, env, report, authorize, *, kind="deny", guard="validate-commit"):
-    return _rec(kind, guard, summary, members, env, report=report, authorize=authorize)
-
-
-def _scope_denial(text: str, foreign_hunk: bool) -> Any:
-    """Strict-scope denial; only a foreign-hunk finding is cleared by COORDINATOR_SCOPE_STRICT_OFF."""
-    return _vc(
-        text,
-        (_offer('coordinator-safe-commit.py "<subject>" -- <literal paths>', "the subject and your literal paths, never a glob"),),
-        "COORDINATOR_SCOPE_STRICT_OFF" if foreign_hunk else None,
-        "the commit you need", "committing paths another session owns",
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -256,7 +243,7 @@ def check_validate_commit(
         lambda a, c, **kw: _dc_git_probe._run_git(a, c, extra_env=_probe_env, **kw),
     )
     if _probe_note:
-        return _vc(_probe_note, (), None, "the staged deletions you need", "committing suspect deletions", kind="advisory")
+        return _advisory(_probe_note)
 
     # Reconstruct exactly what `--name-only` returned: the NEW path for a
     # rename/copy (fields 1,2,3 -> take 3), the single path otherwise.
@@ -1037,6 +1024,11 @@ def check_validate_commit(
                                         _commit_seg_tokens or [], payload, _cwd))
                                 if staged_file in _merge_incoming_cache[0]:
                                     continue
+                                _fh_note = operator_override_note(
+                                    "COORDINATOR_SCOPE_STRICT_OFF",
+                                    payload=payload,
+                                    git_root=git_root,
+                                )
                                 _deny_entries.append({
                                     "path": staged_file,
                                     "kind": "foreign hunk",
@@ -1050,6 +1042,7 @@ def check_validate_commit(
                                         "before committing, or coordinate with "
                                         "whoever else touched it."
                                         % (staged_file, staged_file)
+                                        + ("\n\n" + _fh_note if _fh_note else "")
                                     ),
                                 })
                         continue
@@ -1161,14 +1154,13 @@ def check_validate_commit(
                         # information the operator can act on.
                         if len(commit_scope) > _BULK_FOREIGN_INDEX_PATHS:
                             _record_scope_event("deny", _warned_paths)
-                            return _scope_denial(
+                            return _deny(
                                 _bulk_foreign_index_refusal(
                                     len(commit_scope),
                                     staged_file,
                                     owner_sentence,
                                     _owner_name_provenance_note(owner_sentence),
-                                ),
-                                False,
+                                )
                             )
                         if staged_file in _own_claimed_paths:
                             # CONTESTED, not unclaimed. Say so, and do NOT print
@@ -1298,10 +1290,7 @@ def check_validate_commit(
                     _record_scope_event(
                         "deny", _warned_paths + [e["path"] for e in _deny_entries]
                     )
-                    return _scope_denial(
-                        _format_batched_scope_denial(_deny_entries),
-                        any(e["kind"] == "foreign hunk" for e in _deny_entries),
-                    )
+                    return _deny(_format_batched_scope_denial(_deny_entries))
 
                 # `verdict` here is CHECK 5's own verdict, not the function's
                 # final one -- Check 7/8 below can still deny a call recorded
@@ -1362,12 +1351,17 @@ def check_validate_commit(
         )
 
     if hard_violation and not _override("COORDINATOR_OVERRIDE_CLAUDEMD_BUDGET", payload=payload):
-        return _vc(
-            "BLOCKED: staged CLAUDE.md exceeds 40K char limit (Claude Code "
-            "perf warning threshold):%s" % hard_violation,
-            (_offer("demote a section to docs/wiki/ and replace it with a pointer", "the section"),),
-            "COORDINATOR_OVERRIDE_CLAUDEMD_BUDGET", "the CLAUDE.md change you need", "an oversized CLAUDE.md",
+        _budget_note = operator_override_note(
+            "COORDINATOR_OVERRIDE_CLAUDEMD_BUDGET", payload=payload, git_root=_repo_root_for_governance
         )
+        reason = (
+            "BLOCKED: staged CLAUDE.md exceeds 40K char limit (Claude Code "
+            "perf warning threshold):%s\n\n"
+            "Trim before committing: demote a section to docs/wiki/ and "
+            "replace with a pointer."
+            % hard_violation
+        ) + ("\n\n" + _budget_note if _budget_note else "")
+        return _deny(reason)
 
     if hard_violation and _override("COORDINATOR_OVERRIDE_CLAUDEMD_BUDGET", payload=payload):
         warnings.append("CLAUDEMD-BUDGET (override):%s" % hard_violation)
@@ -1487,7 +1481,7 @@ def check_validate_commit(
     for sf in settings_staged:
         detail = commit_tripwires.check_machine_path_leak(sf, _cwd)
         if detail and not machine_path_leak.fixture_suppressible(sf, detail):
-            return _vc(
+            reason = (
                 "BLOCKED: %s contains machine-specific absolute "
                 "path(s) that must not be committed.\n\n"
                 "%s\n\n"
@@ -1495,9 +1489,9 @@ def check_validate_commit(
                 "settings.local.json or machine-local registry, not in "
                 "tracked settings.json.\n"
                 "See docs/plans/2026-06-23-machine-path-leak-guard.md"
-                % (sf, detail),
-                (), None, "the settings.json change you need", "a machine-specific path in settings.json",
+                % (sf, detail)
             )
+            return _deny(reason)
 
     # Check 12 -- registration-quad-completeness -- REGISTRATION-QUAD-INVARIANT.
     # Unlike Checks 9-11, this is a HARD DENY by default (see commit_tripwires.
@@ -1510,10 +1504,13 @@ def check_validate_commit(
         if _override("COORDINATOR_OVERRIDE_REGISTRATION_QUAD", payload=payload):
             warnings.append("REGISTRATION-QUAD-TRIPWIRE (override):\n%s" % registration_quad_violation)
         else:
-            return _vc(
-                registration_quad_violation, (), "COORDINATOR_OVERRIDE_REGISTRATION_QUAD",
-                "the incomplete registration you need", "an incomplete registration quad",
+            _quad_note = operator_override_note(
+                "COORDINATOR_OVERRIDE_REGISTRATION_QUAD", payload=payload, git_root=_repo_root_for_governance
             )
+            reason = (
+                "%s" % registration_quad_violation
+            ) + ("\n\n" + _quad_note if _quad_note else "")
+            return _deny(reason)
 
     # Check 13 -- staged-pathspec-divergence -- STAGED-PATHSPEC-DIVERGENCE.
     # Advisory only (never denies) -- see commit_tripwires.
@@ -1598,7 +1595,7 @@ def check_validate_commit(
                 "SCOPE: ... and %d more staged paths not in this session's "
                 "touch list (not listed)." % len(_drop)
             )
-        return _vc("\n\n".join(warnings), (), None, "the commit you need", "the flagged commit", kind="advisory")
+        return _advisory("\n\n".join(warnings))
 
     return None
 
@@ -2347,20 +2344,34 @@ def check_git_commit_safe_commit_advise(
             )
             owned = provenance is not None and provenance[2]
             if not owned:
+                _amend_note = operator_override_note(
+                    "COORDINATOR_ALLOW_GIT_COMMIT_AMEND", payload=payload, git_root=git_root
+                )
                 if provenance is not None:
                     head_sha, head_subject, _owned = provenance
                     head_subject = _truncate_to_budget(head_subject, 40)
-                    _amend_what = "HEAD (%s %s), not provably yours" % (head_sha, head_subject)
-                    _amend_fix = _ready('git notes add -f -m "%s" %s' % (_NOTE_CORRECTION, head_sha))
-                else:
-                    _amend_what = "HEAD, not provably yours (its provenance could not be verified)"
-                    _amend_fix = _offer('git notes add -f -m "%s" <sha>' % _NOTE_CORRECTION, "the sha")
-                return _vc(
-                    "Deny: '--amend' rewrites %s -- replaces its message/authorship; "
-                    "without --only, also commits staged." % _amend_what,
-                    (_amend_fix,), "COORDINATOR_ALLOW_GIT_COMMIT_AMEND",
-                    "the amend you need", "rewriting a commit that is not provably yours",
-                    guard="git-commit-safe-commit-advise",
+                    return _deny(
+                        (
+                            "Deny: '--amend' rewrites HEAD (%s %s), not "
+                            "provably yours -- replaces its message/"
+                            "authorship; without --only, also commits "
+                            "staged.\n\n"
+                            "Use instead:\n"
+                            '  git notes add -f -m "%s" %s'
+                            % (head_sha, head_subject, _NOTE_CORRECTION, head_sha)
+                        )
+                        + ("\n\n%s" % _amend_note if _amend_note else "")
+                    )
+                return _deny(
+                    (
+                        "Deny: '--amend' rewrites HEAD, not provably yours "
+                        "(its provenance could not be verified) -- "
+                        "replaces its message/authorship; without --only, "
+                        "also commits staged.\n\n"
+                        "Use instead:\n"
+                        '  git notes add -f -m "' + _NOTE_CORRECTION + '" <sha>'
+                    )
+                    + ("\n\n%s" % _amend_note if _amend_note else "")
                 )
         if _override("COORDINATOR_ALLOW_GIT_COMMIT_BARE", payload=payload):
             return None
@@ -2429,6 +2440,9 @@ def check_git_commit_safe_commit_advise(
         # DENY the compound bare-commit-half unconditionally (PM ruling,
         # 2026-08-30) -- see `_bt_compound_add_bare_commit`. `-a`/`-am`/
         # `--all` are not this shape and keep their own predicate below.
+        _commit_bare_note = operator_override_note(
+            "COORDINATOR_ALLOW_GIT_COMMIT_BARE", payload=payload, git_root=git_root
+        )
         # Amend-specific remediation (see `is_amend` comment above): the
         # scoped-new-commit shapes below never apply to `--amend`, so an
         # amending command gets this text instead of any of the three
@@ -2443,8 +2457,9 @@ def check_git_commit_safe_commit_advise(
             "'git commit --amend' rewrites whatever commit is at HEAD — on "
             "a shared branch that may be a peer's, landed since your last "
             "commit. It replaces that commit's message and authorship, and "
-            "(without --only) also commits everything currently staged.",
-            (_offer('git notes add -f -m "%s" <sha> (fixes a message without rewriting)' % _NOTE_CORRECTION, "the sha"),),
+            "(without --only) also commits everything currently staged.\n\n"
+            "To fix a message without rewriting:\n"
+            "  git notes add -f -m \"" + _NOTE_CORRECTION + "\" <sha>"
         )
         # Sweeping-scope remediation. A command carrying `-- state/` NAMED a
         # scope, so every no-scope-at-all body below is false about it, and
@@ -2462,26 +2477,18 @@ def check_git_commit_safe_commit_advise(
         # spec, `tests/test_commit_scope_directory_operand_still_advises.py`).
         # `ceremony.commit_v2` already refuses the same input with this
         # sentence; the two components now say the same thing.
-        _sweep_scope_body = (
+        _sweep_scope_body = "%s\n\nUse instead:\n  git commit -m %s -- <file> <file>" % (
             _sweeping_scope_sentence(_sweeping_operands),
-            (_offer("git commit -m %s -- <file> <file>" % subject_operand, "the files"),),
+            subject_operand,
         )
         #: The body every branch below uses INSTEAD of its own, when the
         #: command's real defect is not the one that branch is written about.
         #: `--amend` outranks a sweeping scope: a scoped amend still
         #: overwrites a commit that may be a peer's, which no pathspec
         #: wording addresses. `None` means the branch keeps its own text.
-        _body_override: Optional[tuple] = (
+        _body_override: Optional[str] = (
             _amend_body if is_amend else (_sweep_scope_body if _scope_swept else None)
         )
-
-        def _gc(kind: str, prefix: str, default: tuple, tail: str = "") -> Any:
-            text, members = _body_override or default
-            return _vc(
-                prefix + text + tail, members, "COORDINATOR_ALLOW_GIT_COMMIT_BARE",
-                "the commit you need", "committing without a provable scope",
-                kind=kind, guard="git-commit-safe-commit-advise",
-            )
         # A sequencer operation (merge/cherry-pick/revert) is the one state in
         # which every deny below offers a remediation git itself rejects -- see
         # `_bt_git_sequencer_in_progress` for why the "prove it is yours"
@@ -2493,15 +2500,17 @@ def check_git_commit_safe_commit_advise(
         _sequencer = _bt_git_sequencer_in_progress(seg_tokens, payload)
         if _sequencer is not None:
             _state_name, _continue_verb = _sequencer
-            return _vc(
-                "Advisory: %s exists — this commit concludes an in-progress "
-                "operation, so its content is the whole index by "
-                "construction and git refuses to narrow it. A peer's "
-                "concurrent 'git add' into this shared index would still be "
-                "swept in." % _state_name,
-                (_ready(_continue_verb),), "COORDINATOR_ALLOW_GIT_COMMIT_BARE",
-                "the commit you need", "committing without a provable scope",
-                kind="advisory", guard="git-commit-safe-commit-advise",
+            return _advisory(
+                (
+                    "Advisory: %s exists — this commit concludes an in-progress "
+                    "operation, so its content is the whole index by "
+                    "construction and git refuses to narrow it. A peer's "
+                    "concurrent 'git add' into this shared index would still be "
+                    "swept in.\n\n"
+                    "Use instead:\n"
+                    "  %s" % (_state_name, _continue_verb)
+                )
+                + ("\n\n%s" % _commit_bare_note if _commit_bare_note else "")
             )
         if _bt_compound_add_bare_commit(seg_tokens, segments, seg_index):
             from coordinator_core.bash_guards.commit_scope_rewrite import (
@@ -2516,21 +2525,29 @@ def check_git_commit_safe_commit_advise(
                 )
             )
             if _rewritten is not None:
-                return _rec(
-                    "rewrite", "git-commit-safe-commit-advise",
+                return _allow_rewrite(
+                    _rewritten,
                     "Rewritten: this 'git commit' named no scope and would "
                     "have committed the whole shared index. It now commits "
-                    "only what its own 'git add' named. "
-                    "Next time put the paths after 'git commit -m … --'.",
-                    (_ready(_rewritten),), report="the commit you need",
-                    authorize="the original commit", updated_input={"command": _rewritten},
+                    "only what its own 'git add' named:\n  %s\n\n"
+                    "Next time put the paths after 'git commit -m … --'."
+                    % (_rewritten,),
                 )
-            return _gc("deny", "Deny: ", (
-                "this 'git commit' names no scope — it commits the "
-                "whole shared index, not what its own 'git add' named. A "
-                "peer staging concurrently is swept under your subject.",
-                (_offer("git add -- <paths> && git commit -m %s -- <paths>" % subject_operand, "the paths"),),
-            ))
+            return _deny(
+                (
+                    "Deny: " + _body_override
+                    if _body_override
+                    else (
+                        "Deny: this 'git commit' names no scope — it commits the "
+                        "whole shared index, not what its own 'git add' named. A "
+                        "peer staging concurrently is swept under your subject.\n\n"
+                        "Use instead:\n"
+                        "  git add -- <paths> && git commit -m %s -- <paths>"
+                        % (subject_operand,)
+                    )
+                )
+                + ("\n\n%s" % _commit_bare_note if _commit_bare_note else "")
+            )
         _solo_staged = _bt_solo_bare_commit_staged_paths(
             seg_tokens, segments, seg_index, payload
         )
@@ -2539,35 +2556,58 @@ def check_git_commit_safe_commit_advise(
             if _carrier is not None and not is_amend and not _scope_swept:
                 _refusal = named_set_refusal(_carrier)
                 if _refusal is not None:
-                    return _gc("deny", "Deny: ", ("%s." % _refusal, ()))
+                    return _deny(
+                        "Deny: %s." % _refusal
+                        + ("\n\n%s" % _commit_bare_note if _commit_bare_note else "")
+                    )
                 _unnamed = unnamed_staged_paths(_solo_staged, _carrier)
                 if not _unnamed:
                     return None
-                return _gc("deny", "Deny: ", (
-                    "staged but not named: %s — this commit would sweep "
-                    "them under your subject." % ", ".join(_unnamed),
-                    (_offer("add a -c coordinator.staged operand for your own path, "
-                            "or unstage the foreign one", "your path"),),
-                ))
-            return _gc("deny", "Deny: ", (
-                "this 'git commit' names no scope and stages "
-                "nothing itself — the shared index already holds staged "
-                "content this command cannot prove is its own, on a "
-                "shared branch a peer's.",
+                return _deny(
+                    "Deny: staged but not named: %s — this commit would sweep "
+                    "them under your subject.\n\n"
+                    "Use instead:\n"
+                    "  add a -c coordinator.staged operand for your own path, "
+                    "or unstage the foreign one"
+                    % ", ".join(_unnamed)
+                    + ("\n\n%s" % _commit_bare_note if _commit_bare_note else "")
+                )
+            return _deny(
                 (
-                    _offer("git commit -m %s -- <paths>" % subject_operand, "the paths"),
-                    _offer("git -c coordinator.staged=<path> commit -m %s (a staged partial hunk commits "
-                           "as staged; or ceremony.commit_v2 `prefer_staged`)" % subject_operand, "the path"),
-                ),
-            ))
+                    "Deny: " + _body_override
+                    if _body_override
+                    else (
+                        "Deny: this 'git commit' names no scope and stages "
+                        "nothing itself — the shared index already holds staged "
+                        "content this command cannot prove is its own, on a "
+                        "shared branch a peer's.\n\n"
+                        "Use instead:\n"
+                        "  git commit -m %s -- <paths>\n"
+                        "A staged partial hunk commits as staged via:\n"
+                        "  git -c coordinator.staged=<path> commit -m %s\n"
+                        "or ceremony.commit_v2 `prefer_staged`."
+                        % (subject_operand, subject_operand)
+                    )
+                )
+                + ("\n\n%s" % _commit_bare_note if _commit_bare_note else "")
+            )
         if _bt_sweep_all_holds_unverifiable_paths(seg_tokens, payload):
-            return _gc("deny", "Deny: ", (
-                "this 'git commit' sweeps every modified tracked "
-                "file from the worktree ('-a'/'--all'), not just the "
-                "index — a peer's un-staged edits would be swept under "
-                "your subject too.",
-                (_offer("git add -- <paths> && git commit -m %s -- <paths>" % subject_operand, "the paths"),),
-            ))
+            return _deny(
+                (
+                    "Deny: " + _body_override
+                    if _body_override
+                    else (
+                        "Deny: this 'git commit' sweeps every modified tracked "
+                        "file from the worktree ('-a'/'--all'), not just the "
+                        "index — a peer's un-staged edits would be swept under "
+                        "your subject too.\n\n"
+                        "Use instead:\n"
+                        "  git add -- <paths> && git commit -m %s -- <paths>"
+                        % (subject_operand,)
+                    )
+                )
+                + ("\n\n%s" % _commit_bare_note if _commit_bare_note else "")
+            )
         # Fail-open legibility (`_record_probe_fail_open`): reaching here
         # after a failed index probe is NOT the same verdict as reaching here
         # with a clean index, and until now both printed the same advisory.
@@ -2576,17 +2616,24 @@ def check_git_commit_safe_commit_advise(
         # degradation under load stops being indistinguishable from safety.
         _fail_open_reasons = _dc_git_probe._take_probe_fail_open_reasons()
         _dc_git_probe._persist_probe_fail_open(_fail_open_reasons, cmd, session_id, git_root)
-        # The probe's command line is dropped from the advisory (the 220-byte
-        # prose cap); stderr and the persisted record keep the full reason.
         _fail_open_note = (
             "The index was NOT read (%s) -- not because it checked and "
-            "found nothing."
-            % "; ".join(re.sub(r"`git [^`]*` failed -- ", "", r) for r in _fail_open_reasons)
+            "found nothing." % "; ".join(_fail_open_reasons)
             if _fail_open_reasons
             else ""
         )
-        return _gc("advisory", "Advisory: ", (
-            "this 'git commit' names no scope.",
-            (_offer("git add -- <paths> && git commit -m %s -- <paths>" % subject_operand, "the paths"),),
-        ), "\n\n%s" % _fail_open_note if _fail_open_note else "")
+        return _advisory(
+            (
+                "Advisory: " + _body_override
+                if _body_override
+                else (
+                    "Advisory: this 'git commit' names no scope.\n\n"
+                    "Use instead:\n"
+                    "  git add -- <paths> && git commit -m %s -- <paths>"
+                    % (subject_operand,)
+                )
+            )
+            + ("\n\n%s" % _fail_open_note if _fail_open_note else "")
+            + ("\n\n%s" % _commit_bare_note if _commit_bare_note else "")
+        )
     return None
