@@ -685,18 +685,21 @@ def _validate(params: dict, repo_root: Optional[Path] = None) -> dict:
 
     runner_epoch = _create_epoch(proc.pid)
     guard.transfer_tree_lock(lock.path, proc.pid, runner_epoch or 0)
-    _write_handle(
-        root,
-        handle_key,
-        {
-            "key": handle_key,
-            "pid": proc.pid,
-            "start_epoch": runner_epoch,
-            "argv": argv,
-            "cwd": root,
-            "launched_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        },
-    )
+    # The runner re-points this handle at the server it starts and removes it on exit;
+    # an unconditional write here would clobber that or resurrect a torn-down handle.
+    if _read_handle(root, handle_key) is None:
+        _write_handle(
+            root,
+            handle_key,
+            {
+                "key": handle_key,
+                "pid": proc.pid,
+                "start_epoch": runner_epoch,
+                "argv": argv,
+                "cwd": root,
+                "launched_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            },
+        )
     return {
         "ok": True,
         "configured": True,

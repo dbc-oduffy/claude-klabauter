@@ -4524,6 +4524,9 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     "fleet.archive_queue_entry": OpClass.MUTATING,
     "fleet.archive_release_accumulator": OpClass.MUTATING,
     "fleet.migrate_handoff_vocabulary": OpClass.MUTATING,
+    # fleet.migrate_prose_queue — ops/fleet/migrate_prose_queue.py: writes
+    # state/<family>/*.yaml via queue_append.append_queue_entry; no commit.
+    "fleet.migrate_prose_queue": OpClass.MUTATING,
     # fleet.archive_actioned_memos — MUTATING, and a DR-211 archival writer of the
     # same sub-category as fleet.archive_completed_handoffs above: _handle_act calls
     # _common.archive_and_commit, the batched os.replace-plus-_commit_via_head_spine

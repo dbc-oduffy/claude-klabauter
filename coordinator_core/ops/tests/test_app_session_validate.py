@@ -209,6 +209,7 @@ def test_ac11_handler_process_time_under_bar_with_real_spawn(repo, monkeypatch):
     monkeypatch.setattr(
         contract, "runner_argv", lambda run_dir: [sys.executable, "-c", "pass"]
     )
+    # process_time covers this process only, not the spawned child.
     start = time.process_time()
     res = _validate(repo)
     elapsed = time.process_time() - start

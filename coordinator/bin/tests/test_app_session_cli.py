@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.machinery
 import importlib.util
 import io
+import json
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
@@ -168,8 +169,6 @@ def _started(run_dir, budget=10):
 
 
 def _run_validate(argv, route_side_effect, tmp_path, result=None):
-    import json
-
     if result is not None:
         (Path(tmp_path) / "result.json").write_text(json.dumps(result), encoding="utf-8")
     clock = _Clock()
@@ -217,7 +216,7 @@ class TestValidateVerb(unittest.TestCase):
             final,
         )
         self.assertEqual(code, 0)
-        self.assertEqual(__import__("json").loads(out), final)
+        self.assertEqual(json.loads(out), final)
         op, params, _ = route_mock.call_args.args[:3]
         self.assertEqual(op, "app_session.validate")
         self.assertEqual(
@@ -238,7 +237,7 @@ class TestValidateVerb(unittest.TestCase):
             ["validate", "--key", "web"], [refusal], self.run_dir
         )
         self.assertEqual(code, 5)
-        self.assertEqual(__import__("json").loads(out), refusal)
+        self.assertEqual(json.loads(out), refusal)
         route_mock.assert_called_once()
 
     def test_incomplete_result_exits_5(self):
@@ -252,14 +251,14 @@ class TestValidateVerb(unittest.TestCase):
         nc = {"ok": True, "configured": False}
         code, out, *_ = _run_validate(["validate", "--key", "web"], [nc], self.run_dir)
         self.assertEqual(code, 0)
-        self.assertEqual(__import__("json").loads(out), nc)
+        self.assertEqual(json.loads(out), nc)
 
     def test_lapse_exits_5_and_tears_down(self):
         code, out, _, route_mock, _ = _run_validate(
             ["validate", "--key", "web"], [_started(self.run_dir, budget=3), {"ok": True}], self.run_dir
         )
         self.assertEqual(code, 5)
-        parsed = __import__("json").loads(out)
+        parsed = json.loads(out)
         self.assertFalse(parsed["ok"])
         self.assertEqual(parsed["stage"], "sweep")
         self.assertEqual(route_mock.call_count, 2)

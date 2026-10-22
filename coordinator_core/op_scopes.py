@@ -619,6 +619,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "fleet.scratch_hygiene":                 "none",
     "fleet.archive_sweep_status":            "common_dir",
     "fleet.migrate_handoff_vocabulary":       "common_dir",
+    "fleet.migrate_prose_queue":              "show_top",
     "fleet.archive_terminal_sizings":         "common_dir",
     "git_branch.compute_descendant_tip":      "common_dir",
     "git_branch.detect_unpushed_commits":     "show_top",

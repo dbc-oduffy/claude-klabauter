@@ -22,7 +22,7 @@ Usage:
                                     [--wait <seconds>] [--repo-root <path>]
 
     validate calls app_session.validate, then polls the run dir's result.json
-    and prints it verbatim. --wait (integer seconds) re-calls the op every 2 s
+    and prints it as indented, key-sorted JSON. --wait (integer seconds) re-calls the op every 2 s
     while it refuses with stage "guard". On a poll lapse it tears down
     "<key>@validate" and prints an ok:false stage "sweep" timeout result.
 

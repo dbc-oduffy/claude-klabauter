@@ -514,7 +514,8 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.fleet.archive_paper_trail", 'registers "fleet.archive_paper_trail"'),
     ("coordinator_core.ops.fleet.archive_queue_entry", 'registers "fleet.archive_queue_entry"'),
     ("coordinator_core.ops.fleet.migrate_handoff_vocabulary", 'registers "fleet.migrate_handoff_vocabulary"'),
-    ("coordinator_core.ops.fleet.archive_sizings", 'registers "fleet.archive_terminal_sizings"'),
+    ("coordinator_core.ops.fleet.migrate_prose_queue", 'registers "fleet.migrate_prose_queue"'),
+    ("coordinator_core.ops.fleet.archive_sizings",'registers "fleet.archive_terminal_sizings"'),
     (
         "coordinator_core.ops.orphan_branch_sweep",
         'registers "git_branch.compute_descendant_tip", "git_branch.detect_unpushed_commits", '

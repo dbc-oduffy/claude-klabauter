@@ -108,6 +108,7 @@ MUTATES = [
 ]
 
 import datetime
+from dataclasses import dataclass
 import functools
 import hashlib
 import json
@@ -915,7 +916,20 @@ def _write_out_path_excl(out_path: str, content: str) -> str:
         return candidate
 
 
-def append_queue_entry(
+@dataclass(frozen=True)
+class PreparedEntry:
+    """A validated, path-resolved queue entry that has not been written."""
+
+    fields: dict
+    digest12: str
+    slug: Optional[str]
+    out_path: str
+    yaml_content: str
+    schema: str
+    title: Optional[str]
+
+
+def prepare_queue_entry(
     schema: str,
     *,
     title: Optional[str] = None,
@@ -952,8 +966,10 @@ def append_queue_entry(
     session_id: Optional[str] = None,
     **schema_fields: object,
 ) -> dict:
-    """Append one YAML entry to the appropriate queue state directory.
+    """Finalise, validate and digest one queue entry; resolve its path; write nothing.
 
+    Shared by ``append_queue_entry`` (writes) and dry-run callers, so preview and act
+    run one validation path. Returns a ``PreparedEntry``. Creates no directory.
     Byte-parity port of coordinator-queue-append main() write path.
 
     Parameters mirror coordinator-queue-append CLI flags (underscored).
@@ -993,7 +1009,7 @@ def append_queue_entry(
     never derives ``--session`` from its own ``_resolve_session_id()``.
 
     Returns:
-        {out_path: str, schema: str, slug: str, title: str}
+        PreparedEntry
 
     Raises:
         ValueError — invalid schema, missing required field, invalid enum value.
@@ -1133,22 +1149,41 @@ def append_queue_entry(
         session=fields.get("session"),
         created=created,
     )
+    slug = _slug_from_title(title) if title is not None else None
+    return PreparedEntry(
+        fields=fields,
+        digest12=digest12,
+        slug=slug,
+        out_path=out_path,
+        yaml_content=yaml_content,
+        schema=schema,
+        title=title,
+    )
+
+
+def append_queue_entry(schema: str, **kwargs: object) -> dict:
+    """Prepare one entry (see ``prepare_queue_entry`` for kwargs) and write it.
+
+    Returns {out_path: str, schema: str, slug: str, title: str}. Byte output and
+    filename equal what the pre-split single function produced.
+    """
+    prepared = prepare_queue_entry(schema, **kwargs)
+    out_path = prepared.out_path
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
 
-    # Write-primitive selection (C4). `workstream-event` is append-only-by-design
-    # (two events sharing a base path must BOTH survive) -> exclusive-create +
-    # retry-with-suffix (_write_out_path_excl). Every other schema — `workstream`
-    # definitions (single-file-per-id, a second write REWRITES the canonical file)
-    # AND the five pre-existing content-keyed schemas (AC8, unchanged behavior) —
-    # keeps the write-temp + atomic-rename overwrite shape this module already used
-    # unconditionally before C4 (_write_out_path_overwrite).
+    # workstream-event is append-only (exclusive-create + retry-with-suffix); every
+    # other schema keeps write-temp + atomic-rename overwrite.
     if schema == "workstream-event":
-        final_path = _write_out_path_excl(out_path, yaml_content)
+        final_path = _write_out_path_excl(out_path, prepared.yaml_content)
     else:
-        final_path = _write_out_path_overwrite(out_path, yaml_content)
+        final_path = _write_out_path_overwrite(out_path, prepared.yaml_content)
 
-    slug = _slug_from_title(title) if title is not None else None
-    return {"out_path": final_path, "schema": schema, "slug": slug, "title": title}
+    return {
+        "out_path": final_path,
+        "schema": schema,
+        "slug": prepared.slug,
+        "title": prepared.title,
+    }
 
 
 # ---------------------------------------------------------------------------

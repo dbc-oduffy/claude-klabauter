@@ -397,6 +397,7 @@ OP_MODULE_MAP: Dict[str, str] = {
     "fleet.archive_paper_trail":              "coordinator_core.ops.fleet.archive_paper_trail",
     "fleet.archive_queue_entry":              "coordinator_core.ops.fleet.archive_queue_entry",
     "fleet.migrate_handoff_vocabulary":       "coordinator_core.ops.fleet.migrate_handoff_vocabulary",
+    "fleet.migrate_prose_queue":              "coordinator_core.ops.fleet.migrate_prose_queue",
     "fleet.archive_terminal_sizings":         "coordinator_core.ops.fleet.archive_sizings",
     "git_branch.compute_descendant_tip":      "coordinator_core.ops.orphan_branch_sweep",
     "git_branch.detect_unpushed_commits":     "coordinator_core.ops.orphan_branch_sweep",

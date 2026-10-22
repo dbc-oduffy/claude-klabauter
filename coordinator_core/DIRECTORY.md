@@ -170,6 +170,7 @@ Confirm→act (`dry_run:true`/`dry_run:false`) wire contract; git-mv terminal ar
 | `delete_superseded_decisions.py` | `fleet.delete_superseded_decisions` | Cap-bounded git-rm of `status:superseded` `docs/decisions/*.md` records, gated by a one-grep live-citation refusal (the scan lives in `_decision_citations.py`) and a max-id floor; delete lands via `_common.rm_and_commit` |
 | `memo_send.py` | `memo.send` | MUTATING UDS op handler for cross-repo memo send |
 | `memo_sent_records.py` | — | Stdlib-only leaf: write-once per-send records under `memo-outbox/sent-records/`, the `iter_view` bounded ledger view derived from record filenames, and `migrate_legacy_ledgers` |
+| `migrate_prose_queue.py` | `fleet.migrate_prose_queue` | dry_run/act converter of prose-format `state/{improvement-queue,bug-backlog,debt-backlog}` files (pipe, table, DSR) into per-entry YAML via `queue_append.append_queue_entry`; own-tree, no commit |
 | `prune_bugs.py` | `fleet.prune_closed_bugs` | Prunes closed bug-backlog entries |
 | `reap_integrated_findings.py` | `fleet.reap_integrated_findings` | Reaps marker-present (integrated) review-findings sidecars from `state/review-trail/findings/`, no age gate — leg (a) of the DR-218 review-trail cleanup split; custom (non-two-phase) result shape |
 | `reap_unintegrated_findings.py` | `fleet.reap_unintegrated_findings` | Reaps aged (>14d), marker-absent (unintegrated) review-findings sidecars from `state/review-trail/findings/` — leg (b) of the DR-218 review-trail cleanup split; custom (non-two-phase) result shape |

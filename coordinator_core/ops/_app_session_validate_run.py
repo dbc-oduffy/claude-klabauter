@@ -110,6 +110,7 @@ def _kill_tree(pid: int, expected_epoch: Optional[int]) -> None:
                 pass
         psutil.wait_procs(alive, timeout=_TERM_GRACE_S)
     except Exception:
+        # Trap: best-effort; a missing psutil also lands here and leaves the tree running.
         pass
 
 
@@ -281,7 +282,11 @@ def run(
     driver_factory: Optional[DriverFactory] = None,
     probe: Optional[BrowserProbe] = None,
 ) -> Dict[str, Any]:
-    """Execute one validate run and return the result dict (also written to ``result.json``)."""
+    """Execute one validate run and return the result dict (also written to ``result.json``).
+
+    Trap: ``read_run_spec`` and the lock re-stamp run before the guarded block, so a
+    corrupt ``spec.json`` raises with no ``result.json`` and the op-held lock unreleased.
+    """
     run_dir = Path(run_dir)
     spec = contract.read_run_spec(run_dir)
     pid = os.getpid()
@@ -352,7 +357,7 @@ def run(
             result = {
                 "ok": False,
                 "configured": True,
-                "stage": "sweep" if server is not None else "build",
+                "stage": "sweep" if server is not None else ("build" if state is not None else "config"),
                 "error": f"{type(exc).__name__}: {exc}",
             }
     finally:
