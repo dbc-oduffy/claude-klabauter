@@ -84,6 +84,8 @@ def test_posix_run_uses_real_governor_signal_branch(monkeypatch, capsys):
     gov = mod._load_host().load_governor(GOVERNOR)
     sent = []
     monkeypatch.setattr(gov, "psutil", None)
+    # Windows' signal module has no SIGSTOP/SIGCONT; stand-ins keep the POSIX branch testable there.
+    monkeypatch.setattr(gov, "signal", SimpleNamespace(SIGSTOP=19, SIGCONT=18))
     monkeypatch.setattr(gov.os, "kill", lambda pid, sig: sent.append((pid, sig)))
     monkeypatch.setattr(gov, "list_procs", lambda: [_proc(5, 0, "w"), _proc(6, 5, "w")])
     assert mod.main(["suspend", "5"], governor=gov, platform="linux") == 0

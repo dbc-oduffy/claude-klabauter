@@ -85,6 +85,14 @@ CANON = frozenset({"shipped", "abandoned", "continued", "closed"})
 #   above, are themselves derived-consumer hits by the module's stated fixed
 #   point (see module docstring) — its CANON-overlapping literals are the
 #   exemption table itself, not a hand-enumeration of the vocabulary.
+#
+# - Three non-handoff status enums gained `closed` (2e5b90fc0f, the plan/goal
+#   `closed` status): PLAN_TERMINAL_STATUS in assert-no-terminal-plans-in-live.py,
+#   the goal _STATUS_MAP keys in emit-goal-from-artifact.py, and the plan-status
+#   display order in emit_artifact_shape_contract.py. `closed` + `abandoned` is now
+#   a 2-token overlap with CANON on each, but every one is a plan/goal axis, not
+#   handoff deployment_state; each is exempted by its exact literal so a drift in
+#   that literal still trips the check.
 _KNOWN_OVERLAP_EXEMPTIONS: dict[str, frozenset[frozenset[str]]] = {
     # `closed` joined the PLAN status vocabulary (plan axis, not handoff deployment_state),
     # so these plan/goal status enumerations now share two tokens with CANON by coincidence.
@@ -107,6 +115,16 @@ _KNOWN_OVERLAP_EXEMPTIONS: dict[str, frozenset[frozenset[str]]] = {
         {
             frozenset({"shipped", "abandoned", "superseded"}),
             frozenset({"active", "paused", "shipped", "abandoned"}),
+            # The three plan/goal exemptions above, by the same fixed point.
+            frozenset({"abandoned", "closed", "implemented", "superseded"}),
+            frozenset({"abandoned", "achieved", "active", "closed"}),
+            frozenset(
+                {
+                    "abandoned", "approved", "blocked", "closed", "closed_partial",
+                    "deferred", "draft", "executing", "implemented", "landed",
+                    "reviewed", "superseded",
+                }
+            ),
         }
     ),
 }
