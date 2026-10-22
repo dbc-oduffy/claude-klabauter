@@ -2326,7 +2326,11 @@ def amend_research(root: Path, sizing: str, given: dict[str, Any]) -> dict[str, 
             "targets": given.get(
                 "targets", [f"{t['source']}={t['ref']}" for t in prior.get("targets") or []]
             ),
-            "seeds": given.get("seeds", [f"{s['kind']}={s['url']}" for s in prior.get("seeds") or []]),
+            "seeds": (
+                []
+                if given.get("clear_seeds") and not given.get("seeds")
+                else given.get("seeds", [f"{s['kind']}={s['url']}" for s in prior.get("seeds") or []])
+            ),
             "questions": given.get("questions", prior.get("questions") or []),
             "destination": given.get("destination", prior.get("destination")),
             "question_mode": given.get("question_mode", prior.get("question_mode")),
@@ -2338,6 +2342,19 @@ def amend_research(root: Path, sizing: str, given: dict[str, Any]) -> dict[str, 
                 ],
             ),
         }
+        if given.get("sources") and merged["seeds"]:
+            from coordinator_core.ops import _research_contract as rc
+
+            stranded = [
+                s for s in merged["seeds"]
+                if rc.SEED_KIND_SOURCE.get(s.partition("=")[0]) not in (None, *merged["sources"])
+            ]
+            if stranded:
+                raise MutateAbort(
+                    f"--research-source {','.join(merged['sources'])} excludes the source of seeds "
+                    f"{', '.join(stranded)}; clear them with --clear-research-seeds "
+                    "or replace them with --research-seed <kind>=<url>"
+                )
         block, errors = build_research_block(
             merged["value_class"], merged["appetite"], list(merged["sources"]), merged["depth"],
             list(merged["targets"]), list(merged["questions"]), merged["destination"],
@@ -2412,7 +2429,8 @@ def _usage(prog: str, stream=None) -> int:
         "    [--write <state/sizings/x.yaml> [--json (print the decision instead of 'written: <path>')]\n"
         "    [--verbatim-turns A-B | --no-verbatims]\n"
         "    [--relayed-ask-file <path> (register only that text; embedded PM turns go to unrelated_turns)]]\n"
-        "or: --amend-research <state/sizings/x.yaml> --research-* ... (rewrites only the research block)\n"
+        "or: --amend-research <state/sizings/x.yaml> --research-* ... (rewrites only the research block;\n"
+        "    --clear-research-seeds drops every seed, --research-seed replaces them)\n"
         "or: --xl-exit shape|roadmap|accept_multi_session --pm-quote <str>\n"
         "    [--decided-on YYYY-MM-DD] --write <state/sizings/x.yaml>\n"
         "or: --pm-resolution <key> --pm-quote <str>\n"
@@ -2567,6 +2585,7 @@ def main(argv: list[str]) -> int:
     research_depth = None
     research_targets: list[str] = []
     research_seeds: list[str] = []
+    clear_research_seeds = False
     research_questions: list[str] = []
     research_question_mode = None
     research_question_targets: list[str] = []
@@ -2719,6 +2738,10 @@ def main(argv: list[str]) -> int:
         elif tok == "--research-target" and i + 1 < len(argv):
             research_targets.append(argv[i + 1])
             i += 2
+        elif tok == "--clear-research-seeds":
+            clear_research_seeds = True
+            i += 1
+            continue
         elif tok == "--research-seed" and i + 1 < len(argv):
             research_seeds.append(argv[i + 1])
             i += 2
@@ -2923,7 +2946,7 @@ def main(argv: list[str]) -> int:
                 ("questions", research_questions), ("destination", research_destination),
                 ("question_mode", research_question_mode),
                 ("question_targets", research_question_targets),
-                ("seeds", research_seeds),
+                ("seeds", research_seeds), ("clear_seeds", clear_research_seeds),
             )
             if v
         }

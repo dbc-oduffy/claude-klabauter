@@ -9,6 +9,7 @@ interpreter body or `xargs` (DR-258), so this is a speedbump and the Stop-time l
 from __future__ import annotations
 
 import os
+import re
 from typing import Any, Mapping, Optional, Tuple
 
 from coordinator_core.bash_guards import _write_bump_sink_shapes as _sinks
@@ -63,17 +64,49 @@ def _first_below(nt, np: str, nn: str, root: str) -> Optional[Tuple[str, str]]:
     return (np[: len(base)], name) if name else None
 
 
+_MSYS_DRIVE_SHAPE = re.compile(r"^/[A-Za-z](?:/|$)")
+
+
 def new_top_level_entry(
     target: str,
     cwd: Optional[str],
     *,
     bare_slash_is_drive_root: bool = False,
     env: Optional[Mapping[str, str]] = None,
+    interpreter: bool = False,
 ) -> Optional[str]:
     """Leaf name of the new drive-root or home top-level entry `target` would create, else None.
 
     A target directly under home is the home-root pair's case and returns None here. Fails open.
+    `interpreter=True` (a Windows-native interpreter resolves `/x/...` on the cwd drive, MSYS does
+    not) also judges the cwd-drive reading `<cwd drive>:\\x\\...` and flags either reading.
     """
+    hit = _new_top_level_entry(
+        target, cwd, bare_slash_is_drive_root=bare_slash_is_drive_root, env=env
+    )
+    if hit or not interpreter:
+        return hit
+    try:
+        stripped = (target or "").strip()
+        if not (_sinks._host_is_windows() and _MSYS_DRIVE_SHAPE.match(stripped)):
+            return None
+        cwd_native = _sinks.translate_msys_path(cwd) if cwd else None
+        drive = _sinks._native_path().splitdrive(cwd_native or "")[0]
+        if not drive or drive.startswith("\\\\") or drive[0].upper() == stripped[1].upper():
+            return None
+        alt = drive + "\\" + stripped.lstrip("/").replace("/", "\\")
+        return _new_top_level_entry(alt, cwd, bare_slash_is_drive_root=False, env=env)
+    except Exception:
+        return None
+
+
+def _new_top_level_entry(
+    target: str,
+    cwd: Optional[str],
+    *,
+    bare_slash_is_drive_root: bool = False,
+    env: Optional[Mapping[str, str]] = None,
+) -> Optional[str]:
     try:
         if not target or not target.strip():
             return None

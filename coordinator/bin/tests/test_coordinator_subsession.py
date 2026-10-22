@@ -336,7 +336,71 @@ def test_fired_and_clean_reports_sizing_and_prepped_plan(tmp_path, monkeypatch):
     # the stub's own new files leave the tree dirty (untracked) -- a genuinely
     # "fired and clean" child would commit them, which this fixture doesn't.
     assert report["diff_bearing"] is True
-    assert report["terminal_gate"] == "pending-R8"
+    # dirty-tree-only diff: no child commit exists for the op to judge
+    assert report["terminal_gate"]["verdict"] == "unresolved"
+
+
+def _commit_with_session(repo: Path, name: str, session_id: str) -> None:
+    no_window = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    (repo / name).write_text("x", encoding="utf-8")
+    subprocess.run(["git", "-C", str(repo), "add", name], check=True, creationflags=no_window)
+    subprocess.run(
+        ["git", "-C", str(repo), "commit", "-q", "-m", f"c\n\nSession-Id: {session_id}"],
+        check=True, creationflags=no_window,
+    )
+
+
+def _gate(tmp_path, monkeypatch, review_op, *, commit=True, engine=True):
+    repo = tmp_path / "gate-repo"
+    repo.mkdir()
+    _git_init(repo)
+    monkeypatch.setattr(launcher, "_load_terminal_review_op", lambda root: review_op)
+    snap = launcher._FidelitySnapshot(repo, tmp_path if engine else None)
+    snap.sizing_dir = None
+    if commit:
+        _commit_with_session(repo, "a.py", "sess-1")
+    after = launcher._git_snapshot(repo)
+    diff = after != snap.git_before
+    return launcher._terminal_gate_verdict(snap, after, diff), snap
+
+
+def test_terminal_gate_refuse(tmp_path, monkeypatch):
+    seen = []
+
+    def op(payload):
+        seen.append(payload)
+        return {"message": "refused: 1 commit\nmore"}
+
+    verdict, snap = _gate(tmp_path, monkeypatch, op)
+    assert verdict == {"verdict": "refuse", "reason": "refused: 1 commit"}
+    assert seen == [{"session_id": "sess-1", "cwd": str(snap.repo_root)}]
+
+
+def test_terminal_gate_pass_only_when_op_called_and_silent(tmp_path, monkeypatch):
+    verdict, _ = _gate(tmp_path, monkeypatch, lambda payload: None)
+    assert verdict["verdict"] == "pass"
+
+
+def test_terminal_gate_absent_when_op_unloadable_never_pass(tmp_path, monkeypatch):
+    verdict, _ = _gate(tmp_path, monkeypatch, None)
+    assert verdict["verdict"] == "absent"
+
+
+def test_terminal_gate_unresolved_when_op_raises(tmp_path, monkeypatch):
+    def op(payload):
+        raise RuntimeError("boom")
+
+    verdict, _ = _gate(tmp_path, monkeypatch, op)
+    assert verdict["verdict"] == "unresolved"
+
+
+def test_terminal_gate_not_applicable_without_diff(tmp_path, monkeypatch):
+    verdict, _ = _gate(tmp_path, monkeypatch, lambda payload: None, commit=False)
+    assert verdict["verdict"] == "not-applicable"
+
+
+def test_terminal_gate_op_loader_none_without_engine_root():
+    assert launcher._load_terminal_review_op(None) is None
 
 
 def test_no_sizing_reports_sizing_fired_false(tmp_path, monkeypatch):

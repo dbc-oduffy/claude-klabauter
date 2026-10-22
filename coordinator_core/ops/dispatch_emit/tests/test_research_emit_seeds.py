@@ -60,7 +60,9 @@ def _brief(repo: Path, ctx: dict, segment: str) -> str:
 
 
 def test_seed_kinds_route_to_their_own_pipelines(repo):
-    rel = _seeded_sizing(repo, [("repo", URL_A), ("video", URL_B), ("doc", URL_C)])
+    rel = _seeded_sizing(
+        repo, [("repo", URL_A), ("video", URL_B), ("doc", URL_C)], "--research-target", "notebooklm=A"
+    )
     ctx = _setup(repo, rel)
     assert ctx["shape"]["pipelines"] == ["nlm-preflight", "repo", "notebooklm", "web"]
     names = [op_module.segment_name(m, i) for m, i, _ in ctx["segments"]]
@@ -104,12 +106,22 @@ def test_a_notebooklm_segment_without_notebooks_or_video_seeds_still_refuses(rep
     )
 
 
+def test_video_seed_without_notebooks_refuses_naming_the_seed_and_the_clearing_flag(repo):
+    rel = _seeded_sizing(repo, [("video", URL_B)])
+    with pytest.raises(PipelineEmitRefused) as exc:
+        _setup(repo, rel)
+    text = " ".join(exc.value.reasons)
+    assert "needs its notebooks" in text and f"video={URL_B}" in text and "--clear-research-seeds" in text
+
+
 def test_the_emit_spawns_no_subprocess(repo, monkeypatch):
     def _fail(*a, **k):
         raise AssertionError("emit spawned a process")
 
     monkeypatch.setattr(subprocess, "Popen", _fail)
-    rel = _seeded_sizing(repo, [("repo", URL_A), ("video", URL_B), ("doc", URL_C)])
+    rel = _seeded_sizing(
+        repo, [("repo", URL_A), ("video", URL_B), ("doc", URL_C)], "--research-target", "notebooklm=A"
+    )
     assert _setup(repo, rel)["segments"]
 
 

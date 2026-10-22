@@ -224,15 +224,34 @@ def _drive_baseline_path() -> Path:
     return Path(env) if env else settings_home() / "state" / "drive-root-baseline.json"
 
 
+def _fixed_drive_roots() -> list:
+    """Anchors of every fixed local drive (never removable, network or optical); [] off Windows."""
+    if os.name != "nt":
+        return []
+    try:
+        import ctypes
+
+        mask = ctypes.windll.kernel32.GetLogicalDrives()
+        roots = []
+        for i in range(26):
+            if mask & (1 << i):
+                root = f"{chr(65 + i)}:\\"
+                if ctypes.windll.kernel32.GetDriveTypeW(root) == 3:
+                    roots.append(root)
+        return roots
+    except Exception:
+        return []
+
+
 def _drive_roots(cwd: str, repo_root: Optional[str]) -> list:
     configured = configured_drive_roots()
     if configured:
         return list(configured)
-    anchors: list = []
+    anchors: list = _fixed_drive_roots()
     for p in (cwd, repo_root, str(Path.home())):
         if p:
             anchor = Path(p).anchor
-            if anchor and anchor not in anchors:
+            if anchor and anchor.upper() not in (a.upper() for a in anchors):
                 anchors.append(anchor)
     return anchors
 

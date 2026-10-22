@@ -1351,11 +1351,21 @@ def _research_route_setup(
         if key_refusals:
             reasons.extend(f"pipeline {pipeline!r}: {r}" for r in key_refusals)
             continue
-        if "notebooks" in manifest.lists and not inputs.lists.get("notebooks") and pipeline not in seed_briefs:
-            reasons.append(
+        if "notebooks" in manifest.lists and not inputs.lists.get("notebooks"):
+            reason = (
                 f"pipeline {pipeline!r} needs its notebooks: record them on the sizing with "
                 "sizing-assemble --research-target notebooklm=<letter or id>, or pass --list notebooks=A,B"
             )
+            forcing = [
+                f"{s.get('kind')}={s.get('url')}" for s in seeds if rc.SEED_KIND_SOURCE.get(s.get("kind")) == pipeline
+            ]
+            if forcing:
+                reason += (
+                    f"; seeds forcing {pipeline}: {', '.join(forcing)}; clear them with "
+                    "sizing-assemble --amend-research <sizing> --clear-research-seeds "
+                    "(or replace them with --research-seed <kind>=<url>)"
+                )
+            reasons.append(reason)
             continue
         try:
             segments.append((manifest, inputs, validate(manifest, inputs)))

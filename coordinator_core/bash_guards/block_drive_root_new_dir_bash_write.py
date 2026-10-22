@@ -33,6 +33,7 @@ from coordinator_core.bash_guards._write_bump_sink_shapes import (
     _native_path,
     extract_write_sink_targets_for_segment,
     extract_write_sink_targets_powershell,
+    resolve_relative,
     translate_msys_path,
 )
 from coordinator_core.bash_guards.block_home_root_bash_write import _expand_home_var
@@ -190,6 +191,50 @@ def _new_entry(cmd: str, cwd: Optional[str], dialect: Optional[Dialect], env: Op
     return None
 
 
+_INTERPRETER_RE = re.compile(
+    r"(?<![\w./\\-])(?:python(?:3(?:\.\d+)?)?|py|pythonw|node|nodejs|deno|bun|ruby|perl)(?:\.exe)?(?=[\s;&|]|$)",
+    re.IGNORECASE,
+)
+_LEADING_CD_RE = re.compile(r"""^\s*cd\s+(?:/d\s+)?("[^"]+"|'[^']+'|[^\s;&|]+)\s*(?:&&|;)""")
+_MSYS_DRIVE_CAND_RE = re.compile(r"^/[A-Za-z](?:/|$)")
+
+
+def _effective_cwd(cmd: str, cwd: Optional[str]) -> Optional[str]:
+    """`cwd` after a leading `cd <dir> &&` in the same command."""
+    m = _LEADING_CD_RE.match(cmd)
+    if not m:
+        return cwd
+    target = m.group(1).strip("\"'")
+    resolved = resolve_relative(cwd or "", target)
+    return resolved or cwd
+
+
+def _interpreter_new_entry(cmd: str, cwd: Optional[str], env: Optional[Mapping[str, str]]) -> Optional[str]:
+    """Both readings of each `/x/...` literal (MSYS and cwd-drive) when a native interpreter runs."""
+    if not _host_is_windows() or not _INTERPRETER_RE.search(cmd):
+        return None
+    eff = _effective_cwd(cmd, cwd)
+    for cand in _CAND_RE.findall(cmd):
+        if _MSYS_DRIVE_CAND_RE.match(cand):
+            name = new_top_level_entry(cand, eff, env=env, interpreter=True)
+            if name:
+                return name
+    return None
+
+
+def _deny(name: str) -> Dict[str, Any]:
+    return apply_guard_level(
+        "block-drive-root-new-dir-bash-write",
+        {
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": deny_reason(name),
+            }
+        },
+    )
+
+
 def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     try:
         tool_name = payload.get("tool_name") or ""
@@ -203,20 +248,12 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         env = _env(payload)
         dialect = dialect_from_tool_name(tool_name)
         cmd = cmd.replace("\r", "")
+        name = _interpreter_new_entry(cmd, cwd, env)
+        if name:
+            return _deny(name)
         if not _can_create_new(cmd, cwd, dialect, env):
             return None
         name = _new_entry(cmd, cwd, dialect, env)
-        if not name:
-            return None
-        return apply_guard_level(
-            "block-drive-root-new-dir-bash-write",
-            {
-                "hookSpecificOutput": {
-                    "hookEventName": "PreToolUse",
-                    "permissionDecision": "deny",
-                    "permissionDecisionReason": deny_reason(name),
-                }
-            },
-        )
+        return _deny(name) if name else None
     except Exception:
         return None

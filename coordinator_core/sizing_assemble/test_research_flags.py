@@ -355,3 +355,39 @@ def test_amend_question_target_merges_prior_targets_back_to_flag_spelling(repo: 
     sa.main(["--amend-research", rel, "--research-question-mode", "combine"])
     assert captured["args"][7] == "combine"
     assert captured["args"][8] == ["2=repo:."]
+
+
+def _seeded_video_sizing(repo: Path) -> tuple[str, Path]:
+    _run(repo, "--research-class", "corpus", "--research-source", "notebooklm",
+         "--research-seed", "video=https://youtu.be/x", "--research-seed", "repo=https://h/o/r")
+    rel = Path(record_homes.record_path("", "sizings", _NAME)).as_posix()
+    return rel, Path(record_homes.record_path(str(repo), "sizings", _NAME))
+
+
+def test_amend_source_excluding_a_seed_source_is_refused_naming_seeds_and_the_flag(
+    repo: Path, capsys
+) -> None:
+    rel, path = _seeded_video_sizing(repo)
+    capsys.readouterr()
+    assert sa.main(["--amend-research", rel, "--research-source", "repo"]) == sa.EXIT_BUSINESS_FAIL
+    err = capsys.readouterr().err
+    assert "video=https://youtu.be/x" in err and "--clear-research-seeds" in err
+    assert len(yaml.safe_load(path.read_text(encoding="utf-8"))["research"]["seeds"]) == 2
+
+
+def test_clear_research_seeds_drops_them_and_lets_the_source_amend_land(repo: Path) -> None:
+    rel, path = _seeded_video_sizing(repo)
+    code = sa.main(["--amend-research", rel, "--clear-research-seeds",
+                    "--research-source", "repo", "--research-target", "repo=a/b"])
+    assert code == sa.EXIT_OK
+    research = yaml.safe_load(path.read_text(encoding="utf-8"))["research"]
+    assert "seeds" not in research and research["sources"] == ["repo"]
+
+
+def test_research_seed_on_amend_replaces_the_prior_seeds(repo: Path) -> None:
+    rel, path = _seeded_video_sizing(repo)
+    code = sa.main(["--amend-research", rel, "--research-seed", "repo=https://h/o/r2",
+                    "--research-source", "repo"])
+    assert code == sa.EXIT_OK
+    research = yaml.safe_load(path.read_text(encoding="utf-8"))["research"]
+    assert research["seeds"] == [{"kind": "repo", "url": "https://h/o/r2"}]

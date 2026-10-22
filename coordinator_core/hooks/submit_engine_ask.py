@@ -472,9 +472,19 @@ def _fan_tail(root: Path, reply: Mapping[str, Any], fired_run: str) -> str:
     parts = [f"Reply: {json.dumps(frozen)}."]
     if others:
         parts.append("Fire the listed runs now, one call each, this turn: " + " ".join(others))
-    held = [r.run_id for r in runs if r.status in ("after", "queued")]
-    if held:
-        parts.append(f"Held runs ({', '.join(held)}) are named by the close of the run that frees them.")
+    after = [r.run_id for r in runs if r.status == "after"]
+    queued = [r.run_id for r in runs if r.status == "queued"]
+    if after:
+        parts.append(f"Waiting on a predecessor ({', '.join(after)}): named by the close of the run that frees them.")
+    if queued:
+        from coordinator_core.ops.dispatch_emit.ask_fanout_contract import concurrent_run_budget
+
+        # A queued run has no predecessor; the only thing holding it is this per-submission budget.
+        parts.append(
+            f"Queued by the per-submission run budget ({', '.join(queued)}): "
+            f"{concurrent_run_budget()} concurrent runs per submission (physical_cores // 4, "
+            "ask_fanout_contract.concurrent_run_budget); each sibling's close frees a slot and names the run it frees."
+        )
     parts.append("Each run's completion is its own wake.")
     return " ".join(parts)
 
