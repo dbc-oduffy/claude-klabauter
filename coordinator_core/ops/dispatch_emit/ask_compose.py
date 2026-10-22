@@ -1543,25 +1543,28 @@ def compose_ask_script(
     if fold_falsifier:
         b.append("  let _planFalsifier = null;")
         b.append("  " + _AS_PLAN_FALSIFIER_JS)
-    def _stage_act_parts(base: str, sizing: str, gated: str) -> tuple[str, ...]:
+    def _stage_params_js(sizing_js: str, gated_js: str) -> str:
+        """The complete XS stage params as one ``js:`` expression: sizing_path and gated inside it, never plan_path."""
+        return (
+            "js:JSON.stringify({ run_id: _runId, writes: _writes, cross_repo_approved: "
+            f"_crossRepoApproved, session_id: _SESSION_ID, sizing_path: {sizing_js}, gated: {gated_js} }})"
+        )
+
+    def _stage_act_parts(*params: str) -> tuple[str, ...]:
         """The closing act of the agent that just ran the gate: stage the arms with no plan agent to fold into.
 
-        ``base`` is the params object text carrying run_id, writes, cross_repo_approved and session_id;
-        ``sizing`` and ``gated`` are the values the XS params add. Each of the three is a literal or a
-        ``js:`` expression.
+        ``params`` are the parts of the complete params object (sizing_path and gated already inside it,
+        never plan_path), each a literal or a ``js:`` expression, so the agent splices nothing.
         """
         return (
             " When the gate reply carries its own `manifest_handle` (a ledger resume or an S resume stages itself), "
             "return {manifest_handle: <it verbatim>} as stage_reply; when it carries `manifest` holding an `error`, return "
             "{error: <that text>} as stage_reply; either way run no stage command. "
             "As your very last act otherwise, stage the run, but only when the gate reply's halt is null and its arm "
-            f"is XS: run `{_INVOKE} {OP_ASK_STAGE} '<params>'` once, <params> being the JSON object ",
-            base,
-            " with sizing_path ",
-            sizing,
-            " and gated ",
-            gated,
-            " added. Return its JSON reply verbatim as stage_reply (a manifest_handle, or the {\"error\": ...} refusal). "
+            f"is XS: run `{_INVOKE} {OP_ASK_STAGE} '<params>'` once, <params> being exactly this JSON object, "
+            "with no key added, dropped or renamed: ",
+            *params,
+            ". Return its JSON reply verbatim as stage_reply (a manifest_handle, or the {\"error\": ...} refusal). "
             "On any other arm run no stage command and return no stage_reply.",
         )
 
@@ -1576,12 +1579,7 @@ def compose_ask_script(
             "js:_sizingRel",
             " and return its estimate.tshirt as tshirt and its route as route.",
             *(
-                _stage_act_parts(
-                    "js:JSON.stringify({ run_id: _runId, writes: _writes, cross_repo_approved: "
-                    "_crossRepoApproved, session_id: _SESSION_ID })",
-                    "js:JSON.stringify(_sizingRel)",
-                    "js:JSON.stringify(_gated)",
-                )
+                _stage_act_parts(_stage_params_js("_sizingRel", "_gated"))
                 if stage_act and fold_stage
                 else ()
             ),
@@ -1648,11 +1646,12 @@ def compose_ask_script(
             )
         if fold_stage:
             _scout_base = json.dumps(
-                {"run_id": run_id, "cross_repo_approved": bool(cross_repo_approved), "session_id": session_id or ""}
-            )[:-1] + ', "writes": <your writes array>}'
-            scout_closing_tail += "".join(
-                _stage_act_parts(_scout_base, json.dumps(sizing_write_rel), "<your gated array>")
-            )
+                {
+                    "run_id": run_id, "cross_repo_approved": bool(cross_repo_approved),
+                    "session_id": session_id or "", "sizing_path": sizing_write_rel,
+                }
+            )[:-1] + ', "writes": <your writes array>, "gated": <your gated array>}'
+            scout_closing_tail += "".join(_stage_act_parts(_scout_base))
         scout_closing = (
             " Your closing acts, in order, once your fields are settled. (1) Run sizing-assemble once: "
             "replace each <field> in the command below with your own value, POSIX single-quoted (an "
@@ -1785,12 +1784,7 @@ def compose_ask_script(
                 else ""
             ),
             *(
-                _stage_act_parts(
-                    "js:JSON.stringify({ run_id: _runId, writes: _writes, cross_repo_approved: "
-                    "_crossRepoApproved, session_id: _SESSION_ID })",
-                    "js:JSON.stringify(" + _reword_sizing_js + ")",
-                    "js:JSON.stringify(_gated)",
-                )
+                _stage_act_parts(_stage_params_js(_reword_sizing_js, "_gated"))
                 if fold_stage
                 else ()
             ),
@@ -1962,12 +1956,7 @@ def compose_ask_script(
             *(
                 (
                     " Here the gate reply is your record command's reply.",
-                    *_stage_act_parts(
-                        "js:JSON.stringify({ run_id: _runId, writes: _writes, cross_repo_approved: "
-                        "_crossRepoApproved, session_id: _SESSION_ID })",
-                        "js:JSON.stringify(_sizingRel)",
-                        "js:JSON.stringify(_gated)",
-                    ),
+                    *_stage_act_parts(_stage_params_js("_sizingRel", "_gated")),
                 )
                 if fold_stage
                 else ()

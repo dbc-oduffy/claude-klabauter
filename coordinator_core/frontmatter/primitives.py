@@ -813,9 +813,11 @@ _ENGINE_DISPOSITION_RE = re.compile(r'^[ \t]*disposition:[ \t]*(open|coded)[ \t]
 _ENGINE_DISPOSITION_REF_RE = re.compile(r'^[ \t]*disposition_ref:')
 _ANY_DISPOSITION_RE = re.compile(r'^[ \t]*disposition:')
 _ENGINE_DISPOSITION_DETAIL_RE = re.compile(r'^[ \t]*disposition_detail:')
-_GATE_CLEARANCE_KEYS = ('cleared', 'cleared_evidence', 'closure_evidence')
+GATE_CLEARANCE_KEYS = frozenset({'cleared', 'cleared_evidence', 'closure_evidence'})
+"""The `external_gate` keys the engine writes on clearance. `approval_body_sha`
+ignores exactly these; every verb that writes a clearance key reads this set."""
 _GATE_CLEARANCE_RE = re.compile(
-    r'^[ \t]+(?:-[ \t]+)?(?:cleared|cleared_evidence|closure_evidence):(?![ \t]*false[ \t]*$)'
+    r'^[ \t]+(?:-[ \t]+)?(?:' + '|'.join(sorted(GATE_CLEARANCE_KEYS)) + r'):(?![ \t]*false[ \t]*$)'
 )
 
 
@@ -839,7 +841,7 @@ def _without_gate_clearance(row_lines: list[str]) -> list[str]:
     if not isinstance(gates, list):
         return row_lines
     loaded[0]['external_gate'] = [
-        {k: v for k, v in g.items() if k not in _GATE_CLEARANCE_KEYS} if isinstance(g, dict) else g
+        {k: v for k, v in g.items() if k not in GATE_CLEARANCE_KEYS} if isinstance(g, dict) else g
         for g in gates
     ]
     return yaml.safe_dump(
