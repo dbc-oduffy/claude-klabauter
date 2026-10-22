@@ -38,10 +38,12 @@ Wire params, census_set:
                        the caller's obligation to pass only PREPPED, not-CERTIFIED plans; the op does not
                        re-gate, and runs the census commands of every plan it is given.
     census_timeout   (int > 0, default 30) — seconds one command may run.
-    census_budget_ms (int >= 0, default 0) — the caller's remaining set budget; 0 = none.
+    census_budget_ms (int >= 0, default 0) — a PROCESS-time budget (parent plus census children)
+                       passed to ``revalidate_set`` as ``process_budget_ms``; 0 = the op's own 500.
 Reply, census_set: ``revalidate_set``'s reply (``plans``, ``spent_ms``, ``key_ms``,
-``memo_hits``, ``direct_runs``, ``covered``, ``census_plans``, ``pending``, ``order``) plus
-``process_ms``. The deadline is the earlier of the caller's budget and the op's guard share.
+``memo_hits``, ``direct_runs``, ``covered``, ``census_plans``, ``pending``, ``order``,
+``children_process_ms``, ``spawns``, ``inproc_runs``) plus ``process_ms`` = this thread's
+process ms + ``children_process_ms``. The wall deadline is the op's guard share alone.
 
 Wire params, apply: ``plan`` (str, required).
 Reply, apply: ``{"plan", "error", "derived", "residue", "changed"}`` — ``upgrade_plan``'s dict.
@@ -80,8 +82,9 @@ Negative-spec:
     created without a commit, or a ``.gitignore`` edit made without one, is therefore not seen
     until HEAD moves.
   - ``process_ms`` is this process's CPU time over the op body, an upper bound: concurrent ops
-    in one warm server share the clock. Census shell children are separate processes and
-    report their own cost in the census outcome.
+    in one warm server share the clock. Census shell children are separate processes: for
+    ``plan.census_set`` their reaped CPU is added into ``process_ms`` (``children_process_ms``);
+    for ``plan.mise_certify_probe`` it stays in the census outcome only.
 """
 
 from __future__ import annotations
@@ -127,6 +130,10 @@ _CORPUS_CACHE: dict = {}
 #: upgrade leg and the transport inside the guard under load; the guard is a runaway catch,
 #: never a target.
 _CENSUS_DEADLINE_SHARE = 0.5
+
+#: Process-time budget (parent plus reaped children) of one ``plan.census_set`` call when the
+#: caller sends none; the DR-344 bar.
+_CENSUS_PROCESS_BUDGET_MS = 500
 
 
 def _census_deadline(op: str) -> float:
@@ -389,14 +396,16 @@ def _census_set_handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     worktree_root = Path(main_worktree_root(repo_root))
     plans = [_resolve_plan(p.strip(), worktree_root) for p in raw]
     deadline = _census_deadline("plan.census_set")
-    if budget_ms > 0:
-        deadline = min(deadline, time.monotonic() + budget_ms / 1000.0)
     store = CensusStore.load(worktree_root)
     reply = _revalidator().revalidate_set(
         plans, worktree_root, timeout,
         deadline=deadline, head=_head_sha(worktree_root), store=store,
+        process_budget_ms=budget_ms if budget_ms > 0 else _CENSUS_PROCESS_BUDGET_MS,
     )
-    reply["process_ms"] = round((time.process_time() - started) * 1000.0, 3)
+    children_ms = reply.get("children_process_ms")
+    if not isinstance(children_ms, (int, float)) or isinstance(children_ms, bool):
+        children_ms = 0
+    reply["process_ms"] = round((time.process_time() - started) * 1000.0 + children_ms, 3)
     return reply
 
 

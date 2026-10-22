@@ -46,7 +46,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from coordinator_core.hooks._envelope import deny, no_advisory, payload_of, post_advisory
+from coordinator_core._hook_envelope import event_advisory
+from coordinator_core.hooks._envelope import deny, no_advisory, payload_of
 from coordinator_core.hooks.guard_manufactured_blocker import (
     _HANDOFF_PATTERNS,
     _OWNERSHIP_CUE_PATTERNS,
@@ -195,7 +196,7 @@ def _go_ask_advisory(payload: dict, text: str) -> dict:
     if _has_fired_this_session(payload, _GO_ASK_FIRED_MARKER):
         return no_advisory()
     _mark_fired_this_session(payload, _GO_ASK_FIRED_MARKER)
-    return post_advisory(_GO_ASK_ADVISORY_TEXT)
+    return event_advisory("Stop", _GO_ASK_ADVISORY_TEXT)
 
 
 def _git_root_walk(start: str) -> "Optional[str]":

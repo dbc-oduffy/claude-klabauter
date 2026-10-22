@@ -87,7 +87,8 @@ def test_the_op_passes_the_pinned_deadline_and_the_head(tmp_path, monkeypatch):
     before = time.monotonic()
     reply = _call({"plans": [A, B], "census_budget_ms": 1000, "census_timeout": 9}, common)
     guard_share = 8.0 * mod._CENSUS_DEADLINE_SHARE
-    assert stub.seen["deadline"] - before == pytest.approx(min(1.0, guard_share), abs=0.5)
+    assert stub.seen["deadline"] - before == pytest.approx(guard_share, abs=0.5)
+    assert stub.seen["process_budget_ms"] == 1000
     assert stub.seen["head"] == "a" * 40
     assert stub.seen["timeout"] == 9
     assert [p.name for p in stub.seen["plans"]] == [A.rsplit("/", 1)[1], B.rsplit("/", 1)[1]]
@@ -95,19 +96,7 @@ def test_the_op_passes_the_pinned_deadline_and_the_head(tmp_path, monkeypatch):
     assert reply["spent_ms"] == 7
 
 
-def test_a_budget_over_the_guard_share_is_capped_at_the_guard_share(tmp_path, monkeypatch):
-    common = _two_plans(tmp_path)
-    monkeypatch.setattr(ipc, "_timeout_for", lambda method, msg=None: 8.0)
-    stub = Stub()
-    monkeypatch.setattr(mod, "_revalidator", lambda: stub)
-    before = time.monotonic()
-    _call({"plans": [A], "census_budget_ms": 60_000}, common)
-    assert stub.seen["deadline"] - before == pytest.approx(
-        8.0 * mod._CENSUS_DEADLINE_SHARE, abs=0.5
-    )
-
-
-def test_a_zero_budget_passes_the_guard_share_alone(tmp_path, monkeypatch):
+def test_a_zero_budget_passes_the_ops_own_500ms_process_budget(tmp_path, monkeypatch):
     common = _two_plans(tmp_path)
     monkeypatch.setattr(ipc, "_timeout_for", lambda method, msg=None: 8.0)
     stub = Stub()
@@ -117,6 +106,24 @@ def test_a_zero_budget_passes_the_guard_share_alone(tmp_path, monkeypatch):
     assert stub.seen["deadline"] - before == pytest.approx(
         8.0 * mod._CENSUS_DEADLINE_SHARE, abs=0.5
     )
+    assert stub.seen["process_budget_ms"] == 500
+
+
+def test_process_ms_adds_the_children_process_ms(tmp_path, monkeypatch):
+    common = _two_plans(tmp_path)
+    stub = Stub()
+    stub.revalidate_set = lambda *a, **k: {"plans": {}, "pending": [], "children_process_ms": 250}
+    monkeypatch.setattr(mod, "_revalidator", lambda: stub)
+    reply = _call({"plans": [A]}, common)
+    assert reply["children_process_ms"] == 250
+    assert 250 <= reply["process_ms"] < 250 + 5000
+
+
+def test_a_reply_without_children_process_ms_sums_the_op_thread_alone(tmp_path, monkeypatch):
+    common = _two_plans(tmp_path)
+    monkeypatch.setattr(mod, "_revalidator", lambda: Stub())
+    reply = _call({"plans": [A]}, common)
+    assert 0 <= reply["process_ms"] < 5000
 
 
 @pytest.mark.parametrize("bad", [None, [], "a", [""], [7], [A, None]])

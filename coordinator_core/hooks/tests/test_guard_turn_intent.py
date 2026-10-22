@@ -271,7 +271,7 @@ def _heartbeat(root: Path, *, age_s: float = 60, holder: str = "gem-1"):
 
 
 def _advisory(result: dict) -> str:
-    return result.get("hookSpecificOutput", {}).get("additionalContext", "")
+    return result.get("systemMessage", "")
 
 
 def test_go_ask_advisory_fires_when_group_em_live(tmp_path):
@@ -279,7 +279,7 @@ def test_go_ask_advisory_fires_when_group_em_live(tmp_path):
     _heartbeat(root)
     result = _run({**payload, "last_assistant_message": GO_ASK})
     assert "asking for a go" in _advisory(result)
-    assert "decision" not in result
+    assert "hookSpecificOutput" not in result
 
 
 @pytest.mark.parametrize("age_s", [16 * 60, None])

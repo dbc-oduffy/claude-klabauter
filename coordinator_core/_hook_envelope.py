@@ -147,6 +147,22 @@ def post_advisory(context: str) -> dict:
 _STOP_EVENTS = frozenset({"Stop", "SubagentStop"})
 
 
+def event_advisory(event_name: str, context: str) -> dict:
+    """Return an advisory envelope valid for ``event_name``.
+
+    Stop/SubagentStop drop hookSpecificOutput and honour only top-level
+    decision/reason, continue/stopReason and systemMessage. An advisory never
+    holds the stop: it emits top-level ``systemMessage`` only, which reaches the
+    user, not the model. Only deny() holds a stop. Other events get the
+    post_advisory shape.
+    """
+    if event_name in _STOP_EVENTS:
+        envelope = {"systemMessage": _stamp(context)}
+        _record("event_advisory", envelope)
+        return envelope
+    return post_advisory(context)
+
+
 def deny(event_name: str, reason: str) -> dict:
     """Return a deny envelope with a human-readable reason.
 

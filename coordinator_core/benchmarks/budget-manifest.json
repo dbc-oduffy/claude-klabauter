@@ -114,9 +114,9 @@
       "_rationale": "One plan per call, the unit mise-certify's client loop issues. Same target register as plan.mise_prep_probe: one plan read, read_stamp over the same bytes, and (on CERTIFIED only) the census revalidation, whose shell children are separate processes and not in process_ms. No spawn_count_budget row: the op starts no process of its own."
     },
     "plan.census_set": {
-      "target_ms": 2100,
+      "target_ms": 500,
       "tolerance": {"kind": "relative", "value": 0.2},
-      "_rationale": "Measured with time.process_time of the op's own thread, census children excluded, in one fresh interpreter, two calls over the 153 PREPPED not-CERTIFIED approved plans with a 10s set budget: 2050ms (store as found) and 1829ms (warm). The target is the cold figure and is OVER the 500ms bar (DR-344), so it is a standing breach to close, not a budget: the cost was revalidate_set's per-entry _census() call (require_engine_on_path and machine_profile ran 6824 times; _census() now caches its module) and the yaml.safe_load of each plan's frontmatter, both in mise-census-revalidate.py. The 2050ms/1829ms figures predate the _census() cache and have not been re-measured; re-measure before treating 2100 as the target; 2100 is a placeholder over the 500ms bar, a defect to close, not a budget. Census shell children are separate processes and are not in process_ms. No spawn_count_budget row: the op's own git site is the one HEAD read."
+      "_rationale": "The DR-344 bar. process_ms is the op thread's process time plus the reaped census children's (children_process_ms), and the call spends a 500ms process budget over the set, leaving the rest pending for the store-resumed next call. The measured figure over the certified plan set is the one the census-over-bar plan's C5 records; no placeholder is carried here. No spawn_count_budget row: the op's own git site is the one HEAD read."
     },
     "plan.mise_upgrade_apply": {
       "target_ms": 300,

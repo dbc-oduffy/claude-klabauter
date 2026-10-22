@@ -360,10 +360,9 @@ def test_stalled_workflow_blocks_with_the_resume_call(monkeypatch, tmp_path) -> 
 
 def test_stop_hook_active_downgrades_stalled_workflow_to_advisory(monkeypatch, tmp_path) -> None:
     result = _stall_aggregate(monkeypatch, tmp_path, _RESUME_TEXT, stop_hook_active=True)
-    hso = result["hookSpecificOutput"]
+    assert "hookSpecificOutput" not in result
     assert result.get("decision") != "block"
-    assert hso.get("permissionDecision") != "deny"
-    assert "RESUME-CALL" in hso["additionalContext"]
+    assert "RESUME-CALL" in result["systemMessage"]
 
 
 def test_subagent_stop_is_silent_for_stalled_workflow(monkeypatch, tmp_path) -> None:

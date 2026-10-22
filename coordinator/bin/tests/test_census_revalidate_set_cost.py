@@ -270,3 +270,28 @@ def test_the_verdicts_of_a_fixture_set_are_those_of_the_per_plan_pass(mcr, repo)
         "docs/plans/x.md": ["DRIFT"],
         "docs/plans/u.md": ["UNDECIDABLE"],
     }
+
+
+def test_children_cpu_counts_against_the_spawn_bar_and_stops_the_next_batch(
+    mcr, repo, monkeypatch
+):
+    plans = [_plan(repo, "a", [("grep -c alpha f.txt", "2")]),
+             _plan(repo, "b", [("grep -c alpha g.txt", "1")])]
+    monkeypatch.setattr(mcr, "_UNMEASURED_SHARE", 1)
+    monkeypatch.setattr(
+        mcr._LegCost, "_children_s", lambda self: 10.0 if self.spawns else 0.0
+    )
+    reply = _run(mcr, plans, repo, _store(repo))
+    assert reply["spawns"] == 1
+    assert reply["children_process_ms"] == 10_000
+    assert len(reply["pending"]) == 1
+    assert sorted(s[0] for s in _states(reply).values()) == ["MATCH", "UNRUNNABLE"]
+
+
+def test_the_reply_carries_children_spawns_and_inproc_counts(mcr, repo):
+    plans = [_plan(repo, "a", [("grep -c alpha f.txt", "2"), ("grep -c alpha g.txt", "1")])]
+    reply = _run(mcr, plans, repo, _store(repo))
+    assert reply["spawns"] == 1
+    assert isinstance(reply["children_process_ms"], int) and reply["children_process_ms"] >= 0
+    assert reply["inproc_runs"] == 0
+    assert _states(reply) == {"docs/plans/a.md": ["MATCH", "MATCH"]}
