@@ -450,7 +450,7 @@
     "coordinator/bin/cross-repo-memo.py": "8ac7e561b1a3ed32f9e0e4b9cdb7d507355d75fe",
     "coordinator/bin/cruft-sweep.cmd": "5509a6dc2d537c6b08a6703e9ecf696253f4602a",
     "coordinator/bin/cruft-sweep.ps1": "587873af8be111426d2a2cd2bc8903bead977f45",
-    "coordinator/bin/cruft-sweep.py": "92a8c1f57cdeb4d58800aeb699c4ed856fc39907",
+    "coordinator/bin/cruft-sweep.py": "04c4c9307f92776b5d6e51094651f9ba594791ca",
     "coordinator/bin/cutover-cli.cmd": "735c1771b056a95305e06911e8798c9dd02fba69",
     "coordinator/bin/cutover-cli.ps1": "9b7a5c72f5942ac3214e19f1d8b66f43a7fb02ca",
     "coordinator/bin/cutover-cli.py": "d87ee54aeff900d2bade64bf7f15771de1c9f479",
@@ -2100,8 +2100,8 @@
     "coordinator_core/_content_root_primitive.py": "f7fcd3083855a5e1dd53c09233fbfd64f8dffdf5",
     "coordinator_core/_data_root.py": "0c7c8524f25376ae49593f11334445539dc557f9",
     "coordinator_core/_engine_landing.py": "06dbb1273f3c36fdb6be08767ec75e73c71630e7",
-    "coordinator_core/_engine_published_at": "5b1b214e3fb69664ba333cc3f0846161a8be8caa",
-    "coordinator_core/_engine_stamp": "6ce58d9f8b85d6c4605f272a1e7e206d98785be2",
+    "coordinator_core/_engine_published_at": "bb3cf2c9f5d7d24bb48318b55cce34ed7c0ff0b4",
+    "coordinator_core/_engine_stamp": "01e4419d18c8f2299bb9eb4877b069800b357911",
     "coordinator_core/_fleet_names.py": "e81fc4247611fe486697f4707b28a1a3a008f392",
     "coordinator_core/_hook_envelope.py": "d98df967471c001593ab85960dc367f5ff5da056",
     "coordinator_core/_repo_root_probe.py": "2d8edfa8cd9343436a650584da430aa87ae0397d",
@@ -8765,5 +8765,5 @@
     "scripts/unstick_claude.py": "5458a0f699f1793ff9fd32295b9d0b33635f1c06"
   },
   "schema": 1,
-  "source_head": "cd6f632ca694dc44baf94ba0ec7bf6143a75c21c"
+  "source_head": "7eb39ebbf216eae51dce45bf02b903feb85df08c"
 }

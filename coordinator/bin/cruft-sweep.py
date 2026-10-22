@@ -187,6 +187,7 @@ CHUNK BOUNDARY (2026-07-28 collapse addendum — duplicate-port unification):
 """
 from __future__ import annotations
 
+import errno
 import json
 import os
 import re
@@ -589,8 +590,6 @@ def _acquire_lock(lock_dir: str) -> None:
     """Exclusive lock via os.mkdir (atomic on POSIX and Windows). Contention
     (EEXIST) names the held lock on stderr and exits 0; any other OSError
     names itself on stderr and exits 0 — never silent."""
-    import errno
-
     try:
         os.mkdir(lock_dir)
     except FileExistsError:
