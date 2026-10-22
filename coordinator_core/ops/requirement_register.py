@@ -393,6 +393,50 @@ def repin_plan_text(plan_text: str, register: Register) -> tuple[str, list[dict[
     return "".join(lines), changed
 
 
+def claim_rows_plan_text(plan_text: str, register: Register) -> tuple[str, list[str]]:
+    """The plan text with every register row `register_claims.rows` omits appended to it, and the
+    pins recomputed when the plan pins rows; plus the ids added. Text untouched, `[]`, when none
+    is omitted. Writes `rows` as one flow-style line; every other byte is kept, CRLF included.
+    Raises ValueError when the plan has no block-style `register_claims` carrying a `rows` key."""
+    import json
+
+    import yaml
+
+    nl = "\r\n" if "\r\n" in plan_text else "\n"
+    lines = plan_text.splitlines(keepends=True)
+    if not lines or lines[0].rstrip("\r\n") != "---":
+        raise ValueError("plan has no frontmatter")
+    fm_end = next((i for i in range(1, len(lines)) if lines[i].rstrip("\r\n") == "---"), None)
+    if fm_end is None:
+        raise ValueError("plan frontmatter is not closed")
+    claims = (yaml.safe_load("".join(lines[1:fm_end])) or {}).get("register_claims")
+    if not isinstance(claims, Mapping) or not isinstance(claims.get(ROWS_KEY), list):
+        raise ValueError("plan has no register_claims.rows")
+    ids = [str(i) for i in claims[ROWS_KEY]]
+    added = [str(r[ROW_ID]) for r in register.rows if str(r[ROW_ID]) not in set(ids)]
+    if not added:
+        return plan_text, []
+    head = next(
+        (i for i in range(1, fm_end) if re.match(r"register_claims:\s*(#.*)?$", lines[i].rstrip("\r\n"))),
+        None,
+    )
+    if head is None:
+        raise ValueError("register_claims is not a block mapping")
+    claims_end = _sub_block_end(lines, head, fm_end)
+    child = next((_indent_of(lines[i]) for i in range(head + 1, claims_end) if lines[i].strip()), 2)
+    key_re = re.compile(r"^ {%d}rows:" % child)
+    at = next((i for i in range(head + 1, claims_end) if key_re.match(lines[i])), None)
+    if at is None:
+        raise ValueError("register_claims carries no rows key")
+    lines[at:_sub_block_end(lines, at, claims_end)] = [
+        f"{' ' * child}{ROWS_KEY}: {json.dumps([*ids, *added])}{nl}"
+    ]
+    text = "".join(lines)
+    if PINS_KEY in claims:
+        text, _ = repin_plan_text(text, register)
+    return text, added
+
+
 def pin_drift_reason(drift: Sequence[Mapping[str, Any]]) -> str:
     """The refusal text for the first drifted pin in `drift`."""
     return (

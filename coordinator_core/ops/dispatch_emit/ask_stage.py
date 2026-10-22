@@ -112,6 +112,7 @@ _PARAMS = (
     Field("cross_repo_approved", "bool"),
     Field("session_id", "str"),
     Field("only_rows", "str_list"),
+    Field("claim_register_rows", "bool"),
 )
 
 __all__ = ["AskStageError", "stage", "scaffold_markers", "pm_intent_block", "relayed_ask_block", "manifest_payload"]
@@ -578,6 +579,39 @@ def _refuse_live_write_overlap(root: Path, run_id: str, writes: Sequence[str]) -
     raise AskStageError(f"{LIVE_RUN_WRITE_OVERLAP}: writes overlap live run {named}. Resubmit when it lands.")
 
 
+def _claim_register_rows(root: Path, plan_path: Path) -> None:
+    """Claim into `plan_path`'s `register_claims.rows` every row of the register it names that they omit.
+    A plan with no readable claims or register is left as it is."""
+    from coordinator_core.locked_write import MutateAbort, locked_rmw
+    from coordinator_core.ops import requirement_register as rr
+
+    split = split_frontmatter(plan_path.read_text(encoding="utf-8"))
+    sizing_rel, _ = rr.plan_claims(split.fm_text) if split is not None else (None, frozenset())
+    sizing = contained_path(root / sizing_rel, [root]) if sizing_rel else None
+    register = None
+    if sizing is not None:
+        try:
+            register = rr.read_register(sizing.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError):
+            register = None
+    if register is None:
+        return
+
+    crlf = b"\r\n" in plan_path.read_bytes()
+
+    def mutate(old: str) -> str:
+        try:
+            new = rr.claim_rows_plan_text(old.replace("\r\n", "\n"), register)[0]
+        except ValueError as exc:
+            raise MutateAbort(str(exc)) from exc
+        return new.replace("\n", "\r\n") if crlf else new
+
+    try:
+        locked_rmw(plan_path, mutate, repo_root=root)
+    except MutateAbort:
+        return
+
+
 def stage(
     repo_root: Path,
     *,
@@ -591,6 +625,7 @@ def stage(
     commit_sizing_rel: Optional[str] = None,
     only_rows: Optional[Sequence[str]] = None,
     ledger_resume: bool = False,
+    claim_register_rows: bool = False,
 ) -> StageManifest:
     """Stage the run for `plan_rel`, or for the XS sizing `sizing_rel` (minted to X1 over `writes`).
 
@@ -600,6 +635,9 @@ def stage(
     returns a manifest with no rows and the owed/gated lists.
     `ledger_resume=True` (an all-landed plan resumed at its ledger) admits a spine with zero
     dispatchable rows and returns a whole manifest with rows []; the default refuses it.
+    `claim_register_rows=True` (a ledger re-plan) first adds every register row the plan's
+    `register_claims.rows` omit to its claims and re-pins them, so the plan the re-plan revised
+    claims the rows a later revise minted.
     """
     root = Path(repo_root)
     if not safe_id(run_id):
@@ -629,6 +667,8 @@ def stage(
         plan_path = contained_path(root / plan_rel, [root])
         if plan_path is None or not plan_path.is_file():
             raise AskStageError(f"plan not found under the repo: {plan_rel!r}")
+    if claim_register_rows and plan_rel:
+        _claim_register_rows(root, plan_path)
     plan_text = plan_path.read_text(encoding="utf-8")
     if not sizing_rel:
         run_sizing_rel = _run_sizing_rel(commit_sizing_rel, plan_text)
@@ -962,6 +1002,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             session_id=params.get("session_id") or None,
             commit_sizing_rel=params.get("commit_sizing_path") or None,
             only_rows=params["only_rows"] if params.get("only_rows") is not None else None,
+            claim_register_rows=bool(params.get("claim_register_rows")),
         )
         if params.get("plan_path"):
             stamp = stamp_plan_executing(root, params["plan_path"])

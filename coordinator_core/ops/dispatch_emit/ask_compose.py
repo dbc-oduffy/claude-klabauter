@@ -61,6 +61,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     RESUME_LEDGER_KIND_FIELD,
     RESUME_LEDGER_NOTES_FIELD,
     RESUME_LEDGER_REVISED_FIELD,
+    RESUME_LEDGER_UNCLAIMED_FIELD,
     RESUME_LEDGER_REMAINING_FIELD,
     RESUME_LEDGER_UNLANDED_FIELD,
     TERMINAL_RESUME_LEDGER_PARAM,
@@ -1513,7 +1514,7 @@ def compose_ask_script(
             "js:JSON.stringify({ sizing_path: " + sizing_js + ", run_id: _runId, writes: _writes"
             + (", baton: " + json.dumps(baton["path"]) if baton else "")
             + (f", record: {record_js}" if record_js else "")
-            + " })"
+            + ", ...(_RUN_TOKEN ? { require_live_token: true } : {}) })"
         )
 
     fold_stage = not stop_after
@@ -2082,8 +2083,9 @@ def compose_ask_script(
     )
     b.append(
         f"  const _ledgerOwes = _resumeLedger && (_gate.arm === {_lit(ARM_M_PLUS)} || _gate.arm === {_lit(ARM_S)})"
-        f" && ({_rl0}.blocking ?? [])"
-        f".some((id) => (((({_rl0}.{RESUME_LEDGER_REMAINING_FIELD} ?? {{}})[id]) ?? {{}}).remaining ?? []).length > 0);"
+        f" && (({_rl0}.blocking ?? [])"
+        f".some((id) => (((({_rl0}.{RESUME_LEDGER_REMAINING_FIELD} ?? {{}})[id]) ?? {{}}).remaining ?? []).length > 0)"
+        f" || ({_rl0}.{RESUME_LEDGER_UNCLAIMED_FIELD} ?? []).length > 0);"
     )
     b.append(
         f"  if (_resumeLedger) {{ _planRel = {_rl0}.plan; if (_ledgerUnlanded.length) {{ _ledgerExec = true; }} "
@@ -2109,6 +2111,9 @@ def compose_ask_script(
             f"js:JSON.stringify({_rl0}.{RESUME_LEDGER_REMAINING_FIELD} ?? {{}})",
             ". Revise notes, oldest first: ",
             f"js:JSON.stringify({_rl0}.{RESUME_LEDGER_NOTES_FIELD} ?? [])",
+            ". Register rows the plan's register_claims.rows omit (a revise minted them after the plan was written; "
+            "each is owed work and needs a row of its own that serves it): ",
+            f"js:JSON.stringify({_rl0}.{RESUME_LEDGER_UNCLAIMED_FIELD} ?? [])",
             ". Revise the plan at ",
             "js:_planRel",
             " IN PLACE with Edit -- never scaffold a new plan, never change its path -- adding one new row, "
@@ -2120,6 +2125,7 @@ def compose_ask_script(
             "once, <params> being the JSON object ",
             "js:JSON.stringify({ run_id: _runId, plan_path: _planRel, writes: _writes, "
             "cross_repo_approved: _crossRepoApproved, session_id: _SESSION_ID, "
+            f"...(({_rl0}.{RESUME_LEDGER_UNCLAIMED_FIELD} ?? []).length ? {{ claim_register_rows: true }} : {{}}), "
             "...(_sizingRel ? { commit_sizing_path: _sizingRel } : {}) })",
             " with only_rows set to the ids of exactly the rows you added",
             "js:(_ledgerUnlanded.length ? ' together with these unlanded rows: ' + JSON.stringify(_ledgerUnlanded) : '')",

@@ -40,6 +40,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     RESUME_LEDGER_NOTES_FIELD,
     RESUME_LEDGER_REMAINING_FIELD,
     RESUME_LEDGER_REVISED_FIELD,
+    RESUME_LEDGER_UNCLAIMED_FIELD,
     RESUME_LEDGER_UNLANDED_FIELD,
     RESUMED_RUN_ID_KEY,
     RUN_OUTCOME_FILE,
@@ -107,6 +108,7 @@ _PARAMS = (
     Field("cross_repo_approved", "bool"),
     Field("session_id", "str"),
     Field("route_override_reason", "str"),
+    Field("require_live_token", "bool"),
 )
 _RECORD_KINDS = ("exit_criterion", "xl_exit", design_route.RECORD_KIND)
 _XL_PICKS = ("roadmap", "accept_multi_session", "split")
@@ -342,7 +344,7 @@ def _arm_verdict(
     if refusals:
         return _halt(HALT_REFUSAL, "; ".join(refusals))
     try:
-        resume_ledger = _resume_ledger(sizing, resume.ledger, repo_root, run_id=run_id) if resume else None
+        resume_ledger = _resume_ledger(sizing, resume.ledger, repo_root, run_id=run_id, sizing_rel=sizing_rel) if resume else None
     except SizingFireRefused as exc:
         return _halt(HALT_REFUSAL, "; ".join(exc.fields))
     resume_plan = resume.plan_rel if resume and resume_ledger is None else None
@@ -384,7 +386,9 @@ def _arm_verdict(
     )
 
 
-def _resume_ledger(sizing: dict, halt, repo_root: Path, run_id: Optional[str] = None) -> Optional[dict]:
+def _resume_ledger(
+    sizing: dict, halt, repo_root: Path, run_id: Optional[str] = None, sizing_rel: Optional[str] = None
+) -> Optional[dict]:
     """The verdict's `resume_ledger` for a ledger-halt resume: run, plan, blocking ids, the
     sizing's rulable register ids and the plan's em-discharged rows as `{row_id: text}`; None when
     the resume carries no halt. `blocking` is the halt's blocking ids followed by every other rulable
@@ -395,6 +399,7 @@ def _resume_ledger(sizing: dict, halt, repo_root: Path, run_id: Optional[str] = 
         NOTES_FILE,
         ORIGIN_REVISION,
         _origin,
+        _unclaimed_rows,
         carried_notes,
         ledger_ids,
         ruled_out_ids,
@@ -446,6 +451,10 @@ def _resume_ledger(sizing: dict, halt, repo_root: Path, run_id: Optional[str] = 
     revised = [b for b in blocking if b in revision_ids]
     if revised:
         verdict[RESUME_LEDGER_REVISED_FIELD] = revised
+    # A revise after the halt mints register rows the halted plan never claimed; the re-plan serves them.
+    unclaimed = [r for r in _unclaimed_rows(Path(repo_root), sizing_rel)[1] if r not in out]
+    if unclaimed:
+        verdict[RESUME_LEDGER_UNCLAIMED_FIELD] = unclaimed
     if all_landed:
         verdict[RESUME_LEDGER_KIND_FIELD] = ALL_LANDED_HALT_KIND
     if halt.halted == COMMIT_HALT_KIND:
@@ -554,6 +563,9 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     limited to `resume_rows`, wrote) or, on a stage refusal, `manifest` = `{error}`; no other verdict carries
     either key.
 
+    `require_live_token` (bool): with `run_id`, replies a refusal halt naming the fire call when the run's
+    token is not live, before the run binds or spends anything; the script sets it when it holds a token.
+
     `route_override_reason` (str): why the sizing routes against the run's `route-preference.json`; with a
     `run_id` whose record holds a preference it is written to `em_analysis`, and a divergence with no reason
     on the call or the sizing replies a refusal halt. Every other bound reply, halted or armed, carries
@@ -582,6 +594,16 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     writes = params.get("writes") or []
     root = main_worktree_root(Path(repo_root))
     route_verdicts: list = []
+    if params.get("run_id") and params.get("require_live_token"):
+        from coordinator_core.ops.dispatch_emit import run_token
+
+        if not run_token.is_live(root, params["run_id"]):
+            return _halt(
+                HALT_REFUSAL,
+                f"run token for {params['run_id']} is spent or gone (a run that halted or ended no longer "
+                "holds one), so this refire could land nothing. Fire a fresh run, which mints one: "
+                f"{fire_command(sizing_rel)}",
+            ).to_json()
     if params.get("run_id"):
         refused = _bind_run(
             root, params["run_id"], sizing_rel, route_override_reason=params.get("route_override_reason"),
