@@ -209,13 +209,26 @@ def _effective_cwd(cmd: str, cwd: Optional[str]) -> Optional[str]:
     return resolved or cwd
 
 
+def _invoked_heads(cmd: str) -> frozenset:
+    """Shell-level command words (`/c/.../tool.exe args`): executed, never write targets.
+
+    Trap: matching is by literal string, so an interpreter that also writes the same literal
+    it invokes is exempt from the MSYS reading."""
+    heads = set()
+    for rc in resolve_command_positions(cmd, preserve_windows_backslashes=_host_is_windows()):
+        if rc.confidence != ResolutionConfidence.UNRESOLVED and rc.tokens:
+            heads.add(rc.tokens[0].strip("\"'"))
+    return frozenset(heads)
+
+
 def _interpreter_new_entry(cmd: str, cwd: Optional[str], env: Optional[Mapping[str, str]]) -> Optional[str]:
     """Both readings of each `/x/...` literal (MSYS and cwd-drive) when a native interpreter runs."""
     if not _host_is_windows() or not _INTERPRETER_RE.search(cmd):
         return None
     eff = _effective_cwd(cmd, cwd)
+    invoked = _invoked_heads(cmd)
     for cand in _CAND_RE.findall(cmd):
-        if _MSYS_DRIVE_CAND_RE.match(cand):
+        if _MSYS_DRIVE_CAND_RE.match(cand) and cand not in invoked:
             name = new_top_level_entry(cand, eff, env=env, interpreter=True)
             if name:
                 return name

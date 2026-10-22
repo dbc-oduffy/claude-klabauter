@@ -824,6 +824,14 @@ def _noncanonical_branch_creation_hazard_setup(
     return {_CWD_OVERRIDE_KEY: root}
 
 
+def _heavy_tree_repo_root_setup(
+    scratch_dir: Path, mp: pytest.MonkeyPatch
+) -> Dict[str, str]:
+    (scratch_dir / ".git").mkdir()
+    (scratch_dir / "scratch").mkdir()
+    return {_CWD_OVERRIDE_KEY: str(scratch_dir)}
+
+
 CONFINEMENT_ROWS: List[CorpusRow] = [
     CorpusRow(
         "no-verify",
@@ -1003,6 +1011,24 @@ CONFINEMENT_ROWS: List[CorpusRow] = [
         False,
         _DENY,
         False,
+    ),
+    CorpusRow(
+        "block-whole-filesystem-scan",
+        "block-whole-filesystem-scan-heavy-tree-fire",
+        "grep -rn foo .",
+        True,
+        _DENY,
+        False,
+        setup=_heavy_tree_repo_root_setup,
+    ),
+    CorpusRow(
+        "block-whole-filesystem-scan",
+        "block-whole-filesystem-scan-heavy-tree-control",
+        "grep -rn foo src",
+        False,
+        _DENY,
+        False,
+        setup=_heavy_tree_repo_root_setup,
     ),
     CorpusRow(
         "block-worktree-creation",

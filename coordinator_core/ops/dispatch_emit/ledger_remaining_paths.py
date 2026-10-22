@@ -20,7 +20,7 @@ _TRAILING = ".,;:)"
 _LINE_SUFFIX = re.compile(r"(?::\d+(?:-\d+)?)+$")
 _SYMBOL_SUFFIX = re.compile(r"::[\w.]+$")
 _MODULE_TOKEN = re.compile(r"^([A-Za-z_]\w*)(?:\.[A-Za-z_]\w*)?$")
-_PATHLIKE =re.compile(r"^[\w.\-]+(?:/[\w.\-]+)*$")
+_PATHLIKE = re.compile(r"^[\w.\-]+(?:/[\w.\-]+)*$")
 _DROP_HEADS = ("scratch/", Path(record_homes.home_dir("", "warp")).as_posix() + "/")
 _REMEDY = "revise the plan with a row whose writes cover them, or send a re-ruling revise note"
 

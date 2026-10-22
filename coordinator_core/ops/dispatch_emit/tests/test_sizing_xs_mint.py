@@ -195,6 +195,27 @@ def test_unresolvable_receiver_is_a_named_refusal(tmp_path):
         mint_xs_spine(SIZING, sizing_rel=SIZING_REL, writes=["a.py", MEMO], out_dir=tmp_path)
 
 
+@pytest.mark.parametrize(
+    "statement",
+    [
+        "A reply memo to coordinator-content-repo-em naming the landing shas is sent",
+        "Reply to coordinator-content-repo-em with the shas.",
+    ],
+)
+def test_receiver_resolves_from_memo_to_and_reply_to_phrasings(tmp_path, statement):
+    sizing = {"intent": "x", "exit_criterion": {"statement": statement}}
+    _, to = _spine_rows(tmp_path, sizing, ["a.py", MEMO])
+    assert to["M1"] == "coordinator-content-repo-em"
+
+
+def test_criterion_naming_no_receiver_still_refuses(tmp_path):
+    from coordinator_core.ops.dispatch_emit.sizing_xs_mint import MemoReceiverUnresolvedError
+
+    sizing = {"intent": "x", "exit_criterion": {"statement": "A memo naming the landing shas is sent"}}
+    with pytest.raises(MemoReceiverUnresolvedError):
+        mint_xs_spine(sizing, sizing_rel=SIZING_REL, writes=["a.py", MEMO], out_dir=tmp_path)
+
+
 def test_backslash_memo_path_splits_identically(tmp_path):
     rows, _ = _spine_rows(tmp_path, MEMO_SIZING, ["a.py", MEMO.replace("/", "\\")])
     assert {r.id: list(r.writes) for r in rows} == {"X1": ["a.py"], "M1": [MEMO]}

@@ -96,13 +96,15 @@ PROBE_ARG_PATTERN: Final = r"[A-Za-z0-9._-]+"
 SCOUTS_ASK_FRAGMENT: Final = "contract/scouts-ask-fragment.json"
 PROBE_ALLOWLIST_KEY: Final = "probe_allowlist"
 PROBE_NO_REF: Final = "none"
-# A CLI probe fronts a local command-line tool: its entry carries PROBE_TOOL_KEY (the tool name) and
-# PROBE_VERBS_KEY (non-empty list of the only verbs it permits, each fullmatching PROBE_ARG_PATTERN),
-# and its ref is PROBE_VERB_REF. The target grammar is `local:<probe id>:<verb>`; the verb takes the
-# arg slot and must be on the entry's verb list.
+# A CLI probe (DoE probe_rules.cli_class) fronts a local command-line tool: its entry has
+# PROBE_CLASS_KEY == PROBE_CLI_CLASS, names the tool under PROBE_TOOL_KEY, and carries under
+# PROBE_VERBS_KEY a MAP of verb -> the question it answers. The verb set is the map's keys, each
+# fullmatching PROBE_ARG_PATTERN; the ref is prose. The target grammar is `local:<probe id>:<verb>`;
+# the verb takes the arg slot and must be a key of the entry's verbs map.
+PROBE_CLASS_KEY: Final = "class"
+PROBE_CLI_CLASS: Final = "cli"
 PROBE_TOOL_KEY: Final = "tool"
 PROBE_VERBS_KEY: Final = "verbs"
-PROBE_VERB_REF: Final = "verb"
 # Keys of the sizing object's research block.
 QUESTION_MODE_KEY: Final = "question_mode"
 QUESTION_TARGETS_KEY: Final = "question_targets"

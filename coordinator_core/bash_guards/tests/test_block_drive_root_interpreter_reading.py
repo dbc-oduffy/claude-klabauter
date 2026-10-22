@@ -63,6 +63,28 @@ def test_same_command_from_target_drive_is_allowed(fake_fs):
     assert guard.check(_payload(cmd, "E:\\claude-klabauter")) is None
 
 
+MEMO_EXE = "/c/Users/example-operator/.coordinator-claude-settings/bin/cross-repo-memo.exe"  # abs-path-ok: exact incident command shape
+INVOKE_AFTER_HEREDOC = (
+    "python3 - <<'EOF'\n"
+    "open('state/x.md','w').write('hi')\n"
+    "EOF\n"
+    + MEMO_EXE
+    + " send --to coordinator-content-repo-em --subject s"
+)
+
+
+def test_msys_exe_invocation_after_repo_relative_heredoc_is_allowed(fake_fs):
+    fake_fs.update({"c:\\", "c:\\users"})
+    assert guard.check(_payload(INVOKE_AFTER_HEREDOC, "E:\\claude-klabauter")) is None
+
+
+def test_interpreter_write_to_new_msys_literal_still_denied(fake_fs):
+    cmd = "python3 - <<'EOF'\nopen('/e/brand-new/x.md','w')\nEOF\n" + MEMO_EXE + " send"
+    res = guard.check(_payload(cmd, "F:\\dev"))
+    assert res is not None
+    assert "'brand-new'" in res["hookSpecificOutput"]["permissionDecisionReason"]
+
+
 def test_bash_only_mkdir_uses_msys_reading(fake_fs):
     assert guard.check(_payload("mkdir -p /e/example-retrieval-repo/x", "F:\\dev")) is None
     assert guard.check(_payload("mkdir -p /e/brand-new/x", "F:\\dev")) is not None

@@ -93,19 +93,21 @@ def _is_receiver_inbox_surface(raw: dict) -> bool:
 
 
 def inbound_close_path(raw: dict) -> Optional[str]:
-    """The one repo-relative ``state/cross-repo/inbox/<name>.md`` path that ``surface`` or a
-    ``writes`` entry is exactly, for a row naming no memo slug; else ``None``. Such a row closes
-    an inbound memo: the close-out memo-lifecycle leg owns it, never a memo-send."""
+    """The one repo-relative ``state/cross-repo/inbox/<name>.md`` path that every non-empty
+    ``surface`` and ``writes`` entry is exactly, for a row naming no memo slug; else ``None``.
+    Such a row only closes an inbound memo: the close-out memo-lifecycle leg owns it, never a
+    memo-send. A row that also writes any other path is real work and stays dispatchable."""
     if memo_row_slug(raw) is not None:
         return None
     from coordinator_core.ops.dispatch_emit.source_memo_ref import inbox_memo_refs
 
     found: dict = {}
     for p in (raw.get("surface"), *(raw.get("writes") or ())):
-        if isinstance(p, str):
+        if isinstance(p, str) and p.strip():
             norm = p.strip().replace("\\", "/")
-            if inbox_memo_refs(norm) == (norm,):
-                found.setdefault(norm)
+            if inbox_memo_refs(norm) != (norm,):
+                return None
+            found.setdefault(norm)
     return next(iter(found)) if len(found) == 1 else None
 
 

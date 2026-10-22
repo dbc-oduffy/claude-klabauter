@@ -14,6 +14,7 @@ from coordinator_core.ops import _research_contract as rc
 from coordinator_core.ops.dispatch_emit import op as op_module
 from coordinator_core.ops.dispatch_emit.pipeline_contract import PipelineEmitRefused
 from coordinator_core.ops.dispatch_emit.pipeline_manifest import load_manifest
+from coordinator_core.ops.dispatch_emit.research_emit import probe_allowlist
 
 _TESTS = Path(__file__).parent / "fixtures"
 _PROBE_ROOT = _TESTS / "pipeline_research_probe"
@@ -110,12 +111,18 @@ def _cli_ask(repo, ref):
 
 
 def test_cli_probe_with_an_allowlisted_verb_emits_cleanly(repo):
-    seg = _scouts(_cli_ask(repo, "local:p4-readonly:changes"))
+    seg = _scouts(_cli_ask(repo, "local:p4-readonly:depots"))
     assert seg["lists"][rc.PROBES_LIST] == [seg["lists"]["questions"][1]]
     assert seg["flags"][rc.LOCAL_PROBE_FLAG] is True
 
 
-@pytest.mark.parametrize("ref", ["local:p4-readonly:submit", "local:p4-readonly:changes;rm", "local:p4-readonly"])
+def test_probe_allowlist_maps_the_cli_probe_to_its_verbs_in_order():
+    assert probe_allowlist(_PROBE_ROOT)["p4-readonly"] == (
+        "info", "depots", "clients", "streams", "users", "groups", "labels", "servers",
+    )
+
+
+@pytest.mark.parametrize("ref", ["local:p4-readonly:submit", "local:p4-readonly:depots;rm", "local:p4-readonly"])
 def test_cli_probe_with_a_non_allowlisted_or_missing_verb_is_refused(repo, ref):
     with pytest.raises(PipelineEmitRefused, match="scout question 2"):
         _cli_ask(repo, ref)
@@ -124,7 +131,7 @@ def test_cli_probe_with_a_non_allowlisted_or_missing_verb_is_refused(repo, ref):
 def test_refused_verb_message_names_the_allowed_verbs(repo):
     with pytest.raises(PipelineEmitRefused) as err:
         _cli_ask(repo, "local:p4-readonly:submit")
-    assert "changes" in str(err.value) and "opened" in str(err.value)
+    assert "info" in str(err.value) and "depots" in str(err.value)
 
 
 def _content_root_with_p4_entry(tmp_path, mutate):
@@ -143,15 +150,19 @@ def _drop_verbs(entry):
 
 
 def _empty_verbs(entry):
-    entry[rc.PROBE_VERBS_KEY] = []
+    entry[rc.PROBE_VERBS_KEY] = {}
 
 
 def _unsafe_verb(entry):
-    entry[rc.PROBE_VERBS_KEY] = ["changes;rm"]
+    entry[rc.PROBE_VERBS_KEY] = {"changes;rm": "x"}
 
 
-def _verbs_not_a_list(entry):
-    entry[rc.PROBE_VERBS_KEY] = "changes"
+def _verbs_not_a_map(entry):
+    entry[rc.PROBE_VERBS_KEY] = ["depots"]
+
+
+def _blank_verb_question(entry):
+    entry[rc.PROBE_VERBS_KEY] = {"depots": ""}
 
 
 def _drop_tool(entry):
@@ -162,19 +173,24 @@ def _blank_tool(entry):
     entry[rc.PROBE_TOOL_KEY] = " "
 
 
-def _wrong_ref(entry):
-    entry["ref"] = "arg"
+def _drop_class(entry):
+    del entry[rc.PROBE_CLASS_KEY]
+
+
+def _wrong_class(entry):
+    entry[rc.PROBE_CLASS_KEY] = "shell"
 
 
 @pytest.mark.parametrize(
     "mutate",
-    [_drop_verbs, _empty_verbs, _unsafe_verb, _verbs_not_a_list, _drop_tool, _blank_tool, _wrong_ref],
+    [_drop_verbs, _empty_verbs, _unsafe_verb, _verbs_not_a_map, _blank_verb_question,
+     _drop_tool, _blank_tool, _drop_class, _wrong_class],
 )
 def test_malformed_cli_entry_is_refused_naming_the_file(repo, monkeypatch, tmp_path, mutate):
     root = _content_root_with_p4_entry(tmp_path, mutate)
     monkeypatch.setattr(op_module, "_pipeline_content_root", lambda: root)
     with pytest.raises(PipelineEmitRefused, match=r"scouts-ask-fragment.*CLI probe 'p4-readonly'"):
-        _cli_ask(repo, "local:p4-readonly:changes")
+        _cli_ask(repo, "local:p4-readonly:depots")
 
 
 def test_existing_takes_arg_probe_still_emits_beside_a_cli_probe(repo):

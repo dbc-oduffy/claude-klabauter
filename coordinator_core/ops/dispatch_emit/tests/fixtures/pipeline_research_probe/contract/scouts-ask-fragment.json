@@ -72,10 +72,20 @@
     },
     {
       "id": "p4-readonly",
-      "reports": "output of one read-only p4 verb from the verbs list, never a write",
-      "ref": "verb",
+      "class": "cli",
       "tool": "p4",
-      "verbs": ["changes", "describe", "filelog", "fstat", "opened"],
+      "reports": "counts and existence of Perforce depots, clients, streams, users, groups, labels and servers, plus whether the authenticated CLI reaches a server; never file contents, credentials, or workspace, host or user values",
+      "ref": "a verb from verbs, substituted for {ref}",
+      "verbs": {
+        "info": "whether the authenticated CLI reaches a server",
+        "depots": "which depots exist",
+        "clients": "which workspaces exist",
+        "streams": "which streams exist",
+        "users": "how many accounts exist",
+        "groups": "which groups exist",
+        "labels": "which labels exist",
+        "servers": "which servers are registered"
+      },
       "commands": {
         "macOS": "p4 {ref}",
         "Windows": "p4 {ref}",

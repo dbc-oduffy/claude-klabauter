@@ -252,6 +252,7 @@ from __future__ import annotations
 
 import ast
 import dataclasses
+import functools
 import pathlib
 import sys
 import typing
@@ -6763,6 +6764,7 @@ _UNINVENTORIED_SITE_DISPOSITION: dict[tuple[str, str, str, int], str] = {}
 # a hand-duplicated constant, so it cannot drift from them; its own test still pins the exact
 # membership so a NEW op crossing the threshold fails loudly and by name rather than silently
 # growing the list.
+@functools.lru_cache(maxsize=1)
 def _live_static_pin_targets() -> tuple[frozenset[str], dict]:
     """The op population `_STATIC_SPAWN_COUNT_PINS` must cover, and the live-registry
     machinery needed to measure it: every live op that is (a) not a key of
@@ -7399,6 +7401,12 @@ def test_static_spawn_count_pins_cover_every_unlegitimized_residual_op():
     )
 
 
+@functools.lru_cache(maxsize=1)
+def _live_static_counts() -> dict[str, int]:
+    targets, entrypoints = _live_static_pin_targets()
+    return _measure_static_spawn_counts(frozenset(_STATIC_SPAWN_COUNT_PINS) & targets, entrypoints)
+
+
 def test_static_spawn_count_pins_are_a_ceiling_never_exceeded():
     """AC20's ratchet, with CEILING semantics -- live <= pin, never live == pin.
 
@@ -7413,8 +7421,7 @@ def test_static_spawn_count_pins_are_a_ceiling_never_exceeded():
     only that an op cannot silently reach MORE of them than pinned. Growth fails here; shrinkage
     is reported by `test_static_spawn_count_pins_that_have_gone_loose` so it gets tightened
     deliberately rather than drifting."""
-    targets, entrypoints = _live_static_pin_targets()
-    live_counts = _measure_static_spawn_counts(frozenset(_STATIC_SPAWN_COUNT_PINS) & targets, entrypoints)
+    live_counts = _live_static_counts()
 
     grown = sorted(
         op
@@ -7439,8 +7446,7 @@ def test_static_spawn_count_pins_that_have_gone_loose():
     how a ceiling stops meaning anything. Failing here is good news -- an op got cheaper and the
     pin should come down to lock the win in. Tighten the pin to the live number; never raise a
     live number to meet a pin."""
-    targets, entrypoints = _live_static_pin_targets()
-    live_counts = _measure_static_spawn_counts(frozenset(_STATIC_SPAWN_COUNT_PINS) & targets, entrypoints)
+    live_counts = _live_static_counts()
 
     loose = sorted(
         op

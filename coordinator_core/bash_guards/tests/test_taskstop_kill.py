@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from coordinator_core.bash_guards._taskstop_contract import ProcRow
-from coordinator_core.bash_guards._taskstop_kill import kill_tree_verified
+from coordinator_core.bash_guards._taskstop_contract import LaunchRecord, ProcRow, ReapOutcome
+from coordinator_core.bash_guards._taskstop_kill import kill_tree_verified, reap_launch
 
 
 class _Kill:
@@ -62,6 +62,58 @@ def test_child_of_unkilled_parent_is_not_swept():
     orphan = ProcRow(13, 10, 130, "x")
     killed, complete, _ = kill_tree_verified(_tree(), lambda: [orphan], kill)
     assert (13, 130) not in kill.calls and complete is False
+
+
+_S = 10_000_000
+_MARK = 1_000 * _S
+_LIVE = ProcRow(1, 0, _S, "claude.exe")
+
+
+def _rec(task="t1"):
+    return LaunchRecord(task_id=task, session_id="s", tool_use_id="u", command="sleep 3001", mark=_MARK)
+
+
+class _CmdKill(_Kill):
+    def command_line(self, pid, ctime):
+        return "sleep 3001"
+
+
+def _orphan_tree(root=10):
+    return [
+        ProcRow(root, 999, _MARK - _S // 10, "bash.exe"),
+        ProcRow(root + 1, root, _MARK - _S // 10 + 1, "sleep.exe"),
+    ]
+
+
+def test_reap_launch_attributed_tree_is_killed_with_only_its_pids():
+    rows = [_LIVE, *_orphan_tree(10)]
+    kill = _CmdKill()
+    row = reap_launch(_rec(), [], lambda: rows, kill)
+    assert row.outcome is ReapOutcome.KILLED and row.task_id == "t1"
+    assert {p for p, _ in kill.calls} == {10, 11}
+    assert {p for p, _ in row.killed} == {10, 11}
+
+
+def test_reap_launch_two_candidates_are_ambiguous_with_zero_terminates():
+    rows = [_LIVE, *_orphan_tree(10), *_orphan_tree(20)]
+    kill = _CmdKill()
+    row = reap_launch(_rec(), [], lambda: rows, kill)
+    assert row.outcome is ReapOutcome.AMBIGUOUS and row.candidates == 2
+    assert kill.calls == [] and row.killed == ()
+
+
+def test_reap_launch_empty_snapshot_is_no_candidate():
+    kill = _CmdKill()
+    assert reap_launch(_rec(), [], lambda: [], kill).outcome is ReapOutcome.NO_CANDIDATE
+    assert kill.calls == []
+
+
+def test_reap_launch_refused_terminate_is_incomplete():
+    rows = [_LIVE, *_orphan_tree(10)]
+    kill = _CmdKill(refuse=[(11, _MARK - _S // 10 + 1)])
+    row = reap_launch(_rec(), [], lambda: rows, kill)
+    assert row.outcome is ReapOutcome.INCOMPLETE
+    assert {p for p, _ in row.killed} == {10}
 
 
 def test_unreadable_resnapshot_is_not_verified():

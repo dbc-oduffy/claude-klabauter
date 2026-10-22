@@ -459,12 +459,7 @@ _HANDLER_FILES: list[pathlib.Path] = _handler_files()
 _assert_handler_corpus_nonempty(_HANDLER_FILES)
 
 
-@pytest.mark.parametrize(
-    "path",
-    _HANDLER_FILES,
-    ids=lambda p: _rel(p),
-)
-def test_no_direct_blocking_subprocess_in_async_handlers(path: pathlib.Path) -> None:
+def test_no_direct_blocking_subprocess_in_async_handlers() -> None:
     """AC-3 Gap-3: no direct subprocess/os/shutil blocking I/O in async def handler bodies.
 
     Every async def handler in coordinator_core/ops/ and coordinator_core/hooks/ that
@@ -483,11 +478,14 @@ def test_no_direct_blocking_subprocess_in_async_handlers(path: pathlib.Path) -> 
             os.rename(src, dest)                         # stalls the event loop
             shutil.copytree(src, dst)                     # stalls the event loop
     """
-    violations = _find_violations_in_file(path)
-    assert not violations, (
-        f"AC-3 async-handler-discipline violation in {_rel(path)}:\n"
+    # One test over the whole corpus: a per-file parametrize cost ~3000 pytest items for a pure AST scan.
+    found = [(path, _find_violations_in_file(path)) for path in _HANDLER_FILES]
+    found = [(path, v) for path, v in found if v]
+    assert not found, (
+        "AC-3 async-handler-discipline violation(s):\n"
         + "\n".join(
-            f"  async def {fn}() line {ln}: {call} — wrap in asyncio.to_thread()"
+            f"  {_rel(path)}: async def {fn}() line {ln}: {call} — wrap in asyncio.to_thread()"
+            for path, violations in found
             for fn, ln, call in violations
         )
         + "\n\nBlocking I/O inside async def stalls the event loop. "

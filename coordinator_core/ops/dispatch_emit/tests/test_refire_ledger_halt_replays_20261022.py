@@ -164,5 +164,5 @@ def test_b6d61d_s_refire_stages_a_row_for_r1_and_keeps_arm_s(repo, monkeypatch):
     assert out.get("halt") is None and "error" not in (out.get("manifest") or {}), out
     _assert_row(repo, out, "s", S_OWED)
     assert S_NOTE in out["resume_ledger"]["revise_notes"]
-    assert S_SERVING in _staged_rows(repo)[-1]["writes"] or any(S_SERVING in r["writes"] for r in _staged_rows(repo))
+    assert any(S_SERVING in r["writes"] for r in _staged_rows(repo))
     _assert_script_keeps_arm(_compose(monkeypatch, "s"))

@@ -8,7 +8,13 @@ from __future__ import annotations
 
 from typing import Callable, Iterable, List, Optional, Sequence, Tuple
 
-from coordinator_core.bash_guards._taskstop_contract import KillPrimitives, ProcRow
+from coordinator_core.bash_guards._taskstop_contract import (
+    KillPrimitives,
+    LaunchRecord,
+    ProcRow,
+    ReapOutcome,
+    ReapRow,
+)
 
 
 def stale_children(rows: Iterable[ProcRow], killed: List[Tuple[int, int]], done: set) -> list:
@@ -52,4 +58,27 @@ def kill_tree_verified(
     return killed, complete, reason
 
 
-__all__ = ["kill_tree_verified", "stale_children"]
+def reap_launch(
+    rec: LaunchRecord,
+    others: Sequence[LaunchRecord],
+    snapshot: Callable[[], Optional[Sequence[ProcRow]]],
+    kill: KillPrimitives,
+) -> ReapRow:
+    """Attribute rec to its one orphan tree and kill it verified; returns the row, never logs.
+    NO_CANDIDATE on an empty snapshot; AMBIGUOUS/NO_CANDIDATE when attribution declines (nothing
+    killed); else KILLED, or INCOMPLETE when any kill was refused or unverified."""
+    rows = snapshot()
+    if not rows:
+        return ReapRow(rec.task_id, ReapOutcome.NO_CANDIDATE)
+    # Lazy: watcher_stand_down imports this module and must not gain _session_census.
+    from coordinator_core.bash_guards._taskstop_attribution import attribute
+
+    tree, outcome, competing, candidates = attribute(rec, others, rows, kill.command_line)
+    if tree is None:
+        return ReapRow(rec.task_id, outcome, competing=competing, candidates=candidates)
+    killed, complete, _ = kill_tree_verified(tree, lambda: snapshot(), kill)
+    result = ReapOutcome.KILLED if complete else ReapOutcome.INCOMPLETE
+    return ReapRow(rec.task_id, result, killed=tuple(killed), candidates=candidates)
+
+
+__all__ = ["kill_tree_verified", "reap_launch", "stale_children"]

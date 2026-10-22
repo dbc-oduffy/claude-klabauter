@@ -81,8 +81,8 @@ def test_xs_halt_bound_to_another_sizing_is_none(repo):  # noqa: F811
 def test_xs_halt_naming_a_spine_outside_its_record_dir_is_none(repo):  # noqa: F811
     _fixture(repo, halted={"plan": "docs/plans/2026-10-01-gate.md"})
     assert resumable_plan(_sizing(repo), REL, repo, "xs") is None
-    _fixture_other = "state/warp/ask-20261022T165956-aaaaaa/gate.spine.md"
+    other_run_spine = "state/warp/ask-20261022T165956-aaaaaa/gate.spine.md"
     (repo / "state" / "warp" / RUN / "halted.json").write_text(
-        json.dumps({"halted": "ledger-check", "sizing_rel": REL, "plan": _fixture_other}), encoding="utf-8"
+        json.dumps({"halted": "ledger-check", "sizing_rel": REL, "plan": other_run_spine}), encoding="utf-8"
     )
     assert resumable_plan(_sizing(repo), REL, repo, "xs") is None
