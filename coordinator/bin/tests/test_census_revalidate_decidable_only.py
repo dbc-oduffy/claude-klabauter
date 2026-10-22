@@ -3,7 +3,7 @@
 Subject: `can_drift`, `revalidate(decidable_only=, memo=)` and `spent_ms` in
 `coordinator/bin/mise-census-revalidate.py`. A skipped entry is UNDECIDABLE and spawns nothing;
 the proof that skipping preserves verdicts is that `compare` never DRIFTs a result `can_drift`
-rules out.
+rules out. The memo holds `MemoEntry` values and hits only on an equal `input_key`.
 """
 
 from __future__ import annotations
@@ -97,39 +97,51 @@ def test_can_drift_true_for_declared_count_and_typed_not_for_bool(mcr):
     assert mcr.can_drift({"kind": "next-free-number", "result": "prose"}) is True
 
 
+def _repo(tmp_path: Path) -> Path:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "f.txt").write_text("5\n", encoding="utf-8")
+    return repo
+
+
 def test_shared_memo_spawns_once_and_judges_each_entry_on_its_own_result(
     mcr, tmp_path, monkeypatch
 ):
-    a = _plan(tmp_path / "a.md", [("echo 5", "5")])
-    b = _plan(tmp_path / "b.md", [("echo 5", "7")])
+    repo = _repo(tmp_path)
+    a = _plan(repo / "a.md", [("cat f.txt", "5")])
+    b = _plan(repo / "b.md", [("cat f.txt", "7")])
     counter = _SpawnCounter(monkeypatch, mcr)
     memo: dict = {}
-    rep_a = mcr.revalidate(a, tmp_path, 10, memo=memo)
-    rep_b = mcr.revalidate(b, tmp_path, 10, memo=memo)
+    rep_a = mcr.revalidate(a, repo, 10, memo=memo)
+    rep_b = mcr.revalidate(b, repo, 10, memo=memo)
     assert counter.calls == 1
     assert rep_a["entries"][0]["state"] == mcr.MATCH
     assert rep_b["entries"][0]["state"] == mcr.DRIFT
-    assert list(memo) == ["echo 5"]
+    assert (rep_a["memo_hits"], rep_b["memo_hits"]) == (0, 1)
+    assert list(memo) == ["cat f.txt"]
+    assert isinstance(memo["cat f.txt"], mcr.MemoEntry)
 
 
 def test_timed_out_entry_is_not_memoised(mcr, tmp_path, monkeypatch):
-    plan = _plan(tmp_path / "p.md", [("echo 5", "5")])
+    repo = _repo(tmp_path)
+    plan = _plan(repo / "p.md", [("cat f.txt", "5")])
 
     def boom(*a, **kw):
         raise subprocess.TimeoutExpired(cmd="x", timeout=1)
 
     monkeypatch.setattr(mcr.subprocess, "run", boom)
     memo: dict = {}
-    rep = mcr.revalidate(plan, tmp_path, 1, memo=memo)
+    rep = mcr.revalidate(plan, repo, 1, memo=memo)
     assert rep["entries"][0]["state"] == mcr.UNRUNNABLE
     assert memo == {}
 
 
 def test_spent_deadline_spawns_nothing_and_stores_nothing_under_memo(mcr, tmp_path, monkeypatch):
-    plan = _plan(tmp_path / "p.md", [("echo 5", "5")])
+    repo = _repo(tmp_path)
+    plan = _plan(repo / "p.md", [("cat f.txt", "5")])
     counter = _SpawnCounter(monkeypatch, mcr)
     memo: dict = {}
-    rep = mcr.revalidate(plan, tmp_path, 10, deadline=mcr.time.monotonic() - 1, memo=memo)
+    rep = mcr.revalidate(plan, repo, 10, deadline=mcr.time.monotonic() - 1, memo=memo)
     assert counter.calls == 0
     assert rep["entries"][0]["state"] == mcr.UNRUNNABLE
     assert memo == {}

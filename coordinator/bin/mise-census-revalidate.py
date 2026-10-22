@@ -64,15 +64,17 @@ Spec backlink: docs/plans/2026-09-18-doe-holds-no-scripts.md, chunk W3-C2.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
 import shutil
+import stat as _stat
 import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, NamedTuple, Optional
 
 def _load_yaml():
     """Import PyYAML lazily -- a module-scope `try: import yaml / except ImportError: print(...);
@@ -366,6 +368,497 @@ def can_drift(entry: dict) -> bool:
     return re.fullmatch(r"-?\d+", recorded.strip()) is not None
 
 
+class MemoEntry(NamedTuple):
+    """One memoised census command. `key` is its `input_key` at the run (None when un-keyable or
+    run directly), `ran` the completed `(returncode, stdout, stderr)`, `run_ms` the spawn's wall
+    and `key_ms` the key's wall (None when never keyed)."""
+
+    key: Optional[str]
+    ran: tuple
+    run_ms: int
+    key_ms: Optional[int]
+
+
+_DIRECT_BASIS = "direct: key cost exceeds spawn"
+
+#: Programs whose reads are exactly what their argv names, or the previous stage's stdout.
+_READERS = frozenset(
+    "grep rg wc find ls awk sed cat jq head tail sort uniq cut tr".split()
+)
+#: git subcommands that read objects reachable from HEAD and nothing else mutable.
+_GIT_HISTORY = frozenset("log show rev-list ls-tree cat-file rev-parse".split())
+_GIT_WIDE_REFS = frozenset({"--all", "--branches", "--tags", "--remotes"})
+_REV = r"(?:HEAD|[0-9a-f]{7,40})(?:[~^]\d*)*"
+_REVSPEC = re.compile(rf"^{_REV}(?:\.{{2,3}}{_REV})?(?::.*)?$")
+_REV_PARSE_OPTS = frozenset({"--short", "--verify", "-q", "--quiet"})
+_FIND_PREDICATES = frozenset(
+    "-name -iname -type -maxdepth -mindepth -path -ipath -not -o -a -print -print0 -empty".split()
+)
+_GREP_VALUE_SHORT = frozenset("mABCefdDgtTjM")
+_GREP_VALUE_LONG = frozenset(
+    "--include --exclude --exclude-dir --max-count --file --regexp --after-context "
+    "--before-context --context --glob --type --type-not --max-depth --threads "
+    "--replace --color --colors --binary-files --devices --directories --label".split()
+)
+_LS_FLAGS = frozenset("1aAR")
+_REDIRECTS = frozenset({">", ">>", "&>", "&>>", ">&"})
+_PUNCT_ONLY = re.compile(r"^[<>&|;()]+$")
+_UNBOUNDED_SHAPE = re.compile(r"[;&`\n]|\|\|")
+
+
+class _TreeView:
+    """One `revalidate` call's read-only view of the index and the files under an operand.
+
+    The index is parsed at most once (`parse_index_identity`, never written, never refreshed) and
+    each path's identity is computed at most once, so N entries over one tree pay for it once.
+    `deadline` (a `time.monotonic()` value) makes a long directory walk give up as un-keyable."""
+
+    def __init__(self, root: Path, deadline: Optional[float] = None):
+        self.root = Path(root)
+        self.deadline = deadline
+        self._loaded = False
+        self._dash: Optional[bool] = None
+        self._entries: Optional[dict] = None
+        self._index_mtime_ns = 0
+        self._files: dict[tuple, Optional[str]] = {}
+        self._dirs: dict[str, Optional[str]] = {}
+
+    def has_dash_names(self) -> bool:
+        """True when the worktree root holds an entry whose name begins with `-`, the only thing
+        an unquoted `--opt=*.x` word could glob to."""
+        if self._dash is None:
+            try:
+                self._dash = any(n.startswith("-") for n in os.listdir(self.root))
+            except OSError:
+                self._dash = True
+        return self._dash
+
+    def entries(self) -> Optional[dict]:
+        if not self._loaded:
+            self._loaded = True
+            _census()
+            from coordinator_core.git import git_index
+            from coordinator_core.git.git_dir import resolve_git_dir
+
+            try:
+                self._index_mtime_ns = (resolve_git_dir(self.root) / "index").stat().st_mtime_ns
+            except OSError:
+                self._index_mtime_ns = 0
+            try:
+                self._entries = git_index.parse_index_identity(self.root)
+            except (OSError, ValueError):
+                self._entries = None
+        return self._entries
+
+    def _stat_clean(self, e: Any, st: os.stat_result) -> bool:
+        """scoped_status's stat compare plus git's racy-clean rule: an entry whose mtime is not
+        older than the index file's own mtime cannot be trusted by stat alone."""
+        if e.mode & 0o170000 != 0o100000:
+            return False
+        mtime_ns = st.st_mtime_ns
+        same = e.size == (st.st_size & 0xFFFFFFFF) and e.mtime == mtime_ns // 1_000_000_000
+        if same and e.mtime_nsec:
+            same = e.mtime_nsec == mtime_ns % 1_000_000_000
+        return same and e.mtime * 1_000_000_000 + e.mtime_nsec < self._index_mtime_ns
+
+    def _raw_id(self, rel: str, size: int) -> Optional[str]:
+        """`raw:<sha1(b"blob <len>\\0" + file bytes)>:<size>`, an identity for a file git does not
+        track. It is never written, never compared with a git object and makes no claim about the
+        blob git would store, so it does not reopen git_state.py's raw-bytes prohibition."""
+        digest = hashlib.sha1(f"blob {size}\0".encode())
+        try:
+            with open(self.root / rel, "rb") as fh:
+                for chunk in iter(lambda: fh.read(1 << 20), b""):
+                    digest.update(chunk)
+        except OSError:
+            return None
+        return f"raw:{digest.hexdigest()}:{size}"
+
+    def file_id(self, rel: str, st: os.stat_result, in_dir: bool = False) -> Optional[str]:
+        """`<blob sha>:<size>` of a regular file. The sha is the index's for a stat-clean tracked
+        file and `checkin_blob_sha` otherwise; the size keeps a CRLF/LF rewrite that normalises to
+        one blob from keying equal, since the command reads the bytes on disk. Under a directory
+        walk (`in_dir`) an untracked or ignored file takes `_raw_id` instead, so a file
+        `checkin_blob_sha` refuses cannot make the whole directory un-keyable."""
+        slot = (rel, in_dir)
+        if slot in self._files:
+            return self._files[slot]
+        entries = self.entries()
+        ident: Optional[str] = None
+        if entries is not None:
+            cached = entries.get(rel)
+            if cached is None and in_dir:
+                ident = self._raw_id(rel, st.st_size)
+            else:
+                sha = cached.sha if cached is not None and self._stat_clean(cached, st) else None
+                if sha is None:
+                    from coordinator_core.git.commit import checkin_blob_sha
+
+                    sha = checkin_blob_sha(self.root, rel)
+                if sha is not None:
+                    ident = f"{sha}:{st.st_size}"
+        self._files[slot] = ident
+        return ident
+
+    def _walk(self, rel: str, digest: Any) -> bool:
+        if self.deadline is not None and time.monotonic() > self.deadline:
+            return False
+        try:
+            with os.scandir(self.root / rel) as it:
+                kids = sorted(it, key=lambda k: k.name)
+        except OSError:
+            return False
+        for kid in kids:
+            if kid.name == ".git":
+                continue
+            child = f"{rel}/{kid.name}"
+            try:
+                if kid.is_symlink():
+                    line = f"l\0{child}\0{os.readlink(kid.path)}\n"
+                elif kid.is_dir(follow_symlinks=False):
+                    digest.update(f"d\0{child}\n".encode("utf-8", "surrogateescape"))
+                    if not self._walk(child, digest):
+                        return False
+                    continue
+                elif kid.is_file(follow_symlinks=False):
+                    ident = self.file_id(child, kid.stat(follow_symlinks=False), True)
+                    if ident is None:
+                        return False
+                    line = f"f\0{child}\0{ident}\n"
+                else:
+                    return False
+            except OSError:
+                return False
+            digest.update(line.encode("utf-8", "surrogateescape"))
+        return True
+
+    def dir_id(self, rel: str) -> Optional[str]:
+        if rel not in self._dirs:
+            digest = hashlib.sha1()
+            self._dirs[rel] = digest.hexdigest() if self._walk(rel, digest) else None
+        return self._dirs[rel]
+
+    def path_id(self, rel: str) -> Optional[str]:
+        """Content identity of one operand: "absent", a file id, or a directory digest; None when
+        it cannot be bounded (a top-level symlink or special file, an unreadable path)."""
+        try:
+            st = os.lstat(self.root / rel)
+        except (FileNotFoundError, NotADirectoryError):
+            return "absent"
+        except (OSError, ValueError):
+            return None
+        if _stat.S_ISREG(st.st_mode):
+            return self.file_id(rel, st)
+        if _stat.S_ISDIR(st.st_mode):
+            return self.dir_id(rel)
+        return None
+
+
+_DOLLAR_EXPANDS = frozenset("{(!@*#?-$_") | frozenset(
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+)
+
+
+def _shell_expands(command: str, dash_globs_literal: bool = False) -> bool:
+    """True when the shell would expand something in `command` before the program runs: an
+    unquoted glob character or brace, an unquoted word-leading `~`, a backtick, or a `$` that
+    begins a parameter, command or arithmetic expansion. A quoted `*` and a `$` followed by a
+    space, quote or end are literal text. With `dash_globs_literal`, a glob character inside a
+    word that begins with `-` (`--include=*.py`) is literal: it could expand only to a file
+    whose name begins with `-`, and the caller has checked that none exists."""
+    quote = ""
+    word_start = True
+    dash_word = False
+    i = 0
+    while i < len(command):
+        ch = command[i]
+        if word_start and not quote:
+            dash_word = ch == "-"
+        nxt = command[i + 1] if i + 1 < len(command) else ""
+        if ch == "`" and quote != "'":
+            return True
+        if quote == "'":
+            if ch == "'":
+                quote = ""
+        elif quote == '"':
+            if ch == "\\":
+                i += 1
+            elif ch == '"':
+                quote = ""
+            elif ch == "$" and nxt in _DOLLAR_EXPANDS:
+                return True
+        elif ch == "\\":
+            i += 1
+        elif ch in "'\"":
+            quote = ch
+        elif ch == "$":
+            if nxt not in _DOLLAR_EXPANDS:
+                if nxt in ("", " ", "\t"):
+                    i += 1
+                    word_start = False
+                    continue
+            return True
+        elif ch in "*?[{":
+            if not (dash_globs_literal and dash_word):
+                return True
+        elif ch == "~" and word_start:
+            return True
+        word_start = not quote and (ch.isspace() or ch in "|<>();&")
+        i += 1
+    return False
+
+
+def _scrub_redirects(parts: list[str]) -> Optional[list[str]]:
+    """`parts` without `[N]>/dev/null`; None for any other redirect or stray operator."""
+    out: list[str] = []
+    i = 0
+    while i < len(parts):
+        tok = parts[i]
+        if tok in _REDIRECTS:
+            if i + 1 < len(parts) and parts[i + 1] == "/dev/null":
+                if out and len(out[-1]) == 1 and out[-1].isdigit():
+                    out.pop()
+                i += 2
+                continue
+            return None
+        if _PUNCT_ONLY.match(tok):
+            return None
+        out.append(tok)
+        i += 1
+    return out
+
+
+def _git_history_only(args: list[str], head: Optional[str]) -> bool:
+    """True when a git stage reads only objects reachable from HEAD, so `head` keys it."""
+    if head is None:
+        return False
+    i = 2 if args[:2] == ["-C", "."] else 0
+    while i < len(args) and args[i] == "--no-pager":
+        i += 1
+    if i >= len(args) or args[i] not in _GIT_HISTORY:
+        return False
+    sub = args[i]
+    for tok in args[i + 1:]:
+        if tok == "--":
+            break
+        if tok.startswith("-"):
+            name = tok.split("=", 1)[0]
+            if (
+                name in _GIT_WIDE_REFS
+                or name.startswith(("--glob", "--exclude", "--batch"))
+                or name in ("-g", "--walk-reflogs", "--reflog", "--source", "--notes")
+                or "decorate" in tok
+                or "%d" in tok
+                or "%D" in tok
+            ):
+                return False
+            if sub == "rev-parse" and name not in _REV_PARSE_OPTS:
+                return False
+        elif not (tok.isdigit() or _REVSPEC.match(tok)):
+            return False
+    return True
+
+
+def _grep_operands(prog: str, args: list[str], first: bool) -> Optional[list[str]]:
+    shorts = [a[1:] for a in args if a.startswith("-") and not a.startswith("--") and a != "-"]
+    longs = [a for a in args if a.startswith("--")]
+    non = [a for a in args if not a.startswith("-")]
+    if "--" in longs or "--files" in longs:
+        return None
+    if any(a in ("--dereference-recursive", "--follow") for a in longs):
+        return None
+    if any(("R" in c or "L" in c) for c in shorts):
+        return None
+    value_short = _GREP_VALUE_SHORT | ({"r"} if prog == "rg" else set())
+    for cluster in shorts:
+        for idx, ch in enumerate(cluster):
+            if ch in value_short:
+                if idx == len(cluster) - 1:
+                    return None
+                break
+    if any("=" not in lo and lo in _GREP_VALUE_LONG for lo in longs):
+        return None
+    recursive = prog == "rg" or any("r" in c for c in shorts) or "--recursive" in longs
+    pattern_opt = (
+        any(("e" in c or "f" in c) for c in shorts)
+        or any(lo.startswith(("--regexp=", "--file=")) for lo in longs)
+    )
+    operands = non if pattern_opt else non[1:]
+    if not operands and (recursive or first):
+        return None
+    return operands
+
+
+def _stage_operands(prog: str, args: list[str], first: bool) -> Optional[list[str]]:
+    """The path operands a reader stage names, or None when its read set is not bounded by argv.
+    A stage that reads the tree by default (`grep -r`, `rg`, `find`, `ls` with no operand) reads
+    "." and so is None; a first stage with no operand reads inherited stdin and is None."""
+    if prog in ("grep", "rg"):
+        return _grep_operands(prog, args, first)
+    opts = [a for a in args if a.startswith("-") and a != "-"]
+    if "--" in args:
+        return None
+    if prog == "find":
+        lead: list[str] = []
+        for a in args:
+            if a.startswith("-"):
+                break
+            lead.append(a)
+        preds = [a for a in args[len(lead):] if a.startswith("-")]
+        if any(p not in _FIND_PREDICATES for p in preds) or not lead:
+            return None
+        return lead
+    non = [a for a in args if not a.startswith("-") or a == "-"]
+    non = [a for a in non if a != "-"]
+    if prog == "ls":
+        if any(o.startswith("--") or not set(o[1:]) <= _LS_FLAGS for o in opts) or not non:
+            return None
+        return non
+    if not non and first:
+        return None
+    return non
+
+
+def _operand_rel(token: str) -> Optional[str]:
+    """`token` as a clean repo-relative path, or None for any shape the key will not bound."""
+    if token.startswith(("/", "~")):
+        return None
+    rel = token
+    while rel.startswith("./"):
+        rel = rel[2:]
+    segs = [s for s in rel.split("/") if s]
+    if not segs or segs == ["."] or ".." in segs or ".git" in segs or "." in segs:
+        return None
+    return "/".join(segs)
+
+
+def input_key(
+    entry: dict,
+    repo_root: Path,
+    *,
+    head: Optional[str],
+    view: Optional[_TreeView] = None,
+) -> Optional[str]:
+    """A digest over everything the entry's command can read, or None when that set cannot be
+    bounded. INVARIANT: equal keys for one command imply byte-identical stdout, stderr and
+    returncode. Every rule fails toward None, which means "run it". Spawns nothing, writes
+    nothing, never refreshes the index and never calls scoped_changed.
+
+    None when: the entry is typed or has no command; the command carries `;`, `&&`, `||`, `&`,
+    a backtick or a newline, or does not tokenise (`census._split_stages`); the shell would
+    expand something (an unquoted glob character, brace, `$`, backtick or word-leading `~`, or a
+    `$` inside double quotes; a quoted pattern like 'a.*b' is literal and is kept); a redirect other than to /dev/null; a program outside
+    grep, rg, wc, find, ls, awk, sed, cat, jq, head, tail, sort, uniq, cut, tr and git; an
+    absolute path, a `..` or `.git` segment, or a "." operand (the whole worktree); a stage
+    that reads the tree by default with no operand; a `find` predicate, `ls` flag or grep
+    option outside the bounded sets; a git stage that is not `[-C .] log|show|rev-list|ls-tree|
+    cat-file|rev-parse` over HEAD-reachable revisions with no wide-ref option (and any git stage
+    with `head` None); an operand whose files cannot be hashed in process.
+
+    Operand identity: "absent" for a missing path; for a file, the index sha when the entry is
+    stat-clean (racily-clean entries count as stale) and `commit.checkin_blob_sha` when it is
+    stat-stale or untracked, each joined to the on-disk size; for a directory, every file under
+    it by os.scandir (untracked and ignored included, `.git` skipped, symlinks by readlink
+    text, never followed). Inside a directory an untracked or ignored file takes an identity hash
+    of its raw bytes (`raw:` prefix; never a claim about a git blob), so a CR-bearing untracked
+    file keys; a tracked file under a directory, and a file operand, follow the rule above. The
+    index is read once per `view`.
+    """
+    census = _census()
+    if census.is_typed(entry):
+        return None
+    command = str(entry.get("command") or "").strip()
+    tree = view if view is not None else _TreeView(Path(repo_root))
+    if (
+        not command
+        or _UNBOUNDED_SHAPE.search(command)
+        or _shell_expands(command, not tree.has_dash_names())
+    ):
+        return None
+    stages = census._split_stages(command)
+    if not stages or any(not st for st in stages):
+        return None
+    digest = hashlib.sha1()
+    uses_head = False
+    for index, raw in enumerate(stages):
+        parts = _scrub_redirects(raw)
+        if not parts:
+            return None
+        prog, args = parts[0], parts[1:]
+        digest.update(json.dumps(parts).encode("utf-8", "surrogateescape") + b"\n")
+        if prog == "git":
+            if not _git_history_only(args, head):
+                return None
+            uses_head = True
+            continue
+        if prog not in _READERS:
+            return None
+        operands = _stage_operands(prog, args, index == 0)
+        if operands is None:
+            return None
+        for token in operands:
+            rel = _operand_rel(token)
+            ident = tree.path_id(rel) if rel is not None else None
+            if ident is None:
+                return None
+            digest.update(f"{token}\0{ident}\n".encode("utf-8", "surrogateescape"))
+    if uses_head:
+        digest.update(f"head\0{head}\n".encode())
+    return digest.hexdigest()
+
+
+def _git_stage_refused(entry: dict, head: Optional[str]) -> bool:
+    """True when `input_key` is certain to refuse `entry` on a git stage (one that reads beyond
+    HEAD, or any git stage with `head` None). `revalidate` runs those after every other entry."""
+    census = _census()
+    if census.is_typed(entry):
+        return False
+    command = str(entry.get("command") or "").strip()
+    if not command or _UNBOUNDED_SHAPE.search(command):
+        return False
+    stages = census._split_stages(command)
+    for raw in stages or ():
+        parts = _scrub_redirects(raw) if raw else None
+        if parts and parts[0] == "git" and not _git_history_only(parts[1:], head):
+            return True
+    return False
+
+
+def _ms_since(started: float) -> int:
+    return int(round((time.perf_counter() - started) * 1000))
+
+
+def _plan_frontmatter(plan: Path) -> dict:
+    """The plan's parsed frontmatter, `{}` when unreadable or malformed."""
+    yaml = _load_yaml()
+    try:
+        parts = plan.read_text(encoding="utf-8", errors="replace").split("---", 2)
+        fm = yaml.safe_load(parts[1]) if len(parts) >= 3 else {}
+    except (OSError, yaml.YAMLError):
+        return {}
+    return fm if isinstance(fm, dict) else {}
+
+
+def spawning_commands(plan: Path, repo_root: Path, doc: Optional[dict] = None) -> tuple[str, ...]:
+    """The distinct commands `revalidate(decidable_only=True)` would spawn: untyped, screen-clear
+    and `can_drift`. Spawns nothing, so a python target is screened without the tracked-file
+    check (the estimate may include a command the live screen later refuses). `doc` is a
+    frontmatter dict the caller already parsed."""
+    census = _census()
+    fm = doc if doc is not None else _plan_frontmatter(plan)
+    entries = fm.get("census") if isinstance(fm, dict) else None
+    if not isinstance(entries, list):
+        return ()
+    out: dict[str, None] = {}
+    for e in entries:
+        if not isinstance(e, dict) or census.is_typed(e):
+            continue
+        command = str(e.get("command") or "").strip()
+        if command and can_drift(e) and census.screen(command, None) is None:
+            out[command] = None
+    return tuple(out)
+
+
 def _remaining_timeout(timeout: int, deadline: Optional[float]) -> Optional[int]:
     """The spawn timeout under an optional deadline; `None` when the deadline is spent."""
     if deadline is None:
@@ -407,11 +900,16 @@ def _entry_row(
     deadline: Optional[float],
     decidable_only: bool,
     memo: Optional[dict],
+    head: Optional[str] = None,
+    view: Optional[_TreeView] = None,
+    stats: Optional[dict] = None,
 ) -> dict:
     """One entry's row under the skip and memo. Order: typed, empty and refused entries go
-    through `_deadline_bounded` as before; then the cannot-drift skip; then a memo hit; then a
-    deadline-bounded spawn whose completed run is stored. Neither a skip nor a memo hit spends
-    anything, so neither consults the deadline."""
+    through `_deadline_bounded` as before; then the cannot-drift skip; then the cost gate (a
+    prior run no dearer than its key spawns directly, keyless); then `input_key` against the
+    prior key (an equal non-None key judges the prior run, no spawn); then a deadline-bounded
+    spawn whose completed run is stored as a `MemoEntry`. Neither a skip nor a memo hit spends a
+    spawn, so neither consults the deadline."""
     census = _census()
     command = str(e.get("command") or "").strip()
     if census.is_typed(e) or not command:
@@ -429,17 +927,39 @@ def _entry_row(
             "observed": "",
         })
         return row
-    if memo is not None and command in memo:
-        return _judge(e, row, memo[command], plan_rel)
+    prior = memo.get(command) if memo is not None else None
+    prior = prior if isinstance(prior, MemoEntry) else None
+    direct = prior is not None and prior.key_ms is not None and prior.run_ms <= prior.key_ms
+    key: Optional[str] = None
+    key_ms: Optional[int] = None
+    if memo is not None and not direct:
+        started = time.perf_counter()
+        key = input_key(e, repo_root, head=head, view=view)
+        key_ms = _ms_since(started)
+        if key is not None and prior is not None and prior.key == key:
+            memo[command] = prior._replace(key_ms=key_ms)
+            if stats is not None:
+                stats["memo_hits"] += 1
+            return _judge(e, row, prior.ran, plan_rel)
     bounded = _remaining_timeout(timeout, deadline)
     if bounded is None:
         return _deadline_row(e)
+    started = time.perf_counter()
     ran = _spawn(command, repo_root, bounded)
+    run_ms = _ms_since(started)
     if isinstance(ran, dict):
         row.update(ran)
         return row
-    if memo is not None:
-        memo[command] = ran
+    if memo is None:
+        return _judge(e, row, ran, plan_rel)
+    if direct:
+        memo[command] = MemoEntry(None, ran, run_ms, prior.key_ms)
+        if stats is not None:
+            stats["direct_runs"] += 1
+        row = _judge(e, row, ran, plan_rel)
+        row["basis"] = (f"{row['basis']}; " if row.get("basis") else "") + _DIRECT_BASIS
+        return row
+    memo[command] = MemoEntry(key, ran, run_ms, key_ms)
     return _judge(e, row, ran, plan_rel)
 
 
@@ -452,11 +972,15 @@ def revalidate(
     deadline: Optional[float] = None,
     decidable_only: bool = False,
     memo: Optional[dict] = None,
+    head: Optional[str] = None,
 ) -> dict:
     """Revalidate one plan's census. `decidable_only` skips (no spawn) every command entry whose
-    recorded result `can_drift` rules out DRIFT. `memo` is a caller-owned map of command string
-    to a completed `(returncode, stdout, stderr)`; a hit spawns nothing and is judged against
-    the entry's own result. The reply carries `spent_ms`, the entry loop's monotonic wall."""
+    recorded result `can_drift` rules out DRIFT. `memo` is a caller-owned `{command: MemoEntry}`:
+    an entry whose `input_key` equals the stored key is judged from the stored run with no spawn,
+    and one whose stored spawn cost no more than its key runs directly with no key. `head` is the
+    HEAD sha that keys history-reading git stages (None leaves them un-keyed). `memo=None` runs
+    no key at all. The reply carries `spent_ms`, the entry loop's monotonic wall, and the
+    `memo_hits` and `direct_runs` counts."""
     yaml = _load_yaml()
     text = plan.read_text(encoding="utf-8", errors="replace")
     parts = text.split("---", 2)
@@ -476,12 +1000,20 @@ def revalidate(
         return {"plan": str(plan), "state": REFUSED, "detail": "no census: key", "entries": []}
     plan_rel = plan_rel_path(plan, repo_root)
     started = time.monotonic()
+    stats = {"memo_hits": 0, "direct_runs": 0}
     if decidable_only or memo is not None:
-        entries = [
-            _entry_row(e, repo_root, timeout, plan_rel, deadline, decidable_only, memo)
-            for e in census
-            if isinstance(e, dict)
-        ]
+        view = _TreeView(repo_root, deadline) if memo is not None else None
+        dicts = [e for e in census if isinstance(e, dict)]
+        order = list(range(len(dicts)))
+        if memo is not None:
+            order.sort(key=lambda i: _git_stage_refused(dicts[i], head))
+        rows: dict[int, dict] = {}
+        for i in order:
+            rows[i] = _entry_row(
+                dicts[i], repo_root, timeout, plan_rel, deadline, decidable_only, memo, head,
+                view, stats,
+            )
+        entries = [rows[i] for i in range(len(dicts))]
     else:
         entries = [
             _deadline_bounded(e, repo_root, timeout, plan_rel, deadline)
@@ -505,7 +1037,8 @@ def revalidate(
         state = UNDECIDABLE
     else:
         state = MATCH
-    return {"plan": str(plan), "state": state, "entries": entries, "spent_ms": spent_ms}
+    return {"plan": str(plan), "state": state, "entries": entries, "spent_ms": spent_ms,
+            "memo_hits": stats["memo_hits"], "direct_runs": stats["direct_runs"]}
 
 
 def main(argv: list[str]) -> int:
@@ -522,7 +1055,10 @@ def main(argv: list[str]) -> int:
                for p in args.plans]
 
     if args.json:
-        reports = [{k: v for k, v in r.items() if k != "spent_ms"} for r in reports]
+        reports = [
+            {k: v for k, v in r.items() if k not in ("spent_ms", "memo_hits", "direct_runs")}
+            for r in reports
+        ]
         json.dump(reports, sys.stdout, indent=1)
         print()
     else:

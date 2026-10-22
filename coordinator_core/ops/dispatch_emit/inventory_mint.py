@@ -146,8 +146,8 @@ from coordinator_core.ops.read_frontmatter_field import read_frontmatter_field
 from coordinator_core.ops.dispatch_emit.done_unlanded import DONE_LAND as _DONE_LAND
 from coordinator_core.ops.dispatch_emit.done_unlanded import DONE_NOOP as _DONE_NOOP
 from coordinator_core.ops.dispatch_emit.inventory_accounting import IN_ANOTHER_PART
-from coordinator_core.ops.dispatch_emit.wave_map import transitive_dependents
 from coordinator_core.ops.dispatch_emit.run_id_occupancy import family_spent_reason, next_tranche_number
+from coordinator_core.ops.dispatch_emit.wave_map import transitive_dependents
 from coordinator_core.ops.dispatch_emit.spine_read import (
     NON_DISPATCHABLE_DISPOSITIONS,
     SpineReadError,
@@ -1153,6 +1153,7 @@ def _classify_done_unlanded(
     Candidates are the open dispatchable chunks of each whole-plan item (minus checkpoint-landed
     ones) and each non-expanded item; those whose newest family report reads DONE are
     classified with one batched dirty check. Empty without a DONE report: no git spawn."""
+    # Lazy: only reached when an inventory path is given; DONE_* constants are imported at module level.
     from coordinator_core.ops.dispatch_emit.done_unlanded import classify_done, family_done_reports
 
     declared: Dict[str, List[str]] = {}
