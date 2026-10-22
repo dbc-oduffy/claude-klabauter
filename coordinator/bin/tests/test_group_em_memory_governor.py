@@ -372,3 +372,25 @@ def test_thaw_leftovers_ignores_missing_and_malformed(tmp_path):
     bad.write_text("not json")
     assert gov.thaw_leftovers(bad, lambda p, s: calls.append(p)) == []
     assert calls == [] and not bad.exists()
+
+
+def test_footprint_mb_from_rusage_reads_phys_footprint_field():
+    import struct
+    buf = bytearray(256)
+    struct.pack_into("<Q", buf, 72, 3 * 1048576)
+    struct.pack_into("<Q", buf, 64, 999 * 1048576)  # ri_resident_size is a different field
+    assert gov.footprint_mb_from_rusage(bytes(buf)) == 3.0
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="libproc is darwin-only")
+def test_darwin_footprints_spawn_nothing_and_include_self(monkeypatch):
+    import os
+
+    def boom(*a, **k):
+        raise AssertionError("footprints spawned a process")
+
+    monkeypatch.setattr(gov.subprocess, "run", boom)
+    monkeypatch.setattr(gov.subprocess, "Popen", boom)
+    out = gov._darwin_footprints(top_n=100000)
+    assert os.getpid() in out and out[os.getpid()] > 0
+    assert len(gov._darwin_footprints(top_n=3)) == 3

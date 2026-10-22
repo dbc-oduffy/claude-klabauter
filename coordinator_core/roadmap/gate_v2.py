@@ -57,10 +57,12 @@ BATON_REPORT_KEYS = frozenset({
     "held", "waiting_on_execution",
 })
 
-# Nested shape: counts{candidates,planning_open,execution_open,unschedulable}.
+# Nested shapes: counts{candidates,planning_open,execution_open,unschedulable};
+# shipped_unstamped[{id,path,plan_path,plan_status}] -- open batons whose linked plan is archived
+# or terminal: reported for the lander to ship, never candidates and never in a wave.
 REPORT_KEYS = frozenset({
     "batons", "waves", "cycles", "unresolved_blockers", "untracked", "held",
-    "counts", "unmatched_targets", "verdict",
+    "counts", "unmatched_targets", "verdict", "shipped_unstamped",
 })
 
 
@@ -78,6 +80,8 @@ _ID_WANT = frozenset({"stub_id", "handoff_id", "deliverable_id"})
 _TERMINAL_STATUS = frozenset({"claimed", "consumed", "superseded", "closed", "shipped", "done"})
 # A sizing route that holds no planning content: the baton waits for its execution gate.
 _NO_PLAN_ROUTES = frozenset({"dispatch"})
+# A live plan in one of these has nothing left to plan; an archived plan is terminal by location.
+_SHIPPED_PLAN_STATUSES = pg.PLAN_CODED_STATUSES | {"closed", "superseded"}
 _KEY_RES: Dict[frozenset, "re.Pattern[str]"] = {}
 
 
@@ -573,6 +577,14 @@ def _candidates(g: _Gate):
     return by_state, matched
 
 
+def _shipped_plan(g: _Gate, rec: _Rec) -> Optional[dict]:
+    """The linked plan when it is archived or terminal (the baton shipped unstamped), else None."""
+    plan, _amb = _link(g, rec)
+    if plan is not None and (plan["path"].startswith("archive/") or plan["status"] in _SHIPPED_PLAN_STATUSES):
+        return plan
+    return None
+
+
 def _info(g: _Gate, rec: _Rec) -> _Info:
     """The report row for one record plus its gate internals (requirements 5, 7, 8)."""
     cached = g.infos.get(rec.rel)
@@ -594,7 +606,7 @@ def _info(g: _Gate, rec: _Rec) -> _Info:
     waiting = False
     if state == "candidate" and execution and resolved:
         waiting = pg._sizing_route(g.root, resolved) in _NO_PLAN_ROUTES
-    candidate = state == "candidate" and not waiting
+    candidate = state == "candidate" and not waiting and _shipped_plan(g, rec) is None
     plan_approved = plan is not None and plan["status"] in pg.PLAN_APPROVED_STATUSES
     gp = _s(fm.get("governing_plan"))
     row = {
@@ -698,7 +710,22 @@ def _reaches_self(start: str, edges: Dict[str, Set[str]], within: Set[str]) -> b
     return False
 
 
-def _emit(g, infos, waves, cycles, unschedulable, untracked, held, unmatched) -> dict:
+def _shipped_entries(g: _Gate, recs: List[_Rec]) -> List[dict]:
+    """``shipped_unstamped`` rows for the candidate-state ``recs`` whose linked plan is terminal."""
+    out = []
+    for rec in recs:
+        plan = _shipped_plan(g, rec)
+        if plan is not None:
+            out.append({
+                "id": pg._baton_ids(g.fm(rec), rec.path)[0],
+                "path": rec.rel,
+                "plan_path": plan["path"],
+                "plan_status": plan["status"],
+            })
+    return sorted(out, key=lambda e: e["path"])
+
+
+def _emit(g, infos, waves, cycles, unschedulable, untracked, held, unmatched, shipped) -> dict:
     """The requirement-9 report and nothing else."""
     rows = [i.row for i in infos]
     candidates = [r for r in rows if r["candidate"]]
@@ -721,6 +748,7 @@ def _emit(g, infos, waves, cycles, unschedulable, untracked, held, unmatched) ->
         },
         "unmatched_targets": unmatched,
         "verdict": verdict,
+        "shipped_unstamped": shipped,
     }
 
 
@@ -742,8 +770,10 @@ def compute_gate_report(worktree_root, *, roadmap_id=None, targets=None, subject
         untracked = [rec.rel] if state == "untracked" else []
         held = [rec.rel] if state == "held" else []
         waves, cycles, unschedulable = _waves(g, [info])
-        return _emit(g, [info], waves, cycles, unschedulable, untracked, held, [])
+        shipped = _shipped_entries(g, [rec] if state == "candidate" else [])
+        return _emit(g, [info], waves, cycles, unschedulable, untracked, held, [], shipped)
     by_state, matched = _candidates(g)
+    shipped = _shipped_entries(g, by_state["candidate"])
     infos = sorted((_info(g, r) for r in by_state["candidate"]), key=lambda i: i.row["path"])
     waves, cycles, unschedulable = _waves(g, infos)
     unmatched = sorted(t for t in g.targets if t not in matched)
@@ -752,4 +782,5 @@ def compute_gate_report(worktree_root, *, roadmap_id=None, targets=None, subject
         sorted(r.rel for r in by_state["untracked"]),
         sorted(r.rel for r in by_state["held"]),
         unmatched,
+        shipped,
     )

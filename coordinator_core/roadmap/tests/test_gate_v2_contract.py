@@ -24,7 +24,7 @@ def test_baton_keys_equal_requirement_9():
 def test_report_keys_equal_requirement_9():
     assert gate_v2.REPORT_KEYS == frozenset(
         "batons waves cycles unresolved_blockers untracked held counts "
-        "unmatched_targets verdict".split()
+        "unmatched_targets verdict shipped_unstamped".split()
     )
 
 

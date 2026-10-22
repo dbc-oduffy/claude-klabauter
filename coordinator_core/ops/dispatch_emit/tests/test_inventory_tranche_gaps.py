@@ -352,3 +352,43 @@ def test_an_over_budget_group_cycle_places_plan_by_plan():
     taken, deferred = im._pick_groups(groups, size, prereqs, shared, 4)
     assert sorted(taken) == ["b", "c"]
     assert set(deferred) == {"a", "d"}
+
+
+def _groups(*writes_per_item, under=None):
+    items = [f"p{n}" for n in range(len(writes_per_item))]
+    rows = [
+        {"id": f"{item}.r", "writes": list(writes), **({"writes_under": under[n]} if under and under[n] else {})}
+        for n, (item, writes) in enumerate(zip(items, writes_per_item))
+    ]
+    return im._shared_path_groups(rows, items, items)[0]
+
+
+def test_distinct_files_under_one_directory_do_not_group():
+    assert _groups(["docs/plans/x.md"], ["docs/plans/y.md"], ["docs\\plans\\z.md"]) == [["p0"], ["p1"], ["p2"]]
+
+
+def test_one_file_written_by_two_plans_groups_them_across_spellings():
+    assert _groups(["docs/plans/x.md"], ["docs\\plans\\x.md"], ["docs/plans/y.md"]) == [["p0", "p1"], ["p2"]]
+
+
+def test_writes_under_prefix_groups_every_writer_beneath_it():
+    groups = _groups(
+        ["a.md"], ["docs/plans/x.md"], ["docs/plans/y.md"], ["src/z.py"], under=[["docs/plans/"], None, None, None]
+    )
+    assert groups == [["p0", "p1", "p2"], ["p3"]]
+
+
+def test_tranche_takes_plans_writing_distinct_files_under_one_directory_separately(tmp_path):
+    inv = _repo(
+        tmp_path,
+        {
+            "a": [_chunk("A0", "docs/plans/x.md"), _chunk("A1", "src/a1.py")],
+            "b": [_chunk("B0", "docs/plans/y.md"), _chunk("B1", "src/b1.py")],
+            "c": [_chunk("C0", "docs/plans/z.md")],
+        },
+        [("a", "—"), ("b", "—"), ("c", "—")],
+    )
+    report, _, _ = _tranche(inv, 3)
+    assert report["plans"] == ["a", "c"]
+    assert [d["plan"] for d in report["deferred"]] == ["b"]
+    assert "split across tranches" not in report["deferred"][0]["reason"]

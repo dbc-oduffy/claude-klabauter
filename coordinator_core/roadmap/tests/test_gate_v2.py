@@ -435,3 +435,46 @@ def test_tracked_set_comes_from_the_path_only_reader(root, monkeypatch):
     assert calls == [root] and report["untracked"] == []
     monkeypatch.setattr(gate_v2, "read_index_paths", lambda r: frozenset({"state/handoffs/other.md"}))
     assert gate_v2.compute_gate_report(root)["untracked"] == ["state/handoffs/a.md"]
+
+
+def _archived_plan(root, name, **fields):
+    (root / "archive/specs/2026-10").mkdir(parents=True, exist_ok=True)
+    (root / "archive/specs/2026-10" / f"{name}.md").write_text(_fm(**fields), encoding="utf-8")
+
+
+def test_baton_with_archived_plan_is_shipped_unstamped_not_a_candidate(root):
+    _archived_plan(root, "p", status="superseded", deliverable_id="d1", title="p")
+    baton(root, "a", deliverable_id="d1")
+    baton(root, "b")
+    report = gate_v2.compute_gate_report(root)
+    assert by_id(report)["a"]["candidate"] is False and by_id(report)["a"]["needs_plan"] is False
+    assert by_id(report)["b"]["candidate"] is True
+    assert report["shipped_unstamped"] == [{
+        "id": "a", "path": "state/handoffs/a.md",
+        "plan_path": "archive/specs/2026-10/p.md", "plan_status": "superseded",
+    }]
+    assert report["waves"] == [["b"]] and report["counts"]["candidates"] == 1
+
+
+def test_baton_with_live_terminal_plan_is_shipped_unstamped(root):
+    plan(root, "p", status="landed", deliverable_id="d1", title="p")
+    baton(root, "a", deliverable_id="d1")
+    report = gate_v2.compute_gate_report(root)
+    assert by_id(report)["a"]["candidate"] is False and report["waves"] == []
+    assert report["counts"]["candidates"] == 0
+    assert [(e["id"], e["plan_path"]) for e in report["shipped_unstamped"]] == [("a", "docs/plans/p.md")]
+
+
+def test_baton_with_live_nonterminal_plan_is_not_shipped_unstamped(root):
+    plan(root, "p", status="draft", deliverable_id="d1", title="p")
+    baton(root, "a", deliverable_id="d1")
+    report = gate_v2.compute_gate_report(root)
+    assert report["shipped_unstamped"] == [] and set(by_id(report)) == {"a"}
+
+
+def test_subject_with_archived_plan_is_reported_and_not_a_candidate(root):
+    _archived_plan(root, "p", status="superseded", deliverable_id="d1", title="p")
+    baton(root, "a", deliverable_id="d1")
+    report = gate_v2.compute_gate_report(root, subject="a")
+    assert by_id(report)["a"]["candidate"] is False and by_id(report)["a"]["needs_plan"] is False
+    assert [e["id"] for e in report["shipped_unstamped"]] == ["a"]

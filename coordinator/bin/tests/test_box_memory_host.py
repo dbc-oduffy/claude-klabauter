@@ -54,6 +54,11 @@ def test_admit_avail_fails_alone():
     assert not v.avail_ok and v.commit_ok and not v.admit
 
 
+def test_admit_cushion_cap_parameter():
+    v = host.admit(64 * GIB, _status(), cushion_cap=2 * GIB)
+    assert v.need_avail == 66 * GIB
+
+
 def test_admit_commit_limit_override():
     st = _status(used=10 * GIB, limit=200 * GIB)
     assert not host.admit(10 * GIB, st, commit_limit=15 * GIB).commit_ok

@@ -219,18 +219,45 @@ def critical(psi_full: float, avail_pct: float) -> bool:
     raise SystemExit("group-em-memory-governor: no pressure source on this host (install psutil)")
 
 
-_TOP_UNITS = {"B": 1 / 1048576, "K": 1 / 1024, "M": 1.0, "G": 1024.0, "T": 1048576.0}
+_RUSAGE_INFO_V2 = 2
+_RUSAGE_V2_BYTES = 256
+_PHYS_FOOTPRINT_OFFSET = 72  # rusage_info_v2: 16-byte uuid, then seven u64 counters, then ri_phys_footprint
+_TOP_N = 15
+
+
+def footprint_mb_from_rusage(buf: bytes) -> float:
+    """MB of ri_phys_footprint (resident + compressed + swapped) in a rusage_info_v2 buffer."""
+    import struct
+    return struct.unpack_from("<Q", buf, _PHYS_FOOTPRINT_OFFSET)[0] / 1048576
+
+
+def _darwin_footprints(top_n: int = _TOP_N) -> dict[int, float]:
+    """Spawn-free: libproc proc_listallpids + proc_pid_rusage, the largest `top_n` by footprint."""
+    import ctypes
+    import ctypes.util
+    lib = ctypes.CDLL(ctypes.util.find_library("proc") or "/usr/lib/libproc.dylib", use_errno=True)
+    count = lib.proc_listallpids(None, 0)
+    if count <= 0:
+        return {}
+    pids = (ctypes.c_int * (count + 64))()
+    count = lib.proc_listallpids(pids, ctypes.sizeof(pids))
+    buf = ctypes.create_string_buffer(_RUSAGE_V2_BYTES)
+    sizes: dict[int, float] = {}
+    for i in range(max(count, 0)):
+        pid = pids[i]
+        if pid > 0 and lib.proc_pid_rusage(pid, _RUSAGE_INFO_V2, buf) == 0:
+            sizes[pid] = footprint_mb_from_rusage(buf.raw)
+    return dict(sorted(sizes.items(), key=lambda kv: -kv[1])[:top_n])
 
 
 def footprints() -> dict[int, float]:
     """pid -> MB of resident + compressed + swapped memory, for the largest processes."""
     out: dict[int, float] = {}
     if sys.platform == "darwin":
-        raw = subprocess.run(["top", "-l", "1", "-o", "mem", "-n", "15", "-stats", "pid,mem"],
-                             capture_output=True, text=True, check=False).stdout
-        for m in re.finditer(r"^\s*(\d+)\s+(\d+(?:\.\d+)?)([BKMGT])\+?\s*$", raw, re.M):
-            out[int(m.group(1))] = float(m.group(2)) * _TOP_UNITS[m.group(3)]
-        return out
+        try:
+            return _darwin_footprints()
+        except Exception:  # libproc unavailable: no runaway read this tick
+            return out
     if psutil is None:
         return out
     for pr in psutil.process_iter(["pid"]):
