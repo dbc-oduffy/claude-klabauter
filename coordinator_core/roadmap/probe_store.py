@@ -418,10 +418,11 @@ def _save_graph(root: str, files: list) -> None:
 _GRAPH_SEEDED: set = set()
 
 
-def _closure(root: str) -> Optional[list]:
+def _closure(root: str, stats: Optional[dict] = None) -> Optional[list]:
     """The sorted engine files in the static import closure of the probe and the two bin
     scripts, plus those roots and plan.schema.json; None when a closure file will not parse.
-    Per-file parses persist in the cache dir, so only a file whose stat changed is re-parsed."""
+    Per-file parses persist in the cache dir, so only a file whose stat changed is re-parsed.
+    A `stats` dict is filled with `{path: stat_result}` for every file the walk stat'd."""
     if root not in _GRAPH_SEEDED:
         _GRAPH_SEEDED.add(root)
         _load_graph(root)
@@ -436,6 +437,8 @@ def _closure(root: str) -> Optional[list]:
             st = os.stat(path)
         except OSError:
             continue
+        if stats is not None:
+            stats[path] = st
         sig = (st.st_size, st.st_mtime_ns)
         hit = _IMPORT_PARSE_CACHE.get(path)
         if hit is None or hit[0] != sig:
@@ -464,17 +467,23 @@ def engine_key(engine_sha: Optional[str]) -> Optional[str]:
     the caller then neither reads nor writes the store. A file outside the closure
     never changes the key."""
     root = os.path.normpath(str(ENGINE_CHECKOUT_ROOT))
-    files = _closure(root)
+    walked: dict = {}
+    files = _closure(root, walked)
     if files is None:
         return None
     digest = hashlib.sha256()
+    prefix = root + os.sep
+    cut = len(prefix)
     for path in files:
-        rel = os.path.relpath(path, root).replace(os.sep, "/")
-        try:
-            st = os.stat(path)
-        except OSError:
-            digest.update(f"{rel}\0absent\n".encode())
-            continue
+        rel = path[cut:] if path.startswith(prefix) else os.path.relpath(path, root)
+        rel = rel.replace(os.sep, "/")
+        st = walked.get(path)
+        if st is None:
+            try:
+                st = os.stat(path)
+            except OSError:
+                digest.update(f"{rel}\0absent\n".encode())
+                continue
         if st.st_mtime_ns > _IMPORTED_AT_NS:
             return None
         digest.update(f"{rel}\0{st.st_size}\0{st.st_mtime_ns}\n".encode())

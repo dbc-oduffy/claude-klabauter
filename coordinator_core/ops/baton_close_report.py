@@ -9,6 +9,7 @@ Self-registration: importing this module registers the op; ops/__init__.py impor
 
 from __future__ import annotations
 
+import asyncio
 import os
 from pathlib import Path
 from typing import Optional
@@ -61,6 +62,10 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     Returns {exit_code, schema_version, op, batons_scanned, no_evidence, closable, residue,
     scan_incomplete}; `scan_incomplete` is true when the handoffs directory is missing.
     """
+    return await asyncio.to_thread(_run, params, repo_root)
+
+
+def _run(params: dict, repo_root: Optional[Path]) -> dict:
     if repo_root is None:
         return {"exit_code": 1, "error": f"{OP_KEY}: repo_root is required (no founding root available)"}
 

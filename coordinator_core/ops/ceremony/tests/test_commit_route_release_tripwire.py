@@ -366,10 +366,6 @@ ALLOWLIST: dict[str, dict[str, object]] = {
         "reason": "ineligible: benchmark fixture seeding a throwaway repo; no claims exist",
         "confirmed": True,
     },
-    "benchmarks/terminal_commit_full_path.py::build_real_shape": {
-        "reason": "ineligible: benchmark fixture seeding a throwaway repo; no claims exist",
-        "confirmed": True,
-    },
     "benchmarks/close_review_full_path.py::build_fixture": {
         "reason": "ineligible: benchmark fixture seeding a throwaway repo; no claims exist",
         "confirmed": True,
@@ -419,10 +415,6 @@ ALLOWLIST: dict[str, dict[str, object]] = {
         "confirmed": True,
     },
     "benchmarks/run_baton_cascade_full_path.py::build_corpus": {
-        "reason": "ineligible: benchmark fixture seeding a throwaway repo; no claims exist",
-        "confirmed": True,
-    },
-    "benchmarks/terminal_commit_full_path.py::build_real_shape": {
         "reason": "ineligible: benchmark fixture seeding a throwaway repo; no claims exist",
         "confirmed": True,
     },

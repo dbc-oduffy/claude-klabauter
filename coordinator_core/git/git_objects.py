@@ -367,6 +367,28 @@ def _pack_dir_generation(pack_dir: Path) -> Optional[tuple[int, int]]:
     return (st.st_mtime_ns, st.st_size)
 
 
+def _temp_pair_is_complete(idx_path: Path, pack_path: Path) -> bool:
+    """A stranded `.tmp-<pid>-pack-<sha>` pair is read as git reads it, but only
+    when whole: the idx trailer holds the pack checksum, which must equal the
+    pack's last 20 bytes. A torn or in-progress pair fails and stays unlisted."""
+    try:
+        with open(idx_path, "rb") as f:
+            head = f.read(8)
+            f.seek(0, os.SEEK_END)
+            idx_size = f.tell()
+            if head != b"\xfftOc\x00\x00\x00\x02" or idx_size < 8 + 1024 + 40:
+                return False
+            f.seek(-40, os.SEEK_END)
+            idx_pack_sum = f.read(20)
+        with open(pack_path, "rb") as f:
+            if f.read(4) != b"PACK":
+                return False
+            f.seek(-20, os.SEEK_END)
+            return f.read(20) == idx_pack_sum
+    except OSError:
+        return False
+
+
 def _iter_pack_files(common_dir: Path, *, revalidate: bool = True) -> list[tuple[Path, Path]]:
     """Lists `(idx_path, pack_path)` pairs under `objects/pack/`, cached per
     `common_dir` -- see `_PACK_LISTING_CACHE` above for why that is safe in
@@ -395,10 +417,13 @@ def _iter_pack_files(common_dir: Path, *, revalidate: bool = True) -> list[tuple
                 names = {e.name for e in it}
         except OSError:
             names = set()
-        for name in sorted(n for n in names if n.endswith(".idx") and not n.startswith(".")):
+        for name in sorted(n for n in names if n.endswith(".idx")):
             pack_name = name[:-4] + ".pack"
-            if pack_name in names:
-                result.append((pack_dir / name, pack_dir / pack_name))
+            if pack_name not in names:
+                continue
+            if name.startswith(".") and not (name.startswith(".tmp-") and _temp_pair_is_complete(pack_dir / name, pack_dir / pack_name)):
+                continue
+            result.append((pack_dir / name, pack_dir / pack_name))
     _PACK_LISTING_CACHE[key] = (generation, result)
     _PACK_INDEXES_BY_LISTING.pop(key, None)
     _LAST_HIT_PACK.pop(key, None)

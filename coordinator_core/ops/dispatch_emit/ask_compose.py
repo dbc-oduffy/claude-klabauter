@@ -33,6 +33,7 @@ from coordinator_core.ops.dispatch_emit.ask_brief import EM_BRIEF_VAR, EmBrief, 
 from coordinator_core.ops.dispatch_emit import ask_gate as _ask_gate  # noqa: F401 -- installs the fleet-mode provider
 from coordinator_core.ops.dispatch_emit.sizing_fire import RESUME_LEDGER_HALT_BLOCKING_FIELD
 from coordinator_core.ops.dispatch_emit.pre_halt_credit import CREDIT_MATCH_JS
+from coordinator_core.ops.dispatch_emit.memo_rows import MEMO_CLOSE_KEY
 from coordinator_core.ops._workflow_contract import agent_options_phase_titles
 from coordinator_core.ops.dispatch_emit.ask_contract import (
     ALL_LANDED_HALT_KIND,
@@ -2664,6 +2665,7 @@ def compose_ask_script(
     if judged:
         b.append("  let _falsifierSpec = null;")
     b.append("  let _allLanded = false;")
+    b.append("  let _memoCloseOnly = false;")
     b.append("  if (!_viaRoadmap) {")
     b.append("  if (!_halted) {")
     # Stage is folded into the last act of the agent that closes the gate, plan or plan-blitz ready
@@ -2709,6 +2711,12 @@ def compose_ask_script(
         "  if (!_manifest.error && !(_manifest.rows ?? []).length && Array.isArray(_gate.resume_rows) "
         "&& ((_manifest.owed ?? []).length || (_manifest.gated ?? []).length)) "
         "{ _allLanded = true; _xsTail = true; }"
+    )
+    # `_allLanded` is set too: it is the flag the pinned refusal-halt condition already honors.
+    b.append(
+        "  if (!_manifest.error && !(_manifest.rows ?? []).length && !(_manifest.owed ?? []).length "
+        f"&& !(_manifest.gated ?? []).length && Array.isArray(_manifest.{MEMO_CLOSE_KEY}) && _manifest.{MEMO_CLOSE_KEY}.length) "
+        "{ _memoCloseOnly = true; _allLanded = true; _xsTail = true; }"
     )
     b.append(
         f"  if (_manifest.error && /^(?:stage refused: )?{STAGE_REFUSAL_PREFIX}/.test(String(_manifest.error))) {{ _halted = {{ "
@@ -2907,7 +2915,7 @@ def compose_ask_script(
         anchor=anchor,
         test_js=_test_instruction_js(run_base_sha or "HEAD", repo_root),
         docs_parts=_docs_prompt_parts(run_id=run_id, manifest_rel=manifest_rel) if in_run_commit else (),
-        verdict_parts=(*verdict_parts, DEFAULT_MET_BY_CLAUSE, "js:" + _SFE_WAVE_SIDECARS_JS, "js:" + _RESUME_LEDGER_CLAUSE_JS),
+        verdict_parts=(*verdict_parts, DEFAULT_MET_BY_CLAUSE, "js:" + _SFE_WAVE_SIDECARS_JS, "js:" + _RESUME_LEDGER_CLAUSE_JS, "js:" + _MEMO_CLOSE_CLAUSE_JS),
         judged=judged,
         schema=_verify_schema(judge_brief[1] if judged else None),
         run_id=run_id,
@@ -3346,6 +3354,13 @@ _SFE_WAVE_SIDECARS_JS = (
     "const s = w.sidecar_path.replace(/\\\\/g, '/'); "
     "return s.toLowerCase().startsWith(_r.toLowerCase()) ? s.slice(_r.length) : s; }); "
     "return _p.length ? _p.join(', ') : 'none'; })())"
+)
+#: Appended to the verify prompt of a memo-close-only run; `_memoCloseOnly` gates it.
+_MEMO_CLOSE_CLAUSE_JS = (
+    "(_memoCloseOnly ? ' MEMO-CLOSE: no executor ran; the source memo sha reply and resolve are paid by the "
+    "close-out memo-lifecycle leg after commit, so a requirement row whose only remaining acts are sha_reply "
+    "and lifecycle acts is not_met with remaining naming them. Memo rows: ' + "
+    f"JSON.stringify(_manifest.{MEMO_CLOSE_KEY}) + '.' : '')"
 )
 #: Appended to the verify prompt: on a ledger resume the executors' work already landed, so the
 #: verdict covers exactly the rows the halted run blocked on.

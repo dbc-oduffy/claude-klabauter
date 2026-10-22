@@ -26,7 +26,8 @@ EVIDENCE_SHA = "c0ffee1234567890abcdef1234567890abcdef12"
 
 
 def _fm(path: Path, key: str):
-    split = split_frontmatter(path.read_text(encoding="utf-8", newline=""))
+    with open(path, encoding="utf-8", newline="") as handle:
+        split = split_frontmatter(handle.read())
     assert split is not None
     return read_fm_field_unquoted(split.fm_text, key)
 

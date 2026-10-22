@@ -1,7 +1,8 @@
 """Shared host layer for the box-memory CLIs.
 
 Stdlib plus optional psutil. Imports cleanly on every OS; Win32 bindings are created lazily
-inside the functions that use them. No `coordinator_core` import.
+inside the functions that use them. No module-level `coordinator_core` import; available
+memory comes from `host_sampler.avail_mb`, imported inside `read_memory_status`.
 
 Family exit codes: 0 ok, 1 operational failure, 2 usage, 3 not elevated, 4 admission HOLD
 (`box-memory-snapshot --admit-peak` only), 6 unsupported host.
@@ -78,7 +79,7 @@ def read_memory_status() -> MemoryStatus:
             ("dwLength", ctypes.c_uint32),
             ("dwMemoryLoad", ctypes.c_uint32),
             ("ullTotalPhys", ctypes.c_uint64),
-            ("ullAvailPhys", ctypes.c_uint64),
+            ("_ull_avail_phys_unread", ctypes.c_uint64),
             ("ullTotalPageFile", ctypes.c_uint64),
             ("ullAvailPageFile", ctypes.c_uint64),
             ("ullTotalVirtual", ctypes.c_uint64),
@@ -90,8 +91,13 @@ def read_memory_status() -> MemoryStatus:
     stat.dwLength = ctypes.sizeof(_MEMORYSTATUSEX)
     if not ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(stat)):
         raise ctypes.WinError()
+    from coordinator_core.telemetry import host_sampler
+
+    avail_mb, _total_mb = host_sampler.avail_mb()
+    if avail_mb is None:
+        raise OSError("available physical memory unreadable")
     return MemoryStatus(
-        avail_phys=int(stat.ullAvailPhys),
+        avail_phys=int(avail_mb) * 1048576,
         total_phys=int(stat.ullTotalPhys),
         commit_used=int(stat.ullTotalPageFile - stat.ullAvailPageFile),
         commit_limit=int(stat.ullTotalPageFile),

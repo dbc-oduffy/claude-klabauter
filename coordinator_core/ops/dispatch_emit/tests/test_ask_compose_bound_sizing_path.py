@@ -35,7 +35,7 @@ def test_scout_write_gate_and_stage_paths_all_carry_the_run_suffix():
     assert "-<name>.yaml" not in script
     assert f"--write \\'REPO/state/sizings/" in script
     assert f'\\\'{{"sizing_path":"state/sizings/' in script
-    assert f'sizing_path "state/sizings/' in script
+    assert '"sizing_path": "state/sizings/' in script
     assert script.count(suffixed) >= 4
     assert f"_slugOf(r) + '-{SUFFIX}.yaml';" in script
 

@@ -86,8 +86,23 @@ CANON = frozenset({"shipped", "abandoned", "continued", "closed"})
 #   point (see module docstring) — its CANON-overlapping literals are the
 #   exemption table itself, not a hand-enumeration of the vocabulary.
 _KNOWN_OVERLAP_EXEMPTIONS: dict[str, frozenset[frozenset[str]]] = {
-    # test_sweep_shipped_handoffs_terminal_selector.py's exemption removed 2026-08-07 —
-    # the file was excised in the spawn-heavy test cull (see _CONSUMERS below).
+    # `closed` joined the PLAN status vocabulary (plan axis, not handoff deployment_state),
+    # so these plan/goal status enumerations now share two tokens with CANON by coincidence.
+    # Written via str.split() so this module's own scan (it is a consumer) sees no literal collection.
+    "coordinator/bin/assert-no-terminal-plans-in-live.py": frozenset(
+        {frozenset("implemented superseded abandoned closed".split())}
+    ),
+    "coordinator/bin/emit-goal-from-artifact.py": frozenset(
+        {frozenset("active achieved abandoned closed".split())}
+    ),
+    "coordinator_core/ops/emit_artifact_shape_contract.py": frozenset(
+        {
+            frozenset(
+                "draft reviewed approved blocked executing landed implemented "
+                "closed_partial deferred abandoned closed superseded".split()
+            )
+        }
+    ),
     "coordinator/bin/tests/test_handoff_terminal_vocabulary_consumers.py": frozenset(
         {
             frozenset({"shipped", "abandoned", "superseded"}),

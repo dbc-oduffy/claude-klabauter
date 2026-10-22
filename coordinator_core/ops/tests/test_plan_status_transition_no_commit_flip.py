@@ -67,6 +67,12 @@ def _repo(root: Path, disposition: str) -> Path:
     return plan
 
 
+def _successor(plan: Path) -> str:
+    succ = plan.parent / "succ.md"
+    succ.write_text("---\ntitle: S\nstatus: executing\n---\n", encoding="utf-8")
+    return str(succ)
+
+
 def test_no_commit_leaves_plan_modified_and_head_unmoved(tmp_path):
     plan = _repo(tmp_path / "r", "coded")
     head = _git(plan.parent, "rev-parse", "HEAD")
@@ -116,8 +122,40 @@ def test_status_refusal_fires_with_no_commit(tmp_path, capsys):
 def test_no_commit_is_rejected_on_other_verbs(tmp_path, capsys):
     plan = _repo(tmp_path / "r", "coded")
 
-    assert main(["stamp-superseded", "--plan", str(plan), "--by", "x.md", "--no-commit"]) == 1
+    assert main(["stamp-abandoned", "--plan", str(plan), "--no-commit"]) == 1
     assert "--no-commit" in capsys.readouterr().err
+
+
+def test_superseded_no_commit_writes_flip_without_commit_or_archive(tmp_path):
+    plan = _repo(tmp_path / "r", "coded")
+    head = _git(plan.parent, "rev-parse", "HEAD")
+
+    rc = main(["stamp-superseded", "--plan", str(plan), "--by", _successor(plan), "--no-commit"])
+
+    assert rc == 0
+    assert "status: superseded" in plan.read_text(encoding="utf-8")
+    assert _git(plan.parent, "rev-parse", "HEAD") == head
+    assert plan.exists()
+    assert _git(plan.parent, "status", "--porcelain", "--", "p.md").startswith(" M")
+
+
+def test_superseded_without_no_commit_still_commits(tmp_path):
+    plan = _repo(tmp_path / "r", "coded")
+    head = _git(plan.parent, "rev-parse", "HEAD")
+
+    assert main(["stamp-superseded", "--plan", str(plan), "--by", _successor(plan)]) == 0
+
+    assert _git(plan.parent, "rev-parse", "HEAD") != head
+    assert _git(plan.parent, "status", "--porcelain", "--", "p.md") == ""
+
+
+def test_superseded_no_commit_still_refuses_ship_sha(tmp_path, capsys):
+    plan = _repo(tmp_path / "r", "coded")
+
+    argv = ["stamp-superseded", "--plan", str(plan), "--by", _successor(plan), "--no-commit", "--ship-sha", "a"]
+    assert main(argv) == 1
+    assert "--ship-sha" in capsys.readouterr().err
+    assert "status: executing" in plan.read_text(encoding="utf-8")
 
 
 def test_ship_sha_reaches_the_cascade(tmp_path, monkeypatch):

@@ -219,7 +219,8 @@ def test_tracked_at_base_undeclared_foreign_file_is_not_removed(world, monkeypat
     for argv in (["init", "-q"], ["add", "tests/test_tracked_foreign.py"], ["commit", "-q", "-m", "base"]):
         subprocess.run(["git", "-C", str(root), *argv], check=True, env=full_env, capture_output=True, creationflags=_NOWIN)
     base = subprocess.run(
-        ["git", "-C", str(root), "rev-parse", "HEAD"], check=True, capture_output=True, text=True
+        ["git", "-C", str(root), "rev-parse", "HEAD"], check=True, capture_output=True, text=True,
+        creationflags=_NOWIN,
     ).stdout.strip()
     manifest = Path(share_dir(str(root), SESSION)) / f"{PREFIX}.pre-review" / "manifest.json"
     data = json.loads(manifest.read_text(encoding="utf-8"))

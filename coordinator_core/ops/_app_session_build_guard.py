@@ -47,7 +47,7 @@ def _read(path: Path) -> Optional[dict]:
 
 def _try_create(path: Path, record: dict) -> bool:
     try:
-        fd = os.open(str(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        fd = os.open(str(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
     except FileExistsError:
         return False
     with os.fdopen(fd, "w", encoding="utf-8") as fh:

@@ -9,6 +9,7 @@ engine-supplied toplevel is refused before any file is read.
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import Optional
 
@@ -51,4 +52,4 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             "the op migrates its own tree only",
         }
 
-    return _prose_queue_run.run_migration(Path(repo_root).resolve(), list(families), dry_run)
+    return await asyncio.to_thread(_prose_queue_run.run_migration, Path(repo_root).resolve(), list(families), dry_run)

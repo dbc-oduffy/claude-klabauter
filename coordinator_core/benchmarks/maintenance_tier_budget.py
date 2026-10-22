@@ -95,13 +95,15 @@ def add_small_packs_and_loose(repo: Path, packs: int, loose_commits: int) -> str
     a pack-per-commit store accumulates), `loose_commits` reachable loose
     commits, and one unreachable loose blob. Returns the unreachable blob's sha.
     """
-    pack_base = str(repo / ".git" / "objects" / "pack" / "pack")
+    # One fast-import; each `checkpoint` closes the open pack, so every blob lands in its own.
+    stream = []
     for i in range(packs):
-        blob = run_git(
-            ["hash-object", "-w", "--stdin"], cwd=str(repo), input=b"small pack %d\n" % i
-        ).stdout.strip()
-        run_git(["pack-objects", "-q", pack_base], cwd=str(repo), input=(blob + "\n").encode("utf-8"))
-        run_git(["prune-packed", "-q"], cwd=str(repo))
+        blob = b"small pack %d\n" % i
+        stream.append(b"blob\ndata %d\n" % len(blob) + blob + b"\ncheckpoint\n")
+    if stream:
+        run_git(
+            ["-c", "fastimport.unpackLimit=0", "fast-import", "--quiet"], cwd=str(repo), input=b"".join(stream)
+        )
     for i in range(loose_commits):
         run_git(
             ["-c", "user.email=f@example.com", "-c", "user.name=f",

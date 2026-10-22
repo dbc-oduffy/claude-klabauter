@@ -282,6 +282,16 @@ def test_stage_manifest_fanout_serialises_only_when_set_and_round_trips():
     assert c.StageManifest.from_json(json.loads(json.dumps(m.to_json()))) == m
 
 
+def test_stage_manifest_memo_close_serialises_only_when_set_and_round_trips():
+    base = c.StageManifest("r", (), (), "m")
+    assert "memo_close" not in base.to_json()
+    assert c.StageManifest.from_json(base.to_json()).memo_close == ()
+    closes = ({"id": "X1", "memo": "state/cross-repo/inbox/a.md"},)
+    m = c.StageManifest("r", (), (), "m", memo_close=closes)
+    assert m.to_json()["memo_close"] == list(closes)
+    assert c.StageManifest.from_json(json.loads(json.dumps(m.to_json()))) == m
+
+
 def test_scout_schema_seeds_pattern_admits_only_seed_kinds():
     import re
 

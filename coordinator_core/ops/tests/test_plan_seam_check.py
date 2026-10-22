@@ -35,9 +35,13 @@ class FakeGit:
         self.landed: set = set()
         self.touched: list = []
         self.calls: list = []
+        self.ignored: set = set()
 
     def __call__(self, args, **kw):
         self.calls.append(list(args))
+        if "check-ignore" in args:
+            asked = [p for p in kw["input"].decode().split("\0") if p]
+            return SimpleNamespace(ok=True, stdout="".join(p + "\0" for p in asked if p in self.ignored))
         if "cat-file" in args:
             out = []
             for line in kw["input"].decode().split("\n"):
@@ -326,6 +330,40 @@ def test_drift_promised_path_absent(tmp_path, git):
     assert f["path"] == "lib.py" and f["row"] == "B1"
     git.landed.add("lib.py")
     assert _wb(root, [a, b], [(a, "A1")])["verdict"] == "CLEAN"
+
+
+def _drift_pair(root):
+    a = _plan(root, "a", _row("A1", "[scratch/w.md]"))
+    b = _plan(root, "b", _row("B1", "[b.py]", "[scratch/w.md]"))
+    return a, b
+
+
+def test_drift_ignored_promised_path_present_on_disk_is_not_drift(tmp_path, git):
+    root = _root(tmp_path)
+    a, b = _drift_pair(root)
+    (root / "scratch").mkdir()
+    (root / "scratch" / "w.md").write_text("x", encoding="utf-8")
+    git.ignored.add("scratch/w.md")
+    assert _wb(root, [a, b], [(a, "A1")])["verdict"] == "CLEAN"
+
+
+def test_drift_ignored_promised_path_missing_on_disk_is_drift(tmp_path, git):
+    root = _root(tmp_path)
+    a, b = _drift_pair(root)
+    git.ignored.add("scratch/w.md")
+    r = _wb(root, [a, b], [(a, "A1")])
+    assert r["verdict"] == "DRIFT" and r["findings"][0]["path"] == "scratch/w.md"
+    assert not [c for c in git.calls if "check-ignore" in c]
+
+
+def test_drift_unignored_untracked_promised_path_on_disk_is_still_drift(tmp_path, git):
+    root = _root(tmp_path)
+    a, b = _drift_pair(root)
+    (root / "scratch").mkdir()
+    (root / "scratch" / "w.md").write_text("x", encoding="utf-8")
+    r = _wb(root, [a, b], [(a, "A1")])
+    assert r["verdict"] == "DRIFT"
+    assert len([c for c in git.calls if "check-ignore" in c]) == 1
 
 
 def test_a_landed_row_reported_by_its_minted_inventory_id_still_counts_as_landed(tmp_path, git):

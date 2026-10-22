@@ -88,6 +88,8 @@ def _stamp(tmp_path: Path) -> None:
 
 def _patch_boot_seams(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(server, "_engine_clone_root", lambda: tmp_path)
+    # An ambient override naming another tree makes boot refuse; these tests boot against tmp_path.
+    monkeypatch.delenv("COORDINATOR_ENGINE_ROOT", raising=False)
     monkeypatch.setattr(server, "_preload_op_registry", lambda: None)
     monkeypatch.setattr(server, "_suppress_pool_worker_consoles", lambda: None)
     monkeypatch.setattr(server, "_declare_execution_route", lambda: None)

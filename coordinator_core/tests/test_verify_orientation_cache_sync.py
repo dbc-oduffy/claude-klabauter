@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import subprocess
+
+from coordinator_core.win_portability import no_console_creationflags
 from pathlib import Path
 
 from coordinator_core.ops.verify_orientation_cache_sync import main, verify
@@ -235,8 +237,8 @@ def test_fixture_only_uproject_demands_no_caveat(tmp_path: Path, tracked: bool) 
     fx.mkdir(parents=True)
     (fx / "Foo.uproject").write_text("", encoding="utf-8")
     if tracked:
-        subprocess.run(["git", "init", "-q", str(repo)], check=True)
-        subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+        subprocess.run(["git", "init", "-q", str(repo)], check=True, **no_console_creationflags())
+        subprocess.run(["git", "-C", str(repo), "add", "."], check=True, **no_console_creationflags())
     cache = _write(tmp_path, "cache.md", _NO_TC_CACHE)
     violations, _ = verify(str(cache), str(repo))
     assert violations == []

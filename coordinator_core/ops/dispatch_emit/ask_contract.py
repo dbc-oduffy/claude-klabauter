@@ -1007,7 +1007,9 @@ class StageManifest:
     ``test_targets`` is the spine's terminal test scope; ``no_test_target`` is set (``{reason,
     unmapped_paths, testable_omissions}``) when the locator found no runnable target for a
     testable write -- the run's tests read degraded, never pass. ``doc_writes`` is the docs
-    stage's declared write set, carried in the commit request's ``docs`` chunk."""
+    stage's declared write set, carried in the commit request's ``docs`` chunk.
+    ``memo_close`` lists ``{id, memo}`` for a zero-row manifest whose every spine row only
+    closes an inbox memo; an absent key reads as ``()``."""
 
     run_dir: str
     rows: tuple[ManifestRow, ...]
@@ -1036,9 +1038,14 @@ class StageManifest:
     #: Open `needs_slot` rows as `{id, title, register_rows}`: withheld from the judge beside
     #: `gated`, without widening `gated`; an absent key reads as ``()``.
     slot_withheld: tuple[dict[str, Any], ...] = ()
+    #: `{id, memo}` per row that only closes an inbox memo when every spine row was so excluded
+    #: (`memo_rows.memo_close_only`); an absent key reads as ``()``.
+    memo_close: tuple[dict[str, Any], ...] = ()
 
     def to_json(self) -> dict[str, Any]:
         out = self._base_json()
+        if self.memo_close:
+            out["memo_close"] = [dict(r) for r in self.memo_close]
         if self.slot_withheld:
             out["slot_withheld"] = [dict(r) for r in self.slot_withheld]
         if self.fanout is not None:
@@ -1084,4 +1091,5 @@ class StageManifest:
             retired_resume_rows=tuple(data.get("retired_resume_rows") or ()),
             fanout=dict(data["fanout"]) if data.get("fanout") else None,
             slot_withheld=tuple(dict(r) for r in data.get("slot_withheld") or ()),
+            memo_close=tuple(dict(r) for r in data.get("memo_close") or ()),
         )

@@ -86,7 +86,7 @@ def _reap_or_record(rec: LaunchRecord) -> None:
     kill = _kill or _process_kill
     row = reap_launch(rec, store.all_records(), snapshot, kill)
     store.append_row(row)
-    if row.outcome in (ReapOutcome.NO_CANDIDATE, ReapOutcome.AMBIGUOUS):
+    if row.outcome is not ReapOutcome.KILLED:
         store.write_record(rec)
 
 

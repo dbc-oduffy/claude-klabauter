@@ -1340,6 +1340,24 @@ def _is_sanctioned_sizing_writer_shape(segment: str) -> bool:
     return _runs_only_named_program_operands(segment, _SIZING_WRITER_BASENAMES)
 
 
+_CLAIM_RELEASE_SUBCOMMANDS = frozenset({"release-artifact", "clear-claim-if-dead"})
+
+
+def _is_claim_release_shape(segment: str) -> bool:
+    """``session-claim-cli release-artifact|clear-claim-if-dead <operand>``: it
+    writes the claim ledger, never the named record, so a governed path operand
+    is data. Any other subcommand, or a shell write in the segment, declines."""
+    if not _runs_only_named_program_operands(segment, frozenset({"session-claim-cli"})):
+        return False
+    tokens = _strip_quoted_spans(segment).split()
+    idx = 0
+    while idx < len(tokens) and _ASSIGN_RE.match(tokens[idx]):
+        idx += 1
+    if idx + 1 >= len(tokens) or _segment_command_word_is_python(segment):
+        return False
+    return tokens[idx + 1] in _CLAIM_RELEASE_SUBCOMMANDS
+
+
 def _segment_command_word_is_python(segment: str) -> bool:
     tokens = segment.split()
     idx = 0
@@ -1981,6 +1999,7 @@ def is_denied_bash_write(cmd: str, identifiers_lower: Tuple[str, ...]) -> bool:
             or _is_commit_wrapper_read_shape(segment)
             or _is_sanctioned_sizing_writer_shape(segment)
             or _is_commit_cli_argument_shape(segment)
+            or _is_claim_release_shape(segment)
             or _is_claude_md_grant_read_shape(segment)
             or _is_interpreter_read_shape(segment, identifiers_lower)
             or _is_assignment_captured_substitution_read_shape(segment, identifiers_lower)

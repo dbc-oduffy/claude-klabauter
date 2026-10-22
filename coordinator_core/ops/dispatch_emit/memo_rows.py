@@ -111,6 +111,18 @@ def inbound_close_path(raw: dict) -> Optional[str]:
     return next(iter(found)) if len(found) == 1 else None
 
 
+MEMO_CLOSE_KEY = "memo_close"
+
+
+def memo_close_only(exclusions: Optional[list], raw_by_id: Mapping[str, dict]) -> tuple:
+    """``({id, memo}, ...)`` for a spine whose every exclusion is ``memo-lifecycle``, one per
+    entry with ``memo`` its ``inbound_close_path``; ``()`` when ``exclusions`` is empty or any
+    entry carries another reason. Pure: no I/O."""
+    if not exclusions or any(e.get("reason") != "memo-lifecycle" for e in exclusions):
+        return ()
+    return tuple({"id": e["id"], "memo": inbound_close_path(raw_by_id[e["id"]])} for e in exclusions)
+
+
 def memo_receipt_slug(ref: object) -> Optional[str]:
     """The topic when ``ref`` (either separator) is exactly
     ``<outbox>/sent/<slug>.md`` under the canonical or legacy outbox and ``<slug>``

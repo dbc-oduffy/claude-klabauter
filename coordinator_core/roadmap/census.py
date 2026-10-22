@@ -5,7 +5,7 @@ The screen is what the prep gate (`prep_gate._census`) stamps a premise against.
 a census on mise-prep or mise-certify; both report `not_run_outcome`.
 
 Screening is pure string work, except a `python` target: with a `repo_root` it must be a
-git-tracked file of that repo, resolved by ONE `git ls-files` call per batch (`tracked_targets`),
+git-tracked file of that repo, resolved from the index in process per batch (`tracked_targets`),
 never one per entry.
 
 A TYPED entry (`kind` instead of `command`) is not screened: `evaluate_typed` answers it with one
@@ -176,12 +176,23 @@ def python_candidates(command: str, repo_root: Path) -> list[str]:
 
 
 def tracked_targets(repo_root: Path, candidates: list[str]) -> frozenset:
-    """The subset of `candidates` git tracks in `repo_root`: ONE `git ls-files` spawn for the
-    whole batch, none when there is nothing to ask. A failed spawn tracks nothing, so every
-    python target is refused rather than waved through."""
+    """The subset of the tracked paths at or under any of `candidates` in `repo_root`, read from
+    the index in process: no spawn. An index this process cannot read (split, unmerged,
+    malformed) falls back to ONE `git ls-files` for the whole batch. A failed fallback tracks
+    nothing, so every python target is refused rather than waved through."""
     unique = sorted(set(candidates))
     if not unique:
         return frozenset()
+    try:
+        from coordinator_core.git import git_state
+
+        paths = git_state.read_index_paths(repo_root)
+    except Exception:  # noqa: BLE001 -- an unreadable index falls back to git
+        paths = None
+    if paths is not None:
+        prefixes = tuple(c + "/" for c in unique)
+        wanted = frozenset(unique)
+        return frozenset(p for p in paths if p in wanted or p.startswith(prefixes))
     from coordinator_core.git.run import run_git
 
     result = run_git(

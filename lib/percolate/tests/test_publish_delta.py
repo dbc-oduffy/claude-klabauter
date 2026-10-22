@@ -221,6 +221,23 @@ def test_materialize_subtree_writes_only_that_subtree(tmp_path, spawn_counter):
         materialize_subtree(src, head, "nope", tmp_path / "none")
 
 
+def test_unreadable_tree_object_raises_naming_sha_but_absent_name_stays_absent(tmp_path, monkeypatch):
+    src, _ = _src(tmp_path)
+    head = _git(src, "rev-parse", "HEAD")
+    sub_sha = _git(src, "rev-parse", "HEAD:sub")
+    real = publish_delta.read_object
+    monkeypatch.setattr(
+        publish_delta, "read_object", lambda c, s: None if s == sub_sha else real(c, s)
+    )
+    for call in (materialize_subtree, materialize_paths):
+        arg = "sub" if call is materialize_subtree else ["sub/g3.txt"]
+        with pytest.raises(RuntimeError, match=sub_sha):
+            call(src, head, arg, tmp_path / "o")
+    monkeypatch.setattr(publish_delta, "read_object", real)
+    with pytest.raises(RuntimeError, match="is absent"):
+        materialize_subtree(src, head, "nope", tmp_path / "o2")
+
+
 def test_a_test_file_under_a_rule_dir_is_not_a_rule_change(tmp_path):
     """r19 went cold on an edit to coordinator/lib/percolate/tests/: tests never shape published bytes."""
     src, b = _src(tmp_path)

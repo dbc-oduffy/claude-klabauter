@@ -688,7 +688,7 @@ _VAR_NEUTRAL_HEADS = frozenset({"cd", "echo", "command", "test", "[", "true", "f
 
 def _literal_assignment_value(value: str) -> Optional[str]:
     """Return the literal text of an assigned ``value`` (a plain word, or the
-    settings-home ``${COORDINATOR_SETTINGS_HOME:-<default>}/bin/<name>`` path), else ``None``."""
+    settings-home ``bin/<name>`` path), else ``None``."""
     if value and _LITERAL_WORD_RE.match(value):
         return value
     if value.startswith("$") and _is_settings_home_bin_argv0(value):

@@ -32,6 +32,7 @@ def fake_fs(monkeypatch):
         return real(p)
 
     monkeypatch.setattr(sinks, "_host_is_windows", lambda: True)
+    monkeypatch.setattr(guard, "_host_is_windows", lambda: True)
     monkeypatch.setattr(os.path, "lexists", fake_lexists)
     monkeypatch.delenv("COORDINATOR_DRIVE_ROOTS", raising=False)
     monkeypatch.delenv("COORDINATOR_ALLOW_DRIVE_ROOT_NEW_DIR", raising=False)

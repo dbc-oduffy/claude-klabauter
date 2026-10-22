@@ -1,6 +1,7 @@
 {
   "emitted_at": "2000-01-01T00:00:00",
+  "landing_markers": [],
   "plan": null,
   "session_id": "golden-session",
-  "sha256": "22bb300effb814d4a04ce1d6c98a1d80307e2861f20bd44d83cffa226691663f"
+  "sha256": "13b71e7e53d43b0169f3c10f2dd5d2b930fb6c41c7ac0ce162e2261b3ec361ab"
 }

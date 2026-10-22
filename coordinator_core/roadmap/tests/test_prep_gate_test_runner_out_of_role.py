@@ -105,6 +105,42 @@ def test_wont_do_row_passes(tmp_path):
     assert _cls(tmp_path, spine)["status"] == "PASS"
 
 
+def _body_cls(tmp_path, text):
+    spine = _VERIFY_ROW.replace("Run `python -m pytest src/test_a.py`.", text)
+    return _cls(tmp_path, spine)["status"]
+
+
+def test_quoted_broad_command_mid_sentence_passes(tmp_path):
+    assert _body_cls(tmp_path, "Earlier we ran `pnpm vitest run` and it was slow.") == "PASS"
+    assert _body_cls(tmp_path, "```yaml\n    note: pnpm vitest run\n    ```") == "PASS"
+
+
+def test_broad_command_as_step_span_or_shell_fence_is_refused(tmp_path):
+    assert _body_cls(tmp_path, "Run `pnpm vitest run`.") == "DEFECT"
+    assert _body_cls(tmp_path, "`pnpm vitest run`") == "DEFECT"
+    assert _body_cls(tmp_path, "```sh\n    pnpm vitest run\n    ```") == "DEFECT"
+
+
+def test_sh_fenced_path_scoped_pnpm_test_passes(tmp_path):
+    assert _body_cls(tmp_path, "```sh\n    pnpm test src/a.test.ts\n    ```") == "PASS"
+
+
+def test_refusal_names_rule_and_both_repair_forms(tmp_path):
+    result = _gate(tmp_path, _ROW)
+    cls = result["classes"]["TEST_RUNNER_OUT_OF_ROLE"]
+    for text in (cls["detail"], result["message"]):
+        assert "a dispatched subagent never runs one" in text
+        assert "writes nothing declares `performer: em`" in text
+        assert "keeps its writes and loses the command" in text
+        assert "depends on it" in text
+
+
+def test_class_is_mechanical_with_repair(tmp_path):
+    cls = _cls(tmp_path, _ROW)
+    assert cls["mechanical"] is True
+    assert "performer: em" in cls["repair"] and "C0" in cls["repair"]
+
+
 def test_class_order(tmp_path):
     result = _gate(tmp_path, _ROW)
     assert tuple(result["classes"]) == pg.CLASS_ORDER

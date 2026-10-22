@@ -48,6 +48,33 @@ def test_temp_pack_pair_is_not_listed(tmp_path: Path):
     )
 
 
+def _real_pack(pack_dir: Path, stem: str) -> str:
+    payload = b"stranded blob\n"
+    sha = git_objects.hashlib.sha1(b"blob %d\0" % len(payload) + payload).hexdigest()
+    pack, idx, _name = git_objects._build_pack({sha: (b"blob", payload)})
+    (pack_dir / f"{stem}.pack").write_bytes(pack)
+    (pack_dir / f"{stem}.idx").write_bytes(idx)
+    return sha
+
+
+def test_complete_stranded_temp_pack_is_read_as_git_reads_it(tmp_path: Path):
+    pack_dir = _pack_dir(tmp_path)
+    sha = _real_pack(pack_dir, ".tmp-27412-pack-" + "9" * 40)
+
+    assert git_objects.read_object(tmp_path, sha) == ("blob", b"stranded blob\n")
+
+
+def test_torn_temp_pack_is_not_read(tmp_path: Path):
+    pack_dir = _pack_dir(tmp_path)
+    stem = ".tmp-27412-pack-" + "8" * 40
+    sha = _real_pack(pack_dir, stem)
+    pack_path = pack_dir / f"{stem}.pack"
+    pack_path.write_bytes(pack_path.read_bytes()[:-5])
+
+    assert _iter_pack_files(tmp_path) == []
+    assert git_objects.read_object(tmp_path, sha) is None
+
+
 def test_temp_pack_is_skipped_even_when_it_is_the_only_pack(tmp_path: Path):
     pack_dir = _pack_dir(tmp_path)
     _write_pair(pack_dir, ".tmp-1-pack-" + "c" * 40)

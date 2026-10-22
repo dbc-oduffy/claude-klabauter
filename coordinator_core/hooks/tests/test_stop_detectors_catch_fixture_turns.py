@@ -1,7 +1,7 @@
 """Pins that the Stop detectors `hooks.guard_turn_intent` and `hooks.guard_manufactured_blocker`
 fire on the turns they exist to catch: a final turn announcing work with no tool call, and a
 final turn claiming to be blocked. Fixtures are built under tmp_path; the payload shape is the
-one hook-run pipes (strict level, stop_hook_active false, no role marker, no Cockpit signal)."""
+one hook-run pipes (strict level, stop_hook_active false, no role marker; the announce leg additionally needs the Cockpit signal)."""
 
 from __future__ import annotations
 
@@ -43,7 +43,8 @@ def _stop_payload(tmp_path: Path, text: str) -> dict:
     }
 
 
-def test_turn_intent_blocks_announced_but_unexecuted_final_turn(tmp_path):
+def test_turn_intent_blocks_announced_but_unexecuted_final_turn(tmp_path, monkeypatch):
+    monkeypatch.setenv("COORDINATOR_COCKPIT", "1")
     result = gti._handler({"payload": _stop_payload(tmp_path, ANNOUNCE_TEXT)})
     assert result.get("decision") == "block", result
 

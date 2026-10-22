@@ -65,8 +65,12 @@ def _is_absolute(token: str) -> bool:
 def _unresolved(command: str) -> Optional[str]:
     """None when `command` resolves on this host; else the reason it does not."""
     if _is_absolute(command):
-        if os.path.isfile(command) and os.access(command, os.X_OK):
-            return None
+        if os.path.isfile(command):
+            if os.name != "nt":
+                if os.access(command, os.X_OK):
+                    return None
+            else:
+                return None
         return f"{command} is not an executable file on this host"
     if shutil.which(command):
         return None

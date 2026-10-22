@@ -52,6 +52,10 @@ EXCLUDED_MODULES = {
         "non-roster module under coordinator_core/git/; unsized by this plan's scope:.",
     "coordinator_core/git/literal_pathspec.py":
         "non-roster module under coordinator_core/git/; unsized by this plan's scope:.",
+    "coordinator_core/git/ref_cas_retry.py":
+        "non-roster module under coordinator_core/git/; unsized by this plan's scope:.",
+    "coordinator_core/git/store_hygiene.py":
+        "non-roster module under coordinator_core/git/; unsized by this plan's scope:.",
     "coordinator_core/git/argv_batch.py":
         "non-roster module under coordinator_core/git/; unsized by this plan's scope:.",
     "coordinator_core/git/checkpoint_guard.py":

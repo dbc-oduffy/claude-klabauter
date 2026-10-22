@@ -389,6 +389,12 @@ _FINDING_CLASSIFICATION: Dict[str, Any] = {
         "edit prime_exit_criterion statement: name the behaviour and the tests "
         "covering the touched files, not a suite tier — {detail}",
     ),
+    "test-runner-out-of-role-row": (
+        True,
+        "per named row: if it writes nothing, add `performer: em`; if it writes files, keep its "
+        "writes, remove the full-suite or timing command from it, and add a new `performer: em` "
+        "verify row carrying that command with `depends_on` the writing row — {detail}",
+    ),
     "census-unscreenable": (
         True,
         "rewrite each named census entry's command into the allowed form (" + census.ALLOWED_FORM + "): "
@@ -1352,6 +1358,40 @@ def _executor_commit(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     )
 
 
+_RUN_FENCE = re.compile(r"^\s*(?:```|~~~)\s*([^\s`]*)")
+_RUN_FENCE_LANGS = frozenset({"", "sh", "bash", "shell", "console", "powershell", "pwsh", "ps1"})
+_RUN_STEP_LINE = re.compile(
+    r"^\s*(?:(?:[-*+]|\d+[.)])\s+)?(?:step\s+\d+\s*[:.)-]\s*)?"
+    r"(?:(?:run|re-run|execute|invoke)\b:?\s*)?`([^`\n]+)`",
+    re.IGNORECASE,
+)
+
+
+def _run_spans(body: str) -> List[str]:
+    """Body spans that are acts: shell/untagged fenced lines and inline spans standing as a step.
+
+    Trap: an inline span mid-sentence ("Then run `x`", "Measure with `x`"), or any line in a
+    yaml/md/text fence, is read as quoted text and passes; only a line-initial step is an act.
+    """
+    spans: List[str] = []
+    in_fence = False
+    run_fence = False
+    for line in body.splitlines():
+        fence = _RUN_FENCE.match(line)
+        if fence:
+            in_fence = not in_fence
+            run_fence = in_fence and fence.group(1).lower() in _RUN_FENCE_LANGS
+            continue
+        if in_fence:
+            if run_fence:
+                spans.append(line)
+            continue
+        step = _RUN_STEP_LINE.match(line)
+        if step:
+            spans.append(step.group(1))
+    return spans
+
+
 EXECUTOR_HEAVY_FIX = (
     "guard-heavy-command-admission denies a heavy command to coordinator:executor. "
     "Fix: declare `agent_type: coordinator:test-runner` on the row."
@@ -1392,7 +1432,7 @@ def _executor_heavy(rows: List[Dict[str, Any]], repo_root: Path) -> Dict[str, An
     are skipped: the send is the send op's own commit, and the executor's brief is fixed.
     """
     from coordinator_core.bash_guards._heavy_command_class import classify
-    from coordinator_core.ops.dispatch_emit.em_only_act import _code_spans, row_is_em_performed
+    from coordinator_core.ops.dispatch_emit.em_only_act import row_is_em_performed
     from coordinator_core.ops.dispatch_emit.spine_read import _is_memo_send_row, _is_operator_row
 
     hits: List[str] = []
@@ -1407,7 +1447,7 @@ def _executor_heavy(rows: List[Dict[str, Any]], repo_root: Path) -> Dict[str, An
             continue
         spans: List[str] = []
         if isinstance(row.get("body"), str):
-            spans.extend(_code_spans(row["body"]))
+            spans.extend(_run_spans(row["body"]))
         if isinstance(row.get("verification"), str):
             spans.append(row["verification"])
         for span in spans:
@@ -1442,9 +1482,11 @@ def _executor_heavy(rows: List[Dict[str, Any]], repo_root: Path) -> Dict[str, An
 
 
 TEST_RUNNER_OUT_OF_ROLE_FIX = (
-    "coordinator:test-runner refuses a timing measurement and a full or broad suite at its tool "
-    "seam. Fix: declare `performer: em` on the row; a timing measurement runs "
-    "`python -m coordinator_core.benchmarks.measure`."
+    "coordinator:test-runner refuses a timing measurement and a full or broad suite: a dispatched "
+    "subagent never runs one, only the EM does. Fix: a row that writes nothing declares "
+    "`performer: em`; a row that writes files keeps its writes and loses the command, and a new "
+    "`performer: em` verify row carries the same command and depends on it. A timing measurement "
+    "runs `python -m coordinator_core.benchmarks.measure`."
 )
 _TIMING_CHANGE_KIND = re.compile(r"\b(?:timing|measure\w*|benchmark\w*)\b", re.IGNORECASE)
 _BROAD_SUITE_WORKER_CAP = 1 << 30
@@ -1477,7 +1519,7 @@ def _test_runner_out_of_role(rows: List[Dict[str, Any]], repo_root: Path) -> Dic
     brief is fixed. Pure over the parsed row; ``repo_root`` is the gated plan's tree, never process cwd.
     """
     from coordinator_core.bash_guards._heavy_command_class import HeavyClass, classify
-    from coordinator_core.ops.dispatch_emit.em_only_act import _code_spans, row_is_em_performed
+    from coordinator_core.ops.dispatch_emit.em_only_act import row_is_em_performed
     from coordinator_core.ops.dispatch_emit.spine_read import _is_memo_send_row, _is_operator_row
 
     hits: List[str] = []
@@ -1497,7 +1539,7 @@ def _test_runner_out_of_role(rows: List[Dict[str, Any]], repo_root: Path) -> Dic
         else:
             spans: List[str] = []
             if isinstance(row.get("body"), str):
-                spans.extend(_code_spans(row["body"]))
+                spans.extend(_run_spans(row["body"]))
             if isinstance(row.get("verification"), str):
                 spans.append(row["verification"])
             for span in spans:

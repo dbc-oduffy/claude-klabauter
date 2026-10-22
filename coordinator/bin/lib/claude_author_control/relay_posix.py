@@ -269,7 +269,7 @@ def spawn(argv: list[str], env: dict[str, str], observers, *,
 
         proc = subprocess.Popen(
             argv, stdin=slave, stdout=slave, stderr=slave, env=env,
-            start_new_session=True, preexec_fn=_ctty, close_fds=True)
+            start_new_session=True, preexec_fn=_ctty, close_fds=True)  # popup-intentional-last-resort — POSIX pty child owns the console, no conhost
     except BaseException:
         os.close(master)
         raise

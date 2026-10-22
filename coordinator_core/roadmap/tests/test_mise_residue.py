@@ -34,11 +34,21 @@ def test_batch_each_plan_once_in_order():
 
 @pytest.mark.parametrize(
     "command",
-    ["node x.js", "cd a && npx tsc", "gh pr list | wc -l", "claude -p hi", "python -c 'print(1)'",
-     "echo $(date) && node y.js"],
+    ["node x.js", "cd a && npx tsc", "gh pr list | wc -l", "claude -p hi",
+     "echo $(date) && node y.js", "python -c 'print(1)' && node y.js"],
 )
 def test_leftover_heads(command):
     assert mr.classify_census(command, census.screen(command) or "") == "leftover"
+
+
+@pytest.mark.parametrize(
+    "command",
+    ["python -c 'print(1)'", "python3 -c 'import x' | wc -l", "python -m pytest tests/test_x.py",
+     "pytest -q tests/test_x.py", "cd a && python -m pytest t.py"],
+)
+def test_python_c_and_pytest_entries_are_step0(command):
+    refusal = census.screen(command, Path("."), frozenset()) or ""
+    assert mr.classify_census(command, refusal) == "step0"
 
 
 def test_untracked_python_target_is_leftover():
@@ -103,15 +113,18 @@ def test_residue_args_shape_roundtrips_json():
     reply = {"skipped_cycles": [{"class": "seam-fix-cycle", "plans": ["b", "a"], "path": "p", "detail": "d"}]}
     args = _args(rows, reply, {"a.md": PLAN})
     assert json.loads(json.dumps(args)) == args
-    assert args["schema"] == "mise-prep-residue-args/3"
-    assert args["residue"] == {"agentType": mr.RESIDUE_AGENT_TYPE, "model": "sonnet"}
+    assert args["schema"] == "mise-prep-residue-args/4"
+    assert args["residue"] == {"agentType": "coordinator:residue-author", "model": "sonnet"}
     assert args["apm"] == {"agentType": "coordinator:apm", "model": "opus"}
     (batch,) = args["batches"]
     (member,) = batch["plans"]
     assert member["plan"] == "a.md"
     assert member["bar"][0] == "bar: CENSUS/census-unscreenable"
     assert len(member["seam"]) == 1 and member["seam"][0].startswith("seam: capabilities-undeclared")
-    assert [c["index"] for c in member["census"]] == [0]
+    assert [(c["index"], c["class"]) for c in member["census"]] == [(0, "rewrite")]
+    assert member["spine"] == [
+        "spine-repair: CENSUS/census-unscreenable — " + mr.SPINE_REPAIR_CLASSES["CENSUS/census-unscreenable"]
+    ]
     kinds = [i["kind"] for i in args["apmItems"]]
     assert kinds == ["census-leftover", "seam-fix-cycle"]
     assert args["apmItems"][0]["index"] == 1
@@ -281,7 +294,7 @@ def _with_rulings(entries):
 
 
 def test_schema_op_and_args_keys():
-    assert mr.SCHEMA == "mise-prep-residue-args/3"
+    assert mr.SCHEMA == "mise-prep-residue-args/4"
     assert mr.RULINGS_OP == "plan.record_residue_rulings"
     args = _args([_ROW], {"skipped_cycles": [_CYCLE]}, {"a.md": PLAN})
     assert args["rulingsCommand"] == "mise-prep-run --repo-root repo --apply-rulings"
@@ -320,6 +333,91 @@ def test_render_pm_ruling_round_trips_through_parse_frontmatter():
     assert got["ruling"] == "it's \"q\" \\ x: y line2"
     assert got["subject_sha"] == "abc123def456"
     assert got["ruled_by"] == "coordinator:apm"
+
+
+STEP0_PLAN = """---
+title: t
+census:
+  - question: q0
+    command: python -c 'print(1)'
+    result: "1"
+  - question: q1
+    command: node check.js
+    result: "1"
+---
+body
+"""
+
+
+def test_step0_entry_lands_in_census_not_apm_items():
+    rows = [{**_ROW, "failing": ["CENSUS/census-unscreenable"]}]
+    args = _args(rows, None, {"a.md": STEP0_PLAN})
+    (member,) = args["batches"][0]["plans"]
+    assert [(c["index"], c["class"]) for c in member["census"]] == [(0, "step0")]
+    assert [i["index"] for i in args["apmItems"]] == [1]
+
+
+def test_node_only_census_stays_leftover_and_member_spine_is_empty():
+    rows = [{**_ROW, "failing": ["EXECUTOR_COMMIT/x"]}]
+    args = _args(rows, None, {"a.md": PLAN})
+    (member,) = args["batches"][0]["plans"]
+    assert member["spine"] == []
+    assert [i["index"] for i in args["apmItems"]] == [1]
+
+
+def test_spine_repairs_keys_only_the_five_classes_in_input_order():
+    failing = ["SPINE/InvalidChangeKindError", "SPINE/writes-undeclared", "PRIME_EXIT/x",
+               "TEST_RUNNER_OUT_OF_ROLE/test-runner-out-of-role-row"]
+    got = mr.spine_repairs(failing)
+    assert [g.split(" — ")[0] for g in got] == [
+        "spine-repair: SPINE/InvalidChangeKindError",
+        "spine-repair: TEST_RUNNER_OUT_OF_ROLE/test-runner-out-of-role-row",
+    ]
+    assert mr.spine_repairs([]) == []
+
+
+# Step 0: the class strings the gate really produces (mise-prep-run._failing_classes shape).
+_FM = ("census: []\ncapabilities: []\nprime_exit_criterion:\n  statement: s\n"
+       "  derived_from: state/sizings/x.yaml\n")
+_CENSUS_FM = _FM.replace("census: []", "census:\n  - question: q\n    command: python -c 'print(1)'\n    result: '1'")
+_ROW_T = "- id: C0\n  title: t\n  change_kind: {ck}\n  surface: src/a.py\n  writes: {w}\n  {x}disposition: open\n  body: |\n    {b}\n"
+_MEMO_T = ("- id: M1\n  title: t\n  change_kind: doc-edit\n  surface: {s}\n  writes: []\n"
+           "  kind: memo-send\n  disposition: open\n  body: |\n    Send.\n")
+
+
+def _gate_classes(tmp_path, fm, spine):
+    from coordinator_core.roadmap import prep_gate
+    from coordinator_core.roadmap.tests.test_prep_gate_four_legs import _write_plan
+
+    (tmp_path / "src").mkdir(exist_ok=True)
+    (tmp_path / ".git").mkdir(exist_ok=True)
+    gate = prep_gate.gate_plan(tmp_path, _write_plan(tmp_path, frontmatter=fm, spine=spine))
+    return [f"{n}/{b.get('kind') or b.get('status')}" for n, b in gate["classes"].items() if b.get("status") != "PASS"]
+
+
+_RUNNER = "agent_type: coordinator:test-runner\n  "
+
+
+@pytest.mark.parametrize(
+    "fm,spine,expected",
+    [
+        (_CENSUS_FM, _ROW_T.format(ck="code-edit", w="[src/a.py]", x="", b="do"),
+         "CENSUS/census-unscreenable"),
+        (_FM, _MEMO_T.format(s="docs/x.md"), "SPINE/MemoRowNoReceiptError"),
+        (_FM, _MEMO_T.format(s=".coordinator-local/memo-outbox/t.md"), "SPINE/MemoRowNoReceiverError"),
+        (_FM, _ROW_T.format(ck="bogus-kind", w="[src/a.py]", x="", b="do"), "SPINE/InvalidChangeKindError"),
+        (_FM, _ROW_T.format(ck="verification", w="[]", x=_RUNNER, b="Run `python -m pytest tests/`."),
+         "TEST_RUNNER_OUT_OF_ROLE/test-runner-out-of-role-row"),
+    ],
+)
+def test_gate_class_strings_are_keyed(tmp_path, fm, spine, expected):
+    assert _gate_classes(tmp_path, fm, spine) == [expected]
+    assert expected in mr.SPINE_REPAIR_CLASSES
+
+
+def test_unquoted_on_key_yields_no_failing_class(tmp_path):
+    spine = _ROW_T.format(ck="code-edit", w="[src/a.py]", x="on: push\n  ", b="do")
+    assert _gate_classes(tmp_path, _FM, spine) == []
 
 
 @pytest.mark.parametrize("text", ["no frontmatter", "---\npm_ruling: nope\n---\n", "---\npm_ruling:\n  - 3\n---\n"])

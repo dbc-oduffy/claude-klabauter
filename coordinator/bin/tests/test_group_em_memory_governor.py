@@ -24,6 +24,7 @@ P = gov.Proc
 def _fake_start_times(monkeypatch):
     # Fake pids have no real start time; without this every freeze is skipped and `ps` runs per pid.
     monkeypatch.setattr(gov, "process_start_time", lambda pid: 1.0)
+    monkeypatch.setattr(gov, "process_start_times", lambda pids: {p: 1.0 for p in pids})
 
 
 @pytest.fixture(autouse=True)

@@ -55,7 +55,8 @@ def _write(repo: Path, rel: str, text: str, newline: str = "\n") -> None:
 
 
 def _fm(repo: Path, rel: str, key: str):
-    split = split_frontmatter((repo / rel).read_text(encoding="utf-8", newline=""))
+    with open(repo / rel, encoding="utf-8", newline="") as handle:
+        split = split_frontmatter(handle.read())
     assert split is not None
     return read_fm_field_unquoted(split.fm_text, key)
 

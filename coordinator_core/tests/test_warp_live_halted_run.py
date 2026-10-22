@@ -26,6 +26,9 @@ def repo(tmp_path, monkeypatch):
     monkeypatch.setattr(warp_live, "managed_tempdir", lambda: managed)
     monkeypatch.setattr(warp_live, "legacy_top_level_path", lambda name: legacy / name)
     run_token.mint(root, RUN, SCRIPT, session_id="s1", sizing_rel=SIZING)
+    warp_live.record_submission(
+        root, RUN, session_id="s1", transcript_path=None, script_path=SCRIPT, sizing_rel=SIZING
+    )
     return root
 
 

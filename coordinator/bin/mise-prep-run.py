@@ -67,7 +67,9 @@ its route. A seam or stamp op error is a refusal (exit 2), never a pass.
 
 RESIDUE WORKFLOW. After the report rows and the seam-fix reply exist (dry run or not),
 `mise_residue.residue_args` sorts what stayed short: plans to author go to Sonnet
-`coordinator:plan-author-residue` agents, up to 8 plans per agent; unscreenable census entries and
+`coordinator:residue-author` agents, up to 8 plans per agent; a NOT-PREPPED row whose failing
+bar classes are spine-repair classes (`mise_residue.spine_repairs`) prints each repair line with
+`route: coordinator:residue-author`; unscreenable census entries and
 `skippedCycles` go to one `coordinator:apm` agent. When either list is non-empty the run binds
 `workflows/mise-prep-residue.mjs` with those args (`workflow.bind_args`), validates it
 (`workflow.validate`) and writes `state/mise-workflows/<runId>.residue.mjs` plus its receipt, then
@@ -162,7 +164,8 @@ def _invoke(repo_root: Path, op: str, params: dict) -> dict:
 _SEAM_SPELLING = {"REFUSED": "SEAM-REFUSED", "DRIFT": "SEAM-DRIFT"}
 _SEAM_OPS = {False: "plan.seam_record", True: "plan.seam_check"}
 #: Each refusal carries its own route: the engine and the command text publish separately.
-_ROUTE_AUTHOR = "route: coordinator:plan-author-residue, declare capabilities"
+_ROUTE_AUTHOR = "route: coordinator:residue-author, declare capabilities"
+_ROUTE_RESIDUE = "route: coordinator:residue-author"
 _ROUTE_APM = "route: coordinator:apm, scope"
 _FINDING_FIELDS = ("capability", "missing_consumer", "counterpart_plan", "path", "row", "detail")
 
@@ -975,7 +978,16 @@ def main(argv=None) -> int:
                 if r["upgraded"]:
                     print(f"                     upgrade: {r['upgraded']}")
                 elif r["verdict"] != "PREPPED":
-                    print(f"                     {_repair_line(r['failing'], r['plan'])}")
+                    from coordinator_core.roadmap import mise_residue as _mr
+
+                    spine = _mr.spine_repairs(r["failing"])
+                    for line in spine:
+                        print(f"                     {line}")
+                    if spine:
+                        print(f"                     {_ROUTE_RESIDUE}")
+                    rest = [c for c in r["failing"] if c not in _mr.SPINE_REPAIR_CLASSES]
+                    if rest or not spine or "CENSUS/census-unscreenable" in r["failing"]:
+                        print(f"                     {_repair_line(rest, r['plan'])}")
                 for f in r.get("seam") or []:
                     if not _is_missing_seam(f):
                         print(f"                     {_seam_line(f)}")

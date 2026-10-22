@@ -10,7 +10,7 @@ _ROW = """- id: C1
   writes: [src/a.py]
   disposition: open
   body: |
-    Measure with `pnpm vitest run` five times.
+    Run `pnpm vitest run` five times.
 """
 
 
@@ -118,6 +118,25 @@ def test_classification_root_is_the_plan_root_not_process_cwd(tmp_path, monkeypa
     monkeypatch.chdir(elsewhere)
     _gate(tmp_path, _ROW)
     assert seen and all(c == str(tmp_path) for c in seen)
+
+
+def _cls(tmp_path, body_text):
+    spine = _ROW.replace("Run `pnpm vitest run` five times.", body_text)
+    return _gate(tmp_path, spine)["classes"]["EXECUTOR_HEAVY"]["status"]
+
+
+def test_quoted_command_mid_sentence_or_in_text_fence_is_not_an_act(tmp_path):
+    assert _cls(tmp_path, "The old step was `pnpm vitest run`; do not repeat it.") == "PASS"
+    assert _cls(tmp_path, "Do not run `pnpm vitest run` here.") == "PASS"
+    assert _cls(tmp_path, "```yaml\n    note: pnpm vitest run\n    ```") == "PASS"
+
+
+def test_run_step_bare_span_and_shell_fence_are_still_refused(tmp_path):
+    assert _cls(tmp_path, "- Run `pnpm vitest run`.") == "DEFECT"
+    assert _cls(tmp_path, "`pnpm vitest run`") == "DEFECT"
+    assert _cls(tmp_path, "Step 2: execute `pnpm vitest run`") == "DEFECT"
+    assert _cls(tmp_path, "```sh\n    pnpm vitest run\n    ```") == "DEFECT"
+    assert _cls(tmp_path, "```\n    pnpm vitest run\n    ```") == "DEFECT"
 
 
 def test_class_order(tmp_path):

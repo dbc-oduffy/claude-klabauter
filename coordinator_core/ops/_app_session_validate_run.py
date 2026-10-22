@@ -160,7 +160,7 @@ def _start_server(
     log_path = run_dir / SERVER_LOG
     kwargs: Dict[str, Any] = {}
     if os.name == "nt":
-        kwargs.update(no_console_creationflags())
+        kwargs["creationflags"] = no_console_creationflags().get("creationflags", 0)
     else:
         kwargs["start_new_session"] = True
     with open(log_path, "wb") as log:

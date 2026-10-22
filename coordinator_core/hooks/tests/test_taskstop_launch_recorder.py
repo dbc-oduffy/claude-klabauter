@@ -149,6 +149,13 @@ def test_timed_out_read_only_search_ambiguous_kills_nothing_and_keeps_record(sea
     assert store.read_record("bgto1").mark == _MARK
 
 
+def test_timed_out_read_only_search_incomplete_kill_keeps_record(seams):
+    kill, snaps, _ = seams
+    kill.terminate_verified = lambda pid, ctime: False
+    rec._handler({"payload": _timed_out_payload()})
+    assert store.read_record("bgto1") is not None
+
+
 def test_timed_out_read_only_search_no_candidate_keeps_record(seams):
     kill, snaps, state = seams
     state["rows"] = [_LIVE]

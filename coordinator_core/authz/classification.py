@@ -1232,6 +1232,21 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #      The mutated plan file is read by shell consumers, other ops, and rag.
     # Spec backlink: pln-pcli-need-1-plan-tasks-engine--53c00d § C3
     "plan.tasks.mutate": OpClass.MUTATING,
+    # plan.merge — MUTATING: merges N docs/plans/*.md plans plus a delta into one new plan
+    # file at `out`, or refuses with no file written.
+    # DR-208 five-question affirmation (citing ops/plan_merge.py):
+    #   1. Writes, deletes, or reorders any state file, queue, or git object?  YES.
+    #      Writes one new plan file at `out` through atomic_write_bytes.
+    #   2. Writes into rag's relational store?                                 No.
+    #      Writes only the single `out` file; no rag store write.
+    #      Dual-write ban (DR-208 / tri-plane DD#1) satisfied.
+    #   3. Opens any file for write (including sentinel creation)?             YES.
+    #      atomic_write_bytes opens a temp file beside `out` for the atomic replace.
+    #   4. Mutates shared mutable state outside its own module?                YES.
+    #      docs/plans/*.md is coordinator substrate shared across EM sessions.
+    #   5. Persistent state changes observable across process boundaries?     YES.
+    #      The merged plan file is read by shell consumers, other ops, and rag.
+    "plan.merge": OpClass.MUTATING,
     # criterion_evidence.record -- MUTATING: appends to <plan-stem>.evidence.yaml.
     "criterion_evidence.record": OpClass.MUTATING,
     # plan.tasks.grouping_digest — COMPUTE_ONLY, the read-only sibling of plan.tasks.mutate

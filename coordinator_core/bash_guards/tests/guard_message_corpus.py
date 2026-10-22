@@ -2161,7 +2161,7 @@ ADVISORY_REWRITE_ROWS: List[CorpusRow] = [
     CorpusRow(
         "grep-via-bash-guard",
         "grep-via-bash-guard-fire",
-        "grep -rn TODO src/ | wc -l",
+        "grep -rnP TODO src/ | wc -l",
         True,
         _REWRITE,
         False,
