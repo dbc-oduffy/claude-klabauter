@@ -89,6 +89,24 @@ def test_row_without_writes_keeps_the_declare_test_runner_remedy(tmp_path):
     assert "split it into" not in detail
 
 
+def test_no_writes_hit_is_a_mechanical_repair_naming_test_runner(tmp_path):
+    cls = _gate(tmp_path, _ROW.replace("writes: [src/a.py]", "writes: []"))["classes"]["EXECUTOR_HEAVY"]
+    assert cls["mechanical"] is True
+    assert "agent_type: coordinator:test-runner" in cls["repair"] and "C1" in cls["repair"]
+
+
+def test_writes_bearing_hit_stays_substantive(tmp_path):
+    cls = _gate(tmp_path, _ROW)["classes"]["EXECUTOR_HEAVY"]
+    assert cls["mechanical"] is False and cls["repair"] is None
+
+
+def test_mixed_hits_stay_substantive(tmp_path):
+    second = _ROW.replace("C1", "C2").replace("writes: [src/a.py]", "writes: []")
+    cls = _gate(tmp_path, _ROW + second)["classes"]["EXECUTOR_HEAVY"]
+    assert set(cls["withheld"]) == {"C1", "C2"}
+    assert cls["mechanical"] is False and cls["repair"] is None
+
+
 def test_classification_root_is_the_plan_root_not_process_cwd(tmp_path, monkeypatch):
     seen = []
     from coordinator_core.bash_guards import _heavy_command_class as hcc

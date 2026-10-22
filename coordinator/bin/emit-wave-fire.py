@@ -423,7 +423,7 @@ def _renumbered_wave_hint(trail_dir: Path, wave_number: int, waves: list, wave_i
 
 
 def _report_predates_a_landing(
-    trail_dir: Path, wave_number: int, wave_ids: list, take_extras: bool = False
+    trail_dir: Path, wave_number: int, wave_ids: list
 ) -> str:
     """The report is SHAPE-RIGHT and TIME-WRONG: frozen before a landing this run
     has since made, so it proposes batons that landing already advanced.
@@ -481,17 +481,10 @@ def _report_predates_a_landing(
     # Reported by example-game-workbench-repo-b8, who landed at the default 8 with `remaining: 21`,
     # was refused against a correctly-fresh 29-baton report, and read blitz_land source to find
     # out which side was wrong.
+    # The remainder is re-offered: the fresh report's extra batons are emitted.
     remaining = nxt.get("remaining")
     if isinstance(remaining, int) and remaining > 0:
-        if take_extras:
-            return ""
-        return (
-            f"this report proposes {len(extra)} baton(s) that {prior.name} did not hand forward, "
-            f"and that landing declares `remaining: {remaining}` — it was LIMIT-CAPPED, so it "
-            f"handed forward {len(handed)} of a larger set and this report is not thereby stale. "
-            "Pass --take-extras to emit the extra batons deliberately from this fresh report, "
-            "or re-land the same wave-result files at a `--limit` above the remainder."
-        )
+        return ""
     shown = extra[:8]
     tail = f" (and {len(extra) - len(shown)} more)" if len(extra) > len(shown) else ""
     return (
@@ -1509,12 +1502,6 @@ def main(argv=None) -> int:
         ),
     )
     ap.add_argument(
-        "--take-extras",
-        action="store_true",
-        help="accept the batons a fresh report proposes beyond a LIMIT-CAPPED landing's hand-forward "
-        "(its `remaining > 0`). Has no effect on a landing that handed forward everything.",
-    )
-    ap.add_argument(
         "--plugin-agents-available",
         choices=("true", "false", "auto"),
         default="auto",
@@ -1601,12 +1588,14 @@ def main(argv=None) -> int:
     # literally on wave 2 reads wave 0's report. `gate-report.json` stays the wave-0 name
     # so existing trails resolve, but a later wave with no report of its own REFUSES
     # rather than falling back — silently reading the previous wave's is the whole defect.
+    per_wave_resolved = False
     if args.gate_report:
         report_path = Path(args.gate_report)
     else:
         per_wave = trail_dir / f"wave-{wave_number}.gate-report.json"
         legacy = trail_dir / "gate-report.json"
         report_path = per_wave if per_wave.is_file() else legacy
+        per_wave_resolved = report_path is per_wave
         if report_path is legacy and wave_number > 0:
             # NOT a refusal. A run-wide path RE-FROZEN in place is legitimate and common,
             # and the name alone cannot tell that apart from wave 0's report left sitting
@@ -1664,6 +1653,13 @@ def main(argv=None) -> int:
             "0-based index into it, not this wave's label in the run. Use --wave-number for that "
             "label."
         )
+    if per_wave_resolved and args.wave_index != 0:
+        return refuse(
+            f"{report_path.name} is wave {wave_number}'s own fresh report, which renumbers "
+            f"from 0: its ready set is --wave-index 0, and --wave-index {args.wave_index} would "
+            f"fire a later dependent wave of it. Re-run with --wave-index 0 --wave-number "
+            f"{wave_number}, or pass --gate-report to index into a multi-wave report."
+        )
     wave_ids = list(waves[args.wave_index])
     if not wave_ids:
         return refuse(f"wave {args.wave_index} is empty — nothing to fire")
@@ -1691,7 +1687,7 @@ def main(argv=None) -> int:
                 f"every baton in wave {args.wave_index} was excluded — nothing to fire"
             )
 
-    stale = _report_predates_a_landing(trail_dir, wave_number, wave_ids, args.take_extras)
+    stale = _report_predates_a_landing(trail_dir, wave_number, wave_ids)
     if stale:
         hint = _renumbered_wave_hint(trail_dir, wave_number, waves, args.wave_index)
         if hint:

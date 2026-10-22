@@ -1429,6 +1429,21 @@ def test_ac6_cap_is_still_a_required_param_on_both_arms(repo: Path):
         )
 
 
+def test_absent_mode_defaults_to_already_terminal(repo: Path):
+    common_dir = _common_dir(repo)
+    result = _run(_handler({"dry_run": True, "cap": 50}, repo_root=common_dir))
+    assert result.get("exit_code") == 0, result
+    assert result.get("mode") == "already-terminal", result
+
+
+def test_explicit_unknown_mode_is_still_a_setup_error(repo: Path):
+    common_dir = _common_dir(repo)
+    result = _run(_handler(
+        {"mode": "bogus", "dry_run": True, "cap": 50}, repo_root=common_dir,
+    ))
+    assert result.get("exit_code") == 1, result
+
+
 # ---------------------------------------------------------------------------
 # AC-5 -- reason precedence between the classification and worktree-dirty
 # rails.

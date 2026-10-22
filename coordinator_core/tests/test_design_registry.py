@@ -217,6 +217,8 @@ def test_lookup_hits_shape_and_order(tmp_path):
         "harvest_path": "docs/design/x/harvest/harvest.json",
     }
     assert "harvest_path" not in auth
+    assert "harvest_expected_path" not in settings
+    assert auth["harvest_expected_path"] == "docs/design/y/harvest/harvest.json"
 
 
 def test_lookup_backslash_paths_hit(tmp_path):
@@ -257,6 +259,7 @@ def test_harvest_record_outside_root_is_omitted(tmp_path):
     text = _swap(REGISTRY, "harvest: docs/design/x/harvest/\n    sources:\n      - \"src/app/settings", "harvest: ../evil\n    sources:\n      - \"src/app/settings")
     hits, _ = dr.lookup(_repo(root, text), ["src/app/settings/page.tsx"])
     assert "harvest_path" not in hits[0]
+    assert "harvest_expected_path" not in hits[0]
 
 
 def test_lookup_spawns_nothing(tmp_path, monkeypatch):

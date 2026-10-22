@@ -75,6 +75,20 @@ def test_mechanical_prep_failure_pulls_with_repairs():
     ]
 
 
+def test_no_writes_executor_heavy_gate_result_reads_mechanical(tmp_path):
+    from coordinator_core.roadmap import prep_gate as pg
+    from coordinator_core.roadmap.tests.test_prep_gate_four_legs import _CLEAN_FM, _write_plan
+
+    spine = (
+        "- id: C1\n  title: Baseline\n  change_kind: code-edit\n  surface: src/a.py\n"
+        "  writes: []\n  disposition: open\n  body: |\n    Measure with `pnpm vitest run`.\n"
+    )
+    cls = pg.gate_plan(tmp_path, _write_plan(tmp_path, frontmatter=_CLEAN_FM, spine=spine))["classes"]["EXECUTOR_HEAVY"]
+    out = op.readiness_verdict(_gate(cls), None, [])
+    assert (out["verdict"], out["pull_class"]) == ("pulled", "mechanical")
+    assert out["mechanical_repairs"][0]["kind"] == "executor-heavy-command-row"
+
+
 def test_non_mechanical_prep_failure_is_substantive_and_drops_repairs():
     out = op.readiness_verdict(_gate(MECH, JUDG), None, [])
     assert (out["verdict"], out["pull_class"], out["mechanical_repairs"]) == ("pulled", "substantive", [])

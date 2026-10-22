@@ -63,6 +63,9 @@ class SupersedeShippedRefusedTest(unittest.TestCase):
 
         self.assertIs(result.get("choke_point_refusal"), True)
         self.assertIn("closed", result.get("error", ""))
+        self.assertIn("fleet.archive_completed_handoffs", result.get("error", ""))
+        self.assertIn("already-terminal", result.get("error", ""))
+        self.assertIn("reopen", result.get("error", ""))
         self.assertEqual(self.path.read_bytes(), before)
 
     def test_claimed_unshipped_baton_is_not_refused_by_the_shipped_gate(self):

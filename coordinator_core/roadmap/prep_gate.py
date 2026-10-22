@@ -1463,12 +1463,19 @@ def _executor_heavy(rows: List[Dict[str, Any]], repo_root: Path) -> Dict[str, An
                 break
     if not hits:
         return _pass("no executor row runs a heavy command")
-    return _defect(
+    result = _defect(
         "executor-heavy-command-row",
         f"executor rows running a heavy command: {', '.join(hits)[:260]} — "
         f"{' '.join(sorted(fixes, reverse=True))}",
         withheld=sorted(set(ids)),
     )
+    # Mechanical only when every hit row is a pure retype; one writes-bearing hit needs a split.
+    if fixes == {EXECUTOR_HEAVY_FIX}:
+        result["mechanical"] = True
+        result["repair"] = (
+            f"declare `agent_type: coordinator:test-runner` on each named row — {', '.join(hits)[:260]}"
+        )
+    return result
 
 
 TEST_RUNNER_OUT_OF_ROLE_FIX = (

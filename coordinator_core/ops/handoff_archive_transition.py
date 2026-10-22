@@ -1614,8 +1614,10 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             out = _err(
                 f"mode='supersede' refused: {rel_id} is deployment_state: "
                 f"closed (closed_reason: {closed_reason}) — a closed baton "
-                "is terminal and is not superseded; if the closure was "
-                "wrong, reopen it first"
+                "is terminal and is not superseded; to archive it out of "
+                "state/handoffs/ run fleet.archive_completed_handoffs with "
+                "mode already-terminal; if the closure was wrong, reopen "
+                "it first"
             )
             out["mode"] = mode
             out["choke_point_refusal"] = True

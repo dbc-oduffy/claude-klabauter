@@ -1422,6 +1422,9 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
 
     Wire contract: coordinator_core/contract/cockpit-invoke-producer-contract.md.
 
+    `mode` is optional: absent means "already-terminal", the sole valid mode.
+    An explicit unknown mode is still a setup error.
+
     dry_run:true  → preview: enumerate terminal candidates (Branch A/B
                     terminality alone), capped oldest-first at `cap`; excess
                     candidates are named (never silently dropped) in the
@@ -1446,6 +1449,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     obligation and its import cost together; the ACT path's own
     `asyncio.run(...)` boundary is `_handle_act`'s, not this handler's.
     """
+    params = {"mode": "already-terminal", **params}
     parsed = validate_params(params)
     if isinstance(parsed, dict):
         return parsed

@@ -335,12 +335,21 @@ def _harvest_record(root: Path, harvest: str) -> Optional[str]:
     return rel.as_posix() if candidate.is_file() else None
 
 
+def _expected_record(root: Path, harvest: str) -> Optional[str]:
+    candidate = (root / harvest / "harvest.json").resolve()
+    try:
+        return candidate.relative_to(root).as_posix()
+    except ValueError:
+        return None
+
+
 def lookup(repo_root, paths) -> tuple:
     """(hits, None); (None, code) when the registry is malformed; ([], None) when absent.
 
     One hit per entry whose sources intersect a scope path, in registry order. A hit carries
     `id`, `board_url`, `artboards`, `status`, `paths` (the scope paths matched) and, only when
-    `<harvest>/harvest.json` is a file under the repo root, `harvest_path`."""
+    `<harvest>/harvest.json` is a file under the repo root, `harvest_path`; otherwise, when the
+    expected record path stays under the repo root, `harvest_expected_path` (repo-relative)."""
     entries, error = load(repo_root)
     if error:
         return None, error
@@ -363,5 +372,9 @@ def lookup(repo_root, paths) -> tuple:
         record = _harvest_record(root, entry["harvest"])
         if record is not None:
             hit["harvest_path"] = record
+        else:
+            expected = _expected_record(root, entry["harvest"])
+            if expected is not None:
+                hit["harvest_expected_path"] = expected
         hits.append(hit)
     return hits, None
