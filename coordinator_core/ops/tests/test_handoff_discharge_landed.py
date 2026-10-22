@@ -314,6 +314,6 @@ def test_landed_plan_with_open_withheld_rows_keeps_its_baton_and_fully_coded_shi
 
     result = mod._handler({}, repo_root=repo / ".git")
 
-    assert result["skipped"] == [{"plan": "docs/plans/held.md", "reason": "open withheld rows", "rows": ["C9"]}]
+    assert result["skipped"] == [{"plan": "docs/plans/held.md", "reason": "open rows", "rows": ["C9"]}]
     assert [d["id"] for d in result["discharged"]] == ["state/handoffs/2026-09-28-done.md"]
     assert (repo / "state/handoffs/2026-09-28-held.md").exists()

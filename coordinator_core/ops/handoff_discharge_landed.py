@@ -395,7 +395,7 @@ def _discharge(worktree_root: Path, plan_ids_param: Optional[List[str]]) -> dict
             continue
         rows = open_row_ids(text)
         if rows:
-            skipped.append({"plan": rel, "reason": "open withheld rows", "rows": rows})
+            skipped.append({"plan": rel, "reason": "open rows", "rows": rows})
             del target_meta[rel]
 
     if not target_meta:

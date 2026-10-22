@@ -14,6 +14,7 @@ from pathlib import Path
 
 import pytest
 
+from coordinator_core.roadmap.census_inproc import evaluate as _REAL_EVALUATE
 from coordinator_core.roadmap.census_store import CensusStore, store_path
 from coordinator_core.win_portability import no_console_creationflags
 
@@ -82,6 +83,23 @@ def spawns(mcr, monkeypatch):
 
     monkeypatch.setattr(mcr, "_spawn", counting)
     return calls
+
+
+@pytest.fixture(autouse=True)
+def _spawn_path(mcr, monkeypatch):
+    """The arms in this file pin the spawn and memo path, so in-process evaluation declines."""
+    monkeypatch.setattr(mcr._inproc(), "evaluate", lambda command, files, store: None)
+
+
+def test_inproc_runs_counts_the_in_process_entries(mcr, repo, monkeypatch):
+    monkeypatch.setattr(mcr._inproc(), "evaluate", _REAL_EVALUATE)
+    monkeypatch.setattr(mcr, "_spawn", lambda *a: pytest.fail("spawned"))
+    plans = [_plan(repo, "p1", [("grep -c alpha f.txt", "2"), ("grep -c needle d/a.txt", "1")]),
+             _plan(repo, "p2", [("grep -c alpha f.txt", "2")])]
+    reply = mcr.revalidate_set(plans, repo, 30, deadline=_far(), head="H1", store=_store(repo))
+    assert reply["inproc_runs"] == 3
+    assert reply["spawns"] == 0
+    assert all(s == ["MATCH"] * len(s) for s in _states(reply).values())
 
 
 def _far() -> float:

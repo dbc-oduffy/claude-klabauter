@@ -50,7 +50,7 @@ def _diamond(root):
 def test_running_but_landed_sibling_counts_as_landed_for_release(tmp_path):
     _diamond(tmp_path)
     _landed_repo(tmp_path, landed_record_for=["A"])
-    out = run_close.sibling_release(tmp_path, "B", SHA, budget=3)
+    out = run_close.sibling_release(tmp_path, "B", SHA)
     assert out["released"] == [fire_command("state/sizings/C.yaml")]
     assert _status(tmp_path, "A")["status"] == "landed"
     assert _status(tmp_path, "A")["reconciled_from"] == "running"
@@ -59,6 +59,6 @@ def test_running_but_landed_sibling_counts_as_landed_for_release(tmp_path):
 def test_running_sibling_without_record_at_head_does_not_release(tmp_path):
     _diamond(tmp_path)
     _landed_repo(tmp_path)
-    out = run_close.sibling_release(tmp_path, "B", SHA, budget=3)
+    out = run_close.sibling_release(tmp_path, "B", SHA)
     assert out["released"] == []
     assert _status(tmp_path, "A") == {"status": "running"}

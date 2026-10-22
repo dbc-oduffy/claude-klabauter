@@ -8,7 +8,7 @@ from __future__ import annotations
 import pytest
 
 from coordinator_core.ops.dispatch_emit.ask_compose import compose_ask_script
-from coordinator_core.ops.dispatch_emit.ask_contract import HALT_PARKED, PARKED_REPLY_KEY, STOP_AFTER_PLAN, parked_next_action
+from coordinator_core.ops.dispatch_emit.ask_contract import HALT_PARKED, HALT_REFUSAL, PARKED_REPLY_KEY, STOP_AFTER_PLAN, parked_next_action
 from coordinator_core.ops.dispatch_emit.tests import test_size_then_plan_e2e as e2e
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
 from coordinator_core.ops.dispatch_emit.tests import test_ask_compose_plan_blitz_ready_restage as blitz
@@ -80,6 +80,16 @@ def test_an_emit_time_stop_after_ends_as_the_same_parked_halt_naming_mise_prep(t
     assert halt["plan"] == e2e.PLAN_PATH and halt["run_id"] == "run-1"
     assert halt["next_action"] == parked_next_action(e2e.PLAN_PATH)
     assert "/mise-prep" in halt["next_action"] and e2e.PLAN_PATH in halt["next_action"]
+
+
+def test_an_emit_time_stop_after_with_no_landed_plan_on_a_non_xs_arm_is_a_refusal(tmp_path, monkeypatch, capsys):
+    scout, decision, verdict, _rel = e2e._fixture(tmp_path, monkeypatch, capsys, "S", "ceo", [])
+    stub = e2e._stub(scout, decision, verdict)
+    stub["plan"] = {"plan_rel": None}
+    out = e2e._run_script(_emit_time_script(), stub)
+    halt = out["result"]["halted_by"]
+    assert halt["halted"] == HALT_REFUSAL and halt["reason"] == "stop_after=plan but no plan landed", halt
+    assert "route" not in out["result"] and "planned" not in out["result"]
 
 
 def test_an_emit_time_park_is_set_before_the_halt_record_commit_that_lands_it():

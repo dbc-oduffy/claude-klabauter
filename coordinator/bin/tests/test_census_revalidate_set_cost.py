@@ -15,6 +15,7 @@ from pathlib import Path
 import pytest
 import yaml
 
+from coordinator_core.roadmap.census_inproc import evaluate as _REAL_EVALUATE
 from coordinator_core.roadmap.census_store import CensusStore, store_path
 from coordinator_core.win_portability import no_console_creationflags
 
@@ -86,12 +87,18 @@ def spawns(mcr, monkeypatch):
     return calls
 
 
+@pytest.fixture(autouse=True)
+def _spawn_path(mcr, monkeypatch):
+    """The arms in this file pin the spawn path, so in-process evaluation declines."""
+    monkeypatch.setattr(mcr._inproc(), "evaluate", lambda command, files, store: None)
+
+
 def _far() -> float:
     return time.monotonic() + 600
 
 
-def _run(mcr, plans, repo, store):
-    return mcr.revalidate_set(plans, repo, 30, deadline=_far(), head="H1", store=store)
+def _run(mcr, plans, repo, store, **kw):
+    return mcr.revalidate_set(plans, repo, 30, deadline=_far(), head="H1", store=store, **kw)
 
 
 def _states(reply: dict) -> dict:
@@ -245,8 +252,7 @@ def test_the_spawn_process_ceiling_defers_a_spawn_and_still_judges_a_hit(
     store = _store(repo)
     _run(mcr, [plans[0]], repo, store)
     spawns.clear()
-    monkeypatch.setattr(mcr, "_SPAWN_PROCESS_S", -1.0)
-    reply = _run(mcr, plans, repo, store)
+    reply = _run(mcr, plans, repo, store, process_budget_ms=1)
     assert spawns == []
     assert _states(reply) == {"docs/plans/hit.md": ["MATCH"], "docs/plans/new.md": ["UNRUNNABLE"]}
     assert reply["pending"] == ["docs/plans/new.md"]
@@ -288,10 +294,28 @@ def test_children_cpu_counts_against_the_spawn_bar_and_stops_the_next_batch(
     assert sorted(s[0] for s in _states(reply).values()) == ["MATCH", "UNRUNNABLE"]
 
 
-def test_the_reply_carries_children_spawns_and_inproc_counts(mcr, repo):
+def test_the_reply_carries_children_spawns_and_inproc_counts(mcr, repo, monkeypatch):
     plans = [_plan(repo, "a", [("grep -c alpha f.txt", "2"), ("grep -c alpha g.txt", "1")])]
     reply = _run(mcr, plans, repo, _store(repo))
     assert reply["spawns"] == 1
     assert isinstance(reply["children_process_ms"], int) and reply["children_process_ms"] >= 0
     assert reply["inproc_runs"] == 0
     assert _states(reply) == {"docs/plans/a.md": ["MATCH", "MATCH"]}
+    monkeypatch.setattr(mcr._inproc(), "evaluate", _REAL_EVALUATE)
+    other = [_plan(repo, "c", [("grep -c alpha f.txt", "2"), ("grep -c needle d/a.txt", "1")])]
+    fresh = _run(mcr, other, repo, _store(repo))
+    assert fresh["inproc_runs"] >= 1 and fresh["spawns"] == 0
+
+
+def test_process_budget_ms_is_accepted_and_a_smaller_one_stops_the_next_batch(
+    mcr, repo, monkeypatch
+):
+    plans = [_plan(repo, "a", [("grep -c alpha f.txt", "2")]),
+             _plan(repo, "b", [("grep -c alpha g.txt", "1")])]
+    monkeypatch.setattr(mcr, "_UNMEASURED_SHARE", 1)
+    monkeypatch.setattr(
+        mcr._LegCost, "_children_s", lambda self: 0.4 if self.spawns else 0.0
+    )
+    wide = _run(mcr, plans, repo, _store(repo), process_budget_ms=0)
+    assert wide["spawns"] == 1 and len(wide["pending"]) == 1
+    assert _run(mcr, plans, repo, _store(repo), process_budget_ms=2000)["pending"] == []

@@ -175,6 +175,15 @@ def test_signal_unset_with_role_marker_never_blocks(tmp_path, monkeypatch):
     assert not (d / ti.COUNTER_NAME).exists()
 
 
+def test_signal_unset_announced_work_never_blocks(tmp_path, monkeypatch):
+    monkeypatch.delenv("COORDINATOR_COCKPIT", raising=False)
+    text = "Next I'll run the census fix and land the wave."
+    assert ti.announces_unexecuted_work(text)
+    for role in (True, False):
+        _r, _g, _sid, _d, payload = _seed(tmp_path / str(role), text, role=role)
+        assert _run(payload).get("decision") != "block"
+
+
 def test_signal_unset_declared_tail_still_honoured(tmp_path, monkeypatch):
     monkeypatch.delenv("COORDINATOR_COCKPIT", raising=False)
     _r, _g, _sid, d, payload = _seed(tmp_path, f"Done.\n{TAIL}")

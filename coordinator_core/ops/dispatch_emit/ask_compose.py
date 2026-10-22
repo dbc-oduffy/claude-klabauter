@@ -2194,7 +2194,7 @@ def compose_ask_script(
             "path as plan_rel and the ids of exactly the rows you added as added_rows. Commit nothing. "
             f"As your very last act, when you added at least one row, run `{_INVOKE} {OP_ASK_STAGE} '<params>'` "
             "once, <params> being the JSON object ",
-            "js:JSON.stringify({ run_id: _runId, plan_path: _planRel, writes: _writes, "
+            "js:JSON.stringify({ run_id: _runId, plan_path: _planRel, "
             "cross_repo_approved: _crossRepoApproved, session_id: _SESSION_ID, "
             f"...(({_rl0}.{RESUME_LEDGER_UNCLAIMED_FIELD} ?? []).length ? {{ claim_register_rows: true }} : {{}}), "
             "...(_sizingRel ? { commit_sizing_path: _sizingRel } : {}) })",
@@ -2226,7 +2226,7 @@ def compose_ask_script(
             blitz_read_prompt = _cat(
                 f"{head}\n\n{anchor}\n\n",
                 f"Run `{_INVOKE} {OP_ASK_STAGE} '",
-                "js:JSON.stringify({ run_id: _runId, plan_path: _planRel, writes: _writes, "
+                "js:JSON.stringify({ run_id: _runId, plan_path: _planRel, "
                 "cross_repo_approved: _crossRepoApproved, session_id: _SESSION_ID, "
                 "...(_sizingRel ? { commit_sizing_path: _sizingRel } : {}) })",
                 "'` once and return its JSON reply verbatim as stage_reply (a manifest_handle, or the "
@@ -2269,7 +2269,7 @@ def compose_ask_script(
         """Prompt parts that make the plan agent stage its own plan and return the reply as `stage_reply`."""
         return (
             f"{lead} run `{_INVOKE} {OP_ASK_STAGE} '",
-            "js:JSON.stringify({ run_id: _runId, plan_path: '<plan_rel>', writes: _writes, "
+            "js:JSON.stringify({ run_id: _runId, plan_path: '<plan_rel>', "
             "cross_repo_approved: _crossRepoApproved, session_id: _SESSION_ID, " + _ONLY_ROWS_JS +
             "...(_sizingRel ? { commit_sizing_path: _sizingRel } : {}) })",
             "'` with <plan_rel> replaced by the plan's repo-relative path, and return its JSON reply "
@@ -2392,7 +2392,7 @@ def compose_ask_script(
         # plan-blitz-ready-op-contract: omitted once staged and in a stop_after script (never stages).
         ready_op_js = (
             f"...(!_stagedManifest ? {{ readyOp: {{ op: {_lit(OP_ASK_STAGE)}, params: {{ run_id: _runId, "
-            "writes: _writes, cross_repo_approved: _crossRepoApproved, session_id: _SESSION_ID, "
+            "cross_repo_approved: _crossRepoApproved, session_id: _SESSION_ID, "
             + _ONLY_ROWS_JS
             + "...(_sizingRel ? { commit_sizing_path: _sizingRel } : {}) }, "
             + f"schema: {json.dumps(STAGE_REPLY_SCHEMA, sort_keys=True)} }} }} : {{}}), "

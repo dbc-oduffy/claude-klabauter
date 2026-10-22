@@ -72,6 +72,7 @@ BACKGROUND_LEGS: tuple[str, ...] = (
     "post-close",
 )
 
+
 def owed_on_reclose(statuses: Mapping[str, str]) -> list[str]:
     """The background legs a re-close re-runs: those ``queued`` or ``failed``, plus a ``not-applicable``
     ``sizing-ship`` when ``plan-reconciliation`` is owed again -- it settles the register that gates it."""
@@ -254,8 +255,6 @@ def _memo_lifecycle(ctx: JobContext) -> LegResult:
 # --------------------------------------------------------------------------------------------
 
 _FULL_SHA = re.compile(r"^[0-9a-f]{40}$")
-# A row in one of these dispositions is settled in the plan, whatever the run record's incomplete list says.
-_RESOLVED_DISPOSITIONS = frozenset({"coded", "spun_off", "backlogged", "wont_do", "voided", "delivered_elsewhere"})
 _RESOLUTION_SHA = re.compile(r"^[0-9a-f]{7,64}$")
 _LANDS_CHUNKS = re.compile(r"^Lands-Chunks:[ \t]*(?P<v>.+?)\s*$", re.M)
 _HALTED_WALK_CAP = 500
@@ -675,9 +674,11 @@ def _plan_flip(ctx: JobContext) -> LegResult:
             ctx,
         )
     inputs = _inputs(ctx)
+    from coordinator_core.ops.dispatch_emit.spine_read import NON_DISPATCHABLE_DISPOSITIONS
+
     resolved = {
         str(r.get("id")) for r in _spine_rows(text)
-        if (r.get("disposition") or "open") in _RESOLVED_DISPOSITIONS
+        if (r.get("disposition") or "open") in NON_DISPATCHABLE_DISPOSITIONS
     }
     remaining = [c for c in (inputs.get("incomplete") or ()) if str(c) not in resolved]
     if remaining:

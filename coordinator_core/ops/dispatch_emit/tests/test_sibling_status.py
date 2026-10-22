@@ -82,7 +82,7 @@ def test_shares_computation_with_sibling_release(tmp_path):
     copy = tmp_path / c.run_parent_copy_rel("A")
     copy.parent.mkdir(parents=True, exist_ok=True)
     copy.write_text(json.dumps({"parent_id": PARENT}), encoding="utf-8")
-    out = run_close.sibling_release(tmp_path, "A", "a" * 40, budget=2)
+    out = run_close.sibling_release(tmp_path, "A", "a" * 40)
     view = sibling_status.sibling_status({"parent_id": PARENT}, tmp_path)
     assert view["released"] == out["released"]
     assert view["blocked"] == out["blocked"]

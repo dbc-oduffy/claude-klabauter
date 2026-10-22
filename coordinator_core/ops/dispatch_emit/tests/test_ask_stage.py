@@ -246,6 +246,26 @@ def test_audit_and_scratch_only_rows_declare_no_reviewable_path(repo):
     assert m.review_declared_paths == ()
 
 
+def test_plan_branch_stages_the_spines_writes_not_the_sizing_footprint_or_caller_writes(repo):
+    """A sizing footprint guess and caller `writes` never reach a plan-branch row or the review-declared paths."""
+    sizing_rel = "state/sizings/2026-10-01-guess.yaml"
+    (repo / sizing_rel).write_text(
+        yaml.safe_dump({"intent": "x", "footprint": ["guess/old.py"]}), encoding="utf-8", newline="\n"
+    )
+    plan = PLAN.replace("---\n#", f"sizing_object: {sizing_rel}\n---\n#", 1)
+    (repo / PLAN_REL).write_text(plan, encoding="utf-8", newline="\n")
+    (repo / ".git").mkdir(exist_ok=True)
+    reply = read_stage_reply(repo, _handler(
+        {"run_id": "spine", "plan_path": PLAN_REL, "writes": ["guess/old.py", "guess/other.py"]},
+        repo_root=repo / ".git",
+    ))
+    assert "error" not in reply, reply
+    staged = {w for r in reply["rows"] for w in r["writes"]}
+    assert {"pkg/a.py", "pkg/b.py", "pkg/c.py"} <= staged
+    assert not any(w.startswith("guess/") for w in staged)
+    assert not any(w.startswith("guess/") for w in reply["review_declared_paths"])
+
+
 def test_plugin_agent_row_without_agent_model_stages_with_frontmatter_model(repo, tmp_path_factory, monkeypatch):
     home = tmp_path_factory.mktemp("home")
     agents = home / ".claude" / "plugins" / "game-dev" / "agents"

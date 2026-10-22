@@ -456,8 +456,9 @@ def test_amend_settled_and_receipt(tmp_path):
     )
     rec = _rec(tmp_path)
     assert rec["review_receipt"] == "a/b.md" and rec["settled"]["review"]["status"] == "ran"
-    with pytest.raises(ValueError):
-        rc.amend_close_job(tmp_path, "r1", settled={"post-close": LegResult("ran")})
+    rc.amend_close_job(tmp_path, "r1", settled={"post-close": LegResult("ran")})
+    rec = _rec(tmp_path)
+    assert "post-close" not in rec["legs"] and rec["settled"]["post-close"]["status"] == "ran"
     with pytest.raises(ValueError):
         rc.amend_close_job(tmp_path, "r1", review_receipt="/abs/x")
     with pytest.raises(ValueError):

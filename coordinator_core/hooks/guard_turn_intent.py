@@ -233,7 +233,7 @@ def _turn_intent_step(payload: dict, text: str) -> bool:
         # A session started under Cockpit and resumed in a terminal keeps its marker, so the marker alone is not the gate.
         _turn_intent.role_marker_present(directory) and under_cockpit(),
         _heuristic_turn_intent,
-        _turn_intent.announces_unexecuted_work(text),
+        _turn_intent.announces_unexecuted_work(text) and under_cockpit(),
     )
     if decision.block:
         count = _turn_intent.bump_blocks(directory)

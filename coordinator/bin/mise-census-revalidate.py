@@ -131,6 +131,15 @@ def _census():
     return census
 
 
+def _inproc():
+    """`coordinator_core.roadmap.census_inproc`, resolved after `_census()` has put the engine on
+    the path; `evaluate` is read off the module at call time."""
+    _census()
+    from coordinator_core.roadmap import census_inproc
+
+    return census_inproc
+
+
 def screen(command: str, repo_root: Optional[Path] = None) -> Optional[dict]:
     """`None` when the command is read-only; a REFUSED row otherwise."""
     reason = _census().screen(command, repo_root)
@@ -704,6 +713,7 @@ class _TreeView:
         self._index_mtime_ns = 0
         self._files: dict[tuple, Optional[str]] = {}
         self._dirs: dict[str, Optional[str]] = {}
+        self._kids: dict[str, Optional[list]] = {}
 
     def has_dash_names(self) -> bool:
         """True when the worktree root holds an entry whose name begins with `-`, the only thing
@@ -809,6 +819,30 @@ class _TreeView:
             self._subtrees[rel] = self._scan(rel)
         return self._subtrees[rel]
 
+    def _children(self, rel: str) -> Optional[list]:
+        """`rel`'s entries as sorted `(name, kind, stat_or_link)`, scandir'd once per call and
+        shared by the key walk and `walk`. kind: "l" symlink (link target), "d" directory, "f"
+        regular file (lstat), "o" anything else; None when the directory cannot be listed."""
+        if rel not in self._kids:
+            kids: Optional[list] = []
+            try:
+                with os.scandir(self.root / rel) as it:
+                    for kid in sorted(it, key=lambda k: k.name):
+                        if kid.name == ".git":
+                            continue
+                        if kid.is_symlink():
+                            kids.append((kid.name, "l", os.readlink(kid.path)))
+                        elif kid.is_dir(follow_symlinks=False):
+                            kids.append((kid.name, "d", None))
+                        elif kid.is_file(follow_symlinks=False):
+                            kids.append((kid.name, "f", kid.stat(follow_symlinks=False)))
+                        else:
+                            kids.append((kid.name, "o", None))
+            except OSError:
+                kids = None
+            self._kids[rel] = kids
+        return self._kids[rel]
+
     def _scan(self, rel: str) -> Optional[str]:
         if (
             self.deadline is not None
@@ -816,35 +850,63 @@ class _TreeView:
             and time.monotonic() > self.deadline
         ):
             return None
-        try:
-            with os.scandir(self.root / rel) as it:
-                kids = sorted(it, key=lambda k: k.name)
-        except OSError:
+        kids = self._children(rel)
+        if kids is None:
             return None
         lines: list[str] = []
-        for kid in kids:
-            if kid.name == ".git":
-                continue
-            child = f"{rel}/{kid.name}"
-            try:
-                if kid.is_symlink():
-                    lines.append(f"l\0{child}\0{os.readlink(kid.path)}\n")
-                elif kid.is_dir(follow_symlinks=False):
-                    inner = self._subtree(child)
-                    if inner is None:
-                        return None
-                    lines.append(f"d\0{child}\n")
-                    lines.append(inner)
-                elif kid.is_file(follow_symlinks=False):
-                    ident = self.file_id(child, kid.stat(follow_symlinks=False), True)
-                    if ident is None:
-                        return None
-                    lines.append(f"f\0{child}\0{ident}\n")
-                else:
+        for name, kind, info in kids:
+            child = f"{rel}/{name}"
+            if kind == "l":
+                lines.append(f"l\0{child}\0{info}\n")
+            elif kind == "d":
+                inner = self._subtree(child)
+                if inner is None:
                     return None
-            except OSError:
+                lines.append(f"d\0{child}\n")
+                lines.append(inner)
+            elif kind == "f":
+                ident = self.file_id(child, info, True)
+                if ident is None:
+                    return None
+                lines.append(f"f\0{child}\0{ident}\n")
+            else:
                 return None
         return "".join(lines)
+
+    def walk(self, rel: str) -> Optional[list]:
+        """FileSource: every regular file under `rel` (`rel` itself when a file) as
+        `(path, lstat)`, skipping `.git` and symlinks; None when a part cannot be bounded."""
+        try:
+            st = os.lstat(self.root / rel)
+        except OSError:
+            return None
+        if _stat.S_ISREG(st.st_mode):
+            return [(rel, st)]
+        if not _stat.S_ISDIR(st.st_mode):
+            return None
+        out: list = []
+        stack = [rel]
+        while stack:
+            here = stack.pop()
+            kids = self._children(here)
+            if kids is None:
+                return None
+            for name, kind, info in kids:
+                child = f"{here}/{name}"
+                if kind == "d":
+                    stack.append(child)
+                elif kind == "f":
+                    out.append((child, info))
+                elif kind == "o":
+                    return None
+        return out
+
+    def read(self, rel: str) -> Optional[bytes]:
+        """FileSource: the file's bytes, None when unreadable."""
+        try:
+            return (self.root / rel).read_bytes()
+        except OSError:
+            return None
 
     def dir_id(self, rel: str) -> Optional[str]:
         if rel not in self._dirs:
@@ -1278,6 +1340,13 @@ def _entry_row(
             "observed": "",
         })
         return row
+    if view is not None and stats is not None and stats.get("inproc") and not stats.get("inproc_off"):
+        answers = shared.setdefault("inproc", {})
+        if command not in answers:
+            answers[command] = _inproc().evaluate(command, view, view.store)
+        if answers[command] is not None:
+            stats["inproc_runs"] += 1
+            return _judge(e, row, answers[command], plan_rel)
     prior = memo.get(command) if memo is not None else None
     prior = prior if isinstance(prior, MemoEntry) else None
     direct = (
@@ -1508,16 +1577,13 @@ _BUDGET_SPENT = "not run: set census budget spent"
 #: Seconds a `revalidate_set` call may spend hashing files it holds no identity for. Past it the
 #: file's identity is None, the entry runs, and the next call resumes from the store.
 _HASH_BUDGET_S = 0.06
-#: The process-time brightline for one call: parent plus reaped children (DR-344).
+#: The default process-time brightline for one call: parent plus reaped children (DR-344).
 _PROCESS_BAR_S = 0.5
 #: What a call spends after its last batch: judging the batch's rows, the roll-up and one
 #: `store.save()`. It is the ceiling's previous margin (0.5 - 0.32) carried over, not re-measured
 #: here; the children's CPU it once also covered is now counted in `_LegCost`, so it is an
 #: over-estimate until the scoped census-set measurement replaces it.
 _TAIL_RESERVE_S = 0.18
-#: `_LegCost.total_s()` into a `revalidate_set` call after which no new batch starts; the entries
-#: left are `pending` and the next call resumes from the store.
-_SPAWN_PROCESS_S = _PROCESS_BAR_S - _TAIL_RESERVE_S
 #: A command with no stored cost is assumed to take this share of the budget left, so a batch of
 #: strangers cannot spend more than that remainder.
 _UNMEASURED_SHARE = 4
@@ -1549,8 +1615,12 @@ def revalidate_set(
     deadline: float,
     head: Optional[str],
     store: Any = None,
+    process_budget_ms: int = 500,
 ) -> dict:
     """Revalidate a set of plans' census under one `time.monotonic()` `deadline`.
+
+    `process_budget_ms` is the call's process-time bar (a value <= 0 reads as 500); no new batch
+    starts once `_LegCost.total_s()` passes that bar less `_TAIL_RESERVE_S`.
 
     Phase 1 spawns nothing: every entry goes through `_entry_row` with the store's runs as the
     memo, a hit is judged from the stored run and an entry needing a spawn is held. Phase 2 runs
@@ -1563,6 +1633,8 @@ def revalidate_set(
     """
     started = time.monotonic()
     leg = _LegCost()
+    bar_s = process_budget_ms / 1000 if process_budget_ms > 0 else _PROCESS_BAR_S
+    spawn_gate_s = bar_s - _TAIL_RESERVE_S
     view = _TreeView(
         repo_root, deadline, store, deadline_gates_hashing=True,
         hash_budget_s=_HASH_BUDGET_S,
@@ -1572,9 +1644,12 @@ def revalidate_set(
     shared: dict[str, dict] = {}
 
     def no_spawn() -> bool:
-        return leg.total_s() > _SPAWN_PROCESS_S
+        return leg.total_s() > spawn_gate_s
 
-    p1 = {"memo_hits": 0, "direct_runs": 0, "key_ms": 0, "hold": True, "shared": shared}
+    p1 = {
+        "memo_hits": 0, "direct_runs": 0, "key_ms": 0, "hold": True, "shared": shared,
+        "inproc": True, "inproc_runs": 0,
+    }
     census = _census()
 
     def seed(command: str) -> None:
@@ -1586,6 +1661,8 @@ def revalidate_set(
 
     slots: list[dict] = []
     for plan in plans:
+        if no_spawn():
+            p1["inproc_off"] = True
         t0 = time.monotonic()
         plan_rel = plan_rel_path(plan, repo_root)
         early, entries = _plan_census(plan, False, store, plan_rel)
@@ -1652,7 +1729,7 @@ def revalidate_set(
         bounded = _remaining_timeout(timeout, deadline)
         if bounded is None:
             break
-        left_ms = max(0.0, (_SPAWN_PROCESS_S - leg.total_s()) * 1000)
+        left_ms = max(0.0, (spawn_gate_s - leg.total_s()) * 1000)
         batch = _next_batch(distinct, at, left_ms, estimate)
         whole = max(1, int(min(timeout * len(batch), deadline - time.monotonic())))
         results = _spawn_many(batch, repo_root, whole, leg)
@@ -1719,7 +1796,7 @@ def revalidate_set(
         "order": "measured" if measured else "input",
         "children_process_ms": leg.children_ms,
         "spawns": leg.spawns,
-        "inproc_runs": 0,
+        "inproc_runs": p1["inproc_runs"],
     }
 
 

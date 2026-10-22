@@ -88,7 +88,7 @@ def _seed_siblings(root: Path, *, halted: bool = True) -> None:
     st.parent.mkdir(parents=True, exist_ok=True)
     st.write_text(json.dumps({"status": c.STATUS_RUNNING}), encoding="utf-8")
     if halted:
-        run_close.sibling_release(root, PRED, None, budget=2)
+        run_close.sibling_release(root, PRED, None)
         halted_run.write_halt_marker(
             root / "state" / "warp" / PRED, halted="gate", sizing_rel=PRED_SIZING
         )
