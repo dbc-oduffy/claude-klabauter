@@ -2142,8 +2142,8 @@
     "coordinator_core/_content_root_primitive.py": "f7fcd3083855a5e1dd53c09233fbfd64f8dffdf5",
     "coordinator_core/_data_root.py": "0c7c8524f25376ae49593f11334445539dc557f9",
     "coordinator_core/_engine_landing.py": "06dbb1273f3c36fdb6be08767ec75e73c71630e7",
-    "coordinator_core/_engine_published_at": "b677f2ce4bae8c13053d8a6c8c91a422bf9f02b3",
-    "coordinator_core/_engine_stamp": "132d38adc9c7642febf2b25c58e96c5ece2d3730",
+    "coordinator_core/_engine_published_at": "33b2d11b5f547951ad5f575b9e3cc805230786c5",
+    "coordinator_core/_engine_stamp": "4744be3ddd72ef01fe3e9ddcbbb885064330ced8",
     "coordinator_core/_fleet_names.py": "e81fc4247611fe486697f4707b28a1a3a008f392",
     "coordinator_core/_hook_envelope.py": "d98df967471c001593ab85960dc367f5ff5da056",
     "coordinator_core/_repo_root_probe.py": "2d8edfa8cd9343436a650584da430aa87ae0397d",
@@ -4696,7 +4696,7 @@
     "coordinator_core/ops/dispatch_emit/sibling_status.py": "f8de63102937c0174847388f8196a8862dec235e",
     "coordinator_core/ops/dispatch_emit/sizing_fire.py": "2fc258d2fac9ade76bceab4cdcb7bd9a0068b580",
     "coordinator_core/ops/dispatch_emit/sizing_m_mint.py": "212251b79ab6cea6a43f5b6e195e64b30659921e",
-    "coordinator_core/ops/dispatch_emit/sizing_xs_mint.py": "385476b8713f4f696102daafefa8501c62c033a7",
+    "coordinator_core/ops/dispatch_emit/sizing_xs_mint.py": "a9e0c21dba503391ff419cca5f8707b546c59378",
     "coordinator_core/ops/dispatch_emit/slice_supersede.py": "45ecae8bc49b966cc8cac9e91757891109023db7",
     "coordinator_core/ops/dispatch_emit/slot_order.py": "451da44ac8235d79766e41f35dfffa3e185d9f18",
     "coordinator_core/ops/dispatch_emit/source_memo_ref.py": "700cfbcf8e8870a6098d3e13bb56618b8df422ba",
@@ -5363,7 +5363,7 @@
     "coordinator_core/ops/dispatch_emit/tests/test_sizing_fire_routes.py": "bcc4426779c5b5cfb451091047109d3970368ff4",
     "coordinator_core/ops/dispatch_emit/tests/test_sizing_fire_wiring.py": "48c6e0f79ca682f45b1ff52e1180a57a5408f55a",
     "coordinator_core/ops/dispatch_emit/tests/test_sizing_m_mint.py": "3242c1e9d0d64e7e1aa3888e669dc1ee5ea58e43",
-    "coordinator_core/ops/dispatch_emit/tests/test_sizing_xs_mint.py": "64a982a3ebdac1967695a71f4bc5f9be8eea4f6e",
+    "coordinator_core/ops/dispatch_emit/tests/test_sizing_xs_mint.py": "54c516bf890eab376064cb4e10dcc082b14fe084",
     "coordinator_core/ops/dispatch_emit/tests/test_slice_supersede_op.py": "a8f5d658355bdd79f06ed98f87fa9a51082d4250",
     "coordinator_core/ops/dispatch_emit/tests/test_source_memo_ref.py": "b7c1b0e5c9c6687290b2498c73b19c0f4d88260f",
     "coordinator_core/ops/dispatch_emit/tests/test_spent_run_reemit_next_tranche.py": "d21179133ec3cbcbe051fd0ec8fc6c94125d462f",
@@ -8883,5 +8883,5 @@
     "scripts/unstick_claude.py": "5458a0f699f1793ff9fd32295b9d0b33635f1c06"
   },
   "schema": 1,
-  "source_head": "08b06bbbf06c11c8c5943a923c6b2265ed49918f"
+  "source_head": "c84275caff35c491acf3c175f6c95f8247193219"
 }
