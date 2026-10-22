@@ -110,6 +110,8 @@ def test_scout_jtbd_flags_reach_the_assemble_command():
 def test_assemble_command_carries_the_no_hand_off_flag_and_deliverable_id():
     scout = _scout_line(_compose(baton={"path": "docs/plans/p.md", "deliverable_id": "dlv-1"}))
     assert NO_PLAN_HAND_OFF_FLAG in scout and "--write" in scout and "--deliverable-id dlv-1" in scout
+    assert scout.index("--write") < scout.index("--warp-run ") < scout.index("--json")
+    assert "--warp-run run-1 " in scout
     assert "--deliverable-id" not in _scout_line(_compose())
 
 

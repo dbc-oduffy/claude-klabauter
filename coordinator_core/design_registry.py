@@ -327,15 +327,12 @@ def _intersects(glob: str, touched: str) -> bool:
 
 
 def _harvest_record(root: Path, harvest: str) -> Optional[str]:
-    candidate = (root / harvest / "harvest.json").resolve()
-    try:
-        rel = candidate.relative_to(root)
-    except ValueError:
-        return None
-    return rel.as_posix() if candidate.is_file() else None
+    expected = _expected_record(root, harvest)
+    return expected if expected is not None and (root / expected).is_file() else None
 
 
 def _expected_record(root: Path, harvest: str) -> Optional[str]:
+    """Repo-relative `<harvest>/harvest.json` whether or not it exists; None when it escapes root."""
     candidate = (root / harvest / "harvest.json").resolve()
     try:
         return candidate.relative_to(root).as_posix()

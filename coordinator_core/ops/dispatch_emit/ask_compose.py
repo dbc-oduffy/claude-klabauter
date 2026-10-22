@@ -462,7 +462,9 @@ _LEDGER_ITEMS_RULES = (
     "softened or re-read it (name where in evidence); 'superseded' only when a LATER revision item "
     "replaces it, named as superseded_by; 'post_commit' when everything the item asks that can be "
     "true before the commit is met and what remains is only an act that exists after the terminal "
-    "commit -- the commit itself, reporting the landed sha, or a memo naming it -- named in "
+    "commit -- the commit itself, reporting the landed sha, a memo naming it, the run's baton archived "
+    "(baton_archive), or the plan stamped implemented (plan_implemented); the terminal commit writes both "
+    "lifecycle acts -- named in "
     "post_commit_acts from (" + ", ".join(POST_COMMIT_ACTS) + "); the run's change is uncommitted "
     "by design, so such an act is never a reason for 'not_met'; otherwise 'not_met'. Set essential false only for an "
     "item that is an aside rather than something the PM asked to have delivered; when the ledger "
@@ -1673,7 +1675,7 @@ def compose_ask_script(
             "[--well-trodden-step-change when well_trodden_step_change is true] "
             "[--research-class/-appetite/-source/-depth/-target/-question from research when research is returned] "
             "[--design-route <design_route> when design_route is returned] "
-            f"--write {shlex.quote(f'{repo_root}/{sizing_write_rel}')} --json {NO_PLAN_HAND_OFF_FLAG}{relayed_flag}"
+            f"--write {shlex.quote(f'{repo_root}/{sizing_write_rel}')} --warp-run {shlex.quote(run_id)} --json {NO_PLAN_HAND_OFF_FLAG}{relayed_flag}"
         )
         gate_template = (
             f"{_INVOKE} {OP_ASK_GATE} '"
@@ -1721,7 +1723,7 @@ def compose_ask_script(
                 + research_assemble_flags_js("_asmFields", "_q")
                 + design_route_assemble_flags_js("_asmFields", "_q")
                 + acceptance_rows_assemble_flags_js("_asmFields", "_q")
-                + f" + ' --write ' + _q({path_js}) + ' --json ' + {_lit(NO_PLAN_HAND_OFF_FLAG)}"
+                + f" + ' --write ' + _q({path_js}) + ' --warp-run ' + _q(_runId) + ' --json ' + {_lit(NO_PLAN_HAND_OFF_FLAG)}"
                 + (f" + {_lit(' --relayed-ask-file ' + shlex.quote(record_dir + '/' + RELAYED_ASK_FILE))}" if relayed else "")
             )
 

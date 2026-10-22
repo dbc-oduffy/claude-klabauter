@@ -274,9 +274,9 @@ def test_ledger_check_admits_post_commit_items():
     opts = script[script.index("label: 'verify'"):]
     opts = opts[: opts.index("\n")]
     assert "post_commit' when everything the item asks" in script.replace("\\'", "'")
-    assert "post_commit_acts from (commit, sha_reply, sha_memo)" in script
+    assert "post_commit_acts from (commit, sha_reply, sha_memo, baton_archive, plan_implemented)" in script
     assert '"post_commit"' in opts and '"post_commit_acts"' in opts
-    assert '"enum": ["commit", "sha_reply", "sha_memo"]' in opts
+    assert '"enum": ["commit", "sha_reply", "sha_memo", "baton_archive", "plan_implemented"]' in opts
     assert "const _ledgerBlocking = (l) =>" in script
     assert '"remaining"' in opts
     assert "remaining: i.remaining" in script

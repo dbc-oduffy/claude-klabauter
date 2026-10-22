@@ -81,6 +81,11 @@ def brief_text(hits: Sequence[Mapping], registry_rel: Optional[str]) -> str:
         out.append(f"  Artboards: {', '.join(str(a) for a in hit.get('artboards') or []) or '(none named)'}")
         if hit.get("harvest_path"):
             out.append(f"  Harvest: {hit['harvest_path']}")
+        elif hit.get("harvest_expected_path"):
+            out.append(
+                f"  Harvest: absent (expected {hit['harvest_expected_path']}); not a blocking gate. "
+                "Mint it with the canvas.harvest op."
+            )
         out.append(f"  Matched paths: {', '.join(str(p) for p in hit.get('paths') or [])}")
     return "\n".join(out)
 

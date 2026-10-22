@@ -2456,6 +2456,7 @@ def _usage(prog: str, stream=None) -> int:
         "    [--decided-on YYYY-MM-DD] --write <state/sizings/x.yaml>\n"
         "or: --pm-resolution <key> --pm-quote <str>\n"
         "    [--decided-on YYYY-MM-DD] [--supersede] --write <state/sizings/x.yaml>\n"
+        "    [--warp-run <run id> (write only; the sizing takes no session XS lane)]\n"
         "    [--no-plan-hand-off (write only; decision carries pm_exit_question, no obligation or acceptance fires)]\n"
         "    [--scout-register <scout report json|yaml, or - for stdin> (seeds the derived register)]\n"
         "or: --register <yaml, or - for stdin> [--supersede] --write <state/sizings/x.yaml>\n"
@@ -2631,6 +2632,7 @@ def main(argv: list[str]) -> int:
     premise_evidence = None
     write_path = None
     no_plan_hand_off = False
+    warp_run = None
     json_out = False
     deliverable_id = None
     xl_exit_pick = None
@@ -2838,6 +2840,17 @@ def main(argv: list[str]) -> int:
         elif tok == "--no-plan-hand-off":
             no_plan_hand_off = True
             i += 1
+        elif tok == "--warp-run" and i + 1 < len(argv):
+            from coordinator_core.ops._path_guard import safe_id
+
+            if write_path is None and "--write" not in argv:
+                print(f"{prog}: --warp-run requires --write <state/sizings/x.yaml>", file=sys.stderr)
+                return EXIT_USAGE
+            if not safe_id(argv[i + 1]):
+                print(f"{prog}: --warp-run needs a safe run id, got {argv[i + 1]!r}", file=sys.stderr)
+                return EXIT_USAGE
+            warp_run = argv[i + 1]
+            i += 2
         else:
             print(f"{prog}: unrecognized argument {tok!r}", file=sys.stderr)
             return _usage(prog)
@@ -3110,6 +3123,8 @@ def main(argv: list[str]) -> int:
         return EXIT_TRANSPORT_FAIL
 
     xs_sizing = decision["resolved_estimate"]["tshirt"] == "XS" and (express_lane or write_path is not None)
+    if warp_run is not None and write_path is not None:
+        xs_sizing = False
     if xs_sizing:
         refusal = _xs_lane_refusal(write_path)
         if refusal:

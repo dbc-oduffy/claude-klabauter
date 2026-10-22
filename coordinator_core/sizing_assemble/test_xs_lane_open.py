@@ -89,3 +89,55 @@ def test_refused_written_xs_does_not_write(repo, monkeypatch):
     monkeypatch.setattr(sa, "write_back", lambda *a, **k: called.append(1))
     rc = sa.main(["--tshirt", "XS", "--write", _XS_REL, "--no-plan-hand-off"])
     assert rc == sa.EXIT_USAGE and not called
+
+
+def _stub_write(monkeypatch):
+    monkeypatch.setattr(sa, "_open_routed_obligation", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        sa, "write_back", lambda *a, **k: {"pm_verbatims": {"embedded": 0, "turns": None}}
+    )
+
+
+def _warp_xs(rel: str, run_id: str) -> list[str]:
+    return ["--tshirt", "XS", "--write", rel, "--warp-run", run_id, "--no-plan-hand-off"]
+
+
+def test_warp_run_flag_literal_matches_the_contract():
+    from coordinator_core.ops.dispatch_emit import ask_contract
+
+    assert ask_contract.WARP_RUN_FLAG == "--warp-run"
+
+
+def test_warp_run_xs_writes_ignore_an_open_lane(repo, monkeypatch, capsys):
+    _stub_write(monkeypatch)
+    assert sa.main(["--tshirt", "XS", "--express-lane"]) == sa.EXIT_OK
+    before = xs_lane_budget.read_lane(repo, _SID)
+    assert sa.main(_warp_xs(_XS_REL, "run-a")) == sa.EXIT_OK
+    assert sa.main(_warp_xs("state/sizings/2026-10-22-xs2.yaml", "run-b")) == sa.EXIT_OK
+    assert "XS refused" not in capsys.readouterr().err
+    assert xs_lane_budget.read_lane(repo, _SID) == before
+
+
+def test_warp_run_xs_write_ignores_an_s_plus_touch(repo, monkeypatch, capsys):
+    _stub_write(monkeypatch)
+    _touch_sizing(repo, _S_REL, "M")
+    assert sa.main(_warp_xs(_XS_REL, "run-a")) == sa.EXIT_OK
+    assert "XS refused" not in capsys.readouterr().err
+
+
+def test_warp_run_xs_write_opens_no_lane(repo, monkeypatch):
+    _stub_write(monkeypatch)
+    assert sa.main(_warp_xs(_XS_REL, "run-a")) == sa.EXIT_OK
+    assert xs_lane_budget.read_lane(repo, _SID) is None
+
+
+def test_warp_run_without_write_is_usage(repo, capsys):
+    rc = sa.main(["--tshirt", "XS", "--express-lane", "--warp-run", "run-a"])
+    assert rc == sa.EXIT_USAGE
+    assert "--warp-run" in capsys.readouterr().err
+
+
+def test_warp_run_unsafe_id_is_usage(repo, capsys):
+    rc = sa.main(["--tshirt", "XS", "--write", _XS_REL, "--warp-run", "../x"])
+    assert rc == sa.EXIT_USAGE
+    assert "--warp-run" in capsys.readouterr().err

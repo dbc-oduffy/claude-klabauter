@@ -2759,12 +2759,35 @@ def _clean_review_files(inline_review: dict) -> Optional[set]:
 
 
 def _ledger_met_ids(ledger_verdict: object) -> list:
-    """Ids of the verdict items whose status is ``met``, in verdict order."""
+    """Ids of the verdict items whose status is ``met`` or whose only owed acts the landing itself
+    performs (``requirements_ledger.close_dischargeable``), in verdict order."""
+    from coordinator_core.ops.dispatch_emit import requirements_ledger
+
     items = ledger_verdict.get("items") if isinstance(ledger_verdict, dict) else None
     return [
         str(i["id"]) for i in (items if isinstance(items, list) else [])
-        if isinstance(i, dict) and i.get("status") == "met" and i.get("id") is not None
+        if isinstance(i, dict) and i.get("id") is not None
+        and (i.get("status") == "met" or requirements_ledger.close_dischargeable(i))
     ]
+
+
+def _lifecycle_owed(
+    verdict: dict, sha: str, reply: dict, consumed_baton: Optional[str], close_ctx: Optional[dict],
+) -> list:
+    """``post_commit_owed`` entries once the close stamp ran: a lifecycle act counts as performed
+    when the plan reads implemented, or the consumed baton was archived or shipped inline."""
+    from coordinator_core.ops.dispatch_emit import requirements_ledger
+
+    done: set = set()
+    if reply.get("plan_status") == "implemented":
+        done.add("plan_implemented")
+    legs = close_ctx.get("legs") if isinstance(close_ctx, dict) else None
+    shipped = legs.get("baton-ship") if isinstance(legs, dict) else None
+    if (consumed_baton and consumed_baton in (reply.get("archived") or {})) or (
+        getattr(shipped, "status", None) in ("ran", "discharged")
+    ):
+        done.add("baton_archive")
+    return requirements_ledger.post_commit_owed(verdict, sha, discharged=done)
 
 
 def _ledger_met_observation(ledger: object, verdict: object, open_rows: object) -> Optional[str]:
@@ -5367,6 +5390,7 @@ def _terminal_commit_inner(
             and not unsent_memos
         )
         archive_targets = ()
+        consumed_baton = None
         if shipped_sizing and re.search(
             r"^requirement_register:", _read_rel(worktree_root, shipped_sizing) or "", re.MULTILINE
         ):
@@ -5448,6 +5472,13 @@ def _terminal_commit_inner(
         criterion = inline_review.get("criterion")
         if isinstance(criterion, dict) and criterion.get("status"):
             reply["criterion_status"] = criterion["status"]
+        if ledger is not None and isinstance(params.get("ledger_verdict"), dict) and "sha" in reply:
+            reply.pop("post_commit_owed", None)
+            owed = _lifecycle_owed(
+                params["ledger_verdict"], str(reply["sha"]), reply, consumed_baton, close_ctx,
+            )
+            if owed:
+                reply["post_commit_owed"] = owed
     if reply.get("committed") and reply.get("sha"):
         residue = _commit_residue(
             worktree_root, request, snapshot, report_cache, session_id,

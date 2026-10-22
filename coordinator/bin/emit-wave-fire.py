@@ -498,8 +498,36 @@ def _report_predates_a_landing(
     )
 
 
-def _baton_arg(record: dict) -> dict:
+def _baton_route(record: dict, repo_root: "Path | None") -> "str | None":
+    """The effective route of the baton's first readable sizing, else None.
+
+    None for an unsized baton, an unreadable sizing, or no `repo_root`: an unknown route is
+    never defaulted to `plan`. One file read per sized baton, no spawn. With several sizings
+    the first readable one wins; disagreement between them is not detected.
+    """
+    if repo_root is None:
+        return None
+    import yaml
+
+    for rel in record.get("sizing_objects") or []:
+        if not isinstance(rel, str):
+            continue
+        try:
+            sizing = yaml.safe_load((repo_root / rel).read_text(encoding="utf-8"))
+        except (OSError, yaml.YAMLError):
+            continue
+        if isinstance(sizing, dict):
+            route = _effective_route(sizing)
+            if isinstance(route, str) and route:
+                return route
+    return None
+
+
+def _baton_arg(record: dict, repo_root: "Path | None" = None) -> dict:
     """One `batons[]` entry, every field derived — never defaulted, never typed.
+
+    `route` is the sizing's effective route (a recorded `xl_exit: accept_multi_session`
+    turns `pm-decision` into `plan`), null when no sizing can be read.
 
     `executionOpen` has no default on purpose. A baton whose report carries no
     `execution_gate` is a report this script will not paper over: the wave's XS lane
@@ -522,6 +550,7 @@ def _baton_arg(record: dict) -> dict:
         "sized": bool(record.get("sized")),
         "planPath": plan.get("path"),
         "executionOpen": bool(gate["open"]),
+        "route": _baton_route(record, repo_root),
     }
 
 
@@ -1761,7 +1790,7 @@ def main(argv=None) -> int:
         )
 
     try:
-        entries = [_baton_arg(by_id[i]) for i in wave_ids]
+        entries = [_baton_arg(by_id[i], repo_root) for i in wave_ids]
     except ValueError as exc:
         return refuse(str(exc))
 

@@ -89,6 +89,14 @@ def test_brief_text_hits_pointer_and_absent_registry():
     assert dc.brief_text([HIT], None) == "" and dc.brief_text([], "") == ""
 
 
+def test_brief_text_names_mint_route_for_missing_harvest():
+    bare = {k: v for k, v in HIT.items() if k != "harvest_path"}
+    bare["harvest_expected_path"] = "docs/design/settings/harvest/harvest.json"
+    text = dc.brief_text([bare], "r.yaml")
+    assert "canvas.harvest" in text and "docs/design/settings/harvest/harvest.json" in text
+    assert "absent" in text and "not a blocking gate" in text
+
+
 def test_brief_text_omits_harvest_when_absent():
     bare = {k: v for k, v in HIT.items() if k != "harvest_path"}
     assert "Harvest:" not in dc.brief_text([bare], "r.yaml")

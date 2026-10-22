@@ -27,7 +27,7 @@ import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterable, Mapping, Optional, Sequence
+from typing import Collection, Iterable, Mapping, Optional, Sequence
 
 from coordinator_core.ipc import register_op
 from coordinator_core.lifecycle import main_worktree_root
@@ -65,8 +65,13 @@ ORIGIN_RELAYED = "relayed"
 REVISE_REF = "workflow.revise"
 OUT_OF_SCOPE_REF = "out_of_scope"
 STATUSES = ("met", "not_met", "drifted", "superseded", "post_commit")
+#: Acts the terminal commit's landing performs itself: the run's consumed baton archived and the
+#: plan stamped implemented.
+LIFECYCLE_ACTS: tuple[str, ...] = ("baton_archive", "plan_implemented")
 #: Acts that can only exist after the terminal commit; a `post_commit` item names which remain.
-POST_COMMIT_ACTS = ("commit", "sha_reply", "sha_memo")
+POST_COMMIT_ACTS = ("commit", "sha_reply", "sha_memo", *LIFECYCLE_ACTS)
+#: The post-commit acts the landing performs with no further sender.
+CLOSE_DISCHARGED_ACTS: tuple[str, ...] = ("commit", *LIFECYCLE_ACTS)
 VERBATIM_BYTE_CAP = 16 * 1024
 #: Every seeded row's surface: a PM sentence names no entry kind, so the checker judges `wired`
 #: as reachable from the product at all.
@@ -1070,8 +1075,8 @@ def _claim_ruling(root: Path, sizing_rel: str, plan: tuple[str, Path], run_id: s
 
 def normalize_verdict(verdict: object) -> object:
     """A copy of `verdict` in which every `not_met` item whose non-empty `remaining` list holds only
-    `POST_COMMIT_ACTS` reads `post_commit` with those acts; every other item and a shapeless
-    verdict come back unchanged."""
+    `POST_COMMIT_ACTS` (commit, sha_reply, sha_memo, baton_archive, plan_implemented) reads
+    `post_commit` with those acts; every other item and a shapeless verdict come back unchanged."""
     items = verdict.get("items") if isinstance(verdict, Mapping) else None
     if not isinstance(items, list):
         return verdict
@@ -1155,7 +1160,8 @@ def judge(
     `superseded` passes only when it names a later revision row; `not_met` fails when
     `all_of_pm_ask` is set or the row is essential (the default), else it passes listed open as
     `non-essential`; `post_commit` passes only when
-    `post_commit_acts` is a non-empty list drawn from `POST_COMMIT_ACTS`.
+    `post_commit_acts` is a non-empty list drawn from `POST_COMMIT_ACTS` (commit, sha_reply,
+    sha_memo, baton_archive, plan_implemented).
 
     A design-conformance row (anchor `design-registry:<id>`) is always essential: `essential: false`
     is ignored, `post_commit` fails, and `met` passes only when `design_conformance.evidence_refusal`
@@ -1261,7 +1267,8 @@ def apply_verdict(repo_root: Path, sizing_rel: str, verdict: Mapping, *, run_id:
     """Write a passed verdict onto the register once the commit `sha` landed: met and wired ->
     `met` with `<run_id>@<sha>` in met_by; met alone -> `partial`; superseded -> `waived` with the
     PM's superseding words as the ruling. A `post_commit` item whose acts are within
-    `{commit, sha_reply}` is written as `met` (the landed commit is the act); one naming
+    `{commit, sha_reply, baton_archive, plan_implemented}` is written as `met` (the landed commit
+    is the act, and the landing performs the lifecycle acts); one naming
     `sha_memo` is `partial`, the engine sending no memo. A `not_met` item whose `remaining` is only
     post-commit acts reads as `post_commit` (`normalize_verdict`). Every judged row gets
     `last_progress_at`."""
@@ -1302,9 +1309,23 @@ def apply_verdict(repo_root: Path, sizing_rel: str, verdict: Mapping, *, run_id:
     return _mutate_register(Path(repo_root), sizing_rel, edit)
 
 
-def post_commit_owed(verdict: Mapping, sha: str) -> list[dict]:
+def close_dischargeable(item: Mapping) -> bool:
+    """True when `item`, after `normalize_verdict`'s per-item rule, is `post_commit` with a
+    non-empty act list drawn only from `CLOSE_DISCHARGED_ACTS`."""
+    if not isinstance(item, Mapping):
+        return False
+    got = normalize_verdict({"items": [item]})["items"][0]
+    acts = got.get("post_commit_acts")
+    return (
+        got.get("status") == "post_commit" and isinstance(acts, list) and bool(acts)
+        and all(isinstance(a, str) and a in CLOSE_DISCHARGED_ACTS for a in acts)
+    )
+
+
+def post_commit_owed(verdict: Mapping, sha: str, discharged: Collection[str] = ()) -> list[dict]:
     """What the run still owes once `sha` exists: `{id, acts, sha}` per `post_commit` item that
-    names `sha_memo`, which the engine never sends."""
+    names `sha_memo`, which the engine never sends, and `{id, acts, sha}` (the undischarged
+    lifecycle acts) per `post_commit` item naming a `LIFECYCLE_ACTS` member absent from `discharged`."""
     verdict = normalize_verdict(verdict)
     owed = []
     for r in verdict.get("items") or []:
@@ -1313,6 +1334,10 @@ def post_commit_owed(verdict: Mapping, sha: str) -> list[dict]:
         acts = [a for a in r.get("post_commit_acts") or [] if isinstance(a, str)]
         if "sha_memo" in acts:
             owed.append({"id": str(r.get("id")), "acts": acts, "sha": sha})
+            continue
+        undone = [a for a in acts if a in LIFECYCLE_ACTS and a not in discharged]
+        if undone:
+            owed.append({"id": str(r.get("id")), "acts": undone, "sha": sha})
     return owed
 
 

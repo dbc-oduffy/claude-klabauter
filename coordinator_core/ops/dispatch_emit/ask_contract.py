@@ -97,6 +97,8 @@ STOP_AFTER_FILE = "stop-after.json"
 PARKED_REPLY_KEY = "parked"
 SIZING_SCOUT_AGENT_TYPE = "coordinator:sizing-scout"
 NO_PLAN_HAND_OFF_FLAG = "--no-plan-hand-off"
+#: Marks a sizing-assemble write as a warp run's own; it takes no session XS lane.
+WARP_RUN_FLAG = "--warp-run"
 DOC_NEW_CMD = '"${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/bin/coordinator-doc-new"'
 SIZING_ASSEMBLE_CMD = '"${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/bin/sizing-assemble"'
 #: The sizing scout's return fields; every scout prompt concatenates this one passage.

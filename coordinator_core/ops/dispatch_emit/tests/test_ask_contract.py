@@ -109,6 +109,7 @@ def test_size_then_plan_names():
     assert c.STOP_AFTER_PLAN == "plan"
     assert c.SIZING_SCOUT_AGENT_TYPE == "coordinator:sizing-scout"
     assert c.NO_PLAN_HAND_OFF_FLAG == "--no-plan-hand-off"
+    assert c.WARP_RUN_FLAG == "--warp-run"
     assert c.PM_EXIT_QUESTION_KEY == "pm_exit_question"
     assert c.STOP_AFTER_PLAN in c.ASK_PHASES
 
