@@ -2142,8 +2142,8 @@
     "coordinator_core/_content_root_primitive.py": "f7fcd3083855a5e1dd53c09233fbfd64f8dffdf5",
     "coordinator_core/_data_root.py": "0c7c8524f25376ae49593f11334445539dc557f9",
     "coordinator_core/_engine_landing.py": "06dbb1273f3c36fdb6be08767ec75e73c71630e7",
-    "coordinator_core/_engine_published_at": "071bd39e0b489a9cd4cf7f7eab6c595a359ec0ff",
-    "coordinator_core/_engine_stamp": "502167656d067482a5f6d34347a8eeb3df213bed",
+    "coordinator_core/_engine_published_at": "53c3b613ce403b14b066308a56ede7e8eec00f8c",
+    "coordinator_core/_engine_stamp": "aed7b2086f042d4428c818608ee5be83c77300c5",
     "coordinator_core/_fleet_names.py": "e81fc4247611fe486697f4707b28a1a3a008f392",
     "coordinator_core/_hook_envelope.py": "d98df967471c001593ab85960dc367f5ff5da056",
     "coordinator_core/_repo_root_probe.py": "2d8edfa8cd9343436a650584da430aa87ae0397d",
@@ -5080,7 +5080,7 @@
     "coordinator_core/ops/dispatch_emit/tests/test_inventory_split_cap_and_refusal.py": "87504fa6f3220e62cceb978e951d6dad7cf22d6f",
     "coordinator_core/ops/dispatch_emit/tests/test_inventory_tranche_and_withheld.py": "0f5ca6596873bba6eff6c1ca346d018899a61205",
     "coordinator_core/ops/dispatch_emit/tests/test_inventory_tranche_deferred_plan_edge.py": "a3cf54bac976711dc2aad64d528df705b518990f",
-    "coordinator_core/ops/dispatch_emit/tests/test_inventory_tranche_gaps.py": "fad634e9193249dde1c1dddde702bc4f42cb42f3",
+    "coordinator_core/ops/dispatch_emit/tests/test_inventory_tranche_gaps.py": "25faba65922e3274be87848e64dcf8a2e350568c",
     "coordinator_core/ops/dispatch_emit/tests/test_invoke_prompts_carry_reconcile_clause.py": "a3bd37fa6ff61c22f3fb032dbc354cfd952ba928",
     "coordinator_core/ops/dispatch_emit/tests/test_judge_reason_falls_back_to_observation.py": "b5ead4409898bb9941676c8156181fc220a15cb9",
     "coordinator_core/ops/dispatch_emit/tests/test_judge_verdict_falsifier_unrun.py": "a6b30a14ba7a8e40b421cd4e68c8d7b36d506c49",
@@ -8875,5 +8875,5 @@
     "scripts/unstick_claude.py": "5458a0f699f1793ff9fd32295b9d0b33635f1c06"
   },
   "schema": 1,
-  "source_head": "ea944354f5a217216414e529614142e694cfd4f3"
+  "source_head": "b86ca1dda08c614480bfb4bb18190ea1bf7b88c7"
 }

@@ -354,12 +354,16 @@ def test_an_over_budget_group_cycle_places_plan_by_plan():
     assert set(deferred) == {"a", "d"}
 
 
-def _groups(*writes_per_item, under=None):
+def _groups(*writes_per_item, under=None, appends=None):
     items = [f"p{n}" for n in range(len(writes_per_item))]
-    rows = [
-        {"id": f"{item}.r", "writes": list(writes), **({"writes_under": under[n]} if under and under[n] else {})}
-        for n, (item, writes) in enumerate(zip(items, writes_per_item))
-    ]
+    rows = []
+    for n, writes in enumerate(writes_per_item):
+        row = {"id": f"p{n}.r", "writes": list(writes)}
+        if under and under[n]:
+            row["writes_under"] = under[n]
+        if appends and appends[n]:
+            row["appends"] = appends[n]
+        rows.append(row)
     return im._shared_path_groups(rows, items, items)[0]
 
 
@@ -376,6 +380,18 @@ def test_writes_under_prefix_groups_every_writer_beneath_it():
         ["a.md"], ["docs/plans/x.md"], ["docs/plans/y.md"], ["src/z.py"], under=[["docs/plans/"], None, None, None]
     )
     assert groups == [["p0", "p1", "p2"], ["p3"]]
+
+
+def test_backslash_writes_under_prefix_covers_forward_slash_writers():
+    groups = _groups(["a.md"], ["docs/plans/x.md"], under=[["docs\\plans\\"], None])
+    assert groups == [["p0", "p1"]]
+
+
+def test_backslash_appends_exempts_a_forward_slash_hub_path():
+    groups = _groups(
+        ["docs/hub.md"], ["docs\\hub.md"], appends=[["docs\\hub.md"], ["docs/hub.md"]]
+    )
+    assert groups == [["p0"], ["p1"]]
 
 
 def test_tranche_takes_plans_writing_distinct_files_under_one_directory_separately(tmp_path):
