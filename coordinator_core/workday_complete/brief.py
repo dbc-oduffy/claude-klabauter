@@ -674,9 +674,10 @@ def _build_day_goal_closeout_judgment_point(open_day_goals: dict[str, Any]) -> d
         question=(
             f"{len(today_rows)} day goal(s) due today and {len(stale_rows)} "
             "stale day goal(s) from prior days are open on the goals wire. "
-            "Record a done/dropped outcome for each in the top-level key "
-            "decisions['day_goal_closeout'] = {goal_id: 'done'|'dropped'} "
-            "(any value other than exactly 'done' closes 'dropped' — DEC-1), "
+            "Record a done|lapsed|dropped outcome for each in the top-level key "
+            "decisions['day_goal_closeout'] = {goal_id: 'done'|'lapsed'|'dropped'} "
+            "(lapsed means expired with no decision; any value other than exactly "
+            "'done' or 'lapsed' closes 'dropped' — DEC-1), "
             "or skip for now?"
         ),
         dispositions=[

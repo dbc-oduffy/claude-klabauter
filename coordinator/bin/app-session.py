@@ -210,12 +210,15 @@ def _run_validate(prog: str, params: dict, repo_root: str, key: str, wait_s: int
                 break
             _sleep(_RESULT_POLL_S)
 
-        cc_invoke.route(
-            _VERBS["teardown"],
-            {"repo_root": repo_root, "key": f"{key}@validate"},
-            repo_root,
-            _no_fallback,
-        )
+        try:
+            cc_invoke.route(
+                _VERBS["teardown"],
+                {"repo_root": repo_root, "key": f"{key}@validate"},
+                repo_root,
+                _no_fallback,
+            )
+        except RuntimeError as exc:
+            print(f"{prog}: teardown of {key}@validate failed: {exc}", file=sys.stderr)
         _emit(
             {
                 "ok": False,

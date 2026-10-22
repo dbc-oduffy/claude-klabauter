@@ -10,14 +10,13 @@ from __future__ import annotations
 
 import os
 import subprocess
+from typing import Callable, List, Optional, Tuple
 
 UNPUSHED = "unpushed local ref"
 STASH = "stash present"
 UNTRACKED = "untracked files"
 MODIFIED = "modified files"
 UNREADABLE = "git state unreadable"
-
-_GIT_TIMEOUT_S = 5
 
 
 def _in_scratch(root: str) -> bool:
@@ -55,25 +54,25 @@ def is_unborn_scratch_repo(root: str) -> bool:
     return not os.path.exists(os.path.join(gitdir, "logs"))
 
 
-def _git(root: str, *args: str) -> str | None:
+GitRunner = Callable[[List[str], Optional[str]], Tuple[int, str]]
+
+
+def _git(run_git: GitRunner, root: str, *args: str) -> str | None:
     try:
-        proc = subprocess.run(
-            ["git", "-C", root, *args],
-            capture_output=True,
-            text=True,
-            timeout=_GIT_TIMEOUT_S,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        )
+        rc, out = run_git(list(args), root)
     except (OSError, subprocess.SubprocessError):
         return None
-    return proc.stdout if proc.returncode == 0 else None
+    return out if rc == 0 else None
 
 
-def scratch_clone_failures(root: str) -> list[str] | None:
+def scratch_clone_failures(root: str, run_git: GitRunner) -> list[str] | None:
     """None when root is not a non-bare repo under an enclosing repo's `scratch/` (the predicate
     does not apply). Otherwise the failed recoverable-by-re-clone conditions, a subset of
     UNPUSHED, STASH, UNTRACKED, MODIFIED (UNREADABLE if git cannot be read); [] means removing
     root loses nothing a re-clone does not restore.
+
+    `run_git(args, cwd) -> (rc, stdout)` is the caller's shared git runner (args exclude `git`);
+    any rc != 0 reads as UNREADABLE.
 
     TRAP: a repo with no remote-tracking refs fails UNPUSHED as soon as it has any local ref;
     a detached HEAD is counted as a local ref. Ignored files are not checked.
@@ -93,8 +92,8 @@ def scratch_clone_failures(root: str) -> list[str] | None:
                 tips.append("HEAD")
     except OSError:
         return [UNREADABLE]
-    ahead = _git(root, "rev-list", "--max-count=1", *tips, "--not", "--remotes")
-    status = _git(root, "status", "--porcelain=v1", "--untracked-files=all", "--no-renames")
+    ahead = _git(run_git, root, "rev-list", "--max-count=1", *tips, "--not", "--remotes")
+    status = _git(run_git, root, "status", "--porcelain=v1", "--untracked-files=all", "--no-renames")
     if ahead is None or status is None:
         return [UNREADABLE]
     if ahead.strip():

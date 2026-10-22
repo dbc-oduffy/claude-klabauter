@@ -806,8 +806,8 @@ def _link_plans_in(fm: Dict[str, Any], plans: PlanIndex) -> Tuple[List[Dict[str,
 _WEAK_PLAN_LINK_BASES = frozenset({"sizing_object", "sizing_objects"})
 
 
-#: `plan.schema.json`'s `status` enum, in lifecycle-progression order (`closed`
-#: is absent from the vendored schema until the re-vendor). Used
+#: `plan.schema.json`'s `status` enum, in lifecycle-progression order, plus `closed`
+#: (absent from the vendored schema until the re-vendor; drop this note then). Used
 #: only to break a `(coded, approved)` tie between two plans — never as a
 #: standalone ranking, since the tail (`closed_partial`/`deferred`/
 #: `abandoned`/`superseded`) are terminal alternates, not "further along"

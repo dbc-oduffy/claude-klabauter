@@ -10,6 +10,7 @@ _LIB_DIR = os.path.join(_SCRIPT_DIR, "lib")
 _TERMINAL_PLAN_QUERY_LIMIT = 100000
 
 # Single source for both the terminal-path query and the live-ref scan filter.
+# Standalone script: deliberately narrower than lifecycle_constants.PLAN_TERMINAL_STATUS.
 _TERMINAL_PLAN_STATUSES = ("implemented", "superseded", "abandoned", "closed")
 
 

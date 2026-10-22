@@ -27,6 +27,7 @@ naively joining `<root>/.git` (the trap a `.git`-file worktree falls into).
 
 from __future__ import annotations
 
+import ast
 import os
 import subprocess
 from pathlib import Path
@@ -322,8 +323,6 @@ def test_ac7_no_hand_rolled_create_no_window():
     `subprocess.` or a bare assignment), which would mean a hand-rolled flag
     slipped past no_console_creationflags().
     """
-    import ast
-
     for path in _TOUCHED_MODULE_FILES:
         source = path.read_text(encoding="utf-8")
         docstring_lines = set()

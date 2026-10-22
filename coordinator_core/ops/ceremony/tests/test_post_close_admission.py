@@ -64,6 +64,20 @@ def test_notice_admitted_posts_one_start(monkeypatch):
     assert phase == "START" and kw["run"] == "run1" and kw["session_id"] == "close:run1"
     assert "structural-index" in kw["note"]
     assert kw["require_holder"] is False
+    assert "pids" not in kw
+
+
+def test_notice_forwards_pids(monkeypatch):
+    calls = []
+
+    def fake_post(phase, **kw):
+        calls.append(kw)
+        return {"posted": True}
+
+    monkeypatch.setattr(admission_post, "post", fake_post)
+    v = pca.admit("structural-index", 20000, True)
+    assert pca.notice(v, "run1", pids=[4242]) is True
+    assert calls[0]["pids"] == [4242]
 
 
 def test_notice_without_holder_appends_to_admission_jsonl(tmp_path, monkeypatch):

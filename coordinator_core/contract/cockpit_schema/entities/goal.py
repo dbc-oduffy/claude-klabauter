@@ -28,7 +28,7 @@ from coordinator_core.contract.cockpit_schema.provenance import ContentHash, Pro
 
 GoalPeriod = Literal["day", "week", "repo", "quarter", "year"]
 
-GoalStatus = Literal["active", "done", "superseded", "dropped"]
+GoalStatus = Literal["active", "done", "superseded", "dropped", "lapsed"]
 
 
 class GoalKeyResultStatus(BaseModel):

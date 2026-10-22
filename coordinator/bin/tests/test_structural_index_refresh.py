@@ -2,6 +2,7 @@
 import importlib.util
 import json
 import subprocess
+import sys
 import types
 from pathlib import Path
 
@@ -161,7 +162,10 @@ def _admission(monkeypatch, avail_mb, trusted=True):
 def test_spawn_ensure_launches_detached_wrapper_not_ensure(tmp_path, monkeypatch):
     posts = _admission(monkeypatch, 100000)
     captured = {}
-    monkeypatch.setattr(sir.subprocess, "Popen", lambda cmd, **kw: captured.update(cmd=cmd, kw=kw))
+    monkeypatch.setattr(
+        sir.subprocess, "Popen", lambda cmd, **kw: captured.update(cmd=cmd, kw=kw) or FakePid()
+    )
+    monkeypatch.setattr(sir, "lower_io_priority_pid", lambda pid: None)
     sir.spawn_ensure(Path("/rag"), tmp_path)
     assert "--run-and-record" in captured["cmd"] and "ensure" not in captured["cmd"]
     assert captured["kw"]["stdout"] == subprocess.DEVNULL
@@ -172,7 +176,9 @@ def test_spawn_ensure_launches_detached_wrapper_not_ensure(tmp_path, monkeypatch
 def test_spawn_ensure_admitted_child_is_below_normal(tmp_path, monkeypatch):
     _admission(monkeypatch, 100000)
     captured = {}
-    monkeypatch.setattr(sir.subprocess, "Popen", lambda cmd, **kw: captured.update(kw=kw))
+    monkeypatch.setattr(sir.subprocess, "Popen", lambda cmd, **kw: captured.update(kw=kw) or FakePid())
+    monkeypatch.setattr(sir, "lower_io_priority_pid", lambda pid: None)
+    monkeypatch.setattr(sir, "lower_io_priority_self", lambda: None)
     monkeypatch.setattr(sir.subprocess, "BELOW_NORMAL_PRIORITY_CLASS", 0x4000, raising=False)
     monkeypatch.setattr(sir.subprocess, "CREATE_NO_WINDOW", 0x08000000, raising=False)
     monkeypatch.setattr(sir.subprocess, "CREATE_NEW_PROCESS_GROUP", 0x200, raising=False)
@@ -185,6 +191,115 @@ def test_spawn_ensure_admitted_child_is_below_normal(tmp_path, monkeypatch):
     sir.spawn_ensure(Path("/rag"), tmp_path)
     captured["kw"]["preexec_fn"]()
     assert niced == [sir.POSIX_NICE]
+
+
+class FakePid:
+    pid = 4242
+
+
+def test_start_notice_follows_popen_and_carries_pid(tmp_path, monkeypatch):
+    posts = _admission(monkeypatch, 100000)
+    order = []
+    monkeypatch.setattr(sir, "lower_io_priority_pid", lambda pid: None)
+
+    def popen(cmd, **kw):
+        order.append(("popen", len(posts)))
+        return FakePid()
+
+    monkeypatch.setattr(sir.subprocess, "Popen", popen)
+    sir.spawn_ensure(Path("/rag"), tmp_path)
+    assert order == [("popen", 0)]
+    assert len(posts) == 1
+    kind, kw = posts[0]
+    assert kind == "START" and kw["pids"] == [4242] and "peak" in kw["note"]
+
+
+def test_failed_popen_posts_nothing(tmp_path, monkeypatch):
+    posts = _admission(monkeypatch, 100000)
+
+    def popen(*a, **k):
+        raise OSError("no exe")
+
+    monkeypatch.setattr(sir.subprocess, "Popen", popen)
+    with pytest.raises(OSError):
+        sir.spawn_ensure(Path("/rag"), tmp_path)
+    assert posts == []
+
+
+class FakeLibc:
+    def __init__(self):
+        self.calls = []
+
+    def syscall(self, *a):
+        self.calls.append(("syscall", a))
+
+    def setiopolicy_np(self, *a):
+        self.calls.append(("setiopolicy_np", a))
+
+
+def test_io_priority_linux_sets_idle_class(monkeypatch):
+    libc = FakeLibc()
+    monkeypatch.setattr(sir, "_platform", lambda: "linux")
+    monkeypatch.setattr(sir, "_libc", lambda: libc)
+    import platform
+
+    monkeypatch.setattr(platform, "machine", lambda: "x86_64")
+    sir.lower_io_priority_self()
+    assert libc.calls == [("syscall", (251, 1, 0, 3 << 13))]
+
+
+def test_io_priority_macos_sets_throttle(monkeypatch):
+    libc = FakeLibc()
+    monkeypatch.setattr(sir, "_platform", lambda: "darwin")
+    monkeypatch.setattr(sir, "_libc", lambda: libc)
+    sir.lower_io_priority_self()
+    assert libc.calls == [("setiopolicy_np", (1, 0, 3))]
+
+
+def test_io_priority_failure_is_swallowed(monkeypatch):
+    def boom():
+        raise OSError("no libc")
+
+    monkeypatch.setattr(sir, "_platform", lambda: "darwin")
+    monkeypatch.setattr(sir, "_libc", boom)
+    sir.lower_io_priority_self()
+    libc = FakeLibc()
+    monkeypatch.setattr(sir, "_libc", lambda: libc)
+    monkeypatch.setattr(sir, "_platform", lambda: "win32")
+    sir.lower_io_priority_self()
+    assert libc.calls == []
+
+
+def test_io_priority_windows_uses_psutil_and_skips_without_it(monkeypatch):
+    seen = []
+
+    class Proc:
+        def __init__(self, pid):
+            seen.append(pid)
+
+        def ionice(self, level):
+            seen.append(level)
+
+    fake = types.SimpleNamespace(Process=Proc, IOPRIO_VERYLOW=0)
+    monkeypatch.setitem(sys.modules, "psutil", fake)
+    sir.lower_io_priority_pid(77)
+    assert seen == [77, 0]
+    monkeypatch.setitem(sys.modules, "psutil", None)  # ImportError on import
+    sir.lower_io_priority_pid(77)
+    assert seen == [77, 0]
+
+
+def test_spawn_ensure_applies_windows_io_priority_after_popen(tmp_path, monkeypatch):
+    _admission(monkeypatch, 100000)
+    monkeypatch.setattr(sir.subprocess, "Popen", lambda cmd, **kw: FakePid())
+    for name, val in (("BELOW_NORMAL_PRIORITY_CLASS", 0x4000), ("CREATE_NO_WINDOW", 0x08000000),
+                      ("CREATE_NEW_PROCESS_GROUP", 0x200)):
+        monkeypatch.setattr(sir.subprocess, name, val, raising=False)
+    monkeypatch.setattr(sir, "os", types.SimpleNamespace(name="nt"))
+    pids = []
+    monkeypatch.setattr(sir, "lower_io_priority_pid", pids.append)
+    sir.spawn_ensure(Path("/rag"), tmp_path)
+    assert pids == [4242]
 
 
 def test_spawn_ensure_defers_and_records_when_memory_short(tmp_path, monkeypatch):

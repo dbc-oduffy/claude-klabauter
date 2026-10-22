@@ -1,6 +1,7 @@
 """`closed` joins every residual plan-axis status set exactly where `abandoned` is."""
 from __future__ import annotations
 
+import functools
 import importlib.util
 from pathlib import Path
 
@@ -17,6 +18,7 @@ def _load_bin(name: str):
     return mod
 
 
+@functools.lru_cache(maxsize=1)
 def _sets():
     from coordinator_core.distill import delete_guard
     from coordinator_core.ops.fleet import prune_emitted

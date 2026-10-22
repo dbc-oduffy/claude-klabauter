@@ -11,7 +11,7 @@ deferred index refresh costs staleness until the next close, a wrong admit costs
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Mapping, Optional
+from typing import Mapping, Optional, Sequence
 
 RESERVE_MB = 8192
 DECLARED_PEAK_MB: Mapping[str, int] = {"structural-index": 2048, "scip-rebuild": 3072}
@@ -57,8 +57,10 @@ def admit(
     return Verdict(label, False, avail_mb, f"need {need}MB > avail {remaining}MB")
 
 
-def notice(verdict: Verdict, run_id: str) -> bool:
+def notice(verdict: Verdict, run_id: str, pids: Optional[Sequence[int]] = None) -> bool:
     """Post one START line for an admitted verdict; False when deferred, not posted, or on error.
+
+    ``pids`` names the launched child processes and is forwarded to the post only when given.
 
     The line is appended whether or not a box Group EM holder exists; no END line follows a
     launch."""
@@ -72,8 +74,14 @@ def notice(verdict: Verdict, run_id: str) -> bool:
             f"post-close {verdict.label}: peak {peak}MB + {RESERVE_MB}MB reserve "
             f"<= avail {verdict.avail_mb}MB"
         )
+        extra = {"pids": list(pids)} if pids else {}
         reply = admission_post.post(
-            "START", session_id=f"close:{run_id}", run=run_id, note=note, require_holder=False
+            "START",
+            session_id=f"close:{run_id}",
+            run=run_id,
+            note=note,
+            require_holder=False,
+            **extra,
         )
         return bool(reply.get("posted"))
     except Exception:

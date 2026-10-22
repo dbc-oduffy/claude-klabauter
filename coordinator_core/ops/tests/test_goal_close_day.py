@@ -293,6 +293,31 @@ def test_collapse_yields_exactly_one_record_after_close(tmp_path):
     assert len(matches) == 1
 
 
+def test_lapsed_row_excluded_from_open(tmp_path):
+    _write_shard(tmp_path, [_row(goal_id="lapsed-stale", period_value=YESTERDAY, status="lapsed")])
+
+    result = collect_open_day_goals(tmp_path, REPO, today=TODAY)
+
+    assert result["today"] == [] and result["stale"] == []
+
+
+def test_decision_lapsed_closes_lapsed(tmp_path):
+    _write_shard(tmp_path, [_row(goal_id="abc123def456", status="active")])
+
+    result = close_day_goals(tmp_path, REPO, {"abc123def456": "lapsed"}, hostname="test-machine")
+
+    assert result["closed"][0]["status"] == "lapsed"
+    assert _collapse_record(tmp_path, "abc123def456")["status"] == "lapsed"
+
+
+def test_decision_done_still_closes_done(tmp_path):
+    _write_shard(tmp_path, [_row(goal_id="abc123def456", status="active")])
+
+    result = close_day_goals(tmp_path, REPO, {"abc123def456": "done"}, hostname="test-machine")
+
+    assert result["closed"][0]["status"] == "done"
+
+
 def test_decision_not_named_done_closes_dropped(tmp_path):
     _write_shard(tmp_path, [_row(goal_id="abc123def456", status="active")])
 

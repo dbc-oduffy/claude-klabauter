@@ -139,6 +139,8 @@ def test_evidence_previews_stale_goals_with_more_tail_and_source_line():
     assert "x" * 81 not in jp["evidence"]
     assert "source: goal.close_day (open day goals, today and stale)" in jp["evidence"]
     assert "top-level key decisions['day_goal_closeout']" in jp["question"]
+    assert "done|lapsed|dropped" in jp["question"]
+    assert "lapsed means expired with no decision" in jp["question"]
 
 
 def test_evidence_lists_every_goal_id_of_a_small_fixture():

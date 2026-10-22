@@ -4282,7 +4282,7 @@ def check_destructive_rm(
                     clone_failed = (
                         None
                         if tgt_is_bare
-                        else _unborn_scratch_repo.scratch_clone_failures(tgt_abs)
+                        else _unborn_scratch_repo.scratch_clone_failures(tgt_abs, _memo_run_git)
                     )
                     if clone_failed == []:
                         continue

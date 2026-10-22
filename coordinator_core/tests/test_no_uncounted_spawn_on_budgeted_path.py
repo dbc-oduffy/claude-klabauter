@@ -7012,9 +7012,10 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     "distill.apply_disposal": 10,
     "memo.transition": 4,
     "merge_assemble.apply": 1,
-    # 8 -> 9, 2026-10-22: sweep_scratch asks `_unborn_scratch_repo.scratch_clone_failures` per
-    # scratch clone root (two git reads, one reachable subprocess site), never per scratch dir.
-    "cruft_sweep.run": 9,
+    # 8 -> 9 -> 8, 2026-10-22: sweep_scratch asks `_unborn_scratch_repo.scratch_clone_failures`
+    # per scratch clone root; its git reads go through the caller's runner, so the module's
+    # private subprocess site is gone and adds no reachable site of its own.
+    "cruft_sweep.run": 8,
     # "memo.send": 2, removed 2026-09-24 (docs/plans/2026-09-12-memo-send-enrolled-in-the-
     # composition-gate.md, C2) -- the op is now enrolled in _BUDGETED_ENTRYPOINTS with an
     # execution-backed _LEGITIMIZED_SITES entry per reachable site; a COUNT-tier pin beside

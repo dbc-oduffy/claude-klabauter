@@ -2,7 +2,7 @@
 coordinator_core.ops.goal_close_day — day-goal enumeration + close-out
 (``goal.close_day`` read leg, ``goal.close_day_apply`` write leg).
 
-Purpose: enumerate open (``status`` not in ``{done, dropped}``) ``period == "day"``
+Purpose: enumerate open (``status`` not in ``{done, dropped, lapsed}``) ``period == "day"``
 rows from the goals-log wire whose ``period_value`` is TODAY or EARLIER, scoped to
 one ``(repo, coordinator_root_path)``, partitioned into "today" and "stale" buckets
 (``goal.close_day``); and close a set of those rows by re-appending each at its SAME
@@ -84,7 +84,9 @@ from coordinator_core.ops.goal_append import append_goal
 
 _DONE_LITERAL = "done"
 
-_CLOSED_STATUSES = frozenset({"done", "dropped"})
+_LAPSED_LITERAL = "lapsed"
+
+_CLOSED_STATUSES = frozenset({"done", "dropped", "lapsed"})
 
 _PASSTHROUGH_FIELDS = ("parent_goal_id", "key_results_status", "weekly_perceptible")
 
@@ -203,7 +205,9 @@ class GoalCloseDayRootUnreadable(RuntimeError):
 
 
 def _terminal_status(raw_decision: object) -> str:
-    return _DONE_LITERAL if raw_decision == _DONE_LITERAL else "dropped"
+    if raw_decision in (_DONE_LITERAL, _LAPSED_LITERAL):
+        return raw_decision
+    return "dropped"
 
 
 def close_day_goals(

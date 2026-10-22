@@ -24,7 +24,7 @@ per the run-report contract):
     aborted review, not a pass). No boolean/optional parameter may exist on this
     function that skips the check (AC7 leg ii).
   - `workstream_complete._status_requires_review_receipt(status)` — constraint 2's
-    total mapping: `False` for `superseded`/`abandoned` only; `True` for every other
+    total mapping: `False` for `superseded`/`abandoned`/`closed` only; `True` for every other
     `_LEG_A_TERMINAL_PLAN_STATUS` member AND any unrecognised value (fail toward more
     review, constraint 4).
   - `brief()`'s envelope grows `gates["review_receipt"]` (mirroring
@@ -230,11 +230,11 @@ def test_blank_reviewer_sidecar_receipt_still_blocks_the_implemented_stamp(monke
 )
 def test_status_requires_review_receipt_is_total_and_names_only_the_escape_hatch(status):
     requires_receipt = wsc._status_requires_review_receipt(status)
-    if status in ("superseded", "abandoned"):
+    if status in ("superseded", "abandoned", "closed"):
         assert requires_receipt is False, f"{status!r} is constraint 2's escape hatch"
     else:
         assert requires_receipt is True, (
-            f"{status!r} is not superseded/abandoned and must require a receipt "
+            f"{status!r} is not superseded/abandoned/closed and must require a receipt "
             "(constraint 2's mapping is total, not partial; an unrecognised status "
             "resolves toward requiring review per constraint 4)"
         )

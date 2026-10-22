@@ -531,7 +531,12 @@ GENERATES_EXTERNAL = True
 # member. Additive enum widen only: no key removed, renamed or retyped, and no value valid
 # today becomes invalid. Expected red window: `test_committed_emit_drift.py` until DoE
 # regenerates the bundle at 4.14.0.
-CONTRACT_VERSION = "4.14.0"
+#
+# MINOR bump 4.14.0 -> 4.15.0 (DoE-ratified): `lapsed` joins GoalStatus, for a day goal
+# that expired with no decision. Additive enum widen only: no key removed, renamed or
+# retyped, and no value valid today becomes invalid. Expected red window:
+# `test_committed_emit_drift.py` until DoE regenerates the bundle at 4.15.0.
+CONTRACT_VERSION = "4.15.0"
 
 # ---------------------------------------------------------------------------
 # ProvenanceEnvelope conditional injection — ported verbatim from

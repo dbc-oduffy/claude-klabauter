@@ -69,13 +69,7 @@ def _atomic_write_json(path: Path, body: Dict[str, Any]) -> None:
     os.replace(tmp, path)
 
 
-def _create_epoch(pid: int) -> Optional[int]:
-    try:
-        import psutil
-
-        return int(psutil.Process(pid).create_time())
-    except Exception:
-        return None
+_create_epoch = app_session._create_epoch
 
 
 def _default_probe() -> BrowserAvailability:
@@ -327,8 +321,6 @@ def run(
                 state.results, state.defects, state.shots_dir = _sweep(
                     config, run_dir, driver_factory or _default_driver_factory
                 )
-            except _Stage:
-                raise
             except Exception as exc:
                 raise _Stage("sweep", f"{type(exc).__name__}: {exc}")
             report = state.write_report()

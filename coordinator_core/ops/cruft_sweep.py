@@ -1789,6 +1789,18 @@ def _resolve_repo_root(repo_root: Optional[Path]) -> Path:
     return Path.cwd()
 
 
+def _scratch_run_git(args: List[str], cwd: Optional[str]) -> Tuple[int, str]:
+    """`scratch_clone_failures` git runner: `(args, cwd) -> (rc, stdout)`, args exclude `git`.
+
+    Timeouts and spawn failures raise; the predicate reads them as UNREADABLE.
+    """
+    r = subprocess.run(
+        ["git", *args], cwd=cwd, capture_output=True, text=True, timeout=30,
+        **no_console_creationflags(),
+    )
+    return r.returncode, r.stdout
+
+
 def _is_scratch_clone_root(path: Path, scratch_root: Path) -> bool:
     """True for a direct child of `scratch_root` holding a `.git` DIRECTORY (a linked
     worktree's `.git` file and a deeper clone do not qualify). One stat, no spawn."""
@@ -1904,7 +1916,7 @@ def sweep_scratch(
                                "skip", "tracked by git", emit_fn=emit_fn)
                 pruned_parents.append(dir_str)
                 continue
-            failures = scratch_clone_failures(dir_str)
+            failures = scratch_clone_failures(dir_str, _scratch_run_git)
             if failures is not None:
                 pruned_parents.append(dir_str)
                 if failures:

@@ -216,3 +216,46 @@ def test_module_import_does_not_import_playwright():
     text = open(src.origin, encoding="utf-8").read()
     top = text.split("class PlaywrightDriver")[0]
     assert "import playwright" not in top and "from playwright" not in top
+
+
+class _FakeManager:
+    """Like sync_playwright(): start() returns the Playwright object, the manager has no stop()."""
+
+    def __init__(self, pw):
+        self._pw = pw
+
+    def start(self):
+        return self._pw
+
+
+def _install_fake_playwright(monkeypatch, launch_raises=False):
+    events = []
+    browser = SimpleNamespace(close=lambda: events.append("browser.close"))
+
+    def launch(headless):
+        if launch_raises:
+            raise RuntimeError("launch failed")
+        return browser
+
+    pw = SimpleNamespace(
+        chromium=SimpleNamespace(launch=launch), stop=lambda: events.append("pw.stop")
+    )
+    mod = SimpleNamespace(sync_playwright=lambda: _FakeManager(pw))
+    monkeypatch.setitem(sys.modules, "playwright", SimpleNamespace(sync_api=mod))
+    monkeypatch.setitem(sys.modules, "playwright.sync_api", mod)
+    return events
+
+
+def test_driver_stops_the_started_playwright_object(monkeypatch):
+    events = _install_fake_playwright(monkeypatch)
+    with b.PlaywrightDriver():
+        pass
+    assert events == ["browser.close", "pw.stop"]
+
+
+def test_driver_stops_playwright_when_launch_fails(monkeypatch):
+    events = _install_fake_playwright(monkeypatch, launch_raises=True)
+    with pytest.raises(RuntimeError):
+        with b.PlaywrightDriver():
+            pass
+    assert events == ["pw.stop"]

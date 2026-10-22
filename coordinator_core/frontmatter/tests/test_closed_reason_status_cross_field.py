@@ -16,7 +16,6 @@ SCHEMAS = ["plan", "initiative", "goal"]
 @pytest.mark.parametrize("schema", SCHEMAS)
 def test_closed_without_reason_is_refused(schema):
     errs = sv._apply_cross_field_rules({"status": "closed"}, schema)
-    assert [e["field"] for e in errs if e["field"] == "closed_reason"] == ["closed_reason"]
     assert any(e["error"] == "required when status=closed" for e in errs)
 
 

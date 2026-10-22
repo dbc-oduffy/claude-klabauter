@@ -145,20 +145,19 @@ class PlaywrightDriver:
 
     def __init__(self, nav_timeout_ms: int = NAV_TIMEOUT_MS) -> None:
         self._nav_timeout_ms = nav_timeout_ms
-        self._pw_cm: Any = None
         self._pw: Any = None
         self._browser: Any = None
 
     def __enter__(self) -> "PlaywrightDriver":
         from playwright.sync_api import sync_playwright
 
-        self._pw_cm = sync_playwright()
-        self._pw = self._pw_cm.start()
+        # start() returns the Playwright object; stop() lives on it, not on the manager.
+        self._pw = sync_playwright().start()
         try:
             self._browser = self._pw.chromium.launch(headless=True)
         except BaseException:
-            self._pw_cm.stop()
-            self._pw = self._pw_cm = None
+            self._pw.stop()
+            self._pw = None
             raise
         return self
 
@@ -168,9 +167,9 @@ class PlaywrightDriver:
                 self._browser.close()
         finally:
             self._browser = None
-            if self._pw_cm is not None:
-                self._pw_cm.stop()
-            self._pw = self._pw_cm = None
+            if self._pw is not None:
+                self._pw.stop()
+            self._pw = None
         return None
 
     def sweep_route(
