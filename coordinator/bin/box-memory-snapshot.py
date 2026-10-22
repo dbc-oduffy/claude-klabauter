@@ -4,12 +4,14 @@
 Prints Available, commit used vs limit, system cache working set, standby, nonpaged pool and the
 top N consumers by private commit. A counter that fails to read prints `unavailable` for that
 field alone. `--admit-peak GIB` adds one line, `ADMIT ...` (exit 0) or `HOLD ...` naming the
-failed clause (exit 4). `--json` emits the same fields. Non-Windows host: exit 6.
+failed clause (exit 4); the figure is net of `reserved=`, the sum over live START pids without an
+END in admission.jsonl of max(0, declared_peak_mb - tree RSS). `--json` emits the same fields. Non-Windows host: exit 6.
 """
 
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import importlib.util
 import json
 import sys
@@ -115,12 +117,15 @@ def main(
     nonpaged_fn: Optional[Callable] = None,
     cache_host_fn: Optional[Callable] = None,
     governor=None,
+    rss_fn: Optional[Callable] = None,
+    alive_fn: Optional[Callable] = None,
 ) -> int:
     parser = argparse.ArgumentParser(prog=PROG, description="One-screen box memory snapshot.")
     parser.add_argument("--top", type=int, default=10, help="top N consumers (default 10)")
     parser.add_argument("--admit-peak", type=float, metavar="GIB", help="check admission of a peak")
     parser.add_argument("--cushion-pct", type=float, default=25.0, help="available cushion percent")
     parser.add_argument("--commit-limit-gib", type=float, help="override the commit limit")
+    parser.add_argument("--admission-file", help="admission.jsonl path (default: settings-home channel)")
     parser.add_argument("--json", action="store_true", help="emit JSON")
     args = parser.parse_args(argv)
 
@@ -148,11 +153,22 @@ def main(
             return 1
         peak = int(args.admit_peak * host.GIB)
         limit = int(args.commit_limit_gib * host.GIB) if args.commit_limit_gib is not None else status.commit_limit
+        reserved = host.reserved_bytes(
+            args.admission_file or host.admission_file(),
+            **({"rss_fn": rss_fn} if rss_fn else {}),
+            **({"alive_fn": alive_fn} if alive_fn else {}),
+        )
+        status = dataclasses.replace(
+            status,
+            avail_phys=max(0, status.avail_phys - reserved),
+            commit_used=status.commit_used + reserved,
+        )
         verdict = host.admit(
             peak, status, cushion_pct=args.cushion_pct, commit_limit=limit
         )
-        admit_line = _admit_line(verdict, args.admit_peak, status, limit)
+        admit_line = _admit_line(verdict, args.admit_peak, status, limit) + f" reserved={_gib(reserved)}GiB"
         snap["admit"] = {
+            "reserved_gib": _gib(reserved),
             "verdict": "ADMIT" if verdict.admit else "HOLD",
             "peak_gib": args.admit_peak,
             "need_avail_gib": _gib(int(verdict.need_avail)),

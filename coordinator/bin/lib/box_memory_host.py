@@ -151,6 +151,84 @@ def empty_working_set(pid: int) -> None:
         kernel32.CloseHandle(handle)
 
 
+_ADMISSION_TAIL_BYTES = 1 << 20
+
+
+def admission_file() -> "Path":
+    """Default admission channel: ``<settings-home>/state/group-em/box/admission.jsonl``."""
+    import os
+    from pathlib import Path
+
+    root = os.environ.get("COORDINATOR_SETTINGS_HOME")
+    base = Path(root) if root else Path(os.environ.get("CLAUDE_HOME") or Path.home()) / ".coordinator-claude-settings"
+    return base / "state" / "group-em" / "box" / "admission.jsonl"
+
+
+def tree_rss_mb(pid: int) -> float:
+    """RSS in MB of ``pid`` plus its descendants (psutil)."""
+    import psutil
+
+    proc = psutil.Process(pid)
+    total = proc.memory_info().rss
+    for child in proc.children(recursive=True):
+        try:
+            total += child.memory_info().rss
+        except psutil.Error:
+            pass
+    return total / (1024 * 1024)
+
+
+def pid_alive(pid: int) -> bool:
+    import psutil
+
+    return psutil.pid_exists(pid)
+
+
+def reserved_bytes(path, rss_fn=tree_rss_mb, alive_fn=pid_alive) -> int:
+    """Sum over live START pids with no matching END of max(0, declared peak - tree RSS), in bytes.
+
+    START and END match on (session_id, run). A START without ``declared_peak_mb``, a dead pid,
+    an unreadable file or an unreadable RSS contributes 0. Liveness is pid existence only, so a
+    recycled pid of an un-ENDed START over-reserves (fails toward HOLD) until it leaves the tail. Reads only the last 1 MiB of the file.
+    """
+    import json
+
+    try:
+        with open(path, "rb") as fh:
+            fh.seek(0, 2)
+            size = fh.tell()
+            fh.seek(max(0, size - _ADMISSION_TAIL_BYTES))
+            raw = fh.read()
+    except OSError:
+        return 0
+    starts: dict = {}
+    for text in raw.splitlines():
+        try:
+            line = json.loads(text)
+        except ValueError:
+            continue
+        if not isinstance(line, dict):
+            continue
+        key = (line.get("session_id"), line.get("run"))
+        if line.get("phase") == "END":
+            starts.pop(key, None)
+        elif line.get("phase") == "START":
+            starts[key] = line
+    total_mb = 0.0
+    for line in starts.values():
+        peak = line.get("declared_peak_mb")
+        if isinstance(peak, bool) or not isinstance(peak, (int, float)) or peak <= 0:
+            continue
+        for pid in line.get("pids") or []:
+            try:
+                if not alive_fn(pid):
+                    continue
+                total_mb += max(0.0, peak - rss_fn(pid))
+            except Exception:
+                continue
+    return int(total_mb * 1024 * 1024)
+
+
 @dataclass(frozen=True)
 class AdmitVerdict:
     """Admission decision with both clauses exposed."""

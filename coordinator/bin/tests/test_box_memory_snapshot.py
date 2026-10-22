@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -15,6 +16,7 @@ mod = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(mod)
 _hspec = importlib.util.spec_from_file_location("box_memory_host_t", BIN / "lib" / "box_memory_host.py")
 host = importlib.util.module_from_spec(_hspec)
+sys.modules["box_memory_host_t"] = host
 _hspec.loader.exec_module(host)
 
 GIB = host.GIB
@@ -40,6 +42,55 @@ def _run(argv, **kw):
     kw.setdefault("nonpaged_fn", lambda: GIB)
     kw.setdefault("cache_host_fn", _cache())
     return mod.main(argv, platform="win32", governor=GOV, **kw)
+
+
+@pytest.fixture(autouse=True)
+def _isolated_settings_home(tmp_path, monkeypatch):
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "no-settings-home"))
+
+
+def _admission(tmp_path, *lines):
+    path = tmp_path / "admission.jsonl"
+    path.write_text("\n".join(json.dumps(l) for l in lines) + "\n", encoding="utf-8")
+    return str(path)
+
+
+def _start(pid, peak_mb=None, session="s", run="r"):
+    line = {"phase": "START", "session_id": session, "run": run, "pids": [pid]}
+    if peak_mb is not None:
+        line["declared_peak_mb"] = peak_mb
+    return line
+
+
+def test_reserved_sums_live_unended_starts(tmp_path):
+    path = _admission(
+        tmp_path,
+        _start(10, 4096, run="a"),
+        _start(11, 4096, run="b"),
+        {"phase": "END", "session_id": "s", "run": "b", "pids": []},
+        _start(12, 4096, run="c"),
+        _start(13, None, run="d"),
+        _start(14, 1000, run="e"),
+    )
+    rss = {10: 1024.0, 12: 1024.0, 14: 5000.0}
+    got = host.reserved_bytes(path, rss_fn=lambda p: rss[p], alive_fn=lambda p: p != 12)
+    assert got == 3072 * 1024 * 1024
+
+
+def test_reserved_missing_file_is_zero(tmp_path):
+    assert host.reserved_bytes(tmp_path / "none.jsonl") == 0
+
+
+def test_admit_peak_subtracts_reserved_both_sides(tmp_path, capsys):
+    path = _admission(tmp_path, _start(10, 16 * 1024))
+    kw = dict(rss_fn=lambda p: 0.0, alive_fn=lambda p: True)
+    assert _run(["--admit-peak", "10", "--admission-file", path], **kw) == 0
+    capsys.readouterr()
+    rc = _run(["--admit-peak", "25", "--admission-file", path], **kw)
+    out = capsys.readouterr().out
+    assert rc == 4 and "reserved=16.0GiB" in out and "available:" in out
+    kw["alive_fn"] = lambda p: False
+    assert _run(["--admit-peak", "25", "--admission-file", path], **kw) == 0
 
 
 def test_admit(capsys):
