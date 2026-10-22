@@ -53,6 +53,8 @@ import os
 from pathlib import Path
 from typing import NamedTuple, Optional
 
+from coordinator_core.ue_project_detection import SKIP_SEGMENTS, declared_ue
+
 _OVERRIDE_KEY = "example-game-repo-control@example-game-workbench-repo"
 _MAX_DEPTH = 3
 
@@ -91,7 +93,7 @@ def _find_uproject(start_dir: str, max_depth: int = _MAX_DEPTH) -> Optional[str]
                 continue
             if not is_dir and entry.name.endswith(".uproject"):
                 return str(Path(dir_path) / entry.name)
-            if is_dir:
+            if is_dir and entry.name not in SKIP_SEGMENTS:
                 subdirs.append(entry)
 
         if depth < max_depth:
@@ -211,6 +213,9 @@ def run(cwd: str, plugin_root: str) -> DistrustResult:
         it owns bin/claude-ue-bootstrap.py, not claude-klabauter).
     """
     stderr_lines: list[str] = []
+
+    if declared_ue(cwd) is False:
+        return DistrustResult(banner="", stderr_lines=stderr_lines)
 
     uproject = _find_uproject(cwd)
     if uproject is None:

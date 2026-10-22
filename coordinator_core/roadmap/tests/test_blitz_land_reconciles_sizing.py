@@ -67,6 +67,7 @@ def _plan(root: Path, slug: str, status: str, sizing_object: str) -> str:
     lines = [
         f"title: {slug}",
         f"status: {status}",
+        "capabilities: []",
         f"sizing_object: {sizing_object}",
     ]
     p = root / "docs" / "plans" / f"{slug}.md"

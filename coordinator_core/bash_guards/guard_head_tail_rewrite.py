@@ -205,6 +205,16 @@ def _bt_build_generator_lines(kind: str, parsed: Dict[str, Any]) -> Optional[Lis
     return None  # pragma: no cover -- callers only ever pass a recognized kind
 
 
+def _bt_script_compiles(script: str) -> bool:
+    """True when `script` is valid Python source; a rewrite whose script
+    does not compile must yield the original command, never a broken one."""
+    try:
+        compile(script, "<head-tail-rewrite>", "exec")
+    except (SyntaxError, ValueError):
+        return False
+    return True
+
+
 def _bt_head_short_circuit_lines(gen_lines: List[str], n: int) -> List[str]:
     """Wrap `gen_lines` (the flat `_out.append(...)`-populating generator
     body from `_bt_build_generator_lines`, `kind` in ``{"find", "grep"}``)
@@ -477,6 +487,8 @@ def _check_head_tail_plumbing_powershell(
 
     script_lines = body_lines + ["for _l in %s:" % slice_expr, "    print(_l)"]
     script = "\n".join(script_lines)
+    if not _bt_script_compiles(script):
+        return None
     return _allow_rewrite(
         _bt_ps_python_c(script),
         "Auto-rewrite: '%s' piped through head/tail forked twice; "
@@ -703,6 +715,8 @@ def check_head_tail_plumbing_rewrite(
 
     script_lines = body_lines + ["for _l in %s:" % slice_expr, "    print(_l)"]
     script = "\n".join(script_lines)
+    if not _bt_script_compiles(script):
+        return None
     return _allow_rewrite(
         "%s -c %s" % (_bt_python3_invocation(), shlex.quote(script)),
         "Auto-rewrite: '%s' piped through head/tail forked twice; "

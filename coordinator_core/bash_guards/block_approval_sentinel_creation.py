@@ -1274,28 +1274,32 @@ class _ApprovalSentinelDetector(SentinelCreationDetector):
         condition in the class docstring's "ITEM 33 NARROWING" list holds --
         this method NEVER widens what the inherited behavior already
         denies, only narrows it under the enumerated conditions."""
-        fallback = (
-            f"{norm_head} <file> (interpreter-invoked script -- "
-            "indirection wrapper, script content unexamined)",
-            REASON_INDIRECTION,
-        )
+        def deny(why: str) -> Tuple[str, str]:
+            return (
+                f"{norm_head} <file> (interpreter-invoked script -- "
+                f"indirection wrapper, script content unexamined: {why})",
+                REASON_INDIRECTION,
+            )
+
         if depth != 0 or norm_head not in _READABLE_SCRIPT_INTERPRETERS:
-            return fallback
+            return deny("only a top-level bash, sh or python3 script is read")
         path_token = _first_operand_token(working[1:])
         if stdin_target and (not path_token or path_token == "-"):
             path_token = stdin_target
         if not path_token:
-            return fallback
+            return deny("no script path operand")
         if any(backgrounded for _prior_tokens, _pipe_before, backgrounded in prior_segments):
-            return fallback
+            return deny("an earlier segment is backgrounded with &")
         if path_token == "-":
             # F3 (GH #71): `<interp> - <<EOF ... EOF` -- the script is read
             # from stdin via a heredoc, not a named file, so there is no
             # path to check against a prior writer. Consume the next
             # heredoc body in occurrence order instead of a file read.
             body = self._current_segment_heredoc_body(len(prior_segments))
-            if body is None or len(body.encode("utf-8", "replace")) > _MAX_SCRIPT_READ_BYTES:
-                return fallback
+            if body is None:
+                return deny("no heredoc body attributable to this stdin script")
+            if len(body.encode("utf-8", "replace")) > _MAX_SCRIPT_READ_BYTES:
+                return deny("heredoc body exceeds the read cap")
             mentions = self._text_mentions_target(body)
         else:
             writers = [
@@ -1308,14 +1312,14 @@ class _ApprovalSentinelDetector(SentinelCreationDetector):
                 # does not exist on disk yet: judge the heredoc body, which is
                 # the exact text that runs. Any other writer shape stays denied.
                 if len(writers) != 1:
-                    return fallback
+                    return deny("several earlier segments write that script path")
                 if not self._writer_context_unchanged(prior_segments, writers[0], path_token):
-                    return fallback
+                    return deny("the script path may change between its heredoc write and its run")
                 written_body = self._heredoc_written_body(
                     prior_segments[writers[0]][0], writers[0], path_token
                 )
                 if written_body is None:
-                    return fallback
+                    return deny("an earlier segment writes the script by something other than a bare cat heredoc")
                 if not self._text_mentions_target(written_body):
                     return None
                 if norm_head == "python3" and not _PY_WRITE_HINT_RE.search(written_body):
@@ -1329,14 +1333,17 @@ class _ApprovalSentinelDetector(SentinelCreationDetector):
             )
             if read_path is not None:
                 read_path = translate_msys_path(read_path)
+            if read_path is None:
+                return deny("script path holds an unresolved $VAR or substitution")
             effective_cwd = self._cwd_after(prior_segments)
-            mentions = (
-                None
-                if read_path is None or effective_cwd is _UNRESOLVED_CWD
-                else self._readable_script_mentions_target(read_path, effective_cwd)
-            )
-        if mentions is None:
-            return fallback
+            if effective_cwd is _UNRESOLVED_CWD:
+                return deny("a preceding cd target is not a resolvable literal directory")
+            mentions = self._readable_script_mentions_target(read_path, effective_cwd)
+            if mentions is None:
+                return deny(
+                    "script is not a readable regular file within the read cap "
+                    "(missing, symlink, directory or oversize)"
+                )
         if mentions and norm_head == "python3" and path_token != "-":
             if not self._python_script_may_write(read_path, effective_cwd):
                 return None
@@ -1350,7 +1357,12 @@ class _ApprovalSentinelDetector(SentinelCreationDetector):
     def _backslash_spelling(self, path_token: str) -> str:
         """The operand as written with Windows backslashes intact (POSIX
         tokenization strips them); `path_token` itself when no preserved
-        spelling aligns with the current segment. Used for the file read only."""
+        spelling aligns with the current segment, or when POSIX tokenization
+        already yields an absolute path (`\\[x\\]` or `\\ ` escapes were
+        consumed as shell escapes, not Windows separators). Used for the file
+        read only."""
+        if os.path.isabs(path_token) or re.match(r"[A-Za-z]:/", path_token):
+            return path_token
         pair = self._bs_pair
         if pair is None:
             return path_token

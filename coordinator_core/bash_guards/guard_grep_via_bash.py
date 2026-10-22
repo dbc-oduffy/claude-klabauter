@@ -13,9 +13,8 @@ measured against the full corpus it fired on the same 234-command set
 `dispatch.py`'s guard chain, and sharing this module's own classification/
 parsing helpers) already claims as an ``ADVISORY_REWRITE`` -- 0 denies on
 either platform, provably unreachable in production. What remains is
-advisory-only, and only for a narrow slice of composed traffic: a real
-partial rewrite (see "PARTIAL PROMOTION" below) or a genuine GNU-only grep
-construct (see ``_has_gnu_only_construct``). Everything else this guard
+advisory-only, and only for a genuine GNU-only grep construct (see
+``_has_gnu_only_construct``). Everything else this guard
 used to advise on (99.67% of its prior firing set, per H11(c)'s own
 measurement) is now silence -- design-as-offers (global `~/.claude/
 CLAUDE.md`): where no actionable alternative exists, the honest output is
@@ -115,17 +114,12 @@ this guard's Windows-deny half as a complete fix for the 50.9% shape.
 
 PARTIAL PROMOTION OF THE COMPOSED BUCKET (worklist Row G2, 2026-07-30)
 -----------------------------------------------------------------------
-This tradeoff is narrowed, not resolved, by ``_partial_pipe_rewrite``: for
-the narrow sub-case of exactly two `|`-joined segments where the first is
-a substitutable grep-family invocation, the composed advisory now offers a
-REAL alternative (rewrite the grep half only, pipe its stdout verbatim
-into the untouched downstream segment) instead of prose alone. It removes
-one fork, not the whole chain, and it is offered only as an advisory on
-every platform -- never a deny -- because its stdout has not been
-differentially validated against real grep for every flag/downstream
-combination (see that function's own "KNOWN LIMIT" paragraph). A 3+-segment
-pipeline or a `;`/`&&` chain still gets prose only; no mechanism exists for
-those shapes.
+A partial-pipe rewrite (grep half to ``python3 -c``, downstream verbatim)
+was offered for the two-segment `grep | downstream` shape and DELETED by
+M10R: it replaces the grep process with an interpreter process, a spawn
+delta of zero on every shape it accepted
+(state/audits/2026-09-30-grep-composed-advisory-fork-delta.md). A
+composed command now gets only the GNU-only portability advisory.
 
 Override
 --------
@@ -158,8 +152,7 @@ differently on BSD grep (macOS) than GNU grep (Linux) -- `--include`/
 `--exclude` (8.36%), `-o` (2.55%), and `-r` (1.07%) all exist on BSD grep
 too (semantic divergence, not breakage), and were never a genuine
 portability hazard. ``_has_gnu_only_construct`` is that narrow, targeted
-check; `check()` now only calls `_composed_advisory` when it finds one of
-these OR a real partial rewrite (see "PARTIAL PROMOTION" above) --
+check; `check()` now only calls `_composed_advisory` when it finds one --
 everything else is silence, per design-as-offers.
 
 C2 (2026-08-01) corrected the check's SHAPE, not just its threshold: the
@@ -208,7 +201,6 @@ Consumes: coordinator_core/bash_guards/dispatch_checks.py's
 from __future__ import annotations
 
 import os
-import re
 import shlex
 from typing import Any, Dict, Optional, Tuple
 
@@ -307,7 +299,21 @@ def _substitutable_rewrite(tokens: list) -> Tuple[Optional[str], str]:
     parsed = _grep_flags_and_operands(seg_tokens)
     if parsed is None:
         return None, _REASON_UNTRANSLATABLE
-    return _grep_python_rewrite(parsed), ""
+    rewrite = _safe_grep_rewrite(parsed)
+    if rewrite is None:
+        return None, _REASON_UNTRANSLATABLE
+    return rewrite, ""
+
+
+def _safe_grep_rewrite(parsed: Dict[str, Any]) -> Optional[str]:
+    """``_grep_python_rewrite`` output iff it builds and its ``python3 -c``
+    script compiles; ``None`` (caller keeps the original command) on any error."""
+    try:
+        rewrite = _grep_python_rewrite(parsed)
+        compile(shlex.split(rewrite)[-1], "<grep-rewrite>", "exec")
+    except (SyntaxError, ValueError, KeyError, TypeError, IndexError):
+        return None
+    return rewrite
 
 
 #: Short flags GNU-only among grep's recognized set (macOS 26.5 `man grep`,
@@ -377,195 +383,27 @@ def _has_gnu_only_construct(tokens: list) -> bool:
     return False
 
 
-#: ALLOWLIST, not a blocklist, for a downstream token `_partial_pipe_rewrite`
-#: is willing to re-quote via `shlex.quote`. This is the second round of
-#: additions to what used to be a blocklist here (glob/variable/backtick/
-#: tilde characters); a blocklist reproduces the same failure every time a
-#: new construct is found (worklist Row G2 review, 2026-07-30 -- a bare
-#: redirection operator like `>` and brace expansion like `out.{txt,bak}`
-#: both slipped the prior blocklist, since neither contains `$*?`[` and
-#: neither starts with `~`). An allowlist inverts the burden: a token is
-#: only safe to re-quote if it is the kind of ordinary argv word
-#: `shlex.quote` leaves syntactically inert -- word characters, and the
-#: small set of punctuation (`@%+=:,./-`) that is common in flag values
-#: and paths and carries no shell meaning of its own. Anything else --
-#: `>`/`>>`/`<`/`<<`/`<<<` and their numbered/duplicating forms
-#: (`2>`, `&>`, `>&`, `N>`, `N>>`), `|&`, brace expansion (`{`/`}`), glob
-#: characters (`*`/`?`/`[`), variable/command substitution (`$`, `` ` ``),
-#: a leading `~`, or anything else not on the allowlist -- declines rather
-#: than risk re-quoting a token whose shell meaning `shlex.quote` would
-#: change. Declining is always the safe outcome (see `_partial_pipe_rewrite`
-#: docstring): a token this predicate does not recognize is treated as
-#: unsafe, not as "probably fine."
-_DOWNSTREAM_SAFE_TOKEN_RE = re.compile(r"^[\w@%+=:,./-]+$")
-
-
-def _downstream_token_needs_expansion(tok: str) -> bool:
-    """True if `tok` is NOT on the allowlist of ordinary argv words
-    (see `_DOWNSTREAM_SAFE_TOKEN_RE`) -- i.e. re-quoting it via
-    `shlex.quote` is not provably safe, so `_partial_pipe_rewrite` must
-    decline rather than offer a rewrite for it. Kept as a "needs
-    expansion"-named predicate (rather than renamed to "is unsafe") since
-    its caller's control flow already reads that way; the allowlist
-    inversion is internal to this function."""
-    return not _DOWNSTREAM_SAFE_TOKEN_RE.match(tok)
-
-
-def _partial_pipe_rewrite(tokens: list) -> Optional[str]:
-    """For the narrow shape of exactly two `|`-joined segments where the
-    FIRST is a substitutable grep-family invocation (per
-    ``_grep_flags_and_operands``, the same gate the single-segment
-    substitutable-residue path already uses) and nothing pipes INTO that
-    first segment, build a real, runnable replacement: rewrite ONLY the
-    grep segment to its python3 form (``_grep_python_rewrite`` -- the exact
-    function the full single-segment rewrite already calls, never
-    re-derived here), then pipe its stdout into the downstream segment's
-    OWN tokens, re-quoted verbatim via ``shlex.quote`` -- the downstream
-    stage is never re-interpreted or re-implemented, only re-quoted from
-    the tokens the classifier already split out.
-
-    This removes exactly ONE fork (the `grep` process) out of however many
-    the full pipeline spawns -- not the whole pipeline -- so it is a
-    strictly smaller win than the single-segment substitutable-residue
-    rewrite `check()`'s final branch offers. It is nonetheless a REAL
-    alternative for the single largest bucket of otherwise-untouched
-    grep-via-Bash traffic (state/audits/2026-07-29-guard-module-ladder-
-    worklist.md Row G2, coordinator-content-repo repo) -- unlike that bucket's prior
-    prose-only advisory, this names something the caller can actually run.
-
-    Returns ``None`` for anything outside this narrow shape: not exactly
-    two segments, the second not `|`-fed, the first `|`-fed itself
-    (something feeds INTO the grep segment too -- a 3+-stage pipeline,
-    out of scope), or the first segment's flags/pattern outside BX-16's
-    substitutable set (an untranslatable flag or regex dialect makes
-    ``_grep_flags_and_operands`` return ``None``, and this function
-    inherits that same refusal rather than guessing). A `;`/`&&`-joined
-    chain is >= 2 segments joined by a non-`|` separator and also returns
-    ``None`` here -- this function never widens what counts as
-    "chained"/"composed" beyond this one narrow, provably-safe case.
-
-    Also returns ``None`` (2026-07-30, M13/M19 review fix, widened to an
-    allowlist the same day after a second review round) when any
-    DOWNSTREAM token is not on ``_DOWNSTREAM_SAFE_TOKEN_RE``'s allowlist of
-    ordinary argv words -- i.e. re-quoting it via ``shlex.quote`` is not
-    provably safe. This covers shell expansion (`$VAR`/`$(...)`, a glob
-    like `*.py`, a leading `~`, a backtick substitution) AND, since the
-    allowlist inverts the burden instead of naming constructs one at a
-    time, redirection operators (`>`, `>>`, `<`, `<<`, `<<<`, `2>`, `&>`,
-    `>&`, numbered forms, `|&`) and brace expansion (`out.{txt,bak}`) --
-    neither of which the first round's blocklist caught, since neither
-    contains a blocklisted character. The re-quoting step below
-    reconstructs the downstream segment from its ALREADY-tokenized argv,
-    which has already lost whether a token was originally bare or quoted --
-    re-deriving the segment's exact original raw text to recover that
-    distinction is not cheap, so rather than risk silently offering a
-    command whose downstream half no longer means what the caller's own
-    token meant, this narrows applicability instead and declines the shape
-    entirely, same posture as every other refusal in this list.
-
-    KNOWN LIMIT, stated rather than hidden (worklist Row G2's own "what
-    makes this hard" section): the rewritten grep segment's stdout has not
-    been differentially validated byte-for-byte against real grep, across
-    every recognized flag combination, for every downstream consumer
-    (trailing-newline handling on the last line, `-c`'s exact count
-    format, `-l`'s path ordering/formatting) -- this is offered as a real,
-    syntactically valid, one-fewer-fork alternative, never as a
-    guaranteed-identical replacement. That is why this stays an advisory
-    on every platform, same as the rest of the composed bucket -- see
-    `check()` and this module's own docstring "THE SUBSTITUTABLE/COMPOSED
-    LINE" -- never a deny anywhere; this function does not change that.
-    """
-    segments = _segments_from_tokens_with_pipe_flag(tokens)
-    if len(segments) != 2:
-        return None
-    (up_tokens, up_pipe_before), (down_tokens, down_pipe_before) = segments
-    if up_pipe_before or not down_pipe_before:
-        return None
-    if not up_tokens or not down_tokens:
-        return None
-    if not any(_token_matches_binary(up_tokens[0], b) for b in _GREP_FAMILY_BINARIES):
-        return None
-    if any(_downstream_token_needs_expansion(tok) for tok in down_tokens):
-        return None
-    parsed = _grep_flags_and_operands(up_tokens)
-    if parsed is None:
-        return None
-    grep_rewrite = _grep_python_rewrite(parsed)
-    downstream_cmd = " ".join(shlex.quote(tok) for tok in down_tokens)
-    return "%s | %s" % (grep_rewrite, downstream_cmd)
-
-
 def _composed_advisory(
     evidence: str,
-    partial_rewrite: Optional[str] = None,
     payload: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """Advisory-only envelope (never a deny, on any platform) for the
-    narrow slice of composed grep-via-Bash traffic this guard still has
-    something actionable to say about -- see `check()`'s gate just above
-    its call site. Only two things reach this function (worklist row
-    H11(c), 2026-07-30): a real partial rewrite (`_partial_pipe_rewrite`)
-    or a genuine GNU-only grep construct (`_has_gnu_only_construct`).
-    Everything else that used to reach this function (99.67% of this
-    guard's prior firing set) is now silence -- design-as-offers (global
-    `~/.claude/CLAUDE.md`): where no actionable alternative exists, the
-    honest output is silence, not a ~2.2KB advisory naming none.
-
-    Leads with the alternative, not the violation: when a partial
-    rewrite exists it opens the message; the portability-only case (no
-    rewrite, just a real GNU/BSD divergence) states the divergence
-    plainly instead of first explaining what ISN'T offered.
+    """Advisory-only envelope (never a deny, on any platform) for a
+    composed or untranslatable grep-via-Bash command carrying a genuine
+    GNU-only grep construct (``_has_gnu_only_construct``). Everything else
+    is silence -- design-as-offers: where no actionable alternative exists,
+    the honest output is silence.
 
     Does NOT explain why the in-process search answerer is unavailable
-    here. That answerer is registered ahead of this guard in
-    `dispatch.py`'s chain and has already evaluated and declined this
-    exact invocation by the time this message is built -- true, and
-    unusable by the reader, who cannot re-target the answerer or change
-    the registration order. The chain mechanics belong here; the message
-    keeps only the fallback the reader can actually take (dispatch a
-    search subagent). Cut 2026-07-30 under the message-prose trim that
-    also collapsed the override note to a pointer.
+    here: the reader cannot re-target it. The message keeps only the
+    fallback the reader can take (dispatch a search subagent).
 
-    Appends `operator_override_note(_OVERRIDE_ENV_VAR)` -- restored on a
-    code-review finding (M17, 2026-07-30), after H11(b) had opted this guard's advisory out
-    of the shared helper entirely, leaving `_OVERRIDE_ENV_VAR` functional
-    but unmentioned. Every sibling advisory-emitting guard in this package
-    names its own override route this same way; see
-    `tests/test_override_route_inventory.py` for the gate that now keeps
-    this guard (or any future one) from silently regressing again.
+    Appends `operator_override_note(_OVERRIDE_ENV_VAR)`; the gate in
+    `tests/test_override_route_inventory.py` keeps it from regressing.
     """
-    if partial_rewrite:
-        # A real, runnable alternative -- see `_partial_pipe_rewrite`'s own
-        # "KNOWN LIMIT" paragraph for the honest caveat on stdout parity
-        # this offer does NOT claim to guarantee. Embedded VERBATIM, not
-        # re-indented or re-wrapped: `expected_grep_rewrite in ctx`
-        # (this guard's own test suite) pins the exact bytes
-        # `_grep_python_rewrite` emits, and re-indenting a multi-line
-        # `python3 -c` script by a constant offset breaks its top-level
-        # statements (module-level code must start at column 0) --
-        # unrunnable is worse than over-budget. Not exemptable either:
-        # `_BACKTICK_RE` (`` `([^`\n]+)` ``) never matches across a
-        # newline, so this guard's message-size floor is pinned by this
-        # rewrite's own length, not by wrapper prose -- see this guard's
-        # C8 execution report for the measured floor. RECONFIRMED (C3,
-        # docs/plans/2026-09-11-trim-the-remaining-over-cap-guard-messages.md):
-        # even with every wrapper word stripped (no lede prefix, no
-        # fallback sentence, no override note) the two-segment fixture
-        # `grep -rn TODO src/ | wc -l` still measures ~323 prose bytes
-        # against a 220-byte cap -- the un-exemptable, non-indented first
-        # and last lines of the embedded rewrite alone exceed the cap on
-        # their own. Nothing in this file's remaining wrapper prose is the
-        # cost; left over cap for adjudication (GUARD_MESSAGE_EXEMPTIONS is
-        # outside this row's `writes:`).
-        lede = "%s one-fewer-fork replacement instead: %s" % (
-            _SHAPE_NAME,
-            partial_rewrite,
-        )
-    else:
-        lede = "%s `%s` carries a GNU-only grep construct -- diverges on BSD grep (macOS)." % (
-            _SHAPE_NAME,
-            evidence,
-        )
+    lede = "%s `%s` carries a GNU-only grep construct -- diverges on BSD grep (macOS)." % (
+        _SHAPE_NAME,
+        evidence,
+    )
     return allow_advisory(
         "PreToolUse",
         "BASH-SPAWN ADVISORY: %s Else, Explore or general-purpose "
@@ -580,7 +418,7 @@ def _evaluate_grep_via_bash_match(
     """Shared composed/substitutable-residue evaluation for a command whose
     `classification.primary` is already confirmed `GREP_VIA_BASH`, on EITHER
     dialect (C3, pln-the-shape-classifier-reaches-a-e743e5). `_substitutable
-    _rewrite`/`_partial_pipe_rewrite`/`_has_gnu_only_construct` all operate
+    _rewrite`/`_has_gnu_only_construct` both operate
     on already-tokenized argv, which carries no dialect-specific syntax of
     its own once split -- D2's own finding that GREP_VIA_BASH "works
     unchanged" on the PowerShell leg (the same binary-identity detector
@@ -599,19 +437,14 @@ def _evaluate_grep_via_bash_match(
     chunk's write set to widen), so this guard stays silent rather than
     invent a rewrite outlet that does not exist to point at.
     """
-    rewrite, reason = _substitutable_rewrite(classification.tokens)
+    rewrite, _reason = _substitutable_rewrite(classification.tokens)
     if rewrite is not None:
         return None
-    partial_rewrite = (
-        _partial_pipe_rewrite(classification.tokens)
-        if reason == _REASON_CHAINED
-        else None
-    )
-    if partial_rewrite is None and not _has_gnu_only_construct(classification.tokens):
+    if not _has_gnu_only_construct(classification.tokens):
         return None
     match = classification.primary
     assert match is not None
-    return _composed_advisory(match.evidence, partial_rewrite, payload=payload)
+    return _composed_advisory(match.evidence, payload=payload)
 
 
 def _check_powershell(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -709,7 +542,7 @@ def check(
     # (a chained/piped command, or a genuine GNU-only construct) has
     # nothing upstream to claim it -- `_evaluate_grep_via_bash_match`
     # (shared with the PowerShell leg, C3) renders that advisory, or stays
-    # silent per design-as-offers when neither a real partial rewrite nor a
+    # silent per design-as-offers when no
     # genuine GNU/BSD divergence exists to name (H11(c) evidence: 99.67% of
     # this guard's prior firing set was exactly that silent case).
     return _evaluate_grep_via_bash_match(classification, payload)

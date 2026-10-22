@@ -403,6 +403,12 @@ RESUME_LEDGER_CARRIED_MET_FIELD = "carried_met"
 RESUME_LEDGER_UNLANDED_FIELD = "unlanded"
 #: `resume_ledger` verdict key carrying the `ledger_remaining_paths.remaining_leg_plan` result.
 RESUME_LEDGER_LEG_FIELD = "remaining_leg"
+#: `resume_ledger` verdict key carrying the ids of the rows derived for open ledger items.
+RESUME_LEDGER_DERIVED_FIELD = "derived_rows"
+#: `resume_ledger` verdict key echoing the halted run's arm.
+RESUME_LEDGER_ARM_FIELD = "arm"
+#: Id prefix of a row derived for an open ledger item (`L<item>`).
+LEDGER_DERIVED_ROW_PREFIX = "L"
 #: `remaining_leg.action` values: run the leg, skip it (re-ruling-only revise), or refuse before dispatch.
 LEG_DISPATCH, LEG_SKIP, LEG_REFUSE = "dispatch", "skip", "refuse"
 #: Prefix of the compose halt reason when the ledger-remaining leg is refused.

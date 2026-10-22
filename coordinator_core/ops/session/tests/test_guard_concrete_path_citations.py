@@ -902,7 +902,7 @@ _WARP_LEAK = "the repo lives at /Users/realperson/X/claude-klabauter\n"
 
 
 def test_warp_pm_verbatim_names_are_exempt() -> None:
-    for name in ("ask.md", "pm-intent.md", "requirements.md"):
+    for name in ("ask.md", "pm-intent.md", "requirements.md", "relayed-ask.md"):
         path = f"state/warp/ask-2026-x/{name}"
         assert detect_in_text(_WARP_LEAK, filename=path) == []
 
@@ -924,5 +924,66 @@ def test_warp_near_miss_basename_is_still_scanned() -> None:
 
 
 def test_warp_verbatim_name_outside_run_dir_is_still_scanned() -> None:
-    for path in ("state/warp/ask.md", "state/other/run/ask.md"):
+    for path in (
+        "state/warp/ask.md",
+        "state/other/run/ask.md",
+        "state/warp/run/x/relayed-ask.md",
+        "state/warp/relayed-ask.md",
+    ):
         assert any(f.rule == "posix-home" for f in detect_in_text(_WARP_LEAK, filename=path))
+
+
+_SIZING = "state/sizings/2026-x-s.yaml"
+_LEAK = "/Users/realperson/X/claude-klabauter"
+
+
+def _sizing_text(text_val: str, source_val: str, evidence_val: str) -> str:
+    return (
+        f"intent: {evidence_val}\n"
+        "pm_verbatims:\n"
+        f"- text: {text_val}\n"
+        "  at: t\n"
+        "requirement_register:\n"
+        "  rows:\n"
+        f"  - id: R1\n    source_text: {source_val}\n"
+    )
+
+
+def test_sizing_verbatim_keys_exempt_in_plain_quoted_and_block_styles() -> None:
+    plain = f"see {_LEAK} now"
+    for styled in (
+        plain,
+        f"'see {_LEAK} now'",
+        f'"see {_LEAK} now"',
+        f">-\n    see {_LEAK} now",
+        f"|\n    see {_LEAK} now",
+    ):
+        # Block-scalar bodies indent deeper under the nested register key.
+        nested = styled.replace("\n    ", "\n      ")
+        text = (
+            "pm_verbatims:\n"
+            f"- text: {styled}\n"
+            "requirement_register:\n"
+            "  rows:\n"
+            f"  - id: R1\n    source_text: {nested}\n"
+        )
+        assert detect_in_text(text, filename=_SIZING) == [], styled
+
+
+def test_sizing_other_keys_still_scanned() -> None:
+    text = _sizing_text("ok", "ok", f"'see {_LEAK}'")
+    hits = detect_in_text(text, filename=_SIZING)
+    assert any(f.rule == "posix-home" for f in hits)
+    text = "premise:\n  evidence: " + f"'see {_LEAK}'\n" + _sizing_text("ok", "ok", "x")
+    assert any(f.rule == "posix-home" for f in detect_in_text(text, filename=_SIZING))
+
+
+def test_sizing_key_scope_does_not_apply_outside_sizings() -> None:
+    text = _sizing_text(f"'see {_LEAK}'", f"'see {_LEAK}'", "x")
+    for path in ("state/other/s.yaml", "docs/s.yaml", "state/sizings/s.md"):
+        assert any(f.rule == "posix-home" for f in detect_in_text(text, filename=path))
+
+
+def test_sizing_same_key_name_at_wrong_path_still_scanned() -> None:
+    text = f"other:\n  text: 'see {_LEAK}'\n  source_text: 'see {_LEAK}'\n"
+    assert any(f.rule == "posix-home" for f in detect_in_text(text, filename=_SIZING))

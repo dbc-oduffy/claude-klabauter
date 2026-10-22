@@ -90,6 +90,33 @@ def _churn(repo: Path, commits: int) -> None:
     run_git(["fast-import", "--quiet"], cwd=str(repo), input=b"".join(parts))
 
 
+def add_small_packs_and_loose(repo: Path, packs: int, loose_commits: int) -> str:
+    """Give `repo` the daily tier's real input: `packs` one-blob packs (the shape
+    a pack-per-commit store accumulates), `loose_commits` reachable loose
+    commits, and one unreachable loose blob. Returns the unreachable blob's sha.
+    """
+    pack_base = str(repo / ".git" / "objects" / "pack" / "pack")
+    for i in range(packs):
+        blob = run_git(
+            ["hash-object", "-w", "--stdin"], cwd=str(repo), input=b"small pack %d\n" % i
+        ).stdout.strip()
+        run_git(["pack-objects", "-q", pack_base], cwd=str(repo), input=(blob + "\n").encode("utf-8"))
+        run_git(["prune-packed", "-q"], cwd=str(repo))
+    for i in range(loose_commits):
+        run_git(
+            ["-c", "user.email=f@example.com", "-c", "user.name=f",
+             "commit", "-q", "--allow-empty", "-m", "loose %d" % i],
+            cwd=str(repo),
+        )
+    return run_git(
+        ["hash-object", "-w", "--stdin"], cwd=str(repo), input=b"unreachable\n"
+    ).stdout.strip()
+
+
+_DAILY_FIXTURE_PACKS = 60
+_DAILY_FIXTURE_LOOSE = 20
+
+
 def _ensure_scratch_root() -> Path:
     root = scratch_root()
     root.mkdir(parents=True, exist_ok=True)
@@ -189,6 +216,8 @@ def check_maintenance_tier_budget(repo: Path):
 
     def _legs_for(tier, target):
         out = []
+        if tier == "daily":
+            out.append(["git", "-C", str(target), *gm._DAILY_LOOSE_LEG])
         if tier == "weekly":
             out.append(["git", "-C", str(target), "prune", "--expire=%s" % gm._PRUNE_EXPIRE])
         out.append(["git", "-C", str(target), *gm._TIER_ARGV[tier]])
@@ -205,6 +234,8 @@ def check_maintenance_tier_budget(repo: Path):
             target = _make_throwaway_clone()
             _apply_coordinator_registration(target)
             _churn(target, _TIER_BUDGET_CHURN)
+            if tier == "daily":
+                add_small_packs_and_loose(target, _DAILY_FIXTURE_PACKS, _DAILY_FIXTURE_LOOSE)
             total_ms = 0.0
             total_procs = 0.0
             for cmd in _legs_for(tier, target):

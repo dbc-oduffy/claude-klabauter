@@ -133,14 +133,13 @@ Negative-spec:
 from __future__ import annotations
 
 import json
-import os
 import re
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 import yaml
 
-from coordinator_core.roadmap import census, census_operands
+from coordinator_core.roadmap import census
 from coordinator_core.roadmap.post_stamp_clause import (
     post_stamp_body_refusal,
     post_stamp_refusal,
@@ -179,9 +178,14 @@ ENGINE_ERROR = "ENGINE-ERROR"
 #: not.
 CLASS_ORDER = (
     "SPINE", "CENSUS", "EXTERNAL_DEPS", "PRIME_EXIT", "CI_RETIRED", "EXECUTOR_COMMIT",
-    "EXECUTOR_HEAVY", "TEST_RUNNER_OUT_OF_ROLE", "GITIGNORED_WRITES", "SCHEMA",
-    "REGISTER",
+    "EXECUTOR_HEAVY", "TEST_RUNNER_OUT_OF_ROLE", "GITIGNORED_WRITES", "CAPABILITIES",
+    "SCHEMA", "REGISTER",
 )
+
+#: ``classes["CAPABILITIES"]["kind"]`` for an absent ``capabilities`` key; the
+#: spelling is the seam check's ``UNDECLARED_CAPS``, restated so the gate does
+#: not import the seam module.
+CAPABILITIES_UNDECLARED_KIND = "capabilities-undeclared"
 
 #: ``external_gate[].requires`` — the discriminant the three-way split turns on.
 #: ``condition:`` is reader-facing prose the schema itself says no consumer parses
@@ -459,6 +463,7 @@ def _spine(
     from coordinator_core.ops.dispatch_emit.spine_read import (
         UNDECLARED,
         DanglingPlanDependencyError,
+        InvalidChangeKindError,
         SpineReadError,
         em_owned_rows,
         executable_body,
@@ -494,6 +499,8 @@ def _spine(
             "predecessor-plan-dangling",
             "spine not evaluated past a dangling depends_on_plan edge — EXTERNAL_DEPS names each",
         )
+    except InvalidChangeKindError as exc:
+        return _defect(type(exc).__name__, str(exc).strip().splitlines()[0])
     except SpineReadError as exc:
         return _defect(type(exc).__name__, str(exc).strip().splitlines()[0][:300])
     # Zero rows with nothing owed is a plan whose work is done, held or voided: it certifies.
@@ -841,14 +848,8 @@ def _census(fm: Dict[str, Any], repo_root: Optional[Path] = None) -> Dict[str, A
     bad: List[str] = []
     unscreenable: List[str] = []
     tracked: Optional[frozenset] = None
-    operand_rels: Dict[int, List[str]] = {}
     if repo_root is not None:
-        for i, e in enumerate(entries):
-            if isinstance(e, dict) and not census.is_typed(e):
-                rels = census_operands.command_operands(str(e.get("command") or "")) or []
-                if rels:
-                    operand_rels[i] = rels
-        # One ls-files for every python target and every operand in the plan, not one per entry.
+        # One ls-files for every python target in the plan, not one per entry.
         tracked = census.tracked_targets(
             repo_root,
             [
@@ -856,8 +857,7 @@ def _census(fm: Dict[str, Any], repo_root: Optional[Path] = None) -> Dict[str, A
                 for e in entries
                 if isinstance(e, dict) and not census.is_typed(e)
                 for c in census.python_candidates(str(e.get("command") or ""), repo_root)
-            ]
-            + [r for rels in operand_rels.values() for r in rels],
+            ],
         )
     for index, entry in enumerate(entries):
         if not isinstance(entry, dict):
@@ -884,53 +884,16 @@ def _census(fm: Dict[str, Any], repo_root: Optional[Path] = None) -> Dict[str, A
         refusal = census.screen(str(entry["command"]), repo_root, tracked)
         if refusal:
             unscreenable.append(f"[{index}] {refusal}")
-    untracked = _untracked_operand_warnings(operand_rels, tracked, repo_root)
-
-    def _warned(result: Dict[str, Any]) -> Dict[str, Any]:
-        # Non-verdict: never alters status, kind or withheld.
-        result["warnings"] = untracked
-        return result
-
     if bad:
-        return _warned(_defect("census-incomplete", "; ".join(bad)))
+        return _defect("census-incomplete", "; ".join(bad))
     if unscreenable:
-        # The revalidator refuses exactly these at fire time, so a stamp here would certify a
-        # premise nothing can re-ask.
-        return _warned(
-            _defect(
-                "census-unscreenable",
-                "; ".join(unscreenable) + f" -- allowed form: {census.ALLOWED_FORM}",
-            )
+        return _defect(
+            "census-unscreenable",
+            "; ".join(unscreenable) + f" -- allowed form: {census.ALLOWED_FORM}",
         )
     if not entries:
-        return _warned(_pass("declared-empty — this plan rests on no counted premise"))
-    return _warned(_pass(f"{len(entries)} re-runnable census entr(ies)"))
-
-
-def _untracked_operand_warnings(
-    operand_rels: Dict[int, List[str]],
-    tracked: Optional[frozenset],
-    repo_root: Optional[Path],
-) -> List[str]:
-    """One warning per census operand that is a live-state root, or is neither tracked nor
-    holds a tracked path and exists on disk. Spawns nothing: `tracked` is the plan's one batch."""
-    if repo_root is None or tracked is None:
-        return []
-    out: List[str] = []
-    for index, rels in sorted(operand_rels.items()):
-        for rel in rels:
-            live = rel in census_operands.LIVE_STATE_ROOTS
-            if not live:
-                prefix = rel + "/"
-                if rel in tracked or any(t.startswith(prefix) for t in tracked):
-                    continue
-                if not os.path.lexists(os.path.join(str(repo_root), rel)):
-                    continue
-            out.append(
-                f"[{index}] census operand {rel} is not tracked: this entry resolves UNDECIDABLE "
-                "at fire time; count over a tracked path"
-            )
-    return out
+        return _pass("declared-empty — this plan rests on no counted premise")
+    return _pass(f"{len(entries)} census entr(ies) screened")
 
 
 # ---------------------------------------------------------------------------
@@ -1487,6 +1450,23 @@ _TIMING_CHANGE_KIND = re.compile(r"\b(?:timing|measure\w*|benchmark\w*)\b", re.I
 _BROAD_SUITE_WORKER_CAP = 1 << 30
 
 
+def _is_path_scoped_pnpm_test(span: str) -> bool:
+    """True for ``pnpm test <path ...>``: a positional (non-flag) argument scopes the run.
+
+    ``classify`` keeps reporting it TEST_TIER for the admission guard; only this gate reads it as scoped.
+    Trap: a flag's separate value (``--reporter verbose``) counts as a positional, so it reads as scoped.
+    """
+    import shlex
+
+    try:
+        argv = shlex.split(span)
+    except ValueError:
+        return False
+    if len(argv) < 3 or argv[0] != "pnpm" or argv[1] != "test":
+        return False
+    return any(not a.startswith("-") for a in argv[2:])
+
+
 def _test_runner_out_of_role(rows: List[Dict[str, Any]], repo_root: Path) -> Dict[str, Any]:
     """Refuse a row declaring ``coordinator:test-runner`` whose act test-runner cannot perform.
 
@@ -1522,6 +1502,8 @@ def _test_runner_out_of_role(rows: List[Dict[str, Any]], repo_root: Path) -> Dic
                 spans.append(row["verification"])
             for span in spans:
                 span = span.strip()
+                if _is_path_scoped_pnpm_test(span):
+                    continue
                 cls = (
                     classify(span, None, str(repo_root), _BROAD_SUITE_WORKER_CAP) if span else None
                 )
@@ -1549,6 +1531,19 @@ GITIGNORED_WRITES_FIX = (
     "evidence path in `writes:` (e.g. `<plan-slug>.evidence.yaml` beside the plan) and keep the "
     "scratch output as a byproduct."
 )
+
+
+def _capabilities(fm: Dict[str, Any]) -> Dict[str, Any]:
+    """An absent ``capabilities`` key is a defect; ``capabilities: []`` declares none.
+
+    Presence only: the schema and the seam check own the shape.
+    """
+    if "capabilities" not in fm:
+        return _defect(
+            CAPABILITIES_UNDECLARED_KIND,
+            "plan frontmatter declares no capabilities key; `capabilities: []` declares none",
+        )
+    return _pass("capabilities key declared")
 
 
 def _gitignored_writes(rows: List[Dict[str, Any]], gitignored_roots: frozenset) -> Dict[str, Any]:
@@ -2488,6 +2483,7 @@ def evaluate_plan(
                 raw_spine_rows(text), Path(edge_root)
             ),
             "GITIGNORED_WRITES": _gitignored_writes(raw_spine_rows(text), gitignored_roots),
+            "CAPABILITIES": _capabilities(fm),
             "SCHEMA": _schema(fm, prime_exit, parse_error),
             "REGISTER": _register(fm, repo_root),
         }
@@ -2633,6 +2629,12 @@ def _authoring_fix_lines(failing_classes: "Sequence[str] | set") -> List[str]:
         lines.append(f"  fix: {TEST_RUNNER_OUT_OF_ROLE_FIX}")
     if "GITIGNORED_WRITES" in failing_classes:
         lines.append(f"  fix: {GITIGNORED_WRITES_FIX}")
+    if "CAPABILITIES" in failing_classes:
+        lines.append(
+            "  fix: declare `capabilities: []` for a plan with no user-facing capability, "
+            "or entries with role/click_path/ui_consumer; mise-prep-upgrade derives `[]` "
+            "where the body names no UI consumer"
+        )
     if "REGISTER" in failing_classes:
         lines.append(_REGISTER_FIX)
     return lines

@@ -630,6 +630,13 @@ def push_current_branch(repo_root: Path) -> int:
 
 def _cmd_archive(args: argparse.Namespace) -> int:
     repo_root = Path(args.repo_root).resolve()
+    if (repo_root / ".generated-mirror").exists():
+        print(
+            "REFUSED: generated-mirror — changelog rituals do not run in a "
+            "generated-mirror repo; nothing moved",
+            file=sys.stderr,
+        )
+        return 1
     week_changelog_dir = repo_root / args.week_changelog_dir
     archive_week_root = repo_root / args.archive_root
     review_trail_dir = repo_root / args.review_trail_dir

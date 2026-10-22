@@ -6,8 +6,11 @@ This module answers three questions and does nothing else:
 
   batch_plans      which plans share one residue agent (1..RESIDUE_BATCH_MAX, each plan once)
   classify_census  which unscreenable census entry no read-only rewrite can carry ("leftover")
-  residue_args     what the workflow needs to run with no EM relay (`mise-prep-residue-args/2`)
+  residue_args     what the workflow needs to run with no EM relay (`mise-prep-residue-args/3`)
   seam_ref_texts   the per-plan writes-collision findings files the args reference
+
+It also pins the APM ruling interface the workflow, the op and `mise-prep-run` share:
+`RULINGS_OP`, `ruling_item_id`, `subject_sha`, `render_pm_ruling` and `ruled_items`.
 
 Caller: `coordinator/bin/mise-prep-run.py :: _emit_residue` calls `residue_args`/`has_work` and passes
 `RESIDUE_AGENT_TYPE`.
@@ -19,13 +22,17 @@ entry; everything else is string work.
 
 from __future__ import annotations
 
+import hashlib
 import re
 from pathlib import Path
 from typing import Any, Callable, Iterable, Optional
 
+from coordinator_core.session.record_homes import home_dir
 from coordinator_core.roadmap import census as _census  # uses its private _split_stages/_PY_HEADS
 
-SCHEMA = "mise-prep-residue-args/2"
+SCHEMA = "mise-prep-residue-args/3"
+#: The engine op that writes APM rulings into each plan's `pm_ruling:` list.
+RULINGS_OP = "plan.record_residue_rulings"
 RESIDUE_BATCH_MAX = 8
 APM_AGENT_TYPE = "coordinator:apm"
 #: The DoE agent that authors residue; callers pass it as `residue_agent_type`.
@@ -71,11 +78,15 @@ def classify_census(command: str, refusal: str) -> str:
     return "rewrite"
 
 
-def _entries(plan_text: str) -> list:
+def _frontmatter(plan_text: str) -> dict:
     from coordinator_core.frontmatter.schema_validate import parse_frontmatter
 
-    fm = parse_frontmatter(plan_text).get("frontmatter") or {}
-    entries = fm.get("census") if isinstance(fm, dict) else None
+    fm = parse_frontmatter(plan_text).get("frontmatter")
+    return fm if isinstance(fm, dict) else {}
+
+
+def _entries(plan_text: str) -> list:
+    entries = _frontmatter(plan_text).get("census")
     return entries if isinstance(entries, list) else []
 
 
@@ -154,9 +165,22 @@ def _author_seam(row: dict) -> list[dict]:
     return [f for f in row.get("seam") or [] if f.get("class") in AUTHOR_SEAM_CLASSES]
 
 
-def _certified(row: dict) -> bool:
-    """True for a row that is certified or PREPPED: it contributes nothing to the residue."""
+def _owes_capabilities(row: dict) -> bool:
+    return any(f.get("class") == "capabilities-undeclared" for f in row.get("seam") or [])
+
+
+def _closed(row: dict) -> bool:
     return row.get("outcome") in _CERTIFIED_OUTCOMES or row.get("verdict") == "PREPPED"
+
+
+def _certified(row: dict) -> bool:
+    """True for a certified or PREPPED row that owes no capabilities declaration.
+
+    A row with a capabilities-undeclared seam finding (blocking or not) is never certified: the
+    author route is the same. Such a row enters the residue for that line alone; its census is
+    still not residue when `_closed`.
+    """
+    return _closed(row) and not _owes_capabilities(row)
 
 
 def _collision_refs(short_rows: Iterable[dict], run_id: str) -> dict[str, dict]:
@@ -191,7 +215,7 @@ def _collision_refs(short_rows: Iterable[dict], run_id: str) -> dict[str, dict]:
         stem = Path(plan).stem
         if stems.setdefault(stem, plan) != plan:
             raise ValueError(f"plan stem {stem!r} names both {stems[stem]} and {plan}")
-        out[plan] = {"path": f"state/mise-workflows/{run_id}.seam/{stem}.txt", "lines": lines}
+        out[plan] = {"path": Path(home_dir("", "mise-workflows"), f"{run_id}.seam", f"{stem}.txt").as_posix(), "lines": lines}
     return out
 
 
@@ -202,6 +226,77 @@ def seam_ref_texts(rows: Iterable[dict], run_id: str) -> dict[str, str]:
     """
     refs = _collision_refs([r for r in rows if not _certified(r)], run_id)
     return {ref["path"]: "\n".join(ref["lines"]) + "\n" for ref in refs.values()}
+
+
+def ruling_item_id(item: dict) -> str:
+    """The stable id an APM ruling echoes: `census[<index>]` or `cycle:<path>`."""
+    if item.get("kind") == "seam-fix-cycle":
+        return f"cycle:{item.get('path') or ''}"
+    return f"census[{item['index']}]"
+
+
+def _sha12(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:12]
+
+
+def subject_sha(item: dict) -> str:
+    """sha256[:12] of what the ruling is about: a census entry's command, or a cycle's sorted plans."""
+    if item.get("kind") == "seam-fix-cycle":
+        return _sha12("\n".join(sorted(item.get("plans") or [])))
+    return _sha12(str(item.get("command") or "").strip())
+
+
+def _quote(value: Any) -> str:
+    """YAML single-quoted scalar on one line; the frontmatter parser does not unescape double-quoted escapes."""
+    return "'" + " ".join(str(value).split()).replace("'", "''") + "'"
+
+
+def render_pm_ruling(entries: Iterable[dict]) -> str:
+    """The `pm_ruling:` block: a YAML list of `{item, ruling, ruled_by, run_id, on, pm_only, subject_sha}`.
+
+    `on` is emitted quoted as a key (bare `on` parses as the YAML 1.1 boolean) and every string
+    value is single-quoted on one line, so the block round-trips through `parse_frontmatter`.
+    """
+    lines = ["pm_ruling:"]
+    for e in entries:
+        lines += [
+            f"  - item: {_quote(e['item'])}",
+            f"    ruling: {_quote(e['ruling'])}",
+            f"    ruled_by: {e.get('ruled_by') or APM_AGENT_TYPE}",
+            f"    run_id: {_quote(e.get('run_id') or '')}",
+            f"    \"on\": {_quote(e.get('on') or '')}",
+            f"    pm_only: {'true' if e.get('pm_only') else 'false'}",
+            f"    subject_sha: {_quote(e.get('subject_sha') or '')}",
+        ]
+    return "\n".join(lines) + "\n"
+
+
+def ruled_items(plan_text: str, cycle_subjects: Optional[dict] = None) -> frozenset:
+    """Item ids the plan's `pm_ruling` list has ruled and whose subject has not changed since.
+
+    A `census[i]` ruling counts while its `subject_sha` equals the hash of the plan's current
+    census entry i; a `cycle:` ruling counts when `cycle_subjects[id]` (the cycle's current
+    `subject_sha`) equals it. Absent or malformed `pm_ruling` yields the empty set.
+    """
+    ruled = _frontmatter(plan_text).get("pm_ruling")
+    if not isinstance(ruled, list):
+        return frozenset()
+    entries = _entries(plan_text)
+    out = set()
+    for r in ruled:
+        if not isinstance(r, dict) or not isinstance(r.get("item"), str):
+            continue
+        item, sha = r["item"], r.get("subject_sha")
+        m = re.fullmatch(r"census\[(\d+)\]", item)
+        if m:
+            i = int(m.group(1))
+            entry = entries[i] if i < len(entries) else None
+            current = _sha12(str(entry.get("command") or "").strip()) if isinstance(entry, dict) else None
+        else:
+            current = (cycle_subjects or {}).get(item)
+        if current is not None and sha == current:
+            out.add(item)
+    return frozenset(out)
 
 
 def _read(repo_root: Path, plan: str) -> str:
@@ -223,16 +318,18 @@ def residue_args(
     apm_model: str,
     read_text: Optional[Callable[[Path, str], str]] = None,
 ) -> dict:
-    """The `args` object for `workflow.bind_args`, exactly the pinned `mise-prep-residue-args/2`.
+    """The `args` object for `workflow.bind_args`, exactly the pinned `mise-prep-residue-args/3`.
 
     `rows` are the dicts `mise-prep-run.main` builds (plan, verdict, failing, detail, seam,
-    outcome). A certified or PREPPED row is skipped entirely: no batch member and no census
-    apmItem (its cross-plan seams belong to seam_fix; a census refusal the gate does not
-    reproduce is not residue). Any other row enters a batch when it has bar classes to author,
+    outcome). A certified or PREPPED row is skipped entirely, unless it carries a
+    capabilities-undeclared seam finding: it then batches for that line alone. Otherwise no
+    batch member and no census apmItem (its cross-plan seams belong to seam_fix; a census
+    refusal the gate does not reproduce is not residue). Any other row enters a batch when it has bar classes to author,
     an author-routed seam finding, or a rewritable census entry. A member's `seam` carries only
     its capabilities-undeclared lines; its owned writes-collision lines (one per path) live in
     the findings file named by `seamRef` (`seamRefLines` lines), whose text is `seam_ref_texts`. Leftover census entries of non-PREPPED rows and
-    `seam_fix_reply["skipped_cycles"]` become `apmItems`. Both lists empty means no workflow.
+    `seam_fix_reply["skipped_cycles"]` become `apmItems`, each with `id` and `subjectSha`; an item
+    its plan already carries a current `pm_ruling` for is not sent again. Both lists empty means no workflow.
     """
     root = Path(repo_root)
     reader = read_text or _read
@@ -253,14 +350,18 @@ def residue_args(
     apm_items: list[dict] = []
     for row in short:
         plan = row["plan"]
-        entries = census_entries(texts[plan], root, tracked)
+        entries = [] if _closed(row) else census_entries(texts[plan], root, tracked)
+        ruled = ruled_items(texts[plan])
         rewrite = [e for e in entries if e["class"] == "rewrite"]
         for e in entries:
             if e["class"] == "leftover":
-                apm_items.append({
+                item = {
                     "kind": "census-leftover", "plan": plan, "index": e["index"],
                     "question": e["question"], "command": e["command"], "refusal": e["refusal"],
-                })
+                }
+                if ruling_item_id(item) in ruled:
+                    continue
+                apm_items.append({**item, "id": ruling_item_id(item), "subjectSha": subject_sha(item)})
         author = _author_seam(row)
         ref = refs.get(plan)
         inline = [f for f in author if f.get("class") != "writes-collision"]
@@ -283,16 +384,21 @@ def residue_args(
         members.append(member)
 
     for cycle in (seam_fix_reply or {}).get("skipped_cycles") or []:
-        apm_items.append({
+        item = {
             "kind": "seam-fix-cycle", "plans": list(cycle.get("plans") or []),
             "path": cycle.get("path") or "", "detail": cycle.get("detail") or "",
-        })
+        }
+        cid, sha = ruling_item_id(item), subject_sha(item)
+        if any(cid in ruled_items(texts[p] if p in texts else reader(root, p), {cid: sha}) for p in item["plans"]):
+            continue
+        apm_items.append({**item, "id": cid, "subjectSha": sha})
 
     return {
         "schema": SCHEMA,
         "repoRoot": root.as_posix(),
         "runId": run_id,
         "gateCommand": gate_command,
+        "rulingsCommand": f"mise-prep-run --repo-root {root.as_posix()} --apply-rulings",
         "residue": {"agentType": residue_agent_type, "model": residue_model},
         "apm": {"agentType": APM_AGENT_TYPE, "model": apm_model},
         "batches": batch_plans(members),

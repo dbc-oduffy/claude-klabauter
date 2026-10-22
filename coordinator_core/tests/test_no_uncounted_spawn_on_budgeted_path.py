@@ -426,9 +426,6 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
         "coordinator_core/ops/plan_seam_fix.py",
         ("_handler",),
     ),
-    # Enrolled 2026-10-21: statically spawn-free (empty function-granular reachable set). The
-    # census leg's shell entries run in `mise-census-revalidate.py`, loaded by file path, so they
-    # are outside this walker; they are bounded by the op's `_census_deadline`, not by a count.
     # Enrolled 2026-10-22: statically spawn-free (empty function-granular reachable set).
     "fleet.migrate_prose_queue": (
         "coordinator_core/ops/fleet/migrate_prose_queue.py",
@@ -469,10 +466,6 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
     "plan.mise_certify_probe": (
         "coordinator_core/ops/plan_mise_prep_probe.py",
         ("_certify_handler",),
-    ),
-    "plan.census_set": (
-        "coordinator_core/ops/plan_mise_prep_probe.py",
-        ("_census_set_handler",),
     ),
     "plan.overlap_edges": (
         "coordinator_core/ops/plan_overlap_edges.py",

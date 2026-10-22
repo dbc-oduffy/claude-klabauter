@@ -3988,7 +3988,10 @@ def classify_runner_footprint(command: str, *, cwd: Optional[str] = None) -> str
 _NEGATION_RE = re.compile(
     r"(?:\bdo not run\b|\bdon't run\b|\bnever run\b|\bmust not\b|\bshould not\b|"
     r"\binstead of\b|\brather than\b|\bdeny[-\s]?list\b|\bremove\b|\bdelete\b|"
-    r"\bstrip\b|\bforbidden\b|\bbanned\b)",
+    r"\bstrip\b|\bforbidden\b|\bbanned\b|"
+    r"(?:\bnot|\bnever|\bdon't|\bdo\s+not)\s+(?:the\s+)?"
+    r"(?=(?:pytest|py\.test|unittest|nose2|npm|pnpm|yarn|bun|npx|jest|vitest|"
+    r"mocha|jasmine|cargo|nextest|tox|nox)\b))",
     re.IGNORECASE,
 )
 

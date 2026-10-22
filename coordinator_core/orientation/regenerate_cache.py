@@ -219,6 +219,7 @@ from coordinator_core.ops.ceremony.detached_spawn import (
     read_failures_log,
     trim_failures_log,
 )
+from coordinator_core.ue_project_detection import SKIP_SEGMENTS, declared_ue, is_skipped_path
 from coordinator_core.win_portability import same_path
 from coordinator_core.telemetry import op_latency
 from coordinator_core.warm.push_cadence import PUSH_CADENCE_INTERVAL_SECS
@@ -389,7 +390,7 @@ def resolve_repo_root(cwd: Optional[Path] = None) -> Path:
 # ---------------------------------------------------------------------------
 
 
-_UPROJECT_SCAN_SKIP = frozenset({".git", "node_modules"})
+_UPROJECT_SCAN_SKIP = frozenset({".git", "node_modules"}) | SKIP_SEGMENTS
 
 
 def _scan_uproject(repo_root: Path, skip: frozenset) -> str:
@@ -494,15 +495,20 @@ class _GitFacts:
 
     @cached_property
     def uproject(self) -> str:
+        if declared_ue(self.repo_root) is False:
+            return ""
         if self.in_repo:
             try:
-                tracked = sorted(k for k in read_index(self.repo_root) if k.endswith(".uproject"))
+                tracked = sorted(
+                    k for k in read_index(self.repo_root)
+                    if k.endswith(".uproject") and not is_skipped_path(k)
+                )
             except (OSError, IndexParseError):
                 tracked = []
             if tracked:
                 return tracked[0]
             return _scan_uproject(self.repo_root, _UPROJECT_SCAN_SKIP)
-        return _scan_uproject(self.repo_root, frozenset())
+        return _scan_uproject(self.repo_root, SKIP_SEGMENTS)
 
 
 def detect_uproject(repo_root: Path, facts: Optional[_GitFacts] = None) -> str:

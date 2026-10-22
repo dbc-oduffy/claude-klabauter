@@ -43,7 +43,7 @@ def _fire_hold() -> tuple[str, str, str]:
 def _plan(root: Path, slug: str) -> str:
     p = root / "docs" / "plans" / f"{slug}.md"
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(f"---\ntitle: {slug}\nstatus: draft\n---\n\nbody\n", encoding="utf-8")
+    p.write_text(f"---\ntitle: {slug}\nstatus: draft\ncapabilities: []\n---\n\nbody\n", encoding="utf-8")
     return f"docs/plans/{slug}.md"
 
 

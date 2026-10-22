@@ -15,7 +15,7 @@ Wire params, probe:
     plan           (str, required)   — repo-relative or absolute; inside the main worktree.
     upgrade        (bool, default F) — derive what ``mise-prep-upgrade`` would write.
     check_census, census_timeout, census_run — admitted for a launcher that still sends them;
-                     never read. The census is ``plan.census_set``'s.
+                     never read.
 
 Reply, probe:
     {"gate": <plan.prep_gate reply, same shape>, "census": None,
@@ -30,43 +30,21 @@ Each plan is answered by the same ``_probe_one`` the single form uses, or from t
 ``ProbeStore`` when its bytes, HEAD, engine key and recorded external inputs are unchanged. A
 ValueError on one plan is that plan's ``{"error"}``; the rest are still answered.
 
-``plan.census_set`` (COMPUTE_ONLY) revalidates the census of a whole set of plans under one
-set budget, through ``mise-census-revalidate.py :: revalidate_set`` over the on-disk
-``CensusStore``.
-Wire params, census_set:
-    plans            (list[str], required) — repo-relative plan paths, inside the main worktree,
-                       the caller's obligation to pass only PREPPED, not-CERTIFIED plans; the op does not
-                       re-gate, and runs the census commands of every plan it is given.
-    census_timeout   (int > 0, default 30) — seconds one command may run.
-    census_budget_ms (int >= 0, default 0) — a PROCESS-time budget (parent plus census children)
-                       passed to ``revalidate_set`` as ``process_budget_ms``; 0 = the op's own 500.
-Reply, census_set: ``revalidate_set``'s reply (``plans``, ``spent_ms``, ``key_ms``,
-``memo_hits``, ``direct_runs``, ``covered``, ``census_plans``, ``pending``, ``order``,
-``children_process_ms``, ``spawns``, ``inproc_runs``) plus ``process_ms`` = this thread's
-process ms + ``children_process_ms``. The wall deadline is the op's guard share alone.
+There is no census op: no census re-runs on mise-prep or mise-certify.
 
 Wire params, apply: ``plan`` (str, required).
 Reply, apply: ``{"plan", "error", "derived", "residue", "changed"}`` — ``upgrade_plan``'s dict.
 
 ``plan.mise_certify_probe`` (COMPUTE_ONLY) is ``mise-certify.py :: certify`` for ONE plan:
-the sha leg, then the census leg only when the stamp reads CERTIFIED (the opposite of the
-probe's PREPPED-and-not-CERTIFIED census rule, hence a separate op).
-Wire params, certify: ``plan`` (str, required), ``census_timeout`` (int, default 30).
+the sha leg only; the census leg is deleted.
+Wire params, certify: ``plan`` (str, required), ``census_timeout`` (admitted, ignored).
 Reply, certify: ``{"plan", "sha", "sha_detail"?, "stamp": <read_stamp dict>|None,
-"census": <revalidate outcome>|None, "process_ms"}``. An unreadable plan replies sha
-MALFORMED with the OSError text; a plan absent from the worktree raises ValueError.
-
-Census deadline: the census-running ops (``plan.mise_certify_probe``, ``plan.census_set``) bound
-the census leg by ``_CENSUS_DEADLINE_SHARE`` (0.5) of their own ``ipc._timeout_for`` guard. Each entry runs for
-``min(census_timeout, remaining)`` seconds; an entry reached past the deadline reads UNRUNNABLE
-without a spawn, so the census rolls up UNDECIDABLE, never DRIFT. DR-344 standing: an op that
-returns at the deadline is still over 500ms; that cost is the plan's authored census, and this
-bound stops the op dying, it does not make that plan fit.
+"census": census.not_run_outcome(...), "process_ms"}`` — the census is NOT-RUN for every plan.
+An unreadable plan replies sha MALFORMED with the OSError text; a plan absent from the
+worktree raises ValueError.
 
 Negative-spec:
-  - The census store is derived, never a source of truth: a lost save costs a spawn, never a
-    verdict, because every record is checked against its key before use.
-  - The probe runs no census; ``plan.census_set`` does, once for the set.
+  - The probe and certify run no census.
   - The single form takes ONE plan; the set form takes a list and is the only caller shape that
     scales: a per-plan loop measured ~10.0s warm over a 448-plan set (448 spawns, YAML loading
     5.21s). The single form never reads or writes the store.
@@ -82,9 +60,7 @@ Negative-spec:
     created without a commit, or a ``.gitignore`` edit made without one, is therefore not seen
     until HEAD moves.
   - ``process_ms`` is this process's CPU time over the op body, an upper bound: concurrent ops
-    in one warm server share the clock. Census shell children are separate processes: for
-    ``plan.census_set`` their reaped CPU is added into ``process_ms`` (``children_process_ms``);
-    for ``plan.mise_certify_probe`` it stays in the census outcome only.
+    in one warm server share the clock.
 """
 
 from __future__ import annotations
@@ -97,7 +73,6 @@ from typing import Optional
 
 MUTATES = ["docs/plans/*.md"]  # plan.mise_upgrade_apply writes the derivable fields of the caller-named plan only
 
-from coordinator_core import ipc
 from coordinator_core.bin_lib_binding import exec_module_bin_bound
 from coordinator_core.engine_root import ENGINE_CHECKOUT_ROOT
 from coordinator_core.engine_version import engine_build
@@ -105,10 +80,9 @@ from coordinator_core.ipc import register_op
 from coordinator_core.lifecycle import main_worktree_root
 from coordinator_core.ops._param_alias import aliased_param, spellings
 from coordinator_core.ops.plan_prep_gate import _resolve_plan
-from coordinator_core.roadmap.census_store import CensusStore
+from coordinator_core.roadmap import census
 from coordinator_core.roadmap.probe_store import ProbeStore, engine_key, input_paths, plan_sha
 from coordinator_core.roadmap.prep_gate import (
-    CERTIFIED,
     PREPPED,
     CorpusInputs,
     corpus_inputs,
@@ -126,22 +100,7 @@ _BIN_DIR = ENGINE_CHECKOUT_ROOT / "coordinator" / "bin"
 
 _CORPUS_CACHE: dict = {}
 
-#: Share of the op's own wall guard the census leg may spend. It leaves the gate leg, the
-#: upgrade leg and the transport inside the guard under load; the guard is a runaway catch,
-#: never a target.
-_CENSUS_DEADLINE_SHARE = 0.5
-
-#: Process-time budget (parent plus reaped children) of one ``plan.census_set`` call when the
-#: caller sends none; the DR-344 bar.
-_CENSUS_PROCESS_BUDGET_MS = 500
-
-
-def _census_deadline(op: str) -> float:
-    """A `time.monotonic()` deadline for the census leg.
-
-    Read through `ipc._timeout_for`, never a literal: the env knob only narrows the guard.
-    """
-    return time.monotonic() + _CENSUS_DEADLINE_SHARE * ipc._timeout_for(op)
+_CENSUS_DELETED = "census revalidation leg deleted (DR-344 kill bar)"
 
 
 @functools.cache
@@ -158,10 +117,6 @@ def _load_bin(filename: str, modname: str):
 
 def _upgrader():
     return _load_bin("mise-prep-upgrade.py", "mise_prep_upgrade")
-
-
-def _revalidator():
-    return _load_bin("mise-census-revalidate.py", "mise_census_revalidate")
 
 
 def _head_sha(worktree_root: Path) -> Optional[str]:
@@ -373,42 +328,6 @@ def _probe_handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     return reply
 
 
-@register_op("plan.census_set")
-def _census_set_handler(params: dict, repo_root: Optional[Path] = None) -> dict:
-    """JSON-RPC "plan.census_set" handler. See module docstring."""
-    if repo_root is None:
-        raise ValueError("plan.census_set requires a resolved repo_root")
-    raw = params.get("plans")
-    if (
-        not isinstance(raw, list)
-        or not raw
-        or not all(isinstance(p, str) and p.strip() for p in raw)
-    ):
-        raise ValueError("plans must be a non-empty list of plan path strings")
-    timeout = params.get("census_timeout", 30)
-    if not isinstance(timeout, int) or isinstance(timeout, bool) or timeout <= 0:
-        raise ValueError("census_timeout must be a positive integer")
-    budget_ms = params.get("census_budget_ms", 0)
-    if not isinstance(budget_ms, int) or isinstance(budget_ms, bool) or budget_ms < 0:
-        raise ValueError("census_budget_ms must be a non-negative integer")
-
-    started = time.process_time()
-    worktree_root = Path(main_worktree_root(repo_root))
-    plans = [_resolve_plan(p.strip(), worktree_root) for p in raw]
-    deadline = _census_deadline("plan.census_set")
-    store = CensusStore.load(worktree_root)
-    reply = _revalidator().revalidate_set(
-        plans, worktree_root, timeout,
-        deadline=deadline, head=_head_sha(worktree_root), store=store,
-        process_budget_ms=budget_ms if budget_ms > 0 else _CENSUS_PROCESS_BUDGET_MS,
-    )
-    children_ms = reply.get("children_process_ms")
-    if not isinstance(children_ms, (int, float)) or isinstance(children_ms, bool):
-        children_ms = 0
-    reply["process_ms"] = round((time.process_time() - started) * 1000.0 + children_ms, 3)
-    return reply
-
-
 @register_op("plan.mise_upgrade_apply")
 def _apply_handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "plan.mise_upgrade_apply" handler. See module docstring."""
@@ -432,11 +351,6 @@ def _apply_handler(params: dict, repo_root: Optional[Path] = None) -> dict:
 def _certify_handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "plan.mise_certify_probe" handler. See module docstring."""
     plan_path = _plan_param(params, "plan.mise_certify_probe", repo_root)
-    timeout = params.get("census_timeout", 30)
-    if not isinstance(timeout, int) or isinstance(timeout, bool) or timeout <= 0:
-        raise ValueError("census_timeout must be a positive integer")
-
-    deadline = _census_deadline("plan.mise_certify_probe")
     started = time.process_time()
     worktree_root = Path(main_worktree_root(repo_root))
     rel = _rel(plan_path, worktree_root)
@@ -445,7 +359,7 @@ def _certify_handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     except (OSError, UnicodeDecodeError) as exc:
         return {
             "plan": rel, "sha": "MALFORMED", "sha_detail": str(exc), "stamp": None,
-            "census": None, "process_ms": round((time.process_time() - started) * 1000.0, 3),
+            "census": census.not_run_outcome(_CENSUS_DELETED), "process_ms": round((time.process_time() - started) * 1000.0, 3),
         }
     stamp = read_stamp(text)
     reply: dict = {"plan": rel, "sha": stamp["state"]}
@@ -454,10 +368,6 @@ def _certify_handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     elif stamp["state"] == "MALFORMED":
         reply["sha_detail"] = f"stamp fields missing: {', '.join(stamp.get('missing') or [])}"
     reply["stamp"] = stamp
-    reply["census"] = (
-        _revalidator().revalidate(plan_path, worktree_root, timeout, deadline=deadline)
-        if stamp["state"] == CERTIFIED
-        else None
-    )
+    reply["census"] = census.not_run_outcome(_CENSUS_DELETED)
     reply["process_ms"] = round((time.process_time() - started) * 1000.0, 3)
     return reply

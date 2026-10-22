@@ -197,6 +197,7 @@ from __future__ import annotations
 
 import os
 import re
+import shlex
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
@@ -276,11 +277,77 @@ def _strip_ungoverned_redirects(
     return stripped
 
 
+_CP_MV_FLAGS_WITH_ARG = frozenset({"-S", "--suffix", "-m", "--mode", "-o", "--owner", "-g", "--group"})
+_CP_MV_UNJUDGED_CHARS = frozenset(";&|<>$`\n()*?[{~\\")
+
+
+def _cp_mv_lands_in_home(cmd: str, identifiers_lower: Tuple[str, ...]) -> Optional[bool]:
+    """For a lone ``cp``/``mv``/``install`` whose written operand (the last
+    positional, or the ``-t`` target) is readable: whether it names a governed
+    home (cp/install sources are only read; ``mv`` removes its source, so any
+    ``mv`` operand counts as written). ``None`` for anything not a single plain
+    command, which the full predicate judges."""
+    if any(ch in _CP_MV_UNJUDGED_CHARS for ch in cmd):
+        return None
+    try:
+        words = shlex.split(cmd)
+    except ValueError:
+        return None
+    if not words or words[0] not in ("cp", "mv", "install"):
+        return None
+    positional: List[str] = []
+    target: Optional[str] = None
+    pending: Optional[str] = None
+    flags_done = False
+    for word in words[1:]:
+        if pending is not None:
+            if pending == "-t":
+                target = word
+            pending = None
+        elif not flags_done and word == "--":
+            flags_done = True
+        elif not flags_done and word.startswith("--target-directory="):
+            target = word.split("=", 1)[1]
+        elif not flags_done and word in ("-t", "--target-directory"):
+            pending = "-t"
+        elif not flags_done and word in _CP_MV_FLAGS_WITH_ARG:
+            pending = "-"
+        elif not flags_done and word.startswith("-") and len(word) > 1:
+            if word[1:2] != "-" and (word[1:2] == "t" or "t" in word[1:] or word == "-d"):
+                return None
+            if word[1:2] != "-" and "d" in word[1:] and words[0] == "install":
+                return None
+        else:
+            positional.append(word)
+    if pending is not None:
+        return None
+    if target is not None:
+        written = [target]
+        if not positional:
+            return None
+    else:
+        if len(positional) < 2:
+            return None
+        written = [positional[-1]]
+    if words[0] == "mv":
+        written = positional + ([target] if target is not None else [])
+    bare_home = tuple(i.rstrip("/") for i in identifiers_lower)
+    return any(
+        _mentions_governed_identifier(w, identifiers_lower)
+        or any(h in w.lower() for h in bare_home)
+        for w in written
+    )
+
+
 def _sizing_write_denied(cmd: str) -> bool:
     """Sizing-record leg of the predicate, judged by write TARGET: a redirect
     landing outside ``state/sizings`` is not a write into it, so the command
     is re-judged without those redirects. Every other write marker and every
-    indirection marker still decides on the remainder."""
+    indirection marker still decides on the remainder. A lone cp/mv/install
+    is judged by its destination operand alone."""
+    lands = _cp_mv_lands_in_home(cmd, _SIZING_RECORD_IDENTIFIERS)
+    if lands is not None:
+        return lands
     if not is_denied_bash_write(cmd, _SIZING_RECORD_IDENTIFIERS):
         return False
     remainder = _strip_ungoverned_redirects(cmd, _SIZING_RECORD_IDENTIFIERS)

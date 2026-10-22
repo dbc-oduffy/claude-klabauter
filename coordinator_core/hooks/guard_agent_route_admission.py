@@ -22,6 +22,7 @@ from coordinator_core.ipc import register_op
 from coordinator_core.machine_profile import apply_guard_level
 
 GUARD_NAME = "guard-agent-route-admission"
+ROUTE_TABLE_RELPATH = ".claude/route-table.json"
 
 _TOKEN_SPLIT_RE = re.compile(r"""[\s'"`<>()\[\]{},;]+""")
 
@@ -35,10 +36,12 @@ def _path_tokens(prompt: str) -> list[str]:
     return out
 
 
-def _reason(subagent_type: str, cls, missing: list[str], redirect: bool) -> str:
-    tail = f"Dispatch {cls.agent_type} instead." if redirect else f"Dispatch {cls.agent_type}."
+def _reason(subagent_type: str, cls, redirect: bool) -> str:
+    """The route-table names the class's agent and tools; the message points there, never echoes them."""
+    tail = "Dispatch its agent_type instead." if redirect else "Dispatch its agent_type."
     return (
-        f"{subagent_type} lacks {', '.join(missing)} for work class {cls.id}. {tail}"
+        f"{subagent_type} lacks the required_tools of work class {cls.id} "
+        f"({ROUTE_TABLE_RELPATH}). {tail}"
     )
 
 
@@ -87,7 +90,7 @@ def _evaluate(params: dict, repo_root) -> dict:
     if verdict.verdict == "admit":
         return no_advisory()
 
-    reason = _reason(subagent_type, cls, list(verdict.missing), verdict.verdict == "redirect")
+    reason = _reason(subagent_type, cls, verdict.verdict == "redirect")
     return apply_guard_level(GUARD_NAME, deny("PreToolUse", reason)) or no_advisory()
 
 

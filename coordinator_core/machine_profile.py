@@ -391,12 +391,11 @@ def apply_guard_level(
         if risk.startswith("BLOCKED:"):
             risk = "would be blocked at strict level:" + risk[len("BLOCKED:"):]
     event = hso.get("hookEventName") or "PreToolUse"
-    out: Dict[str, Any] = {
-        "hookEventName": event,
-        "additionalContext": (
-            ADVISORY_PREFIX + risk.strip() + " " + advisory_tail(name)
-        ),
-    }
+    advisory = ADVISORY_PREFIX + risk.strip() + " " + advisory_tail(name)
+    if event in ("Stop", "SubagentStop"):
+        # Stop drops hookSpecificOutput; only top-level fields reach anyone.
+        return {"systemMessage": advisory}
+    out: Dict[str, Any] = {"hookEventName": event, "additionalContext": advisory}
     if event == "PreToolUse":
         out["permissionDecision"] = "allow"
     return {"hookSpecificOutput": out}

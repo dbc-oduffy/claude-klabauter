@@ -87,13 +87,13 @@ def test_unmatched_prompt_admits(repo):
 def test_refuse_names_class_and_agent_type(repo):
     reason = _reason(guard.evaluate(_payload(repo(_table("refuse")), "import the unreal meshes")))
     assert "ue-editor" in reason
-    assert NEED in reason
-    assert reason.endswith(f"Dispatch {UE}.")
+    assert "example-game-repo" not in reason
+    assert reason.endswith("Dispatch its agent_type.")
 
 
 def test_redirect_wording(repo):
     reason = _reason(guard.evaluate(_payload(repo(_table("redirect")), "import the unreal meshes")))
-    assert reason.endswith(f"Dispatch {UE} instead.")
+    assert reason.endswith("Dispatch its agent_type instead.")
 
 
 def test_path_token_in_prompt_matches_class(repo):

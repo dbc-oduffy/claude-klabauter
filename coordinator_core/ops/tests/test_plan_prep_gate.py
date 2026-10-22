@@ -41,6 +41,7 @@ def _repo(tmp_path: Path) -> Path:
 
 
 _FM = """census: []
+capabilities: []
 prime_exit_criterion:
   statement: the op reports per class
   derived_from: state/sizings/2026-09-07-fixture.yaml
@@ -143,7 +144,7 @@ def test_the_report_is_per_class_not_a_boolean(tmp_path):
     result = _gate({"plan": rel}, common)
     assert result["verdict"] == pg.NOT_PREPPED
     failing = {k for k, v in result["classes"].items() if v["status"] != "PASS"}
-    assert failing == {"SPINE", "CENSUS", "PRIME_EXIT"}
+    assert failing == {"SPINE", "CENSUS", "PRIME_EXIT", "CAPABILITIES"}
     assert result["classes"]["EXTERNAL_DEPS"]["status"] == "PASS"
 
 

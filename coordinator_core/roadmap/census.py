@@ -1,12 +1,8 @@
 """coordinator_core.roadmap.census -- the one read-only screen a `census[].command`
 must clear, and the comparison a recorded `count` earns.
 
-ONE SCREEN, TWO CALLERS. The prep gate (`prep_gate._census`) refuses at stamp time
-what the fire-time revalidator (`coordinator/bin/mise-census-revalidate.py`) would
-refuse at run time. With a screen per side they disagreed: 20 of 60 premises in one
-14-plan run were stamped by prep and then REFUSED by the revalidator (`python -c`,
-`$( )`, `for` loops), so a third of the recorded premises could never be re-checked.
-A stamped premise is runnable only if both sides ask the same function.
+The screen is what the prep gate (`prep_gate._census`) stamps a premise against. Nothing re-runs
+a census on mise-prep or mise-certify; both report `not_run_outcome`.
 
 Screening is pure string work, except a `python` target: with a `repo_root` it must be a
 git-tracked file of that repo, resolved by ONE `git ls-files` call per batch (`tracked_targets`),
@@ -23,6 +19,16 @@ import re
 import shlex
 from pathlib import Path
 from typing import Optional
+
+#: The census state when no census re-ran; not a revalidation state (MATCH, DRIFT, UNDECIDABLE,
+#: REFUSED, UNRUNNABLE) and never blocks.
+NOT_RUN = "NOT-RUN"
+
+
+def not_run_outcome(detail: str) -> dict:
+    """The census outcome when no census re-ran: {"state": NOT_RUN, "entries": [], "detail": detail}."""
+    return {"state": NOT_RUN, "entries": [], "detail": detail}
+
 
 #: Read-only command heads. A CLOSED list, and deliberately short: the point is not to anticipate
 #: every question an author might ask but to make the set of things a census can execute small

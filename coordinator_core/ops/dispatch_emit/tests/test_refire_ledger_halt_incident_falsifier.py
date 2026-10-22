@@ -63,9 +63,9 @@ def test_the_gate_verdict_and_composed_script_dispatch_r3s_work_at_m_plus(repo, 
 
     script = _compose(monkeypatch, "m_plus")
     owes = script.index("const _ledgerOwes")
-    assert "(_gate.arm === 'm_plus' || _gate.arm === 's')" in script[owes : owes + 200]
+    assert "_gate.arm === 'm_plus'" in script[owes : owes + 200]
     assert ".remaining ?? []).length > 0" in script[owes : owes + 400]
-    assert "else if (!_ledgerOwes) { _gate = { ..._gate, arm: 'xs' }; }" in script
+    assert "else if (!_ledgerOwes) { _xsTail = true; }" in script
     leg = script.index("label: 'ledger-replan'")
     prompt = script[leg - 4200 : leg]
     assert "_gate.resume_ledger.blocking.join(', ')" in prompt

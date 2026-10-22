@@ -849,7 +849,6 @@ _GRANDFATHERED_RUNNER_MODULES: frozenset[str] = frozenset(
         "coordinator/lib/percolate/publish_sync.py",
         "coordinator/lib/release_currency.py",
         "coordinator/lib/session_ensure_branch.py",
-        "coordinator_core/archive_stamp.py",
         "coordinator_core/backlog_grind_assemble/apply.py",
         "coordinator_core/backlog_grind_assemble/readers_mise.py",
         "coordinator_core/bash_guards/_alternative_liveness.py",

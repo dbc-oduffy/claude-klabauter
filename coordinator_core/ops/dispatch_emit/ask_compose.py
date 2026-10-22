@@ -64,6 +64,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     RESUME_LEDGER_REVISED_FIELD,
     RESUME_LEDGER_UNCLAIMED_FIELD,
     RESUME_LEDGER_REMAINING_FIELD,
+    RESUME_LEDGER_DERIVED_FIELD,
     RESUME_LEDGER_UNLANDED_FIELD,
     TERMINAL_RESUME_LEDGER_PARAM,
     RECORD_DIR_ROOT,
@@ -2148,22 +2149,26 @@ def compose_ask_script(
     # The re-plan leg is composed only when `fold_stage`; a stop_after compose never reaches it.
     _rl0 = f"_gate.{RESUME_LEDGER_KEY}"
     b.append("  let _ledgerExec = false;")
+    b.append("  let _xsTail = false;")
     b.append("  let _ledgerAdded = [];")
     b.append(f"  const _resumeLedger = !_halted && !!{_rl0};")
     b.append(
         f"  const _ledgerUnlanded = _resumeLedger ? ({_rl0}.{RESUME_LEDGER_UNLANDED_FIELD} ?? []) : [];"
     )
     b.append(
-        f"  const _ledgerOwes = _resumeLedger && (_gate.arm === {_lit(ARM_M_PLUS)} || _gate.arm === {_lit(ARM_S)})"
+        f"  const _ledgerDerived = _resumeLedger ? ({_rl0}.{RESUME_LEDGER_DERIVED_FIELD} ?? []) : [];"
+    )
+    b.append(
+        f"  const _ledgerOwes = _resumeLedger && _gate.arm === {_lit(ARM_M_PLUS)}"
         f" && ((({_rl0}.blocking ?? [])"
         f".some((id) => (((({_rl0}.{RESUME_LEDGER_REMAINING_FIELD} ?? {{}})[id]) ?? {{}}).remaining ?? []).length > 0)"
         f" && ({_rl0}.{RESUME_LEDGER_LEG_FIELD}?.action !== {_lit(LEG_SKIP)}))"
         f" || ({_rl0}.{RESUME_LEDGER_UNCLAIMED_FIELD} ?? []).length > 0);"
     )
     b.append(
-        f"  if (_resumeLedger) {{ _planRel = {_rl0}.plan; if (_ledgerUnlanded.length) {{ _ledgerExec = true; }} "
-        f"else if (!_ledgerOwes) {{ _gate = {{ ..._gate, arm: {_lit(ARM_XS)} }}; }} "
-        f"if (_gate.arm === {_lit(ARM_S)}) {{ _gate = {{ ..._gate, resume_plan: _planRel }}; }} }}"
+        f"  if (_resumeLedger) {{ _planRel = {_rl0}.plan; if (_ledgerUnlanded.length || _ledgerDerived.length) {{ _ledgerExec = true; }} "
+        "else if (!_ledgerOwes) { _xsTail = true; } "
+        f"if (_gate.arm === {_lit(ARM_S)} && !_xsTail) {{ _gate = {{ ..._gate, resume_plan: _planRel }}; }} }}"
     )
     b.append(
         f"  const _allLandedResume = _resumeLedger && {_rl0}.{RESUME_LEDGER_KIND_FIELD} === {_lit(ALL_LANDED_HALT_KIND)};"
@@ -2218,7 +2223,7 @@ def compose_ask_script(
             ".filter((s) => typeof s === 'string' && s.trim()); "
             "if (_ledgerAdded.length) { _ledgerExec = true; "
             "await _adoptStageReply(_replanned?.stage_reply); } "
-            f"else {{ if (!_ledgerUnlanded.length) {{ _gate = {{ ..._gate, arm: {_lit(ARM_XS)} }}; }} "
+            "else { if (!_ledgerUnlanded.length) { _xsTail = true; } "
             "_stagedManifest = _gateStaged; _relayGap = _gateGap; _diskHalt = _gateDisk; } }"
         )
 
@@ -2602,12 +2607,12 @@ def compose_ask_script(
 
     if stop_after:
         b.append(
-            f"  if (!_halted && _gate.arm !== {_lit(ARM_XS)} && _planRel) {{ _halted = {{ halted: {_lit(HALT_PARKED)}, "
+            f"  if (!_halted && _gate.arm !== {_lit(ARM_XS)} && !_xsTail && _planRel) {{ _halted = {{ halted: {_lit(HALT_PARKED)}, "
             "reason: 'parked after plan: stop_after=plan', "
             f"plan: _planRel, sizing: _sizingRel, run_id: _runId, next_action: {parked_next_action_js('_planRel')} }}; }}"
         )
         b.append(
-            f"  if (!_halted && _gate.arm !== {_lit(ARM_XS)}) {{ _halted = {{ halted: {_lit(HALT_REFUSAL)}, "
+            f"  if (!_halted && _gate.arm !== {_lit(ARM_XS)} && !_xsTail) {{ _halted = {{ halted: {_lit(HALT_REFUSAL)}, "
             "reason: 'stop_after=plan but no plan landed', sizing: _sizingRel, run_id: _runId }; }"
         )
         if in_run_commit:
@@ -2672,7 +2677,7 @@ def compose_ask_script(
     b.append("  if (_stagedManifest) { _manifest = _stagedManifest; }")
     if judged and fold_falsifier:
         spec_js = "_scoutFalsifier ?? _planFalsifier" if sized_in_run else "_planFalsifier"
-        b.append(f"  if (_gate.arm && _gate.arm !== {_lit(ARM_XS)}) {{ _falsifierSpec = {spec_js}; }}")
+        b.append(f"  if (_gate.arm && _gate.arm !== {_lit(ARM_XS)} && !_xsTail) {{ _falsifierSpec = {spec_js}; }}")
     b.append(
         f"  if (!_stagedManifest) {{ _manifest = {{ error: '{NO_MANIFEST_PREFIX}: the agent that closes the "
         "gate, plan or plan-blitz ready path returned none' }; }"
@@ -2693,7 +2698,7 @@ def compose_ask_script(
     b.append(
         "  if (!_manifest.error && !(_manifest.rows ?? []).length && Array.isArray(_gate.resume_rows) "
         "&& ((_manifest.owed ?? []).length || (_manifest.gated ?? []).length)) "
-        f"{{ _allLanded = true; _gate = {{ ..._gate, arm: {_lit(ARM_XS)} }}; }}"
+        "{ _allLanded = true; _xsTail = true; }"
     )
     b.append(
         f"  if (_manifest.error && /^(?:stage refused: )?{STAGE_REFUSAL_PREFIX}/.test(String(_manifest.error))) {{ _halted = {{ "
@@ -2728,7 +2733,7 @@ def compose_ask_script(
     b.append(f"  phase({_lit(_emit._EXECUTE_PHASE_TITLE)});")
     b.append("  const _rows = {};")
     b.append(
-        f"  const _rowVerifyWanted = !(_gate.arm !== {_lit(ARM_XS)} && (_manifest.test_targets ?? []).length);"
+        f"  const _rowVerifyWanted = !(_gate.arm !== {_lit(ARM_XS)} && !_xsTail && (_manifest.test_targets ?? []).length);"
     )
     b.append("  const _waves = [...new Set(_manifest.rows.map((r) => r.wave))].sort((a, b) => a - b);")
     b.append("  if (_manifest.fanout) log('Fanout: ' + JSON.stringify(_manifest.fanout));")
@@ -2817,20 +2822,20 @@ def compose_ask_script(
     b.append("  const _reviewOuterAgent = agent;")
     b.append(f"  {{ const agent = (p, o) => _reviewOuterAgent({_DESIGN_PREFIX_JS} + p, o);")
     b.append(
-        f"  if (!_halted && _gate.arm !== {_lit(ARM_XS)} && !_noReviewPaths) {{\n" + review_text + "\n  }"
+        f"  if (!_halted && _gate.arm !== {_lit(ARM_XS)} && !_xsTail && !_noReviewPaths) {{\n" + review_text + "\n  }"
     )
     b.append("  }")
     # XS skips review; an empty wave (zero slices, no delivery verdict) is the form terminal_commit's
     # inline_review already accepts, so the run still reaches commit without a fabricated verdict.
-    b.append(f"  if (!_halted && _gate.arm === {_lit(ARM_XS)}) {{ _reviewWave = []; }}")
+    b.append(f"  if (!_halted && (_gate.arm === {_lit(ARM_XS)} || _xsTail)) {{ _reviewWave = []; }}")
     b.append(
-        "  if (!_halted && _noReviewPaths && _gate.arm !== "
+        "  if (!_halted && _noReviewPaths && !_xsTail && _gate.arm !== "
         f"{_lit(ARM_XS)}) {{ log('execute_review skipped: no row declares a path, nothing to review'); "
         "_reviewWave = []; }"
     )
     b.append(_review_blocked_halt_js(sizing_rel))
     test_guard = (
-        f"(_gate.arm !== {_lit(ARM_XS)} || _reviewApplied > 0) && (_manifest.test_targets ?? []).length"
+        f"((_gate.arm !== {_lit(ARM_XS)} && !_xsTail) || _reviewApplied > 0) && (_manifest.test_targets ?? []).length"
     )
     review_applied = (
         "const _reviewApplied = (Array.isArray(_reviewWave) ? _reviewWave : [])"

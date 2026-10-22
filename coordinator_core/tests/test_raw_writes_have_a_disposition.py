@@ -609,7 +609,6 @@ _DISPOSITIONS: Dict[str, Tuple[str, str]] = {
     'coordinator_core/ops/write_identity_file.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: <module-level>'),
     'coordinator_core/ops/write_workday_start_marker.py': ('claims-explicitly', "claim token in write_marker [static-only: flagged by census row 2, not exercised in C2's one run — gap stays visible, per C3 body]"),
     'coordinator_core/orientation/expired_grant_signal.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: _write_index_atomically -- target is .coordinator-local/cache/queue-grants-index.json, a best-effort orientation cache, not state/'),
-    'coordinator_core/roadmap/census_store.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: CensusStore._write -- target is the .coordinator-local/cache/census-store/ shard directory (root.marshal, p-<pattern>.marshal), derived census cache, not state/'),
     'coordinator_core/roadmap/probe_store.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: ProbeStore.save, _save_graph -- targets are .coordinator-local/cache/probe-store.json and probe-import-graph.json, derived caches, not state/'),
     'coordinator_core/orientation/regenerate_cache.py': ('outside-repo', 'raw-write site(s) near tempdir/home/settings-home construct: _atomic_replace'),
     'coordinator_core/p4/register.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: _author_gitignore, _ensure_p4ignore, _pin_gitattributes, _upsert_local_md_keys'),

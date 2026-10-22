@@ -111,12 +111,7 @@
     "plan.mise_certify_probe": {
       "target_ms": 250,
       "tolerance": {"kind": "relative", "value": 0.2},
-      "_rationale": "One plan per call, the unit mise-certify's client loop issues. Same target register as plan.mise_prep_probe: one plan read, read_stamp over the same bytes, and (on CERTIFIED only) the census revalidation, whose shell children are separate processes and not in process_ms. No spawn_count_budget row: the op starts no process of its own."
-    },
-    "plan.census_set": {
-      "target_ms": 500,
-      "tolerance": {"kind": "relative", "value": 0.2},
-      "_rationale": "The DR-344 bar. process_ms is the op thread's process time plus the reaped census children's (children_process_ms), and the call spends a 500ms process budget over the set, leaving the rest pending for the store-resumed next call. The measured figure over the certified plan set is the one the census-over-bar plan's C5 records; no placeholder is carried here. No spawn_count_budget row: the op's own git site is the one HEAD read."
+      "_rationale": "One plan per call, the unit mise-certify's client loop issues. Same target register as plan.mise_prep_probe: one plan read and read_stamp over the same bytes. No spawn_count_budget row: the op starts no process of its own."
     },
     "plan.mise_upgrade_apply": {
       "target_ms": 300,

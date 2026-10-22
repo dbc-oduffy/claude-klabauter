@@ -96,6 +96,10 @@ from coordinator_core.machine_resolver import merged_flat_registry as _merged_fl
 # was itself failing, and caught nothing. Found 2026-09-18 when
 # `example_orchestration_hub_repo` reached a live publish refusal behind
 # that silence. KEEPSET is the narrow, named fix; not a pattern loosen.
+# 'general_work' kept: `repos.general_work` registers the coordinator's
+# general-work folder, a published product config key (`coordinator.general_work_home`)
+# and dirname (`general-work`) read by `group_em/gem_home.py`'s legacy fallback --
+# a product term, not a private repo codename.
 KEEPSET: Sequence[str] = (
     "project_rag",
     "deep_research",
@@ -108,6 +112,7 @@ KEEPSET: Sequence[str] = (
     "example_doctrine_repo",
     "fleet_root",
     "claude_klabauter",
+    "general_work",
 )
 
 _EXCLUDE_DIRS = {".git"}

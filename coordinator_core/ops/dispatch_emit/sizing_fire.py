@@ -6,6 +6,7 @@ writes, spawns, or reroutes: a sizing whose route disagrees with its arm is refu
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import replace
 from pathlib import Path, PurePosixPath
@@ -17,6 +18,8 @@ from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.ops.dispatch_emit.ask_contract import (
     ALL_LANDED_HALT_KIND,
     LEDGER_HALT_KIND,
+    RECORD_DIR_ROOT,
+    SPINE_SUFFIX,
     LedgerHalt,
     ResumePlan,
     ledger_halt_path,
@@ -232,11 +235,13 @@ def resumable_plan(
     )
 
     edge = sizing.get("plan")
+    root = Path(repo_root)
     plan_rel = edge if isinstance(edge, str) and edge.strip() else (s_plan_path(sizing_rel) if arm == ARM_S else None)
+    if plan_rel is None and arm == ARM_XS:
+        plan_rel = _xs_halt_spine(root, sizing_rel)
     if plan_rel is None:
         return None
-    root = Path(repo_root)
-    plan = contained_path(root / plan_rel, [root / "docs" / "plans"])
+    plan = contained_path(root / plan_rel, [root / "docs" / "plans", root / RECORD_DIR_ROOT])
     if plan is None or not plan.is_file():
         return None
     plan_text = plan.read_text(encoding="utf-8")
@@ -286,6 +291,65 @@ def resumable_plan(
             [f"{plan_rel} already ran: every row is landed and nothing is left to judge; residue is a new sizing naming it"]
         )
     return ResumePlan(plan_rel, tuple(open_ids), landed_open=landed_open)
+
+
+def _xs_halt_spine(root: Path, sizing_rel: str) -> str | None:
+    """The record spine named by the newest `ledger-check` halt marker of a run bound to
+    `sizing_rel`, else None. Reads `halted.json` only from `ask-`/`warp-` run dirs stamped on or
+    after the sizing's date; no spawn. The spine must sit directly in a `RECORD_DIR_ROOT/<run>` dir."""
+    import os
+
+    from coordinator_core.ops.dispatch_emit.halted_run import _DATE_PREFIX, _STAMP
+
+    sizing = PurePosixPath(str(sizing_rel).replace("\\", "/")).as_posix()
+    stem = PurePosixPath(sizing).stem
+    dated = _DATE_PREFIX.match(stem)
+    if dated is None:
+        return None
+    floor = "".join(dated.groups())
+    prefix = f"warp-{stem}-"
+    base = root / RECORD_DIR_ROOT
+    candidates: list[tuple[str, str]] = []
+    try:
+        with os.scandir(base) as it:
+            for entry in it:
+                name = entry.name
+                if name.startswith("ask-"):
+                    stamp = name[4:]
+                    if not (_STAMP.fullmatch(stamp) and stamp[:8] >= floor):
+                        continue
+                elif name.startswith(prefix):
+                    stamp = name[len(prefix):]
+                    if not _STAMP.fullmatch(stamp):
+                        continue
+                else:
+                    continue
+                candidates.append((stamp, name))
+    except OSError:
+        return None
+    for _, name in sorted(candidates, reverse=True):
+        try:
+            halted = json.loads((base / name / "halted.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(halted, dict) or halted.get("halted") != "ledger-check":
+            continue
+        rel = halted.get("sizing_rel")
+        if not isinstance(rel, str) or PurePosixPath(rel.replace("\\", "/")).as_posix() != sizing:
+            continue
+        plan = halted.get("plan")
+        if not isinstance(plan, str):
+            return None
+        parts = PurePosixPath(plan.replace("\\", "/")).parts
+        if (
+            len(parts) == len(PurePosixPath(RECORD_DIR_ROOT).parts) + 2
+            and "/".join(parts[:-2]) == RECORD_DIR_ROOT
+            and parts[-2] == name
+            and parts[-1].endswith(SPINE_SUFFIX)
+        ):
+            return "/".join(parts)
+        return None
+    return None
 
 
 _FULL_SHA = re.compile(r"[0-9a-f]{40}")

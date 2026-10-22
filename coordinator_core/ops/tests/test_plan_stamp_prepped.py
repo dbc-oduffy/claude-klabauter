@@ -43,6 +43,7 @@ def _repo(tmp_path: Path) -> Path:
 
 
 _FM = """census: []
+capabilities: []
 prime_exit_criterion:
   statement: the four fields land and validate
   derived_from: state/sizings/2026-09-07-fixture.yaml

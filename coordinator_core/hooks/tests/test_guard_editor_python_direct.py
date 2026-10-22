@@ -56,7 +56,8 @@ def _ctx(out):
 def test_em_tool_call_advises_preferred_agent(tmp_path):
     _repo(tmp_path, _editor(tool_names=[UE_TOOL]))
     out = g.evaluate(_payload(tmp_path, UE_TOOL))
-    assert "example-game-repo-control:ue-python" in _ctx(out)
+    assert "editor_python.preferred_agent_type" in _ctx(out)
+    assert "example-game-repo" not in _ctx(out)
     assert out["hookSpecificOutput"]["permissionDecision"] == "allow"
 
 
@@ -68,7 +69,7 @@ def test_subagent_call_is_untouched(tmp_path):
 def test_bash_pattern_match_advises(tmp_path):
     _repo(tmp_path, _editor(bash_patterns=["-run=pythonscript"]))
     p = _payload(tmp_path, "Bash", tool_input={"command": UE_CMD})
-    assert "example-game-repo-control:ue-python" in _ctx(g.evaluate(p))
+    assert "editor_python.preferred_agent_type" in _ctx(g.evaluate(p))
 
 
 ANCHORED = r"^\S*UnrealEditor(-Cmd)?(\.exe)?\s.*-run=pythonscript"
@@ -91,7 +92,7 @@ def _bash(tmp_path, command, level="warn", pattern=ANCHORED):
 )
 def test_bash_launch_advises(tmp_path, command):
     out = _bash(tmp_path, command)
-    assert "example-game-repo-control:ue-python" in _ctx(out)
+    assert "editor_python.preferred_agent_type" in _ctx(out)
 
 
 @pytest.mark.parametrize(
@@ -114,7 +115,7 @@ def test_unanchored_pattern_still_skips_comment_and_heredoc(tmp_path, command):
 def test_bash_leg_at_strict_is_advisory_never_deny(tmp_path):
     out = _bash(tmp_path, UE_CMD, level="strict")
     assert out["hookSpecificOutput"]["permissionDecision"] == "allow"
-    assert "example-game-repo-control:ue-python" in _ctx(out)
+    assert "editor_python.preferred_agent_type" in _ctx(out)
 
 
 def test_unresolved_command_is_skipped(tmp_path):
@@ -139,7 +140,7 @@ def test_strict_denies(tmp_path, monkeypatch):
     _repo(tmp_path, _editor("strict", tool_names=[UE_TOOL]))
     out = g.evaluate(_payload(tmp_path, UE_TOOL))
     assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
-    assert "example-game-repo-control:ue-python" in json.dumps(out)
+    assert "editor_python.preferred_agent_type" in json.dumps(out)
 
 
 def test_no_table_is_untouched(tmp_path):

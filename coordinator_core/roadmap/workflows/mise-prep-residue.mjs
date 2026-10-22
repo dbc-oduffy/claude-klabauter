@@ -8,7 +8,7 @@
 export const meta = {
   name: 'mise-prep-residue',
   description: 'Residue authoring for mise-prep: one coordinator:plan-author-residue agent per batch of plans, then one APM agent over leftover census rows and seam-fix cycles.',
-  phases: ['Residue', 'APM'],
+  phases: ['Residue', 'APM', 'Persist'],
 };
 
 const RESIDUE_CHARTER = [
@@ -22,8 +22,8 @@ const RESIDUE_CHARTER = [
 
 const APM_CHARTER = [
   'You are the APM. Rule on each item below: an unscreenable census entry no read-only rewrite can carry, or a seam-fix cycle that could not be ordered.',
-  'Write the ruling to the plan as `pm_ruling:` in its frontmatter, as you do today. Set `pmOnly` true only for an item that is important, urgent and has no clear right answer, which only the PM can decide.',
-  'You do not stage or commit anything.',
+  'Set `item` to the given item `id` verbatim. Set `pmOnly` true only for an item that is important, urgent and has no clear right answer, which only the PM can decide.',
+  'You rule only; a later stage records each ruling on its plan. You do not stage or commit anything.',
 ].join('\n');
 
 function planBlock(p) {
@@ -92,6 +92,7 @@ for (const res of batchResults) {
     for (const c of (p.leftoverCensus || [])) {
       returnedLeftovers.push({
         kind: 'census-leftover',
+        id: 'census[' + c.index + ']',
         plan: p.plan,
         index: c.index,
         question: c.reason,
@@ -140,8 +141,64 @@ if (apmItems.length > 0) {
   rulings = (apmResult && apmResult.rulings) || [];
 }
 
+const itemIds = new Set(apmItems.map((i) => i.id));
+const unmatched = rulings.filter((r) => !itemIds.has(r.item));
+rulings = rulings.filter((r) => itemIds.has(r.item));
+
+let persisted = [];
+if (rulings.length > 0) {
+  await phase('Persist');
+  // The op reads `id`/`item_kind`/`subjectSha`/`cycle_plans`; the APM returns only `item`.
+  const byId = new Map(apmItems.map((i) => [i.id, i]));
+  const opRulings = rulings.map((r) => {
+    const it = byId.get(r.item);
+    return {
+      id: r.item,
+      item_kind: it.kind,
+      plan: it.kind === 'census-leftover' ? it.plan : r.plan,
+      ruling: r.ruling,
+      pmOnly: r.pmOnly,
+      subjectSha: it.subjectSha || '',
+      cycle_plans: it.plans || [],
+    };
+  });
+  const payloadPath = args.repoRoot + '/scratch/mise-rulings-' + args.runId + '.json';
+  const receipt = await agent(
+    'Repo root: ' + args.repoRoot + ' -- `cd` there first.\n'
+    + 'Step 1: with your Write tool (no shell heredoc), write this exact JSON to `' + payloadPath + '`:\n'
+    + JSON.stringify({ run_id: args.runId, rulings: opRulings }, null, 2) + '\n'
+    + 'Step 2: run this command, appending the path from step 1 as its last argument, and nothing else:\n'
+    + args.rulingsCommand + ' ' + payloadPath + '\n'
+    + 'Return the command\'s JSON reply verbatim as `applied` and `refused`. You run nothing else and do not stage or commit anything.',
+    {
+      label: 'persist-rulings',
+      phase: 'Persist',
+      agentType: args.residue.agentType,
+      model: args.residue.model,
+      schema: {
+        type: 'object',
+        properties: {
+          applied: { type: 'array' },
+          refused: { type: 'array' },
+        },
+        required: ['applied', 'refused'],
+      },
+    },
+  );
+  // The op's `applied` rows are `{plan, id}`.
+  persisted = ((receipt && receipt.applied) || []).map((a) => (typeof a === 'string' ? a : a && a.id));
+  const ruled = rulings.map((r) => r.item);
+  const missing = ruled.filter((id) => !persisted.includes(id));
+  const extra = persisted.filter((id) => !ruled.includes(id));
+  if (missing.length > 0 || extra.length > 0) {
+    throw new Error('mise-prep-residue: rulings not persisted; missing ids: [' + missing.join(', ') + ']; unexpected ids: [' + extra.join(', ') + ']');
+  }
+}
+
 return {
   batches: batchResults,
   rulings,
+  persisted,
+  unmatched,
   pmOnly: rulings.filter((r) => r.pmOnly),
 };

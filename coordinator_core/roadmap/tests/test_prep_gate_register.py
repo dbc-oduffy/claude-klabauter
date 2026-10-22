@@ -46,6 +46,7 @@ def _plan(root: Path, claims: str, sizing_object: str = "") -> Path:
         "created: 2026-10-09",
         "author: fixture-session",
         "census: []",
+        "capabilities: []",
         "prime_exit_criterion:",
         "  statement: the register resolves",
         f"  derived_from: {_SIZING_REL}",

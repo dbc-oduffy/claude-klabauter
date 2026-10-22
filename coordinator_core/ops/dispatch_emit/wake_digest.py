@@ -604,7 +604,8 @@ def completion_return_js(
 
     seam_drift_expr = (
         f"(Object.keys({COMMIT_REFUSED_VAR}).length ? 'wave commit failed, dependents held (the terminal commit lands the wave): ' "
-        f"+ Object.values({COMMIT_REFUSED_VAR}).join('; ') : "
+        f"+ Object.values({COMMIT_REFUSED_VAR}).join('; ') "
+        f"+ ({SEAM_DRIFT_VAR}.length ? '; seam drift also recorded: ' + {SEAM_DRIFT_VAR}.length + ' finding(s)' : '') : "
         f"({SEAM_DRIFT_VAR}.length ? (() => {{ const g = new Map(); {SEAM_DRIFT_VAR}.forEach(d => {{ "
         "const k = [d.wave, d.class || '', d.failed || '', d.plans.join(',')].join('|'); "
         "const e = g.get(k); if (e) e.n++; else g.set(k, { d, n: 1 }); }); "

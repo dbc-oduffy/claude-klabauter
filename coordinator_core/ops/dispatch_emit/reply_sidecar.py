@@ -17,9 +17,10 @@ from typing import Mapping
 
 from coordinator_core.ops import _path_guard
 from coordinator_core.ops.dispatch_emit import grind_commit_contract as _contract
+from coordinator_core.session import record_homes
 
 HANDLE_KEYS = ("path", "sha256", "bytes")
-SIDECAR_ROOTS = ("state/warp", "scratch")
+SIDECAR_ROOTS = (Path(record_homes.home_dir("", "warp")).as_posix(), "scratch")
 
 SIDECAR_CAUSE = "the sidecar changed after the engine wrote it"
 _FLAG = "reply-sidecar"

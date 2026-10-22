@@ -250,6 +250,19 @@ def _ledger_halt_plan_and_blocking(repo_root: Path, halted: dict) -> tuple:
     return plan_rel, tuple(i["id"] for i in items), items
 
 
+def _xs_spine_halt(worktree_root: Path, record_dir_rel: str, halted: dict) -> tuple:
+    """A plan-less ledger-check halt's (spine_rel, blocking ids, blocking items), the spine being
+    the single ``*.spine.md`` in the run's record dir; (None, (), []) when it holds none or several."""
+    from coordinator_core.ops.dispatch_emit.ask_contract import SPINE_SUFFIX
+
+    spines = sorted((worktree_root / record_dir_rel).glob(f"*{SPINE_SUFFIX}"))
+    if len(spines) != 1:
+        return None, (), []
+    raw = halted.get("items")
+    items = _blocking_items(raw if isinstance(raw, list) else [])
+    return f"{record_dir_rel}/{spines[0].name}", tuple(i["id"] for i in items), items
+
+
 def _persist_run_outcome(repo_root: Path, run_id: str, halted: dict, params: dict) -> Optional[str]:
     """Write the run's review outcome into its record dir for an all-landed commit halt (a dict
     ``params.run_outcome`` with a dict ``inline_review`` and no incomplete chunk); returns its
@@ -422,6 +435,10 @@ def _land(
             _ledger_halt_plan_and_blocking(repo_root, halted)
             if halted["halted"] == "ledger-check" else (None, (), [])
         )
+        if halted["halted"] == "ledger-check" and plan_rel is None:
+            plan_rel, blocking, blocking_items = _xs_spine_halt(
+                worktree_root, record_dir_rel, halted
+            )
         write_halt_marker(
             worktree_root / record_dir_rel,
             halted=halted["halted"],

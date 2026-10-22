@@ -318,6 +318,30 @@ def test_archive_week_only_annotated_header_without_week_starting(tmp_path: Path
     assert "(not yet set" in (wc / "HEADER.md").read_text(encoding="utf-8")
 
 
+def test_archive_refuses_generated_mirror_repo_before_moving(tmp_path: Path, monkeypatch, capsys) -> None:
+    wc = _annotated_header_repo(tmp_path, "2026-09-28")
+    (tmp_path / ".generated-mirror").write_text("", encoding="utf-8")
+    monkeypatch.setattr(_mod, "_resolve_session_id_for_relocate", lambda: "")
+
+    rc = _mod.main(_archive_argv(tmp_path))
+
+    assert rc != 0
+    assert "REFUSED: generated-mirror" in capsys.readouterr().err
+    assert (wc / "2026-09-29-host.md").exists()
+    assert not (tmp_path / "archive").exists()
+
+
+def test_archive_without_generated_mirror_marker_proceeds(tmp_path: Path, monkeypatch, capsys) -> None:
+    _annotated_header_repo(tmp_path, "2026-09-28")
+    monkeypatch.setattr(_mod, "_resolve_session_id_for_relocate", lambda: "")
+
+    rc = _mod.main(_archive_argv(tmp_path))
+
+    assert rc == 0
+    assert "REFUSED" not in capsys.readouterr().err
+    assert (tmp_path / "archive" / "week-changelogs" / "2026-09-28" / "2026-09-29-host.md").exists()
+
+
 def test_archive_sentinel_header_without_week_starting_moves_nothing(tmp_path: Path, monkeypatch, capsys) -> None:
     wc = _annotated_header_repo(tmp_path, "(not yet set — run /workweek-start to initialise)")
     monkeypatch.setattr(_mod, "_resolve_session_id_for_relocate", lambda: "")

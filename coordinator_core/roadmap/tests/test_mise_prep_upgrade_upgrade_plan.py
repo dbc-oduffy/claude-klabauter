@@ -29,6 +29,7 @@ _BROKEN = "---\ntitle: [unclosed\n---\n\n# broken\n"
 
 _RESIDUE_LINES = (
     "    AUTHOR: prime_exit_criterion.statement: a falsifiable outcome sentence — authorship\n"
+    "    AUTHOR: capabilities: no `yaml plan-tasks` block — no spine to read ui_consumer rows from\n"
     "    AUTHOR: spine: no `yaml plan-tasks` block — inventing rows would invent scope\n"
 )
 _B_BLOCK = (

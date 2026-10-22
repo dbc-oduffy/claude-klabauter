@@ -33,6 +33,7 @@ module's own docstring "Memoization" section).
 from __future__ import annotations
 
 import ast
+import functools
 import json
 import os
 import re
@@ -784,6 +785,11 @@ class TestBareShowToplevelInventory(unittest.TestCase):
 
     @classmethod
     def _bare_callers(cls) -> set:
+        return set(cls._bare_callers_cached())
+
+    @classmethod
+    @functools.lru_cache(maxsize=None)
+    def _bare_callers_cached(cls) -> frozenset:
         found = set()
         for path in Path(_BIN_DIR).glob("*.py"):
             try:
@@ -792,7 +798,7 @@ class TestBareShowToplevelInventory(unittest.TestCase):
                 continue
             if any(cls._is_bare_show_toplevel(n) for n in ast.walk(tree)):
                 found.add(path.name)
-        return found
+        return frozenset(found)
 
     def test_verdict_tables_are_disjoint_and_name_real_files(self):
         tables = [

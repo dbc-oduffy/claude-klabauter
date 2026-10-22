@@ -180,7 +180,6 @@ def _fake_engine(tmp_path: Path, monkeypatch) -> Path:
         "coordinator_core/outside.py": "y = 2\n",
         "coordinator_core/frontmatter/schemas/plan.schema.json": "{}",
         "coordinator/bin/mise-prep-upgrade.py": "import json\n",
-        "coordinator/bin/mise-census-revalidate.py": "import json\n",
     }
     for rel, text in files.items():
         path = eng / rel

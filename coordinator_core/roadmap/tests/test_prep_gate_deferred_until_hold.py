@@ -12,6 +12,7 @@ from pathlib import Path
 from coordinator_core.roadmap import prep_gate as pg
 
 _FM = """census: []
+capabilities: []
 prime_exit_criterion:
   statement: the hold certifies withheld
   derived_from: state/sizings/2026-09-07-fixture.yaml

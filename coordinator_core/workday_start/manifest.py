@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from coordinator_core.contract.decision_object.reader_result import build_directive
+from coordinator_core.session import record_homes
 from coordinator_core.workday_start import contract
 
 STEP_COSTS_PATH = Path(__file__).resolve().parent / "step_costs.json"
@@ -77,7 +78,7 @@ def _is_synthesized(path: Path) -> bool:
 
 def _concluded_days(root: Path) -> set[str]:
     """Days with BOTH a curated week-changelog block (live or archived) and a daily summary."""
-    changelog = _day_prefixes(root / "state" / "week-changelog")
+    changelog = _day_prefixes(Path(record_homes.home_dir(str(root), "week-changelog")))
     archive = root / "archive" / "week-changelogs"
     try:
         weeks = [archive / n for n in os.listdir(archive)]

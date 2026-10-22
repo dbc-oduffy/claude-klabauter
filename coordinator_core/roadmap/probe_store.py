@@ -7,11 +7,10 @@ code, the repo root, and the stat identity of every external input the verdict
 could have read. A lost, stale or torn store costs a probe on the next run and
 never a wrong verdict.
 
-Racy-clean rule (git's, as `census_store.CensusStore.ident` applies it): a stored
-identity is trusted only when its (size, mtime_ns, ino) equal the file's stat AND
-the stored mtime_ns is strictly older than the moment the identity was computed.
-`census_store` exposes the rule inside a method, not as a helper, so
-`_identity_matches` restates its comparison over the same tuple. Records here take
+Racy-clean rule (git's): a stored identity is trusted only when its
+(size, mtime_ns, ino) equal the file's stat AND the stored mtime_ns is strictly
+older than the moment the identity was computed. `_identity_matches` applies the
+comparison over that tuple. Records here take
 their computed-at moment from `ProbeStore` construction, which precedes every stat
 the caller makes, so a file touched during the run is never trusted.
 
@@ -67,7 +66,7 @@ GLOBAL_INPUTS = (
 )
 
 _PLAN_SCHEMA_REL = "coordinator_core/frontmatter/schemas/plan.schema.json"
-_BIN_SCRIPTS = ("mise-prep-upgrade.py", "mise-census-revalidate.py")
+_BIN_SCRIPTS = ("mise-prep-upgrade.py",)
 _IMPORTED_AT_NS = time.time_ns()
 _PATH_LEAF_RE = re.compile(r"^[^\s\"'`<>|]{1,240}$")
 _GLOB_CHARS = "*?["

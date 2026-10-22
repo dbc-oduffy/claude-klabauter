@@ -436,6 +436,9 @@ def test_step1_longpaths_git_config_call_is_hardened(monkeypatch):
 # for real and never reports "all prereqs satisfied" without having probed.
 # ---------------------------------------------------------------------------
 
+# Runs the real prereq probes (a PowerShell spawn, ~6s); the dry-run report path is covered
+# fast by test_dry_run_always_reports_probe_results.
+@pytest.mark.cadence
 def test_fresh_install_shape_dry_run_completes_without_traceback():
     out = io.StringIO()
     rc = ne.main(["--dry-run"], out=out, in_stream=io.StringIO(""))

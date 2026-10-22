@@ -124,13 +124,18 @@ _BATCH = threading.local()
 #: table, which `_build_pack` does not write -- such a batch goes loose.
 _PACK_OFFSET_LIMIT = 0x7FFFFFFF
 
+#: A flushed batch of at most this many objects is written loose; a larger one
+#: is packed. Verdict of docs/research/2026-10-22-store-hygiene-spike.md.
+_LOOSE_BATCH_MAX = 8
+
 
 @contextmanager
 def object_batch():
-    """Queue every `write_object` on this thread for one gitdir and write them as
-    ONE pack at `flush_object_batch`, not one loose file each: a loose write
-    is an `os.replace`, and on Windows that rename is ~24ms of filesystem
-    latency per object. Leaving without a flush discards the queue -- nothing
+    """Queue every `write_object` on this thread for one gitdir and defer the
+    writes to `flush_object_batch`: a set over `_LOOSE_BATCH_MAX` goes out as
+    ONE pack, a smaller one loose, so commits do not mint a pack each. The
+    threshold exists because a loose write is an `os.replace`, ~24ms of
+    filesystem latency per object on Windows. Leaving without a flush discards the queue -- nothing
     a ref points at can be in it, since a ref only moves after the flush.
     Nested use joins the outer batch."""
     if getattr(_BATCH, "state", None) is not None:
@@ -144,9 +149,9 @@ def object_batch():
 
 
 def flush_object_batch() -> None:
-    """Write the queued objects as one pack and end the batch; later writes go
-    loose. Call before anything outside this process (a git spawn, a ref)
-    must see the objects."""
+    """Write the queued objects (loose when at most `_LOOSE_BATCH_MAX`, else as
+    one pack) and end the batch; later writes go loose. Call before anything
+    outside this process (a git spawn, a ref) must see the objects."""
     state = getattr(_BATCH, "state", None)
     if state is None:
         return
@@ -154,7 +159,10 @@ def flush_object_batch() -> None:
     gitdir, pending = state
     if not pending:
         return
-    if sum(len(p) for _, p in pending.values()) >= _PACK_OFFSET_LIMIT:
+    if (
+        len(pending) <= _LOOSE_BATCH_MAX
+        or sum(len(p) for _, p in pending.values()) >= _PACK_OFFSET_LIMIT
+    ):
         for kind, payload in pending.values():
             write_object(gitdir, kind, payload)
         return

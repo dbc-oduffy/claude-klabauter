@@ -19,10 +19,10 @@ _LANDED_PREFIX = "  if (!_manifest.error && !(_manifest.rows ?? []).length && Ar
 _HALT_PREFIX = "  else if (!_parked && (_manifest.error || (!(_manifest.rows ?? []).length && !_allLanded && !_resumeLedger))) {"
 
 _HARNESS = """
-let _halted = null, _allLanded = false, _resumeLedger = false, _parked = null, _planRel = 'p.md', _sizingRel = 's.yaml', _runId = 'r';
+let _halted = null, _allLanded = false, _xsTail = false, _resumeLedger = false, _parked = null, _planRel = 'p.md', _sizingRel = 's.yaml', _runId = 'r';
 let _gate = %s, _manifest = %s;
 %s
-console.log(JSON.stringify({ halted: _halted, allLanded: _allLanded, arm: _gate.arm }));
+console.log(JSON.stringify({ halted: _halted, allLanded: _allLanded, arm: _gate.arm, xsTail: _xsTail }));
 """
 
 
@@ -49,7 +49,7 @@ def test_the_refusal_halt_for_an_all_landed_resume_is_gone():
 
 def test_the_landed_resume_takes_the_xs_tail_so_the_review_wave_is_skipped():
     landed = _lines(_compose())[0]
-    assert "_allLanded = true; _gate = { ..._gate, arm: 'xs' }" in landed
+    assert "_allLanded = true; _xsTail = true;" in landed
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node absent")
@@ -58,7 +58,7 @@ def test_resume_with_only_gated_rows_does_not_halt_and_takes_the_xs_tail():
     script = _compose()
     manifest = {"rows": [], "gated": [{"id": "WC1"}], "owed": []}
     got = _drive(script, {"arm": "s", "resume_plan": "p.md", "resume_rows": ["C1"]}, manifest)
-    assert got == {"halted": None, "allLanded": True, "arm": "xs"}
+    assert got == {"halted": None, "allLanded": True, "arm": "s", "xsTail": True}
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node absent")

@@ -203,6 +203,94 @@ def _first_parent_ancestors(
     return out
 
 
+class _Node:
+    """One directory prefix of the candidate paths; `prev` is the subtree sha last seen."""
+
+    __slots__ = ("files", "dirs", "prev")
+
+    def __init__(self) -> None:
+        self.files: Dict[str, str] = {}
+        self.dirs: Dict[str, "_Node"] = {}
+        self.prev: object = None
+
+
+def _paths_below(node: _Node) -> List[str]:
+    out = list(node.files.values())
+    for child in node.dirs.values():
+        out.extend(_paths_below(child))
+    return out
+
+
+def _forget_below(node: _Node) -> None:
+    node.prev = None
+    for child in node.dirs.values():
+        _forget_below(child)
+
+
+def _resolve_node(
+    common_dir: Path, node: _Node, tree_sha: Optional[str], cur: Dict[str, object]
+) -> None:
+    """Refresh `cur` for every path under `node`, skipping a subtree whose sha is unchanged.
+
+    `tree_sha` None means the directory is absent at this ancestor. An
+    unreadable tree sets None and leaves `prev` unset so it is never skipped.
+    """
+    marker: object = tree_sha if tree_sha is not None else _NO_VERSION
+    if node.prev is not None and node.prev == marker:
+        return
+    if tree_sha is None:
+        _forget_below(node)
+        node.prev = marker
+        for p in _paths_below(node):
+            cur[p] = ABSENT
+        return
+    entries = _tree_entries(common_dir, tree_sha)
+    if entries is None:
+        _forget_below(node)
+        for p in _paths_below(node):
+            cur[p] = None
+        return
+    node.prev = marker
+    for name, path in node.files.items():
+        entry = entries.get(name)
+        cur[path] = ABSENT if entry is None else entry[1]
+    for name, child in node.dirs.items():
+        entry = entries.get(name)
+        child_sha = entry[1] if entry is not None and entry[0] == _TREE_MODE else None
+        _resolve_node(common_dir, child, child_sha, cur)
+
+
+def _values_along(
+    common_dir: Path, ancestors: List[Tuple[int, str]], paths: List[str]
+) -> "Dict[str, List[Tuple[str, object]]]":
+    """Each path's `_blob_at_commit` value at every ancestor, in one pass.
+
+    A directory whose tree sha equals the previous ancestor's is not re-read;
+    every path below it keeps its previous value.
+    """
+    root = _Node()
+    for path in paths:
+        parts = path.split("/")
+        node = root
+        for part in parts[:-1]:
+            node = node.dirs.setdefault(part, _Node())
+        node.files[parts[-1]] = path
+    out: "Dict[str, List[Tuple[str, object]]]" = {p: [] for p in paths}
+    cur: Dict[str, object] = {}
+    for _step, sha in ancestors:
+        meta = commit_meta(common_dir, sha)
+        tree = meta.get("tree") if meta is not None else None
+        if not tree:
+            for p in paths:
+                cur[p] = None
+            _forget_below(root)
+        else:
+            _resolve_node(common_dir, root, tree, cur)
+        for p in paths:
+            out[p].append((sha, cur[p]))
+    return out
+
+
 def find_exact_blob_rollbacks(
     common_dir: Union[str, Path],
     head_sha: str,
@@ -214,6 +302,7 @@ def find_exact_blob_rollbacks(
         return []
     ancestors = _first_parent_ancestors(common_dir, head_sha, window)
     findings: List[RollbackFinding] = []
+    along = _values_along(common_dir, ancestors, list(candidates))
     for path, new_value in candidates.items():
         # Depth counts VERSIONS of the path, not commits: a commit that did
         # not touch `path` adds no version. V(1) is head's own value -- equal
@@ -221,8 +310,7 @@ def find_exact_blob_rollbacks(
         # unchanged claimed path a depth-1 hit, and three tripped breadth-3).
         version = 0
         previous: object = _NO_VERSION
-        for _step, sha in ancestors:
-            old_value = _blob_at_commit(common_dir, sha, path)
+        for sha, old_value in along[path]:
             if old_value is None or old_value == previous:
                 continue
             version += 1

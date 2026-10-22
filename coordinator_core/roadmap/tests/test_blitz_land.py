@@ -84,6 +84,7 @@ def _baton(root: Path, stub_id: str, **fields) -> str:
 
 
 def _plan(root: Path, slug: str, status: str, **fields) -> str:
+    fields = {"capabilities": "[]", **fields}
     lines = [f"title: {slug}", f"status: {status}"] + [f"{k}: {v}" for k, v in fields.items()]
     p = root / "docs" / "plans" / f"{slug}.md"
     p.parent.mkdir(parents=True, exist_ok=True)
@@ -166,7 +167,7 @@ def test_supersedes_naming_itself_is_not_self_superseded(tmp_path):
     plan.parent.mkdir(parents=True, exist_ok=True)
     rel = "docs/plans/self-plan.md"
     plan.write_text(
-        f"---\ntitle: self-plan\nstatus: draft\nsupersedes: {rel}\n---\n\nbody\n",
+        f"---\ntitle: self-plan\nstatus: draft\ncapabilities: []\nsupersedes: {rel}\n---\n\nbody\n",
         encoding="utf-8",
     )
 
@@ -1489,7 +1490,7 @@ def _spined_plan(root: Path, slug: str, body_line: str) -> str:
     p = root / "docs" / "plans" / f"{slug}.md"
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(
-        f"---\ntitle: {slug}\nstatus: draft\n---\n\n## Tasks\n\n```yaml plan-tasks\n{spine}```\n",
+        f"---\ntitle: {slug}\nstatus: draft\ncapabilities: []\n---\n\n## Tasks\n\n```yaml plan-tasks\n{spine}```\n",
         encoding="utf-8",
     )
     return f"docs/plans/{slug}.md"

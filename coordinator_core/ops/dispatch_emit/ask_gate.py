@@ -32,7 +32,10 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     LEG_REFUSE,
     RESEARCH_HANDBACK_ROUTE,
     RESEARCH_MIXED_REFUSAL,
+    LEDGER_DERIVED_ROW_PREFIX,
+    RESUME_LEDGER_ARM_FIELD,
     RESUME_LEDGER_CARRIED_MET_FIELD,
+    RESUME_LEDGER_DERIVED_FIELD,
     RESUME_LEDGER_EM_DISCHARGED_FIELD,
     RESUME_LEDGER_HALT_SHA_FIELD,
     RESUME_LEDGER_KIND_FIELD,
@@ -62,7 +65,7 @@ from coordinator_core.ops.dispatch_emit.ask_stage import (
     stage,
     stamp_plan_executing,
 )
-from coordinator_core.ops.dispatch_emit import reply_sidecar
+from coordinator_core.ops.dispatch_emit import ask_stage_receipt, reply_sidecar
 from coordinator_core.ops.dispatch_emit.request_validation import Field, validate_params
 from coordinator_core.ops.dispatch_emit.sizing_fire import (
     ARM_S,
@@ -643,12 +646,17 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         if verdict.resume_ledger is not None:
             unlanded = list(verdict.resume_ledger.get(RESUME_LEDGER_UNLANDED_FIELD) or [])
             plan_rel, ledger_resume, only_rows = verdict.resume_ledger["plan"], True, unlanded
+            out["resume_ledger"][RESUME_LEDGER_ARM_FIELD] = verdict.arm
         elif verdict.arm == ARM_S and verdict.resume_plan and verdict.resume_rows is not None:
             # An empty resume_rows stages no rows (all landed); None would re-stage every row.
             plan_rel, ledger_resume, only_rows = verdict.resume_plan, False, list(verdict.resume_rows)
         else:
             return out
         try:
+            if ledger_resume and verdict.arm in (ARM_XS, ARM_S):
+                derived = _derive_resume_rows(root, plan_rel, out["resume_ledger"])
+                out["resume_ledger"][RESUME_LEDGER_DERIVED_FIELD] = derived
+                only_rows = [*only_rows, *(d for d in derived if d not in only_rows)]
             manifest = stage(
                 root,
                 run_id=params["run_id"],
@@ -662,12 +670,21 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             )
             stamp = stamp_plan_executing(root, plan_rel)
             out["manifest_handle"] = reply_sidecar.handle_for(root, record_dir(root, params["run_id"]) / "manifest.json")
+            ask_stage_receipt.write_gate(record_dir(root, params["run_id"]), out["manifest_handle"])
             if stamp["outcome"] != "unchanged":
                 out[PLAN_EXECUTING_STAMP_KEY] = stamp
             if ledger_resume:
-                from coordinator_core.ops.dispatch_emit.ledger_remaining_paths import remaining_leg_plan
+                from coordinator_core.ops.dispatch_emit.ledger_remaining_paths import (
+                    PlanRowsUnreadable,
+                    plan_rows_serving,
+                    remaining_leg_plan,
+                )
 
                 resume_out = out["resume_ledger"]
+                try:
+                    plan_writes = plan_rows_serving(root / plan_rel, resume_out.get("blocking") or [])
+                except PlanRowsUnreadable as exc:
+                    raise AskStageError(str(exc)) from exc
                 resume_out[RESUME_LEDGER_LEG_FIELD] = remaining_leg_plan(
                     resume_out.get(RESUME_LEDGER_REMAINING_FIELD) or {},
                     resume_out.get(RESUME_LEDGER_NOTES_FIELD) or [],
@@ -676,6 +693,8 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                     list(manifest.doc_writes),
                     out.get("sizing_path") or sizing_rel,
                     root,
+                    plan_writes=plan_writes,
+                    arm=verdict.arm,
                 )
                 import json
 
@@ -696,6 +715,80 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                     "action": LEG_REFUSE, "writes": [], "unwritable": [], "reason": str(exc),
                 }
     return out
+
+
+def _derive_resume_rows(root: Path, plan_rel: str, resume_out: dict) -> list[str]:
+    """Ids of the rows serving the resume's open ledger items, appended to the plan's spine.
+
+    One `derive_ledger_rows` row per open item; an item already holding an open derived row from an
+    earlier gate call reuses it. An underivable item raises `AskStageError` naming the item and the
+    remedy. A plan outside `docs/plans` (an XS record spine) is written through the same locked
+    rewrite `plan_tasks_mutate._add_task` applies.
+    """
+    from coordinator_core.frontmatter.body_blocks import LocateStatus
+    from coordinator_core.ops.dispatch_emit import ledger_remaining_paths as lrp
+    from coordinator_core.ops.plan_tasks_render import load_rows
+
+    plan = root / plan_rel
+    blocking = list(resume_out.get("blocking") or [])
+    try:
+        loaded = load_rows(plan.read_text(encoding="utf-8"))
+        if loaded.status is not LocateStatus.LOCATED:
+            raise lrp.PlanRowsUnreadable(f"plan {plan_rel} spine is {loaded.status.name}")
+        spine = [r for r in loaded.rows if isinstance(r, dict)]
+        serving = {b: lrp.plan_rows_serving(plan, [b]) for b in blocking}
+    except (OSError, ValueError, lrp.PlanRowsUnreadable) as exc:
+        raise AskStageError(str(exc)) from exc
+    reuse: dict[str, str] = {}
+    for row in spine:
+        rid, item = str(row.get("id") or ""), (row.get("register_rows") or [None])[0]
+        if rid.startswith(LEDGER_DERIVED_ROW_PREFIX) and item in blocking and row.get("disposition") == "open":
+            reuse.setdefault(str(item), rid)
+    todo = [b for b in blocking if b not in reuse]
+    rows, underivable = lrp.derive_ledger_rows(
+        resume_out.get(RESUME_LEDGER_REMAINING_FIELD) or {},
+        resume_out.get(RESUME_LEDGER_NOTES_FIELD) or [],
+        todo,
+        serving,
+        [str(r.get("id")) for r in spine],
+        root,
+    )
+    if underivable:
+        raise AskStageError(
+            f"ledger item {', '.join(underivable)} owes work and no path resolves for it; {lrp._REMEDY}"
+        )
+    for row in rows:
+        row = {**row, "surface": row["writes"][0], "queue_scope": "project"}
+        error = _append_spine_row(root, plan_rel, row)
+        if error:
+            raise AskStageError(f"derived row {row['id']} not written: {error}")
+    return [*reuse.values(), *(r["id"] for r in rows)]
+
+
+def _append_spine_row(root: Path, plan_rel: str, row: dict) -> Optional[str]:
+    """Append `row` to the plan's spine; the refusal text, else None."""
+    from coordinator_core.locked_write import LockTimeout, MutateAbort, locked_rmw
+    from coordinator_core.ops import plan_tasks_mutate as ptm
+
+    if (root / plan_rel).resolve().is_relative_to((root / "docs" / "plans").resolve()):
+        reply = ptm._add_task(plan_rel, row, root, root)
+        return None if reply.get("exit_code") == 0 else str(reply.get("error"))
+
+    def mutate(old: str) -> str:
+        found = ptm.locate_fenced_block(old)
+        if found.status is not ptm.LocateStatus.LOCATED:
+            raise MutateAbort(f"task spine is {found.status.name}")
+        rows = ptm._parse_rows_or_abort(found.body, "add-task")
+        if any(isinstance(r, dict) and r.get("id") == row["id"] for r in rows):
+            raise MutateAbort(f"duplicate task id {row['id']!r}")
+        start, end = found.span
+        return old[:start] + ptm._dump_rows([*rows, row]) + old[end:]
+
+    try:
+        locked_rmw(root / plan_rel, mutate, repo_root=root)
+    except (MutateAbort, LockTimeout, OSError) as exc:
+        return str(exc.args[0]) if exc.args else str(exc)
+    return None
 
 
 def _stamp_landed_rows(root: Path, plan_rel: str, landed: Sequence) -> None:

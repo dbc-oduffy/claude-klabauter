@@ -14,8 +14,10 @@ THE OP TAKES A TIER, NEVER A SCHEDULE OR A TASK LIST. The mapping, and the
 measured cost of each (spike figures, n=1, lower bounds — see § below):
 
   hourly  -> git maintenance run --task=commit-graph      40.6 ms,  2.0 procs
-  daily   -> git maintenance run --task=commit-graph      ~190   ms (derived,
-             --task=incremental-repack                    see below)
+  daily   -> git repack -d -q (reachable loose only)      not yet measured
+             then git maintenance run --task=commit-graph ~190  ms (derived,
+             --task=incremental-repack                    see below; excludes
+                                                          the repack leg)
   weekly  -> git prune --expire=2.weeks.ago              175.0 ms,  1.0 proc
              then git maintenance run --task=pack-refs    53.1 ms,  2.0 procs
              then sweep_orphan_packs()                    ~2 s (one window)
@@ -37,14 +39,11 @@ Removing `loose-objects` leaves daily's own measured 392.6 ms figure minus
 the 203.1 ms `loose-objects` was measured to cost, ~190 ms — the module's
 own decomposition comment, not a fresh spike measurement; the acceptance
 guard's own run is the first real data point for this shape.
-NAMED RESIDUAL, PER THE SPIKE: `incremental-repack` alone does not touch
-loose objects, so dropping `loose-objects` from daily means nothing packs
-*reachable* loose objects either; under `gc.auto=0` those accumulate
-without bound unless something eventually packs them. Requirement question,
-left open rather than silently dropped: does the weekly tier need a
-loose-objects-equivalent pass for the reachable set, ordered so it can never
-re-introduce this same trap for the unreachable set (never running any
-loose-objects/full-repack task ahead of that same run's own prune leg)?
+REACHABLE LOOSE OBJECTS ARE PACKED BY DAILY'S FIRST LEG: `git repack -d -q`
+(`_DAILY_LOOSE_LEG`, no `-a`), which packs only loose objects reachable from
+refs, reflogs and the index. `incremental-repack` runs after it and writes the
+MIDX covering the new pack. Unreachable objects are still never packed, so the
+R9 note above holds and the weekly prune still reaps them.
 
 THE WEEKLY TIER WAS `--schedule=weekly` AND IT WENT OVER THE BAR. Measured at
 515.6 ms mean / 9 procs (N=8 independent COLD repos, each registered through
@@ -188,6 +187,12 @@ _TIER_ARGV = {
 # `_TIER_ARGV`'s key set, policed only by a sync test. `_TIER_ARGV` is the
 # actual source of truth; this is derived, not restated.
 TIERS = tuple(_TIER_ARGV)
+
+# Daily's reachable-loose leg, run BEFORE `_TIER_ARGV["daily"]` so the MIDX that
+# `incremental-repack` writes covers the pack this leg mints. No `-a`: it packs
+# only loose objects reachable from refs, reflogs and the index, so an
+# unreachable loose object stays loose for the weekly `git prune`.
+_DAILY_LOOSE_LEG = ("repack", "-d", "-q")
 
 
 @dataclass
@@ -449,6 +454,14 @@ def run_tier(repo: Path, tier: Optional[str]) -> MaintenanceResult:
             )
         else:
             result.pruned = True
+
+    if tier == "daily":
+        loose = run_git(list(_DAILY_LOOSE_LEG), cwd=str(repo))
+        if loose.returncode != 0:
+            result.errors.append(
+                f"{' '.join(_DAILY_LOOSE_LEG)} failed rc={loose.returncode}: {loose.stderr.strip()}"
+            )
+            return result
 
     proc = run_git(list(_TIER_ARGV[tier]), cwd=str(repo))
     if proc.returncode != 0:

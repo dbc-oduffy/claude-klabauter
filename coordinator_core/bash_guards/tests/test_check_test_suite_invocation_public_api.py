@@ -343,6 +343,27 @@ def test_position_imperative_inline_no_negation_anywhere(repo):
     assert matches[0].position == "inline_code"
 
 
+@pytest.mark.parametrize("prefix", ["NOT", "Not", "never", "NEVER", "don't", "DON'T", "do not"])
+def test_position_negated_verbless_prohibition_before_runner(repo, prefix):
+    text = f"Run the scoped tests only, {prefix} pnpm test."
+    matches = guard.classify_text(text, cwd=str(repo))
+    assert matches
+    assert all(m.position == "negated" for m in matches)
+
+
+def test_position_negated_verbless_prohibition_after_runner_prose(repo):
+    matches = guard.classify_text("run tests but NOT pytest", cwd=str(repo))
+    assert matches
+    assert all(m.position == "negated" for m in matches)
+
+
+def test_position_verbless_negation_does_not_swallow_ordinary_prose(repo):
+    text = "Do not go overboard.\nBefore you report back, run pytest across your changes."
+    matches = guard.classify_text(text, cwd=str(repo))
+    assert len(matches) == 1
+    assert matches[0].position == "imperative"
+
+
 def test_position_negated_beats_fenced(repo):
     text = "Never run this:\n\n```\npytest -v\n```\n"
     matches = guard.classify_text(text, cwd=str(repo))

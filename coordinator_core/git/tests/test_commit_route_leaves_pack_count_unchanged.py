@@ -1,4 +1,4 @@
-"""An unsigned commit object rides the commit's object-batch pack, not a loose write."""
+"""A small engine commit leaves the pack count unchanged; a large batch adds exactly one pack."""
 
 import subprocess
 
@@ -22,6 +22,10 @@ def _loose(repo):
     return {p.parent.name + p.name for p in (repo / ".git" / "objects").glob("??/*")}
 
 
+def _idx(repo):
+    return set((repo / ".git" / "objects" / "pack").glob("*.idx"))
+
+
 def _repo(tmp_path):
     repo = tmp_path / "r"
     repo.mkdir()
@@ -35,49 +39,44 @@ def _repo(tmp_path):
     return repo
 
 
-def _add_files(repo):
+def _add_files(repo, count, sub=""):
     paths = []
-    for i in range(4):
-        p = f"d{i % 2}/f{i}.txt"
+    for i in range(count):
+        p = f"d{i % 2}/{sub}f{i}.txt"
         (repo / p).parent.mkdir(parents=True, exist_ok=True)
         (repo / p).write_bytes(f"content {i}\n".encode())
         paths.append(p)
     return paths
 
 
-def _count_replaces(monkeypatch):
-    calls = []
-    real = git_objects._replace_with_retry
-
-    def spy(src, dst, *args, **kwargs):
-        calls.append(str(dst))
-        return real(src, dst, *args, **kwargs)
-
-    monkeypatch.setattr(git_objects, "_replace_with_retry", spy)
-    return calls
-
-
-def test_unsigned_commit_lands_in_the_pack_with_no_loose_object(tmp_path, monkeypatch):
+def test_small_unsigned_commit_adds_no_pack_and_stays_loose(tmp_path):
     repo = _repo(tmp_path)
-    paths = _add_files(repo)
-    before = _loose(repo)
-    packs_before = set((repo / ".git" / "objects" / "pack").glob("*.idx"))
-    replaces = _count_replaces(monkeypatch)
+    paths = _add_files(repo, 2)
+    before, packs_before = _loose(repo), _idx(repo)
 
     out = gcommit.commit_paths(repo, paths, "add files")
 
-    assert _loose(repo) == before
-    assert len(set((repo / ".git" / "objects" / "pack").glob("*.idx")) - packs_before) == 1
-    object_replaces = [r for r in replaces if "objects" in r.replace("\\", "/")]
-    assert len(object_replaces) == 2, "the .pack and the .idx; no loose commit replace"
-    assert _git(repo, "cat-file", "-t", out.sha).strip() == "commit"
+    assert _idx(repo) == packs_before
+    assert out.sha in _loose(repo) - before
     assert _git(repo, "rev-parse", "HEAD").strip() == out.sha
     _git(repo, "fsck", "--no-dangling")
 
 
+def test_batch_over_the_threshold_writes_exactly_one_pack(tmp_path):
+    repo = _repo(tmp_path)
+    paths = _add_files(repo, git_objects._LOOSE_BATCH_MAX + 2, sub="sub/")
+    packs_before = _idx(repo)
+
+    gcommit.commit_paths(repo, paths, "add files")
+
+    assert len(_idx(repo) - packs_before) == 1
+    _git(repo, "fsck", "--full", "--strict")
+    assert set(_git(repo, "ls-tree", "-r", "--name-only", "HEAD").split()) == {"seed.txt", *paths}
+
+
 def test_signed_commit_keeps_flush_then_loose_write(tmp_path, monkeypatch):
     repo = _repo(tmp_path)
-    paths = _add_files(repo)
+    paths = _add_files(repo, 2)
     monkeypatch.setattr(gcommit, "_gpgsign_enabled", lambda repo: True)
     order = []
     real_flush = gcommit.flush_object_batch
@@ -97,5 +96,14 @@ def test_signed_commit_keeps_flush_then_loose_write(tmp_path, monkeypatch):
     out = gcommit.commit_paths(repo, paths, "add files")
 
     assert order[:2] == ["flush", "sign"]
-    assert _loose(repo) - before == {out.sha}
+    assert out.sha in _loose(repo) - before
     _git(repo, "fsck", "--no-dangling")
+
+
+def test_refused_commit_writes_no_objects(tmp_path):
+    repo = _repo(tmp_path)
+    before, packs_before = _loose(repo), _idx(repo)
+    with pytest.raises(gcommit.NothingToCommit):
+        gcommit.commit_paths(repo, ["seed.txt"], "no change")
+    assert _loose(repo) == before
+    assert _idx(repo) == packs_before

@@ -27,11 +27,9 @@ client transport
 (`cc_invoke.cc_invoke`) under its own budget. The set-level ops (`plan.seam_fix`, the seam check,
 residue bind/validate) are one call each.
 
-CENSUS LEG. The probe re-runs a plan's `census[]` commands through the `mise-census-revalidate`
-executor (`require_stamp=False`: the plan is not stamped yet) when its gate is PREPPED and it is not
-already CERTIFIED. A DRIFT refuses the stamp and reads CENSUS-DRIFT; MATCH, UNDECIDABLE, REFUSED and
-UNRUNNABLE do not block, the same rule the fire-time leg uses. A SEAM-REFUSED row keeps that verdict
-over a census one. The census runs under `--dry-run` too, being read-only.
+CENSUS. No census re-runs at prep (the revalidation leg was deleted under DR-344). Each PREPPED
+row's `census` is the NOT-RUN outcome, and the JSON summary carries `census: "NOT-RUN"`. Stamping
+proceeds on the gate and seam verdicts alone.
 
 WHAT IT DOES NOT DO. It does not decide what to fire, does not refresh a plan's recorded
 `result:` values, and does not author anything into a plan beyond the `depends_on_plan`
@@ -45,6 +43,11 @@ has just passed.
 Usage:
 
     python3 mise-prep-run.py --repo-root <abs> [--upgrade] [--dry-run] [plan ...]
+    python3 mise-prep-run.py --repo-root <abs> --apply-rulings <payload.json|->
+
+`--apply-rulings` skips the gate/stamp pass: it sends the payload `{run_id, rulings}` as ONE
+`plan.record_residue_rulings` call (`on` = today's UTC date), prints the reply as JSON, and exits 0
+when its `refused` is empty, 1 otherwise, 2 for a malformed payload.
 
 With no plan arguments the set is every APPROVED plan the engine's plan gate reports —
 mise-prep's own entry set, taken from the same seam `mise-prep-entry.py` reads, never
@@ -119,12 +122,6 @@ def _load_entry():
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
-
-
-_CENSUS_ROUTE = (
-    "route: the premise moved — re-plan the census and the body resting on it; a format-only or "
-    "benign-growth ruling is coordinator:apm's, never a hand edit of result:"
-)
 
 
 #: `_invoke` calls this run has made, failures included; `main` resets it and the JSON report
@@ -226,18 +223,17 @@ def _bound_size(script: str) -> int:
     return len(script.encode("utf-8"))
 
 
-# Census commands are plan-authored shells; one set run spends this much process time (parent plus
-# children) in one `plan.census_set` call and reports the rest UNRUNNABLE, resumed from the store.
-_CENSUS_BUDGET_MS = 500
-_CENSUS_SKIPPED = {
-    "state": "UNRUNNABLE",
-    "entries": [],
-    "detail": "set census budget spent; re-run to resume this plan's census from the census store",
-}
-_CENSUS_TOTAL_KEYS = (
-    "spent_ms", "memo_hits", "direct_runs", "key_ms", "process_ms", "children_process_ms",
-    "spawns", "inproc_runs",
-)
+#: Equal to `coordinator_core.roadmap.census.NOT_RUN`; this client imports no engine module.
+_NOT_RUN = "NOT-RUN"
+
+
+def _not_run_census() -> dict:
+    """The census outcome of a row: no census re-ran at prep (DR-344 kill of the revalidation leg)."""
+    return {
+        "state": _NOT_RUN,
+        "entries": [],
+        "detail": "no census re-ran at prep: the revalidation leg was deleted under DR-344",
+    }
 
 
 def _probe_failed_row(plan: str, error: str, upgraded: str | None = None) -> dict:
@@ -634,71 +630,6 @@ def _probe_set(repo_root: Path, plans: list[str], *, upgrade: bool) -> dict[str,
     return out
 
 
-def _census_pass(
-    repo_root: Path, rows: list[dict], gates: dict[str, dict], *, timeout: int, budget_ms: int
-) -> dict:
-    """Spend the census process budget in `plan.census_set` over the PREPPED, not-CERTIFIED rows.
-
-    Contract: sets each such row's `census` to its plan's reply entry (`_CENSUS_SKIPPED` when no
-    call reached it, an "census op unavailable" shape when the op errored) and returns the totals
-    `{spent_ms, memo_hits, direct_runs, key_ms, process_ms, children_process_ms, spawns,
-    inproc_runs, order}`. Never raises: an op error blocks nothing.
-    A budget > 0 issues exactly one call; 0 repeats, the op spending its own default per call,
-    until `pending` is empty or a call makes no progress.
-    """
-    totals = {**dict.fromkeys(_CENSUS_TOTAL_KEYS, 0), "order": "input", "untracked": []}
-    todo = [
-        r["plan"] for r in rows
-        if r["outcome"] != "PROBE-FAILED"
-        and gates[r["plan"]].get("verdict") == "PREPPED"
-        and (gates[r["plan"]].get("stamp") or {}).get("state") != "CERTIFIED"
-    ]
-    by_plan = {r["plan"]: r for r in rows}
-    unavailable = None
-    pending = list(todo)
-    calls = 0
-    while pending:
-        if budget_ms > 0 and calls:
-            break
-        calls += 1
-        try:
-            reply = _invoke(repo_root, "plan.census_set", {
-                "plans": pending, "census_timeout": timeout, "census_budget_ms": max(budget_ms, 0),
-            })
-        except Exception as exc:  # the census is advisory; any failure leaves the rows skipped
-            unavailable = f"census op unavailable: {exc}"
-            break
-        entries = reply.get("plans") if isinstance(reply, dict) else None
-        if not isinstance(entries, dict):
-            unavailable = "census op unavailable: reply without a `plans` object"
-            break
-        for plan, entry in entries.items():
-            if plan in by_plan and isinstance(entry, dict):
-                by_plan[plan]["census"] = entry
-        for key in _CENSUS_TOTAL_KEYS:
-            value = reply.get(key)
-            if isinstance(value, (int, float)) and not isinstance(value, bool):
-                totals[key] += value
-        for item in reply.get("untracked") or []:
-            if isinstance(item, dict) and item not in totals["untracked"]:
-                totals["untracked"].append(item)
-        if reply.get("order") in ("measured", "input"):
-            totals["order"] = reply["order"]
-        still = reply.get("pending")
-        still = [p for p in still if p in by_plan] if isinstance(still, list) else []
-        if still == pending:
-            break
-        pending = still
-    for plan in todo:
-        if by_plan[plan]["census"] is None:
-            by_plan[plan]["census"] = {
-                **_CENSUS_SKIPPED,
-                "entries": [],
-                **({"detail": unavailable} if unavailable else {}),
-            }
-    return totals
-
-
 def _derivable(derivation) -> bool:
     """True when a probe's `upgrade` dict says `upgrade_plan` would change the plan."""
     return isinstance(derivation, dict) and not derivation.get("error") and bool(derivation.get("changed"))
@@ -732,6 +663,38 @@ def _upgrade_note(derivation) -> str | None:
     return "declined: nothing to derive"
 
 
+def _apply_rulings(repo_root: Path, source: str, refuse) -> int:
+    """`--apply-rulings`: one `RULINGS_OP` call over the payload `{run_id, rulings}`, receipt on
+    stdout. Exit 0 when the reply's `refused` is empty, else 1; an unreadable or malformed payload
+    is exit 2 before any op call."""
+    try:
+        text = sys.stdin.read() if source == "-" else Path(source).read_text(encoding="utf-8")
+        payload = json.loads(text)
+    except (OSError, ValueError) as exc:
+        return refuse(f"rulings payload unreadable: {exc}")
+    if not isinstance(payload, dict) or not isinstance(payload.get("rulings"), list):
+        return refuse("rulings payload must be a JSON object with a `rulings` list")
+    try:
+        import lib  # noqa: F401 -- bootstraps coordinator/bin/lib onto sys.path
+        import cc_invoke
+
+        cc_invoke.require_engine_on_path(__file__)
+        from coordinator_core.roadmap import mise_residue
+    except Exception as exc:  # noqa: BLE001
+        return refuse(f"coordinator_core unresolvable: {exc}")
+    params = {
+        "run_id": payload.get("run_id", ""),
+        "on": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+        "rulings": payload["rulings"],
+    }
+    try:
+        reply = _invoke(repo_root, mise_residue.RULINGS_OP, params)
+    except ValueError as exc:
+        return refuse(str(exc))
+    print(json.dumps(reply, indent=2, sort_keys=True))
+    return EXIT_OK if not reply.get("refused") else EXIT_NOT_ALL_CERTIFIED
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(
         prog="mise-prep-run",
@@ -749,19 +712,13 @@ def main(argv=None) -> int:
         "only the declarations derivable from the plan's own text; it invents none, so a "
         "plan needing real authoring still comes back NOT-PREPPED with its classes named.",
     )
-    ap.add_argument(
-        "--census-timeout", type=int, default=30,
-        help="seconds one census command may run before it reads UNRUNNABLE (default 30)",
-    )
-    ap.add_argument(
-        "--census-budget-ms", type=int, default=_CENSUS_BUDGET_MS,
-        help="milliseconds of process time (parent plus children) the run spends on census "
-        f"commands in one call (default {_CENSUS_BUDGET_MS}; 0 = unbounded loop). Plans reached "
-        "after it is spent read UNRUNNABLE and resume from the census store; that never blocks "
-        "a stamp",
-    )
     ap.add_argument("--dry-run", action="store_true", help="gate and report; stamp nothing")
     ap.add_argument("--json", action="store_true")
+    ap.add_argument(
+        "--apply-rulings", metavar="PATH",
+        help="write the APM rulings in this JSON payload file ('-' = stdin) into their plans' "
+        "pm_ruling: lists with one plan.record_residue_rulings call; skips the gate/stamp pass",
+    )
     args = ap.parse_args(argv)
 
     global _OP_CALLS
@@ -773,6 +730,9 @@ def main(argv=None) -> int:
     def refuse(msg: str) -> int:
         print(f"mise-prep-run: REFUSED — {msg}", file=sys.stderr)
         return EXIT_REFUSED
+
+    if args.apply_rulings is not None:
+        return _apply_rulings(repo_root, args.apply_rulings, refuse)
 
     plans = list(args.plans)
     skipped: list[str] = []
@@ -838,7 +798,7 @@ def main(argv=None) -> int:
             "withheld_rows": gate.get("withheld_rows") or [],
             "upgraded": upgraded,
             "stamp_state": (gate.get("stamp") or {}).get("state"),
-            "census": probe.get("census"),
+            "census": _not_run_census() if gate.get("verdict") == "PREPPED" else None,
             "processMs": probe.get("process_ms"),
             "outcome": None,
         }
@@ -891,27 +851,12 @@ def main(argv=None) -> int:
                 slots[i] = make_row(plan, probe, upgraded)
     rows = [r for r in slots if r is not None]
 
-    census_totals = _census_pass(
-        repo_root, rows, gates, timeout=args.census_timeout, budget_ms=args.census_budget_ms
-    )
-    census_spent_ms = census_totals["spent_ms"]
-    census_rows = [r for r in rows if r["census"] is not None]
-    census_covered = sum(
-        1
-        for r in census_rows
-        if r["census"].get("detail") != _CENSUS_SKIPPED["detail"]
-        and not str(r["census"].get("detail") or "").startswith("census op unavailable")
-        and not any(e.get("state") == "UNRUNNABLE" for e in r["census"].get("entries") or [])
-    )
-
     named_set = bool(args.plans or args.roadmap_id)
     try:
         seam = _seam_call(repo_root, plans, "prep", named_set, read_only=args.dry_run)
     except ValueError as exc:
         return refuse(f"seam check: {exc}")
 
-    # Only DRIFT blocks, the same rule the fire leg uses: an UNDECIDABLE or UNRUNNABLE census is
-    # not evidence of movement. A seam refusal keeps its verdict over a census one.
     seam_index = _seam_findings_index(seam, [r["plan"] for r in rows])
     for row in rows:
         plan = row["plan"]
@@ -920,14 +865,12 @@ def main(argv=None) -> int:
             continue
         if _seam_implicated(seam, plan):
             row["outcome"] = "SEAM-REFUSED"
-        elif (row["census"] or {}).get("state") == "DRIFT":
-            row["outcome"] = "CENSUS-DRIFT"
 
     for row in rows:
         plan, gate = row["plan"], gates[row["plan"]]
         # TRAP: a PROBE-FAILED row's `gates[plan]` is {} so it can never read PREPPED below; the
         # `continue` keeps that true even if the gate dict ever carries a verdict.
-        if row["outcome"] in ("SEAM-REFUSED", "CENSUS-DRIFT", "PROBE-FAILED"):
+        if row["outcome"] in ("SEAM-REFUSED", "PROBE-FAILED"):
             continue
         if gate.get("verdict") == "PREPPED" and not args.dry_run:
             try:
@@ -975,18 +918,7 @@ def main(argv=None) -> int:
                     "certified": len(certified),
                     "dryRun": args.dry_run,
                     "opCalls": _OP_CALLS,
-                    "censusSpentMs": census_spent_ms,
-                    "censusMemoHits": census_totals["memo_hits"],
-                    "censusDirectRuns": census_totals["direct_runs"],
-                    "censusKeyMs": census_totals["key_ms"],
-                    "censusProcessMs": census_totals["process_ms"],
-                    "censusChildrenMs": census_totals["children_process_ms"],
-                    "censusSpawns": census_totals["spawns"],
-                    "censusInprocRuns": census_totals["inproc_runs"],
-                    "censusOrder": census_totals["order"],
-                    "censusPlans": len(census_rows),
-                    "censusCovered": census_covered,
-                    "censusUntracked": len(census_totals["untracked"]),
+                    "census": _NOT_RUN,
                     "skipped": [{"plan": p, "outcome": "SKIPPED-OUT-OF-TREE"} for p in skipped],
                     "seam": _seam_spell(seam["verdict"]),
                     "seamFix": seam_fix,
@@ -1008,13 +940,7 @@ def main(argv=None) -> int:
         pending = sum(1 for r in rows if r["outcome"] == "would-stamp")
         work = f" — {pending} would be written" if args.dry_run else ""
         print(f"mise-prep-run: {len(certified)} of {len(rows)} plan(s) {verb}{mode}{work}")
-        print(f"census: {census_totals['process_ms']}ms process over the set")
-        print(f"census: {census_covered} of {len(census_rows)} plans covered")
-        for item in census_totals["untracked"]:
-            print(
-                f"census: untracked operand {item.get('operand')} in {item.get('plan')} "
-                f"[{item.get('index')}] resolves UNDECIDABLE; count over a tracked path"
-            )
+        print(f"census: {_NOT_RUN}")
         if seam_fix.get("notRun"):
             print(f"seam-fix: {seam_fix['notRun']}")
         else:
@@ -1038,8 +964,7 @@ def main(argv=None) -> int:
                     print(f"                     upgrade: {r['upgraded']}")
                 print(
                     f"                     re-run mise-prep-run --repo-root {repo_root.as_posix()} "
-                    f"{r['plan']} once the op answers; a census that ran out its deadline names "
-                    "the entry"
+                    f"{r['plan']} once the op answers"
                 )
             else:
                 print(f"  {(r['outcome'] or r['verdict'] or 'NOT-PREPPED'):<18} {r['plan']}")
@@ -1054,14 +979,6 @@ def main(argv=None) -> int:
                 for f in r.get("seam") or []:
                     if not _is_missing_seam(f):
                         print(f"                     {_seam_line(f)}")
-                if r["outcome"] == "CENSUS-DRIFT":
-                    for e in (r["census"] or {}).get("entries") or []:
-                        if e.get("state") == "DRIFT":
-                            print(
-                                f"                     census: DRIFT {str(e.get('command'))[:110]} "
-                                f"— {e.get('basis')}"
-                            )
-                    print(f"                     {_CENSUS_ROUTE}")
 
     if not args.json:
         for line in _missing_seam_section(rows):
@@ -1083,9 +1000,8 @@ def main(argv=None) -> int:
 
     if short:
         refused = [r for r in short if r["outcome"] == "SEAM-REFUSED"]
-        drifted = [r for r in short if r["outcome"] == "CENSUS-DRIFT"]
         failed = [r for r in short if r["outcome"] == "PROBE-FAILED"]
-        unprepped = len(short) - len(refused) - len(drifted) - len(failed)
+        unprepped = len(short) - len(refused) - len(failed)
         lines = []
         if failed:
             lines.append(
@@ -1106,12 +1022,6 @@ def main(argv=None) -> int:
             lines.append(
                 f"\nmise-prep-run: {len(refused)} plan(s) are SEAM-REFUSED. Follow each "
                 "finding's own `route:` line above; re-authoring does not clear them."
-            )
-        if drifted:
-            lines.append(
-                f"\nmise-prep-run: {len(drifted)} plan(s) are CENSUS-DRIFT. The premise moved — "
-                "re-plan the census and the body resting on it; a format-only or benign-growth "
-                "ruling is coordinator:apm's, never a hand edit of result:."
             )
         # stdout is block-buffered on a pipe while stderr is line-buffered, so without this the
         # summary overtakes the report on a shared stream.

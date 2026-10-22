@@ -58,6 +58,7 @@ def _write_plan(root: Path, *, statement: str, derived_from: str) -> Path:
         "created: 2026-09-07",
         "author: fixture-session",
         "census: []",
+        "capabilities: []",
         "prime_exit_criterion:",
         f"  statement: {statement}",
         f"  derived_from: {derived_from}",

@@ -20,6 +20,7 @@ ALREADY_STAGED_KEY = "already_staged"
 RECEIPT_NAME = "stage-receipt.json"
 MANIFEST_NAME = "manifest.json"
 HALTED_NAME = "halted.json"
+GATE_DIGEST = "ask-gate-resume"
 _DIGEST_EXCLUDED = ("session_id",)
 
 
@@ -35,6 +36,13 @@ def write(record_dir: Path, digest: str, handle: Mapping) -> None:
     body = {"digest": digest, "manifest_handle": dict(handle)}
     text = json.dumps(body, sort_keys=True, ensure_ascii=True) + "\n"
     atomic_write_bytes(Path(record_dir) / RECEIPT_NAME, text.encode("ascii"), preserve_mode=False)
+
+
+def write_gate(record_dir: Path, handle: Mapping) -> None:
+    """Receipt for a manifest the resume gate staged itself. Its digest never equals an ask_stage
+    params digest, so `landed` misses and the next ask_stage re-stages; `partial` sees a vouched
+    manifest and does not refuse it."""
+    write(record_dir, GATE_DIGEST, handle)
 
 
 def _read_receipt(record_dir: Path) -> Optional[dict]:

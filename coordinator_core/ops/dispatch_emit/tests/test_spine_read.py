@@ -1154,3 +1154,35 @@ def test_memo_close_route_names_every_delivered_elsewhere_field():
         route = memo_close_route("C6", slug)
         for field in ("disposition delivered_elsewhere", "delivered_via memo", "disposition_ref", "disposition_detail"):
             assert field in route
+
+
+def _kind_rows(kinds: dict) -> str:
+    return "\n".join(
+        f"- id: {rid}\n  title: row {rid}\n  change_kind: {kind}\n  surface: some/surface"
+        for rid, kind in kinds.items()
+    )
+
+
+def test_every_invalid_change_kind_row_is_named_in_one_error(tmp_path):
+    from coordinator_core.ops.dispatch_emit.spine_read import InvalidChangeKindError
+
+    plan_path = _write_plan(
+        tmp_path, _kind_rows({"E1": "bogus-a", "E2": "bogus-b", "E3": "code-edit", "T1": "bogus-c"})
+    )
+
+    with pytest.raises(InvalidChangeKindError) as excinfo:
+        read_spine(plan_path)
+
+    message = str(excinfo.value)
+    for rid in ("E1", "E2", "T1"):
+        assert repr(rid) in message
+    assert "'E3'" not in message
+
+
+def test_a_single_invalid_change_kind_row_is_still_named(tmp_path):
+    from coordinator_core.ops.dispatch_emit.spine_read import InvalidChangeKindError
+
+    plan_path = _write_plan(tmp_path, _kind_rows({"E1": "code-edit", "E2": "bogus-b"}))
+
+    with pytest.raises(InvalidChangeKindError, match="E2.*bogus-b"):
+        read_spine(plan_path)

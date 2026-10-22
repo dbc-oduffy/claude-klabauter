@@ -123,7 +123,7 @@ def test_a_missing_sizing_is_refused_by_name_and_leaves_the_baton_untouched(tmp_
 
 
 def _spec_plan(root: Path, **fields) -> str:
-    lines = ["title: the-spec", "status: draft"] + [f"{k}: {v}" for k, v in fields.items()]
+    lines = ["title: the-spec", "status: draft", "capabilities: []"] + [f"{k}: {v}" for k, v in fields.items()]
     p = root / "docs" / "plans" / "the-spec.md"
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text("---\n" + "\n".join(lines) + "\n---\n\nbody\n", encoding="utf-8")

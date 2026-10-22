@@ -455,6 +455,68 @@ def test_stamp_fires_on_a_clean_weekly_run(tmp_path, monkeypatch):
     assert stamped == [repo]
 
 
+def _loose_shas(repo: Path) -> set:
+    objects = repo / ".git" / "objects"
+    return {
+        d.name + f.name
+        for d in objects.iterdir()
+        if len(d.name) == 2 and d.is_dir()
+        for f in d.iterdir()
+    }
+
+
+def _daily_fixture(tmp_path: Path) -> tuple[Path, str]:
+    from coordinator_core.benchmarks.maintenance_tier_budget import add_small_packs_and_loose
+
+    repo = _init_repo(tmp_path)
+    _git(repo, "config", "maintenance.strategy", "incremental")
+    _git(repo, "config", "maintenance.auto", "false")
+    return repo, add_small_packs_and_loose(repo, 40, 15)
+
+
+def test_daily_covers_every_pack_packs_reachable_loose_and_leaves_unreachable_loose(tmp_path):
+    """AC3."""
+    from coordinator_core.git.store_hygiene import status
+
+    repo, unreachable = _daily_fixture(tmp_path)
+    before = status(repo / ".git")
+    assert before.pack_count >= 40 and (before.midx_pack_count or 0) < before.pack_count
+
+    result = gm.run_tier(repo, "daily")
+
+    assert result.rc == 0, result.errors
+    after = status(repo / ".git")
+    assert after.midx_pack_count == after.pack_count
+    reachable = {
+        line.split()[0]
+        for line in _git(repo, "rev-list", "--objects", "--all").stdout.splitlines()
+        if line
+    }
+    loose = _loose_shas(repo)
+    assert not (loose & reachable), "reachable loose objects survived daily"
+    assert unreachable in loose, "daily packed an unreachable object"
+
+
+def test_daily_process_time_is_under_the_brightline(tmp_path):
+    """AC4: self plus children, both legs, on the loose-plus-many-pack fixture."""
+    from coordinator_core.benchmarks.process_time import batched_process_time_ms
+
+    repo, _ = _daily_fixture(tmp_path)
+    total = 0.0
+    for leg in (gm._DAILY_LOOSE_LEG, gm._TIER_ARGV["daily"]):
+        sample = batched_process_time_ms(["git", "-C", str(repo), *leg], k=1, cwd=str(repo))
+        assert sample["rc"] == 0, leg
+        total += sample["process_time_ms"]
+    assert total < 500, total
+
+
+def test_daily_loose_leg_runs_before_the_maintenance_run(tmp_path, monkeypatch):
+    invoked = _recorded_argv(tmp_path, "daily", monkeypatch)
+    verbs = [args[0] for args in invoked]
+    assert verbs.index("repack") < verbs.index("maintenance"), verbs
+    assert "-a" not in gm._DAILY_LOOSE_LEG and "-A" not in gm._DAILY_LOOSE_LEG
+
+
 def test_non_weekly_tiers_do_not_prune_or_sweep(tmp_path):
     repo = _init_repo(tmp_path)
     for tier in ("hourly", "daily"):

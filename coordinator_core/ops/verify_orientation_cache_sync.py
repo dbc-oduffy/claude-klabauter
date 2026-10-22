@@ -83,6 +83,11 @@ from coordinator_core.orientation.regenerate_cache import (
     WORKSTREAM_BODY_CAP,
     WORKSTREAM_MAX,
 )
+from coordinator_core.ue_project_detection import (
+    SKIP_SEGMENTS,
+    declared_ue,
+    is_skipped_path,
+)
 from coordinator_core.win_portability import no_console_creationflags
 
 _CREATIONFLAGS = no_console_creationflags()
@@ -304,10 +309,10 @@ def _git_ls_files_uproject(repo_root: str) -> Optional[str]:
         return None
     if result.returncode != 0:
         return None
-    first = result.stdout.strip().splitlines()
-    if not first:
-        return None
-    return Path(repo_root, first[0]).as_posix()
+    for line in result.stdout.strip().splitlines():
+        if not is_skipped_path(line):
+            return Path(repo_root, line).as_posix()
+    return None
 
 
 def _find_uproject(repo_root: str, *, exclude_git_and_node_modules: bool) -> Optional[str]:
@@ -319,6 +324,7 @@ def _find_uproject(repo_root: str, *, exclude_git_and_node_modules: bool) -> Opt
             dirnames[:] = []
         if exclude_git_and_node_modules:
             dirnames[:] = [d for d in dirnames if d not in ("node_modules", ".git")]
+        dirnames[:] = [d for d in dirnames if d not in SKIP_SEGMENTS]
         for fname in filenames:
             if fname.endswith(".uproject"):
                 matches.append(os.path.join(dirpath, fname))
@@ -328,6 +334,8 @@ def _find_uproject(repo_root: str, *, exclude_git_and_node_modules: bool) -> Opt
 
 
 def _detect_uproject(repo_root: str) -> Optional[str]:
+    if declared_ue(repo_root) is False:
+        return None
     has_git = _has_git_worktree(repo_root)
     if has_git:
         found = _git_ls_files_uproject(repo_root)

@@ -549,8 +549,10 @@ def prep_gate_refusal(worktree_root: Path, plan_path: str) -> Tuple[Optional[str
     by hand, and an EM whose call was denied returned `ready` anyway — so the landing
     runs it in-process (`gate_plan`, ~1ms, no spawn) rather than trusting the report.
 
-    Other NOT-PREPPED classes stay advisory: planning gates precede mise-prep, and
-    rows withheld behind an `external_gate` are a schedule fact, not a pull reason.
+    A failing CAPABILITIES class also refuses, but only a first approval: a plan already
+    at an approved status re-lands untouched. Other NOT-PREPPED classes stay advisory:
+    planning gates precede mise-prep, and rows withheld behind an `external_gate` are a
+    schedule fact, not a pull reason.
     """
     from coordinator_core.roadmap.prep_gate import ENGINE_ERROR, gate_plan
 
@@ -573,6 +575,18 @@ def prep_gate_refusal(worktree_root: Path, plan_path: str) -> Tuple[Optional[str
             f"{', '.join(spine['withheld'])}; refusing to stamp {APPROVED_STATUS}",
             verdict,
         )
+    if (report["classes"].get("CAPABILITIES") or {}).get("status") != "PASS":
+        try:
+            current = (_read_field(plan_abs.read_text(encoding="utf-8"), "status") or "").lower()
+        except OSError as exc:
+            return f"plan.prep_gate could not read {plan_path}: {exc}", "UNREAD"
+        if current not in PLAN_APPROVED_STATUSES:
+            return (
+                f"plan.prep_gate CAPABILITIES capabilities-undeclared: {plan_path} declares "
+                f"no capabilities key; refusing to stamp {APPROVED_STATUS} — declare "
+                "`capabilities: []` or entries",
+                verdict,
+            )
     return None, verdict
 
 
@@ -1224,8 +1238,11 @@ def _link_unsized_xs(
         owner = read_fm_field_unquoted(text[span[0] : span[1]] if span else "", "sizing_object")
         if _field_unset(owner):
             unsized.append((entry, baton_path))
-        else:
+            continue
+        try:
             cited.append((entry, baton_path, _rel(owner, worktree_root)))
+        except LandingRefused as exc:
+            refused.append({"baton": entry.get("batonId"), "reason": str(exc)})
 
     def _link(entry: Dict[str, Any], baton_path: str, sizing_rel: str, basis: str) -> None:
         # Sizing edge first: a join refusal leaves a one-edge link; a re-land is idempotent.

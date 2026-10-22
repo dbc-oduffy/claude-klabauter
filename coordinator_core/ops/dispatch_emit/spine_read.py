@@ -1211,6 +1211,7 @@ def read_spine(
             )
 
     seen_ids: set[str] = set()
+    bad_kinds: list[str] = []
     for raw in raw_rows:
         row_id = raw.get("id")
         if not isinstance(row_id, str) or not row_id:
@@ -1220,10 +1221,7 @@ def read_spine(
         seen_ids.add(row_id)
         _kind = raw.get("change_kind")
         if _kind is not None and _kind not in change_kind_members():
-            raise InvalidChangeKindError(
-                f"row {row_id!r} field change_kind: {_kind!r} is not in the plan-tasks schema "
-                f"enum {sorted(change_kind_members())}"
-            )
+            bad_kinds.append(f"row {row_id!r} field change_kind: {_kind!r}")
         if _UNDECLARED_GATE_KEY in raw:
             raise UndeclaredGateKeyError(
                 f"row {row_id!r} declares {_UNDECLARED_GATE_KEY!r}, which "
@@ -1232,6 +1230,12 @@ def read_spine(
                 "though unblocked. Use external_gate to declare a cross-repo "
                 "blocker instead."
             )
+
+    if bad_kinds:
+        raise InvalidChangeKindError(
+            "; ".join(bad_kinds)
+            + f" — each not in the plan-tasks schema enum {sorted(change_kind_members())}"
+        )
 
     row_ids = seen_ids
 

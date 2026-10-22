@@ -52,6 +52,7 @@ def _write_plan(
 
 
 _CLEAN_FM = """census: []
+capabilities: []
 prime_exit_criterion:
   statement: the four legs land and validate
   derived_from: state/sizings/2026-09-26-four-legs-fixture.yaml

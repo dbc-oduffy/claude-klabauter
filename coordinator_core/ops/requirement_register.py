@@ -742,7 +742,8 @@ def coverage_gaps(doc: Mapping[str, Any]) -> list[int]:
     """Embedded PM turns no register row covers, ascending.
 
     A turn is covered when a row's whitespace-normalised `source_text` is a substring of the
-    turn's normalised text, or the turn is named in `unrelated_turns`. Coverage runs from turns
+    turn's normalised text, or a non-empty turn's text is a substring of the row's, or the turn
+    is named in `unrelated_turns`. Coverage runs from turns
     to rows only: a row matching no turn is legal.
     """
     return _gaps(doc, None)
@@ -755,6 +756,10 @@ def _row_needles(doc: Mapping[str, Any]) -> list[str]:
         for r in (rows if isinstance(rows, list) else [])
         if isinstance(r, Mapping) and (n := _norm(r.get(ROW_TEXT) or ""))
     ]
+
+
+# A short turn ("ok") is a substring of nearly any row; reverse containment below that is vacuous.
+_MIN_REVERSE_COVER_CHARS = 12
 
 
 def _gaps(doc: Mapping[str, Any], owed: Optional[set[int]]) -> list[int]:
@@ -773,7 +778,7 @@ def _gaps(doc: Mapping[str, Any], owed: Optional[set[int]]) -> list[int]:
     return [
         t for t in sorted(turns)
         if (owed is None or t in owed) and t not in waived
-        and not any(n in turns[t] for n in needles)
+        and not any(n in turns[t] or (len(turns[t]) >= _MIN_REVERSE_COVER_CHARS and turns[t] in n) for n in needles)
     ]
 
 

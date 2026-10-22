@@ -33,6 +33,7 @@ def _plan(root: Path, statement: str = "the op reports per class") -> Path:
     (root / REL).write_text(
         "---\ntitle: fixture\nauthor: fixture\nstatus: draft\ncreated: 2026-10-15\n"
         "census:\n  - question: q\n    command: echo a\n    result: '1'\n"
+        "capabilities: []\n"
         f"prime_exit_criterion:\n  statement: {statement}\n"
         "  derived_from: state/sizings/2026-10-15-fixture.yaml\n"
         "---\n\n# Fixture\n\n## Tasks\n\n```yaml plan-tasks\n" + _SPINE + "```\n",
@@ -373,6 +374,7 @@ def _corrects_plan(root: Path, corrects: str, fixer_disposition: str = "open", r
     (root / REL).write_text(
         "---\ntitle: fixture\nauthor: fixture\nstatus: draft\ncreated: 2026-10-15\n"
         "census:\n  - question: q\n    command: grep -c a b\n    result: '1'\n"
+        "capabilities: []\n"
         f"{corrects}"
         "prime_exit_criterion:\n  statement: the op reports per class\n"
         "  derived_from: state/sizings/2026-10-15-fixture.yaml\n"
@@ -487,26 +489,40 @@ def test_corrects_citation_is_whitespace_normalised_and_case_sensitive(tmp_path)
     assert _op_reply(common, [_row(citation="TREE CLAIM X")])["verdict"] == "judgment"
 
 
-_P4 = "no live p4 call from a route (store-contract wiki line 58)"
+_P4 = "store-contract wiki line 58"
 _P4_CORRECTS = f"corrects:\n  - citation: {_P4}\n    fixed_by: C2\n"
 _P4_ROW = "There is no live p4 call from a route (store-contract wiki line 58)"
 
 
-def test_paraphrased_citation_of_a_live_corrects_entry_is_a_note(tmp_path):
+def test_row_sharing_a_declared_anchor_with_a_live_corrects_entry_is_an_intended_correction(tmp_path):
     reply = _op_reply(_corrects_plan(tmp_path, _P4_CORRECTS), [_row(citation=_P4_ROW)])
     assert reply["blocking"] == []
+    assert reply["verdict"] == "ready"
     assert f"{_P4} -> C2" in reply["reason"]
+    assert "intended corrections the resolver may take" in reply["reason"]
 
 
-def test_paraphrase_of_an_entry_without_a_live_fixer_still_blocks(tmp_path):
-    reply = _op_reply(_corrects_plan(tmp_path, _P4_CORRECTS, "backlogged"), [_row(citation=_P4_ROW)])
-    assert reply["blocking"] == [f"premise-check: CONTRADICTED {_P4_ROW}"]
+def test_file_line_anchor_covers_a_reworded_row(tmp_path):
+    corrects = "corrects:\n  - citation: docs/wiki/store.md:58\n    fixed_by: C2\n"
+    row = _row(citation="routes never call p4 (docs/wiki/store.md:58)")
+    assert _op_reply(_corrects_plan(tmp_path, corrects), [row])["blocking"] == []
 
 
-def test_unrelated_citation_with_a_paraphrase_neighbour_still_blocks(tmp_path):
+def test_anchor_of_an_entry_without_a_live_fixer_still_blocks(tmp_path):
+    for fixer, disposition in (("C2", "backlogged"), ("C9", "open")):
+        corrects = f"corrects:\n  - citation: {_P4}\n    fixed_by: {fixer}\n"
+        reply = _op_reply(_corrects_plan(tmp_path / fixer, corrects, disposition), [_row(citation=_P4_ROW)])
+        assert reply["blocking"] == [f"premise-check: CONTRADICTED {_P4_ROW}"]
+
+
+def test_row_with_a_different_or_no_anchor_still_blocks(tmp_path):
     common = _corrects_plan(tmp_path, _P4_CORRECTS)
     for cite in ("describe (only with -s)", "There is no live p4 call from a cron job (queue doc line 9)"):
         assert _op_reply(common, [_row(citation=cite)])["blocking"] != []
+
+
+def test_the_fuzzy_paraphrase_matcher_is_gone():
+    assert not hasattr(op, "_paraphrase_cover") and not hasattr(op, "_PARAPHRASE_MIN_OVERLAP")
 
 
 def test_stale_class4_row_is_a_note_and_matching_baseline_ref_still_blocks(tmp_path):

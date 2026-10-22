@@ -178,3 +178,21 @@ class TestFindCensusServesInProcess:
         )
         assert out2 is not None
         assert out2["hookSpecificOutput"]["updatedInput"]["command"] == "true"
+
+
+class TestGeneratorScriptEscapesAndFallsBack:
+    def test_windows_path_and_backslash_regex_compile(self):
+        win = "C:" + "\\Users\\x\\new"  # abs-path-ok: synthetic escape fixture
+        for kind, parsed in (
+            ("grep", {"flags": "", "pattern": r"foo\s+\d\U", "targets": [win]}),
+            ("find", {"path": win, "name_pattern": r"*\t*", "only_files": True}),
+            ("ls", {"path": win}),
+        ):
+            script = "\n".join(guard._bt_build_generator_lines(kind, parsed))
+            compile(script, "<t>", "exec")
+
+    def test_uncompilable_script_leaves_original_command(self, monkeypatch):
+        monkeypatch.setattr(
+            guard, "_bt_build_generator_lines", lambda kind, parsed: ['x = "C:\\Users"[']
+        )
+        assert guard.check_head_tail_plumbing_rewrite("grep -r foo src | head -5") is None

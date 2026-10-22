@@ -891,12 +891,24 @@ def _real_porcelain(cwd) -> list[str]:
     return [line for line in result.stdout.splitlines() if line]
 
 
+_REAL_REPO_TEMPLATE: list = []
+
+
 def _init_real_repo(tmp_path):
+    """Copy of a once-built `git init` template; avoids 3 spawns per test."""
+    import shutil
+    import tempfile
+    from pathlib import Path
+
+    if not _REAL_REPO_TEMPLATE:
+        tpl = Path(tempfile.mkdtemp(prefix="gitnative-tpl-")) / "repo"
+        tpl.mkdir()
+        _real_git(["init", "-q"], tpl)
+        _real_git(["config", "user.email", "t@t.example"], tpl)
+        _real_git(["config", "user.name", "t"], tpl)
+        _REAL_REPO_TEMPLATE.append(tpl)
     repo = tmp_path / "repo"
-    repo.mkdir()
-    _real_git(["init", "-q"], repo)
-    _real_git(["config", "user.email", "t@t.example"], repo)
-    _real_git(["config", "user.name", "t"], repo)
+    shutil.copytree(_REAL_REPO_TEMPLATE[0], repo)
     return repo
 
 
@@ -1193,11 +1205,13 @@ def test_update_refs_stdin_batches_several_ref_writes_in_one_call(tmp_path):
     assert verify.returncode != 0
 
 
-def test_update_refs_stdin_is_all_or_nothing_on_a_stale_old_value(tmp_path):
+def test_update_refs_stdin_is_all_or_nothing_on_a_stale_old_value(tmp_path, monkeypatch):
     """One bad old-value in a multi-command batch refuses the WHOLE
     transaction -- the ref this test seeds correctly must NOT land either.
     This is the property `memo.heal_inbox`'s report-and-converge contract
     depends on: a lost CAS race never partially applies."""
+    # git's "cannot lock ref" refusal reads as lock contention; skip the backoff sleeps.
+    monkeypatch.setattr("coordinator_core.git_lock_retry.time.sleep", lambda _s: None)
     repo = _init_real_repo(tmp_path)
     blob_a = _blob_sha(repo, "a\n")
     blob_b = _blob_sha(repo, "b\n")

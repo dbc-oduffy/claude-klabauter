@@ -287,8 +287,13 @@ def _census_report(result: CensusResult) -> str:
 # ---------------------------------------------------------------------------
 
 
+_REAL_FINDINGS: List[Finding] = []
+
+
 def _real_findings() -> List[Finding]:
-    return scan_dir_for_findings(_repo_root())
+    if not _REAL_FINDINGS:
+        _REAL_FINDINGS.extend(scan_dir_for_findings(_repo_root()))
+    return list(_REAL_FINDINGS)
 
 
 def test_no_unregistered_withholds_over_the_real_tree():

@@ -224,6 +224,8 @@ def find_goals_log_hand_writes(root: Path) -> list[tuple[str, int, str]]:
     return violations
 
 
+# Whole-tree AST sweep (~12s); the detector itself is pinned fast by the two planted-tree tests below.
+@pytest.mark.cadence
 def test_no_goals_log_hand_write_in_production_code():
     """Standing gate: coordinator_core/ non-test code must contain zero
     literal write/append-mode opens of a goals-log-shaped path, except the

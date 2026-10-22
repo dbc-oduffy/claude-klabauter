@@ -1,4 +1,4 @@
-"""mise-certify -- Phase 0 fire-time certification, both legs, one command. Writes nothing.
+"""mise-certify -- Phase 0 fire-time certification, one command. Writes nothing.
 
 Per plan, ONE `plan.mise_certify_probe` op (a client loop, so a full set is N short ops), in the
 order `coordinator-content-repo coordinator/docs/wiki/lesson-triage/mise-prepped-attest.md`
@@ -6,17 +6,17 @@ order `coordinator-content-repo coordinator/docs/wiki/lesson-triage/mise-prepped
 
   1. sha leg     CERTIFIED / STALE / UNSTAMPED / MALFORMED, from the recomputed
                  `canonical_body_sha` against `mise_prepped_sha`. Spawn-free.
-  2. census leg  `mise-census-revalidate`'s `revalidate`, run ONLY on a CERTIFIED plan: it spawns
-                 per entry, and re-measuring the premises of a document that is no longer the
-                 certified one spends the box on an answer nobody can use.
+  2. census      NOT-RUN: no census re-runs at certify (the revalidation leg was deleted under the
+                 DR-344 kill bar). The row carries the op's NOT-RUN outcome unchanged; it is never
+                 PASS, MATCH or the plan verdict.
 
 Exit status:
-  0  nothing below fired (UNSTAMPED, UNDECIDABLE, REFUSED and UNRUNNABLE are reported, not failed)
-  1  at least one STALE, MALFORMED, census DRIFT or a blocking seam finding
+  0  nothing below fired (UNSTAMPED is reported, not failed)
+  1  at least one STALE, MALFORMED or a blocking seam finding
   2  the seam op errored (never a pass)
   3  usage
 
-The third leg runs once over the FIRE SET only (sha CERTIFIED and census not DRIFT):
+The seam leg runs once over the FIRE SET only (sha CERTIFIED):
 `plan.seam_record` at `phase: fire`, `named_set: true`. Its result rides each row as `seam`; a
 row outside the set carries verdict NOT-RUN, and an empty fire set issues no op. Checking
 unstamped or stale plans spends the seam op on plans nobody is about to fire.
@@ -76,7 +76,7 @@ def _repo_relative(plan: str, root: Path) -> str:
 
 
 def _in_fire_set(row: dict) -> bool:
-    return row["sha"] == "CERTIFIED" and (row["census"] or {}).get("state") != "DRIFT"
+    return row["sha"] == "CERTIFIED"
 
 
 def _seam_leg(rows: list[dict], root: Path) -> None:
@@ -86,9 +86,8 @@ def _seam_leg(rows: list[dict], root: Path) -> None:
     fire = [r for r in rows if _in_fire_set(r)]
     for r in rows:
         if not _in_fire_set(r):
-            census = (r["census"] or {}).get("state") or "not run"
             r["seam"] = {"verdict": "NOT-RUN", "findings": [], "blocking": False,
-                         "reason": f"not in fire set (sha {r['sha']} / census {census})"}
+                         "reason": f"not in fire set (sha {r['sha']})"}
     if not fire:
         return
     rel = {r["plan"]: _repo_relative(r["plan"], root) for r in fire}
@@ -105,50 +104,12 @@ def _seam_leg(rows: list[dict], root: Path) -> None:
         }
 
 
-#: Lines of `git log` shown per drifted stamp; the rest are counted, not printed.
-_ATTRIBUTION_SHOWN = 20
-#: Hard cap on what one `git log` returns, so an old stamp cannot stream the whole history.
-_ATTRIBUTION_FETCH = 500
-
-
-def _git_log_since(repo_root: Path, since: str, timeout: int) -> list[str]:
-    """`%h %s` lines for commits after `since`, newest first; empty when git cannot answer."""
-    engine_root = str(Path(__file__).resolve().parents[2])
-    if engine_root not in sys.path:
-        sys.path.insert(0, engine_root)
-    from coordinator_core.git.run import run_git
-
-    proc = run_git(
-        ["log", f"--since={since}", f"--max-count={_ATTRIBUTION_FETCH}", "--format=%h %s"],
-        cwd=str(repo_root), timeout=timeout,
-    )
-    return proc.stdout.splitlines() if proc.returncode == 0 else []
-
-
-def _attribution(repo_root: Path, since: str, timeout: int, cache: dict) -> list[str]:
-    """Commits since the stamp, one `git log` per distinct stamp anchor across the whole run.
-
-    The anchor is `mise_prepped_at`: `mise_prepped_sha` is a blob hash of the plan body, not a
-    commit, so it cannot bound a log.
-    """
-    if since not in cache:
-        lines = _git_log_since(repo_root, since, timeout)
-        shown = lines[:_ATTRIBUTION_SHOWN]
-        extra = len(lines) - len(shown)
-        if extra:
-            plus = "+" if len(lines) >= _ATTRIBUTION_FETCH else ""
-            shown.append(f"... {extra}{plus} more omitted")
-        cache[since] = shown
-    return cache[since]
-
-
-def certify(plan: Path, repo_root: Path, timeout: int, attribute: bool = False,
-            cache: dict | None = None) -> dict:
-    """One `plan.mise_certify_probe` for `plan`; attribution stays here, on the op's census."""
+def certify(plan: Path, repo_root: Path) -> dict:
+    """One `plan.mise_certify_probe` for `plan`; the row carries the op's census outcome as-is."""
     try:
         reply = _prep_run()._invoke(
             repo_root, "plan.mise_certify_probe",
-            {"plan": _repo_relative(str(plan), repo_root), "census_timeout": timeout})
+            {"plan": _repo_relative(str(plan), repo_root)})
     except ValueError as exc:
         return {"plan": str(plan), "sha": "MALFORMED", "sha_detail": str(exc), "census": None,
                 "seam": None}
@@ -157,48 +118,25 @@ def certify(plan: Path, repo_root: Path, timeout: int, attribute: bool = False,
         row["sha_detail"] = reply["sha_detail"]
     if reply.get("process_ms") is not None:
         row["processMs"] = reply["process_ms"]
-    since = str((reply.get("stamp") or {}).get("recorded_at") or "").strip()
-    if attribute and since and row["census"]:
-        cache = {} if cache is None else cache
-        for e in row["census"]["entries"]:
-            if e["state"] == "DRIFT":
-                e["attribution"] = list(_attribution(repo_root, since, timeout, cache))
     return row
 
 
 def plan_state(row: dict) -> str:
-    """The plan's one verdict: the sha state until CERTIFIED, then census DRIFT, a blocking
-    seam, the census state."""
+    """The plan's one verdict: the sha state until CERTIFIED, then a blocking seam, else
+    CERTIFIED. The census outcome never enters it."""
     if row["sha"] != "CERTIFIED":
         return row["sha"]
-    census_state = (row["census"] or {}).get("state")
-    if census_state == "DRIFT":
-        return census_state
     if (row.get("seam") or {}).get("blocking"):
         return _prep_run()._seam_spell("REFUSED")
-    return census_state or "CERTIFIED"
+    return "CERTIFIED"
 
 
 def _print(rows: list[dict]) -> None:
     for row in rows:
         print(Path(row["plan"]).name)
         print(f"  sha     {row['sha']}" + (f" -- {row['sha_detail']}" if row.get("sha_detail") else ""))
-        census = row["census"]
-        if census is None:
-            print(f"  census  not run (sha leg {row['sha']})")
-            _print_seam(row)
-            continue
+        census = row["census"] or {"state": _prep_run()._NOT_RUN, "detail": f"sha leg {row['sha']}"}
         print(f"  census  {census['state']}" + (f" -- {census['detail']}" if census.get("detail") else ""))
-        for e in census["entries"]:
-            if e["state"] == "MATCH":
-                continue
-            print(f"    {e['state']:12s} {e['command'][:110]}")
-            if e.get("basis"):
-                print(f"      basis    {e['basis']}")
-            if e.get("detail"):
-                print(f"      detail   {e['detail']}")
-            for line in e.get("attribution") or []:
-                print(f"      since    {line}")
         _print_seam(row)
 
 
@@ -218,11 +156,8 @@ def _print_seam(row: dict) -> None:
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(prog="mise-certify")
     ap.add_argument("plans", nargs="+", help="plan paths, repo-relative or absolute")
-    ap.add_argument("--repo-root", default=".", help="the repo the census commands run in (default: cwd)")
-    ap.add_argument("--timeout", type=int, default=30, help="per census command, seconds")
+    ap.add_argument("--repo-root", default=".", help="the repo the plans live in (default: cwd)")
     ap.add_argument("--json", action="store_true")
-    ap.add_argument("--attribute", action="store_true",
-                    help="on census DRIFT, list commits since the stamp (one git log per distinct stamp)")
     try:
         args = ap.parse_args(argv)
     except SystemExit as exc:
@@ -230,10 +165,7 @@ def main(argv: list[str]) -> int:
 
     _bootstrap_engine()
     root = Path(args.repo_root).resolve()
-    cache: dict = {}
-    rows = [certify(Path(p) if Path(p).is_absolute() else root / p, root, args.timeout,
-                    args.attribute, cache)
-            for p in args.plans]
+    rows = [certify(Path(p) if Path(p).is_absolute() else root / p, root) for p in args.plans]
     try:
         _seam_leg(rows, root)
     except ValueError as exc:
@@ -246,9 +178,7 @@ def main(argv: list[str]) -> int:
     else:
         _print(rows)
 
-    failed = any(r["sha"] in _FAILING_SHA or (r["census"] or {}).get("state") == "DRIFT"
-                 or (r.get("seam") or {}).get("blocking")
-                 for r in rows)
+    failed = any(r["sha"] in _FAILING_SHA or (r.get("seam") or {}).get("blocking") for r in rows)
     return EXIT_FAILED if failed else EXIT_OK
 
 

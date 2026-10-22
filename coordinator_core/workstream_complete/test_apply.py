@@ -3445,3 +3445,17 @@ def test_push_leg_is_cadence_pending_and_never_touches_the_network(
     report = ws_apply._push_cadence_report(tmp_path)
     assert report["push_status"] == "cadence-pending"
     assert report["failed"] == [] and report["acted"] == []
+
+
+def test_rekey_complete_entry_args_uses_governing_plan_slug_alone() -> None:
+    args = ["--nature", "x"]
+    assert ws_apply._rekey_complete_entry_args(args, {"governing_plan_slug": "my-plan"}) == [
+        "--nature", "x", "--governing-plan-slug", "my-plan",
+    ]
+    assert ws_apply._rekey_complete_entry_args(
+        ["--governing-plan-slug", "chain"], {"governing_plan_slug": "my-plan"}
+    ) == ["--governing-plan-slug", "my-plan"]
+    assert ws_apply._rekey_complete_entry_args(args, {}) == args
+    assert ws_apply._rekey_complete_entry_args(
+        args, {"governing_plan_path": "a/b/p-stem.md", "governing_plan_slug": "my-plan"}
+    )[-1] == "p-stem"

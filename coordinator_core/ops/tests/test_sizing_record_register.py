@@ -136,6 +136,31 @@ def test_refusal_messages_name_ids(repo):
     assert "z" in _run(repo, _register(_row("z", status="waived")))["error"]
 
 
+def _seed_with_turn(repo: Path, text: str) -> Path:
+    path = _seed(repo)
+    path.write_text(
+        path.read_text(encoding="utf-8") + f"pm_verbatims:\n- turn: 1\n  ts: '2026-10-22T15:21:47Z'\n  text: {text}\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+def test_supersede_records_when_a_row_carries_the_turn_verbatim(repo):
+    path = _seed_with_turn(repo, "fix the coverage check")
+    assert _run(repo, _register(_row("R0")), supersede=True)["exit_code"] != 0
+    out = _run(repo, _register(_row("R1", source_text="> fix the coverage check (relayed)")), supersede=True)
+    assert out["exit_code"] == 0 and out["applied"] is True
+    assert _doc(path)["requirement_register"]["rows"][0]["id"] == "R1"
+
+
+def test_supersede_refuses_when_no_row_carries_any_of_the_turn(repo):
+    path = _seed_with_turn(repo, "fix the coverage check")
+    before = path.read_bytes()
+    out = _run(repo, _register(_row("R1", source_text="something else entirely")), supersede=True)
+    assert out["exit_code"] == 1 and "turn 1" in out["message"]
+    assert path.read_bytes() == before
+
+
 def test_ruled_deferred_row_is_accepted(repo):
     _seed(repo)
     r = _run(repo, _register(_row("a", status="deferred", ruling=_RULING)))

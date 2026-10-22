@@ -24,9 +24,10 @@ def _git(root: Path, *args: str) -> str:
     ).stdout.strip()
 
 
-@pytest.fixture
-def repo(tmp_path):
-    root = tmp_path / "repo"
+_TEMPLATE: list = []
+
+
+def _build_template(root):
     root.mkdir()
     _git(root, "init", "-q")
     (root / "pkg").mkdir()
@@ -46,7 +47,22 @@ def repo(tmp_path):
     (root / "old.txt").unlink()
     _git(root, "add", "-A", "--", "pkg", "new.txt", "old.txt")
     _git(root, "commit", "-q", "-m", "head")
-    return root, base_sha, base
+    return base_sha
+
+
+@pytest.fixture
+def repo(tmp_path):
+    """Copy of a once-built base+head repo; the git build spawns run once per module."""
+    import shutil
+    import tempfile
+
+    if not _TEMPLATE:
+        tpl = Path(tempfile.mkdtemp(prefix="landexp-tpl-")) / "repo"
+        _TEMPLATE.append((tpl, _build_template(tpl)))
+    tpl, base_sha = _TEMPLATE[0]
+    root = tmp_path / "repo"
+    shutil.copytree(tpl, root)
+    return root, base_sha, root / "scratch" / "base"
 
 
 def _build(root, base_sha, base, paths, name="out"):

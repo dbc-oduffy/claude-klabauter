@@ -929,9 +929,9 @@ def _rekey_complete_entry_args(args: "list[str]", decisions: dict[str, Any]) -> 
     key and filename follow the plan being closed, not a chain-wide slug that an
     earlier close on the same chain already holds."""
     plan_path = decisions.get("governing_plan_path")
-    if not plan_path:
-        return args
-    stem = Path(str(plan_path)).stem
+    stem = Path(str(plan_path)).stem if plan_path else ""
+    if not stem:
+        stem = str(decisions.get("governing_plan_slug") or "").strip()
     if not stem:
         return args
     out = list(args)

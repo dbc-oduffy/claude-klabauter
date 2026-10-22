@@ -1169,7 +1169,49 @@ def test_resolve_coded_on_deferred_row_names_the_lift(tmp_path):
     ))
 
     assert result["exit_code"] == 1, result
-    assert "row C1 is deferred (deferred_until: 2026-12-01); lift deferred_until first" in result["error"]
+    assert "row C1 is deferred (deferred_until: 2026-12-01); " in result["error"]
+    assert (
+        'lift it: plan.tasks.mutate stamp {"updates":[{"id":"C1","deferred_until":null}]}'
+        in result["error"]
+    )
+    assert plan.read_text(encoding="utf-8") == before
+
+
+def test_stamp_null_lifts_deferred_until_then_resolve_succeeds(tmp_path):
+    repo = _make_git_repo(tmp_path)
+    deferred = _PLAN_WITH_TASKS.replace(
+        "  deferred: false\n", "  deferred: true\n  deferred_until: 2026-12-01\n"
+    )
+    deferred = deferred.replace("  deferred: true\n", "  deferred: true\n  pm_approved: true\n")
+    plan = _seed_plan(repo, "stamp-lift.md", deferred)
+
+    result = _run(_handler(
+        {"verb": "stamp", "plan_path": str(plan),
+         "updates": [{"id": "C1", "deferred_until": None}]},
+        repo_root=repo / ".git",
+    ))
+    assert result["exit_code"] == 0, result
+    assert "deferred_until" not in plan.read_text(encoding="utf-8")
+
+    result = _run(_handler(
+        {"verb": "resolve", "plan_path": str(plan), "id": "C1",
+         "disposition": "voided", "reason": "superseded", "actor": "em-1"},
+        repo_root=repo / ".git",
+    ))
+    assert result["exit_code"] == 0, result
+
+
+def test_stamp_null_on_required_key_refuses(tmp_path):
+    repo = _make_git_repo(tmp_path)
+    plan = _seed_plan(repo, "stamp-null-required.md", _PLAN_WITH_TASKS)
+    before = plan.read_text(encoding="utf-8")
+
+    result = _run(_handler(
+        {"verb": "stamp", "plan_path": str(plan),
+         "updates": [{"id": "C1", "change_kind": None}]},
+        repo_root=repo / ".git",
+    ))
+    assert result["exit_code"] == 1, result
     assert plan.read_text(encoding="utf-8") == before
 
 

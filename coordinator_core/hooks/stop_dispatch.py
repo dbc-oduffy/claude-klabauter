@@ -415,7 +415,8 @@ def _extract_advisory(result) -> "tuple[bool, Optional[str]]":
             return True, reason if isinstance(reason, str) and reason else None
         text = hso.get("additionalContext")
         return False, text if isinstance(text, str) and text else None
-    message = result.get("message")
+    # A warn-level Stop advisory arrives as a top-level systemMessage.
+    message = result.get("message") or result.get("systemMessage")
     if isinstance(message, str) and message:
         return False, message
     return False, None
