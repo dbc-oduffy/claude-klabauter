@@ -2185,8 +2185,8 @@
     "coordinator_core/_content_root_primitive.py": "f7fcd3083855a5e1dd53c09233fbfd64f8dffdf5",
     "coordinator_core/_data_root.py": "0c7c8524f25376ae49593f11334445539dc557f9",
     "coordinator_core/_engine_landing.py": "06dbb1273f3c36fdb6be08767ec75e73c71630e7",
-    "coordinator_core/_engine_published_at": "668bbe9ef0d6832ddc77b28e75d739b477b92578",
-    "coordinator_core/_engine_stamp": "727d3ffe831637fab8af2b5638ad662d2361a53f",
+    "coordinator_core/_engine_published_at": "27dc6de54483aa3e4058b985c45a5ca9d9a0b4ec",
+    "coordinator_core/_engine_stamp": "cbff3570d81c175676872dcfbe0ed18538f77b66",
     "coordinator_core/_fleet_names.py": "e81fc4247611fe486697f4707b28a1a3a008f392",
     "coordinator_core/_hook_envelope.py": "7e70aa3f56bfcea2cc146eab698c57469159691b",
     "coordinator_core/_repo_root_probe.py": "2d8edfa8cd9343436a650584da430aa87ae0397d",
@@ -2238,7 +2238,7 @@
     "coordinator_core/authoring_leaks/tests/test_ts_import_closure.py": "251fe7ed8c686e66d355bd332ae184520315d709",
     "coordinator_core/authoring_leaks/ts_import_closure.py": "b2bff8fdacee145729fcb2053f6f3b74b82fa005",
     "coordinator_core/authz/__init__.py": "37ffe0d0c8c7d7fcfa43e88ec271f71fd5259d30",
-    "coordinator_core/authz/classification.py": "797f6bc3be0daf28744bb4a06f0bffa69e0c6412",
+    "coordinator_core/authz/classification.py": "b8b19f37d628358a972ecd2768417a7964d1c196",
     "coordinator_core/authz/completion_evidence.py": "bd6f8ca5ef30eb83b386eca9af5519a73d9e2e70",
     "coordinator_core/authz/contract.py": "1ccf6e0c16ac7bddd139cf887d56ed8ae45d7ab3",
     "coordinator_core/authz/dispatchable.py": "ff491d113919c1a9f009b89b9720c7ec36b71585",
@@ -4328,7 +4328,7 @@
     "coordinator_core/op_census/tests/test_spawn_bearing_ops.py": "cc71cd5973cd6f43f3521c423432e63eae282cfb",
     "coordinator_core/op_census/tests/test_timing.py": "1415b340dfc50c33503070aef1435d9395328c93",
     "coordinator_core/op_census/timing.py": "88029cbde47fa9a2d8bcf202462072d073b4bf32",
-    "coordinator_core/op_scopes.py": "0e77a076113ff90675f25d5b37ca100d0fc91cf7",
+    "coordinator_core/op_scopes.py": "55123bd4db7b7924cc00510f5d470c686ebe4e8b",
     "coordinator_core/ops/__init__.py": "fdc59a2528522fb5444009fe0604b08207460826",
     "coordinator_core/ops/_app_session_browser.py": "f32781ab794241359a0d3f62b3e51914308d30b9",
     "coordinator_core/ops/_app_session_build_guard.py": "281a2d35a389cb92854f04a9c8da5ab4a52e192b",
@@ -8034,7 +8034,7 @@
     "coordinator_core/tests/test_fast_red_registry_integrity.py": "366dd93713b65733cd780cb91203ce52e63cfaa8",
     "coordinator_core/tests/test_field_empty_key_regression.py": "6d8f87c33c9e1e71a33e960dec2f99547d95f548",
     "coordinator_core/tests/test_fleet_mode_process_boundary.py": "3f00a1ebf26ea04282e4876f63911eb743b924c9",
-    "coordinator_core/tests/test_fleet_mode_reader_set.py": "61deaec7f3627a517e9c6a06e11b9a8772aa21a2",
+    "coordinator_core/tests/test_fleet_mode_reader_set.py": "d3072606aaf7cbb7468d2efc83fb4e769dba61e8",
     "coordinator_core/tests/test_fleet_names.py": "3053ff422e46cbde0ffaac442d05e9b82ee8cb28",
     "coordinator_core/tests/test_foreign_identity_subject_exemptions.py": "a5fe7852b9a59158b7f14c5ac7ec2bfe4afc990d",
     "coordinator_core/tests/test_generate_repomap.py": "f50f2e226e240efee01a0c6d09a18ff1cf73fe67",
@@ -9032,5 +9032,5 @@
     "scripts/unstick_claude.py": "5458a0f699f1793ff9fd32295b9d0b33635f1c06"
   },
   "schema": 1,
-  "source_head": "dbf9933fdce6fb438393e4f78a835530122e60d1"
+  "source_head": "d50f456b6c93a683a1fc6dcf80c16299116184e5"
 }
