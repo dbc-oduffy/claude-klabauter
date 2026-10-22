@@ -209,9 +209,11 @@ def register_gate(
 
 def register_writeback(
     worktree_root: Path, plan_path: Optional[str], inline_review: Optional[dict], sha: str,
+    also_claim: Sequence[str] = (),
 ) -> dict:
     """Cascade the judge's per-row verdicts into the cited sizing's register and recompute its
-    rollup, in place; the caller adds ``sizing`` to the coded-stamp commit's paths.
+    rollup, in place; the caller adds ``sizing`` to the coded-stamp commit's paths. ``also_claim``
+    names row ids the plan claims beyond its frontmatter (rows the requirements ledger judged).
 
     Returns ``{}`` when nothing applies, ``{"register_sizing": rel}`` on a write, or
     ``{"register_writeback_error": reason}`` when the result fails the sizing schema (the file is
@@ -231,6 +233,7 @@ def register_writeback(
     )
     if sizing_rel is None:
         return {}
+    claim_ids = frozenset(claim_ids) | {str(i) for i in also_claim}
     from datetime import datetime, timezone
 
     from coordinator_core.frontmatter.schema_validate import format_validation_errors, validate_frontmatter

@@ -480,6 +480,17 @@ def test_writeback_moves_row_claimed_only_through_register_claims(wb_repo):
     assert (r3["status"], r3["wired"], r3["met_by"]) == ("met", True, [f"{_PLAN}@abc1234"])
 
 
+def test_writeback_also_claim_moves_a_row_the_plan_does_not_claim(wb_repo):
+    (wb_repo / _PLAN).write_text(f"---\nsizing_object: {_SIZING}\n---\nbody\n", encoding="utf-8")
+
+    unclaimed = register_writeback(wb_repo, _PLAN, _wb_review([_wb_judged("r3")]), "abc1234")
+    claimed = register_writeback(wb_repo, _PLAN, _wb_review([_wb_judged("r3")]), "abc1234", also_claim=["r3"])
+
+    assert unclaimed.get("register_sizing") is None
+    assert claimed == {"register_sizing": _SIZING}
+    assert _wb_register(wb_repo)["rows"][2]["status"] == "met"
+
+
 def test_writeback_not_met_run_appends_no_met_by_and_advances_progress(wb_repo):
     register_writeback(
         wb_repo, _PLAN, _wb_review([_wb_judged("r1", "partial", False)], status="not_met"), "abc1234"

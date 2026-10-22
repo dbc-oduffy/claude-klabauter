@@ -865,12 +865,14 @@ def _sizing_ship(ctx: JobContext) -> LegResult:
     ledger_rows = _ledger_met_rows(ctx)
     if ledger_rows:
         merged = {**(criterion or {}), "register_rows": [*((criterion or {}).get("register_rows") or []), *ledger_rows]}
-        settled = register_gate.register_writeback(ctx.root, plan_rel, {"criterion": merged}, sha)
+        settled = register_gate.register_writeback(
+            ctx.root, plan_rel, {"criterion": merged}, sha, also_claim=[r["id"] for r in ledger_rows]
+        )
         if settled.get("register_sizing"):
             _note_written(ctx, settled["register_sizing"])
             notes.append("ledger-met register rows written")
         elif settled.get("register_writeback_error"):
-            notes.append("ledger register write-back refused")
+            return _leg("failed", f"ledger-met rows: {settled['register_writeback_error']}", ctx)
     if _inputs(ctx).get("incomplete"):
         return _leg("ran" if notes else "not-applicable", "; ".join([*notes, "run incomplete: sizing stays live"]), ctx)
     wrote = register_gate.register_writeback(ctx.root, plan_rel, {"criterion": criterion} if criterion else None, sha)
@@ -878,14 +880,14 @@ def _sizing_ship(ctx: JobContext) -> LegResult:
         _note_written(ctx, wrote["register_sizing"])
         notes.append("register rows written")
     elif wrote.get("register_writeback_error"):
-        notes.append("register write-back refused")
+        notes.append(f"register write-back refused: {wrote['register_writeback_error']}")
     try:
         reply = reentrant_dispatch("sizing.ship", {"sizing_path": sizing_rel}, repo_root=ctx.common_dir)
     except Exception as exc:  # noqa: BLE001 -- recorded; the landing stands
         return _leg("failed", f"sizing.ship raised {type(exc).__name__}", ctx)
     if not isinstance(reply, dict) or reply.get("exit_code") != 0:
         refusal = reply.get("error") if isinstance(reply, dict) else reply
-        return _leg("not-applicable", f"ship skipped: {refusal}", ctx)
+        return _leg("failed", "; ".join([*notes, f"ship skipped: {refusal}"]), ctx)
     if not reply.get("applied"):
         return _leg("ran", "; ".join([*notes, "sizing already shipped"]), ctx)
     error = _write_resolution(ctx, sizing_rel, sha)

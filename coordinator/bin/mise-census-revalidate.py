@@ -100,10 +100,17 @@ EXIT_DRIFT = 1
 EXIT_UNCLOSED = 2
 EXIT_USAGE = 3
 
+_CENSUS_MODULE: Any = None
+
+
 def _census():
     """`coordinator_core.roadmap.census` -- the screen the prep gate stamps against, so a stamped
     premise is one this leg will run. Resolved on first call, never at import, so the module body
-    stays inert for `serve_classifier`."""
+    stays inert for `serve_classifier`. Cached: the set pass calls it per entry, and the uncached
+    path (`require_engine_on_path`, machine profile) cost ~2s of process time over a 153-plan set."""
+    global _CENSUS_MODULE
+    if _CENSUS_MODULE is not None:
+        return _CENSUS_MODULE
     own_dir = str(Path(__file__).resolve().parent)
     if own_dir not in sys.path:
         sys.path.insert(0, own_dir)
@@ -113,6 +120,7 @@ def _census():
     cc_invoke.require_engine_on_path(__file__)
     from coordinator_core.roadmap import census
 
+    _CENSUS_MODULE = census
     return census
 
 
@@ -391,6 +399,8 @@ _READERS = frozenset(
 #: git subcommands that read objects reachable from HEAD and nothing else mutable.
 _GIT_HISTORY = frozenset("log show rev-list ls-tree cat-file rev-parse".split())
 _GIT_WIDE_REFS = frozenset({"--all", "--branches", "--tags", "--remotes"})
+#: Options whose output depends on the wall clock, so HEAD alone does not key it.
+_GIT_CLOCK_OPTS = frozenset({"--since", "--until", "--after", "--before", "--max-age", "--min-age"})
 _REV = r"(?:HEAD|[0-9a-f]{7,40})(?:[~^]\d*)*"
 _REVSPEC = re.compile(rf"^{_REV}(?:\.{{2,3}}{_REV})?(?::.*)?$")
 _REV_PARSE_OPTS = frozenset({"--short", "--verify", "-q", "--quiet"})
@@ -675,6 +685,10 @@ def _git_history_only(args: list[str], head: Optional[str]) -> bool:
                 name in _GIT_WIDE_REFS
                 or name.startswith(("--glob", "--exclude", "--batch"))
                 or name in ("-g", "--walk-reflogs", "--reflog", "--source", "--notes")
+                or name in _GIT_CLOCK_OPTS
+                or "relative" in tok
+                or "%ar" in tok
+                or "%cr" in tok
                 or "decorate" in tok
                 or "%d" in tok
                 or "%D" in tok
@@ -993,6 +1007,9 @@ def _entry_row(
     if memo is None:
         return _judge(e, row, ran, plan_rel)
     if direct:
+        if len(ran[1]) + len(ran[2]) > _MEMO_MAX_OUTPUT:
+            memo.pop(command, None)
+            return _judge(e, row, ran, plan_rel)
         memo[command] = MemoEntry(None, ran, run_ms, prior.key_ms)
         if stats is not None:
             stats["direct_runs"] += 1

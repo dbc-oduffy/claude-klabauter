@@ -64,6 +64,42 @@ def test_no_ledger_met_leaves_register_untouched(tmp_path):
     assert out["result"].status == "not-applicable"
 
 
+def _xs_close(tmp_path: Path, extra_rows: tuple = ()) -> dict:
+    """The T22 shape: a plan that cites a sizing but claims no register row, a complete run."""
+    _init_repo(tmp_path)
+    (tmp_path / "docs" / "plans").mkdir(parents=True)
+    (tmp_path / "state" / "sizings").mkdir(parents=True)
+    (tmp_path / PLAN).write_text(f"---\nplan_id: p\nsizing_object: {SIZING}\n---\nbody\n", encoding="utf-8")
+    rows = [_wb_row("T22", claimed=False, anchor="relayed"), *extra_rows]
+    (tmp_path / SIZING).write_text(_wb_sizing_text(rows), encoding="utf-8")
+    run_close.write_close_job(
+        tmp_path, RUN, ("sizing-ship",), datetime.now().astimezone() + timedelta(minutes=10),
+        plan_rel=PLAN, terminal_sha=SHA, criterion=None,
+        inputs={"ledger_met": "ledger-met: T22", "ledger_judged": ["T22"]},
+    )
+    ctx = cb.JobContext(tmp_path, tmp_path / ".git", RUN, (), None, SHA, run_close._load(tmp_path, RUN))
+    result = cb._sizing_ship(ctx)
+    text = (tmp_path / SIZING).read_text(encoding="utf-8")
+    return {"result": result, "doc": yaml.safe_load(text), "rows": {r["id"]: r for r in rr.read_register(text).rows}}
+
+
+def test_xs_close_with_unclaimed_ledger_met_row_writes_it_met_and_ships(tmp_path):
+    out = _xs_close(tmp_path)
+
+    assert out["rows"]["T22"]["status"] == "met"
+    assert out["doc"]["requirement_register"]["rollup"]["open"] == 0
+    assert out["result"].status == "ran", out["result"].detail
+    assert out["doc"]["status"] == "shipped"
+
+
+def test_refused_ship_records_failed_with_the_reason(tmp_path):
+    out = _xs_close(tmp_path, extra_rows=(_wb_row("T23", claimed=False, anchor="relayed"),))
+
+    assert out["rows"]["T22"]["status"] == "met"
+    assert out["result"].status == "failed"
+    assert "ship skipped" in out["result"].detail and "T23" in out["result"].detail
+
+
 def test_reclose_requeues_a_not_applicable_sizing_ship_only_with_plan_reconciliation():
     assert cb.owed_on_reclose({"sizing-ship": "not-applicable", "plan-reconciliation": "failed"}) == [
         "sizing-ship", "plan-reconciliation",

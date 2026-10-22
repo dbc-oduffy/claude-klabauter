@@ -194,10 +194,15 @@ _HARNESS = textwrap.dedent(
       const label = opts.label || '';
       calls.push(label);
       if (label.startsWith('commit:')) return commitReply;
-      if (label.startsWith('seam:')) { seamParams.push(prompt); return reply; }
+      if (label.startsWith('seam:')) {
+        seamParams.push(prompt);
+        const next = Array.isArray(reply) ? reply[Math.min(seamParams.length, reply.length) - 1] : reply;
+        if (next === 'THROW') throw new Error('transport closed');
+        return next;
+      }
       return label.startsWith('work:') ? 'DONE: ok' : null;
     };
-    const body = src + '\\nreturn { notStarted: _notStarted, drift: _seamDrift, haltedPlans: [..._haltedPlans], failures: _seamFailures, planHeld: _planHeld, commitFailures: _commitFailures, commitRefused: _commitRefused };';
+    const body = src + '\\nreturn { notStarted: _notStarted, drift: _seamDrift, haltedPlans: [..._haltedPlans], failures: _seamFailures, reasons: Object.fromEntries(_haltedPlanReasons), planHeld: _planHeld, commitFailures: _commitFailures, commitRefused: _commitRefused };';
     const out = await new Function('agent', 'phase', 'log', 'parallel', 'return (async () => {' + body + '})();')(
       agent, () => {}, () => {}, async (xs) => Promise.all(xs.map((f) => f())));
     console.log(JSON.stringify({ calls, seamParams, ...out }));
@@ -336,6 +341,53 @@ def test_an_op_error_relay_fails_closed_and_an_empty_drift_does_too(tmp_path):
         out = _run_script(tmp_path, _compose(_two_plan_waves()), reply)
         assert "work:P2-C1" not in out["calls"]
         assert out["haltedPlans"] == [P2] and out["failures"]
+
+
+def _refused(text):
+    return {"verdict": "REFUSED", "per_plan": {}, "findings": [{"class": "op-error", "output": text}]}
+
+
+def _seam_calls(out):
+    return sum("seam check for wave 1." in p for p in out["seamParams"])
+
+
+@_NODE
+def test_a_refused_reply_halts_the_held_plan_with_the_finding_text(tmp_path):
+    out = _run_script(tmp_path, _compose(_two_plan_waves()), _refused("param validation: landed_range missing"))
+    assert _seam_calls(out) == 1
+    assert "param validation: landed_range missing" in out["reasons"][P2]
+    assert "param validation: landed_range missing" in out["failures"][0]
+    assert out["drift"][0]["failed"].endswith("param validation: landed_range missing")
+
+
+@_NODE
+@pytest.mark.parametrize("first", [_refused("ETIMEDOUT reaching the engine"), "THROW"])
+def test_an_infra_refusal_is_retried_once_and_a_clean_retry_dispatches_the_held_row(tmp_path, first):
+    out = _run_script(tmp_path, _compose(_two_plan_waves()), [first, CLEAN_REPLY])
+    assert _seam_calls(out) == 2
+    assert "work:P2-C1" in out["calls"]
+    assert out["failures"] == [] and out["haltedPlans"] == []
+
+
+@_NODE
+@pytest.mark.parametrize("bad", [_refused("invoke timed out after 30s"), "THROW"])
+def test_a_persistent_infra_refusal_is_an_engine_defect_with_its_cause_and_no_drift_entry(tmp_path, bad):
+    out = _run_script(tmp_path, _compose(_two_plan_waves()), [bad, bad])
+    assert _seam_calls(out) == 2
+    assert "work:P2-C1" not in out["calls"]
+    assert out["haltedPlans"] == [P2]
+    reason = out["reasons"][P2]
+    assert "engine defect" in reason and ("timed out after 30s" in reason or "transport closed" in reason)
+    assert "seam drift" not in reason
+    assert out["drift"] == []
+
+
+@_NODE
+def test_a_non_infra_refusal_is_not_retried_and_carries_its_cause(tmp_path):
+    out = _run_script(tmp_path, _compose(_two_plan_waves()), [_refused("budget exceeded"), CLEAN_REPLY])
+    assert _seam_calls(out) == 1
+    assert "budget exceeded" in out["reasons"][P2]
+    assert "engine defect" not in out["reasons"][P2]
 
 
 def test_the_relay_prompt_says_refused_for_an_op_error():
