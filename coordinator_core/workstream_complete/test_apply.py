@@ -3432,6 +3432,7 @@ def test_fill_completion_entry_surfaces_appends_review_notes_section_once(
 
 def test_push_leg_is_cadence_pending_and_never_touches_the_network(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     """The close publishes via the warm push cadence; it must not import or
     call `push_outstanding` (120s ceiling vs the 30s dispatch backstop)."""
@@ -3441,6 +3442,6 @@ def test_push_leg_is_cadence_pending_and_never_touches_the_network(
         raise AssertionError("apply must not push inline")
 
     monkeypatch.setattr(po, "push_outstanding", boom)
-    report = ws_apply._push_cadence_report()
+    report = ws_apply._push_cadence_report(tmp_path)
     assert report["push_status"] == "cadence-pending"
     assert report["failed"] == [] and report["acted"] == []

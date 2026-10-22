@@ -1156,6 +1156,45 @@ def _queued_legs(
     return [leg for leg in legs if leg in resolved and resolved[leg].status == "queued"]
 
 
+def _sizing_unshipped(ctx: JobContext) -> bool:
+    """True when the plan cites a sizing whose on-disk ``status`` is still ``sized`` or ``routed``."""
+    plan_rel = _plan_rel(ctx)
+    if not plan_rel or not ctx.terminal_sha or _inputs(ctx).get("incomplete"):
+        return False
+    from coordinator_core.frontmatter.primitives import read_fm_field_unquoted
+
+    sizing_rel, _ = _cited(ctx, plan_rel)
+    text = _read(ctx, sizing_rel) if sizing_rel else None
+    return text is not None and read_fm_field_unquoted(text, "status") in ("sized", "routed")
+
+
+def _legs_owed(ctx: JobContext, record: Any) -> list[str]:
+    """The queued legs, plus ``sizing-ship`` and the ``close-commit`` landing its write when the leg was
+    recorded ``not-applicable`` or ``failed`` yet the cited sizing is still unshipped on disk."""
+    owed = set(_queued_legs(ctx.root, ctx.run_id, record=record))
+    legs = record.get("legs") if isinstance(record, dict) else None
+    entry = legs.get("sizing-ship") if isinstance(legs, dict) else None
+    if (
+        isinstance(entry, dict)
+        and entry.get("status") in ("not-applicable", "failed")
+        and _sizing_unshipped(ctx)
+    ):
+        owed.update(("sizing-ship", "close-commit"))
+    return [leg for leg in BACKGROUND_LEGS if leg in owed]
+
+
+def _no_legs_cause(root: Path, run_id: str) -> str:
+    """Why a record that exists owes nothing: each leg's recorded status, as one line."""
+    record = _load_record(root, run_id)
+    legs = record.get("legs") if isinstance(record, dict) else None
+    if not isinstance(legs, dict) or not legs:
+        return "close-job record lists no legs"
+    statuses = ", ".join(
+        f"{leg}={entry.get('status') if isinstance(entry, dict) else '?'}" for leg, entry in legs.items()
+    )
+    return f"no leg is queued and no sizing-ship is owed (cited sizing shipped or none cited): {statuses}"
+
+
 def run_background(
     ctx: JobContext,
     runners: Optional[Mapping[str, Runner]] = None,
@@ -1177,7 +1216,7 @@ def run_background(
             ctx = replace(ctx, terminal_sha=sha)
     ran_any = False
     deferred: list[str] = []
-    for leg in _queued_legs(ctx.root, ctx.run_id, record=record):
+    for leg in _legs_owed(ctx, record):
         spent = cpu_ms() - started
         if leg not in UNBUDGETED_LEGS and spent >= budget_ms:
             reason = f"job process time {spent:.0f}ms reached {budget_ms:.0f}ms"
@@ -1282,7 +1321,10 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         return {"error": "close.background requires a repo root"}
     try:
         ctx = _context(main_worktree_root(Path(repo_root)), Path(repo_root), params or {})
-        return _summary(ctx.run_id, run_and_continue(ctx))
+        outcomes = run_and_continue(ctx)
+        if not outcomes:
+            return {"error": run_close.scrub_detail(f"no legs paid for run {ctx.run_id}: {_no_legs_cause(ctx.root, ctx.run_id)}")}
+        return _summary(ctx.run_id, outcomes)
     except (ValueError, FileNotFoundError) as exc:
         return {"error": run_close.scrub_detail(f"{type(exc).__name__}: {exc}")}
 

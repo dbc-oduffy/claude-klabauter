@@ -4686,7 +4686,7 @@ def _seam_leg_js(
         "    if (!cause) cause = refusal;",
         "    if (!infra) break;",
         "    }",
-        "    const infraRefused = !!cause && (!r || (r.verdict === 'REFUSED' && _SEAM_INFRA.test(cause)) || cause.startsWith('agent call threw'));",
+        "    const infraRefused = !!cause && (!r || _SEAM_INFRA.test(cause));",
         "    if (infraRefused) {",
         "      _seamFail(n, 'engine defect: seam leg infra refusal persisted after one retry: ' + cause, true);",
         "      return;",

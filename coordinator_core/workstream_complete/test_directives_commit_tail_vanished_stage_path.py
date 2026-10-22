@@ -89,9 +89,9 @@ def test_whole_vanish_fails_the_commit_and_names_the_vanished_path(repo):
     assert len(_vanished_diagnostics(result)) >= 1, result.diagnostics
 
 
-def test_empty_pathspec_is_a_benign_noop_without_diagnostic(repo):
+def test_empty_pathspec_is_a_benign_noop_that_names_itself(repo):
     result = _close(repo, [])
 
     assert result.commit_failed is False
     assert result.committed_sha is None
-    assert result.diagnostics == []
+    assert result.diagnostics == [directives_commit_tail.EMPTY_PATHSPEC_DIAGNOSTIC]

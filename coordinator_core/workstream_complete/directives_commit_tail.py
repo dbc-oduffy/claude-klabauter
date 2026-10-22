@@ -1139,6 +1139,10 @@ FREE_VALUE_KEYS: tuple[str, ...] = (
     _KEY_HANDOFF_DISPOSITIONS,
 )
 
+EMPTY_PATHSPEC_DIAGNOSTIC = (
+    "close commit attempted with an empty pathspec: no stage path resolved, nothing staged"
+)
+
 
 # ---------------------------------------------------------------------------
 # Step 3/3.5 rebuild — d-run-wsc-tail's commit, at the DR-358-ruled shape
@@ -1200,7 +1204,8 @@ def run_close_commit(
     commit lands for the remaining paths with `commit_failed=False`; when the
     pathspec is non-empty and every entry vanished (and `deleted_paths` is
     empty) it returns `commit_failed=True`, `committed_sha=None`. An empty
-    pathspec is a benign no-op. No `on_committed` hook
+    pathspec is a benign no-op (`commit_failed=False`) that carries
+    `EMPTY_PATHSPEC_DIAGNOSTIC`. No `on_committed` hook
     fires mid-call, and `commit_paths` carries no `Session-Id:` trailer
     concept to attribute.
 
@@ -1274,7 +1279,7 @@ def run_close_commit(
             commit_failed=False,
             integrity_breach=False,
             sha_unverified=False,
-            diagnostics=[],
+            diagnostics=[EMPTY_PATHSPEC_DIAGNOSTIC],
         )
     # Engine-owned trailers (Session-Id/Deliverable-Id/Co-Authored-By): this
     # route lands via `commit_paths`' commit-tree plumbing, which fires no

@@ -282,10 +282,12 @@ from coordinator_core.telemetry.composition_record import (
 from coordinator_core.workstream_complete import CONSUMES_MANIFEST, TransportFailure, brief
 from coordinator_core.workstream_complete import close_residue
 from coordinator_core.workstream_complete import completion_verdict as _completion_verdict
+from coordinator_core.workstream_complete import decision_keys
 from coordinator_core.workstream_complete import directives_commit_tail
 from coordinator_core.workstream_complete import directives_completion
 from coordinator_core.workstream_complete import directives_lessons_plan
 from coordinator_core.workstream_complete import directives_review
+from coordinator_core.workstream_complete import push_pending
 from coordinator_core.workstream_complete.directives_session_hygiene import AFTER_CLOSE_COMMIT_KEY
 from coordinator_core.workstream_complete import judgments as _judgments
 from coordinator_core.ops.dispatch_emit.run_close import DISCHARGED_BY_KEY, close_job_path
@@ -964,16 +966,17 @@ def _fill_completion_entry_surfaces(
         fill_authored_surfaces,
     )
 
-    collision = _entry_title_collision(entry, decisions.get("title"), PLACEHOLDER_TITLE)
+    surfaces = decision_keys.resolve_entry_surfaces(decisions)
+    collision = _entry_title_collision(entry, surfaces.title, PLACEHOLDER_TITLE)
     if collision is not None:
         return collision
     try:
         fill_authored_surfaces(
             repo_root,
             str(entry),
-            title=decisions.get("title"),
-            nature=_decided_nature(decisions),
-            prose=decisions.get("prose"),
+            title=surfaces.title,
+            nature=surfaces.nature_key_value or _decided_nature(decisions),
+            prose=surfaces.prose,
         )
     except AuthoredSurfaceMissing as exc:
         return f"{entry.name} left placeholder; set decisions key(s): {', '.join(exc.keys)}"
@@ -1238,6 +1241,8 @@ def _execute_directives(
     degraded: list[dict[str, Any]] = []
     results: list[dict[str, Any]] = []
     stdout_by_id: dict[str, str] = {}
+    decision_keys_report: dict[str, Any] = {}
+    unfilled_entry: Optional[tuple[str, str]] = None
     discharged: dict[str, str] = {}
     _resolved_repo_root: list[Optional[Path]] = [repo_root]
     _repo_root_resolved: list[bool] = [repo_root is not None]
@@ -1375,9 +1380,15 @@ def _execute_directives(
             fill_error = _fill_completion_entry_surfaces(
                 _lazy_repo_root(), result.get("stdout", ""), decisions, review_notes_section
             )
+            aliased = decision_keys.resolve_entry_surfaces(decisions).aliased
+            if aliased:
+                decision_keys_report["aliased"] = list(aliased)
             if fill_error is not None:
                 failed.append({"id": directive["id"], "error": fill_error})
                 results.append(result)
+                printed = (result.get("stdout") or "").strip().splitlines()
+                if printed:
+                    unfilled_entry = (printed[0].strip(), fill_error)
                 continue
         results.append(result)
         landed.append(directive["id"])
@@ -1421,6 +1432,13 @@ def _execute_directives(
     completion_entry_stdout = (stdout_by_id.get(_COMPLETE_ENTRY_DIRECTIVE_ID) or "").strip()
     if completion_entry_stdout:
         report["completion_entry_path"] = completion_entry_stdout.splitlines()[0].strip()
+        report["completion_entry_filled"] = True
+    elif unfilled_entry is not None:
+        report["completion_entry_path"] = unfilled_entry[0]
+        report["completion_entry_filled"] = False
+        report["completion_entry_fill_error"] = unfilled_entry[1]
+    if decision_keys_report:
+        report["decision_keys"] = decision_keys_report
 
     if failed and landed:
         return int(WorkstreamApplyExitCode.PARTIAL_MUTATION), report
@@ -1566,6 +1584,7 @@ def _run_close_commit_tail(
     completion_entry_path: Optional[str] = None,
     extra_stage_paths: "Sequence[str]" = (),
     residue_snapshot: "Optional[close_residue.ResidueSnapshot]" = None,
+    entry_unstaged_reason: Optional[str] = None,
 ) -> Optional[dict[str, Any]]:
     """Invokes `directives_commit_tail.run_close_commit_and_release_claims`
     -- never bare `run_close_commit`, which releases neither claim (see that
@@ -1805,6 +1824,15 @@ def _run_close_commit_tail(
         elif stage_paths:
             report["already_landed"] = True
             report["already_satisfied"] = True
+        else:
+            causes = [str(d) for d in result.diagnostics]
+            if entry_unstaged_reason:
+                causes.append(entry_unstaged_reason)
+            report["commit_failed"] = True
+            report["nothing_committed"] = True
+            report["error"] = "close commit attempted but nothing was committed" + (
+                f": {'; '.join(causes)}" if causes else ""
+            )
     return report
 
 
@@ -1944,7 +1972,7 @@ def _run_completion_entry_fold(
     return fold_completion_entry_commit(Path(worktree_root), entry_path, committed_sha)
 
 
-def _push_cadence_report() -> dict[str, Any]:
+def _push_cadence_report(worktree_root: "Union[Path, str]") -> dict[str, Any]:
     """The close's push leg: publishing belongs to the warm engine's push
     cadence (DR-329, `warm.push_cadence`), never to an inline network call.
 
@@ -1953,14 +1981,26 @@ def _push_cadence_report() -> dict[str, Any]:
     of network round trip inside one apply. A prior round's committed,
     still-unpushed work is swept by the same cadence, so skipping the call
     loses nothing. `cadence-pending` is the success vocabulary
-    (`compute_push_landed_gate`)."""
-    return {
+    (`compute_push_landed_gate`).
+
+    `push_pending` is report-only: local commits the upstream lacks, with the
+    command that publishes them. A failure reading it omits the key and is
+    named in `push_pending_error`; a report leg never crashes a landed close."""
+    report: dict[str, Any] = {
         "push_status": "cadence-pending",
         "acted": [],
         "skipped": [],
         "failed": [],
         "unconfirmed": [],
     }
+    try:
+        pending = push_pending.push_pending(worktree_root)
+    except Exception as exc:  # noqa: BLE001 - report leg must not crash a landed close
+        report["push_pending_error"] = f"{type(exc).__name__}: {exc}"
+    else:
+        if pending is not None:
+            report["push_pending"] = pending
+    return report
 
 
 # ---------------------------------------------------------------------------
@@ -2105,6 +2145,22 @@ def apply(*, decisions: Optional[dict[str, Any]] = None) -> tuple[int, dict[str,
         judgment_points = envelope.get("judgment_points", [])
         effective_decisions = decisions if decisions is not None else envelope.get("decisions", {})
 
+        refused_keys = decision_keys.refused_decision_keys(effective_decisions)
+        if refused_keys:
+            refused_keys_report = {
+                "error": decision_keys.refusal_message(refused_keys),
+                "refused_decision_keys": list(refused_keys),
+                "landed": [],
+                "blocked": [],
+                "blocked_remedy": {},
+                "failed": [],
+                "results": [],
+            }
+            exit_label = exit_code_label(
+                int(WorkstreamApplyExitCode.HALTED_AT_JUDGMENT), refused_keys_report
+            )
+            return int(WorkstreamApplyExitCode.HALTED_AT_JUDGMENT), refused_keys_report
+
         # No-commit row guard (C13) — checked BEFORE dispatch, not woven into
         # the ordinary directive halt contract above: this judgment gates the
         # WHOLE apply (no directive names it in `depends_on`), because a
@@ -2218,6 +2274,13 @@ def apply(*, decisions: Optional[dict[str, Any]] = None) -> tuple[int, dict[str,
         worktree_root = envelope.get("artifact", {}).get("path")
         if worktree_root:
             completion_entry_path = report.get("completion_entry_path")
+            entry_filled = report.get("completion_entry_filled", True)
+            entry_unstaged_reason = (
+                None
+                if entry_filled or not completion_entry_path
+                else f"completion entry {completion_entry_path} not staged: "
+                f"{report.get('completion_entry_fill_error')}"
+            )
             waiver_errors: list[str] = []
             waiver_receipt = _emit_waiver_receipt(
                 worktree_root,
@@ -2236,16 +2299,19 @@ def apply(*, decisions: Optional[dict[str, Any]] = None) -> tuple[int, dict[str,
                 worktree_root,
                 _undischarged_ship_dispositions(effective_decisions, report.get("discharged") or {}),
                 sid,
-                completion_entry_path,
+                completion_entry_path if entry_filled else None,
                 extra_stage_paths=[waiver_receipt] if waiver_receipt else (),
                 residue_snapshot=residue_snapshot,
+                entry_unstaged_reason=entry_unstaged_reason,
             )
             if close_commit_report is not None:
                 report["close_commit"] = close_commit_report
                 if close_commit_report.get("commit_failed"):
                     _fold_failure(
                         report,
-                        "close-commit:commit-failed",
+                        "close-commit:nothing-committed"
+                        if close_commit_report.get("nothing_committed")
+                        else "close-commit:commit-failed",
                         str(close_commit_report.get("error") or "close commit failed"),
                     )
                 elif close_commit_report.get("not_landed"):
@@ -2263,7 +2329,7 @@ def apply(*, decisions: Optional[dict[str, Any]] = None) -> tuple[int, dict[str,
             # both.
             fold_report = _run_completion_entry_fold(
                 worktree_root,
-                completion_entry_path,
+                completion_entry_path if entry_filled else None,
                 (close_commit_report or {}).get("committed_sha"),
             )
             if fold_report is not None:
@@ -2295,7 +2361,7 @@ def apply(*, decisions: Optional[dict[str, Any]] = None) -> tuple[int, dict[str,
             # placement, so a still-outstanding push from an earlier round
             # is not left behind by a session whose own commit attempt found
             # nothing new to commit.
-            report["push"] = _push_cadence_report()
+            report["push"] = _push_cadence_report(worktree_root)
 
             # Only a close that completed and whose commit step ran clean has a
             # committed tree for these to act on. A halted, partial or failed
