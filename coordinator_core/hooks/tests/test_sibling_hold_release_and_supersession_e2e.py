@@ -84,7 +84,6 @@ def repo(tmp_path, monkeypatch):
     monkeypatch.setenv("COORDINATOR_AGENT_TYPE_HOST", "coordinator")
     monkeypatch.setenv("COORDINATOR_SESSION_ID", "11111111-2222-3333-4444-555555555555")
     monkeypatch.setattr(ask_compose, "_read_plan_blitz", lambda: _BLITZ)
-    monkeypatch.setattr(c, "concurrent_run_budget", lambda physical_cores=None: 2)
     return root
 
 

@@ -4279,6 +4279,13 @@ def check_destructive_rm(
                 if tgt_is_bare or (tgt_top and _is_same_dir(tgt_top, tgt_abs)):
                     if rm_override or _unborn_scratch_repo.is_unborn_scratch_repo(tgt_abs):
                         continue
+                    clone_failed = (
+                        None
+                        if tgt_is_bare
+                        else _unborn_scratch_repo.scratch_clone_failures(tgt_abs)
+                    )
+                    if clone_failed == []:
+                        continue
                     store_desc = tgt_top if tgt_top else tgt_abs
                     # A LINKED `git worktree add` worktree's actual .git
                     # store lives in the MAIN repo (`.git/worktrees/<name>`)
@@ -4306,6 +4313,12 @@ def check_destructive_rm(
                             "worktree — every commit, branch, stash, and "
                             "reflog entry that exists only here"
                         )
+                    failed_note = (
+                        "Scratch clone not recoverable by re-clone, failed: %s.\n\n"
+                        % ", ".join(clone_failed)
+                        if clone_failed
+                        else ""
+                    )
                     return _deny(
                         "BLOCKED: '%s' is the ROOT of a git repository (%s). "
                         "'rm' on it %s "
@@ -4313,6 +4326,7 @@ def check_destructive_rm(
                         "plus all gitignored content (settings, caches, "
                         "credentials, session state) that no commit ever "
                         "held.\n\n"
+                        "%s"
                         "This deny is on identity, not on dirty-state: a "
                         "clean worktree does NOT make deleting the store "
                         "safe.\n\n"
@@ -4328,7 +4342,7 @@ def check_destructive_rm(
                         "LOOKS like a case-variant probe directory can be the "
                         "real one. Verify with:\n"
                         '  python3 -c "import os;print(os.stat(%r).st_ino)"'
-                        % (tgt, store_desc, loss_desc, tgt_abs, tgt_abs, tgt_abs, tgt_abs)
+                        % (tgt, store_desc, loss_desc, failed_note, tgt_abs, tgt_abs, tgt_abs, tgt_abs)
                     )
 
             # Scratch allowlist.

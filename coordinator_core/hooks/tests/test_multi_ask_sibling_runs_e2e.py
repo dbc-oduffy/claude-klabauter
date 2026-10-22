@@ -46,7 +46,6 @@ def repo(tmp_path, monkeypatch):
     monkeypatch.setenv("COORDINATOR_AGENT_TYPE_HOST", "coordinator")
     monkeypatch.setenv("COORDINATOR_SESSION_ID", "11111111-2222-3333-4444-555555555555")
     monkeypatch.setattr(ask_compose, "_read_plan_blitz", lambda: _BLITZ)
-    monkeypatch.setattr(c, "concurrent_run_budget", lambda physical_cores=None: 2)
     return root
 
 
@@ -205,20 +204,16 @@ def test_a_halted_predecessor_with_every_row_committed_admits_the_successor(repo
     assert _status(repo, second["run_id"]) == "running"
 
 
-def test_budget_plus_one_asks_queue_the_overflow_and_refuse_nothing(repo):
+def test_three_disjoint_asks_all_read_ready_and_each_fires_while_the_others_run(repo):
     reply = _reply_json(_submit(repo, {"asks": _disjoint(3)}))
     parent = _parent(repo, reply["parent_id"])
-    assert [r.status for r in parent.runs] == ["ready", "ready", "queued"]
+    assert [r.status for r in parent.runs] == ["ready", "ready", "ready"]
     assert len(reply["runs"]) == 3 and all("after" not in r for r in reply["runs"])
-    queued = parent.runs[2]
 
-    _fire_slice(repo, parent.runs[1].slice_sizing)
-    denied = _fire_slice(repo, queued.slice_sizing)
-    assert _hso(denied)["permissionDecision"] == "deny"
-    assert parent.runs[0].run_id in _hso(denied)["permissionDecisionReason"]
-
-    close = run_close.sibling_release(repo, parent.runs[0].run_id, "abc1234")
-    assert close["released"] == [warp_fire.fire_command(queued.slice_sizing)]
+    for run in parent.runs[1:]:
+        allowed = _fire_slice(repo, run.slice_sizing)
+        assert _hso(allowed)["permissionDecision"] == "allow", allowed
+    assert [_status(repo, r.run_id) for r in parent.runs[1:]] == ["running", "running"]
 
 
 def _split_parent(repo: Path) -> str:

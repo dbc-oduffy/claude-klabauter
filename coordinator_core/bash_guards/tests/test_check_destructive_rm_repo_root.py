@@ -146,6 +146,76 @@ class TestUnbornScratchRepo:
         assert _denied(f"rm -rf {probe}")
 
 
+class TestRecoverableScratchClone:
+    """A scratch clone whose refs are all on a remote and holds no stash or loose files is admitted."""
+
+    @pytest.fixture()
+    def clone(self, tmp_path):
+        origin = _make_repo(str(tmp_path / "origin"))
+        outer = tmp_path / "outer"
+        outer.mkdir()
+        _git("init", "-q", cwd=str(outer))
+        s = outer / "scratch"
+        s.mkdir()
+        dest = str(s / "dc-clone")
+        _git("clone", "-q", origin, dest, cwd=str(tmp_path))
+        _git("config", "user.email", "t@t.invalid", cwd=dest)
+        _git("config", "user.name", "t", cwd=dest)
+        return dest
+
+    def test_clean_pushed_clone_is_allowed(self, clone):
+        assert not _denied(f"rm -rf {clone}")
+
+    def test_unpushed_commit_is_refused_naming_it(self, clone):
+        with open(os.path.join(clone, "tracked.txt"), "a", encoding="utf-8") as fh:
+            fh.write("more\n")
+        _git("commit", "-qam", "local", cwd=clone)
+        reason = _reason(f"rm -rf {clone}")
+        assert "unpushed local ref" in reason
+        assert "untracked" not in reason.split("This deny")[0]
+
+    def test_stash_is_refused_naming_it(self, clone):
+        with open(os.path.join(clone, "tracked.txt"), "a", encoding="utf-8") as fh:
+            fh.write("wip\n")
+        _git("stash", cwd=clone)
+        assert "stash present" in _reason(f"rm -rf {clone}")
+
+    def test_untracked_file_is_refused_naming_it(self, clone):
+        with open(os.path.join(clone, "new.txt"), "w", encoding="utf-8") as fh:
+            fh.write("x\n")
+        assert "untracked files" in _reason(f"rm -rf {clone}")
+
+    def test_modified_file_is_refused_naming_it(self, clone):
+        with open(os.path.join(clone, "tracked.txt"), "a", encoding="utf-8") as fh:
+            fh.write("edit\n")
+        assert "modified files" in _reason(f"rm -rf {clone}")
+
+    def test_every_failed_condition_is_named(self, clone):
+        with open(os.path.join(clone, "tracked.txt"), "a", encoding="utf-8") as fh:
+            fh.write("edit\n")
+        with open(os.path.join(clone, "new.txt"), "w", encoding="utf-8") as fh:
+            fh.write("x\n")
+        reason = _reason(f"rm -rf {clone}")
+        assert "untracked files" in reason and "modified files" in reason
+
+    def test_committed_repo_with_no_remote_is_refused_as_unpushed(self, tmp_path):
+        outer = tmp_path / "outer"
+        outer.mkdir()
+        _git("init", "-q", cwd=str(outer))
+        (outer / "scratch").mkdir()
+        local = _make_repo(str(outer / "scratch" / "local-only"))
+        assert "unpushed local ref" in _reason(f"rm -rf {local}")
+
+    def test_clone_outside_scratch_stays_denied(self, tmp_path):
+        origin = _make_repo(str(tmp_path / "origin"))
+        dest = str(tmp_path / "work" / "dc-clone")
+        os.makedirs(os.path.dirname(dest))
+        _git("clone", "-q", origin, dest, cwd=str(tmp_path))
+        reason = _reason(f"rm -rf {dest}")
+        assert "ROOT of a git repository" in reason
+        assert "not recoverable by re-clone" not in reason
+
+
 class TestCleanRepoRootStillDenied:
     def test_pristine_worktree_does_not_soften_the_deny(self, repo_outside_any_repo):
         out = subprocess.run(
