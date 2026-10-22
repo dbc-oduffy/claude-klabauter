@@ -1201,7 +1201,7 @@ def run_background(
     budget_ms: float = JOB_BUDGET_MS,
     cpu_ms: Callable[[], float] = lambda: time.process_time() * 1000.0,
 ) -> dict[str, LegResult]:
-    """Pay each queued background leg in ledger order and record its outcome.
+    """Pay each owed background leg (``_legs_owed``) in ledger order and record its outcome.
 
     Raises FileNotFoundError when the run has no close-job record. Returns leg -> outcome.
     """
@@ -1323,7 +1323,8 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         ctx = _context(main_worktree_root(Path(repo_root)), Path(repo_root), params or {})
         outcomes = run_and_continue(ctx)
         if not outcomes:
-            return {"error": run_close.scrub_detail(f"no legs paid for run {ctx.run_id}: {_no_legs_cause(ctx.root, ctx.run_id)}")}
+            cause = _no_legs_cause(ctx.root, ctx.run_id)
+            return {"error": run_close.scrub_detail(f"no legs paid for run {ctx.run_id}: {cause}")}
         return _summary(ctx.run_id, outcomes)
     except (ValueError, FileNotFoundError) as exc:
         return {"error": run_close.scrub_detail(f"{type(exc).__name__}: {exc}")}
