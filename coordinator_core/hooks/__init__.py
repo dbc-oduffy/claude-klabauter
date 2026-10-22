@@ -166,6 +166,7 @@ _EAGER_HOOK_MODULES: list[str] = [
     "coordinator_core.hooks.subagent_zero_tool_use_surface",
     "coordinator_core.hooks.subagent_zero_tool_use_resolve",
     "coordinator_core.hooks.subagent_arrival_check",
+    "coordinator_core.hooks.subagent_arrival_record",
     "coordinator_core.hooks.subagent_fabrication_check",
     "coordinator_core.hooks.receiver_state_sensor",
     "coordinator_core.hooks.subagent_sidecar_fill_check",

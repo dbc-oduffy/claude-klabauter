@@ -372,7 +372,8 @@ def amend_close_job(
     ``falsifier_broken=None`` writes null (mark read, not BROKEN); ``UNCHANGED`` leaves the
     key as it was, absent included. *queue* sets each named run-bound leg ``queued`` and
     requires *deadline*; legs still ``queued`` past the old deadline are written ``failed``
-    before it is replaced.
+    before it is replaced. A *settled* leg replaces that leg's queued or failed entry; *run_base_sha*
+    overwrites the recorded base.
     """
     _check_criterion(criterion)
     if falsifier_broken is not UNCHANGED:

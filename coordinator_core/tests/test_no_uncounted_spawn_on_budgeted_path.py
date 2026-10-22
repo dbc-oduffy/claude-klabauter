@@ -429,6 +429,39 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
     # Enrolled 2026-10-21: statically spawn-free (empty function-granular reachable set). The
     # census leg's shell entries run in `mise-census-revalidate.py`, loaded by file path, so they
     # are outside this walker; they are bounded by the op's `_census_deadline`, not by a count.
+    # Enrolled 2026-10-22: statically spawn-free (empty function-granular reachable set).
+    "fleet.migrate_prose_queue": (
+        "coordinator_core/ops/fleet/migrate_prose_queue.py",
+        ("_handler",),
+    ),
+    "hooks.context_pressure_precompact": (
+        "coordinator_core/hooks/context_pressure_precompact.py",
+        ("_handler",),
+    ),
+    "hooks.subagent_arrival_record": (
+        "coordinator_core/hooks/subagent_arrival_record.py",
+        ("_handler",),
+    ),
+    "plan.claim_register_rows": (
+        "coordinator_core/ops/dispatch_emit/revise_absorb.py",
+        ("_claim_handler",),
+    ),
+    "research.targets": (
+        "coordinator_core/ops/research_targets.py",
+        ("_handler",),
+    ),
+    "roadmap.link_plan": (
+        "coordinator_core/ops/roadmap_link_plan.py",
+        ("_handler",),
+    ),
+    "session.poll_share": (
+        "coordinator_core/ops/session/poll_share.py",
+        ("_handler",),
+    ),
+    "workflow.pending_revisions": (
+        "coordinator_core/ops/dispatch_emit/revise_absorb.py",
+        ("_pending_handler",),
+    ),
     "plan.mise_upgrade_apply": (
         "coordinator_core/ops/plan_mise_prep_probe.py",
         ("_apply_handler",),
@@ -3201,9 +3234,7 @@ _CLUSTER_D5_OPEN_DISPOSITION: dict[str, tuple[tuple[str, str, str, int], ...]] =
     "goal.close_day_apply": (
         ("coordinator_core/ops/emit/resolvers.py", "resolve_coordinator_root", "<dynamic>", 0),
     ),
-    "handoff.archive_transition": (
-        ("coordinator_core/archive_stamp.py", "_run_git", "git", 0),
-    ),
+    "handoff.archive_transition": (),
     "handoff.author_fork": (
         ("coordinator_core/person_resolver.py", "_git_config_uncached", "git", 0),
     ),
@@ -3303,9 +3334,9 @@ def test_cluster_d5_open_disposition_matches_live_measurement():
     # onto `git/run.py::run_git` (a D3 file), so `handoff.columns` reaches no D5 site.
     # 33 -> 32 on 2026-10-03: `deliverable.cascade_terminal` re-registered from
     # `cascade_terminal_op.py`, which never reaches `archive_stamp.py::_run_git`.
-    assert total_pairs == 34, (
+    assert total_pairs == 33, (
         f"_CLUSTER_D5_OPEN_DISPOSITION now totals {total_pairs} (op, site) pairs, not the "
-        "34 measured 2026-10-12 after f10d5c0233 put the batched files_citing prefetch on distill.apply_disposal and distill.assemble_disposal_manifest; 32 measured 2026-10-03 (see the comment above); 33 measured 2026-10-02 after handoff.columns' D5 site moved onto run_git; 34 left after changelog.upsert_reviewed and a since-retired completion op stopped reaching "
+        "33 measured 2026-10-22 after handoff.archive_transition stopped reaching archive_stamp.py::_run_git; 34 measured 2026-10-12 after f10d5c0233 put the batched files_citing prefetch on distill.apply_disposal and distill.assemble_disposal_manifest; 32 measured 2026-10-03 (see the comment above); 33 measured 2026-10-02 after handoff.columns' D5 site moved onto run_git; 34 left after changelog.upsert_reviewed and a since-retired completion op stopped reaching "
         "their D5 sites (was 38 after the 2026-08-30 rot sweep dropped handoff.reconcile_close_terminal's "
         "single pair -- the op is deleted from the tree and absent from ops/_registry_map.py, "
         "so its row could only ever read a missing file. 39 - 1 = 38. Update this constant "
@@ -5376,10 +5407,12 @@ def test_dynamic_argv0_sites_are_dispositioned_on_their_own_terms():
         "sub-chunk's job) or this entry is a leftover that should be removed:\n"
         + "\n".join(f"  {k}" for k in stale)
     )
-    assert len(_DYNAMIC_ARGV0_DISPOSITIONS) == 30, (
+    assert len(_DYNAMIC_ARGV0_DISPOSITIONS) == 32, (
         f"_DYNAMIC_ARGV0_DISPOSITIONS carries {len(_DYNAMIC_ARGV0_DISPOSITIONS)} "
-        "entries, not the 30 <dynamic>-argv0 sites tranche dyn's inventory now "
-        "names (31 until 2026-10-12, when regenerate_cache.py::_find_uproject was deleted) -- the dispatch brief's EM-measured figure was 43, the 2026-08-29 "
+        "entries, not the 32 <dynamic>-argv0 sites tranche dyn's inventory now "
+        "names (30 until 2026-10-22, when app_session.validate landed in 826a30056e and added the live "
+        "`app_session.py::_spawn_runner` and `::_validate` sites, both present in the frozen inventory); "
+        "(31 until 2026-10-12, when regenerate_cache.py::_find_uproject was deleted) -- the dispatch brief's EM-measured figure was 43, the 2026-08-29 "
         "gravestone deletion of review_trail_readjudication_report.py "
         "(docs/plans/2026-08-29-the-gravestoned-review-trail-surface-is-deleted.md, "
         "DR-374's last row) removed its `_run` site along with the whole module, "
@@ -6973,7 +7006,7 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     # this pass; it surfaced only because the file's other failures were cleared.
     "hooks.plan_persistence_check": 1,
     "git.maintenance": 1,
-    "housekeeping.cycle": 5,
+    "housekeeping.cycle": 4,
     # 1 -> 2: 98f04d91ca added scope.release_committed_claims to _commit_group, reaching
     # git/run.py::run_git via normalize_touch_path's `ls-files` slow arm (zero-spawn fast arm
     # first). That site is already priced into memo.transition and housekeeping.cycle.
@@ -7006,7 +7039,7 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     "fleet.archive_terminal_sizings": 3,
     # 8 -> 9, 2026-10-09: bash guard `deploy-dirty-tree` adds one `git status --porcelain`
     # (session_facts._dirty_paths), reached ONLY when the command resolves to a deploy shape.
-    "warm_guard.evaluate": 9,
+    "warm_guard.evaluate": 5,
     # 9 -> 10, 2026-10-12 (f10d5c0233): `_common.files_citing` is the batched citation
     # prefetch -- one `rg -f` per needle set (live scope, harvest scope), never per candidate.
     "distill.apply_disposal": 10,
@@ -7142,7 +7175,7 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     # (a different blind spot -- a by-reference dispatch dict, not present on this op's path --
     # but the same principle: an empty reading must never stand in for "genuinely spawn-free").
     "handoff.scaffold_from_queue": 1,
-    "hooks.context_pressure_precompact": 1,
+    # Removed 2026-10-22: enrolled in _BUDGETED_ENTRYPOINTS (spawn-free), so the pin duplicated it (AC20c).
     "hooks.subagent_fabrication_check": 1,
     "hooks.subagent_review_mark": 1,
     "hooks.suggest_sonnet_research": 1,
@@ -7230,7 +7263,7 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     "hooks.mise_autofire": 1,
     "hooks.pickup_autofire": 1,
     # 8 -> 9, 2026-10-09: same deploy-dirty-tree `git status` as warm_guard.evaluate (gated).
-    "hooks.preuse_bash_dispatch": 9,
+    "hooks.preuse_bash_dispatch": 5,
     "hooks.session_start_cloud_focus": 1,
     "hooks.session_start_repair_prepare_commit_msg_hook": 2,
     "hooks.sessionend_auto_commit": 2,
@@ -7251,11 +7284,11 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     "plan.gated_criteria_met": 4,
     # plan.narrow_criterion: locked_rmw commit via git_native, same site set as other plan writers.
     "plan.narrow_criterion": 4,
-    "review_mint.bookkeep_wave": 4,
+    "review_mint.bookkeep_wave": 3,
     # Lowered 6 -> 5 2026-10-02: 261b1cc1df removed one reachable site; 5 -> 4 by 7d1da49c7a.
-    "review_mint.record_superseding_review": 4,
+    "review_mint.record_superseding_review": 3,
     "review_stamp.check": 1,
-    "review_stamp.mint": 4,
+    "review_stamp.mint": 3,
     # --- 2026-10-02 merge reconciliation (claude/admiring-franklin x work/machine-a). The git
     # routing sweep (7481613e80, 7835b34367) moved per-module `subprocess` git calls onto the
     # shared `git/run.py::run_git` site, so the same physical call is now one site key for every
