@@ -97,6 +97,13 @@ def test_post_commit_row_with_an_unnamed_sha_still_refuses(plain_repo):
     assert got == [{"id": "R1", "reason": UNCHANGED_SINCE_HALT_REASON}]
 
 
+def test_post_commit_row_with_a_noted_sha_that_does_not_resolve_is_refused(plain_repo):
+    root, manifest, halt = plain_repo
+    verdict = {"items": [{"id": "R1", "status": "post_commit", "met_by": [CREDIT_SHA]}]}
+    got = tc._unchanged_since_halt_failures(root, _resume(halt), verdict, manifest)
+    assert got == [{"id": "R1", "reason": UNCHANGED_SINCE_HALT_REASON}]
+
+
 def test_no_revise_note_still_refuses(plain_repo):
     root, manifest, halt = plain_repo
     got = tc._unchanged_since_halt_failures(root, _resume(halt, revise_notes=[]), _verdict(), manifest)

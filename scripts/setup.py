@@ -35,7 +35,8 @@ Responsibilities:
   4. Verification: `import coordinator_core` from CLAUDE_KLABAUTER_ROOT.
   4b. Verification: PowerShell dialect guard ARMED state (`check_dialect_guard_armed`) —
       makes a disarmed `_dialect.py` (ImportError -> SILENT) loud at install time,
-      naming the interpreter(s) probed. Non-fatal; does not arm the guard (see C2 of
+      naming the interpreter(s) probed. A disarmed guard exits 98 after the remaining
+      steps; this check does not arm the guard (see C2 of
       docs/plans/2026-08-17-machine-first-install-surface.md).
   5. Post-install health probe (bin/claude-klabauter-doctor-probe.py --step-zero --required-only)
      as best-effort; runs only the 4 required probes, not all 26.
@@ -162,6 +163,11 @@ EXIT_HARD_DEP_MISSING = 90
 # a bool is new; if a downstream consumer starts depending on this code,
 # document it alongside EXIT_HARD_DEP_MISSING/EXIT_FLAG_PAIR_VIOLATION.
 EXIT_HEALTH_PROBE_HARD_FAILURE = 94
+
+# Exit-code 98: `check_dialect_guard_armed` found the PowerShell dialect guard
+# disarmed (tree_sitter / tree_sitter_pwsh not importable) under the engine
+# interpreter or bare `python3`; the FAIL line names each interpreter.
+EXIT_DIALECT_GUARD_DISARMED = 98
 
 # Exit-code 95: this script is BOTH claude-klabauter's AND claude-klabauter's
 # standalone installer (docs/plans/2026-07-31-claude-klabauter-oss-release.md
@@ -3199,7 +3205,32 @@ def verify_coordinator_core_importable(claude_klabauter_root_resolved: Path, eng
     print(f"PASS [verification] coordinator_core importable from {claude_klabauter_root_resolved} ({engine_py})")
 
 
-def check_dialect_guard_armed(claude_klabauter_root_resolved: Path, engine_py: str) -> None:
+_PIN_RELAUNCH_ENV = "CLAUDE_KLABAUTER_SETUP_UNDER_PIN"
+
+
+def _relaunch_under_provisioned_pin(argv: list[str]) -> int | None:
+    """Re-run setup under the example-retrieval-repo pinned interpreter when it differs from
+    `sys.executable`; returns the child's exit code, or None to continue here."""
+    if os.environ.get(_PIN_RELAUNCH_ENV):
+        return None
+    try:
+        from coordinator_core.install.provisioned_interpreter import (
+            resolve_provisioned_interpreter,
+        )
+
+        pin = resolve_provisioned_interpreter().path
+    except Exception:  # noqa: BLE001 — unresolved pin is surfaced by the exit-98 check
+        return None
+    if not pin or os.path.realpath(pin) == os.path.realpath(sys.executable):
+        return None
+    print(f"Relaunching setup under the example-retrieval-repo pin: {pin}")
+    env = dict(os.environ, **{_PIN_RELAUNCH_ENV: "1"})
+    return subprocess.run(
+        [pin, str(Path(__file__).resolve()), *argv], env=env, **_NO_CONSOLE
+    ).returncode
+
+
+def check_dialect_guard_armed(claude_klabauter_root_resolved: Path, engine_py: str) -> list[str]:
     """Install-time ARMED check for the PowerShell dialect guard
     (`coordinator_core/bash_guards/_dialect.py`) — makes a disarmed guard
     LOUD at install time instead of leaving it silently degraded.
@@ -3231,10 +3262,14 @@ def check_dialect_guard_armed(claude_klabauter_root_resolved: Path, engine_py: s
         2026-08-17: ARMED under `.coordinator-venv`, SILENT under bare
         `python3`).
 
-    Never fatal: no exit-code change. Anti-scope forbids verifying a
-    dependency by importing it under the WRONG interpreter — `probe_armed`
-    always subprocesses into the named interpreter rather than checking
-    `sys.executable`/the current process.
+    Returns the interpreters under which the guard is DISARMED (empty when
+    armed everywhere); `main` turns a non-empty result into
+    `EXIT_DIALECT_GUARD_DISARMED` once the remaining steps have run, so the
+    install can no longer report success over a disarmed guard.
+
+    Anti-scope forbids verifying a dependency by importing it under the
+    WRONG interpreter — `probe_armed` always subprocesses into the named
+    interpreter rather than checking `sys.executable`/the current process.
     """
     print()
     print("--- Verification: PowerShell dialect guard ARMED state ---")
@@ -3260,6 +3295,17 @@ def check_dialect_guard_armed(claude_klabauter_root_resolved: Path, engine_py: s
     # reason from the record.
     interpreter_labels: dict[str, list[str]] = {}
     interpreter_labels.setdefault(engine_py, []).append("engine (dependency-provisioning) interpreter")
+    from coordinator_core.install.provisioned_interpreter import (
+        resolve_provisioned_interpreter,
+    )
+
+    provisioned = resolve_provisioned_interpreter()
+    if provisioned.path:
+        interpreter_labels.setdefault(provisioned.path, []).append(
+            "example-retrieval-repo provisioned pin (guard interpreter)"
+        )
+    else:
+        print(f"  [ADVISORY] example-retrieval-repo pin unresolved: {provisioned.reason}")
     bare_python3 = shutil.which("python3")
     if bare_python3:
         interpreter_labels.setdefault(bare_python3, []).append(
@@ -3271,7 +3317,7 @@ def check_dialect_guard_armed(claude_klabauter_root_resolved: Path, engine_py: s
             "interpreter hooks.json resolves guard hooks under."
         )
 
-    any_disarmed = False
+    disarmed: list[str] = []
     any_missing_package = False
     for interpreter, labels in interpreter_labels.items():
         label = " / ".join(labels)
@@ -3279,12 +3325,12 @@ def check_dialect_guard_armed(claude_klabauter_root_resolved: Path, engine_py: s
         if armed:
             print(f"PASS [dialect-guard]  {label} ({interpreter}): {detail}")
         else:
-            any_disarmed = True
+            disarmed.append(interpreter)
             if "cause: missing-package" in detail:
                 any_missing_package = True
             print(f"WARN [dialect-guard]  {label} ({interpreter}): {detail}", file=sys.stderr)
 
-    if any_disarmed:
+    if disarmed:
         print(file=sys.stderr)
         print(
             "  The PowerShell dialect guard is DISARMED under at least one interpreter "
@@ -3312,6 +3358,14 @@ def check_dialect_guard_armed(claude_klabauter_root_resolved: Path, engine_py: s
                 "inspect the reported cause before assuming a package install fixes this.",
                 file=sys.stderr,
             )
+        print(
+            f"FAIL [dialect-guard] guard DISARMED under: {', '.join(disarmed)} "
+            f"— setup exits {EXIT_DIALECT_GUARD_DISARMED} after the remaining steps. "
+            "Remedy: run example-retrieval-repo's installer so its pinned interpreter "
+            "(read_claude_pin.py) carries tree-sitter and tree-sitter-pwsh, then re-run setup.",
+            file=sys.stderr,
+        )
+    return disarmed
 
 
 def run_health_probe(claude_klabauter_root_resolved: Path, engine_py: str, agent_mode: bool) -> bool:
@@ -4781,6 +4835,10 @@ def main(argv: list[str]) -> int:
         )
         return EXIT_FLAG_PAIR_VIOLATION
 
+    relaunch_rc = _relaunch_under_provisioned_pin(argv)
+    if relaunch_rc is not None:
+        return relaunch_rc
+
     script_path = Path(__file__).resolve()
     repo_root = script_path.parent.parent
     claude_klabauter_root_resolved, claude_klabauter_root_source = resolve_claude_klabauter_root(repo_root, args)
@@ -4856,7 +4914,7 @@ def main(argv: list[str]) -> int:
     seed_heavy_admission_defaults()
     seed_gem_cross_repo_commit_default()
     verify_coordinator_core_importable(claude_klabauter_root_resolved, engine_py, import_names)
-    check_dialect_guard_armed(claude_klabauter_root_resolved, engine_py)
+    dialect_disarmed = check_dialect_guard_armed(claude_klabauter_root_resolved, engine_py)
     probe_hard_failure = run_health_probe(claude_klabauter_root_resolved, engine_py, args.agent_mode)
 
     if not args.register_only:
@@ -4901,6 +4959,8 @@ def main(argv: list[str]) -> int:
         print(CLOSING_CHAIN_WALK_LINE)
     if probe_hard_failure:
         return EXIT_HEALTH_PROBE_HARD_FAILURE
+    if dialect_disarmed:
+        return EXIT_DIALECT_GUARD_DISARMED
     return 0
 
 

@@ -31,6 +31,32 @@ def test_reply_keys_are_pinned_and_documented():
     assert gcc.ALREADY_LANDED_KEY in gcc.__doc__ and gcc.UNLANDED_KEY in gcc.__doc__
 
 
+def test_landing_constants_are_pinned_and_documented():
+    assert gcc.DROP_PEER_HUNKS_CONFLICT == "peer-hunks-conflict"
+    assert gcc.DROP_UNATTRIBUTED_SHARED == "unattributed-shared"
+    assert gcc.REFUSED_IMPORT_CLOSURE == "import-closure"
+    assert gcc.ROW_IMAGES_ROOT == ".coordinator-local/grind-row-images"
+    assert gcc.IMAGE_VERB == "image"
+    assert gcc.IMAGE_PHASES == ("pre", "post")
+    for name in (gcc.DROP_PEER_HUNKS_CONFLICT, gcc.DROP_UNATTRIBUTED_SHARED, gcc.REFUSED_IMPORT_CLOSURE):
+        assert name in gcc.__doc__ or name.upper().replace("-", "_") in gcc.__doc__
+    for const in ("DROP_PEER_HUNKS_CONFLICT", "DROP_UNATTRIBUTED_SHARED", "REFUSED_IMPORT_CLOSURE"):
+        assert const in gcc.__doc__
+
+
+def test_row_images_rel_joins_safe_segments():
+    assert gcc.row_images_rel("run1", "C1") == ".coordinator-local/grind-row-images/run1/C1"
+
+
+@pytest.mark.parametrize(
+    "run_id,row_id",
+    [("..", "a"), ("r", ".."), ("r/x", "a"), ("r", "a/b"), ("", "a"), ("r", ""), ("r\\x", "a"), ("C:", "a"), ("/r", "a")],
+)
+def test_row_images_rel_refuses_unsafe_segment(run_id, row_id):
+    with pytest.raises(ValueError):
+        gcc.row_images_rel(run_id, row_id)
+
+
 def test_accepts_well_formed_params():
     assert gcc.validate_grind_params(_good()) is None
 

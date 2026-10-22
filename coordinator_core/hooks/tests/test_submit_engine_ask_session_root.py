@@ -78,6 +78,34 @@ def test_absolute_repo_arg_wins(repos, monkeypatch):
     assert seen == []
 
 
+def _child_emit_params(root):
+    run = type("R", (), {"slice_sizing": "state/sizings/x.yaml", "run_id": "ask-1"})()
+    return sea._child_params(root, {"args": {}}, "sid", run, None, False)
+
+
+def test_child_emit_finds_its_sizing_in_the_submitting_repo_not_the_engine_root(tmp_path, monkeypatch):
+    from coordinator_core.ops.dispatch_emit.op import _sizing_root
+    from coordinator_core.ops.dispatch_emit.sizing_fire import SizingFireRefused, load_sizing
+
+    sub = tmp_path / "submitter"
+    engine = tmp_path / "engine"
+    _init(sub)
+    _init(engine)
+    (sub / "state" / "sizings").mkdir(parents=True)
+    (sub / "state" / "sizings" / "x.yaml").write_text("schema: sizing-object\nname: x\n", encoding="utf-8")
+    monkeypatch.setattr(sea, "_load_sizing_doc", lambda *a: {})
+    monkeypatch.chdir(engine)
+
+    params = _child_emit_params(sub)
+    root = _sizing_root(params, None, params["sizing_path"])
+    assert root == sub
+    load_sizing(root, params["sizing_path"])
+
+    bare = {k: v for k, v in params.items() if k != "target_root"}
+    with pytest.raises(SizingFireRefused):
+        load_sizing(_sizing_root(bare, None, bare["sizing_path"]), bare["sizing_path"])
+
+
 def test_claude_project_dir_from_payload_env_anchors(repos, monkeypatch):
     a, clone = repos
     monkeypatch.setattr(wba, "read_session_start_record", lambda *args, **kw: None)

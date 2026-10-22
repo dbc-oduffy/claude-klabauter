@@ -75,7 +75,7 @@ Negative-spec:
     baton, then ``ask_fanout`` over the plans' sizings. It consumes the token on a landed commit.
     Carrying ``halted_by`` too is refused.
   - A call whose ``grind`` is a dict with a ``rows`` list is a grind's terminal commit
-    (``grind_terminal_commit``): one commit_v2 over the finished rows' declared paths, a
+    (``land_run_grind``): one landing over the finished rows' declared paths, a
     ``Grind-Row:`` trailer per landed row; it drops ledger-root paths and deletions git cannot
     see, reports them, and carries no ``stranded``/``undeclared_dirty``. Carrying ``halted_by`` too is refused.
   - Lands a file the run's review stage wrote outside the declared writes as review residue (named
@@ -157,6 +157,9 @@ from coordinator_core.session.record_homes import home_dir
 from coordinator_core.warm.entry_seam import OpUnavailableError, reentrant_dispatch
 from coordinator_core.ops.dispatch_emit import credit_gate, gate_owed, pre_halt_credit  # noqa: E402 -- sibling-package group
 from coordinator_core.ops.dispatch_emit.land_run import _em_discharged_rows  # noqa: E402
+from coordinator_core.ops.dispatch_emit.pre_halt_ancestry import (  # noqa: E402
+    CITED_DETAIL_KEY, cited_at_or_before, verified_post_commit_credit,
+)
 from coordinator_core.ops.dispatch_emit.ask_contract import (
     DELIVERY_NOTE_DIR,
     RECORD_DIR_ROOT,
@@ -1818,7 +1821,9 @@ def _unchanged_since_halt_failures(
     declared set or any git exit other than 0 or 1 refuses the same rows. A resume whose
     ``unlanded`` is an empty list owes no diff and refuses nothing (``_every_staged_row_landed``).
     When ``detail`` is given and the rows are refused it receives ``{base, base_source, outcome}``,
-    ``outcome`` one of ``unchanged``, ``no-base``, ``no-declared-paths``, ``git-exit-<n>``."""
+    ``outcome`` one of ``unchanged``, ``no-base``, ``no-declared-paths``, ``git-exit-<n>``.
+    On the unchanged refusal, rows whose met_by names a commit at or before the base are recorded
+    in ``detail["cited"]`` and, when they cover every refused row, stand as the landing."""
     blocking = resume.get("blocking") if isinstance(resume, dict) else None
     items = verdict.get("items") if isinstance(verdict, dict) else None
     if not isinstance(blocking, list) or not isinstance(items, list):
@@ -1830,7 +1835,14 @@ def _unchanged_since_halt_failures(
     exempt = verified_only_rows(resume)
     credited = pre_halt_credit.credited_rows(resume, verdict)
     discharged = _em_discharged_rows(resume, items) if judged else frozenset()
-    judged = [i for i in judged if i not in exempt and i not in credited and i not in discharged]
+    post_commit = {
+        str(i["id"]) for i in items if isinstance(i, dict) and i.get("status") == "post_commit"
+    }
+    unverified = credited & post_commit
+    judged = [
+        i for i in judged
+        if i not in exempt and (i not in credited or i in unverified) and i not in discharged
+    ]
     if not judged or _every_staged_row_landed(resume):
         return []
     paths, stage_head = _manifest_declared(manifest_path)
@@ -1841,6 +1853,11 @@ def _unchanged_since_halt_failures(
         base, source = stage_head, "stage-head"
     if base is None:
         source = None
+    if unverified and base:
+        verified = verified_post_commit_credit(worktree_root, base, items, unverified)
+        judged = [i for i in judged if i not in verified]
+        if not judged:
+            return []
     outcome = "no-base" if base is None else "no-declared-paths" if not paths else "unchanged"
     if outcome == "unchanged":
         result = run_git(
@@ -1864,10 +1881,17 @@ def _unchanged_since_halt_failures(
                 owners = [
                     x for x in (plan_rel, resume.get("plan"), resume.get("run_id")) if isinstance(x, str)
                 ]
-                landed = _landed_before_halt(worktree_root, base, paths, owners)
-                if landed:
-                    detail["landed_sha"] = landed
+                cited = cited_at_or_before(worktree_root, base, items, judged)
+                if cited and all(i in cited for i in judged):
+                    shas = set(cited.values())
+                    detail[CITED_DETAIL_KEY] = cited
+                    detail["landed_sha"] = next(iter(shas)) if len(shas) == 1 else base
                     detail["landed_paths"] = list(paths)
+                else:
+                    landed = _landed_before_halt(worktree_root, base, paths, owners)
+                    if landed:
+                        detail["landed_sha"] = landed
+                        detail["landed_paths"] = list(paths)
         else:
             outcome = f"git-exit-{result.returncode}"
     if detail is not None:
@@ -1973,7 +1997,8 @@ def _ledger_gate(
     A run emitted without a ledger is not gated (``(None, None, [])``). The pass is one gate among
     the review stage's; it discharges none of them. ``plan_rel`` is the request's plan, the
     since-halt check's halt-commit lookup when ``resume_ledger`` names none; a since-halt refusal
-    carries ``since_halt: {base, base_source, outcome}``."""
+    carries ``since_halt: {base, base_source, outcome}``. A since-halt refusal closes as already
+    landed when every refused row is in ``since_halt["cited"]`` (its met_by names a pre-halt commit)."""
     from coordinator_core.ops.dispatch_emit import requirements_ledger
 
     try:
@@ -2018,7 +2043,10 @@ def _ledger_gate(
         message += f". Verdict ids that are not register rows: {', '.join(foreign)}"
     if since_halt.get("landed_sha") and all(
         f["reason"] == UNCHANGED_SINCE_HALT_REASON for f in result["failures"]
-    ) and _verdict_credits(verdict, [f["id"] for f in result["failures"]], since_halt["landed_sha"]):
+    ) and (
+        all(str(f["id"]) in since_halt.get(CITED_DETAIL_KEY, {}) for f in result["failures"])
+        or _verdict_credits(verdict, [f["id"] for f in result["failures"]], since_halt["landed_sha"])
+    ):
         return {
             "committed": True, "sha": since_halt["landed_sha"], "already_landed": True,
             "paths": since_halt["landed_paths"], "since_halt": since_halt,
@@ -3925,7 +3953,7 @@ def _terminal_commit_inner(
         return commit_halted_record(main_worktree_root(repo_root), repo_root, params)
 
     if _is_grind_call(params):
-        from coordinator_core.ops.dispatch_emit.grind_terminal_commit import commit_grind_rows
+        from coordinator_core.ops.dispatch_emit.land_run_grind import commit_grind_rows
         from coordinator_core.lifecycle import main_worktree_root
 
         return commit_grind_rows(main_worktree_root(repo_root), repo_root, params)

@@ -206,3 +206,14 @@ def test_touched_s_or_larger(tmp_path, monkeypatch):
     assert xb.touched_s_or_larger("s", root) is True
     fake(["state/sizings/gone.yaml"])
     assert xb.touched_s_or_larger("s", root) is True
+
+
+def test_lf_file_stays_byte_exact_and_eol_only_change_is_free(repo):
+    root, sha = repo
+    xb.open_xs_lane(root, "s", sha)
+    (root / "a.py").write_bytes(_lines(10).encode().replace(b"\n", b"\r\n"))
+    assert xb.measure(root, xb.read_lane(root, "s"), "a.py", _lines(10)).files == 0
+    (root / "b.py").write_bytes(b"l1\nl2\n")
+    f = str(root / "b.py")
+    assert xb.project(f, {"old_string": "l1\nl2", "new_string": "q"}) == "q\n"
+    assert xb.project(f, {"old_string": "l1\r\nl2", "new_string": "q"}) is None

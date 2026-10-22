@@ -998,7 +998,7 @@ def test_unresolved_error_names_canonical_id() -> None:
 
     mod = _load_dispatcher_module()
     mod._known_receiver_ids = lambda: list(_KNOWN_FOR_FOLD)
-    mod._receiver_repo_key = lambda to: "repos.content_root"
+    mod._receiver_repo_key = lambda to: "repos.some_sibling"
     mod._is_central_receiver = lambda to: False
     buf = io.StringIO()
     with contextlib.redirect_stderr(buf):

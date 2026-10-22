@@ -134,10 +134,6 @@ _EXEMPT_PRODUCERS = {
         "--no-edit`); the merge commit belongs to no baton or handoff and "
         "carries no claim-bearing session id."
     ),
-    "ops/workday_start_step0_reconcile.py": (
-        "commits the spooled reconcile paths at workday start; session-"
-        "bootstrap bookkeeping owned by no baton or handoff. Pathspec-scoped."
-    ),
     "percolate/publish_lease.py": (
         "`acquire` builds the publish-lease commit with `commit-tree` on a "
         "scratch ref; not a worktree commit and owned by no baton or handoff."

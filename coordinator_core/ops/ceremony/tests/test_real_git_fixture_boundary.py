@@ -74,6 +74,9 @@ _TESTS_DIR = Path(__file__).resolve().parent
 # test_commit_authored_new_file_onto_ref.py: `onto_ref=` lands on a ref HEAD
 # does not name; the oracle is the real ref/HEAD/worktree state after the
 # in-process commit, which a mocked git cannot exhibit.
+# test_commit_via_head_spine_refuses_machine_local_path.py: the oracle is real
+# git state -- HEAD unchanged after the refusal, the sibling path really
+# committed -- which a mocked git cannot fail.
 # test_publish_allowlist_admission.py: the drift leg fires only on a path
 # git reports as newly added; that status comes from a real index.
 _ALLOWED_REAL_GIT_IMPORTERS: frozenset[str] = frozenset({
@@ -88,6 +91,7 @@ _ALLOWED_REAL_GIT_IMPORTERS: frozenset[str] = frozenset({
     "test_commit_scoped_edges.py",
     "test_commit_scoped_in_process.py",
     "test_commit_scoped_trailer_replay.py",
+    "test_commit_via_head_spine_refuses_machine_local_path.py",
     "test_no_interpreter_on_commit.py",
     "test_post_commit_tail.py",
     "test_post_commit_tail_completion_fold.py",

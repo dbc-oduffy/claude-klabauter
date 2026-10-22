@@ -90,7 +90,7 @@ def test_a_landed_sha_consumes_the_token(repo, monkeypatch):  # noqa: F811
 
 _MODE_CASES = {
     "halted": ("coordinator_core.ops.dispatch_emit.halted_record_commit", "commit_halted_record", "_land"),
-    "grind": ("coordinator_core.ops.dispatch_emit.grind_terminal_commit", "commit_grind_rows", "_land"),
+    "grind": ("coordinator_core.ops.dispatch_emit.land_run_grind", "commit_grind_rows", "_land"),
     "fanout": ("coordinator_core.ops.dispatch_emit.roadmap_fanout_commit", "commit_fanout_record", "_land_and_fan_out"),
 }
 

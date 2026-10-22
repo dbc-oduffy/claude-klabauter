@@ -191,3 +191,98 @@ class TestRun:
         monkeypatch.setattr(runner, "_kill_process_tree", lambda pid: None)
         runner.run("p4:1666", "u", "c", ["info"], timeout=0.01)
         assert spawn_count["n"] == 1
+
+
+class TestRunDiscovery:
+    def _present(self, monkeypatch):
+        monkeypatch.setattr(runner.shutil, "which", lambda name: "/usr/bin/p4")
+
+    def test_non_allowlisted_verb_raises_value_error(self, monkeypatch):
+        self._present(monkeypatch)
+        for verb in ("submit", "edit", "set"):
+            with pytest.raises(ValueError):
+                runner.run_discovery([verb])
+        with pytest.raises(ValueError):
+            runner.run_discovery([])
+
+    def test_absent_binary_is_not_installed_without_spawning(self, monkeypatch):
+        monkeypatch.setattr(runner.shutil, "which", lambda name: None)
+
+        def boom(*a, **k):
+            raise AssertionError("spawned")
+
+        monkeypatch.setattr(runner.subprocess, "Popen", boom)
+        result = runner.run_discovery(["info"])
+        assert result.ok is False
+        assert result.error.kind == "refused"
+        assert result.error.raw == "not_installed"
+
+    def test_popen_oserror_is_not_installed_not_a_raise(self, monkeypatch):
+        self._present(monkeypatch)
+
+        def boom(*a, **k):
+            raise FileNotFoundError("p4")
+
+        monkeypatch.setattr(runner.subprocess, "Popen", boom)
+        result = runner.run_discovery(["clients", "-u", "me"])
+        assert result.ok is False
+        assert result.error.raw == "not_installed"
+
+    def test_argv_is_ambient_with_script_and_ztag(self, monkeypatch):
+        self._present(monkeypatch)
+        seen = {}
+
+        def fake_popen(cmd, **kwargs):
+            seen["cmd"] = cmd
+            seen["kwargs"] = kwargs
+            fake = _FakePopen(cmd, **kwargs)
+            fake._stdout = "... Client c1\n"
+            fake._stderr = ""
+            return fake
+
+        monkeypatch.setattr(runner.subprocess, "Popen", fake_popen)
+        result = runner.run_discovery(["clients", "-u", "me"])
+        assert result.ok is True
+        cmd = seen["cmd"]
+        assert cmd[:3] == ["p4", "-s", "-ztag"]
+        assert cmd[3:] == ["clients", "-u", "me"]
+        assert not {"-p", "-c"} & set(cmd[:3])
+        assert seen["kwargs"]["stdin"] == subprocess.DEVNULL
+
+    def test_ticket_error_classifies_as_ticket_expired(self, monkeypatch):
+        self._present(monkeypatch)
+
+        def fake_popen(cmd, **kwargs):
+            fake = _FakePopen(cmd, **kwargs)
+            fake._stdout = "error: Your session has expired, please login again.\n"
+            fake._stderr = ""
+            return fake
+
+        monkeypatch.setattr(runner.subprocess, "Popen", fake_popen)
+        result = runner.run_discovery(["info"])
+        assert result.ok is False
+        assert result.error.kind == "ticket_expired"
+
+    def test_timeout_kills_tree_and_fails_closed(self, monkeypatch):
+        self._present(monkeypatch)
+        killed = {}
+
+        def fake_popen(cmd, **kwargs):
+            fake = _FakePopen(cmd, **kwargs)
+            fake._raise_timeout = True
+            fake._stdout = ""
+            fake._stderr = ""
+            return fake
+
+        monkeypatch.setattr(runner.subprocess, "Popen", fake_popen)
+        monkeypatch.setattr(runner, "_kill_process_tree", lambda pid: killed.setdefault("pid", pid))
+        result = runner.run_discovery(["info"], timeout=0.01)
+        assert result.ok is False
+        assert result.error.raw == "timeout"
+        assert killed["pid"] == 4242
+
+    def test_single_popen_site_in_module(self):
+        import inspect
+
+        source = inspect.getsource(runner)
+        assert source.count("subprocess.Popen(") == 1

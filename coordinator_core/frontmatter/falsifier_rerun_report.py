@@ -42,8 +42,11 @@ and 5: no platform-mismatch detector, no reshaping into the retired
 acceptance oracle). Presence is the entire question this module answers.
 
 Negative-spec: no subprocess, no `git`, no network. One `open()`+`read()`
-per plan file. No second YAML/schema-validation path -- frontmatter
-extraction is `schema_validate.parse_frontmatter` and additionalProperties
+per plan file. No second YAML/schema-validation path --
+`schema_validate.parse_frontmatter` is still the only YAML path, now fed only
+the `_close_out_slice` of each plan: the five top-level blocks the report
+reads (status, schema_version, prime_exit_criterion, exit_criterion_met,
+gated_exit_criteria), never the whole frontmatter. additionalProperties
 detection is `schema_validate.validate_frontmatter` against the vendored
 `plan.schema.json`, the same two read paths every other frontmatter-
 consuming report in this package uses. Do not touch `plan.schema.json`
@@ -60,6 +63,7 @@ from pathlib import Path
 from typing import Any
 
 from coordinator_core.frontmatter.schema_validate import (
+    _FM_CLOSE_RE,
     SchemaVersionError,
     parse_frontmatter,
     validate_frontmatter,
@@ -249,6 +253,67 @@ def _names_close_out_content(text: str) -> bool:
     return any(k in head for k in _CLOSE_OUT_TEXT_MARKERS)
 
 
+_SLICE_KEYS: tuple[str, ...] = (
+    "status",
+    "schema_version",
+    "prime_exit_criterion",
+    "exit_criterion_met",
+    "gated_exit_criteria",
+)
+_SLICE_KEY_RE = re.compile(r"(" + "|".join(_SLICE_KEYS) + r"):(?:\s|$)")
+_SEQ_ITEM_RE = re.compile(r"-(?:\s|$)")
+_LEADING_WS_RE = re.compile(r"\s*")
+
+
+def _close_out_slice(text: str) -> str | None:
+    """Synthetic frontmatter document holding only the `_SLICE_KEYS` top-level
+    blocks of `text`, in source order, every occurrence kept (last-key-wins).
+
+    None exactly when `parse_frontmatter(text)` finds no delimited block. Gaps:
+    a block that fails parse_yaml is None there but sliced here; a quoted or
+    space-before-colon slice key (`"status": x`) is not recognised; a YAML
+    alias in a kept block whose anchor sits in a dropped block fails to parse,
+    so that plan is skipped.
+    """
+    cursor = 0
+    while True:
+        after_ws = _LEADING_WS_RE.match(text, cursor).end()
+        if text.startswith("<!--", after_ws):
+            close_idx = text.find("-->", after_ws + 4)
+            if close_idx == -1:
+                return None
+            cursor = close_idx + 3
+        else:
+            cursor = after_ws
+            break
+
+    if not text.startswith("---", cursor):
+        return None
+    first_newline = text.find("\n", cursor + 3)
+    if first_newline == -1 or text[cursor + 3:first_newline].strip() != "":
+        return None
+    rest_start = first_newline + 1
+    close_match = _FM_CLOSE_RE.search(text, rest_start)
+    if close_match is None:
+        return None
+
+    kept: list[str] = []
+    in_block = False
+    for line in text[rest_start:close_match.start()].split("\n"):
+        if line and not line[0].isspace():
+            if _SLICE_KEY_RE.match(line):
+                in_block = True
+            elif line.strip() == "" or line[0] == "#" or _SEQ_ITEM_RE.match(line):
+                # YAML allows `key:\n- item` at zero indent, so a column-0 `-`
+                # continues the open block rather than ending it.
+                pass
+            else:
+                in_block = False
+        if in_block:
+            kept.append(line)
+    return "---\n" + "\n".join(kept) + "\n---\n"
+
+
 def scan_plans(plans_dir: Path | str = _DEFAULT_PLANS_DIR) -> FalsifierRerunReport:
     """Scan `plans_dir` for `*.md` files and build the report.
 
@@ -274,7 +339,11 @@ def scan_plans(plans_dir: Path | str = _DEFAULT_PLANS_DIR) -> FalsifierRerunRepo
         if not _names_close_out_content(text):
             continue
 
-        parsed = parse_frontmatter(text)
+        sliced = _close_out_slice(text)
+        if sliced is None:
+            continue
+
+        parsed = parse_frontmatter(sliced)
         frontmatter = parsed.get("frontmatter")
         if not isinstance(frontmatter, dict):
             continue

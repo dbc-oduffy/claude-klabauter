@@ -10,6 +10,10 @@ cannot land is dropped with a ``DROP_*`` reason, never refused; only a malformed
 token's spent receipt: ``sha`` and ``rows`` are the first landing's, nothing landed again.
 ``unlanded`` (``UNLANDED_KEY``) is ``[{row_id, reason}]`` for each requested row the landed commit
 did not carry; the reason names the landed sha. Both keys are absent on a first landing.
+Two further drop reasons: ``DROP_PEER_HUNKS_CONFLICT`` (a peer's dirty hunks of a shared file cannot be
+separated from the row's own) and ``DROP_UNATTRIBUTED_SHARED`` (a shared file has no row image to attribute
+its hunks). A landing whose import closure reaches an untracked module is refused with
+``REFUSED_IMPORT_CLOSURE``, before the commit.
 """
 
 from __future__ import annotations
@@ -34,6 +38,26 @@ ROW_TRAILER_KEY = "Grind-Row"
 LEDGER_ROOT = _home_prefix("queue-grind")
 DROP_LEDGER_ROOT = "ledger-root"
 DROP_UNSEEN_DELETION = "deletion-git-cannot-see"
+DROP_PEER_HUNKS_CONFLICT = "peer-hunks-conflict"
+DROP_UNATTRIBUTED_SHARED = "unattributed-shared"
+REFUSED_IMPORT_CLOSURE = "import-closure"
+
+# Row images: the pre/post blobs a ``grind-row image`` call records for one row's declared paths.
+ROW_IMAGES_ROOT = ".coordinator-local/grind-row-images"
+IMAGE_VERB = "image"
+IMAGE_PHASES = ("pre", "post")
+
+
+def row_images_rel(run_id: str, row_id: str) -> str:
+    """Repo-relative POSIX dir of one row's images: ``ROW_IMAGES_ROOT/<run_id>/<row_id>``.
+    Raises ``ValueError`` when either segment is empty, holds a separator or drive colon, or is ``..``."""
+    for seg in (run_id, row_id):
+        bad = _bad_path(seg)
+        if bad is None and "/" in seg:
+            bad = f"path {seg!r} is not a single segment"
+        if bad:
+            raise ValueError(bad)
+    return f"{ROW_IMAGES_ROOT}/{run_id}/{row_id}"
 
 # Run-close contract: the ``grind-row run-record`` flags, the decisions.json keys and the record shape.
 DECLARED_FLAG = "declared-urlenc"

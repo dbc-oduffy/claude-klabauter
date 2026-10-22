@@ -29,7 +29,6 @@ def _human_entered(monkeypatch):
         nomination, "claim", lambda *a, **k: _REAL_CLAIM(*a, **{"prompt_id": "p-1", **k})
     )
     monkeypatch.setattr(nomination, "entry_status", lambda *a, **k: {"status": "verified"})
-    monkeypatch.setattr(nomination, "_session_is_real", lambda sid: True)
 
 
 @pytest.fixture
@@ -519,6 +518,27 @@ def test_rejected_box_claim_with_no_verified_repo_record_is_none(repo_root, reco
     nomination.claim(repo_root, "sid-probe", directory=record_dir)
     _reject_sid(monkeypatch, "sid-probe")
     assert nomination.box_holder(record_dir) is None
+
+
+def test_rejected_newer_repo_record_is_skipped_for_an_older_verified_one(tmp_path, record_dir, monkeypatch):
+    repo_old, repo_probe = tmp_path / "old", tmp_path / "probe"
+    repo_old.mkdir()
+    repo_probe.mkdir()
+    _no_registry_name(monkeypatch)
+    _stub_live(monkeypatch, True, "live")
+    nomination.claim(str(repo_old), "sid-real", directory=record_dir)
+    nomination.claim(str(repo_probe), "sid-probe", directory=record_dir)
+    nomination._box_record_path(record_dir).unlink()
+    box_path = nomination._box_record_path(record_dir)
+    box_path.write_text('{"session_id": "sid-box-rejected"}', encoding="utf-8")
+    monkeypatch.setattr(
+        nomination,
+        "entry_status",
+        lambda rec, *a, **k: {
+            "status": "verified" if rec.get("session_id") == "sid-real" else "rejected"
+        },
+    )
+    assert nomination.box_holder(record_dir)["session_id"] == "sid-real"
 
 
 def _no_registry_name(monkeypatch):

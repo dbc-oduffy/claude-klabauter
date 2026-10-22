@@ -1,5 +1,5 @@
 """Inventory emit artifacts: one naming scheme, no tranche record when the budget does not
-bind, an --out a split does not honour is reported, and a re-emit leaves no stale sibling."""
+bind, an --out a split does not honour is reported, and a re-emit removes no script, and no spine its live output does not supersede."""
 
 from __future__ import annotations
 
@@ -133,26 +133,28 @@ def test_split_without_out_reports_no_ignored_out(tmp_path, monkeypatch, capsys)
     assert "out_ignored" not in json.loads(capsys.readouterr().out)
 
 
-def test_reemit_after_split_removes_the_stale_parts_and_pre_split_spine(tmp_path, monkeypatch, capsys):
+def test_reemit_after_split_keeps_the_landed_parts_and_writes_the_whole_spine(tmp_path, monkeypatch, capsys):
     inventory = _repo_with_inventory(tmp_path)
     cap = _cap_that_splits(tmp_path, inventory, monkeypatch)
     monkeypatch.setattr(emit_module, "_WORKFLOW_SCRIPT_BYTE_CAP", cap)
     assert cli_module.main(_argv(tmp_path, inventory)) == cli_module.EXIT_OK
     stale = [inventory.parent / f"{im.part_run_id(_RUN_ID, i)}.spine.md" for i in (1, 2)]
     assert all(p.is_file() for p in stale)
-    # Cleanup keeps any part whose receipt exists (landed or not); only receipt-less leftovers go.
     for receipt in inventory.parent.glob("*-p*.workflow.mjs.emitted.json"):
-        receipt.unlink()
+        doc = json.loads(receipt.read_text(encoding="utf-8"))
+        doc["landed"] = {"sha": "abc", "at": "t"}
+        receipt.write_text(json.dumps(doc), encoding="utf-8")
     monkeypatch.setattr(emit_module, "_WORKFLOW_SCRIPT_BYTE_CAP", 10**9)
     capsys.readouterr()
 
     assert cli_module.main(_argv(tmp_path, inventory)) == cli_module.EXIT_OK
 
-    assert not any(p.exists() for p in stale)
-    assert not list(inventory.parent.glob("*-p*.workflow.mjs"))
-    assert not list(inventory.parent.glob("*-p*.spine.md"))
+    assert all(p.is_file() for p in stale)
+    assert len(list(inventory.parent.glob("*-p*.workflow.mjs"))) == 2
     assert (inventory.parent / f"{_RUN_ID}.spine.md").is_file()
-    assert "removed stale earlier output" in capsys.readouterr().err
+    err = capsys.readouterr().err
+    for script in inventory.parent.glob("*-p*.workflow.mjs"):
+        assert f"kept spent part {script}" in err
 
 
 def test_reemit_never_touches_another_run_id_or_a_tranche_record(tmp_path, monkeypatch, capsys):
@@ -171,8 +173,8 @@ def test_reemit_never_touches_another_run_id_or_a_tranche_record(tmp_path, monke
     assert record.is_file()
     err = capsys.readouterr().err
     assert str(record) in err
-    # The tranche's script is regenerable and goes; its spine has no script and no landed stamp, and
-    # no live part supersedes it, so it is kept and surfaced.
+    # This run's own tranche spine has no script; a whole re-emit does not supersede it, because
+    # `_superseding_live_stem` only matches `-pN` parts.
     assert not (inventory.parent / f"{_RUN_ID}-t1.spine.workflow.mjs").exists()
     assert (inventory.parent / f"{_RUN_ID}-t1.spine.md").is_file()
     assert f"kept unlanded spine {inventory.parent / f'{_RUN_ID}-t1.spine.md'}" in err

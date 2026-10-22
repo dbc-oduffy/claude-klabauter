@@ -28,6 +28,7 @@ APPLY = "plan.mise_upgrade_apply"
 REL = "docs/plans/2026-09-07-fixture.md"
 
 _PREPPED_FM = """census: []
+capabilities: []
 prime_exit_criterion:
   statement: the op reports per class
   derived_from: state/sizings/2026-09-07-fixture.yaml

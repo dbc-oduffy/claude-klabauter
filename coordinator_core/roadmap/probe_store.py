@@ -68,6 +68,9 @@ GLOBAL_INPUTS = (
 _PLAN_SCHEMA_REL = "coordinator_core/frontmatter/schemas/plan.schema.json"
 _BIN_SCRIPTS = ("mise-prep-upgrade.py",)
 _IMPORTED_AT_NS = time.time_ns()
+#: File mtimes come from a coarser clock than time_ns (Windows lags it by up to a tick, 15.6ms),
+#: so a write after `at` can carry an mtime below it; the racy window reaches back this far.
+_CLOCK_SLACK_NS = 50_000_000
 _PATH_LEAF_RE = re.compile(r"^[^\s\"'`<>|]{1,240}$")
 _GLOB_CHARS = "*?["
 
@@ -100,7 +103,7 @@ def _identity_matches(stored: Any, current: Optional[list], computed_at_ns: Any)
         return False
     if [size, mtime_ns, ino] != current:
         return False
-    return isinstance(computed_at_ns, int) and mtime_ns < computed_at_ns
+    return isinstance(computed_at_ns, int) and mtime_ns < computed_at_ns - _CLOCK_SLACK_NS
 
 
 def _record_key(rel: str, upgrade: bool) -> str:
@@ -415,6 +418,31 @@ def _save_graph(root: str, files: list) -> None:
             pass
 
 
+class _DirStats:
+    """Per-walk stat source: one directory listing replaces a stat per file (on Windows the
+    listing carries the stat). One instance per walk, never module-global, so a listing is never
+    stale. Trap: NTFS is case-insensitive, so a case-variant spelling misses the listing; a miss
+    falls through to os.stat, which resolves it."""
+
+    def __init__(self) -> None:
+        self._dirs: dict = {}
+
+    def stat(self, path: str) -> Optional[os.stat_result]:
+        folder, name = os.path.split(path)
+        listing = self._dirs.get(folder)
+        if listing is None:
+            try:
+                listing = {e.name: e for e in os.scandir(folder)}
+            except OSError:
+                listing = {}
+            self._dirs[folder] = listing
+        entry = listing.get(name)
+        try:
+            return entry.stat() if entry is not None else os.stat(path)
+        except OSError:
+            return None
+
+
 _GRAPH_SEEDED: set = set()
 
 
@@ -431,11 +459,11 @@ def _closure(root: str, stats: Optional[dict] = None) -> Optional[list]:
     seen: dict = {r: None for r in roots}
     queue = list(roots)
     reparsed = False
+    batch = _DirStats()
     while queue:
         path = queue.pop()
-        try:
-            st = os.stat(path)
-        except OSError:
+        st = batch.stat(path)
+        if st is None:
             continue
         if stats is not None:
             stats[path] = st

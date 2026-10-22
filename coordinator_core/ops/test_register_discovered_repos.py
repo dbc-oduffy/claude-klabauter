@@ -11,6 +11,8 @@ out to a synthetic `discover-working-repos.sh`.
 from __future__ import annotations
 
 import os
+import sys
+import types
 from pathlib import Path
 
 import pytest
@@ -370,3 +372,75 @@ def test_missing_path_kept_on_author(env, tmp_path, monkeypatch, standing):
     assert main(["--non-interactive"], self_dir=lib_dir) == 0
 
     assert _read_registry(bin_dir) == {"repos.gone": str(tmp_path / "nowhere")}
+
+
+_REAL_P4_LEG = rdr._register_p4_workspaces
+
+
+@pytest.fixture(autouse=True)
+def _no_real_p4_leg(monkeypatch):
+    monkeypatch.setattr(rdr, "_register_p4_workspaces", lambda check_only: None)
+
+
+@pytest.fixture
+def p4_calls(monkeypatch):
+    calls: list[bool] = []
+    monkeypatch.setattr(rdr, "_register_p4_workspaces", calls.append)
+    return calls
+
+
+class TestP4LegRunsOnEveryPath:
+    def test_no_candidates_run_calls_once_unchecked(self, env, monkeypatch, p4_calls):
+        lib_dir, _ = env
+        _stub_discover(monkeypatch, [])
+        assert main(["--non-interactive"], self_dir=lib_dir) == 0
+        assert p4_calls == [False]
+
+    def test_check_only_calls_once_checked(self, env, tmp_path, monkeypatch, p4_calls):
+        lib_dir, _ = env
+        _stub_discover(monkeypatch, [str(tmp_path / "dev" / "repo-alpha")])
+        assert main(["--check-only"], self_dir=lib_dir) == 0
+        assert p4_calls == [True]
+
+    def test_discovery_raising_still_calls_once(self, env, monkeypatch, p4_calls):
+        lib_dir, _ = env
+
+        def _boom(argv):
+            raise RuntimeError("boom")
+
+        monkeypatch.setattr(rdr, "_discover_working_repos_main", _boom)
+        assert main(["--non-interactive"], self_dir=lib_dir) == 0
+        assert p4_calls == [False]
+
+    def test_normal_registration_calls_once_after_repos_written(
+        self, env, tmp_path, monkeypatch
+    ):
+        lib_dir, reg_dir = env
+        seen: list[dict] = []
+        monkeypatch.setattr(
+            rdr, "_register_p4_workspaces", lambda c: seen.append(_read_registry(reg_dir))
+        )
+        _stub_discover(monkeypatch, [str(tmp_path / "dev" / "repo-alpha")])
+        assert main(["--non-interactive"], self_dir=lib_dir) == 0
+        assert len(seen) == 1 and "repos.repo_alpha" in seen[0]
+
+    def test_unknown_argument_skips_p4_leg(self, env, p4_calls):
+        lib_dir, _ = env
+        assert main(["--bogus"], self_dir=lib_dir) == 1
+        assert p4_calls == []
+
+    def test_p4_leg_exception_keeps_exit_zero_and_repos(self, env, tmp_path, monkeypatch):
+        lib_dir, reg_dir = env
+        _stub_discover(monkeypatch, [str(tmp_path / "dev" / "repo-alpha")])
+        def _boom(argv):
+            raise RuntimeError("p4 exploded")
+
+        monkeypatch.setattr(rdr, "_register_p4_workspaces", _REAL_P4_LEG)
+        fake = types.ModuleType("coordinator_core.ops.register_p4_workspaces")
+        fake.main = _boom
+        monkeypatch.setitem(sys.modules, "coordinator_core.ops.register_p4_workspaces", fake)
+        monkeypatch.setattr(
+            sys.modules["coordinator_core.ops"], "register_p4_workspaces", fake, raising=False
+        )
+        assert main(["--non-interactive"], self_dir=lib_dir) == 0
+        assert "repos.repo_alpha" in _read_registry(reg_dir)

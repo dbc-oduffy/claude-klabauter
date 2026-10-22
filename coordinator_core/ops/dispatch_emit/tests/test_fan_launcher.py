@@ -99,6 +99,44 @@ def test_emit_leg_contract(tmp_path):
     assert "WARP_PREFIX" in script and "scratch/warp/" in script
 
 
+def _refusal(script: str, child_id: str, reply: dict):
+    import shutil
+    import subprocess
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node not available")
+    m = re.search(r"function _emitRefusal\(child, e\) \{.*?\n\}\n", script, re.S)
+    assert m
+    prog = (
+        "const WARP_PREFIX='/r/scratch/warp/';"
+        + m.group(0)
+        + f"console.log(JSON.stringify(_emitRefusal({{run_id:{json.dumps(child_id)}}}, {json.dumps(reply)})));"
+    )
+    out = subprocess.run([node, "-e", prog], capture_output=True, text=True, check=True,
+                         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    return json.loads(out.stdout)
+
+
+@pytest.mark.spawns_process
+def test_failed_emit_surfaces_the_op_error_not_a_run_id_mismatch(tmp_path):
+    _, script = _write(tmp_path)
+    assert "error: { type: 'string' }" in script
+    failed = {"path": "", "run_id": "", "fire_args": {}, "error": "SizingFireRefused: sizing-object not found on disk"}
+    got = _refusal(script, "ask-r1", failed)
+    assert got == "emit failed: SizingFireRefused: sizing-object not found on disk"
+    assert "run_id" not in got
+
+
+@pytest.mark.spawns_process
+def test_genuine_run_id_mismatch_still_refused(tmp_path):
+    _, script = _write(tmp_path)
+    ok_shape = {"path": "/r/scratch/warp/x/s.js", "run_id": "ask-other", "fire_args": {}}
+    assert _refusal(script, "ask-r1", ok_shape) == "emit reply run_id ask-other is not ask-r1"
+    good = dict(ok_shape, run_id="ask-r1")
+    assert _refusal(script, "ask-r1", good) is None
+
+
 def test_stage_hand_back_reuses_the_reader_blocks_verbatim(tmp_path):
     _, script = _write(tmp_path)
     assert VERIFY_REPLY_JS in script

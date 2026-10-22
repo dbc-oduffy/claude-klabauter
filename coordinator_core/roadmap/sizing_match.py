@@ -9,12 +9,14 @@ from __future__ import annotations
 
 import os
 import re
-from pathlib import Path
+from pathlib import Path, PurePath
 
 from coordinator_core.git.run import run_git
 from coordinator_core.locked_write import MutateAbort, locked_rmw
+from coordinator_core.session import record_homes
 
-SIZINGS_DIR = "state/sizings"
+# Repo-relative POSIX form: it is also a git pathspec and a rel-path prefix.
+SIZINGS_DIR = PurePath(record_homes.home_dir("", "sizings")).as_posix()
 TERMINAL_STATUSES = frozenset({"shipped", "declined", "superseded", "closed", "delivered"})
 
 _DATE_PREFIX = re.compile(r"^\d{4}-\d{2}-\d{2}-")

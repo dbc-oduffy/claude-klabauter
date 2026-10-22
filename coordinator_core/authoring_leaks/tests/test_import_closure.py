@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from coordinator_core.authoring_leaks import import_closure, leak_gate
+from coordinator_core.authoring_leaks import HeadView, import_closure, leak_gate
 from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
@@ -253,3 +253,53 @@ def test_parenthesised_import_continuation_triggers(repo):
     _write(repo, "pkg/a.py", "from pkg.b import (\n    old_fn,\n    ghost,\n)\n")
     out = _gate(repo, ["pkg/a.py"])
     assert not out.passed and "imports ghost from pkg.b" in out.diagnostics[0]
+
+
+_LAZY = "def f():\n    from coordinator_core.guard_messages.alternative_record import X\n    return X\n"
+
+
+@pytest.fixture
+def cc_repo(tmp_path):
+    _git(tmp_path, "init", "-q")
+    _write(tmp_path, "coordinator_core/__init__.py", "")
+    _write(tmp_path, "coordinator_core/guard.py", "def f():\n    return 1\n")
+    _git(tmp_path, "add", "-A")
+    _git(tmp_path, "commit", "-q", "-m", "base")
+    _write(tmp_path, "coordinator_core/guard_messages/__init__.py", "")
+    _write(tmp_path, "coordinator_core/guard_messages/alternative_record.py", "X = 1\n")
+    _write(tmp_path, "coordinator_core/guard.py", _LAZY)
+    return tmp_path
+
+
+def _detect(root, paths, **kw):
+    return import_closure.detect(root, paths, HeadView(root, import_closure.candidates(paths)), **kw)
+
+
+def test_function_local_import_of_untracked_package_is_found(cc_repo):
+    out = _detect(cc_repo, ["coordinator_core/guard.py"])
+    assert len(out) == 1 and "guard_messages" in out[0].detail
+
+
+def test_landed_text_without_the_import_yields_none(cc_repo):
+    assert _detect(cc_repo, ["coordinator_core/guard.py"], landed_text=lambda rel: "def f():\n    return 1\n") == []
+
+
+def test_landed_text_with_the_import_is_judged_over_the_worktree(cc_repo):
+    _write(cc_repo, "coordinator_core/guard.py", "def f():\n    return 1\n")
+    assert _detect(cc_repo, ["coordinator_core/guard.py"]) == []
+    assert len(_detect(cc_repo, ["coordinator_core/guard.py"], landed_text=lambda rel: _LAZY)) == 1
+
+
+def test_publish_gate_reports_the_same_module_over_the_committed_tree(cc_repo, tmp_path_factory):
+    import importlib.util
+
+    gate_path = Path(__file__).resolve().parents[3] / "coordinator" / "lib" / "percolate" / "import_closure.py"
+    spec = importlib.util.spec_from_file_location("_percolate_import_closure", gate_path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    tree = tmp_path_factory.mktemp("committed")
+    _write(tree, "coordinator_core/__init__.py", "")
+    _write(tree, "coordinator_core/guard.py", _LAZY)
+    _, violations = mod.find_import_closure_violations(tree)
+    assert any("guard_messages" in entry for _, entry in violations)
+    assert any("guard_messages" in f.detail for f in _detect(cc_repo, ["coordinator_core/guard.py"]))

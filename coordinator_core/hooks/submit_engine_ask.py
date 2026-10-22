@@ -578,7 +578,9 @@ def _child_params(
     root: Path, tool_input: Mapping[str, Any], session_id: Optional[str], run: Any, call_stop: Any, cross_repo: bool
 ) -> dict:
     """The `dispatch.emit` params the direct path sends for one fan-out slice; the launcher's emit leg sends these."""
-    params: dict = {"session_id": session_id or ""}
+    # `dispatch.emit` is repo-unkeyed over the CLI: without target_root a relative sizing_path
+    # resolves against the engine's own root, not the submitting repo.
+    params: dict = {"session_id": session_id or "", "target_root": str(root)}
     if _has_research_block(_load_sizing_doc(root, run.slice_sizing)):
         params["from_sizing"] = run.slice_sizing
     else:

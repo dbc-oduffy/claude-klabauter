@@ -101,7 +101,12 @@ def test_no_sizing_yields_no_rulable_ids(tmp_path):
     assert reply["rulable_ids"] == []
 
 
-def test_a_sizing_without_a_register_yields_no_rulable_ids(tmp_path):
+def test_a_sizing_without_a_register_lists_its_seeded_plan_rows(tmp_path):
     reply = _stage(tmp_path, _sizing(None))
     assert "error" not in reply
-    assert reply["rulable_ids"] == []
+    sizing = yaml.safe_load((tmp_path / SIZING_REL).read_text(encoding="utf-8"))
+    rows = sizing["requirement_register"]["rows"]
+    seeded = [r["id"] for r in rows if r["anchor"] in ("plan-row:U1", "plan-row:X1")]
+    assert len(seeded) == 2
+    assert reply["rulable_ids"] == seeded
+    rl.revise(tmp_path, RUN, verbatim=f"{seeded[0]} is out of scope", out_of_scope=[seeded[0]])

@@ -61,7 +61,7 @@ import re
 import socket
 import sys
 import tokenize
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 
 from coordinator_core._hook_envelope import deny
 from coordinator_core import machine_resolver
@@ -311,10 +311,20 @@ def _is_under_general_work_root(file_path: str) -> bool:
     return bool(root) and _path_contains(root, file_path)
 
 
-def _foreign_checkout_deny(checkout: str) -> dict:
+def _display_checkout(checkout: str, file_path: str) -> str:
+    """`checkout` in the filesystem's own casing: gem_home.inside_checkout returns a normcased path
+    (lowercase on Windows), which the operator should not be shown. Falls back to `checkout` as given."""
+    want = os.path.normcase(checkout)
+    for anc in Path(os.path.realpath(file_path)).parents:
+        if os.path.normcase(str(anc)) == want:
+            return str(anc)
+    return checkout
+
+
+def _foreign_checkout_deny(checkout: str, file_path: str) -> dict:
     return deny(
         "PreToolUse",
-        f"[em-code-dispatch nudge] {checkout} is another EM's repo. "
+        f"[em-code-dispatch nudge] {_display_checkout(checkout, file_path)} is another EM's repo. "
         "Use instead: `cross-repo-memo draft <slug> --to <receiver-em>`.",
     )
 
@@ -735,7 +745,7 @@ def op(payload: dict) -> dict | None:
     if general_work_scope.in_general_work_session(payload.get("cwd")):
         checkout = general_work_scope.foreign_checkout(file_path)
         if checkout is not None:
-            return apply_guard_level("nudge-em-code-dispatch", _foreign_checkout_deny(checkout))
+            return apply_guard_level("nudge-em-code-dispatch", _foreign_checkout_deny(checkout, file_path))
 
     handled, budget_result = _budget_decision(payload, session_id, file_path, tool_input)
     if handled:

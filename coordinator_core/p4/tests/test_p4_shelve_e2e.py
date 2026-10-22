@@ -20,11 +20,18 @@ needs a real credential to drive -- not a literal startup flag this build
 still honors). This fixture instead bootstraps ONE throwaway password for
 the one throwaway user (`bob`), logs in once per test to a scratch
 `P4TICKETS` file, and exports that file on the environment for the whole
-test via `monkeypatch.setenv` -- `coordinator_core.p4.runner.run`'s
+test via `_hermetic_p4_env` (which also removes every ambient `P4*` variable
+and pins `P4ENVIRO`/`P4CONFIG`/`P4TRUST` under `tmp_path`) --
+`coordinator_core.p4.runner.run`'s
 `subprocess.Popen` inherits the parent environment (it sets no `env=`
 kwarg of its own), so every real p4 spawn made by the code under test rides
 the same cached ticket the fixture logged in, with no code-under-test
 change and no ambient-env reliance beyond this one test-only ticket file.
+TRAP: this p4d build refuses `p4 user -f -i` for an account with no password
+("Password must be set before access can be granted."), regardless of ambient
+env, so the bootstrap order must be `passwd` (creates the user) -> `login` ->
+`user -f -i`. The hermetic env keeps a real logged-in p4 client from leaking
+into or out of the test.
 It then reads the server with `p4 -ztag changes -s shelved -c <client>` and
 `p4 -ztag describe -S -s <CL>` and asserts exactly one shelved CL whose
 paths equal the pushed git range (c.txt shelved as a delete).
@@ -112,21 +119,10 @@ class _ThrowawayP4d:
                 time.sleep(0.25)
         raise RuntimeError(f"p4d never became reachable on {self.p4port}: {last_error!r}")
 
-    def login(self, monkeypatch, user: str, tickets_path: Path, password: str = "Passw0rd1!") -> None:
-        """Bootstraps ONE throwaway password for `user`, logs in once, and
-        points `P4TICKETS` at a scratch file for the rest of THIS test --
-        see the module docstring's AUTH NOTE for why this is needed at all
-        against this box's p4d build."""
-        monkeypatch.setenv("P4TICKETS", str(tickets_path))
-        proc = subprocess.run(
-            ["p4", "-p", self.p4port, "-u", user, "user", "-f", "-i"],
-            input=f"User: {user}\nEmail: {user}@example.invalid\nFullName: {user}\n",
-            capture_output=True,
-            text=True,
-            timeout=15,
-            **_NO_WINDOW,
-        )
-        assert proc.returncode == 0, proc.stderr
+    def login(self, user: str, password: str = "Passw0rd1!") -> None:
+        """Bootstraps ONE throwaway password for `user` and logs in once to
+        the hermetic `P4TICKETS` file (`_hermetic_p4_env`) -- see the module
+        docstring's AUTH NOTE for the required passwd -> login -> user order."""
         proc = subprocess.run(
             ["p4", "-p", self.p4port, "-u", user, "passwd"],
             input=f"{password}\n{password}\n",
@@ -145,6 +141,15 @@ class _ThrowawayP4d:
             **_NO_WINDOW,
         )
         assert proc.returncode == 0, proc.stderr
+        proc = subprocess.run(
+            ["p4", "-p", self.p4port, "-u", user, "user", "-f", "-i"],
+            input=f"User: {user}\nEmail: {user}@example.invalid\nFullName: {user}\n",
+            capture_output=True,
+            text=True,
+            timeout=15,
+            **_NO_WINDOW,
+        )
+        assert proc.returncode == 0, proc.stderr
 
     def stop(self) -> None:
         if self._proc is None:
@@ -157,12 +162,39 @@ class _ThrowawayP4d:
             self._proc.wait(timeout=5)
 
 
+def _hermetic_p4_env(monkeypatch, tmp_path: Path) -> None:
+    """Drops every ambient `P4*` variable, then pins the enviro, config,
+    tickets and trust files under `tmp_path` for the whole test so p4d, the
+    bootstrap p4 calls and `coordinator_core.p4.runner` children (which
+    inherit this process env) see nothing of the box's real Perforce setup."""
+    for key in [k for k in os.environ if k.startswith("P4")]:
+        monkeypatch.delenv(key)
+    p4_home = tmp_path / "p4-hermetic"
+    p4_home.mkdir(exist_ok=True)
+    monkeypatch.setenv("P4ENVIRO", str(p4_home / "p4enviro"))
+    monkeypatch.setenv("P4CONFIG", str(p4_home / "p4config"))
+    monkeypatch.setenv("P4TICKETS", str(p4_home / "p4tickets"))
+    monkeypatch.setenv("P4TRUST", str(p4_home / "p4trust"))
+
+
+def test_hermetic_p4_env_scrubs_ambient_and_pins_under_tmp(tmp_path, monkeypatch):
+    monkeypatch.setenv("P4USER", "ambient")
+    monkeypatch.setenv("P4PORT", "ambient:1666")
+    monkeypatch.setenv("P4CLIENT", "ambient")
+    _hermetic_p4_env(monkeypatch, tmp_path)
+    for key in ("P4USER", "P4PORT", "P4CLIENT"):
+        assert key not in os.environ
+    for key in ("P4ENVIRO", "P4CONFIG", "P4TICKETS", "P4TRUST"):
+        assert Path(os.environ[key]).parent == tmp_path / "p4-hermetic"
+
+
 @pytest.fixture
 def p4d(tmp_path, monkeypatch):
+    _hermetic_p4_env(monkeypatch, tmp_path)
     server = _ThrowawayP4d(tmp_path / "p4d-root")
-    server.start()
-    server.login(monkeypatch, "bob", tmp_path / "p4tickets")
     try:
+        server.start()
+        server.login("bob")
         yield server
     finally:
         server.stop()

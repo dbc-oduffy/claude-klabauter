@@ -791,11 +791,10 @@ def _run_probe_dialect_guard_armed(claude_klabauter_root: Path | None) -> _Probe
     "does this guard's own attributable row exist" -- see
     `_dialect.dialect_degrade_rows`).
 
-    Checks bare `python3` on PATH — what `hooks.json` runs every bash guard
-    hook under — plus `sys.executable` (the interpreter running THIS
-    probe), since a healthy result under the probe's own interpreter alone
-    would miss the actual disarmed case on a box where that interpreter is
-    a fallback venv, not what hooks actually run under.
+    Checks the example-retrieval-repo provisioned interpreter (the guard interpreter,
+    door/warm server), bare `python3` on PATH (what DoE's bare-python3
+    hooks run under), and `sys.executable` (the interpreter running THIS
+    probe), deduped by realpath.
 
     `required=False` throughout: a disarmed guard is the CURRENT, still-
     legal runtime state (until the install-chain arms it), so this must
@@ -832,9 +831,22 @@ def _run_probe_dialect_guard_armed(claude_klabauter_root: Path | None) -> _Probe
         )
 
     interpreters: dict[str, str] = {"probe interpreter (sys.executable)": sys.executable}
+    provisioned_path: str | None = None
+    try:
+        from coordinator_core.install.provisioned_interpreter import (
+            resolve_provisioned_interpreter,
+        )
+
+        provisioned_path = resolve_provisioned_interpreter().path
+    except Exception:  # noqa: BLE001 — advisory leg, never fails the probe
+        provisioned_path = None
+    seen_real = {os.path.realpath(sys.executable)}
+    if provisioned_path and os.path.realpath(provisioned_path) not in seen_real:
+        interpreters["guard interpreter (example-retrieval-repo pin; door/warm server)"] = provisioned_path
+        seen_real.add(os.path.realpath(provisioned_path))
     bare_python3 = shutil.which("python3")
-    if bare_python3 and bare_python3 != sys.executable:
-        interpreters["bare python3 on PATH (what hooks.json runs guard hooks under)"] = bare_python3
+    if bare_python3 and os.path.realpath(bare_python3) not in seen_real:
+        interpreters["bare python3 on PATH (what DoE bare-python3 hooks run under)"] = bare_python3
 
     checked: dict[str, Any] = {}
     disarmed: list[str] = []

@@ -32,6 +32,11 @@ Prune: `repos.*` keys under the plugin cache are unset on every run; keys whose 
 is missing are unset on a consumer-profile box only. Install-clone candidates are
 skipped with one stdout line.
 
+Install-path p4 leg: after the repos.* work, on every path through main() (not the
+unknown-argument exit), it calls coordinator_core.ops.register_p4_workspaces, which seeds
+external_workspaces.* for this host's p4 clients. Honours --check-only; its failures never
+change the exit code.
+
 Negative-spec: this module does not read or write ~/.claude/working-repos.yaml (that
 manifest is a separate concern — see install.md Step 4). It only reads
 coordinator_core.ops.discover_working_repos's discovery output and the machine-local
@@ -244,6 +249,18 @@ def _stale_keys(snapshot: Dict[str, str]) -> List[str]:
     return stale
 
 
+def _register_p4_workspaces(check_only: bool) -> None:
+    """Install-path p4 leg: registers this host's p4 client workspaces into
+    `external_workspaces.*` via the sibling module. Swallows every exception
+    (never-block); the lazy import keeps p4 off every other import path."""
+    try:
+        from coordinator_core.ops import register_p4_workspaces
+
+        register_p4_workspaces.main(["--check-only"] if check_only else [])
+    except Exception as exc:  # noqa: BLE001 — never-block contract
+        print(f"{_PROG}: p4 workspace registration failed: {exc}", file=sys.stderr)
+
+
 def main(argv: Sequence[str], self_dir: Optional[Path] = None) -> int:
     non_interactive = False
     check_only = False
@@ -257,6 +274,13 @@ def main(argv: Sequence[str], self_dir: Optional[Path] = None) -> int:
             print(f"Usage: {_PROG} [--non-interactive] [--check-only]", file=sys.stderr)
             return 1
 
+    try:
+        return _register_repos(non_interactive, check_only)
+    finally:
+        _register_p4_workspaces(check_only)
+
+
+def _register_repos(non_interactive: bool, check_only: bool) -> int:
     buf = io.StringIO()
     try:
         with redirect_stdout(buf):

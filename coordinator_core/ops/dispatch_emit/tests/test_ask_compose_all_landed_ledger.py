@@ -123,7 +123,7 @@ def test_a_ledger_check_resume_keeps_the_halt_diff_clause(monkeypatch):
     resume.update(run_id="ask-prior", halt_sha="a" * 40)
     out = _run(_script(monkeypatch), resume=resume)
     verify = next(c for c in out["calls"] if c["label"] == "verify")["prompt"]
-    assert "met only on work changed since the halt commit " + "a" * 40 in verify
+    assert "met on work changed since the halt commit " + "a" * 40 in verify
     assert "against the current tree: R1" in verify
     assert "ledger-remaining" in _labels(out)
 

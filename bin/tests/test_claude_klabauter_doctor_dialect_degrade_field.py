@@ -51,6 +51,18 @@ def _require_module() -> ModuleType:
     return mod  # type: ignore[return-value]
 
 
+def _stub_resolver(monkeypatch, path):
+    import types
+
+    fake = types.ModuleType("coordinator_core.install.provisioned_interpreter")
+    fake.resolve_provisioned_interpreter = lambda: types.SimpleNamespace(
+        path=path, detail="stub", remedy=""
+    )
+    monkeypatch.setitem(
+        sys.modules, "coordinator_core.install.provisioned_interpreter", fake
+    )
+
+
 def test_field_is_false_when_the_only_degrade_row_is_unrelated_to_the_dialect_guard(
     monkeypatch, tmp_path
 ):
@@ -66,6 +78,7 @@ def test_field_is_false_when_the_only_degrade_row_is_unrelated_to_the_dialect_gu
     assert _telemetry.degrade_path(tmp_path).exists()
 
     monkeypatch.setattr(mod.shutil, "which", lambda name: None)
+    _stub_resolver(monkeypatch, None)
 
     def _fake_probe_armed(interpreter, claude_klabauter_root, timeout=10.0):
         return True, f"ARMED under {interpreter}"
@@ -105,6 +118,7 @@ def test_field_is_true_when_this_guard_actually_degraded(monkeypatch, tmp_path):
     _dialect_mod._log_dialect_parser_unavailable("check_some_guard", "missing package")
 
     monkeypatch.setattr(mod.shutil, "which", lambda name: None)
+    _stub_resolver(monkeypatch, None)
 
     def _fake_probe_armed(interpreter, claude_klabauter_root, timeout=10.0):
         return False, "SILENT under interpreter -- cause: missing-package -- tree-sitter-pwsh not importable"
@@ -115,3 +129,31 @@ def test_field_is_true_when_this_guard_actually_degraded(monkeypatch, tmp_path):
 
     assert result.status == mod._DEGRADED
     assert result.data["durable_degrade_record_exists"] is True
+
+
+def test_pin_resolved_interpreter_is_checked_and_deduped_by_realpath(monkeypatch, tmp_path):
+    mod = _require_module()
+    pin = tmp_path / "pin-python"
+    pin.write_text("")
+    link = tmp_path / "bare-python3"
+    try:
+        link.symlink_to(pin)
+    except (OSError, NotImplementedError):
+        import pytest
+
+        pytest.skip("symlink creation unavailable on this host")
+    _stub_resolver(monkeypatch, str(pin))
+    monkeypatch.setattr(mod.shutil, "which", lambda name: str(link))
+
+    from coordinator_core.bash_guards import _dialect as _dialect_mod
+
+    monkeypatch.setattr(
+        _dialect_mod, "probe_armed", lambda interpreter, root, timeout=10.0: (True, "ARMED")
+    )
+
+    result = mod._run_probe_dialect_guard_armed(tmp_path)
+
+    labels = list(result.data["checked"])
+    assert any(label.startswith("guard interpreter") for label in labels)
+    assert not any(label.startswith("bare python3") for label in labels)
+    assert result.status == mod._PASS

@@ -310,6 +310,9 @@ _INSTALL_PREFIX = "coordinator_core/install/"
 #: ============================================================================
 
 _DISPOSITIONS: Dict[str, Tuple[str, str]] = {
+    'coordinator_core/git/store_hygiene.py': ('git-internal', 'daily-tier claim file created exclusively under <git-common-dir>/coordinator/store-hygiene.claim: _claim'),
+    'coordinator_core/install/runtime_ignore_apply.py': ('in-repo-non-state', 'runtime-ignore rule block appended to the repo .gitignore, never state/: _append_rules'),
+    'coordinator_core/ops/dispatch_emit/ask_stage_receipt.py': ('in-repo-non-state', 'stage claim exclusive-create and stage-receipt.json under the tracked record dir state/warp/<run_id>/: claim, write'),
     'coordinator_core/ops/dispatch_emit/run_credit.py': ('claims-explicitly', 'credit.jsonl appended under the run dir, declared through declare_write: record'),
     'coordinator_core/ops/fleet/scratch_hygiene.py': ('ignored-target', 'sweep cursor tmp + os.replace under the gitignored scratch/ dir: _write_cursor'),
     'coordinator_core/usage/session_cost.py': ('outside-repo', 'per-session cost cache tmp + os.replace under <settings-home>/state/session-cost: _write_cache'),

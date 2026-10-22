@@ -231,11 +231,16 @@ def test_a_warm_engine_key_costs_under_20ms_of_process_time():
     cold_ms = (time.process_time() - first) * 1000
     if key is None:
         pytest.skip("a closure file changed since this process imported probe_store")
+    # process_time ticks at 15.625ms on Windows, so one call is sampled, not measured.
     start = time.process_time()
-    assert engine_key("abc") == key
-    warm_ms = (time.process_time() - start) * 1000
+    for _ in range(10):
+        assert engine_key("abc") == key
+    warm_ms = (time.process_time() - start) * 1000 / 10
     files = probe_store._closure(os.path.normpath(str(ENGINE_CHECKOUT_ROOT)))
-    print(f"engine_key closure={len(files)} files cold={cold_ms:.1f}ms warm={warm_ms:.1f}ms")
+    print(
+        f"engine_key closure={len(files)} files cold={cold_ms:.1f}ms "
+        f"warm={warm_ms:.1f}ms (mean of 10 calls)"
+    )
     assert warm_ms < 20
 
 

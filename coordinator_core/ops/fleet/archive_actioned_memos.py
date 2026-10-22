@@ -99,7 +99,7 @@ from __future__ import annotations
 
 import logging
 import os
-from pathlib import Path
+from pathlib import Path, PurePath
 from typing import Dict, List, Optional, Sequence, Tuple
 
 from coordinator_core.temp_layout import fleet_temp_root
@@ -107,6 +107,7 @@ from coordinator_core.dag import _read_meta
 from coordinator_core.ipc import register_op
 from coordinator_core.liveness import cs_claim_holder_live
 from coordinator_core.memo_corpus import memo_corpus_root
+from coordinator_core.session import record_homes
 from coordinator_core.ops.fleet._common import (
     Move,
     _is_identical_duplicate,
@@ -200,13 +201,17 @@ def _sort_key(terminal_since: Optional[str]) -> str:
     return terminal_since if terminal_since else "9999-99-99T99:99:99Z"
 
 
+# The work-record root as record_homes declares it, derived rather than spelled.
+_STATE_ROOT_PREFIX = PurePath(record_homes.home_dir("", "sizings")).parent.as_posix() + "/"
+
+
 def _norm_memo_ref(ref: str) -> str:
     """Repo-prefix- and separator-insensitive memo path key."""
     s = str(ref).strip().strip("'\"").replace("\\", "/")
     while s.startswith("./"):
         s = s[2:]
-    if s.startswith("state/"):
-        s = s[len("state/"):]
+    if s.startswith(_STATE_ROOT_PREFIX):
+        s = s[len(_STATE_ROOT_PREFIX):]
     return s
 
 
@@ -214,7 +219,7 @@ def _open_commitment_memos(worktree_root: Path) -> Dict[str, str]:
     """Map normalised memo path -> ledger filename for every
     `state/cross-repo-commitments/*.yaml` row with top-level `status: open`.
     One pass over the ledger per call; a line scan, no YAML parse."""
-    ledger = worktree_root / "state" / "cross-repo-commitments"
+    ledger = Path(record_homes.home_dir(str(worktree_root), "cross-repo-commitments"))
     named: Dict[str, str] = {}
     if not ledger.is_dir():
         return named

@@ -21,11 +21,13 @@ from __future__ import annotations
 import ast
 import re
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
+from typing import Callable, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 from coordinator_core.authoring_leaks import HeadView, LeakFinding, added_lines
 from coordinator_core.authoring_leaks.module_attrs import AttrRef, attribute_refs, module_aliases
 from coordinator_core.pyimports import ImportRecord, collect_imports, module_name_for_file, resolve_relative_module
+
+LandedText = Callable[[str], Optional[str]]
 
 NAME = "import_closure"
 KIND = "import_closure"
@@ -122,12 +124,15 @@ def _needed_paths(records: Iterable[Tuple[str, ImportRecord]]) -> Set[str]:
 
 
 class _Closure:
-    def __init__(self, root: Path, gate: Set[str], view: HeadView) -> None:
+    def __init__(self, root: Path, gate: Set[str], view: HeadView, landed_text: Optional[LandedText] = None) -> None:
         self.root = root
         self.gate = gate
         self.view = view
+        self.landed_text = landed_text
 
     def worktree_has(self, path: str) -> bool:
+        if self.landed_text is not None and path in self.gate:
+            return self.landed_text(path) is not None
         return (self.root / path).is_file()
 
     def post_has(self, path: str) -> bool:
@@ -148,7 +153,7 @@ class _Closure:
     def post_names(self, target: str, force: bool = False) -> Optional[Set[str]]:
         """Names `target` binds once the commit lands; `None` = assume satisfied (or unparseable)."""
         if target in self.gate:
-            text = _read_text(self.root / target)
+            text = self.landed_text(target) if self.landed_text is not None else _read_text(self.root / target)
         elif force or self.view.worktree_differs(target):
             text = self.view.head_text(target)
         else:
@@ -241,14 +246,17 @@ def _check_attr(closure: _Closure, rel: str, ref: AttrRef) -> Optional[LeakFindi
     return LeakFinding(rel, ref.lineno, KIND, f"references {ref.name} from {ref.module}; {where} is uncommitted in the worktree")
 
 
-def detect(root: Path, gate_paths: Sequence[str], head: HeadView) -> List[LeakFinding]:
+def detect(
+    root: Path, gate_paths: Sequence[str], head: HeadView, *, landed_text: Optional[LandedText] = None
+) -> List[LeakFinding]:
+    """Findings for `gate_paths`. `landed_text(rel)` supplies a gate path's bytes (None = absent) in place of the worktree's."""
     root = Path(root)
     gate = set(gate_paths)
     texts: Dict[str, str] = {}
     import_files: Set[str] = set()
     hits: Dict[str, Dict[str, frozenset]] = {}
     for rel in sorted(p for p in gate if p.endswith(".py")):
-        wt_text = _read_text(root / rel)
+        wt_text = landed_text(rel) if landed_text is not None else _read_text(root / rel)
         if wt_text is None:
             continue
         added = added_lines(head.head_text(rel), wt_text)
@@ -288,7 +296,7 @@ def detect(root: Path, gate_paths: Sequence[str], head: HeadView) -> List[LeakFi
         needed.add(f"{ref.module.split('.')[0]}/__init__.py")
         needed.update(_module_files(ref.module))
         needed.update(_module_files(f"{ref.module}.{ref.name}"))
-    closure = _Closure(root, gate, HeadView(root, needed))
+    closure = _Closure(root, gate, HeadView(root, needed), landed_text)
     findings: List[LeakFinding] = []
     for rel, rec in parsed:
         findings.extend(closure.check(rel, rec))

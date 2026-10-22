@@ -45,6 +45,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     RESUME_LEDGER_REVISED_FIELD,
     RESUME_LEDGER_UNCLAIMED_FIELD,
     RESUME_LEDGER_UNLANDED_FIELD,
+    UNCHANGED_SINCE_HALT_REASON,
     RESUMED_RUN_ID_KEY,
     RUN_OUTCOME_FILE,
     GateVerdict,
@@ -389,6 +390,21 @@ def _arm_verdict(
     )
 
 
+#: The composed ledger-check script's demotion step for a met row whose met_by no note names; the
+#: composed JS in ask_compose.py repeats it verbatim.
+PRE_HALT_CREDIT_DEMOTION_STEP = "met_by: the commit sha that carries the credited work"
+
+
+def _without_gate_verdicts(row_id: str, record):
+    """`record` with the commit gate's own verdicts removed from its `remaining` steps: the
+    unchanged-since-halt refusal (bare or `<id>: `-prefixed) and the pre-halt-credit demotion are
+    verdicts the verify leg re-judges, not owed work, so a row carrying only them owes no re-plan."""
+    if not isinstance(record, dict) or not isinstance(record.get("remaining"), list):
+        return record
+    verdicts = {UNCHANGED_SINCE_HALT_REASON, f"{row_id}: {UNCHANGED_SINCE_HALT_REASON}", PRE_HALT_CREDIT_DEMOTION_STEP}
+    return {**record, "remaining": [s for s in record["remaining"] if not (isinstance(s, str) and s.strip() in verdicts)]}
+
+
 def _resume_ledger(
     sizing: dict, halt, repo_root: Path, run_id: Optional[str] = None, sizing_rel: Optional[str] = None
 ) -> Optional[dict]:
@@ -447,7 +463,9 @@ def _resume_ledger(
         "ledger_item_ids": list(item_ids),
         "withheld_ids": list(withheld_ids),
         RESUME_LEDGER_HALT_SHA_FIELD: halt.halt_sha,
-        RESUME_LEDGER_REMAINING_FIELD: {k: v for k, v in halt.remaining.items() if k in blocking},
+        RESUME_LEDGER_REMAINING_FIELD: {
+            k: _without_gate_verdicts(k, v) for k, v in halt.remaining.items() if k in blocking
+        },
         RESUME_LEDGER_UNLANDED_FIELD: list(halt.unlanded),
         RESUME_LEDGER_NOTES_FIELD: notes,
     }

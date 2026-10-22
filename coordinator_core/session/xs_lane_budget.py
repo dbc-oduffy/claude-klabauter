@@ -11,6 +11,8 @@ Negative-spec:
     `read_tree_spine` -> `git_objects.read_object`). A `git diff` spawn per edit is a defect.
   - `base_sha` is pinned at open and never re-read from HEAD, so a commit is not a budget refill.
   - A file whose text equals its base does not count; a revert frees its slot.
+  - Line endings are priced as `git diff --numstat` prices them under autocrlf: CRLF is read as LF
+    on both sides, so an EOL-only difference costs 0. LF-only files stay byte-exact.
 """
 
 from __future__ import annotations
@@ -170,10 +172,14 @@ def _read_text(abs_path: str) -> Optional[str]:
         return None
 
 
+def _lf(text: Optional[str]) -> Optional[str]:
+    return text.replace("\r\n", "\n") if text else text
+
+
 def project(file_path: str, tool_input: dict) -> Optional[str]:
     """The file's text after this tool call, computed in memory. None when it cannot be
     projected: a MultiEdit without an `edits` list, an `old_string` that is absent, or an
-    unreadable file."""
+    unreadable file. A CRLF file is projected in LF, so an LF `old_string` finds its text."""
     if not isinstance(tool_input, dict):
         return None
     if isinstance(tool_input.get("content"), str) and "old_string" not in tool_input:
@@ -184,6 +190,8 @@ def project(file_path: str, tool_input: dict) -> Optional[str]:
         return None
     if text is None:
         return None
+    crlf = "\r\n" in text
+    text = _lf(text)
     edits = tool_input.get("edits")
     if "old_string" in tool_input:
         edits = [tool_input]
@@ -193,6 +201,8 @@ def project(file_path: str, tool_input: dict) -> Optional[str]:
         if not isinstance(ed, dict):
             return None
         old, new = ed.get("old_string"), ed.get("new_string")
+        if crlf:
+            old, new = _lf(old), _lf(new)
         if not isinstance(old, str) or not isinstance(new, str) or not old or old not in text:
             return None
         text = text.replace(old, new) if ed.get("replace_all") else text.replace(old, new, 1)
@@ -223,8 +233,8 @@ def _base_texts(repo_root, base_sha: str, rels: list) -> dict:
 
 
 def _changed_lines(base: Optional[str], now: Optional[str]) -> int:
-    base = base or ""
-    now = now or ""
+    base = _lf(base) or ""
+    now = _lf(now) or ""
     if base == now:
         return 0
     a, b = base.splitlines(), now.splitlines()

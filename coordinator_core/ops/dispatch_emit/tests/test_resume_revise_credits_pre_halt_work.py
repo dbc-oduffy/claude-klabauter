@@ -38,8 +38,8 @@ def test_a_met_verdict_naming_the_halt_recorded_commit_reaches_the_commit_leg(mo
     assert "commit" in _labels(out)
 
 
-@pytest.mark.parametrize("met_by", ["none", "abcdef1234", ""])
-def test_a_met_verdict_without_a_halt_recorded_sha_halts_not_met(monkeypatch, met_by):
+@pytest.mark.parametrize("met_by", ["none", ""])
+def test_a_met_verdict_naming_no_sha_halts_not_met(monkeypatch, met_by):
     out = _run(_script(monkeypatch), verify=_met(met_by), resume=_REVISED)
     halted = out["result"]["halted_by"]
     assert halted["halted"] == "ledger-check"
@@ -56,12 +56,12 @@ def test_a_met_verdict_naming_a_sha_only_the_revise_note_names_reaches_the_commi
     assert "commit" in _labels(out)
 
 
-def test_a_met_verdict_naming_a_sha_no_note_or_record_names_still_halts(monkeypatch):
+def test_a_met_verdict_naming_a_sha_no_note_or_record_names_is_left_for_the_commit_leg(monkeypatch):
     noted = dict(_REVISED, remaining={"R1": {"remaining": ["x"], "evidence": "none"}},
                  revise_notes=["R1 met by 134841934b"])
     out = _run(_script(monkeypatch), verify=_met("fedcba9876"), resume=noted)
-    assert out["result"]["halted_by"]["items"][0]["status"] == "not_met"
-    assert "commit" not in _labels(out)
+    assert out["result"]["halted_by"] is None, out["result"]["halted_by"]
+    assert "commit" in _labels(out)
 
 
 def test_the_judge_prompt_credits_work_before_the_halt_only_when_a_note_re_rules(monkeypatch):
@@ -71,7 +71,8 @@ def test_the_judge_prompt_credits_work_before_the_halt_only_when_a_note_re_rules
     assert "met_by must name the commit sha" in verify
     plain = dict(_REVISED, revise_notes=[])
     verify = next(c for c in _run(_script(monkeypatch), resume=plain)["calls"] if c["label"] == "verify")["prompt"]
-    assert "met only on work changed since the halt commit" in verify
+    assert "met on work changed since the halt commit" in verify
+    assert "committed at or before it when met_by names that commit sha" in verify
     assert "including commits before the halt commit" not in verify
 
 
@@ -80,7 +81,6 @@ def test_the_judge_prompt_credits_work_before_the_halt_only_when_a_note_re_rules
     [
         ("Re-rule R1 as met by commit 2fd9d96c64 (15 parity tests pass)", ["2fd9d96c64"]),
         ("R1 met by d46d2a1b88, 18/18 tests", ["d46d2a1b88"]),
-        ("Re-rule R1 as met by commit 2fd9d96c64", ["abcdef1234"]),
         ("met by 2fd9d96c64e1a0b", "2fd9d96c64"),
         ("met by 2fd9d96c64", "2fd9d96c64e1a0b"),
         ("met by 12345678", "12345678"),
@@ -109,4 +109,4 @@ def test_the_pre_halt_credit_const_is_declared_before_every_read(monkeypatch):
 
 def test_the_halt_next_action_names_the_pre_halt_credit_path(monkeypatch):
     out = _run(_script(monkeypatch), verify=_met("none"), resume=_REVISED)
-    assert "work committed before the halt meet it" in out["result"]["halted_by"]["next_action"]
+    assert "work committed at or before the halt meets a row when the verdict met_by names that commit" in out["result"]["halted_by"]["next_action"]

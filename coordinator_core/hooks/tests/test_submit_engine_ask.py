@@ -1020,7 +1020,8 @@ def test_asks_launch_every_ready_run(tmp_path):
     assert parent_id == PARENT and session_id == "sess-1"
     assert [c.run_id for c in children] == ["r1", "r2"]
     assert children[1].emit_params == {
-        "session_id": "sess-1", "ask": True, "sizing_path": "state/sizings/r2.yaml", "reserved_run_id": "r2",
+        "session_id": "sess-1", "target_root": str(root), "ask": True,
+        "sizing_path": "state/sizings/r2.yaml", "reserved_run_id": "r2",
     }
     assert hso["updatedInput"] == {"scriptPath": str(launch.script)}
     reason = json.dumps(out)

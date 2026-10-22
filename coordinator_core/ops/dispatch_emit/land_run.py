@@ -851,8 +851,12 @@ def _unchanged_since_halt(
         return []
     from coordinator_core.ops.dispatch_emit.pre_halt_credit import credited_rows
 
-    exempt = {*_verified_only(resume), *credited_rows(resume, verdict),
-              *_em_discharged_rows(resume, items)}
+    credited = credited_rows(resume, verdict)
+    post_commit = {
+        str(i["id"]) for i in items
+        if isinstance(i, dict) and str(i.get("id")) in credited and i.get("status") == "post_commit"
+    }
+    exempt = {*_verified_only(resume), *(credited - post_commit), *_em_discharged_rows(resume, items)}
     judged = [
         str(i["id"]) for i in items
         if isinstance(i, dict) and i.get("id") in blocking and i.get("status") in ("met", "post_commit")
@@ -864,6 +868,13 @@ def _unchanged_since_halt(
     paths, stage_head = _manifest_declared(manifest_abs)
     paths = [p for p in paths if p not in exclude]
     base, source = _halt_base(root, resume, plan_rel, stage_head)
+    if post_commit and base is not None:
+        from coordinator_core.ops.dispatch_emit.pre_halt_ancestry import verified_post_commit_credit
+
+        verified = verified_post_commit_credit(root, base, items, sorted(post_commit & set(judged)))
+        judged = [i for i in judged if i not in verified]
+        if not judged:
+            return []
     outcome = "no-base" if base is None else "no-declared-paths" if not paths else "unchanged"
     if outcome == "unchanged":
         state = _work_since_halt(root, base, paths, _withheld_of(root, resume))
@@ -871,13 +882,22 @@ def _unchanged_since_halt(
             return []
         outcome = "tree-unreadable" if state is None else "unchanged"
         if outcome == "unchanged" and not exclude:  # a footprint breach is dirty work: never "already landed"
-            from coordinator_core.ops.dispatch_emit.terminal_commit import _landed_before_halt
+            from coordinator_core.ops.dispatch_emit.pre_halt_ancestry import CITED_DETAIL_KEY, cited_at_or_before
 
-            owners = [x for x in (plan_rel, resume.get("plan"), resume.get("run_id")) if isinstance(x, str)]
-            landed = _landed_before_halt(root, base, paths, owners)
-            if landed:
-                detail["landed_sha"] = landed
+            cited = cited_at_or_before(root, base, items, judged)
+            if cited and all(i in cited for i in judged):
+                shas = set(cited.values())
+                detail[CITED_DETAIL_KEY] = cited
+                detail["landed_sha"] = next(iter(shas)) if len(shas) == 1 else base
                 detail["landed_paths"] = list(paths)
+            else:
+                from coordinator_core.ops.dispatch_emit.terminal_commit import _landed_before_halt
+
+                owners = [x for x in (plan_rel, resume.get("plan"), resume.get("run_id")) if isinstance(x, str)]
+                landed = _landed_before_halt(root, base, paths, owners)
+                if landed:
+                    detail["landed_sha"] = landed
+                    detail["landed_paths"] = list(paths)
     detail.update(base=base, base_source=source if base else None, outcome=outcome)
     return [{"id": i, "reason": UNCHANGED_SINCE_HALT_REASON} for i in judged]
 
@@ -953,9 +973,14 @@ def _ledger_gate(
     if since_halt.get("landed_sha") and all(
         f["reason"] == UNCHANGED_SINCE_HALT_REASON for f in result["failures"]
     ):
+        from coordinator_core.ops.dispatch_emit.pre_halt_ancestry import CITED_DETAIL_KEY
         from coordinator_core.ops.dispatch_emit.terminal_commit import _verdict_credits
 
-        if _verdict_credits(verdict, [f["id"] for f in result["failures"]], since_halt["landed_sha"]):
+        failed_ids = [f["id"] for f in result["failures"]]
+        vouched = since_halt.get(CITED_DETAIL_KEY) or {}
+        if all(str(i) in vouched for i in failed_ids) or _verdict_credits(
+            verdict, failed_ids, since_halt["landed_sha"],
+        ):
             return {
                 "committed": True, "sha": since_halt["landed_sha"], ALREADY_LANDED_KEY: True,
                 "paths": since_halt["landed_paths"], "since_halt": since_halt,

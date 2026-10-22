@@ -23,12 +23,14 @@ Negative-spec:
   - Never trusts the p4 process exit code.
   - Never retries and never prompts (stdin is DEVNULL).
   - Never reads ``.p4config`` / ambient ``P4*`` env / runs ``p4 set`` — every
-    invocation carries its own ``-p/-u/-c``.
+    invocation carries its own ``-p/-u/-c``. The sole ambient exception to D1
+    is ``run_discovery``, scoped to ``DISCOVERY_VERBS`` (``info``, ``clients``).
 """
 
 from __future__ import annotations
 
 import re
+import shutil
 import subprocess
 from dataclasses import dataclass
 from typing import List, Optional
@@ -39,6 +41,11 @@ from typing import List, Optional
 _CREATIONFLAGS = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 DEFAULT_TIMEOUT_S = 20.0
+DISCOVERY_TIMEOUT_S = 8.0
+DISCOVERY_VERBS = frozenset({"info", "clients"})
+
+# Private marker: only run_discovery passes it as ``port``; run() then omits -p/-u/-c.
+_AMBIENT = object()
 
 _TICKET_EXPIRED_MARKERS = (
     "ticket",
@@ -133,6 +140,8 @@ def run(
 ) -> P4Result:
     """Spawn ``p4 -p <port> -u <user> -c <client> -s <args...>``.
 
+    ``port=_AMBIENT`` (passed only by ``run_discovery``) spawns ``p4 -s -ztag <args...>`` instead.
+
     ``stdin`` is ``DEVNULL`` (never prompts). On a runner-level timeout the
     whole process tree is killed and the result classifies as
     ``refused(raw="timeout")`` — fails closed, never retries.
@@ -149,7 +158,10 @@ def run(
     non-spec verbs keep their DEVNULL guarantee and cannot acquire one by
     accident.
     """
-    cmd = ["p4", "-p", port, "-u", user, "-c", client, "-s", *args]
+    if port is _AMBIENT:
+        cmd = ["p4", "-s", "-ztag", *args]
+    else:
+        cmd = ["p4", "-p", port, "-u", user, "-c", client, "-s", *args]
     proc = subprocess.Popen(
         cmd,
         cwd=cwd,
@@ -173,3 +185,21 @@ def run(
     if error is not None:
         return P4Result(ok=False, stdout=stdout or "", error=error)
     return P4Result(ok=True, stdout=stdout or "")
+
+
+def run_discovery(args: List[str], *, timeout: float = DISCOVERY_TIMEOUT_S) -> P4Result:
+    """Spawn ``p4 -s -ztag <args...>`` against the AMBIENT p4 environment (no -p/-u/-c).
+
+    ``args[0]`` must be in ``DISCOVERY_VERBS`` else ``ValueError`` (a
+    programming error, not a p4 outcome). An absent binary returns
+    ``refused(raw="not_installed")`` without spawning; every other outcome is
+    ``run()``'s, so this never raises on a p4 failure.
+    """
+    if not args or args[0] not in DISCOVERY_VERBS:
+        raise ValueError(f"run_discovery admits only {sorted(DISCOVERY_VERBS)}, got {args[:1]!r}")
+    if shutil.which("p4") is None:
+        return P4Result(ok=False, stdout="", error=P4Error(kind="refused", raw="not_installed"))
+    try:
+        return run(_AMBIENT, "", "", args, timeout=timeout)
+    except OSError:
+        return P4Result(ok=False, stdout="", error=P4Error(kind="refused", raw="not_installed"))

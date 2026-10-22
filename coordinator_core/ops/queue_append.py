@@ -549,7 +549,7 @@ def _build_yaml(schema_name: str, fields: dict) -> str:
 
     document = "\n".join(lines) + "\n"
     try:
-        yaml.safe_load(document)
+        yaml.load(document, Loader=getattr(yaml, "CSafeLoader", yaml.SafeLoader))
     except yaml.YAMLError as exc:
         offending_field = _offending_field_for_yaml_error(exc, line_owners)
         raise ValueError(

@@ -258,10 +258,8 @@ def _input_identities(text: str, worktree_root: Path) -> dict:
 def _probe_set(plans: list, upgrade: bool, repo_root: Path) -> dict:
     """The set form's reply: one corpus, one build, one store load and one save per call.
 
-    Trap: ``engine_key`` digests ``sys.modules``, so it is taken once at call start and used
-    for every get and put. A process that already ran a miss holds more modules, so its next
-    call's key differs from a fresh process's; records written by a fresh process are hit by
-    the next fresh process.
+    ``engine_key`` is taken once at call start and used for every get and put: it is a
+    function of the engine files alone (None once any closure file is newer than import).
     """
     worktree_root = Path(main_worktree_root(repo_root))
     started = time.process_time()

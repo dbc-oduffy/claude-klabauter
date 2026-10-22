@@ -14,11 +14,12 @@ import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Mapping, Optional, Sequence
+from typing import Callable, Mapping, Optional, Sequence
 
 PY_UNPARSEABLE = "py-unparseable"
 SINCE_BASE_OVERLAP = "since-base-overlap"
 TARGETED_TESTS_FAILED = "targeted-tests-failed"
+IMPORT_CLOSURE_UNTRACKED = "import-closure-untracked"
 TARGETED_TESTS_PARAM = "targeted_tests"
 NOT_RUN_CHECK = "not-run"
 
@@ -388,6 +389,33 @@ def _unchanged_since_base(worktree_root: Path, base: str, paths: Sequence[str]) 
         if entry is None or hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest() != entry[1]:
             return False
     return True
+
+
+def import_closure_findings(
+    worktree_root: Path, paths: Sequence[str], deleted: Sequence[str],
+    landed_text: Optional[Callable[[str], Optional[str]]] = None,
+) -> list[Finding]:
+    """Findings(IMPORT_CLOSURE_UNTRACKED) for landing ``.py`` paths that import a module or name
+    HEAD will lack once the landing commits. ``landed_text(rel)`` supplies the bytes the commit
+    lands (None = absent); without it the worktree is judged. ``deleted`` paths read as absent.
+    A detector exception is one finding naming it (fail closed). Zero spawns."""
+    from coordinator_core.authoring_leaks import HeadView, import_closure
+
+    gate = [*paths, *deleted]
+    deleted_set = set(deleted)
+    text = landed_text
+    if text is not None and deleted_set:
+        inner = text
+
+        def text(rel: str) -> Optional[str]:
+            return None if rel in deleted_set else inner(rel)
+
+    try:
+        head = HeadView(worktree_root, import_closure.candidates(gate))
+        found = import_closure.detect(Path(worktree_root), gate, head, landed_text=text)
+    except Exception as exc:
+        return [Finding("", IMPORT_CLOSURE_UNTRACKED, f"import-closure detector failed: {type(exc).__name__}: {exc}")]
+    return [Finding(f.path, IMPORT_CLOSURE_UNTRACKED, f"{f.line}: {f.detail}") for f in found]
 
 
 def since_base_findings(

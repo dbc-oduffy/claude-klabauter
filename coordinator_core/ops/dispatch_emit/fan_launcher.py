@@ -73,6 +73,7 @@ const EMIT_SCHEMA = {
     path: { type: 'string' },
     run_id: { type: 'string' },
     fire_args: { type: 'object' },
+    error: { type: 'string' },
   },
 };
 __VERIFY_REPLY_JS__
@@ -88,6 +89,7 @@ __READ_STAGE_SIDECAR_JS__
 
 function _emitRefusal(child, e) {
   if (!e || typeof e !== 'object') return 'emit reply is not an object';
+  if (typeof e.error === 'string' && e.error !== '') return 'emit failed: ' + e.error;
   if (e.run_id !== child.run_id) return 'emit reply run_id ' + String(e.run_id) + ' is not ' + child.run_id;
   if (typeof e.path !== 'string' || e.path === '') return 'emit reply path is not a non-empty string';
   const p = e.path.replace(/\\/g, '/');
@@ -106,7 +108,8 @@ async function _emitLeg(child) {
   const reply = await agent(
     'Run `' + INVOKE + ' ' + EMIT_OP + " '" + params + "'` once, with the command word exactly as written, and "
     + 'return path, run_id and fire_args from its JSON reply verbatim. When the command is denied or fails, '
-    + 'return path as an empty string, run_id as the empty string and fire_args as {}.',
+    + "return the command's error text verbatim (its stderr or the denial message) in the error field, "
+    + 'with path as an empty string and fire_args as {}; on success omit error.',
     { label: 'emit-' + child.run_id, phase: 'emit', agentType: 'general-purpose', model: 'haiku', effort: 'low', schema: EMIT_SCHEMA },
   );
   return reply;

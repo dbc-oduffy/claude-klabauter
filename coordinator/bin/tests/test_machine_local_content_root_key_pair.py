@@ -1,5 +1,5 @@
-"""`machine-local get` answers for repos.content_root and its legacy name
-repos.content_root from either key, matching machine_resolver.registry_get.
+"""`machine-local get` answers for repos.content_root and its pre-rename
+key from either key, matching machine_resolver.registry_get.
 
 Spec backlink: docs/research/2026-10-16-unclear-claude-author-registry-key.md
 """
@@ -39,9 +39,9 @@ def _registry(tmp_path: Path, monkeypatch, key: str) -> Path:
     "stored,asked",
     [
         ("content_root", "repos.content_root"),
+        ("content_root", "repos.content_root"),  # private-name-ok: upgrade-box fixture
         ("content_root", "repos.content_root"),
-        ("content_root", "repos.content_root"),
-        ("content_root", "repos.content_root"),
+        ("content_root", "repos.content_root"),  # private-name-ok: upgrade-box fixture
     ],
 )
 def test_get_falls_back_across_the_key_pair(ml, tmp_path, monkeypatch, stored, asked):

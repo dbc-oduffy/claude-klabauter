@@ -129,7 +129,7 @@ def test_the_clause_demands_work_changed_since_the_halt_and_lists_the_notes(monk
     ledger = script.replace(ask_compose._lit(" " + RECONCILE_CLAUSE), "")
     assert ledger != script
     assert "already ran" not in ledger and "already landed" not in ledger
-    assert "met only on work changed since the halt commit" in script
+    assert "met on work changed since the halt commit" in script
     assert "JSON.stringify(_gate.resume_ledger.revise_notes ?? [])" in script
 
 

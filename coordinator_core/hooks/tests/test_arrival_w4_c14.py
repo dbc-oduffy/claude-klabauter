@@ -8,6 +8,7 @@ import pytest
 
 def _stop_message(out):
     """A Stop-event envelope carries its text at top-level systemMessage (advisory) or reason (deny)."""
+    assert "hookSpecificOutput" not in out
     return out.get("systemMessage") or out.get("reason")
 
 
