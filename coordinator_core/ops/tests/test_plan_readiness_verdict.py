@@ -32,7 +32,7 @@ def _plan(root: Path, statement: str = "the op reports per class") -> Path:
     (root / "docs" / "plans").mkdir(parents=True)
     (root / REL).write_text(
         "---\ntitle: fixture\nauthor: fixture\nstatus: draft\ncreated: 2026-10-15\n"
-        "census:\n  - question: q\n    command: grep -c a b\n    result: '1'\n"
+        "census:\n  - question: q\n    command: echo a\n    result: '1'\n"
         f"prime_exit_criterion:\n  statement: {statement}\n"
         "  derived_from: state/sizings/2026-10-15-fixture.yaml\n"
         "---\n\n# Fixture\n\n## Tasks\n\n```yaml plan-tasks\n" + _SPINE + "```\n",
@@ -485,6 +485,28 @@ def test_corrects_citation_is_whitespace_normalised_and_case_sensitive(tmp_path)
     common = _corrects_plan(tmp_path, _CORRECTS)
     assert _op_reply(common, [_row(citation="tree   claim\nX")])["verdict"] == "ready"
     assert _op_reply(common, [_row(citation="TREE CLAIM X")])["verdict"] == "judgment"
+
+
+_P4 = "no live p4 call from a route (store-contract wiki line 58)"
+_P4_CORRECTS = f"corrects:\n  - citation: {_P4}\n    fixed_by: C2\n"
+_P4_ROW = "There is no live p4 call from a route (store-contract wiki line 58)"
+
+
+def test_paraphrased_citation_of_a_live_corrects_entry_is_a_note(tmp_path):
+    reply = _op_reply(_corrects_plan(tmp_path, _P4_CORRECTS), [_row(citation=_P4_ROW)])
+    assert reply["blocking"] == []
+    assert f"{_P4} -> C2" in reply["reason"]
+
+
+def test_paraphrase_of_an_entry_without_a_live_fixer_still_blocks(tmp_path):
+    reply = _op_reply(_corrects_plan(tmp_path, _P4_CORRECTS, "backlogged"), [_row(citation=_P4_ROW)])
+    assert reply["blocking"] == [f"premise-check: CONTRADICTED {_P4_ROW}"]
+
+
+def test_unrelated_citation_with_a_paraphrase_neighbour_still_blocks(tmp_path):
+    common = _corrects_plan(tmp_path, _P4_CORRECTS)
+    for cite in ("describe (only with -s)", "There is no live p4 call from a cron job (queue doc line 9)"):
+        assert _op_reply(common, [_row(citation=cite)])["blocking"] != []
 
 
 def test_stale_class4_row_is_a_note_and_matching_baseline_ref_still_blocks(tmp_path):

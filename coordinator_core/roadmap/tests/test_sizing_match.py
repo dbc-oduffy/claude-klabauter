@@ -54,6 +54,20 @@ def test_title_fallback_strips_date_and_runid(repo):
     assert (r["sizing"], r["basis"]) == (s, "title")
 
 
+def test_title_fallback_refuses_contradicting_deliverable_id(repo):
+    b = _baton(repo, "2026-10-22-liveness-reader-closeout", did="dlv-aaa")
+    _sizing(repo, "2026-10-22-liveness-reader-closeout", "status: routed\ndeliverable_id: dlv-bbb\n")
+    r = sm.match_sizings(repo, [b])[0]
+    assert (r["sizing"], r["basis"]) == (None, "none")
+
+
+def test_title_fallback_accepts_sizing_without_deliverable_id_for_did_baton(repo):
+    b = _baton(repo, "2026-10-22-liveness-reader-closeout", did="dlv-aaa")
+    s = _sizing(repo, "2026-10-22-liveness-reader-closeout", "status: routed\n")
+    r = sm.match_sizings(repo, [b])[0]
+    assert (r["sizing"], r["basis"]) == (s, "title")
+
+
 def test_ambiguous_two_deliverable_hits(repo):
     b = _baton(repo, "2026-10-22-thing", did="dlv-aaa")
     _sizing(repo, "2026-10-22-a", "status: routed\ndeliverable_id: dlv-aaa\n")

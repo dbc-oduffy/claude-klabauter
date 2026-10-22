@@ -380,9 +380,10 @@
         "value": 0.2
       },
       "spawn_count_budget": {
-        "shipped_in_reachability": 1
+        "shipped_in_reachability": 1,
+        "xs_sizing_match": 1
       },
-      "_rationale": "One `git rev-list <shas> --not HEAD` for the whole set of cited shipped_in SHAs (blitz_land.shipped_in_refusals via git/run.py::run_git), batched so the count does not grow with the number of batons; it is what refuses a stamp citing a commit HEAD cannot reach. Counted by coordinator_core/ops/tests/test_roadmap_blitz_land_spawn_count.py with exact equality."
+      "_rationale": "One `git rev-list <shas> --not HEAD` for the whole set of cited shipped_in SHAs (blitz_land.shipped_in_refusals via git/run.py::run_git), batched so the count does not grow with the number of batons; it is what refuses a stamp citing a commit HEAD cannot reach. xs_sizing_match: one batched `git grep -l --untracked -F` over state/sizings (sizing_match.match_sizings via run_git) for every unsized XS dispatch baton in routedElsewhere, run only when the wave has one. Counted by coordinator_core/ops/tests/test_roadmap_blitz_land_spawn_count.py with exact equality."
     },
     "roadmap.blitz_stage": {
       "target_ms": 300,

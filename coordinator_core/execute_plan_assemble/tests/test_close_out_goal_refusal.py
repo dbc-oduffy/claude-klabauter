@@ -397,6 +397,19 @@ class TestResolveDerivedFrom:
         assert failure is not None
         assert "kr-missing" in failure
 
+    def test_ac_table_section_citation_resolves(self, tmp_path):
+        cited = "plans/p.md#Acceptance criteria table"
+        assert coas._resolve_derived_from(cited, tmp_path) is None
+
+    def test_empty_goal_id_resolves(self, tmp_path):
+        assert coas._resolve_derived_from("#kr-x", tmp_path) is None
+        assert coas._resolve_derived_from("#acceptance-criteria", tmp_path) is None
+
+    def test_missing_goal_with_kr_fragment_still_refuses(self, tmp_path):
+        failure = coas._resolve_derived_from("goal-nonexistent#kr-x", tmp_path)
+        assert failure is not None
+        assert "goal-nonexistent" in failure
+
     def test_kr_shape_never_treats_an_index_as_an_id(self, tmp_path):
         """AC20: `key_results[].id` must be matched by ITS OWN id field,
         never an array index -- a KR list whose first entry lacks a

@@ -121,6 +121,19 @@ def test_grammar_examples_and_real_shapes_are_answered(tree):
         assert evaluate(command, tree, None) is not None, command
 
 
+def _host_treats_cr_as_eol(sh, env, kw):
+    """Git-for-Windows grep strips CR before `$`; POSIX grep (and the matcher) does not."""
+    out = subprocess.run([sh, "-c", "printf 'a\r\n' | grep -c 'a$'"], capture_output=True,
+                         text=True, env=env, **kw).stdout.strip()
+    return out == "1"
+
+
+def _host_comparable(commands, sh, env, kw):
+    if _host_treats_cr_as_eol(sh, env, kw):
+        return [c for c in commands if "crlf" not in c]
+    return commands
+
+
 @pytest.mark.spawns_process
 @pytest.mark.cadence
 def test_parity_with_the_host_shell(tree):
@@ -131,6 +144,7 @@ def test_parity_with_the_host_shell(tree):
     kw = {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)} if os.name == "nt" else {}
     commands = _docstring_examples() + _REAL_SHAPES
     assert len(commands) >= 20 + 20
+    commands = _host_comparable(commands, sh, env, kw)
     for command in commands:
         proc = subprocess.run([sh, "-c", command], cwd=tree.root, capture_output=True,
                               text=True, env=env, **kw)
@@ -458,6 +472,7 @@ def test_index_world_parity_with_the_host_shell(tmp_path):
     kw = {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)} if os.name == "nt" else {}
     commands = _docstring_examples() + _REAL_SHAPES
     assert len(commands) >= 20 + 20
+    commands = _host_comparable(commands, sh, env, kw)
     index = _Index()
     got = _many(commands, index, _Records())
     for command in commands:

@@ -21,9 +21,10 @@ _BOTH = _HUNK1.replace("line29\n", "line29-B\n")
 
 def _git(repo, *args, stdin=None):
     return subprocess.run(
-        ["git", *args], cwd=repo, check=True, capture_output=True, text=True,
-        input=stdin, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-    ).stdout
+        ["git", *args], cwd=repo, check=True, capture_output=True,
+        input=None if stdin is None else stdin.encode(),
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    ).stdout.decode()
 
 
 def _repo_with_partial_hunk(tmp_path):
@@ -32,12 +33,13 @@ def _repo_with_partial_hunk(tmp_path):
     _git(repo, "init", "-q")
     _git(repo, "config", "user.email", "t@example.com")
     _git(repo, "config", "user.name", "t")
-    (repo / "f.txt").write_text(_BASE)
+    _git(repo, "config", "core.autocrlf", "false")
+    (repo / "f.txt").write_bytes(_BASE.encode())
     _git(repo, "add", "f.txt")
     _git(repo, "commit", "-q", "-m", "base")
-    (repo / "f.txt").write_text(_HUNK1)
+    (repo / "f.txt").write_bytes(_HUNK1.encode())
     patch = _git(repo, "diff")
-    (repo / "f.txt").write_text(_BOTH)
+    (repo / "f.txt").write_bytes(_BOTH.encode())
     _git(repo, "apply", "--cached", "-", stdin=patch)
     assert _git(repo, "diff", "--cached", "--name-only").split() == ["f.txt"]
     return repo
@@ -158,7 +160,8 @@ def test_staged_rename_naming_only_destination_denies_naming_source(tmp_path):
     _git(repo, "init", "-q")
     _git(repo, "config", "user.email", "t@example.com")
     _git(repo, "config", "user.name", "t")
-    (repo / "old.txt").write_text(_BASE)
+    _git(repo, "config", "core.autocrlf", "false")
+    (repo / "old.txt").write_bytes(_BASE.encode())
     _git(repo, "add", "old.txt")
     _git(repo, "commit", "-q", "-m", "base")
     _git(repo, "mv", "old.txt", "new.txt")

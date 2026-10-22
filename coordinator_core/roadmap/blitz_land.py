@@ -1190,6 +1190,80 @@ def join_xs_sizing_to_baton(
     }
 
 
+def _link_unsized_xs(
+    worktree_root: Path,
+    wave_result: Dict[str, Any],
+    report: Dict[str, Any],
+    refused: List[Dict[str, Any]],
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """Pair each `routedElsewhere` XS dispatch baton with an existing sizing, both edges.
+
+    A baton citing a sizing gets that sizing stamped; the rest go through `match_sizings`
+    in one batch. Ambiguous, absent or conflicted results land in the second list.
+    Keys on `route` + `tshirt`, never the entry's `reason` prose.
+    """
+    from coordinator_core.frontmatter.primitives import read_fm_field_unquoted
+    from coordinator_core.roadmap.sizing_match import match_sizings, stamp_sizing_baton
+
+    linked: List[Dict[str, Any]] = []
+    unlinked: List[Dict[str, Any]] = []
+    cited: List[Tuple[Dict[str, Any], str, str]] = []
+    unsized: List[Tuple[Dict[str, Any], str]] = []
+    for entry in wave_result.get("routedElsewhere") or []:
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("route") != "dispatch" or entry.get("tshirt") != "XS":
+            continue
+        try:
+            baton_path = _baton_path_for(entry, report)
+            text = (worktree_root / baton_path).read_text(encoding="utf-8")
+        except (LandingRefused, OSError) as exc:
+            refused.append({"baton": entry.get("batonId"), "reason": str(exc)})
+            continue
+        span = _frontmatter_span(text)
+        owner = read_fm_field_unquoted(text[span[0] : span[1]] if span else "", "sizing_object")
+        if _field_unset(owner):
+            unsized.append((entry, baton_path))
+        else:
+            cited.append((entry, baton_path, _rel(owner, worktree_root)))
+
+    def _link(entry: Dict[str, Any], baton_path: str, sizing_rel: str, basis: str) -> None:
+        # Sizing edge first: a join refusal leaves a one-edge link; a re-land is idempotent.
+        try:
+            stamp = stamp_sizing_baton(worktree_root, sizing_rel, baton_path)
+            if stamp["conflict"]:
+                unlinked.append(
+                    {"baton": baton_path, "sizing": sizing_rel, "basis": "conflict",
+                     "conflict": stamp["conflict"]}
+                )
+                return
+            joined = join_xs_sizing_to_baton(
+                worktree_root, baton_path,
+                {"sizingObject": sizing_rel, "deliverableId": entry.get("deliverableId")},
+            )
+            linked.append(
+                {"baton": baton_path, "sizing": sizing_rel, "basis": basis,
+                 "sizingStamped": stamp["stamped"], "batonStamped": joined["stamped"],
+                 "conflicts": joined["conflicts"]}
+            )
+        except (LandingRefused, MutateAbort, LockTimeout, OSError) as exc:
+            refused.append({"baton": entry.get("batonId"), "reason": str(exc)})
+
+    for entry, baton_path, sizing_rel in cited:
+        _link(entry, baton_path, sizing_rel, "cited")
+    if unsized:
+        results = match_sizings(worktree_root, [p for _, p in unsized])
+        for (entry, baton_path), match in zip(unsized, results):
+            if match["sizing"]:
+                _link(entry, baton_path, match["sizing"], match["basis"])
+            else:
+                unlinked.append(
+                    {"baton": baton_path, "sizing": None, "basis": match["basis"],
+                     "candidates": match["candidates"]}
+                )
+    return linked, unlinked
+
+
 def _spec_join_entry(
     worktree_root: Path, entry: Dict[str, Any], plan_path: Optional[str]
 ) -> Optional[Dict[str, Any]]:
@@ -1644,6 +1718,8 @@ def land_wave(
             except (LandingRefused, MutateAbort, OSError):
                 continue
 
+    xs_linked, xs_unlinked = _link_unsized_xs(worktree_root, wave_result, report, refused)
+
     xs_joined: List[Dict[str, Any]] = []
     for entry in wave_result.get("xsRuns") or []:
         if not isinstance(entry, dict):
@@ -1735,6 +1811,10 @@ def land_wave(
         "minted": minted,
         # xsRuns batons joined to their sizing (handoff_id/deliverable_id/sizing_object).
         "xs_joined": xs_joined,
+        # Unsized XS dispatch batons in routedElsewhere paired with an existing sizing.
+        "xsLinked": xs_linked,
+        # The same batons when the match was ambiguous, absent or conflicted; `basis` says which.
+        "xsUnlinked": xs_unlinked,
         "pulled": pulled,
         # Pulled batons on a plan-carrying route that named no plan: nothing was linked.
         "pulled_without_plan": pulled_without_plan,

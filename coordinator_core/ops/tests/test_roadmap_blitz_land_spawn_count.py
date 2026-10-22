@@ -41,6 +41,51 @@ def _baton(root, stub_id: str) -> None:
     )
 
 
+def _routed_xs_wave(tmp_path, count: int) -> dict:
+    _git(tmp_path, "init", "-q", "-b", "main")
+    entries = []
+    for i in range(count):
+        stub_id = f"x-{i}"
+        _baton(tmp_path, stub_id)
+        sizing = tmp_path / "state" / "sizings" / f"2026-10-22-x-{i}.yaml"
+        sizing.parent.mkdir(parents=True, exist_ok=True)
+        sizing.write_text(f"deliverable_id: dlv-x-{i}-00000{i}\nstatus: open\n", encoding="utf-8")
+        baton = Path(record_homes.record_path(str(tmp_path), "handoffs", f"{stub_id}.md"))
+        baton.write_text(
+            baton.read_text(encoding="utf-8").replace(
+                "baton_role: work", f"baton_role: work\ndeliverable_id: dlv-x-{i}-00000{i}"
+            ),
+            encoding="utf-8",
+        )
+        entries.append({"batonId": stub_id, "route": "dispatch", "tshirt": "XS"})
+    return {"waveIndex": 0, "routedElsewhere": entries}
+
+
+def test_two_unsized_xs_batons_spawn_one_batched_grep(tmp_path, monkeypatch):
+    wave_result = _routed_xs_wave(tmp_path, 2)
+
+    with _count_spawns_attributed(monkeypatch) as spawns:
+        out = roadmap_blitz_land._handler({"wave_result": wave_result}, repo_root=tmp_path)
+
+    assert len(out["xsLinked"]) == 2 and not out["refused"], out
+    assert len(spawns) == _budget()["xs_sizing_match"], [s.argv for s in spawns]
+    assert all("grep" in s.argv for s in spawns), [s.argv for s in spawns]
+
+
+def test_a_wave_with_no_unsized_xs_batons_spawns_no_grep(tmp_path, monkeypatch):
+    _git(tmp_path, "init", "-q", "-b", "main")
+    _baton(tmp_path, "s-0")
+    wave_result = {
+        "waveIndex": 0,
+        "routedElsewhere": [{"batonId": "s-0", "route": "dispatch", "tshirt": "S"}],
+    }
+
+    with _count_spawns_attributed(monkeypatch) as spawns:
+        roadmap_blitz_land._handler({"wave_result": wave_result}, repo_root=tmp_path)
+
+    assert not [s for s in spawns if "grep" in s.argv], [s.argv for s in spawns]
+
+
 def test_a_four_baton_wave_spawns_one_rev_list_in_total(tmp_path, monkeypatch):
     _git(tmp_path, "init", "-q", "-b", "main")
     (tmp_path / "f").write_text("1")

@@ -14,8 +14,9 @@ pytestmark = pytest.mark.spawns_process
 
 
 def _git(repo, *args):
-    subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True,
-                   creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    p = subprocess.run(["git", "-C", str(repo), *args], capture_output=True,
+                       creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    assert p.returncode == 0, p.stderr.decode(errors="replace")
 
 
 def _write(repo, rel, data):
@@ -140,11 +141,11 @@ def test_files_lists_tracked_under_rel_sorted(repo):
 
 def test_read_blobs_is_one_spawn_and_byte_exact(repo, monkeypatch):
     _write(repo, "empty.bin", b"")
-    _write(repo, "nul.bin", b"a\0b\n\0")
-    _git(repo, "add", "empty.bin", "nul.bin")
+    _write(repo, "zero.bin", b"a\0b\n\0")
+    _git(repo, "add", "empty.bin", "zero.bin")
     v = IndexView(repo)
     oids = {p: o for p, o in v.files("")}
-    ask = [oids["empty.bin"], oids["nul.bin"], oids["a/one.txt"]]
+    ask = [oids["empty.bin"], oids["zero.bin"], oids["a/one.txt"]]
 
     class Cost:
         spawns = 0

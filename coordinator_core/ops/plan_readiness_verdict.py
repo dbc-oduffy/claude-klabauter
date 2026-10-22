@@ -175,6 +175,28 @@ _SENTENCE_BREAK = re.compile(r"[.;!?]+(?:\s+|$)")
 _HAS_WORD = re.compile(r"\w")
 
 
+_WORD = re.compile(r"\w+")
+_FILLER = frozenset({"a", "an", "the", "is", "are", "was", "were", "there", "that", "this", "of", "to", "in", "it"})
+_PARAPHRASE_MIN_TOKENS = 3
+_PARAPHRASE_MIN_OVERLAP = 0.75
+
+
+def _significant(text: str) -> frozenset:
+    return frozenset(w for w in _WORD.findall(text) if w not in _FILLER)
+
+
+def _paraphrase_cover(cited: str, entries: List[tuple]) -> Optional[tuple]:
+    """A premise row that rewords a live ``corrects`` citation (case-sensitive token overlap of at
+    least 75% both ways, entry of 3+ significant tokens) is covered; anything looser is not."""
+    row_tokens = _significant(cited)
+    for citation, fix in entries:
+        tokens = _significant(citation)
+        union = row_tokens | tokens
+        if len(tokens) >= _PARAPHRASE_MIN_TOKENS and union and len(row_tokens & tokens) / len(union) >= _PARAPHRASE_MIN_OVERLAP:
+            return citation, fix
+    return None
+
+
 def _covering_row(row: dict, corrects: Any, spine_rows: Optional[List[dict]]) -> Optional[tuple]:
     """(citation, row id) of the first ``corrects`` entry that covers this premise row, else None.
     ``fixed_by`` is a live (open/coded) row id or a comma list of commit shas; malformed entries,
@@ -203,7 +225,7 @@ def _covering_row(row: dict, corrects: Any, spine_rows: Optional[List[dict]]) ->
         if start >= 0:
             spans.append((start, start + len(citation), citation, fix))
     if not spans:
-        return None
+        return _paraphrase_cover(cited, entries)
     hits, begin = [], 0
     for brk in [*_SENTENCE_BREAK.finditer(cited), None]:
         end = brk.start() if brk else len(cited)

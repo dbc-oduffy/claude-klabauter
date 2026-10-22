@@ -234,6 +234,8 @@ def _resolve_derived_from(derived_from: str, root: Path) -> Optional[str]:
         field is found among `state/goals/*.yaml`, AND that goal's
         `key_results[]` must carry an entry whose `id` equals the FULL
         `kr-<kr-id>` token after the `#` -- an id, never an array index.
+      - an intra-plan section citation (empty goal id before `#`, or a
+        fragment that is not a `kr-` token) -- resolves without a lookup.
 
     Returns `None` on a resolved link, otherwise a short message naming
     WHICH half failed. Zero git spawns. A malformed/unreadable
@@ -246,6 +248,10 @@ def _resolve_derived_from(derived_from: str, root: Path) -> Optional[str]:
         return None
 
     goal_id, _, kr_id = derived_from.partition("#")
+    if not goal_id.strip() or not kr_id.strip().startswith("kr-"):
+        # An empty goal id or a non-`kr-` fragment is an intra-plan section
+        # citation (e.g. the plan's own AC table), not a goal link.
+        return None
     goals_dir = Path(home_dir(str(root), "goals"))
     if not goals_dir.is_dir():
         return f"goal id not found (no state/goals/ directory): {goal_id}"

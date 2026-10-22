@@ -870,6 +870,14 @@ def _unchanged_since_halt(
         if state in ("changed", "withheld-pending"):
             return []
         outcome = "tree-unreadable" if state is None else "unchanged"
+        if outcome == "unchanged" and not exclude:  # a footprint breach is dirty work: never "already landed"
+            from coordinator_core.ops.dispatch_emit.terminal_commit import _landed_before_halt
+
+            owners = [x for x in (plan_rel, resume.get("plan"), resume.get("run_id")) if isinstance(x, str)]
+            landed = _landed_before_halt(root, base, paths, owners)
+            if landed:
+                detail["landed_sha"] = landed
+                detail["landed_paths"] = list(paths)
     detail.update(base=base, base_source=source if base else None, outcome=outcome)
     return [{"id": i, "reason": UNCHANGED_SINCE_HALT_REASON} for i in judged]
 
@@ -942,6 +950,17 @@ def _ledger_gate(
     )
     if foreign:
         message += f". Verdict ids that are not register rows: {', '.join(foreign)}"
+    if since_halt.get("landed_sha") and all(
+        f["reason"] == UNCHANGED_SINCE_HALT_REASON for f in result["failures"]
+    ):
+        from coordinator_core.ops.dispatch_emit.terminal_commit import _verdict_credits
+
+        if _verdict_credits(verdict, [f["id"] for f in result["failures"]], since_halt["landed_sha"]):
+            return {
+                "committed": True, "sha": since_halt["landed_sha"], ALREADY_LANDED_KEY: True,
+                "paths": since_halt["landed_paths"], "since_halt": since_halt,
+                "error": None, "refused": None, "close": None,
+            }, ledger, []
     return _error(
         message,
         refused="ledger-unmet",

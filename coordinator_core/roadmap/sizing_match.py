@@ -140,8 +140,14 @@ def match_sizings(worktree_root: Path, baton_rels: list[str]) -> list[dict]:
                             for e in it
                             if e.name.endswith(".yaml")
                         ]
+            def contradicts(n: str, d: str = b["did"]) -> bool:
+                theirs = info(n).get("deliverable_id", "")
+                return bool(d and theirs and theirs != d)
+
             cands = sorted(
-                n for n, v in stems if v & b["slugs"] and acceptable(n, b["rel"])
+                n
+                for n, v in stems
+                if v & b["slugs"] and acceptable(n, b["rel"]) and not contradicts(n)
             )
             basis = "title"
         rels = [f"{SIZINGS_DIR}/{n}" for n in cands]

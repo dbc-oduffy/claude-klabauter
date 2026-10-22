@@ -2863,6 +2863,39 @@ def _credit_regrades(
     return {cid: f"credited: {evidence}"[:_UNDONE_CAP] for cid, evidence in got.items()}
 
 
+def _is_closeout_path(rel: str, evidence_rel: Optional[str]) -> bool:
+    """True for a plan evidence sidecar, an evidence index or a run process-state path
+    (baton, sizing, run record): what a closeout row writes in place of product."""
+    return rel == evidence_rel or rel.endswith(".evidence.yaml") or _is_process_state(rel)
+
+
+def _xs_closeout_regrades(
+    worktree_root: Path, request: CommitRequest, incomplete: set, snapshot: Optional[_Snapshot],
+    report_cache: dict,
+) -> dict:
+    """``{chunk id: evidence}`` for incomplete chunks of an xs-arm run whose report is DONE and whose
+    changed declared paths are all evidence/state paths: the closeout's own writes are its credited
+    chunk. A chunk with no changed declared path, or any product path, never qualifies."""
+    candidates = [c for c in request.chunks if c.id in incomplete and c.report and c.paths]
+    if not candidates:
+        return {}
+    plan_pp = PurePosixPath(request.plan_path) if request.plan_path else None
+    evidence_rel = str(plan_pp.with_name(plan_pp.stem + _EVIDENCE_SIDECAR_SUFFIX)) if plan_pp else None
+    out: dict = {}
+    for chunk in candidates:
+        text = _read_rel(worktree_root, chunk.report)
+        if text is None or not _is_delivered_report(text):
+            continue
+        prefix = _own_prefix_files(worktree_root, chunk, report_cache)
+        if prefix is None:
+            continue
+        declared = sorted(set(chunk.paths) | set(prefix))
+        changed = _changed(snapshot, worktree_root, declared)
+        if changed and all(_is_closeout_path(p, evidence_rel) for p in changed):
+            out[chunk.id] = "credited: xs closeout evidence/state writes"[:_UNDONE_CAP]
+    return out
+
+
 def _own_evidence_append_chunks(
     worktree_root: Path, request: CommitRequest, stranded_ids: set, carried: set,
     changed: Optional[set],
@@ -4340,6 +4373,16 @@ def _terminal_commit_inner(
         cited_sizing or (next(iter(artifacts.by_class.get("sizing", ())), None) if artifacts is not None else None),
     )
     more_regraded.update({k: v for k, v in credited_regraded.items() if k not in more_regraded})
+    if isinstance(close_ctx, dict) and close_ctx.get("kind") == "xs-s-run":
+        held_for_closeout = _held_ids(params)
+        more_regraded.update({
+            k: v
+            for k, v in _xs_closeout_regrades(
+                worktree_root, request, incomplete_chunks - set(more_regraded) - held_for_closeout,
+                snapshot, report_cache,
+            ).items()
+            if k not in more_regraded
+        })
     if more_regraded:
         incomplete_chunks = incomplete_chunks - set(more_regraded)
         if regraded is not None:

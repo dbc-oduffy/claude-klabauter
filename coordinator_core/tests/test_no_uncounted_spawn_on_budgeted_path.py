@@ -7276,7 +7276,9 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     # launch (spawn_detached from _launch_close_job); typical landing: zero git. The walk also
     # reaches archive_stamp._run_git, commit_signing.write_signed_commit_object and
     # git_native._invoke through shared helpers: five sites, as the op it replaces reached.
-    "dispatch.land_run": 4,
+    # 4 -> 5, 2026-10-22 (2939d6540d): _unchanged_since_halt lazily reaches terminal_commit._landed_before_halt
+    # (run_git), refusal path only.
+    "dispatch.land_run": 5,
     "dispatch.reap_abandoned_runs": 1,
     "dispatch.commit_halted_rows": 1,
     "docindex.emit": 1,
