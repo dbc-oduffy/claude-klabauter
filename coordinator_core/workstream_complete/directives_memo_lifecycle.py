@@ -361,7 +361,7 @@ def build_consumed_handoff_ship_directives(
     `--sha <sha>` when the caller supplies one (the close-out commit does not
     exist yet at directive time, so the caller passes the chain tip it
     resolved; without it the CLI's scope derivation refuses on a baton that
-    names no scope paths) and NO `--archive` (the git-mv belongs to the
+    names no scope paths) and `--no-archive` (the git-mv belongs to the
     already-unconditional `d-sweep-terminal-handoffs` drain) and no
     `best_effort` key (the default hard-fail path is the whole of AC2).
     `depends_on=None` here — the gate edge (`jp-consumed-handoff-
@@ -391,7 +391,7 @@ def build_consumed_handoff_ship_directives(
         if not path.startswith(_LIVE_HANDOFF_PREFIX):
             continue
         basename = Path(path).name
-        args = ["ship-handoff", path]
+        args = ["ship-handoff", path, "--no-archive"]
         if sha:
             args += ["--sha", sha]
         directives.append(_directive(f"d-ship-consumed-handoff:{basename}", "archive-stamp-cli", args))

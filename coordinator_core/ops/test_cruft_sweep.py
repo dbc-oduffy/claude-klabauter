@@ -1462,6 +1462,27 @@ def test_sweep_scratch_prunes_pushed_clean_clone_and_spares_unrecoverable(tmp_pa
         assert clones[name].exists()
 
 
+def test_sweep_scratch_reads_clones_through_scratch_run_git(tmp_path, monkeypatch):
+    repo_root, clones = _scratch_clone_fixture(tmp_path, ["pushed"])
+    _age_clones(clones)
+    calls = []
+
+    def _failing_runner(args, cwd):
+        calls.append((list(args), cwd))
+        raise OSError("spawn failed")
+
+    monkeypatch.setattr(cruft_sweep, "_scratch_run_git", _failing_runner)
+    records = []
+    _bytes, items = cruft_sweep.sweep_scratch(
+        repo_root, 0, apply=False, json_mode=True, quiet=True, emit_fn=records.append,
+    )
+    assert calls and calls[0][1] == str(clones["pushed"])
+    assert items == 0
+    rec = next(r for r in records if Path(r["path"]) == clones["pushed"])
+    assert rec["disposition"] == "skip"
+    assert "git state unreadable" in rec["evidence"]
+
+
 def test_sweep_scratch_spares_clone_younger_than_threshold(tmp_path):
     repo_root, clones = _scratch_clone_fixture(tmp_path, ["fresh"])
     _age_clones(clones, 3600)

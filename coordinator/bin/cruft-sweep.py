@@ -825,6 +825,33 @@ def _write_run_marker(cfg: "SweepConfig", totals: "Totals", total_bytes: int) ->
         pass
 
 
+_PRUNE_FAILED_MARKER = "delete failed, not counted as pruned: "
+
+
+def _record_prune_failures() -> List[str]:
+    """Wrap the engine's banner sink so each failed-delete banner also lands in the
+    returned list, even under --quiet. Every sweep's failure path emits the marker."""
+    import coordinator_core.ops.cruft_sweep as engine
+
+    failures: List[str] = []
+    original = engine._banner
+
+    def banner(msg: str, *, quiet: bool) -> None:
+        if _PRUNE_FAILED_MARKER in msg:
+            failures.append(msg.split(_PRUNE_FAILED_MARKER, 1)[1])
+        original(msg, quiet=quiet)
+
+    banner._original = original  # type: ignore[attr-defined]
+    engine._banner = banner
+    return failures
+
+
+def _restore_banner() -> None:
+    import coordinator_core.ops.cruft_sweep as engine
+
+    engine._banner = getattr(engine._banner, "_original", engine._banner)
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     _bootstrap_engine()
     from coordinator_core.cli_entry import recording_declared_writes
@@ -842,6 +869,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         except OSError:
             pass
     _acquire_lock(cfg.lock_dir)
+    prune_failures = _record_prune_failures()
     try:
         with recording_declared_writes():
             totals = Totals()
@@ -873,8 +901,16 @@ def main(argv: Optional[List[str]] = None) -> int:
             if cfg.apply and not cfg.json_mode:
                 _write_run_marker(cfg, totals, total_bytes)
 
+        if prune_failures:
+            sys.stderr.write(
+                f"{SELF_NAME}: {len(prune_failures)} auto-prune(s) failed; "
+                "exiting nonzero. Not removed:\n"
+                + "".join(f"  {path}\n" for path in prune_failures)
+            )
+            return 1
         return 0
     finally:
+        _restore_banner()
         _release_lock(cfg.lock_dir)
 
 

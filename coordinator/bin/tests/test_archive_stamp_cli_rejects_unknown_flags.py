@@ -102,6 +102,7 @@ def test_a_free_standing_value_after_a_flag_is_still_forwarded(cli):
         ("close-handoff", ["p.md", "--reason", "stale"]),
         ("gate-recheck-handoff", ["p.md", "2026-09-01", "--cleared"]),
         ("ship-handoff", ["p.md", "--sha", "abc1234", "--archive", "--force"]),
+        ("ship-handoff", ["p.md", "--sha", "abc1234", "--no-archive", "--force"]),
         ("chain-archive-handoff", ["p.md", "--exclude", "a.md", "--exclude", "b.md"]),
         ("correct-handoff-body", ["p.md", "--old-string", "a", "--new-string", "b"]),
         ("correct-memo-note", ["m.md", "--decision-note", "a"]),

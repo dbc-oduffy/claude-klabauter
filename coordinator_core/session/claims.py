@@ -2706,6 +2706,36 @@ def release_artifact(
 
     if class_ == ARTIFACT_CLASS_PATH:
         return _release_path_claim_artifact(basename, baton_repo_root, cwd)
+    return release_artifact_outcome(
+        class_, basename, baton_repo_root, cwd, my_sid
+    ) != RELEASE_INVALID_CLASS
+
+
+RELEASE_RELEASED = "released"
+RELEASE_ALREADY_ABSENT = "already-absent"
+RELEASE_HELD_BY_ANOTHER = "held-by-another-session-not-released"
+RELEASE_INVALID_CLASS = "invalid-class"
+
+
+def release_artifact_outcome(
+    class_: str,
+    basename: str,
+    baton_repo_root: str = "",
+    cwd: Optional[str] = None,
+    my_sid: Optional[str] = None,
+) -> str:
+    """Classed-claim release (handoff|memo|plan|row) that names what happened.
+
+    Returns ``RELEASE_RELEASED`` when this call removed the claim,
+    ``RELEASE_ALREADY_ABSENT`` for a bad baton root, no sessions dir or no
+    claim dir, ``RELEASE_HELD_BY_ANOTHER`` when either holder read fails, and
+    ``RELEASE_INVALID_CLASS`` (stderr line printed) for an unrecognised class.
+    ``release_artifact`` delegates here; the path class stays on its own branch.
+    """
+    if not class_:
+        raise ValueError("artifact class required")
+    if not basename:
+        raise ValueError("basename required")
 
     if class_ not in _CLASSED_CLAIM_CLASSES:
         print(
@@ -2714,23 +2744,23 @@ def release_artifact(
             f"{_class_token_hint(class_)}",
             file=sys.stderr,
         )
-        return False
+        return RELEASE_INVALID_CLASS
 
     if class_ == ROW_CLAIM_CLASS:
         basename = row_claim_key(basename)
 
     if baton_repo_root:
         if not (Path(baton_repo_root) / ".git").is_dir():
-            return True  # bad baton root -> no-op success
+            return RELEASE_ALREADY_ABSENT
         base = str(Path(baton_repo_root) / ".git" / "coordinator-sessions")
     else:
         base = core.sessions_dir(cwd)
         if not base:
-            return True  # not in a git repo -> no-op success
+            return RELEASE_ALREADY_ABSENT
 
     claim_dir = Path(base) / f"{class_}-claims" / basename
     if not claim_dir.is_dir():
-        return True  # already absent — no-op
+        return RELEASE_ALREADY_ABSENT
 
     # Resolve my id ONCE; pass it to both TOCTOU reads (F1).
     # AC10 verdict: release-side -- KEEPS `resolve_session_id` permanently,
@@ -2741,15 +2771,15 @@ def release_artifact(
         my_sid = core.resolve_session_id(cwd)
         _report_warm_uncarried_resolve("release_artifact")
     if not liveness.claim_held_by_me(str(claim_dir), my_sid, cwd):
-        return True  # not the holder — no-op
+        return RELEASE_HELD_BY_ANOTHER
     # TOCTOU re-read before rm (the second call IS the two-read discipline).
     if not liveness.claim_held_by_me(str(claim_dir), my_sid, cwd):
-        return True  # takeover slipped in — skip; never delete a live peer's claim
+        return RELEASE_HELD_BY_ANOTHER  # takeover slipped in; never delete a live peer's claim
 
     shutil.rmtree(claim_dir, ignore_errors=True)
     if class_ == "plan":
         _clear_shape_plan_pointer(basename, my_sid, cwd)
-    return True
+    return RELEASE_RELEASED
 
 
 def release_or_relinquish_artifact(

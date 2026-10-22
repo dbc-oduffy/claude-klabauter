@@ -173,7 +173,10 @@ _BATON_FIELDS = frozenset(
 #: gate: they are how a plan is told apart from the review and coverage-check
 #: sidecars that live in the same directory.
 _PLAN_FIELDS = frozenset(
-    {"title", "status", "plan_id", "deliverable_id", "sizing_object", "kind", "plan"}
+    {
+        "title", "status", "plan_id", "deliverable_id", "sizing_object", "kind", "plan",
+        "predecessor_handoff",
+    }
 )
 
 #: Keys sufficient to dispose of an ARCHIVED baton acting as a blocker. An
@@ -625,6 +628,8 @@ class PlanIndex:
         self.by_plan_id: Dict[str, List[str]] = {}
         self.by_deliverable_id: Dict[str, List[str]] = {}
         self.by_sizing_object: Dict[str, List[str]] = {}
+        # basename of the baton a plan names in `predecessor_handoff:` -> plan paths.
+        self.by_predecessor_handoff: Dict[str, List[str]] = {}
         # Sizing keys cited by more than one baton; set by `roadmap.audit`.
         # A shared sizing object names the roadmap, not any one baton's plan.
         self.shared_sizing: Set[str] = set()
@@ -664,6 +669,10 @@ class PlanIndex:
             self.by_deliverable_id.setdefault(key, []).append(rel_path)
         for key in _as_list(fm.get("sizing_object")):
             self.by_sizing_object.setdefault(_sizing_key(key), []).append(rel_path)
+        for key in _as_list(fm.get("predecessor_handoff")):
+            name = key.replace("\\", "/").rsplit("/", 1)[-1].strip()
+            if name and name.lower() not in ("none", "null"):
+                self.by_predecessor_handoff.setdefault(name, []).append(rel_path)
 
     def get(self, rel_path: str) -> Optional[Dict[str, Any]]:
         return self.by_path.get(rel_path)
@@ -756,6 +765,27 @@ def link_plans(fm: Dict[str, Any], plans: PlanIndex) -> Tuple[List[Dict[str, Any
     if hits or plans.worktree_root is None:
         return hits, basis
     return _link_plans_in(fm, plans.archived())
+
+
+def plans_naming_predecessor(plans: PlanIndex, baton_basename: str) -> List[Dict[str, Any]]:
+    """Plans whose `predecessor_handoff:` names the baton, by basename.
+
+    Live plans first; `archive/specs/**` only on a live miss, as `link_plans` does.
+    """
+    name = baton_basename.replace("\\", "/").rsplit("/", 1)[-1]
+
+    def _in(idx: PlanIndex) -> List[Dict[str, Any]]:
+        out: List[Dict[str, Any]] = []
+        for rel in dict.fromkeys(idx.by_predecessor_handoff.get(name, [])):
+            record = idx.get(rel)
+            if record is not None:
+                out.append(record)
+        return out
+
+    hits = _in(plans)
+    if hits or plans.worktree_root is None:
+        return hits
+    return _in(plans.archived())
 
 
 def _link_plans_in(fm: Dict[str, Any], plans: PlanIndex) -> Tuple[List[Dict[str, Any]], Optional[str]]:

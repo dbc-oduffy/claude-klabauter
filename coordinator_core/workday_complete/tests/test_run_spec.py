@@ -225,6 +225,14 @@ def test_record_decision_runs_goal_close_day_once_with_its_payload():
     assert run_spec.finish_steps([_decision(run_spec.CLOSEOUT_POINT, "skip")], [], run={}) == []
 
 
+def test_record_with_lapsed_opens_goal_close_day():
+    payload = {"g1": "lapsed", "g2": "done"}
+    steps = run_spec.finish_steps([_decision(run_spec.CLOSEOUT_POINT, "record", payload)], [], run={})
+    assert [s.id for s in steps] == ["d_goal_close_day"]
+    assert steps[0].args == ("--decisions", json.dumps(payload, sort_keys=True))
+    assert "lapsed" in run_spec.JUDGMENT_BRIEFS[run_spec.CLOSEOUT_POINT]
+
+
 @pytest.mark.parametrize("payload", (None, {}, {"g1": "maybe"}, ["g1"]))
 def test_record_without_a_usable_payload_is_a_refusal(payload):
     steps = run_spec.finish_steps([_decision(run_spec.CLOSEOUT_POINT, "record", payload)], [], run={})

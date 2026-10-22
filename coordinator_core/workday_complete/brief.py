@@ -47,8 +47,8 @@ least one open row (today or stale) for the invoking repo — unlike the
 five standing judgment points above (always emitted regardless of
 whether their condition is live), this one is conditional so a repo with
 nothing to close never carries a permanently-blocked directive. The
-per-goal done/dropped outcomes ride a SEPARATE free-form
-`decisions["day_goal_closeout"]` map (`{goal_id: "done"|"dropped"}`),
+per-goal done/lapsed/dropped outcomes ride a SEPARATE free-form
+`decisions["day_goal_closeout"]` map (`{goal_id: "done"|"lapsed"|"dropped"}`),
 threaded into `_build_directives`'s now non-empty parameter list — follows
 the same `decisions`-as-caller-input pattern `workstream_complete
 .build_directives(gate, decisions)` established, though the parameter
@@ -424,7 +424,7 @@ def _build_directives(
     though the parameter shapes differ) supplies the one caller-provided
     input this module cannot read off disk: `decisions["day_goal_closeout"]`,
     a free-form
-    `{goal_id: "done"|"dropped"}` map threaded verbatim into
+    `{goal_id: "done"|"lapsed"|"dropped"}` map threaded verbatim into
     `d_goal_close_day`'s `--decisions` argv as a JSON blob — never encoded
     as `jp_day_goal_closeout`'s own disposition value (C4, DEC-1/DEC-2/DEC-3).
 

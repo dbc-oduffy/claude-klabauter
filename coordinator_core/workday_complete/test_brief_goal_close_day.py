@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import subprocess
 import types
+from datetime import datetime
 from pathlib import Path
 
 from coordinator_core.workday_complete import apply as wc_apply
@@ -62,6 +63,10 @@ def _row(goal_id: str, text: str = "some priority") -> dict:
 
 
 def _stub_operator_config(monkeypatch) -> None:
+    # Pins the concluding period mode: before 15:00 local the clock selects
+    # catch-up, which drops jp_day_goal_closeout.
+    monkeypatch.setattr(wc_brief, "_compute_backfill_scan", lambda: (wc_brief.GapScan(), ""))
+    monkeypatch.setattr(wc_brief, "local_now", lambda: datetime(2026, 10, 22, 16, 0))
     monkeypatch.setattr(
         wc_brief,
         "resolve_operator_config",

@@ -5982,10 +5982,9 @@ def build_shipped_state_judgment_point(evidence_pointer: str, resolves: list[str
                 "guidance": (
                     "Confirm the shipped stamp is accurate — this baton is "
                     "genuinely done. Stand down; do not claim it. The "
-                    "handoff sitting in state/handoffs/ awaiting an archival sweep "
-                    "is expected (ship-handoff retains it in place for later "
-                    "archival, per `handoff_archive_transition`'s stamp_shipped "
-                    "mode) — not a sign it needs picking up."
+                    "handoff stays in state/handoffs/ only when it was shipped "
+                    "with `--no-archive` (the archival sweep moves it) — not a "
+                    "sign it needs picking up."
                 ),
             },
             {

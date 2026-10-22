@@ -181,7 +181,11 @@ class PlaywrightDriver:
         headers: Dict[str, str],
         screenshot_path: Path,
     ) -> RouteResult:
-        """One route at one width in a fresh context; never raises on navigation failure."""
+        """One route at one width in a fresh context.
+
+        A ``goto`` failure (timeout, net error) returns a ``RouteResult`` with ``error``
+        set; post-load ``evaluate``/``screenshot`` failures propagate to the caller.
+        """
         url = base_url.rstrip("/") + route.path
         context = self._browser.new_context(
             viewport={"width": width, "height": height},

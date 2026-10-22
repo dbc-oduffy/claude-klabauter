@@ -50,7 +50,7 @@ class ShipHandoffArgvParsingTest(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertEqual(
             self.stub.calls[-1],
-            {"handoff_path": "state/handoffs/h.md", "archive": False, "sha": None, "force": False},
+            {"handoff_path": "state/handoffs/h.md", "archive": True, "sha": None, "force": False},
         )
 
     def test_bare_positional_sha_is_forwarded(self):
@@ -60,7 +60,7 @@ class ShipHandoffArgvParsingTest(unittest.TestCase):
             self.stub.calls[-1],
             {
                 "handoff_path": "state/handoffs/h.md",
-                "archive": False,
+                "archive": True,
                 "sha": "f7c81a1d",
                 "force": False,
             },
@@ -73,7 +73,7 @@ class ShipHandoffArgvParsingTest(unittest.TestCase):
             self.stub.calls[-1],
             {
                 "handoff_path": "state/handoffs/h.md",
-                "archive": False,
+                "archive": True,
                 "sha": "f7c81a1d",
                 "force": False,
             },
@@ -96,6 +96,27 @@ class ShipHandoffArgvParsingTest(unittest.TestCase):
             ["ship-handoff", "state/handoffs/h.md", "f7c81a1d", "--sha", "deadbeef"]
         )
         self.assertEqual(rc, 2)
+        self.assertEqual(self.stub.calls, [])
+
+    def test_no_archive_flag_opts_out(self):
+        rc = _cli.main(["ship-handoff", "state/handoffs/h.md", "--no-archive"])
+        self.assertEqual(rc, 0)
+        self.assertFalse(self.stub.calls[-1]["archive"])
+
+    def test_no_archive_with_sha_either_order(self):
+        for argv in (
+            ["--sha", "f7c81a1d", "--no-archive"],
+            ["--no-archive", "--sha", "f7c81a1d"],
+        ):
+            rc = _cli.main(["ship-handoff", "state/handoffs/h.md", *argv])
+            self.assertEqual(rc, 0)
+            self.assertEqual(self.stub.calls[-1]["archive"], False)
+            self.assertEqual(self.stub.calls[-1]["sha"], "f7c81a1d")
+
+    def test_archive_and_no_archive_together_is_usage_error(self):
+        for argv in (["--no-archive", "--archive"], ["--archive", "--no-archive"]):
+            rc = _cli.main(["ship-handoff", "state/handoffs/h.md", *argv])
+            self.assertEqual(rc, 2)
         self.assertEqual(self.stub.calls, [])
 
     def test_archive_flag_still_works(self):
@@ -126,7 +147,7 @@ class ShipHandoffArgvParsingTest(unittest.TestCase):
             self.stub.calls[-1],
             {
                 "handoff_path": "state/handoffs/h.md",
-                "archive": False,
+                "archive": True,
                 "sha": "f7c81a1d",
                 "force": True,
             },

@@ -1518,6 +1518,13 @@ def _call_handoff_archive_transition(handoff_path: str, params: dict) -> dict:
     return _run_async(_transition_handler({"handoff_path": handoff_path, **params}, repo_root))
 
 
+#: Exit codes of `ship-handoff` beyond the op's own: retained, claim held by another
+#: session, release raised. The stamp and the move stand under the latter two.
+SHIP_RC_RETAINED = 3
+SHIP_RC_CLAIM_NOT_RELEASED = 5
+SHIP_RC_RELEASE_FAILED = 6
+
+
 def cs_ship_handoff(
     handoff_path: str,
     archive: bool = False,
@@ -1570,9 +1577,8 @@ def _cs_ship_handoff_core(
 
     Returns `(exit_code, retained)` — `retained` is `True` when the live-
     children guard (or an indeterminate/fail-closed read) left the handoff
-    untouched rather than flipping it, so a caller that needs to tell "landed"
-    apart from "deferred, still in_flight" (both `exit_code == 0`, per the
-    Retention paragraph below) can. `cs_ship_handoff` above discards the
+    untouched rather than flipping it (rc `SHIP_RC_RETAINED`, see Retention
+    below). `cs_ship_handoff` above discards the
     second element for callers that only ever wanted the process-exit shape.
 
     Composes handoff.archive_transition (NOT the plain handoff.transition op) so
@@ -1601,12 +1607,9 @@ def _cs_ship_handoff_core(
     an already-stamped `shipped_in`, because the downstream handoff.stamp op's
     idempotency guard no-ops regardless of what sha the caller supplies.
 
-    Retention (the live-children guard finds the handoff still a live
-    merge-parent, or indeterminate/fail-closed) is NEVER an error — the op
-    itself returns exit_code:0 for that case, and this wrapper propagates that
-    verbatim. Idempotent: a second call on an already-shipped handoff is a
+    Idempotent: a second call on an already-shipped handoff is a
     clean deployment_state no-op (handoff_transition._ship's own idempotency)
-    that still returns 0 — unless force=True, in which case shipped_in is
+    — unless force=True, in which case shipped_in is
     replaced (deployment_state's own idempotency is unaffected by force).
 
     Corrected contract (2026-07-28, § S11/AC6/AC6b/AC7, chunk C0): a `sha`
@@ -1623,21 +1626,21 @@ def _cs_ship_handoff_core(
     was ever there) from "retained prior value `<X>`" (AC7) — it no longer
     reports both as "left unset".
 
-    Claim release (Census row 3, docs/plans/2026-09-11-handoff-lifecycle-one-
-    legal-state-table.md § C4): a genuine ship — `rc == 0` AND the op did NOT
-    retain (`result.get("retained")` is falsy) — releases this handoff's claim
-    via the EXISTING seam `coordinator_core.session.claims.release_artifact`,
-    the same call shape `pickup_assemble/apply.py` (three call sites) and
-    `pickup_assemble/__init__.py` already use for `("handoff", basename)`. This
-    fires AFTER the ship has independently verified as landed (the op's own
-    rc/retained verdict, already computed above) — never on the retain path: a
-    live-children RETAIN also returns rc 0, and releasing its claim would
-    unclaim a baton that is still live. Failure to release is reported on
-    stderr, never swallowed, and never converts this successful ship into a
-    non-zero exit — `release_artifact` itself never raises (best-effort,
-    holder-identity-checked, no-op on a non-holder or already-released claim;
-    see its own docstring), so the only failure shape here is an unexpected
-    exception from resolving the worktree, caught and reported the same way.
+    Stdout (one line each, stderr diagnostics unchanged): `plan-terminality=...`
+    first, read from the baton before the move (warns, never changes rc), then
+    `release=<outcome>`. A baton already shipped and archived skips the op and
+    prints both lines again (idempotent).
+
+    Claim release: after a landed ship, `claims.release_artifact_outcome` names
+    what happened — `released`, `already-absent` (rc 0), `held-by-another-
+    session-not-released` (rc `SHIP_RC_CLAIM_NOT_RELEASED`), or `failed` when the
+    release raised (rc `SHIP_RC_RELEASE_FAILED`). The stamp and the move stand
+    in every case.
+
+    Retention: an op result with `retained` prints `stamped=false released=false
+    archived=false`, releases nothing and returns `SHIP_RC_RETAINED`. With
+    `archive=True` a ship counts as landed only when `_archive_move_landed`
+    confirms the move.
     """
     if force and not (sha and sha.strip()):
         print(
@@ -1646,6 +1649,13 @@ def _cs_ship_handoff_core(
             file=sys.stderr,
         )
         return 1, False
+    worktree, _ = _resolve_repo_root_for(Path(handoff_path))
+    basename = Path(handoff_path).name
+    twin = _archived_shipped_twin(handoff_path, worktree)
+    _print_terminality_line(twin if twin is not None else Path(handoff_path), basename, worktree)
+    if twin is not None:
+        return _release_and_report(handoff_path, basename, worktree), False
+
     mode = "stamp_shipped" if archive else "stamp_only"
     params: dict = {"mode": mode}
     if not (sha and sha.strip()) and not force:
@@ -1659,33 +1669,74 @@ def _cs_ship_handoff_core(
     retained = bool(result.get("retained"))
     if rc != 0:
         print(f"cs_ship_handoff: {result.get('error', 'unknown error')}", file=sys.stderr)
-    else:
-        # A legitimate retain (live-children guard) returns exit_code:0 with
-        # message/retain_reason/warnings set — previously silent on the rc==0
-        # path, which made a retained-not-shipped handoff look like a clean
-        # ship with no signal to the operator. Print whenever non-empty,
-        # regardless of rc; guard's own retain/indeterminate semantics
-        # (§ docstring above) are untouched by this change.
-        for key in ("message", "retain_reason", "warnings"):
-            value = result.get(key)
-            if value:
-                print(f"cs_ship_handoff: {key}={value}", file=sys.stderr)
-        if not retained:
-            try:
-                from coordinator_core.session.claims import release_artifact
+        return rc, retained
+    for key in ("message", "retain_reason", "warnings"):
+        value = result.get(key)
+        if value:
+            print(f"cs_ship_handoff: {key}={value}", file=sys.stderr)
+    if retained:
+        print("stamped=false released=false archived=false")
+        return SHIP_RC_RETAINED, True
+    if archive and not _archive_move_landed(handoff_path, worktree):
+        print(
+            f"cs_ship_handoff: archive move for {handoff_path} did not land "
+            "(source still present or archive destination missing)",
+            file=sys.stderr,
+        )
+        return 1, False
+    return _release_and_report(handoff_path, basename, worktree), False
 
-                worktree, _ = _resolve_repo_root_for(Path(handoff_path))
-                basename = Path(handoff_path).name
-                release_artifact(
-                    "handoff", basename, cwd=str(worktree) if worktree else None
-                )
-            except Exception as exc:  # noqa: BLE001 -- never mask a successful ship
-                print(
-                    f"cs_ship_handoff: claim release for {handoff_path} failed "
-                    f"({exc.__class__.__name__}: {exc}) — ship itself succeeded",
-                    file=sys.stderr,
-                )
-    return rc, retained
+
+def _archived_shipped_twin(handoff_path: str, worktree: Optional[Path]) -> Optional[Path]:
+    """The archive twin of a baton already shipped and archived, else None.
+
+    Only a live path that is absent, a twin that exists and a twin whose
+    `deployment_state` reads `shipped` all hold at once."""
+    if worktree is None or Path(handoff_path).exists():
+        return None
+    twin = handoff_archive_dest(worktree, Path(handoff_path))
+    if not twin.exists():
+        return None
+    return twin if str(_read_meta(str(twin)).get("deployment_state", "")).strip() == "shipped" else None
+
+
+def _print_terminality_line(baton: Path, basename: str, worktree: Optional[Path]) -> None:
+    """Prints the one `plan-terminality=` line on stdout; warns only, never raises."""
+    if worktree is None or not baton.exists():
+        return
+    try:
+        from coordinator_core.roadmap.plan_terminality import (
+            format_terminality_line,
+            plan_terminality,
+        )
+
+        verdict = plan_terminality(_read_meta(str(baton)), basename, worktree)
+        print(format_terminality_line(verdict))
+    except Exception as exc:  # noqa: BLE001 -- the verdict never blocks a ship
+        print(
+            f"cs_ship_handoff: plan-terminality unavailable ({exc.__class__.__name__}: {exc})",
+            file=sys.stderr,
+        )
+
+
+def _release_and_report(handoff_path: str, basename: str, worktree: Optional[Path]) -> int:
+    """Releases the baton's claim, prints one `release=` line, returns the ship rc."""
+    from coordinator_core.session import claims
+
+    try:
+        outcome = claims.release_artifact_outcome(
+            "handoff", basename, cwd=str(worktree) if worktree else None
+        )
+    except Exception as exc:  # noqa: BLE001 -- the stamp and the move stand
+        print("release=failed")
+        print(
+            f"cs_ship_handoff: claim release for {handoff_path} failed "
+            f"({exc.__class__.__name__}: {exc}) — ship itself succeeded",
+            file=sys.stderr,
+        )
+        return SHIP_RC_RELEASE_FAILED
+    print(f"release={outcome}")
+    return SHIP_RC_CLAIM_NOT_RELEASED if outcome == claims.RELEASE_HELD_BY_ANOTHER else 0
 
 
 def _archive_move_landed(handoff_path: str, worktree: Optional[Path]) -> bool:

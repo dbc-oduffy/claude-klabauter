@@ -136,7 +136,7 @@ JUDGMENT_BRIEFS: Mapping[str, str] = {
         "adopt_commit."
     ),
     CLOSEOUT_POINT: (
-        "Answer record with payload {goal_id: 'done'|'dropped'} covering every open goal "
+        "Answer record with payload {goal_id: 'done'|'lapsed'|'dropped'} covering every open goal "
         "row the evidence names, or skip."
     ),
 }
@@ -576,11 +576,14 @@ def _refusal(id_: str, reason: str) -> StepSpec:
     )
 
 
+_CLOSEOUT_DECISIONS = ("done", "lapsed", "dropped")
+
+
 def _valid_closeout(payload: Any) -> bool:
     return (
         isinstance(payload, Mapping)
         and bool(payload)
-        and all(isinstance(k, str) and v in ("done", "dropped") for k, v in payload.items())
+        and all(isinstance(k, str) and v in _CLOSEOUT_DECISIONS for k, v in payload.items())
     )
 
 

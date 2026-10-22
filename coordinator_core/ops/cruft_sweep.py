@@ -1789,14 +1789,18 @@ def _resolve_repo_root(repo_root: Optional[Path]) -> Path:
     return Path.cwd()
 
 
+# Generous because the scratch sweep is off the hot path; a slow read costs only the sweep's own time.
+_SCRATCH_GIT_TIMEOUT_SECS = 30
+
+
 def _scratch_run_git(args: List[str], cwd: Optional[str]) -> Tuple[int, str]:
     """`scratch_clone_failures` git runner: `(args, cwd) -> (rc, stdout)`, args exclude `git`.
 
     Timeouts and spawn failures raise; the predicate reads them as UNREADABLE.
     """
     r = subprocess.run(
-        ["git", *args], cwd=cwd, capture_output=True, text=True, timeout=30,
-        **no_console_creationflags(),
+        ["git", *args], cwd=cwd, capture_output=True, text=True,
+        timeout=_SCRATCH_GIT_TIMEOUT_SECS, **no_console_creationflags(),
     )
     return r.returncode, r.stdout
 

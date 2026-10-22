@@ -51,7 +51,7 @@ class TestAppendAdvisoryFires:
             )
         )
         text = _advisory_text(result)
-        assert "migrate_prose_queue.py" in text
+        assert "coordinator-invoke fleet.migrate_prose_queue" in text
         assert "--schema bug-backlog" in text
 
     def test_fires_on_edit_adding_a_dated_row(self, tmp_path):

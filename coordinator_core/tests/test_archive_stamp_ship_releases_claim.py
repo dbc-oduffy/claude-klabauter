@@ -184,14 +184,15 @@ class TestShipReleasesClaim:
             return real_release(*args, **kwargs)
 
         monkeypatch.setattr(claims, "release_artifact", _spy)
+        monkeypatch.setattr(claims, "release_artifact_outcome", _spy)
 
         rc = arstamp.cs_ship_handoff(str(hp))
 
-        assert rc == 0
+        assert rc == arstamp.SHIP_RC_RETAINED == 3
         assert released == []
         assert _claim_dir(repo, "handoff", "ship-retained.md").is_dir()
 
-    def test_release_failure_never_converts_a_successful_ship_into_an_error(
+    def test_release_failure_reports_release_failed_and_the_ship_stands(
         self, tmp_path, monkeypatch, capsys
     ):
         repo = tmp_path / "repo"
@@ -204,11 +205,13 @@ class TestShipReleasesClaim:
         def _boom(*args, **kwargs):
             raise RuntimeError("boom")
 
-        monkeypatch.setattr(claims, "release_artifact", _boom)
+        monkeypatch.setattr(claims, "release_artifact_outcome", _boom)
 
         rc = arstamp.cs_ship_handoff(str(hp))
 
-        assert rc == 0
-        err = capsys.readouterr().err
-        assert "claim release" in err
-        assert "boom" in err
+        assert rc == arstamp.SHIP_RC_RELEASE_FAILED == 6
+        captured = capsys.readouterr()
+        assert "release=failed" in captured.out.splitlines()
+        assert "claim release" in captured.err
+        assert "boom" in captured.err
+        assert "deployment_state: shipped" in hp.read_text(encoding="utf-8")

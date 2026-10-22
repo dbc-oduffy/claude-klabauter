@@ -18,7 +18,7 @@ observable under test is the ORCHESTRATION (which directive gets emitted,
 with what shape, in what order, and how the completeness judgment point
 wires to it), never `handoff.archive_transition`'s already-tested internals.
 AC4 is checked at the directive level (assertion 1: the `d-ship-consumed-
-handoff:*` directive exists, with no `--sha`/`--archive`/`best_effort`), not
+handoff:*` directive exists, with `--no-archive`, no `--sha` unless supplied, no `best_effort`), not
 by asserting a real on-disk `deployment_state` flip.
 
 GATE WIRING (assertion 4) is checked against `brief()`'s output for BOTH
@@ -97,7 +97,7 @@ def test_resolvable_predecessor_consumed_handoff_emits_the_ship_directive(tmp_pa
     entry = ship[0]
     assert entry["id"] == "d-ship-consumed-handoff:foo.md"
     assert entry["cli"] == "archive-stamp-cli"
-    assert entry["args"] == ["ship-handoff", "state/handoffs/foo.md"]
+    assert entry["args"] == ["ship-handoff", "state/handoffs/foo.md", "--no-archive"]
 
 
 def test_already_archived_predecessor_emits_no_ship_directive(tmp_path):
@@ -324,7 +324,7 @@ def test_ship_sha_is_the_sessions_newest_own_commit_never_head(tmp_path):
 
     (entry,) = _ship_directives(wsc.build_directives(gate, {}, tmp_path, history=history))
 
-    assert entry["args"] == ["ship-handoff", "state/handoffs/foo.md", "--sha", "newest"]
+    assert entry["args"] == ["ship-handoff", "state/handoffs/foo.md", "--no-archive", "--sha", "newest"]
 
 
 def test_ship_sha_skips_a_merge_the_session_performed(tmp_path):
@@ -351,4 +351,4 @@ def test_ship_sha_is_omitted_when_the_session_owns_no_commit(tmp_path, kind):
 
     (entry,) = _ship_directives(wsc.build_directives(gate, {}, tmp_path, history=history))
 
-    assert entry["args"] == ["ship-handoff", "state/handoffs/foo.md"]
+    assert entry["args"] == ["ship-handoff", "state/handoffs/foo.md", "--no-archive"]

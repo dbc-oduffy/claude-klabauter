@@ -59,11 +59,9 @@ then protect nothing (DR-115 § PM direction (A)).
 
 Text leads with the transformer, per design-as-offers
 (``coordinator-content-repo coordinator/docs/wiki/hook-best-practices.md`` § nag->action / design-as-offers):
-the fleet migration op is named as FORTHCOMING (verified absent from disk
-at authoring time — ``coordinator_core/ops/fleet/migrate_prose_queue.py``
-does not exist yet; DR-115 § PM direction (C) authorizes it but it has not
-landed), then ``coordinator-queue-append`` for a single new entry, then the
-rule, never first.
+the runnable fleet migration op ``coordinator-invoke fleet.migrate_prose_queue``
+(DR-115 § PM direction (C)), then ``coordinator-queue-append`` for a single
+new entry, then the rule, never first.
 
 Negative-spec:
   - Does NOT deny/block anything — CLASS is "advisory"; the envelope
@@ -115,7 +113,7 @@ PRIORITY = 170
 #: regardless of what this var holds.
 _ESCAPE_HATCH_ENV_VAR = "COORDINATOR_PROSE_QUEUE_APPEND_PUNT"
 
-_TRANSFORMER_PATH = "coordinator_core/ops/fleet/migrate_prose_queue.py"
+_TRANSFORMER_PATH = "coordinator-invoke fleet.migrate_prose_queue"
 
 
 _REASON_TEMPLATE = """Legacy queue. Append instead: `coordinator-queue-append --schema {family}`. Read instead: `records_query`. Migrate instead: `{transformer}`.{override_block}"""
