@@ -15,6 +15,7 @@ from coordinator_core.ops._workflow_contract import Severity, run_checks
 from coordinator_core.ops.dispatch_emit import ask_compose
 from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
 from coordinator_core.ops.dispatch_emit.tests.test_ask_compose import _JUDGE_KW, _NO_FOLD, _compose
+from coordinator_core.ops.dispatch_emit.tests.test_ask_compose_stage_handle import stage_root  # noqa: F401  # fold_manifest writes its sidecar under it
 from coordinator_core.win_portability import no_console_creationflags
 
 _RB_TEXT = "export const meta = { name: 'rb', description: 'd', phases: [{ title: 'RB' }] };\nreturn {};\n"
@@ -348,7 +349,8 @@ def test_reviewers_and_judge_read_the_pm_intent_and_apm_keeps_the_ask():
     assert "scratch/warp/run-1/pm-intent.md" not in script
     assert "scratch/warp/run-1/briefs" in script
     for label in ("accept", "xl-exit"):
-        call = script[script.index(f"label: '{label}'") - 3000 : script.index(f"label: '{label}'")]
+        end = script.index(f"label: '{label}'")
+        call = script[script.rindex(f"phase('{label}')", 0, end) : end]
         assert "Where they conflict, keep the ask and name the conflict in your ruling." in call
 
 
@@ -434,6 +436,7 @@ _WHOLE_ROW = {
 }
 
 
+@pytest.mark.usefixtures("stage_root")
 @pytest.mark.parametrize(
     "rows, error",
     [

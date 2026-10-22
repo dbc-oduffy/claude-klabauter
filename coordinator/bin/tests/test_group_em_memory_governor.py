@@ -8,6 +8,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 _SRC = Path(__file__).resolve().parents[1] / "group-em-memory-governor.py"
 _spec = importlib.util.spec_from_file_location("group_em_memory_governor", _SRC)
 assert _spec is not None and _spec.loader is not None
@@ -16,6 +18,12 @@ sys.modules[_spec.name] = gov  # dataclass resolution needs the module registere
 _spec.loader.exec_module(gov)
 
 P = gov.Proc
+
+
+@pytest.fixture(autouse=True)
+def _fake_start_times(monkeypatch):
+    # Fake pids have no real start time; without this every freeze is skipped and `ps` runs per pid.
+    monkeypatch.setattr(gov, "process_start_time", lambda pid: 1.0)
 
 
 def _args(**kw):

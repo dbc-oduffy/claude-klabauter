@@ -276,10 +276,17 @@ def process_start_time(pid: int) -> Optional[float]:
         except Exception:
             return None
     try:
-        out = subprocess.run(["ps", "-o", "etimes=", "-p", str(pid)], capture_output=True,
+        # `etime` ([[dd-]hh:]mm:ss) is the portable spelling; BSD/macOS ps has no `etimes`.
+        out = subprocess.run(["ps", "-o", "etime=", "-p", str(pid)], capture_output=True,
                              text=True, timeout=5,
                              creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)).stdout.strip()
-        return time.time() - float(out) if out else None
+        if not out:
+            return None
+        days, _, clock = out.rpartition("-")
+        secs = 0
+        for part in clock.split(":"):
+            secs = secs * 60 + int(part)
+        return time.time() - (secs + (int(days) * 86400 if days else 0))
     except Exception:
         return None
 
@@ -294,7 +301,7 @@ def _write_frozen(pidfile: Optional[Path], paused: list[tuple[Proc, list[int]]],
         pids = [t for _, tree in paused for t in tree]
         if pids:
             me = os.getpid()
-            frozen = [{"pid": p, "start_time": start_time_fn(p)} for p in pids]
+            frozen = [{"pid": p, "start_time": st} for p in pids if (st := start_time_fn(p)) is not None]
             pidfile.write_text(json.dumps({"governor_pid": me,
                                            "governor_start_time": start_time_fn(me),
                                            "frozen": frozen}), encoding="utf-8")
@@ -360,8 +367,9 @@ def run(args: argparse.Namespace, emit: Callable[[str], None] = print,
         notice_path: Optional[Path] = None,
         notice_fn: Callable[[Optional[Path], list[Proc]], frozenset] = read_noticed_pids,
         bin_dir: Optional[Path] = None, pidfile: Optional[Path] = None,
-        start_time_fn: Callable[[int], Optional[float]] = process_start_time) -> None:
+        start_time_fn: Optional[Callable[[int], Optional[float]]] = None) -> None:
     bin_dir = bin_dir if bin_dir is not None else Path(__file__).resolve().parent
+    start_time_fn = start_time_fn or process_start_time
     thaw_leftovers(pidfile, signal_fn, start_time_fn)
     hint_armed = True
     sample = sample or (lambda: critical(args.psi_full, args.avail_pct))
@@ -400,8 +408,11 @@ def run(args: argparse.Namespace, emit: Callable[[str], None] = print,
                     victim = choose_victim(procs, {p.pid for p, _ in paused}, self_pid, noticed, ntree)
                     if victim:
                         prot = protected_pids(procs, ntree)
-                        tree = [t for t in descendants(victim.pid, procs) if t not in prot]
-                        _write_frozen(pidfile, paused + [(victim, tree)])
+                        # A pid with no readable start time cannot be recorded, so it is never frozen:
+                        # an unrecorded freeze is one no later thaw can find.
+                        tree = [t for t in descendants(victim.pid, procs)
+                                if t not in prot and start_time_fn(t) is not None]
+                        _write_frozen(pidfile, paused + [(victim, tree)], start_time_fn)
                         signal_fn(tree, True)
                         paused.append((victim, tree))
                         crit_streak = 0
@@ -419,7 +430,7 @@ def run(args: argparse.Namespace, emit: Callable[[str], None] = print,
                         signal_fn(tree, False)
                     emit("GOVERNOR RESUMED " + " ".join(f"pid={v.pid}" for v, _ in reversed(paused)))
                     paused.clear()
-                    _write_frozen(pidfile, paused)
+                    _write_frozen(pidfile, paused, start_time_fn)
                     gave_up = False
             sleep(args.interval)
     finally:
@@ -428,7 +439,7 @@ def run(args: argparse.Namespace, emit: Callable[[str], None] = print,
                 signal_fn(tree, False)
             paused_ids = " ".join(f"pid={v.pid}" for v, _ in reversed(paused))
             paused.clear()
-            _write_frozen(pidfile, paused)
+            _write_frozen(pidfile, paused, start_time_fn)
             try:
                 emit("GOVERNOR RESUMED-ON-EXIT " + paused_ids)
             except Exception:  # stdout's reader may already be gone
