@@ -1074,6 +1074,15 @@ CONFINEMENT_ROWS: List[CorpusRow] = [
         setup=_approval_gate_on_setup,
     ),
     CorpusRow(
+        "block-approval-sentinel-creation",
+        "block-approval-sentinel-creation-script-writer",
+        "sed -i '' 's#a#b#' /tmp/s.py; python3 -I /tmp/s.py a",
+        True,
+        _DENY,
+        False,
+        setup=_approval_gate_on_setup,
+    ),
+    CorpusRow(
         "block-worktree-sentinel-creation",
         "block-worktree-sentinel-creation-fire",
         "touch .coordinator-override-worktree-guard",

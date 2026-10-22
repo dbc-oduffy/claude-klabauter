@@ -365,6 +365,32 @@ class TestReasonClassSpecificMessages:
         path = str(script) if spelling == "native" else str(script).replace("\\", "/")
         assert guard.check(_payload("python3 " + path)) is not None
 
+    @pytest.mark.parametrize(
+        "template, denied, remedy",
+        [
+            ("cd {d}; sed -i '' 's#a#b#' s.py; python3 -I s.py a", True, "separate"),
+            ("sed -i '' 's#a#b#' {d}/s.py; python3 -I {d}/s.py a", True, "separate"),
+            ('SP={d}; cd "$SP" && python3 -I s.py a', False, None),
+            ("cd {d}; sed -i '' 's#a#b#' other.py; python3 -I s.py a", False, None),
+            ('python3 "$W1A_UNSET_P/s.py"', True, "literal"),
+            ("cd {d} && cd .. && python3 -I s.py a", True, "literal"),
+        ],
+    )
+    def test_remedy_matches_the_deny_reason(self, tmp_path, template, denied, remedy):
+        (tmp_path / "s.py").write_text("print('ok')\n", encoding="utf-8")
+        cmd = template.format(d=str(tmp_path).replace("\\", "/"))
+        out = guard.check(_payload(cmd))
+        if not denied:
+            assert out is None
+            return
+        reason = _reason(out)
+        if remedy == "separate":
+            assert "Run the edit and the script in separate Bash calls." in reason
+            assert "literal path" not in reason
+        else:
+            assert "literal path" in reason
+            assert "separate Bash calls" not in reason
+
     def test_native_path_to_a_missing_file_is_denied(self, tmp_path):
         assert guard.check(_payload("python3 " + str(tmp_path / "missing.py"))) is not None
 

@@ -79,6 +79,7 @@ from coordinator_core.hooks.dispatch_escape import (
     _take_escape,
     _resolve_session_id_op,
 )
+from coordinator_core.session import general_work_scope
 from coordinator_core.session.mode_resolution import resolve_mode
 from coordinator_core.warp_fire import fire_step
 
@@ -306,12 +307,16 @@ def _is_outside_git_work_tree(file_path: str) -> bool:
 
 def _is_under_general_work_root(file_path: str) -> bool:
     """Target is under the registry-declared `coordinator.general_work_root`; an unset or unreadable key exempts nothing."""
-    try:
-        root = machine_resolver.registry_get("coordinator.general_work_root") or machine_resolver.registry_get("repos.general_work")
-    except Exception as exc:
-        print(f"nudge_em_code_dispatch: general_work_root unreadable: {exc} (not exempting)", file=sys.stderr)
-        return False
+    root = general_work_scope.general_work_root()
     return bool(root) and _path_contains(root, file_path)
+
+
+def _foreign_checkout_deny(checkout: str) -> dict:
+    return deny(
+        "PreToolUse",
+        f"[em-code-dispatch nudge] {checkout} is another EM's repo. "
+        "Use instead: `cross-repo-memo draft <slug> --to <receiver-em>`.",
+    )
 
 
 def _is_bootstrap_or_out_of_repo(file_path: str) -> bool:
@@ -726,6 +731,11 @@ def op(payload: dict) -> dict | None:
 
     if _take_escape(payload, session_id, file_path, "nudge-em-code-dispatch"):
         return None
+
+    if general_work_scope.in_general_work_session(payload.get("cwd")):
+        checkout = general_work_scope.foreign_checkout(file_path)
+        if checkout is not None:
+            return apply_guard_level("nudge-em-code-dispatch", _foreign_checkout_deny(checkout))
 
     handled, budget_result = _budget_decision(payload, session_id, file_path, tool_input)
     if handled:

@@ -333,6 +333,23 @@ _LITERAL_PATH_REMEDY = (
 )
 
 
+#: `_script_file_verdict` deny reasons for a script written earlier in the same
+#: command; a literal path is denied for each, so they take `_SEPARATE_CALLS_REMEDY`.
+_WHY_SEVERAL_WRITERS = "several earlier segments write that script path"
+_WHY_WRITER_CONTEXT_CHANGES = (
+    "the script path may change between its heredoc write and its run"
+)
+_WHY_WRITER_NOT_BARE_HEREDOC = (
+    "an earlier segment writes the script by something other than a bare cat heredoc"
+)
+_WRITER_REASONS = (
+    _WHY_SEVERAL_WRITERS,
+    _WHY_WRITER_CONTEXT_CHANGES,
+    _WHY_WRITER_NOT_BARE_HEREDOC,
+)
+_SEPARATE_CALLS_REMEDY = "Run the edit and the script in separate Bash calls."
+
+
 def _extract_heredoc_bodies(cmd: str) -> "list[str]":
     """Item 33 (F3, GH #71 follow-up): mirror of the shared engine's
     `_strip_heredoc_bodies` walk, except it COLLECTS each heredoc's body
@@ -1312,14 +1329,14 @@ class _ApprovalSentinelDetector(SentinelCreationDetector):
                 # does not exist on disk yet: judge the heredoc body, which is
                 # the exact text that runs. Any other writer shape stays denied.
                 if len(writers) != 1:
-                    return deny("several earlier segments write that script path")
+                    return deny(_WHY_SEVERAL_WRITERS)
                 if not self._writer_context_unchanged(prior_segments, writers[0], path_token):
-                    return deny("the script path may change between its heredoc write and its run")
+                    return deny(_WHY_WRITER_CONTEXT_CHANGES)
                 written_body = self._heredoc_written_body(
                     prior_segments[writers[0]][0], writers[0], path_token
                 )
                 if written_body is None:
-                    return deny("an earlier segment writes the script by something other than a bare cat heredoc")
+                    return deny(_WHY_WRITER_NOT_BARE_HEREDOC)
                 if not self._text_mentions_target(written_body):
                     return None
                 if norm_head == "python3" and not _PY_WRITE_HINT_RE.search(written_body):
@@ -1530,9 +1547,12 @@ def _deny_reason(cmd: str, reason_kind: str, reason_class: str) -> str:
         # Redact the basename out regardless of which sub-path produced it,
         # rather than trusting the branch alone to guarantee echo-safety.
         safe_shape = reason_kind.replace(_TARGET_BASENAME, "<the sentinel>")
-        return indirection_deny_reason(
-            "approval-sentinel guard", safe_shape, _LITERAL_PATH_REMEDY
+        remedy = (
+            _SEPARATE_CALLS_REMEDY
+            if any(why in reason_kind for why in _WRITER_REASONS)
+            else _LITERAL_PATH_REMEDY
         )
+        return indirection_deny_reason("approval-sentinel guard", safe_shape, remedy)
     del reason_kind  # REASON_DIRECT: message below is fixed, not shape-derived.
     safe_argv0 = ", ".join(
         "`%s`" % name for name in sorted(_ApprovalSentinelDetector._SAFE_ARGV0)

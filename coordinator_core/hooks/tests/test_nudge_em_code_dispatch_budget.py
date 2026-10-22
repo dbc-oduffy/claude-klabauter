@@ -258,3 +258,48 @@ def test_unset_general_work_root_still_denied(landed, monkeypatch, unset):
     root, _ = landed
     _declare_general_work_root(monkeypatch, unset)
     assert _is_deny(_over_budget_edit(root))
+
+
+def _general_work_session(tmp_path, monkeypatch, payload):
+    gw = tmp_path / "general-work"
+    gw.mkdir()
+    _declare_general_work_root(monkeypatch, str(gw))
+    payload["cwd"] = str(gw)
+    return payload
+
+
+def test_general_work_session_editing_foreign_checkout_is_denied_with_memo_pointer(landed, tmp_path, monkeypatch):
+    monkeypatch.setattr(mod, "_COORDINATOR_PATH_MARKERS", [])
+    root, _ = landed
+    big = "".join(f"x{i}\n" for i in range(40))
+    payload = _general_work_session(tmp_path, monkeypatch, _edit(root, "a.py", _lines(10), big))
+    result = mod.op(payload)
+    assert _is_deny(result)
+    reason = _reason(result)
+    assert str(root) in reason
+    assert "cross-repo-memo draft" in reason
+    assert xb.read_lane(root, SID) is None
+
+
+def test_general_work_session_edit_outside_every_checkout_is_not_denied(landed, tmp_path, monkeypatch):
+    monkeypatch.setattr(mod, "_COORDINATOR_PATH_MARKERS", [])
+    monkeypatch.setattr(mod, "_session_sizing_state", lambda payload, sid: (False, False))
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    (plain / "tool.go").write_text("a\n")
+    payload = {
+        "tool_name": "Edit",
+        "session_id": SID,
+        "tool_input": {"file_path": str(plain / "tool.go"), "old_string": "a", "new_string": "bb"},
+    }
+    payload = _general_work_session(tmp_path, monkeypatch, payload)
+    assert mod.op(payload) is None
+
+
+def test_non_general_work_session_is_not_given_the_memo_pointer(landed, tmp_path, monkeypatch):
+    monkeypatch.setattr(mod, "_COORDINATOR_PATH_MARKERS", [])
+    root, _ = landed
+    _declare_general_work_root(monkeypatch, str(tmp_path / "general-work"))
+    result = _over_budget_edit(root)
+    assert _is_deny(result)
+    assert "cross-repo-memo draft" not in _reason(result)

@@ -477,6 +477,47 @@ def _quiet_reason(target: str, violations: List[Finding]) -> str:
     )
 
 
+_BOX_WIDE_RULES = frozenset({"posix-home", "drive-letter", "unc"})
+_TOKEN_RE = re.compile(r"[^\s\"'`]+")
+
+
+def _cited_paths(f: Finding, after_lines: List[str]) -> List[str]:
+    """Full cited path(s) for a finding. A posix-home `matched` is only the home
+    prefix, so the token is recovered at each occurrence of it on the line."""
+    if f.rule != "posix-home":
+        return [f.matched]
+    if not 1 <= f.line <= len(after_lines):
+        return [f.matched]
+    line = after_lines[f.line - 1]
+    paths: List[str] = []
+    start = line.find(f.matched)
+    while start != -1:
+        m = _TOKEN_RE.match(line, start)
+        paths.append(m.group(0) if m else f.matched)
+        start = line.find(f.matched, start + 1)
+    return paths or [f.matched]
+
+
+def _drop_box_wide(
+    findings: List[Finding], after: str, target: str, payload: Dict[str, Any]
+) -> List[Finding]:
+    """General-work sessions work across the box: drop home-shaped citations
+    that lie outside every foreign git checkout. Anything else is kept."""
+    from coordinator_core.session import general_work_scope as gws
+
+    if not gws.in_general_work_session(payload.get("cwd")):
+        return findings
+    if gws.foreign_checkout(target) is not None:
+        return findings
+    after_lines = after.splitlines()
+    return [
+        f
+        for f in findings
+        if f.rule not in _BOX_WIDE_RULES
+        or any(gws.foreign_checkout(p) is not None for p in _cited_paths(f, after_lines))
+    ]
+
+
 def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     try:
         tool_name = payload.get("tool_name", "")
@@ -508,6 +549,9 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         repo_root, rel_path = _repo_relative(target)
 
         new = new_violations(before, after, rel_path or "")
+        if not new:
+            return None
+        new = _drop_box_wide(new, after, target, payload)
         if not new:
             return None
 

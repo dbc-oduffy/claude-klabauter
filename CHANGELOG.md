@@ -69,6 +69,32 @@ watch can be run as a single blocking wait.
   through emit and compose as a strong prior for sizing.
 - **The price table is published as versioned JSON**, kept equal to `price_table.py` by a drift
   test.
+- **`repo.provision_local`** creates or updates a local sibling repo idempotently from a
+  manifest.
+- **`research.targets`**, a COMPUTE_ONLY queryable view over research targets, and a research
+  door that resolves `--research-target repo=<registered key>` to the registered path.
+  `research.close` refuses a stale-grader `invented` ruling and names the reground remedy.
+- **Plan premise carry.** The `plan.premise_scope` and `plan.premise_record` ops carry premise
+  checks across a plan, and the vendored plan schema takes an optional `declared_absent` list.
+- **`baton.close_report` and `baton.close_commit`** replace the deleted `baton.close_apply`;
+  target status readers judge plan, sizing, roadmap and goal done-ness by header line, and
+  target evidence joins a baton to its plan through its sizing.
+- **`comment_only_verifier`.** A review's comment-only edits are verified against the
+  pre-review snapshot, and tolerated drift is reported rather than refused.
+- **`sizing-link-baton`.** The blitz EM links an unsized XS dispatch baton to its matching
+  sizing in-wave.
+- **Cadence catch-up.** A `period_mode` resolver, catch-up briefs and bounded backfill for a
+  missed workday or workweek.
+- **`nlm-run-gate`** trampoline with Windows launcher twins, and `check-version-consistency
+  --strict`, which exits 3 on drift against the latest `v*` tag.
+- **`group-em-enter.py --home-start`** sends a home-start entry evidence, and the Group EM
+  watch skips a PARKED line already reported or just after a SendMessage contact.
+- **Stop advisories** (turn intent, manufactured blocker, announced-but-unexecuted work) are
+  emitted as `decision:block` or a top-level `systemMessage`, whichever Stop honours.
+- **A solo bare commit** is allowed when its staged set is named, and denied naming the
+  unnamed paths otherwise.
+- **`retest_targeted`** re-runs a run's failing targeted tests outside any op and records the
+  fresh verdict.
 
 ### Changed
 - **terminal_commit's worktree snapshot runs in process.** It no longer spawns `git status`,
@@ -126,6 +152,47 @@ watch can be run as a single blocking wait.
 - **`engine.drift`** tells a floor absent from a full clone apart from a shallow clone or a git
   error.
 - **Ceremony receipts** clip each section to 3 lines of at most 160 characters.
+- **Deleted under the 500ms kill bar:** `deliverable.baton_close_backstop`, the
+  `baton.close_apply` modules and `dispatch.reply_page`. A stage reply now reaches the ask
+  script from disk by handle, and no model relays reply pages.
+- **Cold paths cut under the bar.** `evaluate_plan`'s checkpoint read, the prep gate (a lazy
+  newest-first pack probe with memoised commit meta), pack indexes (offsets decoded lazily),
+  `canvas_harvest` stamp reads and the publish-allowlist drift leg now read in process rather
+  than spawning git.
+- **Telemetry appends never block an op.** A bounded writer thread takes them, with a provenance
+  sink cap.
+- **`terminal_commit` is more forgiving of the real tree.** It retries a lost ref CAS against
+  disjoint peer commits, takes a review fix-pass agent's newest hashed write as the blob
+  expectation, credits em-discharged rows on the since-halt check, excludes held chunks'
+  sole-declared paths, and stamps `exit_criterion_met` when only non-essential operator rows
+  remain open.
+- **The ledger gate and landing are exact.** `already_landed` needs the ledger verdict to
+  credit the carrying commit; `land_run` answers `already_landed` like `terminal_commit` and
+  re-closes a landed run; reconcile stamps coded only on rows whose writes landed and never
+  behind an uncleared external gate; a plan whose open rows are all withheld is stamped landed.
+- **Run close is resumable.** Budget-deferred legs stay queued for a continuation job, a
+  re-close re-pays a failed leg with a fresh deadline, and the seam leg carries the refusal
+  cause and retries an infra refusal once.
+- **Resume and refire.** A spent run id continues at the next `-tN`, a refire re-plans and
+  claims every register row the plan omits, and a halted run's manifest is not a partial stage.
+- **The warm server and supervisor refuse at boot** when the env and stamped engine roots
+  diverge.
+- **Guards split and tightened.** `bash_guards` dispatch checks are eight guard-family modules.
+  The out-of-repo write guard admits the registered owner's pull, fetch, push and
+  `merge --ff-only` on its own publish mirror, and only the current share directory is
+  sanctioned. The EM's product write is denied in an unsized session at strict guard level.
+  Cloud EMs can drive an engine run in another mounted repo.
+- **Targeted tests run from the declared launcher.** A repo-relative `targeted_test_launcher`
+  outranks the interpreter pin.
+- **Cockpit contract 4.15.0 is re-vendored**, and the plan schema is 2.41.0.
+- **Ask routing.** XS footprints are derived from the run manifest, the composer carries the EM
+  brief into the footprint prompt, and an XS run with an empty footprint yields a refusing leg
+  with a stated reason. An all-EM halt route names the concrete `em-discharge` call per owed
+  row.
+- **Queue-grind verify and size** ledger every failure with its exit code and stderr tail, and
+  judge a dedupe or refute close on the covering artifact.
+- **Memo ops** refuse every transition verb while HEAD is a default branch, print a refusal
+  reason once, and resolve a Group EM receiver to the central inbox.
 
 ### Fixed
 - **terminal_commit stages what `git add` would.** CRLF content on an `autocrlf=true` checkout
@@ -183,6 +250,34 @@ watch can be run as a single blocking wait.
 - **`residue_gate` ignores gitignored never-commit scratch.**
 - **A publish keeps a removal** that the row's allowlist now withholds.
 - **Install** retires only `reap-claims-for-repos`, and on Windows reaps bare leftovers.
+- **Drive-root guard false positives.** It judges only write targets, reads `/<letter>/` as a
+  drive path, scans every fixed drive at Stop, and exempts Claude memory-dir and out-of-repo
+  heredoc targets.
+- **Commit index repair.** `commit_paths` repairs the index when the post-ref splice fails,
+  and `index_write` splices v3 indexes, where an intent-to-add entry used to leave committed
+  paths staged as a reversal. CRLF-folded bytes are hashed for blob drift everywhere.
+- **Pack listing** reads a complete stranded temp pack as git does.
+- **A run's own halt-record commit** is no longer a since-base overlap, and a halted run's
+  marker ends liveness over a stale live token.
+- **A token minted with no `run.json` and no fire signal** does not read live; an unfired emit
+  is not a live run.
+- **`review.reverify`** treats a write tracked in the snapshot base as foreign, scopes its
+  revert set to the run, and never removes a peer's write.
+- **The reconcile refuses a fast-forward** that adds subagent-share paths, and
+  `reap`/`sweep_scratch` prune a recoverable scratch clone only through the shared guard
+  predicate.
+- **Windows.** The Playwright driver stops the started object, not the manager; census,
+  solo-commit and land-run tests run portably; the driver prompt passes `terminal_commit`
+  params by file with forward-slashed paths.
+- **`plan.tasks.mutate`** takes a row aliasing another row's anchor on the whole-body fallback,
+  and a `null` stamp clears an optional key.
+- **Workday and ceremony.** A gate closed by a resolved judgment point lands in `skipped`,
+  `adopt_commit` gates over the ambiguous paths, a failed step's reason comes from its
+  `[drift]` or `[fail]` line, and a workstream-complete close with nothing to commit reads
+  `already_satisfied`.
+- **Several `ask_stage` and `ask_gate` defects:** the reply carries the manifest inline beside
+  its sidecar handle, dispatchable memo rows stage as executor rows, and an audit-only run
+  skips review.
 
 ## [0.3.0] — 2026-10-01
 

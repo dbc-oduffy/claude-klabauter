@@ -343,3 +343,69 @@ def test_non_guarded_tool_is_allowed() -> None:
 
 def test_missing_target_is_allowed() -> None:
     assert check({"tool_name": "Write", "tool_input": {"content": "C:\\foo"}}) is None
+
+
+# --- general-work sessions: box-wide citations outside tracked repos ---------
+
+_HOME = "/Use" + "rs/jdoe42"
+_HOME_CITE = f"see {_HOME}/errands/notes.md for details"
+_FOREIGN_HOME_CITE = f"see {_HOME}/foreignrepo/src/a.py for details"
+_DRIVE_CITE = "see " + "X:" + r"\errands\notes.txt" + " for details"
+_FOREIGN_DRIVE_CITE = "see " + "X:" + r"\foreignrepo\a.txt" + " for details"
+_MIXED_CITE = "see " + "X:" + r"\errands/notes.txt" + " for details"
+
+
+@pytest.fixture()
+def general_work(monkeypatch, tmp_path: Path):
+    from coordinator_core.session import general_work_scope as gws
+
+    root = tmp_path / "general-work"
+    root.mkdir()
+    monkeypatch.setattr(gws, "general_work_root", lambda: str(root))
+
+    def fake_foreign(path: str, root=None):
+        return "/fake/checkout" if "foreignrepo" in path else None
+
+    monkeypatch.setattr(gws, "foreign_checkout", fake_foreign)
+    return root
+
+
+def _gw_payload(target: Path, content: str, cwd: Path) -> dict:
+    p = _write_payload(str(target), content)
+    p["cwd"] = str(cwd)
+    return p
+
+
+@pytest.mark.parametrize("cite", [_HOME_CITE, _DRIVE_CITE])
+def test_general_work_session_citing_outside_checkout_is_not_warned(
+    general_work: Path, tmp_path: Path, cite: str
+) -> None:
+    target = tmp_path / "elsewhere" / "doc.md"
+    assert check(_gw_payload(target, cite, general_work)) is None
+
+
+@pytest.mark.parametrize("cite", [_FOREIGN_HOME_CITE, _FOREIGN_DRIVE_CITE])
+def test_general_work_session_citing_into_foreign_checkout_still_warns(
+    general_work: Path, tmp_path: Path, cite: str
+) -> None:
+    target = tmp_path / "elsewhere" / "doc.md"
+    assert check(_gw_payload(target, cite, general_work)) is not None
+
+
+def test_general_work_session_mixed_separators_still_warns(general_work: Path, tmp_path: Path) -> None:
+    target = tmp_path / "elsewhere" / "doc.md"
+    assert check(_gw_payload(target, _MIXED_CITE, general_work)) is not None
+
+
+def test_general_work_session_writing_into_foreign_checkout_still_warns(
+    general_work: Path, tmp_path: Path
+) -> None:
+    target = tmp_path / "foreignrepo" / "doc.md"
+    assert check(_gw_payload(target, _HOME_CITE, general_work)) is not None
+
+
+def test_non_general_work_session_still_warns(general_work: Path, tmp_path: Path) -> None:
+    target = tmp_path / "elsewhere" / "doc.md"
+    other_cwd = tmp_path / "other"
+    other_cwd.mkdir()
+    assert check(_gw_payload(target, _HOME_CITE, other_cwd)) is not None
