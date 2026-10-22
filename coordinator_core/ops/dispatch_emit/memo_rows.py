@@ -6,20 +6,18 @@ so the commit path does not load ``spine_read``. Imports nothing from ``spine_re
 
 from __future__ import annotations
 
-import re
+import shlex
 from pathlib import Path
-from typing import Callable, Optional
-
-_MEMO_SEND_BRIEF_RE = re.compile(r"\bcross-repo-memo(?:\.py)?\s+send\b|\bmemo\.send\b")
+from typing import Callable, Mapping, Optional
 
 
 def _is_memo_send_row(raw: dict) -> bool:
     """True when the row's deliverable is a cross-repo memo send.
 
-    A subagent cannot send one (``block-subagent-destructive-action``), so
-    the row is an EM step. Decided by ``kind``, by a surface or write that is
-    a staged memo-outbox draft, by a surface or ``writes_under`` that is the
-    outbox directory or inside it, or by the brief naming the send verb.
+    Decided by ``kind``, by a surface or write that is a staged memo-outbox
+    draft, by a surface or ``writes_under`` that is the outbox directory or
+    inside it, or by a receiver-inbox surface that is not an inbound close.
+    A prose mention of the send verb never classifies a row.
     """
     if raw.get("kind") in ("memo-send", "memo_send"):
         return True
@@ -38,19 +36,48 @@ def _is_memo_send_row(raw: dict) -> bool:
 
         if any(isinstance(p, str) and memo_outbox_topic(p) for p in paths):
             return True
-    brief = raw.get("brief") or raw.get("body")
-    return isinstance(brief, str) and _brief_names_memo_send(brief)
+    return False
 
 
-def _brief_names_memo_send(brief: str) -> bool:
-    """``_MEMO_SEND_BRIEF_RE`` over ``brief``, behind the substring test both alternatives require.
-
-    Each alternative opens with a literal (``cross-repo-memo`` / ``memo.send``), so a brief
-    holding neither is decided by two ``in`` scans instead of a regex walk over a row's body.
-    """
-    if "cross-repo-memo" not in brief and "memo.send" not in brief:
+def memo_row_dispatchable(raw: dict) -> bool:
+    """True when a memo-send row can stage as an executor chunk: open, undeferred, not declared
+    ``performer: em``, not a receiver-inbox close, keyed on a slug, and naming a receiver
+    (``memo_to``). Pure: no stat, no registry."""
+    if not _is_memo_send_row(raw):
         return False
-    return _MEMO_SEND_BRIEF_RE.search(brief) is not None
+    if raw.get("disposition", "open") != "open":
+        return False
+    if raw.get("deferred") is True or raw.get("deferred_until"):
+        return False
+    if raw.get("performer") == "em":
+        return False
+    if inbound_close_path(raw) is not None or _is_receiver_inbox_surface(raw):
+        return False
+    if memo_row_slug(raw) is None:
+        return False
+    to = raw.get("memo_to")
+    return isinstance(to, str) and bool(to.strip())
+
+
+def memo_send_step_block(row_id: str, fields: Mapping[str, str]) -> str:
+    """The executor's steps for memo-send row ``row_id``; ``fields`` is ``{slug, to, title, kind}``."""
+    from coordinator_core.session.machinery_paths import MEMO_OUTBOX_RELDIR
+
+    slug = fields["slug"]
+    draft = f"{MEMO_OUTBOX_RELDIR}/{slug}.md"
+    receipt = f"{MEMO_OUTBOX_RELDIR}/sent/{slug}.md"
+    draft_cmd = (
+        f"cross-repo-memo draft {shlex.quote(slug)} --to {shlex.quote(fields['to'])}"
+        f" --kind {shlex.quote(fields['kind'])} --title {shlex.quote(fields['title'])}"
+    )
+    return (
+        f"Memo send for row {row_id}:\n"
+        f"1. If `{draft}` is absent, run `{draft_cmd}`, then Edit its body to carry the row body.\n"
+        f"2. Run `cross-repo-memo send {shlex.quote(slug)}`.\n"
+        f"3. Confirm `{receipt}` exists and report its path.\n"
+        f"4. If send prints `REFUSED`, stop and report the refusal verbatim; take no other route.\n"
+        f"5. Touch no other file and run no git commit: the send commits its own receipt.\n"
+    )
 
 
 _RECEIVER_INBOX_SEGMENT = "/state/cross-repo/inbox/"

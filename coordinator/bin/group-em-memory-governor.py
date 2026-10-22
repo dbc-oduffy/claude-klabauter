@@ -411,7 +411,7 @@ def run(args: argparse.Namespace, emit: Callable[[str], None] = print,
     try:
         while max_ticks is None or ticks < max_ticks:
             ticks += 1
-            if args.runaway_mb > 0 and ticks % args.runaway_every == 1 % args.runaway_every:
+            if args.runaway_mb > 0 and ticks % max(args.runaway_every, 1) == 1 % max(args.runaway_every, 1):
                 over = {pid: mb for pid, mb in footprint_fn().items()
                         if mb >= args.runaway_mb and pid not in flagged and pid != self_pid}
                 if over:

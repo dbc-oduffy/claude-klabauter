@@ -163,8 +163,19 @@ def test_the_terminal_commit_params_carry_the_resume_block(monkeypatch):
     script = _script(monkeypatch)
     assert (
         "_nextAction.params.resume_ledger = { run_id: _runId, halt_sha: _gate.resume_ledger.halt_sha ?? null, "
-        "blocking: _gate.resume_ledger.blocking ?? [] }"
+        "blocking: _gate.resume_ledger.blocking ?? [], "
+        "revise_notes: _gate.resume_ledger.revise_notes ?? [], remaining: _gate.resume_ledger.remaining ?? {} }"
     ) in script
+
+
+def test_a_skip_leg_re_ruling_only_resume_does_not_owe_the_replan(monkeypatch):
+    script = _script(monkeypatch)
+    owes = script[script.index("const _ledgerOwes"):][:700]
+    blocking = owes[:owes.index("|| (_gate.resume_ledger.unclaimed")]
+    assert "_gate.resume_ledger.remaining_leg?.action !== 'skip'" in blocking
+    assert ".some(" in blocking
+    assert "unclaimed" in owes.replace(blocking, "")
+    assert "else if (!_ledgerOwes) { _gate = { ..._gate, arm: 'xs' }; }" in script
 
 
 def test_the_ledger_halt_next_action_no_longer_asks_for_an_out_of_band_fix(monkeypatch):

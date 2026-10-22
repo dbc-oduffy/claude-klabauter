@@ -99,6 +99,31 @@ def test_zero_product_files_returns_no_slices(repo):
     assert result["slices"] == []
 
 
+def test_empty_paths_return_a_zero_file_reply_and_spawn_nothing(repo, monkeypatch):
+    _spawn_trap(monkeypatch)
+    result = _call(repo, [])
+    assert result["error"] is None
+    assert result["slices"] == []
+    assert result["product_files"] == 0
+    assert result["plan_id"] == "pln-test-1"
+    assert result["run_base_sha"] == _base(repo)
+    assert not (repo / result["share_dir"] / "prep-t.review-prep.md").exists()
+    assert not (repo / result["share_dir"] / "prep-t.review-prep.lock").exists()
+
+
+def test_empty_paths_with_a_group_return_no_slices(repo):
+    result = _call(repo, [], group_index=0, group_count=2)
+    assert result["error"] is None
+    assert result["slices"] == []
+
+
+def test_empty_slice_prefix_is_still_refused(repo):
+    result = rp.review_prep(
+        repo, base=_base(repo), paths=[], slice_prefix="", plan_path="docs/plans/p.md", session_id=SESSION
+    )
+    assert result["error"] == "base, paths, slice_prefix and plan_path are required"
+
+
 def test_a_freeze_refusal_is_returned_as_error_with_no_slices(repo):
     _write(repo, ["a.py"], 3)
     result = rp.review_prep(

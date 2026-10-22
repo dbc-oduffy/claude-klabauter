@@ -2104,8 +2104,9 @@ def compose_ask_script(
     )
     b.append(
         f"  const _ledgerOwes = _resumeLedger && (_gate.arm === {_lit(ARM_M_PLUS)} || _gate.arm === {_lit(ARM_S)})"
-        f" && (({_rl0}.blocking ?? [])"
+        f" && ((({_rl0}.blocking ?? [])"
         f".some((id) => (((({_rl0}.{RESUME_LEDGER_REMAINING_FIELD} ?? {{}})[id]) ?? {{}}).remaining ?? []).length > 0)"
+        f" && ({_rl0}.{RESUME_LEDGER_LEG_FIELD}?.action !== {_lit(LEG_SKIP)}))"
         f" || ({_rl0}.{RESUME_LEDGER_UNCLAIMED_FIELD} ?? []).length > 0);"
     )
     b.append(
@@ -3107,7 +3108,9 @@ def compose_ask_script(
     b.append(
         f"  if (_nextAction.params && _resumeLedger) {{ _nextAction.params.{TERMINAL_RESUME_LEDGER_PARAM} = "
         f"{{ run_id: _runId, {RESUME_LEDGER_HALT_SHA_FIELD}: _gate.{RESUME_LEDGER_KEY}.{RESUME_LEDGER_HALT_SHA_FIELD} ?? null, "
-        f"blocking: _gate.{RESUME_LEDGER_KEY}.blocking ?? [] }}; "
+        f"blocking: _gate.{RESUME_LEDGER_KEY}.blocking ?? [], "
+        f"{RESUME_LEDGER_NOTES_FIELD}: _gate.{RESUME_LEDGER_KEY}.{RESUME_LEDGER_NOTES_FIELD} ?? [], "
+        f"{RESUME_LEDGER_REMAINING_FIELD}: _gate.{RESUME_LEDGER_KEY}.{RESUME_LEDGER_REMAINING_FIELD} ?? {{}} }}; "
         f"if (Array.isArray(_gate.{RESUME_LEDGER_KEY}.{RESUME_LEDGER_HALT_BLOCKING_FIELD})) "
         f"{{ _nextAction.params.{TERMINAL_RESUME_LEDGER_PARAM}.blocking = "
         f"_gate.{RESUME_LEDGER_KEY}.{RESUME_LEDGER_HALT_BLOCKING_FIELD}; }} }}"

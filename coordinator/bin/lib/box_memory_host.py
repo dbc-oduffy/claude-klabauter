@@ -49,7 +49,13 @@ def load_governor(path: Path | None = None) -> types.ModuleType:
     if spec is None or spec.loader is None:
         raise ImportError(f"cannot load governor from {path}")
     module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    # @dataclass resolves string annotations through sys.modules[cls.__module__].
+    sys.modules[spec.name] = module
+    try:
+        spec.loader.exec_module(module)
+    except BaseException:
+        sys.modules.pop(spec.name, None)
+        raise
     return module
 
 

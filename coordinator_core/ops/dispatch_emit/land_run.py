@@ -836,6 +836,9 @@ def _ledger_gate(
     )
     since_halt: dict = {}
     if resume_ledger is not None:
+        from coordinator_core.ops.dispatch_emit.pre_halt_credit import with_notes
+
+        resume_ledger = with_notes(resume_ledger, requirements_ledger.read_notes(run_dir))
         stale = _unchanged_since_halt(root, resume_ledger, verdict, manifest_abs, plan_rel, since_halt)
         if stale:
             result = {**result, "pass": False, "failures": [*result["failures"], *stale]}

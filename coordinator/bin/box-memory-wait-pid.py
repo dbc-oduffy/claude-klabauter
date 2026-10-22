@@ -103,6 +103,9 @@ def main(argv: Optional[list] = None, waiter: Optional[Waiter] = None) -> int:
     parser.add_argument("--interval", type=float, default=1.0, help="poll seconds (default 1)")
     parser.add_argument("--timeout", type=float, default=None, help="give up after S seconds")
     args = parser.parse_args(argv)
+    if args.pid <= 0:
+        # kill(0, 0) / kill(-1, 0) address process groups and always succeed: the poll would never end.
+        parser.error("pid must be a positive integer")
     line, status = run(args.pid, max(args.interval, 0.01), args.timeout, waiter)
     print(line)
     return status

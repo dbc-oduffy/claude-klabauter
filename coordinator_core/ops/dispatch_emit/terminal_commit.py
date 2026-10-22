@@ -1900,6 +1900,7 @@ def _ledger_gate(
     )
     since_halt: dict = {}
     if resume_ledger is not None:
+        resume_ledger = pre_halt_credit.with_notes(resume_ledger, requirements_ledger.read_notes(run_dir))
         stale = _unchanged_since_halt_failures(
             worktree_root, resume_ledger, verdict, manifest_path, plan_rel, since_halt
         )
