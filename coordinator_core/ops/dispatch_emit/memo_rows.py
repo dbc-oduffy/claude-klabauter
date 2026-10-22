@@ -39,7 +39,18 @@ def _is_memo_send_row(raw: dict) -> bool:
         if any(isinstance(p, str) and memo_outbox_topic(p) for p in paths):
             return True
     brief = raw.get("brief") or raw.get("body")
-    return isinstance(brief, str) and _MEMO_SEND_BRIEF_RE.search(brief) is not None
+    return isinstance(brief, str) and _brief_names_memo_send(brief)
+
+
+def _brief_names_memo_send(brief: str) -> bool:
+    """``_MEMO_SEND_BRIEF_RE`` over ``brief``, behind the substring test both alternatives require.
+
+    Each alternative opens with a literal (``cross-repo-memo`` / ``memo.send``), so a brief
+    holding neither is decided by two ``in`` scans instead of a regex walk over a row's body.
+    """
+    if "cross-repo-memo" not in brief and "memo.send" not in brief:
+        return False
+    return _MEMO_SEND_BRIEF_RE.search(brief) is not None
 
 
 _RECEIVER_INBOX_SEGMENT = "/state/cross-repo/inbox/"

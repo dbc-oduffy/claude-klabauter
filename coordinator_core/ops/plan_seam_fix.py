@@ -157,7 +157,7 @@ def _reaches(graph: Dict[str, set], src: str, dst: str) -> bool:
 def _collision_pairs(pset: Dict[str, _Plan], hubs: set, root: Path) -> List[Tuple[str, str, str]]:
     """Distinct (later plan, earlier plan, path), sorted, over the named-set collisions."""
     pairs = set()
-    for f in _collision_findings(pset, {"named_set": True, "hubs": hubs, "root": root, "outside": {}}):
+    for f in _collision_findings(pset, {"named_set": True, "hubs": hubs, "root": root, "outside": {}, "edge_cache": {}}):
         other, path = f["counterpart_plan"], f["path"]
         if f["class"] == COLLISION and other and path and other in pset and f["plan"] in pset:
             earlier, later = sorted((f["plan"], other))

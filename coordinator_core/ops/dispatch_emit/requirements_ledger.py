@@ -82,6 +82,7 @@ _PARAMS = (
     Field("out_of_scope", "str_list"),
     Field("withhold_paths", "list"),
     Field("credit_chunks", "list"),
+    Field("retract_note", "dict"),
     Field("build_only", "bool"),
     Field("stop_after", "str"),
     Field("from", "str"),
@@ -237,22 +238,12 @@ def _inbox(dir_: Path) -> list[dict]:
 
 
 def read_notes(dir_: Path) -> list[str]:
-    """The `note` strings of the run's `NOTES_FILE`, oldest first; malformed lines and non-string
-    notes are skipped, a missing file yields []."""
-    try:
-        raw = (Path(dir_) / NOTES_FILE).read_text(encoding="utf-8")
-    except OSError:
-        return []
-    out: list[str] = []
-    for line in raw.splitlines():
-        try:
-            entry = json.loads(line)
-        except ValueError:
-            continue  # a torn tail line from a crashed writer; the rest stands
-        note = entry.get("note") if isinstance(entry, dict) else None
-        if isinstance(note, str):
-            out.append(note)
-    return out
+    """The `note` strings of the run's `NOTES_FILE` not retracted, oldest first; malformed lines and
+    non-string notes are skipped, a missing file yields []. A retracted note names no path to
+    `noted_paths`."""
+    from coordinator_core.ops.dispatch_emit import run_notes
+
+    return [e["note"] for e in run_notes.live(run_notes.entries(Path(dir_) / NOTES_FILE, ""))]
 
 
 def noted_paths(repo_root: Path, dir_: Path) -> list[str]:
@@ -650,7 +641,13 @@ def _write_view(repo_root: Path, dir_: Path, run_id: str) -> Optional[Ledger]:
         # The view is advisory; terminal_commit._ledger_gate refuses the unreadable sizing.
         return None
     if ledger is not None:
-        atomic_write_bytes(dir_ / LEDGER_VIEW_FILE, render(ledger, run_id).encode("utf-8"), preserve_mode=False)
+        from coordinator_core.ops.dispatch_emit import run_notes
+
+        body = render(ledger, run_id)
+        section = run_notes.render_section(carried_notes(repo_root, run_id))
+        if section:
+            body = body.rstrip("\n") + "\n\n" + "\n".join(section)
+        atomic_write_bytes(dir_ / LEDGER_VIEW_FILE, body.encode("utf-8"), preserve_mode=False)
     return ledger
 
 
@@ -677,26 +674,15 @@ def start(
 
 
 def _note_entries(dir_: Path, run_id: str) -> list[dict]:
-    try:
-        raw = (Path(dir_) / NOTES_FILE).read_text(encoding="utf-8")
-    except OSError:
-        return []
-    out: list[dict] = []
-    for line in raw.splitlines():
-        try:
-            entry = json.loads(line)
-        except ValueError:
-            continue  # a torn tail line from a crashed writer; the rest stands
-        note = entry.get("note") if isinstance(entry, dict) else None
-        if isinstance(note, str):
-            at = entry.get("at")
-            out.append({"note": note, "at": at if isinstance(at, str) else "", "run": run_id})
-    return out
+    from coordinator_core.ops.dispatch_emit import run_notes
+
+    return run_notes.entries(Path(dir_) / NOTES_FILE, run_id)
 
 
 def carried_notes(repo_root: Path, run_id: str) -> list[dict]:
-    """`{note, at, run}` entries of this run's `NOTES_FILE` and of its `resumed_from` run's, oldest
-    first, de-duplicated on (note, at). One hop: the predecessor's own link is not followed."""
+    """`{id, note, at, run, retracted}` entries of this run's `NOTES_FILE` and of its `resumed_from`
+    run's, retracted ones included, oldest first, de-duplicated on (note, at). One hop: the
+    predecessor's own link is not followed."""
     own_dir = run_dir(repo_root, run_id)
     entries = _note_entries(own_dir, run_id)
     prev = (read_run(own_dir) or {}).get(RESUMED_FROM_FIELD)
@@ -710,17 +696,6 @@ def carried_notes(repo_root: Path, run_id: str) -> list[dict]:
             seen.add(key)
             out.append(e)
     return out
-
-
-def unacknowledged_notes(notes: Sequence[Mapping], rows: Sequence[Mapping]) -> list[dict]:
-    """The notes no revision register row acknowledges: none of `rows` has a `revision@` anchor
-    stamped at or after the note's `at`. Both stamps are `_now()` UTC `%Y-%m-%dT%H:%M:%SZ` strings,
-    so string order is time order."""
-    stamps = [
-        at for r in rows
-        if (o := _origin(r.get(rr.ROW_ANCHOR)))[0] == ORIGIN_REVISION and (at := o[1])
-    ]
-    return [dict(n) for n in notes if not any(s >= str(n.get("at") or "") for s in stamps)]
 
 
 def _seedable_words(sizing: Mapping, foreign: Mapping[int, str]) -> list[str]:
@@ -832,7 +807,7 @@ def revise(
     repo_root: Path, run_id: str, *, verbatim: Optional[str] = None, all_of_pm_ask: Optional[bool] = None,
     out_of_scope: Sequence[str] = (), note: Optional[str] = None, sender: Optional[str] = None,
     withhold_paths: Sequence = (), credit_chunks: Sequence = (), build_only: bool = False,
-    outcome: Optional[dict] = None, stop_after: Optional[str] = None,
+    outcome: Optional[dict] = None, stop_after: Optional[str] = None, retract_note: Optional[dict] = None,
 ) -> tuple[Ledger, Path, Optional[str]]:
     """Append the EM's revision (and/or set the flag) on an emitted run: a register row when the
     run's sizing is bound, else a queued revision `bind` folds in. `note` is free text that is
@@ -859,6 +834,10 @@ def revise(
     needs an emitted run whose record dir holds no `manifest.json` (a staged run cannot be parked),
     writes `STOP_AFTER_FILE` atomically, adds no row, and alone satisfies the non-empty precondition;
     a repeat rewrites the marker.
+    `retract_note` (`{note_id, reason}`, `run_notes.validate_retract` before any write) withdraws one of
+    this run's notes as applied or superseded: it needs an emitted run (a halted one qualifies), refuses
+    an id the run's `NOTES_FILE` lacks or already retracted, appends a retraction line to `NOTES_FILE`
+    (nothing is deleted), adds no row, and alone satisfies the non-empty precondition.
     Returns (ledger, run dir, the new row id or None)."""
     text = verbatim.strip() if isinstance(verbatim, str) else ""
     named = [str(i) for i in out_of_scope]
@@ -879,15 +858,23 @@ def revise(
             credit_entries = run_credit.validate(credit_chunks)
         except ValueError as exc:
             raise LedgerRefused(str(exc)) from exc
+    retraction: Optional[dict] = None
+    if retract_note is not None:
+        from coordinator_core.ops.dispatch_emit import run_notes
+
+        try:
+            retraction = run_notes.validate_retract(retract_note)
+        except ValueError as exc:
+            raise LedgerRefused(str(exc)) from exc
     if stop_after is not None and stop_after != STOP_AFTER_PLAN:
         raise LedgerRefused(f"stop_after takes only {STOP_AFTER_PLAN!r}, got {stop_after!r}")
     if (
         not text and all_of_pm_ask is None and not has_note and not withheld_entries and not credit_entries
-        and not build_only and stop_after is None
+        and not build_only and stop_after is None and retraction is None
     ):
         raise LedgerRefused(
             "workflow.revise needs a non-empty verbatim, note, all_of_pm_ask, withhold_paths, "
-            "credit_chunks, build_only, stop_after, or a combination"
+            "credit_chunks, retract_note, build_only, stop_after, or a combination"
         )
     if named and not text:
         raise LedgerRefused("out_of_scope needs a non-empty verbatim: the ruling carries its words")
@@ -897,7 +884,10 @@ def revise(
     dir_ = run_dir(root, run_id)
     run = read_run(dir_)
     if run is None:
-        if named or all_of_pm_ask is not None or withheld_entries or credit_entries or build_only or stop_after:
+        if (
+            named or all_of_pm_ask is not None or withheld_entries or credit_entries or build_only or stop_after
+            or retraction is not None
+        ):
             raise LedgerRefused(
                 f"no ledger-bearing run {run_id!r} under {RECORD_DIR_ROOT}: emit it first "
                 "(a held run takes only a verbatim revision)"
@@ -919,6 +909,16 @@ def revise(
         declare_write(dir_ / INBOX_FILE)
         queued = _queued_ledger(dir_, False)
         return queued, dir_, f"Q{len(queued.items)}"
+    if retraction is not None:
+        from coordinator_core.ops.dispatch_emit import run_notes
+
+        held = {e["id"]: e for e in _note_entries(dir_, run_id)}.get(retraction["note_id"])
+        if held is None:
+            raise LedgerRefused(f"run {run_id!r} holds no note {retraction['note_id']}")
+        if held["retracted"] is not None:
+            raise LedgerRefused(
+                f"note {retraction['note_id']} of run {run_id!r} was already retracted at {held['retracted']['at']}"
+            )
     if stop_after and (dir_ / "manifest.json").exists():
         raise LedgerRefused(f"the run has staged; stop_after={STOP_AFTER_PLAN} can no longer park it")
     if named and not run.get("sizing_rel"):
@@ -956,6 +956,14 @@ def revise(
         append_line(
             dir_ / NOTES_FILE,
             (json.dumps({"note": note.strip(), "at": _now()}, ensure_ascii=False) + "\n").encode("utf-8"),
+        )
+        declare_write(dir_ / NOTES_FILE)
+    if retraction is not None:
+        from coordinator_core.atomic_append import append_line
+
+        append_line(
+            dir_ / NOTES_FILE,
+            run_notes.retraction_line(retraction["note_id"], retraction["reason"], _now(), _clean_sender(sender)),
         )
         declare_write(dir_ / NOTES_FILE)
     if withheld_entries:
@@ -1238,7 +1246,9 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     `withhold.jsonl`; needs an emitted run, no sizing, adds no row; replied as `withhold_paths`),
     `credit_chunks` (list of `{chunk, evidence}`: stranded chunks the EM rules complete, recorded to
     the run's `credit.jsonl` for the re-fired terminal commit to re-grade; needs an emitted run, no
-    sizing, adds no row; replied as `credit_chunks`), `build_only` (bool: removes the bound sizing's
+    sizing, adds no row; replied as `credit_chunks`), `retract_note` (`{note_id, reason}`: withdraws
+    one of the run's notes as applied by hand, appended to the run's `notes.jsonl` and never deleted;
+    needs an emitted run, no sizing, adds no row; replied as `retracted_note`), `build_only` (bool: removes the bound sizing's
     `research` block; needs an emitted run bound to a sizing; adds no row; replied as `research_dropped`),
     `stop_after` (str, only "plan": records the park marker so `dispatch.ask_stage` parks the run after
     planning; needs an emitted run that has not staged; adds no row; replied as `stop_after`).
@@ -1265,6 +1275,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             out_of_scope=params.get("out_of_scope") or (), note=params.get("note"),
             sender=params.get("from"), withhold_paths=params.get("withhold_paths") or (),
             credit_chunks=params.get("credit_chunks") or (), stop_after=params.get("stop_after"),
+            retract_note=params.get("retract_note"),
         )
     except LedgerRefused as exc:
         return {"error": str(exc)}
@@ -1301,6 +1312,8 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         from coordinator_core.ops.dispatch_emit import run_credit
 
         out["credit_chunks"] = run_credit.validate(params["credit_chunks"])
+    if params.get("retract_note"):
+        out["retracted_note"] = {"run_id": params["run_id"], "note_id": params["retract_note"]["note_id"].strip()}
     named = set(params.get("out_of_scope") or ())
     if named:
         out["withheld"] = [w["id"] for w in ledger.withheld if w["id"] in named]

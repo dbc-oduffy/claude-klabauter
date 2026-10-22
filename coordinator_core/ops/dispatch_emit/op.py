@@ -309,7 +309,7 @@ from coordinator_core.ops.dispatch_emit.inventory_mint import (
     mint_spine,
     parse_chunk_table,
 )
-from coordinator_core.ops.dispatch_emit.landed_reconcile import reconcile_landed
+from coordinator_core.ops.dispatch_emit.landed_reconcile import reconcile_done_noop, reconcile_landed
 from coordinator_core.ops.dispatch_emit.queue_emit import QueuePathEscapeError, emit_queue_script
 from coordinator_core.ops.dispatch_emit.request_validation import Field, validate_params
 from coordinator_core.ops.read_frontmatter_field import read_frontmatter_field
@@ -688,7 +688,7 @@ def _start_requirements(ask_ctx: dict, *, all_of_pm_ask: bool) -> Optional[objec
         _seed_run_base(root, ask_ctx["run_id"], ask_ctx.get("inherited_base"))
         _record_run_base(root, ask_ctx["run_id"])
     ledger.start(
-        root, ask_ctx["run_id"], all_of_pm_ask=all_of_pm_ask, resumed_from=ask_ctx.get("resumes_ask"),
+        root, ask_ctx["run_id"], all_of_pm_ask=all_of_pm_ask, resumed_from=ask_ctx.get("resumes_ask") or ask_ctx.get("resumed_from"),
     )
     if ask_ctx.get("sizing_rel"):
         prompt = ask_ctx.get("prompt")
@@ -2022,6 +2022,7 @@ def _dispatch_emit_body(
         output_redirect = None
         inherited_base = None
         resumes_ask = None
+        resumed_from = None
         if params.get("reserved_run_id") is not None:
             run_id, reserved_parent = _reserved_run(ask_root, params["reserved_run_id"], sizing_doc, sizing_rel)
         elif sizing_rel:
@@ -2049,6 +2050,7 @@ def _dispatch_emit_body(
                 if blocker is None:
                     run_id, rebound = halted_id, True
                 else:
+                    resumed_from = halted_id
                     output_redirect = {
                         "from": f"{RUN_DIR_ROOT}/{halted_id}.workflow.mjs",
                         "to": f"{RUN_DIR_ROOT}/{run_id}.workflow.mjs",
@@ -2072,6 +2074,7 @@ def _dispatch_emit_body(
             "root": ask_root, "prompt": prompt, "sizing_rel": sizing_rel, "run_id": run_id,
             "reserved_parent": reserved_parent, "rebound": rebound, "output_redirect": output_redirect,
             "inherited_base": inherited_base, "resumes_ask": resumes_ask,
+            "resumed_from": resumed_from,
             "ask_source": ask_source, "pm_verification": pm_verdict,
             "relayed_slice_text": relayed_slice_text,
             "route_preference": route_pref,
@@ -2181,6 +2184,7 @@ def _dispatch_emit_body(
             withheld_plans: dict = {}
             part_items: list = []
             accounting_ledger: dict = {}
+            done_unlanded: dict = {}
             accounting_item_ids = [
                 _strip_backtick(r["id"])
                 for r in parse_chunk_table(Path(inventory_path).read_text(encoding="utf-8"))
@@ -2197,6 +2201,7 @@ def _dispatch_emit_body(
                 tranche_inventory_out=tranche_inventory,
                 part_items_out=part_items,
                 accounting_out=accounting_ledger,
+                done_unlanded_out=done_unlanded,
                 review_rows=frozenset(params.get("review_only_rows") or ()),
             )
             if part:
@@ -2204,6 +2209,12 @@ def _dispatch_emit_body(
                 # the record still lists every plan: scope the review to the
                 # part's own plans.
                 part_item_set = set(part_items)
+                done_unlanded = {
+                    k: v
+                    for k, v in done_unlanded.items()
+                    if (k[: -len(v["chunk"]) - 1] if v.get("chunk") and k.endswith("." + v["chunk"]) else k)
+                    in part_item_set
+                }
                 part_plans = frozenset(
                     _strip_backtick(r["spec path"])
                     for r in parse_chunk_table(Path(inventory_path).read_text(encoding="utf-8"))
@@ -2236,6 +2247,14 @@ def _dispatch_emit_body(
             # plans and no pre-dispatch checks or falsifier reviews.
             review_only_run = params.get("review_only_rows") is not None
             landed_reconciled = {} if review_only_run else reconcile_landed(Path(inventory_path))
+            noop_by_plan: dict = {}
+            for entry in done_unlanded.values():
+                if entry["class"] == "no-op" and entry["plan"] and entry["chunk"]:
+                    noop_by_plan.setdefault(entry["plan"], {})[entry["chunk"]] = entry["report"]
+            if noop_by_plan and not review_only_run:
+                for plan_rel, ids in reconcile_done_noop(Path(inventory_path), noop_by_plan).items():
+                    seen = landed_reconciled.setdefault(plan_rel, [])
+                    seen.extend(i for i in ids if i not in seen)
             inventory_review_specs = (
                 []
                 if review_only_run
@@ -2535,6 +2554,8 @@ def _dispatch_emit_body(
                 landed_rows=params.get("landed_rows"),
                 sibling=params.get("sibling"),
             )
+            if done_unlanded:
+                inventory_accounting["done_unlanded"] = list(done_unlanded.values())
         if held_out:
             receipt_extras = {
                 **(receipt_extras or {}),

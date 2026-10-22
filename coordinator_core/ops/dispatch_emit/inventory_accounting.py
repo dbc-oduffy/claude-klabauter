@@ -12,6 +12,10 @@ Buckets:
   skipped  -- the item mints nothing now by the inventory's or plan's own state.
   refused  -- an emit gate dropped the item's rows from dispatch.
 
+`done_unlanded` is chunk-level and outside the three item buckets: an optional
+list of entries carried beside them, never counted in `counts`, never checked by
+`account`. `merge_parts` unions it and `summary_lines` renders it.
+
 Negative-spec:
   - Does NOT warn on a gap: an unaccounted or doubly accounted id raises.
   - Does NOT read files or spawn processes.
@@ -122,7 +126,14 @@ def merge_parts(accountings: Sequence[Mapping[str, Any]]) -> Dict[str, Any]:
             skipped_final[i] = skipped[i]
     refused_final = {i: r for i, r in refused.items() if i not in emitted}
     # An id only ever "in another part" is left out of every bucket so account() names it.
-    return account(ordered, emitted, skipped_final, refused_final)
+    merged = account(ordered, emitted, skipped_final, refused_final)
+    entries: Dict[str, Any] = {}
+    for acc in accountings:
+        for entry in acc.get("done_unlanded") or []:
+            entries.setdefault(entry["id"], entry)
+    if entries:
+        merged["done_unlanded"] = list(entries.values())
+    return merged
 
 
 def summary_lines(
@@ -139,6 +150,15 @@ def summary_lines(
         lines.append(f"  skipped {entry['id']}: {entry['reason']}")
     for entry in accounting["refused"]:
         lines.append(f"  refused {entry['id']}: {entry['reason']}")
+    for entry in accounting.get("done_unlanded") or []:
+        if entry.get("class") == "no-op":
+            lines.append(
+                f"  no-op {entry['id']}: executor report {entry['report']} DONE, nothing to land"
+            )
+            continue
+        lines.append(f"  landing {entry['id']}: {entry['route']}")
+        for dep in entry.get("held_behind") or []:
+            lines.append(f"  held {dep}: behind {entry['id']}")
     for plan, rows in landed_reconciled.items():
         lines.append(f"edited {plan}: {', '.join(rows)} -> coded")
     return lines

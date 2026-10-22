@@ -205,6 +205,27 @@ def test_a_quoted_pattern_is_literal_and_an_expansion_is_not(mcr, repo):
     assert _key(mcr, repo, "grep -rn 'needle' d") == _key(mcr, repo, "grep -rn needle d")
 
 
+@pytest.mark.parametrize(
+    "command",
+    [
+        "grep --file=pats.txt d/tracked.txt",
+        "grep -rn --exclude-from=ex.txt needle d",
+        "rg needle d/tracked.txt",
+        "sed -n 1p f.txt",
+        "awk 'NR==1' f.txt",
+    ],
+)
+def test_readers_whose_read_set_argv_does_not_name_give_none(mcr, repo, command):
+    assert _key(mcr, repo, command) is None
+
+
+def test_a_dash_glob_is_literal_only_while_no_dash_named_entry_exists(mcr, repo):
+    cmd = "grep -rn --include=*.txt needle d"
+    assert _key(mcr, repo, cmd) is not None
+    (repo / "-x").write_text("y\n", encoding="utf-8")
+    assert _key(mcr, repo, cmd) is None
+
+
 def test_a_typed_entry_gives_none(mcr, repo):
     assert mcr.input_key({"kind": "next-free-number", "dir": "d"}, repo, head="H1") is None
 

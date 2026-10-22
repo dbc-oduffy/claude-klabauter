@@ -14,7 +14,7 @@ import pytest
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
-_NO_WINDOW =getattr(subprocess, "CREATE_NO_WINDOW", 0)
+_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
 def _git(root: Path, *args: str) -> str:

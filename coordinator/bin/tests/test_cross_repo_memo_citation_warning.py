@@ -21,12 +21,17 @@ def _load_cli_module():
 def test_ambiguous_only_prints_nothing(capsys):
     mod = _load_cli_module()
     mod._print_citation_warning({"citations_ambiguous": ["docs/b.md"]})
-    assert capsys.readouterr().out == ""
+    cap = capsys.readouterr()
+    assert cap.out == "" and cap.err == ""
 
 
 def test_unresolved_prints_new_text(capsys):
     mod = _load_cli_module()
     mod._print_citation_warning({"citations_unresolved": ["docs/n.md"]})
-    out = capsys.readouterr().out
-    assert "bare paths left unqualified (in neither repo): docs/n.md" in out
-    assert "ambiguous" not in out
+    cap = capsys.readouterr()
+    err = cap.err
+    assert cap.out == ""
+    assert err.startswith("cross-repo-memo send: delivered; warning:")
+    assert "bare paths left unqualified (in neither repo): docs/n.md" in err
+    assert "Do not re-send this one." in err
+    assert "ambiguous" not in err

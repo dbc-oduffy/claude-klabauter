@@ -1,4 +1,4 @@
-"""requirements_ledger: resumed_from link, carried_notes and unacknowledged_notes."""
+"""requirements_ledger: resumed_from link, carried_notes and the view's notes section."""
 
 from __future__ import annotations
 
@@ -6,7 +6,6 @@ import json
 
 import pytest
 
-from coordinator_core.ops import requirement_register as rr
 from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
 
 
@@ -57,11 +56,25 @@ def test_carried_notes_does_not_follow_second_hop(tmp_path):
     assert rl.carried_notes(tmp_path, "warp-new") == []
 
 
-def test_unacknowledged_notes_drops_note_once_revision_row_at_or_after():
-    note = {"note": "n", "at": "2026-10-22T10:00:00Z", "run": "ask-old"}
-    row = lambda at: {rr.ROW_ANCHOR: f"revision@{at}"}  # noqa: E731
-    assert rl.unacknowledged_notes([note], []) == [note]
-    assert rl.unacknowledged_notes([note], [row("2026-10-22T09:00:00Z")]) == [note]
-    assert rl.unacknowledged_notes([note], [row("2026-10-22T10:00:00Z")]) == []
-    assert rl.unacknowledged_notes([note], [row("2026-10-22T11:00:00Z")]) == []
-    assert rl.unacknowledged_notes([note], [{rr.ROW_ANCHOR: "ask"}]) == [note]
+def test_carried_notes_carry_id_and_retraction(tmp_path):
+    _note(tmp_path, "ask-old", "first", "2026-10-21T10:00:00Z")
+    d = tmp_path / "state" / "warp" / "ask-old"
+    with (d / rl.NOTES_FILE).open("a", encoding="utf-8") as f:
+        f.write(json.dumps({"retracts": "N1", "reason": "done", "at": "2026-10-21T11:00:00Z"}) + "\n")
+    rl.start(tmp_path, "warp-new", resumed_from="ask-old")
+    [got] = rl.carried_notes(tmp_path, "warp-new")
+    assert got["id"] == "N1" and got["retracted"]["reason"] == "done"
+
+
+def test_view_carries_a_revise_notes_section_when_notes_exist(tmp_path):
+    _note(tmp_path, "ask-old", "also add the key", "2026-10-21T10:00:00Z")
+    d = rl.start(tmp_path, "warp-new", resumed_from="ask-old")
+    view = (d / rl.LEDGER_VIEW_FILE).read_text(encoding="utf-8")
+    assert "## Revise notes" in view
+    assert "> also add the key" in view
+    assert "ask-old N1" in view
+
+
+def test_view_has_no_revise_notes_section_without_notes(tmp_path):
+    d = rl.start(tmp_path, "warp-new")
+    assert "Revise notes" not in (d / rl.LEDGER_VIEW_FILE).read_text(encoding="utf-8")

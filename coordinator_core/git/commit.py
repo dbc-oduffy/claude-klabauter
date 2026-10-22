@@ -432,6 +432,30 @@ def _checkin_bytes(root: Path, rel: str, data: bytes) -> bytes:
     return data
 
 
+def checkin_blob_sha(root: Path, rel: str) -> Optional[str]:
+    """The blob sha `git add` would record for the worktree file `rel`, or None.
+
+    Hash-only: sha1(b"blob <len>\\0" + `_checkin_bytes` output). Writes no object and
+    spawns nothing. None for every shape `_checkin_bytes` refuses with `FilterUnsupported`
+    (clean filter, CR bytes under a text pin, an `[attr]` macro, CR bytes under a
+    not-true autocrlf) and for an unreadable file.
+
+    `git_state.py` forbids re-opening the RAW-bytes question (hashing worktree bytes
+    directly measured wrong on 326 of 400 files under `autocrlf=true`). This hashes
+    the bytes git's checkin filter hands to the object writer, never raw bytes where a
+    conversion applies, so the prohibition stands and is not lifted.
+    """
+    base = Path(root)
+    try:
+        data = (base / rel).read_bytes()
+        out = _checkin_bytes(base, rel, data)
+    except (OSError, FilterUnsupported):
+        return None
+    digest = hashlib.sha1(b"blob %d\0" % len(out))
+    digest.update(out)
+    return digest.hexdigest()
+
+
 def hash_worktree_blobs_via_spawn(
     paths: Sequence[str],
     *,

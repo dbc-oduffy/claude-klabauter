@@ -8,9 +8,13 @@ rows. This closes that gap at emit time: each such item's `open` rows go to
 `plan_row_coding.flip_rows_coded`, the same line-level stamper the terminal
 commit uses. A row already in any other disposition is left alone.
 
+`reconcile_done_noop` does the same for chunks the caller classified as DONE
+with no declared write dirty, recording the executor report in the detail.
+
 Writes plan documents and commits nothing; the caller reports the files.
 
 Negative-spec:
+  - `reconcile_done_noop` flips only rows the caller classified no-op.
   - Does NOT touch a plan outside the repo the inventory lives in.
   - Does NOT flip a row of a live item's plan; only items whose own
     disposition names a landing.
@@ -19,7 +23,7 @@ Negative-spec:
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Mapping, Optional
 
 from coordinator_core.frontmatter.body_blocks import LocateStatus
 from coordinator_core.frontmatter.schema_validate import check_plan_tasks_source
@@ -81,6 +85,35 @@ def reconcile_landed(inventory_path: Path) -> Dict[str, List[str]]:
             else:
                 targets |= ids
         updated, flipped = flip_rows_coded(text, targets, sha)
+        if not flipped:
+            continue
+        if check_plan_tasks_source(updated) is not None and check_plan_tasks_source(text) is None:
+            continue
+        replace_text(plan, updated)
+        flipped_by_plan[plan.relative_to(root).as_posix()] = flipped
+    return flipped_by_plan
+
+
+def reconcile_done_noop(
+    inventory_path: Path, noop: Mapping[str, Mapping[str, str]]
+) -> Dict[str, List[str]]:
+    """`{plan path (repo-relative): [row ids flipped]}` for each `noop` entry
+    (`{plan rel: {chunk id: report rel}}`); `{}` when HEAD is unreadable."""
+    root = Path(inventory_path).resolve().parents[2]
+    sha = head_sha(root)
+    if not sha:
+        return {}
+    flipped_by_plan: Dict[str, List[str]] = {}
+    for plan_rel, chunks in noop.items():
+        plan = contained_path(root / plan_rel, [root])
+        if plan is None or not plan.is_file():
+            continue
+        text = plan.read_text(encoding="utf-8")
+        details = {
+            chunk: f"done-no-op: executor report {report} DONE, no declared write dirty"
+            for chunk, report in chunks.items()
+        }
+        updated, flipped = flip_rows_coded(text, set(chunks), sha, details=details)
         if not flipped:
             continue
         if check_plan_tasks_source(updated) is not None and check_plan_tasks_source(text) is None:

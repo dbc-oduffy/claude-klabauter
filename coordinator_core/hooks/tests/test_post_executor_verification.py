@@ -351,6 +351,33 @@ def test_bookkeeping_code_not_verification(repo, cmd) -> None:
     assert not g.runs_verification(cmd, str(repo), str(repo))
 
 
+@pytest.mark.parametrize("cmd", [
+    "python3 - <<'PY'\nfrom pkg import fm\n# keep the pytest-collected description lines\n"
+    "fm.rewrite('description: run pytest first')\nPY\npython3 tools/doc-index.py --write",
+    "python3 -c 'from pkg import a; a.note(\"unittest and doctest\")'",
+    "python3 - <<'PY'\nfrom pkg import a\n\"\"\"docstring naming pytest\"\"\"\nPY",
+])
+def test_runner_named_only_in_text_not_verification(repo, cmd) -> None:
+    assert not g.runs_verification(cmd, str(repo), str(repo))
+
+
+@pytest.mark.parametrize("cmd", [
+    "python3 - <<'PY'\nfrom pkg import a\nimport subprocess\nsubprocess.run(['pytest', 'a.py'])\nPY",
+    "python3 -c 'from pkg import a; import pytest; pytest.main()'",
+    "python3 -m pytest a.py",
+    "python3 -c 'from pkg import a; __import__(\"pytest\").main()'",
+    "python3 -c 'from pkg import a; import os; os.system(\"pytest a.py\")'",
+    "python3 -c 'from pkg import a; x = (\"pytest\"'",
+])
+def test_runner_invoked_in_code_is_verification(repo, cmd) -> None:
+    assert g.runs_verification(cmd, str(repo), str(repo))
+
+
+def test_script_naming_runner_only_in_text_not_counted(repo, tmp_path) -> None:
+    path = _script(tmp_path, "scratchpad/doc.py", 'import pkg\n"""mentions pytest"""\n# unittest\n')
+    assert not g.runs_verification(f"python3 {path}", str(repo), str(repo))
+
+
 def test_read_only_probe_script_is_not_verification(repo, tmp_path) -> None:
     pin = tmp_path / "tmp" / "register_pin.py"
     pin.write_text("from pkg import register\nprint(register.read())\n")

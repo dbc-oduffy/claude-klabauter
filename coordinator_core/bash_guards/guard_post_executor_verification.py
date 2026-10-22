@@ -42,10 +42,12 @@ session share dir, spans every verification kind; counter I/O failure fails open
 
 from __future__ import annotations
 
+import io
 import json
 import os
 import re
 import tempfile
+import tokenize
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -158,18 +160,42 @@ _RUNNER_RE = re.compile(r"\b(?:pytest|unittest|doctest)\b")
 _MEASURE_RE = re.compile(r"\bbenchmarks\.measure\b")
 
 
+_SPAWN_RE = re.compile(
+    r"\b(?:subprocess|Popen|check_call|check_output|runpy|run_module|system|popen"
+    r"|execv\w*|spawn\w*|__import__|import_module|exec|eval)\b"
+)
+_TEXT_TOKENS = frozenset({tokenize.STRING, tokenize.COMMENT, getattr(tokenize, "FSTRING_MIDDLE", -1)})
+
+
+def _code_names_runner(code: str) -> bool:
+    """Python ``code`` imports or references a test runner outside string literals and
+    comments. A runner named only in text is not a run; code that spawns a process or
+    module keeps its strings (``subprocess.run(["pytest"])``). Unlexable code is
+    judged raw."""
+    if _RUNNER_RE.search(code) is None:
+        return False
+    try:
+        toks = list(tokenize.generate_tokens(io.StringIO(code).readline))
+    except (tokenize.TokenError, IndentationError, SyntaxError):
+        return True
+    code_only = " ".join(t.string for t in toks if t.type not in _TEXT_TOKENS)
+    if _RUNNER_RE.search(code_only) is not None:
+        return True
+    return _SPAWN_RE.search(code_only) is not None
+
+
 def _code_verifies(code: str, repo_root: str) -> bool:
-    """Repo-importing code that also names a test runner; read-only or apply code is bookkeeping."""
-    return _RUNNER_RE.search(code) is not None and _code_imports_repo(code, repo_root)
+    """Repo-importing code that also invokes a test runner; read-only or apply code is bookkeeping."""
+    return _code_names_runner(code) and _code_imports_repo(code, repo_root)
 
 
 def _script_runs_suite(path: str, cwd: str) -> bool:
-    """A probe script naming a test runner. An unreadable script runs nothing we can see."""
+    """A probe script invoking a test runner. An unreadable script runs nothing we can see."""
     if "$" in path:
         return True
     try:
         with open(os.path.join(cwd, os.path.expanduser(path)), "r", encoding="utf-8", errors="replace") as fh:
-            return _RUNNER_RE.search(fh.read(65536)) is not None
+            return _code_names_runner(fh.read(65536))
     except OSError:
         return False
 

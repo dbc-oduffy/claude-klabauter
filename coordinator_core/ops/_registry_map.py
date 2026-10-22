@@ -242,6 +242,7 @@ OP_MODULE_MAP: Dict[str, str] = {
     "plan.mise_prep_probe":                   "coordinator_core.ops.plan_mise_prep_probe",
     "plan.mise_upgrade_apply":                "coordinator_core.ops.plan_mise_prep_probe",
     "plan.mise_certify_probe":                "coordinator_core.ops.plan_mise_prep_probe",
+    "plan.census_order":                      "coordinator_core.ops.plan_census_order",
     "plan.gated_criteria_met":                "coordinator_core.ops.plan_gated_criteria_met",
     "plan.cross_plan_gate":                   "coordinator_core.ops.plan_cross_plan_gate",
     "plan.seam_check":                        "coordinator_core.ops.plan_seam_check",

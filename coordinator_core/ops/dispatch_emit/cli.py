@@ -935,12 +935,33 @@ def _merge_landed(results: "list[dict]") -> dict:
     return merged
 
 
+def _live_stem(name: str) -> str:
+    for suffix in (".spine.workflow.mjs", ".workflow.mjs", ".spine.md"):
+        if name.endswith(suffix):
+            return name[: -len(suffix)]
+    return name
+
+
+def _superseding_live_stem(stem: str, live_stems: "set[str]") -> "Optional[str]":
+    """A live stem that replaces an orphan spine's run: its whole run when the orphan is one of
+    that run's `-pN` parts, or the parts' split run when the orphan is the unsplit whole."""
+    for live_stem in sorted(live_stems):
+        if live_stem == stem:
+            continue
+        if re.fullmatch(re.escape(live_stem) + r"-p\d+", stem) or re.fullmatch(re.escape(stem) + r"-p\d+", live_stem):
+            return live_stem
+    return None
+
+
 def _clear_earlier_outputs(inventory_path: str, live: "list[Path]") -> None:
     """Delete this inventory's regenerable spine and script files that this emit did not write.
 
     Matches only `earlier_outputs` names (this run id, its tranches and parts) beside the
     record; tranche records are inputs and are named, never deleted. A script whose receipt
-    is unlanded, or whose run id is spent (`spent_run_reason`), is kept with its spine."""
+    is unlanded, or whose run id is spent (`spent_run_reason`), is kept with its spine. A
+    scriptless unspent spine is removed only when a live output of this emit supersedes its
+    run (same run split into parts, or parts re-emitted whole); otherwise it is kept. Age is
+    never evidence."""
     keep = {p.resolve() for p in live}
     derived, records = earlier_outputs(Path(inventory_path))
     suffix = ".workflow.mjs"
@@ -958,11 +979,20 @@ def _clear_earlier_outputs(inventory_path: str, live: "list[Path]") -> None:
                 file=sys.stderr,
             )
     spine_suffix = ".spine.md"
+    live_stems = {_live_stem(p.name) for p in live}
     for stale in derived:
         if stale.resolve() in keep or not stale.name.endswith(spine_suffix):
             continue
         script = stale.with_name(stale.name[: -len(spine_suffix)] + suffix)
         if not script.exists() and not spent_run_reason(script):
+            superseded = _superseding_live_stem(stale.name[: -len(spine_suffix)], live_stems)
+            if superseded:
+                print(
+                    f"emit-dispatch-workflow: removing orphan spine {stale} "
+                    f"(superseded by this emit's live output {superseded})",
+                    file=sys.stderr,
+                )
+                continue
             keep.add(stale.resolve())
             print(
                 f"emit-dispatch-workflow: kept unlanded spine {stale} (no script and no landed stamp)",

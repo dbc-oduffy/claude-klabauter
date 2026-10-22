@@ -396,6 +396,12 @@ RESUME_LEDGER_CARRIED_MET_FIELD = "carried_met"
 #: `resume_ledger` verdict key carrying the open plan rows the halted run staged that no checkpoint
 #: or halt commit landed; `[]` when every staged row landed.
 RESUME_LEDGER_UNLANDED_FIELD = "unlanded"
+#: `resume_ledger` verdict key carrying the `ledger_remaining_paths.remaining_leg_plan` result.
+RESUME_LEDGER_LEG_FIELD = "remaining_leg"
+#: `remaining_leg.action` values: run the leg, skip it (re-ruling-only revise), or refuse before dispatch.
+LEG_DISPATCH, LEG_SKIP, LEG_REFUSE = "dispatch", "skip", "refuse"
+#: Prefix of the compose halt reason when the ledger-remaining leg is refused.
+LEG_REFUSAL_HEAD = "ledger-remaining leg refused: "
 #: halted.json key a ledger-check halt records `[{id, remaining, evidence}]` for its blocking rows under.
 HALT_BLOCKING_ITEMS_FIELD = "blocking_items"
 #: `dispatch.land_run` param carrying `{run_id, halt_sha, blocking}` on a ledger resume.

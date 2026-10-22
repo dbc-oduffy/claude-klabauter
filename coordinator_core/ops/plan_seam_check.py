@@ -66,7 +66,6 @@ import yaml
 
 from coordinator_core.atomic_replace import atomic_write_bytes
 from coordinator_core.frontmatter.body_blocks import LocateStatus
-from coordinator_core.frontmatter.primitives import split_frontmatter
 from coordinator_core.git.run import run_git
 from coordinator_core.ipc import register_op
 from coordinator_core.lifecycle import main_worktree_root
@@ -79,6 +78,7 @@ from coordinator_core.ops.dispatch_emit.spine_read import (
     load_frontmatter_doc,
     load_rows_memo,
     read_spine,
+    split_frontmatter_memo,
     with_canonical_disposition,
 )
 from coordinator_core.ops.dispatch_emit.wave_map import _normalize_path
@@ -133,7 +133,7 @@ class _Plan:
         self._edge_cache = edge_cache
         self.path = path if path is not None else root / rel
         self.text = self.path.read_text(encoding="utf-8")
-        split = split_frontmatter(self.text)
+        split = split_frontmatter_memo(self.text)
         doc = None
         if split is not None:
             try:

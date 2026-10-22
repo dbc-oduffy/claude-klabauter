@@ -99,7 +99,6 @@ import json
 import os
 import secrets
 import sys
-import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -547,30 +546,77 @@ def _repair_line(failing: list[str], plan: str) -> str:
     return f"repair: mise-prep-upgrade {plan}  (or --upgrade), then re-run"
 
 
-def _probe(
-    repo_root: Path,
-    plan: str,
-    *,
-    upgrade: bool,
-    census_timeout: int,
-    check_census: bool = True,
-) -> dict:
-    """One `plan.mise_prep_probe` call: this plan's gate, census and upgrade derivation.
+def _probe(repo_root: Path, plan: str, *, upgrade: bool) -> dict:
+    """One `plan.mise_prep_probe` call: this plan's gate and upgrade derivation, no census.
 
-    The census is always requested; the op runs it only for a PREPPED, not-CERTIFIED gate. Raises
-    `ValueError` on an op error or a reply without a `gate` object, so a probe that did not answer
-    is never read as a verdict.
+    Raises `ValueError` on an op error or a reply without a `gate` object, so a probe that did
+    not answer is never read as a verdict.
     """
-    params = {
-        "plan": plan,
-        "check_census": check_census,
-        "upgrade": upgrade,
-        "census_timeout": census_timeout,
-    }
-    reply = _invoke(repo_root, "plan.mise_prep_probe", params)
+    reply = _invoke(repo_root, "plan.mise_prep_probe", {"plan": plan, "upgrade": upgrade})
     if not isinstance(reply.get("gate"), dict):
         raise ValueError("plan.mise_prep_probe returned a reply without a `gate` object")
     return reply
+
+
+def _census_pass(
+    repo_root: Path, rows: list[dict], gates: dict[str, dict], *, timeout: int, budget_s: int
+) -> dict:
+    """Spend the set census budget in `plan.census_set` calls over the PREPPED, not-CERTIFIED rows.
+
+    Contract: sets each such row's `census` to its plan's reply entry (`_CENSUS_SKIPPED` when no
+    call reached it, an "census op unavailable" shape when the op errored) and returns the totals
+    `{spent_ms, memo_hits, direct_runs, key_ms, order}`. Never raises: an op error blocks nothing.
+    A budget of 0 repeats until `pending` is empty or a call makes no progress.
+    """
+    totals = {"spent_ms": 0, "memo_hits": 0, "direct_runs": 0, "key_ms": 0, "order": "input"}
+    todo = [
+        r["plan"] for r in rows
+        if r["outcome"] != "PROBE-FAILED"
+        and gates[r["plan"]].get("verdict") == "PREPPED"
+        and (gates[r["plan"]].get("stamp") or {}).get("state") != "CERTIFIED"
+    ]
+    by_plan = {r["plan"]: r for r in rows}
+    unavailable = None
+    pending = list(todo)
+    calls = 0
+    while pending:
+        left_ms = budget_s * 1000 - totals["spent_ms"] if budget_s > 0 else 0
+        if budget_s > 0 and left_ms < 1000 and calls:
+            break
+        calls += 1
+        try:
+            reply = _invoke(repo_root, "plan.census_set", {
+                "plans": pending, "census_timeout": timeout, "census_budget_ms": max(left_ms, 0),
+            })
+        except Exception as exc:  # the census is advisory; any failure leaves the rows skipped
+            unavailable = f"census op unavailable: {exc}"
+            break
+        entries = reply.get("plans") if isinstance(reply, dict) else None
+        if not isinstance(entries, dict):
+            unavailable = "census op unavailable: reply without a `plans` object"
+            break
+        for plan, entry in entries.items():
+            if plan in by_plan and isinstance(entry, dict):
+                by_plan[plan]["census"] = entry
+        for key in ("spent_ms", "memo_hits", "direct_runs", "key_ms"):
+            value = reply.get(key)
+            if isinstance(value, int) and not isinstance(value, bool):
+                totals[key] += value
+        if reply.get("order") in ("measured", "input"):
+            totals["order"] = reply["order"]
+        still = reply.get("pending")
+        still = [p for p in still if p in by_plan] if isinstance(still, list) else []
+        if still == pending:
+            break
+        pending = still
+    for plan in todo:
+        if by_plan[plan]["census"] is None:
+            by_plan[plan]["census"] = {
+                **_CENSUS_SKIPPED,
+                "entries": [],
+                **({"detail": unavailable} if unavailable else {}),
+            }
+    return totals
 
 
 def _derivable(derivation) -> bool:
@@ -690,45 +736,15 @@ def main(argv=None) -> int:
 
     rows = []
     gates: dict[str, dict] = {}
-    census_spent = 0.0
-    census_spent_ms = 0
-    census_memo_hits = 0
-
-    def _charge(probe: dict, wall_s: float) -> float:
-        """Seconds this probe spent on census: the engine's own figure, else the wall delta."""
-        nonlocal census_spent_ms, census_memo_hits
-        hits = probe.get("census_memo_hits")
-        if isinstance(hits, int) and not isinstance(hits, bool):
-            census_memo_hits += hits
-        ms = probe.get("census_spent_ms")
-        if isinstance(ms, int) and not isinstance(ms, bool):
-            census_spent_ms += ms
-            return ms / 1000
-        census_spent_ms += int(wall_s * 1000)
-        return wall_s
-
     for index, plan in enumerate(plans, 1):
-        remaining = args.census_budget - census_spent
-        out_of_budget = args.census_budget > 0 and remaining < 1
-        began = time.monotonic()
         try:
-            probe = _probe(
-                repo_root, plan, upgrade=args.upgrade,
-                census_timeout=args.census_timeout if args.census_budget <= 0
-                else max(1, min(args.census_timeout, int(remaining))),
-                check_census=not out_of_budget,
-            )
+            probe = _probe(repo_root, plan, upgrade=args.upgrade)
         except ValueError as exc:
             gates[plan] = {}
             rows.append(_probe_failed_row(plan, str(exc)))
             print(f"mise-prep-run: [{index}/{len(plans)}] {plan} PROBE-FAILED", file=sys.stderr)
             continue
         gate = probe["gate"]
-        if out_of_budget:
-            if gate.get("verdict") == "PREPPED" and (gate.get("stamp") or {}).get("state") != "CERTIFIED":
-                probe["census"] = {**_CENSUS_SKIPPED, "entries": []}
-        else:
-            census_spent += _charge(probe, time.monotonic() - began)
         # A set run is minutes long; a silent stderr reads as a hang.
         print(
             f"mise-prep-run: [{index}/{len(plans)}] {plan} {gate.get('verdict')} "
@@ -750,15 +766,7 @@ def main(argv=None) -> int:
             else:
                 upgraded = _upgrade_note(applied)
                 try:
-                    reprobed_at = time.monotonic()
-                    reprobe_left = args.census_budget - census_spent
-                    probe = _probe(
-                        repo_root, plan, upgrade=False,
-                        census_timeout=args.census_timeout if args.census_budget <= 0
-                        else max(1, min(args.census_timeout, int(reprobe_left))),
-                        check_census=args.census_budget <= 0 or reprobe_left >= 1,
-                    )
-                    census_spent += _charge(probe, time.monotonic() - reprobed_at)
+                    probe = _probe(repo_root, plan, upgrade=False)
                 except ValueError as exc:
                     gates[plan] = {}
                     rows.append(
@@ -787,6 +795,19 @@ def main(argv=None) -> int:
             "outcome": None,
         }
         rows.append(row)
+
+    census_totals = _census_pass(
+        repo_root, rows, gates, timeout=args.census_timeout, budget_s=args.census_budget
+    )
+    census_spent_ms = census_totals["spent_ms"]
+    census_rows = [r for r in rows if r["census"] is not None]
+    census_covered = sum(
+        1
+        for r in census_rows
+        if r["census"].get("detail") != _CENSUS_SKIPPED["detail"]
+        and not str(r["census"].get("detail") or "").startswith("census op unavailable")
+        and not any(e.get("state") == "UNRUNNABLE" for e in r["census"].get("entries") or [])
+    )
 
     named_set = bool(args.plans or args.roadmap_id)
     try:
@@ -858,7 +879,12 @@ def main(argv=None) -> int:
                     "certified": len(certified),
                     "dryRun": args.dry_run,
                     "censusSpentMs": census_spent_ms,
-                    "censusMemoHits": census_memo_hits,
+                    "censusMemoHits": census_totals["memo_hits"],
+                    "censusDirectRuns": census_totals["direct_runs"],
+                    "censusKeyMs": census_totals["key_ms"],
+                    "censusOrder": census_totals["order"],
+                    "censusPlans": len(census_rows),
+                    "censusCovered": census_covered,
                     "skipped": [{"plan": p, "outcome": "SKIPPED-OUT-OF-TREE"} for p in skipped],
                     "seam": _seam_spell(seam["verdict"]),
                     "seamFix": seam_fix,
@@ -881,6 +907,7 @@ def main(argv=None) -> int:
         work = f" — {pending} would be written" if args.dry_run else ""
         print(f"mise-prep-run: {len(certified)} of {len(rows)} plan(s) {verb}{mode}{work}")
         print(f"census: {census_spent_ms}ms spent over the set")
+        print(f"census: {census_covered} of {len(census_rows)} plans covered")
         if seam_fix.get("notRun"):
             print(f"seam-fix: {seam_fix['notRun']}")
         else:

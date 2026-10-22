@@ -3316,13 +3316,17 @@ def _cmd_discard(args: argparse.Namespace) -> int:
 
 def _print_citation_warning(acted_item: dict) -> None:
     """Warn for bare paths found in neither repo; `citations_ambiguous`
-    (both repos) is a recorded field, never printed."""
+    (both repos) is a recorded field, never printed.
+
+    Printed after delivery: the memo is already in the receiver's tree, so the
+    text must never read as a refusal — "re-send" drew duplicate sends."""
     unresolved = acted_item.get("citations_unresolved")
     if unresolved:
         print(
-            "cross-repo-memo send: bare paths left unqualified (in neither "
-            "repo): " + ", ".join(unresolved) + " — qualify as "
-            "<repo>:<path> and re-send."
+            "cross-repo-memo send: delivered; warning: bare paths left "
+            "unqualified (in neither repo): " + ", ".join(unresolved) + " — "
+            "qualify as <repo>:<path> in future memos. Do not re-send this one.",
+            file=sys.stderr,
         )
 
 

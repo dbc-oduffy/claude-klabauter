@@ -2,14 +2,17 @@
 
 A drifted path is tolerated only when the bytes the review read (the write-once pre-review
 snapshot beside the prep sidecar) and the bytes now on disk are the same Python AST, docstrings
-included. Anything unprovable is real drift. Pure byte reads and `ast`; zero spawns.
+included. A non-`.py` path is tolerated only when the repo-declared verifier
+(`comment_only_verifier`) exits 0 over every non-`.py` candidate at once. Anything unprovable is
+real drift. Pure byte reads and `ast`; zero spawns on the .py path; at most one on the non-.py
+path.
 """
 
 from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Mapping, Optional, Sequence
+from typing import Collection, Mapping, Optional, Sequence
 
 from coordinator_core.comment_strip.lang_python import proof_equivalent
 from coordinator_core.git.content_hash import eol_folded_sha256
@@ -73,12 +76,19 @@ def reviewed_preimages(
 
 
 def tolerated_drift(
-    worktree_root: Path, prep_sidecar_rel: Optional[str], drift: Sequence[Mapping]
+    worktree_root: Path,
+    prep_sidecar_rel: Optional[str],
+    drift: Sequence[Mapping],
+    *,
+    untrusted_paths: Collection[str] = (),
 ) -> tuple[list[dict], list[str]]:
     """(tolerated, real) over a commit_v2 `blob_drift` list. tolerated: [{path, expected,
     actual}] for content-sha256 entries whose preimage resolves, whose current worktree bytes
-    hash to `actual`, and for which verify_comment_only(preimage, current) holds. real: every
-    other drifted path (a `blob`-basis entry, a null actual, no preimage, or a failed proof)."""
+    hash to `actual`, and for which verify_comment_only(preimage, current) holds (`.py`) or the
+    declared verifier accepted the whole non-`.py` batch. Non-`.py` is all-or-nothing: one
+    undeclared suffix or a False verify_pairs makes every non-`.py` candidate real. real: every
+    other drifted path (a `blob`-basis entry, a null actual, no preimage, or a failed proof).
+    `untrusted_paths` (the landing set) is forwarded so a verifier the landing writes is refused."""
     candidates = {
         d["path"]: d["expected"]
         for d in drift
@@ -91,6 +101,8 @@ def tolerated_drift(
     tolerated: list[dict] = []
     real: list[str] = []
     root = Path(worktree_root)
+    verdict: dict[str, bool] = {}
+    other: list[tuple[str, bytes, bytes]] = []
     for d in drift:
         path = d.get("path")
         pre = preimages.get(path) if isinstance(path, str) else None
@@ -100,12 +112,23 @@ def tolerated_drift(
                 current = (root / path).read_bytes()
             except OSError:
                 current = None
-            ok = (
-                current is not None
-                and eol_folded_sha256(current) == d["actual"]
-                and verify_comment_only(path, pre, current)
-            )
-        if ok:
+            if current is not None and eol_folded_sha256(current) == d["actual"]:
+                if path.lower().endswith(".py"):
+                    ok = verify_comment_only(path, pre, current)
+                else:
+                    other.append((path, pre, current))
+        verdict[path] = ok
+    if other:
+        from coordinator_core.ops.dispatch_emit import comment_only_verifier as cov
+
+        decl = cov.declared_verifier(root)
+        if decl is not None and all(cov.covers(decl, p) for p, _, _ in other):
+            if cov.verify_pairs(root, decl, other, untrusted_paths):
+                for p, _, _ in other:
+                    verdict[p] = True
+    for d in drift:
+        path = d.get("path")
+        if verdict.get(path):
             tolerated.append({"path": path, "expected": d["expected"], "actual": d["actual"]})
         else:
             real.append(path)

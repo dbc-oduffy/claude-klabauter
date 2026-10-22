@@ -870,6 +870,7 @@ _YAML_LOADER = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
 # full clear at the limit made each read of a larger set miss.
 _MEMO_LIMIT = 1024
 _FM_DOCS: dict = {}
+_FM_SPLITS: dict = {}
 _ROWS_MEMO: dict = {}
 _SCHEMA_ERRORS: dict = {}
 
@@ -879,6 +880,18 @@ def _remember(memo: dict, key: str, value):
         memo.clear()
     memo[key] = value
     return value
+
+
+def split_frontmatter_memo(text: str):
+    """``split_frontmatter(text)`` memoised per process by text; the result is immutable.
+
+    One plan's text is split by its ``plan.seam_check`` plan object, its gate read and its
+    edge read; the split is a pure function of the text.
+    """
+    try:
+        return _FM_SPLITS[text]
+    except KeyError:
+        return _remember(_FM_SPLITS, text, split_frontmatter(text))
 
 
 def load_frontmatter_doc(fm_text: str):
@@ -932,7 +945,7 @@ def load_rows_memo(source: str):
 
 
 def _frontmatter_external_gates(source: str, row_ids: set) -> dict:
-    split = split_frontmatter(source)
+    split = split_frontmatter_memo(source)
     if split is None:
         return {}
     try:
@@ -973,7 +986,7 @@ def _frontmatter_external_gates(source: str, row_ids: set) -> dict:
 def frontmatter_plan_edges(source: str):
     """The plan's own frontmatter ``depends_on_plan`` list (an execution
     precondition on the whole plan), or ``None`` when it declares none."""
-    split = split_frontmatter(source)
+    split = split_frontmatter_memo(source)
     if split is None:
         return None
     try:
