@@ -155,6 +155,7 @@ from coordinator_core.session.claimed_write import replace_text
 from coordinator_core.session.record_homes import home_dir
 from coordinator_core.warm.entry_seam import OpUnavailableError, reentrant_dispatch
 from coordinator_core.ops.dispatch_emit import credit_gate, gate_owed, pre_halt_credit  # noqa: E402 -- sibling-package group
+from coordinator_core.ops.dispatch_emit.land_run import _em_discharged_rows  # noqa: E402
 from coordinator_core.ops.dispatch_emit.ask_contract import (
     DELIVERY_NOTE_DIR,
     RECORD_DIR_ROOT,
@@ -1827,7 +1828,8 @@ def _unchanged_since_halt_failures(
     ]
     exempt = verified_only_rows(resume)
     credited = pre_halt_credit.credited_rows(resume, verdict)
-    judged = [i for i in judged if i not in exempt and i not in credited]
+    discharged = _em_discharged_rows(resume, items) if judged else frozenset()
+    judged = [i for i in judged if i not in exempt and i not in credited and i not in discharged]
     if not judged or _every_staged_row_landed(resume):
         return []
     paths, stage_head = _manifest_declared(manifest_path)

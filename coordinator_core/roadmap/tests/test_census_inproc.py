@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 import shutil
@@ -357,3 +358,300 @@ def test_translator_closed_subset():
     for bad in ("\\1", "\\<a", "*a", "a\\", "[abc", "[]", "a\\{2", "\\("):
         assert translate(bad, "B") is None, bad
     assert translate("(a*)*", "E") is None
+
+
+# ---- evaluate_many: the index world, oid-keyed match records -------------------------------
+
+_BLOBS = {
+    "src/top.py": "needle one\nplain\nNEEDLE two\nneedle needle\n",
+    "src/data.txt": "nothing here\nneed\n",
+    "src/pkg/mod.py": "def needle():\n    pass\nneedle\n",
+    "src/pkg/util.py": "x = 1\n",
+    "src/__pycache__/mod.cpython.pyc": b"\x00\x01needle\x02\xff\n",
+    "docs/notes.md": "needle in notes\nsecond\n",
+    "docs/crlf.md": "needle one\r\nneedle\r\nplain\r\n",
+    "docs/noeol.txt": "alpha\nneedle",
+    "odd/latin1.txt": b"caf\xe9 needle\n",
+    "lib/vendor/skip.py": "needle\n",
+    "lib/keep.py": "needle\n",
+}
+_SYMLINKS = {"src/link": "../docs/notes.md"}
+
+
+def _oid(data: bytes) -> str:
+    return hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest()
+
+
+class _Index:
+    """An in-memory IndexFiles: tracked paths only, with a log of every read_blobs call."""
+
+    def __init__(self, blobs=None, links=None) -> None:
+        self.paths = {}
+        for rel, data in (blobs if blobs is not None else _BLOBS).items():
+            self.paths[rel] = (data if isinstance(data, bytes) else data.encode(), "100644")
+        for rel, target in (links if links is not None else _SYMLINKS).items():
+            self.paths[rel] = (target.encode(), "120000")
+        self.calls: list = []
+
+    def files(self, rel):
+        return sorted((p, _oid(d), m) for p, (d, m) in self.paths.items()
+                      if p == rel or p.startswith(rel + "/"))
+
+    def read_blobs(self, oids):
+        self.calls.append(list(oids))
+        by_oid = {_oid(d): d for d, _ in self.paths.values()}
+        return {o: by_oid[o] for o in oids if o in by_oid}
+
+    def fetched(self) -> list:
+        return [o for call in self.calls for o in call]
+
+
+class _Records:
+    """An in-memory MatchStore."""
+
+    def __init__(self) -> None:
+        self.rows: dict = {}
+
+    def matched(self, key, oid):
+        return self.rows.get((key, oid))
+
+    def put_matched(self, key, counts):
+        for oid, v in counts.items():
+            self.rows[(key, oid)] = v
+
+
+def _many(commands, index, store=None, budget=1e9):
+    return census_inproc.evaluate_many(list(commands), index, store, budget)
+
+
+def test_pending_is_not_none_and_is_a_distinct_sentinel():
+    assert census_inproc.PENDING is not None
+    assert census_inproc.PENDING != (0, "0\n", "")
+    assert repr(census_inproc.PENDING) == "PENDING"
+
+
+def test_pack_round_trips_every_state():
+    for res in [(None, -1, 1), (False, 0, 0), (True, 7, 0), (True, -1, 2), (None, -1, 2), (True, 0, 1)]:
+        v = census_inproc._pack(res)
+        assert census_inproc._valid(v)
+        assert census_inproc._unpack(v) == res
+    assert not census_inproc._valid(-1)
+    assert not census_inproc._valid("3")
+    assert not census_inproc._valid(3)
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_index_world_parity_with_the_host_shell(tmp_path):
+    sh = shutil.which("sh")
+    if not sh:
+        pytest.skip("no POSIX shell")
+    co = tmp_path / "co"
+    for rel, data in _BLOBS.items():
+        _put(co, rel, data)
+    try:
+        for rel, target in _SYMLINKS.items():
+            os.symlink(target, co / rel)
+    except (OSError, NotImplementedError):
+        pytest.skip("no symlink support")
+    env = {k: v for k, v in os.environ.items() if not k.startswith("BASH_FUNC_")}
+    kw = {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)} if os.name == "nt" else {}
+    commands = _docstring_examples() + _REAL_SHAPES
+    assert len(commands) >= 20 + 20
+    index = _Index()
+    got = _many(commands, index, _Records())
+    for command in commands:
+        proc = subprocess.run([sh, "-c", command], cwd=co, capture_output=True, text=True,
+                              env=env, **kw)
+        assert got[command] is not None, command
+        assert got[command] is not census_inproc.PENDING, command
+        assert (got[command][0], got[command][1].strip()) == (proc.returncode,
+                                                              proc.stdout.strip()), command
+        assert got[command][2] == "", command
+
+
+def test_grammar_examples_and_real_shapes_match_the_walk_path(tree):
+    commands = _docstring_examples() + _REAL_SHAPES
+    got = _many(commands, _Index())
+    for command in commands:
+        assert got[command] == evaluate(command, tree, None), command
+
+
+@pytest.mark.parametrize("command", _DECLINED)
+def test_every_declined_construct_declines_in_the_index_world_too(command):
+    assert _many([command], _Index())[command] is None
+
+
+def test_many_commands_over_one_tree_fetch_each_oid_once():
+    index = _Index()
+    commands = [
+        "grep -rl needle src docs lib | wc -l",
+        "grep -rc needle src docs lib | wc -l",
+        "grep -rlE 'need(le|les)' src/pkg docs | wc -l",
+        "grep -rli NEEDLE lib docs | wc -l",
+        "grep -c needle docs/notes.md",
+        "wc -l docs/notes.md",
+        "grep -n needle docs/notes.md",
+    ]
+    got = _many(commands, index, _Records())
+    assert all(isinstance(got[c], tuple) for c in commands)
+    fetched = index.fetched()
+    assert len(fetched) == len(set(fetched))
+    assert len(index.calls) == 1
+
+
+def test_a_warm_second_call_fetches_only_what_has_no_record():
+    index = _Index()
+    store = _Records()
+    command = "grep -rl needle src/pkg lib | wc -l"
+    first = _many([command], index, store)
+    assert first[command] == (0, "3\n", "")
+    index.calls.clear()
+    assert _many([command], index, store) == first
+    assert index.calls == []
+    assert _many(["grep -rl pass src/pkg | wc -l"], index, store)[
+        "grep -rl pass src/pkg | wc -l"] == (0, "1\n", "")
+    assert len(index.fetched()) == 2
+
+
+def test_restaging_k_files_fetches_exactly_k_oids():
+    index = _Index()
+    store = _Records()
+    command = "grep -rl needle lib src/pkg docs | wc -l"
+    assert _many([command], index, store)[command] == (0, "6\n", "")
+    index.calls.clear()
+    index.paths["lib/keep.py"] = (b"changed\n", "100644")
+    index.paths["docs/notes.md"] = (b"also changed\n", "100644")
+    assert _many([command], index, store)[command] == (0, "4\n", "")
+    assert len(index.fetched()) == 2
+
+
+def test_a_small_budget_yields_pending_and_a_second_call_finishes_without_refetching(monkeypatch):
+    monkeypatch.setattr(census_inproc, "_SLICE", 2)
+    index = _Index()
+    store = _Records()
+    command = "grep -rl needle src docs lib | wc -l"
+    first = _many([command], index, store, budget=0)
+    assert first[command] is census_inproc.PENDING
+    assert len(index.calls) == 1 and len(index.calls[0]) == 2
+    recorded = {oid for _, oid in store.rows}
+    second = _many([command], index, store, budget=1e9)
+    assert second[command] == (0, "8\n", "")
+    refetched = [o for call in index.calls[1:] for o in call]
+    assert not recorded & set(refetched)
+    assert len(refetched) == len(set(refetched))
+
+
+def test_progress_advances_on_every_call_even_with_zero_budget(monkeypatch):
+    monkeypatch.setattr(census_inproc, "_SLICE", 1)
+    index = _Index()
+    store = _Records()
+    command = "grep -rl needle lib docs | wc -l"
+    seen = 0
+    for _ in range(10):
+        got = _many([command], index, store, budget=0)[command]
+        assert len(store.rows) > seen or got is not census_inproc.PENDING
+        seen = len(store.rows)
+        if got is not census_inproc.PENDING:
+            assert got == (0, "5\n", "")
+            break
+    else:
+        pytest.fail("never finished")
+
+
+def test_a_finished_command_is_answered_while_another_stays_pending(monkeypatch):
+    monkeypatch.setattr(census_inproc, "_SLICE", 1)
+    index = _Index()
+    got = _many(["grep -c needle lib/keep.py", "grep -rl needle src docs | wc -l"],
+                index, _Records(), budget=0)
+    assert got["grep -c needle lib/keep.py"] == (0, "1\n", "")
+    assert got["grep -rl needle src docs | wc -l"] is census_inproc.PENDING
+
+
+def test_an_untracked_file_is_never_read_or_counted(tmp_path):
+    index = _Index()
+    _put(tmp_path, "src/untracked.py", "needle\n")
+    got = _many(["grep -rl needle src/pkg | wc -l", "grep -c needle src/untracked.py",
+                 "grep -rl needle src/untracked.py | wc -l"], index)
+    assert got["grep -rl needle src/pkg | wc -l"] == (0, "1\n", "")
+    assert got["grep -c needle src/untracked.py"] is None
+    assert got["grep -rl needle src/untracked.py | wc -l"] is None
+    assert _oid(b"needle\n") not in index.fetched() or "lib/keep.py" in index.paths
+    assert [r for r, (d, _) in index.paths.items() if r.endswith("untracked.py")] == []
+
+
+def test_two_paths_sharing_a_blob_count_twice():
+    blobs = dict(_BLOBS)
+    blobs["lib/copy.py"] = "needle\n"
+    got = _many(["grep -rl needle lib | wc -l", "grep -rc needle lib | wc -l"],
+                _Index(blobs, {}))
+    assert got["grep -rl needle lib | wc -l"] == (0, "3\n", "")
+    assert got["grep -rc needle lib | wc -l"] == (0, "3\n", "")
+
+
+def test_wc_l_is_recorded_under_the_reserved_key_from_the_newline_count():
+    index = _Index()
+    store = _Records()
+    got = _many(["wc -l docs/noeol.txt", "wc -l docs/crlf.md"], index, store)
+    assert got["wc -l docs/noeol.txt"] == (0, "1 docs/noeol.txt\n", "")
+    assert got["wc -l docs/crlf.md"] == (0, "3 docs/crlf.md\n", "")
+    assert {k for k, _ in store.rows} == {"wc-l"}
+
+
+def test_a_symlink_entry_is_skipped_under_r_and_declined_as_an_operand():
+    index = _Index()
+    got = _many(["grep -rl needle src | wc -l", "grep -rl needle src/link | wc -l",
+                 "wc -l src/link"], index)
+    assert got["grep -rl needle src/link | wc -l"] is None
+    assert got["wc -l src/link"] is None
+    assert got["grep -rl needle src | wc -l"] == (0, "3\n", "")
+    assert _oid(b"../docs/notes.md") not in index.fetched()
+
+
+def test_a_blob_the_index_cannot_supply_declines_the_command():
+    class _Missing(_Index):
+        def read_blobs(self, oids):
+            out = super().read_blobs(oids)
+            out.pop(_oid(b"needle\n"), None)
+            return out
+
+    got = _many(["grep -rl needle lib | wc -l", "grep -rl pass src/pkg | wc -l"], _Missing())
+    assert got["grep -rl needle lib | wc -l"] is None
+    assert got["grep -rl pass src/pkg | wc -l"] == (0, "1\n", "")
+
+
+def test_a_corrupt_record_is_refetched_not_trusted():
+    index = _Index()
+    store = _Records()
+    command = "grep -rl pass src/pkg | wc -l"
+    assert _many([command], index, store)[command] == (0, "1\n", "")
+    for k in list(store.rows):
+        store.rows[k] = -5
+    index.calls.clear()
+    assert _many([command], index, store)[command] == (0, "1\n", "")
+    assert len(index.fetched()) == 2
+
+
+def test_evaluate_many_runs_without_a_store_and_never_spawns(monkeypatch):
+    def boom(*a, **k):
+        raise AssertionError("spawned")
+
+    monkeypatch.setattr(subprocess, "Popen", boom)
+    monkeypatch.setattr(subprocess, "run", boom)
+    monkeypatch.setattr(os, "system", boom)
+    commands = _docstring_examples() + _REAL_SHAPES
+    got = _many(commands, _Index(), None)
+    assert all(got[c] is not None for c in commands)
+
+
+def test_duplicate_commands_collapse_and_order_is_kept():
+    got = _many(["ls docs | wc -l", "ls src/pkg | wc -l", "ls docs | wc -l"], _Index())
+    assert list(got) == ["ls docs | wc -l", "ls src/pkg | wc -l"]
+    assert got["ls docs | wc -l"] == (0, "3\n", "")
+
+
+def test_find_and_ls_filter_stages_answer_from_the_index():
+    got = _many(["find src -name '*.py' | grep -v pkg | wc -l",
+                 "ls src | grep -v data | wc -l"], _Index())
+    assert got["find src -name '*.py' | grep -v pkg | wc -l"] == (0, "1\n", "")
+    assert got["ls src | grep -v data | wc -l"] == (0, "4\n", "")

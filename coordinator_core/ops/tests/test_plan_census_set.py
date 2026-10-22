@@ -191,9 +191,17 @@ def test_a_second_call_over_an_unchanged_plan_spawns_nothing(tmp_path, monkeypat
     _git(tmp_path, "add", "-A")
     _git(tmp_path, "commit", "-q", "-m", "fixture")
 
+    from coordinator_core.roadmap import census_inproc
+
+    monkeypatch.setattr(census_inproc, "evaluate", lambda command, files, store: None)
     calls: list = []
-    real = subprocess.run
-    monkeypatch.setattr(subprocess, "run", lambda *a, **k: calls.append(a) or real(*a, **k))
+    real = subprocess.Popen
+
+    def counting_popen(*a, **k):
+        calls.append(a)
+        return real(*a, **k)
+
+    monkeypatch.setattr(subprocess, "Popen", counting_popen)
 
     first = _call({"plans": [A]}, tmp_path)
     first_spawns = len(calls)

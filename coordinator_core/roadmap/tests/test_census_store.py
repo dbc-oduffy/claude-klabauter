@@ -1,4 +1,4 @@
-"""Tests for coordinator_core.roadmap.census_store; every path is under tmp_path."""
+"""Tests for coordinator_core.roadmap.census_store (schema 3); every path is under tmp_path."""
 
 from __future__ import annotations
 
@@ -14,23 +14,53 @@ def _root(tmp_path: Path) -> Path:
     return tmp_path
 
 
-def _stat(tmp_path: Path, name: str = "f.txt"):
-    p = tmp_path / name
-    p.write_text("x", encoding="utf-8")
-    return p, p.stat()
+def _shard_dir(root: Path) -> Path:
+    return store_path(root).with_suffix("")
 
 
-def test_round_trip_run_and_ident(tmp_path):
+def test_schema_is_three():
+    assert census_store.STORE_SCHEMA == 3
+
+
+def test_round_trip_every_pinned_api(tmp_path):
     root = _root(tmp_path)
-    _, st = _stat(root)
     s = CensusStore.load(root)
     s.put_run("cmd", "k1", (0, "o", "e"), 12, 3)
-    s.put_ident("f.txt", st, "abc", st.st_mtime_ns + 10)
+    s.put_index_fps("c" * 40, {"a.py": "oid1:100644"})
+    s.put_matched("pk1", {"o1": 3, "o2": 0})
+    s.put_screened("grep x", None)
+    s.put_screened("rm y", "refused")
+    s.put_cursor("cmd")
+    s.put_over_bar("slow", 900)
     s.save()
-    assert store_path(root).is_file()
+    census_store._SEEN.clear()
     t = CensusStore.load(root)
     assert t.run("cmd") == ("k1", (0, "o", "e"), 12, 3)
-    assert t.ident("f.txt", st) == "abc"
+    assert t.index_fps("c" * 40) == {"a.py": "oid1:100644"}
+    assert t.index_fps("d" * 40) is None
+    assert t.matched("pk1", "o1") == 3
+    assert t.matched("pk1", "o2") == 0
+    assert t.matched("pk1", "o3") is None
+    assert t.matched("other", "o1") is None
+    assert t.screened("grep x") == (None,)
+    assert t.screened("rm y") == ("refused",)
+    assert t.screened("unseen") is None
+    assert t.cursor() == "cmd"
+    assert t.over_bar("slow") == 900
+    assert t.over_bar("fast") is None
+    assert t.load_cost_ms() >= 0
+    t.put_cursor(None)
+    t.save()
+    census_store._SEEN.clear()
+    assert CensusStore.load(root).cursor() is None
+
+
+def test_one_checksum_at_a_time(tmp_path):
+    s = CensusStore()
+    s.put_index_fps("a", {"x": "1"})
+    s.put_index_fps("b", {"y": "2"})
+    assert s.index_fps("a") is None
+    assert s.index_fps("b") == {"y": "2"}
 
 
 def test_newer_key_replaces_older(tmp_path):
@@ -39,44 +69,63 @@ def test_newer_key_replaces_older(tmp_path):
     s.put_run("cmd", "k1", (0, "", ""), 5, None)
     s.put_run("cmd", "k2", (1, "", "x"), 6, 2)
     s.save()
+    census_store._SEEN.clear()
     assert CensusStore.load(root).run("cmd") == ("k2", (1, "", "x"), 6, 2)
 
 
-def test_missing_corrupt_and_other_schema_load_empty(tmp_path):
+def test_a_later_put_run_clears_the_over_bar_marker(tmp_path):
+    s = CensusStore()
+    s.put_over_bar("cmd", 700)
+    s.put_run("cmd", "k", (0, "", ""), 5, None)
+    assert s.over_bar("cmd") is None
+
+
+def test_schema_one_and_two_json_and_garbage_load_empty(tmp_path):
     root = _root(tmp_path)
-    assert CensusStore.load(root).run("cmd") is None
     p = store_path(root)
     p.parent.mkdir(parents=True)
-    p.write_text("{not json", encoding="utf-8")
-    assert CensusStore.load(root).run("cmd") is None
-    p.write_text('{"schema": 999, "runs": {"cmd": ["k", [0, "", ""], 1, 1]}, "idents": {}}',
-                 encoding="utf-8")
-    assert CensusStore.load(root).run("cmd") is None
-    p.write_text('{"schema": 1, "runs": [], "idents": {}}', encoding="utf-8")
-    assert CensusStore.load(root).run("cmd") is None
+    for body in ('{not json', '{"schema": 1, "runs": {"cmd": ["k", [0, "", ""], 1, 1]}}',
+                 '{"schema": 2, "runs": {"cmd": ["k", [0, "", ""], 1, 1]}, "idents": {},'
+                 ' "matches": {}}'):
+        p.write_text(body, encoding="utf-8")
+        s = CensusStore.load(root)
+        assert s.run("cmd") is None
+        assert s.median_run_ms() is None
+
+
+def test_first_save_removes_the_legacy_json(tmp_path):
+    root = _root(tmp_path)
+    p = store_path(root)
+    p.parent.mkdir(parents=True)
+    p.write_text('{"schema": 2}', encoding="utf-8")
+    s = CensusStore.load(root)
+    s.put_run("cmd", "k", (0, "", ""), 1, 1)
+    s.save()
+    assert not p.exists()
+    assert (_shard_dir(root) / "root.marshal").is_file()
+
+
+def test_cache_tag_mismatch_and_corrupt_shard_load_empty(tmp_path, monkeypatch):
+    root = _root(tmp_path)
+    s = CensusStore.load(root)
+    s.put_run("cmd", "k", (0, "", ""), 1, 1)
+    s.put_matched("pk", {"o": 1})
+    s.save()
+    census_store._SEEN.clear()
+    monkeypatch.setattr(census_store, "_header", lambda: (3, "other-vm"))
+    t = CensusStore.load(root)
+    assert t.run("cmd") is None
+    assert t.matched("pk", "o") is None
+    monkeypatch.undo()
+    census_store._SEEN.clear()
+    (_shard_dir(root) / "p-pk.marshal").write_bytes(b"garbage")
+    u = CensusStore.load(root)
+    assert u.run("cmd") is not None
+    assert u.matched("pk", "o") is None
 
 
 def test_load_never_raises_without_a_git_root(tmp_path):
     assert CensusStore.load(tmp_path / "nowhere").median_run_ms() is None
-
-
-def test_ident_requires_same_stat_and_non_racy(tmp_path):
-    root = _root(tmp_path)
-    p, st = _stat(root)
-    s = CensusStore()
-    s.put_ident("f.txt", st, "abc", st.st_mtime_ns + 1)
-    assert s.ident("f.txt", st) == "abc"
-
-    class _St:
-        def __init__(self, size, mtime_ns, ino):
-            self.st_size, self.st_mtime_ns, self.st_ino = size, mtime_ns, ino
-
-    assert s.ident("f.txt", _St(st.st_size + 1, st.st_mtime_ns, st.st_ino)) is None
-    assert s.ident("f.txt", _St(st.st_size, st.st_mtime_ns + 1, st.st_ino)) is None
-    assert s.ident("f.txt", _St(st.st_size, st.st_mtime_ns, st.st_ino + 1)) is None
-    assert s.ident("other", st) is None
-    s.put_ident("f.txt", st, "abc", st.st_mtime_ns)
-    assert s.ident("f.txt", st) is None
 
 
 def test_save_to_unwritable_directory_raises_nothing(tmp_path):
@@ -93,17 +142,15 @@ def test_save_without_change_writes_nothing(tmp_path):
     s = CensusStore.load(root)
     s.put_run("cmd", "k", (0, "", ""), 1, 1)
     s.save()
-    p = store_path(root)
+    p = _shard_dir(root) / "root.marshal"
     os.utime(p, ns=(1_000_000_000, 1_000_000_000))
     t = CensusStore.load(root)
     t.put_run("cmd", "k", (0, "", ""), 1, 1)
     t.save()
     assert p.stat().st_mtime_ns == 1_000_000_000
-    CensusStore.load(root).save()
-    assert p.stat().st_mtime_ns == 1_000_000_000
 
 
-def test_median_run_ms(tmp_path):
+def test_median_run_ms():
     s = CensusStore()
     assert s.median_run_ms() is None
     for i, ms in enumerate((10, 30, 20)):
@@ -111,165 +158,90 @@ def test_median_run_ms(tmp_path):
     assert s.median_run_ms() == 20
 
 
-def test_save_drops_identities_of_absent_paths(tmp_path):
+def test_one_put_matched_rewrites_exactly_one_pattern_shard(tmp_path):
     root = _root(tmp_path)
-    p, st = _stat(root)
     s = CensusStore.load(root)
-    s.put_ident("f.txt", st, "abc", st.st_mtime_ns + 5)
-    s.put_ident("gone.txt", st, "def", st.st_mtime_ns + 5)
+    s.put_matched("pa", {f"o{i}": 1 for i in range(2000)})
+    s.put_matched("pb", {"x": 1})
     s.save()
-    t = CensusStore.load(root)
-    assert t.ident("f.txt", st) == "abc"
-    assert t.ident("gone.txt", st) is None
-
-
-class _St:
-    def __init__(self, size, mtime_ns, ino):
-        self.st_size, self.st_mtime_ns, self.st_ino = size, mtime_ns, ino
-
-
-def test_schema_one_file_loads_empty_runs_idents_and_matches(tmp_path):
-    root = _root(tmp_path)
-    p = store_path(root)
-    p.parent.mkdir(parents=True)
-    p.write_text(
-        '{"schema": 1, "runs": {"cmd": ["k", [0, "o", ""], 1, 1]},'
-        ' "idents": {"f.txt": [1, 2, 3, "abc", 9]}}',
-        encoding="utf-8",
-    )
-    s = CensusStore.load(root)
-    assert s.run("cmd") is None
-    assert s.ident("f.txt", _St(1, 2, 3)) is None
-    assert s.match("f.txt", _St(1, 2, 3), "pk") is None
-    assert census_store.STORE_SCHEMA == 2
-
-
-def test_schema_two_file_without_a_matches_map_loads_empty(tmp_path):
-    root = _root(tmp_path)
-    p = store_path(root)
-    p.parent.mkdir(parents=True)
-    p.write_text('{"schema": 2, "runs": {}, "idents": {}}', encoding="utf-8")
-    assert CensusStore.load(root).match("f.txt", _St(1, 2, 3), "pk") is None
-
-
-def test_match_round_trips_through_save(tmp_path):
-    root = _root(tmp_path)
-    _, st = _stat(root)
-    s = CensusStore.load(root)
-    s.put_match("f.txt", st, "pk1", (True, 3, 0), st.st_mtime_ns + 10)
-    s.put_match("f.txt", st, "pk2", (False, 0, 0), st.st_mtime_ns + 11)
-    s.save()
-    t = CensusStore.load(root)
-    assert t.match("f.txt", st, "pk1") == (True, 3, 0)
-    assert t.match("f.txt", st, "pk2") == (False, 0, 0)
-    assert t.match("f.txt", st, "other") is None
-    assert t.match("absent.txt", st, "pk1") is None
-    assert len(t._matches) == 1
-
-
-def test_match_requires_same_stat_and_non_racy(tmp_path):
-    root = _root(tmp_path)
-    _, st = _stat(root)
-    s = CensusStore()
-    s.put_match("f.txt", st, "pk", (True, 1, 0), st.st_mtime_ns + 1)
-    assert s.match("f.txt", st, "pk") == (True, 1, 0)
-    assert s.match("f.txt", _St(st.st_size + 1, st.st_mtime_ns, st.st_ino), "pk") is None
-    assert s.match("f.txt", _St(st.st_size, st.st_mtime_ns + 1, st.st_ino), "pk") is None
-    assert s.match("f.txt", _St(st.st_size, st.st_mtime_ns, st.st_ino + 1), "pk") is None
-    racy = CensusStore()
-    racy.put_match("f.txt", st, "pk", (True, 1, 0), st.st_mtime_ns)
-    assert racy.match("f.txt", st, "pk") is None
-
-
-def test_changed_stat_replaces_the_files_whole_record(tmp_path):
-    s = CensusStore()
-    old = _St(1, 10, 5)
-    new = _St(2, 20, 5)
-    s.put_match("f", old, "a", (True, 1, 0), 100)
-    s.put_match("f", old, "b", (True, 2, 0), 100)
-    s.put_match("f", new, "a", (False, 0, 0), 200)
-    assert s.match("f", old, "a") is None
-    assert s.match("f", new, "a") == (False, 0, 0)
-    assert s.match("f", new, "b") is None
-    assert s._match_entries == 1
-
-
-def test_racy_record_is_not_extended_by_a_later_clean_put(tmp_path):
-    s = CensusStore()
-    st = _St(1, 100, 5)
-    s.put_match("f", st, "a", (True, 1, 0), 100)
-    s.put_match("f", st, "b", (True, 1, 0), 500)
-    assert s.match("f", st, "a") is None
-    assert s.match("f", st, "b") == (True, 1, 0)
-
-
-def test_entries_past_the_limit_are_refused_and_existing_ones_kept(tmp_path, monkeypatch):
-    monkeypatch.setattr(census_store, "MATCH_ENTRY_LIMIT", 3)
-    s = CensusStore()
-    st = _St(1, 10, 5)
-    for i in range(5):
-        s.put_match(f"f{i}", st, "a", (True, 1, 0), 100)
-    assert s._match_entries == 3
-    assert s.match("f0", st, "a") == (True, 1, 0)
-    assert s.match("f4", st, "a") is None
-    s.put_match("f0", st, "a", (False, 0, 0), 100)
-    assert s.match("f0", st, "a") == (False, 0, 0)
-    s.put_match("f0", st, "b", (True, 1, 0), 100)
-    assert s.match("f0", st, "b") is None
-
-
-def test_save_drops_match_records_of_absent_paths(tmp_path):
-    root = _root(tmp_path)
-    p, st = _stat(root)
-    s = CensusStore.load(root)
-    s.put_match("f.txt", st, "pk", (True, 1, 0), st.st_mtime_ns + 5)
-    s.put_match("gone.txt", st, "pk", (True, 1, 0), st.st_mtime_ns + 5)
-    s.save()
-    t = CensusStore.load(root)
-    assert t.match("f.txt", st, "pk") == (True, 1, 0)
-    assert t.match("gone.txt", st, "pk") is None
-    assert t._match_entries == 1
-
-
-def test_a_match_alone_marks_the_store_dirty(tmp_path):
-    root = _root(tmp_path)
-    _, st = _stat(root)
-    s = CensusStore.load(root)
-    s.put_match("f.txt", st, "pk", (True, 1, 0), st.st_mtime_ns + 5)
-    s.save()
-    assert store_path(root).is_file()
-    os.utime(store_path(root), ns=(1_000_000_000, 1_000_000_000))
-    t = CensusStore.load(root)
-    t.put_match("f.txt", st, "pk", (True, 1, 0), st.st_mtime_ns + 5)
-    t.save()
-    assert store_path(root).stat().st_mtime_ns == 1_000_000_000
-
-
-def test_store_at_the_entry_limit_loads_and_saves_inside_its_share_of_the_bar(tmp_path):
-    import time
-
-    root = _root(tmp_path)
-    patterns = [f"{i:016x}" for i in range(12)]
-    files = census_store.MATCH_ENTRY_LIMIT // len(patterns)
-    data_dir = root / "d"
-    data_dir.mkdir()
-    s = CensusStore.load(root)
-    for i in range(files):
-        p = data_dir / f"f{i}.py"
-        p.write_bytes(b"x")
+    d = _shard_dir(root)
+    files = sorted(p.name for p in d.iterdir())
+    assert files == ["p-pa.marshal", "p-pb.marshal", "root.marshal"]
+    for p in d.iterdir():
         os.utime(p, ns=(1_000_000_000, 1_000_000_000))
-        st = p.stat()
-        for pk in patterns:
-            s.put_match(f"d/f{i}.py", st, pk, (True, 3, 0), 2_000_000_000)
-    assert s._match_entries == files * len(patterns)
-    started = time.process_time()
+    census_store._SEEN.clear()
+    t = CensusStore.load(root)
+    t.put_matched("pb", {"y": 2})
+    t.save()
+    changed = sorted(p.name for p in d.iterdir() if p.stat().st_mtime_ns != 1_000_000_000)
+    assert changed == ["p-pb.marshal"]
+    assert sorted(p.name for p in d.iterdir()) == files
+    census_store._SEEN.clear()
+    u = CensusStore.load(root)
+    assert u.matched("pb", "x") == 1 and u.matched("pb", "y") == 2
+    assert u.matched("pa", "o1999") == 1
+
+
+def test_in_process_reuse_skips_the_reread_and_rereads_after_an_external_write(
+        tmp_path, monkeypatch):
+    root = _root(tmp_path)
+    s = CensusStore.load(root)
+    s.put_matched("pk", {"o": 1})
     s.save()
-    loaded = CensusStore.load(root)
-    spent = time.process_time() - started
-    assert len(loaded._matches) == files
-    assert spent < 0.25, spent
-    size = store_path(root).stat().st_size
-    assert size < 8_000_000, size
+    reads = []
+    real = census_store._read_shard
+    monkeypatch.setattr(census_store, "_read_shard", lambda p: reads.append(p) or real(p))
+    t = CensusStore.load(root)
+    assert t.matched("pk", "o") == 1
+    assert reads == []
+    census_store._SEEN.clear()
+    u = CensusStore.load(root)
+    assert u.matched("pk", "o") == 1
+    assert len(reads) == 2
+    import marshal
+
+    (_shard_dir(root) / "p-pk.marshal").write_bytes(
+        marshal.dumps((census_store._header(), {"o": 7, "o2": 2})))
+    reads.clear()
+    v = CensusStore.load(root)
+    assert v.matched("pk", "o") == 7
+    assert len(reads) == 1
+
+
+def test_an_unsaved_mutation_never_leaks_through_the_shared_copy(tmp_path):
+    root = _root(tmp_path)
+    s = CensusStore.load(root)
+    s.put_matched("pk", {"o": 1})
+    s.save()
+    t = CensusStore.load(root)
+    t.put_matched("pk", {"o": 9})
+    assert CensusStore.load(root).matched("pk", "o") == 1
+
+
+def test_gc_oids_drops_dead_oids(tmp_path):
+    root = _root(tmp_path)
+    s = CensusStore.load(root)
+    s.put_matched("pk", {"live": 1, "dead": 2})
+    s.gc_oids({"live"})
+    s.save()
+    census_store._SEEN.clear()
+    t = CensusStore.load(root)
+    assert t.matched("pk", "live") == 1
+    assert t.matched("pk", "dead") is None
+
+
+def test_interim_shims_answer_none_and_write_nothing(tmp_path):
+    root = _root(tmp_path)
+    f = root / "f.txt"
+    f.write_text("x", encoding="utf-8")
+    st = f.stat()
+    s = CensusStore.load(root)
+    s.put_ident("f.txt", st, "abc", st.st_mtime_ns + 10)
+    s.put_match("f.txt", st, "pk", (True, 1, 0), st.st_mtime_ns + 10)
+    assert s.ident("f.txt", st) is None
+    assert s.match("f.txt", st, "pk") is None
+    s.save()
+    assert not _shard_dir(root).exists()
 
 
 def test_generates_is_empty():

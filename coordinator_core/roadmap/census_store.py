@@ -1,89 +1,133 @@
-"""coordinator_core.roadmap.census_store — on-disk store of each census command's
-last completed run and each walked file's identity.
+"""coordinator_core.roadmap.census_store — on-disk store of the census's derived answers.
 
-The store is derived machine state under `.coordinator-local/cache/`,
-rebuildable by running the census, and never a source of truth. Every record is
-checked against its key (a run) or its stat (an identity) before use, so a lost,
-stale or torn store costs a spawn or a hash on the next run and never a wrong
-verdict.
+The store is derived machine state under `.coordinator-local/cache/`, rebuildable by running
+the census, and never a source of truth. Every record is keyed by content (a run by its input
+key, a match count by blob oid, the index fingerprints by the index checksum), so a lost, stale
+or torn store costs a spawn or a read on the next run and never a wrong verdict.
 
-Racy-clean rule (git's): a stored identity is trusted only when the file's
-(size, mtime_ns, ino) equal the stored stat AND the stored mtime_ns is strictly
-older than the moment the identity was computed. A file modified within the same
-timestamp tick as its hash could have changed after the read without moving its
-mtime, so that identity is never trusted.
-
-A file's match records (schema 2) live under one per-file stat identity with a per-pattern map,
-so a file costs one stat tuple however many greps ask about it. The same racy-clean rule gates
-them. `MATCH_ENTRY_LIMIT` bounds the (file x pattern) entries the store admits: past it a new
-entry is refused (decline-to-cache), so load + save never grow into a slower leg.
+Layout (schema 3): the directory `store_path(root).with_suffix("")` holds `root.marshal` (runs,
+index fingerprints, screen memo, cursor, over-bar markers) and one `p-<pattern_key>.marshal`
+shard of `{oid: match_count}` per pattern. Each shard is a marshal of
+`((STORE_SCHEMA, cache_tag), payload)`; a header mismatch or a corrupt shard loads empty.
+Pattern shards load lazily and `save` rewrites dirty shards only.
 """
 
 from __future__ import annotations
 
-import json
+import marshal
 import os
+import re
+import sys
+import time
 from pathlib import Path
-from typing import Optional
+from typing import Collection, Optional
 
 from coordinator_core.lifecycle import main_worktree_root
 from coordinator_core.session.machinery_paths import cache_dir
 
 GENERATES = []
 
-STORE_SCHEMA = 2
+STORE_SCHEMA = 3
 
-#: Most (file x pattern) match entries the store holds. A synthetic store of 32k files x 12
-#: patterns (about 416k entries, 15.6MB) cost 157ms to dump and load once on the reference box;
-#: this cap keeps the same round trip near 40ms.
-MATCH_ENTRY_LIMIT = 100_000
+_ROOT_SHARD = "root.marshal"
+_UNSAFE = re.compile(r"[^A-Za-z0-9_-]")
+
+# path -> (size, mtime_ns, ino, payload): what this process last loaded or saved.
+_SEEN: dict = {}
 
 
 def store_path(repo_root: Path) -> Path:
-    """The store file: the main worktree's cache dir, shared by every linked worktree."""
+    """The legacy store file path; the shard directory is this path without its suffix."""
     return Path(cache_dir(str(main_worktree_root(Path(repo_root))))) / "census-store.json"
 
 
-class CensusStore:
-    """In-memory view of the store file; `save` persists it when something changed."""
+def _header() -> tuple:
+    return (STORE_SCHEMA, sys.implementation.cache_tag)
 
-    def __init__(self, path: Optional[Path] = None,
-                 runs: Optional[dict] = None, idents: Optional[dict] = None,
-                 matches: Optional[dict] = None) -> None:
+
+def _stat_key(path: Path) -> Optional[tuple]:
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    return (st.st_size, st.st_mtime_ns, st.st_ino)
+
+
+def _read_shard(path: Path) -> Optional[dict]:
+    """The shard's payload dict, or None when missing, corrupt or of another header."""
+    try:
+        data = path.read_bytes()
+        header, payload = marshal.loads(data)
+    except Exception:  # noqa: BLE001 — a bad shard is a cold shard
+        return None
+    if header != _header() or not isinstance(payload, dict):
+        return None
+    return payload
+
+
+class CensusStore:
+    """In-memory view of the shard directory; `save` persists the shards that changed."""
+
+    def __init__(self, path: Optional[Path] = None) -> None:
         self._path = path
-        self._runs: dict = runs if runs is not None else {}
-        self._idents: dict = idents if idents is not None else {}
-        self._matches: dict = matches if matches is not None else {}
-        self._match_entries = sum(
-            len(r[4]) for r in self._matches.values() if isinstance(r, list) and len(r) == 5
-            and isinstance(r[4], dict)
-        )
-        self._dirty = False
+        self._dir: Optional[Path] = path.with_suffix("") if path is not None else None
+        self._root: dict = {}
+        self._shards: dict = {}
+        self._owned: set = set()
+        self._dirty_shards: set = set()
+        self._root_dirty = False
+        self._root_owned = False
+        self._load_ms = 0.0
+        if self._dir is not None:
+            self._root = self._fetch(self._dir / _ROOT_SHARD) or {}
 
     @classmethod
     def load(cls, repo_root: Path) -> "CensusStore":
-        """The stored view, or an empty one when the file is missing, unreadable,
-        corrupt or of another schema. Never raises."""
+        """The stored view, or an empty one when nothing readable of this schema is stored.
+        Never raises. A schema-1 or schema-2 `census-store.json` is ignored."""
         try:
-            path = store_path(repo_root)
+            return cls(store_path(repo_root))
         except Exception:  # noqa: BLE001 — an unresolvable root has no store
             return cls()
+
+    def _fetch(self, path: Path) -> Optional[dict]:
+        """The shard payload, reusing this process's copy when the file is unchanged."""
+        started = time.process_time()
         try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-            if not isinstance(data, dict) or data.get("schema") != STORE_SCHEMA:
-                return cls(path)
-            runs, idents, matches = data.get("runs"), data.get("idents"), data.get("matches")
-            if not isinstance(runs, dict) or not isinstance(idents, dict) \
-                    or not isinstance(matches, dict):
-                return cls(path)
-            return cls(path, runs, idents, matches)
-        except Exception:  # noqa: BLE001
-            return cls(path)
+            key = _stat_key(path)
+            if key is None:
+                return None
+            seen = _SEEN.get(path)
+            if seen is not None and seen[:3] == key:
+                return seen[3]
+            payload = _read_shard(path)
+            if payload is not None:
+                _SEEN[path] = (*key, payload)
+            return payload
+        finally:
+            self._load_ms += (time.process_time() - started) * 1000.0
+
+    def load_cost_ms(self) -> int:
+        """Process milliseconds spent reading shards."""
+        return int(self._load_ms)
+
+    # -- root shard ---------------------------------------------------------------------
+
+    def _root_mut(self) -> dict:
+        if not self._root_owned:
+            self._root = {k: (dict(v) if isinstance(v, dict) else v) for k, v in self._root.items()}
+            self._root_owned = True
+        self._root_dirty = True
+        return self._root
+
+    def _root_map(self, name: str) -> dict:
+        v = self._root.get(name)
+        return v if isinstance(v, dict) else {}
 
     def run(self, command: str) -> Optional[tuple]:
         """(key, (returncode, stdout, stderr), run_ms, key_ms) of the command's last
         completed run, or None."""
-        rec = self._runs.get(command)
+        rec = self._root_map("runs").get(command)
         try:
             key, ran, run_ms, key_ms = rec
             rc, out, err = ran
@@ -93,120 +137,173 @@ class CensusStore:
 
     def put_run(self, command: str, key: Optional[str], ran: tuple, run_ms: int,
                 key_ms: Optional[int]) -> None:
-        """Record a COMPLETED run, replacing the command's older record. Never put a
-        timeout, an OSError or a deadline row."""
+        """Record a COMPLETED run, replacing the command's older record and clearing its
+        over-bar marker. Never put a timeout, an OSError or a deadline row."""
         rc, out, err = ran
         rec = [key, [rc, out, err], run_ms, key_ms]
-        if self._runs.get(command) != rec:
-            self._runs[command] = rec
-            self._dirty = True
+        if self._root_map("runs").get(command) != rec:
+            self._root_mut().setdefault("runs", {})[command] = rec
+        if command in self._root_map("over_bar"):
+            del self._root_mut()["over_bar"][command]
 
     def median_run_ms(self) -> Optional[int]:
         """Median run_ms over every stored run, or None when the store holds none."""
         vals = sorted(
-            r[2] for r in self._runs.values()
+            r[2] for r in self._root_map("runs").values()
             if isinstance(r, list) and len(r) == 4 and isinstance(r[2], (int, float))
         )
         if not vals:
             return None
         return int(vals[len(vals) // 2])
 
+    def index_fps(self, checksum: str) -> Optional[dict]:
+        """The operand fingerprints stored for this index checksum, or None."""
+        rec = self._root.get("fps")
+        if isinstance(rec, tuple) and len(rec) == 2 and rec[0] == checksum \
+                and isinstance(rec[1], dict):
+            return rec[1]
+        return None
+
+    def put_index_fps(self, checksum: str, fps: dict) -> None:
+        """Keep the fingerprints for `checksum`, dropping any other checksum's."""
+        if self.index_fps(checksum) != fps:
+            self._root_mut()["fps"] = (checksum, dict(fps))
+
+    def screened(self, command: str) -> Optional[tuple]:
+        """(refusal,) when the command's screen verdict is memoised, else None."""
+        screens = self._root_map("screens")
+        if command in screens:
+            return (screens[command],)
+        return None
+
+    def put_screened(self, command: str, refusal: Optional[str]) -> None:
+        screens = self._root_map("screens")
+        if command not in screens or screens[command] != refusal:
+            self._root_mut().setdefault("screens", {})[command] = refusal
+
+    def cursor(self) -> Optional[str]:
+        """The command the last pass stopped before, or None."""
+        v = self._root.get("cursor")
+        return v if isinstance(v, str) else None
+
+    def put_cursor(self, command: Optional[str]) -> None:
+        if self.cursor() != command:
+            self._root_mut()["cursor"] = command
+
+    def over_bar(self, command: str) -> Optional[int]:
+        """The ms a spawn of this command exceeded the bar by, or None."""
+        v = self._root_map("over_bar").get(command)
+        return v if isinstance(v, int) else None
+
+    def put_over_bar(self, command: str, ms: int) -> None:
+        if self._root_map("over_bar").get(command) != ms:
+            self._root_mut().setdefault("over_bar", {})[command] = ms
+
+    # -- pattern shards -----------------------------------------------------------------
+
+    def _shard(self, pattern_key: str) -> dict:
+        name = f"p-{_UNSAFE.sub('_', pattern_key)}.marshal"
+        shard = self._shards.get(name)
+        if shard is None:
+            shard = {}
+            if self._dir is not None:
+                got = self._fetch(self._dir / name)
+                if isinstance(got, dict):
+                    shard = got
+            self._shards[name] = shard
+        return shard
+
+    @staticmethod
+    def _name(pattern_key: str) -> str:
+        return f"p-{_UNSAFE.sub('_', pattern_key)}.marshal"
+
+    def _shard_mut(self, pattern_key: str) -> dict:
+        shard = self._shard(pattern_key)
+        name = self._name(pattern_key)
+        if name not in self._owned:
+            shard = dict(shard)
+            self._shards[name] = shard
+            self._owned.add(name)
+        return shard
+
+    def matched(self, pattern_key: str, oid: str) -> Optional[int]:
+        """The stored match count of blob `oid` for the pattern, or None when unchecked."""
+        v = self._shard(pattern_key).get(oid)
+        return v if isinstance(v, int) else None
+
+    def put_matched(self, pattern_key: str, counts: dict) -> None:
+        """Record `{oid: match_count}` for the pattern; only this pattern's shard is dirtied."""
+        shard = self._shard(pattern_key)
+        if all(shard.get(o) == c for o, c in counts.items()):
+            return
+        self._shard_mut(pattern_key).update(counts)
+        self._dirty_shards.add(self._name(pattern_key))
+
+    def gc_oids(self, live: Collection[str]) -> None:
+        """Drop match records of oids not in `live`, from the shards loaded in this process."""
+        keep = live if isinstance(live, (set, frozenset)) else set(live)
+        for name in list(self._shards):
+            shard = self._shards[name]
+            dead = [o for o in shard if o not in keep]
+            if not dead:
+                continue
+            if name not in self._owned:
+                shard = dict(shard)
+                self._shards[name] = shard
+                self._owned.add(name)
+            for o in dead:
+                del shard[o]
+            self._dirty_shards.add(name)
+
+    # -- interim shims: C10 deletes them and their last callers ------------------------
+
     def ident(self, rel: str, st: os.stat_result) -> Optional[str]:
-        """The stored identity of `rel`, or None when the stat differs or the record is racy."""
-        rec = self._idents.get(rel)
-        try:
-            size, mtime_ns, ino, ident, computed_at_ns = rec
-        except (TypeError, ValueError):
-            return None
-        if (size, mtime_ns, ino) != (st.st_size, st.st_mtime_ns, st.st_ino):
-            return None
-        if not isinstance(computed_at_ns, int) or not mtime_ns < computed_at_ns:
-            return None
-        return ident
+        return None
 
     def put_ident(self, rel: str, st: os.stat_result, ident: str, computed_at_ns: int) -> None:
-        """Record `rel`'s identity; `computed_at_ns` is taken before the file was read."""
-        rec = [st.st_size, st.st_mtime_ns, st.st_ino, ident, computed_at_ns]
-        if self._idents.get(rel) != rec:
-            self._idents[rel] = rec
-            self._dirty = True
+        return None
 
     def match(self, rel: str, st: os.stat_result, pattern_key: str) -> Optional[tuple]:
-        """The stored per-file result for (`rel`, `pattern_key`), or None when the stat differs,
-        the record is racy or no result was stored. The result is opaque to the store."""
-        rec = self._matches.get(rel)
-        try:
-            size, mtime_ns, ino, computed_at_ns, by_pattern = rec
-            result = by_pattern.get(pattern_key)
-        except (TypeError, ValueError, AttributeError):
-            return None
-        if (size, mtime_ns, ino) != (st.st_size, st.st_mtime_ns, st.st_ino):
-            return None
-        if not isinstance(computed_at_ns, int) or not mtime_ns < computed_at_ns:
-            return None
-        return tuple(result) if isinstance(result, list) else None
+        return None
 
     def put_match(self, rel: str, st: os.stat_result, pattern_key: str, result: tuple,
                   computed_at_ns: int) -> None:
-        """Record `result` for (`rel`, `pattern_key`); `computed_at_ns` is taken before the file
-        was read. A changed stat replaces the file's whole record. A new entry past
-        `MATCH_ENTRY_LIMIT` is refused."""
-        stat_key = [st.st_size, st.st_mtime_ns, st.st_ino]
-        rec = self._matches.get(rel)
-        if isinstance(rec, list) and len(rec) == 5 and isinstance(rec[4], dict) \
-                and rec[:3] == stat_key and isinstance(rec[3], int) and st.st_mtime_ns < rec[3]:
-            by_pattern = rec[4]
-        else:
-            if isinstance(rec, list) and len(rec) == 5 and isinstance(rec[4], dict):
-                self._match_entries -= len(rec[4])
-            by_pattern = {}
-            rec = [*stat_key, computed_at_ns, by_pattern]
-            self._matches[rel] = rec
-            self._dirty = True
-        value = list(result)
-        if by_pattern.get(pattern_key) == value:
-            return
-        if pattern_key not in by_pattern:
-            if self._match_entries >= MATCH_ENTRY_LIMIT:
-                if not by_pattern:
-                    del self._matches[rel]
-                return
-            self._match_entries += 1
-        by_pattern[pattern_key] = value
-        self._dirty = True
+        return None
 
-    def save(self) -> None:
-        """Persist when something changed: temp file in the same directory, then
-        os.replace. OSError is swallowed; the last concurrent writer wins."""
-        if not self._dirty or self._path is None:
-            return
-        self._drop_absent_idents()
-        tmp = self._path.with_suffix(f".{os.getpid()}.tmp")
+    # -- persistence --------------------------------------------------------------------
+
+    def _write(self, path: Path, payload: dict) -> None:
+        tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
         try:
-            self._path.parent.mkdir(parents=True, exist_ok=True)
-            payload = json.dumps(
-                {"schema": STORE_SCHEMA, "runs": self._runs, "idents": self._idents,
-                 "matches": self._matches},
-                sort_keys=True,
-            )
-            tmp.write_text(payload, encoding="utf-8", newline="\n")
-            os.replace(tmp, self._path)
-            self._dirty = False
+            tmp.write_bytes(marshal.dumps((_header(), payload)))
+            os.replace(tmp, path)
         except OSError:
             try:
                 tmp.unlink(missing_ok=True)
             except OSError:
                 pass
+            raise
+        key = _stat_key(path)
+        if key is not None:
+            _SEEN[path] = (*key, payload)
 
-    def _drop_absent_idents(self) -> None:
-        """Forget identities and match records of files that no longer exist under the store's
-        repo."""
-        if self._path is None:
+    def save(self) -> None:
+        """Rewrite the dirty shards (temp file, then os.replace). OSError is swallowed; the
+        last concurrent writer wins. The first save removes a schema-1 or schema-2
+        `census-store.json`."""
+        if self._dir is None or not (self._root_dirty or self._dirty_shards):
             return
-        root = self._path.parent.parent.parent
-        for rel in [r for r in self._idents if not os.path.lexists(root / r)]:
-            del self._idents[rel]
-        for rel in [r for r in self._matches if not os.path.lexists(root / r)]:
-            rec = self._matches.pop(rel)
-            if isinstance(rec, list) and len(rec) == 5 and isinstance(rec[4], dict):
-                self._match_entries -= len(rec[4])
+        try:
+            self._dir.mkdir(parents=True, exist_ok=True)
+            for name in sorted(self._dirty_shards):
+                self._write(self._dir / name, self._shards[name])
+            self._dirty_shards.clear()
+            self._owned.clear()
+            if self._root_dirty or not (self._dir / _ROOT_SHARD).exists():
+                self._write(self._dir / _ROOT_SHARD, self._root)
+                self._root_dirty = False
+                self._root_owned = False
+            if self._path is not None:
+                self._path.unlink(missing_ok=True)
+        except OSError:
+            pass

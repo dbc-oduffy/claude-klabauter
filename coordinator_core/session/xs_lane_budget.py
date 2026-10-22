@@ -282,7 +282,10 @@ def touched_s_or_larger(sid: str, repo_root) -> bool:
         except (OSError, yaml.YAMLError):
             return True
         est = obj.get("estimate") if isinstance(obj, dict) else None
-        tshirt = est.get("tshirt") if isinstance(est, dict) else (obj or {}).get("tshirt") if isinstance(obj, dict) else None
+        if isinstance(est, dict):
+            tshirt = est.get("tshirt")
+        else:
+            tshirt = obj.get("tshirt") if isinstance(obj, dict) else None
         if tshirt != "XS":
             return True
     return False

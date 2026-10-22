@@ -47,6 +47,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     LEG_FOOTPRINT_FILE,
     OUTSIDE_ROW_FOOTPRINT,
     RECORD_DIR_ROOT,
+    RESUME_LEDGER_EM_DISCHARGED_FIELD,
     RUN_DIR_ROOT,
     TERMINAL_RESUME_LEDGER_PARAM,
     record_dir,
@@ -809,6 +810,30 @@ def _withheld_of(root: Path, resume: dict) -> dict:
     return halted_withheld(root / RECORD_DIR_ROOT / run_id)
 
 
+def _em_discharged_rows(resume: object, items: Sequence) -> frozenset:
+    """Ids of ``met`` verdict items an EM-performed row discharged between halts: the resume's
+    ``em_discharged`` map ``{plan row id: text}`` links to an item when the item's ``met_by`` names a
+    discharged row id, or a discharge text names the item's id, as a whole token. The EM's landed
+    commit is the work since the halt, so the row owes no diff. No git, no I/O. The same item
+    must be ``blocking`` to be judged at all, so a discharge never credits a row outside the resume."""
+    raw = resume.get(RESUME_LEDGER_EM_DISCHARGED_FIELD) if isinstance(resume, dict) else None
+    if not isinstance(raw, dict) or not raw:
+        return frozenset()
+
+    def names(text: object, token: str) -> bool:
+        return re.search(rf"(?<![\w-]){re.escape(token)}(?![\w-])", str(text)) is not None
+
+    out: set = set()
+    for item in items:
+        if not isinstance(item, dict) or item.get("status") != "met":
+            continue
+        rid, met_by = str(item.get("id")), item.get("met_by")
+        met_text = " ".join(str(m) for m in met_by) if isinstance(met_by, (list, tuple)) else str(met_by or "")
+        if any(names(met_text, str(row)) or names(text, rid) for row, text in raw.items()):
+            out.add(rid)
+    return frozenset(out)
+
+
 def _unchanged_since_halt(
     root: Path, resume: object, verdict: object, manifest_abs: Optional[Path],
     plan_rel: Optional[str], detail: dict, exclude: Sequence[str] = (),
@@ -826,7 +851,8 @@ def _unchanged_since_halt(
         return []
     from coordinator_core.ops.dispatch_emit.pre_halt_credit import credited_rows
 
-    exempt = {*_verified_only(resume), *credited_rows(resume, verdict)}
+    exempt = {*_verified_only(resume), *credited_rows(resume, verdict),
+              *_em_discharged_rows(resume, items)}
     judged = [
         str(i["id"]) for i in items
         if isinstance(i, dict) and i.get("id") in blocking and i.get("status") in ("met", "post_commit")

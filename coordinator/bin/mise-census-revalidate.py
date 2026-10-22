@@ -131,6 +131,15 @@ def _census():
     return census
 
 
+def _operands():
+    """`coordinator_core.roadmap.census_operands`, resolved after `_census()` has put the engine
+    on the path."""
+    _census()
+    from coordinator_core.roadmap import census_operands
+
+    return census_operands
+
+
 def _inproc():
     """`coordinator_core.roadmap.census_inproc`, resolved after `_census()` has put the engine on
     the path; `evaluate` is read off the module at call time."""
@@ -657,10 +666,6 @@ _DIRECT_KEY = "direct"
 #: engine-lifetime memo cannot grow by one unbounded census output per plan.
 _MEMO_MAX_OUTPUT = 256 * 1024
 
-#: Programs whose reads are exactly what their argv names, or the previous stage's stdout.
-_READERS = frozenset(
-    "grep wc find ls cat jq head tail sort uniq cut tr".split()
-)
 #: git subcommands that read objects reachable from HEAD and nothing else mutable.
 _GIT_HISTORY = frozenset("log show rev-list ls-tree cat-file rev-parse".split())
 _GIT_WIDE_REFS = frozenset({"--all", "--branches", "--tags", "--remotes"})
@@ -669,18 +674,6 @@ _GIT_CLOCK_OPTS = frozenset({"--since", "--until", "--after", "--before", "--max
 _REV = r"(?:HEAD|[0-9a-f]{7,40})(?:[~^]\d*)*"
 _REVSPEC = re.compile(rf"^{_REV}(?:\.{{2,3}}{_REV})?(?::.*)?$")
 _REV_PARSE_OPTS = frozenset({"--short", "--verify", "-q", "--quiet"})
-_FIND_PREDICATES = frozenset(
-    "-name -iname -type -maxdepth -mindepth -path -ipath -not -o -a -print -print0 -empty".split()
-)
-_GREP_VALUE_SHORT = frozenset("mABCefdDgtTjM")
-_GREP_VALUE_LONG = frozenset(
-    "--include --exclude --exclude-dir --max-count --file --regexp --after-context "
-    "--before-context --context --glob --type --type-not --max-depth --threads "
-    "--replace --color --colors --binary-files --devices --directories --label".split()
-)
-_LS_FLAGS = frozenset("1aAR")
-_REDIRECTS = frozenset({">", ">>", "&>", "&>>", ">&"})
-_PUNCT_ONLY = re.compile(r"^[<>&|;()]+$")
 _UNBOUNDED_SHAPE = re.compile(r"[;&`\n]|\|\|")
 
 
@@ -987,26 +980,6 @@ def _shell_expands(command: str, dash_globs_literal: bool = False) -> bool:
     return False
 
 
-def _scrub_redirects(parts: list[str]) -> Optional[list[str]]:
-    """`parts` without `[N]>/dev/null`; None for any other redirect or stray operator."""
-    out: list[str] = []
-    i = 0
-    while i < len(parts):
-        tok = parts[i]
-        if tok in _REDIRECTS:
-            if i + 1 < len(parts) and parts[i + 1] == "/dev/null":
-                if out and len(out[-1]) == 1 and out[-1].isdigit():
-                    out.pop()
-                i += 2
-                continue
-            return None
-        if _PUNCT_ONLY.match(tok):
-            return None
-        out.append(tok)
-        i += 1
-    return out
-
-
 def _git_history_only(args: list[str], head: Optional[str]) -> bool:
     """True when a git stage reads only objects reachable from HEAD, so `head` keys it."""
     if head is None:
@@ -1040,81 +1013,6 @@ def _git_history_only(args: list[str], head: Optional[str]) -> bool:
         elif not (tok.isdigit() or _REVSPEC.match(tok)):
             return False
     return True
-
-
-def _grep_operands(prog: str, args: list[str], first: bool) -> Optional[list[str]]:
-    shorts = [a[1:] for a in args if a.startswith("-") and not a.startswith("--") and a != "-"]
-    longs = [a for a in args if a.startswith("--")]
-    non = [a for a in args if not a.startswith("-")]
-    if "--" in longs or "--files" in longs:
-        return None
-    if any(a in ("--dereference-recursive", "--follow") for a in longs):
-        return None
-    if any(("R" in c or "L" in c) for c in shorts):
-        return None
-    if any(lo.startswith(("--file", "--exclude-from")) for lo in longs):
-        return None
-    value_short = _GREP_VALUE_SHORT
-    for cluster in shorts:
-        for idx, ch in enumerate(cluster):
-            if ch in value_short:
-                if idx == len(cluster) - 1:
-                    return None
-                break
-    if any("=" not in lo and lo in _GREP_VALUE_LONG for lo in longs):
-        return None
-    recursive = any("r" in c for c in shorts) or "--recursive" in longs
-    pattern_opt = (
-        any(("e" in c or "f" in c) for c in shorts)
-        or any(lo.startswith("--regexp=") for lo in longs)
-    )
-    operands = non if pattern_opt else non[1:]
-    if not operands and (recursive or first):
-        return None
-    return operands
-
-
-def _stage_operands(prog: str, args: list[str], first: bool) -> Optional[list[str]]:
-    """The path operands a reader stage names, or None when its read set is not bounded by argv.
-    A stage that reads the tree by default (`grep -r`, `rg`, `find`, `ls` with no operand) reads
-    "." and so is None; a first stage with no operand reads inherited stdin and is None."""
-    if prog in ("grep", "rg"):
-        return _grep_operands(prog, args, first)
-    opts = [a for a in args if a.startswith("-") and a != "-"]
-    if "--" in args:
-        return None
-    if prog == "find":
-        lead: list[str] = []
-        for a in args:
-            if a.startswith("-"):
-                break
-            lead.append(a)
-        preds = [a for a in args[len(lead):] if a.startswith("-")]
-        if any(p not in _FIND_PREDICATES for p in preds) or not lead:
-            return None
-        return lead
-    non = [a for a in args if not a.startswith("-") or a == "-"]
-    non = [a for a in non if a != "-"]
-    if prog == "ls":
-        if any(o.startswith("--") or not set(o[1:]) <= _LS_FLAGS for o in opts) or not non:
-            return None
-        return non
-    if not non and first:
-        return None
-    return non
-
-
-def _operand_rel(token: str) -> Optional[str]:
-    """`token` as a clean repo-relative path, or None for any shape the key will not bound."""
-    if token.startswith(("/", "~")):
-        return None
-    rel = token
-    while rel.startswith("./"):
-        rel = rel[2:]
-    segs = [s for s in rel.split("/") if s]
-    if not segs or segs == ["."] or ".." in segs or ".git" in segs or "." in segs:
-        return None
-    return "/".join(segs)
 
 
 def input_key(
@@ -1153,10 +1051,11 @@ def input_key(
     index is read once per `view`.
     """
     census = _census()
+    ops = _operands()
     if census.is_typed(entry):
         return None
     command = str(entry.get("command") or "").strip()
-    tree = view if view is not None else _TreeView(Path(repo_root))
+    tree =view if view is not None else _TreeView(Path(repo_root))
     if (
         not command
         or _UNBOUNDED_SHAPE.search(command)
@@ -1169,7 +1068,7 @@ def input_key(
     digest = hashlib.sha1()
     uses_head = False
     for index, raw in enumerate(stages):
-        parts = _scrub_redirects(raw)
+        parts = ops.scrub_redirects(raw)
         if not parts:
             return None
         prog, args = parts[0], parts[1:]
@@ -1179,13 +1078,13 @@ def input_key(
                 return None
             uses_head = True
             continue
-        if prog not in _READERS:
+        if prog not in ops.READERS:
             return None
-        operands = _stage_operands(prog, args, index == 0)
+        operands = ops.stage_operands(prog, args, index == 0)
         if operands is None:
             return None
         for token in operands:
-            rel = _operand_rel(token)
+            rel = ops.operand_rel(token)
             ident = tree.path_id(rel) if rel is not None else None
             if ident is None:
                 return None
@@ -1216,7 +1115,7 @@ def _git_stage_refused(entry: dict, head: Optional[str], stage_cache: Optional[d
         return False
     stages = _stages(command, stage_cache)
     for raw in stages or ():
-        parts = _scrub_redirects(raw) if raw else None
+        parts = _operands().scrub_redirects(raw) if raw else None
         if parts and parts[0] == "git" and not _git_history_only(parts[1:], head):
             return True
     return False

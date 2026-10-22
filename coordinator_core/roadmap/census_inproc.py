@@ -7,6 +7,10 @@ decline is always safe; a wrong answer never is, so every doubt declines. Each f
 result is kept in the `CensusStore` under that file's stat identity, so a warm pass re-reads only
 files that changed.
 
+`evaluate_many(commands, files, store, read_budget_s)` answers the same GRAMMAR over the git
+index world (`IndexFiles`: tracked paths and blobs) from per-(pattern, oid) match records, one
+blob batch per slice, and reads PENDING for a command it could not finish within the budget.
+
 GRAMMAR (anything else declines). Examples, one per line, are run against the host shell by
 the parity test:
 
@@ -81,7 +85,7 @@ import stat as _stat
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterable, Optional, Protocol
+from typing import Callable, Collection, Iterable, Optional, Protocol, Union
 
 from coordinator_core.roadmap import census
 from coordinator_core.roadmap.census_store import CensusStore
@@ -458,7 +462,7 @@ def _split_quiet(parts: list) -> tuple:
     return out, quiet
 
 
-def _parse_grep(parts: list, raw: str, root: Path, *, stage_only: bool) -> _Grep:
+def _parse_grep(parts: list, raw: str, root: Optional[Path], *, stage_only: bool) -> _Grep:
     g = _Grep()
     positional: list[str] = []
     rest = False
@@ -483,7 +487,8 @@ def _parse_grep(parts: list, raw: str, root: Path, *, stage_only: bool) -> _Grep
             if not chars or any(c not in allowed for c in chars):
                 raise _Decline
             g.flags.update(chars)
-    if (g.include or g.exclude or g.exclude_dir) and any(e.startswith("--") for e in os.listdir(root)):
+    if root is not None and (g.include or g.exclude or g.exclude_dir) \
+            and any(e.startswith("--") for e in os.listdir(root)):
         raise _Decline
     if not positional:
         raise _Decline
@@ -502,9 +507,11 @@ class _Operand:
     rel: str
     kind: str  # file | dir | absent
     clean: bool  # printed paths equal what the shell prints
+    entries: list = field(default_factory=list)  # index entries (path, oid, mode) at/under rel
 
 
-def _operand(token: str, root: Path, raw: str) -> _Operand:
+def _norm_operand(token: str, raw: str) -> tuple:
+    """`(rel, clean)` for a static relative operand token, or raise _Decline."""
     if not _static(token, raw) or token.startswith(("/", "~", "-")) or re.match(r"^[A-Za-z]:", token):
         raise _Decline
     rel = token
@@ -515,6 +522,11 @@ def _operand(token: str, root: Path, raw: str) -> _Operand:
     parts = rel.split("/")
     if not rel or rel == "." or ".." in parts or "" in parts or "." in parts:
         raise _Decline
+    return rel, clean
+
+
+def _operand(token: str, root: Path, raw: str) -> _Operand:
+    rel, clean = _norm_operand(token, raw)
     try:
         st = os.lstat(root / rel)
     except (FileNotFoundError, NotADirectoryError):
@@ -641,7 +653,11 @@ def _grep_single_file(g: _Grep, op: _Operand, files: FileSource,
         if mode == "l":
             return (0 if matched else 1, f"{op.token}\n" if matched else "", "")
         return (0 if count > 0 else 1, f"{count}\n", "")
-    data = files.read(op.rel)
+    return _print_single(g, m, files.read(op.rel))
+
+
+def _print_single(g: _Grep, m: _Matcher, data: Optional[bytes]) -> Ran:
+    """A content-printing single-file grep over one blob's bytes."""
     if data is None or b"\0" in data[:_BINARY_PROBE]:
         raise _Decline
     try:
@@ -689,11 +705,13 @@ def _filter_stage(parts: list, raw: str, lines: list, root: Path) -> list:
     return kept
 
 
-def _find_lines(parts: list, raw: str, root: Path, quiet: bool) -> list:
+def _find_spec(parts: list, raw: str, make_operand) -> tuple:
+    """`(operands, keep)` for `find OPERAND... [-name G] [-type f|d]`; `keep(kind, name)` is the
+    predicate chain."""
     i = 1
     operands: list[_Operand] = []
     while i < len(parts) and not parts[i].startswith("-"):
-        operands.append(_operand(parts[i], root, raw))
+        operands.append(make_operand(parts[i]))
         i += 1
     names: list[str] = []
     types: list[str] = []
@@ -713,6 +731,11 @@ def _find_lines(parts: list, raw: str, root: Path, quiet: bool) -> list:
     def keep(kind: str, name: str) -> bool:
         return all(t == kind for t in types) and all(fnmatch.fnmatchcase(name, g) for g in names)
 
+    return operands, keep
+
+
+def _find_lines(parts: list, raw: str, root: Path, quiet: bool) -> list:
+    operands, keep = _find_spec(parts, raw, lambda t: _operand(t, root, raw))
     out: list[bytes] = []
     for op in operands:
         if op.kind == "absent":
@@ -745,11 +768,15 @@ def _find_lines(parts: list, raw: str, root: Path, quiet: bool) -> list:
     return out
 
 
-def _ls_lines(parts: list, raw: str, root: Path, quiet: bool) -> list:
+def _ls_arg(parts: list) -> str:
     args = [t for t in parts[1:] if t != "-1"]
     if len(args) != 1 or args[0].startswith("-"):
         raise _Decline
-    op = _operand(args[0], root, raw)
+    return args[0]
+
+
+def _ls_lines(parts: list, raw: str, root: Path, quiet: bool) -> list:
+    op = _operand(_ls_arg(parts), root, raw)
     if op.kind == "absent":
         if not quiet:
             raise _Decline
@@ -776,7 +803,9 @@ def _wc_single(parts: list, raw: str, files: FileSource) -> Ran:
     return (0, f"{newlines} {op.token}\n", "")
 
 
-def _evaluate(command: str, files: FileSource, store: Optional[CensusStore]) -> Ran:
+def _split_command(command: str) -> tuple:
+    """`(stages without 2>/dev/null, per-stage quiet flags)` of a screened single pipeline, or
+    raise _Decline."""
     if census.screen(command) is not None:
         raise _Decline
     if any(t in command for t in ("&&", "||", ";", "\n", "\r")):
@@ -794,7 +823,11 @@ def _evaluate(command: str, files: FileSource, store: Optional[CensusStore]) -> 
         raise _Decline
     if any(not st for st in cleaned):
         raise _Decline
-    quiets = [n > 0 for n in removed]
+    return cleaned, [n > 0 for n in removed]
+
+
+def _evaluate(command: str, files: FileSource, store: Optional[CensusStore]) -> Ran:
+    cleaned, quiets = _split_command(command)
     root = Path(files.root)
     heads = [st[0] for st in cleaned]
     if len(cleaned) == 1:
@@ -838,3 +871,382 @@ def evaluate(command: str, files: FileSource, store: Optional[CensusStore]) -> O
         return _evaluate(command, files, store)
     except Exception:  # noqa: BLE001 -- any doubt is a decline; the caller spawns
         return None
+
+
+_SLICE = 256
+_WC_KEY = "wc-l"
+_SYMLINK = "120000"
+_GITLINK = "160000"
+
+
+class _Pending:
+    """Type of PENDING."""
+
+    def __repr__(self) -> str:
+        return "PENDING"
+
+
+PENDING = _Pending()
+
+
+class IndexFiles(Protocol):
+    """The index world `evaluate_many` reads: tracked paths and their blobs, never the worktree."""
+
+    def files(self, rel: str) -> list:
+        """Tracked `(path, oid)` at or under `rel`, sorted; a third element, the git mode string,
+        is read when present (`120000` symlink is skipped under -r and declined as an operand)."""
+
+    def read_blobs(self, oids: Collection[str]) -> dict:
+        """`{oid: bytes}` for every oid asked, in one call."""
+
+
+class MatchStore(Protocol):
+    def matched(self, pattern_key: str, oid: str) -> Optional[int]: ...
+
+    def put_matched(self, pattern_key: str, counts: dict) -> None: ...
+
+
+class _Newlines:
+    """Matcher stand-in recording a blob's newline count under the reserved `wc-l` key."""
+
+    key = _WC_KEY
+
+    def scan(self, data: bytes) -> tuple:
+        n = data.count(b"\n")
+        return (n > 0, n, 0)
+
+
+_NEWLINES = _Newlines()
+
+
+def _pack(res: tuple) -> int:
+    """`(matched, count, kind)` as one non-negative int: count+1 in the high digits, kind (0-2)
+    and matched (0 undecidable, 1 no, 2 yes) in the low twelve."""
+    matched, count, kind = res
+    return (count + 1) * 12 + kind * 4 + (0 if matched is None else 2 if matched else 1)
+
+
+def _unpack(v: int) -> tuple:
+    return ([None, False, True][v % 4], v // 12 - 1, (v // 4) % 3)
+
+
+def _valid(v: object) -> bool:
+    return isinstance(v, int) and not isinstance(v, bool) and v >= 0 and v % 4 != 3 \
+        and (v // 4) % 3 != 3
+
+
+def _cpu_s() -> float:
+    t = os.times()
+    return t.user + t.system + t.children_user + t.children_system
+
+
+@dataclass
+class _Plan:
+    needs: list  # (matcher, oid) records the answer is composed from
+    raw: list  # oids whose bytes the answer prints from
+    finish: Callable  # (get, rawget) -> Ran; raises _Decline
+
+
+def _entries(files: IndexFiles, rel: str) -> list:
+    out = []
+    for e in files.files(rel):
+        path, oid = e[0], e[1]
+        mode = str(e[2]) if len(e) > 2 else ""
+        if mode == _GITLINK:
+            continue
+        if path == rel or path.startswith(rel + "/"):
+            out.append((path, oid, mode))
+    return out
+
+
+def _operand_ix(token: str, files: IndexFiles, raw: str) -> _Operand:
+    rel, clean = _norm_operand(token, raw)
+    entries = _entries(files, rel)
+    if not entries:
+        return _Operand(token, rel, "absent", clean)
+    if any(p == rel for p, _, _ in entries):
+        return _Operand(token, rel, "file", clean, [e for e in entries if e[0] == rel])
+    return _Operand(token, rel, "dir", clean, entries)
+
+
+def _selected_ix(g: _Grep, ops: list) -> list:
+    """`(rel, oid)` of every tracked file the grep reads, with its filters applied."""
+    chosen: list = []
+    for op in ops:
+        if op.kind == "absent":
+            if not g.quiet:
+                raise _Decline
+            continue
+        if op.kind == "file":
+            if g.include or g.exclude or op.entries[0][2] == _SYMLINK:
+                raise _Decline
+            chosen.append((op.rel, op.entries[0][1]))
+            continue
+        if "r" not in g.flags:
+            raise _Decline
+        base = op.rel.rsplit("/", 1)[-1]
+        if any(fnmatch.fnmatchcase(base, d) for d in g.exclude_dir):
+            raise _Decline
+        prefix = len(op.rel) + 1
+        for rel, oid, mode in op.entries:
+            if mode == _SYMLINK:
+                continue
+            name = rel.rsplit("/", 1)[-1]
+            if any(fnmatch.fnmatchcase(d, glob) for d in rel[prefix:].split("/")[:-1]
+                   for glob in g.exclude_dir):
+                continue
+            if g.include and not any(fnmatch.fnmatchcase(name, p) for p in g.include):
+                continue
+            if any(fnmatch.fnmatchcase(name, p) for p in g.exclude):
+                continue
+            chosen.append((rel, oid))
+    return chosen
+
+
+def _plan_grep_pipeline(g: _Grep, ops: list, cleaned: list, command: str) -> _Plan:
+    m = _matcher(g.pattern, g.dialect, ignore="i" in g.flags, word="w" in g.flags,
+                 invert="v" in g.flags, only="o" in g.flags)
+    if m is None:
+        raise _Decline
+    mode = _mode(g)
+    chosen = _selected_ix(g, ops)
+    names_needed = len(cleaned) > 2
+    if names_needed and (not all(op.clean for op in ops) or (
+            "r" in g.flags and any(op.kind == "file" for op in ops))):
+        raise _Decline
+    prefixed = "h" not in g.flags and (
+        "r" in g.flags and any(op.kind == "dir" for op in ops) or len(ops) > 1
+    )
+    for parts in cleaned[1:-1]:
+        _filter_stage(parts, command, [], None)
+
+    def finish(get, rawget) -> Ran:
+        lines: list[bytes] = []
+        for rel, oid in chosen:
+            matched, count, kind = get(m.key, oid)
+            if matched is None:
+                raise _Decline
+            if mode == "l":
+                if matched:
+                    lines.append(os.fsencode(rel))
+            elif mode == "c":
+                if count < 0:
+                    raise _Decline
+                text = f"{rel}:{count}" if prefixed else str(count)
+                lines.append(os.fsencode(text))
+            else:
+                if names_needed:
+                    raise _Decline
+                if count < 0 or (matched and kind != 0):
+                    raise _Decline
+                lines.extend(b"" for _ in range(count))
+        for parts in cleaned[1:-1]:
+            lines = _filter_stage(parts, command, lines, None)
+        return (0, f"{len(lines)}\n", "")
+
+    return _Plan([(m, oid) for _, oid in chosen], [], finish)
+
+
+def _plan_single(g: _Grep, op: _Operand) -> _Plan:
+    if op.kind != "file" or "r" in g.flags or g.include or g.exclude or g.exclude_dir:
+        raise _Decline
+    _, oid, emode = op.entries[0]
+    if emode == _SYMLINK:
+        raise _Decline
+    m = _matcher(g.pattern, g.dialect, ignore="i" in g.flags, word="w" in g.flags,
+                 invert="v" in g.flags, only="o" in g.flags)
+    if m is None:
+        raise _Decline
+    mode = _mode(g)
+    if mode == "print":
+        return _Plan([], [oid], lambda get, rawget: _print_single(g, m, rawget(oid)))
+
+    def finish(get, rawget) -> Ran:
+        matched, count, _ = get(m.key, oid)
+        if matched is None or (mode == "c" and count < 0):
+            raise _Decline
+        if mode == "l":
+            return (0 if matched else 1, f"{op.token}\n" if matched else "", "")
+        return (0 if count > 0 else 1, f"{count}\n", "")
+
+    return _Plan([(m, oid)], [], finish)
+
+
+def _plan_wc(parts: list, raw: str, files: IndexFiles) -> _Plan:
+    if len(parts) != 3 or parts[1] != "-l":
+        raise _Decline
+    op = _operand_ix(parts[2], files, raw)
+    if op.kind != "file" or op.entries[0][2] == _SYMLINK:
+        raise _Decline
+    oid = op.entries[0][1]
+
+    def finish(get, rawget) -> Ran:
+        return (0, f"{get(_WC_KEY, oid)[1]} {op.token}\n", "")
+
+    return _Plan([(_NEWLINES, oid)], [], finish)
+
+
+def _find_names(parts: list, raw: str, files: IndexFiles, quiet: bool) -> list:
+    operands, keep = _find_spec(parts, raw, lambda t: _operand_ix(t, files, raw))
+    out: list[bytes] = []
+    for op in operands:
+        if op.kind == "absent":
+            if not quiet:
+                raise _Decline
+            continue
+        if op.kind == "file" and op.entries[0][2] == _SYMLINK:
+            raise _Decline
+        if keep("f" if op.kind == "file" else "d", op.rel.rsplit("/", 1)[-1]):
+            out.append(os.fsencode(op.token))
+        if op.kind != "dir":
+            continue
+        dirs = set()
+        for path, _, mode in op.entries:
+            comps = path[len(op.rel) + 1:].split("/")
+            for k in range(1, len(comps)):
+                dirs.add(tuple(comps[:k]))
+            if keep("l" if mode == _SYMLINK else "f", comps[-1]):
+                out.append(os.fsencode(op.token + "/" + "/".join(comps)))
+        out.extend(os.fsencode(op.token + "/" + "/".join(d)) for d in sorted(dirs)
+                   if keep("d", d[-1]))
+    return out
+
+
+def _ls_names(parts: list, raw: str, files: IndexFiles, quiet: bool) -> list:
+    op = _operand_ix(_ls_arg(parts), files, raw)
+    if op.kind == "absent":
+        if not quiet:
+            raise _Decline
+        return []
+    if op.kind == "file":
+        return [os.fsencode(op.token)]
+    names = {p[len(op.rel) + 1:].split("/", 1)[0] for p, _, _ in op.entries}
+    return [os.fsencode(n) for n in sorted(names) if not n.startswith(".")]
+
+
+def _plan(command: str, files: IndexFiles) -> _Plan:
+    cleaned, quiets = _split_command(command)
+    heads = [st[0] for st in cleaned]
+    if len(cleaned) == 1:
+        if heads[0] == "wc":
+            return _plan_wc(cleaned[0], command, files)
+        if heads[0] != "grep":
+            raise _Decline
+        g = _parse_grep(cleaned[0], command, None, stage_only=False)
+        g.quiet = quiets[0]
+        if len(g.operands) != 1:
+            raise _Decline
+        return _plan_single(g, _operand_ix(g.operands[0], files, command))
+    if cleaned[-1] != ["wc", "-l"] or any(h != "grep" for h in heads[1:-1]):
+        raise _Decline
+    if heads[0] == "grep":
+        g = _parse_grep(cleaned[0], command, None, stage_only=False)
+        g.quiet = quiets[0]
+        if not g.operands:
+            raise _Decline
+        ops = [_operand_ix(t, files, command) for t in g.operands]
+        return _plan_grep_pipeline(g, ops, cleaned, command)
+    if heads[0] == "find":
+        lines = _find_names(cleaned[0], command, files, quiets[0])
+    elif heads[0] == "ls":
+        lines = _ls_names(cleaned[0], command, files, quiets[0])
+    else:
+        raise _Decline
+    for parts in cleaned[1:-1]:
+        lines = _filter_stage(parts, command, lines, None)
+    answer = (0, f"{len(lines)}\n", "")
+    return _Plan([], [], lambda get, rawget: answer)
+
+
+def evaluate_many(commands: list, files: IndexFiles, store: Optional[MatchStore],
+                  read_budget_s: float) -> dict:
+    """`{command: Ran | None | PENDING}` for each command, answered from the git index world.
+
+    None declines (the caller spawns or reads UNDECIDABLE); PENDING means `read_budget_s` of
+    process time ran out before every blob the command needs was matched, and a later call
+    resumes from the recorded per-(pattern, oid) counts. Every command is parsed once, the oids
+    lacking a record for any pending pattern are fetched in ONE `read_blobs` per slice, and each
+    blob is tested against every pattern that needs it. At least one slice runs per call, so
+    coverage advances however small the budget. An operand with no index entry reads as absent:
+    the caller classifies untracked operands before asking. Never spawns itself."""
+    plans: dict = {}
+    out: dict = {}
+    for command in dict.fromkeys(commands):
+        try:
+            plans[command] = _plan(command, files)
+        except Exception:  # noqa: BLE001 -- any doubt is a decline
+            out[command] = None
+    memo: dict = {}
+    todo: dict = {}
+    wants_raw: set = set()
+    for plan in plans.values():
+        for m, oid in plan.needs:
+            if (m.key, oid) in memo or m.key in todo.get(oid, ()):
+                continue
+            v = store.matched(m.key, oid) if store is not None else None
+            if _valid(v):
+                memo[(m.key, oid)] = v
+            else:
+                todo.setdefault(oid, {})[m.key] = m
+        for oid in plan.raw:
+            wants_raw.add(oid)
+            todo.setdefault(oid, {})
+    rawdata: dict = {}
+    failed: set = set()
+    order = list(todo)
+    started = _cpu_s()
+    for i in range(0, len(order), _SLICE):
+        if i and _cpu_s() - started >= read_budget_s:
+            break
+        batch = order[i:i + _SLICE]
+        try:
+            blobs = files.read_blobs(batch)
+        except Exception:  # noqa: BLE001
+            failed.update(batch)
+            continue
+        fresh: dict = {}
+        for oid in batch:
+            data = blobs.get(oid)
+            if data is None:
+                failed.add(oid)
+                continue
+            try:
+                packed = {key: _pack(m.scan(data)) for key, m in todo[oid].items()}
+            except Exception:  # noqa: BLE001
+                failed.add(oid)
+                continue
+            for key, v in packed.items():
+                memo[(key, oid)] = v
+                fresh.setdefault(key, {})[oid] = v
+            if oid in wants_raw:
+                rawdata[oid] = data
+        if store is not None:
+            for key, counts in fresh.items():
+                store.put_matched(key, counts)
+
+    def get(key: str, oid: str) -> tuple:
+        return _unpack(memo[(key, oid)])
+
+    for command, plan in plans.items():
+        state = "ready"
+        for m, oid in plan.needs:
+            if (m.key, oid) not in memo:
+                state = "declined" if oid in failed else "pending"
+                if state == "declined":
+                    break
+        if state != "declined":
+            for oid in plan.raw:
+                if oid not in rawdata:
+                    state = "declined" if oid in failed else "pending"
+                    if state == "declined":
+                        break
+        if state == "declined":
+            out[command] = None
+        elif state == "pending":
+            out[command] = PENDING
+        else:
+            try:
+                out[command] = plan.finish(get, rawdata.__getitem__)
+            except Exception:  # noqa: BLE001
+                out[command] = None
+    return {c: out[c] for c in dict.fromkeys(commands)}

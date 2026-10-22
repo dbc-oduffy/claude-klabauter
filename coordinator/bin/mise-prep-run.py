@@ -646,7 +646,7 @@ def _census_pass(
     A budget > 0 issues exactly one call; 0 repeats, the op spending its own default per call,
     until `pending` is empty or a call makes no progress.
     """
-    totals = {**dict.fromkeys(_CENSUS_TOTAL_KEYS, 0), "order": "input"}
+    totals = {**dict.fromkeys(_CENSUS_TOTAL_KEYS, 0), "order": "input", "untracked": []}
     todo = [
         r["plan"] for r in rows
         if r["outcome"] != "PROBE-FAILED"
@@ -679,6 +679,9 @@ def _census_pass(
             value = reply.get(key)
             if isinstance(value, (int, float)) and not isinstance(value, bool):
                 totals[key] += value
+        for item in reply.get("untracked") or []:
+            if isinstance(item, dict) and item not in totals["untracked"]:
+                totals["untracked"].append(item)
         if reply.get("order") in ("measured", "input"):
             totals["order"] = reply["order"]
         still = reply.get("pending")
@@ -983,6 +986,7 @@ def main(argv=None) -> int:
                     "censusOrder": census_totals["order"],
                     "censusPlans": len(census_rows),
                     "censusCovered": census_covered,
+                    "censusUntracked": len(census_totals["untracked"]),
                     "skipped": [{"plan": p, "outcome": "SKIPPED-OUT-OF-TREE"} for p in skipped],
                     "seam": _seam_spell(seam["verdict"]),
                     "seamFix": seam_fix,
@@ -1006,6 +1010,11 @@ def main(argv=None) -> int:
         print(f"mise-prep-run: {len(certified)} of {len(rows)} plan(s) {verb}{mode}{work}")
         print(f"census: {census_totals['process_ms']}ms process over the set")
         print(f"census: {census_covered} of {len(census_rows)} plans covered")
+        for item in census_totals["untracked"]:
+            print(
+                f"census: untracked operand {item.get('operand')} in {item.get('plan')} "
+                f"[{item.get('index')}] resolves UNDECIDABLE; count over a tracked path"
+            )
         if seam_fix.get("notRun"):
             print(f"seam-fix: {seam_fix['notRun']}")
         else:

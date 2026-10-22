@@ -138,8 +138,8 @@ COMPOSITION WITH `hand_dispatch_deny`. `check()` runs
 `hooks.hand_dispatch_deny.hand_dispatch_deny` before the roster leg: a deny is
 returned at once (no roster read), a warn-level advisory is merged onto the
 later legs' result. `hooks.general_purpose_code_handoff_deny` (a top-level
-general-purpose dispatch handing over a code edit) runs in the same slot. It lives here because this is the one PreToolUse(Agent)
-engine leg DoE already runs; no new registration is needed.
+general-purpose dispatch handing over a code edit) runs in the same slot. Both live here because
+this is the one PreToolUse(Agent) engine leg DoE already runs; no new registration is needed.
 """
 
 from __future__ import annotations

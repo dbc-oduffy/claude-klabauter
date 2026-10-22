@@ -133,13 +133,14 @@ Negative-spec:
 from __future__ import annotations
 
 import json
+import os
 import re
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 import yaml
 
-from coordinator_core.roadmap import census
+from coordinator_core.roadmap import census, census_operands
 from coordinator_core.roadmap.post_stamp_clause import (
     post_stamp_body_refusal,
     post_stamp_refusal,
@@ -840,8 +841,14 @@ def _census(fm: Dict[str, Any], repo_root: Optional[Path] = None) -> Dict[str, A
     bad: List[str] = []
     unscreenable: List[str] = []
     tracked: Optional[frozenset] = None
+    operand_rels: Dict[int, List[str]] = {}
     if repo_root is not None:
-        # One ls-files for every python target in the plan, not one per entry.
+        for i, e in enumerate(entries):
+            if isinstance(e, dict) and not census.is_typed(e):
+                rels = census_operands.command_operands(str(e.get("command") or "")) or []
+                if rels:
+                    operand_rels[i] = rels
+        # One ls-files for every python target and every operand in the plan, not one per entry.
         tracked = census.tracked_targets(
             repo_root,
             [
@@ -849,7 +856,8 @@ def _census(fm: Dict[str, Any], repo_root: Optional[Path] = None) -> Dict[str, A
                 for e in entries
                 if isinstance(e, dict) and not census.is_typed(e)
                 for c in census.python_candidates(str(e.get("command") or ""), repo_root)
-            ],
+            ]
+            + [r for rels in operand_rels.values() for r in rels],
         )
     for index, entry in enumerate(entries):
         if not isinstance(entry, dict):
@@ -876,18 +884,53 @@ def _census(fm: Dict[str, Any], repo_root: Optional[Path] = None) -> Dict[str, A
         refusal = census.screen(str(entry["command"]), repo_root, tracked)
         if refusal:
             unscreenable.append(f"[{index}] {refusal}")
+    untracked = _untracked_operand_warnings(operand_rels, tracked, repo_root)
+
+    def _warned(result: Dict[str, Any]) -> Dict[str, Any]:
+        # Non-verdict: never alters status, kind or withheld.
+        result["warnings"] = untracked
+        return result
+
     if bad:
-        return _defect("census-incomplete", "; ".join(bad))
+        return _warned(_defect("census-incomplete", "; ".join(bad)))
     if unscreenable:
         # The revalidator refuses exactly these at fire time, so a stamp here would certify a
         # premise nothing can re-ask.
-        return _defect(
-            "census-unscreenable",
-            "; ".join(unscreenable) + f" -- allowed form: {census.ALLOWED_FORM}",
+        return _warned(
+            _defect(
+                "census-unscreenable",
+                "; ".join(unscreenable) + f" -- allowed form: {census.ALLOWED_FORM}",
+            )
         )
     if not entries:
-        return _pass("declared-empty — this plan rests on no counted premise")
-    return _pass(f"{len(entries)} re-runnable census entr(ies)")
+        return _warned(_pass("declared-empty — this plan rests on no counted premise"))
+    return _warned(_pass(f"{len(entries)} re-runnable census entr(ies)"))
+
+
+def _untracked_operand_warnings(
+    operand_rels: Dict[int, List[str]],
+    tracked: Optional[frozenset],
+    repo_root: Optional[Path],
+) -> List[str]:
+    """One warning per census operand that is a live-state root, or is neither tracked nor
+    holds a tracked path and exists on disk. Spawns nothing: `tracked` is the plan's one batch."""
+    if repo_root is None or tracked is None:
+        return []
+    out: List[str] = []
+    for index, rels in sorted(operand_rels.items()):
+        for rel in rels:
+            live = rel in census_operands.LIVE_STATE_ROOTS
+            if not live:
+                prefix = rel + "/"
+                if rel in tracked or any(t.startswith(prefix) for t in tracked):
+                    continue
+                if not os.path.lexists(os.path.join(str(repo_root), rel)):
+                    continue
+            out.append(
+                f"[{index}] census operand {rel} is not tracked: this entry resolves UNDECIDABLE "
+                "at fire time; count over a tracked path"
+            )
+    return out
 
 
 # ---------------------------------------------------------------------------

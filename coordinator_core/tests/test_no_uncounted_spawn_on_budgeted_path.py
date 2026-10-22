@@ -1311,6 +1311,32 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
         "coordinator_core/ops/group_em_enter.py",
         ("_group_em_enter",),
     ),
+    # Six live ops measured to reach an EMPTY function-granular spawn set; enrolled with no
+    # `_LEGITIMIZED_SITES` entry, same adjudication as above.
+    "fleet.migrate_prose_queue": (
+        "coordinator_core/ops/fleet/migrate_prose_queue.py",
+        ("_handler",),
+    ),
+    "hooks.subagent_arrival_record": (
+        "coordinator_core/hooks/subagent_arrival_record.py",
+        ("_handler",),
+    ),
+    "plan.claim_register_rows": (
+        "coordinator_core/ops/dispatch_emit/revise_absorb.py",
+        ("_claim_handler",),
+    ),
+    "roadmap.link_plan": (
+        "coordinator_core/ops/roadmap_link_plan.py",
+        ("_handler",),
+    ),
+    "session.poll_share": (
+        "coordinator_core/ops/session/poll_share.py",
+        ("_handler",),
+    ),
+    "workflow.pending_revisions": (
+        "coordinator_core/ops/dispatch_emit/revise_absorb.py",
+        ("_pending_handler",),
+    ),
     #
     # D6/D11 (2026-08-22-the-composition-gate-counts-processes-across-the-op-graph, this
     # chunk) + the 2026-08-30 two-ratchet-gates close: the registry divergence check
@@ -3334,9 +3360,10 @@ def test_cluster_d5_open_disposition_matches_live_measurement():
     # onto `git/run.py::run_git` (a D3 file), so `handoff.columns` reaches no D5 site.
     # 33 -> 32 on 2026-10-03: `deliverable.cascade_terminal` re-registered from
     # `cascade_terminal_op.py`, which never reaches `archive_stamp.py::_run_git`.
+    # 34 -> 33: `handoff.archive_transition` no longer reaches `archive_stamp.py::_run_git`.
     assert total_pairs == 33, (
         f"_CLUSTER_D5_OPEN_DISPOSITION now totals {total_pairs} (op, site) pairs, not the "
-        "33 measured 2026-10-22 after handoff.archive_transition stopped reaching archive_stamp.py::_run_git; 34 measured 2026-10-12 after f10d5c0233 put the batched files_citing prefetch on distill.apply_disposal and distill.assemble_disposal_manifest; 32 measured 2026-10-03 (see the comment above); 33 measured 2026-10-02 after handoff.columns' D5 site moved onto run_git; 34 left after changelog.upsert_reviewed and a since-retired completion op stopped reaching "
+        "33 measured 2026-10-22 after handoff.archive_transition stopped reaching its D5 site; 34 measured 2026-10-12 after f10d5c0233 put the batched files_citing prefetch on distill.apply_disposal and distill.assemble_disposal_manifest; 32 measured 2026-10-03 (see the comment above); 33 measured 2026-10-02 after handoff.columns' D5 site moved onto run_git; 34 left after changelog.upsert_reviewed and a since-retired completion op stopped reaching "
         "their D5 sites (was 38 after the 2026-08-30 rot sweep dropped handoff.reconcile_close_terminal's "
         "single pair -- the op is deleted from the tree and absent from ops/_registry_map.py, "
         "so its row could only ever read a missing file. 39 - 1 = 38. Update this constant "
@@ -5410,9 +5437,7 @@ def test_dynamic_argv0_sites_are_dispositioned_on_their_own_terms():
     assert len(_DYNAMIC_ARGV0_DISPOSITIONS) == 32, (
         f"_DYNAMIC_ARGV0_DISPOSITIONS carries {len(_DYNAMIC_ARGV0_DISPOSITIONS)} "
         "entries, not the 32 <dynamic>-argv0 sites tranche dyn's inventory now "
-        "names (30 until 2026-10-22, when app_session.validate landed in 826a30056e and added the live "
-        "`app_session.py::_spawn_runner` and `::_validate` sites, both present in the frozen inventory); "
-        "(31 until 2026-10-12, when regenerate_cache.py::_find_uproject was deleted) -- the dispatch brief's EM-measured figure was 43, the 2026-08-29 "
+        "names (30 until 2026-10-22, when app_session.py::_spawn_runner and ::_validate were added; 31 until 2026-10-12, when regenerate_cache.py::_find_uproject was deleted) -- the dispatch brief's EM-measured figure was 43, the 2026-08-29 "
         "gravestone deletion of review_trail_readjudication_report.py "
         "(docs/plans/2026-08-29-the-gravestoned-review-trail-surface-is-deleted.md, "
         "DR-374's last row) removed its `_run` site along with the whole module, "
@@ -7251,7 +7276,7 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     # launch (spawn_detached from _launch_close_job); typical landing: zero git. The walk also
     # reaches archive_stamp._run_git, commit_signing.write_signed_commit_object and
     # git_native._invoke through shared helpers: five sites, as the op it replaces reached.
-    "dispatch.land_run": 5,
+    "dispatch.land_run": 4,
     "dispatch.reap_abandoned_runs": 1,
     "dispatch.commit_halted_rows": 1,
     "docindex.emit": 1,
