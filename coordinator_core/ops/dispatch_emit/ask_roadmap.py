@@ -68,7 +68,18 @@ def approver_for(interaction_mode: object) -> str:
     return _PM_APPROVER if interaction_mode == "hands-on" else _APM_APPROVER
 
 
-ROADMAP_DECLS = ("  let _rb = null;", "  const _ready = [];", "  const _unfired = [];")
+ROADMAP_DECLS = ("  let _rb = null;", "  const _ready = [];", "  const _unfired = [];", "  const _pulled = [];")
+
+NO_READY_LITERAL = "plan-blitz reported no ready plan"
+
+
+def no_ready_reason_js(pulled_js: str) -> str:
+    """JS expression: the no-ready literal, then `: ` and the string `reason` of each entry of
+    `pulled_js` joined by `; `; the bare literal when none carries one."""
+    return (
+        f"('{NO_READY_LITERAL}' + (({pulled_js} ?? []).map((p) => p && p.reason).filter((r) => typeof r === 'string' && r)"
+        ".reduce((a, r) => a ? a + '; ' + r : ': ' + r, '')))"
+    )
 
 #: The run's one commit: lands the planning record, then fans the ready plans out as sibling runs.
 def roadmap_next_action_js(script_path: Optional[str] = None, interaction_mode: object = None) -> str:
@@ -144,6 +155,7 @@ def roadmap_stage_lines(
         "    if ((_pb?.surfacedToPm ?? []).length) { "
         + halt("'plan-blitz surfaced items to the PM'") + " _halted.surfaced = _pb.surfacedToPm; break; }",
         "    for (const r of (_pb?.ready ?? [])) _ready.push({ wave: w.index, planPath: (r && typeof r === 'object') ? r.planPath : r });",
+        "    for (const p of (_pb?.pulled ?? [])) _pulled.push(p);",
         "  }",
         "  for (const w of _waves.slice(_ran)) {",
         "    for (const b of (w.batons ?? [])) {",
@@ -151,7 +163,7 @@ def roadmap_stage_lines(
         "      _unfired.push({ wave: w.index, ...(_b ? { baton: String(_b) } : {}), ...(_p ? { plan: _p } : {}), reason: 'wave-not-run' });",
         "    }",
         "  }",
-        "  if (!_halted && !_ready.length) { " + halt("'plan-blitz reported no ready plan'") + " }",
+        "  if (!_halted && !_ready.length) { " + halt(no_ready_reason_js("_pulled")) + " }",
         "  }",
         f"  if (!_halted) {{ _nextAction = {roadmap_next_action_js(script_path, interaction_mode)}; }}",
     ]

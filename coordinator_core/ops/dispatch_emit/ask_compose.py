@@ -1423,6 +1423,7 @@ def compose_ask_script(
         executor_rows_js="(_manifest?.rows ?? []).length",
         tshirt_js="_gate?.tshirt",
         reverify=True,
+        delivery_notes_js="_deliveryNotes",
     )
     review_titles = [title for title, _ in review_blocks]
     ledger_charter = _folded_ledger_charter(
@@ -1876,7 +1877,7 @@ def compose_ask_script(
         # An existing sizing has no scout to close for it, so an XS one with no writes gets its footprint here.
         if footprint_owed(arm=known_arm, writes=writes, sized_in_run=False):
             fp_call = _agent(
-                _lit(footprint_prompt(sizing_rel=sizing_rel, baton_path=baton["path"] if baton else None)),
+                prompt_of(footprint_prompt(sizing_rel=sizing_rel, baton_path=baton["path"] if baton else None)),
                 label="footprint", phase="gate", agent_type=SIZING_SCOUT_AGENT_TYPE,
                 schema=FOOTPRINT_SCHEMA, run_id=run_id,
             )
@@ -2404,9 +2405,11 @@ def compose_ask_script(
         )
         b.append("      }")
         b.append("    }")
+        from coordinator_core.ops.dispatch_emit.ask_roadmap import no_ready_reason_js as _no_ready_reason_js
+
         b.append(
             f"    if (!_planRel) {{ _halted = {{ halted: {_lit(HALT_REFUSAL)}, "
-            "reason: 'plan-blitz reported no ready plan', blitz: _blitz, sizing: _sizingRel, run_id: _runId };"
+            f"reason: {_no_ready_reason_js('(_blitz?.regate ?? _blitz)?.pulled')}, blitz: _blitz, sizing: _sizingRel, run_id: _runId }};"
         )
         b.append(
             "    const _driftPull = [...(_blitz?.regate?.pulled ?? []), ...(_blitz?.pulled ?? [])].find((p) => p && p.planPath "
@@ -2569,6 +2572,7 @@ def compose_ask_script(
         "sizing: _sizingRel, plan: _planRel, run_id: _runId }; }"
     )
     b.append("  }")
+    b.append("  let _deliveryNotes = '';")
     b.append("  if (!_halted && (!_resumeLedger || _ledgerExec)) {")
     b.append(f"  phase({_lit(_emit._EXECUTE_PHASE_TITLE)});")
     b.append("  const _rows = {};")
@@ -2631,6 +2635,14 @@ def compose_ask_script(
         "+ _commitFailures.join('; '));"
     )
     b.append("  await Promise.all(Object.values(_rows));")
+    # The settled executor replies (their DONE notes), already in hand: no spawn, no file read.
+    b.append(
+        "  _deliveryNotes = (await Promise.all(_manifest.rows"
+        f".filter((r) => r.agent_type !== {_lit(REVIEWER_AGENT_TYPE)})"
+        ".map(async (r) => { const t = await _rows[r.id]; "
+        "return typeof t === 'string' && t.trim() ? r.id + ': ' + t.trim().replace(/\\s+/g, ' ').slice(0, 600) : ''; })))"
+        ".filter((x) => x).join(' | ');"
+    )
     # verify:<row> (emit.py's _runRow) pushes only behind _rowVerifyWanted: the terminal test leg
     # covers every row's scope, except on the XS arm where its test waits on review applying a fix.
     b.append("  await Promise.all(_verifications);")

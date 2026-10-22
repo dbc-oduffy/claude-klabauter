@@ -2,7 +2,9 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://coordinator.local/schemas/fleet-capability-index.schema.json",
   "x-schema-name": "fleet-capability-index",
-  "x-schema-version": "1.0.0",
+  "x-schema-version": "1.1.0",
+  "x-bump-class": "top-level-array-additive",
+  "x-bump-note": "1.0.0 -> 1.1.0 (top-level-array-additive, claude-klabauter-first) adds optional top-level `shapes` [shapeEntry] (DR-201 (b)); holding, because fleet.aggregate_capability_index validates manifests with additionalProperties false, so no declared-tolerant consumer set exists. Pending DoE's own copy (DoE I47 C2). RE-VENDOR: coordinator-content-repo.",
   "applies_to": "state/capabilities/fleet-index.json",
   "description": "The AGGREGATED fleet-capability index — the shape the engine repo's engine op produces by reading every platform repo's authored capability-manifest.schema.json instance and folding them into one persisted, read-derived projection (docs/plans/2026-07-17-cross-repo-capability-lens.md § C1). This is a Tier-B aggregation VIEW, not a producer sink: no repo ever emits INTO this index (Fleet Producer Contract, docs/wiki/hook-best-practices/state-placement-law.md § Fleet Producer Contract, lines ~290-293 — a consolidation point a repo writes into would make one producer a fleet-wide SPOF). If lost or stale it is fully rebuildable from the decentralized per-repo manifests, which remain the sole source of truth. The review SKILL (C4) resolves this index via the engine op-invocation seam, applies the read-time TTL staleness downgrade (AC8) against `generated_at`/`ttl`, and passes its path to prior-art-checker (C3) as `fleet_capability_index:`. `entries[].host_repo` mirrors capability-manifest.schema.json's per-capability shape (duplicated here, not $ref'd cross-file, because this repo's schema-validation harness only resolves `$ref`/`$defs` within a single schema file — see coordinator/bin/lib/schema.js's JSON-Schema-subset validator) and MUST include every repo's capabilities, INCLUDING the plan's own repo, so the checker can compute `host_repo == plan_repo` asymmetry (F1c) as a mechanical field comparison rather than an external lookup.",
   "type": "object",
@@ -23,9 +25,70 @@
       "type": "array",
       "description": "Every aggregated capability entry across every enumerated sibling repo, INCLUDING the plan's own repo's entries if it has authored a manifest (F1c — required so `host_repo == plan_repo` is a mechanical comparison the checker can run without a separate self-lookup). May be empty for an OSS-safe degrade (registry absent, zero siblings enumerated, or zero manifests found) — an empty `entries[]` is a valid index, not a validation failure.",
       "items": { "$ref": "#/$defs/indexEntry" }
+    },
+    "shapes": {
+      "type": "array",
+      "description": "OPTIONAL. Copy-out exemplar shapes aggregated across every enumerated sibling repo (DR-201 shapeEntry, carried through from each source manifest with `source_repo` and verbatim `maturity`).",
+      "items": { "$ref": "#/$defs/shapeEntry" }
     }
   },
   "$defs": {
+    "shapeEntry": {
+      "type": "object",
+      "required": [
+        "shape_id",
+        "shape_label",
+        "shape_summary",
+        "exemplar_path",
+        "copy_posture",
+        "maturity",
+        "provenance",
+        "source_repo"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "shape_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Stable identifier for this shape, unique within the emitting repo's manifest."
+        },
+        "shape_label": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Human-readable label; the string a copy-out offer quotes verbatim."
+        },
+        "shape_summary": {
+          "type": "string",
+          "minLength": 1,
+          "description": "One-line summary of what the shape is and when to copy it."
+        },
+        "exemplar_path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Repo-relative path of the exemplar in the owning repo."
+        },
+        "copy_posture": {
+          "type": "string",
+          "enum": ["copy-out", "ask-the-owner"],
+          "description": "Whether a consumer may copy the exemplar out directly or must ask the owning repo first."
+        },
+        "maturity": {
+          "type": "string",
+          "enum": ["live", "stale", "unverified", "absent"],
+          "description": "Fail-closed reachability marker, carried through verbatim from the source manifest."
+        },
+        "provenance": {
+          "type": "string",
+          "enum": ["curated", "generated", "asserted"],
+          "description": "Same enum and semantics as indexEntry.provenance."
+        },
+        "source_repo": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The emitting repo: a non-polarity echo of the manifest-level `host_repo`, never compared for consume suppression."
+        }
+      }
+    },
     "indexEntry": {
       "type": "object",
       "description": "Same per-capability shape as capability-manifest.schema.json's `capabilityEntry`, PLUS the emitting repo's `host_repo` present on every entry (required at this level too, not only inherited from a manifest-level field, since entries from many manifests are flattened into one array here).",

@@ -207,6 +207,17 @@ def _brief_conformance_clause(criterion: Optional["OperativeCriterion"]) -> str:
     return f"\n{_BRIEF_CONFORMANCE_CLAUSE}{named}"
 
 
+DELIVERY_NOTES_LABEL = "Executor delivery notes in the brief"
+
+
+def _delivery_notes_expr(delivery_notes_js: Optional[str], agent_type: str) -> str:
+    """A JS string expression appending the executor rows' delivery notes to a code-reviewer slice
+    prompt; empty for any other agent, for no source, and (at run time) for an empty source."""
+    if not delivery_notes_js or not _is_code_reviewer(agent_type):
+        return ""
+    return f"(({delivery_notes_js}) ? {_js_string_literal(chr(10) + DELIVERY_NOTES_LABEL + ': ')} + ({delivery_notes_js}) : '')"
+
+
 def _is_code_reviewer(agent_type: str) -> bool:
     return agent_type.split(":")[-1] == "code-reviewer"
 
@@ -754,6 +765,7 @@ def compose_execute_review(
     repo_root: Optional[str] = None,
     prep_in_wave: bool = False,
     reverify: bool = False,
+    delivery_notes_js: Optional[str] = None,
 ) -> List[Tuple[str, str]]:
     """Compose the roster-v5 ``execute_review`` wave into ``(phase_title,
     block)`` entries: prep, review-wave, and -- ONLY when ``review.integration``
@@ -1022,6 +1034,7 @@ def compose_execute_review(
     for agent in slice_agents:
         slice_type, slice_role = _host_native(agent.agent_type, host_degraded)
         slice_bc = _brief_conformance_clause(criterion) if _is_code_reviewer(agent.agent_type) else ""
+        notes_expr = _delivery_notes_expr(delivery_notes_js, agent.agent_type)
         if prep_in_wave:
             if agent.executor_rows_per_reviewer is None:
                 raise ValueError(
@@ -1051,7 +1064,7 @@ def compose_execute_review(
             slice_prefix = f"agent({_prompt_literal(slice_prompt)}, "
             assert slice_call.startswith(slice_prefix)
             grouped_call = (
-                f"() => agent({_prompt_literal(slice_prompt)}{wave_tail_js} + "
+                f"() => agent({_prompt_literal(slice_prompt)}{wave_tail_js}{' + ' + notes_expr if notes_expr else ''} + "
                 f"{_js_string_literal(chr(10) + 'group_index: ')} + i + "
                 f"{_js_string_literal(chr(10) + 'group_count: ')} + n, " + slice_call[len(slice_prefix):]
             )
@@ -1096,7 +1109,7 @@ def compose_execute_review(
         prefix = f"agent({_prompt_literal(base_prompt)}, "
         assert call.startswith(prefix)
         spliced_call = (
-            f"agent({_size_gated(base_prompt, lean_prompt)} + "
+            f"agent({_size_gated(base_prompt, lean_prompt)}{' + ' + notes_expr if notes_expr else ''} + "
             f"{_js_string_literal(chr(10) + chr(10) + 'Slice: ')} + "
             f"JSON.stringify(s), " + call[len(prefix):]
         )

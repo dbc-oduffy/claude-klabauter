@@ -90,6 +90,8 @@ findings-ledger sidecar. The op reads it in-process and never stamps or writes i
 | `mechanical_repairs` | `[{kind, target, instruction}]`; empty unless `pull_class` is `mechanical` |
 | `prep_gate` | the `plan.prep_gate` reply verbatim |
 | `reason` | one line |
+| `blocking_findings` | integer >= 0; uncleared findings that forbid buying a resolver |
+| `advisory_findings` | integer >= 0; uncleared findings an agent may resolve |
 | `blocking` | optional; sorted, de-duplicated keys of everything that put the verdict into `judgment` or `pulled` |
 
 **`blocking` key spelling.** Premise: `premise-check: <VERDICT> <citation[:200]>`. Reviewer:
@@ -99,6 +101,17 @@ op appends to its `substantive` or `judgment` list. Covered and stale premise ro
 they are notes. `blocking` is built before the `+N more` truncation of `reason` and is not
 truncated by it. A caller compares two pulls by comparing their `blocking` sets. Absent on replies
 from a producer that predates it; the schema does not require it.
+
+**`blocking_findings` / `advisory_findings`.** Both are required on every reply and are 0 and 0 on
+`ready`. A review that is neither clear nor ledger-cleared adds its uncleared ledger rows (rows not
+`verified: true`, or whose `status` is present and not `applied`), never fewer than 1 (also 1 when
+the ledger is absent, unreadable or has no rows): to `blocking_findings` when its verdict is
+`BLOCKED` or unrecognised, to `advisory_findings` when `WARN`. Coverage judgment findings add their
+count to `advisory_findings`, or `max(count, 1)` to `blocking_findings` when the coverage verdict
+is `BLOCKED-SURFACE-TO-PM`. Each surviving premise row (not covered, declared absent or stale) adds
+1 to `blocking_findings`. `len(blocking)` is never the count: `blocking` keys include WARN reviewers
+and prep-gate entries, and its meaning is unchanged. A `judgment` `reason` begins
+`needs an agent: <b> blocking, <a> advisory: `.
 
 - `ready` with empty `mechanical_repairs`: no prep-gate or readiness agent is owed.
 - `pulled` + `mechanical`: apply the repairs in one revise; re-run the op, not the review round.

@@ -500,3 +500,72 @@ class TestProjectRagRealExemplar:
         assert skipped == []
         assert len(index["entries"]) == len(manifest["capabilities"])
         assert all(e["host_repo"] == "project-rag" for e in index["entries"])
+
+
+def _shape(shape_id: str, source_repo: str, *, maturity: str = "live",
+           provenance: str = "curated") -> dict:
+    return {
+        "shape_id": shape_id,
+        "shape_label": shape_id.replace("-", " "),
+        "shape_summary": f"summary of {shape_id}",
+        "exemplar_path": f"exemplars/{shape_id}.md",
+        "copy_posture": "copy-out",
+        "maturity": maturity,
+        "provenance": provenance,
+        "source_repo": source_repo,
+    }
+
+
+def _build_with_shapes(tmp_path: Path, monkeypatch, shapes: list):
+    host_root = tmp_path / "host-repo"
+    manifest = _manifest("host-repo", _FRESH, "P7D", [])
+    manifest["shapes"] = shapes
+    _write_json(host_root.joinpath(*cap_index._MANIFEST_REL_PATH), manifest)
+    _no_registry(tmp_path, monkeypatch)
+    build_time = datetime.datetime.fromisoformat(_FRESH.replace("Z", "+00:00"))
+    return cap_index.build_fleet_index(host_root, build_time=build_time)
+
+
+class TestShapesProjection:
+    def test_shapes_projected_verbatim_without_maturity_downgrade(
+        self, tmp_path: Path, monkeypatch,
+    ) -> None:
+        shapes = [
+            _shape("a-shape", "host-repo", maturity="unverified"),
+            _shape("b-shape", "host-repo", maturity="live", provenance="asserted"),
+        ]
+        index, skipped = _build_with_shapes(tmp_path, monkeypatch, shapes)
+
+        assert skipped == []
+        assert index["shapes"] == shapes
+        assert index["shapes"][1]["maturity"] == "live"
+        assert index["shapes"][1]["provenance"] == "asserted"
+        assert validate_frontmatter(index, cap_index._INDEX_SCHEMA_PATH) == []
+
+    def test_source_repo_mismatch_skipped_sibling_still_projects(
+        self, tmp_path: Path, monkeypatch,
+    ) -> None:
+        good = _shape("good-shape", "host-repo")
+        index, skipped = _build_with_shapes(
+            tmp_path, monkeypatch, [_shape("bad-shape", "other-repo"), good],
+        )
+
+        assert index["shapes"] == [good]
+        assert len(skipped) == 1
+        assert skipped[0].endswith(
+            ": shape bad-shape: source_repo other-repo != host_repo host-repo"
+        )
+
+    def test_manifest_without_shapes_yields_empty_list(
+        self, tmp_path: Path, monkeypatch,
+    ) -> None:
+        host_root = tmp_path / "host-repo"
+        _write_json(
+            host_root.joinpath(*cap_index._MANIFEST_REL_PATH),
+            _manifest("host-repo", _FRESH, "P7D", [_cap("c", "host-repo")]),
+        )
+        _no_registry(tmp_path, monkeypatch)
+        index, _skipped = cap_index.build_fleet_index(host_root)
+
+        assert index["shapes"] == []
+        assert validate_frontmatter(index, cap_index._INDEX_SCHEMA_PATH) == []

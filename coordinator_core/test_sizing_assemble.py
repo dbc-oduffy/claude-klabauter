@@ -375,6 +375,53 @@ def test_only_raise_reaches_xxl_collapse_at_xxl_resolves_xl_no_xxl_unprobed():
     assert "xxl_unprobed" not in decision["detents"]
 
 
+# --- I47 C2: xxl_infra_check_owed fires at every resolved XXL --------------
+
+
+def test_xxl_infra_check_owed_is_last_detent():
+    assert sa.DETENT_ENUM[-1] == "xxl_infra_check_owed"
+
+
+def test_xxl_infra_check_owed_fires_on_promotion_without_evidence():
+    decision = sa.route(
+        estimate={"tshirt": "XL"}, probe_signal="raise", scout_evidence=[]
+    )
+    assert "xxl_infra_check_owed" in decision["detents"]
+
+
+def test_xxl_infra_check_owed_fires_on_promotion_with_evidence():
+    decision = sa.route(
+        estimate={"tshirt": "XL"},
+        probe_signal="raise",
+        scout_evidence=[{"kind": "change-set", "count": 3}],
+    )
+    assert decision["resolved_estimate"]["tshirt"] == "XXL"
+    assert "xxl_unprobed" not in decision["detents"]
+    assert "xxl_infra_check_owed" in decision["detents"]
+
+
+def test_xxl_infra_check_owed_fires_on_noop_clamp():
+    decision = sa.route(
+        estimate={"tshirt": "XXL"}, probe_signal="raise", scout_evidence=[]
+    )
+    assert decision["resolved_estimate"]["tshirt"] == "XXL"
+    assert "xxl_infra_check_owed" in decision["detents"]
+
+
+def test_xxl_infra_check_owed_absent_at_xl():
+    decision = sa.route(estimate={"tshirt": "XL"})
+    assert "xxl_infra_check_owed" not in decision["detents"]
+
+
+def test_xxl_infra_check_owed_leaves_route_and_xl_exit_identical():
+    with_it = sa.route(estimate={"tshirt": "XXL"}, scout_evidence=[])
+    without = dict(with_it)
+    without["detents"] = [d for d in with_it["detents"] if d != "xxl_infra_check_owed"]
+    assert "xxl_infra_check_owed" in with_it["detents"]
+    assert with_it["route"] == without["route"] == "goal-setting"
+    assert with_it["xl_exit"] is None
+
+
 # --- AC6: xxl_unprobed is advisory-only -- never alters route/fork/xl_exit/
 # resolved_estimate. Modeled on the premise-provenance invariance shape.
 
@@ -1219,7 +1266,8 @@ def test_sizing_object_schema_version_and_bump_class():
     # Moved 1.41.0 -> 1.42.0 on two DoE lines (38c370f1a5 `research.seeds`; 12069c34ba `initiatives`, `bundle`).
     # Moved 1.42.0 -> 1.43.0: DoE e6fe40b3cc reconciles both 1.42.0 lines.
     # Moved 1.43.0 -> 1.44.0: claude-klabauter-first optional `design_route`; DoE landed the same bytes at 91f02d8ae1.
-    assert schema["x-schema-version"] == "1.44.0"
+    # Moved 1.44.0 -> 1.45.0: claude-klabauter-first `xxl_infra_check_owed` detent; DoE copy pending.
+    assert schema["x-schema-version"] == "1.45.0"
     # NEGATIVE SPEC: `x-bump-class` is asserted ABSENT, not equal to
     # `nested-field-additive` — and absent is the PERMANENT answer for this
     # schema, not a waiting state. DoE's `9f4c0c17b` (2026-08-10, "schemas: drop
@@ -1237,7 +1285,8 @@ def test_sizing_object_schema_version_and_bump_class():
     # the key would mean reverting `9f4c0c17b`, which coordinator-content-repo-em has stated
     # they will not do (memo
     # 2026-08-13-coordinator-content-repo-em-bump-class-deliberately-absent.md).
-    assert "x-bump-class" not in schema
+    # Re-introduced at 1.45.0 by the claude-klabauter-first enum-value-additive bump.
+    assert schema["x-bump-class"] == "enum-value-additive"
 
 
 def test_completion_entry_schema_version_and_bump_class():
@@ -1320,6 +1369,8 @@ def test_vendored_schema_widened_enums_order_exact():
         "exit_criterion_pending",
         # 1.42.0: DoE 12069c34ba, the bundle detent.
         "bundle",
+        # 1.45.0: claude-klabauter-first, the XXL infra-check detent.
+        "xxl_infra_check_owed",
     ]
 
     completion_schema = json.loads(

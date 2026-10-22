@@ -89,27 +89,44 @@ def _clear(verdict: Any) -> bool:
     return isinstance(verdict, str) and verdict.strip().lower() in _CLEAR_VERDICTS
 
 
-def _ledger_clear(review: dict, repo_root: Optional[Path]) -> bool:
-    """A WARN/BLOCKED review is clear only on a stamped sidecar whose rows are all applied+verified."""
-    verdict = review.get("verdict")
+def _ledger_read(review: dict, repo_root: Optional[Path]) -> Optional[tuple]:
+    """(stamped, rows) of the review's ledger sidecar, else None; resolves on the path alone."""
     ledger = review.get("ledger")
-    if not (isinstance(verdict, str) and verdict.strip().lower() in _LEDGER_VERDICTS):
-        return False
     if not isinstance(ledger, str) or not ledger.strip():
-        return False
+        return None
     path = Path(ledger.strip())
     if not path.is_absolute():
         if repo_root is None:
-            return False
+            return None
         path = repo_root / path
-    read = read_ledger(path)
+    return read_ledger(path)
+
+
+def _row_cleared(row: dict) -> bool:
+    return row.get("verified") is True and (row.get("status") or "applied") == "applied"
+
+
+def _rows_clear(read: Optional[tuple]) -> bool:
     if read is None:
         return False
     stamped, rows = read
-    return stamped and bool(rows) and all(
-        row.get("verified") is True and (row.get("status") or "applied") == "applied"
-        for row in rows
-    )
+    return stamped and bool(rows) and all(_row_cleared(row) for row in rows)
+
+
+def _ledger_verdict(review: dict) -> bool:
+    verdict = review.get("verdict")
+    return isinstance(verdict, str) and verdict.strip().lower() in _LEDGER_VERDICTS
+
+
+def _ledger_clear(review: dict, repo_root: Optional[Path]) -> bool:
+    """A WARN/BLOCKED review is clear only on a stamped sidecar whose rows are all applied+verified."""
+    return _ledger_verdict(review) and _rows_clear(_ledger_read(review, repo_root))
+
+
+def _uncleared_count(read: Optional[tuple]) -> int:
+    """Uncleared ledger rows of a review that failed to clear; never below 1."""
+    rows = read[1] if read is not None else []
+    return max(sum(1 for row in rows if not _row_cleared(row)), 1)
 
 
 def _findings(value: Any, label: str) -> List[Any]:
@@ -315,6 +332,7 @@ def readiness_verdict(
     repairs: List[dict] = []
     substantive: List[str] = []
     judgment: List[str] = []
+    blocking_findings = advisory_findings = 0
 
     if prep_gate.get("verdict") not in _PREP_VERDICTS_COMPUTED:
         substantive.append(f"prep gate verdict {prep_gate.get('verdict')}")
@@ -334,6 +352,10 @@ def readiness_verdict(
         judged = _findings(coverage.get("judgmentFindings"), "judgmentFindings")
         if judged:
             judgment.append(f"{len(judged)} judgment coverage finding(s)")
+            if str(coverage.get("verdict")).strip().upper() == "BLOCKED-SURFACE-TO-PM":
+                blocking_findings += max(len(judged), 1)
+            else:
+                advisory_findings += len(judged)
         for finding in mechanical:
             repairs.append(
                 _repair(
@@ -346,8 +368,16 @@ def readiness_verdict(
         if not _clear(coverage.get("verdict")) and not mechanical and not judged:
             notes.append(f"coverage verdict {coverage.get('verdict')!r} carries no findings")
     for review in reviews:
-        if not _clear(review.get("verdict")) and not _ledger_clear(review, repo_root):
-            judgment.append(f"{review.get('reviewer')}: {review.get('verdict')!r}")
+        if _clear(review.get("verdict")):
+            continue
+        read = _ledger_read(review, repo_root)
+        if _ledger_verdict(review) and _rows_clear(read):
+            continue
+        judgment.append(f"{review.get('reviewer')}: {review.get('verdict')!r}")
+        if str(review.get("verdict")).strip().lower() == "warn":
+            advisory_findings += _uncleared_count(read)
+        else:
+            blocking_findings += _uncleared_count(read)
 
     uncheckable = 0
     premise_blocking: List[str] = []
@@ -374,9 +404,11 @@ def readiness_verdict(
                 premise_blocking.append(f"{_PREMISE_REVIEWER}: {row['verdict']} {row['citation'][:200]}")
         elif row["verdict"] == "UNCHECKABLE":
             uncheckable += 1
+    blocking_findings += len(premise_blocking)
+    counts = f"needs an agent: {blocking_findings} blocking, {advisory_findings} advisory: "
     shown = list(premise_blocking)
     for i, entry in enumerate(shown):
-        if len("; ".join(judgment + shown[: i + 1])) > _INSTRUCTION_MAX - 40:
+        if len(counts) + len("; ".join(judgment + shown[: i + 1])) > _INSTRUCTION_MAX - 40:
             tail = len(shown) - i
             shown = shown[:i] + [f"+{tail} more premise row(s)"]
             break
@@ -402,12 +434,13 @@ def readiness_verdict(
         reason = "prep gate failure needs judgment: " + "; ".join(substantive)
     elif judgment:
         verdict, pull_class, repairs = "judgment", "none", []
-        reason = "needs an agent: " + "; ".join(judgment)
+        reason = counts + "; ".join(judgment)
     elif repairs:
         verdict, pull_class = "pulled", "mechanical"
         reason = f"{len(repairs)} mechanical repair(s) apply in one revise"
     else:
         verdict, pull_class = "ready", "none"
+        blocking_findings = advisory_findings = 0
         reason = "prep gate passes with no outstanding findings"
         if notes:
             reason += "; " + "; ".join(notes)
@@ -416,6 +449,8 @@ def readiness_verdict(
         "pull_class": pull_class,
         "mechanical_repairs": repairs,
         "reason": reason[:1000],
+        "blocking_findings": blocking_findings,
+        "advisory_findings": advisory_findings,
         "blocking": sorted({key[:300] for key in blocking_keys}) if verdict in _PULL_VERDICTS else [],
     }
 

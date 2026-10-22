@@ -34,6 +34,9 @@ Behaviour (see ``build_fleet_index`` for the full algorithm):
   5. Fail-closed provenance/maturity downgrade — see ``_project_entry``'s docstring
      for the exact rule this op implements (no network/subprocess reachability
      probe is performed; the rule is a fully static, from-the-read-alone check).
+  5b. Each manifest's optional ``shapes[]`` is projected verbatim (maturity and
+     provenance never downgraded) into the index's top-level ``shapes`` list, always
+     emitted; a shape whose source_repo != the manifest's host_repo is skipped-with-reason.
   6. OSS-safe degrade: registry absent, zero active siblings, or zero manifests
      found still produces a schema-valid EMPTY index and the op call succeeds
      (no exception) — DoE's review pre-flight must never be blocked by this.
@@ -247,6 +250,35 @@ def _project_entry(cap: dict, manifest: dict, build_time: datetime.datetime) -> 
     }
 
 
+_SHAPE_FIELDS = (
+    "shape_id", "shape_label", "shape_summary", "exemplar_path",
+    "copy_posture", "maturity", "provenance", "source_repo",
+)
+
+
+def _project_shape(
+    shape: dict, manifest: dict, manifest_path: object
+) -> Tuple[Optional[dict], Optional[str]]:
+    """Project one manifest shapes[] entry; returns (entry, None) or (None, skip_reason).
+
+    Unlike _project_entry, `maturity` and `provenance` are copied VERBATIM, never
+    downgraded or defaulted (DR-201 (b2)): a shape is a copy-out exemplar, not a
+    consume seam, so the staleness/reachability/provenance fail-closed rule that
+    guards capability consumption has nothing to protect here.
+
+    A shape whose `source_repo` differs from the manifest's `host_repo` is not
+    projected.
+    """
+    host_repo = manifest.get("host_repo")
+    source_repo = shape["source_repo"]
+    if source_repo != host_repo:
+        return None, (
+            f"{manifest_path}: shape {shape['shape_id']}: "
+            f"source_repo {source_repo} != host_repo {host_repo}"
+        )
+    return {field: shape[field] for field in _SHAPE_FIELDS}, None
+
+
 def _read_manifest(repo_path: Path) -> Tuple[Optional[dict], Optional[str]]:
     """Read + Schema-1-validate one repo's state/capabilities/manifest.json.
 
@@ -327,6 +359,7 @@ def build_fleet_index(
     build_time = build_time or datetime.datetime.now(datetime.timezone.utc)
     skipped: List[str] = []
     entries: List[dict] = []
+    shapes: List[dict] = []
 
     repos = _enumerate_repo_paths(worktree_root)
     for _label, repo_path in sorted(repos.items(), key=lambda kv: str(kv[1])):
@@ -338,11 +371,19 @@ def build_fleet_index(
             continue
         for cap in manifest.get("capabilities", []):
             entries.append(_project_entry(cap, manifest, build_time))
+        manifest_path = repo_path.joinpath(*_MANIFEST_REL_PATH)
+        for shape in manifest.get("shapes", []):
+            projected, reason = _project_shape(shape, manifest, manifest_path)
+            if reason:
+                skipped.append(reason)
+            else:
+                shapes.append(projected)
 
     index = {
         "generated_at": build_time.strftime("%Y-%m-%dT%H:%M:%SZ"),
         "ttl": ttl,
         "entries": entries,
+        "shapes": shapes,
     }
     return index, skipped
 

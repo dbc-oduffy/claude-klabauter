@@ -572,3 +572,63 @@ def test_blocking_is_not_truncated_by_the_reason_tail():
     out = _premise(_rows(*["UNRESOLVED"] * 10, citation="x" * 190))
     assert len(out["blocking"]) == 10
     assert out["reason"].endswith("more premise row(s)")
+
+
+def _counts(out: dict) -> tuple:
+    return out["blocking_findings"], out["advisory_findings"]
+
+
+def _with_gate(coverage, reviews, root=None, rows=None) -> dict:
+    return op.readiness_verdict(_gate(PASS, verdict="PREPPED"), coverage, reviews, root, rows)
+
+
+def test_warn_review_with_two_uncleared_rows_plus_coverage_findings_reads_0_blocking_19_advisory(tmp_path):
+    ledger = _ledger(tmp_path, [{"id": "F1"}, {"id": "F2", "verified": True}, {"id": "F3", "verified": False}])
+    cov = {"verdict": "pull", "mechanicalFindings": [], "judgmentFindings": 17}
+    out = _with_gate(cov, _review("WARN", ledger), tmp_path)
+    assert _counts(out) == (0, 19)
+    assert out["reason"].startswith("needs an agent: 0 blocking, 19 advisory: ")
+    assert len(out["reason"]) <= 1000
+    assert out["blocking_findings"] != len(out["blocking"])
+    _validate(out | {"plan": REL, "prep_gate": _gate(PASS, verdict="PREPPED")})
+
+
+def test_blocked_review_with_unverified_ledger_counts_blocking(tmp_path):
+    ledger = _ledger(tmp_path, [{"id": "F1"}])
+    assert _counts(_with_gate(None, _review("BLOCKED", ledger), tmp_path)) == (1, 0)
+    assert _counts(_with_gate(None, _review("BLOCKED"), tmp_path)) == (1, 0)
+    assert _counts(_with_gate(None, _review("reject", "missing.md"), tmp_path)) == (1, 0)
+
+
+def test_blocked_review_with_verified_ledger_beside_uncleared_warn_is_0_blocking(tmp_path):
+    ok = _ledger(tmp_path, [{"id": "F1", "verified": True}], name="a.md")
+    bad = _ledger(tmp_path, [{"id": "F1"}], name="b.md")
+    reviews = [
+        {"reviewer": "a", "verdict": "BLOCKED", "ledger": ok},
+        {"reviewer": "b", "verdict": "WARN", "ledger": bad},
+    ]
+    assert _counts(_with_gate(None, reviews, tmp_path)) == (0, 1)
+
+
+def test_stamped_all_verified_ledger_on_unrecognised_verdict_still_adds_one(tmp_path):
+    ledger = _ledger(tmp_path, [{"id": "F1", "verified": True}])
+    assert _counts(_with_gate(None, _review("mystery", ledger), tmp_path)) == (1, 0)
+
+
+def test_blocked_surface_to_pm_coverage_counts_judgment_findings_as_blocking():
+    cov = {"verdict": "BLOCKED-SURFACE-TO-PM", "mechanicalFindings": [], "judgmentFindings": ["a", "b", "c"]}
+    assert _counts(_with_gate(cov, [])) == (3, 0)
+
+
+def test_premise_contradicted_row_is_one_blocking_and_a_covered_row_is_zero(tmp_path):
+    assert _counts(_premise([_row("CONTRADICTED")])) == (1, 0)
+    common = _corrects_plan(tmp_path, _CORRECTS)
+    reply = _op_reply(common, [_row()])
+    assert _counts(reply) == (0, 0)
+    assert reply["verdict"] == "ready"
+
+
+def test_ready_reply_carries_zero_counts():
+    out = _with_gate(None, [])
+    assert out["verdict"] == "ready"
+    assert _counts(out) == (0, 0)

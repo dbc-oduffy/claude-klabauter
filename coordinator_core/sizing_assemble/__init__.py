@@ -506,6 +506,9 @@ DETENT_ENUM = (
     "exit_criterion_pending",
     # APPENDED by C4c (multi-ask sibling runs): 2+ independent initiatives at XL.
     "bundle",
+    # APPENDED by I47 C2 (sizing-object 1.45.0), never re-sorted — order is
+    # load-bearing against DoE's EQUAL_VERSION_SHAPE_DRIFT gate.
+    "xxl_infra_check_owed",
 )
 
 PREMISE_PROVENANCE_ENUM = ("executed", "read", "not-applicable", "unrecorded")
@@ -1200,6 +1203,10 @@ def route(
     # This predicate tests `scout_evidence` EMPTINESS only, never its
     if resized_tshirt == "XXL" and not scout_evidence:
         detents.append("xxl_unprobed")
+
+    # Advisory; keyed on the resolved size only, never on scout_evidence.
+    if resized_tshirt == "XXL":
+        detents.append("xxl_infra_check_owed")
 
     if resized_tshirt in _PREMISE_DETENT_TSHIRTS:
         if premise_provenance == "read":

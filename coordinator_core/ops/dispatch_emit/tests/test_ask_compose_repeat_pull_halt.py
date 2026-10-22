@@ -53,7 +53,8 @@ def test_repeat_halt_reason_and_payload_and_no_refire():
 
 def test_old_halt_string_and_emission_unchanged():
     script = _script()
-    assert "reason: 'plan-blitz reported no ready plan', blitz: _blitz, sizing: _sizingRel, run_id: _runId };" in script
+    assert "reason: ('plan-blitz reported no ready plan' + (((_blitz?.regate ?? _blitz)?.pulled ?? [])" in script
+    assert ", blitz: _blitz, sizing: _sizingRel, run_id: _runId };" in script
     assert script.index("plan-blitz reported no ready plan") < script.index("if (_repeatBlocking && !_halted.next_action)")
 
 

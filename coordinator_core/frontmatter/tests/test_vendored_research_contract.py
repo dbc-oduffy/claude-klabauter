@@ -40,7 +40,8 @@ def _research_errors(research: dict) -> list[dict]:
 
 
 def test_vendored_versions():
-    assert _version(_SIZING) == "1.44.0"
+    # 1.44.0 -> 1.45.0: claude-klabauter-first; DoE copy pending.
+    assert _version(_SIZING) == "1.45.0"
     assert _version(_HANDOFF) == "11.0.1"
     assert _version(_PLAN_TASKS) == "3.18.0"
 

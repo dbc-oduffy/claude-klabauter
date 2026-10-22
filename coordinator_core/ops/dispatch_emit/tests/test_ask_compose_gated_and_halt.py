@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import re
 
+import pytest
+
 from coordinator_core.ops.dispatch_emit import ask_compose, emit
 from coordinator_core.ops.dispatch_emit.ask_compose import compose_ask_script
 from coordinator_core.ops.dispatch_emit.land_run_contract import WAKE_DIGEST_COMMIT_OP
@@ -103,6 +105,39 @@ def test_unstarted_dependents_halt_before_the_review(monkeypatch):
     assert script.count(halt) == 1
     assert script.index("await Promise.all(_verifications);") < script.index(halt) < script.index("phase('Review wave')")
     assert "function _heldDependentsReason()" in script
+
+
+def _eval_reason(pulled_json: str) -> str:
+    import shutil
+    import subprocess
+
+    from coordinator_core.ops.dispatch_emit.ask_roadmap import no_ready_reason_js
+
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node not on PATH")
+    expr = no_ready_reason_js("_pulled")
+    done = subprocess.run(
+        [node, "-e", f"const _pulled = {pulled_json}; process.stdout.write({expr});"],
+        capture_output=True, text=True, check=True, timeout=30,
+    )
+    return done.stdout
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_no_ready_halt_appends_pulled_reasons_after_the_literal(monkeypatch):
+    script = _script(monkeypatch)
+    assert "reason: ('plan-blitz reported no ready plan' + (((_blitz?.regate ?? _blitz)?.pulled ?? [])" in script
+    got = _eval_reason('[{"reason":"1 blocking, 0 advisory: a"},{"x":1},{"reason":"b"}]')
+    assert got == "plan-blitz reported no ready plan: 1 blocking, 0 advisory: a; b"
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_no_ready_halt_keeps_the_bare_literal_without_pulled_reasons():
+    assert _eval_reason("[]") == "plan-blitz reported no ready plan"
+    assert _eval_reason('[{"planPath":"p"},null,{"reason":""}]') == "plan-blitz reported no ready plan"
 
 
 def test_script_stays_under_byte_cap(monkeypatch):

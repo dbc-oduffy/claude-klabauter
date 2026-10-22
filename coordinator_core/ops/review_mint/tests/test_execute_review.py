@@ -1603,3 +1603,27 @@ def test_unapplied_maps_a_reverted_path_to_its_slice_and_wave_sidecar():
 def test_reverify_is_null_under_verify_only_and_when_the_agent_returns_null():
     assert _run_reverify_block({"edited": []}, verify_only=True) is None
     assert _run_reverify_block(None) is None
+
+
+_NOTES_LABEL = "Executor delivery notes in the brief"
+
+
+def test_delivery_notes_source_unset_leaves_the_wave_byte_identical():
+    review = parse_execute_review(_v5_fragment(), signals={"named": ["coordinator:staff-eng"]})
+    assert _NOTES_LABEL not in _wave_block(review)
+    assert _wave_block(review, delivery_notes_js=None) == _wave_block(review)
+
+
+def test_delivery_notes_ride_only_the_code_reviewer_slice_prompt():
+    review = parse_execute_review(_v5_fragment(), signals={"named": ["coordinator:staff-eng"]})
+    block = _wave_block(review, delivery_notes_js="_deliveryNotes")
+    assert block.count(_NOTES_LABEL) == 1
+    assert "((_deliveryNotes) ? " in block
+    assert block.count("agent(") > 1
+    notes_call = block.split(_NOTES_LABEL)[1].split("agent(", 1)[0]
+    assert "code-reviewer" in notes_call or "code-reviewer" in block.split(_NOTES_LABEL)[0].rsplit("agent(", 1)[-1]
+
+
+def test_delivery_notes_also_ride_the_grouped_prep_in_wave_prompt():
+    block = _wave_block(_ratio_review(), executor_rows_js="n", delivery_notes_js="_deliveryNotes")
+    assert block.count(_NOTES_LABEL) == 1

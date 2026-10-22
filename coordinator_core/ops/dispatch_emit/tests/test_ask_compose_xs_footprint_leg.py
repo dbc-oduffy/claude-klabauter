@@ -55,8 +55,11 @@ def test_non_xs_or_unknown_arm_composes_no_footprint_leg(arm):
         assert "label: 'footprint'" not in _compose(writes=())
 
 
-def test_footprint_prompt_is_a_quoted_string_literal(arm):
+def test_footprint_prompt_is_quoted_and_carries_the_shared_head(arm):
     arm("xs")
     script = _compose(writes=(), baton={"path": "state/handoffs/b.md", "deliverable_id": "dlv-1"})
     call = script[script.index("const _fp = await agent(") + len("const _fp = await agent(") :]
-    assert call[:2] in ("('", '("', "(`"), call[:80]
+    call = call[: call.index("label: 'footprint'")]
+    # The footprint prose is a JS string literal, never raw text spliced into the script.
+    assert "'Read the XS sizing at " in call or '"Read the XS sizing at ' in call, call[:200]
+    assert "_agentDefsClause()" in call, call[:200]

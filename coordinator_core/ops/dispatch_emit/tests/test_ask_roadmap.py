@@ -177,6 +177,15 @@ def test_waves_pass_plan_blitz_batons_only_with_no_size_review_switch(repo):
     assert "sizeReview" not in call and "skipSizeReview" not in call
 
 
+def test_roadmap_no_ready_halt_appends_pulled_reasons(repo):
+    _put(repo)
+    script = _compose(repo)
+    assert "const _pulled = [];" in script
+    assert "for (const p of (_pb?.pulled ?? [])) _pulled.push(p);" in script
+    assert script.index("_pulled.push") < script.index("plan-blitz reported no ready plan")
+    assert "reason: ('plan-blitz reported no ready plan' + ((_pulled ?? [])" in script
+
+
 def test_next_action_carries_the_run_mode_in_the_fanout_spec():
     from coordinator_core.ops.dispatch_emit.ask_roadmap import roadmap_next_action_js
 
