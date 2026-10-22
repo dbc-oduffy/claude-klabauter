@@ -1,7 +1,8 @@
 """Re-run a finished run's failing targeted tests and write the fresh verdict the landing gate reads.
 
 Runs outside any engine op: ``python -m coordinator_core.ops.dispatch_emit.retest_targeted
---from-task-output FILE [--tests PATH ...]``. Exit 0 on pass or stale, 1 on fail, 2 on a read error.
+--from-task-output FILE [--tests PATH ...]``. Exit 0 on pass or stale, 1 on fail, 2 on a read error or an ``error`` verdict (launcher
+denied, missing or exited without test results; the record carries ``reason``).
 
 A failure with no baseline names its tests from ``--tests``, else the run's recorded targeted set;
 with neither, a ``stale`` verdict with a ``note`` is written and the gate reads it as non-blocking.
@@ -77,6 +78,27 @@ def _recorded_targeted_set(params: dict, verdict: object) -> list[str]:
     return []
 
 
+def _launch_argv(root: Path, tests: list[str]) -> "list[str] | str":
+    """The command that runs ``tests``: the repo's declared ``targeted_test_launcher`` under its
+    pinned interpreter (else this one) with the node ids passed through, else ``fast_test_cmd``
+    with the paths appended. A string return is the reason no command could be built."""
+    from coordinator_core import diff_scoped_tests, resolve_validation_cmd
+    from coordinator_core.ops.dispatch_emit import test_interpreter as ti
+
+    declared = resolve_validation_cmd.read_local_md_key(str(root), ti.LAUNCHER_KEY).strip()
+    if declared:
+        script = declared.split()[0]
+        if Path(script).is_absolute() or ".." in re.split(r"[\/]", script) or not (root / script).is_file():
+            return f"{ti.LAUNCHER_KEY} {declared!r} is not a repo-relative file that exists"
+        pin = ti.resolve_targeted_test_python(root)
+        python = pin.command if pin.command and pin.defect is None else sys.executable
+        return [python, *shlex.split(declared), *tests]
+    resolved = resolve_validation_cmd.resolve_fast_test_cmd(str(root))
+    if resolved.returncode != 0:
+        return f"fast_test_cmd unresolved: {resolved.stderr.strip()}"
+    return shlex.split(diff_scoped_tests.append_test_paths(resolved.stdout.strip(), tests))
+
+
 def _write_stale(root: Path, run_id: str, dirty: Callable[[Path], list[str]], head_sha: Callable) -> int:
     """Write a ``stale`` verdict (non-blocking to the landing gate) with a named note when no
     targeted set is recorded and no ``--tests`` was given."""
@@ -108,7 +130,6 @@ def main(
     run: Callable[[list[str], Path], int] = _run_argv,
     dirty: Callable[[Path], list[str]] = dirty_paths,
 ) -> int:
-    from coordinator_core import diff_scoped_tests, resolve_validation_cmd
     from coordinator_core.git.git_state import head_sha
     from coordinator_core.ops.dispatch_emit import terminal_commit
 
@@ -138,15 +159,29 @@ def main(
         )
         return 2
 
-    resolved = resolve_validation_cmd.resolve_fast_test_cmd(str(root))
-    if resolved.returncode != 0:
-        print(f"retest_targeted: {resolved.stderr.strip()}", file=sys.stderr)
-        return 2
-    cmd = diff_scoped_tests.append_test_paths(resolved.stdout.strip(), tests)
-    status = "pass" if run(shlex.split(cmd), root) == 0 else "fail"
+    status, reason = "pass", ""
+    argv_or_err = _launch_argv(root, tests)
+    if isinstance(argv_or_err, str):
+        status, reason = "error", argv_or_err
+    else:
+        try:
+            rc = run(argv_or_err, root)
+        except OSError as exc:
+            rc, reason = None, f"launcher could not start: {exc}"
+        if rc is None:
+            status = "error"
+        elif rc == 1:
+            status = "fail"
+        elif rc != 0:
+            status = "error"
+            reason = (
+                f"launcher exited {rc} with no test results (denied, missing or crashed launcher): "
+                + shlex.join(argv_or_err)
+            )
 
+    test_files = [t.split("::")[0] for t in tests]
     try:
-        covered_paths = list(dict.fromkeys([*tests, *dirty(root)]))
+        covered_paths = list(dict.fromkeys([*test_files, *dirty(root)]))
     except RuntimeError as exc:
         print(f"retest_targeted: {exc}", file=sys.stderr)
         return 2
@@ -158,11 +193,13 @@ def main(
         "status": status,
         "at": datetime.now(timezone.utc).isoformat(),
     }
+    if reason:
+        record["reason"] = reason
     path = li.fresh_verdict_path(root, run_id)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(record, indent=2), encoding="utf-8")
-    print(f"{path} {status}")
-    return 0 if status == "pass" else 1
+    print(f"{path} {status}" + (f": {reason}" if reason else ""))
+    return {"pass": 0, "fail": 1}.get(status, 2)
 
 
 if __name__ == "__main__":

@@ -1794,7 +1794,7 @@ def commit_paths(
     try:
         for pause in (*_SPLICE_LOCK_BACKOFF_SECS, None):
             try:
-                index_write.splice_index(repo, index_updates)
+                index_write.splice_index(repo, index_updates, stat_fallback=True)
                 break
             except index_write.IndexWriteLockBusy:
                 # A peer's lock is held for the width of its own write; sleeping costs
@@ -1804,11 +1804,12 @@ def commit_paths(
                 time.sleep(pause)
     except index_write.IndexWriteError as exc:
         stale = tuple(sorted(index_updates))
+        if _reset_index_paths(repo, stale):
+            return outcome
         raise index_write.IndexStaleAfterCommit(
             f"commit {commit_sha} LANDED; the index splice did not: {exc}. "
-            "Do not retry -- the work is in history. Re-stage the index_stale "
-            "paths (`git add -- <paths>`), or unstage them to HEAD "
-            "(`git reset -q HEAD -- <paths>`).",
+            "Do not retry -- the work is in history. index_stale: true. Repair: "
+            "`git reset -q -- <index_stale paths>` (or `git add -- <paths>` to re-stage).",
             outcome=outcome,
             paths=stale,
         ) from exc
@@ -1820,6 +1821,26 @@ def commit_paths(
         no_delta=tuple(no_delta),
         sign_warning=sign_warning,
     )
+
+
+def _reset_index_paths(repo: Union[str, Path], paths: Sequence[str]) -> bool:
+    """One batched `git reset -q` over a NUL pathspec on stdin, retried once on a held
+    `index.lock`; True when the index entries for `paths` now equal HEAD."""
+    from coordinator_core.git.run import run_git
+
+    if not paths:
+        return True
+    payload = b"".join(p.encode("utf-8", "surrogateescape") + b"\0" for p in paths)
+    for pause in (0.1, None):
+        result = run_git(
+            ["reset", "-q", "--pathspec-from-file=-", "--pathspec-file-nul"],
+            cwd=str(repo), input=payload,
+        )
+        if result.ok:
+            return True
+        if pause is not None:
+            time.sleep(pause)
+    return False
 
 
 #: Pause after each lock-busy post-ref splice attempt; one more attempt than entries.

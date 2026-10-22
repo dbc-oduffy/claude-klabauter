@@ -51,6 +51,7 @@ import hashlib
 import os
 import struct
 from pathlib import Path
+from types import SimpleNamespace
 from typing import IO, Dict, Mapping, Optional, Tuple, Union
 
 from coordinator_core.git.git_dir import resolve_git_dir
@@ -64,6 +65,9 @@ _EXT_FLAGS_LEN = 2
 _SUPPORTED_VERSIONS = (2, 3)
 _FLAG_EXTENDED = 0x4000
 _XFLAG_INTENT_TO_ADD = 0x2000
+
+
+_ZERO_STAT = SimpleNamespace(st_mtime=0, st_size=0)
 
 
 class _DropIfIntentToAdd:
@@ -206,7 +210,14 @@ def _build_entry(name: bytes, mode: int, sha_hex: str, st: os.stat_result) -> by
 def splice_index(
     repo: Union[str, Path],
     updates: Mapping[str, object],
+    *,
+    stat_fallback: bool = False,
 ) -> None:
+    """Splice `updates` into `.git/index` under `index.lock`.
+
+    `stat_fallback`: a path whose worktree file cannot be stat'ed still gets its entry, with a zeroed
+    stat that git reads as changed and re-hashes. Off, one unstat-able path refuses the whole splice.
+    """
     refuse_dotgit(updates)
     gitdir = resolve_git_dir(repo)
     index_path = gitdir / "index"
@@ -222,7 +233,7 @@ def splice_index(
 
     try:
         with os.fdopen(fd, "wb") as handle:
-            _splice_locked(handle, root, index_path, lock_path, updates)
+            _splice_locked(handle, root, index_path, lock_path, updates, stat_fallback)
     finally:
         if lock_path.exists():
             try:
@@ -237,6 +248,7 @@ def _splice_locked(
     index_path: Path,
     lock_path: Path,
     updates: Mapping[str, object],
+    stat_fallback: bool = False,
 ) -> None:
     try:
         raw = index_path.read_bytes()
@@ -293,9 +305,11 @@ def _splice_locked(
         try:
             st = (root / path).stat()
         except OSError as exc:
-            raise IndexWriteError(
-                f"cannot stat {path} to record its index entry: {exc}"
-            ) from exc
+            if not stat_fallback:
+                raise IndexWriteError(
+                    f"cannot stat {path} to record its index entry: {exc}"
+                ) from exc
+            st = _ZERO_STAT
         replacements[key] = _build_entry(key, int(mode), str(sha_hex), st)
 
     view = memoryview(raw)

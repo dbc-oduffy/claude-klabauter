@@ -806,14 +806,6 @@ _EXEMPT_SITES: frozenset[tuple[str, str, str, int]] = frozenset(
         # the other batched node". No batch primitive can substitute: this is `pytest`, not `git`,
         # and there is no cross-node "run each in its own process but report together" form.
         ("coordinator/bin/stable-suite-run.py", "_triage_isolation", "run", 0),
-        # 2026-09-18 -- # class: structural-floor. `mise-census-revalidate.py::run_entry` runs
-        # each `census[]` entry's own INDEPENDENTLY AUTHORED shell `command` -- one row of a
-        # plan's frontmatter, recorded when the plan's premises were mise-prepped, with its own
-        # `--timeout` and its own recorded/observed diff. There is no shared executable or argv
-        # across entries to fold into one spawn (each is arbitrary shell text drawn from a
-        # different plan author, run through a named POSIX shell -- never shell=True/cmd.exe).
-        # Relocating the call only moves the flag.
-        ("coordinator/bin/mise-census-revalidate.py", "revalidate", "run_entry", 0),
         # 2026-10-08 -- # class: structural-floor. `census-recheck.py::recheck_plan` re-runs each
         # `census[]` row's own independently authored shell `command`, the same shape as
         # `mise-census-revalidate.py::run_entry` above: no shared argv across rows to fold.

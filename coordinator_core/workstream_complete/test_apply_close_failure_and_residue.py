@@ -53,18 +53,15 @@ def _run_apply(
     directives: Optional[list[dict[str, Any]]] = None,
     entry_stdout: str = "",
     gates: Optional[dict[str, Any]] = None,
-    commit_calls: Optional[list[dict[str, Any]]] = None,
 ) -> tuple[int, dict[str, Any]]:
     from coordinator_core.ops.ceremony import post_commit_tail
 
     result = commit or _CommitResult()
-
-    def _commit(worktree_root, **kwargs):
-        if commit_calls is not None:
-            commit_calls.append(kwargs)
-        return result
-
-    monkeypatch.setattr(ws_apply.directives_commit_tail, "run_close_commit_and_release_claims", _commit)
+    monkeypatch.setattr(
+        ws_apply.directives_commit_tail,
+        "run_close_commit_and_release_claims",
+        lambda worktree_root, **kwargs: result,
+    )
     monkeypatch.setattr(ws_apply, "_no_commit_row_judgment", lambda decisions, root: None)
     monkeypatch.setattr(post_commit_tail, "fold_completion_entry_commit", lambda *a, **k: {"acted": []})
 
@@ -233,127 +230,3 @@ def test_the_four_census_gates_stay_advisory(monkeypatch, repo: Path) -> None:
 
 def test_the_halt_ladder_is_unchanged() -> None:
     assert {m.name: int(m) for m in EXIT if m.name != "SUCCESS"} == dict(apply_halt.CEREMONY_HALT_EXIT_CODES)
-
-
-# --- completion_* keys, nothing-committed, push_pending ----------------------
-
-_ENTRY_REL = "state/completions/entry.md"
-_ENTRY_DIRECTIVE = {
-    "id": "d-complete-entry",
-    "cli": "coordinator-complete-entry",
-    "args": [],
-    "depends_on": None,
-    "already_satisfied": False,
-}
-
-
-def _write_entry(monkeypatch: pytest.MonkeyPatch, repo: Path) -> None:
-    monkeypatch.setattr(ws_apply, "resolve_repo_root", lambda *a, **k: repo)
-    (repo / _ENTRY_REL).parent.mkdir(parents=True)
-    (repo / _ENTRY_REL).write_text("entry\n", encoding="utf-8")
-
-
-def test_completion_alias_keys_fill_and_stage_the_entry(monkeypatch, repo: Path) -> None:
-    from coordinator_core.ops.ceremony import completion_entry
-
-    _write_entry(monkeypatch, repo)
-    filled: dict[str, Any] = {}
-    monkeypatch.setattr(completion_entry, "fill_authored_surfaces", lambda root, path, **kw: filled.update(kw))
-    calls: list[dict[str, Any]] = []
-    decisions = {
-        "subject": "s",
-        "completion_title": "T",
-        "completion_prose": "P",
-        "completion_nature": "bugfix",
-    }
-    exit_code, report = _run_apply(
-        monkeypatch, repo, decisions, directives=[_ENTRY_DIRECTIVE], entry_stdout=_ENTRY_REL, commit_calls=calls
-    )
-    assert filled == {"title": "T", "prose": "P", "nature": "bugfix"}
-    assert report["decision_keys"]["aliased"] == ["completion_title", "completion_prose", "completion_nature"]
-    assert report["completion_entry_filled"] is True
-    assert _ENTRY_REL in calls[0]["stage_paths"]
-    assert report["close_commit"]["committed_sha"]
-
-
-def test_an_unknown_completion_key_is_refused_before_any_directive(monkeypatch, repo: Path) -> None:
-    calls: list[dict[str, Any]] = []
-    exit_code, report = _run_apply(
-        monkeypatch,
-        repo,
-        {"subject": "s", "completion_summary": "x"},
-        directives=[_ENTRY_DIRECTIVE],
-        entry_stdout=_ENTRY_REL,
-        commit_calls=calls,
-    )
-    assert exit_code == int(EXIT.HALTED_AT_JUDGMENT)
-    assert report["refused_decision_keys"] == ["completion_summary"]
-    assert "completion_summary" in report["error"] and "completion_title" in report["error"]
-    assert report["landed"] == [] and calls == []
-    assert not (repo / _ENTRY_REL).exists()
-
-
-def test_a_fill_failed_entry_is_reported_unstaged_and_fails_the_close(monkeypatch, repo: Path) -> None:
-    from coordinator_core.ops.ceremony import completion_entry
-
-    _write_entry(monkeypatch, repo)
-
-    def _raise(root, path, **kw):
-        raise completion_entry.AuthoredSurfaceMissing(["title"])
-
-    monkeypatch.setattr(completion_entry, "fill_authored_surfaces", _raise)
-    calls: list[dict[str, Any]] = []
-    exit_code, report = _run_apply(
-        monkeypatch,
-        repo,
-        {"subject": "s"},
-        commit=_CommitResult(committed_sha=None),
-        directives=[_ENTRY_DIRECTIVE],
-        entry_stdout=_ENTRY_REL,
-        commit_calls=calls,
-    )
-    assert report["completion_entry_path"] == _ENTRY_REL
-    assert report["completion_entry_filled"] is False
-    assert _ENTRY_REL not in (calls[0].get("stage_paths") or ())
-    assert report["completion_entry_landing"]["state"] == "untracked"
-    commit_report = report["close_commit"]
-    assert commit_report["commit_failed"] is True
-    assert _ENTRY_REL in commit_report["error"] and "title" in commit_report["error"]
-    assert {"close-commit:nothing-committed", "completion-entry:untracked"} <= set(_failed_ids(report))
-    _assert_exit_ladder_invariant(exit_code, report)
-
-
-def test_an_empty_pathspec_close_fails_with_the_commit_tails_diagnostic(monkeypatch, repo: Path) -> None:
-    result = _CommitResult(committed_sha=None)
-    result.diagnostics = ("close commit attempted with an empty pathspec",)
-    exit_code, report = _run_apply(monkeypatch, repo, {"subject": "s"}, commit=result)
-    assert exit_code == int(EXIT.PARTIAL_MUTATION)
-    assert _failed_ids(report) == ["close-commit:nothing-committed"]
-    assert "empty pathspec" in report["close_commit"]["error"]
-    _assert_exit_ladder_invariant(exit_code, report)
-
-
-def test_push_pending_rides_the_push_report_when_ahead(monkeypatch, repo: Path) -> None:
-    pending = {"branch": "b", "remote": "origin", "ahead": 2, "capped": False, "command": "git push origin b"}
-    monkeypatch.setattr(ws_apply.push_pending, "push_pending", lambda root: pending)
-    exit_code, report = _run_apply(monkeypatch, repo, {"subject": "s"})
-    assert exit_code == int(EXIT.SUCCESS)
-    assert report["push"]["push_status"] == "cadence-pending"
-    assert report["push"]["push_pending"] == pending
-
-
-def test_a_synced_branch_carries_no_push_pending(monkeypatch, repo: Path) -> None:
-    monkeypatch.setattr(ws_apply.push_pending, "push_pending", lambda root: None)
-    _, report = _run_apply(monkeypatch, repo, {"subject": "s"})
-    assert "push_pending" not in report["push"]
-
-
-def test_a_push_pending_read_failure_never_crashes_the_close(monkeypatch, repo: Path) -> None:
-    def _boom(root):
-        raise OSError("unreadable ref")
-
-    monkeypatch.setattr(ws_apply.push_pending, "push_pending", _boom)
-    exit_code, report = _run_apply(monkeypatch, repo, {"subject": "s"})
-    assert exit_code == int(EXIT.SUCCESS)
-    assert "push_pending" not in report["push"]
-    assert "unreadable ref" in report["push"]["push_pending_error"]

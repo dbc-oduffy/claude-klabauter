@@ -277,3 +277,16 @@ def test_splice_index_refuses_dotgit_component(tmp_path):
     for name in (".git/coordinator-sessions/s/review-targets.txt", "a/.GIT/x", "a\\.git\\x"):
         with pytest.raises(index_write.DotGitPathRefused):
             index_write.splice_index(tmp_path, {name: index_write.ABSENT})
+
+
+def test_stat_fallback_splices_a_path_whose_worktree_file_is_gone(tmp_path):
+    repo = _repo(tmp_path)
+    (repo / "kept.txt").write_bytes(b"kept\n")
+    kept = write_object(repo / ".git", b"blob", b"kept\n")
+    gone = write_object(repo / ".git", b"blob", b"gone\n")
+    updates = {"kept.txt": (0o100644, kept), "gone.txt": (0o100644, gone)}
+    with pytest.raises(index_write.IndexWriteError, match="cannot stat"):
+        index_write.splice_index(repo, updates)
+    index_write.splice_index(repo, updates, stat_fallback=True)
+    staged = _git(repo, "ls-files", "-s").stdout
+    assert gone in staged and kept in staged

@@ -110,11 +110,11 @@ def test_h1_lock_busy_once_still_ends_at_head(repo, monkeypatch):
     real = index_write.splice_index
     calls = {"n": 0}
 
-    def flaky(repo_path, updates):
+    def flaky(repo_path, updates, **kw):
         calls["n"] += 1
         if calls["n"] == 1:
             raise index_write.IndexWriteLockBusy("simulated peer lock")
-        return real(repo_path, updates)
+        return real(repo_path, updates, **kw)
 
     monkeypatch.setattr(index_write, "splice_index", flaky)
     _run_plain(repo)
@@ -138,11 +138,12 @@ def test_persistent_splice_failure_reports_index_stale(repo, monkeypatch):
     """A splice that keeps failing yields committed: true, the sha, and index_stale naming the paths."""
     calls = {"n": 0}
 
-    def busy(_repo_path, _updates):
+    def busy(_repo_path, _updates, **_kw):
         calls["n"] += 1
         raise index_write.IndexWriteLockBusy("simulated peer lock")
 
     monkeypatch.setattr(index_write, "splice_index", busy)
+    monkeypatch.setattr(commit, "_reset_index_paths", lambda *_a: False)
     out = _run_plain(repo)
     assert calls["n"] == len(commit._SPLICE_LOCK_BACKOFF_SECS) + 1
     assert out["sha"]

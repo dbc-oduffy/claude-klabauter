@@ -317,7 +317,6 @@ from coordinator_core.session.machinery_paths import (
 
 from coordinator_core.workstream_complete import close_residue as _close_residue
 from coordinator_core.workstream_complete import completion_verdict as _completion_verdict
-from coordinator_core.workstream_complete import decision_keys
 from coordinator_core.workstream_complete import directives_commit_tail
 from coordinator_core.workstream_complete import directives_completion
 from coordinator_core.workstream_complete import directives_lessons_plan
@@ -511,7 +510,6 @@ FREE_VALUE_KEYS: tuple[str, ...] = (
     "shared_schema_touched",
     "surface_count",
     "unattributable_files",
-    *decision_keys.COMPLETION_KEY_ALIASES,
 )
 
 

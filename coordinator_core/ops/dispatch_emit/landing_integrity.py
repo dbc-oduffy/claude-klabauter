@@ -261,8 +261,17 @@ def landing_test_gate(
     (``"pre-existing-only"`` when all are), and each other file is its own refusal whose remedy
     retests that file. With no id known the refusal names the ``failed_tests`` param."""
     fresh = fresh_targeted_verdict(worktree_root, run_id) if run_id else None
+    if fresh is not None and fresh.get("status") == "error" and fresh.get("tests_run") != 0:
+        reason = fresh.get("reason") or "launcher produced no test results"
+        return [Finding("", TARGETED_TESTS_FAILED,
+                        f"the run's retest errored without running tests ({reason}); "
+                        f"fix the launcher and re-run: {retest_remedy(params)}")], "failed"
+    if fresh is not None and fresh.get("status") == "fail" and not isinstance(fresh.get("baseline"), Mapping):
+        verdict, fresh = fresh, None
+    else:
+        verdict = None
     if fresh is None:
-        verdict = targeted_test_verdict(params)
+        verdict = verdict or targeted_test_verdict(params)
         if failed_targeted_tests(verdict)[1] == NOT_RUN_CHECK:
             return [], NOT_RUN_CHECK
         nodes = _failed_nodes(params, verdict)
