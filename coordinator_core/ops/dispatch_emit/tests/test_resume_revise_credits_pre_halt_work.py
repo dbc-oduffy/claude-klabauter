@@ -1,0 +1,64 @@
+"""A ledger-check resume with no unlanded rows and a revise note judges the work at HEAD: a met verdict
+stands only when met_by names a sha the row's own halt record names; otherwise the row stays not_met.
+The whole composed script runs under node with every agent leg stubbed by label."""
+
+from __future__ import annotations
+
+import pytest
+
+from coordinator_core.ops.dispatch_emit.tests.test_ask_compose_all_landed_ledger import (
+    _RESUME,
+    _labels,
+    _run,
+    _script,
+)
+from coordinator_core.ops.dispatch_emit.tests.test_ask_compose_stage_handle import (  # noqa: F401
+    readers_cfg,
+    stage_root,
+)
+
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
+_SHA = "9d5f6cb5f6"
+_HALT = "a" * 40
+_REVISED = {
+    "run_id": "ask-prior", "plan": _RESUME["plan"], "blocking": ["R1"], "halt_sha": _HALT,
+    "unlanded": [], "revise_notes": ["R1 is ruled met by the work in " + _SHA],
+    "remaining": {"R1": {"remaining": ["update the sizing"], "evidence": "committed in " + _SHA}},
+}
+
+
+def _met(met_by):
+    return {"items": [{"id": "R1", "status": "met", "wired": True, "met_by": met_by}]}
+
+
+def test_a_met_verdict_naming_the_halt_recorded_commit_reaches_the_commit_leg(monkeypatch):
+    out = _run(_script(monkeypatch), verify=_met(_SHA), resume=_REVISED)
+    assert out["result"]["halted_by"] is None, out["result"]["halted_by"]
+    assert "commit" in _labels(out)
+
+
+@pytest.mark.parametrize("met_by", ["none", "abcdef1234", ""])
+def test_a_met_verdict_without_a_halt_recorded_sha_halts_not_met(monkeypatch, met_by):
+    out = _run(_script(monkeypatch), verify=_met(met_by), resume=_REVISED)
+    halted = out["result"]["halted_by"]
+    assert halted["halted"] == "ledger-check"
+    assert halted["items"][0]["status"] == "not_met"
+    assert halted["items"][0]["remaining"] == ["met_by: the commit sha that carries the credited work"]
+    assert "commit" not in _labels(out)
+
+
+def test_the_judge_prompt_credits_work_before_the_halt_only_when_a_note_re_rules(monkeypatch):
+    out = _run(_script(monkeypatch), verify=_met(_SHA), resume=_REVISED)
+    verify = next(c for c in out["calls"] if c["label"] == "verify")["prompt"]
+    assert "including commits before the halt commit" in verify
+    assert "met_by must name the commit sha" in verify
+    plain = dict(_REVISED, revise_notes=[])
+    verify = next(c for c in _run(_script(monkeypatch), resume=plain)["calls"] if c["label"] == "verify")["prompt"]
+    assert "met only on work changed since the halt commit" in verify
+    assert "including commits before the halt commit" not in verify
+
+
+def test_the_halt_next_action_names_the_pre_halt_credit_path(monkeypatch):
+    out = _run(_script(monkeypatch), verify=_met("none"), resume=_REVISED)
+    assert "work committed before the halt meet it" in out["result"]["halted_by"]["next_action"]

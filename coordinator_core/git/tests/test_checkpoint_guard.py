@@ -89,6 +89,42 @@ def test_writes_reverted_outside_the_run_are_refused(repo):
         gcommit.commit_paths(repo, ["src/a.py"], _message(base))
 
 
+_STAMP = "plan: gated_exit_criteria met (x) — docs/p.md"
+
+
+def _checkpoint_over_plan_commit(repo, plan_text, subject):
+    base = gcommit.head_sha(repo)
+    _write(repo, "docs/p.md", plan_text)
+    gcommit.commit_paths(repo, ["docs/p.md"], subject)
+    _write(repo, "docs/p.md", plan_text + "\nrow edit\n")
+    return gcommit.commit_paths(repo, ["docs/p.md"], _message(base))
+
+
+def test_the_engine_frontmatter_stamp_is_not_outside_the_run(repo):
+    stamped = _PLAN.format(a1="open").replace("title: p\n", "title: p\nmet: true\n")
+    assert _checkpoint_over_plan_commit(repo, stamped, _STAMP)
+
+
+def test_a_same_session_body_edit_under_the_stamp_subject_is_refused(repo):
+    edited = _PLAN.format(a1="open").replace("title: a", "title: reverted")
+    with pytest.raises(CommitRefused, match="changed outside this run: docs/p.md"):
+        _checkpoint_over_plan_commit(repo, edited, _STAMP + "\n\nSession-Id: s1")
+
+
+def test_a_frontmatter_only_stamp_naming_another_plan_is_refused(repo):
+    stamped = _PLAN.format(a1="open").replace("title: p\n", "title: p\nmet: true\n")
+    with pytest.raises(CommitRefused, match="changed outside this run: docs/p.md"):
+        _checkpoint_over_plan_commit(
+            repo, stamped, "plan: gated_exit_criteria met (x) — docs/other.md"
+        )
+
+
+def test_a_frontmatter_only_edit_under_a_non_stamp_subject_is_refused(repo):
+    stamped = _PLAN.format(a1="open").replace("title: p\n", "title: p\nmet: true\n")
+    with pytest.raises(CommitRefused, match="changed outside this run: docs/p.md"):
+        _checkpoint_over_plan_commit(repo, stamped, "hand edit\n\nSession-Id: s1")
+
+
 def test_a_checkpoint_without_the_guard_lines_is_refused(repo):
     _write(repo, "src/a.py", "v1\n")
     with pytest.raises(CommitRefused, match="re-emit"):

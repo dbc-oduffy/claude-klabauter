@@ -106,4 +106,6 @@ def test_round_does_not_push_when_import_gate_fails(tmp_path, monkeypatch):
     rc, out, spy, dest = base._run_round(tmp_path, monkeypatch)
 
     assert rc == base._mod._EXIT_FAIL
+    assert " — FAIL" in out and " — PASS" not in out
+    assert "engine-import-gate:  mod -> ImportError: x" in out
     assert not [c for c in spy.calls if c and str(c[0]) == "git" and "push" in [str(x) for x in c]]

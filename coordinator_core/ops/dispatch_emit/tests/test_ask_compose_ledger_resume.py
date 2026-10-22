@@ -134,7 +134,7 @@ def test_a_remaining_work_leg_runs_for_blocking_rows_before_the_verify(monkeypat
     assert "_gate.resume_ledger.remaining ?? {}" in leg
     assert "_gate.resume_ledger.revise_notes ?? []" in leg
     assert "notes.jsonl" in leg
-    assert "flatMap((r) => r.writes ?? [])" in leg
+    assert "_gate.resume_ledger.remaining_leg?.writes ?? (_manifest?.rows ?? []).flatMap((r) => r.writes ?? [])" in leg
     assert "agentType: 'coordinator:executor'" in script[script.index("label: 'ledger-remaining'"):][:200]
 
 

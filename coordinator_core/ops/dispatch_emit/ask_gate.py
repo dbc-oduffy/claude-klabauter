@@ -29,12 +29,14 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     HALT_ROOM,
     HALT_SPLIT,
     HALT_TOUCHPOINT,
+    LEG_REFUSE,
     RESEARCH_HANDBACK_ROUTE,
     RESEARCH_MIXED_REFUSAL,
     RESUME_LEDGER_CARRIED_MET_FIELD,
     RESUME_LEDGER_EM_DISCHARGED_FIELD,
     RESUME_LEDGER_HALT_SHA_FIELD,
     RESUME_LEDGER_KIND_FIELD,
+    RESUME_LEDGER_LEG_FIELD,
     RESUME_LEDGER_NOTES_FIELD,
     RESUME_LEDGER_REMAINING_FIELD,
     RESUME_LEDGER_REVISED_FIELD,
@@ -160,8 +162,8 @@ def gate(
     sizing's scope; a malformed registry with a non-empty scope halts `registry-unparseable`.
     `mint_design_rows` (a run-bound call) also appends one design row per hit to the register.
     `landed_sink`, when given, receives the row resume's `ResumePlan.landed_open`.
-    `run_id` (a run-bound call) carries the run's and its `resumed_from` predecessor's revise notes into
-    `resume_ledger`, and refuses a predecessor note no leg of a non-ledger resume reads.
+    `run_id` (a run-bound call) carries the run's and its `resumed_from` predecessor's live (unretracted)
+    revise notes into `resume_ledger` and the run's requirements view, and refuses nothing on notes.
     """
     from coordinator_core import design_registry as dr
     from coordinator_core.ops.dispatch_emit import design_conformance as dc
@@ -343,15 +345,6 @@ def _arm_verdict(
         resume_ledger = _resume_ledger(sizing, resume.ledger, repo_root, run_id=run_id) if resume else None
     except SizingFireRefused as exc:
         return _halt(HALT_REFUSAL, "; ".join(exc.fields))
-    if run_id and resume_ledger is None:
-        unread = _unread_predecessor_notes(sizing, repo_root, run_id)
-        if unread:
-            prev = unread[0]["run"]
-            return _halt(
-                HALT_REFUSAL,
-                f"run {prev} carries {len(unread)} revise note(s) no leg of this refire reads: "
-                f"workflow.revise with verbatim on {prev} for each requirement, then refire",
-            )
     resume_plan = resume.plan_rel if resume and resume_ledger is None else None
     resume_rows = list(resume.incomplete) if resume and resume_ledger is None else None
     if landed_sink is not None and resume_rows:
@@ -391,18 +384,6 @@ def _arm_verdict(
     )
 
 
-def _unread_predecessor_notes(sizing: dict, repo_root: Path, run_id: str) -> list[dict]:
-    """The `resumed_from` predecessor's notes that no `revision@` register row acknowledges. The run's
-    own notes are excluded: a rebound run's row legs already read them."""
-    from coordinator_core.ops.dispatch_emit.requirements_ledger import carried_notes, unacknowledged_notes
-
-    prior = [n for n in carried_notes(Path(repo_root), run_id) if n["run"] != run_id]
-    if not prior:
-        return []
-    rows = [r for r in (sizing.get("requirement_register") or {}).get("rows") or [] if isinstance(r, dict)]
-    return unacknowledged_notes(prior, rows)
-
-
 def _resume_ledger(sizing: dict, halt, repo_root: Path, run_id: Optional[str] = None) -> Optional[dict]:
     """The verdict's `resume_ledger` for a ledger-halt resume: run, plan, blocking ids, the
     sizing's rulable register ids and the plan's em-discharged rows as `{row_id: text}`; None when
@@ -411,14 +392,15 @@ def _resume_ledger(sizing: dict, halt, repo_root: Path, run_id: Optional[str] = 
     if halt is None:
         return None
     from coordinator_core.ops.dispatch_emit.requirements_ledger import (
+        NOTES_FILE,
         ORIGIN_REVISION,
         _origin,
         carried_notes,
         ledger_ids,
-        read_notes,
         ruled_out_ids,
         run_dir,
     )
+    from coordinator_core.ops.dispatch_emit import run_notes
     from coordinator_core.ops.plan_tasks_mutate import read_em_discharges
 
     rows = (sizing.get("requirement_register") or {}).get("rows") or []
@@ -436,9 +418,12 @@ def _resume_ledger(sizing: dict, halt, repo_root: Path, run_id: Optional[str] = 
         *(r for r in rulable if r not in halt.blocking and r not in carried),
     ]
     all_landed = halt.halted == ALL_LANDED_HALT_KIND
-    notes = [] if all_landed and halt.run_id == ALL_LANDED_NO_RUN else read_notes(run_dir(Path(repo_root), halt.run_id))
+    notes = (
+        [] if all_landed and halt.run_id == ALL_LANDED_NO_RUN
+        else [e["note"] for e in run_notes.live(run_notes.entries(run_dir(Path(repo_root), halt.run_id) / NOTES_FILE, halt.run_id))]
+    )
     if run_id:
-        notes = list(dict.fromkeys([*notes, *(n["note"] for n in carried_notes(Path(repo_root), run_id))]))
+        notes = list(dict.fromkeys([*notes, *(n["note"] for n in run_notes.live(carried_notes(Path(repo_root), run_id)))]))
     revision_ids = {
         str(r.get("id")) for r in rows
         if isinstance(r, dict) and _origin(r.get("anchor"))[0] == ORIGIN_REVISION
@@ -657,8 +642,24 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             out["manifest_handle"] = reply_sidecar.handle_for(root, record_dir(root, params["run_id"]) / "manifest.json")
             if stamp["outcome"] != "unchanged":
                 out[PLAN_EXECUTING_STAMP_KEY] = stamp
+            if ledger_resume:
+                from coordinator_core.ops.dispatch_emit.ledger_remaining_paths import remaining_leg_plan
+
+                resume_out = out["resume_ledger"]
+                resume_out[RESUME_LEDGER_LEG_FIELD] = remaining_leg_plan(
+                    resume_out.get(RESUME_LEDGER_REMAINING_FIELD) or {},
+                    resume_out.get(RESUME_LEDGER_NOTES_FIELD) or [],
+                    [w for r in manifest.rows for w in r.writes],
+                    list(manifest.doc_writes),
+                    out.get("sizing_path") or sizing_rel,
+                    root,
+                )
         except (AskStageError, SizingFireRefused, reply_sidecar.ReplySidecarError) as exc:
             out["manifest"] = {"error": str(exc)}
+            if ledger_resume:
+                out["resume_ledger"][RESUME_LEDGER_LEG_FIELD] = {
+                    "action": LEG_REFUSE, "writes": [], "unwritable": [], "reason": str(exc),
+                }
     return out
 
 

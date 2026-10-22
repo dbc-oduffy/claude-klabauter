@@ -76,6 +76,75 @@ def test_resume_sibling_spends_a_receiptless_part(tmp_path, capsys):
     assert f"kept spent part {part}" in capsys.readouterr().err
 
 
+def test_orphan_spine_superseded_by_live_parts_is_removed(tmp_path, capsys):
+    t3 = tmp_path / f"{_BASE}-t3.md"
+    t3.write_text("rec", encoding="utf-8")
+    whole = tmp_path / f"{_BASE}-t2.spine.md"
+    whole.write_text("spine", encoding="utf-8")
+    live = tmp_path / f"{_BASE}-t2-p1.workflow.mjs"
+    live.write_text("// live", encoding="utf-8")
+
+    cli_module._clear_earlier_outputs(str(t3), [live])
+
+    assert not whole.exists()
+    assert f"superseded by this emit's live output {_BASE}-t2-p1" in capsys.readouterr().err
+
+
+def test_orphan_part_spine_superseded_by_live_whole_is_removed(tmp_path):
+    t3 = tmp_path / f"{_BASE}-t3.md"
+    t3.write_text("rec", encoding="utf-8")
+    part = tmp_path / f"{_BASE}-t2-p2.spine.md"
+    part.write_text("spine", encoding="utf-8")
+    live = tmp_path / f"{_BASE}-t2.workflow.mjs"
+    live.write_text("// live", encoding="utf-8")
+
+    cli_module._clear_earlier_outputs(str(t3), [live])
+
+    assert not part.exists()
+
+
+def test_orphan_spine_without_evidence_is_kept_and_surfaced(tmp_path, capsys):
+    t3 = tmp_path / f"{_BASE}-t3.md"
+    t3.write_text("rec", encoding="utf-8")
+    orphan = tmp_path / f"{_BASE}-t2.spine.md"
+    orphan.write_text("spine", encoding="utf-8")
+    live = tmp_path / f"{_BASE}-t3.workflow.mjs"
+    live.write_text("// live", encoding="utf-8")
+
+    cli_module._clear_earlier_outputs(str(t3), [live])
+
+    assert orphan.is_file()
+    assert f"kept unlanded spine {orphan}" in capsys.readouterr().err
+
+
+def test_orphan_spine_is_kept_when_live_stem_only_shares_a_prefix(tmp_path):
+    t3 = tmp_path / f"{_BASE}-t3.md"
+    t3.write_text("rec", encoding="utf-8")
+    orphan = tmp_path / f"{_BASE}-t2.spine.md"
+    orphan.write_text("spine", encoding="utf-8")
+    live = tmp_path / f"{_BASE}-t20-p1.workflow.mjs"
+    live.write_text("// live", encoding="utf-8")
+
+    cli_module._clear_earlier_outputs(str(t3), [live])
+
+    assert orphan.is_file()
+
+
+def test_orphan_spine_is_not_removed_on_age_alone(tmp_path):
+    import os
+
+    t3 = tmp_path / f"{_BASE}-t3.md"
+    t3.write_text("rec", encoding="utf-8")
+    orphan = tmp_path / f"{_BASE}-t2.spine.md"
+    orphan.write_text("spine", encoding="utf-8")
+    ancient = 946684800
+    os.utime(orphan, (ancient, ancient))
+
+    cli_module._clear_earlier_outputs(str(t3), [])
+
+    assert orphan.is_file()
+
+
 def test_unlanded_tranche_script_is_kept_too(tmp_path):
     t3 = tmp_path / f"{_BASE}-t3.md"
     t3.write_text("rec", encoding="utf-8")

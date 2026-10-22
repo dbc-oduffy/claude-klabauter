@@ -1,5 +1,5 @@
 """A run-bound gate carries the resumed predecessor's revise notes into resume_ledger, names
-revision rows, and refuses a predecessor note no leg of a non-ledger resume reads."""
+revision rows, and delivers a predecessor note through the run's requirements view."""
 
 from __future__ import annotations
 
@@ -76,33 +76,36 @@ def _row_resume(repo):
     _link(repo)
 
 
-def test_a_row_resume_with_an_unread_predecessor_note_refuses(repo):  # noqa: F811
+def _view(repo) -> str:
+    return (rl.run_dir(repo, NEW) / rl.LEDGER_VIEW_FILE).read_text(encoding="utf-8")
+
+
+def test_a_row_resume_with_an_unread_predecessor_note_arms_and_renders(repo):  # noqa: F811
     _row_resume(repo)
     assert gate(repo, REL).halt is None
     v = gate(repo, REL, run_id=NEW)
-    assert v.halt is not None and v.halt["kind"] == "refusal"
-    assert PREV in v.halt["reason"] and "workflow.revise" in v.halt["reason"]
+    assert v.halt is None
+    view = _view(repo)
+    assert "## Revise notes" in view and f"> {NOTE}" in view and f"{PREV} N1" in view
 
 
-def test_a_later_revision_row_lifts_the_refusal(repo):  # noqa: F811
-    _put_s(repo, requirement_register={"rows": [{"id": "R2", "status": "met", "anchor": "revision@2026-10-21T23:55:00Z"}]})
-    _plan(repo, rows=[("A1", "open"), ("A2", "open")])
-    _link(repo)
-    v = gate(repo, REL, run_id=NEW)
-    assert v.halt is None, v.halt
-
-
-def test_a_revision_row_older_than_the_note_still_refuses(repo):  # noqa: F811
-    _put_s(repo, requirement_register={"rows": [{"id": "R2", "status": "met", "anchor": "revision@2026-10-21T20:00:00Z"}]})
-    _plan(repo, rows=[("A1", "open"), ("A2", "open")])
-    _link(repo)
-    v = gate(repo, REL, run_id=NEW)
-    assert v.halt is not None and v.halt["kind"] == "refusal"
-
-
-def test_a_rebound_runs_own_notes_never_refuse(repo):  # noqa: F811
+def test_a_rebound_runs_own_note_renders_in_its_view(repo):  # noqa: F811
     _row_resume(repo)
-    own = rl.run_dir(repo, NEW)
-    (own / rl.NOTES_FILE).write_text(json.dumps({"note": "own", "at": NOTE_AT}) + "\n", encoding="utf-8")
     (rl.run_dir(repo, PREV) / rl.NOTES_FILE).unlink()
+    rl.revise(repo, NEW, note="own note")
     assert gate(repo, REL, run_id=NEW).halt is None
+    assert "> own note" in _view(repo)
+
+
+def test_a_retracted_predecessor_note_renders_retracted_and_leaves_revise_notes(repo):  # noqa: F811
+    _put_s(repo, requirement_register=REGISTER)
+    _landed_repo(repo, CODED)
+    _link(repo)
+    rl.start(repo, PREV)
+    rl.revise(repo, PREV, retract_note={"note_id": "N1", "reason": "applied by hand"})
+    rl.start(repo, NEW)
+    v = gate(repo, REL, run_id=NEW)
+    assert v.halt is None
+    assert v.resume_ledger["revise_notes"] == []
+    view = _view(repo)
+    assert "was retracted (applied by hand)" in view and f"> {NOTE}" not in view

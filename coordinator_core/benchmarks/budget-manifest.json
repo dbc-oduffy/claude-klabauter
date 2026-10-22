@@ -113,6 +113,11 @@
       "tolerance": {"kind": "relative", "value": 0.2},
       "_rationale": "One plan per call, the unit mise-certify's client loop issues. Same target register as plan.mise_prep_probe: one plan read, read_stamp over the same bytes, and (on CERTIFIED only) the census revalidation, whose shell children are separate processes and not in process_ms. No spawn_count_budget row: the op starts no process of its own."
     },
+    "plan.census_order": {
+      "target_ms": 10,
+      "tolerance": {"kind": "relative", "value": 0.2},
+      "_rationale": "Measured 0.67ms process time (mean of 10 calls, one fresh interpreter, time.process_time) ordering 449 seeded CensusSlots of 4 spawning commands each, 3 memoised; the target is that figure with roughly 15x headroom for a cold import and a heavier memo. The op reads plan_mise_prep_probe._CENSUS_MEMO only: no file read, no spawn, no git. No spawn_count_budget row: the op starts no process."
+    },
     "plan.mise_upgrade_apply": {
       "target_ms": 300,
       "tolerance": {"kind": "relative", "value": 0.2},

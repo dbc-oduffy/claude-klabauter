@@ -143,7 +143,10 @@ import yaml
 from coordinator_core.frontmatter.body_blocks import LocateStatus
 from coordinator_core.ops.plan_tasks_render import load_rows
 from coordinator_core.ops.read_frontmatter_field import read_frontmatter_field
+from coordinator_core.ops.dispatch_emit.done_unlanded import DONE_LAND as _DONE_LAND
+from coordinator_core.ops.dispatch_emit.done_unlanded import DONE_NOOP as _DONE_NOOP
 from coordinator_core.ops.dispatch_emit.inventory_accounting import IN_ANOTHER_PART
+from coordinator_core.ops.dispatch_emit.wave_map import transitive_dependents
 from coordinator_core.ops.dispatch_emit.run_id_occupancy import family_spent_reason, next_tranche_number
 from coordinator_core.ops.dispatch_emit.spine_read import (
     NON_DISPATCHABLE_DISPOSITIONS,
@@ -1080,17 +1083,117 @@ def _in_run_plan_chunks(
         seen.add(rel)
         out[(rel, "*")] = row_id
         for chunk, raw in raw_rows.items():
-            if (
-                (rel, chunk) in (landed or {})
-                or with_canonical_disposition(raw).get("disposition") in NON_DISPATCHABLE_DISPOSITIONS
-                or raw.get("deferred") is True
-                or raw.get("deferred_until")
-                or raw.get("execution_mode") == "operator"
-                or _has_uncleared_execution_gate(raw)
-            ):
+            if (rel, chunk) in (landed or {}) or not _chunk_open_dispatchable(raw):
                 continue
             out[(rel, chunk)] = f"{row_id}.{chunk}"
     return out
+
+
+def _chunk_open_dispatchable(raw: dict) -> bool:
+    """True for a plan row this mint may dispatch: open, not deferred, not operator-run, gates clear."""
+    return not (
+        with_canonical_disposition(raw).get("disposition") in NON_DISPATCHABLE_DISPOSITIONS
+        or raw.get("deferred") is True
+        or raw.get("deferred_until")
+        or raw.get("execution_mode") == "operator"
+        or _has_uncleared_execution_gate(raw)
+    )
+
+
+def _account_done_item(
+    row_id: str,
+    entries: List[dict],
+    inventory_path: Optional[Path],
+    spec_path: str,
+    plan_cache: Dict[Path, Dict[str, dict]],
+    withheld_items: Dict[str, str],
+    withheld_rows_out: Optional[Dict[str, int]],
+    accounting_out: Optional[Dict[str, str]],
+    landed_out: Optional[Dict[str, str]],
+) -> None:
+    """Account for an item whose every open chunk is DONE-unlanded: discharged when all are
+    `no-op`, withheld (its dependents wait) when any is `land`."""
+    lands = [e["id"] for e in entries if e["class"] == _DONE_LAND]
+    if lands:
+        reason = f"done, unlanded: land {', '.join(lands)} first"
+        withheld_items[row_id] = reason
+        if withheld_rows_out is not None:
+            withheld_rows_out[row_id] = _open_rows(inventory_path, spec_path, plan_cache)
+    else:
+        reason = f"every open chunk done, unlanded: no-op {', '.join(e['id'] for e in entries)}"
+        if landed_out is not None:
+            landed_out[row_id] = reason
+    if accounting_out is not None:
+        accounting_out[row_id] = reason
+
+
+def _plan_rel(inventory_path: Path, spec_path: str) -> str:
+    """Repo-relative posix path of `spec_path`'s plan, `""` when it lies outside the repo."""
+    try:
+        return (
+            _resolve_spec_plan_path(inventory_path, spec_path)
+            .resolve()
+            .relative_to(inventory_path.resolve().parents[2])
+            .as_posix()
+        )
+    except ValueError:
+        return ""
+
+
+def _classify_done_unlanded(
+    live: List[Tuple[str, Dict[str, str], List[str]]],
+    inventory_path: Path,
+    plan_cache: Dict[Path, Dict[str, dict]],
+    family_landed: Dict[Tuple[str, str], str],
+    writes_by_id: Dict[str, set],
+    writes_under_by_id: Dict[str, List[str]],
+) -> Tuple[Dict[str, dict], set]:
+    """`({minted id: done_unlanded entry}, {(plan rel, chunk) of each classified expanded chunk})`.
+
+    Candidates are the open dispatchable chunks of each whole-plan item (minus checkpoint-landed
+    ones) and each non-expanded item; those whose newest family report reads DONE are
+    classified with one batched dirty check. Empty without a DONE report: no git spawn."""
+    from coordinator_core.ops.dispatch_emit.done_unlanded import classify_done, family_done_reports
+
+    declared: Dict[str, List[str]] = {}
+    origin: Dict[str, Tuple[str, str]] = {}
+    expanded: set = set()
+    for row_id, row, _writes in live:
+        spec_path = _strip_backtick(row["spec path"])
+        rel = _plan_rel(inventory_path, spec_path) if spec_path else ""
+        raw_rows = _plan_raw_rows_by_id(inventory_path, spec_path, plan_cache) if spec_path else {}
+        bare = _bare_plan_row_id(row_id)
+        if rel and raw_rows and row_id not in raw_rows and bare not in raw_rows:
+            for chunk, raw in raw_rows.items():
+                if (rel, chunk) in family_landed or not _chunk_open_dispatchable(raw):
+                    continue
+                mid = f"{row_id}.{chunk}"
+                paths = [
+                    *(w for w in (raw.get("writes") or []) if isinstance(w, str)),
+                    *(w for w in (raw.get("writes_under") or []) if isinstance(w, str)),
+                ]
+                if not paths and isinstance(raw.get("surface"), str):
+                    paths = [raw["surface"]]
+                declared[mid] = paths
+                origin[mid] = (rel, chunk)
+                expanded.add(mid)
+        else:
+            named = raw_rows.get(row_id) or raw_rows.get(bare)
+            declared[row_id] = sorted(writes_by_id[row_id]) + list(writes_under_by_id[row_id])
+            origin[row_id] = (rel, named["id"]) if named is not None and rel else ("", "")
+    root = inventory_path.resolve().parents[2]  # Trap: assumes `<root>/state/<dir>/<inv>.md`; a shallower path mis-roots.
+    done = family_done_reports(root, inventory_family_base(inventory_path), declared)
+    if not done:
+        return {}, set()
+    classified = classify_done(
+        root,
+        done,
+        {mid: declared[mid] for mid in done},
+        inventory_path.resolve().parent.relative_to(root).as_posix(),
+    )
+    for mid, entry in classified.items():
+        entry["plan"], entry["chunk"] = origin[mid]
+    return classified, {origin[mid] for mid in classified if mid in expanded}
 
 
 def mint_rows(
@@ -1104,6 +1207,7 @@ def mint_rows(
     accounting_out: Optional[Dict[str, str]] = None,
     bound_out: Optional[Dict[str, set]] = None,
     landed_chunks_out: Optional[Dict[str, str]] = None,
+    done_unlanded_out: Optional[Dict[str, dict]] = None,
 ) -> List[dict]:
     """`## Chunk table` rows (as `parse_chunk_table` returns) -> a list of
     schema-valid plan-tasks row dicts, LIVE rows only. See module docstring's
@@ -1142,6 +1246,13 @@ def mint_rows(
     `landed_chunks_out`, when given, is filled `{<item>.<chunk>: "checkpoint-landed
     (<sha10>)"}` for each open plan chunk a checkpoint of this inventory's family
     landed: done for emission, minted nowhere, never holding a dependent.
+
+    `done_unlanded_out`, when given, is filled `{<item>.<chunk>, or <item>: entry}` (the
+    `done_unlanded.classify_done` shape plus `plan`/`chunk`) for each chunk whose newest family
+    report reads DONE and that no checkpoint landed. Such a chunk mints no row. A `no-op` one is
+    discharged (edges onto it dropped); a `land` one holds its transitive in-plan dependents, listed
+    in `held_behind`. An item left with no rows is accounted for, and withheld when any entry is
+    `land`. Runs only with an `inventory_path`.
 
     `accounting_out`, when given, is filled `{item id: reason}` for EVERY item
     that mints no row: routed out (its own disposition text, or `dependency X
@@ -1221,7 +1332,17 @@ def mint_rows(
 
     spine_cache: Dict[Path, object] = {}
     family_landed = _family_landed_map(chunk_rows, inventory_path)
-    in_run_map = _in_run_plan_chunks(live, inventory_path, plan_cache, family_landed)
+    done_classes: Dict[str, dict] = {}
+    if inventory_path is not None and live:
+        done_classes, done_keys = _classify_done_unlanded(
+            live, inventory_path, plan_cache, family_landed, writes_by_id, writes_under_by_id
+        )
+        # Trap: `landed` here is only a key set; read_spine still gets checkpoint-landed alone.
+        in_run_map = _in_run_plan_chunks(
+            live, inventory_path, plan_cache, {**family_landed, **dict.fromkeys(done_keys, "")}
+        )
+    else:
+        in_run_map = _in_run_plan_chunks(live, inventory_path, plan_cache, family_landed)
     withheld_items: Dict[str, str] = {}
     minted: List[dict] = []
     preceding_ids: set = set()
@@ -1236,6 +1357,8 @@ def mint_rows(
     item_chunks: Dict[str, Dict[str, str]] = {}
     #: Expanded item id -> chunk ids whose plan row carries `depends_on_plan`.
     item_blocked: Dict[str, List[str]] = {}
+    #: Minted id -> `_DONE_NOOP` | `_DONE_LAND` for a chunk (or one held behind it) that mints no row.
+    item_dropped: Dict[str, str] = {}
 
     for row_id, row, writes in live:
         spec_path = _strip_backtick(row["spec path"])
@@ -1276,7 +1399,11 @@ def mint_rows(
                         f"{parent!r} has no chunk {chunk!r} (expanded "
                         f"chunks: {sorted(item_chunks[parent])!r})"
                     )
-                dotted_targets.append(item_chunks[parent][chunk])
+                dropped = item_dropped.get(item_chunks[parent][chunk])
+                if dropped == _DONE_LAND:
+                    withheld_dep = dep_id
+                elif dropped is None:
+                    dotted_targets.append(item_chunks[parent][chunk])
                 continue
             explicit_dep_ids.add(dep_id)
             if dep_id not in repair_added:
@@ -1385,15 +1512,31 @@ def mint_rows(
             id_map = {r.id: f"{row_id}.{r.id}" for r in sub_rows}
             plan_raw_rows = _plan_raw_rows_by_id(inventory_path, spec_path, plan_cache)
             entry_ids: List[str] = []
+            done_here = {mid: done_classes[mid] for mid in id_map.values() if mid in done_classes}
+            noop_ids = {mid for mid, e in done_here.items() if e["class"] == _DONE_NOOP}
+            held_ids: set = set()
+            for chunk_id, mid in id_map.items():
+                if mid in done_here and done_here[mid]["class"] == _DONE_LAND:
+                    blocked = transitive_dependents(sub_rows, {chunk_id})
+                    done_here[mid]["held_behind"] = sorted(
+                        id_map[c] for c in blocked if id_map[c] not in done_here
+                    )
+                    held_ids.update(done_here[mid]["held_behind"])
+            if done_unlanded_out is not None:
+                done_unlanded_out.update(done_here)
             for r in sub_rows:
                 minted_id = id_map[r.id]
+                if minted_id in done_here or minted_id in held_ids:
+                    continue
                 sub_depends_on = [
                     {
                         "chunk": id_map[edge.get("chunk")],
                         "gate_kind": edge.get("gate_kind") or "output-consumption-runtime",
                     }
                     for edge in r.depends_on
-                    if isinstance(edge, dict) and edge.get("chunk") in id_map
+                    if isinstance(edge, dict)
+                    and edge.get("chunk") in id_map
+                    and id_map[edge.get("chunk")] not in noop_ids
                 ]
                 is_root = not sub_depends_on
                 depends_on = list(sub_depends_on)
@@ -1482,14 +1625,32 @@ def mint_rows(
                 preceding_ids.add(minted_id)
                 entry_ids.append(minted_id)
 
+            if not entry_ids and done_here:
+                _account_done_item(
+                    row_id, list(done_here.values()), inventory_path, spec_path, plan_cache,
+                    withheld_items, withheld_rows_out, accounting_out, landed_out,
+                )
             item_all_ids[row_id] = entry_ids
             item_chunks[row_id] = dict(id_map)
+            item_dropped.update({mid: e["class"] for mid, e in done_here.items()})
+            item_dropped.update(dict.fromkeys(held_ids, _DONE_LAND))
             plan_raw = _plan_raw_rows_by_id(inventory_path, spec_path, plan_cache)
             item_blocked[row_id] = [
                 chunk
                 for chunk in id_map
                 if (plan_raw.get(chunk) or {}).get("depends_on_plan")
             ]
+            continue
+
+        done_entry = done_classes.get(row_id)
+        if done_entry is not None:
+            if done_unlanded_out is not None:
+                done_unlanded_out[row_id] = done_entry
+            _account_done_item(
+                row_id, [done_entry], inventory_path, spec_path, plan_cache,
+                withheld_items, withheld_rows_out, accounting_out, landed_out,
+            )
+            item_all_ids[row_id] = []
             continue
 
         # Plain, non-plan-sourced row: unchanged single-executor mint.
@@ -2197,6 +2358,7 @@ def mint_spine(
     tranche_inventory_out: Optional[dict] = None,
     part_items_out: Optional[List[str]] = None,
     accounting_out: Optional[Dict[str, str]] = None,
+    done_unlanded_out: Optional[Dict[str, dict]] = None,
 ) -> Tuple[str, Path]:
     """The `--inventory` mint leg's one entry point.
 
@@ -2214,7 +2376,8 @@ def mint_spine(
     and the returned spine path sits beside it under the tranche run id.
     `accounting_out` receives `{item id: reason}` for every Chunk-table item the
     returned spine holds no row for (mint, tranche deferral, other parts); an
-    item absent from it owns a row in the spine.
+    item absent from it owns a row in the spine. `done_unlanded_out` receives mint_rows'
+    DONE-unlanded entries (see `mint_rows`).
 
     Raises `ChunkTableAbsentError` / `ChunkTableMalformedError` /
     `FootprintUnreadableError` -- see their docstrings. An unreadable
@@ -2243,6 +2406,7 @@ def mint_spine(
         withheld_rows_out=withheld_rows,
         accounting_out=ledger,
         bound_out=bound,
+        done_unlanded_out=done_unlanded_out,
     )
     if accounting_out is not None:
         accounting_out.update(ledger)

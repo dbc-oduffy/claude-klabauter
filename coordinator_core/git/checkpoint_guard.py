@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import List, Optional, Sequence
 
 from coordinator_core.git.commit_walk import commit_meta
+from coordinator_core.git.git_objects import _read_object
 from coordinator_core.git.rollback_check import _blob_at_commit
 
 _SUBJECT_RE = re.compile(r"^checkpoint\(wave [^)]*\): \d+ rows? — (?P<ids>.+)$")
@@ -96,7 +97,7 @@ def checkpoint_refusal(
             f"refusing checkpoint: row(s) closed on the spine: {', '.join(closed)}. "
             "Re-landing a closed row undoes the EM's disposition."
         )
-    moved = _moved_outside_run(common_dir, head, base.group("v"), paths)
+    moved = _moved_outside_run(common_dir, head, base.group("v"), paths, plan.group("v"))
     if moved:
         return (
             f"refusing checkpoint: writes changed outside this run: {'; '.join(moved)}. "
@@ -127,8 +128,38 @@ def _closed_rows(plan_path: Path, row_ids: List[str]) -> List[str]:
     return out
 
 
+_STAMP_PREFIX = "plan: gated_exit_criteria met ("
+
+
+def _after_frontmatter(blob: bytes) -> Optional[bytes]:
+    """The bytes after a leading `---` frontmatter block, else None."""
+    if not blob.startswith(b"---"):
+        return None
+    m = re.search(rb"\n---[ \t]*\r?\n", blob)
+    return blob[m.end():] if m else None
+
+
+def _is_engine_stamp(
+    common_dir: Path, sha: str, parent: str, subject: str, path: str, plan: str
+) -> bool:
+    """True when `sha` is the engine's gated-exit stamp of `plan` and changes only `path`'s
+    frontmatter. Subject plus diff shape is the provenance; a shared Session-Id is not."""
+    if not subject.startswith(_STAMP_PREFIX) or not checkpoint_plan_matches(path, plan):
+        return False
+    if not checkpoint_plan_matches(subject.rpartition(" — ")[2], plan):
+        return False
+    new = _blob_at_commit(common_dir, sha, path)
+    old = _blob_at_commit(common_dir, parent, path)
+    n = _read_object(common_dir, new) if isinstance(new, str) else None
+    o = _read_object(common_dir, old) if isinstance(old, str) else None
+    if n is None or o is None:
+        return False
+    nb, ob = _after_frontmatter(n[1]), _after_frontmatter(o[1])
+    return nb is not None and nb == ob
+
+
 def _moved_outside_run(
-    common_dir: Path, head: Optional[str], base: str, paths: Sequence[str]
+    common_dir: Path, head: Optional[str], base: str, paths: Sequence[str], plan: str
 ) -> List[str]:
     out: List[str] = []
     sha = head
@@ -143,6 +174,8 @@ def _moved_outside_run(
         if parents and not msg_subject.startswith("checkpoint("):
             for p in paths:
                 if _blob_at_commit(common_dir, sha, p) != _blob_at_commit(common_dir, parents[0], p):
+                    if _is_engine_stamp(common_dir, sha, parents[0], msg_subject, p, plan):
+                        continue
                     out.append(f"{p} by {sha[:10]} ({msg_subject[:60]})")
         sha = parents[0] if parents else None
     return out

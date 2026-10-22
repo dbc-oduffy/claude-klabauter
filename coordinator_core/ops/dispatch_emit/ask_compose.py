@@ -34,6 +34,10 @@ from coordinator_core.ops._workflow_contract import agent_options_phase_titles
 from coordinator_core.ops.dispatch_emit.ask_contract import (
     ALL_LANDED_HALT_KIND,
     HALT_DEPENDENTS_UNSTARTED,
+    LEG_REFUSAL_HEAD,
+    LEG_REFUSE,
+    LEG_SKIP,
+    RESUME_LEDGER_LEG_FIELD,
     ASK_MANIFEST_MARKER,
     ASK_PHASES,
     ASK_SOURCE_RELAYED,
@@ -2075,6 +2079,10 @@ def compose_ask_script(
     b.append(
         f"  const _allLandedResume = _resumeLedger && {_rl0}.{RESUME_LEDGER_KIND_FIELD} === {_lit(ALL_LANDED_HALT_KIND)};"
     )
+    b.append(
+        f"  const _preHaltCredit = _resumeLedger && !_allLandedResume && _ledgerUnlanded.length === 0"
+        f" && ({_rl0}.{RESUME_LEDGER_NOTES_FIELD} ?? []).length > 0;"
+    )
     if fold_stage:
         # A ledger verdict carries the gate op's own stage of the resumed plan as `manifest`; the re-plan
         # agent stages the plan itself over exactly the rows it added, so no standalone stage leg runs.
@@ -2725,7 +2733,7 @@ def compose_ask_script(
         f"    const _testWanted = !!({test_guard});",
         *([f"    const _docsWanted = !!({_DOCS_PRE_TAIL_GUARD});"] if in_run_commit else []),
         "    let _verify = null;",
-        f"    try {{ _verify = await {verify_call}; }} catch (e) {{ const _m = String((e && e.message) ?? e); "
+        f"    if (!_halted) try {{ _verify = await {verify_call}; }} catch (e) {{ const _m = String((e && e.message) ?? e); "
         "if (_USAGE_LIMIT_RE.test(_m)) { _haltOnUsageLimit(e); } else { log('verify leg threw: ' + _m); } }",
         f"    if (_testWanted && _verify && _verify.test) {{ {_emit._TEST_RESULT_VAR} = _verify.test; }}",
         *(
@@ -2766,7 +2774,7 @@ def compose_ask_script(
         f"js:JSON.stringify({_rl}.{RESUME_LEDGER_REVISED_FIELD} ?? [])",
         f". Also read {record_dir}/{NOTES_FILE} when it exists: the notes of this refire, newer than the ones above. "
         "Do the owed work now. Your writes are exactly these declared paths: ",
-        "js:(_manifest?.rows ?? []).flatMap((r) => r.writes ?? []).join(', ')",
+        f"js:({_rl}.{RESUME_LEDGER_LEG_FIELD}?.writes ?? (_manifest?.rows ?? []).flatMap((r) => r.writes ?? [])).join(', ')",
         ". A row whose work you cannot finish, or whose owed work lies on a path outside those writes, stays "
         "not_met: write nothing for it and say so in `summary`. Commit and stage nothing."
         f"{session_tail}",
@@ -2780,7 +2788,11 @@ def compose_ask_script(
         f"    const _reviseNoted = _resumeLedger && ({_rl}.{RESUME_LEDGER_NOTES_FIELD} ?? []).length > 0;\n"
         f"    const _revisedRows = _resumeLedger && ({_rl}.{RESUME_LEDGER_REVISED_FIELD} ?? []).length > 0;\n"
         f"    if (_resumeLedger && !_ledgerExec && (({_rl}.blocking ?? []).length || _reviseNoted)) {{\n"
-        f"      if (!_allLandedResume || _reviseNoted || _revisedRows) {{ try {{ await {remaining_call}; }} catch (e) {{ const _m = String((e && e.message) ?? e); "
+        f"      const _leg = {_rl}.{RESUME_LEDGER_LEG_FIELD} ?? null;\n"
+        f"      if (_leg && _leg.action === {_lit(LEG_REFUSE)}) {{ _halted = {{ halted: {_lit(HALT_REFUSAL)}, "
+        f"reason: {_lit(LEG_REFUSAL_HEAD)} + (_leg.reason ?? ''), sizing: _sizingRel, run_id: _runId, {HALT_PLAN_FIELD}: _planRel }}; }}\n"
+        f"      else if (_leg && _leg.action === {_lit(LEG_SKIP)}) {{ log('ledger-remaining leg skipped: ' + (_leg.reason ?? '')); }}\n"
+        f"      else if (!_allLandedResume || _reviseNoted || _revisedRows) {{ try {{ await {remaining_call}; }} catch (e) {{ const _m = String((e && e.message) ?? e); "
         "if (_USAGE_LIMIT_RE.test(_m)) { _haltOnUsageLimit(e); } else { log('ledger-remaining leg threw: ' + _m); } } }\n"
         "    }"
     ]
@@ -2795,6 +2807,20 @@ def compose_ask_script(
         "      const _mb = (Array.isArray(i.met_by) ? i.met_by : [i.met_by]).some((m) => typeof m === 'string' && m.trim() && m.trim().toLowerCase() !== 'none');\n"
         "      if (!_mb) { i.status = 'not_met'; i.essential = true; "
         "i.remaining = ['met_by: the senior-front-end review or ratification file of the design board']; }\n"
+        "    }\n"
+        "    if (_preHaltCredit) {\n"
+        f"      const _hr = _gate.{RESUME_LEDGER_KEY}.{RESUME_LEDGER_REMAINING_FIELD} ?? {{}};\n"
+        f"      const _blk = _gate.{RESUME_LEDGER_KEY}.blocking ?? [];\n"
+        "      const _hex = (s) => String(s ?? '').toLowerCase().match(/\\b[0-9a-f]{7,40}\\b/g) ?? [];\n"
+        "      for (const i of (_ledger?.items ?? [])) {\n"
+        "        if (!i || i.status !== 'met' || !_blk.includes(i.id)) continue;\n"
+        "        const _rec = _hr[i.id] ?? {};\n"
+        "        const _known = _hex(JSON.stringify([_rec.evidence ?? '', _rec.remaining ?? []]));\n"
+        "        const _named = _hex((Array.isArray(i.met_by) ? i.met_by : [i.met_by]).join(' '));\n"
+        "        const _ok = _named.some((n) => _known.some((k) => k.startsWith(n) || n.startsWith(k)));\n"
+        "        if (!_ok) { i.status = 'not_met'; i.essential = true; "
+        "i.remaining = ['met_by: the commit sha that carries the credited work']; }\n"
+        "      }\n"
         "    }\n"
         "    for (const i of (_ledger?.items ?? [])) {\n"
         "      if (!i || i.status !== 'not_met' || !Array.isArray(i.remaining) || !i.remaining.length) continue;\n"
@@ -2882,7 +2908,7 @@ def compose_ask_script(
         "+ ' with out_of_scope: [' + _blkRulable.join(', ') + '] for the rows ruled out; `verbatim` carries the PM words ruling them out, recorded as the ruling and adding no row. The re-fire resumes at the ledger check.' : '') "
         "+ (_blkForeign.length ? ' ' + _blkForeign.join(', ') + ' are not in the stage manifest rulable_ids: re-run the ledger check.' : '') "
         "+ (_blkIds.length ? ' Re-fire the same sizing: it executes the remaining work of the rows it keeps, briefed with the revise notes, '"
-        "+ 'and a row is met only on work changed since this halt.' : '')) }; }"
+        "+ 'and a row is met only on work changed since this halt; a revise re-ruling the row lets work committed before the halt meet it when the verdict names that commit.' : '')) }; }"
     )
     b.append("  }")
     b.append("  }")
@@ -3138,7 +3164,9 @@ _RESUME_LEDGER_CLAUSE_JS = (
     f"(_gate.{RESUME_LEDGER_KEY}.blocking.length ? 'Judge only these requirement rows, now, against ' + "
     "(_allLandedResume ? 'the landed work of the plan at HEAD: ' : 'the current tree: ') + "
     f"_gate.{RESUME_LEDGER_KEY}.blocking.join(', ') + '. ' + (_allLandedResume ? 'A blocking row is met when the "
-    "landed work satisfies its register text. ' : 'A blocking row is met only on work changed since the halt "
+    "landed work satisfies its register text. ' : _preHaltCredit ? 'A blocking row is met when the work at HEAD, "
+    "including commits before the halt commit, satisfies its register text as the revise notes rule it; its "
+    "met_by must name the commit sha(s) carrying that work. ' : 'A blocking row is met only on work changed since the halt "
     f"commit ' + (_gate.{RESUME_LEDGER_KEY}.{RESUME_LEDGER_HALT_SHA_FIELD} ?? '(unknown)') + '; the diff the halt already judged is not_met. ') + '"
     f"Revise notes: ' + JSON.stringify(_gate.{RESUME_LEDGER_KEY}.{RESUME_LEDGER_NOTES_FIELD} ?? []) + "
     "'. Return an item for each of them and no other item.' "

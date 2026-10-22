@@ -189,7 +189,8 @@ Sending a mid-run revision to a warp run:
   coordinator-invoke workflow.revise '{"run_id": "<run id>", "verbatim": "<requirement>"}'
   params: run_id (required); verbatim (a requirement, adds a row); note (free text, no row);
   from (sending peer session); all_of_pm_ask (bool); out_of_scope (row ids, needs verbatim);
-  withhold_paths ([{path, reason}]); credit_chunks ([{chunk, evidence}]); build_only (bool).
+  withhold_paths ([{path, reason}]); credit_chunks ([{chunk, evidence}]); build_only (bool);
+  retract_note ({note_id, reason}).
   Full contract: coordinator-invoke workflow.revise --describe
 """
 
