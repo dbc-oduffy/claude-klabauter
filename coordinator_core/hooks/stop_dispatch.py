@@ -127,6 +127,7 @@ from coordinator_core._settings_home import settings_home
 from coordinator_core.block_discharge import record_fire
 from coordinator_core.git.git_dir import resolve_git_common_dir
 from coordinator_core.git.repo_root import show_toplevel
+from coordinator_core._hook_envelope import event_advisory
 from coordinator_core.hooks._envelope import deny, no_advisory, payload_of, post_advisory
 from coordinator_core.hooks.em_report_altitude import op as _em_report_altitude_op
 from coordinator_core.hooks.group_em_park_spool import _handler as _group_em_park_spool_handler
@@ -483,5 +484,5 @@ async def _handler(params: dict, repo_root=None) -> dict:
     if block_reasons:
         return deny("Stop", "\n\n".join(block_reasons))
     if advisories:
-        return post_advisory("\n\n".join(advisories))
+        return event_advisory("Stop", "\n\n".join(advisories))
     return no_advisory()

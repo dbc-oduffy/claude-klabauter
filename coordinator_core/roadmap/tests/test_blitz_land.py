@@ -1672,3 +1672,24 @@ def test_a_spec_dispatch_residue_plan_lands_approved_and_keeps_the_baton_on_its_
     assert pg._read_baton_fields(root / baton)["governing_plan"] == parent
     assert "handoff_phase" not in pg._read_baton_fields(root / baton)
     assert bl.land_wave(root, {"waveIndex": 0, "ready": [entry]})["noop"]
+
+
+def test_authorize_execution_refuses_to_repoint_a_governed_baton(tmp_path):
+    root = _repo(tmp_path)
+    plan_a = _plan(root, "plan-a", "draft")
+    plan_b = _plan(root, "plan-b", "draft")
+    baton = _baton(root, "b-1")
+    path = root / baton
+    path.write_text(
+        path.read_text(encoding="utf-8").replace("---\n", f"---\ngoverning_plan: {plan_a}\n", 1),
+        encoding="utf-8",
+    )
+
+    refused = bl.authorize_execution(root, baton, plan_b, "wave", "n")
+
+    assert refused["execution_ready"] is False
+    assert "already governed" in refused["note"]
+    assert pg._read_baton_fields(path)["governing_plan"] == plan_a
+
+    same = bl.authorize_execution(root, baton, plan_a, "wave", "n")
+    assert same["execution_ready"] is True

@@ -51,19 +51,45 @@ def test_win32_flags_and_pythonw_swap(tmp_path, capsys):
     assert capsys.readouterr().out.strip() == f"LAUNCHED pid=4242 log={log}"
 
 
-def test_win32_single_call_no_breakaway(tmp_path):
+def test_win32_first_call_carries_breakaway(tmp_path):
     rc = bl.main(["--log", str(tmp_path / "l"), "--", "job.exe"], popen=FakePopen, platform="win32")
     assert rc == 0
     assert len(FakePopen.calls) == 1
-    assert not FakePopen.calls[0][1]["creationflags"] & 0x01000000
+    flags = FakePopen.calls[0][1]["creationflags"]
+    assert flags & 0x01000000
+    assert not flags & 0x00000008  # DETACHED_PROCESS
 
 
-def test_win32_oserror_is_one_line_exit_1(tmp_path, capsys):
+def test_win32_breakaway_oserror_retries_without_it(tmp_path, capsys):
+    calls = []
+
+    def flaky(cmd, **kw):
+        calls.append(kw["creationflags"])
+        if len(calls) == 1:
+            raise OSError("access denied")
+        return FakePopen(cmd, **kw)
+
+    log = tmp_path / "l"
+    rc = bl.main(["--log", str(log), "--", "job.exe"], popen=flaky, platform="win32")
+    assert rc == 0
+    assert len(calls) == 2
+    assert calls[0] & 0x01000000
+    assert not calls[1] & 0x01000000
+    assert calls[1] & 0x08000000 and calls[1] & 0x00000200
+    assert not calls[1] & 0x00000008
+    assert capsys.readouterr().out.strip() == f"LAUNCHED pid=4242 log={log}"
+
+
+def test_win32_both_calls_fail_is_one_line_exit_1(tmp_path, capsys):
+    calls = []
+
     def boom(cmd, **kw):
+        calls.append(kw["creationflags"])
         raise OSError("nope")
 
     rc = bl.main(["--log", str(tmp_path / "l"), "--", "job.exe"], popen=boom, platform="win32")
     assert rc == 1
+    assert len(calls) == 2
     assert len(capsys.readouterr().err.strip().splitlines()) == 1
 
 

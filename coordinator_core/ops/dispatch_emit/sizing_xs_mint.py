@@ -113,6 +113,41 @@ def _route_plan_bodies(paths: list[str]) -> tuple[list[str], list[tuple[str, str
     return list(dict.fromkeys(out)), routed
 
 
+class MemoReceiverUnresolvedError(ValueError):
+    """An XS write is a memo-outbox draft and no receiver resolves from the sizing, the draft or
+    the exit criterion."""
+
+
+_CRITERION_RECEIVER = re.compile(r"\b(?:sent|send|sends|delivered|addressed)\s+to\s+`?([A-Za-z0-9][A-Za-z0-9_.-]*)")
+_DRAFT_TO = re.compile(r"^to:[ \t]*(.+?)[ \t]*$", re.MULTILINE)
+
+
+def _memo_receiver(sizing: Mapping, statement: str, draft: str, repo_root: Path | None) -> str:
+    """The receiver of one memo draft: sizing `memo_to`, else the draft's `to:` frontmatter
+    (read only when `repo_root` is given and the draft exists), else the role the exit criterion
+    says the memo is sent to. Raises `MemoReceiverUnresolvedError` rather than guess."""
+    given = sizing.get("memo_to")
+    if isinstance(given, str) and given.strip():
+        return given.strip()
+    if repo_root is not None:
+        try:
+            head = (Path(repo_root) / draft).read_text(encoding="utf-8")
+        except OSError:
+            head = ""
+        if head.startswith("---"):
+            front = head.split("\n---", 1)[0]
+            found = _DRAFT_TO.search(front)
+            if found and found.group(1).strip("'\" "):
+                return found.group(1).strip("'\" ")
+    named = _CRITERION_RECEIVER.search(statement)
+    if named and named.group(1).rstrip(".-"):
+        return named.group(1).rstrip(".-")
+    raise MemoReceiverUnresolvedError(
+        f"{draft} is a memo-outbox draft but no receiver resolves: add memo_to: to the sizing, "
+        "a to: line to the draft, or name the receiver in the exit criterion ('sent to <receiver>')"
+    )
+
+
 def mint_xs_spine(
     sizing: Mapping,
     *,
@@ -120,6 +155,7 @@ def mint_xs_spine(
     writes: Sequence[str],
     out_dir: Path,
     gated: Sequence[Mapping] = (),
+    repo_root: Path | None = None,
 ) -> tuple[str, Path]:
     """Return `(spine_text, out_dir / "<sizing-stem>.spine.md")`; raises the inventory_mint
     footprint errors for a glob or directory-shaped `writes` entry, `ValueError` for empty writes.
@@ -136,7 +172,11 @@ def mint_xs_spine(
         _refuse_if_glob(XS_ROW_ID, path, path)
         _refuse_if_directory_shaped(XS_ROW_ID, path, path)
 
-    paths, routed = _route_plan_bodies(paths)
+    from coordinator_core.ops.fleet.memo_wire import memo_outbox_topic
+
+    drafts = [p for p in paths if memo_outbox_topic(posixpath.normpath(p))]
+    paths = [p for p in paths if p not in drafts]
+    paths, routed = _route_plan_bodies(paths) if paths else (paths, [])
 
     criterion = sizing.get("exit_criterion")
     statement = str(criterion.get("statement") or "").strip() if isinstance(criterion, Mapping) else ""
@@ -156,25 +196,44 @@ def mint_xs_spine(
         frontmatter["deliverable_id"] = str(sizing["deliverable_id"])
     frontmatter["prime_exit_criterion"] = {"statement": statement}
 
-    row = {
-        "id": XS_ROW_ID,
-        "title": title,
-        "change_kind": _infer_change_kind(paths),
-        "surface": paths[0],
-        "body": (
-            f"Spec: {sizing_rel} ({XS_ROW_ID})\n"
-            f"Intent:\n{intent}\n"
-            f"Verification (this row is DONE only when this holds): {statement}\n"
-            + "".join(
-                f"{body} is routed to {sidecar}: record plan evidence with coordinator-invoke "
-                "plan.tasks.mutate evidence-append; an executor row never edits a plan body.\n"
-                for body, sidecar in routed
-            )
-        ),
-        "writes": paths,
-    }
-
-    rows = [row]
+    rows: list[dict] = []
+    if paths:
+        rows.append(
+            {
+                "id": XS_ROW_ID,
+                "title": title,
+                "change_kind": _infer_change_kind(paths),
+                "surface": paths[0],
+                "body": (
+                    f"Spec: {sizing_rel} ({XS_ROW_ID})\n"
+                    f"Intent:\n{intent}\n"
+                    f"Verification (this row is DONE only when this holds): {statement}\n"
+                    + "".join(
+                        f"{body} is routed to {sidecar}: record plan evidence with coordinator-invoke "
+                        "plan.tasks.mutate evidence-append; an executor row never edits a plan body.\n"
+                        for body, sidecar in routed
+                    )
+                ),
+                "writes": paths,
+            }
+        )
+    for n, draft in enumerate(drafts, start=1):
+        rows.append(
+            {
+                "id": f"M{n}",
+                "title": f"Send memo {PurePosixPath(draft).stem}",
+                "change_kind": "doc-edit",
+                "surface": draft,
+                "kind": "memo-send",
+                "memo_to": _memo_receiver(sizing, statement, draft, repo_root),
+                "body": (
+                    f"Spec: {sizing_rel} (M{n})\n"
+                    f"Intent:\n{intent}\n"
+                    f"Verification (this row is DONE only when this holds): {statement}\n"
+                ),
+                "writes": [draft],
+            }
+        )
     for n, g in enumerate(gated, start=2):
         gid = str(g.get("id") or "").strip() or f"X{n}"
         if gid == XS_ROW_ID or any(r["id"] == gid for r in rows):

@@ -840,7 +840,8 @@ def evaluate(
     if defaulted_relayed:
         derived += (
             " Warning: unmarked ask ran as source relayed (AI-derived). "
-            "Add `source: \"pm\"` for the PM's verbatim words."
+            "To mark the PM's verbatim: put it in `ask` with source unset or `source: \"pm\"`, "
+            "and the elaboration in `context: [...]`."
         )
     if isinstance(result, dict) and result.get("pm_verification") == "unverifiable":
         derived += " source pm is unverified: no session turn log resolved."

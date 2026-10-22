@@ -453,6 +453,74 @@ def test_findings_only_or_commit_review_brief_passes(
     assert mod.check(_agent_payload("game-dev:staff-game-dev", prompt=prompt)) is None
 
 
+_EXEC_VOCAB_BRIEF = "Execute the chunk: edit the loader, merge the branch. Commit scoped."
+
+
+def test_fork_execute_edit_merge_commit_scoped_brief_denies_naming_phrase(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _patch_pins(monkeypatch, {})
+    transcript = _write_transcript(tmp_path, model="claude-opus-5-5")
+    envelope = mod.check(_agent_payload("fork", prompt=_EXEC_VOCAB_BRIEF, transcript_path=transcript))
+    hso = envelope["hookSpecificOutput"]
+    assert hso["permissionDecision"] == "deny"
+    assert "'Execute the'" in hso["permissionDecisionReason"]
+
+
+def test_persona_execute_edit_merge_commit_scoped_brief_denies(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_pins(monkeypatch, _SID)
+    envelope = mod.check(_agent_payload("game-dev:staff-game-dev", prompt=_EXEC_VOCAB_BRIEF))
+    assert envelope["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+@pytest.mark.parametrize(
+    "prompt", ["Merge the branches.", "Edit src/loader.py.", "Commit scoped."]
+)
+def test_each_new_verb_alone_is_execution(prompt: str) -> None:
+    assert mod._is_execution_brief({"prompt": prompt})
+
+
+@pytest.mark.parametrize(
+    "prompt",
+    [
+        "Review the merge of 1f533cd05a",
+        "Check the merge order; findings only, do not edit",
+        "Plan the merge order for the three branches",
+        "Open the editor and the edition notes, then report",
+    ],
+)
+def test_new_vocabulary_negative_controls_pass(
+    monkeypatch: pytest.MonkeyPatch, prompt: str
+) -> None:
+    _patch_pins(monkeypatch, _SID)
+    assert mod.check(_agent_payload("game-dev:staff-game-dev", prompt=prompt)) is None
+
+
+def test_partial_do_not_edit_does_not_shield_commit_scoped_brief(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_pins(monkeypatch, _SID)
+    prompt = "Execute the rows; do NOT edit the disposition. Commit scoped."
+    envelope = mod.check(_agent_payload("game-dev:staff-game-dev", prompt=prompt))
+    assert envelope["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+def test_plan_author_persona_edit_the_plan_passes(monkeypatch: pytest.MonkeyPatch) -> None:
+    persona = "coordinator:plan-author"
+    _patch_pins(monkeypatch, {persona: {"model": "opus"}})
+    assert mod.check(_agent_payload(persona, prompt="Edit the plan and merge the rows.")) is None
+
+
+def test_fork_exec_vocab_brief_on_sonnet_parent_passes(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _patch_pins(monkeypatch, {})
+    transcript = _write_transcript(tmp_path, model="claude-sonnet-5-5")
+    assert mod.check(_agent_payload("fork", prompt=_EXEC_VOCAB_BRIEF, transcript_path=transcript)) is None
+
+
 @pytest.mark.parametrize(
     "prompt", ["Fix the loader and commit.", "Inspect commit abc1234, then fix it and commit."]
 )

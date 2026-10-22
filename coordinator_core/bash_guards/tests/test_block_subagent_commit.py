@@ -3224,12 +3224,23 @@ def test_coordinator_invoke_door_is_covered_by_the_deny_matcher(monkeypatch):
     deny with no allow leg in play.
     """
     _subagent(monkeypatch)
-    for op in ("ceremony.commit_v2", "memo.send"):
+    for op in ("ceremony.commit_v2",):
         cmd = 'coordinator-invoke %s \'{"paths": ["a.py"]}\'' % op
         assert guard._has_committing_op_invoke(cmd) is True, op
         result = guard.check(_payload(cmd, agent_type=_SUBAGENT_TYPE))
         assert result is not None, op
         assert result["hookSpecificOutput"]["permissionDecision"] == "deny", op
+
+
+def test_coordinator_invoke_door_admits_memo_send_but_not_chained_commit(monkeypatch):
+    _subagent(monkeypatch)
+    send = "coordinator-invoke memo.send '{}'"
+    assert guard._has_committing_op_invoke(send) is False
+    assert guard.check(_payload(send, agent_type=_SUBAGENT_TYPE)) is None
+    chained = send + " && git commit -m x"
+    result = guard.check(_payload(chained, agent_type=_SUBAGENT_TYPE))
+    assert result is not None
+    assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
 def test_coordinator_invoke_door_matrix_predicate_denies_and_allows(monkeypatch):

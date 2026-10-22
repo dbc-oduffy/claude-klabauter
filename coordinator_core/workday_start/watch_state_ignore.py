@@ -1,4 +1,4 @@
-"""In-process check that the group-EM watch-state files are ignored and untracked.
+"""In-process check that the runtime-state files (ceremony transients and group-EM watch state) are ignored and untracked.
 
 `watch_state_ignore(repo_root) -> (exit_code, text)`. Report-only: writes no `.gitignore`,
 touches no index. Calling repo only. Tracked-ness is index membership (`read_index`) and wins
@@ -18,6 +18,8 @@ WATCH_STATE_FILES: tuple[str, ...] = (
     "state/group-em-watch.json",
     "state/group-em-watch-parked.json",
     "state/group-em-watch-spool.jsonl",
+    "state/housekeeping-liveness.json",
+    "state/engine-provenance-counts.jsonl",
 )
 
 _Rule = tuple[bool, bool, bool, "re.Pattern[str]"]  # negated, dir_only, anchored, regex

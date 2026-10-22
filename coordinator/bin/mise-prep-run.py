@@ -226,14 +226,18 @@ def _bound_size(script: str) -> int:
     return len(script.encode("utf-8"))
 
 
-# Census commands are plan-authored shells (seconds each); one set run cannot afford all of them
-# inside an op budget, so the run spends this much wall on them and reports the rest UNRUNNABLE.
-_CENSUS_BUDGET_S = 10
+# Census commands are plan-authored shells; one set run spends this much process time (parent plus
+# children) in one `plan.census_set` call and reports the rest UNRUNNABLE, resumed from the store.
+_CENSUS_BUDGET_MS = 500
 _CENSUS_SKIPPED = {
     "state": "UNRUNNABLE",
     "entries": [],
-    "detail": "set census budget spent; re-run this plan alone for its census",
+    "detail": "set census budget spent; re-run to resume this plan's census from the census store",
 }
+_CENSUS_TOTAL_KEYS = (
+    "spent_ms", "memo_hits", "direct_runs", "key_ms", "process_ms", "children_process_ms",
+    "spawns", "inproc_runs",
+)
 
 
 def _probe_failed_row(plan: str, error: str, upgraded: str | None = None) -> dict:
@@ -631,16 +635,18 @@ def _probe_set(repo_root: Path, plans: list[str], *, upgrade: bool) -> dict[str,
 
 
 def _census_pass(
-    repo_root: Path, rows: list[dict], gates: dict[str, dict], *, timeout: int, budget_s: int
+    repo_root: Path, rows: list[dict], gates: dict[str, dict], *, timeout: int, budget_ms: int
 ) -> dict:
-    """Spend the set census budget in `plan.census_set` calls over the PREPPED, not-CERTIFIED rows.
+    """Spend the census process budget in `plan.census_set` over the PREPPED, not-CERTIFIED rows.
 
     Contract: sets each such row's `census` to its plan's reply entry (`_CENSUS_SKIPPED` when no
     call reached it, an "census op unavailable" shape when the op errored) and returns the totals
-    `{spent_ms, memo_hits, direct_runs, key_ms, order}`. Never raises: an op error blocks nothing.
-    A budget of 0 repeats until `pending` is empty or a call makes no progress.
+    `{spent_ms, memo_hits, direct_runs, key_ms, process_ms, children_process_ms, spawns,
+    inproc_runs, order}`. Never raises: an op error blocks nothing.
+    A budget > 0 issues exactly one call; 0 repeats, the op spending its own default per call,
+    until `pending` is empty or a call makes no progress.
     """
-    totals = {"spent_ms": 0, "memo_hits": 0, "direct_runs": 0, "key_ms": 0, "order": "input"}
+    totals = {**dict.fromkeys(_CENSUS_TOTAL_KEYS, 0), "order": "input"}
     todo = [
         r["plan"] for r in rows
         if r["outcome"] != "PROBE-FAILED"
@@ -652,13 +658,12 @@ def _census_pass(
     pending = list(todo)
     calls = 0
     while pending:
-        left_ms = budget_s * 1000 - totals["spent_ms"] if budget_s > 0 else 0
-        if budget_s > 0 and left_ms < 1000 and calls:
+        if budget_ms > 0 and calls:
             break
         calls += 1
         try:
             reply = _invoke(repo_root, "plan.census_set", {
-                "plans": pending, "census_timeout": timeout, "census_budget_ms": max(left_ms, 0),
+                "plans": pending, "census_timeout": timeout, "census_budget_ms": max(budget_ms, 0),
             })
         except Exception as exc:  # the census is advisory; any failure leaves the rows skipped
             unavailable = f"census op unavailable: {exc}"
@@ -670,9 +675,9 @@ def _census_pass(
         for plan, entry in entries.items():
             if plan in by_plan and isinstance(entry, dict):
                 by_plan[plan]["census"] = entry
-        for key in ("spent_ms", "memo_hits", "direct_runs", "key_ms"):
+        for key in _CENSUS_TOTAL_KEYS:
             value = reply.get(key)
-            if isinstance(value, int) and not isinstance(value, bool):
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
                 totals[key] += value
         if reply.get("order") in ("measured", "input"):
             totals["order"] = reply["order"]
@@ -746,10 +751,11 @@ def main(argv=None) -> int:
         help="seconds one census command may run before it reads UNRUNNABLE (default 30)",
     )
     ap.add_argument(
-        "--census-budget", type=int, default=_CENSUS_BUDGET_S,
-        help="seconds of wall the whole run spends on census commands (default "
-        f"{_CENSUS_BUDGET_S}; 0 = unbounded). Plans reached after it is spent are probed without "
-        "a census and read UNRUNNABLE, which never blocks a stamp",
+        "--census-budget-ms", type=int, default=_CENSUS_BUDGET_MS,
+        help="milliseconds of process time (parent plus children) the run spends on census "
+        f"commands in one call (default {_CENSUS_BUDGET_MS}; 0 = unbounded loop). Plans reached "
+        "after it is spent read UNRUNNABLE and resume from the census store; that never blocks "
+        "a stamp",
     )
     ap.add_argument("--dry-run", action="store_true", help="gate and report; stamp nothing")
     ap.add_argument("--json", action="store_true")
@@ -883,7 +889,7 @@ def main(argv=None) -> int:
     rows = [r for r in slots if r is not None]
 
     census_totals = _census_pass(
-        repo_root, rows, gates, timeout=args.census_timeout, budget_s=args.census_budget
+        repo_root, rows, gates, timeout=args.census_timeout, budget_ms=args.census_budget_ms
     )
     census_spent_ms = census_totals["spent_ms"]
     census_rows = [r for r in rows if r["census"] is not None]
@@ -970,6 +976,10 @@ def main(argv=None) -> int:
                     "censusMemoHits": census_totals["memo_hits"],
                     "censusDirectRuns": census_totals["direct_runs"],
                     "censusKeyMs": census_totals["key_ms"],
+                    "censusProcessMs": census_totals["process_ms"],
+                    "censusChildrenMs": census_totals["children_process_ms"],
+                    "censusSpawns": census_totals["spawns"],
+                    "censusInprocRuns": census_totals["inproc_runs"],
                     "censusOrder": census_totals["order"],
                     "censusPlans": len(census_rows),
                     "censusCovered": census_covered,
@@ -994,7 +1004,7 @@ def main(argv=None) -> int:
         pending = sum(1 for r in rows if r["outcome"] == "would-stamp")
         work = f" — {pending} would be written" if args.dry_run else ""
         print(f"mise-prep-run: {len(certified)} of {len(rows)} plan(s) {verb}{mode}{work}")
-        print(f"census: {census_spent_ms}ms spent over the set")
+        print(f"census: {census_totals['process_ms']}ms process over the set")
         print(f"census: {census_covered} of {len(census_rows)} plans covered")
         if seam_fix.get("notRun"):
             print(f"seam-fix: {seam_fix['notRun']}")

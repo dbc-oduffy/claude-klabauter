@@ -494,15 +494,15 @@
     {
       "fixture": "m05-closed-missing-all-companions.md",
       "schema": "cross-repo-memo",
-      "rule_covered": "M-CROSS-4: status=closed requires closed_at, action_taken_at, and decision",
+      "rule_covered": "M-CROSS-4: status=closed requires closed_at, action_taken_at, and decision or actioned_note",
       "expect_ok": false,
       "current_validator_result": {
         "ok": false,
         "errors": [
           {
-            "field": "closed_at, action_taken_at, decision",
+            "field": "closed_at, action_taken_at, decision or actioned_note",
             "error": "required when status=closed",
-            "hint": "Set closed_at, action_taken_at, decision when closing a memo. A closed memo must have a complete action record."
+            "hint": "Set closed_at, action_taken_at, decision or actioned_note when closing a memo. A closed memo must have a complete action record."
           }
         ]
       }

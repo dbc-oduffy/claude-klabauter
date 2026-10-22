@@ -16,7 +16,7 @@ import os
 import threading
 import time
 from collections import OrderedDict, deque
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 DEFAULT_CAPACITY = 4000
 RESULT_RETAIN_COUNT = 64
@@ -74,7 +74,17 @@ def mint_ns_of(key: str) -> Optional[int]:
 
 class AckStore:
 
-    def __init__(self, capacity: int = DEFAULT_CAPACITY, *, boot_ns: Optional[int] = None) -> None:
+    def __init__(
+        self,
+        capacity: int = DEFAULT_CAPACITY,
+        *,
+        boot_ns: Optional[int] = None,
+        executing_bound: Optional[Callable[[Optional[str]], float]] = None,
+    ) -> None:
+        """`executing_bound` maps a method to the seconds an admitted record may
+        read `executing`; None means unbounded. Passed in, never imported, so
+        this module stays stdlib-only."""
+        self._executing_bound = executing_bound
         self._capacity = capacity
         self.boot_ns = time.monotonic_ns() if boot_ns is None else boot_ns
         self.low_water_ns = self.boot_ns
@@ -87,6 +97,12 @@ class AckStore:
 
     def admit(self, key: str, method: Optional[str]) -> bool:
         mint_ns = mint_ns_of(key)
+        bound_secs: Optional[float] = None
+        if self._executing_bound is not None:
+            try:
+                bound_secs = float(self._executing_bound(method))
+            except Exception:  # noqa: BLE001 -- a bad bound is no bound; admit never refuses on it
+                bound_secs = None
         with self._lock:
             if key in self._records:
                 return False
@@ -98,6 +114,9 @@ class AckStore:
                 "outcome": None,
                 "error_code": None,
             }
+            if bound_secs is not None:
+                self._records[key]["admitted_mono"] = time.monotonic()
+                self._records[key]["bound_secs"] = bound_secs
             self._order.append(key)
             self._evict_if_needed()
             return True
@@ -183,6 +202,13 @@ class AckStore:
             if record["state"] == _TOMBSTONED:
                 return {"state": STATE_NOT_RECEIVED, "outcome": OUTCOME_NOT_DISPATCHED}
             if record["state"] == _ADMITTED:
+                bound_secs = record.get("bound_secs")
+                # TRAP: the pool done-callback may never fire -- a worker blocked
+                # in `_run_joining_handler` never resolves its future -- so this
+                # read is what ends `executing`. The record stays _ADMITTED so a
+                # late `stamp` still lands.
+                if bound_secs is not None and time.monotonic() - record["admitted_mono"] >= bound_secs:
+                    return {"state": STATE_UNKNOWABLE, "reason": OUTCOME_ABANDONED}
                 return {"state": STATE_EXECUTING}
 
             outcome = record["outcome"]

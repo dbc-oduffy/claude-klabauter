@@ -92,7 +92,8 @@ patching and probing). If `resolve_model_pins()` shows this `subagent_type`'s
 own frontmatter pins `model: opus`, this module does not compute an effective
 model; it classifies the brief (`tool_input` description + prompt, in-process
 regex, no spawn). A brief with execution/diagnosis vocabulary (fix, patch,
-probe, diagnose, implement, debug, write code/tests ...) and NO judgment
+probe, diagnose, implement, debug, write code/tests, execute the ..., edit the ...,
+merge the ..., commit scoped ...) and NO judgment
 vocabulary (review, critique, verdict, ruling, assess, audit, plan, design ...)
 is DENIED with a pointer to `coordinator:executor` -- denied, not rewritten,
 because a persona on Sonnet is still the wrong worker. Every other brief,
@@ -128,7 +129,10 @@ just append an override line to its own next prompt.
 
 BRIEF CLASSIFICATION. A findings-only restriction ("findings only", "review
 only", "do not edit") or a review of a named commit/sha/diff makes the brief
-review; a commit/apply directive voids the commit-review shield. The persona
+review; "execute/edit/merge <object>" and "commit scoped" are execution vocabulary
+(object-bound, so "the merge of <sha>" and "editor" do not match); "commit scoped"
+also voids the findings-only shield. A commit/apply directive voids the
+commit-review shield. The persona
 deny names the execution phrase it keyed on, never the grant mechanism
 (B6); free text in a brief is never a grant.
 
@@ -210,7 +214,11 @@ _JUDGMENT_RE = re.compile(
 _EXECUTION_RE = re.compile(
     r"\b(fix|fixes|fixing|patch\w*|prob(?:e|es|ing)|diagnos\w*|implement\w*|debug\w*|"
     r"repair\w*|refactor\w*|write (?:the )?(?:code|tests?)|code (?:up|the)|"
-    r"add (?:a )?tests?)\b",
+    r"add (?:a )?tests?|"
+    r"execut(?:e|es|ing)\s+(?:the|this|these|each|every|all|chunk|row)|"
+    r"edit(?:s|ed|ing)?\s+(?:the|this|these|each|every|all|a|an|[\w./-]+\.\w+)|"
+    r"merg(?:e|es|ing)\s+(?:the|this|these|each|all|it|them|back)|"
+    r"commit\s+scoped)\b",
     re.IGNORECASE,
 )
 
@@ -240,6 +248,9 @@ _COMMIT_REVIEW_RE = re.compile(
     r"\b(?:review(?:ing)?|judge|assess|inspect|look at|go through|second opinion)\b[^.\n]{0,60}?\b(?:commit|sha|diff|[0-9a-f]{7,40})\b",
     re.IGNORECASE,
 )
+# A scoped-commit directive means the brief mutates the tree, so a partial restriction
+# ("do NOT edit R3's disposition", "read-only" on one step) cannot make it findings-only.
+_COMMIT_SCOPED_RE = re.compile(r"\b(?:commit\s+scoped|scoped\s+commits?)\b", re.IGNORECASE)
 _DIRECTIVE_RE = re.compile(
     r"\b(?:commit\s+(?:and|your|the|it|them|with)|and\s+commit|apply\s+the|"
     r"then\s+(?:fix|apply|patch|implement))\b",
@@ -262,7 +273,7 @@ def _execution_phrase(tool_input: Dict[str, Any]) -> Optional[str]:
     hit = _EXECUTION_RE.search(text)
     if hit is None:
         return None
-    if _FINDINGS_ONLY_RE.search(text):
+    if _FINDINGS_ONLY_RE.search(text) and not _COMMIT_SCOPED_RE.search(text):
         return None
     if _COMMIT_REVIEW_RE.search(text) and not _DIRECTIVE_RE.search(text):
         return None

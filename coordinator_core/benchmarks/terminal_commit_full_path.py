@@ -559,7 +559,13 @@ RECLOSE_CRITERION = {
 def _land_for_reclose(repo: Path, script: str) -> Path:
     """The reclose shape's setup, paid by `--setup-only` too: land the run once so HEAD carries its
     product and the close-job record holds the queued legs, and write the `close_job` digest a repeat
-    call carries beside the repo (a fresh criterion, no run outcome)."""
+    call carries beside the repo (a fresh criterion, no run outcome).
+
+    Trap: never pay this inside a measured process. Windows allocates the conhost.exe of a
+    fast-exiting child (a fixture git, the detached no-op launch) only some of the time, so the
+    setup term read 19 or 20 procs per invocation and the reclose net flaked 2.1 against the 2.0
+    ceiling. `--build-only --kind reclose` pays it in an unmeasured process; the measured one
+    reads the prebuilt repo."""
     import json
 
     first = _run_full_path(repo, script, "plan")
@@ -616,17 +622,20 @@ def _build_only(parent: Path, kind: str) -> int:
     what the measured process needs."""
     import json
 
-    repo, script = build_ask_fixture(parent)
-    token = build_real_shape(repo)
-    if kind == "fanout":
-        build_fanout(repo)
-    launch = repo.parent / f"{repo.name}-tmp"
-    (parent / PREBUILT_MANIFEST).write_text(
-        json.dumps(
-            {"repo": str(repo), "script": script, "launch": str(launch), "run_token": token, "kind": kind}
-        ),
-        encoding="utf-8",
-    )
+    if kind == "reclose":
+        repo, script = build_fixture(parent)
+        _prepare_close(repo)
+        digest = _land_for_reclose(repo, script)
+        manifest = {"repo": str(repo), "script": script, "launch": None, "run_token": None,
+                    "kind": kind, "digest": str(digest)}
+    else:
+        repo, script = build_ask_fixture(parent)
+        token = build_real_shape(repo)
+        if kind == "fanout":
+            build_fanout(repo)
+        launch = repo.parent / f"{repo.name}-tmp"
+        manifest = {"repo": str(repo), "script": script, "launch": str(launch), "run_token": token, "kind": kind}
+    (parent / PREBUILT_MANIFEST).write_text(json.dumps(manifest), encoding="utf-8")
     return 0
 
 
@@ -667,9 +676,8 @@ def main(argv: list[str]) -> int:
         "plan": build_fixture, "mise": build_mise_fixture, "ask": build_ask_fixture, "reclose": build_fixture,
     }
     build_only = "--build-only" in argv
-    bad_shape = (build_only and not (real_shape and kind in ("ask", "fanout"))) or (
-        real_shape and not build_only and kind != "ask"
-    )
+    build_only_ok = (real_shape and kind in ("ask", "fanout")) or (kind == "reclose" and not real_shape)
+    bad_shape = (build_only and not build_only_ok) or (real_shape and not build_only and kind != "ask")
     if (
         unknown
         or (kind not in builders and kind != "fanout")
@@ -681,7 +689,7 @@ def main(argv: list[str]) -> int:
     ):
         print(
             "usage: terminal_commit_full_path <dir> [--setup-only] [--kind plan|mise|ask|reclose] "
-            "[--real-shape (ask only)] [--build-only (with --kind ask|fanout --real-shape)]\n"
+            "[--real-shape (ask only)] [--build-only (with --kind ask|fanout --real-shape, or --kind reclose)]\n"
             "       terminal_commit_full_path --prebuilt <dir> [--setup-only]",
             file=sys.stderr,
         )
@@ -689,13 +697,18 @@ def main(argv: list[str]) -> int:
     if build_only:
         return _build_only(Path(args[0]), kind)
     token: Optional[str] = None
+    digest: Optional[Path] = None
     if prebuilt is not None:
         import json
 
         manifest = json.loads((Path(prebuilt) / PREBUILT_MANIFEST).read_text(encoding="utf-8"))
         repo, script, token = Path(manifest["repo"]), manifest["script"], manifest["run_token"]
-        kind, real_shape = manifest.get("kind", "ask"), True
-        point_temp_at(Path(manifest["launch"]))
+        kind = manifest.get("kind", "ask")
+        real_shape = kind != "reclose"
+        if manifest.get("launch"):
+            point_temp_at(Path(manifest["launch"]))
+        if manifest.get("digest"):
+            digest = Path(manifest["digest"])
     else:
         repo, script = builders[kind](Path(args[0]))
         if real_shape:
@@ -703,7 +716,8 @@ def main(argv: list[str]) -> int:
     from coordinator_core.ops.dispatch_emit import land_run  # noqa: F401  (loaded in both modes)
 
     _prepare_close(repo)
-    digest = _land_for_reclose(repo, script) if kind == "reclose" else None
+    if kind == "reclose" and prebuilt is None:
+        digest = _land_for_reclose(repo, script)
     if "--setup-only" in argv:
         return 0
     import time

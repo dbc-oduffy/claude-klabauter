@@ -73,9 +73,13 @@ def test_an_explicit_tmpdir_reads_that_directory_only(repo, dirs, tmp_path):
     ended = _transcript(
         tmp_path, "<task-notification><task-id>w1</task-id><status>completed</status></task-notification>\n"
     )
-    # Launch record is in the managed dir, not `other`: unlaunched and inside grace reads live.
+    # Launch record is in the managed dir, not `other`: the token reads unfired there, so not live.
     assert warp_live.live_run_for_sizing(
         repo, SIZING, session_id="s1", transcript_path=ended, tmpdir=str(other)
+    ) is None
+    _launch(other, "s1", "w1")
+    assert warp_live.live_run_for_sizing(
+        repo, SIZING, session_id="s1", transcript_path=_transcript(tmp_path), tmpdir=str(other)
     ) == "r1"
 
 
@@ -86,6 +90,7 @@ def test_a_raw_ask_token_owns_no_sizing(repo, dirs):
 
 def test_an_absolute_or_dotted_sizing_path_matches(repo, dirs):
     run_token.mint(repo, "r1", SCRIPT, session_id="s1", sizing_rel=SIZING)
+    _launch(dirs[0], "s1", "w1")
     assert warp_live.live_run_for_sizing(repo, str(repo / SIZING)) == "r1"
     assert warp_live.live_run_for_sizing(repo, "./" + SIZING) == "r1"
     assert warp_live.live_run_for_sizing(repo, "state/sizings/other.yaml") is None
@@ -94,6 +99,8 @@ def test_an_absolute_or_dotted_sizing_path_matches(repo, dirs):
 def test_live_run_for_session_answers_for_sizing_bound_and_raw_ask(repo, dirs):
     run_token.mint(repo, "r1", SCRIPT, session_id="s1", sizing_rel=SIZING)
     run_token.mint(repo, "r2", "scratch/warp/y.mjs", session_id="s2")
+    _launch(dirs[0], "s1", "w1")
+    _launch(dirs[0], "s2", "w2", script="scratch/warp/y.mjs")
     assert warp_live.live_run_for_session(repo, "s1") == "r1"
     assert warp_live.live_run_for_session(repo, "s2") == "r2"
     assert warp_live.live_run_for_session(repo, "s3") is None
@@ -304,6 +311,7 @@ def test_a_run_whose_commit_released_its_token_then_returned_terminal_leaves_no_
 
 def test_a_grace_expired_unlaunched_token_reads_not_live_and_is_not_spent(repo, dirs, monkeypatch):
     run_token.mint(repo, "r1", SCRIPT, session_id="s1", sizing_rel=SIZING)
+    _submit(repo, "r1", None)
     real = warp_live.time.time()
     monkeypatch.setattr(warp_live.time, "time", lambda: real + warp_live.UNLAUNCHED_GRACE_SECONDS + 60)
     assert warp_live.live_run_for_sizing(repo, SIZING, session_id="s1") is None

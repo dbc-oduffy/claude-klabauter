@@ -383,3 +383,14 @@ def test_prose_mentioning_verdict_is_not_a_verdict_line():
     assert g.grounding_counts("the claim is **ungrounded** here\n") == dict.fromkeys(
         g.CLAIM_VERDICTS + g.RULINGS + (g.OPEN,), 0
     )
+
+
+def test_open_questions_section_survives_the_effective_report_and_carry():
+    prior = _prior() + "\n## Open questions\n- **ungrounded** carried q\n"
+    doc = _carry(prior, {"digest-b.md"})
+    assert doc["open"] == ["- **ungrounded** carried q"]
+    fresh = _prior() + "\n## Open questions\n- **ungrounded** fresh q\n"
+    out = g.effective_report(fresh, doc, set(), SHAS)
+    assert g.report_sections(out)["open"] == ["- **ungrounded** carried q", "- **ungrounded** fresh q"]
+    assert g.grounding_counts(out)["open"] == 2
+    assert "open" not in _carry(_prior())

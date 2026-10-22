@@ -144,7 +144,7 @@ from __future__ import annotations
 import functools
 import logging
 import posixpath
-from typing import NamedTuple, Optional
+from typing import Mapping, NamedTuple, Optional
 
 from coordinator_core.ops.dispatch_emit.spine_read import UNDECLARED, EmitterRow
 
@@ -168,6 +168,7 @@ class WaveRow(NamedTuple):
     verification_runs: Optional[bool] = None
     change_kind: Optional[str] = None
     appends: tuple = ()
+    memo_send: Optional[Mapping] = None
 
 
 class WaveCycleError(ValueError):
@@ -798,6 +799,7 @@ def build_waves(rows: list[EmitterRow]) -> list[list[WaveRow]]:
                 verification_runs=getattr(row, "verification_runs", None),
                 change_kind=row.change_kind,
                 appends=getattr(row, "appends", ()),
+                memo_send=getattr(row, "memo_send", None),
             )
             for row in wave
         ]

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 import pytest
 
 from coordinator_core.ops._workflow_contract import Severity, run_checks
@@ -331,6 +333,62 @@ def test_row_executor_prompt_carries_the_skill_weight_headroom_marker(monkeypatc
     assert ask_compose.SKILL_WEIGHT_MARKER in execute
     assert ask_compose.SKILL_WEIGHT_MARKER in ask_compose.SKILL_WEIGHT_HEADROOM_CLAUSE
     assert not [i for i in run_checks(script) if i.severity == Severity.ERROR]
+
+
+def _carries_marker(script, span):
+    """True when `span` holds the marker inline or references an interned `_PFn` constant that does."""
+    if ask_compose.SKILL_WEIGHT_MARKER in span:
+        return True
+    consts = re.findall(r"const (_PF\d+) = '[^\n]*" + ask_compose.SKILL_WEIGHT_MARKER, script)
+    return any(re.search(r"\b" + c + r"\b", span) for c in consts)
+
+
+def _span(script, start, end):
+    _, _, rest = script.partition(start)
+    return rest.split(end, 1)[0] if end else rest
+
+
+@pytest.mark.parametrize("arm", ["xs", "s"])
+def test_skill_weight_marker_reaches_execute_review_and_fix_prompts(monkeypatch, arm):
+    monkeypatch.setattr(ask_compose, "_known_arm", lambda *_: arm)
+    script = _compose(prompt=None, sizing_rel="state/sizings/x.yaml")
+
+    spans = {
+        "execute": _span(script, "phase('Execute');", "phase('Review wave');"),
+        "codereview": _span(script, "phase('Review wave');", "phase('Review integration');"),
+        "fix": _span(script, "Ledger-resume remaining-work leg", "label: 'ledger-remaining'"),
+    }
+    for name, span in spans.items():
+        assert span.strip(), name
+        assert _carries_marker(script, span), name
+
+
+def test_review_prompt_carries_the_cross_repo_caller_clause(monkeypatch):
+    monkeypatch.setattr(ask_compose, "_known_arm", lambda *_: "s")
+    script = _compose(prompt=None, sizing_rel="state/sizings/x.yaml")
+    review = _span(script, "phase('Review wave');", "phase('Review integration');")
+    assert "search the sibling repos for callers" in review or "search the sibling repos for callers" in script
+
+
+def test_the_reviewer_brief_carries_the_skill_weight_marker(tmp_path, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import falsifier_integrity_phase as fip
+    from coordinator_core.ops.dispatch_emit.ask_stage import _reviewer_brief
+
+    rubric = tmp_path / "rubric.md"
+    rubric.write_text("rubric\n", encoding="utf-8")
+    monkeypatch.setattr(fip, "_reviewer_rubric_path", lambda: rubric)
+    (tmp_path / ".git").mkdir()
+    (tmp_path / "docs" / "plans").mkdir(parents=True)
+    (tmp_path / "tools").mkdir()
+    (tmp_path / "tools" / "inst.py").write_text("print('ok')\n", encoding="utf-8", newline="\n")
+    rel = "docs/plans/2026-10-02-reviewed.md"
+    (tmp_path / rel).write_text(
+        "---\ntitle: R\nprime_exit_criterion:\n  statement: s\n  falsifier:\n    how: run tools/inst.py\n"
+        "    baseline_output: green\n    baseline_ref: abc1234\n    expected_when_true: red\n---\n# R\n",
+        encoding="utf-8", newline="\n",
+    )
+    brief = _reviewer_brief(tmp_path, tmp_path / "run", "S1", {"falsifier_review_of": rel, "writes": []})
+    assert ask_compose.SKILL_WEIGHT_MARKER in brief
 
 
 @pytest.mark.parametrize("arm", ["m_plus", "roadmap", None])

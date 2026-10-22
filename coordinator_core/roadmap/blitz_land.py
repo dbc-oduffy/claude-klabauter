@@ -924,6 +924,12 @@ def authorize_execution(
                 f"({', '.join(sorted(_EXECUTION_PHASE_KINDS))}); pickup would "
                 "refuse this baton on claim"
             )
+        governing = _read_field(old, "governing_plan")
+        if governing and governing != rel_plan:
+            raise MutateAbort(
+                f"baton already governed by {governing!r}; refusing to repoint it to {rel_plan!r}. "
+                "Clear governing_plan by hand if the repoint is intended"
+            )
         text = _set_field(old, "governing_plan", rel_plan)
         text = _set_field(text, "handoff_phase", "execution")
         text = _set_field(text, "execution_authorized_by", authorized_by)

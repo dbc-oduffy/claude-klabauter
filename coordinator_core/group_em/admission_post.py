@@ -32,6 +32,7 @@ def admission_path(directory: Optional[Path] = None) -> Path:
 def _append_verified(path: Path, data: bytes) -> Optional[str]:
     """Append ``data`` and confirm it is present whole in the span appended at ``path``.
 
+    Delivery means present at ``path`` as resolved here, not receipt by the tailer.
     Returns None on verified delivery, else a reason: ``write_failed:<exc>``, ``short_write``
     or ``not_found_at_path``. Reads at most ``MAX_VERIFY_SPAN`` bytes past the pre-write size.
     """
@@ -71,7 +72,8 @@ def post(
     ``posted`` is False with ``reason`` ``bad_phase`` or ``no_box_holder`` when nothing was
     written. ``delivered`` is True only when this call's line was verified present at
     ``path``; otherwise ``posted`` and ``delivered`` are False, ``reason`` names the failure
-    (``write_failed:*``, ``short_write``, ``not_found_at_path``) and a stderr line is printed. A non-live holder still receives the line: it is tailed once the holder is back.
+    (``write_failed:*``, ``short_write``, ``not_found_at_path``) and a stderr line is printed.
+    A non-live holder still receives the line: it is tailed once the holder is back.
     With ``require_holder=False`` a holderless box is still written (``holder_session`` null,
     ``holder_live`` False) so a governor reading the file sees the line.
     """

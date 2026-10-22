@@ -14,7 +14,9 @@ Wire params (all optional):
                          ``verdict`` carries under ``subject``.
 
 Reply fields: the requirement-9 top-level set of ``gate_v2.REPORT_KEYS``. ``verdict`` is
-populated only under ``subject``.
+populated only under ``subject``. ``shipped_unstamped`` lists open batons whose linked plan is
+archived or terminal (``id``, ``path``, ``plan_path``, ``plan_status``): their ``batons`` rows
+carry ``candidate: false``, they are in no wave, and landing ships them.
 
 Negative-spec:
   - Does NOT write, stamp or mutate anything. A closed gate is REPORTED; refusing on it is

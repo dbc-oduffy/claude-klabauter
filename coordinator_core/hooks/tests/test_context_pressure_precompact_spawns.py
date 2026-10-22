@@ -43,6 +43,4 @@ def test_build_git_section_reads_repo_without_spawning(tmp_path, monkeypatch):
         "",
         "Modified files:",
         cpp._UNSTAGED_NOT_LISTED,
-        "Staged files:",
-        "b.txt",
     ]

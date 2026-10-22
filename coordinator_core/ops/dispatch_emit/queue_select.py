@@ -89,6 +89,7 @@ __all__ = [
     "UnknownSourceOpError",
     "MissingRowIdError",
     "DuplicateRowIdError",
+    "RowDroppedError",
 ]
 
 
@@ -124,6 +125,11 @@ class DuplicateRowIdError(ValueError):
     profile-declared `row_id_key` (not `'@stem'`, which has its own
     `DuplicateStemError`) — sharing a ledger file cross-contaminates fold-in,
     skip and settle between two otherwise-unrelated rows."""
+
+
+class RowDroppedError(ValueError):
+    """Raised when a row `select_rows` read reaches no manifest field — an
+    engine invariant breach, never a silent omission."""
 
 
 _SENTINEL_ABSENT = object()
@@ -869,6 +875,10 @@ def select_rows(
 
     declined_sorted = tuple(sorted(declined, key=lambda d: d.row_id))
 
+    _assert_every_row_accounted(
+        (r[0] for r in rows), entries, declined_sorted, unselected, claimed
+    )
+
     return Manifest(
         entries=tuple(entries),
         batch_sizes=dict(batch_sizes),
@@ -878,6 +888,29 @@ def select_rows(
         unselected=unselected,
         claimed=tuple(sorted(claimed, key=lambda c: c.row_id)),
     )
+
+
+def _assert_every_row_accounted(
+    read_ids: Any,
+    entries: Sequence[ManifestEntry],
+    declined: Sequence[DeclinedEntry],
+    unselected: Sequence[str],
+    claimed: Sequence[ClaimedEntry],
+) -> None:
+    """Raise `RowDroppedError` when a row `select_rows` read reaches none of
+    entries, declined, unselected or claimed — whatever its id/stem/title shape."""
+    accounted = (
+        {e.row_id for e in entries}
+        | {d.row_id for d in declined}
+        | set(unselected)
+        | {c.row_id for c in claimed}
+    )
+    dropped = sorted(set(read_ids) - accounted)
+    if dropped:
+        raise RowDroppedError(
+            f"queue_select: rows {dropped!r} were read but reached no manifest field "
+            "(entries, declined, unselected, claimed) — refused, never dropped silently"
+        )
 
 
 def _manifest_digest(

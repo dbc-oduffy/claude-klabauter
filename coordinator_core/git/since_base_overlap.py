@@ -126,7 +126,8 @@ def check(
 ) -> Tuple[list, List[str]]:
     """Return ``(findings, notes)``. Findings are ``landing_integrity.Finding`` with reason
     ``SINCE_BASE_OVERLAP``; notes carry finding-free markers (``walk-capped``, ``unreadable:<path>``)
-    the caller surfaces. ``run_id`` is accepted for the pinned signature and unused; ``plan``
+    the caller surfaces. ``run_id`` is accepted for the pinned signature; a commit whose subject
+    ``ask_contract.halted_run_id`` parses to ``run_id`` is the caller's own halt record. ``plan``
     narrows the own-commit test to this run's plan."""
     from coordinator_core.ops.dispatch_emit.landing_integrity import SINCE_BASE_OVERLAP, Finding
 
@@ -144,11 +145,15 @@ def check(
     newest_first, base_sha = walked
     if not newest_first:
         return findings, notes
-    own = {
-        sha
-        for sha in newest_first
-        if is_own_commit((commit_meta(common_dir, sha) or {}).get("message", ""), plan, base_sha, newest_first)
-    }
+    from coordinator_core.ops.dispatch_emit.ask_contract import halted_run_id
+
+    own = set()
+    for sha in newest_first:
+        message = (commit_meta(common_dir, sha) or {}).get("message", "")
+        if is_own_commit(message, plan, base_sha, newest_first) or (
+            run_id is not None and halted_run_id(message.split("\n", 1)[0]) == run_id
+        ):
+            own.add(sha)
     oldest_first = list(reversed(newest_first))
     for path in paths:
         try:

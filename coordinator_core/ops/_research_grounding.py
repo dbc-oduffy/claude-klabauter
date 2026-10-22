@@ -139,11 +139,13 @@ def report_sections(text: str) -> dict:
 
     ``summary`` holds the lines before the first ``##`` heading. ``digests`` holds each
     ``## digest-*.md`` body verbatim (heading excluded, trailing blanks trimmed). ``rulings``
-    holds the ruling verdict lines under ``## Contradictions``.
+    holds the ruling verdict lines under ``## Contradictions``. ``open`` holds the lines under
+    ``## Open questions`` (trailing blanks trimmed).
     """
     summary: list[str] = []
     digests: dict[str, list[str]] = {}
     rulings: list[str] = []
+    open_lines: list[str] = []
     mode, current = "summary", ""
     for raw in text.splitlines():
         h = _HEADING_RE.match(raw.lstrip())
@@ -154,6 +156,8 @@ def report_sections(text: str) -> dict:
                 digests.setdefault(title, [])
             elif title.lower() == "contradictions":
                 mode = "rulings"
+            elif title.lower() == OPEN_SECTION.lower():
+                mode = "open"
             else:
                 mode = "other"
             continue
@@ -163,10 +167,13 @@ def report_sections(text: str) -> dict:
             digests[current].append(raw)
         elif mode == "rulings" and _verdict(raw.lstrip()) in RULINGS:
             rulings.append(raw)
+        elif mode == "open":
+            open_lines.append(raw)
     return {
         "summary": _trim_trailing_blank(summary),
         "digests": {k: _trim_trailing_blank(v) for k, v in digests.items()},
         "rulings": rulings,
+        "open": _trim_trailing_blank(open_lines),
     }
 
 
@@ -263,10 +270,13 @@ def carry_forward(
         for n, lines in carried.items()
         if (blocked := [ln for ln in lines if _verdict(ln.lstrip()) in BLOCKING])
     }
-    return {
+    doc = {
         "generation": generation, "carried": carried, "rulings": rulings, "flagged": flagged,
         "grader": grader,
     }
+    if parts["open"]:
+        doc["open"] = parts["open"]
+    return doc
 
 
 def effective_report(
@@ -296,6 +306,10 @@ def effective_report(
     for name in sorted(sections):
         out += [f"## {name}", *sections[name], ""]
     out += ["## Contradictions", *(rulings or [_NO_CONTRADICTIONS]), ""]
+    open_lines = list(carry.get("open", []))
+    open_lines += [ln for ln in fresh["open"] if ln not in open_lines]
+    if open_lines:
+        out += [f"## {OPEN_SECTION}", *open_lines, ""]
     return "\n".join(out)
 
 

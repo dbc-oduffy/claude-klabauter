@@ -406,19 +406,21 @@ def _ledger_halt_for(
         # pointer's run then resumes when that run's halt commit landed every open row.
         if pointer is not None:
             landed, sha = state.run_halts.get(pointer.run_id, (frozenset(), None))
-            if set(open_ids) <= landed:
-                return _carry(root, plan_rel, replace(pointer, halt_sha=sha), state.run_halts)
+            if set(open_ids) - set(pointer.ruled) <= landed:
+                return _carry(root, plan_rel, _with_ruled_blocking(pointer, halt_sha=sha), state.run_halts)
         return None
     record = read_halt_record(root, state.ledger_run, at_sha=state.ledger_sha)
+    same_run = pointer is not None and pointer.run_id == state.ledger_run
+    ruled = set(pointer.ruled) if same_run else set()
     if (
         record is None
         or record.sizing_rel != sizing_rel
         or (record.plan_rel is not None and record.plan_rel != plan_rel)
-        or not set(open_ids) <= record.staged
+        or not set(open_ids) - ruled <= record.staged
     ):
         return None
-    if pointer is not None and pointer.run_id == state.ledger_run:
-        blocking = pointer.blocking
+    if same_run:
+        blocking = _with_ruled_blocking(pointer).blocking
     else:
         blocking = record.blocking or ()
     return _carry(
@@ -429,6 +431,12 @@ def _ledger_halt_for(
         ),
         state.run_halts,
     )
+
+
+def _with_ruled_blocking(pointer: LedgerHalt, **changes) -> LedgerHalt:
+    """`pointer` with its ruled ids appended to `blocking`, so the verify leg judges them."""
+    extra = tuple(r for r in pointer.ruled if r not in pointer.blocking)
+    return replace(pointer, blocking=(*pointer.blocking, *extra), **changes)
 
 
 def _carry(

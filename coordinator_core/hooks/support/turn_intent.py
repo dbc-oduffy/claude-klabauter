@@ -34,6 +34,19 @@ BLOCK_REASON = (
     'else empty>"}</turn-intent> as the last line.'
 )
 
+ANNOUNCE_BLOCK_REASON = (
+    "The turn ends announcing work it did not run. Run it now, or: " + BLOCK_REASON
+)
+
+# A first-person future-action clause ("I'll now run ...", "Now I'll ...", "Let me run ...").
+_ANNOUNCE_RE = re.compile(
+    r"\b(?:(?:i['’]ll|i\s+will|i['’]m\s+going\s+to|i\s+am\s+going\s+to)\s+(?:now\s+|next\s+|then\s+|go\s+ahead\s+and\s+)?"
+    r"(?!be\s|need\s|have\s|wait\b|stop\b|pause\b|hold\b)[a-z]+"
+    r"|(?:now|next)[, ]+i['’]ll\s+[a-z]+|let\s+me\s+(?:now\s+)?(?!know\b|say\b|be\b|explain\b|summari[sz]e\b)[a-z]+)\b",
+    re.IGNORECASE,
+)
+_SENTENCE_END = re.compile(r"(?<=[.!?])\s+|\n+")
+
 _OPEN = "<turn-intent>"
 _CLOSE = "</turn-intent>"
 _HUB = "coordinator-sessions"
@@ -161,12 +174,27 @@ def write_record(
     return True
 
 
+def announces_unexecuted_work(text: str) -> bool:
+    """True when the final sentence of a turn that declared no intent is a first-person
+    future-action clause: the turn ended on work it said it would do and did not run."""
+    if not isinstance(text, str) or parse_marker(text) is not None:
+        return False
+    sentences = [s for s in _SENTENCE_END.split(text.strip()) if s.strip()]
+    if not sentences:
+        return False
+    last = sentences[-1]
+    return "?" not in last and _ANNOUNCE_RE.search(last) is not None
+
+
 def decide(
     text: str,
     blocks_so_far: int,
     role_marker: bool,
     classify: Callable[[str], Tuple[bool, str]],
+    announced: bool = False,
 ) -> Decision:
+    """`announced` arms the block without the role marker: an announced-but-unrun final turn
+    is blocked in any session, still bounded by BLOCK_CAP."""
     marker = parse_marker(text)
     if marker is not None and marker.source == "marker":
         return Decision(False, (marker.needs_pm, marker.ask, "marker"))
@@ -174,7 +202,7 @@ def decide(
     if marker is not None:
         needs_pm, ask = classify(stripped)
         return Decision(False, (needs_pm, ask, "marker-malformed"))
-    if role_marker and blocks_so_far < BLOCK_CAP:
+    if (role_marker or announced) and blocks_so_far < BLOCK_CAP:
         return Decision(True, None)
     needs_pm, ask = classify(stripped)
     return Decision(False, (needs_pm, ask, "heuristic"))

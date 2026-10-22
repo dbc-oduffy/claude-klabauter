@@ -1506,6 +1506,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
 
     checkpoint_stamp: dict = {}
     if "Checkpoint-Plan: " in message:
+        # Literal mirrors checkpoint_stamp.CHECKPOINT_NOT_LANDED_TRAILER: that module is imported lazily.
         if "\nCheckpoint-Not-Landed: " in message:
             checkpoint_stamp = {"stamp_deferred": "run-open"}
         else:

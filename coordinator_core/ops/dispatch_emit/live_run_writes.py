@@ -51,16 +51,23 @@ def live_footprints(root: Path, *, exclude_run_id: Optional[str]) -> dict[str, O
 def overlaps(writes: Sequence[str], footprints: Mapping[str, Optional[frozenset[str]]]) -> dict[str, list[str]]:
     """Run id -> the footprint paths that equal, contain or sit under one of `writes`. A None
     footprint, and a run with no overlap, are absent."""
-    mine = [_norm(w) for w in writes if w]
+    mine = {_norm(w) for w in writes if w}
+    mine_ancestors = {a for w in mine for a in w.parents}
+    cache: dict[str, bool] = {}
+
+    def touches(p: str) -> bool:
+        hit = cache.get(p)
+        if hit is None:
+            n = _norm(p)
+            hit = n in mine or n in mine_ancestors or any(a in mine for a in n.parents)
+            cache[p] = hit
+        return hit
+
     found: dict[str, list[str]] = {}
     for run_id, footprint in footprints.items():
         if footprint is None:
             continue
-        hit = sorted(
-            p
-            for p in footprint
-            if any(_norm(p) == w or _norm(p) in w.parents or w in _norm(p).parents for w in mine)
-        )
+        hit = sorted(p for p in footprint if touches(p))
         if hit:
             found[run_id] = hit
     return found

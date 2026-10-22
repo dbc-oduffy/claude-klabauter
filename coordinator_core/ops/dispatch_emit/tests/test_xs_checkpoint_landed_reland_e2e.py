@@ -6,7 +6,6 @@ from __future__ import annotations
 
 import json
 import re
-import shlex
 
 import pytest
 import yaml
@@ -44,8 +43,8 @@ def _make_xs(root) -> None:
 
 def _printed_params() -> dict:
     line = sibling_claims.reland_remedy(SIZING)
-    quoted = re.search(r"dispatch\.ask_gate\s+('.*?')\s+--", line).group(1)
-    return json.loads(shlex.split(quoted)[0])
+    args = json.loads(re.search(r"args: (\{.*?\})\}\)", line).group(1))
+    return {"sizing_path": args["sizing"]}
 
 
 def _changed(root, sha: str) -> set:

@@ -35,9 +35,12 @@ def test_the_bare_empty_items_halt_clause_is_gone(monkeypatch):
     assert "!(_ledger.items ?? []).length" not in _script(monkeypatch)
 
 
-def test_ledger_ids_prefer_the_resume_verdict_over_the_manifest(monkeypatch):
+def test_ledger_ids_prefer_minted_manifest_ids_then_the_resume_verdict(monkeypatch):
     script = _script(monkeypatch)
-    assert "_gate.resume_ledger?.ledger_item_ids ?? _manifest?.ledger_item_ids ?? null" in script
+    assert (
+        "_manifest?.ledger_item_ids?.length ? _manifest.ledger_item_ids "
+        ": (_gate.resume_ledger?.ledger_item_ids ?? _manifest?.ledger_item_ids ?? null)"
+    ) in script
     assert "_gate.resume_ledger?.withheld_ids ?? _manifest?.withheld_ids ?? null" in script
 
 

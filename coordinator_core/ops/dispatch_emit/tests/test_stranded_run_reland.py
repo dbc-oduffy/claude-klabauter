@@ -45,9 +45,8 @@ def test_no_reland_op_is_registered_the_refire_is_the_supported_path():
     from coordinator_core.ops._registry_map import OP_MODULE_MAP
 
     assert not [name for name in OP_MODULE_MAP if "reland" in name.lower()]
-    assert "dispatch.ask_gate" in OP_MODULE_MAP
     remedy = sibling_claims.reland_remedy(SIZING)
-    assert "dispatch.ask_gate" in remedy and SIZING in remedy
+    assert "Workflow(" in remedy and SIZING in remedy and "dispatch.ask_gate" not in remedy
 
 
 def _commit(root, token: str, inline_review: dict, **extra) -> dict:
@@ -77,7 +76,7 @@ def test_a_stranded_run_refires_and_lands_its_own_product_without_the_siblings_d
                       run_base_sha=base)
     assert refused.get("refused") == "since-base-overlap", refused
     assert sibling_claims.reland_remedy(SIZING) in refused["error"]
-    assert SIZING in refused["error"] and "dispatch.ask_gate" in refused["error"]
+    assert SIZING in refused["error"] and "dispatch.ask_gate" not in refused["error"]
     assert SIBLING_PATH not in json.dumps(refused.get("findings", refused.get("error")))
 
     verdict = gate(halted, SIZING)

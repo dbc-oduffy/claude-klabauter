@@ -69,12 +69,19 @@ import json
 import os
 import re
 import shutil
+import signal
 import stat as _stat
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
-from typing import Any, NamedTuple, Optional
+from typing import Any, NamedTuple, Optional, Union
+
+try:
+    import resource
+except ImportError:
+    resource = None
 
 def _load_yaml():
     """Import PyYAML lazily -- a module-scope `try: import yaml / except ImportError: print(...);
@@ -291,18 +298,261 @@ def run_entry(entry: dict, repo_root: Path, timeout: int, plan_rel: Optional[str
     return _judge(entry, row, ran, plan_rel)
 
 
+class _LegCost:
+    """Process cost of one leg from one start: this process's CPU plus the CPU of the children it
+    reaped, and the number of shells spawned.
+
+    POSIX reads `getrusage(RUSAGE_CHILDREN)`, which is process-wide: under a multi-threaded warm
+    engine another thread's reaped child lands in the delta, so the figure can over-count. That is
+    the conservative direction for a ceiling. Windows reads each batch shell's Job object after it
+    exits. `last_run_ms` holds the per-command wall ms of the latest `_spawn_many` call.
+    """
+
+    def __init__(self) -> None:
+        self._parent0 = time.process_time()
+        self._job_s = 0.0
+        self.spawns = 0
+        self.last_run_ms: list[int] = []
+        self._children0 = self._children_s()
+
+    def _children_s(self) -> float:
+        if os.name == "nt":
+            return self._job_s
+        if resource is None:
+            return 0.0
+        ru = resource.getrusage(resource.RUSAGE_CHILDREN)
+        return ru.ru_utime + ru.ru_stime
+
+    @property
+    def children_ms(self) -> int:
+        return int(round((self._children_s() - self._children0) * 1000))
+
+    def total_s(self) -> float:
+        return (time.process_time() - self._parent0) + (self._children_s() - self._children0)
+
+
+def _unrunnable(detail: str) -> dict:
+    return {"state": UNRUNNABLE, "detail": detail}
+
+
+def _drain(stream, sink: list) -> None:
+    """Reader thread body: appends `(arrival, chunk)` until EOF, so a marker's arrival time stamps
+    the end of its command."""
+    try:
+        while True:
+            chunk = stream.read1(65536)
+            if not chunk:
+                return
+            sink.append((time.perf_counter(), chunk))
+    except (OSError, ValueError):
+        return
+
+
+def _batch_script(nonce: str, commands: list[str]) -> str:
+    """One shell program running each command in its own subshell, bracketed on stdout and stderr
+    by nonce markers carrying the index and `$?`. The newline before an end marker is the
+    separator the parser strips, which is how output with no trailing newline stays exact."""
+    lines: list[str] = []
+    for i, command in enumerate(commands):
+        begin = f"@@{nonce}:B:{i}@@"
+        lines.append(f"printf '%s\\n' '{begin}'; printf '%s\\n' '{begin}' >&2")
+        lines.append("(")
+        lines.append(command)
+        lines.append(")")
+        lines.append("rc=$?")
+        end = f"@@{nonce}:E:{i}:%s@@"
+        lines.append(f"printf '\\n{end}\\n' \"$rc\"; printf '\\n{end}\\n' \"$rc\" >&2")
+    return "\n".join(lines) + "\n"
+
+
+def _parse_batch(nonce: str, n: int, out: bytes, err: bytes) -> list[Optional[tuple]]:
+    """Per command `(rc, stdout, stderr, end_offset_in_out)`, or None for a command whose end
+    marker was not seen on both streams."""
+
+    def spans(buf: bytes) -> list[Optional[tuple]]:
+        found: list[Optional[tuple]] = []
+        pos = 0
+        for i in range(n):
+            begin = f"@@{nonce}:B:{i}@@\n".encode()
+            if not buf.startswith(begin, pos):
+                break
+            start = pos + len(begin)
+            end = re.compile(rb"\n@@" + nonce.encode() + rb":E:" + str(i).encode() + rb":(\d+)@@\n")
+            m = end.search(buf, start)
+            if m is None:
+                break
+            found.append((int(m.group(1)), buf[start:m.start()], m.end()))
+            pos = m.end()
+        return found + [None] * (n - len(found))
+
+    so, se = spans(out), spans(err)
+    return [
+        None if a is None or b is None else (a[0], a[1], b[1], a[2])
+        for a, b in zip(so, se)
+    ]
+
+
+def _reap_into_cost(cost: _LegCost, job: Any) -> None:
+    """Windows: fold the batch Job's user+kernel time (100ns ticks) into `cost`."""
+    pt = _process_time_module()
+    info = pt._windows_query_job_accounting(job)
+    cost._job_s += (info.TotalUserTime + info.TotalKernelTime) / 1e7
+    pt._k32.CloseHandle(job)
+
+
+def _process_time_module():
+    """`coordinator_core.benchmarks.process_time`, imported on first use and only on Windows,
+    for the Job-object helpers it keeps module-private."""
+    _census()
+    import importlib
+
+    return importlib.import_module("coordinator_core.benchmarks.process_time")
+
+
+def _start_shell(shell: str, script: str, repo_root: Path):
+    """Popen the batch shell; returns `(proc, job)` with `job` None off Windows. On Windows the
+    shell starts suspended and joins a Job before it can run, so its descendants are accounted."""
+    argv = [shell, "-c", script]
+    common = dict(
+        shell=False, cwd=repo_root, stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+    if os.name != "nt":
+        return subprocess.Popen(argv, start_new_session=True, **common), None
+    from ctypes import wintypes
+
+    pt = _process_time_module()
+    job = pt._k32.CreateJobObjectW(None, None)
+    proc = subprocess.Popen(
+        argv, creationflags=pt._CREATE_SUSPENDED | pt._CREATE_NO_WINDOW, **common
+    )
+    pt._k32.AssignProcessToJobObject(wintypes.HANDLE(job), wintypes.HANDLE(int(proc._handle)))
+    pt._resume_all_threads(proc.pid)
+    return proc, job
+
+
+def _kill_tree(proc, job: Any) -> None:
+    try:
+        if os.name == "nt":
+            from ctypes import wintypes
+
+            _process_time_module()._k32.TerminateJobObject(wintypes.HANDLE(job), 1)
+        else:
+            os.killpg(proc.pid, signal.SIGKILL)
+    except (OSError, AttributeError):
+        pass
+    try:
+        proc.kill()
+    except OSError:
+        pass
+
+
+def _spawn_batch(
+    commands: list[str], repo_root: Path, timeout: int, cost: _LegCost
+) -> list[Union[tuple, dict]]:
+    shell = resolve_posix_shell()
+    if not shell:
+        return [_unrunnable(
+            "no POSIX shell on PATH (tried bash, sh); set "
+            f"{_SHELL_ENV_OVERRIDE} to one"
+        )] * len(commands)
+    nonce = os.urandom(8).hex()
+    n = len(commands)
+    script = _batch_script(nonce, commands)
+    started = time.perf_counter()
+    try:
+        proc, job = _start_shell(shell, script, repo_root)
+    except OSError as exc:
+        return [_unrunnable(str(exc))] * n
+    cost.spawns += 1
+    out_sink: list = []
+    err_sink: list = []
+    readers = [
+        threading.Thread(target=_drain, args=(proc.stdout, out_sink), daemon=True),
+        threading.Thread(target=_drain, args=(proc.stderr, err_sink), daemon=True),
+    ]
+    for t in readers:
+        t.start()
+    timed_out = False
+    try:
+        proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        timed_out = True
+        _kill_tree(proc, job)
+        proc.wait()
+    for t in readers:
+        t.join(timeout=2)
+    if job is not None:
+        _reap_into_cost(cost, job)
+    out = b"".join(c for _t, c in out_sink)
+    err = b"".join(c for _t, c in err_sink)
+    parsed = _parse_batch(nonce, n, out, err)
+    ends, total = [], 0
+    for t, chunk in out_sink:
+        total += len(chunk)
+        ends.append((total, t))
+    results: list[Union[tuple, dict]] = []
+    run_ms: list[int] = []
+    prev = started
+    for item in parsed:
+        if item is None:
+            break
+        rc, so, se, end_at = item
+        stamp = next((t for upto, t in ends if upto >= end_at), time.perf_counter())
+        run_ms.append(max(0, int(round((stamp - prev) * 1000))))
+        prev = stamp
+        results.append((rc, so.decode("utf-8", "replace"), se.decode("utf-8", "replace")))
+    done = len(results)
+    if done < n:
+        if timed_out:
+            results.append(_unrunnable(f"timed out after {timeout}s"))
+            results.extend({"state": UNRUNNABLE, "detail": _DEADLINE_SPENT} for _ in range(n - done - 1))
+        else:
+            results.extend(
+                _unrunnable(f"batch shell ended early (exit {proc.returncode})")
+                for _ in range(n - done)
+            )
+        run_ms.extend(0 for _ in range(n - done))
+    cost.last_run_ms = run_ms
+    return results
+
+
+def _spawn_many(
+    commands: list[str], repo_root: Path, timeout: int, cost: _LegCost
+) -> list[Union[tuple, dict]]:
+    """Run screened commands in ONE shell, each in its own subshell, and return one result per
+    command in input order: `(returncode, stdout, stderr)`, or an UNRUNNABLE `{state, detail}`.
+
+    `timeout` bounds the whole batch. A timeout kills the batch: the command in flight reads
+    "timed out" and the commands not yet started read `_DEADLINE_SPENT`; neither is storable.
+    A substituted module-level `_spawn` is honoured command by command, which is the seam the
+    spawn-counting tests wrap. `_spawn` itself stays one `subprocess.run` per command: the
+    single-plan `revalidate` path and its tests pin that.
+    """
+    if not commands:
+        cost.last_run_ms = []
+        return []
+    if _spawn is not _SINGLE_SPAWN:
+        results, run_ms = [], []
+        for command in commands:
+            started = time.perf_counter()
+            results.append(_spawn(command, repo_root, timeout))
+            run_ms.append(_ms_since(started))
+            cost.spawns += 1
+        cost.last_run_ms = run_ms
+        return results
+    return _spawn_batch(commands, repo_root, timeout, cost)
+
+
 def _spawn(command: str, repo_root: Path, timeout: int):
     """Run one screened command. A completed run is `(returncode, stdout, stderr)`; a run that
     could not complete (no shell, timeout, OSError) is an UNRUNNABLE `{state, detail}` dict."""
     shell = resolve_posix_shell()
     if not shell:
-        return {
-            "state": UNRUNNABLE,
-            "detail": (
-                "no POSIX shell on PATH (tried bash, sh); set "
-                f"{_SHELL_ENV_OVERRIDE} to one"
-            ),
-        }
+        return _unrunnable(
+            "no POSIX shell on PATH (tried bash, sh); set "
+            f"{_SHELL_ENV_OVERRIDE} to one"
+        )
     try:
         proc = subprocess.run(
             [shell, "-c", command],
@@ -314,10 +564,13 @@ def _spawn(command: str, repo_root: Path, timeout: int):
             **_no_console_kw(),
         )
     except subprocess.TimeoutExpired:
-        return {"state": UNRUNNABLE, "detail": f"timed out after {timeout}s"}
+        return _unrunnable(f"timed out after {timeout}s")
     except OSError as exc:
-        return {"state": UNRUNNABLE, "detail": str(exc)}
+        return _unrunnable(str(exc))
     return proc.returncode, proc.stdout, proc.stderr
+
+
+_SINGLE_SPAWN = _spawn
 
 
 def _judge(entry: dict, row: dict, ran: tuple, plan_rel: Optional[str]) -> dict:
@@ -1002,7 +1255,8 @@ def _entry_row(
     Under `stats["hold"]` an entry with no prior run is held before it is keyed. The cost gate
     reads `key_ms` as the key's cost at an unchanged tree (its hashing excluded); a prior whose
     key is `_DIRECT_KEY` or any non-None key at that cost spawns directly, and a prior with a
-    None key is keyed again. `stats["no_spawn"]`, a callable, ends the spawns of a call."""
+    None key is keyed again. `stats["ran"]`, command -> `(ran, run_ms)`, supplies the batch's
+    results in place of a spawn; a command absent from it was never reached."""
     census = _census()
     command = str(e.get("command") or "").strip()
     if census.is_typed(e) or not command:
@@ -1055,12 +1309,18 @@ def _entry_row(
             return _judge(e, row, prior.ran, plan_rel)
     if stats is not None and stats.get("hold"):
         return _HELD
-    bounded = _remaining_timeout(timeout, deadline)
-    if bounded is None or (stats is not None and stats.get("no_spawn", _never)()):
-        return _deadline_row(e)
-    started = time.perf_counter()
-    ran = _spawn(command, repo_root, bounded)
-    run_ms = _ms_since(started)
+    batched = stats.get("ran") if stats is not None else None
+    if batched is not None:
+        if command not in batched:
+            return _deadline_row(e)
+        ran, run_ms = batched[command]
+    else:
+        bounded = _remaining_timeout(timeout, deadline)
+        if bounded is None:
+            return _deadline_row(e)
+        started = time.perf_counter()
+        ran = _spawn(command, repo_root, bounded)
+        run_ms = _ms_since(started)
     if isinstance(ran, dict):
         row.update(ran)
         return row
@@ -1248,14 +1508,37 @@ _BUDGET_SPENT = "not run: set census budget spent"
 #: Seconds a `revalidate_set` call may spend hashing files it holds no identity for. Past it the
 #: file's identity is None, the entry runs, and the next call resumes from the store.
 _HASH_BUDGET_S = 0.06
-#: Process seconds into a `revalidate_set` call after which no new command is spawned (the parent
-#: pays ~1.3ms per spawn), so the call stays under the 500ms process-time bar; the entries left
-#: are `pending` and the next call resumes from the store.
-_SPAWN_PROCESS_S = 0.32
+#: The process-time brightline for one call: parent plus reaped children (DR-344).
+_PROCESS_BAR_S = 0.5
+#: What a call spends after its last batch: judging the batch's rows, the roll-up and one
+#: `store.save()`. It is the ceiling's previous margin (0.5 - 0.32) carried over, not re-measured
+#: here; the children's CPU it once also covered is now counted in `_LegCost`, so it is an
+#: over-estimate until the scoped census-set measurement replaces it.
+_TAIL_RESERVE_S = 0.18
+#: `_LegCost.total_s()` into a `revalidate_set` call after which no new batch starts; the entries
+#: left are `pending` and the next call resumes from the store.
+_SPAWN_PROCESS_S = _PROCESS_BAR_S - _TAIL_RESERVE_S
+#: A command with no stored cost is assumed to take this share of the budget left, so a batch of
+#: strangers cannot spend more than that remainder.
+_UNMEASURED_SHARE = 4
 
 
-def _never() -> bool:
-    return False
+def _next_batch(
+    commands: list[str], pos: int, left_ms: float, estimate: Any
+) -> list[str]:
+    """The commands from `pos` that fit one batch: their estimated wall ms (stored run_ms, else
+    the share above) sum to at most `left_ms`. Wall ms bounds CPU ms from above. The first
+    command is always taken, so a dear command still runs alone."""
+    batch: list[str] = []
+    spent = 0.0
+    for command in commands[pos:]:
+        ms, known = estimate(command)
+        cost = ms if known else max(ms, left_ms / _UNMEASURED_SHARE)
+        if batch and spent + cost > left_ms:
+            break
+        batch.append(command)
+        spent += cost
+    return batch
 
 
 def revalidate_set(
@@ -1279,7 +1562,7 @@ def revalidate_set(
     free, so a pre-expired deadline still judges every hit, while a first-run hash stops at it.
     """
     started = time.monotonic()
-    process_from = time.process_time()
+    leg = _LegCost()
     view = _TreeView(
         repo_root, deadline, store, deadline_gates_hashing=True,
         hash_budget_s=_HASH_BUDGET_S,
@@ -1289,7 +1572,7 @@ def revalidate_set(
     shared: dict[str, dict] = {}
 
     def no_spawn() -> bool:
-        return time.process_time() - process_from > _SPAWN_PROCESS_S
+        return leg.total_s() > _SPAWN_PROCESS_S
 
     p1 = {"memo_hits": 0, "direct_runs": 0, "key_ms": 0, "hold": True, "shared": shared}
     census = _census()
@@ -1350,15 +1633,39 @@ def revalidate_set(
         ranked.append((cost, -never, pos, slot))
     ranked.sort(key=lambda r: r[:3])
 
-    p2 = {"memo_hits": 0, "direct_runs": 0, "key_ms": 0, "shared": shared, "no_spawn": no_spawn}
+    stage_cache = shared.setdefault("stages", {})
+    distinct: list[str] = []
+    seen_cmds: set[str] = set()
+    for _cost, _unrun, _pos, slot in ranked:
+        dicts = slot["dicts"]
+        slot["order"] = sorted(
+            slot["held"], key=lambda i: _git_stage_refused(dicts[i], head, stage_cache)
+        )
+        for i in slot["order"]:
+            command = str(dicts[i].get("command") or "").strip()
+            if command not in seen_cmds:
+                seen_cmds.add(command)
+                distinct.append(command)
+    ran_cache: dict[str, tuple] = {}
+    at = 0
+    while at < len(distinct) and not no_spawn():
+        bounded = _remaining_timeout(timeout, deadline)
+        if bounded is None:
+            break
+        left_ms = max(0.0, (_SPAWN_PROCESS_S - leg.total_s()) * 1000)
+        batch = _next_batch(distinct, at, left_ms, estimate)
+        whole = max(1, int(min(timeout * len(batch), deadline - time.monotonic())))
+        results = _spawn_many(batch, repo_root, whole, leg)
+        for command, ran, run_ms in zip(batch, results, leg.last_run_ms):
+            ran_cache[command] = (ran, run_ms)
+        at += len(batch)
+
+    p2 = {"memo_hits": 0, "direct_runs": 0, "key_ms": 0, "shared": shared, "ran": ran_cache}
     pending: list[str] = []
     for _cost, _unrun, _pos, slot in ranked:
         t0 = time.monotonic()
         dicts = slot["dicts"]
-        stage_cache = shared.setdefault("stages", {})
-        held = sorted(
-            slot["held"], key=lambda i: _git_stage_refused(dicts[i], head, stage_cache)
-        )
+        held = slot["order"]
         unreached = False
         hits0, direct0 = p2["memo_hits"], p2["direct_runs"]
         for i in held:
@@ -1410,6 +1717,9 @@ def revalidate_set(
         "census_plans": census_plans,
         "pending": pending,
         "order": "measured" if measured else "input",
+        "children_process_ms": leg.children_ms,
+        "spawns": leg.spawns,
+        "inproc_runs": 0,
     }
 
 

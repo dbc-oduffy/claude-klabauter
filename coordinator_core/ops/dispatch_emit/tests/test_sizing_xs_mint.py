@@ -145,3 +145,62 @@ def test_closure_key_falls_back_to_plan_id_without_a_deliverable_id():
         "kind": "deliverable",
         "id": f"{xs_spine_plan_id(stem)}-x2",
     }
+
+
+MEMO = ".coordinator-local/memo-outbox/engine-asks.md"
+MEMO_SIZING = {
+    "intent": "Ask the engine",
+    "exit_criterion": {"statement": "the engine-asks memo is sent to claude-klabauter-em."},
+}
+
+
+def _spine_rows(tmp_path, sizing, writes, **kw):
+    text, path = mint_xs_spine(sizing, sizing_rel=SIZING_REL, writes=writes, out_dir=tmp_path, **kw)
+    path.write_text(text, encoding="utf-8", newline="\n")
+    return read_spine(path), _raw_memo_to(text)
+
+
+def _raw_memo_to(text):
+    from coordinator_core.ops.plan_tasks_render import load_rows
+
+    return {r["id"]: r.get("memo_to") for r in load_rows(text).rows}
+
+
+def test_memo_draft_splits_into_memo_send_row_with_receiver_from_exit_criterion(tmp_path):
+    rows, to = _spine_rows(tmp_path, MEMO_SIZING, ["a/ev.yaml", MEMO, "h/handoff.md"])
+    by_id = {r.id: r for r in rows}
+    assert list(by_id["X1"].writes) == ["a/ev.yaml", "h/handoff.md"]
+    assert list(by_id["M1"].writes) == [MEMO]
+    assert to["M1"] == "claude-klabauter-em" and to["X1"] is None
+
+
+def test_sizing_memo_to_wins_over_draft_and_criterion(tmp_path):
+    (tmp_path / ".coordinator-local" / "memo-outbox").mkdir(parents=True)
+    (tmp_path / MEMO).write_text("---\nto: draft-em\n---\nbody\n", encoding="utf-8")
+    rows, to = _spine_rows(tmp_path, {**MEMO_SIZING, "memo_to": "sizing-em"}, [MEMO], repo_root=tmp_path)
+    assert [r.id for r in rows] == ["M1"] and to["M1"] == "sizing-em"
+
+
+def test_draft_to_frontmatter_beats_exit_criterion(tmp_path):
+    (tmp_path / ".coordinator-local" / "memo-outbox").mkdir(parents=True)
+    (tmp_path / MEMO).write_text("---\nto: draft-em\n---\nbody\n", encoding="utf-8")
+    _, to = _spine_rows(tmp_path, MEMO_SIZING, ["a.py", MEMO], repo_root=tmp_path)
+    assert to["M1"] == "draft-em"
+
+
+def test_unresolvable_receiver_is_a_named_refusal(tmp_path):
+    from coordinator_core.ops.dispatch_emit.sizing_xs_mint import MemoReceiverUnresolvedError
+
+    with pytest.raises(MemoReceiverUnresolvedError):
+        mint_xs_spine(SIZING, sizing_rel=SIZING_REL, writes=["a.py", MEMO], out_dir=tmp_path)
+
+
+def test_backslash_memo_path_splits_identically(tmp_path):
+    rows, _ = _spine_rows(tmp_path, MEMO_SIZING, ["a.py", MEMO.replace("/", "\\")])
+    assert {r.id: list(r.writes) for r in rows} == {"X1": ["a.py"], "M1": [MEMO]}
+
+
+def test_sent_receipt_is_not_a_draft(tmp_path):
+    receipt = ".coordinator-local/memo-outbox/sent/engine-asks.md"
+    text, _ = mint_xs_spine(SIZING, sizing_rel=SIZING_REL, writes=["a.py", receipt], out_dir=tmp_path)
+    assert "memo_to" not in text

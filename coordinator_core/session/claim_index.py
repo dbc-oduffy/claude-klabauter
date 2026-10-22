@@ -982,6 +982,10 @@ def classify_paths(
         reaper's job, and the refusal names the holder so it can be done
         deliberately.
 
+    A foreign claimant holding only a READ never yields
+    :data:`OWNERSHIP_PEER`; a write or kind-less (unknown) hold does, per
+    ``touch_record.kind_blocks_a_peer_commit``.
+
     Agent fan-out and last-event-wins need no handling here for the same
     reason they need none in :func:`commit_set` -- ``rebuild`` has already
     applied both.
@@ -990,12 +994,17 @@ def classify_paths(
     by_path: Dict[str, PathOwnership] = {}
     for path in paths:
         claimants = state.claims.get(_normalize_key(path)) or []
-        peers = [c for c in claimants if c != session_id]
+        held = state.held_kind.get(_normalize_key(path), {})
+        peers = [
+            c
+            for c in claimants
+            if c != session_id and touch_record.kind_blocks_a_peer_commit(held.get(c))
+        ]
         if peers:
             by_path[path] = PathOwnership(verdict=OWNERSHIP_PEER, peers=list(peers))
         elif not state.complete:
             by_path[path] = PathOwnership(verdict=OWNERSHIP_UNANSWERABLE)
-        elif claimants:
+        elif session_id in claimants:
             by_path[path] = PathOwnership(verdict=OWNERSHIP_MINE)
         else:
             by_path[path] = PathOwnership(verdict=OWNERSHIP_UNCLAIMED)

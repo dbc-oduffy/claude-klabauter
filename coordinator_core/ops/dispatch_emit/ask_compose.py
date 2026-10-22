@@ -34,6 +34,7 @@ from coordinator_core.ops.dispatch_emit.pre_halt_credit import CREDIT_MATCH_JS
 from coordinator_core.ops._workflow_contract import agent_options_phase_titles
 from coordinator_core.ops.dispatch_emit.ask_contract import (
     ALL_LANDED_HALT_KIND,
+    CLAIM_PARAM,
     HALT_DEPENDENTS_UNSTARTED,
     LEG_REFUSAL_HEAD,
     LEG_REFUSE,
@@ -130,6 +131,7 @@ from coordinator_core.ops.dispatch_emit.ask_footprint import (
 )
 from coordinator_core.ops.dispatch_emit.terminal_commit_params_channel import PARAMS_BLOCK_JS, params_path
 from coordinator_core.ops.dispatch_emit.land_run_contract import OP_NAME as LAND_RUN_OP, RECONCILE_CLAUSE as LAND_RUN_RECONCILE_CLAUSE
+from coordinator_core.ops.dispatch_emit.ask_stage_receipt import ALREADY_STAGED_KEY
 from coordinator_core.ops.dispatch_emit.wake_digest import (
     CAP_HELPER_JS,
     TERMINAL_COMMIT_CLI_HELPER_JS,
@@ -175,7 +177,8 @@ _ANCHOR_CLAUSE = (
 SKILL_WEIGHT_MARKER = "skill-weight-budget"
 SKILL_WEIGHT_HEADROOM_CLAUSE = (
     f"Mind the {SKILL_WEIGHT_MARKER}: skill and command prose writes are budgeted by the skill-weight "
-    "leg at commit. Write a tripwire pointer, not prose, wherever a skill or command needs a rule."
+    "leg at commit. Write a tripwire pointer, not prose, wherever a skill or command needs a rule. "
+    "Never add or demand a test to pin prose (the wording of a skill, command or doc); pin behavior or a pointer's target instead."
 )
 _REVIEW_RESULT_NAMES = ("_reviewPrep", "_reviewWave", "_deliveryVerdict", "_deliveryNotRun", WAVE_NOT_RUN_VAR, "_reviewIntegration", "_reviewReverify")
 
@@ -215,6 +218,16 @@ def _cat(*parts: str) -> str:
 
 _UNKEYED_RUN = "unkeyed"
 
+#: Reconcile clause for prompts that run `dispatch.ask_stage`; its re-run is idempotent through the
+#: stage receipt, whose `already_staged` reply is the landed manifest.
+ASK_STAGE_RECONCILE_CLAUSE = (
+    f"If the {OP_ASK_STAGE} command replies with error code -32004 and its error.data carries "
+    "reconcile_command, run reconcile_command once: a status whose state is finished with outcome "
+    "result is the stage's reply. In every other -32004 case, run the same "
+    f"{OP_ASK_STAGE} command exactly once more and return its reply verbatim; a reply carrying "
+    f"{ALREADY_STAGED_KEY} is the landed manifest. A -32004 is never itself the stage's failure."
+)
+
 
 def _agent(
     prompt_expr: str,
@@ -235,11 +248,12 @@ def _agent(
     effort_opt = f"effort: {_lit(effort)}, " if effort else ""
     clause = _lit(_sidecar.sidecar_clause(_sidecar.sidecar_dir("ask", run_id, label)))
     if "coordinator-invoke" in prompt_expr:
-        reconcile = (
-            LAND_RUN_RECONCILE_CLAUSE
-            if LAND_RUN_OP in prompt_expr
-            else _emit._INDETERMINATE_RECONCILE_CLAUSE
-        )
+        if LAND_RUN_OP in prompt_expr:
+            reconcile = LAND_RUN_RECONCILE_CLAUSE
+        elif OP_ASK_STAGE in prompt_expr:
+            reconcile = ASK_STAGE_RECONCILE_CLAUSE
+        else:
+            reconcile = _emit._INDETERMINATE_RECONCILE_CLAUSE
         if reconcile not in prompt_expr:
             clause = _lit(" " + reconcile) + " + " + clause
         if _emit._INVOKE_LITERAL_CLAUSE not in prompt_expr:
@@ -1246,7 +1260,7 @@ def _row_runner_js() -> str:
 _SIZING_SKILL_SOURCE = ("skills", "sizing", "SKILL.md")
 
 
-#: Prefixes every review and fix prompt: a symbol unused in this repo can still be called from a sibling repo.
+#: Prefixes the review-wave prompt head: a symbol unused in this repo can still be called from a sibling repo.
 _CROSS_REPO_CALLER_CLAUSE = (
     "\n\nBefore deleting or removing any symbol (function, method, class, constant, even a private one) as "
     "dead code, search the sibling repos for callers of it. If any sibling repo still calls it, keep the "
@@ -1449,7 +1463,7 @@ def compose_ask_script(
             else ""
         )
     ) + ledger_clause
-    review_head = head + intent_clause + _CROSS_REPO_CALLER_CLAUSE + session_tail
+    review_head = head + intent_clause + _CROSS_REPO_CALLER_CLAUSE + "\n\n" + SKILL_WEIGHT_HEADROOM_CLAUSE + session_tail
     run_base_sha = run_base_sha or head_sha(repo_root) or ""
     review_blocks = compose_execute_review(
         review,
@@ -1563,25 +1577,28 @@ def compose_ask_script(
     if fold_falsifier:
         b.append("  let _planFalsifier = null;")
         b.append("  " + _AS_PLAN_FALSIFIER_JS)
-    def _stage_act_parts(base: str, sizing: str, gated: str) -> tuple[str, ...]:
+    def _stage_params_js(sizing_js: str, gated_js: str) -> str:
+        """The complete XS stage params as one ``js:`` expression: sizing_path and gated inside it, never plan_path."""
+        return (
+            "js:JSON.stringify({ run_id: _runId, writes: _writes, cross_repo_approved: "
+            f"_crossRepoApproved, session_id: _SESSION_ID, sizing_path: {sizing_js}, gated: {gated_js} }})"
+        )
+
+    def _stage_act_parts(*params: str) -> tuple[str, ...]:
         """The closing act of the agent that just ran the gate: stage the arms with no plan agent to fold into.
 
-        ``base`` is the params object text carrying run_id, writes, cross_repo_approved and session_id;
-        ``sizing`` and ``gated`` are the values the XS params add. Each of the three is a literal or a
-        ``js:`` expression.
+        ``params`` are the parts of the complete params object (sizing_path and gated already inside it,
+        never plan_path), each a literal or a ``js:`` expression, so the agent splices nothing.
         """
         return (
             " When the gate reply carries its own `manifest_handle` (a ledger resume or an S resume stages itself), "
             "return {manifest_handle: <it verbatim>} as stage_reply; when it carries `manifest` holding an `error`, return "
             "{error: <that text>} as stage_reply; either way run no stage command. "
             "As your very last act otherwise, stage the run, but only when the gate reply's halt is null and its arm "
-            f"is XS: run `{_INVOKE} {OP_ASK_STAGE} '<params>'` once, <params> being the JSON object ",
-            base,
-            " with sizing_path ",
-            sizing,
-            " and gated ",
-            gated,
-            " added. Return its JSON reply verbatim as stage_reply (a manifest_handle, or the {\"error\": ...} refusal). "
+            f"is XS: run `{_INVOKE} {OP_ASK_STAGE} '<params>'` once, <params> being exactly this JSON object, "
+            "with no key added, dropped or renamed: ",
+            *params,
+            ". Return its JSON reply verbatim as stage_reply (a manifest_handle, or the {\"error\": ...} refusal). "
             "On any other arm run no stage command and return no stage_reply.",
         )
 
@@ -1596,12 +1613,7 @@ def compose_ask_script(
             "js:_sizingRel",
             " and return its estimate.tshirt as tshirt and its route as route.",
             *(
-                _stage_act_parts(
-                    "js:JSON.stringify({ run_id: _runId, writes: _writes, cross_repo_approved: "
-                    "_crossRepoApproved, session_id: _SESSION_ID })",
-                    "js:JSON.stringify(_sizingRel)",
-                    "js:JSON.stringify(_gated)",
-                )
+                _stage_act_parts(_stage_params_js("_sizingRel", "_gated"))
                 if stage_act and fold_stage
                 else ()
             ),
@@ -1668,11 +1680,12 @@ def compose_ask_script(
             )
         if fold_stage:
             _scout_base = json.dumps(
-                {"run_id": run_id, "cross_repo_approved": bool(cross_repo_approved), "session_id": session_id or ""}
-            )[:-1] + ', "writes": <your writes array>}'
-            scout_closing_tail += "".join(
-                _stage_act_parts(_scout_base, json.dumps(sizing_write_rel), "<your gated array>")
-            )
+                {
+                    "run_id": run_id, "cross_repo_approved": bool(cross_repo_approved),
+                    "session_id": session_id or "", "sizing_path": sizing_write_rel,
+                }
+            )[:-1] + ', "writes": <your writes array>, "gated": <your gated array>}'
+            scout_closing_tail += "".join(_stage_act_parts(_scout_base))
         scout_closing = (
             " Your closing acts, in order, once your fields are settled. (1) Run sizing-assemble once: "
             "replace each <field> in the command below with your own value, POSIX single-quoted (an "
@@ -1805,12 +1818,7 @@ def compose_ask_script(
                 else ""
             ),
             *(
-                _stage_act_parts(
-                    "js:JSON.stringify({ run_id: _runId, writes: _writes, cross_repo_approved: "
-                    "_crossRepoApproved, session_id: _SESSION_ID })",
-                    "js:JSON.stringify(" + _reword_sizing_js + ")",
-                    "js:JSON.stringify(_gated)",
-                )
+                _stage_act_parts(_stage_params_js(_reword_sizing_js, "_gated"))
                 if fold_stage
                 else ()
             ),
@@ -1934,11 +1942,17 @@ def compose_ask_script(
     if fold_stage:
         # Adopted only under the plan folds' guard (rows array, no error), for the arms the act covers.
         clean_js = "(_scoutClean || _rewordStaged)" if sized_in_run else "!_gate.halt"
-        reply_js = "_scouted" if sized_in_run else "_gate"
-        b.append(
-            f"  if ({clean_js} && (_gate.arm === {_lit(ARM_XS)} || (_gate.arm === {_lit(ARM_S)} && _gate.resume_plan) "
-            f"|| _gate.{RESUME_LEDGER_KEY})) {{ await _adoptStageReply({reply_js}.stage_reply); }}"
+        arms_js = (
+            f"(_gate.arm === {_lit(ARM_XS)} || (_gate.arm === {_lit(ARM_S)} && _gate.resume_plan) "
+            f"|| _gate.{RESUME_LEDGER_KEY})"
         )
+        if sized_in_run:
+            b.append(f"  if ({clean_js} && {arms_js}) {{ await _adoptStageReply(_scouted.stage_reply); }}")
+        else:
+            b.append(
+                "  if (_gate && typeof _gate.arm === 'string') { _gate = { ..._gate, arm: _gate.arm.trim().toLowerCase() }; "
+                f"if ({clean_js} && {arms_js}) {{ await _adoptStageReply(_gate.stage_reply); }} }}"
+            )
 
     def _record_clause(record_js: str, fields: str) -> list[str]:
         """The ruling agent's own record call; the engine refuses a gated ruling before it writes."""
@@ -1976,12 +1990,7 @@ def compose_ask_script(
             *(
                 (
                     " Here the gate reply is your record command's reply.",
-                    *_stage_act_parts(
-                        "js:JSON.stringify({ run_id: _runId, writes: _writes, cross_repo_approved: "
-                        "_crossRepoApproved, session_id: _SESSION_ID })",
-                        "js:JSON.stringify(_sizingRel)",
-                        "js:JSON.stringify(_gated)",
-                    ),
+                    *_stage_act_parts(_stage_params_js("_sizingRel", "_gated")),
                 )
                 if fold_stage
                 else ()
@@ -2124,8 +2133,9 @@ def compose_ask_script(
     )
     b.append(
         f"  const _ledgerOwes = _resumeLedger && (_gate.arm === {_lit(ARM_M_PLUS)} || _gate.arm === {_lit(ARM_S)})"
-        f" && (({_rl0}.blocking ?? [])"
+        f" && ((({_rl0}.blocking ?? [])"
         f".some((id) => (((({_rl0}.{RESUME_LEDGER_REMAINING_FIELD} ?? {{}})[id]) ?? {{}}).remaining ?? []).length > 0)"
+        f" && ({_rl0}.{RESUME_LEDGER_LEG_FIELD}?.action !== {_lit(LEG_SKIP)}))"
         f" || ({_rl0}.{RESUME_LEDGER_UNCLAIMED_FIELD} ?? []).length > 0);"
     )
     b.append(
@@ -2775,8 +2785,7 @@ def compose_ask_script(
         [_emit._unconst(block, _REVIEW_RESULT_NAMES) for _, block in review_blocks]
     )
     b.append(
-        "  const _noReviewPaths = !!((_manifest?.rows ?? []).length && "
-        "!(_manifest?.review_declared_paths ?? []).length);"
+        "  const _noReviewPaths = !(_manifest?.review_declared_paths ?? []).length;"
     )
     # The review wave shadows `agent` inside its own block (design brief prefix only) rather than
     # renaming its call sites: the leg register, phase-title and brief checks find legs by the
@@ -2901,8 +2910,7 @@ def compose_ask_script(
     ]
     verify_lines[-1:-1] = [_test_verdict_empty_halt_js(sizing_rel).replace("TEST_GUARD", test_guard)]
     _rl = f"_gate.{RESUME_LEDGER_KEY}"
-    # The "writes are exactly these paths" clause below is prompt-only; the terminal commit's declared-path
-    # check bounds what counts as met, not what the leg touches.
+    # The leg's footprint is the only path set named; dispatch.land_run withholds a changed path outside it.
     remaining_prompt = _cat(
         f"{head}\n\n{anchor}\n\n",
         "Ledger-resume remaining-work leg. An earlier run halted; its revise notes may ask for work with no "
@@ -2916,7 +2924,7 @@ def compose_ask_script(
         f"js:JSON.stringify({_rl}.{RESUME_LEDGER_REVISED_FIELD} ?? [])",
         f". Also read {record_dir}/{NOTES_FILE} when it exists: the notes of this refire, newer than the ones above. "
         "Do the owed work now. Your writes are exactly these declared paths: ",
-        f"js:({_rl}.{RESUME_LEDGER_LEG_FIELD}?.writes ?? (_manifest?.rows ?? []).flatMap((r) => r.writes ?? [])).join(', ')",
+        f"js:({_rl}.{RESUME_LEDGER_LEG_FIELD}?.writes ?? []).join(', ')",
         ". A row whose work you cannot finish, or whose owed work lies on a path outside those writes, stays "
         "not_met: write nothing for it and say so in `summary`. Commit and stage nothing. "
         f"{SKILL_WEIGHT_HEADROOM_CLAUSE}{session_tail}",
@@ -3003,7 +3011,8 @@ def compose_ask_script(
     # apart, with the ledger re-check as its remedy.
     b.append(
         f"    const _rulable = _manifest?.rulable_ids ?? _gate.{RESUME_LEDGER_KEY}?.rulable_ids ?? [];\n"
-        f"    const _ledgerIds = _gate.{RESUME_LEDGER_KEY}?.ledger_item_ids ?? _manifest?.ledger_item_ids ?? null;\n"
+        "    // An empty register refuses only when nothing was minted: minted manifest ids outrank a pre-mint resume verdict.\n"
+        f"    const _ledgerIds = _manifest?.ledger_item_ids?.length ? _manifest.ledger_item_ids : (_gate.{RESUME_LEDGER_KEY}?.ledger_item_ids ?? _manifest?.ledger_item_ids ?? null);\n"
         f"    const _withheldIds = _gate.{RESUME_LEDGER_KEY}?.withheld_ids ?? _manifest?.withheld_ids ?? null;\n"
         "    const _allRuledOut = Array.isArray(_ledgerIds) && !_ledgerIds.length "
         "&& Array.isArray(_withheldIds) && _withheldIds.length > 0;\n"
@@ -3046,7 +3055,8 @@ def compose_ask_script(
         ": 'The verify leg returned an empty items list and no ledger row ids are on record to hold it against: fix the verify leg before re-running.') "
         "+ (_blkRulable.length ? ' Run coordinator-invoke workflow.revise with run_id ' + _runId "
         "+ ' with out_of_scope: [' + _blkRulable.join(', ') + '] for the rows ruled out; `verbatim` carries the PM words ruling them out, recorded as the ruling and adding no row. The re-fire resumes at the ledger check.' : '') "
-        "+ (_blkForeign.length ? ' ' + _blkForeign.join(', ') + ' are not in the stage manifest rulable_ids: re-run the ledger check.' : '') "
+        "+ (_blkForeign.length ? ' ' + _blkForeign.join(', ') + ' are not in the stage manifest rulable_ids: re-run the ledger check. "
+        f"A ruling that is not yet a row is recorded with workflow.revise run_id ' + _runId + ' verbatim + from + {CLAIM_PARAM}: true, which claims it and resumes at the ledger check.' : '') "
         "+ (_blkIds.length ? ' Re-fire the same sizing: it executes the remaining work of the rows it keeps, briefed with the revise notes, '"
         "+ 'and a row is met only on work changed since this halt; a revise re-ruling the row lets work committed before the halt meet it when the verdict names that commit.' : '')) }; }"
     )
@@ -3127,7 +3137,9 @@ def compose_ask_script(
     b.append(
         f"  if (_nextAction.params && _resumeLedger) {{ _nextAction.params.{TERMINAL_RESUME_LEDGER_PARAM} = "
         f"{{ run_id: _runId, {RESUME_LEDGER_HALT_SHA_FIELD}: _gate.{RESUME_LEDGER_KEY}.{RESUME_LEDGER_HALT_SHA_FIELD} ?? null, "
-        f"blocking: _gate.{RESUME_LEDGER_KEY}.blocking ?? [] }}; "
+        f"blocking: _gate.{RESUME_LEDGER_KEY}.blocking ?? [], "
+        f"{RESUME_LEDGER_NOTES_FIELD}: _gate.{RESUME_LEDGER_KEY}.{RESUME_LEDGER_NOTES_FIELD} ?? [], "
+        f"{RESUME_LEDGER_REMAINING_FIELD}: _gate.{RESUME_LEDGER_KEY}.{RESUME_LEDGER_REMAINING_FIELD} ?? {{}} }}; "
         f"if (Array.isArray(_gate.{RESUME_LEDGER_KEY}.{RESUME_LEDGER_HALT_BLOCKING_FIELD})) "
         f"{{ _nextAction.params.{TERMINAL_RESUME_LEDGER_PARAM}.blocking = "
         f"_gate.{RESUME_LEDGER_KEY}.{RESUME_LEDGER_HALT_BLOCKING_FIELD}; }} }}"

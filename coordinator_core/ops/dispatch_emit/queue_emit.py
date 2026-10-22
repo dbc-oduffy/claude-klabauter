@@ -80,6 +80,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import sys
 from pathlib import Path
 from typing import Any, Mapping, NamedTuple, Optional, Sequence
 
@@ -248,7 +249,12 @@ def emit_queue_script(
             "output_sha256": manifest.source.output_sha256,
         }
 
+    declined = [{"id": d.row_id, "path": d.path, "reason": d.reason} for d in manifest.declined]
+    for d in declined:
+        print(f"declined {d['id']} ({d['path']}): {d['reason']}", file=sys.stderr)
+
     receipt_extras = {
+        "declined": declined,
         "queue": [str(q) for q in queue],
         "profile": loaded_profile.name,
         "profile_digest": profile_digest,

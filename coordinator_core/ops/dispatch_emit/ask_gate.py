@@ -671,10 +671,23 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                 resume_out[RESUME_LEDGER_LEG_FIELD] = remaining_leg_plan(
                     resume_out.get(RESUME_LEDGER_REMAINING_FIELD) or {},
                     resume_out.get(RESUME_LEDGER_NOTES_FIELD) or [],
-                    [w for r in manifest.rows for w in r.writes],
+                    manifest.rows,
+                    resume_out.get("blocking") or [],
                     list(manifest.doc_writes),
                     out.get("sizing_path") or sizing_rel,
                     root,
+                )
+                import json
+
+                from coordinator_core.atomic_replace import atomic_write_bytes
+                from coordinator_core.ops.dispatch_emit.ask_contract import LEG_FOOTPRINT_FILE
+                from coordinator_core.session.declared_writes import declare_write
+
+                footprint = record_dir(root, params["run_id"]) / LEG_FOOTPRINT_FILE
+                declare_write(str(footprint))
+                atomic_write_bytes(
+                    footprint,
+                    (json.dumps(resume_out[RESUME_LEDGER_LEG_FIELD], indent=2) + "\n").encode("utf-8"),
                 )
         except (AskStageError, SizingFireRefused, reply_sidecar.ReplySidecarError) as exc:
             out["manifest"] = {"error": str(exc)}

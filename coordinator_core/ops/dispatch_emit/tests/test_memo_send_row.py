@@ -20,6 +20,7 @@ _MEMO_ROW = (
     f"  surface: {_OUTBOX}/topic.md\n  writes: []\n  memo_to: example-game-repo-em\n  disposition: open\n"
     "  body: |\n    Send it.\n"
 )
+_EM_MEMO_ROW = _MEMO_ROW.replace("  disposition: open\n", "  disposition: open\n  performer: em\n")
 _CODE_ROW = (
     "- id: C1\n  title: code\n  change_kind: script-edit\n"
     "  surface: pkg/a.py\n  writes:\n    - pkg/a.py\n  disposition: open\n"
@@ -49,8 +50,32 @@ def _receipt(tmp_path, slug="topic"):
     (sent / f"{slug}.md").write_text("sent\n", encoding="utf-8")
 
 
+def test_dispatchable_memo_row_emits_with_memo_send_and_no_exclusion(tmp_path):
+    exclusions: list = []
+    rows = {r.id: r for r in read_spine(_plan(tmp_path, _MEMO_ROW, _CODE_ROW), exclusions=exclusions)}
+    assert set(rows) == {"M1", "C1"}
+    assert rows["M1"].memo_send == {"slug": "topic", "to": "example-game-repo-em", "title": "send the memo", "kind": "ask"}
+    assert rows["C1"].memo_send is None
+    assert exclusions == []
+
+
+def test_dependent_of_a_dispatchable_memo_row_is_not_withheld(tmp_path):
+    dependent = _CODE_ROW.replace("id: C1", "id: D1") + "  depends_on:\n    - chunk: M1\n      gate_kind: output-consumption-runtime\n"
+    exclusions: list = []
+    rows = read_spine(_plan(tmp_path, _MEMO_ROW, dependent), exclusions=exclusions)
+    assert [r.id for r in rows] == ["M1", "D1"]
+    assert exclusions == []
+
+
+def test_performer_em_memo_row_stays_memo_send_owed(tmp_path):
+    exclusions: list = []
+    rows = read_spine(_plan(tmp_path, _EM_MEMO_ROW, _CODE_ROW), exclusions=exclusions)
+    assert [r.id for r in rows] == ["C1"]
+    assert [(e["id"], e["reason"]) for e in exclusions] == [("M1", "memo-send")]
+
+
 def test_memo_row_is_no_executor_row_and_surfaces_as_an_em_action(tmp_path):
-    plan = _plan(tmp_path, _MEMO_ROW, _CODE_ROW)
+    plan = _plan(tmp_path, _EM_MEMO_ROW, _CODE_ROW)
     exclusions: list = []
     assert [r.id for r in read_spine(plan, exclusions=exclusions)] == ["C1"]
     assert [(e["id"], e["reason"]) for e in exclusions] == [("M1", "memo-send")]
@@ -109,7 +134,7 @@ def test_deferred_memo_row_without_memo_to_is_not_refused(tmp_path):
 
 def test_memo_row_with_memo_to_reads_and_stages(tmp_path):
     exclusions: list = []
-    read_spine(_plan(tmp_path, _MEMO_ROW, _CODE_ROW), exclusions=exclusions)
+    read_spine(_plan(tmp_path, _EM_MEMO_ROW, _CODE_ROW), exclusions=exclusions)
     assert [(e["id"], e["reason"]) for e in exclusions] == [("M1", "memo-send")]
 
 
@@ -181,7 +206,7 @@ def _with_verifier_and_criterion(tmp_path, *rows):
 
 
 def test_verifier_and_judge_are_told_the_memo_row_is_em_owned(tmp_path):
-    plan, kw = _with_verifier_and_criterion(tmp_path, _MEMO_ROW, _CODE_ROW)
+    plan, kw = _with_verifier_and_criterion(tmp_path, _EM_MEMO_ROW, _CODE_ROW)
     script = emit_script(plan, repo_root=tmp_path, **kw)
     assert script.count("EM-owned rows (never dispatched to an executor") >= 2
     assert "M1 (EM: send topic" in script

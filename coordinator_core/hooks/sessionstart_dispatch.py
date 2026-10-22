@@ -26,6 +26,8 @@ COMPOSED HERE, in DoE's REGISTRY order, each with its `sources` set:
   - `job_mode_announce` (`startup`)
   - `governed_surface_drift` (all five sources)
   - `guard_hook_generation_self_probe` (`startup`, `clear`, `compact`)
+  - `compact_summary_constraints` (`compact`) -- warns on uncited constraints
+    in the compaction summary
   "All five" is `startup`, `resume`, `clear`, `compact`, `fork`. Every leg is a
   direct import of an already-registered engine function; no `hooks.*` wrapper
   op exists for the three adapters defined here.
@@ -63,6 +65,7 @@ from coordinator_core.bash_guards._write_bump_session_start import (
     write_session_start_record as _write_session_start_record,
 )
 from coordinator_core.hooks._envelope import context_only, no_advisory
+from coordinator_core.hooks.compact_summary_constraints import warn_line as _compact_constraint_warning
 from coordinator_core.hooks.guard_hook_generation_self_probe import (
     _handler as _guard_hook_generation_self_probe_handler,
 )
@@ -102,6 +105,7 @@ def _extract_context(result) -> "Optional[str]":
 
 
 _STARTUP = frozenset({"startup"})
+_COMPACT = frozenset({"compact"})
 _START_CLEAR_COMPACT = frozenset({"startup", "clear", "compact"})
 _ALL_SOURCES = frozenset({"startup", "resume", "clear", "compact", "fork"})
 
@@ -158,6 +162,7 @@ _LEGS = (
     ("job_mode_announce", _STARTUP, "_leg_job_mode_announce"),
     ("governed_surface_drift", _ALL_SOURCES, "_leg_governed_surface_drift"),
     ("guard_hook_generation_self_probe", _START_CLEAR_COMPACT, "_leg_self_probe"),
+    ("compact_summary_constraints", _COMPACT, "_leg_compact_summary_constraints"),
 )
 
 
@@ -183,6 +188,10 @@ def _leg_job_mode_announce(payload):
 
 def _leg_self_probe(payload):
     return _guard_hook_generation_self_probe_handler({"payload": payload})
+
+
+def _leg_compact_summary_constraints(payload):
+    return _compact_constraint_warning(payload)
 
 
 def _unmatched_breadcrumb(source: str) -> str:

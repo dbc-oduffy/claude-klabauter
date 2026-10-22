@@ -365,3 +365,82 @@ def test_verb_list_error_names_clear_gate(tmp_path):
     repo = _make_git_repo(tmp_path)
     result = asyncio.run(_handler({"plan_path": "x"}, repo_root=repo / ".git"))
     assert "clear-gate" in result["error"]
+
+
+_ROWS_COMMENTED = """\
+# spine preamble comment
+- id: C1
+  title: 'Single-quoted title'
+  change_kind: script-edit
+  surface: some/path.py
+  queue_scope: project
+  deferred: false
+  external_gate:
+    - owner_repo: coordinator-content-repo
+      condition: "DoE lands the flip"
+      requires: commit-in-owner-repo
+      blocks: execution
+  # comment between keys
+  body: |
+    Do the thing.
+- id: C2
+  title: "Double-quoted: with colon"   # trailing comment
+  change_kind: script-edit
+  surface: 'other/path.py'
+  queue_scope: project
+  deferred: false
+  body: |
+    Other thing.
+"""
+
+
+def _approved(text: str) -> str:
+    from coordinator_core.frontmatter.primitives import stamp_approved_body_sha
+
+    return stamp_approved_body_sha(text.replace("status: draft", "status: approved", 1))
+
+
+def _spine(text: str) -> str:
+    return text.split("```yaml plan-tasks\n")[1].split("```")[0]
+
+
+def test_row_level_clear_keeps_untouched_bytes_and_approval_sha(tmp_path):
+    from coordinator_core.frontmatter.primitives import approval_body_sha, check_approved_body
+
+    repo = _make_git_repo(tmp_path)
+    approved = _approved(_PLAN.format(rows=_ROWS_COMMENTED))
+    plan = _seed_plan(repo, "g.md", approved)
+
+    result = _call(repo, plan)
+
+    assert result["exit_code"] == 0 and result["applied"] is True, result
+    text = plan.read_text(encoding="utf-8")
+    assert check_approved_body(text)[0] == "ok"
+    assert f"approved_body_sha: {approval_body_sha(text)}" in text.split("---")[1].replace('"', "")
+    old_spine, new_spine = _spine(approved), _spine(text)
+    assert new_spine.startswith("# spine preamble comment\n")
+    assert "# comment between keys" in new_spine
+    assert new_spine.endswith(old_spine[old_spine.index("- id: C2"):])
+    assert "title: 'Single-quoted title'" in new_spine
+
+
+def test_frontmatter_clear_keeps_approval_sha(tmp_path):
+    from coordinator_core.frontmatter.primitives import approval_body_sha, check_approved_body
+
+    repo = _make_git_repo(tmp_path)
+    approved = _approved(_FM_PLAN)
+    plan = _seed_plan(repo, "fm.md", approved)
+
+    result = _call(repo, plan)
+
+    assert result["exit_code"] == 0 and result["applied"] is True, result
+    text = plan.read_text(encoding="utf-8")
+    assert approval_body_sha(text) == approval_body_sha(approved)
+    assert check_approved_body(text)[0] == "ok"
+
+
+def test_clear_gate_writes_only_shared_set_keys():
+    from coordinator_core.frontmatter.primitives import GATE_CLEARANCE_KEYS
+    from coordinator_core.ops.plan_tasks_mutate import _clearance_fields
+
+    assert set(_clearance_fields("ev")) <= GATE_CLEARANCE_KEYS

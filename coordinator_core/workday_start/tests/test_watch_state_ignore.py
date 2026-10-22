@@ -1,5 +1,6 @@
 """watch_state_ignore: the four S4 cases, tracked-beats-ignore, and the spawn bound."""
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -38,7 +39,7 @@ def no_spawn(monkeypatch):
     return calls
 
 
-@pytest.mark.parametrize("gitignore", [ALL_LITERAL, "state/group-em-watch*\n", "state/\n"])
+@pytest.mark.parametrize("gitignore", [ALL_LITERAL, "state/group-em-watch*\nstate/housekeeping-liveness.json\nstate/engine-provenance-counts.jsonl\n", "state/\n"])
 def test_ignored_and_untracked_is_silent_with_zero_spawns(tmp_path, gitignore, no_spawn):
     assert watch_state_ignore(_repo(tmp_path, gitignore)) == (0, "")
     assert no_spawn == []
@@ -62,7 +63,7 @@ def test_not_ignored_reports_after_one_batched_confirm(tmp_path, monkeypatch):
 
 def test_plain_read_miss_rescued_by_check_ignore(tmp_path):
     root = _repo(tmp_path, "")
-    (root / ".git" / "info" / "exclude").write_text("state/group-em-watch*\n", encoding="utf-8")
+    (root / ".git" / "info" / "exclude").write_text("state/*\n", encoding="utf-8")
     assert watch_state_ignore(root) == (0, "")
 
 
@@ -90,3 +91,21 @@ def test_report_only_leaves_gitignore_and_index_untouched(tmp_path, no_spawn):
     before = ((root / ".gitignore").read_bytes(), (root / ".git" / "index").read_bytes())
     watch_state_ignore(root)
     assert before == ((root / ".gitignore").read_bytes(), (root / ".git" / "index").read_bytes())
+
+
+_DOE_TEMPLATE = Path("E:/coordinator-content-repo/coordinator/skills/repo-setup/templates/gitignore.project.template")
+
+
+def test_the_covered_set_includes_the_templates_runtime_state_groups():
+    """The two template groups `ceremony and coverage transients` and `group-EM watch state` are covered."""
+    assert {"state/housekeeping-liveness.json", "state/engine-provenance-counts.jsonl"} <= set(WATCH_STATE_FILES)
+    if not _DOE_TEMPLATE.is_file():
+        return
+    wanted: list[str] = []
+    group = False
+    for ln in _DOE_TEMPLATE.read_text(encoding="utf-8").splitlines():
+        if ln.startswith("#"):
+            group = "ceremony and coverage transients" in ln or "group-EM watch state" in ln
+        elif ln.strip() and group:
+            wanted.append(ln.strip())
+    assert wanted and set(wanted) <= set(WATCH_STATE_FILES)

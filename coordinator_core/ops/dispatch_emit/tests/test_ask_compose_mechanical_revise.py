@@ -24,6 +24,22 @@ def _pulled_block() -> str:
     return script[script.index("_pulledEntry = ") : script.index("plan-blitz reported no ready plan")]
 
 
+def _script(run_id: str) -> str:
+    return compose_ask_script(
+        repo_root="REPO", prompt="add a thing", sizing_rel=None, run_id=run_id,
+        session_id=None, wrap_stage=_stub_wrap, plan_blitz_text="stub", **REVIEW_KW,
+    )
+
+
+def test_readiness_verdict_is_returned_in_the_op_reply_never_via_a_shared_file():
+    a, b = _script("run-a"), _script("run-b")
+    for script in (a, b):
+        assert "apm-readiness" not in script
+        assert "readiness.json" not in script
+        assert "plan.readiness_verdict" in script
+    assert a != b
+
+
 def test_revise_prompt_runs_the_readiness_verdict_op_with_pull_values():
     block = _pulled_block()
     assert "plan.readiness_verdict" in block

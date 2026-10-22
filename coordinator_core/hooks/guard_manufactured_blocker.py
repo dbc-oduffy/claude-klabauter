@@ -69,7 +69,8 @@ import re
 from typing import Mapping, Optional
 
 from coordinator_core import block_discharge as _block_discharge
-from coordinator_core.hooks._envelope import deny, no_advisory, payload_of, post_advisory
+from coordinator_core._hook_envelope import event_advisory
+from coordinator_core.hooks._envelope import deny, no_advisory, payload_of
 from coordinator_core.hooks.support.posture import resolve_posture
 from coordinator_core.hooks.support.touch_record import _touch_lines
 from coordinator_core.ipc import register_op
@@ -333,6 +334,13 @@ _DECLARATIVE_STALL_PATTERNS = [
     ),
     re.compile(r"\bnext\s+(?:up\b|I'?ll\b)", re.IGNORECASE),
     re.compile(r"\bI'?ll\s+stop\s+\w+ing\b", re.IGNORECASE),
+    # A claimed block that names no blocker: "blocked"/"waiting" not followed
+    # by what it is blocked on.
+    re.compile(
+        r"\bI(?:['’]m|\s+am)\s+(?:currently\s+|now\s+)?(?:blocked|stuck|waiting)\b"
+        r"(?!\s+(?:on|by|because|until|for|from|at|due|in)\b)",
+        re.IGNORECASE,
+    ),
 ]
 
 _DECLARATIVE_STALL_CORRECTION_TEXT = (
@@ -721,13 +729,13 @@ def _is_declarative_stall(text: str) -> bool:
 
 def _emit_declarative_stall_verdict(text: str) -> dict:
     if _is_declarative_stall(text):
-        return post_advisory(_DECLARATIVE_STALL_CORRECTION_TEXT)
+        return event_advisory("Stop", _DECLARATIVE_STALL_CORRECTION_TEXT)
     return no_advisory()
 
 
 def _emit_decidability_verdict(candidate: str, text: str) -> dict:
     if _fails_decidability(candidate, text):
-        return post_advisory(_DECIDABILITY_CORRECTION_TEXT)
+        return event_advisory("Stop", _DECIDABILITY_CORRECTION_TEXT)
     return no_advisory()
 
 
@@ -847,4 +855,4 @@ def _handler(params: dict, repo_root=None) -> dict:
     if posture in ("default", "substrate-free"):
         return apply_guard_level(GUARD_NAME, deny("Stop", _CORRECTION_TEXT)) or no_advisory()
 
-    return post_advisory(_CORRECTION_TEXT)
+    return event_advisory("Stop", _CORRECTION_TEXT)

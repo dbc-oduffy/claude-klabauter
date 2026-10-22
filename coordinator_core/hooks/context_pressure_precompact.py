@@ -156,8 +156,7 @@ def _build_tasks_section(session_id: str) -> List[str]:
 
 _LOG_COUNT = 3
 _ABBREV_LEN = 10
-_UNSTAGED_NOT_LISTED = "(unstaged list not computed; run git status)"
-_STAGED_CAP = 10
+_UNSTAGED_NOT_LISTED = "(modified and staged lists not computed; run git status)"
 
 
 def _recent_commits(repo: Path, head: str) -> List[str]:
@@ -172,22 +171,6 @@ def _recent_commits(repo: Path, head: str) -> List[str]:
         subject = meta["message"].splitlines()[0].strip() if meta["message"] else ""
         out.append(f"{sha[:_ABBREV_LEN]} {subject}".rstrip())
     return out
-
-
-def _staged_paths(repo: Path) -> List[str]:
-    """Repo-relative paths whose index `(mode, sha)` differs from HEAD's tree.
-    Staged DELETIONS (`git rm --cached`) are not listed (see
-    `push_failure_verdict._inprocess_staged_unstaged`). Raises on a
-    corrupt/conflicted index.
-    """
-    from coordinator_core.git.git_state import head_blobs, read_index
-
-    index = read_index(repo)
-    paths = sorted(index)
-    if not paths:
-        return []
-    head_map = head_blobs(repo, paths)
-    return [p for p in paths if head_map.get(p) != (index[p].mode, index[p].sha)]
 
 
 def _build_git_section(cwd: Optional[str]) -> List[str]:
@@ -217,13 +200,6 @@ def _build_git_section(cwd: Optional[str]) -> List[str]:
     lines.append("")
     lines.append("Modified files:")
     lines.append(_UNSTAGED_NOT_LISTED)
-    try:
-        staged = _staged_paths(repo)
-    except (OSError, ValueError):
-        staged = []
-    if staged:
-        lines.append("Staged files:")
-        lines.extend(staged[:_STAGED_CAP])
     return lines
 
 
@@ -323,7 +299,9 @@ _STEERING_RULES = (
     "Compaction steering (coordinator):\n"
     "- Lead with forward state: open work, next actions, pending PM decisions, "
     "in-flight agents and workflow runs (with ids), uncommitted or unpushed changes.\n"
-    "- Finished, verified work: one line each. Drop tool-output narration."
+    "- Finished, verified work: one line each. Drop tool-output narration.\n"
+    "- Every standing constraint (never/always/do-not rule) cites its source: a "
+    "pm_turns.jsonl turn number or a durable rule/memory file path. Omit any uncited one."
 )
 
 
@@ -434,8 +412,9 @@ def run(raw_stdin: str) -> str:
         tmpdir = str(managed_tempdir())
 
         _write_sentinel(tmpdir, session_id, transcript_path)
+        steering = build_steering(session_id, os.getcwd(), typed)
         _write_state_snapshot(tmpdir, session_id)
-        return build_steering(session_id, os.getcwd(), typed)
+        return steering
     except Exception:
         return _STEERING_RULES
 

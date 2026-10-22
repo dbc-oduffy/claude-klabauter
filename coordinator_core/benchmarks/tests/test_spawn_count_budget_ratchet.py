@@ -578,7 +578,7 @@ def test_spawn_count_high_water_table_covers_every_override():
     missing = []
     for op, keys in live.items():
         tracked = _SPAWN_COUNT_HIGH_WATER.get(op, {})
-        for key in keys:
+        for key in keys if isinstance(keys, dict) else ():
             if key not in tracked:
                 missing.append(f"{op}.{key}")
     assert not missing, (

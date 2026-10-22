@@ -41,12 +41,15 @@ from typing import Optional, Sequence
 
 from coordinator_core.git.machine_local_paths import machine_local_paths
 from coordinator_core.ipc import register_op
-from coordinator_core.ops._path_guard import contained_path
+from coordinator_core.ops._path_guard import contained_path, safe_id
 from coordinator_core.ops.dispatch_emit import land_run_contract as contract
 from coordinator_core.ops.dispatch_emit.ask_contract import (
+    LEG_FOOTPRINT_FILE,
+    OUTSIDE_ROW_FOOTPRINT,
     RECORD_DIR_ROOT,
     RUN_DIR_ROOT,
     TERMINAL_RESUME_LEDGER_PARAM,
+    record_dir,
     UNCHANGED_SINCE_HALT_REASON,
 )
 from coordinator_core.ops.dispatch_emit.grind_commit_contract import ALREADY_LANDED_KEY
@@ -694,6 +697,72 @@ def _verified_only(resume: object) -> dict:
     return out
 
 
+def _path_changed(common: Path, root: Path, base: str, rel: str) -> Optional[bool]:
+    """Whether ``rel``'s worktree blob differs from its blob at commit ``base``; None when the tree
+    object cannot be read."""
+    from coordinator_core.git.rollback_check import ABSENT, _blob_at_commit
+
+    at_base = _blob_at_commit(common, base, rel)
+    if at_base is None:
+        return None
+    now = _worktree_blob(root, rel)
+    if now is None:
+        return at_base is not ABSENT
+    return at_base is ABSENT or now == _FILTERED or now != at_base
+
+
+def _halt_base(root: Path, resume: dict, plan_rel: Optional[str], stage_head: Optional[str]) -> tuple:
+    """``(base, source)``: the ``halt_sha`` param, else the newest ledger-check halt commit of the
+    resume's run (``resolved``), else the manifest's staging head (``stage-head``)."""
+    base, source = resume.get("halt_sha"), "param"
+    if not (isinstance(base, str) and _SHA40.fullmatch(base)):
+        base, source = _resolve_halt_sha(root, resume, plan_rel), "resolved"
+    if base is None:
+        base, source = stage_head, "stage-head"
+    return base, source
+
+
+def _fence_reply(fence: dict) -> dict:
+    """Reply keys for a ledger resume's fence: ``footprint_breach`` when paths were withheld,
+    ``footprint: "unrecorded"`` when the resume has no footprint artifact; ``{}`` off a resume."""
+    if fence.get("breach"):
+        return {"footprint_breach": list(fence["breach"])}
+    if fence and not fence.get("recorded"):
+        return {"footprint": "unrecorded"}
+    return {}
+
+
+def _footprint_fence(
+    root: Path, run_dir: Path, resume: object, manifest_abs: Optional[Path], plan_rel: Optional[str],
+) -> dict:
+    """The ledger-resume footprint fence: ``{"recorded": False}`` when the run's record dir holds no
+    readable ``LEG_FOOTPRINT_FILE``, else ``{"recorded": True, "breach": [paths]}`` naming each
+    manifest-declared path changed since the halt base that the artifact's ``writes`` omits. No
+    spawn: it reuses the in-process tree read of ``_work_since_halt``."""
+    if not isinstance(resume, dict):
+        return {"recorded": False}
+    data = None
+    for home in (record_dir(root, run_dir.name) if safe_id(run_dir.name) else run_dir, run_dir):
+        try:
+            data = json.loads((home / LEG_FOOTPRINT_FILE).read_text(encoding="utf-8"))
+            break
+        except (OSError, ValueError):
+            continue
+    writes = data.get("writes") if isinstance(data, dict) else None
+    if not isinstance(writes, list):
+        return {"recorded": False}
+    allowed = {w for w in writes if isinstance(w, str)}
+    paths, stage_head = _manifest_declared(manifest_abs)
+    base, _source = _halt_base(root, resume, plan_rel, stage_head)
+    if base is None:
+        return {"recorded": True, "breach": []}
+    from coordinator_core.git.git_dir import resolve_git_common_dir
+
+    common = resolve_git_common_dir(root)
+    breach = [p for p in paths if p not in allowed and _path_changed(common, root, base, p)]
+    return {"recorded": True, "breach": breach}
+
+
 def _work_since_halt(root: Path, base: str, declared: Sequence[str], withheld: dict) -> Optional[str]:
     """How a refire's declared product relates to the halt commit ``base``: ``"changed"`` when a
     declared path's worktree blob differs from the blob at ``base``; ``"withheld-pending"`` when none
@@ -702,18 +771,13 @@ def _work_since_halt(root: Path, base: str, declared: Sequence[str], withheld: d
     otherwise; None when a tree object cannot be read."""
     from coordinator_core.git.git_dir import resolve_git_common_dir
     from coordinator_core.git.git_state import head_blobs
-    from coordinator_core.git.rollback_check import ABSENT, _blob_at_commit
 
     common = resolve_git_common_dir(root)
     for p in declared:
-        at_base = _blob_at_commit(common, base, p)
-        if at_base is None:
+        moved = _path_changed(common, root, base, p)
+        if moved is None:
             return None
-        now = _worktree_blob(root, p)
-        if now is None:
-            if at_base is not ABSENT:
-                return "changed"
-        elif at_base is ABSENT or now == _FILTERED or now != at_base:
+        if moved:
             return "changed"
     pending = [p for p in declared if p in withheld]
     if not pending:
@@ -747,7 +811,7 @@ def _withheld_of(root: Path, resume: dict) -> dict:
 
 def _unchanged_since_halt(
     root: Path, resume: object, verdict: object, manifest_abs: Optional[Path],
-    plan_rel: Optional[str], detail: dict,
+    plan_rel: Optional[str], detail: dict, exclude: Sequence[str] = (),
 ) -> list:
     """``[{id, reason}]`` for each blocking row of a ledger resume the verdict calls met or
     post_commit while no declared product path counts as work since the halt commit.
@@ -772,11 +836,8 @@ def _unchanged_since_halt(
     if not judged or (isinstance(unlanded, list) and not unlanded):
         return []
     paths, stage_head = _manifest_declared(manifest_abs)
-    base, source = resume.get("halt_sha"), "param"
-    if not (isinstance(base, str) and _SHA40.fullmatch(base)):
-        base, source = _resolve_halt_sha(root, resume, plan_rel), "resolved"
-    if base is None:
-        base, source = stage_head, "stage-head"
+    paths = [p for p in paths if p not in exclude]
+    base, source = _halt_base(root, resume, plan_rel, stage_head)
     outcome = "no-base" if base is None else "no-declared-paths" if not paths else "unchanged"
     if outcome == "unchanged":
         state = _work_since_halt(root, base, paths, _withheld_of(root, resume))
@@ -800,7 +861,7 @@ def _resolve_halt_sha(root: Path, resume: dict, plan_rel: Optional[str]) -> Opti
 def _ledger_gate(
     root: Path, run_dir: Path, verdict: object, manifest_abs: Optional[Path], gated: Sequence[str],
     operator: dict, plan_text: Optional[str], inline_review: dict, resume_ledger: object,
-    plan_rel: Optional[str],
+    plan_rel: Optional[str], fence: Optional[dict] = None,
 ) -> tuple[Optional[dict], object, list]:
     """``(refusal or None, ledger, open rows)`` for a ledger-bearing ask run: the refusal when the
     verdict does not pass ``requirements_ledger.judge`` against the live register rows (a not_met row a
@@ -836,7 +897,15 @@ def _ledger_gate(
     )
     since_halt: dict = {}
     if resume_ledger is not None:
-        stale = _unchanged_since_halt(root, resume_ledger, verdict, manifest_abs, plan_rel, since_halt)
+        from coordinator_core.ops.dispatch_emit.pre_halt_credit import with_notes
+
+        resume_ledger = with_notes(resume_ledger, requirements_ledger.read_notes(run_dir))
+        fenced = _footprint_fence(root, run_dir, resume_ledger, manifest_abs, plan_rel)
+        if fence is not None:
+            fence.update(fenced)
+        stale = _unchanged_since_halt(
+            root, resume_ledger, verdict, manifest_abs, plan_rel, since_halt, fenced.get("breach") or (),
+        )
         if stale:
             result = {**result, "pass": False, "failures": [*result["failures"], *stale]}
     if result["pass"]:
@@ -1745,7 +1814,8 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
     if inline_review is None:
         return _error(
             "params.inline_review is absent -- the run carries no review-stage output. Run the "
-            "digest's commit line verbatim (or pass task_output_path); else re-emit "
+            "digest's commit line verbatim (or pass task_output_path = the Workflow run's output file, "
+            "named in its completion notification); else re-emit "
             "with a review stage and re-fire",
             refused="unreviewed",
         )
@@ -1759,11 +1829,12 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
 
     ledger = None
     open_rows: list = []
+    fence: dict = {}
     if ask_run_dir is not None:
         unmet, ledger, open_rows = _ledger_gate(
             root, ask_run_dir, params.get("ledger_verdict"), manifest_abs,
             [g.id for g in manifest.gated], {o.id: o.detail for o in manifest.owed if o.reason == "operator"},
-            plan_text, inline_review, params.get(TERMINAL_RESUME_LEDGER_PARAM), request.plan_path,
+            plan_text, inline_review, params.get(TERMINAL_RESUME_LEDGER_PARAM), request.plan_path, fence,
         )
         if unmet is not None:
             return unmet
@@ -1961,6 +2032,7 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
     from coordinator_core.ops.ceremony.commit_gates import is_never_commit
     from coordinator_core.ops.dispatch_emit.cross_repo_write_refusal import sibling_write
 
+    footprint_breach = set(fence.get("breach") or ())
     declared_changed = [p for p in declared if p in changed and p not in ignored]
     for p in declared_changed:
         if is_never_commit(p):
@@ -1969,6 +2041,8 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
             withhold_reason[p] = "sibling-repo"
         elif p in em_withheld:
             withhold_reason[p] = REVIEW_CARRIED_REASON if p in carried_paths else "withheld"
+        elif p in footprint_breach:
+            withhold_reason[p] = OUTSIDE_ROW_FOOTPRINT
     candidates = [p for p in declared_changed if p not in withhold_reason]
     art_present = [p for p in (art_landable.present if art_landable else ()) if p not in candidates]
     art_deleted = list(art_landable.deleted) if art_landable else []
@@ -2042,7 +2116,7 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
     from coordinator_core.ops.dispatch_emit import credit_gate
 
     if own_evidence_write:
-        evidence_rows = {c.id for c in request.chunks if c.paths and set(c.paths) <= {own_evidence_write[0]}}
+        evidence_rows = _own_evidence_rows(done, own_evidence_write[0])
         landed_ids |= evidence_rows
         for cid in evidence_rows:
             stranded.pop(cid, None)
@@ -2277,6 +2351,7 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
     }
     if script_source == "receipt":
         reply["script_source"] = script_source
+    reply.update(_fence_reply(fence))
     from coordinator_core.ops.dispatch_emit.emission_receipt import stamp_landed
 
     stamp_landed(script, sha)
@@ -2421,6 +2496,12 @@ def _incomplete_reasons(
     for row, path, reason in unlanded:
         reasons.setdefault(row, f"unlanded: {path} ({reason})")
     return reasons
+
+
+def _own_evidence_rows(done: list, evidence_path: str) -> set:
+    """Ids of DONE chunks whose whole footprint is the evidence sidecar this call changed (an
+    incomplete row is never credited by an append, whatever its paths)."""
+    return {c.id for c in done if c.paths and set(c.paths) <= {evidence_path}}
 
 
 def _append_evidence(root: Path, plan_path: str, firings: list) -> Optional[tuple]:

@@ -124,14 +124,45 @@ def ask_full_path_measurement(tmp_path_factory):
 
 @pytest.fixture(scope="module")
 def reclose_measurement(tmp_path_factory):
-    return _measure(tmp_path_factory.mktemp("land_run_budget_reclose"), "--kind", "reclose")
+    """Trap: the landing the reclose re-closes is paid in `--build-only`, never in a measured
+    process; its fixture git and detached launch spawn conhost.exe children Windows counts
+    nondeterministically, which read as a 2.1 net against the 2.0 ceiling."""
+    root = tmp_path_factory.mktemp("land_run_budget_reclose")
+    dirs = [root / f"sample{i}" for i in range(SAMPLES)]
+    for d in dirs:
+        _build_prebuilt(d, "reclose", real_shape=False)
+    setup = _min_prebuilt(dirs[0], "--setup-only")
+    full = min((_sample_prebuilt(d) for d in dirs), key=lambda r: r["process_time_ms"])
+    net_ms = round(full["process_time_ms"] - setup["process_time_ms"], 3)
+    net_procs = round(full["procs_per_call"] - setup["procs_per_call"], 3)
+    detail = (
+        f"land_run reclose on a prebuilt landing, net tree process time: {net_ms}ms, "
+        f"procs_per_call: {net_procs} (full {full['process_time_ms']}ms / {full['procs_per_call']} procs; "
+        f"setup-only {setup['process_time_ms']}ms / {setup['procs_per_call']} procs; "
+        f"k={K_INVOCATIONS}, min of {SAMPLES})"
+    )
+    print(f"LAND-RUN-BUDGET {detail}")
+    return {"net_ms": net_ms, "net_procs": net_procs, "detail": detail}
 
 
-def _build_prebuilt(parent, kind: str) -> None:
-    """One fresh real-shape repo under `parent`, built in its own unmeasured process."""
+def _sample_prebuilt(d, *extra: str) -> dict:
+    result = batched_process_time_ms(
+        [sys.executable, "-m", _DRIVER, "--prebuilt", str(d), *extra], k=K_INVOCATIONS
+    )
+    assert result["rc"] == 0, f"driver exited {result['rc']}: {result!r}"
+    return result
+
+
+def _min_prebuilt(d, *extra: str) -> dict:
+    return min((_sample_prebuilt(d, *extra) for _ in range(SAMPLES)), key=lambda r: r["process_time_ms"])
+
+
+def _build_prebuilt(parent, kind: str, real_shape: bool = True) -> None:
+    """One fresh repo under `parent`, built in its own unmeasured process."""
     parent.mkdir(parents=True)
+    shape = ["--real-shape"] if real_shape else []
     built = subprocess.run(
-        [sys.executable, "-m", _DRIVER, str(parent), "--kind", kind, "--real-shape", "--build-only"],
+        [sys.executable, "-m", _DRIVER, str(parent), "--kind", kind, *shape, "--build-only"],
         capture_output=True,
         text=True,
         **no_console_creationflags(),

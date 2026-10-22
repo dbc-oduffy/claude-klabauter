@@ -36,6 +36,7 @@ from coordinator_core.ops import requirement_register as rr
 from coordinator_core.ops._path_guard import contained_path, safe_id
 from coordinator_core.ops.dispatch_emit.ask_contract import (
     ASK_SOURCE_RELAYED,
+    CLAIM_PARAM,
     EMPTY_REGISTER_REASON,
     PLAN_ROW_ANCHOR_PREFIX,
     RECORD_DIR_ROOT,
@@ -46,7 +47,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
 )
 from coordinator_core.ops.dispatch_emit.ask_fanout_contract import slice_ask_source
 from coordinator_core.ops.dispatch_emit.request_validation import Field, validate_params
-from coordinator_core.ops.sizing_intake_contract import read_em_brief, read_em_context_paths
+from coordinator_core.ops.sizing_intake_contract import EM_CONTEXT_MARKER, read_em_brief, read_em_context_paths
 from coordinator_core.session.declared_writes import declare_write
 
 GENERATES = []
@@ -86,6 +87,7 @@ _PARAMS = (
     Field("build_only", "bool"),
     Field("stop_after", "str"),
     Field("from", "str"),
+    Field(CLAIM_PARAM, "bool"),
 )
 #: Separator between a revision anchor's UTC stamp and the peer session that sent it.
 SENDER_SEP = " from "
@@ -808,6 +810,7 @@ def revise(
     out_of_scope: Sequence[str] = (), note: Optional[str] = None, sender: Optional[str] = None,
     withhold_paths: Sequence = (), credit_chunks: Sequence = (), build_only: bool = False,
     outcome: Optional[dict] = None, stop_after: Optional[str] = None, retract_note: Optional[dict] = None,
+    claim: bool = False,
 ) -> tuple[Ledger, Path, Optional[str]]:
     """Append the EM's revision (and/or set the flag) on an emitted run: a register row when the
     run's sizing is bound, else a queued revision `bind` folds in. `note` is free text that is
@@ -838,6 +841,12 @@ def revise(
     this run's notes as applied or superseded: it needs an emitted run (a halted one qualifies), refuses
     an id the run's `NOTES_FILE` lacks or already retracted, appends a retraction line to `NOTES_FILE`
     (nothing is deleted), adds no row, and alone satisfies the non-empty precondition.
+    `claim=True` records a ruling as work: it needs a non-empty `verbatim` (the row it mints), an
+    emitted run bound to a sizing, and a sizing whose `plan:` edge names a plan whose
+    `register_claims.sizing` is that sizing, else it refuses with nothing written. After the row is
+    minted it appends the id to the plan's `register_claims.rows` with its pin (an id already
+    claimed is left as is) and adds the id to `ruled` on the plan's ledger-halt pointer when one
+    exists. `outcome["claimed"]` receives `[id]`. It cannot combine with `out_of_scope`, which adds no row.
     Returns (ledger, run dir, the new row id or None)."""
     text = verbatim.strip() if isinstance(verbatim, str) else ""
     named = [str(i) for i in out_of_scope]
@@ -923,6 +932,15 @@ def revise(
         raise LedgerRefused(f"the run has staged; stop_after={STOP_AFTER_PLAN} can no longer park it")
     if named and not run.get("sizing_rel"):
         raise LedgerRefused("out_of_scope needs a bound sizing: the run has no register yet")
+    claim_plan: Optional[tuple[str, Path]] = None
+    if claim:
+        if not text:
+            raise LedgerRefused(f"{CLAIM_PARAM} needs a non-empty verbatim: the ruling is the row it mints")
+        if named:
+            raise LedgerRefused(f"{CLAIM_PARAM} cannot combine with out_of_scope: a ruling out adds no row")
+        if not run.get("sizing_rel"):
+            raise LedgerRefused(f"{CLAIM_PARAM} needs a run bound to a sizing")
+        claim_plan = _claiming_plan(root, run["sizing_rel"])
     if build_only and not run.get("sizing_rel"):
         raise LedgerRefused(
             "build_only needs a run bound to a sizing: close the research with research.close and `sizing`"
@@ -977,6 +995,10 @@ def revise(
         if run.get("sizing_rel"):
             rows = _append_rows(root, run["sizing_rel"], [(text, _revision_anchor(at, sender))], withhold=withhold)
             added = str(rows[-1].get(rr.ROW_ID)) if rows else None
+            if claim_plan is not None and added:
+                _claim_ruling(root, run["sizing_rel"], claim_plan, run_id, added)
+                if outcome is not None:
+                    outcome["claimed"] = [added]
         else:
             from coordinator_core.atomic_append import append_line
 
@@ -989,6 +1011,61 @@ def revise(
     if ledger is not None:
         declare_write(dir_ / LEDGER_VIEW_FILE)
     return ledger or Ledger((), bool(run.get("all_of_pm_ask"))), dir_, added
+
+
+def _claiming_plan(root: Path, sizing_rel: str) -> tuple[str, Path]:
+    """`(plan_rel, plan path)` of the plan the sizing's `plan:` edge names, when its
+    `register_claims.sizing` is that sizing; LedgerRefused otherwise. File reads only."""
+    from coordinator_core.roadmap.prep_gate import plan_frontmatter
+
+    edge, plan, _ = _sizing_plan(root, sizing_rel)
+    if plan is None or edge is None:
+        raise LedgerRefused(f"{CLAIM_PARAM} needs {sizing_rel} to name a readable plan under docs/plans")
+    claims = plan_frontmatter(plan.read_text(encoding="utf-8", errors="replace")).get("register_claims")
+    if not isinstance(claims, dict) or claims.get("sizing") != sizing_rel or not isinstance(claims.get("rows"), list):
+        raise LedgerRefused(f"{CLAIM_PARAM} needs {edge} register_claims to name {sizing_rel}")
+    return edge, plan
+
+
+def _claim_ruling(root: Path, sizing_rel: str, plan: tuple[str, Path], run_id: str, row_id: str) -> None:
+    """Claim the freshly minted `row_id` on `plan` (rows + pin, one `locked_rmw`, CRLF kept) and add
+    it to `ruled` on the plan's ledger-halt pointer. A failure names the minted row so
+    `plan.claim_register_rows` can finish the claim."""
+    import dataclasses
+
+    from coordinator_core.locked_write import LockTimeout, locked_rmw
+    from coordinator_core.ops.dispatch_emit import revise_absorb
+    from coordinator_core.ops.dispatch_emit.ask_contract import (
+        LEDGER_HALT_KIND, ledger_halt_path, read_ledger_halt, write_ledger_halt,
+    )
+
+    plan_rel, plan_path = plan
+    stranded = f"row {row_id} was minted but not claimed on {plan_rel}: claim it with plan.claim_register_rows"
+    try:
+        register = rr.read_register(_sizing_path(root, sizing_rel).read_text(encoding="utf-8"))
+        if register is None:
+            raise LedgerRefused(f"{sizing_rel} carries no requirement_register; {stranded}")
+        crlf = b"\r\n" in plan_path.read_bytes()
+
+        def mutate(old_text: str) -> str:
+            _, now_claimed = rr.plan_claims(revise_absorb._plan_fm(old_text.replace("\r\n", "\n")))
+            if row_id in now_claimed:
+                return old_text
+            try:
+                new_text = revise_absorb._claim_rows_text(old_text, [row_id], register)
+            except ValueError as exc:
+                raise MutateAbort(str(exc)) from exc
+            return new_text.replace("\n", "\r\n") if crlf else new_text
+
+        locked_rmw(plan_path, mutate, repo_root=root)
+    except (OSError, LockTimeout, MutateAbort) as exc:
+        raise LedgerRefused(f"{exc}; {stranded}") from exc
+    declare_write(plan_path)
+    pointer = ledger_halt_path(root, plan_rel)
+    halt = read_ledger_halt(pointer)
+    if halt is not None and halt.halted == LEDGER_HALT_KIND and halt.sizing_rel == sizing_rel and row_id not in halt.ruled:
+        write_ledger_halt(pointer, dataclasses.replace(halt, ruled=(*halt.ruled, row_id)))
+        declare_write(pointer)
 
 
 def normalize_verdict(verdict: object) -> object:
@@ -1113,6 +1190,10 @@ def judge(
     order = {item.id: n for n, item in enumerate(ledger.items)}
     for item in ledger.items:
         row = by_id.get(item.id)
+        if item.text.lstrip().startswith(EM_CONTEXT_MARKER) and not _is_design(item.anchor):
+            if row is None or row.get("status") != "met":
+                open_rows.append({"id": item.id, "reason": "em-context"})
+            continue
         if row is None:
             failures.append({"id": item.id, "reason": "unjudged (arrived after the check, or skipped)"})
             continue
@@ -1251,7 +1332,10 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     needs an emitted run, no sizing, adds no row; replied as `retracted_note`), `build_only` (bool: removes the bound sizing's
     `research` block; needs an emitted run bound to a sizing; adds no row; replied as `research_dropped`),
     `stop_after` (str, only "plan": records the park marker so `dispatch.ask_stage` parks the run after
-    planning; needs an emitted run that has not staged; adds no row; replied as `stop_after`).
+    planning; needs an emitted run that has not staged; adds no row; replied as `stop_after`),
+    `claim` (bool, needs `verbatim` and a run bound to a sizing whose plan claims it: the minted row is
+    claimed on the plan with its pin and added to `ruled` on the plan's ledger-halt pointer in the
+    same call; replied as `claimed: [id]`).
 
     Appends a stamped revision row to the run's requirements (its sizing's requirement_register),
     which every later stage of the run reads at its start. Replies `{ok, run_id, item, items,
@@ -1275,7 +1359,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             out_of_scope=params.get("out_of_scope") or (), note=params.get("note"),
             sender=params.get("from"), withhold_paths=params.get("withhold_paths") or (),
             credit_chunks=params.get("credit_chunks") or (), stop_after=params.get("stop_after"),
-            retract_note=params.get("retract_note"),
+            retract_note=params.get("retract_note"), claim=bool(params.get(CLAIM_PARAM)),
         )
     except LedgerRefused as exc:
         return {"error": str(exc)}
@@ -1302,6 +1386,8 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     }
     if "research_dropped" in outcome:
         out["research_dropped"] = outcome["research_dropped"]
+    if "claimed" in outcome:
+        out["claimed"] = outcome["claimed"]
     if params.get("stop_after"):
         out["stop_after"] = params["stop_after"]
     if params.get("withhold_paths"):

@@ -884,6 +884,8 @@ def test_a_run_with_no_review_stage_output_refuses_before_any_write(repo, inline
     assert out["committed"] is False
     assert out["refused"] == "unreviewed"
     assert "terminal_commit_cli" in out["error"]
+    if inline_review is None:
+        assert "output file" in out["error"]
     assert _head(repo) == before
 
 

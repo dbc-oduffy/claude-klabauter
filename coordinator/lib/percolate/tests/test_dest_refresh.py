@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from percolate.dest_refresh import (  # noqa: E402
     default_remote_branch,
+    fast_forward_consumer,
     refresh_dest_from_origin,
 )
 
@@ -346,3 +347,72 @@ def test_diverged_local_main_warns_but_does_not_block(origin_and_clone):
     assert len(result.warnings) == 1
     assert "could not be fast-forwarded to origin/main" in result.warnings[0]
     assert "WARNING" in err.getvalue()
+
+
+def _peer_lands(origin: Path, name: str) -> None:
+    _git(origin, "checkout", "candidate")
+    _commit(origin, name)
+    _git(origin, "checkout", "parked")
+
+
+def test_consumer_behind_clean_is_fast_forwarded_and_reports_behind_zero(origin_and_clone):
+    origin, clone = origin_and_clone
+    _peer_lands(origin, "peer")
+    result = fast_forward_consumer(clone)
+    assert result.ok and result.fast_forwarded and result.behind == 0 and not result.dirty
+    assert (clone / "peer").exists()
+
+
+def test_consumer_level_is_a_noop(origin_and_clone):
+    clone = origin_and_clone[1]
+    before = _git(clone, "rev-parse", "HEAD")
+    result = fast_forward_consumer(clone)
+    assert result.ok and not result.fast_forwarded and result.behind == 0
+    assert _git(clone, "rev-parse", "HEAD") == before
+
+
+def test_consumer_dirty_tracked_file_is_never_merged_but_behind_is_reported(origin_and_clone):
+    origin, clone = origin_and_clone
+    _peer_lands(origin, "peer")
+    (clone / "candidate-seed").write_text("local patch", encoding="utf-8")
+    before = _git(clone, "rev-parse", "HEAD")
+    result = fast_forward_consumer(clone)
+    assert not result.ok and result.dirty and not result.fast_forwarded
+    assert result.behind == 1
+    assert _git(clone, "rev-parse", "HEAD") == before
+
+
+def test_consumer_diverged_refuses_and_does_not_move_head(origin_and_clone):
+    origin, clone = origin_and_clone
+    _peer_lands(origin, "peer")
+    _commit(clone, "local-only")
+    before = _git(clone, "rev-parse", "HEAD")
+    result = fast_forward_consumer(clone)
+    assert not result.ok and result.ahead == 1 and result.behind == 1
+    assert "diverged" in result.reason
+    assert _git(clone, "rev-parse", "HEAD") == before
+
+
+def test_consumer_ahead_only_is_ok_and_unmoved(origin_and_clone):
+    clone = origin_and_clone[1]
+    _commit(clone, "local-only")
+    before = _git(clone, "rev-parse", "HEAD")
+    result = fast_forward_consumer(clone)
+    assert result.ok and result.ahead == 1 and result.behind == 0 and not result.fast_forwarded
+    assert _git(clone, "rev-parse", "HEAD") == before
+
+
+def test_consumer_detached_head_refuses(origin_and_clone):
+    clone = origin_and_clone[1]
+    _git(clone, "checkout", "--detach", "HEAD")
+    result = fast_forward_consumer(clone)
+    assert not result.ok and "detached HEAD" in result.reason
+
+
+def test_consumer_unreachable_origin_reports_stale_tracking_counts(origin_and_clone, tmp_path):
+    origin, clone = origin_and_clone
+    _commit(clone, "local-only")
+    _git(clone, "remote", "set-url", "origin", str(tmp_path / "does-not-exist"))
+    result = fast_forward_consumer(clone)
+    assert not result.ok and "could not fetch origin" in result.reason
+    assert result.ahead == 1 and result.behind == 0

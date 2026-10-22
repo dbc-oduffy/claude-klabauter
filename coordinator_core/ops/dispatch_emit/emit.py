@@ -343,7 +343,12 @@ from coordinator_core.ops.dispatch_emit.wave_map import (
     dag_from_waves,
     transitive_dependents,
 )
-from coordinator_core.ops.dispatch_emit.checkpoint_stamp import STOP_RULE_TRAILER, is_process_half, without_process_half
+from coordinator_core.ops.dispatch_emit.checkpoint_stamp import (
+    CHECKPOINT_NOT_LANDED_TRAILER,
+    STOP_RULE_TRAILER,
+    is_process_half,
+    without_process_half,
+)
 from coordinator_core.ops.dispatch_emit.gate_owed import (
     GATE_OWED_JS_RE,
     GATE_OWED_VAR,
@@ -1253,6 +1258,8 @@ def _row_agent_type(row: WaveRow) -> str:
             )
         return row.agent_type
 
+    if getattr(row, "memo_send", None):
+        return _EXECUTOR_AGENT_TYPE
     if row.writes is UNDECLARED:
         return _EXECUTOR_AGENT_TYPE
     if immutable_body:
@@ -2889,6 +2896,11 @@ def _row_prompt(
             "(verb evidence-append, plan_path, id, text); never edit the "
             "evidence sidecar by hand."
         )
+    memo_send = getattr(row, "memo_send", None)
+    if memo_send:
+        from coordinator_core.ops.dispatch_emit.memo_rows import memo_send_step_block
+
+        body += f"\n\n{memo_send_step_block(row.id, memo_send)}"
     if plan_context is not None:
         if is_slot_row:
             body += f"\n\n{_slot_row_clause(gate_commands)}"
@@ -4438,7 +4450,7 @@ def _run_base_marker() -> str:
 
 
 #: Trailer marking a mid-run checkpoint commit as not landed until the run closes.
-_NOT_LANDED_TRAILER = "\nCheckpoint-Not-Landed: run-open"
+_NOT_LANDED_TRAILER = f"\n{CHECKPOINT_NOT_LANDED_TRAILER}: run-open"
 
 
 def _checkpoint_trailer_js(

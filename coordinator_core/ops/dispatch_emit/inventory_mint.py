@@ -1199,6 +1199,21 @@ def _classify_done_unlanded(
     return classified, {origin[mid] for mid in classified if mid in expanded}
 
 
+#: Plan-row keys `spine_read`'s memo-send check reads; a minted row that drops
+#: them is refused as a memo-send row naming no topic.
+_MEMO_KEYS = ("receipt", "memo_to", "memo_kind", "kind", "performer", "disposition_ref")
+
+
+def _carry_memo_keys(entry: dict, raw: Optional[dict]) -> None:
+    """Copy the plan row's declared memo keys onto ``entry``; absent or null keys are left off."""
+    if not raw:
+        return
+    for key in _MEMO_KEYS:
+        value = raw.get(key)
+        if value is not None:
+            entry[key] = value
+
+
 def mint_rows(
     chunk_rows: List[Dict[str, str]],
     inventory_path: Optional[Path] = None,
@@ -1626,6 +1641,7 @@ def mint_rows(
                     entry["appends"] = list(r.appends)
                 if r.writes_under:
                     entry["writes_under"] = list(r.writes_under)
+                _carry_memo_keys(entry, plan_raw_rows.get(r.id))
                 if depends_on:
                     entry["depends_on"] = depends_on
                 minted.append(entry)
@@ -1705,6 +1721,9 @@ def mint_rows(
         deferred_until = repairs.get(row_id, {}).get("deferred_until")
         if deferred_until:
             entry["deferred_until"] = deferred_until
+        if spec_path and inventory_path is not None:
+            single_raw = _plan_raw_rows_by_id(inventory_path, spec_path, plan_cache)
+            _carry_memo_keys(entry, single_raw.get(row_id) or single_raw.get(_bare_plan_row_id(row_id)))
         if depends_on:
             entry["depends_on"] = depends_on
         minted.append(entry)
@@ -1882,7 +1901,10 @@ def _shared_path_groups(
     covering a path makes that path an ordinary write. The second return value
     names one shared path per multi-item group (its first member's key).
     """
-    from coordinator_core.ops.dispatch_emit.wave_map import _is_ancestor, _normalize_path
+    from coordinator_core.ops.dispatch_emit.wave_map import _is_ancestor, _normalize_path as _norm
+
+    def _normalize_path(path: str) -> str:
+        return _norm(path.replace("\\", "/"))
 
     in_place: set = set()
     appended: set = set()

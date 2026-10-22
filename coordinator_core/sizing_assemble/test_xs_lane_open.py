@@ -62,7 +62,8 @@ def test_second_xs_is_refused_whatever_the_lane_state(repo, capsys):
     assert sa.main(["--tshirt", "XS", "--express-lane"]) == sa.EXIT_USAGE
     xs_lane_budget.mark_spent(repo, _SID)
     assert sa.main(["--tshirt", "XS", "--express-lane"]) == sa.EXIT_USAGE
-    assert "XS refused" in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert "XS refused" in err and "--tshirt S" in err
 
 
 def test_xs_after_s_or_larger_sizing_is_refused_and_opens_no_lane(repo):

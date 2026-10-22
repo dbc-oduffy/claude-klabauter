@@ -18,7 +18,7 @@ def read_stage_reply(root, reply: dict) -> dict:
     """A refusal reply as-is; a success reply's manifest read through its verified `manifest_handle`."""
     if "error" in reply:
         return reply
-    assert set(reply) == {"manifest_handle"}, reply
+    assert set(reply) - {"already_staged"} == {"manifest_handle"}, reply
     return reply_sidecar.read_reply(root, reply["manifest_handle"])
 
 

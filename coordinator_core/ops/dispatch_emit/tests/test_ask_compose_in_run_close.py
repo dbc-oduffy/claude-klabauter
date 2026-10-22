@@ -81,7 +81,7 @@ def test_ledger_halt_composes_no_terminal_commit_hand_off(monkeypatch):
     assert ledger_halt < script.index("const _closeable")
 
 
-_REVISE = "{ kind: 'revise_and_refire', op: 'workflow.revise', params: { run_id: _runId, sizing: _sizingRel, halted: _halted } }"
+_REVISE = "{ kind: 'revise_and_refire', op: 'workflow.revise', params: { run_id: _runId, note: 'halted: ' + String(_halted?.halted ?? 'unknown') } }"
 
 
 def test_in_run_stopped_next_action_is_revise_and_refire_never_a_commit(monkeypatch):

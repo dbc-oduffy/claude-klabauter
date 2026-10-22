@@ -46,7 +46,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from coordinator_core.hooks._envelope import deny, no_advisory, payload_of, post_advisory
+from coordinator_core._hook_envelope import event_advisory
+from coordinator_core.hooks._envelope import deny, no_advisory, payload_of
 from coordinator_core.hooks.guard_manufactured_blocker import (
     _HANDOFF_PATTERNS,
     _OWNERSHIP_CUE_PATTERNS,
@@ -195,7 +196,7 @@ def _go_ask_advisory(payload: dict, text: str) -> dict:
     if _has_fired_this_session(payload, _GO_ASK_FIRED_MARKER):
         return no_advisory()
     _mark_fired_this_session(payload, _GO_ASK_FIRED_MARKER)
-    return post_advisory(_GO_ASK_ADVISORY_TEXT)
+    return event_advisory("Stop", _GO_ASK_ADVISORY_TEXT)
 
 
 def _git_root_walk(start: str) -> "Optional[str]":
@@ -211,7 +212,8 @@ def _git_root_walk(start: str) -> "Optional[str]":
 
 def _turn_intent_step(payload: dict, text: str) -> bool:
     """Record this stop's turn intent; True iff the stop must be blocked for a
-    missing tail. Blocks only with a role marker and a durable counter."""
+    missing tail. Blocks only with a durable counter, and only with a role marker
+    or a final turn that announces unrun work."""
     session_id = payload.get("session_id")
     cwd = payload.get("cwd")
     if not text.strip() or not isinstance(cwd, str) or not cwd:
@@ -231,6 +233,7 @@ def _turn_intent_step(payload: dict, text: str) -> bool:
         # A session started under Cockpit and resumed in a terminal keeps its marker, so the marker alone is not the gate.
         _turn_intent.role_marker_present(directory) and under_cockpit(),
         _heuristic_turn_intent,
+        _turn_intent.announces_unexecuted_work(text),
     )
     if decision.block:
         count = _turn_intent.bump_blocks(directory)
@@ -255,7 +258,12 @@ def _handler(params: dict, repo_root=None) -> dict:
             has_transcript = isinstance(transcript_path, str) and bool(transcript_path)
             text = _final_assistant_text(transcript_path) if has_transcript else ""
         if _turn_intent_step(payload, text):
-            return apply_guard_level("guard-turn-intent", deny("Stop", _turn_intent.BLOCK_REASON)) or no_advisory()
+            reason = (
+                _turn_intent.ANNOUNCE_BLOCK_REASON
+                if _turn_intent.announces_unexecuted_work(text)
+                else _turn_intent.BLOCK_REASON
+            )
+            return apply_guard_level("guard-turn-intent", deny("Stop", reason)) or no_advisory()
         return _go_ask_advisory(payload, text)
     except Exception:
         pass

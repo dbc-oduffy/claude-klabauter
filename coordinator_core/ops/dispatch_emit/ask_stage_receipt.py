@@ -67,11 +67,11 @@ def landed(record_dir: Path, digest: str) -> Optional[dict]:
     return dict(handle) if _manifest_matches(record_dir, handle) else None
 
 
-def partial(record_dir: Path, digest: str) -> bool:
+def partial(record_dir: Path) -> bool:
     """True when a manifest is on disk and no receipt vouches for its current bytes.
 
     A receipt with another digest that still matches the manifest is a landed stage of different
-    params (a revise), not a partial one. `digest` is accepted for call-site symmetry with `landed`."""
+    params (a revise), not a partial one."""
     if not (Path(record_dir) / MANIFEST_NAME).is_file():
         return False
     data = _read_receipt(record_dir)

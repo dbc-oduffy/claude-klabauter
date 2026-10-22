@@ -407,6 +407,12 @@ LEG_DISPATCH, LEG_SKIP, LEG_REFUSE = "dispatch", "skip", "refuse"
 LEG_REFUSAL_HEAD = "ledger-remaining leg refused: "
 #: halted.json key a ledger-check halt records `[{id, remaining, evidence}]` for its blocking rows under.
 HALT_BLOCKING_ITEMS_FIELD = "blocking_items"
+#: Speculative, no non-test consumer yet: `workflow.revise` param naming the register row ids a ruling claims.
+CLAIM_PARAM = "claim"
+#: Speculative, no non-test consumer yet: filename of the remaining-leg footprint artifact inside `RECORD_DIR_ROOT/<run_id>/`.
+LEG_FOOTPRINT_FILE = "leg-footprint.json"
+#: Speculative, no non-test consumer yet: landing withheld reason for a write outside the ledger-resume row's footprint.
+OUTSIDE_ROW_FOOTPRINT = "outside-row-footprint"
 #: `dispatch.land_run` param carrying `{run_id, halt_sha, blocking}` on a ledger resume.
 TERMINAL_RESUME_LEDGER_PARAM = "resume_ledger"
 #: Ledger failure reason for a blocking row judged met when no declared product path changed since the halt.
@@ -669,6 +675,8 @@ class LedgerHalt:
     carried_met: tuple[str, ...] = ()
     #: Open plan rows that no checkpoint or halt commit of this plan landed; derived at resume, never persisted.
     unlanded: tuple[str, ...] = ()
+    #: Ids a claim-ruling added after the halt.
+    ruled: tuple[str, ...] = ()
 
     def to_json(self) -> dict[str, Any]:
         if self.halted == ALL_LANDED_HALT_KIND:
@@ -683,6 +691,8 @@ class LedgerHalt:
             out["halted"] = self.halted
         if self.outcome is not None:
             out["outcome"] = self.outcome
+        if self.ruled:
+            out["ruled"] = list(self.ruled)
         return out
 
     @classmethod
@@ -705,6 +715,7 @@ class LedgerHalt:
             blocking=tuple(blocking),
             halted=halted,
             outcome=outcome,
+            ruled=tuple(str(r) for r in data.get("ruled") or ()),
         )
 
 
@@ -883,6 +894,8 @@ class ManifestRow:
     group: str = ""
     #: Work-class route (`agent_route.Route.to_json()`); `None` for a row the routing table did not touch.
     route: Optional[dict[str, Any]] = None
+    #: Register row ids this row delivers.
+    register_rows: tuple[str, ...] = ()
 
     def to_json(self) -> dict[str, Any]:
         out: dict[str, Any] = {
@@ -898,6 +911,8 @@ class ManifestRow:
             out["group"] = self.group
         if self.route is not None:
             out["route"] = self.route
+        if self.register_rows:
+            out["register_rows"] = list(self.register_rows)
         return out
 
     @classmethod
@@ -912,6 +927,7 @@ class ManifestRow:
             deps=tuple(data.get("deps") or ()),
             group=data.get("group") or "",
             route=data.get("route"),
+            register_rows=tuple(str(r) for r in data.get("register_rows") or ()),
         )
 
 
@@ -958,7 +974,8 @@ class GatedRow:
 @dataclass(frozen=True)
 class OwedRow:
     """A row the run excluded because the EM or an operator performs it. ``reason`` is one of
-    ``spine_read.EM_OWNED_REASONS``: ``em-performed``, ``memo-send``, ``operator``, or
+    ``spine_read.EM_OWNED_REASONS``: ``em-performed``, ``memo-send`` (a memo-send row the EM still
+    sends: ``performer: em``, no slug, or an unregistered receiver), ``operator``, or
     ``withheld_by_owed_dependency`` (a row transitively behind one of those)."""
 
     id: str

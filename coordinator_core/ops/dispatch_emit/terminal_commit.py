@@ -82,10 +82,13 @@ Negative-spec:
     files only, admitted by a review-stage touch record; ``Review-Residue:`` trailers), or refuses
     ``review-edit-unlanded`` naming the files; never leaves it silently dirty.
   - Does NOT commit a dirty file no chunk declares and the run does not own: ``undeclared_dirty``
-    reports it, because widening the pathspec would hide a wrong spine. The one exception is a
-    path the committing session itself holds a write-claim on and no live peer holds: the product
-    commit passes ``carry_own_left_behind`` and commit_v2 carries it (``own_left_behind`` in the
-    reply, relayed verbatim); a path a halted, unresumed in-window run declares it writes is
+    reports it, because widening the pathspec would hide a wrong spine. The product commit
+    is declared-only (``carry_own_left_behind: False``, no landing-set exception). A path the
+    committing session itself holds a write-claim on and no live peer holds lands in a follow-on
+    commit after it (parent is the product sha, ``Own-Left-Behind-Of:`` trailer; reply key
+    ``own_left_behind_commit`` ``{sha, paths}`` or ``{error}``; a refusal never un-lands the
+    product commit); the follow-on is skipped without a session_id and on an anchor-only
+    call; a path a halted, unresumed in-window run declares it writes is
     never carried by either, and the dirty ones are named under ``held_by_halted_run``
     (``{path: [run_id, ...]}``). The commit passes ``carry_stopped_runs: False``: another run's
     residue is never swept into this run's commit, it stays dirty and is reported by
@@ -185,6 +188,7 @@ from coordinator_core.ops.dispatch_emit.plan_row_coding import (  # noqa: F401 -
     MINTED_SPINE_ORIGIN as _MINTED_SPINE_ORIGIN,
     NOOP_DETAIL as _NOOP_DETAIL,
     REVIEW_WALK_CAP as _REVIEW_WALK_CAP,
+    close_memo_rows_delivered as _close_memo_rows_delivered,
     flip_rows_coded as _flip_rows_coded,
     inventory_record_rel as _inventory_record_rel,
     outside_landing_attribution as _outside_landing_attribution,
@@ -552,9 +556,9 @@ _MEMO_NO_SLUG = "no slug: declare receipt:"
 def _memo_rows_without_receipt(worktree_root: Path, request: CommitRequest) -> dict:
     """``{row id: slug}`` of the plan's open memo-send rows whose sender-side receipt is absent.
 
-    A memo row is an EM act, never dispatched; it closes on
-    ``memo-outbox/sent/<slug>.md`` existing, by resolving the row ``delivered_elsewhere``
-    with ``disposition_ref`` naming that receipt (a non-open row is not reported).
+    A memo row may be dispatched to an executor; it closes on
+    ``memo-outbox/sent/<slug>.md`` existing, when ``_stamp_coded_commit`` resolves the row
+    ``delivered_elsewhere`` with ``disposition_ref`` naming that receipt (a non-open row is not reported).
     An open row naming no slug maps to ``"no slug: declare receipt:"``, never dropped.
     Unreadable plan or spine: empty.
     """
@@ -590,6 +594,48 @@ def _memo_rows_without_receipt(worktree_root: Path, request: CommitRequest) -> d
             out[str(row["id"])] = _MEMO_NO_SLUG
         elif not memo_receipt_exists(worktree_root, slug):
             out[str(row["id"])] = slug
+    return out
+
+
+def _memo_rows_to_close(worktree_root: Path, request: CommitRequest) -> dict:
+    """``{plan: {row id: (receipt ref, receiver)}}`` of the run's chunk rows that are open
+    memo-send rows with a sender-side receipt on disk. One stat per memo row, no spawn."""
+    if not request.plan_path:
+        return {}
+    text = _read_rel(worktree_root, request.plan_path)
+    if text is None:
+        return {}
+    import yaml
+
+    from coordinator_core.frontmatter.body_blocks import LocateStatus, locate_fenced_block
+    from coordinator_core.ops.dispatch_emit.memo_rows import (
+        _is_memo_send_row,
+        memo_receipt_exists,
+        memo_row_slug,
+    )
+    from coordinator_core.session.machinery_paths import MEMO_OUTBOX_RELDIR
+
+    located = locate_fenced_block(text.replace("\r\n", "\n"))
+    if located.status != LocateStatus.LOCATED:
+        return {}
+    try:
+        rows = _yaml_load(located.body) or []
+    except yaml.YAMLError:
+        return {}
+    ids = {c.id for c in request.chunks}
+    out: dict = {}
+    for row in rows if isinstance(rows, list) else ():
+        if not isinstance(row, dict) or str(row.get("id")) not in ids:
+            continue
+        if (row.get("disposition") or "open") != "open" or not _is_memo_send_row(row):
+            continue
+        slug = memo_row_slug(row)
+        if slug is not None and memo_receipt_exists(worktree_root, slug):
+            to = row.get("memo_to")
+            out.setdefault(request.plan_path, {})[str(row["id"])] = (
+                f"{MEMO_OUTBOX_RELDIR}/sent/{slug}.md",
+                to.strip() if isinstance(to, str) and to.strip() else "its receiver",
+            )
     return out
 
 
@@ -1337,6 +1383,7 @@ def _stamp_coded_commit(
     flip_reason: Optional[str] = None,
     outside_rows: Optional[dict] = None,
     ledger_met: Optional[str] = None,
+    memo_closes: Optional[dict] = None,
 ) -> dict:
     """Second, plan-only ``commit_v2`` call stamping the product commit's
     rows ``coded`` with ``disposition_ref: <sha>`` -- a SHA only exists once
@@ -1350,6 +1397,8 @@ def _stamp_coded_commit(
     writes commits outside the run landed: they close ``coded`` at the newest landing sha
     with a no-op detail naming every landing sha. An edit that would make a schema-valid plan invalid
     is refused before any write; on any failure every plan edit is restored.
+    ``memo_closes`` (``{plan: {row id: (receipt ref, receiver)}}``) are receipted memo-send rows:
+    they close ``delivered_elsewhere`` via ``memo``, never ``coded``, in the same commit.
     ``flip_plan`` names the plan whose ``implemented`` status is written to disk without
     committing (``_stamp_plan_implemented`` reads the rows just written ``coded``), so
     the one commit below carries rows, minted stamp and status together; its reply
@@ -1379,7 +1428,8 @@ def _stamp_coded_commit(
     noop_rows = noop_rows or {}
     checkpoint_rows = checkpoint_rows or {}
     outside_rows = outside_rows or {}
-    plans = set(source_rows) | set(noop_rows) | set(outside_rows)
+    memo_closes = memo_closes or {}
+    plans = set(source_rows) | set(noop_rows) | set(outside_rows) | set(memo_closes)
     for by_plan in checkpoint_rows.values():
         plans |= set(by_plan)
     for plan_rel in sorted(plans):
@@ -1397,6 +1447,9 @@ def _stamp_coded_commit(
                 flipped = sorted(set(flipped) | set(more))
         for rid, shas in sorted(outside_rows.get(plan_rel, {}).items()):
             updated, more = _flip_rows_coded(updated, {rid}, shas[0], {rid: _outside_landing_detail(shas)})
+            flipped = sorted(set(flipped) | set(more))
+        if plan_rel in memo_closes:
+            updated, more = _close_memo_rows_delivered(updated, memo_closes[plan_rel])
             flipped = sorted(set(flipped) | set(more))
         if not flipped:
             continue
@@ -1728,6 +1781,28 @@ def _withheld_work_pending(worktree_root: Path, resume: object, declared: Sequen
     return status.returncode == 0 and bool(status.stdout.strip())
 
 
+def _landed_before_halt(
+    worktree_root: Path, base: str, paths: Sequence[str], owners: Sequence[str]
+) -> Optional[str]:
+    """The commit that carried the declared product when it landed strictly before the halt commit
+    ``base`` and HEAD still holds it byte for byte; None otherwise. The commit's message must name
+    one of ``owners`` (the plan path or run id): a path merely untouched since the halt was never
+    this run's landing. The halt commit itself carrying the product is not a prior landing."""
+    held = run_git(["--literal-pathspecs", "diff", "--quiet", "HEAD", "--", *paths], cwd=str(worktree_root))
+    if held.returncode != 0:
+        return None
+    log = run_git(
+        ["--literal-pathspecs", "log", "-1", "--format=%H%x00%B", "HEAD", "--", *paths],
+        cwd=str(worktree_root),
+    )
+    sha, _, body = log.stdout.partition("\0") if log.returncode == 0 else ("", "", "")
+    sha = sha.strip()
+    if not _FULL_SHA_RE.fullmatch(sha) or sha == base or not any(o and o in body for o in owners):
+        return None
+    anc = run_git(["merge-base", "--is-ancestor", sha, base], cwd=str(worktree_root))
+    return sha if anc.returncode == 0 else None
+
+
 def _unchanged_since_halt_failures(
     worktree_root: Path, resume: object, verdict: object, manifest_path: Optional[Path],
     plan_rel: Optional[str] = None, detail: Optional[dict] = None,
@@ -1782,6 +1857,14 @@ def _unchanged_since_halt_failures(
                 return []
             if created.returncode != 0:
                 outcome = f"git-exit-{created.returncode}"
+            elif detail is not None:
+                owners = [
+                    x for x in (plan_rel, resume.get("plan"), resume.get("run_id")) if isinstance(x, str)
+                ]
+                landed = _landed_before_halt(worktree_root, base, paths, owners)
+                if landed:
+                    detail["landed_sha"] = landed
+                    detail["landed_paths"] = list(paths)
         else:
             outcome = f"git-exit-{result.returncode}"
     if detail is not None:
@@ -1859,6 +1942,20 @@ def _awaiting_operator(open_rows: Sequence[dict]) -> list:
     return [{"id": r["id"], "row": r["row"], "command": r["command"]} for r in open_rows if "command" in r]
 
 
+def _verdict_credits(verdict: object, ids: Sequence[object], sha: str) -> bool:
+    """True unless a row in ``ids`` cites ``met_by`` shas none of which is ``sha``: a verdict that
+    credits some other commit has not vouched for this landing (pre-halt credit's rule)."""
+    items = verdict.get("items") if isinstance(verdict, dict) else None
+    for item in items if isinstance(items, list) else ():
+        if not isinstance(item, dict) or item.get("id") not in ids:
+            continue
+        met_by = item.get("met_by") or ()
+        cited = [m for m in ([met_by] if isinstance(met_by, str) else met_by) if isinstance(m, str) and m]
+        if cited and not any(sha.startswith(m) for m in cited):
+            return False
+    return True
+
+
 def _ledger_gate(
     worktree_root: Path, run_dir: Path, verdict: object, manifest_path: Optional[Path] = None,
     gated: Optional[Sequence[str]] = None, operator: Optional[dict] = None,
@@ -1900,6 +1997,7 @@ def _ledger_gate(
     )
     since_halt: dict = {}
     if resume_ledger is not None:
+        resume_ledger = pre_halt_credit.with_notes(resume_ledger, requirements_ledger.read_notes(run_dir))
         stale = _unchanged_since_halt_failures(
             worktree_root, resume_ledger, verdict, manifest_path, plan_rel, since_halt
         )
@@ -1915,6 +2013,13 @@ def _ledger_gate(
     )
     if foreign:
         message += f". Verdict ids that are not register rows: {', '.join(foreign)}"
+    if since_halt.get("landed_sha") and all(
+        f["reason"] == UNCHANGED_SINCE_HALT_REASON for f in result["failures"]
+    ) and _verdict_credits(verdict, [f["id"] for f in result["failures"]], since_halt["landed_sha"]):
+        return {
+            "committed": True, "sha": since_halt["landed_sha"], "already_landed": True,
+            "paths": since_halt["landed_paths"], "since_halt": since_halt,
+        }, ledger, []
     return _error(
         message,
         refused="ledger-unmet",
@@ -2216,6 +2321,37 @@ def _own_run_seniority(worktree_root: Path, run_id: object, script_path_raw: obj
         return (datetime.fromisoformat(receipt["emitted_at"]).timestamp(), key)
     except (TypeError, KeyError, ValueError):
         return None
+
+
+def _land_own_left_behind(
+    reply: dict, product_sha: str, session_id: str, worktree_root: Path, repo_root: Optional[Path],
+) -> None:
+    """Land the session's uncontested left-behind claims (``reply["own_left_behind"]["left"]``) in
+    a follow-on commit and record it under ``own_carry.REPLY_KEY``. A refusal is recorded as
+    ``{"error": ...}`` and never un-lands the product commit; nothing left makes no call."""
+    from coordinator_core.ops.dispatch_emit import own_carry
+    from coordinator_core.session import scope as session_scope
+
+    info = reply.get("own_left_behind")
+    left = info.get("left") if isinstance(info, dict) else None
+    if not left:
+        return
+    contested = session_scope.contested_by_live_peers(list(left), session_id, cwd=str(worktree_root))
+    if contested is None:
+        return
+    try:
+        carry = own_carry.own_carry_params(list(left), contested, product_sha, session_id)
+        if carry is None:
+            return
+        out = reentrant_dispatch("ceremony.commit_v2", {**carry, "session_id": session_id}, repo_root=repo_root)
+    except Exception as exc:
+        reply[own_carry.REPLY_KEY] = {"error": f"{type(exc).__name__}: {exc}"}
+        return
+    if isinstance(out, dict) and out.get("committed") and out.get("sha"):
+        reply[own_carry.REPLY_KEY] = {"sha": str(out["sha"]), "paths": list(carry["paths"])}
+    else:
+        err = out.get("error") if isinstance(out, dict) else None
+        reply[own_carry.REPLY_KEY] = {"error": str(err or f"unexpected commit_v2 reply: {out!r}")}
 
 
 def _in_scope(path: str, request: CommitRequest) -> bool:
@@ -3388,8 +3524,8 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     dirty files (modified or untracked) in the directories of the run's declared
     writes, or under its declared prefixes, that no chunk declares: work the
     commit could never see. Reported, never committed, except a path the committing session
-    itself claimed and no live peer holds: commit_v2 carries it (reply ``own_left_behind``
-    ``{carried, left}``), so it leaves this list. ``None`` when git could
+    itself claimed and no live peer holds: the follow-on commit lands it (reply
+    ``own_left_behind_commit``), though it stays in this list. ``None`` when git could
     not answer; ``undeclared_dirty_total`` appears when the list is capped.
     A file the run's review stage wrote (per-agent touch records since the run began) that is still
     dirty, uncontested and declared by no sibling run rides the one commit as ``review_residue``
@@ -3879,7 +4015,8 @@ def _terminal_commit_inner(
         return _error(
             "params.inline_review is absent -- the run carries no review-stage "
             "output. Run the digest's `terminal_commit_cli` line verbatim (or pass "
-            "task_output_path); else re-emit with a review stage and re-fire",
+            "task_output_path = the Workflow run's output file, the path named in its completion "
+            "notification); else re-emit with a review stage and re-fire",
             refused="unreviewed",
         )
     if not inline_review.get("integration_stem") or inline_review.get("slices") is None:
@@ -4854,17 +4991,11 @@ def _terminal_commit_inner(
                 _ls.FOREIGN_EXCLUDED_KEY: foreign_excluded,
             }))
 
-    # commit_v2 carries every path the session holds a claim on, so it is asked only when no dirty
-    # file sits unlanded in the run's declared scope: such a file may be a sibling run's of the
-    # same session, which `undeclared_dirty` reports and the commit must not widen to.
-    in_scope_left = snapshot is None or any(
-        _in_scope(p, request)
-        for p in snapshot.changed
-        if p not in all_paths and p not in deleted_paths
-    )
+    # The product commit never carries the session's claimed leftovers: commit_v2 would widen the
+    # pathspec past the declared set. They land in the follow-on commit after this one.
     commit_params: dict = {
         "paths": all_paths, "message": message,
-        "carry_own_left_behind": not in_scope_left and not foreign_excluded,
+        "carry_own_left_behind": False,
         "carry_stopped_runs": False,
     }
     if deleted_paths:
@@ -5035,6 +5166,8 @@ def _terminal_commit_inner(
         from coordinator_core.ops.dispatch_emit.emission_receipt import stamp_landed
 
         stamp_landed(guarded_script, str(reply["sha"]))
+        if session_id is not None and not anchor_only:
+            _land_own_left_behind(reply, str(reply["sha"]), session_id, worktree_root, repo_root)
     if not reply.get("committed"):
         _remove(worktree_root, receipt_paths)
         receipt_paths = []
@@ -5256,6 +5389,7 @@ def _terminal_commit_inner(
                 trailers=(f"Sizing-Shipped: {shipped_sizing} {reply['sha']}",) if shipped_sizing else (),
                 commit=stamp_commit,
                 archive_after_flip=archive_targets,
+                memo_closes=_memo_rows_to_close(worktree_root, request),
             )
         )
         flipped = reply.pop("_flip", None)

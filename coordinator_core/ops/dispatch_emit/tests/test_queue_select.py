@@ -657,3 +657,40 @@ def test_load_row_schema_gate_reads_the_profile_schema_and_closure_fields(tmp_pa
     gate = load_row_schema_gate(profile, tmp_path)
     assert gate.closure_fields == {"status", "closed_at", "closed_by"} and "scope" in gate.schema["required"]
     assert load_row_schema_gate(SimpleNamespace(schema="nope.schema.json", closure=profile.closure), tmp_path) is None
+
+
+def _accounted_ids(manifest):
+    return (
+        {e.row_id for e in manifest.entries}
+        | {d.row_id for d in manifest.declined}
+        | set(manifest.unselected)
+        | {c.row_id for c in manifest.claimed}
+    )
+
+
+@pytest.mark.parametrize("row_id_key", ["id", "@stem"])
+@pytest.mark.parametrize("gated", [True, False])
+@pytest.mark.parametrize("where", [None, [[["status", "==", "closed"]]]])
+def test_stem_mismatched_titleless_row_reaches_a_manifest_field(tmp_path, row_id_key, gated, where):
+    queue_dir = tmp_path / "state" / "lessons"
+    queue_dir.mkdir(parents=True)
+    _write_row(queue_dir / "file-stem.yaml", id="a-different-id", status="open", created="2026-09-21")
+    _write_row(queue_dir / "ok.yaml", id="ok", status="open", created="2026-09-21", title="t", body="b",
+               scope="project", from_repo="x")
+    manifest = _select(
+        queue=[queue_dir], repo_root=tmp_path, row_id_key=row_id_key, where=where,
+        row_schema_gate=_lesson_gate() if gated else None,
+    )
+    mismatched = "a-different-id" if row_id_key == "id" else "file-stem"
+    assert mismatched in _accounted_ids(manifest)
+    if gated and where is None:
+        (entry,) = [d for d in manifest.declined if d.row_id == mismatched]
+        assert entry.reason.startswith("admission:") and "title" in entry.reason
+
+
+def test_unaccounted_row_raises_named_error_not_silent_drop():
+    from coordinator_core.ops.dispatch_emit.queue_select import RowDroppedError, _assert_every_row_accounted
+
+    _assert_every_row_accounted(["a"], (), (), ("a",), ())
+    with pytest.raises(RowDroppedError, match="'ghost'"):
+        _assert_every_row_accounted(["a", "ghost"], (), (), ("a",), ())

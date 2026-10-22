@@ -2211,7 +2211,21 @@ def build_research_block(
         elif source not in rc.SOURCES:
             errors.append(f"--research-target source must be one of {rc.SOURCES}, got {source!r}")
         else:
-            parsed_targets.append({"source": source, "ref": ref.strip()})
+            ref = ref.strip()
+            if source == "repo" and not any(ch in ref for ch in "/\\:"):
+                from coordinator_core import machine_resolver as mr
+
+                registered = mr.resolve_research_target(ref)
+                if registered is not None:
+                    ref = registered
+                elif not Path(ref).is_dir():  # cwd-relative: a bare token is a local dir only from the invocation directory
+                    keys = ", ".join(row["key"] for row in mr.research_targets()) or "none registered"
+                    errors.append(
+                        f"--research-target repo={ref}: not a registered research target; "
+                        f"pass a path or one of: {keys}"
+                    )
+                    continue
+            parsed_targets.append({"source": source, "ref": ref})
     parsed_seeds: list[dict[str, str]] = []
     for raw in seeds:
         kind, sep, url = raw.partition("=")
@@ -2424,7 +2438,7 @@ def _usage(prog: str, stream=None) -> int:
         "    [--research-appetite small|medium|large (research budget; distinct from --appetite)]\n"
         "    [--research-source web|repo|structured|notebooklm ...]\n"
         "    [--research-depth standard|deeper|deepest]\n"
-        "    [--research-target <source>=<ref> ...]\n"
+        "    [--research-target <source>=<ref> ...]  (a repo ref may be a registered research key)\n"
         "    [--research-seed <video|doc|repo|paper>=<url> ... (a URL to study; routed to its kind's pipeline)]\n"
         "    [--research-question <text> ...]\n"
         "    [--research-question-mode split|combine]\n"
@@ -2532,7 +2546,10 @@ def _xs_lane_refusal(write_path: Optional[str]) -> Optional[str]:
     if root is None:
         return None
     if xs_lane_budget.read_lane(root, sid) is not None or xs_lane_budget.touched_s_or_larger(sid, root):
-        return "XS refused: this session already holds a lane or an S+ sizing; size S or larger."
+        return (
+            "XS refused: this session already holds a lane or an S+ sizing. "
+            "Re-run the same command with `--tshirt S` (drop `--express-lane`); the S sizing hands to coordinator:engine-ask."
+        )
     return None
 
 

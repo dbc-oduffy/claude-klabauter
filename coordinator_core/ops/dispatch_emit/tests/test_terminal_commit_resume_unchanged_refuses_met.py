@@ -229,3 +229,24 @@ def test_stage_head_that_is_not_a_full_sha_is_no_base(run):
     _stamp_head(run, "HEAD")
     (run[0] / "prod.py").write_text("x = 13\n", encoding="utf-8")
     assert _gate_plan(run, _composed())["since_halt"]["outcome"] == "no-base"
+
+
+def test_product_landed_in_a_commit_before_the_halt_reports_already_landed(run):
+    root, _, _, halt = run
+    (root / "prod.py").write_text("x = 9\n", encoding="utf-8")
+    _git(root, "add", "prod.py")
+    _git(root, "commit", "-q", "-m", "checkpoint(wave 0): 1 rows" + chr(10)*2 + "Checkpoint-Plan: docs/plans/p.md")
+    carrier = _git(root, "rev-parse", "HEAD")
+    (root / "note.txt").write_text("halt\n", encoding="utf-8")
+    _git(root, "add", "note.txt")
+    _git(root, "commit", "-q", "-m", "halt record")
+    halt_sha = _git(root, "rev-parse", "HEAD")
+    reply = _gate(run, {**_resume(run, halt_sha), "plan": "docs/plans/p.md"})
+    assert reply["already_landed"] is True and reply["committed"] is True
+    assert reply["sha"] == carrier and "refused" not in reply
+    unrelated = _gate(run, _resume(run, halt_sha))
+    assert unrelated["refused"] == "ledger-unmet", "a carrier naming neither the plan nor the run is not this run's landing"
+
+
+def test_product_carried_by_the_halt_commit_itself_is_still_refused(run):
+    assert _gate(run, _resume(run))["refused"] == "ledger-unmet"

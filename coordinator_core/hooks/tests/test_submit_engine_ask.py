@@ -611,6 +611,7 @@ def test_an_unmarked_later_turn_ask_runs_as_relayed_with_one_warning(tmp_path, m
         out = mod.evaluate(_payload(root, args, tool_use_id=f"t{i}"), emit=emit)
         assert _hso(out)["permissionDecision"] == "allow"
         assert _hso(out)["additionalContext"].count("Warning: unmarked ask ran as source relayed") == 1
+        assert "context: [...]" in _hso(out)["additionalContext"]
     assert [c[0]["ask_source"] for c in emit.calls] == ["relayed"] * 3
 
 

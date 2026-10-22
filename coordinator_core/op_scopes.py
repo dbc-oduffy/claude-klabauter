@@ -327,6 +327,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "handoff.match_candidates":              "common_dir",
     "handoff.lineage_ancestry":               "common_dir",
     "deliverable.rollup":                    "common_dir",
+    "research.targets":                      "none",
     "spec_backlink.resolve":                 "common_dir",
     "spec_backlink.rewrite":                 "common_dir",
     "queue.append":                          "common_dir",

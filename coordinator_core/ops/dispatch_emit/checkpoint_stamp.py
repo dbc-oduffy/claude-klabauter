@@ -4,9 +4,10 @@
 ``stamp_checkpoint`` flips the rows it names from ``open`` to ``coded`` at the
 checkpoint's own sha, in-process (rows named on ``Checkpoint-Gate-Owed:`` or
 ``Checkpoint-Stop-Rule:`` stay ``open``), and lands one plan-only follow-up commit
-carrying ``Checkpoint-Stamp: <sha>``. ``Checkpoint-Not-Landed: run-open`` marks a mid-run checkpoint and
-``Checkpoint-Run-Closed: <base>`` on a later commit closes it for ``rows_landed_at_head``. Stdlib-only at module top: callers gate the
-import on a literal ``Checkpoint-Plan: `` test so a plain commit pays nothing.
+carrying ``Checkpoint-Stamp: <sha>``. ``Checkpoint-Not-Landed: run-open`` marks a mid-run
+checkpoint and ``Checkpoint-Run-Closed: <base>`` on a later commit closes it for
+``rows_landed_at_head``. Stdlib-only at module top: callers gate the import on a literal
+``Checkpoint-Plan: `` test so a plain commit pays nothing.
 """
 
 from __future__ import annotations

@@ -179,6 +179,21 @@ _GATED_ROWS = """- id: C3
 """
 
 
+def _gated(extra: str) -> str:
+    return _plan(rows=_GATED_ROWS + extra)
+
+
+def test_gate_clearance_keys_are_neutral_and_any_other_gate_key_is_not():
+    from coordinator_core.frontmatter.primitives import GATE_CLEARANCE_KEYS, approval_body_sha
+
+    assert GATE_CLEARANCE_KEYS == {"cleared", "cleared_evidence", "closure_evidence"}
+    base = approval_body_sha(_gated(""))
+    cleared = _gated("    cleared: true\n    cleared_evidence: landed in abc\n    closure_evidence: ran it\n")
+    assert approval_body_sha(cleared) == base
+    assert approval_body_sha(_gated("    cleared: false\n    other_key: x\n")) != base
+    assert approval_body_sha(_gated("").replace("land the thing", "x")) != base
+
+
 @pytest.mark.spawns_process
 @pytest.mark.cadence
 def test_clearing_an_external_gate_keeps_the_stamp_valid_and_real_edit_refuses(tmp_path):

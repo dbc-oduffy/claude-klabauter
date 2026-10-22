@@ -30,7 +30,7 @@ _PROSE = (
 )
 
 
-def _row(i: int, rows: int, body_bytes: int) -> dict:
+def _row(i: int, body_bytes: int) -> dict:
     row = {
         "id": f"C{i}",
         "title": f"Size-L fixture row {i}",
@@ -104,10 +104,10 @@ def build_size_l_plan(
 
     register = rr.read_register((root / SIZING_REL).read_text(encoding="utf-8"))
     pins = rr.register_pins(register, ["R1", "R2"])
-    spine = [_row(i, rows, 0) for i in range(1, rows + 1)]
+    spine = [_row(i, 0) for i in range(1, rows + 1)]
     overhead = len(yaml.safe_dump(spine, sort_keys=False)) + 600
     body_bytes = max(0, (plan_bytes - overhead) // rows)
-    spine = [_row(i, rows, body_bytes) for i in range(1, rows + 1)]
+    spine = [_row(i, body_bytes) for i in range(1, rows + 1)]
     front = (
         "---\n"
         "title: size-L fixture\n"

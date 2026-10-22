@@ -63,6 +63,6 @@ def forward(relpath: str, name: str) -> NoReturn:
         _fail(f"{name}: {target} not found. Update the DoE clone, then rerun.")
 
     sys.argv = [str(target), *args]
-    sys.path[0] = str(target.parent)
+    sys.path.insert(0, str(target.parent))
     runpy.run_path(str(target), run_name="__main__")
     raise SystemExit(0)

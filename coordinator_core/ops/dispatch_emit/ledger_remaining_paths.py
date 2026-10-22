@@ -62,20 +62,26 @@ def _named(remaining: Mapping[str, Mapping[str, Any]], repo_root: Path) -> list[
 def remaining_leg_plan(
     remaining: Mapping[str, Mapping[str, Any]],
     notes: Sequence[str],
-    manifest_writes: Sequence[str],
+    rows: Sequence[Any],
+    blocking: Sequence[str],
     doc_writes: Sequence[str],
     sizing_rel: Optional[str],
     repo_root: Path,
 ) -> dict[str, Any]:
     """Return `{action, writes, unwritable, reason}` for the ledger-remaining leg.
 
-    `writes` = manifest writes plus the named remaining paths the run's commit can land (doc
-    writes or the sizing); `unwritable` = named paths nothing can land.
+    `writes` = writes of the manifest `rows` whose `register_rows` intersect `blocking` (a row
+    with none serves no blocking row), plus the named remaining paths the run's commit can land
+    (doc writes or the sizing); `unwritable` = named paths nothing can land.
     A note naming a commit sha (digit and letter, 7-40 hex) re-rules the owed rows as met, so
     unwritable paths alone do not refuse. The sha is not resolved against git: the verify leg judges.
     """
     named = _named(remaining, repo_root)
     allowed = set(doc_writes) | ({sizing_rel} if sizing_rel else set())
+    blocked = set(blocking)
+    manifest_writes = [
+        w for r in rows if blocked.intersection(getattr(r, "register_rows", ()) or ()) for w in r.writes
+    ]
     writes: list[str] = []
     for p in [*manifest_writes, *(n for n in named if n in allowed)]:
         if p not in writes:

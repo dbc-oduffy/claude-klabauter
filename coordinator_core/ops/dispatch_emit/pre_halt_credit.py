@@ -34,6 +34,20 @@ def note_rerules(notes: Sequence[object]) -> bool:
     return any(sha_tokens(n) for n in notes)
 
 
+def with_notes(resume: object, notes: Sequence[object]) -> object:
+    """`resume` with `revise_notes` extended by `notes` (strings only, order kept, de-duplicated,
+    existing notes first). A non-dict resume, or empty `notes`, is returned unchanged (same
+    object). Never mutates its argument."""
+    if not isinstance(resume, dict) or not notes:
+        return resume
+    existing = resume.get("revise_notes")
+    merged = list(existing) if isinstance(existing, list) else []
+    for n in notes:
+        if isinstance(n, str) and n not in merged:
+            merged.append(n)
+    return {**resume, "revise_notes": merged}
+
+
 def _row_credited(met_by: object, known: Sequence[str]) -> bool:
     text = " ".join(str(m) for m in met_by) if isinstance(met_by, (list, tuple)) else str(met_by)
     return any(k.startswith(n) or n.startswith(k) for n in sha_tokens(text) for k in known)

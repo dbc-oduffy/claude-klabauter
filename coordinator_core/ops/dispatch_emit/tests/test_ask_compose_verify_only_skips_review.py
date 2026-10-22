@@ -26,10 +26,8 @@ def _script(monkeypatch) -> str:
 
 def test_review_block_gated_on_declared_paths(monkeypatch):
     script = _script(monkeypatch)
-    assert (
-        "const _noReviewPaths = !!((_manifest?.rows ?? []).length && "
-        "!(_manifest?.review_declared_paths ?? []).length);"
-    ) in script
+    assert "const _noReviewPaths = !(_manifest?.review_declared_paths ?? []).length;" in script
+    assert "!!((_manifest?.rows ?? []).length &&" not in script
     assert "if (!_halted && _gate.arm !== 'xs' && !_noReviewPaths) {\n  phase('Review wave');" in script
 
 

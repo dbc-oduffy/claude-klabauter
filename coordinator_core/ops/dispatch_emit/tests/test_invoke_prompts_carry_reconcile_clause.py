@@ -6,6 +6,9 @@ import re
 
 import yaml
 
+from coordinator_core.ops.dispatch_emit.ask_compose import ASK_STAGE_RECONCILE_CLAUSE
+from coordinator_core.ops.dispatch_emit.ask_contract import OP_ASK_STAGE
+from coordinator_core.ops.dispatch_emit.ask_stage_receipt import ALREADY_STAGED_KEY
 from coordinator_core.ops.dispatch_emit.emit import _INDETERMINATE_RECONCILE_CLAUSE, compose_script
 from coordinator_core.ops.dispatch_emit.land_run_contract import OP_NAME, RECONCILE_CLAUSE
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
@@ -35,7 +38,12 @@ def _prompts(script: str) -> list[str]:
 def _assert_clause_everywhere(script: str, *, marker: str = _INVOKE_PATH) -> int:
     named = [p for p in _prompts(script) if marker in p and _REVIEW_SIDECAR not in p]
     for prompt in named:
-        want = RECONCILE_CLAUSE if _TERMINAL_OP in prompt else _INDETERMINATE_RECONCILE_CLAUSE
+        if _TERMINAL_OP in prompt:
+            want = RECONCILE_CLAUSE
+        elif OP_ASK_STAGE in prompt:
+            want = ASK_STAGE_RECONCILE_CLAUSE
+        else:
+            want = _INDETERMINATE_RECONCILE_CLAUSE
         assert want in prompt, prompt[:200]
     assert _STALE not in script
     return len(named)
@@ -48,6 +56,14 @@ def test_clause_text_names_the_engine_contract_fields():
 
 def test_ask_script_raw_prompt_arm():
     assert _assert_clause_everywhere(_compose_ask(in_run_commit=True), marker=_INVOKE_ANY) >= 3
+
+
+def test_ask_stage_prompts_carry_the_stage_clause_marker():
+    stage = [p for p in _prompts(_compose_ask(in_run_commit=True)) if OP_ASK_STAGE in p]
+    assert stage
+    for prompt in stage:
+        assert ALREADY_STAGED_KEY in prompt, prompt[:200]
+        assert _INDETERMINATE_RECONCILE_CLAUSE not in prompt
 
 
 def test_ask_script_sizing_arm(tmp_path):
