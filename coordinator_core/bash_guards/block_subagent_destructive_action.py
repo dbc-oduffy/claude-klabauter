@@ -679,6 +679,64 @@ def _is_settings_home_bin_argv0(argv0: str) -> bool:
     return bool(_SETTINGS_HOME_BIN_EXEMPT_RE.match(argv0))
 
 
+_ASSIGN_TOKEN_RE = re.compile(r"^\(*([A-Za-z_][A-Za-z0-9_]*)=(.*?)\)*$")
+_VAR_ARGV0_RE = re.compile(r"^\$(?:([A-Za-z_][A-Za-z0-9_]*)|\{([A-Za-z_][A-Za-z0-9_]*)\})$")
+_LITERAL_WORD_RE = re.compile(r"^[A-Za-z0-9_./:@+-]+$")
+_LAUNCHER_BASENAMES = frozenset({"coordinator-invoke", "coordinator-invoke.exe"})
+_VAR_NEUTRAL_HEADS = frozenset({"cd", "echo", "command", "test", "[", "true", "false", ":"})
+
+
+def _literal_assignment_value(value: str) -> Optional[str]:
+    """Return the literal text of an assigned ``value`` (a plain word, or the
+    settings-home ``${COORDINATOR_SETTINGS_HOME:-<default>}/bin/<name>`` path), else ``None``."""
+    if value and _LITERAL_WORD_RE.match(value):
+        return value
+    if value.startswith("$") and _is_settings_home_bin_argv0(value):
+        return value
+    return None
+
+
+def _record_assignment_segment(seg: List[str], assigns: "dict[str, list]") -> bool:
+    """If ``seg`` is only ``NAME=value`` words, record each value (``None`` when not a
+    literal) under its name and return ``True``."""
+    found = []
+    for tok in seg:
+        m = _ASSIGN_TOKEN_RE.match(tok)
+        if not m:
+            return False
+        found.append(m)
+    for m in found:
+        assigns.setdefault(m.group(1), []).append(_literal_assignment_value(m.group(2)))
+    return bool(found)
+
+
+def _resolve_launcher_var(argv0: str, assigns: "dict[str, list]") -> Optional[str]:
+    """Return ``argv0`` rewritten to the literal coordinator-invoke launcher when it is a
+    ``$VAR`` whose every earlier assignment in the command line is a literal launcher path."""
+    m = _VAR_ARGV0_RE.match(argv0)
+    if not m:
+        return None
+    values = assigns.get(m.group(1) or m.group(2))
+    if not values or any(v is None for v in values):
+        return None
+    for v in values:
+        if os.path.basename(v.replace("\\", "/")) not in _LAUNCHER_BASENAMES:
+            return None
+    return "coordinator-invoke"
+
+
+def _var_touched_by_other_command(seg: List[str], assigns: "dict[str, list]") -> None:
+    """Poison any tracked variable a non-assignment segment could rewrite (``read V``,
+    ``export V=..``, ``printf -v V`` ...): its resolution is no longer static."""
+    head = seg[0].lstrip("(")
+    if head in _VAR_NEUTRAL_HEADS:
+        return
+    text = " ".join(seg)
+    for name in list(assigns):
+        if re.search(r"(?<![A-Za-z0-9_])" + re.escape(name) + r"(?![A-Za-z0-9_])", text):
+            assigns[name].append(None)
+
+
 def _normalize_interpreter_basename(name: str) -> str:
     m = _PYTHON_VERSION_SUFFIX_RE.match(name)
     return m.group(1) if m else name
@@ -2166,6 +2224,11 @@ _SAFE_GIT_SUBCOMMANDS = frozenset(
         "name-rev",
         "check-ignore",
         "ls-tree",
+        "diff-index",
+        "diff-files",
+        "diff-tree",
+        "show-ref",
+        "count-objects",
     }
 )
 
@@ -2833,11 +2896,21 @@ def _evaluate_tokenized(cmd_text: str, depth: int = 0) -> _TokenSurfaces:
         result.deny_kind = "unparseable command (fails closed)"
         return result
 
+    assigns: "dict[str, list]" = {}
     for seg_tokens, pipe_before in _segments_from_tokens(tokens):
         if not seg_tokens:
             continue
 
+        if _record_assignment_segment(seg_tokens, assigns):
+            continue
         argv0 = seg_tokens[0]
+        if _ARGV0_UNRESOLVED_RE.match(argv0):
+            launcher = _resolve_launcher_var(argv0, assigns)
+            if launcher is not None:
+                seg_tokens = [launcher] + seg_tokens[1:]
+                argv0 = launcher
+        if assigns:
+            _var_touched_by_other_command(seg_tokens, assigns)
         if _ARGV0_UNRESOLVED_RE.match(argv0) and not _is_settings_home_bin_argv0(argv0):
             # Finding #3: unexpanded $VAR/${VAR}/$(...) in argv[0] position --
             # deny outright, do NOT attempt to statically resolve the

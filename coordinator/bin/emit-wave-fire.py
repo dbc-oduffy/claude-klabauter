@@ -422,7 +422,9 @@ def _renumbered_wave_hint(trail_dir: Path, wave_number: int, waves: list, wave_i
     return ""
 
 
-def _report_predates_a_landing(trail_dir: Path, wave_number: int, wave_ids: list) -> str:
+def _report_predates_a_landing(
+    trail_dir: Path, wave_number: int, wave_ids: list, take_extras: bool = False
+) -> str:
     """The report is SHAPE-RIGHT and TIME-WRONG: frozen before a landing this run
     has since made, so it proposes batons that landing already advanced.
 
@@ -481,13 +483,14 @@ def _report_predates_a_landing(trail_dir: Path, wave_number: int, wave_ids: list
     # out which side was wrong.
     remaining = nxt.get("remaining")
     if isinstance(remaining, int) and remaining > 0:
+        if take_extras:
+            return ""
         return (
             f"this report proposes {len(extra)} baton(s) that {prior.name} did not hand forward, "
             f"and that landing declares `remaining: {remaining}` — it was LIMIT-CAPPED, so it "
             f"handed forward {len(handed)} of a larger set and this report is not thereby stale. "
-            "Re-land the same wave-result files at a `--limit` above the remainder if you want "
-            "them all in one hand-forward; otherwise emit from a freshly frozen report and take "
-            "the extra batons deliberately."
+            "Pass --take-extras to emit the extra batons deliberately from this fresh report, "
+            "or re-land the same wave-result files at a `--limit` above the remainder."
         )
     shown = extra[:8]
     tail = f" (and {len(extra) - len(shown)} more)" if len(extra) > len(shown) else ""
@@ -1506,6 +1509,12 @@ def main(argv=None) -> int:
         ),
     )
     ap.add_argument(
+        "--take-extras",
+        action="store_true",
+        help="accept the batons a fresh report proposes beyond a LIMIT-CAPPED landing's hand-forward "
+        "(its `remaining > 0`). Has no effect on a landing that handed forward everything.",
+    )
+    ap.add_argument(
         "--plugin-agents-available",
         choices=("true", "false", "auto"),
         default="auto",
@@ -1659,12 +1668,14 @@ def main(argv=None) -> int:
     if not wave_ids:
         return refuse(f"wave {args.wave_index} is empty — nothing to fire")
 
-    stale = _report_predates_a_landing(trail_dir, wave_number, wave_ids)
-    if stale:
-        hint = _renumbered_wave_hint(trail_dir, wave_number, waves, args.wave_index)
-        if hint:
-            return refuse(hint)
-        return refuse(stale)
+    dupes = sorted({i for i in wave_ids if wave_ids.count(i) > 1})
+    if dupes:
+        print(
+            f"  NOTE: wave {args.wave_index} names {dupes} more than once; each is counted and "
+            "fired once.",
+            file=sys.stderr,
+        )
+        wave_ids = list(dict.fromkeys(wave_ids))
 
     if args.exclude:
         unmatched = [i for i in args.exclude if i not in wave_ids]
@@ -1679,6 +1690,13 @@ def main(argv=None) -> int:
             return refuse(
                 f"every baton in wave {args.wave_index} was excluded — nothing to fire"
             )
+
+    stale = _report_predates_a_landing(trail_dir, wave_number, wave_ids, args.take_extras)
+    if stale:
+        hint = _renumbered_wave_hint(trail_dir, wave_number, waves, args.wave_index)
+        if hint:
+            return refuse(hint)
+        return refuse(stale)
 
     collapsed = _shared_wave_slots(payload, wave_ids)
     if collapsed:

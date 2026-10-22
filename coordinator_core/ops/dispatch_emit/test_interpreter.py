@@ -21,6 +21,10 @@ from coordinator_core.resolve_validation_cmd import read_local_md_key
 
 PORTABLE_CLAUSE = "Run Python as `python3`, falling back to `python` when `python3` is absent."
 DEFECT_PREFIX = "interpreter-resolution-defect:"
+LITERAL_PATHS_CLAUSE = (
+    "Name every test path literally in the command (`pytest tests/a.py tests/b.py`), "
+    "never through a shell variable such as `FILES=...; pytest $FILES`: the suite guard denies it."
+)
 
 _VERSIONED_NAME = re.compile(r"^python\d+\.\d+(\.exe)?$", re.IGNORECASE)
 _ABS_INTERPRETER = re.compile(r"^python[\d.]*(\.exe)?$", re.IGNORECASE)
@@ -105,19 +109,21 @@ def _launcher_clause(repo_root: Union[str, Path]) -> Optional[str]:
 
 
 def interpreter_clause(repo_root: Union[str, Path, None]) -> str:
-    """The prompt sentence naming the interpreter; the portable python3/python text when nothing is pinned."""
+    """The prompt sentence naming the interpreter; the portable python3/python text when nothing is pinned.
+
+    A clause that lets tests run also carries `LITERAL_PATHS_CLAUSE`; a resolution defect runs none."""
     if repo_root is None:
-        return PORTABLE_CLAUSE
+        return f"{PORTABLE_CLAUSE} {LITERAL_PATHS_CLAUSE}"
     launcher = _launcher_clause(repo_root)
     if launcher is not None:
-        return launcher
+        return launcher if DEFECT_PREFIX in launcher else f"{launcher} {LITERAL_PATHS_CLAUSE}"
     pinned = resolve_targeted_test_python(repo_root)
     if pinned.command is None:
-        return PORTABLE_CLAUSE
+        return f"{PORTABLE_CLAUSE} {LITERAL_PATHS_CLAUSE}"
     if pinned.defect is None:
         return (
             f"Run Python as `{pinned.command}` (this repo's pinned interpreter, from {pinned.source}), "
-            "never bare `python3` or `python`."
+            f"never bare `python3` or `python`. {LITERAL_PATHS_CLAUSE}"
         )
     return (
         f"This repo pins `{pinned.command}` (from {pinned.source}) but it does not resolve: {pinned.defect}. "

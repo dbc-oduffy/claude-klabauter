@@ -23,8 +23,12 @@ pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 SELF = "5e1f0000-0000-4000-8000-000000000011"
 PEER = "5e1f0000-0000-4000-8000-000000000012"
 RUN = "run-review-residue"
-_REVIEWED = {"integration_stem": "rev-stem", "slices": 1, "fixes": 0}
 STRAY = "elsewhere/tests/test_stray.py"
+FOREIGN = "foreign/other_run.py"
+_REVIEWED = {
+    "integration_stem": "rev-stem", "slices": 1, "fixes": 0,
+    "prep": {"slice_files": [STRAY, "elsewhere/tests/gone.py"]},
+}
 
 
 def _git(args, cwd: Path) -> str:
@@ -149,3 +153,14 @@ def test_a_sibling_declared_review_write_is_neither_landed_nor_refused(repo, mon
     assert "review_residue" not in out
     assert STRAY not in _committed(repo)
     assert _dirty(repo, STRAY) != ""
+
+
+def test_a_review_write_outside_the_runs_own_files_is_left_dirty_and_not_halted(repo, monkeypatch):
+    (repo / "foreign").mkdir()
+    (repo / FOREIGN).write_text("other run\n", encoding="utf-8", newline="")
+    _review_wrote(monkeypatch, {STRAY: "agent-1", FOREIGN: "agent-2"})
+    out = _run(repo)
+    assert out["committed"] is True, out
+    assert out["review_residue"] == [STRAY]
+    assert FOREIGN not in _committed(repo)
+    assert _dirty(repo, FOREIGN) != ""

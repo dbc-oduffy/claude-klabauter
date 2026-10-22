@@ -1529,9 +1529,11 @@ def mint_rows(
                     held_ids.update(done_here[mid]["held_behind"])
             if done_unlanded_out is not None:
                 done_unlanded_out.update(done_here)
+            review_minted = {mid for mid in id_map.values() if mid in review_rows}
+            unminted = (set(done_here) | held_ids) - review_minted
             for r in sub_rows:
                 minted_id = id_map[r.id]
-                if minted_id in done_here or minted_id in held_ids:
+                if minted_id in unminted:
                     continue
                 sub_depends_on = [
                     {
@@ -1541,7 +1543,7 @@ def mint_rows(
                     for edge in r.depends_on
                     if isinstance(edge, dict)
                     and edge.get("chunk") in id_map
-                    and id_map[edge.get("chunk")] not in noop_ids
+                    and id_map[edge.get("chunk")] not in noop_ids | unminted
                 ]
                 is_root = not sub_depends_on
                 depends_on = list(sub_depends_on)
@@ -2445,11 +2447,10 @@ def mint_spine(
         spent_tranche = (
             not binding
             and part is None
-            and is_tranche_record
             and family_spent_reason(path.parent, run_id) is not None
         )
         if spent_tranche:
-            # The record's own run id has run or landed: continue the family at the next N.
+            # The record's own run id (base or tranche) has run or landed: continue the family at the next N.
             tranche_path, tranche_text, run_id = _tranche_inventory(
                 path, text, chunk_rows, set(report["plans"]), run_id
             )

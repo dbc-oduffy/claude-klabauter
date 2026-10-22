@@ -787,6 +787,41 @@ def render_gem_refusal_message(target_repo: str) -> str:
     )
 
 
+def render_out_of_repo_refusal(
+    target: str,
+    session_repo: str,
+    *,
+    agent_class: str,
+    sandbox_root: str = "",
+    target_in_repo: bool = False,
+    raw_target: str = "",
+) -> str:
+    """The deny copy for an out-of-repo write on a box that refuses them
+    outright (the author flag). One fact plus an in-repo absolute
+    alternative: the session's `scratch/` for an EM, `sandbox_root` for a
+    subagent. A peer-repo target adds the `cross-repo-memo` route (EM) or
+    the report-to-dispatching-EM route (subagent).
+
+    Names no marker, grant, level verb or clear line: none of them opens
+    under the flag, so naming one would advertise a door that cannot open."""
+    fact = (
+        f"{_target_phrase(target, raw_target)} is outside `{session_repo}` "
+        "and out-of-repo writes are blocked on this box."
+    )
+    scratch = session_repo.rstrip("/\\") + "/scratch/"
+    if agent_class == AGENT_CLASS_SUBAGENT:
+        place = sandbox_root or scratch
+        message = f"Coordinator guard — instead: write under `{place}`; {fact}"
+        if target_in_repo:
+            message += " Report to your dispatching EM."
+        return message
+    place = scratch
+    message = f"Coordinator guard — instead: write under `{place}`; {fact}"
+    if target_in_repo:
+        message += " A peer repo takes `cross-repo-memo`."
+    return message
+
+
 def render_bump_message(
     *,
     agent_class: str,

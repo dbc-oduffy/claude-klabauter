@@ -64,9 +64,9 @@ def spent_run_reason(script_path: Path) -> Optional[str]:
 
 
 def family_spent_reason(parent: Path, run_id: str) -> Optional[str]:
-    """`spent_run_reason` over `<run_id>.workflow.mjs` and each `<run_id>-pM.workflow.mjs`
+    """`spent_run_reason` over `<run_id>[.spine].workflow.mjs` and each `<run_id>-pM[.spine].workflow.mjs`
     script in `parent`; the first reason found, else None."""
-    script_re = re.compile(rf"^{re.escape(run_id)}(-p\d+)?\.workflow\.mjs$")
+    script_re = re.compile(rf"^{re.escape(run_id)}(-p\d+)?(\.spine)?\.workflow\.mjs$")
     for child in sorted(parent.iterdir()):
         if script_re.match(child.name):
             reason = spent_run_reason(child)

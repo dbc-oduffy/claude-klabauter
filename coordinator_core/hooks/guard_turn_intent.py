@@ -65,6 +65,7 @@ from coordinator_core.hooks.support.cockpit_session import under_cockpit
 from coordinator_core.hooks.support.git_common_dir import resolve_git_common_dir
 from coordinator_core.hooks.support.session_hub import ensure_session_dir, session_id_is_real
 from coordinator_core.ipc import register_op
+from coordinator_core.machine_profile import apply_guard_level
 
 _PATTERN_GROUPS = (_HANDOFF_PATTERNS, _POSSESSIVE_PATTERNS)
 
@@ -254,7 +255,7 @@ def _handler(params: dict, repo_root=None) -> dict:
             has_transcript = isinstance(transcript_path, str) and bool(transcript_path)
             text = _final_assistant_text(transcript_path) if has_transcript else ""
         if _turn_intent_step(payload, text):
-            return deny("Stop", _turn_intent.BLOCK_REASON)
+            return apply_guard_level("guard-turn-intent", deny("Stop", _turn_intent.BLOCK_REASON)) or no_advisory()
         return _go_ask_advisory(payload, text)
     except Exception:
         pass

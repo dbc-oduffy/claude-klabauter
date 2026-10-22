@@ -605,6 +605,8 @@ def approve_ready(
         "link_repaired": repaired,
         "stamped": stamped,
         "note": note,
+        # A plan already at an approved status is the landing's end state, not a refusal.
+        "already_in_state": (not stamped) and (note or "").startswith("already at status"),
         "superseded": superseded,
     }
 
@@ -923,6 +925,7 @@ def authorize_execution(
         "execution_ready": stamped,
         "authorized_sha": body_sha,
         "note": detail,
+        "already_in_state": (not stamped) and (detail or "").startswith("baton is already stamped"),
     }
 
 
@@ -1379,6 +1382,7 @@ def land_wave(
     closed: List[Dict[str, Any]] = []
     execution_ready: List[Dict[str, Any]] = []
     refused: List[Dict[str, Any]] = []
+    noop: List[Dict[str, Any]] = []
     cited = {
         sha
         for entry in wave_result.get("ready") or []
@@ -1510,6 +1514,8 @@ def land_wave(
                     if join_row is not None:
                         row["join"] = join_row
                     execution_ready.append(row)
+                elif row.get("already_in_state"):
+                    noop.append({"baton": entry.get("batonId"), "reason": row.get("note")})
                 else:
                     refused.append(
                         {
@@ -1649,6 +1655,9 @@ def land_wave(
     wave = after["waves"][0] if after["waves"] else []
     by_id = {b["id"]: b for b in after["batons"]}
     wave = _without_replanned_sources(wave, by_id, replanned_sources)
+    # A gate wave may carry one id twice (a predecessor/continuation pair); `limit` and every
+    # downstream count are by unique id.
+    wave = list(dict.fromkeys(wave))
     # A baton whose OWN plan already landed as `implemented` is done, not a candidate.
     wave = [
         i
@@ -1670,6 +1679,7 @@ def land_wave(
         # stamp hands this baton to /execute-plan as a straight dispatch.
         "execution_ready": execution_ready,
         "refused": refused,
+        "noop": noop,
         "minted": minted,
         # xsRuns batons joined to their sizing (handoff_id/deliverable_id/sizing_object).
         "xs_joined": xs_joined,

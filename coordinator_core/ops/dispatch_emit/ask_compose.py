@@ -233,6 +233,8 @@ def _agent(
         )
         if reconcile not in prompt_expr:
             clause = _lit(" " + reconcile) + " + " + clause
+        if _emit._INVOKE_LITERAL_CLAUSE not in prompt_expr:
+            clause = _lit(_emit._INVOKE_LITERAL_CLAUSE) + " + " + clause
     return (
         f"agent(({prompt_expr}) + {clause}, {{ label: {_lit(label)}, phase: {_lit(phase)}, "
         f"agentType: {_lit(agent_type)}, {_emit._model_opt(agent_type, agent_model)}, {effort_opt}"

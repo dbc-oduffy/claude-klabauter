@@ -410,9 +410,10 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--rows",
+        action="append",
         default=None,
         metavar="IDS",
-        help="with --review-only: comma-separated row ids to review (e.g. C1,C2); coded rows allowed",
+        help="with --review-only: comma-separated row ids to review (e.g. C1,C2); repeatable; coded rows allowed",
     )
     parser.add_argument(
         "--run-base",
@@ -1261,10 +1262,10 @@ def _do_resume(args: argparse.Namespace) -> int:
 def _incomplete_chunks_of(run_path: str) -> "Optional[frozenset]":
     """The task output's `incomplete_chunks` (at `params` or `params.run_outcome`), or None when
     `run_path` is not a task output carrying a list there (a git-log dump)."""
-    from coordinator_core.ops.dispatch_emit.terminal_commit import _params_from_task_output
+    from coordinator_core.ops.dispatch_emit.land_run import params_from_task_output
 
     try:
-        params = _params_from_task_output(run_path)
+        params = params_from_task_output(run_path)
     except ValueError:
         return None
     for home in (params, params.get("run_outcome")):
@@ -2032,7 +2033,7 @@ def main(argv: "Optional[list[str]]" = None) -> int:
         from coordinator_core.ops.dispatch_emit.emit import landed_rows_from_text
         from coordinator_core.ops.dispatch_emit.spine_read import SpineReadError, coded_row_ids
 
-        review_set = {r.strip() for r in (args.rows or "").split(",") if r.strip()}
+        review_set = {r.strip() for chunk in (args.rows or ()) for r in chunk.split(",") if r.strip()}
         if args.review_only:
             try:
                 text = Path(args.review_only).read_text(encoding="utf-8")

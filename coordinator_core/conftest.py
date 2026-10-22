@@ -1566,6 +1566,16 @@ def _pin_guard_level_strict_suite_wide(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _pin_out_of_repo_write_block_off_suite_wide(monkeypatch):
+    from coordinator_core import machine_profile
+
+    monkeypatch.setenv("MACHINE_LOCAL_COORDINATOR_FEATURE_OUT_OF_REPO_WRITE_BLOCK", "off")
+    machine_profile.reset_cache()
+    yield
+    machine_profile.reset_cache()
+
+
+@pytest.fixture(autouse=True)
 def _pin_environment_answered_mode_defaults(monkeypatch):
     try:
         monkeypatch.setattr(

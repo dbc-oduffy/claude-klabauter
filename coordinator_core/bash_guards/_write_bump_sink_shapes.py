@@ -942,18 +942,107 @@ def _iter_python_dash_c_payloads(raw_cmd: str) -> List[str]:
     return payloads
 
 
+_JS_QUOTED_LITERAL = r"(?<![A-Za-z0-9_$])('(?:[^'\\\n]|\\.)*'|\"(?:[^\"\\\n]|\\.)*\")"
+
+_JS_FS = r"\bfs\s*\.\s*(?:promises\s*\.\s*)?"
+
+_JS_FIRST_ARG_RE = re.compile(
+    _JS_FS
+    + r"(?:writeFileSync|appendFileSync|mkdirSync|writeFile|appendFile|mkdir)\(\s*"
+    + _JS_QUOTED_LITERAL
+)
+
+_JS_SECOND_ARG_RE = re.compile(
+    _JS_FS + r"(?:copyFileSync|renameSync)\(\s*[^,()]*,\s*" + _JS_QUOTED_LITERAL
+)
+
+_JS_COMMENT_RE = re.compile(r"/\*[\s\S]*?\*/|(?<![:\\])//[^\n]*")
+
+_NODE_EVAL_FLAGS = ("-e", "--eval")
+
+
+def _node_write_targets_in_text(text: str) -> List[str]:
+    """Literal-only write destinations of the closed `fs.*` shape set in a
+    node source text; a template literal, variable or concatenation yields
+    nothing for that occurrence."""
+    text = _JS_COMMENT_RE.sub(" ", text)
+    targets: List[str] = []
+    for rx in (_JS_FIRST_ARG_RE, _JS_SECOND_ARG_RE):
+        for m in rx.finditer(text):
+            targets.append(m.group(1)[1:-1])
+    return targets
+
+
+def _iter_node_eval_payloads(raw_cmd: str) -> List[str]:
+    try:
+        segments = resolve_command_positions(
+            raw_cmd, preserve_windows_backslashes=_host_is_windows()
+        )
+    except Exception:  # noqa: BLE001 -- fail open
+        return []
+    payloads: List[str] = []
+    for rc in segments:
+        if rc.depth != 0 or rc.confidence == ResolutionConfidence.UNRESOLVED or not rc.tokens:
+            continue
+        if normalize_executable_basename(rc.tokens[0]) != "node":
+            continue
+        args = rc.tokens[1:]
+        for i, tok in enumerate(args):
+            if tok in _NODE_EVAL_FLAGS and i + 1 < len(args):
+                payloads.append(args[i + 1])
+                break
+            if tok.startswith("--eval="):
+                payloads.append(tok.split("=", 1)[1])
+                break
+    return payloads
+
+
+def cwd_drive_reading(target: str, cwd: Optional[str]) -> Optional[str]:
+    """Windows host and a `/x/...` literal: `<cwd drive>:\\x\\...` when the cwd drive
+    differs from x, else None; None on every other host; never raises."""
+    try:
+        stripped = (target or "").strip()
+        if not (_host_is_windows() and re.match(r"^/[A-Za-z](?:/|$)", stripped)):
+            return None
+        cwd_native = translate_msys_path(cwd) if cwd else None
+        drive = _native_path().splitdrive(cwd_native or "")[0]
+        if not drive or drive.startswith("\\\\") or drive[0].upper() == stripped[1].upper():
+            return None
+        return drive + "\\" + stripped.lstrip("/").replace("/", "\\")
+    except Exception:  # noqa: BLE001 -- fail open
+        return None
+
+
+def interpreter_write_target_readings(
+    raw_target: str, effective_cwd: Optional[str]
+) -> List[str]:
+    """`raw_target` plus its cwd-drive reading when one exists."""
+    out = [raw_target]
+    alt = cwd_drive_reading(raw_target, effective_cwd)
+    if alt is not None:
+        out.append(alt)
+    return out
+
+
 def extract_interpreter_payload_write_sink_targets(raw_cmd: str) -> List[str]:
     targets: List[str] = []
 
     try:
         for body in _iter_heredoc_bodies(raw_cmd):
             targets.extend(_python_write_targets_in_text(body))
+            targets.extend(_node_write_targets_in_text(body))
     except Exception:  # noqa: BLE001 -- fail open
         pass
 
     try:
         for payload in _iter_python_dash_c_payloads(raw_cmd):
             targets.extend(_python_write_targets_in_text(payload))
+    except Exception:  # noqa: BLE001 -- fail open
+        pass
+
+    try:
+        for payload in _iter_node_eval_payloads(raw_cmd):
+            targets.extend(_node_write_targets_in_text(payload))
     except Exception:  # noqa: BLE001 -- fail open
         pass
 

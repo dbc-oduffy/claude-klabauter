@@ -488,7 +488,17 @@ class SpentRunOverwriteError(ValueError):
     """Raised when an emit would rewrite a script or spine whose run id has landed or run."""
 
 
-def _refuse_spent_overwrite(target: Path, new_bytes: bytes, script_path: Path) -> None:
+_SPENT_HINT_INVENTORY = "for an --inventory emit pass --row-budget N to continue the family at the next tranche."
+_SPENT_HINT_OUTPUT = "name a different output_path to emit beside it."
+_SPENT_HINT_PART = (
+    "a recut of a spent part keeps its run id: emit the unspent parts, or re-emit the record "
+    "without --part and with --row-budget N to continue at the next tranche."
+)
+
+
+def _refuse_spent_overwrite(
+    target: Path, new_bytes: bytes, script_path: Path, hint: str = _SPENT_HINT_INVENTORY
+) -> None:
     """Refuse to change `target` when `script_path`'s run id is spent (landed, or a
     land/resume sibling exists). Identical bytes pass: nothing would change. `force` does
     not bypass this refusal: it is checked before the foreign-emission guard."""
@@ -498,10 +508,44 @@ def _refuse_spent_overwrite(target: Path, new_bytes: bytes, script_path: Path) -
     if reason is None or target.read_bytes() == new_bytes:
         return
     raise SpentRunOverwriteError(
-        f"refusing to overwrite {target.name}: its run id is spent ({reason}). "
-        "The spine path derives from the run id, so a fresh output path does not clear it; "
-        "for an --inventory emit pass --row-budget N to continue the family at the next tranche."
+        f"refusing to overwrite {target.name}: its run id is spent ({reason}). {hint}"
     )
+
+
+_UNBOUNDED_ROW_BUDGET = 10**6
+_SPINE_SOURCE_RE = re.compile(r"^Derived from `([^`\n]+)` by `dispatch\.emit --inventory`", re.MULTILINE)
+
+
+def _spent_spine_tranche_params(params: dict, plan_path: str) -> Optional[dict]:
+    """`params` re-aimed at the inventory route when `plan_path` is a minted spine whose run id
+    is spent: the rows still owed are re-minted under the family's next tranche id instead of
+    refused. None when the plan is not a spine minted from a record beside it, its script is
+    unspent, or the caller pinned a non-default output path, holds, or a review-only row set."""
+    if params.get("review_only_rows") is not None or params.get("hold_rows"):
+        return None
+    spine = Path(plan_path)
+    if not spine.name.endswith(".spine.md"):
+        return None
+    script = spine.with_name(spine.name.removesuffix(".md") + ".workflow.mjs")
+    pinned = aliased_param(params, "output_path", "out_path")
+    if pinned and Path(pinned).resolve() != script.resolve():
+        return None
+    if not spine.is_file():
+        return None
+    if str(read_frontmatter_field(str(spine), "derived_from") or "").strip() != "mise inventory record":
+        return None
+    named = _SPINE_SOURCE_RE.search(spine.read_text(encoding="utf-8", errors="replace"))
+    record = spine.with_name(re.split(r"[\\/]", named.group(1))[-1]) if named else spine.with_name(
+        spine.name.removesuffix(".spine.md") + ".md"
+    )
+    if not record.is_file():
+        return None
+    if spent_run_reason(script) is None:
+        return None
+    kept = {
+        k: v for k, v in params.items() if k not in ("plan_path", "plan", "auto_split", "output_path", "out_path")
+    }
+    return {**kept, "inventory_path": str(record), "row_budget": _UNBOUNDED_ROW_BUDGET}
 
 
 def _refuse_foreign_emission(
@@ -1599,7 +1643,7 @@ def _emit_script_file(
     findings = [*run_checks(script), *plan_findings]
     # newline="" suppresses the platform line-ending translation: a CRLF-carrying .mjs is
     # rejected by the Workflow surface that fires it.
-    _refuse_spent_overwrite(path, script.encode("utf-8"), path)
+    _refuse_spent_overwrite(path, script.encode("utf-8"), path, _SPENT_HINT_OUTPUT)
     if not params.get("force"):
         _refuse_foreign_emission(path, script, session_id, _repo_root_for_plan(str(path)))
     before_write()
@@ -2180,6 +2224,11 @@ def _dispatch_emit_body(
     if lanes_requested:
         return _emit_lanes(params, repo_root)
 
+    if plan_path and not inventory_path and not is_queue_route and ask_ctx is None and pipeline_ctx is None:
+        respawned = _spent_spine_tranche_params(params, plan_path)
+        if respawned is not None:
+            params, plan_path, inventory_path = respawned, None, respawned["inventory_path"]
+
     inventory_review_specs: list = []
     inventory_accounting: Optional[dict] = None
     tranche_inventory: dict = {}
@@ -2250,6 +2299,7 @@ def _dispatch_emit_body(
                 guarded_spine_path,
                 spine_text.encode("utf-8"),
                 guarded_spine_path.with_name(guarded_spine_path.name.removesuffix(".md") + ".workflow.mjs"),
+                _SPENT_HINT_PART if part else _SPENT_HINT_INVENTORY,
             )
             _writes.write(guarded_spine_path, spine_text)
             plan_path = str(guarded_spine_path)

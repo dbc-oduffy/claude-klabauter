@@ -98,6 +98,7 @@ _REVIEWER_AGENT_TYPES = frozenset(
         "coordinator:falsifier-integrity-reviewer",
         "coordinator:subtractive-adjudicator",
         "coordinator:blitz-em",
+        "coordinator:plan-reviewer",
     }
 )
 

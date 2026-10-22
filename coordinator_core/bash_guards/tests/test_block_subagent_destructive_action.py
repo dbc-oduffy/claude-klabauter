@@ -4482,3 +4482,41 @@ def test_posix_argv0_path_with_a_slash_git_word_in_its_quoted_json_operand_allow
 def test_windows_spaced_git_path_is_still_normalised_to_one_token():
     cmd = r"C:\Program Files\Git\bin\git.exe push --force origin main"
     assert guard._normalize_windows_argv0_head_path_with_spaces(cmd).startswith("'C:/Program Files/Git/bin/git.exe'")
+
+
+_COMMIT_V2_ROUTE = (
+    '"${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/bin/coordinator-invoke" '
+    "ceremony.commit_v2 --repo E:/example-retrieval-repo "
+    '\'{"paths":["a.py"],"skip_missing":true,"gone_tracked_as_deleted":true,"message":"wave 1"}\''
+)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        _COMMIT_V2_ROUTE,
+        "git diff-index --quiet HEAD -- a.py ; " + _COMMIT_V2_ROUTE,
+        "git diff-files --quiet -- a.py && " + _COMMIT_V2_ROUTE,
+        "git diff-tree --no-commit-id --name-only -r HEAD && " + _COMMIT_V2_ROUTE,
+        "git show-ref --head && " + _COMMIT_V2_ROUTE,
+    ],
+)
+def test_commit_agent_sanctioned_route_and_readonly_plumbing_allow(command):
+    payload = _payload(command, agent_type="coordinator:git-commit-agent")
+    result = guard.check(payload)
+    assert result is None or result["hookSpecificOutput"]["permissionDecision"] != "deny"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "git reset --hard HEAD~1 ; " + _COMMIT_V2_ROUTE,
+        "git diff-index --output=/tmp/x HEAD",
+        "git update-index --refresh ; " + _COMMIT_V2_ROUTE,
+        "rm -rf build && " + _COMMIT_V2_ROUTE,
+    ],
+)
+def test_commit_agent_destructive_neighbours_still_deny(command):
+    payload = _payload(command, agent_type="coordinator:git-commit-agent")
+    result = guard.check(payload)
+    assert result["hookSpecificOutput"]["permissionDecision"] == "deny"

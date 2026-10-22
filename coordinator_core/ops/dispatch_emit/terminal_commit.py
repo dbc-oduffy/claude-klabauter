@@ -2394,11 +2394,17 @@ def _review_edit_verdict(
     worktree_root: Path, writes: Optional[dict], snapshot: Optional[_Snapshot],
     session_id: Optional[str], run_id: Optional[str], committed: set,
     sibling_claims: Optional[dict] = None,
+    own_files: Optional[frozenset] = None,
 ):
     """``review_edits.partition`` over the review stage's writes against the pre-commit snapshot.
     Without a snapshot the dirt cannot be read, so the verdict is unanswerable. ``sibling_claims``
-    ({path: run id} an unlanded sibling run claims) joins the live siblings' declared paths."""
+    ({path: run id} an unlanded sibling run claims) joins the live siblings' declared paths.
+    ``own_files`` bounds residue: a write outside it belongs to another run of the session and is
+    neither landed nor halted."""
     from coordinator_core.ops.dispatch_emit import review_edits
+
+    if writes is not None and own_files is not None:
+        writes = {k: v for k, v in writes.items() if review_edits._norm(k) in own_files}
 
     if writes is None or snapshot is None:
         return review_edits.partition(
@@ -2774,6 +2780,7 @@ def _entangled_chunks(
     commit). Only stranded files that differ from HEAD count: an unchanged one
     already resolves. Returns ``{chunk id: sorted ids of the stranded chunks it
     needs}``; a chunk needing only another entangled chunk names that chain's root.
+    A stranded path a committable chunk also declares lands with that chunk, so it blocks no importer.
     """
     by_id = {c.id: c for c in request.chunks}
     declared: dict = {}
@@ -2796,10 +2803,10 @@ def _entangled_chunks(
         for path in changed:
             if not path.endswith(".py"):
                 continue
+            if path in done_declared:
+                continue
             if path in declared:
                 blocked_files[path] = declared[path]
-                continue
-            if path in done_declared:
                 continue
             for root, cid in prefix_roots:
                 if path == root or path.startswith(root + "/"):
@@ -4434,6 +4441,8 @@ def _terminal_commit_inner(
     scope["stranded_residue"] = residue
     review_land: tuple = ()
     review_unanswerable: Optional[str] = None
+    from coordinator_core.ops.dispatch_emit.review_edits import _norm as review_edits_norm
+
     sibling_claim_run_id = _run_id_of(params, ask_run_dir, script_path_raw)
     sibling_claims_seen: set = set()
     sibling_claims: dict = {}
@@ -4456,6 +4465,16 @@ def _terminal_commit_inner(
         verdict = _review_edit_verdict(
             worktree_root, review_writes, snapshot, session_id, review_run_id,
             set(all_paths) | set(deleted_paths), sibling_claims,
+            own_files=frozenset(
+                {review_edits_norm(p) for c in request.chunks for p in c.paths}
+                | {review_edits_norm(p) for p in prefix_files}
+                | {
+                    review_edits_norm(p)
+                    for p in ((inline_review.get("prep") or {}).get("slice_files") or ())
+                    if isinstance(p, str)
+                }
+                | {review_edits_norm(p) for p in (artifacts.paths() if artifacts is not None else ())}
+            ),
         )
         if verdict.halt:
             return _error(

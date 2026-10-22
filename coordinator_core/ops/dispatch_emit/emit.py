@@ -483,6 +483,13 @@ _INDETERMINATE_RECONCILE_CLAUSE = (
     "retained. On any other status, report it verbatim as the failure."
 )
 
+#: Appended to an emitted leg prompt that prescribes a ``coordinator-invoke`` command line; the
+#: block-subagent-destructive-action guard refuses the launcher path moved into a shell variable.
+_INVOKE_LITERAL_CLAUSE = (
+    " Run each coordinator-invoke command with its command word exactly as written "
+    "(a guard denies the prefix moved into a shell variable)."
+)
+
 #: The one table of DoE-defined agent types the engine dispatches, each mapped to
 #: the ``model:`` frontmatter of coordinator-content-repo's ``coordinator/agents/<name>.md``.
 #: Pinned by ``tests/test_agent_model_table_matches_doe.py``; a type listed here
@@ -4633,8 +4640,9 @@ def _seam_leg_js(
         "`unreachable` and each `click_paths[]` item whose verdict is `broken`; never report "
         "`undecidable`. Any such finding makes the `verdict` DRIFT. Return `verdict`, `per_plan`, "
         "`findings`, `sidecars` with step 1's reply and step 2's findings merged. "
-        "Judge nothing, edit nothing, commit nothing. "
-        "If either op refuses or errors, put its verbatim output in `findings` as one object with "
+        "Judge nothing, edit nothing, commit nothing."
+        + _INVOKE_LITERAL_CLAUSE
+        + " If either op refuses or errors, put its verbatim output in `findings` as one object with "
         "`class` `op-error` and report `verdict` REFUSED for any op refusal or error. "
         + _INDETERMINATE_RECONCILE_CLAUSE
     )
@@ -4838,8 +4846,9 @@ def _checkpoint_commit_js(
         "] -- commit via `\"${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}"
         f"/bin/coordinator-invoke\" ceremony.commit_v2{repo_flag} "
         "'{\"paths\":[...],\"skip_missing\":true,\"gone_tracked_as_deleted\":true,\"message\":\"<message>\"}'` -- the only committer route. "
-        "Raw `git commit` is refused by the block-subagent-commit guard and is NOT a route. "
-        "If every listed path already matches HEAD, commit nothing and report outcome "
+        "Raw `git commit` is refused by the block-subagent-commit guard and is NOT a route."
+        + _INVOKE_LITERAL_CLAUSE
+        + " If every listed path already matches HEAD, commit nothing and report outcome "
         "committed without a sha. "
         + _INDETERMINATE_RECONCILE_CLAUSE
         + " On commit-failed, put the verbatim refusal in `reason`."

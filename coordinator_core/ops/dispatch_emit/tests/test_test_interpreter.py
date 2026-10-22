@@ -46,7 +46,7 @@ def test_fast_cmd_versioned_name_leading_token(tmp_path, monkeypatch):
 def test_bare_interpreter_or_non_interpreter_is_not_a_pin(tmp_path, cmd):
     repo = _repo(tmp_path, fast_test_cmd=cmd)
     assert ti.resolve_targeted_test_python(repo) == ti.TargetedPython(None, "none", None)
-    assert ti.interpreter_clause(repo) == ti.PORTABLE_CLAUSE
+    assert ti.interpreter_clause(repo) == f"{ti.PORTABLE_CLAUSE} {ti.LITERAL_PATHS_CLAUSE}"
 
 
 def test_key_outranks_fast_cmd(tmp_path):
@@ -70,8 +70,8 @@ def test_unresolvable_bare_pin_yields_defect(tmp_path, monkeypatch):
 
 
 def test_no_settings_file_and_none_root_are_portable(tmp_path):
-    assert ti.interpreter_clause(tmp_path) == ti.PORTABLE_CLAUSE
-    assert ti.interpreter_clause(None) == ti.PORTABLE_CLAUSE
+    assert ti.interpreter_clause(tmp_path) == f"{ti.PORTABLE_CLAUSE} {ti.LITERAL_PATHS_CLAUSE}"
+    assert ti.interpreter_clause(None) == f"{ti.PORTABLE_CLAUSE} {ti.LITERAL_PATHS_CLAUSE}"
     assert "falling back to `python`" in ti.PORTABLE_CLAUSE
 
 

@@ -483,3 +483,44 @@ def test_read_ledger_returns_none_when_unparseable_or_absent(tmp_path):
     )
     assert m.read_ledger(sidecar) is None
     assert m.read_ledger(tmp_path / "nope.md") is None
+
+
+def _plan_reviewer_sidecar(tmp_path, agent_type: str):
+    plan = tmp_path / "docs" / "plans" / "p.md"
+    plan.parent.mkdir(parents=True, exist_ok=True)
+    plan.write_text("fixture now patches the root\n", encoding="utf-8")
+    baseline = _sha256("old text\n")
+    text = (
+        "---\n"
+        "status: open\n"
+        f"agent_type: {agent_type}\n"
+        "kind: review-findings\n"
+        f"reviewer: {agent_type}\n"
+        "verdict: WARN\n"
+        "plan: docs/plans/p.md\n"
+        "target_plan: null\n"
+        "divergence:\n  diverged: false\n"
+        "commits: []\n"
+        f"baseline_sha256:\n  docs/plans/p.md: {baseline}\n"
+        "---\n\n"
+        "## Findings\n\n- [P2] fixture omits the monkeypatch. Applied.\n\n"
+        "## Findings Ledger\n\n```json\n"
+        + json.dumps([{"id": "finding-1", "file": "docs/plans/p.md", "before": "old text", "after": "fixture now patches the root"}])
+        + "\n```\n"
+    )
+    sidecar_dir = tmp_path / ".coordinator-local" / "subagent-share" / "sess-1"
+    sidecar_dir.mkdir(parents=True, exist_ok=True)
+    sidecar = sidecar_dir / "coordinator-plan-reviewer.md"
+    sidecar.write_text(text, encoding="utf-8")
+    return sidecar
+
+
+@pytest.mark.parametrize("agent_type", ["coordinator:plan-reviewer", "review-findings"])
+def test_verify_accepts_a_plan_reviewer_sidecar_of_either_shape(tmp_path, monkeypatch, agent_type):
+    from coordinator_core.ops import plan_status_transition
+
+    monkeypatch.setattr(plan_status_transition, "main", lambda argv: 0)
+    sidecar = _plan_reviewer_sidecar(tmp_path, agent_type)
+    m._check_sidecar_scope(sidecar, tmp_path, sidecar.read_text(encoding="utf-8"))
+    outcome = m.verify(sidecar, repo_root=tmp_path)
+    assert outcome.ok, outcome.failures

@@ -30,6 +30,10 @@ profile until set ``off``: a session holding live Group EM standing may make
 scoped commits in a foreign repo. It mirrors coordinator-content-repo's
 ``coordinator/hooks/scripts/_machine_profile.py`` ``_FEATURE_DEFAULT``, which
 must agree.
+``coordinator.feature.out_of_repo_write_block`` is ``on`` for an author box and
+``off`` for a consumer box: with it on, the ``OUT_OF_REPO_WRITE_GUARDS`` deny
+(an EM write to a destination outside the session repo) holds at every
+``guard_level``, so neither ``warn`` nor ``off`` lowers it.
 
 Change the level with ``machine-local set coordinator.guard_level warn``
 (or ``strict`` / ``off``); one guard with
@@ -153,8 +157,15 @@ def machine_profile() -> str:
 
 
 FEATURE_KEY = "coordinator.feature."
-FEATURES = ("cross_repo_memos", "publishing", "doctrine_edit_gate", "gem_cross_repo_commit")
+FEATURES = (
+    "cross_repo_memos",
+    "publishing",
+    "doctrine_edit_gate",
+    "gem_cross_repo_commit",
+    "out_of_repo_write_block",
+)
 _FEATURE_LABEL = {
+    "out_of_repo_write_block": "the out-of-repo write block",
     "cross_repo_memos": "cross-repo memos",
     "publishing": "publishing (percolate)",
     "doctrine_edit_gate": "the doctrine-edit approval gate",
@@ -168,6 +179,7 @@ _FEATURE_DEFAULT = {
     "publishing": "profile",
     "doctrine_edit_gate": "on",
     "gem_cross_repo_commit": "on",
+    "out_of_repo_write_block": "profile",
 }
 
 
@@ -203,6 +215,11 @@ def feature_refusal(name: str) -> Optional[str]:
         f"{_FEATURE_LABEL[name]} is off on this machine; "
         f"enable it with: machine-local set {FEATURE_KEY}{name} on"
     )
+
+
+def out_of_repo_write_blocked() -> bool:
+    """True when ``out_of_repo_write_block`` is on: the author-box default."""
+    return feature_enabled("out_of_repo_write_block")
 
 
 def guard_level(guard_name: str) -> str:
@@ -279,6 +296,20 @@ FLOOR_GUARDS = frozenset(
 )
 
 
+#: Guards whose deny holds at every level while ``out_of_repo_write_block`` is on.
+OUT_OF_REPO_WRITE_GUARDS: frozenset[str] = frozenset(
+    {
+        "bump-foreign-repo-write",
+        "bump-outside-repo-write",
+        "bump-out-of-repo-tool-write",
+        "block-drive-root-new-dir-bash-write",
+        "block-drive-root-new-dir-write",
+        "block-home-root-bash-write",
+        "block-home-root-write",
+    }
+)
+
+
 def _deny_body(envelope: Any) -> Optional[Dict[str, Any]]:
     if not isinstance(envelope, dict):
         return None
@@ -336,6 +367,8 @@ def apply_guard_level(
         return deny_envelope
     name = guard_name.replace("_", "-")
     if name in FLOOR_GUARDS or (subagent and name in SUBAGENT_FLOOR_GUARDS):
+        return deny_envelope
+    if name in OUT_OF_REPO_WRITE_GUARDS and out_of_repo_write_blocked():
         return deny_envelope
     level = guard_level(name)
     if level == "strict":

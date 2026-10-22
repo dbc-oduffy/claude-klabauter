@@ -24,12 +24,12 @@ def test_runner_clause_carries_the_pin(tmp_path):
 
 
 def test_runner_clause_without_repo_root_keeps_portable_text():
-    assert emit._test_runner_clause().endswith(ti.PORTABLE_CLAUSE)
+    assert emit._test_runner_clause().endswith(f"{ti.PORTABLE_CLAUSE} {ti.LITERAL_PATHS_CLAUSE}")
 
 
 def test_runner_clause_without_pin_keeps_portable_text(tmp_path):
     repo = _repo(tmp_path, fast_test_cmd="python3 -m pytest")
-    assert emit._test_runner_clause(repo).endswith(ti.PORTABLE_CLAUSE)
+    assert emit._test_runner_clause(repo).endswith(f"{ti.PORTABLE_CLAUSE} {ti.LITERAL_PATHS_CLAUSE}")
 
 
 def test_unresolvable_pin_names_the_defect(tmp_path):

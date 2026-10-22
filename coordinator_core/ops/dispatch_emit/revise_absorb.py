@@ -277,7 +277,8 @@ def absorb_tail_js(
     check = (
         f"Run `{invoke} {PENDING_REVISIONS_OP} '{pending_params}'` once and return its reply's "
         "`rows` and `drift` verbatim. Judge nothing, edit nothing, commit nothing. If the op "
-        "refuses or errors, return empty `rows` and empty `drift`."
+        "refuses or errors, return empty `rows` and empty `drift`. Run the command with its command "
+        "word exactly as written (a guard denies the prefix moved into a shell variable)."
     )
     author = (
         f"Plan {plan_path} gained register rows the running plan does not claim. For each row in "
@@ -287,7 +288,8 @@ def absorb_tail_js(
         f"run `{invoke} {CLAIM_ROWS_OP}` once with params "
         f'{{"plan":"{plan_path}","rows":[<those register row ids>]}}. '
         'Reply `{added: [{id, title, writes}]}` for the rows you added. Edit nothing else; never '
-        "hand-edit the plan."
+        "hand-edit the plan. Run each command with its command word exactly as written (a guard "
+        "denies the prefix moved into a shell variable)."
     )
     return "\n".join([
         "  for (let _absorbRound = 0; _absorbRound < " + str(ABSORB_ROUNDS) + "; _absorbRound++) {",

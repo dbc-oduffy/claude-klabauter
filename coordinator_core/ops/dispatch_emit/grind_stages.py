@@ -87,6 +87,7 @@ from coordinator_core.ops.dispatch_emit.emit import (
     _AGENT_MODELS,
     _COMMIT_AGENT_TYPE,
     _INDETERMINATE_RECONCILE_CLAUSE,
+    _INVOKE_LITERAL_CLAUSE,
     _TEST_AGENT_TYPE,
     _degrade_agent_type,
     resolve_agent_model,
@@ -1251,7 +1252,8 @@ _COMMIT_TAIL_PARTS: tuple[tuple[str, str], ...] = (
         "lit",
         " '{\"paths\":[...],\"deleted_paths\":[...],\"message\":\"<subject>\",\"drop_ignored\":true}'` -- the only committer route. Raw `git commit` "
         "is refused by the block-subagent-commit guard and is NOT a route."
-        " `drop_ignored` drops gitignored scratch paths from the list and commits the rest; "
+        + _INVOKE_LITERAL_CLAUSE
+        + " `drop_ignored` drops gitignored scratch paths from the list and commits the rest; "
         "put any `dropped_ignored` paths the result names in `reason`."
         " " + _INDETERMINATE_RECONCILE_CLAUSE
         + " When an indeterminate reply carries no reconcile_command, read `git log` and "

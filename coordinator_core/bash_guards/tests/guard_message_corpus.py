@@ -6933,7 +6933,45 @@ def _fire_emit_memo_schema_output() -> str:
     )
 
 
+def _fire_out_of_repo_refusal_em() -> str:
+    from coordinator_core.bash_guards._write_bump_message import (
+        AGENT_CLASS_EM,
+        render_out_of_repo_refusal,
+    )
+
+    return render_out_of_repo_refusal(
+        "/srv/peer/out.txt", "/srv/session", agent_class=AGENT_CLASS_EM, target_in_repo=True
+    )
+
+
+def _fire_out_of_repo_refusal_subagent() -> str:
+    from coordinator_core.bash_guards._write_bump_message import (
+        AGENT_CLASS_SUBAGENT,
+        render_out_of_repo_refusal,
+    )
+
+    return render_out_of_repo_refusal(
+        "/srv/peer/out.txt",
+        "/srv/session",
+        agent_class=AGENT_CLASS_SUBAGENT,
+        sandbox_root="/srv/session/state/subagent-share/sid",
+        target_in_repo=True,
+    )
+
+
 STATIC_TEXT_ROWS: List[StaticTextRow] = [
+    StaticTextRow(
+        "bash_guards",
+        "out_of_repo_refusal",
+        "out-of-repo-refusal-em",
+        _fire_out_of_repo_refusal_em,
+    ),
+    StaticTextRow(
+        "bash_guards",
+        "out_of_repo_refusal",
+        "out-of-repo-refusal-subagent",
+        _fire_out_of_repo_refusal_subagent,
+    ),
     StaticTextRow(
         "install", "sandbox_check", "sandbox-check-usage-text", _fire_sandbox_check_usage_text
     ),
@@ -7263,7 +7301,7 @@ def test_static_text_rows_fire_and_produce_non_empty_text():
     rows while reporting green (the same dark-gate shape C3b's own
     `test_gate_fails_loud_if_collection_drops_to_zero` guards against for
     the other three packages)."""
-    assert {row.package for row in STATIC_TEXT_ROWS} == {"install", "contract"}
+    assert {row.package for row in STATIC_TEXT_ROWS} == {"install", "contract", "bash_guards"}
     for row in STATIC_TEXT_ROWS:
         text = fire_static_text_row(row)
         assert text, "static text row %s/%s fired but produced empty text" % (

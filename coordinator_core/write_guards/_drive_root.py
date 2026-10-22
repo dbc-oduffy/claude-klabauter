@@ -9,7 +9,6 @@ interpreter body or `xargs` (DR-258), so this is a speedbump and the Stop-time l
 from __future__ import annotations
 
 import os
-import re
 from typing import Any, Mapping, Optional, Tuple
 
 from coordinator_core.bash_guards import _write_bump_sink_shapes as _sinks
@@ -64,9 +63,6 @@ def _first_below(nt, np: str, nn: str, root: str) -> Optional[Tuple[str, str]]:
     return (np[: len(base)], name) if name else None
 
 
-_MSYS_DRIVE_SHAPE = re.compile(r"^/[A-Za-z](?:/|$)")
-
-
 def new_top_level_entry(
     target: str,
     cwd: Optional[str],
@@ -87,14 +83,9 @@ def new_top_level_entry(
     if hit or not interpreter:
         return hit
     try:
-        stripped = (target or "").strip()
-        if not (_sinks._host_is_windows() and _MSYS_DRIVE_SHAPE.match(stripped)):
+        alt = _sinks.cwd_drive_reading(target, cwd)
+        if alt is None:
             return None
-        cwd_native = _sinks.translate_msys_path(cwd) if cwd else None
-        drive = _sinks._native_path().splitdrive(cwd_native or "")[0]
-        if not drive or drive.startswith("\\\\") or drive[0].upper() == stripped[1].upper():
-            return None
-        alt = drive + "\\" + stripped.lstrip("/").replace("/", "\\")
         return _new_top_level_entry(alt, cwd, bare_slash_is_drive_root=False, env=env)
     except Exception:
         return None

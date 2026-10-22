@@ -315,6 +315,13 @@ live Group EM's git write refusal (see `docs/wiki/write-confinement.md` § Group
 Set it with `machine-local set coordinator.feature.gem_cross_repo_commit off`; clear it with
 `machine-local unset coordinator.feature.gem_cross_repo_commit` (unset reads as on).
 
+`coordinator.feature.out_of_repo_write_block` holds the out-of-repo write guards' deny
+(`OUT_OF_REPO_WRITE_GUARDS` in `coordinator_core/machine_profile.py`) at every guard level.
+Unset reads as on for an author box and off for a consumer box; a consumer opts in with
+`machine-local set coordinator.feature.out_of_repo_write_block on`, and an author opts out with
+`machine-local set coordinator.feature.out_of_repo_write_block off`. Clear it with
+`machine-local unset coordinator.feature.out_of_repo_write_block`.
+
 Distinct from both, and not interchangeable with either:
 `.coordinator-doctrine-edit-approved` gates only while
 `machine-local set coordinator.feature.doctrine_edit_gate on` is in effect (off by

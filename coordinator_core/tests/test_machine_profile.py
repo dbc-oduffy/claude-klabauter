@@ -298,6 +298,71 @@ def test_gem_cross_repo_commit_leaves_other_defaults(reg):
     assert mp.feature_enabled("doctrine_edit_gate") is True
 
 
+_OOR = "out_of_repo_write_block"
+
+
+def test_out_of_repo_write_block_registered():
+    assert len(mp.FEATURES) == 5
+    assert _OOR in mp.FEATURES
+    assert len(mp.OUT_OF_REPO_WRITE_GUARDS) == 7
+
+
+def test_out_of_repo_write_block_unset_follows_profile(reg, tmp_path):
+    assert mp.out_of_repo_write_blocked() is False
+    _author_repo(reg, tmp_path)
+    mp.reset_cache()
+    assert mp.machine_profile() == "author"
+    assert mp.out_of_repo_write_blocked() is True
+
+
+def test_out_of_repo_write_block_explicit_wins_on_both_profiles(reg, tmp_path):
+    _write(reg, '"coordinator.feature.%s" = "on"\n' % _OOR)
+    assert mp.out_of_repo_write_blocked() is True
+    _author_repo(reg, tmp_path, '"coordinator.feature.%s" = "off"\n' % _OOR)
+    assert mp.machine_profile() == "author"
+    assert mp.out_of_repo_write_blocked() is False
+
+
+@pytest.mark.parametrize("name", sorted(mp.OUT_OF_REPO_WRITE_GUARDS))
+@pytest.mark.parametrize("level", ["warn", "off"])
+def test_out_of_repo_guards_keep_deny_when_block_on(reg, name, level):
+    _write(
+        reg,
+        '"coordinator.guard_level" = "%s"\n"coordinator.feature.%s" = "on"\n' % (level, _OOR),
+    )
+    deny = _deny()
+    assert mp.apply_guard_level(name, deny) is deny
+
+
+def test_out_of_repo_guards_follow_level_when_block_off(reg):
+    _write(reg, '"coordinator.guard_level" = "off"\n"coordinator.feature.%s" = "off"\n' % _OOR)
+    for name in mp.OUT_OF_REPO_WRITE_GUARDS:
+        assert mp.apply_guard_level(name, _deny()) is None
+    _write(reg, '"coordinator.guard_level" = "warn"\n"coordinator.feature.%s" = "off"\n' % _OOR)
+    out = mp.apply_guard_level("bump-outside-repo-write", _deny())
+    assert out["hookSpecificOutput"]["permissionDecision"] == "allow"
+
+
+def test_non_member_guard_unaffected_by_block(reg):
+    _write(reg, '"coordinator.guard_level" = "off"\n"coordinator.feature.%s" = "on"\n' % _OOR)
+    assert mp.apply_guard_level("some-other-guard", _deny()) is None
+
+
+def test_out_of_repo_guards_name_only_existing_guards():
+    import re
+    from pathlib import Path
+
+    root = Path(mp.__file__).parent
+    source = (root / "bash_guards" / "dispatch.py").read_text(encoding="utf-8")
+    chain = source[source.index("def _build_guard_chain") :]
+    bash_names = set(re.findall(r'GuardEntry\(\s*(?:name=)?"([a-z0-9-]+)"', chain))
+    write_modules = {p.stem.replace("_", "-") for p in (root / "write_guards").glob("*.py")}
+    unknown = sorted(
+        n for n in mp.OUT_OF_REPO_WRITE_GUARDS if n not in bash_names and n not in write_modules
+    )
+    assert not unknown, unknown
+
+
 def test_features_are_independent(reg):
     _write(reg, '"coordinator.feature.publishing" = "on"\n')
     assert mp.feature_enabled("publishing") is True

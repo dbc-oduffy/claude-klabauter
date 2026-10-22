@@ -679,7 +679,38 @@ def test_re_landing_does_not_re_stamp_an_execution_ready_baton(tmp_path):
     second = bl.land_wave(root, result)
 
     assert not second["execution_ready"], "a declined stamp is not a landing"
-    assert "already stamped" in second["refused"][0]["reason"]
+    assert second["refused"] == [], "an already-stamped baton is a no-op, not a refusal"
+    assert "already stamped" in second["noop"][0]["reason"]
+
+
+def test_re_landing_an_approved_plan_is_flagged_already_in_state(tmp_path):
+    root = _repo(tmp_path)
+    plan = _plan(root, "the-plan", "draft")
+    _baton(root, "b-1")
+    result = {"waveIndex": 0, "ready": [{"batonId": "b-1", "planPath": plan}]}
+
+    bl.land_wave(root, result)
+    second = bl.land_wave(root, result)
+
+    assert second["approved"][0]["already_in_state"] is True
+    assert second["refused"] == []
+
+
+def test_a_duplicate_gate_id_is_handed_forward_once_and_counted_once(tmp_path, monkeypatch):
+    """A predecessor/continuation pair puts one id in the wave twice; `limit` and `remaining`
+    count unique ids, or the hand-forward is one short of the limit."""
+    root = _repo(tmp_path)
+    for i in ("a", "b", "c"):
+        _baton(root, i)
+    base = _fixture_report(root)
+    base["waves"] = [["a", "a", "b", "c"]]
+    monkeypatch.setattr(bl.gate_v2, "compute_gate_report", lambda r, roadmap_id=None, **k: base)
+
+    out = bl.land_wave(root, {"waveIndex": 0, "ready": []}, limit=2)
+
+    ids = [b["id"] for b in out["next_wave"]["batons"]]
+    assert ids == ["a", "b"]
+    assert out["next_wave"]["remaining"] == 1
 
 
 def test_a_non_s_route_still_takes_the_ordinary_approval(tmp_path):
