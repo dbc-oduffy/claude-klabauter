@@ -1,5 +1,5 @@
 """coordinator/bin/tests/test_census_revalidate_inproc.py -- `revalidate_set` answers GRAMMAR
-commands in-process (`census_inproc.evaluate` over `_TreeView`) before it batches the rest.
+commands in-process (`census_inproc.evaluate_many` over `_TreeView`) before it batches the rest.
 
 Repos are built under tmp_path with `git init`; spawns are counted at `subprocess.Popen`.
 """
@@ -94,15 +94,22 @@ GRAMMAR_ENTRIES = [
 ]
 
 
-def test_all_grammar_set_spawns_nothing_and_matches_the_declined_states(
+def _decline_all(monkeypatch, mcr):
+    monkeypatch.setattr(
+        mcr._inproc(), "evaluate_many",
+        lambda commands, files, store, read_budget_s, force_first=True: {c: None for c in commands},
+    )
+
+
+def test_all_grammar_set_spawns_no_command_and_matches_the_declined_states(
     mcr, repo, popens, monkeypatch
 ):
     plans = [_plan(repo, "p1", GRAMMAR_ENTRIES)]
     reply = _run(mcr, repo, plans)
-    assert popens == []
-    assert reply["spawns"] == 0
+    assert [a[0][-2:] for a in popens] == [["cat-file", "--batch"]], "one blob batch, no command"
+    assert reply["spawns"] == 1
     assert reply["inproc_runs"] == 3
-    monkeypatch.setattr(mcr._inproc(), "evaluate", lambda command, files, store: None)
+    _decline_all(monkeypatch, mcr)
     spawned = _run(mcr, repo, plans)
     assert spawned["inproc_runs"] == 0
     assert spawned["spawns"] >= 1
@@ -110,10 +117,17 @@ def test_all_grammar_set_spawns_nothing_and_matches_the_declined_states(
     assert all(s == "MATCH" for s in _states(reply)["p1.md"])
 
 
-def test_in_process_answers_are_never_stored_as_runs(mcr, repo):
+def test_in_process_answers_are_stored_under_the_in_process_run_marker(mcr, repo):
     store = CensusStore()
-    _run(mcr, repo, [_plan(repo, "p1", GRAMMAR_ENTRIES)], store)
-    assert all(store.run(c) is None for c, _ in GRAMMAR_ENTRIES)
+    first = _run(mcr, repo, [_plan(repo, "p1", GRAMMAR_ENTRIES)], store)
+    marker = mcr._inproc_run_ms()
+    for command, _ in GRAMMAR_ENTRIES:
+        stored = store.run(command)
+        assert stored is not None and stored[2] == marker and stored[0] is not None
+    assert store.median_run_ms() is None, "an in-process run is not a spawn cost"
+    again = _run(mcr, repo, [_plan(repo, "p1", GRAMMAR_ENTRIES)], store)
+    assert again["memo_hits"] == 3 and again["inproc_runs"] == 0 and again["spawns"] == 0
+    assert _states(again) == _states(first)
 
 
 def test_mixed_set_spawns_one_batch_for_the_declined_commands(mcr, repo, monkeypatch):
@@ -134,41 +148,37 @@ def test_mixed_set_spawns_one_batch_for_the_declined_commands(mcr, repo, monkeyp
     assert reply["covered"] == reply["census_plans"] == 2
 
 
-def test_second_call_over_unchanged_tree_reads_no_file_bodies(mcr, repo, monkeypatch):
+def test_second_call_over_unchanged_index_reads_no_blob_and_a_restaged_file_reads_one(
+    mcr, repo, monkeypatch
+):
     plans = [_plan(repo, "p1", GRAMMAR_ENTRIES)]
     store = CensusStore()
     first = _run(mcr, repo, plans, store)
-    reads: list[str] = []
-    real = mcr._TreeView.read
+    fetched: list[list[str]] = []
+    real = mcr._TreeView.read_blobs
 
-    def counting(self, rel):
-        reads.append(rel)
-        return real(self, rel)
+    def counting(self, oids):
+        fetched.append(list(oids))
+        return real(self, oids)
 
-    monkeypatch.setattr(mcr._TreeView, "read", counting)
+    monkeypatch.setattr(mcr._TreeView, "read_blobs", counting)
     assert first["inproc_runs"] == 3
-    time.sleep(0.01)
     _run(mcr, repo, plans, store)
-    # the racy-clean rule distrusts records stamped within the file's mtime tick; a rewrite of
-    # the store after the tree settled makes them trusted
-    reads.clear()
-    _run(mcr, repo, plans, store)
-    assert reads == []
+    assert fetched == []
     (repo / "d" / "b.txt").write_text("needle\nneedle\n", encoding="utf-8")
+    _git(["add", "d/b.txt"], repo)
     _run(mcr, repo, plans, store)
-    assert set(reads) <= {"d/b.txt"}
+    assert sum(len(f) for f in fetched) <= 3, "only the restaged blob is read, for its patterns"
+    assert fetched
 
 
-def test_tree_view_walk_skips_git_and_symlinks_and_shares_the_listing(mcr, repo, monkeypatch):
+def test_tree_view_lists_tracked_paths_with_modes_and_never_a_worktree_file(mcr, repo):
     (repo / "d" / "link").symlink_to("a.txt")
+    (repo / "d" / "untracked.txt").write_text("needle\n", encoding="utf-8")
+    _git(["add", "d/link"], repo)
     view = mcr._TreeView(repo)
-    assert sorted(rel for rel, _ in view.walk("d")) == ["d/a.txt", "d/b.txt"]
-    assert [rel for rel, _ in view.walk("f.txt")] == ["f.txt"]
-    assert view.walk("nowhere") is None
-    assert all(not rel.startswith(".git") for rel, _ in view.walk("."))
-    scans: list = []
-    real = mcr.os.scandir
-    monkeypatch.setattr(mcr.os, "scandir", lambda p: scans.append(p) or real(p))
-    assert view.dir_id("d") is not None
-    view.walk("d")
-    assert scans == []
+    listed = {p: mode for p, _oid, mode in view.files("d")}
+    assert listed == {"d/a.txt": "100644", "d/b.txt": "100644", "d/link": "120000"}
+    assert view.files("nowhere") == []
+    assert view.files("f.txt")[0][0] == "f.txt"
+    assert view.files("d") is view.files("d"), "one listing per directory per call"

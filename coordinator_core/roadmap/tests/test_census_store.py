@@ -230,18 +230,101 @@ def test_gc_oids_drops_dead_oids(tmp_path):
     assert t.matched("pk", "dead") is None
 
 
-def test_interim_shims_answer_none_and_write_nothing(tmp_path):
+def test_the_stat_keyed_shims_are_gone():
+    for name in ("ident", "put_ident", "match", "put_match"):
+        assert not hasattr(CensusStore, name), name
+
+
+def _plan_file(root: Path, mtime_ns: int) -> os.stat_result:
+    plan = root / "p.md"
+    plan.write_text("---\ncensus: []\n---\n", encoding="utf-8")
+    os.utime(plan, ns=(mtime_ns, mtime_ns))
+    return plan.stat()
+
+
+def test_a_parsed_census_round_trips_under_its_stat_and_a_changed_stat_misses(tmp_path):
     root = _root(tmp_path)
-    f = root / "f.txt"
-    f.write_text("x", encoding="utf-8")
-    st = f.stat()
+    st = _plan_file(root, 1_700_000_000_123_456_789)
+    census = [{"question": "q", "command": "ls", "result": "1"}]
     s = CensusStore.load(root)
-    s.put_ident("f.txt", st, "abc", st.st_mtime_ns + 10)
-    s.put_match("f.txt", st, "pk", (True, 1, 0), st.st_mtime_ns + 10)
-    assert s.ident("f.txt", st) is None
-    assert s.match("f.txt", st, "pk") is None
+    assert s.parsed("p.md", st) is None
+    s.put_parsed("p.md", st, census, st.st_mtime_ns + 5)
+    assert s.parsed("p.md", st) == census
     s.save()
-    assert not _shard_dir(root).exists()
+    census_store._SEEN.clear()
+    t = CensusStore.load(root)
+    assert t.parsed("p.md", st) == census
+    st2 = _plan_file(root, 1_700_000_001_000_000_001)
+    assert t.parsed("p.md", st2) is None
+    assert (_shard_dir(root) / "plans.marshal").exists()
+
+
+def test_a_whole_second_mtime_read_within_two_seconds_is_not_kept(tmp_path):
+    root = _root(tmp_path)
+    st = _plan_file(root, 1_700_000_000 * 10**9)
+    s = CensusStore.load(root)
+    s.put_parsed("p.md", st, [{"command": "ls"}], st.st_mtime_ns + 10**9)
+    assert s.parsed("p.md", st) is None
+    s.put_parsed("p.md", st, [{"command": "ls"}], st.st_mtime_ns + 3 * 10**9)
+    assert s.parsed("p.md", st) == [{"command": "ls"}]
+
+
+def test_a_census_marshal_cannot_hold_is_not_kept_and_save_survives(tmp_path):
+    import datetime
+
+    root = _root(tmp_path)
+    st = _plan_file(root, 1_700_000_000_123_456_789)
+    s = CensusStore.load(root)
+    s.put_parsed("p.md", st, [{"result": datetime.date(2026, 1, 1)}], st.st_mtime_ns + 5)
+    assert s.parsed("p.md", st) is None
+    s.put_cursor("x")
+    s.save()
+    census_store._SEEN.clear()
+    assert CensusStore.load(root).cursor() == "x"
+
+
+def test_an_unsaved_parsed_census_never_leaks_through_the_shared_copy(tmp_path):
+    root = _root(tmp_path)
+    st = _plan_file(root, 1_700_000_000_123_456_789)
+    s = CensusStore.load(root)
+    s.put_parsed("p.md", st, [{"command": "a"}], st.st_mtime_ns + 5)
+    s.save()
+    t = CensusStore.load(root)
+    t.put_parsed("p.md", st, [{"command": "b"}], st.st_mtime_ns + 5)
+    assert CensusStore.load(root).parsed("p.md", st) == [{"command": "a"}]
+
+
+def test_declined_commands_are_kept_for_one_checksum_at_a_time(tmp_path):
+    root = _root(tmp_path)
+    s = CensusStore.load(root)
+    assert s.declined("a") == frozenset()
+    s.put_declined("a", {"x", "y"})
+    assert s.declined("a") == {"x", "y"}
+    assert s.declined("b") == frozenset()
+    s.save()
+    census_store._SEEN.clear()
+    assert CensusStore.load(root).declined("a") == {"x", "y"}
+    s.put_declined("b", {"z"})
+    assert s.declined("a") == frozenset() and s.declined("b") == {"z"}
+
+
+def test_an_in_process_run_marker_stays_out_of_the_median():
+    s = CensusStore()
+    s.put_run("a", "k", (0, "1\n", ""), census_store.INPROC_RUN_MS, 2)
+    assert s.median_run_ms() is None
+    s.put_run("b", "k", (0, "1\n", ""), 40, 2)
+    assert s.median_run_ms() == 40
+
+
+def test_matched_writes_moves_only_when_a_shard_changes():
+    s = CensusStore()
+    assert s.matched_writes == 0
+    s.put_matched("pk", {"o": 1})
+    assert s.matched_writes == 1
+    s.put_matched("pk", {"o": 1})
+    assert s.matched_writes == 1
+    s.put_matched("pk", {"o": 2})
+    assert s.matched_writes == 2
 
 
 def test_generates_is_empty():

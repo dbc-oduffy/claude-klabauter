@@ -57,6 +57,8 @@ INBOX_FILE = "revisions.jsonl"
 NOTES_FILE = "notes.jsonl"
 #: run.json key naming the halted run a fresh fire resumed.
 RESUMED_FROM_FIELD = "resumed_from"
+#: Most `resumed_from` hops `carried_notes` follows.
+CARRIED_HOP_CAP = 16
 LEDGER_VIEW_FILE = "requirements.md"
 ORIGIN_PM_VERBATIMS, ORIGIN_ASK, ORIGIN_REVISION = "pm_verbatims", "ask", "revision"
 ORIGIN_RELAYED = "relayed"
@@ -688,13 +690,19 @@ def _note_entries(dir_: Path, run_id: str) -> list[dict]:
 
 def carried_notes(repo_root: Path, run_id: str) -> list[dict]:
     """`{id, note, at, run, retracted}` entries of this run's `NOTES_FILE` and of its `resumed_from`
-    run's, retracted ones included, oldest first, de-duplicated on (note, at). One hop: the
-    predecessor's own link is not followed."""
+    chain (each predecessor's `resumed_from`, cycle-safe, at most `CARRIED_HOP_CAP` hops),
+    retracted ones included, oldest first, de-duplicated on (note, at)."""
     own_dir = run_dir(repo_root, run_id)
     entries = _note_entries(own_dir, run_id)
-    prev = (read_run(own_dir) or {}).get(RESUMED_FROM_FIELD)
-    if isinstance(prev, str) and safe_id(prev) and prev != run_id:
-        entries = _note_entries(run_dir(repo_root, prev), prev) + entries
+    visited = {run_id}
+    cur_dir = own_dir
+    for _ in range(CARRIED_HOP_CAP):
+        prev = (read_run(cur_dir) or {}).get(RESUMED_FROM_FIELD)
+        if not (isinstance(prev, str) and safe_id(prev)) or prev in visited:
+            break
+        visited.add(prev)
+        cur_dir = run_dir(repo_root, prev)
+        entries = _note_entries(cur_dir, prev) + entries
     seen: set[tuple[str, str]] = set()
     out: list[dict] = []
     for e in sorted(entries, key=lambda e: e["at"]):

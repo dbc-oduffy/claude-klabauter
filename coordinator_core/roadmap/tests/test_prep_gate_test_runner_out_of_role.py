@@ -74,6 +74,22 @@ def test_targeted_vitest_file_with_worker_cap_passes(tmp_path):
     assert _cls(tmp_path, spine)["status"] == "PASS"
 
 
+def test_pnpm_test_with_path_passes_and_bare_pnpm_test_is_refused(tmp_path):
+    scoped = _VERIFY_ROW.replace("`python -m pytest src/test_a.py`", "`pnpm test src/a.test.ts`")
+    assert _cls(tmp_path, scoped)["status"] == "PASS"
+    bare = _VERIFY_ROW.replace("`python -m pytest src/test_a.py`", "`pnpm test`")
+    assert _cls(tmp_path, bare)["status"] == "DEFECT"
+    flags_only = _VERIFY_ROW.replace("`python -m pytest src/test_a.py`", "`pnpm test --coverage`")
+    assert _cls(tmp_path, flags_only)["status"] == "DEFECT"
+
+
+def test_pnpm_test_with_path_stays_test_tier_for_admission():
+    from coordinator_core.bash_guards._heavy_command_class import HeavyClass, classify
+
+    cls = classify("pnpm test src/a.test.ts", None, ".", 1 << 30)
+    assert cls is not None and cls.heavy_class is HeavyClass.TEST_TIER
+
+
 def test_timing_row_not_declaring_test_runner_passes(tmp_path):
     spine = _ROW.replace("  agent_type: coordinator:test-runner\n", "")
     assert _cls(tmp_path, spine)["status"] == "PASS"

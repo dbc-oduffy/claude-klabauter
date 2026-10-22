@@ -193,7 +193,7 @@ def test_a_second_call_over_an_unchanged_plan_spawns_nothing(tmp_path, monkeypat
 
     from coordinator_core.roadmap import census_inproc
 
-    monkeypatch.setattr(census_inproc, "evaluate", lambda command, files, store: None)
+    monkeypatch.setattr(census_inproc, "evaluate_many", lambda commands, *a, **k: {c: None for c in commands})
     calls: list = []
     real = subprocess.Popen
 

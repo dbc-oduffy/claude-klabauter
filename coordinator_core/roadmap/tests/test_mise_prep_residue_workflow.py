@@ -25,9 +25,10 @@ APM_TYPE = "coordinator:apm"
 
 def _args(*, apm_items: bool = True, batches: int = 2) -> dict:
     return {
-        "schema": "mise-prep-residue-args/2",
+        "schema": "mise-prep-residue-args/3",
         "repoRoot": "REPO",
         "runId": "20261019T1630Z-deadbeef",
+        "rulingsCommand": "mise-prep-run --repo-root REPO --apply-rulings",
         "gateCommand": "mise-prep-gate --repo-root REPO",
         "residue": {"agentType": RESIDUE_TYPE, "model": "m-residue"},
         "apm": {"agentType": APM_TYPE, "model": "m-apm"},
@@ -49,13 +50,14 @@ def _args(*, apm_items: bool = True, batches: int = 2) -> dict:
             [
                 {
                     "kind": "census-leftover",
+                    "id": "census[1]",
                     "plan": "docs/plans/p0.md",
                     "index": 1,
                     "question": "q",
                     "command": "node x.js",
                     "refusal": "node",
                 },
-                {"kind": "seam-fix-cycle", "plans": ["a", "b"], "path": "p", "detail": "d"},
+                {"kind": "seam-fix-cycle", "id": "cycle:p", "plans": ["a", "b"], "path": "p", "detail": "d"},
             ]
             if apm_items
             else []
@@ -77,9 +79,11 @@ def test_bound_script_validates_ok(tmp_path):
     assert reply["error_count"] == 0
 
 
-def test_source_has_one_residue_call_and_one_apm_call_typed_from_args():
+def test_source_has_residue_apm_and_persist_calls_typed_from_args():
     text = SOURCE.read_text(encoding="utf-8")
-    assert len(re.findall(r"\bagent\s*\(", text)) == 2
+    assert len(re.findall(r"\bagent\s*\(", text)) == 3
+    assert "Write the ruling to the plan" not in text
+    assert text.count("await phase('Persist')") == 1
     assert "agentType: args.residue.agentType" in text
     assert "model: args.residue.model" in text
     assert "agentType: args.apm.agentType" in text
@@ -182,3 +186,71 @@ def test_run_with_stubbed_agent_counts_calls(tmp_path, apm_items, expect_apm):
     apm = [c for c in calls if c[0] == APM_TYPE]
     assert len(residue) == 2 and all(c[1] == "m-residue" for c in residue)
     assert len(apm) == expect_apm and all(c[1] == "m-apm" for c in apm)
+
+
+def _run_persist(tmp_path: Path, rulings: list, applied: list) -> subprocess.CompletedProcess:
+    bound = _bind(tmp_path, _args(batches=1))
+    body = bound.read_text(encoding="utf-8").replace("export const meta", "const meta", 1)
+    harness = tmp_path / "run.cjs"
+    harness.write_text(
+        "const calls = [];\n"
+        "const agent = async (p, o) => { calls.push([o.label, o.agentType, o.model, p]);\n"
+        "  if (o.label === 'apm-rulings') return { rulings: " + json.dumps(rulings) + " };\n"
+        "  if (o.label === 'persist-rulings') return { applied: " + json.dumps(applied) + ", refused: [] };\n"
+        "  return { plans: [] }; };\n"
+        "const phase = async () => {};\n"
+        "const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;\n"
+        f"const body = {json.dumps(body)};\n"
+        "new AsyncFunction('agent', 'phase', body)(agent, phase).then((r) => {\n"
+        "  console.log(JSON.stringify({ calls, r }));\n"
+        "}, (e) => { console.error('REJECTED: ' + e.message); process.exit(3); });\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    return subprocess.run(
+        ["node", str(harness)], capture_output=True, text=True, timeout=30,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+
+
+_RULED = [
+    {"item": "census[1]", "ruling": "drop", "plan": "docs/plans/p0.md", "pmOnly": False},
+    {"item": "cycle:p", "ruling": "order", "plan": "a", "pmOnly": True},
+]
+_STRAY = {"item": "census[9]", "ruling": "x", "plan": "docs/plans/p0.md", "pmOnly": False}
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not on PATH")
+def test_persist_resolves_when_scribe_confirms_every_ruled_id_and_drops_unmatched(tmp_path):
+    out = _run_persist(tmp_path, _RULED + [_STRAY], ["census[1]", "cycle:p"])
+    assert out.returncode == 0, out.stderr
+    got = json.loads(out.stdout.strip().splitlines()[-1])
+    scribe = [c for c in got["calls"] if c[0] == "persist-rulings"]
+    assert len(scribe) == 1 and scribe[0][1:3] == [RESIDUE_TYPE, "m-residue"]
+    assert "mise-prep-run --repo-root REPO --apply-rulings REPO/scratch/mise-rulings-20261019T1630Z-deadbeef.json" in scribe[0][3]
+    assert "census[9]" not in scribe[0][3]
+    assert got["r"]["persisted"] == ["census[1]", "cycle:p"]
+    assert [u["item"] for u in got["r"]["unmatched"]] == ["census[9]"]
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not on PATH")
+@pytest.mark.parametrize("applied", [[], ["census[1]"]])
+def test_persist_rejects_naming_missing_ids_when_confirmation_is_short(tmp_path, applied):
+    out = _run_persist(tmp_path, _RULED, applied)
+    assert out.returncode == 3
+    assert "REJECTED" in out.stderr and "cycle:p" in out.stderr
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not on PATH")
+def test_no_scribe_runs_when_no_ruling_matches_an_item(tmp_path):
+    out = _run_persist(tmp_path, [_STRAY], [])
+    assert out.returncode == 0, out.stderr
+    got = json.loads(out.stdout.strip().splitlines()[-1])
+    assert not [c for c in got["calls"] if c[0] == "persist-rulings"]
+    assert len(got["r"]["unmatched"]) == 1

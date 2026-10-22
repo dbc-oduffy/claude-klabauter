@@ -22,6 +22,8 @@ from coordinator_core.ops.dispatch_emit.inventory_mint import (
     _refuse_if_directory_shaped,
     _refuse_if_glob,
 )
+from coordinator_core.ops import requirement_register as rr
+from coordinator_core.ops.dispatch_emit.ledger_remaining_paths import gated_paths, named_paths
 from coordinator_core.ops.dispatch_emit.source_memo_ref import sizing_source_memo
 
 XS_ROW_ID = "X1"
@@ -113,6 +115,26 @@ def _route_plan_bodies(paths: list[str]) -> tuple[list[str], list[tuple[str, str
     return list(dict.fromkeys(out)), routed
 
 
+def _is_plan_or_problem_body(path: str) -> bool:
+    from coordinator_core.write_guards.block_subagent_plan_body_write import _PLAN_BODY_RE
+
+    return bool(_PLAN_BODY_RE.search(posixpath.normpath(path.replace("\\", "/")).lower()))
+
+
+def _ledger_named_paths(sizing: Mapping, repo_root: Path | None) -> list[str]:
+    """Existing repo files the open register rows name literally; `[]` without a `repo_root`."""
+    if repo_root is None:
+        return []
+    register = sizing.get("requirement_register")
+    rows = register.get("rows") if isinstance(register, Mapping) else None
+    texts = [
+        str(r.get(rr.ROW_TEXT) or "")
+        for r in rows or ()
+        if isinstance(r, Mapping) and r.get(rr.ROW_STATUS) not in (rr.STATUS_DEFERRED, rr.STATUS_WAIVED)
+    ]
+    return named_paths(texts, Path(repo_root))
+
+
 class MemoReceiverUnresolvedError(ValueError):
     """An XS write is a memo-outbox draft and no receiver resolves from the sizing, the draft or
     the exit criterion."""
@@ -176,7 +198,22 @@ def mint_xs_spine(
 
     drafts = [p for p in paths if memo_outbox_topic(posixpath.normpath(p))]
     paths = [p for p in paths if p not in drafts]
+    ledger = _ledger_named_paths(sizing, repo_root)
+    ledger = [p for p in ledger if p not in drafts]
+    paths = [p for p in paths if p not in ledger]
+    em_paths = list(dict.fromkeys(gated_paths([*paths, *ledger])))
+    paths = [p for p in paths if p not in em_paths]
+    ledger = [p for p in ledger if p not in em_paths]
     paths, routed = _route_plan_bodies(paths) if paths else (paths, [])
+    # Trap: the ledger judges an edit to a plan body it names, and the body's sidecar cannot satisfy
+    # it, so ledger-named paths join after routing and stay declared as themselves.
+    ledger_bodies = [p for p in ledger if _is_plan_or_problem_body(p)]
+    if ledger_bodies and any(p not in ledger_bodies for p in [*paths, *ledger]):
+        # emit refuses a row mixing an immutable body with ordinary paths, so the bodies get their own row.
+        ledger = [p for p in ledger if p not in ledger_bodies]
+    else:
+        ledger_bodies = []
+    paths = list(dict.fromkeys([*paths, *ledger]))
 
     criterion = sizing.get("exit_criterion")
     statement = str(criterion.get("statement") or "").strip() if isinstance(criterion, Mapping) else ""
@@ -232,6 +269,40 @@ def mint_xs_spine(
                     f"Verification (this row is DONE only when this holds): {statement}\n"
                 ),
                 "writes": [draft],
+            }
+        )
+    if ledger_bodies:
+        rows.append(
+            {
+                "id": "P1",
+                "title": f"Edit {', '.join(ledger_bodies)}",
+                "change_kind": "doc-edit",
+                "surface": ledger_bodies[0],
+                "body": (
+                    f"Spec: {sizing_rel} (P1)\n"
+                    f"Intent:\n{intent}\n"
+                    f"Verification (this row is DONE only when this holds): {statement}\n"
+                ),
+                "writes": ledger_bodies,
+            }
+        )
+    if em_paths:
+        eid = "E1"
+        rows.append(
+            {
+                "id": eid,
+                "title": f"EM edits {', '.join(em_paths)} inline",
+                "change_kind": "doc-edit",
+                "surface": em_paths[0],
+                "performer": "em",
+                "body": (
+                    f"Spec: {sizing_rel} ({eid})\n"
+                    f"Intent:\n{intent}\n"
+                    f"Verification (this row is DONE only when this holds): {statement}\n"
+                    "A dispatched agent cannot write a CLAUDE.md-class surface, so the EM performs this edit "
+                    "in its own session and records it with plan.tasks.mutate verb em-discharge.\n"
+                ),
+                "writes": em_paths,
             }
         )
     for n, g in enumerate(gated, start=2):

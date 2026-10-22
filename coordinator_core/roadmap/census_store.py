@@ -6,7 +6,8 @@ key, a match count by blob oid, the index fingerprints by the index checksum), s
 or torn store costs a spawn or a read on the next run and never a wrong verdict.
 
 Layout (schema 3): the directory `store_path(root).with_suffix("")` holds `root.marshal` (runs,
-index fingerprints, screen memo, cursor, over-bar markers) and one `p-<pattern_key>.marshal`
+index fingerprints, screen memo, cursor, over-bar markers), `plans.marshal` (each plan's parsed
+`census:` list under its stat) and one `p-<pattern_key>.marshal`
 shard of `{oid: match_count}` per pattern. Each shard is a marshal of
 `((STORE_SCHEMA, cache_tag), payload)`; a header mismatch or a corrupt shard loads empty.
 Pattern shards load lazily and `save` rewrites dirty shards only.
@@ -30,10 +31,17 @@ GENERATES = []
 STORE_SCHEMA = 3
 
 _ROOT_SHARD = "root.marshal"
+_PLANS_SHARD = "plans.marshal"
+
+#: `run_ms` of a run answered in-process: no spawn was timed, and a negative figure keeps it out
+#: of the cost gate, the median and the over-bar test.
+INPROC_RUN_MS = -1
 _UNSAFE = re.compile(r"[^A-Za-z0-9_-]")
 
 # path -> (size, mtime_ns, ino, payload): what this process last loaded or saved.
 _SEEN: dict = {}
+# pattern_key -> shard file name
+_NAMES: dict = {}
 
 
 def store_path(repo_root: Path) -> Path:
@@ -77,6 +85,11 @@ class CensusStore:
         self._dirty_shards: set = set()
         self._root_dirty = False
         self._root_owned = False
+        self._plans: Optional[dict] = None
+        self._plans_owned = False
+        self._plans_dirty = False
+        #: Count of `put_matched` calls that changed a shard; a pass that moved it made progress.
+        self.matched_writes = 0
         self._load_ms = 0.0
         if self._dir is not None:
             self._root = self._fetch(self._dir / _ROOT_SHARD) or {}
@@ -151,6 +164,7 @@ class CensusStore:
         vals = sorted(
             r[2] for r in self._root_map("runs").values()
             if isinstance(r, list) and len(r) == 4 and isinstance(r[2], (int, float))
+            and r[2] >= 0
         )
         if not vals:
             return None
@@ -181,6 +195,20 @@ class CensusStore:
         if command not in screens or screens[command] != refusal:
             self._root_mut().setdefault("screens", {})[command] = refusal
 
+    def declined(self, checksum: str) -> frozenset:
+        """Commands the in-process evaluator declined at the index with this checksum."""
+        rec = self._root.get("declined")
+        if isinstance(rec, tuple) and len(rec) == 2 and rec[0] == checksum \
+                and isinstance(rec[1], frozenset):
+            return rec[1]
+        return frozenset()
+
+    def put_declined(self, checksum: str, commands: Collection[str]) -> None:
+        """Keep the declined set for `checksum`, dropping any other checksum's."""
+        fresh = frozenset(commands)
+        if self.declined(checksum) != fresh:
+            self._root_mut()["declined"] = (checksum, fresh)
+
     def cursor(self) -> Optional[str]:
         """The command the last pass stopped before, or None."""
         v = self._root.get("cursor")
@@ -202,7 +230,7 @@ class CensusStore:
     # -- pattern shards -----------------------------------------------------------------
 
     def _shard(self, pattern_key: str) -> dict:
-        name = f"p-{_UNSAFE.sub('_', pattern_key)}.marshal"
+        name = self._name(pattern_key)
         shard = self._shards.get(name)
         if shard is None:
             shard = {}
@@ -215,7 +243,10 @@ class CensusStore:
 
     @staticmethod
     def _name(pattern_key: str) -> str:
-        return f"p-{_UNSAFE.sub('_', pattern_key)}.marshal"
+        name = _NAMES.get(pattern_key)
+        if name is None:
+            name = _NAMES[pattern_key] = f"p-{_UNSAFE.sub('_', pattern_key)}.marshal"
+        return name
 
     def _shard_mut(self, pattern_key: str) -> dict:
         shard = self._shard(pattern_key)
@@ -238,6 +269,7 @@ class CensusStore:
             return
         self._shard_mut(pattern_key).update(counts)
         self._dirty_shards.add(self._name(pattern_key))
+        self.matched_writes += 1
 
     def gc_oids(self, live: Collection[str]) -> None:
         """Drop match records of oids not in `live`, from the shards loaded in this process."""
@@ -255,20 +287,40 @@ class CensusStore:
                 del shard[o]
             self._dirty_shards.add(name)
 
-    # -- interim shims: C10 deletes them and their last callers ------------------------
+    # -- parsed plan census -------------------------------------------------------------
 
-    def ident(self, rel: str, st: os.stat_result) -> Optional[str]:
+    def _plans_map(self) -> dict:
+        if self._plans is None:
+            got = self._fetch(self._dir / _PLANS_SHARD) if self._dir is not None else None
+            self._plans = got if isinstance(got, dict) else {}
+        return self._plans
+
+    def parsed(self, rel: str, st: os.stat_result) -> Optional[list]:
+        """The `census:` list parsed from plan `rel` when its (size, mtime_ns, inode) still equal
+        `st`, else None. The caller must not mutate the list."""
+        rec = self._plans_map().get(rel)
+        if (isinstance(rec, tuple) and len(rec) == 4
+                and rec[:3] == (st.st_size, st.st_mtime_ns, st.st_ino)
+                and isinstance(rec[3], list)):
+            return rec[3]
         return None
 
-    def put_ident(self, rel: str, st: os.stat_result, ident: str, computed_at_ns: int) -> None:
-        return None
-
-    def match(self, rel: str, st: os.stat_result, pattern_key: str) -> Optional[tuple]:
-        return None
-
-    def put_match(self, rel: str, st: os.stat_result, pattern_key: str, result: tuple,
-                  computed_at_ns: int) -> None:
-        return None
+    def put_parsed(self, rel: str, st: os.stat_result, census: list, computed_at_ns: int) -> None:
+        """Keep a plan's parsed census. A whole-second mtime read within two seconds of its
+        stamp could still be rewritten inside that tick, so it is not kept; neither is a list
+        marshal cannot hold."""
+        if st.st_mtime_ns % 1_000_000_000 == 0 and computed_at_ns - st.st_mtime_ns < 2_000_000_000:
+            return
+        try:
+            marshal.dumps(census)
+        except ValueError:
+            return
+        plans = self._plans_map()
+        if not self._plans_owned:
+            plans = self._plans = dict(plans)
+            self._plans_owned = True
+        plans[rel] = (st.st_size, st.st_mtime_ns, st.st_ino, census)
+        self._plans_dirty = True
 
     # -- persistence --------------------------------------------------------------------
 
@@ -291,7 +343,7 @@ class CensusStore:
         """Rewrite the dirty shards (temp file, then os.replace). OSError is swallowed; the
         last concurrent writer wins. The first save removes a schema-1 or schema-2
         `census-store.json`."""
-        if self._dir is None or not (self._root_dirty or self._dirty_shards):
+        if self._dir is None or not (self._root_dirty or self._dirty_shards or self._plans_dirty):
             return
         try:
             self._dir.mkdir(parents=True, exist_ok=True)
@@ -299,6 +351,10 @@ class CensusStore:
                 self._write(self._dir / name, self._shards[name])
             self._dirty_shards.clear()
             self._owned.clear()
+            if self._plans_dirty:
+                self._write(self._dir / _PLANS_SHARD, self._plans)
+                self._plans_dirty = False
+                self._plans_owned = False
             if self._root_dirty or not (self._dir / _ROOT_SHARD).exists():
                 self._write(self._dir / _ROOT_SHARD, self._root)
                 self._root_dirty = False

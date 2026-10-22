@@ -1224,8 +1224,11 @@ def _link_unsized_xs(
         owner = read_fm_field_unquoted(text[span[0] : span[1]] if span else "", "sizing_object")
         if _field_unset(owner):
             unsized.append((entry, baton_path))
-        else:
+            continue
+        try:
             cited.append((entry, baton_path, _rel(owner, worktree_root)))
+        except LandingRefused as exc:
+            refused.append({"baton": entry.get("batonId"), "reason": str(exc)})
 
     def _link(entry: Dict[str, Any], baton_path: str, sizing_rel: str, basis: str) -> None:
         # Sizing edge first: a join refusal leaves a one-edge link; a re-land is idempotent.

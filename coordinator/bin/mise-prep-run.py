@@ -45,6 +45,11 @@ has just passed.
 Usage:
 
     python3 mise-prep-run.py --repo-root <abs> [--upgrade] [--dry-run] [plan ...]
+    python3 mise-prep-run.py --repo-root <abs> --apply-rulings <payload.json|->
+
+`--apply-rulings` skips the gate/stamp pass: it sends the payload `{run_id, rulings}` as ONE
+`plan.record_residue_rulings` call (`on` = today's UTC date), prints the reply as JSON, and exits 0
+when its `refused` is empty, 1 otherwise, 2 for a malformed payload.
 
 With no plan arguments the set is every APPROVED plan the engine's plan gate reports —
 mise-prep's own entry set, taken from the same seam `mise-prep-entry.py` reads, never
@@ -732,6 +737,34 @@ def _upgrade_note(derivation) -> str | None:
     return "declined: nothing to derive"
 
 
+def _apply_rulings(repo_root: Path, source: str, refuse) -> int:
+    """`--apply-rulings`: one `RULINGS_OP` call over the payload `{run_id, rulings}`, receipt on
+    stdout. Exit 0 when the reply's `refused` is empty, else 1; an unreadable or malformed payload
+    is exit 2 before any op call."""
+    try:
+        text = sys.stdin.read() if source == "-" else Path(source).read_text(encoding="utf-8")
+        payload = json.loads(text)
+    except (OSError, ValueError) as exc:
+        return refuse(f"rulings payload unreadable: {exc}")
+    if not isinstance(payload, dict) or not isinstance(payload.get("rulings"), list):
+        return refuse("rulings payload must be a JSON object with a `rulings` list")
+    try:
+        from coordinator_core.roadmap import mise_residue
+    except Exception as exc:  # noqa: BLE001
+        return refuse(f"coordinator_core unresolvable: {exc}")
+    params = {
+        "run_id": payload.get("run_id", ""),
+        "on": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+        "rulings": payload["rulings"],
+    }
+    try:
+        reply = _invoke(repo_root, mise_residue.RULINGS_OP, params)
+    except ValueError as exc:
+        return refuse(str(exc))
+    print(json.dumps(reply, indent=2, sort_keys=True))
+    return EXIT_OK if not reply.get("refused") else EXIT_NOT_ALL_CERTIFIED
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(
         prog="mise-prep-run",
@@ -762,6 +795,11 @@ def main(argv=None) -> int:
     )
     ap.add_argument("--dry-run", action="store_true", help="gate and report; stamp nothing")
     ap.add_argument("--json", action="store_true")
+    ap.add_argument(
+        "--apply-rulings", metavar="PATH",
+        help="write the APM rulings in this JSON payload file ('-' = stdin) into their plans' "
+        "pm_ruling: lists with one plan.record_residue_rulings call; skips the gate/stamp pass",
+    )
     args = ap.parse_args(argv)
 
     global _OP_CALLS
@@ -773,6 +811,9 @@ def main(argv=None) -> int:
     def refuse(msg: str) -> int:
         print(f"mise-prep-run: REFUSED — {msg}", file=sys.stderr)
         return EXIT_REFUSED
+
+    if args.apply_rulings is not None:
+        return _apply_rulings(repo_root, args.apply_rulings, refuse)
 
     plans = list(args.plans)
     skipped: list[str] = []

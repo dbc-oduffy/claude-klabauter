@@ -1,15 +1,13 @@
 """coordinator_core.roadmap.census_inproc -- answer an order-insensitive read-only census
 pipeline without a spawn.
 
-`evaluate(command, files, store)` returns the `(returncode, stdout, stderr)` the screened POSIX
-pipeline would produce, or None when it cannot promise that exactly (the caller spawns). A
-decline is always safe; a wrong answer never is, so every doubt declines. Each file's match
-result is kept in the `CensusStore` under that file's stat identity, so a warm pass re-reads only
-files that changed.
-
-`evaluate_many(commands, files, store, read_budget_s)` answers the same GRAMMAR over the git
-index world (`IndexFiles`: tracked paths and blobs) from per-(pattern, oid) match records, one
-blob batch per slice, and reads PENDING for a command it could not finish within the budget.
+`evaluate_many(commands, files, store, read_budget_s)` returns, per command, the
+`(returncode, stdout, stderr)` the screened POSIX pipeline would produce over the git index world
+(`IndexFiles`: tracked paths and blobs), or None when it cannot promise that exactly (the caller
+spawns), or PENDING when the budget ran out first. A decline is always safe; a wrong answer never
+is, so every doubt declines. Answers are composed from per-(pattern, blob oid) match records kept
+in the `CensusStore`, one blob batch per slice, so a warm pass reads only blobs it has no record
+for.
 
 GRAMMAR (anything else declines). Examples, one per line, are run against the host shell by
 the parity test:
@@ -66,13 +64,12 @@ agree, because GNU grep treats NUL as a line end in a binary file and BSD grep d
 NOT UTF-8: a file with no NUL and invalid UTF-8 is undecidable. BSD grep skips its lines in a
 UTF-8 locale and GNU grep matches them, so a walk that meets one declines.
 
-STORE: per file, per pattern key, `(matched, count, kind)`. `matched` is None when the file's
-answer is undecidable (a decline); `count` is -1 when only `matched` is trusted; `kind` is 0
-text, 1 not UTF-8, 2 holds NUL. No line text is ever stored.
+STORE: per blob oid, per pattern key, `(matched, count, kind)` packed into one int. `matched` is
+None when the blob's answer is undecidable (a decline); `count` is -1 when only `matched` is
+trusted; `kind` is 0 text, 1 not UTF-8, 2 holds NUL. No line text is ever stored.
 
-FILES: `FileSource.walk(rel)` yields `(path relative to root, os.stat_result)` for every regular
-file under `rel`; `find` and `ls` read directories through `files.root` themselves because the
-walk skips `.git` and directories.
+FILES: `IndexFiles.files(rel)` lists the tracked `(path, oid)` at or under `rel`; `find` and `ls`
+answer from those paths alone.
 """
 
 from __future__ import annotations
@@ -81,14 +78,11 @@ import fnmatch
 import hashlib
 import os
 import re
-import stat as _stat
-import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Collection, Iterable, Optional, Protocol, Union
+from typing import Callable, Collection, Optional, Protocol
 
 from coordinator_core.roadmap import census
-from coordinator_core.roadmap.census_store import CensusStore
 
 GENERATES = []
 
@@ -106,19 +100,6 @@ _POSIX_CLASSES = {
     "alnum": "a-zA-Z0-9",
 }
 _REPEAT_LIMIT = 1000
-
-
-class FileSource(Protocol):
-    """The tree `evaluate` reads. `root` is the repo root every relative path resolves against."""
-
-    root: Path
-
-    def walk(self, rel: str) -> Optional[Iterable[tuple]]:
-        """Every regular file under `rel` (`rel` itself when it is a file) as
-        `(path relative to root, os.stat_result)`, skipping `.git`; None = unbounded."""
-
-    def read(self, rel: str) -> Optional[bytes]:
-        """The file's bytes, or None when it cannot be read."""
 
 
 class _Decline(Exception):
@@ -525,135 +506,8 @@ def _norm_operand(token: str, raw: str) -> tuple:
     return rel, clean
 
 
-def _operand(token: str, root: Path, raw: str) -> _Operand:
-    rel, clean = _norm_operand(token, raw)
-    try:
-        st = os.lstat(root / rel)
-    except (FileNotFoundError, NotADirectoryError):
-        return _Operand(token, rel, "absent", clean)
-    except OSError:
-        raise _Decline
-    if _stat.S_ISREG(st.st_mode):
-        return _Operand(token, rel, "file", clean)
-    if _stat.S_ISDIR(st.st_mode):
-        return _Operand(token, rel, "dir", clean)
-    raise _Decline
-
-
-def _result(rel: str, st, m: _Matcher, files: FileSource, store: Optional[CensusStore]) -> tuple:
-    if store is not None:
-        hit = store.match(rel, st, m.key)
-        if hit is not None and len(hit) == 3:
-            return hit
-    started = time.time_ns()
-    data = files.read(rel)
-    if data is None:
-        raise _Decline
-    res = m.scan(data)
-    if store is not None:
-        store.put_match(rel, st, m.key, res, started)
-    return res
-
-
-def _selected_files(g: _Grep, ops: list, files: FileSource) -> list:
-    """`(rel, stat)` of every file the grep reads, with its --include/--exclude filters applied."""
-    chosen: list = []
-    for op in ops:
-        if op.kind == "absent":
-            if not g.quiet:
-                raise _Decline
-            continue
-        if op.kind == "file":
-            if g.include or g.exclude:
-                raise _Decline
-            try:
-                chosen.append((op.rel, os.lstat(files.root / op.rel)))
-            except OSError:
-                raise _Decline
-            continue
-        if "r" not in g.flags or os.path.lexists(files.root / op.rel / ".git"):
-            raise _Decline
-        base = op.rel.rsplit("/", 1)[-1]
-        if any(fnmatch.fnmatchcase(base, d) for d in g.exclude_dir):
-            raise _Decline
-        walked = files.walk(op.rel)
-        if walked is None:
-            raise _Decline
-        prefix = len(op.rel) + 1
-        for rel, st in walked:
-            name = rel.rsplit("/", 1)[-1]
-            if any(fnmatch.fnmatchcase(d, glob) for d in rel[prefix:].split("/")[:-1]
-                   for glob in g.exclude_dir):
-                continue
-            if g.include and not any(fnmatch.fnmatchcase(name, p) for p in g.include):
-                continue
-            if any(fnmatch.fnmatchcase(name, p) for p in g.exclude):
-                continue
-            chosen.append((rel, st))
-    return chosen
-
-
 def _mode(g: _Grep) -> str:
     return "l" if "l" in g.flags else "c" if "c" in g.flags else "print"
-
-
-def _grep_lines(g: _Grep, ops: list, files: FileSource, store: Optional[CensusStore],
-                *, names_needed: bool) -> list:
-    """The unordered output lines of a first-stage grep, as bytes. Content-printing output is
-    only ever counted (`names_needed` False), never listed."""
-    m = _matcher(g.pattern, g.dialect, ignore="i" in g.flags, word="w" in g.flags,
-                 invert="v" in g.flags, only="o" in g.flags)
-    if m is None:
-        raise _Decline
-    mode = _mode(g)
-    chosen = _selected_files(g, ops, files)
-    if names_needed and (not all(op.clean for op in ops) or (
-            "r" in g.flags and any(op.kind == "file" for op in ops))):
-        raise _Decline
-    prefixed = "h" not in g.flags and (
-        "r" in g.flags and any(op.kind == "dir" for op in ops) or len(ops) > 1
-    )
-    lines: list[bytes] = []
-    for rel, st in chosen:
-        matched, count, kind = _result(rel, st, m, files, store)
-        if matched is None:
-            raise _Decline
-        if mode == "l":
-            if matched:
-                lines.append(os.fsencode(rel))
-        elif mode == "c":
-            if count < 0:
-                raise _Decline
-            text = f"{rel}:{count}" if prefixed else str(count)
-            lines.append(os.fsencode(text))
-        else:
-            if names_needed:
-                raise _Decline
-            if count < 0 or (matched and kind != 0):
-                raise _Decline
-            lines.extend(b"" for _ in range(count))
-    return lines
-
-
-def _grep_single_file(g: _Grep, op: _Operand, files: FileSource,
-                      store: Optional[CensusStore]) -> Ran:
-    """`grep ... FILE` as the only stage: every mode, in file order."""
-    if op.kind != "file" or "r" in g.flags or g.include or g.exclude or g.exclude_dir:
-        raise _Decline
-    m = _matcher(g.pattern, g.dialect, ignore="i" in g.flags, word="w" in g.flags,
-                 invert="v" in g.flags, only="o" in g.flags)
-    if m is None:
-        raise _Decline
-    mode = _mode(g)
-    st = os.lstat(files.root / op.rel)
-    if mode != "print":
-        matched, count, _ = _result(op.rel, st, m, files, store)
-        if matched is None or (mode == "c" and count < 0):
-            raise _Decline
-        if mode == "l":
-            return (0 if matched else 1, f"{op.token}\n" if matched else "", "")
-        return (0 if count > 0 else 1, f"{count}\n", "")
-    return _print_single(g, m, files.read(op.rel))
 
 
 def _print_single(g: _Grep, m: _Matcher, data: Optional[bytes]) -> Ran:
@@ -734,73 +588,11 @@ def _find_spec(parts: list, raw: str, make_operand) -> tuple:
     return operands, keep
 
 
-def _find_lines(parts: list, raw: str, root: Path, quiet: bool) -> list:
-    operands, keep = _find_spec(parts, raw, lambda t: _operand(t, root, raw))
-    out: list[bytes] = []
-    for op in operands:
-        if op.kind == "absent":
-            if not quiet:
-                raise _Decline
-            continue
-        if keep("f" if op.kind == "file" else "d", op.rel.rsplit("/", 1)[-1]):
-            out.append(os.fsencode(op.token))
-        stack = [(op.token, root / op.rel)] if op.kind == "dir" else []
-        while stack:
-            shown, path = stack.pop()
-            try:
-                with os.scandir(path) as it:
-                    entries = list(it)
-            except OSError:
-                raise _Decline
-            for e in entries:
-                child = f"{shown}/{e.name}"
-                if e.is_symlink():
-                    kind = "l"
-                elif e.is_dir(follow_symlinks=False):
-                    kind = "d"
-                    stack.append((child, Path(e.path)))
-                elif e.is_file(follow_symlinks=False):
-                    kind = "f"
-                else:
-                    kind = "o"
-                if keep(kind, e.name):
-                    out.append(os.fsencode(child))
-    return out
-
-
 def _ls_arg(parts: list) -> str:
     args = [t for t in parts[1:] if t != "-1"]
     if len(args) != 1 or args[0].startswith("-"):
         raise _Decline
     return args[0]
-
-
-def _ls_lines(parts: list, raw: str, root: Path, quiet: bool) -> list:
-    op = _operand(_ls_arg(parts), root, raw)
-    if op.kind == "absent":
-        if not quiet:
-            raise _Decline
-        return []
-    if op.kind == "file":
-        return [os.fsencode(op.token)]
-    try:
-        with os.scandir(root / op.rel) as it:
-            return [os.fsencode(e.name) for e in it if not e.name.startswith(".")]
-    except OSError:
-        raise _Decline
-
-
-def _wc_single(parts: list, raw: str, files: FileSource) -> Ran:
-    if len(parts) != 3 or parts[1] != "-l":
-        raise _Decline
-    op = _operand(parts[2], files.root, raw)
-    if op.kind != "file":
-        raise _Decline
-    data = files.read(op.rel)
-    if data is None:
-        raise _Decline
-    newlines = data.count(b"\n")
-    return (0, f"{newlines} {op.token}\n", "")
 
 
 def _split_command(command: str) -> tuple:
@@ -824,53 +616,6 @@ def _split_command(command: str) -> tuple:
     if any(not st for st in cleaned):
         raise _Decline
     return cleaned, [n > 0 for n in removed]
-
-
-def _evaluate(command: str, files: FileSource, store: Optional[CensusStore]) -> Ran:
-    cleaned, quiets = _split_command(command)
-    root = Path(files.root)
-    heads = [st[0] for st in cleaned]
-    if len(cleaned) == 1:
-        if heads[0] == "wc":
-            return _wc_single(cleaned[0], command, files)
-        if heads[0] != "grep":
-            raise _Decline
-        g = _parse_grep(cleaned[0], command, root, stage_only=False)
-        g.quiet = quiets[0]
-        if len(g.operands) != 1:
-            raise _Decline
-        return _grep_single_file(g, _operand(g.operands[0], root, command), files, store)
-    if cleaned[-1] != ["wc", "-l"] or any(h != "grep" for h in heads[1:-1]):
-        raise _Decline
-    later = len(cleaned) > 2
-    if heads[0] == "grep":
-        g = _parse_grep(cleaned[0], command, root, stage_only=False)
-        g.quiet = quiets[0]
-        if not g.operands:
-            raise _Decline
-        ops = [_operand(t, root, command) for t in g.operands]
-        lines = _grep_lines(g, ops, files, store, names_needed=later)
-    elif heads[0] == "find":
-        lines = _find_lines(cleaned[0], command, root, quiets[0])
-    elif heads[0] == "ls":
-        lines = _ls_lines(cleaned[0], command, root, quiets[0])
-    else:
-        raise _Decline
-    for parts in cleaned[1:-1]:
-        lines = _filter_stage(parts, command, lines, root)
-    return (0, f"{len(lines)}\n", "")
-
-
-def evaluate(command: str, files: FileSource, store: Optional[CensusStore]) -> Optional[Ran]:
-    """The output the screened POSIX pipeline would print, or None (decline: the caller spawns).
-    Never spawns, never writes the tree. Declines on: any stage outside GRAMMAR; a regex outside
-    the translatable subset; an order-sensitive multi-file output; a binary file matched under a
-    content-printing mode; an unreadable or unbounded operand. A `store` is read and filled with
-    per-file match results; saving it stays the caller's single call."""
-    try:
-        return _evaluate(command, files, store)
-    except Exception:  # noqa: BLE001 -- any doubt is a decline; the caller spawns
-        return None
 
 
 _SLICE = 256
@@ -988,8 +733,12 @@ def _selected_ix(g: _Grep, ops: list) -> list:
         if any(fnmatch.fnmatchcase(base, d) for d in g.exclude_dir):
             raise _Decline
         prefix = len(op.rel) + 1
+        filtered = bool(g.exclude_dir or g.include or g.exclude)
         for rel, oid, mode in op.entries:
             if mode == _SYMLINK:
+                continue
+            if not filtered:
+                chosen.append((rel, oid))
                 continue
             name = rel.rsplit("/", 1)[-1]
             if any(fnmatch.fnmatchcase(d, glob) for d in rel[prefix:].split("/")[:-1]
@@ -1159,16 +908,17 @@ def _plan(command: str, files: IndexFiles) -> _Plan:
 
 
 def evaluate_many(commands: list, files: IndexFiles, store: Optional[MatchStore],
-                  read_budget_s: float) -> dict:
+                  read_budget_s: float, force_first: bool = True) -> dict:
     """`{command: Ran | None | PENDING}` for each command, answered from the git index world.
 
     None declines (the caller spawns or reads UNDECIDABLE); PENDING means `read_budget_s` of
     process time ran out before every blob the command needs was matched, and a later call
     resumes from the recorded per-(pattern, oid) counts. Every command is parsed once, the oids
     lacking a record for any pending pattern are fetched in ONE `read_blobs` per slice, and each
-    blob is tested against every pattern that needs it. At least one slice runs per call, so
-    coverage advances however small the budget. An operand with no index entry reads as absent:
-    the caller classifies untracked operands before asking. Never spawns itself."""
+    blob is tested against every pattern that needs it. With `force_first` at least one slice
+    runs whatever the budget, so coverage advances however small it is; without it a spent
+    budget reads no blob. An operand with no index entry reads as absent: the caller classifies
+    untracked operands before asking. Never spawns itself."""
     plans: dict = {}
     out: dict = {}
     for command in dict.fromkeys(commands):
@@ -1196,7 +946,7 @@ def evaluate_many(commands: list, files: IndexFiles, store: Optional[MatchStore]
     order = list(todo)
     started = _cpu_s()
     for i in range(0, len(order), _SLICE):
-        if i and _cpu_s() - started >= read_budget_s:
+        if (i or not force_first) and _cpu_s() - started >= read_budget_s:
             break
         batch = order[i:i + _SLICE]
         try:

@@ -1605,3 +1605,16 @@ def test_no_gitignore_means_no_refusal(tmp_path):
     report = _gate(tmp_path, _write_plan(tmp_path, frontmatter=_CLEAN_FM, spine=spine))
     assert report["classes"]["GITIGNORED_WRITES"]["status"] == "PASS"
     assert report["classes"]["GITIGNORED_WRITES"]["withheld"] == []
+
+
+def test_the_spine_defect_names_every_invalid_change_kind_row(tmp_path):
+    (tmp_path / "coordinator_core").mkdir()
+    spine = "\n".join(
+        _CLEAN_SPINE.replace("C1", rid).replace("change_kind: code-edit", f"change_kind: {kind}")
+        for rid, kind in (("E1", "bogus"), ("E2", "bogus"), ("E4", "bogus"), ("E7", "bogus"), ("T1", "bogus"))
+    )
+    report = _gate(tmp_path, _write_plan(tmp_path, frontmatter=_CLEAN_FM, spine=spine))
+    spine_class = report["classes"]["SPINE"]
+    assert spine_class["kind"] == "InvalidChangeKindError"
+    for rid in ("E1", "E2", "E4", "E7", "T1"):
+        assert repr(rid) in spine_class["detail"]

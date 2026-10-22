@@ -120,6 +120,39 @@ def test_write_failure_fails_open(tmp_path, monkeypatch):
     assert message.startswith("ERROR")
 
 
+def test_fixture_only_uproject_is_silent(tmp_path):
+    fixture = tmp_path / "tests" / "fixtures" / "polyglot"
+    fixture.mkdir(parents=True)
+    (fixture / "Foo.uproject").write_text("{}", encoding="utf-8")
+
+    result = mod.run(str(tmp_path), "unused")
+
+    assert result.banner == ""
+    assert result.stderr_lines == []
+    assert not (tmp_path / ".claude" / "settings.json").exists()
+
+
+def test_declared_non_ue_suppresses_banner_and_write(tmp_path):
+    (tmp_path / "Game.uproject").write_text("{}", encoding="utf-8")
+    (tmp_path / "coordinator.local.md").write_text(
+        "---\nproject_type: general\n---\n", encoding="utf-8"
+    )
+
+    result = mod.run(str(tmp_path), "unused")
+
+    assert result.banner == ""
+    assert result.stderr_lines == []
+    assert not (tmp_path / ".claude").exists()
+
+
+def test_root_uproject_undeclared_still_banners(tmp_path):
+    (tmp_path / "Game.uproject").write_text("{}", encoding="utf-8")
+
+    result = mod.run(str(tmp_path), "unused")
+
+    assert "UE PROJECT DETECTED (Game)" in result.banner
+
+
 def _forbid_subprocess(*args, **kwargs):
     """Fail loud if the port ever regresses to spawning a subprocess -- the
     whole point of C5 is that _run_bootstrap no longer shells out at all."""

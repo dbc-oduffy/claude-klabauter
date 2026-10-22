@@ -57,15 +57,17 @@ def _key(mcr, repo, command, head="H1"):
     return mcr.input_key({"command": command}, repo, head=head)
 
 
-def test_edit_changes_the_key_and_an_unchanged_tree_keeps_it(mcr, repo):
+def test_a_staged_edit_changes_the_key_and_an_unstaged_one_does_not(mcr, repo):
     first = _key(mcr, repo, "cat f.txt")
     assert first is not None
     assert _key(mcr, repo, "cat f.txt") == first
     (repo / "f.txt").write_text("alpha\ngamma\n", encoding="utf-8")
+    assert _key(mcr, repo, "cat f.txt") == first
+    _git(["add", "f.txt"], repo)
     assert _key(mcr, repo, "cat f.txt") != first
 
 
-def test_stat_stale_file_with_unchanged_content_keys_the_same_and_index_is_untouched(mcr, repo):
+def test_a_stat_stale_file_with_unchanged_content_keys_the_same_and_index_is_untouched(mcr, repo):
     before = _key(mcr, repo, "cat f.txt")
     index = repo / ".git" / "index"
     index_bytes = index.read_bytes()
@@ -75,54 +77,50 @@ def test_stat_stale_file_with_unchanged_content_keys_the_same_and_index_is_untou
     assert index.read_bytes() == index_bytes
 
 
-def test_untracked_and_ignored_files_under_a_directory_enter_the_key(mcr, repo):
+def test_untracked_and_ignored_files_under_a_directory_do_not_enter_the_key(mcr, repo):
     cmd = "grep -rn needle d"
     base = _key(mcr, repo, cmd)
     assert base is not None
     for name in ("new.txt", "ignored.log"):
         path = repo / "d" / name
         path.write_text("one\n", encoding="utf-8")
-        added = _key(mcr, repo, cmd)
-        assert added not in (None, base)
-        path.write_text("two\n", encoding="utf-8")
-        edited = _key(mcr, repo, cmd)
-        assert edited not in (None, added)
-        path.unlink()
         assert _key(mcr, repo, cmd) == base
+        path.unlink()
+    (repo / "d" / "crlf.bin").write_bytes(b"a\r\nb\r\n")
+    assert _key(mcr, repo, cmd) == base
 
 
-def test_cr_bearing_untracked_file_under_a_directory_keys_and_editing_it_changes_the_key(
-    mcr, repo
-):
+def test_staging_a_file_under_a_directory_moves_the_key(mcr, repo):
     cmd = "grep -rn needle d"
     base = _key(mcr, repo, cmd)
-    (repo / "d" / "crlf.bin").write_bytes(b"a\r\nb\r\n")
+    (repo / "d" / "new.txt").write_text("one\n", encoding="utf-8")
+    _git(["add", "d/new.txt"], repo)
     added = _key(mcr, repo, cmd)
     assert added not in (None, base)
-    (repo / "d" / "crlf.bin").write_bytes(b"a\r\nc\r\n")
-    assert _key(mcr, repo, cmd) not in (None, added)
 
 
-def test_cr_bearing_untracked_file_operand_still_gives_none(mcr, repo):
+def test_an_untracked_file_operand_gives_none(mcr, repo):
     (repo / "crlf.txt").write_bytes(b"a\r\nb\r\n")
     assert _key(mcr, repo, "cat crlf.txt") is None
 
 
-def test_cr_bearing_tracked_stat_stale_file_gives_none(mcr, repo):
+def test_a_cr_bearing_tracked_file_keys_whatever_its_stat(mcr, repo):
     (repo / "crlf.txt").write_bytes(b"a\r\nb\r\n")
     _git(["add", "crlf.txt"], repo)
     _git(["commit", "-qm", "crlf"], repo)
     st = (repo / "crlf.txt").stat()
     os.utime(repo / "crlf.txt", ns=(st.st_atime_ns, st.st_mtime_ns + 7_000_000_000))
-    assert _key(mcr, repo, "cat crlf.txt") is None
-    assert _key(mcr, repo, "grep -rn a crlf.txt") is None
+    assert _key(mcr, repo, "cat crlf.txt") is not None
+    assert _key(mcr, repo, "grep -rn a crlf.txt") is not None
 
 
-def test_a_crlf_rewrite_that_normalises_to_one_blob_still_changes_the_key(mcr, repo):
-    _git(["config", "core.autocrlf", "true"], repo)
+def test_a_staged_line_ending_rewrite_changes_the_key(mcr, repo):
+    _git(["config", "core.autocrlf", "false"], repo)
     (repo / "u.txt").write_bytes(b"a\nb\n")
+    _git(["add", "u.txt"], repo)
     lf = _key(mcr, repo, "wc -c u.txt")
     (repo / "u.txt").write_bytes(b"a\r\nb\r\n")
+    _git(["add", "u.txt"], repo)
     crlf = _key(mcr, repo, "wc -c u.txt")
     assert lf is not None and crlf is not None and lf != crlf
 
@@ -230,21 +228,23 @@ def test_a_typed_entry_gives_none(mcr, repo):
     assert mcr.input_key({"kind": "next-free-number", "dir": "d"}, repo, head="H1") is None
 
 
-def test_a_missing_operand_keys_as_absent_and_creating_it_changes_the_key(mcr, repo):
+def test_a_missing_operand_keys_as_absent_and_staging_it_changes_the_key(mcr, repo):
     missing = _key(mcr, repo, "cat later.txt")
     assert missing is not None
     (repo / "later.txt").write_text("now\n", encoding="utf-8")
+    assert _key(mcr, repo, "cat later.txt") is None
+    _git(["add", "later.txt"], repo)
     assert _key(mcr, repo, "cat later.txt") not in (None, missing)
 
 
 def test_the_index_is_parsed_once_per_view(mcr, repo, monkeypatch):
     mcr._census()
-    from coordinator_core.git import git_index
+    from coordinator_core.git import git_state
 
     calls = []
-    real = git_index.parse_index_identity
+    real = git_state.read_index
     monkeypatch.setattr(
-        git_index, "parse_index_identity", lambda *a, **kw: calls.append(1) or real(*a, **kw)
+        git_state, "read_index", lambda *a, **kw: calls.append(1) or real(*a, **kw)
     )
     view = mcr._TreeView(repo)
     for cmd in ("cat f.txt", "grep -rn needle d", "cat d/tracked.txt"):
@@ -287,8 +287,10 @@ def test_equal_key_judges_from_the_memo_with_zero_spawns(mcr, repo, monkeypatch)
     assert spawns.calls == 1 and again["memo_hits"] == 1
     assert again["entries"][0]["state"] == first["entries"][0]["state"] == mcr.MATCH
     (repo / "f.txt").write_text("alpha\nbeta\ngamma\n", encoding="utf-8")
+    _git(["add", "f.txt"], repo)
+    staged_at = spawns.calls
     moved = mcr.revalidate(plan, repo, 10, memo=memo, head="H1")
-    assert spawns.calls == 2 and moved["memo_hits"] == 0
+    assert spawns.calls == staged_at + 1 and moved["memo_hits"] == 0
     assert moved["entries"][0]["state"] == mcr.DRIFT
 
 

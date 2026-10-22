@@ -62,7 +62,7 @@ from coordinator_core.ops.dispatch_emit.ask_stage import (
     stage,
     stamp_plan_executing,
 )
-from coordinator_core.ops.dispatch_emit import reply_sidecar
+from coordinator_core.ops.dispatch_emit import ask_stage_receipt, reply_sidecar
 from coordinator_core.ops.dispatch_emit.request_validation import Field, validate_params
 from coordinator_core.ops.dispatch_emit.sizing_fire import (
     ARM_S,
@@ -662,12 +662,21 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             )
             stamp = stamp_plan_executing(root, plan_rel)
             out["manifest_handle"] = reply_sidecar.handle_for(root, record_dir(root, params["run_id"]) / "manifest.json")
+            ask_stage_receipt.write_gate(record_dir(root, params["run_id"]), out["manifest_handle"])
             if stamp["outcome"] != "unchanged":
                 out[PLAN_EXECUTING_STAMP_KEY] = stamp
             if ledger_resume:
-                from coordinator_core.ops.dispatch_emit.ledger_remaining_paths import remaining_leg_plan
+                from coordinator_core.ops.dispatch_emit.ledger_remaining_paths import (
+                    PlanRowsUnreadable,
+                    plan_rows_serving,
+                    remaining_leg_plan,
+                )
 
                 resume_out = out["resume_ledger"]
+                try:
+                    plan_writes = plan_rows_serving(root / plan_rel, resume_out.get("blocking") or [])
+                except PlanRowsUnreadable as exc:
+                    raise AskStageError(str(exc)) from exc
                 resume_out[RESUME_LEDGER_LEG_FIELD] = remaining_leg_plan(
                     resume_out.get(RESUME_LEDGER_REMAINING_FIELD) or {},
                     resume_out.get(RESUME_LEDGER_NOTES_FIELD) or [],
@@ -676,6 +685,8 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                     list(manifest.doc_writes),
                     out.get("sizing_path") or sizing_rel,
                     root,
+                    plan_writes=plan_writes,
+                    arm=verdict.arm,
                 )
                 import json
 

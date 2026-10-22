@@ -459,6 +459,7 @@ def _spine(
     from coordinator_core.ops.dispatch_emit.spine_read import (
         UNDECLARED,
         DanglingPlanDependencyError,
+        InvalidChangeKindError,
         SpineReadError,
         em_owned_rows,
         executable_body,
@@ -494,6 +495,8 @@ def _spine(
             "predecessor-plan-dangling",
             "spine not evaluated past a dangling depends_on_plan edge — EXTERNAL_DEPS names each",
         )
+    except InvalidChangeKindError as exc:
+        return _defect(type(exc).__name__, str(exc).strip().splitlines()[0])
     except SpineReadError as exc:
         return _defect(type(exc).__name__, str(exc).strip().splitlines()[0][:300])
     # Zero rows with nothing owed is a plan whose work is done, held or voided: it certifies.
@@ -1487,6 +1490,23 @@ _TIMING_CHANGE_KIND = re.compile(r"\b(?:timing|measure\w*|benchmark\w*)\b", re.I
 _BROAD_SUITE_WORKER_CAP = 1 << 30
 
 
+def _is_path_scoped_pnpm_test(span: str) -> bool:
+    """True for ``pnpm test <path ...>``: a positional (non-flag) argument scopes the run.
+
+    ``classify`` keeps reporting it TEST_TIER for the admission guard; only this gate reads it as scoped.
+    Trap: a flag's separate value (``--reporter verbose``) counts as a positional, so it reads as scoped.
+    """
+    import shlex
+
+    try:
+        argv = shlex.split(span)
+    except ValueError:
+        return False
+    if len(argv) < 3 or argv[0] != "pnpm" or argv[1] != "test":
+        return False
+    return any(not a.startswith("-") for a in argv[2:])
+
+
 def _test_runner_out_of_role(rows: List[Dict[str, Any]], repo_root: Path) -> Dict[str, Any]:
     """Refuse a row declaring ``coordinator:test-runner`` whose act test-runner cannot perform.
 
@@ -1522,6 +1542,8 @@ def _test_runner_out_of_role(rows: List[Dict[str, Any]], repo_root: Path) -> Dic
                 spans.append(row["verification"])
             for span in spans:
                 span = span.strip()
+                if _is_path_scoped_pnpm_test(span):
+                    continue
                 cls = (
                     classify(span, None, str(repo_root), _BROAD_SUITE_WORKER_CAP) if span else None
                 )

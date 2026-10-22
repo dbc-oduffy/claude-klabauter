@@ -4710,6 +4710,29 @@ def _reset_resolution_journal() -> None:
         print(f"[ADVISORY] resolution journal not reset: {exc}", file=sys.stderr)
 
 
+def install_general_work_ensure(repo_root: Path, claude_klabauter_root_resolved: Path, args: Args, *, ensure=None) -> None:
+    """Install-chain step: run DoE's `general-work-root ensure` once; never fatal.
+
+    A refused root or a missing DoE script is an [ADVISORY], not an install failure.
+    """
+    print()
+    print("--- Install: general-work root ---")
+    try:
+        if ensure is None:
+            if str(claude_klabauter_root_resolved) not in sys.path:
+                sys.path.insert(0, str(claude_klabauter_root_resolved))
+            from coordinator_core.install.general_work_ensure import ensure_general_work_root as ensure
+        coord_path, _ = _resolve_coordinator_claude_root(repo_root, args)
+        outcome = ensure(coord_path)
+    except Exception as exc:
+        print(f"[ADVISORY] general-work root ensure skipped ({exc}); re-run scripts/setup.py.", file=sys.stderr)
+        return
+    if outcome.status == "ensured":
+        print(f"[OK] general-work root ensured ({outcome.root})")
+    else:
+        print(f"[ADVISORY] general-work root {outcome.status}: {outcome.detail}", file=sys.stderr)
+
+
 def main(argv: list[str]) -> int:
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(line_buffering=True)
@@ -4839,6 +4862,7 @@ def main(argv: list[str]) -> int:
         install_global_doctrine_files(repo_root, claude_klabauter_root_resolved, args)
         install_precompiled_bytecode(claude_klabauter_root_resolved, args)
         install_machine_identity(repo_root, claude_klabauter_root_resolved, args)
+        install_general_work_ensure(repo_root, claude_klabauter_root_resolved, args)
         install_host_sampler_task(repo_root, claude_klabauter_root_resolved)
         install_verify_settings_home(claude_klabauter_root_resolved, forwarders_failed=forwarders_failed)
         install_record_receipt(claude_klabauter_root_resolved)

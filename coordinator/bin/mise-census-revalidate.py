@@ -70,7 +70,6 @@ import os
 import re
 import shutil
 import signal
-import stat as _stat
 import subprocess
 import sys
 import threading
@@ -149,9 +148,20 @@ def _inproc():
     return census_inproc
 
 
-def screen(command: str, repo_root: Optional[Path] = None) -> Optional[dict]:
-    """`None` when the command is read-only; a REFUSED row otherwise."""
-    reason = _census().screen(command, repo_root)
+def _inproc_run_ms() -> int:
+    """`census_store.INPROC_RUN_MS`, the `run_ms` an in-process answer is stored under."""
+    _census()
+    from coordinator_core.roadmap import census_store
+
+    return census_store.INPROC_RUN_MS
+
+
+def screen(
+    command: str, repo_root: Optional[Path] = None, tracked: Optional[frozenset] = None
+) -> Optional[dict]:
+    """`None` when the command is read-only; a REFUSED row otherwise. `tracked` is the tracked
+    subset of the command's python targets when the caller already holds it (no git spawn)."""
+    reason = _census().screen(command, repo_root, tracked)
     return None if reason is None else {"state": REFUSED, "detail": reason}
 
 
@@ -351,6 +361,10 @@ class _LegCost:
 
 def _unrunnable(detail: str) -> dict:
     return {"state": UNRUNNABLE, "detail": detail}
+
+
+def _timed_out(ran: dict) -> bool:
+    return str(ran.get("detail") or "").startswith("timed out")
 
 
 def _drain(stream, sink: list) -> None:
@@ -650,7 +664,8 @@ def can_drift(entry: dict) -> bool:
 class MemoEntry(NamedTuple):
     """One memoised census command. `key` is its `input_key` at the run (None when un-keyable or
     run directly), `ran` the completed `(returncode, stdout, stderr)`, `run_ms` the spawn's wall
-    and `key_ms` the key's wall (None when never keyed)."""
+    (`census_store.INPROC_RUN_MS` for an in-process answer) and `key_ms` the key's wall (None
+    when never keyed)."""
 
     key: Optional[str]
     ran: tuple
@@ -659,7 +674,7 @@ class MemoEntry(NamedTuple):
 
 
 _DIRECT_BASIS = "direct: key cost exceeds spawn"
-#: A stored `MemoEntry.key` for a command whose key at an unchanged tree (stat walk, no hash)
+#: A stored `MemoEntry.key` for a command whose key at an unchanged index
 #: costs no less than its spawn: it runs directly. Never an `input_key` digest, so it never hits.
 _DIRECT_KEY = "direct"
 #: Largest stdout+stderr a keyed `MemoEntry` retains; a bigger run is judged and not stored, so the
@@ -678,35 +693,27 @@ _UNBOUNDED_SHAPE = re.compile(r"[;&`\n]|\|\|")
 
 
 class _TreeView:
-    """One `revalidate` call's read-only view of the index and the files under an operand.
+    """One call's read-only view of the git index world: keys, and the in-process answers.
 
-    The index is parsed at most once (`parse_index_identity`, never written, never refreshed) and
-    each path's identity is computed at most once, so N entries over one tree pay for it once.
-    `deadline` (a `time.monotonic()` value) makes a long directory walk give up as un-keyable."""
+    One `IndexView` serves both. Nothing here lists a directory beyond the repo root's dash-name
+    probe; an operand's identity is its index fingerprint, and an operand the index does not
+    track is live state the census cannot revalidate (EM note N2)."""
 
-    def __init__(
-        self, root: Path, deadline: Optional[float] = None, store: Any = None,
-        deadline_gates_hashing: bool = False, hash_budget_s: Optional[float] = None,
-    ):
+    def __init__(self, root: Path, store: Any = None, cost: Optional["_LegCost"] = None):
         self.root = Path(root)
-        self.deadline = deadline
         self.store = store
-        self.deadline_gates_hashing = deadline_gates_hashing
-        #: Seconds of hashing this view may spend; once `hash_s` reaches it a file without a
-        #: stored or index identity has none this call, so its key is None and the entry runs.
-        #: Identities already hashed stay in the store, so the next call resumes from them.
-        self.hash_budget_s = hash_budget_s
-        #: Seconds spent hashing so far; the share of a key a later call at an unchanged tree
-        #: does not pay.
-        self.hash_s = 0.0
-        self._subtrees: dict[str, Optional[str]] = {}
-        self._loaded = False
+        self.cost = cost
+        self._index: Any = None
         self._dash: Optional[bool] = None
-        self._entries: Optional[dict] = None
-        self._index_mtime_ns = 0
-        self._files: dict[tuple, Optional[str]] = {}
-        self._dirs: dict[str, Optional[str]] = {}
-        self._kids: dict[str, Optional[list]] = {}
+        self._listed: dict[str, list] = {}
+
+    def _ix(self) -> Any:
+        if self._index is None:
+            _census()
+            from coordinator_core.roadmap.census_index import IndexView
+
+            self._index = IndexView(self.root, self.store, _operands().LIVE_STATE_ROOTS)
+        return self._index
 
     def has_dash_names(self) -> bool:
         """True when the worktree root holds an entry whose name begins with `-`, the only thing
@@ -718,212 +725,50 @@ class _TreeView:
                 self._dash = True
         return self._dash
 
-    def entries(self) -> Optional[dict]:
-        if not self._loaded:
-            self._loaded = True
-            _census()
-            from coordinator_core.git import git_index
-            from coordinator_core.git.git_dir import resolve_git_dir
+    def checksum(self) -> Optional[str]:
+        """The index's trailing checksum (None when there is no index)."""
+        return self._ix().checksum
 
-            try:
-                self._index_mtime_ns = (resolve_git_dir(self.root) / "index").stat().st_mtime_ns
-            except OSError:
-                self._index_mtime_ns = 0
-            try:
-                self._entries = git_index.parse_index_identity(self.root)
-            except (OSError, ValueError):
-                self._entries = None
-        return self._entries
+    def fingerprint(self, rel: str) -> Optional[str]:
+        """`IndexView.fingerprint`: the operand's index identity, None when untracked."""
+        return self._ix().fingerprint(rel)
 
-    def _stat_clean(self, e: Any, st: os.stat_result) -> bool:
-        """scoped_status's stat compare plus git's racy-clean rule: an entry whose mtime is not
-        older than the index file's own mtime cannot be trusted by stat alone."""
-        if e.mode & 0o170000 != 0o100000:
-            return False
-        mtime_ns = st.st_mtime_ns
-        same = e.size == (st.st_size & 0xFFFFFFFF) and e.mtime == mtime_ns // 1_000_000_000
-        if same and e.mtime_nsec:
-            same = e.mtime_nsec == mtime_ns % 1_000_000_000
-        return same and e.mtime * 1_000_000_000 + e.mtime_nsec < self._index_mtime_ns
+    def untracked_operand(self, command: str, cache: dict) -> Optional[str]:
+        """The first operand `command` reads that is untracked (live state), or None."""
+        if command not in cache:
+            found: Optional[str] = None
+            rels = _operands().command_operands(command)
+            for rel in rels or ():
+                if self._ix().classify(rel) == "untracked":
+                    found = rel
+                    break
+            cache[command] = found
+        return cache[command]
 
-    def _raw_id(self, rel: str, size: int) -> Optional[str]:
-        """`raw:<sha1(b"blob <len>\\0" + file bytes)>:<size>`, an identity for a file git does not
-        track. It is never written, never compared with a git object and makes no claim about the
-        blob git would store, so it does not reopen git_state.py's raw-bytes prohibition."""
-        digest = hashlib.sha1(f"blob {size}\0".encode())
-        try:
-            with open(self.root / rel, "rb") as fh:
-                for chunk in iter(lambda: fh.read(1 << 20), b""):
-                    digest.update(chunk)
-        except OSError:
-            return None
-        return f"raw:{digest.hexdigest()}:{size}"
+    def tracked_among(self, candidates: list) -> frozenset:
+        """The candidate paths the index tracks as files; no git spawn."""
+        ix = self._ix()
+        return frozenset(c for c in candidates if ix.classify(c) == "file")
 
-    def file_id(self, rel: str, st: os.stat_result, in_dir: bool = False) -> Optional[str]:
-        """`<blob sha>:<size>` of a regular file. The sha is the index's for a stat-clean tracked
-        file and `checkin_blob_sha` otherwise; the size keeps a CRLF/LF rewrite that normalises to
-        one blob from keying equal, since the command reads the bytes on disk. Under a directory
-        walk (`in_dir`) an untracked or ignored file takes `_raw_id` instead, so a file
-        `checkin_blob_sha` refuses cannot make the whole directory un-keyable."""
-        slot = (rel, in_dir)
-        if slot in self._files:
-            return self._files[slot]
-        entries = self.entries()
-        ident: Optional[str] = None
-        if entries is not None:
-            cached = entries.get(rel)
-            sha = cached.sha if cached is not None and self._stat_clean(cached, st) else None
-            if sha is not None:
-                ident = f"{sha}:{st.st_size}"
-            else:
-                tag = "d" if in_dir else "f"
-                stored = self.store.ident(rel, st) if self.store is not None else None
-                if stored is not None and stored.startswith(tag + "|"):
-                    ident = stored[2:]
-                elif (
-                    self.deadline_gates_hashing
-                    and self.deadline is not None
-                    and time.monotonic() > self.deadline
-                ):
-                    ident = None
-                elif self.hash_budget_s is not None and self.hash_s >= self.hash_budget_s:
-                    ident = None
-                else:
-                    computed_at_ns = time.time_ns()
-                    hashing_from = time.perf_counter()
-                    if cached is None and in_dir:
-                        ident = self._raw_id(rel, st.st_size)
-                    else:
-                        from coordinator_core.git.commit import checkin_blob_sha
+    def files(self, rel: str) -> list:
+        """IndexFiles: tracked `(path, oid, mode)` at or under `rel`; mode is the octal string
+        `census_inproc` reads to skip symlinks and gitlinks. Listed once per `rel` per call."""
+        if rel not in self._listed:
+            ix = self._ix()
+            entries = ix._parse()
+            self._listed[rel] = [(p, oid, f"{entries[p][0]:o}") for p, oid in ix.files(rel)]
+        return self._listed[rel]
 
-                        sha = checkin_blob_sha(self.root, rel)
-                        if sha is not None:
-                            ident = f"{sha}:{st.st_size}"
-                    self.hash_s += time.perf_counter() - hashing_from
-                    if ident is not None and self.store is not None:
-                        self.store.put_ident(rel, st, f"{tag}|{ident}", computed_at_ns)
-        self._files[slot] = ident
-        return ident
+    def read_blobs(self, oids: Any) -> dict:
+        """IndexFiles: blob bytes in one `git cat-file --batch` spawn counted on the leg."""
+        return self._ix().read_blobs(oids, cost=self.cost)
 
-    def _subtree(self, rel: str) -> Optional[str]:
-        """The digest text of everything under `rel`, memoised per directory so a directory
-        nested under another operand is scanned once; None when any part cannot be bounded."""
-        if rel not in self._subtrees:
-            self._subtrees[rel] = self._scan(rel)
-        return self._subtrees[rel]
-
-    def _children(self, rel: str) -> Optional[list]:
-        """`rel`'s entries as sorted `(name, kind, stat_or_link)`, scandir'd once per call and
-        shared by the key walk and `walk`. kind: "l" symlink (link target), "d" directory, "f"
-        regular file (lstat), "o" anything else; None when the directory cannot be listed."""
-        if rel not in self._kids:
-            kids: Optional[list] = []
-            try:
-                with os.scandir(self.root / rel) as it:
-                    for kid in sorted(it, key=lambda k: k.name):
-                        if kid.name == ".git":
-                            continue
-                        if kid.is_symlink():
-                            kids.append((kid.name, "l", os.readlink(kid.path)))
-                        elif kid.is_dir(follow_symlinks=False):
-                            kids.append((kid.name, "d", None))
-                        elif kid.is_file(follow_symlinks=False):
-                            kids.append((kid.name, "f", kid.stat(follow_symlinks=False)))
-                        else:
-                            kids.append((kid.name, "o", None))
-            except OSError:
-                kids = None
-            self._kids[rel] = kids
-        return self._kids[rel]
-
-    def _scan(self, rel: str) -> Optional[str]:
-        if (
-            self.deadline is not None
-            and not self.deadline_gates_hashing
-            and time.monotonic() > self.deadline
-        ):
-            return None
-        kids = self._children(rel)
-        if kids is None:
-            return None
-        lines: list[str] = []
-        for name, kind, info in kids:
-            child = f"{rel}/{name}"
-            if kind == "l":
-                lines.append(f"l\0{child}\0{info}\n")
-            elif kind == "d":
-                inner = self._subtree(child)
-                if inner is None:
-                    return None
-                lines.append(f"d\0{child}\n")
-                lines.append(inner)
-            elif kind == "f":
-                ident = self.file_id(child, info, True)
-                if ident is None:
-                    return None
-                lines.append(f"f\0{child}\0{ident}\n")
-            else:
-                return None
-        return "".join(lines)
-
-    def walk(self, rel: str) -> Optional[list]:
-        """FileSource: every regular file under `rel` (`rel` itself when a file) as
-        `(path, lstat)`, skipping `.git` and symlinks; None when a part cannot be bounded."""
-        try:
-            st = os.lstat(self.root / rel)
-        except OSError:
-            return None
-        if _stat.S_ISREG(st.st_mode):
-            return [(rel, st)]
-        if not _stat.S_ISDIR(st.st_mode):
-            return None
-        out: list = []
-        stack = [rel]
-        while stack:
-            here = stack.pop()
-            kids = self._children(here)
-            if kids is None:
-                return None
-            for name, kind, info in kids:
-                child = f"{here}/{name}"
-                if kind == "d":
-                    stack.append(child)
-                elif kind == "f":
-                    out.append((child, info))
-                elif kind == "o":
-                    return None
-        return out
-
-    def read(self, rel: str) -> Optional[bytes]:
-        """FileSource: the file's bytes, None when unreadable."""
-        try:
-            return (self.root / rel).read_bytes()
-        except OSError:
-            return None
-
-    def dir_id(self, rel: str) -> Optional[str]:
-        if rel not in self._dirs:
-            text = self._subtree(rel)
-            self._dirs[rel] = (
-                hashlib.sha1(text.encode("utf-8", "surrogateescape")).hexdigest()
-                if text is not None else None
-            )
-        return self._dirs[rel]
-
-    def path_id(self, rel: str) -> Optional[str]:
-        """Content identity of one operand: "absent", a file id, or a directory digest; None when
-        it cannot be bounded (a top-level symlink or special file, an unreadable path)."""
-        try:
-            st = os.lstat(self.root / rel)
-        except (FileNotFoundError, NotADirectoryError):
-            return "absent"
-        except (OSError, ValueError):
-            return None
-        if _stat.S_ISREG(st.st_mode):
-            return self.file_id(rel, st)
-        if _stat.S_ISDIR(st.st_mode):
-            return self.dir_id(rel)
-        return None
+    def gc_store(self) -> None:
+        """Drop the store's match records of oids the index no longer holds. Runs only after this
+        call parsed the index, which is the only moment the live set is in hand."""
+        ix = self._ix()
+        if self.store is not None and ix._entries is not None:
+            self.store.gc_oids({oid for _mode, oid in ix._entries.values()})
 
 
 _DOLLAR_EXPANDS = frozenset("{(!@*#?-$_") | frozenset(
@@ -1024,9 +869,11 @@ def input_key(
     stage_cache: Optional[dict] = None,
 ) -> Optional[str]:
     """A digest over everything the entry's command can read, or None when that set cannot be
-    bounded. INVARIANT: equal keys for one command imply byte-identical stdout, stderr and
-    returncode. Every rule fails toward None, which means "run it". Spawns nothing, writes
-    nothing, never refreshes the index and never calls scoped_changed.
+    bounded. INVARIANT: equal keys for one command imply equal output over the index world (EM
+    note N2): a staged change moves a key, an unstaged edit or an untracked file under a tracked
+    path does not, and an operand the index does not track has no key. Every rule fails toward
+    None, which means "run it". Spawns nothing, writes nothing, never refreshes the index and
+    never calls scoped_changed.
 
     None when: the entry is typed or has no command; the command carries `;`, `&&`, `||`, `&`,
     a backtick or a newline, or does not tokenise (`census._split_stages`); the shell would
@@ -1041,21 +888,16 @@ def input_key(
     cat-file|rev-parse` over HEAD-reachable revisions with no wide-ref option (and any git stage
     with `head` None); an operand whose files cannot be hashed in process.
 
-    Operand identity: "absent" for a missing path; for a file, the index sha when the entry is
-    stat-clean (racily-clean entries count as stale) and `commit.checkin_blob_sha` when it is
-    stat-stale or untracked, each joined to the on-disk size; for a directory, every file under
-    it by os.scandir (untracked and ignored included, `.git` skipped, symlinks by readlink
-    text, never followed). Inside a directory an untracked or ignored file takes an identity hash
-    of its raw bytes (`raw:` prefix; never a claim about a git blob), so a CR-bearing untracked
-    file keys; a tracked file under a directory, and a file operand, follow the rule above. The
-    index is read once per `view`.
+    Operand identity: `IndexView.fingerprint`, "absent" for a path neither tracked nor on disk,
+    the `<oid>:<mode>` of a tracked file, a digest over the tracked paths under a directory; None
+    (so no key) for an untracked operand. The index is parsed at most once per `view`.
     """
     census = _census()
     ops = _operands()
     if census.is_typed(entry):
         return None
     command = str(entry.get("command") or "").strip()
-    tree =view if view is not None else _TreeView(Path(repo_root))
+    tree = view if view is not None else _TreeView(Path(repo_root))
     if (
         not command
         or _UNBOUNDED_SHAPE.search(command)
@@ -1085,7 +927,7 @@ def input_key(
             return None
         for token in operands:
             rel = ops.operand_rel(token)
-            ident = tree.path_id(rel) if rel is not None else None
+            ident = tree.fingerprint(rel) if rel is not None else None
             if ident is None:
                 return None
             digest.update(f"{token}\0{ident}\n".encode("utf-8", "surrogateescape"))
@@ -1191,6 +1033,38 @@ def _deadline_bounded(
 
 #: `_entry_row`'s answer under `stats["hold"]` for an entry that needs a spawn; never a row.
 _HELD: dict = {"state": "HELD"}
+#: ... for an entry whose command still needs an in-process answer; asked again once it exists.
+_WANT: dict = {"state": "WANT"}
+#: ... for an entry whose in-process answer is resumable and unfinished this call.
+_PENDING_ROW: dict = {"state": "PENDING"}
+
+_UNTRACKED_OPERAND = (
+    "not run: operand {rel} is not tracked; the census cannot revalidate live state"
+)
+_OVER_BAR = "not run: over the process bar"
+_PYTHON_WORD = re.compile(r"\bpython3?\b")
+
+
+def _screened(command: str, repo_root: Path, view: Optional["_TreeView"], screens: dict) -> Any:
+    """`screen(command)` once per call, and once per store for a command whose verdict is a
+    function of its text alone (a `python` target also reads the tracked-file set)."""
+    if command in screens:
+        return screens[command]
+    store = view.store if view is not None else None
+    memoable = store is not None and not _PYTHON_WORD.search(command)
+    seen = store.screened(command) if memoable else None
+    if seen is not None:
+        refusal = None if seen[0] is None else {"state": REFUSED, "detail": seen[0]}
+    else:
+        if view is not None and _PYTHON_WORD.search(command):
+            cands = _census().python_candidates(command, repo_root)
+            refusal = screen(command, repo_root, view.tracked_among(cands))
+        else:
+            refusal = screen(command, repo_root)
+        if memoable:
+            store.put_screened(command, None if refusal is None else refusal["detail"])
+    screens[command] = refusal
+    return refusal
 
 
 def _entry_row(
@@ -1223,13 +1097,11 @@ def _entry_row(
     if census.is_typed(e) or not command:
         return _deadline_bounded(e, repo_root, timeout, plan_rel, deadline)
     shared = stats.setdefault("shared", {}) if stats is not None else {}
-    screens = shared.setdefault("screen", {})
-    if command not in screens:
-        screens[command] = screen(command, repo_root)
-    refusal = screens[command]
-    if refusal:
-        return _deadline_bounded(e, repo_root, timeout, plan_rel, deadline)
+    refusal = _screened(command, repo_root, view, shared.setdefault("screen", {}))
     row: dict[str, Any] = {"question": str(e.get("question") or ""), "command": command}
+    if refusal:
+        row.update(refusal)
+        return row
     if decidable_only and not can_drift(e):
         recorded = str(e.get("result") or "")
         row.update({
@@ -1239,27 +1111,17 @@ def _entry_row(
             "observed": "",
         })
         return row
-    if view is not None and stats is not None and stats.get("inproc") and not stats.get("inproc_off"):
-        answers = shared.setdefault("inproc", {})
-        if command not in answers:
-            answers[command] = _inproc().evaluate(command, view, view.store)
-        if answers[command] is not None:
-            stats["inproc_runs"] += 1
-            return _judge(e, row, answers[command], plan_rel)
     prior = memo.get(command) if memo is not None else None
     prior = prior if isinstance(prior, MemoEntry) else None
     direct = (
         prior is not None and prior.key is not None
-        and prior.key_ms is not None and prior.run_ms <= prior.key_ms
+        and prior.key_ms is not None and 0 <= prior.run_ms <= prior.key_ms
     )
     key: Optional[str] = None
     key_ms: Optional[int] = None
     if memo is not None and not direct:
-        if prior is None and stats is not None and stats.get("hold"):
-            return _HELD
         keys = shared.setdefault("key", {})
         if command not in keys:
-            hashed_from = view.hash_s if view is not None else 0.0
             started = time.perf_counter()
             computed = input_key(
                 e, repo_root, head=head, view=view, stage_cache=shared.setdefault("stages", {})
@@ -1267,16 +1129,41 @@ def _entry_row(
             spent_ms = _ms_since(started)
             if stats is not None:
                 stats["key_ms"] = stats.get("key_ms", 0) + spent_ms
-            hashed_ms = int(round(((view.hash_s if view is not None else 0.0) - hashed_from) * 1000))
-            keys[command] = (computed, max(0, spent_ms - hashed_ms))
+            keys[command] = (computed, spent_ms)
         key, key_ms = keys[command]
         if key is not None and prior is not None and prior.key == key:
             memo[command] = prior._replace(key_ms=key_ms)
             if stats is not None:
                 stats["memo_hits"] += 1
             return _judge(e, row, prior.ran, plan_rel)
+        if key is None and view is not None:
+            rel = view.untracked_operand(command, shared.setdefault("untracked", {}))
+            if rel is not None:
+                row.update({
+                    "state": UNDECIDABLE,
+                    "basis": _UNTRACKED_OPERAND.format(rel=rel),
+                    "recorded": str(e.get("result") or "")[:400],
+                    "observed": "",
+                    "untracked_operand": rel,
+                })
+                return row
     if stats is not None and stats.get("hold"):
+        if stats.get("inproc") and view is not None:
+            answers = shared.setdefault("inproc", {})
+            if command not in answers:
+                return _WANT
+            answer = answers[command]
+            if answer is _inproc().PENDING:
+                return _PENDING_ROW
+            if answer is not None:
+                stats["inproc_runs"] += 1
+                if memo is not None and key is not None:
+                    memo[command] = MemoEntry(key, answer, _inproc_run_ms(), key_ms)
+                return _judge(e, row, answer, plan_rel)
         return _HELD
+    if stats is not None and command in stats.get("over", ()):
+        row.update({"state": UNRUNNABLE, "detail": _OVER_BAR, "basis": _OVER_BAR})
+        return row
     batched = stats.get("ran") if stats is not None else None
     if batched is not None:
         if command not in batched:
@@ -1340,7 +1227,7 @@ def revalidate(
     started = time.monotonic()
     stats = {"memo_hits": 0, "direct_runs": 0}
     if decidable_only or memo is not None:
-        view = _TreeView(repo_root, deadline) if memo is not None else None
+        view = _TreeView(repo_root) if memo is not None else None
         dicts = [e for e in census if isinstance(e, dict)]
         order = list(range(len(dicts)))
         if memo is not None:
@@ -1385,52 +1272,42 @@ def _census_block(fm_text: str, yaml: Any) -> Optional[list]:
     return census if isinstance(census, list) else None
 
 
-def _parsed_key(plan_rel: Optional[str]) -> Optional[str]:
-    """The store key under which a plan's parsed `census:` list is held: the plan's own path
-    spelled through its parent (`docs/plans/../plans/a.md`). It must name an existing path or
-    `CensusStore.save` drops it as absent, and must differ from `plan_rel` itself, which
-    `_TreeView.file_id` owns when a directory operand covers the plan."""
-    if not plan_rel or "/" not in plan_rel:
-        return None
-    parent, name = plan_rel.rsplit("/", 1)
-    return f"{parent}/../{parent.rsplit('/', 1)[-1]}/{name}"
+def _unparsed_reply(plan: Path) -> dict:
+    return {"plan": str(plan), "state": UNRUNNABLE, "detail": _BUDGET_SPENT, "entries": [],
+            "unparsed": True}
 
 
 def _plan_census(
-    plan: Path, require_stamp: bool, store: Any = None, plan_rel: Optional[str] = None
+    plan: Path, require_stamp: bool, store: Any = None, plan_rel: Optional[str] = None,
+    may_parse: Any = None,
 ) -> tuple[Optional[dict], list]:
     """`(early_reply, census_entries)`: an early reply when the plan cannot be revalidated at all
     (bad frontmatter, not CERTIFIED under `require_stamp`, no `census:` list). With a `store`
     and no stamp requirement, a plan whose stat is unchanged since its list was last parsed
     takes the stored list and is neither read nor parsed; the stat check is the store's own
-    (size, mtime, inode, racy-clean)."""
-    pkey = _parsed_key(plan_rel) if store is not None and not require_stamp else None
+    (size, mtime, inode, racy-clean). `may_parse()` is asked before a cold read; False gives
+    the `unparsed` reply and parses nothing."""
+    keyed = store is not None and not require_stamp and bool(plan_rel)
     computed_at_ns = time.time_ns()
-    if pkey is not None:
+    if keyed:
         try:
             st = os.stat(plan)
         except OSError:
-            pkey = None
+            keyed = False
         else:
-            stored = store.ident(pkey, st)
-            if stored is not None and stored.startswith("c|"):
-                try:
-                    return None, json.loads(stored[2:])
-                except ValueError:
-                    pass
+            stored = store.parsed(plan_rel, st)
+            if stored is not None:
+                return None, stored
+    if may_parse is not None and not may_parse():
+        return _unparsed_reply(plan), []
     yaml = _load_yaml()
     text = plan.read_text(encoding="utf-8", errors="replace")
     parts = text.split("---", 2)
     if not require_stamp and len(parts) >= 3:
         sliced = _census_block(parts[1], yaml)
         if sliced is not None:
-            if pkey is not None:
-                try:
-                    blob = json.dumps(sliced)
-                    if json.loads(blob) == sliced:
-                        store.put_ident(pkey, st, "c|" + blob, computed_at_ns)
-                except (TypeError, ValueError):
-                    pass
+            if keyed:
+                store.put_parsed(plan_rel, st, sliced, computed_at_ns)
             return None, sliced
     fm = {}
     if len(parts) >= 3:
@@ -1473,9 +1350,14 @@ def _plan_reply(plan: Path, entries: list, spent_ms: int, stats: dict) -> dict:
 
 
 _BUDGET_SPENT = "not run: set census budget spent"
-#: Seconds a `revalidate_set` call may spend hashing files it holds no identity for. Past it the
-#: file's identity is None, the entry runs, and the next call resumes from the store.
-_HASH_BUDGET_S = 0.06
+#: Commands handed to one `evaluate_many`; the budget is checked between groups because planning a
+#: command costs process time before any blob is read.
+_INPROC_GROUP = 16
+#: The least wall time a spawned command gets before it is killed for want of budget.
+_MIN_KILL_S = 0.05
+#: A kill that gave the command at least this share of the bar classifies it over the bar; a
+#: shorter kill only records a lower bound, and the command is tried again with twice the room.
+_OVER_BAR_SHARE = 4
 #: The default process-time brightline for one call: parent plus reaped children (DR-344).
 _PROCESS_BAR_S = 0.5
 #: What a call spends after its last batch: judging the batch's rows, the roll-up and one
@@ -1489,21 +1371,33 @@ _UNMEASURED_SHARE = 4
 
 
 def _next_batch(
-    commands: list[str], pos: int, left_ms: float, estimate: Any
+    commands: list[str], pos: int, left_ms: float, estimate: Any, *, floor: bool = True
 ) -> list[str]:
     """The commands from `pos` that fit one batch: their estimated wall ms (stored run_ms, else
-    the share above) sum to at most `left_ms`. Wall ms bounds CPU ms from above. The first
-    command is always taken, so a dear command still runs alone."""
+    the share above) sum to at most `left_ms`. Wall ms bounds CPU ms from above. With `floor`
+    the first command is taken whatever it costs; without it a command whose estimate does not
+    fit what is left is skipped, and the progress floor alone runs a command that does not fit."""
     batch: list[str] = []
     spent = 0.0
     for command in commands[pos:]:
         ms, known = estimate(command)
         cost = ms if known else max(ms, left_ms / _UNMEASURED_SHARE)
-        if batch and spent + cost > left_ms:
-            break
+        if spent + cost > left_ms and (batch or not floor):
+            if floor:
+                break
+            continue
         batch.append(command)
         spent += cost
     return batch
+
+
+def _rotated(commands: list[str], order: dict, cursor: Optional[str]) -> list[str]:
+    """`commands` from the first whose position in `order` is at or after the cursor's, wrapping
+    round; a cursor outside `order` leaves the input order."""
+    at = order.get(cursor) if cursor is not None else None
+    if at is None:
+        return list(commands)
+    return sorted(commands, key=lambda c: (order[c] < at, order[c]))
 
 
 def revalidate_set(
@@ -1518,38 +1412,58 @@ def revalidate_set(
 ) -> dict:
     """Revalidate a set of plans' census under one `time.monotonic()` `deadline`.
 
-    `process_budget_ms` is the call's process-time bar (a value <= 0 reads as 500); no new batch
-    starts once `_LegCost.total_s()` passes that bar less `_TAIL_RESERVE_S`.
+    `process_budget_ms` is the call's process-time bar (a value <= 0 reads as 500); a batch or an
+    in-process slice starts only while `_LegCost.total_s()` is under that bar less
+    `_TAIL_RESERVE_S`.
+
+    PROGRESS FLOOR. A call that completed no unit (an in-process slice, a spawned command, an
+    over-bar kill) completes exactly one before it returns, however little budget is left, and
+    persists it; the first cold plan parse is likewise always allowed. The store's cursor is the
+    first command still unfinished, and the next call starts its in-process and floor work there,
+    so a cold store converges over successive calls.
 
     Phase 1 spawns nothing: every entry goes through `_entry_row` with the store's runs as the
-    memo, a hit is judged from the stored run and an entry needing a spawn is held. Phase 2 runs
-    the held entries plan by plan, cheapest estimated remaining cost first (stored run_ms, else
-    the store's median, else 1; ties to more never-run commands, then input order), keyable
-    entries before git-stage ones within a plan. An entry reached past `deadline` is UNRUNNABLE
-    and never stored. One `_TreeView` serves the call and `store.save()` runs once, at the end.
-    The deadline gates hashing in the key walk, not the walk: a stat-clean or stored identity is
-    free, so a pre-expired deadline still judges every hit, while a first-run hash stops at it.
+    memo, a hit is judged from the stored run, a command with no hit is answered in-process by
+    one `evaluate_many`, and an entry needing a spawn is held. An entry whose operand the index
+    does not track is UNDECIDABLE and never run. Phase 2 runs the held entries plan by plan,
+    cheapest estimated remaining cost first (stored run_ms, else the store's median, else 1;
+    ties to more never-run commands, then input order), keyable entries before git-stage ones
+    within a plan. A command stored over the bar, or killed at the budget left, reads UNRUNNABLE
+    `_OVER_BAR` and is listed in `over_bar`. An entry reached past `deadline` is UNRUNNABLE and
+    never stored. One `_TreeView` serves the call and `store.save()` runs once, at the end.
     """
     started = time.monotonic()
     leg = _LegCost()
     bar_s = process_budget_ms / 1000 if process_budget_ms > 0 else _PROCESS_BAR_S
-    spawn_gate_s = bar_s - _TAIL_RESERVE_S
-    view = _TreeView(
-        repo_root, deadline, store, deadline_gates_hashing=True,
-        hash_budget_s=_HASH_BUDGET_S,
-    )
+    bar_ms = bar_s * 1000
+    gate_s = bar_s - _TAIL_RESERVE_S
+    load0 = store.load_cost_ms() if store is not None else 0
+    view = _TreeView(repo_root, store, leg)
     memo: dict[str, MemoEntry] = {}
     initial: dict[str, MemoEntry] = {}
-    shared: dict[str, dict] = {}
+    shared: dict[str, dict] = {"inproc": {}}
+    census = _census()
+    inproc = _inproc()
+    pending_mark = inproc.PENDING
+    progressed = 0
+    parsed_new = 0
 
-    def no_spawn() -> bool:
-        return leg.total_s() > spawn_gate_s
+    def gate_open() -> bool:
+        return leg.total_s() < gate_s
+
+    parse_s = 0.0
+
+    def may_parse() -> bool:
+        nonlocal parsed_new
+        if parsed_new and leg.total_s() + parse_s / parsed_new >= gate_s:
+            return False
+        parsed_new += 1
+        return True
 
     p1 = {
         "memo_hits": 0, "direct_runs": 0, "key_ms": 0, "hold": True, "shared": shared,
         "inproc": True, "inproc_runs": 0,
     }
-    census = _census()
 
     def seed(command: str) -> None:
         if command in memo or store is None:
@@ -1559,15 +1473,19 @@ def revalidate_set(
             memo[command] = initial[command] = MemoEntry(*rec)
 
     slots: list[dict] = []
+    order: dict[str, int] = {}
     for plan in plans:
-        if no_spawn():
-            p1["inproc_off"] = True
         t0 = time.monotonic()
         plan_rel = plan_rel_path(plan, repo_root)
-        early, entries = _plan_census(plan, False, store, plan_rel)
+        parsed_before, cost_before = parsed_new, leg.total_s()
+        early, entries = _plan_census(plan, False, store, plan_rel, may_parse)
+        if parsed_new > parsed_before:
+            parse_s += leg.total_s() - cost_before
         slot: dict[str, Any] = {
-            "plan": plan, "rel": plan_rel or str(plan), "early": early, "dicts": [],
-            "rows": {}, "held": [], "ms": 0, "hits": 0, "direct": 0,
+            "plan": plan, "rel": plan_rel or str(plan), "plan_rel": plan_rel, "early": early,
+            "dicts": [],
+            "rows": {}, "held": [], "want": [], "pend": [], "ms": 0, "hits": 0, "direct": 0,
+            "unparsed": bool(early is not None and early.pop("unparsed", False)),
         }
         slots.append(slot)
         if early is not None:
@@ -1578,22 +1496,93 @@ def revalidate_set(
             command = str(e.get("command") or "").strip()
             if command and not census.is_typed(e):
                 seed(command)
+                order.setdefault(command, len(order))
             row = _entry_row(e, repo_root, timeout, plan_rel, None, True, memo, head, view, p1)
             if row is _HELD:
                 slot["held"].append(i)
+            elif row is _WANT:
+                slot["want"].append(i)
             else:
                 slot["rows"][i] = row
         slot["hits"], slot["direct"] = p1["memo_hits"] - hits0, p1["direct_runs"] - direct0
         slot["ms"] += int(round((time.monotonic() - t0) * 1000))
+
+    cursor = store.cursor() if store is not None else None
+    want_cmds = _rotated(
+        list(dict.fromkeys(
+            str(slot["dicts"][i].get("command") or "").strip()
+            for slot in slots for i in slot["want"]
+        )),
+        order, cursor,
+    )
+    inproc_pending: list[str] = []
+    resume_at: Optional[str] = None
+    if want_cmds:
+        checksum = view.checksum() if store is not None else None
+        known = store.declined(checksum) if checksum else frozenset()
+        answers: dict = {c: (None if c in known else pending_mark) for c in want_cmds}
+        asked = [c for c in want_cmds if c not in known]
+        writes0 = store.matched_writes if store is not None else 0
+        group_s = 0.0
+        for at in range(0, len(asked), _INPROC_GROUP):
+            if not (leg.total_s() + group_s < gate_s or progressed == 0):
+                resume_at = asked[at]
+                break
+            group = asked[at:at + _INPROC_GROUP]
+            began = leg.total_s()
+            try:
+                got = inproc.evaluate_many(
+                    group, view, store, max(0.0, gate_s - began), force_first=progressed == 0
+                )
+            except Exception:  # noqa: BLE001 -- any doubt is a decline; the commands spawn
+                got = {c: None for c in group}
+            group_s = max(group_s, leg.total_s() - began)
+            answers.update(got)
+            progressed += sum(1 for a in got.values() if a is not None and a is not pending_mark)
+        if progressed == 0 and store is not None and store.matched_writes > writes0:
+            progressed = 1
+        declined_now = {c for c in asked if answers[c] is None}
+        if declined_now and checksum:
+            store.put_declined(checksum, known | declined_now)
+        view.gc_store()
+        shared["inproc"].update(answers)
+        inproc_pending = [c for c, a in answers.items() if a is pending_mark]
+        for slot in slots:
+            for i in slot["want"]:
+                e = slot["dicts"][i]
+                row = _entry_row(
+                    e, repo_root, timeout, slot["plan_rel"], None, True, memo, head, view, p1,
+                )
+                if row is _HELD:
+                    slot["held"].append(i)
+                elif row is _PENDING_ROW:
+                    slot["pend"].append(i)
+                else:
+                    slot["rows"][i] = row
+            slot["held"].sort()
+    phase1_ms = int(round(leg.total_s() * 1000)) + load0
 
     median = store.median_run_ms() if store is not None else None
     measured = False
 
     def estimate(command: str) -> tuple[int, bool]:
         rec = store.run(command) if store is not None else None
-        if rec is not None and isinstance(rec[2], (int, float)):
+        if rec is not None and isinstance(rec[2], (int, float)) and rec[2] >= 0:
             return int(rec[2]), True
+        killed_at = store.over_bar(command) if store is not None else None
+        if killed_at is not None:
+            return killed_at * 2, True
         return (median, False) if median is not None else (1, False)
+
+    def stored_over_bar(command: str) -> bool:
+        """A run dearer than the bar, or a kill that had `1/_OVER_BAR_SHARE` of the bar."""
+        if store is None:
+            return False
+        killed_at = store.over_bar(command)
+        if killed_at is not None and killed_at >= bar_ms / _OVER_BAR_SHARE:
+            return True
+        rec = store.run(command)
+        return rec is not None and isinstance(rec[2], (int, float)) and rec[2] > bar_ms
 
     ranked: list[tuple[int, int, int, dict]] = []
     for pos, slot in enumerate(slots):
@@ -1622,42 +1611,92 @@ def revalidate_set(
             if command not in seen_cmds:
                 seen_cmds.add(command)
                 distinct.append(command)
+    over_cmds = {c for c in distinct if stored_over_bar(c)}
+    todo = [c for c in distinct if c not in over_cmds]
+    killed: list[str] = []
     ran_cache: dict[str, tuple] = {}
-    at = 0
-    while at < len(distinct) and not no_spawn():
-        bounded = _remaining_timeout(timeout, deadline)
-        if bounded is None:
-            break
-        left_ms = max(0.0, (spawn_gate_s - leg.total_s()) * 1000)
-        batch = _next_batch(distinct, at, left_ms, estimate)
-        whole = max(1, int(min(timeout * len(batch), deadline - time.monotonic())))
-        results = _spawn_many(batch, repo_root, whole, leg)
-        for command, ran, run_ms in zip(batch, results, leg.last_run_ms):
-            ran_cache[command] = (ran, run_ms)
-        at += len(batch)
 
-    p2 = {"memo_hits": 0, "direct_runs": 0, "key_ms": 0, "shared": shared, "ran": ran_cache}
-    pending: list[str] = []
+    def run_batch(batch: list[str], cap_s: float) -> list[str]:
+        """Spawn `batch` in one shell killed at `cap_s` wall seconds; the commands that started."""
+        nonlocal progressed
+        whole_s = max(1.0, min(timeout * len(batch), deadline - time.monotonic()))
+        run_s = min(whole_s, cap_s)
+        results = _spawn_many(batch, repo_root, run_s, leg)
+        finished: list[str] = []
+        before_ms = 0
+        for command, ran, run_ms in zip(batch, results, leg.last_run_ms):
+            if isinstance(ran, dict) and ran.get("detail") == _DEADLINE_SPENT:
+                continue
+            finished.append(command)
+            if isinstance(ran, dict) and _timed_out(ran) and cap_s < whole_s:
+                # The kill landed on the command in flight: it ran only what the batch's earlier
+                # commands left of the cap, so blaming the whole cap would mark an innocent
+                # command over the bar for good.
+                killed_ms = max(0, int(run_s * 1000) - before_ms)
+                if store is not None:
+                    store.put_over_bar(command, killed_ms)
+                if killed_ms >= bar_ms / _OVER_BAR_SHARE:
+                    killed.append(command)
+                    ran = {"state": UNRUNNABLE, "detail": _OVER_BAR, "basis": _OVER_BAR}
+                else:
+                    ran = {"state": UNRUNNABLE, "detail": _DEADLINE_SPENT}
+                progressed += 1
+            elif isinstance(ran, tuple):
+                progressed += 1
+            before_ms += run_ms
+            ran_cache[command] = (ran, run_ms)
+        return finished
+
+    while todo and gate_open() and _remaining_timeout(timeout, deadline) is not None:
+        left_ms = max(0.0, (gate_s - leg.total_s()) * 1000)
+        batch = _next_batch(todo, 0, left_ms, estimate, floor=False)
+        if not batch:
+            break
+        done = set(run_batch(batch, max(left_ms / 1000, _MIN_KILL_S)))
+        todo = [c for c in todo if c not in done]
+    if progressed == 0 and todo and _remaining_timeout(timeout, deadline) is not None:
+        left_ms = max(0.0, (gate_s - leg.total_s()) * 1000)
+        ordered = _rotated(todo, order, cursor)
+        pick = next((c for c in ordered if not estimate(c)[1] or estimate(c)[0] <= left_ms), None)
+        if pick is None:
+            pick = next((c for c in ordered if estimate(c)[0] <= bar_ms), None)
+        if pick is not None:
+            done = set(run_batch([pick], max(left_ms / 1000, bar_s / 2, _MIN_KILL_S)))
+            todo = [c for c in todo if c not in done]
+
+    remaining = _rotated(list(dict.fromkeys(inproc_pending + todo)), order, cursor)
+    next_cursor = resume_at if resume_at is not None else (remaining[0] if remaining else None)
+    if store is not None:
+        store.put_cursor(next_cursor)
+
+    p2 = {
+        "memo_hits": 0, "direct_runs": 0, "key_ms": 0, "shared": shared, "ran": ran_cache,
+        "over": over_cmds,
+    }
     for _cost, _unrun, _pos, slot in ranked:
         t0 = time.monotonic()
         dicts = slot["dicts"]
         held = slot["order"]
-        unreached = False
         hits0, direct0 = p2["memo_hits"], p2["direct_runs"]
         for i in held:
             row = _entry_row(
-                dicts[i], repo_root, timeout, plan_rel_path(slot["plan"], repo_root), deadline,
-                True, memo, head, view, p2,
+                dicts[i], repo_root, timeout, slot["plan_rel"], deadline, True, memo, head, view,
+                p2,
             )
             if row.get("state") == UNRUNNABLE and row.get("detail") == _DEADLINE_SPENT:
                 row = {**row, "detail": _BUDGET_SPENT, "basis": _BUDGET_SPENT}
-                unreached = True
             slot["rows"][i] = row
         slot["hits"] += p2["memo_hits"] - hits0
         slot["direct"] += p2["direct_runs"] - direct0
-        if unreached:
-            pending.append(slot["rel"])
         slot["ms"] += int(round((time.monotonic() - t0) * 1000))
+    for slot in slots:
+        for i in slot["pend"]:
+            e = slot["dicts"][i]
+            slot["rows"][i] = {
+                "question": str(e.get("question") or ""),
+                "command": str(e.get("command") or "").strip(),
+                "state": UNRUNNABLE, "detail": _BUDGET_SPENT, "basis": _BUDGET_SPENT,
+            }
     for command, now in memo.items():
         was = initial.get(command)
         if store is not None and (
@@ -1670,12 +1709,21 @@ def revalidate_set(
         store.save()
 
     out: dict[str, dict] = {}
+    pending: list[str] = []
+    untracked: list[dict] = []
     covered = census_plans = 0
     for slot in slots:
         if slot["early"] is not None:
             out[slot["rel"]] = slot["early"]
+            if slot["unparsed"]:
+                census_plans += 1
+                pending.append(slot["rel"])
             continue
         entries = [slot["rows"][i] for i in range(len(slot["dicts"]))]
+        for index, row in enumerate(entries):
+            operand = row.pop("untracked_operand", None)
+            if operand is not None:
+                untracked.append({"plan": slot["rel"], "index": index, "operand": operand})
         stats = {"memo_hits": slot["hits"], "direct_runs": slot["direct"]}
         reply = _plan_reply(slot["plan"], entries, slot["ms"], stats)
         out[slot["rel"]] = reply
@@ -1683,6 +1731,9 @@ def revalidate_set(
             census_plans += 1
             if all(r.get("state") != UNRUNNABLE for r in entries):
                 covered += 1
+            if any(r.get("basis") in (_BUDGET_SPENT, _OVER_BAR) for r in entries):
+                pending.append(slot["rel"])
+    over_bar = [c for c in dict.fromkeys([*sorted(over_cmds), *killed])]
     return {
         "plans": out,
         "spent_ms": int(round((time.monotonic() - started) * 1000)),
@@ -1696,6 +1747,11 @@ def revalidate_set(
         "children_process_ms": leg.children_ms,
         "spawns": leg.spawns,
         "inproc_runs": p1["inproc_runs"],
+        "phase1_ms": phase1_ms,
+        "progressed": progressed + parsed_new,
+        "cursor_moved": next_cursor != cursor,
+        "over_bar": over_bar,
+        "untracked": untracked,
     }
 
 

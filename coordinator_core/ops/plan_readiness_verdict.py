@@ -23,7 +23,11 @@ Wire params:
                                   ``corrects: [{citation, fixed_by}]`` names, with ``fixed_by`` an
                                   open or coded spine row, is a note; a composite citation of
                                   several sentences is a note when every sentence is touched by a
-                                  live entry, and pulls when any sentence is left uncited. A class-4 row whose optional
+                                  live entry, and pulls when any sentence is left uncited. A row
+                                  with no entry text in it is covered when one of its anchors
+                                  (``path:line``, ``<source> line N``, ``§ Section``) equals an
+                                  anchor of a live entry; covered rows are notes marking an
+                                  intended correction the resolver may take. A class-4 row whose optional
                                   ``baseline_ref`` differs from the plan's current falsifier
                                   ``baseline_ref`` is stale and a note. An UNRESOLVED row is exempt
                                   only through the plan's ``declared_absent: [{citation,
@@ -175,24 +179,26 @@ _SENTENCE_BREAK = re.compile(r"[.;!?]+(?:\s+|$)")
 _HAS_WORD = re.compile(r"\w")
 
 
-_WORD = re.compile(r"\w+")
-_FILLER = frozenset({"a", "an", "the", "is", "are", "was", "were", "there", "that", "this", "of", "to", "in", "it"})
-_PARAPHRASE_MIN_TOKENS = 3
-_PARAPHRASE_MIN_OVERLAP = 0.75
+# A citation's anchor: `path.ext:LINE[-LINE]`, a `<source name> line N` reference, or a
+# `§ Section` reference. Equality of anchors, never similarity of prose, ties a row to an entry.
+_ANCHOR = re.compile(
+    r"[\w./\\-]+\.\w+:\d+(?:-\d+)?"
+    r"|[\w./\\-]+(?:\s[\w./\\-]+){0,2}\s+line\s+\d+(?:-\d+)?"
+    r"|§\s*[^;.()]+"
+)
 
 
-def _significant(text: str) -> frozenset:
-    return frozenset(w for w in _WORD.findall(text) if w not in _FILLER)
+def _anchors(text: str) -> frozenset:
+    return frozenset(_norm(m.group(0)) for m in _ANCHOR.finditer(text))
 
 
-def _paraphrase_cover(cited: str, entries: List[tuple]) -> Optional[tuple]:
-    """A premise row that rewords a live ``corrects`` citation (case-sensitive token overlap of at
-    least 75% both ways, entry of 3+ significant tokens) is covered; anything looser is not."""
-    row_tokens = _significant(cited)
+def _anchor_cover(cited: str, entries: List[tuple]) -> Optional[tuple]:
+    """The first live ``corrects`` entry whose declared anchor equals one of the row's anchors."""
+    row_anchors = _anchors(cited)
+    if not row_anchors:
+        return None
     for citation, fix in entries:
-        tokens = _significant(citation)
-        union = row_tokens | tokens
-        if len(tokens) >= _PARAPHRASE_MIN_TOKENS and union and len(row_tokens & tokens) / len(union) >= _PARAPHRASE_MIN_OVERLAP:
+        if row_anchors & _anchors(citation):
             return citation, fix
     return None
 
@@ -225,7 +231,7 @@ def _covering_row(row: dict, corrects: Any, spine_rows: Optional[List[dict]]) ->
         if start >= 0:
             spans.append((start, start + len(citation), citation, fix))
     if not spans:
-        return _paraphrase_cover(cited, entries)
+        return _anchor_cover(cited, entries)
     hits, begin = [], 0
     for brk in [*_SENTENCE_BREAK.finditer(cited), None]:
         end = brk.start() if brk else len(cited)
@@ -473,7 +479,10 @@ def readiness_verdict(
     if uncheckable:
         notes.append(f"{uncheckable} UNCHECKABLE premise row(s) left to reviewer judgment")
     if covered:
-        notes.append(f"{len(covered)} CONTRADICTED premise row(s) the plan corrects: " + "; ".join(covered))
+        notes.append(
+            f"{len(covered)} CONTRADICTED premise row(s) the plan corrects "
+            "(intended corrections the resolver may take): " + "; ".join(covered)
+        )
     if absent_notes:
         notes.append(
             f"{len(absent_notes)} UNRESOLVED premise row(s) the plan declares absent: "

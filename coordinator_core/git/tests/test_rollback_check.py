@@ -275,3 +275,24 @@ def test_reads_no_process(tmp_path):
         )
 
     assert counter.argvs == [], f"expected zero spawns, got {counter.argvs}"
+
+
+def test_values_along_equals_per_pair_walk(tmp_path):
+    repo = _repo(tmp_path)
+    _commit(repo, "a/b/x.txt", "1\n", "c1")
+    _commit(repo, "a/y.txt", "1\n", "c2")
+    _commit(repo, "a/b/x.txt", "2\n", "c3")
+    _commit(repo, "z.txt", "1\n", "c4")
+    _git(repo, "rm", "-q", "a/y.txt")
+    _git(repo, "commit", "-q", "-m", "rm y")
+    _commit(repo, "a/y.txt", "1\n", "c6")
+    head = read_head_sha(_common(repo))
+    common = _common(repo)
+    paths = ["a/b/x.txt", "a/y.txt", "z.txt", "nope/q.txt", "a/b/x.txt/deeper"]
+    ancestors = rollback_check._first_parent_ancestors(common, head, 100)
+    along = rollback_check._values_along(common, ancestors, paths)
+    for p in paths:
+        expected = [
+            (sha, rollback_check._blob_at_commit(common, sha, p)) for _s, sha in ancestors
+        ]
+        assert along[p] == expected, p

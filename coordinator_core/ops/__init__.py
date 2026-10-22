@@ -218,6 +218,10 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ),
     ("coordinator_core.ops.plan_stamp_prepped", 'registers "plan.stamp_prepped"'),
     (
+        "coordinator_core.ops.plan_record_residue_rulings",
+        'registers "plan.record_residue_rulings"',
+    ),
+    (
         "coordinator_core.ops.plan_mise_prep_probe",
         'registers "plan.mise_prep_probe", "plan.mise_upgrade_apply", '
         '"plan.mise_certify_probe", "plan.census_set"',
@@ -433,7 +437,7 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ),
     ("coordinator_core.ops.session.guard_settings_integrity", 'registers "session.guard_settings_integrity"'),
     ("coordinator_core.ops.session.poll_share", 'registers "session.poll_share"'),
-    ("coordinator_core.ops.session.record_pickup",'registers "session.record_pickup"'),
+    ("coordinator_core.ops.session.record_pickup", 'registers "session.record_pickup"'),
     ("coordinator_core.ops.session.scope_report", 'registers "session.scope_report"'),
     ("coordinator_core.ops.session.safe_commit_offer", 'registers "session.safe_commit_offer"'),
     ("coordinator_core.ops.session_resolve_address", 'registers "session.resolve_address"'),
@@ -517,7 +521,7 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.fleet.archive_queue_entry", 'registers "fleet.archive_queue_entry"'),
     ("coordinator_core.ops.fleet.migrate_handoff_vocabulary", 'registers "fleet.migrate_handoff_vocabulary"'),
     ("coordinator_core.ops.fleet.migrate_prose_queue", 'registers "fleet.migrate_prose_queue"'),
-    ("coordinator_core.ops.fleet.archive_sizings",'registers "fleet.archive_terminal_sizings"'),
+    ("coordinator_core.ops.fleet.archive_sizings", 'registers "fleet.archive_terminal_sizings"'),
     (
         "coordinator_core.ops.orphan_branch_sweep",
         'registers "git_branch.compute_descendant_tip", "git_branch.detect_unpushed_commits", '

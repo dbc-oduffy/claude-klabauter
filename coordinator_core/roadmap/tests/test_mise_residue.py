@@ -103,7 +103,7 @@ def test_residue_args_shape_roundtrips_json():
     reply = {"skipped_cycles": [{"class": "seam-fix-cycle", "plans": ["b", "a"], "path": "p", "detail": "d"}]}
     args = _args(rows, reply, {"a.md": PLAN})
     assert json.loads(json.dumps(args)) == args
-    assert args["schema"] == "mise-prep-residue-args/2"
+    assert args["schema"] == "mise-prep-residue-args/3"
     assert args["residue"] == {"agentType": mr.RESIDUE_AGENT_TYPE, "model": "sonnet"}
     assert args["apm"] == {"agentType": "coordinator:apm", "model": "opus"}
     (batch,) = args["batches"]
@@ -254,3 +254,62 @@ def test_nine_plans_make_two_batches():
     ]
     args = _args(rows)
     assert [len(b["plans"]) for b in args["batches"]] == [8, 1]
+
+
+_ROW = {"plan": "a.md", "verdict": "NOT-PREPPED", "failing": [], "detail": [], "outcome": "NOT-PREPPED", "seam": []}
+_CYCLE = {"plans": ["b", "a"], "path": "p", "detail": "d"}
+
+
+def _ruling(item, sha, **kw):
+    return {"item": item, "ruling": "r", "run_id": "x", "on": "2026-10-22", "subject_sha": sha, **kw}
+
+
+def _with_rulings(entries):
+    return PLAN.replace("\n---\nbody", "\n" + mr.render_pm_ruling(entries) + "---\nbody")
+
+
+def test_schema_op_and_args_keys():
+    assert mr.SCHEMA == "mise-prep-residue-args/3"
+    assert mr.RULINGS_OP == "plan.record_residue_rulings"
+    args = _args([_ROW], {"skipped_cycles": [_CYCLE]}, {"a.md": PLAN})
+    assert args["rulingsCommand"] == "mise-prep-run --repo-root repo --apply-rulings"
+    census_item, cycle_item = args["apmItems"]
+    assert census_item["id"] == "census[1]" == mr.ruling_item_id(census_item)
+    assert census_item["subjectSha"] == mr.subject_sha(census_item)
+    assert cycle_item["id"] == "cycle:p" == mr.ruling_item_id(cycle_item)
+    assert cycle_item["subjectSha"] == mr.subject_sha({"kind": "seam-fix-cycle", "plans": ["a", "b"]})
+
+
+def test_ruled_census_item_is_not_re_raised_but_stale_one_is():
+    sha = mr.subject_sha({"kind": "census-leftover", "command": "node check.js"})
+    assert _args([_ROW], None, {"a.md": _with_rulings([_ruling("census[1]", sha)])})["apmItems"] == []
+    stale = _with_rulings([_ruling("census[1]", "000000000000")])
+    assert [i["id"] for i in _args([_ROW], None, {"a.md": stale})["apmItems"]] == ["census[1]"]
+
+
+def test_ruled_cycle_is_dropped_when_any_plan_carries_it():
+    sha = mr.subject_sha({"kind": "seam-fix-cycle", "plans": ["a", "b"]})
+    texts = {"b": _with_rulings([_ruling("cycle:p", sha)])}
+    assert _args([], {"skipped_cycles": [_CYCLE]}, texts)["apmItems"] == []
+    stale = {"b": _with_rulings([_ruling("cycle:p", "000000000000")])}
+    assert len(_args([], {"skipped_cycles": [_CYCLE]}, stale)["apmItems"]) == 1
+
+
+def test_render_pm_ruling_round_trips_through_parse_frontmatter():
+    from coordinator_core.frontmatter.schema_validate import parse_frontmatter
+
+    entry = _ruling("census[3]", "abc123def456", ruling="it's \"q\" \\ x: y\nline2", pm_only=True,
+                    ruled_by="coordinator:apm")
+    text = "---\n" + mr.render_pm_ruling([entry]) + "---\nb\n"
+    (got,) = parse_frontmatter(text)["frontmatter"]["pm_ruling"]
+    assert got["on"] == "2026-10-22"
+    assert got["pm_only"] is True
+    assert got["item"] == "census[3]"
+    assert got["ruling"] == "it's \"q\" \\ x: y line2"
+    assert got["subject_sha"] == "abc123def456"
+    assert got["ruled_by"] == "coordinator:apm"
+
+
+@pytest.mark.parametrize("text", ["no frontmatter", "---\npm_ruling: nope\n---\n", "---\npm_ruling:\n  - 3\n---\n"])
+def test_ruled_items_empty_when_absent_or_malformed(text):
+    assert mr.ruled_items(text) == frozenset()

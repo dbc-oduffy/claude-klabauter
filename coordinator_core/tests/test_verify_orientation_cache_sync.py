@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
 from coordinator_core.ops.verify_orientation_cache_sync import main, verify
@@ -218,3 +219,36 @@ def test_main_usage_error_exit_two(capsys) -> None:
     assert rc == 2
     err = capsys.readouterr().err
     assert "usage:" in err
+
+
+_NO_TC_CACHE = (
+    "---\ngenerated_by: update-docs\ngenerated_at: 2026-07-13T09:41:49Z\n"
+    "git_head_at_generation: ae65840f\n---\n\n"
+    "## Wiki\n- `docs/wiki/` — no trust caveats section\n"
+)
+
+
+@pytest.mark.parametrize("tracked", [True, False])
+def test_fixture_only_uproject_demands_no_caveat(tmp_path: Path, tracked: bool) -> None:
+    repo = tmp_path / "repo"
+    fx = repo / "tests" / "fixtures" / "polyglot"
+    fx.mkdir(parents=True)
+    (fx / "Foo.uproject").write_text("", encoding="utf-8")
+    if tracked:
+        subprocess.run(["git", "init", "-q", str(repo)], check=True)
+        subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+    cache = _write(tmp_path, "cache.md", _NO_TC_CACHE)
+    violations, _ = verify(str(cache), str(repo))
+    assert violations == []
+
+
+def test_declared_non_ue_wins_over_root_uproject(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    (repo / "sub").mkdir(parents=True)
+    (repo / "sub" / "Game.uproject").write_text("", encoding="utf-8")
+    (repo / "coordinator.local.md").write_text(
+        "---\nproject_type: general\n---\n", encoding="utf-8"
+    )
+    cache = _write(tmp_path, "cache.md", _NO_TC_CACHE)
+    violations, _ = verify(str(cache), str(repo))
+    assert violations == []

@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from coordinator_core.roadmap.census_inproc import evaluate as _REAL_EVALUATE
+from coordinator_core.roadmap.census_inproc import evaluate_many as _REAL_EVALUATE_MANY
 from coordinator_core.roadmap.census_store import CensusStore, store_path
 from coordinator_core.win_portability import no_console_creationflags
 
@@ -90,7 +90,10 @@ def spawns(mcr, monkeypatch):
 @pytest.fixture(autouse=True)
 def _spawn_path(mcr, monkeypatch):
     """The arms in this file pin the spawn path, so in-process evaluation declines."""
-    monkeypatch.setattr(mcr._inproc(), "evaluate", lambda command, files, store: None)
+    monkeypatch.setattr(
+        mcr._inproc(), "evaluate_many",
+        lambda commands, files, store, read_budget_s, force_first=True: {c: None for c in commands},
+    )
 
 
 def _far() -> float:
@@ -190,25 +193,6 @@ def test_an_entry_stored_direct_under_a_cold_key_cost_is_a_zero_spawn_hit_by_the
     assert _states(third) == {"docs/plans/a.md": ["MATCH"]}
 
 
-def test_hashing_time_is_not_charged_to_the_cost_gate(mcr, repo, spawns, monkeypatch):
-    plan = _plan(repo, "a", [("grep -c alpha f.txt", "2")])
-
-    def slow_hashing_key(entry, repo_root, *, head, view=None, stage_cache=None):
-        started = time.perf_counter()
-        time.sleep(0.05)
-        view.hash_s += time.perf_counter() - started
-        return "k1"
-
-    monkeypatch.setattr(mcr, "input_key", slow_hashing_key)
-    store = _store(repo)
-    _run(mcr, [plan], repo, store)
-    spawns.clear()
-    second = _run(mcr, [plan], repo, store)
-    assert spawns == []
-    assert second["memo_hits"] == 1 and second["direct_runs"] == 0
-    assert store.run("grep -c alpha f.txt")[0] == "k1"
-
-
 def test_an_entry_whose_unchanged_tree_key_costs_more_than_its_spawn_stays_direct(
     mcr, repo, spawns, monkeypatch
 ):
@@ -228,17 +212,13 @@ def test_an_entry_whose_unchanged_tree_key_costs_more_than_its_spawn_stays_direc
     assert store.run("grep -c alpha f.txt")[0] == mcr._DIRECT_KEY
 
 
-def test_an_exhausted_hash_budget_leaves_the_entry_running_and_the_next_call_resumes(
-    mcr, repo, spawns, monkeypatch
+def test_an_untracked_file_under_a_directory_operand_neither_moves_the_key_nor_respawns(
+    mcr, repo, spawns
 ):
-    (repo / "d" / "untracked.txt").write_text("needle\n", encoding="utf-8")
     plan = _plan(repo, "a", [("grep -rn needle d", "2")])
     store = _store(repo)
-    monkeypatch.setattr(mcr, "_HASH_BUDGET_S", 0.0)
     _run(mcr, [plan], repo, store)
-    assert spawns == ["grep -rn needle d"]
-    monkeypatch.setattr(mcr, "_HASH_BUDGET_S", 60.0)
-    _run(mcr, [plan], repo, store)
+    (repo / "d" / "untracked.txt").write_text("needle\n", encoding="utf-8")
     spawns.clear()
     again = _run(mcr, [plan], repo, store)
     assert spawns == [] and again["memo_hits"] == 1
@@ -248,15 +228,20 @@ def test_the_spawn_process_ceiling_defers_a_spawn_and_still_judges_a_hit(
     mcr, repo, spawns, monkeypatch
 ):
     plans = [_plan(repo, "hit", [("grep -c alpha f.txt", "2")]),
-             _plan(repo, "new", [("grep -c alpha g.txt", "1")])]
+             _plan(repo, "new", [("grep -c alpha g.txt", "1")]),
+             _plan(repo, "newer", [("grep -c needle d/a.txt", "1")])]
     store = _store(repo)
     _run(mcr, [plans[0]], repo, store)
     spawns.clear()
     reply = _run(mcr, plans, repo, store, process_budget_ms=1)
-    assert spawns == []
-    assert _states(reply) == {"docs/plans/hit.md": ["MATCH"], "docs/plans/new.md": ["UNRUNNABLE"]}
-    assert reply["pending"] == ["docs/plans/new.md"]
-    assert (reply["covered"], reply["census_plans"]) == (1, 2)
+    assert len(spawns) == 1, "the progress floor runs exactly one unit"
+    states = _states(reply)
+    assert states["docs/plans/hit.md"] == ["MATCH"]
+    rest = sorted(tuple(s) for p, s in states.items() if p != "docs/plans/hit.md")
+    assert rest == [(), ("MATCH",)], "one cold plan parsed and run, the other left unparsed"
+    assert len(reply["pending"]) == 1
+    assert (reply["covered"], reply["census_plans"]) == (2, 3)
+    assert reply["progressed"] >= 1
 
 
 def test_the_verdicts_of_a_fixture_set_are_those_of_the_per_plan_pass(mcr, repo):
@@ -301,10 +286,11 @@ def test_the_reply_carries_children_spawns_and_inproc_counts(mcr, repo, monkeypa
     assert isinstance(reply["children_process_ms"], int) and reply["children_process_ms"] >= 0
     assert reply["inproc_runs"] == 0
     assert _states(reply) == {"docs/plans/a.md": ["MATCH", "MATCH"]}
-    monkeypatch.setattr(mcr._inproc(), "evaluate", _REAL_EVALUATE)
+    monkeypatch.setattr(mcr._inproc(), "evaluate_many", _REAL_EVALUATE_MANY)
     other = [_plan(repo, "c", [("grep -c alpha f.txt", "2"), ("grep -c needle d/a.txt", "1")])]
     fresh = _run(mcr, other, repo, _store(repo))
-    assert fresh["inproc_runs"] >= 1 and fresh["spawns"] == 0
+    assert fresh["inproc_runs"] >= 1
+    assert fresh["spawns"] == 1, "one cat-file batch reads every blob; no command is spawned"
 
 
 def test_process_budget_ms_is_accepted_and_a_smaller_one_stops_the_next_batch(

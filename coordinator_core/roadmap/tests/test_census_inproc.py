@@ -6,52 +6,14 @@ import hashlib
 import os
 import re
 import shutil
-import stat
 import subprocess
 from pathlib import Path
 
 import pytest
 
 from coordinator_core.roadmap import census_inproc
-from coordinator_core.roadmap.census_inproc import evaluate
-from coordinator_core.roadmap.census_store import CensusStore
 
 _OLD_NS = 1_600_000_000 * 10**9
-
-
-class _Tree:
-    """A FileSource over a real directory that counts the bodies it reads."""
-
-    def __init__(self, root: Path) -> None:
-        self.root = root
-        self.reads: list = []
-
-    def walk(self, rel):
-        base = self.root / rel
-        try:
-            st = os.lstat(base)
-        except OSError:
-            return None
-        if stat.S_ISREG(st.st_mode):
-            return [(rel, st)]
-        if not stat.S_ISDIR(st.st_mode):
-            return None
-        out = []
-        for dirpath, dirnames, filenames in os.walk(base):
-            dirnames[:] = [d for d in dirnames if d != ".git"]
-            for name in filenames:
-                path = Path(dirpath) / name
-                lst = os.lstat(path)
-                if stat.S_ISREG(lst.st_mode):
-                    out.append((path.relative_to(self.root).as_posix(), lst))
-        return out
-
-    def read(self, rel):
-        self.reads.append(rel)
-        try:
-            return (self.root / rel).read_bytes()
-        except OSError:
-            return None
 
 
 def _put(root: Path, rel: str, data) -> None:
@@ -59,30 +21,6 @@ def _put(root: Path, rel: str, data) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(data if isinstance(data, bytes) else data.encode("utf-8"))
     os.utime(path, ns=(_OLD_NS, _OLD_NS))
-
-
-@pytest.fixture
-def tree(tmp_path):
-    root = tmp_path / "repo"
-    root.mkdir()
-    _put(root, "src/top.py", "needle one\nplain\nNEEDLE two\nneedle needle\n")
-    _put(root, "src/data.txt", "nothing here\nneed\n")
-    _put(root, "src/pkg/mod.py", "def needle():\n    pass\nneedle\n")
-    _put(root, "src/pkg/util.py", "x = 1\n")
-    _put(root, "src/__pycache__/mod.cpython.pyc", b"\x00\x01needle\x02\xff\n")
-    _put(root, "docs/notes.md", "needle in notes\nsecond\n")
-    _put(root, "docs/crlf.md", "needle one\r\nneedle\r\nplain\r\n")
-    _put(root, "docs/noeol.txt", "alpha\nneedle")
-    _put(root, "odd/latin1.txt", b"caf\xe9 needle\n")
-    _put(root, "lib/vendor/skip.py", "needle\n")
-    _put(root, "lib/keep.py", "needle\n")
-    try:
-        os.symlink("../docs/notes.md", root / "src" / "link")
-    except (OSError, NotImplementedError):
-        pass
-    (root / ".git").mkdir()
-    _put(root, ".git/config", "needle\n")
-    return _Tree(root)
 
 
 def _docstring_examples() -> list:
@@ -116,11 +54,6 @@ _REAL_SHAPES = [
 ]
 
 
-def test_grammar_examples_and_real_shapes_are_answered(tree):
-    for command in _docstring_examples() + _REAL_SHAPES:
-        assert evaluate(command, tree, None) is not None, command
-
-
 def _host_treats_cr_as_eol(sh, env, kw):
     """Git-for-Windows grep strips CR before `$`; POSIX grep (and the matcher) does not."""
     out = subprocess.run([sh, "-c", "printf 'a\r\n' | grep -c 'a$'"], capture_output=True,
@@ -132,26 +65,6 @@ def _host_comparable(commands, sh, env, kw):
     if _host_treats_cr_as_eol(sh, env, kw):
         return [c for c in commands if "crlf" not in c]
     return commands
-
-
-@pytest.mark.spawns_process
-@pytest.mark.cadence
-def test_parity_with_the_host_shell(tree):
-    sh = shutil.which("sh")
-    if not sh:
-        pytest.skip("no POSIX shell")
-    env = {k: v for k, v in os.environ.items() if not k.startswith("BASH_FUNC_")}
-    kw = {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)} if os.name == "nt" else {}
-    commands = _docstring_examples() + _REAL_SHAPES
-    assert len(commands) >= 20 + 20
-    commands = _host_comparable(commands, sh, env, kw)
-    for command in commands:
-        proc = subprocess.run([sh, "-c", command], cwd=tree.root, capture_output=True,
-                              text=True, env=env, **kw)
-        got = evaluate(command, tree, None)
-        assert got is not None, command
-        assert (got[0], got[1].strip()) == (proc.returncode, proc.stdout.strip()), command
-        assert got[2] == "", command
 
 
 _DECLINED = [
@@ -236,127 +149,6 @@ _DECLINED = [
 ]
 
 
-@pytest.mark.parametrize("command", _DECLINED)
-def test_every_declined_construct_returns_none(tree, command):
-    assert evaluate(command, tree, None) is None
-
-
-def test_character_dependent_regex_declines_only_when_a_file_holds_non_ascii(tree):
-    assert evaluate("grep -rl 'ne.dle' src | wc -l", tree, None) is None
-    assert evaluate("grep -rl 'ne.dle' src/pkg | wc -l", tree, None) == (0, "1\n", "")
-    assert evaluate("grep -c 'caf.' odd/latin1.txt", tree, None) is None
-    assert evaluate("grep -rlw needle src | wc -l", tree, None) is None
-    assert evaluate("grep -rlw needle src/pkg | wc -l", tree, None) == (0, "1\n", "")
-
-
-def test_absent_operand_is_answered_only_under_a_quiet_stderr(tree):
-    assert evaluate("grep -rl needle src nowhere 2>/dev/null | wc -l", tree, None) == (0, "3\n", "")
-    assert evaluate("find nowhere 2>/dev/null | wc -l", tree, None) == (0, "0\n", "")
-    assert evaluate("ls nowhere 2>/dev/null | wc -l", tree, None) == (0, "0\n", "")
-
-
-def test_nul_binary_counts_under_l_and_c_but_not_under_a_printing_mode(tree):
-    assert evaluate("grep -rl needle src/__pycache__ | wc -l", tree, None) == (0, "1\n", "")
-    assert evaluate("grep -rc needle src/__pycache__ | wc -l", tree, None) == (0, "1\n", "")
-    assert evaluate("grep -rn needle src/__pycache__ | wc -l", tree, None) is None
-    assert evaluate("grep -rn needle src/pkg | wc -l", tree, None) == (0, "2\n", "")
-
-
-def test_symlink_under_a_recursive_walk_is_skipped(tree):
-    if not (tree.root / "src" / "link").is_symlink():
-        pytest.skip("no symlink support")
-    assert evaluate("grep -rl needle src | wc -l", tree, None) == (0, "3\n", "")
-
-
-def test_git_directory_is_never_walked_by_grep_but_declined_when_an_operand_holds_one(tree):
-    _put(tree.root, "lib/.git/HEAD", "needle\n")
-    assert evaluate("grep -rl needle lib | wc -l", tree, None) is None
-
-
-def test_quiet_redirect_must_be_the_exact_form(tree):
-    assert evaluate("grep -rl needle src 2>/dev/null | wc -l", tree, None) is not None
-    assert evaluate("grep -rl needle src 2> /dev/null | wc -l", tree, None) is None
-    assert evaluate("grep -rl '2>/dev/null' src | wc -l", tree, None) is None
-
-
-def test_warm_second_evaluate_reads_zero_bodies_and_an_edit_rereads_one_file(tree):
-    store = CensusStore()
-    command = "grep -rl needle lib src/pkg docs | wc -l"
-    first = evaluate(command, tree, store)
-    assert first == (0, "6\n", "")
-    assert len(tree.reads) == 7
-    tree.reads.clear()
-    assert evaluate(command, tree, store) == first
-    assert tree.reads == []
-    _put(tree.root, "lib/keep.py", "changed\n")
-    os.utime(tree.root / "lib/keep.py", ns=(_OLD_NS + 10**9, _OLD_NS + 10**9))
-    assert evaluate(command, tree, store) == (0, "5\n", "")
-    assert tree.reads == ["lib/keep.py"]
-
-
-def test_a_second_pattern_reads_each_file_once_and_shares_the_stat_record(tree):
-    store = CensusStore()
-    evaluate("grep -rl needle src/pkg | wc -l", tree, store)
-    tree.reads.clear()
-    evaluate("grep -rl pass src/pkg | wc -l", tree, store)
-    assert sorted(tree.reads) == ["src/pkg/mod.py", "src/pkg/util.py"]
-    assert len(store._matches) == 2
-    assert all(len(rec[4]) == 2 for rec in store._matches.values())
-
-
-def test_racy_file_is_reread_every_time(tree):
-    path = tree.root / "lib" / "keep.py"
-    future = 4_000_000_000 * 10**9
-    os.utime(path, ns=(future, future))
-    store = CensusStore()
-    command = "grep -c needle lib/keep.py"
-    assert evaluate(command, tree, store) == (0, "1\n", "")
-    tree.reads.clear()
-    evaluate(command, tree, store)
-    assert tree.reads == ["lib/keep.py"]
-
-
-def test_results_do_not_leak_between_patterns_flags_or_dialects(tree):
-    store = CensusStore()
-    assert evaluate("grep -c needle src/top.py", tree, store) == (0, "2\n", "")
-    assert evaluate("grep -ci needle src/top.py", tree, store) == (0, "3\n", "")
-    assert evaluate("grep -c -v needle src/top.py", tree, store) == (0, "2\n", "")
-    assert evaluate("grep -cw need src/top.py", tree, store) == (1, "0\n", "")
-    assert evaluate("grep -c 'ne\\{2\\}dle' src/top.py", tree, store) == (0, "2\n", "")
-    assert evaluate("grep -cE 'ne{2}dle' src/top.py", tree, store) == (0, "2\n", "")
-    assert evaluate("grep -cF 'ne{2}dle' src/top.py", tree, store) == (1, "0\n", "")
-    assert evaluate("grep -c 'ne{2}dle' src/top.py", tree, store) == (1, "0\n", "")
-
-
-def test_evaluate_never_writes_the_tree(tree):
-    before = sorted((p.relative_to(tree.root).as_posix(), p.stat().st_mtime_ns)
-                    for p in tree.root.rglob("*") if p.is_file() and not p.is_symlink())
-    for command in _docstring_examples() + _REAL_SHAPES:
-        evaluate(command, tree, CensusStore())
-    after = sorted((p.relative_to(tree.root).as_posix(), p.stat().st_mtime_ns)
-                   for p in tree.root.rglob("*") if p.is_file() and not p.is_symlink())
-    assert before == after
-
-
-def test_evaluate_never_spawns(tree, monkeypatch):
-    def boom(*a, **k):
-        raise AssertionError("spawned")
-
-    monkeypatch.setattr(subprocess, "Popen", boom)
-    monkeypatch.setattr(subprocess, "run", boom)
-    monkeypatch.setattr(os, "system", boom)
-    for command in _docstring_examples() + _REAL_SHAPES:
-        assert evaluate(command, tree, None) is not None
-
-
-def test_evaluate_swallows_a_file_source_that_raises(tree):
-    class _Broken(_Tree):
-        def walk(self, rel):
-            raise RuntimeError("boom")
-
-    assert evaluate("grep -rl needle src | wc -l", _Broken(tree.root), None) is None
-
-
 def test_translator_closed_subset():
     translate = census_inproc._translate
     assert translate("a.c", "B").src == "a.c"
@@ -372,6 +164,11 @@ def test_translator_closed_subset():
     for bad in ("\\1", "\\<a", "*a", "a\\", "[abc", "[]", "a\\{2", "\\("):
         assert translate(bad, "B") is None, bad
     assert translate("(a*)*", "E") is None
+
+
+def test_evaluate_and_the_file_source_walk_path_are_gone():
+    assert not hasattr(census_inproc, "evaluate")
+    assert not hasattr(census_inproc, "FileSource")
 
 
 # ---- evaluate_many: the index world, oid-keyed match records -------------------------------
@@ -434,8 +231,8 @@ class _Records:
             self.rows[(key, oid)] = v
 
 
-def _many(commands, index, store=None, budget=1e9):
-    return census_inproc.evaluate_many(list(commands), index, store, budget)
+def _many(commands, index, store=None, budget=1e9, **kw):
+    return census_inproc.evaluate_many(list(commands), index, store, budget, **kw)
 
 
 def test_pending_is_not_none_and_is_a_distinct_sentinel():
@@ -485,16 +282,80 @@ def test_index_world_parity_with_the_host_shell(tmp_path):
         assert got[command][2] == "", command
 
 
-def test_grammar_examples_and_real_shapes_match_the_walk_path(tree):
+def test_grammar_examples_and_real_shapes_are_answered_in_the_index_world():
     commands = _docstring_examples() + _REAL_SHAPES
     got = _many(commands, _Index())
     for command in commands:
-        assert got[command] == evaluate(command, tree, None), command
+        assert isinstance(got[command], tuple), command
 
 
 @pytest.mark.parametrize("command", _DECLINED)
 def test_every_declined_construct_declines_in_the_index_world_too(command):
     assert _many([command], _Index())[command] is None
+
+
+def test_character_dependent_regex_declines_only_when_a_blob_holds_non_ascii():
+    assert _many(["grep -rl 'ne.dle' src | wc -l"], _Index())[
+        "grep -rl 'ne.dle' src | wc -l"] is None
+    assert _many(["grep -rl 'ne.dle' src/pkg | wc -l"], _Index())[
+        "grep -rl 'ne.dle' src/pkg | wc -l"] == (0, "1\n", "")
+    assert _many(["grep -c 'caf.' odd/latin1.txt"], _Index())["grep -c 'caf.' odd/latin1.txt"] is None
+
+
+def test_absent_operand_is_answered_only_under_a_quiet_stderr():
+    one = "grep -rl needle src nowhere 2>/dev/null | wc -l"
+    two = "find nowhere 2>/dev/null | wc -l"
+    three = "ls nowhere 2>/dev/null | wc -l"
+    got = _many([one, two, three], _Index())
+    assert got[one] == (0, "3\n", "")
+    assert got[two] == (0, "0\n", "")
+    assert got[three] == (0, "0\n", "")
+
+
+def test_nul_binary_counts_under_l_and_c_but_not_under_a_printing_mode():
+    commands = ["grep -rl needle src/__pycache__ | wc -l", "grep -rc needle src/__pycache__ | wc -l",
+                "grep -rn needle src/__pycache__ | wc -l", "grep -rn needle src/pkg | wc -l"]
+    got = _many(commands, _Index())
+    assert got[commands[0]] == (0, "1\n", "")
+    assert got[commands[1]] == (0, "1\n", "")
+    assert got[commands[2]] is None
+    assert got[commands[3]] == (0, "2\n", "")
+
+
+def test_quiet_redirect_must_be_the_exact_form():
+    exact = "grep -rl needle src 2>/dev/null | wc -l"
+    spaced = "grep -rl needle src 2> /dev/null | wc -l"
+    quoted = "grep -rl '2>/dev/null' src | wc -l"
+    got = _many([exact, spaced, quoted], _Index())
+    assert got[exact] is not None
+    assert got[spaced] is None
+    assert got[quoted] is None
+
+
+def test_results_do_not_leak_between_patterns_flags_or_dialects():
+    store = _Records()
+    index = _Index()
+    expect = {
+        "grep -c needle src/top.py": (0, "2\n", ""),
+        "grep -ci needle src/top.py": (0, "3\n", ""),
+        "grep -c -v needle src/top.py": (0, "2\n", ""),
+        "grep -cw need src/top.py": (1, "0\n", ""),
+        "grep -c 'ne\\{2\\}dle' src/top.py": (0, "2\n", ""),
+        "grep -cE 'ne{2}dle' src/top.py": (0, "2\n", ""),
+        "grep -cF 'ne{2}dle' src/top.py": (1, "0\n", ""),
+        "grep -c 'ne{2}dle' src/top.py": (1, "0\n", ""),
+    }
+    for command, want in expect.items():
+        assert _many([command], index, store)[command] == want, command
+
+
+def test_a_broken_blob_source_declines_instead_of_raising():
+    class _Broken(_Index):
+        def read_blobs(self, oids):
+            raise RuntimeError("boom")
+
+    got = _many(["grep -rl needle src | wc -l"], _Broken())
+    assert got["grep -rl needle src | wc -l"] is None
 
 
 def test_many_commands_over_one_tree_fetch_each_oid_once():
@@ -572,6 +433,16 @@ def test_progress_advances_on_every_call_even_with_zero_budget(monkeypatch):
             break
     else:
         pytest.fail("never finished")
+
+
+def test_without_force_first_a_spent_budget_reads_no_blob(monkeypatch):
+    monkeypatch.setattr(census_inproc, "_SLICE", 1)
+    index = _Index()
+    store = _Records()
+    command = "grep -rl needle lib docs | wc -l"
+    got = _many([command], index, store, budget=0, force_first=False)
+    assert got[command] is census_inproc.PENDING
+    assert index.calls == [] and store.rows == {}
 
 
 def test_a_finished_command_is_answered_while_another_stays_pending(monkeypatch):

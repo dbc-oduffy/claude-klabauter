@@ -1687,3 +1687,50 @@ def test_uproject_inside_git_dir_and_node_modules_is_skipped(tmp_path: Path) -> 
     (repo / "node_modules" / "X.uproject").write_text("{}", encoding="utf-8")
     (repo / ".git" / "X.uproject").write_text("{}", encoding="utf-8")
     assert mod.detect_uproject(repo) == ""
+
+
+def _track(repo: Path, *paths: str) -> None:
+    subprocess.run(["git", "init", "-q"], cwd=str(repo), check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "add", "--", *paths], cwd=str(repo), check=True, **no_console_passthrough_kwargs())
+
+
+def test_tracked_fixture_uproject_is_not_detected_and_no_caveat(tmp_path: Path) -> None:
+    repo = _make_repo(tmp_path)
+    fx = repo / "tests" / "fixtures" / "polyglot"
+    fx.mkdir(parents=True)
+    (fx / "Foo.uproject").write_text("{}", encoding="utf-8")
+    (repo / ".git").rmdir()
+    _track(repo, "tests/fixtures/polyglot/Foo.uproject")
+    assert mod.detect_uproject(repo) == ""
+    out = mod.build_cache(invoker="handoff", repo_root=repo)["output"]
+    assert "Unreal Engine project detected" not in out
+
+
+def test_untracked_fixture_uproject_one_level_down_is_skipped(tmp_path: Path) -> None:
+    repo = _make_repo(tmp_path)
+    (repo / "fixtures").mkdir()
+    (repo / "fixtures" / "Foo.uproject").write_text("{}", encoding="utf-8")
+    assert mod.detect_uproject(repo) == ""
+    (repo / "tests").mkdir()
+    (repo / "tests" / "Bar.uproject").write_text("{}", encoding="utf-8")
+    assert mod.detect_uproject(repo) == ""
+
+
+def test_declared_non_ue_project_type_wins_over_tracked_uproject(tmp_path: Path) -> None:
+    repo = _make_repo(tmp_path)
+    (repo / "Game").mkdir()
+    (repo / "Game" / "Game.uproject").write_text("{}", encoding="utf-8")
+    (repo / ".git").rmdir()
+    _track(repo, "Game/Game.uproject")
+    assert mod.detect_uproject(repo) == "Game/Game.uproject"
+    (repo / "coordinator.local.md").write_text("---\nproject_type: general\n---\n", encoding="utf-8")
+    assert mod.detect_uproject(repo) == ""
+    out = mod.build_cache(invoker="handoff", repo_root=repo)["output"]
+    assert "Unreal Engine project detected" not in out
+
+
+def test_root_level_uproject_is_never_skipped(tmp_path: Path) -> None:
+    """A root-level .uproject has no directory segment to skip."""
+    repo = _make_repo(tmp_path)
+    (repo / "Root.uproject").write_text("{}", encoding="utf-8")
+    assert mod.detect_uproject(repo) == "Root.uproject"

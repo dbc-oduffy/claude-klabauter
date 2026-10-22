@@ -101,6 +101,12 @@ def _repo(tmp_path: Path) -> Path:
     repo = tmp_path / "repo"
     repo.mkdir()
     (repo / "f.txt").write_text("5\n", encoding="utf-8")
+    for args in (["init", "-q"], ["add", "f.txt"], ["commit", "-q", "-m", "operands"]):
+        subprocess.run(
+            ["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t", *args],
+            check=True, capture_output=True,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
     return repo
 
 

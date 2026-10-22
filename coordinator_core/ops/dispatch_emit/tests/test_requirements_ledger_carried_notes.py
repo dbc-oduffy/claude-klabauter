@@ -49,11 +49,29 @@ def test_carried_notes_missing_predecessor_yields_own(tmp_path):
     assert [n["note"] for n in rl.carried_notes(tmp_path, "warp-new")] == ["mine"]
 
 
-def test_carried_notes_does_not_follow_second_hop(tmp_path):
+def test_carried_notes_follows_second_hop(tmp_path):
     _note(tmp_path, "ask-first", "deep", "2026-10-20T10:00:00Z")
     rl.start(tmp_path, "ask-old", resumed_from="ask-first")
     rl.start(tmp_path, "warp-new", resumed_from="ask-old")
-    assert rl.carried_notes(tmp_path, "warp-new") == []
+    assert [n["note"] for n in rl.carried_notes(tmp_path, "warp-new")] == ["deep"]
+
+
+def test_carried_notes_cycle_terminates(tmp_path):
+    _note(tmp_path, "ask-a", "na", "2026-10-20T10:00:00Z")
+    _note(tmp_path, "ask-b", "nb", "2026-10-21T10:00:00Z")
+    rl.start(tmp_path, "ask-a", resumed_from="ask-b")
+    rl.start(tmp_path, "ask-b", resumed_from="ask-a")
+    assert [n["note"] for n in rl.carried_notes(tmp_path, "ask-a")] == ["na", "nb"]
+
+
+def test_carried_notes_hop_cap(tmp_path):
+    n = rl.CARRIED_HOP_CAP + 4
+    for i in range(n):
+        _note(tmp_path, f"r{i}", f"n{i}", f"2026-10-01T10:00:{i:02d}Z")
+        rl.start(tmp_path, f"r{i}", resumed_from=f"r{i + 1}" if i + 1 < n else None)
+    got = rl.carried_notes(tmp_path, "r0")
+    assert len(got) == rl.CARRIED_HOP_CAP + 1
+    assert "n0" in [x["note"] for x in got] and f"n{n - 1}" not in [x["note"] for x in got]
 
 
 def test_carried_notes_carry_id_and_retraction(tmp_path):
