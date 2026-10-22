@@ -1331,6 +1331,11 @@ def _frontmatter_gate_items(fm_lines: list) -> Optional[tuple]:
     return spans, indent
 
 
+def _clearance_fields(evidence: str) -> dict:
+    """The gate keys clear-gate writes; test_clear_gate_writes_only_shared_set_keys pins them to GATE_CLEARANCE_KEYS."""
+    return {"cleared": True, "closure_evidence": evidence}
+
+
 def _clear_gate(
     plan_path: str,
     task_id: str,
@@ -1379,6 +1384,7 @@ def _clear_gate(
         governed = is_governed_plan(plan_fm) if isinstance(plan_fm, dict) else False
 
         rows = _parse_rows_or_abort(result.body, "clear-gate")
+        original_rows = copy.deepcopy(rows)
         row = next(
             (r for r in rows if isinstance(r, dict) and r.get("id") == task_id), None
         )
@@ -1430,8 +1436,7 @@ def _clear_gate(
             return old_text
 
         if row_hits:
-            entry["cleared"] = True
-            entry["closure_evidence"] = evidence
+            entry.update(_clearance_fields(evidence))
             try:
                 untouched_invalid = _validate_all(
                     rows, governed=governed, touched_ids={task_id}, plan_created=plan_created,
@@ -1439,12 +1444,11 @@ def _clear_gate(
             except MutateAbort as exc:
                 raise MutateAbort(f"clear-gate: {exc.args[0] if exc.args else exc}") from exc
             start, end = result.span
-            new_text = old_text[:start] + _dump_rows(rows) + old_text[end:]
+            new_text = old_text[:start] + _patch_body(result.body, original_rows, rows) + old_text[end:]
             _state["warnings"] = _untouched_invalid_warnings(untouched_invalid)
         else:
             start, end, indent, item = fm_hits[0]
-            item["cleared"] = True
-            item["closure_evidence"] = evidence
+            item.update(_clearance_fields(evidence))
             dumped = yaml.safe_dump(
                 [item], sort_keys=False, allow_unicode=True, width=10_000
             ).splitlines(keepends=True)

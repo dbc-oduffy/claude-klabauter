@@ -1332,7 +1332,7 @@ def _research_route_setup(
     if research_emit.REPO_PIPELINE in shape["pipelines"] and repo_refs == 0 and (targets or questions):
         raise PipelineEmitRefused([
             f"sizing {sizing_rel or '(research route)'}: the repo pipeline has no resolved repo target; "
-            "record one with sizing-assemble --research-target repo=<path> or a repo seed"
+            "record one with sizing-assemble --research-target repo=<path or registered key> (list: research.targets) or a repo seed"
         ])
     if research_emit.REPO_PIPELINE in shape["pipelines"] and repo_refs >= (1 if repo_seeds else 2):
         compare_name = research_emit.REPO_COMPARE_PIPELINE + MANIFEST_SUFFIX

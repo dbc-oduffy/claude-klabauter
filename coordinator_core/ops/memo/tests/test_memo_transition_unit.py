@@ -1779,6 +1779,47 @@ created: 2026-06-01
         assert result["exit_code"] == 1
         assert result["applied"] is False
 
+    def _setup_custom(self, tmp_path: Path, fm_body: str) -> str:
+        repo = tmp_path / "repo"
+        _git_init(repo)
+        inbox = repo / "cross-repo" / "inbox"
+        inbox.mkdir(parents=True)
+        memo = inbox / "memo.md"
+        memo.write_text(
+            "---\nkind: fyi\nstatus: actioned\npicked_up_at: '2026-01-02T10:00:00Z'\n"
+            "picked_up_by: session-test\n" + fm_body +
+            "from: sender-session\nsummary: A test memo.\ncreated: 2026-06-01\n---\n",
+            encoding="utf-8",
+        )
+        _git_track(repo, memo)
+        return str(memo)
+
+    def test_close_actioned_note_only_memo(self, tmp_path):
+        memo = self._setup_custom(tmp_path, "actioned_note: noted and handled\n")
+        result = _close(memo, "2026-08-12T00:00:00Z")
+        assert result["exit_code"] == 0
+        assert result["applied"] is True
+        fm = _fm_dict(memo)
+        assert fm["status"] == "closed"
+        assert fm["actioned_note"] == "noted and handled"
+        assert "decision" not in fm
+        assert validate_memo_cross_fields(fm) == []
+
+    def test_close_neither_decision_nor_actioned_note_fails(self, tmp_path):
+        memo = self._setup_custom(tmp_path, "")
+        result = _close(memo, "2026-08-12T00:00:00Z")
+        assert result["exit_code"] == 1
+        assert result["applied"] is False
+
+    def test_closed_without_decision_or_actioned_note_invalid(self):
+        fm = {
+            "kind": "fyi", "status": "closed", "from": "s", "summary": "x",
+            "created": "2026-06-01", "closed_at": "2026-08-12T00:00:00Z",
+            "action_taken_at": "2026-08-12T00:00:00Z",
+        }
+        errors = validate_memo_cross_fields(fm)
+        assert any("decision or actioned_note" in str(e.get("field", "")) for e in errors)
+
     def test_close_idempotent_when_already_closed(self, tmp_path):
         if _close is None:
             pytest.skip("_close not implemented yet — see test_close_verb_exists")

@@ -586,6 +586,24 @@ def test_ungrounded_report_fixed_then_reclosed_commits(repo, scratch):
     assert _close(repo, scratch, "scouts")["exit_code"] == 0
 
 
+def test_open_questions_lines_pass_close_and_are_reported_open(repo, scratch):
+    _report(scratch, _GOOD + "## Open questions\n- **ungrounded** q1\n- **ungrounded** q2\n")
+    out = _close(repo, scratch, "scouts")
+    assert out["exit_code"] == 0 and out["deliverable"] is True, out
+    assert out["open"] == 2
+
+
+def test_ungrounded_line_outside_open_questions_still_refuses_with_open_count(repo, scratch):
+    _report(scratch, _GOOD + "- **ungrounded** bad\n## Open questions\n- **ungrounded** q1\n")
+    out = _refused(repo, scratch)
+    assert out["grounding"]["ungrounded"] == 1 and out["grounding"]["open"] == 1
+
+
+def test_close_without_open_questions_omits_open(repo, scratch):
+    _report(scratch, _GOOD)
+    assert "open" not in _close(repo, scratch, "scouts")
+
+
 def _age(path: Path, delta: float) -> None:
     now = time.time()
     os.utime(path, (now + delta, now + delta))

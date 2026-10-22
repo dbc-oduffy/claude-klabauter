@@ -1186,15 +1186,14 @@ def _unqualified_path_citations(body: str, qualifiers: frozenset) -> list:
 
 def _citation_owners(
     paths: list, sender_root: Path, receiver_root: Path,
-    sender_name: str,
+    sender_name: str, receiver_name: Optional[str] = None,
 ) -> tuple:
-    """Classify each bare path: `({path: qualifier}, [unresolved], [ambiguous])`. A path
-    absent from the sender's tree still belongs to the sender when a
-    non-top-level ancestor directory exists there, or when the receiver
-    holds it (an absence report is the common cause); the receiver is never
-    credited by existence alone. Held by both trees -> ambiguous, and by
-    neither with no sender ancestor -> unresolved; both stay bare. In-process
-    stats only.
+    """Classify each bare path: `({path: qualifier}, [unresolved], [ambiguous])`.
+    A path the sender holds, or whose non-top-level ancestor directory exists
+    in the sender's tree, belongs to the sender. A path only the receiver
+    holds belongs to the receiver (`receiver_name`; the sender when None).
+    Held by both trees -> ambiguous, and by neither with no sender ancestor
+    -> unresolved; both stay bare. In-process stats only.
     """
     owners: dict = {}
     unresolved: list = []
@@ -1204,8 +1203,10 @@ def _citation_owners(
         in_receiver = (receiver_root / p).exists()
         if in_sender and in_receiver:
             ambiguous.append(p)
-        elif in_sender or in_receiver or _sender_has_ancestor(sender_root, p):
+        elif in_sender or _sender_has_ancestor(sender_root, p):
             owners[p] = sender_name
+        elif in_receiver:
+            owners[p] = receiver_name or sender_name
         else:
             unresolved.append(p)
     return owners, unresolved, ambiguous
@@ -1232,7 +1233,7 @@ def _citation_lint_notice(paths: list, sender_name: str, owners: Optional[dict] 
     more_clause = f"\n    ...and {remainder} more" if remainder > 0 else ""
     return (
         "memo.send: %d body path(s) were not repo-qualified; qualified as "
-        "the sender's. Write `repo:path` to cite a peer.\n"
+        "the repo that holds each. Write `repo:path` to cite a peer.\n"
         "%s%s"
         % (len(paths), listed, more_clause)
     )
@@ -1905,7 +1906,7 @@ def _memo_send(params: dict, repo_root=None) -> dict:
                 sender_name = sender_name[: -len("-em")]
             owners, citations_unresolved, citations_ambiguous = _citation_owners(
                 unqualified, sender_worktree, receiver_repo_path,
-                sender_name,
+                sender_name, Path(receiver_repo_path).name.lower(),
             )
             split = split_frontmatter(content)
             if split is not None and owners:

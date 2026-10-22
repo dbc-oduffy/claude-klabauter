@@ -80,6 +80,67 @@ def test_only_given_keys_are_written(repo: Path) -> None:
     assert doc["research"] == {"value_class": "scouts"}
 
 
+@pytest.fixture()
+def registered(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> str:
+    from coordinator_core import machine_resolver as mr
+
+    clone = (tmp_path / "clones" / "Glean").as_posix()
+    rows = [{"key": "research_glean", "path": clone}]
+    monkeypatch.setattr(mr, "research_targets", lambda: rows)
+    monkeypatch.setattr(
+        mr, "resolve_research_target",
+        lambda name: clone if name in ("research_glean", "glean") else None,
+    )
+    return clone
+
+
+@pytest.mark.parametrize("ref", ["research_glean", "glean"])
+def test_registered_key_lands_as_its_path(repo: Path, registered: str, ref: str) -> None:
+    code, doc = _run(repo, "--research-class", "corpus", "--research-target", f"repo={ref}")
+    assert code == sa.EXIT_OK
+    assert doc["research"]["targets"] == [{"source": "repo", "ref": registered}]
+
+
+def test_unregistered_bare_token_is_refused_with_the_key_list(
+    repo: Path, registered: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    code, doc = _run(repo, "--research-class", "corpus", "--research-target", "repo=nope")
+    assert code == sa.EXIT_USAGE
+    assert "research" not in doc
+    assert (
+        "--research-target repo=nope: not a registered research target; "
+        "pass a path or one of: research_glean"
+    ) in capsys.readouterr().err
+
+
+def test_unregistered_bare_token_with_empty_registry_says_none_registered(
+    repo: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from coordinator_core import machine_resolver as mr
+
+    monkeypatch.setattr(mr, "research_targets", lambda: [])
+    monkeypatch.setattr(mr, "resolve_research_target", lambda name: None)
+    code, _ = _run(repo, "--research-class", "corpus", "--research-target", "repo=nope")
+    assert code == sa.EXIT_USAGE
+    assert "pass a path or one of: none registered" in capsys.readouterr().err
+
+
+def test_bare_existing_directory_passes_through(repo: Path, registered: str) -> None:
+    (repo / "localdir").mkdir()
+    code, doc = _run(repo, "--research-class", "corpus", "--research-target", "repo=localdir")
+    assert code == sa.EXIT_OK
+    assert doc["research"]["targets"] == [{"source": "repo", "ref": "localdir"}]
+
+
+def test_path_shaped_repo_refs_are_unchanged(repo: Path, registered: str) -> None:
+    code, doc = _run(
+        repo, "--research-class", "corpus",
+        "--research-target", "repo=a/b", "--research-target", "repo=coordinator_core/ops",
+    )
+    assert code == sa.EXIT_OK
+    assert [t["ref"] for t in doc["research"]["targets"]] == ["a/b", "coordinator_core/ops"]
+
+
 def test_research_appetite_never_touches_top_level_appetite(repo: Path) -> None:
     code, doc = _run(repo, "--research-class", "deep", "--research-appetite", "small")
     assert code == sa.EXIT_OK

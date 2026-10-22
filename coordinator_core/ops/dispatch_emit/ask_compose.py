@@ -171,6 +171,12 @@ _ANCHOR_CLAUSE = (
     "Repo root: {root} -- run `cd {root}` as its own standalone Bash call first; every "
     "repo-relative path below resolves against it."
 )
+#: Marker token a test asserts; other stage modules import the clause, never retype it.
+SKILL_WEIGHT_MARKER = "skill-weight-budget"
+SKILL_WEIGHT_HEADROOM_CLAUSE = (
+    f"Mind the {SKILL_WEIGHT_MARKER}: skill and command prose writes are budgeted by the skill-weight "
+    "leg at commit. Write a tripwire pointer, not prose, wherever a skill or command needs a rule."
+)
 _REVIEW_RESULT_NAMES = ("_reviewPrep", "_reviewWave", "_deliveryVerdict", "_deliveryNotRun", WAVE_NOT_RUN_VAR, "_reviewIntegration", "_reviewReverify")
 
 
@@ -477,6 +483,12 @@ _WITHHELD_ROWS_JS = (
     "+ ((g.register_rows ?? []).length ? ' [register ' + g.register_rows.join(', ') + ']' : '')).join('; ') + '. ' + "
     + json.dumps(WITHHELD_RULE)
     + " : '')"
+)
+#: A halted run's recorded next_action: params carry only keys `workflow.revise` reads, and `note`
+#: satisfies its non-empty precondition (the halt reason becomes the run's note).
+REVISE_NEXT_ACTION_JS = (
+    "{ kind: 'revise_and_refire', op: 'workflow.revise', params: { run_id: _runId, "
+    "note: 'halted: ' + String(_halted?.halted ?? 'unknown') } }"
 )
 #: The stage-start read every judgment-bearing stage makes: the EM can revise the ask mid-run
 #: (`workflow.revise`), so a stage that read the ask only at emit would act on a stale one.
@@ -1234,6 +1246,14 @@ def _row_runner_js() -> str:
 _SIZING_SKILL_SOURCE = ("skills", "sizing", "SKILL.md")
 
 
+#: Prefixes every review and fix prompt: a symbol unused in this repo can still be called from a sibling repo.
+_CROSS_REPO_CALLER_CLAUSE = (
+    "\n\nBefore deleting or removing any symbol (function, method, class, constant, even a private one) as "
+    "dead code, search the sibling repos for callers of it. If any sibling repo still calls it, keep the "
+    "symbol and report it as a finding instead."
+)
+
+
 def _sizing_procedure_pointer() -> str:
     """` by Reading <sizing SKILL.md> and following it`, or "" when the plugin root or the file
     does not resolve. Agents hold no Skill tool, so the procedure is named as a file, never a skill."""
@@ -1429,7 +1449,7 @@ def compose_ask_script(
             else ""
         )
     ) + ledger_clause
-    review_head = head + intent_clause + session_tail
+    review_head = head + intent_clause + _CROSS_REPO_CALLER_CLAUSE + session_tail
     run_base_sha = run_base_sha or head_sha(repo_root) or ""
     review_blocks = compose_execute_review(
         review,
@@ -2680,7 +2700,7 @@ def compose_ask_script(
         f"{brief_prefix}{_AGENT_DEFS_MARKER}{_emit._prompt_head(preamble)}\n\n{anchor}\n\n",
         "Your brief is the file ",
         "js:r.brief_path",
-        f" -- read it completely, then execute it as written.{ledger_clause}{session_tail}",
+        f" -- read it completely, then execute it as written.\n\n{SKILL_WEIGHT_HEADROOM_CLAUSE}{ledger_clause}{session_tail}",
         "js:" + _row_sidecar_js(run_id, _lit(build_work_label(''))),
     )
     work_label = _lit(build_work_label(''))
@@ -2894,8 +2914,8 @@ def compose_ask_script(
         "Do the owed work now. Your writes are exactly these declared paths: ",
         f"js:({_rl}.{RESUME_LEDGER_LEG_FIELD}?.writes ?? (_manifest?.rows ?? []).flatMap((r) => r.writes ?? [])).join(', ')",
         ". A row whose work you cannot finish, or whose owed work lies on a path outside those writes, stays "
-        "not_met: write nothing for it and say so in `summary`. Commit and stage nothing."
-        f"{session_tail}",
+        "not_met: write nothing for it and say so in `summary`. Commit and stage nothing. "
+        f"{SKILL_WEIGHT_HEADROOM_CLAUSE}{session_tail}",
     )
     remaining_call = _agent(
         remaining_prompt, label="ledger-remaining", phase=ASK_VERIFY_PHASE,
@@ -3065,7 +3085,7 @@ def compose_ask_script(
         f"refire: {_refire_js(sizing_rel)} }});"
     )
     stopped_na = (
-        "{ kind: 'revise_and_refire', op: 'workflow.revise', params: { run_id: _runId, sizing: _sizingRel, halted: _halted } }"
+        REVISE_NEXT_ACTION_JS
         if in_run_commit
         else "{ kind: 'none', op: null, params: null }"
     )
@@ -3382,8 +3402,7 @@ def _append_docs_and_commit(
         "error: _commit?.error ?? null, blob_drift: _commit?.blob_drift ?? null, "
         "plan: _planRel ?? null, sizing: _sizingRel ?? null }; "
         "if (_incompleteChunks.length === 0) { _nextAction.params.halted = _halted; _reviseAndRefire = null; } "
-        "else { _nextAction = { kind: 'revise_and_refire', op: 'workflow.revise', params: { run_id: _runId, "
-        "sizing: _sizingRel, halted: _halted } }; _reviseAndRefire = _mkRevise(); } }"
+        f"else {{ _nextAction = {REVISE_NEXT_ACTION_JS}; _reviseAndRefire = _mkRevise(); }} }}"
     )
     b.append("  }")
 

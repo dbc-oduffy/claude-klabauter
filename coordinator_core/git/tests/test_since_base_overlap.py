@@ -167,6 +167,39 @@ def test_other_plan_checkpoint_commit_is_foreign(tmp_path: Path) -> None:
     assert len(since_base_overlap.find_overlaps(tmp_path, [PATH], base, run_id=None, plan=PLAN)) == 1
 
 
+def _halt_record_setup(tmp_path: Path, subject: str):
+    repo, base, base_lines = _setup(tmp_path)
+    halted = list(base_lines)
+    halted.insert(40, "halt_record_line = 1\n")
+    repo.commit({PATH: _join(halted)}, subject)
+    repo.land(_join(base_lines))
+    return base
+
+
+def test_own_run_halt_record_commit_is_not_overlap(tmp_path: Path) -> None:
+    base = _halt_record_setup(tmp_path, "warp: record halted run-R1 run artifacts")
+
+    assert since_base_overlap.find_overlaps(tmp_path, [PATH], base, run_id="run-R1") == []
+
+
+def test_own_run_halt_record_process_files_variant_is_not_overlap(tmp_path: Path) -> None:
+    base = _halt_record_setup(tmp_path, "warp: record halted run-R1 run artifacts (process files)")
+
+    assert since_base_overlap.find_overlaps(tmp_path, [PATH], base, run_id="run-R1") == []
+
+
+def test_other_run_halt_record_commit_is_foreign(tmp_path: Path) -> None:
+    base = _halt_record_setup(tmp_path, "warp: record halted run-R2 run artifacts")
+
+    assert len(since_base_overlap.find_overlaps(tmp_path, [PATH], base, run_id="run-R1")) == 1
+
+
+def test_halt_record_commit_without_run_id_is_foreign(tmp_path: Path) -> None:
+    base = _halt_record_setup(tmp_path, "warp: record halted run-R1 run artifacts")
+
+    assert len(since_base_overlap.find_overlaps(tmp_path, [PATH], base, run_id=None)) == 1
+
+
 def test_path_unchanged_since_base_is_skipped(tmp_path: Path) -> None:
     repo, base, base_lines = _setup(tmp_path)
     repo.commit({PATH: _join(base_lines), "other.txt": "x\n"}, "unrelated")

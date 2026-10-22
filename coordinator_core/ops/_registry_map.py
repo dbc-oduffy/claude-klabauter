@@ -266,6 +266,7 @@ OP_MODULE_MAP: Dict[str, str] = {
     "memo.blitz_buckets":                     "coordinator_core.ops.fleet.memo_blitz_buckets",
     "memo.check_addressee":                   "coordinator_core.ops.fleet.memo_check_addressee",
     "deliverable.rollup":                     "coordinator_core.ops.deliverable_rollup",
+    "research.targets":                       "coordinator_core.ops.research_targets",
     "spec_backlink.resolve":                  "coordinator_core.ops.spec_backlink_resolve",
     "spec_backlink.rewrite":                  "coordinator_core.ops.spec_backlink_resolve",
     "sizing.decline":                          "coordinator_core.ops.sizing_decline",

@@ -1506,14 +1506,17 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
 
     checkpoint_stamp: dict = {}
     if "Checkpoint-Plan: " in message:
-        try:
-            from coordinator_core.ops.dispatch_emit.checkpoint_stamp import stamp_checkpoint
+        if "\nCheckpoint-Not-Landed: " in message:
+            checkpoint_stamp = {"stamp_deferred": "run-open"}
+        else:
+            try:
+                from coordinator_core.ops.dispatch_emit.checkpoint_stamp import stamp_checkpoint
 
-            checkpoint_stamp = stamp_checkpoint(
-                worktree_root, message, sha, session_id=session_id_override
-            )
-        except Exception as exc:  # noqa: BLE001 -- the landed checkpoint stands
-            checkpoint_stamp = {"stamp_error": repr(exc)}
+                checkpoint_stamp = stamp_checkpoint(
+                    worktree_root, message, sha, session_id=session_id_override
+                )
+            except Exception as exc:  # noqa: BLE001 -- the landed checkpoint stands
+                checkpoint_stamp = {"stamp_error": repr(exc)}
 
     landed = commit_meta(resolve_git_common_dir(worktree_root), sha)
     result = {

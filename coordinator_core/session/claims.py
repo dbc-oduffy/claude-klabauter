@@ -2442,6 +2442,38 @@ def _release_path_claim_artifact(
     return True
 
 
+def _release_path_claims_bulk(
+    paths: Optional[List[str]],
+    baton_repo_root: str = "",
+    cwd: Optional[str] = None,
+) -> bool:
+    """Bulk counterpart to ``_release_path_claim_artifact``: releases THIS
+    session's own touch-claims on *paths* (``None``: every claim it holds) in
+    ONE pass over its claim sinks via ``scope.release_own_path_claims``, so
+    the sink scan count is independent of ``len(paths)``.
+
+    Same identity contract as the single-path form: only the resolved
+    session's own sink and agent sinks back-pointed to it are touched, never
+    a peer's; no git-clean gate. ``cwd`` must be the worktree root (the
+    scope seam's requirement); a *baton_repo_root* stands in for it. An empty
+    list is a no-op, distinct from ``None``. Always returns True; a bad baton
+    root or unresolvable session id is an idempotent no-op.
+    """
+    base, ok = _resolve_path_claim_base(baton_repo_root, cwd)
+    if not ok or not base:
+        return True
+    my_sid = core.resolve_session_id(cwd)
+    _report_warm_uncarried_resolve("_release_path_claims_bulk")
+    if not my_sid:
+        return True
+    scope.release_own_path_claims(
+        my_sid,
+        None if paths is None else list(paths),
+        cwd=baton_repo_root or cwd,
+    )
+    return True
+
+
 def _clear_path_claim_if_dead(
     path: str, baton_repo_root: str = "", cwd: Optional[str] = None
 ) -> bool:

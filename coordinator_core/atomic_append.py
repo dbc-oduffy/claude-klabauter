@@ -40,7 +40,11 @@ Negative-spec (hard-won, Windows):
 
 from __future__ import annotations
 
+import atexit
 import os
+import queue
+import sys
+import threading
 from pathlib import Path
 
 IS_WINDOWS = os.name == "nt"
@@ -121,3 +125,61 @@ def append_line(sink: "Path | str", encoded: bytes) -> None:
             view = view[n:]
     finally:
         os.close(fd)
+
+
+_QUEUE_MAX = 512
+_ATEXIT_DRAIN_SECS = 0.3
+_queue: "queue.Queue | None" = None
+_queue_lock = threading.Lock()
+#: Tests that exercise the queued path set this; otherwise pytest runs synchronously
+#: so a test can read the sink right after the call.
+_force_async = False
+
+
+def _drain_worker(q: "queue.Queue") -> None:
+    while True:
+        sink, encoded = q.get()
+        try:
+            append_line(sink, encoded)
+        except Exception:
+            pass
+        finally:
+            q.task_done()
+
+
+def _get_queue() -> "queue.Queue":
+    global _queue
+    with _queue_lock:
+        if _queue is None:
+            _queue = queue.Queue(maxsize=_QUEUE_MAX)
+            threading.Thread(
+                target=_drain_worker, args=(_queue,), daemon=True, name="atomic-append-drain"
+            ).start()
+            atexit.register(flush, _ATEXIT_DRAIN_SECS)
+        return _queue
+
+
+def flush(timeout: float) -> None:
+    """Wait up to ``timeout`` seconds for queued appends to land; never raises."""
+    q = _queue
+    if q is None:
+        return
+    done = threading.Event()
+    threading.Thread(target=lambda: (q.join(), done.set()), daemon=True).start()
+    done.wait(timeout)
+
+
+def append_line_bounded(sink: "Path | str", encoded: bytes) -> None:
+    """Hand ``encoded`` to a per-process writer thread; never blocks the caller.
+
+    For telemetry on an op's critical path: a stalled ``CreateFileW`` (AV
+    minifilter, contended sink) must delay only the writer thread. A full queue
+    drops the line. Never raises.
+    """
+    try:
+        if "pytest" in sys.modules and not _force_async:
+            append_line(sink, encoded)
+            return
+        _get_queue().put_nowait((str(sink), encoded))
+    except Exception:
+        pass

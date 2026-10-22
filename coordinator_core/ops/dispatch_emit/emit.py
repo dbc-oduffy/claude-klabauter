@@ -4444,6 +4444,10 @@ def _run_base_marker() -> str:
     return f"{_SHARED_PATH_MARKER_DELIM}{_RUN_BASE_VAR}{_SHARED_PATH_MARKER_DELIM}"
 
 
+#: Trailer marking a mid-run checkpoint commit as not landed until the run closes.
+_NOT_LANDED_TRAILER = "\nCheckpoint-Not-Landed: run-open"
+
+
 def _checkpoint_trailer_js(
     plan_path: Optional[str],
     run_base_sha: Optional[str],
@@ -4461,7 +4465,8 @@ def _checkpoint_trailer_js(
             _js_string_literal("\n\nCheckpoint-Plan: ")
             + f" + {runtime_plan_js} + "
             + _js_string_literal("\nCheckpoint-Base: ")
-            + f" + {_RUN_BASE_VAR}"
+            + f" + {_RUN_BASE_VAR} + "
+            + _js_string_literal(_NOT_LANDED_TRAILER)
         )
     if not plan_path:
         return "''"
@@ -4471,7 +4476,7 @@ def _checkpoint_trailer_js(
     )
     if prior_run_base:
         expr += " + " + _js_string_literal(f"\nCheckpoint-Review-Base: {prior_run_base}")
-    return expr
+    return expr + " + " + _js_string_literal(_NOT_LANDED_TRAILER)
 
 
 def _emit_run_base_blocks(emit_sha: str) -> list[str]:

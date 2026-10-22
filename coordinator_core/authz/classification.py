@@ -1836,6 +1836,9 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # the commit.anchors read-only git carve-out does NOT apply here and does NOT transfer).
     # Spec: docs/plans/2026-07-06-claude-klabauter-deliverable-spine-factsupply-op.md § C2/C3
     "deliverable.rollup": OpClass.COMPUTE_ONLY,
+    # research.targets — COMPUTE_ONLY: reads external_workspaces.* from the machine-local registry
+    # files in-process; zero spawns, no repo read, no write of any kind (ops/research_targets.py).
+    "research.targets": OpClass.COMPUTE_ONLY,
     # deliverable.fork_detect — COMPUTE_ONLY. Landed by a sibling session (d94775334,
     # C7 of the baton-closes-when-its-plan-ships plan) with an _OP_KEY_SCOPE and an
     # OP_MODULE_MAP entry but no classification, leaving check_registration_quad() red

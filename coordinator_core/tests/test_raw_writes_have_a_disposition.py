@@ -347,7 +347,7 @@ _DISPOSITIONS: Dict[str, Tuple[str, str]] = {
     'coordinator_core/ops/dispatch_emit/requirements_ledger.py': ('in-repo-non-state', 'run.json, the revision inbox and the requirements view under the tracked record dir state/warp/<run_id>/: _write_run, _write_view, revise; PM rows go through requirement_register (tracked, not gitignored scratch)'),
     'coordinator_core/ops/dispatch_emit/run_close.py': ('ignored-target', 'close-job record under .coordinator-local/close-jobs (gitignored): _write_atomic'),
     'coordinator_core/ops/ceremony/close_background.py': ('in-repo-non-state', 'no write: the vocabulary hit is dataclasses.replace; the legs write through their own seams'),
-    'coordinator_core/ops/dispatch_emit/retest_targeted.py': ('ignored-target', 'fresh test-verdict record under the retest dir (landing_integrity.RETEST_DIR): the two path.write_text calls'),
+    'coordinator_core/ops/dispatch_emit/retest_targeted.py': ('ignored-target', 'fresh test-verdict record and the launcher log beside it under the retest dir (landing_integrity.RETEST_DIR): the two path.write_text calls and the _run_argv log open'),
     'coordinator_core/ops/dispatch_emit/reply_sidecar.py': ('in-repo-non-state', 'content-addressed stage readers under scratch/stage-readers and reply pages under the run record dir state/warp/<run_id>/: _ensure_reader, write_reply'),
     'coordinator_core/ops/plan_premise_carry.py': ('ignored-target', 'premise-carry record under .coordinator-local/plan-sidecars (gitignored): _write_atomic'),
     'coordinator_core/ops/dispatch_emit/run_close_lessons.py': ('outside-repo', 'front-matter stamp on a candidate queue_promote just wrote into the central lessons outbox, which is not this repo: _stamp'),

@@ -4,7 +4,8 @@
 ``stamp_checkpoint`` flips the rows it names from ``open`` to ``coded`` at the
 checkpoint's own sha, in-process (rows named on ``Checkpoint-Gate-Owed:`` or
 ``Checkpoint-Stop-Rule:`` stay ``open``), and lands one plan-only follow-up commit
-carrying ``Checkpoint-Stamp: <sha>``. Stdlib-only at module top: callers gate the
+carrying ``Checkpoint-Stamp: <sha>``. ``Checkpoint-Not-Landed: run-open`` marks a mid-run checkpoint and
+``Checkpoint-Run-Closed: <base>`` on a later commit closes it for ``rows_landed_at_head``. Stdlib-only at module top: callers gate the
 import on a literal ``Checkpoint-Plan: `` test so a plain commit pays nothing.
 """
 
@@ -24,6 +25,14 @@ CHECKPOINT_STOP_RULE_LINE = re.compile(r"^Checkpoint-Stop-Rule:[ \t]*(?P<v>.+?)\
 STOP_RULE_TRAILER = "Checkpoint-Stop-Rule"
 STAMP_TRAILER = "Checkpoint-Stamp"
 _STAMP_LINE = re.compile(r"^" + STAMP_TRAILER + r":[ \t]*\S", re.M)
+# A marked checkpoint is mid-run: outside readers count it only once a newer first-parent
+# commit carries RUN_CLOSED_TRAILER naming its base. A line absent means legacy, i.e. landed.
+CHECKPOINT_NOT_LANDED_TRAILER = "Checkpoint-Not-Landed"
+RUN_CLOSED_TRAILER = "Checkpoint-Run-Closed"
+_NOT_LANDED_LINE = re.compile(r"^" + CHECKPOINT_NOT_LANDED_TRAILER + r":[ \t]*\S", re.M)
+_BASE_LINE = re.compile(r"^Checkpoint-Base:[ \t]*(?P<v>\S+)[ \t]*$", re.M)
+_REVIEW_BASE_LINE = re.compile(r"^Checkpoint-Review-Base:[ \t]*(?P<v>\S+)[ \t]*$", re.M)
+_RUN_CLOSED_LINE = re.compile(r"^" + RUN_CLOSED_TRAILER + r":[ \t]*(?P<v>[0-9a-f]{40})[ \t]*$", re.M)
 
 
 class Checkpoint(NamedTuple):
@@ -31,6 +40,14 @@ class Checkpoint(NamedTuple):
     row_ids: frozenset
     gate_owed: frozenset
     stop_rule: frozenset = frozenset()  # carried, not landed
+    base: Optional[str] = None
+    review_base: Optional[str] = None
+    not_landed: bool = False  # mid-run marker present
+
+
+def run_closed_bases(message: str) -> frozenset:
+    """The 40-hex base of every ``Checkpoint-Run-Closed:`` line in ``message``."""
+    return frozenset(m.group("v") for m in _RUN_CLOSED_LINE.finditer(message))
 
 
 def _ids(text: str) -> frozenset:
@@ -46,11 +63,16 @@ def parse_checkpoint(message: str) -> Optional[Checkpoint]:
         return None
     owed = CHECKPOINT_GATE_OWED_LINE.search(message)
     stopped = CHECKPOINT_STOP_RULE_LINE.search(message)
+    base = _BASE_LINE.search(message)
+    review = _REVIEW_BASE_LINE.search(message)
     return Checkpoint(
         plan.group("v").replace("\\", "/"),
         _ids(subject.group("ids")),
         _ids(owed.group("v")) if owed else frozenset(),
         _ids(stopped.group("v")) if stopped else frozenset(),
+        base.group("v") if base else None,
+        review.group("v") if review else None,
+        bool(_NOT_LANDED_LINE.search(message)),
     )
 
 
@@ -124,6 +146,7 @@ def checkpoint_rows_landed(
     *,
     floor_epoch: Optional[int] = None,
     cap: int = 500,
+    honour_open_runs: bool = False,
 ) -> CheckpointWalk:
     """Which ``wanted`` rows did same-plan checkpoints land, at which sha, newest first.
 
@@ -132,6 +155,12 @@ def checkpoint_rows_landed(
     ``(row ids - gate-owed - stop-rule) & remaining`` at its own sha, so the newest landing wins.
     Ends when ``wanted`` is exhausted, below ``floor_epoch``, at ``cap`` commits, or at
     an unreadable or root commit. ``Checkpoint-Base:`` is not a stop.
+
+    ``honour_open_runs`` is for readers outside the run: the walk collects each commit's
+    ``Checkpoint-Run-Closed:`` bases as it passes, and a ``Checkpoint-Not-Landed`` checkpoint
+    counts only when its base or review base is already collected (the close is newer, so it is
+    seen first); otherwise it is stepped over and its rows stay wanted. Run-internal readers
+    (resume, refire, re-mint) leave it False.
     """
     empty = CheckpointWalk({}, 0, False)
     if not wanted or not plan_rel or not isinstance(start_sha, str) or not _FULL_SHA.fullmatch(start_sha):
@@ -142,6 +171,7 @@ def checkpoint_rows_landed(
     remaining = set(wanted)
     landed: dict = {}
     read = 0
+    closed: set = set()
     sha: Optional[str] = start_sha
     while remaining and sha is not None and read < cap:
         meta = _walk_commit_meta(common_dir, sha)
@@ -152,10 +182,14 @@ def checkpoint_rows_landed(
             break
         read += 1
         message = meta.get("message") or ""
+        if honour_open_runs:
+            closed |= run_closed_bases(message)
         cp = None if is_stamp_commit(message) else parse_checkpoint(message)
         if cp is not None and cp.plan_rel == plan_rel:
             subject = (message.splitlines() or [""])[0].strip()
             ids = (cp.row_ids - cp.gate_owed - cp.stop_rule) & remaining
+            if honour_open_runs and cp.not_landed and not ({cp.base, cp.review_base} & closed):
+                ids = frozenset()
             if ids and not is_process_half(subject):
                 landed[sha] = frozenset(ids)
                 remaining -= ids
@@ -171,7 +205,8 @@ def rows_landed_at_head(repo_root: Path, plan_rel: str, wanted: frozenset) -> fr
     """The ``wanted`` rows of ``plan_rel`` named by a same-plan checkpoint in HEAD's first-parent
     history, minus gate-owed and stop-rule ids. In-process; empty on an unborn HEAD. The walk
     reads at most ``_HEAD_WALK_CAP`` commits; a checkpoint older than that is not seen, so its
-    row stays held (fails closed)."""
+    row stays held (fails closed). A ``Checkpoint-Not-Landed`` checkpoint lands its rows only
+    once a newer commit carries ``Checkpoint-Run-Closed:`` for its base."""
     if not wanted or not plan_rel:
         return frozenset()
     from coordinator_core.git.git_state import head_sha
@@ -185,7 +220,8 @@ def rows_landed_at_head(repo_root: Path, plan_rel: str, wanted: frozenset) -> fr
     except (OSError, UnicodeDecodeError):
         pass
     walk = checkpoint_rows_landed(
-        repo_root, plan_rel, head, frozenset(wanted), floor_epoch=floor, cap=_HEAD_WALK_CAP
+        repo_root, plan_rel, head, frozenset(wanted), floor_epoch=floor, cap=_HEAD_WALK_CAP,
+        honour_open_runs=True,
     )
     return frozenset().union(*walk.landed.values())
 

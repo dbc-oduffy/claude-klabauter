@@ -26,6 +26,13 @@ def _fake_start_times(monkeypatch):
     monkeypatch.setattr(gov, "process_start_time", lambda pid: 1.0)
 
 
+@pytest.fixture(autouse=True)
+def _non_windows_host(monkeypatch):
+    # The win32-only cache-trim hint must not leak into the pause/resume line assertions;
+    # the hint tests set their own platform.
+    monkeypatch.setattr(gov.sys, "platform", "linux")
+
+
 def _args(**kw):
     base = dict(interval=0, max_pauses=3, resume_after=2, psi_full=10.0, avail_pct=5.0,
                 runaway_mb=0, runaway_every=1)
@@ -271,10 +278,7 @@ def test_verdicts_identical_with_and_without_sibling(tmp_path, monkeypatch):
     assert strip(a) == strip(b) and any("PAUSED" in x for x in a) and any("RESUMED" in x for x in a)
 
 
-def test_help_exits_zero_on_linux(monkeypatch):
-    import pytest
-
-    monkeypatch.setattr(gov.sys, "platform", "linux")
+def test_help_exits_zero_on_linux():
     with pytest.raises(SystemExit) as exc:
         gov.main(["--help"])
     assert exc.value.code == 0

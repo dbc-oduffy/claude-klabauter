@@ -307,3 +307,27 @@ def test_error_finding_in_the_script_exits_1_after_writing(tmp_path, monkeypatch
     assert _run(repo, plan) == plan_route.EXIT_DATA_ERROR
     assert json.loads(capsys.readouterr().out)["error_count"] == 1
     assert (repo / "out" / "p.workflow.mjs").is_file()
+
+
+def test_clear_gate_after_approval_still_emits(tmp_path):
+    import asyncio
+
+    from coordinator_core.frontmatter.primitives import stamp_approved_body_sha
+    from coordinator_core.ops.plan_tasks_mutate import _handler
+
+    text = (
+        "---\nstatus: approved\n---\n\n# A plan\n\n## Tasks\n\n```yaml plan-tasks\n"
+        "# comment\n"
+        "- id: C1\n  title: 'Do a thing'\n  change_kind: script-edit\n  surface: a.txt\n  queue_scope: project\n  writes: [\"a.txt\"]\n"
+        "  external_gate:\n    - owner_repo: coordinator-content-repo\n      condition: \"flip\"\n"
+        "      requires: commit-in-owner-repo\n      blocks: execution\n"
+        "  body: |\n    Write a.txt.\n```\n"
+    )
+    repo, plan = _repo(tmp_path, stamp_approved_body_sha(text))
+    params = {"verb": "clear-gate", "plan_path": str(plan), "id": "C1",
+              "owner_repo": "coordinator-content-repo", "evidence": "DoE commit abc1234 landed"}
+    result = asyncio.run(_handler(params, repo_root=repo / ".git"))
+    assert result["exit_code"] == 0 and result["applied"] is True, result
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "clear")
+    assert _run(repo, plan) == plan_route.EXIT_OK

@@ -91,7 +91,7 @@ Plan: Script-fired reconcile merge: start, file-only resolver, conclude
     const subject = 'checkpoint(wave ' + n + '): ' + done.length + ' rows — ' + done.join(', ');
     const owed = done.filter((i) => _gateOwed[i]);
     const stopped = done.filter((i) => _stoppedBy.includes(i));
-    const message = subject + '\n\nCheckpoint-Plan: docs/plans/emit-full-path-plan.md\nCheckpoint-Base: ' + _runBase + (owed.length ? '\nCheckpoint-Gate-Owed: ' + owed.join(', ') : '') + (stopped.length ? '\nCheckpoint-Stop-Rule: ' + stopped.join(', ') : '');
+    const message = subject + '\n\nCheckpoint-Plan: docs/plans/emit-full-path-plan.md\nCheckpoint-Base: ' + _runBase + '\nCheckpoint-Not-Landed: run-open' + (owed.length ? '\nCheckpoint-Gate-Owed: ' + owed.join(', ') : '') + (stopped.length ? '\nCheckpoint-Stop-Rule: ' + stopped.join(', ') : '');
     let r = null;
     try {
       r = await agent(

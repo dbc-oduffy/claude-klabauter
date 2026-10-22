@@ -4626,9 +4626,10 @@ def _memo_cf_action_taken_requires_companions(fm: dict) -> ErrorDict | None:
 
 
 def _memo_cf_closed_requires_companions(fm: dict) -> ErrorDict | None:
-    """status=closed requires closed_at, action_taken_at, AND decision.
+    """status=closed requires closed_at, action_taken_at, AND decision OR actioned_note.
 
-    Port of schema.js:1439-1454.
+    Port of schema.js:1439-1454, widened so a consult/fyi memo carrying only
+    actioned_note can close.
     """
     if fm.get('status') != 'closed':
         return None
@@ -4637,8 +4638,10 @@ def _memo_cf_closed_requires_companions(fm: dict) -> ErrorDict | None:
         missing.append('closed_at')
     if not fm.get('action_taken_at') or str(fm.get('action_taken_at', '')).strip() == '':
         missing.append('action_taken_at')
-    if not fm.get('decision') or str(fm.get('decision', '')).strip() == '':
-        missing.append('decision')
+    has_decision = bool(fm.get('decision')) and str(fm.get('decision', '')).strip() != ''
+    has_note = bool(fm.get('actioned_note')) and str(fm.get('actioned_note', '')).strip() != ''
+    if not has_decision and not has_note:
+        missing.append('decision or actioned_note')
     if missing:
         return {
             'field': ', '.join(missing),

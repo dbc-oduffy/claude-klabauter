@@ -858,6 +858,52 @@ def test_classify_paths_denies_a_path_a_peer_also_holds(tmp_path):
     assert answer.by_path["shared.py"].peers == ["sid-peer"]
 
 
+def _session_touched_kind(base, sid, path, kind):
+    sink = os.path.join(str(base), sid, "touch-record.jsonl")
+    touch_record.append_event(
+        sink,
+        session_id=sid,
+        agent_id=None,
+        verb="T",
+        path=path,
+        timestamp=1.0,
+        kind=kind,
+    )
+
+
+def test_classify_paths_admits_a_path_whose_only_foreign_claim_is_a_read(tmp_path):
+    _session_touched_kind(tmp_path, "sid-mine", "r.py", touch_record.KIND_WRITE)
+    _session_touched_kind(tmp_path, "sid-peer", "r.py", touch_record.KIND_READ)
+    _session_touched_kind(tmp_path, "sid-peer", "only-read.py", touch_record.KIND_READ)
+
+    answer = claim_index.classify_paths(
+        "sid-mine", ["r.py", "only-read.py"], sessions_dir=str(tmp_path)
+    )
+
+    assert answer.by_path["r.py"].verdict == claim_index.OWNERSHIP_MINE
+    assert answer.by_path["only-read.py"].verdict == claim_index.OWNERSHIP_UNCLAIMED
+
+
+def test_classify_paths_denies_a_path_a_peer_holds_for_write(tmp_path):
+    _session_touched_kind(tmp_path, "sid-mine", "w.py", touch_record.KIND_WRITE)
+    _session_touched_kind(tmp_path, "sid-peer", "w.py", touch_record.KIND_WRITE)
+
+    answer = claim_index.classify_paths("sid-mine", ["w.py"], sessions_dir=str(tmp_path))
+
+    assert answer.by_path["w.py"].verdict == claim_index.OWNERSHIP_PEER
+    assert answer.by_path["w.py"].peers == ["sid-peer"]
+
+
+def test_classify_paths_denies_a_path_a_peer_holds_kindless(tmp_path):
+    _session_touched_kind(tmp_path, "sid-mine", "k.py", touch_record.KIND_WRITE)
+    _session_touched_kind(tmp_path, "sid-peer", "k.py", None)
+
+    answer = claim_index.classify_paths("sid-mine", ["k.py"], sessions_dir=str(tmp_path))
+
+    assert answer.by_path["k.py"].verdict == claim_index.OWNERSHIP_PEER
+    assert answer.by_path["k.py"].peers == ["sid-peer"]
+
+
 def test_classify_paths_never_answers_mine_or_unclaimed_on_an_aborted_walk(
     tmp_path, monkeypatch
 ):

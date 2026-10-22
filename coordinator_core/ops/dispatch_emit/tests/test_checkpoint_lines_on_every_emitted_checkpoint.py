@@ -57,6 +57,7 @@ def test_every_checkpoint_script_carries_both_lines(tmp_path, with_out):
     assert "checkpoint(wave" in script
     assert f"Checkpoint-Plan: {_PLAN_REL}" in script
     assert "Checkpoint-Base: " in script
+    assert "\\nCheckpoint-Not-Landed: run-open" in script
 
 
 def test_template_message_passes_the_checkpoint_guard(tmp_path):
@@ -90,6 +91,7 @@ def test_repo_less_emit_still_carries_both_lines_resolved_at_fire(tmp_path):
     assert "checkpoint(wave" in script
     assert re.search(r"Checkpoint-Plan: [^\\\n']*" + re.escape(_PLAN_REL.rsplit("/", 1)[-1]), script)
     assert "Checkpoint-Base: " in script
+    assert "\\nCheckpoint-Not-Landed: run-open" in script
     assert "_runBase" in script
     assert "throw new Error('run base sha unreadable" in script
 

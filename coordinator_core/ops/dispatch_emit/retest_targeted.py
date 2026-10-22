@@ -1,12 +1,16 @@
 """Re-run a finished run's failing targeted tests and write the fresh verdict the landing gate reads.
 
-Runs outside any engine op: ``python -m coordinator_core.ops.dispatch_emit.retest_targeted
---from-task-output FILE [--tests PATH ...]``. Exit 0 on pass or stale, 1 on fail, 2 on a read error or an ``error`` verdict (launcher
-denied, missing or exited without test results; the record carries ``reason``).
+Entered as ``python -m coordinator_core.ops.dispatch_emit.retest_targeted
+--from-task-output FILE [--tests PATH ...]`` or, under the warm engine, through
+``emit-dispatch-workflow --retest-targeted`` inside a pool worker. Exit 0 on pass or stale, 1 on
+fail, 2 on a read error or an ``error`` verdict (launcher denied, missing, timed out or exited
+without test results; the record carries ``reason``).
 
 A failure with no baseline names its tests from ``--tests``, else the run's recorded targeted set;
 with neither, a ``stale`` verdict with a ``note`` is written and the gate reads it as non-blocking.
-Trap: the gate trusts a fresh pass as the run's whole verdict.
+Traps: the gate trusts a fresh pass as the run's whole verdict. The launch holds a pool worker, so it
+is bounded below the pool deadline (``RETEST_LAUNCH_TIMEOUT_SECS``), reads no stdin, and logs to a
+file beside the verdict; the warm engine never kills a worker, so an unbounded child strands the op.
 """
 from __future__ import annotations
 
@@ -22,6 +26,7 @@ from typing import Callable, Optional, Sequence
 
 from coordinator_core.ops._path_guard import contained_path, safe_id
 from coordinator_core.ops.dispatch_emit import landing_integrity as li
+from coordinator_core.warm.client import MUTATION_READ_DEADLINE_SECS
 
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
@@ -34,8 +39,46 @@ def _run_id_of(params: dict) -> str:
     return PurePosixPath(str(params.get("script_path") or "").replace("\\", "/")).stem
 
 
-def _run_argv(argv: list[str], cwd: Path) -> int:
-    return subprocess.run(argv, cwd=str(cwd), creationflags=_NO_WINDOW).returncode
+#: Pool deadline minus a 5s margin for writing the verdict after the child is gone.
+RETEST_LAUNCH_TIMEOUT_SECS = MUTATION_READ_DEADLINE_SECS - 5.0
+
+#: ``run`` return value for a launcher killed at the timeout.
+LAUNCH_TIMED_OUT = "timed-out"
+
+#: Options whose next token is a value, never a collection root.
+_VALUE_OPTIONS = frozenset({"--rootdir", "-c", "-p", "--confcutdir", "-m", "-k"})
+
+
+def _run_argv(argv: list[str], cwd: Path, *, log: Optional[Path] = None, timeout: Optional[float] = None):
+    """Exit code, or ``LAUNCH_TIMED_OUT``. Trap: the timeout kills only the direct child; the log is a
+    file so a surviving grandchild never blocks this call."""
+    limit = RETEST_LAUNCH_TIMEOUT_SECS if timeout is None else timeout
+    sink = open(log, "wb") if log is not None else subprocess.DEVNULL
+    try:
+        return subprocess.run(
+            argv, cwd=str(cwd), creationflags=_NO_WINDOW, stdin=subprocess.DEVNULL,
+            stdout=sink, stderr=subprocess.STDOUT, timeout=limit,
+        ).returncode
+    except subprocess.TimeoutExpired:
+        return LAUNCH_TIMED_OUT
+    finally:
+        if log is not None:
+            sink.close()
+
+
+def _strip_collection_roots(root: Path, cmd: str) -> list[str]:
+    """``cmd`` split, minus positional tokens naming an existing path under ``root``. Option values
+    and the program token stay."""
+    tokens = shlex.split(cmd)
+    kept: list[str] = []
+    prev_takes_value = False
+    for i, tok in enumerate(tokens):
+        if i == 0 or prev_takes_value or tok.startswith("-"):
+            kept.append(tok)
+        elif not (root / tok.split("::")[0]).exists():
+            kept.append(tok)
+        prev_takes_value = tok in _VALUE_OPTIONS
+    return kept
 
 
 def dirty_paths(repo_root: Path) -> list[str]:
@@ -105,7 +148,8 @@ def _launch_argv(root: Path, tests: list[str]) -> "list[str] | str":
     resolved = resolve_validation_cmd.resolve_fast_test_cmd(str(root))
     if resolved.returncode != 0:
         return f"fast_test_cmd unresolved: {resolved.stderr.strip()}"
-    return shlex.split(diff_scoped_tests.append_test_paths(resolved.stdout.strip(), tests))
+    stripped = shlex.join(_strip_collection_roots(root, resolved.stdout.strip()))
+    return shlex.split(diff_scoped_tests.append_test_paths(stripped, tests))
 
 
 def _write_stale(root: Path, run_id: str, dirty: Callable[[Path], list[str]], head_sha: Callable) -> int:
@@ -136,7 +180,7 @@ def _write_stale(root: Path, run_id: str, dirty: Callable[[Path], list[str]], he
 def main(
     argv: Optional[Sequence[str]] = None,
     *,
-    run: Callable[[list[str], Path], int] = _run_argv,
+    run: Callable[..., "int | str | None"] = _run_argv,
     dirty: Callable[[Path], list[str]] = dirty_paths,
 ) -> int:
     from coordinator_core.git.git_state import head_sha
@@ -176,15 +220,23 @@ def main(
         return 2
 
     status, reason = "pass", ""
+    path = li.fresh_verdict_path(root, run_id)
+    log_path = path.with_suffix(".log")
+    log_used = False
     argv_or_err = _launch_argv(root, tests)
     if isinstance(argv_or_err, str):
         status, reason = "error", argv_or_err
     else:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        log_used = True
         try:
-            rc = run(argv_or_err, root)
+            rc = run(argv_or_err, root, log=log_path, timeout=RETEST_LAUNCH_TIMEOUT_SECS)
         except OSError as exc:
             rc, reason = None, f"launcher could not start: {exc}"
-        if rc is None:
+        if rc == LAUNCH_TIMED_OUT:
+            status = "error"
+            reason = f"launcher exceeded {RETEST_LAUNCH_TIMEOUT_SECS:g}s: {shlex.join(argv_or_err)}"
+        elif rc is None:
             status = "error"
         elif rc == 1:
             status = "fail"
@@ -211,7 +263,8 @@ def main(
     }
     if reason:
         record["reason"] = reason
-    path = li.fresh_verdict_path(root, run_id)
+    if log_used:
+        record["log"] = str(log_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(record, indent=2), encoding="utf-8")
     print(f"{path} {status}" + (f": {reason}" if reason else ""))

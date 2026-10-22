@@ -2753,6 +2753,31 @@ def _credit_regrades(
     return {cid: f"credited: {evidence}"[:_UNDONE_CAP] for cid, evidence in got.items()}
 
 
+def _own_evidence_append_chunks(
+    worktree_root: Path, request: CommitRequest, stranded_ids: set, carried: set,
+    changed: Optional[set],
+) -> set:
+    """Stranded chunk ids whose own deliverable is the plan evidence append this commit carries.
+
+    A chunk qualifies when its report is DONE, none of its declared paths differs from HEAD (the
+    work its footprint forbids is the append itself) and the plan or its evidence sidecar is changed
+    and in the commit. Unanswerable change state (``changed`` None) credits nothing."""
+    if not request.plan_path or changed is None:
+        return set()
+    plan_pp = PurePosixPath(request.plan_path)
+    evidence_rel = str(plan_pp.with_name(plan_pp.stem + _EVIDENCE_SIDECAR_SUFFIX))
+    if not ({request.plan_path, evidence_rel} & carried & changed):
+        return set()
+    out: set = set()
+    for chunk in request.chunks:
+        if chunk.id not in stranded_ids or not chunk.report or set(chunk.paths) & changed:
+            continue
+        text = _read_rel(worktree_root, chunk.report)
+        if text is not None and _is_delivered_report(text):
+            out.add(chunk.id)
+    return out
+
+
 def _changed_paths(worktree_root: Path, paths: list) -> Optional[set]:
     """The subset of ``paths`` whose worktree bytes differ from HEAD (modified,
     added, untracked or deleted): the files a commit over them can carry. One
@@ -3192,6 +3217,23 @@ def _close_block(ctx: dict, reply: dict) -> dict:
 
     legs = dict(ctx["legs"])
     if ctx["applies"]:
+        already_landed = (
+            reply.get("committed") is not True
+            and bool(reply.get("nothing_to_commit"))
+            and not reply.get("refused")
+        )
+        if already_landed:
+            na = _leg("not-applicable", "already landed: no fresh diff to commit")
+            if "review" not in legs and reply.get("review_stamp") != "refused":
+                legs["review"] = na
+            if (
+                "plan-reconciliation" not in ctx["presets"]
+                and "plan-reconciliation" not in legs
+                and not reply.get("plan_status")
+            ):
+                legs["plan-reconciliation"] = na
+            for leg in RUN_BOUND_LEGS:
+                legs.setdefault(leg, na)
         if reply.get("committed") is not True:
             why = f"terminal commit did not land ({reply['refused']})" if reply.get("refused") else "terminal commit did not land"
         elif "coded_stamp_error" in reply:
@@ -3216,8 +3258,10 @@ def _close_block(ctx: dict, reply: dict) -> dict:
                 if deferred
                 else _leg("ran", "plan implemented")
             )
-        elif "plan-reconciliation" in ctx["presets"]:
-            pass  # the preset is applied below
+        elif "plan-reconciliation" in ctx["presets"] or (
+            already_landed and "plan-reconciliation" in legs
+        ):
+            pass  # the preset is applied below / the already-landed leg stands
         elif status:
             legs["plan-reconciliation"] = _leg(
                 "failed", str(reply.get("plan_status_reason") or status), ctx["root"]
@@ -4609,6 +4653,9 @@ def _terminal_commit_inner(
         c.id for c in done_chunks
         if c not in contributing_chunks and not (c.paths and set(c.paths) <= absent_dropped)
     }
+    landed_ids |= _own_evidence_append_chunks(
+        worktree_root, request, set(stranded) - set(wh_chunks), final_paths_set, changed
+    )
     if credit_gate.no_credited_landing(
         set(stranded) - set(wh_chunks), {c.id for c in contributing_chunks + contributing_partial}, landed_ids
     ):
@@ -4618,9 +4665,10 @@ def _terminal_commit_inner(
         why = "".join(f" {cid} blocker: {text}." for cid, text in sorted(withheld_partial.items()) if cid in stranded)
         return _error(
             f"no product chunk lands in this commit; stranded work stays uncommitted: {shown}.{why} "
-            "Finish or land the stranded chunks, then re-fire; or credit one: workflow.revise "
+            "Credit one: workflow.revise "
             f"run_id={_run_id_of(params, ask_run_dir, script_path_raw)} "
-            "credit_chunks=[{chunk, evidence}], then re-fire",
+            "credit_chunks=[{chunk, evidence}], then re-fire; or finish or land the stranded chunks, "
+            "then re-fire",
             refused=credit_gate.REFUSED_NO_CREDITED_LANDING,
         )
 
@@ -4730,6 +4778,14 @@ def _terminal_commit_inner(
         f"Inline-Review: applies {inline_review['integration_stem']} -- execute-review: "
         f"{inline_review['slices']} slices, {inline_review.get('fixes')} fixes"
     )
+    from coordinator_core.ops.dispatch_emit import landing_integrity as _li_close
+
+    close_base = _li_close.run_base_for(worktree_root, _run_id_of(params, ask_run_dir, script_path_raw), params)
+    if close_base is not None:
+        trailers.append(f"Checkpoint-Run-Closed: {close_base}")
+    review_base = request.review_run_base
+    if isinstance(review_base, str) and review_base and review_base != close_base:
+        trailers.append(f"Checkpoint-Run-Closed: {review_base}")
     if product_only:
         trailers.extend(_ask_trailers(worktree_root, request.plan_path, record_abs, receipts_built))
     elif record_abs is not None:

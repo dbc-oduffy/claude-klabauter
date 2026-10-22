@@ -81,6 +81,14 @@ def test_parse_checkpoint_shapes():
     assert parse_checkpoint(_message(subject="checkpoint(wave 3): 1 rows — C9")).row_ids == {"C9"}
 
 
+def test_parse_checkpoint_reads_base_and_not_landed_marker():
+    cp = parse_checkpoint(_message())
+    assert (cp.base, cp.review_base, cp.not_landed) == ("abc1234", None, False)
+    marked = _message() + "\nCheckpoint-Review-Base: def5678\nCheckpoint-Not-Landed: run-open"
+    cp = parse_checkpoint(marked)
+    assert (cp.base, cp.review_base, cp.not_landed) == ("abc1234", "def5678", True)
+
+
 def test_parse_checkpoint_refuses_non_checkpoints():
     assert parse_checkpoint(f"fix: thing\n\nCheckpoint-Plan: {PLAN}") is None
     assert parse_checkpoint(SUBJECT) is None

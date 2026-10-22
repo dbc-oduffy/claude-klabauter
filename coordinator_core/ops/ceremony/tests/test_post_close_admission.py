@@ -96,17 +96,35 @@ def test_notice_deferred_posts_nothing(monkeypatch):
     assert pca.notice(pca.admit("structural-index", 100, True), "r") is False
 
 
-def test_notice_swallows_raise(monkeypatch):
+def test_notice_raise_is_contained_and_reported(monkeypatch, capsys):
     def boom(*a, **k):
         raise OSError("x")
 
     monkeypatch.setattr(admission_post, "post", boom)
     assert pca.notice(pca.admit("structural-index", 20000, True), "r") is False
+    assert "not delivered: post raised OSError" in capsys.readouterr().err
 
 
-def test_notice_no_holder_returns_false(monkeypatch):
-    monkeypatch.setattr(admission_post, "post", lambda *a, **k: {"posted": False})
+def test_notice_undelivered_surfaces_reason(monkeypatch, capsys):
+    monkeypatch.setattr(
+        admission_post,
+        "post",
+        lambda *a, **k: {"posted": False, "delivered": False, "reason": "short_write"},
+    )
+    assert pca.notice(pca.admit("structural-index", 20000, True), "r7") is False
+    err = capsys.readouterr().err
+    assert "structural-index" in err and "r7" in err and "short_write" in err
+
+
+def test_notice_posted_but_not_delivered_is_false(monkeypatch, capsys):
+    monkeypatch.setattr(admission_post, "post", lambda *a, **k: {"posted": True, "delivered": False})
     assert pca.notice(pca.admit("structural-index", 20000, True), "r") is False
+    assert "not delivered" in capsys.readouterr().err
+
+
+def test_notice_deferred_is_silent(capsys):
+    assert pca.notice(pca.admit("structural-index", 100, True), "r") is False
+    assert capsys.readouterr().err == ""
 
 
 def test_read_available_maps_reading(monkeypatch):

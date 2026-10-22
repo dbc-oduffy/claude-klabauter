@@ -16,7 +16,7 @@ MEMO_RULE_CONTRACT: dict[str, str] = {
         "(inline, a path, or a commit sha)"
     ),
     "_memo_cf_action_taken_requires_companions": "status=action_taken requires action_taken_at and decision",
-    "_memo_cf_closed_requires_companions": "status=closed requires closed_at, action_taken_at and decision",
+    "_memo_cf_closed_requires_companions": "status=closed requires closed_at, action_taken_at and decision or actioned_note",
     "_memo_cf_superseded_requires_superseded_by": "status=superseded requires superseded_by",
     "_memo_cf_central_only_requires_to": "delivery_mode=central-only requires to",
     "_memo_cf_summary_length_cap": "summary is one line within the length cap",

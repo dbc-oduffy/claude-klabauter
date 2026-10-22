@@ -69,7 +69,34 @@ def test_counts_exact():
     text = _report("- **grounded** a", "- **ungrounded** b", ruling="- **real** r\n- **invented** i\n- **real** s")
     assert g.grounding_counts(text) == {
         "grounded": 2, "ungrounded": 2, "contradicted": 0, "real": 2, "invented": 1, "dismissed": 0,
+        "open": 0,
     }
+
+
+_OPEN = "## Open questions\n- **ungrounded** q one\n  - **grounded** q two\n"
+
+
+def test_open_section_counted_open_not_graded():
+    text = _report("- **grounded** ok") + _OPEN
+    c = g.grounding_counts(text)
+    assert c["open"] == 2 and c["ungrounded"] == 0 and c["grounded"] == 2
+
+
+def test_open_section_lines_do_not_block():
+    assert g.grounding_problems(_report("- **grounded** ok") + _OPEN, NAMES) == []
+
+
+def test_ungrounded_outside_open_section_still_blocks():
+    text = _report("- **grounded** ok") + _OPEN + "## digest-c.md\n- **ungrounded** real\n"
+    out = g.grounding_problems(text, NAMES)
+    assert len(out) == 1 and out[0].startswith("ungrounded: ")
+    assert g.grounding_counts(text)["open"] == 2
+
+
+def test_open_lines_are_not_a_graded_claim():
+    assert g.grounding_problems("## digest-a.md\n## digest-b.md\n" + _OPEN, NAMES) == [
+        "grounding.md grades no claim"
+    ]
 
 
 def test_counts_include_dismissed():
@@ -354,5 +381,5 @@ def test_legacy_string_ruling_never_counts():
 
 def test_prose_mentioning_verdict_is_not_a_verdict_line():
     assert g.grounding_counts("the claim is **ungrounded** here\n") == dict.fromkeys(
-        g.CLAIM_VERDICTS + g.RULINGS, 0
+        g.CLAIM_VERDICTS + g.RULINGS + (g.OPEN,), 0
     )

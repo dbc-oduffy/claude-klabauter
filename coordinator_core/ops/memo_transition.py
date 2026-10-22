@@ -1613,10 +1613,13 @@ def _close(memo: str, at: str, cwd: str | None = None) -> dict:
             )
 
         decision = read_fm_field(split.fm_text, "decision")
-        if not decision or not str(decision).strip():
+        actioned_note = read_fm_field(split.fm_text, "actioned_note")
+        has_decision = bool(decision and str(decision).strip())
+        has_note = bool(actioned_note and str(actioned_note).strip())
+        if not has_decision and not has_note:
             raise MutateAbort(
-                f"{memo} has no decision on record — close requires an actioned memo "
-                "with a decision (accepted/partial/declined), not an actioned_note-only memo"
+                f"{memo} has neither decision nor actioned_note on record — close requires "
+                "an actioned memo with a decision (accepted/partial/declined) or an actioned_note"
             )
 
         fm_text = split.fm_text

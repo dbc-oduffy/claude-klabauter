@@ -323,7 +323,8 @@ def _discharge_clauses_for(plan_text: str, root: Path, raw_rows: list) -> dict[s
 
 def _reviewer_brief(root: Path, run_dir: Path, row_id: str, raw: Mapping) -> str:
     """The blinded reviewer row's brief: exactly the falsifier-integrity phase's spec prompt for
-    the plan the row's `falsifier_review_of` names, and nothing else. Writes the can-report-red
+    the plan the row's `falsifier_review_of` names, then the skill-weight headroom clause and the
+    no-prose-pinning rule. Writes the can-report-red
     report the prompt cites under the run dir first. Trap: no intent block, plan context or plan
     text may be added -- any of them un-blinds the reviewer. Raises AskStageError, failing the whole
     stage, when the target's verdict is already cached."""
@@ -347,7 +348,13 @@ def _reviewer_brief(root: Path, run_dir: Path, row_id: str, raw: Mapping) -> str
         if report is None:
             raise AskStageError(f"reviewer row {row_id}: can-report-red path escapes the repo root")
         _write(report, item.report_json or "")
-    return review_specs(inputs)[0].prompt
+    from coordinator_core.ops.dispatch_emit.ask_compose import SKILL_WEIGHT_HEADROOM_CLAUSE
+
+    return (
+        f"{review_specs(inputs)[0].prompt}\n\n{SKILL_WEIGHT_HEADROOM_CLAUSE} "
+        "As a reviewer, do not pin prose in tests: never add or demand a test asserting the wording "
+        "of a skill, command or brief; assert a stable marker token instead."
+    )
 
 
 def _with_owner_roots(gated: Sequence[GatedRow]) -> list[GatedRow]:

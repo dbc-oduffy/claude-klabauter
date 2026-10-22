@@ -322,6 +322,17 @@ def test_a_sized_ask_carries_the_preamble_into_every_row_executor_prompt(monkeyp
     assert not [i for i in run_checks(script) if i.severity == Severity.ERROR]
 
 
+@pytest.mark.parametrize("arm", ["xs", "s"])
+def test_row_executor_prompt_carries_the_skill_weight_headroom_marker(monkeypatch, arm):
+    monkeypatch.setattr(ask_compose, "_known_arm", lambda *_: arm)
+    script = _compose(prompt=None, sizing_rel="state/sizings/x.yaml")
+
+    execute = script.split("phase('Execute');", 1)[1]
+    assert ask_compose.SKILL_WEIGHT_MARKER in execute
+    assert ask_compose.SKILL_WEIGHT_MARKER in ask_compose.SKILL_WEIGHT_HEADROOM_CLAUSE
+    assert not [i for i in run_checks(script) if i.severity == Severity.ERROR]
+
+
 @pytest.mark.parametrize("arm", ["m_plus", "roadmap", None])
 def test_a_preamble_the_arm_cannot_deliver_is_refused_not_recorded(monkeypatch, arm):
     monkeypatch.setattr(ask_compose, "_known_arm", lambda *_: arm)
