@@ -3,6 +3,7 @@ whole-plan executor), and `row_budget` cuts a dependency-ordered tranche."""
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -177,6 +178,38 @@ def test_shared_path_group_with_untaken_external_prerequisite_keeps_fireable_mem
     assert taken == ["a"]
     assert "prerequisite z" in deferred["b"]
     assert "prerequisite b" in deferred["c"]
+
+
+def _rows(item: str, n: int, edge_to: str | None = None) -> list:
+    rows = [{"id": f"{item}.{item}{k}"} for k in range(n)]
+    if edge_to:
+        rows[0]["depends_on"] = [{"chunk": edge_to}]
+    return rows
+
+
+@pytest.mark.parametrize("budget", [100, 95])
+def test_unblocked_72_row_group_is_taken_within_budget(budget):
+    selected, report = im.select_tranche(_rows("big", 72), ["big"], budget)
+    assert report["plans"] == ["big"] and len(selected) == 72
+
+
+@pytest.mark.parametrize("budget", [100, 95])
+def test_edge_onto_unemitted_chunk_of_free_item_defers_dependent_not_the_free_item(budget):
+    # An unemitted chunk has not run this tranche, so its dependent must wait for it.
+    rows = _rows("free", 1) + _rows("dep", 72, edge_to="free.F9")
+    selected, report = im.select_tranche(rows, ["free", "dep"], budget)
+    assert report["plans"] == ["free"]
+    assert len(selected) == 1
+
+
+def test_all_blocked_refusal_names_each_group_size_and_blocker():
+    rows = _rows("aa", 3, edge_to="bb.B0") + _rows("bb", 4, edge_to="aa.A0")
+    with pytest.raises(im.InventoryTooLargeError) as exc:
+        im.select_tranche(rows, ["aa", "bb"], 100)
+    msg = str(exc.value)
+    assert "smallest dispatchable group" not in msg
+    for item, n, blocker in (("aa", "3", "bb"), ("bb", "4", "aa")):
+        assert re.search(rf"{item}\W[^;\n]*\b{n} rows?\b[^;\n]*prerequisite {blocker}", msg), msg
 
 
 def test_bound_shared_path_group_still_defers_whole():

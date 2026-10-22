@@ -1974,8 +1974,11 @@ def _merge_unit_cycles(
     size: Dict[str, int],
     prereqs: Dict[str, set],
     row_budget: int,
+    unmerged: Optional[Dict[str, set]] = None,
 ) -> List[Tuple[List[str], str]]:
     """Units whose prerequisites run in a cycle, as one unit, in table order.
+    A prerequisite listed in `unmerged` (an edge onto a chunk no row owns) never
+    closes a cycle: it holds the dependent but merges nothing.
 
     A unit is admitted only once every prerequisite outside it is taken, so two
     shared-path groups each holding the other's prerequisite were never admitted
@@ -1985,7 +1988,10 @@ def _merge_unit_cycles(
     their own prerequisites across sequential tranches."""
     unit_of = {i: n for n, (group, _) in enumerate(units) for i in group}
     succ = [
-        sorted({unit_of[p] for i in group for p in prereqs[i] if p in unit_of} - {n})
+        sorted(
+            {unit_of[p] for i in group for p in prereqs[i] - (unmerged or {}).get(i, set()) if p in unit_of}
+            - {n}
+        )
         for n, (group, _) in enumerate(units)
     ]
     index: Dict[int, int] = {}
@@ -2045,6 +2051,7 @@ def _pick_groups(
     shared: Dict[str, str],
     row_budget: int,
     binding: Optional[Dict[str, str]] = None,
+    unmerged: Optional[Dict[str, set]] = None,
 ) -> Tuple[List[str], Dict[str, str]]:
     """Greedy fill in table order: `(taken items, {item: why deferred})`. A
     group is taken only when every prerequisite outside it is already taken,
@@ -2083,7 +2090,7 @@ def _pick_groups(
             )
         else:
             units.append((group, label))
-    units = _merge_unit_cycles(units, size, prereqs, row_budget)
+    units = _merge_unit_cycles(units, size, prereqs, row_budget, unmerged)
     taken: List[str] = []
     used = 0
     undecided = list(units)
@@ -2192,6 +2199,30 @@ def _unemitted_chunk_item(chunk: str, item_ids: List[str]) -> Optional[str]:
     return item if item in item_ids else None
 
 
+def _nothing_taken_message(
+    groups: List[List[str]],
+    size: Dict[str, int],
+    prereqs: Dict[str, set],
+    deferred: Dict[str, str],
+    row_budget: int,
+    reasons: Dict[str, str],
+) -> str:
+    """The refusal when `_pick_groups` takes nothing: each deferred group with
+    its row count after binding, then each member's size and the prerequisite
+    or reason holding it (a prerequisite with no minted rows carries why)."""
+    lines = [f"no plan item is dispatchable at row_budget {row_budget}; every group is deferred:"]
+    for group in groups:
+        lines.append(f"  group {', '.join(group)} ({sum(size[i] for i in group)} rows after binding)")
+        for item in group:
+            why = deferred.get(item, "prerequisite not in this tranche").rsplit("; ", 1)[-1]
+            absent = sorted(p for p in prereqs[item] - set(group) if p not in size and p in reasons)
+            if absent:
+                why += " [" + "; ".join(f"{p}: {reasons[p]}" for p in absent) + "]"
+            lines.append(f"    {item} ({size[item]} rows): {why}")
+    lines.append("raise --row-budget only for a group over it; otherwise land or release the named prerequisite")
+    return "\n".join(lines)
+
+
 def select_tranche(
     rows: List[dict],
     item_ids: List[str],
@@ -2256,12 +2287,11 @@ def select_tranche(
             for dep, preds in bound.items()
         }
         groups, shared, binding = _bind_groups(groups, shared, bound)
-    taken, deferred = _pick_groups(groups, size, prereqs, shared, row_budget, binding)
+    unmerged = {i: unemitted_edge[i] - emitted_edge[i] for i in items}
+    taken, deferred = _pick_groups(groups, size, prereqs, shared, row_budget, binding, unmerged)
     if not taken:
         raise InventoryTooLargeError(
-            f"no plan item fits row_budget {row_budget}: smallest dispatchable group "
-            f"is {min((sum(size[i] for i in g) for g in groups), default=0)} rows; "
-            "raise --row-budget"
+            _nothing_taken_message(groups, size, prereqs, deferred, row_budget, reasons or {})
         )
     taken_set = set(taken)
     left = [i for i in items if i not in taken_set]
@@ -2271,7 +2301,7 @@ def select_tranche(
         sub_groups = [[i for i in g if i in pending] for g in groups]
         sub_groups = [g for g in sub_groups if g]
         sub_prereqs = {i: prereqs[i] & pending for i in pending}
-        got, _ = _pick_groups(sub_groups, size, sub_prereqs, shared, row_budget, binding)
+        got, _ = _pick_groups(sub_groups, size, sub_prereqs, shared, row_budget, binding, unmerged)
         if not got:
             break
         pending -= set(got)

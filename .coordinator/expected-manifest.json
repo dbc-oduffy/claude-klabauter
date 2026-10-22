@@ -2154,8 +2154,8 @@
     "coordinator_core/_content_root_primitive.py": "f7fcd3083855a5e1dd53c09233fbfd64f8dffdf5",
     "coordinator_core/_data_root.py": "0c7c8524f25376ae49593f11334445539dc557f9",
     "coordinator_core/_engine_landing.py": "06dbb1273f3c36fdb6be08767ec75e73c71630e7",
-    "coordinator_core/_engine_published_at": "0132fca4540324fc73a574fd19be4d71a0f06e7b",
-    "coordinator_core/_engine_stamp": "53c1564e50f5796b704858de92e63763ce01b99c",
+    "coordinator_core/_engine_published_at": "3f890876dd9f7b268ecad49eaf2dcaa9e7940071",
+    "coordinator_core/_engine_stamp": "32f785bbc221b8661889d16fe9d9192b249400af",
     "coordinator_core/_fleet_names.py": "e81fc4247611fe486697f4707b28a1a3a008f392",
     "coordinator_core/_hook_envelope.py": "7e70aa3f56bfcea2cc146eab698c57469159691b",
     "coordinator_core/_repo_root_probe.py": "2d8edfa8cd9343436a650584da430aa87ae0397d",
@@ -4643,7 +4643,7 @@
     "coordinator_core/ops/dispatch_emit/halted_run.py": "b02ec76010a292a8c1bb71266973dc157df9d63e",
     "coordinator_core/ops/dispatch_emit/halted_run_landed.py": "485b4ace5cc47e7eaba1535cc23254c2839ca2b5",
     "coordinator_core/ops/dispatch_emit/inventory_accounting.py": "38472b5d4ad09ec681015200162dab2f9192c116",
-    "coordinator_core/ops/dispatch_emit/inventory_mint.py": "55e2b110420eb59b58b88986def45a8633047781",
+    "coordinator_core/ops/dispatch_emit/inventory_mint.py": "95944b70a38b7f532c33a9d0bb3721ce7e967304",
     "coordinator_core/ops/dispatch_emit/judgment_halt.py": "d555852109e3f1e4b80ee43abb2760d2435dfbf9",
     "coordinator_core/ops/dispatch_emit/land_run.py": "38827534b638e0ac349a459ae0a461a21c5857d4",
     "coordinator_core/ops/dispatch_emit/land_run_contract.py": "abdaa2869dba11008c40ae894abd40ce1c9a1b76",
@@ -5115,7 +5115,7 @@
     "coordinator_core/ops/dispatch_emit/tests/test_inventory_optional_columns.py": "9f686a82a54e702adc323b46068726fd14534047",
     "coordinator_core/ops/dispatch_emit/tests/test_inventory_plan_edge_item_chunk.py": "122eed5e47efcd69e8f35b7ed733a6dd41775162",
     "coordinator_core/ops/dispatch_emit/tests/test_inventory_split_cap_and_refusal.py": "87504fa6f3220e62cceb978e951d6dad7cf22d6f",
-    "coordinator_core/ops/dispatch_emit/tests/test_inventory_tranche_and_withheld.py": "0f5ca6596873bba6eff6c1ca346d018899a61205",
+    "coordinator_core/ops/dispatch_emit/tests/test_inventory_tranche_and_withheld.py": "728d61f88707e6c16bc8f1ffd6edce87483fb02a",
     "coordinator_core/ops/dispatch_emit/tests/test_inventory_tranche_deferred_plan_edge.py": "a3cf54bac976711dc2aad64d528df705b518990f",
     "coordinator_core/ops/dispatch_emit/tests/test_inventory_tranche_gaps.py": "25faba65922e3274be87848e64dcf8a2e350568c",
     "coordinator_core/ops/dispatch_emit/tests/test_invoke_prompts_carry_reconcile_clause.py": "971fbf9bea05728097b8852c9de7d58c3c34330d",
@@ -8943,5 +8943,5 @@
     "scripts/unstick_claude.py": "5458a0f699f1793ff9fd32295b9d0b33635f1c06"
   },
   "schema": 1,
-  "source_head": "46d1641349246ed5de46c81439e516040090c812"
+  "source_head": "4baf46b0d3cdbcaae68048945bf2ead94ef95f5e"
 }
