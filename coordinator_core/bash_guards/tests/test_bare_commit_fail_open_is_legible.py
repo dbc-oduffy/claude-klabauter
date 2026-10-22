@@ -44,7 +44,7 @@ def _install_git_stub(monkeypatch, diff_result: Tuple[int, str]):
             return 0, "no-such-sequencer-state\n"
         return diff_result
 
-    monkeypatch.setattr(dispatch_checks, "_run_git", _stub)
+    monkeypatch.setattr(dispatch_checks._dc_git_probe, "_run_git", _stub)
 
 
 def _verdict(cmd: str) -> str:
@@ -127,7 +127,7 @@ def test_deny_path_is_unaffected_by_the_recording(monkeypatch):
 
 def test_sweep_all_probe_failure_is_named_too(monkeypatch):
     _install_git_stub(monkeypatch, (-1, ""))
-    monkeypatch.setattr(dispatch_checks, "_is_hazard_repo", lambda _p: True)
+    monkeypatch.setattr(dispatch_checks._dc_git_shared, "_is_hazard_repo", lambda _p: True)
     text = _advisory_text('git -C /repo commit -am "x"')
     assert "The index was NOT read" in text
     assert "sweep-all" in text
@@ -150,7 +150,7 @@ def test_help_spends_no_probe(monkeypatch):
     def _never(*args, **kwargs):
         raise AssertionError("help invocation must not probe git")
 
-    monkeypatch.setattr(dispatch_checks, "_run_git", _never)
+    monkeypatch.setattr(dispatch_checks._dc_git_probe, "_run_git", _never)
     assert _verdict("git -C /repo commit -h") == "none"
 
 
@@ -192,7 +192,7 @@ def _point_audit_dir_at(monkeypatch, tmp_path):
     audit = tmp_path / "audit"
     audit.mkdir(parents=True, exist_ok=True)
     monkeypatch.setattr(
-        dispatch_checks,
+        dispatch_checks._dc_git_probe,
         "_override_log_path",
         lambda _root, _sid: str(audit / "overrides.log"),
     )
@@ -238,7 +238,7 @@ def test_persistence_failure_never_breaks_the_guard(monkeypatch, tmp_path):
     def _boom(_root, _sid):
         raise OSError("audit dir is unwritable")
 
-    monkeypatch.setattr(dispatch_checks, "_override_log_path", _boom)
+    monkeypatch.setattr(dispatch_checks._dc_git_probe, "_override_log_path", _boom)
 
     out = dispatch_checks.check_git_commit_safe_commit_advise(
         'git -C /repo commit -m "x"', "sess-boom", git_root=str(tmp_path)

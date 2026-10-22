@@ -499,3 +499,7 @@ def test_scratch_dir_under_non_repo_still_denies(tmp_path, monkeypatch):
     (proj / ".git").mkdir(parents=True)
     (proj / ".git" / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
     assert _denied(_check(proj, "git checkout -b feature-x"))
+
+
+def test_cloud_session_may_push_its_harness_ccr_branch(repo):
+    assert not _denied(_check(repo, "git push -u origin ccr-26b62fdb-pmxy1z", env=CLOUD))

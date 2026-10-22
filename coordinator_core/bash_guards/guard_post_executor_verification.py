@@ -404,6 +404,16 @@ def is_scoped_pytest(cmd: str, repo_root: str, cwd: str) -> bool:
     )
 
 
+# A post-run scoped pytest checks the EM's own residue edit. A run naming more targets
+# is a regression sweep over work the run's test stage and review already verified
+# (ladder XL: 199 files, an hour), so it counts toward the cap.
+_POST_RUN_SCOPED_TARGET_CAP = 10
+
+
+def _test_target_count(cmd: str) -> int:
+    return len(re.findall(r"(?:^|\s)['\"]?[^\s'\"]*(?:\.py|::)[^\s'\"]*", cmd))
+
+
 def execute_plan_session(session_id: str, repo_root: str) -> bool:
     """This session claimed a plan through execute-plan: ``claim_plan(for_execution=True)``
     stamps the plan ``executing`` and records ``plan.path`` in the session's
@@ -599,7 +609,7 @@ def check(payload: dict) -> Optional[dict]:
             return None
         from coordinator_core.hooks.flag_em_poll_in_flight import session_workflow_run_ids
 
-        if session_workflow_run_ids(session_id):
+        if session_workflow_run_ids(session_id) and _test_target_count(clean) <= _POST_RUN_SCOPED_TARGET_CAP:
             record_silent(GUARD_NAME, "scoped pytest after a workflow run: exempt")
             return None
     if _bump_counter(repo_root, session_id, newest_arming_epoch(session_id, repo_root) or 0.0) < 1:

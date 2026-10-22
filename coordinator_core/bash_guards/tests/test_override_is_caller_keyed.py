@@ -24,6 +24,7 @@ second-and-a-half/C14c.md
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 from coordinator_core.bash_guards import dispatch_checks as dc
 
@@ -108,7 +109,11 @@ def test_all_override_call_sites_thread_payload_or_hook_payload(monkeypatch):
     import inspect
     import re
 
-    src = inspect.getsource(dc)
+    guard_dir = Path(dc.__file__).parent
+    src = "\n".join(
+        [inspect.getsource(dc)]
+        + [p.read_text(encoding="utf-8") for p in sorted(guard_dir.glob("_dc_*.py"))]
+    )
     call_sites = [
         m.start()
         for m in re.finditer(r"(?<!def )_override\(", src)

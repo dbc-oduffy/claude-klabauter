@@ -62,7 +62,7 @@ def _run(testResult: str, owed: bool) -> object:
     body = snippet.split("&& (_TEST_GUARD) && ", 1)[1]
     program = _HARNESS % ("true" if owed else "false", testResult, body)
     out = subprocess.run(
-        [node, "-e", program], capture_output=True, text=True, check=True, **no_console_creationflags()
+        [node, "-"], input=program, capture_output=True, text=True, check=True, **no_console_creationflags()
     ).stdout.strip()
     import json
 

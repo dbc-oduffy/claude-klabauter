@@ -19,6 +19,7 @@ import pytest
 from coordinator_core.ops.dispatch_emit import ask_compose, reply_sidecar
 from coordinator_core.ops.dispatch_emit.ask_compose import compose_ask_script
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
+from coordinator_core.ops.dispatch_emit.tests._node_support import payload_file
 from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
@@ -128,7 +129,7 @@ def big_manifest(rows: int = 40) -> dict:
 _NODE_PROGRAM = (
     WORKFLOW_FAKE_JS
     + r"""
-const src = process.env.SRC.replace(/^export const meta/m, 'const meta');
+const src = require('fs').readFileSync(process.env.SRC_FILE, 'utf8').replace(/^export const meta/m, 'const meta');
 const cfg = JSON.parse(process.env.CFG);
 const workflow = makeWorkflow(cfg);
 const calls = [];
@@ -173,8 +174,8 @@ def _run(script: str, reply: dict | None, *, relay=None, tamper=None) -> dict:
     if tamper is not None:
         tamper()
     proc = subprocess.run(
-        [node, "-e", _NODE_PROGRAM], capture_output=True, text=True, encoding="utf-8", timeout=60,
-        env={**os.environ, "SRC": script, "CFG": json.dumps(cfg)}, **no_console_creationflags(),
+        [node, "-"], input=_NODE_PROGRAM, capture_output=True, text=True, encoding="utf-8", timeout=60,
+        env={**os.environ, "SRC_FILE": payload_file(script), "CFG": json.dumps(cfg)}, **no_console_creationflags(),
     )
     assert proc.returncode == 0, proc.stderr
     return json.loads(proc.stdout.strip().splitlines()[-1])

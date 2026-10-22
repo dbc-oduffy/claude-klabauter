@@ -426,7 +426,7 @@ def _golden_size_chain_command(repo_root: Path, row: dict, sizing_path: str) -> 
         + f"\nconsole.log(_sizeChainCmd({json.dumps(scouted)}, {json.dumps(row)}, {json.dumps(sizing_path)}));"
     )
     out = subprocess.run(
-        [node, "-e", js], capture_output=True, text=True, check=False,
+        [node, "-"], input=js, capture_output=True, text=True, check=False,
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     )
     assert out.returncode == 0, out.stderr
@@ -454,7 +454,7 @@ def test_size_scout_template_filled_with_the_scout_fields_is_the_concrete_chain_
         " concrete: _sizeChainCmd(scouted, row, _sizingPath(scouted, row.row_id)) }));"
     )
     out = subprocess.run(
-        [node, "-e", js], capture_output=True, text=True, check=False,
+        [node, "-"], input=js, capture_output=True, text=True, check=False,
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     )
     assert out.returncode == 0, out.stderr

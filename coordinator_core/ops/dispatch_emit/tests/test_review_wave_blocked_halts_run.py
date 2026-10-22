@@ -40,7 +40,7 @@ def _run_halt(wave) -> dict | None:
         + "\nconsole.log(JSON.stringify(_halted));\n"
     )
     proc = subprocess.run(
-        [node, "-e", source], capture_output=True, text=True, timeout=30, **no_console_creationflags()
+        [node, "-"], input=source, capture_output=True, text=True, timeout=30, **no_console_creationflags()
     )
     assert proc.returncode == 0, proc.stderr
     return json.loads(proc.stdout)

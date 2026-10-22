@@ -37,6 +37,7 @@ from pathlib import Path
 
 from coordinator_core.bash_guards import dispatch as bash_dispatch
 from coordinator_core.bash_guards import dispatch_checks
+from coordinator_core.bash_guards import _dc_commit
 from coordinator_core.bash_guards._message_size import MESSAGE_PROSE_CAP_BYTES
 from coordinator_core.session import core
 from coordinator_core.session import scope as session_scope
@@ -674,7 +675,7 @@ class TestCheckFiveOwnerAttributionIntegration:
 
         marker = "OWNER-SENTENCE-MARKER-7d3c"
         monkeypatch.setattr(
-            dispatch_checks, "_format_owner_sentence", lambda *a, **kw: marker
+            _dc_commit, "_format_owner_sentence", lambda *a, **kw: marker
         )
 
         monkeypatch.setenv("COORDINATOR_SCOPE_STRICT_OFF", "1")

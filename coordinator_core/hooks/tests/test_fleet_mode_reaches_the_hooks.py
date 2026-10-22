@@ -57,6 +57,10 @@ def _isolate_sentinel_and_fleet(tmp_path, monkeypatch):
     monkeypatch.setattr(
         nudge_em_code_dispatch, "_is_scratch_or_tmp", lambda file_path: False
     )
+    # Autonomy exempts a sized session only, so these precedence tests run sized.
+    monkeypatch.setattr(
+        nudge_em_code_dispatch, "_session_sizing_state", lambda payload, sid: (True, False)
+    )
     return tmp_path, settings_home
 
 

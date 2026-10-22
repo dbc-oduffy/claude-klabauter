@@ -56,7 +56,7 @@ def test_helper_halts_on_limit_and_rethrows_other_errors(monkeypatch):
         "if (!rethrown || _halted) throw new Error('boom swallowed');\n"
     )
     r = subprocess.run(
-        ["node", "-e", js], capture_output=True, text=True,
+        ["node", "-"], input=js, capture_output=True, text=True,
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     )
     assert r.returncode == 0, r.stderr

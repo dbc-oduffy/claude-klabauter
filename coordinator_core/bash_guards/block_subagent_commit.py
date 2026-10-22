@@ -6848,10 +6848,62 @@ _RUN_TOKEN_OPS = ("dispatch.terminal_commit", "dispatch.land_run")
 
 
 def _bare_params_file_value(args: List[str]) -> Optional[str]:
-    """The path of a lone `--params-file <path>` (path is not `-`), else None."""
-    if len(args) == 2 and args[0] == "--params-file" and args[1] != "-":
+    """The path of `--params-file <path>` (path is not `-`), optionally followed by one `--repo <root>`, else None."""
+    if (
+        len(args) in (2, 4)
+        and args[0] == "--params-file"
+        and args[1] != "-"
+        and (len(args) == 2 or (args[2] == "--repo" and args[3] != "-" and not args[3].startswith("-")))
+    ):
         return args[1]
     return None
+
+
+def _repo_operand(args: List[str]) -> Optional[str]:
+    """The `<root>` of the trailing `--repo <root>` of `--params-file <path> --repo <root>`, else None."""
+    return args[3] if len(args) == 4 and _bare_params_file_value(args) is not None else None
+
+
+def _same_path(a: str, b: str) -> bool:
+    return os.path.normcase(os.path.normpath(a)) == os.path.normcase(os.path.normpath(b))
+
+
+def _checkout_of(path: str) -> Optional[str]:
+    """The nearest ancestor of absolute `path` holding a `.git` entry, else None. Walk only; no spawn."""
+    if not os.path.isabs(path):
+        return None
+    cur = os.path.dirname(os.path.normpath(path))
+    while True:
+        if os.path.exists(os.path.join(cur, ".git")):
+            return cur
+        parent = os.path.dirname(cur)
+        if parent == cur:
+            return None
+        cur = parent
+
+
+def _run_root(typed_path: Optional[str], repo_operand: Optional[str], git_root: str, session_id: str) -> str:
+    """The checkout whose run token the params-file commit is checked in: the typed params file's
+    checkout R when it differs from the cwd git root and this session holds a run there (or the
+    command pins `--repo R` and the token check then admits or finds the spent receipt there);
+    else the cwd git root.
+
+    Trap: ownership comes from the engine-minted token record in R, never from the typed path alone.
+    """
+    if not typed_path:
+        return git_root
+    root = _checkout_of(typed_path)
+    if root is None or _same_path(root, git_root):
+        return git_root
+    from pathlib import Path
+
+    from coordinator_core.ops.dispatch_emit import run_token
+
+    if run_token.session_holds_run(Path(root), session_id) or (
+        repo_operand is not None and _same_path(repo_operand, root)
+    ):
+        return root
+    return git_root
 
 
 def _prompt_sourced_params_admit(
@@ -6947,6 +6999,16 @@ def _prefixed_params_file_value(cmd_for_scan: str) -> Optional[str]:
     return path
 
 
+def _typed_repo_operand(cmd_for_scan: str) -> Optional[str]:
+    """The trailing `--repo <root>` operand of the command's last segment, else None."""
+    tokens = _tokenize_full_command(cmd_for_scan)
+    segments = [seg for seg in _segments_from_tokens(tokens) if seg] if tokens is not None else []
+    if not segments:
+        return None
+    op_idx = _first_positional_after_invoke_module(segments[-1], 1)
+    return None if op_idx is None else _repo_operand(segments[-1][op_idx + 1:])
+
+
 _REDIRECT_WRITE_TOKEN_RE = re.compile(r"^(?:&|\d+)?>>?\|?(.*)$")
 
 
@@ -7033,6 +7095,9 @@ def _warp_run_token_admits(
     from coordinator_core.ops.dispatch_emit import run_token
 
     params_file = _bare_params_file_value(seg[op_idx + 1:])
+    repo_operand = _repo_operand(seg[op_idx + 1:])
+    if repo_operand is not None and not _same_path(repo_operand, git_root):
+        return refused
     if params_file is not None:
         if params_leg is not _PARAMS_LEG_UNSET:
             return params_leg
@@ -7198,6 +7263,11 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             else _prefixed_params_file_value(cmd_for_scan)
         )
         written_target = _params_file_write_target(cmd_for_scan) if git_root else None
+        token_root = git_root
+        if typed_params_file is not None and git_root:
+            token_root = _run_root(
+                typed_params_file, _typed_repo_operand(cmd_for_scan), git_root, session_id
+            )
         if written_target is not None:
             # A demoted deny still runs the command: the file must hold the prompt's params then.
             _prompt_sourced_params_admit(written_target, git_root, _spawn_transcript(payload))
@@ -7205,7 +7275,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         else:
             if typed_params_file is not None:
                 params_leg = _prompt_sourced_params_admit(
-                    typed_params_file, git_root, _spawn_transcript(payload)
+                    typed_params_file, token_root, _spawn_transcript(payload)
                 )
             may_commit, ownership_reason = _git_commit_agent_may_commit(
                 cmd_for_scan, git_root, session_id, cwd
@@ -7216,7 +7286,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
                 _warp_run_token_admits(
                     cmd,
                     cmd_for_scan,
-                    git_root,
+                    token_root,
                     payload_legs,
                     heredoc_stdin_import_hit,
                     transcript_path=_spawn_transcript(payload),

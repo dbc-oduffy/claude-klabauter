@@ -43,12 +43,14 @@ def _halt_clause(script: str) -> str:
     return script[start : script.index("\n", start)]
 
 
-def test_repeat_halt_reason_and_payload_and_no_refire():
+def test_repeat_halt_reason_and_payload_and_resumable_refire():
     clause = _halt_clause(_script())
     assert "reason: 'plan-blitz pulled twice on the same blocking set'" in clause
     assert "blocking: _repeatBlocking" in clause
-    assert "rule_on_blocking_rows" in clause
-    assert "refire" not in clause
+    assert "kind: 'rule_on_blocking_rows'" in clause
+    assert "plan: _pullPlan, rulings: _pullRulings" in clause
+    assert "refire:" in clause
+    assert "revise:" in clause
 
 
 def test_old_halt_string_and_emission_unchanged():
@@ -82,7 +84,7 @@ def test_comparison_runs_over_equal_different_and_absent_sets(first, second, exp
         f"{line}\nconsole.log(JSON.stringify(_repeatBlocking));"
     )
     out = subprocess.run(
-        ["node", "-e", js], capture_output=True, text=True, check=True,
+        ["node", "-"], input=js, capture_output=True, text=True, check=True,
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     ).stdout.strip()
     assert (json.loads(out) is not None) is expect_halt

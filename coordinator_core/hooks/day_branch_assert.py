@@ -57,9 +57,9 @@ from pathlib import Path
 from typing import NamedTuple, Optional
 
 
-#: Harness-assigned cloud session branches share this prefix; it is the only
+#: Harness-assigned cloud session branches (`claude/<slug>`, `ccr-<id>-<slug>`) carry these prefixes; that is the only
 #: signal available when the session cwd is the container dir above the checkouts.
-_CLOUD_SESSION_BRANCH_PREFIX = "claude/"
+_CLOUD_SESSION_BRANCH_PREFIX = ("claude/", "ccr-")
 
 
 def is_cloud_session(env: Optional[dict] = None) -> bool:

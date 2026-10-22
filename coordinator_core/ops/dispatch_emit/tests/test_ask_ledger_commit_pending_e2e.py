@@ -43,7 +43,7 @@ let _haltCommit = null; const _commitHaltRecord = async () => null; const _termi
 let _ledger = null, _falsifierResult = null, _falsifierSpec = null;
 const log = () => {};
 const _viaRoadmap = false, _RUN_TOKEN = '%(token)s', _sizingRel = 'state/sizings/x.yaml', _planRel = null, REPO_ROOT = '/r';
-const _gate = { arm: 'xs' }, _runId = 'run-1', _resumeLedger = null;
+const _gate = { arm: 'xs' }, _runId = 'run-1', _resumeLedger = null, _preHaltCredit = false;
 let _splitExit = null;
 let _writes = [];
 const _verdictReports = [];

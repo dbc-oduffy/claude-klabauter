@@ -230,12 +230,8 @@ def plan_repo(path: Path) -> Optional[str]:
     a stat per directory level, cached per plan directory — no spawn."""
     start = path.resolve().parent
     if start not in _repo_cache:
-        found: Optional[str] = None
-        for anc in (start, *start.parents):
-            if (anc / ".git").exists():
-                found = _REPO_ALIASES.get(anc.name.lower(), anc.name)
-                break
-        _repo_cache[start] = found
+        root = _repo_root_of(path)
+        _repo_cache[start] = _REPO_ALIASES.get(root.name.lower(), root.name) if root else None
     return _repo_cache[start]
 
 
@@ -374,6 +370,112 @@ def upgrade_falsifier(fm_text: str, derivable: Dict[str, Any]) -> str:
     return out
 
 
+#: The wording prep_gate states for an unscreenable census command; reported beside every entry
+#: this tool cannot rewrite.
+_CENSUS_REPAIR_LINE = (
+    "mechanical repair — rewrite each named census command into census.ALLOWED_FORM (pipe the "
+    "inner command, split loops, move live checks to execution-time evidence); never delete "
+    "the premise"
+)
+
+_SUBST_WRAPPER = re.compile(
+    r'^\s*echo\s+(?:"\$\((?P<a>.*)\)"|\$\((?P<b>.*)\)|"`(?P<c>[^`]*)`"|`(?P<d>[^`]*)`)\s*$',
+    re.S,
+)
+_WC_FILELIST = re.compile(
+    r"^\s*(?P<head>wc(?:\s+-[A-Za-z]+)*)\s+(?:\$\((?P<a>[^()`]*)\)|`(?P<b>[^`$]*)`)\s*$"
+)
+_COMMAND_LINE = re.compile(r"^(?P<prefix>[ \t]*(?:-[ \t]+)?command:[ \t]*)(?P<value>\S.*?)[ \t]*$", re.M)
+
+
+def _repo_root_of(path: Path) -> Optional[Path]:
+    start = path.resolve().parent
+    for anc in (start, *start.parents):
+        if (anc / ".git").exists():
+            return anc
+    return None
+
+
+def rewrite_census_command(command: str, screen) -> Optional[str]:
+    """The deterministic rewrite of an unscreenable `command`, or None. The result is returned
+    only when `screen` (census.screen bound to the plan's repo) passes it clean."""
+    candidate: Optional[str] = None
+    m = _SUBST_WRAPPER.match(command)
+    if m:
+        inner = next(g for g in m.group("a", "b", "c", "d") if g is not None)
+        candidate = inner.strip()
+    else:
+        m = _WC_FILELIST.match(command)
+        if m:
+            inner = (m.group("a") or m.group("b") or "").strip()
+            if inner:
+                candidate = f"{inner} | {m.group('head').strip()}"
+    if not candidate or candidate == command or screen(candidate) is not None:
+        return None
+    return candidate
+
+
+def census_report(
+    fm: Dict[str, Any], repo_root: Optional[Path]
+) -> Tuple[Dict[int, Tuple[str, str]], List[str]]:
+    """({entry index: (old, new)} rewrites, residue lines) for every stated census command."""
+    from coordinator_core.roadmap import census
+
+    entries = fm.get("census")
+    if not isinstance(entries, list):
+        return {}, []
+    commands = {
+        i: e["command"]
+        for i, e in enumerate(entries)
+        if isinstance(e, dict) and not census.is_typed(e) and isinstance(e.get("command"), str)
+    }
+    cands = [c for cmd in commands.values() for c in census.python_candidates(cmd, repo_root)] if repo_root else []
+    tracked = census.tracked_targets(repo_root, cands) if repo_root and cands else None
+
+    def screen(cmd: str) -> Optional[str]:
+        return census.screen(cmd, repo_root, tracked)
+
+    rewrites: Dict[int, Tuple[str, str]] = {}
+    residue: List[str] = []
+    for i, cmd in commands.items():
+        reason = screen(cmd)
+        if reason is None:
+            continue
+        new = rewrite_census_command(cmd, screen)
+        if new is not None:
+            rewrites[i] = (cmd, new)
+        else:
+            residue.append(f"census[{i}].command: {reason} — {_CENSUS_REPAIR_LINE}")
+    return rewrites, residue
+
+
+def rewrite_census_commands(fm_text: str, rewrites: Dict[int, Tuple[str, str]]) -> str:
+    """Replace each rewritten command's single-line `command:` value; an entry whose line is not
+    uniquely found, or whose reparse differs from the intended change, stays as authored."""
+    out = fm_text
+    for index, (old, new) in sorted(rewrites.items()):
+        hits = []
+        for m in _COMMAND_LINE.finditer(out):
+            try:
+                value = yaml.safe_load(m.group("value"))
+            except yaml.YAMLError:
+                continue
+            if value == old:
+                hits.append(m)
+        if len(hits) != 1:
+            continue
+        m = hits[0]
+        candidate = out[: m.start()] + m.group("prefix") + yaml.safe_dump(new, default_flow_style=True, width=10**6).split("\n")[0] + out[m.end() :]
+        try:
+            before, after = yaml.safe_load(out), yaml.safe_load(candidate)
+            before["census"][index]["command"] = new
+        except (yaml.YAMLError, KeyError, IndexError, TypeError):
+            continue
+        if before == after:
+            out = candidate
+    return out
+
+
 def body_rests_on_a_count(body: str) -> List[str]:
     prose = _CODEFENCE.sub(" ", body)
     prose = _DATEISH.sub(" ", prose)
@@ -412,6 +514,11 @@ def plan_report(
             )
         else:
             derivable["census"] = []
+    else:
+        c_rewrites, c_residue = census_report(fm, _repo_root_of(path))
+        if c_rewrites:
+            derivable["census.commands"] = c_rewrites
+        residue.extend(c_residue)
 
     # --- PRIME_EXIT -------------------------------------------------------
     criterion = fm.get("prime_exit_criterion")
@@ -474,6 +581,8 @@ def apply_derivable(path: Path, derivable: Dict[str, Any]) -> bool:
         return False
     fm_text, _ = split
     new_fm = upgrade_falsifier(fm_text, derivable)
+    if derivable.get("census.commands"):
+        new_fm = rewrite_census_commands(new_fm, derivable["census.commands"])
 
     if "census" in derivable:
         new_fm = new_fm.rstrip("\n") + (

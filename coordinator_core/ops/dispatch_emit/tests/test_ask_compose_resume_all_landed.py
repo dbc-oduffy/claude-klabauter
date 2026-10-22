@@ -34,7 +34,7 @@ def _drive(script: str, gate: dict, manifest: dict) -> dict:
     body = "\n".join(ln.replace("  else if (", "  if (", 1) for ln in _lines(script))
     program = _HARNESS % (json.dumps(gate), json.dumps(manifest), body)
     out = subprocess.run(
-        ["node", "-e", program], capture_output=True, text=True, check=True, **no_console_creationflags()
+        ["node", "-"], input=program, capture_output=True, text=True, check=True, **no_console_creationflags()
     ).stdout
     return json.loads(out)
 

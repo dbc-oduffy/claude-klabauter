@@ -32,10 +32,11 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from coordinator_core.bash_guards import dispatch_checks as guard
+from coordinator_core.bash_guards import _dc_git_probe, _dc_git_shared
 
 
 def _wire_hazard(monkeypatch, *, is_hazard=True):
-    monkeypatch.setattr(guard, "_is_hazard_repo", lambda root: is_hazard)
+    monkeypatch.setattr(_dc_git_shared, "_is_hazard_repo", lambda root: is_hazard)
 
 
 def _wire_git(monkeypatch, root, *, diff_lines=None, diff_rc=0):
@@ -51,7 +52,7 @@ def _wire_git(monkeypatch, root, *, diff_lines=None, diff_rc=0):
             return diff_rc, "\n".join(diff_lines) + "\n"
         raise AssertionError("unexpected git invocation: %r" % (args,))
 
-    monkeypatch.setattr(guard, "_run_git", _fake_run_git)
+    monkeypatch.setattr(_dc_git_probe, "_run_git", _fake_run_git)
     return calls
 
 
@@ -250,3 +251,110 @@ def test_not_a_hazard_repo_is_not_denied(monkeypatch, tmp_path):
     )
 
     assert result is None
+
+
+# ---------------------------------------------------------------------------
+# Run record dirs: attributed to the session whose held run token names it.
+# ---------------------------------------------------------------------------
+
+RUN_FILES = ["state/warp/ask-1/run.json", "state/warp/ask-1/ask.md"]
+
+
+def _warp_repo(monkeypatch, tmp_path, *, holder, staged=None, live=("sess1", "peer")):
+    """A repo with a real run token for ask-1 held by ``holder`` (None: unheld)."""
+    from coordinator_core.ops.dispatch_emit import run_token
+    from coordinator_core.session import touch_record
+
+    root = tmp_path / "repo"
+    (root / ".git").mkdir(parents=True)
+    (root / "state" / "warp" / "ask-1").mkdir(parents=True)
+    (root / "state" / "sizings").mkdir(parents=True)
+    monkeypatch.chdir(root)
+    monkeypatch.setattr(touch_record, "session_live", lambda sid, cwd=None: sid in live)
+    if holder is not None:
+        run_token.mint(root, "ask-1", "script.py", session_id=holder)
+    _wire_hazard(monkeypatch)
+    calls = _wire_git(monkeypatch, str(root), diff_lines=staged or RUN_FILES)
+    _wire_claims(monkeypatch, set())
+    from coordinator_core.session import scope
+
+    monkeypatch.setattr(scope, "contested_by_live_peers", lambda paths, sid, cwd=None: {})
+    return root, calls
+
+
+def test_commit_of_own_submitted_run_record_dir_is_allowed(monkeypatch, tmp_path):
+    _, calls = _warp_repo(monkeypatch, tmp_path, holder="sess1")
+
+    result = guard.check_blanket_git_add(
+        "git commit -m x -- state/warp/ask-1/", session_id="sess1", hook_payload={}
+    )
+
+    assert result is None
+    assert [c for c in calls if c[0] not in ("rev-parse", "diff")] == []
+
+
+def test_commit_of_a_different_live_sessions_run_record_dir_is_denied(monkeypatch, tmp_path):
+    _warp_repo(monkeypatch, tmp_path, holder="peer")
+
+    result = guard.check_blanket_git_add(
+        "git commit -m x -- state/warp/ask-1/", session_id="sess1", hook_payload={}
+    )
+
+    assert result is not None
+    reason = result["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "COMMIT-side" in reason
+    assert "state/warp/ask-1/run.json" in reason
+
+
+def test_commit_of_a_dead_sessions_run_record_dir_is_allowed(monkeypatch, tmp_path):
+    _warp_repo(monkeypatch, tmp_path, holder="peer", live=("sess1",))
+
+    result = guard.check_blanket_git_add(
+        "git commit -m x -- state/warp/ask-1/", session_id="sess1", hook_payload={}
+    )
+
+    assert result is None
+
+
+def test_commit_of_an_unheld_run_record_dir_is_allowed(monkeypatch, tmp_path):
+    _warp_repo(monkeypatch, tmp_path, holder=None)
+
+    result = guard.check_blanket_git_add(
+        "git commit -m x -- state/warp/ask-1/", session_id="sess1", hook_payload={}
+    )
+
+    assert result is None
+
+
+def test_a_non_warp_foreign_path_beside_an_own_run_is_still_denied(monkeypatch, tmp_path):
+    _warp_repo(
+        monkeypatch, tmp_path, holder="sess1", staged=RUN_FILES + ["state/other/peer.md"]
+    )
+
+    result = guard.check_blanket_git_add(
+        "git commit -m x -- state/", session_id="sess1", hook_payload={}
+    )
+
+    assert result is not None
+    reason = result["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "state/other/peer.md" in reason
+    assert "state/warp/ask-1/run.json" not in reason
+
+
+def test_full_em_checkpoint_shape_with_literal_file_operands_is_allowed(monkeypatch, tmp_path):
+    root, _ = _warp_repo(monkeypatch, tmp_path, holder="sess1")
+    inner = guard._run_git
+
+    def _git(args, cwd=None, timeout=2.0, extra_env=None):
+        if args[:2] == ["add", "--dry-run"]:
+            return 0, "".join("add '%s'\n" % p for p in RUN_FILES)
+        return inner(args, cwd, timeout, extra_env)
+
+    monkeypatch.setattr(_dc_git_probe, "_run_git", _git)
+    cmd = (
+        "git add -- state/warp/ask-1/ state/sizings/s.yaml docs/plans/p.md state/handoffs/h.md"
+        " && git commit -m x -- state/warp/ask-1/ state/sizings/s.yaml docs/plans/p.md"
+        " state/handoffs/h.md"
+    )
+
+    assert guard.check_blanket_git_add(cmd, session_id="sess1", hook_payload={}) is None

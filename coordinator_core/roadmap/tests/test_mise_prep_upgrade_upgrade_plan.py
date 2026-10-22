@@ -118,3 +118,53 @@ def test_main_stdout_pinned_write(tmp_path):
     rc, out = _run_main([str(a), str(b)])
     assert rc == 1
     assert out == _golden("derived", "1 changed")
+
+
+def _census_plan(commands):
+    items = "".join(
+        f"  - question: q{i}\n    command: {c}\n    result: r{i}\n" for i, c in enumerate(commands)
+    )
+    return f'---\ntitle: "C"\nstatus: draft\ncensus:\n{items}---\n\n# C\n'
+
+
+def _census_commands(path):
+    import yaml
+
+    fm = yaml.safe_load(path.read_text(encoding="utf-8").split("---\n")[1])
+    return [e["command"] for e in fm["census"]]
+
+
+def test_backtick_wrapped_command_is_rewritten_and_screens_clean(tmp_path):
+    from coordinator_core.roadmap import census
+
+    path = _plan(tmp_path, "2026-09-08-gamma.md", _census_plan(["'echo `grep -c foo a.txt`'"]))
+    result = _cli.upgrade_plan(path, check=False)
+    assert result["changed"] is True
+    assert "census.commands" in result["derived"]
+    (cmd,) = _census_commands(path)
+    assert cmd == "grep -c foo a.txt"
+    assert census.screen(cmd) is None
+
+
+def test_wc_file_list_substitution_becomes_a_pipe(tmp_path):
+    path = _plan(tmp_path, "2026-09-08-gamma.md", _census_plan(["'wc -l $(find . -name x)'"]))
+    _cli.upgrade_plan(path, check=False)
+    assert _census_commands(path) == ["find . -name x | wc -l"]
+
+
+def test_for_loop_is_reported_not_rewritten_and_entry_kept(tmp_path):
+    loop = "'for f in a b; do wc -l $f; done'"
+    text = _census_plan([loop, "'grep -c x a'"])
+    path = _plan(tmp_path, "2026-09-08-gamma.md", text)
+    result = _cli.upgrade_plan(path, check=False)
+    assert result["changed"] is False
+    assert any("census[0].command" in r and "never delete the premise" in r for r in result["residue"])
+    assert path.read_text(encoding="utf-8") == text
+
+
+def test_clean_command_untouched_and_no_entry_removed(tmp_path):
+    text = _census_plan(["'grep -c x a'", "'echo $(for f in a; do :; done)'"])
+    path = _plan(tmp_path, "2026-09-08-gamma.md", text)
+    _cli.upgrade_plan(path, check=False)
+    assert len(_census_commands(path)) == 2
+    assert _census_commands(path)[0] == "grep -c x a"

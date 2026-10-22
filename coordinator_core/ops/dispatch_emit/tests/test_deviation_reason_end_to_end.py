@@ -19,6 +19,7 @@ from coordinator_core.ops.dispatch_emit import wake_digest as wd
 from coordinator_core.ops.dispatch_emit.emit import compose_script
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
 from coordinator_core.ops.dispatch_emit.wave_map import WaveRow
+from coordinator_core.ops.dispatch_emit.tests._node_support import payload_file
 from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
@@ -32,7 +33,7 @@ _PREP = {
     "slices": [{"id": "s", "files": ["A.py"], "diff_path": "d.diff", "sidecar_path": "s.md", "contract_blocks": 0}],
 }
 _NODE_PROGRAM = r"""
-const src = process.env.SRC.replace(/^export const meta/m, 'const meta');
+const src = require('fs').readFileSync(process.env.SRC_FILE, 'utf8').replace(/^export const meta/m, 'const meta');
 const cfg = JSON.parse(process.env.CFG);
 const agent = async (prompt, opts) => {
   const label = String((opts && opts.label) || '');
@@ -76,12 +77,12 @@ def _digest(replies: dict) -> dict:
         **REVIEW_KW,
     )
     proc = subprocess.run(
-        [node, "-e", _NODE_PROGRAM],
+        [node, "-"], input=_NODE_PROGRAM,
         capture_output=True,
         text=True,
         encoding="utf-8",
         timeout=60,
-        env={**os.environ, "SRC": script, "CFG": json.dumps({"replies": replies, "prep": _PREP})},
+        env={**os.environ, "SRC_FILE": payload_file(script), "CFG": json.dumps({"replies": replies, "prep": _PREP})},
         **no_console_creationflags(),
     )
     assert proc.returncode == 0, proc.stderr

@@ -75,7 +75,7 @@ def _node(program: str) -> dict:
     if node is None:
         pytest.skip("node not on PATH")
     out = subprocess.run(
-        [node, "-e", program], capture_output=True, text=True, timeout=60, check=True, **no_console_creationflags()
+        [node, "-"], input=program, capture_output=True, text=True, timeout=60, check=True, **no_console_creationflags()
     )
     return json.loads(out.stdout)
 

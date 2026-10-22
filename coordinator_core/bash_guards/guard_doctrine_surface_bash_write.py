@@ -233,7 +233,8 @@ _SIZING_RECORD_DENY = (
     "Shell write into state/sizings bypasses the sizing-object schema check. "
     "New record: `sizing-assemble --write`. Amend: `sizing.record_pm_resolution` "
     "or `sizing-accept-exit-criterion`. "
-    "Register: `sizing-assemble --register <yaml> --write <sizing>`."
+    "Register: `sizing-assemble --register <yaml> --write <sizing>`. "
+    "Plan scaffold: `coordinator-doc-new --type plan --sizing-object <yaml>`."
 )
 
 
@@ -1263,8 +1264,24 @@ def _is_sanctioned_sizing_writer_shape(segment: str) -> bool:
     """A sanctioned writer as the segment's command, with no shell write of
     its own. Its operands are data -- an interpreter name in ``--intent`` or
     in the record's filename runs nothing -- so the only execution left in
-    the segment is a substitution: a live ``$(``/backtick or ``<(``."""
+    the segment is a substitution: a live ``$(``/backtick or ``<(``. An
+    interpreter-launched writer carries no ``-c``/``-m`` operand."""
+    if any(
+        re.fullmatch(r"-[A-Za-z]*[cm]", token.strip("'\"")) for token in _strip_quoted_spans(segment).split()
+    ) and _segment_command_word_is_python(segment):
+        return False
     return _runs_only_named_program_operands(segment, _SIZING_WRITER_BASENAMES)
+
+
+def _segment_command_word_is_python(segment: str) -> bool:
+    tokens = segment.split()
+    idx = 0
+    while idx < len(tokens) and _ASSIGN_RE.match(tokens[idx]):
+        idx += 1
+    return idx < len(tokens) and _command_token_basename(tokens[idx]).lower() in {
+        "python",
+        "python3",
+    }
 
 
 def _is_commit_cli_argument_shape(segment: str) -> bool:

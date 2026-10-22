@@ -42,7 +42,7 @@ def _kind_js(text):
         "const m = re.exec(s); process.stdout.write(JSON.stringify(m ? [m[1].toLowerCase(), m[2]] : null));"
     )
     out = subprocess.run(
-        [node, "-e", script], capture_output=True, text=True, check=True, **no_console_creationflags()
+        [node, "-"], input=script, capture_output=True, text=True, check=True, **no_console_creationflags()
     ).stdout
     return json.loads(out)
 

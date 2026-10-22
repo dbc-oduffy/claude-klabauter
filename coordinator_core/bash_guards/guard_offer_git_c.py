@@ -102,6 +102,16 @@ def _offer_quote_aware_segments(buf: str) -> List[str]:
 _OFFER_SEP_TOKEN_CHARS = frozenset(";&|")
 
 
+# Shell syntax the tokenizer hands back as a word: a redirection (`2>&1`,
+# `>/dev/null`) or a subshell paren. Quoting it turns syntax into a literal
+# argument, so the suggestion would no longer run the command typed.
+_OFFER_SHELL_SYNTAX_TOKEN = re.compile(r"\d*(?:>>?|<|&>>?)(?:&\d+|&-)?\S*|\(+\S*|\S*\)+")
+
+
+def _offer_quote_follower_token(t: str) -> str:
+    return t if _OFFER_SHELL_SYNTAX_TOKEN.fullmatch(t) else shlex.quote(t)
+
+
 def _offer_anchor_followers(followers: str, qt: str) -> Tuple[str, Optional[List[str]]]:
     """Splice ``-C <qt>`` into every top-level follower segment (the text
     starting at the separator right after the first git segment -- ``&& git
@@ -149,7 +159,8 @@ def _offer_anchor_followers(followers: str, qt: str) -> Tuple[str, Optional[List
     that keeps the leading ``cd``/first-``git`` prefix case out of
     auto-rewrite above applies identically here, with no extra code.
     """
-    tokens = _bt_tokenize_full_command(followers)
+    # A heredoc body is not shell words; re-joining its tokens mangles it.
+    tokens = None if "<<" in followers else _bt_tokenize_full_command(followers)
     if tokens is None:
         return (followers, None)
 
@@ -180,7 +191,7 @@ def _offer_anchor_followers(followers: str, qt: str) -> Tuple[str, Optional[List
             pieces.append("%s %s" % (sep, body))
         else:
             seg_text = " ".join(seg_tokens)
-            pieces.append("%s %s" % (sep, " ".join(shlex.quote(t) for t in seg_tokens)))
+            pieces.append("%s %s" % (sep, " ".join(_offer_quote_follower_token(t) for t in seg_tokens)))
             unanchored.append(seg_text)
 
     return (" ".join(pieces), unanchored)
@@ -394,7 +405,13 @@ def check_offer_git_c(
     if (
         unanchored
         and cwd
-        and os.path.isdir(os.path.join(cwd, ".git"))
+        and (
+            os.path.isdir(os.path.join(cwd, ".git"))
+            # A multi-repo container (a cloud session's cwd sits above every
+            # checkout) is the same shape as a sibling-repo cwd.
+            or _offer_normalize_path(os.path.dirname(os.path.abspath(target)))
+            == _offer_normalize_path(cwd)
+        )
         and os.path.isdir(os.path.join(target, ".git"))
     ):
         return None

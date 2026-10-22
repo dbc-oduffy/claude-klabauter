@@ -44,7 +44,7 @@ def _go(replies, rows):
         "rows": rows,
     }
     proc = subprocess.run(
-        [node, "-e", script],
+        [node, "-"], input=script,
         capture_output=True, text=True, encoding="utf-8", timeout=60,
         **no_console_creationflags(),
     )

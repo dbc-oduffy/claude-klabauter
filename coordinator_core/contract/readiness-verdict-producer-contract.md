@@ -92,6 +92,8 @@ findings-ledger sidecar. The op reads it in-process and never stamps or writes i
 | `reason` | one line |
 | `blocking_findings` | integer >= 0; uncleared findings that forbid buying a resolver |
 | `advisory_findings` | integer >= 0; uncleared findings an agent may resolve |
+| `rulings` | `[{id, source, subject, ask}]`; required, `[]` unless `verdict` is `pulled` or `judgment` |
+| `split_recommended` | boolean; required; true when the verdict is `pulled` (substantive) or `judgment` and `blocking_findings >= SPLIT_BLOCKING_THRESHOLD` |
 | `blocking` | optional; sorted, de-duplicated keys of everything that put the verdict into `judgment` or `pulled` |
 
 **`blocking` key spelling.** Premise: `premise-check: <VERDICT> <citation[:200]>`. Reviewer:
@@ -112,6 +114,16 @@ is `BLOCKED-SURFACE-TO-PM`. Each surviving premise row (not covered, declared ab
 1 to `blocking_findings`. `len(blocking)` is never the count: `blocking` keys include WARN reviewers
 and prep-gate entries, and its meaning is unchanged. A `judgment` `reason` begins
 `needs an agent: <b> blocking, <a> advisory: `.
+
+**`rulings` / `split_recommended`.** Each ruling is one decision the EM owes: `id` is `J<n>`
+(distinct from the requirements ledger's `R<n>`), numbered substantive, then judgment, then
+surviving premise rows. `source` is `prep-gate`, `coverage`, `review` or `premise`; `subject` is the
+blocking entry text capped at 300 characters; `ask` is one sentence naming the decision and where
+it is discharged (fix the class in the plan; revise or accept a review; a `corrects:` entry for a
+CONTRADICTED premise; a `declared_absent:` entry for an UNRESOLVED one). A mechanical pull carries no
+rulings and never recommends a split, whatever its count. `SPLIT_BLOCKING_THRESHOLD` (12, module
+constant in `plan_readiness_verdict.py`) is the blocking count at which a pull is too large for one
+baton.
 
 - `ready` with empty `mechanical_repairs`: no prep-gate or readiness agent is owed.
 - `pulled` + `mechanical`: apply the repairs in one revise; re-run the op, not the review round.

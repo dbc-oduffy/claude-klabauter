@@ -46,7 +46,7 @@ def _go(reply):
     if node is None:
         pytest.skip("node is not installed")
     proc = subprocess.run(
-        [node, "-e", _HARNESS % {"helper": emit._run_row_helper_js(), "rows": _FAN % json.dumps(reply)}],
+        [node, "-"], input=_HARNESS % {"helper": emit._run_row_helper_js(), "rows": _FAN % json.dumps(reply)},
         capture_output=True, text=True, encoding="utf-8", timeout=60,
         **no_console_creationflags(),
     )

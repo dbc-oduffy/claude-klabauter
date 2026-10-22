@@ -53,7 +53,7 @@ def _next_action(monkeypatch, items, *, blocked=(), incomplete=("C9", "C10", "C1
         % (json.dumps(_OWED), json.dumps(items), json.dumps(list(blocked)), json.dumps(list(incomplete)), script[start:end])
     )
     return subprocess.run(
-        [_NODE, "-e", program], capture_output=True, text=True, check=True, **no_console_creationflags()
+        [_NODE, "-"], input=program, capture_output=True, text=True, check=True, **no_console_creationflags()
     ).stdout
 
 

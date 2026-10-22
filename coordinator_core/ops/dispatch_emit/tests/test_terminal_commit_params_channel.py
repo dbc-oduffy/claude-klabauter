@@ -221,7 +221,7 @@ def test_js_and_python_block_agree():
         pytest.skip("node unavailable")
     prog = ch.PARAMS_BLOCK_JS + f"\nprocess.stdout.write(_terminalCommitParamsBlock({json.dumps(PARAMS)}));"
     out = subprocess.run(
-        [node, "-e", prog], capture_output=True, timeout=30, **no_console_creationflags()
+        [node, "-"], input=prog.encode("utf-8"), capture_output=True, timeout=30, **no_console_creationflags()
     )
     assert out.returncode == 0, out.stderr
     assert out.stdout.decode("utf-8") == ch.render_params_block(PARAMS)

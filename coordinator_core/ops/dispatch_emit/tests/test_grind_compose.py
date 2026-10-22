@@ -2363,7 +2363,7 @@ def _golden_undo_verdict(row: dict) -> dict:
         + "console.log(JSON.stringify({ wrote: !!_hasWrites(row), paths: _undoPaths(row) }));"
     )
     out = subprocess.run(
-        [node, "-e", js], capture_output=True, text=True, check=False,
+        [node, "-"], input=js, capture_output=True, text=True, check=False,
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     )
     assert out.returncode == 0, out.stderr

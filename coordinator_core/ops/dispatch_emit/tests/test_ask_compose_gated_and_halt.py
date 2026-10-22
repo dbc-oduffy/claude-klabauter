@@ -118,7 +118,7 @@ def _eval_reason(pulled_json: str) -> str:
         pytest.skip("node not on PATH")
     expr = no_ready_reason_js("_pulled")
     done = subprocess.run(
-        [node, "-e", f"const _pulled = {pulled_json}; process.stdout.write({expr});"],
+        [node, "-"], input=f"const _pulled = {pulled_json}; process.stdout.write({expr});",
         capture_output=True, text=True, check=True, timeout=30,
     )
     return done.stdout

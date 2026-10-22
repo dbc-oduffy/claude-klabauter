@@ -88,3 +88,58 @@ def test_a_failed_approval_records_no_grant(fleet, monkeypatch):
     with pytest.raises(m.CrossRepoApprovalNeeded):
         check_cross_repo_writes([row], fleet.run, approved=False, session_id=SESSION)
     assert not grant_file(fleet.run, SESSION).exists()
+
+
+def _mint(repo, session=SESSION):
+    from coordinator_core.ops.dispatch_emit import run_token
+
+    return run_token.mint(repo, "run-c2", "scripts/x.js", session_id=session)
+
+
+def _denied(out):
+    return out is not None and out["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+def test_session_holding_a_run_in_the_target_repo_is_admitted(fleet):
+    _mint(fleet.sib)
+    assert guard.check(_payload(fleet, fleet.sib / "docs" / "plans" / "p.md")) is None
+
+
+def test_third_registered_repo_without_token_is_still_denied(fleet, tmp_path, monkeypatch):
+    third = tmp_path / "third"
+    (third / ".git").mkdir(parents=True)
+    monkeypatch.setattr(
+        machine_resolver,
+        "merged_flat_registry",
+        lambda: {"repos.run": str(fleet.run), "repos.sib": str(fleet.sib), "repos.third": str(third)},
+    )
+    _mint(fleet.sib)
+    out = guard.check(_payload(fleet, third / "a.py"))
+    assert _denied(out)
+    assert "run-repo" in out["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def test_token_naming_another_session_does_not_admit(fleet):
+    _mint(fleet.sib, session="99999999-0000-0000-0000-000000000000")
+    assert _denied(guard.check(_payload(fleet, fleet.sib / "a.py")))
+
+
+def test_expired_token_does_not_admit(fleet, monkeypatch):
+    import time
+
+    from coordinator_core.ops.dispatch_emit import run_token
+
+    _mint(fleet.sib)
+    real = time.time()
+    monkeypatch.setattr(run_token.time, "time", lambda: real + run_token.TTL_SECONDS + 10)
+    assert _denied(guard.check(_payload(fleet, fleet.sib / "a.py")))
+
+
+def test_empty_session_id_is_denied_even_when_a_token_carries_an_empty_session(fleet):
+    _mint(fleet.sib, session="")
+    assert _denied(guard.check(_payload(fleet, fleet.sib / "a.py", session_id="")))
+
+
+def test_em_inline_write_unchanged_with_token_held(fleet):
+    _mint(fleet.sib)
+    assert guard.check(_payload(fleet, fleet.sib / "a.py", agent_id="")) is None

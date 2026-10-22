@@ -113,7 +113,7 @@ def _counting_run_git(monkeypatch: pytest.MonkeyPatch, match_prefix: List[str]) 
             count[0] += 1
         return original(args, cwd=cwd, timeout=timeout, extra_env=extra_env)
 
-    monkeypatch.setattr(dispatch_checks, "_run_git", wrapper)
+    monkeypatch.setattr(dispatch_checks._dc_git_probe, "_run_git", wrapper)
     return count
 
 

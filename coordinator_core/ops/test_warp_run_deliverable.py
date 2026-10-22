@@ -359,3 +359,56 @@ def test_withheld_path_is_not_claimed(repo, live):
     run_token.mint(repo, "p1", "s.mjs", session_id=PEER)
     run_withhold.record(repo / "state/warp/p1", [{"path": "a.py", "reason": "handed off"}], "t")
     assert _claims(repo, ["a.py", "b.py"]) == {"b.py": [PEER]}
+
+
+def _owners(repo, paths, **kw):
+    """`live_record_dir_owners` as seen from SESSION unless overridden."""
+    kw.setdefault("exclude_session", SESSION)
+    return wrd.live_record_dir_owners(repo, paths, **kw)
+
+
+def test_owners_own_run_absent(repo, live):
+    run_token.mint(repo, "p1", "s.mjs", session_id=SESSION)
+    assert _owners(repo, ["state/warp/p1/run.json"]) == {}
+
+
+def test_owners_live_peer_run_present(repo, live):
+    run_token.mint(repo, "p1", "s.mjs", session_id=PEER)
+    got = _owners(repo, ["state/warp/p1/run.json", "state\\warp\\p1\\sub\\x.json", "state/warp/p2/run.json"])
+    assert got == {"state/warp/p1/run.json": [PEER], "state/warp/p1/sub/x.json": [PEER]}
+
+
+def test_owners_dead_peer_absent(repo, live):
+    run_token.mint(repo, "p1", "s.mjs", session_id=PEER)
+    live.add(PEER)
+    assert _owners(repo, ["state/warp/p1/run.json"]) == {}
+
+
+def test_owners_expired_token_absent(repo, live, monkeypatch):
+    run_token.mint(repo, "p1", "s.mjs", session_id=PEER)
+    real = time.time
+    monkeypatch.setattr(time, "time", lambda: real() + run_token.TTL_SECONDS + 5)
+    assert _owners(repo, ["state/warp/p1/run.json"]) == {}
+
+
+def test_owners_halted_run_absent(repo, live):
+    from coordinator_core.ops.dispatch_emit import halted_run
+    from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
+
+    run_token.mint(repo, "p1", "s.mjs", session_id=PEER)
+    halted_run.write_halt_marker(record_dir(repo, "p1"), halted="criterion_not_met", sizing_rel=None)
+    assert _owners(repo, ["state/warp/p1/run.json"]) == {}
+
+
+def test_owners_unheld_run_and_outside_paths_absent(repo, live):
+    run_token.mint(repo, "p1", "s.mjs", session_id=PEER)
+    assert _owners(repo, ["state/warp/p9/run.json", "src/a.py", "state/warp", "state/warp/"]) == {}
+
+
+def test_owners_claimed_fresh_present_expired_absent(repo, live, monkeypatch):
+    token = run_token.mint(repo, "p1", "s.mjs", session_id=PEER)
+    assert run_token.redeem(repo, "p1", token, "s.mjs")
+    assert _owners(repo, ["state/warp/p1/run.json"]) == {"state/warp/p1/run.json": [PEER]}
+    real = time.time
+    monkeypatch.setattr(time, "time", lambda: real() + run_token.TTL_SECONDS + 5)
+    assert _owners(repo, ["state/warp/p1/run.json"]) == {}

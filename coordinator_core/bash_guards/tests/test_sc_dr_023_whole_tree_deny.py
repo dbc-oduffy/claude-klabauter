@@ -48,7 +48,7 @@ class _NeverCalled:
 
 @pytest.fixture()
 def no_git_spawn(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(dispatch_checks, "_run_git", _NeverCalled())
+    monkeypatch.setattr(dispatch_checks._dc_git_probe, "_run_git", _NeverCalled())
 
 
 class TestWholeTreeFormsDenyWithoutAProbe:
@@ -115,7 +115,7 @@ class TestResetHardWithRefIsUnchanged:
             calls.append((tuple(args), kwargs))
             return (0, "")
 
-        monkeypatch.setattr(dispatch_checks, "_run_git", _spy)
+        monkeypatch.setattr(dispatch_checks._dc_git_probe, "_run_git", _spy)
         check_destructive_git_revert("git reset --hard HEAD~1")
         assert calls, "git reset --hard <ref> must still consult git status (not command-string-alone)"
 

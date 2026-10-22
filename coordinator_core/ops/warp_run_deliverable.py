@@ -208,6 +208,50 @@ def _withheld_paths(root: Path, run_id: str) -> set:
     return {n for n in (_norm(p) for p in run_withhold.read([record_dir(root, run_id)])) if n}
 
 
+def _live_peer_run(
+    root: Path, record: dict, exclude_session: str, cwd: Optional[str], minted_before: Optional[tuple] = None,
+) -> bool:
+    """True when a held `record` is a live peer's run: fresh (claimed records included), a
+    non-empty `session_id` other than `exclude_session` that is `touch_record.session_live`, not
+    halted, and (when given) strictly senior to `minted_before=(minted_at, run_id)`."""
+    from coordinator_core.session import touch_record
+
+    sid = record.get("session_id")
+    run_id = record["run_id"]
+    if not isinstance(sid, str) or not sid or sid == exclude_session or not run_token._fresh(record):
+        return False
+    if minted_before is not None and (record["minted_at"], run_id) >= tuple(minted_before):
+        return False
+    return touch_record.session_live(sid, cwd) and not _halted(root, run_id)
+
+
+def live_record_dir_owners(
+    repo_root: Path, paths: Iterable[str], *, exclude_session: str, cwd: Optional[str] = None,
+) -> dict:
+    """`{path: sorted peer session ids}` for each of `paths` under a run's record dir
+    (`RECORD_DIR_ROOT/<run_id>/...`) whose run is held by a live peer (`_live_peer_run`).
+
+    Paths outside a record dir, runs held by `exclude_session`, and unheld runs are absent.
+    One token-dir listing, no spawn."""
+    root = Path(repo_root)
+    prefix = RECORD_DIR_ROOT + "/"
+    by_run: dict = {}
+    for path in (_norm(p) for p in paths if p):
+        if path.startswith(prefix):
+            run_id = path[len(prefix):].split("/", 1)[0]
+            if run_id:
+                by_run.setdefault(run_id, []).append(path)
+    owners: dict = {}
+    if not by_run:
+        return owners
+    for record in run_token.held_records(root):
+        run_id = record["run_id"]
+        if run_id in by_run and _live_peer_run(root, record, exclude_session, cwd):
+            for path in by_run[run_id]:
+                owners.setdefault(path, set()).add(record["session_id"])
+    return {p: sorted(s) for p, s in owners.items()}
+
+
 def live_run_write_claims(
     repo_root: Path,
     paths: Iterable[str],
@@ -225,8 +269,6 @@ def live_run_write_claims(
     keeps only strictly senior runs. A path matches a declared path or sits under a declared
     prefix, unless the run recorded it with `workflow.revise withhold_paths`. Returns None (contest unknown) when a live peer's declaration is unparseable and
     yields no usable paths; {} when nothing is declared."""
-    from coordinator_core.session import touch_record
-
     root = Path(repo_root)
     wanted = {_norm(p) for p in paths if p}
     wanted.discard("")
@@ -238,13 +280,7 @@ def live_run_write_claims(
         run_id = record["run_id"]
         if exclude_run is not None and run_id == exclude_run:
             continue
-        if not isinstance(sid, str) or not sid or sid == exclude_session or not run_token._fresh(record):
-            continue
-        if minted_before is not None and (record["minted_at"], run_id) >= tuple(minted_before):
-            continue
-        if not touch_record.session_live(sid, cwd):
-            continue
-        if _halted(root, run_id):
+        if not _live_peer_run(root, record, exclude_session, cwd, minted_before):
             continue
         declared, prefixes, unreadable = _manifest_declared(run_id, root)
         if unreadable and not declared and not prefixes:

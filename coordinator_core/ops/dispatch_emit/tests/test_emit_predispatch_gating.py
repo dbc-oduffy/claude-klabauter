@@ -212,7 +212,7 @@ def _run_harness(*, row_plan, setup, rows):
         "rows": rows,
     }
     proc = subprocess.run(
-        [node, "-e", source],
+        [node, "-"], input=source,
         capture_output=True,
         text=True,
         encoding="utf-8",
@@ -275,7 +275,7 @@ def _run_fold(review_plans, results):
         "fold": emit._PRE_PHASE_FOLD_JS,
     }
     proc = subprocess.run(
-        [node, "-e", source],
+        [node, "-"], input=source,
         capture_output=True,
         text=True,
         encoding="utf-8",

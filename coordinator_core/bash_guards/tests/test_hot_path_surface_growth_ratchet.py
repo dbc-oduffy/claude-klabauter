@@ -9,7 +9,7 @@ by every peer session's Bash/PowerShell fire:
 
 1. Eager-import count -- module-scope `import`/`from ... import`
    statements in `dispatch.py`.
-2. `dispatch_checks.py` line count.
+2. `dispatch_checks.py` + `_dc_*.py` aggregate line count.
 3. Registered-entry count -- `len(guard_roster())`.
 
 Discriminator against
@@ -56,9 +56,16 @@ _DISPATCH_PY_PATH = _REPO_ROOT / "coordinator_core" / "bash_guards" / "dispatch.
 
 #: Path indirection for leg 2 -- monkeypatched to a tmp_path copy by the red
 #: leg, never mutated in place.
-_DISPATCH_CHECKS_PY_PATH = (
-    _REPO_ROOT / "coordinator_core" / "bash_guards" / "dispatch_checks.py"
-)
+_BASH_GUARDS_DIR = _REPO_ROOT / "coordinator_core" / "bash_guards"
+
+
+def _dispatch_checks_aggregate_paths() -> list[Path]:
+    """The facade plus every `_dc_*.py` family module -- all imported on every
+    Bash fire through `dispatch_checks`. Reads `_BASH_GUARDS_DIR` at call time
+    so the red leg can point it at a tmp_path copy."""
+    return [_BASH_GUARDS_DIR / "dispatch_checks.py"] + sorted(
+        _BASH_GUARDS_DIR.glob("_dc_*.py")
+    )
 
 #: Roster-provider indirection for leg 3 -- monkeypatched to a synthetic
 #: callable by the red leg, defaults to the live registration.
@@ -81,7 +88,13 @@ _EAGER_IMPORT_CEILING = 21
 # 11332 -> 11341: the foreign-hunk check lets a merge conclusion stage MERGE_HEAD's
 # incoming paths (slice 6 of PM batch ask-parent-20261016T003841-924a0e, break-class); the
 # probe itself lives in _merge_incoming.py, only the call site is here.
-_DISPATCH_CHECKS_LINE_CEILING = 11341
+# Re-pinned to the facade-plus-_dc_* aggregate by the dispatch-checks split
+# (docs/plans/2026-10-22-dispatch-checks-split-into-guard-family-modules.md; the plan, not R1,
+# sanctions this one ceiling edit). Baseline was a single 11414-line file at d913f5b (already over
+# the old 11341 pin). Folded to eight _dc_* modules by the EM ruling (plan row C21): measured
+# aggregate 348 facade + 11587 across 8 _dc_* modules = 11935; the +521 over 11414 is
+# per-module import-header overhead only, no logic added.
+_DISPATCH_CHECKS_AGGREGATE_LINE_CEILING = 11935
 _REGISTERED_ENTRY_CEILING = 75  # + block-external-workspace-vcs-write; + block-drive-root-new-dir-bash-write; + block-push-pr-non-owned-remote (publish is the line); + trailing-background-ampersand, move-from-inside-cwd (example-game-repo-3b friction advisories); + block-home-root-bash-write; + guard-post-executor-verification (EM verification after an executor); + guard-heavy-command-admission (box-capacity admission plan); + deploy-dirty-tree; + guard-subagent-heavy-ue-launch (coordinator-content-repo-55 ask, DoE 169088ceb); + block-whole-filesystem-scan; + block-hand-authored-handoff-creation; + block-editor-kill-by-name, block-unreal-engine-resave, block-perforce-submit, block-topic-branch, block-dev-repo-sentinel-removal deny leg; + piped-pytest-exit-advisory, block-venv-creation (PM directive 2026-09-29), background-publish, headless-claude-plugin-dir
 
 
@@ -112,12 +125,15 @@ def _assert_eager_import_ratchet() -> None:
 
 
 def _assert_dispatch_checks_line_ratchet() -> None:
-    count = _count_lines(_DISPATCH_CHECKS_PY_PATH.read_text(encoding="utf-8"))
-    assert count <= _DISPATCH_CHECKS_LINE_CEILING, (
-        f"dispatch_checks.py's line count ({count}) exceeds its per-commit "
-        f"pin ({_DISPATCH_CHECKS_LINE_CEILING}). Move the new guard to its "
-        "own module, or raise this pin in a commit citing the EM/PM ruling "
-        "that sanctioned it."
+    count = sum(
+        _count_lines(p.read_text(encoding="utf-8"))
+        for p in _dispatch_checks_aggregate_paths()
+    )
+    assert count <= _DISPATCH_CHECKS_AGGREGATE_LINE_CEILING, (
+        f"dispatch_checks.py + _dc_*.py aggregate line count ({count}) exceeds "
+        f"its per-commit pin ({_DISPATCH_CHECKS_AGGREGATE_LINE_CEILING}). Move "
+        "the new guard to its own module outside the _dc_ family, or raise "
+        "this pin in a commit citing the EM/PM ruling that sanctioned it."
     )
 
 
@@ -162,15 +178,25 @@ def test_dispatch_checks_line_ratchet_green_at_head() -> None:
 def test_dispatch_checks_line_ratchet_reds_on_synthetic_growth(
     tmp_path, monkeypatch
 ) -> None:
-    """AC7 leg 2, red: a synthetic copy of dispatch_checks.py, grown past the pin
-    by a full pin's worth of lines. Never touches the tracked file."""
-    synthetic = tmp_path / "dispatch_checks.py"
-    original = _DISPATCH_CHECKS_PY_PATH.read_text(encoding="utf-8")
-    extra_lines = "\n".join(f"# synthetic-growth-{i}" for i in range(_DISPATCH_CHECKS_LINE_CEILING)) + "\n"
-    synthetic.write_text(original + extra_lines, encoding="utf-8")
-    monkeypatch.setattr(
-        sys.modules[__name__], "_DISPATCH_CHECKS_PY_PATH", synthetic
+    """AC7 leg 2, red: tmp_path copies of the facade and every _dc_* module,
+    the facade grown past the pin by a full pin's worth of lines. Never
+    touches the tracked files."""
+    for src in _dispatch_checks_aggregate_paths():
+        (tmp_path / src.name).write_text(
+            src.read_text(encoding="utf-8"), encoding="utf-8"
+        )
+    extra_lines = (
+        "\n".join(
+            f"# synthetic-growth-{i}"
+            for i in range(_DISPATCH_CHECKS_AGGREGATE_LINE_CEILING)
+        )
+        + "\n"
     )
+    facade = tmp_path / "dispatch_checks.py"
+    facade.write_text(
+        facade.read_text(encoding="utf-8") + extra_lines, encoding="utf-8"
+    )
+    monkeypatch.setattr(sys.modules[__name__], "_BASH_GUARDS_DIR", tmp_path)
     with pytest.raises(AssertionError):
         _assert_dispatch_checks_line_ratchet()
 

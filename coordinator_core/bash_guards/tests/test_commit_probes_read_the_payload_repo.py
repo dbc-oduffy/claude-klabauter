@@ -53,7 +53,7 @@ def probe_cwds(monkeypatch) -> List[Optional[str]]:
         seen.append(cwd)
         return 0, ""
 
-    monkeypatch.setattr(dc, "_run_git", _fake_run_git)
+    monkeypatch.setattr(dc._dc_git_probe, "_run_git", _fake_run_git)
     return seen
 
 
@@ -70,7 +70,7 @@ def test_the_solo_bare_commit_index_probe_reads_the_payload_repo(probe_cwds):
 
 
 def test_the_sweep_all_probe_reads_the_payload_repo(probe_cwds, monkeypatch):
-    monkeypatch.setattr(dc, "_is_hazard_repo", lambda _p: True)
+    monkeypatch.setattr(dc._dc_git_shared, "_is_hazard_repo", lambda _p: True)
     _run("git commit -am x")
     assert probe_cwds, "the sweep-all probe never ran"
     assert set(probe_cwds) == {PAYLOAD_CWD}

@@ -112,7 +112,7 @@ def test_runner_releases_dependent_on_the_reply_the_prompt_asks_for():
         "_rows.B = _runRow('B', [_rows.A], null, run('B', 'DONE: B'));"
     )
     proc = subprocess.run(
-        [node, "-e", _HARNESS % {"helper": _run_row_helper_js(), "rows": rows}],
+        [node, "-"], input=_HARNESS % {"helper": _run_row_helper_js(), "rows": rows},
         capture_output=True, text=True, encoding="utf-8", timeout=60,
         **no_console_creationflags(),
     )

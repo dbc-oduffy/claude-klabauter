@@ -247,7 +247,7 @@ def test_ask_six_same_wave_rows_stage_into_fewer_groups_and_the_script_runs_one_
         "manifest": json.dumps({**manifest.to_json(), "error": None}), "reply": json.dumps(reply), "block": block,
     }
     out = subprocess.run(
-        [shutil.which("node"), "-e", program], capture_output=True, text=True, timeout=60,
+        [shutil.which("node"), "-"], input=program, capture_output=True, text=True, timeout=60,
         **no_console_creationflags(),
     )
     assert out.returncode == 0, out.stderr

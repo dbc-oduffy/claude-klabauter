@@ -180,7 +180,7 @@ def _js_cli(params) -> str:
         + f"\nprocess.stdout.write(_terminalCommitCli({json.dumps(params)}));"
     )
     out = subprocess.run(
-        [node, "-e", prog], capture_output=True, text=True, timeout=30, encoding="utf-8",
+        [node, "-"], input=prog, capture_output=True, text=True, timeout=30, encoding="utf-8",
         **no_console_creationflags(),
     )
     assert out.returncode == 0, out.stderr

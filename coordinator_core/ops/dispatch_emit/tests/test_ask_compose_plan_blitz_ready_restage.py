@@ -23,6 +23,7 @@ from coordinator_core.ops.dispatch_emit.tests.test_ask_compose_stage_handle impo
     stage_reply,
     stage_root,
 )
+from coordinator_core.ops.dispatch_emit.tests._node_support import payload_file
 from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
@@ -42,7 +43,7 @@ _LANDED = {"committed": True, "sha": "abc1234", "error": None, "refused": None}
 _GATE = {"arm": "m_plus", "halt": None, "baton": None, "tshirt": "M", "route": "spec-dispatch"}
 
 _NODE_PROGRAM = WORKFLOW_FAKE_JS + r"""
-const src = process.env.SRC.replace(/^export const meta/m, 'const meta');
+const src = require('fs').readFileSync(process.env.SRC_FILE, 'utf8').replace(/^export const meta/m, 'const meta');
 const cfg = JSON.parse(process.env.CFG);
 const workflow = makeWorkflow(cfg);
 const calls = [];
@@ -88,8 +89,8 @@ def _run(script: str, *, read=None, tamper=None) -> dict:
     if tamper is not None:
         tamper()
     proc = subprocess.run(
-        [node, "-e", _NODE_PROGRAM], capture_output=True, text=True, encoding="utf-8", timeout=60,
-        env={**os.environ, "SRC": script, "CFG": json.dumps(cfg)}, **no_console_creationflags(),
+        [node, "-"], input=_NODE_PROGRAM, capture_output=True, text=True, encoding="utf-8", timeout=60,
+        env={**os.environ, "SRC_FILE": payload_file(script), "CFG": json.dumps(cfg)}, **no_console_creationflags(),
     )
     assert proc.returncode == 0, proc.stderr
     return json.loads(proc.stdout.strip().splitlines()[-1])
@@ -110,13 +111,13 @@ def test_the_emitted_script_parses_as_the_workflow_runner_parses_it(monkeypatch)
     if node is None:
         pytest.skip("node not on PATH")
     program = (
-        "const src = process.env.SRC.replace(/^export const meta/m, 'const meta');"
+        "const src = require('fs').readFileSync(process.env.SRC_FILE, 'utf8').replace(/^export const meta/m, 'const meta');"
         "new (Object.getPrototypeOf(async function () {}).constructor)("
         "'args', 'agent', 'parallel', 'pipeline', 'phase', src);"
     )
     proc = subprocess.run(
-        [node, "-e", program], capture_output=True, text=True, encoding="utf-8",
-        env={**os.environ, "SRC": _script(monkeypatch, {"planPath": _PLAN})}, **no_console_creationflags(),
+        [node, "-"], input=program, capture_output=True, text=True, encoding="utf-8",
+        env={**os.environ, "SRC_FILE": payload_file(_script(monkeypatch, {"planPath": _PLAN}))}, **no_console_creationflags(),
     )
     assert proc.returncode == 0, proc.stderr
 

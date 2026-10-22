@@ -366,7 +366,7 @@ def test_amend_probe_failure_fails_closed_never_silent(monkeypatch, tmp_path):
     def _boom(*args, **kwargs):
         return (-1, "")
 
-    monkeypatch.setattr(dispatch_checks, "_run_git", _boom)
+    monkeypatch.setattr(dispatch_checks._dc_git_probe, "_run_git", _boom)
     out = dispatch_checks.check_git_commit_safe_commit_advise(cmd, "sess-mine")
     assert out is not None
     assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
@@ -439,7 +439,7 @@ def test_solo_bare_commit_probe_failure_fails_open_never_denies(monkeypatch, tmp
     def _boom(*args, **kwargs):
         return (-1, "")
 
-    monkeypatch.setattr(dispatch_checks, "_run_git", _boom)
+    monkeypatch.setattr(dispatch_checks._dc_git_probe, "_run_git", _boom)
     assert _verdict(cmd) == "advisory"
 
 
@@ -476,7 +476,7 @@ def test_compound_deny_survives_a_dead_git_because_it_never_probes(
     def _boom(*args, **kwargs):
         return (-1, "")
 
-    monkeypatch.setattr(dispatch_checks, "_run_git", _boom)
+    monkeypatch.setattr(dispatch_checks._dc_git_probe, "_run_git", _boom)
     assert _verdict(cmd) == "rewrite"
 
 
@@ -553,7 +553,7 @@ def test_deny_reason_names_the_shape_and_offers_a_runnable_scoped_form(tmp_path)
 
 
 def _force_hazard(monkeypatch, is_hazard: bool) -> None:
-    monkeypatch.setattr(dispatch_checks, "_is_hazard_repo", lambda git_root: is_hazard)
+    monkeypatch.setattr(dispatch_checks._dc_git_shared, "_is_hazard_repo", lambda git_root: is_hazard)
 
 
 def _touch_worktree(repo, name, content="worktree-edit"):
@@ -695,7 +695,7 @@ def test_dash_am_budget_spent_dispatch_stays_advisory_never_deny(tmp_path, monke
     def _spent(*args, **kwargs):
         return (dispatch_checks._GIT_PROBE_BUDGET_SPENT_RC, "")
 
-    monkeypatch.setattr(dispatch_checks, "_run_git", _spent)
+    monkeypatch.setattr(dispatch_checks._dc_git_probe, "_run_git", _spent)
     cmd = 'git -C %s commit -am "x"' % shlex.quote(str(repo))
     assert _verdict(cmd) == "advisory"
 
@@ -710,7 +710,7 @@ def test_dash_am_probe_failure_fails_open_never_denies(tmp_path, monkeypatch):
     def _boom(*args, **kwargs):
         return (-1, "")
 
-    monkeypatch.setattr(dispatch_checks, "_run_git", _boom)
+    monkeypatch.setattr(dispatch_checks._dc_git_probe, "_run_git", _boom)
     cmd = 'git -C %s commit -am "x"' % shlex.quote(str(repo))
     assert _verdict(cmd) == "advisory"
 

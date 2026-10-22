@@ -217,7 +217,7 @@ def test_relay_sha256_js_uses_no_unsupplied_global(word):
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_relay_sha256_js_matches_hashlib_under_node():
+def test_relay_sha256_js_matches_hashlib_under_node(tmp_path):
     node = shutil.which("node")
     if node is None:
         pytest.skip("node not on PATH")
@@ -226,8 +226,10 @@ def test_relay_sha256_js_matches_hashlib_under_node():
     samples = ["", "abc", quote(json.dumps({"k": "{}é" * 4000}), safe="")]
     assert len(samples[2]) > 20000
     js = gcc.RELAY_SHA256_JS + (
-        "\nconsole.log(JSON.stringify(JSON.parse(require('fs').readFileSync(0, 'utf8')).map(_sha256Ascii)));")
-    res = subprocess.run([node, "-e", js], input=json.dumps(samples), capture_output=True, text=True,
+        "\nconsole.log(JSON.stringify(JSON.parse(require('fs').readFileSync(process.argv[2], 'utf8')).map(_sha256Ascii)));")
+    samples_file = tmp_path / "samples.json"
+    samples_file.write_text(json.dumps(samples), encoding="utf-8")
+    res = subprocess.run([node, "-", str(samples_file)], input=js, capture_output=True, text=True,
                          check=False, **no_console_creationflags())
     assert res.returncode == 0, res.stderr
     assert json.loads(res.stdout) == [gcc.relay_digest(s)[1] for s in samples]

@@ -93,7 +93,7 @@ def test_each_grouped_prompt_names_both_members_digest_files(tmp_path):
     path = tmp_path / "s.js"
     path.write_text(_scouts_script(tmp_path), encoding="utf-8")
     program = (
-        "const src = require('fs').readFileSync(process.argv[1], 'utf8').replace(/^export const meta/m, 'const meta');"
+        "const src = require('fs').readFileSync(process.argv[2], 'utf8').replace(/^export const meta/m, 'const meta');"
         "const prompts = [];"
         "const agent = async (p) => { prompts.push(p); return 'ok'; };"
         "const parallel = (thunks) => Promise.all(thunks.map((t) => t()));"
@@ -102,7 +102,7 @@ def test_each_grouped_prompt_names_both_members_digest_files(tmp_path):
         "run({}, agent, parallel, null, () => {}, () => {}).then(() => console.log(JSON.stringify(prompts)));"
     )
     out = subprocess.run(
-        [node, "-e", program, str(path)], capture_output=True, text=True, timeout=60, **no_console_creationflags(),
+        [node, "-", str(path)], input=program, capture_output=True, text=True, timeout=60, **no_console_creationflags(),
     )
     assert out.returncode == 0, out.stderr
     prompts = json.loads(out.stdout)

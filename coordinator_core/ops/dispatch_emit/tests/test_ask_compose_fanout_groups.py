@@ -77,7 +77,7 @@ def _run(rows: list[dict], reply: str) -> dict:
     block = _block(_script())
     program = _HARNESS % {"manifest": json.dumps(_manifest(rows)), "reply": json.dumps(reply), "block": block}
     out = subprocess.run(
-        [shutil.which("node"), "-e", program], capture_output=True, text=True, timeout=60,
+        [shutil.which("node"), "-"], input=program, capture_output=True, text=True, timeout=60,
         **no_console_creationflags(),
     )
     assert out.returncode == 0, out.stderr

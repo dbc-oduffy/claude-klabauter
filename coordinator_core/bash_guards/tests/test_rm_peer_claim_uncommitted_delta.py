@@ -137,7 +137,7 @@ class TestUncommittedDeltaGate:
                 return 1, ""
             return original(args, *a, **k)
 
-        monkeypatch.setattr(dc, "_run_git", _flaky)
+        monkeypatch.setattr(dc._dc_git_probe, "_run_git", _flaky)
         monkeypatch.setenv("COORDINATOR_ALLOW_RM", "1")
         monkeypatch.chdir(root)
         result = dc.check_destructive_rm(
@@ -175,7 +175,7 @@ class TestUncommittedDeltaGate:
                 calls.append(tuple(args))
             return original(args, *a, **k)
 
-        monkeypatch.setattr(dc, "_run_git", _counting)
+        monkeypatch.setattr(dc._dc_git_probe, "_run_git", _counting)
         monkeypatch.chdir(root)
         dc.check_destructive_rm("rm " + " ".join(targets), session_id="my-sess", payload={})
 

@@ -83,6 +83,22 @@ _LIVE_DISPOSITIONS = frozenset({"open", "coded"})
 # its fix as surely as a live row id; a token that is neither covers nothing.
 _SHA_LIST = re.compile(r"[0-9a-f]{7,40}(\s*,\s*[0-9a-f]{7,40})*")
 _PULL_VERDICTS = frozenset({"pulled", "judgment"})
+# A pull with at least this many blocking findings is too large for one baton.
+SPLIT_BLOCKING_THRESHOLD = 12
+_SUBJECT_MAX = 300
+_PREMISE_ASK = {
+    "CONTRADICTED": "add a `corrects:` entry naming the spine row that fixes it, or correct the plan's claim",
+    "UNRESOLVED": "add a `declared_absent:` entry with a resolvable `tracked_by`, or supply the evidence",
+}
+
+
+def _ruling(index: int, source: str, subject: str, ask: str) -> dict:
+    return {"id": f"J{index}", "source": source, "subject": subject[:_SUBJECT_MAX], "ask": ask}
+
+
+def _premise_ask(entry: str) -> str:
+    verdict = entry.split(": ", 1)[-1].split(" ", 1)[0]
+    return "Rule on this premise row: " + _PREMISE_ASK.get(verdict, "resolve it in the plan") + "."
 
 
 def _clear(verdict: Any) -> bool:
@@ -332,6 +348,7 @@ def readiness_verdict(
     repairs: List[dict] = []
     substantive: List[str] = []
     judgment: List[str] = []
+    judgment_source: List[str] = []
     blocking_findings = advisory_findings = 0
 
     if prep_gate.get("verdict") not in _PREP_VERDICTS_COMPUTED:
@@ -352,6 +369,7 @@ def readiness_verdict(
         judged = _findings(coverage.get("judgmentFindings"), "judgmentFindings")
         if judged:
             judgment.append(f"{len(judged)} judgment coverage finding(s)")
+            judgment_source.append("coverage")
             if str(coverage.get("verdict")).strip().upper() == "BLOCKED-SURFACE-TO-PM":
                 blocking_findings += max(len(judged), 1)
             else:
@@ -374,6 +392,7 @@ def readiness_verdict(
         if _ledger_verdict(review) and _rows_clear(read):
             continue
         judgment.append(f"{review.get('reviewer')}: {review.get('verdict')!r}")
+        judgment_source.append("review")
         if str(review.get("verdict")).strip().lower() == "warn":
             advisory_findings += _uncleared_count(read)
         else:
@@ -413,6 +432,21 @@ def readiness_verdict(
             shown = shown[:i] + [f"+{tail} more premise row(s)"]
             break
     blocking_keys = [*substantive, *judgment, *premise_blocking]
+    rulings: List[dict] = []
+    for entry in substantive:
+        rulings.append(_ruling(
+            len(rulings) + 1, "prep-gate", entry,
+            "Fix the named class in the plan so the prep gate passes, or rule it out of scope.",
+        ))
+    for entry, source in zip(judgment, judgment_source):
+        ask = (
+            "Rule on the judgment coverage findings: revise the plan or accept them."
+            if source == "coverage"
+            else "Rule on this review verdict: revise the plan for its findings or accept them."
+        )
+        rulings.append(_ruling(len(rulings) + 1, source, entry, ask))
+    for entry in premise_blocking:
+        rulings.append(_ruling(len(rulings) + 1, "premise", entry, _premise_ask(entry)))
     judgment.extend(shown)
     if uncheckable:
         notes.append(f"{uncheckable} UNCHECKABLE premise row(s) left to reviewer judgment")
@@ -444,8 +478,12 @@ def readiness_verdict(
         reason = "prep gate passes with no outstanding findings"
         if notes:
             reason += "; " + "; ".join(notes)
+    pulled = verdict in _PULL_VERDICTS
     return {
         "verdict": verdict,
+        "rulings": rulings if pulled else [],
+        "split_recommended": pulled and pull_class != "mechanical"
+        and blocking_findings >= SPLIT_BLOCKING_THRESHOLD,
         "pull_class": pull_class,
         "mechanical_repairs": repairs,
         "reason": reason[:1000],

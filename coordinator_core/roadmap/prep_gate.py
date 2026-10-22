@@ -384,6 +384,15 @@ _FINDING_CLASSIFICATION: Dict[str, Any] = {
         "edit prime_exit_criterion statement: name the behaviour and the tests "
         "covering the touched files, not a suite tier — {detail}",
     ),
+    "census-unscreenable": (
+        True,
+        "rewrite each named census entry's command into the allowed form (" + census.ALLOWED_FORM + "): "
+        "drop `$( )` and backticks by piping the inner command, split a loop into N entries or "
+        "one `grep -c` / `find | wc -l`, and move a live check (`node`, `gh`, `claude`, a running "
+        "service) to the body's `## Execution-time evidence` list verbatim, keeping its question "
+        "in the body. Keep each entry's `question`; rerun the rewritten command and set `result` "
+        "to its output with `at <short HEAD sha>`; never delete an entry or a premise — {detail}",
+    ),
 }
 
 
@@ -2675,9 +2684,10 @@ def refusal_message(
         unscreenable = classes.get("CENSUS", {}).get("kind") == "census-unscreenable"
         if unscreenable:
             lines.append(
-                "  fix: rewrite each named census command BY HAND as a read-only pipeline "
-                "(grep/find/wc/jq, git <read>) — mise-prep-upgrade derives missing "
-                "declarations and does not rewrite a stated command"
+                "  fix: mechanical repair — rewrite each named census command into the allowed "
+                "read-only form (grep/find/wc/jq, git <read>), keeping its question; "
+                "mise-prep-upgrade converts the shapes it rewrites and derives missing "
+                "declarations"
             )
         if (not unscreenable or any(
             k != "CENSUS" and v["status"] != "PASS" for k, v in classes.items()

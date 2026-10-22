@@ -198,7 +198,7 @@ def _git_orphan(cmd: str, ctx: _Ctx) -> Optional[Dict[str, Any]]:
 
 
 def _blanket_add(cmd: str, ctx: _Ctx) -> Optional[Dict[str, Any]]:
-    ctx.monkeypatch.setattr(dc, "_is_hazard_repo", lambda _root: True)
+    ctx.monkeypatch.setattr(dc._dc_git_shared, "_is_hazard_repo", lambda _root: True)
     return dc.check_blanket_git_add(cmd, "sess", hook_payload=_bash(cmd))
 
 

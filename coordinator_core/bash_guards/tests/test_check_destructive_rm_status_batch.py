@@ -6,6 +6,7 @@ import subprocess
 
 import pytest
 
+from coordinator_core.bash_guards import _dc_rm
 from coordinator_core.bash_guards import dispatch_checks as dc
 from coordinator_core.win_portability import no_console_creationflags
 
@@ -56,7 +57,7 @@ def _count_status_spawns(monkeypatch, root: str, targets: list[str]):
             status_calls.append(tuple(args))
         return original(args, *a, **k)
 
-    monkeypatch.setattr(dc, "_run_git", counting)
+    monkeypatch.setattr(dc._dc_git_probe, "_run_git", counting)
     monkeypatch.chdir(root)
     verdict = dc.check_destructive_rm(
         "rm " + " ".join(targets), session_id="spawn-batch-probe", payload={}
@@ -114,7 +115,7 @@ def test_relative_target_resolves_against_the_payload_cwd(tmp_path, monkeypatch)
     # The warm engine's process cwd is wherever it booted, never the session's: a relative
     # target must still be found, or uncommitted work under it is deleted unguarded.
     root, _targets = _repo_with_dirty_files(tmp_path, 2)
-    monkeypatch.setattr(dc, "_rm_flush_touch", lambda *_a, **_k: None)
+    monkeypatch.setattr(_dc_rm, "_rm_flush_touch", lambda *_a, **_k: None)
     elsewhere = tmp_path / "elsewhere"
     elsewhere.mkdir()
     monkeypatch.chdir(elsewhere)

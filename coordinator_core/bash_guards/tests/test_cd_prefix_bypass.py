@@ -695,7 +695,7 @@ class TestBlanketGitAdd:
                 return 0, str(fake_meta_root) + "\n"
             return 1, ""
 
-        monkeypatch.setattr(dc, "_run_git", fake_run_git)
+        monkeypatch.setattr(dc._dc_git_probe, "_run_git", fake_run_git)
         monkeypatch.setattr(
             dc.os.path, "expanduser", lambda p: str(tmp_path / "home") if p == "~" else p
         )

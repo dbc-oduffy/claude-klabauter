@@ -5,7 +5,7 @@
   "description": "Reply of the plan.readiness_verdict op: the prep gate computed in-process plus the mechanical readiness verdict. verdict 'ready' with empty mechanical_repairs means no prep-gate or readiness agent is owed. Spec: coordinator_core/contract/readiness-verdict-producer-contract.md.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["plan", "verdict", "pull_class", "mechanical_repairs", "prep_gate", "reason", "blocking_findings", "advisory_findings"],
+  "required": ["plan", "verdict", "pull_class", "mechanical_repairs", "prep_gate", "reason", "blocking_findings", "advisory_findings", "rulings", "split_recommended"],
   "if": { "properties": { "pull_class": { "enum": ["none", "substantive"] } } },
   "then": { "properties": { "mechanical_repairs": { "maxItems": 0 } } },
   "properties": {
@@ -65,6 +65,25 @@
       "type": "integer",
       "minimum": 0,
       "description": "Count of uncleared findings an agent may resolve: uncleared ledger rows of WARN reviews and judgment coverage findings of any other verdict. 0 on ready."
+    },
+    "rulings": {
+      "type": "array",
+      "description": "The decisions the EM must make for a pull to clear, numbered J1.. in the order substantive, judgment, premise. Empty unless verdict is pulled or judgment.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "source", "subject", "ask"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^J[0-9]+$" },
+          "source": { "type": "string", "enum": ["prep-gate", "coverage", "review", "premise"] },
+          "subject": { "type": "string", "maxLength": 300, "description": "The existing blocking entry text." },
+          "ask": { "type": "string", "description": "One sentence naming the decision and where it is discharged." }
+        }
+      }
+    },
+    "split_recommended": {
+      "type": "boolean",
+      "description": "True when verdict is pulled (substantive) or judgment and blocking_findings >= SPLIT_BLOCKING_THRESHOLD. A mechanical pull never recommends a split."
     },
     "reason": {
       "type": "string",

@@ -770,7 +770,7 @@ _EXEMPT_SITES: frozenset[tuple[str, str, str, int]] = frozenset(
         # arrow, a quoted path). This guard stands between `rm` and a peer's uncommitted work, so
         # it re-asks git rather than guess; the batch that just failed cannot answer for one path.
         # Pinned by `test_check_destructive_rm_status_batch.py`.
-        ('coordinator_core/bash_guards/dispatch_checks.py', 'check_destructive_rm', '_run_git', 0),
+        ('coordinator_core/bash_guards/_dc_rm.py', 'check_destructive_rm', '_run_git', 0),
         # 2026-10-07 -- # class: structural-floor. `source_edit_gate._run_groups` runs one test
         # runner per (runner, root) group and already hands that run every file of its group. N is
         # the count of distinct test roots one edit touches; pytest and jest, or two roots with
@@ -2267,6 +2267,7 @@ def _summarise(record: _FileRecord) -> _FileSummary:
 
     imported: set[str] = set()
     raw_imports: dict[str, set[tuple[str, str]]] = {}
+    module_bindings: dict[str, str] = {}
     for node in _iter_stmts(tree):
         if isinstance(node, ast.ImportFrom):
             abs_module = _absolute_import_module(relpath, node)
@@ -2274,6 +2275,21 @@ def _summarise(record: _FileRecord) -> _FileSummary:
                 local_binding = alias.asname or alias.name
                 imported.add(local_binding)
                 raw_imports.setdefault(local_binding, set()).add((alias.name, abs_module))
+                if abs_module and (_REPO_ROOT / (abs_module + "." + alias.name).replace(".", "/")).with_suffix(".py").is_file():
+                    module_bindings[local_binding] = abs_module + "." + alias.name
+    # `<module>.<callee>(...)` on a repo module bound by `from pkg import module` resolves for
+    # route c only: it is not added to `imported`, so the wide suppressor legs never match a
+    # homonym of it and a qualified call is never silenced by an unrelated same-named helper.
+    for node in _walk(tree):
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id in module_bindings
+        ):
+            raw_imports.setdefault(node.func.attr, set()).add(
+                (node.func.attr, module_bindings[node.func.value.id])
+            )
 
     lines: list[str] | None = None
     funcs: list[_FuncSummary] = []
@@ -4689,6 +4705,7 @@ def _file_verdicts(
     _EnclosingTracker(enclosing_by_call).visit(tree)
 
     imported_here = index.imported_names_by_file.get(relpath, set())
+    qualified_here = index.resolved_imports_by_file.get(relpath, {})
 
     # AC1/AC10: the ordinal is assigned in its OWN pass, over every marked call in this
     # file, before any discriminator runs -- see `_assign_call_ordinals`'s docstring for why
@@ -4899,7 +4916,7 @@ def _file_verdicts(
             # `callee in index.direct_spawn_funcs` would ask whether a spawner is named
             # after the ALIAS and miss every aliased import. See module docstring's route-c
             # section and `_resolve_imported_defs`.
-            if route is None and callee in imported_here:
+            if route is None and (callee in imported_here or callee in qualified_here):
                 _resolved_defs = _resolve_imported_defs(index, relpath, callee)
                 _reaches_spawner = any(
                     any(

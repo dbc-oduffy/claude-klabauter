@@ -73,7 +73,7 @@ def test_empty_index_read_fails_open_with_one_line(tmp_path, monkeypatch):
             return 0, ""
         return real_run_git(args, cwd, timeout, extra_env)
 
-    monkeypatch.setattr(dc, "_run_git", empty_index)
+    monkeypatch.setattr(dc._dc_git_probe, "_run_git", empty_index)
     out = _text(
         dc.check_validate_commit('git commit -q -m "m" -- a.py b.py', cwd=str(repo))
     )

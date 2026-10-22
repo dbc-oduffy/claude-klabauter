@@ -2,8 +2,9 @@
 coordinator_core.hooks.nudge_em_code_dispatch — PreToolUse op.
 
 Purpose: Routes the EM's (main-agent) inline code writes to executor dispatch.
-The async `_handler` below stays advisory; `op()` advises in every
-session (unsized, sized, plan-routed) and never denies the EM's product-code Edits.
+The async `_handler` below stays advisory. `op()` denies the EM's product-code
+write in an unsized session at guard level strict (an author box) and advises at warn
+(a consumer box); a sized or plan-routed session gets the advisory at every level.
 
 Suppression conditions (no_advisory):
   1. agent_id present — subagent writes are allowed; executors write code. The one exception is
@@ -19,12 +20,13 @@ Suppression conditions (no_advisory):
   5. `op()` ONLY (the async `_handler` above never receives old_string/new_string/
      content — see the MultiEdit negative-spec below): the triggering edit is a
      semantic-bypass shape — whitespace-only, comment/docstring-only (heuristic,
-     see `_is_comment_or_docstring_only_diff`), or a single-token rename. This is
-     the size-floor mechanism for the EM-code-dispatch nudge (plan
-     2026-08-01-advisory-firing-shape-predicate.md C5): a numeric length/diff-size
-     threshold derived from a session-local transcript histogram or recent-commit
-     diff sizes was REJECTED (one session's datapoint, wrong unit — see
-     `_is_semantic_bypass_edit`'s docstring) in favor of this semantic mechanism.
+     see `_is_comment_or_docstring_only_diff`), or a single-token rename. These
+     shapes are the size floor for every session. A learned threshold (session
+     histogram, recent-commit sizes) is not used. Separately, a recorded XS lane
+     or a post-landing residue window applies a ruled diff-measured budget
+     (`session.xs_lane_budget`: 2 files, 30 changed lines) to the EM's own
+     edits; authority is the APM ruling on calibration-ladder findings 60/61
+     (relayed ask R1).
 
   6. `op()` ONLY: scratch/tmp paths. Elsewhere `op()` answers the main EM's
      product-code write with a repeating advisory.
@@ -38,8 +40,11 @@ Negative-spec:
     # TODO(pcore-04 C5): if MultiEdit edits[] forwarding is added to the hook
     #   input contract, re-plumb the extension-check to walk edits[].file_path
     #   the same way nudge-em-code-dispatch.js lines 97-105 do.
-  - This op is read-only (per ipc.py:28-32 negative-spec). Sentinels are only CHECKED,
-    never written — writing the dispatch-nudge-ok sentinel remains the EM's job via bash.
+  - `op()` never writes the working tree. Its one write is the session's XS-lane/residue
+    record (a session-dir file, like the escape log). Sentinels are only CHECKED, never
+    written — writing the dispatch-nudge-ok sentinel remains the EM's job via bash.
+  - The budget branches run before the autonomous exemption: autonomy buys no extra budget.
+    An escaped edit (`_take_escape`) is not added to the lane's path set.
 
 Spec backlink: pln-pcore-04-advisory-hook-ops-mak-b219a8 § C5
 Source: coordinator/hooks/scripts/nudge-em-code-dispatch.js
@@ -351,19 +356,12 @@ def _build_dispatch_brief(file_path: str, executor_type: str, edit_description: 
 # ---------------------------------------------------------------------------
 # Semantic-bypass mechanism (AC6) — the size floor for the nudge.
 #
-# Purpose: `op()` had zero occurrences of a length/diff-size/changed-line
-# threshold of any kind — a one-character Edit nudged identically to a
-# full-file rewrite. Plan 2026-08-01-advisory-firing-shape-predicate.md C5
-# REJECTS deriving that floor from a session-local transcript histogram or
-# from recent-commit diff sizes: one session's datapoint, wrong unit (a
-# commit aggregates many Edit calls and excludes reverted ones; the hook
-# sees exactly one tool call), and it measures what happened rather than
-# what SHOULD have been dispatched. This module ships the PLAN-PREFERRED
-# alternative instead of a guessed number: a semantic-bypass mechanism. An
+# Purpose: the size floor for the nudge is semantic, not a learned number. An
 # edit confined to whitespace, to comment/docstring text, or to a single
 # identifier rename is defensible without a threshold — it is closer to
 # what the nudge is FOR (steering substantive code authorship to a
-# dispatched executor) than any character count would be.
+# dispatched executor) than any character count would be. The ruled
+# diff-measured budget is a separate layer (`_budget_decision`).
 #
 # Negative-spec: this bypass exists ONLY on `op()`. The async `_handler`
 # above (the pcore-04 mcp_tool op) never receives old_string/new_string or
@@ -512,7 +510,11 @@ def _session_sizing_state(payload: dict, session_id: str) -> tuple[bool, bool]:
             return True, False
         rels = sizing._session_touched_sizing_files(session_id, repo_root)
         if not rels:
-            return False, False
+            # A commit releases touched.txt; a Workflow run this session launched
+            # outlives it, so a session that fired the route stays sized.
+            from coordinator_core.hooks.flag_em_poll_in_flight import session_workflow_run_ids
+
+            return bool(session_workflow_run_ids(session_id)), False
         routes = {(sizing._load_sizing_object(repo_root, rel) or {}).get("route") for rel in rels}
         plan_pending = bool(routes & set(sizing._SKILL_BY_ROUTE)) and not (
             sizing._session_touched_plan_files(session_id, repo_root)
@@ -580,10 +582,89 @@ def _size_stage_write_deny(payload: dict) -> dict | None:
     return apply_guard_level("nudge-em-code-dispatch", deny("PreToolUse", _SIZE_STAGE_DENY))
 
 
+def _budget_text(prefix: str, usage) -> str:
+    return f"{prefix} {usage.files}/2 files, {usage.lines}/30 lines."
+
+
+def _budget_deny(text: str) -> dict | None:
+    return apply_guard_level("nudge-em-code-dispatch", deny("PreToolUse", text))
+
+
+def _budget_decision(payload: dict, session_id: str, file_path: str, tool_input: dict) -> tuple[bool, dict | None]:
+    """The XS-lane / residue-window answer: (handled, result). Not handled means the session is in
+    neither state and the sizing branches decide. Runs after the escape check and ahead of the
+    autonomous exemption, so autonomy cannot buy past the budget."""
+    from coordinator_core.hooks.nudge_unrouted_sizing import _repo_root
+    from coordinator_core.session import xs_lane_budget as xlb
+
+    root = _repo_root(payload)
+    if root is None or not session_id:
+        return False, None
+    try:
+        s_plus = xlb.touched_s_or_larger(session_id, root)
+        rec = xlb.read_lane(root, session_id)
+        if s_plus and rec is None:
+            from coordinator_core import warp_live
+            from coordinator_core.git import git_state
+            from coordinator_core.hooks.flag_em_poll_in_flight import session_workflow_run_ids
+
+            landed = bool(session_workflow_run_ids(session_id)) and (
+                warp_live.live_run_for_session(root, session_id) is None
+            )
+            head = git_state.head_sha(root) if landed else None
+            if head and xlb.open_residue_window(root, session_id, head):
+                rec = xlb.read_lane(root, session_id)
+    except Exception:
+        return False, None
+    if rec is None:
+        return False, None
+    kind = rec.get("kind")
+    if s_plus and kind != xlb.KIND_RESIDUE:
+        return False, None
+    residue = kind == xlb.KIND_RESIDUE
+    if residue:
+        executor, _ = _derive_executor_info(file_path)
+        over_text = lambda u: _budget_text("Residue budget spent:", u) + f" Dispatch {executor} for the rest."
+    else:
+        over_text = lambda u: _budget_text("XS budget spent:", u) + " Size S or larger. " + fire_step()
+    if rec.get("state") == xlb.STATE_SPENT:
+        usage = xlb.Usage(0, 0, True)
+        return True, _budget_deny(over_text(usage))
+    try:
+        projected = xlb.project(file_path, tool_input)
+        if projected is None:
+            raise ValueError("edit cannot be projected")
+        usage = xlb.measure(root, rec, file_path, projected)
+    except Exception as exc:
+        text = f"Budget unmeasurable ({type(exc).__name__}: {exc}). Make the change as one plain Edit per file."
+        return True, _budget_deny(text)
+    if usage.over:
+        try:
+            xlb.mark_spent(root, session_id)
+        except Exception:
+            pass
+        return True, _budget_deny(over_text(usage))
+    try:
+        xlb.add_path(root, session_id, file_path)
+    except Exception:
+        pass
+    if residue:
+        return True, context_only(
+            "PreToolUse",
+            _SIZED_ADVISORY + " " + _budget_text("residue", usage),
+        )
+    return True, None
+
+
 def op(payload: dict) -> dict | None:
-    """Advise on the main EM's product-code write; never deny the EM. The advisory
+    """Route the main EM's product-code write to the session's next step. Unsized, it is
+    denied at guard level strict and advised at warn; sized, it is advised. The text
     repeats on every Edit and names the step for the session's sizing state. A subagent
     (`agent_id` present) is denied only as a size-stage run spawn (`_size_stage_write_deny`).
+
+    A recorded XS lane allows in-budget edits and denies the first past 2 files / 30 changed
+    lines; a landed S-or-larger session's residue edits are advised under that budget and denied
+    over it (`_budget_decision`).
 
     Exempt: doc/data files, bootstrap/out-of-repo, semantic-bypass
     diffs, scratch/tmp, autonomous mode, and a sentinel carrying a reason
@@ -634,12 +715,18 @@ def op(payload: dict) -> dict | None:
     if _take_escape(payload, session_id, file_path, "nudge-em-code-dispatch"):
         return None
 
-    if resolve_mode("autonomous", session_id):
-        return None
+    handled, budget_result = _budget_decision(payload, session_id, file_path, tool_input)
+    if handled:
+        return budget_result
 
     has_sizing, plan_pending = _session_sizing_state(payload, session_id)
+    # Autonomous mode exempts a sized session only: the EM can toggle it on itself,
+    # so it must not buy the way past sizing.
+    if has_sizing and resolve_mode("autonomous", session_id):
+        return None
     if not has_sizing:
-        return context_only("PreToolUse", _UNSIZED_ADVISORY)
+        # Author box (strict): denied until the session sizes. Consumer (warn): advisory.
+        return apply_guard_level("nudge-em-code-dispatch", deny("PreToolUse", _UNSIZED_ADVISORY))
     if plan_pending:
         return context_only("PreToolUse", _PLAN_ROUTE_ADVISORY)
     return context_only("PreToolUse", _SIZED_ADVISORY)

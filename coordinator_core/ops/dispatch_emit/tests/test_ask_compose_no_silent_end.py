@@ -44,7 +44,7 @@ def _tail(script: str) -> str:
 def _drive(script: str, falsifier: dict | None, delivery: dict | None) -> object:
     program = _HARNESS % (json.dumps(falsifier), json.dumps(delivery), _tail(script))
     out = subprocess.run(
-        ["node", "-e", program], capture_output=True, text=True, check=True, **no_console_creationflags()
+        ["node", "-"], input=program, capture_output=True, text=True, check=True, **no_console_creationflags()
     ).stdout
     return json.loads(out)
 

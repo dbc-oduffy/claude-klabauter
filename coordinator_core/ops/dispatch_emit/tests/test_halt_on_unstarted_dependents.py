@@ -45,7 +45,7 @@ def _go(rows):
     if node is None:
         pytest.skip("node is not installed")
     proc = subprocess.run(
-        [node, "-e", _HARNESS % {"helper": emit._run_row_helper_js(), "rows": rows}],
+        [node, "-"], input=_HARNESS % {"helper": emit._run_row_helper_js(), "rows": rows},
         capture_output=True, text=True, encoding="utf-8", timeout=60,
         **no_console_creationflags(),
     )
@@ -122,7 +122,7 @@ def test_owed_gate_clause_names_exactly_the_gate_owed_rows_commands():
         "const _gateBaselineText = (c) => '[baseline:' + c.join('|') + ']';"
         f"console.log(JSON.stringify({expr}));"
     )
-    proc = subprocess.run([node, "-e", prog], capture_output=True, text=True, encoding="utf-8",
+    proc = subprocess.run([node, "-"], input=prog, capture_output=True, text=True, encoding="utf-8",
                           timeout=60, **no_console_creationflags())
     assert proc.returncode == 0, proc.stderr
     text = json.loads(proc.stdout)
@@ -138,7 +138,7 @@ def test_owed_gate_clause_is_empty_when_nothing_is_owed():
         pytest.skip("node is not installed")
     expr = emit._owed_gates_clause({"A": ["tsc --noEmit"]}).strip("\x01")
     prog = f"const _gateOwed = {{}}; const _gateBaselineText = () => 'x'; console.log(JSON.stringify({expr}));"
-    proc = subprocess.run([node, "-e", prog], capture_output=True, text=True, encoding="utf-8",
+    proc = subprocess.run([node, "-"], input=prog, capture_output=True, text=True, encoding="utf-8",
                           timeout=60, **no_console_creationflags())
     assert proc.returncode == 0, proc.stderr
     assert json.loads(proc.stdout) == ""

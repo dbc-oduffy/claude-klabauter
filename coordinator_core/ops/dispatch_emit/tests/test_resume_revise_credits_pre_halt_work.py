@@ -99,6 +99,14 @@ def test_the_composed_verdict_agrees_with_credited_rows(monkeypatch, note, met_b
     assert ("commit" in _labels(out)) is credited
 
 
+def test_the_pre_halt_credit_const_is_declared_before_every_read(monkeypatch):
+    script = _script(monkeypatch)
+    decl = script.index("const _preHaltCredit =")
+    reads = [i for i in range(len(script)) if script.startswith("_preHaltCredit", i) and i != decl + len("const ")]
+    assert reads, "composed script no longer reads _preHaltCredit"
+    assert all(decl < i for i in reads), (decl, reads)
+
+
 def test_the_halt_next_action_names_the_pre_halt_credit_path(monkeypatch):
     out = _run(_script(monkeypatch), verify=_met("none"), resume=_REVISED)
     assert "work committed before the halt meet it" in out["result"]["halted_by"]["next_action"]

@@ -21,7 +21,7 @@ def _rules(verdict: dict) -> dict:
         pytest.skip("node not on PATH")
     script = f"const log = () => {{}}; console.log(JSON.stringify({_JUDGE_VERDICT_RULES_JS}({json.dumps(verdict)})));"
     out = subprocess.run(
-        [node, "-e", script], capture_output=True, text=True, check=True,
+        [node, "-"], input=script, capture_output=True, text=True, check=True,
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     )
     return json.loads(out.stdout)

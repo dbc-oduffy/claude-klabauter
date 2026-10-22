@@ -181,7 +181,7 @@ def _emitted_run_record_argv(cwd, *, record: str, declared: list, decisions: str
         "record": record, "declared": declared, "decisions": decisions,
     }
     out = subprocess.run(
-        [node, "-e", script], capture_output=True, text=True, check=False,
+        [node, "-"], input=script, capture_output=True, text=True, check=False,
         env={**os.environ, "T_BINDINGS": json.dumps(bindings)}, creationflags=_no_console(),
     )
     assert out.returncode == 0, out.stderr
@@ -897,7 +897,7 @@ def test_paths_reach_the_emitted_command_as_one_single_quoted_token():
         + f"(async () => {{ const agent = async (p) => console.log(p);\n{sweep}; }})();"
     )
     out = subprocess.run(
-        [node, "-e", script], capture_output=True, text=True, check=False,
+        [node, "-"], input=script, capture_output=True, text=True, check=False,
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     )
     assert out.returncode == 0, out.stderr
@@ -960,7 +960,7 @@ def test_ledger_sweep_encodes_each_payload_once():
         + "console.log('COUNTS ' + _n + ' ' + _m); })();"
     )
     out = subprocess.run(
-        [node, "-e", script], capture_output=True, text=True, check=False,
+        [node, "-"], input=script, capture_output=True, text=True, check=False,
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     )
     assert out.returncode == 0, out.stderr
@@ -1091,7 +1091,7 @@ def _size_chain_command(row_id: str) -> str:
         + f"\nconsole.log(_sizeChainCmd({json.dumps(_SCOUTED)}, {json.dumps({'row_id': row_id, 'path': 'p', 'digest': 'd'})}, 's.yaml'));"
     )
     out = subprocess.run(
-        [node, "-e", js], capture_output=True, text=True, check=False,
+        [node, "-"], input=js, capture_output=True, text=True, check=False,
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     )
     assert out.returncode == 0, out.stderr

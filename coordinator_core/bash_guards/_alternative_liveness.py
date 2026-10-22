@@ -131,6 +131,14 @@ from coordinator_core.bash_guards._command_tokenizer import (
     exceeds_tokenizable_ceiling as _exceeds_tokenizable_ceiling,
 )
 from coordinator_core.bash_guards import dispatch_checks as _dc
+from coordinator_core.bash_guards import (
+    _dc_blanket_add,
+    _dc_commit,
+    _dc_git_misc,
+    _dc_git_shared,
+    _dc_rewrites,
+    _dc_rm,
+)
 from coordinator_core.temp_layout import managed_tempdir
 from coordinator_core.bash_guards import block_approval_sentinel_creation
 from coordinator_core.bash_guards import block_disarm_marker_sentinel_creation
@@ -277,7 +285,16 @@ def _probe_env() -> Dict[str, str]:
     return env
 
 
-_DISPATCH_CHECK_SOURCE_MODULES = (_dc, guard_offer_git_c, guard_head_tail_rewrite)
+_DISPATCH_CHECK_SOURCE_MODULES = (
+    _dc,
+    _dc_git_misc,
+    _dc_rm,
+    _dc_commit,
+    _dc_blanket_add,
+    _dc_rewrites,
+    guard_offer_git_c,
+    guard_head_tail_rewrite,
+)
 
 
 def discover_dispatch_check_names() -> List[str]:
@@ -581,8 +598,8 @@ def _trigger_check_blanket_git_add() -> Optional[Dict[str, Any]]:
     explicit ``git -C <dir> add -A`` rather than relying on whatever
     directory the test runner's own process happens to be in.
 
-    ``_is_hazard_repo`` is swapped on `dispatch_checks`'s own module
-    attribute (``_dc._is_hazard_repo``) for the duration of this one call,
+    ``_is_hazard_repo`` is swapped on its home module
+    attribute (``_dc_git_shared._is_hazard_repo``) for the duration of this one call,
     same convention as `_trigger_block_noncanonical_branch_creation` above
     -- a temporary swap on the
     SHIPPED guard's own module, restored in `finally`, never a persistent
@@ -602,13 +619,13 @@ def _trigger_check_blanket_git_add() -> Optional[Dict[str, Any]]:
     value instead and the whole gate silently stops matching -- confirmed
     live during this dispatch (quoted form returns None, unquoted fires).
     """
-    orig_hazard = _dc._is_hazard_repo
-    _dc._is_hazard_repo = lambda git_root: True
+    orig_hazard = _dc_git_shared._is_hazard_repo
+    _dc_git_shared._is_hazard_repo = lambda git_root: True
     try:
         with _scratch_git_repo() as repo:
             return _dc.check_blanket_git_add("git -C %s add -A" % repo, "altlive-probe")
     finally:
-        _dc._is_hazard_repo = orig_hazard
+        _dc_git_shared._is_hazard_repo = orig_hazard
 
 
 def _trigger_p4_verb_fence() -> Optional[Dict[str, Any]]:

@@ -141,7 +141,7 @@ def test_member_result_helper_returns_each_members_own_line_or_null():
         + "console.log(JSON.stringify([_memberResult(r,'C1'),_memberResult(r,'C10'),_memberResult(r,'C2'),_memberResult(null,'C1')]));"
     )
     out = subprocess.run(
-        [shutil.which("node"), "-e", probe], capture_output=True, text=True, timeout=30,
+        [shutil.which("node"), "-"], input=probe, capture_output=True, text=True, timeout=30,
         **no_console_creationflags(),
     )
     assert out.stdout.strip() == '["DONE: ok","PARTIAL: half",null,null]'
@@ -159,7 +159,7 @@ def test_member_result_credits_decorated_and_inline_status_lines_each_to_own_row
         + "console.log(JSON.stringify(['C0','S1','T1','C1','C10','Z9','Q'].map(i=>_memberResult(r,i))));"
     )
     out = subprocess.run(
-        [shutil.which("node"), "-e", probe], capture_output=True, text=True, timeout=30,
+        [shutil.which("node"), "-"], input=probe, capture_output=True, text=True, timeout=30,
         **no_console_creationflags(),
     )
     assert out.stdout.strip() == (
@@ -196,7 +196,7 @@ def test_hq07_reply_classifies_both_rows_done_through_the_real_run_row_regexes()
         + "console.log(JSON.stringify(['C0','S1','T1'].map(i=>cls(_memberStatus(r,i)))));"
     )
     out = subprocess.run(
-        [shutil.which("node"), "-e", probe], capture_output=True, text=True, timeout=30,
+        [shutil.which("node"), "-"], input=probe, capture_output=True, text=True, timeout=30,
         **no_console_creationflags(),
     )
     assert out.stdout.strip() == '["done","done","unanswered"]'

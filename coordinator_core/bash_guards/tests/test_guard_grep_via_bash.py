@@ -44,7 +44,7 @@ from __future__ import annotations
 import inspect
 
 from coordinator_core.bash_guards._helpers import OVERRIDE_KEYS_DOC_DISPLAY
-from coordinator_core.bash_guards import dispatch_checks
+from coordinator_core.bash_guards import _dc_rewrites, dispatch_checks
 from coordinator_core.bash_guards import guard_grep_via_bash as guard
 
 
@@ -198,7 +198,7 @@ class TestPartialRewriteMessageSizeFloorC3:
         The 450 pin is unchanged."""
         from coordinator_core.bash_guards._message_size import measure_envelope
 
-        monkeypatch.setattr(dispatch_checks, "_bt_python3_invocation", lambda: "python3")
+        monkeypatch.setattr(_dc_rewrites, "_bt_python3_invocation", lambda: "python3")
         out = _envelope("grep -rn TODO src/ | wc -l", host_is_windows=True)
         measurement = measure_envelope({"hookSpecificOutput": out}, band="advisory-rewrite")
         assert measurement.is_speaker

@@ -473,6 +473,14 @@ def test_scoped_pytest_after_workflow_run_never_denied(repo, monkeypatch, tmp_pa
         assert g.check(_bash(repo, "pytest pkg/test_a.py -q")) is None
 
 
+def test_broad_scoped_pytest_after_workflow_run_counts(repo, monkeypatch, tmp_path) -> None:
+    _executor_ran(repo)
+    _workflow_run_record(monkeypatch, tmp_path)
+    cmd = "pytest " + " ".join(f"pkg/test_a.py::t{i}" for i in range(11))
+    assert g.check(_bash(repo, cmd)) is None
+    assert _denied(g.check(_bash(repo, cmd)))
+
+
 def test_unscoped_pytest_after_workflow_run_still_denied(repo, monkeypatch, tmp_path) -> None:
     _executor_ran(repo)
     _workflow_run_record(monkeypatch, tmp_path)

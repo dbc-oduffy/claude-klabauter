@@ -19,7 +19,7 @@ _PREFIX = ask_compose._DESIGN_PREFIX_JS
 
 def _prefix_value(gate: dict) -> str:
     proc = subprocess.run(
-        ["node", "-e", f"const _gate = {json.dumps(gate)}; process.stdout.write({_PREFIX});"],
+        ["node", "-"], input=f"const _gate = {json.dumps(gate)}; process.stdout.write({_PREFIX});",
         capture_output=True, text=True, check=True,
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     )

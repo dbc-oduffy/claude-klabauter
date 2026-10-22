@@ -104,6 +104,7 @@ from coordinator_core.ops.dispatch_emit import route_dispatch_js as _route_js
 from coordinator_core.ops.dispatch_emit import route_preference as _route_pref
 from coordinator_core.ops.dispatch_emit.design_route import DESIGN_ROUTE_KEY, STAGE_REFUSAL_PREFIX, next_action as _design_next_action
 from coordinator_core.ops.dispatch_emit.ask_fanout_contract import FANOUT_OP, run_parent_copy_rel
+from coordinator_core.ops.dispatch_emit.judgment_halt import pull_split_prompt, rule_and_refire_next_action_js
 from coordinator_core.ops.dispatch_emit.ask_plan_blitz import STAGE_FN as _PLAN_BLITZ_FN
 from coordinator_core.ops.dispatch_emit.requirements_ledger import (
     LEDGER_VIEW_FILE,
@@ -322,7 +323,27 @@ _ACCEPT_SCHEMA = _obj(
     },
 )
 _PLAN_SCHEMA = _obj(["plan_rel"], {"plan_rel": _STR})
-_REVISE_SCHEMA = _obj(["plan_rel"], {"plan_rel": _STR, "pull_class": _STR, "verdict": _STR})
+#: The readiness reply's judgment fields, copied through a revise leg so a pull halt can name its rulings.
+_PULL_JUDGMENT_PROPS = {
+    "rulings": {"type": "array", "items": {"type": "object"}},
+    "blocking_findings": {"type": "number"},
+    "split_recommended": {"type": "boolean"},
+}
+_REVISE_SCHEMA = _obj(["plan_rel"], {"plan_rel": _STR, "pull_class": _STR, "verdict": _STR, **_PULL_JUDGMENT_PROPS})
+#: The pull split-proposal agent's reply: the xl-exit split shape `_append_split_stage` consumes.
+_PULL_SPLIT_SCHEMA = _obj(
+    ["pick", "slices"],
+    {
+        "pick": {"type": "string", "enum": ["split"]},
+        "slices": {"type": "array", "items": {"type": "object"}},
+        "parent_id": _STR,
+        "runs": {"type": "array", "items": {"type": "object"}},
+        "fire": {"type": "array", "items": {"type": "object"}},
+        "error": _STR,
+    },
+)
+#: The resume-with-rulings leg's reply: the ruling ids it applied to the plan.
+_RULED_SCHEMA = _obj(["plan_rel", "applied"], {"plan_rel": _STR, "applied": {"type": "array", "items": _STR}})
 _REVIEW_SIGNALS_PROP = {"review_signals": {"type": "array", "items": {"type": "string"}}}
 _FALSIFIER_PROP = {"falsifier": {"type": ["object", "null"]}}
 _SPINE_REVIEW_SCHEMA = _obj(
@@ -525,7 +546,7 @@ _PLAN_STAGED_SCHEMA = _obj(
 )
 _REVISE_STAGED_SCHEMA = _obj(
     ["plan_rel"],
-    {"plan_rel": _STR, "pull_class": _STR, "verdict": _STR, **_STAGE_REPLY_PROP},
+    {"plan_rel": _STR, "pull_class": _STR, "verdict": _STR, **_PULL_JUDGMENT_PROPS, **_STAGE_REPLY_PROP},
 )
 _SPINE_REVIEW_STAGED_SCHEMA = _obj(
     ["plan_rel"],
@@ -2338,6 +2359,26 @@ def compose_ask_script(
                 f"planPath: {plan_path_js}, executionOpen: true }}] }});"
             )
 
+        ruled_prompt = _cat(
+            f"{head}\n\n{anchor}\n\n",
+            "phase: apply-rulings\n\nThis run resumes the pulled plan at ",
+            "js:_gate.resume_plan",
+            ". Read the requirements ledger (path below) at run time. Its revision rows that "
+            "`workflow.revise` recorded on the halted run and whose text names a ruling id `J<n>` are "
+            "the EM's rulings on that plan's blocking findings; a revision of the original ask that "
+            "names no such id is not a ruling. Apply each ruling to the plan IN PLACE with Edit: a "
+            "prep-gate class is fixed in the plan, a review is revised or accepted, a CONTRADICTED "
+            "premise gets a `corrects:` entry and an UNRESOLVED premise a `declared_absent:` entry. "
+            "Never scaffold a new plan, never change its path, and never delete a census premise or a "
+            "review finding to clear one. Return the plan's repo-relative path as plan_rel and the "
+            "ruling ids you applied as applied (an empty list, with no edit, when the ledger carries "
+            "no ruling)." + ledger_clause,
+        )
+        ruled_call = _agent(
+            ruled_prompt, label="apply-rulings", phase="plan", agent_type=_PLAN_AUTHOR_AGENT_TYPE,
+            schema=_RULED_SCHEMA, effort=_PLAN_AUTHOR_EFFORT, run_id=run_id,
+        )
+        b.append(f"    if (_gate.resume_plan) {{ const _ruled = await {ruled_call}; _gate = {{ ..._gate, resume_rulings: (_ruled?.applied ?? []) }}; }}")
         b.append(f"    const _blitz = {_blitz_call('_gate.resume_plan ?? _spineFallback ?? null')}")
         b.append("    const _ready = (_blitz?.ready ?? [])[0];")
         if fold_stage:
@@ -2349,6 +2390,13 @@ def compose_ask_script(
             b.append(blitz_stage_read("_ready", "    "))
         b.append("    const _pulledEntry = (_blitz?.pulled ?? []).find((p) => p && p.planPath);")
         b.append("    let _repeatBlocking = null;")
+        b.append("    let _pullPlan = null;")
+        b.append("    let _pullRulings = [];")
+        b.append("    let _pullBlocking = null;")
+        b.append("    let _pullSplit = false;")
+        if not (accept_pending or xl_possible):
+            b.append("    let _splitSlices = null;")
+            b.append("    let _splitFan = null;")
         b.append("    if (!_planRel && _pulledEntry) {")
         revise_prompt = _cat(
             f"{head}\n\n{anchor}\n\n",
@@ -2361,7 +2409,9 @@ def compose_ask_script(
             "mechanical_repairs entry in place with Edit, then re-run the op with the plan alone "
             "(no coverage, no reviews: the repairs answered those findings, and the same values "
             "would pull the plan again), and return that reply's pull_class and verdict "
-            "alongside plan_rel.\n\nPull reason:\n",
+            "alongside plan_rel. Also return that reply's rulings, blocking_findings and "
+            "split_recommended verbatim; when the pull's coverage or reviews still stand unanswered "
+            "after your repairs, take them from the run that carried those values instead.\n\nPull reason:\n",
             "js:String(_pulledEntry.reason ?? '')",
             "\n\nPull coverage: ",
             "js:JSON.stringify(_pulledEntry.coverage ?? null)",
@@ -2383,6 +2433,9 @@ def compose_ask_script(
         b.append(
             f"      const _revised = await {_agent(revise_prompt, label='plan-revise', phase='plan', agent_type=_PLAN_AUTHOR_AGENT_TYPE, schema=_REVISE_STAGED_SCHEMA if fold_stage else _REVISE_SCHEMA, effort=_PLAN_AUTHOR_EFFORT, run_id=run_id)};"
         )
+        b.append("      _pullPlan = _revised?.plan_rel || _pulledEntry.planPath;")
+        b.append("      _pullRulings = Array.isArray(_revised?.rulings) ? _revised.rulings : [];")
+        b.append("      _pullBlocking = typeof _revised?.blocking_findings === 'number' ? _revised.blocking_findings : null;")
         b.append(
             "      if (_revised?.pull_class === 'mechanical' && _revised?.verdict === 'ready') "
             "{ _planRel = _revised.plan_rel || _pulledEntry.planPath;"
@@ -2393,6 +2446,27 @@ def compose_ask_script(
             )
             + " } else {"
         )
+        split_prompt = (
+            _cat(f"{head}\n\n{anchor}\n\n")
+            + " + "
+            + pull_split_prompt("_pullPlan", "_sizingRel")
+        )
+        split_call = _agent(
+            split_prompt, label="pull-split", phase="plan", agent_type=_PLAN_AUTHOR_AGENT_TYPE,
+            schema=_PULL_SPLIT_SCHEMA, effort=_PLAN_AUTHOR_EFFORT, run_id=run_id,
+        )
+        b.append(
+            "      if (_revised?.split_recommended === true && _splitSlices == null "
+            f"&& !(String(_pulledEntry.reason ?? '') + String(_pulledEntry.prepGateReport ?? '')).includes({_lit(REGISTER_PIN_DRIFT_KIND)})) {{"
+        )
+        b.append("      let _pullFan = null;")
+        b.append(f"      try {{ _pullFan = await {split_call}; }} catch (_e) {{ _haltOnUsageLimit(_e); _pullFan = null; }}")
+        b.append(
+            "      if (_pullFan && _pullFan.pick === 'split' && Array.isArray(_pullFan.slices) && _pullFan.slices.length) "
+            "{ _splitSlices = _pullFan.slices; _splitFan = _pullFan; _pullSplit = true; }"
+        )
+        b.append("      }")
+        b.append("      if (!_planRel && !_pullSplit) {")
         b.append(f"      const _reblitz = {_blitz_call('_revised?.plan_rel || _pulledEntry.planPath')}")
         b.append("      const _reready = (_reblitz?.ready ?? [])[0];")
         if fold_stage:
@@ -2412,6 +2486,7 @@ def compose_ask_script(
             "&& _rePulled.blocking.every((r, i) => r === _pulledEntry.blocking[i])) "
             "{ _repeatBlocking = _rePulled.blocking; }"
         )
+        b.append("      }")
         b.append("      }")
         b.append("    }")
         from coordinator_core.ops.dispatch_emit.ask_roadmap import no_ready_reason_js as _no_ready_reason_js
@@ -2441,16 +2516,31 @@ def compose_ask_script(
             "note: _premise ? undefined : 'the pull carries no premise-check verdict: replace premise_check with the regate premise-check review {verdict[, ledger]}' };"
         )
         b.append("    }")
+        pull_refire = _refire_js(sizing_rel)
+        pull_na = rule_and_refire_next_action_js("_pullPlan", "_pullRulings", pull_refire)
         b.append(
             f"    if (_repeatBlocking && !_halted.next_action) {{ _halted = {{ halted: {_lit(HALT_REFUSAL)}, "
             "reason: 'plan-blitz pulled twice on the same blocking set', blocking: _repeatBlocking, "
-            "next_action: { kind: 'rule_on_blocking_rows', blocking: _repeatBlocking, "
+            "plan: _pullPlan, rulings: _pullRulings, blocking_findings: _pullBlocking, "
+            f"next_action: {{ ...{pull_na}, kind: 'rule_on_blocking_rows', blocking: _repeatBlocking, "
             "note: 'a second pull blocked on the same rows: rule on them (revise the plan or accept them); the same plan pulls again' }, "
             "blitz: _blitz, sizing: _sizingRel, run_id: _runId }; }"
+        )
+        b.append(
+            "    if (_pullSplit && !_halted.next_action) { _halted = { halted: "
+            f"{_lit(HALT_SPLIT)}, reason: 'plan-blitz pulled the plan with ' + _pullBlocking + ' blocking findings: split into smaller batons', "
+            "plan: _pullPlan, rulings: _pullRulings, blocking_findings: _pullBlocking, "
+            "blitz: _blitz, sizing: _sizingRel, run_id: _runId }; }"
+        )
+        b.append(
+            "    else if (_pullPlan && !_halted.next_action) { _halted = { ..._halted, "
+            "plan: _pullPlan, rulings: _pullRulings, blocking_findings: _pullBlocking, "
+            f"next_action: {pull_na} }}; }}"
         )
         b.append("    }")
         b.append("    }")
         b.append("  }")
+        _append_split_stage(b)
     else:
         b.append(
             f"  if (!_halted && _gate.arm === {_lit(ARM_M_PLUS)}) {{ _halted = {{ halted: {_lit(HALT_REFUSAL)}, "
@@ -3350,7 +3440,7 @@ def _commit_stage_call(
         "stage). Run exactly this one command as its own Bash call: no `cd &&`, no wrapper, no env "
         f"prefix, no edit to it. `{LAND_RUN_OP}` derives the paths from the run's commit "
         "request, so no `paths` array is owed.\n\n",
-        f"coordinator-invoke {LAND_RUN_OP} --params-file {params_file.as_posix()}",
+        f"coordinator-invoke {LAND_RUN_OP} --params-file {params_file.as_posix()} --repo {Path(repo_root).as_posix()}",
         "\n\nThe engine reads the params block below. Do not copy, edit or pass it.\n\n",
         "js:_terminalCommitParamsBlock({ ..._nextAction.params, " + _TARGETED_TESTS_JS + " "
         f"script_path: _nextAction.params.script_path ?? {_lit(script_path or '')}, "
@@ -3386,7 +3476,7 @@ def _halt_record_commit_fn(
         f"{head}\n\n{anchor}\n\n",
         "phase: commit\n\nThis run halted. Run exactly this one command as its own Bash call: no "
         "`cd &&`, no wrapper, no env prefix, no edit to it.\n\n",
-        f"coordinator-invoke {LAND_RUN_OP} --params-file {params_file.as_posix()}",
+        f"coordinator-invoke {LAND_RUN_OP} --params-file {params_file.as_posix()} --repo {Path(repo_root).as_posix()}",
         "\n\nThe engine reads the params block below. Do not copy, edit or pass it.\n\n",
         f"js:_terminalCommitParamsBlock({{ script_path: {_lit(script_path or '')}, run_id: _runId, "
         f"run_token: _RUN_TOKEN, {HALTED_RECORD_PARAM}: _halted, doc_paths: {_DOC_PATHS_JS}, "

@@ -1698,11 +1698,11 @@ def _heredoc_repo_write_advise_setup(
     # The target must read as inside a session repo or the guard stays silent;
     # patch that seam rather than pointing cwd at a fake root, which the
     # advisory counter would then create on disk.
-    from coordinator_core.bash_guards import dispatch_checks
+    from coordinator_core.bash_guards import _dc_rewrites
 
-    mp.setattr(dispatch_checks, "_heredoc_target_outside_any_session_repo", lambda target, payload: False)
+    mp.setattr(_dc_rewrites, "_heredoc_target_outside_any_session_repo", lambda target, payload: False)
     # scratch_dir lives under $TEMP, which heredoc-repo-write-advise treats as scratch.
-    mp.setattr(dispatch_checks, "_heredoc_write_target_is_scratch", lambda abs_path: False)
+    mp.setattr(_dc_rewrites, "_heredoc_write_target_is_scratch", lambda abs_path: False)
     return {_CWD_OVERRIDE_KEY: str(scratch_dir)}
 
 
@@ -4077,6 +4077,25 @@ def _fire_hand_dispatch_deny_nested_control() -> Optional[Dict[str, Any]]:
     return _fire_hand_dispatch_deny("coordinator:plan-author", "Write the plan.", agent_id="a1")
 
 
+def _fire_general_purpose_code_handoff(
+    prompt: str, subagent_type: str = "general-purpose"
+) -> Optional[Dict[str, Any]]:
+    from coordinator_core.hooks import general_purpose_code_handoff_deny as _leaf
+
+    payload = {"tool_name": "Agent", "tool_input": {"subagent_type": subagent_type, "prompt": prompt}}
+    return _to_envelope_or_none(_leaf.general_purpose_code_handoff_deny(payload, subagent_type))
+
+
+def _fire_general_purpose_code_handoff_fire() -> Optional[Dict[str, Any]]:
+    return _fire_general_purpose_code_handoff("Edit coordinator_core/foo.py to fix the parser.")
+
+
+def _fire_general_purpose_code_handoff_control() -> Optional[Dict[str, Any]]:
+    return _fire_general_purpose_code_handoff(
+        "Edit coordinator_core/foo.py to fix the parser.", "coordinator:executor"
+    )
+
+
 def _fire_submit_engine_ask_control() -> Optional[Dict[str, Any]]:
     payload = {
         "tool_name": "Agent", "agent_id": "a1", "tool_input": {"subagent_type": "coordinator:sizing-scout"},
@@ -4132,6 +4151,29 @@ def _fire_nudge_em_code_dispatch() -> Optional[Dict[str, Any]]:
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr(_hook_nudge_em_code_dispatch, "_is_bootstrap_or_out_of_repo", lambda file_path: False)
         return _to_envelope_or_none(_hook_nudge_em_code_dispatch.op(payload))
+
+
+def _fire_nudge_em_code_dispatch_spent(kind: str) -> Optional[Dict[str, Any]]:
+    from coordinator_core.session import xs_lane_budget as xlb
+
+    payload = {
+        "tool_input": {"file_path": "/repo/src/module.py", "content": "def foo():\n    return 42\n"},
+        "session_id": "sess-nemcd-%s-%s" % (kind, uuid.uuid4().hex),
+    }
+    record = {"kind": kind, "state": "spent", "base_sha": "0" * 40, "paths": []}
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(_hook_nudge_em_code_dispatch, "_is_bootstrap_or_out_of_repo", lambda file_path: False)
+        mp.setattr(xlb, "read_lane", lambda root, sid: record)
+        mp.setattr(xlb, "touched_s_or_larger", lambda sid, root: kind == "residue")
+        return _to_envelope_or_none(_hook_nudge_em_code_dispatch.op(payload))
+
+
+def _fire_nudge_em_code_dispatch_xs_over() -> Optional[Dict[str, Any]]:
+    return _fire_nudge_em_code_dispatch_spent("xs")
+
+
+def _fire_nudge_em_code_dispatch_residue_over() -> Optional[Dict[str, Any]]:
+    return _fire_nudge_em_code_dispatch_spent("residue")
 
 
 def _fire_nudge_em_code_dispatch_control() -> Optional[Dict[str, Any]]:
@@ -6364,6 +6406,13 @@ HOOK_ROWS: List[HookRow] = [
         _fire_enforce_agent_model_pin_control,
     ),
     HookRow("nudge_em_code_dispatch", "fire-code-write", True, _fire_nudge_em_code_dispatch),
+    HookRow("nudge_em_code_dispatch", "fire-xs-budget-spent", True, _fire_nudge_em_code_dispatch_xs_over),
+    HookRow(
+        "nudge_em_code_dispatch",
+        "fire-residue-budget-spent",
+        True,
+        _fire_nudge_em_code_dispatch_residue_over,
+    ),
     HookRow(
         "nudge_em_code_dispatch", "control-doc-write", False, _fire_nudge_em_code_dispatch_control
     ),
@@ -6431,6 +6480,8 @@ HOOK_ROWS: List[HookRow] = [
     HookRow("hand_dispatch_deny", "fire-roadmap-planner", True, _fire_hand_dispatch_deny_roadmap_planner),
     HookRow("hand_dispatch_deny", "control-mise-prep-brief", False, _fire_hand_dispatch_deny_mise_prep_control),
     HookRow("hand_dispatch_deny", "control-nested-dispatch", False, _fire_hand_dispatch_deny_nested_control),
+    HookRow("general_purpose_code_handoff_deny", "fire-code-edit-handoff", True, _fire_general_purpose_code_handoff_fire),
+    HookRow("general_purpose_code_handoff_deny", "control-typed-executor", False, _fire_general_purpose_code_handoff_control),
     HookRow("submit_bug_blitz", "fire-on-main", True, _fire_submit_bug_blitz_main),
     HookRow("submit_bug_blitz", "fire-no-targets", True, _fire_submit_bug_blitz_no_targets),
     HookRow("submit_bug_blitz", "fire-unknown-arg", True, _fire_submit_bug_blitz_unknown_arg),

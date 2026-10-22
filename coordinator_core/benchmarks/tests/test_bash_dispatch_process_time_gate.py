@@ -227,7 +227,7 @@ def test_message_baseline_capture_is_non_empty_and_every_row_is_a_non_negative_i
 
 
 def test_message_baseline_substitutes_out_the_resolved_interpreter_prefix():
-    from coordinator_core.bash_guards import dispatch_checks
+    from coordinator_core.bash_guards import _dc_rewrites as dispatch_checks
     from coordinator_core.benchmarks import bash_dispatch_probe as probe
 
     original = dispatch_checks._bt_python3_invocation

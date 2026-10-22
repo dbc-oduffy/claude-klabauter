@@ -374,6 +374,8 @@ def normalize_sizing_rel(repo_root: Path, sizing_path: str) -> str:
         except (ValueError, OSError):
             return text
     return os.path.normpath(text).replace("\\", "/")
+
+
 def run_owns_sizing(repo_root: Path, session_id: str, sizing_rel: str) -> bool:
     """True when a live run this session emitted names `sizing_rel`: from its emit (a `--sizing`
     run) or from its gate's bind (a raw ask). A sizing the session merely wrote while a raw ask
@@ -386,6 +388,23 @@ def run_owns_sizing(repo_root: Path, session_id: str, sizing_rel: str) -> bool:
         and str(record.get("sizing_rel") or "").replace("\\", "/") == want
         for record in live_records(repo_root)
     )
+
+
+def session_holds_run(repo_root: Path, session_id: str) -> bool:
+    """True when a run this session minted is held in `repo_root`: a fresh live record or a fresh
+    claimed one (a run mid terminal-commit still writes and commits) carries `session_id`.
+    Ownership is the engine-minted token record, never a caller value. `held_records` does not
+    age claimed records, so they are checked with `_fresh` here: an orphaned claim admits nothing
+    past `TTL_SECONDS`. One directory listing each; no spawn; never raises."""
+    if not isinstance(session_id, str) or not session_id:
+        return False
+    try:
+        return any(
+            record.get("session_id") == session_id and _fresh(record)
+            for record in held_records(Path(repo_root))
+        )
+    except (OSError, ValueError, TypeError):
+        return False
 
 
 def token_params_from_command(raw_cmd: str) -> Optional[dict]:

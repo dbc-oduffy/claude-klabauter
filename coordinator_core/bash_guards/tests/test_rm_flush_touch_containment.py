@@ -25,7 +25,7 @@ import sys
 
 import pytest
 
-from coordinator_core.bash_guards import dispatch_checks
+from coordinator_core.bash_guards import _dc_rm, dispatch_checks
 
 
 def _capture(monkeypatch):
@@ -107,7 +107,7 @@ class TestCrossDriveTargetSkipped:
             gate_calls.append((path, root_arg, result))
             return result
 
-        monkeypatch.setattr(dispatch_checks, "_is_within", spying_is_within)
+        monkeypatch.setattr(_dc_rm, "_is_within", spying_is_within)
 
         dispatch_checks._rm_flush_touch([target], "sess", str(root))
 

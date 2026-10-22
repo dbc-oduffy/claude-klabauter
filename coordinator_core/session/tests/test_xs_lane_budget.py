@@ -1,0 +1,208 @@
+"""Tests for the XS lane / residue budget leaf. Repos are hand-built loose git objects, so no test
+spawns a process."""
+
+from __future__ import annotations
+
+import hashlib
+import subprocess
+import time
+import zlib
+from pathlib import Path
+
+import pytest
+
+from coordinator_core.session import xs_lane_budget as xb
+
+
+def _obj(git: Path, kind: str, payload: bytes) -> str:
+    raw = f"{kind} {len(payload)}".encode() + b"\0" + payload
+    sha = hashlib.sha1(raw).hexdigest()
+    p = git / "objects" / sha[:2] / sha[2:]
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_bytes(zlib.compress(raw))
+    return sha
+
+
+def _tree(git: Path, entries: dict) -> str:
+    """entries: name -> ('blob'|'tree', sha). Sorted per git (dirs sort with trailing '/')."""
+    def key(item):
+        name, (kind, _) = item
+        return name + ("/" if kind == "tree" else "")
+
+    body = b""
+    for name, (kind, sha) in sorted(entries.items(), key=key):
+        mode = b"40000" if kind == "tree" else b"100644"
+        body += mode + b" " + name.encode() + b"\0" + bytes.fromhex(sha)
+    return _obj(git, "tree", body)
+
+
+def _commit(git: Path, tree: str) -> str:
+    return _obj(git, "commit", f"tree {tree}\nauthor a <a@b> 0 +0000\ncommitter a <a@b> 0 +0000\n\nm\n".encode())
+
+
+def _make_repo(tmp_path: Path, files: dict) -> tuple[Path, str]:
+    root = tmp_path / "repo"
+    git = root / ".git"
+    (git / "objects").mkdir(parents=True)
+    (git / "HEAD").write_text("ref: refs/heads/main\n")
+    sub: dict = {}
+    top: dict = {}
+    for rel, text in files.items():
+        (root / rel).parent.mkdir(parents=True, exist_ok=True)
+        (root / rel).write_text(text)
+        blob = _obj(git, "blob", text.encode())
+        if "/" in rel:
+            d, n = rel.split("/", 1)
+            sub.setdefault(d, {})[n] = ("blob", blob)
+        else:
+            top[rel] = ("blob", blob)
+    for d, ents in sub.items():
+        top[d] = ("tree", _tree(git, ents))
+    return root, _commit(git, _tree(git, top))
+
+
+def _lines(n: int, tag: str = "l") -> str:
+    return "".join(f"{tag}{i}\n" for i in range(n))
+
+
+def _edit(root: Path, rel: str, old: str, new: str, **kw) -> dict:
+    return {"file_path": str(root / rel), "old_string": old, "new_string": new, **kw}
+
+
+@pytest.fixture
+def repo(tmp_path):
+    return _make_repo(tmp_path, {"a.py": _lines(10), "b.py": _lines(10), "c.py": _lines(10), "d/e.py": _lines(5)})
+
+
+def test_open_refuses_reopen_and_residue_is_idempotent(repo):
+    root, sha = repo
+    assert xb.open_xs_lane(root, "s1", sha) is True
+    assert xb.open_xs_lane(root, "s1", sha) is False
+    assert xb.open_residue_window(root, "s1", sha) is False
+    assert xb.open_residue_window(root, "s2", sha) is True
+    assert xb.open_residue_window(root, "s2", sha) is True
+    assert xb.read_lane(root, "s2")["kind"] == "residue"
+    assert xb.read_lane(root, "absent") is None
+
+
+def test_record_shape_add_path_and_spent(repo):
+    root, sha = repo
+    xb.open_xs_lane(root, "s", sha)
+    xb.add_path(root, "s", str(root / "a.py"))
+    xb.add_path(root, "s", "a.py")
+    rec = xb.read_lane(root, "s")
+    assert rec == {"kind": "xs", "base_sha": sha, "state": "open", "paths": ["a.py"]}
+    xb.mark_spent(root, "s")
+    assert xb.read_lane(root, "s")["state"] == "spent"
+
+
+def test_corrupt_record_reads_spent_and_blocks_reopen(repo):
+    root, sha = repo
+    p = xb.lane_path(root, "s")
+    p.parent.mkdir(parents=True)
+    p.write_text("{not json")
+    assert xb.read_lane(root, "s")["state"] == "spent"
+    assert xb.open_xs_lane(root, "s", sha) is False
+
+
+def test_project_edit_replace_all_multiedit_write(repo):
+    root, _ = repo
+    f = str(root / "a.py")
+    assert xb.project(f, _edit(root, "a.py", "l1\n", "X\n")).splitlines()[1] == "X"
+    (root / "a.py").write_text("x\nx\n")
+    assert xb.project(f, _edit(root, "a.py", "x", "y")) == "y\nx\n"
+    assert xb.project(f, _edit(root, "a.py", "x", "y", replace_all=True)) == "y\ny\n"
+    me = {"edits": [{"old_string": "x", "new_string": "y"}, {"old_string": "y\nx", "new_string": "z"}]}
+    assert xb.project(f, me) == "z\n"
+    assert xb.project(f, {"content": "new\n"}) == "new\n"
+    assert xb.project(f, {}) is None
+    assert xb.project(f, _edit(root, "a.py", "absent", "q")) is None
+    assert xb.project(str(root / "nope.py"), _edit(root, "nope.py", "a", "b")) is None
+
+
+def test_measure_counts_added_plus_deleted_and_trips_third_file(repo):
+    root, sha = repo
+    xb.open_xs_lane(root, "s", sha)
+    rec = xb.read_lane(root, "s")
+    u = xb.measure(root, rec, "a.py", _lines(10).replace("l1\n", "X\n"))
+    assert (u.files, u.lines, u.over) == (1, 2, False)
+    (root / "a.py").write_text(_lines(10).replace("l1\n", "X\n"))
+    xb.add_path(root, "s", "a.py")
+    (root / "b.py").write_text(_lines(10).replace("l2\n", "Y\n"))
+    xb.add_path(root, "s", "b.py")
+    rec = xb.read_lane(root, "s")
+    u = xb.measure(root, rec, "c.py", _lines(10).replace("l3\n", "Z\n"))
+    assert (u.files, u.over) == (3, True)
+
+
+def test_line_budget_boundary(repo):
+    root, sha = repo
+    xb.open_xs_lane(root, "s", sha)
+    rec = xb.read_lane(root, "s")
+    at = _lines(10) + "".join(f"n{i}\n" for i in range(xb.BUDGET_LINES))
+    assert xb.measure(root, rec, "a.py", at).over is False
+    assert xb.measure(root, rec, "a.py", at + "n\n").over is True
+
+
+def test_revert_frees_slot_and_new_file_counts_all_lines(repo):
+    root, sha = repo
+    xb.open_xs_lane(root, "s", sha)
+    xb.add_path(root, "s", "a.py")
+    xb.add_path(root, "s", "b.py")
+    (root / "a.py").write_text(_lines(10))  # equals base: drops out
+    (root / "b.py").write_text("changed\n")
+    rec = xb.read_lane(root, "s")
+    u = xb.measure(root, rec, "new.py", "1\n2\n3\n")
+    assert (u.files, u.lines, u.over) == (2, 11 + 3, False)
+
+
+def test_unreadable_base_raises(repo):
+    root, _ = repo
+    rec = {"kind": "xs", "base_sha": "0" * 40, "state": "open", "paths": []}
+    with pytest.raises(RuntimeError):
+        xb.measure(root, rec, "a.py", "x\n")
+
+
+def test_zero_spawns_and_fast(tmp_path, monkeypatch):
+    big = "".join(f"line {i}\n" for i in range(2000))
+    root, sha = _make_repo(tmp_path, {"a.py": big, "b.py": big})
+    xb.open_xs_lane(root, "s", sha)
+    xb.add_path(root, "s", "b.py")
+    (root / "b.py").write_text(big.replace("line 7\n", "seven\n"))
+    rec = xb.read_lane(root, "s")
+    proj = big.replace("line 900\n", "nine\n")
+
+    def boom(*a, **k):
+        raise AssertionError("spawn")
+
+    monkeypatch.setattr(subprocess, "run", boom)
+    monkeypatch.setattr(subprocess, "Popen", boom)
+    t = time.process_time()
+    u = xb.measure(root, rec, "a.py", proj)
+    dt = time.process_time() - t
+    assert (u.files, u.lines) == (2, 4)
+    assert dt < 0.5  # AC7 evidence line prints the figure; 50ms is the target on the box
+    print(f"measure process_time_ms={dt * 1000:.1f}")
+
+
+def test_touched_s_or_larger(tmp_path, monkeypatch):
+    root, _ = _make_repo(tmp_path, {"a.py": "x\n"})
+    from coordinator_core.session import scope
+
+    def fake(touched, degraded=False):
+        monkeypatch.setattr(
+            scope, "_read_touch_record_as_legacy_lines", lambda sink: ([f"T 2026-01-01T00:00:00+00:00 {t}" for t in touched], degraded)
+        )
+
+    z = root / "state" / "sizings"
+    z.mkdir(parents=True)
+    (z / "xs.yaml").write_text("estimate:\n  tshirt: XS\n")
+    (z / "m.yaml").write_text("estimate:\n  tshirt: M\n")
+    fake([])
+    assert xb.touched_s_or_larger("s", root) is False
+    fake(["a.py", "state/sizings/xs.yaml"])
+    assert xb.touched_s_or_larger("s", root) is False
+    fake(["state/sizings/xs.yaml", "state/sizings/m.yaml"])
+    assert xb.touched_s_or_larger("s", root) is True
+    fake(["state/sizings/gone.yaml"])
+    assert xb.touched_s_or_larger("s", root) is True

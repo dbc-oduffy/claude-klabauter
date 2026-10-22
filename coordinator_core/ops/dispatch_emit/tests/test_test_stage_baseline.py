@@ -59,7 +59,7 @@ def _status(result: dict) -> str:
         pytest.skip("node unavailable to evaluate the status expression")
     expr = wd._tests_status_expr("_t", "_v", "not_run")
     js = f"const _t = {json.dumps(result)}; const _v = []; console.log({expr});"
-    out = subprocess.run([node, "-e", js], capture_output=True, text=True, timeout=30, **no_console_creationflags())
+    out = subprocess.run([node, "-"], input=js, capture_output=True, text=True, timeout=30, **no_console_creationflags())
     assert out.returncode == 0, out.stderr
     return out.stdout.strip()
 

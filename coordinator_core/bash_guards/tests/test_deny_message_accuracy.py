@@ -673,7 +673,7 @@ class TestGitCommitSafeCommitAdviseMessageAccuracy:
         escalate a solo bare commit to DENY. Pinning the probe to "always
         empty" keeps every row here at its pre-existing advisory outcome,
         deterministically."""
-        monkeypatch.setattr(dispatch_checks, "_run_git", lambda *a, **k: (0, ""))
+        monkeypatch.setattr(dispatch_checks._dc_git_probe, "_run_git", lambda *a, **k: (0, ""))
 
     SCOPED_FORMS = [
         'git commit -m "fix the thing" -- one/file.md',

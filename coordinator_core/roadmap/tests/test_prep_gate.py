@@ -463,6 +463,40 @@ prime_exit_criterion:
     assert "command" in report["classes"]["CENSUS"]["detail"]
 
 
+def _backtick_census_plan(tmp_path):
+    fm = """census:
+  - question: how many plans?
+    command: "echo `ls docs/plans | wc -l`"
+    result: "3 at abc1234"
+prime_exit_criterion:
+  statement: s
+  derived_from: d
+"""
+    (tmp_path / "coordinator_core").mkdir(parents=True, exist_ok=True)
+    return _write_plan(tmp_path, frontmatter=fm, spine=_CLEAN_SPINE)
+
+
+def test_unscreenable_census_is_a_mechanical_repair(tmp_path):
+    cls = _gate(tmp_path, _backtick_census_plan(tmp_path))["classes"]["CENSUS"]
+    assert cls["kind"] == "census-unscreenable"
+    assert cls["mechanical"] is True
+    assert "[0]" in cls["repair"]
+    assert "Keep each entry's `question`" in cls["repair"]
+    assert "never delete an entry" in cls["repair"]
+
+
+def test_unscreenable_census_is_pulled_mechanical_not_substantive(tmp_path):
+    from coordinator_core.ops import plan_readiness_verdict as prv
+
+    report = _gate(tmp_path, _backtick_census_plan(tmp_path))
+    only_census = dict(report, classes={
+        k: v for k, v in report["classes"].items() if k == "CENSUS"
+    })
+    verdict = prv.readiness_verdict(only_census, None, [])
+    assert verdict["verdict"] == "pulled"
+    assert verdict["pull_class"] == "mechanical"
+
+
 def test_a_census_command_is_never_run(tmp_path, monkeypatch):
     """The bar checks the question is ASKABLE, never re-asks it. Re-running is
     fire-time work for the runner, which is why the command is recorded rather

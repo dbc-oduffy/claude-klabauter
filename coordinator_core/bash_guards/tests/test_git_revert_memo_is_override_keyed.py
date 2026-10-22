@@ -32,6 +32,7 @@ from typing import Any, Dict, Optional, Tuple
 import pytest
 
 from coordinator_core.bash_guards import dispatch
+from coordinator_core.bash_guards import _dc_git_misc
 
 
 OVERRIDE = "COORDINATOR_OVERRIDE_GIT_REVERT"
@@ -95,7 +96,7 @@ def _git_revert_cache_after_one_call(
 ) -> Dict[Tuple[Any, ...], Any]:
     sentinel = (None, None)
     monkeypatch.setattr(
-        dispatch._dc,
+        _dc_git_misc,
         "_check_destructive_git_revert_full",
         lambda *a, **k: sentinel,
     )

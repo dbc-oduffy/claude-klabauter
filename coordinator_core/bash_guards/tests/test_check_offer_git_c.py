@@ -421,3 +421,40 @@ class TestSharedHelperPinsBothCallers:
         stripped = dispatch_checks._strip_leading_env_and_wrappers(seg)
         assert stripped == "find /repo"
         assert seg.endswith(stripped)
+
+
+class TestMultiRepoContainerCwdAllows:
+    """A cwd that is the parent of the target repo (a cloud session's
+    container dir) is the multi-repo shape: pass through, don't deny."""
+
+    def test_container_parent_cwd_with_non_git_follower_allows(self, tmp_path):
+        repo = tmp_path / "repo"
+        (repo / ".git").mkdir(parents=True)
+        out = guard.check_offer_git_c(
+            "cd %s && git status && ls subdir/" % repo, cwd=str(tmp_path)
+        )
+        assert out is None
+
+
+class TestFollowerShellSyntaxNotQuoted:
+    def test_redirections_survive_in_suggestion(self, tmp_path):
+        scratch = tmp_path / "scratch"
+        scratch.mkdir()
+        out = guard.check_offer_git_c(
+            "cd %s && git status; which pnpm >/dev/null 2>&1" % scratch,
+            cwd=str(tmp_path / "elsewhere"),
+        )
+        reason = _reason(out)["permissionDecisionReason"]
+        assert "'>/dev/null'" not in reason
+        assert "'2>&1'" not in reason
+        assert ">/dev/null 2>&1" in reason
+
+
+def test_heredoc_follower_kept_verbatim(tmp_path):
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    cmd = "cd %s && git status && python3 - <<'X'\nprint('a b')\nX" % scratch
+    out = guard.check_offer_git_c(cmd, cwd=str(tmp_path / "elsewhere"))
+    if out is not None:
+        reason = _reason(out)["permissionDecisionReason"]
+        assert "'<<X'" not in reason and "\"print('a b')\"" not in reason

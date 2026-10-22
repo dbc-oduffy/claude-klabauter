@@ -59,7 +59,7 @@ def test_design_review_check_matches_the_stage_refused_spelling_only_at_the_star
     at = script.index(head)
     regex = script[at : script.index("/", at + 1) + 1]
     probe = "const r = %s; console.log(JSON.stringify(['design-review: x', 'stage refused: design-review: x', 'no manifest: design-review: x', 'stage refused: other'].map((e) => r.test(e))));" % regex
-    proc = subprocess.run([node, "-e", probe], capture_output=True, text=True, timeout=60, **no_console_creationflags())
+    proc = subprocess.run([node, "-"], input=probe, capture_output=True, text=True, timeout=60, **no_console_creationflags())
     assert json.loads(proc.stdout) == [True, True, False, False]
 
 
@@ -98,12 +98,12 @@ def test_script_with_the_design_review_halt_parses_through_asyncfunction(over, t
     path = tmp_path / "s.js"
     path.write_text(_compose(**over), encoding="utf-8")
     program = (
-        "const src = require('fs').readFileSync(process.argv[1], 'utf8')"
+        "const src = require('fs').readFileSync(process.argv[2], 'utf8')"
         ".replace(/^export const meta/m, 'const meta');"
         "new (Object.getPrototypeOf(async function () {}).constructor)("
         "'args', 'agent', 'parallel', 'pipeline', 'phase', src);"
     )
-    out = subprocess.run([node, "-e", program, str(path)], capture_output=True, text=True, **no_console_creationflags())
+    out = subprocess.run([node, "-", str(path)], input=program, capture_output=True, text=True, **no_console_creationflags())
     assert out.returncode == 0, out.stderr
 
 

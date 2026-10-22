@@ -387,6 +387,13 @@
     "verdict": null
   },
   {
+    "detail": "coordinator_core/bash_guards/_dc_git_probe.py declares GENERATES = [] (declared-empty, no artifacts)",
+    "generator": "coordinator_core/bash_guards/_dc_git_probe.py",
+    "mutates": [],
+    "pairs": [],
+    "verdict": null
+  },
+  {
     "detail": "coordinator_core/bash_guards/_dialect.py declares GENERATES = [] (declared-empty, no artifacts)",
     "generator": "coordinator_core/bash_guards/_dialect.py",
     "mutates": [],

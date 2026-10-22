@@ -240,16 +240,35 @@ def _unsized(monkeypatch) -> None:
 
 def _advisory(result) -> str:
     out = result["hookSpecificOutput"]
-    assert "permissionDecision" not in out
+    assert out.get("permissionDecision") in (None, "allow")
     return out["additionalContext"]
 
 
-def test_unsized_advises_and_repeats(monkeypatch) -> None:
+def _level(monkeypatch, level: str) -> None:
+    import coordinator_core.machine_profile as mp
+    monkeypatch.setattr(mp, "guard_level", lambda name: level)
+
+
+def test_unsized_advises_and_repeats_at_warn(monkeypatch) -> None:
     _unsized(monkeypatch)
+    _level(monkeypatch, "warn")
     first = _advisory(op(_payload()))
     second = _advisory(op(_payload()))
     assert "No sizing" in first
     assert first == second
+
+
+def test_unsized_denies_at_strict(monkeypatch) -> None:
+    _unsized(monkeypatch)
+    _level(monkeypatch, "strict")
+    out = op(_payload())["hookSpecificOutput"]
+    assert out["permissionDecision"] == "deny"
+    assert "coordinator:engine-ask" in out["permissionDecisionReason"]
+
+
+def test_sized_advises_at_strict(monkeypatch) -> None:
+    _level(monkeypatch, "strict")
+    assert "route through the warp run" in _advisory(op(_payload()))
 
 
 def test_sized_advises_and_repeats(monkeypatch) -> None:
@@ -270,6 +289,7 @@ def test_plan_routed_sizing_without_a_plan_advises_and_repeats(monkeypatch) -> N
 
 
 def test_unsized_advisory_names_the_ask_fire_not_the_express_lane(monkeypatch) -> None:
+    _level(monkeypatch, "warn")
     monkeypatch.setattr(_mod, "_session_sizing_state", lambda payload, sid: (False, False))
     reason = _advisory(op(_payload()))
     assert 'name: "coordinator:engine-ask", args: {"ask": ' in reason and "express-lane" not in reason
@@ -310,9 +330,16 @@ def test_scratch_path_allowed(monkeypatch) -> None:
     assert op(p) is None
 
 
-def test_autonomous_allowed(monkeypatch) -> None:
+def test_autonomous_allowed_when_sized(monkeypatch) -> None:
     monkeypatch.setattr(_mod, "resolve_mode", lambda k, sid: True)
     assert op(_payload()) is None
+
+
+def test_autonomous_does_not_skip_sizing(monkeypatch) -> None:
+    _unsized(monkeypatch)
+    _level(monkeypatch, "strict")
+    monkeypatch.setattr(_mod, "resolve_mode", lambda k, sid: True)
+    assert op(_payload())["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
 def test_empty_sentinel_still_advises(monkeypatch) -> None:
@@ -381,3 +408,15 @@ def test_reasoned_sentinel_allows_and_logs_one_line(monkeypatch, tmp_path) -> No
     assert entry["session_id"] == "sess-sizing-1"
     assert entry["path"] == "/repo/pkg/module.py"
     assert "ts" in entry
+
+
+def test_launched_run_counts_as_sized_after_touched_release(monkeypatch) -> None:
+    from coordinator_core.hooks import flag_em_poll_in_flight as poll
+    from coordinator_core.hooks import nudge_unrouted_sizing as sizing
+
+    monkeypatch.setattr(sizing, "_repo_root", lambda p: "/repo")
+    monkeypatch.setattr(sizing, "_session_touched_sizing_files", lambda sid, root: [])
+    monkeypatch.setattr(poll, "session_workflow_run_ids", lambda sid: ["ask-1"])
+    assert _REAL_SIZING_STATE({"cwd": "/repo"}, "s") == (True, False)
+    monkeypatch.setattr(poll, "session_workflow_run_ids", lambda sid: [])
+    assert _REAL_SIZING_STATE({"cwd": "/repo"}, "s") == (False, False)

@@ -184,7 +184,7 @@ def test_ask_wave_review_naming_slices_prevents_the_no_slices_halt(monkeypatch, 
         "process.stdout.write(JSON.stringify({ halted: _halted && _halted.halted, n: _reviewPrep.slices.length }));\n"
     )
     out = subprocess.run(
-        ["node", "-e", harness], capture_output=True, text=True, timeout=20, check=True, **no_console_creationflags()
+        ["node", "-"], input=harness, capture_output=True, text=True, timeout=20, check=True, **no_console_creationflags()
     )
     result = json.loads(out.stdout)
     assert bool(result["halted"] and result["halted"].startswith(NO_SLICES_HALT)) is halts

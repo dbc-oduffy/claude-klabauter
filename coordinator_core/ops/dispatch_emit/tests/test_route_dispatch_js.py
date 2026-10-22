@@ -55,7 +55,7 @@ def _run(route: dict, replies: dict) -> dict:
         + f"_routedRun({json.dumps(route)}, dispatch).then(r => console.log(JSON.stringify({{r, calls: _calls, logs: _logs}})));\n"
     )
     out = subprocess.run(
-        [_NODE, "-e", program], capture_output=True, text=True, check=True, **no_console_creationflags()
+        [_NODE, "-"], input=program, capture_output=True, text=True, check=True, **no_console_creationflags()
     ).stdout
     return json.loads(out)
 

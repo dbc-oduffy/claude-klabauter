@@ -98,7 +98,7 @@ def _run(repo_root: str, rows: list[dict], replies: dict) -> dict:
         "block": _block(_script(repo_root)),
     }
     out = subprocess.run(
-        [shutil.which("node"), "-e", program], capture_output=True, text=True, timeout=60,
+        [shutil.which("node"), "-"], input=program, capture_output=True, text=True, timeout=60,
         **no_console_creationflags(),
     )
     assert out.returncode == 0, out.stderr

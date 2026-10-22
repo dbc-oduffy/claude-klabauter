@@ -421,7 +421,7 @@ def test_the_digest_renders_the_class_and_collapses_repeats():
         {"wave": 1, "class": "path-collision", "plans": [P2, P1], "path": "c.py"},
     ]
     done = subprocess.run(
-        [node, "-e", f"const _seamDrift = {json.dumps(drift)}; console.log({expr});"],
+        [node, "-"], input=f"const _seamDrift = {json.dumps(drift)}; console.log({expr});",
         capture_output=True,
         text=True,
         timeout=60,
@@ -446,7 +446,7 @@ def test_the_digest_names_a_refused_wave_commit_as_a_commit_failure_never_a_seam
         f"const r = {expr} null);console.log(r);"
     )
     done = subprocess.run(
-        [node, "-e", probe],
+        [node, "-"], input=probe,
         capture_output=True,
         text=True,
         timeout=60,

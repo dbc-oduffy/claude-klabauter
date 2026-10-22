@@ -8,6 +8,7 @@ import subprocess
 import pytest
 
 from coordinator_core.bash_guards import dispatch_checks as guard
+from coordinator_core.bash_guards import _dc_git_probe, _dc_git_shared
 from coordinator_core.win_portability import no_console_creationflags, no_console_passthrough_kwargs
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
@@ -58,7 +59,7 @@ def test_subtree_foreign_paths_empty_in_a_fresh_repo(fresh_repo):
 
 
 def test_many_files_recipe_runs_and_the_guard_allows_it(fresh_repo, monkeypatch):
-    monkeypatch.setattr(guard, "_is_hazard_repo", lambda root: True)
+    monkeypatch.setattr(_dc_git_shared, "_is_hazard_repo", lambda root: True)
     (fresh_repo / "docs").mkdir()
     for n in range(3):
         (fresh_repo / "docs" / ("f%d.md" % n)).write_text("x")

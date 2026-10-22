@@ -162,7 +162,8 @@ def test_unscreenable_census_names_the_hand_rewrite_not_the_converter(spine_stat
         },
         [],
     )
-    assert "rewrite each named census command BY HAND" in message
+    assert "BY HAND" not in message
+    assert "mechanical repair — rewrite each named census command" in message
     assert ("mise-prep-upgrade.py" in message) == (spine_status == "DEFECT")
 
 

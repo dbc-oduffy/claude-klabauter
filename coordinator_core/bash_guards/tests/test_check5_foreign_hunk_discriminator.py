@@ -131,7 +131,7 @@ def _run(
             0,
             "\n".join(pathspec),
         )
-    monkeypatch.setattr(dispatch_checks, "_run_git", _stub_run_git(table))
+    monkeypatch.setattr(dispatch_checks._dc_git_probe, "_run_git", _stub_run_git(table))
     return dispatch_checks.check_validate_commit(command, session_id, git_root)
 
 

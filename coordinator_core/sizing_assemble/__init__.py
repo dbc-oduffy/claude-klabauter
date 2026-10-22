@@ -2513,6 +2513,45 @@ def _open_routed_obligation(write_path: str) -> None:
     append_touch_claims([rel], session_id, root, kind=KIND_WRITE)
 
 
+def _xs_lane_session(write_path: Optional[str]) -> tuple[Optional[Path], Optional[str]]:
+    """(repo root, session id) for the XS lane, or (None, None) when either cannot be resolved."""
+    from coordinator_core.session.core import resolve_session_id
+
+    sid = resolve_session_id() or None
+    if not sid:
+        return None, None
+    return _cli_repo_root(write_path), sid
+
+
+def _xs_lane_refusal(write_path: Optional[str]) -> Optional[str]:
+    """The refusal text when this session may not take an XS sizing: a lane record exists in any
+    state, or an S-or-larger sizing was touched. None when the lane may open."""
+    from coordinator_core.session import xs_lane_budget
+
+    root, sid = _xs_lane_session(write_path)
+    if root is None:
+        return None
+    if xs_lane_budget.read_lane(root, sid) is not None or xs_lane_budget.touched_s_or_larger(sid, root):
+        return "XS refused: this session already holds a lane or an S+ sizing; size S or larger."
+    return None
+
+
+def _open_xs_lane_for_session(write_path: Optional[str]) -> None:
+    """Open the XS lane at HEAD. Never raises: a missing session or HEAD opens nothing."""
+    from coordinator_core.git import git_state
+    from coordinator_core.session import xs_lane_budget
+
+    root, sid = _xs_lane_session(write_path)
+    if root is None:
+        return
+    try:
+        base = git_state.head_sha(root)
+        if base:
+            xs_lane_budget.open_xs_lane(root, sid, base)
+    except Exception:  # noqa: BLE001 - the sizing result stands; no lane means today's unsized guard
+        return
+
+
 def _hand_to_engine_ask(write_path: str, decision: dict[str, Any]) -> int:
     """An accepted plan/spec-dispatch sizing at S-L prints the one `coordinator:engine-ask`
     submission call. A live run on the sizing refuses (decision JSON on stdout, the refusal
@@ -3053,6 +3092,13 @@ def main(argv: list[str]) -> int:
         print(f"{prog}: unexpected failure: {exc}", file=sys.stderr)
         return EXIT_TRANSPORT_FAIL
 
+    xs_sizing = decision["resolved_estimate"]["tshirt"] == "XS" and (express_lane or write_path is not None)
+    if xs_sizing:
+        refusal = _xs_lane_refusal(write_path)
+        if refusal:
+            print(f"{prog}: {refusal}", file=sys.stderr)
+            return EXIT_USAGE
+
     if research_block is not None:
         _route_to_research(decision, write_path)
 
@@ -3100,6 +3146,8 @@ def main(argv: list[str]) -> int:
         except SizingAssembleError as exc:
             print(f"{prog}: --write refused: {exc}", file=sys.stderr)
             return EXIT_BUSINESS_FAIL
+        if xs_sizing:
+            _open_xs_lane_for_session(write_path)
         report = decision["write"]["pm_verbatims"]
         if report["embedded"]:
             lo, hi = report["turns"]
@@ -3132,6 +3180,8 @@ def main(argv: list[str]) -> int:
                 shown = _wp.as_posix()
             print(f"written: {shown}")
             return EXIT_OK
+    elif xs_sizing and express_lane:
+        _open_xs_lane_for_session(None)
 
     print(json.dumps(decision, indent=2, sort_keys=True))
     return EXIT_OK

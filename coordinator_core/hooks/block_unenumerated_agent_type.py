@@ -137,7 +137,8 @@ docstring for the Opus/Fable persona-or-grant rule it enforces.
 COMPOSITION WITH `hand_dispatch_deny`. `check()` runs
 `hooks.hand_dispatch_deny.hand_dispatch_deny` before the roster leg: a deny is
 returned at once (no roster read), a warn-level advisory is merged onto the
-later legs' result. It lives here because this is the one PreToolUse(Agent)
+later legs' result. `hooks.general_purpose_code_handoff_deny` (a top-level
+general-purpose dispatch handing over a code edit) runs in the same slot. It lives here because this is the one PreToolUse(Agent)
 engine leg DoE already runs; no new registration is needed.
 """
 
@@ -1042,6 +1043,12 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     from coordinator_core.hooks.hand_dispatch_deny import hand_dispatch_deny
 
     scout = hand_dispatch_deny(payload, subagent_type)
+    if scout is None:
+        from coordinator_core.hooks.general_purpose_code_handoff_deny import (
+            general_purpose_code_handoff_deny,
+        )
+
+        scout = general_purpose_code_handoff_deny(payload, subagent_type)
     if scout is None:
         return _gate_legs(payload, tool_input, subagent_type)
     if scout.get("hookSpecificOutput", {}).get("permissionDecision") == "deny":

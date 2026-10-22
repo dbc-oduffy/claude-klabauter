@@ -45,7 +45,7 @@ def _judged(falsifier_verdict: str) -> dict:
     }
     script = f"const log = () => {{}}; console.log(JSON.stringify({_JUDGE_VERDICT_RULES_JS}({json.dumps(verdict)})));"
     out = subprocess.run(
-        [node, "-e", script], capture_output=True, text=True, check=True, **no_console_creationflags()
+        [node, "-"], input=script, capture_output=True, text=True, check=True, **no_console_creationflags()
     )
     return json.loads(out.stdout)
 

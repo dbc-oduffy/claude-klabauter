@@ -25,6 +25,7 @@ from coordinator_core.ops.dispatch_emit.tests.test_all_landed_refire_e2e import 
 )
 from coordinator_core.ops.dispatch_emit.tests.test_ask_compose_stage_handle import agent_gate_reply, readers_cfg
 from coordinator_core.ops.dispatch_emit.tests.test_ask_gate import REL, repo  # noqa: F401
+from coordinator_core.ops.dispatch_emit.tests._node_support import payload_file
 from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
@@ -53,8 +54,8 @@ def _run(root, leg) -> dict:
         "replies": {"gate": reply, "gate-stage": reply, "ledger-remaining": {"summary": "ok"}},
     }
     proc = subprocess.run(
-        [node, "-e", "globalThis.log = () => {};\n" + _NODE_PROGRAM], capture_output=True, text=True, encoding="utf-8", timeout=60,
-        env={**os.environ, "SRC": script, "CFG": json.dumps(cfg)}, **no_console_creationflags(),
+        [node, "-"], input="globalThis.log = () => {};\n" + _NODE_PROGRAM, capture_output=True, text=True, encoding="utf-8", timeout=60,
+        env={**os.environ, "SRC_FILE": payload_file(script), "CFG": json.dumps(cfg)}, **no_console_creationflags(),
     )
     assert proc.returncode == 0, proc.stderr
     return json.loads(proc.stdout.strip().splitlines()[-1])

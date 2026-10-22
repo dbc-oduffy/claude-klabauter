@@ -57,6 +57,7 @@ from __future__ import annotations
 import pytest
 
 from coordinator_core.bash_guards import dispatch_checks as guard
+from coordinator_core.bash_guards import _dc_git_probe, _dc_git_shared
 from coordinator_core.bash_guards._message_size import MESSAGE_PROSE_CAP_BYTES, measure_envelope
 
 
@@ -79,11 +80,11 @@ def _wire_git_root(monkeypatch, root):
         assert args == ["rev-parse", "--show-toplevel"]
         return 0, root + "\n"
 
-    monkeypatch.setattr(guard, "_run_git", _fake_run_git)
+    monkeypatch.setattr(_dc_git_probe, "_run_git", _fake_run_git)
 
 
 def _wire_hazard(monkeypatch, *, is_hazard):
-    monkeypatch.setattr(guard, "_is_hazard_repo", lambda root: is_hazard)
+    monkeypatch.setattr(_dc_git_shared, "_is_hazard_repo", lambda root: is_hazard)
 
 
 def _check(monkeypatch, tmp_path, cmd, *, hazard, session_id="sess1"):
@@ -203,8 +204,8 @@ def test_dash_c_value_used_to_resolve_git_root_cwd(monkeypatch, tmp_path):
         seen_cwd["cwd"] = cwd
         return 0, str(tmp_path / "repo") + "\n"
 
-    monkeypatch.setattr(guard, "_run_git", _fake_run_git)
-    monkeypatch.setattr(guard, "_is_hazard_repo", lambda root: True)
+    monkeypatch.setattr(_dc_git_probe, "_run_git", _fake_run_git)
+    monkeypatch.setattr(_dc_git_shared, "_is_hazard_repo", lambda root: True)
 
     explicit_target = str(tmp_path / "explicit" / "target")
     guard.check_blanket_git_add("git -C %s add -A" % explicit_target, "sess1")
@@ -373,7 +374,7 @@ def test_unresolvable_git_root_allows(monkeypatch, tmp_path):
     def _fake_run_git(args, cwd=None, timeout=2.0, extra_env=None):
         return 128, ""
 
-    monkeypatch.setattr(guard, "_run_git", _fake_run_git)
+    monkeypatch.setattr(_dc_git_probe, "_run_git", _fake_run_git)
     result = guard.check_blanket_git_add("git add -A", "sess1")
     assert result is None
 
@@ -383,7 +384,7 @@ def test_is_hazard_repo_true_for_meta_repo(monkeypatch, tmp_path):
     meta_root = fake_home / ".claude"
     meta_root.mkdir(parents=True)
     _set_fake_home(monkeypatch, fake_home)
-    monkeypatch.setattr(guard, "_hazard_registry_repo_roots", lambda: [])
+    monkeypatch.setattr(_dc_git_shared, "_hazard_registry_repo_roots", lambda: [])
 
     assert guard._is_hazard_repo(str(meta_root)) is True
 
@@ -395,7 +396,7 @@ def test_is_hazard_repo_true_for_registered_fleet_sibling(monkeypatch, tmp_path)
     sibling_root = tmp_path / "some-fleet-sibling-checkout"
     sibling_root.mkdir(parents=True)
     monkeypatch.setattr(
-        guard, "_hazard_registry_repo_roots", lambda: [str(sibling_root)]
+        _dc_git_shared, "_hazard_registry_repo_roots", lambda: [str(sibling_root)]
     )
 
     assert guard._is_hazard_repo(str(sibling_root)) is True
@@ -405,7 +406,7 @@ def test_is_hazard_repo_false_without_marker(monkeypatch, tmp_path):
     fake_home = tmp_path / "home-unrelated"
     fake_home.mkdir(parents=True)
     _set_fake_home(monkeypatch, fake_home)
-    monkeypatch.setattr(guard, "_hazard_registry_repo_roots", lambda: [])
+    monkeypatch.setattr(_dc_git_shared, "_hazard_registry_repo_roots", lambda: [])
     oss_repo = tmp_path / "some-oss-consumer-repo"
     oss_repo.mkdir(parents=True)
 
@@ -420,7 +421,7 @@ def test_is_hazard_repo_fails_open_on_registry_exception(monkeypatch, tmp_path):
     fake_home = tmp_path / "home-unrelated"
     fake_home.mkdir(parents=True)
     _set_fake_home(monkeypatch, fake_home)
-    monkeypatch.setattr(guard, "_hazard_registry_repo_roots", _boom)
+    monkeypatch.setattr(_dc_git_shared, "_hazard_registry_repo_roots", _boom)
     some_repo = tmp_path / "some-repo"
     some_repo.mkdir(parents=True)
 

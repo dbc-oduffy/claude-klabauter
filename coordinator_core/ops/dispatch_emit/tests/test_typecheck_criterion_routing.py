@@ -129,7 +129,7 @@ def test_partial_with_the_clause_guard_line_releases_the_dependent():
     line = report_line(KIND_GUARD_DENIED, "npx tsc --noEmit -p . (guard-heavy-command-admission)")
     reply = json.dumps(f"PARTIAL: report.md\n{line}")
     proc = subprocess.run(
-        [node, "-e", _HARNESS % {"helper": emit._run_row_helper_js(), "reply": reply}],
+        [node, "-"], input=_HARNESS % {"helper": emit._run_row_helper_js(), "reply": reply},
         capture_output=True, text=True, encoding="utf-8", timeout=60,
         **no_console_creationflags(),
     )

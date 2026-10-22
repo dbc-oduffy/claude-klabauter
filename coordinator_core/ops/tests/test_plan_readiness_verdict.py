@@ -632,3 +632,35 @@ def test_ready_reply_carries_zero_counts():
     out = _with_gate(None, [])
     assert out["verdict"] == "ready"
     assert _counts(out) == (0, 0)
+
+
+def test_substantive_prep_gate_failure_yields_one_prep_gate_ruling():
+    out = op.readiness_verdict(_gate(MECH, JUDG), None, [])
+    assert [(r["id"], r["source"]) for r in out["rulings"]] == [("J1", "prep-gate")]
+    assert "census-incomplete" in out["rulings"][0]["subject"]
+    assert out["split_recommended"] is False
+    _validate({"plan": REL, **out, "prep_gate": _gate(MECH, JUDG)})
+
+
+def test_warn_review_and_unresolved_premise_yield_review_and_premise_rulings():
+    out = op.readiness_verdict(
+        _gate(PASS, verdict="PREPPED"), None,
+        [{"reviewer": "patrik", "verdict": "WARN"}], None, _rows("UNRESOLVED", citation="x"),
+    )
+    assert [(r["id"], r["source"]) for r in out["rulings"]] == [("J1", "review"), ("J2", "premise")]
+    assert "declared_absent" in out["rulings"][1]["ask"]
+
+
+def test_ready_and_mechanical_verdicts_have_no_rulings_and_no_split():
+    ready = op.readiness_verdict(_gate(PASS, verdict="PREPPED"), None, [])
+    assert (ready["rulings"], ready["split_recommended"]) == ([], False)
+    mech = op.readiness_verdict(_gate(PASS, MECH), None, [])
+    assert (mech["rulings"], mech["split_recommended"]) == ([], False)
+
+
+@pytest.mark.parametrize("count,split", [(op.SPLIT_BLOCKING_THRESHOLD - 1, False), (op.SPLIT_BLOCKING_THRESHOLD, True)])
+def test_split_recommended_flips_at_the_threshold(count, split):
+    cov = {"verdict": "BLOCKED-SURFACE-TO-PM", "mechanicalFindings": [], "judgmentFindings": count}
+    out = op.readiness_verdict(_gate(PASS, verdict="PREPPED"), cov, [])
+    assert out["blocking_findings"] == count
+    assert out["split_recommended"] is split

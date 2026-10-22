@@ -81,10 +81,10 @@ def test_composed_script_parses_as_an_async_function_body(tmp_path):
     path = tmp_path / "s.js"
     path.write_text(_compose(), encoding="utf-8")
     program = (
-        "const src = require('fs').readFileSync(process.argv[1], 'utf8')"
+        "const src = require('fs').readFileSync(process.argv[2], 'utf8')"
         ".replace(/^export const meta/m, 'const meta');"
         "new (Object.getPrototypeOf(async function () {}).constructor)("
         "'args', 'agent', 'parallel', 'pipeline', 'phase', src);"
     )
-    out = subprocess.run([node, "-e", program, str(path)], capture_output=True, text=True, **no_console_creationflags())
+    out = subprocess.run([node, "-", str(path)], input=program, capture_output=True, text=True, **no_console_creationflags())
     assert out.returncode == 0, out.stderr

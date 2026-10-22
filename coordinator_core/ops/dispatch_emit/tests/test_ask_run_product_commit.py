@@ -419,7 +419,7 @@ def _composed_digest(ledger_js: str) -> dict:
     )
     body = script[start:stop].replace("  return { arm:", "  const _out = { arm:", 1)
     prog = f"(() => {{\n{stubs}{body}\nconsole.log(JSON.stringify(_out));\n}})();"
-    run = subprocess.run([node, "-e", prog], capture_output=True, text=True, **no_console_creationflags())
+    run = subprocess.run([node, "-"], input=prog, capture_output=True, text=True, **no_console_creationflags())
     assert run.returncode == 0, run.stderr
     return json.loads(run.stdout)
 

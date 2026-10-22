@@ -47,7 +47,7 @@ def _drive(js_line: str, *, incomplete=(), commit=None, resume=False, gate=None,
         json.dumps(resume), json.dumps(gate or {}), json.dumps(na), js_line,
     )
     out = subprocess.run(
-        ["node", "-e", program], capture_output=True, text=True, check=True, **no_console_creationflags()
+        ["node", "-"], input=program, capture_output=True, text=True, check=True, **no_console_creationflags()
     ).stdout
     return json.loads(out)
 

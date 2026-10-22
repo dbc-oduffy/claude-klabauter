@@ -102,7 +102,7 @@ def test_malformed_never_raises(resume, verdict):
 )
 def test_js_twin_agrees_with_python(met_by, known):
     src = f"console.log(JSON.stringify(({phc.CREDIT_MATCH_JS})({json.dumps(met_by)}, {json.dumps(known)})))"
-    out = subprocess.run(["node", "-e", src], capture_output=True, text=True, check=True).stdout.strip()
+    out = subprocess.run(["node", "-"], input=src, capture_output=True, text=True, check=True).stdout.strip()
     r = _resume([known])
     expected = bool(phc.credited_rows(r, _verdict(met_by)))
     assert json.loads(out) is expected

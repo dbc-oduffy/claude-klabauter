@@ -245,12 +245,12 @@ def test_script_is_valid_and_parses(over, tmp_path):
     path = tmp_path / "s.js"
     path.write_text(script, encoding="utf-8")
     program = (
-        "const src = require('fs').readFileSync(process.argv[1], 'utf8')"
+        "const src = require('fs').readFileSync(process.argv[2], 'utf8')"
         ".replace(/^export const meta/m, 'const meta');"
         "new (Object.getPrototypeOf(async function () {}).constructor)("
         "'args', 'agent', 'parallel', 'pipeline', 'phase', src);"
     )
-    out = subprocess.run([node, "-e", program, str(path)], capture_output=True, text=True, **no_console_creationflags())
+    out = subprocess.run([node, "-", str(path)], input=program, capture_output=True, text=True, **no_console_creationflags())
     assert out.returncode == 0, out.stderr
 
 
@@ -414,7 +414,7 @@ def test_the_fire_time_tier_expression_maps_every_size_and_defaults_to_full(tshi
     if node is None:
         pytest.skip("node not on PATH")
     program = f"const _gate = {{ tshirt: {json.dumps(tshirt)} }}; console.log({ask_compose._fire_tier_js()});"
-    out = subprocess.run([node, "-e", program], capture_output=True, text=True, timeout=30, **no_console_creationflags())
+    out = subprocess.run([node, "-"], input=program, capture_output=True, text=True, timeout=30, **no_console_creationflags())
     assert out.stdout.strip() == tier, out.stderr
 
 

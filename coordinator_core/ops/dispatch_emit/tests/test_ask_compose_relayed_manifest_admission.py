@@ -32,7 +32,7 @@ def _gap(manifest) -> str | None:
         + f"\nlet _stagedManifest = null;\nprocess.stdout.write(JSON.stringify(_wholeManifestGap({json.dumps(manifest)})));\n"
     )
     return json.loads(
-        subprocess.run([node, "-e", js], capture_output=True, text=True, check=True, **no_console_creationflags()).stdout
+        subprocess.run([node, "-"], input=js, capture_output=True, text=True, check=True, **no_console_creationflags()).stdout
     )
 
 
@@ -121,7 +121,7 @@ def _adopt(manifest, soft: bool) -> str | None:
         "process.stdout.write(JSON.stringify(_stageRefusal));\n})();\n"
     )
     return json.loads(
-        subprocess.run([node, "-e", js], capture_output=True, text=True, check=True, **no_console_creationflags()).stdout
+        subprocess.run([node, "-"], input=js, capture_output=True, text=True, check=True, **no_console_creationflags()).stdout
     )
 
 

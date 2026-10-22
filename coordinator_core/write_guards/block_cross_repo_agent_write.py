@@ -12,7 +12,14 @@ writes when sibling ``writes:`` pass approval.
 
 Allow: no ``agent_id`` (EM inline write); either repo unresolvable; target in
 the run repo; target repo not in the machine registry; target equal to or
-under a ledger line.
+under a ledger line; target repo holds a fresh run token minted by the payload's session
+(``run_token.session_holds_run``).
+
+The run-token leg assumes a subagent's hook payload carries its parent session's id, the id
+``run_token.mint`` stamped (``docs/wiki/commit-path.md``: a subagent shares its EM's
+``CLAUDE_PID`` and session id). It admits every subagent of session S into that repo while S holds
+a run there, not only the run's own agents, because the payload carries no run identity; the
+session-scoped grant ledger has the same breadth. An empty session id admits nothing.
 
 Negative-spec: no subprocess (walks and file reads only); no override env var;
 an agent type is never consulted -- every dispatched agent is bound.
@@ -106,7 +113,12 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     owner_real = casefold_path(os.path.realpath(owner)).rstrip("/")
     if owner_real not in _registered_roots():
         return None
-    if _granted(run_root, payload.get("session_id") or "", _norm(str(target))):
+    session_id = payload.get("session_id") or ""
+    from coordinator_core.ops.dispatch_emit.run_token import session_holds_run
+
+    if session_holds_run(owner, session_id):
+        return None
+    if _granted(run_root, session_id, _norm(str(target))):
         return None
 
     safe = "".join(ch if ch >= " " else " " for ch in file_path)
