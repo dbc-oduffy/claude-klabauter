@@ -23,6 +23,34 @@ def test_read_of_sizings_is_allowed():
     assert _check("cat state/sizings/x.yaml") is None
 
 
+def test_cp_install_from_sizings_into_scratch_is_allowed():
+    for cmd in (
+        "cp state/sizings/x.yaml scratch/x.yaml",
+        "cp -p state/sizings/x.yaml scratch/",
+        "cp -t scratch/ state/sizings/x.yaml",
+        "cp --target-directory=scratch state/sizings/x.yaml",
+        "install state/sizings/x.yaml scratch/x.yaml",
+    ):
+        assert _check(cmd) is None, cmd
+
+
+def test_cp_mv_into_sizings_is_still_refused():
+    for cmd in (
+        "cp scratch/x.yaml state/sizings/x.yaml",
+        "mv scratch/x.yaml state/sizings/",
+        "mv -t state/sizings/ scratch/x.yaml",
+        "mv state/sizings/x.yaml scratch/x.yaml",
+        "mv -t scratch/ state/sizings/x.yaml",
+        "cp -t state/sizings/ scratch/x.yaml",
+        "cp --target-directory=state/sizings scratch/x.yaml",
+        "cp state/sizings/a.yaml state/sizings/b.yaml",
+        "install scratch/x.yaml state/sizings/x.yaml",
+        "cp state/sizings/x.yaml scratch/x.yaml && cp scratch/y state/sizings/y.yaml",
+        "cp state/sizings/x.yaml $D",
+    ):
+        assert _check(cmd) is not None, cmd
+
+
 _SA = "/home/u/.coordinator-claude-settings/bin/sizing-assemble"
 
 

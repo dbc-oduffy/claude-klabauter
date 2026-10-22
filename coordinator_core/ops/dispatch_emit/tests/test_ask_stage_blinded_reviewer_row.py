@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.ops.dispatch_emit import emit, falsifier_integrity_phase as fip
+from coordinator_core.ops.dispatch_emit.ask_compose import SKILL_WEIGHT_HEADROOM_CLAUSE
 from coordinator_core.ops.dispatch_emit.ask_stage import AskStageError, stage
 from coordinator_core.ops.dispatch_emit.tests.test_ask_compose import _compose
 
@@ -77,7 +78,10 @@ def test_reviewer_row_brief_is_the_phase_spec_prompt(tmp_path):
     report_dir = Path(manifest.run_dir) / "can-report-red"
     expected = fip.review_specs(fip.review_inputs([REVIEWED_REL], repo_root=tmp_path, report_dir=report_dir))[0].prompt
     got = _brief(tmp_path, manifest)
-    assert got == expected.encode("utf-8")
+    assert got.startswith(expected.encode("utf-8") + b"\n\n")
+    tail = got[len(expected.encode("utf-8")):].decode("utf-8")
+    assert tail.startswith("\n\n" + SKILL_WEIGHT_HEADROOM_CLAUSE)
+    assert "do not pin prose in tests" in tail
     assert b"\r" not in got
     assert (tmp_path / report_dir / "2026-10-02-reviewed-secret-title.json").is_file()
 

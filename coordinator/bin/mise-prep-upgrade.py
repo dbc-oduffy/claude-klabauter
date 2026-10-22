@@ -30,6 +30,10 @@ wrong" class this fleet has already found instances of.
                                         claim at all. `[]` asserts the plan rests on
                                         no counted premise — a claim, so it is written
                                         only where the text supports it.
+  capabilities: []                      ONLY when the plan has a `yaml plan-tasks`
+                                        spine and its body (code fences stripped)
+                                        names no ui_consumer / ui_carve_out /
+                                        click_path. `[]` asserts no UI consumer.
   falsifier nesting                     a top-level `falsifier:` block moved, bytes
                                         intact, under `prime_exit_criterion:` — the
                                         author wrote the falsifier; only its address
@@ -126,6 +130,7 @@ _PAREN_TAIL = re.compile(r"\s*\((?:new|edit|new\|edit)\)\s*$", re.I)
 _COUNTISH = re.compile(r"(?<![\w./-])(\d{2,6})(?![\w./-])")
 _DATEISH = re.compile(r"\b20\d{2}-\d{2}-\d{2}\b")
 _CODEFENCE = re.compile(r"```.*?```", re.S)
+_UI_TOKEN = re.compile(r"\b(ui_consumer|ui_carve_out|click_path)\b")
 
 _PLAN_KINDS = frozenset({"plan"})
 
@@ -539,6 +544,20 @@ def plan_report(
 
     targets = write_targets(body)
     spine_rows = raw_spine_rows(text)
+    if "capabilities" not in fm:
+        if spine_rows is None:
+            residue.append(
+                "capabilities: no `yaml plan-tasks` block — no spine to read ui_consumer rows from"
+            )
+        else:
+            ui_tokens = sorted(set(_UI_TOKEN.findall(_CODEFENCE.sub(" ", body))))
+            if ui_tokens:
+                residue.append(
+                    f"capabilities: body names a UI consumer ({', '.join(ui_tokens)}) — "
+                    "declare entries, or an argued `capabilities: []`"
+                )
+            else:
+                derivable["capabilities"] = []
     if spine_rows is None:
         residue.append("spine: no `yaml plan-tasks` block — inventing rows would invent scope")
     else:
@@ -588,6 +607,11 @@ def apply_derivable(path: Path, derivable: Dict[str, Any]) -> bool:
         new_fm = new_fm.rstrip("\n") + (
             "\ncensus: []  # no counted premise found in the body at conversion time;"
             "\n            # a claim a reviewer can falsify. Bar: mise-prep-gate.py.\n"
+        )
+    if "capabilities" in derivable:
+        new_fm = new_fm.rstrip("\n") + (
+            "\ncapabilities: []  # no ui_consumer/ui_carve_out/click_path token in the plan body at conversion time;"
+            "\n               # a claim a reviewer can falsify. Bar: mise-prep-gate.py.\n"
         )
     derived_from = derivable.get("prime_exit_criterion.derived_from")
     if derived_from:

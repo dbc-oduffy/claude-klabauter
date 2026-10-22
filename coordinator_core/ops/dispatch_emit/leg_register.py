@@ -116,6 +116,8 @@ REGISTER: tuple[LegDecl, ...] = (
     ),
     _earns("ask", "footprint", "reads the baton for an XS sizing's write footprint when the sizing carries none"),
     _earns("ask", "size-retry", "re-runs the scout when its first pass did not assemble the sizing"),
+    _earns("ask", "apply-rulings", "applies the EM's recorded rulings on a pulled plan's blocking findings to the plan in place"),
+    _earns("ask", "pull-split", "slices a pulled plan into smaller batons when its blocking findings exceed one baton"),
     _earns("ask", "ledger-replan", "re-plans the rows a resumed ledger still owes"),
     _earns("ask", "ledger-remaining", "executes the rows a resumed ledger still owes"),
     _floor(

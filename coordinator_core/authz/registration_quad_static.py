@@ -200,7 +200,16 @@ def registration_violations(
     """
     paths = [_norm(p) for p in commit_paths]
     surface_in_paths = any(p in _SURFACE_PATHS for p in paths)
-    candidates = [p for p in paths if p.startswith("coordinator_core/") and p.endswith(".py")]
+    # A test file never registers a live op (no test module is in OP_MODULE_MAP); its
+    # `@register_op` lines are string fixtures that the line scan would misread as keys.
+    candidates = [
+        p
+        for p in paths
+        if p.startswith("coordinator_core/")
+        and p.endswith(".py")
+        and "/tests/" not in p
+        and not p.rsplit("/", 1)[-1].startswith("test_")
+    ]
     if not surface_in_paths and not candidates:
         return StaticQuadVerdict("skip", reason="no registration-relevant path in the commit")
 

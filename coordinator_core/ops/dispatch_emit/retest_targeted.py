@@ -46,7 +46,10 @@ RETEST_LAUNCH_TIMEOUT_SECS = MUTATION_READ_DEADLINE_SECS - 5.0
 LAUNCH_TIMED_OUT = "timed-out"
 
 #: Options whose next token is a value, never a collection root.
-_VALUE_OPTIONS = frozenset({"--rootdir", "-c", "-p", "--confcutdir", "-m", "-k"})
+_VALUE_OPTIONS = frozenset({
+    "--rootdir", "-c", "-p", "--confcutdir", "-m", "-k", "--ignore", "--ignore-glob", "--deselect",
+    "-o", "--override-ini", "--maxfail", "--tb", "--durations", "-n", "--basetemp",
+})
 
 
 def _run_argv(argv: list[str], cwd: Path, *, log: Optional[Path] = None, timeout: Optional[float] = None):

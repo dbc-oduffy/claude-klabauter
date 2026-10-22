@@ -100,6 +100,9 @@ trio above — different question, same pull/poll posture):
                                        subagent's own transcript (last record, never a
                                        full-file parse); fails toward "running"/"unknown",
                                        never a false "arrived"; returns structured data
+    subagent_arrival_record         — SubagentStop write (MUTATING): appends one
+                                       arrival row per stopped agent_id under the git
+                                       common dir; always returns no advisory
 
 Receiver-state sensor op (cross-repo coordinator-content-repo contract, source memo
 2026-08-14-coordinator-content-repo-em-receiver-state-sensor-seam.md) — thin op over

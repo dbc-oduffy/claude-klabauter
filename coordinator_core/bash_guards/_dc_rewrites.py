@@ -412,11 +412,18 @@ def check_grep_via_bash_rewrite(
     parsed = _bt_grep_flags_and_operands(tokens)
     if parsed is None:
         return None
+    # A rewrite whose `python3 -c` script does not compile (a drive-letter
+    # path, a backslash regex) would replace a working command with a broken one.
+    try:
+        rewrite = _bt_grep_python_rewrite(parsed)
+        compile(shlex.split(rewrite)[-1], "<grep-rewrite>", "exec")
+    except (SyntaxError, ValueError, KeyError, TypeError, IndexError):
+        return None
     _grep_note = operator_override_note(
         "COORDINATOR_ALLOW_GREP_VIA_BASH", payload=payload, git_root=git_root
     )
     return _allow_rewrite(
-        _bt_grep_python_rewrite(parsed),
+        rewrite,
         # Portability claim, not a fork-count one: GNU and BSD grep disagree
         # on where `^` binds inside an anchored alternation (e.g.
         # `grep -E '^status:|^deployment_state:'`), so the same pattern can

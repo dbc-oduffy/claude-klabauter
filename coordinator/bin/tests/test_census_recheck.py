@@ -163,48 +163,6 @@ def test_does_not_write_anything(cr, tmp_path):
     assert plan.read_text(encoding="utf-8") == before
 
 
-@pytest.fixture(scope="module")
-def mcr():
-    spec = importlib.util.spec_from_file_location(
-        "mise_census_revalidate", Path(__file__).resolve().parents[1] / "mise-census-revalidate.py")
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
-
-
-def test_per_file_grep_c_counts_are_summed(mcr):
-    assert mcr.compare("37", "a.py:30\nb.py:7")["state"] == mcr.MATCH
-    assert mcr.compare("37", "a.py:30\nb.py:8")["state"] == mcr.DRIFT
-
-
-def test_per_file_sum_tolerates_crlf_and_windows_drive_paths(mcr):
-    out = "C:\\repo\\a.py:30\r\nD:\\repo\\b.py:7\r\n"  # abs-path-ok: literal stdout fixture, never opened
-    assert mcr.compare("37", out)["state"] == mcr.MATCH
-    assert mcr.compare("38", out)["state"] == mcr.DRIFT
-
-
-def test_recorded_value_present_in_grep_n_output_matches(mcr):
-    out = 'a.json:12:  "resident_limit": 510648,\nb.json:40:  "resident_limit": 510648,\n'
-    assert mcr.compare("510648", out)["state"] == mcr.MATCH
-
-
-def test_recorded_value_absent_from_output_still_drifts(mcr):
-    out = 'a.json:12:  "resident_limit": 1024,\nb.json:40:  "x": 2,\nc.json:1: y\n'
-    assert mcr.compare("510648", out)["state"] == mcr.DRIFT
-
-
-def test_value_token_is_not_a_substring_match(mcr):
-    assert mcr.compare("5106", 'a:1: "n": 510648\nb:2: z\nc:3: z\n')["state"] == mcr.DRIFT
-
-
-def test_grep_n_line_number_equal_to_recorded_count_still_drifts(mcr):
-    assert mcr.compare("37", "a.py:37:foo\nb.py:2:bar\nc.py:3:baz\n")["state"] == mcr.DRIFT
-
-
-def test_prose_row_gains_no_drift_from_value_rule(mcr):
-    assert mcr.compare("7 then prose", "a:1: x\nb:2: y\n")["state"] == mcr.UNDECIDABLE
-
-
 _TYPED = ('census:\n  - question: q\n    kind: next-free-number\n'
           '    dir: supabase/migrations\n    claims: 715\n    result: "715"\n')
 

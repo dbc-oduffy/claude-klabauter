@@ -76,6 +76,23 @@ def test_spine_read_reexports_leaf_object(name):
     assert getattr(spine_read, name) is getattr(memo_rows, name)
 
 
+_X1_MEMO = "state/cross-repo/inbox/2026-10-22-coordinator-content-repo-em-refire-stage-receipt-missing.md"
+_X1_RAW = {"id": "X1", "surface": _X1_MEMO, "writes": [_X1_MEMO]}
+
+
+def test_memo_close_only_all_memo_lifecycle_returns_the_row_memo():
+    excl = [{"id": "X1", "reason": "memo-lifecycle"}]
+    assert memo_rows.memo_close_only(excl, {"X1": _X1_RAW}) == ({"id": "X1", "memo": _X1_MEMO},)
+    assert memo_rows.MEMO_CLOSE_KEY == "memo_close"
+
+
+def test_memo_close_only_mixed_reasons_and_empty_return_nothing():
+    mixed = [{"id": "X1", "reason": "memo-lifecycle"}, {"id": "X2", "reason": "em-performed"}]
+    assert memo_rows.memo_close_only(mixed, {"X1": _X1_RAW, "X2": _X1_RAW}) == ()
+    assert memo_rows.memo_close_only([], {}) == ()
+    assert memo_rows.memo_close_only(None, {}) == ()
+
+
 def test_leaf_import_set_excludes_spine_read_and_heavy_modules():
     code = (
         "import sys\n"

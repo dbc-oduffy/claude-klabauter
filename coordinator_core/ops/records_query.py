@@ -75,6 +75,10 @@ Grammar surface (post-T4d-g1c EXTEND):
     no body to project.
 
 Negative-spec:
+  - ``delivery-verdict`` (``state/delivery-verdicts/**/*.md``) and ``ruling``
+    (``state/rulings/*.md`` plus ``state/apm-rulings/*.md`` via
+    ``_EXTRA_GLOBS_FOR_TYPE``) are served here; the map holds one glob string
+    per type, so ruling's second directory lives in that side map.
   - ``_TYPE_TO_GLOB`` covers 22 query-records.js record types (widened from
     the original 4 — ``handoff``/``handoff-archived``/``plan``/
     ``cross-repo-memo`` — with 13 more: ``bug``/``debt``/``improvement``/
@@ -436,6 +440,14 @@ _TYPE_TO_GLOB: dict[str, str] = {
     'priority-ledger':    'state/priority-ledger/*.yaml',
     'subtractive-adjudication-record': 'state/mise-inventory/*-adjudication.md',
     'completion-receipt': 'state/completion-receipts/**/*.md',
+    'delivery-verdict':   'state/delivery-verdicts/**/*.md',
+    'ruling':             'state/rulings/*.md',
+}
+
+# Additional globs a type's records also live under, beyond its one `_TYPE_TO_GLOB` string.
+# `ruling` spans the engine-ruling dir and the APM-ruling dir.
+_EXTRA_GLOBS_FOR_TYPE: dict[str, tuple[str, ...]] = {
+    'ruling': ('state/apm-rulings/*.md',),
 }
 
 # Query types whose files are `.yaml` whole-file frontmatter (no `---` fences) —
@@ -454,6 +466,7 @@ _YAML_WHOLE_FILE_TYPES: frozenset[str] = frozenset({'bug', 'debt', 'improvement'
 # see that function's docstring.
 _WILDCARD_DIR_TYPES: frozenset[str] = frozenset({
     'roadmap', 'completion', 'handoff-archived', 'cutover', 'completion-receipt',
+    'delivery-verdict',
 })
 
 # Synthetic types: one source FILE yields N records (one `## Session Ledger`
@@ -1442,7 +1455,14 @@ def _collect_files(worktree_root: Path, record_type: str) -> list[Path]:
     strangle because node sorts via scandir.
     """
     glob_pat = _memo_glob(worktree_root, record_type) or _TYPE_TO_GLOB[record_type]
+    files = _collect_files_for_glob(worktree_root, record_type, glob_pat)
+    for extra in _EXTRA_GLOBS_FOR_TYPE.get(record_type, ()):
+        files = files + _collect_files_for_glob(worktree_root, record_type, extra)
+    return files
 
+
+def _collect_files_for_glob(worktree_root: Path, record_type: str, glob_pat: str) -> list[Path]:
+    """One glob's candidate files, readdir-sorted; ``_collect_files`` concatenates a type's globs."""
     if record_type in _WILDCARD_DIR_TYPES:
         # Wildcard DIRECTORY component — e.g. state/roadmap/*/OVERVIEW.md (single
         # level) or archive/handoffs/**/*.md, state/roadmap/**/cutovers/*.md

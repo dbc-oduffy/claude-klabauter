@@ -252,6 +252,7 @@ from __future__ import annotations
 
 import ast
 import dataclasses
+import functools
 import pathlib
 import sys
 import typing
@@ -426,9 +427,6 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
         "coordinator_core/ops/plan_seam_fix.py",
         ("_handler",),
     ),
-    # Enrolled 2026-10-21: statically spawn-free (empty function-granular reachable set). The
-    # census leg's shell entries run in `mise-census-revalidate.py`, loaded by file path, so they
-    # are outside this walker; they are bounded by the op's `_census_deadline`, not by a count.
     # Enrolled 2026-10-22: statically spawn-free (empty function-granular reachable set).
     "fleet.migrate_prose_queue": (
         "coordinator_core/ops/fleet/migrate_prose_queue.py",
@@ -470,12 +468,12 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
         "coordinator_core/ops/plan_mise_prep_probe.py",
         ("_certify_handler",),
     ),
-    "plan.census_set": (
-        "coordinator_core/ops/plan_mise_prep_probe.py",
-        ("_census_set_handler",),
-    ),
     "plan.overlap_edges": (
         "coordinator_core/ops/plan_overlap_edges.py",
+        ("_handler",),
+    ),
+    "plan.record_residue_rulings": (
+        "coordinator_core/ops/plan_record_residue_rulings.py",
         ("_handler",),
     ),
     "seam.mint_batons": (
@@ -2187,6 +2185,57 @@ _LEGITIMIZED_SITES: dict[tuple[str, str, str, str, int], _Legitimation] = {
         "git process for the stub commit plus the gate-report commit under "
         "`test_staging_a_roadmap_commits_stubs_and_report_with_the_budgeted_spawns` (`assert "
         "len(counted) == budget`, read from the manifest's roadmap.blitz_stage override).",
+    ),
+    (
+        "roadmap.blitz_land",
+        "coordinator_core/ops/ceremony/detached_spawn.py",
+        "spawn_detached",
+        "<dynamic>",
+        0,
+    ): _Legitimation(
+        # The commit route's `store_hygiene.maybe_refresh` launches the daily tier through
+        # `spawn_detached`, only when the store owes maintenance and no claim is live. The
+        # companion substitutes the function object (`detached_spawn.spawn_detached`) and asserts
+        # one call per owed claim and none otherwise; this op's own fixtures never owe maintenance.
+        counter=_SEAM,
+        counted_by="coordinator_core/git/tests/test_store_hygiene.py",
+        executed="Seam substitution under `test_midx_lag_fires_once_per_claim_interval` "
+        "(`len(spawns) == 1`) and `test_not_stale_does_not_spawn` (`spawns == []`); the file's "
+        "only spawn is the Popen behind that call.",
+    ),
+    (
+        "roadmap.blitz_stage",
+        "coordinator_core/ops/ceremony/detached_spawn.py",
+        "spawn_detached",
+        "<dynamic>",
+        0,
+    ): _Legitimation(
+        # The commit route's `store_hygiene.maybe_refresh` launches the daily tier through
+        # `spawn_detached`, only when the store owes maintenance and no claim is live. The
+        # companion substitutes the function object (`detached_spawn.spawn_detached`) and asserts
+        # one call per owed claim and none otherwise; this op's own fixtures never owe maintenance.
+        counter=_SEAM,
+        counted_by="coordinator_core/git/tests/test_store_hygiene.py",
+        executed="Seam substitution under `test_midx_lag_fires_once_per_claim_interval` "
+        "(`len(spawns) == 1`) and `test_not_stale_does_not_spawn` (`spawns == []`); the file's "
+        "only spawn is the Popen behind that call.",
+    ),
+    (
+        "memo.send",
+        "coordinator_core/ops/ceremony/detached_spawn.py",
+        "spawn_detached",
+        "<dynamic>",
+        0,
+    ): _Legitimation(
+        # The commit route's `store_hygiene.maybe_refresh` launches the daily tier through
+        # `spawn_detached`, only when the store owes maintenance and no claim is live. The
+        # companion substitutes the function object (`detached_spawn.spawn_detached`) and asserts
+        # one call per owed claim and none otherwise; this op's own fixtures never owe maintenance.
+        counter=_SEAM,
+        counted_by="coordinator_core/git/tests/test_store_hygiene.py",
+        executed="Seam substitution under `test_midx_lag_fires_once_per_claim_interval` "
+        "(`len(spawns) == 1`) and `test_not_stale_does_not_spawn` (`spawns == []`); the file's "
+        "only spawn is the Popen behind that call.",
     ),
     (
         "session.reap",
@@ -6770,6 +6819,7 @@ _UNINVENTORIED_SITE_DISPOSITION: dict[tuple[str, str, str, int], str] = {}
 # a hand-duplicated constant, so it cannot drift from them; its own test still pins the exact
 # membership so a NEW op crossing the threshold fails loudly and by name rather than silently
 # growing the list.
+@functools.lru_cache(maxsize=1)
 def _live_static_pin_targets() -> tuple[frozenset[str], dict]:
     """The op population `_STATIC_SPAWN_COUNT_PINS` must cover, and the live-registry
     machinery needed to measure it: every live op that is (a) not a key of
@@ -6928,6 +6978,9 @@ def _measure_static_spawn_counts(op_names, entrypoints) -> dict[str, int]:
 #: different delta than this file's own predicates reproduce; the census's raw counts are not
 #: transcribed here without this file's own re-derivation, which is what these two entries are.
 #: Both pinned at their freshly measured 1.
+# Commit-route ops each gained one reachable site on the store-hygiene merge: the commit route
+# calls store_hygiene.maybe_refresh, which launches the daily tier through detached_spawn.spawn_detached
+# (one Popen, only when the store owes maintenance and no claim is live). Ten ops: +1 each.
 _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     # plan.mise_prep_probe: one reachable git site (HEAD sha read in `_head_sha`); the census
     # leg's per-entry shell spawns are the counted carve-out, bounded by `_census_deadline`.
@@ -6974,7 +7027,7 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     # archive_and_commit -- the auto_push and warm.skew machinery it does not
     # execute -- so raising an alarm about "13 spawns" from this row alone is a
     # misreading; go to the brightline test for what it actually costs.
-    "ceremony.commit_v2": 1,
+    "ceremony.commit_v2": 2,
     # 4 -> 3, 2026-08-30 (two-ratchet-gates C3): scope.py::_git_run's removal from
     # the reachable set.
     "fleet.archive_actioned_memos": 3,
@@ -7035,7 +7088,7 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     # 1 -> 2: 98f04d91ca added scope.release_committed_claims to _commit_group, reaching
     # git/run.py::run_git via normalize_touch_path's `ls-files` slow arm (zero-spawn fast arm
     # first). That site is already priced into memo.transition and housekeeping.cycle.
-    "session.safe_commit_offer": 2,
+    "session.safe_commit_offer": 3,
     # 20 -> 21, 2026-10-12 (3843db8c19): P-24 runs `machine-local check` once per sentinel
     # run, not per key -- one constant spawn under the probe's own timeout.
     "plugin_health.sentinel": 21,
@@ -7151,7 +7204,7 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     "cartography.chunk_table": 1,
     "research.archive_workdir": 1,
     "research.restructure_for_repeat_topic": 1,
-    "research.close": 1,
+    "research.close": 2,
     "cartography.tree": 1,
     "ceremony.chunk_commits": 1,
     "changelog.compute_day_fields": 1,
@@ -7240,8 +7293,8 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     "records.history": 1,
     "repo_setup.validate_target_root": 1,
     # 1 -> 2: the freeze's per-batch commit reaches `git/run.py::run_git` (fresh measure).
-    "review.freeze_diff": 2,
-    "review.partition_slices": 3,
+    "review.freeze_diff": 3,
+    "review.partition_slices": 4,
     "review.reachability": 1,
     "review.snapshot_diff_and_head": 1,
     "scratchpad.sweep": 1,
@@ -7264,7 +7317,7 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     # `git status` (_worktree_paths) and one `git log <oldest>..HEAD` (_committed_since): real,
     # constant at 2 however many records exist, skipped when no record carries a usable sha.
     "testing.suite_runs": 2,
-    "deliverable.cascade_terminal": 1,
+    "deliverable.cascade_terminal": 2,
     # Six reachable sites: five git/plumbing sites (archive_stamp._run_git, git_native._invoke and
     # _hash_object_stdin_bytes, git/run.py::run_git, commit_signing) plus the one detached launch of
     # the close job (spawn_detached from _launch_close_job), which keeps the commit from waiting
@@ -7293,7 +7346,7 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     "hooks.preuse_bash_dispatch": 5,
     "hooks.session_start_cloud_focus": 1,
     "hooks.session_start_repair_prepare_commit_msg_hook": 2,
-    "hooks.sessionend_auto_commit": 2,
+    "hooks.sessionend_auto_commit": 3,
     "hooks.sessionstart_ensure_http_forwarder": 1,
     "hooks.subagent_zero_tool_use_detect": 1,
     # 10 -> 7, 2026-10-12: sweep_boot reaches build_cache; the same three sites left its reach.
@@ -7311,11 +7364,11 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     "plan.gated_criteria_met": 4,
     # plan.narrow_criterion: locked_rmw commit via git_native, same site set as other plan writers.
     "plan.narrow_criterion": 4,
-    "review_mint.bookkeep_wave": 3,
+    "review_mint.bookkeep_wave": 4,
     # Lowered 6 -> 5 2026-10-02: 261b1cc1df removed one reachable site; 5 -> 4 by 7d1da49c7a.
-    "review_mint.record_superseding_review": 3,
+    "review_mint.record_superseding_review": 4,
     "review_stamp.check": 1,
-    "review_stamp.mint": 3,
+    "review_stamp.mint": 4,
     # --- 2026-10-02 merge reconciliation (claude/admiring-franklin x work/machine-a). The git
     # routing sweep (7481613e80, 7835b34367) moved per-module `subprocess` git calls onto the
     # shared `git/run.py::run_git` site, so the same physical call is now one site key for every
@@ -7406,6 +7459,12 @@ def test_static_spawn_count_pins_cover_every_unlegitimized_residual_op():
     )
 
 
+@functools.lru_cache(maxsize=1)
+def _live_static_counts() -> dict[str, int]:
+    targets, entrypoints = _live_static_pin_targets()
+    return _measure_static_spawn_counts(frozenset(_STATIC_SPAWN_COUNT_PINS) & targets, entrypoints)
+
+
 def test_static_spawn_count_pins_are_a_ceiling_never_exceeded():
     """AC20's ratchet, with CEILING semantics -- live <= pin, never live == pin.
 
@@ -7420,8 +7479,7 @@ def test_static_spawn_count_pins_are_a_ceiling_never_exceeded():
     only that an op cannot silently reach MORE of them than pinned. Growth fails here; shrinkage
     is reported by `test_static_spawn_count_pins_that_have_gone_loose` so it gets tightened
     deliberately rather than drifting."""
-    targets, entrypoints = _live_static_pin_targets()
-    live_counts = _measure_static_spawn_counts(frozenset(_STATIC_SPAWN_COUNT_PINS) & targets, entrypoints)
+    live_counts = _live_static_counts()
 
     grown = sorted(
         op
@@ -7446,8 +7504,7 @@ def test_static_spawn_count_pins_that_have_gone_loose():
     how a ceiling stops meaning anything. Failing here is good news -- an op got cheaper and the
     pin should come down to lock the win in. Tighten the pin to the live number; never raise a
     live number to meet a pin."""
-    targets, entrypoints = _live_static_pin_targets()
-    live_counts = _measure_static_spawn_counts(frozenset(_STATIC_SPAWN_COUNT_PINS) & targets, entrypoints)
+    live_counts = _live_static_counts()
 
     loose = sorted(
         op

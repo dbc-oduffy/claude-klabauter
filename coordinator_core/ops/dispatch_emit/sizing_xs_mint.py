@@ -140,7 +140,7 @@ class MemoReceiverUnresolvedError(ValueError):
     the exit criterion."""
 
 
-_CRITERION_RECEIVER = re.compile(r"\b(?:sent|send|sends|delivered|addressed)\s+to\s+`?([A-Za-z0-9][A-Za-z0-9_.-]*)")
+_CRITERION_RECEIVER = re.compile(r"\b(?:(?:sent|send|sends|delivered|addressed)|memo|reply)\s+to\s+`?([A-Za-z0-9][A-Za-z0-9_.-]*)", re.IGNORECASE)
 _DRAFT_TO = re.compile(r"^to:[ \t]*(.+?)[ \t]*$", re.MULTILINE)
 
 

@@ -12,6 +12,7 @@ Handlers are synchronous and called directly. Fixtures are bare `tmp_path` trees
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -282,13 +283,16 @@ def _stamped(root: Path, *, sha: str | None, frontmatter: str = _PREPPED_FM) -> 
     return rel
 
 
-class _StubRevalidator:
-    def __init__(self):
-        self.calls = []
+def _assert_not_run(census: dict) -> None:
+    assert census["state"] == "NOT-RUN" and census["entries"] == [] and census["detail"]
 
-    def revalidate(self, *args, **kwargs):
-        self.calls.append((args, kwargs))
-        return {"state": "MATCH", "entries": []}
+
+@pytest.fixture
+def no_spawn(monkeypatch):
+    def boom(*a, **k):
+        raise AssertionError("certify spawned a process")
+
+    monkeypatch.setattr(subprocess, "Popen", boom)
 
 
 def test_certify_is_compute_only_keyed_and_budgeted():
@@ -299,30 +303,23 @@ def test_certify_is_compute_only_keyed_and_budgeted():
     assert callable(handler)
 
 
-def test_certify_certified_plan_runs_the_census_with_the_default_stamp_rule(tmp_path, monkeypatch):
+def test_certify_certified_plan_reports_the_census_not_run_and_spawns_nothing(tmp_path, no_spawn):
     common = _repo(tmp_path)
-    rel = _stamped(tmp_path, sha=None)
-    stub = _StubRevalidator()
-    monkeypatch.setattr(mod, "_revalidator", lambda: stub)
+    rel = _stamped(tmp_path, sha=None, frontmatter=_SLOW_CENSUS_FM)
     reply = mod._certify_handler({"plan": rel, "census_timeout": 7}, common)
     assert reply["sha"] == "CERTIFIED"
     assert reply["plan"] == rel
-    assert reply["census"] == {"state": "MATCH", "entries": []}
+    _assert_not_run(reply["census"])
     assert reply["stamp"]["state"] == "CERTIFIED"
     assert "sha_detail" not in reply
-    assert len(stub.calls) == 1
-    (_plan_arg, _root, timeout), kwargs = stub.calls[0]
-    assert timeout == 7 and set(kwargs) == {"deadline"}
 
 
-def test_certify_stale_plan_has_no_census_and_the_detail(tmp_path, monkeypatch):
+def test_certify_stale_plan_has_no_census_and_the_detail(tmp_path, no_spawn):
     common = _repo(tmp_path)
     rel = _stamped(tmp_path, sha="b" * 64)
-    stub = _StubRevalidator()
-    monkeypatch.setattr(mod, "_revalidator", lambda: stub)
     reply = mod._certify_handler({"plan": rel}, common)
     assert reply["sha"] == "STALE"
-    assert reply["census"] is None and not stub.calls
+    _assert_not_run(reply["census"])
     assert reply["sha_detail"].startswith("recorded " + "b" * 64 + ", body ")
 
 
@@ -331,7 +328,7 @@ def test_certify_unstamped_plan_has_no_census(tmp_path):
     rel = _plan(tmp_path, frontmatter=_PREPPED_FM, spine=_SPINE)
     reply = mod._certify_handler({"plan": rel}, common)
     assert reply["sha"] == "UNSTAMPED"
-    assert reply["census"] is None
+    _assert_not_run(reply["census"])
 
 
 def test_certify_partial_stamp_is_malformed_with_the_missing_fields(tmp_path):
@@ -340,7 +337,7 @@ def test_certify_partial_stamp_is_malformed_with_the_missing_fields(tmp_path):
     reply = mod._certify_handler({"plan": rel}, common)
     assert reply["sha"] == "MALFORMED"
     assert reply["sha_detail"].startswith("stamp fields missing: ")
-    assert reply["census"] is None
+    _assert_not_run(reply["census"])
 
 
 def test_certify_unreadable_plan_is_malformed_with_the_oserror(tmp_path, monkeypatch):
@@ -353,7 +350,7 @@ def test_certify_unreadable_plan_is_malformed_with_the_oserror(tmp_path, monkeyp
     monkeypatch.setattr(Path, "read_text", boom)
     reply = mod._certify_handler({"plan": rel}, common)
     assert reply["sha"] == "MALFORMED" and reply["sha_detail"] == "disk gone"
-    assert reply["census"] is None
+    _assert_not_run(reply["census"])
 
 
 def test_certify_missing_file_is_refused_for_the_client_to_map(tmp_path):
@@ -369,12 +366,11 @@ def test_certify_refuses_a_list_or_empty_plan(tmp_path, bad):
         mod._certify_handler({"plan": bad}, common)
 
 
-@pytest.mark.parametrize("bad", [0, -1, True, "5"])
-def test_certify_census_timeout_must_be_a_positive_int(tmp_path, bad):
+@pytest.mark.parametrize("val", [0, -1, True, "5"])
+def test_certify_admits_and_ignores_census_timeout(tmp_path, val):
     common = _repo(tmp_path)
     rel = _plan(tmp_path, frontmatter=_PREPPED_FM, spine=_SPINE)
-    with pytest.raises(ValueError, match="census_timeout must be a positive integer"):
-        mod._certify_handler({"plan": rel, "census_timeout": bad}, common)
+    _assert_not_run(mod._certify_handler({"plan": rel, "census_timeout": val}, common)["census"])
 
 
 _SLOW_CENSUS_FM = """census:
@@ -400,12 +396,6 @@ def slow_shell(tmp_path_factory, monkeypatch):
     monkeypatch.setattr(ipc, "_timeout_for", lambda method, msg=None: 4.0)
 
 
-def _assert_deadline_census(census: dict) -> None:
-    assert census["state"] == "UNDECIDABLE"
-    assert [e["state"] for e in census["entries"]] == ["UNRUNNABLE", "UNRUNNABLE"]
-    assert "census deadline was spent" in census["entries"][1]["detail"]
-
-
 @pytest.mark.skipif(__import__("os").name == "nt", reason="needs a POSIX sh script as the shell")
 def test_probe_runs_no_census_even_when_asked(tmp_path, slow_shell):
     import time
@@ -420,7 +410,7 @@ def test_probe_runs_no_census_even_when_asked(tmp_path, slow_shell):
 
 
 @pytest.mark.skipif(__import__("os").name == "nt", reason="needs a POSIX sh script as the shell")
-def test_certify_census_stops_at_the_deadline_under_the_ops_own_timeout(tmp_path, slow_shell):
+def test_certify_runs_no_census_under_a_slow_shell(tmp_path, slow_shell):
     import time
 
     common = _repo(tmp_path)
@@ -429,16 +419,9 @@ def test_certify_census_stops_at_the_deadline_under_the_ops_own_timeout(tmp_path
     reply = mod._certify_handler({"plan": rel}, common)
     assert time.monotonic() - started < 3.0
     assert reply["sha"] == "CERTIFIED"
-    _assert_deadline_census(reply["census"])
+    _assert_not_run(reply["census"])
 
 
-@pytest.mark.parametrize("op", [PROBE, CERTIFY])
-def test_the_deadline_is_read_through_timeout_for(monkeypatch, op):
-    seen = []
-    monkeypatch.setattr(ipc, "_timeout_for", lambda method, msg=None: seen.append(method) or 8.0)
-    import time
-
-    before = time.monotonic()
-    deadline = mod._census_deadline(op)
-    assert seen == [op]
-    assert deadline - before == pytest.approx(8.0 * mod._CENSUS_DEADLINE_SHARE, abs=0.5)
+def test_the_census_op_and_leg_are_gone():
+    assert not hasattr(mod, "_census_set_handler")
+    assert ipc._REGISTRY.get("plan.census_set") is None

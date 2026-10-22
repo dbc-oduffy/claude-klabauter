@@ -121,6 +121,37 @@ def test_subagent_permitted_ops_disjoint_from_committing_ops():
     )
 
 
+def test_bare_params_file_value_accepts_one_trailing_repo_pair_only():
+    assert guard._bare_params_file_value(["--params-file", "p.json"]) == "p.json"
+    ok = ["--params-file", "p.json", "--repo", "/r"]
+    assert guard._bare_params_file_value(ok) == "p.json"
+    assert guard._repo_operand(ok) == "/r"
+    assert guard._repo_operand(["--params-file", "p.json"]) is None
+    for bad in (
+        ["--params-file", "p.json", "--repo"],
+        ["--params-file", "p.json", "--other", "/r"],
+        ["--params-file", "p.json", "--repo", "-"],
+        ["--params-file", "p.json", "--repo", "--x"],
+        ["--params-file", "-", "--repo", "/r"],
+        ["--params-file", "p.json", "--repo", "/r", "extra"],
+    ):
+        assert guard._bare_params_file_value(bad) is None, bad
+        assert guard._repo_operand(bad) is None, bad
+
+
+def test_run_root_falls_back_to_cwd_root_without_a_token_or_pinned_repo(tmp_path):
+    cwd_root = tmp_path / "cwd"
+    other = tmp_path / "other"
+    (cwd_root / ".git").mkdir(parents=True)
+    (other / ".git").mkdir(parents=True)
+    params = str(other / "p.json")
+    assert guard._run_root(None, None, str(cwd_root), "sess1") == str(cwd_root)
+    assert guard._run_root("rel.json", None, str(cwd_root), "sess1") == str(cwd_root)
+    assert guard._run_root(params, None, str(cwd_root), "sess1") == str(cwd_root)
+    assert guard._run_root(params, str(other), str(cwd_root), "sess1") == str(other)
+    assert guard._run_root(params, str(cwd_root), str(cwd_root), "sess1") == str(cwd_root)
+
+
 def test_committing_op_em_main_loop_still_allows():
     """No ``agent_id`` in the payload -> EM main-loop -> allowed exactly
     like every other committing shape this gate denies for a subagent.

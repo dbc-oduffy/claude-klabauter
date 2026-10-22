@@ -229,6 +229,7 @@ class TestRestampArmIsBoundedPerProcess:
         unbounded set is a slow leak."""
         core.reset_stamp_attempt_memo()
         self._unstampable(monkeypatch)
+        monkeypatch.setattr(core, "_STAMP_ATTEMPTED_MAX", 8)
 
         for i in range(core._STAMP_ATTEMPTED_MAX + 5):
             core.ensure_session(f"sess-bound-{i}", str(repo))

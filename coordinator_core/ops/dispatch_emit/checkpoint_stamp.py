@@ -88,18 +88,31 @@ class CheckpointWalk(NamedTuple):
     capped: bool  # the cap ended the walk with wanted ids still unfound
 
 
+_WALK_META_CACHE: dict = {}
+_WALK_META_CACHE_MAX = 4096
+
+
 def _walk_commit_meta(common_dir: Path, sha: str) -> Optional[dict]:
-    """``commit_meta`` for a first-parent walk from HEAD. Trap: ``commit_meta`` probes every pack
+    """``commit_meta`` for a first-parent walk from HEAD, memoized by ``(common_dir, sha)`` (a
+    commit's content is its sha; an absent commit is never cached). Callers must not mutate the
+    returned dict: one prep-gate call walks the same history once per predecessor plan. Trap: ``commit_meta`` probes every pack
     index (twice) before it tries a loose object, and the recent commits a walk reads are loose, so
     a cold 500-commit walk costs ~450ms on a many-pack repo; a loose read costs ~0.04ms. A
     commit absent loose falls through to ``commit_meta`` unchanged."""
+    key = (str(common_dir), sha)
+    cached = _WALK_META_CACHE.get(key)
+    if cached is not None:
+        return cached
     from coordinator_core.git.commit_walk import commit_meta, parse_commit
     from coordinator_core.git.git_objects import _read_loose_object
 
     obj = _read_loose_object(common_dir, sha)
-    if obj is not None and obj[0] == "commit":
-        return parse_commit(obj[1])
-    return commit_meta(common_dir, sha)
+    meta = parse_commit(obj[1]) if obj is not None and obj[0] == "commit" else commit_meta(common_dir, sha)
+    if meta is not None:
+        if len(_WALK_META_CACHE) >= _WALK_META_CACHE_MAX:
+            _WALK_META_CACHE.pop(next(iter(_WALK_META_CACHE)))
+        _WALK_META_CACHE[key] = meta
+    return meta
 
 
 _PROCESS_HALF_SUFFIX = "(process files)"

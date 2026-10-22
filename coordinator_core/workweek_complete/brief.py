@@ -104,6 +104,7 @@ from coordinator_core.contract.decision_object.judgment import (
     partition_reportable,
 )
 from coordinator_core.resolution.facade import resolve_operator_config
+from coordinator_core.session import record_homes
 from coordinator_core.workweek_complete.brief_inputs import (
     _resolve_repo_root,
     compute_brief_inputs,
@@ -769,7 +770,9 @@ def _read_week_anchor(repo_root: Optional[str]) -> Optional[date]:
     if not repo_root:
         return None
     try:
-        text = (Path(repo_root) / "state" / "week-changelog" / "HEADER.md").read_text(
+        text = Path(
+            record_homes.record_path(str(repo_root), "week-changelog", "HEADER.md")
+        ).read_text(
             encoding="utf-8"
         )
     except OSError:

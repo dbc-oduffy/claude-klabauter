@@ -18,6 +18,7 @@ See also tasks/shell-spawn-regrowth-gate/PINNED-API.md.
 
 from __future__ import annotations
 
+import functools
 import pathlib
 
 import pytest
@@ -263,6 +264,7 @@ def test_allowlist_is_fully_pinned():
 _SHELL_SHAPED = frozenset({SpawnKind.SHELL_BINARY, SpawnKind.SHELL_TRUE})
 
 
+@functools.lru_cache(maxsize=1)
 def _scan_repo():
     """One `walk_repo(REPO_ROOT)` call, partitioned into reporting buckets.
 
@@ -364,6 +366,8 @@ def test_repo_wide_no_unsanctioned_shell_spawn():
     print(summary)
 
 
+# cadence: vacuous over the empty KNOWN_OPEN; the repo-wide gate above is the fast coverage.
+@pytest.mark.cadence
 def test_known_open_is_not_stale():
     """KNOWN_OPEN entries must still correspond to a real detected site.
 

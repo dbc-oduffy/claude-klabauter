@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import subprocess
+
+from coordinator_core.win_portability import no_console_creationflags
 from pathlib import Path
 
 import pytest
@@ -14,7 +16,7 @@ from coordinator_core.workstream_complete import push_pending as pp
 def _git(root: Path, *args: str) -> str:
     return subprocess.run(
         ["git", "-C", str(root), "-c", "user.name=t", "-c", "user.email=t@t", *args],
-        check=True, capture_output=True, text=True,
+        check=True, capture_output=True, text=True, **no_console_creationflags(),
     ).stdout.strip()
 
 

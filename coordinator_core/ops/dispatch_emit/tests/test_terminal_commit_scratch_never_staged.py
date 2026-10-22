@@ -136,8 +136,10 @@ def test_subagent_share_paths_never_reach_the_commit_pathspec(repo):
     assert (repo / _SHARE / "sess" / "review.md").is_file()
 
 
-def test_the_machine_local_guard_still_refuses_a_subagent_share_add():
+def test_the_machine_local_guard_still_refuses_a_subagent_share_add(repo):
     from coordinator_core.git.commit import CommitRefused, commit_paths
 
+    (repo / _SHARE / "sess").mkdir(parents=True)
+    (repo / _SHARE / "sess" / "review.md").write_text("review\n", encoding="utf-8")
     with pytest.raises(CommitRefused, match="machine-local path"):
-        commit_paths(Path("."), [f"{_SHARE}/sess/review.md"], "m")
+        commit_paths(repo, [f"{_SHARE}/sess/review.md"], "m")

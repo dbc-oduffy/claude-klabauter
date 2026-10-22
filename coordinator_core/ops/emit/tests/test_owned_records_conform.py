@@ -22,6 +22,9 @@ if not (_REPO_ROOT / "state" / "handoffs").is_dir():
         allow_module_level=True,
     )
 
+# Whole-corpus scan (~57s of live-tree collect); this oracle is the only coverage of live-record conformance.
+pytestmark = pytest.mark.cadence
+
 _SECTIONS = (
     ("handoffs", handoffs, "handoff-summary"),
     ("plans", plans, "plan-summary"),

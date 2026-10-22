@@ -40,8 +40,8 @@ def _record(repo_root, session_id: str, agent_id: str, agent_type: str) -> None:
 
 @register_op("hooks.subagent_arrival_record")
 async def _handler(params: dict, repo_root=None) -> dict:
+    params = payload_of(params)
     try:
-        params = payload_of(params)
         session_id = field(params, "session_id")
         agent_id = field(params, "agent_id")
         if not repo_root or not session_id or not agent_id:

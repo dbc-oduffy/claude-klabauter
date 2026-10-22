@@ -203,6 +203,23 @@ def test_sizing_writer_with_a_live_substitution_outside_quotes_still_denies() ->
     assert guard.is_denied_bash_write(cmd, SIZING_IDS) is True
 
 
+_CLAIM_CLI = "~/.coordinator-claude-settings/bin/session-claim-cli"
+
+
+def test_claim_release_with_a_sizing_operand_is_admitted() -> None:
+    for sub in ("release-artifact", "clear-claim-if-dead"):
+        cmd = f"{_CLAIM_CLI} {sub} artifact state/sizings/2026-10-22-x.yaml"
+        assert guard._sizing_write_denied(cmd) is False
+
+
+def test_claim_cli_with_a_redirect_or_other_subcommand_still_denies() -> None:
+    base = f"{_CLAIM_CLI} release-artifact artifact state/sizings/2026-10-22-x.yaml"
+    assert guard._sizing_write_denied(base + " > state/sizings/y.yaml") is True
+    assert guard._sizing_write_denied(base + " && tee state/sizings/y.yaml") is True
+    assert guard._sizing_write_denied(base + " $(tee state/sizings/y.yaml)") is True
+    assert guard._sizing_write_denied("echo x > state/sizings/y.yaml") is True
+
+
 def test_escaped_apostrophe_does_not_split_a_quoted_pipe() -> None:
     cmd = r"echo 'it'\''s a | b'"
     assert guard._split_top_level_segments(cmd) == [cmd]

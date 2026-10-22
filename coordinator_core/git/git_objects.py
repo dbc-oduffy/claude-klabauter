@@ -124,13 +124,18 @@ _BATCH = threading.local()
 #: table, which `_build_pack` does not write -- such a batch goes loose.
 _PACK_OFFSET_LIMIT = 0x7FFFFFFF
 
+#: A flushed batch of at most this many objects is written loose; a larger one
+#: is packed. Verdict of docs/research/2026-10-22-store-hygiene-spike.md.
+_LOOSE_BATCH_MAX = 8
+
 
 @contextmanager
 def object_batch():
-    """Queue every `write_object` on this thread for one gitdir and write them as
-    ONE pack at `flush_object_batch`, not one loose file each: a loose write
-    is an `os.replace`, and on Windows that rename is ~24ms of filesystem
-    latency per object. Leaving without a flush discards the queue -- nothing
+    """Queue every `write_object` on this thread for one gitdir and defer the
+    writes to `flush_object_batch`: a set over `_LOOSE_BATCH_MAX` goes out as
+    ONE pack, a smaller one loose, so commits do not mint a pack each. The
+    threshold exists because a loose write is an `os.replace`, ~24ms of
+    filesystem latency per object on Windows. Leaving without a flush discards the queue -- nothing
     a ref points at can be in it, since a ref only moves after the flush.
     Nested use joins the outer batch."""
     if getattr(_BATCH, "state", None) is not None:
@@ -144,9 +149,9 @@ def object_batch():
 
 
 def flush_object_batch() -> None:
-    """Write the queued objects as one pack and end the batch; later writes go
-    loose. Call before anything outside this process (a git spawn, a ref)
-    must see the objects."""
+    """Write the queued objects (loose when at most `_LOOSE_BATCH_MAX`, else as
+    one pack) and end the batch; later writes go loose. Call before anything
+    outside this process (a git spawn, a ref) must see the objects."""
     state = getattr(_BATCH, "state", None)
     if state is None:
         return
@@ -154,7 +159,10 @@ def flush_object_batch() -> None:
     gitdir, pending = state
     if not pending:
         return
-    if sum(len(p) for _, p in pending.values()) >= _PACK_OFFSET_LIMIT:
+    if (
+        len(pending) <= _LOOSE_BATCH_MAX
+        or sum(len(p) for _, p in pending.values()) >= _PACK_OFFSET_LIMIT
+    ):
         for kind, payload in pending.values():
             write_object(gitdir, kind, payload)
         return
@@ -359,6 +367,28 @@ def _pack_dir_generation(pack_dir: Path) -> Optional[tuple[int, int]]:
     return (st.st_mtime_ns, st.st_size)
 
 
+def _temp_pair_is_complete(idx_path: Path, pack_path: Path) -> bool:
+    """A stranded `.tmp-<pid>-pack-<sha>` pair is read as git reads it, but only
+    when whole: the idx trailer holds the pack checksum, which must equal the
+    pack's last 20 bytes. A torn or in-progress pair fails and stays unlisted."""
+    try:
+        with open(idx_path, "rb") as f:
+            head = f.read(8)
+            f.seek(0, os.SEEK_END)
+            idx_size = f.tell()
+            if head != b"\xfftOc\x00\x00\x00\x02" or idx_size < 8 + 1024 + 40:
+                return False
+            f.seek(-40, os.SEEK_END)
+            idx_pack_sum = f.read(20)
+        with open(pack_path, "rb") as f:
+            if f.read(4) != b"PACK":
+                return False
+            f.seek(-20, os.SEEK_END)
+            return f.read(20) == idx_pack_sum
+    except OSError:
+        return False
+
+
 def _iter_pack_files(common_dir: Path, *, revalidate: bool = True) -> list[tuple[Path, Path]]:
     """Lists `(idx_path, pack_path)` pairs under `objects/pack/`, cached per
     `common_dir` -- see `_PACK_LISTING_CACHE` above for why that is safe in
@@ -382,12 +412,18 @@ def _iter_pack_files(common_dir: Path, *, revalidate: bool = True) -> list[tuple
         generation = _pack_dir_generation(pack_dir)
     result: list[tuple[Path, Path]] = []
     if generation is not None:
-        for idx_path in sorted(pack_dir.glob("*.idx")):
-            if idx_path.name.startswith("."):
+        try:
+            with os.scandir(pack_dir) as it:
+                names = {e.name for e in it}
+        except OSError:
+            names = set()
+        for name in sorted(n for n in names if n.endswith(".idx")):
+            pack_name = name[:-4] + ".pack"
+            if pack_name not in names:
                 continue
-            pack_path = idx_path.with_suffix(".pack")
-            if pack_path.is_file():
-                result.append((idx_path, pack_path))
+            if name.startswith(".") and not (name.startswith(".tmp-") and _temp_pair_is_complete(pack_dir / name, pack_dir / pack_name)):
+                continue
+            result.append((pack_dir / name, pack_dir / pack_name))
     _PACK_LISTING_CACHE[key] = (generation, result)
     _PACK_INDEXES_BY_LISTING.pop(key, None)
     _LAST_HIT_PACK.pop(key, None)
@@ -413,20 +449,59 @@ def _probe_order(key: str, indexes: list):
             yield i
 
 
+def _newest_first(listing: list[tuple[Path, Path]]) -> list[tuple[Path, Path]]:
+    """`listing` ordered by `.idx` mtime, newest first, from one directory scan.
+    A walk reads recent commits, which sit in recently written packs."""
+    if len(listing) < 2:
+        return listing
+    try:
+        with os.scandir(listing[0][0].parent) as it:
+            mtimes = {e.name: e.stat().st_mtime_ns for e in it if e.name.endswith(".idx")}
+    except OSError:
+        return listing
+    return sorted(listing, key=lambda pair: mtimes.get(pair[0].name, 0), reverse=True)
+
+
+class _LazyPackIndexes(Sequence):
+    """The pack set, newest first, each `.idx` parsed on first access.
+
+    Trap: an entry's index is `None` when its `.idx` is unparseable; only
+    iteration skips those, positional access returns them, so a caller
+    indexing by position must test for `None`. Parsing every index up front
+    costs ~90ms on a 1800-pack repo, and a lookup that hits a recent pack
+    never needs the rest."""
+
+    __slots__ = ("_listing", "_parsed")
+
+    def __init__(self, listing: list[tuple[Path, Path]]) -> None:
+        self._listing = _newest_first(listing)
+        self._parsed: dict[int, Optional[_PackIndex]] = {}
+
+    def __len__(self) -> int:
+        return len(self._listing)
+
+    def __getitem__(self, i):  # type: ignore[override]
+        idx_path, pack_path = self._listing[i]
+        if i not in self._parsed:
+            self._parsed[i] = _parse_pack_index(idx_path)
+        return idx_path, pack_path, self._parsed[i]
+
+    def __iter__(self):
+        for i in range(len(self._listing)):
+            entry = self[i]
+            if entry[2] is not None:
+                yield entry
+
+
 def _pack_indexes(
     common_dir: Path, *, revalidate: bool = True
-) -> list[tuple[Path, Path, "_PackIndex"]]:
+) -> Sequence[tuple[Path, Path, "Optional[_PackIndex]"]]:
     key = str(common_dir)
     listing = _iter_pack_files(common_dir, revalidate=revalidate)
     cached = _PACK_INDEXES_BY_LISTING.get(key)
     if cached is not None:
         return cached
-    result: list[tuple[Path, Path, _PackIndex]] = []
-    for idx_path, pack_path in listing:
-        pidx = _parse_pack_index(idx_path)
-        if pidx is None:
-            continue
-        result.append((idx_path, pack_path, pidx))
+    result = _LazyPackIndexes(listing)
     _PACK_INDEXES_BY_LISTING[key] = result
     return result
 
@@ -651,7 +726,8 @@ def packed_contains(common_dir: Path, sha: str) -> bool:
     key = str(common_dir)
     indexes = _pack_indexes(common_dir, revalidate=False)
     for i in _probe_order(key, indexes):
-        if _pack_index_find(indexes[i][2], sha) is not None:
+        pidx = indexes[i][2]
+        if pidx is not None and _pack_index_find(pidx, sha) is not None:
             _LAST_HIT_PACK[key] = i
             return True
     return False
@@ -664,6 +740,8 @@ def _search_packs_for_sha(
     indexes = _pack_indexes(common_dir, revalidate=revalidate)
     for i in _probe_order(key, indexes):
         _idx_path, pack_path, pidx = indexes[i]
+        if pidx is None:
+            continue
         offset = _pack_index_find(pidx, sha)
         if offset is None:
             continue

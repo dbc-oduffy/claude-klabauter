@@ -5,6 +5,8 @@ import json
 import shutil
 import subprocess
 
+from coordinator_core.win_portability import no_console_creationflags
+
 import pytest
 
 from coordinator_core.ops.dispatch_emit import pre_halt_credit as phc
@@ -41,10 +43,19 @@ def test_no_revise_note_no_credit():
     assert phc.credited_rows(r, _verdict(["2fd9d96c64"])) == frozenset()
 
 
-@pytest.mark.parametrize("status", ["post_commit", "not_met"])
-def test_status_must_be_met(status):
+def test_status_not_met_is_not_credited():
     r = _resume(["met by 2fd9d96c64"])
-    assert phc.credited_rows(r, _verdict(["2fd9d96c64"], status=status)) == frozenset()
+    assert phc.credited_rows(r, _verdict(["2fd9d96c64"], status="not_met")) == frozenset()
+
+
+def test_7f92dc_shape_post_commit_row_met_by_halt_sha_is_credited():
+    r = _resume(["R1 re-ruled: met by f3d01e5f1d (halt commit)"])
+    assert phc.credited_rows(r, _verdict(["f3d01e5f1d"], status="post_commit")) == {"R1"}
+
+
+def test_post_commit_row_with_unnamed_sha_is_not_credited():
+    r = _resume(["R1 re-ruled: met by f3d01e5f1d"])
+    assert phc.credited_rows(r, _verdict(["abcdef1234"], status="post_commit")) == frozenset()
 
 
 def test_row_outside_blocking():
@@ -102,7 +113,8 @@ def test_malformed_never_raises(resume, verdict):
 )
 def test_js_twin_agrees_with_python(met_by, known):
     src = f"console.log(JSON.stringify(({phc.CREDIT_MATCH_JS})({json.dumps(met_by)}, {json.dumps(known)})))"
-    out = subprocess.run(["node", "-"], input=src, capture_output=True, text=True, check=True).stdout.strip()
+    out = subprocess.run(["node", "-"], input=src, capture_output=True, text=True, check=True,
+                         **no_console_creationflags()).stdout.strip()
     r = _resume([known])
     expected = bool(phc.credited_rows(r, _verdict(met_by)))
     assert json.loads(out) is expected

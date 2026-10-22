@@ -34,6 +34,7 @@ def _groupem_admission_post(params: dict, repo_root: Optional[Path] = None) -> d
         pids (list[int], optional) -- PIDs of the heavy processes; only live ones are reported live.
         run (str, optional) -- run or task label.
         note (str, optional) -- free text.
+        declared_peak_mb (number, optional) -- expected peak tree RSS in MB; START lines only.
 
     Returns:
         {"posted": True, "path", "phase", "pids", "dead_pids", "holder_live"}
@@ -51,7 +52,12 @@ def _groupem_admission_post(params: dict, repo_root: Optional[Path] = None) -> d
     note = p.get("note", "")
     if not isinstance(run, str) or not isinstance(note, str):
         return {"error": "run and note must be str"}
+    peak = p.get("declared_peak_mb")
+    if peak is not None and admission_post.valid_peak_mb(peak) is None:
+        return {"error": "declared_peak_mb must be a number in [0, MAX_PEAK_MB]"}
     try:
-        return admission_post.post(str(p.get("phase", "")), sid, pids, run=run, note=note)
+        return admission_post.post(
+            str(p.get("phase", "")), sid, pids, run=run, note=note, declared_peak_mb=peak
+        )
     except Exception as exc:  # noqa: BLE001 -- degrade-never-raise
         return {"error": f"{type(exc).__name__}: {exc}"}

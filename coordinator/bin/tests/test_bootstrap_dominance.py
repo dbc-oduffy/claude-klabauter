@@ -78,6 +78,7 @@ Spec backlink: state/bug-backlog/2026-08-28-nothing-enforces-part-5-of-the-lazy-
 from __future__ import annotations
 
 import ast
+import functools
 from pathlib import Path
 from typing import NamedTuple
 
@@ -308,6 +309,7 @@ _REVIEWED_DISPOSITIONS: dict[str, str] = {
 }
 
 
+@functools.lru_cache(maxsize=None)
 def _live_violations() -> list[Violation]:
     findings = _analyze_bin_dir(_BIN_DIR)
     return [v for v in findings if v.key() not in _REVIEWED_DISPOSITIONS]
@@ -369,6 +371,13 @@ def _bootstraps_anywhere(tree: ast.AST, source: str) -> bool:
     return "spec_from_file_location" in source and '"lib"' in source
 
 
+@functools.lru_cache(maxsize=None)
+def _parsed(path: Path) -> tuple[str, ast.AST]:
+    source = path.read_text(encoding="utf-8", errors="replace")
+    return source, ast.parse(source, filename=path.name)
+
+
+@functools.lru_cache(maxsize=None)
 def _unbootstrapped_modules() -> list[tuple[str, str]]:
     """`(filename, module)` for every `coordinator/bin/*.py` CLI that imports a
     `bin/lib` sibling while bootstrapping nowhere in the file.
@@ -386,9 +395,8 @@ def _unbootstrapped_modules() -> list[tuple[str, str]]:
     for path in sorted(_BIN_DIR.glob("*.py")):
         if path.name.startswith("test_"):
             continue
-        source = path.read_text(encoding="utf-8", errors="replace")
         try:
-            tree = ast.parse(source)
+            source, tree = _parsed(path)
         except SyntaxError:
             continue
         if _bootstraps_anywhere(tree, source):
@@ -445,10 +453,9 @@ def test_population_examined_is_nonzero_and_matches_corpus():
     modules_with_bootstrap = 0
     for path in files:
         try:
-            source = path.read_text(encoding="utf-8")
+            _, tree = _parsed(path)
         except (UnicodeDecodeError, OSError):
             continue
-        tree = ast.parse(source, filename=path.name)
         if any(
             isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and _contains_import_lib(n)
             for n in tree.body

@@ -259,7 +259,7 @@ def test_a_roster_judge_runs_inside_the_one_verify_agent_and_feeds_the_criterion
 
 def test_the_verify_agent_runs_on_the_xs_arm_where_the_scoped_test_does_not():
     script = _compose(**_JUDGE_KW)
-    assert "const _testWanted = !!((_gate.arm !== 'xs' || _reviewApplied > 0) && (_manifest.test_targets ?? []).length);" in script
+    assert "const _testWanted = !!(((_gate.arm !== 'xs' && !_xsTail) || _reviewApplied > 0) && (_manifest.test_targets ?? []).length);" in script
     assert "if (_testWanted && _verify && _verify.test) { _testResult = _verify.test; }" in script
     assert "_falsifierResult = (_verify && _verify.judge)" in script
 
@@ -284,11 +284,11 @@ def test_a_merged_leg_that_returns_no_test_leaves_the_result_unread_and_no_targe
 
 def test_the_review_phase_runs_on_every_arm_but_xs_and_xs_hands_commit_an_empty_wave():
     script = _compose()
-    gate = "if (!_halted && _gate.arm !== 'xs' && !_noReviewPaths) {\n  phase('Review wave');"
+    gate = "if (!_halted && _gate.arm !== 'xs' && !_xsTail && !_noReviewPaths) {\n  phase('Review wave');"
     assert script.count(gate) == 1
     assert "phase('review')" not in script
     assert script.index("await Promise.all(_verifications);") < script.index(gate) < script.index("label: 'verify'")
-    assert "if (!_halted && _gate.arm === 'xs') { _reviewWave = []; }" in script
+    assert "if (!_halted && (_gate.arm === 'xs' || _xsTail)) { _reviewWave = []; }" in script
     assert script.index(gate) < script.index("_reviewWave = [];") < script.index("  _nextAction = _closeable")
     assert [f for f in run_checks(script) if f.severity is Severity.ERROR] == []
 

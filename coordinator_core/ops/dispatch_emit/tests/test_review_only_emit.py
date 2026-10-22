@@ -234,8 +234,26 @@ def _g(repo, *args):
     return done.stdout.strip()
 
 
+_REPO_TEMPLATE: list = []
+
+
 def _real_repo(tmp_path):
+    """Copy of a once-built two-commit repo; the 12 build spawns run once per module."""
+    import shutil
+    import tempfile
+
+    if not _REPO_TEMPLATE:
+        from pathlib import Path
+
+        tpl = Path(tempfile.mkdtemp(prefix="reviewonly-tpl-")) / "repo"
+        _REPO_TEMPLATE.append((tpl, *_build_real_repo(tpl)))
+    tpl, base, head = _REPO_TEMPLATE[0]
     repo = tmp_path / "repo"
+    shutil.copytree(tpl, repo)
+    return repo, base, head
+
+
+def _build_real_repo(repo):
     repo.mkdir()
     _g(repo, "init", "-q")
     _g(repo, "config", "user.email", "t@example.com")
@@ -248,7 +266,7 @@ def _real_repo(tmp_path):
     base = _g(repo, "rev-parse", "HEAD")
     (repo / "a.py").write_text("two\n", encoding="utf-8")
     _g(repo, "commit", "-q", "-am", "landed")
-    return repo, base, _g(repo, "rev-parse", "HEAD")
+    return base, _g(repo, "rev-parse", "HEAD")
 
 
 def _emit_review_only(repo, base):

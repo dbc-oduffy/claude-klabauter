@@ -133,14 +133,13 @@ Negative-spec:
 from __future__ import annotations
 
 import json
-import os
 import re
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 import yaml
 
-from coordinator_core.roadmap import census, census_operands
+from coordinator_core.roadmap import census
 from coordinator_core.roadmap.post_stamp_clause import (
     post_stamp_body_refusal,
     post_stamp_refusal,
@@ -179,9 +178,14 @@ ENGINE_ERROR = "ENGINE-ERROR"
 #: not.
 CLASS_ORDER = (
     "SPINE", "CENSUS", "EXTERNAL_DEPS", "PRIME_EXIT", "CI_RETIRED", "EXECUTOR_COMMIT",
-    "EXECUTOR_HEAVY", "TEST_RUNNER_OUT_OF_ROLE", "GITIGNORED_WRITES", "SCHEMA",
-    "REGISTER",
+    "EXECUTOR_HEAVY", "TEST_RUNNER_OUT_OF_ROLE", "GITIGNORED_WRITES", "CAPABILITIES",
+    "SCHEMA", "REGISTER",
 )
+
+#: ``classes["CAPABILITIES"]["kind"]`` for an absent ``capabilities`` key; the
+#: spelling is the seam check's ``UNDECLARED_CAPS``, restated so the gate does
+#: not import the seam module.
+CAPABILITIES_UNDECLARED_KIND = "capabilities-undeclared"
 
 #: ``external_gate[].requires`` — the discriminant the three-way split turns on.
 #: ``condition:`` is reader-facing prose the schema itself says no consumer parses
@@ -384,6 +388,12 @@ _FINDING_CLASSIFICATION: Dict[str, Any] = {
         True,
         "edit prime_exit_criterion statement: name the behaviour and the tests "
         "covering the touched files, not a suite tier — {detail}",
+    ),
+    "test-runner-out-of-role-row": (
+        True,
+        "per named row: if it writes nothing, add `performer: em`; if it writes files, keep its "
+        "writes, remove the full-suite or timing command from it, and add a new `performer: em` "
+        "verify row carrying that command with `depends_on` the writing row — {detail}",
     ),
     "census-unscreenable": (
         True,
@@ -844,14 +854,8 @@ def _census(fm: Dict[str, Any], repo_root: Optional[Path] = None) -> Dict[str, A
     bad: List[str] = []
     unscreenable: List[str] = []
     tracked: Optional[frozenset] = None
-    operand_rels: Dict[int, List[str]] = {}
     if repo_root is not None:
-        for i, e in enumerate(entries):
-            if isinstance(e, dict) and not census.is_typed(e):
-                rels = census_operands.command_operands(str(e.get("command") or "")) or []
-                if rels:
-                    operand_rels[i] = rels
-        # One ls-files for every python target and every operand in the plan, not one per entry.
+        # One ls-files for every python target in the plan, not one per entry.
         tracked = census.tracked_targets(
             repo_root,
             [
@@ -859,8 +863,7 @@ def _census(fm: Dict[str, Any], repo_root: Optional[Path] = None) -> Dict[str, A
                 for e in entries
                 if isinstance(e, dict) and not census.is_typed(e)
                 for c in census.python_candidates(str(e.get("command") or ""), repo_root)
-            ]
-            + [r for rels in operand_rels.values() for r in rels],
+            ],
         )
     for index, entry in enumerate(entries):
         if not isinstance(entry, dict):
@@ -887,53 +890,16 @@ def _census(fm: Dict[str, Any], repo_root: Optional[Path] = None) -> Dict[str, A
         refusal = census.screen(str(entry["command"]), repo_root, tracked)
         if refusal:
             unscreenable.append(f"[{index}] {refusal}")
-    untracked = _untracked_operand_warnings(operand_rels, tracked, repo_root)
-
-    def _warned(result: Dict[str, Any]) -> Dict[str, Any]:
-        # Non-verdict: never alters status, kind or withheld.
-        result["warnings"] = untracked
-        return result
-
     if bad:
-        return _warned(_defect("census-incomplete", "; ".join(bad)))
+        return _defect("census-incomplete", "; ".join(bad))
     if unscreenable:
-        # The revalidator refuses exactly these at fire time, so a stamp here would certify a
-        # premise nothing can re-ask.
-        return _warned(
-            _defect(
-                "census-unscreenable",
-                "; ".join(unscreenable) + f" -- allowed form: {census.ALLOWED_FORM}",
-            )
+        return _defect(
+            "census-unscreenable",
+            "; ".join(unscreenable) + f" -- allowed form: {census.ALLOWED_FORM}",
         )
     if not entries:
-        return _warned(_pass("declared-empty — this plan rests on no counted premise"))
-    return _warned(_pass(f"{len(entries)} re-runnable census entr(ies)"))
-
-
-def _untracked_operand_warnings(
-    operand_rels: Dict[int, List[str]],
-    tracked: Optional[frozenset],
-    repo_root: Optional[Path],
-) -> List[str]:
-    """One warning per census operand that is a live-state root, or is neither tracked nor
-    holds a tracked path and exists on disk. Spawns nothing: `tracked` is the plan's one batch."""
-    if repo_root is None or tracked is None:
-        return []
-    out: List[str] = []
-    for index, rels in sorted(operand_rels.items()):
-        for rel in rels:
-            live = rel in census_operands.LIVE_STATE_ROOTS
-            if not live:
-                prefix = rel + "/"
-                if rel in tracked or any(t.startswith(prefix) for t in tracked):
-                    continue
-                if not os.path.lexists(os.path.join(str(repo_root), rel)):
-                    continue
-            out.append(
-                f"[{index}] census operand {rel} is not tracked: this entry resolves UNDECIDABLE "
-                "at fire time; count over a tracked path"
-            )
-    return out
+        return _pass("declared-empty — this plan rests on no counted premise")
+    return _pass(f"{len(entries)} census entr(ies) screened")
 
 
 # ---------------------------------------------------------------------------
@@ -1392,6 +1358,40 @@ def _executor_commit(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     )
 
 
+_RUN_FENCE = re.compile(r"^\s*(?:```|~~~)\s*([^\s`]*)")
+_RUN_FENCE_LANGS = frozenset({"", "sh", "bash", "shell", "console", "powershell", "pwsh", "ps1"})
+_RUN_STEP_LINE = re.compile(
+    r"^\s*(?:(?:[-*+]|\d+[.)])\s+)?(?:step\s+\d+\s*[:.)-]\s*)?"
+    r"(?:(?:run|re-run|execute|invoke)\b:?\s*)?`([^`\n]+)`",
+    re.IGNORECASE,
+)
+
+
+def _run_spans(body: str) -> List[str]:
+    """Body spans that are acts: shell/untagged fenced lines and inline spans standing as a step.
+
+    Trap: an inline span mid-sentence ("Then run `x`", "Measure with `x`"), or any line in a
+    yaml/md/text fence, is read as quoted text and passes; only a line-initial step is an act.
+    """
+    spans: List[str] = []
+    in_fence = False
+    run_fence = False
+    for line in body.splitlines():
+        fence = _RUN_FENCE.match(line)
+        if fence:
+            in_fence = not in_fence
+            run_fence = in_fence and fence.group(1).lower() in _RUN_FENCE_LANGS
+            continue
+        if in_fence:
+            if run_fence:
+                spans.append(line)
+            continue
+        step = _RUN_STEP_LINE.match(line)
+        if step:
+            spans.append(step.group(1))
+    return spans
+
+
 EXECUTOR_HEAVY_FIX = (
     "guard-heavy-command-admission denies a heavy command to coordinator:executor. "
     "Fix: declare `agent_type: coordinator:test-runner` on the row."
@@ -1432,7 +1432,7 @@ def _executor_heavy(rows: List[Dict[str, Any]], repo_root: Path) -> Dict[str, An
     are skipped: the send is the send op's own commit, and the executor's brief is fixed.
     """
     from coordinator_core.bash_guards._heavy_command_class import classify
-    from coordinator_core.ops.dispatch_emit.em_only_act import _code_spans, row_is_em_performed
+    from coordinator_core.ops.dispatch_emit.em_only_act import row_is_em_performed
     from coordinator_core.ops.dispatch_emit.spine_read import _is_memo_send_row, _is_operator_row
 
     hits: List[str] = []
@@ -1447,7 +1447,7 @@ def _executor_heavy(rows: List[Dict[str, Any]], repo_root: Path) -> Dict[str, An
             continue
         spans: List[str] = []
         if isinstance(row.get("body"), str):
-            spans.extend(_code_spans(row["body"]))
+            spans.extend(_run_spans(row["body"]))
         if isinstance(row.get("verification"), str):
             spans.append(row["verification"])
         for span in spans:
@@ -1482,9 +1482,11 @@ def _executor_heavy(rows: List[Dict[str, Any]], repo_root: Path) -> Dict[str, An
 
 
 TEST_RUNNER_OUT_OF_ROLE_FIX = (
-    "coordinator:test-runner refuses a timing measurement and a full or broad suite at its tool "
-    "seam. Fix: declare `performer: em` on the row; a timing measurement runs "
-    "`python -m coordinator_core.benchmarks.measure`."
+    "coordinator:test-runner refuses a timing measurement and a full or broad suite: a dispatched "
+    "subagent never runs one, only the EM does. Fix: a row that writes nothing declares "
+    "`performer: em`; a row that writes files keeps its writes and loses the command, and a new "
+    "`performer: em` verify row carries the same command and depends on it. A timing measurement "
+    "runs `python -m coordinator_core.benchmarks.measure`."
 )
 _TIMING_CHANGE_KIND = re.compile(r"\b(?:timing|measure\w*|benchmark\w*)\b", re.IGNORECASE)
 _BROAD_SUITE_WORKER_CAP = 1 << 30
@@ -1517,7 +1519,7 @@ def _test_runner_out_of_role(rows: List[Dict[str, Any]], repo_root: Path) -> Dic
     brief is fixed. Pure over the parsed row; ``repo_root`` is the gated plan's tree, never process cwd.
     """
     from coordinator_core.bash_guards._heavy_command_class import HeavyClass, classify
-    from coordinator_core.ops.dispatch_emit.em_only_act import _code_spans, row_is_em_performed
+    from coordinator_core.ops.dispatch_emit.em_only_act import row_is_em_performed
     from coordinator_core.ops.dispatch_emit.spine_read import _is_memo_send_row, _is_operator_row
 
     hits: List[str] = []
@@ -1537,7 +1539,7 @@ def _test_runner_out_of_role(rows: List[Dict[str, Any]], repo_root: Path) -> Dic
         else:
             spans: List[str] = []
             if isinstance(row.get("body"), str):
-                spans.extend(_code_spans(row["body"]))
+                spans.extend(_run_spans(row["body"]))
             if isinstance(row.get("verification"), str):
                 spans.append(row["verification"])
             for span in spans:
@@ -1571,6 +1573,19 @@ GITIGNORED_WRITES_FIX = (
     "evidence path in `writes:` (e.g. `<plan-slug>.evidence.yaml` beside the plan) and keep the "
     "scratch output as a byproduct."
 )
+
+
+def _capabilities(fm: Dict[str, Any]) -> Dict[str, Any]:
+    """An absent ``capabilities`` key is a defect; ``capabilities: []`` declares none.
+
+    Presence only: the schema and the seam check own the shape.
+    """
+    if "capabilities" not in fm:
+        return _defect(
+            CAPABILITIES_UNDECLARED_KIND,
+            "plan frontmatter declares no capabilities key; `capabilities: []` declares none",
+        )
+    return _pass("capabilities key declared")
 
 
 def _gitignored_writes(rows: List[Dict[str, Any]], gitignored_roots: frozenset) -> Dict[str, Any]:
@@ -2510,6 +2525,7 @@ def evaluate_plan(
                 raw_spine_rows(text), Path(edge_root)
             ),
             "GITIGNORED_WRITES": _gitignored_writes(raw_spine_rows(text), gitignored_roots),
+            "CAPABILITIES": _capabilities(fm),
             "SCHEMA": _schema(fm, prime_exit, parse_error),
             "REGISTER": _register(fm, repo_root),
         }
@@ -2655,6 +2671,12 @@ def _authoring_fix_lines(failing_classes: "Sequence[str] | set") -> List[str]:
         lines.append(f"  fix: {TEST_RUNNER_OUT_OF_ROLE_FIX}")
     if "GITIGNORED_WRITES" in failing_classes:
         lines.append(f"  fix: {GITIGNORED_WRITES_FIX}")
+    if "CAPABILITIES" in failing_classes:
+        lines.append(
+            "  fix: declare `capabilities: []` for a plan with no user-facing capability, "
+            "or entries with role/click_path/ui_consumer; mise-prep-upgrade derives `[]` "
+            "where the body names no UI consumer"
+        )
     if "REGISTER" in failing_classes:
         lines.append(_REGISTER_FIX)
     return lines

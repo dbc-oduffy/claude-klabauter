@@ -1061,6 +1061,14 @@ def _stub_main_beyond_provisioning(setup_mod, monkeypatch, tmp_path):
         "install_percolate_identity",
         "install_machine_identity", "install_host_sampler_task",
         "install_verify_settings_home",
+        # Every remaining main() step writes real machine state (bytecode precompile,
+        # receipt, hook-plane verdict, content-root migration); none is under test here.
+        "migrate_legacy_content_root", "seed_heavy_admission_defaults",
+        "seed_gem_cross_repo_commit_default", "repair_status_lines",
+        "refresh_group_em_home", "migrate_group_em_inbox",
+        "apply_transcript_retention_default", "install_global_doctrine_files",
+        "install_precompiled_bytecode", "install_general_work_ensure",
+        "install_record_receipt", "install_write_hook_plane_verdict",
     ):
         monkeypatch.setattr(setup_mod, name, lambda *a, **k: None)
     monkeypatch.setattr(setup_mod, "apply_settings_manifest_env", lambda *a, **k: True)

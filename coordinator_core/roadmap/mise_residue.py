@@ -2,11 +2,13 @@
 
 A plan that stays short after the gate is "residue": mechanical declarations (`capabilities:`,
 row `appends:`) and census entries to rewrite into the read-only form `census.screen` accepts.
-This module answers three questions and does nothing else:
+This module answers five questions and does nothing else:
 
   batch_plans      which plans share one residue agent (1..RESIDUE_BATCH_MAX, each plan once)
-  classify_census  which unscreenable census entry no read-only rewrite can carry ("leftover")
-  residue_args     what the workflow needs to run with no EM relay (`mise-prep-residue-args/3`)
+  classify_census  which unscreenable census entry no read-only rewrite can carry ("leftover"),
+                   and which is a check for a row's step 0 ("step0": `python -c` / pytest)
+  spine_repairs    which failing bar classes are a residue-author repair, and which repair
+  residue_args     what the workflow needs to run with no EM relay (`mise-prep-residue-args/4`)
   seam_ref_texts   the per-plan writes-collision findings files the args reference
 
 It also pins the APM ruling interface the workflow, the op and `mise-prep-run` share:
@@ -30,16 +32,41 @@ from typing import Any, Callable, Iterable, Optional
 from coordinator_core.session.record_homes import home_dir
 from coordinator_core.roadmap import census as _census  # uses its private _split_stages/_PY_HEADS
 
-SCHEMA = "mise-prep-residue-args/3"
+SCHEMA = "mise-prep-residue-args/4"
 #: The engine op that writes APM rulings into each plan's `pm_ruling:` list.
 RULINGS_OP = "plan.record_residue_rulings"
 RESIDUE_BATCH_MAX = 8
 APM_AGENT_TYPE = "coordinator:apm"
 #: The DoE agent that authors residue; callers pass it as `residue_agent_type`.
-RESIDUE_AGENT_TYPE = "coordinator:plan-author-residue"
+RESIDUE_AGENT_TYPE = "coordinator:residue-author"
 
 #: Heads whose question cannot be asked read-only; the author has no rewrite to offer.
 LEFTOVER_HEADS = frozenset({"node", "npx", "gh", "claude"})
+_PYTEST_HEADS = frozenset({"pytest", "py.test"})
+
+#: Gate bar class (`<CLASS>/<kind>`, the shape `mise-prep-run._failing_classes` builds) -> the
+#: in-place repair the residue author applies. The unquoted-`on:` class is absent: the gate reports
+#: no failing class for it, so that spine repair has no route (pinned by
+#: test_unquoted_on_key_yields_no_failing_class).
+SPINE_REPAIR_CLASSES: dict[str, str] = {
+    "CENSUS/census-unscreenable": (
+        "a census entry marked step0 (python -c / pytest) moves into the owning row's step 0 "
+        "and the census is renumbered"
+    ),
+    "SPINE/MemoRowNoReceiptError": (
+        "add the row's receipt from the plan's own text; absent there, return the row as a leftover"
+    ),
+    "SPINE/MemoRowNoReceiverError": (
+        "add the row's memo_to from the plan's own text; absent there, return the row as a leftover"
+    ),
+    "SPINE/InvalidChangeKindError": (
+        "re-tag change_kind to the schema enum value the row's writes imply"
+    ),
+    "TEST_RUNNER_OUT_OF_ROLE/test-runner-out-of-role-row": (
+        "split into a performer: em verify row with the same command, leaving the original "
+        "row's writes"
+    ),
+}
 
 #: Seam classes handed to the residue author. For `writes-collision` the author's only repair is
 #: `appends:` on rows that only append; any other collision comes back in `escalate`, and
@@ -52,30 +79,49 @@ _REFUSED_HEAD = re.compile(r"^'([^']+)' is not on the read-only allowlist")
 _UNTRACKED_PYTHON = ("is not a git-tracked file of this repo", "is not a path inside the repo")
 
 
-def classify_census(command: str, refusal: str) -> str:
-    """"leftover" when no read-only command can carry the entry's question, else "rewrite".
+def _is_pytest_stage(parts: list[str], head: str) -> bool:
+    if head in _PYTEST_HEADS:
+        return True
+    return head in _census._PY_HEADS and "-m" in parts and parts[parts.index("-m") + 1:][:1] == ["pytest"]
 
-    Leftover: a `node`/`npx`/`gh`/`claude` stage, `python -c`, or a python target that is not a
-    tracked file. The command is scanned as well as the refusal, because the screen reports only
-    the FIRST refusing stage and a `$( )` in front would hide a `node` behind it.
+
+def classify_census(command: str, refusal: str) -> str:
+    """"leftover", "step0" or "rewrite" for an unscreenable census entry.
+
+    Leftover: a `node`/`npx`/`gh`/`claude` stage, or a non-pytest python target that is not a
+    tracked file. Step0: a `python -c` or pytest-headed stage, a check the owning row runs in its
+    step 0, not a census question. The command is scanned as well as the refusal, because the
+    screen reports only the FIRST refusing stage and a `$( )` in front would hide a `node` behind it.
     """
+    step0 = False
     for parts in _census._split_stages(command or "") or []:
         if not parts:
             continue
         head = Path(parts[0]).name
         if head in LEFTOVER_HEADS:
             return "leftover"
-        if head in _census._PY_HEADS and "-c" in parts:
-            return "leftover"
+        if head in _census._PY_HEADS and "-c" in parts or _is_pytest_stage(parts, head):
+            step0 = True
+    if step0:
+        return "step0"
     refusal = refusal or ""
     match = _REFUSED_HEAD.match(refusal)
     if match and match.group(1) in LEFTOVER_HEADS:
         return "leftover"
     if refusal.startswith("python -c"):
-        return "leftover"
+        return "step0"
     if refusal.startswith("python ") and any(tag in refusal for tag in _UNTRACKED_PYTHON):
         return "leftover"
     return "rewrite"
+
+
+def spine_repairs(failing: list[str]) -> list[str]:
+    """One `spine-repair: <class> — <repair>` line per failing class `SPINE_REPAIR_CLASSES` keys, input order."""
+    return [
+        f"spine-repair: {name} — {SPINE_REPAIR_CLASSES[name]}"
+        for name in failing or []
+        if name in SPINE_REPAIR_CLASSES
+    ]
 
 
 def _frontmatter(plan_text: str) -> dict:
@@ -165,9 +211,22 @@ def _author_seam(row: dict) -> list[dict]:
     return [f for f in row.get("seam") or [] if f.get("class") in AUTHOR_SEAM_CLASSES]
 
 
-def _certified(row: dict) -> bool:
-    """True for a row that is certified or PREPPED: it contributes nothing to the residue."""
+def _owes_capabilities(row: dict) -> bool:
+    return any(f.get("class") == "capabilities-undeclared" for f in row.get("seam") or [])
+
+
+def _closed(row: dict) -> bool:
     return row.get("outcome") in _CERTIFIED_OUTCOMES or row.get("verdict") == "PREPPED"
+
+
+def _certified(row: dict) -> bool:
+    """True for a certified or PREPPED row that owes no capabilities declaration.
+
+    A row with a capabilities-undeclared seam finding (blocking or not) is never certified: the
+    author route is the same. Such a row enters the residue for that line alone; its census is
+    still not residue when `_closed`.
+    """
+    return _closed(row) and not _owes_capabilities(row)
 
 
 def _collision_refs(short_rows: Iterable[dict], run_id: str) -> dict[str, dict]:
@@ -305,12 +364,13 @@ def residue_args(
     apm_model: str,
     read_text: Optional[Callable[[Path, str], str]] = None,
 ) -> dict:
-    """The `args` object for `workflow.bind_args`, exactly the pinned `mise-prep-residue-args/3`.
+    """The `args` object for `workflow.bind_args`, exactly the pinned `mise-prep-residue-args/4`.
 
     `rows` are the dicts `mise-prep-run.main` builds (plan, verdict, failing, detail, seam,
-    outcome). A certified or PREPPED row is skipped entirely: no batch member and no census
-    apmItem (its cross-plan seams belong to seam_fix; a census refusal the gate does not
-    reproduce is not residue). Any other row enters a batch when it has bar classes to author,
+    outcome). A certified or PREPPED row is skipped entirely, unless it carries a
+    capabilities-undeclared seam finding: it then batches for that line alone. Otherwise no
+    batch member and no census apmItem (its cross-plan seams belong to seam_fix; a census
+    refusal the gate does not reproduce is not residue). Any other row enters a batch when it has bar classes to author,
     an author-routed seam finding, or a rewritable census entry. A member's `seam` carries only
     its capabilities-undeclared lines; its owned writes-collision lines (one per path) live in
     the findings file named by `seamRef` (`seamRefLines` lines), whose text is `seam_ref_texts`. Leftover census entries of non-PREPPED rows and
@@ -336,9 +396,9 @@ def residue_args(
     apm_items: list[dict] = []
     for row in short:
         plan = row["plan"]
-        entries = census_entries(texts[plan], root, tracked)
+        entries = [] if _closed(row) else census_entries(texts[plan], root, tracked)
         ruled = ruled_items(texts[plan])
-        rewrite = [e for e in entries if e["class"] == "rewrite"]
+        rewrite = [e for e in entries if e["class"] != "leftover"]
         for e in entries:
             if e["class"] == "leftover":
                 item = {
@@ -359,8 +419,9 @@ def residue_args(
             "plan": plan,
             "bar": bar,
             "seam": [seam_line(f) for f in inline],
+            "spine": spine_repairs(row.get("failing") or []),
             "census": [
-                {"index": e["index"], "command": e["command"], "refusal": e["refusal"]}
+                {"index": e["index"], "command": e["command"], "refusal": e["refusal"], "class": e["class"]}
                 for e in rewrite
             ],
         }

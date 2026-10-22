@@ -85,6 +85,7 @@ this guard's shape and drift test are copied from).
 from __future__ import annotations
 
 import ast
+import functools
 import os
 import re
 from pathlib import Path
@@ -523,6 +524,13 @@ _ALLOWED: Dict[Tuple[str, str, str, str, str, int], str] = {
     ("coordinator_core", "ops/dispatch_emit/tests/test_requirements_ledger_archived_sizing.py", "test_archived_only_sizing_resolves_and_read_ledger_returns_rows", "Path.replace", "(repo / REL).replace(archived)", 1): _TMP_FIXTURE_REASON,
     ("coordinator_core", "ops/dispatch_emit/tests/test_requirements_ledger_archived_sizing.py", "test_ledger_gate_over_an_archived_sizing_is_not_unreadable", "Path.replace", "(repo / REL).replace(archived)", 1): _TMP_FIXTURE_REASON,
     ("coordinator_core", "ops/dispatch_emit/tests/test_requirements_ledger_archived_sizing.py", "test_mutate_register_on_archived_sizing_writes_the_archive_only", "Path.replace", "(repo / REL).replace(archived)", 1): _TMP_FIXTURE_REASON,
+    ("bin", "publish.py", "_export_engine_at_ref", "os.replace", "os.replace(staging, dest)", 1): "publishes a freshly extracted `git archive` tree from an mkdtemp staging dir to its sha-keyed cache dir, both under the system temp `claude-klabauter-publish-engine/` -- outside the worktree, so no touch-claim can name either end",
+    ("coordinator_core", "ops/_app_session_build_guard.py", "acquire_tree_lock", "os.rename", "os.rename(path, aside)", 1): "sets a dead holder's validate-lock file aside to a unique `.stale-<pid>-<rand>` sibling and unlinks it, so exactly one reclaimer wins; engine lock bookkeeping under the handle dir, never a T-claimed work path",
+    ("coordinator_core", "ops/fleet/memo_sent_records.py", "migrate_legacy_ledgers", "os.replace", "os.replace(src, dst)", 1): "retires the legacy sent-memo ledgers into `retired-ledgers/` under the machinery outbox directory (gitignored, machine-written); never a session-touched work path, and a one-shot idempotent migration with no session id in scope",
+    ("coordinator_core", "ops/ceremony/tests/test_close_background.py", "_cascade_repo", "Path.rename", "path.rename(dest)", 1): _TMP_FIXTURE_REASON,
+    ("coordinator_core", "ops/dispatch_emit/tests/test_halted_record_fires_cascade.py", "_seed_baton", "Path.rename", "path.rename(dest)", 1): _TMP_FIXTURE_REASON,
+    ("coordinator_core", "ops/dispatch_emit/tests/test_land_run_reclose.py", "test_a_digest_run_id_without_the_workflow_suffix_matches_the_record_key", "shutil.move", "shutil.move(env.record_file, env.repo / run_close.close_job_path(f'{KEY}.workflow'))", 1): _TMP_FIXTURE_REASON,
+    ("coordinator_core", "ops/dispatch_emit/tests/test_run_baton_cascade.py", "_baton", "Path.rename", "path.rename(dest)", 1): _TMP_FIXTURE_REASON,
 }
 
 _METHODS = {"move", "rename", "replace"}
@@ -809,6 +817,7 @@ def _scan_root(root: Path) -> List[Tuple[str, str, int, int, str, str]]:
     return findings
 
 
+@functools.lru_cache(maxsize=1)  # one tree scan shared by the three guards; callers only read
 def _scan_all() -> Dict[Tuple[str, str, str, str, str, int], str]:
     """Return `{(root-name, relpath, enclosing_function, kind,
     call_signature, ordinal): kind}` for every relocation call site found

@@ -404,6 +404,18 @@ def test_coverage_gaps_substring_after_whitespace_normalisation():
     assert rr.coverage_gaps(doc) == [5]
 
 
+def test_coverage_gaps_row_carrying_the_whole_turn_covers_it():
+    doc = _cov(
+        [{"turn": 1, "text": "fix the  coverage check"}, {"turn": 2, "text": "unrelated words"}],
+        rows=[_row("a", source_text="> fix the coverage check (T1, verbatim)")],
+    )
+    assert rr.coverage_gaps(doc) == [2]
+
+
+def test_coverage_gaps_empty_turn_text_is_not_covered_by_any_row():
+    assert rr.coverage_gaps(_cov([{"turn": 1, "text": " "}], rows=[_row("a")])) == [1]
+
+
 def test_coverage_gaps_unrelated_turn_covers():
     doc = _cov([{"turn": 2, "text": "ok thanks"}], rows=[], unrelated=[{"turn": 2, "reason": "chat"}])
     assert rr.coverage_gaps(doc) == []
@@ -557,7 +569,8 @@ def test_loader_uses_c_base_when_libyaml_present(_fresh_loader):
 def test_loader_falls_back_to_safeloader_without_libyaml(_fresh_loader, monkeypatch):
     monkeypatch.setattr(yaml, "__with_libyaml__", False, raising=False)
     cls = rr._loader()
-    assert issubclass(cls, yaml.SafeLoader) and not issubclass(cls, yaml.CSafeLoader)
+    csafe = getattr(yaml, "CSafeLoader", None)  # absent on a pure-Python PyYAML build
+    assert issubclass(cls, yaml.SafeLoader) and not (csafe and issubclass(cls, csafe))
 
 
 @pytest.mark.parametrize("libyaml", [True, False])
@@ -603,3 +616,7 @@ def test_apply_verdicts_repeat_for_the_same_sha_is_byte_identical():
     assert again == once
     newer = rr.apply_verdicts(once, [{"id": "a", "status": "met", "wired": True}], P1, "sha2", NOW + timedelta(minutes=5))
     assert newer != once
+
+
+def test_coverage_gaps_short_turn_is_not_covered_by_a_longer_row_containing_it():
+    assert rr._MIN_REVERSE_COVER_CHARS > len("ok")

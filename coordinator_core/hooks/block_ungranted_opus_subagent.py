@@ -88,7 +88,13 @@ than being quietly overridden.
 
 PERSONA EXEMPTION -- ON THE TYPE'S OWN PIN, NOT ON WHAT WAS PASSED, BUT ONLY
 FOR JUDGMENT BRIEFS (PM ruling 2026-10-13: Opus is for review and plan, not
-patching and probing). If `resolve_model_pins()` shows this `subagent_type`'s
+patching and probing). The ruling and gating roles (apm, vp-product, blitz-em,
+subtractive-adjudicator) are exempt from the brief check outright. The
+plan-writing pair (`coordinator:plan-author`, `coordinator:roadmap-planner`) is
+not: an execution brief to them (mechanical plan repair) is REWRITTEN to
+`model: "sonnet"` with the persona kept, never denied; a brief opening with
+judgment or authoring vocabulary stays on Opus.
+If `resolve_model_pins()` shows this `subagent_type`'s
 own frontmatter pins `model: opus`, this module does not compute an effective
 model; it classifies the brief (`tool_input` description + prompt, in-process
 regex, no spawn). A brief with execution/diagnosis vocabulary (fix, patch,
@@ -211,6 +217,13 @@ _JUDGMENT_RE = re.compile(
     r"plan|design|architect|recommend|advis|opin|judg)\w*\b",
     re.IGNORECASE,
 )
+# Judgment set for the plan-writing pair only: adds authoring verbs without widening
+# the execution personas' pass.
+_PLAN_WRITER_JUDGMENT_RE = re.compile(
+    r"\A\W*(review|critiqu|rul|assess|audit|evaluat|adjudicat|apprais|approv|"
+    r"plan|design|architect|recommend|advis|opin|judg|author|draft)\w*\b",
+    re.IGNORECASE,
+)
 _EXECUTION_RE = re.compile(
     r"\b(fix|fixes|fixing|patch\w*|prob(?:e|es|ing)|diagnos\w*|implement\w*|debug\w*|"
     r"repair\w*|refactor\w*|write (?:the )?(?:code|tests?)|code (?:up|the)|"
@@ -223,18 +236,22 @@ _EXECUTION_RE = re.compile(
 )
 
 
-# Personas whose role cannot be execution: plan authors, and the ruling/gating roles
-# that only ever return a verdict. Every brief to them is plan or review work, whatever
-# words it uses ("amend the plan: fix two rows"; "after the probe read, rule on tiers").
+# Ruling/gating roles that only ever return a verdict: every brief to them is review
+# work, whatever words it uses ("after the probe read, rule on tiers"). Exempt from the
+# brief check.
 _PLAN_AUTHORING_PERSONAS = frozenset(
     {
-        "coordinator:plan-author",
-        "coordinator:roadmap-planner",
         "coordinator:apm",
         "coordinator:vp-product",
         "coordinator:blitz-em",
         "coordinator:subtractive-adjudicator",
     }
+)
+
+# Plan writers: Opus only for authoring/design briefs; a mechanical-repair brief is
+# rewritten to sonnet, not denied.
+_PLAN_WRITER_PERSONAS = frozenset(
+    {"coordinator:plan-author", "coordinator:roadmap-planner"}
 )
 
 
@@ -259,7 +276,29 @@ _DIRECTIVE_RE = re.compile(
 
 
 
-def _execution_phrase(tool_input: Dict[str, Any]) -> Optional[str]:
+_POINTER_MAX_PROMPT = 400
+_POINTER_READ_BYTES = 64 * 1024
+_POINTER_PATH_RE = re.compile(r"(?:[A-Za-z]:[\\/]|/)[^\s\"'`<>|*?]+\.(?:md|txt)\b")
+
+
+def _pointer_file_text(prompt: Any) -> Optional[str]:
+    """First 64 KiB of the one .md/.txt file a short pointer prompt names, else None.
+    One bounded read, no spawn; a missing or unreadable file yields None."""
+    if not isinstance(prompt, str) or len(prompt) > _POINTER_MAX_PROMPT:
+        return None
+    paths = set(_POINTER_PATH_RE.findall(prompt))
+    if len(paths) != 1:
+        return None
+    try:
+        with open(paths.pop(), "rb") as handle:
+            return handle.read(_POINTER_READ_BYTES).decode("utf-8", errors="replace")
+    except OSError:
+        return None
+
+
+def _execution_phrase(
+    tool_input: Dict[str, Any], judgment_re: "re.Pattern[str]" = _JUDGMENT_RE
+) -> Optional[str]:
     """The execution phrase that makes the brief execution work, else None. A brief
     that opens with a judgment verb, restricts itself to findings (no edits), or
     reviews a named commit/diff is review; a commit/apply directive overrides only
@@ -267,7 +306,10 @@ def _execution_phrase(tool_input: Dict[str, Any]) -> Optional[str]:
     fields = [
         v for v in (tool_input.get("description"), tool_input.get("prompt")) if isinstance(v, str)
     ]
-    if not fields or any(_JUDGMENT_RE.match(v) for v in fields):
+    pointed = _pointer_file_text(tool_input.get("prompt"))
+    if pointed is not None:
+        fields.append(pointed)
+    if not fields or any(judgment_re.match(v) for v in fields):
         return None
     text = " ".join(fields)
     hit = _EXECUTION_RE.search(text)
@@ -341,6 +383,21 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
     entry = pins.get(subagent_type) or {}
     pin_model = entry.get("model")
+
+    if subagent_type in _PLAN_WRITER_PERSONAS:
+        phrase = _execution_phrase(tool_input, _PLAN_WRITER_JUDGMENT_RE)
+        if phrase is not None and _is_gated_tier(
+            _clean_str(tool_input.get("model")) or pin_model or "opus"
+        ):
+            return rewrite_input(
+                "PreToolUse",
+                {**tool_input, "model": _INHERITED_REWRITE_MODEL},
+                f"MODEL SWITCHED: {subagent_type!r} runs as {_INHERITED_REWRITE_MODEL}: "
+                f"brief says {phrase!r} (mechanical plan edit). Authoring or design "
+                "work: open the brief with plan/design/author.",
+            )
+        if phrase is None and pin_model == "opus":
+            return None
 
     if pin_model == "opus":
         # Named persona -- see module docstring "PERSONA EXEMPTION".

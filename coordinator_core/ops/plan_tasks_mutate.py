@@ -824,7 +824,10 @@ def _stamp(plan_path: str, updates: list, worktree: Path, repo_root: Path) -> di
             for field, value in update.items():
                 if field == "id":
                     continue
-                row[field] = value
+                if value is None:
+                    row.pop(field, None)
+                else:
+                    row[field] = value
             stamped_ids.append(task_id)
 
         try:
@@ -2306,7 +2309,8 @@ def _resolve(
             if deferred not in (None, ""):
                 raise MutateAbort(
                     f"resolve: row {r['id']} is deferred (deferred_until: {deferred}); "
-                    f"lift deferred_until first"
+                    f"lift it: plan.tasks.mutate stamp "
+                    f'{{"updates":[{{"id":"{r["id"]}","deferred_until":null}}]}}'
                 )
 
         # Authorization gate: a CLOSED disposition is a scope decision and

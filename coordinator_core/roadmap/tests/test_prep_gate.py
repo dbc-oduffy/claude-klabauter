@@ -64,6 +64,7 @@ def _write_plan(
 
 
 _CLEAN_FM = """census: []
+capabilities: []
 prime_exit_criterion:
   statement: the four fields land and validate
   derived_from: state/sizings/2026-09-07-fixture.yaml
@@ -572,6 +573,7 @@ def test_prose_where_the_schema_wants_a_sizings_path_is_a_defect(tmp_path):
             tmp_path,
             frontmatter=(
                 "census: []\n"
+                "capabilities: []\n"
                 "prime_exit_criterion:\n"
                 "  statement: the four fields land and validate\n"
                 "  derived_from: >-\n"
@@ -1230,6 +1232,7 @@ def test_a_schema_only_refusal_does_not_name_a_converter_that_cannot_fix_it(tmp_
             tmp_path,
             frontmatter=(
                 "census: []\n"
+                "capabilities: []\n"
                 "prime_exit_criterion:\n"
                 "  statement: the four fields land and validate\n"
                 "  derived_from: this is prose, not a sizings path\n"

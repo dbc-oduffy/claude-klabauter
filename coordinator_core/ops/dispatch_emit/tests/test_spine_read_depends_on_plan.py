@@ -254,12 +254,25 @@ def test_plan_absent_everywhere_stays_dangling(tmp_path):
 _PRED = "docs/plans/pred.md"
 
 
+_GIT_REPO_TEMPLATE: list = []
+
+
 def _git_repo(tmp_path):
+    """Copy of a once-built seeded repo; the init/commit spawns run once per module."""
+    import shutil
+    import tempfile
+    from pathlib import Path
+
     from coordinator_core.ops.dispatch_emit.tests.test_checkpoint_rows_landed import _commit, _git
 
-    _git(tmp_path, "init", "-q")
-    _commit(tmp_path, "seed")
-    _predecessor(tmp_path, "open")
+    if not _GIT_REPO_TEMPLATE:
+        tpl = Path(tempfile.mkdtemp(prefix="spine-tpl-")) / "repo"
+        tpl.mkdir()
+        _git(tpl, "init", "-q")
+        _commit(tpl, "seed")
+        _predecessor(tpl, "open")
+        _GIT_REPO_TEMPLATE.append(tpl)
+    shutil.copytree(_GIT_REPO_TEMPLATE[0], tmp_path, dirs_exist_ok=True)
     return tmp_path
 
 

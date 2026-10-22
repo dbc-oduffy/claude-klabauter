@@ -1320,7 +1320,12 @@ def test_a_busy_prep_in_the_wave_halts_rather_than_merging_a_prep_without_its_sl
     assert result["wave"] is None
 
 
-@pytest.mark.parametrize("bad_id", ["s0..s4", "prep-1..5", "s0+nope"])
+# Fast tier keeps one malformed-id shape; the rest hit the same membership check and run at cadence.
+@pytest.mark.parametrize("bad_id", [
+    "s0..s4",
+    pytest.param("prep-1..5", marks=pytest.mark.cadence),
+    pytest.param("s0+nope", marks=pytest.mark.cadence),
+])
 def test_a_wave_review_with_a_slice_id_naming_no_real_slice_halts(bad_id):
     patch = f"(r, n) => n === 0 ? {{ ...r, review: {{ ...r.review, slice_id: {json.dumps(bad_id)} }} }} : r"
     result = _run_in_wave(_FULL, 9, patch=patch)
@@ -1360,13 +1365,13 @@ def test_a_grouped_wave_review_naming_every_prepped_slice_id_reaches_a_valid_wav
 @pytest.mark.parametrize(
     "returned",
     [
-        "prep-1+…+prep-3",
+        pytest.param("prep-1+…+prep-3", marks=pytest.mark.cadence),
         "prep-1+prep-2",
-        "...e964d43cd66e-prep-1+...e964d43cd66e-prep-2",
+        pytest.param("...e964d43cd66e-prep-1+...e964d43cd66e-prep-2", marks=pytest.mark.cadence),
         "prep",
-        "...",
+        pytest.param("...", marks=pytest.mark.cadence),
         "prep-9",
-        f"{_RUN_PREP_ID}-1+nope",
+        pytest.param(f"{_RUN_PREP_ID}-1+nope", marks=pytest.mark.cadence),
     ],
 )
 def test_a_wave_review_slice_id_that_is_not_an_exact_prepped_id_halts(returned):
@@ -1390,7 +1395,14 @@ _SLICES = [
 _FULL = {**_PREP, "verdict": "PARTITION-MANDATORY", "product_files": 9, "slices": _SLICES, "error": None}
 
 
-@pytest.mark.parametrize("rows,groups", [(1, 1), (4, 1), (8, 2), (9, 3), (12, 3), (99, 6)])
+@pytest.mark.parametrize("rows,groups", [
+    (1, 1),
+    pytest.param(4, 1, marks=pytest.mark.cadence),
+    (8, 2),
+    pytest.param(9, 3, marks=pytest.mark.cadence),
+    pytest.param(12, 3, marks=pytest.mark.cadence),
+    (99, 6),
+])
 def test_prep_in_wave_fans_out_the_ratio_reviewer_count_and_merges_every_group_back(rows, groups):
     result = _run_in_wave(_FULL, rows)
     assert "halted" not in result and "error" not in result
@@ -1464,7 +1476,7 @@ def test_no_composed_slices_iteration_is_unguarded():
     assert not re.findall(r"\.slices\.length", script)
 
 
-@pytest.mark.parametrize("bad", [3, "3", None, {"n": 3}])
+@pytest.mark.parametrize("bad", [3, pytest.param("3", marks=pytest.mark.cadence), None, pytest.param({"n": 3}, marks=pytest.mark.cadence)])
 def test_a_summarised_prep_reply_halts_instead_of_throwing(bad):
     patch = f"(r, n) => n === 0 ? {{ ...r, prep: {{ ...r.prep, slices: {json.dumps(bad)} }} }} : r"
     result = _run_in_wave(_FULL, 9, patch=patch)

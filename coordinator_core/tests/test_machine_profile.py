@@ -58,10 +58,10 @@ def test_warn_shapes_follow_event(reg):
     pre = mp.apply_guard_level("g", _deny())["hookSpecificOutput"]
     assert pre["hookEventName"] == "PreToolUse"
     assert pre["permissionDecision"] == "allow"
-    stop = mp.apply_guard_level("g", _deny("Stop"))["hookSpecificOutput"]
-    assert stop["hookEventName"] == "Stop"
-    assert "permissionDecision" not in stop
-    assert "additionalContext" in stop
+    # Stop drops hookSpecificOutput, so its advisory is a top-level systemMessage.
+    stop = mp.apply_guard_level("g", _deny("Stop"))
+    assert "hookSpecificOutput" not in stop
+    assert stop["systemMessage"]
 
 
 def test_risk_none_derives_first_paragraph(reg):

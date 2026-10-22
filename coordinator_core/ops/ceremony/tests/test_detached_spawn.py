@@ -258,14 +258,13 @@ def test_divergent_live_tree_override_is_pinned_to_repo_root(
     other = str(tmp_path_factory.mktemp("other-tree"))
     with mock.patch.dict(
         detached_spawn.os.environ,
-        {"COORDINATOR_ENGINE_ROOT": other, "CLAUDE_KLABAUTER_ROOT": other},
+        {"COORDINATOR_ENGINE_ROOT": other},
         clear=False,
     ), mock.patch.object(detached_spawn.subprocess, "Popen") as mock_popen:
         detached_spawn.spawn_detached(repo_root, existing_script)
 
     env = mock_popen.call_args.kwargs["env"]
     assert env["COORDINATOR_ENGINE_ROOT"] == repo_root
-    assert env["CLAUDE_KLABAUTER_ROOT"] == repo_root
 
 
 def test_matching_or_unset_engine_root_is_left_alone(

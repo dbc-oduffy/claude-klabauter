@@ -150,14 +150,18 @@ class _MalformedCliProbe(ValueError):
 
 def _probe_takes(entry: Mapping) -> "bool | tuple[str, ...]":
     """One allowlist entry's value: a bool (takes an arg), or for a CLI probe its non-empty verb tuple; _MalformedCliProbe when a CLI entry is malformed."""
-    if rc.PROBE_TOOL_KEY not in entry and rc.PROBE_VERBS_KEY not in entry:
+    is_cli = (entry.get(rc.PROBE_CLASS_KEY) == rc.PROBE_CLI_CLASS
+              or rc.PROBE_TOOL_KEY in entry or rc.PROBE_VERBS_KEY in entry)
+    if not is_cli:
         return entry.get("ref") != rc.PROBE_NO_REF
     tool, verbs = entry.get(rc.PROBE_TOOL_KEY), entry.get(rc.PROBE_VERBS_KEY)
-    if not (isinstance(tool, str) and tool.strip() and entry.get("ref") == rc.PROBE_VERB_REF
-            and isinstance(verbs, list) and verbs
-            and all(isinstance(v, str) and _PROBE_ARG_RE.fullmatch(v) for v in verbs)):
+    if not (entry.get(rc.PROBE_CLASS_KEY) == rc.PROBE_CLI_CLASS
+            and isinstance(tool, str) and tool.strip()
+            and isinstance(verbs, Mapping) and verbs
+            and all(isinstance(k, str) and _PROBE_ARG_RE.fullmatch(k)
+                    and isinstance(q, str) and q.strip() for k, q in verbs.items())):
         raise _MalformedCliProbe(
-            f"CLI probe {entry.get('id')!r} needs a {rc.PROBE_TOOL_KEY}, ref {rc.PROBE_VERB_REF!r} and a non-empty {rc.PROBE_VERBS_KEY} list of {rc.PROBE_ARG_PATTERN} words"
+            f"CLI probe {entry.get('id')!r} needs class {rc.PROBE_CLI_CLASS!r}, a {rc.PROBE_TOOL_KEY} and a non-empty {rc.PROBE_VERBS_KEY} map of {rc.PROBE_ARG_PATTERN} verbs to questions"
         )
     return tuple(verbs)
 

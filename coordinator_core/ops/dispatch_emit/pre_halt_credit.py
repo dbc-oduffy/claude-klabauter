@@ -54,10 +54,10 @@ def _row_credited(met_by: object, known: Sequence[str]) -> bool:
 
 
 def credited_rows(resume: object, verdict: object) -> frozenset[str]:
-    """Ids of `resume.blocking` rows the verdict judges status 'met' whose met_by (str or list)
-    names a sha token that prefix-matches (either direction) a sha token of the resume's
-    revise_notes, or of that row's resume.remaining[id] evidence/remaining. Empty when the resume
-    carries no revise note, or either argument is malformed."""
+    """Ids of `resume.blocking` rows the verdict judges status 'met' or 'post_commit' whose
+    met_by (str or list) names a sha token that prefix-matches (either direction) a sha token of
+    the resume's revise_notes, or of that row's resume.remaining[id] evidence/remaining. Empty
+    when the resume carries no revise note, or either argument is malformed."""
     try:
         if not isinstance(resume, dict) or not isinstance(verdict, dict):
             return frozenset()
@@ -72,7 +72,7 @@ def credited_rows(resume: object, verdict: object) -> frozenset[str]:
         note_shas = sha_tokens(" ".join(str(n) for n in notes))
         out: set[str] = set()
         for item in items:
-            if not isinstance(item, dict) or item.get("status") != "met":
+            if not isinstance(item, dict) or item.get("status") not in ("met", "post_commit"):
                 continue
             rid = item.get("id")
             if rid not in blocking:

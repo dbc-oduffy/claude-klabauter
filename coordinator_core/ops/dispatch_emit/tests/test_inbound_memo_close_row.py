@@ -61,6 +61,18 @@ def test_two_distinct_inbox_memos_are_not_an_inbound_close():
     assert inbound_close_path(raw) is None
 
 
+def test_row_also_writing_code_is_not_an_inbound_close(tmp_path):
+    raw = {"surface": "coordinator_core/group_em/gem_home.py", "writes": ["coordinator_core/group_em/gem_home.py", _MEMO]}
+    assert inbound_close_path(raw) is None
+    row = (
+        "- id: C1\n  title: fix and close\n  change_kind: code-edit\n"
+        f"  surface: coordinator_core/group_em/gem_home.py\n  writes: [coordinator_core/group_em/gem_home.py, {_MEMO}]\n"
+        "  disposition: open\n  body: |\n    Fix it.\n"
+    )
+    rows, out = _read(_plan(tmp_path, f"source_memo: {_MEMO}\n", row))
+    assert [e["reason"] for e in out if e["reason"] == "memo-lifecycle"] == []
+
+
 def test_plan_naming_the_memo_excludes_row_as_memo_lifecycle(tmp_path):
     rows, out = _read(_plan(tmp_path, f"source_memo: {_MEMO}\n"))
     assert rows == []

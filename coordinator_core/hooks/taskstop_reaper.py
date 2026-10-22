@@ -11,9 +11,8 @@ import sys
 
 from coordinator_core.bash_guards import _host_probe as _hp
 from coordinator_core.bash_guards import _process_kill
-from coordinator_core.bash_guards._taskstop_kill import kill_tree_verified
+from coordinator_core.bash_guards._taskstop_kill import reap_launch
 from coordinator_core.bash_guards import _taskstop_launch_store as store
-from coordinator_core.bash_guards._taskstop_attribution import attribute
 from coordinator_core.bash_guards._taskstop_contract import ReapOutcome, ReapRow
 from coordinator_core.hooks._envelope import no_advisory, payload_of
 from coordinator_core.ipc import register_op
@@ -44,20 +43,10 @@ def _reap(payload: dict) -> None:
     if rec.session_id != payload.get("session_id"):
         _log(ReapRow(task_id, ReapOutcome.SESSION_MISMATCH))
         return
-    others = store.all_records()
-    rows = _snapshot()
-    if not rows:
-        _log(ReapRow(task_id, ReapOutcome.NO_CANDIDATE))
-        return
-    tree, outcome, competing, candidates = attribute(rec, others, rows, _kill.command_line)
-    if tree is None:
-        _log(ReapRow(task_id, outcome, competing=competing, candidates=candidates))
-        return
-
-    killed, complete, _ = kill_tree_verified(tree, lambda: _snapshot(), _kill)
-    result = ReapOutcome.KILLED if complete else ReapOutcome.INCOMPLETE
-    _log(ReapRow(task_id, result, killed=tuple(killed), candidates=candidates))
-    store.delete_record(task_id)
+    row = reap_launch(rec, store.all_records(), _snapshot, _kill)
+    _log(row)
+    if row.outcome in (ReapOutcome.KILLED, ReapOutcome.INCOMPLETE):
+        store.delete_record(task_id)
 
 
 def _write_stopped_marker(payload: dict) -> None:

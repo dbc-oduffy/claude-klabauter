@@ -33,6 +33,8 @@ def _install_doubles(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stamp: str
 
     skew.write_engine_stamp(tmp_path, stamp)
     monkeypatch.setattr(supervisor, "_default_engine_clone", lambda: tmp_path)
+    # An ambient override naming another tree makes boot refuse; these tests boot against tmp_path.
+    monkeypatch.delenv("COORDINATOR_ENGINE_ROOT", raising=False)
     monkeypatch.setattr(supervisor, "_declare_execution_route", lambda: None)
 
     servers: list = []

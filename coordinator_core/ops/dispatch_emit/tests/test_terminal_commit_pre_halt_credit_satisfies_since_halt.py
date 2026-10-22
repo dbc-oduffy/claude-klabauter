@@ -83,6 +83,20 @@ def test_met_by_naming_an_unnamed_sha_still_refuses(plain_repo):
     assert got == [{"id": "R1", "reason": UNCHANGED_SINCE_HALT_REASON}]
 
 
+def test_post_commit_row_met_by_the_halt_sha_is_exempt(plain_repo):
+    root, manifest, halt = plain_repo
+    resume = _resume(halt, revise_notes=[f"R1 met by {halt[:10]} (halt commit)"])
+    verdict = {"items": [{"id": "R1", "status": "post_commit", "met_by": [halt[:10]]}]}
+    assert tc._unchanged_since_halt_failures(root, resume, verdict, manifest) == []
+
+
+def test_post_commit_row_with_an_unnamed_sha_still_refuses(plain_repo):
+    root, manifest, halt = plain_repo
+    verdict = {"items": [{"id": "R1", "status": "post_commit", "met_by": ["abcdef1234"]}]}
+    got = tc._unchanged_since_halt_failures(root, _resume(halt), verdict, manifest)
+    assert got == [{"id": "R1", "reason": UNCHANGED_SINCE_HALT_REASON}]
+
+
 def test_no_revise_note_still_refuses(plain_repo):
     root, manifest, halt = plain_repo
     got = tc._unchanged_since_halt_failures(root, _resume(halt, revise_notes=[]), _verdict(), manifest)

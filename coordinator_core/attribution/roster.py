@@ -150,6 +150,7 @@ AGENT_IDENTIFIERS = (
     "parallel-review-synthesizer",
     "plan-author",
     "plan-author-residue",
+    "residue-author",
     "plan-coverage-checker",
     "premise-checker",
     "prior-art-checker",

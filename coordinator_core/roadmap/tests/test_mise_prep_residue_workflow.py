@@ -25,7 +25,7 @@ APM_TYPE = "coordinator:apm"
 
 def _args(*, apm_items: bool = True, batches: int = 2) -> dict:
     return {
-        "schema": "mise-prep-residue-args/3",
+        "schema": "mise-prep-residue-args/4",
         "repoRoot": "REPO",
         "runId": "20261019T1630Z-deadbeef",
         "rulingsCommand": "mise-prep-run --repo-root REPO --apply-rulings",
@@ -143,6 +143,50 @@ def test_member_with_seam_ref_renders_read_that_file_line(tmp_path):
     line = "seam: 3 writes-collision line(s) in state/mise-workflows/r.seam/p0.txt -- read that file"
     assert sum(line in p for p in prompts) == 1
     assert sum("writes-collision line(s) in" in p for p in prompts) == 1
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not on PATH")
+def test_member_renders_spine_lines_and_step0_census_line(tmp_path):
+    args = _args(apm_items=False, batches=1)
+    member = args["batches"][0]["plans"][0]
+    member["spine"] = ["spine-repair: tests-broad-suite -- name the file"]
+    member["census"] = [
+        {"index": 0, "command": "python -c 'x'", "refusal": "inline python", "class": "step0"},
+        {"index": 1, "command": "ls $(pwd)", "refusal": "subshell", "class": "rewrite"},
+    ]
+    bound = _bind(tmp_path, args)
+    body = bound.read_text(encoding="utf-8").replace("export const meta", "const meta", 1)
+    harness = tmp_path / "run.cjs"
+    harness.write_text(
+        "const prompts = [];\n"
+        "const agent = async (p, o) => { prompts.push(p); return { plans: [] }; };\n"
+        "const phase = async () => {};\n"
+        "const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;\n"
+        f"const body = {json.dumps(body)};\n"
+        "new AsyncFunction('agent', 'phase', body)(agent, phase).then(() => {\n"
+        "  console.log(JSON.stringify(prompts));\n"
+        "});\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    out = subprocess.run(
+        ["node", str(harness)], capture_output=True, text=True, timeout=30,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    assert out.returncode == 0, out.stderr
+    prompt = json.loads(out.stdout.strip().splitlines()[-1])[0]
+    assert "  spine-repair: tests-broad-suite -- name the file" in prompt
+    assert "census[0] moves into its row's step 0: python -c 'x'  (refused: inline python)" in prompt
+    assert "census[1] needs a rewrite: ls $(pwd)  (refused: subshell)" in prompt
+
+
+def test_source_names_residue_author_and_args_v4():
+    text = SOURCE.read_text(encoding="utf-8")
+    assert "coordinator:residue-author" in text
+    assert "mise-prep-residue-args/4" in text
+    assert "beyond the named classes and spine repairs above" in text
 
 
 def test_apm_call_is_guarded_by_non_empty_items():

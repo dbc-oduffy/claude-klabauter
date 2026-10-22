@@ -117,7 +117,7 @@ def test_cs_ship_handoff_threads_resolved_sha(monkeypatch, tmp_path):
     monkeypatch.setattr(archive_stamp, "_deliverable_commit_for_scopeless", lambda p: "abcdef1234")
     monkeypatch.setattr(
         archive_stamp, "_call_handoff_archive_transition",
-        lambda p, params: sent.append(params) or {"exit_code": 0, "retained": True},
+        lambda p, params: sent.append(params) or {"exit_code": 0, "retained": False},
     )
     assert archive_stamp.cs_ship_handoff(str(tmp_path / "h.md")) == 0
     assert sent[0]["sha"] == "abcdef1234"

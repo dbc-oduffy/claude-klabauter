@@ -186,7 +186,7 @@ def _log_spawn_failure(repo_root: str, script_path: str, args: Sequence[str], ex
         pass
 
 
-_LIVE_TREE_ENV_VARS = ("COORDINATOR_ENGINE_ROOT", "CLAUDE_KLABAUTER_ROOT")
+_LIVE_TREE_ENV_VARS = ("COORDINATOR_ENGINE_ROOT",)
 
 
 def _canonical(path: str) -> str:

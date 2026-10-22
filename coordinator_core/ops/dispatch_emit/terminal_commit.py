@@ -2790,13 +2790,44 @@ def _lifecycle_owed(
     return requirements_ledger.post_commit_owed(verdict, sha, discharged=done)
 
 
+def _blocking_open_rows(ledger: object, verdict: object, open_rows: object) -> list:
+    """The open rows that keep ``_ledger_met_observation`` from stamping: every open row except an
+    awaiting-operator row whose verdict item is explicitly ``essential: false``, under a ledger that
+    is not ``all_of_pm_ask`` and whose row is not a design-conformance row (always essential)."""
+    from coordinator_core.ops.dispatch_emit import requirements_ledger
+
+    items = verdict.get("items") if isinstance(verdict, dict) else None
+    design = {
+        str(i.id) for i in (getattr(ledger, "items", None) or ())
+        if requirements_ledger._is_design(getattr(i, "anchor", None))
+    }
+    optional = {
+        str(i.get("id")) for i in (items if isinstance(items, list) else [])
+        if isinstance(i, dict) and i.get("essential") is False and str(i.get("id")) not in design
+    } if not getattr(ledger, "all_of_pm_ask", False) else set()
+    return [r for r in (open_rows or []) if not (isinstance(r, dict) and "command" in r and str(r.get("id")) in optional)]
+
+
 def _ledger_met_observation(ledger: object, verdict: object, open_rows: object) -> Optional[str]:
-    """``"ledger-met: <ids>"`` when a ledger-bearing run's passed gate left no awaiting-operator
-    row and the verdict names a ``met`` item; else None. Call only after ``_ledger_gate`` passed."""
-    if ledger is None or open_rows:
+    """``"ledger-met: <ids>"`` when a ledger-bearing run's passed gate left no blocking open row
+    (an awaiting-operator row the verdict marks non-essential does not block) and the verdict names
+    a ``met`` item; else None. Call only after ``_ledger_gate`` passed."""
+    if ledger is None or _blocking_open_rows(ledger, verdict, open_rows):
         return None
     met = _ledger_met_ids(verdict)
     return ("ledger-met: " + ", ".join(met))[:_UNDONE_CAP] if met else None
+
+
+def _ledger_not_stamped_reason(ledger: object, verdict: object, open_rows: object) -> Optional[str]:
+    """Why a passed ledger gate yielded no ``ledger_met`` observation, for the close reply; None when
+    the run is not ledger-bearing or an observation exists."""
+    if ledger is None or _ledger_met_observation(ledger, verdict, open_rows) is not None:
+        return None
+    blocking = _blocking_open_rows(ledger, verdict, open_rows)
+    if blocking:
+        why = "; ".join(f"{r.get('id')}: {r.get('reason')}" for r in blocking)
+        return f"exit_criterion_met not stamped: open ledger row(s) not met ({why})"[:_UNDONE_CAP]
+    return "exit_criterion_met not stamped: the ledger verdict names no met row"
 
 
 def _ledger_met_regrades(
@@ -4374,15 +4405,10 @@ def _terminal_commit_inner(
     )
     more_regraded.update({k: v for k, v in credited_regraded.items() if k not in more_regraded})
     if isinstance(close_ctx, dict) and close_ctx.get("kind") == "xs-s-run":
-        held_for_closeout = _held_ids(params)
-        more_regraded.update({
-            k: v
-            for k, v in _xs_closeout_regrades(
-                worktree_root, request, incomplete_chunks - set(more_regraded) - held_for_closeout,
-                snapshot, report_cache,
-            ).items()
-            if k not in more_regraded
-        })
+        more_regraded.update(_xs_closeout_regrades(
+            worktree_root, request, incomplete_chunks - set(more_regraded) - _held_ids(params),
+            snapshot, report_cache,
+        ))
     if more_regraded:
         incomplete_chunks = incomplete_chunks - set(more_regraded)
         if regraded is not None:
@@ -5363,6 +5389,9 @@ def _terminal_commit_inner(
         pending_operator = _awaiting_operator(open_rows)
         if pending_operator:
             reply["awaiting_operator"] = pending_operator
+        not_stamped = _ledger_not_stamped_reason(ledger, params.get("ledger_verdict"), open_rows)
+        if not_stamped:
+            reply["exit_criterion_not_stamped"] = not_stamped
         if (
             record_abs is not None and record is not None and not anchor_only
             and source_rows and request.plan_path not in source_rows

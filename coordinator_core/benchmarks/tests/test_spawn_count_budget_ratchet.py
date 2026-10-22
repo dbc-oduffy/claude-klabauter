@@ -23,7 +23,9 @@ Spec backlink: docs/wiki/cost-budgets-and-the-kill-disposition.md
 
 from __future__ import annotations
 
+import functools
 import json
+import os
 import re
 from pathlib import Path
 
@@ -299,6 +301,12 @@ _SPAWN_COUNT_HIGH_WATER = {
                 "First recorded 2026-10-06 at the value it entered with: one batched reachability check serves every shipped-in lookup."
             ),
         },
+        "xs_sizing_match": {
+            "ceiling": 1,
+            "reason": (
+                "First recorded 2026-10-22 at the value it entered with: one batched grep matches every unsized XS baton to its sizing."
+            ),
+        },
     },
     "roadmap.blitz_stage": {
         "commit_stubs_and_report": {
@@ -498,6 +506,20 @@ def _stale_high_water_ops(live: dict) -> list:
 _TEST_FILE_IN_PROSE = re.compile(r"test_[\w.]*\.py")
 
 
+_UNTRACKED_EPHEMERA = frozenset({".git", "scratch", ".coordinator-local", ".project-rag", "node_modules", ".venv", "__pycache__"})
+
+
+@functools.lru_cache(maxsize=1)
+def _repo_file_basenames() -> frozenset:
+    """Basenames of every file under the repo, minus untracked ephemera -- one pruned walk
+    shared by every enforcer lookup (a per-name rglob re-walked scratch/ each time)."""
+    names = set()
+    for _dir, dirnames, filenames in os.walk(_REPO_ROOT):
+        dirnames[:] = [d for d in dirnames if d not in _UNTRACKED_EPHEMERA]
+        names.update(filenames)
+    return frozenset(names)
+
+
 def _named_enforcer_paths(row: dict) -> list:
     return sorted(set(_TEST_FILE_IN_PROSE.findall(json.dumps(row))))
 
@@ -546,9 +568,7 @@ def _rows_whose_named_enforcer_is_gone(overrides: dict) -> tuple:
         if not named:
             unpinnable.append(op)
             continue
-        if not any(
-            any(True for _ in _REPO_ROOT.rglob(name)) for name in named
-        ):
+        if not any(name in _repo_file_basenames() for name in named):
             orphaned.append((op, named))
     return orphaned, unpinnable
 

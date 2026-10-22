@@ -2324,7 +2324,13 @@ def _stamp_superseded(opts: _Opts) -> int:
         print(f"{_PROG}: {opts.plan} status \"{_state['prior_status']}\" is already superseded — no-op")
         return 0
 
-    if worktree_root is not None:
+    if worktree_root is not None and opts.no_commit:
+        # The caller owns the commit and the archive move; the plan stays at its path.
+        print(
+            f"{_PROG}: {opts.plan} --no-commit: plan written to disk, commit and archive left to the caller",
+            file=sys.stderr,
+        )
+    elif worktree_root is not None:
         relpath, relpath_err = _relpath_for_commit(plan_path, worktree_root)
         if relpath_err is not None:
             print(
@@ -3827,16 +3833,20 @@ def main(argv: List[str]) -> int:
         )
         return 1
 
-    if opts.no_commit and opts.verb != "stamp-implemented":
+    if opts.no_commit and opts.verb not in ("stamp-implemented", "stamp-superseded"):
         print(
             f"{_PROG}: {opts.verb} does not accept --no-commit "
-            "(only stamp-implemented can leave its write to a caller's commit)",
+            "(only stamp-implemented and stamp-superseded can leave their write to a caller's commit)",
             file=sys.stderr,
         )
         return 1
 
     if not opts.cascade and opts.verb != "stamp-implemented":
         print(f"{_PROG}: {opts.verb} does not accept --no-cascade (only stamp-implemented cascades)", file=sys.stderr)
+        return 1
+
+    if opts.ship_sha is not None and opts.verb == "stamp-superseded":
+        print(f"{_PROG}: stamp-superseded does not accept --ship-sha", file=sys.stderr)
         return 1
 
     if opts.ship_sha is not None and not opts.no_commit:

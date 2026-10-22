@@ -849,7 +849,6 @@ _GRANDFATHERED_RUNNER_MODULES: frozenset[str] = frozenset(
         "coordinator/lib/percolate/publish_sync.py",
         "coordinator/lib/release_currency.py",
         "coordinator/lib/session_ensure_branch.py",
-        "coordinator_core/archive_stamp.py",
         "coordinator_core/backlog_grind_assemble/apply.py",
         "coordinator_core/backlog_grind_assemble/readers_mise.py",
         "coordinator_core/bash_guards/_alternative_liveness.py",
@@ -1009,7 +1008,6 @@ _GRANDFATHERED_DIALS: frozenset = frozenset(
         ("coordinator/lib/release_currency.py", "_LOCAL_GIT_TIMEOUT_SECS"),
         ("coordinator/lib/release_currency.py", "_REMOTE_FETCH_TIMEOUT_SECS"),
         ("coordinator/lib/release_currency.py", "_REMOTE_GIT_TIMEOUT_SECS"),
-        ("coordinator_core/archive_stamp.py", "_SUBPROCESS_TIMEOUT_SEC"),
         ("coordinator_core/backlog_grind_assemble/readers_mise.py", "_GIT_TIMEOUT"),
         ("coordinator_core/bash_guards/_dc_git_probe.py", "_run_git(timeout)"),
         ("coordinator_core/dag.py", "_git_history_is_complete(timeout_s)"),
@@ -1078,8 +1076,8 @@ _GRANDFATHERED_DIALS: frozenset = frozenset(
 #: all. Lowering either is free and is the point; raising either is the
 #: deliberate, reviewable act of arguing that the tree needs one more private
 #: git runner than it had yesterday.
-_PINNED_RUNNER_CEILING = 190
-_PINNED_DIAL_CEILING = 72
+_PINNED_RUNNER_CEILING = 189
+_PINNED_DIAL_CEILING = 71
 
 #: Frozen inventory of destructive-verb call sites (plan AC2/AC3). FROZEN
 #: 2026-09-19 over a full run of `collect_destructive_verb_sites()` across
@@ -1119,9 +1117,9 @@ _FROZEN_DESTRUCTIVE_VERB_SITES: frozenset = frozenset(
         ("coordinator_core/consolidate_assemble/apply.py", "_cherry_pick_unique", "cherry-pick"),
         ("coordinator_core/consolidate_assemble/apply.py", "_dispatch_worktree_prune", "worktree"),
         ("coordinator_core/consolidate_assemble/apply.py", "_dispatch_worktree_remove", "worktree"),
-        ("coordinator_core/consolidate_assemble/apply.py", "_union_resolve_ledgers", "add"),
         ("coordinator_core/contract/apply_base.py", "scoped_commit", "add"),
         ("coordinator_core/contract/apply_base.py", "scoped_commit", "commit"),
+        ("coordinator_core/git/commit.py", "_reset_index_paths", "reset"),
         ("coordinator_core/merge_assemble/__init__.py", "compute_version_bump_proposal", "tag"),
         ("coordinator_core/ops/ceremony/detached_render_commit.py", "commit_own_artifact", "add"),
         ("coordinator_core/ops/fleet_machinery_sweep.py", "_git_rm_cached", "rm"),

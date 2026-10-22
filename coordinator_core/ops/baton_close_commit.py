@@ -11,6 +11,7 @@ Self-registration: importing this module registers the op; ops/__init__.py impor
 
 from __future__ import annotations
 
+import asyncio
 import os
 from pathlib import Path
 from typing import Any, Optional
@@ -46,6 +47,10 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     commits and no engine caller lands `pathspec`: until the caller does, the flips are
     uncommitted working-tree edits.
     """
+    return await asyncio.to_thread(_run, params, repo_root)
+
+
+def _run(params: dict, repo_root: Optional[Path]) -> dict:
     if repo_root is None:
         return {"exit_code": 1, "error": f"{OP_KEY}: repo_root is required (no founding root available)"}
     rows = params.get("rows")

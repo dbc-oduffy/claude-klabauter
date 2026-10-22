@@ -1232,6 +1232,21 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #      The mutated plan file is read by shell consumers, other ops, and rag.
     # Spec backlink: pln-pcli-need-1-plan-tasks-engine--53c00d § C3
     "plan.tasks.mutate": OpClass.MUTATING,
+    # plan.merge — MUTATING: merges N docs/plans/*.md plans plus a delta into one new plan
+    # file at `out`, or refuses with no file written.
+    # DR-208 five-question affirmation (citing ops/plan_merge.py):
+    #   1. Writes, deletes, or reorders any state file, queue, or git object?  YES.
+    #      Writes one new plan file at `out` through atomic_write_bytes.
+    #   2. Writes into rag's relational store?                                 No.
+    #      Writes only the single `out` file; no rag store write.
+    #      Dual-write ban (DR-208 / tri-plane DD#1) satisfied.
+    #   3. Opens any file for write (including sentinel creation)?             YES.
+    #      atomic_write_bytes opens a temp file beside `out` for the atomic replace.
+    #   4. Mutates shared mutable state outside its own module?                YES.
+    #      docs/plans/*.md is coordinator substrate shared across EM sessions.
+    #   5. Persistent state changes observable across process boundaries?     YES.
+    #      The merged plan file is read by shell consumers, other ops, and rag.
+    "plan.merge": OpClass.MUTATING,
     # criterion_evidence.record -- MUTATING: appends to <plan-stem>.evidence.yaml.
     "criterion_evidence.record": OpClass.MUTATING,
     # plan.tasks.grouping_digest — COMPUTE_ONLY, the read-only sibling of plan.tasks.mutate
@@ -1425,9 +1440,8 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #   4. Mutates shared mutable state outside its own module?                No.
     #   5. Persistent state changes observable across process boundaries?      No.
     "plan.mise_prep_probe": OpClass.COMPUTE_ONLY,
-    # plan.mise_certify_probe — COMPUTE_ONLY: ONE plan's stamp state (sha leg) and, on CERTIFIED,
-    # its census revalidation; mise-certify's per-plan unit. Census commands run as read-only
-    # shell children whose outcome it reports.
+    # plan.mise_certify_probe — COMPUTE_ONLY: ONE plan's stamp state (sha leg); mise-certify's
+    # per-plan unit. Spawns nothing.
     # DR-208 five-question affirmation (citing ops/plan_mise_prep_probe.py):
     #   1. Writes, deletes, or reorders any state file, queue, or git object?  No.
     #   2. Writes into rag's relational store?                                 No.
@@ -1435,17 +1449,6 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #   4. Mutates shared mutable state outside its own module?                No.
     #   5. Persistent state changes observable across process boundaries?      No.
     "plan.mise_certify_probe": OpClass.COMPUTE_ONLY,
-    # plan.census_set — COMPUTE_ONLY: revalidates a caller's whole plan set's census under one set
-    # budget (revalidate_set). Census commands run as read-only shell children whose outcome it
-    # reports; its only write is the derived CensusStore cache file under .coordinator-local/cache/,
-    # rebuildable by running the census and never a source of truth.
-    # DR-208 five-question affirmation (citing ops/plan_mise_prep_probe.py):
-    #   1. Writes, deletes, or reorders any state file, queue, or git object?  No (cache file only).
-    #   2. Writes into rag's relational store?                                 No.
-    #   3. Opens any file for write (including sentinel creation)?             Cache file only.
-    #   4. Mutates shared mutable state outside its own module?                No.
-    #   5. Persistent state changes observable across process boundaries?      Cache file only.
-    "plan.census_set": OpClass.COMPUTE_ONLY,
     # plan.mise_upgrade_apply — MUTATING: writes the fields mise-prep-upgrade derives from ONE
     # caller-named docs/plans/*.md (upgrade_plan check=False, in place). The only upgrade writer
     # the mise-prep-run driver uses outside --dry-run.

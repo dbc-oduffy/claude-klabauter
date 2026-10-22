@@ -19,7 +19,9 @@ from coordinator_core.git.git_state import head_sha
 from coordinator_core.warp_fire import SUBMIT_WORKFLOW_NAME, fire_command
 from coordinator_core.ops.dispatch_emit import agent_sidecar as _sidecar
 from coordinator_core.ops.dispatch_emit import prompt_fragments as _prompt_fragments
+from coordinator_core.ops.dispatch_emit.nested_run_contract import STAGE_PENDING_KEY
 from coordinator_core.ops.dispatch_emit.reply_sidecar import (
+    ADOPT_STAGED_ARG_JS,
     READ_STAGE_SIDECAR_JS,
     STAGE_REPLY_SCHEMA,
     VERIFY_REPLY_JS,
@@ -31,6 +33,7 @@ from coordinator_core.ops.dispatch_emit.ask_brief import EM_BRIEF_VAR, EmBrief, 
 from coordinator_core.ops.dispatch_emit import ask_gate as _ask_gate  # noqa: F401 -- installs the fleet-mode provider
 from coordinator_core.ops.dispatch_emit.sizing_fire import RESUME_LEDGER_HALT_BLOCKING_FIELD
 from coordinator_core.ops.dispatch_emit.pre_halt_credit import CREDIT_MATCH_JS
+from coordinator_core.ops.dispatch_emit.memo_rows import MEMO_CLOSE_KEY
 from coordinator_core.ops._workflow_contract import agent_options_phase_titles
 from coordinator_core.ops.dispatch_emit.ask_contract import (
     ALL_LANDED_HALT_KIND,
@@ -64,6 +67,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     RESUME_LEDGER_REVISED_FIELD,
     RESUME_LEDGER_UNCLAIMED_FIELD,
     RESUME_LEDGER_REMAINING_FIELD,
+    RESUME_LEDGER_DERIVED_FIELD,
     RESUME_LEDGER_UNLANDED_FIELD,
     TERMINAL_RESUME_LEDGER_PARAM,
     RECORD_DIR_ROOT,
@@ -660,6 +664,7 @@ _ADMIT_MANIFEST_JS = (
 )
 _STAGE_SIDECAR_HALT = "stage reply sidecar does not match its handle: "
 _ADOPT_STAGE_REPLY_JS = (
+    "  let _stagePending = null;\n"
     # A soft (plan-blitz readyOp) reply's `error` is the pass-through's prose: `_adoptReadyError` owns
     # the refusal there. The manifest is only ever the sidecar text that matched its handle.
     "  const _adoptStageReply = async (r, soft) => {\n"
@@ -671,7 +676,11 @@ _ADOPT_STAGE_REPLY_JS = (
     "plan: typeof r.owed_plan === 'string' ? r.owed_plan : null }; } return; }\n"
     f"    if (r.{PARKED_REPLY_KEY} && !r.manifest_handle) {{ if (!_parked) _parked = String(r.{PARKED_REPLY_KEY}); return; }}\n"
     "    if (!r.manifest_handle) { if (!soft && !_relayGap) _relayGap = 'manifest_handle'; return; }\n"
-    "    const got = await _readStageSidecar(r.manifest_handle, REPO_ROOT);\n"
+    "    let got;\n"
+    "    if (_LAUNCHER_CHILD) {\n"
+    "      got = _adoptStagedArg(r.manifest_handle);\n"
+    "      if (got === null) { if (!_stagePending) _stagePending = { handle: r.manifest_handle }; return; }\n"
+    "    } else { got = await _readStageSidecar(r.manifest_handle, REPO_ROOT); }\n"
     f"    if (got.fail) {{ if (!_diskHalt) _diskHalt = {_js_string_literal(_STAGE_SIDECAR_HALT)} + got.fail; return; }}\n"
     "    const gap = _wholeManifestGap(got.manifest);\n"
     "    if (gap) { if (!_relayGap) _relayGap = gap; return; }\n"
@@ -683,7 +692,7 @@ _ADOPT_STAGE_REPLY_JS = (
 def _stage_reply_js() -> str:
     """The script block that turns a stage reply into `_stagedManifest`: the runtime reads the sidecar's reader
     with no agent, and the text is verified against the handle before `JSON.parse`."""
-    return VERIFY_REPLY_JS + READ_STAGE_SIDECAR_JS + _ADOPT_STAGE_REPLY_JS
+    return VERIFY_REPLY_JS + READ_STAGE_SIDECAR_JS + ADOPT_STAGED_ARG_JS + _ADOPT_STAGE_REPLY_JS
 
 
 #: The run reads its commit token from the Workflow `args` the emit's fire args carry, so the
@@ -2148,22 +2157,26 @@ def compose_ask_script(
     # The re-plan leg is composed only when `fold_stage`; a stop_after compose never reaches it.
     _rl0 = f"_gate.{RESUME_LEDGER_KEY}"
     b.append("  let _ledgerExec = false;")
+    b.append("  let _xsTail = false;")
     b.append("  let _ledgerAdded = [];")
     b.append(f"  const _resumeLedger = !_halted && !!{_rl0};")
     b.append(
         f"  const _ledgerUnlanded = _resumeLedger ? ({_rl0}.{RESUME_LEDGER_UNLANDED_FIELD} ?? []) : [];"
     )
     b.append(
-        f"  const _ledgerOwes = _resumeLedger && (_gate.arm === {_lit(ARM_M_PLUS)} || _gate.arm === {_lit(ARM_S)})"
+        f"  const _ledgerDerived = _resumeLedger ? ({_rl0}.{RESUME_LEDGER_DERIVED_FIELD} ?? []) : [];"
+    )
+    b.append(
+        f"  const _ledgerOwes = _resumeLedger && _gate.arm === {_lit(ARM_M_PLUS)}"
         f" && ((({_rl0}.blocking ?? [])"
         f".some((id) => (((({_rl0}.{RESUME_LEDGER_REMAINING_FIELD} ?? {{}})[id]) ?? {{}}).remaining ?? []).length > 0)"
         f" && ({_rl0}.{RESUME_LEDGER_LEG_FIELD}?.action !== {_lit(LEG_SKIP)}))"
         f" || ({_rl0}.{RESUME_LEDGER_UNCLAIMED_FIELD} ?? []).length > 0);"
     )
     b.append(
-        f"  if (_resumeLedger) {{ _planRel = {_rl0}.plan; if (_ledgerUnlanded.length) {{ _ledgerExec = true; }} "
-        f"else if (!_ledgerOwes) {{ _gate = {{ ..._gate, arm: {_lit(ARM_XS)} }}; }} "
-        f"if (_gate.arm === {_lit(ARM_S)}) {{ _gate = {{ ..._gate, resume_plan: _planRel }}; }} }}"
+        f"  if (_resumeLedger) {{ _planRel = {_rl0}.plan; if (_ledgerUnlanded.length || _ledgerDerived.length) {{ _ledgerExec = true; }} "
+        "else if (!_ledgerOwes) { _xsTail = true; } "
+        f"if (_gate.arm === {_lit(ARM_S)} && !_xsTail) {{ _gate = {{ ..._gate, resume_plan: _planRel }}; }} }}"
     )
     b.append(
         f"  const _allLandedResume = _resumeLedger && {_rl0}.{RESUME_LEDGER_KIND_FIELD} === {_lit(ALL_LANDED_HALT_KIND)};"
@@ -2218,7 +2231,7 @@ def compose_ask_script(
             ".filter((s) => typeof s === 'string' && s.trim()); "
             "if (_ledgerAdded.length) { _ledgerExec = true; "
             "await _adoptStageReply(_replanned?.stage_reply); } "
-            f"else {{ if (!_ledgerUnlanded.length) {{ _gate = {{ ..._gate, arm: {_lit(ARM_XS)} }}; }} "
+            "else { if (!_ledgerUnlanded.length) { _xsTail = true; } "
             "_stagedManifest = _gateStaged; _relayGap = _gateGap; _diskHalt = _gateDisk; } }"
         )
 
@@ -2602,12 +2615,12 @@ def compose_ask_script(
 
     if stop_after:
         b.append(
-            f"  if (!_halted && _gate.arm !== {_lit(ARM_XS)} && _planRel) {{ _halted = {{ halted: {_lit(HALT_PARKED)}, "
+            f"  if (!_halted && _gate.arm !== {_lit(ARM_XS)} && !_xsTail && _planRel) {{ _halted = {{ halted: {_lit(HALT_PARKED)}, "
             "reason: 'parked after plan: stop_after=plan', "
             f"plan: _planRel, sizing: _sizingRel, run_id: _runId, next_action: {parked_next_action_js('_planRel')} }}; }}"
         )
         b.append(
-            f"  if (!_halted && _gate.arm !== {_lit(ARM_XS)}) {{ _halted = {{ halted: {_lit(HALT_REFUSAL)}, "
+            f"  if (!_halted && _gate.arm !== {_lit(ARM_XS)} && !_xsTail) {{ _halted = {{ halted: {_lit(HALT_REFUSAL)}, "
             "reason: 'stop_after=plan but no plan landed', sizing: _sizingRel, run_id: _runId }; }"
         )
         if in_run_commit:
@@ -2652,6 +2665,7 @@ def compose_ask_script(
     if judged:
         b.append("  let _falsifierSpec = null;")
     b.append("  let _allLanded = false;")
+    b.append("  let _memoCloseOnly = false;")
     b.append("  if (!_viaRoadmap) {")
     b.append("  if (!_halted) {")
     # Stage is folded into the last act of the agent that closes the gate, plan or plan-blitz ready
@@ -2669,10 +2683,13 @@ def compose_ask_script(
         "  let _stageHalt = _stageRefusal ? 'stage refused: ' + _stageRefusal : "
         "(_diskHalt ?? (_relayGap ? 'stage manifest relay is not whole: ' + _relayGap : null));"
     )
+    b.append(
+        f"  if (_LAUNCHER_CHILD && _stagePending && !_stagedManifest) {{ return {{ {STAGE_PENDING_KEY}: _stagePending }}; }}"
+    )
     b.append("  if (_stagedManifest) { _manifest = _stagedManifest; }")
     if judged and fold_falsifier:
         spec_js = "_scoutFalsifier ?? _planFalsifier" if sized_in_run else "_planFalsifier"
-        b.append(f"  if (_gate.arm && _gate.arm !== {_lit(ARM_XS)}) {{ _falsifierSpec = {spec_js}; }}")
+        b.append(f"  if (_gate.arm && _gate.arm !== {_lit(ARM_XS)} && !_xsTail) {{ _falsifierSpec = {spec_js}; }}")
     b.append(
         f"  if (!_stagedManifest) {{ _manifest = {{ error: '{NO_MANIFEST_PREFIX}: the agent that closes the "
         "gate, plan or plan-blitz ready path returned none' }; }"
@@ -2693,7 +2710,13 @@ def compose_ask_script(
     b.append(
         "  if (!_manifest.error && !(_manifest.rows ?? []).length && Array.isArray(_gate.resume_rows) "
         "&& ((_manifest.owed ?? []).length || (_manifest.gated ?? []).length)) "
-        f"{{ _allLanded = true; _gate = {{ ..._gate, arm: {_lit(ARM_XS)} }}; }}"
+        "{ _allLanded = true; _xsTail = true; }"
+    )
+    # `_allLanded` is set too: it is the flag the pinned refusal-halt condition already honors.
+    b.append(
+        "  if (!_manifest.error && !(_manifest.rows ?? []).length && !(_manifest.owed ?? []).length "
+        f"&& !(_manifest.gated ?? []).length && Array.isArray(_manifest.{MEMO_CLOSE_KEY}) && _manifest.{MEMO_CLOSE_KEY}.length) "
+        "{ _memoCloseOnly = true; _allLanded = true; _xsTail = true; }"
     )
     b.append(
         f"  if (_manifest.error && /^(?:stage refused: )?{STAGE_REFUSAL_PREFIX}/.test(String(_manifest.error))) {{ _halted = {{ "
@@ -2728,7 +2751,7 @@ def compose_ask_script(
     b.append(f"  phase({_lit(_emit._EXECUTE_PHASE_TITLE)});")
     b.append("  const _rows = {};")
     b.append(
-        f"  const _rowVerifyWanted = !(_gate.arm !== {_lit(ARM_XS)} && (_manifest.test_targets ?? []).length);"
+        f"  const _rowVerifyWanted = !(_gate.arm !== {_lit(ARM_XS)} && !_xsTail && (_manifest.test_targets ?? []).length);"
     )
     b.append("  const _waves = [...new Set(_manifest.rows.map((r) => r.wave))].sort((a, b) => a - b);")
     b.append("  if (_manifest.fanout) log('Fanout: ' + JSON.stringify(_manifest.fanout));")
@@ -2817,20 +2840,20 @@ def compose_ask_script(
     b.append("  const _reviewOuterAgent = agent;")
     b.append(f"  {{ const agent = (p, o) => _reviewOuterAgent({_DESIGN_PREFIX_JS} + p, o);")
     b.append(
-        f"  if (!_halted && _gate.arm !== {_lit(ARM_XS)} && !_noReviewPaths) {{\n" + review_text + "\n  }"
+        f"  if (!_halted && _gate.arm !== {_lit(ARM_XS)} && !_xsTail && !_noReviewPaths) {{\n" + review_text + "\n  }"
     )
     b.append("  }")
     # XS skips review; an empty wave (zero slices, no delivery verdict) is the form terminal_commit's
     # inline_review already accepts, so the run still reaches commit without a fabricated verdict.
-    b.append(f"  if (!_halted && _gate.arm === {_lit(ARM_XS)}) {{ _reviewWave = []; }}")
+    b.append(f"  if (!_halted && (_gate.arm === {_lit(ARM_XS)} || _xsTail)) {{ _reviewWave = []; }}")
     b.append(
-        "  if (!_halted && _noReviewPaths && _gate.arm !== "
+        "  if (!_halted && _noReviewPaths && !_xsTail && _gate.arm !== "
         f"{_lit(ARM_XS)}) {{ log('execute_review skipped: no row declares a path, nothing to review'); "
         "_reviewWave = []; }"
     )
     b.append(_review_blocked_halt_js(sizing_rel))
     test_guard = (
-        f"(_gate.arm !== {_lit(ARM_XS)} || _reviewApplied > 0) && (_manifest.test_targets ?? []).length"
+        f"((_gate.arm !== {_lit(ARM_XS)} && !_xsTail) || _reviewApplied > 0) && (_manifest.test_targets ?? []).length"
     )
     review_applied = (
         "const _reviewApplied = (Array.isArray(_reviewWave) ? _reviewWave : [])"
@@ -2892,7 +2915,7 @@ def compose_ask_script(
         anchor=anchor,
         test_js=_test_instruction_js(run_base_sha or "HEAD", repo_root),
         docs_parts=_docs_prompt_parts(run_id=run_id, manifest_rel=manifest_rel) if in_run_commit else (),
-        verdict_parts=(*verdict_parts, DEFAULT_MET_BY_CLAUSE, "js:" + _SFE_WAVE_SIDECARS_JS, "js:" + _RESUME_LEDGER_CLAUSE_JS),
+        verdict_parts=(*verdict_parts, DEFAULT_MET_BY_CLAUSE, "js:" + _SFE_WAVE_SIDECARS_JS, "js:" + _RESUME_LEDGER_CLAUSE_JS, "js:" + _MEMO_CLOSE_CLAUSE_JS),
         judged=judged,
         schema=_verify_schema(judge_brief[1] if judged else None),
         run_id=run_id,
@@ -3331,6 +3354,13 @@ _SFE_WAVE_SIDECARS_JS = (
     "const s = w.sidecar_path.replace(/\\\\/g, '/'); "
     "return s.toLowerCase().startsWith(_r.toLowerCase()) ? s.slice(_r.length) : s; }); "
     "return _p.length ? _p.join(', ') : 'none'; })())"
+)
+#: Appended to the verify prompt of a memo-close-only run; `_memoCloseOnly` gates it.
+_MEMO_CLOSE_CLAUSE_JS = (
+    "(_memoCloseOnly ? ' MEMO-CLOSE: no executor ran; the source memo sha reply and resolve are paid by the "
+    "close-out memo-lifecycle leg after commit, so a requirement row whose only remaining acts are sha_reply "
+    "and lifecycle acts is not_met with remaining naming them. Memo rows: ' + "
+    f"JSON.stringify(_manifest.{MEMO_CLOSE_KEY}) + '.' : '')"
 )
 #: Appended to the verify prompt: on a ledger resume the executors' work already landed, so the
 #: verdict covers exactly the rows the halted run blocked on.

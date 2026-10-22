@@ -1184,7 +1184,58 @@ _CAPTURE_DATA_EXTENSIONS: Tuple[str, ...] = (".json", ".jsonl", ".patch", ".diff
 _COMMENT_SYNTAX_FREE_EXTENSIONS: Tuple[str, ...] = (".json", ".jsonl")
 
 
-_PM_VERBATIM_NAMES = frozenset({"ask.md", "pm-intent.md", "requirements.md"})
+_PM_VERBATIM_NAMES = frozenset(
+    {"ask.md", "pm-intent.md", "requirements.md", "relayed-ask.md"}
+)
+
+# Sizing yaml values that transcribe the PM's / a relayer's words verbatim,
+# addressed as key paths from the document root; "*" matches every sequence
+# item. Any scalar style is exempt there (a same-line marker would rewrite
+# the quoted bytes), every other key in the sizing stays scanned.
+_SIZING_VERBATIM_KEY_PATHS: Tuple[Tuple[str, ...], ...] = (
+    ("pm_verbatims", "*", "text"),
+    ("requirement_register", "rows", "*", "source_text"),
+)
+
+
+def _is_sizing_yaml(filename: str) -> bool:
+    return filename.startswith("state/sizings/") and filename.lower().endswith(
+        (".yaml", ".yml")
+    )
+
+
+def _collect_verbatim_spans(
+    node: "yaml.nodes.Node", path: Tuple[str, ...], spans: List[Tuple[int, int]]
+) -> None:
+    """Record the span of every scalar VALUE reached by following `path`
+    (see `_SIZING_VERBATIM_KEY_PATHS`) from `node`."""
+    if not path:
+        if isinstance(node, yaml.ScalarNode):
+            spans.append((node.start_mark.index, node.end_mark.index))
+        return
+    head, rest = path[0], path[1:]
+    if head == "*":
+        if isinstance(node, yaml.SequenceNode):
+            for item in node.value:
+                _collect_verbatim_spans(item, rest, spans)
+    elif isinstance(node, yaml.MappingNode):
+        for key_node, value_node in node.value:
+            if isinstance(key_node, yaml.ScalarNode) and key_node.value == head:
+                _collect_verbatim_spans(value_node, rest, spans)
+
+
+def _sizing_verbatim_spans(text: str) -> List[Tuple[int, int]]:
+    """Character-offset spans of the sizing verbatim values; `[]` on any
+    compose failure, so a malformed file keeps firing."""
+    spans: List[Tuple[int, int]] = []
+    try:
+        for doc_node in yaml.compose_all(io.StringIO(text)):
+            if doc_node is not None:
+                for key_path in _SIZING_VERBATIM_KEY_PATHS:
+                    _collect_verbatim_spans(doc_node, key_path, spans)
+    except Exception:
+        return []
+    return spans
 
 
 def _is_evidence_artifact(filename: str) -> bool:
@@ -1319,6 +1370,8 @@ def detect_in_text(text: str, filename: str = "") -> List[Finding]:
     line_offsets: List[int] = []
     if lower_filename.endswith((".yaml", ".yml")):
         class2_spans = _yaml_block_scalar_spans(text)
+        if _is_sizing_yaml(filename):
+            class2_spans = class2_spans + _sizing_verbatim_spans(text)
         if class2_spans:
             cum = 0
             for lw in text.splitlines(keepends=True):

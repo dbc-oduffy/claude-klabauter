@@ -108,3 +108,43 @@ def test_stamp_plan_implemented_absent_criterion_with_ledger_met_stamps(repo):
     plan.write_text(text.replace("review_stamp:", "review_stamp_unused:", 1), encoding="utf-8")
     out = terminal_commit._stamp_plan_implemented(repo, "docs/plan.md", _SHA, ledger_met="ledger-met: R1")
     assert out.get("plan_status_reason") != "review_stamp criterion is not met", out
+
+
+class _Ledger:
+    def __init__(self, all_of_pm_ask=False):
+        self.all_of_pm_ask = all_of_pm_ask
+
+
+_OP = {"id": "R3", "reason": "awaiting_operator C6", "row": "C6", "command": "run it"}
+
+
+def _verdict(**extra):
+    return {"items": [{"id": "R2", "status": "met"}, {"id": "R3", "status": "not_met", **extra}]}
+
+
+def test_no_open_row_stamps_unchanged():
+    got = terminal_commit._ledger_met_observation(_Ledger(), {"items": [{"id": "R2", "status": "met"}]}, [])
+    assert got == "ledger-met: R2"
+    assert terminal_commit._ledger_not_stamped_reason(_Ledger(), {"items": [{"id": "R2", "status": "met"}]}, []) is None
+
+
+def test_non_essential_operator_row_stamps():
+    v = _verdict(essential=False)
+    assert terminal_commit._ledger_met_observation(_Ledger(), v, [_OP]) == "ledger-met: R2"
+    assert terminal_commit._ledger_not_stamped_reason(_Ledger(), v, [_OP]) is None
+
+
+def test_essential_operator_row_names_reason():
+    v = _verdict()
+    assert terminal_commit._ledger_met_observation(_Ledger(), v, [_OP]) is None
+    assert "R3: awaiting_operator C6" in terminal_commit._ledger_not_stamped_reason(_Ledger(), v, [_OP])
+
+
+def test_all_of_pm_ask_keeps_operator_row_blocking():
+    v = _verdict(essential=False)
+    assert terminal_commit._ledger_met_observation(_Ledger(True), v, [_OP]) is None
+    assert terminal_commit._ledger_not_stamped_reason(_Ledger(True), v, [_OP])
+
+
+def test_non_ledger_run_is_silent():
+    assert terminal_commit._ledger_not_stamped_reason(None, None, []) is None

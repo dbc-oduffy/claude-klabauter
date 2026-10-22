@@ -796,7 +796,12 @@ def stage(
         raise AskStageError(f"route: {exc}") from exc
     # Split, not refuse: runtime_cap is CPU-dependent and a refusal would halt hands-off runs.
     waves = cap_waves(build_waves(rows), sibling_split.runtime_cap())
-    if not waves and not ledger_resume and not (only_rows is not None and (owed or gated)):
+    from coordinator_core.ops.dispatch_emit.memo_rows import memo_close_only
+
+    memo_close = memo_close_only(exclusions, raw_by_id)
+    closing_ids = {c["id"] for c in memo_close}
+    memo_close_run = bool(memo_close) and not gated and all(o.id in closing_ids for o in owed)
+    if not waves and not ledger_resume and not memo_close_run and not (only_rows is not None and (owed or gated)):
         named = f"; gated: {', '.join(g.id for g in gated)}" if gated else ""
         if owed:
             named += f"; owed by the EM: {', '.join(o.id for o in owed)}"
@@ -946,6 +951,7 @@ def stage(
         withheld_ids=withheld_ids,
         retired_resume_rows=retired_resume,
         slot_withheld=tuple(slot_withheld_rows(raw_by_id)),
+        memo_close=memo_close if not manifest_rows else (),
     )
     reply_sidecar.write_reply(root, record / "manifest.json", manifest_payload(root, manifest))
     if session_id:

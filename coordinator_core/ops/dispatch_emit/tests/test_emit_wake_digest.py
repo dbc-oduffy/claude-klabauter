@@ -547,7 +547,7 @@ def test_a_roster_judge_takes_the_criterion_leg_even_with_no_falsifier_and_no_te
         waves, name="wf", description="judge", plan_path="docs/plans/p.md",
         review_roster_fragment=_V5_FRAGMENT_WITH_JUDGE, review_stage_schemas=_STAGE_SCHEMAS_WITH_JUDGE,
     )
-    assert "_falsifierResult = await (async () => { try { return ((r) => {" in script
+    assert "_falsifierResult = await (async () => { try { return ((r, g) => {" in script
     assert "agentType: 'coordinator:criterion-judge'" in script
     assert "test:terminal-falsifier'" not in script
     assert "criterion: (_falsifierResult ?" in script

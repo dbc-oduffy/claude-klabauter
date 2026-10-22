@@ -110,6 +110,28 @@ def test_line_absent_at_path_reports_not_delivered(tmp_path, monkeypatch):
     assert r["delivered"] is False and r["reason"] == "not_found_at_path"
 
 
+def test_start_with_declared_peak_carries_field(tmp_path, monkeypatch):
+    _holder(monkeypatch, {"session_id": "gem", "live": True})
+    admission_post.post("START", "s1", [], directory=tmp_path, declared_peak_mb=2048)
+    (line,) = _lines(tmp_path)
+    assert line["declared_peak_mb"] == 2048.0
+
+
+def test_start_without_peak_and_end_omit_field(tmp_path, monkeypatch):
+    _holder(monkeypatch, {"session_id": "gem", "live": True})
+    admission_post.post("START", "s1", [], directory=tmp_path)
+    admission_post.post("END", "s1", [], directory=tmp_path, declared_peak_mb=2048)
+    assert all("declared_peak_mb" not in x for x in _lines(tmp_path))
+
+
+def test_invalid_peak_is_dropped_but_line_written(tmp_path, monkeypatch):
+    _holder(monkeypatch, {"session_id": "gem", "live": True})
+    for bad in (-1, float("nan"), float("inf"), True, "5", admission_post.MAX_PEAK_MB * 2):
+        admission_post.post("START", "s1", [], directory=tmp_path, declared_peak_mb=bad)
+    lines = _lines(tmp_path)
+    assert len(lines) == 6 and all("declared_peak_mb" not in x for x in lines)
+
+
 def test_oversize_note_and_pid_list_are_capped(tmp_path, monkeypatch):
     _holder(monkeypatch, {"session_id": "gem", "live": True})
     monkeypatch.setattr(admission_post.session_registry, "pid_alive", lambda pid: True)

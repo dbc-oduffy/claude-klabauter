@@ -260,7 +260,7 @@ def test_a_part_that_composes_over_the_cap_is_resplit_in_place_with_later_parts_
             ]
         ),
     )
-    monkeypatch.setattr(emit, "_WORKFLOW_SCRIPT_BYTE_CAP", one_row + 9000)
+    monkeypatch.setattr(emit, "_WORKFLOW_SCRIPT_BYTE_CAP", one_row + 14000)
     monkeypatch.setattr(emit, "row_block_bytes", lambda rows, **kw: {r.id: 3000 for r in rows})
 
     reply = _lanes(inv, root, hot_files=0)

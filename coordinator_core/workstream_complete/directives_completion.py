@@ -172,6 +172,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Mapping, NamedTuple, Optional
 
+from coordinator_core.completion_record_integrity import _find_archived_plan
 from coordinator_core.frontmatter.schema_validate import parse_frontmatter
 from coordinator_core.ops.ceremony.wsc_disposition import PREDECESSOR_CONSUMED, canonicalize
 from coordinator_core.workstream_complete.directives_session_hygiene import AFTER_CLOSE_COMMIT_KEY
@@ -444,6 +445,20 @@ def build_baton_chain_closure_directive(
     return directive
 
 
+def _current_plan_path(plan_path: str, repo_root: Path) -> str:
+    """`plan_path` unchanged while the file exists; else the archived copy
+    (stamp-implemented moves a plan out of `docs/plans/`), in the same form
+    (relative stays repo-relative, absolute stays absolute). Unchanged when
+    no archived copy exists either."""
+    p = Path(plan_path)
+    if (p if p.is_absolute() else repo_root / p).exists():
+        return plan_path
+    found = _find_archived_plan(repo_root, p.stem)
+    if found is None:
+        return plan_path
+    return str(found if p.is_absolute() else found.relative_to(repo_root).as_posix())
+
+
 def build_plan_reversibility_eligibility_directive(
     *,
     plan_path: str,
@@ -462,6 +477,7 @@ def build_plan_reversibility_eligibility_directive(
     an unreadable plan)."""
     if not plan_path:
         return None
+    plan_path = _current_plan_path(plan_path, repo_root)
     args = [plan_path, "--json", "--repo-root", str(repo_root)]
     directive = _directive(
         "d-plan-reversibility-eligibility", _PLAN_REVERSIBILITY_ELIGIBILITY_CLI, args

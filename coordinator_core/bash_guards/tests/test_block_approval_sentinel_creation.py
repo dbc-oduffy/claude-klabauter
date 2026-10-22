@@ -1502,3 +1502,75 @@ class TestGitInitIntoScratch:
     def test_init_with_hook_vector_denies(self, tree):
         assert self._at("git init --template=/t scratch/x", tree) is not None
         assert self._at("git init --separate-git-dir=/g scratch/x", tree) is not None
+
+
+class TestBracketedScriptPaths:
+    """A cd-prefixed python3 on a shell-escaped or quoted bracketed absolute path
+    resolves to the literal file; every remaining fallback deny names its trigger."""
+
+    @pytest.fixture
+    def bracketed(self, tmp_path):
+        d = tmp_path / "[general-work]" / "scratch"
+        d.mkdir(parents=True)
+        return tmp_path, d
+
+    @staticmethod
+    def _spellings(path):
+        posix = str(path).replace("\\", "/")
+        return {
+            "escaped": posix.replace("[", "\\[").replace("]", "\\]"),
+            "single-quoted": "'%s'" % posix,
+            "double-quoted": '"%s"' % posix,
+            "bare": posix,
+        }
+
+    @pytest.mark.parametrize("spelling", ["escaped", "single-quoted", "double-quoted", "bare"])
+    def test_clean_script_allows_under_cd_and_pipe(self, bracketed, spelling):
+        root, d = bracketed
+        script = d / "clean.py"
+        script.write_text("print('ok')\n", encoding="utf-8")
+        arg = self._spellings(script)[spelling]
+        cmd = "cd %s && python3 %s 2>&1 | grep -v deprecat; ls" % (
+            str(root).replace("\\", "/"), arg
+        )
+        assert guard.check(_payload(cmd, cwd=str(root))) is None
+
+    @pytest.mark.parametrize("spelling", ["escaped", "single-quoted", "double-quoted"])
+    def test_sentinel_creating_script_still_denies(self, bracketed, spelling):
+        root, d = bracketed
+        script = d / "bad.py"
+        script.write_text("open('%s', 'w').write('x')\n" % SENTINEL, encoding="utf-8")
+        arg = self._spellings(script)[spelling]
+        cmd = "cd %s && python3 %s" % (str(root).replace("\\", "/"), arg)
+        assert guard.check(_payload(cmd, cwd=str(root))) is not None
+
+    def test_missing_bracketed_script_denies_naming_the_condition(self, bracketed):
+        root, d = bracketed
+        arg = self._spellings(d / "missing.py")["escaped"]
+        reason = _reason(guard.check(_payload("python3 " + arg, cwd=str(root))))
+        assert "not a readable regular file" in reason
+
+    def test_unresolved_variable_denial_names_the_variable(self, tmp_path):
+        reason = _reason(guard.check(_payload('python3 "$W1A_UNSET_P/x.py"', cwd=str(tmp_path))))
+        assert "unresolved $VAR" in reason
+
+    def test_unresolvable_cd_denial_names_the_cd(self, tmp_path):
+        reason = _reason(guard.check(_payload("cd $W1A_UNSET_D && python3 x.py", cwd=str(tmp_path))))
+        assert "preceding cd target" in reason
+
+    def test_backgrounded_prior_segment_denial_names_it(self, bracketed):
+        root, d = bracketed
+        script = d / "clean.py"
+        script.write_text("print('ok')\n", encoding="utf-8")
+        posix = str(script).replace("\\", "/")
+        reason = _reason(guard.check(_payload("sleep 1 & python3 %s" % posix, cwd=str(root))))
+        assert "backgrounded" in reason
+
+    def test_oversize_script_denial_names_the_cap(self, bracketed, monkeypatch):
+        root, d = bracketed
+        script = d / "big.py"
+        script.write_text("print('ok')\n" * 10, encoding="utf-8")
+        monkeypatch.setattr(guard, "_MAX_SCRIPT_READ_BYTES", 5)
+        posix = str(script).replace("\\", "/")
+        reason = _reason(guard.check(_payload("python3 " + posix, cwd=str(root))))
+        assert "read cap" in reason

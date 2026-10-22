@@ -18,6 +18,8 @@ from coordinator_core.session import record_homes
 _STRIP_EDGES = "`'\"()[]<>{}"
 _TRAILING = ".,;:)"
 _LINE_SUFFIX = re.compile(r"(?::\d+(?:-\d+)?)+$")
+_SYMBOL_SUFFIX = re.compile(r"::[\w.]+$")
+_MODULE_TOKEN = re.compile(r"^([A-Za-z_]\w*)(?:\.[A-Za-z_]\w*)?$")
 _PATHLIKE = re.compile(r"^[\w.\-]+(?:/[\w.\-]+)*$")
 _DROP_HEADS = ("scratch/", Path(record_homes.home_dir("", "warp")).as_posix() + "/")
 _REMEDY = "revise the plan with a row whose writes cover them, or send a re-ruling revise note"
@@ -28,6 +30,7 @@ def _clean(token: str) -> Optional[str]:
     while t and t[-1] in _TRAILING:
         t = t[:-1].rstrip(_STRIP_EDGES)
     t = t.split("#", 1)[0]
+    t = _SYMBOL_SUFFIX.sub("", t)
     t = _LINE_SUFFIX.sub("", t)
     while t and t[-1] in _TRAILING:
         t = t[:-1]
@@ -113,6 +116,74 @@ def plan_rows_serving(plan_path: Path, blocking: Sequence[str]) -> list[str]:
             if isinstance(w, str) and w not in out:
                 out.append(w)
     return out
+
+
+def _module_paths(texts: Iterable[str], serving: Sequence[str], repo_root: Path) -> list[str]:
+    dirs = list(dict.fromkeys(p.rsplit("/", 1)[0] for p in serving if "/" in p))
+    mods: list[str] = []
+    for text in texts:
+        for tok in str(text).split():
+            m = _MODULE_TOKEN.match(tok.strip(_STRIP_EDGES).rstrip(_TRAILING))
+            if m and m.group(1) not in mods:
+                mods.append(m.group(1))
+    return [f"{d}/{m}.py" for m in mods for d in dirs if (repo_root / d / f"{m}.py").is_file()]
+
+
+def derive_ledger_rows(
+    remaining: Mapping[str, Mapping[str, Any]],
+    notes: Sequence[str],
+    blocking: Sequence[str],
+    serving_writes: Mapping[str, Sequence[str]],
+    existing_ids: Iterable[str],
+    repo_root: Path,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Return `(rows, underivable)`: one dispatchable row per open ledger item.
+
+    An item is open when its `remaining` list is non-empty, or it has none and a live (sha-free)
+    note exists. A re-ruling note derives nothing. `writes` = named paths, then module tokens
+    resolved beside the item's serving writes, then the serving writes; CLAUDE.md-class paths
+    are excluded. An open item with no resolved write is returned in `underivable`.
+    """
+    from coordinator_core.ops.dispatch_emit.ask_contract import LEDGER_DERIVED_ROW_PREFIX
+
+    if note_rerules(notes):
+        return [], []
+    taken = set(existing_ids)
+    rows: list[dict[str, Any]] = []
+    underivable: list[str] = []
+    for item in blocking:
+        steps = [str(s) for s in (remaining.get(item) or {}).get("remaining") or []]
+        if not steps and not notes:
+            continue
+        texts = [*steps, *(str(n) for n in notes)]
+        serving = [str(w) for w in serving_writes.get(item) or []]
+        writes: list[str] = []
+        for p in [*named_paths(texts, repo_root), *_module_paths(texts, serving, repo_root), *serving]:
+            if p not in writes and p not in gated_paths([p]):
+                writes.append(p)
+        if not writes:
+            underivable.append(item)
+            continue
+        rid = f"{LEDGER_DERIVED_ROW_PREFIX}{item}"
+        n = 1
+        while rid in taken:
+            n += 1
+            rid = f"{LEDGER_DERIVED_ROW_PREFIX}{item}-{n}"
+        taken.add(rid)
+        lines = [f"Ledger item {item} is open. Remaining steps:", *(f"- {s}" for s in steps)]
+        if notes:
+            lines += ["Revise notes:", *(f"- {n_}" for n_ in notes)]
+        lines.append(f"Done when: the ledger check judges {item} met.")
+        rows.append({
+            "id": rid,
+            "title": steps[0] if steps else f"Serve revise note for {item}",
+            "change_kind": "code-edit",
+            "writes": writes,
+            "register_rows": [item],
+            "disposition": "open",
+            "body": "\n".join(lines),
+        })
+    return rows, underivable
 
 
 def _named(remaining: Mapping[str, Mapping[str, Any]], repo_root: Path) -> list[str]:

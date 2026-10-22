@@ -297,6 +297,12 @@ def test_typed_defect_clean_and_helpers():
     assert census.describe_typed(_typed()) == "next-free-number supabase/migrations claims 715"
 
 
+def test_not_run_outcome_shape_and_is_no_revalidation_state():
+    assert census.not_run_outcome("deleted") == {"state": census.NOT_RUN, "entries": [], "detail": "deleted"}
+    assert census.NOT_RUN == "NOT-RUN"
+    assert census.NOT_RUN not in {"MATCH", "DRIFT", "UNDECIDABLE", "REFUSED", "UNRUNNABLE"}
+
+
 def test_evaluate_typed_spawns_nothing(tmp_path, monkeypatch):
     import subprocess
 

@@ -140,10 +140,9 @@ def test_reemit_after_split_removes_the_stale_parts_and_pre_split_spine(tmp_path
     assert cli_module.main(_argv(tmp_path, inventory)) == cli_module.EXIT_OK
     stale = [inventory.parent / f"{im.part_run_id(_RUN_ID, i)}.spine.md" for i in (1, 2)]
     assert all(p.is_file() for p in stale)
-    # Cleanup deletes a part only on evidence it landed; an unlanded part's script is kept.
-    from coordinator_core.ops.dispatch_emit import emission_receipt
-    for script in inventory.parent.glob("*-p*.workflow.mjs"):
-        emission_receipt.stamp_landed(script, "0" * 40)
+    # Cleanup keeps any part whose receipt exists (landed or not); only receipt-less leftovers go.
+    for receipt in inventory.parent.glob("*-p*.workflow.mjs.emitted.json"):
+        receipt.unlink()
     monkeypatch.setattr(emit_module, "_WORKFLOW_SCRIPT_BYTE_CAP", 10**9)
     capsys.readouterr()
 
@@ -170,5 +169,10 @@ def test_reemit_never_touches_another_run_id_or_a_tranche_record(tmp_path, monke
 
     assert other.is_file()
     assert record.is_file()
-    assert str(record) in capsys.readouterr().err
-    assert not (inventory.parent / f"{_RUN_ID}-t1.spine.md").exists()
+    err = capsys.readouterr().err
+    assert str(record) in err
+    # The tranche's script is regenerable and goes; its spine has no script and no landed stamp, and
+    # no live part supersedes it, so it is kept and surfaced.
+    assert not (inventory.parent / f"{_RUN_ID}-t1.spine.workflow.mjs").exists()
+    assert (inventory.parent / f"{_RUN_ID}-t1.spine.md").is_file()
+    assert f"kept unlanded spine {inventory.parent / f'{_RUN_ID}-t1.spine.md'}" in err

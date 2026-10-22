@@ -2048,7 +2048,7 @@ def _bt_solo_bare_commit_staged_paths(
     rc, out = _dc_git_probe._run_git(["diff", "--cached", "--name-only", "--no-renames"], cwd=cwd, extra_env=extra_env)
     if rc != 0:
         _dc_git_probe._record_probe_fail_open(
-            "solo-bare-commit index probe", "diff --cached --name-only --no-renames", rc
+            "index probe", "diff --cached --name-only --no-renames", rc
         )
         return None
     return [ln for ln in out.splitlines() if ln]

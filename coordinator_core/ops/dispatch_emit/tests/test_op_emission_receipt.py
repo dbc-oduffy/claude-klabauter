@@ -26,7 +26,7 @@ from coordinator_core.ops.dispatch_emit.op import (
 from coordinator_core.ops.dispatch_emit.tests.test_op import _write_fixture_plan
 from coordinator_core.session.core import SESSION_ENV_PRECEDENCE
 
-_RECEIPT_KEYS = {"sha256", "session_id", "emitted_at", "plan", "findings"}
+_RECEIPT_KEYS = {"sha256", "session_id", "emitted_at", "plan", "findings", "landing_markers"}
 
 
 def _emit(tmp_path, **extra):

@@ -1,13 +1,14 @@
 // Parameterized mise-prep residue workflow. Runs inside the Workflow runner, which
 // executes this body directly and permits a top-level `return`; `node --check`
 // reports `Illegal return statement` for that, which is not a defect.
-// Bound by `workflow.bind_args` with the `mise-prep-residue-args/2` object: it
+// Residue stage agent: coordinator:residue-author.
+// Bound by `workflow.bind_args` with the `mise-prep-residue-args/4` object: it
 // reads only the `args` global and never declares it. Agent types and models
 // come from args; no model literal belongs in this file.
 
 export const meta = {
   name: 'mise-prep-residue',
-  description: 'Residue authoring for mise-prep: one coordinator:plan-author-residue agent per batch of plans, then one APM agent over leftover census rows and seam-fix cycles.',
+  description: 'Residue authoring for mise-prep: one coordinator:residue-author agent per batch (mise-prep-residue-args/4) of plans, then one APM agent over leftover census rows and seam-fix cycles.',
   phases: ['Residue', 'APM', 'Persist'],
 };
 
@@ -15,7 +16,8 @@ const RESIDUE_CHARTER = [
   'You are the mise-prep residue author. For each plan below, make it pass the gate command and nothing more.',
   'Allowed edits: declare `capabilities:` in the plan frontmatter; add `appends:` on rows a writes-collision seam line (inline or read from a findings file) names append-only; rewrite each census entry listed as needing a rewrite into the read-only form `coordinator_core/roadmap/census.py` screen accepts (a plain read-only command; a script that is a tracked file).',
   'A census entry no read-only command can carry (it needs node, npx, gh, claude, or python -c with no tracked script) is not yours to decide: do not rewrite or delete it; return it in `leftoverCensus` with `index`, `command` and `reason`.',
-  'Never add `ui_carve_out`, change `status`, write any `mise_prepped_*` key, or edit the body beyond the named classes above. Scope decisions are APM\'s, not yours; put anything that needs one in `escalate`.',
+  'Never add `ui_carve_out`, change `status`, write any `mise_prepped_*` key, or edit the body beyond the named classes and spine repairs above. Scope decisions are APM\'s, not yours; put anything that needs one in `escalate`.',
+  'A member with `spine-repair:` lines: apply exactly the named repair on the cited row and nothing beyond it; a census entry marked step0 moves into the owning row\'s step 0 with the census renumbered, never deleted.',
   'After editing a plan, run the gate command on it and report only what it said.',
   'You do not stage or commit anything.',
 ].join('\n');
@@ -29,12 +31,17 @@ const APM_CHARTER = [
 function planBlock(p) {
   const lines = ['PLAN ' + p.plan];
   for (const l of (p.bar || [])) lines.push('  bar: ' + l);
+  for (const l of (p.spine || [])) lines.push('  ' + l);
   for (const l of (p.seam || [])) lines.push('  seam: ' + l);
   if (p.seamRef) {
     lines.push('  seam: ' + p.seamRefLines + ' writes-collision line(s) in ' + p.seamRef + ' -- read that file; each line is one seam finding');
   }
   for (const c of (p.census || [])) {
-    lines.push('  census[' + c.index + '] needs a rewrite: ' + c.command + '  (refused: ' + c.refusal + ')');
+    if (c.class === 'step0') {
+      lines.push('  census[' + c.index + '] moves into its row\'s step 0: ' + c.command + '  (refused: ' + c.refusal + ')');
+    } else {
+      lines.push('  census[' + c.index + '] needs a rewrite: ' + c.command + '  (refused: ' + c.refusal + ')');
+    }
   }
   return lines.join('\n');
 }
@@ -155,7 +162,7 @@ if (rulings.length > 0) {
     return {
       id: r.item,
       item_kind: it.kind,
-      plan: r.plan,
+      plan: it.kind === 'census-leftover' ? it.plan : r.plan,
       ruling: r.ruling,
       pmOnly: r.pmOnly,
       subjectSha: it.subjectSha || '',

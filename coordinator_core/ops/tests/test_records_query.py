@@ -1091,7 +1091,7 @@ class TestNewTypeGlobCoverage:
             "archived-memo", "sizing-object", "cutover",
             "subtractive-adjudication-record", "completion-receipt",
             "priority-intent", "priority-ledger", "spike-result",
-            "spine",
+            "spine", "delivery-verdict", "ruling",
         }
         assert set(_TYPE_TO_GLOB) == expected
 
@@ -1218,6 +1218,43 @@ class TestPriorityLedgerTypeCollectsAndParses:
         assert record["frontmatter"]["priority"] == "urgent"
 
 
+class TestVerdictAndRulingTypesCollect:
+    """``delivery-verdict`` (nested month dir) and ``ruling`` (two dirs) are
+    served by ``_collect_files``/``_load_record``; unrelated dirs stay out."""
+
+    @staticmethod
+    def _md(path: Path, ident: str) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(f"---\nid: {ident}\n---\nbody\n", encoding="utf-8")
+
+    def test_delivery_verdict_from_nested_month_dir(self, tmp_path: Path):
+        self._md(tmp_path / "state" / "delivery-verdicts" / "2026-10" / "a.md", "dv-a")
+        self._md(tmp_path / "state" / "rulings" / "r.md", "not-a-verdict")
+        files = _collect_files(tmp_path, "delivery-verdict")
+        assert [f.name for f in files] == ["a.md"]
+        record = _load_record(files[0], tmp_path, "delivery-verdict")
+        assert record is not None
+        assert record["frontmatter"]["id"] == "dv-a"
+
+    def test_ruling_from_both_ruling_dirs(self, tmp_path: Path):
+        self._md(tmp_path / "state" / "rulings" / "eng.md", "r-eng")
+        self._md(tmp_path / "state" / "apm-rulings" / "apm.md", "r-apm")
+        self._md(tmp_path / "state" / "delivery-verdicts" / "2026-10" / "v.md", "dv")
+        files = _collect_files(tmp_path, "ruling")
+        assert sorted(f.name for f in files) == ["apm.md", "eng.md"]
+        ids = {_load_record(f, tmp_path, "ruling")["frontmatter"]["id"] for f in files}
+        assert ids == {"r-eng", "r-apm"}
+
+    def test_ruling_handler_returns_both_dirs(self, tmp_path: Path):
+        worktree = tmp_path / "repo"
+        git_dir = _make_git_repo(worktree)
+        self._md(worktree / "state" / "rulings" / "eng.md", "r-eng")
+        self._md(worktree / "state" / "apm-rulings" / "apm.md", "r-apm")
+        result = _run(_handler(params={"type": "ruling", "format": "paths"}, repo_root=git_dir))
+        names = {Path(p).name for p in result["records"].split("\n") if p}
+        assert names == {"eng.md", "apm.md"}
+
+
 class TestTypeToGlobDerivedGate:
     """Derive-and-gate parity check: ``_TYPE_TO_GLOB`` (hand-maintained) vs.
     ``build_type_to_glob`` (schema-derived from DoE's ``coordinator/schemas/
@@ -1293,6 +1330,7 @@ class TestTypeToGlobDerivedGate:
         "plan-approvability-judgment": "JSON glob (state/review-trail/plan-approvability/*.json), whole-document-json — unparseable by this module's .md/.yaml branches",
         "plan-completeness-ledger": "record-shaped (<plan_sidecars_dir>/<plan-stem>.completeness.md) — not yet wired, out of scope for this fix",
         "queue-grind-profile":     "record-shaped (coordinator/queue-profiles/*.yaml) — profile config, not a queried record set; not yet wired",
+        "route-table":             "single fixed JSON file (.claude/route-table.json), no wildcard, not frontmatter-shaped — not a record set",
         "known-red-registry":      "two fixed JSON files (state/hook-tier-known-red.json, state/fast-full-known-red.json), no wildcard — not a record set",
     }
 

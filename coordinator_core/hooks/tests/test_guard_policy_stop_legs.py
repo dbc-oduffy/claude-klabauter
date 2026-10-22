@@ -46,7 +46,7 @@ def _gated(name):
 def test_default_is_advisory_with_the_deny_text_as_context(reg):
     result = _gated(guard_manufactured_blocker.GUARD_NAME)
     assert not _denies(result)
-    assert "BLOCK-TEXT" in result["hookSpecificOutput"]["additionalContext"]
+    assert "BLOCK-TEXT" in result["systemMessage"]
 
 
 def test_global_strict_denies(reg):

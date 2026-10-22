@@ -807,8 +807,8 @@ _EXEMPT_SITES: frozenset[tuple[str, str, str, int]] = frozenset(
         # and there is no cross-node "run each in its own process but report together" form.
         ("coordinator/bin/stable-suite-run.py", "_triage_isolation", "run", 0),
         # 2026-10-08 -- # class: structural-floor. `census-recheck.py::recheck_plan` re-runs each
-        # `census[]` row's own independently authored shell `command`, the same shape as
-        # `mise-census-revalidate.py::run_entry` above: no shared argv across rows to fold.
+        # `census[]` row's own independently authored shell `command`: no shared argv across
+        # rows to fold.
         ("coordinator/bin/census-recheck.py", "recheck_plan", "recheck_entry", 0),
         # 2026-09-24 -- # class: retained-fallback. C1's B-git classification
         # (`state/tasks/2026-09-11-b-git-site-classification.json`) dispositions this site

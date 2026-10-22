@@ -38,7 +38,7 @@ def _past_grace(monkeypatch):
 
 def test_ownerless_token_ages_out_without_a_submission(repo, dirs, monkeypatch):
     run_token.mint(repo, "r1", SCRIPT, session_id=None, sizing_rel=SIZING)
-    assert warp_live.live_run_for_sizing(repo, SIZING) == "r1"
+    assert warp_live.live_run_for_sizing(repo, SIZING) is None
     _past_grace(monkeypatch)
     assert warp_live.live_run_for_sizing(repo, SIZING) is None
     assert run_token.is_live(repo, "r1")

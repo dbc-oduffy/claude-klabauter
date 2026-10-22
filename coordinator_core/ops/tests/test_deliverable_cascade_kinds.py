@@ -81,13 +81,26 @@ def _git(repo: Path, *args: str) -> subprocess.CompletedProcess:
     )
 
 
+_REPO_TEMPLATE: list = []
+
+
 def _init_repo(repo: Path) -> None:
+    """Materialise a one-commit repo at `repo` by copying a once-built template
+    (imported by many fast-tier files; 4 spawns per call otherwise)."""
+    import shutil
+    import tempfile
+
+    if not _REPO_TEMPLATE:
+        tpl = Path(tempfile.mkdtemp(prefix="cascade-tpl-")) / "repo"
+        tpl.mkdir()
+        _git(tpl, "init")
+        _git(tpl, "config", "commit.gpgsign", "false")
+        (tpl / "README.md").write_text("init\n", encoding="utf-8")
+        _git(tpl, "add", "README.md")
+        _git(tpl, "commit", "-m", "init")
+        _REPO_TEMPLATE.append(tpl)
     repo.mkdir(parents=True, exist_ok=True)
-    _git(repo, "init")
-    _git(repo, "config", "commit.gpgsign", "false")
-    (repo / "README.md").write_text("init\n", encoding="utf-8")
-    _git(repo, "add", "README.md")
-    _git(repo, "commit", "-m", "init")
+    shutil.copytree(_REPO_TEMPLATE[0], repo, dirs_exist_ok=True)
 
 
 def _run(params: dict, repo_root: Path) -> dict:

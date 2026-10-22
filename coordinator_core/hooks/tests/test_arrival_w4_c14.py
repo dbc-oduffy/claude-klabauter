@@ -6,6 +6,11 @@ import asyncio
 import pytest
 
 
+def _stop_message(out):
+    """A Stop-event envelope carries its text at top-level systemMessage (advisory) or reason (deny)."""
+    return out.get("systemMessage") or out.get("reason")
+
+
 def _run(coro):
     return asyncio.run(coro)
 
@@ -53,9 +58,7 @@ def test_guard_manufactured_blocker_fires_on_handoff_construct(tmp_path):
             }
         }
     )
-    hso = out.get("hookSpecificOutput")
-    assert hso is not None
-    assert hso.get("additionalContext") or hso.get("permissionDecisionReason")
+    assert _stop_message(out)
 
 
 def _write_transcript(tmp_path, text):
@@ -85,8 +88,7 @@ def test_guard_manufactured_blocker_skips_negated_handoff(tmp_path):
             }
         }
     )
-    hso = out.get("hookSpecificOutput")
-    assert hso is None or hso.get("permissionDecision") != "deny"
+    assert not _stop_message(out)
 
 
 def test_guard_manufactured_blocker_skips_quoted_handoff(tmp_path):
@@ -105,8 +107,7 @@ def test_guard_manufactured_blocker_skips_quoted_handoff(tmp_path):
             }
         }
     )
-    hso = out.get("hookSpecificOutput")
-    assert hso is None or hso.get("permissionDecision") != "deny"
+    assert not _stop_message(out)
 
 
 def test_guard_manufactured_blocker_genuine_handup_still_fires(tmp_path):
@@ -124,9 +125,7 @@ def test_guard_manufactured_blocker_genuine_handup_still_fires(tmp_path):
             }
         }
     )
-    hso = out.get("hookSpecificOutput")
-    assert hso is not None
-    assert hso.get("additionalContext") or hso.get("permissionDecisionReason")
+    assert _stop_message(out)
 
 
 def test_guard_manufactured_blocker_fires_at_most_once_per_session(tmp_path):
@@ -140,9 +139,7 @@ def test_guard_manufactured_blocker_fires_at_most_once_per_session(tmp_path):
 
     transcript_1 = _write_transcript(tmp_path, "Three things now wait on you: A, B, C.")
     first = _handler({"payload": {**payload, "transcript_path": str(transcript_1)}})
-    first_hso = first.get("hookSpecificOutput")
-    assert first_hso is not None
-    assert first_hso.get("additionalContext") or first_hso.get("permissionDecisionReason")
+    assert _stop_message(first)
 
     transcript_2 = _write_transcript(tmp_path, "Two more things now wait on you: D, E.")
     second = _handler({"payload": {**payload, "transcript_path": str(transcript_2)}})
@@ -358,12 +355,10 @@ def test_declared_operator_action_is_exempt(tmp_path, line):
 def test_declared_construct_does_not_exempt_other_lines(tmp_path):
     text = "Operator action: sign in once.\nThe merge strategy is waiting on you to decide."
     out = _stop(tmp_path, text, "sess-op-mixed")
-    hso = out["hookSpecificOutput"]
-    assert hso.get("additionalContext") or hso.get("permissionDecisionReason")
+    assert _stop_message(out)
 
 
 def test_hand_up_message_names_the_construct(tmp_path):
     out = _stop(tmp_path, "Three things now wait on you: A, B, C.", "sess-msg")
-    hso = out["hookSpecificOutput"]
-    msg = hso.get("additionalContext") or hso.get("permissionDecisionReason")
+    msg = _stop_message(out)
     assert "Hands-on task:" in msg and "Operator action:" in msg

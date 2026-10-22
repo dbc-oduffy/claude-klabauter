@@ -33,6 +33,7 @@ def _plan(root: Path, statement: str = "the op reports per class") -> Path:
     (root / REL).write_text(
         "---\ntitle: fixture\nauthor: fixture\nstatus: draft\ncreated: 2026-10-15\n"
         "census:\n  - question: q\n    command: echo a\n    result: '1'\n"
+        "capabilities: []\n"
         f"prime_exit_criterion:\n  statement: {statement}\n"
         "  derived_from: state/sizings/2026-10-15-fixture.yaml\n"
         "---\n\n# Fixture\n\n## Tasks\n\n```yaml plan-tasks\n" + _SPINE + "```\n",
@@ -373,6 +374,7 @@ def _corrects_plan(root: Path, corrects: str, fixer_disposition: str = "open", r
     (root / REL).write_text(
         "---\ntitle: fixture\nauthor: fixture\nstatus: draft\ncreated: 2026-10-15\n"
         "census:\n  - question: q\n    command: grep -c a b\n    result: '1'\n"
+        "capabilities: []\n"
         f"{corrects}"
         "prime_exit_criterion:\n  statement: the op reports per class\n"
         "  derived_from: state/sizings/2026-10-15-fixture.yaml\n"

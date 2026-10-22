@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -50,9 +52,14 @@ def _commit_home(home: Path) -> None:
     _run(home, *_IDENT, "commit", "-q", "-m", "x")
 
 
-@pytest.fixture
-def env(tmp_path, monkeypatch):
-    home = tmp_path / "home"
+_HOME_TEMPLATE: list = []
+
+
+def _build_home_template() -> Path:
+    import tempfile
+
+    root = Path(tempfile.mkdtemp(prefix="sibprov-tpl-"))
+    home = root / "home"
     (home / "templates").mkdir(parents=True)
     (home / "state" / "sizings").mkdir(parents=True)
     (home / "templates" / "README.md").write_bytes(b"hello\r\nworld\n")
@@ -61,8 +68,21 @@ def env(tmp_path, monkeypatch):
         f"requirement_register:\n  rows:\n    - id: R1\n      source_text: make {NAME} locally\n",
         encoding="utf-8",
     )
-    _run(tmp_path, "init", "-q", str(home))
-    _commit_home(home)
+    # Pinned config keeps the CRLF fixture byte-stable under a machine-level autocrlf.
+    env = {**os.environ, "GIT_CONFIG_GLOBAL": str(root / "gitconfig"), "GIT_CONFIG_NOSYSTEM": "1"}
+    for args in (["init", "-q", str(home)], ["-C", str(home), "add", "-A", "-f"],
+                 ["-C", str(home), *_IDENT, "commit", "-q", "-m", "x"]):
+        subprocess.run(["git", *args], env=env, capture_output=True, check=True,
+                       **no_console_creationflags())
+    return home
+
+
+@pytest.fixture
+def env(tmp_path, monkeypatch):
+    if not _HOME_TEMPLATE:
+        _HOME_TEMPLATE.append(_build_home_template())
+    home = tmp_path / "home"
+    shutil.copytree(_HOME_TEMPLATE[0], home)
     registry: dict[str, str] = {}
     monkeypatch.setattr(machine_resolver, "registry_get", registry.get)
     monkeypatch.setattr(machine_resolver, "registry_set", registry.__setitem__)

@@ -11,13 +11,14 @@ import argparse
 import cProfile
 import io
 import pstats
-import shutil
 import tempfile
 import time
 from pathlib import Path
 
 import pytest
 
+from coordinator_core.benchmarks import declare_benchmark_origin
+from coordinator_core.benchmarks.isolated_clone import rmtree_or_raise
 from coordinator_core.benchmarks.process_time import in_process_time_ms
 from coordinator_core.benchmarks.spawn_counter import _count_spawns_attributed
 
@@ -83,10 +84,11 @@ def profile(rows: int, tokens: int, top: int) -> dict:
         }
     finally:
         mp.undo()
-        shutil.rmtree(scratch, ignore_errors=True)
+        rmtree_or_raise(scratch, label="ask-stage-size-l")
 
 
 def main() -> None:
+    declare_benchmark_origin()
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--rows", type=int, default=14)
     ap.add_argument("--tokens", type=int, default=50)

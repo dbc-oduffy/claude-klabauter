@@ -427,6 +427,8 @@ def test_ops_with_spawn_evidence_function_granular_follows_a_dispatch_table(tmp_
     assert function_granular["op.a"][0].enclosing == "_spawn_handler"
 
 
+# cadence: whole-repo transitive spawn scan (~41s); the by-reference dispatch edge is unit-covered by the synthetic function_granular test above.
+@pytest.mark.cadence
 def test_merge_assemble_apply_measures_non_empty_at_function_granularity():
     """AC21b -- the exact oracle the bug-backlog row names: `merge_assemble.apply` dispatches
     every one of its subprocess-spawning handlers through its own closed `_CLI_DISPATCH` dict,

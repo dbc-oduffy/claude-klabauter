@@ -1760,6 +1760,13 @@ def commit_paths(
             "past a peer."
         )
 
+    try:
+        from coordinator_core.git import store_hygiene
+
+        store_hygiene.maybe_refresh(repo, resolve_git_common_dir(repo))
+    except Exception:  # noqa: BLE001 -- a landed commit never fails on store hygiene
+        pass
+
     # INVARIANT 3, and it must follow the ref, not precede it: an index that
     # matches a commit which never landed is the same lie in the other
     # direction. A failure here leaves a correct commit and a stale index --

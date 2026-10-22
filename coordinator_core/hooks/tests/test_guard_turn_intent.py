@@ -321,3 +321,35 @@ def test_block_takes_precedence_over_go_ask_advisory(tmp_path, monkeypatch):
     result = _run({**payload, "last_assistant_message": GO_ASK})
     assert _blocked(result)
     assert not _advisory(result)
+
+
+# --- announced-unexecuted-work block at each guard level ------------------
+
+ANNOUNCE = "I'll now run the full fast test suite and report the results."
+
+
+def _stop_valid(envelope: dict) -> bool:
+    """Stop honours only top-level decision/reason/systemMessage; hookSpecificOutput is dropped."""
+    return "hookSpecificOutput" not in envelope and bool(
+        envelope.get("decision") == "block" or envelope.get("systemMessage")
+    )
+
+
+def _announce_at_level(tmp_path, monkeypatch, level: str) -> dict:
+    from coordinator_core import machine_profile
+
+    monkeypatch.setenv("COORDINATOR_COCKPIT", "1")
+    monkeypatch.setattr(machine_profile, "guard_level", lambda *_a, **_k: level)
+    _r, _g, _sid, _d, payload = _seed(tmp_path, ANNOUNCE, role=False)
+    return _run(payload)
+
+
+def test_announced_work_blocks_at_strict_level(tmp_path, monkeypatch):
+    result = _announce_at_level(tmp_path, monkeypatch, "strict")
+    assert result.get("decision") == "block" and _stop_valid(result)
+
+
+def test_announced_work_at_warn_level_is_stop_valid(tmp_path, monkeypatch):
+    """Default level is warn; a Stop advisory must be top-level, since Stop
+    drops hookSpecificOutput and the stop would be neither held nor shown."""
+    assert _stop_valid(_announce_at_level(tmp_path, monkeypatch, "warn"))

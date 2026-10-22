@@ -40,6 +40,20 @@ def test_dispatch_appends_line(tmp_path, monkeypatch):
     assert rec["phase"] == "START" and rec["session_id"] == "s1" and rec["run"] == "probe"
 
 
+def test_dispatch_declared_peak_written_and_invalid_refused(tmp_path, monkeypatch):
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
+    monkeypatch.setattr(
+        nomination, "box_holder", lambda directory=None, now=None: {"session_id": "gem", "live": True}
+    )
+    out = op._groupem_admission_post({"phase": "START", "session_id": "s1", "declared_peak_mb": 4096})
+    assert out["posted"] is True
+    bad = op._groupem_admission_post({"phase": "START", "session_id": "s1", "declared_peak_mb": -5})
+    assert "error" in bad
+    lines = admission_post.admission_path().read_text(encoding="utf-8").splitlines()
+    (rec,) = [json.loads(x) for x in lines]
+    assert rec["declared_peak_mb"] == 4096.0
+
+
 def test_no_holder_fails_open(tmp_path, monkeypatch):
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
     monkeypatch.setattr(nomination, "box_holder", lambda directory=None, now=None: None)

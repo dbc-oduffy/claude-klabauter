@@ -84,6 +84,7 @@ prime_exit_criterion:
   statement: the tree carries the thing
   derived_from: state/sizings/2026-09-07-x.yaml
 census: []
+capabilities: []
 """
 
 
@@ -238,5 +239,5 @@ def test_refuse_foreign_emission_is_called_from_the_registered_op():
     exercised only by test_queue_emit.py's direct unit calls."""
     import inspect
 
-    assert "_emit_script_file(" in inspect.getsource(dispatch_op._dispatch_emit)
+    assert "_emit_script_file(" in inspect.getsource(dispatch_op._dispatch_emit_body)
     assert "_refuse_foreign_emission(" in inspect.getsource(dispatch_op._emit_script_file)

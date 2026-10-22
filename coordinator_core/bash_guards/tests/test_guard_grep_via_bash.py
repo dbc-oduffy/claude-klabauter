@@ -13,16 +13,16 @@ module's own docstring "GNU-ONLY PORTABILITY CHECK" section. Coverage:
       platform-conditioned deny/advise for the same set was provably
       unreachable in production (0 denies on either platform across the
       full corpus) and was removed.
-  (b) composed pipelines/chains with a REAL two-segment `|` partial rewrite
-      -- still advisory on every platform, never a deny anywhere, leading
-      with the real alternative (design-as-offers).
-  (c) composed pipelines/chains/untranslatable-flag commands with NEITHER a
-      partial rewrite NOR a genuine GNU-only construct (`-P`/`-z`/a long
-      option other than `--include`/`--exclude`) -- now SILENT: no
+  (b) the two-segment `|` partial rewrite (M10R: deleted -- it swaps the
+      grep process for an interpreter process, a spawn delta of zero) --
+      asserted ABSENT.
+  (c) composed pipelines/chains/untranslatable-flag commands without a
+      genuine GNU-only construct (`-P`/`-z`/a long
+      option other than `--include`/`--exclude`) -- SILENT: no
       actionable alternative exists, so the honest output is silence, not
       the ~2.2KB advisory this guard used to render unconditionally.
   (d) a genuine GNU-only construct (`-P`/`-z`/a non-`--include`/`--exclude`
-      long option), with no partial rewrite available -- still advisory,
+      long option) -- still advisory,
       naming the real GNU/BSD divergence (`_has_gnu_only_construct`).
   (e) precedence: a command that is simultaneously GREP_VIA_BASH and
       another shape (the plan's own canonical composite example) still
@@ -67,6 +67,38 @@ def _envelope(cmd, **kwargs):
     return result["hookSpecificOutput"]
 
 
+class TestRewriteScriptCompilesAndFallsBack:
+    def test_windows_path_and_backslash_regex_compile(self):
+        import shlex
+
+        for cmd in (
+            r"grep -n 'foo' 'C:\Users\me\new'",
+            r"grep -n 'a\.b' 'C:\t\n'",
+            "grep -n 'a.b' /tmp/x/src",
+        ):
+            rewrite, _ = guard._substitutable_rewrite(shlex.split(cmd))
+            assert rewrite is not None, cmd
+            compile(shlex.split(rewrite)[-1], "x", "exec")
+
+    def test_rewrite_error_falls_back_to_original(self, monkeypatch):
+        import shlex
+
+        def boom(parsed):
+            raise ValueError("boom")
+
+        monkeypatch.setattr(guard, "_grep_python_rewrite", boom)
+        rewrite, reason = guard._substitutable_rewrite(shlex.split("grep -n foo src"))
+        assert rewrite is None and reason == guard._REASON_UNTRANSLATABLE
+
+    def test_standalone_rewrite_that_will_not_compile_keeps_the_original(self, monkeypatch):
+        cmd = "grep -n foo src"
+        assert _dc_rewrites.check_grep_via_bash_rewrite(cmd) is not None
+        monkeypatch.setattr(
+            _dc_rewrites, "_bt_grep_python_rewrite", lambda parsed: "python3 -c 'if ('"
+        )
+        assert _dc_rewrites.check_grep_via_bash_rewrite(cmd) is None
+
+
 class TestSubstitutableResidueIsSilent:
     def test_windows_no_longer_denies(self):
         assert _result("grep -rn TODO src/", host_is_windows=True) is None
@@ -93,121 +125,29 @@ class TestSubstitutableResidueIsSilent:
         assert dispatch_checks.check_grep_via_bash_rewrite(cmd) is not None
 
 
-class TestPartialRewriteStillAdvises:
-    @staticmethod
-    def _assert_advisory_both_platforms(cmd):
-        for host_is_windows in (True, False):
-            out = _envelope(cmd, host_is_windows=host_is_windows)
-            assert out["permissionDecision"] == "allow", (cmd, host_is_windows)
-            assert "additionalContext" in out
-            assert "permissionDecisionReason" not in out
+class TestPartialRewriteIsDeleted:
+    def test_two_segment_pipe_offer_is_absent(self):
+        for cmd in (
+            "grep -rn TODO src/ | wc -l",
+            "grep -l X . | xargs grep -l Y",
+            "grep -rn TODO src/ | head -n 5",
+        ):
+            for host_is_windows in (True, False):
+                assert _result(cmd, host_is_windows=host_is_windows) is None, cmd
 
-    def test_two_segment_pipe_offers_a_real_partial_rewrite(self):
-        cmd = "grep -rn TODO src/ | wc -l"
-        self._assert_advisory_both_platforms(cmd)
-        out = _envelope(cmd, host_is_windows=True)
+    def test_partial_pipe_rewrite_symbols_are_gone(self):
+        assert not hasattr(guard, "_partial_pipe_rewrite")
+        assert not hasattr(guard, "_downstream_token_needs_expansion")
+        assert not hasattr(guard, "_DOWNSTREAM_SAFE_TOKEN_RE")
+        assert "one-fewer-fork" not in inspect.getsource(guard._composed_advisory)
+
+    def test_gnu_only_pipe_advisory_carries_no_replacement_offer(self):
+        out = _envelope("grep -Pn TODO src/ | wc -l", host_is_windows=True)
         ctx = out["additionalContext"]
-        expected_grep_rewrite = dispatch_checks._bt_grep_python_rewrite(
-            dispatch_checks._bt_grep_flags_and_operands(["grep", "-rn", "TODO", "src/"])
-        )
-        assert expected_grep_rewrite in ctx
-        assert "wc -l" in ctx
-        assert "one-fewer-fork" in ctx
-
-    def test_two_stage_and_filter_edge_case_also_gets_partial_rewrite(self):
-        """The pinned edge case `grep -l X | xargs grep -l Y` (two segments,
-        first substitutable) qualifies for the partial rewrite -- piping
-        into `xargs` verbatim is still correct, since `xargs` only cares
-        about the bytes on its stdin. Also confirm BX-16's own rewrite
-        offers nothing for this shape."""
-        cmd = "grep -l X . | xargs grep -l Y"
-        self._assert_advisory_both_platforms(cmd)
-        assert dispatch_checks.check_grep_via_bash_rewrite(cmd) is None
-        out = _envelope(cmd, host_is_windows=True)
-        assert "xargs grep -l Y" in out["additionalContext"]
-
-    def test_ordinary_downstream_flag_value_still_gets_partial_rewrite(self):
-        cmd = "grep -rn TODO src/ | head -n 5"
-        out = _envelope(cmd, host_is_windows=True)
-        ctx = out["additionalContext"]
-        assert "head -n 5" in ctx
-        assert "one-fewer-fork" in ctx
-
-    def test_message_leads_with_the_alternative(self):
-        """design-as-offers: the alternative leads, not the violation."""
-        out = _envelope("grep -rn TODO src/ | wc -l", host_is_windows=True)
-        ctx = out["additionalContext"]
-        assert ctx.index("one-fewer-fork replacement") < ctx.index("Else, Explore")
-
-    def test_message_names_the_subagent_fallback(self):
-        out = _envelope("grep -rn TODO src/ | wc -l", host_is_windows=True)
-        ctx = out["additionalContext"]
+        assert "GNU-only" in ctx
+        assert "one-fewer-fork" not in ctx
+        assert "python3 -c" not in ctx
         assert "Explore or general-purpose subagent" in ctx
-
-    def test_message_does_not_explain_why_the_in_process_answerer_declined(self):
-        """The answerer's chain position is true and unusable: the reader
-        cannot re-target it or reorder registration, so the explanation was
-        cut (2026-07-30 message-prose trim) to the docstring. This asserts
-        the negative so it cannot creep back into the reader's context."""
-        ctx = _envelope("grep -rn TODO src/ | wc -l", host_is_windows=True)[
-            "additionalContext"
-        ]
-        assert "registered ahead of this guard" not in ctx
-        assert "already evaluated this exact invocation" not in ctx
-
-    def test_message_points_to_the_override_route_doc(self):
-        """A code-review finding (M17, 2026-07-30): H11(b) had opted this guard's advisory
-        out of `operator_override_note` entirely, leaving `_OVERRIDE_ENV_VAR`
-        functional but undiscoverable from the message text. Restored as
-        the same one-line SSOT pointer every sibling guard appends -- not
-        the old ~1.1KB inline boilerplate, which stays gone.
-
-        UPDATED 2026-08-11 (guard-messages-point-to-docs-never-name plan,
-        C2): `operator_override_note` stopped naming the env-var key at all
-        -- the property this test now proves is "reaches its own override
-        route via the doc pointer", not "prints the key inline". The key's
-        continued FUNCTIONING is `test_override_suppresses_partial_rewrite_
-        advisory`/`test_override_suppresses_gnu_only_advisory`'s job (live
-        behavioral checks, unaffected by this render change); this test's
-        job is the render's reachability shape only. Renamed from
-        `test_message_names_its_own_override_route` to match."""
-        out = _envelope("grep -rn TODO src/ | wc -l", host_is_windows=True)
-        ctx = out["additionalContext"]
-        assert "blanket-disarm marker" not in ctx
-        assert "COORDINATOR_OVERRIDE_GREP_VIA_BASH_GUARD" not in ctx
-        # RETARGETED 2026-08-30 (DR-290 form 1 -> form 2): the message
-        assert OVERRIDE_KEYS_DOC_DISPLAY in ctx
-
-
-class TestPartialRewriteMessageSizeFloorC3:
-    """C3 (docs/plans/2026-09-11-trim-the-remaining-over-cap-guard-
-    messages.md): pins the finding that this cell cannot reach
-    `MESSAGE_PROSE_CAP_BYTES` (220) without losing its route -- see
-    `_composed_advisory`'s "Not exemptable either" docstring paragraph.
-    Regression check only: a future change that pushes the floor higher,
-    or that lowers it back under cap, should touch this number
-    deliberately rather than let it drift unnoticed either way."""
-
-    def test_partial_rewrite_cell_stays_over_cap_at_a_bounded_floor(self, monkeypatch):
-        """The rendered interpreter token is host-resolved (an absolute
-        `$HOME/AppData/.../python.exe` path on Windows, ~66 bytes, versus
-        `python3` elsewhere) and lands in the non-exempt first line, so the
-        floor is measured with the interpreter pinned to its host-independent
-        form. C9 (docs/plans/2026-10-02-tf-c2-guard-message-register-
-        ratchets.md): the 461b reading was this host path, not copy growth.
-        The 450 pin is unchanged."""
-        from coordinator_core.bash_guards._message_size import measure_envelope
-
-        monkeypatch.setattr(_dc_rewrites, "_bt_python3_invocation", lambda: "python3")
-        out = _envelope("grep -rn TODO src/ | wc -l", host_is_windows=True)
-        measurement = measure_envelope({"hookSpecificOutput": out}, band="advisory-rewrite")
-        assert measurement.is_speaker
-        assert measurement.over_cap
-        assert measurement.prose_bytes <= 450, (
-            "prose bytes grew past the C3-measured floor headroom (%d) -- "
-            "investigate before assuming this is still the same floor"
-            % measurement.prose_bytes
-        )
 
 
 class TestNoActionableAlternativeIsSilent:
@@ -232,9 +172,7 @@ class TestNoActionableAlternativeIsSilent:
     def test_downstream_expansion_declines_the_partial_rewrite_and_stays_silent(self):
         """A downstream token needing shell expansion (`$VAR`, a glob, a
         leading `~`, a backtick, redirection, brace expansion) makes
-        `_partial_pipe_rewrite` decline -- with no GNU-only construct
-        either, the whole command is now silent (previously advisory-only
-        prose naming no action)."""
+        a pipe-downstream, with no GNU-only construct, is silent."""
         for cmd in (
             "grep -rn TODO src/ | head -n $LINES",
             "grep -rln TODO src/ | xargs grep -l *.py",
@@ -406,9 +344,10 @@ class TestGnuOnlyDenylistRationaleDocumented:
 
 
 class TestOverrideEnvVar:
-    def test_override_suppresses_partial_rewrite_advisory(self, monkeypatch):
+    def test_override_suppresses_gnu_only_pipe_advisory(self, monkeypatch):
+        assert _result("grep -Pn TODO src/ | wc -l", host_is_windows=True) is not None
         monkeypatch.setenv("COORDINATOR_OVERRIDE_GREP_VIA_BASH_GUARD", "1")
-        assert _result("grep -rn TODO src/ | wc -l", host_is_windows=True) is None
+        assert _result("grep -Pn TODO src/ | wc -l", host_is_windows=True) is None
 
     def test_override_suppresses_gnu_only_advisory(self, monkeypatch):
         monkeypatch.setenv("COORDINATOR_OVERRIDE_GREP_VIA_BASH_GUARD", "1")

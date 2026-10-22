@@ -6,7 +6,9 @@
 
 ## 1. Producer and consumer
 
-- **Producer:** DoE `plan-blitz.mjs` (`readinessStep`, run by the last plan reviewer).
+- **Producer:** DoE `plan-blitz.mjs`, through three legs: `readinessStep` (run by the last plan
+  reviewer), the prep-gate repair loop, and the judgment resolver when no premise re-check follows
+  it (coordinator-content-repo refs `c85667bd2f`, `2631754f78`).
 - **Consumer:** claude-klabauter `coordinator_core/ops/dispatch_emit/ask_compose.py`, through
   `ask_plan_blitz.wrap_stage`. Claude-klabauter's op is `dispatch.ask_stage`.
 
@@ -37,7 +39,11 @@ never on a pulled, replan or judgment entry. plan-blitz never interprets the rep
 the reply's `manifest_handle` as the stage manifest when the sidecar it names is whole, and only then.
 The engine leaves `scratch/stage-readers/<sha256>.js` beside every handle; the script reads it with
 `workflow({scriptPath})` and checks the text's length and sha256 against the handle before parsing
-it. A mismatch halts the run with `stage reply sidecar does not match its handle: <reason>`. The
+it. A mismatch halts the run with `stage reply sidecar does not match its handle: <reason>`. A
+launcher child (`args.launcherChild: true`) never calls `workflow()`: it adopts `args.stagedManifest.text`
+when `stagedManifest.handle` equals the reply's handle, through the same length and sha256 check
+and the same manifest rules below, and otherwise ends the run with `{stage_pending: {handle}}` for the
+launcher to answer. The
 `readyOpReply` shape is unchanged: nothing on the plan-blitz side moves. The parsed
 manifest must be:
 
@@ -47,6 +53,9 @@ manifest must be:
   `wave` is an integer, and `writes` and `deps` are arrays;
 - every `gated[]` and `owed[]` entry present carries a non-empty string `id`;
 - `head_sha` is 40 lowercase hex.
+
+A ready made by a premise re-check keeps the `did not run` error and carries no reply: that is the
+case the `blitz-stage-read` fallback handles (`ask_compose.py :: blitz_stage_read`).
 
 When the reply is absent and the op did not run (no error, or the `did not run` error), claude-klabauter composes
 one conditional haiku leg, `blitz-stage-read`: it runs the stage op and returns the op's reply as

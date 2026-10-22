@@ -7,11 +7,10 @@ code, the repo root, and the stat identity of every external input the verdict
 could have read. A lost, stale or torn store costs a probe on the next run and
 never a wrong verdict.
 
-Racy-clean rule (git's, as `census_store.CensusStore.ident` applies it): a stored
-identity is trusted only when its (size, mtime_ns, ino) equal the file's stat AND
-the stored mtime_ns is strictly older than the moment the identity was computed.
-`census_store` exposes the rule inside a method, not as a helper, so
-`_identity_matches` restates its comparison over the same tuple. Records here take
+Racy-clean rule (git's): a stored identity is trusted only when its
+(size, mtime_ns, ino) equal the file's stat AND the stored mtime_ns is strictly
+older than the moment the identity was computed. `_identity_matches` applies the
+comparison over that tuple. Records here take
 their computed-at moment from `ProbeStore` construction, which precedes every stat
 the caller makes, so a file touched during the run is never trusted.
 
@@ -67,7 +66,7 @@ GLOBAL_INPUTS = (
 )
 
 _PLAN_SCHEMA_REL = "coordinator_core/frontmatter/schemas/plan.schema.json"
-_BIN_SCRIPTS = ("mise-prep-upgrade.py", "mise-census-revalidate.py")
+_BIN_SCRIPTS = ("mise-prep-upgrade.py",)
 _IMPORTED_AT_NS = time.time_ns()
 _PATH_LEAF_RE = re.compile(r"^[^\s\"'`<>|]{1,240}$")
 _GLOB_CHARS = "*?["
@@ -419,10 +418,11 @@ def _save_graph(root: str, files: list) -> None:
 _GRAPH_SEEDED: set = set()
 
 
-def _closure(root: str) -> Optional[list]:
+def _closure(root: str, stats: Optional[dict] = None) -> Optional[list]:
     """The sorted engine files in the static import closure of the probe and the two bin
     scripts, plus those roots and plan.schema.json; None when a closure file will not parse.
-    Per-file parses persist in the cache dir, so only a file whose stat changed is re-parsed."""
+    Per-file parses persist in the cache dir, so only a file whose stat changed is re-parsed.
+    A `stats` dict is filled with `{path: stat_result}` for every file the walk stat'd."""
     if root not in _GRAPH_SEEDED:
         _GRAPH_SEEDED.add(root)
         _load_graph(root)
@@ -437,6 +437,8 @@ def _closure(root: str) -> Optional[list]:
             st = os.stat(path)
         except OSError:
             continue
+        if stats is not None:
+            stats[path] = st
         sig = (st.st_size, st.st_mtime_ns)
         hit = _IMPORT_PARSE_CACHE.get(path)
         if hit is None or hit[0] != sig:
@@ -465,17 +467,23 @@ def engine_key(engine_sha: Optional[str]) -> Optional[str]:
     the caller then neither reads nor writes the store. A file outside the closure
     never changes the key."""
     root = os.path.normpath(str(ENGINE_CHECKOUT_ROOT))
-    files = _closure(root)
+    walked: dict = {}
+    files = _closure(root, walked)
     if files is None:
         return None
     digest = hashlib.sha256()
+    prefix = root + os.sep
+    cut = len(prefix)
     for path in files:
-        rel = os.path.relpath(path, root).replace(os.sep, "/")
-        try:
-            st = os.stat(path)
-        except OSError:
-            digest.update(f"{rel}\0absent\n".encode())
-            continue
+        rel = path[cut:] if path.startswith(prefix) else os.path.relpath(path, root)
+        rel = rel.replace(os.sep, "/")
+        st = walked.get(path)
+        if st is None:
+            try:
+                st = os.stat(path)
+            except OSError:
+                digest.update(f"{rel}\0absent\n".encode())
+                continue
         if st.st_mtime_ns > _IMPORTED_AT_NS:
             return None
         digest.update(f"{rel}\0{st.st_size}\0{st.st_mtime_ns}\n".encode())

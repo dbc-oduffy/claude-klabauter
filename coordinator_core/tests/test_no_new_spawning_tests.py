@@ -1345,8 +1345,15 @@ def _iter_test_files() -> list[Path]:
     return sorted(out, key=lambda p: _rel(p))
 
 
+_ALL_REPORTS_CACHE: list[FileSpawnReport] | None = None
+
+
 def _all_reports() -> list[FileSpawnReport]:
-    return [_analyze_file(path, _rel(path)) for path in _iter_test_files()]
+    # Memoized per process: the corpus scan is the dominant cost and four tests share it.
+    global _ALL_REPORTS_CACHE
+    if _ALL_REPORTS_CACHE is None:
+        _ALL_REPORTS_CACHE = [_analyze_file(path, _rel(path)) for path in _iter_test_files()]
+    return _ALL_REPORTS_CACHE
 
 
 # ---------------------------------------------------------------------------
@@ -1542,9 +1549,8 @@ def test_rule4_every_spawning_file_is_cadence_tiered() -> None:
     module-level `pytestmark`, or `@pytest.mark.cadence` on each spawning
     function -- see module docstring 'Rule 4' and `_rule4_missing_cadence`."""
     untiered: list[str] = []
-    for path in _iter_test_files():
+    for path, report in zip(_iter_test_files(), _all_reports()):
         relpath = _rel(path)
-        report = _analyze_file(path, relpath)
         reason = _rule4_missing_cadence(path, relpath, report)
         if reason is not None:
             untiered.append(f"{relpath} ({reason})")

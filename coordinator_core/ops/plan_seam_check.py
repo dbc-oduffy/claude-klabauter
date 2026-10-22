@@ -649,12 +649,33 @@ def _landed_writes(landed_rows: list, ctx: dict, pset) -> tuple:
     return paths, prefixes, exact_by_path
 
 
+def _ignored_on_disk(root: Path, raws: list) -> set:
+    """The ``raws`` that git ignores and that exist under ``root``, by one batched
+    ``check-ignore``; no spawn when ``raws`` is empty. A non-ignored path is never
+    returned: an untracked, unignored file is a forgotten commit."""
+    rels = {}
+    for raw in dict.fromkeys(raws):
+        rel = _contained_rel(raw, root)
+        if rel is not None and (root / rel).exists():
+            rels[raw] = rel
+    if not rels:
+        return set()
+    result = run_git(
+        ["-C", str(root), "check-ignore", "--stdin", "-z"],
+        input=("\0".join(rels.values()) + "\0").encode("utf-8"),
+    )
+    _raise_on_timeout(result, "check-ignore")
+    ignored = {p for p in result.stdout.split("\0") if p}
+    return {raw for raw, rel in rels.items() if rel in ignored}
+
+
 def _drift_findings(pset, ctx, tree: _Tree, touched: list, landed_head: str) -> list:
     findings: list = []
     landed_rows = _resolve_landed(ctx, pset)
     landed = set(landed_rows)
     land_paths, land_prefixes, landed_by_path = _landed_writes(landed_rows, ctx, pset)
     touched_norm = {_normalize_path(t): t for t in touched}
+    absent: list = []
     for rel, plan in pset.items():
         for row in plan.live_rows:
             if (rel, row.id) in landed:
@@ -666,10 +687,18 @@ def _drift_findings(pset, ctx, tree: _Tree, touched: list, landed_head: str) -> 
                 norm = _normalize_path(raw)
                 promiser = landed_by_path.get(norm) if norm in consumed else None
                 if promiser is not None and not tree.at(landed_head, raw):
-                    findings.append(_finding(
-                        rel, DRIFT_CLASS, True,
-                        f"{raw} was promised by a landed row of {promiser} and is absent from the tree",
-                        counterpart=promiser, path=raw, row=row.id))
+                    absent.append((rel, row.id, raw, promiser))
+    present = _ignored_on_disk(ctx["root"], [raw for _, _, raw, _ in absent])
+    for rel, row_id, raw, promiser in absent:
+        if raw not in present:
+            findings.append(_finding(
+                rel, DRIFT_CLASS, True,
+                f"{raw} was promised by a landed row of {promiser} and is absent from the tree",
+                counterpart=promiser, path=raw, row=row_id))
+    for rel, plan in pset.items():
+        for row in plan.live_rows:
+            if (rel, row.id) in landed:
+                continue
             row_writes, row_prefixes = _paths_and_prefixes([row])
             row_reads = {_normalize_path(p) for p in (row.reads or ()) if isinstance(p, str) and p}
             row_head = {_normalize_path(p) for p in (row.reads_at_head or ()) if isinstance(p, str) and p}

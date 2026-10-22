@@ -69,8 +69,9 @@ def test_both_planblitz_calls_carry_the_stage_ready_op_without_plan_path():
         assert "readyOp: { op: 'dispatch.ask_stage'" in call
         assert "!_stagedManifest" in call
         ready = call.split("readyOp:", 1)[1].split("repoRoot:", 1)[0]
-        assert "plan_path" not in ready
-        for key in ("run_id", "writes", "cross_repo_approved", "session_id", "commit_sizing_path"):
+        assert "plan_path" not in ready.split(", schema:", 1)[0]
+        assert "writes" not in ready.split(", schema:", 1)[0]  # plan-branch stage params carry no sizing-time writes
+        for key in ("run_id", "cross_repo_approved", "session_id", "commit_sizing_path"):
             assert key in ready
 
 

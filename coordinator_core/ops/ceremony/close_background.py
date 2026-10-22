@@ -234,7 +234,11 @@ def _memo_lifecycle(ctx: JobContext) -> LegResult:
         return LegResult("failed", run_close.scrub_detail(f"source memo {name} is in neither inbox nor archive"))
 
     from coordinator_core import archive_stamp
+    from coordinator_core.ops.ceremony.memo_close_reply import send_close_reply
 
+    reply = send_close_reply(ctx.root, _plan_rel(ctx), ctx.source_memo, ctx.run_id, ctx.terminal_sha)
+    if reply is not None and reply.status == "failed":
+        return reply
     if ctx.terminal_sha:
         args = (
             "--actioned-note", f"resolved by run {ctx.run_id} at {ctx.terminal_sha}",
@@ -245,7 +249,8 @@ def _memo_lifecycle(ctx: JobContext) -> LegResult:
     result = archive_stamp.cs_resolve_memo(str(inbox), *args, return_result=True)
     if int(result.get("exit_code", 1)) != 0:
         return LegResult("failed", run_close.scrub_detail(f"resolve refused: {result.get('error', 'exit non-zero')}"))
-    return LegResult("ran", run_close.scrub_detail(f"source memo {name} resolved"))
+    note = f"; {reply.detail}" if reply is not None else ""
+    return LegResult("ran", run_close.scrub_detail(f"source memo {name} resolved{note}"))
 
 
 # --------------------------------------------------------------------------------------------

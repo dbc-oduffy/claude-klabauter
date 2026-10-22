@@ -3477,6 +3477,29 @@ def register_live_plugin_root(repo_root: Path, claude_klabauter_root_resolved: P
         print(line)
 
 
+def apply_runtime_gitignore(repo_root: Path, args: Args) -> None:
+    """Append the template's missing runtime ignore rules and untrack tracked runtime files.
+
+    ADVISORY like its siblings: any failure prints WARN and returns. Skipped on a publish mirror.
+    """
+    try:
+        if resolve_repo_identity(repo_root) == IDENTITY_MIRROR:
+            print("SKIP [gitignore] publish mirror")
+            return
+        from coordinator_core.install.runtime_ignore_apply import apply_runtime_ignore
+
+        result = apply_runtime_ignore(repo_root)
+    except Exception as exc:  # advisory phase -- never fails the install
+        print(f"WARN [gitignore] apply skipped ({type(exc).__name__}: {exc})")
+        return
+    if result.skipped:
+        print(f"SKIP [gitignore] {result.skipped}")
+        return
+    print(f"OK   [gitignore] appended {len(result.appended)} rule(s), untracked {len(result.untracked)} file(s)")
+    if result.untracked:
+        print("     [gitignore] the untrack is staged in the index; commit it with your next commit")
+
+
 def refresh_group_em_home(repo_root: Path, args: Args) -> None:
     """Redeploy the shipped group-em CLAUDE.md template into the group-em home on every run.
 
@@ -4854,6 +4877,7 @@ def main(argv: list[str]) -> int:
         register_live_plugin_root(repo_root, claude_klabauter_root_resolved, args)
         repair_status_lines(claude_klabauter_root_resolved)
         refresh_group_em_home(repo_root, args)
+        apply_runtime_gitignore(repo_root, args)
         migrate_group_em_inbox(repo_root, args)
         if not apply_settings_manifest_env(repo_root, claude_klabauter_root_resolved, args):
             return 1

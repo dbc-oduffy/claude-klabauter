@@ -32,17 +32,27 @@ def _git(repo: Path, *args: str) -> str:
     return out.stdout.strip()
 
 
+_REPO_TEMPLATES: dict = {}
+
+
 def _repo(tmp_path: Path, branch: str) -> Path:
+    """Copy of a once-built per-branch repo; the init/commit spawns run once per branch."""
+    import shutil
+    import tempfile
+
+    if branch not in _REPO_TEMPLATES:
+        tpl = Path(tempfile.mkdtemp(prefix="memo-tpl-")) / "repo"
+        tpl.mkdir()
+        _git(tpl, "init", "-b", branch)
+        inbox = tpl / "state" / "cross-repo" / "inbox"
+        inbox.mkdir(parents=True)
+        (inbox / "m.md").write_text(_MEMO, encoding="utf-8")
+        _git(tpl, "add", "-A")
+        _git(tpl, "commit", "-m", "init")
+        _REPO_TEMPLATES[branch] = tpl
     repo = tmp_path / "repo"
-    repo.mkdir()
-    _git(repo, "init", "-b", branch)
-    inbox = repo / "state" / "cross-repo" / "inbox"
-    inbox.mkdir(parents=True)
-    memo = inbox / "m.md"
-    memo.write_text(_MEMO, encoding="utf-8")
-    _git(repo, "add", "-A")
-    _git(repo, "commit", "-m", "init")
-    return memo
+    shutil.copytree(_REPO_TEMPLATES[branch], repo)
+    return repo / "state" / "cross-repo" / "inbox" / "m.md"
 
 
 def _claim(memo: Path) -> dict:

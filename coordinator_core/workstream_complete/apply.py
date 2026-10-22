@@ -929,9 +929,9 @@ def _rekey_complete_entry_args(args: "list[str]", decisions: dict[str, Any]) -> 
     key and filename follow the plan being closed, not a chain-wide slug that an
     earlier close on the same chain already holds."""
     plan_path = decisions.get("governing_plan_path")
-    if not plan_path:
-        return args
-    stem = Path(str(plan_path)).stem
+    stem = Path(str(plan_path)).stem if plan_path else ""
+    if not stem:
+        stem = str(decisions.get("governing_plan_slug") or "").strip()
     if not stem:
         return args
     out = list(args)
@@ -1241,7 +1241,7 @@ def _execute_directives(
     degraded: list[dict[str, Any]] = []
     results: list[dict[str, Any]] = []
     stdout_by_id: dict[str, str] = {}
-    decision_keys_report: dict[str, Any] = {}
+    alias_report: dict[str, Any] = {}
     unfilled_entry: Optional[tuple[str, str]] = None
     discharged: dict[str, str] = {}
     _resolved_repo_root: list[Optional[Path]] = [repo_root]
@@ -1382,7 +1382,7 @@ def _execute_directives(
             )
             aliased = decision_keys.resolve_entry_surfaces(decisions).aliased
             if aliased:
-                decision_keys_report["aliased"] = list(aliased)
+                alias_report["aliased"] = list(aliased)
             if fill_error is not None:
                 failed.append({"id": directive["id"], "error": fill_error})
                 results.append(result)
@@ -1437,8 +1437,8 @@ def _execute_directives(
         report["completion_entry_path"] = unfilled_entry[0]
         report["completion_entry_filled"] = False
         report["completion_entry_fill_error"] = unfilled_entry[1]
-    if decision_keys_report:
-        report["decision_keys"] = decision_keys_report
+    if alias_report:
+        report["decision_keys"] = alias_report
 
     if failed and landed:
         return int(WorkstreamApplyExitCode.PARTIAL_MUTATION), report

@@ -19,7 +19,7 @@ RSS, so a single runaway shows up only here. The Group EM decides whether to kil
 
 Critical, per OS: macOS `kern.memorystatus_vm_pressure_level == 4`; Linux PSI
 `/proc/pressure/memory` `full avg10 >= --psi-full`; elsewhere (Windows) available memory under
-`--avail-pct` percent of total, read through psutil.
+`--avail-pct` percent of total, read through `host_sampler.avail_mb`.
 
 On a critical sample only, it also reads the tail of the box admission channel
 (`admission.jsonl`, the engine's `admission_path()`): a live pid named by a START line is a pause
@@ -194,7 +194,8 @@ def list_procs() -> list[Proc]:
                             info["memory_info"].rss / 1048576, " ".join(info["cmdline"] or [])))
         return out
     raw = subprocess.run(["ps", "-axo", "pid=,ppid=,etime=,rss=,command="],
-                         capture_output=True, text=True, check=False).stdout
+                         capture_output=True, text=True, check=False,
+                         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)).stdout
     out = []
     for line in raw.splitlines():
         f = line.split(None, 4)
@@ -206,17 +207,20 @@ def list_procs() -> list[Proc]:
 def critical(psi_full: float, avail_pct: float) -> bool:
     if sys.platform == "darwin":
         lv = subprocess.run(["sysctl", "-n", "kern.memorystatus_vm_pressure_level"],
-                            capture_output=True, text=True, check=False).stdout.strip()
+                            capture_output=True, text=True, check=False,
+                            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)).stdout.strip()
         return lv == "4"
     psi = Path("/proc/pressure/memory")
     if psi.exists():
         for line in psi.read_text().splitlines():
             if line.startswith("full"):
                 return float(re.search(r"avg10=([\d.]+)", line).group(1)) >= psi_full
-    if psutil is not None:
-        vm = psutil.virtual_memory()
-        return vm.available * 100 / vm.total < avail_pct
-    raise SystemExit("group-em-memory-governor: no pressure source on this host (install psutil)")
+    from coordinator_core.telemetry import host_sampler
+
+    avail, total = host_sampler.avail_mb()
+    if avail is not None and total:
+        return avail * 100 / total < avail_pct
+    raise SystemExit("group-em-memory-governor: no pressure source on this host (available memory unreadable)")
 
 
 _RUSAGE_INFO_V2 = 2
@@ -293,15 +297,20 @@ def default_pidfile() -> Path:
 START_TIME_TOLERANCE_S = 2.0
 
 
+def _psutil_start_time(pid: int) -> Optional[float]:
+    """In-process start time of `pid` via psutil, None when absent or unreadable."""
+    try:
+        if not psutil.pid_exists(pid):
+            return None
+        return float(psutil.Process(pid).create_time())
+    except Exception:
+        return None
+
+
 def process_start_time(pid: int) -> Optional[float]:
     """Epoch start time of a live `pid`, or None when it does not exist (or cannot be read)."""
     if psutil is not None:
-        try:
-            if not psutil.pid_exists(pid):
-                return None
-            return float(psutil.Process(pid).create_time())
-        except Exception:
-            return None
+        return _psutil_start_time(pid)
     try:
         # `etime` ([[dd-]hh:]mm:ss) is the portable spelling; BSD/macOS ps has no `etimes`.
         out = subprocess.run(["ps", "-o", "etime=", "-p", str(pid)], capture_output=True,
@@ -318,8 +327,33 @@ def process_start_time(pid: int) -> Optional[float]:
         return None
 
 
+def process_start_times(pids: list[int]) -> dict[int, Optional[float]]:
+    """Epoch start time per pid in `pids` (None for one that does not exist or cannot be read),
+    from at most one `ps` spawn for the whole list."""
+    if psutil is not None:
+        return {p: _psutil_start_time(p) for p in pids}
+    if not pids:
+        return {}
+    out: dict[int, Optional[float]] = {p: None for p in pids}
+    try:
+        text = subprocess.run(["ps", "-o", "pid=,etime=", "-p", ",".join(str(p) for p in pids)],
+                              capture_output=True, text=True, timeout=5,
+                              creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)).stdout
+        now = time.time()
+        for line in text.splitlines():
+            pid_text, _, etime = line.strip().partition(" ")
+            days, _, clock = etime.strip().rpartition("-")
+            secs = 0
+            for part in clock.split(":"):
+                secs = secs * 60 + int(part)
+            out[int(pid_text)] = now - (secs + (int(days) * 86400 if days else 0))
+    except Exception:
+        pass
+    return out
+
+
 def _write_frozen(pidfile: Optional[Path], paused: list[tuple[Proc, list[int]]],
-                  start_time_fn: Callable[[int], Optional[float]] = process_start_time) -> None:
+                  start_times_fn: Callable[[list[int]], dict[int, Optional[float]]] = process_start_times) -> None:
     """Persist {governor_pid, governor_start_time, frozen:[{pid, start_time}]}, or remove the file
     when no pid remains frozen."""
     if pidfile is None:
@@ -328,9 +362,10 @@ def _write_frozen(pidfile: Optional[Path], paused: list[tuple[Proc, list[int]]],
         pids = [t for _, tree in paused for t in tree]
         if pids:
             me = os.getpid()
-            frozen = [{"pid": p, "start_time": st} for p in pids if (st := start_time_fn(p)) is not None]
+            times = start_times_fn(pids + [me])
+            frozen = [{"pid": p, "start_time": times[p]} for p in pids if times.get(p) is not None]
             pidfile.write_text(json.dumps({"governor_pid": me,
-                                           "governor_start_time": start_time_fn(me),
+                                           "governor_start_time": times.get(me),
                                            "frozen": frozen}), encoding="utf-8")
         else:
             pidfile.unlink(missing_ok=True)
@@ -396,6 +431,8 @@ def run(args: argparse.Namespace, emit: Callable[[str], None] = print,
         bin_dir: Optional[Path] = None, pidfile: Optional[Path] = None,
         start_time_fn: Optional[Callable[[int], Optional[float]]] = None) -> None:
     bin_dir = bin_dir if bin_dir is not None else Path(__file__).resolve().parent
+    start_times_fn = process_start_times if start_time_fn is None else (
+        lambda pids: {p: start_time_fn(p) for p in pids})
     start_time_fn = start_time_fn or process_start_time
     thaw_leftovers(pidfile, signal_fn, start_time_fn)
     hint_armed = True
@@ -439,7 +476,7 @@ def run(args: argparse.Namespace, emit: Callable[[str], None] = print,
                         # an unrecorded freeze is one no later thaw can find.
                         tree = [t for t in descendants(victim.pid, procs)
                                 if t not in prot and start_time_fn(t) is not None]
-                        _write_frozen(pidfile, paused + [(victim, tree)], start_time_fn)
+                        _write_frozen(pidfile, paused + [(victim, tree)], start_times_fn)
                         signal_fn(tree, True)
                         paused.append((victim, tree))
                         crit_streak = 0
@@ -457,7 +494,7 @@ def run(args: argparse.Namespace, emit: Callable[[str], None] = print,
                         signal_fn(tree, False)
                     emit("GOVERNOR RESUMED " + " ".join(f"pid={v.pid}" for v, _ in reversed(paused)))
                     paused.clear()
-                    _write_frozen(pidfile, paused, start_time_fn)
+                    _write_frozen(pidfile, paused, start_times_fn)
                     gave_up = False
             sleep(args.interval)
     finally:
@@ -466,7 +503,7 @@ def run(args: argparse.Namespace, emit: Callable[[str], None] = print,
                 signal_fn(tree, False)
             paused_ids = " ".join(f"pid={v.pid}" for v, _ in reversed(paused))
             paused.clear()
-            _write_frozen(pidfile, paused, start_time_fn)
+            _write_frozen(pidfile, paused, start_times_fn)
             try:
                 emit("GOVERNOR RESUMED-ON-EXIT " + paused_ids)
             except Exception:  # stdout's reader may already be gone

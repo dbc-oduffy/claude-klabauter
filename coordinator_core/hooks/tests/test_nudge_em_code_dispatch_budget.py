@@ -182,7 +182,10 @@ def test_residue_under_budget_advises_with_count(landed):
     assert xb.read_lane(root, SID)["kind"] == "residue"
 
 
-def test_residue_over_budget_denies_naming_typed_executor(landed):
+def test_residue_over_budget_denies_naming_typed_executor(landed, monkeypatch):
+    # A redirected tmp root can itself sit under a `coordinator/` directory, which would
+    # select the coordinator-domain override over the extension map this test pins.
+    monkeypatch.setattr(mod, "_COORDINATOR_PATH_MARKERS", [])
     root, _ = landed
     big = "".join(f"x{i}\n" for i in range(40))
     result = mod.op(_edit(root, "a.py", _lines(10), big))

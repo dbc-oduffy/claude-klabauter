@@ -209,20 +209,99 @@ def test_opus_persona_judgment_or_ambiguous_brief_passes(
 @pytest.mark.parametrize(
     "persona",
     [
-        "coordinator:plan-author",
-        "coordinator:roadmap-planner",
         "coordinator:apm",
         "coordinator:vp-product",
         "coordinator:blitz-em",
         "coordinator:subtractive-adjudicator",
     ],
 )
-def test_plan_authoring_persona_passes_an_amend_brief_with_execution_verbs(
+def test_ruling_persona_passes_an_amend_brief_with_execution_verbs(
     monkeypatch: pytest.MonkeyPatch, persona: str
 ) -> None:
     _patch_pins(monkeypatch, {persona: {"model": "opus"}})
     prompt = "Amend the executing plan in place: add a tier dimension, fix two rows, implement R10."
     assert mod.check(_agent_payload(persona, prompt=prompt)) is None
+
+
+@pytest.mark.parametrize("persona", ["coordinator:plan-author", "coordinator:roadmap-planner"])
+def test_plan_writer_mechanical_brief_is_rewritten_to_sonnet(
+    monkeypatch: pytest.MonkeyPatch, persona: str
+) -> None:
+    _patch_pins(monkeypatch, {persona: {"model": "opus"}})
+    prompt = "Amend the executing plan in place: add a tier dimension, fix two rows, implement R10."
+    payload = _agent_payload(persona, prompt=prompt)
+    envelope = mod.check(payload)
+    _assert_rewritten_to_sonnet(envelope, payload)
+    context = envelope["hookSpecificOutput"]["additionalContext"]
+    assert persona in context and "'fix'" in context
+
+
+_REAL_BRIEF_OPENING = (
+    "Make each plan pass the mise-prep-gate. Fix classes: spine rows, body headings."
+)
+
+
+def _pointer_prompt(path: Path) -> str:
+    return f"Read your full brief at {path.as_posix()} and follow it exactly."
+
+
+def test_plan_author_pointer_brief_with_execution_vocab_is_rewritten(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    persona = "coordinator:plan-author"
+    _patch_pins(monkeypatch, {persona: {"model": "opus"}})
+    brief = tmp_path / "r2-brief-01.md"
+    brief.write_text(_REAL_BRIEF_OPENING, encoding="utf-8")
+    payload = _agent_payload(persona, prompt=_pointer_prompt(brief))
+    _assert_rewritten_to_sonnet(mod.check(payload), payload)
+
+
+@pytest.mark.parametrize("opening", ["Plan the migration. Fix nothing yet.", "Author a plan for X; fix R3."])
+def test_plan_author_pointer_brief_opening_with_plan_or_author_passes(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, opening: str
+) -> None:
+    persona = "coordinator:plan-author"
+    _patch_pins(monkeypatch, {persona: {"model": "opus"}})
+    brief = tmp_path / "brief.md"
+    brief.write_text(opening, encoding="utf-8")
+    assert mod.check(_agent_payload(persona, prompt=_pointer_prompt(brief))) is None
+
+
+def test_authoring_verb_does_not_widen_executor_persona_pass(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_pins(monkeypatch, _SID)
+    envelope = mod.check(_agent_payload("game-dev:staff-game-dev", prompt="Author the fix."))
+    assert envelope["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+def test_apm_pointer_brief_with_fix_passes(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    persona = "coordinator:apm"
+    _patch_pins(monkeypatch, {persona: {"model": "opus"}})
+    brief = tmp_path / "brief.md"
+    brief.write_text(_REAL_BRIEF_OPENING, encoding="utf-8")
+    assert mod.check(_agent_payload(persona, prompt=_pointer_prompt(brief))) is None
+
+
+def test_pointer_to_missing_file_classifies_on_prompt_alone(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    persona = "coordinator:plan-author"
+    _patch_pins(monkeypatch, {persona: {"model": "opus"}})
+    assert mod.check(_agent_payload(persona, prompt=_pointer_prompt(tmp_path / "gone.md"))) is None
+    missing_fix = f"Fix it per {(tmp_path / 'gone.md').as_posix()}"
+    payload = _agent_payload(persona, prompt=missing_fix)
+    _assert_rewritten_to_sonnet(mod.check(payload), payload)
+
+
+def test_executor_persona_pointer_brief_with_execution_vocab_denied(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _patch_pins(monkeypatch, _SID)
+    brief = tmp_path / "brief.md"
+    brief.write_text(_REAL_BRIEF_OPENING, encoding="utf-8")
+    envelope = mod.check(_agent_payload("game-dev:staff-game-dev", prompt=_pointer_prompt(brief)))
+    assert envelope["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
 def test_opus_persona_execution_brief_description_field_classified(
@@ -507,10 +586,11 @@ def test_partial_do_not_edit_does_not_shield_commit_scoped_brief(
     assert envelope["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
-def test_plan_author_persona_edit_the_plan_passes(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_plan_author_persona_edit_the_plan_is_rewritten(monkeypatch: pytest.MonkeyPatch) -> None:
     persona = "coordinator:plan-author"
     _patch_pins(monkeypatch, {persona: {"model": "opus"}})
-    assert mod.check(_agent_payload(persona, prompt="Edit the plan and merge the rows.")) is None
+    payload = _agent_payload(persona, prompt="Edit the plan and merge the rows.")
+    _assert_rewritten_to_sonnet(mod.check(payload), payload)
 
 
 def test_fork_exec_vocab_brief_on_sonnet_parent_passes(

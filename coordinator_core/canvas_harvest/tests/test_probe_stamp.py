@@ -4,6 +4,8 @@ import json
 import os
 import subprocess
 
+from coordinator_core.win_portability import no_console_creationflags
+
 import pytest
 
 from coordinator_core.canvas_harvest import model, probe_stamp
@@ -32,6 +34,7 @@ def _git(cwd, *args):
         ["git", "-C", str(cwd), "-c", "user.email=t@t", "-c", "user.name=t", "-c", "core.autocrlf=false", *args],
         capture_output=True,
         check=True,
+        **no_console_creationflags(),
     )
 
 

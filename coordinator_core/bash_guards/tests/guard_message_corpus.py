@@ -824,6 +824,14 @@ def _noncanonical_branch_creation_hazard_setup(
     return {_CWD_OVERRIDE_KEY: root}
 
 
+def _heavy_tree_repo_root_setup(
+    scratch_dir: Path, mp: pytest.MonkeyPatch
+) -> Dict[str, str]:
+    (scratch_dir / ".git").mkdir()
+    (scratch_dir / "scratch").mkdir()
+    return {_CWD_OVERRIDE_KEY: str(scratch_dir)}
+
+
 CONFINEMENT_ROWS: List[CorpusRow] = [
     CorpusRow(
         "no-verify",
@@ -1003,6 +1011,24 @@ CONFINEMENT_ROWS: List[CorpusRow] = [
         False,
         _DENY,
         False,
+    ),
+    CorpusRow(
+        "block-whole-filesystem-scan",
+        "block-whole-filesystem-scan-heavy-tree-fire",
+        "grep -rn foo .",
+        True,
+        _DENY,
+        False,
+        setup=_heavy_tree_repo_root_setup,
+    ),
+    CorpusRow(
+        "block-whole-filesystem-scan",
+        "block-whole-filesystem-scan-heavy-tree-control",
+        "grep -rn foo src",
+        False,
+        _DENY,
+        False,
+        setup=_heavy_tree_repo_root_setup,
     ),
     CorpusRow(
         "block-worktree-creation",
@@ -2135,7 +2161,7 @@ ADVISORY_REWRITE_ROWS: List[CorpusRow] = [
     CorpusRow(
         "grep-via-bash-guard",
         "grep-via-bash-guard-fire",
-        "grep -rn TODO src/ | wc -l",
+        "grep -rnP TODO src/ | wc -l",
         True,
         _REWRITE,
         False,
@@ -3827,6 +3853,9 @@ from coordinator_core.hooks import context_pressure_precompact as _hook_context_
 from coordinator_core.hooks import subagent_arrival_check as _hook_subagent_arrival_check
 from coordinator_core.hooks import subagent_fabrication_check as _hook_subagent_fabrication_check
 from coordinator_core.hooks import subagent_review_mark as _hook_subagent_review_mark
+from coordinator_core.hooks import compact_summary_constraints as _hook_compact_summary_constraints
+from coordinator_core.hooks import guard_turn_intent as _hook_guard_turn_intent
+from coordinator_core.hooks import subagent_arrival_record as _hook_subagent_arrival_record
 from coordinator_core.hooks import subagent_zero_tool_use as _hook_subagent_zero_tool_use
 from coordinator_core.hooks import subagent_zero_tool_use_resolve as _hook_subagent_zero_tool_use_resolve
 from coordinator_core.hooks import subagent_zero_tool_use_surface as _hook_subagent_zero_tool_use_surface
@@ -3905,10 +3934,14 @@ def _to_envelope_or_none(result: Optional[Dict[str, Any]]) -> Optional[Dict[str,
     expects -- `no_advisory()` returns `{}` (falsy but not `None`), and the
     structured-JSON-RPC-result modules (subagent_arrival_check et al.) return a
     non-empty dict that carries no `hookSpecificOutput` key at all. Both count as
-    "did not speak" for this corpus's purposes."""
+    "did not speak" for this corpus's purposes. A Stop-event advisory speaks through
+    top-level `systemMessage` and a Stop-event block through top-level `decision`
+    (Stop drops `hookSpecificOutput`), so those count too."""
     if not result:
         return None
-    if not isinstance(result, dict) or "hookSpecificOutput" not in result:
+    if not isinstance(result, dict) or not any(
+        key in result for key in ("hookSpecificOutput", "systemMessage", "decision")
+    ):
         return None
     return result
 
@@ -3935,6 +3968,66 @@ def _fire_subagent_review_mark_noop() -> Optional[Dict[str, Any]]:
     return _to_envelope_or_none(
         _run_maybe_async(_hook_subagent_review_mark._handler({}, repo_root=None))
     )
+
+
+def _fire_subagent_arrival_record_noop() -> Optional[Dict[str, Any]]:
+    return _to_envelope_or_none(
+        _run_maybe_async(_hook_subagent_arrival_record._handler({}, repo_root=None))
+    )
+
+
+def _fire_compact_summary_constraints(summary: str) -> Optional[Dict[str, Any]]:
+    with tempfile.TemporaryDirectory(prefix="guard-message-corpus-hooks-csc-", dir=_neutral_scratch_parent()) as scratch:
+        transcript = Path(scratch) / "transcript.jsonl"
+        line = _json.dumps(
+            {"isCompactSummary": True, "message": {"content": summary}}, separators=(",", ":")
+        )
+        transcript.write_text(line + "\n", encoding="utf-8")
+        text = _hook_compact_summary_constraints.warn_line({"transcript_path": str(transcript)})
+        return _hook_envelope_from_message({"message": text} if text else None)
+
+
+def _fire_compact_summary_constraints_uncited() -> Optional[Dict[str, Any]]:
+    return _fire_compact_summary_constraints("- Never push to origin without asking.\n- Work on the parser.")
+
+
+def _fire_compact_summary_constraints_control() -> Optional[Dict[str, Any]]:
+    return _fire_compact_summary_constraints("- Never push (pm_turns turn 4).\n- Work on the parser.")
+
+
+def _fire_guard_turn_intent(text: str, group_em_live: bool) -> Optional[Dict[str, Any]]:
+    with tempfile.TemporaryDirectory(prefix="guard-message-corpus-hooks-gti-", dir=_neutral_scratch_parent()) as scratch:
+        scratch_dir = Path(scratch)
+        os.makedirs(scratch_dir / ".git")
+        if group_em_live:
+            import datetime
+
+            (scratch_dir / "state").mkdir()
+            (scratch_dir / "state" / "group-em-watch.json").write_text(
+                _json.dumps(
+                    {
+                        "holder_session_id": "holder",
+                        "last_tick_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                    }
+                ),
+                encoding="utf-8",
+            )
+        payload = {
+            "session_id": str(uuid.uuid4()),
+            "cwd": str(scratch_dir),
+            "last_assistant_message": text,
+        }
+        return _to_envelope_or_none(
+            _run_maybe_async(_hook_guard_turn_intent._handler(payload, repo_root=str(scratch_dir)))
+        )
+
+
+def _fire_guard_turn_intent_go_ask() -> Optional[Dict[str, Any]]:
+    return _fire_guard_turn_intent("Tests pass. Ready when you are.", True)
+
+
+def _fire_guard_turn_intent_control() -> Optional[Dict[str, Any]]:
+    return _fire_guard_turn_intent("Tests pass. Ready when you are.", False)
 
 
 # --- AC10 coverage-gap closers, 2026-08-31. Three hooks modules landed
@@ -5412,6 +5505,19 @@ def _fire_guard_host_subagent_bash_spawn_shapes_control() -> Optional[Dict[str, 
     )
 
 
+def _stop_envelope_or_none(result: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Stop/SubagentStop drop `hookSpecificOutput` (`_hook_envelope.event_advisory`,
+    `deny`): an advisory is top-level `systemMessage`, a hold is `{"decision": "block",
+    "reason"}`. Re-wrap either as the `additionalContext` envelope `HookCapture` reads;
+    `_to_envelope_or_none` alone reads a Stop advisory as silence."""
+    if not isinstance(result, dict):
+        return None
+    text = result.get("systemMessage") or result.get("reason")
+    if isinstance(text, str) and text:
+        return {"hookSpecificOutput": {"additionalContext": text}}
+    return _to_envelope_or_none(result)
+
+
 def _fire_guard_manufactured_blocker() -> Optional[Dict[str, Any]]:
     with tempfile.TemporaryDirectory(prefix="guard-message-corpus-gmb-", dir=_neutral_scratch_parent()) as scratch:
         transcript = Path(scratch) / "t.jsonl"
@@ -5426,7 +5532,7 @@ def _fire_guard_manufactured_blocker() -> Optional[Dict[str, Any]]:
                 + "\n"
             )
         payload = {"payload": {"transcript_path": str(transcript), "session_id": "sess-gmb", "cwd": scratch}}
-        return _to_envelope_or_none(_hook_guard_manufactured_blocker._handler(payload))
+        return _stop_envelope_or_none(_hook_guard_manufactured_blocker._handler(payload))
 
 
 def _fire_guard_manufactured_blocker_control() -> Optional[Dict[str, Any]]:
@@ -5443,7 +5549,7 @@ def _fire_guard_manufactured_blocker_control() -> Optional[Dict[str, Any]]:
                 + "\n"
             )
         payload = {"payload": {"transcript_path": str(transcript), "session_id": "sess-gmb-2", "cwd": scratch}}
-        return _to_envelope_or_none(_hook_guard_manufactured_blocker._handler(payload))
+        return _stop_envelope_or_none(_hook_guard_manufactured_blocker._handler(payload))
 
 
 def _fire_guard_named_dispatch_tool_restriction() -> Optional[Dict[str, Any]]:
@@ -6057,7 +6163,7 @@ def _fire_stop_dispatch() -> Optional[Dict[str, Any]]:
                     "last_assistant_message": "See test.py:42 and foo/bar.py:10 for details.",
                 }
             }
-            return _to_envelope_or_none(_run_maybe_async(_hook_stop_dispatch._handler(payload)))
+            return _stop_envelope_or_none(_run_maybe_async(_hook_stop_dispatch._handler(payload)))
 
 
 def _fire_stop_dispatch_control() -> Optional[Dict[str, Any]]:
@@ -6076,7 +6182,7 @@ def _fire_stop_dispatch_control() -> Optional[Dict[str, Any]]:
                 "last_assistant_message": "Done.",
             }
         }
-        return _to_envelope_or_none(_run_maybe_async(_hook_stop_dispatch._handler(payload)))
+        return _stop_envelope_or_none(_run_maybe_async(_hook_stop_dispatch._handler(payload)))
 
 
 def _fire_strip_worktree_isolation() -> Optional[Dict[str, Any]]:
@@ -6345,6 +6451,15 @@ HOOK_ROWS: List[HookRow] = [
         _fire_cater_subagent_start_missing_provisioning,
     ),
     HookRow("subagent_review_mark", "noop-control", False, _fire_subagent_review_mark_noop),
+    HookRow("subagent_arrival_record", "noop-control", False, _fire_subagent_arrival_record_noop),
+    HookRow(
+        "compact_summary_constraints", "fire-uncited", True, _fire_compact_summary_constraints_uncited
+    ),
+    HookRow(
+        "compact_summary_constraints", "control-cited", False, _fire_compact_summary_constraints_control
+    ),
+    HookRow("guard_turn_intent", "fire-go-ask", True, _fire_guard_turn_intent_go_ask),
+    HookRow("guard_turn_intent", "control-no-group-em", False, _fire_guard_turn_intent_control),
     HookRow(
         "plan_persistence_check",
         "fire-persisted-advisory",

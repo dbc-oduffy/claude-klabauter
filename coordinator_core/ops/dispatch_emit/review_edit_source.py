@@ -27,6 +27,7 @@ NON_REVIEW_SUBAGENT_TYPES = frozenset(
         "enricher",
         "plan-author",
         "plan-author-residue",
+        "residue-author",
         "sizing-scout",
         "git-commit-agent",
         "apm",

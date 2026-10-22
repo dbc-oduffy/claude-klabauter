@@ -511,6 +511,7 @@ _AGENT_MODELS = {
     "coordinator:apm": "opus",
     "coordinator:plan-author": "opus",
     "coordinator:plan-author-residue": "sonnet",
+    "coordinator:residue-author": "sonnet",
     "coordinator:premise-checker": "sonnet",
     "coordinator:code-reviewer": "sonnet",
     "coordinator:delivery-verifier": "sonnet",
@@ -4893,8 +4894,10 @@ def _checkpoint_commit_js(
         "  }",
         "  async function _commitWave(n, ids) {",
         "    const done = ids.filter((i) => _landed[i]);",
+        *([] if seam is not None else ["    if (!done.length) return;"]),
+        "    const paths = [...new Set([..._carried, ...done].flatMap((i) => _landed[i].paths))];",
         (
-            "    if (!done.length) {\n"
+            "    if (!done.length || !paths.length) {\n"
             "      if ((_seamHeldPlans[n] || []).length) {\n"
             "        _commitFailures.push('wave ' + n + ': no row landed to commit');\n"
             f"        {COMMIT_REFUSED_VAR}['wave ' + n + ' commit'] = 'wave ' + n + ': no row landed to commit';\n"
@@ -4903,9 +4906,8 @@ def _checkpoint_commit_js(
             "      return;\n"
             "    }"
             if seam is not None
-            else "    if (!done.length) return;"
+            else "    if (!paths.length) return;"
         ),
-        "    const paths = [...new Set([..._carried, ...done].flatMap((i) => _landed[i].paths))];",
         "    const id = 'wave ' + n;",
         "    const subject = 'checkpoint(wave ' + n + '): ' + done.length + ' rows \u2014 ' + done.join(', ');",
         f"    const owed = done.filter((i) => {GATE_OWED_VAR}[i]);",

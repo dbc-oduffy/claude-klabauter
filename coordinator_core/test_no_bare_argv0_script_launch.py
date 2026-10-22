@@ -109,6 +109,7 @@ generalizes, ``coordinator_core/plugin_health/tests/test_sentinel.py::test_every
 from __future__ import annotations
 
 import ast
+import functools
 import os
 import sys
 from pathlib import Path
@@ -443,6 +444,7 @@ def _classify(node: ast.AST, tree: ast.AST, call_lineno: int, depth: int = 0) ->
     return "unknown", f"unhandled node shape: {_unparse(node)}"
 
 
+@functools.lru_cache(maxsize=1)
 def _scan_violations_raw() -> List[Tuple[str, str, str, int, int, str, str]]:
     """Return `(relpath, enclosing_function, callee, lineno, col_offset,
     reason, call_signature)` for every argv[0] that traces to a bare
@@ -498,7 +500,7 @@ def _scan_violations() -> Dict[Tuple[str, str, str, str, int], str]:
     BYTE-IDENTICAL violating calls (same `call_signature`) in one
     `(relpath, enclosing_function, callee)` group.
     """
-    raw = _scan_violations_raw()
+    raw = _scan_violations_raw()  # cached: one tree walk shared by the three guards
     per_group: Dict[Tuple[str, str, str], List[Tuple[int, int, str, str]]] = {}
     for rel, func_name, callee, lineno, col, reason, sig in raw:
         per_group.setdefault((rel, func_name, callee), []).append((lineno, col, reason, sig))

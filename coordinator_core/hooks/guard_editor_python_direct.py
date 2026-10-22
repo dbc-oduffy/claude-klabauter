@@ -30,10 +30,11 @@ from coordinator_core.machine_profile import apply_guard_level
 GUARD_NAME = "guard-editor-python-direct"
 
 
-def _message(trigger: str, preferred: str) -> str:
+def _message(trigger: str) -> str:
+    """The route-table names the agent and the tool; the message points there, never echoes them."""
     return (
-        f"{trigger} is editor-Python work, which belongs to {preferred}. "
-        f"Dispatch {preferred} with the outcome."
+        f"{trigger} is editor-Python work, which belongs to editor_python.preferred_agent_type "
+        f"(.claude/route-table.json). Dispatch it with the outcome."
     )
 
 
@@ -91,13 +92,11 @@ def _evaluate(params: dict, repo_root) -> dict:
         if isinstance(command, str) and editor.bash_patterns and _bash_hit(command, editor):
             # Warn-only at every `level`: recall is ~78%, so a deny (which apply_guard_level
             # would keep on an author box at strict) would block on a classifier known to miss.
-            return allow_advisory(
-                "PreToolUse", _message("This Bash launch", editor.preferred_agent_type)
-            )
+            return allow_advisory("PreToolUse", _message("This Bash launch"))
     if trigger is None:
         return no_advisory()
 
-    message = _message(trigger, editor.preferred_agent_type)
+    message = _message("This editor-Python tool call")
     if editor.level == "strict":
         return apply_guard_level(GUARD_NAME, deny("PreToolUse", message)) or no_advisory()
     return allow_advisory("PreToolUse", message)

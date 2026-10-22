@@ -58,7 +58,9 @@ def test_the_leg_is_called_only_when_readyop_never_ran(tmp_path):
 
 def test_every_engine_owned_fold_site_returns_the_stage_reply_under_the_stage_reply_schema():
     schema_of = ask_compose.STAGE_REPLY_SCHEMA
-    assert set(schema_of["properties"]) == {"manifest_handle", "error", "owed_em_ids", "owed_plan"}
+    assert set(schema_of["properties"]) == {
+        "manifest_handle", "error", "owed_em_ids", "owed_plan", "parked", "plan_path",
+    }
     for schema in (ask_compose._GATE_STAGED_SCHEMA, ask_compose._REWORD_SCHEMA, ask_compose._REVISE_STAGED_SCHEMA,
                    ask_compose._SPINE_REVIEW_STAGED_SCHEMA, ask_compose._REPLAN_STAGED_SCHEMA,
                    ask_compose._ASK_SCOUT_STAGED_SCHEMA, ask_compose._BLITZ_STAGE_READ_SCHEMA):

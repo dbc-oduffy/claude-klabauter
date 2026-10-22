@@ -1,25 +1,33 @@
 """Probe: attribute the cost of `rollback_check.find_exact_blob_rollbacks` on a live store.
 
 Run: python -m coordinator_core.benchmarks.probe_rollback_check_cost --repo . --from-commit 3c95ac4a26
+     python -m coordinator_core.benchmarks.probe_rollback_check_cost --repo . --head HEAD --churned 60 --window 1000
 
-Runs the check in-process from cold caches and prints process time (`time.process_time`,
-never wall clock), the subprocess spawn count, `read_object` calls, `_TREE_CACHE`
+Runs the check in-process from cold caches and prints process time (`os.times()` self plus
+reaped children, so a spawned mechanism is charged honestly; never wall clock), the
+subprocess spawn count, `read_object` calls, `_TREE_CACHE`
 hits/misses, pack-object inflates (top-level vs OFS_DELTA chain links) and per-pack mmap
 opens. Counters wrap module attributes inside the probe; production code is untouched.
 A run past `--cap-s` of process time is cut and reported as exceeded, with partial counters.
 
 Candidate values: with `--from-commit` they are that commit's own blobs for the paths it
 changed, and `--head` defaults to its first parent (the commit_paths shape). With `--paths` /
-`--sample-head` they are a sentinel that matches no ancestor, which forces the full walk.
+`--sample-head` / `--churned` they are a sentinel that matches no ancestor, which forces the
+full walk. `--churned N` is the N most-changed paths over `--head`'s last `--lookback`
+first-parent commits, resolved in-process with no spawn. `--impl FILE.py:FUNC` measures
+FUNC (same signature as `find_exact_blob_rollbacks`) in place of the shipped function.
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
+import importlib.util
 import json
+import os
+import re
 import subprocess
 import sys
-import time
 from collections import Counter
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence
@@ -33,6 +41,68 @@ _SENTINEL = "0" * 39 + "1"
 
 class _CapExceeded(Exception):
     pass
+
+
+def _process_s() -> float:
+    t = os.times()
+    return t.user + t.system + t.children_user + t.children_system
+
+
+def _resolve_head(common_dir: Path, head: str) -> Optional[str]:
+    """40-hex passes through; HEAD / a ref name resolves from loose files then packed-refs."""
+    if re.fullmatch(r"[0-9a-f]{40}", head):
+        return head
+    ref = head
+    for _ in range(5):
+        if ref == "HEAD":
+            raw = (common_dir / "HEAD").read_text().strip()
+        else:
+            loose = common_dir / ref
+            if loose.is_file():
+                raw = loose.read_text().strip()
+            else:
+                raw = ""
+                packed = common_dir / "packed-refs"
+                if packed.is_file():
+                    for line in packed.read_text().splitlines():
+                        if line.endswith(" " + ref):
+                            raw = line.split(" ", 1)[0]
+                            break
+        if re.fullmatch(r"[0-9a-f]{40}", raw):
+            return raw
+        if raw.startswith("ref: "):
+            ref = raw[5:]
+            continue
+        return None
+    return None
+
+
+def _churned(common_dir: Path, head: str, n: int, lookback: int) -> List[str]:
+    """The n paths changed most often across `lookback` first-parent commits ending at head."""
+    counts: Counter = Counter()
+    sha: Optional[str] = head
+    child_tree: Optional[str] = None
+    for i in range(lookback + 1):
+        meta = commit_meta(common_dir, sha) if sha else None
+        if meta is None:
+            break
+        tree = meta.get("tree")
+        if i > 0:
+            changed: Dict[str, object] = {}
+            _diff_trees(common_dir, tree, child_tree, "", changed)
+            counts.update(changed.keys())
+        child_tree = tree
+        parents = meta.get("parents") or []
+        sha = parents[0] if parents else None
+    return [p for p, _c in counts.most_common(n)]
+
+
+def _load_impl(spec: str):
+    file_part, _, func = spec.rpartition(":")
+    mod_spec = importlib.util.spec_from_file_location("_rollback_impl", file_part)
+    mod = importlib.util.module_from_spec(mod_spec)
+    mod_spec.loader.exec_module(mod)
+    return getattr(mod, func)
 
 
 def _clear_caches() -> None:
@@ -88,7 +158,7 @@ class _Counters:
         self._orig: Dict[str, object] = {}
 
     def _check_cap(self) -> None:
-        if time.process_time() - self._t0 > self.cap_s:
+        if _process_s() - self._t0 > self.cap_s:
             raise _CapExceeded()
 
     def __enter__(self) -> "_Counters":
@@ -146,17 +216,20 @@ class _Counters:
         subprocess.Popen.__init__ = self._popen  # type: ignore[method-assign]
 
 
-def measure(common_dir: Path, head: str, candidates: Dict[str, object], window: int, cap_s: float) -> Dict[str, object]:
+def measure(
+    common_dir: Path, head: str, candidates: Dict[str, object], window: int, cap_s: float, impl=None
+) -> Dict[str, object]:
     _clear_caches()
+    fn = impl or rollback_check.find_exact_blob_rollbacks
     with _Counters(cap_s) as c:
-        c._t0 = time.process_time()
+        c._t0 = _process_s()
         status = "completed"
         findings = None
         try:
-            findings = rollback_check.find_exact_blob_rollbacks(common_dir, head, candidates, window)
+            findings = fn(common_dir, head, candidates, window)
         except _CapExceeded:
             status = f"exceeded {cap_s:g}s process time (cut)"
-        ms = (time.process_time() - c._t0) * 1000.0
+        ms = (_process_s() - c._t0) * 1000.0
     return {
         "status": status,
         "process_ms": round(ms, 2),
@@ -171,6 +244,9 @@ def measure(common_dir: Path, head: str, candidates: Dict[str, object], window: 
         "paths": len(candidates),
         "window": window,
         "findings": None if findings is None else len(findings),
+        "findings_digest": None if findings is None else hashlib.sha1(
+            repr(sorted(tuple(f) for f in findings)).encode()
+        ).hexdigest(),
     }
 
 
@@ -182,6 +258,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ap.add_argument("--window", type=int, default=1000)
     ap.add_argument("--from-commit")
     ap.add_argument("--sample-head", type=int, help="first N blob paths of --head's tree")
+    ap.add_argument("--churned", type=int, help="N most-changed paths over --head's last --lookback commits")
+    ap.add_argument("--lookback", type=int, default=400)
+    ap.add_argument("--impl", help="FILE.py:FUNC measured in place of find_exact_blob_rollbacks")
     ap.add_argument("--cap-s", type=float, default=60.0)
     args = ap.parse_args(argv)
     declare_benchmark_origin()
@@ -210,10 +289,18 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         _list_blob_paths(common_dir, _tree_of(common_dir, head) or "", "", args.sample_head, sample)
         for p in sample:
             candidates[p] = _SENTINEL
+    if head:
+        head = _resolve_head(common_dir, head)
+    if args.churned:
+        if not head:
+            print("--churned needs --head", file=sys.stderr)
+            return 2
+        for p in _churned(common_dir, head, args.churned, args.lookback):
+            candidates[p] = _SENTINEL
     if not head or not candidates:
         print("need --head (or --from-commit) and at least one path", file=sys.stderr)
         return 2
-    print(json.dumps(measure(common_dir, head, candidates, args.window, args.cap_s), indent=2, default=str))
+    print(json.dumps(measure(common_dir, head, candidates, args.window, args.cap_s, _load_impl(args.impl) if args.impl else None), indent=2, default=str))
     return 0
 
 

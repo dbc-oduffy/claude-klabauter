@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import os
 import re
+from pathlib import Path
 
 from coordinator_core.ops.baton_close_report_contract import (
     REVERSE_FIELD_DELIVERABLE,
@@ -25,7 +26,7 @@ from coordinator_core.ops.baton_close_report_contract import (
 from coordinator_core.ops.baton_close_plan_delivery import PLAN_DONE, PlanDeliveryCache
 from coordinator_core.ops.baton_close_report_decide import STATUS_MISSING, STATUS_UNREADABLE
 from coordinator_core.ops.baton_close_report_readers import run_claims
-from coordinator_core.session.record_homes import home_dir
+from coordinator_core.session.record_homes import home_dir, record_path
 
 SIZING_DONE = frozenset({"shipped"})
 ROADMAP_DONE = frozenset({"shipped"})
@@ -47,7 +48,8 @@ _DELIVERABLE_RE = re.compile(r"^deliverable_id:[ \t]*(.*)$")
 _PREDECESSOR_RE = re.compile(r"^predecessor_handoff:[ \t]*(.*)$")
 _GOAL_ID_RE = re.compile(r"^id:[ \t]*(.*)$")
 _SIZING_OBJECT_RE = re.compile(r"^sizing_object:[ \t]*(.*)$")
-_BATON_PATH_RE = re.compile(r"state/handoffs/[^\s\"',()#]+\.md")
+_HANDOFFS = Path(home_dir("", "handoffs")).as_posix()
+_BATON_PATH_RE = re.compile(re.escape(_HANDOFFS) + r"/[^\s\"',()#]+\.md")
 
 
 def _scalar(raw: str) -> str:
@@ -395,7 +397,7 @@ class _Reader:
                 gid = _key_value(lines, _GOAL_ID_RE)
                 if gid:
                     self._goal_status[gid] = _key_value(lines, _STATUS_RE)
-                    self._goal_paths[gid] = "state/goals/" + name
+                    self._goal_paths[gid] = Path(record_path("", "goals", name)).as_posix()
         if goal_id not in self._goal_status:
             return None
         return self._goal_paths[goal_id], self._goal_status[goal_id]
@@ -468,7 +470,7 @@ def target_evidence(worktree_root: str, headers: dict[str, BatonHeader]) -> dict
             items.append(_path_item(rd, EvidenceClass.SIZING, "sizing_object", so, False, SIZING_DONE))
         rid = h.get("roadmap_id")
         if rid:
-            ov = f"state/roadmap/{rid}/OVERVIEW.md"
+            ov = Path(home_dir("", "roadmap"), rid, "OVERVIEW.md").as_posix()
             if "/" in rid or "\\" in rid or ".." in rid:
                 items.append(_item(EvidenceClass.ROADMAP, "roadmap_id", ov, False, None, ROADMAP_DONE))
             else:

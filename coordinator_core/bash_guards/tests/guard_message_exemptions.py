@@ -269,7 +269,7 @@ def _block_reviewer_bash_outside_allowlist_fire_fixture() -> Tuple[str, str, str
 
 
 def _grep_via_bash_guard_fire_fixture() -> Tuple[str, str, str, Dict[str, Any], bool]:
-    cmd = "grep -rn TODO src/ | wc -l"
+    cmd = "grep -rnP TODO src/ | wc -l"
     session_id = "guard-message-exemption-%s" % uuid.uuid4().hex
     cwd = "/nonexistent-guard-message-exemption-dir"
     payload: Dict[str, Any] = {

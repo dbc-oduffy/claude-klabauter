@@ -6,7 +6,8 @@ import pytest
 
 from coordinator_core.benchmarks.process_time import in_process_time_ms
 from coordinator_core.win_portability import no_console_creationflags
-from coordinator_core.workday_start.watch_state_ignore import WATCH_STATE_FILES, watch_state_ignore
+from coordinator_core.workday_start import runtime_ignore_set as rset
+from coordinator_core.workday_start.watch_state_ignore import watch_state_ignore
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
@@ -23,8 +24,12 @@ def _git(root, *args):
 
 
 def test_watch_state_ignore_median_under_bar_and_spawns_nothing(tmp_path, monkeypatch):
+    rules = ("state/group-em-watch.json", ".coordinator-local/", "state/**/*.fire.mjs")
+    template = tmp_path.parent / f"{tmp_path.name}-gitignore.template"
+    template.write_text("\n".join(rules) + "\n", encoding="utf-8")
+    monkeypatch.setattr(rset, "resolve_template_path", lambda: template)
     _git(tmp_path, "init", "-q")
-    (tmp_path / ".gitignore").write_text("\n".join(WATCH_STATE_FILES) + "\n", encoding="utf-8")
+    (tmp_path / ".gitignore").write_text("\n".join(rules) + "\n", encoding="utf-8")
     bulk = tmp_path / "bulk"
     bulk.mkdir()
     for n in range(TRACKED_FILES):

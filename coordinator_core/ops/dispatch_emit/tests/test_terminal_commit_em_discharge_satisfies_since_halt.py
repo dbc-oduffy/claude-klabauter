@@ -27,14 +27,26 @@ def _resume(halt, **extra):
     return {"run_id": "old", "halt_sha": halt, "blocking": ["R1"], "unlanded": ["C2"], **extra}
 
 
+_PLAIN_TEMPLATE: list = []
+
+
 @pytest.fixture
 def plain_repo(tmp_path):
-    _git(tmp_path, "init", "-q")
-    _git(tmp_path, "config", "user.email", "t@t.example")
-    _git(tmp_path, "config", "user.name", "t")
-    (tmp_path / "prod.py").write_text("x = 1\n", encoding="utf-8")
-    _git(tmp_path, "add", ".")
-    _git(tmp_path, "commit", "-q", "-m", "halt")
+    import shutil
+    import tempfile
+    from pathlib import Path
+
+    if not _PLAIN_TEMPLATE:
+        tpl = Path(tempfile.mkdtemp(prefix="emdis-tpl-")) / "repo"
+        tpl.mkdir()
+        _git(tpl, "init", "-q")
+        _git(tpl, "config", "user.email", "t@t.example")
+        _git(tpl, "config", "user.name", "t")
+        (tpl / "prod.py").write_text("x = 1\n", encoding="utf-8")
+        _git(tpl, "add", ".")
+        _git(tpl, "commit", "-q", "-m", "halt")
+        _PLAIN_TEMPLATE.append(tpl)
+    shutil.copytree(_PLAIN_TEMPLATE[0], tmp_path, dirs_exist_ok=True)
     manifest = tmp_path / "manifest.json"
     manifest.write_text(json.dumps({"rows": [{"id": "C1", "writes": ["prod.py"]}]}), encoding="utf-8")
     return tmp_path, manifest, _git(tmp_path, "rev-parse", "HEAD")
