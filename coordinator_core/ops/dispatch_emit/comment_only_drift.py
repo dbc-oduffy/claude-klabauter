@@ -1,4 +1,4 @@
-"""Comment-only blob-drift proof for `dispatch.terminal_commit`'s refusal path.
+"""Comment-only blob-drift proof for a landing's blob-drift refusal path.
 
 A drifted path is tolerated only when the bytes the review read (the write-once pre-review
 snapshot beside the prep sidecar) and the bytes now on disk are the same Python AST, docstrings

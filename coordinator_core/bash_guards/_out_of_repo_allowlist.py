@@ -12,7 +12,7 @@ entries: they run in engine code, not through an EM's tool call.
 Each entry delegates to the predicate that already decides it:
 claude-home, settings-home, agent-memory-store, os-temp-scratch and
 declared-run-output-root come from `_write_bump_applicability`; session-share-dir
-from `machinery_paths.share_dirs`; lessons-outbox from `is_lessons_outbox_write`.
+from `machinery_paths.share_dir`; lessons-outbox from `is_lessons_outbox_write`.
 
 Differences found between surfaces (the tool surface's semantics win; the Bash
 legs gain allows and lose none):
@@ -20,8 +20,8 @@ legs gain allows and lose none):
   carried a duplicate and the Bash outside-repo guard none. Path-shape only, not
   gated on which repo owns the path, because the target is the central lessons
   repo by design.
-- share dir: the Bash guards allowed only the current share root; the legacy
-  root is accepted too, so a session mid-migration is not refused its own dir.
+- share dir: only the current share root is sanctioned; the retired
+  `state/subagent-share` root stays out of bounds.
 - os-temp-scratch and settings-home keep their git-repo conditions: a checkout
   under temp, or nested in the settings home, is still a foreign repo.
 
@@ -84,11 +84,8 @@ def _is_under_session_share_dir(
     target_cf = _resolve_path(path)
     if target_cf is None:
         return False
-    for candidate in machinery_paths.share_dirs(session_repo, sanitized):
-        root_cf = _resolve_path(candidate)
-        if root_cf is not None and _is_under(target_cf, root_cf):
-            return True
-    return False
+    root_cf = _resolve_path(machinery_paths.share_dir(session_repo, sanitized))
+    return root_cf is not None and _is_under(target_cf, root_cf)
 
 
 def sanctioned_destination(

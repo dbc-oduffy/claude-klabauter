@@ -146,7 +146,7 @@ def main(
             print(f"{PROG}: cannot read memory status for admission", file=sys.stderr)
             return 1
         peak = int(args.admit_peak * host.GIB)
-        limit = int(args.commit_limit_gib * host.GIB) if args.commit_limit_gib else status.commit_limit
+        limit = int(args.commit_limit_gib * host.GIB) if args.commit_limit_gib is not None else status.commit_limit
         verdict = host.admit(
             peak, status, cushion_pct=args.cushion_pct, commit_limit=limit
         )

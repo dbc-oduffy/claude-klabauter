@@ -86,6 +86,14 @@ def test_counter_failure_degrades_one_field(capsys):
     assert data["available_gib"] == 40.0
 
 
+def test_admit_without_readable_status_exits_1(capsys):
+    def boom():
+        raise OSError("GlobalMemoryStatusEx")
+
+    assert _run(["--admit-peak", "1"], status_fn=boom) == 1
+    assert "cannot read memory status" in capsys.readouterr().err
+
+
 @pytest.mark.parametrize("plat", ["linux", "darwin"])
 def test_unsupported_host(plat, capsys):
     rc = mod.main([], platform=plat)

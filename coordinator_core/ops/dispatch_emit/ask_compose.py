@@ -30,6 +30,7 @@ from coordinator_core.ops.dispatch_emit.falsifier_integrity_phase import REVIEWE
 from coordinator_core.ops.dispatch_emit.ask_brief import EM_BRIEF_VAR, EmBrief, brief_decl_js
 from coordinator_core.ops.dispatch_emit import ask_gate as _ask_gate  # noqa: F401 -- installs the fleet-mode provider
 from coordinator_core.ops.dispatch_emit.sizing_fire import RESUME_LEDGER_HALT_BLOCKING_FIELD
+from coordinator_core.ops.dispatch_emit.pre_halt_credit import CREDIT_MATCH_JS
 from coordinator_core.ops._workflow_contract import agent_options_phase_titles
 from coordinator_core.ops.dispatch_emit.ask_contract import (
     ALL_LANDED_HALT_KIND,
@@ -2836,14 +2837,12 @@ def compose_ask_script(
         "    if (_preHaltCredit) {\n"
         f"      const _hr = _gate.{RESUME_LEDGER_KEY}.{RESUME_LEDGER_REMAINING_FIELD} ?? {{}};\n"
         f"      const _blk = _gate.{RESUME_LEDGER_KEY}.blocking ?? [];\n"
-        "      const _hex = (s) => String(s ?? '').toLowerCase().match(/\\b[0-9a-f]{7,40}\\b/g) ?? [];\n"
+        f"      const _creditMatch = {CREDIT_MATCH_JS};\n"
         "      for (const i of (_ledger?.items ?? [])) {\n"
         "        if (!i || i.status !== 'met' || !_blk.includes(i.id)) continue;\n"
         "        const _rec = _hr[i.id] ?? {};\n"
-        f"        const _known = _hex(JSON.stringify([_rec.evidence ?? '', _rec.remaining ?? [], _gate.{RESUME_LEDGER_KEY}.{RESUME_LEDGER_NOTES_FIELD} ?? []]));\n"
-        "        const _named = _hex((Array.isArray(i.met_by) ? i.met_by : [i.met_by]).join(' '));\n"
-        "        const _ok = _named.some((n) => _known.some((k) => k.startsWith(n) || n.startsWith(k)));\n"
-        "        if (!_ok) { i.status = 'not_met'; i.essential = true; "
+        f"        const _known = JSON.stringify([_rec.evidence ?? '', _rec.remaining ?? [], _gate.{RESUME_LEDGER_KEY}.{RESUME_LEDGER_NOTES_FIELD} ?? []]);\n"
+        "        if (!_creditMatch(i.met_by, _known)) { i.status = 'not_met'; i.essential = true; "
         "i.remaining = ['met_by: the commit sha that carries the credited work']; }\n"
         "      }\n"
         "    }\n"

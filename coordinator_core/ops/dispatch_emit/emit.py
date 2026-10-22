@@ -7197,6 +7197,9 @@ def emit_script(
             )
             landed_rows = landed_rows | (trailer_landed & spine_ids)
             carried_gate_owed = tuple(sorted(trailer_owed & spine_ids))
+        # A landed id this spine does not carry (a no-hunk DONE row closed elsewhere, or a row of
+        # another plan in a mixed run) has nothing to drop here; it is skipped, not refused.
+        landed_rows = landed_rows & ({r.id for r in rows} | set(closed_ids))
         rows = _drop_landed_rows(rows, landed_rows, closed_ids)
         if prior_run_base is not None:
             prior_landed_rows = [r for r in pre_drop_rows if r.id in landed_rows]

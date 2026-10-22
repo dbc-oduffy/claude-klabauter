@@ -277,10 +277,9 @@ from coordinator_core.bash_guards._write_bump_applicability import (
     record_applicability_event,
     resolve_launch_anchor,
     session_anchor_has_git_repo,
-    target_is_bare_temp_scratch,
     target_is_publish_destination,
-    target_is_under_claude_home,
 )
+from coordinator_core.bash_guards._out_of_repo_allowlist import sanctioned_destination
 from coordinator_core.bash_guards._write_bump_marker import (
     bump_is_cleared,
     effective_session_id,
@@ -292,6 +291,7 @@ from coordinator_core.bash_guards._write_bump_message import (
     DESTINATION_FOREIGN,
     DESTINATION_PUBLISH,
     render_bump_message,
+    render_out_of_repo_refusal,
     resolve_agent_class,
 )
 from coordinator_core.bash_guards._write_bump_sink_shapes import (
@@ -301,6 +301,7 @@ from coordinator_core.bash_guards._write_bump_sink_shapes import (
     extract_set_location_target_powershell,
     extract_write_sink_targets_for_segment,
     extract_write_sink_targets_powershell,
+    interpreter_write_target_readings,
     nearest_existing_ancestor as _nearest_existing_ancestor,
     resolve_relative as _resolve_relative,
 )
@@ -311,8 +312,7 @@ from coordinator_core.bash_guards._write_bump_stand_down import (
     stand_down_reason,
 )
 from coordinator_core.session import machinery_paths
-from coordinator_core.machine_profile import apply_guard_level
-from coordinator_core.trusted_root_guard import _settings_home_dir_from_env
+from coordinator_core.machine_profile import apply_guard_level, out_of_repo_write_blocked
 from coordinator_core.write_guards._case_fold_path import casefold_path
 from coordinator_core.write_guards.guard_memory_store_cap import bash_write_verdict
 
@@ -355,6 +355,44 @@ def _stand_down_instead_of_denying(
     )
 
 
+def _render_deny_message(
+    *,
+    agent_class: str,
+    target_label: str,
+    target_dir: str,
+    raw_target: str,
+    anchor_git_root_str: str,
+    anchor_gitdir: Path,
+    effective_sid: str,
+    sandbox_root: str,
+    destination_class: str,
+    destination_owner: str,
+) -> str:
+    """Deny copy: the flat in-repo refusal under the author flag, else the
+    marker-bearing bump message."""
+    shown_raw = raw_target if raw_target != target_dir else ""
+    if out_of_repo_write_blocked():
+        return render_out_of_repo_refusal(
+            target_dir,
+            anchor_git_root_str,
+            agent_class=agent_class,
+            sandbox_root=sandbox_root,
+            raw_target=shown_raw,
+        )
+    message = render_bump_message(
+        agent_class=agent_class,
+        target_repo=target_label,
+        session_repo=anchor_git_root_str,
+        gitdir=anchor_gitdir,
+        session_id=effective_sid,
+        sandbox_root=sandbox_root,
+        destination_class=destination_class,
+        destination_owner=destination_owner,
+        raw_target=shown_raw,
+    )
+    return _with_route_remedy(message, target_dir, anchor_git_root_str)
+
+
 def _deny(reason: str) -> Dict[str, Any]:
     return {
         "hookSpecificOutput": {
@@ -386,59 +424,22 @@ def _sandbox_root(git_root: Optional[str], session_id: str) -> str:
     return machinery_paths.share_dir(git_root, session_id)
 
 
-def _always_allowed_roots(
-    anchor_git_root: Optional[str], effective_sid: str, env: Optional[dict] = None
-) -> List[str]:
-    """Every root a write under this predicate must NEVER bump against
-    (AC9), resolved through existing primitives -- see module docstring,
-    "ALWAYS-ALLOWED DESTINATIONS". Silently drops any root this process
-    cannot resolve (fail open) rather than raising."""
-    env = os.environ if env is None else env
-    roots: List[str] = []
-
-    settings_home = _settings_home_dir_from_env(env)
-    if settings_home:
-        roots.append(settings_home)
-
-
-    sandbox = _sandbox_root(anchor_git_root, effective_sid)
-    if sandbox:
-        roots.append(sandbox)
-
-    return roots
-
-
 def _target_is_always_allowed(
     target_dir: str, anchor_git_root: Optional[str], effective_sid: str, env: Optional[dict] = None
 ) -> bool:
-    target_cf = _resolve_and_casefold(target_dir)
-    if target_cf is None:
-        return False
-
-    # System temp / session scratchpad -- shared classifier (see module
-    # docstring, "ALWAYS-ALLOWED DESTINATIONS"), NOT the settings-home/
-    # sandbox containment-list mechanism below: `target_is_bare_temp_scratch`
-    # both covers the full recognized-temp-root set AND re-asserts the
-    # no-git-repo conjunction itself, so it is correct even if a future
-    # caller ever invokes this helper without first excluding
-    # git-resolved candidates the way `check_bump_outside_repo_write` does
-    # today.
-    if target_is_bare_temp_scratch(target_dir, env=env):
-        return True
-
-    if is_agent_memory_store_path(target_dir):
-        return True
-
-    if target_is_under_claude_home(target_dir, env=env):
-        return True
-
-    for raw_root in _always_allowed_roots(anchor_git_root, effective_sid, env=env):
-        root_cf = _resolve_and_casefold(raw_root)
-        if root_cf is None:
-            continue
-        if _is_under(target_cf, root_cf):
-            return True
-    return False
+    """True when `target_dir` falls under a `SANCTIONED_DESTINATIONS` entry.
+    Callers reach here only for a target that resolved to no git root, so
+    `target_gitdir` is None."""
+    return (
+        sanctioned_destination(
+            target_dir,
+            session_repo=anchor_git_root,
+            session_id=effective_sid,
+            target_gitdir=None,
+            env=env,
+        )
+        is not None
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -616,13 +617,14 @@ def _iter_write_sink_candidates(
                         continue
                     yield (resolved_target, nested_head, raw_target)
 
-    for raw_target in extract_interpreter_payload_write_sink_targets(cmd):
-        if cwd_unknown and _is_relative_target(raw_target):
+    for payload_target in extract_interpreter_payload_write_sink_targets(cmd):
+        if cwd_unknown and _is_relative_target(payload_target):
             continue
-        resolved_target = _resolve_relative(effective_cwd, raw_target)
-        if resolved_target is None:
-            continue
-        yield (resolved_target, "interpreter-payload", raw_target)
+        for raw_target in interpreter_write_target_readings(payload_target, effective_cwd):
+            resolved_target = _resolve_relative(effective_cwd, raw_target)
+            if resolved_target is None:
+                continue
+            yield (resolved_target, "interpreter-payload", raw_target)
 
 
 def _no_git_repo_target_label(
@@ -953,18 +955,18 @@ def check_bump_outside_repo_write(
         target_label = _no_git_repo_target_label(
             cmd, cwd, candidate_index, target_dir, raw_target
         )
-        message = render_bump_message(
+        message = _render_deny_message(
             agent_class=agent_class,
-            target_repo=target_label,
-            session_repo=anchor_git_root_str,
-            gitdir=anchor_gitdir,
-            session_id=effective_sid,
+            target_label=target_label,
+            target_dir=target_dir,
+            raw_target=raw_target,
+            anchor_git_root_str=anchor_git_root_str,
+            anchor_gitdir=anchor_gitdir,
+            effective_sid=effective_sid,
             sandbox_root=sandbox_root,
             destination_class=destination_class,
             destination_owner=destination_owner,
-            raw_target=raw_target if raw_target != target_dir else "",
         )
-        message = _with_route_remedy(message, target_dir, anchor_git_root_str)
         stood_down = environment_stands_the_bump_down(env)
         if stood_down is not None:
             _stand_down_instead_of_denying(
@@ -1174,18 +1176,18 @@ def _check_bump_outside_repo_write_powershell(
         )
 
         target_label = "no git repo (%s)" % target_dir
-        message = render_bump_message(
+        message = _render_deny_message(
             agent_class=agent_class,
-            target_repo=target_label,
-            session_repo=anchor_git_root_str,
-            gitdir=anchor_gitdir,
-            session_id=effective_sid,
+            target_label=target_label,
+            target_dir=target_dir,
+            raw_target=raw_target,
+            anchor_git_root_str=anchor_git_root_str,
+            anchor_gitdir=anchor_gitdir,
+            effective_sid=effective_sid,
             sandbox_root=sandbox_root,
             destination_class=destination_class,
             destination_owner=destination_owner,
-            raw_target=raw_target if raw_target != target_dir else "",
         )
-        message = _with_route_remedy(message, target_dir, anchor_git_root_str)
         stood_down = environment_stands_the_bump_down(env)
         if stood_down is not None:
             _stand_down_instead_of_denying(

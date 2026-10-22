@@ -67,6 +67,9 @@ def default_waiter() -> Waiter:
     try:
         import psutil  # noqa: F401
     except ImportError:
+        if os.name == "nt":
+            # On Windows os.kill(pid, 0) calls TerminateProcess: the poll branch would kill its target.
+            raise SystemExit("box-memory-wait-pid: psutil is required on Windows (pip install psutil)")
         return poll_waiter
     return psutil_waiter
 

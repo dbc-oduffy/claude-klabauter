@@ -151,7 +151,7 @@ from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.session.claimed_write import replace_text
 from coordinator_core.session.record_homes import home_dir
 from coordinator_core.warm.entry_seam import OpUnavailableError, reentrant_dispatch
-from coordinator_core.ops.dispatch_emit import credit_gate, gate_owed  # noqa: E402 -- sibling-package group
+from coordinator_core.ops.dispatch_emit import credit_gate, gate_owed, pre_halt_credit  # noqa: E402 -- sibling-package group
 from coordinator_core.ops.dispatch_emit.ask_contract import (
     DELIVERY_NOTE_DIR,
     RECORD_DIR_ROOT,
@@ -1751,7 +1751,8 @@ def _unchanged_since_halt_failures(
         if isinstance(i, dict) and i.get("id") in blocking and i.get("status") in ("met", "post_commit")
     ]
     exempt = verified_only_rows(resume)
-    judged = [i for i in judged if i not in exempt]
+    credited = pre_halt_credit.credited_rows(resume, verdict)
+    judged = [i for i in judged if i not in exempt and i not in credited]
     if not judged or _every_staged_row_landed(resume):
         return []
     paths, stage_head = _manifest_declared(manifest_path)
@@ -4923,7 +4924,7 @@ def _terminal_commit_inner(
 
         tolerated, real_drift = tolerated_drift(
             worktree_root, inline_review.get("prep_sidecar") if isinstance(inline_review, dict) else None,
-            reply["blob_drift"],
+            reply["blob_drift"], untrusted_paths=all_paths,
         )
         if tolerated and not real_drift:
             moved = dict(commit_params["expected_content_sha256"])

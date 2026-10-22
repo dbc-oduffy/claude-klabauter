@@ -542,6 +542,7 @@ def _bump_outside_repo_write_fire_setup(
     scratch_dir: Path, mp: pytest.MonkeyPatch
 ) -> Dict[str, str]:
     from coordinator_core.bash_guards import _write_bump_applicability as applicability
+    from coordinator_core.bash_guards import _out_of_repo_allowlist as allowlist
     from coordinator_core.bash_guards import bump_outside_repo_write as guard
 
     anchor = _bump_confinement_anchor_repo(scratch_dir)
@@ -551,7 +552,7 @@ def _bump_outside_repo_write_fire_setup(
     mp.setattr(guard, "bump_applies", lambda *a, **k: True)
     mp.setattr(guard, "resolve_launch_anchor", lambda *a, **k: str(anchor))
     mp.setattr(applicability, "resolve_launch_anchor", lambda *a, **k: str(anchor))
-    mp.setattr(guard, "target_is_bare_temp_scratch", lambda *a, **k: False)
+    mp.setattr(allowlist, "target_is_bare_temp_scratch", lambda *a, **k: False)
 
     src = anchor / "README.md"
     dest = outside / "newfile.txt"

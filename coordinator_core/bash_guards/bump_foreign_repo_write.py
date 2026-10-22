@@ -223,8 +223,13 @@ from coordinator_core.bash_guards._gem_cross_repo_commit import (
     git_write_is_gem_scoped,
     session_holds_live_gem_standing,
 )
-from coordinator_core.machine_profile import feature_enabled
+from coordinator_core.machine_profile import feature_enabled, out_of_repo_write_blocked
+from coordinator_core.bash_guards._out_of_repo_allowlist import (
+    is_lessons_outbox_write,
+    sanctioned_destination,
+)
 from coordinator_core.bash_guards._write_bump_message import (
+    render_out_of_repo_refusal,
     render_gem_refusal_message,
     apply_cross_repo_level,
     AGENT_CLASS_SUBAGENT,
@@ -240,6 +245,7 @@ from coordinator_core.bash_guards._write_bump_sink_shapes import (
     extract_set_location_target_powershell,
     extract_write_sink_targets_for_segment,
     extract_write_sink_targets_powershell,
+    interpreter_write_target_readings,
     nearest_existing_ancestor as _nearest_existing_ancestor,
     resolve_relative as _resolve_relative,
 )
@@ -852,62 +858,6 @@ def _same_repo_root(path_a: str, path_b: str) -> bool:
     return _same_tree(path_a, path_b)
 
 
-#: Adjacent, case-folded directory-path pair this predicate keys on -- mirrors
-#: `bump_out_of_repo_tool_write._LESSONS_OUTBOX_SEGMENTS` exactly (same two
-#: literal segments, same reasoning) so the two surfaces cannot silently
-#: drift on what "lessons-outbox" means path-shape-wise. Deliberately the two
-#: literal segments only, never a broader `cross-repo/` prefix -- see
-#: `_target_is_lessons_outbox_write`'s own docstring, "DO NOT WIDEN".
-_LESSONS_OUTBOX_SEGMENTS = ("state", "lessons-outbox")
-
-
-def _target_is_lessons_outbox_write(file_path: str) -> bool:
-    """True iff `file_path`'s path components contain `state/lessons-outbox`
-    as an adjacent, case-folded directory pair -- the Bash-surface twin of
-    `bump_out_of_repo_tool_write._target_is_lessons_outbox_write` (same
-    module docstring section there, "LESSONS-OUTBOX IS NOT A MISWRITE, EVEN
-    THOUGH IT IS A FOREIGN REPO"). `coordinator-lesson-promote`
-    (`ops/queue_promote.py`) writes a universal lesson's durable home to
-    `<content_root>/state/lessons-outbox/<id>.yaml` BY DESIGN -- the content repo is
-    the central lessons repo, there is no in-repo alternative, and a foreign-
-    repo bump on that write is a false positive on both surfaces alike.
-    Callers treat `True` as "never bump".
-
-    DELIBERATELY NOT CONJUNCTIVE WITH "NO GIT REPO", unlike this module's
-    sibling `_target_is_bare_temp_scratch`-shaped exemptions (see the tool
-    surface's own docstring, same section, for why): the whole point of this
-    exemption is that the target IS a foreign repo -- `queue.promote` always
-    writes into an actual coordinator-content-repo checkout -- so gating on "no repo"
-    would exempt nothing real. This is exactly why the check below sits
-    INSIDE the per-candidate loop, after `target_gitdir` is already
-    confirmed non-`None`: this guard (C4) only ever sees candidates that
-    resolve to a real git root in the first place (an unresolvable target is
-    C5's `bump_outside_repo_write.py` concern, never this module's), so
-    there is no "no repo" branch to gate against here even in principle.
-
-    DO NOT WIDEN THIS TO `cross-repo/inbox/` OR `cross-repo/outbox/` -- see
-    the tool-surface twin's own docstring, "DO NOT WIDEN THIS", verbatim:
-    hand-writing a memo into a sibling's tree stays forbidden, and the
-    `cross-repo-memo` carve-out (AC5, above) already handles the sanctioned
-    memo CLI on THIS surface by invoked-executable identity, not destination
-    path shape -- a second, path-shape-keyed exemption for the memo channel
-    would blur a distinction this repo's own CLAUDE.md draws on purpose.
-
-    Path-shape only, via a simple casefolded split -- matches a subdirectory
-    under `state/lessons-outbox/` too, not merely a direct child file. Never
-    raises: `casefold_path` and plain `str.split` do not raise on any `str`
-    input.
-    """
-    if not file_path:
-        return False
-    normalized = casefold_path(file_path)
-    parts = [p for p in normalized.split("/") if p]
-    for i in range(len(parts) - 1):
-        if (parts[i], parts[i + 1]) == _LESSONS_OUTBOX_SEGMENTS:
-            return True
-    return False
-
-
 def _common_dir_cf_from_root(root: Optional[str]) -> Optional[str]:
     """The resolved+case-folded git COMMON dir for a git repo TOPLEVEL
     already resolved by the caller (`root`), or `None` when `root` is
@@ -1455,7 +1405,10 @@ def _iter_write_sink_candidates(
                 rc.tokens, effective_cwd, raw_tokens=rc.raw_tokens
             )
             if subcommand and _git_invocation_is_write(subcommand, sub_args):
-                scope = "scoped" if git_write_is_gem_scoped(subcommand, sub_args) else "unscoped"
+                if _is_owner_sync_verb(subcommand, sub_args):
+                    scope = _OWNER_SYNC_SCOPE
+                else:
+                    scope = "scoped" if git_write_is_gem_scoped(subcommand, sub_args) else "unscoped"
                 yield (target_cwd, "git %s" % subcommand, None, scope)
             continue
 
@@ -1470,10 +1423,47 @@ def _iter_write_sink_candidates(
     for raw_target in extract_interpreter_payload_write_sink_targets(cmd):
         if cwd_unresolved and _is_relative_target(raw_target):
             continue
-        resolved_target = _resolve_relative(effective_cwd, raw_target)
-        if resolved_target is None:
-            continue
-        yield (resolved_target, "interpreter-payload", raw_target, None)
+        readings = (
+            interpreter_write_target_readings(raw_target, effective_cwd)
+            if out_of_repo_write_blocked()
+            else [raw_target]
+        )
+        for reading in readings:
+            resolved_target = _resolve_relative(effective_cwd, reading)
+            if resolved_target is None:
+                continue
+            yield (resolved_target, "interpreter-payload", raw_target, None)
+
+
+#: Candidate scope marking a git verb that only syncs a repo with its own remote.
+_OWNER_SYNC_SCOPE = "owner-sync"
+
+
+def _is_owner_sync_verb(subcommand: str, args: List[str]) -> bool:
+    """`pull`, `fetch`, `push`, and `merge --ff-only`: the verbs a publish
+    destination's owner needs to move the mirror's own branch."""
+    if subcommand in ("pull", "fetch", "push"):
+        return True
+    return subcommand == "merge" and "--ff-only" in args
+
+
+def _session_owns_publish_destination(
+    session_root: Optional[str], destination_root: str, env: dict
+) -> bool:
+    """True iff the session repo is the registered owner of the publish
+    destination containing `destination_root`. Unresolvable is not owner."""
+    try:
+        if not session_root:
+            return False
+        owner = publish_destination_owner(destination_root, env=env)
+        if not owner:
+            return False
+        from coordinator_core.machine_resolver import em_id_for_root
+        from coordinator_core.ops.fleet._memo_resolver import read_registry_repos
+
+        return em_id_for_root(session_root, read_registry_repos()) == owner
+    except Exception:  # noqa: BLE001 -- not provably the owner, so not exempt
+        return False
 
 
 def _sandbox_root_hint(git_root: Optional[str], session_id: str) -> str:
@@ -1560,7 +1550,7 @@ def _evaluate_foreign_repo_candidate(
     # per-command: a compound command could write both an ordinary
     # foreign-repo target and a lessons-outbox one, and only the latter
     # should be silenced.
-    if _target_is_lessons_outbox_write(target_dir):
+    if is_lessons_outbox_write(target_dir):
         return None
 
     if is_agent_memory_store_path(target_dir):
@@ -1704,6 +1694,27 @@ def _evaluate_foreign_repo_candidate(
     )
     effective_sid = effective_session_id(session_id, session_root_for_marker, agent_id)
 
+    blocked = out_of_repo_write_blocked()
+    if blocked:
+        sanctioned = sanctioned_destination(
+            target_dir,
+            session_repo=session_root_for_marker or anchor,
+            session_id=effective_sid,
+            target_gitdir=target_gitdir,
+            env=env,
+        )
+        # Same publish-destination exception the tool surface applies: a
+        # declared run-output root inside a publish mirror stays refused.
+        if sanctioned is not None and not (
+            sanctioned == "declared-run-output-root"
+            and target_is_publish_destination(probe_root or target_dir, env=env)
+        ):
+            return None
+        if git_scope == _OWNER_SYNC_SCOPE and _session_owns_publish_destination(
+            session_root_for_marker or anchor, probe_root or target_dir, env
+        ):
+            return None
+
     gem_refusal = False
     if git_scope is not None:
         try:
@@ -1722,7 +1733,7 @@ def _evaluate_foreign_repo_candidate(
         return None
 
     marker_gitdir = resolve_gitdir(marker_probe)
-    if marker_gitdir is None or not marker_gitdir_is_writable(marker_gitdir):
+    if not blocked and (marker_gitdir is None or not marker_gitdir_is_writable(marker_gitdir)):
         # Cannot compose a clear line without a gitdir, OR the target
         # gitdir exists but is not writable/readable (STAFF-ENG F0, AC5)
         # -- fail open on the WRITE axis in BOTH cases: allow, rather
@@ -1786,6 +1797,15 @@ def _evaluate_foreign_repo_candidate(
 
     if gem_refusal:
         message = render_gem_refusal_message(target_repo_label)
+    elif blocked:
+        message = render_out_of_repo_refusal(
+            target_repo_label,
+            session_repo_label,
+            agent_class=agent_class,
+            sandbox_root=sandbox_root,
+            target_in_repo=True,
+            raw_target=raw_target if raw_target and raw_target != target_dir else "",
+        )
     else:
         message = render_bump_message(
             agent_class=agent_class,
@@ -1832,7 +1852,7 @@ def _evaluate_foreign_repo_candidate(
     return apply_cross_repo_level(
         "bump-foreign-repo-write",
         _deny(message),
-        gitdir=marker_gitdir,
+        gitdir=marker_gitdir or target_gitdir,
         session_id=effective_sid,
     )
 

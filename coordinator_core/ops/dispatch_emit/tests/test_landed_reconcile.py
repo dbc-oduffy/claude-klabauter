@@ -98,13 +98,14 @@ def test_landed_items_flip_their_open_rows_to_coded(tmp_path, monkeypatch):
     reply = _emit(tmp_path, monkeypatch, inventory)
 
     p1 = _dispositions(tmp_path, 1)
-    assert p1.count("disposition: coded") == 3
-    assert f"disposition_ref: {_SHA}" in p1
+    assert p1.count("disposition: coded") == 1  # whole-plan item, no landing evidence: C1/C2 stay open
     assert "disposition_ref: abc1234" in p1
     p2 = _dispositions(tmp_path, 2)
     assert p2.count("disposition: coded") == 2
     assert p2.count("disposition: open") == 1
-    assert reply["landed_reconciled"] == {"docs/plans/p1.md": ["C1", "C2"], "docs/plans/p2.md": ["C2"]}
+    assert f"disposition_ref: {_SHA}" in p2
+    assert reply["landed_reconciled"] == {"docs/plans/p2.md": ["C2"]}
+    assert reply["landed_unevidenced"] == {"docs/plans/p1.md": ["C1", "C2"]}
 
 
 def test_live_item_plan_is_untouched_and_a_second_emit_changes_nothing(tmp_path, monkeypatch):

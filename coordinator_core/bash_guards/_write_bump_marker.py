@@ -242,6 +242,7 @@ from pathlib import Path
 from typing import Dict, Optional
 
 from coordinator_core.git.repo_root import git_dir as _seam_git_dir
+from coordinator_core.machine_profile import out_of_repo_write_blocked
 from coordinator_core.subagent_sandbox.engine import _SESSION_ID_FORMAT_RE
 
 #: The marker's basename prefix. The full basename a caller creates is
@@ -506,7 +507,14 @@ def marker_present(gitdir: Optional[Path], session_id: str) -> bool:
     evidence of a clear"; it is the CALLING guard's job to turn that into a
     bump, never this module's (see module docstring, "ABSENCE NEVER
     HARD-DENIES").
+
+    Under ``machine_profile.out_of_repo_write_blocked()`` no marker clears
+    anything: returns ``False`` before any filesystem read, so
+    ``bump_is_cleared`` and every guard call site re-deny. This is the one
+    sanctioned exception to the fail-open direction above.
     """
+    if out_of_repo_write_blocked():
+        return False
     if gitdir is None or not session_id:
         return False
     prefix = marker_basename(session_id)

@@ -61,6 +61,13 @@ def test_sha_bearing_note_lifts_unwritable_refusal(tmp_path):
     assert plan["unwritable"] == ["pkg/mod.py"]
 
 
+def test_ten_char_sha_note_rerules_and_date_only_note_does_not(tmp_path):
+    root = _repo(tmp_path)
+    rem = _rem("fix pkg/mod.py")
+    assert remaining_leg_plan(rem, ["met_by 2fd9d96c64"], [], [], SIZING, root)["action"] != LEG_REFUSE
+    assert remaining_leg_plan(rem, ["20261022"], [], [], SIZING, root)["action"] == LEG_REFUSE
+
+
 def test_note_without_sha_still_refuses_unwritable(tmp_path):
     root = _repo(tmp_path)
     notes = ["R1 is met, trust me; ran 20261022 and defaced nothing"]

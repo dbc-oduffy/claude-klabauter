@@ -8,24 +8,40 @@ already exist; this module's only original code is param validation, the HEAD-ke
 corpus cache and the census/upgrade gating rules.
 
 ``plan.mise_prep_probe`` (COMPUTE_ONLY) answers, for ONE plan, in one reply: the gate
-verdict, the census outcome and the upgrade derivation.
+verdict and the upgrade derivation.
 ``plan.mise_upgrade_apply`` (MUTATING) writes the derivable fields of ONE plan.
 
 Wire params, probe:
     plan           (str, required)   — repo-relative or absolute; inside the main worktree.
-    check_census   (bool, default F) — re-run the plan's census commands.
     upgrade        (bool, default F) — derive what ``mise-prep-upgrade`` would write.
-    census_timeout (int, default 30) — seconds one census command may run.
-    census_run     (str, 1..64 chars, optional) — one set run's token; commands repeat at most
-                     once per (root, HEAD, token). Absent = no memo.
+    check_census, census_timeout, census_run — admitted for a launcher that still sends them;
+                     never read. The census is ``plan.census_set``'s.
 
 Reply, probe:
-    {"gate": <plan.prep_gate reply, same shape>, "census": <revalidate outcome>|None,
+    {"gate": <plan.prep_gate reply, same shape>, "census": None,
      "upgrade": <upgrade_plan dict>|{"skipped": "not upgradeable"}|None,
-     "census_spent_ms": int (the census loop's spent_ms; 0 when census did not run),
      "process_ms": float}
-The probe's census runs ``decidable_only``: an entry whose recorded result cannot DRIFT is not
-spawned (UNDECIDABLE, "not run: recorded result cannot drift").
+
+Set form: ``plans`` (non-empty list of non-empty strings) in place of ``plan``; exactly one of
+the two. ``upgrade`` applies to every plan. Reply:
+    {"probes": {<plan string as sent>: {"gate", "census", "upgrade"} | {"error": text}},
+     "store_hits": int, "store_misses": int, "process_ms": float}
+Each plan is answered by the same ``_probe_one`` the single form uses, or from the on-disk
+``ProbeStore`` when its bytes, HEAD, engine key and recorded external inputs are unchanged. A
+ValueError on one plan is that plan's ``{"error"}``; the rest are still answered.
+
+``plan.census_set`` (COMPUTE_ONLY) revalidates the census of a whole set of plans under one
+set budget, through ``mise-census-revalidate.py :: revalidate_set`` over the on-disk
+``CensusStore``.
+Wire params, census_set:
+    plans            (list[str], required) — repo-relative plan paths, inside the main worktree,
+                       the caller's obligation to pass only PREPPED, not-CERTIFIED plans; the op does not
+                       re-gate, and runs the census commands of every plan it is given.
+    census_timeout   (int > 0, default 30) — seconds one command may run.
+    census_budget_ms (int >= 0, default 0) — the caller's remaining set budget; 0 = none.
+Reply, census_set: ``revalidate_set``'s reply (``plans``, ``spent_ms``, ``key_ms``,
+``memo_hits``, ``direct_runs``, ``covered``, ``census_plans``, ``pending``, ``order``) plus
+``process_ms``. The deadline is the earlier of the caller's budget and the op's guard share.
 
 Wire params, apply: ``plan`` (str, required).
 Reply, apply: ``{"plan", "error", "derived", "residue", "changed"}`` — ``upgrade_plan``'s dict.
@@ -38,17 +54,23 @@ Reply, certify: ``{"plan", "sha", "sha_detail"?, "stamp": <read_stamp dict>|None
 "census": <revalidate outcome>|None, "process_ms"}``. An unreadable plan replies sha
 MALFORMED with the OSError text; a plan absent from the worktree raises ValueError.
 
-Census deadline: both census-running ops bound the census leg by
-``_CENSUS_DEADLINE_SHARE`` (0.5) of their own ``ipc._timeout_for`` guard. Each entry runs for
+Census deadline: the census-running ops (``plan.mise_certify_probe``, ``plan.census_set``) bound
+the census leg by ``_CENSUS_DEADLINE_SHARE`` (0.5) of their own ``ipc._timeout_for`` guard. Each entry runs for
 ``min(census_timeout, remaining)`` seconds; an entry reached past the deadline reads UNRUNNABLE
 without a spawn, so the census rolls up UNDECIDABLE, never DRIFT. DR-344 standing: an op that
 returns at the deadline is still over 500ms; that cost is the plan's authored census, and this
 bound stops the op dying, it does not make that plan fit.
 
 Negative-spec:
-  - The census memo is per run, never persisted; a ``census_run`` reused across HEADs is a new memo.
-  - Takes ONE plan, never a list. ``roadmap.prep_gate.gate_plan`` records one-plan-per-call
-    as a measured budget decision; a batch probe would reopen it.
+  - The census store is derived, never a source of truth: a lost save costs a spawn, never a
+    verdict, because every record is checked against its key before use.
+  - The probe runs no census; ``plan.census_set`` does, once for the set.
+  - The single form takes ONE plan; the set form takes a list and is the only caller shape that
+    scales: a per-plan loop measured ~10.0s warm over a 448-plan set (448 spawns, YAML loading
+    5.21s). The single form never reads or writes the store.
+  - The store holds only a reply that answered; a plan whose resolution, read or gate raised
+    ValueError is never stored. Every key leg is checked before a stored reply is served, and a
+    leg is never narrowed to get a hit.
   - Does NOT write. The probe runs ``upgrade_plan(check=True)``; only
     ``plan.mise_upgrade_apply`` writes.
   - Does NOT re-implement the census executor or the deriver: both are loaded by file path
@@ -68,7 +90,7 @@ import functools
 import importlib.util
 import time
 from pathlib import Path
-from typing import Any, Optional
+from typing import Optional
 
 MUTATES = ["docs/plans/*.md"]  # plan.mise_upgrade_apply writes the derivable fields of the caller-named plan only
 
@@ -80,6 +102,8 @@ from coordinator_core.ipc import register_op
 from coordinator_core.lifecycle import main_worktree_root
 from coordinator_core.ops._param_alias import aliased_param, spellings
 from coordinator_core.ops.plan_prep_gate import _resolve_plan
+from coordinator_core.roadmap.census_store import CensusStore
+from coordinator_core.roadmap.probe_store import ProbeStore, engine_key, input_paths, plan_sha
 from coordinator_core.roadmap.prep_gate import (
     CERTIFIED,
     PREPPED,
@@ -98,9 +122,6 @@ _NOT_UPGRADEABLE = ("schema",)
 _BIN_DIR = ENGINE_CHECKOUT_ROOT / "coordinator" / "bin"
 
 _CORPUS_CACHE: dict = {}
-
-#: At most one entry: {(worktree root, HEAD sha, census_run): {command: completed run}}.
-_CENSUS_MEMO: dict = {}
 
 #: Share of the op's own wall guard the census leg may spend. It leaves the gate leg, the
 #: upgrade leg and the transport inside the guard under load; the guard is a runaway catch,
@@ -150,8 +171,7 @@ def _head_sha(worktree_root: Path) -> Optional[str]:
 def _corpus(worktree_root: Path) -> tuple[CorpusInputs, Optional[str]]:
     """``(CorpusInputs, head)`` for the root, derived once per (root, HEAD sha).
 
-    ``head`` is the sha the cache keyed on (None when unreadable), returned so the census
-    memo key costs no second HEAD read.
+    ``head`` is the sha the cache keyed on (None when unreadable).
     """
     head = _head_sha(worktree_root)
     if head is None:
@@ -162,17 +182,6 @@ def _corpus(worktree_root: Path) -> tuple[CorpusInputs, Optional[str]]:
         _CORPUS_CACHE.clear()
         cached = _CORPUS_CACHE[key] = corpus_inputs(worktree_root)
     return cached, head
-
-
-def _census_memo(worktree_root: Path, head: Optional[str], census_run: Optional[str]) -> Optional[dict]:
-    """The command memo for one (root, HEAD, census_run) key; a new key replaces the old."""
-    if census_run is None or head is None:
-        return None
-    key = (str(worktree_root), head, census_run)
-    if key not in _CENSUS_MEMO:
-        _CENSUS_MEMO.clear()
-        _CENSUS_MEMO[key] = {}
-    return _CENSUS_MEMO[key]
 
 
 def _rel(plan_path: Path, worktree_root: Path) -> str:
@@ -214,26 +223,11 @@ def _upgrade_dict(result: dict, worktree_root: Path) -> dict:
     return out
 
 
-@register_op("plan.mise_prep_probe")
-def _probe_handler(params: dict, repo_root: Optional[Path] = None) -> dict:
-    """JSON-RPC "plan.mise_prep_probe" handler. See module docstring."""
-    plan_path = _plan_param(params, "plan.mise_prep_probe", repo_root)
-    check_census = _bool_param(params, "check_census")
-    upgrade = _bool_param(params, "upgrade")
-    timeout = params.get("census_timeout", 30)
-    if not isinstance(timeout, int) or isinstance(timeout, bool) or timeout <= 0:
-        raise ValueError("census_timeout must be a positive integer")
-    census_run = params.get("census_run")
-    if census_run is not None and (
-        not isinstance(census_run, str) or not 1 <= len(census_run) <= 64
-    ):
-        raise ValueError("census_run must be a string of 1 to 64 characters")
-
-    deadline = _census_deadline("plan.mise_prep_probe")
-    started = time.process_time()
-    worktree_root = Path(main_worktree_root(repo_root))
-    text = plan_path.read_text(encoding="utf-8", errors="replace")
-    corpus, head = _corpus(worktree_root)
+def _probe_one(plan_path: Path, worktree_root: Path, corpus: CorpusInputs, *,
+               upgrade: bool, build: dict, text: Optional[str] = None) -> dict:
+    """One plan's reply, less ``process_ms``: the single form and the set form share it."""
+    if text is None:
+        text = plan_path.read_text(encoding="utf-8", errors="replace")
     report = gate_plan_with_corpus(plan_path, corpus, text=text)
     stamp = read_stamp(text)
     gate = {
@@ -243,15 +237,8 @@ def _probe_handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         "classes": report["classes"],
         "message": report["message"],
         "stamp": stamp,
-        "engine_build": engine_build(),
+        "engine_build": build,
     }
-
-    census = None
-    if check_census and report["verdict"] == PREPPED and stamp["state"] != CERTIFIED:
-        census = _revalidator().revalidate(
-            plan_path, worktree_root, timeout, require_stamp=False, deadline=deadline,
-            decidable_only=True, memo=_census_memo(worktree_root, head, census_run),
-        )
 
     derivation = None
     if upgrade and report["verdict"] != PREPPED:
@@ -262,13 +249,155 @@ def _probe_handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                 _upgrader().upgrade_plan(plan_path, check=True, text=text), worktree_root
             )
 
-    return {
-        "gate": gate,
-        "census": census,
-        "upgrade": derivation,
-        "census_spent_ms": int(census.get("spent_ms", 0)) if census else 0,
-        "process_ms": round((time.process_time() - started) * 1000.0, 3),
-    }
+    return {"gate": gate, "census": None, "upgrade": derivation}
+
+
+def _ms_since(started: float) -> float:
+    return round((time.process_time() - started) * 1000.0, 3)
+
+
+def _stat_triple(path: Path) -> Optional[list]:
+    try:
+        st = path.stat()
+    except OSError:
+        return None
+    return [st.st_size, st.st_mtime_ns, st.st_ino]
+
+
+def _input_identities(text: str, worktree_root: Path) -> dict:
+    """``{rel: [size, mtime_ns, ino] | None}`` for every external input the verdict could read.
+
+    The frontmatter and spine come from the memoised shared parses the gate just used; both
+    documents are read-only here.
+    """
+    import yaml
+
+    from coordinator_core.frontmatter.body_blocks import LocateStatus
+    from coordinator_core.ops.dispatch_emit.spine_read import (
+        load_frontmatter_doc,
+        load_rows_memo,
+        split_frontmatter_memo,
+    )
+
+    fm: dict = {}
+    split = split_frontmatter_memo(text)
+    if split is not None:
+        try:
+            loaded = load_frontmatter_doc(split.fm_text)
+        except yaml.YAMLError:
+            loaded = None
+        if isinstance(loaded, dict):
+            fm = loaded
+    spine = load_rows_memo(text)
+    rows = spine.rows if spine.status is LocateStatus.LOCATED else []
+    return {rel: _stat_triple(worktree_root / rel) for rel in input_paths(fm, rows, worktree_root)}
+
+
+def _probe_set(plans: list, upgrade: bool, repo_root: Path) -> dict:
+    """The set form's reply: one corpus, one build, one store load and one save per call.
+
+    Trap: ``engine_key`` digests ``sys.modules``, so it is taken once at call start and used
+    for every get and put. A process that already ran a miss holds more modules, so its next
+    call's key differs from a fresh process's; records written by a fresh process are hit by
+    the next fresh process.
+    """
+    worktree_root = Path(main_worktree_root(repo_root))
+    started = time.process_time()
+    corpus, head = _corpus(worktree_root)
+    build = engine_build()
+    key = engine_key(build.get("engine_sha"))
+    store = ProbeStore.load(worktree_root)
+    hits = misses = 0
+    probes: dict = {}
+    for raw in plans:
+        try:
+            plan_path = _resolve_plan(raw.strip(), worktree_root)
+            data = plan_path.read_bytes()
+            text = data.decode("utf-8", errors="replace")
+            if "\r" in text:
+                text = text.replace("\r\n", "\n").replace("\r", "\n")
+            rel = _rel(plan_path, worktree_root)
+            sha = plan_sha(data)
+            stored = store.get(rel, sha, upgrade, head, key)
+            if stored is not None:
+                hits += 1
+                probes[raw] = stored
+                continue
+            reply = _probe_one(plan_path, worktree_root, corpus,
+                               upgrade=upgrade, build=build, text=text)
+            if key is not None:
+                store.put(rel, sha, upgrade, head, key,
+                          _input_identities(text, worktree_root), reply)
+            misses += 1
+            probes[raw] = reply
+        except ValueError as exc:
+            probes[raw] = {"error": str(exc)}
+    store.save()
+    return {"probes": probes, "store_hits": hits, "store_misses": misses,
+            "process_ms": _ms_since(started)}
+
+
+@register_op("plan.mise_prep_probe")
+def _probe_handler(params: dict, repo_root: Optional[Path] = None) -> dict:
+    """JSON-RPC "plan.mise_prep_probe" handler. See module docstring."""
+    has_plan = "plan" in params or "plan_path" in params
+    if "plans" in params:
+        if has_plan:
+            raise ValueError("send plan or plans, not both")
+        if repo_root is None:
+            raise ValueError("plan.mise_prep_probe requires a resolved repo_root")
+        plans = params["plans"]
+        if (
+            not isinstance(plans, list)
+            or not plans
+            or not all(isinstance(p, str) and p.strip() for p in plans)
+        ):
+            raise ValueError("plans must be a non-empty list of plan path strings")
+        return _probe_set(plans, _bool_param(params, "upgrade"), repo_root)
+
+    plan_path = _plan_param(params, "plan.mise_prep_probe", repo_root)
+    upgrade = _bool_param(params, "upgrade")
+
+    started = time.process_time()
+    worktree_root = Path(main_worktree_root(repo_root))
+    corpus, _ = _corpus(worktree_root)
+    reply = _probe_one(plan_path, worktree_root, corpus, upgrade=upgrade, build=engine_build())
+    reply["process_ms"] = _ms_since(started)
+    return reply
+
+
+@register_op("plan.census_set")
+def _census_set_handler(params: dict, repo_root: Optional[Path] = None) -> dict:
+    """JSON-RPC "plan.census_set" handler. See module docstring."""
+    if repo_root is None:
+        raise ValueError("plan.census_set requires a resolved repo_root")
+    raw = params.get("plans")
+    if (
+        not isinstance(raw, list)
+        or not raw
+        or not all(isinstance(p, str) and p.strip() for p in raw)
+    ):
+        raise ValueError("plans must be a non-empty list of plan path strings")
+    timeout = params.get("census_timeout", 30)
+    if not isinstance(timeout, int) or isinstance(timeout, bool) or timeout <= 0:
+        raise ValueError("census_timeout must be a positive integer")
+    budget_ms = params.get("census_budget_ms", 0)
+    if not isinstance(budget_ms, int) or isinstance(budget_ms, bool) or budget_ms < 0:
+        raise ValueError("census_budget_ms must be a non-negative integer")
+
+    started = time.process_time()
+    worktree_root = Path(main_worktree_root(repo_root))
+    plans = [_resolve_plan(p.strip(), worktree_root) for p in raw]
+    deadline = _census_deadline("plan.census_set")
+    if budget_ms > 0:
+        deadline = min(deadline, time.monotonic() + budget_ms / 1000.0)
+    store = CensusStore.load(worktree_root)
+    reply = _revalidator().revalidate_set(
+        plans, worktree_root, timeout,
+        deadline=deadline, head=_head_sha(worktree_root), store=store,
+    )
+    reply["process_ms"] = round((time.process_time() - started) * 1000.0, 3)
+    return reply
 
 
 @register_op("plan.mise_upgrade_apply")

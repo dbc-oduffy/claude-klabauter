@@ -75,6 +75,30 @@ def test_the_judge_prompt_credits_work_before_the_halt_only_when_a_note_re_rules
     assert "including commits before the halt commit" not in verify
 
 
+@pytest.mark.parametrize(
+    "note,met_by",
+    [
+        ("Re-rule R1 as met by commit 2fd9d96c64 (15 parity tests pass)", ["2fd9d96c64"]),
+        ("R1 met by d46d2a1b88, 18/18 tests", ["d46d2a1b88"]),
+        ("Re-rule R1 as met by commit 2fd9d96c64", ["abcdef1234"]),
+        ("met by 2fd9d96c64e1a0b", "2fd9d96c64"),
+        ("met by 2fd9d96c64", "2fd9d96c64e1a0b"),
+        ("met by 12345678", "12345678"),
+        ("met by 2fd9d96c64", None),
+    ],
+)
+def test_the_composed_verdict_agrees_with_credited_rows(monkeypatch, note, met_by):
+    from coordinator_core.ops.dispatch_emit.pre_halt_credit import credited_rows
+
+    resume = dict(_REVISED, revise_notes=[note], remaining={"R1": {"remaining": ["x"], "evidence": "none"}})
+    verdict = _met(met_by)
+    credited = "R1" in credited_rows(resume, verdict)
+    out = _run(_script(monkeypatch), verify=verdict, resume=resume)
+    halted = out["result"]["halted_by"]
+    assert (halted is None) is credited, halted
+    assert ("commit" in _labels(out)) is credited
+
+
 def test_the_halt_next_action_names_the_pre_halt_credit_path(monkeypatch):
     out = _run(_script(monkeypatch), verify=_met("none"), resume=_REVISED)
     assert "work committed before the halt meet it" in out["result"]["halted_by"]["next_action"]

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
-import time
+import sys
 from pathlib import Path
 
 import pytest
@@ -73,7 +73,15 @@ def test_help_exits_zero(capsys):
     assert e.value.code == 0 and "PID" in capsys.readouterr().out.upper()
 
 
-def test_poll_iteration_process_time_recorded():
-    t0 = time.process_time()
-    mod.poll_waiter(1, 0.0, 0.0, kill=lambda p, s: None, sleep=lambda s: None)
-    assert time.process_time() - t0 < 0.05
+def test_windows_without_psutil_refuses_instead_of_signalling(monkeypatch):
+    monkeypatch.setitem(sys.modules, "psutil", None)
+    monkeypatch.setattr(mod.os, "name", "nt")
+    with pytest.raises(SystemExit) as e:
+        mod.default_waiter()
+    assert "psutil is required" in str(e.value)
+
+
+def test_posix_without_psutil_falls_back_to_poll(monkeypatch):
+    monkeypatch.setitem(sys.modules, "psutil", None)
+    monkeypatch.setattr(mod.os, "name", "posix")
+    assert mod.default_waiter() is mod.poll_waiter

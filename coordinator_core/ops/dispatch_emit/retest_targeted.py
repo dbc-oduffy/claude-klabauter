@@ -17,12 +17,21 @@ import shlex
 import subprocess
 import sys
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Callable, Optional, Sequence
 
+from coordinator_core.ops._path_guard import contained_path, safe_id
 from coordinator_core.ops.dispatch_emit import landing_integrity as li
 
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+
+def _run_id_of(params: dict) -> str:
+    """``params.run_id``, else the script stem (an ask script's stem is ``<run_id>.workflow``)."""
+    rid = params.get("run_id")
+    if isinstance(rid, str) and rid:
+        return rid
+    return PurePosixPath(str(params.get("script_path") or "").replace("\\", "/")).stem
 
 
 def _run_argv(argv: list[str], cwd: Path) -> int:
@@ -131,7 +140,7 @@ def main(
     dirty: Callable[[Path], list[str]] = dirty_paths,
 ) -> int:
     from coordinator_core.git.git_state import head_sha
-    from coordinator_core.ops.dispatch_emit import terminal_commit
+    from coordinator_core.ops.dispatch_emit.land_run import params_from_task_output
 
     ap = argparse.ArgumentParser(prog="retest_targeted")
     ap.add_argument("--from-task-output", required=True)
@@ -140,17 +149,24 @@ def main(
     args = ap.parse_args(argv)
 
     try:
-        params = terminal_commit._params_from_task_output(args.from_task_output)
+        params = params_from_task_output(args.from_task_output)
         root = _repo_root(args.repo_root)
     except (ValueError, RuntimeError) as exc:
         print(f"retest_targeted: {exc}", file=sys.stderr)
         return 2
-    run_id = terminal_commit._run_id_of(params, None, params.get("script_path") or "")
+    run_id = _run_id_of(params)
+    if not safe_id(run_id):
+        print(f"retest_targeted: run id {run_id!r} is not a single safe path segment", file=sys.stderr)
+        return 2
 
     tests = _tests_to_run(args.tests, params)
     if not tests:
         return _write_stale(root, run_id, dirty, head_sha)
 
+    escaping = [t for t in tests if contained_path(root / t.split("::")[0], [root]) is None]
+    if escaping:
+        print("retest_targeted: test path escapes the repo: " + ", ".join(escaping), file=sys.stderr)
+        return 2
     missing = [t for t in tests if not (root / t.split("::")[0]).exists()]
     if missing:
         print(

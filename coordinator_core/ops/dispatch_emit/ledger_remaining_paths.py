@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from coordinator_core.ops.dispatch_emit.ask_contract import LEG_DISPATCH, LEG_REFUSE, LEG_SKIP
+from coordinator_core.ops.dispatch_emit.pre_halt_credit import note_rerules
 from coordinator_core.session import record_homes
 
 _STRIP_EDGES = "`'\"()[]<>{}"
@@ -18,7 +19,6 @@ _TRAILING = ".,;:)"
 _LINE_SUFFIX = re.compile(r"(?::\d+(?:-\d+)?)+$")
 _PATHLIKE = re.compile(r"^[\w.\-]+(?:/[\w.\-]+)*$")
 _DROP_HEADS = ("scratch/", Path(record_homes.home_dir("", "warp")).as_posix() + "/")
-_SHA = re.compile(r"\b[0-9a-f]{7,40}\b")
 _REMEDY = "revise the plan with a row whose writes cover them, or send a re-ruling revise note"
 
 
@@ -41,11 +41,6 @@ def _clean(token: str) -> Optional[str]:
     if t.startswith(_DROP_HEADS):
         return None
     return t
-
-
-def _mixed(tok: str) -> bool:
-    """A commit-sha-shaped token holds a digit and a letter, so dates and plain words do not count."""
-    return any(c.isdigit() for c in tok) and any(c.isalpha() for c in tok)
 
 
 def _exists(rel: str, repo_root: Path) -> bool:
@@ -87,7 +82,7 @@ def remaining_leg_plan(
             writes.append(p)
     unwritable = [n for n in named if n not in writes]
     owed = [rid for rid, row in remaining.items() if row.get("remaining")]
-    rerule = any(_mixed(m) for n in notes for m in _SHA.findall(str(n).lower()))
+    rerule = note_rerules(notes)
     if owed and ((unwritable and not rerule) or (not writes and not notes)):
         if unwritable:
             reason = "remaining names paths no row can land: " + ", ".join(unwritable)

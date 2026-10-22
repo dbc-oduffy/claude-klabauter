@@ -257,6 +257,93 @@ def signal_tree(pids: list[int], stop: bool) -> None:
             pass
 
 
+def default_pidfile() -> Path:
+    """Where the governor records the pids it holds frozen; one file per OS user temp dir."""
+    import tempfile
+    return Path(tempfile.gettempdir()) / "group-em-memory-governor.frozen.json"
+
+
+START_TIME_TOLERANCE_S = 2.0
+
+
+def process_start_time(pid: int) -> Optional[float]:
+    """Epoch start time of a live `pid`, or None when it does not exist (or cannot be read)."""
+    if psutil is not None:
+        try:
+            if not psutil.pid_exists(pid):
+                return None
+            return float(psutil.Process(pid).create_time())
+        except Exception:
+            return None
+    try:
+        out = subprocess.run(["ps", "-o", "etimes=", "-p", str(pid)], capture_output=True,
+                             text=True, timeout=5,
+                             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)).stdout.strip()
+        return time.time() - float(out) if out else None
+    except Exception:
+        return None
+
+
+def _write_frozen(pidfile: Optional[Path], paused: list[tuple[Proc, list[int]]],
+                  start_time_fn: Callable[[int], Optional[float]] = process_start_time) -> None:
+    """Persist {governor_pid, governor_start_time, frozen:[{pid, start_time}]}, or remove the file
+    when no pid remains frozen."""
+    if pidfile is None:
+        return
+    try:
+        pids = [t for _, tree in paused for t in tree]
+        if pids:
+            me = os.getpid()
+            frozen = [{"pid": p, "start_time": start_time_fn(p)} for p in pids]
+            pidfile.write_text(json.dumps({"governor_pid": me,
+                                           "governor_start_time": start_time_fn(me),
+                                           "frozen": frozen}), encoding="utf-8")
+        else:
+            pidfile.unlink(missing_ok=True)
+    except OSError:  # an unwritable pidfile must not stop the governor
+        pass
+
+
+def _same_process(pid: int, recorded: object,
+                  start_time_fn: Callable[[int], Optional[float]]) -> bool:
+    if not isinstance(recorded, (int, float)):
+        return False
+    now = start_time_fn(pid)
+    return now is not None and abs(now - float(recorded)) <= START_TIME_TOLERANCE_S
+
+
+def thaw_leftovers(pidfile: Optional[Path],
+                   signal_fn: Callable[[list[int], bool], None] = signal_tree,
+                   start_time_fn: Callable[[int], Optional[float]] = process_start_time) -> list[int]:
+    """Resume the pids a DEAD governor recorded in `pidfile`, then clear it.
+
+    Entry point for the governor's own start and the waiter's. A live recorded governor (pid exists
+    and start time matches) owns the file: nothing is thawed and the file is kept. With a dead owner
+    only recorded pids whose start time still matches are signalled; a reused pid is skipped. A
+    missing, legacy or malformed file thaws nothing and is cleared. Returns the pids signalled.
+    """
+    if pidfile is None:
+        return []
+    path = Path(pidfile)
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        owner = int(raw["governor_pid"])
+        owner_start = raw["governor_start_time"]
+        entries = [(int(e["pid"]), e["start_time"]) for e in raw["frozen"]]
+    except (OSError, ValueError, TypeError, KeyError):
+        owner, owner_start, entries = None, None, []
+    if owner is not None and _same_process(owner, owner_start, start_time_fn):
+        return []
+    pids = [p for p, st in entries if _same_process(p, st, start_time_fn)]
+    if pids:
+        signal_fn(pids, False)
+    try:
+        path.unlink(missing_ok=True)
+    except OSError:
+        pass
+    return pids
+
+
 def cache_trim_hint(bin_dir: Path) -> str:
     """The hint line for the elevated cache trim; the unavailable form when the sibling is absent."""
     sibling = Path(bin_dir) / "trim-file-cache.py"
@@ -272,8 +359,10 @@ def run(args: argparse.Namespace, emit: Callable[[str], None] = print,
         footprint_fn: Callable[[], dict[int, float]] = footprints,
         notice_path: Optional[Path] = None,
         notice_fn: Callable[[Optional[Path], list[Proc]], frozenset] = read_noticed_pids,
-        bin_dir: Optional[Path] = None) -> None:
+        bin_dir: Optional[Path] = None, pidfile: Optional[Path] = None,
+        start_time_fn: Callable[[int], Optional[float]] = process_start_time) -> None:
     bin_dir = bin_dir if bin_dir is not None else Path(__file__).resolve().parent
+    thaw_leftovers(pidfile, signal_fn, start_time_fn)
     hint_armed = True
     sample = sample or (lambda: critical(args.psi_full, args.avail_pct))
     self_pid = os.getpid()
@@ -282,6 +371,8 @@ def run(args: argparse.Namespace, emit: Callable[[str], None] = print,
     calm = crit_streak = ticks = 0
     gave_up = False
     # A governor that exits (session end, SIGTERM) must never leave a peer's command frozen.
+    # A hard kill (Windows TerminateProcess, SIGKILL) skips this finally; the pids are in `pidfile`
+    # before the freeze signal, and the next governor or waiter start thaws them.
     try:
         while max_ticks is None or ticks < max_ticks:
             ticks += 1
@@ -310,6 +401,7 @@ def run(args: argparse.Namespace, emit: Callable[[str], None] = print,
                     if victim:
                         prot = protected_pids(procs, ntree)
                         tree = [t for t in descendants(victim.pid, procs) if t not in prot]
+                        _write_frozen(pidfile, paused + [(victim, tree)])
                         signal_fn(tree, True)
                         paused.append((victim, tree))
                         crit_streak = 0
@@ -327,14 +419,18 @@ def run(args: argparse.Namespace, emit: Callable[[str], None] = print,
                         signal_fn(tree, False)
                     emit("GOVERNOR RESUMED " + " ".join(f"pid={v.pid}" for v, _ in reversed(paused)))
                     paused.clear()
+                    _write_frozen(pidfile, paused)
                     gave_up = False
             sleep(args.interval)
     finally:
         if paused:
             for _, tree in reversed(paused):
                 signal_fn(tree, False)
+            paused_ids = " ".join(f"pid={v.pid}" for v, _ in reversed(paused))
+            paused.clear()
+            _write_frozen(pidfile, paused)
             try:
-                emit("GOVERNOR RESUMED-ON-EXIT " + " ".join(f"pid={v.pid}" for v, _ in reversed(paused)))
+                emit("GOVERNOR RESUMED-ON-EXIT " + paused_ids)
             except Exception:  # stdout's reader may already be gone
                 pass
 
@@ -354,7 +450,7 @@ def main(argv: Optional[list[str]] = None) -> None:
     for sig in (signal.SIGTERM, getattr(signal, "SIGHUP", None)):
         if sig is not None:
             signal.signal(sig, lambda *_: sys.exit(0))
-    run(args, notice_path=resolve_notice_path())
+    run(args, notice_path=resolve_notice_path(), pidfile=default_pidfile())
 
 
 if __name__ == "__main__":

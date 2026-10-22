@@ -12,9 +12,7 @@ landing can still redeem it.
 
 from __future__ import annotations
 
-import hashlib
 import json
-import re
 from functools import partial
 from pathlib import Path
 from typing import Optional, Sequence
@@ -38,16 +36,8 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
 from coordinator_core.ops.dispatch_emit.commit_request import PREFIX_CLAIM_LABEL
 from coordinator_core.ops.dispatch_emit.grind_commit_contract import ALREADY_LANDED_KEY
 
-_DELIVERED_REPORT_RE = re.compile(
-    r'^\s*"?[*_`]{0,2}DONE(?:_WITH_CONCERNS)?[*_`]{0,2}:|<exit-status>DONE</exit-status>'
-    r'|(?i:^[ \t>#-]*"?[*_`]{0,2}status[*_`]{0,2}[ \t]*:[ \t]*[*_`]{0,2}[ \t]*DONE(?:_WITH_CONCERNS)?\b)',
-    re.MULTILINE,
-)
-_UNDELIVERED_REPORT_RE = re.compile(
-    r'^\s*"?[*_`]{0,2}(?:PARTIAL|BLOCKED)[*_`]{0,2}:|<exit-status>(?:PARTIAL|BLOCKED)</exit-status>'
-    r'|(?i:^[ \t>#-]*"?[*_`]{0,2}status[*_`]{0,2}[ \t]*:[ \t]*[*_`]{0,2}[ \t]*(?:PARTIAL|BLOCKED)\b)',
-    re.MULTILINE,
-)
+# One report grammar for both landing modes: `land_run` imports this module lazily, so no cycle.
+from coordinator_core.ops.dispatch_emit.land_run import _DELIVERED_REPORT_RE, _UNDELIVERED_REPORT_RE
 
 #: ``withheld`` reason for a finished chunk's product when the halt lands the record only.
 HALT_RECORD_ONLY = "halt-record-only"
@@ -69,20 +59,9 @@ def _error(message: str, **extra: object) -> dict:
 
 
 def _worktree_blob_sha(root: Path, rel: str) -> Optional[str]:
-    """The blob sha ``git add`` would write for ``rel``'s worktree bytes; ``"?"`` when the path's
-    checkin filter cannot be reproduced in process (it then counts as differing), None when
-    unreadable."""
-    from coordinator_core.git.commit import FilterUnsupported, _checkin_bytes
+    from coordinator_core.ops.dispatch_emit.land_run import _worktree_blob
 
-    try:
-        data = (root / rel).read_bytes()
-    except OSError:
-        return None
-    try:
-        body = _checkin_bytes(root, rel, data)
-    except FilterUnsupported:
-        return "?"
-    return hashlib.sha1(b"blob %d\0" % len(body) + body).hexdigest()
+    return _worktree_blob(root, rel)
 
 
 def _differs(root: Path, entries: dict, rels: Sequence[str]) -> tuple[set, set]:

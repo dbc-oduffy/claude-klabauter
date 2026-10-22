@@ -438,6 +438,17 @@ an allow path, and never before the marker check -- a cleared bump must not
 be logged as having fired). Best-effort per C2's own contract; a failed
 append never alters this module's ALLOW/advise decision.
 
+OUT-OF-REPO WRITE BLOCK. Every sanctioned out-of-repo destination (temp,
+lessons-outbox, memory store, claude home, settings home, session share dir,
+declared run output root) is decided by `_out_of_repo_allowlist.
+sanctioned_destination`, not inline (the `_target_is_*` helpers the sections
+above name were lifted there; their rationale stands); the run-output-root entry keeps its
+publish-destination exception here. Under `machine_profile.
+out_of_repo_write_blocked()` no marker clears the deny, the unwritable-marker
+allow does not apply, and the deny text is `render_out_of_repo_refusal` (an
+in-repo alternative, no marker/grant/level verb). The anchor, gitdir and
+stand-down fail-opens above are unchanged.
+
 FAIL-OPEN, UNCONDITIONALLY. `check()` is wrapped in a single try/except that
 returns `None` on ANY unexpected exception, matching this package's other
 advisory guards (`nudge_windows_subprocess_popup.py`). Every helper below
@@ -508,21 +519,16 @@ import os
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
+from coordinator_core.bash_guards._out_of_repo_allowlist import sanctioned_destination
 from coordinator_core.bash_guards._write_bump_applicability import (
-    _is_under,
     anchor_subtree_contains,
     bump_applies,
-    is_agent_memory_store_path,
     own_repo_write_gitdir,
     publish_destination_owner,
     record_applicability_event,
     resolve_launch_anchor,
-    target_is_bare_temp_scratch,
     target_is_publish_destination,
     target_is_registered_repo,
-    target_is_under_claude_home,
-    target_is_under_declared_run_output_root,
-    target_is_under_settings_home,
 )
 from coordinator_core.bash_guards._write_bump_marker import (
     effective_session_id,
@@ -544,13 +550,14 @@ from coordinator_core.bash_guards._write_bump_message import (
     DESTINATION_PUBLISH,
     SURFACE_TOOL,
     render_bump_message,
+    render_out_of_repo_refusal,
     resolve_agent_class,
 )
+from coordinator_core.machine_profile import out_of_repo_write_blocked
 from coordinator_core.machine_resolver import external_workspace_containing
 from coordinator_core.session import machinery_paths
 from coordinator_core.subagent_sandbox.engine import resolve_effective_types
 from coordinator_core.subagent_sandbox.provision_report import _sanitize_segment
-from coordinator_core.trusted_root_guard import _settings_home_dir_from_env
 from coordinator_core.write_guards._case_fold_path import casefold_path
 from coordinator_core.write_guards._repo_root import resolve_repo_root
 from coordinator_core.bash_guards._write_bump_stand_down import (
@@ -631,119 +638,6 @@ def _resolve_sandbox_root(git_root: Optional[str], session_id: str) -> str:
     if not sanitized:
         return ""
     return machinery_paths.share_dir(git_root, sanitized)
-
-
-#: Adjacent, case-folded directory-path pair this predicate keys on -- see
-#: module docstring, "LESSONS-OUTBOX IS NOT A MISWRITE". Deliberately the
-#: two literal segments only, never a broader `cross-repo/` prefix -- see
-#: that section's "DO NOT WIDEN" paragraph.
-_LESSONS_OUTBOX_SEGMENTS = ("state", "lessons-outbox")
-
-
-def _target_is_lessons_outbox_write(file_path: str) -> bool:
-    """True iff `file_path`'s path components contain `state/lessons-outbox`
-    as an adjacent, case-folded directory pair -- see module docstring,
-    "LESSONS-OUTBOX IS NOT A MISWRITE, EVEN THOUGH IT IS A FOREIGN REPO".
-    Callers treat `True` as "never bump".
-
-    UNLIKE `_target_is_bare_temp_scratch`/`_target_is_under_settings_home`
-    immediately below, this predicate is NOT gated on `target_gitdir is
-    None` -- the whole point of this exemption is the target IS a foreign
-    repo (`coordinator-lesson-promote` always writes into an actual
-    coordinator-content-repo checkout), so requiring "no repo" would exempt nothing real.
-
-    Path-shape only, via a simple casefolded split -- matches a subdirectory
-    under `state/lessons-outbox/` too (e.g. the `drained/` subdirectory
-    `priority_drain.py` adopts), not merely a direct child file. Never
-    raises: `casefold_path` and plain `str.split` do not raise on any `str`
-    input.
-
-    C4c (docs/plans/2026-08-07-guard-posix-path-rerooting.md): `file_path`
-    is now the TRANSLATED path `check()` resolved once via
-    `_resolve_translated_file_path` -- an untranslatable candidate (`None`,
-    coerced to `""` by the caller) falls through this same `not file_path`
-    branch to `False` ("not exempt"), which is safe because `check()`'s own
-    `_verdict_bumps` already fails open (no bump) on an unresolved target;
-    this predicate merely stops WIDENING an exemption on a path it cannot
-    read, never causing a bump on its own.
-    """
-    if not file_path:
-        return False
-    normalized = casefold_path(file_path)
-    parts = [p for p in normalized.split("/") if p]
-    for i in range(len(parts) - 1):
-        if (parts[i], parts[i + 1]) == _LESSONS_OUTBOX_SEGMENTS:
-            return True
-    return False
-
-
-def _target_is_bare_temp_scratch(file_path: str, target_gitdir: Optional[Path]) -> bool:
-    """True iff `file_path` resolves under ANY recognized temp root AND
-    resolves to no git repo -- see module docstring, "SYSTEM-TEMP SCRATCH IS
-    NOT A FOREIGN REPO". Callers treat `True` as "never bump".
-
-    Delegates to the SHARED classifier,
-    `_write_bump_applicability.target_is_bare_temp_scratch` -- this module
-    previously derived "system temp" from `tempfile.gettempdir()` alone,
-    which does NOT cover the harness-designated per-session scratchpad on
-    macOS (`TMPDIR`/`gettempdir()` resolves under `/var/folders/...`, while
-    the scratchpad lives under `/private/tmp`; `os.path.realpath("/tmp")`
-    is what actually catches it). Two independent, same-shaped classifiers
-    that could silently drift is exactly the defect the shared helper exists
-    to close -- kept as a thin wrapper, name preserved, so existing
-    references to `_target_is_bare_temp_scratch` on this module continue to
-    resolve.
-
-    `target_gitdir` is accepted as a short-circuit only: when the caller has
-    ALREADY resolved it and found a repo, there is no need to re-resolve via
-    the shared helper's own `resolve_gitdir` call.
-
-    C4c: `file_path` is now the TRANSLATED path `check()` resolved once via
-    `_resolve_translated_file_path` -- see `_target_is_lessons_outbox_
-    write`'s own C4c note for why an untranslatable (`""`/`None`) input
-    falling through to "not exempt" here is the correct, fail-open-overall
-    behaviour rather than a widening of what bumps.
-    """
-    if target_gitdir is not None:
-        return False
-    return target_is_bare_temp_scratch(file_path)
-
-
-def _target_is_under_settings_home(
-    file_path: str, target_gitdir: Optional[Path], env: Optional[dict] = None
-) -> bool:
-    """True iff `file_path` resolves to no git repo AND sits under the
-    settings home -- see module docstring, "SETTINGS HOME IS NOT A FOREIGN
-    REPO" (DoE finding #2, parity with the Bash-surface AC9 exemption).
-
-    Same conjunctive shape as `_target_is_bare_temp_scratch` immediately
-    above: `target_gitdir` is accepted purely as an already-resolved
-    short-circuit, so a real checkout that happens to live under the
-    settings home is still classified as a foreign repo and still bumps.
-    Resolves the settings home through the SAME shared helper both
-    Bash-surface guards already import -- `trusted_root_guard.
-    _settings_home_dir_from_env` -- never a hand-rolled env read.
-
-    C4c: `file_path` is now the TRANSLATED path `check()` resolved once via
-    `_resolve_translated_file_path` -- same C4c note as
-    `_target_is_lessons_outbox_write`/`_target_is_bare_temp_scratch`: a
-    `""`/`None` (untranslatable) input falls through
-    `_normalize_for_compare`'s own `not path` branch to `None`, so this
-    predicate returns `False` ("not exempt") without widening anything,
-    relying on `check()`'s own overall fail-open-on-unresolved-target
-    contract for the "never bump" guarantee.
-    """
-    if target_gitdir is not None:
-        return False
-    env = os.environ if env is None else env
-    settings_home = _settings_home_dir_from_env(env)
-    if not settings_home:
-        return False
-    target_cf = _normalize_for_compare(file_path)
-    home_cf = _normalize_for_compare(settings_home)
-    if target_cf is None or home_cf is None:
-        return False
-    return _is_under(target_cf, home_cf)
 
 
 def _resolve_target_gitdir(
@@ -828,9 +722,7 @@ def _resolve_translated_file_path(
     translate the DIRECTORY used for the bump/no-bump VERDICT
     (`_resolve_target_dir` -> `target_dir`/`target_gitdir`), but `check()`
     was still handing the four exemption predicates
-    (`_target_is_bare_temp_scratch`, `_target_is_under_settings_home` via
-    `_normalize_for_compare`, `_target_is_lessons_outbox_write`,
-    `is_agent_memory_store_path`) the RAW, untranslated `file_path`. An
+    (now `_out_of_repo_allowlist.sanctioned_destination`) the RAW, untranslated `file_path`. An
     MSYS-spelled write to the harness scratchpad
     (`/x/AppData/Local/Temp/claude/.../scratch/foo.txt` on Windows) then
     matched no recognized native temp root, so the temp-scratch exemption
@@ -1014,35 +906,26 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         target_gitdir = _target_gitdir_from_dir(target_dir)
         translated_file_path = _resolve_translated_file_path(file_path, payload_cwd)
 
-        if _target_is_bare_temp_scratch(translated_file_path or "", target_gitdir):
+        if translated_file_path is None:
             return None
 
-        if _target_is_lessons_outbox_write(translated_file_path or ""):
-            return None
-
-        if is_agent_memory_store_path(translated_file_path or ""):
-            return None
-
-        if target_is_under_claude_home(translated_file_path or ""):
-            return None
-
-        if target_is_under_declared_run_output_root(
-            translated_file_path or ""
-        ) and not (
-            target_gitdir is not None
+        own_git_root = _resolve_git_root(anchor)
+        sanctioned = sanctioned_destination(
+            translated_file_path,
+            session_repo=own_git_root or anchor,
+            session_id=session_id,
+            target_gitdir=target_gitdir,
+        )
+        if sanctioned is not None and not (
+            sanctioned == "declared-run-output-root"
+            and target_gitdir is not None
             and target_is_publish_destination(
                 _resolve_git_root(target_dir) if target_dir is not None else file_path
             )
         ):
             return None
 
-        if _target_is_under_settings_home(translated_file_path or "", target_gitdir):
-            return None
-
-        if target_is_under_settings_home(
-            translated_file_path or "", target_gitdir=target_gitdir
-        ):
-            return None
+        blocked = out_of_repo_write_blocked()
 
         own_repo_cwd_gitdir = (
             own_repo_write_gitdir(payload_cwd, payload) if own_gitdir is None else None
@@ -1068,7 +951,6 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             own_gitdir, target_gitdir
         )
 
-        own_git_root = _resolve_git_root(anchor)
         raw_agent_id = payload.get("agent_id") or ""
         canonical_agent_id, _agent_type, _subagent_type = resolve_effective_types(
             payload, own_git_root
@@ -1091,6 +973,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         workspace_key = external_workspace_containing(target_dir or file_path)
         if (
             effective_sid
+            and not blocked
             and not subagent_at_publish
             and workspace_key is None
             and (
@@ -1111,7 +994,9 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         if agent_class == AGENT_CLASS_SUBAGENT:
             sandbox_root = _resolve_sandbox_root(own_git_root or target_repo, session_id)
 
-        if marker_gitdir is None or not marker_gitdir_is_writable(marker_gitdir):
+        if not blocked and (
+            marker_gitdir is None or not marker_gitdir_is_writable(marker_gitdir)
+        ):
             # Nothing to compose a clear line against, OR the marker
             # location exists but is not writable/readable (STAFF-ENG
             # F0/AC5, mirrored from `bump_foreign_repo_write.
@@ -1131,28 +1016,39 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             destination_class = DESTINATION_EXTERNAL_WORKSPACE
             destination_owner = workspace_key
 
-        message = render_bump_message(
-            agent_class=agent_class,
-            target_repo=target_repo,
-            session_repo=session_repo,
-            gitdir=marker_gitdir,
-            session_id=effective_sid or session_id,
-            sandbox_root=sandbox_root,
-            destination_class=destination_class,
-            destination_owner=destination_owner,
-            raw_target=file_path if file_path != target_repo else "",
-            surface=SURFACE_TOOL,
-        )
-        try:
-            from coordinator_core.ops.sibling_repo_provision_contract import (
-                ROUTE_REMEDY,
-                remedy_applies,
+        raw_target = file_path if file_path != target_repo else ""
+        if blocked:
+            message = render_out_of_repo_refusal(
+                target_repo,
+                session_repo,
+                agent_class=agent_class,
+                sandbox_root=sandbox_root,
+                target_in_repo=target_gitdir is not None,
+                raw_target=raw_target,
             )
+        else:
+            message = render_bump_message(
+                agent_class=agent_class,
+                target_repo=target_repo,
+                session_repo=session_repo,
+                gitdir=marker_gitdir,
+                session_id=effective_sid or session_id,
+                sandbox_root=sandbox_root,
+                destination_class=destination_class,
+                destination_owner=destination_owner,
+                raw_target=raw_target,
+                surface=SURFACE_TOOL,
+            )
+            try:
+                from coordinator_core.ops.sibling_repo_provision_contract import (
+                    ROUTE_REMEDY,
+                    remedy_applies,
+                )
 
-            if remedy_applies(file_path, session_repo):
-                message = message.rstrip("\n") + "\n" + ROUTE_REMEDY
-        except (ImportError, OSError):
-            pass
+                if remedy_applies(file_path, session_repo):
+                    message = message.rstrip("\n") + "\n" + ROUTE_REMEDY
+            except (ImportError, OSError):
+                pass
 
         record_applicability_event(
             session_id,

@@ -332,6 +332,26 @@ def repoint_fire_hold(worktree_root: Path, baton_path: str, cite: str) -> bool:
     return True
 
 
+def _residue_parent(worktree_root: Path, baton_path: str, plan_path: str) -> Optional[str]:
+    """The baton's governing plan when `plan_path` is that plan's residue, else None.
+
+    A residue plan is a different plan whose OWN `governing_plan:` names the plan the
+    baton already governs. The edge is authored on the plan (plan -> parent) and the
+    schemas carry no baton-side residue field, so recording it writes nothing: the
+    baton stays on its parent. A plan that does not name the baton's governing plan
+    is not residue, however it relates, and keeps the repoint refusal.
+    """
+    try:
+        baton_gov = _read_field((worktree_root / baton_path).read_text(encoding="utf-8"), "governing_plan")
+        plan_gov = _read_field((worktree_root / plan_path).read_text(encoding="utf-8"), "governing_plan")
+    except OSError:
+        return None
+    if _field_unset(baton_gov) or _field_unset(plan_gov):
+        return None
+    baton_gov, plan_gov = baton_gov.replace("\\", "/"), plan_gov.replace("\\", "/")
+    return baton_gov if baton_gov == plan_gov and baton_gov != plan_path else None
+
+
 def _link_baton_to_plan(
     worktree_root: Path,
     baton_path: str,
@@ -362,6 +382,10 @@ def _link_baton_to_plan(
         return False
 
     rel = plan_abs.relative_to(worktree_root).as_posix()
+
+    if _residue_parent(worktree_root, baton_path, rel) is not None:
+        _clear_fire_hold(worktree_root, baton_path)
+        return False
 
     def _link(old: str) -> str:
         existing = _read_field(old, "governing_plan")
@@ -573,6 +597,7 @@ def approve_ready(
         raise LandingRefused(f"baton does not exist on disk: {baton_path}")
 
     repaired = _link_baton_to_plan(worktree_root, baton_path, plan_path, report)
+    residue_of = _residue_parent(worktree_root, baton_path, plan_path)
 
     def _stamp(old: str) -> str:
         current = (_read_field(old, "status") or "").lower()
@@ -608,6 +633,7 @@ def approve_ready(
         # A plan already at an approved status is the landing's end state, not a refusal.
         "already_in_state": (not stamped) and (note or "").startswith("already at status"),
         "superseded": superseded,
+        "residue_of": residue_of,
     }
 
 
@@ -1472,6 +1498,23 @@ def land_wave(
                 if rejected:
                     row["prior_shipped_in_rejected"] = rejected
                 closed.append(row)
+            elif (
+                entry.get("route") == "spec-dispatch"
+                and _residue_parent(worktree_root, baton_path, plan_path) is not None
+            ):
+                # An execution stamp would repoint the baton and bind its sha to the
+                # residue body; the baton stays on its parent, so the residue plan
+                # lands on the ordinary approval.
+                row = approve_ready(worktree_root, baton_path, plan_path, report)
+                row["fell_back_from"] = "spec-dispatch"
+                row["fallback_reason"] = f"plan is residue of the baton's governing plan {row['residue_of']}"
+                row["prep_gate"] = gate_verdict
+                if sizing_recon is not None:
+                    row["sizing_reconciled"] = sizing_recon
+                if row["already_in_state"]:
+                    noop.append({"baton": entry.get("batonId"), "reason": row.get("note")})
+                else:
+                    approved.append(row)
             elif entry.get("route") == "spec-dispatch" and not _admits_execution_phase(
                 (baton_kind := _baton_kind(worktree_root / baton_path))
             ):
@@ -1529,7 +1572,10 @@ def land_wave(
                 row["prep_gate"] = gate_verdict
                 if sizing_recon is not None:
                     row["sizing_reconciled"] = sizing_recon
-                approved.append(row)
+                if row["residue_of"] and row["already_in_state"]:
+                    noop.append({"baton": entry.get("batonId"), "reason": row.get("note")})
+                else:
+                    approved.append(row)
         except (LandingRefused, MutateAbort, OSError) as exc:
             refused.append({"baton": entry.get("batonId"), "reason": str(exc)})
 

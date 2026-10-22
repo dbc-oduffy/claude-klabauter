@@ -67,8 +67,6 @@ def test_win32_oserror_is_one_line_exit_1(tmp_path, capsys):
     assert len(capsys.readouterr().err.strip().splitlines()) == 1
 
 
-
-
 def test_posix_new_session(tmp_path):
     rc = bl.main(["--log", str(tmp_path / "l"), "--", "echo", "hi"], popen=FakePopen, platform="linux")
     assert rc == 0

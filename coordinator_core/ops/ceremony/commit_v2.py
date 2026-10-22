@@ -78,6 +78,8 @@ from coordinator_core.git.commit_trailers import (
 )
 from coordinator_core.git.commit import partition_declared_deletions
 from coordinator_core.git.run import run_git
+from coordinator_core.git import checkpoint_guard
+from coordinator_core.git.git_state import head_sha
 from coordinator_core.git.git_index import IndexParseError
 from coordinator_core.git.index_write import IndexStaleAfterCommit
 from coordinator_core.git.eol_declared import (
@@ -1176,7 +1178,10 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     stopped_carried: dict = {}
     stopped_withheld: dict = {}
     stopped_error: Optional[str] = None
-    if raw_carry_stopped and own_sid:
+    # A checkpoint lands its wave's declared footprint only: a sibling run's residue is not it.
+    if raw_carry_stopped and own_sid and not checkpoint_guard._SUBJECT_RE.match(
+        message.split("\n", 1)[0].strip()
+    ):
         try:
             from coordinator_core.ops.dispatch_emit import stopped_runs
 
@@ -1327,6 +1332,16 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     else:
         proc_set = set()
         halves = [(raw_paths, raw_deleted, raw_untracked, message)]
+
+    if mixed:
+        # Each half is checkpoint-checked inside its own landing; judged here over the whole
+        # set so a refusal in the second half cannot follow a landed first.
+        whole_refusal = checkpoint_guard.checkpoint_refusal(
+            worktree_root, resolve_git_common_dir(worktree_root), head_sha(worktree_root),
+            message, list(raw_paths),
+        )
+        if whole_refusal:
+            return _error(whole_refusal)
 
     # (paths + removed, message, landing outcome or None, sha, process half?)
     landed_halves: list = []

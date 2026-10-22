@@ -20,9 +20,10 @@ of them and this module never prints it:
   UNSTAMPED    never certified. Gate and stamp.
   MALFORMED    a hand-written stamp. Repair the frontmatter; do not stamp over it.
 
-CLIENT-SIDE DRIVER. This file is a client: it loops over the set and sends the engine one bounded op
-per plan (`plan.mise_prep_probe`: gate, census and upgrade derivation for that plan), so a whole-set
-run is N short ops and never one long one. Each op travels the warm client transport
+CLIENT-SIDE DRIVER. This file is a client: it sends the engine ONE `plan.mise_prep_probe` call over
+the whole set (gate and upgrade derivation per plan), so the op count does not grow with the set;
+an engine that predates the set form falls back to one probe per plan. Each op travels the warm
+client transport
 (`cc_invoke.cc_invoke`) under its own budget. The set-level ops (`plan.seam_fix`, the seam check,
 residue bind/validate) are one call each.
 
@@ -126,6 +127,11 @@ _CENSUS_ROUTE = (
 )
 
 
+#: `_invoke` calls this run has made, failures included; `main` resets it and the JSON report
+#: carries it as `opCalls`.
+_OP_CALLS = 0
+
+
 def _invoke(repo_root: Path, op: str, params: dict) -> dict:
     """One op call over the warm client transport — a bounded op under its own budget, never a
     `coordinator-invoke.py` subprocess and never an in-process dispatch.
@@ -135,6 +141,8 @@ def _invoke(repo_root: Path, op: str, params: dict) -> dict:
     `ValueError` on any failure — unresolvable transport, an error envelope, or a malformed
     reply — so callers keep treating a refusal as a reply, never a crash.
     """
+    global _OP_CALLS
+    _OP_CALLS += 1
     try:
         import lib  # noqa: F401 -- bootstraps coordinator/bin/lib onto sys.path
         import cc_invoke
@@ -402,6 +410,30 @@ def _seam_findings_for(reply: dict, plan: str) -> list[dict]:
     return out
 
 
+def _seam_findings_index(reply: dict, plans: list[str]) -> dict[str, list[dict]]:
+    """`{p: _seam_findings_for(reply, p)}` for every plan in `plans`, from one pass over the
+    findings instead of one pass per plan. Order within a plan is the reply's order."""
+    index: dict[str, list[dict]] = {p: [] for p in plans}
+    implicated = {p for p in index if _seam_implicated(reply, p)}
+    for f in reply.get("findings") or []:
+        if not isinstance(f, dict):
+            continue
+        owner = f.get("plan")
+        if owner is None:
+            if f.get("blocking"):
+                for p in index:
+                    if p in implicated:
+                        index[p].append(f)
+            else:
+                for p in index:
+                    index[p].append(f)
+        else:
+            for p in {owner, f.get("counterpart_plan")}:
+                if p in index:
+                    index[p].append(f)
+    return index
+
+
 _MISSING_SEAM = "missing-seam"
 _MISSING_SEAM_SHOWN = 10
 
@@ -558,6 +590,46 @@ def _probe(repo_root: Path, plan: str, *, upgrade: bool) -> dict:
     return reply
 
 
+def _probe_set(repo_root: Path, plans: list[str], *, upgrade: bool) -> dict[str, dict]:
+    """ONE `plan.mise_prep_probe` call over `plans`: `{plan: probe reply | {"error": text}}`.
+
+    A failed call, or a reply with no `probes` object (an engine that predates the set form
+    rejects `plans`), falls back to the per-plan `_probe` loop. A plan the reply omits, or answers
+    without a `gate` object, reads `{"error"}`, never a verdict.
+    """
+    ordered = list(dict.fromkeys(plans))
+    try:
+        reply = _invoke(repo_root, "plan.mise_prep_probe", {"plans": ordered, "upgrade": upgrade})
+        probes = reply.get("probes")
+        if not isinstance(probes, dict):
+            raise ValueError("plan.mise_prep_probe returned a reply without a `probes` object")
+    except Exception as exc:  # noqa: BLE001 - any set-call failure degrades to the per-plan loop
+        if isinstance(exc, TimeoutError) or "timed out" in str(exc).lower():
+            return {plan: {"error": str(exc)} for plan in ordered}
+        print(f"mise-prep-run: set probe unavailable ({exc}); probing per plan", file=sys.stderr)
+        out: dict[str, dict] = {}
+        for plan in ordered:
+            try:
+                out[plan] = _probe(repo_root, plan, upgrade=upgrade)
+            except ValueError as perr:
+                out[plan] = {"error": str(perr)}
+        return out
+    out = {}
+    for plan in ordered:
+        entry = probes.get(plan)
+        if not isinstance(entry, dict):
+            out[plan] = {"error": "set probe returned no reply for this plan"}
+        elif isinstance(entry.get("gate"), dict):
+            out[plan] = entry
+        else:
+            out[plan] = {
+                "error": str(entry.get("error"))
+                if entry.get("error")
+                else "plan.mise_prep_probe returned a reply without a `gate` object"
+            }
+    return out
+
+
 def _census_pass(
     repo_root: Path, rows: list[dict], gates: dict[str, dict], *, timeout: int, budget_s: int
 ) -> dict:
@@ -683,6 +755,8 @@ def main(argv=None) -> int:
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args(argv)
 
+    global _OP_CALLS
+    _OP_CALLS = 0
     repo_root = Path(args.repo_root).resolve()
     if args.engine_root:
         os.environ["COORDINATOR_ENGINE_ROOT"] = str(Path(args.engine_root).resolve())
@@ -734,55 +808,20 @@ def main(argv=None) -> int:
     except ValueError as exc:
         return refuse(f"seam fix: {exc}")
 
-    rows = []
     gates: dict[str, dict] = {}
-    for index, plan in enumerate(plans, 1):
-        try:
-            probe = _probe(repo_root, plan, upgrade=args.upgrade)
-        except ValueError as exc:
-            gates[plan] = {}
-            rows.append(_probe_failed_row(plan, str(exc)))
-            print(f"mise-prep-run: [{index}/{len(plans)}] {plan} PROBE-FAILED", file=sys.stderr)
-            continue
-        gate = probe["gate"]
-        # A set run is minutes long; a silent stderr reads as a hang.
-        print(
-            f"mise-prep-run: [{index}/{len(plans)}] {plan} {gate.get('verdict')} "
-            f"{probe.get('process_ms')}ms",
-            file=sys.stderr,
-        )
+    slots: list[dict | None] = [None] * len(plans)
+    regate: dict[int, str | None] = {}
 
-        derivation = probe.get("upgrade")
-        upgraded = _upgrade_note(derivation)
-        # Apply only a derivable plan, and only outside `--dry-run`: the probe's derivation is
-        # check-only, so a dry run never issues the MUTATING apply op. A written plan is
-        # re-probed: the ordinary outcome is a write alongside residue, and the re-probe is the
-        # re-gate. The re-probe skips the derivation (the apply reply is the new note).
-        if args.upgrade and not args.dry_run and _derivable(derivation):
-            try:
-                applied = _invoke(repo_root, "plan.mise_upgrade_apply", {"plan": plan})
-            except ValueError as exc:
-                upgraded = f"declined: {exc}"
-            else:
-                upgraded = _upgrade_note(applied)
-                try:
-                    probe = _probe(repo_root, plan, upgrade=False)
-                except ValueError as exc:
-                    gates[plan] = {}
-                    rows.append(
-                        _probe_failed_row(plan, f"re-gate after upgrade: {exc}", upgraded=upgraded)
-                    )
-                    continue
-                gate = probe["gate"]
-
+    def make_row(plan: str, probe: dict, upgraded: str | None) -> dict:
         # The gate already carries the attest's own four-state read (`plan.prep_gate`
         # returns `read_stamp`'s answer). Carrying it here is what makes a dry run
         # answer the question a dry run is asked: not "would these pass the bar" but
         # "how many of them does this run actually write". Without it every plan in the
         # set reads `would-stamp`, CERTIFIED ones included, and a set with nothing to do
         # is indistinguishable from a set where all of it is pending.
+        gate = probe["gate"]
         gates[plan] = gate
-        row = {
+        return {
             "plan": plan,
             "verdict": gate.get("verdict"),
             "failing": _failing_classes(gate),
@@ -794,7 +833,54 @@ def main(argv=None) -> int:
             "processMs": probe.get("process_ms"),
             "outcome": None,
         }
-        rows.append(row)
+
+    probes = _probe_set(repo_root, plans, upgrade=args.upgrade)
+    for index, plan in enumerate(plans, 1):
+        probe = probes[plan]
+        if not isinstance(probe.get("gate"), dict):
+            gates[plan] = {}
+            slots[index - 1] = _probe_failed_row(plan, str(probe.get("error")))
+            print(f"mise-prep-run: [{index}/{len(plans)}] {plan} PROBE-FAILED", file=sys.stderr)
+            continue
+        gate = probe["gate"]
+        # One line per plan, printed after the set probe returned: a record of the verdicts, not
+        # a progress signal.
+        print(
+            f"mise-prep-run: [{index}/{len(plans)}] {plan} {gate.get('verdict')} "
+            f"{probe.get('process_ms')}ms",
+            file=sys.stderr,
+        )
+
+        derivation = probe.get("upgrade")
+        upgraded = _upgrade_note(derivation)
+        # Apply only a derivable plan, and only outside `--dry-run`: the probe's derivation is
+        # check-only, so a dry run never issues the MUTATING apply op. A written plan is
+        # re-gated after the loop in one set call: the ordinary outcome is a write alongside
+        # residue. The re-gate skips the derivation (the apply reply is the new note).
+        if args.upgrade and not args.dry_run and _derivable(derivation):
+            try:
+                applied = _invoke(repo_root, "plan.mise_upgrade_apply", {"plan": plan})
+            except ValueError as exc:
+                upgraded = f"declined: {exc}"
+            else:
+                regate[index - 1] = _upgrade_note(applied)
+                continue
+        slots[index - 1] = make_row(plan, probe, upgraded)
+
+    if regate:
+        regated = _probe_set(
+            repo_root, [plans[i] for i in regate], upgrade=False
+        )
+        for i, upgraded in regate.items():
+            plan, probe = plans[i], regated[plans[i]]
+            if not isinstance(probe.get("gate"), dict):
+                gates[plan] = {}
+                slots[i] = _probe_failed_row(
+                    plan, f"re-gate after upgrade: {probe.get('error')}", upgraded=upgraded
+                )
+            else:
+                slots[i] = make_row(plan, probe, upgraded)
+    rows = [r for r in slots if r is not None]
 
     census_totals = _census_pass(
         repo_root, rows, gates, timeout=args.census_timeout, budget_s=args.census_budget
@@ -817,9 +903,10 @@ def main(argv=None) -> int:
 
     # Only DRIFT blocks, the same rule the fire leg uses: an UNDECIDABLE or UNRUNNABLE census is
     # not evidence of movement. A seam refusal keeps its verdict over a census one.
+    seam_index = _seam_findings_index(seam, [r["plan"] for r in rows])
     for row in rows:
         plan = row["plan"]
-        row["seam"] = _seam_findings_for(seam, plan)
+        row["seam"] = seam_index[plan]
         if row["outcome"] == "PROBE-FAILED":
             continue
         if _seam_implicated(seam, plan):
@@ -878,6 +965,7 @@ def main(argv=None) -> int:
                     "plans": rows,
                     "certified": len(certified),
                     "dryRun": args.dry_run,
+                    "opCalls": _OP_CALLS,
                     "censusSpentMs": census_spent_ms,
                     "censusMemoHits": census_totals["memo_hits"],
                     "censusDirectRuns": census_totals["direct_runs"],

@@ -219,17 +219,22 @@ def params_from_task_output(path_raw: str) -> dict:
 
 
 def _reclose_params(root: Path, params: object) -> Optional[dict]:
-    """``close_landed_run`` params when the call re-pays a landed run's close legs, else None.
+    """``{plan_path, run_id, criterion?, ...}`` when the call re-pays a landed run's close legs, else None.
 
     Two shapes: a ``task_output_path`` whose ``next_action.kind`` is ``close_job`` (its params carry
     ``run_id``, never a run outcome), or a ``script_path`` with no run outcome and no task output whose
     run already has a close-job record. Both need that record to name the plan; none -> None, so the
-    ordinary refusal answers. Product is never re-landed on this route."""
+    ordinary refusal answers. ``criterion`` is the call's own judge verdict (``inline_review.criterion``,
+    else the task output's). Product is never re-landed on this route."""
     if not isinstance(params, dict) or params.get("incomplete_chunks") is not None:
         return None
     from coordinator_core.ops.dispatch_emit import run_close
 
     run_id = None
+    criterion = None
+    review = params.get("inline_review")
+    if isinstance(review, dict) and isinstance(review.get("criterion"), dict):
+        criterion = review["criterion"]
     task_output = params.get("task_output_path")
     if isinstance(task_output, str):
         try:
@@ -243,6 +248,9 @@ def _reclose_params(root: Path, params: object) -> Optional[dict]:
             return None
         found = action.get("params")
         run_id = found.get("run_id") if isinstance(found, dict) else None
+        digest_review = data.get("inline_review")
+        if criterion is None and isinstance(digest_review, dict) and isinstance(digest_review.get("criterion"), dict):
+            criterion = digest_review["criterion"]
     elif isinstance(params.get("script_path"), str) and params.get("inline_review") is None:
         run_id = PurePosixPath(params["script_path"].replace("\\", "/")).stem
     if not isinstance(run_id, str) or not run_id or "/" in run_id or "\\" in run_id:
@@ -256,7 +264,53 @@ def _reclose_params(root: Path, params: object) -> Optional[dict]:
     for key in ("task_output_path", "session_id"):
         if params.get(key) is not None:
             out[key] = params[key]
+    if criterion:
+        out["criterion"] = criterion
     return out
+
+
+def _reclose(root: Path, reclose: dict) -> dict:
+    """Answer a repeat call for a run whose landing receipt sha is on HEAD: ``already_landed``.
+
+    The close-job record takes the call's ``criterion`` when it differs, and the record's unfinished
+    legs are re-queued to ``close.background``. ``criterion_status`` is read back from the record,
+    never judged here; the other close keys read ``deferred``. Writes no product and no commit."""
+    from coordinator_core.ops.dispatch_emit import run_close
+
+    run_id = reclose["run_id"]
+    stem = run_close.resolve_close_job_stem(root, run_id)
+    record = run_close._load(root, stem) if stem else None
+    if stem is None or record is None:
+        return _error(
+            f"no close-job record at {run_close.close_job_path(run_id)} or "
+            f"{run_close.close_job_path(run_id + '.workflow')}. A run that has not landed closes "
+            f"through {contract.OP_NAME} with script_path.",
+            refused="no-close-job",
+        )
+    plan = reclose["plan_path"]
+    if str(record.get("plan_rel") or "").replace("\\", "/").removeprefix("./") != plan.replace("\\", "/").removeprefix("./"):
+        return _error(
+            f"{run_close.close_job_path(stem)} belongs to plan {record.get('plan_rel')!r}, not {plan!r}. "
+            "Pass that plan's path.",
+            refused="close-job-plan-mismatch",
+        )
+    sha = record.get("terminal_sha")
+    if not isinstance(sha, str) or not landed_on_head(root, sha):
+        return _error(
+            f"terminal_sha {sha!r} is absent or not an ancestor of HEAD. Land the run's terminal commit first.",
+            refused="terminal-commit-not-landed",
+        )
+    _requeue_close(root, {}, key=stem, criterion=reclose.get("criterion"))
+    refreshed = run_close._load(root, stem) or record
+    held = refreshed.get("criterion")
+    reply: dict = {
+        "committed": True, "sha": sha, ALREADY_LANDED_KEY: True, "rows": [], "paths": [],
+        "error": None, "refused": None, "close": None,
+        "review_stamp": "deferred", "plan_status": "deferred",
+    }
+    if isinstance(held, dict) and held.get("status"):
+        reply["criterion_status"] = held["status"]
+    return reply
 
 
 def _missing_run_outcome(params: object, task_output: Optional[str] = None) -> Optional[dict]:
@@ -706,7 +760,9 @@ def _unchanged_since_halt(
     items = verdict.get("items") if isinstance(verdict, dict) else None
     if not isinstance(blocking, list) or not isinstance(items, list):
         return []
-    exempt = _verified_only(resume)
+    from coordinator_core.ops.dispatch_emit.pre_halt_credit import credited_rows
+
+    exempt = {*_verified_only(resume), *credited_rows(resume, verdict)}
     judged = [
         str(i["id"]) for i in items
         if isinstance(i, dict) and i.get("id") in blocking and i.get("status") in ("met", "post_commit")
@@ -1201,15 +1257,17 @@ def _fixes_integrated_at(root: Path, inline_review: object) -> tuple:
 def _recorded_fingerprints(
     root: Path, session_id: str, candidates: Sequence[str], carried: Sequence[str], *, excluded: set,
     reviewed: Optional[dict], reviewed_at: Optional[float], fixes_integrated_at: Optional[float],
-    wave_paths: frozenset,
+    wave_paths: frozenset, review_events: Optional[dict] = None,
 ) -> dict:
     """``{path: sha256}`` the run expects each candidate path to carry; one batched sink read.
 
     Per path the newer of the session's last recorded write and the run's newest review supplies the
     hash (a tie goes to the session write). After a fix-applying wave a reviewed path settled before
     the integration is declared at its current bytes; a path the session wrote after the review, with
-    a file mtime no earlier than that write, is declared at its current bytes. A path with no usable
-    event carries no entry."""
+    a file mtime no earlier than that write, is declared at its current bytes. ``review_events``
+    (``{path: (sha256, epoch)}``, ``_review_write_events``) is a review fix-pass agent's own newest
+    write: it supplies the hash for a path whose session event is older or absent, so a later foreign
+    edit still refuses. A path with no usable event carries no entry."""
     from coordinator_core.session import touch_record
 
     wanted = [p for p in dict.fromkeys(candidates) if p in set(carried) and p not in excluded]
@@ -1248,6 +1306,94 @@ def _recorded_fingerprints(
             out[p] = review_hash
         elif event is not None and event[0]:
             out[p] = event[0]
+        agent_event = (review_events or {}).get(p)
+        if agent_event is not None and agent_event[0] and (event is None or agent_event[1] > event[1]):
+            out[p] = agent_event[0]
+    return out
+
+
+def _review_since(root: Path, run_id: Optional[str], inline_review: object) -> Optional[float]:
+    """Epoch seconds the run began: its ``submission.json`` ``submitted_at``, else the committer time of
+    its base commit (the review prep's ``run_base_sha``, else the recorded run base). None when neither
+    resolves."""
+    from coordinator_core.ops.dispatch_emit.register_gate import RESOLUTION_RUN_ID, run_started_at
+
+    started = run_started_at(root, run_id)
+    if started is not None:
+        return started
+    prep = inline_review.get("prep") if isinstance(inline_review, dict) else None
+    base = prep.get("run_base_sha") if isinstance(prep, dict) else None
+    if not (isinstance(base, str) and _SIZING_OBJECT_RESOLUTION.match(base)) and run_id and RESOLUTION_RUN_ID.match(run_id):
+        from coordinator_core.ops.dispatch_emit.ask_fanout_contract import recorded_run_base
+
+        base = recorded_run_base(root, run_id)
+    if not (isinstance(base, str) and _SIZING_OBJECT_RESOLUTION.match(base)):
+        return None
+    from coordinator_core.git.commit_walk import commit_meta
+    from coordinator_core.git.git_dir import resolve_git_common_dir
+
+    epoch = (commit_meta(resolve_git_common_dir(root), base) or {}).get("committer_epoch")
+    return float(epoch) if isinstance(epoch, int) and not isinstance(epoch, bool) else None
+
+
+def _resumed_review_source(root: Path, inline_review: object, run_id: Optional[str], session_id: Optional[str]) -> tuple:
+    """``(run_id, session_id)`` whose review writes this landing reads: the halted run named by
+    ``inline_review[RESUMED_RUN_ID_KEY]`` with its recorded emitter when that id is safe and its record
+    dir exists; else the caller's own pair."""
+    from coordinator_core.ops._path_guard import safe_id
+    from coordinator_core.ops.dispatch_emit.ask_contract import RESUMED_RUN_ID_KEY, record_dir
+
+    resumed = inline_review.get(RESUMED_RUN_ID_KEY) if isinstance(inline_review, dict) else None
+    if not (isinstance(resumed, str) and resumed and safe_id(resumed)):
+        return run_id, session_id
+    try:
+        if not record_dir(root, resumed).is_dir():
+            return run_id, session_id
+    except ValueError:
+        return run_id, session_id
+    from coordinator_core.ops.dispatch_emit.halted_run import recorded_emitter
+
+    return resumed, recorded_emitter(root, resumed) or session_id
+
+
+def _review_write_events(root: Path, session_id: Optional[str], run_id: Optional[str], inline_review: object) -> dict:
+    """``{path: (sha256, epoch)}`` of each path a review agent of this run wrote: the newest hashed write
+    in that agent's sink, one sink walk per distinct agent. A path whose agent's newest write is hashless,
+    or whose source is unreadable, has no entry."""
+    if not session_id:
+        return {}
+    from coordinator_core.ops.dispatch_emit import review_edit_source
+    from coordinator_core.session import core, touch_record
+
+    read_run_id, read_session = _resumed_review_source(root, inline_review, run_id, session_id)
+    try:
+        writes = review_edit_source.session_review_writes(root, read_session, _review_since(root, read_run_id, inline_review))
+        hub = core.sessions_dir(str(root)) if writes else None
+    except Exception:  # noqa: BLE001 -- an unreadable source is "no agent events", never a refusal
+        return {}
+    if not writes or not hub:
+        return {}
+    by_agent: dict = {}
+    for path, agent_id in writes.items():
+        by_agent.setdefault(agent_id, set()).add(path.replace("\\", "/").removeprefix("./"))
+    out: dict = {}
+    for agent_id, paths in by_agent.items():
+        newest: dict = {}
+        try:
+            for member in touch_record.discover_family(touch_record.sink_path(Path(hub) / ".agents" / agent_id)):
+                for line in touch_record.iter_complete_lines(member.read_bytes()):
+                    try:
+                        ev = touch_record.decode_line(line)
+                    except touch_record.MalformedRecordLine:
+                        continue
+                    if (
+                        ev.verb == touch_record.VERB_TOUCH and ev.kind != touch_record.KIND_READ
+                        and ev.path in paths and ev.timestamp >= newest.get(ev.path, (None, float("-inf")))[1]
+                    ):
+                        newest[ev.path] = (ev.content_hash, ev.timestamp)
+        except OSError:
+            continue
+        out.update({p: v for p, v in newest.items() if v[0]})
     return out
 
 
@@ -1400,23 +1546,26 @@ def _run_own_baton(root: Path, run_id: str) -> Optional[str]:
     return rel if target is not None and target.is_file() else None
 
 
-def _requeue_close(root: Path, reply: dict, params: dict) -> None:
+def _requeue_close(root: Path, params: dict, *, key: Optional[str] = None, criterion: Optional[dict] = None) -> None:
     """A repeat call after a landing re-queues the close legs the first call's job never recorded and
-    refreshes the record's ``criterion`` when this call carries a different one. Never raises."""
+    refreshes the record's ``criterion`` when this call carries a different one. ``key`` names the
+    close-job record (default: the call's script stem); ``criterion`` the call's own verdict (default:
+    ``params.inline_review.criterion``). Never raises."""
     try:
         from datetime import datetime, timedelta
 
         from coordinator_core.ops.ceremony import close_background
         from coordinator_core.ops.dispatch_emit import run_close
 
-        key = PurePosixPath(str(params.get("script_path", "")).replace("\\", "/")).stem
+        key = key or PurePosixPath(str(params.get("script_path", "")).replace("\\", "/")).stem
         path = root / run_close.close_job_path(key)
         if not path.is_file():
             return
         record = json.loads(path.read_text(encoding="utf-8"))
         legs = record.get("legs") if isinstance(record.get("legs"), dict) else {}
-        review = params.get("inline_review")
-        criterion = review.get("criterion") if isinstance(review, dict) else None
+        if criterion is None:
+            review = params.get("inline_review")
+            criterion = review.get("criterion") if isinstance(review, dict) else None
         criterion = criterion if isinstance(criterion, dict) else None
         unfinished = close_background.owed_on_reclose(
             {leg: v.get("status") for leg, v in legs.items() if isinstance(v, dict)}
@@ -1471,9 +1620,7 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
     task_output = params.get("task_output_path") if isinstance(params, dict) else None
     reclose = _reclose_params(root, params)
     if reclose is not None:
-        from coordinator_core.ops.dispatch_emit import close_without_script
-
-        return close_without_script.close_landed_run(root, repo_root, reclose)
+        return _reclose(root, reclose)
     if isinstance(params, dict) and isinstance(params.get("task_output_path"), str):
         try:
             params = {
@@ -1500,7 +1647,7 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
         answered = _redeem_or_answer(root, params.get("run_id"), params["run_token"], script_path)
         if answered is not None:
             if answered.get(ALREADY_LANDED_KEY):
-                _requeue_close(root, answered, params)
+                _requeue_close(root, params)
             return answered
         token_state["claim"] = (root, params.get("run_id"), params["run_token"], script_path)
 
@@ -1908,8 +2055,10 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
         if p not in stranded[row]:
             stranded[row].append(p)
 
+    # A review that applied fixes anchors its trailer on the plan path even when the product matches HEAD.
+    fixes_anchor = bool(inline_review.get("fixes")) and bool(request.plan_path) and bool(_review_trailer(record_abs))
     if not paths and not deleted:
-        if params.get("allow_empty") is True or ((anchor_only or request.review_only) and _review_trailer(record_abs)):
+        if params.get("allow_empty") is True or ((anchor_only or request.review_only or fixes_anchor) and _review_trailer(record_abs)):
             paths = [p for p in declared if p not in absent_dropped and (root / p).is_file()]
             if not paths and request.plan_path and (root / request.plan_path).is_file():
                 paths = [request.plan_path]
@@ -1969,6 +2118,7 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
             excluded={*receipt_paths, bookkeeping_path, note_rel},
             reviewed=reviewed_bytes, reviewed_at=reviewed_at, fixes_integrated_at=fixes_at,
             wave_paths=wave_paths,
+            review_events=_review_write_events(root, session_id, sibling_run_id, inline_review),
         )
         for ev_path, ev_before, ev_after in ([own_evidence_write] if own_evidence_write else []):
             if ev_path in paths and expected.get(ev_path) == ev_before:
@@ -2031,7 +2181,7 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
         try:
             return commit_paths(
                 root, paths, message, deleted_paths=deleted, expected_content_sha256=expected or None,
-                allow_empty=params.get("allow_empty") is True or ((anchor_only or request.review_only) and review_trailed),
+                allow_empty=params.get("allow_empty") is True or ((anchor_only or request.review_only or fixes_anchor) and review_trailed),
                 blob_fallback=lambda ps: hash_worktree_blobs_via_spawn(ps, cwd=root),
             )
         except CommitRefused as lost_exc:
@@ -2039,44 +2189,65 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
                 return lost_exc
             raise
 
-    try:
-        # Receipt files are run-unique, so no peer commit can have touched them.
-        own_receipts = set(receipt_paths)
-        overlap_paths = [p for p in [*paths, *deleted] if p not in own_receipts]
-        outcome, overlap = retry_ref_moved(
-            root, overlap_paths, _attempt, lambda r: isinstance(r, CommitRefused)
-        )
-        if isinstance(outcome, CommitRefused):
-            if overlap:
-                _remove(root, receipt_paths)
-                return _error(f"{outcome} {_OVERLAP_REMEDY}", refused=overlap)
-            raise outcome
-    except BlobDriftRefused as exc:
-        _remove(root, receipt_paths)
-        return _error(
-            blob_drift_remedy(
-                str(exc), root, sibling_run_id, contract.OP_NAME, params.get("task_output_path"),
-                [d.path for d in exc.drift],
-            ),
-            refused="blob-drift",
-            blob_drift=[
+    # Receipt files are run-unique, so no peer commit can have touched them.
+    own_receipts = set(receipt_paths)
+    overlap_paths = [p for p in [*paths, *deleted] if p not in own_receipts]
+    drift_moved = False
+    while True:
+        try:
+            outcome, overlap = retry_ref_moved(
+                root, overlap_paths, _attempt, lambda r: isinstance(r, CommitRefused)
+            )
+            if isinstance(outcome, CommitRefused):
+                if overlap:
+                    _remove(root, receipt_paths)
+                    return _error(f"{outcome} {_OVERLAP_REMEDY}", refused=overlap)
+                raise outcome
+            break
+        except BlobDriftRefused as exc:
+            drift = [
                 {"path": d.path, "basis": d.basis, "expected": d.expected, "actual": d.actual} for d in exc.drift
-            ],
-        )
-    except NothingToCommit as exc:
-        _remove(root, receipt_paths)
-        return _error(str(exc), nothing_to_commit=True)
-    except IndexStaleAfterCommit as exc:
-        if exc.outcome is None:
-            return _error(f"{exc} (the commit landed; resolve its sha with `git log -1`)")
-        outcome = exc.outcome
-        index_stale = list(exc.paths)
-    except CommitRefused as exc:
-        _remove(root, receipt_paths)
-        return _error(str(exc), refused="commit")
-    except Exception as exc:  # noqa: BLE001 -- an unreadable index or ref is a refusal, nothing landed
-        _remove(root, receipt_paths)
-        return _error(f"{type(exc).__name__}: {exc}", refused="commit")
+            ]
+            real_drift = [d["path"] for d in drift]
+            if not drift_moved:
+                from coordinator_core.ops.dispatch_emit.comment_only_drift import tolerated_drift
+
+                # A comment-only edit after the review read the bytes is not a different reviewed
+                # product: the expectation moves once and the drift rides a trailer.
+                tolerated, real = tolerated_drift(
+                    root, inline_review.get("prep_sidecar"), drift, untrusted_paths=[*paths, *deleted]
+                )
+                if tolerated and not real:
+                    expected = {**expected, **{t["path"]: t["actual"] for t in tolerated}}
+                    message = message.rstrip("\n") + "\n" + "\n".join(
+                        f"Comment-Only-Drift: {t['path']} {t['expected'][:12]}->{t['actual'][:12]}" for t in tolerated
+                    ) + "\n"
+                    drift_moved = True
+                    continue
+                real_drift = real or real_drift
+            _remove(root, receipt_paths)
+            return _error(
+                blob_drift_remedy(
+                    str(exc), root, sibling_run_id, contract.OP_NAME, params.get("task_output_path"), real_drift,
+                ),
+                refused="blob-drift",
+                blob_drift=drift,
+            )
+        except NothingToCommit as exc:
+            _remove(root, receipt_paths)
+            return _error(str(exc), nothing_to_commit=True)
+        except IndexStaleAfterCommit as exc:
+            if exc.outcome is None:
+                return _error(f"{exc} (the commit landed; resolve its sha with `git log -1`)")
+            outcome = exc.outcome
+            index_stale = list(exc.paths)
+            break
+        except CommitRefused as exc:
+            _remove(root, receipt_paths)
+            return _error(str(exc), refused="commit")
+        except Exception as exc:  # noqa: BLE001 -- an unreadable index or ref is a refusal, nothing landed
+            _remove(root, receipt_paths)
+            return _error(f"{type(exc).__name__}: {exc}", refused="commit")
 
     sha = outcome.sha
     token_state["landed"] = True
@@ -2282,19 +2453,9 @@ def _stamp_usage(root: Path, run_id: str) -> None:
 
 
 def _within_handoffs_home(root: Path, artifacts):
-    """``artifacts`` without any ``baton`` candidate outside the handoffs home."""
-    from coordinator_core.ops.dispatch_emit import run_artifacts
-    from coordinator_core.session.record_homes import home_dir
+    from coordinator_core.ops.dispatch_emit.land_run_halt import within_handoffs_home
 
-    home = [Path(home_dir(str(root), "handoffs"))]
-    batons = artifacts.by_class.get("baton", ())
-    kept = tuple(p for p in batons if contained_path(root / p, home) is not None)
-    if kept == batons:
-        return artifacts
-    return run_artifacts.RunArtifacts(
-        run_id=artifacts.run_id, by_class={**artifacts.by_class, "baton": kept},
-        record_dirs=artifacts.record_dirs, root=artifacts.root,
-    )
+    return within_handoffs_home(root, artifacts)
 
 
 def _superseded(root: Path, run_id: str, sizing_rel: str, artifacts, run_token) -> tuple:

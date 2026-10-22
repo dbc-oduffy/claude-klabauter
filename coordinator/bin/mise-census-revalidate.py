@@ -388,6 +388,9 @@ class MemoEntry(NamedTuple):
 
 
 _DIRECT_BASIS = "direct: key cost exceeds spawn"
+#: A stored `MemoEntry.key` for a command whose key at an unchanged tree (stat walk, no hash)
+#: costs no less than its spawn: it runs directly. Never an `input_key` digest, so it never hits.
+_DIRECT_KEY = "direct"
 #: Largest stdout+stderr a keyed `MemoEntry` retains; a bigger run is judged and not stored, so the
 #: engine-lifetime memo cannot grow by one unbounded census output per plan.
 _MEMO_MAX_OUTPUT = 256 * 1024
@@ -428,12 +431,20 @@ class _TreeView:
 
     def __init__(
         self, root: Path, deadline: Optional[float] = None, store: Any = None,
-        deadline_gates_hashing: bool = False,
+        deadline_gates_hashing: bool = False, hash_budget_s: Optional[float] = None,
     ):
         self.root = Path(root)
         self.deadline = deadline
         self.store = store
         self.deadline_gates_hashing = deadline_gates_hashing
+        #: Seconds of hashing this view may spend; once `hash_s` reaches it a file without a
+        #: stored or index identity has none this call, so its key is None and the entry runs.
+        #: Identities already hashed stay in the store, so the next call resumes from them.
+        self.hash_budget_s = hash_budget_s
+        #: Seconds spent hashing so far; the share of a key a later call at an unchanged tree
+        #: does not pay.
+        self.hash_s = 0.0
+        self._subtrees: dict[str, Optional[str]] = {}
         self._loaded = False
         self._dash: Optional[bool] = None
         self._entries: Optional[dict] = None
@@ -519,8 +530,11 @@ class _TreeView:
                     and time.monotonic() > self.deadline
                 ):
                     ident = None
+                elif self.hash_budget_s is not None and self.hash_s >= self.hash_budget_s:
+                    ident = None
                 else:
                     computed_at_ns = time.time_ns()
+                    hashing_from = time.perf_counter()
                     if cached is None and in_dir:
                         ident = self._raw_id(rel, st.st_size)
                     else:
@@ -529,51 +543,63 @@ class _TreeView:
                         sha = checkin_blob_sha(self.root, rel)
                         if sha is not None:
                             ident = f"{sha}:{st.st_size}"
+                    self.hash_s += time.perf_counter() - hashing_from
                     if ident is not None and self.store is not None:
                         self.store.put_ident(rel, st, f"{tag}|{ident}", computed_at_ns)
         self._files[slot] = ident
         return ident
 
-    def _walk(self, rel: str, digest: Any) -> bool:
+    def _subtree(self, rel: str) -> Optional[str]:
+        """The digest text of everything under `rel`, memoised per directory so a directory
+        nested under another operand is scanned once; None when any part cannot be bounded."""
+        if rel not in self._subtrees:
+            self._subtrees[rel] = self._scan(rel)
+        return self._subtrees[rel]
+
+    def _scan(self, rel: str) -> Optional[str]:
         if (
             self.deadline is not None
             and not self.deadline_gates_hashing
             and time.monotonic() > self.deadline
         ):
-            return False
+            return None
         try:
             with os.scandir(self.root / rel) as it:
                 kids = sorted(it, key=lambda k: k.name)
         except OSError:
-            return False
+            return None
+        lines: list[str] = []
         for kid in kids:
             if kid.name == ".git":
                 continue
             child = f"{rel}/{kid.name}"
             try:
                 if kid.is_symlink():
-                    line = f"l\0{child}\0{os.readlink(kid.path)}\n"
+                    lines.append(f"l\0{child}\0{os.readlink(kid.path)}\n")
                 elif kid.is_dir(follow_symlinks=False):
-                    digest.update(f"d\0{child}\n".encode("utf-8", "surrogateescape"))
-                    if not self._walk(child, digest):
-                        return False
-                    continue
+                    inner = self._subtree(child)
+                    if inner is None:
+                        return None
+                    lines.append(f"d\0{child}\n")
+                    lines.append(inner)
                 elif kid.is_file(follow_symlinks=False):
                     ident = self.file_id(child, kid.stat(follow_symlinks=False), True)
                     if ident is None:
-                        return False
-                    line = f"f\0{child}\0{ident}\n"
+                        return None
+                    lines.append(f"f\0{child}\0{ident}\n")
                 else:
-                    return False
+                    return None
             except OSError:
-                return False
-            digest.update(line.encode("utf-8", "surrogateescape"))
-        return True
+                return None
+        return "".join(lines)
 
     def dir_id(self, rel: str) -> Optional[str]:
         if rel not in self._dirs:
-            digest = hashlib.sha1()
-            self._dirs[rel] = digest.hexdigest() if self._walk(rel, digest) else None
+            text = self._subtree(rel)
+            self._dirs[rel] = (
+                hashlib.sha1(text.encode("utf-8", "surrogateescape")).hexdigest()
+                if text is not None else None
+            )
         return self._dirs[rel]
 
     def path_id(self, rel: str) -> Optional[str]:
@@ -782,6 +808,7 @@ def input_key(
     *,
     head: Optional[str],
     view: Optional[_TreeView] = None,
+    stage_cache: Optional[dict] = None,
 ) -> Optional[str]:
     """A digest over everything the entry's command can read, or None when that set cannot be
     bounded. INVARIANT: equal keys for one command imply byte-identical stdout, stderr and
@@ -821,7 +848,7 @@ def input_key(
         or _shell_expands(command, not tree.has_dash_names())
     ):
         return None
-    stages = census._split_stages(command)
+    stages = _stages(command, stage_cache)
     if not stages or any(not st for st in stages):
         return None
     digest = hashlib.sha1()
@@ -853,7 +880,17 @@ def input_key(
     return digest.hexdigest()
 
 
-def _git_stage_refused(entry: dict, head: Optional[str]) -> bool:
+def _stages(command: str, cache: Optional[dict]) -> Optional[list]:
+    """`census._split_stages(command)`, split once per distinct command when a per-call `cache`
+    is given."""
+    if cache is None:
+        return _census()._split_stages(command)
+    if command not in cache:
+        cache[command] = _census()._split_stages(command)
+    return cache[command]
+
+
+def _git_stage_refused(entry: dict, head: Optional[str], stage_cache: Optional[dict] = None) -> bool:
     """True when `input_key` is certain to refuse `entry` on a git stage (one that reads beyond
     HEAD, or any git stage with `head` None). `revalidate` runs those after every other entry."""
     census = _census()
@@ -862,7 +899,7 @@ def _git_stage_refused(entry: dict, head: Optional[str]) -> bool:
     command = str(entry.get("command") or "").strip()
     if not command or _UNBOUNDED_SHAPE.search(command):
         return False
-    stages = census._split_stages(command)
+    stages = _stages(command, stage_cache)
     for raw in stages or ():
         parts = _scrub_redirects(raw) if raw else None
         if parts and parts[0] == "git" and not _git_history_only(parts[1:], head):
@@ -959,12 +996,22 @@ def _entry_row(
     prior run no dearer than its key spawns directly, keyless); then `input_key` against the
     prior key (an equal non-None key judges the prior run, no spawn); then a deadline-bounded
     spawn whose completed run is stored as a `MemoEntry`. Neither a skip nor a memo hit spends a
-    spawn, so neither consults the deadline."""
+    spawn, so neither consults the deadline.
+
+    `stats["shared"]` holds the per-call screen, key and stage-split results by command text.
+    Under `stats["hold"]` an entry with no prior run is held before it is keyed. The cost gate
+    reads `key_ms` as the key's cost at an unchanged tree (its hashing excluded); a prior whose
+    key is `_DIRECT_KEY` or any non-None key at that cost spawns directly, and a prior with a
+    None key is keyed again. `stats["no_spawn"]`, a callable, ends the spawns of a call."""
     census = _census()
     command = str(e.get("command") or "").strip()
     if census.is_typed(e) or not command:
         return _deadline_bounded(e, repo_root, timeout, plan_rel, deadline)
-    refusal = screen(command, repo_root)
+    shared = stats.setdefault("shared", {}) if stats is not None else {}
+    screens = shared.setdefault("screen", {})
+    if command not in screens:
+        screens[command] = screen(command, repo_root)
+    refusal = screens[command]
     if refusal:
         return _deadline_bounded(e, repo_root, timeout, plan_rel, deadline)
     row: dict[str, Any] = {"question": str(e.get("question") or ""), "command": command}
@@ -979,15 +1026,28 @@ def _entry_row(
         return row
     prior = memo.get(command) if memo is not None else None
     prior = prior if isinstance(prior, MemoEntry) else None
-    direct = prior is not None and prior.key_ms is not None and prior.run_ms <= prior.key_ms
+    direct = (
+        prior is not None and prior.key is not None
+        and prior.key_ms is not None and prior.run_ms <= prior.key_ms
+    )
     key: Optional[str] = None
     key_ms: Optional[int] = None
     if memo is not None and not direct:
-        started = time.perf_counter()
-        key = input_key(e, repo_root, head=head, view=view)
-        key_ms = _ms_since(started)
-        if stats is not None:
-            stats["key_ms"] = stats.get("key_ms", 0) + key_ms
+        if prior is None and stats is not None and stats.get("hold"):
+            return _HELD
+        keys = shared.setdefault("key", {})
+        if command not in keys:
+            hashed_from = view.hash_s if view is not None else 0.0
+            started = time.perf_counter()
+            computed = input_key(
+                e, repo_root, head=head, view=view, stage_cache=shared.setdefault("stages", {})
+            )
+            spent_ms = _ms_since(started)
+            if stats is not None:
+                stats["key_ms"] = stats.get("key_ms", 0) + spent_ms
+            hashed_ms = int(round(((view.hash_s if view is not None else 0.0) - hashed_from) * 1000))
+            keys[command] = (computed, max(0, spent_ms - hashed_ms))
+        key, key_ms = keys[command]
         if key is not None and prior is not None and prior.key == key:
             memo[command] = prior._replace(key_ms=key_ms)
             if stats is not None:
@@ -996,7 +1056,7 @@ def _entry_row(
     if stats is not None and stats.get("hold"):
         return _HELD
     bounded = _remaining_timeout(timeout, deadline)
-    if bounded is None:
+    if bounded is None or (stats is not None and stats.get("no_spawn", _never)()):
         return _deadline_row(e)
     started = time.perf_counter()
     ran = _spawn(command, repo_root, bounded)
@@ -1010,7 +1070,9 @@ def _entry_row(
         if len(ran[1]) + len(ran[2]) > _MEMO_MAX_OUTPUT:
             memo.pop(command, None)
             return _judge(e, row, ran, plan_rel)
-        memo[command] = MemoEntry(None, ran, run_ms, prior.key_ms)
+        memo[command] = MemoEntry(
+            prior.key if prior.key == _DIRECT_KEY else None, ran, run_ms, prior.key_ms
+        )
         if stats is not None:
             stats["direct_runs"] += 1
         row = _judge(e, row, ran, plan_rel)
@@ -1019,6 +1081,8 @@ def _entry_row(
     if len(ran[1]) + len(ran[2]) > _MEMO_MAX_OUTPUT:
         memo.pop(command, None)
         return _judge(e, row, ran, plan_rel)
+    if key is not None and key_ms is not None and run_ms <= key_ms:
+        key = _DIRECT_KEY
     memo[command] = MemoEntry(key, ran, run_ms, key_ms)
     return _judge(e, row, ran, plan_rel)
 
@@ -1070,12 +1134,76 @@ def revalidate(
     return _plan_reply(plan, entries, spent_ms, stats)
 
 
-def _plan_census(plan: Path, require_stamp: bool) -> tuple[Optional[dict], list]:
+_CENSUS_HEAD = re.compile(r"^census:[ \t]*(?:#[^\n]*)?\n", re.M)
+_NEXT_TOP_KEY = re.compile(r"^(?![ \t\r\n#-])", re.M)
+
+
+def _census_block(fm_text: str, yaml: Any) -> Optional[list]:
+    """The `census:` list parsed from just that top-level block of the frontmatter, so a plan's
+    other keys are never parsed. None (the caller parses the whole frontmatter) when the block
+    is not one plain block list: absent or repeated key, a flow or scalar value, a parse error."""
+    heads = _CENSUS_HEAD.findall(fm_text)
+    if len(heads) != 1 or len(re.findall(r"^census:", fm_text, re.M)) != 1:
+        return None
+    head = _CENSUS_HEAD.search(fm_text)
+    rest = fm_text[head.end():]
+    stop = _NEXT_TOP_KEY.search(rest)
+    block = fm_text[head.start():head.end() + (stop.start() if stop else len(rest))]
+    try:
+        doc = yaml.safe_load(block)
+    except yaml.YAMLError:
+        return None
+    census = doc.get("census") if isinstance(doc, dict) else None
+    return census if isinstance(census, list) else None
+
+
+def _parsed_key(plan_rel: Optional[str]) -> Optional[str]:
+    """The store key under which a plan's parsed `census:` list is held: the plan's own path
+    spelled through its parent (`docs/plans/../plans/a.md`). It must name an existing path or
+    `CensusStore.save` drops it as absent, and must differ from `plan_rel` itself, which
+    `_TreeView.file_id` owns when a directory operand covers the plan."""
+    if not plan_rel or "/" not in plan_rel:
+        return None
+    parent, name = plan_rel.rsplit("/", 1)
+    return f"{parent}/../{parent.rsplit('/', 1)[-1]}/{name}"
+
+
+def _plan_census(
+    plan: Path, require_stamp: bool, store: Any = None, plan_rel: Optional[str] = None
+) -> tuple[Optional[dict], list]:
     """`(early_reply, census_entries)`: an early reply when the plan cannot be revalidated at all
-    (bad frontmatter, not CERTIFIED under `require_stamp`, no `census:` list)."""
+    (bad frontmatter, not CERTIFIED under `require_stamp`, no `census:` list). With a `store`
+    and no stamp requirement, a plan whose stat is unchanged since its list was last parsed
+    takes the stored list and is neither read nor parsed; the stat check is the store's own
+    (size, mtime, inode, racy-clean)."""
+    pkey = _parsed_key(plan_rel) if store is not None and not require_stamp else None
+    computed_at_ns = time.time_ns()
+    if pkey is not None:
+        try:
+            st = os.stat(plan)
+        except OSError:
+            pkey = None
+        else:
+            stored = store.ident(pkey, st)
+            if stored is not None and stored.startswith("c|"):
+                try:
+                    return None, json.loads(stored[2:])
+                except ValueError:
+                    pass
     yaml = _load_yaml()
     text = plan.read_text(encoding="utf-8", errors="replace")
     parts = text.split("---", 2)
+    if not require_stamp and len(parts) >= 3:
+        sliced = _census_block(parts[1], yaml)
+        if sliced is not None:
+            if pkey is not None:
+                try:
+                    blob = json.dumps(sliced)
+                    if json.loads(blob) == sliced:
+                        store.put_ident(pkey, st, "c|" + blob, computed_at_ns)
+                except (TypeError, ValueError):
+                    pass
+            return None, sliced
     fm = {}
     if len(parts) >= 3:
         try:
@@ -1117,6 +1245,17 @@ def _plan_reply(plan: Path, entries: list, spent_ms: int, stats: dict) -> dict:
 
 
 _BUDGET_SPENT = "not run: set census budget spent"
+#: Seconds a `revalidate_set` call may spend hashing files it holds no identity for. Past it the
+#: file's identity is None, the entry runs, and the next call resumes from the store.
+_HASH_BUDGET_S = 0.06
+#: Process seconds into a `revalidate_set` call after which no new command is spawned (the parent
+#: pays ~1.3ms per spawn), so the call stays under the 500ms process-time bar; the entries left
+#: are `pending` and the next call resumes from the store.
+_SPAWN_PROCESS_S = 0.32
+
+
+def _never() -> bool:
+    return False
 
 
 def revalidate_set(
@@ -1140,10 +1279,19 @@ def revalidate_set(
     free, so a pre-expired deadline still judges every hit, while a first-run hash stops at it.
     """
     started = time.monotonic()
-    view = _TreeView(repo_root, deadline, store, deadline_gates_hashing=True)
+    process_from = time.process_time()
+    view = _TreeView(
+        repo_root, deadline, store, deadline_gates_hashing=True,
+        hash_budget_s=_HASH_BUDGET_S,
+    )
     memo: dict[str, MemoEntry] = {}
     initial: dict[str, MemoEntry] = {}
-    p1 = {"memo_hits": 0, "direct_runs": 0, "key_ms": 0, "hold": True}
+    shared: dict[str, dict] = {}
+
+    def no_spawn() -> bool:
+        return time.process_time() - process_from > _SPAWN_PROCESS_S
+
+    p1 = {"memo_hits": 0, "direct_runs": 0, "key_ms": 0, "hold": True, "shared": shared}
     census = _census()
 
     def seed(command: str) -> None:
@@ -1156,8 +1304,8 @@ def revalidate_set(
     slots: list[dict] = []
     for plan in plans:
         t0 = time.monotonic()
-        early, entries = _plan_census(plan, False)
         plan_rel = plan_rel_path(plan, repo_root)
+        early, entries = _plan_census(plan, False, store, plan_rel)
         slot: dict[str, Any] = {
             "plan": plan, "rel": plan_rel or str(plan), "early": early, "dicts": [],
             "rows": {}, "held": [], "ms": 0, "hits": 0, "direct": 0,
@@ -1186,7 +1334,7 @@ def revalidate_set(
         rec = store.run(command) if store is not None else None
         if rec is not None and isinstance(rec[2], (int, float)):
             return int(rec[2]), True
-        return (median, True) if median is not None else (1, False)
+        return (median, False) if median is not None else (1, False)
 
     ranked: list[tuple[int, int, int, dict]] = []
     for pos, slot in enumerate(slots):
@@ -1202,12 +1350,15 @@ def revalidate_set(
         ranked.append((cost, -never, pos, slot))
     ranked.sort(key=lambda r: r[:3])
 
-    p2 = {"memo_hits": 0, "direct_runs": 0, "key_ms": 0}
+    p2 = {"memo_hits": 0, "direct_runs": 0, "key_ms": 0, "shared": shared, "no_spawn": no_spawn}
     pending: list[str] = []
-    for _cost, _never, _pos, slot in ranked:
+    for _cost, _unrun, _pos, slot in ranked:
         t0 = time.monotonic()
         dicts = slot["dicts"]
-        held = sorted(slot["held"], key=lambda i: _git_stage_refused(dicts[i], head))
+        stage_cache = shared.setdefault("stages", {})
+        held = sorted(
+            slot["held"], key=lambda i: _git_stage_refused(dicts[i], head, stage_cache)
+        )
         unreached = False
         hits0, direct0 = p2["memo_hits"], p2["direct_runs"]
         for i in held:
@@ -1227,7 +1378,9 @@ def revalidate_set(
     for command, now in memo.items():
         was = initial.get(command)
         if store is not None and (
-            was is None or (now.key, now.ran, now.run_ms) != (was.key, was.ran, was.run_ms)
+            was is None
+            or (now.key, now.ran, now.run_ms, now.key_ms)
+            != (was.key, was.ran, was.run_ms, was.key_ms)
         ):
             store.put_run(command, now.key, now.ran, now.run_ms, now.key_ms)
     if store is not None:

@@ -6,7 +6,7 @@ through the landing: one scoped commit, with the close legs queued to the close
 job. `--setup-only` does everything except the handler call, so the cost of the
 call is `full - setup-only` (the run-close spike's method).
 
-    python -m coordinator_core.benchmarks.terminal_commit_full_path <dir> [--setup-only] [--kind plan|mise|ask] [--real-shape]
+    python -m coordinator_core.benchmarks.terminal_commit_full_path <dir> [--setup-only] [--kind plan|mise|ask|reclose] [--real-shape]
 
 `--real-shape` (ask only) grows the fixture to the incident's tree, corpus, launch dir and a live
 run token (`build_real_shape`); the call then carries `run_id` and `run_token` as a field call does.
@@ -24,6 +24,10 @@ completed, whatever the time: the caller gates on it.
 
 `--kind mise` rewires the same repo as an inventory-mode run: the emitted script's marker
 names a minted spine, whose sibling inventory record maps row `P1.C3` to the source plan.
+
+`--kind reclose` lands the plan fixture once in setup (`--setup-only` pays it too, so it cancels out of
+the net), then measures a repeat call carrying a `close_job` digest with a fresh criterion: the reply
+is `already_landed`, the close-job record takes the criterion and its queued legs are re-queued.
 
 The argv is re-run k times by `batched_process_time_ms`, so every invocation
 takes its own subdirectory; nothing is shared between runs.
@@ -312,6 +316,34 @@ def _write_tree(repo: Path, files: int) -> None:
         (d / f"f{i:05d}.txt").write_text(f"{i}\n", encoding="utf-8")
 
 
+def _commit_dirs_fast_import(repo: Path, dirs: tuple[str, ...], message: str) -> None:
+    """Commit every file under `dirs` on top of HEAD through one `git fast-import` stream.
+
+    `git add` writes one loose object per file, which costs over a minute for the 41.5k-file tree on
+    Windows; fast-import writes a single pack. Ends with `git reset -q` because fast-import moves the
+    branch ref without touching the index.
+    """
+    head = subprocess.run(
+        ["git", "symbolic-ref", "HEAD"], cwd=str(repo), capture_output=True, check=True,
+        **no_console_creationflags(),
+    ).stdout.strip()
+    msg = message.encode("utf-8")
+    parts = [
+        b"commit " + head + b"\ncommitter t <t@example.com> 1 +0000\ndata %d\n%b\nfrom HEAD\n" % (len(msg), msg)
+    ]
+    for d in dirs:
+        for f in sorted((repo / d).rglob("*")):
+            if f.is_file():
+                body = f.read_bytes()
+                rel = f.relative_to(repo).as_posix().encode("utf-8")
+                parts.append(b"M 100644 inline %b\ndata %d\n%b\n" % (rel, len(body), body))
+    subprocess.run(
+        ["git", "fast-import", "--quiet"], cwd=str(repo), input=b"".join(parts), capture_output=True,
+        check=True, **no_console_creationflags(),
+    )
+    _git(repo, "reset", "-q")
+
+
 def build_real_shape(repo: Path) -> str:
     """Grow an ask fixture to the shape the 2026-10-21 incident ran at, sizes from
     docs/research/2026-10-21-terminal-commit-real-shape-attribution.md: a tracked tree, a
@@ -350,8 +382,7 @@ def build_real_shape(repo: Path) -> str:
             "delivery:\n  verdict: PASS\n---\n\nbody\n",
             encoding="utf-8",
         )
-    _git(repo, "add", "tree", "state/sizings", "state/delivery-verdicts")
-    _git(repo, "commit", "-q", "-m", "real-shape corpus")
+    _commit_dirs_fast_import(repo, ("tree", "state/sizings", "state/delivery-verdicts"), "real-shape corpus")
 
     transcript = repo.parent / f"{repo.name}-transcript.jsonl"
     line = json.dumps({"type": "assistant", "text": "x" * REAL_TRANSCRIPT_LINE_BYTES}) + "\n"
@@ -515,9 +546,44 @@ def _stub_fanout_relay() -> None:
     ask_fanout.fanout = lambda params, root: {"exit_code": 0, "ready": [], "runs": []}
 
 
-def _run_full_path(repo: Path, script: str, kind: str = "plan", run_token: Optional[str] = None) -> dict:
+RECLOSE_DIGEST = "reclose-digest.json"
+RECLOSE_CRITERION = {
+    "status": "met",
+    "observation": "a.py exists at HEAD, re-judged",
+    "sidecar": "j2.md",
+    "completion_summary": "Shipped a.py. It makes the fixture plan's criterion true.",
+    "authored_by": "terminal-judge",
+}
+
+
+def _land_for_reclose(repo: Path, script: str) -> Path:
+    """The reclose shape's setup, paid by `--setup-only` too: land the run once so HEAD carries its
+    product and the close-job record holds the queued legs, and write the `close_job` digest a repeat
+    call carries beside the repo (a fresh criterion, no run outcome)."""
+    import json
+
+    first = _run_full_path(repo, script, "plan")
+    if first.get("committed") is not True:
+        raise RuntimeError(f"reclose setup: the first landing did not land: {first!r}")
+    digest = repo.parent / f"{repo.name}-{RECLOSE_DIGEST}"
+    result = {
+        "next_action": {"kind": "close_job", "op": None, "params": {"run_id": Path(script).stem}},
+        "inline_review": {"criterion": RECLOSE_CRITERION},
+    }
+    digest.write_text(json.dumps({"result": result}), encoding="utf-8")
+    return digest
+
+
+def _run_full_path(
+    repo: Path, script: str, kind: str = "plan", run_token: Optional[str] = None, digest: Optional[Path] = None
+) -> dict:
     from coordinator_core.ops.dispatch_emit import land_run
 
+    if kind == "reclose":
+        return land_run._handler(
+            {"script_path": script, "session_id": SESSION_ID, "task_output_path": str(digest)},
+            repo_root=repo / ".git",
+        )
     if kind == "fanout":
         _stub_fanout_relay()
         return land_run._handler(
@@ -571,6 +637,10 @@ def _landed_failure(out: dict, kind: str) -> str:
     if kind == "fanout":
         fan = out.get("fanout") or {}
         return "" if fan.get("exit_code") == 0 else f"fanout relay not reached: {out!r}"
+    if kind == "reclose":
+        if out.get("already_landed") is not True or out.get("criterion_status") != RECLOSE_CRITERION["status"]:
+            return f"reclose did not answer already_landed with the refreshed criterion: {out!r}"
+        return ""
     if out.get("review_stamp") != "deferred":
         return f"review stamp not deferred to the close job: {out.get('review_stamp')!r}"
     return ""
@@ -593,7 +663,9 @@ def main(argv: list[str]) -> int:
     args = [a for a in argv if not a.startswith("--")]
     flags = ("--setup-only", "--real-shape", "--build-only")
     unknown = [a for a in argv if a.startswith("--") and a not in flags]
-    builders = {"plan": build_fixture, "mise": build_mise_fixture, "ask": build_ask_fixture}
+    builders = {
+        "plan": build_fixture, "mise": build_mise_fixture, "ask": build_ask_fixture, "reclose": build_fixture,
+    }
     build_only = "--build-only" in argv
     bad_shape = (build_only and not (real_shape and kind in ("ask", "fanout"))) or (
         real_shape and not build_only and kind != "ask"
@@ -608,7 +680,7 @@ def main(argv: list[str]) -> int:
         or (prebuilt is not None and (build_only or real_shape))
     ):
         print(
-            "usage: terminal_commit_full_path <dir> [--setup-only] [--kind plan|mise|ask] "
+            "usage: terminal_commit_full_path <dir> [--setup-only] [--kind plan|mise|ask|reclose] "
             "[--real-shape (ask only)] [--build-only (with --kind ask|fanout --real-shape)]\n"
             "       terminal_commit_full_path --prebuilt <dir> [--setup-only]",
             file=sys.stderr,
@@ -631,12 +703,13 @@ def main(argv: list[str]) -> int:
     from coordinator_core.ops.dispatch_emit import land_run  # noqa: F401  (loaded in both modes)
 
     _prepare_close(repo)
+    digest = _land_for_reclose(repo, script) if kind == "reclose" else None
     if "--setup-only" in argv:
         return 0
     import time
 
     started = time.process_time()
-    out = _run_full_path(repo, script, kind, token)
+    out = _run_full_path(repo, script, kind, token, digest)
     handler_ms = (time.process_time() - started) * 1000.0
     if prebuilt is not None:
         import json

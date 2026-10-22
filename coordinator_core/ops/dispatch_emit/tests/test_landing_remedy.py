@@ -10,6 +10,7 @@ import pytest
 
 from coordinator_core.ops.dispatch_emit import landing_remedy as lr
 from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
+from coordinator_core.ops.dispatch_emit.land_run_contract import OP_NAME
 
 GENERIC = "Re-review the current bytes and pass their blob, or leave the path out."
 
@@ -30,7 +31,8 @@ def test_invoke_call_unquotable_path_prints_placeholder(path):
 
 
 def test_release_held_call_sorts_ids():
-    line = lr.release_held_call("dispatch.terminal_commit", "t.output", ["C2", "C0", "C1"])
+    line = lr.release_held_call(OP_NAME, "t.output", ["C2", "C0", "C1"])
+    assert line.startswith(f"coordinator-invoke {OP_NAME} ")
     assert _json_of(line) == {"release_held": ["C0", "C1", "C2"]}
 
 

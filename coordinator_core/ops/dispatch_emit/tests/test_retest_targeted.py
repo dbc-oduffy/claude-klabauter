@@ -215,3 +215,25 @@ def test_gate_fresh_fail_record_honours_failed_tests_param(repo, tmp_path):
     findings, check = li.landing_test_gate(repo, {"failed_tests": ["test_a.py::test_a"]}, RUN_ID)
     assert check == "pre-existing-only" or findings[0].path == "test_a.py"
     assert check != "failed" or "no baseline" not in findings[0].detail
+
+
+@pytest.mark.parametrize("run_id", ["../escape", "a/b", ".."])
+def test_unsafe_run_id_refuses_before_any_write(repo, tmp_path, run_id):
+    params = {"run_id": run_id, "script_path": "x/y", "targeted_tests": {"status": "fail", "baseline": None}}
+    out = tmp_path / "task.output"
+    out.write_text(json.dumps({"next_action": {"params": params}}), encoding="utf-8")
+    rc = retest_targeted.main(
+        ["--from-task-output", str(out), "--tests", "test_a.py", "--repo-root", str(repo)],
+        run=lambda argv, cwd: pytest.fail("must not run"),
+    )
+    assert rc == 2
+    assert not (repo / li.RETEST_DIR).exists() and not (tmp_path / "escape.json").exists()
+
+
+@pytest.mark.parametrize("test_path", ["../outside.py", "../../x.py::t"])
+def test_test_path_escaping_the_repo_refuses_without_running(repo, tmp_path, test_path):
+    rc = retest_targeted.main(
+        ["--from-task-output", str(_task_output(tmp_path)), "--tests", test_path, "--repo-root", str(repo)],
+        run=lambda argv, cwd: pytest.fail("must not run"),
+    )
+    assert rc == 2

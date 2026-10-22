@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import json
 import sys
 from pathlib import Path
 
@@ -254,8 +255,10 @@ def test_hint_spawns_nothing(tmp_path, monkeypatch):
 
 def test_verdicts_identical_with_and_without_sibling(tmp_path, monkeypatch):
     seq = [True, True, False, False]
-    a = _stream(seq, tmp_path / "a", sibling=True, monkeypatch=monkeypatch) if (tmp_path / "a").mkdir() is None else None
-    b = _stream(seq, tmp_path / "b", sibling=False, monkeypatch=monkeypatch) if (tmp_path / "b").mkdir() is None else None
+    (tmp_path / "a").mkdir()
+    (tmp_path / "b").mkdir()
+    a = _stream(seq, tmp_path / "a", sibling=True, monkeypatch=monkeypatch)
+    b = _stream(seq, tmp_path / "b", sibling=False, monkeypatch=monkeypatch)
     strip = lambda ls: [x for x in ls if "CACHE-TRIM-HINT" not in x]
     assert strip(a) == strip(b) and any("PAUSED" in x for x in a) and any("RESUMED" in x for x in a)
 
@@ -267,3 +270,97 @@ def test_help_exits_zero_on_linux(monkeypatch):
     with pytest.raises(SystemExit) as exc:
         gov.main(["--help"])
     assert exc.value.code == 0
+
+
+def test_pids_are_in_pidfile_before_freeze_and_cleared_on_resume(tmp_path):
+    pidfile = tmp_path / "frozen.json"
+    seen = []
+    verdicts = iter([True, False, False])
+
+    def signal_fn(pids, stop):
+        seen.append((stop, pidfile.exists() and sorted(
+            e["pid"] for e in json.loads(pidfile.read_text())["frozen"])))
+
+    gov.run(_args(), emit=lambda line: None, sample=lambda: next(verdicts), procs_fn=lambda: PROCS,
+            signal_fn=signal_fn, sleep=lambda s: None, max_ticks=3, pidfile=pidfile)
+    assert seen[0] == (True, [60])  # recorded before the freeze signal
+    assert seen[1][0] is False
+    assert not pidfile.exists()
+
+
+def test_finally_thaw_clears_pidfile(tmp_path):
+    pidfile = tmp_path / "frozen.json"
+
+    def sample():
+        if pidfile.exists():
+            raise SystemExit(0)
+        return True
+
+    try:
+        gov.run(_args(), emit=lambda line: None, sample=sample, procs_fn=lambda: PROCS,
+                signal_fn=lambda pids, stop: None, sleep=lambda s: None, pidfile=pidfile)
+    except SystemExit:
+        pass
+    assert not pidfile.exists()
+
+
+def test_start_thaws_leftover_pids_before_first_sample(tmp_path):
+    pidfile = tmp_path / "frozen.json"
+    _record(pidfile, 999999, 5.0, [(70, 7.0), (71, 8.0)])  # a governor hard-killed mid-freeze
+    calls = []
+    _run_start(pidfile, calls, {70: 7.0, 71: 8.0}.get)
+    assert calls == [((70, 71), False), "sample"]
+    assert not pidfile.exists()
+
+
+def _record(pidfile, owner, owner_start, frozen):
+    pidfile.write_text(json.dumps({
+        "governor_pid": owner, "governor_start_time": owner_start,
+        "frozen": [{"pid": p, "start_time": s} for p, s in frozen]}))
+
+
+def _run_start(pidfile, calls, start_time_fn):
+
+    def sample():
+        calls.append("sample")
+        return False
+
+    gov.run(_args(), emit=lambda line: None, sample=sample, procs_fn=lambda: PROCS,
+            signal_fn=lambda pids, stop: calls.append((tuple(pids), stop)),
+            sleep=lambda s: None, max_ticks=1, pidfile=pidfile, start_time_fn=start_time_fn)
+
+
+def test_alive_owner_thaws_nothing_and_keeps_file(tmp_path):
+    pidfile = tmp_path / "frozen.json"
+    _record(pidfile, 10, 100.0, [(70, 7.0)])
+    times = {10: 100.5, 70: 7.0}
+    calls = []
+    assert gov.thaw_leftovers(pidfile, lambda p, s: calls.append(p), times.get) == []
+    assert calls == [] and pidfile.exists()
+
+
+def test_reused_pid_is_skipped(tmp_path):
+    pidfile = tmp_path / "frozen.json"
+    _record(pidfile, 10, 100.0, [(70, 7.0), (71, 8.0)])
+    times = {70: 999.0, 71: 8.0}  # owner dead; pid 70 now a different process
+    calls = []
+    assert gov.thaw_leftovers(pidfile, lambda p, s: calls.append((p, s)), times.get) == [71]
+    assert calls == [([71], False)]
+
+
+def test_dead_owner_matching_pids_thawed_and_file_cleared(tmp_path):
+    pidfile = tmp_path / "frozen.json"
+    _record(pidfile, 10, 100.0, [(70, 7.0)])
+    times = {70: 7.0, 10: 555.0}  # owner pid reused by another process
+    calls = []
+    assert gov.thaw_leftovers(pidfile, lambda p, s: calls.append(p), times.get) == [70]
+    assert calls == [[70]] and not pidfile.exists()
+
+
+def test_thaw_leftovers_ignores_missing_and_malformed(tmp_path):
+    calls = []
+    assert gov.thaw_leftovers(tmp_path / "none.json", lambda p, s: calls.append(p)) == []
+    bad = tmp_path / "bad.json"
+    bad.write_text("not json")
+    assert gov.thaw_leftovers(bad, lambda p, s: calls.append(p)) == []
+    assert calls == [] and not bad.exists()

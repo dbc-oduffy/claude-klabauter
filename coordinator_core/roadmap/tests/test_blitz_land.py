@@ -1602,3 +1602,73 @@ def test_approve_ready_leaves_a_later_status_without_a_stamp_untouched(tmp_path,
 
     assert out["stamped"] is False
     assert (root / plan).read_text(encoding="utf-8") == before
+
+
+# ---------------------------------------------------------------------------
+# A residue plan names the baton's governing plan; landing never repoints
+# ---------------------------------------------------------------------------
+
+
+def _residue_fixture(root: Path):
+    parent = _plan(root, "parent-plan", "executing", deliverable_id="dlv-parent")
+    baton = _baton(root, "b-1", deliverable_id="dlv-b-1", governing_plan=parent)
+    residue = _plan(root, "residue-plan", "reviewed", deliverable_id="dlv-residue", governing_plan=parent)
+    return parent, baton, residue
+
+
+def test_a_residue_plan_lands_approved_without_repointing_the_baton(tmp_path):
+    root = _repo(tmp_path)
+    parent, baton, residue = _residue_fixture(root)
+
+    out = bl.land_wave(root, {"waveIndex": 0, "ready": [{"batonId": "b-1", "planPath": residue}]})
+
+    assert not out["refused"]
+    assert out["approved"][0]["residue_of"] == parent
+    assert out["approved"][0]["stamped"] is True
+    assert _status(root, residue) == "approved"
+    assert _status(root, parent) == "executing"
+    assert pg._read_baton_fields(root / baton)["governing_plan"] == parent
+
+
+def test_a_non_residue_different_plan_is_still_refused(tmp_path):
+    root = _repo(tmp_path)
+    parent, baton, _ = _residue_fixture(root)
+    stranger_parent = _plan(root, "other-parent", "executing")
+    stranger = _plan(root, "stranger-plan", "reviewed", governing_plan=stranger_parent)
+    unlinked = _plan(root, "unlinked-plan", "reviewed")
+
+    for plan in (stranger, unlinked):
+        out = bl.land_wave(root, {"waveIndex": 0, "ready": [{"batonId": "b-1", "planPath": plan}]})
+        assert not out["approved"]
+        assert "different governing_plan" in out["refused"][0]["reason"]
+        assert _status(root, plan) == "reviewed"
+    assert pg._read_baton_fields(root / baton)["governing_plan"] == parent
+
+
+def test_re_landing_a_residue_plan_is_a_noop(tmp_path):
+    root = _repo(tmp_path)
+    parent, baton, residue = _residue_fixture(root)
+    result = {"waveIndex": 0, "ready": [{"batonId": "b-1", "planPath": residue}]}
+
+    bl.land_wave(root, result)
+    second = bl.land_wave(root, result)
+
+    assert not second["refused"] and not second["approved"]
+    assert second["noop"][0]["baton"] == "b-1"
+    assert "already at status" in second["noop"][0]["reason"]
+    assert pg._read_baton_fields(root / baton)["governing_plan"] == parent
+
+
+def test_a_spec_dispatch_residue_plan_lands_approved_and_keeps_the_baton_on_its_parent(tmp_path):
+    root = _repo(tmp_path)
+    parent, baton, residue = _residue_fixture(root)
+    entry = {"batonId": "b-1", "planPath": residue, "route": "spec-dispatch"}
+
+    out = bl.land_wave(root, {"waveIndex": 0, "ready": [entry]})
+
+    assert not out["refused"] and not out["execution_ready"]
+    assert out["approved"][0]["fell_back_from"] == "spec-dispatch"
+    assert _status(root, residue) == "approved"
+    assert pg._read_baton_fields(root / baton)["governing_plan"] == parent
+    assert "handoff_phase" not in pg._read_baton_fields(root / baton)
+    assert bl.land_wave(root, {"waveIndex": 0, "ready": [entry]})["noop"]

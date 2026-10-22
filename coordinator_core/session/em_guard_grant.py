@@ -140,6 +140,7 @@ import tempfile
 from pathlib import Path
 from typing import List, Optional, Tuple
 
+from coordinator_core.machine_profile import out_of_repo_write_blocked
 from coordinator_core.session import core, guard_unlock_sentinel, liveness
 
 #: The bounded wave-1 tier — two members, not three. Deliberately excludes
@@ -218,6 +219,11 @@ def write_em_guard_grant(
     if guard_name not in _GRANTABLE_GUARDS:
         raise ValueError(
             f"guard_name must be one of {sorted(_GRANTABLE_GUARDS)}, got {guard_name!r}"
+        )
+    if out_of_repo_write_blocked():
+        raise ValueError(
+            f"{guard_name} is not grantable on this box: out-of-repo writes are blocked "
+            "(coordinator.feature.out_of_repo_write_block). Write inside the session repo."
         )
     if not reason or not reason.strip():
         raise ValueError("reason is required (must not be empty or whitespace-only)")

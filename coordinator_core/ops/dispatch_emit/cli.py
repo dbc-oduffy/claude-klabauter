@@ -2293,6 +2293,13 @@ def main(argv: "Optional[list[str]]" = None) -> int:
     if not split_research and (result.get("inventory_accounting") or result.get("landed_reconciled")):
         _print_accounting(result.get("inventory_accounting"), result.get("landed_reconciled"))
 
+    for plan, rows in (result.get("landed_unevidenced") or {}).items():
+        print(
+            f"emit-dispatch-workflow: not stamped {plan}: {', '.join(rows)} "
+            "(inventory says landed; no landing evidence or an uncleared external gate)",
+            file=sys.stderr,
+        )
+
     for key in ("batons", "uncommitted"):
         if key in result:
             print(f"emit-dispatch-workflow: {key}: {json.dumps(result[key])}", file=sys.stderr)

@@ -40,6 +40,12 @@ from coordinator_core.win_portability import no_console_creationflags
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
+def _temp_scratch(path: str) -> bool:
+    from coordinator_core.bash_guards._out_of_repo_allowlist import sanctioned_destination
+
+    return sanctioned_destination(path, session_repo=None, session_id="") == "os-temp-scratch"
+
+
 def _git(root: str, *args: str) -> None:
     subprocess.run(["git", *args], cwd=root, check=True, capture_output=True, **no_console_creationflags())
 
@@ -1002,7 +1008,7 @@ def test_non_temp_path_outside_any_repo_is_not_exempted(tmp_path, monkeypatch):
     elsewhere = tmp_path / "Documents" / "loose"
     elsewhere.mkdir(parents=True)
 
-    assert guard._target_is_bare_temp_scratch(str(elsewhere / "f.txt"), None) is False
+    assert _temp_scratch(str(elsewhere / "f.txt")) is False
 
 
 def test_symlinked_temp_root_resolves_to_the_same_verdict(tmp_path, monkeypatch):
@@ -1038,7 +1044,7 @@ def test_macos_private_tmp_symlink_shape(monkeypatch):
 
     monkeypatch.setattr(applicability.tempfile, "gettempdir", lambda: os.path.realpath("/tmp"))
 
-    assert guard._target_is_bare_temp_scratch("/tmp/claude-501/x/scratchpad/f.md", None) is True
+    assert _temp_scratch("/tmp/claude-501/x/scratchpad/f.md") is True
 
 
 def test_temp_exemption_never_raises_on_unresolvable_temp_root(tmp_path, monkeypatch):
@@ -1057,7 +1063,7 @@ def test_temp_exemption_never_raises_on_unresolvable_temp_root(tmp_path, monkeyp
     payload = _payload("Write", str(foreign_dir / "f.txt"), session_id, str(own))
 
     assert guard.check(payload) is None
-    assert guard._target_is_bare_temp_scratch(str(foreign_dir / "f.txt"), None) is True
+    assert _temp_scratch(str(foreign_dir / "f.txt")) is True
 
 
 def test_live_temp_root_is_resolvable_and_non_trivial():
@@ -1074,7 +1080,7 @@ def test_live_temp_root_is_resolvable_and_non_trivial():
 # under `/private/tmp`). Uses a REAL session-start record so applicability is
 # genuinely True -- a test that passes only because applicability failed open
 # proves nothing. MUST fail against the pre-fix module (the old
-# `_target_is_bare_temp_scratch`, keyed on `tempfile.gettempdir()` alone, no
+# temp-scratch classifier, keyed on `tempfile.gettempdir()` alone, no
 # `/tmp` realpath candidate).
 # ---------------------------------------------------------------------------
 
@@ -1526,17 +1532,19 @@ def test_ac4_registered_repo_destination_still_bumps(tmp_path, monkeypatch):
 
 def test_target_is_lessons_outbox_write_helper_path_shape(tmp_path):
     content_root = str(tmp_path / "coordinator-content-repo")
-    assert guard._target_is_lessons_outbox_write(
+    from coordinator_core.bash_guards._out_of_repo_allowlist import is_lessons_outbox_write
+
+    assert is_lessons_outbox_write(
         content_root + "/state/lessons-outbox/some-lesson.yaml"
     )
-    assert guard._target_is_lessons_outbox_write(
+    assert is_lessons_outbox_write(
         content_root + "/state/lessons-outbox/drained/old.yaml"
     )
-    assert not guard._target_is_lessons_outbox_write(content_root + "/cross-repo/inbox/memo.md")
-    assert not guard._target_is_lessons_outbox_write(
+    assert not is_lessons_outbox_write(content_root + "/cross-repo/inbox/memo.md")
+    assert not is_lessons_outbox_write(
         content_root + "/state/lessons-outbox-unrelated/f.txt"
     )
-    assert not guard._target_is_lessons_outbox_write("")
+    assert not is_lessons_outbox_write("")
 
 
 def _msys_form(p: Path) -> str:
@@ -1804,8 +1812,7 @@ def test_extended_length_prefix_does_not_desync_same_gitdir(monkeypatch, tmp_pat
 
 # ---------------------------------------------------------------------------
 # C4c (docs/plans/2026-08-07-guard-posix-path-rerooting.md) -- the exemption
-# predicates (`_target_is_bare_temp_scratch`, `_target_is_under_settings_
-# home`, `_target_is_lessons_outbox_write`, `is_agent_memory_store_path`)
+# predicates (now `_out_of_repo_allowlist.sanctioned_destination`)
 # never got the translated `file_path` C4/C4b already thread to the VERDICT
 # resolution -- see review finding [P3] on commit fc1419657. THE HEADLINE
 # REGRESSION: an MSYS-spelled write to the harness scratchpad on Windows
@@ -1880,9 +1887,13 @@ def test_c4c_untranslatable_file_path_no_bump_no_crash_outside_any_repo_anchor(
 
 
 def test_c4c_untranslatable_translated_path_predicates_fall_through_safely():
-    assert guard._target_is_bare_temp_scratch("", None) is True
-    assert guard._target_is_under_settings_home("", None) is False
-    assert guard._target_is_lessons_outbox_write("") is False
+    from coordinator_core.bash_guards._out_of_repo_allowlist import (
+        is_lessons_outbox_write,
+        sanctioned_destination,
+    )
+
+    assert sanctioned_destination("", session_repo=None, session_id="") is None
+    assert is_lessons_outbox_write("") is False
 
 
 def test_c4c_msys_foreign_target_still_bumps_not_converted_to_permit(tmp_path):

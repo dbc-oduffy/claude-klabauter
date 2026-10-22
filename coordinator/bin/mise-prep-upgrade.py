@@ -139,6 +139,9 @@ from coordinator_core.execute_plan_assemble.falsifier_shape import (  # noqa: E4
     _DISPOSITION_REF_SHA_RE,
 )
 
+from coordinator_core.frontmatter.body_blocks import LocateStatus  # noqa: E402
+from coordinator_core.ops.dispatch_emit import spine_read  # noqa: E402
+
 #: A sha-shaped token inside prose. An all-digit run still counts toward
 #: ambiguity (it may be a second sha) but is never itself taken as the sha.
 _PROSE_SHA = re.compile(r"(?<![0-9A-Za-z])[0-9a-fA-F]{7,40}(?![0-9A-Za-z])")
@@ -175,12 +178,13 @@ Parsed = Tuple[Optional[Dict[str, Any]], str, Optional[str]]
 
 
 def parse_frontmatter(text: str) -> Parsed:
-    split = split_frontmatter(text)
+    split = spine_read.split_frontmatter_memo(text)
     if split is None:
         return None, "", "no frontmatter block"
-    fm_text, body = split
+    body = split.body_with_leading_newline
+    body = body[1:] if body.startswith("\n") else body
     try:
-        loaded = yaml.safe_load(fm_text) or {}
+        loaded = spine_read.load_frontmatter_doc(split.fm_text) or {}
     except yaml.YAMLError as exc:
         return None, body, f"frontmatter does not parse: {type(exc).__name__}"
     if not isinstance(loaded, dict):
@@ -454,14 +458,13 @@ def plan_report(
 
 
 def raw_spine_rows(text: str) -> Optional[List[Any]]:
-    match = re.search(r"```yaml plan-tasks\n(.*?)```", text, re.S)
-    if not match:
+    """Authored spine rows: None when no block, [] when malformed. Shared memo; read-only."""
+    result = spine_read.load_rows_memo(text)
+    if result.status is LocateStatus.ABSENT:
         return None
-    try:
-        rows = yaml.safe_load(match.group(1))
-    except yaml.YAMLError:
+    if result.status is LocateStatus.MALFORMED:
         return []
-    return rows if isinstance(rows, list) else []
+    return result.rows
 
 
 def apply_derivable(path: Path, derivable: Dict[str, Any]) -> bool:

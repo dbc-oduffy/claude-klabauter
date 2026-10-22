@@ -309,7 +309,7 @@ from coordinator_core.ops.dispatch_emit.inventory_mint import (
     mint_spine,
     parse_chunk_table,
 )
-from coordinator_core.ops.dispatch_emit.landed_reconcile import reconcile_done_noop, reconcile_landed
+from coordinator_core.ops.dispatch_emit.landed_reconcile import reconcile_done_noop, reconcile_landed_detail
 from coordinator_core.ops.dispatch_emit.queue_emit import QueuePathEscapeError, emit_queue_script
 from coordinator_core.ops.dispatch_emit.request_validation import Field, validate_params
 from coordinator_core.ops.read_frontmatter_field import read_frontmatter_field
@@ -2306,7 +2306,9 @@ def _dispatch_emit_body(
             # A review-only run executes nothing: no landed-flip writes to the
             # plans and no pre-dispatch checks or falsifier reviews.
             review_only_run = params.get("review_only_rows") is not None
-            landed_reconciled = {} if review_only_run else reconcile_landed(Path(inventory_path))
+            landed_reconciled, landed_unevidenced = (
+                ({}, {}) if review_only_run else reconcile_landed_detail(Path(inventory_path))
+            )
             noop_by_plan: dict = {}
             for entry in done_unlanded.values():
                 if entry["class"] == "no-op" and entry["plan"] and entry["chunk"]:
@@ -2755,6 +2757,8 @@ def _dispatch_emit_body(
 
     if inventory_path:
         reply["landed_reconciled"] = landed_reconciled
+        if landed_unevidenced:
+            reply["landed_unevidenced"] = landed_unevidenced
         if inventory_accounting is not None:
             reply["inventory_accounting"] = inventory_accounting
         if params.get("skip_landed"):

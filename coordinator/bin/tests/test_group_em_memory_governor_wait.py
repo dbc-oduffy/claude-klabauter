@@ -62,3 +62,64 @@ def test_help_exits_zero():
     with pytest.raises(SystemExit) as exc:
         w.main(["--help"])
     assert exc.value.code == 0
+
+
+def _record(governor_pid, governor_start, frozen):
+    import json
+
+    return json.dumps({"governor_pid": governor_pid, "governor_start_time": governor_start,
+                       "frozen": [{"pid": p, "start_time": s} for p, s in frozen]})
+
+
+def test_live_recorded_governor_is_left_alone(tmp_path):
+    pidfile = tmp_path / "frozen.json"
+    text = _record(99, 500.0, [(11, 100.0), (12, 100.0)])
+    pidfile.write_text(text, encoding="utf-8")
+    calls: list = []
+    starts = {99: 500.0, 11: 100.0, 12: 100.0}
+    assert w.thaw_on_start(pidfile, lambda p, s: calls.append(p), starts.get) == []
+    assert calls == []
+    assert pidfile.read_text(encoding="utf-8") == text
+
+
+def test_dead_governor_thaws_only_matching_start_times(tmp_path):
+    pidfile = tmp_path / "frozen.json"
+    pidfile.write_text(_record(99, 500.0, [(11, 100.0), (12, 100.0)]), encoding="utf-8")
+    calls: list = []
+    starts = {11: 100.0, 12: 777.0}  # 99 gone; 12 was reused
+    assert w.thaw_on_start(pidfile, lambda p, s: calls.append((list(p), s)), starts.get) == [11]
+    assert calls == [([11], False)]
+    assert not pidfile.exists()
+
+
+def test_legacy_pidfile_thaws_nothing(tmp_path):
+    pidfile = tmp_path / "frozen.json"
+    pidfile.write_text("[11, 12]", encoding="utf-8")
+    calls: list = []
+    assert w.thaw_on_start(pidfile, lambda p, s: calls.append(p), {11: 1.0, 12: 1.0}.get) == []
+    assert calls == []
+
+
+def test_start_thaws_pidfile_leftovers_before_tailing(tmp_path, monkeypatch):
+    pidfile = tmp_path / "frozen.json"
+    pidfile.write_text(_record(99, 500.0, [(11, 100.0), (12, 100.0)]), encoding="utf-8")
+    starts = {11: 100.0, 12: 100.0}
+    log = tmp_path / "governor.log"
+    order: list = []
+    calls: list = []
+
+    def fake_signal(pids, stop):
+        calls.append((list(pids), stop))
+        order.append("thaw")
+
+    monkeypatch.setattr(w, "wait_for_line", lambda *a, **k: order.append("tail"))
+    assert w.main([str(log)], thaw=lambda: w.thaw_on_start(pidfile, fake_signal, starts.get)) == 0
+    assert calls == [([11, 12], False)]
+    assert order == ["thaw", "tail"]
+    assert not pidfile.exists()
+
+
+def test_start_with_no_pidfile_thaws_nothing(tmp_path):
+    calls: list = []
+    assert w.thaw_on_start(tmp_path / "absent.json", lambda p, s: calls.append(p)) == []
+    assert calls == []

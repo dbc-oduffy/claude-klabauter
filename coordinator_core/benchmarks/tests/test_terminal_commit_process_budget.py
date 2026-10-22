@@ -3,8 +3,9 @@
 The landing is one scoped commit; the review stamp, coded stamp, implemented flip and the rest of
 the close run in the close job, which the drivers point at a no-op script (the job's own work is
 gated by `test_close_background_process_budget.py`). Shapes: plan, mise, ask, ask at real shape,
-halted record, halted incident, halted refire (#60), grind and fanout. The fanout shape is driven
-through `land_run._handler` on the real-shape fixture with the `ask_fanout` relay stubbed.
+reclose (a landed run called again with a fresh criterion), halted record, halted incident, halted
+refire (#60), grind and fanout. The fanout shape is driven through `land_run._handler` on the
+real-shape fixture with the `ask_fanout` relay stubbed.
 
 UNIT: process time and spawn count from `batched_process_time_ms`
 (k=K_INVOCATIONS, job-object / kqueue / fork accounting), never wall clock
@@ -56,6 +57,10 @@ PROCS_CEILING_PLAN = 2.0
 PROCS_CEILING_MISE = 2.0
 PROCS_CEILING_ASK = 2.0
 PROCS_CEILING_ASK_REAL_SHAPE = 2.0
+# reclose: a landed run called again with a fresh criterion. No commit and no hash-object fallback;
+# the one spawn is the re-queued close job's detached launch (`spawn_detached` of `close.background`),
+# so the ceiling is the product shape's and the typical net is that single launch.
+PROCS_CEILING_RECLOSE = PROCS_CEILING_PLAN
 # halted record and incident: hash-object fallback only; a halt launches no close job.
 PROCS_CEILING_HALTED = 1.0
 PROCS_CEILING_HALTED_INCIDENT = 1.0
@@ -115,6 +120,11 @@ def mise_full_path_measurement(tmp_path_factory):
 @pytest.fixture(scope="module")
 def ask_full_path_measurement(tmp_path_factory):
     return _measure(tmp_path_factory.mktemp("land_run_budget_ask"), "--kind", "ask")
+
+
+@pytest.fixture(scope="module")
+def reclose_measurement(tmp_path_factory):
+    return _measure(tmp_path_factory.mktemp("land_run_budget_reclose"), "--kind", "reclose")
 
 
 def _build_prebuilt(parent, kind: str) -> None:
@@ -219,6 +229,11 @@ def _assert_under_bar(m: dict, procs_ceiling: float) -> None:
 
 def test_land_run_full_path_is_under_the_500ms_bar(full_path_measurement):
     _assert_under_bar(full_path_measurement, PROCS_CEILING_PLAN)
+
+
+def test_land_run_reclose_is_under_the_500ms_bar(reclose_measurement):
+    _assert_under_bar(reclose_measurement, PROCS_CEILING_RECLOSE)
+    print(f"LAND-RUN-RECLOSE {reclose_measurement['detail']}")
 
 
 def test_land_run_mise_full_path_is_under_the_500ms_bar(mise_full_path_measurement):

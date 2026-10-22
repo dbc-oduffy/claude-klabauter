@@ -159,13 +159,12 @@ def admit(
     peak: int,
     status: MemoryStatus,
     cushion_pct: float = 25.0,
-    cushion_cap: int = 8 * GIB,
     commit_limit: int | None = None,
 ) -> AdmitVerdict:
     """Pure admission check for a declared peak against a memory snapshot."""
-    need_avail = peak + min(peak * cushion_pct / 100, cushion_cap)
+    need_avail = peak + min(peak * cushion_pct / 100, 8 * GIB)
     avail_ok = need_avail <= status.avail_phys
-    commit_ok = status.commit_used + peak <= (commit_limit or status.commit_limit)
+    commit_ok = status.commit_used + peak <= (status.commit_limit if commit_limit is None else commit_limit)
     return AdmitVerdict(
         admit=avail_ok and commit_ok,
         need_avail=need_avail,

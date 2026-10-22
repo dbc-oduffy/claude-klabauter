@@ -25,7 +25,7 @@ from coordinator_core.ops.fleet._prose_queue_contract import (
     SKIP_REASONS,
     CandidateEntry,
 )
-from coordinator_core.ops.fleet._prose_queue_fields import FLAG_CLOSED, fill_fields
+from coordinator_core.ops.fleet._prose_queue_fields import FLAG_AMBIGUOUS, FLAG_CLOSED, fill_fields
 from coordinator_core.ops.fleet._prose_queue_grammars import parse_file
 from coordinator_core.ops.queue_append import prepare_queue_entry, write_prepared_entry
 
@@ -165,7 +165,7 @@ def _migrate_family(
             write_prepared_entry(prepared)
 
         report[BUCKET_TO_MIGRATE] += 1
-        if "ambiguous" in cand.flags:
+        if FLAG_AMBIGUOUS in cand.flags:
             report[BUCKET_AMBIGUOUS] += 1
         if BUCKET_MIGRATED_INCOMPLETE in cand.flags:
             report[BUCKET_MIGRATED_INCOMPLETE] += 1

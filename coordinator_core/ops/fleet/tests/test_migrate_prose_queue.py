@@ -149,6 +149,19 @@ def test_debt_row_gets_not_recorded_and_migrated_incomplete(tmp_path):
         assert "(not recorded in legacy source)" in out.read_text(encoding="utf-8")
 
 
+def test_handler_refuses_candidate_ids_and_foreign_repo_root(tmp_path):
+    (tmp_path / "a").mkdir()
+    root = _repo(tmp_path / "a", "improvement-queue", PIPE)
+    other = tmp_path / "b"
+    other.mkdir()
+    base = {"repo_root": str(root), "family": ["improvement-queue"], "dry_run": False}
+    refused = asyncio.run(migrate_prose_queue._handler({**base, "candidate_ids": ["x"]}, root))
+    assert refused["exit_code"] == 2
+    foreign = asyncio.run(migrate_prose_queue._handler({**base, "repo_root": str(other)}, root))
+    assert foreign["exit_code"] == 1
+    assert _yamls(tmp_path) == set()
+
+
 def test_perf_200_row_pipe_no_subprocess(tmp_path, monkeypatch):
     rows = "".join(
         f"- 2026-06-02 | self | a/b{i}.py | Perf item number {i}. Detail. | proposed target: z\n"

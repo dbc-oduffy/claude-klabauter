@@ -114,11 +114,21 @@ def test_plan_must_name_one_plan(tmp_path, bad):
 def test_flags_must_be_booleans(tmp_path):
     common = _repo(tmp_path)
     rel = _plan(tmp_path, frontmatter=_PREPPED_FM, spine=_SPINE)
-    with pytest.raises(ValueError, match="check_census must be a boolean"):
-        _probe({"plan": rel, "check_census": "yes"}, common)
+    with pytest.raises(ValueError, match="upgrade must be a boolean"):
+        _probe({"plan": rel, "upgrade": "yes"}, common)
 
 
-def test_a_prepped_plan_returns_gate_and_census_and_no_upgrade(tmp_path):
+def test_retired_census_params_are_admitted_and_ignored(tmp_path):
+    common = _repo(tmp_path)
+    rel = _plan(tmp_path, frontmatter=_PREPPED_FM, spine=_SPINE)
+    reply = _probe(
+        {"plan": rel, "check_census": "yes", "census_timeout": -1, "census_run": 7}, common
+    )
+    assert reply["census"] is None
+    assert not any(k.startswith("census_") for k in reply)
+
+
+def test_a_prepped_plan_returns_the_gate_and_no_census_and_no_upgrade(tmp_path):
     common = _repo(tmp_path)
     rel = _plan(tmp_path, frontmatter=_PREPPED_FM, spine=_SPINE)
     reply = _probe({"plan": rel, "check_census": True, "upgrade": True}, common)
@@ -127,7 +137,7 @@ def test_a_prepped_plan_returns_gate_and_census_and_no_upgrade(tmp_path):
     assert set(reply["gate"]) == {
         "plan", "verdict", "withheld_rows", "classes", "message", "stamp", "engine_build",
     }
-    assert isinstance(reply["census"], dict) and "state" in reply["census"]
+    assert reply["census"] is None
     assert reply["upgrade"] is None
     assert reply["process_ms"] >= 0
 
@@ -397,7 +407,7 @@ def _assert_deadline_census(census: dict) -> None:
 
 
 @pytest.mark.skipif(__import__("os").name == "nt", reason="needs a POSIX sh script as the shell")
-def test_probe_census_stops_at_the_deadline_under_the_ops_own_timeout(tmp_path, slow_shell):
+def test_probe_runs_no_census_even_when_asked(tmp_path, slow_shell):
     import time
 
     common = _repo(tmp_path)
@@ -406,7 +416,7 @@ def test_probe_census_stops_at_the_deadline_under_the_ops_own_timeout(tmp_path, 
     reply = _probe({"plan": rel, "check_census": True}, common)
     assert time.monotonic() - started < 3.0
     assert reply["gate"]["verdict"] == pg.PREPPED
-    _assert_deadline_census(reply["census"])
+    assert reply["census"] is None
 
 
 @pytest.mark.skipif(__import__("os").name == "nt", reason="needs a POSIX sh script as the shell")

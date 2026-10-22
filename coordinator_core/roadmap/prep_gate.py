@@ -2710,7 +2710,10 @@ def gate_plan(worktree_root: Path, plan_path: Path, *, text: Optional[str] = Non
     over the bar by an order of magnitude, and 5.9s of a box ~50 peer sessions
     are queued behind. The cost is concentrated in ``read_spine``'s own YAML
     work (3.8s of the 5.9s), which this module consumes and does not own, so
-    there is no local fix that makes a corpus sweep an op. A corpus CENSUS is a
+    there is no local fix that makes a corpus sweep an op. The probe op's set form
+    loops ``gate_plan_with_corpus`` under one ``CorpusInputs`` (warm about 10.0s
+    over 448 plans, C25), and a probe verdict store keeps an unchanged plan out of
+    that loop (EM 01:17Z); ``gate_plan`` itself stays one plan. A corpus CENSUS is a
     different question with a different budget and it already has a home: DoE's
     ``coordinator/bin/mise-prep-gate.py --tally``, human-invoked, outside the
     per-op budget. Re-measure with
