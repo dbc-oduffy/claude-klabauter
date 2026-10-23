@@ -410,6 +410,18 @@ def _baton_cascade(worktree_root: Path, repo_root: Path, run_id: str) -> dict:
     return {"run_baton_cascade": fire_for_batons(worktree_root, repo_root, [rel], None)}
 
 
+def _manifest_baseline(record_dir: Path) -> Optional[dict]:
+    """The run manifest's ``write_baseline``; None when the manifest or the key is absent or unreadable."""
+    import json
+
+    try:
+        data = json.loads((record_dir / "manifest.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    base = data.get("write_baseline") if isinstance(data, dict) else None
+    return base if isinstance(base, dict) and base else None
+
+
 def _record_kept(
     root: Path, record_dir_rel: str, owner: dict, withheld: dict, halted: dict, paths: list
 ) -> dict:
@@ -420,7 +432,7 @@ def _record_kept(
     record_dir = root / record_dir_rel
     if not record_dir.is_dir():
         return {}
-    chunks = kept_work.kept_chunks(root, owner, withheld)
+    chunks = kept_work.kept_chunks(root, owner, withheld, _manifest_baseline(record_dir))
     gate = kept_work.plan_gate(halted, root)
     written = kept_work.write(record_dir, chunks, gate)
     if written is None:

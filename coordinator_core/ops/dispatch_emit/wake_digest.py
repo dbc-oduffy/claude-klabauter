@@ -446,6 +446,19 @@ def next_action_parts(
                     f"status_after: {rv}.status_after ?? null, failing: {rv}.failing ?? [], "
                     f"reverted: ({rv}.reverted ?? []).map(v => ({{ path: v.path, tests: v.tests ?? [] }})) }} : null)"
                 )
+        def bookkeeping_form() -> str:
+            # review-stage 1.3.0: the prep agent returns its own sidecar path. Absent on an
+            # older prep agent, it is null and bookkeeping resolves the real file itself.
+            prep_sidecar_expr = f"(({prep_var} && {prep_var}.sidecar_path) ?? null)"
+            return (
+                "(" + wave_var + " ? { integration_stem: " + review_vars["bookkeeping_stem"] + ", "
+                "slices: " + wave_var + ".length, "
+                "fixes: " + wave_var + ".reduce((n, r) => n + ((r && r.applied) || 0), 0), "
+                "prep_sidecar: " + prep_sidecar_expr
+                + record_fields_expr
+                + " } : null)"
+            )
+
         if review_vars and review_vars.get("integration"):
             # The trailer names the engine's record (`bookkeeping_stem`), not
             # the integrator's own sidecar: that sidecar's frontmatter is
@@ -455,6 +468,15 @@ def next_action_parts(
                 "String(" + integration_var + ".sidecar_path).split('/').pop().replace(/\\.md$/, '') : null)"
             )
             slices_count_expr = f"({prep_var} ? (Array.isArray({prep_var}.slices) ? {prep_var}.slices.length : 0) : null)"
+            # Integration gated off (not owed): the zero-slice bookkeeping record, so the
+            # commit is not refused `unreviewed`. A gate that let the stage run and got null
+            # stays null.
+            not_run_fallback = (
+                f"((typeof {INTEGRATION_NOT_RUN_VAR} !== 'undefined' && {INTEGRATION_NOT_RUN_VAR}"
+                f" && {wave_var}) ? {bookkeeping_form()} : null)"
+                if review_vars.get("bookkeeping_stem")
+                else "null"
+            )
             inline_review_expr = (
                 "(" + integration_var + " ? { integration_stem: " + integration_stem_expr + ", "
                 "slices: " + slices_count_expr + ", fixes: " + integration_var + ".fixes_applied"
@@ -462,7 +484,7 @@ def next_action_parts(
                 + ", integration: { sidecar: " + integration_var + ".sidecar_path ?? null, "
                 "unresolved: " + integration_var + ".unresolved ?? [], "
                 "confinement_violations: " + integration_var + ".confinement_violations ?? 0 }"
-                " } : null)"
+                " } : " + not_run_fallback + ")"
             )
         elif review_vars and review_vars.get("bookkeeping_stem"):
             # Zero-stage `inline_review` carries everything
@@ -473,18 +495,7 @@ def next_action_parts(
             # sidecar of its own), using these very params, before it builds
             # the commit -- so the record lands in the same commit as the
             # code it reviews.
-            stem_lit = review_vars["bookkeeping_stem"]
-            # review-stage 1.3.0: the prep agent returns its own sidecar path. Absent on an
-            # older prep agent, it is null and bookkeeping resolves the real file itself.
-            prep_sidecar_expr = f"(({prep_var} && {prep_var}.sidecar_path) ?? null)"
-            inline_review_expr = (
-                "(" + wave_var + " ? { integration_stem: " + stem_lit + ", "
-                "slices: " + wave_var + ".length, "
-                "fixes: " + wave_var + ".reduce((n, r) => n + ((r && r.applied) || 0), 0), "
-                "prep_sidecar: " + prep_sidecar_expr
-                + record_fields_expr
-                + " } : null)"
-            )
+            inline_review_expr = bookkeeping_form()
         else:
             inline_review_expr = "null"
         # `script_path`/`session_id` make the params `dispatch.terminal_commit`

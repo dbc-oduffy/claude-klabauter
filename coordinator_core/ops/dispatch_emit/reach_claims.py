@@ -1,6 +1,6 @@
 """Reach-claim types, canonical-form extractor and refusal composer for delivery notes.
 
-Pure, no I/O. A delivery note states "`X` reaches `Y`"; the in-tree judge
+Pure bar `reach_gate`, which loads the tree judge. A delivery note states "`X` reaches `Y`"; the in-tree judge
 (`reach_claims_tree.judge_reach_claims`) decides each claim and this module composes the landing
 refusal from the verdicts.
 
@@ -81,6 +81,23 @@ def reach_refusal(verdicts: Iterable[ReachVerdict]) -> Optional[str]:
                 "Correct the change or the note, then re-fire the same sizing."
             )
     return None
+
+
+def reach_gate(
+    root, note_text: Optional[str], *, landing_paths=(), deleted_paths=(), withheld_paths=(),
+) -> tuple[Optional[str], dict]:
+    """``(refusal | None, reply_field)`` for a delivery note; the tree scan loads only when the
+    note carries a claim, and ``reply_field`` is empty when it carries none."""
+    claims = extract_reach_claims(note_text) if note_text else ()
+    if not claims:
+        return None, {}
+    from coordinator_core.ops.dispatch_emit.reach_claims_tree import judge_reach_claims
+
+    verdicts = judge_reach_claims(
+        root, claims, landing_paths=landing_paths, deleted_paths=deleted_paths,
+        withheld_paths=withheld_paths,
+    )
+    return reach_refusal(verdicts), reach_reply(verdicts)
 
 
 def reach_reply(verdicts: Iterable[ReachVerdict]) -> dict:

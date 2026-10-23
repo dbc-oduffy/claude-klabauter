@@ -367,6 +367,7 @@ from coordinator_core.ops.dispatch_emit.gate_owed import (
 from coordinator_core.ops.dispatch_emit.wake_digest import (
     CHUNK_REASON_VAR,
     COMMIT_REFUSED_VAR,
+    INTEGRATION_NOT_RUN_VAR,
     PLAN_HELD_VAR,
     completion_return_js,
     stage_schema_literal,
@@ -6118,6 +6119,7 @@ def compose_script(
     body_blocks.append("  let _deliveryNotRun = null;")
     body_blocks.append(f"  let {WAVE_NOT_RUN_VAR} = [];")
     body_blocks.append("  let _reviewIntegration = null;")
+    body_blocks.append(f"  let {INTEGRATION_NOT_RUN_VAR} = false;")
     body_blocks.append("  let _reviewReverify = null;")
     body_blocks.append(f"  let {_TEST_RESULT_VAR} = null;")
     body_blocks.append(f"  let {_FALSIFIER_RESULT_VAR} = null;")
@@ -6132,6 +6134,7 @@ def compose_script(
         "_deliveryNotRun",
         WAVE_NOT_RUN_VAR,
         "_reviewIntegration",
+        INTEGRATION_NOT_RUN_VAR,
         "_reviewReverify",
     )
     review_vars: Optional[dict] = None

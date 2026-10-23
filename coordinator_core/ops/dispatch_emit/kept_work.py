@@ -32,9 +32,21 @@ def fingerprint(root: Path, rel: str) -> Optional[str]:
         return None
 
 
-def kept_chunks(root: Path, owner: Mapping[str, str], withheld: Mapping[str, str]) -> dict:
+def kept_chunks(
+    root: Path,
+    owner: Mapping[str, str],
+    withheld: Mapping[str, str],
+    baseline: Optional[Mapping[str, Optional[str]]] = None,
+) -> dict:
     """``{chunk: {"paths": {rel: fingerprint}}}`` for each chunk all of whose withheld paths carry
-    ``halt-record-only``; ``owner`` maps path to chunk, ``withheld`` maps path to reason."""
+    ``halt-record-only``; ``owner`` maps path to chunk, ``withheld`` maps path to reason.
+    With ``baseline``, a chunk any of whose paths still equals it (this run never wrote it) is not kept."""
+    unwritten: set[str] = set()
+    if baseline:
+        # Deferred: write_baseline imports this module's `fingerprint`.
+        from coordinator_core.ops.dispatch_emit.write_baseline import unwritten as _unwritten
+
+        unwritten = set(_unwritten(root, baseline, withheld))
     by_chunk: dict[str, dict[str, str]] = {}
     for path, reason in withheld.items():
         chunk = owner.get(path)
@@ -42,7 +54,7 @@ def kept_chunks(root: Path, owner: Mapping[str, str], withheld: Mapping[str, str
             by_chunk.setdefault(chunk, {})[path] = reason
     out: dict[str, dict] = {}
     for chunk, paths in by_chunk.items():
-        if all(r == HALT_RECORD_ONLY for r in paths.values()):
+        if all(r == HALT_RECORD_ONLY for r in paths.values()) and not unwritten.intersection(paths):
             prints = {p: fingerprint(root, p) for p in paths}
             if all(v is not None for v in prints.values()):
                 out[chunk] = {"paths": prints}

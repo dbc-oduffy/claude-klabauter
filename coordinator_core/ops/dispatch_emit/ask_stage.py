@@ -57,6 +57,7 @@ from coordinator_core.ops.dispatch_emit.commit_request import (
     render_marker,
 )
 from coordinator_core.ops.dispatch_emit.credit_gate import DOCS_CHUNK_ID, SIZING_CHUNK_ID
+from coordinator_core.ops.dispatch_emit import write_baseline as _write_baseline
 from coordinator_core.ops.dispatch_emit.fanout_cost import FanoutCost, Unit, propose_groups
 from coordinator_core.ops.dispatch_emit.engine_owned_rows import engine_owner_rows
 from coordinator_core.ops.dispatch_emit.falsifier_integrity_phase import (
@@ -1010,6 +1011,7 @@ def stage(
                     route=routes[row.id].to_json() if row.id in routes else None,
                     register_rows=tuple(str(r) for r in (raw_by_id.get(row.id) or {}).get("register_rows") or ()),
                     kept_from=kept_from,
+                    adopts_stranded=_adopts_stranded(raw_by_id.get(row.id)),
                 )
             )
             chunks.append(
@@ -1088,6 +1090,7 @@ def stage(
         withheld_ids=withheld_ids,
         retired_resume_rows=retired_resume,
         dropped_writes=tuple({"path": p, "sentence": s} for p, s in excluded.items()),
+        write_baseline=_stage_write_baseline(root, manifest_rows),
         slot_withheld=tuple(slot_withheld_rows(raw_by_id)),
         memo_close=memo_close if not manifest_rows else (),
     )
@@ -1101,6 +1104,28 @@ def stage(
         except LedgerError:
             pass
     return manifest
+
+
+def _adopts_stranded(raw: Optional[Mapping]) -> bool:
+    """True exactly when the plan-task is em-inferred and its rationale names the token `stranded`."""
+    auth = (raw or {}).get("authorization")
+    if not isinstance(auth, Mapping) or auth.get("source") != "em-inferred":
+        return False
+    return re.search(r"\bstranded\b", str(auth.get("rationale") or "")) is not None
+
+
+def _stage_write_baseline(root: Path, rows: Sequence[ManifestRow]) -> dict:
+    """Fingerprint every non-adopting row's declared file write (absent -> None); directories and globs are skipped.
+    Spawn-free; runs at stage, before any executor."""
+    paths: list[str] = []
+    for r in rows:
+        if r.adopts_stranded:
+            continue
+        for w in r.writes:
+            if any(ch in w for ch in "*?[") or w.endswith("/") or (root / w).is_dir():
+                continue
+            paths.append(w)
+    return _write_baseline.capture(root, _dedupe_preserve_order(paths))
 
 
 def manifest_payload(root: Path, manifest: StageManifest) -> dict:

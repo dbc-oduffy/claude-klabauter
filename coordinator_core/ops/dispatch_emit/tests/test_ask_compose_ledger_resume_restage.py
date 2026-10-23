@@ -12,7 +12,7 @@ import subprocess
 
 import pytest
 
-from coordinator_core.ops.dispatch_emit import ask_compose
+from coordinator_core.ops.dispatch_emit import ask_compose, halt_refire
 from coordinator_core.ops.dispatch_emit.ask_compose import compose_ask_script
 from coordinator_core.ops.dispatch_emit.land_run_contract import OP_NAME
 from coordinator_core.ops.dispatch_emit.ask_contract import HALTED_RECORD_PARAM, OP_ASK_STAGE
@@ -210,13 +210,18 @@ def test_the_no_folded_manifest_halt_names_the_refire_as_its_resume_route(monkey
     })
     halted = out["result"]["halted_by"]
     assert halted["reason"].startswith("no folded stage manifest")
-    assert "Refire: " in halted["next_action"] and _SIZING in halted["next_action"]
-    assert "coordinator:engine-ask" in halted["next_action"]
+    nx = halted["next_action"]
+    assert halt_refire.is_refire_next_action(nx), nx
+    assert "coordinator:engine-ask" in nx["call"] and _SIZING in nx["call"]
+    assert nx["resume"]["sizing"] == _SIZING
+    assert "Resume: the stage manifest is rebuilt" in nx["detail"] and "Refire: " in nx["detail"]
 
 
-def test_a_non_manifest_refusal_carries_no_resume_next_action(monkeypatch):
+def test_a_non_manifest_refusal_does_not_carry_the_no_manifest_resume_phrasing(monkeypatch):
     out = _run(_script(monkeypatch), manifest={"error": "boom"})
-    assert "next_action" not in out["result"]["halted_by"]
+    nx = out["result"]["halted_by"]["next_action"]
+    assert halt_refire.is_refire_next_action(nx), nx
+    assert "Resume: the stage manifest is rebuilt" not in (nx.get("detail") or "")
 
 
 def test_the_stage_op_runs_against_the_resume_ledger_plan_in_the_script_text(monkeypatch):

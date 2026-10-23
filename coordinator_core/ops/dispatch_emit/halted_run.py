@@ -24,7 +24,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     HALT_BLOCKING_FIELD, HALT_BLOCKING_ITEMS_FIELD, HALT_PLAN_FIELD, RECORD_DIR_ROOT, RUN_DIR_ROOT,
 )
 from coordinator_core.ops.dispatch_emit.ask_fanout_contract import STATUS_HALTED
-from coordinator_core.ops.dispatch_emit.halt_refire import is_refire_next_action
+from coordinator_core.ops.dispatch_emit.halt_refire import is_exit_next_action, is_refire_next_action
 
 HALTED_FILE = "halted.json"
 STATUS_RESUMED = "resumed"
@@ -75,7 +75,7 @@ def write_halt_marker(
     """Write the `halted` marker into `record_dir` (created if absent); return its path.
 
     `plan`, the blocking key, the blocking items, the reason, the next_action and the base are written only when given (the base
-    only when 40-hex; next_action only when `halt_refire.is_refire_next_action` accepts it), so other halts' markers are unchanged.
+    only when 40-hex; next_action only when `halt_refire.is_refire_next_action` or `is_exit_next_action` accepts it), so other halts' markers are unchanged.
     """
     payload = {
         "status": STATUS_HALTED,
@@ -90,7 +90,7 @@ def write_halt_marker(
         payload[HALT_BLOCKING_ITEMS_FIELD] = list(blocking_items)
     if reason:
         payload[HALT_REASON_FIELD] = reason
-    if next_action is not None and is_refire_next_action(next_action):
+    if next_action is not None and (is_refire_next_action(next_action) or is_exit_next_action(next_action)):
         payload[HALT_NEXT_ACTION_FIELD] = next_action
     if run_base_sha and _SHA40.fullmatch(run_base_sha):
         payload[HALT_RUN_BASE_FIELD] = run_base_sha

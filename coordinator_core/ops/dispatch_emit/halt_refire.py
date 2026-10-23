@@ -10,8 +10,21 @@ from __future__ import annotations
 import json
 
 from coordinator_core.ops.dispatch_emit.ask_contract import HALT_DESIGN_REVIEW
+from coordinator_core.ops.dispatch_emit.write_baseline import (
+    DIRTY_BEFORE_RUN_KEY,
+    MEANT_TO_LAND_KEY,
+    NO_CHANGE_REFUSAL,
+    NON_REFIRE_REFUSALS,
+)
 
 REFIRE_KIND = "refire"
+EXIT_KIND = "exit"
+ROUTE_REVIEW_ONLY = "review-only"
+ROUTE_REVISE = "revise"
+EXIT_ROUTES = (ROUTE_REVIEW_ONLY, ROUTE_REVISE)
+REVIEW_ONLY_CALL = (
+    "emit-dispatch-workflow --inventory <inv> --review-only --rows <DONE ids> --run-base <sha>"
+)
 OP_ENGINE_ASK = "engine-ask"
 OP_WORKFLOW_RESUME = "workflow-resume"
 OPS = (OP_ENGINE_ASK, OP_WORKFLOW_RESUME)
@@ -113,6 +126,51 @@ def is_refire_next_action(obj: object) -> bool:
     return not (_carries_hand_repair(call) or _carries_hand_repair(obj.get("detail")))
 
 
+def exit_next_action(*, reason: str, route: str, call: str) -> dict:
+    """The exit object `{kind, reason, route, call}` a halt records instead of a same-sizing refire."""
+    return {"kind": EXIT_KIND, "reason": reason, "route": route, "call": call}
+
+
+def is_exit_next_action(obj: object) -> bool:
+    """True only for an exit object whose `call` is not an engine-ask/Workflow refire."""
+    if not isinstance(obj, dict) or obj.get("kind") != EXIT_KIND or set(obj) != {"kind", "reason", "route", "call"}:
+        return False
+    call, reason = obj.get("call"), obj.get("reason")
+    return (
+        obj.get("route") in EXIT_ROUTES
+        and isinstance(reason, str)
+        and bool(reason.strip())
+        and isinstance(call, str)
+        and bool(call.strip())
+        and "Workflow" not in call
+    )
+
+
+def _exit_route_js(run_id_js: str) -> str:
+    """JS `_exitRoute(refused)` returning the exit object for a NON_REFIRE refusal."""
+    j = json.dumps
+    return "\n".join(
+        [
+            "  const _exitRoute = (_ref) => {",
+            "    const _list = (v) => (Array.isArray(v) ? v.filter((x) => typeof x === 'string') : []);",
+            f"    const _meant = _list(_halted[{j(MEANT_TO_LAND_KEY)}]);",
+            f"    const _dirty = _list(_halted[{j(DIRTY_BEFORE_RUN_KEY)}]);",
+            f"    if (_ref === {j(NO_CHANGE_REFUSAL)} && _dirty.length) {{",
+            f"      return {{ kind: {j(EXIT_KIND)}, route: {j(ROUTE_REVIEW_ONLY)}, call: {j(REVIEW_ONLY_CALL)},",
+            "        reason: 'The executor wrote nothing; these paths were already dirty before the run: ' + _dirty.join(', ') + '. A refire reproduces the refusal: land exactly them review-only.' };",
+            "    }",
+            f"    if (_ref === {j(NO_CHANGE_REFUSAL)}) {{",
+            f"      return {{ kind: {j(EXIT_KIND)}, route: {j(ROUTE_REVISE)},",
+            f"        call: 'workflow.revise {{run_id: ' + {run_id_js} + ', note: <name the undelivered rows>}}',",
+            "        reason: 'The executor wrote nothing for ' + (_meant.length ? _meant.join(', ') : 'its declared paths') + '. A refire reproduces the refusal: revise the run to name the undelivered rows.' };",
+            "    }",
+            f"    return {{ kind: {j(EXIT_KIND)}, route: {j(ROUTE_REVIEW_ONLY)}, call: {j(REVIEW_ONLY_CALL)},",
+            "      reason: 'The run produced no review, so its commit refuses as unreviewed. A refire reproduces the refusal: re-emit it review-only.' };",
+            "  };",
+        ]
+    )
+
+
 def refire_next_action_js(
     call_js: str,
     legacy_js: str,
@@ -134,6 +192,11 @@ def refire_next_action_js(
         [
             "function _refireNextAction() {",
             "  if (!_halted || typeof _halted !== 'object') return;",
+            _exit_route_js(run_id_js),
+            f"  if ({j(list(NON_REFIRE_REFUSALS))}.includes(_halted.refused)) {{",
+            f"    if (!(_halted.next_action && _halted.next_action.kind === {j(EXIT_KIND)})) _halted['next_action'] = _exitRoute(_halted.refused);",
+            "    return;",
+            "  }",
             f"  const _hk = {kind_js};",
             f"  if ({j(list(ENVELOPE_EXEMPT_KINDS))}.includes(_hk)) return;",
             f"  if ({j(list(FANNED_KINDS))}.includes(_hk) && Array.isArray(_halted.fire) && _halted.fire.length) return;",

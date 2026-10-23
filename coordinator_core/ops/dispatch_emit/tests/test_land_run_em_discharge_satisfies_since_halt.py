@@ -1,5 +1,7 @@
 """A ledger-resume row an EM-performed row discharged between halts owes no diff to land_run's since-halt
-check, so the close lands with no declared product path changed; an undischarged row still refuses."""
+check, so the close lands with no declared product path changed. An undischarged row whose met_by cites
+no contrary sha is credited as already landed by the carrier commit (halt_landing.landing_credited); a
+foreign sha is still refused, pinned in test_land_run_ledger_already_landed.py."""
 
 from __future__ import annotations
 
@@ -114,13 +116,13 @@ def test_land_run_lands_the_close_for_an_em_discharged_row(halted):  # noqa: F81
     assert not landed & {"a.py", B}, landed
 
 
-def test_land_run_still_refuses_the_undischarged_refire_that_changed_nothing(halted):  # noqa: F811
+def test_land_run_credits_the_undischarged_refire_to_the_carrier_commit(halted):  # noqa: F811
     resume = _composed(halted)
     refire = _refire(halted, edit=False)
     head = _git(halted, "rev-parse", "HEAD")
 
     out = _terminal(halted, refire["token"], resume, _verdict(["E1"]))
 
-    assert out["committed"] is False and out["refused"] == "ledger-unmet", out
-    assert out["ledger_failures"] == REFUSED
+    assert out["committed"] is True and out["already_landed"] is True, out
+    assert out["sha"] == _git(halted, "log", "-1", "--format=%H", "--", "a.py").strip()
     assert _git(halted, "rev-parse", "HEAD") == head

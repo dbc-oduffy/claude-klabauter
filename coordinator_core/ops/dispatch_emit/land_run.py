@@ -53,7 +53,6 @@ from coordinator_core.git.machine_local_paths import machine_local_paths
 from coordinator_core.ipc import register_op
 from coordinator_core.ops._path_guard import contained_path, safe_id
 from coordinator_core.ops.dispatch_emit import land_run_contract as contract
-from coordinator_core.ops.dispatch_emit.halted_run_route import halted_refusal, route_suffix
 from coordinator_core.ops.dispatch_emit.ask_contract import (
     LEG_FOOTPRINT_FILE,
     OUTSIDE_ROW_FOOTPRINT,
@@ -65,6 +64,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     UNCHANGED_SINCE_HALT_REASON,
 )
 from coordinator_core.ops.dispatch_emit.grind_commit_contract import ALREADY_LANDED_KEY
+from coordinator_core.ops.dispatch_emit.halted_run_route import halted_refusal, route_suffix
 from coordinator_core.ops.dispatch_emit.request_validation import Field, validate_params
 
 _PARAM_FIELDS = (
@@ -979,6 +979,39 @@ def _ledger_gate(
         wave_reviews=[w for w in inline_review.get("wave_reviews") or [] if isinstance(w, dict)],
         noted_paths=requirements_ledger.noted_paths(root, run_dir),
     )
+    from coordinator_core.ops.dispatch_emit import measured_rev
+
+    try:
+        drifted = measured_rev.measured_rev_drift(run_dir, root)
+        drift_reason = f"measured-rev-drift: {', '.join(drifted)}"
+    except (OSError, ValueError):
+        drifted, drift_reason = ["<record>"], "measured-rev-record-unreadable"
+    if drifted:
+        items = verdict.get("items")
+        stale_met = [
+            {"id": i.get("id"), "reason": drift_reason}
+            for i in (items if isinstance(items, list) else [])
+            if isinstance(i, dict) and i.get("status") == "met"
+        ]
+        if stale_met:
+            result = {**result, "pass": False, "failures": [*result["failures"], *stale_met]}
+    baseline = manifest_data.get("write_baseline") if isinstance(manifest_data, dict) else None
+    if baseline and result["pass"]:
+        from coordinator_core.ops.dispatch_emit.write_baseline import unwritten
+
+        mrows = [r for r in manifest_data.get("rows") or [] if isinstance(r, dict)]
+        dirt: list = []
+        for it in verdict.get("items") or []:
+            if not isinstance(it, dict) or it.get("status") not in ("met", "post_commit"):
+                continue
+            claimed = [r for r in mrows if str(it.get("id")) in (r.get("register_rows") or [])]
+            if not claimed or any(r.get("kept_from") or r.get("adopts_stranded") for r in claimed):
+                continue
+            writes = {w for r in claimed for w in r.get("writes") or [] if isinstance(w, str)}
+            if writes and len(unwritten(root, baseline, writes)) == len(writes):
+                dirt.append({"id": it.get("id"), "reason": "pre-existing-dirt: " + ", ".join(sorted(writes))})
+        if dirt:
+            result = {**result, "pass": False, "failures": [*result["failures"], *dirt]}
     since_halt: dict = {}
     if resume_ledger is not None:
         from coordinator_core.ops.dispatch_emit.pre_halt_credit import with_notes
@@ -2426,6 +2459,22 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
             integrity=[{"path": f.path, "reason": f.reason, "detail": f.detail} for f in findings],
         )
 
+    reach_summary: dict = {}
+    if ask_run_dir is not None and token_state.get("since_halt_close") is None:
+        try:
+            note_text = (root / DELIVERY_NOTE_DIR / f"{ask_run_dir.name}.md").read_text(encoding="utf-8")
+        except (OSError, UnicodeError):
+            note_text = None
+        from coordinator_core.ops.dispatch_emit.reach_claims import REACH_CLAIM_REFUSED, reach_gate
+
+        refusal, reach_summary = reach_gate(
+            root, note_text, landing_paths=paths, deleted_paths=deleted,
+            withheld_paths=[*withhold_reason, *recorded_reason, *art_dropped, *art_withheld, *held_paths],
+        )
+        if refusal is not None:
+            _remove(root, receipt_paths)
+            return _error(refusal, refused=REACH_CLAIM_REFUSED, reach_claims=reach_summary)
+
     expected: dict = {}
     reread_artifacts: list = []
     if session_id is not None:
@@ -2602,6 +2651,8 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
     }
     if script_source == "receipt":
         reply["script_source"] = script_source
+    if reach_summary:
+        reply["reach_claims"] = reach_summary
     reply.update(_fence_reply(fence))
     reply.update(_peer_held_left(peer_held))
     if recorded_changed:

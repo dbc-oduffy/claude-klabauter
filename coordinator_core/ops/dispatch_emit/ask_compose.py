@@ -144,9 +144,11 @@ from coordinator_core.ops.dispatch_emit.wake_digest import (
     CAP_HELPER_JS,
     TERMINAL_COMMIT_CLI_HELPER_JS,
     TERMINAL_COMMIT_CLI_PROPERTY_JS,
+    INTEGRATION_NOT_RUN_VAR,
     next_action_parts,
 )
 from coordinator_core.ops.dispatch_emit.work_label import build_work_label
+from coordinator_core.ops.dispatch_emit.write_baseline import DIRTY_BEFORE_RUN_KEY, MEANT_TO_LAND_KEY, NO_CHANGE_REFUSAL
 from coordinator_core.ops.review_mint.execute_review import (
     NO_SLICES_HALT,
     PREP_BUSY_HALT,
@@ -188,7 +190,7 @@ SKILL_WEIGHT_HEADROOM_CLAUSE = (
     "leg at commit. Write a tripwire pointer, not prose, wherever a skill or command needs a rule. "
     "Never add or demand a test to pin prose (the wording of a skill, command or doc); pin behavior or a pointer's target instead."
 )
-_REVIEW_RESULT_NAMES = ("_reviewPrep", "_reviewWave", "_deliveryVerdict", "_deliveryNotRun", WAVE_NOT_RUN_VAR, "_reviewIntegration", "_reviewReverify")
+_REVIEW_RESULT_NAMES = ("_reviewPrep", "_reviewWave", "_deliveryVerdict", "_deliveryNotRun", WAVE_NOT_RUN_VAR, "_reviewIntegration", INTEGRATION_NOT_RUN_VAR, "_reviewReverify")
 
 
 class AskComposeRefused(ValueError):
@@ -700,10 +702,11 @@ _ADMIT_MANIFEST_JS = (
 _STAGE_SIDECAR_HALT = "stage reply sidecar does not match its handle: "
 _ADOPT_STAGE_REPLY_HEAD_JS = (
     "  let _stagePending = null;\n"
+    "  let _noFoldCause = null;\n"
     # A soft (plan-blitz readyOp) reply's `error` is the pass-through's prose: `_adoptReadyError` owns
     # the refusal there. The manifest is only ever the sidecar text that matched its handle.
     "  const _adoptStageReply = async (r, soft) => {\n"
-    "    if (r === null || r === undefined || typeof r !== 'object' || Array.isArray(r)) return;\n"
+    "    if (r === null || r === undefined || typeof r !== 'object' || Array.isArray(r)) { if (!_noFoldCause) _noFoldCause = 'stage_reply absent from the agent return'; return; }\n"
     "    if (r.error && r.manifest_handle) { if (!soft && !_relayGap) _relayGap = "
     "'stage reply carries both error and manifest_handle'; return; }\n"
     "    if (r.error) { if (!soft && !_stageRefusal) { _stageRefusal = String(r.error); "
@@ -825,9 +828,21 @@ def _test_instruction_js(review_edits_base: str, repo_root: Optional[str] = None
 
     The plan is authored inside the run, so the scope cannot resolve at compose time; the stage
     resolves `test_targets` through `pathspec.terminal_test_scope`. Trap: the runner is told to
-    report raw evidence and never gate, and the targets are scoped, never a tier.
+    report raw evidence and never gate, and the targets are scoped, never a tier. The measured-rev
+    step precedes the targets so a HEAD-measured test reads the candidate commit; the env is set
+    in the test process environment, never as a shell prefix. Trap: the env is prompt-enforced
+    only; `measured_rev_drift` at the landing gates backstops file changes, not a runner that ignores the sha.
     """
+    from coordinator_core.ops.dispatch_emit.ask_contract import MEASURED_REV_ENV, MEASURED_REV_OP
+
     return _cat(
+        f"First run `coordinator-invoke {MEASURED_REV_OP}` with run_id ",
+        "js:_runId",
+        " and paths [",
+        "js:(_manifest.review_declared_paths ?? []).join(', ')",
+        f"]; it returns a candidate commit sha. Run every scoped test target with {MEASURED_REV_ENV} "
+        "set to that sha in the test process environment. If the op refuses, run the tests without it "
+        "and report the refusal as raw evidence. ",
         "Run the scoped test targets: [",
         "js:(_manifest.test_targets ?? []).join(', ')",
         "]. "
@@ -1128,6 +1143,24 @@ def _fire_tier_js() -> str:
     return f"({json.dumps(_emit._TSHIRT_TO_REVIEW_TIER, sort_keys=True)}[_gate?.tshirt] ?? 'full')"
 
 
+# A no-change refusal is a no-op halt (envelope-exempt in halt_refire); the paths it meant to land ride along.
+_NO_CHANGE_HALT_JS = (
+    f"if (_halted?.refused === {_lit(NO_CHANGE_REFUSAL)}) {{ Object.assign(_halted, {{ halted: 'no-op', "
+    f"{MEANT_TO_LAND_KEY}: _commit?.{MEANT_TO_LAND_KEY} ?? null, "
+    f"{DIRTY_BEFORE_RUN_KEY}: _commit?.{DIRTY_BEFORE_RUN_KEY} ?? null }}); }} "
+)
+_GATE_HALT_CAUSE_JS = "(_gate.halt ? 'gate halt: ' + String(_gate.halt.kind ?? _gate.halt.reason ?? 'halt') : 'apm ruling carried no foldable arm (non-XS arm or resume_plan)')"
+
+
+def _fold_decline_js(clean_js: str, cause_js: Optional[str] = None) -> str:
+    """JS `else` clause for a guarded fold site: records into `_noFoldCause` why nothing folded."""
+    cause = cause_js or (
+        f"(!({clean_js}) ? 'scout not clean (exit_code/halt/arm)' : "
+        "'arm ' + String(_gate?.arm) + ' is outside the fold set')"
+    )
+    return f" else if (!_noFoldCause) {{ _noFoldCause = {cause}; }}"
+
+
 def _folded_ledger_charter(
     *, relayed: bool, ledger_rel: str, record_dir: str, run_dir: str, in_run_commit: bool
 ) -> str:
@@ -1145,7 +1178,13 @@ def _folded_ledger_charter(
         f"started), then {record_dir}/{PM_INTENT_FILE} when it exists, the change, and the briefs under "
         f"{run_dir}/briefs. "
         + _LEDGER_ITEMS_RULES
-        + "The manifest's withheld (gated) chunks close this prompt. Return items, all_of_pm_ask and "
+        + "A path the manifest's write_baseline shows unchanged since stage was not delivered by this "
+        "run: pre-existing dirt never meets a row, whatever the working tree holds. "
+        "A HEAD-measured gate's result in this leg measures the run's candidate commit, so it is "
+        "evidence about this run's change, never \"no change\"; when the measured-rev op refused, that "
+        "gate measured HEAD, not the change, so the row is unmet with the refusal as its reason, never "
+        "\"no change\". "
+        "The manifest's withheld (gated) chunks close this prompt. Return items, all_of_pm_ask and "
         "conflicts beside your criterion verdict"
         + _LEDGER_GATED_RULE
         + (_LEDGER_DOC_WRITES_RULE if in_run_commit else "")
@@ -1823,7 +1862,7 @@ def compose_ask_script(
     b.append(_usage_limit_helper_js())
     b.append(_refire_next_action_helper_js(sizing_rel))
     for name in (*_REVIEW_RESULT_NAMES, _emit._TEST_RESULT_VAR):
-        b.append(f"  let {name} = {'[]' if name == WAVE_NOT_RUN_VAR else 'null'};")
+        b.append(f"  let {name} = {'[]' if name == WAVE_NOT_RUN_VAR else 'false' if name == INTEGRATION_NOT_RUN_VAR else 'null'};")
     if judged:
         b.append(f"  let {_emit._FALSIFIER_RESULT_VAR} = null;")
 
@@ -2245,11 +2284,15 @@ def compose_ask_script(
             f"|| _gate.resume_ready || _gate.{RESUME_LEDGER_KEY})"
         )
         if sized_in_run:
-            b.append(f"  if ({clean_js} && {arms_js}) {{ await _adoptStageReply(_scouted.stage_reply); }}")
+            b.append(
+                f"  if ({clean_js} && {arms_js}) {{ await _adoptStageReply(_scouted.stage_reply); }}"
+                f"{_fold_decline_js(clean_js)}"
+            )
         else:
             b.append(
                 "  if (_gate && typeof _gate.arm === 'string') { _gate = { ..._gate, arm: _gate.arm.trim().toLowerCase() }; "
-                f"if ({clean_js} && {arms_js}) {{ await _adoptStageReply(_gate.stage_reply); }} }}"
+                f"if ({clean_js} && {arms_js}) {{ await _adoptStageReply(_gate.stage_reply); }}"
+                f"{_fold_decline_js(clean_js)} }}"
             )
 
     def _record_clause(record_js: str, fields: str) -> list[str]:
@@ -2362,7 +2405,8 @@ def compose_ask_script(
             "&& _apm.recorded && _apm.recorded.ok === true && 'arm' in _apm && 'halt' in _apm) {\n"
             f"      {take_gate % (('_apm',) * 10)}\n"
             + (
-                f"      if (!_gate.halt && _gate.arm === {_lit(ARM_XS)} && !_gate.resume_plan) {{ await _adoptStageReply(_apm.stage_reply); }}\n"
+                f"      if (!_gate.halt && _gate.arm === {_lit(ARM_XS)} && !_gate.resume_plan) {{ await _adoptStageReply(_apm.stage_reply); }}"
+                f"{_fold_decline_js('!_gate.halt', _GATE_HALT_CAUSE_JS)}\n"
                 if fold_stage
                 else ""
             )
@@ -3000,7 +3044,7 @@ def compose_ask_script(
         b.append(f"  if (_gate.arm && _gate.arm !== {_lit(ARM_XS)} && !_xsTail) {{ _falsifierSpec = {spec_js}; }}")
     b.append(
         f"  if (!_stagedManifest) {{ _manifest = {{ error: '{NO_MANIFEST_PREFIX}: the agent that closes the "
-        "gate, plan or plan-blitz ready path returned none' }; }"
+        "gate, plan or plan-blitz ready path returned none (' + (_noFoldCause ?? 'no fold site was reached') + ')' }; }"
     )
     b.append(
         "  if (!_stagedManifest && _stageHalt) { _manifest = { error: _stageHalt, owed_em_ids: _stageOwedEm?.ids ?? [], "
@@ -3164,10 +3208,15 @@ def compose_ask_script(
     # XS skips review; an empty wave (zero slices, no delivery verdict) is the form terminal_commit's
     # inline_review already accepts, so the run still reaches commit without a fabricated verdict.
     b.append(f"  if (!_halted && (_gate.arm === {_lit(ARM_XS)} || _xsTail)) {{ _reviewWave = []; }}")
+    b.append(f"  if (!_halted && (_gate.arm === {_lit(ARM_XS)} || _xsTail)) {{ {INTEGRATION_NOT_RUN_VAR} = true; }}")
     b.append(
         "  if (!_halted && _noReviewPaths && !_xsTail && _gate.arm !== "
         f"{_lit(ARM_XS)}) {{ log('execute_review skipped: no row declares a path, nothing to review'); "
         "_reviewWave = []; }"
+    )
+    b.append(
+        f"  if (!_halted && _noReviewPaths && !_xsTail && _gate.arm !== {_lit(ARM_XS)}) "
+        f"{{ {INTEGRATION_NOT_RUN_VAR} = true; }}"
     )
     b.append(_review_blocked_halt_js(sizing_rel))
     test_guard = (
@@ -3727,11 +3776,8 @@ def _docs_prompt_parts(*, run_id: str, manifest_rel: str) -> tuple[str, ...]:
     `dispatch.land_run`'s, so the prompt carries none of the tail's own results.
     """
     note_rel = f"{DELIVERY_NOTE_DIR}/{run_id}.md"
-    reach_claim_form = (
-        'State every claim that one code symbol reaches another as "`X` reaches `Y`", both '
-        "backticked; the commit checks each against the tree and refuses the landing when the "
-        "tree does not support it. "
-    )
+    from coordinator_core.ops.dispatch_emit.reach_claims import REACH_CLAIM_FORM
+
     return (
         "This run's change is on disk, uncommitted. Read the sizing at ",
         "js:_sizingRel",
@@ -3751,7 +3797,7 @@ def _docs_prompt_parts(*, run_id: str, manifest_rel: str) -> tuple[str, ...]:
         "and why), each review finding and how it was resolved, and every decision "
         "or deviation taken in-run with its reason -- read them off the row briefs under ",
         f"{RUN_DIR_ROOT}/{run_id}/briefs",
-        ", which are never committed. " + reach_claim_form + "Never edit a plan, sizing or other process record to carry "
+        ", which are never committed. " + REACH_CLAIM_FORM + " Never edit a plan, sizing or other process record to carry "
         "this. Write no verdicts section: the ledger checker's, the tests' and the criterion's results "
         "are appended to the note by the commit. Never write under scratch/, never stage or commit. "
         "Return as doc_paths every "
@@ -3819,7 +3865,7 @@ def _append_docs_and_commit(
         "    else { if (!_halted) _halted = { halted: 'commit', refused: _commit?.refused ?? null, "
         "already_landed: _commit?.already_landed ?? null, "
         "error: _commit?.error ?? null, blob_drift: _commit?.blob_drift ?? null, "
-        "plan: _planRel ?? null, sizing: _sizingRel ?? null }; "
+        "plan: _planRel ?? null, sizing: _sizingRel ?? null }; " + _NO_CHANGE_HALT_JS +
         "if (_incompleteChunks.length === 0) { _nextAction.params.halted = _halted; _reviseAndRefire = null; } "
         f"else {{ _nextAction = {REVISE_NEXT_ACTION_JS}; _reviseAndRefire = _mkRevise(); }} }}"
     )
@@ -3854,7 +3900,7 @@ def roadmap_commit_lines(
         f"    try {{ _commit = await {call}; }} catch (e) {{ _haltOnUsageLimit(e); }}",
         "    if (!_halted && !(_commit && _commit.committed === true)) { _halted = { halted: 'commit', "
         "refused: _commit?.refused ?? null, error: _commit?.error ?? null, "
-        "blob_drift: _commit?.blob_drift ?? null, sizing: _sizingRel, run_id: _runId }; }",
+        "blob_drift: _commit?.blob_drift ?? null, sizing: _sizingRel, run_id: _runId }; " + _NO_CHANGE_HALT_JS + "}",
         "  }",
     ]
 

@@ -1004,6 +1004,9 @@ class ManifestRow:
     register_rows: tuple[str, ...] = ()
     #: Run id whose halt kept this row's finished product; the row is staged kept, not executed.
     kept_from: str = ""
+    #: True for a row that adopts stranded dirt under review; it writes nothing by design, so
+    #: the no-change rules skip its paths. Serialised only when true.
+    adopts_stranded: bool = False
 
     def to_json(self) -> dict[str, Any]:
         out: dict[str, Any] = {
@@ -1023,6 +1026,8 @@ class ManifestRow:
             out["register_rows"] = list(self.register_rows)
         if self.kept_from:
             out["kept_from"] = self.kept_from
+        if self.adopts_stranded:
+            out["adopts_stranded"] = True
         return out
 
     @classmethod
@@ -1039,6 +1044,7 @@ class ManifestRow:
             route=data.get("route"),
             register_rows=tuple(str(r) for r in data.get("register_rows") or ()),
             kept_from=str(data.get("kept_from") or ""),
+            adopts_stranded=bool(data.get("adopts_stranded")),
         )
 
 
@@ -1150,9 +1156,14 @@ class StageManifest:
     #: rows carried from an earlier withheld wave are tested before they ride into a later
     #: checkpoint. Serialised only when non-empty; an absent key reads as ``{}``.
     wave_test_targets: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    #: Declared write path -> `kept_work.fingerprint` taken at stage, before any executor
+    #: (None = absent). Serialised only when non-empty; an absent key reads as ``{}``.
+    write_baseline: dict[str, Optional[str]] = field(default_factory=dict)
 
     def to_json(self) -> dict[str, Any]:
         out = self._base_json()
+        if self.write_baseline:
+            out["write_baseline"] = dict(self.write_baseline)
         if self.wave_test_targets:
             out["wave_test_targets"] = {k: list(v) for k, v in self.wave_test_targets.items()}
         if self.memo_close:
@@ -1207,5 +1218,9 @@ class StageManifest:
             memo_close=tuple(dict(r) for r in data.get("memo_close") or ()),
             wave_test_targets={
                 str(k): tuple(v) for k, v in (data.get("wave_test_targets") or {}).items()
+            },
+            write_baseline={
+                str(k): (None if v is None else str(v))
+                for k, v in (data.get("write_baseline") or {}).items()
             },
         )

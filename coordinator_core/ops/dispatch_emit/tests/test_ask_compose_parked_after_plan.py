@@ -83,7 +83,9 @@ def test_an_emit_time_stop_after_ends_as_the_same_parked_halt_naming_mise_prep(t
 
 
 def test_an_emit_time_stop_after_with_no_landed_plan_on_a_non_xs_arm_is_a_refusal(tmp_path, monkeypatch, capsys):
-    scout, decision, verdict, _rel = e2e._fixture(tmp_path, monkeypatch, capsys, "S", "ceo", [])
+    # An S sizing without positive S evidence resizes to XS at assemble; the precedent flag keeps it on the S arm.
+    scout, decision, verdict, _rel = e2e._fixture(tmp_path, monkeypatch, capsys, "S", "ceo", ["--precedent", "shipped-before"])
+    assert verdict["arm"] == "s"
     stub = e2e._stub(scout, decision, verdict)
     stub["plan"] = {"plan_rel": None}
     out = e2e._run_script(_emit_time_script(), stub)

@@ -187,6 +187,13 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     UNCHANGED_SINCE_HALT_REASON,
     StageManifest,
 )
+from coordinator_core.ops.dispatch_emit.reach_claims import REACH_CLAIM_REFUSED, reach_gate  # noqa: E402
+from coordinator_core.ops.dispatch_emit.write_baseline import (  # noqa: E402
+    DIRTY_BEFORE_RUN_KEY,
+    MEANT_TO_LAND_KEY,
+    NO_CHANGE_REFUSAL,
+    unwritten as _unwritten_paths,
+)
 from coordinator_core.ops.dispatch_emit.commit_request import (
     MARKER_PREFIX,
     PREFIX_CLAIM_LABEL,
@@ -2161,6 +2168,123 @@ def _awaiting_operator(open_rows: Sequence[dict]) -> list:
     return [{"id": r["id"], "row": r["row"], "command": r["command"]} for r in open_rows if "command" in r]
 
 
+def _measured_rev_drift_refusal(
+    run_dir: Path, worktree_root: Path, verdict: dict, ledger: object
+) -> Optional[dict]:
+    """A ``ledger-unmet`` refusal (reason ``measured-rev-drift``) when a ``met`` item stands on a
+    measurement whose recorded blobs no longer match the worktree; None when nothing drifted, no
+    item is ``met``, or the run recorded no measurement."""
+    from coordinator_core.ops.dispatch_emit import measured_rev
+
+    met = [
+        str(i["id"]) for i in verdict.get("items") or []
+        if isinstance(i, dict) and i.get("status") == "met" and i.get("id") is not None
+    ]
+    if not met:
+        return None
+    try:
+        drifted = measured_rev.measured_rev_drift(run_dir, worktree_root)
+    except (OSError, ValueError) as exc:
+        reason, detail = "measured-rev-record-unreadable", f"measured-rev record unreadable ({exc})"
+    else:
+        if not drifted:
+            return None
+        reason = detail = "measured-rev-drift: " + ", ".join(drifted)
+    return _error(
+        f"the requirements are not met: {', '.join(met)}: {detail}. Re-measure and re-run the ledger check",
+        refused="ledger-unmet",
+        ledger_failures=[{"id": i, "reason": reason} for i in met],
+        ledger_items=len(ledger.items),
+        all_of_pm_ask=ledger.all_of_pm_ask,
+        awaiting_operator=[],
+    )
+
+
+def _readable_manifest(manifest_path: Optional[Path]) -> Optional[StageManifest]:
+    if manifest_path is None:
+        return None
+    try:
+        return StageManifest.from_json(json.loads(Path(manifest_path).read_text(encoding="utf-8")))
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def _pre_existing_dirt_refusal(
+    worktree_root: Path, manifest: Optional[StageManifest], verdict: dict, ledger: object
+) -> Optional[dict]:
+    """A ``ledger-unmet`` refusal (reason ``pre-existing-dirt``) when a ``met``/``post_commit`` item's
+    claiming chunks are all non-kept and every declared write of them still equals the stage-time
+    baseline: the run wrote none of it. None otherwise, or when the manifest carries no baseline."""
+    if manifest is None or not manifest.write_baseline:
+        return None
+    failures: list = []
+    for item in verdict.get("items") or []:
+        if not isinstance(item, dict) or item.get("status") not in ("met", "post_commit"):
+            continue
+        iid = str(item.get("id"))
+        rows = [r for r in manifest.rows if iid in r.register_rows]
+        if not rows or any(r.kept_from or r.adopts_stranded for r in rows):
+            continue
+        writes = [p for r in rows for p in r.writes]
+        if not writes or len(_unwritten_paths(worktree_root, manifest.write_baseline, writes)) != len(set(writes)):
+            continue
+        failures.append({"id": iid, "reason": "pre-existing-dirt: " + ", ".join(sorted(set(writes)))})
+    if not failures:
+        return None
+    return _error(
+        "the requirements are not met: "
+        + "; ".join(f"{f['id']}: {f['reason']}" for f in failures)
+        + ". The run did not write these paths; land the dirt through a reviewed run or revise the ask",
+        refused="ledger-unmet",
+        ledger_failures=failures,
+        ledger_items=len(ledger.items),
+        all_of_pm_ask=ledger.all_of_pm_ask,
+        awaiting_operator=[],
+    )
+
+
+def _no_change_refusal(
+    worktree_root: Path, manifest: Optional[StageManifest], request: CommitRequest, inline_review: object
+) -> Optional[dict]:
+    """The ``no-change`` refusal when the run changed none of the product paths it meant to land:
+    every declared path of every non-kept row chunk still equals the stage-time baseline and the
+    review recorded no edit to them. None when the manifest has no baseline, a row adopts stranded
+    dirt, or any path was written."""
+    if manifest is None or not manifest.write_baseline or request.review_only or not request.chunks:
+        return None
+    rows = {r.id: r for r in manifest.rows}
+    if any(r.adopts_stranded for r in rows.values()):
+        return None
+    meant = sorted({
+        p for c in request.chunks if c.id in rows and not rows[c.id].kept_from for p in c.paths
+    })
+    if not meant:
+        return None
+    unchanged = set(_unwritten_paths(worktree_root, manifest.write_baseline, meant))
+    if unchanged != set(meant) or _review_recorded_edits(inline_review) & set(meant):
+        return None
+    from coordinator_core.git.git_state import IndexParseError, read_index
+
+    try:
+        index = read_index(worktree_root)
+    except (IndexParseError, OSError):
+        index = {}
+    dirty = [
+        p for p in meant
+        if manifest.write_baseline.get(p) is not None
+        and (p not in index or index[p].sha != manifest.write_baseline[p])
+    ]
+    route = (
+        "the dirt predates the run: land it through a reviewed run of its own"
+        if dirty else "revise the ask"
+    )
+    return _error(
+        f"the run changed none of the paths it meant to land: {', '.join(meant)}; {route}",
+        refused=NO_CHANGE_REFUSAL,
+        **{MEANT_TO_LAND_KEY: meant, DIRTY_BEFORE_RUN_KEY: dirty},
+    )
+
+
 def _ledger_gate(
     worktree_root: Path, run_dir: Path, verdict: object, manifest_path: Optional[Path] = None,
     gated: Optional[Sequence[str]] = None, operator: Optional[dict] = None,
@@ -2210,6 +2334,12 @@ def _ledger_gate(
         if stale:
             result = {**result, "pass": False, "failures": [*result["failures"], *stale]}
     if result["pass"]:
+        dirt = _pre_existing_dirt_refusal(worktree_root, _readable_manifest(manifest_path), verdict, ledger)
+        if dirt is not None:
+            return dirt, ledger, []
+        drift = _measured_rev_drift_refusal(run_dir, worktree_root, verdict, ledger)
+        if drift is not None:
+            return drift, ledger, []
         return None, ledger, result.get("open") or []
     foreign = [
         str(f["id"]) for f in result["failures"] if f["reason"] == requirements_ledger.NOT_A_ROW_REASON
@@ -4404,6 +4534,11 @@ def _terminal_commit_inner(
     # Review at close is deterministic (PM ruling 2026-10-01): a run whose
     # result carries no review-stage output cannot land code, however the
     # script was composed or stripped.
+    no_change = _no_change_refusal(
+        worktree_root, manifest if ask_run_dir is not None else None, request, inline_review
+    )
+    if no_change is not None:
+        return no_change
     if inline_review is None:
         return _error(
             "params.inline_review is absent -- the run carries no review-stage "
@@ -5604,6 +5739,20 @@ def _terminal_commit_inner(
             **integrity_extra,
         )
 
+    reach_reply_field: dict = {}
+    if ask_note_rel is not None and token_state.get("since_halt_close") is None:
+        reach_withheld = {
+            *wh_map, *proc_wh, *sibling_withheld, *held_paths,
+            *(art_landable.withheld if art_landable is not None else ()),
+        }
+        reach_refused, reach_reply_field = reach_gate(
+            worktree_root, _read_rel(worktree_root, ask_note_rel), landing_paths=all_paths,
+            deleted_paths=deleted_paths, withheld_paths=reach_withheld,
+        )
+        if reach_refused is not None:
+            _remove(worktree_root, receipt_paths)
+            return _error(reach_refused, refused=REACH_CLAIM_REFUSED, reach_claims=reach_reply_field)
+
     from coordinator_core.git import ref_cas_retry
 
     # Receipts are run-unique so no peer can touch them; the regenerated allowlist stays in the
@@ -6094,6 +6243,8 @@ def _terminal_commit_inner(
         )
     if integrity_extra.get("since_base_check"):
         reply["since_base_check"] = integrity_extra["since_base_check"]
+    if reach_reply_field.get("checked"):
+        reply["reach_claims"] = reach_reply_field
     reply["targeted_tests_check"] = integrity_extra["targeted_tests_check"]
     reply["reverify_check"] = integrity_extra["reverify_check"]
     if "retested_tests" in integrity_extra:
