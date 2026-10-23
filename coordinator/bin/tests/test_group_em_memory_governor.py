@@ -189,6 +189,34 @@ def test_dead_noticed_pid_is_ignored(tmp_path):
     assert gov.read_noticed_pids(path, RAG_TREE) == frozenset()
 
 
+CONHOSTS = [
+    P(80, 1, 5, 8, r"C:\Windows\System32\conhost.exe 0x4"),
+    P(81, 1, 4, 7, "conhost.exe"),
+]
+
+
+def test_noticed_conhost_is_never_paused_and_only_hint_is_emitted(tmp_path, monkeypatch):
+    monkeypatch.setattr(gov.sys, "platform", "win32")
+    path = _channel(tmp_path, '{"phase":"START","pids":[80,81]}')
+    lines, calls = _crit(CONHOSTS, path, ticks=3)
+    assert calls == []
+    assert len(lines) == 1 and lines[0].startswith("GOVERNOR CACHE-TRIM-HINT")
+
+
+def test_noticed_process_under_rss_floor_is_not_paused(tmp_path):
+    small = [P(90, 1, 5, 50, "python /x/job.py"), P(91, 90, 4, 40, "python /x/worker.py")]
+    path = _channel(tmp_path, '{"phase":"START","pids":[90]}')
+    lines, calls = _crit(small, path)
+    assert calls == [] and all("PAUSED" not in line for line in lines)
+
+
+def test_noticed_tree_over_floor_is_still_paused(tmp_path):
+    big = [P(90, 1, 5, 50, "python /x/job.py"), P(91, 90, 4, 400, "python /x/worker.py")]
+    path = _channel(tmp_path, '{"phase":"START","pids":[90]}')
+    lines, calls = _crit(big, path)
+    assert calls[0] == ((90, 91), True)
+
+
 def test_noticed_harness_process_stays_protected(tmp_path):
     path = _channel(tmp_path, '{"phase":"START","pids":[11]}')
     assert _crit(PROCS, path)[1][0][0] == (60,)

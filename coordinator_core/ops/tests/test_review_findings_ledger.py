@@ -328,6 +328,51 @@ def test_verify_refuses_non_reviewer_agent_type(tmp_path):
         m.verify(sidecar, repo_root=tmp_path)
 
 
+@pytest.mark.parametrize(
+    "on_disk",
+    [
+        b"a = 1\r\nb = 2\r\nc = 3\r\n",
+        b"a = 1\nb = 2\r\nc = 3\r\n",
+        b"a = 1\r\nb = 2\nc = 3\n",
+    ],
+    ids=["crlf", "mixed-lf-first", "mixed-crlf-first"],
+)
+def test_verify_accepts_multiline_after_in_crlf_or_mixed_file(tmp_path, on_disk):
+    target = tmp_path / "src.py"
+    target.write_bytes(on_disk)
+    sidecar = _write_sidecar(
+        tmp_path,
+        baseline={"src.py": _sha256("a = 0\nb = 0\nc = 3\n")},
+        findings_count=1,
+        rows=[{"id": "finding-1", "file": "src.py", "before": "a = 0\nb = 0", "after": "a = 1\nb = 2"}],
+    )
+    outcome = m.verify(sidecar, repo_root=tmp_path)
+    assert outcome.ok, outcome.failures
+
+
+def test_verify_still_refuses_a_multiline_after_that_is_absent_from_a_crlf_file(tmp_path):
+    target = tmp_path / "src.py"
+    target.write_bytes(b"a = 1\r\nb = 9\r\nc = 3\r\n")
+    sidecar = _write_sidecar(
+        tmp_path,
+        baseline={"src.py": _sha256("a = 0\nb = 0\nc = 3\n")},
+        findings_count=1,
+        rows=[{"id": "finding-1", "file": "src.py", "before": "a = 0\nb = 0", "after": "a = 1\nb = 2"}],
+    )
+    outcome = m.verify(sidecar, repo_root=tmp_path)
+    assert not outcome.ok
+    assert "not found" in outcome.failures[0]
+
+
+def test_cli_verify_help_prints_verify_usage(capsys):
+    with pytest.raises(SystemExit) as exc:
+        m.main(["verify", "-h"])
+    assert exc.value.code == 0
+    out = capsys.readouterr().out
+    assert "review-findings-ledger verify" in out
+    assert "--sidecar" in out
+
+
 def test_cli_verify_exit_codes(tmp_path):
     target = tmp_path / "src.py"
     target.write_text("x = 2\n", encoding="utf-8")
@@ -515,7 +560,14 @@ def _plan_reviewer_sidecar(tmp_path, agent_type: str):
     return sidecar
 
 
-@pytest.mark.parametrize("agent_type", ["coordinator:plan-reviewer", "review-findings"])
+@pytest.mark.parametrize("agent_type", ["game-dev:executor", "coordinator:staff-unknown", "game-dev:"])
+def test_scope_refuses_non_reviewer_plugin_agent_types(tmp_path, agent_type):
+    sidecar = _plan_reviewer_sidecar(tmp_path, agent_type)
+    with pytest.raises(m.LedgerError, match="agent_type"):
+        m._check_sidecar_scope(sidecar, tmp_path, sidecar.read_text(encoding="utf-8"))
+
+
+@pytest.mark.parametrize("agent_type", ["coordinator:plan-reviewer", "review-findings", "game-dev:staff-game-dev"])
 def test_verify_accepts_a_plan_reviewer_sidecar_of_either_shape(tmp_path, monkeypatch, agent_type):
     from coordinator_core.ops import plan_status_transition
 

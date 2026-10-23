@@ -1183,6 +1183,61 @@ def test_content_change_still_blocks_late_delta(tmp_path):
     assert "later commit" in m.check(plan_path, repo, supersession=True)
 
 
+def _later_edit_with_anchor(repo: Path, plan_id_of_sidecar, stem: str) -> None:
+    if plan_id_of_sidecar is not None:
+        _write_sidecar(
+            repo / ".coordinator-local" / "subagent-share" / "sessZ" / f"{stem}.md",
+            {"plan_id": plan_id_of_sidecar},
+        )
+    (repo / "coordinator_core" / "foo.py").write_text("x = 3\n", encoding="utf-8")
+    trailer = f"\n\nInline-Review: applies {stem} -- execute-review: 1 slices" if stem else ""
+    _commit(repo, "later edit" + trailer)
+
+
+def _stamped(repo: Path):
+    _, build_test = _mint_success_fixture(repo)
+    plan_path = repo / "docs" / "plans" / "example.md"
+    m.mint(plan_path, repo, build_test_path=str(build_test))
+    return plan_path
+
+
+def test_late_delta_ignores_commit_attributed_to_another_plan(tmp_path):
+    repo = _setup_repo(tmp_path)
+    plan_path = _stamped(repo)
+    _later_edit_with_anchor(repo, "pln-other-000001", "2026-10-01-integration-other")
+    assert m.check(plan_path, repo, supersession=True) is None
+
+
+def test_late_delta_still_blocks_commit_attributed_to_this_plan(tmp_path):
+    repo = _setup_repo(tmp_path)
+    plan_path = _stamped(repo)
+    _later_edit_with_anchor(repo, "pln-example-abc123", "2026-10-01-integration-own")
+    assert "later commit" in m.check(plan_path, repo, supersession=True)
+
+
+def test_late_delta_still_blocks_unattributed_commit(tmp_path):
+    repo = _setup_repo(tmp_path)
+    plan_path = _stamped(repo)
+    _later_edit_with_anchor(repo, None, "")
+    assert "later commit" in m.check(plan_path, repo, supersession=True)
+
+
+def test_late_delta_blocks_when_anchor_sidecar_is_missing(tmp_path):
+    repo = _setup_repo(tmp_path)
+    plan_path = _stamped(repo)
+    _later_edit_with_anchor(repo, None, "2026-10-01-integration-gone")
+    assert "later commit" in m.check(plan_path, repo, supersession=True)
+
+
+def test_late_delta_blocks_when_one_of_several_commits_is_not_foreign(tmp_path):
+    repo = _setup_repo(tmp_path)
+    plan_path = _stamped(repo)
+    _later_edit_with_anchor(repo, "pln-other-000001", "2026-10-01-integration-other")
+    (repo / "coordinator_core" / "foo.py").write_text("x = 4\n", encoding="utf-8")
+    _commit(repo, "unattributed edit")
+    assert "later commit" in m.check(plan_path, repo, supersession=True)
+
+
 def test_repair_discovers_a_prep_whose_product_files_is_only_in_the_body(tmp_path):
     share = tmp_path / "share"
     share.mkdir()

@@ -221,6 +221,10 @@ def _sibling_sizing_resolves(derived_from: str, root: Path) -> bool:
     return False
 
 
+#: A goal id is one slug token; anything with whitespace, a slash or a quote is prose.
+_GOAL_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
+
+
 def _resolve_derived_from(derived_from: str, root: Path) -> Optional[str]:
     """Resolves `prime_exit_criterion.derived_from` against the plan's own
     repo (AC20) -- a link a reader can open and compare, never a
@@ -248,9 +252,14 @@ def _resolve_derived_from(derived_from: str, root: Path) -> Optional[str]:
         return None
 
     goal_id, _, kr_id = derived_from.partition("#")
-    if not goal_id.strip() or not kr_id.strip().startswith("kr-"):
-        # An empty goal id or a non-`kr-` fragment is an intra-plan section
-        # citation (e.g. the plan's own AC table), not a goal link.
+    if (
+        not goal_id.strip()
+        or not kr_id.strip().startswith("kr-")
+        or _GOAL_ID_RE.match(goal_id) is None
+    ):
+        # An empty goal id, a non-`kr-` fragment, or a left half that does not
+        # parse as a goal id (prose, a path, a quote char) is an intra-plan
+        # citation, not a goal link.
         return None
     goals_dir = Path(home_dir(str(root), "goals"))
     if not goals_dir.is_dir():

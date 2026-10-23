@@ -405,6 +405,20 @@ class TestResolveDerivedFrom:
         assert coas._resolve_derived_from("#kr-x", tmp_path) is None
         assert coas._resolve_derived_from("#acceptance-criteria", tmp_path) is None
 
+    @pytest.mark.parametrize(
+        "prose",
+        [
+            ". read with ## Problem#kr-x",
+            '" quoted prose#kr-1',
+            "docs/plans/p.md#kr-x",
+        ],
+    )
+    def test_prose_left_of_hash_is_not_read_as_a_goal_id(self, tmp_path, prose):
+        assert coas._resolve_derived_from(prose, tmp_path) is None
+
+    def test_slug_goal_id_absent_still_refuses_beside_prose_fix(self, tmp_path):
+        assert coas._resolve_derived_from("goal-nope#kr-x", tmp_path) is not None
+
     def test_missing_goal_with_kr_fragment_still_refuses(self, tmp_path):
         failure = coas._resolve_derived_from("goal-nonexistent#kr-x", tmp_path)
         assert failure is not None

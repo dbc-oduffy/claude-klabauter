@@ -218,6 +218,49 @@ def test_run_only_source_is_live_exits_zero(tmp_path: Path, monkeypatch):
     assert any("n/a by design" in ln for ln in out)
 
 
+def _mixed_registry(tmp_path: Path, monkeypatch) -> None:
+    _registry(
+        tmp_path,
+        monkeypatch,
+        '[plugin.mirrors.live-a]\npropagation_mode = "source_is_live"\n'
+        '[plugin.mirrors.copy-a]\npropagation_mode = "copy_install"\n',
+    )
+
+
+def test_run_ok_and_git_propagation_and_na_lines_exit_zero(tmp_path: Path, monkeypatch):
+    from coordinator_core.plugin_health import drift as drift_mod
+
+    _mixed_registry(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        drift_mod,
+        "_check_copy_install",
+        lambda name, *a, **k: drift_mod.DriftResult(
+            ok=True, lines=[f"[ok-via-git-propagation] {name}: copy_install -- content matches"]
+        ),
+    )
+    out, _err, code = drift_mod._run("", False)
+    assert code == 0
+    assert any("n/a by design" in ln for ln in out)
+    assert any(ln.startswith("[ok-via-git-propagation]") for ln in out)
+    assert not any(ln.startswith("[drift]") for ln in out)
+
+
+def test_run_drift_line_beside_na_line_exits_one(tmp_path: Path, monkeypatch):
+    from coordinator_core.plugin_health import drift as drift_mod
+
+    _mixed_registry(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        drift_mod,
+        "_check_copy_install",
+        lambda name, *a, **k: drift_mod.DriftResult(
+            ok=False, lines=[f"[drift] {name}: content differs"]
+        ),
+    )
+    out, _err, code = drift_mod._run("", False)
+    assert code == 1
+    assert any("n/a by design" in ln for ln in out)
+
+
 def test_run_drift_exit_names_plugin_even_when_probe_gave_no_line(tmp_path: Path, monkeypatch):
     from coordinator_core.plugin_health import drift as drift_mod
 

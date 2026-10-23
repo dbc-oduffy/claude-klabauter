@@ -12,6 +12,7 @@ Usage (argv, mirrors the node CLI verbatim):
     plan-status-transition stamp-implemented --plan <path> --override-reason "<why>"
     plan-status-transition stamp-implemented --plan <path> --falsifier-verdict pass \\
         --falsifier-output "<observation>" --prose "<observation tied to the criterion, naming HEAD sha>"
+    plan-status-transition stamp-implemented --plan <path> --decision-record <committed-DR-path>
     plan-status-transition stamp-superseded --plan <path> --by <successor-plan-path>
     plan-status-transition stamp-reopened --plan <path> --reason "<why>"
     plan-status-transition stamp-blocked --plan <path> --reason "<why>"
@@ -427,7 +428,7 @@ class _Opts:
     __slots__ = (
         "verb", "plan", "by", "override_reason", "reason", "findings",
         "falsifier_verdict", "falsifier_output", "prose", "no_commit", "ship_sha",
-        "ledger_met", "cascade",
+        "ledger_met", "cascade", "decision_record",
     )
 
     def __init__(
@@ -445,7 +446,9 @@ class _Opts:
         ship_sha: Optional[str] = None,
         ledger_met: Optional[str] = None,
         cascade: bool = True,
+        decision_record: Optional[str] = None,
     ) -> None:
+        self.decision_record = decision_record
         self.cascade = cascade
         self.no_commit = no_commit
         self.ship_sha = ship_sha
@@ -548,6 +551,11 @@ def _parse_args(argv: List[str]) -> _Opts:
                 raise _CliError(f"flag requires a value: {a}")
             i += 1
             opts.ship_sha = argv[i]
+        elif a == "--decision-record":
+            if i + 1 >= len(argv):
+                raise _CliError(f"flag requires a value: {a}")
+            i += 1
+            opts.decision_record = argv[i]
         elif a == "--ledger-met":
             if i + 1 >= len(argv):
                 raise _CliError(f"flag requires a value: {a}")
@@ -1836,6 +1844,41 @@ def _stamp_implemented(opts: _Opts) -> int:
         # stands: overwriting a prior observation is never this flag's job.
         recorded_fm = split.fm_text
         gate_text = text
+        decision_attested = False
+        if opts.decision_record is not None:
+            # Decision-record close: a plan whose deliverable is a decision has no
+            # criterion to falsify, so the attestation is the landed record itself.
+            if read_fm_nested_field(split.fm_text, "prime_exit_criterion") is not None:
+                raise MutateAbort(
+                    f"{_PROG}: {opts.plan} declares a prime_exit_criterion; "
+                    "--decision-record is only for plans with none -- record the "
+                    "observation with --falsifier-*/--prose"
+                )
+            if worktree_root is None:
+                raise MutateAbort(
+                    f"{_PROG}: --decision-record needs the plan inside a git worktree "
+                    "to verify the record is tracked"
+                )
+            record_rel = opts.decision_record.strip().replace("\\", "/")
+            record_abs = contained_path(Path(worktree_root) / record_rel, [worktree_root])
+            if (
+                not record_rel
+                or record_abs is None
+                or not _plan_tracked_in_head(Path(worktree_root), record_rel)
+            ):
+                raise MutateAbort(
+                    f"{_PROG}: --decision-record {opts.decision_record!r} is not a "
+                    "committed file under the repo; land the decision record first"
+                )
+            if read_fm_field(split.fm_text, "decision_record") is not None:
+                raise MutateAbort(
+                    f"{_PROG}: {opts.plan} already carries decision_record -- "
+                    "the existing attestation stands; drop --decision-record"
+                )
+            recorded_fm = insert_fm_field(
+                split.fm_text, "decision_record", record_rel, after_key="status"
+            )
+            decision_attested = True
         if opts.falsifier_verdict is not None:
             if read_fm_nested_field(split.fm_text, "prime_exit_criterion") is None:
                 raise MutateAbort(
@@ -1852,7 +1895,7 @@ def _stamp_implemented(opts: _Opts) -> int:
             )
             gate_text = rebuild(split, recorded_fm)
 
-        if worktree_root is not None:
+        if worktree_root is not None and not decision_attested:
             from coordinator_core.execute_plan_assemble.goal_gate import (
                 _evaluate_goal_falsifier_gate,
                 _goal_refusal_next_move,
@@ -3829,6 +3872,16 @@ def main(argv: List[str]) -> int:
             f"{_PROG}: {opts.verb} does not accept --falsifier-verdict/"
             "--falsifier-output/--prose (they record exit_criterion_met for "
             "stamp-implemented only)",
+            file=sys.stderr,
+        )
+        return 1
+
+    if opts.decision_record is not None and (
+        opts.verb != "stamp-implemented" or opts.falsifier_verdict is not None
+    ):
+        print(
+            f"{_PROG}: --decision-record is for stamp-implemented only, "
+            "and excludes --falsifier-*/--prose",
             file=sys.stderr,
         )
         return 1

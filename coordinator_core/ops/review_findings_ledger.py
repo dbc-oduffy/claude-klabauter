@@ -107,6 +107,10 @@ _REVIEWER_AGENT_TYPES = frozenset(
 #: identity. Ported from `append_integrator_dispositions._REVIEWER_DOC_TYPE_TOKENS`.
 _REVIEWER_DOC_TYPE_TOKENS = frozenset({"review-findings"})
 
+#: Plugin-domain reviewers (`game-dev:staff-game-dev`): any non-`coordinator`
+#: plugin namespace with a `staff-*` agent. `coordinator:*` stays enumerated.
+_PLUGIN_DOMAIN_REVIEWER_RE = re.compile(r"^(?!coordinator:)[a-z0-9][a-z0-9-]*:staff-[a-z0-9-]+$")
+
 _AGENT_TYPE_RE = re.compile(r"^agent_type:[ \t]*(.*)$")
 
 _FENCE_DELIM_RE = re.compile(r"(?m)^```[A-Za-z0-9_-]*[ \t]*\r?$")
@@ -442,7 +446,11 @@ def _check_sidecar_scope(sidecar_path: Path, repo_root: Path, text: str) -> None
         )
 
     agent_type = _extract_frontmatter_agent_type(text)
-    if agent_type not in _REVIEWER_AGENT_TYPES and agent_type not in _REVIEWER_DOC_TYPE_TOKENS:
+    if (
+        agent_type not in _REVIEWER_AGENT_TYPES
+        and agent_type not in _REVIEWER_DOC_TYPE_TOKENS
+        and not _PLUGIN_DOMAIN_REVIEWER_RE.match(agent_type)
+    ):
         accepted = sorted(_REVIEWER_AGENT_TYPES) + sorted(_REVIEWER_DOC_TYPE_TOKENS)
         raise LedgerError(
             f"target's frontmatter agent_type is {agent_type!r}, which is not one "

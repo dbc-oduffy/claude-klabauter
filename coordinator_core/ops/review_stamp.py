@@ -1476,6 +1476,46 @@ def _review_only_route(plan_path: Path, run_base: str) -> str:
     )
 
 
+_ATTRIBUTION_FMT = (
+    f"{_HEADER_SENTINEL}%H{_FIELD_SEP}%(trailers:key=Session-Id,valueonly=true,unfold=true,separator={_MULTI_SEP})"
+    f"{_FIELD_SEP}%(trailers:key=Inline-Review,valueonly=true,unfold=true,separator={_MULTI_SEP})%n%B"
+)
+
+
+def _unforeign_commits(repo_root: Path, log_out: str, plan_id: str) -> List[str]:
+    """Shas from an `_ATTRIBUTION_FMT` log that are NOT attributed to another plan.
+
+    A commit is foreign only when an `Inline-Review: applies <stem>` anchor resolves to a
+    sidecar whose `plan_id` is set and differs from `plan_id`. Unanchored commits, unreadable
+    sidecars and sidecars without a `plan_id` stay counted: absence of attribution never exempts.
+    """
+    kept: List[str] = []
+    for record in log_out.split(_HEADER_SENTINEL)[1:]:
+        header, _, body = record.partition("\n")
+        sha, _, rest = header.partition(_FIELD_SEP)
+        session, _, trailer_field = rest.partition(_FIELD_SEP)
+        anchors = [t for t in trailer_field.split(_MULTI_SEP) if t]
+        anchors += [
+            m.group(1)
+            for m in map(_BODY_INLINE_REVIEW_RE.match, body.splitlines())
+            if m and m.group(1) not in anchors
+        ]
+        foreign = False
+        for trailer in anchors:
+            m = _APPLIES_RE.match(trailer.strip())
+            sidecar_path = _find_sidecar_by_stem(repo_root, m.group(1), session.strip() or None) if m else None
+            data = _load_sidecar(sidecar_path) if sidecar_path is not None else None
+            sidecar_plan_id = str((data or {}).get("plan_id") or "")
+            if sidecar_plan_id and sidecar_plan_id != plan_id:
+                foreign = True
+            elif sidecar_plan_id:
+                foreign = False
+                break
+        if not foreign:
+            kept.append(sha)
+    return kept
+
+
 def check(plan_path: Path, repo_root: Path, *, supersession: bool = False) -> Optional[str]:
     """Returns `None` when the plan's `review_stamp` is still valid, or a
     one-line refusal string. At most four git spawns (see module
@@ -1534,10 +1574,11 @@ def check(plan_path: Path, repo_root: Path, *, supersession: bool = False) -> Op
             writes = [git_pathspec(w) for w in writes]
             spec = [*writes, f":(exclude){own_rel}"] if own_rel else writes
             try:
-                out = _run_git(["log", "--format=%H", f"{terminal}..HEAD", "--", *spec], cwd=str(repo_root))
+                out = _run_git(["log", f"--pretty=format:{_ATTRIBUTION_FMT}", f"{terminal}..HEAD", "--", *spec], cwd=str(repo_root))
             except _GitUnavailable as exc:
                 return f"review-stamp: could not check supersession: {exc}"
-            if out.strip():
+            own_plan_id = str(fm_data.get("plan_id") or "")
+            if _unforeign_commits(repo_root, out, own_plan_id):
                 ws = run_git(
                     ["diff", "--quiet", "-w", "--ignore-blank-lines", terminal, "HEAD", "--", *spec],
                     cwd=str(repo_root),
