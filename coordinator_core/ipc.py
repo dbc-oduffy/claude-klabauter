@@ -2612,9 +2612,12 @@ def _timeout_error_envelope(method: str, op_timeout: float, id_: Any) -> dict:
         }
 
     if _op_may_mutate(method):
-        from coordinator_core.telemetry import op_latency  # noqa: PLC0415 - timeout path only
+        try:
+            from coordinator_core.telemetry import op_latency  # noqa: PLC0415 - timeout path only
 
-        warm = op_latency.execution_route() != op_latency.IN_PROCESS
+            warm = op_latency.execution_route() != op_latency.IN_PROCESS
+        except Exception:  # noqa: BLE001 -- telemetry is fail-open; default to warm wording
+            warm = True
         lead = (
             _OP_TIMEOUT_INDETERMINATE_MESSAGE
             if warm

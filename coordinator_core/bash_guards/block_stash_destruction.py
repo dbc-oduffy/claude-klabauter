@@ -415,7 +415,8 @@ def _evaluate_powershell(cmd: str, classify=_classify_stash_subcommand) -> Optio
     return None
 
 
-def _deny_reason(deny_kind: str) -> str:
+def _deny_reason(cmd: str, deny_kind: str) -> str:
+    del cmd
     return (
         "BLOCKED: `%s` discards stash content for good (no reflog entry), and on a "
         "shared tree the entry at a position may not be yours.\n\n"
@@ -478,7 +479,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
     from coordinator_core.guard_messages.alternative_record import AdaptableOffer
 
-    legacy = _deny_reason(deny_kind)
+    legacy = _deny_reason(cmd, deny_kind)
     return _record(
         "deny",
         legacy,

@@ -295,7 +295,7 @@ RATCHET_BASELINE_MEAN_PROSE_BYTES_PER_BAND: Dict[str, int] = {
     # `python3` on PATH that is a ~58b quoted path instead of 7b, lifting the
     # band mean 555 -> 580. No change to the banner text or its seam script
     # since 18e3f6c0a2 (git log -S).
-    "platform-conditioned-deny": 565 + JITTER_ALLOWANCE_BYTES,
+    "platform-conditioned-deny": 580 + JITTER_ALLOWANCE_BYTES,
     "directory:write_guards": 145 + JITTER_ALLOWANCE_BYTES,
     # Legitimate bump (this dispatch): five new `hooks/*` corpus rows
     # (guard_config_change_hookstack_selfdefence, nudge_cross_repo_cwd_

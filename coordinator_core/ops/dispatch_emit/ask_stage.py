@@ -1082,33 +1082,6 @@ def stamp_plan_executing(root: Path, plan_rel: str) -> dict:
     return out
 
 
-def _escaping_write_refusal(root: Path, plan_rel: Optional[str], only_rows) -> Optional[str]:
-    """The `CrossRepoWriteError` text for a full-plan stage whose rows write outside every checkout, else None.
-    Runs before the record dir exists, so a hard refusal leaves nothing on disk; `stage()` re-checks
-    approval and grants. Any other failure is left for `stage()` to report."""
-    if not plan_rel or only_rows is not None:
-        return None
-    try:
-        plan_path = contained_path(root / plan_rel, [root])
-        if plan_path is None or not plan_path.is_file():
-            return None
-        raw = [
-            r for r in load_rows(plan_path.read_text(encoding="utf-8")).rows
-            if isinstance(r, dict) and isinstance(r.get("id"), str)
-        ]
-        rows = read_spine(
-            plan_path,
-            exclusions=[],
-            cleared_gate_owners=own_gate_owners(raw, root) | frozenset(provisioned_sibling_roots(raw, root)),
-        )
-        check_cross_repo_writes(rows, root, approved=True)
-    except CrossRepoWriteError as exc:
-        return str(exc)
-    except Exception:
-        return None
-    return None
-
-
 @register_op("dispatch.ask_stage")
 def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "dispatch.ask_stage": params `run_id` (str), exactly one of `plan_path` / `sizing_path`, `writes`.
@@ -1146,9 +1119,6 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                 "error": f"{STAGE_RECEIPT_MISSING}: manifest.json landed for run {run_id} with no matching "
                 "stage receipt. Reconcile the run; nothing was written."
             }
-        escaping = _escaping_write_refusal(root, params.get("plan_path") or None, params.get("only_rows"))
-        if escaping is not None:
-            return {"error": escaping}
         prior_dir.mkdir(parents=True, exist_ok=True)
         if not ask_stage_receipt.claim(prior_dir, digest):
             # A racing claim of other params has no matching digest, so `in_flight` is None; the key still answers.

@@ -49,14 +49,20 @@ _CREATIONFLAGS = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 #: attachment in a live transcript -- the harness owns that number, this
 #: repo does not), minus the rest of one invocation: interpreter boot, the
 #: `coordinator_core` import, and every non-probing guard's in-process work.
-#: Not felt on an unloaded box; binds only under the documented load norm.
+#: Measured idle end-to-end for the whole hook, real payload, warm index:
+#: ~0.55 s, of which ~0.95 s of git time is the tail under contention -- so
+#: this budget is not felt on an unloaded box and only binds when the machine
+#: is at its documented 50-70-concurrent-LLM norm (`docs/wiki/machine-load-
+#: norm.md`).
 #:
 #: WHY A CEILING AT ALL. Per-probe `timeout=2.0` bounds ONE spawn; nothing
 #: bounded their SUM. A commit-shaped command spawns six git processes on
 #: this path, so the engine's own worst case (12 s of git, plus boot and
 #: import) sat ABOVE the harness window -- and a hook that overruns its
 #: window is cancelled outright, which loses every guard's verdict, not just
-#: the slow one's.
+#: the slow one's. That is the delivery failure recorded in
+#: `state/bug-backlog/2026-08-15-bare-commit-deny-never-reached-the-
+#: operator.yaml`: no deny, no advisory, nothing printed at all.
 _GIT_PROBE_BUDGET_SECONDS = 6.0
 
 #: Deadline (a `time.monotonic()` stamp) for the dispatch currently in
@@ -68,10 +74,15 @@ _GIT_PROBE_BUDGET_SECONDS = 6.0
 #: this budget existed. Do not arm it from a check; a check does not know
 #: whether it is one guard in a chain or the whole call.
 #:
-#: `contextvars.ContextVar` rather than a bare module global: under a warm
-#: engine two dispatches can be interleaved, and a bare global lets one
-#: dispatch's `_arm_git_probe_deadline` resurrect the other's exhausted budget.
-#: Each dispatch runs in its own Context, so arm/disarm is invisible to a peer.
+#: `contextvars.ContextVar` rather than a bare module global (C8,
+#: docs/plans/2026-08-15-warm-engine-retires-the-per-invocation-cold-start.md):
+#: under a warm engine two dispatches can be interleaved, and a bare global
+#: lets a second dispatch's `_arm_git_probe_deadline` silently resurrect a
+#: first dispatch's already-exhausted budget (or vice versa) -- the
+#: characterization test this fix flips,
+#: `coordinator_core/warm/tests/test_process_global_characterization.py`
+#: Site 6. Each dispatch runs in its own Task/thread Context, so arm/disarm
+#: in one dispatch is invisible to a concurrently-interleaved one.
 _git_probe_deadline: contextvars.ContextVar[Optional[float]] = contextvars.ContextVar(
     "_dispatch_checks_git_probe_deadline", default=None
 )
@@ -644,10 +655,29 @@ def _rm_peer_claim_of(
             if mtime is not _UNKNOWN_MTIME and now - mtime > 1800:
                 continue
 
-        # NEGATIVE SPEC -- do NOT restore the legacy AC21 claim union here on
-        # the shape of the 2026-08-03 fail-open. That restoration was correct
-        # while a live writer still emitted the old dialect; no writer can
-        # emit that dialect now, so a restored union would read a corpus that cannot grow, and would
+        # The AC21 legacy union that stood here was deleted 2026-08-27 on the
+        # condition this comment itself named: "until a chunk migrates that
+        # writer off the old dialect (verified at HEAD, not assumed from a
+        # stale premise) and deletes this union." Both halves are now true.
+        # `claims.atomic_dedup_append`'s last reachable production caller --
+        # the CLI `claim-path` seam -- was repointed onto
+        # `touch_record.append_event` (`ab177e43f`), and the claim-reader
+        # union came out of `scope.py`/`claim_index.py` in one change
+        # (`227b513e7`). The on-disk corpus was drained BEFORE the read was
+        # removed, not assumed empty: `legacy_touch_corpus_migrate` applied
+        # across 135 dirs, and both checks then read zero -- the existence-
+        # keyed `legacy_touch_corpus_drain_check` and the CONTENT-level
+        # `legacy_touch_corpus_straggler_check`, the latter walking
+        # `.agents/<aid>/`. Neither alone is sufficient, since the
+        # existence-keyed checks can never reopen a drained dir.
+        #
+        # NEGATIVE SPEC -- do NOT restore this union on the shape of the
+        # 2026-08-03 fail-open. That restoration (58420b380) was correct at
+        # the time because a live writer still emitted the old dialect; a
+        # peer whose claims arrived only through `self_claim` then projected
+        # to zero claims and a destructive command against its claimed path
+        # was silently allowed. No writer can emit that dialect now, so a
+        # restored union would read a corpus that cannot grow, and would
         # re-admit the legacy PARSER this seam exists to retire. If a legacy
         # writer ever reappears, the defect is the writer.
         new_claimed_paths: set = set()
@@ -699,7 +729,13 @@ def _rm_peer_claim_of(
 #: tokenizer-adjacent helpers).
 #: Staged-path count above which the per-file unstage remedy stops being
 #: advice and becomes an instruction to destroy a peer's in-flight work.
-#: 50 sits far below the 11,534 foreign paths a peer's bulk untracking once staged.
+#:
+#: Measured 2026-09-02: a peer's bulk untracking left 11,534 foreign paths
+#: staged on the shared branch. Every commit form in this tree refused for as
+#: long as that stood -- including `git commit -- <pathspec>`, because this
+#: check reads the whole index and a pathspec does not narrow it. The refusal
+#: named one `git restore --staged <file>` per file, which at that size is an
+#: hour of work whose successful completion is the loss of the peer's change.
 _BULK_FOREIGN_INDEX_PATHS = 50
 
 
@@ -1026,10 +1062,23 @@ def _with_name_clause(sentence: str, writer_name: Optional[str]) -> str:
     # the clause outright renders subject + verdict and nothing else -- a
     # bare sid presented as though it were an address, which is the single
     # output this whole cluster exists to prevent and which
-    # `_format_owner_sentence`'s own anti-scope forbids by name.
+    # `_format_owner_sentence`'s own anti-scope forbids by name. Measured
+    # 2026-09-03: the drop began at a 35-byte writer_name, with or without a
+    # basis clause; the longest name in the live registry is 25 bytes, so
+    # this was latent rather than firing -- and
+    # `test_no_live_owner_clause_ever_ends_in_a_bare_sid` asserted the
+    # universal from three names (19/25/22) that all sat under the
+    # threshold, proving less than it claimed.
     #
     # Precedence, worst-last: a full name beats a truncated one, a truncated
-    # one beats UNNAMED, and every one of them beats a bare sid.
+    # one beats UNNAMED, and every one of them beats a bare sid. The old
+    # whole-or-nothing rule ranked a fragment BELOW nothing on the grounds
+    # that `_owner_name_provenance_note` fires on the `" -- w:"` substring
+    # and would warn beside an unreadable name. That trade is real but it
+    # was priced against the wrong alternative: the fallback is not "no
+    # name", it is "no address at all". A marked truncation warns beside a
+    # partial name; the drop warns beside nothing and reads as though no
+    # name existed.
     #
     # NEGATIVE SPEC: never fall back to `" -- UNNAMED"` here. That marker is
     # rung 3's -- it states that NO name resolved -- and reusing it for a
@@ -1073,10 +1122,16 @@ def _format_owner_sentence(
             _owner_clause_budget_bytes(),
         )
 
+    # Resolved once here and threaded through both helpers below -- each
+    # used to call `_resolve_owner_writer_name` independently, up to two
+    # `harness_registry.lookup` calls per rendered sentence.
     writer_name = _resolve_owner_writer_name(fact)
 
     if fact.claim_source == "agent-race":
-        # Terse by budget: do not re-lengthen, and no ": agent-race" token.
+        # Terse by budget: the pre-fix wording exceeded the ~73-byte budget
+        # before any name, truncating the load-bearing CONTESTED verdict
+        # away. Do not re-lengthen -- and no ": agent-race" token; the
+        # prefix cost dropped the name clause entirely.
         sentence = (
             "%s unattributed agent -- CONTESTED"
             % _owner_display_id(fact, writer_name)
@@ -1087,6 +1142,10 @@ def _format_owner_sentence(
         sibling_id = _owner_display_id(fact, writer_name) if fact.owner and fact.owner != ".agents" else None
         sentence = (
             ("sibling %s" % sibling_id if sibling_id else "an unresolved sibling")
+            # "its claim record is" -> "claim record": the dropped words say
+            # nothing the remaining ones do not, and they were the whole
+            # difference between a readable name clause and a `w:proj…`
+            # fragment on a real 36-character sid.
             + " (claim unreadable this call)"
         )
         return _with_name_clause(sentence, writer_name)
@@ -1096,8 +1155,19 @@ def _format_owner_sentence(
     subject = (
         "session %s" % display_id
         if fact.claim_source == "session"
-        # No "session " word here: it spends name-clause budget, and the
-        # substring "dispatched agent" is what test_check_validate_commit.py pins.
+        # C3 follow-up fix 3 (bug 616e4449f90c): NOT "session %s's dispatched
+        # agent" (the pre-fix shape) -- on a real 8-char display_id plus a
+        # realistic name, that subject alone (25 bytes without "session ")
+        # already left too little of the ~73-byte budget for the name
+        # clause (~24 bytes) once ANY liveness prose was added, so the name
+        # truncated to a fragment in every agent-class rendering. Dropping
+        # the redundant "session " word (the subject already says
+        # "dispatched agent", which only a session dispatches) is the
+        # cheapest cut available in this clause: it costs no information a
+        # reader did not already have from "dispatched agent" itself, and
+        # the substring `"dispatched agent"` -- the one thing
+        # ``test_check_validate_commit.py`` pins outside this file -- is
+        # untouched.
         else "%s dispatched agent" % display_id
     )
     if fact.liveness == "live":
@@ -1106,15 +1176,39 @@ def _format_owner_sentence(
             subject,
             " via %s" % basis if basis else "",
         )
-        # The BASIS yields to the NAME: the name is the blocked operator's
-        # only route to the peer; keep the basis only when it is free.
+        # The BASIS yields to the NAME, same call the CONTESTED arm below
+        # already makes: " via harness-registry" is 21 bytes of diagnostic
+        # provenance, and on a real sid it spent exactly the bytes the name
+        # clause needed. Measured 2026-09-02 against the published engine:
+        # `session b4681734 (confirmed live via harness-registry)` is 54
+        # bytes of a 73-byte budget, so a `-- w:example-cockpit-repo-0f` clause
+        # (24) did not fit and `_with_name_clause` dropped it WHOLE --
+        # rendering a bare sid with no `-- w:` and no `-- UNNAMED`, the one
+        # output this clause's anti-scope forbids, to the exact reader who
+        # is blocked and needs the address. `example-game-repo-em` (11 bytes) fit
+        # and `example-cockpit-repo-0f` (18) did not, so the fleet's longer repo
+        # names lost the name and the shorter ones kept it.
+        #
+        # Basis is a debugging aid for whoever maintains the liveness
+        # ladder; the name is the blocked operator's only route to the
+        # peer holding their tree. Keep the basis when it is free, drop it
+        # the moment it costs the name.
         if basis and not _name_clause_fits(sentence, writer_name):
             sentence = "%s (confirmed live)" % subject
     elif fact.liveness == "dead":
         sentence = "%s (no longer live)" % subject
     else:
-        # "CONTESTED" alone is the token tests assert on; extra words would
-        # cost the name clause its bytes.
+        # C3 follow-up fix 3: was "liveness undetermined this call --
+        # CONTESTED" (~44 bytes) -- said the same fact twice ("undetermined"
+        # and "CONTESTED" are the same verdict) and, added to the
+        # "dispatched agent" subject, left no room for the name clause at
+        # all. "CONTESTED" alone is the token every test in this suite and
+        # `test_check_validate_commit.py` actually asserts on (grepped
+        # before this edit -- no test anywhere pins the word
+        # "undetermined" appearing in the rendered sentence, only in the
+        # `OwnerFact.liveness` field name); the descriptive words around it
+        # were free bytes this budget cannot afford across all six classes
+        # with a name attached, so they are cut rather than the name.
         sentence = "%s (CONTESTED)" % subject
     return _with_name_clause(sentence, writer_name)
 

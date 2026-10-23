@@ -295,12 +295,6 @@ from coordinator_core.ops.dispatch_emit.pathspec import (
     _declared_paths,
 )
 from coordinator_core.ops.dispatch_emit import chatty as _chatty
-from coordinator_core.ops.dispatch_emit.seam_repair import (
-    REPAIRABLE_CLASSES as _SEAM_REPAIRABLE_CLASSES,
-    SEAM_FIX_LABEL as _SEAM_FIX_LABEL,
-    SEAM_FIX_SCHEMA as _SEAM_FIX_SCHEMA_DICT,
-    seam_fix_prompt as _seam_fix_prompt,
-)
 from coordinator_core.ops.dispatch_emit.test_caller_widen import widen_waves as _widen_waves
 from coordinator_core.git.literal_pathspec import git_pathspec
 from coordinator_core.ops.dispatch_emit.criterion_leg import (
@@ -4541,8 +4535,6 @@ class SeamLeg(NamedTuple):
     ``gated``: wave numbers whose seam leg a held row awaits.
     ``holds``: row id -> wave numbers (below the row's own) it awaits.
     ``held_plans``: wave number -> plans owning a row held behind that wave's leg.
-    ``own_tests``: ``(row id, (test path, ...))`` pairs of the test files a row's own plan-authored
-    ``writes`` name; caller-widened tests are not here and the seam never runs them.
     """
 
     plans: tuple
@@ -4550,10 +4542,6 @@ class SeamLeg(NamedTuple):
     holds: dict
     held_plans: dict
     certified_plans: tuple = ()
-    own_tests: tuple = ()
-
-
-_SEAM_TEST_FILE_RE = re.compile(r"(^|/)(test_[^/]*|[^/]*_test)\.py$")
 
 
 def _plan_of(row_plan: Optional[str], plan_path: Optional[str]) -> Optional[str]:
@@ -4689,22 +4677,9 @@ def _seam_leg_js(
         "failing file, or the first test path>, blocking: true}` and makes the `verdict` DRIFT. "
         "Run no other command."
     )
-    fix_tail = (
-        json.dumps(_seam_fix_prompt("@F@", "@P@"))
-        .replace("${@F@}", '" + _seamText(JSON.stringify(found)) + "')
-        .replace("${@P@}", '" + JSON.stringify(footprint) + "')
-    )
-    fix_label = json.dumps(_SEAM_FIX_LABEL)
-    own_tests = json.dumps({rid: list(paths) for rid, paths in seam.own_tests})
     return [
         "  const _seamDrift = [];",
         "  const _seamCommitted = [];",
-        f"  const _seamOwnTests = {own_tests};",
-        "  const _seamRepaired = {};",
-        "  const _lastSha = {};",
-        f"  const _SEAM_FIX_SCHEMA = {json.dumps(_SEAM_FIX_SCHEMA_DICT)};",
-        f"  const _SEAM_REPAIRABLE = {json.dumps(list(_SEAM_REPAIRABLE_CLASSES))};",
-        f"  const _isSeamFix = (i) => i.startsWith({fix_label});",
         f"  const _seamHeldPlans = {json.dumps({str(k): list(v) for k, v in seam.held_plans.items()})};",
         "  const _seamFailures = [];",
         f"  const _seamPlans = {json.dumps(list(seam.plans))};",
@@ -4715,16 +4690,15 @@ def _seam_leg_js(
         "  const _seamRelease = {};",
         "  const _seamGates = {};",
         "  async function _seamLeg(n, sha) {",
-        "    _lastSha[n] = sha;",
         "    const params = { plans: _seamPlans, phase: 'wave-boundary', named_set: true, wave: n,"
         + (" certified_plans: _seamCertified," if seam.certified_plans else ""),
         f"      landed_range: {_RUN_BASE_VAR} + '..' + sha,",
-        f"      landed_rows: _seamCommitted.filter((i) => !_isSeamFix(i)).map((i) => ({{ plan: _rowPlan[i] || {_js_string_literal(plan_path or '')}, row: i }})) }};",
+        f"      landed_rows: _seamCommitted.map((i) => ({{ plan: _rowPlan[i] || {_js_string_literal(plan_path or '')}, row: i }})) }};",
         "    const _paths = [...new Set(_seamCommitted.flatMap((i) => _landed[i].paths))];",
         f"    const reach = {{ base_sha: {_RUN_BASE_VAR}, head_sha: sha, paths: _paths }};",
-        "    const tests = [...new Set(_seamCommitted.flatMap((i) => (_seamOwnTests[i] || [])))].filter((p) => /(^|\\/)(test_[^\\/]*|[^\\/]*_test)\\.py$/.test(p));",
+        "    const tests = [...new Set(_seamCommitted.flatMap((i) => _landed[i].declared))].filter((p) => /(^|\\/)(test_[^\\/]*|[^\\/]*_test)\\.py$/.test(p));",
         "    const _seamPathPlan = {};",
-        f"    _seamCommitted.filter((i) => !_isSeamFix(i)).forEach((i) => [..._landed[i].paths, ..._landed[i].declared].forEach((p) => {{ _seamPathPlan[p] = _rowPlan[i] || {_js_string_literal(plan_path or '')}; }}));",
+        f"    _seamCommitted.forEach((i) => [..._landed[i].paths, ..._landed[i].declared].forEach((p) => {{ _seamPathPlan[p] = _rowPlan[i] || {_js_string_literal(plan_path or '')}; }}));",
         "    let r = null;",
         "    let cause = '';",
         "    for (let attempt = 0; attempt < 2; attempt++) {",
@@ -4761,13 +4735,6 @@ def _seam_leg_js(
         "      return;",
         "    }",
         "    if (r.verdict !== 'DRIFT') return;",
-        "    let repairWhy = '';",
-        "    if (!_seamRepaired[n] && found.length && found.every((f) => _SEAM_REPAIRABLE.includes(f.class))) {",
-        "      _seamRepaired[n] = true;",
-        "      const fix = await _seamRepair(n, found);",
-        "      if (fix.ok) return;",
-        "      repairWhy = fix.why;",
-        "    }",
         "    const halted = new Set(marked);",
         "    const finding = {};",
         "    found.forEach((f) => {",
@@ -4776,7 +4743,7 @@ def _seam_leg_js(
         "      if (f.plan) halted.add(f.plan);",
         "      const named = f.plan ? [f.plan, f.counterpart_plan].filter(Boolean) : mine ? [mine] : marked;",
         "      const what = (f.class || 'unclassified') + (f.path ? ' at ' + f.path : '');",
-        "      named.forEach((p) => { if (!finding[p]) finding[p] = what + (repairWhy ? '; in-route repair: ' + repairWhy : ''); });",
+        "      named.forEach((p) => { if (!finding[p]) finding[p] = what; });",
         "      _seamDrift.push({ wave: n, class: f.class || 'unclassified', plans: named, path: f.path || '' });",
         "    });",
         "    if (!found.length) _seamDrift.push({ wave: n, class: 'unclassified', plans: marked, path: '' });",
@@ -4784,33 +4751,6 @@ def _seam_leg_js(
         "      _haltedPlans.add(p);",
         "      if (!_haltedPlanReasons.has(p)) _haltedPlanReasons.set(p, 'seam drift at wave ' + n + (finding[p] ? ': ' + finding[p] : ''));",
         "    });",
-        "  }",
-        "  async function _seamRepair(n, found) {",
-        f"    const synth = {fix_label} + n;",
-        "    const footprint = [...new Set(_seamCommitted.filter((i) => !_isSeamFix(i)).flatMap((i) => _landed[i].declared))];",
-        "    let fix = null;",
-        "    try {",
-        "      fix = await agent(",
-        f"        {js(head)} + 'You repair the seam test failure of wave ' + n + '. ' + {fix_tail} + {sidecar_js},",
-        f"        {{ label: {fix_label} + n, phase: {phase}, agentType: {exec_type}, "
-        f"{_model_opt(_EXECUTOR_AGENT_TYPE)}, schema: _SEAM_FIX_SCHEMA }}",
-        "      );",
-        "    } catch (e) {",
-        "      return { ok: false, why: 'agent call threw: ' + _seamText(e && e.message ? e.message : e) };",
-        "    }",
-        "    if (!fix || fix.status !== 'DONE' || !Array.isArray(fix.paths)) {",
-        "      return { ok: false, why: (fix && fix.reason) ? _seamText(fix.reason) : 'no usable repair reply' };",
-        "    }",
-        "    const outside = fix.paths.filter((p) => !footprint.includes(p));",
-        "    if (outside.length) return { ok: false, why: 'repair wrote outside the footprint: ' + outside.join(', ') };",
-        "    if (!fix.paths.length) {",
-        "      await _seamLeg(n, _lastSha[n]);",
-        "      return { ok: true };",
-        "    }",
-        "    _landed[synth] = { paths: fix.paths, declared: fix.paths };",
-        "    await _commitWave(n, [synth]);",
-        "    if (!_seamCommitted.includes(synth)) return { ok: false, why: 'repair commit did not land' };",
-        "    return { ok: true };",
         "  }",
         "  function _seamText(v) {",
         "    const t = typeof v === 'string' ? v : JSON.stringify(v);",
@@ -5551,11 +5491,6 @@ def compose_script(
             "boundary in the module docstring)"
         )
 
-    row_own_writes = {
-        row.id: tuple(commit_pathspec_or_none([row]) or ())
-        for wave in waves
-        for row in wave
-    }
     if repo_root is not None and not review_only:
         waves = _widen_waves_with_test_referencers(waves, repo_root)
 
@@ -5713,13 +5648,6 @@ def compose_script(
             _checkpointable_rows(dag, row_pathspecs)[0],
             run_base_sha,
         )
-        if seam_leg is not None:
-            own_tests = tuple(
-                (rid, tests)
-                for rid, paths in row_own_writes.items()
-                if (tests := tuple(p for p in paths if p not in gitignored and _SEAM_TEST_FILE_RE.search(p)))
-            )
-            seam_leg = seam_leg._replace(own_tests=own_tests)
         body_blocks.append(
             _checkpoint_commit_js(
                 agent_type_host,

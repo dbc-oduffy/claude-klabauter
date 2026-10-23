@@ -93,10 +93,9 @@ _EAGER_IMPORT_CEILING = 21
 # sanctions this one ceiling edit). Baseline was a single 11414-line file at d913f5b (already over
 # the old 11341 pin). Folded to eight _dc_* modules by the EM ruling (plan row C21): measured
 # aggregate 348 facade + 11587 across 8 _dc_* modules = 11935; the +521 over 11414 is
-# per-module import-header overhead only, no logic added. Comment trims since then
-# leave the measured aggregate below this pin.
+# per-module import-header overhead only, no logic added.
 _DISPATCH_CHECKS_AGGREGATE_LINE_CEILING = 11935
-_REGISTERED_ENTRY_CEILING = 76  # + block-external-workspace-vcs-write; + block-drive-root-new-dir-bash-write; + block-push-pr-non-owned-remote (publish is the line); + trailing-background-ampersand, move-from-inside-cwd (example-game-repo-3b friction advisories); + block-home-root-bash-write; + guard-post-executor-verification (EM verification after an executor); + guard-heavy-command-admission (box-capacity admission plan); + deploy-dirty-tree; + guard-subagent-heavy-ue-launch (coordinator-content-repo-55 ask, DoE 169088ceb); + block-whole-filesystem-scan; + block-hand-authored-handoff-creation; + block-editor-kill-by-name, block-unreal-engine-resave, block-perforce-submit, block-topic-branch, block-dev-repo-sentinel-removal deny leg; + piped-pytest-exit-advisory, block-venv-creation (PM directive 2026-09-29), background-publish, headless-claude-plugin-dir; + xs-lane-shell-write
+_REGISTERED_ENTRY_CEILING = 75  # + block-external-workspace-vcs-write; + block-drive-root-new-dir-bash-write; + block-push-pr-non-owned-remote (publish is the line); + trailing-background-ampersand, move-from-inside-cwd (example-game-repo-3b friction advisories); + block-home-root-bash-write; + guard-post-executor-verification (EM verification after an executor); + guard-heavy-command-admission (box-capacity admission plan); + deploy-dirty-tree; + guard-subagent-heavy-ue-launch (coordinator-content-repo-55 ask, DoE 169088ceb); + block-whole-filesystem-scan; + block-hand-authored-handoff-creation; + block-editor-kill-by-name, block-unreal-engine-resave, block-perforce-submit, block-topic-branch, block-dev-repo-sentinel-removal deny leg; + piped-pytest-exit-advisory, block-venv-creation (PM directive 2026-09-29), background-publish, headless-claude-plugin-dir
 
 
 def _count_module_scope_imports(source: str) -> int:

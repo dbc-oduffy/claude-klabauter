@@ -188,14 +188,12 @@ _HARNESS = textwrap.dedent(
       .replace(/export const meta = \\{[\\s\\S]*?\\n\\};\\n/, '');
     const reply = JSON.parse(process.env.SEAM_REPLY);
     const commitReply = JSON.parse(process.env.COMMIT_REPLY);
-    const repairReply = JSON.parse(process.env.REPAIR_REPLY || 'null');
     const calls = [];
     const seamParams = [];
     const agent = async (prompt, opts = {}) => {
       const label = opts.label || '';
       calls.push(label);
       if (label.startsWith('commit:')) return commitReply;
-      if (label.startsWith('seam-fix:')) return repairReply;
       if (label.startsWith('seam:')) {
         seamParams.push(prompt);
         const next = Array.isArray(reply) ? reply[Math.min(seamParams.length, reply.length) - 1] : reply;
@@ -224,7 +222,7 @@ CLEAN_REPLY = {"verdict": "CLEAN", "per_plan": {}, "findings": []}
 COMMITTED = {"outcome": "committed", "sha": "c0ffee1"}
 
 
-def _run_script(tmp_path, script: str, reply: dict, commit: dict = COMMITTED, repair=None) -> dict:
+def _run_script(tmp_path, script: str, reply: dict, commit: dict = COMMITTED) -> dict:
     node = shutil.which("node")
     if node is None:
         pytest.skip("node is not installed")
@@ -239,8 +237,7 @@ def _run_script(tmp_path, script: str, reply: dict, commit: dict = COMMITTED, re
         capture_output=True,
         text=True,
         timeout=60,
-        env={"SEAM_REPLY": json.dumps(reply), "COMMIT_REPLY": json.dumps(commit),
-             "REPAIR_REPLY": json.dumps(repair), "PATH": "",
+        env={"SEAM_REPLY": json.dumps(reply), "COMMIT_REPLY": json.dumps(commit), "PATH": "",
              # Windows node aborts CSPRNG init without SystemRoot.
              **{k: os.environ[k] for k in ("SystemRoot",) if k in os.environ}},
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),

@@ -33,18 +33,71 @@ from coordinator_core.bash_guards._rewrite_support import (
 from coordinator_core.bash_guards.block_subagent_destructive_action import _ps_normalize_verb_token
 
 
-#: Tolerates a wrapper's own `-flag` tokens ahead of `git` (`timeout 30 git`,
-#: `ionice -c2 git`, `stdbuf -oL git`), attached-value (`-c2`) or separate-token
-#: (`-c 2`); the `(?!git\b)` lookahead stops a bare flag swallowing the `git` token.
-#: Atomic `(?>...)` groups here and in `_BYPASS_PREFIX` defeat ReDoS on long
-#: `FOO=1 BAR=2 ...` runs (the `env` and bare-assignment branches overlap). Safe
-#: because every alternative ends at a whitespace boundary and none can match a
-#: literal `git`, so no other partition could let the trailing `git` match.
+#: BX-13 fix (2026-07-29, confirmed live via the real dispatcher, not a
+#: theoretical hole): `git` used to have to sit DIRECTLY after the segment
+#: boundary (`^|&&|;|\|`) with nothing but whitespace in between, so a
+#: leading environment-variable assignment, an `env` prefix, or a passthrough
+#: wrapper (`nice`/`time`/`command`/`exec`/`nohup`/`ionice`/`timeout`/
+#: `stdbuf`/`which`/`type`) -- `FOO=1 git commit --no-verify -m x`,
+#: `nice git commit --no-verify -m x` -- was never recognized as a git
+#: invocation at all and sailed through this guard while still executing
+#: `--no-verify` for real. This tolerates the same wrapper-prefix shape this
+#: file's own `_GC_CLEAN_CMD_RE` (destructive-git-clean) already tolerates
+#: ahead of its own `git` anchor, reused here rather than re-derived.
+#: BX-14 fix (2026-07-29, confirmed live via the real dispatcher): the walk
+#: above tolerated the WRAPPER BINARY token itself but never the wrapper's
+#: OWN argument(s) -- `timeout 30 git commit --no-verify`, `ionice -c2 git
+#: commit --no-verify`, `stdbuf -oL git commit --no-verify` all landed on
+#: `30`/`-c2`/`-oL` as the "next token", which is neither a wrapper word nor
+#: `git`, so the walk broke there and the segment fell through to the raw
+#: `_BYPASS_RE` scan below -- which has the identical gap (a bare
+#: wrapper-word-then-space is required immediately before `git`, with no
+#: allowance for an intervening argument token). `_WRAPPER_FLAG_GROUP` below
+#: tolerates zero or more of the wrapper's own `-flag` tokens, both the
+#: attached-value form (`-c2`/`-oL`, a single token) and the SEPARATE-token
+#: form (`-c 2`) via a negative lookahead (`(?!git\b)`) on the optional value
+#: slot -- a bare flag can never swallow the literal `git` token that must
+#: follow as its "value"; the regex engine backtracks off the optional value
+#: group rather than consuming past the command boundary.
+#: Catastrophic-backtracking fix (2026-08-05, dispatch-latency-bound corpus):
+#: `_WRAPPER_FLAG_GROUP`'s star and `_BYPASS_PREFIX`'s outer star (below) both
+#: sit ABOVE an alternation whose branches can match overlapping text -- the
+#: `env\s+(?:\S+=\S*\s+)*` branch and the bare-assignment branch
+#: (`[A-Za-z_][A-Za-z0-9_]*=\S*\s+`) both recognize the same
+#: assignment-shaped token, so a long run of `FOO=1 BAR=2 ...` with no
+#: trailing `git` gives the engine exponentially many ways to partition that
+#: run across outer-star iterations before it can conclude no match exists --
+#: the textbook nested-quantifier ReDoS shape. Wrapped in `(?>...)` (atomic
+#: group, Python 3.11+ -- this package's floor, see repo CLAUDE.md) rather
+#: than rewritten to remove the overlap: atomic grouping commits to the
+#: first successful partition and never reconsiders it, which is safe here
+#: specifically BECAUSE every alternative below ends at a whitespace
+#: boundary and NONE of them can match a literal `git` token -- there is no
+#: legitimate input for which some OTHER partition of the prefix would let
+#: the trailing `git` match succeed where the first-found partition's
+#: trailing `git` match fails. Losing the ability to backtrack into the
+#: prefix therefore cannot lose a match; it only forecloses the exponential
+#: re-exploration of partitions that were never going to matter.
 _WRAPPER_FLAG_GROUP = r"(?>(?:-\S+(?:\s+(?!git\b)\S+)?\s+)*)"
 _BYPASS_PREFIX = (
-    # `{ ` (bash brace-list opener) and `( ` reach this prefix as their own
-    # token; callers anchoring on `_BYPASS_PREFIX` (this regex fallback and
-    # `check_blanket_git_add`) must tolerate both.
+    # BRACE-GROUPING FIX (2026-07-29, EM-run second-pass integration,
+    # confirmed live): `{ ` is bash's brace-list opener (a reserved word
+    # requiring a following space, not an operator like `(`), so
+    # `{ git add -A; }` / `{ git commit --no-verify; }` reach this prefix
+    # with a leading `{ ` this group did not previously tolerate -- any
+    # caller anchoring on `_BYPASS_PREFIX` (this regex fallback and
+    # `check_blanket_git_add`'s matcher) silently missed the brace-wrapped
+    # form. Added as one more zero-or-more alternative, same as every other
+    # wrapper here.
+    # PAREN-GROUPING FIX (2026-07-29, EM-run confinement-corpus pass,
+    # confirmed live): `( git add -A )` / `( git commit --no-verify )` were
+    # never tolerated either -- `(` is whitespace-separated in the tested
+    # shape and, like `{`, the shared tokenizer (`shlex.shlex(...,
+    # punctuation_chars=";&|")`, `_command_tokenizer.py`) does not treat it
+    # specially, so it always falls out as its own token via ordinary
+    # whitespace-splitting. Same bypass class, same fix shape as the brace
+    # alternative directly above -- this regex fallback and
+    # `check_blanket_git_add`'s matcher both anchor on `_BYPASS_PREFIX`.
     r"(?>(?:\{\s+|"
     r"\(\s+|"
     r"(?:sudo|command|time|exec|nohup|which|type)\s+|"

@@ -2566,8 +2566,10 @@ def register_claude_klabauter_root(
         `engine.target` — `candidate` on a makers' box (the claude-klabauter or DoE
         source tree present, `_authoring_tree_on_box`), `main` otherwise
         (PM ruling 2026-09-23, superseding 2026-08-16's unconditional
-        `main`). Neither claude_klabauter key nor `track_ref` is written; a
-        consumer never publishes, so `track_ref` stays publish-side only.
+        `main`). `track_ref` and `engine.working_repos.claude_klabauter` are
+        never written; a consumer never publishes, so `track_ref` stays
+        publish-side only. `repos.claude_klabauter` is written only for a
+        verified claude-klabauter checkout beside the clone (`_discover_claude_klabauter_checkout`).
         The installer never moves the checkout: when its branch disagrees
         with the declared channel, an advisory names the `git switch`.
         Per the agreed cross-repo contract

@@ -332,6 +332,9 @@ _NON_SESSION_DIR_NAMES = frozenset(
         # as -- which is precisely why it lands inside the registry directory
         # this denylist guards.
         ".agent-sidecars",
+        # DoE's `/workday-start` run sink: one dir per run id, never a session
+        # id. `ops/session/reap.py`'s `_LIVE_BOOKKEEPING_DIRS` already names it.
+        "workday-start-runs",
     }
 )
 
