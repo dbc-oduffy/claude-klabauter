@@ -1026,6 +1026,22 @@ def _cas_target(repo: Union[str, Path]) -> Optional[Tuple[Path, str]]:
     return common, ref_rel
 
 
+def _unborn_cas_target(repo: Union[str, Path]) -> Optional[Tuple[Path, str]]:
+    """`(common_dir, ref)` when HEAD is a symref to a branch with no ref yet
+    (loose or packed), else None. The CAS then swaps from absent."""
+    try:
+        head_text = (resolve_git_dir(repo) / "HEAD").read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    if not head_text.startswith("ref:"):
+        return None
+    ref_rel = head_text[len("ref:"):].strip()
+    common = resolve_git_common_dir(repo)
+    if _ref_exists_loose_or_packed(common, ref_rel):
+        return None
+    return common, ref_rel
+
+
 _REQUIRED = object()
 
 
@@ -1552,6 +1568,11 @@ def commit_paths(
 
     old_head = head_sha(repo)
     spine = read_tree_spine(repo, list(assembled))
+    unborn_target = _unborn_cas_target(repo) if old_head is None else None
+    if spine is None and unborn_target is not None:
+        # Unborn branch: HEAD names a ref with no commit, so the tree is empty
+        # and this commit is the root commit.
+        spine = {"": {}}
     if spine is None:
         raise CommitRefused("could not read HEAD's tree spine")
     # SETTLE THE CANDIDATES AGAINST HEAD, off the spine that was read for the
@@ -1792,7 +1813,7 @@ def commit_paths(
         commit_sha = write_object(gitdir, b"commit", body.encode("utf-8", "surrogateescape"))
     flush_object_batch()
 
-    target = _cas_target(repo)
+    target = _cas_target(repo) or unborn_target
     if target is None:
         raise CommitRefused("could not resolve the ref to compare-and-swap")
     ref_gitdir, ref = target

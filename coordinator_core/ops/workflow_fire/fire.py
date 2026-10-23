@@ -336,6 +336,18 @@ def _scaled_max_turns(script_text: str) -> int:
     return max(DEFAULT_MAX_TURNS, phase_count * _TURNS_PER_PHASE + DEFAULT_MAX_TURNS)
 
 
+def _is_git_dir_path(path: str) -> bool:
+    """True when ``path`` names a ``.git`` directory rather than a worktree.
+
+    ``workflow.fire`` is ``common_dir``-scoped (``op_scopes``), so the op
+    layer hands ``fire_workflow`` the git common dir as ``repo_root``; that
+    is never a tree a script lives under. A linked worktree's common dir is
+    the MAIN repo's ``.git``, so the parent is not a safe substitute -- the
+    caller re-resolves from ``script_path`` instead.
+    """
+    return os.path.basename(os.path.normpath(path)) == ".git"
+
+
 def _resolve_target_repo(script_path: Path, cwd: Optional[str]) -> str:
     """Resolve the single tree this fire targets, refusing rather than
     guessing.
@@ -350,7 +362,7 @@ def _resolve_target_repo(script_path: Path, cwd: Optional[str]) -> str:
     inside the tree it targets. Raises ``RepoRootUnresolvableError`` when
     neither yields a real git tree.
     """
-    if cwd:
+    if cwd and not _is_git_dir_path(cwd):
         return cwd
     resolved = show_toplevel(str(script_path.parent))
     if not resolved:

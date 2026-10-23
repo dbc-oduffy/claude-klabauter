@@ -885,15 +885,18 @@ def _test_verdict_empty_halt_js(sizing_rel: Optional[str]) -> str:
 _WAVE_TESTS_GATE_FN = "_waveTestsGreen"
 
 
-def _wave_tests_green_js(agent_type_host: Optional[str], *, repo_root: Optional[str], run_id: str) -> str:
+def _wave_tests_green_js(
+    agent_type_host: Optional[str], *, repo_root: Optional[str], run_id: str, em_brief: bool = False
+) -> str:
     """`_waveTestsGreen(n, ids)`: the checkpoint's pre-commit gate over wave n's cumulative declared tests.
 
     An empty scope passes. Otherwise one test-runner leg runs the scope, and only the returned
     `status` gates (`pass` / `pass-with-skips` land); a throw, a missing sidecar or any other
     status records `_checkpointWithheld` and withholds. Trap: the runner reports, the script gates.
     `_checkpointWithheld` is read only by the run log line and the node regression test; no result
-    field carries it.
+    field carries it. With `em_brief` the runner prompt opens with `_EM_BRIEF`, like the row verify leg.
     """
+    brief = f"{EM_BRIEF_VAR} + " if em_brief else ""
     agent_type = _js_string_literal(_emit._degrade_agent_type(_emit._TEST_AGENT_TYPE, agent_type_host))
     sidecar = _sidecar.sidecar_clause_js("ask", run_id, "'verify:wave-' + n")
     phase = _js_string_literal(_emit._EXECUTE_PHASE_TITLE)
@@ -905,7 +908,7 @@ def _wave_tests_green_js(agent_type_host: Optional[str], *, repo_root: Optional[
         "    let r = null;\n"
         "    try {\n"
         "      r = await agent(\n"
-        "        'Run and report on the scoped test target(s) for the wave ' + n + ' checkpoint: ' + "
+        f"        {brief}'Run and report on the scoped test target(s) for the wave ' + n + ' checkpoint: ' + "
         "scope.join(', ') + '. ' + "
         f"{_js_string_literal(_emit._test_runner_clause(repo_root))} + {sidecar},\n"
         f"        {{ label: 'verify:wave-' + n, phase: {phase}, agentType: {agent_type}, "
@@ -1816,7 +1819,7 @@ def compose_ask_script(
         agent_type_host, repo_root=repo_root, session_id=session_id, seam=None,
         runtime_plan_js=_RUNTIME_PLAN_PATH_JS, pre_commit_gate_js=_WAVE_TESTS_GATE_FN,
     ))
-    b.append(_wave_tests_green_js(agent_type_host, repo_root=repo_root, run_id=run_id))
+    b.append(_wave_tests_green_js(agent_type_host, repo_root=repo_root, run_id=run_id, em_brief=bool(em_brief)))
     b.append(_usage_limit_helper_js())
     b.append(_refire_next_action_helper_js(sizing_rel))
     for name in (*_REVIEW_RESULT_NAMES, _emit._TEST_RESULT_VAR):
@@ -3724,6 +3727,11 @@ def _docs_prompt_parts(*, run_id: str, manifest_rel: str) -> tuple[str, ...]:
     `dispatch.land_run`'s, so the prompt carries none of the tail's own results.
     """
     note_rel = f"{DELIVERY_NOTE_DIR}/{run_id}.md"
+    reach_claim_form = (
+        'State every claim that one code symbol reaches another as "`X` reaches `Y`", both '
+        "backticked; the commit checks each against the tree and refuses the landing when the "
+        "tree does not support it. "
+    )
     return (
         "This run's change is on disk, uncommitted. Read the sizing at ",
         "js:_sizingRel",
@@ -3743,7 +3751,7 @@ def _docs_prompt_parts(*, run_id: str, manifest_rel: str) -> tuple[str, ...]:
         "and why), each review finding and how it was resolved, and every decision "
         "or deviation taken in-run with its reason -- read them off the row briefs under ",
         f"{RUN_DIR_ROOT}/{run_id}/briefs",
-        ", which are never committed. Never edit a plan, sizing or other process record to carry "
+        ", which are never committed. " + reach_claim_form + "Never edit a plan, sizing or other process record to carry "
         "this. Write no verdicts section: the ledger checker's, the tests' and the criterion's results "
         "are appended to the note by the commit. Never write under scratch/, never stage or commit. "
         "Return as doc_paths every "

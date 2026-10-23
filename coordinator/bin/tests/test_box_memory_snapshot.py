@@ -145,11 +145,26 @@ def test_admit_without_readable_status_exits_1(capsys):
     assert "cannot read memory status" in capsys.readouterr().err
 
 
-@pytest.mark.parametrize("plat", ["linux", "darwin"])
-def test_unsupported_host(plat, capsys):
-    rc = mod.main([], platform=plat)
+def test_unsupported_host(capsys):
+    rc = mod.main([], platform="linux")
     err = capsys.readouterr().err
     assert rc == 6 and "unsupported host" in err and len(err.strip().splitlines()) == 1
+
+
+def _run_darwin(argv, **kw):
+    kw.setdefault("status_fn", _status())
+    return mod.main(argv, platform="darwin", governor=GOV, **kw)
+
+
+def test_darwin_admit(capsys):
+    assert _run_darwin(["--admit-peak", "4"]) == 0
+    out = capsys.readouterr().out
+    assert "ADMIT" in out and "unavailable" in out and "Available:        40.0 GiB" in out
+
+
+def test_darwin_hold(capsys):
+    assert _run_darwin(["--admit-peak", "39"]) == 4
+    assert "HOLD" in capsys.readouterr().out
 
 
 def test_help_exits_zero_on_linux(capsys):

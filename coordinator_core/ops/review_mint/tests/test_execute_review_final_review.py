@@ -11,6 +11,7 @@ from coordinator_core.ops.review_mint.final_review import final_review_mandate
 from coordinator_core.ops.review_mint.post_exec_tail import ReviewGroup
 from coordinator_core.ops.review_mint.roster import parse_execute_review
 from coordinator_core.ops.review_mint.tests.test_execute_review import _STAGE_SCHEMAS, _v5_fragment
+from coordinator_core.win_portability import no_console_creationflags
 
 _GROUPS = [
     ReviewGroup(index=0, rows=("C1",), paths=("a/one.py",), quiescence_rows=("C1",)),
@@ -70,5 +71,5 @@ def test_free_text_statement_keeps_the_script_parseable():
         pytest.skip("node not on PATH")
     block = _integration(_compose(criterion=OperativeCriterion(statement=_NASTY)))
     script = "async function f(agent, phase, _verifyOnly, _degrading){\n" + block +"\n}"
-    proc = subprocess.run([node, "--check", "-"], input=script, capture_output=True, text=True, timeout=30)
+    proc = subprocess.run([node, "--check", "-"], input=script, capture_output=True, text=True, timeout=30, **no_console_creationflags())
     assert proc.returncode == 0, proc.stderr

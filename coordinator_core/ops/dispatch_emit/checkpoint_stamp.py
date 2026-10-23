@@ -61,7 +61,6 @@ _RUN_HALTED_LINE = re.compile(r"^" + RUN_HALTED_TRAILER + r":[ \t]*(?P<v>[0-9a-f
 _LANDING_TRAILER_LINE = re.compile(r"^(?:Lands-Chunks|Inline-Review):", re.M)
 _HALT_SUBJECT_PREFIX = "warp: record halted "
 _PLANS_PREFIX = "docs/plans/"
-_MISE_PREFIX = "state/mise-inventory/"
 
 
 def run_halted_bases(message: str) -> frozenset:
@@ -101,6 +100,11 @@ def terminal_plan_closures(message: str, changed_paths) -> frozenset:
     halt (subject starts ``warp: record halted ``). Yields the changed ``docs/plans/*.md`` paths
     plus any ``Halt-Plan:`` value. A checkpoint, stamp or untyped commit touching a plan yields
     nothing."""
+    # Function-local: the module top stays stdlib-only (test_module_top_imports_stdlib_only).
+    from coordinator_core.session import record_homes
+
+    # Repo-relative and "/"-separated, the form `changed_paths` are normalised to below.
+    mise_prefix = record_homes.home_dir("", "mise-inventory").replace("\\", "/") + "/"
     lines = message.splitlines()
     subject = lines[0].strip() if lines else ""
     halt = subject.startswith(_HALT_SUBJECT_PREFIX)
@@ -110,7 +114,7 @@ def terminal_plan_closures(message: str, changed_paths) -> frozenset:
     out = {
         p for p in (str(c).replace("\\", "/") for c in changed_paths)
         if (p.startswith(_PLANS_PREFIX) and p.endswith(".md"))
-        or (p.startswith(_MISE_PREFIX) and p.endswith(".spine.md"))
+        or (p.startswith(mise_prefix) and p.endswith(".spine.md"))
     }
     from coordinator_core.ops.dispatch_emit.ask_contract import HALT_PLAN_TRAILER
 

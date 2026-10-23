@@ -32,7 +32,7 @@ classified by path pattern — NOT directories.
 
 CLI contract (unchanged from the bash oracle):
     review-brightline-gate.sh [--session-id <id>] [<git-range>]
-    range default: `git merge-base origin/main HEAD`..HEAD — REFUSED (exit 1)
+    range default: `git merge-base <origin/main|main|master> HEAD`..HEAD — REFUSED (exit 1)
     when neither --session-id nor an explicit <git-range> is given AND HEAD
     is on a shared `work/*` branch (see `_resolve_range`'s bare-argv-refusal
     note); the bash oracle carried no such guard, so this is a deliberate,
@@ -541,11 +541,16 @@ def _resolve_range(argv: List[str]) -> Tuple[Optional[str], Optional[str], int]:
                     file=sys.stderr,
                 )
                 return None, None, 1
-        base_out, rc = _run_git(["merge-base", "origin/main", "HEAD"])
-        base = base_out.strip()
-        if rc != 0 or not base:
+        base = ""
+        for trunk in ("origin/main", "main", "master"):
+            base_out, rc = _run_git(["merge-base", trunk, "HEAD"])
+            base = base_out.strip()
+            if rc == 0 and base:
+                break
+            base = ""
+        if not base:
             print(
-                f"{_PROG}: cannot resolve origin/main — pass a range explicitly",
+                f"{_PROG}: cannot resolve origin/main, main or master — pass a range explicitly",
                 file=sys.stderr,
             )
             return None, None, 1

@@ -16,6 +16,7 @@ claim with nothing committable beneath it is dropped, never expanded).
 """
 
 import os
+import stat
 import time
 from pathlib import Path
 from typing import Any, Iterable, NamedTuple, Optional, Union
@@ -31,6 +32,7 @@ from coordinator_core.git.git_state import read_index as _read_index
 from coordinator_core.ops.ceremony import git_native
 from coordinator_core.session import core, record_homes, touch_record
 from coordinator_core.session.claims import list_claims_by_session_checked
+from coordinator_core.session.scan_floor import session_start_floor
 from coordinator_core.session.scope import _TOUCH_RECORD_FILENAME, own_path_claims
 
 LANDED = "landed"
@@ -72,6 +74,7 @@ def snapshot(worktree_root: Union[Path, str], sid: Optional[str]) -> ResidueSnap
     except (OSError, ValueError):
         owned = ()
         degraded = True
+    owned = _written_since_session_start(cwd, sid, owned)
     try:
         matches, errors = list_claims_by_session_checked(sid, cwd=cwd)
     except (OSError, ValueError):
@@ -88,6 +91,28 @@ def snapshot(worktree_root: Union[Path, str], sid: Optional[str]) -> ResidueSnap
         if os.path.exists(sink) and touch_record.read_stream_claims_and_held_kind(sink)[2]:
             degraded = True
     return ResidueSnapshot(owned, held, degraded)
+
+
+def _written_since_session_start(cwd: str, sid: str, owned: tuple[str, ...]) -> tuple[str, ...]:
+    """`owned` minus regular files last modified before the session began: a
+    claim recorded by a scan or a declared-path report is not a write, and a
+    file no session write has reached since the session started is not this
+    session's residue. Directories, missing files and an unreadable start
+    time are kept."""
+    floor = session_start_floor(Path(cwd), sid)
+    if floor is None:
+        return owned
+    kept = []
+    for rel in owned:
+        try:
+            st = os.stat(os.path.join(cwd, rel))
+        except OSError:
+            kept.append(rel)
+            continue
+        if stat.S_ISREG(st.st_mode) and st.st_mtime < floor:
+            continue
+        kept.append(rel)
+    return tuple(kept)
 
 
 def landing_states(worktree_root: Union[Path, str], rels: Iterable[str]) -> dict[str, str]:
@@ -155,6 +180,13 @@ def _payload(verdict: str, items: Iterable[str] = (), contested: Iterable[str] =
     return {"verdict": verdict, "items": list(items), "contested": list(contested), "reason": reason}
 
 
+def _with_in_flight(payload: dict[str, Any], in_flight: list[str]) -> dict[str, Any]:
+    """Attach the running-wave paths: reported, never residue."""
+    if in_flight:
+        payload["in_flight"] = in_flight
+    return payload
+
+
 def _ignored(worktree_root: Union[Path, str], rels: list[str]) -> Optional[set[str]]:
     """Subset of `rels` that `.gitignore` matches, or `None` when the check
     itself failed."""
@@ -186,6 +218,39 @@ def _under_dot_git(rel: str) -> bool:
     return rel.replace("\\", "/").split("/", 1)[0] == ".git"
 
 
+#: A plan-blitz trail written to within this window belongs to a running wave.
+IN_FLIGHT_TRAIL_WINDOW_S = 900
+
+_PLAN_BLITZ_HOME = "state/plan-blitz"
+
+
+def _in_flight_trail_paths(worktree_root: Union[Path, str], rels: Iterable[str]) -> set[str]:
+    """Subset of `rels` inside a `state/plan-blitz/<ts>/` trail whose newest
+    file mtime is within `IN_FLIGHT_TRAIL_WINDOW_S`: `land-wave.py` commits
+    that trail on landing, so a close never owns it. An unreadable trail
+    reads as not in flight (its paths stay residue)."""
+    cutoff = time.time() - IN_FLIGHT_TRAIL_WINDOW_S
+    live: dict[str, bool] = {}
+    held: set[str] = set()
+    for rel in rels:
+        parts = rel.replace("\\", "/").split("/")
+        if len(parts) < 4 or "/".join(parts[:2]) != _PLAN_BLITZ_HOME:
+            continue
+        trail = "/".join(parts[:3])
+        if trail not in live:
+            newest = 0.0
+            for dirpath, _dirs, files in os.walk(Path(worktree_root) / trail):
+                for name in files:
+                    try:
+                        newest = max(newest, os.stat(os.path.join(dirpath, name)).st_mtime)
+                    except OSError:
+                        continue
+            live[trail] = newest > cutoff
+        if live[trail]:
+            held.add(rel)
+    return held
+
+
 def owned_uncommitted_payload(
     worktree_root: Union[Path, str],
     snap: ResidueSnapshot,
@@ -195,13 +260,16 @@ def owned_uncommitted_payload(
 ) -> dict[str, Any]:
     """Owned paths not durably in HEAD, minus `excluded` and gitignored
     untracked paths. Paths in `peer_claimed` are `contested`: reported, never
-    residue, since a co-held file can stay dirty with the peer's hunks."""
+    residue, since a co-held file can stay dirty with the peer's hunks. Paths in
+    a running plan-blitz trail are reported under `in_flight`, never residue."""
     if snap.degraded:
         return _payload("indeterminate", reason="session claim read degraded")
     if not snap.owned_paths:
         return _payload("not-applicable")
     skip = set(excluded)
     candidates = [rel for rel in snap.owned_paths if rel not in skip and not _under_dot_git(rel)]
+    in_flight = sorted(_in_flight_trail_paths(worktree_root, candidates))
+    candidates = [rel for rel in candidates if rel not in set(in_flight)]
     states = landing_states(worktree_root, candidates)
     untracked = [rel for rel in candidates if states[rel] == UNTRACKED]
     root = Path(worktree_root)
@@ -226,11 +294,14 @@ def owned_uncommitted_payload(
     items = [rel for rel, state in states.items() if state in NOT_DURABLE_STATES and rel not in peers]
     contested = [rel for rel, state in states.items() if state in NOT_DURABLE_STATES and rel in peers]
     if items:
-        return _payload("open", items, contested)
+        return _with_in_flight(_payload("open", items, contested), in_flight)
     unverified = [rel for rel, state in states.items() if state == UNVERIFIED]
     if unverified:
-        return _payload("indeterminate", contested=contested, reason=f"landing unverified for {len(unverified)} path(s)")
-    return _payload("clean", contested=contested)
+        return _with_in_flight(
+            _payload("indeterminate", contested=contested, reason=f"landing unverified for {len(unverified)} path(s)"),
+            in_flight,
+        )
+    return _with_in_flight(_payload("clean", contested=contested), in_flight)
 
 
 def unstamped_run_batons_payload(

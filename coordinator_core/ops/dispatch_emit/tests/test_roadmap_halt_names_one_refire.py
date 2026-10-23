@@ -11,6 +11,7 @@ import pytest
 
 from coordinator_core.ops.dispatch_emit import halt_refire as hr
 from coordinator_core.ops.dispatch_emit.ask_roadmap import ROADMAP_STAGE_FN, compose_roadmap_script
+from coordinator_core.win_portability import no_console_creationflags
 
 
 def _script() -> str:
@@ -48,7 +49,7 @@ def test_no_arm_gate_halt_yields_refire_envelope(tmp_path):
     )
     f = tmp_path / "t.js"
     f.write_text(js)
-    out = subprocess.run(["node", str(f)], capture_output=True, text=True, check=True).stdout
+    out = subprocess.run(["node", str(f)], capture_output=True, text=True, check=True, **no_console_creationflags()).stdout
     env = json.loads(out)
     assert hr.is_refire_next_action(env)
     assert "state/sizings/x.yaml" in env["call"]

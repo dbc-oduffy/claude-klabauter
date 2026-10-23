@@ -78,6 +78,37 @@ def test_fire_workflow_refuses_before_spawn_when_explicit_cwd_is_wrong_tree(
         fire.fire_workflow(str(script), cwd=str(wrong_repo))
 
 
+def _fake_spawn(monkeypatch):
+    monkeypatch.setattr(fire, "resolve_plugin_dir", lambda claude_bin="claude": "/plugins/coordinator")
+
+    class _FakePopen:
+        def __init__(self, *a, **k):
+            self.pid = 4242
+
+        def poll(self):
+            return None
+
+    monkeypatch.setattr(fire.subprocess, "Popen", _FakePopen)
+    monkeypatch.setattr(fire.time, "sleep", lambda *_: None)
+
+
+def test_fire_workflow_with_dotgit_cwd_fires_against_worktree_root(monkeypatch, script, target_repo):
+    import os
+
+    _fake_spawn(monkeypatch)
+    record = fire.fire_workflow(str(script), cwd=str(target_repo / ".git"))
+    assert os.path.realpath(record["repo_root"]) == os.path.realpath(str(target_repo))
+
+
+def test_fire_workflow_dotgit_of_unrelated_repo_still_refused(monkeypatch, script, wrong_repo):
+    monkeypatch.setattr(fire.subprocess, "Popen", _fail_if_spawned)
+    # a .git cwd is discarded, not trusted: the root comes from the script's own tree
+    record_root = fire._resolve_target_repo(script, str(wrong_repo / ".git"))
+    assert record_root != str(wrong_repo)
+    with pytest.raises(fire.ScriptOutsideRepoRootError):
+        fire.fire_workflow(str(script), cwd=str(wrong_repo))
+
+
 def test_fire_workflow_records_resolved_repo_root_on_success(monkeypatch, script, target_repo):
     monkeypatch.setattr(fire, "resolve_plugin_dir", lambda claude_bin="claude": "/plugins/coordinator")
 

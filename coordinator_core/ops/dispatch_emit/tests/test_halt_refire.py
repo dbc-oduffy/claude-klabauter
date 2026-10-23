@@ -9,6 +9,7 @@ import subprocess
 import pytest
 
 from coordinator_core.ops.dispatch_emit import halt_refire as hr
+from coordinator_core.win_portability import no_console_creationflags
 
 _CALL = "Workflow({ script: 'x' })"
 _RESUME_CALL = "Workflow({ resumeFromRunId: 'r1' })"
@@ -110,7 +111,7 @@ def test_js_runs_under_node(tmp_path):
     )
     f = tmp_path / "t.js"
     f.write_text(script)
-    out = subprocess.run(["node", str(f)], capture_output=True, text=True, check=True).stdout.splitlines()
+    out = subprocess.run(["node", str(f)], capture_output=True, text=True, check=True, **no_console_creationflags()).stdout.splitlines()
     env, idem = json.loads(out[0])
     assert idem and env["op"] == "workflow-resume" and env["input"]["kind"] == "em-discharge"
     assert env["detail"].startswith(hr.ALL_OWED_PREFIX) and out[1] == "x"

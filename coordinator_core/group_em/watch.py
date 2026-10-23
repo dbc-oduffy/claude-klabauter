@@ -294,6 +294,11 @@ _CRON_FLOOR_INTERVAL_SECONDS = 23 * 60.0
 #: should not have to reconcile two renderings of the same instant.
 _GONE_STAMP_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
 
+#: How long a "GONE already reported" tombstone outlives its session's last
+#: departure in the carried peer notes; bounds the persisted record's growth.
+_GONE_TOMBSTONE_TTL_SECONDS = 7 * 24 * 3600
+
+
 def _roster_kwargs(box_wide: bool) -> dict[str, bool]:
     return {"box_wide": True} if box_wide else {}
 
@@ -378,7 +383,10 @@ def _current_agents(
         raise_on_empty_snapshot=True,
         **_roster_kwargs(box_wide),
     )
-    peers = read_pass.enumerate_repo_peers(agents, caller_session_id)
+    peers = read_pass.enumerate_repo_peers(
+        [a for a in agents if not read_pass.is_eval_sandbox_peer(a)],
+        caller_session_id,
+    )
     if group_em_session_id is not None and group_em_session_id != caller_session_id:
         peers = read_pass.enumerate_repo_peers(peers, group_em_session_id)
     return peers
@@ -805,7 +813,8 @@ def poll_once(
     `{session_id: parked_bool}` -- the caller's new `prev_parked` -- this
     tick's declination rows, `{session_id: {"name", "last_seen"}}` for
     every peer seen, which is what the NEXT tick's GONE lines are named
-    from, and this tick's inbox open count -- the caller's new
+    from (plus `{"gone_reported", "gone_at"}` tombstone-only rows for departed
+    sessions, kept `_GONE_TOMBSTONE_TTL_SECONDS`), and this tick's inbox open count -- the caller's new
     `prev_inbox_open`. RAISES on an unreadable registry (`_current_agents`),
     which `main`'s loop and `tick_once` both turn into a POLL-ERROR line;
     every other failure mode stays a plain computation the caller can drive
@@ -868,6 +877,17 @@ def poll_once(
         prior_sig = ((prev_names or {}).get(sid) or {}).get("parked_sig")
         if isinstance(prior_sig, str):
             peer_notes[sid]["parked_sig"] = prior_sig
+    # GONE fires once per session id: a tombstone rides in peer_notes so a
+    # session that re-enters under a new name and leaves again stays quiet.
+    for sid, note in (prev_names or {}).items():
+        if not note.get("gone_reported"):
+            continue
+        gone_at = note.get("gone_at")
+        if sid in peer_notes:
+            peer_notes[sid]["gone_reported"] = True
+            peer_notes[sid]["gone_at"] = gone_at
+        elif isinstance(gone_at, (int, float)) and now_epoch - gone_at < _GONE_TOMBSTONE_TTL_SECONDS:
+            peer_notes[sid] = {"gone_reported": True, "gone_at": gone_at}
 
     watched_repo = (
         "the box"
@@ -878,6 +898,9 @@ def poll_once(
         if session_id in (caller_session_id, group_em_session_id):
             continue
         prior = (prev_names or {}).get(session_id) or {}
+        if prior.get("gone_reported"):
+            continue
+        peer_notes.setdefault(session_id, {"gone_reported": True, "gone_at": now_epoch})
         last_seen = prior.get("last_seen")
         emit(
             _gone_line(
@@ -1306,7 +1329,10 @@ def main(
     # len(cur_parked))`); printing it here too means a reader comparing the two
     # never has to re-derive the caller-inclusion rule to explain an
     # apparent off-by-one between them.
-    excluding_caller = read_pass.enumerate_repo_peers(agents, caller_session_id)
+    excluding_caller = read_pass.enumerate_repo_peers(
+        [a for a in agents if not read_pass.is_eval_sandbox_peer(a)],
+        caller_session_id,
+    )
     if group_em_session_id is not None and group_em_session_id != caller_session_id:
         excluding_caller = read_pass.enumerate_repo_peers(
             excluding_caller, group_em_session_id

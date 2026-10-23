@@ -362,6 +362,7 @@ from coordinator_core.locked_write import LockTimeout, MutateAbort, locked_rmw
 from coordinator_core.module_load_lock import held_during_load
 from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.ops.fleet._common import main_worktree_root
+from coordinator_core.session import record_homes
 from coordinator_core.wire_paths import rel_id
 
 
@@ -1261,7 +1262,7 @@ def _em_discharge(
     A second discharge of the same row is a no-op, never an overwrite.
     """
     try:
-        path = _resolve_path(plan_path, worktree, extra_roots=("state/warp",))
+        path = _resolve_path(plan_path, worktree, extra_roots=(record_homes.home_dir("", "warp"),))
     except _PathNotContained as exc:
         return _err(f"em-discharge: {exc}")
     if not row_id:

@@ -114,6 +114,23 @@ def test_load_governor_default_is_sibling_path(monkeypatch):
     assert seen["path"] == _HOST.parents[1] / "group-em-memory-governor.py"
 
 
+def test_memory_status_darwin_from_injected_readers():
+    st = host.memory_status_darwin(
+        avail_mb_fn=lambda: (8192, 16384),
+        vm_fn=lambda: 16 * GIB,
+        swap_fn=lambda: (4 * GIB, 1 * GIB),
+    )
+    assert st.avail_phys == 8 * GIB and st.total_phys == 16 * GIB
+    assert st.commit_used == 9 * GIB and st.commit_limit == 20 * GIB
+
+
+def test_memory_status_darwin_unreadable_available_raises():
+    with pytest.raises(OSError):
+        host.memory_status_darwin(
+            avail_mb_fn=lambda: (None, None), vm_fn=lambda: GIB, swap_fn=lambda: (0, 0)
+        )
+
+
 @pytest.mark.skipif(sys.platform != "win32", reason="Win32 only")
 def test_read_memory_status_win32():
     st = host.read_memory_status()

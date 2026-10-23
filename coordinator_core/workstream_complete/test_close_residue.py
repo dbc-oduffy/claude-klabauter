@@ -170,6 +170,58 @@ def test_untracked_owned_path_is_open(repo: Path) -> None:
     assert payload["verdict"] == "open" and payload["items"] == ["fresh.txt"]
 
 
+def _trail_file(repo: Path, age_s: float) -> str:
+    rel = "state/plan-blitz/20261022T205707Z/wave-0.gate-report.json"
+    path = repo / rel
+    path.parent.mkdir(parents=True)
+    path.write_text("{}\n", encoding="utf-8")
+    stamp = time.time() - age_s
+    os.utime(path, (stamp, stamp))
+    return rel
+
+
+def test_running_plan_blitz_trail_is_in_flight_never_open(repo: Path) -> None:
+    rel = _trail_file(repo, 5)
+    _claim(repo, rel)
+    payload = cr.owned_uncommitted_payload(repo, cr.snapshot(repo, SID))
+    assert payload["verdict"] == "clean" and payload["items"] == []
+    assert payload["in_flight"] == [rel]
+
+
+def test_finished_plan_blitz_trail_stays_open(repo: Path) -> None:
+    rel = _trail_file(repo, cr.IN_FLIGHT_TRAIL_WINDOW_S + 600)
+    _claim(repo, rel)
+    sdir = repo / ".git" / "coordinator-sessions" / SID
+    (sdir / "started_at").write_text("2020-01-01T00:00:00Z", encoding="utf-8")
+    payload = cr.owned_uncommitted_payload(repo, cr.snapshot(repo, SID))
+    assert payload["verdict"] == "open" and payload["items"] == [rel]
+    assert "in_flight" not in payload
+
+
+def test_in_flight_trail_does_not_mask_other_owned_residue(repo: Path) -> None:
+    rel = _trail_file(repo, 5)
+    (repo / "fresh.txt").write_text("f\n", encoding="utf-8")
+    _claim(repo, rel)
+    _claim(repo, "fresh.txt")
+    payload = cr.owned_uncommitted_payload(repo, cr.snapshot(repo, SID))
+    assert payload["verdict"] == "open" and payload["items"] == ["fresh.txt"]
+    assert payload["in_flight"] == [rel]
+
+
+def test_claimed_file_older_than_the_session_is_not_owned(repo: Path) -> None:
+    old = repo / "earlier-session.md"
+    old.write_text("x\n", encoding="utf-8")
+    stamp = time.time() - 3 * 86400
+    os.utime(old, (stamp, stamp))
+    (repo / "fresh.txt").write_text("f\n", encoding="utf-8")
+    _claim(repo, "earlier-session.md")
+    _claim(repo, "fresh.txt")
+    snap = cr.snapshot(repo, SID)
+    assert snap.owned_paths == ("fresh.txt",)
+    payload = cr.owned_uncommitted_payload(repo, snap)
+    assert payload["verdict"] == "open" and payload["items"] == ["fresh.txt"]
+
+
 def test_peer_claimed_path_is_contested_never_open(repo: Path) -> None:
     (repo / "tracked.txt").write_text("v2\n", encoding="utf-8")
     _claim(repo, "tracked.txt")

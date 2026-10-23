@@ -11,6 +11,7 @@ best-effort: state is an unlocked read-modify-write, so concurrent hooks may bot
 
 from __future__ import annotations
 
+import asyncio
 import os
 
 from coordinator_core._hook_envelope import context_only, no_advisory, payload_of
@@ -90,7 +91,7 @@ def advisory_text(params: dict) -> str:
 
 @register_op("hooks.nudge_em_turn_budget")
 async def _handler(params: dict, repo_root=None) -> dict:
-    text = advisory_text(params)
+    text = await asyncio.to_thread(advisory_text, params)
     if not text:
         return no_advisory()
     event = field(payload_of(params), "hook_event_name") or "PostToolUse"

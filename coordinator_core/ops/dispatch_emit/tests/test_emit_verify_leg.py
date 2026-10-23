@@ -124,7 +124,7 @@ def test_the_test_leg_starts_at_launch_and_the_judge_reads_both_results_after_re
     assert "if (!_halted) {\n    const _testCall = " in script
     assert "_testResult = await _verifyTestRun;" in script
     assert "JSON.stringify(_testResult)" in script and "JSON.stringify(_reviewReverify)" in script
-    assert "_falsifierResult = await Promise.race([_judgeCall," in script
+    assert "_falsifierResult = await ((_t) => Promise.race([_judgeCall," in script
 
 
 def test_the_test_binding_and_judge_stay_inside_the_halted_guard():

@@ -1063,10 +1063,69 @@ def test_poll_once_reports_a_departed_peer_by_name():
     assert emitted[0].startswith("GONE session=claude-klabauter-3e [peer-gone]")
     assert "gap=300s" in emitted[0]
     # The surviving peer's note is carried forward for the NEXT tick to name.
-    assert set(notes) == {"peer-1"}
+    assert set(notes) == {"peer-1", "peer-gone"}
+    assert notes["peer-gone"]["gone_reported"] is True
     assert notes["peer-1"]["last_seen"] == pytest.approx(
         datetime(2026, 9, 1, 12, 5, 0, tzinfo=timezone.utc).timestamp()
     )
+
+
+SANDBOX_ID = "16ebfad5-0000-4000-8000-000000000001"
+
+
+@pytest.mark.parametrize(
+    "cwd",
+    [
+        "exp\\w-774f66365f5e",
+        "EXP\\W-774F66365F5E\\sub",
+        "exp/w-774f66365f5e",
+    ],
+)
+def test_eval_sandbox_session_is_never_a_peer(cwd):
+    flapping = _agent(SANDBOX_ID, cwd=cwd, name="w-774f66365f5e-9e")
+    (parked, decl, notes, _io), emitted = _gone_poll(
+        prev_parked={"peer-1": False}, agents=[_agent("peer-1"), flapping]
+    )
+    assert SANDBOX_ID not in parked and SANDBOX_ID not in notes
+    assert all(d["session_id"] != SANDBOX_ID for d in decl)
+    assert not any("PARKED" in l for l in emitted)
+    assert all(SANDBOX_ID not in l for l in emitted)
+
+
+def test_non_sandbox_lookalike_dirs_stay_peers():
+    for cwd in (REPO_ROOT, REPO_ROOT + "/w-774f66365f5", REPO_ROOT + "/w-774f66365f5e0", REPO_ROOT + "/xw-774f66365f5e"):
+        assert not watch.read_pass.is_eval_sandbox_peer(_agent("p", cwd=cwd))
+
+
+def test_gone_fires_once_per_session_id_across_a_name_flip():
+    """Replay of w-774f66365f5e-9e -> w-774f66365f5e-84 on one session id."""
+    t0 = datetime(2026, 9, 1, 12, 0, 0, tzinfo=timezone.utc).timestamp()
+    prev_names = {SANDBOX_ID: {"name": "w-774f66365f5e-9e", "last_seen": t0}}
+    (parked, _d, notes, _io), emitted = _gone_poll(
+        prev_parked={SANDBOX_ID: False}, agents=[], prev_names=prev_names
+    )
+    assert len(emitted) == 1 and "w-774f66365f5e-9e" in emitted[0]
+    # Re-enters under a new name, then leaves again.
+    (parked, _d, notes, _io), emitted = _gone_poll(
+        prev_parked=parked,
+        agents=[_agent(SANDBOX_ID, name="w-774f66365f5e-84")],
+        prev_names=notes,
+    )
+    assert emitted == [] and SANDBOX_ID in parked
+    assert notes[SANDBOX_ID]["gone_reported"] is True
+    (parked, _d, notes, _io), emitted = _gone_poll(
+        prev_parked=parked, agents=[], prev_names=notes
+    )
+    assert emitted == []
+
+
+def test_a_different_real_peer_leaving_still_fires_one_gone():
+    (parked, _d, notes, _io), emitted = _gone_poll(
+        prev_parked={SANDBOX_ID: False, "peer-2": False},
+        agents=[],
+        prev_names={SANDBOX_ID: {"gone_reported": True, "gone_at": 1.0}},
+    )
+    assert len(emitted) == 1 and "peer-2" in emitted[0]
 
 
 def test_poll_once_still_reports_a_departure_it_cannot_name():

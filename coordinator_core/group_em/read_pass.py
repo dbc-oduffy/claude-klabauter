@@ -237,6 +237,25 @@ def fetch_live_agents(
     ]
 
 
+_EVAL_SANDBOX_DIR_RE = re.compile(r"^w-[0-9a-f]{12}$")
+
+
+def is_eval_sandbox_peer(agent: Mapping[str, Any]) -> bool:
+    """True for a headless `claude -p` child of an experiments eval cell.
+
+    Recognised from the row's own `cwd`: any path component (either
+    separator, any case) shaped `w-<12 hex>` is the cell's sandbox dir. Such a
+    child is not a peer -- it never parks for a Group-EM and its name suffix
+    flips while its session id stays.
+    """
+    cwd = agent.get("cwd")
+    if not isinstance(cwd, str) or not cwd:
+        return False
+    return any(
+        _EVAL_SANDBOX_DIR_RE.match(part.lower()) for part in re.split(r"[/\\]", cwd)
+    )
+
+
 def enumerate_repo_peers(
     agents: list[dict[str, Any]],
     exclude_session_id: Optional[str] = None,
