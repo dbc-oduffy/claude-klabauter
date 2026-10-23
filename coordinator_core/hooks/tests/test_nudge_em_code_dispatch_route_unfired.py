@@ -158,6 +158,23 @@ def test_unsized_xs_edit_in_budget_is_admitted(env, monkeypatch):
     assert xb.read_lane(root, SID)["kind"] == "xs"
 
 
+def test_plan_routed_unfired_edit_gets_plan_route_advisory_not_the_deny(env, monkeypatch):
+    root, _ = env
+    monkeypatch.setattr(mod, "_session_sizing_state", lambda payload, sid: (True, True))
+    result = mod.op(_edit(root))
+    assert result is not None and not _is_deny(result)
+    assert mod._PLAN_ROUTE_ADVISORY in _ctx(result)
+    assert mod._ROUTE_UNFIRED_DENY not in _ctx(result)
+
+
+def test_escape_sentinel_admits_unfired_s_plus_edit(env, monkeypatch):
+    root, _ = env
+    assert _is_deny(mod.op(_edit(root)))
+    monkeypatch.setattr(mod, "_take_escape", lambda *a, **k: True)
+    assert mod.op(_edit(root)) is None
+    assert _shell(root) is None
+
+
 def test_phase_probe_raising_fails_open(env, monkeypatch):
     root, _ = env
 

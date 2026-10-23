@@ -81,7 +81,7 @@ from coordinator_core.git.eol_declared import (
 )
 from functools import partial
 from coordinator_core.git.commit_walk import commit_meta
-from coordinator_core.git.git_dir import resolve_git_common_dir
+from coordinator_core.git.git_dir import resolve_git_common_dir, resolve_git_dir
 from coordinator_core.git.main_commit_policy import main_commit_refusal
 from coordinator_core.git.git_objects import _read_object
 from coordinator_core.git.git_state import read_tree_spine
@@ -989,8 +989,7 @@ def _handler_body(params: dict, repo_root: Optional[Path], ledger: PhaseLedger) 
                                        carries this message. A mixed set lands at most one marker.
         finish_merge (bool, optional, DEFAULT FALSE) -- with MERGE_HEAD present and every conflict
                                        resolved, land the merge as one two-parent commit over
-                                       `paths`; the reply carries `merge_parent`. Refused when
-                                       the paths split into product and process halves.
+                                       `paths`, never split into halves; reply has `merge_parent`.
         session_id (str, optional)  -- canonical UUID (8-4-4-4-12 hex,
                                        case-insensitive) threaded into
                                        `apply_missing_trailers` as
@@ -1424,12 +1423,9 @@ def _handler_body(params: dict, repo_root: Optional[Path], ledger: PhaseLedger) 
     mixed = bool(prod_paths or prod_deleted or prod_untracked) and bool(
         proc_paths or proc_deleted or proc_untracked
     )
-    if mixed and raw_finish_merge:
-        return _error(
-            "params.finish_merge needs one commit, but these paths split into product and "
-            "process halves; a merge cannot land as two commits. Commit the merge paths of "
-            "one half."
-        )
+    # A merge is one commit: a finish_merge over a live MERGE_HEAD never splits.
+    if mixed and raw_finish_merge and (resolve_git_dir(worktree_root) / "MERGE_HEAD").exists():
+        mixed = False
     if mixed:
         proc_set = set(proc_paths) | set(proc_deleted) | set(proc_untracked)
         halves = [
@@ -1439,7 +1435,6 @@ def _handler_body(params: dict, repo_root: Optional[Path], ledger: PhaseLedger) 
     else:
         proc_set = set()
         halves = [(raw_paths, raw_deleted, raw_untracked, message)]
-
     if mixed:
         # Each half is checkpoint-checked inside its own landing; judged here over the whole
         # set so a refusal in the second half cannot follow a landed first.

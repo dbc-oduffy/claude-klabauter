@@ -130,3 +130,74 @@ def test_ordinary_commit_carries_no_merge_parent(tmp_path):
 
     assert reply["committed"] is True, reply
     assert "merge_parent" not in reply
+
+
+_MIXED = ["state/x.yaml", "coordinator_core/y.py"]
+
+
+@pytest.fixture
+def mixed_merging(tmp_path):
+    r = tmp_path / "m"
+    r.mkdir()
+    _git(r, "init", "-q", "-b", "base")
+    _git(r, "config", "user.email", "t@local")
+    _git(r, "config", "user.name", "t")
+    _git(r, "config", "core.autocrlf", "false")
+    for n in _MIXED:
+        (r / n).parent.mkdir(parents=True, exist_ok=True)
+        _w(r, n, "base\n")
+    _git(r, "add", ".")
+    _git(r, "commit", "-q", "-m", "seed")
+    _git(r, "checkout", "-q", "-b", "other")
+    _w(r, "state/x.yaml", "other\n")
+    _w(r, "coordinator_core/y.py", "other\n")
+    _git(r, "commit", "-qam", "other side")
+    _git(r, "checkout", "-q", "base")
+    _w(r, "coordinator_core/y.py", "mine\n")
+    _git(r, "commit", "-qam", "my side")
+    _git(r, "merge", "other", check=False)
+    assert (r / ".git" / "MERGE_HEAD").exists()
+    return r
+
+
+def _mixed_params(**extra) -> dict:
+    return {"paths": list(_MIXED), "message": "merge other\n", "session_id": _SID, **extra}
+
+
+def test_mixed_finish_merge_lands_one_two_parent_commit(mixed_merging):
+    r = mixed_merging
+    old_head = _git(r, "rev-parse", "HEAD")
+    merge_head = _git(r, "rev-parse", "MERGE_HEAD")
+    _w(r, "coordinator_core/y.py", "resolved\n")
+
+    reply = _call(r, _mixed_params(finish_merge=True))
+
+    assert reply["committed"] is True, reply
+    assert _parents(r) == [old_head, merge_head]
+    assert _git(r, "rev-list", "--count", f"{old_head}..HEAD") == "2"
+    assert "(process files)" not in _git(r, "log", "-1", "--format=%s")
+
+
+def test_mixed_retry_without_merge_head_still_splits(mixed_merging):
+    r = mixed_merging
+    _git(r, "merge", "--abort")
+    _w(r, "state/x.yaml", "edit\n")
+    _w(r, "coordinator_core/y.py", "edit\n")
+
+    reply = _call(r, _mixed_params(finish_merge=True))
+
+    assert reply["committed"] is True, reply
+    assert len(_parents(r)) == 1
+    assert "(process files)" in _git(r, "log", "-1", "--format=%s")
+
+
+def test_mixed_without_finish_merge_keeps_the_mid_merge_refusal(mixed_merging):
+    r = mixed_merging
+    before = _git(r, "rev-parse", "HEAD")
+    _w(r, "coordinator_core/y.py", "resolved\n")
+
+    reply = _call(r, _mixed_params())
+
+    assert reply["committed"] is False
+    assert _git(r, "rev-parse", "HEAD") == before
+    assert (r / ".git" / "MERGE_HEAD").exists()

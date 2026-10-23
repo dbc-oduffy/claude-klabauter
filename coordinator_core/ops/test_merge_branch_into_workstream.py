@@ -230,6 +230,129 @@ def test_branch_adding_machine_local_path_is_refused(tmp_path):
     assert _git(repo, "rev-parse", "HEAD").stdout == head
 
 
+def _conflicting_branch(repo: Path, branch: str = "work/other/2026-07-21") -> str:
+    _git(repo, "checkout", "-q", "-b", branch)
+    (repo / "f.txt").write_text("branch version\n")
+    (repo / "branch.txt").write_text("branch work\n")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-q", "-m", "branch edit")
+    sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    _git(repo, "checkout", "-q", "main")
+    (repo / "f.txt").write_text("main version\n")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-q", "-m", "main edit")
+    return sha
+
+
+def _mh(repo: Path) -> Path:
+    return repo / ".git" / "MERGE_HEAD"
+
+
+def test_stage_conflicting_leaves_merge_open(tmp_path):
+    repo = _init_repo(tmp_path)
+    sha = _conflicting_branch(repo)
+    head = _git(repo, "rev-parse", "HEAD").stdout
+    out = mbw.merge_branch_into_workstream(
+        "work/other/2026-07-21", "r", repo, stage=True
+    )
+    assert out == {
+        "merged": False, "staged": True, "already_ancestor": False,
+        "conflict": True, "conflicted": ["f.txt"], "merge_head": sha,
+    }
+    assert _mh(repo).read_text().strip() == sha
+    assert _git(repo, "rev-parse", "HEAD").stdout == head
+
+
+def test_stage_clean_branch(tmp_path):
+    repo = _init_repo(tmp_path)
+    _make_divergent_branch(repo)
+    head = _git(repo, "rev-parse", "HEAD").stdout
+    out = mbw.merge_branch_into_workstream(
+        "work/other/2026-07-21", "r", repo, stage=True
+    )
+    assert out["staged"] is True and out["conflict"] is False
+    assert out["conflicted"] == []
+    assert _mh(repo).exists()
+    assert _git(repo, "rev-parse", "HEAD").stdout == head
+
+
+def test_stage_accepts_remote_style_ref_and_bare_sha(tmp_path):
+    repo = _init_repo(tmp_path)
+    sha = _conflicting_branch(repo)
+    _git(repo, "update-ref", "refs/remotes/origin/work/other/x", sha)
+    out = mbw.merge_branch_into_workstream(
+        "origin/work/other/x", "r", repo, stage=True
+    )
+    assert out["staged"] is True and out["merge_head"] == sha
+    mbw.merge_branch_into_workstream("", "r", repo, abort=True)
+    out = mbw.merge_branch_into_workstream(sha, "r", repo, stage=True)
+    assert out["staged"] is True and out["merge_head"] == sha
+
+
+def test_stage_unresolvable_ref_raises_before_merge(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path)
+    calls: list[list[str]] = []
+    real_git = mbw._git
+    monkeypatch.setattr(
+        mbw, "_git", lambda a, cwd=None, env=None: (calls.append(list(a)), real_git(a, cwd=cwd, env=env))[1]
+    )
+    with pytest.raises(ValueError, match="does not resolve"):
+        mbw.merge_branch_into_workstream("ghost/none", "r", repo, stage=True)
+    assert not any(a[0] == "merge" for a in calls)
+
+
+def test_stage_already_ancestor_runs_nothing(tmp_path):
+    repo = _init_repo(tmp_path)
+    _git(repo, "branch", "same")
+    out = mbw.merge_branch_into_workstream("same", "r", repo, stage=True)
+    assert out["staged"] is False and out["already_ancestor"] is True
+    assert out["merge_head"] is None and not _mh(repo).exists()
+
+
+def test_second_stage_refuses_with_state_unchanged(tmp_path):
+    repo = _init_repo(tmp_path)
+    sha = _conflicting_branch(repo)
+    head = _git(repo, "rev-parse", "HEAD").stdout
+    mbw.merge_branch_into_workstream("work/other/2026-07-21", "r", repo, stage=True)
+    with pytest.raises(ValueError, match="already open"):
+        mbw.merge_branch_into_workstream("work/other/2026-07-21", "r", repo, stage=True)
+    assert _mh(repo).read_text().strip() == sha
+    assert _git(repo, "rev-parse", "HEAD").stdout == head
+
+
+def test_abort_restores_and_refuses_without_merge(tmp_path):
+    repo = _init_repo(tmp_path)
+    _conflicting_branch(repo)
+    mbw.merge_branch_into_workstream("work/other/2026-07-21", "r", repo, stage=True)
+    assert mbw.merge_branch_into_workstream("", "", repo, abort=True) == {"aborted": True}
+    assert not _mh(repo).exists()
+    assert (repo / "f.txt").read_text() == "main version\n"
+    assert _git(repo, "status", "--porcelain").stdout.strip() == ""
+    with pytest.raises(ValueError, match="no merge is open"):
+        mbw.merge_branch_into_workstream("", "", repo, abort=True)
+
+
+def test_stage_and_abort_together_or_non_bool_refused_before_git(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path)
+    monkeypatch.setattr(mbw, "_git", lambda *a, **k: pytest.fail("git called"))
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        mbw.merge_branch_into_workstream("x", "r", repo, stage=True, abort=True)
+    handler = mbw._merge_branch_into_workstream_handler
+    with pytest.raises(ValueError, match="booleans"):
+        asyncio.run(handler({"branch": "x", "stage": "true"}, repo))
+
+
+def test_handler_stage_then_abort(tmp_path):
+    repo = _init_repo(tmp_path)
+    _conflicting_branch(repo)
+    handler = mbw._merge_branch_into_workstream_handler
+    out = asyncio.run(
+        handler({"branch": "work/other/2026-07-21", "reason": "r", "stage": True}, repo)
+    )
+    assert out["conflicted"] == ["f.txt"]
+    assert asyncio.run(handler({"abort": True}, repo)) == {"aborted": True}
+
+
 def test_branch_carrying_untracked_machine_local_files_merges(tmp_path):
     repo = _init_repo(tmp_path)
     _commit_share_file(repo)

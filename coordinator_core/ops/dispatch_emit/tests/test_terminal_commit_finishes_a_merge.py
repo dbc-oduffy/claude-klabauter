@@ -61,6 +61,61 @@ def merging(tmp_path):
     return root
 
 
+@pytest.fixture
+def staged_mixed(tmp_path):
+    """`theirs` edits state/s.yaml (auto-merges) and coordinator_core/m.py (conflicts); staged by the engine op."""
+    from coordinator_core.ops.merge_branch_into_workstream import merge_branch_into_workstream
+
+    root = tmp_path / "repo"
+    root.mkdir()
+    _git(root, "init", "-q", "-b", "main")
+    _git(root, "config", "user.email", "t@example.com")
+    _git(root, "config", "user.name", "t")
+    _git(root, "config", "commit.gpgsign", "false")
+    for rel, text in (("state/s.yaml", "s: 0\n"), ("coordinator_core/m.py", "x = 0\n")):
+        (root / rel).parent.mkdir(parents=True, exist_ok=True)
+        (root / rel).write_text(text, encoding="utf-8")
+    plan = root / _PLAN
+    plan.parent.mkdir(parents=True)
+    plan.write_text(f"---\nsizing_object: {_SIZING}\n---\n# p\n", encoding="utf-8")
+    sizing = root / _SIZING
+    sizing.parent.mkdir(parents=True)
+    sizing.write_text(
+        "schema: sizing-object\nintent: Test intent, verbatim.\nestimate:\n  tshirt: XS\n  provisional: true\n"
+        "route: dispatch\ndetents: []\nfork: null\nxl_exit: null\nstatus: routed\npremise:\n"
+        "  provenance: read\n  evidence: test fixture\n",
+        encoding="utf-8",
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "seed")
+    _git(root, "checkout", "-q", "-b", "theirs")
+    (root / "state/s.yaml").write_text("s: 2\n", encoding="utf-8")
+    (root / "coordinator_core/m.py").write_text("x = 2\n", encoding="utf-8")
+    _git(root, "commit", "-q", "-am", "theirs")
+    _git(root, "checkout", "-q", "main")
+    (root / "coordinator_core/m.py").write_text("x = 1\n", encoding="utf-8")
+    _git(root, "commit", "-q", "-am", "ours")
+    reply = merge_branch_into_workstream("theirs", "test", root, stage=True)
+    assert reply["staged"] is True and reply["conflict"] is True, reply
+    assert reply["conflicted"] == ["coordinator_core/m.py"], reply
+    assert (root / ".git" / "MERGE_HEAD").exists()
+    return root
+
+
+def test_an_engine_staged_mixed_merge_lands_one_two_parent_commit(staged_mixed):
+    root = staged_mixed
+    ours = _git(root, "rev-parse", "HEAD").strip()
+    theirs = _git(root, "rev-parse", "theirs").strip()
+    (root / "coordinator_core/m.py").write_text("x = 3\n", encoding="utf-8")
+    out = _call(root, paths=("state/s.yaml", "coordinator_core/m.py"))
+    assert out["committed"] is True, out
+    assert _git(root, "rev-list", "--parents", "-n1", out["sha"]).split() == [out["sha"], ours, theirs]
+    assert not (root / ".git" / "MERGE_HEAD").exists()
+    assert _git(root, "show", f"{out['sha']}:state/s.yaml") == "s: 2\n"
+    assert _git(root, "show", f"{out['sha']}:coordinator_core/m.py") == "x = 3\n"
+    assert "(process files)" not in _git(root, "log", "-1", "--format=%s", out["sha"])
+
+
 def _call(root: Path, paths: tuple = ("a.py",)) -> dict:
     request = CommitRequest(chunks=(ChunkCommit(id="C1", title="t1", paths=paths),), plan_path=_PLAN)
     (root / "run.mjs").write_text(render_marker(request) + "\n", encoding="utf-8")

@@ -690,7 +690,10 @@ def _budget_core(payload: dict, session_id: str, file_path: str, project) -> tup
         if s_plus and (rec is None or rec.get("kind") != xlb.KIND_RESIDUE):
             from coordinator_core.session.engine_route_state import PHASE_UNFIRED, session_route_phase
 
-            unfired = session_route_phase(root, session_id) == PHASE_UNFIRED
+            unfired = (
+                session_route_phase(root, session_id) == PHASE_UNFIRED
+                and not _session_sizing_state(payload, session_id)[1]
+            )
     except Exception:
         return False, None
     if unfired:

@@ -2232,6 +2232,8 @@ _SAFE_GIT_SUBCOMMANDS = frozenset(
         "diff-tree",
         "show-ref",
         "count-objects",
+        # `merge-tree --write-tree` adds unreferenced objects and moves no ref, index or worktree file.
+        "merge-tree",
     }
 )
 
@@ -2239,6 +2241,11 @@ _SAFE_GIT_SUBCOMMANDS = frozenset(
 #: sends the merge result to stdout. Scanned before any `--` end-of-options.
 _MERGE_FILE_STDOUT_FLAGS = frozenset({"-p", "--stdout"})
 _MERGE_FILE_DENY_KIND = "git merge-file (overwrites first file)"
+_GIT_MERGE_DENY_KIND = "git merge (not --ff-only)"
+_MERGE_STAGE_TEMPLATE = (
+    "coordinator-invoke branch.merge_into_workstream --repo <repo-root> "
+    """'{"branch":"<ref>","reason":"<why>","stage":true}'"""
+)
 
 #: `git worktree` SECOND-level subcommand classification (2026-07-25 fix).
 #: `list` is the only read-only second-level subcommand; a bare `git
@@ -3570,6 +3577,15 @@ def _build_reason(
             "2026-07-28 for this reason — a brief cannot grant it, because there is\n"
             "nothing to grant."
         )
+    if deny_kind == _GIT_MERGE_DENY_KIND:
+        return (
+            "BLOCKED: a subagent may not start a merge in the shared checkout.\n\n"
+            f"  Subagent: {agent_id} ({effective_type})\n"
+            f"  Denied:   {deny_kind}\n"
+            f"  Command:  {cmd_safe}\n\n"
+            "Have the engine stage it, then resolve conflicts in the worktree:\n"
+            f"    {_MERGE_STAGE_TEMPLATE}"
+        )
     if deny_kind == _MERGE_FILE_DENY_KIND:
         return (
             "BLOCKED: `git merge-file` overwrites its first file argument.\n\n"
@@ -3735,6 +3751,8 @@ def _build_record(
         ready = _git_mv_corrected_command(cmd)
         if ready is None:
             adapt = ("mv <A> <B>", "<A> and <B> to your own source and destination")
+    elif deny_kind == _GIT_MERGE_DENY_KIND:
+        adapt = (_MERGE_STAGE_TEMPLATE, "<repo-root>, <ref> and <why> to your own repo, branch and reason")
     return build_record(
         _GUARD_NAME,
         "deny",
