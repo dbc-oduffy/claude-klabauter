@@ -210,7 +210,7 @@ class TestCitationOwnerDecisionTable:
         assert "claude-klabauter-engine:docs/r.md" not in delivered
         assert "citations_unresolved" not in acted
 
-    def test_absent_in_sender_present_in_receiver_with_sender_ancestor(self, sender_and_receiver):
+    def test_receiver_only_with_sender_ancestor_qualified_as_receiver(self, sender_and_receiver):
         sender_repo, receiver_repo = sender_and_receiver
         (sender_repo / "state" / "queue-grind" / "bug").mkdir(parents=True)
         _touch(receiver_repo, "state/queue-grind/bug/runs/r.json")
@@ -218,8 +218,8 @@ class TestCitationOwnerDecisionTable:
             sender_repo, receiver_repo, "owner-absent",
             "Missing: state/queue-grind/bug/runs/r.json never written.\n",
         )
-        assert "claude-klabauter-engine:state/queue-grind/bug/runs/r.json" in delivered
-        assert f"{receiver_repo.name.lower()}:state" not in delivered
+        assert f"{receiver_repo.name.lower()}:state/queue-grind/bug/runs/r.json" in delivered
+        assert "claude-klabauter-engine:state" not in delivered
         assert "citations_unresolved" not in acted
 
     def test_explicit_peer_qualifier_untouched(self, sender_and_receiver):
@@ -260,16 +260,20 @@ class TestCitationOwnerDecisionTable:
         assert "citations_unresolved" not in acted
         assert "citations_ambiguous" not in acted
 
-    def test_neither_tree_with_sender_ancestor_is_qualified(self, sender_and_receiver):
+    def test_neither_tree_with_sender_ancestor_left_bare_and_warned(
+        self, sender_and_receiver, caplog,
+    ):
         sender_repo, receiver_repo = sender_and_receiver
         (sender_repo / "state" / "queue-grind" / "bug").mkdir(parents=True)
-        acted, delivered = _send_and_read(
-            sender_repo, receiver_repo, "owner-neither-anc",
-            "See state/queue-grind/bug/runs/z.json here.\n",
-        )
-        assert "claude-klabauter-engine:state/queue-grind/bug/runs/z.json" in delivered
-        assert "citations_unresolved" not in acted
-        assert "citations_ambiguous" not in acted
+        with caplog.at_level("WARNING"):
+            acted, delivered = _send_and_read(
+                sender_repo, receiver_repo, "owner-neither-anc",
+                "See state/queue-grind/bug/runs/z.json here.\n",
+            )
+        assert "See state/queue-grind/bug/runs/z.json here." in delivered
+        assert "claude-klabauter-engine:state" not in delivered
+        assert acted["citations_unresolved"] == ["state/queue-grind/bug/runs/z.json"]
+        assert "held by neither repo" in caplog.text
 
     def test_notice_names_per_path_owner(self):
         from coordinator_core.ops.fleet.memo_send import _citation_lint_notice

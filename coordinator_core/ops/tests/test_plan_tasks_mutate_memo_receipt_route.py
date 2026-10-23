@@ -1,4 +1,4 @@
-"""plan.tasks.mutate resolve: a memo-send row closes on a verified, committed sent receipt."""
+"""plan.tasks.mutate resolve: a memo-send row closes on a verified sent receipt present on disk."""
 
 from __future__ import annotations
 
@@ -100,7 +100,7 @@ def _rows(plan):
     return {r["id"]: r for r in load_rows(plan.read_text(encoding="utf-8")).rows}
 
 
-def test_committed_receipt_resolves_and_clears_gate(tmp_path):
+def test_receipt_on_disk_resolves_and_clears_gate(tmp_path):
     repo, plan = _fixture(tmp_path)
     out = _resolve(repo, plan, [_memo("M1", "alpha")])
     assert out["exit_code"] == 0, out
@@ -108,17 +108,26 @@ def test_committed_receipt_resolves_and_clears_gate(tmp_path):
     assert row["disposition"] == "delivered_elsewhere"
     gate = row["external_gate"][0]
     assert gate["cleared"] is True
-    assert gate["closure_evidence"] == f"memo sent: {_SENT}/alpha.md committed at HEAD"
+    assert gate["closure_evidence"] == f"memo sent: {_SENT}/alpha.md on disk"
     assert any("memo receipt verified" in w for w in out.get("warnings", []))
     assert not any("not commit-proven" in w for w in out.get("warnings", []))
 
 
-def test_uncommitted_receipt_refuses(tmp_path):
+def test_untracked_gitignored_receipt_resolves(tmp_path):
+    repo, plan = _fixture(tmp_path)
+    (repo / ".gitignore").write_text(".coordinator-local\n", encoding="utf-8")
+    out = _resolve(repo, plan, [_memo("M2", "gamma")])
+    assert out["exit_code"] == 0, out
+    assert _rows(plan)["M2"]["disposition"] == "delivered_elsewhere"
+
+
+def test_missing_receipt_refuses(tmp_path):
     repo, plan = _fixture(tmp_path)
     before = plan.read_bytes()
-    out = _resolve(repo, plan, [_memo("M2", "gamma")])
+    out = _resolve(repo, plan, [_memo("M2", "delta")])
     assert out["exit_code"] != 0
-    assert "not committed at HEAD" in out["error"]
+    assert "not on disk" in out["error"]
+    assert "plan.tasks.mutate" in out["error"]
     assert plan.read_bytes() == before
 
 
@@ -144,13 +153,12 @@ def test_delivered_via_other_than_memo_refuses(tmp_path):
     assert "delivered_via memo" in out["error"]
 
 
-def test_two_row_batch_spawns_git_once(tmp_path, monkeypatch):
+def test_receipt_check_spawns_no_ls_tree(tmp_path, monkeypatch):
     repo, plan = _fixture(tmp_path)
     with _count_spawns_attributed(monkeypatch) as spawns:
         out = _resolve(repo, plan, [_memo("M1", "alpha"), _memo("M2", "beta")])
     assert out["exit_code"] == 0, out
-    assert len(spawns) == 1, [s.argv for s in spawns]
-    assert "ls-tree" in spawns[0].argv
+    assert not any("ls-tree" in s.argv for s in spawns), [s.argv for s in spawns]
 
 
 def test_non_memo_delivered_elsewhere_is_unchanged(tmp_path):

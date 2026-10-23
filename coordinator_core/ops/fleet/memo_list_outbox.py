@@ -69,7 +69,7 @@ _SURFACED_FIELDS = ("title", "from", "to", "created", "status", "summary", "kind
 
 
 def _validate_list_outbox_params(params: dict):
-    dry_run = params.get("dry_run")
+    dry_run = params.get("dry_run", True)
     if not isinstance(dry_run, bool):
         return build_setup_error_result(
             _MODE, dry_run,
@@ -137,7 +137,7 @@ def _memo_list_outbox(params: dict, repo_root: Optional[Path] = None) -> dict:
     unlike memo.list's "none" scoping).
 
     Params:
-        dry_run (bool, required): must be True — memo.list_outbox has no act
+        dry_run (bool, optional): defaults to True when absent; must be True — memo.list_outbox has no act
                                    mode; it only ever enumerates.
 
     Returns:

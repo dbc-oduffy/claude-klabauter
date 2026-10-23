@@ -1189,11 +1189,11 @@ def _citation_owners(
     sender_name: str, receiver_name: Optional[str] = None,
 ) -> tuple:
     """Classify each bare path: `({path: qualifier}, [unresolved], [ambiguous])`.
-    A path the sender holds, or whose non-top-level ancestor directory exists
-    in the sender's tree, belongs to the sender. A path only the receiver
-    holds belongs to the receiver (`receiver_name`; the sender when None).
-    Held by both trees -> ambiguous, and by neither with no sender ancestor
-    -> unresolved; both stay bare. In-process stats only.
+    A path only the sender holds belongs to the sender; a path only the
+    receiver holds belongs to the receiver (`receiver_name`; the sender when
+    None). Held by both trees -> ambiguous, and by neither -> unresolved;
+    both stay bare. A shared ancestor directory never attributes a path.
+    In-process stats only.
     """
     owners: dict = {}
     unresolved: list = []
@@ -1203,22 +1203,13 @@ def _citation_owners(
         in_receiver = (receiver_root / p).exists()
         if in_sender and in_receiver:
             ambiguous.append(p)
-        elif in_sender or _sender_has_ancestor(sender_root, p):
+        elif in_sender:
             owners[p] = sender_name
         elif in_receiver:
             owners[p] = receiver_name or sender_name
         else:
             unresolved.append(p)
     return owners, unresolved, ambiguous
-
-
-def _sender_has_ancestor(sender_root: Path, rel: str) -> bool:
-    """True when a directory strictly between the repo root's top-level
-    segment (`state/`, `docs/` exist in every fleet repo) and `rel` exists."""
-    parts = rel.split("/")
-    return any(
-        (sender_root.joinpath(*parts[:i])).is_dir() for i in range(len(parts) - 1, 1, -1)
-    )
 
 
 def _citation_lint_notice(paths: list, sender_name: str, owners: Optional[dict] = None) -> str:
@@ -1919,6 +1910,12 @@ def _memo_send(params: dict, repo_root=None) -> dict:
                         split.body_with_leading_newline, qualifiers, sender_name,
                         owners,
                     )
+                )
+            if citations_unresolved:
+                _LOG.warning(
+                    "memo.send: %d body path(s) held by neither repo; left "
+                    "unqualified: %s",
+                    len(citations_unresolved), ", ".join(citations_unresolved[:5]),
                 )
             if owners:
                 notice = _warn_once(

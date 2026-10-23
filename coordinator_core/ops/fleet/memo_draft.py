@@ -235,6 +235,48 @@ def _validate_scoped_to(dry_run: bool, value: Any):
     return None
 
 
+_DISCHARGES_KNOWN_SUBKEYS = frozenset({"closure_key", "evidence", "landed_at"})
+
+
+def _validate_discharges(dry_run: bool, value: Any):
+    """Return a setup-error envelope for a malformed `discharges` param, else None.
+
+    Shape is gate_liveness.emit_discharge's: `closure_key` {kind, id} is
+    required whenever the block is present; `evidence` and `landed_at` are
+    optional and checked only when supplied (`landed_at` defaults to today at
+    compose time).
+    """
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        return build_setup_error_result(
+            _MODE, dry_run,
+            f"memo.draft: discharges must be a mapping, got {type(value).__name__}",
+        )
+    unknown = set(value.keys()) - _DISCHARGES_KNOWN_SUBKEYS
+    if unknown:
+        return build_setup_error_result(
+            _MODE, dry_run,
+            f"memo.draft: discharges has unrecognized sub-key(s) {sorted(unknown)} "
+            f"— known sub-keys: {sorted(_DISCHARGES_KNOWN_SUBKEYS)}",
+        )
+    from coordinator_core.ops.gate_liveness.emit_discharge import (
+        validate_closure_key,
+        validate_discharge_evidence,
+        validate_landed_at,
+    )
+
+    errors = [validate_closure_key(value.get("closure_key"))]
+    if value.get("evidence") is not None:
+        errors.append(validate_discharge_evidence(value["evidence"]))
+    if value.get("landed_at") is not None:
+        errors.append(validate_landed_at(value["landed_at"]))
+    message = next((e for e in errors if e is not None), None)
+    if message is not None:
+        return build_setup_error_result(_MODE, dry_run, f"memo.draft: discharges: {message}")
+    return None
+
+
 _KNOWN_REPO_PREFIXES = (
     "project-rag", "claude-klabauter", "coordinator-content-repo", "coordinator-claude",
     "claude-klabauter",
@@ -470,6 +512,11 @@ def _validate_draft_params(params: dict):
     if scoped_to_error is not None:
         return scoped_to_error
 
+    discharges = params.get("discharges")
+    discharges_error = _validate_discharges(dry_run, discharges)
+    if discharges_error is not None:
+        return discharges_error
+
     classify_receiver = params.get("classify_receiver", False)
     if not isinstance(classify_receiver, bool):
         return build_setup_error_result(
@@ -513,7 +560,7 @@ def _validate_draft_params(params: dict):
 
     return (
         dry_run, topic, to, title, summary, kind, scoped_to, classify_receiver,
-        in_reply_to, space, supersedes, display_name_advisory,
+        in_reply_to, space, supersedes, display_name_advisory, discharges,
     )
 
 
@@ -529,6 +576,7 @@ def compose_draft_frontmatter(
     in_reply_to: Optional[str] = None,
     space: Optional[str] = None,
     supersedes: Optional[str | list[str]] = None,
+    discharges: Optional[dict] = None,
 ) -> str:
     """Compose the YAML frontmatter block for a NEW outbox draft.
 
@@ -607,6 +655,8 @@ def compose_draft_frontmatter(
         lines.append(f"space: {_yaml_quote(space)}")
     if scoped_to:
         lines.append(_render_extra_field("scoped_to", scoped_to))
+    if discharges:
+        lines.append(_render_extra_field("discharges", discharges))
     lines.append("---")
     return "\n".join(lines) + "\n"
 
@@ -665,6 +715,12 @@ def _memo_draft(params: dict, repo_root=None) -> dict:
                                     fix — memo.draft previously silently dropped
                                     this field, exit_code:0, same defect class
                                     as memo.send's C9/A11 finding).
+        discharges (dict, optional): {closure_key: {kind, id}, evidence?,
+                                    landed_at?} — rendered as a nested
+                                    mapping; memo.send carries it into the
+                                    delivered memo frontmatter. `landed_at`
+                                    defaults to today. A malformed block
+                                    fails loud.
         classify_receiver (bool, optional): default False (the portable-draft
                                     default — UNCHANGED, see negative-spec).
                                     When true, `to` is classified using the
@@ -758,7 +814,9 @@ def _memo_draft(params: dict, repo_root=None) -> dict:
         return validated
 
     (dry_run, topic, to, title, summary, kind, scoped_to, classify_receiver,
-     in_reply_to, space, supersedes, display_name_advisory) = validated
+     in_reply_to, space, supersedes, display_name_advisory, discharges) = validated
+    if discharges and discharges.get("landed_at") is None:
+        discharges = {**discharges, "landed_at": datetime.date.today().isoformat()}
 
     refusal = feature_refusal("cross_repo_memos")
     if refusal:
@@ -828,7 +886,7 @@ def _memo_draft(params: dict, repo_root=None) -> dict:
         from_id=from_id, to=to, title=title, today=today,
         summary=summary, kind=kind,
         scoped_to=scoped_to, in_reply_to=in_reply_to, space=space,
-        supersedes=supersedes,
+        supersedes=supersedes, discharges=discharges,
     ) + "\n" + _BODY_PLACEHOLDER
 
     try:

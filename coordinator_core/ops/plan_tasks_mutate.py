@@ -1918,8 +1918,8 @@ def _coded_sha_refusal(resolutions: list, rows_by_id: dict, worktree: Path) -> O
 def _memo_receipt_refusal(resolutions: list, rows_by_id: dict, worktree: Path) -> dict:
     """`{row id: receipt path}` for every delivered_elsewhere resolution of a memo-send row,
     each verified: delivered_via memo, a sent-receipt ref, the row's declared slug, and the
-    receipt committed at HEAD (ONE `git ls-tree` for the batch; a timed-out probe refuses).
-    Raises MutateAbort naming `memo_close_route` otherwise."""
+    receipt present on disk under the worktree (no git spawn; the receipt may be untracked or
+    gitignored in a consumer repo). Raises MutateAbort naming `memo_close_route` otherwise."""
     from coordinator_core.ops.dispatch_emit.spine_read import (
         _is_memo_send_row,
         memo_close_route,
@@ -1953,19 +1953,10 @@ def _memo_receipt_refusal(resolutions: list, rows_by_id: dict, worktree: Path) -
         if declared is not None and declared != slug:
             raise MutateAbort(f"resolve: row {tid}: receipt names {slug!r}, row declares {declared!r}; {route}")
         checked[tid] = ref
-    if not checked:
-        return {}
-    from coordinator_core.git.run import run_git
-
-    paths = sorted(set(checked.values()))
-    shown = run_git(["ls-tree", "--name-only", "HEAD", "--", *paths], cwd=str(worktree))
-    if shown.timed_out or shown.returncode != 0:
-        raise MutateAbort("resolve: memo receipt commit check was indeterminate; retry")
-    present = {ln.strip() for ln in shown.stdout.splitlines()}
     for tid, ref in checked.items():
-        if ref not in present:
+        if not (worktree / ref).is_file():
             raise MutateAbort(
-                f"resolve: row {tid}: receipt {ref} is not committed at HEAD; "
+                f"resolve: row {tid}: receipt {ref} is not on disk under the worktree; "
                 f"{memo_close_route(tid, memo_receipt_slug(ref))}"
             )
     return checked
@@ -2532,7 +2523,7 @@ def _resolve(
             if disposition == _DELIVERED_ELSEWHERE:
                 row["delivered_via"] = r["delivered_via"]
                 if task_id in memo_receipts:
-                    evidence = f"memo sent: {memo_receipts[task_id]} committed at HEAD"
+                    evidence = f"memo sent: {memo_receipts[task_id]} on disk"
                     _clear_own_gates(row, evidence)
                     evidence_by_row[task_id] = evidence
                     delivered_warnings.append(f"memo receipt verified: {evidence}")

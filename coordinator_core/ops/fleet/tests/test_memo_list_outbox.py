@@ -79,8 +79,17 @@ def _snapshot(tmp_path: Path) -> set:
 
 
 class TestSetupErrorEnvelope:
-    def test_dry_run_missing(self):
-        result = _validate_list_outbox_params({})
+    def test_dry_run_missing_defaults_true(self):
+        assert _validate_list_outbox_params({}) is True
+
+    def test_handler_empty_params_enumerates(self, tmp_path):
+        sender = _make_sender_git_repo(tmp_path)
+        result = _run(_memo_list_outbox({}, repo_root=sender / ".git"))
+        assert result["exit_code"] == 0
+        assert result["dry_run"] is True
+
+    def test_dry_run_explicit_none_rejected(self):
+        result = _validate_list_outbox_params({"dry_run": None})
         assert isinstance(result, dict)
         assert result["exit_code"] == 1
 
