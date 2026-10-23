@@ -74,6 +74,22 @@ def test_incomplete_chunk_paths_are_named(repo):
     assert out["stranded"] == {"C2": ["b.py", "b2.py"]}
 
 
+def test_incomplete_chunk_with_dirty_writes_is_left_in_tree_and_surfaced_with_a_next_action(repo):
+    out = _call(repo, _two_chunks(repo), ["C2"])
+    tracked = subprocess.run(
+        ["git", "ls-files"], cwd=str(repo), capture_output=True, text=True,
+        **no_console_creationflags(),
+    ).stdout.split()
+    assert "b.py" not in tracked and "a.py" in tracked
+    assert out["stranded"]["C2"] == ["b.py", "b2.py"]
+    assert "stranded files for C2" in out["next"] and "--only-incomplete" in out["next"]
+
+
+def test_all_done_run_has_no_next_action(repo):
+    out = _call(repo, _two_chunks(repo), [])
+    assert "next" not in out
+
+
 def test_all_done_run_strands_nothing(repo):
     out = _call(repo, _two_chunks(repo), [])
     assert out["stranded"] == {}

@@ -20,10 +20,13 @@ with ``REVIEW_PREP_BUSY_PREFIX`` for the caller to re-call. No path computes wit
 Only a success is stored, so a refusal is recomputed.
 
 The sidecar also stores ``reviewed_sha256`` (repo-relative POSIX product path -> sha256 of the
-bytes frozen) beside ``recorded_at``. A worktree-mode stored reply is served only when that map is
-present and every entry still matches the bytes on disk; a moved worktree recomputes, shelving the
-prior freeze. Range mode ignores it. Trap: the key is deliberately outside ``_STORED_KEYS``, so an
-older sidecar without it stays readable by ``stored_reply_for_run``.
+bytes frozen) beside ``recorded_at``; it feeds terminal_commit's blob-drift check, not serving.
+A worktree-mode sidecar also stores ``declared_sha256`` (declared path -> hash, null when absent;
+the whole value null when a declared entry is a magic pathspec or directory). A worktree-mode stored
+reply is served only when that is a map and every entry still matches the bytes on disk, so a path
+that was absent or unchanged at the freeze and written later recomputes, shelving the prior freeze.
+Range mode ignores it. Trap: both keys are deliberately outside ``_STORED_KEYS``, so an older sidecar
+without them stays readable by ``stored_reply_for_run`` (and recomputes in worktree mode).
 
 Worktree mode also writes a write-once pre-review snapshot beside the sidecar:
 ``<slice_prefix>.pre-review/manifest.json`` (``base``, ``head``, ``recorded_at``, ``paths``, ``files``: product
@@ -69,7 +72,7 @@ from coordinator_core.atomic_replace import atomic_write_bytes
 from coordinator_core.frontmatter.primitives import split_frontmatter
 from coordinator_core.git import git_state
 from coordinator_core.git.content_hash import eol_folded_sha256
-from coordinator_core.git.literal_pathspec import git_pathspec
+from coordinator_core.git.literal_pathspec import git_pathspec, is_magic_pathspec
 from coordinator_core.git.run import run_git
 from coordinator_core.ipc import register_op
 from coordinator_core.session import claim_index
@@ -197,11 +200,23 @@ _LOCK_STALE_SECS = 10.0
 _LOCK_POLL_SECS = 0.05
 
 
-def _reviewed_bytes_unmoved(repo_root: Path, reviewed: object) -> bool:
-    """True when ``reviewed`` is a ``reviewed_sha256`` map and every entry still hashes equal."""
-    if not isinstance(reviewed, dict):
+def _declared_hashes(repo_root: Path, paths: List[str]) -> Optional[dict]:
+    """Declared path -> content hash (``None`` when absent), or ``None`` when any entry is a magic
+    pathspec or a directory: such a declaration cannot be proven unmoved, so it is never served."""
+    out: dict = {}
+    for entry in paths:
+        if is_magic_pathspec(entry) or entry.endswith("/") or (repo_root / entry).is_dir():
+            return None
+        out[entry.replace("\\", "/")] = compute_content_hash(repo_root / entry)
+    return out
+
+
+def _declared_bytes_unmoved(repo_root: Path, declared: object) -> bool:
+    """True when ``declared`` is a ``declared_sha256`` map and every entry still hashes equal
+    (absent still equals absent)."""
+    if not isinstance(declared, dict):
         return False
-    return all(compute_content_hash(repo_root / rel) == digest for rel, digest in reviewed.items())
+    return all(compute_content_hash(repo_root / rel) == digest for rel, digest in declared.items())
 
 
 def _stored_reply(
@@ -209,7 +224,7 @@ def _stored_reply(
 ) -> Optional[dict]:
     """The reply a success sidecar stored, or ``None`` when absent, unreadable, written before
     replies were stored, written for another base, basis, head or path list, or (worktree mode)
-    lacking ``reviewed_sha256`` or recorded over bytes that have since moved."""
+    lacking a ``declared_sha256`` map or recorded over declared bytes that have since moved."""
     try:
         split = split_frontmatter(sidecar.read_text(encoding="utf-8"))
         fm = yaml.safe_load(split.fm_text) if split else None
@@ -224,7 +239,7 @@ def _stored_reply(
         or fm.get("paths") != paths
     ):
         return None
-    if not head and not _reviewed_bytes_unmoved(repo_root, fm.get("reviewed_sha256")):
+    if not head and not _declared_bytes_unmoved(repo_root, fm.get("declared_sha256")):
         return None
     reply = {**{k: fm[k] for k in _STORED_KEYS}, "error": None}
     if "reviewed_sha256" in fm:
@@ -452,6 +467,7 @@ def _compute(
         rel: eol_folded_sha256(data) for rel, data in contents.items() if data is not None
     }
     if not head:
+        out["declared_sha256"] = _declared_hashes(repo_root, paths)
         _write_pre_review_snapshot(share, repo_root, slice_prefix, base, paths, contents, hashes)
         out["pre_review_manifest"] = _rel(_manifest_path(share, slice_prefix), repo_root)
 
@@ -485,6 +501,7 @@ def _compute(
     out["foreign_claims"] = foreign_claims(repo_root, rev_range, paths, session)
     out["sidecar_path"] = _rel(sidecar, repo_root)
     _write_sidecar(sidecar, out, session, paths, head)
+    out.pop("declared_sha256", None)
     return out
 
 
@@ -552,6 +569,7 @@ def _write_sidecar(sidecar: Path, result: dict, session: str, paths: List[str], 
         "recorded_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
         **{k: result[k] for k in _STORED_KEYS},
         "reviewed_sha256": result.get("reviewed_sha256", {}),
+        **({"declared_sha256": result["declared_sha256"]} if "declared_sha256" in result else {}),
         "head": head or None,
         "paths": paths,
     }

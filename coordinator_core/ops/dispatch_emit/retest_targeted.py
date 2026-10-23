@@ -101,6 +101,27 @@ def dirty_paths(repo_root: Path) -> list[str]:
     return sorted(result["value"]["paths"])
 
 
+def covering_dirty_paths(repo_root: Path) -> list[str]:
+    """``dirty_paths`` minus untracked files a test run cannot depend on: an untracked path stays only
+    when it is a ``.py`` file outside any dot-directory (a new module the tests may import). Scratch
+    trees such as ``.salvage-*`` therefore never enter the ``covered`` hash. Raises RuntimeError when
+    git fails."""
+    from coordinator_core.session.session_facts import _dirty_paths
+
+    result = _dirty_paths(repo_root)
+    if result["degraded"]:
+        raise RuntimeError(result["evidence"])
+    kept = []
+    for entry in result["value"]["entries"]:
+        xy, path = entry[0], entry[1]
+        if xy.strip() == "??" and not (
+            path.endswith(".py") and not any(seg.startswith(".") for seg in path.split("/"))
+        ):
+            continue
+        kept.append(path)
+    return sorted(set(kept))
+
+
 def _repo_root(raw: Optional[str]) -> Path:
     if raw:
         return Path(raw).resolve()
@@ -270,7 +291,7 @@ def main(
     argv: Optional[Sequence[str]] = None,
     *,
     run: Callable[..., "int | str | None"] = _run_argv,
-    dirty: Callable[[Path], list[str]] = dirty_paths,
+    dirty: Callable[[Path], list[str]] = covering_dirty_paths,
     spawn: Optional[Callable[..., bool]] = None,
 ) -> int:
     from coordinator_core.git.git_state import head_sha

@@ -292,6 +292,11 @@
                     }
                   }
                 },
+                "siblings_merged": {
+                  "type": "array",
+                  "description": "Set only by merge_digests: the fanout siblings whose digests this one unions. Without it, a carrier terminal_commit leaves every sibling_scope row open.",
+                  "items": { "type": "string" }
+                },
                 "falsifier_broken": {
                   "type": "array",
                   "description": "One entry per plan the pre-dispatch falsifier-integrity review called BROKEN, with its fired tells. Advisory: the plan executes, and dispatch.terminal_commit withholds its implemented stamp.",

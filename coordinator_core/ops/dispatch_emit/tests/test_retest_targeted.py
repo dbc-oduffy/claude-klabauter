@@ -68,7 +68,7 @@ def test_pass_writes_verdict_the_gate_accepts(repo, tmp_path):
     record = li.fresh_targeted_verdict(repo, RUN_ID)
     assert record is not None and record["status"] == "pass"
     assert record["tests"] == ["test_a.py"]
-    assert set(record["covered"]) == {"test_a.py", "dirty.txt"}
+    assert set(record["covered"]) == {"test_a.py"}
     assert li.landing_test_gate(repo, {"targeted_tests": {"status": "fail", "baseline": None}}, RUN_ID)[1] == "pass-on-retest"
 
 
@@ -144,6 +144,21 @@ def test_dirty_paths_reads_untracked_and_modified(repo):
     (repo / "new.txt").write_text("x", encoding="utf-8")
     (repo / "test_a.py").write_text("changed\n", encoding="utf-8")
     assert sorted(retest_targeted.dirty_paths(repo)) == ["new.txt", "test_a.py"]
+
+
+def test_covered_drops_unrelated_untracked_keeps_tracked_edits_and_new_modules(repo, tmp_path):
+    (repo / ".salvage-staged-embed").mkdir()
+    (repo / ".salvage-staged-embed" / "x.py").write_text("x", encoding="utf-8")
+    (repo / "notes.txt").write_text("x", encoding="utf-8")
+    (repo / "newmod.py").write_text("y = 1\n", encoding="utf-8")
+    (repo / "test_a.py").write_text("def test_a():\n    assert True\n", encoding="utf-8")
+    rc = retest_targeted.main(
+        ["--from-task-output", str(_task_output(tmp_path)), "--tests", "test_a.py", "--repo-root", str(repo), "--detached-child"],
+        run=lambda argv, cwd, **_kw: 0,
+    )
+    assert rc == 0
+    record = li.fresh_targeted_verdict(repo, RUN_ID)
+    assert set(record["covered"]) == {"test_a.py", "newmod.py"}
 
 
 def _declare(repo: Path, **keys: str) -> None:

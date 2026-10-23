@@ -197,6 +197,7 @@ from coordinator_core.ops.dispatch_emit.commit_request import (
     parse_marker,
     plan_deliverable_id,
     plan_trailer_deliverable_ids,
+    unmerged_sibling_scope,
     valid_deliverable_id,
 )
 from coordinator_core.ops.dispatch_emit.checkpoint_stamp import (
@@ -3731,10 +3732,8 @@ def _handler_body(params: dict, repo_root: Optional[Path] = None) -> dict:
     landed = (params.get("landed_chunks") if isinstance(params, dict) else None) or []
     held = params.get("held") if isinstance(params, dict) else None
     held = {
-        h["chunk"]: h.get("reason") or ""
-        for h in (held if isinstance(held, list) else [])
-        if isinstance(h, dict) and isinstance(h.get("chunk"), str)
-        and h["chunk"] not in _released_ids(params if isinstance(params, dict) else {})
+        k: v for k, v in _held_entries(params if isinstance(params, dict) else {}).items()
+        if k not in _released_ids(params if isinstance(params, dict) else {})
     }
     if (landed or regraded) and isinstance(incomplete, list) and isinstance(landed, list):
         reply["incomplete_chunks"] = sorted(set(incomplete) - set(landed) - set(regraded))
@@ -3790,12 +3789,33 @@ def _released_ids(params: dict) -> set:
     return {r for r in (rel if isinstance(rel, list) else []) if isinstance(r, str)}
 
 
+def _held_entries(params: dict) -> dict:
+    """``{chunk id: reason}`` of ``params.held``, in object form (``{chunk, reason}``) or bare string form."""
+    held = params.get("held") if isinstance(params, dict) else None
+    out: dict = {}
+    for h in held if isinstance(held, list) else []:
+        if isinstance(h, str):
+            out[h] = ""
+        elif isinstance(h, dict) and isinstance(h.get("chunk"), str):
+            out[h["chunk"]] = h.get("reason") or ""
+    return out
+
+
 def _held_ids(params: dict) -> set:
-    held = params.get("held")
-    return {
-        h["chunk"] for h in (held if isinstance(held, list) else [])
-        if isinstance(h, dict) and isinstance(h.get("chunk"), str)
-    } - _released_ids(params)
+    return set(_held_entries(params)) - _released_ids(params)
+
+
+_STOP_RULE_REPLY_RE = re.compile(r"^[ \t>\"]*[*_`]{0,2}STOP-RULE-FIRED[*_`]{0,2}:[ \t]*\S", re.MULTILINE)
+
+
+def _stop_rule_fired_ids(worktree_root: Path, request: CommitRequest) -> set:
+    """Chunk ids whose report carries a STOP-RULE-FIRED line: the row halted the run and is never coded."""
+    out: set = set()
+    for chunk in request.chunks:
+        text = _read_rel(worktree_root, chunk.report) if chunk.report else None
+        if text is not None and _STOP_RULE_REPLY_RE.search(text):
+            out.add(chunk.id)
+    return out
 
 
 def _held_write_paths(worktree_root: Path, request: CommitRequest, held_ids: set) -> dict:
@@ -4514,8 +4534,15 @@ def _terminal_commit_inner(
     # started and so never reached the marker; those carry no paths to hold
     # back, so they are reported, not refused.
     # A held chunk's work is not the run's to land, whatever its report or the review's slice say.
-    held_ids = _held_ids(params)
+    held_ids = _held_ids(params) | _stop_rule_fired_ids(worktree_root, request)
     incomplete_chunks = incomplete_chunks | (held_ids & known_ids)
+    # Trap: a carrier's own digest lists only the carrier's own unfinished rows; only merge_digests
+    # unions the other siblings', so unmerged sibling_scope rows are never graded done here.
+    unmerged = unmerged_sibling_scope(request, params) & known_ids
+    incomplete_chunks = incomplete_chunks | unmerged
+    if unmerged and regraded is not None:
+        for cid in unmerged:
+            regraded.pop(cid, None)
     unmarked_incomplete = sorted(incomplete_chunks - known_ids)
     stranded.update(
         {c.id: list(c.paths) for c in request.chunks if c.id in incomplete_chunks}
@@ -4531,7 +4558,7 @@ def _terminal_commit_inner(
         incomplete_chunks = incomplete_chunks | set(entangled)
         partial_chunks = [c for c in partial_chunks if c.id not in entangled]
         stranded.update({c.id: list(c.paths) for c in request.chunks if c.id in entangled})
-    partial_chunks = [c for c in partial_chunks if c.id not in held_ids]
+    partial_chunks = [c for c in partial_chunks if c.id not in held_ids and c.id not in unmerged]
     done_chunks = [c for c in request.chunks if c.id not in incomplete_chunks]
 
     # A path a stranded chunk declares never rides the commit by a side route (review residue,
@@ -5436,6 +5463,7 @@ def _terminal_commit_inner(
                 reply, str(reply["sha"]), session_id, worktree_root, repo_root,
                 withheld=[
                     *foreign_excluded,
+                    *wh_reasons,
                     *_sc_follow.shared_dir_holds(
                         worktree_root, sibling_run_id, [*all_paths, *declared_writes], left_behind,
                     ),
@@ -5497,14 +5525,23 @@ def _terminal_commit_inner(
             )
             for csha, by_plan in review_coded.items():
                 for plan_rel, ids in by_plan.items():
-                    checkpoint_rows.setdefault(csha, {}).setdefault(plan_rel, set()).update(ids)
+                    ids = ids - unmerged
+                    if ids:
+                        checkpoint_rows.setdefault(csha, {}).setdefault(plan_rel, set()).update(ids)
             if review_no_delta:
                 reply["review_uncoded_no_delta"] = review_no_delta
         predecessor = {} if rows_untouched else _predecessor_rows(
             worktree_root, request.plan_path, params.get(TERMINAL_RESUME_LEDGER_PARAM)
         )
+        if unmerged:
+            predecessor = {
+                csha: {plan_rel: ids - unmerged for plan_rel, ids in by_plan.items()}
+                for csha, by_plan in predecessor.items()
+            }
         resume_ledger_param = params.get(TERMINAL_RESUME_LEDGER_PARAM)
-        own_coded = frozenset(c.id for c in coded_chunks) | frozenset(checkpoint_of) | frozenset(outside_of)
+        own_coded = (
+            frozenset(c.id for c in coded_chunks) | frozenset(checkpoint_of) | frozenset(outside_of) | unmerged
+        )
         if rows_untouched:
             halted_checkpoints = {}
         elif resume_ledger_param is not None:
@@ -5829,6 +5866,8 @@ def _terminal_commit_inner(
     if declared_reverts_ignored:
         reply["declared_reverts_ignored"] = declared_reverts_ignored
     reply["unmarked_incomplete"] = unmarked_incomplete
+    if unmerged:
+        reply["sibling_rows_unmerged"] = sorted(unmerged)
     if unsent_memos:
         reply["memo_unsent"] = dict(sorted(unsent_memos.items()))
     reply["prefix_files"] = prefix_files

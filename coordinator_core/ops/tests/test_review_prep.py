@@ -491,7 +491,21 @@ def test_worktree_prep_records_reviewed_sha256_and_re_freezes_a_moved_file(repo)
     assert list(Path(first["whole_diff_path"]).parent.glob("*.attempt1.diff"))
 
 
-def test_a_worktree_sidecar_without_reviewed_sha256_is_recomputed_but_range_is_served(repo):
+def test_unmoved_declared_paths_are_served_with_no_git_spawn_and_a_directory_entry_is_never_served(repo, monkeypatch):
+    _write(repo, ["a/one.py", "b/two.py"], 3)
+    first = _call(repo, ["a/one.py", "b/two.py", "never/written.py"])
+    assert _sidecar_fm(repo, first)["declared_sha256"]["never/written.py"] is None
+    _spawn_trap(monkeypatch)
+    assert _call(repo, ["a/one.py", "b/two.py", "never/written.py"]) == first
+    monkeypatch.undo()
+
+    pathspecs = ["a/one.py", "b/"]
+    made = _stored(repo, pathspecs, run="run2")
+    assert _sidecar_fm(repo, made)["declared_sha256"] is None
+    assert rp._stored_reply(repo, repo / made["sidecar_path"], _base(repo), pathspecs, None) is None
+
+
+def test_a_worktree_sidecar_without_declared_sha256_is_recomputed_but_range_is_served(repo):
     import yaml  # noqa: PLC0415
 
     base = _base(repo)
@@ -507,11 +521,11 @@ def test_a_worktree_sidecar_without_reviewed_sha256_is_recomputed_but_range_is_s
         repo, base=base, paths=["a/one.py"], slice_prefix="prep-r", plan_path="docs/plans/p.md",
         session_id=SESSION, head=head,
     )
-    for reply in (wt, rng):
+    for reply, key in ((wt, "declared_sha256"), (rng, "reviewed_sha256")):
         path = repo / reply["sidecar_path"]
         _, fm_text, rest = path.read_text(encoding="utf-8").split("---\n", 2)
         fm = yaml.safe_load(fm_text)
-        fm.pop("reviewed_sha256")
+        fm.pop(key)
         path.write_text(f"---\n{yaml.safe_dump(fm, sort_keys=False)}---\n{rest}", encoding="utf-8")
     served = rp._stored_reply(repo, repo / rng["sidecar_path"], base, ["a/one.py"], head)
     assert served is not None and "reviewed_sha256" not in served

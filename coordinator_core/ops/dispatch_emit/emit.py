@@ -4832,6 +4832,7 @@ def _checkpoint_commit_js(
     runtime_plan_js: Optional[str] = None,
     sidecar_workflow: str = _SIDECAR_WORKFLOW,
     sidecar_run_key: Optional[str] = None,
+    pre_commit_gate_js: Optional[str] = None,
 ) -> str:
     """The script-scope checkpoint machinery: ``_runRow`` records each DONE
     row's declared paths in ``_landed``; ``_waveCommit`` waits for a wave's
@@ -4841,7 +4842,11 @@ def _checkpoint_commit_js(
     so wave commits never race the index. A wave with no DONE row emits no
     leg. The leg never pushes: ``ceremony.commit_v2`` marks the repo for the
     DR-329 push cadence. The terminal commit still lands the receipts, stamps
-    and any prefix-claimed files."""
+    and any prefix-claimed files.
+
+    ``pre_commit_gate_js`` names an ``async (n, done) => boolean`` the script defines; a false
+    verdict withholds the checkpoint and carries the wave's rows onto ``_carried`` (no leg, no
+    failure, no halt). None emits the machinery byte-identically."""
     root_clause = (
         "Your repo is `\0`: `cd` there before any command and resolve every "
         "relative path against it. "
@@ -4915,6 +4920,14 @@ def _checkpoint_commit_js(
             "    }"
             if seam is not None
             else "    if (!paths.length) return;"
+        ),
+        *(
+            [
+                f"    if (!(await {pre_commit_gate_js}(n, done))) {{ "
+                "done.forEach((i) => { if (!_carried.includes(i)) _carried.push(i); }); return; }"
+            ]
+            if pre_commit_gate_js
+            else []
         ),
         "    const id = 'wave ' + n;",
         "    const subject = 'checkpoint(wave ' + n + '): ' + done.length + ' rows \u2014 ' + done.join(', ');",
@@ -5221,6 +5234,7 @@ def _terminal_commit_marker(
     review_open_rows: Sequence[str] = (),
     review_carried: Sequence[str] = (),
     run_base_sha: Optional[str] = None,
+    sibling_scope: Sequence[str] = (),
 ) -> Optional[str]:
     """§ Design D2/D4's terminal-commit-request marker: one JS comment line
     (``commit_request.render_marker``) recording what this run promises
@@ -5258,6 +5272,7 @@ def _terminal_commit_marker(
             review_open_rows=tuple(review_open_rows),
             review_carried=tuple(review_carried),
             review_run_base=run_base_sha if review_only else None,
+            sibling_scope=tuple(sibling_scope),
         )
     )
     if marker is None:
@@ -5467,7 +5482,8 @@ def compose_script(
 
     Sibling-split emission (``sibling_split``): ``terminal_commit=False`` emits no
     commit marker; ``commit_scope`` rows (other siblings' rows) ride in this script's
-    marker beside its own; ``split_note`` adds the sibling width-report line. Defaults
+    marker beside its own and are named ``sibling_scope``, so an unmerged close cannot grade
+    them; ``split_note`` adds the sibling width-report line. Defaults
     leave every emitted byte unchanged.
 
     ``chatty`` (opt-in, default off; absent leaves every emitted byte
@@ -5939,6 +5955,7 @@ def compose_script(
             review_open_rows=review_open_rows,
             review_carried=review_carried,
             run_base_sha=run_base_sha,
+            sibling_scope=[r.id for r in commit_scope] if commit_scope else (),
         )
         if terminal_commit
         else None

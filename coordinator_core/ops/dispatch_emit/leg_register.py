@@ -108,7 +108,7 @@ REGISTER: tuple[LegDecl, ...] = (
     _earns("ask", "plan-review", "reviews the plan"),
     _earns("ask", "plan-revise", "revises the plan against its review"),
     _earns("ask", "work:", "executes one row"),
-    _earns("ask", "verify:", "runs a row's scoped tests and reports"),
+    _earns("ask", "verify:", "runs a row's or a wave's scoped tests and reports"),
     _earns(
         "ask", "verify",
         "runs the manifest's scoped tests, writes the declared docs and note, then rules the criterion and the "

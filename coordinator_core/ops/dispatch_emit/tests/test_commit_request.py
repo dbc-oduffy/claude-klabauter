@@ -9,11 +9,13 @@ import pytest
 from coordinator_core.ops.dispatch_emit.commit_request import (
     MARKER_PREFIX,
     PREFIX_CLAIM_LABEL,
+    SIBLINGS_MERGED_PARAM,
     ChunkCommit,
     CommitRequest,
     MalformedCommitRequestError,
     parse_marker,
     render_marker,
+    unmerged_sibling_scope,
 )
 
 
@@ -159,6 +161,36 @@ def test_no_chunk_left_means_no_marker():
         ),
     )
     assert render_marker(req) is None
+
+
+def test_sibling_scope_round_trips_sorted():
+    req = dataclasses.replace(_fixture_request(), sibling_scope=("C9", "C3"))
+    marker = render_marker(req)
+    assert '"sibling_scope":["C3","C9"]' in marker
+    assert parse_marker(marker).sibling_scope == ("C3", "C9")
+
+
+def test_empty_sibling_scope_leaves_marker_byte_identical():
+    marker = render_marker(_fixture_request())
+    assert "sibling_scope" not in marker
+    assert parse_marker(marker).sibling_scope == ()
+
+
+def test_malformed_sibling_scope_parses_to_empty():
+    marker = render_marker(_fixture_request())
+    payload = json.loads(marker[len(MARKER_PREFIX):])
+    for bad in ("C3", {"C3": 1}, [1, 2]):
+        payload["sibling_scope"] = bad
+        text = MARKER_PREFIX + json.dumps(payload)
+        assert parse_marker(text).sibling_scope == ()
+
+
+def test_unmerged_sibling_scope_both_branches():
+    req = dataclasses.replace(_fixture_request(), sibling_scope=("C3", "C9"))
+    assert unmerged_sibling_scope(req, {}) == frozenset({"C3", "C9"})
+    assert unmerged_sibling_scope(req, {SIBLINGS_MERGED_PARAM: []}) == frozenset({"C3", "C9"})
+    assert unmerged_sibling_scope(req, {SIBLINGS_MERGED_PARAM: ["C3"]}) == frozenset()
+    assert SIBLINGS_MERGED_PARAM == "siblings_merged"
 
 
 def test_prefix_claim_label_literal():

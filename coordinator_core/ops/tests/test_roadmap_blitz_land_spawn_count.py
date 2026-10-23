@@ -72,6 +72,16 @@ def test_two_unsized_xs_batons_spawn_one_batched_grep(tmp_path, monkeypatch):
     assert all("grep" in s.argv for s in spawns), [s.argv for s in spawns]
 
 
+def test_seven_unsized_xs_batons_spawn_the_same_one_grep(tmp_path, monkeypatch):
+    wave_result = _routed_xs_wave(tmp_path, 7)
+
+    with _count_spawns_attributed(monkeypatch) as spawns:
+        out = roadmap_blitz_land._handler({"wave_result": wave_result}, repo_root=tmp_path)
+
+    assert len(out["xsLinked"]) == 7 and not out["refused"], out
+    assert len(spawns) == _budget()["xs_sizing_match"], [s.argv for s in spawns]
+
+
 def test_a_wave_with_no_unsized_xs_batons_spawns_no_grep(tmp_path, monkeypatch):
     _git(tmp_path, "init", "-q", "-b", "main")
     _baton(tmp_path, "s-0")

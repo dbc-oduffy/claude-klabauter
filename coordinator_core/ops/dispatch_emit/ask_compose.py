@@ -587,6 +587,7 @@ _MANIFEST_SCHEMA = _obj(
         "fanout": {"type": ["object", "null"]},
         "review_declared_paths": {"type": "array", "items": _STR},
         "test_targets": {"type": "array", "items": _STR},
+        "wave_test_targets": {"type": "object", "additionalProperties": {"type": "array", "items": _STR}},
         "no_test_target": {"type": ["object", "null"]},
         "doc_writes": {"type": "array", "items": _STR},
         "marker_path": _STR,
@@ -876,6 +877,49 @@ def _test_verdict_empty_halt_js(sizing_rel: Optional[str]) -> str:
         "{ _halted = { halted: " + json.dumps("test_verdict_empty") + ", run_id: _runId, "
         "detail: 'the test leg returned no verdict (empty sidecar or not_run); the run did not pass its tests', "
         "next_action: 'Refire to re-run the test leg: ' + " + _refire_js(sizing_rel) + " }; }"
+    )
+
+
+_WAVE_TESTS_GATE_FN = "_waveTestsGreen"
+
+
+def _wave_tests_green_js(agent_type_host: Optional[str], *, repo_root: Optional[str], run_id: str) -> str:
+    """`_waveTestsGreen(n, ids)`: the checkpoint's pre-commit gate over wave n's cumulative declared tests.
+
+    An empty scope passes. Otherwise one test-runner leg runs the scope, and only the returned
+    `status` gates (`pass` / `pass-with-skips` land); a throw, a missing sidecar or any other
+    status records `_checkpointWithheld` and withholds. Trap: the runner reports, the script gates.
+    `_checkpointWithheld` is read only by the run log line and the node regression test; no result
+    field carries it.
+    """
+    agent_type = _js_string_literal(_emit._degrade_agent_type(_emit._TEST_AGENT_TYPE, agent_type_host))
+    sidecar = _sidecar.sidecar_clause_js("ask", run_id, "'verify:wave-' + n")
+    phase = _js_string_literal(_emit._EXECUTE_PHASE_TITLE)
+    return (
+        "  const _checkpointWithheld = [];\n"
+        f"  async function {_WAVE_TESTS_GATE_FN}(n, ids) {{\n"
+        "    const scope = ((_manifest && _manifest.wave_test_targets) ?? {})[String(n)] ?? [];\n"
+        "    if (!scope.length) return true;\n"
+        "    let r = null;\n"
+        "    try {\n"
+        "      r = await agent(\n"
+        "        'Run and report on the scoped test target(s) for the wave ' + n + ' checkpoint: ' + "
+        "scope.join(', ') + '. ' + "
+        f"{_js_string_literal(_emit._test_runner_clause(repo_root))} + {sidecar},\n"
+        f"        {{ label: 'verify:wave-' + n, phase: {phase}, agentType: {agent_type}, "
+        f"{_emit._model_opt(_emit._TEST_AGENT_TYPE)}, schema: _ROW_VERIFY_SCHEMA }}\n"
+        "      );\n"
+        "    } catch (e) {\n"
+        "      if (_USAGE_LIMIT_RE.test(String((e && e.message) ?? e))) _haltOnUsageLimit(e);\n"
+        "      r = null;\n"
+        "    }\n"
+        "    const status = (r && r.status) || null;\n"
+        "    if ((status === 'pass' || status === 'pass-with-skips') "
+        "&& typeof r.sidecar_path === 'string' && r.sidecar_path.trim()) return true;\n"
+        "    _checkpointWithheld.push({ wave: n, ids, status });\n"
+        "    log('checkpoint of wave ' + n + ' withheld: scoped tests ' + (status || 'returned no verdict'));\n"
+        "    return false;\n"
+        "  }"
     )
 
 
@@ -1681,8 +1725,9 @@ def compose_ask_script(
     b.append(f"  let {_emit._RUN_BASE_VAR} = {_lit(run_base_sha)};")
     b.append(_emit._checkpoint_commit_js(
         agent_type_host, repo_root=repo_root, session_id=session_id, seam=None,
-        runtime_plan_js=_RUNTIME_PLAN_PATH_JS,
+        runtime_plan_js=_RUNTIME_PLAN_PATH_JS, pre_commit_gate_js=_WAVE_TESTS_GATE_FN,
     ))
+    b.append(_wave_tests_green_js(agent_type_host, repo_root=repo_root, run_id=run_id))
     b.append(_usage_limit_helper_js())
     for name in (*_REVIEW_RESULT_NAMES, _emit._TEST_RESULT_VAR):
         b.append(f"  let {name} = {'[]' if name == WAVE_NOT_RUN_VAR else 'null'};")

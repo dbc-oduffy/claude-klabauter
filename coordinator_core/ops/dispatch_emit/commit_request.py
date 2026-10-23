@@ -171,6 +171,22 @@ class CommitRequest:
     # Sorted repo-relative paths dirty at a review-only emit: the review never read their bytes, so
     # the landing withholds them.
     review_carried: tuple = ()
+    # Row ids a carrier sibling's marker holds for OTHER siblings. Trap: they are not this run's
+    # work, and only a merged digest may grade them.
+    sibling_scope: tuple = ()
+
+
+# The next_action param `merge_digests` writes once the siblings' digests are merged.
+SIBLINGS_MERGED_PARAM = "siblings_merged"
+
+
+def unmerged_sibling_scope(request: "CommitRequest", params) -> frozenset:
+    """The request's ``sibling_scope`` ids while ``params`` carries no non-empty
+    ``SIBLINGS_MERGED_PARAM`` list; empty once the digests are merged."""
+    merged = params.get(SIBLINGS_MERGED_PARAM) if isinstance(params, dict) else None
+    if isinstance(merged, list) and merged:
+        return frozenset()
+    return frozenset(request.sibling_scope)
 
 
 def _chunk_to_dict(chunk: ChunkCommit) -> dict:
@@ -240,6 +256,8 @@ def render_marker(req: CommitRequest) -> Optional[str]:
             payload["review_run_base"] = req.review_run_base
         if req.review_carried:
             payload["review_carried"] = sorted(p.replace("\\", "/") for p in req.review_carried)
+    if req.sibling_scope:
+        payload["sibling_scope"] = sorted(req.sibling_scope)
     body = json.dumps(payload, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
     return f"{MARKER_PREFIX}{body}"
 
@@ -320,6 +338,7 @@ def parse_marker(script_text: str) -> Optional[CommitRequest]:
                 payload["review_run_base"] if isinstance(payload.get("review_run_base"), str) else None
             ),
             review_carried=_carried_from(payload.get("review_carried")),
+            sibling_scope=_open_rows_from(payload.get("sibling_scope")),
         )
     except (KeyError, TypeError) as exc:
         raise MalformedCommitRequestError(

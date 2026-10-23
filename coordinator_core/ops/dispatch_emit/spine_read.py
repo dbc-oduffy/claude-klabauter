@@ -490,6 +490,27 @@ from coordinator_core.ops.dispatch_emit.memo_rows import (  # noqa: E402,F401  (
 )
 
 
+def _unbuilt_non_memo_writes(raw: dict, root: Optional[Path]) -> tuple:
+    """The row's declared ``writes:`` that are not memo-outbox/inbox drafts and do not exist under
+    ``root``. A memo-send row with any is an EM perform row, not owed as a bare memo send."""
+    if root is None:
+        return ()
+    from coordinator_core.ops.fleet.memo_wire import memo_outbox_topic
+
+    missing = []
+    for p in raw.get("writes") or ():
+        if not isinstance(p, str) or not p.strip():
+            continue
+        posix = p.replace("\\", "/")
+        if _RECEIVER_INBOX_SEGMENT in "/" + posix.lstrip("/") or (
+            "outbox" in posix and memo_outbox_topic(p)
+        ):
+            continue
+        if not (root / posix).exists():
+            missing.append(p)
+    return tuple(missing)
+
+
 def memo_close_route(row_id: str, slug: Optional[str]) -> str:
     """The one-line register text naming the act that closes a sent memo-send row."""
     from coordinator_core.session.machinery_paths import MEMO_OUTBOX_RELDIR
@@ -1465,6 +1486,15 @@ def read_spine(
                     )
                 if not memo_delivered and memo_row_dispatchable(raw):
                     memo_slug = None
+        unbuilt_writes = (
+            _unbuilt_non_memo_writes(raw, _repo_root_of(plan_path))
+            if (memo_owed or memo_slug is not None or memo_delivered) and em_performed
+            else ()
+        )
+        if unbuilt_writes:
+            memo_owed = False
+            memo_slug = None
+            memo_delivered = False
         em_discharged = None
         if em_discharge_eligible(raw, tuple(frontmatter_gates.get(raw.get("id"), ()))):
             if discharges is None:
@@ -1519,6 +1549,13 @@ def read_spine(
                 )
             elif em_discharged is not None:
                 _reason = ("em-discharged", "EM discharge recorded %s" % em_discharged)
+            elif unbuilt_writes:
+                _reason = (
+                    "em-performed",
+                    "EM: perform the row; the memo is one step, not the row. Its non-memo writes "
+                    "do not exist yet (%s); close it on those committed writes, never on the memo"
+                    % ", ".join(unbuilt_writes),
+                )
             elif memo_delivered:
                 _reason = (
                     "memo-delivered",

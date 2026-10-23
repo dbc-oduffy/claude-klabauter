@@ -72,7 +72,7 @@ from coordinator_core.git.commit_trailers import (
 from coordinator_core.git.commit import partition_declared_deletions
 from coordinator_core.git.run import run_git
 from coordinator_core.git import checkpoint_guard
-from coordinator_core.git.git_state import head_sha
+from coordinator_core.git.git_state import head_sha, read_index_paths
 from coordinator_core.git.git_index import IndexParseError
 from coordinator_core.git.index_write import IndexStaleAfterCommit
 from coordinator_core.git.eol_declared import (
@@ -253,10 +253,8 @@ def _guard_class_relay_step(
                     "sha": committed_sha,
                 }
                 transitions.append(entry)
-                # Emission failure is NAMED, never swallowed (C3 negative
-                # spec) -- but scoped to THIS transition's own try/except so
-                # one bad emission does not stop the loop from detecting/
-                # staging the rest.
+                # Emission failure is NAMED, never swallowed -- but scoped to THIS transition's
+                # try/except so one bad emission does not stop the loop staging the rest.
                 try:
                     emission = stage_class_transition_memo(
                         entry, repo_root=repo_root
@@ -584,10 +582,8 @@ def _pre_commit_gates(
     if not gate_paths:
         return None
 
-    # `declared_deletion_gate` needs the declaration argument the other two
-    # do not, so it does not fit the uniform `(name, gate)` loop below --
-    # called explicitly, BEFORE `commit_paths` (a refusal after the commit
-    # lands is not a refusal), passing `deleted_paths` as the declaration.
+    # `declared_deletion_gate` takes the declaration the other gates do not, so it runs outside the
+    # `(name, gate)` loop, explicitly and BEFORE `commit_paths`: a refusal after the commit is none.
     deletion_outcome = declared_deletion_gate(worktree_root, gate_paths, deleted_paths)
     if not deletion_outcome.passed:
         return "declared_deletion_gate: " + "; ".join(deletion_outcome.diagnostics[:5])
@@ -645,6 +641,22 @@ def _drop_missing(worktree_root: Path, paths: list) -> tuple:
     if partition is None:
         return list(paths), []
     gone = set(partition[1])
+    return [p for p in paths if p not in gone], [p for p in paths if p in gone]
+
+
+def _split_index_deleted(worktree_root: Path, paths: list) -> tuple:
+    """(kept, untracked): on-disk HEAD-tracked paths absent from the index move to untracked, so a `git rm --cached` lands; zero spawns."""
+    present = [p for p in paths if (worktree_root / p).is_file()]
+    if not present:
+        return list(paths), []
+    try:
+        partition = partition_declared_deletions(worktree_root, present)
+        if partition is None or not partition[0]:
+            return list(paths), []
+        in_index = read_index_paths(worktree_root)
+    except Exception:  # noqa: BLE001
+        return list(paths), []
+    gone = {p for p in partition[0] if p.replace("\\", "/") not in in_index}
     return [p for p in paths if p not in gone], [p for p in paths if p in gone]
 
 
@@ -871,7 +883,6 @@ def _cap_list(items: list) -> tuple:
 
 
 def _cap_mapping_lists(block: dict) -> dict:
-    """Cap each list value of ``block`` (a dict of lists, or of dicts keyed by path)."""
     out: dict = {}
     for key, value in block.items():
         if isinstance(value, list) and len(value) > REPLY_LIST_CAP:
@@ -885,10 +896,7 @@ def _cap_mapping_lists(block: dict) -> dict:
 
 
 def cap_reply(result: dict) -> dict:
-    """Bound a ``ceremony.commit_v2`` reply: every list over ``REPLY_LIST_CAP`` entries keeps its
-    first ``REPLY_LIST_CAP`` and gains a sibling ``<key>_total`` count; the nested
-    ``own_left_behind`` and ``stopped_run_residue`` blocks are capped the same way. A caller that
-    needs a full list passes ``full_reply: true`` and caps afterwards with this function."""
+    """Cap every reply list at REPLY_LIST_CAP with a `<key>_total` sibling; `full_reply: true` skips it."""
     if not isinstance(result, dict):
         return result
     out = _cap_mapping_lists(result)
@@ -1174,6 +1182,10 @@ def _handler_body(params: dict, repo_root: Optional[Path], ledger: PhaseLedger) 
                 nothing_to_commit=True,
                 skipped_missing=skipped_missing,
             )
+
+    with ledger.phase("index_deleted_present"):
+        raw_paths, index_untracked = _split_index_deleted(worktree_root, raw_paths)
+    raw_untracked = list(raw_untracked) + [p for p in index_untracked if p not in raw_untracked]
 
     with ledger.phase("expand_untracked_dirs"):
         raw_untracked = _expand_untracked_dirs(worktree_root, raw_untracked)
@@ -1489,6 +1501,13 @@ def _handler_body(params: dict, repo_root: Optional[Path], ledger: PhaseLedger) 
     outcomes = [h[2] for h in landed_halves if h[2] is not None]
     sha = landed_halves[0][3]
     process_sha = next((h[3] for h in landed_halves[1:] if h[4]), None)
+    if index_stale_paths:
+        # A peer's index lock lasts one write: a single batched retry after the landings usually heals it.
+        from coordinator_core.git import commit as _git_commit
+
+        if _git_commit._reset_index_paths(worktree_root, sorted(set(index_stale_paths))):
+            index_stale_paths = []
+            index_stale_warnings = []
     index_stale_warning = " ".join(index_stale_warnings) or None
 
     # A FIELD IS NOT A SIGNAL: a commit that sets one side aside still owes the operator a warning.

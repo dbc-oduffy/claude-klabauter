@@ -1065,9 +1065,15 @@ class StageManifest:
     #: `{id, memo}` per row that only closes an inbox memo when every spine row was so excluded
     #: (`memo_rows.memo_close_only`); an absent key reads as ``()``.
     memo_close: tuple[dict[str, Any], ...] = ()
+    #: Wave number (as a string, a JSON object key) -> test scope of waves 0..n. Cumulative so
+    #: rows carried from an earlier withheld wave are tested before they ride into a later
+    #: checkpoint. Serialised only when non-empty; an absent key reads as ``{}``.
+    wave_test_targets: dict[str, tuple[str, ...]] = field(default_factory=dict)
 
     def to_json(self) -> dict[str, Any]:
         out = self._base_json()
+        if self.wave_test_targets:
+            out["wave_test_targets"] = {k: list(v) for k, v in self.wave_test_targets.items()}
         if self.memo_close:
             out["memo_close"] = [dict(r) for r in self.memo_close]
         if self.slot_withheld:
@@ -1116,4 +1122,7 @@ class StageManifest:
             fanout=dict(data["fanout"]) if data.get("fanout") else None,
             slot_withheld=tuple(dict(r) for r in data.get("slot_withheld") or ()),
             memo_close=tuple(dict(r) for r in data.get("memo_close") or ()),
+            wave_test_targets={
+                str(k): tuple(v) for k, v in (data.get("wave_test_targets") or {}).items()
+            },
         )

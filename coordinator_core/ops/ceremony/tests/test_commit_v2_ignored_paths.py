@@ -106,6 +106,14 @@ def test_untracking_an_ignored_directory_commits_every_removal(repo):
     assert _git(repo, "diff", "--cached", "--name-only").strip() == ""
 
 
+def test_index_deletions_of_ignored_files_named_in_paths_land(repo):
+    _git(repo, "rm", "-r", "-q", "--cached", ".local")
+    out = _call(repo, paths=[".local/share/a.md", ".local/share/sub/b.md"], message="untrack by file")
+    assert out["committed"] is True, out
+    assert not [p for p in _tracked(repo) if p.startswith(".local/")]
+    assert (repo / ".local/share/a.md").exists()
+
+
 def test_untracking_without_prior_git_rm_also_lands(repo):
     out = _call(repo, untracked_paths=[".local/"], message="untrack ignored tree")
     assert out["committed"] is True, out

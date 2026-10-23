@@ -19,6 +19,8 @@ import os
 from dataclasses import dataclass
 from typing import Mapping, Optional, Sequence
 
+from coordinator_core.ops.dispatch_emit.commit_request import SIBLINGS_MERGED_PARAM
+
 MANIFEST_SCHEMA = "sibling-manifest"
 RUNTIME_CAP_LABEL = "min(16, CPUs-2)"
 _LIST_CAPS = {"em_may_think_differently": 10, "unresolved": 10}
@@ -276,7 +278,9 @@ def merge_digests(digests: Mapping[str, dict], manifest: Mapping) -> dict:
     ``digests`` is keyed by sibling id and must cover every sibling in ``manifest``. Counts sum,
     statuses take the worst, lists concatenate under the schema's caps, and ``next_action`` is
     the commit carrier's with ``incomplete_chunks``/``held``/``falsifier_broken`` unioned across
-    all siblings (the other siblings carry no commit marker).
+    all siblings (the other siblings carry no commit marker). The merged params name every
+    sibling merged (``siblings_merged``, fanout order): terminal_commit grades commit-scope rows
+    only when that list is present.
     """
     ids = [s["id"] for s in manifest["siblings"]]
     missing = [i for i in ids if i not in digests]
@@ -370,6 +374,7 @@ def merge_digests(digests: Mapping[str, dict], manifest: Mapping) -> dict:
         broken = union("falsifier_broken")
         if broken or "falsifier_broken" in params:
             params["falsifier_broken"] = broken
+        params[SIBLINGS_MERGED_PARAM] = list(ids)
         next_action["params"] = params
 
     width = {

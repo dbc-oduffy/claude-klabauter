@@ -2558,6 +2558,10 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
                 return _error(f"{exc} (the commit landed; resolve its sha with `git log -1`)")
             outcome = exc.outcome
             index_stale = list(exc.paths)
+            from coordinator_core.git.commit import _reset_index_paths
+
+            if _reset_index_paths(root, index_stale):
+                index_stale = []
             break
         except CommitRefused as exc:
             _remove(root, receipt_paths)

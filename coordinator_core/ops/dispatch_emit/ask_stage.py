@@ -248,6 +248,17 @@ def _test_scope(waves, root: Path) -> tuple[tuple[str, ...], Optional[dict]]:
     except NoWritesDeclaredError as exc:
         return (), {"reason": str(exc), "unmapped_paths": [], "testable_omissions": []}
 
+
+def _wave_test_scopes(waves, root: Path) -> dict[str, tuple[str, ...]]:
+    """Cumulative declared test scope per non-last wave, keyed by the wave number rows carry.
+    A wave whose cumulative scope is empty has no key: nothing to wait on before its checkpoint."""
+    out: dict[str, tuple[str, ...]] = {}
+    for i in range(len(waves) - 1):
+        scope = _test_scope(waves[: i + 1], root)[0]
+        if scope:
+            out[str(i)] = scope
+    return out
+
 # Mirrors DoE's coordinator/lib/plan_scaffold_markers.py; claude-klabauter never imports DoE's tree.
 _SCAFFOLD_MARKERS = (
     ("PLACEHOLDER", re.compile(r"\bPLACEHOLDER\b")),
@@ -412,8 +423,9 @@ def _sibling_owner_rows(plan_rows: Sequence[Mapping], sibling_roots: Mapping[str
 
 def _only_rows(
     rows: list, exclusions: list, keep: frozenset, snap: Optional[resume_snapshot.Snapshot] = None
-) -> tuple[list, list, tuple[str, ...]]:
-    """The resume subset of a spine read, and the resume rows a re-plan retired: `keep` rows only,
+) -> tuple[list, list, tuple[str, ...], list]:
+    """The resume subset of a spine read, the resume rows a re-plan retired, and the dispatchable
+    rows dropped as landed: `keep` rows only,
     edges onto the dropped (landed) rows stripped, and only `keep` rows among the owed/gated
     exclusions. With `snap` (the gate's snapshot), every known row outside `snap.not_to_run` is
     kept, rows a re-plan added included. A `keep` id the spine lacks but `snap.resume_rows` names
@@ -430,12 +442,14 @@ def _only_rows(
         keep = frozenset(known - snap.not_to_run)
     landed = known - keep
     kept = []
+    dropped = []
     for row in rows:
         if row.id not in keep:
+            dropped.append(row)
             continue
         edges = [e for e in row.depends_on if not (isinstance(e, dict) and e.get("chunk") in landed)]
         kept.append(row._replace(depends_on=edges) if len(edges) != len(row.depends_on) else row)
-    return kept, [e for e in exclusions if e.get("id") in keep], retired
+    return kept, [e for e in exclusions if e.get("id") in keep], retired, dropped
 
 
 def _refuse_reminted_em_rows(plan_path: Path, raw_by_id: Mapping[str, Mapping], keep: frozenset) -> None:
@@ -659,6 +673,37 @@ def _refuse_misrouted_xs_mint(sizing: Mapping, sizing_rel: str, writes: Sequence
         raise AskStageError(f"XS-MINT-NO-WRITES: {sizing_rel} is an XS arm and needs at least one writes path")
 
 
+_EXCLUSION_CUE = re.compile(
+    r"\b(?:do not|don't|dont|must not|never|should not|shall not)\s+(?:touch|modify|edit|change|write|stage|commit|revert)\b"
+    r"|\bnot to be (?:touched|modified|edited|changed)\b|\bleave\b[^.\n]*\balone\b|\bout of scope\b",
+    re.IGNORECASE,
+)
+_PATH_TOKEN = re.compile(r"[\w.\-]+(?:/[\w.\-]+)+/?|[\w\-]+\.\w+")
+
+
+def _excluded_by_ask(sizing: Mapping, writes: Sequence[str]) -> frozenset[str]:
+    """The `writes` the sizing's intent or register rows name inside a do-not-touch sentence.
+
+    A path matches by equality, or by a directory token it sits under. Trap: lexical only; a path
+    described in prose without being spelled out is not caught, and a dropped write is not logged."""
+    texts: list[str] = [str(sizing.get("intent") or "")]
+    register = sizing.get("requirement_register")
+    for row in register if isinstance(register, list) else ():
+        if isinstance(row, Mapping):
+            texts.extend(str(v) for v in row.values() if isinstance(v, str))
+    named: set[str] = set()
+    for text in texts:
+        for sentence in re.split(r"(?<=[.!?])\s+|\n", text):
+            if _EXCLUSION_CUE.search(sentence):
+                named.update(t.rstrip(".,;:)\"'`").lstrip("(\"'`") for t in _PATH_TOKEN.findall(sentence))
+    out = set()
+    for w in writes:
+        norm = str(w).replace("\\", "/")
+        if any(norm == n or (n.endswith("/") and norm.startswith(n)) for n in named if n):
+            out.add(w)
+    return frozenset(out)
+
+
 LIVE_RUN_WRITE_OVERLAP = "live-run-write-overlap"
 STAGE_RECEIPT_MISSING = "stage-receipt-missing"
 
@@ -756,6 +801,8 @@ def stage(
         sizing = load_sizing(root, sizing_rel)
         run_sizing_rel, run_sizing = sizing_rel, sizing
         _refuse_unapproved_design(sizing, sizing_rel)
+        excluded = _excluded_by_ask(sizing, writes)
+        writes = [w for w in writes if w not in excluded]
         _refuse_misrouted_xs_mint(sizing, sizing_rel, writes)
         spine_text, spine_path = mint_xs_spine(
             sizing, sizing_rel=sizing_rel, writes=writes, out_dir=record, gated=gated,
@@ -799,8 +846,9 @@ def stage(
     except InvalidChangeKindError as exc:
         raise AskStageError(f"INVALID-CHANGE-KIND: {plan_posix}: {exc}") from exc
     retired_resume: tuple[str, ...] = ()
+    dropped_landed: list = []
     if only_rows is not None:
-        rows, exclusions, retired_resume = _only_rows(
+        rows, exclusions, retired_resume, dropped_landed = _only_rows(
             rows, exclusions, frozenset(only_rows), resume_snapshot.read(root, run_id, plan_posix)
         )
     if ledger_resume and only_rows is not None:
@@ -877,6 +925,7 @@ def stage(
             raise AskStageError(f"requirements: {exc}") from exc
         run_sizing = _run_sizing(root, run_sizing_rel) or run_sizing
     test_targets, no_test_target = _test_scope(waves, root)
+    wave_test_targets = _wave_test_scopes(waves, root)
 
     after = {node.row.id: tuple(node.after) for node in dag_from_waves(waves).nodes}
     manifest_rows: list[ManifestRow] = []
@@ -965,6 +1014,13 @@ def stage(
     marker_path = run_dir / "commit-request.txt"
     _write(marker_path, f"{marker}\n" if marker else "")
 
+    review_paths = list(declared)
+    if only_rows is not None and not ledger_resume:
+        # Twin of emit.py prior_landed_rows -> prior_surface. Trap: the review base is the halted
+        # run's base, so a dropped row landed before that base adds no hunk.
+        for row in dropped_landed:
+            review_paths.extend(_widen_with_test_candidates(commit_pathspec_or_none([row]) or [], root))
+
     register_rows = [
         r for r in ((run_sizing or {}).get("requirement_register") or {}).get("rows") or [] if isinstance(r, Mapping)
     ]
@@ -972,7 +1028,7 @@ def stage(
     manifest = StageManifest(
         run_dir=_rel(root, run_dir),
         rows=tuple(manifest_rows),
-        review_declared_paths=_reviewable(_dedupe_preserve_order(declared)),
+        review_declared_paths=_reviewable(_dedupe_preserve_order(review_paths)),
         marker_path=_rel(root, marker_path),
         plan_id=_plan_id(plan_text),
         gated=tuple(gated),
@@ -980,6 +1036,7 @@ def stage(
         engine_rows=_engine_rows(root, plan_path, raw_by_id, gated, run_sizing, sibling_roots),
         test_targets=test_targets,
         no_test_target=no_test_target,
+        wave_test_targets=wave_test_targets,
         fanout=fanout.meta_dict(),
         doc_writes=docs,
         rulable_ids=rulable_ids(register_rows),
