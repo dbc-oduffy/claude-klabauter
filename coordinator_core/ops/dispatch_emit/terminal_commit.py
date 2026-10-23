@@ -2360,6 +2360,14 @@ def _land_own_left_behind(
         reply[own_carry.REPLY_KEY] = {"error": str(err or f"unexpected commit_v2 reply: {out!r}")}
 
 
+def _cap_commit_reply(reply: dict) -> dict:
+    """``reply`` bounded by ``commit_v2.cap_reply``, applied once every consumer of the full
+    ``full_reply`` lists has read them."""
+    from coordinator_core.ops.ceremony.commit_v2 import cap_reply
+
+    return cap_reply(reply)
+
+
 def _in_scope(path: str, request: CommitRequest) -> bool:
     """Whether ``path`` matches one of ``_scope_pathspecs(request)``."""
     parent = path.rpartition("/")[0]
@@ -5207,6 +5215,7 @@ def _terminal_commit_inner(
         "paths": all_paths, "message": message,
         "carry_own_left_behind": False,
         "carry_stopped_runs": False,
+        "full_reply": True,
     }
     if deleted_paths:
         commit_params["deleted_paths"] = deleted_paths
@@ -5398,11 +5407,13 @@ def _terminal_commit_inner(
     if not reply.get("committed"):
         _remove(worktree_root, receipt_paths)
         receipt_paths = []
+        reply = _cap_commit_reply(reply)
     if reply.get("committed") and reply.get("sha"):
         # Advance plan status so a re-fire (which selects live `open` rows)
         # cannot redo landed work. incomplete_chunks never reach here.
         scope.setdefault("landed", set()).update(all_paths)
         scope["landed"].update(_stopped_run_carried(reply))
+        reply = _cap_commit_reply(reply)
         no_delta = set(reply.get("no_delta") or [])
         coded_chunks = [
             c for c in contributing_chunks

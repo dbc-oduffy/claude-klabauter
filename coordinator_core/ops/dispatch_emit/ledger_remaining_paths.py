@@ -176,7 +176,8 @@ def plan_rows_serving(plan_path: Path, blocking: Sequence[str]) -> list[str]:
     """Ordered, de-duplicated `writes` of every spine row serving a blocking id (see `serving_rows`)."""
     out: list[str] = []
     for row in serving_rows(plan_path, blocking):
-        for w in row.get("writes") or []:
+        declared = row.get("writes") or []
+        for w in [declared] if isinstance(declared, str) else declared:
             if isinstance(w, str) and w not in out:
                 out.append(w)
     return out
@@ -328,6 +329,10 @@ def remaining_leg_plan(
     manifest_writes = [
         w for r in rows if blocked.intersection(getattr(r, "register_rows", ()) or ()) for w in r.writes
     ]
+    plan_writes = [str(w).replace("\\", "/").removeprefix("./") for w in plan_writes]
+    if spelling is not None and plan_writes:
+        respelled = spelling(plan_writes)
+        plan_writes = [respelled.get(w) or w for w in plan_writes]
     writes: list[str] = []
     for p in [*manifest_writes, *plan_writes, *(n for n in named if n in allowed)]:
         if p not in writes:

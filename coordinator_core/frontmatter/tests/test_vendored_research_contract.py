@@ -42,7 +42,7 @@ def _research_errors(research: dict) -> list[dict]:
 def test_vendored_versions():
     # 1.45.0 -> 1.46.0: optional top-level tie_break; claude-klabauter-first, DoE copy pending.
     assert _version(_SIZING) == "1.46.0"
-    assert _version(_HANDOFF) == "11.0.1"
+    assert _version(_HANDOFF) == "11.1.0"
     assert _version(_PLAN_TASKS) == "3.19.0"
 
 

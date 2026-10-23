@@ -2,13 +2,19 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://coordinator.local/schemas/initiative.schema.json",
   "x-schema-name": "initiative",
-  "x-schema-version": "1.2.0",
+  "x-schema-version": "1.3.0",
   "x-bump-class": "enum-value-additive",
-  "x-bump-note": "1.1.0 -> 1.2.0 (lvv-06) added `closed` to `status`'s enum and the optional top-level `closed_reason` (superseded|rejected|wontfix|duplicate|obsolete) and `closed_at` (date) fields; `abandoned` stays for legacy read-tolerance. HOLDING: the DR-097 re-vendor notice is sent by C2, and records are not written `closed` until klabauter re-vendors.\n\n1.0.0 -> 1.1.0 added the optional nullable top-level `deliverable_id` scalar (durable deliverable-spine join key; C9c). DR-097 push-side notification duty is discharged — memo delivered to the engine repo's EM 2026-08-10 at their `8796e9bd4`. Vendoring order actually used: DoE lands first, the engine vendors on our ping, because this bump originates here.",
+  "x-bump-note": "1.2.0 -> 1.3.0 (lvv-06) a record with `status: closed` now requires `closed_reason` and `closed_at` (top-level if/then allOf). Re-vendor notice owed to claude-klabauter.\n\n1.1.0 -> 1.2.0 (lvv-06) added `closed` to `status`'s enum and the optional top-level `closed_reason` (superseded|rejected|wontfix|duplicate|obsolete) and `closed_at` (date) fields; `abandoned` stays for legacy read-tolerance.\n\n1.0.0 -> 1.1.0 added the optional nullable top-level `deliverable_id` scalar (durable deliverable-spine join key; C9c). DR-097 push-side notification duty is discharged — memo delivered to the engine repo's EM 2026-08-10 at their `8796e9bd4`. Vendoring order actually used: DoE lands first, the engine vendors on our ping, because this bump originates here.",
   "applies_to": "state/initiatives/*.yaml",
   "description": "Lightweight initiative entity — the parent container for a fleet deliverable spine. A cross-repo bet, feature area, or goal that groups related work artifacts. Artifacts carry initiative: <id> as a nullable FK. Roadmaps attach to an initiative as one kind of initiative; a cross-repo bet with no formal roadmap is still a first-class initiative. Stored per-initiative in state/initiatives/<id>.yaml. Spec backlink: the engine repo:pln-fleet-deliverable-spine-identity-and-facets-2b331c § D2",
   "type": "object",
   "required": ["id", "label", "status"],
+  "allOf": [
+    {
+      "if": {"required": ["status"], "properties": {"status": {"const": "closed"}}},
+      "then": {"required": ["closed_reason", "closed_at"]}
+    }
+  ],
   "properties": {
     "id": {
       "type": "string",

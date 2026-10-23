@@ -36,6 +36,7 @@ from __future__ import annotations
 import os
 import posixpath
 import re
+import tempfile
 from pathlib import Path
 from typing import Iterable, Mapping, Optional, Sequence
 
@@ -77,17 +78,33 @@ def _under_root(posix_path: str, root_posix: str) -> bool:
     return candidate == root or candidate.startswith(root.rstrip("/") + "/")
 
 
+def in_session_scratchpad(posix_path: str) -> bool:
+    """True for an absolute path under ``<tempdir>/claude/<project-slug>/<session>/scratchpad/``.
+    Any session's scratchpad counts; the rest of the temp dir does not."""
+    candidate = posixpath.normpath(posix_path)
+    tempdir = Path(tempfile.gettempdir())
+    # Both spellings: a harness-issued path may be the symlinked form (macOS /var vs /private/var)
+    # or the 8.3 short form (Windows) that resolve() rewrites.
+    for temp in {_posix(str(tempdir)), _posix(str(tempdir.resolve()))}:
+        if not _under_root(candidate, temp):
+            continue
+        parts = candidate[len(posixpath.normpath(temp).rstrip("/")):].lstrip("/").split("/")
+        if len(parts) >= 5 and parts[0].casefold() == "claude" and parts[3] == "scratchpad":
+            return True
+    return False
+
+
 def paths_outside_repo_root(paths: Iterable[str], repo_root: Path) -> list[str]:
     """The paths a terminal commit keyed on ``repo_root`` cannot reach, in
-    input order: absolute and not under ``repo_root``, ``..``-escaping, or
-    first-segment-sibling-repo."""
+    input order: absolute and not under ``repo_root`` or a session scratchpad,
+    ``..``-escaping, or first-segment-sibling-repo."""
     root_posix = _posix(str(repo_root))
     repo_root = Path(repo_root)
     out: list[str] = []
     for raw in paths:
         posix = _posix(raw)
         if _is_absolute(posix):
-            if not _under_root(posix, root_posix):
+            if not _under_root(posix, root_posix) and not in_session_scratchpad(posix):
                 out.append(raw)
             continue
         normalized = posixpath.normpath(posix)

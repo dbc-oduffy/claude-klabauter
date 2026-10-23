@@ -863,13 +863,62 @@ def _record_ledger(worktree_root: Path, paths: list, sha: str, message: str) -> 
     record_ledger_entry(worktree_root, paths, sha, closes=closes, reverts_sha=reverts_sha)
 
 
+REPLY_LIST_CAP = 20
+
+
+def _cap_list(items: list) -> tuple:
+    return items[:REPLY_LIST_CAP], len(items)
+
+
+def _cap_mapping_lists(block: dict) -> dict:
+    """Cap each list value of ``block`` (a dict of lists, or of dicts keyed by path)."""
+    out: dict = {}
+    for key, value in block.items():
+        if isinstance(value, list) and len(value) > REPLY_LIST_CAP:
+            out[key], out[f"{key}_total"] = _cap_list(value)
+        elif isinstance(value, dict) and len(value) > REPLY_LIST_CAP:
+            out[key] = dict(list(value.items())[:REPLY_LIST_CAP])
+            out[f"{key}_total"] = len(value)
+        else:
+            out[key] = value
+    return out
+
+
+def cap_reply(result: dict) -> dict:
+    """Bound a ``ceremony.commit_v2`` reply: every list over ``REPLY_LIST_CAP`` entries keeps its
+    first ``REPLY_LIST_CAP`` and gains a sibling ``<key>_total`` count; the nested
+    ``own_left_behind`` and ``stopped_run_residue`` blocks are capped the same way. A caller that
+    needs a full list passes ``full_reply: true`` and caps afterwards with this function."""
+    if not isinstance(result, dict):
+        return result
+    out = _cap_mapping_lists(result)
+    for key in ("own_left_behind", "stopped_run_residue"):
+        block = out.get(key)
+        if isinstance(block, dict):
+            inner = _cap_mapping_lists(block)
+            carried = inner.get("carried")
+            if key == "stopped_run_residue" and isinstance(carried, dict):
+                total = sum(len(v) for v in carried.values() if isinstance(v, list))
+                if total > REPLY_LIST_CAP:
+                    inner["carried"] = {
+                        rid: ps[:REPLY_LIST_CAP] if isinstance(ps, list) else ps
+                        for rid, ps in carried.items()
+                    }
+                    inner["carried_total"] = total
+            out[key] = inner
+    return out
+
+
 @register_op("ceremony.commit_v2")
 def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     ledger = PhaseLedger()
     spawn_start = spawn_counter.spawn_count()
     t0 = time.thread_time()
     try:
-        return _handler_body(params, repo_root, ledger)
+        reply = _handler_body(params, repo_root, ledger)
+        if isinstance(params, dict) and params.get("full_reply") is True:
+            return reply
+        return cap_reply(reply)
     finally:
         with contextlib.suppress(Exception):
             total_ms = (time.thread_time() - t0) * 1000.0

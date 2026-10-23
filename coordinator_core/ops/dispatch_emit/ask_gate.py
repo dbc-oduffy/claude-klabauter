@@ -678,6 +678,9 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     writes = params.get("writes") or []
     root = main_worktree_root(Path(repo_root))
     route_verdicts: list = []
+    if params.get("run_id"):
+        # A refire's refusal returns before the verdict writes its own snapshot; the prior attempt's must not outlive it.
+        _clear_resume_snapshot(root, params["run_id"])
     if params.get("run_id") and params.get("require_live_token"):
         from coordinator_core.ops.dispatch_emit import run_token
 
@@ -912,6 +915,12 @@ def _stamp_landed_rows(root: Path, plan_rel: str, landed: Sequence) -> None:
     if check_plan_tasks_source(updated) is not None and check_plan_tasks_source(text) is None:
         return
     replace_text(plan, updated)
+
+
+def _clear_resume_snapshot(root: Path, run_id: str) -> None:
+    from coordinator_core.ops.dispatch_emit import resume_snapshot
+
+    resume_snapshot.clear(root, run_id)
 
 
 def _record_resume_snapshot(root: Path, run_id: str, verdict: GateVerdict) -> None:

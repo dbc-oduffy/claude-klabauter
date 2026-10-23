@@ -1184,6 +1184,30 @@ created: 2026-06-01
         assert result["exit_code"] == 0
         assert result["applied"] is False
 
+    def test_same_decision_reapply_omitting_evidence_is_noop(self, tmp_path):
+        """Same decision and realized_by with decision_note omitted is an idempotent no-op rather than a refusal."""
+        memo = self._setup_memo(tmp_path, self._ACTIONED_FIXTURE)
+        before = Path(memo).read_text(encoding="utf-8")
+        for call in (
+            lambda: _action(memo, {"decision": "accepted", "realized_by": self._OLD_SHA}),
+            lambda: _resolve(
+                memo, "session-test", "2026-07-28T17:00:00Z",
+                {"decision": "accepted", "realized_by": self._OLD_SHA},
+            ),
+        ):
+            result = call()
+            assert result["exit_code"] == 0
+            assert result["applied"] is False
+            assert Path(memo).read_text(encoding="utf-8") == before
+
+    def test_same_decision_reapply_with_differing_realized_by_still_refused(self, tmp_path):
+        memo = self._setup_memo(tmp_path, self._ACTIONED_FIXTURE)
+        before = Path(memo).read_text(encoding="utf-8")
+        result = _action(memo, {"decision": "accepted", "realized_by": self._NEW_SHA})
+        assert result["exit_code"] == 1
+        assert "different disposition" in result["error"]
+        assert Path(memo).read_text(encoding="utf-8") == before
+
     # -- Live repro (AC1) --------------------------------------------------
     #
     # Reproduces the real 2026-07-28-example-cockpit-repo-em-... memo's shape

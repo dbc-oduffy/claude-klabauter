@@ -1115,6 +1115,11 @@ def _handle_already_actioned(fm_text: str, params: dict, verb: str) -> str | Non
         base = "memo is already actioned with a different disposition — cannot re-action"
         if not same_decision:
             raise MutateAbort(base)
+        if not params.get("superseded_by") and all(
+            not params.get(f) or params.get(f) == read_fm_field_unquoted(fm_text, f)
+            for f in ("decision_note", "realized_by")
+        ):
+            return None
         tail = "; to amend the note or realized_by only, pass "
         raise MutateAbort(f"{base}{tail}correct_realization", f"{base}{tail}--correct-realization")
 

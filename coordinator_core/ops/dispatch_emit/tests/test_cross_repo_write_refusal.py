@@ -92,6 +92,34 @@ def test_absolute_and_escaping_paths_refused_and_names_each(tmp_path: Path) -> N
         assert needle in message
 
 
+def test_session_scratchpad_write_is_not_a_cross_repo_touch(tmp_path: Path, monkeypatch) -> None:
+    import tempfile
+
+    temp = tmp_path / "tmp"
+    pad = temp / "claude" / "E--proj" / "sess-1" / "scratchpad"
+    pad.mkdir(parents=True)
+    monkeypatch.setattr(tempfile, "tempdir", str(temp))
+    repo_root = tmp_path / "coordinator-content-repo"
+    repo_root.mkdir()
+    _make_sibling_repo(tmp_path, "claude-klabauter")
+    inside = (pad / "out.md").as_posix()
+    other_temp = (temp / "elsewhere" / "x.md").as_posix()
+    not_pad = (temp / "claude" / "E--proj" / "sess-1" / "other" / "x.md").as_posix()
+
+    check_cross_repo_writes([_row("S", [inside])], repo_root, env=LOCAL)  # does not raise
+    with pytest.raises(CrossRepoWriteError):
+        check_cross_repo_writes([_row("T", [other_temp])], repo_root, env=LOCAL)
+    with pytest.raises(CrossRepoWriteError):
+        check_cross_repo_writes([_row("U", [not_pad])], repo_root, env=LOCAL)
+    escaping = (pad / ".." / ".." / "x.md").as_posix()
+    with pytest.raises(CrossRepoWriteError):
+        check_cross_repo_writes([_row("V", [escaping])], repo_root, env=LOCAL)
+    with pytest.raises(CrossRepoApprovalNeeded):
+        check_cross_repo_writes(
+            [_row("S", [inside]), _row("M", ["claude-klabauter/x.py"])], repo_root, env=LOCAL
+        )
+
+
 def test_paths_outside_repo_root_accepts_inside_paths(tmp_path: Path) -> None:
     from coordinator_core.ops.dispatch_emit.cross_repo_write_refusal import (
         paths_outside_repo_root,

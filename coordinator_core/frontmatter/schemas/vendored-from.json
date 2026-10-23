@@ -48,16 +48,16 @@
     "doe_commit": "cb819d590e88a1324e0f59d7dde7749746f22219"
   },
   "goal.schema.json": {
-    "blob": "1e6c50d5e824450abef9d784fb1b28685218a6e1",
-    "doe_commit": "2eee177a8f4588f92bcc2fb781b2b00f99d5c33c"
+    "blob": "3810bd754326a81eaa59fa9f7f4c466a9084cca0",
+    "doe_commit": "ccd0645b195c55122837d6e98f6c749e4d17c363"
   },
   "handoff-archived.schema.json": {
     "blob": "c45753a4646163f50ad91a53cc0a63b6d1d8e4b4",
     "doe_commit": "33a89a443a9e6377f7c5222a3e988437c375984e"
   },
   "handoff.schema.json": {
-    "blob": "4f31c7b17916903038930f72a736a610bf665441",
-    "doe_commit": "08e6c0f3907df625c1a3d72080fe619128e02fbf"
+    "blob": "f05f7369f4f5683cda411cef4d9608e23b49e128",
+    "doe_commit": "ccd0645b195c55122837d6e98f6c749e4d17c363"
   },
   "health-status.schema.json": {
     "blob": "d31ddbff5b35ca0c760aabe3d02de903d19550d8",
@@ -68,8 +68,8 @@
     "doe_commit": "fd4a6410358cb567b8af5693a92246a8ef4aecd0"
   },
   "initiative.schema.json": {
-    "blob": "25555f5e58f63c844b5f1f9b7c35ce047649f9f3",
-    "doe_commit": "2eee177a8f4588f92bcc2fb781b2b00f99d5c33c"
+    "blob": "59cecad0245274c395e5f50c5efbc884ec8fc1f3",
+    "doe_commit": "ccd0645b195c55122837d6e98f6c749e4d17c363"
   },
   "lesson-entry.schema.json": {
     "blob": "d53cedfd36baad3ee7cbe7cda3a9793775ff1d16",
@@ -100,8 +100,8 @@
     "doe_commit": "2eee177a8f4588f92bcc2fb781b2b00f99d5c33c"
   },
   "plan.schema.json": {
-    "blob": "df722ca7d9a1af6544f4d15fa51e4753973bdd20",
-    "doe_commit": "2eee177a8f4588f92bcc2fb781b2b00f99d5c33c"
+    "blob": "b59901f5a0cf0edeb0dfdc8e0c4aa9f57117ebab",
+    "doe_commit": "ccd0645b195c55122837d6e98f6c749e4d17c363"
   },
   "prior-art-check.schema.json": {
     "blob": "70f770c2a1c104737f62f617b071f577575d309f",
@@ -140,8 +140,8 @@
     "doe_commit": "fd4a6410358cb567b8af5693a92246a8ef4aecd0"
   },
   "roadmap.schema.json": {
-    "blob": "cca67e8519509f45431f6ba64c9bd9170e7176c4",
-    "doe_commit": "08e6c0f3907df625c1a3d72080fe619128e02fbf"
+    "blob": "babeb11cb9e0015b9dad4de2476a823e0f90513d",
+    "doe_commit": "ccd0645b195c55122837d6e98f6c749e4d17c363"
   },
   "run-report.schema.json": {
     "blob": "cdf831d739af01f56c3c2b24138046881d830096",

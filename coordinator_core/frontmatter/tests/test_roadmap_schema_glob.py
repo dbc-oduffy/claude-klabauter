@@ -84,10 +84,10 @@ def _make_git_repo(root: Path) -> Path:
     return (root / ".git").resolve()
 
 
-def test_roadmap_schema_is_vendored_at_1_4_0_with_the_widened_glob():
+def test_roadmap_schema_is_vendored_with_the_widened_glob():
     schemas = load_schemas(_SCHEMAS_DIR)
     schema = schemas["roadmap"]
-    assert schema["x-schema-version"] == "1.4.0"
+    assert schema["x-schema-version"] == "1.5.0"
     assert schema["applies_to"] == "state/roadmap/**/OVERVIEW.md"
 
 
