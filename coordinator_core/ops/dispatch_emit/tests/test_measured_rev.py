@@ -103,6 +103,21 @@ def test_refuses_non_file_paths(repo, bad):
         mr.measured_rev("run-4", [bad], repo_root=repo)
 
 
+def test_refuses_traversal_run_id_before_writing_objects(repo):
+    with pytest.raises(ValueError):
+        mr.measured_rev("../escape", ["edit.txt"], repo_root=repo)
+
+
+def test_handler_replies_typed_refusal_and_result(repo):
+    bad = mr._handler({"run_id": "run-h", "paths": "edit.txt"}, repo)
+    assert bad["refused"] == "measured-rev"
+    refused = mr._handler({"run_id": "run-h", "paths": ["../x"]}, repo)
+    assert refused["refused"] == "measured-rev"
+    (repo / "edit.txt").write_text("new\n")
+    ok = mr._handler({"run_id": "run-h", "paths": ["edit.txt"]}, repo)
+    assert tuple(ok) == MEASURED_REV_KEYS
+
+
 def test_refuses_when_no_head(tmp_path):
     _git(tmp_path, "init", "-q")
     with pytest.raises(mr.MeasuredRevRefused):

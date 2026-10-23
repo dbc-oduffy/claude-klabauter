@@ -53,3 +53,20 @@ def test_a_footprint_wholly_excluded_is_refused_as_no_writes(tmp_path):
     _sizing(tmp_path)
     with pytest.raises(AskStageError, match="^XS-MINT-NO-WRITES: "):
         stage(tmp_path, run_id="r1", sizing_rel=SIZING_REL, writes=["lib/dep.py"])
+
+
+def test_dropped_write_is_reported_with_its_sentence(tmp_path):
+    _sizing(tmp_path)
+    m = stage(
+        tmp_path, run_id="r1", sizing_rel=SIZING_REL,
+        writes=["pkg/a.py", "lib/dep.py", "tests/fixtures.py"],
+    )
+    by_path = {d["path"]: d["sentence"] for d in m.dropped_writes}
+    assert set(by_path) == {"lib/dep.py", "tests/fixtures.py"}
+    assert by_path["lib/dep.py"].startswith("Do not touch the uncommitted peer edits")
+
+
+def test_no_exclusion_reports_no_dropped_writes(tmp_path):
+    _sizing(tmp_path, intent="Fix lib/dep.py and pkg/a.py.")
+    m = stage(tmp_path, run_id="r1", sizing_rel=SIZING_REL, writes=["pkg/a.py", "lib/dep.py"])
+    assert m.dropped_writes == ()

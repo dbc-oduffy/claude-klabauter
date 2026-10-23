@@ -2,7 +2,7 @@
 
 A ledger-check or all-landed resume with a blocking item, nothing executable staged, nothing derived,
 no dispatching leg, and no change since the halt (no credited id, since-halt sha, unclaimed row, revised
-id or revise note) would spend the ledger-check and halt-commit agents to reach the same verdict.
+id, revise note or blocking id the register has since ruled) would spend the ledger-check and halt-commit agents to reach the same verdict.
 """
 
 from __future__ import annotations
@@ -24,6 +24,8 @@ from .ask_contract import (
 
 _BLOCKING_FIELD = "blocking"
 _LEG_ACTION_FIELD = "action"
+# A blocking id absent from the register's rulable ids was ruled (met/waived) after the halt: a change.
+_RULABLE_FIELD = "rulable_ids"
 
 
 def identical_rehalt_reason(
@@ -48,6 +50,9 @@ def identical_rehalt_reason(
     if not blocking:
         return None
     if manifest_rows or owed or gated or derived:
+        return None
+    rulable = resume_ledger.get(_RULABLE_FIELD)
+    if rulable is not None and any(b not in rulable for b in blocking):
         return None
     if leg and leg.get(_LEG_ACTION_FIELD) == LEG_DISPATCH:
         return None

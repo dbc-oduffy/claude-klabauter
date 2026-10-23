@@ -67,5 +67,13 @@ def test_each_release_condition_is_none(kwargs):
     assert _call(**kwargs) is None
 
 
+def test_a_blocking_id_the_register_has_since_ruled_releases_the_noop():
+    assert _call(_ledger(rulable_ids=["R2"])) is None
+
+
+def test_a_blocking_id_still_rulable_keeps_the_noop():
+    assert _call(_ledger(rulable_ids=["R1", "R2"])) is not None
+
+
 def test_no_resume_ledger_is_none():
     assert identical_rehalt_reason(None, (), (), (), (), None) is None

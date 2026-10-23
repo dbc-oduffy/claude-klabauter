@@ -375,6 +375,35 @@ def test_validate_digest_accepts_failing_digest():
     assert wd.validate_digest(d) == []
 
 
+def _merged_sibling_digest():
+    from coordinator_core.ops.dispatch_emit import sibling_split as ss
+
+    commit = {"kind": "terminal_commit", "op": "dispatch.terminal_commit",
+              "params": {"incomplete_chunks": [], "inline_review": None, "held": []}}
+    manifest = {
+        "siblings": [{"id": "sib1"}, {"id": "sib2"}], "commit_carrier": "sib2",
+        "achieved_width": 2, "cap": 14,
+        "stages": [{"fire_together": ["sib1", "sib2"]}],
+    }
+    digests = {
+        "sib1": _base_digest(chunks=["A"]),
+        "sib2": _base_digest(chunks=["B"], next_action=commit),
+    }
+    return ss.merge_digests(digests, manifest)
+
+
+def test_a_merged_digest_with_siblings_merged_validates_against_the_schema():
+    merged = _merged_sibling_digest()
+    assert merged["next_action"]["params"]["siblings_merged"] == ["sib1", "sib2"]
+    assert wd.validate_digest(merged) == []
+
+
+def test_a_merged_digest_with_a_non_string_siblings_merged_entry_is_refused():
+    merged = _merged_sibling_digest()
+    merged["next_action"]["params"]["siblings_merged"].append(7)
+    assert wd.validate_digest(merged) != []
+
+
 def _digest_with_deviation(**extra):
     d = _base_digest(outcome="incomplete", completed=False)
     d["deviations"] = [{"chunk": "A", "kind": "blocked", "anchor": "", **extra}]

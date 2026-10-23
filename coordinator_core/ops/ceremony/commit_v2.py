@@ -646,7 +646,7 @@ def _drop_missing(worktree_root: Path, paths: list) -> tuple:
 
 
 def _split_index_deleted(worktree_root: Path, paths: list) -> tuple:
-    """(kept, untracked): on-disk HEAD-tracked paths absent from the index move to untracked, so a `git rm --cached` lands; zero spawns."""
+    """(kept, untracked): on-disk HEAD-tracked paths absent from the index move to untracked, so a `git rm --cached` lands; zero spawns; any read failure leaves `paths` as given."""
     present = [p for p in paths if (worktree_root / p).is_file()]
     if not present:
         return list(paths), []
@@ -899,7 +899,7 @@ def _cap_mapping_lists(block: dict) -> dict:
 
 
 def cap_reply(result: dict) -> dict:
-    """Cap every reply list at REPLY_LIST_CAP with a `<key>_total` sibling; `full_reply: true` skips it."""
+    """Cap every reply list at REPLY_LIST_CAP with a `<key>_total` sibling, nested `own_left_behind` and `stopped_run_residue` blocks included; `full_reply: true` skips it."""
     if not isinstance(result, dict):
         return result
     out = _cap_mapping_lists(result)
@@ -1549,7 +1549,6 @@ def _handler_body(params: dict, repo_root: Optional[Path], ledger: PhaseLedger) 
         # First: the commit landed and the index did not, so `git status` misreports these paths.
         warnings.append(index_stale_warning)
     if worktree_over_staged:
-        # Bounded join: an unbounded one breaks the guard-messaging register.
         paths = ", ".join(worktree_over_staged[:5])
         if len(worktree_over_staged) > 5:
             paths += ", ..."
@@ -1594,22 +1593,18 @@ def _handler_body(params: dict, repo_root: Optional[Path], ledger: PhaseLedger) 
             + (f" {unfixed} could not be written." if unfixed else "")
         )
 
-    # Step runs AFTER the commit has landed -- it cannot refuse, delay, or
-    # fail it (NEGATIVE SPEC). `guard_class_relay` is additive; existing
-    # consumers reading `committed`/`sha`/`warnings` see no change.
+    # Post-commit: cannot refuse, delay, or fail the landed commit (NEGATIVE SPEC).
     guard_class_relay = _guard_class_relay_step(
         worktree_root, guard_paths, pre_commit_guard_sources, sha,
         repo_root=repo_root,
     )
 
-    # Same post-commit region, same negative spec: cannot refuse, delay, or fail the landed
-    # commit. Release set: raw_paths + raw_deleted, including outcome.no_delta members.
+    # Post-commit, same negative spec. Release set includes outcome.no_delta members.
     with ledger.phase("release_committed_claims"):
         _release_committed_claims_step(
             worktree_root, list(raw_paths) + raw_removed
         )
 
-    # Same post-commit region, same negative spec. Zero spawns.
     for done_paths, done_message, _o, done_sha, _p in landed_halves:
         with ledger.phase("record_ledger"):
             _record_ledger(worktree_root, done_paths, done_sha, done_message)

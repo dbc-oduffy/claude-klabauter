@@ -18,7 +18,7 @@ separate sibling run via `dispatch.ask_fanout`; with two or more ready runs the 
 lazy-emit launcher (`fan_launcher.write_launcher`) that emits and starts each, with one ready run it fires
 that run directly; the allow reason carries `{parent_id, runs}` and the runs waiting; a one-element array is an `ask`; a
 slice `{sizing}` is denied until its `after` predecessors land), optional `repo` (absolute path; else the payload
-cwd's repo, or for an ask whose absolute `context` lies in another registered repo, that repo; a run root foreign to an anchored session is refused unless the sizing takes the research route), optional `source: "pm" | "relayed"` (a chosen source is forwarded to the engine verbatim as `ask_source`; an unmarked single `ask` defaults to `pm` on the session's first human turn and to `relayed` with one warning in the allow reason on any later turn; only `source: "pm"` makes it the PM's
+cwd's repo, or for an ask whose absolute `context` lies in another registered repo, that repo; a run root foreign to the session's repo is refused unless the sizing takes the research route, `cross_repo_approved: true` is set, or the venue is remote), optional `source: "pm" | "relayed"` (a chosen source is forwarded to the engine verbatim as `ask_source`; an unmarked single `ask` defaults to `pm` on the session's first human turn and to `relayed` with one warning in the allow reason on any later turn; only `source: "pm"` makes it the PM's
 words, which the engine verifies against the session's recorded turns (refused when contradicted, flagged
 when no log resolves); on `asks` it is the default for items naming no `source` of their own; a redirected
 root passes `session_root`, the submitting session's repo, so the log is found for that verification), optional EM brief beside either arm
@@ -262,22 +262,11 @@ def _repo_root(repo_arg: Optional[str], payload: dict) -> Optional[Path]:
     return Path(top) if top else None
 
 
-def _cross_repo_refusal(
-    run_root: Path, own: Path, research_route: bool, session_id: Optional[str], payload: Mapping[str, Any]
-) -> Optional[str]:
-    """Deny text when the run root is a repo the write-bump guard refuses this session's agents; else None."""
+def _cross_repo_refusal(run_root: Path, own: Optional[Path], research_route: bool, approved: bool) -> Optional[str]:
+    """Deny text when the run root is another checkout and no research sizing, approval or remote venue admits it; else None."""
     from coordinator_core.ops.dispatch_emit.cross_repo_ask_refusal import cross_repo_run_refusal
 
-    cwd = payload.get("cwd")
-    pe = payload.get("env")
-    return cross_repo_run_refusal(
-        run_root,
-        own,
-        research_route=research_route,
-        session_id=session_id,
-        cwd=cwd if isinstance(cwd, str) and cwd else None,
-        env={**os.environ, **pe} if isinstance(pe, dict) and pe else None,
-    )
+    return cross_repo_run_refusal(run_root, own, research_route=research_route, approved=approved)
 
 
 def _context_home(root: Path, paths: list[str]) -> Path:
@@ -617,7 +606,7 @@ def _refuse(text: str) -> dict:
 
 
 def _child_params(
-    root: Path, tool_input: Mapping[str, Any], session_id: Optional[str], run: Any, call_stop: Any, cross_repo: bool
+    root: Path, tool_input: Mapping[str, Any], session_id: Optional[str], run: Any, call_stop: Any, approved: bool
 ) -> dict:
     """The `dispatch.emit` params the direct path sends for one fan-out slice; the launcher's emit leg sends these."""
     # `dispatch.emit` is repo-unkeyed over the CLI: without target_root a relative sizing_path
@@ -635,7 +624,7 @@ def _child_params(
             params["stop_after"] = call_stop
         if isinstance(args, dict) and args.get(_CHATTY_KEY) is True:
             params[_CHATTY_KEY] = True
-    if cross_repo:
+    if approved:
         params["cross_repo_approved"] = True
     return params
 
@@ -647,22 +636,20 @@ def _launch_all(
     ready: Sequence[Any],
     call_stop: Any,
     launch: Optional[Callable[..., Path]],
+    approved: bool,
 ) -> dict:
     """The rewrite to one launcher script that emits and starts every ready run of an asks submission."""
     from coordinator_core import warp_live
-    from coordinator_core.ops.dispatch_emit.cross_repo_write_refusal import is_remote_venue
     from coordinator_core.ops.dispatch_emit.fan_launcher import LaunchChild
 
     tool_input = payload["tool_input"]
-    args = tool_input.get("args")
     session_id = payload.get("session_id") if isinstance(payload.get("session_id"), str) else None
     transcript = payload.get("transcript_path") if isinstance(payload.get("transcript_path"), str) else None
-    cross_repo = is_remote_venue() or (isinstance(args, dict) and args.get("cross_repo_approved") is True)
     children = [
         LaunchChild(
             run_id=r.run_id,
             sizing_rel=r.slice_sizing,
-            emit_params=_child_params(root, tool_input, session_id, r, call_stop, cross_repo),
+            emit_params=_child_params(root, tool_input, session_id, r, call_stop, approved),
         )
         for r in ready
     ]
@@ -800,8 +787,11 @@ def evaluate(
         if own is not None and own.resolve() != root.resolve():
             session_root = str(own)
     session_id = payload.get("session_id") if isinstance(payload.get("session_id"), str) else None
+    from coordinator_core.ops.dispatch_emit.cross_repo_write_refusal import is_remote_venue
+
+    approved = is_remote_venue() or (isinstance(call_args, dict) and call_args.get("cross_repo_approved") is True)
     if own is not None:
-        cross = _cross_repo_refusal(root, own, False, session_id, payload)
+        cross = _cross_repo_refusal(root, own, False, approved)
         if cross:
             return _refuse(cross)
     missing = _missing_context(root, brief.get("ask_context", []))
@@ -848,17 +838,15 @@ def evaluate(
         if not ready:
             return deny("PreToolUse", "The fan-out produced no ready run to fire.")
         if len(ready) >= 2:
-            return _launch_all(root, payload, fan_reply, ready, call_stop, launch)
+            return _launch_all(root, payload, fan_reply, ready, call_stop, launch, approved)
         first = ready[0]
         sizing_rel, reserved_run_id = first.slice_sizing, first.run_id
 
     sizing_doc = _load_sizing_doc(root, sizing_rel) if sizing_rel else {}
-    if sizing_submitted and repo_arg and Path(repo_arg).is_absolute() and not _has_research_block(sizing_doc):
-        sizing_own = _repo_root(None, payload)
-        if sizing_own is not None:
-            cross = _cross_repo_refusal(root, sizing_own, False, session_id, payload)
-            if cross:
-                return _refuse(cross)
+    if sizing_submitted and repo_arg and Path(repo_arg).is_absolute():
+        cross = _cross_repo_refusal(root, _repo_root(None, payload), _has_research_block(sizing_doc), approved)
+        if cross:
+            return _refuse(cross)
     if sizing_rel and asks is None:
         from coordinator_core.ops.dispatch_emit.ask_fanout_contract import parse_ask_parent
 
@@ -925,10 +913,7 @@ def evaluate(
             params["stop_after"] = call_stop
         if call_chatty is True:
             params[_CHATTY_KEY] = True
-    from coordinator_core.ops.dispatch_emit.cross_repo_write_refusal import is_remote_venue
-
-    args = payload["tool_input"].get("args")
-    if is_remote_venue() or (isinstance(args, dict) and args.get("cross_repo_approved") is True):
+    if approved:
         params["cross_repo_approved"] = True
 
     try:

@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 import re
 import shlex
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 from typing import Callable, Mapping, Optional, Sequence
 
@@ -713,27 +713,30 @@ _EXCLUSION_CUE = re.compile(
 _PATH_TOKEN = re.compile(r"[\w.\-]+(?:/[\w.\-]+)+/?|[\w\-]+\.\w+")
 
 
-def _excluded_by_ask(sizing: Mapping, writes: Sequence[str]) -> frozenset[str]:
-    """The `writes` the sizing's intent or register rows name inside a do-not-touch sentence.
+def _excluded_by_ask(sizing: Mapping, writes: Sequence[str]) -> dict[str, str]:
+    """Map each of `writes` the sizing's intent or register rows name inside a do-not-touch sentence to that sentence (first match).
 
     A path matches by equality, or by a directory token it sits under. Trap: lexical only; a path
-    described in prose without being spelled out is not caught, and a dropped write is not logged."""
+    described in prose without being spelled out is not caught."""
     texts: list[str] = [str(sizing.get("intent") or "")]
     register = sizing.get("requirement_register")
     for row in register if isinstance(register, list) else ():
         if isinstance(row, Mapping):
             texts.extend(str(v) for v in row.values() if isinstance(v, str))
-    named: set[str] = set()
+    named: dict[str, str] = {}
     for text in texts:
         for sentence in re.split(r"(?<=[.!?])\s+|\n", text):
             if _EXCLUSION_CUE.search(sentence):
-                named.update(t.rstrip(".,;:)\"'`").lstrip("(\"'`") for t in _PATH_TOKEN.findall(sentence))
-    out = set()
+                for t in _PATH_TOKEN.findall(sentence):
+                    named.setdefault(t.rstrip(".,;:)\"'`").lstrip("(\"'`"), sentence.strip())
+    out: dict[str, str] = {}
     for w in writes:
         norm = str(w).replace("\\", "/")
-        if any(norm == n or (n.endswith("/") and norm.startswith(n)) for n in named if n):
-            out.add(w)
-    return frozenset(out)
+        for n, sentence in named.items():
+            if n and (norm == n or (n.endswith("/") and norm.startswith(n))):
+                out[w] = sentence
+                break
+    return out
 
 
 LIVE_RUN_WRITE_OVERLAP = "live-run-write-overlap"
@@ -802,6 +805,7 @@ def stage(
     ledger_resume: bool = False,
     claim_register_rows: bool = False,
     classify_receiver: Optional[Callable[[str, bool], object]] = None,
+    plan_parse: Optional["_PlanParse"] = None,
 ) -> StageManifest:
     """Stage the run for `plan_rel`, or for the XS sizing `sizing_rel` (minted to X1 over `writes`).
 
@@ -814,6 +818,8 @@ def stage(
     `claim_register_rows=True` (a ledger re-plan) first adds every register row the plan's
     `register_claims.rows` omit to its claims and re-pins them, so the plan the re-plan revised
     claims the rows a later revise minted.
+    `plan_parse` is the handler's one parse of an unmodified full plan; it is ignored under
+    `claim_register_rows`, which rewrites the plan first.
     """
     root = Path(repo_root)
     if not safe_id(run_id):
@@ -829,6 +835,7 @@ def stage(
     except ValueError as exc:
         raise AskStageError(str(exc)) from exc
 
+    excluded: dict[str, str] = {}
     if sizing_rel:
         sizing = load_sizing(root, sizing_rel)
         run_sizing_rel, run_sizing = sizing_rel, sizing
@@ -848,7 +855,8 @@ def stage(
             raise AskStageError(f"plan not found under the repo: {plan_rel!r}")
     if claim_register_rows and plan_rel:
         _claim_register_rows(root, plan_path)
-    plan_text = plan_path.read_text(encoding="utf-8")
+    shared = plan_parse if (plan_rel and not claim_register_rows) else None
+    plan_text = shared.plan_text if shared is not None else plan_path.read_text(encoding="utf-8")
     if not sizing_rel:
         run_sizing_rel = _run_sizing_rel(commit_sizing_rel, plan_text)
         run_sizing = _run_sizing(root, run_sizing_rel)
@@ -862,21 +870,12 @@ def stage(
         if unfilled:
             named = ", ".join(f"{k} (line {v})" for k, v in sorted(unfilled.items()))
             raise AskStageError(f"PLAN-SCAFFOLD-UNFILLED: {plan_posix} still carries {named}")
-    exclusions: list = []
-    raw_by_id = {
-        raw["id"]: raw
-        for raw in load_rows(plan_text).rows
-        if isinstance(raw, dict) and isinstance(raw.get("id"), str)
-    }
-    sibling_roots = provisioned_sibling_roots(raw_by_id.values(), root)
     try:
-        rows = read_spine(
-            plan_path,
-            exclusions=exclusions,
-            cleared_gate_owners=own_gate_owners(raw_by_id.values(), root) | frozenset(sibling_roots),
-        )
+        parse = shared if shared is not None else _parse_plan(root, plan_path, plan_text)
     except InvalidChangeKindError as exc:
         raise AskStageError(f"INVALID-CHANGE-KIND: {plan_posix}: {exc}") from exc
+    raw_by_id, rows, sibling_roots = parse.raw_by_id, list(parse.rows), parse.sibling_roots
+    exclusions = list(parse.exclusions)
     retired_resume: tuple[str, ...] = ()
     resume_snap = resume_snapshot.read(root, run_id, plan_posix) if only_rows is not None else None
     dropped_landed: list = []
@@ -1088,6 +1087,7 @@ def stage(
         ledger_item_ids=ledger_item_ids,
         withheld_ids=withheld_ids,
         retired_resume_rows=retired_resume,
+        dropped_writes=tuple({"path": p, "sentence": s} for p, s in excluded.items()),
         slot_withheld=tuple(slot_withheld_rows(raw_by_id)),
         memo_close=memo_close if not manifest_rows else (),
     )
@@ -1184,26 +1184,51 @@ def stamp_plan_executing(root: Path, plan_rel: str) -> dict:
     return out
 
 
-def _escaping_write_refusal(root: Path, plan_rel: Optional[str], only_rows) -> Optional[str]:
+@dataclass(frozen=True)
+class _PlanParse:
+    """One parse of a plan: its text, raw rows by id, provisioned sibling roots, spine rows and exclusions."""
+
+    plan_text: str
+    raw_by_id: Mapping[str, dict]
+    sibling_roots: Mapping[str, Path]
+    rows: tuple
+    exclusions: tuple
+
+
+def _parse_plan(root: Path, plan_path: Path, plan_text: str) -> _PlanParse:
+    """Parse `plan_text` once; `InvalidChangeKindError` from the spine read propagates."""
+    raw_by_id = {
+        raw["id"]: raw
+        for raw in load_rows(plan_text).rows
+        if isinstance(raw, dict) and isinstance(raw.get("id"), str)
+    }
+    sibling_roots = provisioned_sibling_roots(raw_by_id.values(), root)
+    exclusions: list = []
+    rows = read_spine(
+        plan_path,
+        exclusions=exclusions,
+        cleared_gate_owners=own_gate_owners(raw_by_id.values(), root) | frozenset(sibling_roots),
+    )
+    return _PlanParse(plan_text, raw_by_id, sibling_roots, tuple(rows), tuple(exclusions))
+
+
+def _escaping_write_refusal(
+    root: Path, plan_rel: Optional[str], only_rows, *, parse_out: Optional[list] = None
+) -> Optional[str]:
     """The `CrossRepoWriteError` text for a full-plan stage whose rows write outside every checkout, else None.
     Runs before the record dir exists, so a hard refusal leaves nothing on disk; `stage()` re-checks
-    approval and grants. Any other failure is left for `stage()` to report."""
+    approval and grants. Any other failure is left for `stage()` to report. A successful parse is
+    appended to `parse_out` for the caller to hand to `stage()`."""
     if not plan_rel or only_rows is not None:
         return None
     try:
         plan_path = contained_path(root / plan_rel, [root])
         if plan_path is None or not plan_path.is_file():
             return None
-        raw = [
-            r for r in load_rows(plan_path.read_text(encoding="utf-8")).rows
-            if isinstance(r, dict) and isinstance(r.get("id"), str)
-        ]
-        rows = read_spine(
-            plan_path,
-            exclusions=[],
-            cleared_gate_owners=own_gate_owners(raw, root) | frozenset(provisioned_sibling_roots(raw, root)),
-        )
-        check_cross_repo_writes(rows, root, approved=True)
+        parse = _parse_plan(root, plan_path, plan_path.read_text(encoding="utf-8"))
+        if parse_out is not None:
+            parse_out.append(parse)
+        check_cross_repo_writes(parse.rows, root, approved=True)
     except CrossRepoWriteError as exc:
         return str(exc)
     except Exception:
@@ -1232,6 +1257,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     if _consume_park_marker(root, run_id):
         return {PARKED_REPLY_KEY: STOP_AFTER_PLAN, "plan_path": params.get("plan_path") or None}
     digest = ask_stage_receipt.params_digest(params)
+    plan_parse: Optional[_PlanParse] = None
     try:
         prior_dir = record_dir(root, run_id)
     except ValueError:
@@ -1248,7 +1274,12 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                 "error": f"{STAGE_RECEIPT_MISSING}: manifest.json landed for run {run_id} with no matching "
                 "stage receipt. Reconcile the run; nothing was written."
             }
-        escaping = _escaping_write_refusal(root, params.get("plan_path") or None, params.get("only_rows"))
+        parsed: list = []
+        escaping = _escaping_write_refusal(
+            root, params.get("plan_path") or None, params.get("only_rows"), parse_out=parsed
+        )
+        if parsed:
+            plan_parse = parsed[0]
         if escaping is not None:
             return {"error": escaping}
         prior_dir.mkdir(parents=True, exist_ok=True)
@@ -1269,6 +1300,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             commit_sizing_rel=params.get("commit_sizing_path") or None,
             only_rows=params["only_rows"] if params.get("only_rows") is not None else None,
             claim_register_rows=bool(params.get("claim_register_rows")),
+            plan_parse=plan_parse,
         )
         if params.get("plan_path"):
             stamp = stamp_plan_executing(root, params["plan_path"])

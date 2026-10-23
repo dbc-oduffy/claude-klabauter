@@ -2469,6 +2469,20 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #      The record's absence.
     # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
     "dispatch.release_run_token": OpClass.MUTATING,
+    # dispatch.measured_rev — MUTATING: writes blob and commit objects into the object store and the run's
+    # measured-rev.json record under state/warp/<run_id>/ (ops/dispatch_emit/measured_rev.py); moves no ref, writes no index.
+    # DR-208 five-question affirmation (citing dispatch.measured_rev handler):
+    #   1. Writes, deletes, or reorders any state file, queue, or git object?  YES.
+    #      Blob and tree/commit objects, and the run record.
+    #   2. Writes into rag's relational store?                                 No.
+    #   3. Opens any file for write (including sentinel creation)?             YES.
+    #      Loose object files and the record.
+    #   4. Mutates shared mutable state outside its own module?                YES.
+    #      The shared object store.
+    #   5. Persistent state changes observable across process boundaries?     YES.
+    #      The objects and the record persist on disk.
+    # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
+    "dispatch.measured_rev": OpClass.MUTATING,
     # workflow.revise — MUTATING: appends a PM verbatim row to the run's sizing requirement_register (or
     # queues it in the record dir's inbox until the sizing exists) and rewrites the record dir's
     # (state/warp/<run_id>/) requirements view (ops/dispatch_emit/requirements_ledger.py); nothing else.

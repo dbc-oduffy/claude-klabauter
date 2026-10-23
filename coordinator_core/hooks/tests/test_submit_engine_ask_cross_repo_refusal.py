@@ -83,10 +83,19 @@ def test_ask_with_a_foreign_repo_is_refused(repos):
     _assert_refused_before_any_write(own, other, {"ask": "a", "repo": str(other)}, _Recorder(), _Recorder())
 
 
-def test_approval_does_not_clear_the_refusal(repos):
+def test_approval_clears_the_refusal(repos):
     own, other = repos
-    args = {"ask": "a", "repo": str(other), "cross_repo_approved": True}
-    _assert_refused_before_any_write(own, other, args, _Recorder(), _Recorder())
+    emit = _Recorder()
+    mod.evaluate(_payload(own, {"ask": "a", "repo": str(other), "cross_repo_approved": True}), emit=emit)
+    assert emit.calls and emit.calls[0][0].get("cross_repo_approved") is True
+
+
+def test_a_remote_venue_clears_the_refusal(repos, monkeypatch):
+    own, other = repos
+    monkeypatch.setenv("CLAUDE_CODE_REMOTE", "true")
+    emit = _Recorder()
+    mod.evaluate(_payload(own, {"ask": "a", "repo": str(other)}), emit=emit)
+    assert emit.calls and emit.calls[0][0].get("cross_repo_approved") is True
 
 
 def test_asks_with_a_foreign_repo_is_refused(repos):
@@ -125,19 +134,15 @@ def test_the_sessions_own_repo_is_admitted(repos):
     assert emit.calls
 
 
-def test_an_unanchored_session_is_admitted(repos):
+def test_an_unanchored_session_is_refused(repos):
     own, other = repos
-    emit = _Recorder()
-    mod.evaluate(_payload(own, {"ask": "a", "repo": str(other)}, anchored=False), emit=emit)
-    assert emit.calls
+    _assert_refused_before_any_write(own, other, {"ask": "a", "repo": str(other)}, _Recorder(), _Recorder(), anchored=False)
 
 
-def test_a_stood_down_environment_is_admitted(repos, monkeypatch):
+def test_a_stood_down_environment_is_refused(repos, monkeypatch):
     own, other = repos
     monkeypatch.setattr(
         "coordinator_core.bash_guards._write_bump_stand_down.environment_stands_the_bump_down",
         lambda env: "stand-down",
     )
-    emit = _Recorder()
-    mod.evaluate(_payload(own, {"ask": "a", "repo": str(other)}), emit=emit)
-    assert emit.calls
+    _assert_refused_before_any_write(own, other, {"ask": "a", "repo": str(other)}, _Recorder(), _Recorder())

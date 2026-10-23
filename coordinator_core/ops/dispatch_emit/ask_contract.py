@@ -425,7 +425,7 @@ def measured_rev_record_path(repo_root: Path, run_id: str) -> Path:
     state = contained_path(root / RECORD_DIR_ROOT / run_id, [root / RECORD_DIR_ROOT])
     if state is None:
         raise ValueError(f"record dir for {run_id!r} escapes {RECORD_DIR_ROOT}")
-    return Path(repo_root) / RECORD_DIR_ROOT / run_id / MEASURED_REV_RECORD
+    return root / RECORD_DIR_ROOT / run_id / MEASURED_REV_RECORD
 
 
 def record_dir(repo_root: Path, run_id: str) -> Path:
@@ -1136,6 +1136,8 @@ class StageManifest:
     #: Sorted gate resume rows the re-planned spine no longer carries: reported, never staged;
     #: an absent key reads as ``()``.
     retired_resume_rows: tuple[str, ...] = ()
+    #: Declared writes the stage dropped, as `{path, sentence}`; an absent key reads as ``()``.
+    dropped_writes: tuple[dict[str, str], ...] = ()
     #: The staged rows' `fanout_cost.FanoutCost.meta_dict()` (agents, basis, groups); None when unset.
     fanout: dict[str, Any] | None = None
     #: Open `needs_slot` rows as `{id, title, register_rows}`: withheld from the judge beside
@@ -1167,6 +1169,7 @@ class StageManifest:
             "ledger_item_ids": list(self.ledger_item_ids),
             "withheld_ids": list(self.withheld_ids),
             "retired_resume_rows": list(self.retired_resume_rows),
+            "dropped_writes": [dict(r) for r in self.dropped_writes],
             "owed": [o.to_json() for o in self.owed],
             "engine_rows": [dict(r) for r in self.engine_rows],
             "plan_id": self.plan_id,
@@ -1198,6 +1201,7 @@ class StageManifest:
             ledger_item_ids=tuple(data.get("ledger_item_ids") or ()),
             withheld_ids=tuple(data.get("withheld_ids") or ()),
             retired_resume_rows=tuple(data.get("retired_resume_rows") or ()),
+            dropped_writes=tuple(dict(r) for r in data.get("dropped_writes") or ()),
             fanout=dict(data["fanout"]) if data.get("fanout") else None,
             slot_withheld=tuple(dict(r) for r in data.get("slot_withheld") or ()),
             memo_close=tuple(dict(r) for r in data.get("memo_close") or ()),

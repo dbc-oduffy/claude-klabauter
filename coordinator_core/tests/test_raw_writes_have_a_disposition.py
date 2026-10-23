@@ -322,6 +322,7 @@ _DISPOSITIONS: Dict[str, Tuple[str, str]] = {
     'coordinator_core/ops/baton_pm_turns.py': ('git-internal', 'pm-turns log appended under <git-common-dir>/coordinator-sessions/<sid>: append_turn'),
     'coordinator_core/ops/dispatch_emit/landing_export.py': ('ignored-target', 'blob export and its staging dir under the gitignored <worktree_root>/scratch/: write_bytes, os.replace'),
     'coordinator_core/ops/dispatch_emit/research_emit.py': ('ignored-target', 'ask.md and brief.md under the caller-named run scratch dir (gitignored scratch/): write_ask, bind_context'),
+    'coordinator_core/ops/dispatch_emit/measured_rev.py': ('in-repo-non-state', 'measured-rev.json under the tracked record dir state/warp/<run_id>/, beside manifest.json; git objects via write_object: write_text'),
     'coordinator_core/ops/dispatch_emit/resume_snapshot.py': ('in-repo-non-state', 'resume-snapshot.json in the gitignored run scratch dir scratch/warp/<run_id>/: write'),
     'coordinator_core/bug_blitz/mint.py': ('claims-explicitly', 'in-place tag rewrite of a state/bug-backlog row via tmp + os.replace, declared through declare_write: _write_reuse'),
     'coordinator_core/ops/dispatch_emit/kept_work.py': ('claims-explicitly', 'kept.json under the run record dir, declared through declare_write: write'),

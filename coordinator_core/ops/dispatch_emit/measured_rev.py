@@ -51,6 +51,7 @@ def measured_rev(run_id: str, paths: Sequence[str], repo_root: Path | str | None
     directory, glob or submodule path, or an unsupported checkin filter. `repo_root`
     defaults to the current directory."""
     root = Path(repo_root) if repo_root is not None else Path.cwd()
+    record = measured_rev_record_path(root, run_id)
     base = head_sha(root, fresh=True)
     if base is None:
         raise MeasuredRevRefused("no HEAD commit to measure against")
@@ -108,7 +109,6 @@ def measured_rev(run_id: str, paths: Sequence[str], repo_root: Path | str | None
         flush_object_batch()
 
     result = {"sha": cand, "base_sha": base, "paths": written, "removed": removed, "blobs": blobs}
-    record = measured_rev_record_path(root, run_id)
     record.parent.mkdir(parents=True, exist_ok=True)
     record.write_text(json.dumps(result, indent=2, sort_keys=True), encoding="utf-8")
     return result
@@ -123,18 +123,21 @@ def _handler(params: dict, repo_root: Path | None = None) -> Dict[str, Any]:
         return {"error": "params.run_id (str) and params.paths (list of str) are required", "refused": "measured-rev"}
     try:
         return measured_rev(run_id, paths, repo_root)
-    except ValueError as exc:
+    except (OSError, ValueError) as exc:
         return {"error": str(exc), "refused": "measured-rev"}
 
 
 def measured_rev_drift(run_dir: Path, repo_root: Path) -> list[str]:
     """Recorded paths whose worktree blob no longer matches the record (None included), plus
     each `removed` path that exists again. `[]` when `run_dir` holds no record. Hash-only:
-    spawns nothing and reads no object."""
+    spawns nothing and reads no object. Raises OSError/ValueError on an unreadable or malformed
+    record; callers fail closed."""
     record = Path(run_dir) / MEASURED_REV_RECORD
     if not record.is_file():
         return []
     data = json.loads(record.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise ValueError(f"{record} does not hold a measured-rev record object")
     root = Path(repo_root)
     blobs = data.get("blobs") or {}
     drifted = [p for p, sha in blobs.items() if commit.checkin_blob_sha(root, p) != sha]

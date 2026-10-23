@@ -342,6 +342,10 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
         "coordinator_core/ops/dispatch_emit/release_run_token.py",
         ("_handler",),
     ),
+    "dispatch.measured_rev": (
+        "coordinator_core/ops/dispatch_emit/measured_rev.py",
+        ("_handler",),
+    ),
     "dispatch.supersede_slice": (
         "coordinator_core/ops/dispatch_emit/slice_supersede.py",
         ("_handler",),

@@ -38,6 +38,17 @@ REFUSALS, all before any landing is attempted:
     commit that has not been made. The op validates each prior itself.
   - a file that is neither a wave result nor a task-output envelope carrying one.
 
+COLD, BY MEASUREMENT. This driver stays off `warm_entrypoint_allowlist.json`; each op goes
+out over `cc_invoke`, one bounded call under its own budget. Process time (user+sys) and
+spawns, Apple M5 Pro, HEAD ae2d1f7256: the driver costs ~53-56ms per landing, flat in the
+fire count (n=3 and n=7), 2 processes (the interpreter plus one `git status` in
+`_dirty_among`); ~41ms of that is the interpreter and compile before the first op, against
+DR-344's <50ms warm-reach bar. Served warm instead, a landing was 52-70ms on a fixture that
+stubs the gate, but the real cost is `gate_v2.compute_gate_report` called twice per fire
+(~390ms per fire on the real corpus, ~2.7s for 7 fires), which grows with fires and is what
+reached the 30s `DISPATCH_TIMEOUT_SECS` guard. A warm envelope therefore fails the
+500ms rule and the grows-with-n test, so the driver stays cold and the timeout is untouched.
+
 Usage:
 
     python3 land-wave.py --repo-root <abs> [--shipped-in <sha>] [--branch <name>]

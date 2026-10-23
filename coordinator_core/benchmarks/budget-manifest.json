@@ -407,6 +407,15 @@
         "resume_checkpoint_log": 1
       },      "_rationale": "The gate reads the sizing and mints in process. A plan already on disk with a row still open adds exactly one `git log --grep=^Checkpoint-Plan:` (emit.py::checkpoint_landed_state via git/run.py::run_git) to subtract the rows a checkpoint commit landed; a plan with no open row, or none on disk, starts no process. The stage leg's plan status stamp (ask_stage.py::stamp_plan_executing, shared with dispatch.ask_stage) is spawn-free: an in-process locked_rmw, an in-process HEAD blob compare, and ceremony.commit_v2's in-process handler, counted by coordinator_core/ops/dispatch_emit/tests/test_ask_gate_stamps_plan_executing.py. The checkpoint log is counted by coordinator_core/ops/dispatch_emit/tests/test_ask_gate_spawn_count.py with exact equality."
     },
+    "dispatch.measured_rev": {
+      "target_ms": 300,
+      "tolerance": {
+        "kind": "relative",
+        "value": 0.2
+      },
+      "spawn_count_budget": {},
+      "_rationale": "Builds the candidate commit in process: HEAD and the tree spine are read and rewritten through git_state and tree_spine, blobs are written from checkin bytes, and the commit object is written inside one object_batch; no git process is started and the count does not grow with the number of paths. The empty figure is counted by coordinator_core/ops/dispatch_emit/tests/test_measured_rev.py with subprocess.Popen monkeypatched to raise."
+    },
     "dispatch.ask_stage": {
       "target_ms": 300,
       "tolerance": {
