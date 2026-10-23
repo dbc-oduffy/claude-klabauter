@@ -98,21 +98,53 @@ def closing_bases(worktree_root: Path, run_id: Optional[str], params: Mapping) -
     The manifest comes first because the ask route's checkpoints carry it as ``Checkpoint-Base``
     (``emit._checkpoint_trailer_js`` stamps ``_RUN_BASE_VAR`` from the emit sha), and it differs
     from the submission ``run_base_sha``. A trailing ``.workflow`` is stripped from ``run_id``.
+    A run whose ledger names ``resumed_from`` also closes each predecessor's bases (manifest and
+    recorded base), appended after its own, following the chain cycle-safe for at most
+    ``requirements_ledger.CARRIED_HOP_CAP`` hops.
     In-process file reads only; empty when nothing resolves."""
-    found: list = []
     rid = run_id[: -len(".workflow")] if isinstance(run_id, str) and run_id.endswith(".workflow") else run_id
+    found: list = [*_own_bases(worktree_root, rid, params), params.get("review_run_base")]
+    for prev in _resumed_chain(worktree_root, rid):
+        found.extend(_own_bases(worktree_root, prev, {}))
+    return tuple(dict.fromkeys(b for b in found if isinstance(b, str) and re.fullmatch(r"[0-9a-f]{40}", b)))
+
+
+def _own_bases(worktree_root: Path, rid: Optional[str], params: Mapping) -> list:
+    """One run's unfiltered candidate bases: ledger manifest ``head_sha`` then its recorded run base."""
+    found: list = []
     if rid:
         try:
             from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
 
             data = json.loads((record_dir(Path(worktree_root), rid) / "manifest.json").read_text(encoding="utf-8"))
-            head = data.get("head_sha") if isinstance(data, dict) else None
-            found.append(head)
+            found.append(data.get("head_sha") if isinstance(data, dict) else None)
         except (OSError, ValueError):
             pass
     found.append(run_base_for(worktree_root, rid, params))
-    found.append(params.get("review_run_base"))
-    return tuple(dict.fromkeys(b for b in found if isinstance(b, str) and re.fullmatch(r"[0-9a-f]{40}", b)))
+    return found
+
+
+def _resumed_chain(worktree_root: Path, rid: Optional[str]) -> list:
+    """The ``resumed_from`` predecessors of ``rid``, nearest first; empty without a ledger link."""
+    if not rid:
+        return []
+    from coordinator_core.ops._path_guard import safe_id
+    from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
+
+    out: list = []
+    visited = {rid}
+    cur = rid
+    for _ in range(rl.CARRIED_HOP_CAP):
+        try:
+            prev = (rl.read_run(rl.run_dir(Path(worktree_root), cur)) or {}).get(rl.RESUMED_FROM_FIELD)
+        except rl.LedgerRefused:
+            break
+        if not (isinstance(prev, str) and safe_id(prev)) or prev in visited:
+            break
+        visited.add(prev)
+        out.append(prev)
+        cur = prev
+    return out
 
 
 def targeted_test_verdict(params: Mapping) -> Optional[Mapping]:

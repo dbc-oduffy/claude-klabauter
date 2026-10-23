@@ -632,12 +632,35 @@ def test_a_truncated_run_reporting_is_error_false_is_still_classified_truncated(
     assert "wait ceiling" in truncated["outcome_basis"]
 
 
-def test_a_dead_child_that_never_wrote_an_envelope_is_truncated(repo):
+def test_a_dead_child_that_never_wrote_an_envelope_is_failed(repo):
     killed = fire._refresh_record_state(
         _exited_record(repo, log_text="partial output, no envelope\n")
     )
 
-    assert killed["outcome"] == "truncated"
+    assert killed["outcome"] == "failed"
+    assert killed["failure_subtype"] == "no_terminal_envelope"
+    assert "never wrote a terminal result envelope" in killed["outcome_basis"]
+
+
+def test_a_running_child_with_a_live_pid_is_not_failed(repo):
+    live = fire._refresh_record_state(
+        {**_exited_record(repo, log_text="partial\n"), "state": "running", "pid": os.getpid()}
+    )
+
+    assert live["state"] == "running"
+    assert live["outcome"] == "unknown"
+
+
+def test_fire_status_reports_a_child_that_died_after_startup_as_failed(repo, script, monkeypatch):
+    _patch_plugin_dir(monkeypatch)
+    monkeypatch.setattr(fire.subprocess, "Popen", lambda *a, **k: _FakePopen(*a, **k))
+    handle = fire.fire_workflow(str(script), cwd=str(repo))
+    monkeypatch.setattr(fire, "_pid_alive", lambda pid: False)
+
+    status = fire.fire_status(handle["fire_id"], cwd=str(repo))
+
+    assert status["state"] == "exited"
+    assert status["outcome"] == "failed"
 
 
 def test_a_running_record_carries_no_terminal_outcome(repo, script, monkeypatch):
@@ -702,7 +725,7 @@ def test_a_child_with_no_envelope_carries_no_driver_session_id(repo):
     its envelope has no session id to report."""
     refreshed = fire._refresh_record_state(_exited_record(repo, log_text="no envelope here\n"))
 
-    assert refreshed["outcome"] == "truncated"
+    assert refreshed["outcome"] == "failed"
     assert "driver_session_id" not in refreshed
 
 

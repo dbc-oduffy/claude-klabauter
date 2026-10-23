@@ -758,7 +758,7 @@ _LOG_SCAN_WINDOW_BYTES = 64 * 1024
 #: and re-stamped -- which is how a record settled by an earlier version
 #: picks up a field that version never wrote, without a migration pass and
 #: without re-reading its log on every subsequent sweep.
-_ANNOTATION_VERSION = 4
+_ANNOTATION_VERSION = 5
 
 _STALENESS_NOTE = (
     "`state`, `exit_code` and `outcome` are only valid as of `status_checked_at` -- "
@@ -920,10 +920,10 @@ def _classify_outcome(record: dict) -> tuple:
             return "failed", basis, session_id, subtype
         return "clean", "the driver wrote its own terminal result envelope", session_id, None
     return (
-        "truncated",
-        "the child is dead and never wrote a terminal result envelope",
+        "failed",
+        "the child died after startup and never wrote a terminal result envelope",
         None,
-        None,
+        "no_terminal_envelope",
     )
 
 
