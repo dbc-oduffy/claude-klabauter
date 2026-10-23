@@ -1166,6 +1166,7 @@ _GATED: frozenset[str] = frozenset({
     "lesson-entry",
     "lessons-outbox",
     "orientation-cache",
+    "plan",
     "priority-intent",
     "priority-ledger",
     "review-findings",

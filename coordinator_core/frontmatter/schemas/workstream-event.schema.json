@@ -14,7 +14,7 @@
     },
     "field": {
       "type": "string",
-      "description": "The field-scoped sub-state this event mutates — e.g. 'status', 'deliverable[0].done', 'order'. The generator folds strictly per-(workstream, field) pair; two events naming different fields on the same workstream both survive the fold independently (§ Approach finding 2)."
+      "description": "The field-scoped sub-state this event mutates — e.g. 'status', 'deliverable[0].done', 'order'. The generator folds strictly per-(workstream, field) pair; two events naming different fields on the same workstream both survive the fold independently."
     },
     "value": {
       "type": "string",

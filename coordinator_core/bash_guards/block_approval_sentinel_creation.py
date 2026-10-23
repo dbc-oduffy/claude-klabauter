@@ -342,7 +342,7 @@ _WHY_WRITER_CONTEXT_CHANGES = (
     "the script path may change between its heredoc write and its run"
 )
 _WHY_WRITER_NOT_BARE_HEREDOC = (
-    "an earlier segment writes the script, not by a bare cat heredoc"
+    "an earlier segment writes the script without a bare cat heredoc"
 )
 _WRITER_REASONS = (
     _WHY_SEVERAL_WRITERS,

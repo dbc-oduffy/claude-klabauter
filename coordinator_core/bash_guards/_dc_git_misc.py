@@ -169,25 +169,14 @@ class _BypassRe:
 
 _BYPASS_RE = _BypassRe()
 
-#: Quote-blindness fix (2026-07-29, this-package sixth instance): `_BYPASS_RE`
-#: above scans RAW segment TEXT, with no regard for whether the matched flag
-#: string sits in ARGUMENT position or inside a quoted operand (a `-m`/`-F`
-#: commit-message body, a heredoc, a filename). Reproduced live: a commit
-#: whose MESSAGE PROSE merely *describes* `--no-verify`/`--no-gpg-sign`/`-c
-#: commit.gpgsign=false` (e.g. this very fix's own commit message) tripped
-#: the guard exactly as hard as a commit that actually PASSES one of those
-#: flags. `_seg_has_git_bypass_flag` below replaces the raw-text scan with a
-#: tokenize-first, then-inspect-argv-position check: it shlex-splits `seg`
-#: ONCE and drops the -m/--message operand TOKEN (same free-text-operand
-#: flags CHECK 2's `_seg_excluding_freetext_operands` already excludes for
-#: the identical prose-vs-argv problem) directly from the token LIST --
-#: deliberately NOT by reusing that helper's string-rejoin-then-re-split
-#: round trip, which would silently drop the quoting around any OTHER
-#: operand still in the segment (a `-c "commit.gpgsign = false"` operand's
-#: internal space would re-split into three tokens on the second parse,
-#: turning a genuine single-token bypass into three that no longer match).
-#: Only an actual `--no-verify`/`--no-gpg-sign` token, or an actual `-c`
-#: token followed by a `commit.gpgsign=false` operand, counts.
+#: `_BYPASS_RE` above scans RAW segment TEXT, so commit-message prose that
+#: merely *describes* `--no-verify` tripped it. `_seg_has_git_bypass_flag`
+#: shlex-splits `seg` ONCE and drops the -m/--message operand TOKEN from the
+#: token LIST -- deliberately NOT via `_seg_excluding_freetext_operands`'s
+#: string-rejoin-then-re-split round trip, which would drop the quoting around
+#: any OTHER operand (`-c "commit.gpgsign = false"` would re-split into three
+#: tokens and no longer match). Only an actual `--no-verify`/`--no-gpg-sign`
+#: token, or `-c` followed by a `commit.gpgsign=false` operand, counts.
 _BYPASS_WRAPPER_WORDS = frozenset({
     "sudo", "command", "time", "exec", "nice", "nohup",
     "ionice", "timeout", "stdbuf",
@@ -195,43 +184,23 @@ _BYPASS_WRAPPER_WORDS = frozenset({
 _BYPASS_FLAG_TOKENS = frozenset({"--no-verify", "--no-gpg-sign"})
 _BYPASS_GPGSIGN_FALSE_RE = re.compile(r"^commit\.gpgsign\s*=\s*false$")
 
-#: DELIBERATE VERDICT CHANGE (M5P Piece 1, 2026-07-29, named on purpose --
-#: this is not a plumbing change): `which`/`type` used to sit inside
-#: `_BYPASS_WRAPPER_WORDS` above, so `_seg_has_git_bypass_flag`'s tokenized
-#: walk peeled through them exactly like an execs-its-argv wrapper --
-#: `which git commit --no-verify` was DENIED as if it had actually run
-#: `git commit --no-verify`. It never does: `which`/`type` REPORT on a
-#: named command without ever executing it (`_command_tokenizer.
-#: WrapperSemanticClass.INSPECTS_WITHOUT_EXECING` already classifies both
-#: this way, correctly -- this file previously disagreed with its own
-#: package's shared classification). A segment whose command-position head
-#: positively resolves to one of these two words can never be a real
-#: `--no-verify`/`--no-gpg-sign`/`-c commit.gpgsign=false` bypass, no matter
-#: what its remaining argv looks like, so `_seg_has_git_bypass_flag` now
-#: returns a confirmed `False` for it directly rather than falling through
-#: to the ambiguous-case raw-text scan (see that function's own use of this
-#: set, below). Scope is `check_no_verify` only -- the shared `_BYPASS_
-#: PREFIX`/`_BYPASS_RE` regex (also relied on by `check_blanket_git_add`)
-#: is deliberately UNCHANGED, so this narrowing does not reach that guard.
+#: `which`/`type` REPORT on a command without executing it
+#: (`_command_tokenizer.WrapperSemanticClass.INSPECTS_WITHOUT_EXECING`), so a
+#: segment whose command-position head resolves to one of them is never a real
+#: bypass: `_seg_has_git_bypass_flag` returns a confirmed `False` for it
+#: rather than falling through to the raw-text scan. Scope is `check_no_verify`
+#: only -- `_BYPASS_PREFIX`/`_BYPASS_RE` (also used by `check_blanket_git_add`)
+#: are unchanged.
 _INSPECTS_WITHOUT_EXECING_WORDS = frozenset({"which", "type"})
 
-#: BX-14 (2026-07-29): wrapper binaries that take their OWN argument(s)
-#: before the wrapped command -- `timeout 30 <cmd>`, `nice -n 10 <cmd>`,
-#: `ionice -c 2 <cmd>` / `ionice -c2 <cmd>`, `stdbuf -oL <cmd>`. Both the
-#: separate-token (`-c 2`) and attached (`-c2`) flag-value forms are
-#: consumed here -- this token-list walk can distinguish them safely,
-#: unlike the regex fallback (`_BYPASS_PREFIX`) above, which only tolerates
-#: the attached form without risking swallowing the real command token.
-#: `_skip_wrapper_own_argv` itself (walking `base`'s own flag/argument
-#: tokens so `_seg_has_git_bypass_flag`'s walk lands on the NEXT wrapper or
-#: the real command) now lives in `_command_tokenizer.py` (2026-07-30, M8
-#: consolidation) -- imported above rather than hand-maintained here. That
-#: shared copy is a strict superset of this file's former one (it also
-#: recognizes `nice`'s bare-numeric niceness operand, which this file's copy
-#: never did), so consolidating can only widen wrapper-argv recognition
-#: here, never narrow it -- a segment this file's narrower walk could not
-#: fully peel already fell back to the raw `_BYPASS_RE` scan, which still
-#: over-blocks rather than under-blocking.
+#: Wrapper binaries that take their OWN argument(s) before the wrapped
+#: command -- `timeout 30 <cmd>`, `nice -n 10 <cmd>`, `ionice -c 2 <cmd>` /
+#: `ionice -c2 <cmd>`, `stdbuf -oL <cmd>`. This token-list walk consumes both
+#: the separate-token and attached flag-value forms; the regex fallback
+#: (`_BYPASS_PREFIX`) only tolerates the attached form without risking
+#: swallowing the real command token. `_skip_wrapper_own_argv` lives in
+#: `_command_tokenizer.py`; a segment the walk cannot fully peel falls back
+#: to the raw `_BYPASS_RE` scan, which over-blocks rather than under-blocks.
 
 
 def _seg_has_git_bypass_flag(seg: str, pretokenized: Optional[List[str]] = None) -> bool:
@@ -289,21 +258,10 @@ def _seg_has_git_bypass_flag(seg: str, pretokenized: Optional[List[str]] = None)
     n = len(tokens)
     while i < n:
         tok = tokens[i]
-        # BRACE-GROUPING FIX (2026-07-29, EM-run second-pass integration,
-        # confirmed live): `{ git commit --no-verify -m x; }` was never
-        # peeled here -- the leading `{` token left the "first effective
-        # token" as `{` itself, never `git`, so the walk below fell through
-        # to `_BYPASS_RE.search(seg)`, whose prefix pattern also has no `{`
-        # tolerance -- a real bypass silently allowed. Bash requires a space
-        # after `{` (a reserved word, not an operator like `(`), so
-        # `shlex.split`/the shared tokenizer always yields it as its own
-        # token. Mirrors `block_subagent_commit.py`'s
-        # `_first_effective_token` brace-peel fix (same day, same class).
-        # PAREN-GROUPING FIX (2026-07-29, EM-run confinement-corpus pass,
-        # confirmed live): `( git commit --no-verify -m x )` has the exact
-        # same shape -- `(`, whitespace-separated, falls out as its own
-        # token from the shared tokenizer for the same reason `{` does, and
-        # was never peeled here either. Same fix, same reasoning.
+        # Peel `{` / `(` grouping tokens: left in place, the "first effective
+        # token" is never `git` and the walk falls to `_BYPASS_RE`, whose
+        # prefix has no `{` tolerance -- `{ git commit --no-verify -m x; }`
+        # would be silently allowed. The tokenizer yields each as its own token.
         if tok in ("{", "("):
             i += 1
             continue
@@ -428,43 +386,22 @@ def check_no_verify(
             if used_resolved:
                 return _no_verify_rescan_shell_c_and_heredoc(cmd, flat, session_id, hook_payload, git_root)
 
-        # Finding 1 fix (2026-07-29, this-package seventh instance of the
-        # split-before-tokenize class): `_split_segments` below is a raw
-        # `re.split(r"[;&|]+", cmd)` -- QUOTE-UNAWARE. A quoted `;`/`&`/`|`
-        # inside a git commit-message operand (`git commit -m "release;
-        # ship it" --no-verify`) would get torn in half by that split, with
-        # "git" landing in one fragment and the real `--no-verify` flag
-        # landing in the other -- neither fragment alone carries both, so
-        # the bypass silently sailed through undetected. Segmenting via the
-        # SAME quote-aware tokenizer already shared by every other guard in
-        # this package instead of a second, bespoke, quote-blind splitter
-        # closes this: an unquoted `;`/`&`/`|` still yields a clean segment
-        # boundary, but one sitting inside a quoted operand no longer does,
-        # so one indivisible git invocation can never be torn into two
-        # innocent-looking halves.
+        # Segment via the shared quote-aware tokenizer, not a raw
+        # `re.split(r"[;&|]+", cmd)`: a quoted `;`/`&`/`|` inside a commit
+        # message (`git commit -m "release; ship it" --no-verify`) would tear
+        # one git invocation into halves that each look innocent.
         #
-        # Dialect-aware seam (C2, pln-the-destructive-core-learns-the-she):
-        # routed through `_dialect.resolve_segments_for_dialect` instead of
-        # a direct `_bt_tokenize_full_command` + `_bt_segments_from_
-        # tokens_simple` pair -- the same seam the 27 already-dual-declaring
-        # entries use. `dialect` is read from `hook_payload["tool_name"]`
-        # via `dialect_from_tool_name`; an absent `hook_payload` (every
-        # caller predating this parameter -- this module's own test suite
-        # calls `check_no_verify(cmd)` directly) or an unrecognized
-        # `tool_name` falls back to `Dialect.BASH`, preserving this
-        # function's pre-existing bash-only behavior byte-for-byte (AC2) --
-        # this guard's own `MATCHERS` registration is unchanged
-        # (`("Bash",)`), so live dispatch never actually reaches the
-        # PowerShell branch below; it exists for the fixtures this chunk's
-        # own test file drives directly.
+        # Routed through `_dialect.resolve_segments_for_dialect`; `dialect`
+        # comes from `hook_payload["tool_name"]`, and an absent payload or
+        # unrecognized `tool_name` falls back to `Dialect.BASH`. `MATCHERS`
+        # is `("Bash",)`, so live dispatch never reaches the PowerShell
+        # branch below; it exists for fixtures.
         #
-        # FAIL DIRECTION (AC4): for the BASH leg, `resolve_segments_for_
-        # dialect` returning `None` means `tokenize_full_command` itself
-        # returned `None` (unterminated quote / trailing backslash) --
-        # EXACTLY the prior `bt_tokens is None` condition -- so the
-        # over-inclusive raw-text `_BYPASS_RE` fail-CLOSED scan below still
-        # fires only in that same case. For any OTHER dialect, `None` means
-        # a DIFFERENT thing (a PowerShell parse failure, already recorded
+        # FAIL DIRECTION: for the BASH leg, `None` means
+        # `tokenize_full_command` returned `None` (unterminated quote /
+        # trailing backslash), and the over-inclusive raw-text `_BYPASS_RE`
+        # fail-CLOSED scan below fires only in that case. For any OTHER
+        # dialect, `None` means a DIFFERENT thing (a PowerShell parse failure, already recorded
         # SILENT inside `_powershell_tokens`) and must NOT fall through to
         # the bash raw-text deny scan -- that would misattribute a
         # PowerShell parse failure as a bash unparseable-command fail-close,
@@ -1081,21 +1018,14 @@ def check_destructive_git_orphan(
 
         # CHECK 1 -- git reset <target>, any ref-moving mode
         #
-        # WIDENED 2026-08-27 (PM ruling) from `--hard` only. Orphaning is a
-        # property of the BRANCH REF MOVING BACKWARDS, not of what the reset
-        # does to the index or worktree: `--soft`, `--mixed` and `--hard` all
-        # move the ref, so all three drop the same commits out of branch
-        # history. `--soft` merely keeps their CONTENT staged, which makes the
-        # loss quieter, not smaller -- the live incident this closes is a
-        # `reset --soft HEAD~1` that dropped a peer's commit (487855c59,
-        # "memo.send: ac-table-collapse") out of a shared branch while leaving
-        # its file staged and byte-identical, so nothing about the working
-        # tree looked wrong afterwards. Under the old `--hard`-only gate that
-        # command reached no check at all.
+        # Orphaning is a property of the BRANCH REF MOVING BACKWARDS, not of
+        # what the reset does to the index or worktree: `--soft`, `--mixed`
+        # and `--hard` all drop the same commits out of branch history;
+        # `--soft` only makes the loss quieter.
         #
-        # Both arms below widen soundly: a subshell-resolved target is equally
-        # unverifiable in any mode, and the `rev-list --count <target>..HEAD`
-        # probe already measures ref movement rather than mode. Non-ref-moving
+        # Both arms below are mode-independent: a subshell-resolved target is
+        # equally unverifiable in any mode, and the `rev-list --count
+        # <target>..HEAD` probe measures ref movement. Non-ref-moving
         # forms stay out via the PRE-EXISTING guards, not the mode gate -- the
         # `--` pathspec form is excluded below, `git reset <path>` resolves no
         # commit so its `rev-parse --verify <path>^{commit}` fails, and a bare
@@ -1488,13 +1418,10 @@ def check_destructive_git_clean(
     if _override("COORDINATOR_OVERRIDE_GIT_CLEAN", payload=payload):
         return None
 
-    # W5/C5 (2026-08-19, spawn-count defect): identical to the F0-b shape
-    # `_new_git_memo` was built for -- a chained command repeating the exact
-    # same `git clean` invocation (`git clean -nd dirA && git clean -nd
-    # dirA`) re-ran the oracle once per segment with byte-identical argv.
-    # `extra_env` is a fixed `{"LC_ALL": "C"}` on every call in this loop, so
-    # it is not part of the memo key -- folding it in would be a no-op that
-    # only widens the key for no reason.
+    # Memo: a chained command repeating the same `git clean` invocation
+    # (`git clean -nd dirA && git clean -nd dirA`) would re-run the oracle per
+    # segment. `extra_env` is a fixed `{"LC_ALL": "C"}`, so it stays out of
+    # the memo key.
     _clean_oracle_memo: Dict[Tuple[str, ...], Tuple[int, str]] = {}
     # The oracle must run where the command runs: git then resolves the
     # innermost repo itself, instead of the hook process's own cwd repo.
@@ -1609,16 +1536,12 @@ def check_destructive_git_clean(
 # ---------------------------------------------------------------------------
 
 #: The verbs this guard resolves, in the order it tries them. Hoisted from
-#: three identical inline tuples (2026-08-30) so a verb cannot be added to one
-#: resolution path and forgotten in the other two -- the shape that let
-#: `switch` be absent everywhere at once.
+#: three identical inline tuples so a verb cannot be added to one resolution
+#: path and forgotten in the other two.
 #:
-#: `switch` joined the set on 2026-08-30: `git switch -f <branch>` discards
-#: every uncommitted modification exactly as `git checkout -f <branch>` does
-#: (confirmed via `git switch -h`: "-f, --force ... throw away local
-#: modifications"), and it is the spelling git's own docs now steer people
-#: toward. It carries no pathspec form at all -- `git restore` took that over
-#: -- so only the force leg below ever speaks for it.
+#: `git switch -f <branch>` discards every uncommitted modification exactly as
+#: `git checkout -f <branch>` does. It carries no pathspec form (`git restore`
+#: took that over), so only the force leg below ever speaks for it.
 _GR_VERBS = ("checkout", "restore", "reset", "stash", "switch")
 
 _GR_BASE_RE = (
@@ -1632,29 +1555,11 @@ _GR_BASE_RE = (
 
 
 
-#: CONSOLIDATED (2026-07-28, Finding 5, nit -- three independently-authored
-#: Windows-path-head normalizers, one weaker/undermaintained): this module
-#: used to carry its OWN git-only argv0-head-path regex/rewrite, duplicating
-#: `block_subagent_destructive_action._normalize_windows_argv0_head_path_
-#: with_spaces` (a documented, deliberate divergence -- see that function's
-#: own history) rather than reusing it. Confirmed by inspection, NOT
-#: assumed, that reuse is safe in THIS direction: this module already
-#: imports `_normalize_executable_basename` from `block_subagent_
-#: destructive_action` (see the top-of-file import block), and that module
-#: imports nothing from this one -- the dependency is one-way, so importing
-#: one more name from it introduces no cycle. The two normalizers had
-#: already diverged exactly as this finding warned they would: the shared
-#: one is git+bash+sh+zsh+python[3]+env+xargs-aware and covers spaced UNC
-#: paths (Finding 4 fix, same review), while this module's own copy was
-#: git-only and had NOT yet received the UNC-anchor widening -- reusing it
-#: here closes that gap for `_command_really_invokes` too, for free.
-#:
-#: The shared function ADDITIONALLY single-quotes an unquoted spaced path so
-#: it lands as ONE `shlex` token (this module's own copy only rewrote
-#: separators, leaving a spaced path split across tokens) -- strictly safer
-#: for `_command_really_invokes` below, which previously had to document
-#: "tolerating" that split because it scans every token position-
-#: independent; quoting removes the need to tolerate anything.
+#: Reuses `block_subagent_destructive_action`'s shared normalizer rather than a
+#: git-only copy: this module already imports from it and it imports nothing
+#: from here, so no cycle. The shared one covers git+bash+sh+zsh+python[3]+
+#: env+xargs and spaced UNC paths, and single-quotes an unquoted spaced path
+#: so it lands as ONE `shlex` token.
 def _normalize_windows_git_path_head(cmd: str) -> str:
     """Thin alias over the shared normalizer -- kept as its own name (rather
     than inlining the import at every call site) so this module's own

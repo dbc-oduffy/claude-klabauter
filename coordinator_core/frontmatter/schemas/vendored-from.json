@@ -56,8 +56,8 @@
     "doe_commit": "33a89a443a9e6377f7c5222a3e988437c375984e"
   },
   "handoff.schema.json": {
-    "blob": "822a3bff08528629a7321787b7258c3abe6e9fc5",
-    "doe_commit": "c4de71c142eab1c8bc7671d56dd4eb49bad8dd70"
+    "blob": "4f31c7b17916903038930f72a736a610bf665441",
+    "doe_commit": "08e6c0f3907df625c1a3d72080fe619128e02fbf"
   },
   "health-status.schema.json": {
     "blob": "d31ddbff5b35ca0c760aabe3d02de903d19550d8",
@@ -140,8 +140,8 @@
     "doe_commit": "fd4a6410358cb567b8af5693a92246a8ef4aecd0"
   },
   "roadmap.schema.json": {
-    "blob": "2c374b94dffebde8ac8503837b79bd321c85feee",
-    "doe_commit": "cb819d590e88a1324e0f59d7dde7749746f22219"
+    "blob": "cca67e8519509f45431f6ba64c9bd9170e7176c4",
+    "doe_commit": "08e6c0f3907df625c1a3d72080fe619128e02fbf"
   },
   "run-report.schema.json": {
     "blob": "cdf831d739af01f56c3c2b24138046881d830096",
@@ -168,11 +168,11 @@
     "doe_commit": "cb819d590e88a1324e0f59d7dde7749746f22219"
   },
   "workstream-event.schema.json": {
-    "blob": "b797cbcee7fb46fce5fde0935d921bd6841a8b40",
-    "doe_commit": "e9baba482128ef3f1fc1c047179bd10c4ec1a4a6"
+    "blob": "d6de73b480a6f14858fac6beef7888320a04f388",
+    "doe_commit": "08e6c0f3907df625c1a3d72080fe619128e02fbf"
   },
   "workstream.schema.json": {
-    "blob": "571a9cb0085c3e78b51ba25756b5f841298bef98",
-    "doe_commit": "e9baba482128ef3f1fc1c047179bd10c4ec1a4a6"
+    "blob": "590ef154390cf792a71b4c139d03fe9544fe3de7",
+    "doe_commit": "08e6c0f3907df625c1a3d72080fe619128e02fbf"
   }
 }

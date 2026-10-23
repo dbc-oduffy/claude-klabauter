@@ -4343,8 +4343,8 @@ _QUEUE_SCHEMA_PINS = {
 # byte-pin call below — that is the designed exit path, not a place to leave
 # this parked indefinitely.
 # Schemas where claude-klabauter deliberately leads DoE, awaiting their upward vendor.
-# EMPTY IS THE HEALTHY STATE — an entry here is a temporary divergence with a
-# named reason, not a resting place, and `check_schema_ahead_of_doe` fails the
+# AN ENTRY IS A TEMPORARY DIVERGENCE with a named reason, not a resting place
+# (empty is the healthy state), and `check_schema_ahead_of_doe` fails the
 # moment DoE moves so the entry cannot quietly outlive its justification.
 #
 # review-trail occupied this for a few hours on 2026-08-10 and is the worked
@@ -4354,7 +4354,23 @@ _QUEUE_SCHEMA_PINS = {
 # the stale-ahead branch caught that unprompted, and the pair converged back to
 # an ordinary byte-pin through bin/claude-klabauter-revendor-schema.py. That is the whole
 # intended lifecycle: declare, gate, converge, remove.
-_QUEUE_SCHEMA_AHEAD_PINS: dict = {}
+#
+# sizing-object: claude-klabauter 1.46.0 adds `tie_break` (claude-klabauter-first, 7fb517dc90); DoE
+# still reads 1.45.0 at the doe_ref below and has not vendored it yet.
+# Exit path: once DoE vendors 1.46.0, delete this entry and run
+# bin/claude-klabauter-revendor-schema.py sizing-object so it returns to a plain
+# check_schema_drift byte-pin.
+_QUEUE_SCHEMA_AHEAD_PINS: dict = {
+    'sizing-object': {
+        'doe_ref': "8807597379a74d97b6396eaa667e6646f6da49c2",
+        'reason': (
+            "claude-klabauter-first sizing-object 1.46.0 adds `tie_break` (7fb517dc90); "
+            "DoE's copy is still 1.45.0 and its own vendor of 1.46.0 is pending"
+        ),
+        'provenance': "claude-klabauter 7fb517dc90; plan 2026-10-23-vendored-schema-drift-reconcile",
+        'local_shape_hash': "54e992cbd5a430349237a5bbe24600a2266ea9ed6762511ddeb2115c25bef354",
+    },
+}
 
 
 def _check_vendored_against_doe(name: str, schema_path: Path) -> None:
@@ -5206,7 +5222,9 @@ class TestHeadTrackedQueueSchemaDrift:
         if _DOE_REPO is None or not _DOE_REPO.exists():
             pytest.skip(f'DoE repo not found at {_DOE_REPO}')
         _skip_if_probe_unavailable(
-            check_schema_drift, _SCHEMAS_DIR / 'sizing-object.schema.json', _DOE_REPO
+            _check_vendored_against_doe,
+            'sizing-object',
+            _SCHEMAS_DIR / 'sizing-object.schema.json',
         )
 
     def test_workstream_event_matches_doe_head(self):
@@ -6290,11 +6308,7 @@ class TestParseYamlLegacyDialect:
         assert parse_yaml(text) == {'outer': {'inner_seq': ['a', 'b']}, 'title': 'y'}
 
     def test_real_handoff_carried_items_round_trips_with_scalar_keys_intact(self):
-        fixture = (
-            Path(__file__).parent.parent.parent.parent
-            / 'state' / 'handoffs'
-            / '2026-08-06-2026-08-05_215136_2026-08-04_235721_2026-08-03_155105_claude-klabauter-oss-release.md'
-        )
+        fixture = Path(__file__).parent / 'fixtures' / 'legacy-dialect-carried-items-handoff.md'
         fm = parse_frontmatter(fixture.read_text(encoding='utf-8'))['frontmatter']
         assert isinstance(fm, dict)
         assert fm['title']

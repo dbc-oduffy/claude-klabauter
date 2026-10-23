@@ -228,7 +228,7 @@ class TestDenyMessage:
         msg = _reason(_enveloped(guard.check)(_payload("git stash drop")))
         assert "git show stash@{N}" in msg
 
-    def test_echoes_the_command(self):
+    def test_names_the_denied_stash_verb(self):
         assert "git stash clear" in _reason(_enveloped(guard.check)(_payload("git stash clear")))
 
     def test_does_not_echo_a_very_long_command(self):

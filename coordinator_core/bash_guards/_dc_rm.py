@@ -93,22 +93,15 @@ def _rm_is_rm_segment(seg: str) -> bool:
         elif s.startswith("\\"):
             s = s[1:]
     probe = s.replace("'", "").replace('"', "")
-    # Bundled `-c` (2026-07-29, EM-run second-pass integration, confirmed
-    # live): `sh -ic '...'` behaves as `sh -i -c '...'`, so an exact `-c`
-    # token requirement missed it -- `sh -ic "rm -rf ..."` / `sh -ic "git
-    # clean -fdx"` / `sh -ic "git <revert-verb>..."` all silently sailed
-    # through as prose. Widened to `-[a-zA-Z]*c[a-zA-Z]*` (same tolerance as
-    # `_BUNDLED_C_FLAG_RE` elsewhere in this file/package).
+    # Bundled `-c`: `sh -ic '...'` behaves as `sh -i -c '...'`, so an exact
+    # `-c` token missed it. Same tolerance as `_BUNDLED_C_FLAG_RE`.
     if re.match(r"^(bash|sh|zsh|dash)\s+(\S+\s+)*-[a-zA-Z]*c[a-zA-Z]*(\s|$)|^eval(\s|$)", probe):
         return bool(re.search(r"\brm\b", probe))
     firstword = s.split(None, 1)[0] if s.split(None, 1) else ""
     if firstword in _RM_WRAPPER_WORDS:
-        # Searched on `probe` as well as `s`: the non-wrapper branch below
-        # already reads the quote-stripped form, and reading only `s` here let
-        # `sudo 'r''m' -rf <path>` past while the bare `'r''m' -rf <path>` was
-        # caught (measured 2026-08-29). Quote-stripping does not disturb the
-        # `(){}` and backtick boundaries this pattern anchors on -- it removes
-        # only quote characters.
+        # Searched on `probe` as well as `s`: reading only `s` let
+        # `sudo 'r''m' -rf <path>` past. Quote-stripping leaves the `(){}` and
+        # backtick boundaries this pattern anchors on intact.
         return bool(
             re.search(r"(^|[\s({`])(/\S*/)?rm([\s)}`]|$)", s)
             or re.search(r"(^|[\s({`])(/\S*/)?rm([\s)}`]|$)", probe)
@@ -167,14 +160,10 @@ def _expand_home_var(tok: str) -> Optional[str]:
     home = os.environ.get("HOME")
     if not home:
         return None
-    # negative-spec: the replacement MUST stay a callable. Passing `home` as a
-    # plain string makes re.sub parse it as a replacement TEMPLATE, in which
-    # backslash sequences are escapes -- so a Windows HOME of `C:\Users\<name>`
-    # raises `PatternError: bad escape \U`, breaking this function's own
-    # "never raises" contract three lines up in the docstring. Observed live on
-    # win32: every `rm` naming `$HOME` crashed the destructive-rm guard, which
-    # fails CLOSED, so the guard denied the command having never inspected it.
-    # A callable replacement is returned verbatim with no escape processing.
+    # negative-spec: the replacement MUST stay a callable. A plain-string `home`
+    # is parsed as a re.sub TEMPLATE, so a Windows HOME of `C:\Users\<name>`
+    # raises `PatternError: bad escape \U` and the fail-closed guard denies
+    # every `rm` naming `$HOME` uninspected. A callable is returned verbatim.
     expanded = _HOME_VAR_RE.sub(lambda _m: home, tok)
     if "$" in expanded:
         return None
@@ -679,44 +668,24 @@ def check_destructive_rm(
     cmd = _join_backslash_newlines(cmd)
     cmd = _strip_heredoc_bodies(cmd)
 
-    # C3 (pln-the-destructive-core-learns-the-she): the pre-existing
-    # `\brm\b` gate is BASH-shaped -- none of PowerShell's `Remove-Item`
-    # spelling or its `ri`/`rd`/`del`/`erase` aliases contains the substring
-    # `rm`, so a PowerShell-native invocation returned None here before ever
-    # reaching a target check. Widen the gate (cheap pre-filter only, never
-    # the real detection -- that is `_PS_REMOVE_VERBS` membership below).
+    # The `\brm\b` gate is BASH-shaped: PowerShell's `Remove-Item` and its
+    # `ri`/`rd`/`del`/`erase` aliases never contain `rm`. Widen the gate
+    # (cheap pre-filter only; real detection is `_PS_REMOVE_VERBS` below).
     #
-    # Deliberately NOT gated on `dialect_from_tool_name(payload["tool_name"])
-    # is Dialect.POWERSHELL`. Per this plan's own "Row 2 is the load-bearing
-    # row": coordinator-content-repo's `_rearm_command_tool_name` rewrites a genuine
-    # `PowerShell` tool call to `tool_name: "Bash"` BEFORE this payload ever
-    # reaches the dispatcher, so a real `Remove-Item -Recurse -Force .git`
-    # issued from PowerShell arrives here labeled `"Bash"` -- the exact shape
-    # AC5's oracle pins (`Remove-Item ...` must deny under BOTH tool_name
-    # values, not only under a `tool_name` that happens to say
-    # `"PowerShell"`). Trusting the declared `tool_name` to gate PowerShell
-    # vocabulary detection would silently keep this guard blind on that
-    # relabeled row -- the one case the plan's § Problem measured as the
-    # load-bearing gap. The PowerShell verb scan below therefore always
-    # runs, independent of `tool_name`; the risk this widens is a literal
-    # `Remove-Item`/`ri`/`rd`/`del`/`erase` WORD appearing in an otherwise
-    # unrelated bash command, which is not a realistic false-positive shape
-    # (none of those words collides with ordinary bash vocabulary the way a
-    # narrower alias might).
-    # Scanned on the raw command AND on a quote-stripped copy. The shell
-    # resolves `'r''m'` to `rm`, but `\brm\b` matched neither the raw text nor
-    # anything downstream, so this fast path returned None and the whole guard
-    # never ran: measured 2026-08-29, `rm -rf <path>` denied while
-    # `'r''m' -rf <path>` was ALLOWED against the same path with the same
-    # uncommitted work under it. Same shape as the doctrine-surface guard's
-    # prefilter bypass closed the same day -- a correct analyzer gated behind a
-    # raw-text probe that shell quoting walks straight past.
+    # Deliberately NOT gated on `dialect_from_tool_name(payload["tool_name"])`:
+    # coordinator-content-repo's `_rearm_command_tool_name` rewrites a genuine `PowerShell`
+    # tool call to `tool_name: "Bash"` before it reaches the dispatcher, so
+    # `Remove-Item -Recurse -Force .git` must deny under BOTH tool_name values.
+    # The verb scan always runs; the cost is a literal `Remove-Item`/`ri`/`rd`/
+    # `del`/`erase` word in an unrelated bash command, not a realistic shape.
     #
-    # WIDENING ONLY, and this gate decides solely whether to LOOK: every
-    # downstream check still requires a real rm segment, a target that exists,
-    # and uncommitted work under it, so a spurious word here cannot produce a
-    # deny on its own. `_rm_is_rm_segment` already reads segments this way; the
-    # gate in front of it did not.
+    # Scanned on the raw command AND a quote-stripped copy: the shell resolves
+    # `'r''m'` to `rm`, but `\brm\b` matched neither, so the guard never ran and
+    # `'r''m' -rf <path>` was ALLOWED where `rm -rf <path>` was denied.
+    #
+    # WIDENING ONLY: this gate decides solely whether to LOOK; every downstream
+    # check still requires a real rm segment, an existing target and
+    # uncommitted work under it.
     _has_bash_rm_word = _word_present(r"\brm\b", cmd)
     _has_ps_remove_word = _word_present(r"(?i)\b(remove-item|ri|rd|del|erase)\b", cmd)
     if not _has_bash_rm_word and not _has_ps_remove_word:
@@ -727,35 +696,24 @@ def check_destructive_rm(
     # cwd is wherever the server booted, and an unresolved target is silently skipped.
     _rm_cwd = (payload or {}).get("cwd") or os.getcwd()
 
-    # Per-call memo, keyed on the exact (cwd, args) pair actually run -- see
-    # `_new_git_memo` docstring for why this is sound and why it is
-    # deliberately NOT module-level.
+    # Per-call memo keyed on (cwd, args); deliberately NOT module-level (see
+    # `_new_git_memo`).
     _memo_run_git = _new_git_memo()
 
-    # `_rm_peer_claim_of`'s uncommitted-delta gate, shared across every
-    # target this call's loop below checks -- see `_new_dirty_paths_memo`'s
-    # own docstring for why this MUST be built once here and threaded
-    # through, rather than left for that function's own one-shot fallback
-    # (which would spawn `git status` once per rm target).
+    # Built once and threaded through `_rm_peer_claim_of` (see
+    # `_new_dirty_paths_memo`), or its fallback spawns `git status` per target.
     _dirty_paths_lookup = _new_dirty_paths_memo()
 
-    # Per-call, per-ROOT batched `git status --porcelain`. One spawn per distinct
-    # repo root instead of one per TARGET (`rm a.py b.py c.py` was three).
+    # Per-call, per-ROOT batched `git status --porcelain`: one spawn per repo root.
     #
-    # WHY LAZY, AND WHY NOT A PRE-PASS. Resolving every target's root up front to
-    # group them would spawn for targets the loop below `continue`s past long
-    # before it ever needs a status -- a scratch-allowlisted path, a nonexistent
-    # path, a claims-dir path. That trades an N-spawn tail for an N-spawn head.
-    # This fills on FIRST need for a root and only then, so every early exit above
-    # still costs nothing.
+    # LAZY, NOT A PRE-PASS: a pre-pass would spawn for targets the loop below
+    # `continue`s past (scratch-allowlisted, nonexistent, claims-dir paths).
     #
-    # WHY IT FALLS BACK RATHER THAN GUESSING. This guard's deny leg is the thing
-    # standing between a peer's uncommitted work and `rm -rf`. Porcelain paths are
-    # root-relative, may be renames (`XY orig -> new`), and are quoted when
-    # `core.quotepath` fires on non-ASCII. If a line cannot be attributed to a
-    # target with certainty, this does NOT assume clean -- it returns None and the
-    # caller re-issues that target's own un-batched status call. A missed spawn is
-    # a cost; a missed deny is a peer's lost work.
+    # FALLS BACK RATHER THAN GUESSING: porcelain paths are root-relative, may be
+    # renames (`XY orig -> new`), and are quoted when `core.quotepath` fires on
+    # non-ASCII. A line that cannot be attributed with certainty is never
+    # assumed clean: this returns None and the caller re-issues the per-target
+    # status. A missed spawn is a cost; a missed deny is a peer's lost work.
     _status_by_root: Dict[str, Optional[Dict[str, str]]] = {}
 
     def _batched_status_for(root: str, tgt_abs: str, all_targets: List[str]) -> Optional[str]:
@@ -780,13 +738,10 @@ def check_destructive_rm(
     if rc == 0:
         cur_repo = out.strip()
 
-    # C9 (2026-08-27, docs/plans/2026-08-27-a-pathspec-is-not-a-scope.md):
-    # every real target this call ends up letting through -- bash `rm` or
-    # `git rm` alike -- is collected here (as `tgt_abs`) and flushed as a
-    # TOUCH record ONLY at this function's final `return None`, never
-    # inline where a target is found. That ordering is load-bearing: any
-    # earlier `return _deny(...)` anywhere below means the whole command
-    # never executes, so nothing in this list may have been recorded yet.
+    # Every target this call lets through (bash `rm` or `git rm`) is collected
+    # here and flushed as a TOUCH record ONLY at the final `return None`. Load-
+    # bearing: an earlier `return _deny(...)` means the command never executes,
+    # so nothing may have been recorded yet.
     # See `_rm_flush_touch`'s own docstring for why this is a plain TOUCH
     # (not a delete-flavored verb) and what it closes.
     _pending_rm_touch_paths: List[str] = []
@@ -801,36 +756,18 @@ def check_destructive_rm(
     #: free-text scan below, which is correct for bash and only for bash.
     _parsed_recursion = {}
     if _has_ps_remove_word:
-        # AC3: alias/flag resolution is TABLE-DRIVEN AND SHARED, reusing
-        # `block_subagent_destructive_action`'s own `_PS_REMOVE_VERBS`/
-        # `_ps_resolve_head_verb`/`_ps_normalize_verb_token` (which already
-        # unwind the `&('Remove-Item') ...` / `&(Get-Command Remove-Item)
-        # ...` call-operator forms) rather than a second, per-check alias
-        # list. `resolve_segments_for_dialect` itself already expands
-        # `Start-Process`/`saps`/`start` invocations before segmentation
-        # (`_dialect.expand_start_process_invocations`) and its
-        # tree-sitter-pwsh parser natively resolves backtick escapes and
-        # `@'...'@`/`@"..."@` here-strings at the token level -- the
-        # anti-bypass surface this chunk's brief names is inherited from
-        # that seam, not reinvented here.
+        # Alias/flag resolution is table-driven and shared with
+        # `block_subagent_destructive_action` (`_PS_REMOVE_VERBS`,
+        # `_ps_resolve_head_verb`, `_ps_normalize_verb_token`), not a second
+        # alias list. `resolve_segments_for_dialect` already expands
+        # `Start-Process` forms and resolves backtick escapes and here-strings.
         #
-        # Each recognized invocation is rewritten to an EQUIVALENT
-        # bash-shaped `rm -rf <remaining argv>` segment string and appended
-        # to the same segment list the loop below already walks -- this
-        # reuses the ~300-line target-resolution/deny ladder byte-for-byte
-        # for both dialects instead of forking a parallel PowerShell copy of
-        # it. `-Recurse`/`-Force` (any order, abbreviated `-r`/`-fo`) and a
-        # named `-Path`/`-LiteralPath` flag all survive into `rest` and are
-        # filtered by the SAME `startswith("-")` flag test the bash leg
-        # already applies when it walks `after.split()` below -- a
-        # positional target (`Remove-Item .git -Recurse -Force`) or a
-        # named-flag target (`Remove-Item -Path .git`) both leave exactly
-        # the target token as the sole non-flag operand. Gating is
-        # deliberately NOT conditioned on `-Recurse`/`-Force` presence: the
-        # bash leg denies a `.git`/repo-root target regardless of `-r`,
-        # since the irreversibility is a property of the TARGET, not of
-        # whether the caller also passed a flag -- matching that posture is
-        # the safe direction, not a widening of it.
+        # Each recognized invocation is rewritten to an equivalent bash-shaped
+        # `rm -rf <argv>` segment and appended to the list the loop below walks,
+        # so both dialects share one deny ladder. `-Path`/`-LiteralPath` and
+        # positional targets leave the target as the sole non-flag operand.
+        # Gating is deliberately NOT conditioned on `-Recurse`/`-Force`: the
+        # irreversibility is a property of the TARGET, as on the bash leg.
         _ps_segments = resolve_segments_for_dialect(
             _rm_cmd, Dialect.POWERSHELL, guard_name="destructive-rm"
         )
@@ -842,44 +779,28 @@ def check_destructive_rm(
                 _ps_verb, _ps_rest = _ps_resolve_head_verb(_ps_clean)
                 if _ps_verb not in _PS_REMOVE_VERBS:
                     continue
-                # `-rf` is NOT stamped on unconditionally any more. It was,
-                # and any PowerShell flag CONTAINING an `r` then re-matched the
-                # bash short-flag scan below -- `-Force` most of all. Measured
-                # 2026-09-11 across three repos: `Remove-Item -Force <file>` on
-                # a single tracked file was refused as a recursive delete of
-                # uncommitted work, and the refusal named neither the flag it
-                # had read nor the dialect it had read it in, so three sessions
-                # in turn read a parse bug as a policy they had to argue with.
-                #
-                # The target-irreversibility posture the old comment defended
-                # is untouched: a `.git`/repo-root target is denied on
-                # `tgt_is_dir` above, which never consulted this flag.
+                # `-rf` is stamped only when recursion was declared: any
+                # PowerShell flag CONTAINING an `r` (`-Force`) would otherwise
+                # re-match the bash short-flag scan below and refuse a
+                # single-file `Remove-Item -Force` as a recursive delete. A
+                # `.git`/repo-root target is denied on `tgt_is_dir`, not this flag.
                 _ps_recurse = _ps_recurse_flag(_ps_rest)
                 _ps_seg = ("rm -rf " if _ps_recurse else "rm ") + " ".join(_ps_rest)
                 _rm_segments.append(_ps_seg)
                 _parsed_recursion[_ps_seg] = _ps_recurse
-        # `_ps_segments is None` (unparseable PowerShell) -- SILENT already
-        # recorded by `resolve_segments_for_dialect`; no synthetic segment
-        # is added, preserving today's fail-open posture (AC4) rather than
-        # falling through to the bash-shaped free-text scan below, which
-        # would misattribute a PowerShell parse failure as a bash
-        # unparseable-command fail-close.
+        # `_ps_segments is None` (unparseable PowerShell): no synthetic segment,
+        # so the fail-open posture holds rather than the bash free-text scan
+        # below misattributing a PowerShell parse failure as a fail-close.
 
     for seg in _rm_segments:
         if not seg.strip():
             continue
 
-        # `git ... rm` (staged removal, git-recoverable) never matches
-        # `_rm_is_rm_segment` below -- that gate requires the segment's OWN
-        # head word (past wrappers/env) to be `rm`, and `git` is not in
-        # `_RM_WRAPPER_WORDS` -- so this detection must run BEFORE that
-        # gate, not after it (a `git rm` segment would otherwise `continue`
-        # past this whole block, silently, on the very next line). The deny
-        # ladder below still never runs for it (staged removal is
-        # git-recoverable, unlike a bare `rm`), but (C9) it still needs its
-        # own TOUCH: `git rm` (without `--cached`) deletes the working-tree
-        # file too, not just the index entry, and previously left no touch
-        # claim behind at all.
+        # `git ... rm` never matches `_rm_is_rm_segment` below (its head word
+        # must be `rm`; `git` is not in `_RM_WRAPPER_WORDS`), so this runs
+        # BEFORE that gate. The deny ladder never runs for it (staged removal
+        # is git-recoverable), but without `--cached` it deletes the
+        # working-tree file too and still needs its own TOUCH.
         if re.search(
             r"\bgit(\s+(-C\s+\S+|-c\s+\S+|--(git-dir|work-tree|namespace)(=\S+|\s+\S+)|"
             r"--exec-path(=\S+|\s+\S+)?|-p|--paginate|--no-pager|--bare|"
@@ -907,17 +828,9 @@ def check_destructive_rm(
 
         if not _rm_is_rm_segment(seg):
             continue
-        # Quote-stripped, for the SAME reason `_rm_is_rm_segment` builds its
-        # own `probe` that way: the shell resolves `'r''m'` to `rm`, so the
-        # segment reaches here correctly identified as an rm -- but this
-        # verb-strip needed a LITERAL `rm` token, found none, and left `after`
-        # as the whole segment. Measured 2026-08-29: `rm -rf <path>` denied
-        # while `'r''m' -rf <path>` was ALLOWED on the same path with the same
-        # uncommitted work under it. The two must read the segment the same
-        # way or the detector and the extractor disagree about what they are
-        # looking at. Whitespace-splitting a quoted path was already lossy
-        # here (`rm -rf 'my dir'` split to `'my` + `dir'` before this), so
-        # this changes no case that previously resolved.
+        # Quote-stripped like `_rm_is_rm_segment`'s `probe`: `'r''m'` is `rm` to
+        # the shell, and the verb-strip needs a LITERAL `rm` token or `after`
+        # stays the whole segment. Detector and extractor must read alike.
         seg_unquoted = seg.replace("'", "").replace('"', "")
         after = re.sub(r".*(^|\s)rm(\s|$)", " ", seg_unquoted, count=1)
         if seg in _parsed_recursion:
@@ -952,14 +865,9 @@ def check_destructive_rm(
             if "$" in tok:
                 expanded = _expand_home_var(tok)
                 if expanded is None or any(c in expanded for c in ("*", "?", "[")):
-                    # 2026-07-31: a bare `$`/`${...}` reference the hook
-                    # cannot resolve in-process still gets skipped here --
-                    # this is finding 8, an inherited/known bound (no shell
-                    # environment access, no expansion rules) unchanged by
-                    # this fix. Only the narrow, well-known $HOME/${HOME}
-                    # case below is resolved, because that is exactly the
-                    # incident class (a recursive rm on a $HOME-relative
-                    # target silently bypassing every check here).
+                    # A `$`/`${...}` reference the hook cannot resolve
+                    # in-process is skipped (known bound: no shell environment).
+                    # Only $HOME/${HOME} is resolved, the incident class.
                     continue
                 tok = expanded
             elif any(c in tok for c in ("*", "?", "[")):
@@ -969,14 +877,8 @@ def check_destructive_rm(
                 t = t[:-1]
             if t.endswith("}"):
                 t = t[:-1]
-            # `t_raw` is the AS-TYPED
-            # token (captured BEFORE any `$HOME`/`${HOME}` expansion above),
-            # kept separate from `t` (which is already expanded for the
-            # $HOME leg). For a plain or `~`-spelled token the two are
-            # identical (expansion never touched `tok` in that case). Both
-            # are threaded through so deny MESSAGES can show the raw, as-
-            # typed spelling for EVERY target shape, not just tilde-spelled
-            # ones.
+            # `t_raw` is the as-typed token (before `$HOME` expansion), kept
+            # apart from `t` so deny MESSAGES show the raw spelling.
             t_raw = _strip_q(raw_tok)
             if t_raw.endswith(")"):
                 t_raw = t_raw[:-1]
@@ -985,28 +887,16 @@ def check_destructive_rm(
             targets.append((t_raw, t))
 
         for tgt, tgt_expanded in targets:
-            # 2026-07-31: `os.path.exists`/`os.path.isdir` do NOT expand a
-            # leading `~` themselves -- `rm -rf ~/.Claude` was tokenized
-            # correctly but then silently `continue`d here because
-            # `os.path.exists("~/.claude")` is False, before ANY guard leg
-            # below got a chance to run. Expand a leading `~` the same way
-            # guard_offer_git_c.py:_offer_normalize_path already does, and
-            # use the expanded form for every filesystem probe below; `tgt`
-            # itself stays the raw, as-typed string so deny MESSAGES still
-            # show the user what they wrote. `tgt_expanded` is `tgt` for a
-            # plain or `~`-spelled token, and the already-`$HOME`-expanded
-            # path for a `$HOME`/`${HOME}`-spelled token (Finding 1 fix --
-            # this used to overwrite `tgt` itself for that spelling, so
-            # `tgt` was already absolute by message-build time despite the
-            # comment above claiming otherwise for every spelling).
+            # `os.path.exists`/`isdir` do not expand a leading `~`, so
+            # `rm -rf ~/.Claude` was silently `continue`d before any guard leg
+            # ran. Expand it (as `_offer_normalize_path` does) for every
+            # filesystem probe; `tgt` stays as typed for deny MESSAGES, and
+            # `tgt_expanded` carries the `$HOME`-expanded path.
             tgt_resolved = os.path.join(_rm_cwd, os.path.expanduser(tgt) if tgt.startswith("~") else tgt_expanded)
             if not tgt or not os.path.exists(tgt_resolved):
                 continue
             tgt_abs = _abs_path(tgt_resolved)
-            # C9: collected now, flushed only at this function's final
-            # `return None` -- see the list's own comment at this
-            # function's top for why an early `return _deny(...)` below
-            # must never let this target reach the touch record.
+            # Flushed only at the final `return None`; see the list's comment above.
             _pending_rm_touch_paths.append(tgt_abs)
 
             norm = tgt_abs.replace("\\", "/")
@@ -1041,22 +931,12 @@ def check_destructive_rm(
                     ),
                 )
 
-            # A `*.lock` file under the git store holds no committed data --
-            # git writes a new index to `index.lock` and renames it onto
-            # `index`; unlink the lock mid-flight and that rename FAILS and
-            # the git command errors out loudly, leaving the on-disk index
-            # untouched and still consistent. A second git that acquires a
-            # fresh lock reads that same consistent index. The realistic
-            # worst case is a failed git command, not a damaged repository
-            # -- and the index is regenerable from HEAD plus the working
-            # tree regardless. Hard blocks in this guard are reserved for
-            # irreversible harm; this is not irreversible, so the prior
-            # deny was a wall around the wrong path rather than a cheaper
-            # right one -- an EM must be able to clear a git lock without
-            # human escalation. See cross-repo/inbox/
-            # 2026-08-12-example-retrieval-repo-em-git-index-lock-reaper.md. This leg
-            # must fire FIRST and narrowly (it does not replace the branch
-            # below, which still denies every non-lock git-store path).
+            # A `*.lock` file under the git store holds no committed data: git
+            # renames `index.lock` onto `index`, so unlinking it mid-flight only
+            # fails that git command, and the index is regenerable. Hard blocks
+            # are reserved for irreversible harm, so an EM must be able to clear
+            # a git lock. This leg fires FIRST and narrowly; every non-lock
+            # git-store path still meets the deny below.
             #
             # NEGATIVE SPEC -- do NOT turn this into an advisory that names
             # the reaper, however helpful that reads. `dispatch.py`'s guard
@@ -1065,26 +945,16 @@ def check_destructive_rm(
             # one for the same command. A silent `continue` is the required
             # shape; the allow IS the message.
             is_git_store_target = norm.endswith("/.git") or "/.git/" in norm or os.path.basename(tgt_abs) == ".git"
-            # The
-            # allow is scoped to a lock FILE only; a `.lock`-suffixed
-            # directory has no place in the rename-onto-index safety
-            # argument above and must fall through to the general git-store
-            # deny below.
+            # Scoped to a lock FILE: a `.lock`-suffixed directory falls through
+            # to the git-store deny below.
             if is_git_store_target and os.path.basename(tgt_abs).endswith(".lock") and os.path.isfile(tgt_abs):
                 continue
 
-            # The write-confinement bump's own clear marker
-            # (`allow-xrepo-write-<session-id>`, `_write_bump_marker.py`) is
-            # a zero-byte sentinel directly under the gitdir, not objects,
-            # refs, or logs -- removing it only re-arms the bump for the
-            # rest of the session, per that module's own docstring. Denying
-            # its removal leaves a session that cleared the bump for one
-            # deliberate operation with no way to put it back
-            # (state/bug-backlog/2026-09-02-git-store-rm-guard-blocks-
-            # removing-the-w-d2194cff6d30.yaml). Same shape as the `.lock`
-            # allow above: scoped to a FILE whose basename matches, so a
-            # directory merely named with that prefix still falls through
-            # to the general git-store deny below.
+            # The write-confinement bump's clear marker
+            # (`allow-xrepo-write-<session-id>`, `_write_bump_marker.py`) is a
+            # zero-byte sentinel under the gitdir; removing it only re-arms the
+            # bump. Denying it strands a session with no way to put it back.
+            # FILE only, as with `.lock`: a same-prefix directory is still denied.
             if (
                 is_git_store_target
                 and os.path.basename(tgt_abs).startswith("allow-xrepo-write-")
@@ -1105,14 +975,9 @@ def check_destructive_rm(
             ):
                 continue
 
-            # A target whose basename is
-            # literally `.git` is caught HERE and denied with the generic
-            # git-store message below, before it ever reaches the bare-repo
-            # probe further down (`tgt_is_bare` / `--is-bare-repository`).
-            # A `.git`-named bare repo is therefore denied via a different,
-            # less specific message than the root-deny branch's bare-repo
-            # wording -- the bare-repo leg is not exercised for every
-            # bare-repo shape.
+            # A target whose basename is literally `.git` is denied HERE with the
+            # generic git-store message, before the bare-repo probe below, so a
+            # `.git`-named bare repo gets the less specific wording.
             if is_git_store_target:
                 if rm_override:
                     continue
@@ -1129,30 +994,19 @@ def check_destructive_rm(
                     ),
                 )
 
-            # A repo ROOT is the same irreversibility class as the `.git`
-            # target above -- deleting it takes the store with it -- but it
-            # reaches this code as an ordinary directory, so the check above
-            # never sees it. It is denied on IDENTITY (the target resolves to
-            # a toplevel, OR the target IS a bare repo -- a bare repo has no
-            # separate worktree to distinguish it from its own store), not on
-            # dirty-state: by the time the store is gone there is no status
-            # to consult, and every clean/dirty distinction downstream is
-            # moot.
+            # A repo ROOT is the same irreversibility class as the `.git` target
+            # above but reaches here as an ordinary directory. It is denied on
+            # IDENTITY (resolves to a toplevel, or IS a bare repo), not on
+            # dirty-state: once the store is gone there is no status to consult.
             #
-            # Resolution is by st_dev/st_ino (`_is_same_dir`), never by string
-            # compare, because a case-insensitive filesystem makes
-            # `~/.Claude` and `~/.claude` the SAME directory while
-            # `os.path.normcase` (a no-op off Windows) reports them distinct.
-            # That exact aliasing deleted a live `~/.claude` on 2026-07-31
-            # via a probe-cleanup `rm -rf` whose author believed it named a
-            # separate case-variant directory.
+            # Resolution is by st_dev/st_ino (`_is_same_dir`), never string
+            # compare: on a case-insensitive filesystem `~/.Claude` and
+            # `~/.claude` are the SAME directory while `os.path.normcase` (a
+            # no-op off Windows) reports them distinct. That aliasing deleted a
+            # live `~/.claude` on 2026-07-31.
             #
-            # `tgt_top`/`tgt_is_bare` are computed ONCE here (a single
-            # `rev-parse --show-toplevel` plus, only when that comes back
-            # empty, a single `--is-bare-repository` probe) and reused by the
-            # dirty-work branch below instead of re-invoking `_run_git` with
-            # the same `-C <dir> rev-parse --show-toplevel` args a second
-            # time on this hot path.
+            # `tgt_top`/`tgt_is_bare` are computed ONCE here and reused by the
+            # dirty-work branch below rather than re-spawning `_run_git`.
             tgt_is_dir = os.path.isdir(tgt_resolved)
             tgt_top = ""
             tgt_is_bare = False
@@ -1162,25 +1016,11 @@ def check_destructive_rm(
                 rc_top, out_top = _memo_run_git(["-C", tgt_abs, "rev-parse", "--show-toplevel"])
                 tgt_top = out_top.strip() if rc_top == 0 else ""
                 if not tgt_top:
-                    # `rev-parse --show-toplevel` fails inside a BARE repo
-                    # (no working tree to name) -- without this probe a
-                    # bare repo target would fall straight through both this
-                    # branch and the dirty-work branch below (which also has
-                    # no dirty-state fallback for a bare repo) undenied.
-                    #
-                    # `--show-toplevel`
-                    # also fails for the OVERWHELMINGLY common case of "a
-                    # plain, non-repo scratch directory" -- not just for a
-                    # bare repo. Spawning a second git process to rule out
-                    # "is this a bare repo" on EVERY such target doubled
-                    # subprocess cost on the single most frequent shape of
-                    # this check. A real (bare or non-bare) git directory
-                    # always has a `HEAD` file and an `objects/` subdir at
-                    # its root -- cheap `os.path` checks that can rule out
-                    # the common non-repo case without a spawn. This can
-                    # only narrow when the spawn happens, never skip a
-                    # genuine bare repo: a bare repo's toplevel dir IS its
-                    # git dir, so it always has both.
+                    # `--show-toplevel` fails inside a BARE repo, which would then
+                    # fall through both branches undenied, so probe for one. It
+                    # also fails for any plain non-repo directory (the common
+                    # case), so cheap `HEAD` + `objects/` checks gate the spawn:
+                    # a genuine bare repo always has both.
                     looks_like_git_dir = os.path.isfile(
                         os.path.join(tgt_abs, "HEAD")
                     ) and os.path.isdir(os.path.join(tgt_abs, "objects"))
@@ -1201,11 +1041,8 @@ def check_destructive_rm(
                     if clone_failed == []:
                         continue
                     store_desc = tgt_top if tgt_top else tgt_abs
-                    # A LINKED `git worktree add` worktree's actual .git
-                    # store lives in the MAIN repo (`.git/worktrees/<name>`)
-                    # -- deleting the worktree directory loses its local
-                    # uncommitted changes, not the repo's full history.
-                    # Branch the claim so it's true for both target shapes.
+                    # A LINKED worktree's store lives in the MAIN repo, so deleting
+                    # it loses only local uncommitted changes: branch the claim.
                     is_linked_worktree = False
                     if tgt_top and not tgt_is_bare:
                         # F0-b: memoized, same rationale as `tgt_top` above.
@@ -1288,14 +1125,8 @@ def check_destructive_rm(
             # Scratch allowlist.
             scratch_bn = os.path.basename(tgt_abs)
             scratch_par_abs = os.path.dirname(tgt_abs)
-            # F0-b: memoized -- `scratch_par_abs` is the TARGET's parent dir,
-            # byte-identical argv across every target sharing that parent
-            # (the common `rm a.py b.py c.py` shape: 1 extra spawn per
-            # target, linear, before this fix). Also collapses with the
-            # file-target `probe_dir` call further below, which computes the
-            # exact same `-C <parent-dir> rev-parse --show-toplevel` for a
-            # non-directory target -- a pre-existing double-spawn on THIS
-            # target alone that the shared memo now also absorbs for free.
+            # Memoized: identical argv for every target sharing this parent, and
+            # for the file-target `probe_dir` call further below.
             rc_s, out_s = _memo_run_git(["-C", scratch_par_abs, "rev-parse", "--show-toplevel"])
             scratch_repo = out_s.strip() if rc_s == 0 else None
             if (
@@ -1314,48 +1145,29 @@ def check_destructive_rm(
                 # itself a directory, and only fall back to its parent for a
                 # file target (where `-C <file>` is not a valid git cwd).
                 #
-                # Asking the parent unconditionally -- as this did until
-                # 2026-07-31 -- silently skipped (`continue`) every target
-                # whose parent happened to sit outside a repo, which is the
-                # normal shape of a checkout: `~/.claude`, `~/X/coordinator-content-repo`,
-                # and `~/X/claude-klabauter` were all ALLOWED because `~` and
-                # `~/X` are not repos, while their SUBdirectories were
-                # correctly denied. The dirty-work protection existed and
-                # simply never ran on the paths with the most to lose.
+                # Asking the parent unconditionally silently skipped every target
+                # whose parent sits outside a repo (`~/.claude`, `~/X/coordinator-content-repo`:
+                # `~` and `~/X` are not repos), so the dirty-work protection
+                # never ran on the paths with the most to lose.
                 #
-                # For a directory target, `tgt_top` was already resolved by
-                # the root-deny branch above via this exact `-C <dir>
-                # rev-parse --show-toplevel` call -- reuse it rather than
-                # spawning git a second time with identical args. A bare
-                # repo target never reaches here (denied above), so no
-                # bare-repo handling is needed on this leg.
+                # For a directory target, reuse `tgt_top` from the root-deny
+                # branch above. A bare repo never reaches here (denied above).
                 if tgt_is_dir:
                     root = tgt_top
                 else:
                     probe_dir = os.path.dirname(tgt_abs)
-                    # F0-b: memoized -- `probe_dir` is `dirname(tgt_abs)`,
-                    # identical to `scratch_par_abs` above for THIS target
-                    # (same computation) and to every other file target
-                    # sharing this parent dir; routed through the same memo
-                    # rather than spawning a second/duplicate `git` call.
+                    # Memoized: same argv as `scratch_par_abs` above.
                     rc_r, out_r = _memo_run_git(["-C", probe_dir, "rev-parse", "--show-toplevel"])
                     root = out_r.strip() if rc_r == 0 else ""
                 if not root:
                     continue
-                # BATCHED per repo root, not memoized per target. The pathspec is
-                # loop-VARIANT -- `tgt_abs` differs by construction -- which is why
-                # the (cwd, args) memo above cannot absorb it, and why this was one
-                # spawn per target: `rm a.py b.py c.py` paid three. `git status`
-                # takes MANY pathspecs, so one call answers every target sharing a
-                # root, and `_batched_status_for` fills that table on first need
-                # (never in a pre-pass -- see its docstring: a pre-pass would spawn
-                # for targets the early `continue`s above never reach).
+                # BATCHED per repo root: the pathspec varies per target, so the
+                # (cwd, args) memo cannot absorb it. `_batched_status_for` fills
+                # on first need (never a pre-pass; see its docstring).
                 #
-                # `None` means the batch could not be attributed with certainty, so
-                # this falls back to the original per-target call rather than
-                # treating an unparsed line as a clean tree. See
-                # `_attribute_porcelain`'s negative spec: a missed spawn is a cost,
-                # a missed deny is a peer's lost work.
+                # `None` means the batch could not be attributed with certainty:
+                # fall back to the per-target call, never read it as a clean tree.
+                # See `_attribute_porcelain`'s negative spec.
                 _all_tgt_abs = [
                     _abs_path(os.path.expanduser(t) if t.startswith("~") else te)
                     for t, te in targets
@@ -1396,11 +1208,8 @@ def check_destructive_rm(
                         continue
                     disp = "\n".join(status.splitlines()[:8])
                     more = "\n  ... and more (first 8 shown)" if len(status.splitlines()) > 8 else ""
-                    # Name the flag when recursion is the ONLY reason this
-                    # armed. On a directory target the reason is the target
-                    # and needs no flag; on a file target the caller cannot
-                    # otherwise tell a read of their command from a policy
-                    # about it, which is how a misparse survived three repos.
+                    # Name the flag when recursion is the ONLY reason this armed
+                    # (a file target); a directory target needs no flag.
                     why = ""
                     if not tgt_is_dir and recursion_flag:
                         why = " (read as recursive: %s)" % recursion_flag

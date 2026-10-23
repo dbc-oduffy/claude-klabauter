@@ -19,7 +19,7 @@
     "created": {
       "type": "string",
       "format": "date",
-      "description": "Date the workstream was created (YYYY-MM-DD). Part of the render-order tiebreaker: (created, workstream_id) per § Approach finding 3."
+      "description": "Date the workstream was created (YYYY-MM-DD). Part of the render-order tiebreaker: (created, workstream_id)."
     },
     "coordinator_root_path": {
       "type": "string",
@@ -27,7 +27,7 @@
     },
     "deliverables": {
       "type": "array",
-      "description": "Ordered list of deliverable slots for this workstream. Completion state is NOT recorded here — it is a field-scoped event (field: 'deliverable[i].done') per the definition/event boundary (finding 6). Adding a new slot is a definition edit (rare); checking an existing one is an event (frequent). The generator's fold is union-tolerant: an event referencing a slot not yet present in a stale definition snapshot renders as a pending/orphan line rather than being silently dropped.",
+      "description": "Ordered list of deliverable slots for this workstream. Completion state is NOT recorded here — it is a field-scoped event (field: 'deliverable[i].done') per the definition/event boundary. Adding a new slot is a definition edit (rare); checking an existing one is an event (frequent). The generator's fold is union-tolerant: an event referencing a slot not yet present in a stale definition snapshot renders as a pending/orphan line rather than being silently dropped.",
       "items": {
         "type": "object",
         "required": ["text"],

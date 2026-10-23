@@ -24,6 +24,9 @@ GATE_VERDICT_CASE = "vendored-schema-drift"
 _REPO = Path(__file__).resolve().parents[3]
 _ORACLES = _REPO / "coordinator_core/frontmatter/tests/test_schema_validate.py"
 _SCRIPT = _REPO / "bin/claude-klabauter-revendor-schema.py"
+# _check_vendored_against_doe routes to check_schema_drift, or to the ahead check while an
+# ahead-pin is live; both gate against DoE.
+_ORACLE_FNS = frozenset({"check_schema_drift", "_check_vendored_against_doe"})
 _SCHEMA_NAME_RE = re.compile(r"([A-Za-z0-9_-]+)\.schema\.json$")
 
 # The script is authoring-only: the claude-klabauter-bin row excludes it, so the
@@ -66,9 +69,9 @@ def _backed_schemas() -> set[str]:
             callee = call.func
             callee_name = callee.id if isinstance(callee, ast.Name) else getattr(callee, "attr", "")
             forwarded = any(
-                isinstance(a, ast.Name) and a.id == "check_schema_drift" for a in call.args
+                isinstance(a, ast.Name) and a.id in _ORACLE_FNS for a in call.args
             )
-            if callee_name != "check_schema_drift" and not forwarded:
+            if callee_name not in _ORACLE_FNS and not forwarded:
                 continue
             for arg in [*call.args, *(k.value for k in call.keywords)]:
                 backed |= _names_in(arg)
