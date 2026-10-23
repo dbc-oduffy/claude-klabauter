@@ -126,21 +126,29 @@ def _offence(cmd: str) -> Optional[str]:
 
 
 ANCHOR = "P4-SUBMIT-AND-SHELVE-ARE-DENIED-ON-A-NO-SUBMIT-BOX"
-WIKI_PATH = (
-    "coordinator-content-repo:coordinator/docs/wiki/coordinator-tripwires/"
-    "p4-submit-and-shelve-are-denied-on-a-no-submit-box.md"
-)
 
 
-def _deny_reason(what: str) -> str:
-    return (
-        f"BLOCKED: {what} writes to Perforce. {ANCHOR}. Box policy: this depot is read, "
-        "synced, built and edited locally, never submitted or shelved. Alternative: "
-        f"leave the change opened locally and hand the changelist to a human. Wiki: {WIKI_PATH}"
+def _deny_record(what: str) -> Any:
+    from coordinator_core.bash_guards._rewrite_support import _deny_record as _build
+    from coordinator_core.guard_messages.alternative_record import EscalationRoute
+
+    return _build(
+        "block-perforce-submit",
+        f"BLOCKED: {what} writes to Perforce; this box never submits. {ANCHOR}.",
+        (
+            EscalationRoute(
+                report_what="the changelist, left opened locally",
+                authorize_what="a human submitting it",
+            ),
+        ),
+        em_text=(
+            f"BLOCKED: {what} writes to Perforce; this box never submits. {ANCHOR}. "
+            "Alternative: leave the change opened; a human submits it."
+        ),
     )
 
 
-def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def check(payload: Dict[str, Any]) -> Any:
     if (payload.get("tool_name") or "") not in MATCHERS:
         return None
     tool_input = payload.get("tool_input") or {}
@@ -150,10 +158,4 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     offence = _offence(cmd.replace("\r", ""))
     if offence is None or not _armed():
         return None
-    return {
-        "hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "permissionDecision": "deny",
-            "permissionDecisionReason": _deny_reason(offence),
-        }
-    }
+    return _deny_record(offence)

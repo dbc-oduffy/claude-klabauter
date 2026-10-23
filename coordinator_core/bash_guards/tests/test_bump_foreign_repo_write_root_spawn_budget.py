@@ -58,6 +58,11 @@ from coordinator_core.bash_guards.tests.test_bump_foreign_repo_write import (
     _set_anchor,
     repos,  # noqa: F401 -- fixture reused rather than re-founded.
 )
+from coordinator_core.guard_messages.testing import envelope_of
+
+
+def _enveloped(check):
+    return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 _FIRST_BACKTICK_TOKEN_RE = re.compile(r"`([^`]+)`")
 
@@ -100,7 +105,7 @@ def test_foreign_write_sink_costs_one_root_resolution(
     _set_anchor(monkeypatch, repos, "sess-budget-1")
     cmd = f"echo hi > {_posix(repos['foreign'] / 'redir.txt')}"
 
-    result = guard.check_bump_foreign_repo_write(
+    result = _enveloped(guard.check_bump_foreign_repo_write)(
         cmd, "sess-budget-1", str(repos["anchor"]), {}
     )
 
@@ -121,7 +126,7 @@ def test_root_resolutions_do_not_scale_with_candidate_count(
         f"echo {n} > {_posix(foreign / f'sub-{n}' / 'f.txt')}" for n in ("a", "b", "c")
     )
 
-    result = guard.check_bump_foreign_repo_write(
+    result = _enveloped(guard.check_bump_foreign_repo_write)(
         cmd, "sess-budget-2", str(repos["anchor"]), {}
     )
 
@@ -135,7 +140,7 @@ def test_own_repo_write_sink_costs_one_root_resolution(
     _set_anchor(monkeypatch, repos, "sess-budget-3")
     cmd = f"echo hi > {_posix(repos['anchor'] / 'own.txt')}"
 
-    result = guard.check_bump_foreign_repo_write(
+    result = _enveloped(guard.check_bump_foreign_repo_write)(
         cmd, "sess-budget-3", str(repos["anchor"]), {}
     )
 
@@ -148,7 +153,7 @@ def test_command_with_no_write_sink_resolves_no_root_at_all(
 ):
     _set_anchor(monkeypatch, repos, "sess-budget-4")
 
-    result = guard.check_bump_foreign_repo_write(
+    result = _enveloped(guard.check_bump_foreign_repo_write)(
         "echo hello", "sess-budget-4", str(repos["anchor"]), {}
     )
 
@@ -163,7 +168,7 @@ def test_sibling_outside_repo_guard_resolves_no_root(repos, monkeypatch, root_re
     outside = repos["home"] / "not-a-repo"
     cmd = f"echo hi > {_posix(outside / 'f.txt')}"
 
-    sibling.check_bump_outside_repo_write(
+    _enveloped(sibling.check_bump_outside_repo_write)(
         cmd, "sess-budget-5", str(repos["anchor"]), {}
     )
 
@@ -184,7 +189,7 @@ def test_linked_worktree_target_label_is_the_worktree_root_not_main(
     _git(str(repos["foreign"]), "worktree", "add", "-b", "wt-branch", str(wt))
 
     cmd = f"echo hi > {_posix(wt / 'redir.txt')}"
-    result = guard.check_bump_foreign_repo_write(
+    result = _enveloped(guard.check_bump_foreign_repo_write)(
         cmd, "sess-budget-worktree", str(repos["anchor"]), {}
     )
 
@@ -216,7 +221,7 @@ def test_submodule_target_label_is_the_submodule_root_not_super(
     sub_dir = repos["foreign"] / "sub"
 
     cmd = f"echo hi > {_posix(sub_dir / 'redir.txt')}"
-    result = guard.check_bump_foreign_repo_write(
+    result = _enveloped(guard.check_bump_foreign_repo_write)(
         cmd, "sess-budget-submodule", str(repos["anchor"]), {}
     )
 
@@ -236,7 +241,7 @@ def test_separated_gitdir_target_label_degrades_to_target_dir(
     assert show_toplevel(str(sep_gitdir)) is None, "fixture drift: expected a bare-shaped gitdir"
 
     cmd = f"GIT_DIR={_posix(sep_gitdir)} git commit --allow-empty -m x"
-    result = guard.check_bump_foreign_repo_write(
+    result = _enveloped(guard.check_bump_foreign_repo_write)(
         cmd, "sess-budget-separated-gitdir", str(repos["anchor"]), {}
     )
 

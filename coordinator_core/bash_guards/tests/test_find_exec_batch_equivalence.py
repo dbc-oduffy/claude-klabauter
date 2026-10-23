@@ -11,6 +11,11 @@ from coordinator_core.bash_guards.find_exec_rewrite import (
     _bt_parse_find_exec_segment,
     check_find_exec_rewrite,
 )
+from coordinator_core.guard_messages.testing import envelope_of
+
+
+def _enveloped(check):
+    return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 
 def test_parser_records_plus_terminator() -> None:
@@ -28,17 +33,17 @@ def test_parser_records_semi_terminator() -> None:
 
 
 def test_already_batched_plus_form_gets_no_advisory_or_rewrite() -> None:
-    result = check_find_exec_rewrite("find . -name '*.txt' -exec rm {} +")
+    result = _enveloped(check_find_exec_rewrite)("find . -name '*.txt' -exec rm {} +")
     assert result is None
 
 
 def test_unbatched_semi_form_still_fires() -> None:
-    result = check_find_exec_rewrite("find . -name '*.txt' -exec rm {} \\;")
+    result = _enveloped(check_find_exec_rewrite)("find . -name '*.txt' -exec rm {} \\;")
     assert result is not None
 
 
 def test_plus_form_message_never_claims_per_match_forking() -> None:
-    result = check_find_exec_rewrite("find . -name '*.txt' -exec rm {} +")
+    result = _enveloped(check_find_exec_rewrite)("find . -name '*.txt' -exec rm {} +")
     if result is not None:
         message = str(result.get("reason", "")) + str(result.get("message", ""))
         assert "PER MATCH" not in message
@@ -76,7 +81,7 @@ def test_batch_equivalent_verbs_seeded_from_measured_table() -> None:
 
 
 def test_chmod_gets_plus_form_offered_end_to_end() -> None:
-    result = check_find_exec_rewrite("find . -name '*.txt' -exec chmod 644 {} \\;")
+    result = _enveloped(check_find_exec_rewrite)("find . -name '*.txt' -exec chmod 644 {} \\;")
     assert result is not None
     updated = result.get("updatedInput") or result.get("hookSpecificOutput", {}).get(
         "updatedInput"
@@ -89,7 +94,7 @@ def test_chmod_gets_plus_form_offered_end_to_end() -> None:
 
 def test_chown_and_touch_get_plus_form_offered() -> None:
     for verb_cmd in ("chown user {}", "touch {}"):
-        result = check_find_exec_rewrite("find . -exec %s \\;" % verb_cmd)
+        result = _enveloped(check_find_exec_rewrite)("find . -exec %s \\;" % verb_cmd)
         assert result is not None
         command = _extract_command(result)
         assert command is not None
@@ -97,7 +102,7 @@ def test_chown_and_touch_get_plus_form_offered() -> None:
 
 
 def test_git_add_gets_plus_form_offered() -> None:
-    result = check_find_exec_rewrite("find . -name '*.py' -exec git add {} \\;")
+    result = _enveloped(check_find_exec_rewrite)("find . -name '*.py' -exec git add {} \\;")
     assert result is not None
     command = _extract_command(result)
     assert command is not None
@@ -105,7 +110,7 @@ def test_git_add_gets_plus_form_offered() -> None:
 
 
 def test_git_rm_not_on_allowlist_no_plus_offered() -> None:
-    result = check_find_exec_rewrite("find . -exec git rm {} \\;")
+    result = _enveloped(check_find_exec_rewrite)("find . -exec git rm {} \\;")
     assert result is not None
     command = _extract_command(result)
     assert command is None
@@ -118,7 +123,7 @@ def test_head_tail_wc_grep_not_batch_equivalent_no_plus_offered() -> None:
         "find . -exec wc {} \\;",
         "find . -exec grep foo {} \\;",
     ):
-        result = check_find_exec_rewrite(cmd)
+        result = _enveloped(check_find_exec_rewrite)(cmd)
         assert result is not None
         command = _extract_command(result)
         assert command is None
@@ -176,7 +181,7 @@ def _extract_command(result: dict) -> "str | None":
 
 
 def test_chained_translatable_names_the_plus_form_in_prose() -> None:
-    result = check_find_exec_rewrite("echo hi; find . -name '*.txt' -exec rm {} \\;")
+    result = _enveloped(check_find_exec_rewrite)("echo hi; find . -name '*.txt' -exec rm {} \\;")
     assert result is not None
     hook_output = result["hookSpecificOutput"]
     assert hook_output.get("updatedInput") is None, (
@@ -195,7 +200,7 @@ def test_chained_translatable_names_the_plus_form_in_prose() -> None:
 
 
 def test_chained_untranslatable_names_the_plus_form_in_prose() -> None:
-    result = check_find_exec_rewrite("echo hi; find . -name '*.txt' -exec chmod 644 {} \\;")
+    result = _enveloped(check_find_exec_rewrite)("echo hi; find . -name '*.txt' -exec chmod 644 {} \\;")
     assert result is not None
     assert result["hookSpecificOutput"].get("updatedInput") is None
     command = _extract_command(result)
@@ -205,4 +210,4 @@ def test_chained_untranslatable_names_the_plus_form_in_prose() -> None:
 
 
 def test_chained_plus_form_stays_silent_like_its_lone_twin() -> None:
-    assert check_find_exec_rewrite("echo hi; find . -name '*.txt' -exec rm {} +") is None
+    assert _enveloped(check_find_exec_rewrite)("echo hi; find . -name '*.txt' -exec rm {} +") is None

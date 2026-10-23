@@ -34,6 +34,7 @@ REPLY_KEYS: Final = frozenset({
     "refused",
     "run_artifacts",
     "run_artifact_residue",
+    "engine_residue",
     "close",
     "fanout",
     "siblings",

@@ -13,8 +13,8 @@ from the caller's own working directory. Every one of those would have
 passed a non-emptiness check on the message text. The bar here is
 LIVENESS, not presence: does the named alternative still work.
 
-This module is the mechanism (guard registry, alternative extraction,
-per-kind liveness probes); ``tests/test_alternative_liveness_gate.py`` is
+This module is the mechanism (guard registry, record-member alternatives,
+rung grading, per-kind liveness probes); ``tests/test_alternative_liveness_gate.py`` is
 the gate that drives it and fails the build on a ``DEAD`` verdict. Mirrors
 the standing-measurement posture of the sibling ``_guard_coverage.py``:
 importable, re-runnable, driven by the SHIPPED guard functions themselves,
@@ -51,18 +51,12 @@ NEGATIVE-SPEC -- what this module deliberately does NOT do
   real (a read-only informational command) runs inside a throwaway
   ``tempfile.mkdtemp()`` cwd with a subprocess timeout, never this
   package's own working tree.
-- Never claims coverage it does not have. A message with no
-  alternative-shaped signal at all (no "Use instead"/"Did you mean",
-  no backtick command, no `COORDINATOR_ALLOW_*`/`COORDINATOR_OVERRIDE_*`/
-  `COORDINATOR_DISABLE_*` token, no harness-tool phrase) is recorded as
-  carrying zero alternatives -- this is NOT a gate failure (some denies are
-  pure policy statements with no offered substitute, e.g.
-  ``block_worktree_sentinel_creation``/``block_approval_sentinel_creation``
-  both deliberately name no bypass). A message that DOES carry
-  alternative-shaped signal but that signal cannot be classified into one
-  of the five kinds below IS a gate failure (fail loud, per this module's
-  own charter -- an unclassifiable alternative is indistinguishable from a
-  dead one).
+- Never parses message prose. Alternatives and rungs are read from the
+  guard's ``AlternativeRecord`` members (``record_alternatives``, ``rung``);
+  ``em_text`` is never scanned. A legacy dict result carries only its
+  ``updatedInput`` command. A result with no member offers zero
+  alternatives -- not a failure (some denies are pure policy statements,
+  e.g. ``block_worktree_sentinel_creation``).
 - Does not attempt Windows-native execution. Every subprocess probe in this
   module is written to be Windows-safe (no ``shell=True`` with POSIX
   quoting, ``shutil.which`` for resolution, no POSIX-only path assumptions)
@@ -186,6 +180,16 @@ from coordinator_core.bash_guards import guard_host_subagent_bash_ban
 from coordinator_core.bash_guards import guard_host_subagent_bash_spawn_shapes
 from coordinator_core.bash_guards import p4_verb_fence
 from coordinator_core.daily_day import local_day
+from coordinator_core.guard_messages.alternative_record import (
+    AdaptableOffer,
+    AlternativeRecord,
+    Audience,
+    CapabilityRef,
+    EscalationRoute,
+    Member,
+    Override,
+    ReadyCommand,
+)
 
 _PROBE_TIMEOUT_SEC = 10
 
@@ -1119,8 +1123,20 @@ WRITE_GUARD_UNTRIGGERED: Dict[str, str] = {
 class GuardFireResult:
     guard: str
     fired: bool
-    envelope: Optional[Dict[str, Any]]
+    #: What the trigger returned: an ``AlternativeRecord``, or a legacy
+    #: ``{"hookSpecificOutput": ...}`` dict from a site not yet converted.
+    envelope: Any
     error: Optional[str] = None
+
+
+def _decision_of(result: Any) -> Optional[str]:
+    """Verdict kind of a guard result: a record's ``verdict_kind``, a legacy
+    dict's ``permissionDecision``, ``None`` for silence."""
+    if result is None:
+        return None
+    if isinstance(result, AlternativeRecord):
+        return result.verdict_kind
+    return result.get("hookSpecificOutput", {}).get("permissionDecision")
 
 
 #: The one env var, per SC-DR-009, any session-scoped guard latch may key off
@@ -1236,14 +1252,6 @@ class AlternativeKind(enum.Enum):
     OVERRIDE = "override"
 
 
-class UnclassifiableAlternative(Exception):
-    """Raised when a message carries alternative-shaped signal (a "Use
-    instead"/"Did you mean" cue, a backtick span, or similar) that does not
-    fit any of the five kinds above. Per this module's charter, this is a
-    GATE FAILURE, not a silent skip -- an alternative this module cannot
-    even classify is indistinguishable from a dead one."""
-
-
 @dataclass
 class Alternative:
     kind: AlternativeKind
@@ -1255,62 +1263,11 @@ class Alternative:
     detail: Any = None
 
 
-#: 2026-08-11 (guard-messages-point-to-docs-never-name plan, chunk C1):
-#: `operator_override_note`'s own 2026-08-11 C2 reshape stopped
-#: interpolating the env-var name into its rendered output at all (see that
-#: function's own docstring), so this regex now finds ZERO matches in the
-#: overwhelming majority of real guard messages -- a guard whose ONLY
-#: offered alternative is its override key would silently drop out of
-#: `extract_alternatives`'s OVERRIDE detection with no gate turning red
-#: (the exact "vacuous, not red" failure this module's own charter treats
-#: as worse than a test failing). Kept, unmodified, as a belt for any
-#: HAND-WRITTEN mention of a bare env var that still slips into rendered
-#: text outside the builder (the class `test_no_handwritten_override_
-#: clauses.py` polices separately) -- but the OVERRIDE alternative this
-#: module actually verifies liveness for is now primarily sourced from the
-#: guard's own call-site ARGUMENT, never the render alone. See
-#: `_source_override_alternatives` below, and `evaluate_guard`'s merge of
-#: the two sources.
-_OVERRIDE_RE = re.compile(r"\bCOORDINATOR_(?:ALLOW|OVERRIDE|DISABLE)_[A-Z0-9_]+\b")
 _BACKTICK_RE = re.compile(r"`([^`\n]+)`")
-_READ_CALL_RE = re.compile(r"\bRead\([^)]*\)")
 _INDENTED_CMD_RE = re.compile(r"^[ \t]{2,}(\S.*)$", re.MULTILINE)
-#: A colon (optionally preceded by a closing paren, e.g. "...resolve it):")
-#: immediately followed by one or more blank-line-tolerant indented lines --
-#: this package's own convention for "the following lines are the offer",
-#: independent of any specific cue WORD. Structural/positional, same spirit
-#: as `_CUE_WINDOW_RE` but anchored on punctuation+indentation rather than
-#: prose vocabulary, for messages whose introducing sentence uses neither
-#: "Use instead:" nor "Did you mean" (see `extract_alternatives`' last-
-#: resort fallback for the concrete case this closes).
+#: Re-exported for ``_message_size``, which measures message bytes with it.
 _LABELED_INDENT_BLOCK_RE = re.compile(r"[:)]\s*\n\s*\n?((?:[ \t]{2,}\S[^\n]*\n?)+)")
-#: Deliberately narrow to the structural markers this package's own guard
-#: messages use to introduce a CONCRETE substitute (always followed by a
-#: backtick/indented command in every message surveyed while building this
-#: module) -- a bare "instead"/"Instead:" is excluded because several
-#: guards (e.g. block_worktree_sentinel_creation) use it to introduce pure
-#: prose guidance ("dispatch into the SAME working tree...") with no
-#: concrete command at all, which must NOT be treated as an unclassifiable
-#: gate failure. Used ONLY to decide "did this message promise something
-#: extraction failed to find" (the fail-loud trigger) -- NOT to bound where
-#: extraction looks (see ``_CUE_WINDOW_RE``/``_cue_windows`` below, a
-#: separate, deliberately broader regex with a different job).
-_ALT_CUE_RE = re.compile(r"(Use instead:|Did you mean|Run this instead|Example:)", re.IGNORECASE)
 
-#: the Director of Engineering's review (2026-07-29, coordinatoreng-director-1d83280e, finding 4):
-#: scanning EVERY backtick span in a message's full text is how a guard's
-#: own shape-name self-reference and a Python API reference mentioned in
-#: unrelated prose became "candidate alternatives" -- extraction must be
-#: anchored to POSITION, not merely to backtick markup. This regex is
-#: deliberately BROADER than ``_ALT_CUE_RE`` above (it also matches a bare
-#: mid-sentence "instead", e.g. check_raw_pid_liveness's "Use the canonical
-#: liveness primitives instead (...)"") because a false-positive window
-#: here only WIDENS where backtick spans get a chance to classify -- the
-#: per-span filters in ``_classify_backtick_span`` (shape-name/dotted-path/
-#: snake_case exclusions) still apply inside the window and do the real
-#: precision work. A false-positive cue is harmless; a false-negative cue
-#: silently drops a real alternative, so broad-and-filtered beats
-#: narrow-and-exact for THIS regex's specific job.
 #: DEFINED IN ``_advisory_dedupe``, re-exported here, and the direction of
 #: that dependency is load-bearing rather than stylistic. This module runs
 #: ``discover_write_guard_names()`` at import time (the module-level
@@ -1332,11 +1289,8 @@ from coordinator_core.bash_guards._advisory_dedupe import (  # noqa: E402
 def _cue_windows(text: str) -> List[str]:
     """Every bounded span of ``text`` following a cue-word occurrence, cut
     at the next blank line (paragraph break) or a fixed character cap,
-    whichever comes first. Alternative extraction from backtick spans and
-    indented command blocks is restricted to these windows -- text OUTSIDE
-    any cue window (e.g. the sentence naming a guard's own detected shape,
-    or an unrelated prose aside) never gets a chance to be misread as an
-    offered alternative."""
+    whichever comes first. Kept for ``_message_size``, which exempts the
+    bytes inside these windows from the message cap; it grades nothing."""
     windows: List[str] = []
     for m in _CUE_WINDOW_RE.finditer(text):
         start = m.end()
@@ -1346,6 +1300,11 @@ def _cue_windows(text: str) -> List[str]:
         windows.append(text[start:end])
     return windows
 
+
+#: Pinned by docs/wiki/guard-messaging.md § Reconciliation with
+#: `_alternative_liveness`: the `in-process` and `searched in-process` markers
+#: survive. The manifest keys `<guard>::<marker>` name them; no extractor reads
+#: this tuple.
 _HARNESS_CAPABILITY_MARKERS = (
     "the Read tool",
     "the Write tool",
@@ -1450,201 +1409,137 @@ def _classify_backtick_span(span: str) -> Optional[Alternative]:
     return Alternative(AlternativeKind.COMMAND, span, argv)
 
 
-_INDENTED_RUN_RE = re.compile(r"(?:^[ \t]{2,}\S[^\n]*(?:\n|\Z))+", re.MULTILINE)
-_NON_OFFER_PREFIXES = ("Subagent:", "Command:", "Denied:", "Reason:")
-#: First tokens of a line that continues a script body (a rewrite's
-#: `python3 -c` source or shell control flow), never a command on its own.
-_BODY_LINE_HEADS = frozenset(
-    {
-        "import", "from", "for", "while", "if", "elif", "else", "try", "except",
-        "finally", "with", "def", "class", "return", "print", "pass", "fi", "do",
-        "done", "then", "esac", "case", "}", ")",
-    }
-)
+_METACHAR_RE = re.compile(r"[|><&;`]|\$\(")
+
+#: Alternatives a ``Member`` set offers, as ``Alternative`` rows for the probes.
+#: ``ReadyCommand`` and a rewrite's ``updated_input.command`` run through
+#: ``probe_command``. An ``AdaptableOffer`` is a template and is never
+#: executed, except a metacharacter-free ``git <subcommand>`` shape, which
+#: ``probe_command`` verifies with ``-h`` or in a throwaway cwd. A
+#: ``CapabilityRef`` goes to the capability manifest by its id; an ``Override``
+#: to ``probe_override``.
 
 
-def _offer_argv(candidate: str) -> Optional[List[str]]:
-    """argv for a self-contained command line, or None when the line cannot
-    stand alone (unbalanced quote, or a script-body keyword head)."""
-    if _exceeds_tokenizable_ceiling(candidate):
-        return candidate.split()
-    try:
-        argv = shlex.split(candidate, posix=True)
-    except ValueError:
-        return None
-    if not argv or argv[0] in _BODY_LINE_HEADS:
-        return None
-    return argv
+def _command_alternative(text: str) -> Optional[Alternative]:
+    argv = _split_alternative_text(text)
+    return Alternative(AlternativeKind.COMMAND, text, argv) if argv else None
 
 
-def _inside_open_quote(prefix: str) -> bool:
-    """True when ``prefix`` leaves a shell quote open, so the text that follows
-    is the body of a quoted payload (a rewrite's ``python3 -c '...'``). A prefix
-    past the tokenizer ceiling reads as open, so it is never graded."""
-    if _exceeds_tokenizable_ceiling(prefix):
-        return True
-    try:
-        shlex.split(prefix, posix=True)
-    except ValueError:
-        return True
-    return False
-
-
-def _indented_offers(text: str) -> List[Alternative]:
-    """Plain indented commands a cue window offers. A run of consecutive
-    indented lines is graded line by line only when every line is a
-    self-contained command and no quote is open where the run starts; either
-    failing marks the run as a rewrite body, which is never graded."""
-    offers: List[Alternative] = []
-    seen = set()
-    for window in _cue_windows(text):
-        for run in _INDENTED_RUN_RE.finditer(window):
-            if _inside_open_quote(window[: run.start()]):
-                continue
-            lines = [ln.strip() for ln in run.group(0).splitlines() if ln.strip()]
-            lines = [ln for ln in lines if not ln.startswith(_NON_OFFER_PREFIXES)]
-            argvs = [_offer_argv(ln) for ln in lines]
-            if not lines or any(argv is None for argv in argvs):
-                continue
-            for ln, argv in zip(lines, argvs):
-                if ln not in seen:
-                    seen.add(ln)
-                    offers.append(Alternative(AlternativeKind.COMMAND, ln, argv))
-    return offers
-
-
-def extract_alternatives(hso: Dict[str, Any], *, override_route_known: bool = False) -> List[Alternative]:
-    """Extract every alternative a guard's emitted ``hookSpecificOutput``
-    names, classified into one of the five ``AlternativeKind`` members.
-    Returns an empty list for a message that names NO alternative at all
-    (a bare policy statement -- not a gate failure, see module negative-
-    spec). Raises ``UnclassifiableAlternative`` for alternative-shaped
-    signal this function cannot classify (a gate failure).
-
-    ``override_route_known`` -- default ``False``, so every caller that does not
-    know a call-site override route (notably ``_firing_shape.py``, which must
-    stay guard-agnostic and purely textual) sees the raw-line fallback below.
-    ``evaluate_guard`` passes ``True`` when it has already resolved a real
-    OVERRIDE route for the guard from the call-site argument
-    (``_source_override_alternatives``); the raw-line fallback then stays off,
-    because it would otherwise grade each line of a multi-line rewrite
-    (`guard_plumbing_and_loops`'s python3 -c body) as its own command. Plain
-    one-command indented offers are still extracted under a cue, via
-    ``_indented_offers``, which skips rewrite bodies."""
-    text = hso.get("permissionDecisionReason") or hso.get("additionalContext") or ""
+def record_alternatives(record: AlternativeRecord) -> List[Alternative]:
+    """The probe-able alternatives of ``record``, read from its typed members."""
     alts: List[Alternative] = []
+    seen_commands = set()
 
-    updated = hso.get("updatedInput")
-    if isinstance(updated, dict) and updated.get("command"):
-        cmd = updated["command"]
-        argv = _split_alternative_text(cmd)
-        if argv:
-            alts.append(Alternative(AlternativeKind.COMMAND, cmd, argv))
+    def add_command(text: str) -> None:
+        if text in seen_commands:
+            return
+        alt = _command_alternative(text)
+        if alt is not None:
+            seen_commands.add(text)
+            alts.append(alt)
 
-    for m in _OVERRIDE_RE.finditer(text):
-        alts.append(Alternative(AlternativeKind.OVERRIDE, m.group(0), m.group(0)))
-
-    for m in _READ_CALL_RE.finditer(text):
-        alts.append(Alternative(AlternativeKind.HARNESS_CAPABILITY, m.group(0), m.group(0)))
-
-    classified_backtick_spans = set()
-    for window in _cue_windows(text):
-        for m in _BACKTICK_RE.finditer(window):
-            span = m.group(1)
-            if span in classified_backtick_spans:
-                continue
-            if _OVERRIDE_RE.fullmatch(span.strip()):
-                continue  # already captured as OVERRIDE above
-            alt = _classify_backtick_span(span)
-            if alt is not None:
-                alts.append(alt)
-                classified_backtick_spans.add(span)
-
-    for marker in _HARNESS_CAPABILITY_MARKERS:
-        if marker in text:
-            alts.append(Alternative(AlternativeKind.HARNESS_CAPABILITY, marker, marker))
-
-    if override_route_known:
-        # A known OVERRIDE route (sourced from the call site) stands in for
-        # the render-derived match that once kept `alts` non-empty, so the
-        # raw-line fallback below stays off. Plain indented offers are still
-        # graded; rewrite bodies are skipped by `_indented_offers`.
-        if _ALT_CUE_RE.search(text):
-            alts.extend(_indented_offers(text))
-        return alts
-
-    if not alts:
-        # No alternative-shaped signal at all -- legitimate for a
-        # bare-policy deny (see negative-spec). Only escalate to
-        # UnclassifiableAlternative when a cue phrase promised one (the
-        # NARROW _ALT_CUE_RE, not the broad _CUE_WINDOW_RE -- a bare
-        # mid-sentence "instead" must not manufacture a failure on a
-        # message that never actually promised a concrete substitute).
-        if _ALT_CUE_RE.search(text):
-            alts.extend(_indented_offers(text))
-            if not alts:
-                # Last resort, still POSITION-anchored (never a bare
-                # backtick/prose scan): a colon immediately introducing an
-                # indented block is this package's own convention for "the
-                # following lines are the offer" even when the introducing
-                # sentence uses neither "Use instead:" nor "Did you mean"
-                # (e.g. block_reviewer_bash_outside_allowlist's "...
-                # scaffolding their own findings sidecar:\n\n  coordinator-
-                # doc-new --type review-findings ..."). Only engaged when a
-                # cue phrase was already found SOMEWHERE in the message
-                # (so a pure policy statement with an incidental colon
-                # elsewhere never triggers this) and ordinary windowed
-                # scanning still found nothing.
-                for m in _LABELED_INDENT_BLOCK_RE.finditer(text):
-                    cues = [c.end() for c in _ALT_CUE_RE.finditer(text, 0, m.start())]
-                    if cues and _inside_open_quote(text[cues[-1] : m.start()]):
-                        continue
-                    for line in m.group(1).splitlines():
-                        candidate = line.strip()
-                        if not candidate or candidate.startswith(("Subagent:", "Command:", "Denied:", "Reason:")):
-                            continue
-                        if _exceeds_tokenizable_ceiling(candidate):
-                            argv = candidate.split()
-                        else:
-                            try:
-                                argv = shlex.split(candidate, posix=True)
-                            except ValueError:
-                                argv = candidate.split()
-                        if argv:
-                            alts.append(Alternative(AlternativeKind.COMMAND, candidate, argv))
-            if not alts:
-                # Final resort, still cue-gated and still position-anchored
-                # (never a bare whole-message backtick scan): every ordinary
-                # avenue above found nothing because the ONLY backtick
-                # span(s) in the cue window(s) carry an angle-bracket
-                # placeholder (e.g. block_noncanonical_branch_creation's own
-                # "Use instead: ... e.g. `work/<machine>/2026-08-01`") --
-                # `_classify_backtick_span` correctly treats `<`/`>` as an
-                # unprobable shell metacharacter for its OWN (unconditional,
-                # every-span) main-loop job, so widening that check there
-                # would silently reclassify spans in OTHER, already-passing
-                # guards' messages (confirmed: check_raw_pid_liveness's own
-                # `<sid>`/`<claim_dir>` placeholder spans, which co-occur
-                # with a REAL alternative elsewhere in its message and must
-                # stay excluded). Scoped here instead, to the narrow case
-                # where a cue phrase promised something and literally
-                # nothing else in the message classifies -- a templated
-                # NAME example is graded HARNESS_CAPABILITY (the same
-                # honest, UNVERIFIABLE-by-default probe path already used
-                # for `<claude-klabauter-live-root>`-style templates elsewhere), never a
-                # false DEAD (an unresolvable basename) or a hard failure.
-                for window in _cue_windows(text):
-                    for m in _BACKTICK_RE.finditer(window):
-                        candidate = m.group(1).strip()
-                        if candidate and _PLACEHOLDER_RE.search(candidate) and not re.search(r"[|]|&&|\$\(", candidate):
-                            alts.append(Alternative(AlternativeKind.HARNESS_CAPABILITY, candidate, candidate))
-            if not alts:
-                raise UnclassifiableAlternative(
-                    "message carries an alternative-offering cue phrase but no "
-                    "backtick/indented-command/labeled-block/override/harness-"
-                    "marker signal this extractor recognizes: %r" % text[:300]
-                )
+    if isinstance(record.updated_input, dict) and record.updated_input.get("command"):
+        add_command(record.updated_input["command"])
+    for member in record.members:
+        if isinstance(member, ReadyCommand):
+            add_command(member.text)
+        elif isinstance(member, AdaptableOffer):
+            argv = _split_alternative_text(member.template)
+            if argv and argv[0] == "git" and not _METACHAR_RE.search(_PLACEHOLDER_RE.sub("x", member.template)):
+                add_command(member.template)
+        elif isinstance(member, CapabilityRef):
+            alts.append(Alternative(AlternativeKind.HARNESS_CAPABILITY, member.capability_id, member.capability_id))
+        elif isinstance(member, Override):
+            alts.append(Alternative(AlternativeKind.OVERRIDE, member.env_var, member.env_var))
     return alts
+
+
+def _member_text(member: Any) -> Optional[str]:
+    """The text a member must put in an EM message to be offered there."""
+    if isinstance(member, ReadyCommand):
+        return member.text
+    if isinstance(member, AdaptableOffer):
+        return member.template
+    if isinstance(member, CapabilityRef):
+        return member.capability_id.partition("::")[2] or member.capability_id
+    if isinstance(member, EscalationRoute):
+        return member.report_what
+    return None
+
+
+def em_visible_members(record: AlternativeRecord) -> Tuple[Member, ...]:
+    """Members an EM-audience render shows. With ``em_text`` the EM sees that
+    string only, so an actionable member counts only when its text occurs in it.
+    A ``ReadyCommand`` equal to a rewrite's ``updated_input`` command also
+    counts: the harness applies that command, so no prose has to carry it.
+    ``em_text`` is never parsed for alternatives. Occurrence is a plain
+    substring test, so a very short member text ("ls") is satisfied by
+    unrelated prose; keep member texts distinctive."""
+    if record.em_text is None:
+        return record.members
+    applied = (record.updated_input or {}).get("command")
+    visible = []
+    for member in record.members:
+        text = _member_text(member)
+        if text is None or text in record.em_text or (isinstance(member, ReadyCommand) and text == applied):
+            visible.append(member)
+    return tuple(visible)
+
+
+def em_text_gaps(record: AlternativeRecord) -> List[Member]:
+    """Actionable members an ``em_text`` render does not offer."""
+    if record.em_text is None:
+        return []
+    shown = em_visible_members(record)
+    return [m for m in record.members if m not in shown]
+
+
+RUNG_ORDER = "ABCD"
+
+
+def rung(record: AlternativeRecord, caller_class: Optional[str], audience: Audience, policy: Any) -> str:
+    """Duty-of-care rung of ``record`` for one receiver, computed from its
+    members. A: a reachable ReadyCommand. B: a reachable AdaptableOffer or
+    CapabilityRef. C: only an Override (EM, pre-launch) or EscalationRoute is
+    reachable. D: nothing is reachable. Never read from the verdict class."""
+    from coordinator_core.bash_guards._alternative_reachability import Verdict as Reach, reachable
+
+    members = em_visible_members(record) if audience is Audience.EM else record.members
+    best = "D"
+    for member in members:
+        verdict = reachable(member, caller_class, policy, audience)
+        if verdict is Reach.UNREACHABLE:
+            continue
+        if isinstance(member, ReadyCommand) and verdict is Reach.REACHABLE:
+            return "A"
+        if isinstance(member, (AdaptableOffer, CapabilityRef)) and verdict is Reach.REACHABLE:
+            best = "B"
+        elif best == "D":
+            best = "C"
+    return best
+
+
+def confined_caller_classes(policy: Any) -> List[str]:
+    """Every subagent class the reviewer-allowlist guard confines."""
+    from coordinator_core.bash_guards._helpers import _CONFINED_FINDINGS_AGENTS
+
+    return sorted(set(getattr(policy, "bash_policy", {}) or {}) | set(_CONFINED_FINDINGS_AGENTS))
+
+
+def rung_table(record: AlternativeRecord, policy: Any = None) -> Dict[str, str]:
+    """Rung per caller class: ``em``, ``unresolved`` (a subagent whose class is
+    unknown), and each confined class by name."""
+    if policy is None:
+        from coordinator_core.subagent_sandbox.engine import load_policy
+
+        policy = load_policy(None)
+    table = {
+        "em": rung(record, None, Audience.EM, policy),
+        "unresolved": rung(record, None, Audience.SUBAGENT, policy),
+    }
+    for cls in confined_caller_classes(policy):
+        table[cls] = rung(record, cls, Audience.SUBAGENT, policy)
+    return table
 
 
 class VerdictStatus(enum.Enum):
@@ -2009,8 +1904,8 @@ def _capability_id(guard: Optional[str], detail: Any) -> Optional[str]:
     """Compose the manifest lookup key for a HARNESS_CAPABILITY alternative.
 
     Deliberately ``<guard>::<marker>``, never the bare marker alone. The
-    marker half is prose lifted from ``_HARNESS_CAPABILITY_MARKERS`` (or a
-    ``Read(...)``/``Write(...)`` span), and the SAME marker string is
+    marker half is the text a guard's ``CapabilityRef`` id carries after
+    ``::``, and the SAME marker string is
     reused by unrelated guards to describe DIFFERENT things -- e.g.
     ``guard_head_tail_rewrite``'s own advisory text calls its
     ``python3 -c`` subprocess rewrite "in-process, zero extra forks",
@@ -2024,6 +1919,8 @@ def _capability_id(guard: Optional[str], detail: Any) -> Optional[str]:
     ``guard`` is unknown (no key can be composed; the caller reports
     UNVERIFIABLE rather than guessing at an ambiguous bare-marker key).
     """
+    if "::" in str(detail):
+        return str(detail)
     if not guard:
         return None
     return "%s::%s" % (guard, detail)
@@ -2156,16 +2053,12 @@ def probe_override(alt: Alternative, guard: str, baseline: GuardFireResult) -> V
                 os.environ[env_var] = prior_value
             else:
                 os.environ.pop(env_var, None)
-        baseline_decision = None
-        if own_baseline_envelope:
-            baseline_decision = own_baseline_envelope.get("hookSpecificOutput", {}).get("permissionDecision")
+        baseline_decision = _decision_of(own_baseline_envelope)
     else:
         trigger = LIVE_TRIGGERS.get(guard)
         if trigger is None:
             return Verdict(VerdictStatus.UNVERIFIABLE, "no registered trigger for %r to behaviorally re-fire with %r set" % (guard, env_var))
-        baseline_decision = None
-        if baseline.envelope:
-            baseline_decision = baseline.envelope.get("hookSpecificOutput", {}).get("permissionDecision")
+        baseline_decision = _decision_of(baseline.envelope)
 
     had_prior = env_var in os.environ
     prior_value = os.environ.get(env_var)
@@ -2180,9 +2073,7 @@ def probe_override(alt: Alternative, guard: str, baseline: GuardFireResult) -> V
         else:
             os.environ.pop(env_var, None)
 
-    patched_decision = None
-    if patched_envelope:
-        patched_decision = patched_envelope.get("hookSpecificOutput", {}).get("permissionDecision")
+    patched_decision = _decision_of(patched_envelope)
 
     if patched_envelope is None:
         return Verdict(VerdictStatus.LIVE, "%r=1 makes the guard stand down entirely (baseline decision was %r)" % (env_var, baseline_decision))
@@ -2199,16 +2090,12 @@ def probe_override(alt: Alternative, guard: str, baseline: GuardFireResult) -> V
 def _probe_inline_prefix_override(
     env_var: str, trigger: Callable[[str], Optional[Dict[str, Any]]], baseline: GuardFireResult
 ) -> Verdict:
-    baseline_decision = None
-    if baseline.envelope:
-        baseline_decision = baseline.envelope.get("hookSpecificOutput", {}).get("permissionDecision")
+    baseline_decision = _decision_of(baseline.envelope)
     try:
         patched_envelope = _call_trigger_isolated(lambda: trigger("%s=altlive-probe " % env_var))
     except Exception as exc:  # noqa: BLE001 -- a crash under the override is evidence, not a probe failure
         return Verdict(VerdictStatus.DEAD, "guard crashed with inline %s=... (%s: %s)" % (env_var, type(exc).__name__, exc))
-    patched_decision = None
-    if patched_envelope:
-        patched_decision = patched_envelope.get("hookSpecificOutput", {}).get("permissionDecision")
+    patched_decision = _decision_of(patched_envelope)
     if patched_envelope is None or patched_decision != baseline_decision:
         return Verdict(VerdictStatus.LIVE, "inline %s=... changes the verdict (%r -> %r)" % (env_var, baseline_decision, patched_decision))
     return Verdict(
@@ -2232,8 +2119,6 @@ def probe_alternative(alt: Alternative, guard: Optional[str] = None, baseline: O
         return probe_override(alt, guard, baseline)
     raise AssertionError("unreachable: unknown AlternativeKind %r" % alt.kind)
 
-
-# never from the rendered message. See `_OVERRIDE_RE`'s own comment above
 
 _MAX_OVERRIDE_SOURCE_DEPTH = 3
 
@@ -2339,9 +2224,8 @@ def _source_override_env_vars(fn: Callable, _seen: Optional[set] = None, _depth:
 
 def _source_override_alternatives(guard: str) -> List[Alternative]:
     """`guard`'s OVERRIDE alternatives, sourced from its own check
-    function's call-site argument to `operator_override_note` -- the
-    replacement for scraping `_OVERRIDE_RE` out of the rendered message
-    (C1). Deduplicated by env-var value (a guard calling the builder more
+    function's call-site argument to `operator_override_note`, for a guard
+    whose record carries no Override member. Deduplicated by env-var value (a guard calling the builder more
     than once with the same key names one route, not two)."""
     fn = _resolve_guard_callable(guard)
     if fn is None:
@@ -2363,26 +2247,27 @@ class GuardEvaluation:
     band: GuardBand
     alternatives: List[Alternative] = field(default_factory=list)
     verdicts: List[Tuple[Alternative, Verdict]] = field(default_factory=list)
-    extraction_error: Optional[str] = None
 
 
 def evaluate_guard(guard: str) -> GuardEvaluation:
+    """Fire ``guard`` and probe every alternative its result offers. A record is
+    read by member; a legacy dict contributes only its ``updatedInput`` command."""
     fire = fire_guard(guard)
     ev = GuardEvaluation(guard=guard, fire=fire, band=classify_band(guard))
-    if not fire.fired or fire.envelope is None:
+    result = fire.envelope
+    if not fire.fired or result is None:
         return ev
-    hso = fire.envelope.get("hookSpecificOutput", {})
+    if isinstance(result, AlternativeRecord):
+        ev.alternatives = record_alternatives(result)
+    else:
+        updated = result.get("hookSpecificOutput", {}).get("updatedInput")
+        if isinstance(updated, dict) and updated.get("command"):
+            alt = _command_alternative(updated["command"])
+            if alt is not None:
+                ev.alternatives = [alt]
+    # OVERRIDE alternatives sourced from the guard's own call-site argument,
+    # deduped against the record's Override members.
     source_overrides = _source_override_alternatives(guard)
-    try:
-        ev.alternatives = extract_alternatives(hso, override_route_known=bool(source_overrides))
-    except UnclassifiableAlternative as exc:
-        ev.extraction_error = str(exc)
-        return ev
-    # C1 merge: OVERRIDE alternatives sourced from the guard's own call-site
-    # argument (never vacuous now that the render carries no key name at
-    # all), deduped against anything `extract_alternatives` already found
-    # in the rendered text (belt for a hand-written mention outside the
-    # builder -- see `_OVERRIDE_RE`'s own comment).
     already = {a.detail for a in ev.alternatives if a.kind is AlternativeKind.OVERRIDE}
     for alt in source_overrides:
         if alt.detail not in already:
@@ -2409,9 +2294,6 @@ def format_report(evaluations: List[GuardEvaluation]) -> str:
         tag = "[%s]" % ev.band.value
         if not ev.fire.fired:
             lines.append("%s %s: DID NOT FIRE (%s)" % (tag, ev.guard, ev.fire.error or "trigger returned None"))
-            continue
-        if ev.extraction_error:
-            lines.append("%s %s: UNCLASSIFIABLE ALTERNATIVE -- %s" % (tag, ev.guard, ev.extraction_error))
             continue
         if not ev.verdicts:
             lines.append("%s %s: fired, 0 alternatives named" % (tag, ev.guard))

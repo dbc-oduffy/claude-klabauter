@@ -2552,6 +2552,11 @@ def _dispatch_emit_body(
             # hands its commit back to the EM.
             ask_run_token = None
         ask_ctx["run_token"] = ask_run_token
+        ask_ctx["token_escrowed"] = bool(
+            ask_run_token
+            and params.get("launcher_child") is True
+            and _run_token.escrow(Path(ask_ctx["root"]), ask_ctx["run_id"], ask_run_token)
+        )
         script = compose_ask_script(
             review_roster_fragment=review_roster_fragment,
             review_stage_schemas=review_stage_schemas,
@@ -2821,8 +2826,11 @@ def _dispatch_emit_body(
         )
         if anchor_root is not None:
             reply["fire_args"] = {"repoRoot": Path(anchor_root).as_posix()}
-        if ask_ctx is not None and ask_ctx.get("run_token"):
+        if ask_ctx is not None and ask_ctx.get("run_token") and not ask_ctx.get("token_escrowed"):
             # The run's commit token rides the launch args only: never the script's bytes.
+            # Trap: an escrowed launcher child's token stays out of the reply, so the launcher holds
+            # no token and the child hands its commit back like a tokenless run; the stage-time twin
+            # write reads the token from escrow. A failed escrow keeps this reply.
             reply.setdefault("fire_args", {})["runToken"] = ask_ctx["run_token"]
         if ask_ctx is not None and ask_ctx.get("revisions_inherited"):
             reply["revisions_inherited"] = list(ask_ctx["revisions_inherited"])

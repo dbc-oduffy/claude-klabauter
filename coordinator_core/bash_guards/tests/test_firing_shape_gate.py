@@ -36,6 +36,12 @@ from coordinator_core.bash_guards import dispatch_checks as _dc
 from coordinator_core.bash_guards import guard_inprocess_search as _gis
 from coordinator_core.bash_guards._helpers import operator_override_note
 from coordinator_core.hooks import nudge_em_code_dispatch as _nudge
+from coordinator_core.guard_messages.alternative_record import (
+    AlternativeRecord,
+    EscalationRoute,
+    Override,
+    ReadyCommand,
+)
 
 pytestmark = [
     pytest.mark.spawns_process,
@@ -73,30 +79,29 @@ def _item1_pre_fix_hso(joined_tokens: str) -> dict:
 
 class TestItem1MultiprobeBannerFiringShape:
     def test_pre_fix_fixture_is_flagged(self):
-        hso = _item1_pre_fix_hso("sed -n 1,5p a.py")["hookSpecificOutput"]
+        legacy = _item1_pre_fix_hso("sed -n 1,5p a.py")
         spec = fs.REGISTRY["check_multiprobe_banner_rewrite"]
-        ev = fs.evaluate_ask_hso(hso, alternative_required=spec.alternative_required)
+        ev = fs.evaluate_ask(legacy, alternative_required=spec.alternative_required)
         assert ev.fired
         assert ev.violated, "pre-fix prose-only multi-probe-banner advisory was not flagged"
 
     def test_post_fix_unrecognized_segment_emits_nothing_not_a_violation(self):
-        envelope = _dc.check_multiprobe_banner_rewrite(
+        result = _dc.check_multiprobe_banner_rewrite(
             "sed -n 1,5p a.py; echo ===; sed -n 6,9p b.py", "firing-shape-gate-test"
         )
-        assert envelope is None, "C4's exit (b) must emit nothing for an unrecognized segment"
+        assert result is None, "C4's exit (b) must emit nothing for an unrecognized segment"
         spec = fs.REGISTRY["check_multiprobe_banner_rewrite"]
-        ev = fs.evaluate_ask_hso(None, alternative_required=spec.alternative_required)
+        ev = fs.evaluate_ask(None, alternative_required=spec.alternative_required)
         assert not ev.fired
         assert not ev.violated
 
     def test_post_fix_recognized_segment_still_names_a_real_alternative(self):
-        envelope = _dc.check_multiprobe_banner_rewrite(
+        result = _dc.check_multiprobe_banner_rewrite(
             'echo "=== SESSION FACTS ==="; pwd; whoami; git status --short', "firing-shape-gate-test"
         )
-        assert envelope is not None
-        hso = envelope["hookSpecificOutput"]
+        assert isinstance(result, AlternativeRecord)
         spec = fs.REGISTRY["check_multiprobe_banner_rewrite"]
-        ev = fs.evaluate_ask_hso(hso, alternative_required=spec.alternative_required)
+        ev = fs.evaluate_ask(result, alternative_required=spec.alternative_required)
         assert not ev.violated, ev.reasons
 
 
@@ -185,45 +190,43 @@ class TestItem3NudgeDispatchBriefFiringShape:
 class TestSentinelGuardsZeroAlternativeIsLegal:
     @pytest.mark.parametrize("guard", ["block_worktree_sentinel_creation", "block_approval_sentinel_creation"])
     def test_sentinel_guard_names_no_alternative_and_still_passes(self, guard):
-        envelope = altlive.LIVE_TRIGGERS[guard]()
-        assert envelope is not None, "%s's registered trigger did not fire" % guard
-        hso = envelope["hookSpecificOutput"]
+        result = altlive.LIVE_TRIGGERS[guard]()
+        assert result is not None, "%s's registered trigger did not fire" % guard
         spec = fs.REGISTRY[guard]
         assert spec.alternative_required is False
-        ev = fs.evaluate_ask_hso(hso, alternative_required=spec.alternative_required)
+        ev = fs.evaluate_ask(result, alternative_required=spec.alternative_required)
         assert not ev.violated, ev.reasons
 
-    def test_same_zero_alternative_message_WOULD_fail_if_alternative_were_required(self):
-        envelope = altlive.LIVE_TRIGGERS["block_worktree_sentinel_creation"]()
-        hso = envelope["hookSpecificOutput"]
-        ev = fs.evaluate_ask_hso(hso, alternative_required=True)
-        assert ev.violated
+    def test_zero_alternative_record_WOULD_fail_if_alternative_were_required(self):
+        record = AlternativeRecord(
+            verdict_kind="deny",
+            summary="BLOCKED: policy deny with no substitute.",
+            members=(EscalationRoute("why you need it", "the exemption"),),
+            guard_name="fake",
+        )
+        assert fs.evaluate_ask(record, alternative_required=True).violated
+        assert not fs.evaluate_ask(record, alternative_required=False).violated
 
 
 class TestAxisBOverrideIsOrthogonal:
     def test_override_only_signal_does_not_satisfy_axis_a(self):
-        hso = {
-            "hookSpecificOutput": {
-                "hookEventName": "PreToolUse",
-                "permissionDecision": "deny",
-                "permissionDecisionReason": (
-                    "BLOCKED: fake finding, no alternative named. "
-                    "COORDINATOR_ALLOW_FAKE_THING=1 (pre-launch only)."
-                ),
-            }
-        }["hookSpecificOutput"]
-        ev = fs.evaluate_ask_hso(hso, alternative_required=True)
+        record = AlternativeRecord(
+            verdict_kind="deny",
+            summary="BLOCKED: fake finding, no alternative named.",
+            members=(EscalationRoute("the finding", "the action"), Override("COORDINATOR_ALLOW_FAKE_THING")),
+            guard_name="fake",
+        )
+        ev = fs.evaluate_ask(record, alternative_required=True)
         assert ev.violated, "an override-only signal wrongly satisfied Axis A's alternative obligation"
 
     def test_missing_override_is_never_itself_a_violation(self):
-        hso = {
-            "hookSpecificOutput": {
-                "hookEventName": "PreToolUse",
-                "permissionDecision": "deny",
-                "permissionDecisionReason": "BLOCKED: fake finding.\n\nUse instead: `git status`\n",
-            }
-        }["hookSpecificOutput"]
-        ev = fs.evaluate_ask_hso(hso, alternative_required=True)
+        record = AlternativeRecord(
+            verdict_kind="deny",
+            summary="BLOCKED: fake finding.",
+            members=(ReadyCommand("git status"),),
+            guard_name="fake",
+        )
+        ev = fs.evaluate_ask(record, alternative_required=True)
         assert not ev.violated
 
 
@@ -296,12 +299,12 @@ def test_known_violations_ratchet_mechanism_can_actually_detect_a_violation():
     against the module's own registry-declared value -- proof that the
     ratchet's evaluation function is capable of flagging a violation, using
     the real live emitter output already fired above, not a synthetic one."""
-    envelope = _dc.check_multiprobe_banner_rewrite(
+    result = _dc.check_multiprobe_banner_rewrite(
         "sed -n 1,5p a.py; echo ===; sed -n 6,9p b.py", "firing-shape-gate-meta-test"
     )
-    assert envelope is None
-    hso = _item1_pre_fix_hso("sed -n 1,5p a.py")["hookSpecificOutput"]
-    assert fs.evaluate_ask_hso(hso, alternative_required=True).violated
+    assert result is None
+    legacy = _item1_pre_fix_hso("sed -n 1,5p a.py")
+    assert fs.evaluate_ask(legacy, alternative_required=True).violated
 
 
 def _run_all_live_violation_checks_in_fresh_subprocess() -> dict:

@@ -94,10 +94,11 @@ def profile(
     plan: str | None = None,
 ) -> dict:
     from coordinator_core import warp_live
+    from coordinator_core.temp_layout import managed_tempdir
     from coordinator_core.ops.dispatch_emit import ask_stage, ask_stage_receipt
     from coordinator_core.ops.dispatch_emit.tests._size_l_plan import build_size_l_plan
 
-    scratch = Path(tempfile.mkdtemp(prefix="ask-stage-size-l-"))
+    scratch = Path(tempfile.mkdtemp(prefix="ask-stage-size-l-", dir=managed_tempdir()))
     mp = pytest.MonkeyPatch()
     try:
         managed = scratch / "managed"

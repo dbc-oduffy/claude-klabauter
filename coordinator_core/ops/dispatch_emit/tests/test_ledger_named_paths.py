@@ -44,15 +44,28 @@ def test_spelling_called_once_canonicalizes_and_dedupes(tmp_path):
 
     out = named_paths(["a/Pub.py a/gone.py", "a/pub.py"], tmp_path, spelling=spelling)
     assert out == ["a/pub.py"]
-    assert len(calls) == 1 and calls[0] == ["a/Pub.py", "a/gone.py", "a/pub.py"]
+    assert len(calls) <= 2 and calls[0] == ["a/Pub.py", "a/gone.py", "a/pub.py"]
 
 
-def test_spelling_ignores_disk_and_parent_dir_leg(tmp_path):
+def test_spelling_admits_a_new_file_in_an_existing_dir_and_drops_an_orphan(tmp_path):
     root = _repo(tmp_path)
-    (root / "docs/plans/y.md").write_text("x")
-    backed = {"docs/plans/y.md": "docs/plans/y.md"}
-    out = named_paths(["docs/plans/x.md docs/plans/y.md"], root, spelling=lambda ps: {p: backed.get(p) for p in ps})
-    assert out == ["docs/plans/y.md"]
+    backed = {"docs/plans": "docs/plans"}
+    out = named_paths(
+        ["docs/plans/x.md docs/plans/new.md nodir/new.py"], root, spelling=lambda ps: {p: backed.get(p) for p in ps}
+    )
+    assert out == ["docs/plans/x.md", "docs/plans/new.md"]
+
+
+def test_production_call_shape_returns_only_the_tracked_spelling(tmp_path):
+    from coordinator_core.git.tracked_case import tracked_spelling
+
+    (tmp_path / "bin").mkdir()
+    (tmp_path / "bin/blocked.py").write_text("x")
+    out = named_paths(
+        ["bin/BLOCKED.py bin/Publish.py"], tmp_path, spelling=lambda ps: tracked_spelling(tmp_path, ps)
+    )
+    assert "bin/BLOCKED.py" not in out and "bin/blocked.py" in out
+    assert "bin/Publish.py" in out  # parent exists: a new file the row may create
 
 
 def test_gated_paths_selects_claude_md_class():

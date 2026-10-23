@@ -182,3 +182,111 @@ def test_sweep_leaves_non_twin_names_even_when_old(tmp_path):
 
 def test_sweep_no_directory_is_zero(tmp_path):
     assert twin.sweep_expired_twins(tmp_path) == 0
+
+
+def _inline(root):
+    text = _twin_path(root).read_text(encoding="utf-8")
+    line = next(ln for ln in text.splitlines() if ln.startswith("const _STAGED_INLINE = "))
+    return json.loads(line[len("const _STAGED_INLINE = "):-1])
+
+
+def _run(root, sizing_text, rel="state/sizings/s1.yaml"):
+    (root / "state" / "warp" / "run1").mkdir(parents=True, exist_ok=True)
+    (root / "state" / "warp" / "run1" / "run.json").write_text(json.dumps({"sizing_rel": rel}), encoding="utf-8")
+    if sizing_text is not None:
+        (root / rel).parent.mkdir(parents=True, exist_ok=True)
+        (root / rel).write_text(sizing_text, encoding="utf-8")
+
+
+def test_resume_block_for_plan_edged_s_sizing(tmp_path):
+    from coordinator_core.ops.dispatch_emit.sizing_fire import resolve_arm
+
+    _script(tmp_path)
+    _run(tmp_path, "estimate:\n  tshirt: S\nplan: docs/plans/p.md\n")
+    _call(tmp_path)
+    assert _inline(tmp_path)[nrc.STAGED_RESUME_KEY] == {
+        "arm": resolve_arm({"estimate": {"tshirt": "S"}}),
+        "sizing_rel": "state/sizings/s1.yaml",
+        "plan_rel": "docs/plans/p.md",
+    }
+
+
+def test_resume_plan_rel_null_for_xs_sizing_without_edge(tmp_path):
+    _script(tmp_path)
+    _run(tmp_path, "estimate:\n  tshirt: XS\n")
+    _call(tmp_path)
+    assert _inline(tmp_path)[nrc.STAGED_RESUME_KEY]["plan_rel"] is None
+
+
+@pytest.mark.parametrize("sizing_text", [None, "estimate: {}\n", "- not a mapping\n"])
+def test_unreadable_sizing_omits_resume(tmp_path, sizing_text):
+    _script(tmp_path)
+    _run(tmp_path, sizing_text)
+    _call(tmp_path)
+    assert nrc.STAGED_RESUME_KEY not in _inline(tmp_path)
+
+
+def test_no_run_json_omits_resume(tmp_path):
+    _script(tmp_path)
+    _call(tmp_path)
+    assert nrc.STAGED_RESUME_KEY not in _inline(tmp_path)
+
+
+def test_token_call_and_stage_call_share_resume_block(tmp_path):
+    _script(tmp_path)
+    _run(tmp_path, "estimate:\n  tshirt: S\nplan: docs/plans/p.md\n")
+    _call(tmp_path)
+    staged = _inline(tmp_path)[nrc.STAGED_RESUME_KEY]
+    twin.ensure_twin(tmp_path, "state/warp/run1/manifest.json", RAW, HANDLE, max_bytes=CAP, refuse=ValueError, run_token="a" * 32)
+    tokened = _inline(tmp_path)
+    assert tokened[nrc.STAGED_RESUME_KEY] == staged
+    assert tokened["runToken"] == "a" * 32
+
+
+def _escrowed_run(root):
+    from coordinator_core.ops.dispatch_emit import run_token
+
+    (root / ".git").mkdir(exist_ok=True)
+    token = run_token.mint(root, "run1", "scratch/warp/run1.workflow.mjs")
+    assert run_token.escrow(root, "run1", token)
+    return token
+
+
+def _stage(root, **kw):
+    return twin.ensure_twin(root, "state/warp/run1/manifest.json", RAW, HANDLE, max_bytes=CAP, refuse=ValueError, **kw)
+
+
+def test_escrowed_token_is_inlined_without_explicit_token_and_repeat_writes_nothing(tmp_path):
+    _script(tmp_path)
+    token = _escrowed_run(tmp_path)
+    assert _stage(tmp_path) == nrc.staged_twin_rel("run1", SHA)
+    path = _twin_path(tmp_path)
+    assert f'"runToken": "{token}"' in path.read_text(encoding="utf-8")
+    before = (path.read_bytes(), path.stat().st_mtime_ns)
+    _stage(tmp_path)
+    assert (path.read_bytes(), path.stat().st_mtime_ns) == before
+
+
+def test_no_escrow_keeps_tokenless_twin(tmp_path):
+    _script(tmp_path)
+    (tmp_path / ".git").mkdir()
+    _stage(tmp_path)
+    assert "runToken" not in _twin_path(tmp_path).read_text(encoding="utf-8")
+
+
+def test_after_consume_next_call_writes_tokenless_twin(tmp_path):
+    from coordinator_core.ops.dispatch_emit import run_token
+
+    _script(tmp_path)
+    _escrowed_run(tmp_path)
+    _stage(tmp_path)
+    run_token.consume(tmp_path, "run1")
+    _stage(tmp_path)
+    assert "runToken" not in _twin_path(tmp_path).read_text(encoding="utf-8")
+
+
+def test_escrow_on_noop_branch_returns_none_quietly(tmp_path):
+    _escrowed_run(tmp_path)
+    assert twin.ensure_twin(tmp_path, "state/other/run1/manifest.json", RAW, HANDLE, max_bytes=CAP, refuse=ValueError) is None
+    got = _stage(tmp_path)
+    assert got is None

@@ -45,6 +45,10 @@ def _handler(params: dict, repo_root=None) -> dict:
 
     try:
         result = check(params)
+        if result is not None and not isinstance(result, dict):
+            from coordinator_core.bash_guards import dispatch
+
+            result = dispatch._render_record(result, params)
     except Exception:
         return no_advisory()
 

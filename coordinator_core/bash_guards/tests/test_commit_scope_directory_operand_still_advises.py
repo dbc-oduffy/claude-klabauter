@@ -37,6 +37,11 @@ from pathlib import Path
 
 from coordinator_core.bash_guards import commit_tripwires as ct
 from coordinator_core.bash_guards import dispatch_checks as dc
+from coordinator_core.guard_messages.testing import envelope_of
+
+
+def _enveloped(check):
+    return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 _REPO_ROOT = str(Path(__file__).resolve().parents[3])
 
@@ -55,7 +60,7 @@ def _payload():
 
 
 def _advises(cmd: str) -> bool:
-    return dc.check_git_commit_safe_commit_advise(cmd, "", _payload()) is not None
+    return _enveloped(dc.check_git_commit_safe_commit_advise)(cmd, "", _payload()) is not None
 
 
 # ---------------------------------------------------------------------------
@@ -265,7 +270,7 @@ def _reason(cmd: str) -> str:
     vs `_advisory`). Reading one key alone makes every row below assert the
     severity it was written to leave alone.
     """
-    out = dc.check_git_commit_safe_commit_advise(cmd, "", _payload())
+    out = _enveloped(dc.check_git_commit_safe_commit_advise)(cmd, "", _payload())
     assert out is not None, cmd
     hook = out["hookSpecificOutput"]
     text = hook.get("permissionDecisionReason") or hook.get("additionalContext")

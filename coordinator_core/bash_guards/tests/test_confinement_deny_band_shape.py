@@ -89,6 +89,7 @@ import pytest
 
 from coordinator_core.bash_guards import dispatch
 from coordinator_core.bash_guards.dispatch import GuardBand, GuardEntry
+from coordinator_core.guard_messages.testing import envelope_of
 from coordinator_core.bash_guards.tests.guard_message_corpus import (
     _CMD_OVERRIDE_KEY,
     _CWD_OVERRIDE_KEY,
@@ -316,7 +317,7 @@ def _classify_chain(
     for idx, entry in enumerate(chain):
         if entry.band is not GuardBand.CONFINEMENT_DENY:
             continue
-        envelope = entry.fn()
+        envelope = envelope_of(entry.fn(), "em")
         if envelope is None:
             continue
         if entry.name in exceptions:

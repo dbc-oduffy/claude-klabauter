@@ -25,6 +25,11 @@ from coordinator_core.bash_guards.find_exec_rewrite import (
     _bt_parse_for_loop_find,
     check_find_exec_rewrite,
 )
+from coordinator_core.guard_messages.testing import envelope_of
+
+
+def _enveloped(check):
+    return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 
 def _tok(cmd: str):
@@ -120,7 +125,7 @@ def test_a_shape_this_parser_does_not_model_is_refused(cmd: str) -> None:
 
 
 def test_the_guard_now_rewrites_the_loop() -> None:
-    result = check_find_exec_rewrite('for f in $(find . -name "*.txt"); do rm "$f"; done')
+    result = _enveloped(check_find_exec_rewrite)('for f in $(find . -name "*.txt"); do rm "$f"; done')
     assert result is not None
     assert result["hookSpecificOutput"]["permissionDecision"] == "allow"
     updated = result["hookSpecificOutput"]["updatedInput"]["command"]
@@ -128,7 +133,7 @@ def test_the_guard_now_rewrites_the_loop() -> None:
 
 
 def test_an_unmeasured_verb_gets_an_advisory_not_a_rewrite() -> None:
-    result = check_find_exec_rewrite('for f in $(find . -name "*.txt"); do frobnicate "$f"; done')
+    result = _enveloped(check_find_exec_rewrite)('for f in $(find . -name "*.txt"); do frobnicate "$f"; done')
     assert result is not None
     assert "updatedInput" not in result["hookSpecificOutput"]
     assert "frobnicate" in result["hookSpecificOutput"]["additionalContext"]
@@ -136,16 +141,16 @@ def test_an_unmeasured_verb_gets_an_advisory_not_a_rewrite() -> None:
 
 def test_a_chained_loop_is_advised_never_wholesale_replaced() -> None:
     cmd = 'for f in $(find . -name "*.txt"); do rm "$f"; done; echo finished'
-    result = check_find_exec_rewrite(cmd)
+    result = _enveloped(check_find_exec_rewrite)(cmd)
     assert result is not None
     assert "updatedInput" not in result["hookSpecificOutput"]
 
 
 def test_an_ordinary_find_exec_is_unaffected() -> None:
-    result = check_find_exec_rewrite("find . -name '*.txt' -exec rm {} \\;")
+    result = _enveloped(check_find_exec_rewrite)("find . -name '*.txt' -exec rm {} \\;")
     assert result is not None
     assert result["hookSpecificOutput"]["permissionDecision"] == "allow"
 
 
 def test_an_unrelated_for_loop_is_silent() -> None:
-    assert check_find_exec_rewrite("for i in 1 2 3; do echo $i; done") is None
+    assert _enveloped(check_find_exec_rewrite)("for i in 1 2 3; do echo $i; done") is None

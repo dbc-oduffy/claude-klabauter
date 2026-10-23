@@ -28,6 +28,11 @@ from __future__ import annotations
 
 from coordinator_core.bash_guards import _verdict
 from coordinator_core.bash_guards import block_subagent_plan_body_bash_write as guard
+from coordinator_core.guard_messages.testing import envelope_of
+
+
+def _enveloped(check):
+    return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 
 def _payload(command, agent_id="deadbeef0123", session_id="sess1", cwd="/repo"):
@@ -63,14 +68,14 @@ def test_em_caller_no_agent_id_allowed_and_silent(monkeypatch, capsys):
     """
     _stub(monkeypatch, resolved_agent_id="", subagent_type="")
     payload = _payload(_WRITE_CMD, agent_id=None)
-    assert guard.check(payload) is None
+    assert _enveloped(guard.check)(payload) is None
     assert capsys.readouterr().err == ""
 
 
 def test_unresolvable_kind_still_allows(monkeypatch, capsys):
     _stub(monkeypatch, resolved_agent_id="deadbeef0123", subagent_type="")
     payload = _payload(_WRITE_CMD)
-    assert guard.check(payload) is None
+    assert _enveloped(guard.check)(payload) is None
     err = capsys.readouterr().err
     assert "kind-resolution-failed" in err
     assert "ALLOWS" in err
@@ -79,7 +84,7 @@ def test_unresolvable_kind_still_allows(monkeypatch, capsys):
 def test_unparseable_agent_id_still_allows(monkeypatch):
     _stub(monkeypatch, resolved_agent_id="", subagent_type="")
     payload = _payload(_WRITE_CMD)
-    assert guard.check(payload) is None
+    assert _enveloped(guard.check)(payload) is None
 
 
 def test_resolvable_non_executor_kind_allowed_and_silent(monkeypatch, capsys):
@@ -89,7 +94,7 @@ def test_resolvable_non_executor_kind_allowed_and_silent(monkeypatch, capsys):
     """
     _stub(monkeypatch, resolved_agent_id="deadbeef0123", subagent_type="coordinator:enricher")
     payload = _payload(_WRITE_CMD)
-    assert guard.check(payload) is None
+    assert _enveloped(guard.check)(payload) is None
     assert capsys.readouterr().err == ""
 
 
@@ -99,7 +104,7 @@ def test_resolvable_executor_kind_still_fires(monkeypatch):
     """
     _stub(monkeypatch, resolved_agent_id="deadbeef0123", subagent_type="coordinator:executor")
     payload = _payload(_WRITE_CMD)
-    result = guard.check(payload)
+    result = _enveloped(guard.check)(payload)
     assert result is not None
     assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
     reason = result["hookSpecificOutput"]["permissionDecisionReason"]
@@ -113,7 +118,7 @@ def test_resolvable_ambiguous_kind_still_fires_unconditionally(monkeypatch):
     """
     _stub(monkeypatch, resolved_agent_id="deadbeef0123", subagent_type="AMBIGUOUS")
     payload = _payload("cat docs/plans/2026-07-30-x.md")
-    result = guard.check(payload)
+    result = _enveloped(guard.check)(payload)
     assert result is not None
     assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
@@ -125,7 +130,7 @@ def test_non_write_command_allows_even_with_unresolved_kind(monkeypatch):
     """
     _stub(monkeypatch, resolved_agent_id="deadbeef0123", subagent_type="")
     payload = _payload("cat docs/plans/2026-07-30-x.md")
-    assert guard.check(payload) is None
+    assert _enveloped(guard.check)(payload) is None
 
 
 def _ps_payload(command, **kw):
@@ -141,7 +146,7 @@ def test_powershell_redirect_idiom_still_fires_dialect_neutral(monkeypatch):
     """
     _stub(monkeypatch, resolved_agent_id="deadbeef0123", subagent_type="coordinator:executor")
     payload = _ps_payload('"in progress" >> docs/plans/2026-07-30-x.md')
-    result = guard.check(payload)
+    result = _enveloped(guard.check)(payload)
     assert result is not None
     assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
@@ -150,7 +155,7 @@ def test_powershell_cmdlet_write_records_silent_not_clean(monkeypatch):
     _stub(monkeypatch, resolved_agent_id="deadbeef0123", subagent_type="coordinator:executor")
     payload = _ps_payload("Set-Content docs/plans/2026-07-30-x.md -Value 'x'")
     with _verdict.collecting() as silences:
-        result = guard.check(payload)
+        result = _enveloped(guard.check)(payload)
     assert result is None
     assert _verdict.was_silent("block_subagent_plan_body_bash_write", silences)
 
@@ -167,7 +172,7 @@ def test_unenumerated_type_falls_through_to_deny(monkeypatch):
         guard, "resolve_roster", lambda: (frozenset({"coordinator:enricher"}), None)
     )
     payload = _payload(_WRITE_CMD)
-    result = guard.check(payload)
+    result = _enveloped(guard.check)(payload)
     assert result is not None
     assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
     assert "permissionDecisionReason" in result["hookSpecificOutput"]
@@ -179,20 +184,20 @@ def test_enumerated_non_executor_type_still_allows_silently(monkeypatch):
         guard, "resolve_roster", lambda: (frozenset({"coordinator:enricher"}), None)
     )
     payload = _payload(_WRITE_CMD)
-    assert guard.check(payload) is None
+    assert _enveloped(guard.check)(payload) is None
 
 
 def test_roster_load_error_falls_back_to_allow(monkeypatch):
     _stub(monkeypatch, resolved_agent_id="deadbeef0123", subagent_type="hookprobe-named")
     monkeypatch.setattr(guard, "resolve_roster", lambda: (None, "roster unresolved"))
     payload = _payload(_WRITE_CMD)
-    assert guard.check(payload) is None
+    assert _enveloped(guard.check)(payload) is None
 
 
 def test_powershell_non_executor_kind_no_silent_no_deep_scan(monkeypatch):
     _stub(monkeypatch, resolved_agent_id="deadbeef0123", subagent_type="coordinator:enricher")
     payload = _ps_payload("Set-Content docs/plans/2026-07-30-x.md -Value 'x'")
     with _verdict.collecting() as silences:
-        result = guard.check(payload)
+        result = _enveloped(guard.check)(payload)
     assert result is None
     assert silences == []

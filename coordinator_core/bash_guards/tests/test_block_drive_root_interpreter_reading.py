@@ -9,6 +9,11 @@ import pytest
 from coordinator_core import machine_profile
 from coordinator_core.bash_guards import _write_bump_sink_shapes as sinks
 from coordinator_core.bash_guards import block_drive_root_new_dir_bash_write as guard
+from coordinator_core.guard_messages.testing import envelope_of
+
+
+def _enveloped(check):
+    return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 INCIDENT = (
     "cd /f/dev/research/example-retrieval-repo/scip-clang && python3 - <<'EOF'\n"
@@ -47,7 +52,7 @@ def _payload(cmd, cwd, tool="Bash"):
 
 
 def test_incident_command_is_denied(fake_fs):
-    res = guard.check(_payload(INCIDENT, "F:\\dev"))
+    res = _enveloped(guard.check)(_payload(INCIDENT, "F:\\dev"))
     assert res is not None
     out = res["hookSpecificOutput"]
     assert out["permissionDecision"] == "deny"
@@ -56,12 +61,12 @@ def test_incident_command_is_denied(fake_fs):
 
 
 def test_incident_denied_when_cd_is_the_only_drive_change(fake_fs):
-    assert guard.check(_payload(INCIDENT, "E:\\claude-klabauter")) is not None
+    assert _enveloped(guard.check)(_payload(INCIDENT, "E:\\claude-klabauter")) is not None
 
 
 def test_same_command_from_target_drive_is_allowed(fake_fs):
     cmd = INCIDENT.replace("cd /f/dev/research/example-retrieval-repo/scip-clang", "cd /e/claude-klabauter")
-    assert guard.check(_payload(cmd, "E:\\claude-klabauter")) is None
+    assert _enveloped(guard.check)(_payload(cmd, "E:\\claude-klabauter")) is None
 
 
 MEMO_EXE = "/c/Users/example-operator/.coordinator-claude-settings/bin/cross-repo-memo.exe"  # abs-path-ok: exact incident command shape
@@ -76,16 +81,16 @@ INVOKE_AFTER_HEREDOC = (
 
 def test_msys_exe_invocation_after_repo_relative_heredoc_is_allowed(fake_fs):
     fake_fs.update({"c:\\", "c:\\users"})
-    assert guard.check(_payload(INVOKE_AFTER_HEREDOC, "E:\\claude-klabauter")) is None
+    assert _enveloped(guard.check)(_payload(INVOKE_AFTER_HEREDOC, "E:\\claude-klabauter")) is None
 
 
 def test_interpreter_write_to_new_msys_literal_still_denied(fake_fs):
     cmd = "python3 - <<'EOF'\nopen('/e/brand-new/x.md','w')\nEOF\n" + MEMO_EXE + " send"
-    res = guard.check(_payload(cmd, "F:\\dev"))
+    res = _enveloped(guard.check)(_payload(cmd, "F:\\dev"))
     assert res is not None
     assert "'brand-new'" in res["hookSpecificOutput"]["permissionDecisionReason"]
 
 
 def test_bash_only_mkdir_uses_msys_reading(fake_fs):
-    assert guard.check(_payload("mkdir -p /e/example-retrieval-repo/x", "F:\\dev")) is None
-    assert guard.check(_payload("mkdir -p /e/brand-new/x", "F:\\dev")) is not None
+    assert _enveloped(guard.check)(_payload("mkdir -p /e/example-retrieval-repo/x", "F:\\dev")) is None
+    assert _enveloped(guard.check)(_payload("mkdir -p /e/brand-new/x", "F:\\dev")) is not None

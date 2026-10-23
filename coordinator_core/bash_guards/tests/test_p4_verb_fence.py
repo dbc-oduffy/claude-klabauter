@@ -28,6 +28,11 @@ import pytest
 
 from coordinator_core.bash_guards import p4_verb_fence
 from coordinator_core.p4 import runner as p4_runner
+from coordinator_core.guard_messages.testing import envelope_of
+
+
+def _enveloped(check):
+    return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 #: Captured before any test monkeypatches `p4_verb_fence._is_p4_gated` --
 #: the two "real filesystem walk" cases below need the UNPATCHED function,
@@ -60,13 +65,13 @@ def _no_spawns(monkeypatch):
 
 
 def _deny(cmd: str, tool_name: str = "Bash") -> dict:
-    result = p4_verb_fence.check(_payload(cmd, tool_name=tool_name))
+    result = _enveloped(p4_verb_fence.check)(_payload(cmd, tool_name=tool_name))
     assert result is not None, "expected a deny for %r" % cmd
     return result["hookSpecificOutput"]
 
 
 def _allow(cmd: str, tool_name: str = "Bash") -> None:
-    result = p4_verb_fence.check(_payload(cmd, tool_name=tool_name))
+    result = _enveloped(p4_verb_fence.check)(_payload(cmd, tool_name=tool_name))
     assert result is None, "expected an allow for %r, got %r" % (cmd, result)
 
 
@@ -313,7 +318,7 @@ class TestChangeScoped:
 
 class TestNonCommandToolNamesIgnored:
     def test_non_matching_tool_name_returns_none(self):
-        result = p4_verb_fence.check(
+        result = _enveloped(p4_verb_fence.check)(
             {"tool_name": "Read", "tool_input": {"file_path": "x"}, "cwd": "/repo"}
         )
         assert result is None

@@ -16,7 +16,7 @@ replaces the tool input wholesale.
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 from coordinator_core.bash_guards._tool_names import COMMAND_TOOL_NAMES
 
@@ -59,7 +59,7 @@ def _runs_a_round(cmd: str) -> bool:
     return False
 
 
-def check_background_publish(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def check_background_publish(payload: Dict[str, Any]) -> Any:
     if payload.get("tool_name") not in COMMAND_TOOL_NAMES:
         return None
     tool_input = payload.get("tool_input")
@@ -70,13 +70,10 @@ def check_background_publish(payload: Dict[str, Any]) -> Optional[Dict[str, Any]
         return None
     if not _runs_a_round(_mask_quoted_separators(_HEREDOC_BODY_RE.sub("", cmd))):
         return None
+    from coordinator_core.bash_guards._rewrite_support import _allow_rewrite_record
+
     updated = dict(tool_input)
     updated["run_in_background"] = True
-    return {
-        "hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "permissionDecision": "allow",
-            "updatedInput": updated,
-            "additionalContext": _NOTE,
-        }
-    }
+    return _allow_rewrite_record(
+        "background-publish", cmd, _NOTE, tool_input=updated, em_text=_NOTE
+    )

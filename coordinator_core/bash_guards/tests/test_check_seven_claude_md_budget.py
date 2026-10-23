@@ -31,6 +31,11 @@ from coordinator_core.claude_md_budget import (
 from coordinator_core.win_portability import no_console_creationflags
 
 import pytest
+from coordinator_core.guard_messages.testing import envelope_of
+
+
+def _enveloped(check):
+    return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 pytestmark = [
     pytest.mark.spawns_process,
@@ -79,7 +84,7 @@ class TestCheckSevenGovernedGlobalSurfaceBoundaries:
         root = self._init_dev_repo(tmp_path)
         _stage_claude_md(root, "coordinator/CLAUDE.md", HARD_LIMIT_BYTES + 1)
 
-        result = dispatch_checks.check_validate_commit(
+        result = _enveloped(dispatch_checks.check_validate_commit)(
             'git commit -m "bump doctrine"', "no-session", cwd=root
         )
         assert result is not None
@@ -91,7 +96,7 @@ class TestCheckSevenGovernedGlobalSurfaceBoundaries:
         root = self._init_dev_repo(tmp_path)
         _stage_claude_md(root, "coordinator/CLAUDE.md", HARD_LIMIT_BYTES)
 
-        result = dispatch_checks.check_validate_commit(
+        result = _enveloped(dispatch_checks.check_validate_commit)(
             'git commit -m "bump doctrine"', "no-session", cwd=root
         )
         assert result is None or result["hookSpecificOutput"]["permissionDecision"] != "deny"
@@ -100,7 +105,7 @@ class TestCheckSevenGovernedGlobalSurfaceBoundaries:
         root = self._init_dev_repo(tmp_path)
         _stage_claude_md(root, "coordinator/CLAUDE.md", SOFT_LIMIT_BYTES + 1)
 
-        result = dispatch_checks.check_validate_commit(
+        result = _enveloped(dispatch_checks.check_validate_commit)(
             'git commit -m "bump doctrine"', "no-session", cwd=root
         )
         assert result is not None
@@ -112,7 +117,7 @@ class TestCheckSevenGovernedGlobalSurfaceBoundaries:
         root = self._init_dev_repo(tmp_path)
         _stage_claude_md(root, "coordinator/CLAUDE.md", SOFT_LIMIT_BYTES)
 
-        result = dispatch_checks.check_validate_commit(
+        result = _enveloped(dispatch_checks.check_validate_commit)(
             'git commit -m "bump doctrine"', "no-session", cwd=root
         )
         assert result is None or "CLAUDEMD-BUDGET" not in result["hookSpecificOutput"].get(
@@ -123,7 +128,7 @@ class TestCheckSevenGovernedGlobalSurfaceBoundaries:
         root = self._init_dev_repo(tmp_path)
         _stage_claude_md(root, "coordinator/CLAUDE.md", SOFT_LIMIT_BYTES - 1)
 
-        result = dispatch_checks.check_validate_commit(
+        result = _enveloped(dispatch_checks.check_validate_commit)(
             'git commit -m "bump doctrine"', "no-session", cwd=root
         )
         assert result is None or "CLAUDEMD-BUDGET" not in result["hookSpecificOutput"].get(
@@ -135,7 +140,7 @@ class TestCheckSevenGovernedGlobalSurfaceBoundaries:
         _stage_claude_md(root, "coordinator/CLAUDE.md", HARD_LIMIT_BYTES + 1)
 
         monkeypatch.setenv("COORDINATOR_OVERRIDE_CLAUDEMD_BUDGET", "1")
-        result = dispatch_checks.check_validate_commit(
+        result = _enveloped(dispatch_checks.check_validate_commit)(
             'git commit -m "bump doctrine"', "no-session", cwd=root
         )
         assert result is not None
@@ -150,7 +155,7 @@ class TestCheckSevenRepoScopedSurfaceNeverGated:
         root = _init_repo(tmp_path)
         _stage_claude_md(root, "CLAUDE.md", HARD_LIMIT_BYTES + 50000)
 
-        result = dispatch_checks.check_validate_commit(
+        result = _enveloped(dispatch_checks.check_validate_commit)(
             'git commit -m "bump project doctrine"', "no-session", cwd=root
         )
         assert result is None or "CLAUDEMD-BUDGET" not in result["hookSpecificOutput"].get(
@@ -161,7 +166,7 @@ class TestCheckSevenRepoScopedSurfaceNeverGated:
         root = _init_repo(tmp_path)
         _stage_claude_md(root, "coordinator/CLAUDE.md", HARD_LIMIT_BYTES + 50000)
 
-        result = dispatch_checks.check_validate_commit(
+        result = _enveloped(dispatch_checks.check_validate_commit)(
             'git commit -m "bump doctrine"', "no-session", cwd=root
         )
         assert result is None or (
@@ -197,7 +202,7 @@ class TestCheckSevenAudienceManifestWidening:
             HARD_LIMIT_BYTES + 1,
         )
 
-        result = dispatch_checks.check_validate_commit(
+        result = _enveloped(dispatch_checks.check_validate_commit)(
             'git commit -m "bump em doctrine"', "no-session", cwd=root
         )
         assert result is not None
@@ -212,7 +217,7 @@ class TestCheckSevenAudienceManifestWidening:
             HARD_LIMIT_BYTES + 1,
         )
 
-        result = dispatch_checks.check_validate_commit(
+        result = _enveloped(dispatch_checks.check_validate_commit)(
             'git commit -m "bump unrelated file"', "no-session", cwd=root
         )
         assert result is None or result["hookSpecificOutput"]["permissionDecision"] != "deny"
@@ -244,7 +249,7 @@ class TestCheckSevenRatchetWatermark:
         root = self._init_watermarked_repo(tmp_path, bytes_val=6000, reason="post-cut arming")
         _stage_claude_md(root, "coordinator/CLAUDE.md", 6001)
 
-        result = dispatch_checks.check_validate_commit(
+        result = _enveloped(dispatch_checks.check_validate_commit)(
             'git commit -m "bump doctrine"', "no-session", cwd=root
         )
         assert result is not None
@@ -256,7 +261,7 @@ class TestCheckSevenRatchetWatermark:
         root = self._init_watermarked_repo(tmp_path, bytes_val=6000, reason="post-cut arming")
         _stage_claude_md(root, "coordinator/CLAUDE.md", 6000)
 
-        result = dispatch_checks.check_validate_commit(
+        result = _enveloped(dispatch_checks.check_validate_commit)(
             'git commit -m "bump doctrine"', "no-session", cwd=root
         )
         assert result is None or result["hookSpecificOutput"]["permissionDecision"] != "deny"
@@ -265,7 +270,7 @@ class TestCheckSevenRatchetWatermark:
         root = self._init_watermarked_repo(tmp_path, bytes_val=6000, reason="post-cut arming")
         _stage_claude_md(root, "coordinator/CLAUDE.md", 100)
 
-        result = dispatch_checks.check_validate_commit(
+        result = _enveloped(dispatch_checks.check_validate_commit)(
             'git commit -m "bump doctrine"', "no-session", cwd=root
         )
         assert result is None or result["hookSpecificOutput"]["permissionDecision"] != "deny"
@@ -283,7 +288,7 @@ class TestCheckSevenRatchetWatermark:
         root = self._commit_over_watermark_surface(tmp_path, bytes_val=6000, size=8000)
         _stage_claude_md(root, "coordinator/CLAUDE.md", 7000)
 
-        result = dispatch_checks.check_validate_commit(
+        result = _enveloped(dispatch_checks.check_validate_commit)(
             'git commit -m "shrink doctrine"', "no-session", cwd=root
         )
         assert result is None or result["hookSpecificOutput"]["permissionDecision"] != "deny"
@@ -292,7 +297,7 @@ class TestCheckSevenRatchetWatermark:
         root = self._commit_over_watermark_surface(tmp_path, bytes_val=6000, size=8000)
         _stage_claude_md(root, "coordinator/CLAUDE.md", 8001)
 
-        result = dispatch_checks.check_validate_commit(
+        result = _enveloped(dispatch_checks.check_validate_commit)(
             'git commit -m "grow doctrine"', "no-session", cwd=root
         )
         assert result is not None
@@ -306,7 +311,7 @@ class TestCheckSevenRatchetWatermark:
         target.write_text("y" * 8000, encoding="utf-8")
         _git(root, "add", "coordinator/CLAUDE.md")
 
-        result = dispatch_checks.check_validate_commit(
+        result = _enveloped(dispatch_checks.check_validate_commit)(
             'git commit -m "no-op re-stage"', "no-session", cwd=root
         )
         assert result is not None

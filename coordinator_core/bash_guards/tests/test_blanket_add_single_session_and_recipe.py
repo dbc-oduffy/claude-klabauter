@@ -9,7 +9,12 @@ import pytest
 
 from coordinator_core.bash_guards import dispatch_checks as guard
 from coordinator_core.bash_guards import _dc_git_probe, _dc_git_shared
+from coordinator_core.guard_messages.testing import envelope_of
 from coordinator_core.win_portability import no_console_creationflags, no_console_passthrough_kwargs
+
+
+def _enveloped(check):
+    return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -64,7 +69,7 @@ def test_many_files_recipe_runs_and_the_guard_allows_it(fresh_repo, monkeypatch)
     for n in range(3):
         (fresh_repo / "docs" / ("f%d.md" % n)).write_text("x")
     monkeypatch.chdir(fresh_repo)
-    denied = guard.check_blanket_git_add("git add .", "s1")
+    denied = _enveloped(guard.check_blanket_git_add)("git add .", "s1")
     reason = denied["hookSpecificOutput"]["permissionDecisionReason"]
     steps = re.findall(r"^  (git (?:ls-files|add --pathspec|commit -m <subject> --pathspec)[^\n]*)$", reason, re.M)
     assert len(steps) == 3
@@ -72,6 +77,6 @@ def test_many_files_recipe_runs_and_the_guard_allows_it(fresh_repo, monkeypatch)
     for step in steps:
         step = step.replace("<dir>", "docs").replace("<subject>", "'init'")
         step = step.replace("git ", "git -c user.name=t -c user.email=t@t ", 1)
-        assert guard.check_blanket_git_add(step, "s1") is None
+        assert _enveloped(guard.check_blanket_git_add)(step, "s1") is None
         subprocess.run(["bash", "-c", step], cwd=fresh_repo, env=env, check=True, capture_output=True, **no_console_creationflags())
     assert "docs/f0.md" in _git(fresh_repo, "ls-files").stdout

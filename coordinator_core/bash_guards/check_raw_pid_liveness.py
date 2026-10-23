@@ -88,7 +88,7 @@ import os
 import re
 from typing import Any, Dict, Optional
 
-from coordinator_core._hook_envelope import deny
+from coordinator_core._hook_envelope import _stamp
 from coordinator_core.bash_guards._dialect import Dialect, dialect_from_tool_name
 from coordinator_core.bash_guards._helpers import operator_override_note
 from coordinator_core.bash_guards._tool_names import COMMAND_TOOL_NAMES
@@ -204,6 +204,40 @@ def _deny_reason(idiom: str, payload: Optional[Dict[str, Any]] = None) -> str:
     ) % (idiom,)
 
 
+def _deny_record(idiom: str, payload: Dict[str, Any]) -> Any:
+    """Deny record; ``em_text`` is the stamped legacy reason, byte for byte.
+    The EscalationRoute exists because this guard is not identity-gated, so a
+    subagent render must have one."""
+    from coordinator_core.guard_messages.alternative_record import (
+        AdaptableOffer,
+        AlternativeRecord,
+        EscalationRoute,
+        Override,
+    )
+
+    reason = _deny_reason(idiom, payload=payload)
+    return AlternativeRecord(
+        verdict_kind="deny",
+        guard_name="check-raw-pid-liveness",
+        summary=reason,
+        members=(
+            AdaptableOffer(
+                template="session-liveness-cli session-live SID", what_to_adapt="SID"
+            ),
+            AdaptableOffer(
+                template="session-liveness-cli claim-holder-live CLAIM_DIR",
+                what_to_adapt="CLAIM_DIR",
+            ),
+            EscalationRoute(
+                report_what="the process you need to probe",
+                authorize_what="a raw pid probe",
+            ),
+            Override(env_var=_OVERRIDE_ENV),
+        ),
+        em_text=_stamp(reason),
+    )
+
+
 def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     tool_name = payload.get("tool_name") or ""
     dialect = dialect_from_tool_name(tool_name)
@@ -254,6 +288,6 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             continue
         idiom = _segment_has_raw_pid_liveness_idiom(segment, raw_segment)
         if idiom is not None:
-            return deny("PreToolUse", _deny_reason(idiom, payload=payload))
+            return _deny_record(idiom, payload)
 
     return None

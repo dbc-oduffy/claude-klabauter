@@ -179,7 +179,7 @@ from coordinator_core.bash_guards._dialect import (
 )
 from coordinator_core.bash_guards._helpers import resolve_git_root
 from coordinator_core.bash_guards.dispatch_checks import _is_hazard_repo
-from coordinator_core._hook_envelope import deny
+from coordinator_core._hook_envelope import _stamp
 from coordinator_core.daily_branch import is_canonical_branch
 from coordinator_core.daily_day import local_day
 from coordinator_core.bash_guards._tool_names import COMMAND_TOOL_NAMES
@@ -339,10 +339,9 @@ def _canonical_example(today: str) -> str:
     return f"work/{machine}/{today}"
 
 
-def _advisory_reason(cmd: str, name: str) -> str:
-    del cmd
-    today = local_day()
-    canonical = _canonical_example(today)
+def _advisory_parts(name: str) -> "tuple[str, str]":
+    """Return (reason text, canonical branch name) for one refusal."""
+    canonical = _canonical_example(local_day())
     return (
         "`%s` is not canonical -- daily-branch discipline "
         "requires `work/{machine}/{date}` (or a longlived prefix: "
@@ -350,7 +349,35 @@ def _advisory_reason(cmd: str, name: str) -> str:
         "Use instead:\n"
         "  `git checkout -b %s`\n"
         "  a sanctioned longlived prefix, if genuinely longlived (PM/EM call)"
-    ) % (name, canonical)
+    ) % (name, canonical), canonical
+
+
+def _advisory_reason(cmd: str, name: str) -> str:
+    del cmd
+    return _advisory_parts(name)[0]
+
+
+def _deny_record(name: str) -> Any:
+    from coordinator_core.guard_messages.alternative_record import (
+        AlternativeRecord,
+        EscalationRoute,
+        ReadyCommand,
+    )
+
+    reason, canonical = _advisory_parts(name)
+    return AlternativeRecord(
+        verdict_kind="deny",
+        guard_name="block-noncanonical-branch-creation",
+        summary=reason,
+        members=(
+            ReadyCommand(text="git checkout -b %s" % canonical),
+            EscalationRoute(
+                report_what="the branch name you need",
+                authorize_what="a longlived branch prefix",
+            ),
+        ),
+        em_text=_stamp(reason),
+    )
 
 
 @declares_safe_direction(
@@ -419,6 +446,6 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     for resolved in resolve_command_positions(cmd):
         name = _classify_segment(resolved.tokens, configured_day_branch)
         if name is not None:
-            return deny("PreToolUse", _advisory_reason(cmd, name))
+            return _deny_record(name)
 
     return None

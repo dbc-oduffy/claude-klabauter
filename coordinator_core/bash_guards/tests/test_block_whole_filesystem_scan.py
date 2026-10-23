@@ -2,7 +2,13 @@
 
 import pytest
 
-from coordinator_core.bash_guards.block_whole_filesystem_scan import check
+from coordinator_core.bash_guards.block_whole_filesystem_scan import check as _check
+from coordinator_core.guard_messages.testing import envelope_of
+
+
+def check(*args, **kwargs):
+    return envelope_of(_check(*args, **kwargs))
+
 
 BS = chr(92)
 

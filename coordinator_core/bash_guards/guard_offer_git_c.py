@@ -15,21 +15,27 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from coordinator_core.bash_guards.dispatch_checks import (
-    _allow_rewrite,
-    _crlf_strip,
-    _deny,
-    _override,
     _skip_leading_env_and_wrappers_idx,
     _strip_leading_env_and_wrappers,
     _strip_q,
 )
 from coordinator_core.bash_guards._helpers import operator_override_note
+from coordinator_core.bash_guards._rewrite_support import (
+    _allow_rewrite_record,
+    _crlf_strip,
+    _deny_record,
+    _override,
+)
 from coordinator_core.bash_guards._command_tokenizer import (
     find_git_segment as _bt_find_git_segment,
     token_matches_binary as _bt_token_matches_binary,
     tokenize_full_command as _bt_tokenize_full_command,
 )
 from coordinator_core.conservatism import SafeDirection, declares_safe_direction
+
+
+_GUARD = "offer-git-c"
+_OVERRIDE_ENV = "COORDINATOR_ALLOW_CD_PREFIX"
 
 
 def _offer_strip_q(t: str) -> str:
@@ -236,7 +242,7 @@ def check_offer_git_c(
     session_id: str = "",
     cwd: str = "",
     payload: Optional[Dict[str, Any]] = None,
-) -> Optional[Dict[str, Any]]:
+) -> Any:
     if not cmd:
         return None
     cmd = _crlf_strip(cmd)
@@ -249,9 +255,18 @@ def check_offer_git_c(
         return None
 
     _cd_note = operator_override_note(
-        "COORDINATOR_ALLOW_CD_PREFIX", payload=payload, git_root=cwd or None
+        _OVERRIDE_ENV, payload=payload, git_root=cwd or None
     )
     _cd_note_suffix = (" " + _cd_note) if _cd_note else ""
+
+    def _rewrite(new_cmd: str, note: str) -> Any:
+        return _allow_rewrite_record(
+            _GUARD,
+            new_cmd,
+            note,
+            override_env=_OVERRIDE_ENV,
+            em_text=note + _cd_note_suffix,
+        )
 
     segments = _offer_quote_aware_segments(cmd)
     seg_count = sum(1 for s in segments if s.strip())
@@ -345,12 +360,10 @@ def check_offer_git_c(
                         "segment scopes to that command either way, so it "
                         "carries forward verbatim)."
                         % (target, carried, carried, target)
-                    ) + _cd_note_suffix
+                    )
                 else:
-                    note = (
-                        "cd+git stalls; auto-rewritten."
-                    ) + _cd_note_suffix
-                return _allow_rewrite(suggestion, note)
+                    note = "cd+git stalls; auto-rewritten."
+                return _rewrite(suggestion, note)
 
         elif followers and unanchored == [] and not ml_bail:
             if prefix1_only:
@@ -360,15 +373,15 @@ def check_offer_git_c(
                     "itself a git invocation, and the wrapper/env prefix on "
                     "the first one carries forward verbatim -- prompt-free)."
                     % (target, carried, carried, target, target)
-                ) + _cd_note_suffix
+                )
             else:
                 note = (
                     "Auto-rewritten: 'cd %s && git ... && git ...' -> "
                     "'git -C %s ... && git -C %s ...' (every follower is itself "
                     "a git invocation, so anchoring each one is equivalent to "
                     "the original 'cd' -- prompt-free)." % (target, target, target)
-                ) + _cd_note_suffix
-            return _allow_rewrite(suggestion, note)
+                )
+            return _rewrite(suggestion, note)
 
     if not has_prefix:
         if cwd and git_body:
@@ -378,13 +391,12 @@ def check_offer_git_c(
                 if ml_bail:
                     return None
                 stripped_cmd = "%s%s" % (git_body, followers)
-                return _allow_rewrite(
+                return _rewrite(
                     stripped_cmd,
                     (
                         "Auto-rewritten: leading 'cd %s' stripped (cwd "
                         "already matches target; followers unchanged)." % target
-                    )
-                    + _cd_note_suffix,
+                    ),
                 )
 
     # F10 (GH #71): a leading `cd` into a real, attached repo root (this
@@ -426,8 +438,34 @@ def check_offer_git_c(
             % (target, "; ".join("'%s'" % s for s in unanchored))
         )
 
-    return _deny(
+    from coordinator_core.guard_messages.alternative_record import AdaptableOffer, ReadyCommand
+
+    offer = (
+        ReadyCommand(text=suggestion)
+        if suggestion_ok
+        else AdaptableOffer(
+            template="git -C %s <subcommand>" % qt,
+            what_to_adapt="the git subcommand, with the 'cd' dropped",
+        )
+    )
+    return _deny_record(
+        _GUARD,
         (
+            "Use 'git -C <path>' instead of a 'cd <path> && git ...' prefix.\n\n"
+            "A leading 'cd' makes this a compound command, which trips a "
+            "permission prompt that renders as a non-returning 'Waiting...' — "
+            "the stall that gets misread as a flaky channel and drives a "
+            "retry-and-retool loop (docs/wiki/tool-output-flakiness-protocol.md § "
+            "Not this protocol — blocked / no-return). 'git -C' is the exact, "
+            "prompt-free equivalent.%s\n\n"
+            "Note: the follower commands after the first ';' / '&&' / newline "
+            "no longer run with '%s' as cwd. If a follower references a "
+            "relative path that was anchored at the cd target, prefix the path "
+            "with '%s/'." % (residual_note, target, target)
+        ),
+        (offer,),
+        _OVERRIDE_ENV,
+        em_text=(
             "Use 'git -C <path>' instead of a 'cd <path> && git ...' prefix.\n\n"
             "A leading 'cd' makes this a compound command, which trips a "
             "permission prompt that renders as a non-returning 'Waiting...' — "
@@ -448,7 +486,7 @@ def check_offer_git_c(
                 target,
             )
         )
-        + _cd_note_suffix
+        + _cd_note_suffix,
     )
 
 

@@ -12,6 +12,11 @@ import pytest
 from coordinator_core.bash_guards import block_subagent_commit as guard
 from coordinator_core.ops.dispatch_emit import run_token
 from coordinator_core.ops.dispatch_emit import terminal_commit_params_channel as chan
+from coordinator_core.guard_messages.testing import envelope_of
+
+
+def _enveloped(check):
+    return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 _COMMIT_AGENT = "coordinator:git-commit-agent"
 _SCRIPT = "scratch/warp/a.workflow.mjs"
@@ -43,7 +48,7 @@ def _emitted_argv(repo) -> str:
 
 
 def _check(cmd: str, transcript: str, agent_type: str = _COMMIT_AGENT):
-    return guard.check(
+    return _enveloped(guard.check)(
         {
             "tool_name": "Bash",
             "tool_input": {"command": cmd},

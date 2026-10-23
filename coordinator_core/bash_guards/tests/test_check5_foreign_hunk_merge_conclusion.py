@@ -17,6 +17,11 @@ from coordinator_core.bash_guards.tests.test_check5_foreign_hunk import (
 )
 from coordinator_core.session import core
 from coordinator_core.win_portability import no_console_creationflags
+from coordinator_core.guard_messages.testing import envelope_of
+
+
+def _enveloped(check):
+    return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -67,7 +72,7 @@ def test_incoming_rewrite_during_merge_is_not_a_foreign_hunk(tmp_path):
     _git(root, "merge", "--no-commit", "--no-ff", "side")
     sid = _session(root)
     _claim(root, sid, "a.txt", content_hash="0" * 64)
-    result = dispatch_checks.check_validate_commit('git commit -m "merge"', sid, cwd=root)
+    result = _enveloped(dispatch_checks.check_validate_commit)('git commit -m "merge"', sid, cwd=root)
     assert "foreign hunk" not in _deny_text(result).lower()
 
 
@@ -84,7 +89,7 @@ def test_untouched_by_merge_path_still_denies(tmp_path):
     _git(root, "add", "c.txt")
     sid = _session(root)
     _claim(root, sid, "c.txt", content_hash="0" * 64)
-    result = dispatch_checks.check_validate_commit('git commit -m "merge"', sid, cwd=root)
+    result = _enveloped(dispatch_checks.check_validate_commit)('git commit -m "merge"', sid, cwd=root)
     reason = _deny_text(result)
     assert "foreign hunk" in reason.lower() and "c.txt" in reason
 
@@ -95,7 +100,7 @@ def test_no_merge_head_denies_as_before(tmp_path):
     _git(root, "add", "a.txt")
     sid = _session(root)
     _claim(root, sid, "a.txt", content_hash="0" * 64)
-    result = dispatch_checks.check_validate_commit('git commit -m "x"', sid, cwd=root)
+    result = _enveloped(dispatch_checks.check_validate_commit)('git commit -m "x"', sid, cwd=root)
     assert "foreign hunk" in _deny_text(result).lower()
 
 
@@ -112,5 +117,5 @@ def test_conflict_resolved_file_is_not_a_foreign_hunk(tmp_path):
     _git(root, "add", "a.txt")
     sid = _session(root)
     _claim(root, sid, "a.txt", content_hash="0" * 64)
-    result = dispatch_checks.check_validate_commit('git commit -m "merge"', sid, cwd=root)
+    result = _enveloped(dispatch_checks.check_validate_commit)('git commit -m "merge"', sid, cwd=root)
     assert "foreign hunk" not in _deny_text(result).lower()

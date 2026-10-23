@@ -38,8 +38,14 @@ import pytest
 from coordinator_core.bash_guards import dispatch_checks as dc
 from coordinator_core.bash_guards import guard_head_tail_rewrite as ht
 from coordinator_core.win_portability import no_console_creationflags
+from coordinator_core.guard_messages.testing import envelope_of
 
-pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
+def _enveloped(check):
+    return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
+
+# real_home: the emitted interpreter is "$HOME"-relative, so the bash child needs the real HOME.
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence, pytest.mark.real_home]
 
 
 def _posix(p) -> str:
@@ -72,7 +78,7 @@ class TestFindExecRewriteApostropheSafety:
         target_dir.mkdir()
         (target_dir / "a.tmp").write_text("x")
         cmd = 'find "%s" -name "*.tmp" -exec rm {} \\;' % _posix(target_dir)
-        out = dc.check_find_exec_rewrite(cmd)
+        out = _enveloped(dc.check_find_exec_rewrite)(cmd)
         assert out is not None
         rewrite = out["hookSpecificOutput"]["updatedInput"]["command"]
         result = _run_via_real_shell(rewrite)
@@ -84,7 +90,7 @@ class TestGrepViaBashRewriteApostropheSafety:
     def test_pattern_with_apostrophe_does_not_break_outer_quote(self, tmp_path):
         (tmp_path / "f.txt").write_text("don't stop\nkeep going\n")
         cmd = "grep -rn \"don't\" %s" % _posix(tmp_path)
-        out = dc.check_grep_via_bash_rewrite(cmd)
+        out = _enveloped(dc.check_grep_via_bash_rewrite)(cmd)
         assert out is not None
         rewrite = out["hookSpecificOutput"]["updatedInput"]["command"]
         result = _run_via_real_shell(rewrite)
@@ -95,7 +101,7 @@ class TestGrepViaBashRewriteApostropheSafety:
 class TestMultiprobeBannerRewriteApostropheSafety:
     def test_echo_banner_with_apostrophe_does_not_break_outer_quote(self):
         cmd = 'echo "=== it\'s facts ==="; pwd; whoami'
-        out = dc.check_multiprobe_banner_rewrite(cmd)
+        out = _enveloped(dc.check_multiprobe_banner_rewrite)(cmd)
         assert out is not None
         rewrite = out["hookSpecificOutput"]["updatedInput"]["command"]
         result = _run_via_real_shell(rewrite)
@@ -107,7 +113,7 @@ class TestHeadTailPlumbingRewriteApostropheSafety:
     def test_grep_upstream_pattern_with_apostrophe_does_not_break_outer_quote(self, tmp_path):
         (tmp_path / "f.txt").write_text("don't stop\nkeep going\n")
         cmd = "grep -rn \"don't\" %s | head -n 1" % _posix(tmp_path)
-        out = ht.check_head_tail_plumbing_rewrite(cmd)
+        out = _enveloped(ht.check_head_tail_plumbing_rewrite)(cmd)
         assert out is not None
         rewrite = out["hookSpecificOutput"]["updatedInput"]["command"]
         result = _run_via_real_shell(rewrite)
@@ -119,7 +125,7 @@ class TestHeadTailPlumbingRewriteApostropheSafety:
         target_dir.mkdir()
         (target_dir / "a.tmp").write_text("x")
         cmd = 'find "%s" -name "*.tmp" | head -n 5' % _posix(target_dir)
-        out = ht.check_head_tail_plumbing_rewrite(cmd)
+        out = _enveloped(ht.check_head_tail_plumbing_rewrite)(cmd)
         assert out is not None
         rewrite = out["hookSpecificOutput"]["updatedInput"]["command"]
         result = _run_via_real_shell(rewrite)

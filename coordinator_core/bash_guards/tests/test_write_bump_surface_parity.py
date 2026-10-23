@@ -80,6 +80,11 @@ from coordinator_core.bash_guards.tests.test_bump_outside_repo_write import (
     _clean_bump_env,  # noqa: F401 -- shared isolation fixture, autouse once imported.
 )
 from coordinator_core.win_portability import no_console_creationflags
+from coordinator_core.guard_messages.testing import envelope_of
+
+
+def _enveloped(check):
+    return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 pytestmark = [
     pytest.mark.spawns_process,
@@ -193,10 +198,10 @@ def test_ac8_bash_and_tool_surfaces_agree_on_destination_class(tmp_path, monkeyp
 
     if kind == "outside_any_repo":
         cmd = f"echo hi > {_posix(target_file)}"
-        bash_result = outside_guard.check_bump_outside_repo_write(cmd, session_id, str(anchor), {})
+        bash_result = _enveloped(outside_guard.check_bump_outside_repo_write)(cmd, session_id, str(anchor), {})
     else:
         cmd = f"git -C {_posix(target_repo)} commit --allow-empty -m x"
-        bash_result = fg_guard.check_bump_foreign_repo_write(cmd, session_id, str(anchor), {})
+        bash_result = _enveloped(fg_guard.check_bump_foreign_repo_write)(cmd, session_id, str(anchor), {})
 
     payload = {
         "tool_name": "Write",
@@ -205,7 +210,7 @@ def test_ac8_bash_and_tool_surfaces_agree_on_destination_class(tmp_path, monkeyp
         "cwd": str(anchor),
         "agent_id": "",
     }
-    tool_result = tool_guard.check(payload)
+    tool_result = _enveloped(tool_guard.check)(payload)
 
     assert bash_result is not None, f"{kind}: Bash-surface guard did not bump for {target_repo}"
     assert tool_result is not None, f"{kind}: tool-surface guard did not bump for {target_repo}"
@@ -277,7 +282,7 @@ def test_lessons_outbox_write_silent_on_both_surfaces(tmp_path, monkeypatch):
     assert applicability.bump_applies(session_id, cwd=str(anchor)) is True
 
     cmd = f"echo hi > {_posix(lessons_file)}"
-    bash_result = fg_guard.check_bump_foreign_repo_write(cmd, session_id, str(anchor), {})
+    bash_result = _enveloped(fg_guard.check_bump_foreign_repo_write)(cmd, session_id, str(anchor), {})
     assert bash_result is None, (
         "Bash surface bumped on a foreign-repo state/lessons-outbox write -- "
         "the parity gap this test exists to close."
@@ -290,7 +295,7 @@ def test_lessons_outbox_write_silent_on_both_surfaces(tmp_path, monkeypatch):
         "cwd": str(anchor),
         "agent_id": "",
     }
-    tool_result = tool_guard.check(payload)
+    tool_result = _enveloped(tool_guard.check)(payload)
     assert tool_result is None, "tool surface bumped on a foreign-repo state/lessons-outbox write"
 
 
@@ -343,7 +348,7 @@ def test_claude_home_write_silent_on_both_surfaces(tmp_path, monkeypatch):
     assert applicability.target_is_under_claude_home(str(target_file)) is True
 
     cmd = f"git -C {_posix(claude_home)} commit --allow-empty -m x"
-    bash_result = fg_guard.check_bump_foreign_repo_write(cmd, session_id, str(anchor), {})
+    bash_result = _enveloped(fg_guard.check_bump_foreign_repo_write)(cmd, session_id, str(anchor), {})
     assert bash_result is None, (
         "foreign-repo Bash guard bumped a ~/.claude write -- the AC7 parity "
         "this test exists to hold."
@@ -356,7 +361,7 @@ def test_claude_home_write_silent_on_both_surfaces(tmp_path, monkeypatch):
         "cwd": str(anchor),
         "agent_id": "",
     }
-    tool_result = tool_guard.check(payload)
+    tool_result = _enveloped(tool_guard.check)(payload)
     assert tool_result is None, (
         "tool guard bumped a ~/.claude write -- the AC7 parity this test "
         "exists to hold."
@@ -416,7 +421,7 @@ def test_claude_home_env_call_site_consistency_under_injected_home(tmp_path, mon
     assert applicability.target_is_under_claude_home(str(target_file)) is False
 
     cmd = f"git -C {_posix(claude_home)} commit --allow-empty -m x"
-    bash_result = fg_guard.check_bump_foreign_repo_write(cmd, session_id, str(anchor), {})
+    bash_result = _enveloped(fg_guard.check_bump_foreign_repo_write)(cmd, session_id, str(anchor), {})
     payload = {
         "tool_name": "Write",
         "tool_input": {"file_path": str(target_file)},
@@ -424,7 +429,7 @@ def test_claude_home_env_call_site_consistency_under_injected_home(tmp_path, mon
         "cwd": str(anchor),
         "agent_id": "",
     }
-    tool_result = tool_guard.check(payload)
+    tool_result = _enveloped(tool_guard.check)(payload)
 
     assert bash_result is not None, (
         "foreign-repo Bash guard stayed silent despite the injected HOME no "
@@ -467,7 +472,7 @@ def test_ordinary_foreign_write_still_bumps_on_both_surfaces(tmp_path, monkeypat
     assert applicability.bump_applies(session_id, cwd=str(anchor)) is True
 
     cmd = f"git -C {_posix(foreign_root)} commit --allow-empty -m x"
-    bash_result = fg_guard.check_bump_foreign_repo_write(cmd, session_id, str(anchor), {})
+    bash_result = _enveloped(fg_guard.check_bump_foreign_repo_write)(cmd, session_id, str(anchor), {})
     assert bash_result is not None, "Bash surface failed to bump on an ordinary foreign-repo write"
 
     payload = {
@@ -477,5 +482,5 @@ def test_ordinary_foreign_write_still_bumps_on_both_surfaces(tmp_path, monkeypat
         "cwd": str(anchor),
         "agent_id": "",
     }
-    tool_result = tool_guard.check(payload)
+    tool_result = _enveloped(tool_guard.check)(payload)
     assert tool_result is not None, "tool surface failed to bump on an ordinary foreign-repo write"

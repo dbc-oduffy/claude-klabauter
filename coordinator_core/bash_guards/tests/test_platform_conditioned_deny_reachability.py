@@ -52,6 +52,7 @@ import pytest
 
 from coordinator_core.bash_guards import dispatch
 from coordinator_core.bash_guards.dispatch import evaluate_payload_json
+from coordinator_core.guard_messages.testing import envelope_of
 from coordinator_core.bash_guards.tests import guard_message_corpus as corpus
 from coordinator_core.bash_guards.tests import test_confinement_deny_band_shape as band_shape
 
@@ -263,7 +264,7 @@ def _fire(row):
             chain_out = evaluate_payload_json(
                 json.dumps(payload), host_is_windows=row.host_is_windows
             )
-    return _verdict(isolated.envelope), _verdict(chain_out)
+    return _verdict(envelope_of(isolated.envelope, "em")), _verdict(chain_out)
 
 
 def test_fail_closed_enumeration_is_non_empty():

@@ -26,6 +26,11 @@ from typing import Dict, List, Optional, Tuple
 import pytest
 
 from coordinator_core.bash_guards import dispatch_checks
+from coordinator_core.guard_messages.testing import envelope_of
+
+
+def _enveloped(check):
+    return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 
 def _install_git_stub(monkeypatch, diff_result: Tuple[int, str]):
@@ -48,7 +53,7 @@ def _install_git_stub(monkeypatch, diff_result: Tuple[int, str]):
 
 
 def _verdict(cmd: str) -> str:
-    out = dispatch_checks.check_git_commit_safe_commit_advise(cmd, "sess-fail-open")
+    out = _enveloped(dispatch_checks.check_git_commit_safe_commit_advise)(cmd, "sess-fail-open")
     if out is None:
         return "none"
     decision = out["hookSpecificOutput"]["permissionDecision"]
@@ -57,7 +62,7 @@ def _verdict(cmd: str) -> str:
 
 
 def _advisory_text(cmd: str) -> str:
-    out = dispatch_checks.check_git_commit_safe_commit_advise(cmd, "sess-fail-open")
+    out = _enveloped(dispatch_checks.check_git_commit_safe_commit_advise)(cmd, "sess-fail-open")
     assert out is not None
     hook = out["hookSpecificOutput"]
     assert hook["permissionDecision"] == "allow"
@@ -203,7 +208,7 @@ def test_fail_open_is_persisted_with_cause_session_and_command(monkeypatch, tmp_
     _point_audit_dir_at(monkeypatch, tmp_path)
     _install_git_stub(monkeypatch, (-1, ""))
 
-    dispatch_checks.check_git_commit_safe_commit_advise(
+    _enveloped(dispatch_checks.check_git_commit_safe_commit_advise)(
         'git -C /repo commit -m "sweeping subject"',
         "sess-persisted",
         git_root=str(tmp_path),
@@ -223,7 +228,7 @@ def test_a_clean_index_writes_no_record(monkeypatch, tmp_path):
     _point_audit_dir_at(monkeypatch, tmp_path)
     _install_git_stub(monkeypatch, (0, ""))
 
-    dispatch_checks.check_git_commit_safe_commit_advise(
+    _enveloped(dispatch_checks.check_git_commit_safe_commit_advise)(
         'git -C /repo commit -m "x"', "sess-clean", git_root=str(tmp_path)
     )
 
@@ -240,7 +245,7 @@ def test_persistence_failure_never_breaks_the_guard(monkeypatch, tmp_path):
 
     monkeypatch.setattr(dispatch_checks._dc_git_probe, "_override_log_path", _boom)
 
-    out = dispatch_checks.check_git_commit_safe_commit_advise(
+    out = _enveloped(dispatch_checks.check_git_commit_safe_commit_advise)(
         'git -C /repo commit -m "x"', "sess-boom", git_root=str(tmp_path)
     )
     assert out is not None
@@ -252,7 +257,7 @@ def test_no_git_root_is_a_silent_skip_not_a_crash(monkeypatch, tmp_path):
     """`git_root` is optional on this entry point; absent it there is no
     session audit directory to write into, and that must not raise."""
     _install_git_stub(monkeypatch, (-1, ""))
-    out = dispatch_checks.check_git_commit_safe_commit_advise(
+    out = _enveloped(dispatch_checks.check_git_commit_safe_commit_advise)(
         'git -C /repo commit -m "x"', "sess-no-root"
     )
     assert out is not None

@@ -5,6 +5,8 @@ import asyncio
 
 import pytest
 
+from coordinator_core.guard_messages.testing import envelope_of
+
 
 def _run(result):
     if asyncio.iscoroutine(result):
@@ -152,13 +154,13 @@ def test_bash_ban_op_denies_under_deny_policy(tmp_path):
     (tmp_path / "coordinator.local.md").write_text(
         "---\nsubagent_bash_policy: deny\n---\nbody\n", encoding="utf-8"
     )
-    out = _handler(
+    out = envelope_of(_handler(
         {
             "tool_name": "Bash",
             "cwd": str(tmp_path),
             "agent_id": "some-agent",
         }
-    )
+    ), "em")
     hso = out.get("hookSpecificOutput")
     assert hso is not None
     assert hso.get("permissionDecision") == "deny"

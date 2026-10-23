@@ -33,6 +33,7 @@ import pytest
 from coordinator_core.bash_guards import (
     block_reviewer_bash_outside_allowlist as guard,
 )
+from coordinator_core.guard_messages.testing import envelope_of
 
 _REVIEWER_TYPE = "coordinator:code-reviewer"
 _EXECUTOR_TYPE = "coordinator:executor"
@@ -89,12 +90,14 @@ def _confine(monkeypatch, subagent_type: str) -> None:
 
 
 def _verdict(result) -> str:
+    result = envelope_of(result, "em")
     if result is None:
         return "allow"
     return result["hookSpecificOutput"]["permissionDecision"]
 
 
 def _reason(result) -> str:
+    result = envelope_of(result, "em")
     assert result is not None
     assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
     return result["hookSpecificOutput"]["permissionDecisionReason"]

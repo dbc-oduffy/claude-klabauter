@@ -31,6 +31,11 @@ import re
 import pytest
 
 from coordinator_core.bash_guards import block_noncanonical_branch_creation as c1
+from coordinator_core.guard_messages.testing import envelope_of
+
+
+def _enveloped(check):
+    return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 _GUARDS = (c1,)
 
@@ -202,11 +207,11 @@ class TestAC3NoHatch:
     # AC3's guarantee: the retired env-prefix hatch does not let a caller
     # escape the guard's verdict.
     def test_env_prefix_override_still_advises(self):
-        out = c1.check(_payload('COORDINATOR_OVERRIDE_BRANCH=1 git checkout -b bad-name'))
+        out = _enveloped(c1.check)(_payload('COORDINATOR_OVERRIDE_BRANCH=1 git checkout -b bad-name'))
         _advisory_ctx(out)
 
     def test_env_prefix_override_still_advises_git_branch_form(self):
-        out = c1.check(_payload("COORDINATOR_OVERRIDE_BRANCH=1 git branch bad-name"))
+        out = _enveloped(c1.check)(_payload("COORDINATOR_OVERRIDE_BRANCH=1 git branch bad-name"))
         _advisory_ctx(out)
 
     def test_override_key_absent_from_guard_module_source(self):
@@ -295,7 +300,7 @@ class TestAC3NoHatch:
             )
 
     def test_override_key_absent_from_every_emitted_message(self, monkeypatch):
-        c1_ctx = _advisory_ctx(c1.check(_payload("git checkout -b fix/some-topic")))
+        c1_ctx = _advisory_ctx(_enveloped(c1.check)(_payload("git checkout -b fix/some-topic")))
         assert "COORDINATOR_OVERRIDE_BRANCH" not in c1_ctx
 
 
@@ -311,14 +316,14 @@ class TestAC5CeremonyNonRegression:
         for cmd in shapes:
             payload = _payload(cmd, tool_name=None)
             for g in _GUARDS:
-                assert g.check(payload) is None
+                assert _enveloped(g.check)(payload) is None
 
     def test_bare_today_branch_checkout_allows(self):
-        assert c1.check(_payload("git checkout -b work/machine-b/2026-08-01")) is None
+        assert _enveloped(c1.check)(_payload("git checkout -b work/machine-b/2026-08-01")) is None
 
     def test_collision_suffix_shapes_are_c1s_own_documented_incoherence(self):
         for n in range(2, 10):
-            out = c1.check(_payload("git checkout -b work/machine-b/2026-08-01-%d" % n))
+            out = _enveloped(c1.check)(_payload("git checkout -b work/machine-b/2026-08-01-%d" % n))
             _advisory_ctx(out)
 
     def test_workday_start_step0_rename_and_rollback_untouched(self):
@@ -326,10 +331,10 @@ class TestAC5CeremonyNonRegression:
         rollback = "git branch -m work/machine-b/2026-08-01 work/machine-b/2026-07-30to01"
         for cmd in (rename, rollback):
             for g in _GUARDS:
-                assert g.check(_payload(cmd)) is None
+                assert _enveloped(g.check)(_payload(cmd)) is None
 
     def test_recovery_branch_cut_shape_allows(self):
-        assert c1.check(_payload("git checkout -b work/some-host/2026-08-01")) is None
+        assert _enveloped(c1.check)(_payload("git checkout -b work/some-host/2026-08-01")) is None
 
 
 # ---------------------------------------------------------------------------
@@ -340,12 +345,13 @@ class TestAC5CeremonyNonRegression:
 class TestAC9NoDateComparisonInC1:
     def test_local_day_only_referenced_inside_advisory_reason(self):
         """Structural (AST) assertion: `local_day` is named nowhere in C1's
-        module except inside `_advisory_reason` (remediation text only)."""
+        module except inside the remediation-text builders
+        (`_advisory_reason`, and `_advisory_parts` which it delegates to)."""
         src = inspect.getsource(c1)
         tree = ast.parse(src)
         offending = []
         for node in ast.walk(tree):
-            if isinstance(node, ast.FunctionDef) and node.name != "_advisory_reason":
+            if isinstance(node, ast.FunctionDef) and node.name not in ("_advisory_reason", "_advisory_parts"):
                 for sub in ast.walk(node):
                     if isinstance(sub, ast.Name) and sub.id == "local_day":
                         offending.append(node.name)
@@ -378,18 +384,18 @@ class TestAC9NoDateComparisonInC1:
         does not change when `local_day()` (only used for remediation text)
         returns a different date."""
         monkeypatch.setattr(c1, "local_day", lambda: "2020-01-01")
-        out_a = c1.check(_payload("git checkout -b fix/some-topic"))
+        out_a = _enveloped(c1.check)(_payload("git checkout -b fix/some-topic"))
         monkeypatch.setattr(c1, "local_day", lambda: "2030-12-31")
-        out_b = c1.check(_payload("git checkout -b fix/some-topic"))
+        out_b = _enveloped(c1.check)(_payload("git checkout -b fix/some-topic"))
         assert out_a is not None and out_b is not None
         assert out_a["hookSpecificOutput"]["permissionDecision"] == "deny"
         assert out_b["hookSpecificOutput"]["permissionDecision"] == "deny"
 
     def test_verdict_identical_across_different_todays_for_canonical_name(self, monkeypatch):
         monkeypatch.setattr(c1, "local_day", lambda: "2020-01-01")
-        out_a = c1.check(_payload("git checkout -b work/machine-b/2026-08-01"))
+        out_a = _enveloped(c1.check)(_payload("git checkout -b work/machine-b/2026-08-01"))
         monkeypatch.setattr(c1, "local_day", lambda: "2030-12-31")
-        out_b = c1.check(_payload("git checkout -b work/machine-b/2026-08-01"))
+        out_b = _enveloped(c1.check)(_payload("git checkout -b work/machine-b/2026-08-01"))
         assert out_a is None
         assert out_b is None
 
@@ -399,11 +405,11 @@ class TestAC10AC14RenameVsCreate:
     def test_branch_rename_untouched(self, flag):
         cmd = "git branch %s old-name new-name" % flag
         for g in _GUARDS:
-            assert g.check(_payload(cmd)) is None
+            assert _enveloped(g.check)(_payload(cmd)) is None
 
     def test_branch_create_advised_by_c1(self):
         cmd = "git branch some-noncanonical-name"
-        _advisory_ctx(c1.check(_payload(cmd)))
+        _advisory_ctx(_enveloped(c1.check)(_payload(cmd)))
 
 
 class TestAC13HazardRepoGateFirst:
@@ -417,4 +423,4 @@ class TestAC13HazardRepoGateFirst:
         ]
         for cmd in shapes:
             for g in _GUARDS:
-                assert g.check(_payload(cmd)) is None
+                assert _enveloped(g.check)(_payload(cmd)) is None

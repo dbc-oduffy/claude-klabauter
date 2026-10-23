@@ -39,7 +39,6 @@ import sys
 import time
 from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
 
-from coordinator_core._hook_envelope import deny as _deny
 from coordinator_core.bash_guards._heavy_admission_contract import (
     ADVISORY_WORKER_RSS,
     GUARD_NAME,
@@ -65,8 +64,9 @@ CLASS = "hard-deny"
 MATCHERS = COMMAND_TOOL_NAMES
 GENERATES: List[str] = []
 
-_SETUP_REMEDY = "The box owner runs scripts/setup.py"
 _LOG_CMD_CHARS = 120
+_SETUP_REMEDY = "The box owner runs scripts/setup.py"
+_RETRY_READING = "Retry once the host reading recovers"
 
 
 # --------------------------------------------------------------------------- seams
@@ -228,8 +228,32 @@ def _log_bypass(leg: str, key: str, payload: Dict[str, Any], command: str) -> No
         print("%s: failed to write override audit log: %s" % (GUARD_NAME, exc), file=sys.stderr)
 
 
-def _deny_text(leg: str, fact: str, alternative: str) -> Dict[str, Any]:
-    return _deny("PreToolUse", "BLOCKED %s (%s leg): %s. %s." % (GUARD_NAME, leg, fact, alternative))
+def _deny_text(leg: str, fact: str, *members: Any, legacy: str) -> Any:
+    from coordinator_core._hook_envelope import _stamp
+    from coordinator_core.bash_guards._rewrite_support import _deny_record
+
+    return _deny_record(
+        GUARD_NAME,
+        "BLOCKED %s (%s leg): %s." % (GUARD_NAME, leg, fact),
+        members,
+        em_text=_stamp("BLOCKED %s (%s leg): %s. %s." % (GUARD_NAME, leg, fact, legacy)),
+    )
+
+
+def _retry(template: str, what_to_adapt: str = "the timing") -> Any:
+    from coordinator_core.guard_messages.alternative_record import AdaptableOffer
+
+    return AdaptableOffer(template=template, what_to_adapt=what_to_adapt)
+
+
+def _route(report_what: str, authorize_what: str) -> Any:
+    from coordinator_core.guard_messages.alternative_record import EscalationRoute
+
+    return EscalationRoute(report_what=report_what, authorize_what=authorize_what)
+
+
+def _setup_route() -> Any:
+    return _route("the unconfigured heavy_admission keys", "the box owner running scripts/setup.py")
 
 
 def _payload_pid(payload: Mapping[str, Any]) -> Optional[int]:
@@ -298,9 +322,8 @@ def _record(
     }
 
 
-def _deny_reason(envelope: Mapping[str, Any]) -> str:
-    hso = envelope.get("hookSpecificOutput")
-    return str(hso.get("permissionDecisionReason", "")) if isinstance(hso, dict) else ""
+def _deny_reason(record: Any) -> str:
+    return record.em_text or record.summary
 
 
 def _flag_runaway_workers(config, payload, command, cls, anchor, census, rows) -> None:
@@ -350,7 +373,7 @@ ADMITTED_VERIFIER = "admitted-verifier"
 _VERIFIER_TYPES = frozenset({"coordinator:test-runner", "coordinator:exit-criterion-judge"})
 
 
-def _identity_leg(payload: Dict[str, Any], command: str, heavy_name: str, cls) -> Optional[Dict[str, Any]]:
+def _identity_leg(payload: Dict[str, Any], command: str, heavy_name: str, cls) -> Any:
     from coordinator_core.bash_guards._heavy_identity import identity_verdict, load_allowlist
 
     allowlist = load_allowlist()
@@ -373,7 +396,8 @@ def _identity_leg(payload: Dict[str, Any], command: str, heavy_name: str, cls) -
     return _deny_text(
         LEG_IDENTITY,
         "%s: %s" % (heavy_name, verdict.reason),
-        "The EM or coordinator:test-runner runs it",
+        _route("the heavy command", "the EM or coordinator:test-runner running it"),
+        legacy="The EM or coordinator:test-runner runs it",
     )
 
 
@@ -383,7 +407,7 @@ def _read_box_hold():
     return box_hold.read_hold()
 
 
-def _box_hold_leg(payload: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
+def _box_hold_leg(payload: Mapping[str, Any]) -> Any:
     hold = _read_box_hold()
     if hold is None or hold.set_by_session == payload.get("session_id"):
         return None
@@ -391,12 +415,18 @@ def _box_hold_leg(payload: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
     return _deny_text(
         LEG_BOX_HOLD,
         "the box is held by %s until %s: %s" % (hold.set_by_session, expires, hold.reason),
-        "Wait for expiry or the holder's clear; inside a workflow row or terminal test, "
+        _retry("wait for expiry or the holder's clear"),
+        _route(
+            "the command as an owed gate (gate-blocker: guard-denied), inside a workflow row "
+            "or terminal test",
+            "running it once the hold clears",
+        ),
+        legacy="Wait for expiry or the holder's clear; inside a workflow row or terminal test, "
         "report the command as an owed gate (gate-blocker: guard-denied) and continue",
     )
 
 
-def _ram_leg(config: Mapping[str, Any], primitives) -> Optional[Dict[str, Any]]:
+def _ram_leg(config: Mapping[str, Any], primitives) -> Any:
     from coordinator_core.bash_guards import _heavy_lease_store as leases
 
     floor = _positive_int(config, KEY_FREE_RAM_FLOOR_MB)
@@ -405,14 +435,16 @@ def _ram_leg(config: Mapping[str, Any], primitives) -> Optional[Dict[str, Any]]:
         return _deny_text(
             LEG_RAM_FLOOR,
             "heavy_admission RAM keys unconfigured",
-            _SETUP_REMEDY,
+            _setup_route(),
+            legacy=_SETUP_REMEDY,
         )
     reading = _read_available()
     if not reading.trusted or reading.avail_mb is None:
         return _deny_text(
             LEG_RAM_FLOOR,
             "available RAM is unreadable or untrusted (%s)" % reading.source,
-            "Retry once the host reading recovers",
+            _retry("retry the command", "the timing, once the host reading recovers"),
+            legacy=_RETRY_READING,
         )
     leases.reap(primitives)
     reserved = leases.unattributed_count() * reserve
@@ -424,7 +456,8 @@ def _ram_leg(config: Mapping[str, Any], primitives) -> Optional[Dict[str, Any]]:
         LEG_RAM_FLOOR,
         "%d MB available, %d MB reserved by unattributed leases, floor %d MB; holders: %s"
         % (reading.avail_mb, reserved, floor, "; ".join(held) if held else "none"),
-        "Wait for a holder to finish, then retry",
+        _retry("wait for a holder to finish, then retry"),
+        legacy="Wait for a holder to finish, then retry",
     )
 
 
@@ -463,7 +496,7 @@ def _cap_leg(
     typecheck: bool = False,
     snapshot_out: Optional[List[Any]] = None,
 ):
-    """Returns (deny_envelope_or_None, anchor_or_None, census_or_None, launch_ctime).
+    """Returns (deny_record_or_None, anchor_or_None, census_or_None, launch_ctime).
     The one process-table snapshot is appended to `snapshot_out` for the worker-RSS advisory."""
     from coordinator_core.bash_guards import _session_census as census_mod
 
@@ -474,7 +507,8 @@ def _cap_leg(
             _deny_text(
                 LEG_SESSION_CAP,
                 "heavy_admission session cap unconfigured",
-                _SETUP_REMEDY,
+                _setup_route(),
+                legacy=_SETUP_REMEDY,
             ),
             None,
             None,
@@ -483,7 +517,12 @@ def _cap_leg(
     rows = primitives.snapshot()
     if rows is None:
         return (
-            _deny_text(LEG_SESSION_CAP, "the process table is unreadable", "Retry once the host reading recovers"),
+            _deny_text(
+                LEG_SESSION_CAP,
+                "the process table is unreadable",
+                _retry("retry the command", "the timing, once the host reading recovers"),
+                legacy=_RETRY_READING,
+            ),
             None,
             None,
             0,
@@ -497,7 +536,8 @@ def _cap_leg(
             _deny_text(
                 LEG_SESSION_CAP,
                 "no session anchor found above pid %d" % caller,
-                "Launch from inside a Claude session",
+                _retry("launch from inside a Claude session", "the launching session"),
+                legacy="Launch from inside a Claude session",
             ),
             None,
             None,
@@ -511,7 +551,12 @@ def _cap_leg(
         census = _fold_claimed(census, rows, anchor, chain)
     if census is None:
         return (
-            _deny_text(LEG_SESSION_CAP, "the process table is unreadable", "Retry once the host reading recovers"),
+            _deny_text(
+                LEG_SESSION_CAP,
+                "the process table is unreadable",
+                _retry("retry the command", "the timing, once the host reading recovers"),
+                legacy=_RETRY_READING,
+            ),
             None,
             None,
             0,
@@ -523,7 +568,8 @@ def _cap_leg(
             _deny_text(
                 LEG_SESSION_CAP,
                 "session already runs a typecheck: pids %s" % ", ".join(str(p) for p in running),
-                "Wait for it to finish",
+                _retry("wait for it to finish"),
+                legacy="Wait for it to finish",
             ),
             anchor,
             census,
@@ -536,7 +582,8 @@ def _cap_leg(
             _deny_text(
                 LEG_SESSION_CAP,
                 "session holds %d heavy commands (cap %d): pids %s" % (len(commands), heavy_cap, pids),
-                "Wait for one to finish",
+                _retry("wait for one to finish"),
+                legacy="Wait for one to finish",
             ),
             anchor,
             census,
@@ -548,7 +595,8 @@ def _cap_leg(
             _deny_text(
                 LEG_SESSION_CAP,
                 "session holds %d background shells (cap %d): pids %s" % (len(census.shells), bg_cap, pids),
-                "Stop an idle shell first",
+                _retry("stop an idle shell first", "the shell to stop"),
+                legacy="Stop an idle shell first",
             ),
             anchor,
             census,
@@ -633,8 +681,8 @@ def release_session_leases(payload: Mapping[str, Any], holder_pid: Optional[int]
 def check(
     payload: Dict[str, Any],
     resolve_wiki_citation: Optional[Callable[[str], str]] = None,
-) -> Optional[Dict[str, Any]]:
-    """None (allow) or the hard-deny envelope. Every deny, and every crash, is appended to the
+) -> Any:
+    """None (allow) or the hard-deny record. Every deny, and every crash, is appended to the
     would-deny log whatever the guard's level. `resolve_wiki_citation` is accepted for the
     chain's call signature and unused."""
     del resolve_wiki_citation
@@ -665,7 +713,7 @@ def check(
         raise
 
 
-def _admit(payload: Dict[str, Any], command: str, cls, config) -> Optional[Dict[str, Any]]:
+def _admit(payload: Dict[str, Any], command: str, cls, config) -> Any:
     heavy = cls.heavy_class is not None
     heavy_name = cls.heavy_class.value if heavy else "background"
 

@@ -37,6 +37,11 @@ from coordinator_core.bash_guards.dispatch_checks import (
     check_validate_commit,
 )
 from coordinator_core.win_portability import no_console_creationflags
+from coordinator_core.guard_messages.testing import envelope_of
+
+
+def _enveloped(check):
+    return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -94,7 +99,7 @@ class TestCommitScopeFollowsLeadingCd:
 
         monkeypatch.chdir(outer)
         cmd = f"cd {fixture} && git commit -q -m x"
-        result = check_validate_commit(cmd, "s1", outer, payload={"cwd": outer})
+        result = _enveloped(check_validate_commit)(cmd, "s1", outer, payload={"cwd": outer})
         assert result is None, (
             "commit-scope check must resolve the fixture repo's own "
             f"(empty) staged set, not the outer repo's -- got {result!r}"
@@ -134,13 +139,13 @@ class TestDestructiveGitOrphanRelativeCDirResolvesAgainstPayloadCwd:
 
         monkeypatch.chdir(os.path.dirname(outer))
 
-        abs_result = check_destructive_git_orphan(
+        abs_result = _enveloped(check_destructive_git_orphan)(
             f"git -C {nested} reset --hard main", "s1", payload={"cwd": outer}
         )
         assert abs_result is not None
         assert abs_result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
-        rel_result = check_destructive_git_orphan(
+        rel_result = _enveloped(check_destructive_git_orphan)(
             f"git -C {c_dir_form} reset --hard main", "s1", payload={"cwd": outer}
         )
         assert rel_result is not None, (
@@ -155,7 +160,7 @@ class TestDestructiveGitOrphanRelativeCDirResolvesAgainstPayloadCwd:
         outer, nested = _outer_and_nested_ahead_repo
         monkeypatch.chdir(os.path.dirname(outer))
 
-        result = check_destructive_git_orphan(
+        result = _enveloped(check_destructive_git_orphan)(
             "git -C reset reset --hard main", "s1", payload={}, git_root=outer
         )
         assert result is not None, (
@@ -182,7 +187,7 @@ class TestDestructiveRevertFollowsLeadingCd:
 
         monkeypatch.chdir(outer)
         cmd = f"cd {fixture} && git checkout -q -f"
-        result = check_destructive_git_revert(cmd, "s1", {"cwd": outer})
+        result = _enveloped(check_destructive_git_revert)(cmd, "s1", {"cwd": outer})
         assert result is None, (
             "checkout in a clean fixture repo must not be blocked on the "
             f"OUTER repo's dirty state -- got {result!r}"
@@ -260,7 +265,7 @@ class TestDestructiveGitOrphanFollowsCdChain:
             f"cd {scratch} && rm -rf other && mkdir other && cd sub && "
             "git reset --hard main"
         )
-        result = check_destructive_git_orphan(cmd, "s1", payload={"cwd": engine})
+        result = _enveloped(check_destructive_git_orphan)(cmd, "s1", payload={"cwd": engine})
         assert result is None, (
             "reset that is a no-op in the scratch repo's own history must "
             f"not be denied on the engine repo's ahead branch -- got {result!r}"
@@ -286,7 +291,7 @@ class TestDestructiveGitOrphanFollowsCdChain:
             f"cd {scratch} && rm -rf other && mkdir other && cd sub && "
             "git reset --hard main"
         )
-        result = check_destructive_git_orphan(cmd, "s1", payload={"cwd": engine})
+        result = _enveloped(check_destructive_git_orphan)(cmd, "s1", payload={"cwd": engine})
         assert result is not None, (
             "reset that would drop the scratch repo's own ahead commit must "
             "be denied even though the engine repo the guard would otherwise "

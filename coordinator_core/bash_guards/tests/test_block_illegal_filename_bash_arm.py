@@ -28,6 +28,11 @@ import itertools
 import pytest
 
 from coordinator_core.bash_guards import block_illegal_filename as m
+from coordinator_core.guard_messages.testing import envelope_of
+
+
+def _enveloped(check):
+    return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 
 def _payload(command: str) -> dict:
@@ -40,7 +45,7 @@ def _payload(command: str) -> dict:
 
 
 def _fires(command: str) -> bool:
-    out = m.check(_payload(command))
+    out = _enveloped(m.check)(_payload(command))
     return out is not None
 
 
@@ -86,7 +91,7 @@ def test_git_commit_unquoted_example_stays_silent():
 
 
 def test_advisory_never_denies_when_it_fires():
-    out = m.check(_payload('echo x > "bad?name.txt"'))
+    out = _enveloped(m.check)(_payload('echo x > "bad?name.txt"'))
     assert out is not None
     hso = out.get("hookSpecificOutput", {})
     assert hso.get("permissionDecision") != "deny"
@@ -308,7 +313,7 @@ def test_redir_escape_quote_target_matrix(cmd, expected_fires):
 
 
 def test_illegal_redirect_target_returns_updated_input_with_sanitized_name():
-    out = m.check(_payload('echo x > bad?name.txt'))
+    out = _enveloped(m.check)(_payload('echo x > bad?name.txt'))
     assert out is not None
     hso = out.get("hookSpecificOutput", {})
     assert "permissionDecision" not in hso
@@ -320,7 +325,7 @@ def test_illegal_redirect_target_returns_updated_input_with_sanitized_name():
 def test_updated_input_preserves_other_tool_input_keys():
     payload = _payload('echo x > bad?name.txt')
     payload["tool_input"]["description"] = "keep me"
-    out = m.check(payload)
+    out = _enveloped(m.check)(payload)
     updated = out["hookSpecificOutput"]["updatedInput"]
     assert updated["description"] == "keep me"
 
@@ -332,7 +337,7 @@ def test_updated_input_still_carries_advisory_context():
     # message text is a register" (one fact, once; no self-legitimacy). The
     # claim worth pinning was never the prefix, it was that a rewritten call
     # still explains ITSELF rather than silently changing under the agent.
-    out = m.check(_payload('echo x > bad?name.txt'))
+    out = _enveloped(m.check)(_payload('echo x > bad?name.txt'))
     hso = out["hookSpecificOutput"]
     assert "additionalContext" in hso
     ctx = hso["additionalContext"]
@@ -341,25 +346,25 @@ def test_updated_input_still_carries_advisory_context():
 
 
 def test_updated_input_still_never_denies():
-    out = m.check(_payload('echo x > bad?name.txt'))
+    out = _enveloped(m.check)(_payload('echo x > bad?name.txt'))
     hso = out.get("hookSpecificOutput", {})
     assert hso.get("permissionDecision") != "deny"
 
 
 def test_mv_dest_illegal_name_returns_updated_input():
-    out = m.check(_payload('mv a.txt b?.txt'))
+    out = _enveloped(m.check)(_payload('mv a.txt b?.txt'))
     hso = out["hookSpecificOutput"]
     assert hso["updatedInput"]["command"] == 'mv a.txt b-.txt'
 
 
 def test_quoted_redirect_target_updated_input_preserves_quoting():
-    out = m.check(_payload('echo x > "bad?name.txt"'))
+    out = _enveloped(m.check)(_payload('echo x > "bad?name.txt"'))
     hso = out["hookSpecificOutput"]
     assert hso["updatedInput"]["command"] == 'echo x > "bad-name.txt"'
 
 
 def test_rewrite_context_does_not_ask_agent_to_act():
-    out = m.check(_payload('echo x > "bad?name.txt"'))
+    out = _enveloped(m.check)(_payload('echo x > "bad?name.txt"'))
     ctx = out["hookSpecificOutput"].get("additionalContext", "")
     assert "Use instead" not in ctx
     assert "Auto-corrected" in ctx
@@ -389,7 +394,7 @@ def test_dash_o_inside_a_word_is_not_a_flag():
 
 
 def _rewritten(command: str):
-    out = m.check(_payload(command))
+    out = _enveloped(m.check)(_payload(command))
     return None if out is None else out.get("hookSpecificOutput", {}).get("updatedInput", {}).get("command")
 
 
@@ -397,7 +402,7 @@ def test_a_string_comparison_against_an_iso_timestamp_is_never_rewritten():
     # example-game-repo-2a: the ':' rewrite moved a freshness gate's comparison literal, letting a
     # stale artifact pass. Inside [[ ]] the '>' is a comparison, not a redirect.
     cmd = 'if [[ "$m" > "2026-10-09T12:17:36" ]]; then echo fresh; fi'
-    assert m.check(_payload(cmd)) is None
+    assert _enveloped(m.check)(_payload(cmd)) is None
 
 
 def test_an_arithmetic_comparison_does_not_hide_a_real_redirect_after_it():
@@ -406,5 +411,5 @@ def test_an_arithmetic_comparison_does_not_hide_a_real_redirect_after_it():
 
 def test_a_candidate_repeated_elsewhere_in_the_command_is_advised_not_rewritten():
     cmd = "echo 2026-10-09T12:17:36.log; echo x > 2026-10-09T12:17:36.log"
-    out = m.check(_payload(cmd))
+    out = _enveloped(m.check)(_payload(cmd))
     assert out is not None and _rewritten(cmd) is None

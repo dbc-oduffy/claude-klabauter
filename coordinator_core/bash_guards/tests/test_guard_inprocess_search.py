@@ -54,6 +54,11 @@ import pytest
 
 from coordinator_core.bash_guards import _verdict
 from coordinator_core.bash_guards import guard_inprocess_search as guard
+from coordinator_core.guard_messages.testing import envelope_of
+
+
+def _enveloped(check):
+    return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 
 def _payload(command: str, cwd: str, **extra_tool_input) -> dict:
@@ -86,15 +91,15 @@ def _answered_context(result: dict) -> str:
 class TestSessionLatchDedupesTheParagraph:
     def test_first_call_carries_full_paragraph(self, repo, monkeypatch):
         monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sess-latch-1")
-        result = guard.check(_payload("grep foo bar.py", str(repo)))
+        result = _enveloped(guard.check)(_payload("grep foo bar.py", str(repo)))
         reason = _answered_context(result)
         assert "recognized as a search" in reason
         assert guard._ANSWERED_MARKER not in reason
 
     def test_second_call_same_session_carries_marker_not_paragraph(self, repo, monkeypatch):
         monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sess-latch-2")
-        guard.check(_payload("grep foo bar.py", str(repo)))
-        second = guard.check(_payload("grep baz qux.py", str(repo)))
+        _enveloped(guard.check)(_payload("grep foo bar.py", str(repo)))
+        second = _enveloped(guard.check)(_payload("grep baz qux.py", str(repo)))
         reason = _answered_context(second)
         assert "recognized as a search" not in reason
         assert guard._ANSWERED_MARKER in reason
@@ -102,7 +107,7 @@ class TestSessionLatchDedupesTheParagraph:
     def test_every_answered_call_carries_an_already_handled_signal(self, repo, monkeypatch):
         monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sess-latch-3")
         reasons = [
-            _answered_context(guard.check(_payload("grep %d foo.py" % i, str(repo))))
+            _answered_context(_enveloped(guard.check)(_payload("grep %d foo.py" % i, str(repo))))
             for i in range(4)
         ]
         assert "recognized as a search" in reasons[0]
@@ -113,22 +118,22 @@ class TestSessionLatchDedupesTheParagraph:
         """A DIFFERENT session id in the same repo gets its own full
         paragraph -- the latch is per-(repo, session), not global."""
         monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sess-latch-A")
-        guard.check(_payload("grep foo bar.py", str(repo)))
+        _enveloped(guard.check)(_payload("grep foo bar.py", str(repo)))
         monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sess-latch-B")
-        result = guard.check(_payload("grep foo bar.py", str(repo)))
+        result = _enveloped(guard.check)(_payload("grep foo bar.py", str(repo)))
         assert "recognized as a search" in _answered_context(result)
 
     def test_marker_survives_spawn_per_call_reinvocation(self, repo, monkeypatch):
         monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sess-latch-spawn")
-        guard.check(_payload("grep foo bar.py", str(repo)))
+        _enveloped(guard.check)(_payload("grep foo bar.py", str(repo)))
         assert guard._footer(str(repo)) == guard._ANSWERED_MARKER
 
 
 class TestFailsOpenTowardTheFullParagraph:
     def test_no_session_id_env_var_never_latches(self, repo, monkeypatch):
         monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
-        first = guard.check(_payload("grep foo bar.py", str(repo)))
-        second = guard.check(_payload("grep baz qux.py", str(repo)))
+        first = _enveloped(guard.check)(_payload("grep foo bar.py", str(repo)))
+        second = _enveloped(guard.check)(_payload("grep baz qux.py", str(repo)))
         assert "recognized as a search" in _answered_context(first)
         assert "recognized as a search" in _answered_context(second)
 
@@ -138,8 +143,8 @@ class TestFailsOpenTowardTheFullParagraph:
         presence of that sentinel must not influence latching at all."""
         monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
         (repo / ".current-session-id").write_text("some-other-session", encoding="utf-8")
-        first = guard.check(_payload("grep foo bar.py", str(repo)))
-        second = guard.check(_payload("grep baz qux.py", str(repo)))
+        first = _enveloped(guard.check)(_payload("grep foo bar.py", str(repo)))
+        second = _enveloped(guard.check)(_payload("grep baz qux.py", str(repo)))
         assert "recognized as a search" in _answered_context(first)
         assert "recognized as a search" in _answered_context(second)
 
@@ -147,7 +152,7 @@ class TestFailsOpenTowardTheFullParagraph:
         monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sess-latch-noroot")
         no_git_dir = tmp_path / "not-a-repo"
         no_git_dir.mkdir()
-        result = guard.check(_payload("grep foo bar.py", str(no_git_dir)))
+        result = _enveloped(guard.check)(_payload("grep foo bar.py", str(no_git_dir)))
         assert "recognized as a search" in _answered_context(result)
 
     def test_unwritable_marker_parent_fails_open_never_raises(self, repo, monkeypatch):
@@ -157,7 +162,7 @@ class TestFailsOpenTowardTheFullParagraph:
             "_latch_path",
             lambda cwd, sid: (_ for _ in ()).throw(OSError("simulated unwritable path")),
         )
-        result = guard.check(_payload("grep foo bar.py", str(repo)))
+        result = _enveloped(guard.check)(_payload("grep foo bar.py", str(repo)))
         assert "recognized as a search" in _answered_context(result)
 
     def test_stat_failure_on_read_fails_open_to_full_paragraph(self, repo, monkeypatch):
@@ -168,7 +173,7 @@ class TestFailsOpenTowardTheFullParagraph:
                 raise OSError("simulated stat failure")
 
         monkeypatch.setattr(guard, "_latch_path", lambda cwd, sid: _BoomPath())
-        result = guard.check(_payload("grep foo bar.py", str(repo)))
+        result = _enveloped(guard.check)(_payload("grep foo bar.py", str(repo)))
         assert "recognized as a search" in _answered_context(result)
 
 
@@ -198,7 +203,7 @@ class TestPowerShellDialectStaysBashOnly:
             "cwd": str(repo),
         }
         with _verdict.collecting() as silences:
-            result = guard.check(payload)
+            result = _enveloped(guard.check)(payload)
         assert result is None
         assert _verdict.was_silent("guard_inprocess_search", silences)
 
@@ -225,7 +230,7 @@ class TestDenyVersusSubstitutionContract:
         search output. Fails against the old `rendered + footer` composition,
         which would put "ANSWERED-TEXT" first."""
         monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sess-contract-full")
-        result = guard.check(_payload("grep foo bar.py", str(repo)))
+        result = _enveloped(guard.check)(_payload("grep foo bar.py", str(repo)))
         reason = _answered_context(result)
         assert "ANSWERED-TEXT" in reason
         assert reason.index("in-process") < reason.index("ANSWERED-TEXT"), (
@@ -235,7 +240,7 @@ class TestDenyVersusSubstitutionContract:
 
     def test_full_paragraph_states_the_contract_explicitly(self, repo, monkeypatch):
         monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sess-contract-full-text")
-        result = guard.check(_payload("grep foo bar.py", str(repo)))
+        result = _enveloped(guard.check)(_payload("grep foo bar.py", str(repo)))
         reason = _answered_context(result)
         assert "Answered in-process" in reason
         assert "recognized as a search" in reason
@@ -249,8 +254,8 @@ class TestDenyVersusSubstitutionContract:
 
     def test_latched_marker_contract_precedes_rendered_results(self, repo, monkeypatch):
         monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sess-contract-latched")
-        guard.check(_payload("grep foo bar.py", str(repo)))
-        second = guard.check(_payload("grep baz qux.py", str(repo)))
+        _enveloped(guard.check)(_payload("grep foo bar.py", str(repo)))
+        second = _enveloped(guard.check)(_payload("grep baz qux.py", str(repo)))
         reason = _answered_context(second)
         assert guard._ANSWERED_MARKER in reason
         assert "ANSWERED-TEXT" in reason
@@ -274,7 +279,7 @@ class TestSuccessNeverShipsAsError:
 
     def test_successful_answer_uses_rewrite_input_shape_not_deny(self, repo, monkeypatch):
         monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sess-success-shape")
-        result = guard.check(_payload("grep foo bar.py", str(repo)))
+        result = _enveloped(guard.check)(_payload("grep foo bar.py", str(repo)))
         hso = result["hookSpecificOutput"]
         assert hso.get("permissionDecision") != "deny"
         assert "permissionDecisionReason" not in hso
@@ -283,7 +288,7 @@ class TestSuccessNeverShipsAsError:
 
     def test_successful_answer_rewrites_command_to_a_no_op(self, repo, monkeypatch):
         monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sess-success-noop")
-        result = guard.check(_payload("grep foo bar.py", str(repo)))
+        result = _enveloped(guard.check)(_payload("grep foo bar.py", str(repo)))
         updated_input = result["hookSpecificOutput"]["updatedInput"]
         assert updated_input["command"] == "true"
 
@@ -292,7 +297,7 @@ class TestSuccessNeverShipsAsError:
         key on the original call (e.g. `description`) must survive the
         rewrite, not be silently dropped."""
         monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sess-success-preserve")
-        result = guard.check(
+        result = _enveloped(guard.check)(
             _payload("grep foo bar.py", str(repo), description="find foo in bar.py")
         )
         updated_input = result["hookSpecificOutput"]["updatedInput"]
@@ -301,7 +306,7 @@ class TestSuccessNeverShipsAsError:
     def test_multiple_answered_calls_in_a_session_never_use_deny(self, repo, monkeypatch):
         monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sess-success-multi")
         for i in range(3):
-            result = guard.check(_payload("grep %d foo.py" % i, str(repo)))
+            result = _enveloped(guard.check)(_payload("grep %d foo.py" % i, str(repo)))
             hso = result["hookSpecificOutput"]
             assert hso.get("permissionDecision") != "deny"
             assert "permissionDecisionReason" not in hso
@@ -314,8 +319,18 @@ class TestLiteralReadsOfANamedFileAreNotIntercepted:
     )
     def test_bare_read_is_left_to_bash(self, tmp_path, cmd):
         (tmp_path / "f.txt").write_text("a\nb\nc\n", encoding="utf-8")
-        assert guard.check(_payload(cmd, str(tmp_path))) is None
+        assert _enveloped(guard.check)(_payload(cmd, str(tmp_path))) is None
 
     def test_grep_is_still_answered(self, tmp_path):
         (tmp_path / "f.txt").write_text("a\nb\nc\n", encoding="utf-8")
-        assert guard.check(_payload("grep b f.txt", str(tmp_path))) is not None
+        assert _enveloped(guard.check)(_payload("grep b f.txt", str(tmp_path))) is not None
+
+
+def test_answer_is_a_rewrite_record_carrying_no_override(tmp_path):
+    from coordinator_core.guard_messages.alternative_record import AlternativeRecord, Override
+
+    (tmp_path / "f.txt").write_text("a\nb\nc\n", encoding="utf-8")
+    record = guard.check(_payload("grep b f.txt", str(tmp_path)))
+    assert isinstance(record, AlternativeRecord) and record.verdict_kind == "rewrite"
+    assert record.updated_input["command"] == "true"
+    assert not any(isinstance(m, Override) for m in record.members)

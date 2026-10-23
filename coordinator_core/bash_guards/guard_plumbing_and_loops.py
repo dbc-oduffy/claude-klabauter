@@ -31,7 +31,7 @@ toward a shape in the abstract. This module honors that by literally
 CALLING the seam check for each shape and inspecting what it returns, rather
 than re-deriving a parallel judgment of "is this translatable":
 
-  - HEAD_TAIL_PLUMBING -> `dispatch_checks.check_head_tail_plumbing_rewrite`.
+  - HEAD_TAIL_PLUMBING -> `guard_head_tail_rewrite.check_head_tail_plumbing_rewrite`.
     As of this module's authoring that check IS landed (2026-07-29,
     concurrent BX-16 work). Critically, that check returns non-``None`` for
     almost EVERY `upstream | head-or-tail` two-segment pipeline the shape
@@ -168,6 +168,7 @@ Spec backlink (shape/verdict primitives): coordinator-content-repo:pln-fleet-wid
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import os
 import re
@@ -178,7 +179,12 @@ from coordinator_core.bash_guards._command_tokenizer import (
     segments_from_tokens_with_pipe_flag as _pl_segments_from_tokens_with_pipe_flag,
     token_matches_binary as _pl_token_matches_binary,
 )
-from coordinator_core.bash_guards._platform_verdict import platform_verdict_for_shape
+from coordinator_core.bash_guards._platform_verdict import (
+    shape_advisory_record,
+    shape_context,
+    spawn_shape_summary,
+)
+from coordinator_core.bash_guards._rewrite_support import _em_stamped
 from coordinator_core.bash_guards._shape_classifier import Shape, classify_command
 from coordinator_core.bash_guards.dispatch_checks import (
     _bt_python3_invocation as _pl_python3_invocation,
@@ -188,7 +194,7 @@ from coordinator_core.bash_guards.guard_head_tail_rewrite import (
     _bt_head_tail_count as _pl_head_tail_count,
     check_head_tail_plumbing_rewrite,
 )
-from coordinator_core._hook_envelope import allow_advisory
+from coordinator_core.guard_messages.alternative_record import AlternativeRecord
 from coordinator_core.bash_guards._helpers import COMMAND_LINE_LABEL, operator_override_note
 from coordinator_core.bash_guards import _dialect
 from coordinator_core.bash_guards._tool_names import COMMAND_TOOL_NAMES
@@ -223,7 +229,7 @@ PRIORITY = 100
 #: (which this module also implicitly honors -- see module docstring).
 _OVERRIDE_ENV = "COORDINATOR_OVERRIDE_PLUMBING_AND_LOOPS"
 
-_EVENT_NAME = "PreToolUse"
+_RECORD_GUARD_NAME = "plumbing-and-loops"
 
 #: FOR-LOOP GENERIC FALLBACK -- DECIDED EXPLICITLY, NOT AN OMISSION
 #: (worklist Row P4, `state/audits/2026-07-29-guard-module-ladder-
@@ -321,7 +327,7 @@ def _label_echo_generic_example() -> str:
 
 def _verdict_label_echo(
     cmd: str, payload: Optional[Dict[str, Any]]
-) -> Dict[str, Any]:
+) -> AlternativeRecord:
     """Stand-alone advisory for a command whose only match is
     LABEL_OR_EXIT_ECHO. No seam is consulted: no BX-16 rewrite exists."""
     return _generic_advisory(
@@ -334,13 +340,16 @@ def _verdict_label_echo(
     )
 
 
-def _append_echo_line(envelope: Dict[str, Any]) -> Dict[str, Any]:
-    """Append the echo-cost line after a blank line, so it sits outside the
-    primary's `Example:` cue window."""
-    hso = envelope.get("hookSpecificOutput")
-    if isinstance(hso, dict) and isinstance(hso.get("additionalContext"), str):
-        hso["additionalContext"] += "\n" + _LABEL_ECHO_APPENDED_LINE + "\n"
-    return envelope
+def _append_echo_line(record: AlternativeRecord) -> AlternativeRecord:
+    """Append the echo-cost line to the primary verdict's summary."""
+    em_text = record.em_text
+    if em_text is not None:
+        em_text += "\n" + _LABEL_ECHO_APPENDED_LINE + "\n"
+    return dataclasses.replace(
+        record,
+        summary=record.summary + "\n\n" + _LABEL_ECHO_APPENDED_LINE,
+        em_text=em_text,
+    )
 
 
 #: PIPELINE_FOREACH_OBJECT -- PowerShell-only, no bash analogue (D2, C3 of
@@ -365,27 +374,33 @@ def _pipeline_foreach_object_example() -> str:
     )
 
 
-def _seam_confirmed_rewrite(result: Optional[Dict[str, Any]]) -> bool:
-    if not isinstance(result, dict):
-        return False
-    hso = result.get("hookSpecificOutput", {})
-    if not isinstance(hso, dict):
-        return False
-    updated = hso.get("updatedInput")
-    return isinstance(updated, dict) and bool(updated.get("command"))
+def _seam_rewrite_command(result: Any) -> str:
+    """The seam's rewritten command, from an AlternativeRecord or a legacy
+    envelope dict; ``""`` when the seam confirmed nothing."""
+    if isinstance(result, dict):
+        hso = result.get("hookSpecificOutput")
+        updated = hso.get("updatedInput") if isinstance(hso, dict) else None
+    else:
+        updated = getattr(result, "updated_input", None)
+    if not isinstance(updated, dict):
+        return ""
+    return updated.get("command") or ""
+
+
+def _seam_confirmed_rewrite(result: Any) -> bool:
+    return bool(_seam_rewrite_command(result))
 
 
 def _outlet_from_seam_result(
-    result: Dict[str, Any], payload: Optional[Dict[str, Any]]
-) -> Tuple[str, str]:
-    hso = result.get("hookSpecificOutput", {}) if isinstance(result, dict) else {}
-    updated = hso.get("updatedInput")
-    bypass_note = operator_override_note(_OVERRIDE_ENV, payload=payload)
-    summary = "the seam-confirmed single-process rewrite"
-    if isinstance(updated, dict) and updated.get("command"):
-        return (summary, "%s\n  %s" % (updated["command"], bypass_note))
-    context = hso.get("additionalContext") or ""
-    return (summary, "%s\n  %s" % (context, bypass_note))
+    result: Any, payload: Optional[Dict[str, Any]]
+) -> Tuple[str, str, str]:
+    """``(summary, command, bypass_note)`` for a seam result
+    `_seam_confirmed_rewrite` accepted."""
+    return (
+        "the seam-confirmed single-process rewrite",
+        _seam_rewrite_command(result),
+        operator_override_note(_OVERRIDE_ENV, payload=payload),
+    )
 
 
 def _generic_advisory(
@@ -395,9 +410,9 @@ def _generic_advisory(
     example: str,
     payload: Optional[Dict[str, Any]],
     finding: str = "spawns a subprocess per iteration/pipe stage",
-) -> Dict[str, Any]:
+) -> AlternativeRecord:
     cmd_safe = cmd if len(cmd) <= 200 else cmd[:200] + "..."
-    context = (
+    legacy = (
         "BASH-SPAWN ADVISORY (non-blocking): `%s`-shaped command %s.\n\n"
         "  %s  %s\n\n"
         "Use instead: %s\n"
@@ -413,7 +428,31 @@ def _generic_advisory(
             operator_override_note(_OVERRIDE_ENV, payload=payload),
         )
     )
-    return allow_advisory(_EVENT_NAME, context)
+    return shape_advisory_record(
+        "BASH-SPAWN ADVISORY (non-blocking): `%s`-shaped command %s.\n\n"
+        "  %s  %s\n\n"
+        "Use instead: %s."
+        % (shape_label, finding, COMMAND_LINE_LABEL, cmd_safe, summary),
+        example,
+        guard_name=_RECORD_GUARD_NAME,
+        override_env=_OVERRIDE_ENV,
+        em_text=_em_stamped(legacy),
+    )
+
+
+def _confirmed_rewrite_advisory(
+    shape_label: str, summary: str, example: str, bypass_note: str
+) -> AlternativeRecord:
+    """Advisory for a seam-confirmed single-process rewrite: the example is a
+    command the reader can run as written."""
+    return shape_advisory_record(
+        spawn_shape_summary(shape_label, summary),
+        example,
+        guard_name=_RECORD_GUARD_NAME,
+        override_env=_OVERRIDE_ENV,
+        ready=True,
+        em_text=shape_context(shape_label, summary, "%s\n  %s" % (example, bypass_note)),
+    )
 
 
 def _verbatim_head_tail_alternative(cmd: str) -> Optional[str]:
@@ -537,7 +576,7 @@ def _verdict_head_tail(
     host_is_windows: Optional[bool],
     payload: Optional[Dict[str, Any]],
     classification: Any = None,
-) -> Optional[Dict[str, Any]]:
+) -> Optional[AlternativeRecord]:
     """Platform-conditioned verdict for a HEAD_TAIL_PLUMBING-primary command,
     consuming `check_head_tail_plumbing_rewrite`'s own confirmation of an
     outlet for this exact command (rewrite or advisory-with-skeleton both
@@ -571,10 +610,8 @@ def _verdict_head_tail(
             "[:N] / [-N:] in-process",
             payload,
         )
-    summary, example = _outlet_from_seam_result(seam_result, payload)
-    return platform_verdict_for_shape(
-        "head-tail-plumbing", cmd, summary, example, host_is_windows=False
-    )
+    summary, example, note = _outlet_from_seam_result(seam_result, payload)
+    return _confirmed_rewrite_advisory("head-tail-plumbing", summary, example, note)
 
 
 def _verdict_for_loop(
@@ -582,7 +619,7 @@ def _verdict_for_loop(
     session_id: str,
     host_is_windows: Optional[bool],
     payload: Optional[Dict[str, Any]],
-) -> Dict[str, Any]:
+) -> AlternativeRecord:
     """Platform-conditioned verdict for a FOR_LOOP-primary command,
     consuming `check_find_exec_rewrite`'s own confirmation of an outlet.
     That check's FOR_LOOP handling is narrow (a loop wrapping a literal
@@ -596,20 +633,13 @@ def _verdict_for_loop(
         return _generic_advisory(
             "for-loop", cmd, _FOR_LOOP_GENERIC_SUMMARY, _for_loop_generic_example(), payload
         )
-    summary, example = _outlet_from_seam_result(seam_result, payload)
-    # DR-280 (2026-08-07): the deny leg is retired -- always render the
-    # advisory envelope, regardless of `host_is_windows`. See `check()`'s
-    # own docstring for why. (In practice this branch is also unreachable
-    # per this module's own "FOR_LOOP's leg of AC-5" note above -- no
-    # FOR_LOOP-classified command can ever produce a seam-confirmed
-    # rewrite -- but the fixed argument stays as defense-in-depth against
-    # that structural fact changing.)
-    return platform_verdict_for_shape(
-        "for-loop-wrapping-find-exec",
-        cmd,
-        summary,
-        example,
-        host_is_windows=False,
+    summary, example, note = _outlet_from_seam_result(seam_result, payload)
+    # DR-280 (2026-08-07): advisory on every host. In practice this branch is
+    # unreachable per this module's own "FOR_LOOP's leg of AC-5" note above --
+    # no FOR_LOOP-classified command can produce a seam-confirmed rewrite --
+    # but it stays as defense-in-depth against that structural fact changing.
+    return _confirmed_rewrite_advisory(
+        "for-loop-wrapping-find-exec", summary, example, note
     )
 
 
@@ -618,7 +648,7 @@ def _verdict_while_read(
     session_id: str,
     host_is_windows: Optional[bool],
     payload: Optional[Dict[str, Any]],
-) -> Dict[str, Any]:
+) -> AlternativeRecord:
     """Advisory-only-on-every-platform verdict for a WHILE_READ_LOOP-primary
     command. Goes straight to `_generic_advisory` -- no seam is consulted
     (unlike `_verdict_for_loop`, which calls `check_find_exec_rewrite`):
@@ -631,7 +661,11 @@ def _verdict_while_read(
     """
     del session_id
     return _generic_advisory(
-        "while-read-loop", cmd, _WHILE_READ_GENERIC_SUMMARY, _while_read_generic_example(), payload
+        "while-read-loop",
+        cmd,
+        _WHILE_READ_GENERIC_SUMMARY,
+        _while_read_generic_example(),
+        payload,
     )
 
 
@@ -658,7 +692,7 @@ def _record_powershell_non_verdict(reason: str) -> None:
 
 def _verdict_bash_shaped_loop_powershell(
     cmd: str, payload: Optional[Dict[str, Any]]
-) -> Optional[Dict[str, Any]]:
+) -> Optional[AlternativeRecord]:
     """A bash `for`/`while read` loop sent through the PowerShell tool.
     Advises with a PowerShell remedy: the bash leg's `python3 -c` example
     is not a valid PowerShell command line."""
@@ -687,7 +721,7 @@ def _verdict_powershell(
     session_id: str,
     host_is_windows: Optional[bool],
     payload: Optional[Dict[str, Any]],
-) -> Optional[Dict[str, Any]]:
+) -> Optional[AlternativeRecord]:
     """PowerShell-dialect leg of `check()` (row 14, docs/reference/
     guard-dialect-coverage.md -- superseded in part by
     `pln-the-shape-classifier-reaches-a-e743e5` § D2, C3).
@@ -737,10 +771,8 @@ def _verdict_powershell(
                 "... | Select-Object -First 5  # slice in-process",
                 payload,
             )
-        summary, example = _outlet_from_seam_result(seam_result, payload)
-        return platform_verdict_for_shape(
-            "head-tail-plumbing", cmd, summary, example, host_is_windows=False
-        )
+        summary, example, note = _outlet_from_seam_result(seam_result, payload)
+        return _confirmed_rewrite_advisory("head-tail-plumbing", summary, example, note)
 
     classification = classify_command(cmd, dialect=_dialect.Dialect.POWERSHELL)
     primary = classification.primary
@@ -809,10 +841,10 @@ def _only_plain_separator_echo(classification: Any) -> bool:
 
 def check(
     payload: Dict[str, Any], host_is_windows: Optional[bool] = None
-) -> Optional[Dict[str, Any]]:
+) -> Optional[AlternativeRecord]:
     """Evaluate the head/tail-plumbing-and-for-loop guard against a
     PreToolUse payload. Returns ``None`` (allow, no advisory) or an
-    `allow_advisory` envelope -- never a deny (DR-280, 2026-08-07: the
+    advisory AlternativeRecord -- never a deny (DR-280, 2026-08-07: the
     platform-conditioned deny branch was retired as structurally
     unreachable -- each shape gated on `_seam_confirmed_rewrite`, the same
     seam an earlier-registered `ADVISORY_REWRITE` chain entry already
@@ -832,9 +864,7 @@ def check(
     ``host_is_windows``: still accepted (the chain-wide threading contract
     every registered shape-guard honors -- see `_platform_verdict.py`'s
     "Platform-override contract" and `dispatch.py`'s own docstring), but no
-    longer changes this guard's own verdict -- each verdict helper below
-    now calls `platform_verdict_for_shape` with a fixed
-    ``host_is_windows=False``.
+    longer changes this guard's own verdict.
     """
     if os.environ.get(_OVERRIDE_ENV, "0") == "1":
         return None
@@ -874,7 +904,7 @@ def check(
         return None
     echo_is_separator = _only_plain_separator_echo(classification)
 
-    verdict: Optional[Dict[str, Any]] = None
+    verdict: Optional[AlternativeRecord] = None
     if primary.shape is Shape.HEAD_TAIL_PLUMBING:
         verdict = _verdict_head_tail(
             cmd, session_id, host_is_windows, payload, classification

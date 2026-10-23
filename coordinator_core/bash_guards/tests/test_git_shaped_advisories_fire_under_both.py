@@ -29,6 +29,7 @@ import time
 
 import pytest
 
+from coordinator_core.guard_messages.testing import envelope_of
 from coordinator_core.bash_guards import dispatch
 
 
@@ -71,8 +72,8 @@ class TestGitNoOptionalLocksBothDialects:
         bash_entry = _entry(_chain("git status", "sess-a", str(tmp_path), "Bash"), self.NAME)
         ps_entry = _entry(_chain("git status", "sess-b", str(tmp_path), "PowerShell"), self.NAME)
 
-        bash_out = bash_entry.fn()
-        ps_out = ps_entry.fn()
+        bash_out = envelope_of(bash_entry.fn())
+        ps_out = envelope_of(ps_entry.fn())
 
         assert bash_out is not None
         assert ps_out is not None
@@ -147,8 +148,8 @@ class TestBlockDevRepoSentinelRemovalBothDialects:
         bash_entry = _entry(_chain(cmd, "sess-a", str(tmp_path), "Bash"), self.NAME)
         ps_entry = _entry(_chain(cmd, "sess-b", str(tmp_path), "PowerShell"), self.NAME)
 
-        bash_out = bash_entry.fn()
-        ps_out = ps_entry.fn()
+        bash_out = envelope_of(bash_entry.fn())
+        ps_out = envelope_of(ps_entry.fn())
 
         assert bash_out is not None, "expected a deny envelope (Bash)"
         assert ps_out is not None, "expected a deny envelope (PowerShell)"

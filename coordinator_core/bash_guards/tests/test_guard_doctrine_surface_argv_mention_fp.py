@@ -6,10 +6,15 @@ names a sizing as an argument, and a write into state/sizings still denies."""
 import pytest
 
 from coordinator_core.bash_guards import guard_doctrine_surface_bash_write as guard
+from coordinator_core.guard_messages.testing import envelope_of
+
+
+def _enveloped(check):
+    return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 
 def _check(cmd: str):
-    return guard.check({"tool_name": "Bash", "tool_input": {"command": cmd}}, None)
+    return _enveloped(guard.check)({"tool_name": "Bash", "tool_input": {"command": cmd}}, None)
 
 
 @pytest.mark.parametrize(

@@ -6,6 +6,11 @@ import pytest
 
 from coordinator_core.bash_guards import dispatch
 from coordinator_core.bash_guards import guard_headless_claude_plugin_dir as g
+from coordinator_core.guard_messages.testing import envelope_of
+
+
+def _enveloped(check):
+    return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 ROOT = "/native/coordinator"
 
@@ -17,7 +22,7 @@ def _root(monkeypatch):
 
 
 def _rewritten(cmd):
-    out = g.check_headless_claude_plugin_dir(cmd)
+    out = _enveloped(g.check_headless_claude_plugin_dir)(cmd)
     assert out is not None
     spec = out["hookSpecificOutput"]
     assert spec["permissionDecision"] == "allow"
@@ -86,12 +91,12 @@ def test_bg_with_plugin_dir_passes_through_dispatch(tool_name, tmp_path):
     ],
 )
 def test_pass_through(cmd):
-    assert g.check_headless_claude_plugin_dir(cmd) is None
+    assert _enveloped(g.check_headless_claude_plugin_dir)(cmd) is None
 
 
 def test_unresolvable_root_allows_with_advisory(monkeypatch):
     monkeypatch.setattr(g, "_plugin_root", lambda: None)
-    out = g.check_headless_claude_plugin_dir("claude -p x")
+    out = _enveloped(g.check_headless_claude_plugin_dir)("claude -p x")
     spec = out["hookSpecificOutput"]
     assert spec.get("permissionDecision", "allow") == "allow"
     assert "updatedInput" not in spec
@@ -101,9 +106,9 @@ def test_unresolvable_root_allows_with_advisory(monkeypatch):
 
 def test_no_sentinel_is_noop(monkeypatch):
     monkeypatch.setattr(g, "_is_dev_install", lambda: False)
-    assert g.check_headless_claude_plugin_dir("claude -p x") is None
+    assert _enveloped(g.check_headless_claude_plugin_dir)("claude -p x") is None
     monkeypatch.setattr(g, "_plugin_root", lambda: None)
-    assert g.check_headless_claude_plugin_dir("claude -p x") is None
+    assert _enveloped(g.check_headless_claude_plugin_dir)("claude -p x") is None
 
 
 def test_is_dev_install_follows_sentinel(monkeypatch, tmp_path):

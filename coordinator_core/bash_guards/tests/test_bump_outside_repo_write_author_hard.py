@@ -21,6 +21,11 @@ from coordinator_core.bash_guards._write_bump_marker import marker_basename, res
 from coordinator_core.session import machinery_paths
 from coordinator_core.testing.home_sandbox import sandbox_home
 from coordinator_core.win_portability import no_console_creationflags
+from coordinator_core.guard_messages.testing import envelope_of
+
+
+def _enveloped(check):
+    return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -83,7 +88,7 @@ def _touch_marker(env) -> None:
 
 
 def _check(env, cmd, payload=None, cwd=None):
-    return guard.check_bump_outside_repo_write(cmd, _SID, cwd or str(env["anchor"]), payload or {})
+    return _enveloped(guard.check_bump_outside_repo_write)(cmd, _SID, cwd or str(env["anchor"]), payload or {})
 
 
 def _reason(result) -> str:

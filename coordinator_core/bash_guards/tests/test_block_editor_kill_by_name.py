@@ -5,6 +5,11 @@ from __future__ import annotations
 import pytest
 
 from coordinator_core.bash_guards import block_editor_kill_by_name as guard
+from coordinator_core.guard_messages.testing import envelope_of
+
+
+def _enveloped(check):
+    return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 
 def _payload(cmd: str, tool: str = "Bash", **extra) -> dict:
@@ -29,7 +34,7 @@ def _payload(cmd: str, tool: str = "Bash", **extra) -> dict:
 )
 @pytest.mark.parametrize("tool", ["Bash", "PowerShell"])
 def test_name_based_kills_denied(cmd, tool):
-    out = guard.check(_payload(cmd, tool))
+    out = _enveloped(guard.check)(_payload(cmd, tool))
     assert out is not None
     reason = out["hookSpecificOutput"]["permissionDecisionReason"]
     assert "Kill by the PID of your own launch" in reason
@@ -47,11 +52,11 @@ def test_name_based_kills_denied(cmd, tool):
     ],
 )
 def test_pid_and_unrelated_allowed(cmd):
-    assert guard.check(_payload(cmd)) is None
+    assert _enveloped(guard.check)(_payload(cmd)) is None
 
 
 def test_denied_for_subagents_too():
-    out = guard.check(_payload("taskkill /F /IM UnrealEditor.exe", agent_id="a1"))
+    out = _enveloped(guard.check)(_payload("taskkill /F /IM UnrealEditor.exe", agent_id="a1"))
     assert out is not None
 
 
@@ -66,20 +71,20 @@ def test_denied_for_subagents_too():
 def test_name_kill_inside_a_launched_script_denied(tmp_path, name, body, launch):
     script = tmp_path / name
     script.write_text(body, encoding="utf-8", newline="\n")
-    out = guard.check(_payload(launch.format(p=script.as_posix())))
+    out = _enveloped(guard.check)(_payload(launch.format(p=script.as_posix())))
     assert out is not None
 
 
 def test_relative_script_resolves_against_cwd(tmp_path):
     (tmp_path / "w.sh").write_text("taskkill /F /IM UnrealEditor.exe\n", encoding="utf-8")
-    assert guard.check(_payload("bash w.sh", cwd=str(tmp_path))) is not None
+    assert _enveloped(guard.check)(_payload("bash w.sh", cwd=str(tmp_path))) is not None
 
 
 def test_script_with_pid_kill_allowed(tmp_path):
     script = tmp_path / "w.sh"
     script.write_text("taskkill /F /PID $(cat editor.pid)\n", encoding="utf-8")
-    assert guard.check(_payload(f"bash {script.as_posix()}")) is None
+    assert _enveloped(guard.check)(_payload(f"bash {script.as_posix()}")) is None
 
 
 def test_missing_script_allowed():
-    assert guard.check(_payload("bash /nonexistent/w.sh")) is None
+    assert _enveloped(guard.check)(_payload("bash /nonexistent/w.sh")) is None

@@ -51,6 +51,11 @@ import pytest
 from coordinator_core.bash_guards import dispatch
 from coordinator_core.bash_guards import guard_doctrine_surface_bash_write as _guard
 from coordinator_core.testing.content_root import resolve_content_root
+from coordinator_core.guard_messages.testing import envelope_of
+
+
+def _enveloped(check):
+    return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 _CONTENT_ROOT = resolve_content_root() or None
 _CONTENT_HOOKS_DIR = Path(_CONTENT_ROOT) / "coordinator" / "hooks" / "scripts" if _CONTENT_ROOT else None
@@ -147,14 +152,14 @@ class TestCheckThreadsResolverOnDenyPathOnly:
             calls.append(citation)
             return "RESOLVED-CITATION-MARKER"
 
-        result = _guard.check(self._PAYLOAD, self._GOVERNED_SURFACES, resolve_wiki_citation=_resolver)
+        result = _enveloped(_guard.check)(self._PAYLOAD, self._GOVERNED_SURFACES, resolve_wiki_citation=_resolver)
         assert result is not None
         reason = result["hookSpecificOutput"]["permissionDecisionReason"]
         assert "RESOLVED-CITATION-MARKER" in reason
         assert calls == [_guard._WIKI_ANCHOR]
 
     def test_no_resolver_leaves_bare_literal(self) -> None:
-        result = _guard.check(self._PAYLOAD, self._GOVERNED_SURFACES)
+        result = _enveloped(_guard.check)(self._PAYLOAD, self._GOVERNED_SURFACES)
         assert result is not None
         reason = result["hookSpecificOutput"]["permissionDecisionReason"]
         assert _guard._WIKI_ANCHOR in reason
@@ -170,6 +175,6 @@ class TestCheckThreadsResolverOnDenyPathOnly:
             "tool_name": "Bash",
             "tool_input": {"command": "cat CLAUDE.md"},
         }
-        result = _guard.check(allow_payload, self._GOVERNED_SURFACES, resolve_wiki_citation=_resolver)
+        result = _enveloped(_guard.check)(allow_payload, self._GOVERNED_SURFACES, resolve_wiki_citation=_resolver)
         assert result is None
         assert calls == []

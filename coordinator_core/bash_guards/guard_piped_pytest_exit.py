@@ -11,7 +11,7 @@ from __future__ import annotations
 import re
 from typing import Any, Dict, Optional
 
-from coordinator_core.bash_guards._rewrite_support import _advisory
+from coordinator_core.bash_guards._rewrite_support import _advisory_record
 from coordinator_core.bash_guards._tool_names import COMMAND_TOOL_NAMES
 
 CLASS = "advisory"
@@ -30,16 +30,35 @@ _FILTER_PIPE = re.compile(
 )
 _SAFE_MARKERS = ("pipefail", "PIPESTATUS", "$LASTEXITCODE")
 
-_MESSAGE = (
-    "PIPED-EXIT-CODE-IS-THE-PIPES: a piped pytest reports the filter's exit code. "
-    "Bash: `set -o pipefail` or `${PIPESTATUS[0]}`. PowerShell: read `$LASTEXITCODE` "
-    "before any pipe. Either: redirect to a file, then tail it."
-)
+_MESSAGE = "PIPED-EXIT-CODE-IS-THE-PIPES: a piped pytest reports the filter's exit code."
+
+
+def _advisory_with_offers() -> Any:
+    from coordinator_core.guard_messages.alternative_record import AdaptableOffer
+
+    return _advisory_record(
+        "piped-pytest-exit-advisory",
+        _MESSAGE,
+        (
+            AdaptableOffer(
+                template="Bash: `set -o pipefail` or `${PIPESTATUS[0]}`. "
+                "PowerShell: read `$LASTEXITCODE` before any pipe",
+                what_to_adapt="the pipeline",
+            ),
+            AdaptableOffer(
+                template="redirect pytest to a file, then tail it",
+                what_to_adapt="the output path",
+            ),
+        ),
+        em_text=_MESSAGE
+        + " Bash: `set -o pipefail` or `${PIPESTATUS[0]}`. PowerShell: read `$LASTEXITCODE` "
+        "before any pipe. Either: redirect to a file, then tail it.",
+    )
 
 
 def check_piped_pytest_exit(
     cmd: str, session_id: str = "", payload: Optional[Dict[str, Any]] = None
-) -> Optional[Dict[str, Any]]:
+) -> Any:
     if not cmd or "pytest" not in cmd.lower() or "|" not in cmd:
         return None
     if any(marker in cmd for marker in _SAFE_MARKERS):
@@ -51,5 +70,5 @@ def check_piped_pytest_exit(
         if end:
             rest = rest[: end.start()]
         if _FILTER_PIPE.search(rest):
-            return _advisory(_MESSAGE)
+            return _advisory_with_offers()
     return None

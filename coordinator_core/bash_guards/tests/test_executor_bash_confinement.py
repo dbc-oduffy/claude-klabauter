@@ -72,6 +72,11 @@ from coordinator_core.bash_guards import (
     block_subagent_destructive_action as destructive_guard,
 )
 from coordinator_core.bash_guards import _helpers
+from coordinator_core.guard_messages.testing import envelope_of
+
+
+def _enveloped(check):
+    return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 _CONFINED_TYPE = "coordinator:executor"
 _REVIEWER_TYPE = "coordinator:code-reviewer"
@@ -186,16 +191,16 @@ def test_git_commit_denies(monkeypatch):
     _confine(monkeypatch)
     _wire_other_guard(monkeypatch, commit_guard)
     payload = _payload('git commit -m "x"')
-    _assert_allowed(guard.check(payload))
-    _assert_denied(commit_guard.check(payload))
+    _assert_allowed(_enveloped(guard.check)(payload))
+    _assert_denied(_enveloped(commit_guard.check)(payload))
 
 
 def test_coordinator_safe_commit_denies(monkeypatch):
     _confine(monkeypatch)
     _wire_other_guard(monkeypatch, commit_guard)
     payload = _payload("coordinator-safe-commit --expected-owner em-only")
-    _assert_allowed(guard.check(payload))
-    _assert_denied(commit_guard.check(payload))
+    _assert_allowed(_enveloped(guard.check)(payload))
+    _assert_denied(_enveloped(commit_guard.check)(payload))
 
 
 def test_invoke_committing_op_denies(monkeypatch):
@@ -204,8 +209,8 @@ def test_invoke_committing_op_denies(monkeypatch):
     payload = _payload(
         "python3 -m coordinator_core.invoke ceremony.scoped_git_commit"
     )
-    _assert_allowed(guard.check(payload))
-    _assert_denied(commit_guard.check(payload))
+    _assert_allowed(_enveloped(guard.check)(payload))
+    _assert_denied(_enveloped(commit_guard.check)(payload))
 
 
 def test_git_push_denies(monkeypatch):
@@ -221,32 +226,32 @@ def test_git_push_denies(monkeypatch):
     _confine(monkeypatch)
     _wire_other_guard(monkeypatch, destructive_guard)
     payload = _payload("git push origin main")
-    _assert_allowed(guard.check(payload))
-    _assert_allowed(destructive_guard.check(payload))
+    _assert_allowed(_enveloped(guard.check)(payload))
+    _assert_allowed(_enveloped(destructive_guard.check)(payload))
 
 
 def test_git_push_force_denies(monkeypatch):
     _confine(monkeypatch)
     _wire_other_guard(monkeypatch, destructive_guard)
     payload = _payload("git push --force origin main")
-    _assert_allowed(guard.check(payload))
-    _assert_denied(destructive_guard.check(payload))
+    _assert_allowed(_enveloped(guard.check)(payload))
+    _assert_denied(_enveloped(destructive_guard.check)(payload))
 
 
 def test_git_stash_denies(monkeypatch):
     _confine(monkeypatch)
     _wire_other_guard(monkeypatch, destructive_guard)
     payload = _payload("git stash")
-    _assert_allowed(guard.check(payload))
-    _assert_denied(destructive_guard.check(payload))
+    _assert_allowed(_enveloped(guard.check)(payload))
+    _assert_denied(_enveloped(destructive_guard.check)(payload))
 
 
 def test_git_reset_denies(monkeypatch):
     _confine(monkeypatch)
     _wire_other_guard(monkeypatch, destructive_guard)
     payload = _payload("git reset --hard")
-    _assert_allowed(guard.check(payload))
-    _assert_denied(destructive_guard.check(payload))
+    _assert_allowed(_enveloped(guard.check)(payload))
+    _assert_denied(_enveloped(destructive_guard.check)(payload))
 
 
 def test_python3_dash_c_denies_even_with_attacker_shaped_ruleset(monkeypatch):
@@ -266,7 +271,7 @@ def test_python3_dash_c_denies_even_with_attacker_shaped_ruleset(monkeypatch):
     payload = _payload(
         'python3 -c "import os; os.system(\'rm -rf /\')"', agent_type=_REVIEWER_TYPE
     )
-    reason = _assert_denied(guard.check(payload))
+    reason = _assert_denied(_enveloped(guard.check)(payload))
     assert "-c" in reason
 
 
@@ -285,99 +290,99 @@ def test_python3_dash_e_denies_even_with_attacker_shaped_ruleset(monkeypatch):
 
     monkeypatch.setattr(guard, "_resolve_ruleset", _attacker_ruleset)
     payload = _payload('python3 -e "print(1)"', agent_type=_REVIEWER_TYPE)
-    _assert_denied(guard.check(payload))
+    _assert_denied(_enveloped(guard.check)(payload))
 
 
 def test_python3_dash_m_unlisted_module_denies(monkeypatch):
     _confine(monkeypatch, subagent_type=_REVIEWER_TYPE)
     payload = _payload("python3 -m http.server", agent_type=_REVIEWER_TYPE)
-    reason = _assert_denied(guard.check(payload))
+    reason = _assert_denied(_enveloped(guard.check)(payload))
     assert "http.server" in reason
 
 
 def test_python3_dash_c_inline_code_allows_executor_denies_reviewer(monkeypatch):
     cmd = 'python3 -c "import os; os.system(\'rm -rf /\')"'
     _confine(monkeypatch)
-    _assert_allowed(guard.check(_payload(cmd)))
+    _assert_allowed(_enveloped(guard.check)(_payload(cmd)))
 
     _confine(monkeypatch, subagent_type=_REVIEWER_TYPE)
-    reason = _assert_denied(guard.check(_payload(cmd, agent_type=_REVIEWER_TYPE)))
+    reason = _assert_denied(_enveloped(guard.check)(_payload(cmd, agent_type=_REVIEWER_TYPE)))
     assert "-c" in reason
 
 
 def test_python3_dash_e_inline_code_allows_executor_denies_reviewer(monkeypatch):
     cmd = 'python3 -e "print(1)"'
     _confine(monkeypatch)
-    _assert_allowed(guard.check(_payload(cmd)))
+    _assert_allowed(_enveloped(guard.check)(_payload(cmd)))
 
     _confine(monkeypatch, subagent_type=_REVIEWER_TYPE)
-    _assert_denied(guard.check(_payload(cmd, agent_type=_REVIEWER_TYPE)))
+    _assert_denied(_enveloped(guard.check)(_payload(cmd, agent_type=_REVIEWER_TYPE)))
 
 
 def test_python3_dash_m_pytest_allows(monkeypatch):
     _confine(monkeypatch)
     payload = _payload("python3 -m pytest -q")
-    assert guard.check(payload) is None
+    assert _enveloped(guard.check)(payload) is None
 
 
 def test_python3_dash_m_pytest_with_stderr_redirect_allows(monkeypatch):
     _confine(monkeypatch)
     payload = _payload("python3 -m pytest -q 2>&1")
-    assert guard.check(payload) is None
+    assert _enveloped(guard.check)(payload) is None
 
 
 def test_python3_script_path_allows(monkeypatch):
     _confine(monkeypatch)
     payload = _payload("python3 myscript.py")
-    assert guard.check(payload) is None
+    assert _enveloped(guard.check)(payload) is None
 
 
 def test_readonly_git_status_allows(monkeypatch):
     _confine(monkeypatch)
     payload = _payload("git status")
-    assert guard.check(payload) is None
+    assert _enveloped(guard.check)(payload) is None
 
 
 def test_readonly_git_diff_allows(monkeypatch):
     _confine(monkeypatch)
     payload = _payload("git diff HEAD~1")
-    assert guard.check(payload) is None
+    assert _enveloped(guard.check)(payload) is None
 
 
 def test_readonly_git_log_allows(monkeypatch):
     _confine(monkeypatch)
     payload = _payload("git log -5")
-    assert guard.check(payload) is None
+    assert _enveloped(guard.check)(payload) is None
 
 
 def test_readonly_git_show_allows(monkeypatch):
     _confine(monkeypatch)
     payload = _payload("git show HEAD")
-    assert guard.check(payload) is None
+    assert _enveloped(guard.check)(payload) is None
 
 
 def test_readonly_git_rev_parse_allows(monkeypatch):
     _confine(monkeypatch)
     payload = _payload("git rev-parse --show-toplevel")
-    assert guard.check(payload) is None
+    assert _enveloped(guard.check)(payload) is None
 
 
 def test_ls_no_write_flags_allows(monkeypatch):
     _confine(monkeypatch)
     payload = _payload("ls -la coordinator_core/bash_guards")
-    assert guard.check(payload) is None
+    assert _enveloped(guard.check)(payload) is None
 
 
 def test_grep_allows(monkeypatch):
     _confine(monkeypatch)
     payload = _payload('grep -rn "foo" coordinator_core')
-    assert guard.check(payload) is None
+    assert _enveloped(guard.check)(payload) is None
 
 
 def test_find_no_write_flags_allows(monkeypatch):
     _confine(monkeypatch)
     payload = _payload('find . -name "*.py"')
-    assert guard.check(payload) is None
+    assert _enveloped(guard.check)(payload) is None
 
 
 def test_coordinator_doc_new_allows(monkeypatch):
@@ -385,37 +390,37 @@ def test_coordinator_doc_new_allows(monkeypatch):
     payload = _payload(
         "/x/claude-klabauter/coordinator/bin/coordinator-doc-new.py --type run-report"
     )
-    assert guard.check(payload) is None
+    assert _enveloped(guard.check)(payload) is None
 
 
 def test_machine_local_get_allows(monkeypatch):
     _confine(monkeypatch)
     payload = _payload("machine-local get repos.content_root")
-    assert guard.check(payload) is None
+    assert _enveloped(guard.check)(payload) is None
 
 
 def test_machine_local_has_allows(monkeypatch):
     _confine(monkeypatch)
     payload = _payload("machine-local has repos.content_root")
-    assert guard.check(payload) is None
+    assert _enveloped(guard.check)(payload) is None
 
 
 def test_machine_local_keys_allows(monkeypatch):
     _confine(monkeypatch)
     payload = _payload("machine-local keys repos")
-    assert guard.check(payload) is None
+    assert _enveloped(guard.check)(payload) is None
 
 
 def test_machine_local_path_allows(monkeypatch):
     _confine(monkeypatch)
     payload = _payload("machine-local path repos.content_root")
-    assert guard.check(payload) is None
+    assert _enveloped(guard.check)(payload) is None
 
 
 def test_machine_local_dir_allows(monkeypatch):
     _confine(monkeypatch)
     payload = _payload("machine-local dir repos.content_root")
-    assert guard.check(payload) is None
+    assert _enveloped(guard.check)(payload) is None
 
 
 def test_machine_local_set_allowlist_allows_executor_but_destructive_guard_denies_both(
@@ -434,61 +439,61 @@ def test_machine_local_set_allowlist_allows_executor_but_destructive_guard_denie
     cmd = "machine-local set repos.content_root /x/evil"
     _confine(monkeypatch)
     _wire_other_guard(monkeypatch, destructive_guard)
-    _assert_allowed(guard.check(_payload(cmd)))
-    _assert_denied(destructive_guard.check(_payload(cmd)))
+    _assert_allowed(_enveloped(guard.check)(_payload(cmd)))
+    _assert_denied(_enveloped(destructive_guard.check)(_payload(cmd)))
 
     _confine(monkeypatch, subagent_type=_REVIEWER_TYPE)
     _wire_other_guard(monkeypatch, destructive_guard, subagent_type=_REVIEWER_TYPE)
-    _assert_denied(guard.check(_payload(cmd, agent_type=_REVIEWER_TYPE)))
-    _assert_denied(destructive_guard.check(_payload(cmd, agent_type=_REVIEWER_TYPE)))
+    _assert_denied(_enveloped(guard.check)(_payload(cmd, agent_type=_REVIEWER_TYPE)))
+    _assert_denied(_enveloped(destructive_guard.check)(_payload(cmd, agent_type=_REVIEWER_TYPE)))
 
 
 def test_machine_local_array_append_allows_executor_denies_reviewer(monkeypatch):
     cmd = "machine-local array-append repos.mirrors /x/evil"
     _confine(monkeypatch)
-    _assert_allowed(guard.check(_payload(cmd)))
+    _assert_allowed(_enveloped(guard.check)(_payload(cmd)))
 
     _confine(monkeypatch, subagent_type=_REVIEWER_TYPE)
-    _assert_denied(guard.check(_payload(cmd, agent_type=_REVIEWER_TYPE)))
+    _assert_denied(_enveloped(guard.check)(_payload(cmd, agent_type=_REVIEWER_TYPE)))
 
 
 def test_machine_local_array_set_allows_executor_denies_reviewer(monkeypatch):
     cmd = "machine-local array-set repos.mirrors 0 /x/evil"
     _confine(monkeypatch)
-    _assert_allowed(guard.check(_payload(cmd)))
+    _assert_allowed(_enveloped(guard.check)(_payload(cmd)))
 
     _confine(monkeypatch, subagent_type=_REVIEWER_TYPE)
-    _assert_denied(guard.check(_payload(cmd, agent_type=_REVIEWER_TYPE)))
+    _assert_denied(_enveloped(guard.check)(_payload(cmd, agent_type=_REVIEWER_TYPE)))
 
 
 def test_machine_local_migrate_publish_mirrors_allows_executor_denies_reviewer(monkeypatch):
     cmd = "machine-local migrate-publish-mirrors"
     _confine(monkeypatch)
-    _assert_allowed(guard.check(_payload(cmd)))
+    _assert_allowed(_enveloped(guard.check)(_payload(cmd)))
 
     _confine(monkeypatch, subagent_type=_REVIEWER_TYPE)
-    _assert_denied(guard.check(_payload(cmd, agent_type=_REVIEWER_TYPE)))
+    _assert_denied(_enveloped(guard.check)(_payload(cmd, agent_type=_REVIEWER_TYPE)))
 
 
 def test_machine_local_bare_no_subcommand_allows_executor_denies_reviewer(monkeypatch):
     cmd = "machine-local"
     _confine(monkeypatch)
-    _assert_allowed(guard.check(_payload(cmd)))
+    _assert_allowed(_enveloped(guard.check)(_payload(cmd)))
 
     _confine(monkeypatch, subagent_type=_REVIEWER_TYPE)
-    _assert_denied(guard.check(_payload(cmd, agent_type=_REVIEWER_TYPE)))
+    _assert_denied(_enveloped(guard.check)(_payload(cmd, agent_type=_REVIEWER_TYPE)))
 
 
 def test_reviewer_type_unaffected_by_executor_interpreter_allowance(monkeypatch):
     _confine(monkeypatch, subagent_type=_REVIEWER_TYPE)
     payload = _payload("python3 myscript.py", agent_type=_REVIEWER_TYPE)
-    _assert_denied(guard.check(payload))
+    _assert_denied(_enveloped(guard.check)(payload))
 
 
 def test_reviewer_type_shares_the_executors_pytest_module_allowance(monkeypatch):
     _confine(monkeypatch, subagent_type=_REVIEWER_TYPE)
     payload = _payload("python3 -m pytest -q", agent_type=_REVIEWER_TYPE)
-    assert guard.check(payload) is None
+    assert _enveloped(guard.check)(payload) is None
 
 
 def test_reviewer_type_python3_dash_c_still_denies(monkeypatch):
@@ -497,14 +502,14 @@ def test_reviewer_type_python3_dash_c_still_denies(monkeypatch):
         'python3 -c "import os; os.system(\'rm -rf /\')"',
         agent_type=_REVIEWER_TYPE,
     )
-    reason = _assert_denied(guard.check(payload))
+    reason = _assert_denied(_enveloped(guard.check)(payload))
     assert "-c" in reason
 
 
 def test_reviewer_type_unlisted_module_still_denies(monkeypatch):
     _confine(monkeypatch, subagent_type=_REVIEWER_TYPE)
     payload = _payload("python3 -m http.server", agent_type=_REVIEWER_TYPE)
-    reason = _assert_denied(guard.check(payload))
+    reason = _assert_denied(_enveloped(guard.check)(payload))
     assert "http.server" in reason
 
 
@@ -551,7 +556,7 @@ def _reviewer_verdict_table(monkeypatch) -> list:
         (
             cmd,
             "deny"
-            if guard.check(_payload(cmd, agent_type=_REVIEWER_TYPE)) is not None
+            if _enveloped(guard.check)(_payload(cmd, agent_type=_REVIEWER_TYPE)) is not None
             else "allow",
         )
         for cmd in _AC4_REVIEWER_VERDICT_COMMANDS
@@ -594,7 +599,7 @@ def test_ac4_reviewer_verdict_table_unchanged_by_removing_executor_from_set(monk
 def test_executor_no_longer_denied_by_this_guard(monkeypatch):
     _confine(monkeypatch)
     payload = _payload("curl https://evil.example/x")
-    assert guard.check(payload) is None
+    assert _enveloped(guard.check)(payload) is None
 
 
 # ---------------------------------------------------------------------------

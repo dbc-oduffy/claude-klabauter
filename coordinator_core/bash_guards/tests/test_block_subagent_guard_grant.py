@@ -21,6 +21,11 @@ import json
 from coordinator_core.bash_guards import block_subagent_guard_grant as guard
 from coordinator_core.bash_guards import dispatch
 from coordinator_core.bash_guards import _verdict
+from coordinator_core.guard_messages.testing import envelope_of
+
+
+def _enveloped(check):
+    return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 
 def _payload(command, agent_id=None, agent_type=None):
@@ -61,31 +66,31 @@ _DASH_C_READ = (
 
 class TestNonBashOrEmpty:
     def test_non_bash_tool_allows(self):
-        assert guard.check({"tool_name": "Edit", "tool_input": {"file_path": "x"}}) is None
+        assert _enveloped(guard.check)({"tool_name": "Edit", "tool_input": {"file_path": "x"}}) is None
 
     def test_empty_command_allows(self):
-        assert guard.check(_payload("", agent_id="a1")) is None
+        assert _enveloped(guard.check)(_payload("", agent_id="a1")) is None
 
     def test_malformed_tool_input_allows(self):
-        assert guard.check({"tool_name": "Bash", "tool_input": "not-a-dict"}) is None
+        assert _enveloped(guard.check)({"tool_name": "Bash", "tool_input": "not-a-dict"}) is None
 
 
 class TestDashMForm:
     def test_em_grant_allows(self):
-        assert guard.check(_payload(_MODULE_M_GRANT)) is None
+        assert _enveloped(guard.check)(_payload(_MODULE_M_GRANT)) is None
 
     def test_subagent_grant_denies(self):
-        _reason(guard.check(_payload(_MODULE_M_GRANT, agent_id="a1")))
+        _reason(_enveloped(guard.check)(_payload(_MODULE_M_GRANT, agent_id="a1")))
 
     def test_present_but_unresolvable_agent_id_denies(self):
         _reason(
-            guard.check(
+            _enveloped(guard.check)(
                 _payload(_MODULE_M_GRANT, agent_id="unresolvable-nonexistent-id")
             )
         )
 
     def test_subagent_read_allows(self):
-        assert guard.check(
+        assert _enveloped(guard.check)(
             _payload(
                 "python3 -m coordinator_core.session.em_guard_grant read",
                 agent_id="a1",
@@ -93,7 +98,7 @@ class TestDashMForm:
         ) is None
 
     def test_subagent_check_allows(self):
-        assert guard.check(
+        assert _enveloped(guard.check)(
             _payload(
                 "python3 -m coordinator_core.session.em_guard_grant check",
                 agent_id="a1",
@@ -101,13 +106,13 @@ class TestDashMForm:
         ) is None
 
     def test_lookalike_module_name_does_not_match(self):
-        assert guard.check(
+        assert _enveloped(guard.check)(
             _payload(
                 "python3 -m coordinator_core.session.em_guard_grant_extra grant x y",
                 agent_id="a1",
             )
         ) is None
-        assert guard.check(
+        assert _enveloped(guard.check)(
             _payload(
                 "python3 -m coordinator_core.session.em_guard_grantx grant x y",
                 agent_id="a1",
@@ -122,20 +127,20 @@ class TestAgentTypeOnlyRegression:
     `resolve_effective_types` OR-resolved triple."""
 
     def test_agent_type_only_payload_not_denied(self):
-        assert guard.check(
+        assert _enveloped(guard.check)(
             _payload(_MODULE_M_GRANT, agent_type="coordinator:em")
         ) is None
 
 
 class TestDashCForm:
     def test_subagent_dash_c_grant_denies(self):
-        _reason(guard.check(_payload(_DASH_C_GRANT, agent_id="a1")))
+        _reason(_enveloped(guard.check)(_payload(_DASH_C_GRANT, agent_id="a1")))
 
     def test_em_dash_c_grant_allows(self):
-        assert guard.check(_payload(_DASH_C_GRANT)) is None
+        assert _enveloped(guard.check)(_payload(_DASH_C_GRANT)) is None
 
     def test_subagent_dash_c_read_allows(self):
-        assert guard.check(_payload(_DASH_C_READ, agent_id="a1")) is None
+        assert _enveloped(guard.check)(_payload(_DASH_C_READ, agent_id="a1")) is None
 
 
 class TestPowerShellParity:
@@ -148,12 +153,12 @@ class TestPowerShellParity:
     def test_subagent_grant_denies_via_powershell(self):
         p = _payload(_MODULE_M_GRANT, agent_id="a1")
         p["tool_name"] = "PowerShell"
-        _reason(guard.check(p))
+        _reason(_enveloped(guard.check)(p))
 
     def test_em_grant_allows_via_powershell(self):
         p = _payload(_MODULE_M_GRANT)
         p["tool_name"] = "PowerShell"
-        assert guard.check(p) is None
+        assert _enveloped(guard.check)(p) is None
 
 
 class TestDispatchWiring:
@@ -197,11 +202,11 @@ class TestScopeEqualsEnforcement:
     indirection route the docstring itself says is not caught."""
 
     def test_denies_exactly_the_two_documented_shapes(self):
-        _reason(guard.check(_payload(_MODULE_M_GRANT, agent_id="a1")))
-        _reason(guard.check(_payload(_DASH_C_GRANT, agent_id="a1")))
+        _reason(_enveloped(guard.check)(_payload(_MODULE_M_GRANT, agent_id="a1")))
+        _reason(_enveloped(guard.check)(_payload(_DASH_C_GRANT, agent_id="a1")))
 
     def test_does_not_deny_a_command_merely_mentioning_the_module_name(self):
-        assert guard.check(
+        assert _enveloped(guard.check)(
             _payload(
                 "echo coordinator_core.session.em_guard_grant",
                 agent_id="a1",
@@ -209,17 +214,17 @@ class TestScopeEqualsEnforcement:
         ) is None
 
     def test_does_not_deny_dash_c_mentioning_module_without_write_func(self):
-        assert guard.check(_payload(_DASH_C_READ, agent_id="a1")) is None
+        assert _enveloped(guard.check)(_payload(_DASH_C_READ, agent_id="a1")) is None
 
     def test_does_not_deny_dash_c_mentioning_lookalike_func_name(self):
         payload = (
             "python3 -c \"from coordinator_core.session.em_guard_grant import "
             "_write_em_guard_grant_helper as w; w()\""
         )
-        assert guard.check(_payload(payload, agent_id="a1")) is None
+        assert _enveloped(guard.check)(_payload(payload, agent_id="a1")) is None
 
     def test_does_not_deny_non_python_command(self):
-        assert guard.check(
+        assert _enveloped(guard.check)(
             _payload(
                 "rg 'em_guard_grant' coordinator_core/",
                 agent_id="a1",
@@ -234,12 +239,12 @@ class TestUnparseableCommandRecordsSilent:
 
     def test_powershell_herestring_records_silent(self):
         with _verdict.collecting() as silences:
-            out = guard.check(_payload(self._HERESTRING_APOSTROPHE, agent_id="a1"))
+            out = _enveloped(guard.check)(_payload(self._HERESTRING_APOSTROPHE, agent_id="a1"))
         assert out is None
         assert _verdict.was_silent("block-subagent-guard-grant", silences)
 
     def test_powershell_backtick_continuation_records_silent(self):
         with _verdict.collecting() as silences:
-            out = guard.check(_payload(self._BACKTICK_UNTERMINATED, agent_id="a1"))
+            out = _enveloped(guard.check)(_payload(self._BACKTICK_UNTERMINATED, agent_id="a1"))
         assert out is None
         assert _verdict.was_silent("block-subagent-guard-grant", silences)

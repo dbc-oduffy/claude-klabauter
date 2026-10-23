@@ -432,16 +432,21 @@ def test_guard_admits_the_composed_runner_line_and_denies_bare_suites(tmp_path, 
     import re
 
     from coordinator_core.bash_guards import check_test_suite_invocation as guard
+    try:
+        from coordinator_core.guard_messages.testing import envelope_of
+    except ImportError:  # guard still returns the bare envelope
+        def envelope_of(out, _caller):
+            return out
 
     monkeypatch.setattr(guard, "_mutex_holder", lambda: None)
     line = re.search(r"`([^`]*targeted-test-run[^`]*)`", _runner_calls()["verify"]).group(1)
     line = line.replace("' + ", "").replace(" + '", "")
 
     def _decision(cmd):
-        out = guard.check({
+        out = envelope_of(guard.check({
             "tool_name": "Bash", "tool_input": {"command": cmd}, "session_id": "s1",
             "cwd": str(tmp_path), "agent_id": "a0123456789abcdef",
-        })
+        }), "em")
         return out and out["hookSpecificOutput"]["permissionDecision"]
 
     assert _decision(line) != "deny"
@@ -495,6 +500,26 @@ def test_fix_prompt_precheck_peer_dirty_before_work():
     peer_dirty_index = call_text.index("PEER_DIRTY")
     fix_index = call_text.lower().index("fix the row")
     assert peer_dirty_index < fix_index
+
+
+def test_fix_prompt_images_pre_before_work_and_post_before_close():
+    text = grind_stages.compose_fix_call(
+        label="fix:row1", phase_title="Fix", row_id="row1", locked_files=["a.py", "b.py"],
+    )
+    pre = text.index("grind-row image --phase pre")
+    assert pre < text.index("PEER_DIRTY") < text.index("fix the row")
+    post = text.index("--phase post")
+    assert text.index("fix the row") < post < text.index("grind-row close")
+    assert '["a.py", "b.py"]' in text
+    assert text.count("A row without images lands only files no peer holds.") == 1
+    assert "per locked file (edited or not) and per file you created" in text
+
+
+def test_fix_prompt_images_interpolate_the_locked_files_js_expression():
+    text = grind_stages.compose_fix_call(
+        label="f", phase_title="F", row_id_js="row.row_id", locked_files_js="row.files",
+    )
+    assert "JSON.stringify({paths: row.files})" in text
 
 
 def test_review_fix_commit_reconciles_before_retry():

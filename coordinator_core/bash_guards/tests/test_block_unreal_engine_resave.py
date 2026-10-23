@@ -5,6 +5,11 @@ from __future__ import annotations
 import pytest
 
 from coordinator_core.bash_guards import block_unreal_engine_resave as guard
+from coordinator_core.guard_messages.testing import envelope_of
+
+
+def _enveloped(check):
+    return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 _ED = '"C:/Program Files/Epic Games/UE_5.8/Engine/Binaries/Win64/UnrealEditor-Cmd.exe"'  # abs-path-ok: fixture command text
 _PROJ = "C:/Game/Game.uproject"
@@ -29,7 +34,7 @@ def roots(monkeypatch):
     ],
 )
 def test_denied(cmd):
-    out = guard.check(_bash(cmd))
+    out = _enveloped(guard.check)(_bash(cmd))
     assert out is not None
     assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
 
@@ -45,4 +50,4 @@ def test_denied(cmd):
     ],
 )
 def test_allowed(cmd):
-    assert guard.check(_bash(cmd)) is None
+    assert _enveloped(guard.check)(_bash(cmd)) is None

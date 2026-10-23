@@ -27,6 +27,11 @@ from coordinator_core.bash_guards._heavy_admission_contract import (
     OVERRIDE_KEYS,
     ProcRow,
 )
+from coordinator_core.guard_messages.testing import envelope_of
+
+
+def _enveloped(check):
+    return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 CLAUDE = ProcRow(pid=100, ppid=1, ctime=10, name="claude.exe")
 # The Bash tool shell: the census only counts what runs under one.
@@ -136,20 +141,20 @@ class TestLightPath:
 
         for name in ("_read_config", "_primitives", "_read_available", "_workflow_runs_of"):
             monkeypatch.setattr(guard, name, boom)
-        assert guard.check(_payload("git status")) is None
-        assert guard.check(_payload("grep tsc README.md", agent_id="deadbeef0123")) is None
+        assert _enveloped(guard.check)(_payload("git status")) is None
+        assert _enveloped(guard.check)(_payload("grep tsc README.md", agent_id="deadbeef0123")) is None
 
     @pytest.mark.parametrize("payload", [None, [], {}, {"tool_name": "Read"}, _payload("")])
     def test_malformed_or_foreign_payload_allows(self, payload):
-        assert guard.check(payload) is None
+        assert _enveloped(guard.check)(payload) is None
 
     def test_non_string_command_allows(self):
-        assert guard.check({"tool_name": "Bash", "tool_input": {"command": 5}}) is None
+        assert _enveloped(guard.check)({"tool_name": "Bash", "tool_input": {"command": 5}}) is None
 
 
 class TestIdentityLeg:
     def test_subagent_tsc_is_denied_naming_the_gate(self, host):
-        out = guard.check(_payload("tsc --noEmit", agent_id="deadbeef0123", agent_type="general-purpose"))
+        out = _enveloped(guard.check)(_payload("tsc --noEmit", agent_id="deadbeef0123", agent_type="general-purpose"))
         assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
         text = _reason(out)
         assert GUARD_NAME in text and "identity" in text and "typecheck" in text
@@ -160,47 +165,47 @@ class TestIdentityLeg:
         ["general-purpose", "Explore", "workflow-subagent", "unknown", "", "aliza-0123456789abcdef"],
     )
     def test_unlisted_caller_classes_are_denied(self, host, agent_type):
-        out = guard.check(_payload("tsc --noEmit", agent_id="deadbeef0123", agent_type=agent_type))
+        out = _enveloped(guard.check)(_payload("tsc --noEmit", agent_id="deadbeef0123", agent_type=agent_type))
         assert out is not None and "identity" in _reason(out)
 
     def test_absent_agent_type_with_agent_id_is_denied(self, host):
-        assert guard.check(_payload("tsc --noEmit", agent_id="deadbeef0123")) is not None
+        assert _enveloped(guard.check)(_payload("tsc --noEmit", agent_id="deadbeef0123")) is not None
 
     def test_main_thread_is_admitted(self, host):
-        assert guard.check(_payload("tsc --noEmit")) is None
+        assert _enveloped(guard.check)(_payload("tsc --noEmit")) is None
 
     def test_main_thread_with_bare_agent_type_is_admitted(self, host):
-        assert guard.check(_payload("tsc --noEmit", agent_type="coordinator:staff-eng")) is None
+        assert _enveloped(guard.check)(_payload("tsc --noEmit", agent_type="coordinator:staff-eng")) is None
 
     def test_listed_persona_is_admitted(self, host):
-        assert guard.check(_payload("tsc --noEmit", agent_id="deadbeef0123", agent_type="coordinator:staff-eng")) is None
+        assert _enveloped(guard.check)(_payload("tsc --noEmit", agent_id="deadbeef0123", agent_type="coordinator:staff-eng")) is None
 
     def test_listed_persona_spawned_by_a_workflow_is_denied(self, host, monkeypatch):
         monkeypatch.setattr(guard, "_workflow_runs_of", lambda payload: ["run-1"])
-        out = guard.check(_payload("tsc --noEmit", agent_id="deadbeef0123", agent_type="coordinator:staff-eng"))
+        out = _enveloped(guard.check)(_payload("tsc --noEmit", agent_id="deadbeef0123", agent_type="coordinator:staff-eng"))
         assert out is not None and "workflow run" in _reason(out)
 
     def test_main_thread_never_consults_workflow_runs(self, host, monkeypatch):
         monkeypatch.setattr(guard, "_workflow_runs_of", lambda payload: pytest.fail("consulted"))
-        assert guard.check(_payload("tsc --noEmit")) is None
+        assert _enveloped(guard.check)(_payload("tsc --noEmit")) is None
 
     def test_a_denied_identity_writes_no_lease(self, host, tmp_path):
-        guard.check(_payload("tsc --noEmit", agent_id="deadbeef0123", agent_type="general-purpose"))
+        _enveloped(guard.check)(_payload("tsc --noEmit", agent_id="deadbeef0123", agent_type="general-purpose"))
         assert _lease_files(tmp_path) == []
 
 
 class TestRamLeg:
     def test_above_floor_admits_and_writes_one_lease(self, host, tmp_path):
-        assert guard.check(_payload("pnpm build")) is None
+        assert _enveloped(guard.check)(_payload("pnpm build")) is None
         (lease,) = _lease_files(tmp_path)
         rec = json.loads(lease.read_text(encoding="utf-8"))
         assert (rec["holder_pid"], rec["holder_ctime"]) == (CLAUDE.pid, CLAUDE.ctime)
         assert rec["heavy_class"] == "build"
 
     def test_below_floor_denies_naming_holders(self, host, tmp_path):
-        assert guard.check(_payload("pnpm build")) is None
+        assert _enveloped(guard.check)(_payload("pnpm build")) is None
         host.avail = 900
-        out = guard.check(_payload("pnpm build"))
+        out = _enveloped(guard.check)(_payload("pnpm build"))
         text = _reason(out)
         assert GUARD_NAME in text and "ram-floor" in text
         assert "pid 100" in text and "build" in text
@@ -208,7 +213,7 @@ class TestRamLeg:
 
     def test_denied_call_writes_no_lease(self, host, tmp_path):
         host.avail = 900
-        assert guard.check(_payload("pnpm build")) is not None
+        assert _enveloped(guard.check)(_payload("pnpm build")) is not None
         assert _lease_files(tmp_path) == []
 
     def test_dead_holder_lease_is_reaped_on_the_next_call(self, host, tmp_path):
@@ -219,52 +224,52 @@ class TestRamLeg:
             )
         )
         assert len(_lease_files(tmp_path)) == 1
-        assert guard.check(_payload("pnpm build")) is None
+        assert _enveloped(guard.check)(_payload("pnpm build")) is None
         holders = [json.loads(p.read_text(encoding="utf-8"))["holder_pid"] for p in _lease_files(tmp_path)]
         assert holders == [CLAUDE.pid]
 
     def test_back_to_back_launches_reserve_the_first_leases_memory(self, host, tmp_path):
         host.avail = 1400
-        assert guard.check(_payload("pnpm build")) is None
-        out = guard.check(_payload("pnpm build"))
+        assert _enveloped(guard.check)(_payload("pnpm build")) is None
+        out = _enveloped(guard.check)(_payload("pnpm build"))
         assert out is not None and "ram-floor" in _reason(out)
         assert len(_lease_files(tmp_path)) == 1
 
     def test_unreadable_ram_denies(self, host):
         host.trusted = False
-        out = guard.check(_payload("pnpm build"))
+        out = _enveloped(guard.check)(_payload("pnpm build"))
         assert out is not None and "unreadable or untrusted" in _reason(out)
 
     def test_none_reading_denies(self, host, monkeypatch):
         monkeypatch.setattr(guard, "_read_available", lambda: MemoryReading(None, False, "stub"))
-        assert guard.check(_payload("pnpm build")) is not None
+        assert _enveloped(guard.check)(_payload("pnpm build")) is not None
 
     @pytest.mark.parametrize("missing", [KEY_FREE_RAM_FLOOR_MB, KEY_LEASE_RESERVE_MB])
     def test_unconfigured_floor_denies_naming_setup(self, host, missing):
         del host.config[missing]
-        out = guard.check(_payload("pnpm build"))
+        out = _enveloped(guard.check)(_payload("pnpm build"))
         assert "unconfigured" in _reason(out) and "scripts/setup.py" in _reason(out)
 
     @pytest.mark.parametrize("bad", ["", "abc", "0", "-5"])
     def test_malformed_floor_denies(self, host, bad):
         host.config[KEY_FREE_RAM_FLOOR_MB] = bad
-        assert guard.check(_payload("pnpm build")) is not None
+        assert _enveloped(guard.check)(_payload("pnpm build")) is not None
 
 
 class TestScopedCarveOut:
     def test_scoped_test_run_skips_the_ram_leg_and_writes_no_lease(self, host, tmp_path):
         host.avail = 1
-        out = guard.check(_payload("python -m pytest coordinator_core/bash_guards/tests/test_host_probe.py::test_x"))
+        out = _enveloped(guard.check)(_payload("python -m pytest coordinator_core/bash_guards/tests/test_host_probe.py::test_x"))
         assert out is None
         assert host.ram_reads == 0
         assert _lease_files(tmp_path) == []
 
     def test_scoped_run_by_a_subagent_is_never_identity_denied(self, host):
         cmd = "python -m pytest coordinator_core/bash_guards/tests/test_host_probe.py"
-        assert guard.check(_payload(cmd, agent_id="deadbeef0123", agent_type="coordinator:executor")) is None
+        assert _enveloped(guard.check)(_payload(cmd, agent_id="deadbeef0123", agent_type="coordinator:executor")) is None
 
     def test_bare_tier_run_stays_heavy(self, host):
-        out = guard.check(_payload("python -m pytest", agent_id="deadbeef0123", agent_type="coordinator:executor"))
+        out = _enveloped(guard.check)(_payload("python -m pytest", agent_id="deadbeef0123", agent_type="coordinator:executor"))
         assert out is not None and "identity" in _reason(out)
 
 
@@ -280,7 +285,7 @@ class TestBoxHoldLeg:
 
     def test_a_workflow_test_runner_scoped_test_is_denied_under_a_live_hold(self, host, monkeypatch):
         monkeypatch.setattr(guard, "_read_box_hold", lambda: self._hold())
-        out = guard.check(_payload(self.SCOPED, agent_id="deadbeef0123", agent_type="coordinator:test-runner"))
+        out = _enveloped(guard.check)(_payload(self.SCOPED, agent_id="deadbeef0123", agent_type="coordinator:test-runner"))
         text = _reason(out)
         assert "box-hold" in text and "sess-em" in text and "swap pressure" in text
         assert "gate-blocker: guard-denied" in text
@@ -288,7 +293,7 @@ class TestBoxHoldLeg:
 
     def test_the_holder_session_is_admitted(self, host, monkeypatch):
         monkeypatch.setattr(guard, "_read_box_hold", lambda: self._hold("sess-heavy"))
-        assert guard.check(_payload(self.SCOPED)) is None
+        assert _enveloped(guard.check)(_payload(self.SCOPED)) is None
 
     def test_an_expired_or_malformed_record_admits(self, host, monkeypatch, tmp_path):
         from coordinator_core.group_em import box_hold
@@ -301,24 +306,24 @@ class TestBoxHoldLeg:
         monkeypatch.setattr(leases, "leases_dir", lambda: tmp_path / "leases")
         monkeypatch.setattr(box_hold, "_hold_path", lambda directory=None: tmp_path / "hold.json")
         (tmp_path / "hold.json").write_text("{not json", encoding="utf-8")
-        assert guard.check(_payload(self.SCOPED)) is None
+        assert _enveloped(guard.check)(_payload(self.SCOPED)) is None
         (tmp_path / "hold.json").write_text(
             json.dumps({"set_by_session": "x", "reason": "r", "set_at": 1, "expires_at": 2}), encoding="utf-8"
         )
-        assert guard.check(_payload(self.SCOPED)) is None
+        assert _enveloped(guard.check)(_payload(self.SCOPED)) is None
 
     def test_a_light_command_never_reads_the_hold(self, host, monkeypatch):
         def boom():
             raise AssertionError("hold read for a light command")
 
         monkeypatch.setattr(guard, "_read_box_hold", boom)
-        assert guard.check(_payload("git status")) is None
+        assert _enveloped(guard.check)(_payload("git status")) is None
 
     def test_the_bypass_key_admits_and_logs(self, host, monkeypatch, tmp_path):
         (tmp_path / ".git").mkdir()
         monkeypatch.setattr(guard, "_read_box_hold", lambda: self._hold())
         env = {OVERRIDE_KEYS["box-hold"]: "1"}
-        assert guard.check(_payload(self.SCOPED, env=env, cwd=tmp_path)) is None
+        assert _enveloped(guard.check)(_payload(self.SCOPED, env=env, cwd=tmp_path)) is None
         logs = list((tmp_path / ".git" / "coordinator-sessions").rglob("overrides.log"))
         assert OVERRIDE_KEYS["box-hold"] in "".join(p.read_text(encoding="utf-8") for p in logs)
 
@@ -331,17 +336,17 @@ class TestSessionCapLeg:
 
     def test_at_the_heavy_cap_denies_naming_the_pids(self, host):
         host.rows = self._heavy_rows(2)
-        out = guard.check(_payload("pnpm build"))
+        out = _enveloped(guard.check)(_payload("pnpm build"))
         text = _reason(out)
         assert "session-cap" in text and "300" in text and "301" in text
 
     def test_under_the_heavy_cap_admits(self, host):
         host.rows = self._heavy_rows(1)
-        assert guard.check(_payload("pnpm build")) is None
+        assert _enveloped(guard.check)(_payload("pnpm build")) is None
 
     def test_callers_own_wrapper_chain_is_not_counted(self, host):
         host.config[KEY_SESSION_HEAVY_CAP] = "1"
-        assert guard.check(_payload("pnpm build")) is None
+        assert _enveloped(guard.check)(_payload("pnpm build")) is None
 
     def _chain(self, base, ctime):
         """pnpm -> tsx (node) -> node under the tool shell: one command, three heavy images."""
@@ -353,67 +358,67 @@ class TestSessionCapLeg:
 
     def test_one_multi_process_chain_counts_as_one_command(self, host):
         host.rows = [CLAUDE, TOOL, CALLER] + self._chain(300, 30)
-        assert guard.check(_payload("pnpm build")) is None
+        assert _enveloped(guard.check)(_payload("pnpm build")) is None
 
     def test_two_separate_chains_at_cap_deny_naming_the_roots(self, host):
         host.rows = [CLAUDE, TOOL, CALLER] + self._chain(300, 30) + self._chain(310, 40)
-        text = _reason(guard.check(_payload("pnpm build")))
+        text = _reason(_enveloped(guard.check)(_payload("pnpm build")))
         assert "holds 2 heavy commands" in text and "300" in text and "310" in text
         assert "301" not in text and "312" not in text
 
     def test_three_chains_over_cap_deny(self, host):
         host.rows = [CLAUDE, TOOL, CALLER] + self._chain(300, 30) + self._chain(310, 40) + self._chain(320, 50)
-        assert "holds 3 heavy commands" in _reason(guard.check(_payload("pnpm build")))
+        assert "holds 3 heavy commands" in _reason(_enveloped(guard.check)(_payload("pnpm build")))
 
     def test_a_heavy_launcher_above_claude_still_counts_the_sessions_commands(self, host):
         launcher = ProcRow(pid=50, ppid=1, ctime=5, name="npx.exe")
         claude = ProcRow(pid=100, ppid=50, ctime=10, name="claude.exe")
         host.rows = [launcher, claude, TOOL, CALLER] + self._chain(300, 30) + self._chain(310, 40)
-        assert "holds 2 heavy commands" in _reason(guard.check(_payload("pnpm build")))
+        assert "holds 2 heavy commands" in _reason(_enveloped(guard.check)(_payload("pnpm build")))
 
     def test_background_shells_over_cap_deny_naming_the_pids(self, host):
         host.rows = [CLAUDE, TOOL, CALLER] + [
             ProcRow(pid=400 + i, ppid=CLAUDE.pid, ctime=40 + i, name="bash.exe") for i in range(3)
         ]
-        out = guard.check(_payload("sleep 600", background=True))
+        out = _enveloped(guard.check)(_payload("sleep 600", background=True))
         text = _reason(out)
         assert "session-cap" in text and "background" in text and "400" in text
 
     def test_background_light_command_under_cap_admits(self, host, tmp_path):
-        assert guard.check(_payload("sleep 600", background=True)) is None
+        assert _enveloped(guard.check)(_payload("sleep 600", background=True)) is None
         assert _lease_files(tmp_path) == []
 
     def test_foreground_light_command_ignores_shell_count(self, host):
         host.rows = [CLAUDE, TOOL, CALLER] + [
             ProcRow(pid=400 + i, ppid=CLAUDE.pid, ctime=40 + i, name="bash.exe") for i in range(9)
         ]
-        assert guard.check(_payload("ls")) is None
+        assert _enveloped(guard.check)(_payload("ls")) is None
 
     def test_unreadable_process_table_denies(self, host):
         host.rows = None
-        out = guard.check(_payload("pnpm build"))
+        out = _enveloped(guard.check)(_payload("pnpm build"))
         assert out is not None and "unreadable" in _reason(out)
 
     def test_unresolvable_anchor_denies(self, host):
         host.rows = [CALLER]
-        out = guard.check(_payload("pnpm build"))
+        out = _enveloped(guard.check)(_payload("pnpm build"))
         assert out is not None and "no session anchor" in _reason(out)
 
     def test_unconfigured_cap_denies(self, host):
         del host.config[KEY_SESSION_HEAVY_CAP]
-        out = guard.check(_payload("pnpm build"))
+        out = _enveloped(guard.check)(_payload("pnpm build"))
         assert "unconfigured" in _reason(out)
 
     def test_a_cap_denied_call_writes_no_lease(self, host, tmp_path):
         host.rows = self._heavy_rows(2)
-        guard.check(_payload("pnpm build"))
+        _enveloped(guard.check)(_payload("pnpm build"))
         assert _lease_files(tmp_path) == []
 
     def test_admitted_call_narrows_an_earlier_unattributed_lease(self, host, tmp_path):
-        assert guard.check(_payload("pnpm build")) is None
+        assert _enveloped(guard.check)(_payload("pnpm build")) is None
         host.rows = self._heavy_rows(1)
         host.avail = 9000
-        assert guard.check(_payload("pnpm build")) is None
+        assert _enveloped(guard.check)(_payload("pnpm build")) is None
         holders = sorted(json.loads(p.read_text(encoding="utf-8"))["holder_pid"] for p in _lease_files(tmp_path))
         assert holders == [CLAUDE.pid, 300]
 
@@ -431,7 +436,7 @@ class TestOverrideKeys:
     def test_identity_key_bypasses_only_the_identity_leg(self, host, repo):
         env = {OVERRIDE_KEYS["identity"]: "1"}
         host.avail = 900
-        out = guard.check(
+        out = _enveloped(guard.check)(
             _payload("tsc --noEmit", agent_id="d", agent_type="general-purpose", env=env, cwd=repo)
         )
         assert out is not None and "ram-floor" in _reason(out)
@@ -440,8 +445,8 @@ class TestOverrideKeys:
     def test_ram_key_bypasses_only_the_ram_leg(self, host, repo):
         env = {OVERRIDE_KEYS["ram-floor"]: "1"}
         host.avail = 1
-        assert guard.check(_payload("pnpm build", env=env, cwd=repo)) is None
-        out = guard.check(
+        assert _enveloped(guard.check)(_payload("pnpm build", env=env, cwd=repo)) is None
+        out = _enveloped(guard.check)(
             _payload("pnpm build", agent_id="d", agent_type="general-purpose", env=env, cwd=repo)
         )
         assert out is not None and "identity" in _reason(out)
@@ -452,25 +457,25 @@ class TestOverrideKeys:
         host.rows = [CLAUDE, TOOL, CALLER] + [
             ProcRow(pid=300 + i, ppid=TOOL.pid, ctime=30 + i, name="node.exe") for i in range(5)
         ]
-        assert guard.check(_payload("pnpm build", env=env, cwd=repo)) is None
+        assert _enveloped(guard.check)(_payload("pnpm build", env=env, cwd=repo)) is None
         host.avail = 1
-        assert guard.check(_payload("pnpm build", env=env, cwd=repo)) is not None
+        assert _enveloped(guard.check)(_payload("pnpm build", env=env, cwd=repo)) is not None
         assert OVERRIDE_KEYS["session-cap"] in self._log(repo)
 
     def test_without_a_key_nothing_is_logged(self, host, repo):
-        guard.check(_payload("pnpm build", cwd=repo))
+        _enveloped(guard.check)(_payload("pnpm build", cwd=repo))
         assert self._log(repo) == ""
 
     def test_a_key_set_to_anything_but_one_does_not_bypass(self, host, repo):
         env = {OVERRIDE_KEYS["ram-floor"]: "true"}
         host.avail = 1
-        assert guard.check(_payload("pnpm build", env=env, cwd=repo)) is not None
+        assert _enveloped(guard.check)(_payload("pnpm build", env=env, cwd=repo)) is not None
 
     def test_no_payload_field_admits(self, host):
         p = _payload("tsc --noEmit", agent_id="d", agent_type="general-purpose")
         p.update({"justification": "urgent", "priority": "high", "light": True})
         p["tool_input"].update({"justification": "urgent", "light": True})
-        assert guard.check(p) is not None
+        assert _enveloped(guard.check)(p) is not None
 
 
 class TestChainIntegration:
@@ -534,26 +539,26 @@ class TestChainIntegration:
 class TestDenyTextRegister:
     def _reasons(self, host):
         out = []
-        out.append(guard.check(_payload("tsc --noEmit", agent_id="d", agent_type="general-purpose")))
+        out.append(_enveloped(guard.check)(_payload("tsc --noEmit", agent_id="d", agent_type="general-purpose")))
         host.avail = 900
-        out.append(guard.check(_payload("pnpm build")))
+        out.append(_enveloped(guard.check)(_payload("pnpm build")))
         host.trusted = False
-        out.append(guard.check(_payload("pnpm build")))
+        out.append(_enveloped(guard.check)(_payload("pnpm build")))
         host.trusted = True
         host.avail = 5000
         saved = host.config.pop(KEY_FREE_RAM_FLOOR_MB)
-        out.append(guard.check(_payload("pnpm build")))
+        out.append(_enveloped(guard.check)(_payload("pnpm build")))
         host.config[KEY_FREE_RAM_FLOOR_MB] = saved
         host.rows = [CLAUDE, TOOL, CALLER] + [
             ProcRow(pid=300 + i, ppid=TOOL.pid, ctime=30 + i, name="node.exe") for i in range(3)
         ]
-        out.append(guard.check(_payload("pnpm build")))
+        out.append(_enveloped(guard.check)(_payload("pnpm build")))
         host.rows = [CLAUDE, TOOL, CALLER] + [
             ProcRow(pid=400 + i, ppid=CLAUDE.pid, ctime=40 + i, name="bash.exe") for i in range(3)
         ]
-        out.append(guard.check(_payload("sleep 9", background=True)))
+        out.append(_enveloped(guard.check)(_payload("sleep 9", background=True)))
         host.rows = None
-        out.append(guard.check(_payload("pnpm build")))
+        out.append(_enveloped(guard.check)(_payload("pnpm build")))
         return [_reason(o) for o in out]
 
     def test_every_deny_passes_the_message_register_lint(self, host):
@@ -618,26 +623,26 @@ class TestNoThresholdLiterals:
 
 class TestWouldDenyLog:
     def test_every_deny_is_logged_with_leg_class_and_caller(self, host, tmp_path):
-        guard.check(_payload("tsc --noEmit", agent_id="a1", agent_type="general-purpose"))
+        _enveloped(guard.check)(_payload("tsc --noEmit", agent_id="a1", agent_type="general-purpose"))
         (line,) = _log_lines(tmp_path)
         assert line["kind"] == "identity" and line["heavy_class"] == "typecheck"
         assert line["agent_type"] == "general-purpose" and line["command"] == "tsc --noEmit"
         assert line["pid_source"] == "payload" and line["caller_pid"] == CALLER.pid
 
     def test_an_admitted_call_logs_nothing(self, host, tmp_path):
-        assert guard.check(_payload("pnpm build")) is None
+        assert _enveloped(guard.check)(_payload("pnpm build")) is None
         assert _log_lines(tmp_path) == []
 
     def test_a_cap_deny_logs_the_census_names(self, host, tmp_path):
         host.rows = TestSessionCapLeg()._heavy_rows(2)
-        guard.check(_payload("pnpm build"))
+        _enveloped(guard.check)(_payload("pnpm build"))
         (line,) = _log_lines(tmp_path)
         assert line["kind"] == "session-cap" and line["census_heavy"] == ["node.exe", "node.exe"]
 
     def test_a_missing_payload_pid_is_recorded_as_the_guard_process(self, host, tmp_path):
         payload = _payload("pnpm build")
         del payload["pid"]
-        guard.check(payload)
+        _enveloped(guard.check)(payload)
         (line,) = _log_lines(tmp_path)
         assert line["pid_source"] == "guard-process"
 
@@ -647,7 +652,7 @@ class TestWouldDenyLog:
 
         monkeypatch.setattr(guard, "_ram_leg", boom)
         with pytest.raises(RuntimeError):
-            guard.check(_payload("pnpm build"))
+            _enveloped(guard.check)(_payload("pnpm build"))
         (line,) = _log_lines(tmp_path)
         assert line["kind"] == "crash" and "probe" in line["reason"]
 
@@ -657,7 +662,7 @@ class TestRunawayWorkerAdvisory:
         host.rows = TestSessionCapLeg()._heavy_rows(1)
         host.config[KEY_WORKER_RSS_CEILING_MB] = "4096"
         host.working_sets = {300: 8800}
-        assert guard.check(_payload("pnpm build")) is None
+        assert _enveloped(guard.check)(_payload("pnpm build")) is None
         (line,) = _log_lines(tmp_path)
         assert line["kind"] == "worker-rss" and "300" in line["reason"] and "8800" in line["reason"]
 
@@ -668,7 +673,7 @@ class TestRunawayWorkerAdvisory:
         host.config[KEY_WORKER_RSS_CEILING_MB] = "4000"
         host.working_sets = {300: 300, **{k.pid: 400 for k in kids}}
         host.working_sets.pop(405)
-        assert guard.check(_payload("pnpm build")) is None
+        assert _enveloped(guard.check)(_payload("pnpm build")) is None
         (line,) = _log_lines(tmp_path)
         assert line["kind"] == "worker-rss"
         assert "root pid 300" in line["reason"] and "21 processes" in line["reason"]
@@ -680,14 +685,14 @@ class TestRunawayWorkerAdvisory:
         host.rows = [CLAUDE, TOOL, CALLER, root, child]
         host.config[KEY_WORKER_RSS_CEILING_MB] = "1000"
         host.working_sets = {300: 600, 301: 600}
-        assert guard.check(_payload("pnpm build")) is None
+        assert _enveloped(guard.check)(_payload("pnpm build")) is None
         (line,) = _log_lines(tmp_path)
         assert "2 processes" in line["reason"] and "1200 MB" in line["reason"]
 
     def test_no_ceiling_configured_flags_nothing(self, host, tmp_path):
         host.rows = TestSessionCapLeg()._heavy_rows(1)
         host.working_sets = {300: 8800}
-        assert guard.check(_payload("pnpm build")) is None
+        assert _enveloped(guard.check)(_payload("pnpm build")) is None
         assert _log_lines(tmp_path) == []
 
 
@@ -697,9 +702,9 @@ class TestOneTypecheckPerSession:
         host.rows = [CLAUDE, TOOL, CALLER, sourcer]
         alive = {(CLAUDE.pid, CLAUDE.ctime), (TOOL.pid, TOOL.ctime), (sourcer.pid, sourcer.ctime)}
         monkeypatch.setattr(guard, "_primitives", lambda: _Prims(host.rows, alive_set=alive))
-        assert guard.check(_payload("tsc --noEmit")) is None
-        assert guard.check(_payload("tsc --noEmit")) is None
-        assert guard.check(_payload("tsc --noEmit")) is None
+        assert _enveloped(guard.check)(_payload("tsc --noEmit")) is None
+        assert _enveloped(guard.check)(_payload("tsc --noEmit")) is None
+        assert _enveloped(guard.check)(_payload("tsc --noEmit")) is None
         holders = {json.loads(p.read_text(encoding="utf-8"))["holder_pid"] for p in _lease_files(tmp_path)}
         assert sourcer.pid not in holders
 
@@ -707,11 +712,11 @@ class TestOneTypecheckPerSession:
         host.rows = [CLAUDE, TOOL, CALLER]
         alive = {(CLAUDE.pid, CLAUDE.ctime), (TOOL.pid, TOOL.ctime)}
         monkeypatch.setattr(guard, "_primitives", lambda: _Prims(host.rows, alive_set=alive))
-        assert guard.check(_payload("tsc --noEmit")) is None
+        assert _enveloped(guard.check)(_payload("tsc --noEmit")) is None
         tsc = ProcRow(pid=300, ppid=TOOL.pid, ctime=CALLER.ctime + 1, name="node.exe")
         host.rows = [CLAUDE, TOOL, CALLER, tsc]
         alive.add((tsc.pid, tsc.ctime))
-        text = _reason(guard.check(_payload("tsc --noEmit")))
+        text = _reason(_enveloped(guard.check)(_payload("tsc --noEmit")))
         assert "already runs a typecheck" in text and "300" in text
 
     def test_a_second_typecheck_while_one_runs_is_denied(self, host, tmp_path, monkeypatch):
@@ -724,7 +729,7 @@ class TestOneTypecheckPerSession:
         monkeypatch.setattr(
             guard, "_primitives", lambda: _Prims(host.rows, alive_set={(CLAUDE.pid, CLAUDE.ctime), (TOOL.pid, TOOL.ctime), (tsc.pid, tsc.ctime)})
         )
-        text = _reason(guard.check(_payload("tsc --noEmit")))
+        text = _reason(_enveloped(guard.check)(_payload("tsc --noEmit")))
         assert "already runs a typecheck" in text and "300" in text
 
     def test_a_build_beside_a_running_typecheck_is_not_denied_for_it(self, host, tmp_path, monkeypatch):
@@ -737,20 +742,20 @@ class TestOneTypecheckPerSession:
         monkeypatch.setattr(
             guard, "_primitives", lambda: _Prims(host.rows, alive_set={(CLAUDE.pid, CLAUDE.ctime), (TOOL.pid, TOOL.ctime), (tsc.pid, tsc.ctime)})
         )
-        assert guard.check(_payload("pnpm build")) is None
+        assert _enveloped(guard.check)(_payload("pnpm build")) is None
 
 
 class TestVitestWorkerCap:
     def test_capped_vitest_is_admitted_for_a_subagent_without_any_leg(self, host, tmp_path):
         host.config[KEY_VITEST_MAX_WORKERS] = "4"
-        out = guard.check(
+        out = _enveloped(guard.check)(
             _payload("vitest run a.test.ts --maxWorkers=2", agent_id="a1", agent_type="general-purpose", cwd=tmp_path)
         )
         assert out is None
 
     def test_uncapped_scoped_vitest_from_a_subagent_is_identity_denied(self, host, tmp_path):
         host.config[KEY_VITEST_MAX_WORKERS] = "4"
-        out = guard.check(_payload("vitest run a.test.ts", agent_id="a1", agent_type="general-purpose", cwd=tmp_path))
+        out = _enveloped(guard.check)(_payload("vitest run a.test.ts", agent_id="a1", agent_type="general-purpose", cwd=tmp_path))
         assert "identity" in _reason(out)
 
 
@@ -759,7 +764,7 @@ def test_an_unlisted_subagent_never_pays_for_the_workflow_run_lookup(host, monke
         raise AssertionError("workflow-run lookup reached for an unlisted caller")
 
     monkeypatch.setattr(guard, "_workflow_runs_of", lookup)
-    out = guard.check(_payload("tsc --noEmit", agent_id="a1", agent_type="general-purpose"))
+    out = _enveloped(guard.check)(_payload("tsc --noEmit", agent_id="a1", agent_type="general-purpose"))
     assert "not on the heavy-command allow-list" in _reason(out)
 
 
@@ -829,7 +834,7 @@ class TestForwardedCallerPid:
 
     def test_the_forwarded_pid_anchors_the_session(self, host, monkeypatch):
         monkeypatch.setenv("CLAUDE_PID", str(CALLER.pid))
-        assert guard.check(self._no_pid()) is None
+        assert _enveloped(guard.check)(self._no_pid()) is None
 
     def test_a_payload_pid_wins_over_the_forwarded_one(self, host, monkeypatch):
         monkeypatch.setenv("CLAUDE_PID", "999999")
@@ -837,7 +842,7 @@ class TestForwardedCallerPid:
 
     def test_no_forwarded_pid_falls_back_to_the_guard_process_and_fails_closed(self, host, monkeypatch):
         assert guard._pid_and_source(self._no_pid())[1] == "guard-process"
-        out = guard.check(self._no_pid())
+        out = _enveloped(guard.check)(self._no_pid())
         assert out is not None and "no session anchor" in _reason(out)
 
     @pytest.mark.parametrize("raw", ["", "abc", "-5", "12x"])
@@ -848,7 +853,7 @@ class TestForwardedCallerPid:
     def test_the_log_names_the_forwarded_source(self, host, monkeypatch, tmp_path):
         monkeypatch.setenv("CLAUDE_PID", str(CALLER.pid))
         host.config = dict(host.config, **{KEY_FREE_RAM_FLOOR_MB: "999999"})
-        guard.check(self._no_pid("pnpm build"))
+        _enveloped(guard.check)(self._no_pid("pnpm build"))
         assert _log_lines(tmp_path)[-1]["pid_source"] == "caller-env"
 
 
@@ -858,36 +863,36 @@ class TestExecutorCarveOut:
     EXEC = {"agent_id": "deadbeef0123", "agent_type": "coordinator:executor"}
 
     def test_an_executor_noemit_tsc_is_admitted(self, host):
-        assert guard.check(_payload("pnpm exec tsc --noEmit", **self.EXEC)) is None
+        assert _enveloped(guard.check)(_payload("pnpm exec tsc --noEmit", **self.EXEC)) is None
 
     @pytest.mark.parametrize("cmd", ["tsc", "tsc --noEmit --watch", "pnpm typecheck", "pnpm build", "tsc --noEmit; pnpm build"])
     def test_an_executor_running_anything_else_heavy_is_denied(self, host, cmd):
-        out = guard.check(_payload(cmd, **self.EXEC))
+        out = _enveloped(guard.check)(_payload(cmd, **self.EXEC))
         assert out is not None and "identity" in _reason(out)
 
     def test_the_carve_out_is_the_executor_only(self, host):
-        out = guard.check(_payload("tsc --noEmit", agent_id="deadbeef0123", agent_type="general-purpose"))
+        out = _enveloped(guard.check)(_payload("tsc --noEmit", agent_id="deadbeef0123", agent_type="general-purpose"))
         assert out is not None and "identity" in _reason(out)
 
     def test_an_executor_tsc_is_still_bounded_by_one_typecheck_per_session(self, host, monkeypatch):
         monkeypatch.setattr(guard, "_second_typecheck", lambda anchor, primitives: [4242])
-        out = guard.check(_payload("tsc --noEmit", **self.EXEC))
+        out = _enveloped(guard.check)(_payload("tsc --noEmit", **self.EXEC))
         assert out is not None and "already runs a typecheck" in _reason(out)
 
     def test_any_subagent_may_run_a_capped_file_scoped_vitest(self, host):
         host.config = dict(host.config, **{KEY_VITEST_MAX_WORKERS: "4"})
         cmd = "pnpm vitest run src/a.test.ts --maxWorkers=2"
-        assert guard.check(_payload(cmd, agent_id="deadbeef0123", agent_type="general-purpose")) is None
+        assert _enveloped(guard.check)(_payload(cmd, agent_id="deadbeef0123", agent_type="general-purpose")) is None
 
     def test_an_unscoped_capped_vitest_from_a_subagent_stays_denied(self, host):
         host.config = dict(host.config, **{KEY_VITEST_MAX_WORKERS: "4"})
-        out = guard.check(_payload("pnpm vitest run --maxWorkers=2", agent_id="deadbeef0123", agent_type="general-purpose"))
+        out = _enveloped(guard.check)(_payload("pnpm vitest run --maxWorkers=2", agent_id="deadbeef0123", agent_type="general-purpose"))
         assert out is not None and "identity" in _reason(out)
 
     def test_an_executor_scoped_vitest_and_noemit_tsc_together_are_admitted(self, host):
         host.config = dict(host.config, **{KEY_VITEST_MAX_WORKERS: "4"})
         cmd = "pnpm vitest run a.test.ts --maxWorkers=1 2>&1 | tail -5; pnpm exec tsc --noEmit"
-        assert guard.check(_payload(cmd, **self.EXEC)) is None
+        assert _enveloped(guard.check)(_payload(cmd, **self.EXEC)) is None
 
 
 class TestVerifierCarveOut:
@@ -905,7 +910,7 @@ class TestVerifierCarveOut:
         "npx jest --maxWorkers=2",
     ])
     def test_a_bounded_test_or_typecheck_run_is_admitted_inside_a_workflow(self, host, agent_type, cmd):
-        assert guard.check(_payload(cmd, agent_id="deadbeef0123", agent_type=agent_type)) is None
+        assert _enveloped(guard.check)(_payload(cmd, agent_id="deadbeef0123", agent_type=agent_type)) is None
 
     @pytest.mark.parametrize("cmd", [
         "pnpm exec vitest run packages/ddct/test/names",
@@ -917,11 +922,11 @@ class TestVerifierCarveOut:
         "pnpm exec tsc --noEmit; pnpm build",
     ])
     def test_an_uncapped_watch_or_build_run_stays_denied(self, host, cmd):
-        out = guard.check(_payload(cmd, agent_id="deadbeef0123", agent_type="coordinator:exit-criterion-judge"))
+        out = _enveloped(guard.check)(_payload(cmd, agent_id="deadbeef0123", agent_type="coordinator:exit-criterion-judge"))
         assert out is not None and "identity" in _reason(out)
 
     def test_another_workflow_subagent_gains_nothing(self, host):
-        out = guard.check(_payload("pnpm exec tsc --noEmit -p .", agent_id="deadbeef0123", agent_type="general-purpose"))
+        out = _enveloped(guard.check)(_payload("pnpm exec tsc --noEmit -p .", agent_id="deadbeef0123", agent_type="general-purpose"))
         assert out is not None and "identity" in _reason(out)
 
     def test_an_admitted_verifier_and_a_denied_one_both_log_their_run(self, host, tmp_path):
@@ -929,15 +934,15 @@ class TestVerifierCarveOut:
             "agent_id": "deadbeef0123", "agent_type": "coordinator:exit-criterion-judge",
             "transcript_path": str(tmp_path / "s" / "subagents" / "workflows" / "wf_test" / "agent-deadbeef0123.jsonl"),
         }
-        assert guard.check(_payload("pnpm exec tsc --noEmit -p .", **judge)) is None
-        assert guard.check(_payload("pnpm exec vitest run test/a --maxWorkers=8", **judge)) is not None
+        assert _enveloped(guard.check)(_payload("pnpm exec tsc --noEmit -p .", **judge)) is None
+        assert _enveloped(guard.check)(_payload("pnpm exec vitest run test/a --maxWorkers=8", **judge)) is not None
         admitted, denied = _log_lines(tmp_path)[-2:]
         assert admitted["kind"] == guard.ADMITTED_VERIFIER and admitted["workflow_run"] == "wf_test"
         assert denied["kind"] == "identity" and denied["workflow_run"] == "wf_test"
 
     def test_the_session_cap_still_bounds_a_verifier(self, host, monkeypatch):
         monkeypatch.setattr(guard, "_second_typecheck", lambda anchor, primitives: [4242])
-        out = guard.check(_payload("tsc --noEmit", agent_id="deadbeef0123", agent_type="coordinator:test-runner"))
+        out = _enveloped(guard.check)(_payload("tsc --noEmit", agent_id="deadbeef0123", agent_type="coordinator:test-runner"))
         assert out is not None and "already runs a typecheck" in _reason(out)
 
 
@@ -954,7 +959,7 @@ class TestOrphanAttribution:
         leases.write_lease(LeaseRecord(CLAUDE.pid, CLAUDE.ctime, CLAUDE.pid, CLAUDE.ctime, cls, time.time(), launch))
 
     def test_an_admitted_lease_carries_the_callers_launch_mark(self, host):
-        assert guard.check(_payload("pnpm build")) is None
+        assert _enveloped(guard.check)(_payload("pnpm build")) is None
         (rec,) = leases.live_leases()
         assert rec.launch_ctime == CALLER.ctime
 
@@ -963,7 +968,7 @@ class TestOrphanAttribution:
         self._live(monkeypatch, host)
         self._open("build", 20)
         self._open("build", 21)
-        out = guard.check(_payload("pnpm build"))
+        out = _enveloped(guard.check)(_payload("pnpm build"))
         assert out is not None and "session holds 2 heavy commands" in _reason(out)
         assert {r.holder_pid for r in leases.live_leases()} == {500, 600}
 
@@ -972,13 +977,13 @@ class TestOrphanAttribution:
         host.rows = [CLAUDE, TOOL, CALLER] + chain
         self._live(monkeypatch, host)
         self._open("build", 20)
-        assert guard.check(_payload("pnpm build")) is None
+        assert _enveloped(guard.check)(_payload("pnpm build")) is None
 
     def test_a_claimed_orphan_typecheck_holds_the_one_typecheck_rule(self, host, monkeypatch):
         host.rows = [CLAUDE, TOOL, CALLER] + self._orphan(500, 22)
         self._live(monkeypatch, host)
         self._open("typecheck", 20)
-        out = guard.check(_payload("tsc --noEmit"))
+        out = _enveloped(guard.check)(_payload("tsc --noEmit"))
         assert out is not None and "already runs a typecheck" in _reason(out)
 
     def test_release_verb_frees_the_sessions_lease_and_a_later_typecheck_is_admitted(self, host, monkeypatch):
@@ -987,14 +992,14 @@ class TestOrphanAttribution:
         self._open("typecheck", 20)
         assert guard.release_session_leases(_payload("x")) == 1
         assert leases.live_leases() == []
-        assert guard.check(_payload("tsc --noEmit")) is None
+        assert _enveloped(guard.check)(_payload("tsc --noEmit")) is None
 
     def test_an_unrelated_long_lived_process_is_not_charged_to_an_unmarked_lease(self, host, monkeypatch):
         server = [ProcRow(500, 9999, 12, "bash.exe"), ProcRow(501, 500, 13, "node.exe")]
         host.rows = [CLAUDE, TOOL, CALLER] + server
         self._live(monkeypatch, host)
         self._open("typecheck", 0)
-        assert guard.check(_payload("tsc --noEmit")) is None
+        assert _enveloped(guard.check)(_payload("tsc --noEmit")) is None
         assert 500 not in {r.holder_pid for r in leases.live_leases()}
         assert 501 not in {r.holder_pid for r in leases.live_leases()}
 
@@ -1003,4 +1008,4 @@ class TestOrphanAttribution:
         self._live(monkeypatch, host)
         self._open("build", 20)
         self._open("build", 21)
-        assert guard.check(_payload("pnpm build")) is None
+        assert _enveloped(guard.check)(_payload("pnpm build")) is None

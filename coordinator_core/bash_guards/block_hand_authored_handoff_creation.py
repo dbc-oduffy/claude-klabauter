@@ -80,6 +80,34 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             return None
         if not _creates_handoff(cmd.replace("\r", ""), payload.get("cwd")):
             return None
-        return _write_twin.deny_envelope(payload)
+        return _deny_record(payload)
     except Exception:
         return None
+
+
+def _deny_record(payload: Dict[str, Any]) -> Any:
+    """The write twin's reason text as a record; the twin itself is untouched."""
+    from coordinator_core.guard_messages.alternative_record import (
+        AlternativeRecord,
+        EscalationRoute,
+        Override,
+        ReadyCommand,
+    )
+
+    summary, _, offer = _write_twin.DENY_REASON.partition("\nUse instead: ")
+    command = offer.strip().strip("`")
+    members: List[Any] = [ReadyCommand(text=command)] if command else []
+    members.append(
+        EscalationRoute(
+            report_what="why the sanctioned producers cannot create this handoff",
+            authorize_what="a hand-authored handoff",
+        )
+    )
+    members.append(Override(env_var=_write_twin.OVERRIDE_ENV_VAR))
+    return AlternativeRecord(
+        verdict_kind="deny",
+        guard_name="block-hand-authored-handoff-creation",
+        summary=summary,
+        em_text=_write_twin.deny_envelope(payload)["hookSpecificOutput"]["permissionDecisionReason"],
+        members=tuple(members),
+    )

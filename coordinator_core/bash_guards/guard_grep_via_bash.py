@@ -134,11 +134,9 @@ composed advisory out of the shared ``operator_override_note`` call
 entirely, on the reasoning that a hand-written paragraph could be dropped
 without a substitute -- that left the env var functioning but
 undiscoverable from the message text, unlike every other advisory-emitting
-guard in this package. Restored (M17, 2026-07-30) on a code-review finding, as the
-same one-line ``operator_override_note(_OVERRIDE_ENV_VAR)`` pointer every
-sibling guard now appends post the second override-note cut (see that
-function's own docstring) -- no reintroduction of the old ~1.1KB inline
-boilerplate, just the SSOT pointer.
+guard in this package. Restored (M17, 2026-07-30) on a code-review finding.
+The record now carries ``Override(_OVERRIDE_ENV_VAR)``; the dispatcher renders
+the SSOT pointer for the EM only.
 
 GNU-ONLY PORTABILITY CHECK (worklist row H11(c), 2026-07-30; DENYLIST
 correction C2, 2026-08-01)
@@ -174,8 +172,8 @@ Negative-spec -- what this module deliberately does NOT do:
     ``has_shape(Shape.GREP_VIA_BASH)`` and the shared tokenizer's segment
     split.
   - Does NOT re-implement the rewrite. ``_bt_grep_flags_and_operands`` /
-    ``_bt_grep_python_rewrite`` are imported from ``dispatch_checks``
-    (BX-16's own module) verbatim -- a second hand-rolled translation would
+    ``_bt_grep_python_rewrite`` are imported from ``_rewrite_support``
+    (BX-16's shared primitives) verbatim -- a second hand-rolled translation would
     drift the moment BX-16's flag set or rendering changes.
   - Does NOT read/write ``dispatch.py``'s guard chain. Registration is the
     EM's serial step (see this module's own commit/PR notes for the exact
@@ -205,7 +203,9 @@ import shlex
 from typing import Any, Dict, Optional, Tuple
 
 from coordinator_core.bash_guards._command_tokenizer import (
+    exceeds_tokenizable_ceiling,
     segments_from_tokens_with_pipe_flag as _segments_from_tokens_with_pipe_flag,
+    token_matches_binary as _token_matches_binary,
 )
 from coordinator_core.bash_guards._shape_classifier import (
     Shape as _Shape,
@@ -213,14 +213,19 @@ from coordinator_core.bash_guards._shape_classifier import (
     classify_command as _classify_command,
     tokenize_for_classification as _tokenize_for_classification,
 )
-from coordinator_core.bash_guards.dispatch_checks import (
+from coordinator_core.bash_guards._helpers import operator_override_note
+from coordinator_core.bash_guards._rewrite_support import (
+    _em_stamped,
     _GREP_FAMILY_BINARIES_BT as _GREP_FAMILY_BINARIES,
     _bt_grep_flags_and_operands as _grep_flags_and_operands,
     _bt_grep_python_rewrite as _grep_python_rewrite,
-    _bt_token_matches_binary as _token_matches_binary,
 )
-from coordinator_core._hook_envelope import allow_advisory
-from coordinator_core.bash_guards._helpers import operator_override_note
+from coordinator_core.guard_messages.alternative_record import (
+    AdaptableOffer,
+    AlternativeRecord,
+    EscalationRoute,
+    Override,
+)
 from coordinator_core.bash_guards import _dialect
 from coordinator_core.bash_guards._verdict import record_silent
 from coordinator_core.bash_guards._tool_names import COMMAND_TOOL_NAMES
@@ -310,6 +315,8 @@ def _safe_grep_rewrite(parsed: Dict[str, Any]) -> Optional[str]:
     script compiles; ``None`` (caller keeps the original command) on any error."""
     try:
         rewrite = _grep_python_rewrite(parsed)
+        if exceeds_tokenizable_ceiling(rewrite):
+            return None
         compile(shlex.split(rewrite)[-1], "<grep-rewrite>", "exec")
     except (SyntaxError, ValueError, KeyError, TypeError, IndexError):
         return None
@@ -384,37 +391,49 @@ def _has_gnu_only_construct(tokens: list) -> bool:
 
 
 def _composed_advisory(
-    evidence: str,
-    payload: Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
-    """Advisory-only envelope (never a deny, on any platform) for a
+    evidence: str, payload: Optional[Dict[str, Any]] = None
+) -> AlternativeRecord:
+    """Advisory-only record (never a deny, on any platform) for a
     composed or untranslatable grep-via-Bash command carrying a genuine
     GNU-only grep construct (``_has_gnu_only_construct``). Everything else
     is silence -- design-as-offers: where no actionable alternative exists,
     the honest output is silence.
 
     Does NOT explain why the in-process search answerer is unavailable
-    here: the reader cannot re-target it. The message keeps only the
-    fallback the reader can take (dispatch a search subagent).
-
-    Appends `operator_override_note(_OVERRIDE_ENV_VAR)`; the gate in
-    `tests/test_override_route_inventory.py` keeps it from regressing.
+    here: the reader cannot re-target it. The record keeps only the
+    fallback the reader can take (dispatch a search subagent), the
+    subagent's route, and the EM-only Override.
     """
     lede = "%s `%s` carries a GNU-only grep construct -- diverges on BSD grep (macOS)." % (
         _SHAPE_NAME,
         evidence,
     )
-    return allow_advisory(
-        "PreToolUse",
-        "BASH-SPAWN ADVISORY: %s Else, Explore or general-purpose "
-        "subagent. %s"
-        % (lede, operator_override_note(_OVERRIDE_ENV_VAR, payload=payload)),
+    return AlternativeRecord(
+        verdict_kind="advisory",
+        guard_name="grep-via-bash-guard",
+        summary="BASH-SPAWN ADVISORY: %s" % lede,
+        em_text=_em_stamped(
+            "BASH-SPAWN ADVISORY: %s Else, Explore or general-purpose "
+            "subagent. %s"
+            % (lede, operator_override_note(_OVERRIDE_ENV_VAR, payload=payload))
+        ),
+        members=(
+            AdaptableOffer(
+                template="have an Explore or general-purpose subagent run the search",
+                what_to_adapt="the search request",
+            ),
+            EscalationRoute(
+                report_what="the GNU-only grep flag the search needs",
+                authorize_what="running it as written",
+            ),
+            Override(env_var=_OVERRIDE_ENV_VAR),
+        ),
     )
 
 
 def _evaluate_grep_via_bash_match(
-    classification: _ShapeClassification, payload: Optional[Dict[str, Any]]
-) -> Optional[Dict[str, Any]]:
+    classification: _ShapeClassification, payload: Optional[Dict[str, Any]] = None
+) -> Optional[AlternativeRecord]:
     """Shared composed/substitutable-residue evaluation for a command whose
     `classification.primary` is already confirmed `GREP_VIA_BASH`, on EITHER
     dialect (C3, pln-the-shape-classifier-reaches-a-e743e5). `_substitutable
@@ -447,7 +466,7 @@ def _evaluate_grep_via_bash_match(
     return _composed_advisory(match.evidence, payload=payload)
 
 
-def _check_powershell(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def _check_powershell(payload: Dict[str, Any]) -> Optional[AlternativeRecord]:
     """PowerShell-dialect leg (row 12, docs/reference/guard-dialect-
     coverage.md): declares SILENT for a Select-String/sls invocation this
     guard can SEE but cannot safely translate (see
@@ -512,7 +531,7 @@ def _check_powershell(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
 def check(
     payload: Dict[str, Any], host_is_windows: Optional[bool] = None
-) -> Optional[Dict[str, Any]]:
+) -> Optional[AlternativeRecord]:
     if _dialect.dialect_from_tool_name(payload.get("tool_name") or "") is _dialect.Dialect.POWERSHELL:
         return _check_powershell(payload)
 

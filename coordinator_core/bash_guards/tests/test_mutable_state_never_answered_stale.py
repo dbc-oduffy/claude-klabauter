@@ -72,6 +72,11 @@ from coordinator_core.bash_guards import dispatch_checks as dc
 from coordinator_core.bash_guards import guard_inprocess_search as guard
 from coordinator_core.search import engine, sources_powershell, sources_read
 from coordinator_core.search.answer import answer, plan_for
+from coordinator_core.guard_messages.testing import envelope_of
+
+
+def _enveloped(check):
+    return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 
 MUTABLE_STATE_COMMANDS = (
@@ -113,7 +118,7 @@ class TestOnlyReadOnlySearchIsAnswerable:
             "tool_input": {"command": command},
             "cwd": str(tmp_path),
         }
-        assert guard.check(payload) is None
+        assert _enveloped(guard.check)(payload) is None
 
     @pytest.mark.parametrize("command", RATIFIED_ANSWERABLE_READS)
     def test_ratified_read_verb_is_answerable(self, command):
@@ -192,7 +197,7 @@ def _payload_script(command: str) -> str:
 
 
 def _banner_rewrite_script(cmd: str) -> str:
-    out = dc.check_multiprobe_banner_rewrite(cmd)
+    out = _enveloped(dc.check_multiprobe_banner_rewrite)(cmd)
     assert out is not None, "expected a rewrite for %r" % cmd
     return _payload_script(out["hookSpecificOutput"]["updatedInput"]["command"])
 

@@ -44,6 +44,11 @@ from coordinator_core.bash_guards._command_tokenizer import (
     resolve_command_positions,
     tokenize_full_command,
 )
+from coordinator_core.guard_messages.testing import envelope_of
+
+
+def _enveloped(check):
+    return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 # Spawns a real external process; runs at cadence gates, not per-commit.
 # Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
@@ -144,7 +149,7 @@ class TestOverCeilingFailsClosed:
             "agent_id": "deadbeef0123",
             "agent_type": "coordinator:executor",
         }
-        assert guard.check(payload) is not None, (
+        assert _enveloped(guard.check)(payload) is not None, (
             "over-ceiling commit became MORE permissive"
         )
 
@@ -169,7 +174,7 @@ class TestOverCeilingFailsClosed:
             "agent_id": "deadbeef0123",
             "agent_type": "coordinator:executor",
         }
-        assert guard.check(payload) is not None
+        assert _enveloped(guard.check)(payload) is not None
 
 
 class TestDosBoundIsActuallyBinding:
@@ -406,7 +411,7 @@ class TestEveryDirectShlexSiteInheritsTheCeiling:
             "tool_input": {"command": cmd},
             "agent_id": "agent-under-test",
         }
-        timing = in_process_time_ms(lambda: cts.check(payload))
+        timing = in_process_time_ms(lambda: _enveloped(cts.check)(payload))
         assert timing["process_time_ms"] < 500.0, (
             "800 KB `bash -c '<no-whitespace payload>'` took %.3fms process "
             "time through check() -- the ceiling is not binding on the "
@@ -428,7 +433,7 @@ class TestEveryDirectShlexSiteInheritsTheCeiling:
         outcome = {}
 
         def _call() -> None:
-            outcome["result"] = cts.check({
+            outcome["result"] = _enveloped(cts.check)({
                 "tool_name": "Bash",
                 "tool_input": {"command": cmd},
                 "agent_id": "agent-under-test",

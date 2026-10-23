@@ -7327,13 +7327,23 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         ownership_reason,
         command_leg,
     )
-    verdict = {
-        "hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "permissionDecision": "deny",
-            "permissionDecisionReason": reason,
-        }
-    }
+    from coordinator_core.guard_messages.alternative_record import (
+        AlternativeRecord,
+        EscalationRoute,
+    )
+
+    verdict = AlternativeRecord(
+        verdict_kind="deny",
+        summary=reason,
+        members=(
+            EscalationRoute(
+                report_what="your changed files",
+                authorize_what="the commit",
+            ),
+        ),
+        guard_name="block-subagent-commit",
+        em_text=reason,
+    )
     if kind_unresolved:
         emit_kind_resolution_failure_signal("block_subagent_commit", agent_id, git_root, verdict)
     return verdict

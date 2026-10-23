@@ -431,6 +431,29 @@ def _deny_reason(cmd: str, deny_kind: str) -> str:
     ) % (deny_kind, cmd_safe)
 
 
+def _record(verdict_kind: str, summary: str, em_text: str, *members: Any) -> Any:
+    """Record whose EM render is ``em_text`` byte for byte; the typed members
+    and the route drive the subagent render. Imports lazily: hot-path budget."""
+    from coordinator_core.guard_messages.alternative_record import (
+        AlternativeRecord,
+        EscalationRoute,
+    )
+
+    return AlternativeRecord(
+        verdict_kind=verdict_kind,
+        summary=summary,
+        em_text=em_text,
+        members=members
+        + (
+            EscalationRoute(
+                report_what="the stash you need to read or discard",
+                authorize_what="a stash-discarding command",
+            ),
+        ),
+        guard_name="block-stash-destruction",
+    )
+
+
 def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     tool_name = payload.get("tool_name") or ""
     dialect = dialect_from_tool_name(tool_name)
@@ -459,13 +482,22 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if deny_kind is None:
         return None
 
-    return {
-        "hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "permissionDecision": "deny",
-            "permissionDecisionReason": _deny_reason(cmd, deny_kind),
-        }
-    }
+    from coordinator_core.guard_messages.alternative_record import AdaptableOffer
+
+    legacy = _deny_reason(cmd, deny_kind)
+    return _record(
+        "deny",
+        legacy,
+        legacy,
+        AdaptableOffer(
+            template="git show stash@{N}:<path> > <path>",
+            what_to_adapt="N and <path> (read one path without touching the stack)",
+        ),
+        AdaptableOffer(
+            template="git stash show -p stash@{N}",
+            what_to_adapt="N (see the whole diff)",
+        ),
+    )
 
 
 #: `apply`-ONLY -- see module docstring "APPLY ADVISORY LEG" (below,
@@ -544,10 +576,12 @@ def check_apply_advisory(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if advisory_kind is None:
         return None
 
-    return {
-        "hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "permissionDecision": "allow",
-            "additionalContext": _advisory_reason(cmd),
-        }
-    }
+    from coordinator_core.guard_messages.alternative_record import ReadyCommand
+
+    legacy = _advisory_reason(cmd)
+    return _record(
+        "advisory",
+        legacy,
+        legacy,
+        ReadyCommand(text="git stash show --name-only stash@{N}"),
+    )

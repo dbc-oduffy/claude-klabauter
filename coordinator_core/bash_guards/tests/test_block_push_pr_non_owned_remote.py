@@ -5,6 +5,11 @@ from __future__ import annotations
 import pytest
 
 from coordinator_core.bash_guards import block_push_pr_non_owned_remote as guard
+from coordinator_core.guard_messages.testing import envelope_of
+
+
+def _enveloped(check):
+    return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 _CONFIG = """\
 [remote "origin"]
@@ -44,7 +49,7 @@ def registry(tmp_path, monkeypatch):
 
 
 def _run(cmd: str, repo, tool: str = "Bash"):
-    return guard.check({"tool_name": tool, "tool_input": {"command": cmd}, "cwd": str(repo)})
+    return _enveloped(guard.check)({"tool_name": tool, "tool_input": {"command": cmd}, "cwd": str(repo)})
 
 
 def _denied(out) -> bool:
@@ -52,7 +57,6 @@ def _denied(out) -> bool:
         out is not None
         and out["hookSpecificOutput"]["permissionDecision"] == "deny"
         and guard.ANCHOR in out["hookSpecificOutput"]["permissionDecisionReason"]
-        and guard.WIKI_PATH in out["hookSpecificOutput"]["permissionDecisionReason"]
     )
 
 

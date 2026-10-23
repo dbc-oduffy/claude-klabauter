@@ -70,11 +70,7 @@ COUNTER_NAME = "post-executor-pytest-runs"
 _PYTHON_RE = re.compile(r"^python[0-9.]*$")
 _DASH_M_BUNDLED_RE = re.compile(r"^-m(.+)$")
 
-_DENY_BODY = (
-    "A second verification run after an executor is not the EM's. "
-    "Dispatch a coordinator:test-runner. "
-    "To measure, run python -m coordinator_core.benchmarks.measure -- <argv>."
-)
+_DENY_BODY = "A second verification run after an executor is not the EM's."
 
 
 # Launchers that run their argument command; each is peeled before the pytest test.
@@ -477,14 +473,29 @@ def executor_reported(payload: dict, session_id: str, repo_root: str) -> bool:
     return newest_arming_epoch(session_id, repo_root) is not None
 
 
-def _deny(event_sentinel: str) -> dict:
-    return {
-        "hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "permissionDecision": "deny",
-            "permissionDecisionReason": f"{_DENY_BODY} No self-escape: if an executor BLOCKs, a reason line in {event_sentinel} is honoured once.",
-        }
-    }
+def _deny_record(event_sentinel: str):
+    from coordinator_core.bash_guards._rewrite_support import _deny_record as _build
+    from coordinator_core.guard_messages.alternative_record import AdaptableOffer
+
+    return _build(
+        GUARD_NAME,
+        f"{_DENY_BODY} No self-escape: if an executor BLOCKs, a reason line in {event_sentinel} is honoured once.",
+        (
+            AdaptableOffer(
+                template="dispatch a coordinator:test-runner",
+                what_to_adapt="the verification command it runs",
+            ),
+            AdaptableOffer(
+                template="python -m coordinator_core.benchmarks.measure -- <argv>",
+                what_to_adapt="<argv>, the command to measure",
+            ),
+        ),
+        em_text=(
+            f"{_DENY_BODY} Dispatch a coordinator:test-runner. "
+            "To measure, run python -m coordinator_core.benchmarks.measure -- <argv>. "
+            f"No self-escape: if an executor BLOCKs, a reason line in {event_sentinel} is honoured once."
+        ),
+    )
 
 
 def _gate(payload: dict, subject: str):
@@ -534,7 +545,8 @@ def written_text_verifies(payload: dict, file_path: str, repo_root: str) -> bool
 
 def after_executor_deny(payload: dict, subject: str) -> Optional[dict]:
     """Deny envelope when the EM has an executor behind it, the written text runs a test
-    runner or measurement against repo code, and no escape; else None."""
+    runner or measurement against repo code, and no escape; else None. The Write/Edit
+    hook that calls this is not the Bash dispatcher, so the record is rendered here."""
     from coordinator_core.hooks import dispatch_escape as nd
 
     session_id, repo_root, verdict = _gate(payload, subject)
@@ -542,9 +554,11 @@ def after_executor_deny(payload: dict, subject: str) -> Optional[dict]:
         return None
     if nd._take_escape(payload, session_id, subject, GUARD_NAME):
         return None
+    from coordinator_core.guard_messages.alternative_record import Audience
+    from coordinator_core.guard_messages.render import render
     from coordinator_core.session.dispatch_nudge_sentinel import sentinel_path
 
-    return _deny(str(sentinel_path(session_id)))
+    return render(_deny_record(str(sentinel_path(session_id))), Audience.EM)
 
 
 _SUITE_MUTEX = "with-suite-mutex"
@@ -585,7 +599,7 @@ def _bump_counter(repo_root: str, session_id: str, armed_since: float = 0.0) -> 
     return prior
 
 
-def check(payload: dict) -> Optional[dict]:
+def check(payload: dict):
     if (payload.get("tool_name") or "") not in MATCHERS:
         return None
     if "agent_id" in payload:
@@ -620,4 +634,4 @@ def check(payload: dict) -> Optional[dict]:
         return None
     from coordinator_core.session.dispatch_nudge_sentinel import sentinel_path
 
-    return _deny(str(sentinel_path(session_id)))
+    return _deny_record(str(sentinel_path(session_id)))

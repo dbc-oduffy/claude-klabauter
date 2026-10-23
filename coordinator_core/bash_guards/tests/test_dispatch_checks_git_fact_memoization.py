@@ -15,6 +15,11 @@ from coordinator_core.bash_guards.dispatch_checks import (
     check_destructive_git_revert_advisory,
 )
 from coordinator_core.win_portability import no_console_creationflags
+from coordinator_core.guard_messages.testing import envelope_of
+
+
+def _enveloped(check):
+    return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 pytestmark = [
     pytest.mark.spawns_process,
@@ -127,7 +132,7 @@ class TestGitStatusPorcelainMemoizedAcrossSegments:
             repo_with_ordinary_dirty_file,
             repo_with_ordinary_dirty_file,
         )
-        check_destructive_git_revert_advisory(cmd)
+        _enveloped(check_destructive_git_revert_advisory)(cmd)
         assert count[0] == 1, (
             "chained 'git checkout -f && git reset --hard HEAD' against ONE "
             "working tree spawned %d 'git status --porcelain' calls; "
@@ -145,7 +150,7 @@ class TestGitStatusPorcelainMemoizedAcrossSegments:
         cmd = "git -C %s checkout -f && git -C %s reset --hard HEAD && git -C %s checkout -f" % (
             (repo_with_ordinary_dirty_file,) * 3
         )
-        check_destructive_git_revert_advisory(cmd)
+        _enveloped(check_destructive_git_revert_advisory)(cmd)
         assert count[0] == 1
 
     def test_status_probe_still_scoped_per_distinct_cwd(
@@ -162,7 +167,7 @@ class TestGitStatusPorcelainMemoizedAcrossSegments:
             repo_with_ordinary_dirty_file,
             clean_repo,
         )
-        check_destructive_git_revert_advisory(cmd)
+        _enveloped(check_destructive_git_revert_advisory)(cmd)
         assert count[0] == 2
 
 
@@ -171,7 +176,7 @@ class TestGitRevertFullPriorVerdictUnchanged:
     def test_loadbearing_dirty_tree_still_denies_on_reset_hard(
         self, repo_with_peer_work: Path
     ) -> None:
-        result = check_destructive_git_revert("git -C %s reset --hard HEAD" % repo_with_peer_work)
+        result = _enveloped(check_destructive_git_revert)("git -C %s reset --hard HEAD" % repo_with_peer_work)
         assert result is not None
         assert "state/peer-in-flight.md" in _deny_reason(result)
 
@@ -182,7 +187,7 @@ class TestGitRevertFullPriorVerdictUnchanged:
             repo_with_peer_work,
             repo_with_peer_work,
         )
-        result = check_destructive_git_revert(cmd)
+        result = _enveloped(check_destructive_git_revert)(cmd)
         assert result is not None
         assert "state/peer-in-flight.md" in _deny_reason(result)
 
@@ -190,14 +195,14 @@ class TestGitRevertFullPriorVerdictUnchanged:
         self, repo_with_ordinary_dirty_file: Path
     ) -> None:
         cmd = "git -C %s reset --hard HEAD" % repo_with_ordinary_dirty_file
-        assert check_destructive_git_revert(cmd) is None
-        advisory = check_destructive_git_revert_advisory(cmd)
+        assert _enveloped(check_destructive_git_revert)(cmd) is None
+        advisory = _enveloped(check_destructive_git_revert_advisory)(cmd)
         assert advisory is not None
 
     def test_clean_tree_allows(self, clean_repo: Path) -> None:
         cmd = "git -C %s checkout -f && git -C %s reset --hard HEAD" % (clean_repo, clean_repo)
-        assert check_destructive_git_revert(cmd) is None
-        assert check_destructive_git_revert_advisory(cmd) is None
+        assert _enveloped(check_destructive_git_revert)(cmd) is None
+        assert _enveloped(check_destructive_git_revert_advisory)(cmd) is None
 
 
 class TestOrphanCurrentBranchMemoization:
@@ -206,7 +211,7 @@ class TestOrphanCurrentBranchMemoization:
         self, repo_with_droppable_commit: Tuple[Path, str]
     ) -> None:
         repo, sha_a = repo_with_droppable_commit
-        result = check_destructive_git_orphan("git -C %s reset --hard %s" % (repo, sha_a))
+        result = _enveloped(check_destructive_git_orphan)("git -C %s reset --hard %s" % (repo, sha_a))
         assert result is not None
         reason = _deny_reason(result)
         assert "branch 'main'" in reason
@@ -217,7 +222,7 @@ class TestOrphanCurrentBranchMemoization:
         self, repo_with_droppable_commit: Tuple[Path, str]
     ) -> None:
         repo, _sha_a = repo_with_droppable_commit
-        assert check_destructive_git_orphan("git -C %s reset --hard HEAD" % repo) is None
+        assert _enveloped(check_destructive_git_orphan)("git -C %s reset --hard HEAD" % repo) is None
 
 
 @pytest.fixture()
@@ -244,7 +249,7 @@ class TestGitCleanOracleMemoizedAcrossSegments:
         count = _counting_run_git(monkeypatch, ["-c", "color.ui=never"])
         repo = repo_with_untracked_non_loadbearing_file
         cmd = "git -C %s clean -fd && git -C %s clean -fd" % (repo, repo)
-        check_destructive_git_clean(cmd)
+        _enveloped(check_destructive_git_clean)(cmd)
         assert count[0] == 1, (
             "chained 'git clean -nd && git clean -nd' against ONE working "
             "tree spawned %d clean-oracle calls; expected exactly 1 -- the "
@@ -266,5 +271,5 @@ class TestGitCleanOracleMemoizedAcrossSegments:
             repo_with_untracked_non_loadbearing_file,
             clean_repo,
         )
-        check_destructive_git_clean(cmd)
+        _enveloped(check_destructive_git_clean)(cmd)
         assert count[0] == 2

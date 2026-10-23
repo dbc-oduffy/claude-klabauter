@@ -17,6 +17,7 @@ from pathlib import Path
 
 import pytest
 
+from coordinator_core.guard_messages.testing import envelope_of
 from coordinator_core.roadmap import blitz_land as bl
 from coordinator_core.roadmap import plan_gate as pg
 
@@ -1568,7 +1569,7 @@ def test_a_claude_home_fallback_outside_the_documented_default_is_still_flagged(
     from coordinator_core.bash_guards import block_subagent_destructive_action as guard
 
     command = '"${COORDINATOR_SETTINGS_HOME:-${CLAUDE_HOME:-/tmp/evil}/.coordinator-claude-settings}/bin/x" a'
-    result = guard.check(_blitz_em_bash(command))
+    result = envelope_of(guard.check(_blitz_em_bash(command)), "em")
     assert result is not None
     assert "unresolved" in result["hookSpecificOutput"]["additionalContext"]
 

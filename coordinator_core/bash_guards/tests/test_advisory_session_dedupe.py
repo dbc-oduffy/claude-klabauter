@@ -33,6 +33,17 @@ _DENY_ENVELOPE = {
 }
 
 
+@pytest.fixture(autouse=True)
+def _admit_fake_envelope_dicts(monkeypatch):
+    # The fakes inject "ask" and context-only envelopes an AlternativeRecord cannot express.
+    admit = dispatch._admit_guard_result
+    monkeypatch.setattr(
+        dispatch,
+        "_admit_guard_result",
+        lambda name, out, payload: out if isinstance(out, dict) else admit(name, out, payload),
+    )
+
+
 def _payload(cmd="echo probe", session_id="sess-dedupe", cwd="/tmp"):
     return {
         "tool_name": "Bash",
@@ -340,15 +351,23 @@ class TestAdvisoryDedupeKeyUnit:
         assert a == b
 
 
+def _em_generic_advisory(*args):
+    """The EM envelope of the plumbing guard's real record builder."""
+    from coordinator_core.guard_messages.alternative_record import Audience
+    from coordinator_core.guard_messages.render import render
+
+    return render(guard_plumbing_and_loops._generic_advisory(*args), Audience.EM)
+
+
 class TestRealBuilderRoundTrip:
 
     def test_generic_advisory_same_shape_different_command_collides(self):
         payload = {"session_id": "round-trip-sess"}
-        env_a = guard_plumbing_and_loops._generic_advisory(
+        env_a = _em_generic_advisory(
             "for-loop", "for f in *.py; do wc -l $f; done", "a single in-process pass",
             "python3 -c '...'", payload,
         )
-        env_b = guard_plumbing_and_loops._generic_advisory(
+        env_b = _em_generic_advisory(
             "for-loop", "for f in *.txt; do cat $f; done", "a single in-process pass",
             "python3 -c '...'", payload,
         )
@@ -361,11 +380,11 @@ class TestRealBuilderRoundTrip:
 
     def test_generic_advisory_different_shape_does_not_collide(self):
         payload = {"session_id": "round-trip-sess"}
-        env_for_loop = guard_plumbing_and_loops._generic_advisory(
+        env_for_loop = _em_generic_advisory(
             "for-loop", "for f in *.py; do wc -l $f; done", "a single in-process pass",
             "python3 -c '...'", payload,
         )
-        env_while_read = guard_plumbing_and_loops._generic_advisory(
+        env_while_read = _em_generic_advisory(
             "while-read-loop", "while read -r line; do echo $line; done < f",
             "a single in-process pass", "python3 -c '...'", payload,
         )

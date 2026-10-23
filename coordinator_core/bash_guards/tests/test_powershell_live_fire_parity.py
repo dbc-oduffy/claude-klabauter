@@ -16,6 +16,7 @@ from coordinator_core.bash_guards import (
     guard_plumbing_and_loops,
 )
 from coordinator_core.bash_guards import _dialect
+from coordinator_core.guard_messages.testing import envelope_of
 
 TOOLS = ("Bash", "PowerShell")
 GATE_ENV = "MACHINE_LOCAL_COORDINATOR_FEATURE_DOCTRINE_EDIT_GATE"
@@ -31,13 +32,13 @@ def _payload(tool, cmd, tmp_path):
 
 
 def _ctx(result):
-    return (result or {}).get("hookSpecificOutput", {}).get("additionalContext", "")
+    return (envelope_of(result) or {}).get("hookSpecificOutput", {}).get("additionalContext", "")
 
 
 @pytest.mark.parametrize("tool", TOOLS)
 def test_illegal_filename_fires(tool, tmp_path):
     cmd = "echo x > " + str(tmp_path / "bad?name.txt")
-    result = block_illegal_filename.check(_payload(tool, cmd, tmp_path))
+    result = envelope_of(block_illegal_filename.check(_payload(tool, cmd, tmp_path)))
     assert result is not None
     assert "bad-name" in result["hookSpecificOutput"]["updatedInput"]["command"]
 
@@ -61,6 +62,7 @@ def test_head_pipe_advises(tmp_path):
         dialect=dialect,
         payload=_payload(tool, "cat CLAUDE.md | head -5", tmp_path),
     )
+    result = envelope_of(result)
     assert result is not None
     assert "updatedInput" not in result["hookSpecificOutput"]
     assert "Select-Object" in _ctx(result)
@@ -103,7 +105,7 @@ def test_approval_sentinel_denies_when_gate_on_and_allows_when_off(
 ):
     payload = _payload(tool, cmd, tmp_path)
     mp.reset_cache()
-    result = block_approval_sentinel_creation.check(payload)
+    result = envelope_of(block_approval_sentinel_creation.check(payload))
     assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
     monkeypatch.setenv(GATE_ENV, "off")
     mp.reset_cache()

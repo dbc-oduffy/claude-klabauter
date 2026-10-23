@@ -220,6 +220,7 @@ def candidate_paths(
             base = stem.with_suffix("").as_posix()
             add("evidence-sidecar", f"{base}.evidence.yaml")
             add("seam-sidecar", f"{base}.seam.yaml")
+            add("seam-sidecar", f"{base}.fire.seam.yaml")
             plan_dir = PurePosixPath(base).parent.as_posix()
             for wave_rel in _glob_files(root, plan_dir, f"{glob_escape(PurePosixPath(base).name)}.wave-*.seam.yaml"):
                 add("seam-sidecar", wave_rel)
@@ -295,8 +296,8 @@ def superseded_runs(
 
 _SIDECAR_SUFFIXES = (".evidence.yaml", ".seam.yaml")
 
-#: `<stem>.wave-<N>` tail of a per-wave seam sidecar once `.seam.yaml` is stripped.
-_WAVE_SEAM_TAIL = re.compile(r"\.wave-\d+$")
+#: `<stem>.wave-<N>` or `<stem>.fire` tail of a seam sidecar once `.seam.yaml` is stripped.
+_WAVE_SEAM_TAIL = re.compile(r"\.(?:wave-\d+|fire)$")
 
 
 def _sizing_of_artifact(root: Path, rel: str) -> Optional[str]:

@@ -35,6 +35,11 @@ import pytest
 
 from coordinator_core.bash_guards import _helpers
 from coordinator_core.bash_guards import block_reviewer_bash_outside_allowlist as guard
+from coordinator_core.guard_messages.testing import envelope_of
+
+
+def _enveloped(check):
+    return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 _CMD = "python -m pytest coordinator_core/bash_guards/tests -q"
 _AGENT_ID = "deadbeef0123"
@@ -77,7 +82,7 @@ def unreadable_roster(monkeypatch: pytest.MonkeyPatch):
 
 
 def _header(payload: Dict[str, Any]) -> str:
-    result: Optional[Dict[str, Any]] = guard.check(payload)
+    result: Optional[Dict[str, Any]] = _enveloped(guard.check)(payload)
     assert result is not None, "fixture must produce a denial for a header to be read"
     return result["hookSpecificOutput"]["permissionDecisionReason"].splitlines()[0]
 

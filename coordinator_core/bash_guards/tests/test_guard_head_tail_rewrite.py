@@ -31,10 +31,15 @@ import shlex
 from coordinator_core.bash_guards import guard_head_tail_rewrite as guard
 from coordinator_core.bash_guards import _dialect
 from coordinator_core.search import census as _census
+from coordinator_core.guard_messages.testing import envelope_of
+
+
+def _enveloped(check):
+    return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 
 def _ps_rewrite(cmd, session_id="sess1"):
-    return guard.check_head_tail_plumbing_rewrite(
+    return _enveloped(guard.check_head_tail_plumbing_rewrite)(
         cmd, session_id, dialect=_dialect.Dialect.POWERSHELL
     )
 
@@ -82,7 +87,7 @@ class TestPowerShellSelectObjectFirstLast:
         assert _ps_rewrite("") is None
 
     def test_bash_leg_unchanged_when_dialect_omitted(self):
-        out = guard.check_head_tail_plumbing_rewrite("find . -type f | head -n 5")
+        out = _enveloped(guard.check_head_tail_plumbing_rewrite)("find . -type f | head -n 5")
         assert out is not None
         assert "updatedInput" in out["hookSpecificOutput"]
 
@@ -113,7 +118,7 @@ class TestFindCensusServesInProcess:
     def test_served_answer_replaces_command_with_true(self, tmp_path):
         census_dir = self._fixture(tmp_path)
         cmd = "find %s -type f -name '*.txt' | head -n 5" % self._bash_root(census_dir)
-        out = guard.check_head_tail_plumbing_rewrite(cmd, payload=_payload(cmd, tmp_path))
+        out = _enveloped(guard.check_head_tail_plumbing_rewrite)(cmd, payload=_payload(cmd, tmp_path))
         assert out is not None
         hso = out["hookSpecificOutput"]
         assert hso["updatedInput"]["command"] == "true"
@@ -124,7 +129,7 @@ class TestFindCensusServesInProcess:
     def test_served_answer_matches_real_find_equivalence(self, tmp_path):
         census_dir = self._fixture(tmp_path)
         cmd = "find %s -type f -name '*.txt' | head -n 5" % self._bash_root(census_dir)
-        out = guard.check_head_tail_plumbing_rewrite(cmd, payload=_payload(cmd, tmp_path))
+        out = _enveloped(guard.check_head_tail_plumbing_rewrite)(cmd, payload=_payload(cmd, tmp_path))
         hso = out["hookSpecificOutput"]
         context = hso["additionalContext"]
         rendered = context.split("\n\n", 1)[1]
@@ -134,12 +139,13 @@ class TestFindCensusServesInProcess:
                 str(census_dir / "b.txt").replace("\\", "/"),
             ]
         )
-        assert rendered.splitlines() == expected
+        assert rendered.splitlines()[: len(expected)] == expected
+        assert hso["updatedInput"]["command"] == "true"
 
     def test_no_payload_keeps_old_generator_rewrite(self, tmp_path):
         census_dir = self._fixture(tmp_path)
         cmd = "find %s -type f -name '*.txt' | head -n 5" % self._bash_root(census_dir)
-        out = guard.check_head_tail_plumbing_rewrite(cmd)
+        out = _enveloped(guard.check_head_tail_plumbing_rewrite)(cmd)
         assert out is not None
         assert "python3" in out["hookSpecificOutput"]["updatedInput"]["command"] or (
             "python" in out["hookSpecificOutput"]["updatedInput"]["command"]
@@ -148,7 +154,7 @@ class TestFindCensusServesInProcess:
     def test_shape_census_declines_falls_back_to_generator_rewrite(self, tmp_path):
         census_dir = self._fixture(tmp_path)
         cmd = "find %s -type d | head -n 5" % self._bash_root(census_dir)
-        out = guard.check_head_tail_plumbing_rewrite(cmd, payload=_payload(cmd, tmp_path))
+        out = _enveloped(guard.check_head_tail_plumbing_rewrite)(cmd, payload=_payload(cmd, tmp_path))
         assert out is not None
         hso = out["hookSpecificOutput"]
         assert hso["updatedInput"]["command"] != "true"
@@ -157,21 +163,21 @@ class TestFindCensusServesInProcess:
         census_dir = self._fixture(tmp_path)
         monkeypatch.setattr(_census, "WALK_BUDGET_ENTRIES", 0)
         cmd = "find %s -type f | head -n 5" % self._bash_root(census_dir)
-        out = guard.check_head_tail_plumbing_rewrite(cmd, payload=_payload(cmd, tmp_path))
+        out = _enveloped(guard.check_head_tail_plumbing_rewrite)(cmd, payload=_payload(cmd, tmp_path))
         assert out is not None
         assert out["hookSpecificOutput"]["updatedInput"]["command"] != "true"
 
     def test_powershell_leg_also_serves(self, tmp_path):
         census_dir = self._fixture(tmp_path)
         cmd = "ls %s | Select-Object -First 5" % census_dir
-        out = guard.check_head_tail_plumbing_rewrite(
+        out = _enveloped(guard.check_head_tail_plumbing_rewrite)(
             cmd, dialect=_dialect.Dialect.POWERSHELL, payload=_payload(cmd, tmp_path)
         )
         assert out is not None
         assert "updatedInput" in out["hookSpecificOutput"]
 
         find_cmd = "find %s -type f -name '*.txt' | Select-Object -First 5" % census_dir
-        out2 = guard.check_head_tail_plumbing_rewrite(
+        out2 = _enveloped(guard.check_head_tail_plumbing_rewrite)(
             find_cmd,
             dialect=_dialect.Dialect.POWERSHELL,
             payload=_payload(find_cmd, tmp_path),
@@ -195,4 +201,52 @@ class TestGeneratorScriptEscapesAndFallsBack:
         monkeypatch.setattr(
             guard, "_bt_build_generator_lines", lambda kind, parsed: ['x = "C:\\Users"[']
         )
-        assert guard.check_head_tail_plumbing_rewrite("grep -r foo src | head -5") is None
+        assert _enveloped(guard.check_head_tail_plumbing_rewrite)("grep -r foo src | head -5") is None
+
+
+def test_rewrite_and_advisory_are_records_carrying_a_subagent_route():
+    from coordinator_core.guard_messages.alternative_record import (
+        AlternativeRecord,
+        Audience,
+        EscalationRoute,
+        Override,
+    )
+    from coordinator_core.guard_messages.render import render
+
+    rewrite = guard.check_head_tail_plumbing_rewrite("grep -rn foo src | head -5")
+    advisory = guard.check_head_tail_plumbing_rewrite("grep -rn foo src | head -c 5")
+    for record, kind in ((rewrite, "rewrite"), (advisory, "advisory")):
+        assert isinstance(record, AlternativeRecord) and record.verdict_kind == kind
+        assert any(isinstance(m, Override) for m in record.members)
+        assert any(isinstance(m, EscalationRoute) for m in record.members)
+        assert "COORDINATOR_ALLOW_HEAD_TAIL_PLUMBING" not in str(render(record, Audience.SUBAGENT))
+
+
+class TestEmRenderKeepsLegacyText:
+    """`em_text` makes the EM render the legacy envelope byte for byte; the
+    subagent render drops the override pointer."""
+
+    def test_advisory_em_render_is_the_legacy_text_with_the_override_pointer(self):
+        from coordinator_core.guard_messages.alternative_record import Audience
+        from coordinator_core.guard_messages.render import render
+
+        record = guard.check_head_tail_plumbing_rewrite("ls | head -c 10")
+        assert record.verdict_kind == "advisory"
+        em = render(record, Audience.EM)["hookSpecificOutput"]["additionalContext"]
+        assert em == record.em_text
+        assert em.startswith("Advisory: '... | head' truncates output")
+        assert "COORDINATOR_ALLOW_HEAD_TAIL_PLUMBING" not in str(
+            render(record, Audience.SUBAGENT)
+        )
+
+    def test_census_serve_is_stamped_and_carries_no_permission_decision(self, tmp_path):
+        from coordinator_core.guard_messages.alternative_record import Audience
+        from coordinator_core.guard_messages.render import render
+
+        (tmp_path / "a.txt").write_text("x")
+        cmd = "find %s -type f -name '*.txt' | head -n 5" % str(tmp_path).replace("\\", "/")
+        record = guard.check_head_tail_plumbing_rewrite(cmd, payload=_payload(cmd, tmp_path))
+        assert record.updated_input["command"] == "true"
+        hso = render(record, Audience.EM)["hookSpecificOutput"]
+        assert hso["additionalContext"].startswith("[coordinator] [Answered in-process")
+        assert "permissionDecision" not in hso

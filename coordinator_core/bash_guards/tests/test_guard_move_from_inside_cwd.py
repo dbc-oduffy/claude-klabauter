@@ -7,6 +7,11 @@ import time
 import pytest
 
 from coordinator_core.bash_guards.guard_move_from_inside_cwd import check_move_from_inside_cwd
+from coordinator_core.guard_messages.testing import envelope_of
+
+
+def _enveloped(check):
+    return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 
 def _ctx(out):
@@ -14,7 +19,7 @@ def _ctx(out):
 
 
 def _run(cmd, cwd, tool_name="Bash"):
-    return check_move_from_inside_cwd(
+    return _enveloped(check_move_from_inside_cwd)(
         cmd, "s", payload={"tool_name": tool_name, "cwd": str(cwd), "tool_input": {"command": cmd}}
     )
 
@@ -99,7 +104,7 @@ def test_silent_on_non_literal_operand(tree, src):
 
 def test_silent_without_move_or_cwd(tree):
     assert _run("ls -la", tree / "a") is None
-    assert check_move_from_inside_cwd("mv a z", "s", payload={"tool_name": "Bash"}) is None
+    assert _enveloped(check_move_from_inside_cwd)("mv a z", "s", payload={"tool_name": "Bash"}) is None
 
 
 def test_cost_under_five_ms_per_call(tree):

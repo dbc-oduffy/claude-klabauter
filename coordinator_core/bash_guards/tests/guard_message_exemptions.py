@@ -107,19 +107,6 @@ GUARD_MESSAGE_EXEMPTIONS: Dict[Tuple[str, str], str] = {
         "`Subagent:` line pre-2026-08-03); the remaining bytes are the "
         "coherence-pinned enumeration itself."
     ),
-    ("grep-via-bash-guard", "grep-via-bash-guard-fire"): (
-        "the partial-pipe-rewrite lede embeds the real, runnable `python3 -c` "
-        "replacement VERBATIM, per this guard's own `_evaluate_grep_via_bash_"
-        "match` docstring ('embedded VERBATIM, not re-indented or re-wrapped "
-        "... unrunnable is worse than over-budget ... this guard's message-"
-        "size floor is pinned by this rewrite's own length, not by wrapper "
-        "prose'). The script is inline prose text, not inside a `Use "
-        "instead:`-cued backtick/indented span, so none of it is cue-window-"
-        "exempt -- and `_BACKTICK_RE` cannot match a multi-line script even "
-        "if it were backtick-wrapped (`_BACKTICK_RE` never matches across a "
-        "newline). `test_guard_grep_via_bash.py` pins this rewrite's exact "
-        "bytes; shortening it breaks the alternative it offers."
-    ),
     ("project_orientation", "fire-always"): (
         "this is SessionStart context injection (an orientation-cache "
         "banner), not agent-facing guard advisory prose the duty-of-care "

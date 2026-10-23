@@ -305,9 +305,30 @@ def _extract_command(payload: Dict[str, Any]) -> Optional[str]:
     return command.replace("\r", "") if command else None
 
 
+def _answer_record(noop_command: str, payload: Dict[str, Any], context: str) -> Any:
+    """The served answer: `updatedInput` swaps the command for a no-op and the
+    answer rides in the summary. `updatedInput` replaces the whole tool input, so
+    every other key is carried over."""
+    from coordinator_core.bash_guards._rewrite_support import (
+        _allow_rewrite_record,
+        _em_stamped,
+    )
+    from coordinator_core.guard_messages.alternative_record import CapabilityRef
+
+    return _allow_rewrite_record(
+        "inprocess-search",
+        noop_command,
+        context,
+        (CapabilityRef("guard_inprocess_search::in-process"),),
+        tool_input=payload.get("tool_input") or {},
+        em_text=_em_stamped(context),
+        rewrite_allow=False,
+    )
+
+
 def check(
     payload: Dict[str, Any], host_is_windows: Optional[bool] = None
-) -> Optional[Dict[str, Any]]:
+) -> Any:
     tool_name = payload.get("tool_name") or ""
     dialect = dialect_from_tool_name(tool_name)
     if dialect is Dialect.POWERSHELL:
@@ -342,7 +363,6 @@ def check(
         if os.environ.get(_DISABLE_ENV_VAR, "0") == "1":
             return None
         try:
-            from coordinator_core._hook_envelope import rewrite_input
             from coordinator_core.search.answer import answer
 
             cwd = payload.get("cwd") or os.getcwd()
@@ -351,19 +371,13 @@ def check(
             return None
         if rendered is None:
             return None
-        tool_input = payload.get("tool_input") or {}
-        updated_input = dict(tool_input)
-        updated_input["command"] = "$null"
-        return rewrite_input(
-            "PreToolUse", updated_input, context="%s\n\n%s" % (_footer(cwd), rendered)
-        )
+        return _answer_record("$null", payload, "%s\n\n%s" % (_footer(cwd), rendered))
     command = _extract_command(payload)
     if not command:
         return None
     if os.environ.get(_DISABLE_ENV_VAR, "0") == "1":
         return None
     try:
-        from coordinator_core._hook_envelope import rewrite_input
         from coordinator_core.search.answer import answer
 
         from coordinator_core.search.answer import ReadSource, plan_for
@@ -401,9 +415,4 @@ def check(
     # as a suggested alternative and resolves its argv[0] on PATH; `:` is a
     # bash builtin with no on-PATH binary and reads DEAD there, while `true`
     # is a real coreutils binary every supported platform ships.
-    tool_input = payload.get("tool_input") or {}
-    updated_input = dict(tool_input)
-    updated_input["command"] = "true"
-    return rewrite_input(
-        "PreToolUse", updated_input, context="%s\n\n%s" % (_footer(cwd), rendered)
-    )
+    return _answer_record("true", payload, "%s\n\n%s" % (_footer(cwd), rendered))

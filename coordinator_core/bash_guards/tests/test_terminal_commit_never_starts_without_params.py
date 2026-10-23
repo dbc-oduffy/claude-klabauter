@@ -23,6 +23,11 @@ from coordinator_core.bash_guards import block_subagent_commit as guard
 from coordinator_core.bash_guards import dispatch
 from coordinator_core.ops.dispatch_emit import run_token
 from coordinator_core.ops.dispatch_emit import terminal_commit_params_channel as chan
+from coordinator_core.guard_messages.testing import envelope_of
+
+
+def _enveloped(check):
+    return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 _COMMIT_AGENT = "coordinator:git-commit-agent"
 _SCRIPT = "scratch/warp/a.workflow.mjs"
@@ -132,7 +137,7 @@ def test_a_command_writing_the_params_file_is_denied_naming_the_shape(repo, monk
     params = {"script_path": _SCRIPT, "run_id": _RUN, "run_token": token, "incomplete_chunks": []}
     out = _verdict(repo, _command(repo, shape), _transcript(repo, params), "strict", monkeypatch)
     assert _is_deny(out)
-    own = guard.check(_payload(repo, _command(repo, shape), _transcript(repo, params)))
+    own = _enveloped(guard.check)(_payload(repo, _command(repo, shape), _transcript(repo, params)))
     assert "writes the run's params file" in "\n".join(_reasons(own))
 
 
@@ -141,7 +146,7 @@ def test_a_redirect_to_another_file_is_not_the_params_write_leg(repo, monkeypatc
     params = {"script_path": _SCRIPT, "run_id": _RUN, "run_token": token, "incomplete_chunks": []}
     argv = f"coordinator-invoke dispatch.terminal_commit --params-file {chan.params_path(repo, _RUN).as_posix()}"
     cmd = f"echo hi > {repo.as_posix()}/other.txt; {argv}"
-    own = guard.check(_payload(repo, cmd, _transcript(repo, params)))
+    own = _enveloped(guard.check)(_payload(repo, cmd, _transcript(repo, params)))
     assert _is_deny(own)
     assert "writes the run's params file" not in "\n".join(_reasons(own))
 

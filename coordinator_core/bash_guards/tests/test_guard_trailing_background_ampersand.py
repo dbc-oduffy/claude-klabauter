@@ -6,8 +6,13 @@ import pytest
 
 from coordinator_core.bash_guards.guard_trailing_background_ampersand import (
     OVERRIDE_ENV,
-    check_trailing_background_ampersand as check,
+    check_trailing_background_ampersand as _check,
 )
+from coordinator_core.guard_messages.testing import envelope_of
+
+
+def check(*args, **kwargs):
+    return envelope_of(_check(*args, **kwargs))
 
 
 @pytest.mark.parametrize("cmd", ["sleep 5 &", "python x.py &", "a && b &", "sleep 5 & \n"])

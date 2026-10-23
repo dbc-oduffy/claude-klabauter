@@ -33,6 +33,11 @@ import pytest
 from coordinator_core.bash_guards import dispatch_checks as dc
 from coordinator_core.session import core
 from coordinator_core.win_portability import no_console_creationflags
+from coordinator_core.guard_messages.testing import envelope_of
+
+
+def _enveloped(check):
+    return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 pytestmark = [
     pytest.mark.spawns_process,
@@ -87,7 +92,7 @@ class TestUncommittedDeltaGate:
 
         monkeypatch.setenv("COORDINATOR_ALLOW_RM", "1")
         monkeypatch.chdir(root)
-        result = dc.check_destructive_rm(
+        result = _enveloped(dc.check_destructive_rm)(
             "rm -r work", session_id="my-sess", payload={}
         )
         assert result is None, (
@@ -109,7 +114,7 @@ class TestUncommittedDeltaGate:
 
         monkeypatch.setenv("COORDINATOR_ALLOW_RM", "1")
         monkeypatch.chdir(root)
-        result = dc.check_destructive_rm(
+        result = _enveloped(dc.check_destructive_rm)(
             "rm -r work", session_id="my-sess", payload={}
         )
         assert result is not None
@@ -140,7 +145,7 @@ class TestUncommittedDeltaGate:
         monkeypatch.setattr(dc._dc_git_probe, "_run_git", _flaky)
         monkeypatch.setenv("COORDINATOR_ALLOW_RM", "1")
         monkeypatch.chdir(root)
-        result = dc.check_destructive_rm(
+        result = _enveloped(dc.check_destructive_rm)(
             "rm -r work", session_id="my-sess", payload={}
         )
         assert result is not None, (
@@ -177,7 +182,7 @@ class TestUncommittedDeltaGate:
 
         monkeypatch.setattr(dc._dc_git_probe, "_run_git", _counting)
         monkeypatch.chdir(root)
-        dc.check_destructive_rm("rm " + " ".join(targets), session_id="my-sess", payload={})
+        _enveloped(dc.check_destructive_rm)("rm " + " ".join(targets), session_id="my-sess", payload={})
 
         assert len(calls) <= 1, (
             "the uncommitted-delta probe spawned once per target instead of "

@@ -33,6 +33,11 @@ from types import SimpleNamespace
 
 from coordinator_core.bash_guards import dispatch_checks as guard
 from coordinator_core.bash_guards import _dc_git_probe, _dc_git_shared
+from coordinator_core.guard_messages.testing import envelope_of
+
+
+def _enveloped(check):
+    return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 
 def _wire_hazard(monkeypatch, *, is_hazard=True):
@@ -90,7 +95,7 @@ def test_commit_dot_pathspec_denies(monkeypatch, tmp_path):
     _wire_hazard(monkeypatch)
     _wire_git(monkeypatch, str(root))
 
-    result = guard.check_blanket_git_add(
+    result = _enveloped(guard.check_blanket_git_add)(
         'git commit -m x -- .', session_id="sess1", hook_payload={}
     )
 
@@ -106,7 +111,7 @@ def test_commit_magic_root_pathspec_denies(monkeypatch, tmp_path):
     _wire_hazard(monkeypatch)
     _wire_git(monkeypatch, str(root))
 
-    result = guard.check_blanket_git_add(
+    result = _enveloped(guard.check_blanket_git_add)(
         'git commit -m x -- :/', session_id="sess1", hook_payload={}
     )
 
@@ -129,7 +134,7 @@ def test_subtree_commit_with_foreign_path_is_denied(monkeypatch, tmp_path):
     _wire_git(monkeypatch, str(root), diff_lines=["src/mine.py", "src/peer.py"])
     _wire_claims(monkeypatch, {"src/mine.py"})
 
-    result = guard.check_blanket_git_add(
+    result = _enveloped(guard.check_blanket_git_add)(
         "git commit -m x -- src/", session_id="sess1", hook_payload={}
     )
 
@@ -147,7 +152,7 @@ def test_subtree_commit_all_own_paths_is_allowed(monkeypatch, tmp_path):
     _wire_git(monkeypatch, str(root), diff_lines=["src/mine.py"])
     _wire_claims(monkeypatch, {"src/mine.py"})
 
-    result = guard.check_blanket_git_add(
+    result = _enveloped(guard.check_blanket_git_add)(
         "git commit -m x -- src/", session_id="sess1", hook_payload={}
     )
 
@@ -162,7 +167,7 @@ def test_subtree_commit_no_session_id_fails_open(monkeypatch, tmp_path):
     _wire_hazard(monkeypatch)
     _wire_git(monkeypatch, str(root), diff_lines=["src/peer.py"])
 
-    result = guard.check_blanket_git_add(
+    result = _enveloped(guard.check_blanket_git_add)(
         "git commit -m x -- src/", session_id="", hook_payload={}
     )
 
@@ -178,7 +183,7 @@ def test_subtree_commit_diff_failure_fails_open(monkeypatch, tmp_path):
     _wire_git(monkeypatch, str(root), diff_rc=1, diff_lines=None)
     _wire_claims(monkeypatch, set())
 
-    result = guard.check_blanket_git_add(
+    result = _enveloped(guard.check_blanket_git_add)(
         "git commit -m x -- src/", session_id="sess1", hook_payload={}
     )
 
@@ -197,7 +202,7 @@ def test_single_file_commit_is_not_denied(monkeypatch, tmp_path):
     _wire_hazard(monkeypatch)
     _wire_git(monkeypatch, str(root))
 
-    result = guard.check_blanket_git_add(
+    result = _enveloped(guard.check_blanket_git_add)(
         "git commit -m x -- src/mine.py", session_id="sess1", hook_payload={}
     )
 
@@ -215,7 +220,7 @@ def test_a_bare_commit_with_no_dash_dash_is_not_touched_by_this_branch(
     _wire_hazard(monkeypatch)
     _wire_git(monkeypatch, str(root))
 
-    result = guard.check_blanket_git_add(
+    result = _enveloped(guard.check_blanket_git_add)(
         "git commit -m x", session_id="sess1", hook_payload={}
     )
 
@@ -232,7 +237,7 @@ def test_dash_o_only_form_is_not_this_branchs_remit(monkeypatch, tmp_path):
     _wire_hazard(monkeypatch)
     _wire_git(monkeypatch, str(root))
 
-    result = guard.check_blanket_git_add(
+    result = _enveloped(guard.check_blanket_git_add)(
         "git commit -o state/ -m x", session_id="sess1", hook_payload={}
     )
 
@@ -246,7 +251,7 @@ def test_not_a_hazard_repo_is_not_denied(monkeypatch, tmp_path):
     _wire_hazard(monkeypatch, is_hazard=False)
     _wire_git(monkeypatch, str(root))
 
-    result = guard.check_blanket_git_add(
+    result = _enveloped(guard.check_blanket_git_add)(
         "git commit -m x -- .", session_id="sess1", hook_payload={}
     )
 
@@ -285,7 +290,7 @@ def _warp_repo(monkeypatch, tmp_path, *, holder, staged=None, live=("sess1", "pe
 def test_commit_of_own_submitted_run_record_dir_is_allowed(monkeypatch, tmp_path):
     _, calls = _warp_repo(monkeypatch, tmp_path, holder="sess1")
 
-    result = guard.check_blanket_git_add(
+    result = _enveloped(guard.check_blanket_git_add)(
         "git commit -m x -- state/warp/ask-1/", session_id="sess1", hook_payload={}
     )
 
@@ -296,7 +301,7 @@ def test_commit_of_own_submitted_run_record_dir_is_allowed(monkeypatch, tmp_path
 def test_commit_of_a_different_live_sessions_run_record_dir_is_denied(monkeypatch, tmp_path):
     _warp_repo(monkeypatch, tmp_path, holder="peer")
 
-    result = guard.check_blanket_git_add(
+    result = _enveloped(guard.check_blanket_git_add)(
         "git commit -m x -- state/warp/ask-1/", session_id="sess1", hook_payload={}
     )
 
@@ -309,7 +314,7 @@ def test_commit_of_a_different_live_sessions_run_record_dir_is_denied(monkeypatc
 def test_commit_of_a_dead_sessions_run_record_dir_is_allowed(monkeypatch, tmp_path):
     _warp_repo(monkeypatch, tmp_path, holder="peer", live=("sess1",))
 
-    result = guard.check_blanket_git_add(
+    result = _enveloped(guard.check_blanket_git_add)(
         "git commit -m x -- state/warp/ask-1/", session_id="sess1", hook_payload={}
     )
 
@@ -319,7 +324,7 @@ def test_commit_of_a_dead_sessions_run_record_dir_is_allowed(monkeypatch, tmp_pa
 def test_commit_of_an_unheld_run_record_dir_is_allowed(monkeypatch, tmp_path):
     _warp_repo(monkeypatch, tmp_path, holder=None)
 
-    result = guard.check_blanket_git_add(
+    result = _enveloped(guard.check_blanket_git_add)(
         "git commit -m x -- state/warp/ask-1/", session_id="sess1", hook_payload={}
     )
 
@@ -331,7 +336,7 @@ def test_a_non_warp_foreign_path_beside_an_own_run_is_still_denied(monkeypatch, 
         monkeypatch, tmp_path, holder="sess1", staged=RUN_FILES + ["state/other/peer.md"]
     )
 
-    result = guard.check_blanket_git_add(
+    result = _enveloped(guard.check_blanket_git_add)(
         "git commit -m x -- state/", session_id="sess1", hook_payload={}
     )
 
@@ -357,4 +362,4 @@ def test_full_em_checkpoint_shape_with_literal_file_operands_is_allowed(monkeypa
         " state/handoffs/h.md"
     )
 
-    assert guard.check_blanket_git_add(cmd, session_id="sess1", hook_payload={}) is None
+    assert _enveloped(guard.check_blanket_git_add)(cmd, session_id="sess1", hook_payload={}) is None

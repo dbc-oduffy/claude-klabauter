@@ -28,6 +28,11 @@ from typing import Any, Dict
 import pytest
 
 from coordinator_core.bash_guards import block_subagent_commit as guard
+from coordinator_core.guard_messages.testing import envelope_of
+
+
+def _enveloped(check):
+    return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 _SUBAGENT_TYPE = "coordinator:executor"
 _GIT_COMMIT_AGENT_TYPE = "coordinator:git-commit-agent"
@@ -61,7 +66,7 @@ def _subagent(monkeypatch, subagent_type=_SUBAGENT_TYPE):
 
 def _denies(monkeypatch, cmd):
     _subagent(monkeypatch)
-    result = guard.check(_payload(cmd, agent_type=_SUBAGENT_TYPE))
+    result = _enveloped(guard.check)(_payload(cmd, agent_type=_SUBAGENT_TYPE))
     assert result is not None, f"expected DENY for: {cmd!r}"
     assert (
         result["hookSpecificOutput"]["permissionDecision"] == "deny"
@@ -71,7 +76,7 @@ def _denies(monkeypatch, cmd):
 
 def _allows(monkeypatch, cmd, agent_type=_SUBAGENT_TYPE):
     _subagent(monkeypatch)
-    result = guard.check(_payload(cmd, agent_type=agent_type))
+    result = _enveloped(guard.check)(_payload(cmd, agent_type=agent_type))
     assert result is None, f"expected ALLOW for: {cmd!r}, got {result!r}"
 
 
@@ -212,7 +217,7 @@ def test_ceremony_commit_v2_op_door_still_allows(monkeypatch):
         "python3 -m coordinator_core.invoke ceremony.commit_v2 "
         "'{\"worktree_root\": \"/repo\", \"paths\": [\"src/foo.py\"], \"message\": \"x\"}'"
     )
-    result = guard.check(_payload(cmd, agent_type=_GIT_COMMIT_AGENT_TYPE))
+    result = _enveloped(guard.check)(_payload(cmd, agent_type=_GIT_COMMIT_AGENT_TYPE))
     assert result is None, f"expected ALLOW for: {cmd!r}, got {result!r}"
 
 

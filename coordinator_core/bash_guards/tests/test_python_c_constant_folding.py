@@ -60,6 +60,11 @@ import pytest
 from coordinator_core.bash_guards import block_subagent_commit as guard
 from coordinator_core.bash_guards.tests import test_block_subagent_commit as base
 from coordinator_core.benchmarks.process_time import in_process_time_ms
+from coordinator_core.guard_messages.testing import envelope_of
+
+
+def _enveloped(check):
+    return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 HELPER = "coordinator/bin/scoped-git-commit"
 _OP = "ceremony.scoped_git_commit"
@@ -1542,7 +1547,7 @@ def _fold_cache_is_never_inherited():
 
 
 def _verdicts(rows):
-    return {label: guard.check(base._payload(cmd, agent_type=base._SUBAGENT_TYPE)) is not None
+    return {label: _enveloped(guard.check)(base._payload(cmd, agent_type=base._SUBAGENT_TYPE)) is not None
             for label, cmd in rows}
 
 
@@ -1582,9 +1587,9 @@ def test_realistic_corpus_is_untouched_by_mechanism_1(monkeypatch):
 def test_part16_moves_no_command_outside_the_python_c_family(monkeypatch):
     base._subagent(monkeypatch)
     outside = [c for c, _ in base._VERDICT_PARITY_MATRIX if not ("python" in c and "-c " in c)]
-    live = [guard.check(base._payload(c, agent_type=base._SUBAGENT_TYPE)) is not None for c in outside]
+    live = [_enveloped(guard.check)(base._payload(c, agent_type=base._SUBAGENT_TYPE)) is not None for c in outside]
     _disable_part16(monkeypatch)
-    after = [guard.check(base._payload(c, agent_type=base._SUBAGENT_TYPE)) is not None for c in outside]
+    after = [_enveloped(guard.check)(base._payload(c, agent_type=base._SUBAGENT_TYPE)) is not None for c in outside]
     assert live == after
 
 
@@ -1599,9 +1604,9 @@ def test_prefilter_widening_moves_no_pre_part16_verdict(monkeypatch):
     _disable_part16(monkeypatch)
     commands = [c for c, _ in base._VERDICT_PARITY_MATRIX]
     commands += [cmd for _label, cmd in _ASSEMBLY_COMMANDS + _REALISTIC_COMMANDS]
-    live = [guard.check(base._payload(c, agent_type=base._SUBAGENT_TYPE)) is not None for c in commands]
+    live = [_enveloped(guard.check)(base._payload(c, agent_type=base._SUBAGENT_TYPE)) is not None for c in commands]
     monkeypatch.setattr(guard, "_may_carry_python_c_payload", lambda cmd: False)
-    narrow = [guard.check(base._payload(c, agent_type=base._SUBAGENT_TYPE)) is not None for c in commands]
+    narrow = [_enveloped(guard.check)(base._payload(c, agent_type=base._SUBAGENT_TYPE)) is not None for c in commands]
     assert live == narrow
 
 
@@ -1650,7 +1655,7 @@ def test_resolved_identity_leg_wins_message_selection(monkeypatch):
     literal-reconstruction message is the one the caller sees.
     """
     base._subagent(monkeypatch)
-    result = guard.check(
+    result = _enveloped(guard.check)(
         base._payload(
             "python3 -c \"import os; os.system('scoped-git'+'-commit -m x')\"",
             agent_type=base._SUBAGENT_TYPE,
@@ -1671,8 +1676,8 @@ def test_unwrap_memo_does_not_outlive_one_check(monkeypatch):
     """
     base._subagent(monkeypatch)
     cmd = "python3 -c \"import subprocess; subprocess.run(['%s','-m','x'])\"" % HELPER
-    assert guard.check(base._payload(cmd, agent_type=base._SUBAGENT_TYPE)) is not None
+    assert _enveloped(guard.check)(base._payload(cmd, agent_type=base._SUBAGENT_TYPE)) is not None
     monkeypatch.setattr(guard, "_python_c_payload_is_provably_inert", lambda payload: True)
     monkeypatch.setattr(guard, "_has_folded_commit_identity", lambda cmd, legs=None: False)
     monkeypatch.setattr(guard, "_has_opaque_execution_sink", lambda cmd, legs=None: False)
-    assert guard.check(base._payload(cmd, agent_type=base._SUBAGENT_TYPE)) is None
+    assert _enveloped(guard.check)(base._payload(cmd, agent_type=base._SUBAGENT_TYPE)) is None

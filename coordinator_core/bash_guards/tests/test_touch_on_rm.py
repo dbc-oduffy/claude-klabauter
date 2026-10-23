@@ -14,6 +14,11 @@ from coordinator_core.session.touch_record import (
     sink_path,
 )
 from coordinator_core.win_portability import no_console_creationflags
+from coordinator_core.guard_messages.testing import envelope_of
+
+
+def _enveloped(check):
+    return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 pytestmark = [
     pytest.mark.spawns_process,
@@ -65,7 +70,7 @@ def test_bash_rm_of_clean_tracked_file_records_a_touch(tmp_path, monkeypatch):
     _git("commit", "-qm", "seed", cwd=root)
 
     monkeypatch.chdir(root)
-    verdict = dc.check_destructive_rm(
+    verdict = _enveloped(dc.check_destructive_rm)(
         "rm seed.txt", session_id=_SESSION_ID, payload={}
     )
     assert verdict is None, f"a clean, committed, non-recursive rm must be ALLOWED: {verdict}"
@@ -84,7 +89,7 @@ def test_git_rm_of_clean_tracked_file_records_a_touch(tmp_path, monkeypatch):
     _git("commit", "-qm", "tracked", cwd=root)
 
     monkeypatch.chdir(root)
-    verdict = dc.check_destructive_rm(
+    verdict = _enveloped(dc.check_destructive_rm)(
         "git rm tracked.txt", session_id=_SESSION_ID, payload={}
     )
     assert verdict is None, f"git rm is treated as git-recoverable and stays ALLOWED: {verdict}"
@@ -103,7 +108,7 @@ def test_git_rm_cached_does_not_touch_the_working_tree_copy(tmp_path, monkeypatc
     _git("commit", "-qm", "cached", cwd=root)
 
     monkeypatch.chdir(root)
-    verdict = dc.check_destructive_rm(
+    verdict = _enveloped(dc.check_destructive_rm)(
         "git rm --cached cached.txt", session_id=_SESSION_ID, payload={}
     )
     assert verdict is None
@@ -128,7 +133,7 @@ def test_denied_rm_records_no_touch(tmp_path, monkeypatch):
         fh.write("# uncommitted\n")
 
     monkeypatch.chdir(root)
-    verdict = dc.check_destructive_rm(
+    verdict = _enveloped(dc.check_destructive_rm)(
         "rm -rf work", session_id=_SESSION_ID, payload={}
     )
     assert (
@@ -150,7 +155,7 @@ def test_rm_does_not_touch_paths_it_did_not_target(tmp_path, monkeypatch):
     _git("commit", "-qm", "seed", cwd=root)
 
     monkeypatch.chdir(root)
-    verdict = dc.check_destructive_rm(
+    verdict = _enveloped(dc.check_destructive_rm)(
         "rm a.txt", session_id=_SESSION_ID, payload={}
     )
     assert verdict is None

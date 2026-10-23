@@ -187,22 +187,31 @@ def _evaluate(cmd: str) -> Optional[str]:
     return None
 
 
-def _deny_reason(cmd: str, deny_kind: str) -> str:
-    """Design-as-offer deny text -- only ever rendered for a dispatched
-    subagent (see module docstring "IDENTITY-GATE POSTURE"). Mirrors
-    `block_subagent_grant_acquisition._deny_reason`'s register: states the
-    structural reason a subagent cannot itself clear this gate, and hands
-    it what its BLOCKED report needs, never a command it could run itself.
+def _deny_record(cmd: str, deny_kind: str):
+    """Deny record for a dispatched subagent (see module docstring
+    "IDENTITY-GATE POSTURE"): the structural reason plus an escalation
+    route, never a command the subagent could run itself.
     """
     del deny_kind, cmd
-    return (
-        "BLOCKED: `reject`/`targets` are EM-only. Name a contested "
-        "finding for the EM to `reject`, or ask it to `targets --add` a "
-        "write target. `verify` stays available."
+    from coordinator_core.guard_messages.alternative_record import (
+        AlternativeRecord,
+        EscalationRoute,
+    )
+
+    return AlternativeRecord(
+        verdict_kind="deny",
+        guard_name="block-subagent-findings-reject",
+        summary="BLOCKED: `reject`/`targets` are EM-only. `verify` stays available.",
+        members=(
+            EscalationRoute(
+                report_what="the contested finding, or the write target you need, to your EM",
+                authorize_what="`reject` or `targets --add`",
+            ),
+        ),
     )
 
 
-def check(payload: dict) -> Optional[dict]:
+def check(payload: dict):
     """Evaluate the `reject`/`targets` EM-only gate against a PreToolUse
     payload. Identity-gated to subagents only -- fail CLOSED on a
     present-but-unresolvable `agent_id`, same posture as
@@ -225,10 +234,4 @@ def check(payload: dict) -> Optional[dict]:
     if deny_kind is None:
         return None
 
-    return {
-        "hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "permissionDecision": "deny",
-            "permissionDecisionReason": _deny_reason(cmd, deny_kind),
-        }
-    }
+    return _deny_record(cmd, deny_kind)

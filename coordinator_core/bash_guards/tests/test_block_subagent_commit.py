@@ -42,6 +42,11 @@ from coordinator_core.ops.session import scope_report as _scope_report
 from coordinator_core.session import core as _session_core
 from coordinator_core.session import scope as _session_scope
 from coordinator_core.win_portability import no_console_passthrough_kwargs
+from coordinator_core.guard_messages.testing import envelope_of
+
+
+def _enveloped(check):
+    return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 # Spawns a real external process; runs at cadence gates, not per-commit.
 # Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
@@ -85,7 +90,7 @@ def _subagent(monkeypatch, subagent_type=_SUBAGENT_TYPE):
 
 def _denies(monkeypatch, cmd):
     _subagent(monkeypatch)
-    result = guard.check(_payload(cmd, agent_type=_SUBAGENT_TYPE))
+    result = _enveloped(guard.check)(_payload(cmd, agent_type=_SUBAGENT_TYPE))
     assert result is not None, f"expected DENY for: {cmd!r}"
     assert (
         result["hookSpecificOutput"]["permissionDecision"] == "deny"
@@ -94,7 +99,7 @@ def _denies(monkeypatch, cmd):
 
 def _allows(monkeypatch, cmd):
     _subagent(monkeypatch)
-    result = guard.check(_payload(cmd, agent_type=_SUBAGENT_TYPE))
+    result = _enveloped(guard.check)(_payload(cmd, agent_type=_SUBAGENT_TYPE))
     assert result is None, f"expected ALLOW for: {cmd!r}, got {result!r}"
 
 
@@ -316,7 +321,7 @@ def test_git_commit_denies_via_actual_powershell_tool_name(monkeypatch):
     _subagent(monkeypatch)
     p = _payload('git commit -m "msg"', agent_type=_SUBAGENT_TYPE)
     p["tool_name"] = "PowerShell"
-    result = guard.check(p)
+    result = _enveloped(guard.check)(p)
     assert result is not None
     assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
@@ -635,7 +640,7 @@ def test_ceremony_scoped_git_commit_em_main_loop_allows():
         "python3 -m coordinator_core.invoke ceremony.scoped_git_commit '{}'",
         agent_id=None,
     )
-    assert guard.check(payload) is None
+    assert _enveloped(guard.check)(payload) is None
 
 
 # ---------------------------------------------------------------------------
@@ -645,7 +650,7 @@ def test_ceremony_scoped_git_commit_em_main_loop_allows():
 
 def test_non_bash_tool_allows():
     payload = {"tool_name": "Write", "tool_input": {"command": "git commit -m x"}}
-    assert guard.check(payload) is None
+    assert _enveloped(guard.check)(payload) is None
 
 
 def test_git_status_allows(monkeypatch):
@@ -674,7 +679,7 @@ def test_echo_commit_words_allows(monkeypatch):
 
 def test_no_agent_id_em_main_loop_allows():
     payload = _payload("git commit -m x", agent_id=None)
-    assert guard.check(payload) is None
+    assert _enveloped(guard.check)(payload) is None
 
 
 def test_plain_git_commit_still_denies(monkeypatch):
@@ -695,7 +700,7 @@ def test_unresolvable_agent_id_still_denies_via_agent_type_leg(monkeypatch):
     monkeypatch.setattr(guard, "resolve_git_root", lambda cwd: "/fake/git-root")
     monkeypatch.setattr(guard, "_resolve_subagent_identity", lambda raw, session: "")
     payload = _payload('git commit -m "msg"', agent_type=_SUBAGENT_TYPE)
-    result = guard.check(payload)
+    result = _enveloped(guard.check)(payload)
     assert result is not None
     assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
@@ -714,7 +719,7 @@ def test_no_effective_type_confines_as_subagent(monkeypatch):
         guard, "_read_backpointer_subagent_type", lambda git_root, agent_id: ""
     )
     payload = _payload('git commit -m "msg"', agent_type=None)
-    result = guard.check(payload)
+    result = _enveloped(guard.check)(payload)
     assert result is not None
     assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
@@ -722,7 +727,7 @@ def test_no_effective_type_confines_as_subagent(monkeypatch):
 def test_empty_command_allows(monkeypatch):
     _subagent(monkeypatch)
     payload = _payload("", agent_type=_SUBAGENT_TYPE)
-    assert guard.check(payload) is None
+    assert _enveloped(guard.check)(payload) is None
 
 
 # ---------------------------------------------------------------------------
@@ -1009,7 +1014,7 @@ _VERDICT_PARITY_MATRIX = [
 
 def _reason(monkeypatch, cmd):
     _subagent(monkeypatch)
-    result = guard.check(_payload(cmd, agent_type=_SUBAGENT_TYPE))
+    result = _enveloped(guard.check)(_payload(cmd, agent_type=_SUBAGENT_TYPE))
     assert result is not None, f"expected DENY for: {cmd!r}"
     return result["hookSpecificOutput"]["permissionDecisionReason"]
 
@@ -1274,7 +1279,7 @@ def _git_commit_agent_setup(
 
 def _gca_denies(monkeypatch, cmd, agent_type=_GIT_COMMIT_AGENT_TYPE, **setup_kwargs):
     _git_commit_agent_setup(monkeypatch, **setup_kwargs)
-    result = guard.check(_payload(cmd, agent_type=agent_type))
+    result = _enveloped(guard.check)(_payload(cmd, agent_type=agent_type))
     assert result is not None, f"expected DENY for: {cmd!r}"
     assert (
         result["hookSpecificOutput"]["permissionDecision"] == "deny"
@@ -1284,7 +1289,7 @@ def _gca_denies(monkeypatch, cmd, agent_type=_GIT_COMMIT_AGENT_TYPE, **setup_kwa
 
 def _gca_allows(monkeypatch, cmd, agent_type=_GIT_COMMIT_AGENT_TYPE, **setup_kwargs):
     _git_commit_agent_setup(monkeypatch, **setup_kwargs)
-    result = guard.check(_payload(cmd, agent_type=agent_type))
+    result = _enveloped(guard.check)(_payload(cmd, agent_type=agent_type))
     assert result is None, f"expected ALLOW for: {cmd!r}, got {result!r}"
 
 
@@ -1483,7 +1488,7 @@ def test_git_commit_agent_allow_branch_is_gated_by_may_commit_helper(monkeypatch
         'git commit -m "msg" -- src/foo.py',
         agent_type=_GIT_COMMIT_AGENT_TYPE,
     )
-    result = guard.check(payload)
+    result = _enveloped(guard.check)(payload)
     assert result is not None
     assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
@@ -1771,7 +1776,7 @@ def test_ac7_type_membership_alone_is_not_the_mechanism(monkeypatch):
         guard, "_ALLOWED_SUBAGENT_TYPES", frozenset({_GIT_COMMIT_AGENT_TYPE})
     )
     _git_commit_agent_setup(monkeypatch)
-    result = guard.check(_payload('git commit -m "msg"', agent_type=_GIT_COMMIT_AGENT_TYPE))
+    result = _enveloped(guard.check)(_payload('git commit -m "msg"', agent_type=_GIT_COMMIT_AGENT_TYPE))
     assert result is None, "type-membership-alone placement would (wrongly) allow this"
 
 
@@ -1786,7 +1791,7 @@ def test_ac15_backpointer_leg_alone_insufficient_denies(monkeypatch):
     """
     _git_commit_agent_setup(monkeypatch, subagent_type=_GIT_COMMIT_AGENT_TYPE)
     payload = _payload('git commit -m "msg" -- src/foo.py', agent_type=None)
-    result = guard.check(payload)
+    result = _enveloped(guard.check)(payload)
     assert result is not None
     assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
     # Finding 2 (2026-08-03 security review): message SELECTION must honor
@@ -1816,7 +1821,7 @@ def test_ac19_named_teammate_dispatch_denies(monkeypatch):
     payload = _payload(
         'git commit -m "msg" -- src/foo.py', agent_type="sam"
     )
-    result = guard.check(payload)
+    result = _enveloped(guard.check)(payload)
     assert result is not None
     assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
@@ -1835,7 +1840,7 @@ def test_ac8_other_subagent_type_scoped_commit_still_denies(monkeypatch):
         'git commit -m "msg" -- src/foo.py',
         agent_type=_SUBAGENT_TYPE,
     )
-    result = guard.check(payload)
+    result = _enveloped(guard.check)(payload)
     assert result is not None
     assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
     assert "git-commit-agent" not in result["hookSpecificOutput"]["permissionDecisionReason"]
@@ -1849,7 +1854,7 @@ def test_ac8_unresolved_effective_type_path_still_denies(monkeypatch):
     payload = _payload(
         'git commit -m "msg" -- src/foo.py', agent_type=None
     )
-    result = guard.check(payload)
+    result = _enveloped(guard.check)(payload)
     assert result is not None
     assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
@@ -1869,7 +1874,7 @@ def test_landing_order_safety_scope_import_unavailable_denies(monkeypatch):
         'git commit -m "msg" -- src/foo.py',
         agent_type=_GIT_COMMIT_AGENT_TYPE,
     )
-    result = guard.check(payload)
+    result = _enveloped(guard.check)(payload)
     assert result is not None
     assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
@@ -1884,7 +1889,7 @@ def test_landing_order_safety_git_root_unresolvable_denies(monkeypatch):
         'git commit -m "msg" -- src/foo.py',
         agent_type=_GIT_COMMIT_AGENT_TYPE,
     )
-    result = guard.check(payload)
+    result = _enveloped(guard.check)(payload)
     assert result is not None
     assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
@@ -1916,7 +1921,7 @@ def test_git_dash_c_absolute_root_resolves_when_cwd_unresolvable(monkeypatch):
         f'git -C {_FAKE_REPO_ROOT} commit -m "msg" -- src/foo.py',
         agent_type=_GIT_COMMIT_AGENT_TYPE,
     )
-    assert guard.check(payload) is None
+    assert _enveloped(guard.check)(payload) is None
 
 
 def test_git_dash_c_relative_root_still_denies(monkeypatch):
@@ -1929,7 +1934,7 @@ def test_git_dash_c_relative_root_still_denies(monkeypatch):
         'git -C relative/repo commit -m "msg" -- src/foo.py',
         agent_type=_GIT_COMMIT_AGENT_TYPE,
     )
-    result = guard.check(payload)
+    result = _enveloped(guard.check)(payload)
     assert result is not None
     assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
@@ -1945,7 +1950,7 @@ def test_git_dash_c_root_failing_toplevel_validation_still_denies(monkeypatch):
         'git -C /not/a/repo commit -m "msg" -- src/foo.py',
         agent_type=_GIT_COMMIT_AGENT_TYPE,
     )
-    result = guard.check(payload)
+    result = _enveloped(guard.check)(payload)
     assert result is not None
     assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
     assert calls == []
@@ -1958,7 +1963,7 @@ def test_commit_v2_cli_dash_dash_repo_absolute_resolves_when_cwd_unresolvable(mo
         '\'{"paths": ["src/foo.py"], "message": "x"}\'' % _FAKE_REPO_ROOT,
         agent_type=_GIT_COMMIT_AGENT_TYPE,
     )
-    assert guard.check(payload) is None
+    assert _enveloped(guard.check)(payload) is None
 
 
 @pytest.mark.parametrize("key", ["repo", "repo_root"])
@@ -1973,7 +1978,7 @@ def test_commit_v2_json_repo_keys_are_not_read_as_explicit_root(monkeypatch, key
         % (key, _FAKE_REPO_ROOT),
         agent_type=_GIT_COMMIT_AGENT_TYPE,
     )
-    result = guard.check(payload)
+    result = _enveloped(guard.check)(payload)
     assert result is not None
     assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
     assert calls == []
@@ -1989,7 +1994,7 @@ def test_no_explicit_root_named_still_denies_unresolvable(monkeypatch):
         'git commit -m "msg" -- src/foo.py',
         agent_type=_GIT_COMMIT_AGENT_TYPE,
     )
-    result = guard.check(payload)
+    result = _enveloped(guard.check)(payload)
     assert result is not None
     assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
     assert calls == []
@@ -2073,7 +2078,7 @@ def test_ownership_scope_exception_denies(monkeypatch):
         'git commit -m "msg" -- src/foo.py',
         agent_type=_GIT_COMMIT_AGENT_TYPE,
     )
-    result = guard.check(payload)
+    result = _enveloped(guard.check)(payload)
     assert result is not None
     assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
@@ -2150,7 +2155,7 @@ def test_deny_prose_never_routes_to_the_retired_scoped_git_commit_launcher():
 
 def test_ac16_deny_message_unchanged_for_other_types(monkeypatch):
     _subagent(monkeypatch)
-    result = guard.check(_payload("git commit -m x", agent_type=_SUBAGENT_TYPE))
+    result = _enveloped(guard.check)(_payload("git commit -m x", agent_type=_SUBAGENT_TYPE))
     reason = result["hookSpecificOutput"]["permissionDecisionReason"]
     assert reason == (
         "BLOCKED: subagents may not commit -- EM-only, enforced by caller "
@@ -2440,7 +2445,7 @@ def test_git_commit_agent_sweeping_element_denies_before_ownership_leg_even_reac
     pathspec, not merely "invoked and coincidentally denied the same way".
     """
     calls = _git_commit_agent_setup(monkeypatch, scope_result=(True, ""))
-    result = guard.check(
+    result = _enveloped(guard.check)(
         _payload(
             'git commit -m "msg" -- src/foo.py .',
             agent_type=_GIT_COMMIT_AGENT_TYPE,
@@ -2481,7 +2486,7 @@ def test_git_commit_agent_trampoline_without_include_orphans_flag_passes_true(
     non-sweeping pathspec regardless of whether the flag was named.
     """
     calls = _git_commit_agent_setup(monkeypatch)
-    guard.check(
+    _enveloped(guard.check)(
         _payload(
             'git commit -m "msg" -- src/foo.py',
             agent_type=_GIT_COMMIT_AGENT_TYPE,
@@ -2507,7 +2512,7 @@ def test_git_commit_agent_retired_trampoline_denies_and_never_reaches_ownership(
     separately in `test_subagent_commit_prefilter_and_flags.py`.
     """
     calls = _git_commit_agent_setup(monkeypatch)
-    result = guard.check(
+    result = _enveloped(guard.check)(
         _payload(
             'scoped-git-commit -m "msg" --repo /repo --include-orphans -- src/foo.py',
             agent_type=_GIT_COMMIT_AGENT_TYPE,
@@ -2525,7 +2530,7 @@ def test_git_commit_agent_invoke_module_include_orphans_key_is_inert(monkeypatch
     (BV-20260927-01).
     """
     calls = _git_commit_agent_setup(monkeypatch)
-    guard.check(
+    _enveloped(guard.check)(
         _payload(
             "python3 -m coordinator_core.invoke ceremony.commit_v2 "
             '\'{"worktree_root": "/repo", "paths": ["src/foo.py"], "message": "x", '
@@ -2545,7 +2550,7 @@ def test_git_commit_agent_invoke_module_without_include_orphans_key_passes_true(
     (BV-20260927-01: the flag is no longer what decides this).
     """
     calls = _git_commit_agent_setup(monkeypatch)
-    guard.check(
+    _enveloped(guard.check)(
         _payload(
             "python3 -m coordinator_core.invoke ceremony.commit_v2 "
             '\'{"worktree_root": "/repo", "paths": ["src/foo.py"], "message": "x"}\'',
@@ -2732,7 +2737,7 @@ class TestRealOwnershipScopeWiring:
         payload = _real_scope_payload(
             'git commit -m "msg" -- a.py', repo, "mine"
         )
-        result = guard.check(payload)
+        result = _enveloped(guard.check)(payload)
         assert result is None, f"expected ALLOW, got deny: {result!r}"
 
     def test_another_live_sessions_paths_deny(self, tmp_path):
@@ -2746,7 +2751,7 @@ class TestRealOwnershipScopeWiring:
         payload = _real_scope_payload(
             'git commit -m "msg" -- shared.py', repo, "mine"
         )
-        result = guard.check(payload)
+        result = _enveloped(guard.check)(payload)
         assert result is not None
         assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
@@ -2770,7 +2775,7 @@ class TestRealOwnershipScopeWiring:
         payload = _real_scope_payload(
             'git commit -m "msg" -- a.py', repo, "mine"
         )
-        result = guard.check(payload)
+        result = _enveloped(guard.check)(payload)
         assert result is None, f"expected ALLOW (self-liveness is not gated), got deny: {result!r}"
 
     def test_orphan_inside_declared_pathspec_is_adopted(self, tmp_path):
@@ -2792,7 +2797,7 @@ class TestRealOwnershipScopeWiring:
         payload = _real_scope_payload(
             'git commit -m "msg" -- orphan.py', repo, "mine"
         )
-        result = guard.check(payload)
+        result = _enveloped(guard.check)(payload)
         assert result is None, f"expected ALLOW: orphan.py is inside the declared pathspec, got deny: {result!r}"
 
     def test_orphan_inside_pathspec_adopted_with_include_orphans_flag_too(
@@ -2814,7 +2819,7 @@ class TestRealOwnershipScopeWiring:
             repo,
             "mine",
         )
-        result = guard.check(payload)
+        result = _enveloped(guard.check)(payload)
         assert result is None, f"expected ALLOW: {result!r}"
 
     def test_git_commit_agent_peer_claimed_path_still_denies_with_orphans_allowed(
@@ -2878,7 +2883,7 @@ class TestRealOwnershipScopeWiring:
             repo,
             "mine",
         )
-        result = guard.check(payload)
+        result = _enveloped(guard.check)(payload)
         assert result is not None, "expected DENY: shared.py is peer-claimed"
         assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
         reason = result["hookSpecificOutput"]["permissionDecisionReason"]
@@ -2893,7 +2898,7 @@ class TestRealOwnershipScopeWiring:
         payload = _real_scope_payload(
             'git commit -m "msg" -- edited.py README.md', repo, "mine"
         )
-        assert guard.check(payload) is None
+        assert _enveloped(guard.check)(payload) is None
 
     def test_a_clean_path_does_not_unlock_a_peer_claimed_one(self, tmp_path):
         repo = _make_real_repo(tmp_path)
@@ -2905,7 +2910,7 @@ class TestRealOwnershipScopeWiring:
         payload = _real_scope_payload(
             'git commit -m "msg" -- shared.py README.md', repo, "mine"
         )
-        result = guard.check(payload)
+        result = _enveloped(guard.check)(payload)
         assert result is not None
         assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
         assert "shared.py" in result["hookSpecificOutput"]["permissionDecisionReason"]
@@ -2917,7 +2922,7 @@ class TestRealOwnershipScopeWiring:
         payload = _real_scope_payload(
             'git commit -m "msg" -- a.py', repo, ""
         )
-        result = guard.check(payload)
+        result = _enveloped(guard.check)(payload)
         assert result is not None
         assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
@@ -2958,7 +2963,7 @@ class TestRealOwnershipScopeWiring:
             repo,
             "mine",
         )
-        result = guard.check(payload)
+        result = _enveloped(guard.check)(payload)
         assert result is None, f"expected ALLOW: both paths are inside the declared pathspec, got deny: {result!r}"
 
 
@@ -3034,7 +3039,7 @@ def test_git_commit_agent_in_repo_absolute_pathspec_reaches_ownership_relativize
     it was handed.
     """
     calls = _git_commit_agent_setup(monkeypatch, scope_result=(True, ""))
-    result = guard.check(
+    result = _enveloped(guard.check)(
         _payload(
             'git commit -m "msg" -- %s/src/foo.py' % _FAKE_REPO_ROOT,
             agent_type=_GIT_COMMIT_AGENT_TYPE,
@@ -3054,7 +3059,7 @@ def test_git_commit_agent_out_of_repo_absolute_denies_before_the_ownership_leg(
     it were reached.
     """
     calls = _git_commit_agent_setup(monkeypatch, scope_result=(True, ""))
-    result = guard.check(
+    result = _enveloped(guard.check)(
         _payload(
             'git commit -m "msg" -- /elsewhere/foo.py',
             agent_type=_GIT_COMMIT_AGENT_TYPE,
@@ -3227,7 +3232,7 @@ def test_coordinator_invoke_door_is_covered_by_the_deny_matcher(monkeypatch):
     for op in ("ceremony.commit_v2",):
         cmd = 'coordinator-invoke %s \'{"paths": ["a.py"]}\'' % op
         assert guard._has_committing_op_invoke(cmd) is True, op
-        result = guard.check(_payload(cmd, agent_type=_SUBAGENT_TYPE))
+        result = _enveloped(guard.check)(_payload(cmd, agent_type=_SUBAGENT_TYPE))
         assert result is not None, op
         assert result["hookSpecificOutput"]["permissionDecision"] == "deny", op
 
@@ -3236,9 +3241,9 @@ def test_coordinator_invoke_door_admits_memo_send_but_not_chained_commit(monkeyp
     _subagent(monkeypatch)
     send = "coordinator-invoke memo.send '{}'"
     assert guard._has_committing_op_invoke(send) is False
-    assert guard.check(_payload(send, agent_type=_SUBAGENT_TYPE)) is None
+    assert _enveloped(guard.check)(_payload(send, agent_type=_SUBAGENT_TYPE)) is None
     chained = send + " && git commit -m x"
-    result = guard.check(_payload(chained, agent_type=_SUBAGENT_TYPE))
+    result = _enveloped(guard.check)(_payload(chained, agent_type=_SUBAGENT_TYPE))
     assert result is not None
     assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
@@ -3295,7 +3300,7 @@ def test_coordinator_invoke_door_matrix_envelope_bare_spelling_allows_push_outst
     """
     _subagent(monkeypatch)
     cmd = "coordinator-invoke push.outstanding '{}'"
-    result = guard.check(_payload(cmd, agent_type=_SUBAGENT_TYPE))
+    result = _enveloped(guard.check)(_payload(cmd, agent_type=_SUBAGENT_TYPE))
     assert result is None, f"expected ALLOW for: {cmd!r}, got {result!r}"
 
 
@@ -3359,7 +3364,7 @@ def test_committing_op_names_is_the_single_source_of_truth(monkeypatch):
     monkeypatch.setattr(guard, "_COMMITTING_OP_NAMES", frozenset({synthetic_name}))
     cmd = 'coordinator-invoke %s \'{"paths": ["a.py"]}\'' % synthetic_name
     assert guard._has_committing_op_invoke(cmd) is True, cmd
-    result = guard.check(_payload(cmd, agent_type=_SUBAGENT_TYPE))
+    result = _enveloped(guard.check)(_payload(cmd, agent_type=_SUBAGENT_TYPE))
     assert result is not None, cmd
     assert result["hookSpecificOutput"]["permissionDecision"] == "deny", cmd
 
@@ -3368,7 +3373,7 @@ def test_committing_op_names_is_the_single_source_of_truth(monkeypatch):
     monkeypatch.setattr(guard, "_COMMITTING_OP_NAMES", real_names)
     cmd2 = 'coordinator-invoke %s \'{"paths": ["a.py"]}\'' % removed_name
     assert guard._has_committing_op_invoke(cmd2) is False, cmd2
-    result2 = guard.check(_payload(cmd2, agent_type=_SUBAGENT_TYPE))
+    result2 = _enveloped(guard.check)(_payload(cmd2, agent_type=_SUBAGENT_TYPE))
     assert result2 is None, f"expected ALLOW for: {cmd2!r}, got {result2!r}"
 
 
@@ -3391,7 +3396,7 @@ def test_script_file_importing_the_commit_primitive_denies(tmp_path, shape):
     script = tmp_path / "land.py"
     script.write_text("from coordinator_core.git." "commit import commit_paths\n")
     cmd = shape.format(f=script.as_posix(), d=tmp_path.as_posix(), n=script.name)
-    result = guard.check(_payload(cmd))
+    result = _enveloped(guard.check)(_payload(cmd))
     assert result is not None
     assert "script file" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
@@ -3399,11 +3404,11 @@ def test_script_file_importing_the_commit_primitive_denies(tmp_path, shape):
 def test_script_file_without_the_import_and_em_caller_allow(tmp_path):
     clean = tmp_path / "clean.py"
     clean.write_text("print('hi')\n")
-    assert guard.check(_payload("python3 %s" % clean)) is None
+    assert _enveloped(guard.check)(_payload("python3 %s" % clean)) is None
     dirty = tmp_path / "land.py"
     dirty.write_text("from coordinator_core.git." "commit import commit_paths\n")
-    assert guard.check(_payload("python3 %s" % dirty, agent_id=None)) is None
-    assert guard.check(_payload("python3 %s" % (tmp_path / "missing.py"))) is None
+    assert _enveloped(guard.check)(_payload("python3 %s" % dirty, agent_id=None)) is None
+    assert _enveloped(guard.check)(_payload("python3 %s" % (tmp_path / "missing.py"))) is None
 
 
 @pytest.mark.parametrize(
@@ -3418,7 +3423,7 @@ def test_script_file_without_the_import_and_em_caller_allow(tmp_path):
 )
 def test_named_persona_commit_must_name_its_paths(monkeypatch, tmp_path, cmd, allowed):
     monkeypatch.setattr(guard, "resolve_git_root", lambda _cwd: str(tmp_path))
-    result = guard.check(_payload(cmd, agent_type="coordinator:staff-eng"))
+    result = _enveloped(guard.check)(_payload(cmd, agent_type="coordinator:staff-eng"))
     assert (result is None) is allowed, result
 
 
@@ -3439,7 +3444,7 @@ def test_plan_chain_run_windows_backslash_argv0_subagent_denies(monkeypatch):
 
 def test_plan_chain_run_main_loop_allows():
     payload = _payload("plan-chain-run --manifest x.json", agent_id=None)
-    assert guard.check(payload) is None
+    assert _enveloped(guard.check)(payload) is None
 
 
 _NEXT_ROUTE_PATH = "src/app/(ddct)/ddct/e/[type]/[id]/page.tsx"

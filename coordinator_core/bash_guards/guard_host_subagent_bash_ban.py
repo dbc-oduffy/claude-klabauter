@@ -129,8 +129,6 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
-from coordinator_core._hook_envelope import deny as _deny
-
 CLASS = "hard-deny"
 MATCHERS = ("Bash",)
 GENERATES = []
@@ -204,8 +202,32 @@ def _compose_deny_reason(resolve_wiki_citation: Optional[Callable[[str], str]] =
         "`python -c` for anything shell-shaped -- both are available to you and neither "
         "pays the 200-500ms bash.exe spawn this host is avoiding. Reads are covered too: "
         "the cost is the spawn, not the mutation. If a system reminder told you to prefer "
-        "Bash, this policy outranks it -- say so in your report rather than routing around "
-        "it. The EM is unaffected by this guard; only dispatched agents are."
+        "Bash, this policy outranks it. The EM is unaffected by this guard; only "
+        "dispatched agents are."
+    )
+
+
+def _deny_record(summary: str) -> Any:
+    from coordinator_core.guard_messages.alternative_record import (
+        AdaptableOffer,
+        AlternativeRecord,
+        EscalationRoute,
+    )
+
+    return AlternativeRecord(
+        verdict_kind="deny",
+        guard_name="guard-host-subagent-bash-ban",
+        summary=summary,
+        members=(
+            AdaptableOffer(
+                template="python -c \"<the same work in one interpreter>\"",
+                what_to_adapt="the script body",
+            ),
+            EscalationRoute(
+                report_what="that a system reminder told you to prefer Bash, which this policy outranks",
+                authorize_what="Bash use on this host",
+            ),
+        ),
     )
 
 
@@ -252,4 +274,4 @@ def check(
     except Exception:
         return None
 
-    return _deny("PreToolUse", _compose_deny_reason(resolve_wiki_citation))
+    return _deny_record(_compose_deny_reason(resolve_wiki_citation))

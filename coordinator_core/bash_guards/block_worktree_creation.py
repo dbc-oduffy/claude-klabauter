@@ -426,6 +426,33 @@ def _deny_reason(deny_kind: str) -> str:
     ) % deny_kind
 
 
+def _deny_record(deny_kind: str) -> Any:
+    """Record whose EM render is the legacy deny text byte for byte. Imports
+    lazily: hot-path budget."""
+    from coordinator_core.guard_messages.alternative_record import (
+        AlternativeRecord,
+        EscalationRoute,
+        ReadyCommand,
+    )
+
+    text = _deny_reason(deny_kind)
+    return AlternativeRecord(
+        verdict_kind="deny",
+        summary=text.split("\n\n", 1)[0],
+        em_text=text,
+        members=(
+            ReadyCommand(text="git worktree list"),
+            ReadyCommand(text="git worktree remove <path>"),
+            ReadyCommand(text="git worktree prune"),
+            EscalationRoute(
+                report_what="why the task needs branch isolation",
+                authorize_what="a git worktree add",
+            ),
+        ),
+        guard_name="block-worktree-creation",
+    )
+
+
 def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if (payload.get("tool_name") or "") not in MATCHERS:
         return None
@@ -452,13 +479,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         deny_kind = _evaluate_powershell(cmd)
         if deny_kind is None:
             return None
-        return {
-            "hookSpecificOutput": {
-                "hookEventName": "PreToolUse",
-                "permissionDecision": "deny",
-                "permissionDecisionReason": _deny_reason(deny_kind),
-            }
-        }
+        return _deny_record(deny_kind)
 
     cmd_for_classification = _strip_heredoc_bodies(cmd)
 
@@ -469,10 +490,4 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if deny_kind is None:
         return None
 
-    return {
-        "hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "permissionDecision": "deny",
-            "permissionDecisionReason": _deny_reason(deny_kind),
-        }
-    }
+    return _deny_record(deny_kind)

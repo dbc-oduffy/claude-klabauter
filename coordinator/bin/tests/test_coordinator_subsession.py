@@ -508,3 +508,34 @@ def test_require_fidelity_without_report_is_a_usage_error(tmp_path, monkeypatch,
     assert not record_path.exists()
     captured = capfd.readouterr()
     assert "require-fidelity" in captured.err
+
+
+def test_engine_root_resolves_from_mirror_shaped_tree_without_hooks_engine_root(
+    tmp_path, monkeypatch
+):
+    import shutil
+
+    bin_dir = tmp_path / "mirror" / "coordinator" / "bin"
+    bin_dir.mkdir(parents=True)
+    shutil.copy(_MODULE_PATH, bin_dir / "coordinator-subsession.py")
+    (bin_dir / "lib").symlink_to(_MODULE_PATH.parent / "lib", target_is_directory=True)
+    assert not (tmp_path / "mirror" / "coordinator" / "hooks" / "scripts" / "_engine_root.py").exists()
+
+    engine = _engine_root_dir(tmp_path)
+    (engine / "coordinator" / "bin").mkdir(parents=True)
+    (engine / "coordinator" / "bin" / "mise-prep-gate.py").write_text("", encoding="utf-8")
+    monkeypatch.setenv("COORDINATOR_ENGINE_ROOT", str(engine))
+
+    spec = importlib.util.spec_from_file_location(
+        "coordinator_subsession_mirror", bin_dir / "coordinator-subsession.py"
+    )
+    mirror = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mirror)
+
+    resolved = mirror._load_engine_root()
+    assert resolved.resolve_claude_klabauter_root() == str(engine)
+    assert resolved.resolve_engine_bin_script("mise-prep-gate.py") == str(
+        engine / "coordinator" / "bin" / "mise-prep-gate.py"
+    )
+    assert resolved.resolve_engine_bin_script("absent-script.py") is None
+    mirror._check_engine({})

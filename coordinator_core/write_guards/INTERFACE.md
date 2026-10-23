@@ -31,7 +31,7 @@ advisory:
 
 ## Fidelity rules (faithful engine-ification, NOT redesign — mirror subagent_sandbox/engine.py's discipline)
 1. Do NOT change any deny CONDITION. The blocked set must be identical before/after.
-2. Preserve every `permissionDecisionReason` / advisory string BYTE-FOR-BYTE from the `.sh`.
+2. New and migrated message sites build an `AlternativeRecord` (`coordinator_core/guard_messages`); `bash_guards/dispatch.py`'s render is the envelope's only author. Byte-for-byte preservation from the `.sh` was a porting rule and applies to unmigrated sites only; a migrated site keeps its legacy EM string byte for byte through `AlternativeRecord.em_text`, a migration bridge whose retirement (EM render from the typed members) is a tracked debt row, not a standing carve-out.
 3. Preserve every escape-hatch env var (grep the `.sh` for `COORDINATOR_`/`OVERRIDE`/`ALLOW`) — read `os.environ` exactly as bash read `$VAR`.
 4. Preserve side-effects (state-file writes / log appends), wrapped so a failure can NEVER flip the decision (mirror bash `|| true`).
 5. Subagent detection: `payload.get("agent_id")` present ⇒ subagent (bare-hex `^[a-f0-9]{12,}$` or named-teammate). Replicate the `.sh`'s exact detection source.

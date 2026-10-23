@@ -120,6 +120,7 @@ from coordinator_core.bash_guards._sentinel_creation_guard import (
     indirection_deny_reason,
     REASON_INDIRECTION,
     SentinelCreationDetector,
+    sentinel_record,
 )
 from coordinator_core.bash_guards._dialect import Dialect, dialect_from_tool_name
 from coordinator_core.bash_guards._tool_names import COMMAND_TOOL_NAMES
@@ -189,10 +190,23 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if not deny:
         return None
 
-    return {
-        "hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "permissionDecision": "deny",
-            "permissionDecisionReason": _deny_reason(cmd, reason_kind, reason_class),
-        }
-    }
+    from coordinator_core.guard_messages.alternative_record import AdaptableOffer
+
+    if reason_class == REASON_INDIRECTION:
+        offer = AdaptableOffer(
+            template="./path/to/script.py",
+            what_to_adapt="the script path (executable, shebang)",
+        )
+    else:
+        offer = AdaptableOffer(
+            template="a report to the EM/PM naming why a disarm is warranted",
+            what_to_adapt="the reason",
+        )
+    return sentinel_record(
+        "block-disarm-marker-sentinel-creation",
+        "deny",
+        _deny_reason(cmd, reason_kind, reason_class),
+        offer,
+        report_what="why a disarm is warranted",
+        authorize_what="the disarm marker",
+    )

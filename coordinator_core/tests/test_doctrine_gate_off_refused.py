@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 from coordinator_core import machine_profile as mp
+from coordinator_core.guard_messages.testing import envelope_of
 from coordinator_core.bash_guards import block_approval_sentinel_creation as bash_guard
 from coordinator_core.write_guards import guard_doctrine_surface_edits as write_guard
 
@@ -66,6 +67,7 @@ def _bash(cmd, repo, tool="Bash"):
 
 
 def _deny(result):
+    result = envelope_of(result, "em")
     return bool(result) and result["hookSpecificOutput"].get("permissionDecision") == "deny"
 
 

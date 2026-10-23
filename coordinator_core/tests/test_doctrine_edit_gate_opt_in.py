@@ -8,6 +8,7 @@ import json
 import pytest
 
 from coordinator_core import machine_profile as mp
+from coordinator_core.guard_messages.testing import envelope_of
 from coordinator_core.bash_guards import (
     block_approval_sentinel_creation,
     guard_doctrine_surface_bash_write,
@@ -75,6 +76,7 @@ def _bash_write_payload():
 
 
 def _is_deny(result):
+    result = envelope_of(result, "em")
     return bool(result) and result["hookSpecificOutput"].get("permissionDecision") == "deny"
 
 

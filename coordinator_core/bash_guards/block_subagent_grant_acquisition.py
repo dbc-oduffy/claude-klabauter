@@ -283,39 +283,40 @@ def _evaluate(cmd: str) -> Optional[str]:
     return None
 
 
-def _deny_reason(cmd: str, deny_kind: str) -> str:
-    """Design-as-offer deny text for a recognised grant-acquisition
-    invocation carrying an `agent_id` (see module docstring "IDENTITY-GATE
-    POSTURE" -- this only ever renders for a dispatched subagent, never the
-    EM).
+def _deny_record(cmd: str, deny_kind: str):
+    """Deny record for a recognised grant-acquisition invocation carrying an
+    `agent_id` (see module docstring "IDENTITY-GATE POSTURE": only a
+    dispatched subagent reaches this).
 
-    `deny_kind` and `cmd` are accepted for call-site parity with the
-    classifier but deliberately UNUSED in the rendered text below -- a
-    dispatched subagent is never shown the governed module path, the
-    gated subcommand, or its own attempted command, because any of those
-    is a pasteable recipe to the one audience this guard exists to keep in
-    the dark (see module docstring "THE HOLE THIS CLOSES" -- this is the
-    exact self-clearing shape confirmed live 2026-08-08). Tone per this
-    chunk's brief, functional not decorative: this deny fires almost
-    exclusively on agents acting in good faith, so it does not frame the
-    caller's own work as suspect. It states the STRUCTURAL reason a
-    dispatched subagent cannot itself confirm PM ratification -- it never
-    speaks to the PM directly, only hears what its EM tells it, true of
-    every subagent on every dispatch -- and hands the agent the pieces its
-    BLOCKED report needs, never a command the agent could run itself to
-    clear its own gate. Matches the register of
-    `block_unauthorized_claude_md_write._deny_reason` (C4), read as the
-    tone precedent for this text.
+    `deny_kind` and `cmd` are deliberately UNUSED: the governed module path,
+    the gated subcommand and the attempted command are a pasteable recipe to
+    the audience this guard keeps in the dark. The record carries the
+    structural reason and an escalation route, never a command the subagent
+    could run to clear its own gate.
     """
     del deny_kind, cmd
-    return (
-        "BLOCKED: CLAUDE.md write-grant acquisition is EM-only. Report "
-        "BLOCKED to your EM: inherit its grant via shared-session-id; EM "
-        "ratifies with PM, then acquires before dispatch."
+    from coordinator_core.guard_messages.alternative_record import (
+        AlternativeRecord,
+        EscalationRoute,
+    )
+
+    return AlternativeRecord(
+        verdict_kind="deny",
+        guard_name="block-subagent-grant-acquisition",
+        summary=(
+            "BLOCKED: CLAUDE.md write-grant acquisition is EM-only. Inherit "
+            "your EM's grant via shared-session-id."
+        ),
+        members=(
+            EscalationRoute(
+                report_what="BLOCKED to your EM",
+                authorize_what="the grant (EM ratifies with PM, then acquires before dispatch)",
+            ),
+        ),
     )
 
 
-def check(payload: dict) -> Optional[dict]:
+def check(payload: dict):
     """Evaluate the grant-ACQUISITION gate against a PreToolUse payload.
 
     Identity-gated to subagents only -- fail CLOSED on a present-but-
@@ -384,10 +385,4 @@ def check(payload: dict) -> Optional[dict]:
     if deny_kind is None:
         return None
 
-    return {
-        "hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "permissionDecision": "deny",
-            "permissionDecisionReason": _deny_reason(cmd, deny_kind),
-        }
-    }
+    return _deny_record(cmd, deny_kind)

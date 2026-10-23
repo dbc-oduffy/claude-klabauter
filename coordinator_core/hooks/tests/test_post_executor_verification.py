@@ -9,6 +9,7 @@ import tempfile
 import pytest
 
 from coordinator_core.bash_guards import guard_post_executor_verification as g
+from coordinator_core.guard_messages.testing import envelope_of
 from coordinator_core.hooks import nudge_em_code_dispatch as nd
 from coordinator_core.hooks.dispatch_escape import ESCAPE_LOG_NAME
 
@@ -57,6 +58,7 @@ def _write(repo, path: str, tool="Write", content: str = _VERIFYING) -> dict:
 
 
 def _denied(out) -> bool:
+    out = envelope_of(out, "em")
     return out is not None and out["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
@@ -68,7 +70,7 @@ def test_no_executor_yet_pytest_is_free(repo) -> None:
 def test_first_pytest_allowed_second_denied(repo) -> None:
     _executor_ran(repo)
     assert g.check(_bash(repo, "python -m pytest a.py")) is None
-    out = g.check(_bash(repo, "pytest b.py -q"))
+    out = envelope_of(g.check(_bash(repo, "pytest b.py -q")), "em")
     assert _denied(out)
     reason = out["hookSpecificOutput"]["permissionDecisionReason"]
     assert "engine-ask" not in reason and "sizing" not in reason
@@ -485,7 +487,7 @@ def test_unscoped_pytest_after_workflow_run_still_denied(repo, monkeypatch, tmp_
     _executor_ran(repo)
     _workflow_run_record(monkeypatch, tmp_path)
     assert g.check(_bash(repo, "pytest")) is None
-    out = g.check(_bash(repo, "pytest"))
+    out = envelope_of(g.check(_bash(repo, "pytest")), "em")
     assert _denied(out)
     assert "engine-ask" not in out["hookSpecificOutput"]["permissionDecisionReason"]
 
@@ -493,7 +495,7 @@ def test_unscoped_pytest_after_workflow_run_still_denied(repo, monkeypatch, tmp_
 def test_probe_shares_pytest_counter(repo) -> None:
     _executor_ran(repo)
     assert g.check(_bash(repo, "pytest a.py")) is None
-    out = g.check(_bash(repo, "python3 -c 'import pkg, pytest'"))
+    out = envelope_of(g.check(_bash(repo, "python3 -c 'import pkg, pytest'")), "em")
     assert _denied(out)
     assert "honoured once." in out["hookSpecificOutput"]["permissionDecisionReason"]
 
@@ -618,7 +620,7 @@ def test_measure_wrapped_scoped_pytest_gets_the_scoped_exemption(repo) -> None:
 def test_both_deny_halves_name_the_measurement_route(repo) -> None:
     _executor_ran(repo)
     assert g.check(_bash(repo, "pytest a.py")) is None
-    bash_reason = g.check(_bash(repo, "pytest b.py"))["hookSpecificOutput"]["permissionDecisionReason"]
+    bash_reason = envelope_of(g.check(_bash(repo, "pytest b.py")), "em")["hookSpecificOutput"]["permissionDecisionReason"]
     write_reason = nd.op(_write(repo, str(repo / "scratch" / "probe.py")))["hookSpecificOutput"]["permissionDecisionReason"]
     for reason in (bash_reason, write_reason):
         assert "coordinator_core.benchmarks.measure -- <argv>" in reason

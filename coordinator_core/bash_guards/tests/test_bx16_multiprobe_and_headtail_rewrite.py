@@ -33,6 +33,11 @@ import pytest
 from coordinator_core.bash_guards import dispatch_checks as dc
 from coordinator_core.bash_guards import guard_head_tail_rewrite as ht
 from coordinator_core.win_portability import no_console_creationflags
+from coordinator_core.guard_messages.testing import envelope_of
+
+
+def _enveloped(check):
+    return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -145,18 +150,18 @@ class TestPython3InvocationImportErrorFallback:
         assert dc._bt_python3_invocation() == "python3"
     def test_never_denies_on_recognized_chain(self):
         cmd = 'echo "=== SESSION FACTS ==="; pwd; whoami; date; uname'
-        out = dc.check_multiprobe_banner_rewrite(cmd)
+        out = _enveloped(dc.check_multiprobe_banner_rewrite)(cmd)
         assert out["hookSpecificOutput"]["permissionDecision"] != "deny"
         assert "updatedInput" in out["hookSpecificOutput"]
 
     def test_unrecognized_probe_emits_nothing(self):
         cmd = 'echo "=== FACTS ==="; git log -1; pwd'
-        out = dc.check_multiprobe_banner_rewrite(cmd)
+        out = _enveloped(dc.check_multiprobe_banner_rewrite)(cmd)
         assert out is None
 
     def test_bare_facts_equivalence(self, tmp_path):
         cmd = 'echo "=== FACTS ==="; pwd; whoami'
-        out = dc.check_multiprobe_banner_rewrite(cmd)
+        out = _enveloped(dc.check_multiprobe_banner_rewrite)(cmd)
         rewrite = out["hookSpecificOutput"]["updatedInput"]["command"]
 
         original = _run_shell(cmd)
@@ -165,7 +170,7 @@ class TestPython3InvocationImportErrorFallback:
 
     def test_date_and_uname_a_equivalence(self):
         cmd = "date; uname -a"
-        out = dc.check_multiprobe_banner_rewrite("echo \"=== X === Y ===\"; " + cmd)
+        out = _enveloped(dc.check_multiprobe_banner_rewrite)("echo \"=== X === Y ===\"; " + cmd)
         rewrite = out["hookSpecificOutput"]["updatedInput"]["command"]
         original = _run_shell("echo \"=== X === Y ===\"; " + cmd)
         rewritten = _run_python_c(rewrite)
@@ -192,7 +197,7 @@ class TestPython3InvocationImportErrorFallback:
             'echo "=== SESSION FACTS ==="; git rev-parse --abbrev-ref HEAD; '
             "git status --porcelain; pwd"
         )
-        out = dc.check_multiprobe_banner_rewrite(cmd)
+        out = _enveloped(dc.check_multiprobe_banner_rewrite)(cmd)
         rewrite = out["hookSpecificOutput"]["updatedInput"]["command"]
         script = rewrite[len(_payload_prefix()) : -1]
         assert script.count("subprocess.run([\"git\"") == 1
@@ -204,27 +209,27 @@ class TestPython3InvocationImportErrorFallback:
 
     def test_quoted_banner_marker_not_mis_split(self):
         cmd = 'echo "=== a ; b ==="; pwd; whoami'
-        out = dc.check_multiprobe_banner_rewrite(cmd)
+        out = _enveloped(dc.check_multiprobe_banner_rewrite)(cmd)
         assert out["hookSpecificOutput"]["permissionDecision"] != "deny"
         rewrite = out["hookSpecificOutput"]["updatedInput"]["command"]
         assert "a ; b" in rewrite
 
     def test_piped_stage_inside_banner_emits_nothing(self):
         cmd = 'echo "=== FACTS ==="; pwd | cat; whoami'
-        out = dc.check_multiprobe_banner_rewrite(cmd)
+        out = _enveloped(dc.check_multiprobe_banner_rewrite)(cmd)
         assert out is None
 
     def test_no_banner_shape_returns_none(self):
-        assert dc.check_multiprobe_banner_rewrite("pwd; whoami") is None
-        assert dc.check_multiprobe_banner_rewrite("") is None
+        assert _enveloped(dc.check_multiprobe_banner_rewrite)("pwd; whoami") is None
+        assert _enveloped(dc.check_multiprobe_banner_rewrite)("") is None
 
     def test_override_disables_check(self, monkeypatch):
         monkeypatch.setenv("COORDINATOR_ALLOW_MULTIPROBE_BANNER", "1")
         cmd = 'echo "=== FACTS ==="; pwd; whoami; date'
-        assert dc.check_multiprobe_banner_rewrite(cmd) is None
+        assert _enveloped(dc.check_multiprobe_banner_rewrite)(cmd) is None
 
     def test_unparseable_command_returns_none(self):
-        assert dc.check_multiprobe_banner_rewrite("echo 'unterminated") is None
+        assert _enveloped(dc.check_multiprobe_banner_rewrite)("echo 'unterminated") is None
 
 
 def _run_python_c_with_faked_git_status(command: str, porcelain_lines) -> str:
@@ -270,7 +275,7 @@ class TestGitFactDetachedHeadAndUnbornBranchFidelity:
     )
 
     def test_detached_head_sentinel_mapped_per_form(self):
-        out = dc.check_multiprobe_banner_rewrite(self._cmd)
+        out = _enveloped(dc.check_multiprobe_banner_rewrite)(self._cmd)
         rewrite = out["hookSpecificOutput"]["updatedInput"]["command"]
         result = _run_python_c_with_faked_git_status(
             rewrite, ["# branch.oid abc123", "# branch.head (detached)"]
@@ -281,7 +286,7 @@ class TestGitFactDetachedHeadAndUnbornBranchFidelity:
         assert lines[3] == ""
 
     def test_unborn_branch_sentinel_mapped_per_form(self):
-        out = dc.check_multiprobe_banner_rewrite(self._cmd)
+        out = _enveloped(dc.check_multiprobe_banner_rewrite)(self._cmd)
         rewrite = out["hookSpecificOutput"]["updatedInput"]["command"]
         result = _run_python_c_with_faked_git_status(
             rewrite, ["# branch.oid (initial)", "# branch.head master"]
@@ -296,7 +301,7 @@ class TestGitStatusPorcelainV2RenameAndSpacePathFidelity:
 
     def test_rename_record_reconstructed_as_short_style_arrow_line(self):
         cmd = 'echo "=== X ==="; git status --porcelain; pwd'
-        out = dc.check_multiprobe_banner_rewrite(cmd)
+        out = _enveloped(dc.check_multiprobe_banner_rewrite)(cmd)
         rewrite = out["hookSpecificOutput"]["updatedInput"]["command"]
         result = _run_python_c_with_faked_git_status(
             rewrite,
@@ -311,7 +316,7 @@ class TestGitStatusPorcelainV2RenameAndSpacePathFidelity:
 
     def test_modified_path_containing_space_not_fragmented(self):
         cmd = 'echo "=== X ==="; git status --porcelain; pwd'
-        out = dc.check_multiprobe_banner_rewrite(cmd)
+        out = _enveloped(dc.check_multiprobe_banner_rewrite)(cmd)
         rewrite = out["hookSpecificOutput"]["updatedInput"]["command"]
         result = _run_python_c_with_faked_git_status(
             rewrite,
@@ -325,7 +330,7 @@ class TestGitStatusPorcelainV2RenameAndSpacePathFidelity:
 
     def test_untracked_path_containing_space_not_fragmented(self):
         cmd = 'echo "=== X ==="; git status --porcelain; pwd'
-        out = dc.check_multiprobe_banner_rewrite(cmd)
+        out = _enveloped(dc.check_multiprobe_banner_rewrite)(cmd)
         rewrite = out["hookSpecificOutput"]["updatedInput"]["command"]
         result = _run_python_c_with_faked_git_status(
             rewrite,
@@ -347,7 +352,7 @@ class TestDatePortableAcrossPlatforms:
 
     def test_date_rewrite_never_raises_and_matches_real_date(self):
         cmd = 'echo "=== FACTS ==="; pwd; date'
-        out = dc.check_multiprobe_banner_rewrite(cmd)
+        out = _enveloped(dc.check_multiprobe_banner_rewrite)(cmd)
         rewrite = out["hookSpecificOutput"]["updatedInput"]["command"]
         original = _run_shell(cmd)
         rewritten = _run_python_c(rewrite)
@@ -361,7 +366,7 @@ class TestDatePortableAcrossPlatforms:
 
     def test_date_rewrite_uses_no_percent_e_directive(self):
         cmd = 'echo "=== FACTS ==="; pwd; date'
-        out = dc.check_multiprobe_banner_rewrite(cmd)
+        out = _enveloped(dc.check_multiprobe_banner_rewrite)(cmd)
         rewrite = out["hookSpecificOutput"]["updatedInput"]["command"]
         script = rewrite[len(_payload_prefix()) : -1]
         assert "%e" not in script
@@ -399,12 +404,12 @@ class TestHeadTailPlumbingRewrite:
             "cat file | head",
             "a | b | c | head",
         ]:
-            out = ht.check_head_tail_plumbing_rewrite(cmd)
+            out = _enveloped(ht.check_head_tail_plumbing_rewrite)(cmd)
             assert out is None or out["hookSpecificOutput"]["permissionDecision"] != "deny"
 
     def test_ls_head_equivalence(self, census_dir):
         cmd = "ls %s | head -n 2" % _posix(census_dir)
-        out = ht.check_head_tail_plumbing_rewrite(cmd)
+        out = _enveloped(ht.check_head_tail_plumbing_rewrite)(cmd)
         rewrite = out["hookSpecificOutput"]["updatedInput"]["command"]
         original = _run_shell(cmd)
         rewritten = _run_python_c(rewrite)
@@ -412,7 +417,7 @@ class TestHeadTailPlumbingRewrite:
 
     def test_find_head_equivalence_sorted(self, census_dir):
         cmd = "find %s -type f -name '*.txt' | head -n 5" % _posix(census_dir)
-        out = ht.check_head_tail_plumbing_rewrite(cmd)
+        out = _enveloped(ht.check_head_tail_plumbing_rewrite)(cmd)
         rewrite = out["hookSpecificOutput"]["updatedInput"]["command"]
         original = _run_shell(
             "find %s -type f -name '*.txt' | sort | head -n 5" % _posix(census_dir)
@@ -422,7 +427,7 @@ class TestHeadTailPlumbingRewrite:
 
     def test_grep_tail_equivalence_sorted(self, census_dir):
         cmd = "grep -rn TODO %s | tail -n 1" % _posix(census_dir)
-        out = ht.check_head_tail_plumbing_rewrite(cmd)
+        out = _enveloped(ht.check_head_tail_plumbing_rewrite)(cmd)
         rewrite = out["hookSpecificOutput"]["updatedInput"]["command"]
         original = _run_shell("grep -rn TODO %s | sort | tail -n 1" % _posix(census_dir))
         rewritten = _run_python_c(rewrite)
@@ -430,12 +435,12 @@ class TestHeadTailPlumbingRewrite:
 
     def test_tail_zero_does_not_return_everything(self, census_dir):
         cmd = "ls %s | tail -n 0" % _posix(census_dir)
-        out = ht.check_head_tail_plumbing_rewrite(cmd)
+        out = _enveloped(ht.check_head_tail_plumbing_rewrite)(cmd)
         rewrite = out["hookSpecificOutput"]["updatedInput"]["command"]
         assert _run_python_c(rewrite) == ""
 
     def test_unrecognized_upstream_silent_not_advised(self):
-        assert ht.check_head_tail_plumbing_rewrite("sort weird.txt | head -n 3") is None
+        assert _enveloped(ht.check_head_tail_plumbing_rewrite)("sort weird.txt | head -n 3") is None
 
     def test_grep_dash_w_upstream_silent_not_advised(self, census_dir):
         """Finding 4: `check_head_tail_plumbing_rewrite`'s grep-upstream
@@ -444,18 +449,18 @@ class TestHeadTailPlumbingRewrite:
         too, not just at the standalone-grep entry point, since dropping
         `-w` from `_GREP_SUBSTITUTABLE_SHORT_FLAGS` closes both callers at
         once. No rewrite means no advisory either (silenced branch)."""
-        out = ht.check_head_tail_plumbing_rewrite(
+        out = _enveloped(ht.check_head_tail_plumbing_rewrite)(
             "grep -wrn TODO %s | head -n 5" % _posix(census_dir)
         )
         assert out is None
 
     def test_unrecognized_count_form_advises(self, census_dir):
-        out = ht.check_head_tail_plumbing_rewrite("ls %s | head -c 10" % _posix(census_dir))
+        out = _enveloped(ht.check_head_tail_plumbing_rewrite)("ls %s | head -c 10" % _posix(census_dir))
         assert out is not None
         assert "updatedInput" not in out["hookSpecificOutput"]
 
     def test_composed_three_stage_pipeline_silent_not_advised(self, census_dir):
-        out = ht.check_head_tail_plumbing_rewrite(
+        out = _enveloped(ht.check_head_tail_plumbing_rewrite)(
             "ls %s | sort | head -n 2" % _posix(census_dir)
         )
         assert out is None
@@ -463,7 +468,7 @@ class TestHeadTailPlumbingRewrite:
     def test_quoted_pipe_character_not_mis_split(self, census_dir):
         (census_dir / "pipe.txt").write_text("a|b marker\n")
         cmd = "grep -Frn 'a|b' %s | head -n 1" % _posix(census_dir)
-        out = ht.check_head_tail_plumbing_rewrite(cmd)
+        out = _enveloped(ht.check_head_tail_plumbing_rewrite)(cmd)
         assert out is not None
         assert out["hookSpecificOutput"]["permissionDecision"] != "deny"
         rewrite = out["hookSpecificOutput"]["updatedInput"]["command"]
@@ -475,20 +480,20 @@ class TestHeadTailPlumbingRewrite:
     def test_quoted_pipe_bare_bre_pattern_refuses_not_mistranslates(self, census_dir):
         (census_dir / "pipe.txt").write_text("a|b marker\n")
         cmd = "grep -rn 'a|b' %s | head -n 1" % _posix(census_dir)
-        out = ht.check_head_tail_plumbing_rewrite(cmd)
+        out = _enveloped(ht.check_head_tail_plumbing_rewrite)(cmd)
         assert out is None
 
     def test_bare_pipeline_without_head_tail_returns_none(self, census_dir):
-        assert ht.check_head_tail_plumbing_rewrite("ls %s" % _posix(census_dir)) is None
-        assert ht.check_head_tail_plumbing_rewrite("") is None
+        assert _enveloped(ht.check_head_tail_plumbing_rewrite)("ls %s" % _posix(census_dir)) is None
+        assert _enveloped(ht.check_head_tail_plumbing_rewrite)("") is None
 
     def test_override_disables_check(self, monkeypatch, census_dir):
         monkeypatch.setenv("COORDINATOR_ALLOW_HEAD_TAIL_PLUMBING", "1")
         cmd = "ls %s | head -n 2" % _posix(census_dir)
-        assert ht.check_head_tail_plumbing_rewrite(cmd) is None
+        assert _enveloped(ht.check_head_tail_plumbing_rewrite)(cmd) is None
 
     def test_bare_head_no_pipe_returns_none(self, census_dir):
-        assert ht.check_head_tail_plumbing_rewrite("head %s/a.txt" % _posix(census_dir)) is None
+        assert _enveloped(ht.check_head_tail_plumbing_rewrite)("head %s/a.txt" % _posix(census_dir)) is None
 
 
 class TestRedirectionDeclinesRewriteNotRewritesWrong(object):
@@ -506,7 +511,7 @@ class TestRedirectionDeclinesRewriteNotRewritesWrong(object):
     """
 
     def _declines_rewrite(self, cmd: str) -> None:
-        assert ht.check_head_tail_plumbing_rewrite(cmd) is None
+        assert _enveloped(ht.check_head_tail_plumbing_rewrite)(cmd) is None
 
     def test_exact_live_repro_command(self, census_dir):
         self._declines_rewrite("ls %s 2>/dev/null | head -40" % _posix(census_dir))
@@ -538,7 +543,7 @@ class TestRedirectionDeclinesRewriteNotRewritesWrong(object):
         self._declines_rewrite("grep -rn TODO %s 2>/dev/null | head -n 5" % _posix(census_dir))
 
     def test_standalone_grep_rewrite_also_declines(self, census_dir):
-        out = dc.check_grep_via_bash_rewrite(
+        out = _enveloped(dc.check_grep_via_bash_rewrite)(
             "grep -rn TODO %s 2>/dev/null" % _posix(census_dir)
         )
         if out is not None:
@@ -546,7 +551,7 @@ class TestRedirectionDeclinesRewriteNotRewritesWrong(object):
             assert "updatedInput" not in out["hookSpecificOutput"]
 
     def test_unredirected_control_still_rewrites(self, census_dir):
-        out = ht.check_head_tail_plumbing_rewrite("ls %s | head -n 2" % _posix(census_dir))
+        out = _enveloped(ht.check_head_tail_plumbing_rewrite)("ls %s | head -n 2" % _posix(census_dir))
         assert out is not None
         assert "updatedInput" in out["hookSpecificOutput"]
 
@@ -554,7 +559,7 @@ class TestRedirectionDeclinesRewriteNotRewritesWrong(object):
 class TestGeneratedPayloadShellSafety:
     def test_banner_rewrite_has_no_raw_single_quote_in_payload(self):
         cmd = 'echo "=== FACTS ==="; git rev-parse --abbrev-ref HEAD; git status; pwd; whoami'
-        out = dc.check_multiprobe_banner_rewrite(cmd)
+        out = _enveloped(dc.check_multiprobe_banner_rewrite)(cmd)
         command = out["hookSpecificOutput"]["updatedInput"]["command"]
         prefix = _payload_prefix()
         assert command.startswith(prefix) and command.endswith("'")
@@ -568,7 +573,7 @@ class TestGeneratedPayloadShellSafety:
             "find %s -type f | tail -n 1" % _posix(census_dir),
             "grep -rn TODO %s | head -n 1 -l" % _posix(census_dir),
         ]:
-            out = ht.check_head_tail_plumbing_rewrite(cmd)
+            out = _enveloped(ht.check_head_tail_plumbing_rewrite)(cmd)
             if out is None or "updatedInput" not in out["hookSpecificOutput"]:
                 continue
             command = out["hookSpecificOutput"]["updatedInput"]["command"]
@@ -577,14 +582,14 @@ class TestGeneratedPayloadShellSafety:
 
     def test_banner_rewrite_parses_under_current_interpreter(self):
         cmd = 'echo "=== FACTS ==="; pwd; whoami; date; uname'
-        out = dc.check_multiprobe_banner_rewrite(cmd)
+        out = _enveloped(dc.check_multiprobe_banner_rewrite)(cmd)
         command = out["hookSpecificOutput"]["updatedInput"]["command"]
         inner = command[len(_payload_prefix()) : -1]
         compile(inner, "<test>", "exec")
 
     def test_head_tail_rewrite_parses_under_current_interpreter(self, census_dir):
         cmd = "grep -rn TODO %s | tail -n 1" % _posix(census_dir)
-        out = ht.check_head_tail_plumbing_rewrite(cmd)
+        out = _enveloped(ht.check_head_tail_plumbing_rewrite)(cmd)
         command = out["hookSpecificOutput"]["updatedInput"]["command"]
         inner = command[len(_payload_prefix()) : -1]
         compile(inner, "<test>", "exec")
@@ -623,7 +628,7 @@ class TestHeadTailRewriteDifferentialEquivalence:
         parsed = ht._bt_parse_find_census_segment(up_tokens)
         old = _exec_script_text(_old_style_head_tail_script("find", parsed, True, n))
         cmd = "find %s -type f -name '*.txt' | head -n %d" % (_posix(big_tree), n)
-        out = ht.check_head_tail_plumbing_rewrite(cmd)
+        out = _enveloped(ht.check_head_tail_plumbing_rewrite)(cmd)
         new = _run_python_c(out["hookSpecificOutput"]["updatedInput"]["command"])
         assert old == new
 
@@ -633,7 +638,7 @@ class TestHeadTailRewriteDifferentialEquivalence:
         parsed = ht._bt_parse_find_census_segment(up_tokens)
         old = _exec_script_text(_old_style_head_tail_script("find", parsed, False, n))
         cmd = "find %s -type f -name '*.txt' | tail -n %d" % (_posix(big_tree), n)
-        out = ht.check_head_tail_plumbing_rewrite(cmd)
+        out = _enveloped(ht.check_head_tail_plumbing_rewrite)(cmd)
         new = _run_python_c(out["hookSpecificOutput"]["updatedInput"]["command"])
         assert old == new
 
@@ -643,7 +648,7 @@ class TestHeadTailRewriteDifferentialEquivalence:
         parsed = dc._bt_grep_flags_and_operands(up_tokens)
         old = _exec_script_text(_old_style_head_tail_script("grep", parsed, True, n))
         cmd = "grep -rn TODO %s | head -n %d" % (_posix(big_tree), n)
-        out = ht.check_head_tail_plumbing_rewrite(cmd)
+        out = _enveloped(ht.check_head_tail_plumbing_rewrite)(cmd)
         new = _run_python_c(out["hookSpecificOutput"]["updatedInput"]["command"])
         assert old == new
 
@@ -653,7 +658,7 @@ class TestHeadTailRewriteDifferentialEquivalence:
         parsed = dc._bt_grep_flags_and_operands(up_tokens)
         old = _exec_script_text(_old_style_head_tail_script("grep", parsed, False, n))
         cmd = "grep -rn TODO %s | tail -n %d" % (_posix(big_tree), n)
-        out = ht.check_head_tail_plumbing_rewrite(cmd)
+        out = _enveloped(ht.check_head_tail_plumbing_rewrite)(cmd)
         new = _run_python_c(out["hookSpecificOutput"]["updatedInput"]["command"])
         assert old == new
 
@@ -667,7 +672,7 @@ class TestHeadTailRewriteDifferentialEquivalence:
             )
             verb = "head" if is_head else "tail"
             cmd = "ls %s | %s -n %d" % (_posix(big_tree), verb, n)
-            out = ht.check_head_tail_plumbing_rewrite(cmd)
+            out = _enveloped(ht.check_head_tail_plumbing_rewrite)(cmd)
             new = _run_python_c(out["hookSpecificOutput"]["updatedInput"]["command"])
             assert old == new, (verb, n)
 
@@ -693,7 +698,7 @@ class TestHeadShortCircuitStopsEarly:
 
         n = 3
         cmd = "find %s -type f -name 'match.txt' | head -n %d" % (_posix(tmp_path), n)
-        out = ht.check_head_tail_plumbing_rewrite(cmd)
+        out = _enveloped(ht.check_head_tail_plumbing_rewrite)(cmd)
         result = _run_python_c(out["hookSpecificOutput"]["updatedInput"]["command"])
 
         assert len(result.strip().splitlines()) == n
@@ -719,7 +724,7 @@ class TestHeadShortCircuitStopsEarly:
 
         n = 4
         cmd = "grep -rn TODO %s | head -n %d" % (_posix(tmp_path), n)
-        out = ht.check_head_tail_plumbing_rewrite(cmd)
+        out = _enveloped(ht.check_head_tail_plumbing_rewrite)(cmd)
         result = _run_python_c(out["hookSpecificOutput"]["updatedInput"]["command"])
 
         assert len(result.strip().splitlines()) == n
@@ -744,7 +749,7 @@ class TestHeadShortCircuitStopsEarly:
         monkeypatch.setattr(os, "walk", counting_walk)
 
         cmd = "find %s -type f -name 'match.txt' | tail -n 3" % _posix(tmp_path)
-        out = ht.check_head_tail_plumbing_rewrite(cmd)
+        out = _enveloped(ht.check_head_tail_plumbing_rewrite)(cmd)
         result = _run_python_c(out["hookSpecificOutput"]["updatedInput"]["command"])
 
         assert len(result.strip().splitlines()) == 3

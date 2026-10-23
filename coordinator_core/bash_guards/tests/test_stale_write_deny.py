@@ -8,6 +8,11 @@ import pytest
 
 from coordinator_core.bash_guards import dispatch_checks
 from coordinator_core.session import touch_record
+from coordinator_core.guard_messages.testing import envelope_of
+
+
+def _enveloped(check):
+    return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 
 @pytest.fixture()
@@ -34,7 +39,7 @@ class TestStaleWriteDeny:
         _record_baseline(repo, "sess-A", "F.txt", abs_path)
         _write_file(repo, "F.txt", "peer changed this\n")
 
-        result = dispatch_checks.check_stale_write(
+        result = _enveloped(dispatch_checks.check_stale_write)(
             "cat > F.txt <<'EOF'\nfoo\nEOF", "sess-A", repo
         )
 
@@ -49,7 +54,7 @@ class TestStaleWriteDeny:
         _record_baseline(repo, "sess-A", "F.txt", abs_path)
         _write_file(repo, "F.txt", "peer changed this\n")
 
-        result = dispatch_checks.check_stale_write("echo hi > F.txt", "sess-A", repo)
+        result = _enveloped(dispatch_checks.check_stale_write)("echo hi > F.txt", "sess-A", repo)
 
         assert result is not None
         assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
@@ -59,7 +64,7 @@ class TestStaleWriteDeny:
         _record_baseline(repo, "sess-A", "F.txt", abs_path)
         _write_file(repo, "F.txt", "peer changed this\n")
 
-        result = dispatch_checks.check_stale_write("echo hi | tee F.txt", "sess-A", repo)
+        result = _enveloped(dispatch_checks.check_stale_write)("echo hi | tee F.txt", "sess-A", repo)
 
         assert result is not None
         assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
@@ -68,7 +73,7 @@ class TestStaleWriteDeny:
         abs_path = _write_file(repo, "F.txt", "original\n")
         _record_baseline(repo, "sess-A", "F.txt", abs_path)
 
-        result = dispatch_checks.check_stale_write(
+        result = _enveloped(dispatch_checks.check_stale_write)(
             "cat > F.txt <<'EOF'\nfoo\nEOF", "sess-A", repo
         )
 
@@ -81,7 +86,7 @@ class TestStaleWriteDeny:
         _record_baseline(repo, "sess-A", "F.txt", abs_path)
         _write_file(repo, "F.txt", "sed -i already changed this\n")
 
-        result = dispatch_checks.check_stale_write("sed -i 's/x/y/' F.txt", "sess-A", repo)
+        result = _enveloped(dispatch_checks.check_stale_write)("sed -i 's/x/y/' F.txt", "sess-A", repo)
 
         assert result is None
 
@@ -94,7 +99,7 @@ class TestStaleWriteDeny:
         _record_baseline(repo, "sess-A", "F.txt", abs_path)
         _write_file(repo, "F.txt", "peer edited elsewhere\n")
 
-        result = dispatch_checks.check_stale_write("sed -i 's/y/z/' F.txt", "sess-A", repo)
+        result = _enveloped(dispatch_checks.check_stale_write)("sed -i 's/y/z/' F.txt", "sess-A", repo)
 
         assert result is None
 
@@ -103,7 +108,7 @@ class TestStaleWriteDeny:
         _record_baseline(repo, "sess-A", "F.txt", abs_path)
         _write_file(repo, "F.txt", "peer changed this\n")
 
-        result = dispatch_checks.check_stale_write("echo hi >> F.txt", "sess-A", repo)
+        result = _enveloped(dispatch_checks.check_stale_write)("echo hi >> F.txt", "sess-A", repo)
 
         assert result is None
 
@@ -112,14 +117,14 @@ class TestStaleWriteDeny:
         _record_baseline(repo, "sess-A", "F.txt", abs_path)
         _write_file(repo, "F.txt", "peer changed this\n")
 
-        result = dispatch_checks.check_stale_write("echo hi | tee -a F.txt", "sess-A", repo)
+        result = _enveloped(dispatch_checks.check_stale_write)("echo hi | tee -a F.txt", "sess-A", repo)
 
         assert result is None
 
     def test_no_recorded_baseline_allows(self, repo):
         _write_file(repo, "F.txt", "original\n")
 
-        result = dispatch_checks.check_stale_write(
+        result = _enveloped(dispatch_checks.check_stale_write)(
             "cat > F.txt <<'EOF'\nfoo\nEOF", "sess-never-read", repo
         )
 
@@ -130,7 +135,7 @@ class TestStaleWriteDeny:
         _record_baseline(repo, "sess-A", "F.txt", abs_path)
         _write_file(repo, "F.txt", "peer changed this\n")
 
-        result = dispatch_checks.check_stale_write(
+        result = _enveloped(dispatch_checks.check_stale_write)(
             "cat > F.txt <<'EOF'\nfoo\nEOF", "sess-A", repo
         )
 
@@ -156,7 +161,7 @@ class TestStaleWriteDeny:
 
         _write_file(repo, "F.txt", "worker changed this\n")
 
-        result = dispatch_checks.check_stale_write(
+        result = _enveloped(dispatch_checks.check_stale_write)(
             "cat > F.txt <<'EOF'\nfoo\nEOF", "sess-A", repo
         )
 
@@ -168,8 +173,8 @@ class TestStaleWriteDeny:
         )
 
     def test_never_raises_on_bad_command(self, repo):
-        assert dispatch_checks.check_stale_write("", "sess-A", repo) is None
-        assert dispatch_checks.check_stale_write("cat > F.txt", "", repo) is None
+        assert _enveloped(dispatch_checks.check_stale_write)("", "sess-A", repo) is None
+        assert _enveloped(dispatch_checks.check_stale_write)("cat > F.txt", "", repo) is None
 
     def _run_through_recorder(self, repo, sid, cmd, effect):
         """Record `cmd` as the PreToolUse seam does (before it runs), then
@@ -200,7 +205,7 @@ class TestStaleWriteDeny:
         )
         assert os.path.exists(target)
 
-        assert dispatch_checks.check_stale_write(cmd, "sess-A", repo) is None
+        assert _enveloped(dispatch_checks.check_stale_write)(cmd, "sess-A", repo) is None
 
     def test_foreign_change_after_read_still_denies_in_scratch(self, repo):
         os.makedirs(os.path.join(repo, "scratch"))
@@ -210,7 +215,7 @@ class TestStaleWriteDeny:
         )
         _write_file(repo, "scratch/r2.txt", "peer changed this\n")
 
-        result = dispatch_checks.check_stale_write(
+        result = _enveloped(dispatch_checks.check_stale_write)(
             "echo hi > scratch/r2.txt", "sess-A", repo
         )
 
@@ -223,7 +228,7 @@ class TestStaleWriteDeny:
         _write_file(repo, "F.txt", "peer changed this\n")
 
         payload = {"env": {"COORDINATOR_OVERRIDE_STALE_WRITE": "1"}}
-        result = dispatch_checks.check_stale_write(
+        result = _enveloped(dispatch_checks.check_stale_write)(
             "cat > F.txt <<'EOF'\nfoo\nEOF", "sess-A", repo, payload=payload
         )
 

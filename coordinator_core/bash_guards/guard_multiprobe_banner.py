@@ -170,7 +170,11 @@ import shlex
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
-from coordinator_core.bash_guards._platform_verdict import platform_verdict_for_shape
+from coordinator_core.bash_guards._platform_verdict import (
+    shape_advisory_record,
+    shape_context,
+    spawn_shape_summary,
+)
 from coordinator_core.bash_guards._sanctioned_remedy import (
     CALLER_EM,
     CALLER_SUBAGENT,
@@ -199,6 +203,7 @@ from coordinator_core.bash_guards._write_bump_message import (
     AGENT_CLASS_SUBAGENT,
     resolve_agent_class,
 )
+from coordinator_core.guard_messages.alternative_record import AlternativeRecord
 from coordinator_core.session import machinery_paths
 
 _GUARD_NAME = "guard_multiprobe_banner"
@@ -284,6 +289,8 @@ _OVERRIDE_ENV = "COORDINATOR_OVERRIDE_MULTIPROBE_BANNER"
 
 _SHAPE_NAME = "multi-probe-banner"
 
+_RECORD_GUARD_NAME = "multiprobe-banner"
+
 #: Session-scratchpad script filename this guard recommends a SUBAGENT
 #: caller write its batched probe to -- see `_sandbox_script_hint`.
 _SCRATCH_SCRIPT_NAME = "multiprobe.py"
@@ -342,14 +349,21 @@ def _resolve_caller(payload: Dict[str, Any], session_id: str) -> Tuple[bool, str
     return True, _sandbox_script_hint(git_root, session_id), git_root
 
 
-def _seam_confirmed_rewrite(result: Optional[Dict[str, Any]]) -> bool:
-    if not isinstance(result, dict):
-        return False
-    hso = result.get("hookSpecificOutput", {})
-    if not isinstance(hso, dict):
-        return False
-    updated = hso.get("updatedInput")
-    return isinstance(updated, dict) and bool(updated.get("command"))
+def _seam_rewrite_command(result: Any) -> str:
+    """The seam's rewritten command, from an AlternativeRecord or a legacy
+    envelope dict; ``""`` when the seam confirmed nothing."""
+    if isinstance(result, dict):
+        hso = result.get("hookSpecificOutput")
+        updated = hso.get("updatedInput") if isinstance(hso, dict) else None
+    else:
+        updated = getattr(result, "updated_input", None)
+    if not isinstance(updated, dict):
+        return ""
+    return updated.get("command") or ""
+
+
+def _seam_confirmed_rewrite(result: Any) -> bool:
+    return bool(_seam_rewrite_command(result))
 
 
 def _sandbox_script_hint(git_root: Optional[str], session_id: str) -> str:
@@ -358,9 +372,7 @@ def _sandbox_script_hint(git_root: Optional[str], session_id: str) -> str:
     return str(Path(machinery_paths.share_dir(git_root, session_id)) / _SCRATCH_SCRIPT_NAME)
 
 
-def _subagent_script_outlet(
-    rewrite_command: str, script_hint: str, bypass_note: str
-) -> Tuple[str, str]:
+def _subagent_script_outlet(rewrite_command: str, script_hint: str) -> Tuple[str, str]:
     """Render the SUBAGENT-caller outlet for a seam-confirmed rewrite.
 
     `python3 -c` (the outlet the main-loop leg names) is a blocked
@@ -392,7 +404,7 @@ def _subagent_script_outlet(
         script_body = argv[-1]
 
     remedy, run_cmd = probe_remedy(CALLER_SUBAGENT, Dialect.BASH, script_hint)
-    summary = "%s. %s" % (remedy, bypass_note)
+    summary = remedy
     if script_body:
         example = (
             "write the script body below to the script path, then run:\n\n"
@@ -405,35 +417,18 @@ def _subagent_script_outlet(
 
 
 def _outlet_from_seam_result(
-    result: Dict[str, Any],
-    *,
-    is_subagent: bool,
-    script_hint: str,
-    payload: Optional[Dict[str, Any]],
-    git_root: Optional[str] = None,
+    result: Any, *, is_subagent: bool, script_hint: str
 ) -> Tuple[str, str]:
-    hso = result.get("hookSpecificOutput", {}) if isinstance(result, dict) else {}
-    updated = hso.get("updatedInput")
-    bypass_note = operator_override_note(_OVERRIDE_ENV, payload=payload, git_root=git_root)
-    if isinstance(updated, dict) and updated.get("command"):
-        rewrite = updated["command"]
-        if is_subagent:
-            return _subagent_script_outlet(rewrite, script_hint, bypass_note)
-        # TRIMMED (C8b, pln-trim-the-remaining-over-cap-guard-b969d9 §
-        # C8b): was "this rewrite. %s" -- the two-word lede carries no
-        # information a bare "rewrite" doesn't; the module's own docstring
-        # ("SUBAGENT-AWARE OUTLET" section) names the shared
-        # `_platform_verdict`/seam-script bytes as the real overage this
-        # guard cannot trim from within its own footprint (out-of-footprint:
-        # `_platform_verdict.py`, `dispatch_checks.py`).
-        return ("rewrite. %s" % bypass_note, rewrite)
-    context = hso.get("additionalContext") or ""
-    return ("alternative. %s" % bypass_note, context)
+    """``(outlet_summary, outlet_example)`` for a seam-confirmed rewrite record."""
+    rewrite = _seam_rewrite_command(result)
+    if is_subagent:
+        return _subagent_script_outlet(rewrite, script_hint)
+    return ("the rewrite", rewrite)
 
 
 def check(
     payload: Dict[str, Any], host_is_windows: Optional[bool] = None
-) -> Optional[Dict[str, Any]]:
+) -> Optional[AlternativeRecord]:
     if os.environ.get(_OVERRIDE_ENV, "0") == "1":
         return None
 
@@ -479,12 +474,14 @@ def check(
         remedy, exemplar = _powershell_remedy(
             CALLER_SUBAGENT if ps_subagent else CALLER_EM, ps_hint
         )
-        return platform_verdict_for_shape(
-            _SHAPE_NAME,
-            cmd,
-            remedy,
-            "%s\n  %s" % (exemplar, bypass_note),
-            host_is_windows=False,
+        return shape_advisory_record(
+            spawn_shape_summary(_SHAPE_NAME, remedy),
+            exemplar,
+            guard_name=_RECORD_GUARD_NAME,
+            override_env=_OVERRIDE_ENV,
+            em_text=shape_context(
+                _SHAPE_NAME, remedy, "%s\n  %s" % (exemplar, bypass_note)
+            ),
         )
 
     # 2026-07-29 duty-of-care promotion: consult the sibling rewrite chain
@@ -504,26 +501,20 @@ def check(
     is_subagent, script_hint, git_root = _resolve_caller(payload, session_id)
 
     summary, example = _outlet_from_seam_result(
-        seam_result, is_subagent=is_subagent, script_hint=script_hint, payload=payload, git_root=git_root
+        seam_result, is_subagent=is_subagent, script_hint=script_hint
     )
-    # 2026-08-06 (C19a, guard-class census): `primary.evidence` is only the
-    # matched banner-marker SEGMENT (e.g. the bare `echo "=== facts ==="`),
-    # not the caller's actual command -- rendering it in the "Command:"
-    # field misdescribes what was denied whenever the banner-marker segment
-    # is not the whole command (i.e. every real firing, since a lone banner
-    # echo with nothing else is below `_MIN_BANNER_SEGMENTS` and never
-    # reaches here). `platform_verdict_for_shape` already truncates its
-    # `matched_cmd` argument to 200 chars, so passing the full `cmd` here
-    # costs nothing extra for a pathological input.
-    # DR-280: the deny leg is retired -- always render the advisory
-    # envelope (never deny), regardless of the real or overridden host.
-    # `platform_verdict_for_shape` is still the shared template so this
-    # guard's message reads as one family with its still-live siblings;
-    # only the platform BRANCH is forced here, not the rendering.
-    return platform_verdict_for_shape(
-        _SHAPE_NAME,
-        cmd,
-        summary,
+    bypass_note = operator_override_note(_OVERRIDE_ENV, payload=payload, git_root=git_root)
+    legacy_summary = (
+        "%s. %s" % (summary, bypass_note) if is_subagent else "rewrite. %s" % bypass_note
+    )
+    # DR-280: advisory only, never a deny, on every host. The EM's outlet is
+    # the seam's own rewrite (a ReadyCommand); a subagent's is a script it
+    # writes first, so that one is an AdaptableOffer.
+    return shape_advisory_record(
+        spawn_shape_summary(_SHAPE_NAME, summary),
         example,
-        host_is_windows=False,
+        guard_name=_RECORD_GUARD_NAME,
+        override_env=_OVERRIDE_ENV,
+        ready=not is_subagent,
+        em_text=shape_context(_SHAPE_NAME, legacy_summary, example),
     )

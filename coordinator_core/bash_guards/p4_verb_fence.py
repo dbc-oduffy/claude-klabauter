@@ -454,10 +454,21 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if deny_kind is None:
         return None
 
-    return {
-        "hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "permissionDecision": "deny",
-            "permissionDecisionReason": _deny_reason(deny_kind),
-        }
-    }
+    from coordinator_core.guard_messages.alternative_record import (
+        AlternativeRecord,
+        EscalationRoute,
+    )
+
+    reason = _deny_reason(deny_kind)
+    return AlternativeRecord(
+        verdict_kind="deny",
+        guard_name="p4-verb-fence",
+        summary=reason,
+        members=(
+            EscalationRoute(
+                report_what="the p4 verb you need",
+                authorize_what="that verb on this repo",
+            ),
+        ),
+        em_text=reason,
+    )

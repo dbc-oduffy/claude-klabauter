@@ -50,10 +50,13 @@ from __future__ import annotations
 import os
 from typing import Any, Dict, Optional
 
-from coordinator_core._hook_envelope import deny
+from coordinator_core._hook_envelope import _stamp
 from coordinator_core.bash_guards._dialect import Dialect, dialect_from_tool_name
 from coordinator_core.bash_guards._helpers import operator_override_note
-from coordinator_core.bash_guards._sentinel_creation_guard import indirection_deny_reason
+from coordinator_core.bash_guards._sentinel_creation_guard import (
+    indirection_deny_reason,
+    sentinel_record,
+)
 from coordinator_core.bash_guards._sentinel_removal_guard import (
     REASON_INDIRECTION,
     VERDICT_ADVISORY,
@@ -158,7 +161,19 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if verdict != VERDICT_DENY:
         return None
 
-    return deny("PreToolUse", _deny_reason(reason_kind, reason_class, payload=payload))
+    from coordinator_core.guard_messages.alternative_record import AdaptableOffer
+
+    return sentinel_record(
+        "block-dev-repo-sentinel-removal",
+        "deny",
+        _stamp(_deny_reason(reason_kind, reason_class, payload=payload)),
+        AdaptableOffer(
+            template="a command that leaves the discriminant file in place",
+            what_to_adapt="the removal or move",
+        ),
+        report_what="why the discriminant file must change",
+        authorize_what="the removal",
+    )
 
 
 def check_advisory(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -185,10 +200,16 @@ def check_advisory(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if verdict != VERDICT_ADVISORY:
         return None
 
-    return {
-        "hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "permissionDecision": "allow",
-            "additionalContext": _advisory_reason(payload=payload),
-        }
-    }
+    from coordinator_core.guard_messages.alternative_record import AdaptableOffer
+
+    return sentinel_record(
+        _GUARD_NAME,
+        "advisory",
+        _advisory_reason(payload=payload),
+        AdaptableOffer(
+            template="recreate the discriminant file",
+            what_to_adapt="nothing (only if the removal was unintended)",
+        ),
+        report_what="an unintended removal of the discriminant file",
+        authorize_what="its restoration",
+    )

@@ -20,14 +20,16 @@ import json
 from pathlib import Path
 
 from coordinator_core.bash_guards import dispatch
+from coordinator_core.guard_messages.alternative_record import AlternativeRecord, ReadyCommand
 from coordinator_core.session.machinery_paths import share_dir
 
-_DENY_ENVELOPE = {
-    "hookSpecificOutput": {
-        "permissionDecision": "deny",
-        "permissionDecisionReason": "hard-deny for testing",
-    }
-}
+_DENY_RECORD = AlternativeRecord(
+    "deny",
+    "hard-deny for testing",
+    (ReadyCommand("true"),),
+    "fake-hard-deny-guard",
+    em_text="hard-deny for testing",
+)
 
 
 def _payload(session_id="sess-c6-bash-deny", cwd=None):
@@ -45,7 +47,7 @@ def _fake_chain(name="fake-hard-deny-guard"):
     return [
         dispatch.GuardEntry(
             name,
-            lambda: dict(_DENY_ENVELOPE),
+            lambda: _DENY_RECORD,
             True,
             dispatch.GuardBand.CONFINEMENT_DENY,
         )

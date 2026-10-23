@@ -19,8 +19,8 @@ from coordinator_core.bash_guards.block_subagent_destructive_action import (
     _normalize_executable_basename,
 )
 from coordinator_core.bash_guards._rewrite_support import (
-    _advisory,
-    _allow_rewrite,
+    _advisory_record,
+    _allow_rewrite_record,
     _bt_python3_invocation,
     _crlf_strip,
     _override,
@@ -361,12 +361,33 @@ def _bt_find_exec_batch_rewrite(tokens: List[str], parsed: Dict[str, Any]) -> Op
     return shlex.join(new_tokens)
 
 
+_GUARD = "find-exec-rewrite"
+_OVERRIDE_ENV = "COORDINATOR_ALLOW_FIND_EXEC"
+
+
+def _em(msg: str, note: str) -> str:
+    return msg + (" %s" % note if note else "")
+
+
+def _adaptable(template: str, what_to_adapt: str) -> Any:
+    from coordinator_core.guard_messages.alternative_record import AdaptableOffer
+
+    return AdaptableOffer(template=template, what_to_adapt=what_to_adapt)
+
+
+def _walk_offer() -> Any:
+    return _adaptable(
+        "python3 -c 'import os; print([r for r, d, f in os.walk(\".\")])'",
+        "the walk root, the name filter and the per-file action",
+    )
+
+
 def check_find_exec_rewrite(
     cmd: str,
     session_id: str = "",
     payload: Optional[Dict[str, Any]] = None,
     git_root: Optional[str] = None,
-) -> Optional[Dict[str, Any]]:
+) -> Any:
     """Auto-rewrite or advise on a per-match-fork `find` shape; None otherwise.
 
     A full-command rewrite (`updatedInput.command`) is only sound when the
@@ -390,9 +411,17 @@ def check_find_exec_rewrite(
 
     segments = _bt_segments_from_tokens_with_pipe_flag(classification.tokens)
     single_segment = len(segments) == 1
-    _find_exec_note = operator_override_note(
-        "COORDINATOR_ALLOW_FIND_EXEC", payload=payload, git_root=git_root
-    )
+    note = operator_override_note(_OVERRIDE_ENV, payload=payload, git_root=git_root)
+
+    def emit_rewrite(new_cmd: str, msg: str) -> Any:
+        return _allow_rewrite_record(
+            _GUARD, new_cmd, msg, override_env=_OVERRIDE_ENV, em_text=_em(msg, note)
+        )
+
+    def advise(msg: str, offer: Any) -> Any:
+        return _advisory_record(
+            _GUARD, msg, (offer,), _OVERRIDE_ENV, em_text=_em(msg, note)
+        )
 
     for_loop = _bt_parse_for_loop_find(classification.tokens)
     if for_loop is not None:
@@ -400,7 +429,7 @@ def check_find_exec_rewrite(
         whole_command = classification.tokens[-1] == "done"
         verb = for_loop["verb_argv"][0]
         if loop_batch and whole_command:
-            return _allow_rewrite(
+            return emit_rewrite(
                 loop_batch,
                 (
                     "Auto-rewritten: 'for f in $(find ...); do %s \"$f\"; done' "
@@ -408,21 +437,20 @@ def check_find_exec_rewrite(
                     "'-exec ... ;'. The POSIX '+' form batches matches into as "
                     "few invocations as ARG_MAX allows, with identical output "
                     "for this verb." % (verb,)
-                )
-                + (" %s" % _find_exec_note if _find_exec_note else ""),
+                ),
             )
         if loop_batch:
-            return _advisory(
+            return advise(
                 (
                     "Advisory: 'for f in $(find ...); do %s \"$f\"; done' forks "
                     "one process PER MATCH -- '%s' does the same work in as few "
                     "invocations as ARG_MAX allows, but this loop runs alongside "
                     "OTHER work in the same command, so no full-command "
                     "auto-rewrite is offered." % (verb, loop_batch)
-                )
-                + (" %s" % _find_exec_note if _find_exec_note else "")
+                ),
+                _adaptable(loop_batch, "the loop's place in the command"),
             )
-        return _advisory(
+        return advise(
             (
                 "Advisory: 'for f in $(find ...); do %s \"$f\"; done' forks one "
                 "process PER MATCH -- the founding-incident 879-process shape on "
@@ -430,8 +458,8 @@ def check_find_exec_rewrite(
                 "so no '+' form is offered: batching it could change its output. "
                 "A single python3 -c os.walk(...) loop does the enumeration in "
                 "one process." % (verb, verb)
-            )
-            + (" %s" % _find_exec_note if _find_exec_note else "")
+            ),
+            _walk_offer(),
         )
     for tokens, _pipe_before in segments:
         if not tokens or not _bt_token_matches_binary(tokens[0], "find"):
@@ -444,20 +472,19 @@ def check_find_exec_rewrite(
             continue
         rewrite = _bt_find_exec_python_rewrite(parsed)
         if rewrite and single_segment:
-            return _allow_rewrite(
+            return emit_rewrite(
                 rewrite,
                 (
                     "Auto-rewritten: 'find ... -exec %s ... {} ;' forks one "
                     "process PER MATCH (the founding-incident 879-process shape "
                     "on Windows) -> one python3 process, zero per-match forks."
                     % (parsed["exec_argv"][0],)
-                )
-                + (" %s" % _find_exec_note if _find_exec_note else ""),
+                ),
             )
         batch_rewrite = _bt_find_exec_batch_rewrite(tokens, parsed)
         if rewrite and batch_rewrite:
             # The `+` form is a segment-local edit, so it survives chaining.
-            return _advisory(
+            return advise(
                 (
                     "Advisory: 'find ... -exec %s ... {} ;' (segment: %s) "
                     "forks one process PER MATCH -- the POSIX '+' form (%s) "
@@ -466,11 +493,11 @@ def check_find_exec_rewrite(
                     "alongside OTHER work, and replacing the whole command "
                     "would drop it."
                     % (parsed["exec_argv"][0], " ".join(tokens), batch_rewrite)
-                )
-                + (" %s" % _find_exec_note if _find_exec_note else "")
+                ),
+                _adaptable(batch_rewrite, "the segment's place in the command"),
             )
         if rewrite:
-            return _advisory(
+            return advise(
                 (
                     "Advisory: 'find ... -exec %s ... {} ;' (segment: %s) forks "
                     "one process PER MATCH -- the founding-incident 879-process "
@@ -481,11 +508,11 @@ def check_find_exec_rewrite(
                     "full-command auto-rewrite is offered -- replacing the "
                     "whole command would silently drop that other work."
                     % (parsed["exec_argv"][0], " ".join(tokens))
-                )
-                + (" %s" % _find_exec_note if _find_exec_note else "")
+                ),
+                _walk_offer(),
             )
         if batch_rewrite and single_segment:
-            return _allow_rewrite(
+            return emit_rewrite(
                 batch_rewrite,
                 (
                     "Auto-rewritten: 'find ... -exec %s ... {} ;' forks one "
@@ -493,11 +520,10 @@ def check_find_exec_rewrite(
                     "into as few invocations as ARG_MAX allows, with "
                     "identical output for this verb."
                     % (parsed["exec_argv"][0],)
-                )
-                + (" %s" % _find_exec_note if _find_exec_note else ""),
+                ),
             )
         if batch_rewrite:
-            return _advisory(
+            return advise(
                 (
                     "Advisory: 'find ... -exec %s ... {} ;' (segment: %s) "
                     "forks one process PER MATCH -- the POSIX '+' form (%s) "
@@ -506,10 +532,10 @@ def check_find_exec_rewrite(
                     "the same command, so no full-command auto-rewrite is "
                     "offered."
                     % (parsed["exec_argv"][0], " ".join(tokens), batch_rewrite)
-                )
-                + (" %s" % _find_exec_note if _find_exec_note else "")
+                ),
+                _adaptable(batch_rewrite, "the segment's place in the command"),
             )
-        return _advisory(
+        return advise(
             (
                 "Advisory: 'find ... -exec %s ... {} ;' forks one process PER "
                 "MATCH -- the founding-incident 879-process shape on Windows. "
@@ -518,7 +544,7 @@ def check_find_exec_rewrite(
                 "translation on file, so the rewrite is not offered "
                 "automatically."
                 % (parsed["exec_argv"][0],)
-            )
-            + (" %s" % _find_exec_note if _find_exec_note else "")
+            ),
+            _walk_offer(),
         )
     return None

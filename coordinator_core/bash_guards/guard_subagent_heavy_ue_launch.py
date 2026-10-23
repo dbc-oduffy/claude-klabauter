@@ -25,7 +25,6 @@ from __future__ import annotations
 
 from typing import Any, Callable, Dict, List, Optional
 
-from coordinator_core._hook_envelope import deny as _deny
 from coordinator_core.bash_guards._command_tokenizer import _strip_heredocs
 from coordinator_core.bash_guards._tool_names import COMMAND_TOOL_NAMES
 
@@ -60,7 +59,7 @@ _MAX_DEPTH = 4
 # No `See:` citation: the tripwire page lives only in coordinator-content-repo, a family B7 bans here.
 _REASON = (
     "BLOCKED: Unreal builds and editor runs are Group EM slot legs "
-    "(AN-EXECUTOR-NEVER-FANS-OUT-HEAVY-RUNS). Report the run as a needs_slot leg."
+    "(AN-EXECUTOR-NEVER-FANS-OUT-HEAVY-RUNS)."
 )
 
 
@@ -204,8 +203,8 @@ def launches_heavy(cmd: str, depth: int = 0) -> bool:
 def check(
     payload: Dict[str, Any],
     resolve_wiki_citation: Optional[Callable[[str], str]] = None,
-) -> Optional[Dict[str, Any]]:
-    """`None` (allow) or the hard-deny envelope. `resolve_wiki_citation` is accepted for the
+) -> Any:
+    """`None` (allow) or the hard-deny record. `resolve_wiki_citation` is accepted for the
     chain's call signature and unused: the deny carries no citation (see `_REASON`)."""
     del resolve_wiki_citation
     try:
@@ -222,4 +221,17 @@ def check(
             return None
     except Exception:
         return None
-    return _deny("PreToolUse", _REASON)
+    from coordinator_core.bash_guards._rewrite_support import _deny_record, _em_stamped
+    from coordinator_core.guard_messages.alternative_record import EscalationRoute
+
+    return _deny_record(
+        "guard-subagent-heavy-ue-launch",
+        _REASON,
+        (
+            EscalationRoute(
+                report_what="the run as a needs_slot leg",
+                authorize_what="the Group EM launching it in the slot",
+            ),
+        ),
+        em_text=_em_stamped(_REASON + " Report the run as a needs_slot leg."),
+    )

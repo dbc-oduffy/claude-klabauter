@@ -81,6 +81,8 @@ Negative-spec:
   - Lands a file the run's review stage wrote outside the declared writes as review residue (named
     files only, admitted by a review-stage touch record; ``Review-Residue:`` trailers), or refuses
     ``review-edit-unlanded`` naming the files; never leaves it silently dirty.
+  - Names dirty engine-owned paths outside the landing under ``engine_residue`` (``residue_classes``;
+    ``engine_residue_total`` when capped, ``None`` when unreadable): advisory, never staged.
   - Does NOT commit a dirty file no chunk declares and the run does not own: ``undeclared_dirty``
     reports it, because widening the pathspec would hide a wrong spine. The product commit
     is declared-only (``carry_own_left_behind: False``, no landing-set exception). A path the
@@ -148,6 +150,7 @@ from typing import Optional, Sequence
 
 from coordinator_core.git.git_state import head_branch
 from coordinator_core.git.machine_local_paths import machine_local_paths
+from coordinator_core.git import residue_classes
 from coordinator_core.git.path_canon import canonical_repo_relative_path_refusal
 from coordinator_core.git.run import run_git
 from coordinator_core.ipc import register_op
@@ -159,7 +162,7 @@ from coordinator_core.ops.dispatch_emit import credit_gate, gate_owed, halt_base
 from coordinator_core.ops.dispatch_emit.land_run import _em_discharged_rows  # noqa: E402
 from coordinator_core.ops.dispatch_emit.halt_landing import (  # noqa: E402
     landed_before_halt as _landed_before_halt,
-    verdict_credits as _verdict_credits,
+    since_halt_close as _since_halt_close,
 )
 from coordinator_core.ops.dispatch_emit.pre_halt_ancestry import (  # noqa: E402
     CITED_DETAIL_KEY, cited_at_or_before, verified_post_commit_credit,
@@ -548,6 +551,9 @@ def _seam_sidecars(worktree_root: Path, plan_path: Optional[str], chunk_ids: lis
         prep = str(pure.with_name(pure.stem + _SEAM_SIDECAR_SUFFIX))
         if (worktree_root / prep).is_file():
             found.append(prep)
+        fire = str(pure.with_name(pure.stem + ".fire" + _SEAM_SIDECAR_SUFFIX))
+        if (worktree_root / fire).is_file():
+            found.append(fire)
         try:
             waves = sorted(
                 p.name for p in (worktree_root / pure.parent).glob(f"{_glob.escape(pure.stem)}.wave-*{_SEAM_SIDECAR_SUFFIX}")
@@ -1988,14 +1994,10 @@ def _ledger_gate(
     )
     if foreign:
         message += f". Verdict ids that are not register rows: {', '.join(foreign)}"
-    if since_halt.get("landed_sha") and all(
-        f["reason"] == UNCHANGED_SINCE_HALT_REASON for f in result["failures"]
-    ) and (
-        all(str(f["id"]) in since_halt.get(CITED_DETAIL_KEY, {}) for f in result["failures"])
-        or _verdict_credits(verdict, [f["id"] for f in result["failures"]], since_halt["landed_sha"])
-    ):
+    landed = _since_halt_close(since_halt, result["failures"], verdict)
+    if landed:
         return {
-            "committed": True, "sha": since_halt["landed_sha"], "already_landed": True,
+            "committed": True, "sha": landed, "already_landed": True,
             "paths": since_halt["landed_paths"], "since_halt": since_halt,
         }, ledger, []
     return _error(
@@ -2363,7 +2365,7 @@ def _stopped_run_carried(reply: dict) -> set:
 def _undeclared_dirty(
     worktree_root: Path, request: CommitRequest,
     snapshot: Optional[_Snapshot] = None, landed: frozenset = frozenset(),
-    *, run_id: Optional[str] = None,
+    *, run_id: Optional[str] = None, full_out: Optional[set] = None,
 ) -> dict:
     """Dirty files beside the run's declared writes that no chunk declares.
 
@@ -2373,7 +2375,8 @@ def _undeclared_dirty(
     signal. One scoped ``git status`` spawn; the shared tree means a peer's
     dirt in the same directory is listed too, so a row is a candidate for
     inspection, not proof of this run's authorship. ``undeclared_dirty`` is
-    ``None`` when git could not answer.
+    ``None`` when git could not answer. ``full_out``, when given, receives the uncapped
+    dirty set before the peer-held filter.
     """
     specs = _scope_pathspecs(request)
     if not specs:
@@ -2402,6 +2405,8 @@ def _undeclared_dirty(
             }
             - declared
         )
+    if full_out is not None:
+        full_out.update(dirty)
     peer_held = _peer_held(worktree_root, request.session_id, dirty, run_id=run_id)
     dirty = [p for p in dirty if p not in peer_held]
     out: dict = {"undeclared_dirty": dirty[:_UNDECLARED_DIRTY_CAP]}
@@ -3657,12 +3662,20 @@ def _handler_body(params: dict, repo_root: Optional[Path] = None) -> dict:
             reply["run_owned"] = scope["run_owned"]
         if scope.get("stranded_residue"):
             reply["stranded_residue"] = {c: sorted(ps) for c, ps in scope["stranded_residue"].items()}
+        in_scope_dirty: set = set()
         reply.update(
             _undeclared_dirty(
                 scope["root"], scope["request"], scope.get("snapshot"), frozenset(scope.get("landed", ())),
                 run_id=params.get("run_id") if isinstance(params, dict) else None,
+                full_out=in_scope_dirty,
             )
         )
+        arts = reply.get("run_artifacts")
+        named = in_scope_dirty | set(scope.get("landed", ())) | set(reply.get("archived") or ())
+        if isinstance(arts, dict):
+            named |= set(arts.get("landed") or ()) | set(arts.get("withheld") or ())
+        named |= set(reply.get("run_artifact_residue") or ())
+        reply.update(residue_classes.dirty_engine_residue(scope["root"], exclude=named))
     incomplete = params.get("incomplete_chunks") if isinstance(params, dict) else None
     landed = (params.get("landed_chunks") if isinstance(params, dict) else None) or []
     held = params.get("held") if isinstance(params, dict) else None
@@ -3809,6 +3822,13 @@ def _terminal_commit(
         _settle_token(token_state, landed=bool(token_state.get("landed")))
         raise
     _settle_token(token_state, landed=bool(token_state.get("landed")))
+    close = token_state.get("since_halt_close")
+    if close is None:
+        return reply
+    if reply.get("committed"):
+        return {**reply, "since_halt": close["since_halt"]}
+    if reply.get("nothing_to_commit") and not reply.get("refused") and not reply.get("error"):
+        return {**reply, **close, "nothing_to_commit": False}
     return reply
 
 
@@ -4108,7 +4128,9 @@ def _terminal_commit_inner(
             params.get(TERMINAL_RESUME_LEDGER_PARAM), request.plan_path,
         )
         if unmet is not None:
-            return unmet
+            if not (unmet.get("already_landed") and unmet.get("committed")):
+                return unmet
+            token_state["since_halt_close"] = unmet
     ledger_met = (
         _ledger_met_observation(ledger, params.get("ledger_verdict"), open_rows)
         if ask_run_dir is not None else None

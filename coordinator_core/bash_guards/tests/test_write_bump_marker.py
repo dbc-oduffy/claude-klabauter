@@ -17,6 +17,11 @@ from coordinator_core.win_portability import (
     no_console_creationflags,
     no_console_passthrough_kwargs,
 )
+from coordinator_core.guard_messages.testing import envelope_of
+
+
+def _enveloped(check):
+    return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 pytestmark = [
     pytest.mark.spawns_process,
@@ -563,8 +568,8 @@ def test_ac4_clearing_target_a_leaves_target_b_firing(tmp_path, monkeypatch):
     cmd_a = f"git -C {_posix(foreign_a)} commit --allow-empty -m x"
     cmd_b = f"git -C {_posix(foreign_b)} commit --allow-empty -m x"
 
-    result_a = fg_guard.check_bump_foreign_repo_write(cmd_a, session_id, str(root), {})
-    result_b = fg_guard.check_bump_foreign_repo_write(cmd_b, session_id, str(root), {})
+    result_a = _enveloped(fg_guard.check_bump_foreign_repo_write)(cmd_a, session_id, str(root), {})
+    result_b = _enveloped(fg_guard.check_bump_foreign_repo_write)(cmd_b, session_id, str(root), {})
 
     assert result_a is None, "target A's own marker must clear target A"
     assert result_b is not None, (
@@ -594,7 +599,7 @@ def test_ac5_unwritable_target_gitdir_allows_matching_unresolvable_precedent(tmp
     try:
         os.chmod(foreign_gitdir, 0o555)
         cmd = f"git -C {_posix(foreign)} commit --allow-empty -m x"
-        result = fg_guard.check_bump_foreign_repo_write(cmd, session_id, str(root), {})
+        result = _enveloped(fg_guard.check_bump_foreign_repo_write)(cmd, session_id, str(root), {})
         assert result is None, (
             "an unwritable target gitdir must ALLOW the write, matching "
             "check_bump_foreign_repo_write's existing `marker_gitdir is "
@@ -624,14 +629,14 @@ def test_ac5_clear_line_executed_verbatim_clears_the_target(tmp_path, monkeypatc
     assert applicability.bump_applies(session_id, cwd=str(root)) is True
 
     cmd = f"git -C {_posix(foreign)} commit --allow-empty -m x"
-    result = fg_guard.check_bump_foreign_repo_write(cmd, session_id, str(root), {})
+    result = _enveloped(fg_guard.check_bump_foreign_repo_write)(cmd, session_id, str(root), {})
     assert result is not None, "guard must actually fire for this test to mean anything"
 
     foreign_gitdir = marker.resolve_gitdir(str(foreign))
     assert foreign_gitdir is not None
     marker.marker_path(foreign_gitdir, session_id).touch()
 
-    result2 = fg_guard.check_bump_foreign_repo_write(cmd, session_id, str(root), {})
+    result2 = _enveloped(fg_guard.check_bump_foreign_repo_write)(cmd, session_id, str(root), {})
     assert result2 is None
 
 
@@ -648,7 +653,7 @@ def test_ac6_marker_carries_no_expiry_identity_gating_or_hard_deny(tmp_path, mon
     assert applicability.bump_applies(session_id, cwd=str(root)) is True
 
     cmd = f"git -C {_posix(foreign)} commit --allow-empty -m x"
-    result = fg_guard.check_bump_foreign_repo_write(cmd, session_id, str(root), {})
+    result = _enveloped(fg_guard.check_bump_foreign_repo_write)(cmd, session_id, str(root), {})
     assert result is not None, "guard must actually fire for the absence assertions below to mean anything"
 
     hook_output = result["hookSpecificOutput"]
@@ -697,15 +702,15 @@ def test_ac6_outside_repo_bump_still_clearable_by_single_anchor_gitdir_touch(tmp
     cmd_a = f"echo hi > {_posix(outside_a / 'a.txt')}"
     cmd_b = f"echo hi > {_posix(outside_b / 'b.txt')}"
 
-    result_a = outside_guard.check_bump_outside_repo_write(cmd_a, session_id, str(root), {})
+    result_a = _enveloped(outside_guard.check_bump_outside_repo_write)(cmd_a, session_id, str(root), {})
     assert result_a is not None, "guard must actually fire for this test to mean anything"
 
     anchor_gitdir = marker.resolve_gitdir(str(root))
     assert anchor_gitdir is not None
     (anchor_gitdir / marker.marker_basename(session_id)).touch()
 
-    result_a_after = outside_guard.check_bump_outside_repo_write(cmd_a, session_id, str(root), {})
-    result_b_after = outside_guard.check_bump_outside_repo_write(cmd_b, session_id, str(root), {})
+    result_a_after = _enveloped(outside_guard.check_bump_outside_repo_write)(cmd_a, session_id, str(root), {})
+    result_b_after = _enveloped(outside_guard.check_bump_outside_repo_write)(cmd_b, session_id, str(root), {})
 
     assert result_a_after is None
     assert result_b_after is None, (

@@ -11,10 +11,16 @@ import shlex
 from typing import List, Optional
 
 from coordinator_core.bash_guards._command_tokenizer import (
+    _BUNDLED_C_FLAG_RE,
     _extract_command_substitutions as _bt_extract_command_substitutions,
     exceeds_tokenizable_ceiling as _bt_exceeds_tokenizable_ceiling,
     segments_from_tokens_simple as _bt_segments_from_tokens_simple,
     tokenize_full_command as _bt_tokenize_full_command,
+)
+from coordinator_core.bash_guards._rewrite_support import (
+    _BT_REDIRECTION_TOKEN_RE,
+    _bt_has_redirection,
+    _bt_is_redirection_token,
 )
 
 
@@ -26,20 +32,6 @@ def _join_backslash_newlines(cmd: str) -> str:
 
 _SHELL_C_WRAPPER_INTERPRETERS = frozenset({"sh", "bash", "zsh", "dash", "ksh"})
 _MAX_SHELL_C_UNWRAP_DEPTH = 4
-
-#: Bundled-or-standalone `-c` short flag, e.g. `-c`, `-ic`, `-ci` (Finding,
-#: 2026-07-29 EM-run second-pass integration): a shell's CLI parser accepts
-#: bundled short flags, so `sh -ic '<payload>'` behaves as `sh -i -c
-#: '<payload>'` -- an exact `"-c" in rest` check (below) missed this
-#: entirely, so `sh -ic "git commit --no-verify"` was never unwrapped and
-#: re-scanned by ANY of this module's checks that rely on
-#: `_shell_c_unwrap_payloads` (`check_no_verify`, `check_destructive_rm`,
-#: `check_destructive_git_revert`, `check_blanket_git_add`,
-#: `check_runaway_find`). Own-module copy of `block_subagent_commit.py` /
-#: `block_subagent_destructive_action.py`'s identically-named constant (no-
-#: cross-module-coupling convention already established in this file).
-_BUNDLED_C_FLAG_RE = re.compile(r"^-[a-zA-Z]*c[a-zA-Z]*$")
-
 
 def _shell_c_unwrap_single_segment(tokens: List[str]) -> Optional[str]:
     """The single-segment scan `_shell_c_unwrap_payloads` used to run
@@ -809,61 +801,6 @@ def _word_present(pattern: str, cmd: str) -> bool:
     return unquoted != cmd and bool(re.search(pattern, unquoted))
 
 
-#: Task 4 fix (2026-07-29, live incident): a shell redirection operator
-#: token (`2>`, `>`, `>>`, `<`, `<<`, and their glued-target spelling
-#: `2>/dev/null`) is NOT a path/pattern operand -- before this fix, every
-#: segment parser below (`_bt_parse_ls_segment`, `_bt_parse_find_census_
-#: segment`, `_bt_grep_flags_and_operands`) walked its own non-flag tokens
-#: and treated the LAST one as the path/target, so
-#: `ls DIR 2>/dev/null | head -40` silently took `"2>/dev/null"` as the
-#: directory to list, and the emitted rewrite crashed with
-#: `FileNotFoundError: [Errno 2] No such file or directory: '2>/dev/null'`
-#: -- an AUTO-APPLIED rewrite (`updatedInput`), not an advisory, so the
-#: caller's command was silently replaced with one that meant something
-#: different before it failed.
-#:
-#: `&`-involving forms (`2>&1`, `&>/dev/null`) are a SEPARATE, already-safe
-#: case: the shared tokenizer's `punctuation_chars=";&|"` splits a bare `&`
-#: out as its own chain-separator token (confirmed empirically -- `2>&1`
-#: tokenizes to `['2>', '&', '1']`), which makes `_bt_segments_from_tokens_
-#: with_pipe_flag` see 3+ segments instead of the 2 this rewrite requires,
-#: so `check_head_tail_plumbing_rewrite`'s own segment-count guard already
-#: falls through to its "longer chain" advisory for those forms -- this fix
-#: does not need to (and, per the file-scope constraint, must not) touch
-#: that tokenizer behavior.
-#:
-#: This detector matches only the OPERATOR's own leading characters (a
-#: `re.match`, not `fullmatch`), so it catches both the glued form
-#: (`2>/dev/null`, one token) and the separate-token form (`2>` followed by
-#: `/dev/null` as its own token) -- for the separate form, seeing the bare
-#: `2>` operator token anywhere in a segment is already sufficient to
-#: decline the whole segment, so the target token that follows it never
-#: needs its own check.
-#:
-#: A quoted operand that merely CONTAINS this shape (e.g. a `find -name`
-#: pattern of literally `"2>foo"`) cannot be distinguished from a real
-#: unquoted redirection once the shared tokenizer has stripped quoting --
-#: this is a coverage loss (a rewrite that could have been offered isn't),
-#: never a correctness risk, and is the same "prefer not rewriting over
-#: rewriting approximately" bias this whole fix exists to apply.
-_BT_REDIRECTION_TOKEN_RE = re.compile(r"^(?:\d*(?:>>|<<|>|<)|&>>?)")
-
-
-def _bt_is_redirection_token(tok: str) -> bool:
-    """`True` if `tok` alone looks like a shell redirection operator
-    (`_BT_REDIRECTION_TOKEN_RE`) -- the single per-token predicate behind
-    both `_bt_has_redirection` (segment-level "does this contain one at
-    all") and `_bt_commit_operand_scan` (token-level "is THIS surviving
-    token a redirection, not a git pathspec operand"). Factored out so
-    there remains exactly one definition of "is a redirection token" in
-    this module, per the 2026-08-05 cockpit incident fix: a surviving
-    redirection token (`<<'MSG'`, `>/dev/null`, `2>&1`, ...) was being read
-    as a git commit pathspec operand, which made an UNSCOPED `git commit`
-    carrying any redirection look explicitly scoped and silenced the
-    sweep-commit advisory/deny entirely."""
-    return bool(_BT_REDIRECTION_TOKEN_RE.match(tok))
-
-
 def _bt_is_bare_redirection_token(tok: str) -> bool:
     """`True` if `tok` is a redirection operator with nothing glued after
     it (`>`, `>>`, `2>`, `<`, `<<`, `&>`), as opposed to a glued form
@@ -881,13 +818,3 @@ def _bt_is_bare_redirection_token(tok: str) -> bool:
     an unscoped `git commit ... > /dev/null` as explicitly scoped."""
     m = _BT_REDIRECTION_TOKEN_RE.match(tok)
     return bool(m) and m.end() == len(tok)
-
-
-def _bt_has_redirection(tokens: List[str]) -> bool:
-    """`True` if any token in `tokens` looks like a shell redirection
-    operator (`_bt_is_redirection_token`) -- shared by every BX-16
-    head/tail-upstream segment parser (`_bt_parse_ls_segment`,
-    `_bt_parse_find_census_segment`, `_bt_grep_flags_and_operands`) so a
-    redirection-bearing segment is declined identically everywhere, rather
-    than three independently-hand-derived checks drifting apart."""
-    return any(_bt_is_redirection_token(tok) for tok in tokens)

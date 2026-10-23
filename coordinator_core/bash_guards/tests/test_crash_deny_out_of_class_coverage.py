@@ -49,6 +49,7 @@ from coordinator_core.bash_guards import (
     p4_verb_fence,
 )
 from coordinator_core.bash_guards.roster import guard_roster
+from coordinator_core.guard_messages.testing import envelope_of
 from coordinator_core.session import touch_record
 
 pytestmark = [
@@ -356,7 +357,7 @@ _DENIED.append(
 
 
 def _decision(result: Optional[Dict[str, Any]]) -> Optional[str]:
-    return (result or {}).get("hookSpecificOutput", {}).get("permissionDecision")
+    return (envelope_of(result) or {}).get("hookSpecificOutput", {}).get("permissionDecision")
 
 
 @pytest.mark.parametrize(

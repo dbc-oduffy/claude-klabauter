@@ -33,21 +33,26 @@ from pathlib import Path
 from coordinator_core.bash_guards import dispatch
 from coordinator_core.bash_guards._advisory_value import AdvisoryValue
 from coordinator_core.bash_guards.dispatch import GuardBand, GuardEntry
+from coordinator_core.guard_messages.alternative_record import AlternativeRecord, ReadyCommand
+from coordinator_core.guard_messages.testing import envelope_of
 from coordinator_core.session.machinery_paths import share_dir
 
-_ADVISORY_ENVELOPE = {
-    "hookSpecificOutput": {
-        "permissionDecision": "allow",
-        "permissionDecisionReason": "advisory note",
-    }
-}
+_ADVISORY_RECORD = AlternativeRecord(
+    "advisory",
+    "advisory note",
+    (ReadyCommand("true"),),
+    "fake-advisory-guard",
+    em_text="advisory note",
+)
+_ADVISORY_ENVELOPE = envelope_of(_ADVISORY_RECORD)
 
-_DENY_ENVELOPE = {
-    "hookSpecificOutput": {
-        "permissionDecision": "deny",
-        "permissionDecisionReason": "hard deny",
-    }
-}
+_DENY_RECORD = AlternativeRecord(
+    "deny",
+    "hard deny",
+    (ReadyCommand("true"),),
+    "fake-hard-deny-guard",
+    em_text="hard deny",
+)
 
 
 def _payload(session_id="sess-c21", cwd="/tmp"):
@@ -62,7 +67,7 @@ def _payload(session_id="sess-c21", cwd="/tmp"):
 def _fake_advisory_entry(name="fake-advisory-guard"):
     return GuardEntry(
         name,
-        lambda: dict(_ADVISORY_ENVELOPE),
+        lambda: _ADVISORY_RECORD,
         False,
         GuardBand.ADVISORY_REWRITE,
         AdvisoryValue.HOST_INDEPENDENT,
@@ -72,7 +77,7 @@ def _fake_advisory_entry(name="fake-advisory-guard"):
 def _fake_hard_deny_entry(name="fake-hard-deny-guard"):
     return GuardEntry(
         name,
-        lambda: dict(_DENY_ENVELOPE),
+        lambda: _DENY_RECORD,
         True,
         GuardBand.CONFINEMENT_DENY,
         AdvisoryValue.NOT_COST_ARGUED,

@@ -4,6 +4,11 @@ agent_type, or a `subagents/` transcript_path, and never the EM."""
 from __future__ import annotations
 
 from coordinator_core.bash_guards import block_subagent_commit as guard
+from coordinator_core.guard_messages.testing import envelope_of
+
+
+def _enveloped(check):
+    return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 _CMD = 'git commit -m "x"'
 _SUB_TP = "/h/projects/p/sess/subagents/agent-a1.jsonl"
@@ -28,22 +33,22 @@ def _denied(result):
 
 
 def test_agent_id_is_refused():
-    assert _denied(guard.check(_payload(agent_id="deadbeef0123")))
+    assert _denied(_enveloped(guard.check)(_payload(agent_id="deadbeef0123")))
 
 
 def test_subagent_transcript_path_without_agent_id_is_refused():
-    assert _denied(guard.check(_payload(transcript_path=_SUB_TP)))
+    assert _denied(_enveloped(guard.check)(_payload(transcript_path=_SUB_TP)))
 
 
 def test_windows_subagent_transcript_path_is_refused():
     tp = "C:\\h\\projects\\p\\sess\\subagents\\agent-a1.jsonl"  # abs-path-ok: fixture string, never touched
-    assert _denied(guard.check(_payload(transcript_path=tp)))
+    assert _denied(_enveloped(guard.check)(_payload(transcript_path=tp)))
 
 
 def test_unlisted_agent_type_without_agent_id_is_refused():
-    assert _denied(guard.check(_payload(agent_type="coordinator:executor")))
+    assert _denied(_enveloped(guard.check)(_payload(agent_type="coordinator:executor")))
 
 
 def test_em_payload_is_allowed():
-    assert guard.check(_payload(transcript_path="/h/projects/p/sess.jsonl")) is None
-    assert guard.check(_payload()) is None
+    assert _enveloped(guard.check)(_payload(transcript_path="/h/projects/p/sess.jsonl")) is None
+    assert _enveloped(guard.check)(_payload()) is None

@@ -5,6 +5,11 @@ from __future__ import annotations
 import pytest
 
 from coordinator_core.bash_guards.guard_piped_pytest_exit import check_piped_pytest_exit
+from coordinator_core.guard_messages.testing import envelope_of
+
+
+def _enveloped(check):
+    return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 
 def _ctx(out):
@@ -23,7 +28,7 @@ def _ctx(out):
 )
 @pytest.mark.parametrize("tool_name", ["Bash", "PowerShell"])
 def test_fires_advisory_only(cmd, tool_name):
-    out = check_piped_pytest_exit(cmd, "s", payload={"tool_name": tool_name, "tool_input": {"command": cmd}})
+    out = _enveloped(check_piped_pytest_exit)(cmd, "s", payload={"tool_name": tool_name, "tool_input": {"command": cmd}})
     assert out is not None
     hso = out["hookSpecificOutput"]
     assert hso["permissionDecision"] == "allow"
@@ -48,4 +53,4 @@ def test_fires_advisory_only(cmd, tool_name):
 @pytest.mark.parametrize("tool_name", ["Bash", "PowerShell"])
 def test_silent(cmd, tool_name):
     payload = {"tool_name": tool_name, "tool_input": {"command": cmd}}
-    assert check_piped_pytest_exit(cmd, "s", payload=payload) is None
+    assert _enveloped(check_piped_pytest_exit)(cmd, "s", payload=payload) is None

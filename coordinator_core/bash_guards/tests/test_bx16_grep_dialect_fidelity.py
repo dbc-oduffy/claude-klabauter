@@ -42,6 +42,11 @@ import pytest
 
 from coordinator_core.bash_guards import dispatch_checks as dc
 from coordinator_core.win_portability import no_console_creationflags
+from coordinator_core.guard_messages.testing import envelope_of
+
+
+def _enveloped(check):
+    return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -55,7 +60,7 @@ def _payload_prefix() -> str:
 
 
 def _run_rewrite(cmd: str) -> str:
-    out = dc.check_grep_via_bash_rewrite(cmd)
+    out = _enveloped(dc.check_grep_via_bash_rewrite)(cmd)
     if out is None:
         return None
     command = out["hookSpecificOutput"]["updatedInput"]["command"]
@@ -124,29 +129,29 @@ def fixture_file(tmp_path):
 class TestRefusesRatherThanGuesses:
     def test_founding_incident_pattern_refused(self, fixture_file):
         cmd = 'grep -n "^| AC-3 \\|^| AC-4 \\|^| AC-5 " %s' % fixture_file
-        assert dc.check_grep_via_bash_rewrite(cmd) is None
+        assert _enveloped(dc.check_grep_via_bash_rewrite)(cmd) is None
 
     def test_bare_pipe_basic_dialect_refused(self, fixture_file):
-        assert dc.check_grep_via_bash_rewrite("grep -n a|b %s" % fixture_file) is None
+        assert _enveloped(dc.check_grep_via_bash_rewrite)("grep -n a|b %s" % fixture_file) is None
 
     def test_escaped_plus_basic_dialect_refused(self, fixture_file):
         cmd = r"grep -n a\+b %s" % fixture_file
-        assert dc.check_grep_via_bash_rewrite(cmd) is None
+        assert _enveloped(dc.check_grep_via_bash_rewrite)(cmd) is None
 
     def test_bare_plus_basic_dialect_refused(self, fixture_file):
-        assert dc.check_grep_via_bash_rewrite("grep -n a+b %s" % fixture_file) is None
+        assert _enveloped(dc.check_grep_via_bash_rewrite)("grep -n a+b %s" % fixture_file) is None
 
     def test_escaped_braces_basic_dialect_refused(self, fixture_file):
         cmd = r"grep -n a\{2\}b %s" % fixture_file
-        assert dc.check_grep_via_bash_rewrite(cmd) is None
+        assert _enveloped(dc.check_grep_via_bash_rewrite)(cmd) is None
 
     def test_bare_parens_basic_dialect_refused(self, fixture_file):
-        assert dc.check_grep_via_bash_rewrite("grep -n a(b)c %s" % fixture_file) is None
+        assert _enveloped(dc.check_grep_via_bash_rewrite)("grep -n a(b)c %s" % fixture_file) is None
 
     def test_posix_bracket_class_refused_regex_dialects(self, fixture_file):
         for binary in ("grep", "egrep", "rg"):
             cmd = '%s -n "[[:alpha:]]" %s' % (binary, fixture_file)
-            assert dc.check_grep_via_bash_rewrite(cmd) is None, binary
+            assert _enveloped(dc.check_grep_via_bash_rewrite)(cmd) is None, binary
 
     def test_fixed_dialect_bracket_class_text_is_literal_not_refused(self, fixture_file):
         TestDifferentialExecutionMatchesRealBinary._assert_matches(
@@ -155,7 +160,7 @@ class TestRefusesRatherThanGuesses:
 
     def test_fixed_flag_with_extended_flag_refused(self, fixture_file):
         cmd = "grep -EFn a+b %s" % fixture_file
-        assert dc.check_grep_via_bash_rewrite(cmd) is None
+        assert _enveloped(dc.check_grep_via_bash_rewrite)(cmd) is None
 
     def test_perl_shorthand_escape_refused_in_every_dialect(self, fixture_file):
         # Single-quoted in the command TEXT (not merely an `r"..."` Python
@@ -166,19 +171,19 @@ class TestRefusesRatherThanGuesses:
         # testing the wrong thing entirely.
         for binary in ("grep", "egrep"):
             cmd = "%s -n '\\d+' %s" % (binary, fixture_file)
-            assert dc.check_grep_via_bash_rewrite(cmd) is None, binary
+            assert _enveloped(dc.check_grep_via_bash_rewrite)(cmd) is None, binary
 
     def test_mid_pattern_bare_caret_basic_dialect_refused(self, fixture_file):
         cmd = "grep -n a^b %s" % fixture_file
 
-        assert dc.check_grep_via_bash_rewrite(cmd) is None
+        assert _enveloped(dc.check_grep_via_bash_rewrite)(cmd) is None
 
     def test_mid_pattern_bare_dollar_basic_dialect_refused(self, fixture_file):
         cmd = "grep -n 'a$b' %s" % fixture_file
-        assert dc.check_grep_via_bash_rewrite(cmd) is None
+        assert _enveloped(dc.check_grep_via_bash_rewrite)(cmd) is None
 
     def test_trailing_dollar_basic_dialect_still_safe(self, fixture_file):
-        assert dc.check_grep_via_bash_rewrite("grep -n plain$ %s" % fixture_file) is not None
+        assert _enveloped(dc.check_grep_via_bash_rewrite)("grep -n plain$ %s" % fixture_file) is not None
 
 
 class TestGrepDashWRefusedRatherThanSilentlyDropped:
@@ -190,10 +195,10 @@ class TestGrepDashWRefusedRatherThanSilentlyDropped:
     untranslated flag."""
 
     def test_dash_w_refuses_rewrite(self, fixture_file):
-        assert dc.check_grep_via_bash_rewrite("grep -w plain %s" % fixture_file) is None
+        assert _enveloped(dc.check_grep_via_bash_rewrite)("grep -w plain %s" % fixture_file) is None
 
     def test_dash_w_combined_short_flags_refuses_rewrite(self, fixture_file):
-        assert dc.check_grep_via_bash_rewrite("grep -wrn plain %s" % fixture_file) is None
+        assert _enveloped(dc.check_grep_via_bash_rewrite)("grep -wrn plain %s" % fixture_file) is None
 
 
 class TestDifferentialExecutionMatchesRealBinary:
@@ -252,10 +257,10 @@ class TestDifferentialExecutionMatchesRealBinary:
 class TestLowercaseEfNotDialectFlags:
     def test_lowercase_e_pattern_flag_not_recognized(self, fixture_file):
         cmd = "grep -e a+b %s" % fixture_file
-        assert dc.check_grep_via_bash_rewrite(cmd) is None
+        assert _enveloped(dc.check_grep_via_bash_rewrite)(cmd) is None
 
     def test_lowercase_f_file_flag_not_recognized(self, tmp_path):
         pat_file = tmp_path / "patterns.txt"
         pat_file.write_text("TODO\n")
         cmd = "grep -f %s %s" % (pat_file, tmp_path / "corpus.txt")
-        assert dc.check_grep_via_bash_rewrite(cmd) is None
+        assert _enveloped(dc.check_grep_via_bash_rewrite)(cmd) is None

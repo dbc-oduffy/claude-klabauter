@@ -302,11 +302,12 @@ def test_case_variant_of_existing_file_mints_the_tracked_spelling(tmp_path):
     assert "SRC/BLOCKED.py" not in rows["X1"]["writes"]
 
 
-def test_unbacked_path_in_existing_directory_mints_nothing(tmp_path):
+def test_new_file_in_existing_directory_is_minted_and_orphan_dir_is_not(tmp_path):
     repo = _repo_with(tmp_path / "repo", "src/x.py")
-    sizing = _ledger_sizing(("add src/test_missing.py", "open"))
+    sizing = _ledger_sizing(("add src/test_missing.py and nodir/none.py", "open"))
     _, rows = _rows_by_id(tmp_path, sizing, ["src/x.py"], repo)
-    assert rows["X1"]["writes"] == ["src/x.py"]
+    assert "src/test_missing.py" in rows["X1"]["writes"]
+    assert "nodir/none.py" not in rows["X1"]["writes"]
 
 
 def test_plans_only_ledger_body_stays_in_x1(tmp_path):

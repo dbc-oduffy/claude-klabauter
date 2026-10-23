@@ -9,6 +9,11 @@ import pytest
 from coordinator_core import machine_profile
 from coordinator_core.bash_guards import block_home_root_bash_write as guard
 from coordinator_core.write_guards._home_root import DENY_REASON
+from coordinator_core.guard_messages.testing import envelope_of
+
+
+def _enveloped(check):
+    return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 
 @pytest.fixture
@@ -53,20 +58,20 @@ def _denied(result):
     ],
 )
 def test_bash_home_creation_is_denied(home, tmp_path, cmd):
-    assert _denied(guard.check(_payload(cmd, cwd=tmp_path)))
+    assert _denied(_enveloped(guard.check)(_payload(cmd, cwd=tmp_path)))
 
 
 def test_bash_absolute_home_literal_is_denied(home, tmp_path):
     cmd = f"echo x > {(home / 'fo.txt').as_posix()}"
-    assert _denied(guard.check(_payload(cmd, cwd=tmp_path)))
+    assert _denied(_enveloped(guard.check)(_payload(cmd, cwd=tmp_path)))
 
 
 def test_relative_redirect_with_cwd_home_is_denied(home):
-    assert _denied(guard.check(_payload("echo x > fo.txt", cwd=home)))
+    assert _denied(_enveloped(guard.check)(_payload("echo x > fo.txt", cwd=home)))
 
 
 def test_relative_redirect_with_cwd_elsewhere_is_allowed(home, tmp_path):
-    assert guard.check(_payload("echo x > fo.txt", cwd=tmp_path)) is None
+    assert _enveloped(guard.check)(_payload("echo x > fo.txt", cwd=tmp_path)) is None
 
 
 @pytest.mark.parametrize(
@@ -81,22 +86,22 @@ def test_relative_redirect_with_cwd_elsewhere_is_allowed(home, tmp_path):
     ],
 )
 def test_powershell_home_creation_is_denied(home, tmp_path, cmd):
-    assert _denied(guard.check(_payload(cmd, tool="PowerShell", cwd=tmp_path)))
+    assert _denied(_enveloped(guard.check)(_payload(cmd, tool="PowerShell", cwd=tmp_path)))
 
 
 def test_tool_owned_dotfile_is_allowed(home, tmp_path):
-    assert guard.check(_payload("echo x >> ~/.bashrc", cwd=tmp_path)) is None
+    assert _enveloped(guard.check)(_payload("echo x >> ~/.bashrc", cwd=tmp_path)) is None
 
 
 def test_existing_home_file_is_allowed(home, tmp_path):
     (home / "keep.txt").write_text("x", encoding="utf-8")
-    assert guard.check(_payload("echo x >> ~/keep.txt", cwd=tmp_path)) is None
+    assert _enveloped(guard.check)(_payload("echo x >> ~/keep.txt", cwd=tmp_path)) is None
 
 
 def test_home_subdir_target_is_allowed(home, tmp_path):
-    assert guard.check(_payload("echo x > ~/X/repo/scratch/x", cwd=tmp_path)) is None
+    assert _enveloped(guard.check)(_payload("echo x > ~/X/repo/scratch/x", cwd=tmp_path)) is None
     assert (
-        guard.check(
+        _enveloped(guard.check)(
             _payload(r"Out-File ~\X\repo\scratch\x", tool="PowerShell", cwd=tmp_path)
         )
         is None
@@ -104,22 +109,22 @@ def test_home_subdir_target_is_allowed(home, tmp_path):
 
 
 def test_unrelated_command_is_allowed(home, tmp_path):
-    assert guard.check(_payload("git status", cwd=tmp_path)) is None
-    assert guard.check(_payload("echo x > out.txt", cwd=tmp_path)) is None
+    assert _enveloped(guard.check)(_payload("git status", cwd=tmp_path)) is None
+    assert _enveloped(guard.check)(_payload("echo x > out.txt", cwd=tmp_path)) is None
 
 
 @pytest.mark.skipif(os.name != "nt", reason="MSYS drive-mount spelling is only decoded on Windows")
 def test_msys_spelled_home_is_denied(home, tmp_path):
     drive, rest = os.path.splitdrive(str(home / "fo.txt"))
     msys = "/" + drive[0].lower() + rest.replace("\\", "/")
-    assert _denied(guard.check(_payload(f"echo x > {msys}", cwd=tmp_path)))
+    assert _denied(_enveloped(guard.check)(_payload(f"echo x > {msys}", cwd=tmp_path)))
 
 
 @pytest.mark.parametrize("level,decision", [("warn", "allow"), ("off", None)])
 def test_guard_level_downgrades_the_deny(home, tmp_path, monkeypatch, level, decision):
     monkeypatch.setenv("MACHINE_LOCAL_COORDINATOR_GUARD_LEVEL", level)
     machine_profile.reset_cache()
-    out = guard.check(_payload("echo x > ~/fo.txt", cwd=tmp_path))
+    out = _enveloped(guard.check)(_payload("echo x > ~/fo.txt", cwd=tmp_path))
     if decision is None:
         assert out is None
     else:
@@ -127,9 +132,9 @@ def test_guard_level_downgrades_the_deny(home, tmp_path, monkeypatch, level, dec
 
 
 def test_malformed_payload_allows(home):
-    assert guard.check({}) is None
-    assert guard.check({"tool_name": "Bash", "tool_input": "nope"}) is None
-    assert guard.check({"tool_name": "Write", "tool_input": {"command": "echo x > ~/f"}}) is None
+    assert _enveloped(guard.check)({}) is None
+    assert _enveloped(guard.check)({"tool_name": "Bash", "tool_input": "nope"}) is None
+    assert _enveloped(guard.check)({"tool_name": "Write", "tool_input": {"command": "echo x > ~/f"}}) is None
 
 
 def test_prefilter_skips_commands_that_cannot_name_home(home, tmp_path, monkeypatch):
@@ -137,4 +142,4 @@ def test_prefilter_skips_commands_that_cannot_name_home(home, tmp_path, monkeypa
         raise AssertionError("tokenizer reached")
 
     monkeypatch.setattr(guard, "resolve_command_positions", boom)
-    assert guard.check(_payload("echo hello > out.txt", cwd=tmp_path)) is None
+    assert _enveloped(guard.check)(_payload("echo hello > out.txt", cwd=tmp_path)) is None

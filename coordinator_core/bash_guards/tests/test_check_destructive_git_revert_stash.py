@@ -50,6 +50,11 @@ from coordinator_core.bash_guards.dispatch_checks import (
     check_destructive_git_revert_advisory,
 )
 from coordinator_core.win_portability import no_console_creationflags
+from coordinator_core.guard_messages.testing import envelope_of
+
+
+def _enveloped(check):
+    return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 pytestmark = [
     pytest.mark.spawns_process,
@@ -93,7 +98,7 @@ class TestBareStashSweepingPeerTrackedEdits:
         ],
     )
     def test_sweep_shapes_are_denied(self, repo_with_peer_work: Path, cmd: str) -> None:
-        result = check_destructive_git_revert(
+        result = _enveloped(check_destructive_git_revert)(
             "git -C %s %s" % (repo_with_peer_work, cmd.removeprefix("git "))
         )
         assert result is not None, "unscoped %r swept a peer's tracked work undetected" % cmd
@@ -115,19 +120,19 @@ class TestBareStashSweepingPeerTrackedEdits:
         self, repo_with_peer_work: Path, template: str
     ) -> None:
         cmd = template % repo_with_peer_work
-        result = check_destructive_git_revert(cmd)
+        result = _enveloped(check_destructive_git_revert)(cmd)
         assert result is not None, "%r masked the stash behind an earlier git invocation" % cmd
         assert "SC-DR-023" in _deny_reason(result)
 
     def test_pathspec_scoped_stash_is_allowed(self, repo_with_peer_work: Path) -> None:
-        result = check_destructive_git_revert(
+        result = _enveloped(check_destructive_git_revert)(
             "git -C %s stash push -- some/other/path.py" % repo_with_peer_work
         )
         assert result is None
 
     @pytest.mark.parametrize("sub", ["list", "show", "create", "store"])
     def test_non_sweep_subcommands_are_allowed(self, repo_with_peer_work: Path, sub: str) -> None:
-        result = check_destructive_git_revert("git -C %s stash %s" % (repo_with_peer_work, sub))
+        result = _enveloped(check_destructive_git_revert)("git -C %s stash %s" % (repo_with_peer_work, sub))
         assert result is None
 
 
@@ -149,19 +154,19 @@ class TestWindowsExeStashRealEntrypoint:
     """
 
     def test_git_exe_bare_stash_denies(self, repo_with_peer_work: Path) -> None:
-        result = check_destructive_git_revert("git.exe -C %s stash" % repo_with_peer_work)
+        result = _enveloped(check_destructive_git_revert)("git.exe -C %s stash" % repo_with_peer_work)
         assert result is not None, "git.exe stash swept a peer's tracked work undetected"
         assert "SC-DR-023" in _deny_reason(result)
 
     def test_git_exe_uppercase_bare_stash_denies(self, repo_with_peer_work: Path) -> None:
-        result = check_destructive_git_revert("GIT.EXE -C %s stash" % repo_with_peer_work)
+        result = _enveloped(check_destructive_git_revert)("GIT.EXE -C %s stash" % repo_with_peer_work)
         assert result is not None, "GIT.EXE stash swept a peer's tracked work undetected"
         assert "SC-DR-023" in _deny_reason(result)
 
     def test_windows_spaced_path_backslash_git_exe_stash_denies(
         self, repo_with_peer_work: Path
     ) -> None:
-        result = check_destructive_git_revert(
+        result = _enveloped(check_destructive_git_revert)(
             "C:\\Program Files\\Git\\bin\\git.exe -C %s stash" % repo_with_peer_work
         )
         assert result is not None, "spaced-path git.exe stash swept a peer's tracked work undetected"
@@ -170,20 +175,20 @@ class TestWindowsExeStashRealEntrypoint:
     def test_windows_spaced_path_forward_slash_git_exe_stash_denies(
         self, repo_with_peer_work: Path
     ) -> None:
-        result = check_destructive_git_revert(
+        result = _enveloped(check_destructive_git_revert)(
             "C:/Program Files/Git/bin/git.exe -C %s stash" % repo_with_peer_work
         )
         assert result is not None, "spaced-path git.exe stash swept a peer's tracked work undetected"
         assert "SC-DR-023" in _deny_reason(result)
 
     def test_git_exe_pathspec_scoped_stash_still_allowed(self, repo_with_peer_work: Path) -> None:
-        result = check_destructive_git_revert(
+        result = _enveloped(check_destructive_git_revert)(
             "git.exe -C %s stash push -- some/other/path.py" % repo_with_peer_work
         )
         assert result is None
 
     def test_gitk_exe_bare_invocation_not_treated_as_git(self, repo_with_peer_work: Path) -> None:
-        result = check_destructive_git_revert("gitk.exe -C %s stash" % repo_with_peer_work)
+        result = _enveloped(check_destructive_git_revert)("gitk.exe -C %s stash" % repo_with_peer_work)
         assert result is None
 
 
@@ -191,7 +196,7 @@ class TestTrackedRowsAreCollected:
 
     def test_tracked_only_tree_still_denies(self, repo_with_peer_work: Path) -> None:
         assert not [p for p in repo_with_peer_work.rglob("*") if p.name.startswith("untracked")]
-        result = check_destructive_git_revert("git -C %s stash -u" % repo_with_peer_work)
+        result = _enveloped(check_destructive_git_revert)("git -C %s stash -u" % repo_with_peer_work)
         assert result is not None
         assert "SC-DR-023" in _deny_reason(result)
 
@@ -274,7 +279,7 @@ class TestMentionIsNotInvocation:
         ],
     )
     def test_mentions_do_not_deny(self, repo_with_peer_work: Path, cmd: str) -> None:
-        assert check_destructive_git_revert(cmd) is None
+        assert _enveloped(check_destructive_git_revert)(cmd) is None
 
 
 class TestMentionIsNotInvocationOtherVerbs:
@@ -290,8 +295,8 @@ class TestMentionIsNotInvocationOtherVerbs:
     def test_reset_mentions_are_silent(
         self, repo_with_ordinary_dirty_file: Path, cmd: str
     ) -> None:
-        assert check_destructive_git_revert(cmd) is None
-        assert check_destructive_git_revert_advisory(cmd) is None
+        assert _enveloped(check_destructive_git_revert)(cmd) is None
+        assert _enveloped(check_destructive_git_revert_advisory)(cmd) is None
 
     @pytest.mark.parametrize(
         "cmd",
@@ -304,8 +309,8 @@ class TestMentionIsNotInvocationOtherVerbs:
     def test_checkout_mentions_are_silent(
         self, repo_with_ordinary_dirty_file: Path, cmd: str
     ) -> None:
-        assert check_destructive_git_revert(cmd) is None
-        assert check_destructive_git_revert_advisory(cmd) is None
+        assert _enveloped(check_destructive_git_revert)(cmd) is None
+        assert _enveloped(check_destructive_git_revert_advisory)(cmd) is None
 
     @pytest.mark.parametrize(
         "cmd",
@@ -318,8 +323,8 @@ class TestMentionIsNotInvocationOtherVerbs:
     def test_restore_mentions_are_silent(
         self, repo_with_ordinary_dirty_file: Path, cmd: str
     ) -> None:
-        assert check_destructive_git_revert(cmd) is None
-        assert check_destructive_git_revert_advisory(cmd) is None
+        assert _enveloped(check_destructive_git_revert)(cmd) is None
+        assert _enveloped(check_destructive_git_revert_advisory)(cmd) is None
 
 
 def _advisory_context(result) -> str:
@@ -370,7 +375,7 @@ class TestAdvisoryFloorDirtyNotLoadbearing:
     )
     def test_stash_denies(self, repo_with_ordinary_dirty_file: Path, cmd_tail: str) -> None:
         cmd = "git -C %s %s" % (repo_with_ordinary_dirty_file, cmd_tail)
-        result = check_destructive_git_revert(cmd)
+        result = _enveloped(check_destructive_git_revert)(cmd)
         assert result is not None
         hso = result["hookSpecificOutput"]
         assert hso["permissionDecision"] == "deny"
@@ -378,7 +383,7 @@ class TestAdvisoryFloorDirtyNotLoadbearing:
 
     def test_reset_hard_denies(self, repo_with_ordinary_dirty_file: Path) -> None:
         cmd = "git -C %s reset --hard" % repo_with_ordinary_dirty_file
-        result = check_destructive_git_revert(cmd)
+        result = _enveloped(check_destructive_git_revert)(cmd)
         assert result is not None
         hso = result["hookSpecificOutput"]
         assert hso["permissionDecision"] == "deny"
@@ -389,7 +394,7 @@ class TestAdvisoryFloorDirtyNotLoadbearing:
         self, repo_with_ordinary_dirty_file: Path, verb_cmd: str
     ) -> None:
         cmd = "git -C %s %s" % (repo_with_ordinary_dirty_file, verb_cmd)
-        result = check_destructive_git_revert(cmd)
+        result = _enveloped(check_destructive_git_revert)(cmd)
         assert result is not None
         hso = result["hookSpecificOutput"]
         assert hso["permissionDecision"] == "deny"
@@ -409,7 +414,7 @@ class TestCleanTreeStillDeniesWholeTreeForms:
         ["stash", "stash -u", "reset --hard", "checkout .", "restore ."],
     )
     def test_clean_tree_still_denies(self, clean_repo: Path, cmd_tail: str) -> None:
-        result = check_destructive_git_revert("git -C %s %s" % (clean_repo, cmd_tail))
+        result = _enveloped(check_destructive_git_revert)("git -C %s %s" % (clean_repo, cmd_tail))
         assert result is not None
         assert "SC-DR-023" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
@@ -423,14 +428,14 @@ class TestAdvisoryNeverDemotesADeny:
     when the tree happens to be clean."""
 
     def test_reset_hard_on_loadbearing_still_denies(self, repo_with_peer_work: Path) -> None:
-        result = check_destructive_git_revert("git -C %s reset --hard" % repo_with_peer_work)
+        result = _enveloped(check_destructive_git_revert)("git -C %s reset --hard" % repo_with_peer_work)
         assert result is not None
         hso = result["hookSpecificOutput"]
         assert hso["permissionDecision"] == "deny"
         assert "SC-DR-023" in hso["permissionDecisionReason"]
 
     def test_checkout_dot_on_loadbearing_still_denies(self, repo_with_peer_work: Path) -> None:
-        result = check_destructive_git_revert("git -C %s checkout ." % repo_with_peer_work)
+        result = _enveloped(check_destructive_git_revert)("git -C %s checkout ." % repo_with_peer_work)
         assert result is not None
         hso = result["hookSpecificOutput"]
         assert hso["permissionDecision"] == "deny"
@@ -453,7 +458,7 @@ class TestDenySegmentWinsOverAdvisorySegment:
             repo_with_ordinary_dirty_file,
             repo_with_peer_work,
         )
-        result = check_destructive_git_revert(cmd)
+        result = _enveloped(check_destructive_git_revert)(cmd)
         assert result is not None
         hso = result["hookSpecificOutput"]
         assert hso["permissionDecision"] == "deny"
@@ -466,7 +471,7 @@ class TestDenySegmentWinsOverAdvisorySegment:
             repo_with_peer_work,
             repo_with_ordinary_dirty_file,
         )
-        result = check_destructive_git_revert(cmd)
+        result = _enveloped(check_destructive_git_revert)(cmd)
         assert result is not None
         hso = result["hookSpecificOutput"]
         assert hso["permissionDecision"] == "deny"
@@ -478,7 +483,7 @@ class TestScopedStashStillNone:
     def test_scoped_stash_on_ordinary_dirty_tree_is_none(
         self, repo_with_ordinary_dirty_file: Path
     ) -> None:
-        result = check_destructive_git_revert(
+        result = _enveloped(check_destructive_git_revert)(
             "git -C %s stash push -- some/other/path.py" % repo_with_ordinary_dirty_file
         )
         assert result is None
@@ -598,7 +603,7 @@ class TestShellCRescanAdvisoryFloor:
         self, repo_with_ordinary_dirty_file: Path
     ) -> None:
         cmd = "sh -c 'git -C %s stash'" % repo_with_ordinary_dirty_file
-        result = check_destructive_git_revert(cmd)
+        result = _enveloped(check_destructive_git_revert)(cmd)
         assert result is not None
         hso = result["hookSpecificOutput"]
         assert hso["permissionDecision"] == "deny"
@@ -611,7 +616,7 @@ class TestShellCRescanAdvisoryFloor:
             repo_with_ordinary_dirty_file,
             repo_with_peer_work,
         )
-        result = check_destructive_git_revert(cmd)
+        result = _enveloped(check_destructive_git_revert)(cmd)
         assert result is not None
         hso = result["hookSpecificOutput"]
         assert hso["permissionDecision"] == "deny"
@@ -633,7 +638,7 @@ class TestForceCheckoutWholeTree:
     def test_force_checkout_denies_over_peer_work(
         self, repo_with_peer_work: Path, flags: str
     ) -> None:
-        result = check_destructive_git_revert(
+        result = _enveloped(check_destructive_git_revert)(
             "git -C %s checkout %s" % (repo_with_peer_work, flags)
         )
         assert result is not None, "force checkout must not pass silently"
@@ -642,13 +647,13 @@ class TestForceCheckoutWholeTree:
     def test_force_with_explicit_pathspec_stays_scoped(
         self, repo_with_peer_work: Path
     ) -> None:
-        result = check_destructive_git_revert(
+        result = _enveloped(check_destructive_git_revert)(
             "git -C %s checkout -f -- some/other/path.py" % repo_with_peer_work
         )
         assert result is None
 
     def test_force_dot_pathspec_still_denies(self, repo_with_peer_work: Path) -> None:
-        result = check_destructive_git_revert(
+        result = _enveloped(check_destructive_git_revert)(
             "git -C %s checkout -f -- ." % repo_with_peer_work
         )
         assert result is not None
@@ -665,13 +670,13 @@ class TestForceCheckoutWholeTree:
     def test_benign_checkout_shapes_stay_silent(
         self, repo_with_peer_work: Path, cmd: str
     ) -> None:
-        result = check_destructive_git_revert(
+        result = _enveloped(check_destructive_git_revert)(
             "git -C %s %s" % (repo_with_peer_work, cmd)
         )
         assert result is None, cmd
 
     def test_force_checkout_on_clean_tree_stays_silent(self, clean_repo: Path) -> None:
-        result = check_destructive_git_revert(
+        result = _enveloped(check_destructive_git_revert)(
             "git -C %s checkout -f" % clean_repo
         )
         assert result is None
@@ -683,7 +688,7 @@ class TestForceSwitchWholeTree:
     def test_force_switch_denies_over_peer_work(
         self, repo_with_peer_work: Path, flags: str
     ) -> None:
-        result = check_destructive_git_revert(
+        result = _enveloped(check_destructive_git_revert)(
             "git -C %s switch %s" % (repo_with_peer_work, flags)
         )
         assert result is not None, "force switch must not pass silently"
@@ -693,13 +698,13 @@ class TestForceSwitchWholeTree:
     def test_benign_switch_shapes_stay_silent(
         self, repo_with_peer_work: Path, cmd: str
     ) -> None:
-        result = check_destructive_git_revert(
+        result = _enveloped(check_destructive_git_revert)(
             "git -C %s %s" % (repo_with_peer_work, cmd)
         )
         assert result is None, cmd
 
     def test_force_switch_on_clean_tree_stays_silent(self, clean_repo: Path) -> None:
-        result = check_destructive_git_revert("git -C %s switch -f main" % clean_repo)
+        result = _enveloped(check_destructive_git_revert)("git -C %s switch -f main" % clean_repo)
         assert result is None
 
 

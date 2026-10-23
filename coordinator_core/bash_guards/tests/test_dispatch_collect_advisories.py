@@ -49,6 +49,7 @@ import pytest
 
 from coordinator_core.bash_guards import _verdict, dispatch
 from coordinator_core.bash_guards.dispatch import GuardBand, GuardEntry
+from coordinator_core.guard_messages.alternative_record import AlternativeRecord, ReadyCommand
 
 
 def _payload(cmd: str = "echo probe", session_id: str = "sess-collect-1") -> str:
@@ -92,14 +93,30 @@ def _deny_envelope(tag: str):
     }
 
 
+def _fake_record(kind: str, text: str, name: str) -> AlternativeRecord:
+    return AlternativeRecord(kind, text, (ReadyCommand("true"),), name, em_text=text)
+
+
+def _soft_record(tag: str):
+    return _fake_record("advisory", "soft note: %s" % tag, "fake-soft-first")
+
+
+def _content_record(tag: str):
+    return _fake_record("advisory", "content note: %s" % tag, "fake-content-second")
+
+
+def _deny_record(tag: str):
+    return _fake_record("deny", "fake hard deny: %s" % tag, "fake-platform-deny")
+
+
 # Two distinct soft/content-shaped advisory entries, in registration order --
 # used for (a)/(b)/(d)/(e) below. Deliberately DIFFERENT envelope shapes
 # (soft "allow+additionalContext" vs content "allow+additionalContext" with
 # a distinguishable tag) so (d) can assert each survives the aggregate
 # return without being merged/coerced into the other's shape.
 _TWO_ADVISORY_CHAIN = [
-    GuardEntry("fake-soft-first", lambda: _soft_envelope("first"), False, GuardBand.ADVISORY_REWRITE),
-    GuardEntry("fake-content-second", lambda: _content_envelope("second"), False, GuardBand.ADVISORY_REWRITE),
+    GuardEntry("fake-soft-first", lambda: _soft_record("first"), False, GuardBand.ADVISORY_REWRITE),
+    GuardEntry("fake-content-second", lambda: _content_record("second"), False, GuardBand.ADVISORY_REWRITE),
 ]
 
 # Same two advisories, plus a hard-deny entry registered AFTER both --
@@ -109,7 +126,7 @@ _TWO_ADVISORY_CHAIN = [
 _ADVISORY_THEN_DENY_CHAIN = list(_TWO_ADVISORY_CHAIN) + [
     GuardEntry(
         "fake-platform-deny",
-        lambda: _deny_envelope("tail"),
+        lambda: _deny_record("tail"),
         True,
         GuardBand.PLATFORM_CONDITIONED_DENY,
     ),
@@ -135,7 +152,7 @@ _SILENT_RECORDING_CHAIN = [
 ]
 
 _SILENT_THEN_ADVISORY_CHAIN = list(_SILENT_RECORDING_CHAIN) + [
-    GuardEntry("fake-soft-first", lambda: _soft_envelope("first"), False, GuardBand.ADVISORY_REWRITE),
+    GuardEntry("fake-soft-first", lambda: _soft_record("first"), False, GuardBand.ADVISORY_REWRITE),
 ]
 
 

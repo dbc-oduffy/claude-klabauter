@@ -24,6 +24,11 @@ import os
 import pytest
 
 from coordinator_core.bash_guards import dispatch_checks as dc
+from coordinator_core.guard_messages.testing import envelope_of
+
+
+def _enveloped(check):
+    return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 
 @pytest.fixture(autouse=True)
@@ -69,14 +74,14 @@ class TestFires:
         cmd = _heredoc(
             'import pathlib\npathlib.Path("coordinator_core/x.py").write_text("hi")'
         )
-        result = dc.check_heredoc_repo_write_advise(cmd, "sess", None, fires_git_root)
+        result = _enveloped(dc.check_heredoc_repo_write_advise)(cmd, "sess", None, fires_git_root)
         hso = _hso(result)
         assert hso["permissionDecision"] == "allow"
         assert "coordinator_core/x.py" in hso["additionalContext"]
 
     def test_open_write_mode_under_git_root(self, fires_git_root):
         cmd = _heredoc('open("docs/foo.md", "w").write("hi")')
-        result = dc.check_heredoc_repo_write_advise(cmd, "sess", None, fires_git_root)
+        result = _enveloped(dc.check_heredoc_repo_write_advise)(cmd, "sess", None, fires_git_root)
         hso = _hso(result)
         assert hso["permissionDecision"] == "allow"
         assert "docs/foo.md" in hso["additionalContext"]
@@ -90,40 +95,40 @@ class TestSilent:
         cmd = _heredoc(
             'import pathlib\npathlib.Path(%r).write_text("hi")' % (rel + "/out.py")
         )
-        assert dc.check_heredoc_repo_write_advise(cmd, "sess", None, str(tmp_path)) is None
+        assert _enveloped(dc.check_heredoc_repo_write_advise)(cmd, "sess", None, str(tmp_path)) is None
 
     def test_target_outside_git_root(self, tmp_path):
         cmd = _heredoc(
             'import pathlib\npathlib.Path("../outside/x.py").write_text("hi")'
         )
-        assert dc.check_heredoc_repo_write_advise(cmd, "sess", None, str(tmp_path)) is None
+        assert _enveloped(dc.check_heredoc_repo_write_advise)(cmd, "sess", None, str(tmp_path)) is None
 
     def test_read_only_heredoc(self, tmp_path):
         cmd = _heredoc(
             'import pathlib\ndata = pathlib.Path("coordinator_core/x.py").read_text()'
         )
-        assert dc.check_heredoc_repo_write_advise(cmd, "sess", None, str(tmp_path)) is None
+        assert _enveloped(dc.check_heredoc_repo_write_advise)(cmd, "sess", None, str(tmp_path)) is None
 
     def test_open_read_mode_is_not_a_write(self, tmp_path):
         cmd = _heredoc('open("coordinator_core/x.py", "r").read()')
-        assert dc.check_heredoc_repo_write_advise(cmd, "sess", None, str(tmp_path)) is None
+        assert _enveloped(dc.check_heredoc_repo_write_advise)(cmd, "sess", None, str(tmp_path)) is None
 
     def test_unresolvable_variable_path(self, tmp_path):
         cmd = _heredoc('p = "coordinator_core/x.py"\nopen(p, "w").write("hi")')
-        assert dc.check_heredoc_repo_write_advise(cmd, "sess", None, str(tmp_path)) is None
+        assert _enveloped(dc.check_heredoc_repo_write_advise)(cmd, "sess", None, str(tmp_path)) is None
 
     def test_unresolvable_fstring_path(self, tmp_path):
         cmd = _heredoc(
             'name = "x"\nopen(f"coordinator_core/{name}.py", "w").write("hi")'
         )
-        assert dc.check_heredoc_repo_write_advise(cmd, "sess", None, str(tmp_path)) is None
+        assert _enveloped(dc.check_heredoc_repo_write_advise)(cmd, "sess", None, str(tmp_path)) is None
 
     def test_empty_git_root(self):
         cmd = _heredoc(
             'import pathlib\npathlib.Path("coordinator_core/x.py").write_text("hi")'
         )
-        assert dc.check_heredoc_repo_write_advise(cmd, "sess", None, "") is None
-        assert dc.check_heredoc_repo_write_advise(cmd, "sess", None, None) is None
+        assert _enveloped(dc.check_heredoc_repo_write_advise)(cmd, "sess", None, "") is None
+        assert _enveloped(dc.check_heredoc_repo_write_advise)(cmd, "sess", None, None) is None
 
     def test_shell_heredoc_body_never_scanned(self, tmp_path):
         """A `bash <<'EOF' ... EOF` heredoc is a DIFFERENT class
@@ -132,7 +137,7 @@ class TestSilent:
         shell heredoc containing the identical write-shaped text must never
         fire, whatever it says."""
         cmd = "bash <<'EOF'\npathlib.Path(\"coordinator_core/x.py\").write_text(\"hi\")\nEOF"
-        assert dc.check_heredoc_repo_write_advise(cmd, "sess", None, str(tmp_path)) is None
+        assert _enveloped(dc.check_heredoc_repo_write_advise)(cmd, "sess", None, str(tmp_path)) is None
 
 
 class TestClaudeMemoryExempt:
@@ -153,7 +158,7 @@ class TestClaudeMemoryExempt:
     def test_memory_file_silent_when_git_root_is_config_dir(self, home):
         cfg = home + "/.claude"
         target = cfg + "/projects/-slug/memory/note.md"
-        assert dc.check_heredoc_repo_write_advise(self._write(target), "s", None, cfg) is None
+        assert _enveloped(dc.check_heredoc_repo_write_advise)(self._write(target), "s", None, cfg) is None
 
     def test_memory_file_silent_with_windows_separators(self, home):
         cfg = home + "/.claude"
@@ -165,17 +170,17 @@ class TestClaudeMemoryExempt:
         cfg = "/fires-git-root-fixture/" + tmp_path.name + "/cfg"
         monkeypatch.setenv("CLAUDE_CONFIG_DIR", cfg)
         target = cfg + "/projects/p/memory/a.md"
-        assert dc.check_heredoc_repo_write_advise(self._write(target), "s", None, cfg) is None
+        assert _enveloped(dc.check_heredoc_repo_write_advise)(self._write(target), "s", None, cfg) is None
 
     def test_non_memory_file_in_config_dir_still_advises(self, home):
         cfg = home + "/.claude"
         target = cfg + "/projects/-slug/other/note.md"
-        assert dc.check_heredoc_repo_write_advise(self._write(target), "s", None, cfg) is not None
+        assert _enveloped(dc.check_heredoc_repo_write_advise)(self._write(target), "s", None, cfg) is not None
 
     def test_memory_shaped_path_in_ordinary_repo_still_advises(self, home):
         root = "/fires-git-root-fixture/repo"
         target = root + "/projects/x/memory/a.md"
-        assert dc.check_heredoc_repo_write_advise(self._write(target), "s", None, root) is not None
+        assert _enveloped(dc.check_heredoc_repo_write_advise)(self._write(target), "s", None, root) is not None
 
 
 class TestAdvisoryNeverBlocking:
@@ -185,7 +190,7 @@ class TestAdvisoryNeverBlocking:
             _heredoc('open("docs/foo.md", "w").write("hi")'),
         ]
         for cmd in cases:
-            hso = _hso(dc.check_heredoc_repo_write_advise(cmd, "sess", None, fires_git_root))
+            hso = _hso(_enveloped(dc.check_heredoc_repo_write_advise)(cmd, "sess", None, fires_git_root))
             assert hso["permissionDecision"] == "allow"
             assert "updatedInput" not in hso
 
@@ -196,4 +201,4 @@ class TestOverride:
         cmd = _heredoc(
             'import pathlib\npathlib.Path("coordinator_core/x.py").write_text("hi")'
         )
-        assert dc.check_heredoc_repo_write_advise(cmd, "sess", None, str(tmp_path)) is None
+        assert _enveloped(dc.check_heredoc_repo_write_advise)(cmd, "sess", None, str(tmp_path)) is None

@@ -151,6 +151,8 @@ def capture_all_guards(
     captures: List[GuardCapture] = []
     for entry in chain:
         envelope = entry.fn()
+        if envelope is not None and not isinstance(envelope, (dict, list)):
+            envelope = dispatch._render_record(envelope, payload)
         envelope = _maybe_annotate_deny(
             entry.name, entry.fail_closed, envelope, session_id, agent_id
         )

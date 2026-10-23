@@ -344,3 +344,54 @@ def test_removed_created_path_leaves_no_intent_to_add_entry(world, monkeypatch):
     assert not new.exists()
     assert git("ls-files", "--", "tests/test_new.py") == ""
     assert git("diff", "--cached", "--name-only").split() == ["pkg/other.py"]
+
+
+def _add_tripwire(root):
+    (root / "tests/test_tripwire.py").write_text(
+        'def test_t():\n    assert open("pkg/mod.py")\n', encoding="utf-8"
+    )
+
+
+def test_tripwire_list_mode_returns_test_naming_an_edited_file(world):
+    root, _orig, _ = world
+    _add_tripwire(root)
+    (root / "pkg/mod.py").write_text("VALUE = 2\n", encoding="utf-8")
+    assert _list(root)["tripwires"] == ["tests/test_tripwire.py"]
+
+
+def test_tripwire_list_mode_ignores_unrelated_edit_and_empty_edit_set(world):
+    root, _orig, _ = world
+    _add_tripwire(root)
+    assert _list(root)["tripwires"] == []
+    (root / "pkg/other.py").write_text("OTHER = 2\n", encoding="utf-8")
+    assert _list(root)["tripwires"] == []
+
+
+def test_tripwire_edited_test_file_naming_another_edit_stays_in_edited_only(world):
+    root, _orig, _ = world
+    (root / "tests/test_plain.py").write_text('X = "pkg/mod.py"\n', encoding="utf-8")
+    (root / "pkg/mod.py").write_text("VALUE = 2\n", encoding="utf-8")
+    out = _list(root)
+    assert "tests/test_plain.py" in out["edited"]
+    assert out["tripwires"] == []
+
+
+def test_tripwire_failing_node_restores_the_file_it_names(world):
+    root, orig, _ = world
+    _add_tripwire(root)
+    (root / "pkg/mod.py").write_text("VALUE = 2\n", encoding="utf-8")
+    out = _revert(root, ["tests/test_tripwire.py::test_t"])
+    assert [(e["path"], e["tests"]) for e in out["reverted"]] == [
+        ("pkg/mod.py", ["tests/test_tripwire.py::test_t"])
+    ]
+    assert out["unattributed"] == []
+    assert (root / "pkg/mod.py").read_bytes() == orig["pkg/mod.py"]
+
+
+def test_tripwire_failing_node_naming_only_unedited_file_is_unattributed(world):
+    root, _orig, _ = world
+    _add_tripwire(root)
+    (root / "pkg/other.py").write_text("OTHER = 2\n", encoding="utf-8")
+    out = _revert(root, ["tests/test_tripwire.py::test_t"])
+    assert out["reverted"] == []
+    assert out["unattributed"] == ["tests/test_tripwire.py::test_t"]

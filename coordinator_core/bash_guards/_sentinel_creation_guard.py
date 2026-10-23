@@ -213,6 +213,45 @@ def indirection_deny_reason(
     )
 
 
+def sentinel_record(
+    guard_name: str,
+    verdict_kind: str,
+    em_text: str,
+    *members,
+    report_what: str,
+    authorize_what: str,
+):
+    """Record whose EM render is ``em_text`` byte for byte; ``members`` plus the
+    EscalationRoute drive the subagent render. Imports lazily: hot-path budget."""
+    from coordinator_core.guard_messages.alternative_record import (
+        AlternativeRecord,
+        EscalationRoute,
+    )
+
+    return AlternativeRecord(
+        verdict_kind=verdict_kind,
+        summary=em_text.split("\n\n", 1)[0],
+        em_text=em_text,
+        members=members
+        + (EscalationRoute(report_what=report_what, authorize_what=authorize_what),),
+        guard_name=guard_name,
+    )
+
+
+def leveled_record(guard_name: str, record, apply_level, risk: Optional[str] = None):
+    """The record at strict; otherwise the guard-level-mapped envelope."""
+    from coordinator_core.guard_messages.alternative_record import Audience
+    from coordinator_core.guard_messages.render import render
+
+    envelope = render(record, Audience.EM)
+    leveled = (
+        apply_level(guard_name, envelope)
+        if risk is None
+        else apply_level(guard_name, envelope, risk=risk)
+    )
+    return record if leveled == envelope else leveled
+
+
 from coordinator_core.bash_guards.block_subagent_destructive_action import (
     _BUNDLED_C_FLAG_RE,
     _C_FLAG_INTERPRETERS,

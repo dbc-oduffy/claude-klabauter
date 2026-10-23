@@ -10,6 +10,7 @@ import pytest
 from coordinator_core.bash_guards import block_approval_sentinel_creation as sentinel_guard
 from coordinator_core.bash_guards import block_subagent_commit as commit_guard
 from coordinator_core.bash_guards import guard_post_executor_verification as verify_guard
+from coordinator_core.guard_messages.testing import envelope_of
 from coordinator_core.hooks import nudge_em_code_dispatch as nd
 
 SID = "sess-clone-route-1"
@@ -60,6 +61,7 @@ def _counter(repo):
 
 
 def _denied(out) -> bool:
+    out = envelope_of(out, "em")
     return out is not None and out["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
@@ -85,7 +87,7 @@ def test_subagent_commit_guard_allows_the_grid_command_from_the_em(armed_repo) -
 def test_subagent_running_the_harness_script_in_the_repo_is_still_denied() -> None:
     script = REPO_ROOT / "coordinator_core" / "benchmarks" / "commit_leg_profile.py"
     assert "from coordinator_core.git.commit import" in script.read_text(encoding="utf-8")
-    out = commit_guard.check(_bash(REPO_ROOT, HARNESS_COMMAND, agent_id="deadbeef0123"))
+    out = envelope_of(commit_guard.check(_bash(REPO_ROOT, HARNESS_COMMAND, agent_id="deadbeef0123")), "em")
     assert _denied(out)
     assert "script file" in out["hookSpecificOutput"]["permissionDecisionReason"]
 

@@ -157,17 +157,27 @@ def _dirty_paths(cwd: str) -> List[str]:
     return sorted(result["value"]["paths"])
 
 
-def _deny_reason(shape: str, paths: List[str]) -> str:
+def _deny_record(shape: str, paths: List[str]) -> Any:
+    from coordinator_core.bash_guards._rewrite_support import _deny_record as _build
+    from coordinator_core.guard_messages.alternative_record import ReadyCommand
+
     shown = ", ".join(paths[:_MAX_PATHS])
     more = f" (+{len(paths) - _MAX_PATHS} more)" if len(paths) > _MAX_PATHS else ""
-    return (
+    return _build(
+        "deploy-dirty-tree",
         f"BLOCKED: `{shape}` builds the working tree, which holds {len(paths)} "
         f"uncommitted path(s) that would ship: {shown}{more}. "
-        "Run `git status`, then commit or clean the paths you own; leave a peer's."
+        "Commit or clean the paths you own; leave a peer's.",
+        (ReadyCommand(text="git status"),),
+        em_text=(
+            f"BLOCKED: `{shape}` builds the working tree, which holds {len(paths)} "
+            f"uncommitted path(s) that would ship: {shown}{more}. "
+            "Run `git status`, then commit or clean the paths you own; leave a peer's."
+        ),
     )
 
 
-def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def check(payload: Dict[str, Any]) -> Any:
     if (payload.get("tool_name") or "") not in MATCHERS:
         return None
     tool_input = payload.get("tool_input") or {}
@@ -187,10 +197,4 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         return None
     if not paths:
         return None
-    return {
-        "hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "permissionDecision": "deny",
-            "permissionDecisionReason": _deny_reason(shape, paths),
-        }
-    }
+    return _deny_record(shape, paths)

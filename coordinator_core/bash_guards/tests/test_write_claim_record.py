@@ -52,6 +52,12 @@ from coordinator_core.session.touch_record import (
     iter_complete_lines,
     sink_path,
 )
+from coordinator_core.guard_messages.alternative_record import AlternativeRecord, ReadyCommand
+from coordinator_core.guard_messages.testing import envelope_of
+
+
+def _enveloped(check):
+    return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 try:
     from coordinator_core.bash_guards._advisory_value import AdvisoryValue
@@ -124,18 +130,19 @@ def _payload_json(cmd, session_id, cwd):
     )
 
 
-_DENY_ENVELOPE = {
-    "hookSpecificOutput": {
-        "permissionDecision": "deny",
-        "permissionDecisionReason": "hard deny (fake, isolated chain)",
-    }
-}
+_DENY_RECORD = AlternativeRecord(
+    "deny",
+    "hard deny (fake, isolated chain)",
+    (ReadyCommand("true"),),
+    "fake-hard-deny-guard",
+    em_text="hard deny (fake, isolated chain)",
+)
 
 
 def _fake_hard_deny_entry(name="fake-hard-deny-guard"):
     return GuardEntry(
         name,
-        lambda: dict(_DENY_ENVELOPE),
+        lambda: _DENY_RECORD,
         True,
         GuardBand.CONFINEMENT_DENY,
         AdvisoryValue.NOT_COST_ARGUED,

@@ -202,6 +202,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from coordinator_core.bash_guards._command_tokenizer import (
+    exceeds_tokenizable_ceiling,
     normalize_executable_basename,
     resolve_command_positions,
 )
@@ -288,6 +289,8 @@ def _cp_mv_lands_in_home(cmd: str, identifiers_lower: Tuple[str, ...]) -> Option
     ``mv`` operand counts as written). ``None`` for anything not a single plain
     command, which the full predicate judges."""
     if any(ch in _CP_MV_UNJUDGED_CHARS for ch in cmd):
+        return None
+    if exceeds_tokenizable_ceiling(cmd):
         return None
     try:
         words = shlex.split(cmd)
@@ -1931,6 +1934,45 @@ def _neutralize_home_path_operands(
     return segment
 
 
+_PY_C_SUBSTITUTION_RE = re.compile(r"\$\(\s*python3?(?:\.\d+)?\s+-c\s+'(?P<body>[^'`]*)'\s*\)")
+_PY_C_SAFE_IMPORT_RE = re.compile(r"\bimport\s+([\w\s,]+)")
+_PY_C_SAFE_MODULES = frozenset({"json", "sys", "re", "datetime", "time"})
+_PY_C_CAPABILITY_RE = re.compile(
+    r"\b(?:open|exec|eval|compile|getattr|setattr|globals|locals|vars|input|breakpoint|"
+    r"os|shutil|subprocess|pathlib|Path|system|popen|write\w*|dump|print_to|modules)\b|__|\bfile\s*=|\bfrom\b"
+)
+
+
+def _is_pure_python_c_body(body: str) -> bool:
+    """A ``python -c`` body that can only compute and print: it imports nothing
+    outside ``_PY_C_SAFE_MODULES`` and names no file, process, reflection or
+    write capability, so a governed path inside it is a string value."""
+    if _PY_C_CAPABILITY_RE.search(body):
+        return False
+    for match in _PY_C_SAFE_IMPORT_RE.finditer(body):
+        names = {n.strip() for n in match.group(1).replace(";", ",").split(",")}
+        if not names <= _PY_C_SAFE_MODULES:
+            return False
+    return True
+
+
+def _neutralize_mention_only_python_substitutions(
+    segment: str, identifiers_lower: Tuple[str, ...]
+) -> str:
+    """``segment`` with each ``$(python -c '<pure body>')`` that mentions a
+    governed identifier replaced by ``x``: the body computes a string (a JSON
+    argument naming the path), it does not write it. A body with any file,
+    process or write capability keeps its substitution and stays judged."""
+
+    def _swap(match: "re.Match[str]") -> str:
+        body = match.group("body")
+        if _mentions_governed_identifier(body, identifiers_lower) and _is_pure_python_c_body(body):
+            return "x"
+        return match.group(0)
+
+    return _PY_C_SUBSTITUTION_RE.sub(_swap, segment)
+
+
 def is_denied_bash_write(cmd: str, identifiers_lower: Tuple[str, ...]) -> bool:
     """The whole predicate, isolated from payload plumbing so it is directly
     unit-testable. ``identifiers_lower`` is the per-call resolved governed-
@@ -1988,6 +2030,7 @@ def is_denied_bash_write(cmd: str, identifiers_lower: Tuple[str, ...]) -> bool:
         _strip_data_heredoc_bodies(_blank_prose_literal_mentions(cmd, identifiers_lower))
     )
     for segment in data_stripped_segments:
+        segment = _neutralize_mention_only_python_substitutions(segment, identifiers_lower)
         if not _mentions_governed_identifier(segment, identifiers_lower):
             continue
         segment = _neutralize_home_path_operands(segment, identifiers_lower)
@@ -2222,7 +2265,44 @@ def _check_advisory(
         return None
     if _is_onboarding_write(cmd, identifiers, cwd):
         return None
-    return doctrine_surface_advisory()
+    return _record("advisory", doctrine_surface_advisory()["hookSpecificOutput"]["additionalContext"])
+
+
+def _record(verdict_kind: str, text: str) -> Any:
+    """This guard's record; its EM text is ``text`` verbatim, so the EM render is the legacy envelope."""
+    from coordinator_core.guard_messages.alternative_record import (
+        AdaptableOffer,
+        AlternativeRecord,
+        EscalationRoute,
+    )
+
+    return AlternativeRecord(
+        verdict_kind=verdict_kind,
+        guard_name=_GUARD_NAME,
+        summary=text,
+        em_text=text,
+        members=(
+            AdaptableOffer(
+                template="use the Write or Edit tool on the governed file",
+                what_to_adapt="the governed file path",
+            ),
+            EscalationRoute(
+                report_what="the governed doctrine surface you need changed to whoever dispatched you",
+                authorize_what="an edit to a governed doctrine surface",
+            ),
+        ),
+    )
+
+
+def _levelled_deny(message: str, risk: str) -> Any:
+    """The deny record; a non-strict guard level returns the levelled envelope instead."""
+    from coordinator_core.guard_messages.alternative_record import Audience
+    from coordinator_core.guard_messages.render import render
+
+    record = _record("deny", message)
+    envelope = render(record, Audience.EM)
+    leveled = apply_guard_level(_GUARD_NAME, envelope, risk=risk)
+    return record if leveled == envelope else leveled
 
 
 def check(
@@ -2240,13 +2320,7 @@ def check(
     cmd = cmd.replace("\r", "")
 
     if _sizing_write_denied(cmd):
-        return {
-            "hookSpecificOutput": {
-                "hookEventName": "PreToolUse",
-                "permissionDecision": "deny",
-                "permissionDecisionReason": _SIZING_RECORD_DENY,
-            }
-        }
+        return _record("deny", _SIZING_RECORD_DENY)
 
     if not feature_enabled("doctrine_edit_gate"):
         return _check_advisory(cmd, governed_surfaces, str(payload.get("cwd") or ""))
@@ -2268,15 +2342,6 @@ def check(
         resolve_wiki_citation=resolve_wiki_citation,
     )
 
-    denial = {
-        "hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "permissionDecision": "deny",
-            "permissionDecisionReason": message,
-        }
-    }
-    return apply_guard_level(
-        _GUARD_NAME,
-        denial,
-        risk=doctrine_surface_risk("this command writes a governed doctrine surface."),
+    return _levelled_deny(
+        message, doctrine_surface_risk("this command writes a governed doctrine surface.")
     )

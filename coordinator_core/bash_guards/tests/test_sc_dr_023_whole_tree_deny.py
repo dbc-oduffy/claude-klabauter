@@ -26,6 +26,11 @@ import pytest
 from coordinator_core.bash_guards import dispatch_checks
 from coordinator_core.bash_guards.dispatch_checks import check_destructive_git_revert
 from coordinator_core.win_portability import no_console_creationflags
+from coordinator_core.guard_messages.testing import envelope_of
+
+
+def _enveloped(check):
+    return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 pytestmark = [pytest.mark.cadence]
 
@@ -67,7 +72,7 @@ class TestWholeTreeFormsDenyWithoutAProbe:
         ],
     )
     def test_denies_with_no_run_git_call(self, no_git_spawn: None, cmd: str) -> None:
-        result = check_destructive_git_revert(cmd)
+        result = _enveloped(check_destructive_git_revert)(cmd)
         assert result is not None, "%r must deny (SC-DR-023 whole-tree form)" % cmd
         hso = result["hookSpecificOutput"]
         assert hso["permissionDecision"] == "deny"
@@ -85,21 +90,21 @@ class TestWholeTreeFormsDenyWithoutAProbe:
         subprocess.run(["git", "commit", "-qm", "baseline"], cwd=str(repo), check=True, capture_output=True, **no_console_creationflags())
 
         for tail in ("stash", "reset --hard", "checkout .", "restore ."):
-            result = check_destructive_git_revert("git -C %s %s" % (repo, tail))
+            result = _enveloped(check_destructive_git_revert)("git -C %s %s" % (repo, tail))
             assert result is not None, "%r on a clean tree must still deny" % tail
 
 
 class TestScopedFormsUnaffected:
 
     def test_scoped_stash_is_allowed(self, no_git_spawn: None) -> None:
-        assert check_destructive_git_revert("git stash push -- some/path.py") is None
+        assert _enveloped(check_destructive_git_revert)("git stash push -- some/path.py") is None
 
     @pytest.mark.parametrize("sub", ["list", "show", "pop", "apply", "drop"])
     def test_non_sweep_stash_subcommands_are_allowed(self, no_git_spawn: None, sub: str) -> None:
-        assert check_destructive_git_revert("git stash %s" % sub) is None
+        assert _enveloped(check_destructive_git_revert)("git stash %s" % sub) is None
 
     def test_checkout_branch_is_not_whole_tree(self, no_git_spawn: None) -> None:
-        assert check_destructive_git_revert("git checkout main") is None
+        assert _enveloped(check_destructive_git_revert)("git checkout main") is None
 
 
 class TestResetHardWithRefIsUnchanged:
@@ -116,7 +121,7 @@ class TestResetHardWithRefIsUnchanged:
             return (0, "")
 
         monkeypatch.setattr(dispatch_checks._dc_git_probe, "_run_git", _spy)
-        check_destructive_git_revert("git reset --hard HEAD~1")
+        _enveloped(check_destructive_git_revert)("git reset --hard HEAD~1")
         assert calls, "git reset --hard <ref> must still consult git status (not command-string-alone)"
 
 
@@ -125,6 +130,6 @@ class TestPowerShellLeg:
     def test_start_process_bare_stash_denies(self, no_git_spawn: None) -> None:
         cmd = "Start-Process git -ArgumentList 'stash'"
         payload = {"tool_name": "PowerShell"}
-        result = dispatch_checks._check_destructive_git_revert_full(cmd, hook_payload=payload)[0]
+        result = envelope_of(dispatch_checks._check_destructive_git_revert_full(cmd, hook_payload=payload)[0])
         assert result is not None, "PowerShell Start-Process bare stash must deny too"
         assert "SC-DR-023" in result["hookSpecificOutput"]["permissionDecisionReason"]

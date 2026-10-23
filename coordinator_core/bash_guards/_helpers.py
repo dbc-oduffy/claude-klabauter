@@ -232,7 +232,7 @@ def emit_kind_resolution_failure_signal(
     guard_name: str,
     agent_id: str,
     git_root: Optional[str],
-    verdict: Optional[Dict[str, object]],
+    verdict: Any,
 ) -> None:
     if not agent_id:
         leg = "agent_id-canonicalization (raw agent_id did not match either accepted id shape)"
@@ -243,7 +243,10 @@ def emit_kind_resolution_failure_signal(
 
     if verdict is None:
         outcome = "this guard ALLOWS it (verdict: allow)"
+    elif getattr(verdict, "verdict_kind", None) == "deny":
+        outcome = "this guard CONFINES it (denies) (verdict: deny)"
     elif (
+        # dict branch: write_guards/block_subagent_plan_body_write.py still passes an envelope
         isinstance(verdict, dict)
         and isinstance(verdict.get("hookSpecificOutput"), dict)
         and verdict["hookSpecificOutput"].get("permissionDecision") == "deny"
@@ -588,7 +591,9 @@ def operator_override_note(
         return ""
     if not _override_keys_doc_reachable():
         return ""
-    return "See %s for this guard's override keys." % _resolve_override_keys_doc_display()
+    from coordinator_core.guard_messages.render import override_pointer
+
+    return override_pointer(_resolve_override_keys_doc_display())
 
 
 #: CONFINED SET -- originally mirrored coordinator-session.sh's

@@ -8,6 +8,11 @@ import pytest
 
 from coordinator_core.bash_guards import dispatch_checks
 from coordinator_core.bash_guards import guard_offer_git_c as guard
+from coordinator_core.guard_messages.testing import envelope_of
+
+
+def _enveloped(check):
+    return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 
 def _reason(out):
@@ -25,8 +30,8 @@ def _deny_reason(out) -> str:
 
 def _rewritten_command(out) -> str:
     hso = _reason(out)
-    assert hso["permissionDecision"] == "allow", (
-        "expected an allow-rewrite, got %r" % hso.get("permissionDecision")
+    assert hso.get("permissionDecision") != "deny" and "updatedInput" in hso, (
+        "expected a rewrite, got %r" % hso.get("permissionDecision")
     )
     return hso["updatedInput"]["command"]
 
@@ -39,7 +44,7 @@ def _clean_override(monkeypatch):
 class TestBareCdGitStillDenies:
 
     def test_bare_cd_and_git_auto_rewrites(self):
-        out = guard.check_offer_git_c("cd /repo && git log -1")
+        out = _enveloped(guard.check_offer_git_c)("cd /repo && git log -1")
         assert _rewritten_command(out) == "git -C /repo log -1"
 
 
@@ -47,32 +52,32 @@ class TestTildeTargetExpandsBeforeQuoting:
 
     def test_leading_tilde_is_expanded_not_quoted(self):
         home = os.path.expanduser("~")
-        out = guard.check_offer_git_c("cd ~/X/peer && git log -1")
+        out = _enveloped(guard.check_offer_git_c)("cd ~/X/peer && git log -1")
         rewritten = _rewritten_command(out)
 
         assert "~" not in rewritten
         assert rewritten == "git -C %s log -1" % shlex.quote(home + "/X/peer")
 
     def test_bare_tilde_target_is_expanded(self):
-        out = guard.check_offer_git_c("cd ~ && git status")
+        out = _enveloped(guard.check_offer_git_c)("cd ~ && git status")
         rewritten = _rewritten_command(out)
 
         assert rewritten == "git -C %s status" % shlex.quote(os.path.expanduser("~"))
 
     def test_non_tilde_target_is_byte_identical_to_before(self):
-        out = guard.check_offer_git_c("cd /repo/sub && git log -1")
+        out = _enveloped(guard.check_offer_git_c)("cd /repo/sub && git log -1")
         assert _rewritten_command(out) == "git -C /repo/sub log -1"
 
 
 class TestEnvPrefixEvasionNowDenies:
 
     def test_single_env_assignment_before_cd_denies(self):
-        out = guard.check_offer_git_c("FOO=1 cd /repo && git log -1")
+        out = _enveloped(guard.check_offer_git_c)("FOO=1 cd /repo && git log -1")
         reason = _deny_reason(out)
         assert "git -C /repo log -1" in reason
 
     def test_multiple_env_assignments_before_cd_denies(self):
-        out = guard.check_offer_git_c("FOO=1 BAR=2 cd /repo && git log -1")
+        out = _enveloped(guard.check_offer_git_c)("FOO=1 BAR=2 cd /repo && git log -1")
         reason = _deny_reason(out)
         assert "git -C /repo log -1" in reason
 
@@ -82,40 +87,40 @@ class TestWrapperWordEvasionNowDenies:
     assignment -- `_FIND_WRAPPER_WORDS` covers both."""
 
     def test_env_wrapper_word_before_cd_denies(self):
-        out = guard.check_offer_git_c("env cd /repo && git log -1")
+        out = _enveloped(guard.check_offer_git_c)("env cd /repo && git log -1")
         _deny_reason(out)
 
     def test_sudo_wrapper_word_before_cd_denies(self):
-        out = guard.check_offer_git_c("sudo cd /repo && git log -1")
+        out = _enveloped(guard.check_offer_git_c)("sudo cd /repo && git log -1")
         _deny_reason(out)
 
 
 class TestGitSidePrefixAutoRewritesCarryingThePrefix:
 
     def test_env_assignment_before_git_auto_rewrites(self):
-        out = guard.check_offer_git_c("cd /repo && FOO=1 git log -1")
+        out = _enveloped(guard.check_offer_git_c)("cd /repo && FOO=1 git log -1")
         assert _rewritten_command(out) == "FOO=1 git -C /repo log -1"
 
 
 class TestRewriteCasePreservesPrefix:
 
     def test_prefix_survives_into_rewrite_not_dropped(self):
-        out = guard.check_offer_git_c("cd /repo && FOO=1 git status")
+        out = _enveloped(guard.check_offer_git_c)("cd /repo && FOO=1 git status")
         assert _rewritten_command(out) == "FOO=1 git -C /repo status"
 
 
 class TestNicePrefixOnGitSegmentAutoRewrites:
 
     def test_nice_bare_numeric_before_git_auto_rewrites_carrying_nice_forward(self):
-        out = guard.check_offer_git_c("cd /repo && nice -19 git log -1")
+        out = _enveloped(guard.check_offer_git_c)("cd /repo && nice -19 git log -1")
         assert _rewritten_command(out) == "nice -19 git -C /repo log -1"
 
     def test_nice_n_flag_form_before_git_auto_rewrites(self):
-        out = guard.check_offer_git_c("cd /repo && nice -n 19 git status")
+        out = _enveloped(guard.check_offer_git_c)("cd /repo && nice -n 19 git status")
         assert _rewritten_command(out) == "nice -n 19 git -C /repo status"
 
     def test_nice_before_git_with_all_git_followers_auto_rewrites(self):
-        out = guard.check_offer_git_c(
+        out = _enveloped(guard.check_offer_git_c)(
             "cd /tmp/repo && nice -19 git status && git log -1"
         )
         assert _rewritten_command(out) == (
@@ -126,7 +131,7 @@ class TestNicePrefixOnGitSegmentAutoRewrites:
 class TestNicePrefixOnCdSegmentStillDenies:
 
     def test_nice_before_cd_still_denies_not_promoted(self):
-        out = guard.check_offer_git_c("nice -19 cd /repo && git log -1")
+        out = _enveloped(guard.check_offer_git_c)("nice -19 cd /repo && git log -1")
         reason = _deny_reason(out)
         assert "git -C /repo log -1" in reason
 
@@ -149,32 +154,32 @@ class TestNonExecWrapperOnGitSideNeverAutoRewrites:
     recognize them as command-position wrappers at all."""
 
     def test_which_before_git_never_auto_rewrites(self):
-        assert guard.check_offer_git_c("cd /repo && which git status") is None
+        assert _enveloped(guard.check_offer_git_c)("cd /repo && which git status") is None
 
     def test_busybox_before_git_never_auto_rewrites(self):
-        assert guard.check_offer_git_c("cd /repo && busybox git status") is None
+        assert _enveloped(guard.check_offer_git_c)("cd /repo && busybox git status") is None
 
     def test_setsid_before_git_never_auto_rewrites(self):
-        assert guard.check_offer_git_c("cd /repo && setsid git status") is None
+        assert _enveloped(guard.check_offer_git_c)("cd /repo && setsid git status") is None
 
 
 class TestExistingBailsUnaffected:
 
     def test_cwd_matches_target_multiline_bails_to_none(self):
-        out = guard.check_offer_git_c("cd /repo && git log -1\n", cwd="/repo")
+        out = _enveloped(guard.check_offer_git_c)("cd /repo && git log -1\n", cwd="/repo")
         assert out is None
 
 
 class TestQuotedSemicolonHoleClosed:
 
     def test_quoted_semicolon_no_longer_bails_gets_rewritten(self):
-        out = guard.check_offer_git_c('cd /repo && git commit -m "a; b"')
+        out = _enveloped(guard.check_offer_git_c)('cd /repo && git commit -m "a; b"')
         hso = _reason(out)
-        assert hso["permissionDecision"] == "allow"
-        assert hso["updatedInput"]["command"] == 'git -C /repo commit -m "a; b"'
+        assert hso.get("permissionDecision") != "deny"
+        assert hso["updatedInput"]["command"] =='git -C /repo commit -m "a; b"'
 
     def test_quoted_semicolon_with_real_follower_denies_not_bails(self):
-        out = guard.check_offer_git_c('cd /repo && git commit -m "a; b"; echo done')
+        out = _enveloped(guard.check_offer_git_c)('cd /repo && git commit -m "a; b"; echo done')
         hso = _reason(out)
         assert hso["permissionDecision"] == "deny"
         assert 'git -C /repo commit -m "a; b"' in hso["permissionDecisionReason"]
@@ -183,21 +188,21 @@ class TestQuotedSemicolonHoleClosed:
 class TestOverrideStillSuppresses:
     def test_override_env_suppresses_plain_form(self, monkeypatch):
         monkeypatch.setenv("COORDINATOR_ALLOW_CD_PREFIX", "1")
-        assert guard.check_offer_git_c("cd /repo && git log -1") is None
+        assert _enveloped(guard.check_offer_git_c)("cd /repo && git log -1") is None
 
     def test_override_env_suppresses_prefixed_form(self, monkeypatch):
         monkeypatch.setenv("COORDINATOR_ALLOW_CD_PREFIX", "1")
-        assert guard.check_offer_git_c("FOO=1 cd /repo && git log -1") is None
+        assert _enveloped(guard.check_offer_git_c)("FOO=1 cd /repo && git log -1") is None
 
 
 class TestAllGitFollowersAutoRewrite:
 
     def test_single_git_no_followers_still_auto_rewrites(self):
-        out = guard.check_offer_git_c("cd /tmp/repo && git status")
+        out = _enveloped(guard.check_offer_git_c)("cd /tmp/repo && git status")
         assert _rewritten_command(out) == "git -C /tmp/repo status"
 
     def test_two_git_followers_auto_rewrites_both_anchored(self):
-        out = guard.check_offer_git_c(
+        out = _enveloped(guard.check_offer_git_c)(
             "cd /tmp/repo && git status && git log --oneline"
         )
         assert (
@@ -206,7 +211,7 @@ class TestAllGitFollowersAutoRewrite:
         )
 
     def test_git_followers_with_args_and_flags_all_anchored(self):
-        out = guard.check_offer_git_c(
+        out = _enveloped(guard.check_offer_git_c)(
             "cd /tmp/repo && git diff --stat && git status --porcelain -- subdir/"
         )
         assert _rewritten_command(out) == (
@@ -215,7 +220,7 @@ class TestAllGitFollowersAutoRewrite:
         )
 
     def test_three_git_followers_all_anchored(self):
-        out = guard.check_offer_git_c(
+        out = _enveloped(guard.check_offer_git_c)(
             "cd /tmp/repo && git fetch && git status && git log -1"
         )
         assert _rewritten_command(out) == (
@@ -224,7 +229,7 @@ class TestAllGitFollowersAutoRewrite:
         )
 
     def test_semicolon_separated_git_followers_all_anchored(self):
-        out = guard.check_offer_git_c("cd /tmp/repo && git status; git log -1")
+        out = _enveloped(guard.check_offer_git_c)("cd /tmp/repo && git status; git log -1")
         assert (
             _rewritten_command(out)
             == "git -C /tmp/repo status; git -C /tmp/repo log -1"
@@ -238,24 +243,24 @@ class TestNonGitFollowerStaysRungBWithSafeOffer:
     denying rather than auto-rewriting."""
 
     def test_non_git_follower_denies_not_rewrites(self):
-        out = guard.check_offer_git_c("cd /tmp/repo && git status && ls subdir/")
+        out = _enveloped(guard.check_offer_git_c)("cd /tmp/repo && git status && ls subdir/")
         hso = _reason(out)
         assert hso["permissionDecision"] == "deny"
 
     def test_non_git_follower_offer_anchors_the_git_segment(self):
-        out = guard.check_offer_git_c("cd /tmp/repo && git status && ls subdir/")
+        out = _enveloped(guard.check_offer_git_c)("cd /tmp/repo && git status && ls subdir/")
         reason = _deny_reason(out)
         assert "git -C /tmp/repo status && ls subdir/" in reason
 
     def test_non_git_follower_offer_flags_the_unanchored_segment(self):
-        out = guard.check_offer_git_c("cd /tmp/repo && git status && ls subdir/")
+        out = _enveloped(guard.check_offer_git_c)("cd /tmp/repo && git status && ls subdir/")
         reason = _deny_reason(out)
         assert "'ls subdir/'" in reason
         assert "Not anchored" in reason
         assert "/tmp/repo" in reason
 
     def test_first_follower_non_git_second_follower_git_only_first_flagged(self):
-        out = guard.check_offer_git_c(
+        out = _enveloped(guard.check_offer_git_c)(
             "cd /tmp/repo && git status && ls subdir/ && git log -1"
         )
         hso = _reason(out)
@@ -278,7 +283,7 @@ class TestAttachedRepoRootWithNonGitFollowerAllows:
         (origin / ".git").mkdir(parents=True)
         repo = tmp_path / "repo"
         (repo / ".git").mkdir(parents=True)
-        out = guard.check_offer_git_c(
+        out = _enveloped(guard.check_offer_git_c)(
             "cd %s && git status && ls subdir/" % repo, cwd=str(origin)
         )
         assert out is None
@@ -288,7 +293,7 @@ class TestAttachedRepoRootWithNonGitFollowerAllows:
         (origin / ".git").mkdir(parents=True)
         scratch = tmp_path / "scratch"
         scratch.mkdir()
-        out = guard.check_offer_git_c(
+        out = _enveloped(guard.check_offer_git_c)(
             "cd %s && git status && ls subdir/" % scratch, cwd=str(origin)
         )
         hso = _reason(out)
@@ -299,7 +304,7 @@ class TestAttachedRepoRootWithNonGitFollowerAllows:
         # target's `.git` presence alone.
         repo = tmp_path / "repo"
         (repo / ".git").mkdir(parents=True)
-        out = guard.check_offer_git_c(
+        out = _enveloped(guard.check_offer_git_c)(
             "cd %s && git status && ls subdir/" % repo
         )
         hso = _reason(out)
@@ -309,14 +314,14 @@ class TestAttachedRepoRootWithNonGitFollowerAllows:
 class TestFollowerAnchoringRespectsExistingBailOuts:
 
     def test_env_prefix_before_cd_with_all_git_followers_still_denies(self):
-        out = guard.check_offer_git_c(
+        out = _enveloped(guard.check_offer_git_c)(
             "FOO=1 cd /tmp/repo && git status && git log -1"
         )
         hso = _reason(out)
         assert hso["permissionDecision"] == "deny"
 
     def test_env_prefix_before_first_git_with_all_git_followers_now_auto_rewrites(self):
-        out = guard.check_offer_git_c(
+        out = _enveloped(guard.check_offer_git_c)(
             "cd /tmp/repo && FOO=1 git status && git log -1"
         )
         assert _rewritten_command(out) == (
@@ -324,7 +329,7 @@ class TestFollowerAnchoringRespectsExistingBailOuts:
         )
 
     def test_env_prefix_on_a_follower_itself_is_not_anchored(self):
-        out = guard.check_offer_git_c(
+        out = _enveloped(guard.check_offer_git_c)(
             "cd /tmp/repo && git status && FOO=1 git log -1"
         )
         hso = _reason(out)
@@ -332,7 +337,7 @@ class TestFollowerAnchoringRespectsExistingBailOuts:
         assert "'FOO=1 git log -1'" in hso["permissionDecisionReason"]
 
     def test_multiline_all_git_followers_bails_no_auto_rewrite(self):
-        out = guard.check_offer_git_c(
+        out = _enveloped(guard.check_offer_git_c)(
             "cd /tmp/repo && git status && git log -1\n"
         )
         hso = _reason(out)
@@ -341,7 +346,7 @@ class TestFollowerAnchoringRespectsExistingBailOuts:
     def test_override_env_suppresses_all_git_followers_form(self, monkeypatch):
         monkeypatch.setenv("COORDINATOR_ALLOW_CD_PREFIX", "1")
         assert (
-            guard.check_offer_git_c(
+            _enveloped(guard.check_offer_git_c)(
                 "cd /tmp/repo && git status && git log -1"
             )
             is None
@@ -386,14 +391,14 @@ class TestOfferAnchorFollowersHelperDirect:
 class TestPowerShellIdiomDialectNeutral:
 
     def test_semicolon_chained_powershell_style_denies(self):
-        out = guard.check_offer_git_c("cd /tmp/repo; git status; git log -1")
+        out = _enveloped(guard.check_offer_git_c)("cd /tmp/repo; git status; git log -1")
         assert (
             _rewritten_command(out)
             == "git -C /tmp/repo status; git -C /tmp/repo log -1"
         )
 
     def test_semicolon_chained_non_git_follower_still_denies(self):
-        out = guard.check_offer_git_c("cd /tmp/repo; git status; ls subdir/")
+        out = _enveloped(guard.check_offer_git_c)("cd /tmp/repo; git status; ls subdir/")
         hso = _reason(out)
         assert hso["permissionDecision"] == "deny"
 
@@ -413,7 +418,7 @@ class TestSharedHelperPinsBothCallers:
         assert not dispatch_checks._find_is_find_segment("FOO=1 echo find")
 
     def test_offer_git_c_strips_env_assignment_before_cd(self):
-        out = guard.check_offer_git_c("FOO=1 cd /repo && git log -1")
+        out = _enveloped(guard.check_offer_git_c)("FOO=1 cd /repo && git log -1")
         assert out is not None
 
     def test_strip_leading_env_and_wrappers_returns_literal_suffix(self):
@@ -430,7 +435,7 @@ class TestMultiRepoContainerCwdAllows:
     def test_container_parent_cwd_with_non_git_follower_allows(self, tmp_path):
         repo = tmp_path / "repo"
         (repo / ".git").mkdir(parents=True)
-        out = guard.check_offer_git_c(
+        out = _enveloped(guard.check_offer_git_c)(
             "cd %s && git status && ls subdir/" % repo, cwd=str(tmp_path)
         )
         assert out is None
@@ -440,7 +445,7 @@ class TestFollowerShellSyntaxNotQuoted:
     def test_redirections_survive_in_suggestion(self, tmp_path):
         scratch = tmp_path / "scratch"
         scratch.mkdir()
-        out = guard.check_offer_git_c(
+        out = _enveloped(guard.check_offer_git_c)(
             "cd %s && git status; which pnpm >/dev/null 2>&1" % scratch,
             cwd=str(tmp_path / "elsewhere"),
         )
@@ -454,7 +459,27 @@ def test_heredoc_follower_kept_verbatim(tmp_path):
     scratch = tmp_path / "scratch"
     scratch.mkdir()
     cmd = "cd %s && git status && python3 - <<'X'\nprint('a b')\nX" % scratch
-    out = guard.check_offer_git_c(cmd, cwd=str(tmp_path / "elsewhere"))
+    out = _enveloped(guard.check_offer_git_c)(cmd, cwd=str(tmp_path / "elsewhere"))
     if out is not None:
         reason = _reason(out)["permissionDecisionReason"]
         assert "'<<X'" not in reason and "\"print('a b')\"" not in reason
+
+
+def test_rewrite_and_deny_are_records_carrying_a_subagent_route():
+    from coordinator_core.guard_messages.alternative_record import (
+        AlternativeRecord,
+        Audience,
+        EscalationRoute,
+        Override,
+    )
+    from coordinator_core.guard_messages.render import render
+
+    rewrite = guard.check_offer_git_c("cd /repo && git log -1")
+    deny = guard.check_offer_git_c("cd /repo && git status && ls rel/path")
+    for record, kind in ((rewrite, "rewrite"), (deny, "deny")):
+        assert isinstance(record, AlternativeRecord) and record.verdict_kind == kind
+        assert any(isinstance(m, Override) for m in record.members)
+        assert any(isinstance(m, EscalationRoute) for m in record.members)
+        text = str(render(record, Audience.SUBAGENT))
+        assert "COORDINATOR_ALLOW_CD_PREFIX" not in text
+    assert rewrite.updated_input == {"command": "git -C /repo log -1"}

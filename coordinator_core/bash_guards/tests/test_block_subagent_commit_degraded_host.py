@@ -29,6 +29,11 @@ import pytest
 from typing import Any, Dict, List
 
 from coordinator_core.bash_guards import block_subagent_commit as guard
+from coordinator_core.guard_messages.testing import envelope_of
+
+
+def _enveloped(check):
+    return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 _GIT_COMMIT_AGENT_TYPE = guard._GIT_COMMIT_AGENT_TYPE
 _FAKE_REPO_ROOT = "/repo"
@@ -115,7 +120,7 @@ def test_degraded_general_purpose_with_old_sentinel_text_still_denies(monkeypatc
     transcript = _write_transcript(
         tmp_path, '{"role": "user", "content": "' + _OLD_SENTINEL_TEXT + '"}'
     )
-    result = guard.check(
+    result = _enveloped(guard.check)(
         _payload(
             _SCOPED_COMMIT_CMD,
             agent_type="general-purpose",
@@ -130,7 +135,7 @@ def test_ordinary_coordinator_agent_type_still_works_unchanged(monkeypatch, tmp_
     """The pre-existing, non-degraded route (agent_type ==
     coordinator:git-commit-agent) keeps working unchanged."""
     _git_commit_agent_setup(monkeypatch)
-    result = guard.check(
+    result = _enveloped(guard.check)(
         _payload(
             _SCOPED_COMMIT_CMD,
             agent_type=_GIT_COMMIT_AGENT_TYPE,
@@ -150,7 +155,7 @@ def test_subagent_invoking_terminal_commit_op_is_denied(monkeypatch):
     monkeypatch.setattr(
         guard, "_read_backpointer_subagent_type", lambda git_root, agent_id: ""
     )
-    result = guard.check(
+    result = _enveloped(guard.check)(
         _payload(
             "coordinator-invoke dispatch.terminal_commit '{\"script_path\": \"x\"}'",
             agent_type="general-purpose",
@@ -176,7 +181,7 @@ def test_subagent_invoking_land_run_op_is_denied(monkeypatch):
     monkeypatch.setattr(
         guard, "_read_backpointer_subagent_type", lambda git_root, agent_id: ""
     )
-    result = guard.check(
+    result = _enveloped(guard.check)(
         _payload(
             "coordinator-invoke dispatch.land_run '{\"script_path\": \"x\"}'",
             agent_type="general-purpose",

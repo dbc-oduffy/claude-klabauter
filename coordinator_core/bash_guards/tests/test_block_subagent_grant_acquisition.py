@@ -27,6 +27,11 @@ from coordinator_core.bash_guards import dispatch
 from coordinator_core.bash_guards import _verdict
 from coordinator_core import hooks as _hooks_pkg
 from coordinator_core import ops as _ops_pkg
+from coordinator_core.guard_messages.testing import envelope_of
+
+
+def _enveloped(check):
+    return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 
 def _payload(command, agent_id=None, agent_type=None):
@@ -66,35 +71,35 @@ _DASH_C_READ = (
 
 class TestNonBashOrEmpty:
     def test_non_bash_tool_allows(self):
-        assert guard.check({"tool_name": "Edit", "tool_input": {"file_path": "x"}}) is None
+        assert _enveloped(guard.check)({"tool_name": "Edit", "tool_input": {"file_path": "x"}}) is None
 
     def test_empty_command_allows(self):
-        assert guard.check(_payload("", agent_id="a1")) is None
+        assert _enveloped(guard.check)(_payload("", agent_id="a1")) is None
 
     def test_malformed_tool_input_allows(self):
-        assert guard.check({"tool_name": "Bash", "tool_input": "not-a-dict"}) is None
+        assert _enveloped(guard.check)({"tool_name": "Bash", "tool_input": "not-a-dict"}) is None
 
 
 class TestDashMForm:
     def test_em_grant_allows(self):
         """AC2: no `agent_id` at all -> main-loop EM -> allowed."""
-        assert guard.check(_payload(_MODULE_M_GRANT)) is None
+        assert _enveloped(guard.check)(_payload(_MODULE_M_GRANT)) is None
 
     def test_subagent_grant_denies(self):
         """AC1: subagent (`agent_id` present) invoking `grant` -> DENY."""
-        _reason(guard.check(_payload(_MODULE_M_GRANT, agent_id="a1")))
+        _reason(_enveloped(guard.check)(_payload(_MODULE_M_GRANT, agent_id="a1")))
 
     def test_present_but_unresolvable_agent_id_denies(self):
         """AC3: fails CLOSED on a present-but-unresolvable `agent_id`."""
         _reason(
-            guard.check(
+            _enveloped(guard.check)(
                 _payload(_MODULE_M_GRANT, agent_id="unresolvable-nonexistent-id")
             )
         )
 
     def test_subagent_read_allows(self):
         """AC4: `read` is not gated."""
-        assert guard.check(
+        assert _enveloped(guard.check)(
             _payload(
                 "python3 -m coordinator_core.session.claude_md_grant read",
                 agent_id="a1",
@@ -103,7 +108,7 @@ class TestDashMForm:
 
     def test_subagent_check_allows(self):
         """AC4: `check` is not gated."""
-        assert guard.check(
+        assert _enveloped(guard.check)(
             _payload(
                 "python3 -m coordinator_core.session.claude_md_grant check",
                 agent_id="a1",
@@ -111,13 +116,13 @@ class TestDashMForm:
         ) is None
 
     def test_lookalike_module_name_does_not_match(self):
-        assert guard.check(
+        assert _enveloped(guard.check)(
             _payload(
                 "python3 -m coordinator_core.session.claude_md_grant_extra grant pm x",
                 agent_id="a1",
             )
         ) is None
-        assert guard.check(
+        assert _enveloped(guard.check)(
             _payload(
                 "python3 -m coordinator_core.session.claude_md_grantx grant pm x",
                 agent_id="a1",
@@ -132,7 +137,7 @@ class TestAgentTypeOnlyRegression:
     `resolve_effective_types` OR-resolved triple."""
 
     def test_agent_type_only_payload_not_denied(self):
-        assert guard.check(
+        assert _enveloped(guard.check)(
             _payload(_MODULE_M_GRANT, agent_type="coordinator:em")
         ) is None
 
@@ -141,15 +146,15 @@ class TestDashCForm:
     """AC11: widened inline-import `-c` shape."""
 
     def test_subagent_dash_c_grant_denies(self):
-        _reason(guard.check(_payload(_DASH_C_GRANT, agent_id="a1")))
+        _reason(_enveloped(guard.check)(_payload(_DASH_C_GRANT, agent_id="a1")))
 
     def test_em_dash_c_grant_allows(self):
-        assert guard.check(_payload(_DASH_C_GRANT)) is None
+        assert _enveloped(guard.check)(_payload(_DASH_C_GRANT)) is None
 
     def test_subagent_dash_c_read_allows(self):
         """A `-c` payload referencing only a read/check-shaped name mirrors
         the `-m` form's grant-only gating."""
-        assert guard.check(_payload(_DASH_C_READ, agent_id="a1")) is None
+        assert _enveloped(guard.check)(_payload(_DASH_C_READ, agent_id="a1")) is None
 
 
 class TestPowerShellParity:
@@ -162,12 +167,12 @@ class TestPowerShellParity:
     def test_subagent_grant_denies_via_powershell(self):
         p = _payload(_MODULE_M_GRANT, agent_id="a1")
         p["tool_name"] = "PowerShell"
-        _reason(guard.check(p))
+        _reason(_enveloped(guard.check)(p))
 
     def test_em_grant_allows_via_powershell(self):
         p = _payload(_MODULE_M_GRANT)
         p["tool_name"] = "PowerShell"
-        assert guard.check(p) is None
+        assert _enveloped(guard.check)(p) is None
 
 
 class TestDispatchWiring:
@@ -224,15 +229,15 @@ class TestScopeEqualsEnforcement:
 
     def test_denies_exactly_the_two_documented_shapes(self):
         # Shape 1: `-m` + module + `grant` subcommand.
-        _reason(guard.check(_payload(_MODULE_M_GRANT, agent_id="a1")))
+        _reason(_enveloped(guard.check)(_payload(_MODULE_M_GRANT, agent_id="a1")))
         # Shape 2: `-c` referencing both the module and the write function.
-        _reason(guard.check(_payload(_DASH_C_GRANT, agent_id="a1")))
+        _reason(_enveloped(guard.check)(_payload(_DASH_C_GRANT, agent_id="a1")))
 
     def test_does_not_deny_a_command_merely_mentioning_the_module_name(self):
         """Not wider than documented: a command that references the module
         path in prose/echo, without either recognized invocation shape, is
         not classified."""
-        assert guard.check(
+        assert _enveloped(guard.check)(
             _payload(
                 "echo coordinator_core.session.claude_md_grant",
                 agent_id="a1",
@@ -242,7 +247,7 @@ class TestScopeEqualsEnforcement:
     def test_does_not_deny_dash_c_mentioning_module_without_write_func(self):
         """Not wider than documented: a `-c` payload referencing the module
         but not `write_claude_md_write_grant` is not grant-shaped."""
-        assert guard.check(_payload(_DASH_C_READ, agent_id="a1")) is None
+        assert _enveloped(guard.check)(_payload(_DASH_C_READ, agent_id="a1")) is None
 
     def test_does_not_deny_dash_c_mentioning_lookalike_func_name(self):
         """Not wider than documented: a `-c` payload referencing an
@@ -253,13 +258,13 @@ class TestScopeEqualsEnforcement:
             "python3 -c \"from coordinator_core.session.claude_md_grant import "
             "_write_claude_md_write_grant_helper as w; w()\""
         )
-        assert guard.check(_payload(payload, agent_id="a1")) is None
+        assert _enveloped(guard.check)(_payload(payload, agent_id="a1")) is None
 
     def test_does_not_deny_non_python_command(self):
         """Not wider than documented: the docstring's RECOGNIZED SHAPES are
         both python-interpreter-headed; a non-python command is out of
         scope regardless of content."""
-        assert guard.check(
+        assert _enveloped(guard.check)(
             _payload(
                 "rg 'claude_md_grant' coordinator_core/",
                 agent_id="a1",
@@ -278,13 +283,13 @@ class TestUnparseableCommandRecordsSilent:
 
     def test_powershell_herestring_records_silent(self):
         with _verdict.collecting() as silences:
-            out = guard.check(_payload(self._HERESTRING_APOSTROPHE, agent_id="a1"))
+            out = _enveloped(guard.check)(_payload(self._HERESTRING_APOSTROPHE, agent_id="a1"))
         assert out is None
         assert _verdict.was_silent("block-subagent-grant-acquisition", silences)
 
     def test_powershell_backtick_continuation_records_silent(self):
         with _verdict.collecting() as silences:
-            out = guard.check(_payload(self._BACKTICK_UNTERMINATED, agent_id="a1"))
+            out = _enveloped(guard.check)(_payload(self._BACKTICK_UNTERMINATED, agent_id="a1"))
         assert out is None
         assert _verdict.was_silent("block-subagent-grant-acquisition", silences)
 

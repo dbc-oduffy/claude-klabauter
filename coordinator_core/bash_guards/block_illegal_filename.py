@@ -119,7 +119,7 @@ from coordinator_core.bash_guards._verdict import record_silent
 from coordinator_core.bash_guards._helpers import csn_check as _csn_check
 from coordinator_core.bash_guards._helpers import operator_override_note
 from coordinator_core.bash_guards._tool_names import COMMAND_TOOL_NAMES
-from coordinator_core._hook_envelope import allow_advisory, rewrite_input
+from coordinator_core._hook_envelope import _stamp
 
 CLASS = "advisory"
 MATCHERS = COMMAND_TOOL_NAMES
@@ -470,15 +470,20 @@ def _safe_suggestion(raw_name: str) -> str:
     return squeezed
 
 
-def _make_deny_msg(
-    raw_name: str, illegal_char_hint: str, payload: Optional[Dict[str, Any]] = None
-) -> str:
+def _deny_body(raw_name: str, illegal_char_hint: str) -> str:
     safe_suggestion = _safe_suggestion(raw_name)
     return (
         f"'{raw_name}' has '{illegal_char_hint}' -- illegal on Windows, blocks "
         f"`git checkout`. Use instead: rename to '{safe_suggestion}', or run "
         "`coordinator-safe-name timestamp`. "
-        + operator_override_note(_OVERRIDE_ENV, payload=payload)
+    )
+
+
+def _make_deny_msg(
+    raw_name: str, illegal_char_hint: str, payload: Optional[Dict[str, Any]] = None
+) -> str:
+    return _deny_body(raw_name, illegal_char_hint) + operator_override_note(
+        _OVERRIDE_ENV, payload=payload
     )
 
 
@@ -486,13 +491,46 @@ def _advisory_ctx(reason: str) -> str:
     return f"ADVISORY (non-blocking): {reason}"
 
 
-def _rewrite_ctx(
-    raw_name: str, safe_name: str, illegal_char_hint: str, payload: Optional[Dict[str, Any]] = None
-) -> str:
+def _rewrite_body(raw_name: str, safe_name: str, illegal_char_hint: str) -> str:
     return (
         f"'{raw_name}' has '{illegal_char_hint}' -- illegal on Windows, blocks "
         f"`git checkout`. Auto-corrected to '{safe_name}'. "
-        + operator_override_note(_OVERRIDE_ENV, payload=payload)
+    )
+
+
+def _rewrite_ctx(
+    raw_name: str, safe_name: str, illegal_char_hint: str, payload: Optional[Dict[str, Any]] = None
+) -> str:
+    return _rewrite_body(raw_name, safe_name, illegal_char_hint) + operator_override_note(
+        _OVERRIDE_ENV, payload=payload
+    )
+
+
+def _record(verdict_kind: str, summary: str, em_text: str, ready: str, updated_input=None) -> Any:
+    """Typed record for one firing. ``em_text`` is the legacy EM text, stamp included;
+    ``summary`` is the same text without the override pointer, for non-EM audiences."""
+    from coordinator_core.guard_messages.alternative_record import (
+        AlternativeRecord,
+        EscalationRoute,
+        Override,
+        ReadyCommand,
+    )
+
+    return AlternativeRecord(
+        verdict_kind=verdict_kind,
+        guard_name="block-illegal-filename",
+        summary=summary.strip(),
+        members=(
+            ReadyCommand(text=ready),
+            EscalationRoute(
+                report_what="the file name you need",
+                authorize_what="a name with that character",
+            ),
+            Override(_OVERRIDE_ENV),
+        ),
+        updated_input=updated_input,
+        em_text=em_text,
+        rewrite_allow=False,
     )
 
 
@@ -559,7 +597,13 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
                 updated_input = dict(tool_input)
                 updated_input["command"] = new_cmd
                 ctx = _rewrite_ctx(basename, safe_suggestion, hint, payload=payload)
-                return rewrite_input("PreToolUse", updated_input, ctx)
+                return _record(
+                    "rewrite",
+                    _rewrite_body(basename, safe_suggestion, hint),
+                    _stamp(ctx),
+                    new_cmd,
+                    updated_input,
+                )
 
             reason = _make_deny_msg(basename, hint, payload=payload)
             ctx = _advisory_ctx(reason)
@@ -580,9 +624,20 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
                     new_cmd = original_cmd.replace(raw_candidate, new_candidate, 1)
                     updated_input = dict(tool_input)
                     updated_input["command"] = new_cmd
-                    return rewrite_input("PreToolUse", updated_input, context=ctx)
+                    return _record(
+                        "rewrite",
+                        _advisory_ctx(_deny_body(basename, hint)),
+                        _stamp(ctx),
+                        new_cmd,
+                        updated_input,
+                    )
 
-            return allow_advisory("PreToolUse", ctx)
+            return _record(
+                "advisory",
+                _advisory_ctx(_deny_body(basename, hint)),
+                _stamp(ctx),
+                "coordinator-safe-name timestamp",
+            )
 
         _silent_on_powershell(dialect)
         return None

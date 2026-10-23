@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.bash_guards import block_subagent_commit as guard
+from coordinator_core.guard_messages.testing import envelope_of
 from coordinator_core.bash_guards.tests.test_block_subagent_commit_run_token import _COMMIT_AGENT, _SCRIPT
 from coordinator_core.ops.dispatch_emit import ask_compose, land_run, run_token
 from coordinator_core.ops.dispatch_emit import terminal_commit_params_channel as chan
@@ -84,7 +85,7 @@ def _relay_spawn(root: Path, params: dict, *, relay_block: bool = False, command
 
 
 def _check(command: str, transcript: str):
-    return guard.check(
+    return envelope_of(guard.check(
         {
             "tool_name": "Bash",
             "tool_input": {"command": command},
@@ -94,7 +95,7 @@ def _check(command: str, transcript: str):
             "agent_type": _COMMIT_AGENT,
             "transcript_path": transcript,
         }
-    )
+    ), "em")
 
 
 def _halt_params(token: str) -> dict:

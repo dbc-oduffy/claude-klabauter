@@ -388,10 +388,32 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         offence = ("a git command that cannot be read", key) if key else None
     if offence is None:
         return None
-    return {
-        "hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "permissionDecision": "deny",
-            "permissionDecisionReason": _deny_reason(*offence),
-        }
-    }
+    return _deny_record(*offence)
+
+
+def _deny_record(what: str, key: Optional[str]) -> Any:
+    from coordinator_core.guard_messages.alternative_record import (
+        AdaptableOffer,
+        AlternativeRecord,
+        EscalationRoute,
+    )
+
+    legacy = _deny_reason(what, key)
+    summary, _, _alt = legacy.partition(" Alternative: ")
+    if key is None:
+        member: Any = AdaptableOffer(
+            template="run read verbs only, or fix the machine-local registry",
+            what_to_adapt="the command to a read verb",
+        )
+    else:
+        member = EscalationRoute(
+            report_what="the uncommitted change you left in the workspace",
+            authorize_what="a human making it through the workspace's own VCS",
+        )
+    return AlternativeRecord(
+        verdict_kind="deny",
+        guard_name="block-external-workspace-vcs-write",
+        summary=summary,
+        em_text=legacy,
+        members=(member,),
+    )

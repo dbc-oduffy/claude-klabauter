@@ -28,6 +28,11 @@ Spec backlink: coordinator_core/bash_guards/guard_powershell_via_bash.py
 from __future__ import annotations
 
 from coordinator_core.bash_guards import guard_powershell_via_bash as guard
+from coordinator_core.guard_messages.testing import envelope_of
+
+
+def _enveloped(check):
+    return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 
 def _payload(command, tool_name="Bash"):
@@ -40,7 +45,7 @@ def _payload(command, tool_name="Bash"):
 
 
 def _result(cmd, tool_name="Bash"):
-    return guard.check(_payload(cmd, tool_name=tool_name))
+    return _enveloped(guard.check)(_payload(cmd, tool_name=tool_name))
 
 
 def _envelope(cmd, **kwargs):

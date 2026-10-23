@@ -15,16 +15,18 @@ process killed between `redeem` and `release` strands the claim; recovery is a r
 workflow.revise. Every other subagent commit stays denied.
 
 Invariants: the record lives in the git common dir (never the worktree, so no commit can carry
-it); only a sha256 of the token is stored; the record names the run's script and a token admits
-nothing without that script; a record older than `TTL_SECONDS` admits nothing. In-process file
-I/O only: no spawn.
+it); only a sha256 of the token is stored, except a launcher child's escrow
+(`escrow/<run_id>.json`), which only the stage-time twin write reads (`escrowed`) and which dies
+with the record; the record names the run's script and a token admits nothing without that
+script; a record older than `TTL_SECONDS` admits nothing. In-process file I/O only: no spawn.
 
 Removal rule: only a landed commit, an ended or refused run, or a sanctioned peer release
 removes a record. `tests/test_run_token_removers_enumerated.py` names every `consume` / `discard`
 caller with its condition. This module's own unlinks are the protocol and are outside that walk:
-`mint` unlinks a stale claimed record and a stale spent receipt, `redeem` unlinks the live record
-it claims, and `consume` / `discard` unlink their targets. A receipt is never removed otherwise;
-it ages out by `TTL_SECONDS` and `live_records` / `held_records` (non-recursive) never list it.
+`mint` unlinks a stale claimed record, a stale spent receipt and a stale escrow, `redeem` unlinks
+the live record it claims, and `consume` / `discard` unlink their targets and the escrow.
+`sweep_expired_escrows` unlinks escrows older than `TTL_SECONDS`. A receipt is never removed
+otherwise; it ages out by `TTL_SECONDS` and `live_records` / `held_records` (non-recursive) never list it.
 """
 
 from __future__ import annotations
@@ -47,6 +49,8 @@ _CLAIMED = "claimed"
 _SPENT = "spent"
 #: Where `note_halt_landing` leaves the receipt of a landed halted-run record commit, which never spends the token.
 _HALTED = "halted"
+#: Where `escrow` keeps a launcher child's plaintext token for the stage-time twin write.
+_ESCROW = "escrow"
 _RUN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,200}$")
 TOKEN_RE = re.compile(r"^[0-9a-f]{32}$")
 
@@ -71,7 +75,13 @@ def _common_dir(repo_root: Path) -> Optional[Path]:
 
 
 def _record_path(
-    repo_root: Path, run_id: str, *, claimed: bool = False, spent: bool = False, halted: bool = False
+    repo_root: Path,
+    run_id: str,
+    *,
+    claimed: bool = False,
+    spent: bool = False,
+    halted: bool = False,
+    escrow: bool = False,
 ) -> Optional[Path]:
     if not _RUN_ID_RE.match(run_id or ""):
         return None
@@ -79,7 +89,7 @@ def _record_path(
     if common is None:
         return None
     base = common / _DIR
-    sub = _SPENT if spent else _HALTED if halted else _CLAIMED if claimed else None
+    sub = _SPENT if spent else _HALTED if halted else _ESCROW if escrow else _CLAIMED if claimed else None
     return (base / sub if sub else base) / f"{run_id}.json"
 
 
@@ -134,11 +144,77 @@ def mint(
         _record_path(repo_root, run_id, claimed=True),
         _record_path(repo_root, run_id, spent=True),
         _record_path(repo_root, run_id, halted=True),
+        _record_path(repo_root, run_id, escrow=True),
     ):
         if stale is not None:
             stale.unlink(missing_ok=True)
     path.write_text(json.dumps(record, sort_keys=True), encoding="utf-8")
     return token
+
+
+def escrow(repo_root: Path, run_id: str, token: str) -> bool:
+    """Keep `token` in plaintext at `escrow/<run_id>.json` so the stage-time twin write can read it
+    back without an agent. False when no common dir resolves or the run id is malformed.
+
+    Trap: the plaintext token sits on disk from emit, not from stage. It lives under the git common
+    dir (never the worktree, never the script's bytes), so the invariant that no commit or script
+    carries the token still holds; do not move it into the script."""
+    path = _record_path(repo_root, run_id, escrow=True)
+    if path is None or not isinstance(token, str):
+        return False
+    from coordinator_core.atomic_replace import atomic_write_bytes
+
+    record = {"run_id": run_id, "token": token, "minted_at": time.time()}
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write_bytes(path, json.dumps(record, sort_keys=True).encode("utf-8"), preserve_mode=False)
+    except OSError:
+        return False
+    return True
+
+
+def escrowed(repo_root: Path, run_id: str) -> Optional[str]:
+    """Read-only: the escrowed token while it is TOKEN_RE-shaped and the run's live (unclaimed)
+    record is fresh with a matching sha256; else None. Never raises. A claimed record never
+    admits (`redeem` dropped the plaintext twins; a later write must not re-create one); a
+    `release` restores the live record, so the token is readable again."""
+    try:
+        held = _read(_record_path(repo_root, run_id, escrow=True))
+        token = held.get("token") if held else None
+        if not isinstance(token, str) or not TOKEN_RE.match(token):
+            return None
+        live = _read(_record_path(repo_root, run_id))
+        if live is None or not _fresh(live):
+            return None
+        if not hmac.compare_digest(str(live.get("sha256") or ""), _digest(token)):
+            return None
+        return token
+    except Exception:  # noqa: BLE001 -- a peek never fails its caller
+        return None
+
+
+def sweep_expired_escrows(repo_root: Path, now: Optional[float] = None) -> int:
+    """Unlink escrow files older than `TTL_SECONDS` (a run that died without consume/discard);
+    return the count. Age is the escrow's own `minted_at`, else file mtime. Never raises."""
+    common = _common_dir(repo_root)
+    if common is None:
+        return 0
+    cutoff = (time.time() if now is None else now) - TTL_SECONDS
+    removed = 0
+    try:
+        paths = list((common / _DIR / _ESCROW).glob("*.json"))
+    except OSError:
+        return 0
+    for path in paths:
+        try:
+            minted = (_read(path) or {}).get("minted_at")
+            stamp = minted if isinstance(minted, (int, float)) else path.stat().st_mtime
+            if stamp < cutoff:
+                path.unlink()
+                removed += 1
+        except OSError:
+            continue
+    return removed
 
 
 def _matches(record: Optional[dict], run_id: object, token: object, script_path: object) -> bool:
@@ -343,6 +419,9 @@ def consume(repo_root: Path, run_id: str, *, landed: Optional[dict] = None) -> N
         path = _record_path(repo_root, run_id, claimed=claimed)
         if path is not None:
             path.unlink(missing_ok=True)
+    held = _record_path(repo_root, run_id, escrow=True)
+    if held is not None:
+        held.unlink(missing_ok=True)
 
 
 def discard(repo_root: Path, run_id: str) -> Optional[dict]:
@@ -356,6 +435,9 @@ def discard(repo_root: Path, run_id: str) -> Optional[dict]:
         return None
     record = _read(path)
     path.unlink(missing_ok=True)
+    held = _record_path(repo_root, run_id, escrow=True)
+    if held is not None:
+        held.unlink(missing_ok=True)
     return record
 
 

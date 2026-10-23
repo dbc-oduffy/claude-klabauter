@@ -2,6 +2,11 @@
 from __future__ import annotations
 
 from coordinator_core.bash_guards import guard_no_optional_locks as guard
+from coordinator_core.guard_messages.testing import envelope_of
+
+
+def _enveloped(check):
+    return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 
 def _reason(out):
@@ -18,7 +23,7 @@ def _rewritten_command(out) -> str:
 
 
 def _check(cmd: str):
-    return guard.check_git_no_optional_locks(cmd)
+    return _enveloped(guard.check_git_no_optional_locks)(cmd)
 
 
 class TestPlainRewrite:
@@ -217,8 +222,8 @@ def test_status_is_unaffected_by_the_diff_only_exclusion() -> None:
 
 
 def test_rewrite_note_is_command_independent_so_session_dedupe_can_silence_it():
-    a = guard.check_git_no_optional_locks("git status -sb")
-    b = guard.check_git_no_optional_locks("git log --oneline -3 && git diff --stat")
+    a = _enveloped(guard.check_git_no_optional_locks)("git status -sb")
+    b = _enveloped(guard.check_git_no_optional_locks)("git log --oneline -3 && git diff --stat")
     ctx_a = a["hookSpecificOutput"]["additionalContext"]
     ctx_b = b["hookSpecificOutput"]["additionalContext"]
     assert ctx_a == ctx_b

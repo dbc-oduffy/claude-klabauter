@@ -56,6 +56,11 @@ from coordinator_core.bash_guards import block_subagent_grant_acquisition
 from coordinator_core.bash_guards import block_subagent_guard_grant
 from coordinator_core.bash_guards import block_noncanonical_branch_creation
 from coordinator_core.win_portability import no_console_creationflags
+from coordinator_core.guard_messages.testing import envelope_of
+
+
+def _enveloped(check):
+    return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 pytestmark = [
     pytest.mark.spawns_process,
@@ -99,7 +104,7 @@ class TestDestructiveGitRevertConvertedForPowerShell:
 
     def test_start_process_powershell_stash_denies(self, repo_with_peer_work: Path) -> None:
         cmd = "Start-Process git -ArgumentList '-C','%s','stash'" % repo_with_peer_work
-        result = check_destructive_git_revert(cmd, payload=_powershell_payload())
+        result = _enveloped(check_destructive_git_revert)(cmd, payload=_powershell_payload())
         assert result is not None, "Start-Process-wrapped stash swept a peer's tracked work undetected"
         assert "whole-tree revert" in _deny_reason(result)
 
@@ -107,7 +112,7 @@ class TestDestructiveGitRevertConvertedForPowerShell:
         self, repo_with_peer_work: Path
     ) -> None:
         cmd = "git -C %s stash" % repo_with_peer_work
-        result = check_destructive_git_revert(cmd)
+        result = _enveloped(check_destructive_git_revert)(cmd)
         assert result is not None
         assert "whole-tree revert" in _deny_reason(result)
 
@@ -115,7 +120,7 @@ class TestDestructiveGitRevertConvertedForPowerShell:
         self, repo_with_peer_work: Path
     ) -> None:
         cmd = "Start-Process git -ArgumentList '-C','%s','stash','list'" % repo_with_peer_work
-        result = check_destructive_git_revert(cmd, payload=_powershell_payload())
+        result = _enveloped(check_destructive_git_revert)(cmd, payload=_powershell_payload())
         assert result is None
 
     def test_bash_leg_unaffected_by_the_powershell_expansion_branch(
@@ -125,7 +130,7 @@ class TestDestructiveGitRevertConvertedForPowerShell:
         Dialect.POWERSHELL` -- a Bash (or absent) payload must reach the
         exact prior code path, unchanged."""
         cmd = "git -C %s stash" % repo_with_peer_work
-        result = check_destructive_git_revert(cmd, payload={"tool_name": "Bash"})
+        result = _enveloped(check_destructive_git_revert)(cmd, payload={"tool_name": "Bash"})
         assert result is not None
         assert "whole-tree revert" in _deny_reason(result)
 
@@ -138,8 +143,8 @@ class TestDestructiveGitRevertAdvisoryNoChangeVerdict:
         )
 
         cmd = "Start-Process git -ArgumentList '-C','%s','stash'" % repo_with_peer_work
-        result = check_destructive_git_revert_advisory(cmd, payload=_powershell_payload())
-        deny_result = check_destructive_git_revert(cmd, payload=_powershell_payload())
+        result = _enveloped(check_destructive_git_revert_advisory)(cmd, payload=_powershell_payload())
+        deny_result = _enveloped(check_destructive_git_revert)(cmd, payload=_powershell_payload())
         assert deny_result is not None
         assert result is None
 
@@ -152,8 +157,8 @@ class TestDestructiveGitRevertAdvisoryNoChangeVerdict:
             check_destructive_git_revert_advisory,
         )
 
-        bash_result = check_destructive_git_revert_advisory(bash_cmd, payload={"tool_name": "Bash"})
-        ps_result = check_destructive_git_revert_advisory(ps_cmd, payload=_powershell_payload())
+        bash_result = _enveloped(check_destructive_git_revert_advisory)(bash_cmd, payload={"tool_name": "Bash"})
+        ps_result = _enveloped(check_destructive_git_revert_advisory)(ps_cmd, payload=_powershell_payload())
         assert bash_result == ps_result
 
 
@@ -176,17 +181,17 @@ class TestGitCommitSafeCommitAdviseConverted:
 
     def test_start_process_powershell_bare_commit_advises(self) -> None:
         cmd = 'Start-Process git -ArgumentList "commit","-m","wip"'
-        result = check_git_commit_safe_commit_advise(cmd, payload={"tool_name": "PowerShell"})
+        result = _enveloped(check_git_commit_safe_commit_advise)(cmd, payload={"tool_name": "PowerShell"})
         assert result is not None
 
     def test_bash_verdict_parity_same_command_without_start_process(self) -> None:
         cmd = 'git commit -m "wip"'
-        result = check_git_commit_safe_commit_advise(cmd, payload={"tool_name": "Bash"})
+        result = _enveloped(check_git_commit_safe_commit_advise)(cmd, payload={"tool_name": "Bash"})
         assert result is not None
 
     def test_unparseable_powershell_does_not_deny(self) -> None:
         cmd = "Start-Process git -ArgumentList 'commit', '-m', @'\nunterminated"
-        result = check_git_commit_safe_commit_advise(cmd, payload={"tool_name": "PowerShell"})
+        result = _enveloped(check_git_commit_safe_commit_advise)(cmd, payload={"tool_name": "PowerShell"})
         assert result is None or (
             result["hookSpecificOutput"]["permissionDecision"] != "deny"
         )
@@ -211,13 +216,13 @@ class TestBlockSubagentCommitConverted:
 
     def test_start_process_powershell_commit_denies(self) -> None:
         cmd = 'Start-Process git -ArgumentList "commit","-am","wip"'
-        result = block_subagent_commit.check(self._payload(cmd, "PowerShell"))
+        result = _enveloped(block_subagent_commit.check)(self._payload(cmd, "PowerShell"))
         assert result is not None
         assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
     def test_bash_verdict_parity_same_command_without_start_process(self) -> None:
         cmd = 'git commit -am "wip"'
-        result = block_subagent_commit.check(self._payload(cmd, "Bash"))
+        result = _enveloped(block_subagent_commit.check)(self._payload(cmd, "Bash"))
         assert result is not None
         assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
@@ -234,8 +239,8 @@ class TestBlockSubagentCommitConverted:
         `cmd_for_scan` is left untouched and both dialects reach the
         IDENTICAL verdict on the identical raw text."""
         cmd = "Start-Process git -ArgumentList 'commit', @'\nunterminated"
-        bash_result = block_subagent_commit.check(self._payload(cmd, "Bash"))
-        ps_result = block_subagent_commit.check(self._payload(cmd, "PowerShell"))
+        bash_result = _enveloped(block_subagent_commit.check)(self._payload(cmd, "Bash"))
+        ps_result = _enveloped(block_subagent_commit.check)(self._payload(cmd, "PowerShell"))
         assert bash_result == ps_result
 
 
@@ -258,19 +263,19 @@ class TestBlockSubagentGrantAcquisitionConverted:
             'Start-Process python -ArgumentList "-m",'
             '"coordinator_core.session.claude_md_grant","grant","pm","note"'
         )
-        result = block_subagent_grant_acquisition.check(self._payload(cmd, "PowerShell"))
+        result = _enveloped(block_subagent_grant_acquisition.check)(self._payload(cmd, "PowerShell"))
         assert result is not None
         assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
     def test_bash_verdict_parity_same_command_without_start_process(self) -> None:
         cmd = "python -m coordinator_core.session.claude_md_grant grant pm note"
-        result = block_subagent_grant_acquisition.check(self._payload(cmd, "Bash"))
+        result = _enveloped(block_subagent_grant_acquisition.check)(self._payload(cmd, "Bash"))
         assert result is not None
         assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
     def test_unparseable_powershell_does_not_deny(self) -> None:
         cmd = "Start-Process python -ArgumentList '-m', @'\nunterminated"
-        result = block_subagent_grant_acquisition.check(self._payload(cmd, "PowerShell"))
+        result = _enveloped(block_subagent_grant_acquisition.check)(self._payload(cmd, "PowerShell"))
         assert result is None or (
             result["hookSpecificOutput"]["permissionDecision"] != "deny"
         )
@@ -290,19 +295,19 @@ class TestBlockSubagentGuardGrantConverted:
             'Start-Process python -ArgumentList "-m",'
             '"coordinator_core.session.em_guard_grant","grant","em","note"'
         )
-        result = block_subagent_guard_grant.check(self._payload(cmd, "PowerShell"))
+        result = _enveloped(block_subagent_guard_grant.check)(self._payload(cmd, "PowerShell"))
         assert result is not None
         assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
     def test_bash_verdict_parity_same_command_without_start_process(self) -> None:
         cmd = "python -m coordinator_core.session.em_guard_grant grant em note"
-        result = block_subagent_guard_grant.check(self._payload(cmd, "Bash"))
+        result = _enveloped(block_subagent_guard_grant.check)(self._payload(cmd, "Bash"))
         assert result is not None
         assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
     def test_unparseable_powershell_does_not_deny(self) -> None:
         cmd = "Start-Process python -ArgumentList '-m', @'\nunterminated"
-        result = block_subagent_guard_grant.check(self._payload(cmd, "PowerShell"))
+        result = _enveloped(block_subagent_guard_grant.check)(self._payload(cmd, "PowerShell"))
         assert result is None or (
             result["hookSpecificOutput"]["permissionDecision"] != "deny"
         )
@@ -330,19 +335,19 @@ class TestBlockNoncanonicalBranchCreationConverted:
 
     def test_start_process_powershell_checkout_b_advises(self) -> None:
         cmd = 'Start-Process git -ArgumentList "checkout","-b","fix-thing"'
-        result = block_noncanonical_branch_creation.check(self._payload(cmd, "PowerShell"))
+        result = _enveloped(block_noncanonical_branch_creation.check)(self._payload(cmd, "PowerShell"))
         assert result is not None
         assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
     def test_bash_verdict_parity_same_command_without_start_process(self) -> None:
         cmd = "git checkout -b fix-thing"
-        result = block_noncanonical_branch_creation.check(self._payload(cmd, "Bash"))
+        result = _enveloped(block_noncanonical_branch_creation.check)(self._payload(cmd, "Bash"))
         assert result is not None
         assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
     def test_unparseable_powershell_does_not_deny(self) -> None:
         cmd = "Start-Process git -ArgumentList 'checkout', @'\nunterminated"
-        result = block_noncanonical_branch_creation.check(self._payload(cmd, "PowerShell"))
+        result = _enveloped(block_noncanonical_branch_creation.check)(self._payload(cmd, "PowerShell"))
         assert result is None or (
             result["hookSpecificOutput"]["permissionDecision"] != "deny"
         )

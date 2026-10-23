@@ -289,7 +289,7 @@ RATCHET_BASELINE_MEAN_PROSE_BYTES_PER_BAND: Dict[str, int] = {
     # Legitimate bump (this dispatch): `block-venv-creation` (PM directive
     # 2026-09-29) is a new corpus population member, not a trimmable
     # regression -- raw raised from 165 to ceil5(172.46)=175.
-    "advisory-rewrite": 165 + JITTER_ALLOWANCE_BYTES,
+    "advisory-rewrite": 150 + JITTER_ALLOWANCE_BYTES,
     # Legitimate bump: multiprobe-banner embeds the machine-local interpreter
     # path (`_rewrite_support._bt_python3_invocation`); on a box with no
     # `python3` on PATH that is a ~58b quoted path instead of 7b, lifting the

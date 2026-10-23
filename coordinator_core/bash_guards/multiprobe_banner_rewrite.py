@@ -16,10 +16,14 @@ from coordinator_core.bash_guards._command_tokenizer import (
 )
 from coordinator_core.bash_guards._helpers import operator_override_note
 from coordinator_core.bash_guards._rewrite_support import (
-    _allow_rewrite,
     _bt_python3_invocation,
     _crlf_strip,
     _override,
+)
+from coordinator_core.guard_messages.alternative_record import (
+    AlternativeRecord,
+    EscalationRoute,
+    Override,
 )
 from coordinator_core.bash_guards._shape_classifier import (
     Shape as _BT_Shape,
@@ -108,7 +112,7 @@ def check_multiprobe_banner_rewrite(
     session_id: str = "",
     payload: Optional[Dict[str, Any]] = None,
     git_root: Optional[str] = None,
-) -> Optional[Dict[str, Any]]:
+) -> Optional[AlternativeRecord]:
     """BX-16 shape 6 -- the multi-probe session-facts banner: a banner-marked
     chain like ``echo "=== SESSION FACTS ==="; git rev-parse --abbrev-ref
     HEAD; git status --short; pwd; whoami; date; uname`` forks one process
@@ -252,13 +256,25 @@ def check_multiprobe_banner_rewrite(
     _multiprobe_note = operator_override_note(
         "COORDINATOR_ALLOW_MULTIPROBE_BANNER", payload=payload, git_root=git_root
     )
-    return _allow_rewrite(
-        "%s -c %s" % (_bt_python3_invocation(), shlex.quote(script)),
-        (
-            "Auto-rewritten: this banner re-derives facts the harness already "
-            "knows, one process per probe (89%/84%/71%/49% re-derivation). "
-            "One python3 process reproduces the same facts, batching every "
-            "git fact into ONE status call."
-        )
-        + (" %s" % _multiprobe_note if _multiprobe_note else ""),
+    _summary = (
+        "Auto-rewritten: this banner re-derives facts the harness already "
+        "knows, one process per probe (89%/84%/71%/49% re-derivation). "
+        "One python3 process reproduces the same facts, batching every "
+        "git fact into ONE status call."
+    )
+    return AlternativeRecord(
+        verdict_kind="rewrite",
+        guard_name="multiprobe-banner-rewrite",
+        updated_input={
+            "command": "%s -c %s" % (_bt_python3_invocation(), shlex.quote(script))
+        },
+        summary=_summary,
+        em_text=_summary + (" %s" % _multiprobe_note if _multiprobe_note else ""),
+        members=(
+            EscalationRoute(
+                report_what="the batched banner if its output differs from the original probes",
+                authorize_what="running the original probes unbatched",
+            ),
+            Override(env_var="COORDINATOR_ALLOW_MULTIPROBE_BANNER"),
+        ),
     )

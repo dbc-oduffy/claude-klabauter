@@ -8,6 +8,23 @@ import pytest
 from coordinator_core.bash_guards import (
     block_reviewer_bash_outside_allowlist as guard,
 )
+from coordinator_core.guard_messages.alternative_record import (
+    AlternativeRecord,
+    Audience,
+    EscalationRoute,
+    Override,
+)
+from coordinator_core.guard_messages.render import render
+from coordinator_core.guard_messages.testing import envelope_of
+
+_record_check = guard.check
+
+
+@pytest.fixture(autouse=True)
+def _render_records_as_em(monkeypatch):
+    monkeypatch.setattr(
+        guard, "check", lambda payload, *a, **kw: envelope_of(_record_check(payload, *a, **kw))
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -1665,3 +1682,30 @@ def test_the_emitted_review_prep_call_allows(monkeypatch):
 
 def test_another_engine_op_still_denies(monkeypatch):
     _deny(_EMITTED_PREP.replace("review.prep", "review.stamp"), monkeypatch)
+
+
+def test_deny_is_a_record_with_an_escalation_route_and_no_override(monkeypatch):
+    _confine(monkeypatch)
+    record = _record_check(_payload("curl https://example.com", agent_type=_CONFINED_TYPE))
+    assert isinstance(record, AlternativeRecord)
+    assert record.verdict_kind == "deny"
+    assert not any(isinstance(m, Override) for m in record.members)
+    assert any(isinstance(m, EscalationRoute) for m in record.members)
+    envelope = render(record, Audience.SUBAGENT)
+    assert envelope["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert "Command: curl https://example.com" in (
+        envelope["hookSpecificOutput"]["permissionDecisionReason"]
+    )
+
+
+def test_em_render_is_the_legacy_deny_text_verbatim(monkeypatch):
+    _confine(monkeypatch)
+    record = _record_check(_payload("curl https://example.com", agent_type=_CONFINED_TYPE))
+    reason = render(record, Audience.EM)["hookSpecificOutput"]["permissionDecisionReason"]
+    assert reason == record.em_text
+    assert reason.startswith("BLOCKED") or "Command: curl https://example.com" in reason
+
+
+def test_allowed_command_still_returns_none_not_a_record(monkeypatch):
+    _confine(monkeypatch)
+    assert _record_check(_payload("git show HEAD", agent_type=_CONFINED_TYPE)) is None

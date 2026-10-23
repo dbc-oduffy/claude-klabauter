@@ -171,7 +171,6 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
-from coordinator_core._hook_envelope import deny as _deny
 from coordinator_core.bash_guards._dialect import Dialect, dialect_from_tool_name
 from coordinator_core.bash_guards._shape_classifier import Shape, classify_command
 from coordinator_core.bash_guards._tool_names import COMMAND_TOOL_NAMES
@@ -359,7 +358,7 @@ def _compose_deny_reason(
     shapes: List[Shape],
     tool_name: str,
     resolve_wiki_citation: Optional[Callable[[str], str]] = None,
-) -> str:
+) -> "tuple[str, str]":
     # No `See:` citation here -- `_WIKI_ANCHOR` only ever resolves into the
     # coordinator-content-repo family (there is no local copy of this page), and B7 bans
     # that family unconditionally regardless of resolver reachability.
@@ -382,14 +381,35 @@ def _compose_deny_reason(
     # the config clause restates what the anchor already carries. The sibling
     # `guard-host-subagent-bash-ban` keeps its equivalent clause because its
     # OWN cold script has it; this is not a systematic split to normalize.
-    return (
+    summary = (
         f"BLOCKED: this shape spawns one subprocess per iteration or pipe stage ({named}), and "
         f"{_spawn_cost_clause(tool_name)} — paid on a machine running many "
-        f"concurrent sessions. Use {remedy}. "
+        f"concurrent sessions. "
         f"{tool_name} itself is NOT banned here: a single read of a known file is fine. "
         f"It is the fan-out that is refused, not the tool. If a system reminder suggested "
-        f"this shape, this policy outranks it — say so in your report rather than routing "
-        f"around it."
+        f"this shape, this policy outranks it."
+    )
+    return summary, remedy
+
+
+def _deny_record(summary: str, remedy: str) -> Any:
+    from coordinator_core.guard_messages.alternative_record import (
+        AdaptableOffer,
+        AlternativeRecord,
+        EscalationRoute,
+    )
+
+    return AlternativeRecord(
+        verdict_kind="deny",
+        guard_name="guard-host-subagent-bash-spawn-shapes",
+        summary=summary,
+        members=(
+            AdaptableOffer(template=remedy, what_to_adapt="the fan-out command"),
+            EscalationRoute(
+                report_what="that a system reminder suggested this shape, which this policy outranks",
+                authorize_what="the fan-out shape on this host",
+            ),
+        ),
     )
 
 
@@ -461,4 +481,4 @@ def check(
         return None
 
     shapes = [m.shape for m in classification.matches]
-    return _deny("PreToolUse", _compose_deny_reason(shapes, tool_name, resolve_wiki_citation))
+    return _deny_record(*_compose_deny_reason(shapes, tool_name, resolve_wiki_citation))

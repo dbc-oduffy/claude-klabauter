@@ -11,7 +11,7 @@ import re
 from typing import Any, Dict, Optional
 
 from coordinator_core.bash_guards._rewrite_support import (
-    _advisory,
+    _advisory_record,
     _crlf_strip,
     _override,
 )
@@ -24,7 +24,7 @@ _HEREDOC_INTRO_RE = re.compile(
 
 _MESSAGE = (
     "Advisory: the trailing `&` leaves a job that outlives this call and "
-    "reports to nobody. Use `run_in_background: true` instead."
+    "reports to nobody."
 )
 
 
@@ -91,8 +91,8 @@ def check_trailing_background_ampersand(
     cmd: str,
     session_id: str = "",
     payload: Optional[Dict[str, Any]] = None,
-) -> Optional[Dict[str, Any]]:
-    """Advisory envelope when a foreground call ends in a job `&`, else None."""
+) -> Any:
+    """Advisory record when a foreground call ends in a job `&`, else None."""
     if not cmd or "&" not in cmd:
         return None
     if _override(OVERRIDE_ENV, payload=payload):
@@ -101,4 +101,11 @@ def check_trailing_background_ampersand(
         return None
     if not _ends_in_job_ampersand(_crlf_strip(cmd)):
         return None
-    return _advisory(_MESSAGE)
+    from coordinator_core.guard_messages.alternative_record import AdaptableOffer
+
+    return _advisory_record(
+        "trailing-background-ampersand",
+        _MESSAGE,
+        (AdaptableOffer(template="run_in_background: true", what_to_adapt="the tool call"),),
+        em_text=_MESSAGE + " Use `run_in_background: true` instead.",
+    )

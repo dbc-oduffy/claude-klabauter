@@ -47,6 +47,11 @@ from coordinator_core.bash_guards.dispatch_checks import (
     check_destructive_rm,
 )
 from coordinator_core.win_portability import no_console_creationflags
+from coordinator_core.guard_messages.testing import envelope_of
+
+
+def _enveloped(check):
+    return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 pytestmark = [
     pytest.mark.spawns_process,
@@ -77,11 +82,11 @@ def _make_repo(path: str) -> str:
 
 
 def _denied(cmd: str) -> bool:
-    return check_destructive_rm(cmd) is not None
+    return _enveloped(check_destructive_rm)(cmd) is not None
 
 
 def _reason(cmd: str) -> str:
-    out = check_destructive_rm(cmd)
+    out = _enveloped(check_destructive_rm)(cmd)
     assert out is not None, f"expected a deny for: {cmd}"
     return out["hookSpecificOutput"]["permissionDecisionReason"]
 

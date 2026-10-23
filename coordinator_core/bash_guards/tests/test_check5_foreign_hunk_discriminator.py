@@ -27,6 +27,11 @@ import pytest
 from coordinator_core.bash_guards import dispatch_checks
 from coordinator_core.session import touch_record
 from coordinator_core.session.scope import ScopeResult
+from coordinator_core.guard_messages.testing import envelope_of
+
+
+def _enveloped(check):
+    return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 pytestmark = [pytest.mark.cadence]
 
@@ -132,7 +137,7 @@ def _run(
             "\n".join(pathspec),
         )
     monkeypatch.setattr(dispatch_checks._dc_git_probe, "_run_git", _stub_run_git(table))
-    return dispatch_checks.check_validate_commit(command, session_id, git_root)
+    return _enveloped(dispatch_checks.check_validate_commit)(command, session_id, git_root)
 
 
 def _scope(monkeypatch: pytest.MonkeyPatch, my_scope: List[str]) -> None:

@@ -23,6 +23,7 @@ from __future__ import annotations
 
 from typing import Optional
 
+from coordinator_core.guard_messages.testing import envelope_of
 from coordinator_core.bash_guards import dispatch_checks as guard
 from coordinator_core.bash_guards._verdict import collecting
 
@@ -114,7 +115,7 @@ class TestPowerShellUnparseableStaysSilentNotBashFailClosed:
         # bash-shaped fail-closed deny via the wrong branch.
         cmd = "git commit -m wip --no-verify"
         result = guard.check_no_verify(cmd, hook_payload=self._powershell_payload(cmd))
-        assert result is None or isinstance(result, dict)
+        assert result is None or isinstance(envelope_of(result), dict)
 
 
 class TestNoDialectDefaultsToBash:

@@ -4,6 +4,11 @@ from __future__ import annotations
 import pytest
 
 from coordinator_core.bash_guards import check_test_suite_invocation as guard
+from coordinator_core.guard_messages.testing import envelope_of
+
+
+def _enveloped(check):
+    return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 
 @pytest.fixture
@@ -708,7 +713,7 @@ def test_check_still_allows_scoped_subagent_command(repo, monkeypatch):
     a dispatched caller's scoped run is permitted -- is unchanged; only the
     encoding of "permitted" moved. A deny still fails here."""
     monkeypatch.setattr(guard, "_mutex_holder", lambda: None)
-    out = guard.check(_payload(
+    out = _enveloped(guard.check)(_payload(
         "pytest coordinator_core/frontmatter/tests/test_x.py", repo, agent_id="a0123456789abcdef"
     ))
     if out is not None:
@@ -720,7 +725,7 @@ def test_check_still_allows_scoped_subagent_command(repo, monkeypatch):
 
 def test_check_still_denies_unscoped_subagent_command(repo, monkeypatch):
     monkeypatch.setattr(guard, "_mutex_holder", lambda: None)
-    out = guard.check(_payload("pytest", repo, agent_id="a0123456789abcdef"))
+    out = _enveloped(guard.check)(_payload("pytest", repo, agent_id="a0123456789abcdef"))
     assert out is not None
     reason = out["hookSpecificOutput"]["permissionDecisionReason"]
     assert reason.startswith("Full-suite subagent runs are denied")

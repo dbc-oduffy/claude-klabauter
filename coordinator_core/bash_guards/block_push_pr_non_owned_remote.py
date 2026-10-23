@@ -50,10 +50,6 @@ PRIORITY = 44
 
 POLICY_KEY = "policy.non_owned_remotes"
 ANCHOR = "PUSH-AND-PR-TO-A-NON-OWNED-REMOTE-ARE-DENIED"
-WIKI_PATH = (
-    "coordinator-content-repo:coordinator/docs/wiki/coordinator-tripwires/"
-    "push-and-pr-to-a-non-owned-remote-are-denied.md"
-)
 
 _PRE_FILTER_RE = re.compile(r"(?i)\b(?:push|pr)\b")
 _GH_DEFAULT_REMOTES = ("upstream", "github", "origin")
@@ -237,8 +233,7 @@ def _offence(
 def _deny_reason(command: str, remote: str) -> str:
     return (
         f"BLOCKED: `{command}` toward non-owned remote {remote}. {ANCHOR}. "
-        "Alternative: commit locally and hand the push or PR to a human. "
-        f"Wiki: {WIKI_PATH}"
+        "Alternative: commit locally and hand the push or PR to a human."
     )
 
 
@@ -274,10 +269,23 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             break
     if found is None:
         return None
-    return {
-        "hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "permissionDecision": "deny",
-            "permissionDecisionReason": _deny_reason(*found),
-        }
-    }
+    return _deny_record(*found)
+
+
+def _deny_record(command: str, remote: str) -> Any:
+    from coordinator_core.guard_messages.alternative_record import AlternativeRecord, EscalationRoute
+
+    legacy = _deny_reason(command, remote)
+    summary, _, _alt = legacy.partition(" Alternative: ")
+    return AlternativeRecord(
+        verdict_kind="deny",
+        guard_name="block-push-pr-non-owned-remote",
+        summary=summary,
+        em_text=legacy,
+        members=(
+            EscalationRoute(
+                report_what="the local commit the push or PR is for",
+                authorize_what="a human pushing it or opening the PR",
+            ),
+        ),
+    )

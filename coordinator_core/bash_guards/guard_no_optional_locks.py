@@ -76,7 +76,6 @@ from typing import Any, Dict, List, Optional, Tuple
 from coordinator_core.bash_guards.dispatch_checks import (
     _GIT_GLOBAL_OPT_NO_ARG_SIMPLE,
     _GIT_GLOBAL_OPT_WITH_ARG,
-    _allow_rewrite,
     _crlf_strip,
     _override,
 )
@@ -470,8 +469,31 @@ def check_git_no_optional_locks(
     # advisory dedupe fingerprints the text, so naming the rewritten segments
     # (or their count) made every call a "new" shape and re-emitted the line
     # on every git call. The rewrite itself is visible in updatedInput.
-    note = (
+    summary = (
         "Auto-rewritten: '--no-optional-locks' inserted before the git "
         "subcommand -- avoids the shared-tree `.git/index.lock` acquisition."
-    ) + " " + operator_override_note("COORDINATOR_ALLOW_OPTIONAL_LOCKS", payload=payload)
-    return _allow_rewrite(new_cmd, note)
+    )
+    note = summary + " " + operator_override_note("COORDINATOR_ALLOW_OPTIONAL_LOCKS", payload=payload)
+    from coordinator_core.guard_messages.alternative_record import (
+        AlternativeRecord,
+        EscalationRoute,
+        Override,
+        ReadyCommand,
+    )
+
+    return AlternativeRecord(
+        verdict_kind="rewrite",
+        guard_name="git-no-optional-locks",
+        summary=summary,
+        members=(
+            ReadyCommand(text=new_cmd),
+            EscalationRoute(
+                report_what="the git call that needs the lock",
+                authorize_what="running it without --no-optional-locks",
+            ),
+            Override("COORDINATOR_ALLOW_OPTIONAL_LOCKS"),
+        ),
+        updated_input={"command": new_cmd},
+        em_text=note,
+        rewrite_allow=True,
+    )

@@ -43,6 +43,11 @@ from coordinator_core.bash_guards.tests.test_bump_outside_repo_write import (
     env,  # noqa: F401 -- reused fixture: anchor repo + an outside-any-repo scratch dir.
     requires_powershell_grammar,
 )
+from coordinator_core.guard_messages.testing import envelope_of
+
+
+def _enveloped(check):
+    return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 # The `env` fixture builds real git repos; declared, not inherited silently.
 # Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
@@ -89,7 +94,7 @@ def test_bash_leg_stands_down_on_a_host_with_no_fleet(env, monkeypatch, capsys):
     monkeypatch.delenv("COORDINATOR_CAP_FLEET_PRESENT", raising=False)
     monkeypatch.setenv("CLAUDE_CODE_ENTRYPOINT", "remote")
 
-    result = guard.check_bump_outside_repo_write(
+    result = _enveloped(guard.check_bump_outside_repo_write)(
         _outside_write_cmd(env), "sess-sd-bash", str(env["anchor"]), {}
     )
 
@@ -109,7 +114,7 @@ def test_bash_leg_stand_down_leaves_a_durable_audit_line(env, monkeypatch):
     monkeypatch.setenv("CLAUDE_CODE_ENTRYPOINT", "remote")
 
     assert (
-        guard.check_bump_outside_repo_write(
+        _enveloped(guard.check_bump_outside_repo_write)(
             _outside_write_cmd(env), "sess-sd-bash-audit", str(env["anchor"]), {}
         )
         is None
@@ -128,7 +133,7 @@ def test_bash_leg_still_denies_where_the_premise_holds(env, monkeypatch):
     """Property 2, resting on the package pin rather than restating it."""
     _set_anchor(monkeypatch, env, "sess-sd-bash-fleet")
 
-    result = guard.check_bump_outside_repo_write(
+    result = _enveloped(guard.check_bump_outside_repo_write)(
         _outside_write_cmd(env), "sess-sd-bash-fleet", str(env["anchor"]), {}
     )
 
@@ -144,7 +149,7 @@ def test_bash_leg_denies_when_the_capability_layer_raises(
     stand-down existed, not guess."""
     _set_anchor(monkeypatch, env, "sess-sd-bash-broken-cap")
 
-    result = guard.check_bump_outside_repo_write(
+    result = _enveloped(guard.check_bump_outside_repo_write)(
         _outside_write_cmd(env), "sess-sd-bash-broken-cap", str(env["anchor"]), {}
     )
 
@@ -166,7 +171,7 @@ def test_powershell_leg_stands_down_on_a_host_with_no_fleet(env, monkeypatch, ca
     monkeypatch.setenv("CLAUDE_CODE_ENTRYPOINT", "remote")
     cmd = "New-Item -Path %s -ItemType File" % (env["outside"] / "ps-newfile.txt")
 
-    result = guard.check_bump_outside_repo_write(
+    result = _enveloped(guard.check_bump_outside_repo_write)(
         cmd, "sess-sd-ps", str(env["anchor"]), {"tool_name": "PowerShell"}
     )
 
@@ -184,7 +189,7 @@ def test_powershell_leg_still_denies_where_the_premise_holds(env, monkeypatch):
     _set_anchor(monkeypatch, env, "sess-sd-ps-fleet")
     cmd = "New-Item -Path %s -ItemType File" % (env["outside"] / "ps-fleet.txt")
 
-    result = guard.check_bump_outside_repo_write(
+    result = _enveloped(guard.check_bump_outside_repo_write)(
         cmd, "sess-sd-ps-fleet", str(env["anchor"]), {"tool_name": "PowerShell"}
     )
 
@@ -199,7 +204,7 @@ def test_powershell_leg_denies_when_the_capability_layer_raises(
     _set_anchor(monkeypatch, env, "sess-sd-ps-broken-cap")
     cmd = "New-Item -Path %s -ItemType File" % (env["outside"] / "ps-broken.txt")
 
-    result = guard.check_bump_outside_repo_write(
+    result = _enveloped(guard.check_bump_outside_repo_write)(
         cmd, "sess-sd-ps-broken-cap", str(env["anchor"]), {"tool_name": "PowerShell"}
     )
 

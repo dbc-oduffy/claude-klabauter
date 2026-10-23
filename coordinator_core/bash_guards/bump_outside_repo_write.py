@@ -393,14 +393,38 @@ def _render_deny_message(
     return _with_route_remedy(message, target_dir, anchor_git_root_str)
 
 
-def _deny(reason: str) -> Dict[str, Any]:
-    return {
-        "hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "permissionDecision": "deny",
-            "permissionDecisionReason": reason,
-        }
-    }
+def _levelled_deny(guard_name: str, reason: str, apply_level: Any, **level_kwargs: Any) -> Any:
+    """The deny record for ``reason``; a non-strict guard level returns the levelled envelope.
+
+    The EM text is ``reason`` verbatim, so the EM render is the legacy envelope byte for byte.
+    """
+    from coordinator_core.guard_messages.alternative_record import (
+        AdaptableOffer,
+        AlternativeRecord,
+        Audience,
+        EscalationRoute,
+    )
+    from coordinator_core.guard_messages.render import render
+
+    record = AlternativeRecord(
+        verdict_kind="deny",
+        guard_name=guard_name,
+        summary=reason,
+        em_text=reason,
+        members=(
+            AdaptableOffer(
+                template="write under <repo>/scratch/ or the session scratchpad instead",
+                what_to_adapt="<repo>",
+            ),
+            EscalationRoute(
+                report_what="the refused write target to whoever dispatched you",
+                authorize_what="a write outside this session's repo",
+            ),
+        ),
+    )
+    envelope = render(record, Audience.EM)
+    leveled = apply_level(guard_name, envelope, **level_kwargs)
+    return record if leveled == envelope else leveled
 
 
 def _resolve_and_casefold(raw: str) -> Optional[str]:
@@ -882,14 +906,15 @@ def check_bump_outside_repo_write(
                     anchor_git_root_str, effective_sid, raw_target, stood_down
                 )
                 return None
-            return apply_guard_level(
+            return _levelled_deny(
                 "bump-outside-repo-write",
-                _deny(
+                (
                     "'%s' did not expand -- the variable was never set, so this "
                     "write will create a literal file or directory named '%s', "
                     "not use the value you intended. Set/export the variable "
                     "first, or write the real path." % (raw_target, raw_target)
                 ),
+                apply_guard_level,
                 risk=(
                     "A variable in the write target did not expand, so the "
                     "write creates a literal path named after the variable."
@@ -906,9 +931,10 @@ def check_bump_outside_repo_write(
         if is_agent_memory_store_path(probe_dir):
             cap_reason = bash_write_verdict(target_dir)
             if cap_reason:
-                return apply_guard_level(
+                return _levelled_deny(
                     "guard-memory-store-cap",
-                    _deny(cap_reason),
+                    cap_reason,
+                    apply_guard_level,
                     risk="A Bash write creates a memory file past the store's file-count cap.",
                 )
             continue
@@ -973,9 +999,10 @@ def check_bump_outside_repo_write(
                 anchor_git_root_str, effective_sid, target_label, stood_down
             )
             return None
-        return apply_cross_repo_level(
+        return _levelled_deny(
             "bump-outside-repo-write",
-            _deny(message),
+            message,
+            apply_cross_repo_level,
             gitdir=anchor_gitdir,
             session_id=effective_sid,
         )
@@ -1194,9 +1221,10 @@ def _check_bump_outside_repo_write_powershell(
                 anchor_git_root_str, effective_sid, target_label, stood_down
             )
             return None
-        return apply_cross_repo_level(
+        return _levelled_deny(
             "bump-outside-repo-write",
-            _deny(message),
+            message,
+            apply_cross_repo_level,
             gitdir=anchor_gitdir,
             session_id=effective_sid,
         )

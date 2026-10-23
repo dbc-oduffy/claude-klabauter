@@ -16,6 +16,11 @@ from coordinator_core.bash_guards.tests.test_bump_foreign_repo_write import (
     repos,  # noqa: F401 -- fixture
 )
 from coordinator_core.ops.sibling_repo_provision_contract import MARKER_NAME, ROUTE_REMEDY
+from coordinator_core.guard_messages.testing import envelope_of
+
+
+def _enveloped(check):
+    return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -30,7 +35,7 @@ def _reason(result) -> str:
 def _run(repos, monkeypatch):
     _set_anchor(monkeypatch, repos, _SID)
     cmd = f"git -C {_posix(repos['foreign'])} commit --allow-empty -m x"
-    return guard.check_bump_foreign_repo_write(cmd, _SID, str(repos["anchor"]), _PAYLOAD)
+    return _enveloped(guard.check_bump_foreign_repo_write)(cmd, _SID, str(repos["anchor"]), _PAYLOAD)
 
 
 def test_marked_target_is_bumped_and_reason_ends_in_route_remedy(repos, monkeypatch):

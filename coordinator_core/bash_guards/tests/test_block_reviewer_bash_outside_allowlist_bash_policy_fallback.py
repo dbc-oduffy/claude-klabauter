@@ -35,6 +35,11 @@ import yaml
 from coordinator_core.bash_guards import (
     block_reviewer_bash_outside_allowlist as guard,
 )
+from coordinator_core.guard_messages.testing import envelope_of
+
+
+def _enveloped(check):
+    return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 _CONFINED_TYPE = "coordinator:code-reviewer"
 
@@ -72,7 +77,7 @@ def test_bash_policy_path_absent_still_denies_git_commit(tmp_path, monkeypatch):
     _confine(monkeypatch)
     missing_path = tmp_path / "does-not-exist.yaml"
     payload = _payload('git commit -m "x"')
-    reason = _assert_denied(guard.check(payload, policy_path=str(missing_path)))
+    reason = _assert_denied(_enveloped(guard.check)(payload, policy_path=str(missing_path)))
     assert "coordinator-doc-new" in reason
 
 
@@ -81,7 +86,7 @@ def test_bash_policy_file_unreadable_still_denies_git_commit(tmp_path, monkeypat
     unreadable = tmp_path / "policy-is-a-directory"
     unreadable.mkdir()
     payload = _payload('git commit -m "x"')
-    reason = _assert_denied(guard.check(payload, policy_path=str(unreadable)))
+    reason = _assert_denied(_enveloped(guard.check)(payload, policy_path=str(unreadable)))
     assert "coordinator-doc-new" in reason
 
 
@@ -90,7 +95,7 @@ def test_bash_policy_malformed_top_level_still_denies_git_commit(tmp_path, monke
     policy_file = tmp_path / "policy.yaml"
     policy_file.write_text("- not\n- a\n- mapping\n", encoding="utf-8")
     payload = _payload('git commit -m "x"')
-    reason = _assert_denied(guard.check(payload, policy_path=str(policy_file)))
+    reason = _assert_denied(_enveloped(guard.check)(payload, policy_path=str(policy_file)))
     assert "coordinator-doc-new" in reason
 
 
@@ -115,7 +120,7 @@ def test_bash_policy_entry_missing_keys_still_denies_git_commit(tmp_path, monkey
         encoding="utf-8",
     )
     payload = _payload('git commit -m "x"')
-    reason = _assert_denied(guard.check(payload, policy_path=str(policy_file)))
+    reason = _assert_denied(_enveloped(guard.check)(payload, policy_path=str(policy_file)))
     assert "coordinator-doc-new" in reason
 
 
@@ -129,7 +134,7 @@ def test_bash_policy_entry_missing_keys_still_denies_unlisted_command(tmp_path, 
         encoding="utf-8",
     )
     payload = _payload("rm -rf /")
-    reason = _assert_denied(guard.check(payload, policy_path=str(policy_file)))
+    reason = _assert_denied(_enveloped(guard.check)(payload, policy_path=str(policy_file)))
     assert "coordinator-doc-new" in reason
 
 
@@ -177,7 +182,7 @@ def test_bash_policy_non_str_list_element_still_denies_git_commit(tmp_path, monk
         encoding="utf-8",
     )
     payload = _payload('git commit -m "x"')
-    reason = _assert_denied(guard.check(payload, policy_path=str(policy_file)))
+    reason = _assert_denied(_enveloped(guard.check)(payload, policy_path=str(policy_file)))
     assert "coordinator-doc-new" in reason
 
 
@@ -189,7 +194,7 @@ def test_bash_policy_non_str_list_element_still_denies_unlisted_command(tmp_path
         encoding="utf-8",
     )
     payload = _payload("rm -rf /")
-    reason = _assert_denied(guard.check(payload, policy_path=str(policy_file)))
+    reason = _assert_denied(_enveloped(guard.check)(payload, policy_path=str(policy_file)))
     assert "coordinator-doc-new" in reason
 
 
@@ -201,7 +206,7 @@ def test_bash_policy_empty_scaffolder_field_still_denies_git_commit(tmp_path, mo
         encoding="utf-8",
     )
     payload = _payload('git commit -m "x"')
-    reason = _assert_denied(guard.check(payload, policy_path=str(policy_file)))
+    reason = _assert_denied(_enveloped(guard.check)(payload, policy_path=str(policy_file)))
     assert "coordinator-doc-new" in reason
 
 
@@ -213,7 +218,7 @@ def test_bash_policy_empty_scaffolder_field_still_denies_unlisted_command(tmp_pa
         encoding="utf-8",
     )
     payload = _payload("rm -rf /")
-    reason = _assert_denied(guard.check(payload, policy_path=str(policy_file)))
+    reason = _assert_denied(_enveloped(guard.check)(payload, policy_path=str(policy_file)))
     assert "coordinator-doc-new" in reason
 
 
@@ -225,7 +230,7 @@ def test_bash_policy_non_dict_git_global_options_still_denies_git_commit(tmp_pat
         encoding="utf-8",
     )
     payload = _payload('git commit -m "x"')
-    reason = _assert_denied(guard.check(payload, policy_path=str(policy_file)))
+    reason = _assert_denied(_enveloped(guard.check)(payload, policy_path=str(policy_file)))
     assert "coordinator-doc-new" in reason
 
 
@@ -237,7 +242,7 @@ def test_bash_policy_non_dict_git_global_options_still_denies_unlisted_command(t
         encoding="utf-8",
     )
     payload = _payload("rm -rf /")
-    reason = _assert_denied(guard.check(payload, policy_path=str(policy_file)))
+    reason = _assert_denied(_enveloped(guard.check)(payload, policy_path=str(policy_file)))
     assert "coordinator-doc-new" in reason
 
 
@@ -283,13 +288,13 @@ def test_well_formed_policy_ruleset_does_not_grant_a_binary_the_hardcoded_fallba
 
     # Without an injected policy path, the hardcoded fallback governs --
     # "sed" is not in _READONLY_FS_BINARIES, so this denies.
-    assert _assert_denied(guard.check(payload)) is not None
+    assert _assert_denied(_enveloped(guard.check)(payload)) is not None
 
     policy_file = tmp_path / "policy.yaml"
     policy_file.write_text(
         _well_formed_policy_yaml(["ls", "sed"]), encoding="utf-8"
     )
-    result = guard.check(payload, policy_path=str(policy_file))
+    result = _enveloped(guard.check)(payload, policy_path=str(policy_file))
     assert result is not None
     assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
@@ -300,11 +305,11 @@ def test_well_formed_policy_ruleset_does_not_narrow_git_subcommands_relative_to_
     _confine(monkeypatch)
     payload = _payload("git log")
 
-    assert guard.check(payload) is None
+    assert _enveloped(guard.check)(payload) is None
 
     policy_file = tmp_path / "policy.yaml"
     policy_file.write_text(_well_formed_policy_yaml(["ls"]), encoding="utf-8")
-    result = guard.check(payload, policy_path=str(policy_file))
+    result = _enveloped(guard.check)(payload, policy_path=str(policy_file))
     assert result is None
 
 
@@ -339,7 +344,7 @@ def test_preexisting_policy_entry_does_not_shadow_newer_interpreter_override(
     policy_file = tmp_path / "policy.yaml"
     policy_file.write_text(_well_formed_policy_yaml(["ls"]), encoding="utf-8")
 
-    result = guard.check(payload, policy_path=str(policy_file))
+    result = _enveloped(guard.check)(payload, policy_path=str(policy_file))
     assert result is None, (
         "coordinator:code-reviewer's pytest allowance "
         "(_DEFAULT_RULESET_TYPE_OVERRIDES) must survive even when a "
@@ -349,10 +354,10 @@ def test_preexisting_policy_entry_does_not_shadow_newer_interpreter_override(
     )
 
     other_payload = _payload("git log")
-    other_result = guard.check(other_payload, policy_path=str(policy_file))
+    other_result = _enveloped(guard.check)(other_payload, policy_path=str(policy_file))
     assert other_result is None
 
     inline_payload = _payload('python3 -c "import os"')
-    inline_result = guard.check(inline_payload, policy_path=str(policy_file))
+    inline_result = _enveloped(guard.check)(inline_payload, policy_path=str(policy_file))
     assert inline_result is not None
     assert inline_result["hookSpecificOutput"]["permissionDecision"] == "deny"

@@ -34,6 +34,11 @@ import pytest
 from coordinator_core.bash_guards import dispatch_checks
 from coordinator_core.session import core
 from coordinator_core.win_portability import no_console_creationflags
+from coordinator_core.guard_messages.testing import envelope_of
+
+
+def _enveloped(check):
+    return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 pytestmark = [
     pytest.mark.spawns_process,
@@ -119,7 +124,7 @@ class TestCheckFiveForeignHunk:
         _git(root, "add", "foo.txt")
         _claim(root, sid, "foo.txt", content_hash=compute_content_hash(tmp_path / "foo.txt"))
 
-        result = dispatch_checks.check_validate_commit(
+        result = _enveloped(dispatch_checks.check_validate_commit)(
             'git commit -m "add foo"', sid, cwd=root
         )
         assert result is None
@@ -137,7 +142,7 @@ class TestCheckFiveForeignHunk:
         # recorded write no longer matches disk-now.
         _claim(root, sid, "foo.txt", content_hash="0" * 64)
 
-        result = dispatch_checks.check_validate_commit(
+        result = _enveloped(dispatch_checks.check_validate_commit)(
             'git commit -m "add foo"', sid, cwd=root
         )
         assert result is not None
@@ -156,7 +161,7 @@ class TestCheckFiveForeignHunk:
         _git(root, "add", "foo.txt")
         _claim(root, sid, "foo.txt")
 
-        result = dispatch_checks.check_validate_commit(
+        result = _enveloped(dispatch_checks.check_validate_commit)(
             'git commit -m "add foo"', sid, cwd=root
         )
         assert result is None
@@ -170,7 +175,7 @@ class TestCheckFiveForeignHunk:
         (tmp_path / "foo.txt").write_text("hello\n", encoding="utf-8")
         _git(root, "add", "foo.txt")
 
-        result = dispatch_checks.check_validate_commit(
+        result = _enveloped(dispatch_checks.check_validate_commit)(
             'git commit -m "add foo"', sid, cwd=root
         )
         assert result is not None
@@ -195,7 +200,7 @@ class TestCheckFiveForeignHunk:
         _claim(root, sid, "foo.txt", content_hash="0" * 64)
         _claim_agent(root, "agent1", sid, sid, "foo.txt", content_hash=disk_hash)
 
-        result = dispatch_checks.check_validate_commit(
+        result = _enveloped(dispatch_checks.check_validate_commit)(
             'git commit -m "add foo"', sid, cwd=root
         )
         assert result is None
@@ -224,7 +229,7 @@ class TestCheckFiveForeignHunk:
             root, "agent2", peer_sid, peer_sid, "foo.txt", content_hash=disk_hash
         )
 
-        result = dispatch_checks.check_validate_commit(
+        result = _enveloped(dispatch_checks.check_validate_commit)(
             'git commit -m "add foo"', sid, cwd=root
         )
         assert result is not None
@@ -243,7 +248,7 @@ class TestCheckFiveForeignHunk:
         _claim(root, sid, "foo.txt", content_hash="0" * 64)
 
         em_payload = {"session_id": sid}
-        result = dispatch_checks.check_validate_commit(
+        result = _enveloped(dispatch_checks.check_validate_commit)(
             'git commit -m "add foo"', sid, cwd=root, payload=em_payload
         )
         assert result is not None
@@ -269,10 +274,10 @@ class TestCheckFiveForeignHunk:
         }
         em_payload = {"session_id": sid}
 
-        subagent_result = dispatch_checks.check_validate_commit(
+        subagent_result = _enveloped(dispatch_checks.check_validate_commit)(
             'git commit -m "add foo"', sid, cwd=root, payload=subagent_payload
         )
-        em_result = dispatch_checks.check_validate_commit(
+        em_result = _enveloped(dispatch_checks.check_validate_commit)(
             'git commit -m "add foo"', sid, cwd=root, payload=em_payload
         )
         assert subagent_result is not None and em_result is not None
@@ -311,7 +316,7 @@ class TestExecutorSidecarStopAppend:
 
     def _commit(self, root, sid):
         _git(root, "add", "-f", self._REL)
-        return dispatch_checks.check_validate_commit(
+        return _enveloped(dispatch_checks.check_validate_commit)(
             'git commit -m "sidecar"', sid, cwd=root
         )
 

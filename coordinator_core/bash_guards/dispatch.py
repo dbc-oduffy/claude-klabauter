@@ -230,7 +230,10 @@ import re
 import sys
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Callable, Dict, FrozenSet, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Callable, Dict, FrozenSet, List, Optional, Tuple, Union
+
+if TYPE_CHECKING:
+    from coordinator_core.guard_messages.alternative_record import AlternativeRecord
 
 from coordinator_core.bash_guards._advisory_value import (
     AdvisoryValue,
@@ -417,7 +420,7 @@ class GuardEntry:
     """
 
     name: str
-    fn: Callable[[], Optional[Dict[str, Any]]]
+    fn: "Callable[[], Optional[Union[AlternativeRecord, Dict[str, Any]]]]"
     fail_closed: bool
     band: GuardBand
     advisory_value: AdvisoryValue = AdvisoryValue.UNCLASSIFIED
@@ -813,11 +816,24 @@ def _crash_deny(guard_name: str, exc: BaseException, resolution_class: Optional[
     """
     _engine_phrase = _RESOLUTION_CLASS_PHRASES.get(resolution_class)
     _engine_note = (" (engine: %s)" % _engine_phrase) if _engine_phrase else ""
-    return {
-        "hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "permissionDecision": "deny",
-            "permissionDecisionReason": (
+    from coordinator_core.guard_messages.alternative_record import (
+        AlternativeRecord as _AlternativeRecord,
+        Audience as _Audience,
+        EscalationRoute as _EscalationRoute,
+    )
+    from coordinator_core.guard_messages.render import render as _render
+
+    return _render(
+        _AlternativeRecord(
+            verdict_kind="deny",
+            guard_name=guard_name,
+            members=(
+                _EscalationRoute(
+                    report_what="the guard name and exception above to whoever dispatched you",
+                    authorize_what="a fix to the guard",
+                ),
+            ),
+            summary=(
                 "coordinator hook dispatcher: %s guard crashed (%s: %s)%s.\n\n"
                 "This is a BUG IN THE GUARD, not a policy verdict -- your "
                 "command was never inspected and was not found to violate "
@@ -844,8 +860,7 @@ def _crash_deny(guard_name: str, exc: BaseException, resolution_class: Optional[
                 "message fired.\n\n"
                 "This does NOT require the Bash tool to diagnose: file-"
                 "reading tools reach the guard source directly, without "
-                "Bash. Report this crash (guard name and exception above) "
-                "to whoever dispatched you and open claude-klabauter's "
+                "Bash. Open claude-klabauter's "
                 "`coordinator_core/bash_guards/` (the guard named above, or "
                 "its dispatcher wiring in `dispatch.py`) to find and fix "
                 "the crash. Escalating to a human or PM with their own "
@@ -854,8 +869,72 @@ def _crash_deny(guard_name: str, exc: BaseException, resolution_class: Optional[
                 "fixed from outside the session."
                 % (guard_name, type(exc).__name__, exc, _engine_note)
             ),
-        }
-    }
+        ),
+        _Audience.EM,
+    )
+
+
+_PINNED_DICT_RETURNS: Dict[str, str] = {
+    "block-drive-root-new-dir-bash-write": "returns apply_guard_level's warn advisory below strict",
+    "block-home-root-bash-write": "returns apply_guard_level's warn advisory below strict",
+    "block-worktree-sentinel-creation": "returns apply_guard_level's warn advisory below strict",
+    "block-approval-sentinel-creation": "returns apply_guard_level's warn advisory below strict",
+    "bump-outside-repo-write": "returns apply_guard_level's warn advisory below strict",
+    "bump-foreign-repo-write": "returns apply_guard_level's warn advisory below strict",
+    "guard-doctrine-surface-bash-write": "returns apply_guard_level's warn advisory below strict",
+}
+"""Chain entries still allowed to return a non-deny envelope dict, each with the
+reason. A dict from any other entry, or a deny dict from any entry, is a
+guard bug and crash-denies. Count-pinned by ``test_guards_return_records_only``;
+shrink-only."""
+
+
+def _admit_guard_result(name: str, out: Any, payload: Optional[Dict[str, Any]]) -> Any:
+    """Turn a guard's return into the envelope the loop consumes.
+
+    ``None`` and an AlternativeRecord are the contract. A pinned non-deny dict
+    passes through; anything else raises, which the loop routes as a crash.
+    """
+    if out is None:
+        return None
+    from coordinator_core.guard_messages.alternative_record import AlternativeRecord
+
+    if isinstance(out, AlternativeRecord):
+        return _render_record(out, payload)
+    if isinstance(out, dict) and name in _PINNED_DICT_RETURNS:
+        from coordinator_core.machine_profile import is_deny_envelope
+
+        if not is_deny_envelope(out):
+            return out
+    raise TypeError("guard %r returned %s; return an AlternativeRecord" % (name, type(out).__name__))
+
+
+def _render_record(record: Any, payload: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Render a guard's AlternativeRecord; the only place a record becomes an envelope.
+
+    The audience is resolved only for a record that carries an Override. The
+    override note is built here, for EM only, and not at all for a record whose
+    ``em_text`` the EM render returns verbatim.
+    """
+    from coordinator_core.guard_messages.alternative_record import Audience, Override
+    from coordinator_core.guard_messages.render import render
+
+    override = next((m for m in record.members if isinstance(m, Override)), None)
+    if override is None:
+        return render(record, Audience.EM)
+    from coordinator_core.bash_guards._audience import resolve_audience
+
+    audience, _caller_class = resolve_audience(payload if isinstance(payload, dict) else {})
+    note = ""
+    if audience is Audience.EM and record.em_text is None:
+        from coordinator_core.bash_guards._helpers import operator_override_note
+
+        note = operator_override_note(
+            override.env_var,
+            payload=payload,
+            reason_placeholder="<reason>" if override.reason_shaped else None,
+        )
+    return render(record, audience, override_note=note)
 
 
 _PLUGIN_ROOT_UNRESOLVED_GUARD_NAME = "plugin-root-unresolved"
@@ -1958,7 +2037,7 @@ def _evaluate_payload_json_budgeted(
             continue
         _demoted = False
         try:
-            out = fn()
+            out = _admit_guard_result(name, fn(), payload)
         except Exception as exc:  # noqa: BLE001 -- F1: isolate, do not propagate
             if fail_closed:
                 if _crash_deny_is_out_of_class(name, cmd):

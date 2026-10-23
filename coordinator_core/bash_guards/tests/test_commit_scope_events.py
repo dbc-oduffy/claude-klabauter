@@ -29,6 +29,11 @@ from coordinator_core.session import commit_scope_events
 from coordinator_core.win_portability import no_console_creationflags, no_console_passthrough_kwargs
 
 import pytest
+from coordinator_core.guard_messages.testing import envelope_of
+
+
+def _enveloped(check):
+    return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 # Spawns a real external process; runs at cadence gates, not per-commit.
 # Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
@@ -86,7 +91,7 @@ def _stage(repo, name, content="x"):
 
 
 def _verdict(cmd, repo):
-    out = dispatch_checks.check_validate_commit(cmd, SID, str(repo))
+    out = _enveloped(dispatch_checks.check_validate_commit)(cmd, SID, str(repo))
     if out is None:
         return "none"
     decision = out["hookSpecificOutput"]["permissionDecision"]

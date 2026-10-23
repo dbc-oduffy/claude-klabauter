@@ -28,6 +28,11 @@ from coordinator_core.bash_guards._tool_names import COMMAND_TOOL_NAMES
 from coordinator_core.bash_guards._write_bump_session_start import (
     write_session_start_record,
 )
+from coordinator_core.guard_messages.testing import envelope_of
+
+
+def _enveloped(check):
+    return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 
 # Declared, not excused: this file spawns real processes because the behaviour under
@@ -279,8 +284,8 @@ def test_ac7_bash_payload_verdict_unchanged_by_tool_name_widening(
     session_id = "sess-ac7-%s" % abs(hash(cmd))
     _set_anchor(monkeypatch, home, anchor, session_id)
 
-    result_no_tool_name = guard.check_bump_outside_repo_write(cmd, session_id, str(anchor), {})
-    result_explicit_bash = guard.check_bump_outside_repo_write(
+    result_no_tool_name = _enveloped(guard.check_bump_outside_repo_write)(cmd, session_id, str(anchor), {})
+    result_explicit_bash = _enveloped(guard.check_bump_outside_repo_write)(
         cmd, session_id, str(anchor), {"tool_name": "Bash"}
     )
 
@@ -365,8 +370,8 @@ def test_no_bash_regression_foreign_repo_write_verdict_unchanged_by_tool_name_wi
     # case (`_write_bump_message.resolve_agent_class` -> AGENT_CLASS_UNKNOWN,
     # coordinator-claude#42 B2), which is not what this test isolates.
     base = {"session_id": session_id}
-    result_no_tool_name = foreign_guard.check_bump_foreign_repo_write(cmd, session_id, str(anchor), base)
-    result_explicit_bash = foreign_guard.check_bump_foreign_repo_write(
+    result_no_tool_name = _enveloped(foreign_guard.check_bump_foreign_repo_write)(cmd, session_id, str(anchor), base)
+    result_explicit_bash = _enveloped(foreign_guard.check_bump_foreign_repo_write)(
         cmd, session_id, str(anchor), {**base, "tool_name": "Bash"}
     )
 
@@ -449,7 +454,7 @@ def test_ac11_unparseable_segment_never_denies(
     _set_anchor(monkeypatch, home, anchor, session_id)
 
     leg = _GUARD_LEGS[guard_leg_name]
-    result = leg(cmd, session_id, str(anchor), {"tool_name": "PowerShell"})
+    result = envelope_of(leg(cmd, session_id, str(anchor), {"tool_name": "PowerShell"}))
 
     assert result is None, (
         "an unparseable PowerShell segment must record SILENT, never "
@@ -492,9 +497,9 @@ def test_ac11_extracted_literal_target_does_bump(segment_template, tmp_path, mon
     session_id = "sess-ac11-pos-%s" % abs(hash(cmd))
     _set_anchor(monkeypatch, home, anchor, session_id)
 
-    result = _GUARD_LEGS[guard_leg_name](
+    result = envelope_of(_GUARD_LEGS[guard_leg_name](
         cmd, session_id, str(anchor), {"tool_name": "PowerShell"}
-    )
+    ))
 
     assert result is not None, (
         "awkward PowerShell that still lands a literal -FilePath target "
@@ -555,7 +560,7 @@ def test_ac11_fully_unparseable_segment_yields_no_candidates_at_all(
     )
 
     leg = _GUARD_LEGS[guard_leg_name]
-    result = leg(cmd, session_id, str(anchor), {"tool_name": "PowerShell"})
+    result = envelope_of(leg(cmd, session_id, str(anchor), {"tool_name": "PowerShell"}))
 
     assert result is None, (
         "a segment that defeats extraction outright must still record "

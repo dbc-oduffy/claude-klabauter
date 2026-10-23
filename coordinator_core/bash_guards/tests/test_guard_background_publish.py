@@ -2,6 +2,11 @@
 import pytest
 
 from coordinator_core.bash_guards.guard_background_publish import check_background_publish
+from coordinator_core.guard_messages.testing import envelope_of
+
+
+def _enveloped(check):
+    return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 
 def _payload(cmd, tool="Bash", **extra):
@@ -18,18 +23,18 @@ def _payload(cmd, tool="Bash", **extra):
     "S=/tmp/s\npython3 coordinator/bin/percolate-round.py t > $S/r.txt 2>&1",
 ])
 def test_publish_cli_is_backgrounded_with_input_preserved(cmd):
-    out = check_background_publish(_payload(cmd, timeout=400000))
+    out = _enveloped(check_background_publish)(_payload(cmd, timeout=400000))
     updated = out["hookSpecificOutput"]["updatedInput"]
     assert updated == {"command": cmd, "description": "d", "timeout": 400000, "run_in_background": True}
     assert out["hookSpecificOutput"]["permissionDecision"] == "allow"
 
 
 def test_help_in_one_segment_does_not_shield_a_later_round():
-    assert check_background_publish(_payload("percolate-push --help && percolate-push t"))
+    assert _enveloped(check_background_publish)(_payload("percolate-push --help && percolate-push t"))
 
 
 def test_powershell_tool_is_covered():
-    assert check_background_publish(_payload("python x\\percolate-round.py t", tool="PowerShell"))
+    assert _enveloped(check_background_publish)(_payload("python x\\percolate-round.py t", tool="PowerShell"))
 
 
 @pytest.mark.parametrize("cmd", [
@@ -51,12 +56,12 @@ def test_powershell_tool_is_covered():
     "python3 - <<'EOF'\nopen('coordinator/bin/publish.py')\nEOF",
 ])
 def test_non_publish_commands_are_untouched(cmd):
-    assert check_background_publish(_payload(cmd)) is None
+    assert _enveloped(check_background_publish)(_payload(cmd)) is None
 
 
 def test_already_backgrounded_is_untouched():
-    assert check_background_publish(_payload("percolate-push t", run_in_background=True)) is None
+    assert _enveloped(check_background_publish)(_payload("percolate-push t", run_in_background=True)) is None
 
 
 def test_other_tools_are_untouched():
-    assert check_background_publish(_payload("percolate-push t", tool="Read")) is None
+    assert _enveloped(check_background_publish)(_payload("percolate-push t", tool="Read")) is None

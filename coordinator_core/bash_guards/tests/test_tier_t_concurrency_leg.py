@@ -18,6 +18,11 @@ from __future__ import annotations
 import pytest
 
 from coordinator_core.bash_guards import check_test_suite_invocation as guard
+from coordinator_core.guard_messages.testing import envelope_of
+
+
+def _enveloped(check):
+    return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 
 def _payload(command, *, agent=True, cwd=None, tool="Bash"):
@@ -30,7 +35,7 @@ def _payload(command, *, agent=True, cwd=None, tool="Bash"):
 
 
 def _verdict(command, *, agent=True, cwd=None):
-    return guard.check(_payload(command, agent=agent, cwd=cwd))
+    return _enveloped(guard.check)(_payload(command, agent=agent, cwd=cwd))
 
 
 def _decision(out):
@@ -144,7 +149,7 @@ def test_scoped_runs_remain_permitted_for_subagents(repo):
 
 
 def test_leg_does_not_restate_a_deny_the_identity_leg_owns(repo):
-    out = guard.check(_payload("pytest", cwd=repo))
+    out = _enveloped(guard.check)(_payload("pytest", cwd=repo))
     assert out is not None
     text = out["hookSpecificOutput"]["permissionDecisionReason"]
     assert "with-tier-t-slot" not in text
@@ -153,7 +158,7 @@ def test_leg_does_not_restate_a_deny_the_identity_leg_owns(repo):
 def test_override_env_var_does_not_disarm_the_slot_leg_for_a_subagent(repo):
     p = _payload("pytest tests/test_a.py", cwd=repo)
     p["env"] = {"COORDINATOR_OVERRIDE_TEST_SUITE_INVOCATION": "1"}
-    out = guard.check(p)
+    out = _enveloped(guard.check)(p)
     assert out is not None
     assert "with-tier-t-slot" in str(out)
 
@@ -161,4 +166,4 @@ def test_override_env_var_does_not_disarm_the_slot_leg_for_a_subagent(repo):
 def test_powershell_dialect_is_classified_too(repo):
     assert _slotted("pytest tests/test_a.py", cwd=repo)
     p = _payload("pytest tests/test_a.py", cwd=repo, tool="PowerShell")
-    assert guard.check(p) is not None
+    assert _enveloped(guard.check)(p) is not None

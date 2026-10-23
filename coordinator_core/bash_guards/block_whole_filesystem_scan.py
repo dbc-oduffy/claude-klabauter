@@ -201,7 +201,7 @@ def _covered(name: str, exclude_globs: List[str]) -> bool:
     return any(fnmatch.fnmatchcase(name, g.rstrip("/")) for g in exclude_globs)
 
 
-def _heavy_tree_reason(toks: List[str], cwd: Optional[str], cmd_text: str) -> Optional[str]:
+def _heavy_tree_reason(toks: List[str], cwd: Optional[str], cmd_text: str) -> Any:
     targets = _recursive_grep_targets(toks[0], toks[1:])
     if targets is None:
         return None
@@ -221,15 +221,20 @@ def _heavy_tree_reason(toks: List[str], cwd: Optional[str], cmd_text: str) -> Op
             continue
         flag = "--exclude-dir=" + (uncovered[0] if len(uncovered) == 1 else "{" + ",".join(uncovered) + "}")
         scoped = " ".join([toks[0], flag] + [shlex.quote(t) for t in toks[1:]])
-        return (
+        from coordinator_core.guard_messages.alternative_record import AdaptableOffer, ReadyCommand
+
+        return _record(
             f"BLOCKED: `grep -r` at repo root {target} walks {', '.join(uncovered[:3])} "
-            f"and outlives a Bash timeout. Scope it: `{scoped}` or a source subdirectory."
+            "and outlives a Bash timeout.",
+            f" Scope it: `{scoped}` or a source subdirectory.",
+            ReadyCommand(text=scoped),
+            AdaptableOffer(template="grep a source subdirectory", what_to_adapt="the search root"),
         )
     return None
 
 
-def _offence(text: str, cwd: Optional[str] = None) -> Optional[str]:
-    """The full deny reason for the first offending segment, or None."""
+def _offence(text: str, cwd: Optional[str] = None) -> Any:
+    """The deny record for the first offending segment, or None."""
     if not _PRE_FILTER_RE.search(text):
         return None
     clean = text.replace("\r", "")
@@ -239,9 +244,13 @@ def _offence(text: str, cwd: Optional[str] = None) -> Optional[str]:
             continue
         for root in _search_roots(toks[0], toks[1:]):
             if _is_root(root):
-                return (
+                from coordinator_core.guard_messages.alternative_record import AdaptableOffer
+
+                return _record(
                     f"BLOCKED: `{toks[0]} {root}` is a whole-filesystem scan: it walks every mounted "
-                    "drive and pins the box. Scope it to a repo or engine directory."
+                    "drive and pins the box.",
+                    " Scope it to a repo or engine directory.",
+                    AdaptableOffer(template="scan a repo or engine directory", what_to_adapt="the scan root"),
                 )
         heavy = _heavy_tree_reason(toks, cwd, clean)
         if heavy:
@@ -257,15 +266,18 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if not cmd:
         return None
     try:
-        reason = _offence(cmd, payload.get("cwd") or None)
+        return _offence(cmd, payload.get("cwd") or None)
     except Exception:
         return None
-    if reason is None:
-        return None
-    return {
-        "hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "permissionDecision": "deny",
-            "permissionDecisionReason": reason,
-        }
-    }
+
+
+def _record(summary: str, tail: str, *members: Any) -> Any:
+    from coordinator_core.guard_messages.alternative_record import AlternativeRecord
+
+    return AlternativeRecord(
+        verdict_kind="deny",
+        guard_name="block-whole-filesystem-scan",
+        summary=summary,
+        em_text=summary + tail,
+        members=members,
+    )

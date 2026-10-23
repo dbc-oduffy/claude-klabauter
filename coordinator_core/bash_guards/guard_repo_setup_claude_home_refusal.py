@@ -354,10 +354,25 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if not is_denied_repo_setup_claude_home(cmd, cwd, env):
         return None
 
-    return {
-        "hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "permissionDecision": "deny",
-            "permissionDecisionReason": _deny_reason(),
-        }
-    }
+    from coordinator_core.guard_messages.alternative_record import (
+        AdaptableOffer,
+        AlternativeRecord,
+        EscalationRoute,
+    )
+
+    return AlternativeRecord(
+        verdict_kind="deny",
+        guard_name="guard-repo-setup-claude-home-refusal",
+        summary=_deny_reason(),
+        members=(
+            AdaptableOffer(
+                template="/repo-setup --root <path-to-that-clone>",
+                what_to_adapt="the clone path",
+            ),
+            EscalationRoute(
+                report_what="the target you meant",
+                authorize_what="scaffolding ~/.claude",
+            ),
+        ),
+        em_text=_deny_reason(),
+    )

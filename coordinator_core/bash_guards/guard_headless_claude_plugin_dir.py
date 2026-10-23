@@ -20,14 +20,16 @@ from coordinator_core.bash_guards._command_tokenizer import (
     token_matches_binary,
 )
 from coordinator_core.bash_guards._rewrite_support import (
-    _advisory,
-    _allow_rewrite,
+    _advisory_record,
+    _allow_rewrite_record,
     _bt_peel_wrapper_prefix,
 )
 from coordinator_core.bash_guards._tool_names import COMMAND_TOOL_NAMES
 
 CLASS = "advisory"
 MATCHERS = COMMAND_TOOL_NAMES
+
+_GUARD_NAME = "headless-claude-plugin-dir"
 
 _SEPARATORS = ";&|\n"
 _Word = Tuple[int, int, str]
@@ -127,7 +129,7 @@ def _plugin_root() -> Optional[str]:
 
 def check_headless_claude_plugin_dir(
     cmd: str, session_id: str = "", payload: Optional[Dict[str, Any]] = None
-) -> Optional[Dict[str, Any]]:
+) -> Any:
     if not cmd or "claude" not in cmd.lower():
         return None
     inserts: List[int] = []
@@ -147,15 +149,21 @@ def check_headless_claude_plugin_dir(
         return None
     root = _plugin_root()
     if not root:
-        return _advisory(
+        from coordinator_core.guard_messages.alternative_record import AdaptableOffer
+
+        return _advisory_record(
+            _GUARD_NAME,
             "Coordinator plugin not found; this headless `claude` launch runs with "
-            "no coordinator skills or agents. Launch via `claude-author`."
+            "no coordinator skills or agents.",
+            (AdaptableOffer(template="claude-author", what_to_adapt="the launch arguments"),),
+            em_text=(
+                "Coordinator plugin not found; this headless `claude` launch runs with "
+                "no coordinator skills or agents. Launch via `claude-author`."
+            ),
         )
     flag = " --plugin-dir " + shlex.quote(root.replace("\\", "/"))
     new_cmd = cmd
     for pos in reversed(inserts):
         new_cmd = new_cmd[:pos] + flag + new_cmd[pos:]
-    return _allow_rewrite(
-        new_cmd,
-        "Headless `claude` launch rewritten to add --plugin-dir %s." % root.replace("\\", "/"),
-    )
+    note = "Headless `claude` launch rewritten to add --plugin-dir %s." % root.replace("\\", "/")
+    return _allow_rewrite_record(_GUARD_NAME, new_cmd, note, em_text=note)

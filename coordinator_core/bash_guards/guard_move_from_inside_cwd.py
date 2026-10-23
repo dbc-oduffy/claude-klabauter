@@ -35,18 +35,25 @@ _PS_VALUE_FLAGS = frozenset(
 
 _MESSAGE = (
     "BLOCKED: the shell cwd `{cwd}` is inside `{src}`; Windows refuses to {verb} "
-    "a directory the shell holds. `cd` out first."
+    "a directory the shell holds."
 )
 
 
-def _deny(msg: str) -> Dict[str, Any]:
-    return {
-        "hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "permissionDecision": "deny",
-            "permissionDecisionReason": msg,
-        }
-    }
+def _deny(msg: str) -> Any:
+    from coordinator_core.guard_messages.alternative_record import AdaptableOffer, AlternativeRecord
+
+    return AlternativeRecord(
+        verdict_kind="deny",
+        guard_name="move-from-inside-cwd",
+        summary=msg,
+        em_text=msg + " `cd` out first.",
+        members=(
+            AdaptableOffer(
+                template="cd <a directory outside the one being moved>",
+                what_to_adapt="the directory",
+            ),
+        ),
+    )
 
 
 def _literal(token: str, powershell: bool) -> Optional[str]:

@@ -235,17 +235,23 @@ def _interpreter_new_entry(cmd: str, cwd: Optional[str], env: Optional[Mapping[s
     return None
 
 
-def _deny(name: str) -> Dict[str, Any]:
-    return apply_guard_level(
-        "block-drive-root-new-dir-bash-write",
-        {
-            "hookSpecificOutput": {
-                "hookEventName": "PreToolUse",
-                "permissionDecision": "deny",
-                "permissionDecisionReason": deny_reason(name),
-            }
-        },
+def _deny(name: str) -> Any:
+    """The deny record; a non-strict guard level returns the leveled envelope instead."""
+    from coordinator_core.guard_messages.alternative_record import AdaptableOffer, AlternativeRecord, Audience
+    from coordinator_core.guard_messages.render import render
+
+    legacy = deny_reason(name)
+    summary, _, offer = legacy.partition(" Instead: ")
+    record = AlternativeRecord(
+        verdict_kind="deny",
+        guard_name="block-drive-root-new-dir-bash-write",
+        summary=summary,
+        em_text=legacy,
+        members=(AdaptableOffer(template=offer or "write under <repo>/scratch/", what_to_adapt="<repo>"),),
     )
+    envelope = render(record, Audience.EM)
+    leveled = apply_guard_level("block-drive-root-new-dir-bash-write", envelope)
+    return record if leveled == envelope else leveled
 
 
 def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:

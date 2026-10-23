@@ -51,6 +51,11 @@ from coordinator_core.bash_guards.tests.test_bump_outside_repo_write import (
 from coordinator_core.subagent_sandbox import engine as _sandbox_engine
 from coordinator_core.testing.home_sandbox import sandbox_home
 from coordinator_core.win_portability import no_console_creationflags
+from coordinator_core.guard_messages.testing import envelope_of
+
+
+def _enveloped(check):
+    return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 pytestmark = [
     pytest.mark.spawns_process,
@@ -124,7 +129,7 @@ def test_ac1_git_dash_c_write_subcommand_bumps(repos, monkeypatch):
     _set_anchor(monkeypatch, repos, "sess-1")
     cmd = f"git -C {_posix(repos['foreign'])} commit --allow-empty -m x"
 
-    result = guard.check_bump_foreign_repo_write(cmd, "sess-1", str(repos["anchor"]), {})
+    result = _enveloped(guard.check_bump_foreign_repo_write)(cmd, "sess-1", str(repos["anchor"]), {})
 
     assert result is not None
     assert "hookSpecificOutput" in result
@@ -134,7 +139,7 @@ def test_ac1_cd_and_git_write_subcommand_bumps(repos, monkeypatch):
     _set_anchor(monkeypatch, repos, "sess-2")
     cmd = f"cd {_posix(repos['foreign'])} && git commit --allow-empty -m x"
 
-    result = guard.check_bump_foreign_repo_write(cmd, "sess-2", str(repos["anchor"]), {})
+    result = _enveloped(guard.check_bump_foreign_repo_write)(cmd, "sess-2", str(repos["anchor"]), {})
 
     assert result is not None
 
@@ -147,7 +152,7 @@ def test_ac1_plain_bash_write_sink_cp_to_new_file_bumps(repos, monkeypatch):
     assert not dest.exists()
     cmd = f"cp {_posix(src)} {_posix(dest)}"
 
-    result = guard.check_bump_foreign_repo_write(cmd, "sess-3", str(repos["anchor"]), {})
+    result = _enveloped(guard.check_bump_foreign_repo_write)(cmd, "sess-3", str(repos["anchor"]), {})
 
     assert result is not None
 
@@ -157,7 +162,7 @@ def test_ac1_output_redirection_write_sink_bumps(repos, monkeypatch):
     dest = repos["foreign"] / "redir.txt"
     cmd = f"echo hi > {_posix(dest)}"
 
-    result = guard.check_bump_foreign_repo_write(cmd, "sess-4", str(repos["anchor"]), {})
+    result = _enveloped(guard.check_bump_foreign_repo_write)(cmd, "sess-4", str(repos["anchor"]), {})
 
     assert result is not None
 
@@ -168,7 +173,7 @@ def test_ac1_mkdir_write_sink_to_not_yet_existing_dir_bumps(repos, monkeypatch):
     assert not new_dir.exists()
     cmd = f"mkdir -p {_posix(new_dir)}"
 
-    result = guard.check_bump_foreign_repo_write(cmd, "sess-5", str(repos["anchor"]), {})
+    result = _enveloped(guard.check_bump_foreign_repo_write)(cmd, "sess-5", str(repos["anchor"]), {})
 
     assert result is not None
 
@@ -186,7 +191,7 @@ def test_reported_incident_cd_fetch_merge_base_log_show_never_bumps(repos, monke
         "git merge-base --is-ancestor HEAD HEAD; git log; git show HEAD"
     )
 
-    result = guard.check_bump_foreign_repo_write(cmd, "sess-fetch-chain", str(repos["anchor"]), {})
+    result = _enveloped(guard.check_bump_foreign_repo_write)(cmd, "sess-fetch-chain", str(repos["anchor"]), {})
 
     assert result is None
 
@@ -196,7 +201,7 @@ def test_cd_and_git_fetch_then_mutating_verb_still_bumps(repos, monkeypatch):
     foreign = _posix(repos["foreign"])
     cmd = f"cd {foreign}; git fetch -q origin main; git commit --allow-empty -m x"
 
-    result = guard.check_bump_foreign_repo_write(
+    result = _enveloped(guard.check_bump_foreign_repo_write)(
         cmd, "sess-fetch-then-write", str(repos["anchor"]), {}
     )
 
@@ -209,7 +214,7 @@ def test_fetch_with_colon_refspec_destination_still_bumps(repos, monkeypatch):
     foreign = _posix(repos["foreign"])
     cmd = f"cd {foreign}; git fetch origin feature:main"
 
-    result = guard.check_bump_foreign_repo_write(
+    result = _enveloped(guard.check_bump_foreign_repo_write)(
         cmd, "sess-fetch-refspec", str(repos["anchor"]), {}
     )
 
@@ -230,7 +235,7 @@ def test_evasion_env_git_dir_write_subcommand_bumps(repos, monkeypatch):
     cmd = f"GIT_DIR={_posix(repos['foreign'])}/.git git commit --allow-empty -m x"
     _set_anchor(monkeypatch, repos, "sess-evasion-1")
 
-    result = guard.check_bump_foreign_repo_write(cmd, "sess-evasion-1", str(repos["anchor"]), {})
+    result = _enveloped(guard.check_bump_foreign_repo_write)(cmd, "sess-evasion-1", str(repos["anchor"]), {})
 
     assert result is not None
     assert "hookSpecificOutput" in result
@@ -240,7 +245,7 @@ def test_evasion_env_git_common_dir_write_subcommand_bumps(repos, monkeypatch):
     cmd = f"GIT_COMMON_DIR={_posix(repos['foreign'])}/.git git commit --allow-empty -m x"
     _set_anchor(monkeypatch, repos, "sess-evasion-2")
 
-    result = guard.check_bump_foreign_repo_write(cmd, "sess-evasion-2", str(repos["anchor"]), {})
+    result = _enveloped(guard.check_bump_foreign_repo_write)(cmd, "sess-evasion-2", str(repos["anchor"]), {})
 
     assert result is not None
 
@@ -252,7 +257,7 @@ def test_evasion_env_git_work_tree_write_subcommand_bumps(repos, monkeypatch):
     cmd = f"GIT_WORK_TREE={_posix(repos['foreign'])} git commit --allow-empty -m x"
     _set_anchor(monkeypatch, repos, "sess-evasion-3")
 
-    result = guard.check_bump_foreign_repo_write(cmd, "sess-evasion-3", str(repos["anchor"]), {})
+    result = _enveloped(guard.check_bump_foreign_repo_write)(cmd, "sess-evasion-3", str(repos["anchor"]), {})
 
     assert result is not None
 
@@ -261,7 +266,7 @@ def test_evasion_cli_git_dir_flag_write_subcommand_bumps(repos, monkeypatch):
     cmd = f"git --git-dir={_posix(repos['foreign'])}/.git commit --allow-empty -m x"
     _set_anchor(monkeypatch, repos, "sess-evasion-4")
 
-    result = guard.check_bump_foreign_repo_write(cmd, "sess-evasion-4", str(repos["anchor"]), {})
+    result = _enveloped(guard.check_bump_foreign_repo_write)(cmd, "sess-evasion-4", str(repos["anchor"]), {})
 
     assert result is not None
 
@@ -270,7 +275,7 @@ def test_evasion_cli_git_dir_flag_separate_token_write_subcommand_bumps(repos, m
     cmd = f"git --git-dir {_posix(repos['foreign'])}/.git commit --allow-empty -m x"
     _set_anchor(monkeypatch, repos, "sess-evasion-5")
 
-    result = guard.check_bump_foreign_repo_write(cmd, "sess-evasion-5", str(repos["anchor"]), {})
+    result = _enveloped(guard.check_bump_foreign_repo_write)(cmd, "sess-evasion-5", str(repos["anchor"]), {})
 
     assert result is not None
 
@@ -279,7 +284,7 @@ def test_evasion_env_wrapper_git_dir_write_subcommand_bumps(repos, monkeypatch):
     cmd = f"env GIT_DIR={_posix(repos['foreign'])}/.git git commit --allow-empty -m x"
     _set_anchor(monkeypatch, repos, "sess-evasion-6")
 
-    result = guard.check_bump_foreign_repo_write(cmd, "sess-evasion-6", str(repos["anchor"]), {})
+    result = _enveloped(guard.check_bump_foreign_repo_write)(cmd, "sess-evasion-6", str(repos["anchor"]), {})
 
     assert result is not None
 
@@ -293,7 +298,7 @@ def test_non_regression_env_git_dir_pointing_at_own_repo_does_not_bump(repos, mo
     cmd = f"GIT_DIR={_posix(repos['anchor'])}/.git git commit --allow-empty -m x"
     _set_anchor(monkeypatch, repos, "sess-evasion-7")
 
-    result = guard.check_bump_foreign_repo_write(cmd, "sess-evasion-7", str(repos["anchor"]), {})
+    result = _enveloped(guard.check_bump_foreign_repo_write)(cmd, "sess-evasion-7", str(repos["anchor"]), {})
 
     assert result is None
 
@@ -302,7 +307,7 @@ def test_non_regression_cli_git_dir_flag_pointing_at_own_repo_does_not_bump(repo
     cmd = f"git --git-dir={_posix(repos['anchor'])}/.git commit --allow-empty -m x"
     _set_anchor(monkeypatch, repos, "sess-evasion-8")
 
-    result = guard.check_bump_foreign_repo_write(cmd, "sess-evasion-8", str(repos["anchor"]), {})
+    result = _enveloped(guard.check_bump_foreign_repo_write)(cmd, "sess-evasion-8", str(repos["anchor"]), {})
 
     assert result is None
 
@@ -317,7 +322,7 @@ def test_non_regression_git_dir_readonly_allowlisted_subcommand_still_never_bump
     cmd = f"GIT_DIR={_posix(repos['foreign'])}/.git git log"
     _set_anchor(monkeypatch, repos, "sess-evasion-9")
 
-    result = guard.check_bump_foreign_repo_write(cmd, "sess-evasion-9", str(repos["anchor"]), {})
+    result = _enveloped(guard.check_bump_foreign_repo_write)(cmd, "sess-evasion-9", str(repos["anchor"]), {})
 
     assert result is None
 
@@ -326,7 +331,7 @@ def test_evasion_env_git_dir_write_subcommand_reproduces_live_incident_bumps(rep
     cmd = f"GIT_DIR={_posix(repos['foreign'])}/.git git commit --allow-empty -m x"
     _set_anchor(monkeypatch, repos, "sess-evasion-10")
 
-    result = guard.check_bump_foreign_repo_write(cmd, "sess-evasion-10", str(repos["anchor"]), {})
+    result = _enveloped(guard.check_bump_foreign_repo_write)(cmd, "sess-evasion-10", str(repos["anchor"]), {})
 
     assert result is not None
 
@@ -363,7 +368,7 @@ def test_readonly_git_verb_outside_the_old_eight_never_bumps(repos, monkeypatch,
     cmd = f"git -C {_posix(repos['foreign'])} {verb}"
     _set_anchor(monkeypatch, repos, "sess-readonly-verbs")
 
-    result = guard.check_bump_foreign_repo_write(
+    result = _enveloped(guard.check_bump_foreign_repo_write)(
         cmd, "sess-readonly-verbs", str(repos["anchor"]), {}
     )
 
@@ -374,7 +379,7 @@ def test_unknown_git_verb_does_not_bump(repos, monkeypatch):
     cmd = f"git -C {_posix(repos['foreign'])} some-future-readonly-verb"
     _set_anchor(monkeypatch, repos, "sess-unknown-verb")
 
-    result = guard.check_bump_foreign_repo_write(
+    result = _enveloped(guard.check_bump_foreign_repo_write)(
         cmd, "sess-unknown-verb", str(repos["anchor"]), {}
     )
 
@@ -432,7 +437,7 @@ def test_dual_mode_verb_read_spelling_never_bumps(repos, monkeypatch, verb):
     cmd = f"git -C {_posix(repos['foreign'])} {verb}"
     _set_anchor(monkeypatch, repos, "sess-dual-read")
 
-    result = guard.check_bump_foreign_repo_write(
+    result = _enveloped(guard.check_bump_foreign_repo_write)(
         cmd, "sess-dual-read", str(repos["anchor"]), {}
     )
 
@@ -480,7 +485,7 @@ def test_dual_mode_verb_write_spelling_still_bumps(repos, monkeypatch, verb):
     cmd = f"git -C {_posix(repos['foreign'])} {verb}"
     _set_anchor(monkeypatch, repos, "sess-dual-write")
 
-    result = guard.check_bump_foreign_repo_write(
+    result = _enveloped(guard.check_bump_foreign_repo_write)(
         cmd, "sess-dual-write", str(repos["anchor"]), {}
     )
 
@@ -491,7 +496,7 @@ def test_dual_mode_predicate_unrecognised_bundle_alone_fails_toward_bump(repos, 
     cmd = f"git -C {_posix(repos['foreign'])} branch -qXz"
     _set_anchor(monkeypatch, repos, "sess-dual-unknown-nopos")
 
-    result = guard.check_bump_foreign_repo_write(
+    result = _enveloped(guard.check_bump_foreign_repo_write)(
         cmd, "sess-dual-unknown-nopos", str(repos["anchor"]), {}
     )
 
@@ -502,7 +507,7 @@ def test_dual_mode_predicate_tag_unrecognised_bundle_alone_fails_toward_bump(rep
     cmd = f"git -C {_posix(repos['foreign'])} tag -qXz"
     _set_anchor(monkeypatch, repos, "sess-dual-unknown-tag-nopos")
 
-    result = guard.check_bump_foreign_repo_write(
+    result = _enveloped(guard.check_bump_foreign_repo_write)(
         cmd, "sess-dual-unknown-tag-nopos", str(repos["anchor"]), {}
     )
 
@@ -515,7 +520,7 @@ def test_dual_mode_predicate_fails_toward_bump_on_unrecognised_spelling_with_pos
     cmd = f"git -C {_posix(repos['foreign'])} branch -qXz topic"
     _set_anchor(monkeypatch, repos, "sess-dual-unknown")
 
-    result = guard.check_bump_foreign_repo_write(
+    result = _enveloped(guard.check_bump_foreign_repo_write)(
         cmd, "sess-dual-unknown", str(repos["anchor"]), {}
     )
 
@@ -527,7 +532,7 @@ def test_write_git_verb_still_bumps(repos, monkeypatch, verb):
     cmd = f"git -C {_posix(repos['foreign'])} {verb}"
     _set_anchor(monkeypatch, repos, "sess-write-verbs")
 
-    result = guard.check_bump_foreign_repo_write(
+    result = _enveloped(guard.check_bump_foreign_repo_write)(
         cmd, "sess-write-verbs", str(repos["anchor"]), {}
     )
 
@@ -538,7 +543,7 @@ def test_symbolic_ref_read_spelling_never_bumps(repos, monkeypatch):
     cmd = f"git -C {_posix(repos['foreign'])} symbolic-ref HEAD"
     _set_anchor(monkeypatch, repos, "sess-symref-read")
 
-    result = guard.check_bump_foreign_repo_write(cmd, "sess-symref-read", str(repos["anchor"]), {})
+    result = _enveloped(guard.check_bump_foreign_repo_write)(cmd, "sess-symref-read", str(repos["anchor"]), {})
 
     assert result is None
 
@@ -547,7 +552,7 @@ def test_symbolic_ref_reassign_write_spelling_bumps(repos, monkeypatch):
     cmd = f"git -C {_posix(repos['foreign'])} symbolic-ref HEAD refs/heads/other"
     _set_anchor(monkeypatch, repos, "sess-symref-reassign")
 
-    result = guard.check_bump_foreign_repo_write(
+    result = _enveloped(guard.check_bump_foreign_repo_write)(
         cmd, "sess-symref-reassign", str(repos["anchor"]), {}
     )
 
@@ -558,7 +563,7 @@ def test_symbolic_ref_delete_write_spelling_bumps(repos, monkeypatch):
     cmd = f"git -C {_posix(repos['foreign'])} symbolic-ref -d HEAD"
     _set_anchor(monkeypatch, repos, "sess-symref-delete")
 
-    result = guard.check_bump_foreign_repo_write(
+    result = _enveloped(guard.check_bump_foreign_repo_write)(
         cmd, "sess-symref-delete", str(repos["anchor"]), {}
     )
 
@@ -570,7 +575,7 @@ def test_hash_object_read_spelling_never_bumps(repos, monkeypatch):
     cmd = f"git -C {_posix(repos['foreign'])} hash-object {_posix(target_file)}"
     _set_anchor(monkeypatch, repos, "sess-hashobj-read")
 
-    result = guard.check_bump_foreign_repo_write(cmd, "sess-hashobj-read", str(repos["anchor"]), {})
+    result = _enveloped(guard.check_bump_foreign_repo_write)(cmd, "sess-hashobj-read", str(repos["anchor"]), {})
 
     assert result is None
 
@@ -580,7 +585,7 @@ def test_hash_object_write_spelling_bumps(repos, monkeypatch):
     cmd = f"git -C {_posix(repos['foreign'])} hash-object -w {_posix(target_file)}"
     _set_anchor(monkeypatch, repos, "sess-hashobj-write")
 
-    result = guard.check_bump_foreign_repo_write(cmd, "sess-hashobj-write", str(repos["anchor"]), {})
+    result = _enveloped(guard.check_bump_foreign_repo_write)(cmd, "sess-hashobj-write", str(repos["anchor"]), {})
 
     assert result is not None
 
@@ -589,7 +594,7 @@ def test_pack_refs_bumps(repos, monkeypatch):
     cmd = f"git -C {_posix(repos['foreign'])} pack-refs --all"
     _set_anchor(monkeypatch, repos, "sess-packrefs")
 
-    result = guard.check_bump_foreign_repo_write(cmd, "sess-packrefs", str(repos["anchor"]), {})
+    result = _enveloped(guard.check_bump_foreign_repo_write)(cmd, "sess-packrefs", str(repos["anchor"]), {})
 
     assert result is not None
 
@@ -600,7 +605,7 @@ def test_config_get_subcommand_style_read_never_bumps(repos, monkeypatch):
     cmd = f"git -C {_posix(repos['foreign'])} config get foo.bar"
     _set_anchor(monkeypatch, repos, "sess-config-get")
 
-    result = guard.check_bump_foreign_repo_write(cmd, "sess-config-get", str(repos["anchor"]), {})
+    result = _enveloped(guard.check_bump_foreign_repo_write)(cmd, "sess-config-get", str(repos["anchor"]), {})
 
     assert result is None
 
@@ -609,7 +614,7 @@ def test_config_list_subcommand_style_read_never_bumps(repos, monkeypatch):
     cmd = f"git -C {_posix(repos['foreign'])} config list"
     _set_anchor(monkeypatch, repos, "sess-config-list")
 
-    result = guard.check_bump_foreign_repo_write(cmd, "sess-config-list", str(repos["anchor"]), {})
+    result = _enveloped(guard.check_bump_foreign_repo_write)(cmd, "sess-config-list", str(repos["anchor"]), {})
 
     assert result is None
 
@@ -618,7 +623,7 @@ def test_config_user_name_positional_write_still_bumps(repos, monkeypatch):
     cmd = f"git -C {_posix(repos['foreign'])} config user.name bob"
     _set_anchor(monkeypatch, repos, "sess-config-username")
 
-    result = guard.check_bump_foreign_repo_write(
+    result = _enveloped(guard.check_bump_foreign_repo_write)(
         cmd, "sess-config-username", str(repos["anchor"]), {}
     )
 
@@ -629,7 +634,7 @@ def test_config_unset_flag_write_still_bumps(repos, monkeypatch):
     cmd = f"git -C {_posix(repos['foreign'])} config --unset x"
     _set_anchor(monkeypatch, repos, "sess-config-unset")
 
-    result = guard.check_bump_foreign_repo_write(cmd, "sess-config-unset", str(repos["anchor"]), {})
+    result = _enveloped(guard.check_bump_foreign_repo_write)(cmd, "sess-config-unset", str(repos["anchor"]), {})
 
     assert result is not None
 
@@ -638,7 +643,7 @@ def test_cd_and_git_dual_mode_read_verb_never_bumps(repos, monkeypatch):
     cmd = f"cd {_posix(repos['foreign'])} && git branch --show-current"
     _set_anchor(monkeypatch, repos, "sess-cdgit-dual-read")
 
-    result = guard.check_bump_foreign_repo_write(
+    result = _enveloped(guard.check_bump_foreign_repo_write)(
         cmd, "sess-cdgit-dual-read", str(repos["anchor"]), {}
     )
 
@@ -649,7 +654,7 @@ def test_cd_and_git_dual_mode_write_verb_bumps(repos, monkeypatch):
     cmd = f"cd {_posix(repos['foreign'])} && git branch -d topic"
     _set_anchor(monkeypatch, repos, "sess-cdgit-dual-write")
 
-    result = guard.check_bump_foreign_repo_write(
+    result = _enveloped(guard.check_bump_foreign_repo_write)(
         cmd, "sess-cdgit-dual-write", str(repos["anchor"]), {}
     )
 
@@ -660,7 +665,7 @@ def test_cd_and_git_plain_read_verb_never_bumps(repos, monkeypatch):
     cmd = f"cd {_posix(repos['foreign'])} && git log"
     _set_anchor(monkeypatch, repos, "sess-cdgit-plain-read")
 
-    result = guard.check_bump_foreign_repo_write(
+    result = _enveloped(guard.check_bump_foreign_repo_write)(
         cmd, "sess-cdgit-plain-read", str(repos["anchor"]), {}
     )
 
@@ -671,7 +676,7 @@ def test_git_dir_override_with_dual_mode_read_verb_does_not_bump(repos, monkeypa
     cmd = f"GIT_DIR={_posix(repos['foreign'])}/.git git branch --show-current"
     _set_anchor(monkeypatch, repos, "sess-gitdir-dual-read")
 
-    result = guard.check_bump_foreign_repo_write(
+    result = _enveloped(guard.check_bump_foreign_repo_write)(
         cmd, "sess-gitdir-dual-read", str(repos["anchor"]), {}
     )
 
@@ -682,7 +687,7 @@ def test_git_dir_override_with_dual_mode_write_verb_bumps(repos, monkeypatch):
     cmd = f"GIT_DIR={_posix(repos['foreign'])}/.git git branch -d topic"
     _set_anchor(monkeypatch, repos, "sess-gitdir-dual-write")
 
-    result = guard.check_bump_foreign_repo_write(
+    result = _enveloped(guard.check_bump_foreign_repo_write)(
         cmd, "sess-gitdir-dual-write", str(repos["anchor"]), {}
     )
 
@@ -693,7 +698,7 @@ def test_work_tree_override_with_dual_mode_read_verb_does_not_bump(repos, monkey
     cmd = f"GIT_WORK_TREE={_posix(repos['foreign'])} git branch --show-current"
     _set_anchor(monkeypatch, repos, "sess-worktree-dual-read")
 
-    result = guard.check_bump_foreign_repo_write(
+    result = _enveloped(guard.check_bump_foreign_repo_write)(
         cmd, "sess-worktree-dual-read", str(repos["anchor"]), {}
     )
 
@@ -704,7 +709,7 @@ def test_work_tree_override_with_dual_mode_write_verb_bumps(repos, monkeypatch):
     cmd = f"GIT_WORK_TREE={_posix(repos['foreign'])} git branch -d topic"
     _set_anchor(monkeypatch, repos, "sess-worktree-dual-write")
 
-    result = guard.check_bump_foreign_repo_write(
+    result = _enveloped(guard.check_bump_foreign_repo_write)(
         cmd, "sess-worktree-dual-write", str(repos["anchor"]), {}
     )
 
@@ -715,7 +720,7 @@ def test_dash_c_core_worktree_override_with_dual_mode_read_verb_does_not_bump(re
     cmd = f"git -c core.worktree={_posix(repos['foreign'])} branch --show-current"
     _set_anchor(monkeypatch, repos, "sess-coreworktree-dual-read")
 
-    result = guard.check_bump_foreign_repo_write(
+    result = _enveloped(guard.check_bump_foreign_repo_write)(
         cmd, "sess-coreworktree-dual-read", str(repos["anchor"]), {}
     )
 
@@ -726,7 +731,7 @@ def test_dash_c_core_worktree_override_with_dual_mode_write_verb_bumps(repos, mo
     cmd = f"git -c core.worktree={_posix(repos['foreign'])} branch -d topic"
     _set_anchor(monkeypatch, repos, "sess-coreworktree-dual-write")
 
-    result = guard.check_bump_foreign_repo_write(
+    result = _enveloped(guard.check_bump_foreign_repo_write)(
         cmd, "sess-coreworktree-dual-write", str(repos["anchor"]), {}
     )
 
@@ -749,7 +754,7 @@ def test_adversarial_dual_mode_shapes_still_bump(repos, monkeypatch, verb):
     cmd = f"git -C {_posix(repos['foreign'])} {verb}"
     _set_anchor(monkeypatch, repos, "sess-adversarial-write")
 
-    result = guard.check_bump_foreign_repo_write(
+    result = _enveloped(guard.check_bump_foreign_repo_write)(
         cmd, "sess-adversarial-write", str(repos["anchor"]), {}
     )
 
@@ -768,7 +773,7 @@ def test_adversarial_dual_mode_shapes_never_bump(repos, monkeypatch, verb):
     cmd = f"git -C {_posix(repos['foreign'])} {verb}"
     _set_anchor(monkeypatch, repos, "sess-adversarial-read")
 
-    result = guard.check_bump_foreign_repo_write(
+    result = _enveloped(guard.check_bump_foreign_repo_write)(
         cmd, "sess-adversarial-read", str(repos["anchor"]), {}
     )
 
@@ -786,7 +791,7 @@ def test_evasion_dash_c_core_worktree_write_subcommand_bumps(repos, monkeypatch)
     cmd = f"git -c core.worktree={_posix(repos['foreign'])} commit --allow-empty -m x"
     _set_anchor(monkeypatch, repos, "sess-evasion-dashc-1")
 
-    result = guard.check_bump_foreign_repo_write(cmd, "sess-evasion-dashc-1", str(repos["anchor"]), {})
+    result = _enveloped(guard.check_bump_foreign_repo_write)(cmd, "sess-evasion-dashc-1", str(repos["anchor"]), {})
 
     assert result is not None
     assert "hookSpecificOutput" in result
@@ -796,7 +801,7 @@ def test_evasion_dash_c_core_worktree_separate_token_write_subcommand_bumps(repo
     cmd = f"git -c core.worktree={_posix(repos['foreign'])} commit --allow-empty -m x"
     _set_anchor(monkeypatch, repos, "sess-evasion-dashc-2")
 
-    result = guard.check_bump_foreign_repo_write(cmd, "sess-evasion-dashc-2", str(repos["anchor"]), {})
+    result = _enveloped(guard.check_bump_foreign_repo_write)(cmd, "sess-evasion-dashc-2", str(repos["anchor"]), {})
 
     assert result is not None
 
@@ -805,7 +810,7 @@ def test_evasion_dash_c_core_worktree_attached_form_write_subcommand_bumps(repos
     cmd = f"git -ccore.worktree={_posix(repos['foreign'])} commit --allow-empty -m x"
     _set_anchor(monkeypatch, repos, "sess-evasion-dashc-3")
 
-    result = guard.check_bump_foreign_repo_write(cmd, "sess-evasion-dashc-3", str(repos["anchor"]), {})
+    result = _enveloped(guard.check_bump_foreign_repo_write)(cmd, "sess-evasion-dashc-3", str(repos["anchor"]), {})
 
     assert result is not None
 
@@ -814,7 +819,7 @@ def test_non_regression_dash_c_core_worktree_pointing_at_own_repo_does_not_bump(
     cmd = f"git -c core.worktree={_posix(repos['anchor'])} commit --allow-empty -m x"
     _set_anchor(monkeypatch, repos, "sess-evasion-dashc-4")
 
-    result = guard.check_bump_foreign_repo_write(cmd, "sess-evasion-dashc-4", str(repos["anchor"]), {})
+    result = _enveloped(guard.check_bump_foreign_repo_write)(cmd, "sess-evasion-dashc-4", str(repos["anchor"]), {})
 
     assert result is None
 
@@ -830,7 +835,7 @@ def test_non_regression_ordinary_dash_c_unrelated_config_key_still_bumps_correct
     cmd = f"git -c color.ui=always -C {_posix(repos['foreign'])} commit --allow-empty -m x"
     _set_anchor(monkeypatch, repos, "sess-evasion-dashc-5")
 
-    result = guard.check_bump_foreign_repo_write(cmd, "sess-evasion-dashc-5", str(repos["anchor"]), {})
+    result = _enveloped(guard.check_bump_foreign_repo_write)(cmd, "sess-evasion-dashc-5", str(repos["anchor"]), {})
 
     assert result is not None
 
@@ -839,7 +844,7 @@ def test_non_regression_ordinary_dash_c_unrelated_config_key_read_still_allowed(
     cmd = f"git -c color.ui=always -C {_posix(repos['foreign'])} log"
     _set_anchor(monkeypatch, repos, "sess-evasion-dashc-6")
 
-    result = guard.check_bump_foreign_repo_write(cmd, "sess-evasion-dashc-6", str(repos["anchor"]), {})
+    result = _enveloped(guard.check_bump_foreign_repo_write)(cmd, "sess-evasion-dashc-6", str(repos["anchor"]), {})
 
     assert result is None
 
@@ -848,7 +853,7 @@ def test_non_regression_dash_config_env_flag_does_not_swallow_subcommand(repos, 
     cmd = f"git --config-env=core.editor=EDITOR -C {_posix(repos['foreign'])} commit --allow-empty -m x"
     _set_anchor(monkeypatch, repos, "sess-evasion-dashc-7")
 
-    result = guard.check_bump_foreign_repo_write(cmd, "sess-evasion-dashc-7", str(repos["anchor"]), {})
+    result = _enveloped(guard.check_bump_foreign_repo_write)(cmd, "sess-evasion-dashc-7", str(repos["anchor"]), {})
 
     assert result is not None
 
@@ -857,7 +862,7 @@ def test_non_regression_dash_namespace_separate_token_does_not_swallow_subcomman
     cmd = f"git --namespace foo -C {_posix(repos['foreign'])} commit --allow-empty -m x"
     _set_anchor(monkeypatch, repos, "sess-evasion-dashc-8")
 
-    result = guard.check_bump_foreign_repo_write(cmd, "sess-evasion-dashc-8", str(repos["anchor"]), {})
+    result = _enveloped(guard.check_bump_foreign_repo_write)(cmd, "sess-evasion-dashc-8", str(repos["anchor"]), {})
 
     assert result is not None
 
@@ -876,7 +881,7 @@ def test_p3_git_dir_and_git_common_dir_both_set_last_token_order_wins(repos, mon
     cmd = f"GIT_COMMON_DIR={_posix(repos['foreign'])}/.git GIT_DIR={_posix(repos['anchor'])}/.git git commit --allow-empty -m x"
     _set_anchor(monkeypatch, repos, "sess-p3-lastwins-1")
 
-    result = guard.check_bump_foreign_repo_write(cmd, "sess-p3-lastwins-1", str(repos["anchor"]), {})
+    result = _enveloped(guard.check_bump_foreign_repo_write)(cmd, "sess-p3-lastwins-1", str(repos["anchor"]), {})
 
     assert result is None
 
@@ -885,7 +890,7 @@ def test_p3_git_dir_last_write_wins_pinned_by_docstring(repos, monkeypatch):
     cmd = f"GIT_DIR={_posix(repos['anchor'])}/.git GIT_DIR={_posix(repos['foreign'])}/.git git commit --allow-empty -m x"
     _set_anchor(monkeypatch, repos, "sess-p3-lastwins-2")
 
-    result = guard.check_bump_foreign_repo_write(cmd, "sess-p3-lastwins-2", str(repos["anchor"]), {})
+    result = _enveloped(guard.check_bump_foreign_repo_write)(cmd, "sess-p3-lastwins-2", str(repos["anchor"]), {})
 
     assert result is not None
 
@@ -897,7 +902,7 @@ def test_same_repo_write_does_not_bump(repos, monkeypatch):
     dest = repos["anchor"] / "dest.txt"
     cmd = f"cp {_posix(src)} {_posix(dest)}"
 
-    result = guard.check_bump_foreign_repo_write(cmd, "sess-6", str(repos["anchor"]), {})
+    result = _enveloped(guard.check_bump_foreign_repo_write)(cmd, "sess-6", str(repos["anchor"]), {})
 
     assert result is None
 
@@ -934,7 +939,7 @@ def test_ac14_transient_target_root_spawn_failure_allows_same_repo_write(repos, 
 
     monkeypatch.setattr(guard, "resolve_git_root", _flaky_resolve_git_root)
 
-    result = guard.check_bump_foreign_repo_write(
+    result = _enveloped(guard.check_bump_foreign_repo_write)(
         cmd, "sess-ac14-unresolved-same-repo", str(repos["anchor"]), {}
     )
 
@@ -946,7 +951,7 @@ def test_ac14_resolved_and_different_roots_still_bumps(repos, monkeypatch):
     dest = repos["foreign"] / "note.txt"
     cmd = f"echo hi > {_posix(dest)}"
 
-    result = guard.check_bump_foreign_repo_write(
+    result = _enveloped(guard.check_bump_foreign_repo_write)(
         cmd, "sess-ac14-genuinely-foreign", str(repos["anchor"]), {}
     )
 
@@ -958,7 +963,7 @@ def test_read_carve_out_git_log_on_foreign_repo_does_not_bump(repos, monkeypatch
     _set_anchor(monkeypatch, repos, "sess-7")
     cmd = f"git -C {_posix(repos['foreign'])} log"
 
-    result = guard.check_bump_foreign_repo_write(cmd, "sess-7", str(repos["anchor"]), {})
+    result = _enveloped(guard.check_bump_foreign_repo_write)(cmd, "sess-7", str(repos["anchor"]), {})
 
     assert result is None
 
@@ -967,7 +972,7 @@ def test_read_carve_out_git_status_on_foreign_repo_does_not_bump(repos, monkeypa
     _set_anchor(monkeypatch, repos, "sess-8")
     cmd = f"git -C {_posix(repos['foreign'])} status"
 
-    result = guard.check_bump_foreign_repo_write(cmd, "sess-8", str(repos["anchor"]), {})
+    result = _enveloped(guard.check_bump_foreign_repo_write)(cmd, "sess-8", str(repos["anchor"]), {})
 
     assert result is None
 
@@ -987,7 +992,7 @@ def test_ac5_bare_word_cross_repo_memo_invocation_never_bumps(repos, monkeypatch
     _set_anchor(monkeypatch, repos, "sess-9")
     cmd = f"cross-repo-memo --repo foreign --note '{_posix(repos['foreign'])}/some/path'"
 
-    result = guard.check_bump_foreign_repo_write(cmd, "sess-9", str(repos["anchor"]), {})
+    result = _enveloped(guard.check_bump_foreign_repo_write)(cmd, "sess-9", str(repos["anchor"]), {})
 
     assert result is None
 
@@ -997,7 +1002,7 @@ def test_ac5_canonical_path_carrying_cross_repo_memo_invocation_never_bumps(repo
     _set_anchor(monkeypatch, repos, "sess-10")
     cmd = f"{_posix(crm)} --repo foreign"
 
-    result = guard.check_bump_foreign_repo_write(cmd, "sess-10", str(repos["anchor"]), {})
+    result = _enveloped(guard.check_bump_foreign_repo_write)(cmd, "sess-10", str(repos["anchor"]), {})
 
     assert result is None
 
@@ -1007,7 +1012,7 @@ def test_ac5_powershell_call_operator_prefixed_bare_word_never_bumps(repos, monk
     _set_anchor(monkeypatch, repos, "sess-9b")
     cmd = f"& cross-repo-memo --repo foreign --note '{_posix(repos['foreign'])}/some/path'"
 
-    result = guard.check_bump_foreign_repo_write(cmd, "sess-9b", str(repos["anchor"]), {})
+    result = _enveloped(guard.check_bump_foreign_repo_write)(cmd, "sess-9b", str(repos["anchor"]), {})
 
     assert result is None
 
@@ -1017,7 +1022,7 @@ def test_ac5_powershell_semicolon_chained_canonical_path_never_bumps(repos, monk
     _set_anchor(monkeypatch, repos, "sess-10b")
     cmd = f"Set-Location C:\\repo; {_posix(crm)} --repo foreign"
 
-    result = guard.check_bump_foreign_repo_write(cmd, "sess-10b", str(repos["anchor"]), {})
+    result = _enveloped(guard.check_bump_foreign_repo_write)(cmd, "sess-10b", str(repos["anchor"]), {})
 
     assert result is None
 
@@ -1039,7 +1044,7 @@ def test_powershell_new_item_quoted_foreign_repo_target_bumps(repos, monkeypatch
     dest = repos["foreign"] / "newfile.txt"
     cmd = f'New-Item -Path "{dest}" -ItemType File'
 
-    result = guard.check_bump_foreign_repo_write(
+    result = _enveloped(guard.check_bump_foreign_repo_write)(
         cmd, "sess-ps-quoted-foreign", str(repos["anchor"]), {"tool_name": "PowerShell"}
     )
 
@@ -1052,7 +1057,7 @@ def test_powershell_new_item_single_quoted_foreign_repo_target_bumps(repos, monk
     dest = repos["foreign"] / "newfile.txt"
     cmd = f"New-Item -Path '{dest}' -ItemType File"
 
-    result = guard.check_bump_foreign_repo_write(
+    result = _enveloped(guard.check_bump_foreign_repo_write)(
         cmd, "sess-ps-single-quoted-foreign", str(repos["anchor"]), {"tool_name": "PowerShell"}
     )
 
@@ -1065,7 +1070,7 @@ def test_powershell_new_item_unquoted_foreign_repo_target_still_bumps(repos, mon
     dest = repos["foreign"] / "newfile.txt"
     cmd = f"New-Item -Path {dest} -ItemType File"
 
-    result = guard.check_bump_foreign_repo_write(
+    result = _enveloped(guard.check_bump_foreign_repo_write)(
         cmd, "sess-ps-unquoted-foreign", str(repos["anchor"]), {"tool_name": "PowerShell"}
     )
 
@@ -1078,7 +1083,7 @@ def test_powershell_new_item_quoted_own_repo_target_does_not_bump(repos, monkeyp
     dest = repos["anchor"] / "newfile.txt"
     cmd = f'New-Item -Path "{dest}" -ItemType File'
 
-    result = guard.check_bump_foreign_repo_write(
+    result = _enveloped(guard.check_bump_foreign_repo_write)(
         cmd, "sess-ps-quoted-own", str(repos["anchor"]), {"tool_name": "PowerShell"}
     )
 
@@ -1091,7 +1096,7 @@ def test_ac5_carve_out_is_unconditional_even_with_no_marker_and_bump_applying(re
     assert not (resolve_gitdir(str(repos["anchor"])) / marker_basename("sess-11")).exists()
     cmd = f"{_posix(crm)} --repo foreign --target {_posix(repos['foreign'])}"
 
-    result = guard.check_bump_foreign_repo_write(cmd, "sess-11", str(repos["anchor"]), {})
+    result = _enveloped(guard.check_bump_foreign_repo_write)(cmd, "sess-11", str(repos["anchor"]), {})
 
     assert result is None
 
@@ -1110,7 +1115,7 @@ def test_ac5_negative_hand_rolled_write_into_a_sibling_cross_repo_directory_stil
     dest = cross_repo_dir / "note.md"
     cmd = f"cp {_posix(src)} {_posix(dest)}"
 
-    result = guard.check_bump_foreign_repo_write(cmd, "sess-12", str(repos["anchor"]), {})
+    result = _enveloped(guard.check_bump_foreign_repo_write)(cmd, "sess-12", str(repos["anchor"]), {})
 
     assert result is not None
 
@@ -1128,7 +1133,7 @@ def test_ac5_same_named_decoy_script_elsewhere_does_not_get_the_carve_out(repos,
     dest = repos["foreign"] / "other.txt"
     cmd = f"{_posix(decoy)} && cp {_posix(src)} {_posix(dest)}"
 
-    result = guard.check_bump_foreign_repo_write(cmd, "sess-13", str(repos["anchor"]), {})
+    result = _enveloped(guard.check_bump_foreign_repo_write)(cmd, "sess-13", str(repos["anchor"]), {})
 
     assert result is not None
 
@@ -1138,7 +1143,7 @@ def test_ac5_double_quoted_canonical_path_carrying_invocation_never_bumps(repos,
     _set_anchor(monkeypatch, repos, "sess-14")
     cmd = f'"{_posix(crm)}" --repo foreign'
 
-    result = guard.check_bump_foreign_repo_write(cmd, "sess-14", str(repos["anchor"]), {})
+    result = _enveloped(guard.check_bump_foreign_repo_write)(cmd, "sess-14", str(repos["anchor"]), {})
 
     assert result is None
 
@@ -1148,7 +1153,7 @@ def test_ac5_single_quoted_canonical_path_carrying_invocation_never_bumps(repos,
     _set_anchor(monkeypatch, repos, "sess-14b")
     cmd = f"'{_posix(crm)}' --repo foreign"
 
-    result = guard.check_bump_foreign_repo_write(cmd, "sess-14b", str(repos["anchor"]), {})
+    result = _enveloped(guard.check_bump_foreign_repo_write)(cmd, "sess-14b", str(repos["anchor"]), {})
 
     assert result is None
 
@@ -1173,7 +1178,7 @@ def test_ac5_quoted_same_named_decoy_script_elsewhere_does_not_get_the_carve_out
     dest = repos["foreign"] / "other.txt"
     cmd = f'"{_posix(decoy)}" && cp {_posix(src)} {_posix(dest)}'
 
-    result = guard.check_bump_foreign_repo_write(cmd, "sess-15", str(repos["anchor"]), {})
+    result = _enveloped(guard.check_bump_foreign_repo_write)(cmd, "sess-15", str(repos["anchor"]), {})
 
     assert result is not None
 
@@ -1183,7 +1188,7 @@ def test_ac5_unquoted_canonical_path_carrying_invocation_still_never_bumps(repos
     _set_anchor(monkeypatch, repos, "sess-14c")
     cmd = f"{_posix(crm)} --repo foreign"
 
-    result = guard.check_bump_foreign_repo_write(cmd, "sess-14c", str(repos["anchor"]), {})
+    result = _enveloped(guard.check_bump_foreign_repo_write)(cmd, "sess-14c", str(repos["anchor"]), {})
 
     assert result is None
 
@@ -1195,7 +1200,7 @@ def test_marker_present_for_session_clears_the_bump(repos, monkeypatch):
     (foreign_gitdir / marker_basename("sess-14")).touch()
     cmd = f"git -C {_posix(repos['foreign'])} commit --allow-empty -m x"
 
-    result = guard.check_bump_foreign_repo_write(cmd, "sess-14", str(repos["anchor"]), {})
+    result = _enveloped(guard.check_bump_foreign_repo_write)(cmd, "sess-14", str(repos["anchor"]), {})
 
     assert result is None
 
@@ -1207,7 +1212,7 @@ def test_marker_for_a_different_session_does_not_clear_this_ones_bump(repos, mon
     (anchor_gitdir / marker_basename("some-other-session")).touch()
     cmd = f"git -C {_posix(repos['foreign'])} commit --allow-empty -m x"
 
-    result = guard.check_bump_foreign_repo_write(cmd, "sess-15", str(repos["anchor"]), {})
+    result = _enveloped(guard.check_bump_foreign_repo_write)(cmd, "sess-15", str(repos["anchor"]), {})
 
     assert result is not None
 
@@ -1249,7 +1254,7 @@ def test_ac6_cwd_drifted_to_a_foreign_repo_still_bumps_the_commit_there(repos, m
 
     cmd = "git commit --allow-empty -m x"
 
-    result = guard.check_bump_foreign_repo_write(cmd, session_id, str(repos["foreign"]), {})
+    result = _enveloped(guard.check_bump_foreign_repo_write)(cmd, session_id, str(repos["foreign"]), {})
 
     assert result is not None
 
@@ -1269,7 +1274,7 @@ def test_ac3_publish_destination_write_renders_publish_class_copy_naming_owner(r
     )
     cmd = f"git -C {_posix(repos['foreign'])} commit --allow-empty -m x"
 
-    result = guard.check_bump_foreign_repo_write(cmd, "sess-ac3-publish", str(repos["anchor"]), {})
+    result = _enveloped(guard.check_bump_foreign_repo_write)(cmd, "sess-ac3-publish", str(repos["anchor"]), {})
 
     assert result is not None
     reason = result["hookSpecificOutput"]["permissionDecisionReason"]
@@ -1298,7 +1303,7 @@ def test_ac1_ordinary_foreign_repo_keeps_todays_foreign_class_copy(repos, monkey
     _set_anchor(monkeypatch, repos, "sess-ac1-foreign-class")
     cmd = f"git -C {_posix(repos['foreign'])} commit --allow-empty -m x"
 
-    result = guard.check_bump_foreign_repo_write(cmd, "sess-ac1-foreign-class", str(repos["anchor"]), {})
+    result = _enveloped(guard.check_bump_foreign_repo_write)(cmd, "sess-ac1-foreign-class", str(repos["anchor"]), {})
 
     assert result is not None
     reason = result["hookSpecificOutput"]["permissionDecisionReason"]
@@ -1320,7 +1325,7 @@ def test_ac9_publish_destination_verdict_asserted_only_after_bump_applies(repos,
     assert applicability.bump_applies("sess-ac9-publish", cwd=str(repos["anchor"])) is True
 
     cmd = f"git -C {_posix(repos['foreign'])} commit --allow-empty -m x"
-    result = guard.check_bump_foreign_repo_write(cmd, "sess-ac9-publish", str(repos["anchor"]), {})
+    result = _enveloped(guard.check_bump_foreign_repo_write)(cmd, "sess-ac9-publish", str(repos["anchor"]), {})
     assert result is not None
 
 
@@ -1337,7 +1342,7 @@ def test_one_command_publish_ac_unauthorized_push_into_publish_mirror_bumps(
     )
     cmd = f"git -C {_posix(repos['foreign'])} push origin main"
 
-    result = guard.check_bump_foreign_repo_write(
+    result = _enveloped(guard.check_bump_foreign_repo_write)(
         cmd, "sess-publish-push-1", str(repos["anchor"]), {}
     )
 
@@ -1360,7 +1365,7 @@ def test_one_command_publish_ac_cd_into_publish_mirror_then_push_bumps(
     )
     cmd = f"cd {_posix(repos['foreign'])} && git push origin main"
 
-    result = guard.check_bump_foreign_repo_write(
+    result = _enveloped(guard.check_bump_foreign_repo_write)(
         cmd, "sess-publish-push-2", str(repos["anchor"]), {}
     )
 
@@ -1386,7 +1391,7 @@ def test_one_command_publish_ac_marker_clears_the_publish_mirror_push_bump(
     (mirror_gitdir / marker_basename("sess-publish-push-3")).touch()
     cmd = f"git -C {_posix(repos['foreign'])} push origin main"
 
-    result = guard.check_bump_foreign_repo_write(
+    result = _enveloped(guard.check_bump_foreign_repo_write)(
         cmd, "sess-publish-push-3", str(repos["anchor"]), {}
     )
 
@@ -1417,7 +1422,7 @@ def test_percolate_push_memo_git_push_into_publish_mirror_names_percolate_push(
     )
     cmd = f"git -C {_posix(repos['foreign'])} push origin main"
 
-    result = guard.check_bump_foreign_repo_write(
+    result = _enveloped(guard.check_bump_foreign_repo_write)(
         cmd, "sess-percolate-push-em", str(repos["anchor"]), {}
     )
 
@@ -1441,7 +1446,7 @@ def test_percolate_push_memo_content_authoring_write_still_cites_doctrine(
     )
     cmd = f"git -C {_posix(repos['foreign'])} commit --allow-empty -m x"
 
-    result = guard.check_bump_foreign_repo_write(
+    result = _enveloped(guard.check_bump_foreign_repo_write)(
         cmd, "sess-percolate-push-authoring", str(repos["anchor"]), {}
     )
 
@@ -1454,11 +1459,11 @@ def test_percolate_push_memo_content_authoring_write_still_cites_doctrine(
 def test_fail_open_when_session_id_empty(repos, monkeypatch):
     cmd = f"git -C {_posix(repos['foreign'])} commit --allow-empty -m x"
 
-    assert guard.check_bump_foreign_repo_write(cmd, "", str(repos["anchor"]), {}) is None
+    assert _enveloped(guard.check_bump_foreign_repo_write)(cmd, "", str(repos["anchor"]), {}) is None
 
 
 def test_fail_open_when_cmd_empty(repos, monkeypatch):
-    assert guard.check_bump_foreign_repo_write("", "sess-16", str(repos["anchor"]), {}) is None
+    assert _enveloped(guard.check_bump_foreign_repo_write)("", "sess-16", str(repos["anchor"]), {}) is None
 
 
 def test_fail_open_when_anchor_unresolvable(repos, monkeypatch):
@@ -1468,7 +1473,7 @@ def test_fail_open_when_anchor_unresolvable(repos, monkeypatch):
     monkeypatch.setenv("HOME", str(repos["home"]))
     cmd = f"git -C {_posix(repos['foreign'])} commit --allow-empty -m x"
 
-    result = guard.check_bump_foreign_repo_write(cmd, "sess-17", str(repos["anchor"]), {})
+    result = _enveloped(guard.check_bump_foreign_repo_write)(cmd, "sess-17", str(repos["anchor"]), {})
 
     assert result is None
 
@@ -1487,7 +1492,7 @@ def test_agent_memory_store_write_never_bumps_even_when_home_is_a_repo(repos, mo
     dest = memory_dir / "note.md"
     cmd = f"echo hi > {_posix(dest)}"
 
-    result = guard.check_bump_foreign_repo_write(cmd, session_id, str(repos["anchor"]), {})
+    result = _enveloped(guard.check_bump_foreign_repo_write)(cmd, session_id, str(repos["anchor"]), {})
 
     assert result is None
 
@@ -1502,7 +1507,7 @@ def test_agent_memory_store_index_write_never_bumps_even_when_home_is_a_repo(rep
     dest = memory_dir / "MEMORY.md"
     cmd = f"echo hi > {_posix(dest)}"
 
-    result = guard.check_bump_foreign_repo_write(cmd, session_id, str(repos["anchor"]), {})
+    result = _enveloped(guard.check_bump_foreign_repo_write)(cmd, session_id, str(repos["anchor"]), {})
 
     assert result is None
 
@@ -1517,7 +1522,7 @@ def test_project_dir_write_not_under_memory_now_allowed_by_c1(repos, monkeypatch
     dest = project_dir / "not-memory.md"
     cmd = f"echo hi > {_posix(dest)}"
 
-    result = guard.check_bump_foreign_repo_write(cmd, session_id, str(repos["anchor"]), {})
+    result = _enveloped(guard.check_bump_foreign_repo_write)(cmd, session_id, str(repos["anchor"]), {})
 
     assert result is None
 
@@ -1531,7 +1536,7 @@ def test_ac1_settings_json_write_never_bumps_on_this_leg(repos, monkeypatch, tmp
     dest.parent.mkdir(parents=True)
     cmd = f"echo hi > {_posix(dest)}"
 
-    result = guard.check_bump_foreign_repo_write(cmd, session_id, str(repos["anchor"]), {})
+    result = _enveloped(guard.check_bump_foreign_repo_write)(cmd, session_id, str(repos["anchor"]), {})
 
     assert result is None
 
@@ -1552,7 +1557,7 @@ def test_ac4_unregistered_foreign_repo_still_bumps_alongside_claude_home_carveou
     dest = repos["foreign"] / "note.txt"
     cmd = f"echo hi > {_posix(dest)}"
 
-    result = guard.check_bump_foreign_repo_write(cmd, session_id, str(repos["anchor"]), {})
+    result = _enveloped(guard.check_bump_foreign_repo_write)(cmd, session_id, str(repos["anchor"]), {})
 
     assert result is not None
     assert "hookSpecificOutput" in result
@@ -1622,7 +1627,7 @@ def test_transient_anchor_gitdir_spawn_failure_does_not_bump_a_write_into_the_an
     _patch_resolve_gitdir_to_fail_for(monkeypatch, str(repos["anchor"]))
 
     cmd = f"echo hi > {_posix(repos['anchor'] / 'note.txt')}"
-    result = guard.check_bump_foreign_repo_write(
+    result = _enveloped(guard.check_bump_foreign_repo_write)(
         cmd, "sess-transient-anchor-own-repo", str(repos["anchor"]), {}
     )
 
@@ -1650,7 +1655,7 @@ def test_transient_anchor_gitdir_spawn_failure_still_allows_a_registered_foreign
     _patch_resolve_gitdir_to_fail_for(monkeypatch, str(repos["anchor"]))
 
     cmd = f"echo hi > {_posix(repos['foreign'] / 'note.txt')}"
-    result = guard.check_bump_foreign_repo_write(
+    result = _enveloped(guard.check_bump_foreign_repo_write)(
         cmd, "sess-transient-anchor-foreign-registered", str(repos["anchor"]), {}
     )
 
@@ -1682,7 +1687,7 @@ def test_genuinely_repo_less_anchor_still_bumps_registered_target_after_the_fix(
     session_id = "sess-scaffold-registered-target"
 
     cmd = f"echo hi > {_posix(registered / 'note.txt')}"
-    result = guard.check_bump_foreign_repo_write(cmd, session_id, str(scaffold), {})
+    result = _enveloped(guard.check_bump_foreign_repo_write)(cmd, session_id, str(scaffold), {})
 
     assert result is not None
 
@@ -1708,7 +1713,7 @@ def test_cloud_repro_bash_leg_own_registered_repo_allows(monkeypatch, tmp_path):
     session_id = "sess-cloud-bash-own-repo"
 
     cmd = f"echo hi > {_posix(own / 'note.txt')}"
-    result = guard.check_bump_foreign_repo_write(cmd, session_id, str(own), {})
+    result = _enveloped(guard.check_bump_foreign_repo_write)(cmd, session_id, str(own), {})
 
     assert result is None
 
@@ -1735,7 +1740,7 @@ def test_cloud_repro_bash_leg_does_not_widen_to_a_different_registered_repo(
     session_id = "sess-cloud-bash-no-widen"
 
     cmd = f"echo hi > {_posix(target_repo / 'note.txt')}"
-    result = guard.check_bump_foreign_repo_write(cmd, session_id, str(cwd_repo), {})
+    result = _enveloped(guard.check_bump_foreign_repo_write)(cmd, session_id, str(cwd_repo), {})
 
     assert result is not None
 
@@ -1791,6 +1796,7 @@ def test_ac10_bare_git_commit_no_pathspec_in_foreign_repo_now_reaches_the_bump(r
     name, result = _first_verdict(chain)
 
     assert name == "bump-foreign-repo-write"
+    result = envelope_of(result)
     assert result is not None
     assert "hookSpecificOutput" in result
 
@@ -1894,10 +1900,10 @@ def test_c2_ac5_backslash_spelled_target_bumps_same_as_forward_slash(monkeypatch
     forward = _posix(repos["foreign"] / "out.txt")
     backward = str(repos["foreign"] / "out.txt")
 
-    fwd_result = guard.check_bump_foreign_repo_write(
+    fwd_result = _enveloped(guard.check_bump_foreign_repo_write)(
         f"echo probe > {forward}", "sess-c2-ac5", str(repos["anchor"]), {}
     )
-    bwd_result = guard.check_bump_foreign_repo_write(
+    bwd_result = _enveloped(guard.check_bump_foreign_repo_write)(
         f"echo probe > {backward}", "sess-c2-ac5", str(repos["anchor"]), {}
     )
 
@@ -2069,7 +2075,7 @@ def test_ac7_subagent_inherits_em_marker_on_bash_leg(repos, monkeypatch):
     cmd = f"git -C {_posix(repos['foreign'])} commit --allow-empty -m x"
     payload = {"agent_id": AC7_AGENT_ID, "cwd": str(repos["anchor"])}
 
-    result = guard.check_bump_foreign_repo_write(cmd, SUB_SID, str(repos["anchor"]), payload)
+    result = _enveloped(guard.check_bump_foreign_repo_write)(cmd, SUB_SID, str(repos["anchor"]), payload)
 
     assert result is None, (
         "AC7 BROKEN: subagent re-bumped despite its EM's marker being present "
@@ -2084,7 +2090,7 @@ def test_ac7_non_vacuity_same_payload_bumps_without_the_em_marker(repos, monkeyp
     cmd = f"git -C {_posix(repos['foreign'])} commit --allow-empty -m x"
     payload = {"agent_id": AC7_AGENT_ID, "cwd": str(repos["anchor"])}
 
-    result = guard.check_bump_foreign_repo_write(cmd, SUB_SID, str(repos["anchor"]), payload)
+    result = _enveloped(guard.check_bump_foreign_repo_write)(cmd, SUB_SID, str(repos["anchor"]), payload)
 
     assert result is not None
 
@@ -2130,7 +2136,7 @@ def test_ac14_anchor_root_spawn_failure_still_bumps_a_foreign_target(repos, monk
     monkeypatch.setattr(guard, "resolve_git_root", _anchor_root_misses)
 
     cmd = f"git -C {_posix(repos['foreign'])} commit --allow-empty -m x"
-    result = guard.check_bump_foreign_repo_write(
+    result = _enveloped(guard.check_bump_foreign_repo_write)(
         cmd, "sess-ac14-anchor-miss", str(repos["anchor"]), {}
     )
 
@@ -2148,7 +2154,7 @@ def test_ac14_own_repo_write_survives_every_root_resolution_missing(repos, monke
 
     monkeypatch.setattr(guard, "resolve_git_root", lambda cwd=None: None)
 
-    result = guard.check_bump_foreign_repo_write(
+    result = _enveloped(guard.check_bump_foreign_repo_write)(
         cmd, "sess-ac14-all-miss", str(repos["anchor"]), {}
     )
 
@@ -2222,7 +2228,7 @@ def test_interpreter_payload_dash_c_open_write_to_foreign_repo_bumps(repos, monk
     dest = _posix(repos["foreign"] / "x")
     cmd = f"python3 -c \"open('{dest}','w').write('x')\""
 
-    result = guard.check_bump_foreign_repo_write(cmd, "sess-ip-dashc", str(repos["anchor"]), {})
+    result = _enveloped(guard.check_bump_foreign_repo_write)(cmd, "sess-ip-dashc", str(repos["anchor"]), {})
 
     assert result is not None
     assert "hookSpecificOutput" in result
@@ -2233,7 +2239,7 @@ def test_interpreter_payload_heredoc_open_write_to_foreign_repo_bumps(repos, mon
     dest = _posix(repos["foreign"] / "x")
     cmd = f"python3 - <<'EOF'\nopen('{dest}','w').write('x')\nEOF\n"
 
-    result = guard.check_bump_foreign_repo_write(cmd, "sess-ip-heredoc", str(repos["anchor"]), {})
+    result = _enveloped(guard.check_bump_foreign_repo_write)(cmd, "sess-ip-heredoc", str(repos["anchor"]), {})
 
     assert result is not None
     assert "hookSpecificOutput" in result
@@ -2244,7 +2250,7 @@ def test_interpreter_payload_write_into_own_repo_does_not_bump(repos, monkeypatc
     dest = _posix(repos["anchor"] / "x")
     cmd = f"python3 -c \"open('{dest}','w').write('x')\""
 
-    result = guard.check_bump_foreign_repo_write(cmd, "sess-ip-own", str(repos["anchor"]), {})
+    result = _enveloped(guard.check_bump_foreign_repo_write)(cmd, "sess-ip-own", str(repos["anchor"]), {})
 
     assert result is None
 
@@ -2258,7 +2264,7 @@ def test_interpreter_payload_relative_write_after_cd_into_foreign_repo_bumps(rep
     sub.mkdir()
     cmd = f"cd {_posix(sub)} && python3 - <<'EOF'\nopen('git_native.py','w').write('x')\nEOF\n"
 
-    result = guard.check_bump_foreign_repo_write(
+    result = _enveloped(guard.check_bump_foreign_repo_write)(
         cmd, "sess-ip-cd-foreign", str(repos["anchor"]), {}
     )
 
@@ -2272,7 +2278,7 @@ def test_interpreter_payload_relative_write_after_cd_into_own_repo_does_not_bump
     sub.mkdir()
     cmd = f"cd {_posix(sub)} && python3 - <<'EOF'\nopen('x.py','w').write('x')\nEOF\n"
 
-    result = guard.check_bump_foreign_repo_write(
+    result = _enveloped(guard.check_bump_foreign_repo_write)(
         cmd, "sess-ip-cd-own", str(repos["foreign"]), {}
     )
 
@@ -2349,13 +2355,13 @@ def test_consumer_level_warns_once_per_session_instead_of_denying(repos, monkeyp
     _consumer(monkeypatch)
     cmd = f"git -C {_posix(repos['foreign'])} commit --allow-empty -m x"
 
-    first = guard.check_bump_foreign_repo_write(cmd, "sess-warn-1", str(repos["anchor"]), {})
+    first = _enveloped(guard.check_bump_foreign_repo_write)(cmd, "sess-warn-1", str(repos["anchor"]), {})
     hso = first["hookSpecificOutput"]
     assert hso["permissionDecision"] == "allow"
     assert "full context" in hso["additionalContext"]
     assert "machine-local set coordinator.guard_level" in hso["additionalContext"]
     assert "DR-298" not in hso["additionalContext"]
-    again = guard.check_bump_foreign_repo_write(cmd, "sess-warn-1", str(repos["anchor"]), {})
+    again = _enveloped(guard.check_bump_foreign_repo_write)(cmd, "sess-warn-1", str(repos["anchor"]), {})
     assert again is None
 
 
@@ -2364,9 +2370,9 @@ def test_off_level_is_silent_and_strict_override_denies(repos, monkeypatch):
     _consumer(monkeypatch)
     cmd = f"git -C {_posix(repos['foreign'])} commit --allow-empty -m x"
     monkeypatch.setenv("MACHINE_LOCAL_COORDINATOR_GUARD_LEVEL", "off")
-    assert guard.check_bump_foreign_repo_write(cmd, "sess-warn-2", str(repos["anchor"]), {}) is None
+    assert _enveloped(guard.check_bump_foreign_repo_write)(cmd, "sess-warn-2", str(repos["anchor"]), {}) is None
     monkeypatch.setenv("MACHINE_LOCAL_COORDINATOR_GUARD_LEVEL", "strict")
-    denied = guard.check_bump_foreign_repo_write(cmd, "sess-warn-2", str(repos["anchor"]), {})
+    denied = _enveloped(guard.check_bump_foreign_repo_write)(cmd, "sess-warn-2", str(repos["anchor"]), {})
     assert denied["hookSpecificOutput"]["permissionDecision"] == "deny"
     assert "DR-298" not in denied["hookSpecificOutput"]["permissionDecisionReason"]
 
@@ -2381,6 +2387,6 @@ def test_settings_home_inside_a_git_tracked_home_is_not_foreign(tmp_path, monkey
     session_start.write_session_start_record("sess-tracked-home", launch_cwd=str(anchor))
 
     ok = f"echo note >> {_posix(settings_home / 'notes.md')}"
-    assert guard.check_bump_foreign_repo_write(ok, "sess-tracked-home", str(anchor), {}) is None
+    assert _enveloped(guard.check_bump_foreign_repo_write)(ok, "sess-tracked-home", str(anchor), {}) is None
     elsewhere = f"echo note >> {_posix(home_repo / 'other.md')}"
-    assert guard.check_bump_foreign_repo_write(elsewhere, "sess-tracked-home", str(anchor), {}) is not None
+    assert _enveloped(guard.check_bump_foreign_repo_write)(elsewhere, "sess-tracked-home", str(anchor), {}) is not None

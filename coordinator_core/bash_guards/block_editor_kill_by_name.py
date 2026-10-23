@@ -120,7 +120,28 @@ def _script_offence(cmd: str, cwd: Optional[str]) -> Optional[str]:
     return None
 
 
-def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def _deny_record(offence: str) -> Any:
+    from coordinator_core.bash_guards._rewrite_support import _deny_record as _build
+    from coordinator_core.guard_messages.alternative_record import AdaptableOffer
+
+    text = (
+        f"BLOCKED: {offence}. Kill by the PID of your own launch; a name-based "
+        "kill takes down other sessions' editors."
+    )
+    return _build(
+        "block-editor-kill-by-name",
+        text,
+        em_text=text,
+        members=(
+            AdaptableOffer(
+                template="taskkill /PID <pid> (or Stop-Process -Id <pid>, kill <pid>)",
+                what_to_adapt="<pid>, the PID of your own launch",
+            ),
+        ),
+    )
+
+
+def check(payload: Dict[str, Any]) -> Any:
     if (payload.get("tool_name") or "") not in MATCHERS:
         return None
     tool_input = payload.get("tool_input") or {}
@@ -132,13 +153,4 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         offence = _script_offence(cmd.replace("\r", ""), payload.get("cwd"))
     if offence is None:
         return None
-    return {
-        "hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "permissionDecision": "deny",
-            "permissionDecisionReason": (
-                f"BLOCKED: {offence}. Kill by the PID of your own launch; a name-based "
-                "kill takes down other sessions' editors."
-            ),
-        }
-    }
+    return _deny_record(offence)

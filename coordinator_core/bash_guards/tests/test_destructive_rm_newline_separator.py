@@ -12,6 +12,11 @@ import pytest
 
 from coordinator_core.bash_guards import dispatch_checks
 from coordinator_core.win_portability import no_console_passthrough_kwargs
+from coordinator_core.guard_messages.testing import envelope_of
+
+
+def _enveloped(check):
+    return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -28,7 +33,7 @@ def repos(tmp_path, monkeypatch):
 
 
 def _verdict(cmd: str, cwd):
-    return dispatch_checks.check_destructive_rm(
+    return _enveloped(dispatch_checks.check_destructive_rm)(
         cmd, "test-session", {"cwd": str(cwd), "tool_input": {"command": cmd}}
     )
 

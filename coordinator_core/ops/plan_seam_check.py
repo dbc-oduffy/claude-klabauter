@@ -7,9 +7,9 @@ unpromised-export, writes-collision, drifted-contract) and a verdict; with ``uni
 it adds a sixth, ``missing-seam``, that never blocks and never moves the verdict. The read/write
 pair mirrors ``plan.prep_gate`` / ``plan.stamp_prepped``: ``plan.seam_check`` evaluates
 and writes nothing; ``plan.seam_record`` evaluates inside the write so the reply and the
-files describe one tree, writes one ``docs/plans/<plan-stem>.seam.yaml`` per plan
-(``<plan-stem>.wave-<N>.seam.yaml`` at wave-boundary, so the prep record is never overwritten),
-atomically, and never commits.
+files describe one tree, writes one ``docs/plans/<plan-stem>.seam.yaml`` per plan at prep
+(``<plan-stem>.fire.seam.yaml`` at fire, ``<plan-stem>.wave-<N>.seam.yaml`` at wave-boundary,
+so the prep record is never overwritten), atomically, and never commits.
 
 Wire params (both ops):
     plans (list[str], required) — repo-relative plan paths, at least one.
@@ -88,7 +88,9 @@ from coordinator_core.resolve_validation_cmd import cs_read_local_md_key
 _DUMPER = getattr(yaml, "CSafeDumper", yaml.SafeDumper)
 
 GENERATES: list = []
-MUTATES = ["docs/plans/*.seam.yaml"]
+MUTATES = ["docs/plans/*.seam.yaml", "docs/plans/*.fire.seam.yaml", "docs/plans/*.wave-*.seam.yaml"]
+
+_RECORD_SUFFIX = {"prep": ".seam.yaml", "fire": ".fire.seam.yaml"}
 
 SCHEMA_VERSION = "1.1.0"
 _PHASES = ("prep", "fire", "wave-boundary")
@@ -1045,7 +1047,10 @@ def _record_handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     by_plan: Dict[str, list] = {}
     for f in reply["findings"]:
         by_plan.setdefault(f["plan"], []).append(f)
-    suffix = f".wave-{reply['wave']}.seam.yaml" if reply["phase"] == "wave-boundary" else ".seam.yaml"
+    if reply["phase"] == "wave-boundary":
+        suffix = f".wave-{reply['wave']}.seam.yaml"
+    else:
+        suffix = _RECORD_SUFFIX[reply["phase"]]
     for rel in reply["set"]:
         target = (root / rel).with_name(Path(rel).stem + suffix)
         body = yaml.dump(_sidecar(reply, rel, by_plan.get(rel, [])), Dumper=_DUMPER, sort_keys=False, allow_unicode=True)

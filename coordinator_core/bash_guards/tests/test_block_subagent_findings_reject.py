@@ -16,6 +16,11 @@ from __future__ import annotations
 
 from coordinator_core.bash_guards import block_subagent_findings_reject as guard
 from coordinator_core.bash_guards import dispatch
+from coordinator_core.guard_messages.testing import envelope_of
+
+
+def _enveloped(check):
+    return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 
 def _payload(command, agent_id=None, agent_type=None):
@@ -61,39 +66,39 @@ _BARE_SCRIPT_TARGETS = (
 
 class TestNonBashOrEmpty:
     def test_non_bash_tool_allows(self):
-        assert guard.check({"tool_name": "Edit", "tool_input": {"file_path": "x"}}) is None
+        assert _enveloped(guard.check)({"tool_name": "Edit", "tool_input": {"file_path": "x"}}) is None
 
     def test_empty_command_allows(self):
-        assert guard.check(_payload("", agent_id="a1")) is None
+        assert _enveloped(guard.check)(_payload("", agent_id="a1")) is None
 
     def test_malformed_tool_input_allows(self):
-        assert guard.check({"tool_name": "Bash", "tool_input": "not-a-dict"}) is None
+        assert _enveloped(guard.check)({"tool_name": "Bash", "tool_input": "not-a-dict"}) is None
 
 
 class TestDashMForm:
     def test_em_reject_allows(self):
         """No `agent_id` at all -> main-loop EM -> allowed."""
-        assert guard.check(_payload(_MODULE_M_REJECT)) is None
+        assert _enveloped(guard.check)(_payload(_MODULE_M_REJECT)) is None
 
     def test_subagent_reject_denies(self):
-        _reason(guard.check(_payload(_MODULE_M_REJECT, agent_id="a1")))
+        _reason(_enveloped(guard.check)(_payload(_MODULE_M_REJECT, agent_id="a1")))
 
     def test_subagent_targets_denies(self):
-        _reason(guard.check(_payload(_MODULE_M_TARGETS, agent_id="a1")))
+        _reason(_enveloped(guard.check)(_payload(_MODULE_M_TARGETS, agent_id="a1")))
 
     def test_present_but_unresolvable_agent_id_denies(self):
         _reason(
-            guard.check(
+            _enveloped(guard.check)(
                 _payload(_MODULE_M_REJECT, agent_id="unresolvable-nonexistent-id")
             )
         )
 
     def test_subagent_verify_allows(self):
         """`verify` is not gated -- a reviewer's own self-check."""
-        assert guard.check(_payload(_MODULE_M_VERIFY, agent_id="a1")) is None
+        assert _enveloped(guard.check)(_payload(_MODULE_M_VERIFY, agent_id="a1")) is None
 
     def test_lookalike_module_name_does_not_match(self):
-        assert guard.check(
+        assert _enveloped(guard.check)(
             _payload(
                 "python3 -m coordinator_core.ops.review_findings_ledger_extra reject x",
                 agent_id="a1",
@@ -106,23 +111,23 @@ class TestAgentTypeOnlyRegression:
     gates on raw `agent_id` presence alone."""
 
     def test_agent_type_only_payload_not_denied(self):
-        assert guard.check(
+        assert _enveloped(guard.check)(
             _payload(_MODULE_M_REJECT, agent_type="coordinator:em")
         ) is None
 
 
 class TestDirectScriptForm:
     def test_subagent_script_reject_denies(self):
-        _reason(guard.check(_payload(_SCRIPT_REJECT, agent_id="a1")))
+        _reason(_enveloped(guard.check)(_payload(_SCRIPT_REJECT, agent_id="a1")))
 
     def test_em_script_reject_allows(self):
-        assert guard.check(_payload(_SCRIPT_REJECT)) is None
+        assert _enveloped(guard.check)(_payload(_SCRIPT_REJECT)) is None
 
     def test_subagent_bare_script_targets_denies(self):
-        _reason(guard.check(_payload(_BARE_SCRIPT_TARGETS, agent_id="a1")))
+        _reason(_enveloped(guard.check)(_payload(_BARE_SCRIPT_TARGETS, agent_id="a1")))
 
     def test_subagent_bare_script_verify_allows(self):
-        assert guard.check(
+        assert _enveloped(guard.check)(
             _payload("review-findings-ledger.py verify --sidecar s.md", agent_id="a1")
         ) is None
 

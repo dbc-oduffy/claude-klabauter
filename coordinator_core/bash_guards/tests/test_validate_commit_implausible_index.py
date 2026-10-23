@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.bash_guards import dispatch_checks as dc
+from coordinator_core.guard_messages.testing import envelope_of
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -33,7 +34,7 @@ def _repo(tmp_path: Path, n: int) -> Path:
 
 
 def _text(result) -> str:
-    return str(result) if result else ""
+    return str(envelope_of(result)) if result else ""
 
 
 def test_compound_command_with_two_scoped_files_does_not_fire(tmp_path):

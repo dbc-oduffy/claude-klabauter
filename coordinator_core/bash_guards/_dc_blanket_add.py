@@ -25,7 +25,6 @@ import time
 from typing import Any, Dict, List, Optional
 
 from coordinator_core.bash_guards import _dc_git_probe, _dc_git_shared
-from coordinator_core.bash_guards._dc_git_probe import _deny
 from coordinator_core.bash_guards._dc_git_shared import (
     _BYPASS_PREFIX,
     _paths_match,
@@ -37,7 +36,7 @@ from coordinator_core.bash_guards._dc_shell_text import (
 )
 from coordinator_core.bash_guards._helpers import operator_override_note
 from coordinator_core.bash_guards._override_log_path import _override_log_path
-from coordinator_core.bash_guards._rewrite_support import _crlf_strip, _override
+from coordinator_core.bash_guards._rewrite_support import _alt_record, _crlf_strip, _offer, _override
 
 
 def _awk_quote_aware_split(cmd: str) -> List[str]:
@@ -378,7 +377,7 @@ def check_blanket_git_add(
                     tok, git_root, _ga_dash_c_cwd
                 )
                 if _ga_subtree_dir is not None:
-                    _ga_foreign = _bt_add_subtree_foreign_paths(
+                    _ga_foreign, _ga_churn = _bt_add_subtree_foreign_paths_and_churn(
                         _ga_subtree_dir, _ga_dash_c_cwd, git_root, session_id
                     )
                     if _ga_foreign:
@@ -387,6 +386,8 @@ def check_blanket_git_add(
                             tok,
                             ", ".join(sorted(_ga_foreign)[:5]),
                         )
+                        if _ga_churn:
+                            deny_reason += " [build churn: %d not counted]" % _ga_churn
                         break
 
         if should_deny:
@@ -450,7 +451,7 @@ def check_blanket_git_add(
                     gc_tok, git_root, _ga_dash_c_cwd
                 )
                 if gc_abs_dir is not None:
-                    gc_foreign = _bt_commit_subtree_foreign_paths(
+                    gc_foreign, gc_churn = _bt_commit_subtree_foreign_paths_and_churn(
                         gc_abs_dir, _ga_dash_c_cwd, git_root, session_id
                     )
                     if gc_foreign:
@@ -458,6 +459,8 @@ def check_blanket_git_add(
                             gc_tok,
                             ", ".join(sorted(gc_foreign)[:5]),
                         )
+                        if gc_churn:
+                            commit_matched_cmd += " [build churn: %d not counted]" % gc_churn
                         break
             if commit_matched_cmd:
                 full_seg_trimmed = seg.lstrip()[:120]
@@ -476,6 +479,8 @@ def check_blanket_git_add(
                 return result
         return None
 
+    _kw = dict(report="the blanket git add or commit you need", authorize="the sweep of sibling sessions' edits")
+    _pick = _offer("git commit -m <subject> -- path/to/file", "the subject and path")
     if commit_matched_cmd and not matched_cmd:
         _commit_note = operator_override_note(
             "COORDINATOR_OVERRIDE_BLANKET_ADD", payload=hook_payload, git_root=git_root
@@ -487,8 +492,12 @@ def check_blanket_git_add(
             "  git commit -m <subject> -- path/to/file"
             % (commit_matched_cmd,)
         ) + ("\n\nOr: %s" % _commit_note if _commit_note else "")
-        return _deny(commit_reason)
-
+        return _alt_record(
+            "deny", "blanket-git-add",
+            "BLOCKED: this 'git commit' names a pathspec that sweeps in sibling sessions' "
+            "edits (SC-DR-014, COMMIT-side). Matched: %s" % (commit_matched_cmd,),
+            (_pick,), "COORDINATOR_OVERRIDE_BLANKET_ADD", em_text=commit_reason, **_kw,
+        )
     _add_note = operator_override_note(
         "COORDINATOR_OVERRIDE_BLANKET_ADD", payload=hook_payload, git_root=git_root
     )
@@ -504,7 +513,22 @@ def check_blanket_git_add(
         "  git commit -m <subject> --pathspec-from-file=\"${TMPDIR:-/tmp}/p\""
         % (matched_cmd,)
     ) + ("\n\nOr: %s" % _add_note if _add_note else "")
-    return _deny(reason)
+    return _alt_record(
+        "deny", "blanket-git-add",
+        "BLOCKED: blanket `git add` sweeps in sibling sessions' edits (SC-DR-014). "
+        "Matched: %s" % (matched_cmd,),
+        (
+            _offer("git add -- path/to/file", "the path"),
+            _pick,
+            _offer(
+                'git ls-files -om --exclude-standard -- <dir> > "${TMPDIR:-/tmp}/p"; '
+                'git add --pathspec-from-file="${TMPDIR:-/tmp}/p"; '
+                'git commit -m <subject> --pathspec-from-file="${TMPDIR:-/tmp}/p" (many files, keep only yours)',
+                "the dir and subject",
+            ),
+        ),
+        "COORDINATOR_OVERRIDE_BLANKET_ADD", em_text=reason, **_kw,
+    )
 
 
 def _bt_add_resolve_subtree_dir_token(
@@ -565,6 +589,31 @@ def _bt_no_peer_can_share_the_index(git_root: str, session_id: str) -> bool:
 def _bt_add_subtree_foreign_paths(
     abs_dir: str, cwd: Optional[str], git_root: str, session_id: str
 ) -> List[str]:
+    """The foreign paths of `_bt_add_subtree_foreign_paths_and_churn`, without the churn count."""
+    return _bt_add_subtree_foreign_paths_and_churn(abs_dir, cwd, git_root, session_id)[0]
+
+
+def _bt_commit_subtree_foreign_paths(
+    abs_dir: str, cwd: Optional[str], git_root: str, session_id: str
+) -> List[str]:
+    """The foreign paths of `_bt_commit_subtree_foreign_paths_and_churn`, without the churn count."""
+    return _bt_commit_subtree_foreign_paths_and_churn(abs_dir, cwd, git_root, session_id)[0]
+
+
+def _bt_drop_build_churn(foreign: List[str]) -> "tuple[List[str], int]":
+    """``foreign`` minus generated build artifacts (no session owns them), and how many were dropped.
+
+    Trap: matching is by basename glob only, so a peer's hand-edited ``*.generated.*`` file is
+    also dropped; the deny reason's churn count is the only trace of it."""
+    from coordinator_core.git.residue_classes import is_build_churn
+
+    kept = [p for p in foreign if not is_build_churn(p)]
+    return kept, len(foreign) - len(kept)
+
+
+def _bt_add_subtree_foreign_paths_and_churn(
+    abs_dir: str, cwd: Optional[str], git_root: str, session_id: str
+) -> "tuple[List[str], int]":
     """C3: resolve WHICH paths a `git add -- <abs_dir>` would actually
     stage (one ``git add --dry-run`` spawn -- the add-side analogue of
     Check 5's ``git diff --cached --name-only -- <pathspec>``
@@ -583,10 +632,10 @@ def _bt_add_subtree_foreign_paths(
     see the override-log comment earlier in this module for the same
     posture stated explicitly)."""
     if not session_id or _bt_no_peer_can_share_the_index(git_root, session_id):
-        return []
+        return [], 0
     rc, out = _dc_git_probe._run_git(["add", "--dry-run", "--", abs_dir], cwd)
     if rc != 0:
-        return []
+        return [], 0
 
     staged: List[str] = []
     for line in out.splitlines():
@@ -603,7 +652,7 @@ def _bt_add_subtree_foreign_paths(
             continue
         staged.append(rel)
     if not staged:
-        return []
+        return [], 0
 
     try:
         from coordinator_core.session.touch_record import (
@@ -615,20 +664,21 @@ def _bt_add_subtree_foreign_paths(
         touch_record_path = sink_path(sid_dir)
         projection = project_live_claims(touch_record_path, cwd=git_root)
         if projection.degraded:
-            return []
+            return [], 0
         my_claims = set(projection.claims.keys())
     except Exception:
-        return []
+        return [], 0
 
     # data/serving/ is regenerated by a session's own rebuild, never hand-authored.
     foreign = [p for p in staged if p not in my_claims and not p.startswith("data/serving/")]
+    foreign, churn = _bt_drop_build_churn(foreign)
     # Run record dirs are written by the engine, never through a claimed touch, so they are
     # never in my_claims. Trap: foreign there means held by a live peer, not unclaimed.
     run_records = _bt_run_record_paths(foreign)
     if run_records:
         held_foreign = set(_bt_run_record_paths_foreign(run_records, git_root, session_id))
         foreign = [p for p in foreign if p not in run_records or p in held_foreign]
-    return foreign
+    return foreign, churn
 
 
 def _bt_run_record_paths(paths: List[str]) -> List[str]:
@@ -670,9 +720,9 @@ def _bt_run_record_paths_foreign(
     return [p for p in run_records if held.get(p) or owners.get(p)]
 
 
-def _bt_commit_subtree_foreign_paths(
+def _bt_commit_subtree_foreign_paths_and_churn(
     abs_dir: str, cwd: Optional[str], git_root: str, session_id: str
-) -> List[str]:
+) -> "tuple[List[str], int]":
     """C6 (Items 28/16.6, `docs/plans/2026-09-26-inbox-blitz-claude-klabauter-fixes-
     doe-thread.md`) -- the COMMIT-side analogue of
     `_bt_add_subtree_foreign_paths`. A `git commit -- <abs_dir>` names no new
@@ -687,14 +737,14 @@ def _bt_commit_subtree_foreign_paths(
     projection -- same soft/fail-open posture as the add-side sibling this
     mirrors (this guard is registered fail_closed=False)."""
     if not session_id or _bt_no_peer_can_share_the_index(git_root, session_id):
-        return []
+        return [], 0
     rc, out = _dc_git_probe._run_git(["diff", "--cached", "--name-only", "--", abs_dir], cwd)
     if rc != 0:
-        return []
+        return [], 0
 
     staged = [ln for ln in out.splitlines() if ln]
     if not staged:
-        return []
+        return [], 0
 
     try:
         from coordinator_core.session.touch_record import (
@@ -706,14 +756,15 @@ def _bt_commit_subtree_foreign_paths(
         touch_record_path = sink_path(sid_dir)
         projection = project_live_claims(touch_record_path, cwd=git_root)
         if projection.degraded:
-            return []
+            return [], 0
         my_claims = set(projection.claims.keys())
     except Exception:
-        return []
+        return [], 0
 
     foreign = [p for p in staged if p not in my_claims]
+    foreign, churn = _bt_drop_build_churn(foreign)
     run_records = _bt_run_record_paths(foreign)
     if run_records:
         held_foreign = set(_bt_run_record_paths_foreign(run_records, git_root, session_id))
         foreign = [p for p in foreign if p not in run_records or p in held_foreign]
-    return foreign
+    return foreign, churn

@@ -32,6 +32,11 @@ from coordinator_core.bash_guards import block_disarm_marker_sentinel_creation a
 from coordinator_core.bash_guards import block_worktree_sentinel_creation as worktree_guard
 from coordinator_core.bash_guards import block_approval_sentinel_creation as doctrine_guard
 from coordinator_core.bash_guards import dispatch
+from coordinator_core.guard_messages.testing import envelope_of
+
+
+def _enveloped(check):
+    return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 
 SENTINEL = bd.MARKER_BASENAME
@@ -63,31 +68,31 @@ def _reason(out):
 class TestNonBashOrEmpty:
     def test_non_bash_tool_allows(self):
         payload = {"tool_name": "Edit", "tool_input": {"file_path": "x"}}
-        assert guard.check(payload) is None
+        assert _enveloped(guard.check)(payload) is None
 
     def test_empty_command_allows(self):
-        assert guard.check(_payload("")) is None
+        assert _enveloped(guard.check)(_payload("")) is None
 
     def test_malformed_tool_input_allows(self):
         payload = {"tool_name": "Bash", "tool_input": "not-a-dict"}
-        assert guard.check(payload) is None
+        assert _enveloped(guard.check)(payload) is None
 
     def test_no_sentinel_mention_allows(self):
-        assert guard.check(_payload("git status && ls -la")) is None
+        assert _enveloped(guard.check)(_payload("git status && ls -la")) is None
 
 
 class TestRedirectionDenies:
     def test_bare_gt_denies(self):
-        _reason(guard.check(_payload("echo ok > %s" % SENTINEL)))
+        _reason(_enveloped(guard.check)(_payload("echo ok > %s" % SENTINEL)))
 
     def test_attached_gt_denies(self):
-        _reason(guard.check(_payload("echo ok >%s" % SENTINEL)))
+        _reason(_enveloped(guard.check)(_payload("echo ok >%s" % SENTINEL)))
 
     def test_append_denies(self):
-        _reason(guard.check(_payload("echo ok >> %s" % SENTINEL)))
+        _reason(_enveloped(guard.check)(_payload("echo ok >> %s" % SENTINEL)))
 
     def test_redirect_into_settings_home_denies(self):
-        _reason(guard.check(_payload("echo ok > /home/op/.coordinator-claude-settings/%s" % SENTINEL)))
+        _reason(_enveloped(guard.check)(_payload("echo ok > /home/op/.coordinator-claude-settings/%s" % SENTINEL)))
 
 
 class TestCaseFoldedTargetMatch:
@@ -99,13 +104,13 @@ class TestCaseFoldedTargetMatch:
     spelling."""
 
     def test_upper_case_sentinel_denies(self):
-        _reason(guard.check(_payload("touch %s" % SENTINEL.upper())))
+        _reason(_enveloped(guard.check)(_payload("touch %s" % SENTINEL.upper())))
 
     def test_mixed_case_sentinel_denies(self):
         mixed = "".join(
             c.upper() if i % 2 == 0 else c for i, c in enumerate(SENTINEL)
         )
-        _reason(guard.check(_payload("touch %s" % mixed)))
+        _reason(_enveloped(guard.check)(_payload("touch %s" % mixed)))
 
     def test_upper_case_sentinel_denies_end_to_end(self):
         out = dispatch.evaluate_payload_json(
@@ -117,109 +122,109 @@ class TestCaseFoldedTargetMatch:
 
     def test_case_varied_python_c_mention_denies(self):
         code = "open('%s', 'w').close()" % SENTINEL.upper()
-        _reason(guard.check(_payload("python3 -c \"%s\"" % code)))
+        _reason(_enveloped(guard.check)(_payload("python3 -c \"%s\"" % code)))
 
 
 class TestFileArgCommandsDeny:
     def test_touch_denies(self):
-        _reason(guard.check(_payload("touch %s" % SENTINEL)))
+        _reason(_enveloped(guard.check)(_payload("touch %s" % SENTINEL)))
 
     def test_touch_with_settings_home_prefix_denies(self):
-        _reason(guard.check(_payload("touch $COORDINATOR_SETTINGS_HOME/%s" % SENTINEL)))
+        _reason(_enveloped(guard.check)(_payload("touch $COORDINATOR_SETTINGS_HOME/%s" % SENTINEL)))
 
     def test_cp_dest_denies(self):
-        _reason(guard.check(_payload("cp somefile %s" % SENTINEL)))
+        _reason(_enveloped(guard.check)(_payload("cp somefile %s" % SENTINEL)))
 
     def test_mv_denies(self):
-        _reason(guard.check(_payload("mv somefile %s" % SENTINEL)))
+        _reason(_enveloped(guard.check)(_payload("mv somefile %s" % SENTINEL)))
 
     def test_tee_denies(self):
-        _reason(guard.check(_payload("echo ok | tee %s" % SENTINEL)))
+        _reason(_enveloped(guard.check)(_payload("echo ok | tee %s" % SENTINEL)))
 
 
 class TestSedInplaceDenies:
     def test_bare_dash_i_denies(self):
-        _reason(guard.check(_payload("sed -i 's/Scope: time/Scope: machine-total/' %s" % SENTINEL)))
+        _reason(_enveloped(guard.check)(_payload("sed -i 's/Scope: time/Scope: machine-total/' %s" % SENTINEL)))
 
     def test_sed_without_inplace_flag_allows(self):
-        assert guard.check(_payload("sed 's/a/b/' %s" % SENTINEL)) is None
+        assert _enveloped(guard.check)(_payload("sed 's/a/b/' %s" % SENTINEL)) is None
 
 
 class TestPythonDashCDenies:
     def test_open_write_mode_denies(self):
         code = "open('%s', 'w').close()" % SENTINEL
-        _reason(guard.check(_payload("python3 -c \"%s\"" % code)))
+        _reason(_enveloped(guard.check)(_payload("python3 -c \"%s\"" % code)))
 
     def test_unrelated_python_c_allows(self):
-        assert guard.check(_payload("python3 -c \"print('hello world')\"")) is None
+        assert _enveloped(guard.check)(_payload("python3 -c \"print('hello world')\"")) is None
 
 
 class TestDdOfDenies:
     def test_dd_of_denies(self):
-        _reason(guard.check(_payload("dd if=/dev/null of=%s" % SENTINEL)))
+        _reason(_enveloped(guard.check)(_payload("dd if=/dev/null of=%s" % SENTINEL)))
 
     def test_dd_of_with_conv_denies(self):
-        _reason(guard.check(_payload("dd if=/dev/null of=%s conv=notrunc" % SENTINEL)))
+        _reason(_enveloped(guard.check)(_payload("dd if=/dev/null of=%s conv=notrunc" % SENTINEL)))
 
 
 class TestChainedAndEnvPrefixedShapes:
     def test_semicolon_chained_denies(self):
-        _reason(guard.check(_payload("cd /tmp; touch %s" % SENTINEL)))
+        _reason(_enveloped(guard.check)(_payload("cd /tmp; touch %s" % SENTINEL)))
 
     def test_and_chained_denies(self):
-        _reason(guard.check(_payload("cd /tmp && touch %s" % SENTINEL)))
+        _reason(_enveloped(guard.check)(_payload("cd /tmp && touch %s" % SENTINEL)))
 
     def test_leading_env_assignment_still_denies(self):
-        _reason(guard.check(_payload("FOO=bar touch %s" % SENTINEL)))
+        _reason(_enveloped(guard.check)(_payload("FOO=bar touch %s" % SENTINEL)))
 
     def test_git_dash_c_prefixed_denies(self):
-        _reason(guard.check(_payload("git -C /tmp status; touch %s" % SENTINEL)))
+        _reason(_enveloped(guard.check)(_payload("git -C /tmp status; touch %s" % SENTINEL)))
 
 
 class TestAllowReadsAndRemoval:
     def test_rm_allows(self):
-        assert guard.check(_payload("rm %s" % SENTINEL)) is None
+        assert _enveloped(guard.check)(_payload("rm %s" % SENTINEL)) is None
 
     def test_cat_allows(self):
-        assert guard.check(_payload("cat %s" % SENTINEL)) is None
+        assert _enveloped(guard.check)(_payload("cat %s" % SENTINEL)) is None
 
     def test_ls_allows(self):
-        assert guard.check(_payload("ls -la %s" % SENTINEL)) is None
+        assert _enveloped(guard.check)(_payload("ls -la %s" % SENTINEL)) is None
 
     def test_stat_allows(self):
-        assert guard.check(_payload("stat %s" % SENTINEL)) is None
+        assert _enveloped(guard.check)(_payload("stat %s" % SENTINEL)) is None
 
     def test_test_and_rm_allows(self):
-        assert guard.check(_payload("test -f %s && rm %s" % (SENTINEL, SENTINEL))) is None
+        assert _enveloped(guard.check)(_payload("test -f %s && rm %s" % (SENTINEL, SENTINEL))) is None
 
     def test_unrelated_touch_allows(self):
-        assert guard.check(_payload("touch somefile.txt")) is None
+        assert _enveloped(guard.check)(_payload("touch somefile.txt")) is None
 
     def test_near_miss_filename_allows(self):
-        assert guard.check(_payload("touch %s-typo" % SENTINEL)) is None
+        assert _enveloped(guard.check)(_payload("touch %s-typo" % SENTINEL)) is None
 
 
 class TestDoesNotCatchTheOtherSentinels:
 
     def test_disarm_guard_does_not_catch_worktree_sentinel(self):
-        assert guard.check(_payload("touch %s" % WORKTREE_SENTINEL)) is None
+        assert _enveloped(guard.check)(_payload("touch %s" % WORKTREE_SENTINEL)) is None
 
     def test_disarm_guard_does_not_catch_doctrine_sentinel(self):
-        assert guard.check(_payload("touch %s" % DOCTRINE_SENTINEL)) is None
+        assert _enveloped(guard.check)(_payload("touch %s" % DOCTRINE_SENTINEL)) is None
 
     def test_worktree_guard_does_not_catch_disarm_sentinel(self):
-        assert worktree_guard.check(_payload("touch %s" % SENTINEL)) is None
+        assert _enveloped(worktree_guard.check)(_payload("touch %s" % SENTINEL)) is None
 
     def test_doctrine_guard_does_not_catch_disarm_sentinel(self):
-        assert doctrine_guard.check(_payload("touch %s" % SENTINEL)) is None
+        assert _enveloped(doctrine_guard.check)(_payload("touch %s" % SENTINEL)) is None
 
 
 class TestNotIdentityGated:
     def test_denies_without_any_identity_fields(self):
-        _reason(guard.check(_payload("touch %s" % SENTINEL)))
+        _reason(_enveloped(guard.check)(_payload("touch %s" % SENTINEL)))
 
     def test_denies_with_subagent_identity(self):
-        out = guard.check(
+        out = _enveloped(guard.check)(
             _payload(
                 "touch %s" % SENTINEL,
                 agent_id="a0123456789abcdef",
@@ -232,16 +237,16 @@ class TestNotIdentityGated:
 class TestNoOverride:
     def test_env_var_shaped_override_does_not_allow(self, monkeypatch):
         monkeypatch.setenv("COORDINATOR_OVERRIDE_DISARM_MARKER_GUARD", "1")
-        _reason(guard.check(_payload("touch %s" % SENTINEL)))
+        _reason(_enveloped(guard.check)(_payload("touch %s" % SENTINEL)))
 
 
 class TestDenyMessageDiscipline:
     def test_deny_reason_never_names_the_sentinel(self):
-        reason = _reason(guard.check(_payload("touch %s" % SENTINEL)))
+        reason = _reason(_enveloped(guard.check)(_payload("touch %s" % SENTINEL)))
         assert SENTINEL not in reason
 
     def test_deny_reason_is_offer_shaped(self):
-        reason = _reason(guard.check(_payload("touch %s" % SENTINEL)))
+        reason = _reason(_enveloped(guard.check)(_payload("touch %s" % SENTINEL)))
         assert "!-prefixed prompt" not in reason
         assert "bypasses this hook entirely" not in reason
         assert "EM/PM" in reason
@@ -249,41 +254,41 @@ class TestDenyMessageDiscipline:
 
 class TestReasonClassSpecificMessages:
     def test_direct_deny_message_unchanged(self):
-        reason = _reason(guard.check(_payload("touch %s" % SENTINEL)))
+        reason = _reason(_enveloped(guard.check)(_payload("touch %s" % SENTINEL)))
         assert "this command would create or modify the file" in reason
         assert SENTINEL not in reason
 
     def test_indirection_deny_does_not_assert_creation(self):
-        reason = _reason(guard.check(_payload("bash bin/some-script.sh")))
+        reason = _reason(_enveloped(guard.check)(_payload("bash bin/some-script.sh")))
         assert "this command would create or modify the file" not in reason
         assert "unreadable payload" in reason
         assert SENTINEL not in reason
 
     def test_recursive_indirection_deny_still_redacts_the_sentinel(self):
-        reason = _reason(guard.check(_payload('bash -c "touch %s"' % SENTINEL)))
+        reason = _reason(_enveloped(guard.check)(_payload('bash -c "touch %s"' % SENTINEL)))
         assert SENTINEL not in reason
         assert "unreadable payload" in reason
 
 
 class TestIndirectionWrapperShapesDeny:
     def test_bash_dash_c_denies(self):
-        _reason(guard.check(_payload('bash -c "touch %s"' % SENTINEL)))
+        _reason(_enveloped(guard.check)(_payload('bash -c "touch %s"' % SENTINEL)))
 
     def test_env_sh_dash_c_denies(self):
-        _reason(guard.check(_payload('env sh -c "touch %s"' % SENTINEL)))
+        _reason(_enveloped(guard.check)(_payload('env sh -c "touch %s"' % SENTINEL)))
 
     def test_xargs_denies(self):
-        _reason(guard.check(_payload("echo %s | xargs touch" % SENTINEL)))
+        _reason(_enveloped(guard.check)(_payload("echo %s | xargs touch" % SENTINEL)))
 
     def test_heredoc_fed_bash_denies(self):
         cmd = "bash <<'EOF'\ntouch %s\nEOF" % SENTINEL
-        _reason(guard.check(_payload(cmd)))
+        _reason(_enveloped(guard.check)(_payload(cmd)))
 
     def test_unrelated_bash_dash_c_allows(self):
-        assert guard.check(_payload('bash -c "echo hello"')) is None
+        assert _enveloped(guard.check)(_payload('bash -c "echo hello"')) is None
 
     def test_python_dash_m_allows(self):
-        assert guard.check(_payload("python3 -m pytest")) is None
+        assert _enveloped(guard.check)(_payload("python3 -m pytest")) is None
 
 
 class TestReachableThroughTheDispatchChain:
@@ -388,19 +393,19 @@ class TestPowerShellDialect:
         }
 
     def test_new_item_cmdlet_denies(self):
-        out = guard.check(self._ps_payload("New-Item %s" % SENTINEL))
+        out = _enveloped(guard.check)(self._ps_payload("New-Item %s" % SENTINEL))
         assert out is not None
         assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
 
     def test_redirect_denies(self):
-        out = guard.check(self._ps_payload("echo ok > %s" % SENTINEL))
+        out = _enveloped(guard.check)(self._ps_payload("echo ok > %s" % SENTINEL))
         assert out is not None
 
     def test_unrelated_command_allows_with_no_silence(self):
         from coordinator_core.bash_guards import _verdict
 
         with _verdict.collecting() as silences:
-            out = guard.check(self._ps_payload("Get-ChildItem"))
+            out = _enveloped(guard.check)(self._ps_payload("Get-ChildItem"))
         assert out is None
         assert silences == []
 
@@ -408,7 +413,7 @@ class TestPowerShellDialect:
         from coordinator_core.bash_guards import _verdict
 
         with _verdict.collecting() as silences:
-            out = guard.check(self._ps_payload("Remove-Item x &> out.txt"))
+            out = _enveloped(guard.check)(self._ps_payload("Remove-Item x &> out.txt"))
         assert out is None
         assert any(
             s.guard_name == "block_disarm_marker_sentinel_creation" for s in silences
@@ -416,4 +421,4 @@ class TestPowerShellDialect:
 
     def test_non_bash_non_powershell_tool_allows(self):
         payload = {"tool_name": "Edit", "tool_input": {"file_path": "x"}}
-        assert guard.check(payload) is None
+        assert _enveloped(guard.check)(payload) is None

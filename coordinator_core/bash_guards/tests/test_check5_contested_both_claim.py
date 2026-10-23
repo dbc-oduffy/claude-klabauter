@@ -10,6 +10,11 @@ import pytest
 from coordinator_core.bash_guards import dispatch_checks
 from coordinator_core.session import core
 from coordinator_core.win_portability import no_console_creationflags
+from coordinator_core.guard_messages.testing import envelope_of
+
+
+def _enveloped(check):
+    return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 pytestmark = [
     pytest.mark.spawns_process,
@@ -75,7 +80,7 @@ class TestContestedBothClaim:
         _push_started_at_to_future(root, sid)
         _stage_contested(tmp_path, root, sid, peer_sid)
 
-        result = dispatch_checks.check_validate_commit(
+        result = _enveloped(dispatch_checks.check_validate_commit)(
             'git commit -m "sub work" -- sub', sid, cwd=root
         )
 
@@ -95,7 +100,7 @@ class TestContestedBothClaim:
         _push_started_at_to_future(root, sid)
         _stage_contested(tmp_path, root, sid, peer_sid)
 
-        result = dispatch_checks.check_validate_commit(
+        result = _enveloped(dispatch_checks.check_validate_commit)(
             'git commit -m "sub work" -- sub', sid, cwd=root
         )
 
@@ -117,7 +122,7 @@ class TestContestedBothClaim:
         _claim(root, sid, "sub/mine.txt")
         _claim(root, peer_sid, "sub/theirs.txt")
 
-        result = dispatch_checks.check_validate_commit(
+        result = _enveloped(dispatch_checks.check_validate_commit)(
             'git commit -m "sub work" -- sub', sid, cwd=root
         )
 

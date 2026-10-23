@@ -413,6 +413,10 @@ from pathlib import Path
 from typing import Any, Dict, List, NamedTuple, Optional, Sequence, Tuple
 
 from coordinator_core.bash_guards._helpers import operator_override_note, resolve_git_root
+from coordinator_core.bash_guards._rewrite_support import (
+    _advisory_record,
+    _allow_rewrite_record,
+)
 from coordinator_core.bash_guards._command_tokenizer import (
     exceeds_tokenizable_ceiling as _exceeds_tokenizable_ceiling,
     tokenize_full_command as _tokenize_full_command,
@@ -2162,14 +2166,41 @@ _ANTI_EVASION = (
 )
 
 
-def _deny(reason: str) -> Dict[str, Any]:
-    return {
-        "hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "permissionDecision": "deny",
-            "permissionDecisionReason": reason,
-        }
-    }
+def _deny(
+    reason: str,
+    offer: str,
+    adapt: str,
+    authorize: str,
+    *,
+    em_override: bool = False,
+) -> Any:
+    """Deny record for one leg. ``reason`` is the EM text verbatim (``em_text``);
+    ``offer``/``adapt`` are the typed alternative and ``authorize`` names what
+    the subagent's escalation must get approved. Only an EM-reachable leg
+    (``em_override``) carries the Override member."""
+    from coordinator_core.guard_messages.alternative_record import (
+        AdaptableOffer,
+        AlternativeRecord,
+        EscalationRoute,
+        Override,
+    )
+
+    members: Tuple[Any, ...] = (
+        AdaptableOffer(template=offer, what_to_adapt=adapt),
+        EscalationRoute(report_what="the test run you need", authorize_what=authorize),
+    )
+    if em_override:
+        members += (Override(env_var=_OVERRIDE_ENV_VAR),)
+    return AlternativeRecord(
+        verdict_kind="deny",
+        guard_name="check-test-suite-invocation",
+        summary=reason,
+        members=members,
+        em_text=reason,
+    )
+
+
+_SCOPED_RUN_OFFER = "pytest <test file or node id you touched>"
 
 
 def _deny_reason_subagent(
@@ -2422,9 +2453,10 @@ def _tier_t_slot_verdict(
     cmd: str,
     dialect: Optional[_Dialect],
     segments_argv: Sequence[Sequence[str]],
-) -> Optional[Dict[str, Any]]:
+) -> Any:
     if not any(_runner_recognized(list(argv)) for argv in segments_argv):
         return None
+    from coordinator_core.guard_messages.alternative_record import ReadyCommand
 
     cmd_safe = _sanitize(cmd)
     taken, cap = _tier_t_occupancy()
@@ -2440,9 +2472,11 @@ def _tier_t_slot_verdict(
     ) % (taken, cap, cap)
 
     if len(segments_argv) == 1:
-        return _allow_rewrite_tier_t(wrapped, note)
+        return _allow_rewrite_record(
+            "check-test-suite-invocation", wrapped, note, em_text=note
+        )
 
-    return _advisory_tier_t(
+    msg = (
         "Run this through the Tier-T slot semaphore so the box can bound how "
         "many scoped runs execute at once:\n"
         "  with-tier-t-slot -- <the test segment of your command>\n\n"
@@ -2452,27 +2486,12 @@ def _tier_t_slot_verdict(
         "  Slots:   %d/%d taken\n"
         "  Command: %s" % (taken, cap, cmd_safe)
     )
-
-
-def _allow_rewrite_tier_t(new_cmd: str, ctx: str) -> Dict[str, Any]:
-    return {
-        "hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "permissionDecision": "allow",
-            "updatedInput": {"command": new_cmd},
-            "additionalContext": ctx,
-        }
-    }
-
-
-def _advisory_tier_t(msg: str) -> Dict[str, Any]:
-    return {
-        "hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "permissionDecision": "allow",
-            "additionalContext": msg,
-        }
-    }
+    return _advisory_record(
+        "check-test-suite-invocation",
+        msg,
+        (ReadyCommand(text="with-tier-t-slot -- <the test segment of your command>"),),
+        em_text=msg,
+    )
 
 
 def _tier_t_occupancy() -> Tuple[int, int]:
@@ -3308,10 +3327,13 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if is_subagent and _SUITE_CLI_PREFILTER_RE.search(cmd):
         cli = _invokes_suite_cli(cmd, _dialect_from_tool_name(payload.get("tool_name")))
         if cli:
-            return _deny(_deny_reason_subagent(
-                "suite-running CLI " + cli, _sanitize(cmd), payload=payload,
-                git_root=resolve_git_root(cwd) or cwd,
-            ))
+            return _deny(
+                _deny_reason_subagent(
+                    "suite-running CLI " + cli, _sanitize(cmd), payload=payload,
+                    git_root=resolve_git_root(cwd) or cwd,
+                ),
+                _SCOPED_RUN_OFFER, "the test path", "a suite run by the EM",
+            )
 
     if (
         is_subagent
@@ -3320,7 +3342,8 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     ):
         return _deny(
             "A subagent cannot issue a Group EM test-run grant -- the live Group EM "
-            "issues this grant itself.\n  Command:  %s" % _sanitize(cmd)
+            "issues this grant itself.\n  Command:  %s" % _sanitize(cmd),
+            _SCOPED_RUN_OFFER, "the test path", "a Group EM test-run grant",
         )
 
     if not _RUNNER_PREFILTER_RE.search(cmd):
@@ -3365,17 +3388,20 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if is_subagent and detected is None:
         dir_args = _pytest_directory_args(segments_argv, cwd)
         if dir_args:
-            return _deny(_deny_reason_subagent_directory(
-                dir_args,
-                _sanitize(cmd),
-                _agent_touched_test_files(
-                    raw_agent_id if isinstance(raw_agent_id, str) else "",
-                    payload.get("session_id") if isinstance(payload.get("session_id"), str) else "",
-                    repo_root,
+            return _deny(
+                _deny_reason_subagent_directory(
+                    dir_args,
+                    _sanitize(cmd),
+                    _agent_touched_test_files(
+                        raw_agent_id if isinstance(raw_agent_id, str) else "",
+                        payload.get("session_id") if isinstance(payload.get("session_id"), str) else "",
+                        repo_root,
+                    ),
+                    payload=payload,
+                    git_root=repo_root,
                 ),
-                payload=payload,
-                git_root=repo_root,
-            ))
+                _SCOPED_RUN_OFFER, "the test file", "a directory-wide test run",
+            )
 
         # TIER-T CONCURRENCY leg (layer 6's missing half, fail-OPEN on infra)
         # -- a dispatched caller's SCOPED test run is denied unless it routes
@@ -3420,7 +3446,10 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         note += _VARIABLE_PATH_OPERAND_NOTE
 
     if is_subagent:
-        return _deny(_deny_reason_subagent(detected, cmd_safe, payload=payload, git_root=repo_root) + note)
+        return _deny(
+            _deny_reason_subagent(detected, cmd_safe, payload=payload, git_root=repo_root) + note,
+            _SCOPED_RUN_OFFER, "the test path", "a suite run by the EM",
+        )
 
     if configured is None:
         configured = _configured_test_cmds(repo_root)
@@ -3476,16 +3505,26 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
                 and "full_test_cmd" in by_tier
                 and by_tier["fast_test_cmd"] == by_tier["full_test_cmd"]
             )
-            if "U" in matched_tiers:
-                return _deny(_deny_reason_grant(detected, cmd_safe, is_tie=is_tie, payload=payload, git_root=repo_root, ungranted_record=grant_record, ungranted_cwd=cwd) + note)
-            return _deny(_deny_reason_grant(detected, cmd_safe, is_tie=is_tie, payload=payload, git_root=repo_root, ungranted_record=grant_record, ungranted_cwd=cwd) + note)
+            return _deny(
+                _deny_reason_grant(detected, cmd_safe, is_tie=is_tie, payload=payload, git_root=repo_root, ungranted_record=grant_record, ungranted_cwd=cwd) + note,
+                "tier-u-grant-cli grant pm", "the grant scope", "a Tier-U grant from the PM",
+                em_override=True,
+            )
 
         if not _command_wrapped_in_suite_mutex(cmd, dialect, testpaths, cwd, configured):
-            return _deny(_deny_reason_wrapper_required(detected, cmd_safe, cloud_box=cloud_box) + note)
+            return _deny(
+                _deny_reason_wrapper_required(detected, cmd_safe, cloud_box=cloud_box) + note,
+                "with-suite-mutex -- <your test command>", "the wrapped command", "a wrapped suite run",
+                em_override=True,
+            )
 
     holder = _mutex_holder()
     if holder:
-        return _deny(_deny_reason_mutex(detected, cmd_safe, holder) + note)
+        return _deny(
+            _deny_reason_mutex(detected, cmd_safe, holder) + note,
+            "with-suite-mutex -- <your test command>", "the wrapped command", "waiting for the mutex holder",
+            em_override=True,
+        )
 
     return None
 

@@ -21,7 +21,7 @@ One guard (`validate-commit`) has no cheap, deterministic single-call
 trigger -- `check_validate_commit` reads real git-repo staged state. It is
 named explicitly below (never silently dropped) and exercised via the REAL
 suppression predicate against a representative envelope shaped exactly like
-its own `_advisory(...)`/`allow_advisory(...)` return, rather than through a
+its own advisory `AlternativeRecord`, rather than through a
 live trigger command.
 
 Spec backlink: coordinator-content-repo:pln-os-aware-guard-advisory-defaul-060dbe
@@ -38,6 +38,7 @@ import pytest
 from coordinator_core.bash_guards import _platform_verdict, dispatch
 from coordinator_core.bash_guards._advisory_value import AdvisoryValue, suppress_advisory
 from coordinator_core.bash_guards.dispatch import GuardBand, GuardEntry
+from coordinator_core.guard_messages.alternative_record import AlternativeRecord, ReadyCommand
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -381,14 +382,26 @@ def test_suppressed_advisory_then_later_deny_still_fires(monkeypatch):
     fake_chain = [
         GuardEntry(
             "fake-suppressible-advisory",
-            lambda: suppressible_allow,
+            lambda: AlternativeRecord(
+                "advisory",
+                "a pure advisory that should be fully suppressed",
+                (ReadyCommand("true"),),
+                "fake-suppressible-advisory",
+                em_text="a pure advisory that should be fully suppressed",
+            ),
             False,
             GuardBand.ADVISORY_REWRITE,
             AdvisoryValue.WINDOWS_COST_ONLY,
         ),
         GuardEntry(
             "fake-later-deny-not-cost-argued",
-            lambda: later_deny,
+            lambda: AlternativeRecord(
+                "deny",
+                "a later not_cost_argued guard's deny",
+                (ReadyCommand("true"),),
+                "fake-later-deny-not-cost-argued",
+                em_text="a later not_cost_argued guard's deny",
+            ),
             False,
             GuardBand.ADVISORY_REWRITE,
             AdvisoryValue.NOT_COST_ARGUED,

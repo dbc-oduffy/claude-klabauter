@@ -71,6 +71,11 @@ from coordinator_core.bash_guards import guard_multiprobe_banner as guard
 from coordinator_core.bash_guards._dialect import Dialect
 from coordinator_core.bash_guards._helpers import OVERRIDE_KEYS_DOC_DISPLAY
 from coordinator_core.bash_guards._tool_names import COMMAND_TOOL_NAMES
+from coordinator_core.guard_messages.testing import envelope_of
+
+
+def _enveloped(check):
+    return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 _GRAMMAR_PRESENT = all(
     importlib.util.find_spec(name) is not None
@@ -133,17 +138,17 @@ _EXPECTED_SCRIPT_HINT = str(
 class TestNonBashOrEmpty:
     def test_non_bash_tool_allows(self):
         payload = {"tool_name": "Edit", "tool_input": {"file_path": "x"}}
-        assert guard.check(payload) is None
+        assert _enveloped(guard.check)(payload) is None
 
     def test_empty_command_allows(self):
-        assert guard.check(_payload("")) is None
+        assert _enveloped(guard.check)(_payload("")) is None
 
     def test_malformed_tool_input_allows(self):
         payload = {"tool_name": "Bash", "tool_input": "not-a-dict"}
-        assert guard.check(payload) is None
+        assert _enveloped(guard.check)(payload) is None
 
     def test_plain_command_allows(self):
-        assert guard.check(_payload("git status")) is None
+        assert _enveloped(guard.check)(_payload("git status")) is None
 
 
 class TestMultiProbeBannerVerdict:
@@ -159,7 +164,7 @@ class TestMultiProbeBannerVerdict:
         # (never denies) even with Windows forced, using the same
         # ALL-RECOGNIZED fixture so the seam-confirmed-outlet content
         # assertions below are unchanged.
-        out = guard.check(_payload(_BANNER_CMD_CONFIRMED), host_is_windows=True)
+        out = _enveloped(guard.check)(_payload(_BANNER_CMD_CONFIRMED), host_is_windows=True)
         ctx = _ctx(out)
         assert "multi-probe-banner" in ctx
         # New (2026-07-29): the Example is the LITERAL rewritten command
@@ -184,7 +189,7 @@ class TestMultiProbeBannerVerdict:
         assert OVERRIDE_KEYS_DOC_DISPLAY in ctx
 
     def test_banner_command_advises_on_posix(self):
-        out = guard.check(_payload(_BANNER_CMD_CONFIRMED), host_is_windows=False)
+        out = _enveloped(guard.check)(_payload(_BANNER_CMD_CONFIRMED), host_is_windows=False)
         ctx = _ctx(out)
         assert "multi-probe-banner" in ctx
         assert dc._bt_python3_invocation() + " -c" in ctx
@@ -227,7 +232,7 @@ class TestMultiProbeBannerVerdict:
                 }
             },
         )
-        ctx = _ctx(guard.check(_payload(_BANNER_CMD_CONFIRMED)))
+        ctx = _ctx(_enveloped(guard.check)(_payload(_BANNER_CMD_CONFIRMED)))
         assert "multi-probe-banner" in ctx
 
     def test_banner_with_unrecognized_segment_allows_silently(self):
@@ -238,8 +243,8 @@ class TestMultiProbeBannerVerdict:
         # offer. It used to fall back to a fixed generic advisory
         # (misdescribing any command without a literal `pwd`/`whoami`/`git
         # status`); it now allows silently instead, on every platform.
-        assert guard.check(_payload(_BANNER_CMD), host_is_windows=True) is None
-        assert guard.check(_payload(_BANNER_CMD), host_is_windows=False) is None
+        assert _enveloped(guard.check)(_payload(_BANNER_CMD), host_is_windows=True) is None
+        assert _enveloped(guard.check)(_payload(_BANNER_CMD), host_is_windows=False) is None
 
     def test_advisory_example_is_the_full_sibling_chain_rewrite(self):
         # MERGED (DR-280 cleanup, 2026-08-07): this test used to be two --
@@ -274,16 +279,16 @@ class TestMultiProbeBannerVerdict:
             check_multiprobe_banner_rewrite,
         )
 
-        expected = check_multiprobe_banner_rewrite(_BANNER_CMD_CONFIRMED, "sess1")
+        expected = _enveloped(check_multiprobe_banner_rewrite)(_BANNER_CMD_CONFIRMED, "sess1")
         expected_cmd = expected["hookSpecificOutput"]["updatedInput"]["command"]
-        ctx = _ctx(guard.check(_payload(_BANNER_CMD_CONFIRMED), host_is_windows=True))
+        ctx = _ctx(_enveloped(guard.check)(_payload(_BANNER_CMD_CONFIRMED), host_is_windows=True))
         assert expected_cmd in ctx
 
     def test_below_min_segment_threshold_allows(self):
         # Only 2 segments -- a single labeled probe, not the N-unrelated-
         # probes shape (mirrors _shape_classifier._MIN_BANNER_SEGMENTS).
         assert (
-            guard.check(
+            _enveloped(guard.check)(
                 _payload('echo "=== status ==="; git status'), host_is_windows=True
             )
             is None
@@ -291,7 +296,7 @@ class TestMultiProbeBannerVerdict:
 
     def test_no_banner_marker_allows(self):
         cmd = "pwd; whoami; git status; git log -1"
-        assert guard.check(_payload(cmd), host_is_windows=True) is None
+        assert _enveloped(guard.check)(_payload(cmd), host_is_windows=True) is None
 
     def test_grep_via_bash_precedence_stays_silent(self):
         # This command is simultaneously grep-via-Bash and a banner probe;
@@ -299,7 +304,7 @@ class TestMultiProbeBannerVerdict:
         # primary match, so this guard must not fire (AC-7: never
         # misdescribe what tripped a command).
         cmd = 'echo "=== search ==="; grep -rn TODO src/; ls -la; git status'
-        assert guard.check(_payload(cmd), host_is_windows=True) is None
+        assert _enveloped(guard.check)(_payload(cmd), host_is_windows=True) is None
 
     def test_head_tail_plumbing_present_but_not_primary_allows_silently(self):
         # A command that is simultaneously a banner probe AND carries
@@ -313,7 +318,7 @@ class TestMultiProbeBannerVerdict:
         # it the same as any other unrecognized segment") -- no outlet
         # describes this exact command, so 2026-08-06 this allows silently.
         cmd = 'echo "=== facts ==="; git log --oneline | head -5; pwd; whoami'
-        assert guard.check(_payload(cmd), host_is_windows=True) is None
+        assert _enveloped(guard.check)(_payload(cmd), host_is_windows=True) is None
 
     def test_banner_precedence_wins_even_with_head_tail_plumbing_present(self, monkeypatch):
         # Same three-shapes-at-once command as above, but with the sibling
@@ -334,12 +339,12 @@ class TestMultiProbeBannerVerdict:
                 }
             },
         )
-        ctx = _ctx(guard.check(_payload(cmd), host_is_windows=False))
+        ctx = _ctx(_enveloped(guard.check)(_payload(cmd), host_is_windows=False))
         assert "multi-probe-banner" in ctx
 
     def test_quoted_separators_do_not_split_tokens(self):
         cmd = 'echo "=== notes; test | pipe ==="; pwd; whoami; git status'
-        ctx = _ctx(guard.check(_payload(cmd), host_is_windows=False))
+        ctx = _ctx(_enveloped(guard.check)(_payload(cmd), host_is_windows=False))
         assert "multi-probe-banner" in ctx
 
     def test_quoted_pipe_in_grep_pattern_still_wins_precedence(self):
@@ -347,7 +352,7 @@ class TestMultiProbeBannerVerdict:
             'echo "=== search ==="; '
             'grep -n "foo; bar | baz" file.txt; pwd; whoami'
         )
-        assert guard.check(_payload(cmd), host_is_windows=True) is None
+        assert _enveloped(guard.check)(_payload(cmd), host_is_windows=True) is None
 
 
 class TestSubagentOutlet:
@@ -355,7 +360,7 @@ class TestSubagentOutlet:
     def test_subagent_gets_script_outlet_not_python3_dash_c_on_windows(self, monkeypatch):
         # RETARGETED (DR-280, 2026-08-07): was reading `_reason` (the deny
         monkeypatch.setattr(guard, "resolve_git_root", lambda cwd: "/fake/root")
-        out = guard.check(
+        out = _enveloped(guard.check)(
             _payload(_BANNER_CMD_CONFIRMED, agent_id="a" * 16),
             host_is_windows=True,
         )
@@ -367,7 +372,7 @@ class TestSubagentOutlet:
 
     def test_subagent_gets_script_outlet_not_python3_dash_c_on_posix(self, monkeypatch):
         monkeypatch.setattr(guard, "resolve_git_root", lambda cwd: "/fake/root")
-        out = guard.check(
+        out = _enveloped(guard.check)(
             _payload(_BANNER_CMD_CONFIRMED, agent_id="a" * 16),
             host_is_windows=False,
         )
@@ -385,12 +390,12 @@ class TestSubagentOutlet:
         )
 
         monkeypatch.setattr(guard, "resolve_git_root", lambda cwd: "/fake/root")
-        expected = check_multiprobe_banner_rewrite(_BANNER_CMD_CONFIRMED, "sess1")
+        expected = _enveloped(check_multiprobe_banner_rewrite)(_BANNER_CMD_CONFIRMED, "sess1")
         expected_cmd = expected["hookSpecificOutput"]["updatedInput"]["command"]
         expected_body = _shlex.split(expected_cmd)[-1]
 
         ctx = _ctx(
-            guard.check(
+            _enveloped(guard.check)(
                 _payload(_BANNER_CMD_CONFIRMED, agent_id="a" * 16),
                 host_is_windows=False,
             )
@@ -402,7 +407,7 @@ class TestSubagentOutlet:
     ):
         monkeypatch.setattr(guard, "resolve_git_root", lambda cwd: None)
         ctx = _ctx(
-            guard.check(
+            _enveloped(guard.check)(
                 _payload(_BANNER_CMD_CONFIRMED, agent_id="a" * 16),
                 host_is_windows=False,
             )
@@ -418,14 +423,14 @@ class TestSubagentOutlet:
         monkeypatch.setattr(guard, "resolve_git_root", _boom)
         # RETARGETED (DR-280, 2026-08-07): was reading `_reason` (the deny
         ctx = _ctx(
-            guard.check(_payload(_BANNER_CMD_CONFIRMED), host_is_windows=True)
+            _enveloped(guard.check)(_payload(_BANNER_CMD_CONFIRMED), host_is_windows=True)
         )
         assert dc._bt_python3_invocation() + " -c" in ctx
 
     def test_no_outlet_case_still_allows_silently_for_subagent(self, monkeypatch):
         monkeypatch.setattr(guard, "resolve_git_root", lambda cwd: "/fake/root")
         assert (
-            guard.check(_payload(_BANNER_CMD, agent_id="a" * 16), host_is_windows=True)
+            _enveloped(guard.check)(_payload(_BANNER_CMD, agent_id="a" * 16), host_is_windows=True)
             is None
         )
 
@@ -433,13 +438,13 @@ class TestSubagentOutlet:
 class TestFalsePositives:
     def test_legitimate_composed_pipeline_allows(self):
         assert (
-            guard.check(_payload("git log --oneline | head -20"), host_is_windows=True)
+            _enveloped(guard.check)(_payload("git log --oneline | head -20"), host_is_windows=True)
             is None
         )
 
     def test_unrelated_multi_segment_command_allows(self):
         assert (
-            guard.check(
+            _enveloped(guard.check)(
                 _payload("npm install && npm run build && npm test"),
                 host_is_windows=True,
             )
@@ -448,7 +453,7 @@ class TestFalsePositives:
 
     def test_single_banner_labeled_probe_allows(self):
         assert (
-            guard.check(
+            _enveloped(guard.check)(
                 _payload('echo "=== build ==="; npm run build'), host_is_windows=True
             )
             is None
@@ -499,7 +504,7 @@ class TestPowerShellDialectWiring:
             "session_id": "sess1",
             "cwd": "/repo",
         }
-        out = guard.check(payload, host_is_windows=True)
+        out = _enveloped(guard.check)(payload, host_is_windows=True)
         assert out is not None
         ctx = out["hookSpecificOutput"]["additionalContext"]
         assert guard._mb_python3_invocation() in ctx
@@ -518,7 +523,7 @@ class TestDispatchReachability:
     and consequently reported this guard as "blind" on a PowerShell payload
     when it had simply never been INVOKED. `test_powershell_multiprobe_
     banner_reaches_same_primary_as_bash` above (and every other test in this
-    file) calls `guard.check(...)` or `guard._classify_for_dialect(...)`
+    file) calls `_enveloped(guard.check)(...)` or `guard._classify_for_dialect(...)`
     directly -- none of them prove reachability through the real dispatcher.
     This class routes through `dispatch.evaluate_payload_json`, the actual
     PreToolUse entry point, instead.
@@ -619,7 +624,7 @@ class TestCrashPropagatesForFailClosed:
 
         monkeypatch.setattr(guard, "classify_command", _boom)
         try:
-            guard.check(_payload(_BANNER_CMD), host_is_windows=True)
+            _enveloped(guard.check)(_payload(_BANNER_CMD), host_is_windows=True)
         except RuntimeError as exc:
             assert str(exc) == "boom"
         else:
@@ -629,11 +634,11 @@ class TestCrashPropagatesForFailClosed:
 class TestOverrideEscapeHatch:
     def test_override_env_suppresses_on_windows(self, monkeypatch):
         monkeypatch.setenv("COORDINATOR_OVERRIDE_MULTIPROBE_BANNER", "1")
-        assert guard.check(_payload(_BANNER_CMD), host_is_windows=True) is None
+        assert _enveloped(guard.check)(_payload(_BANNER_CMD), host_is_windows=True) is None
 
     def test_override_env_suppresses_on_posix(self, monkeypatch):
         monkeypatch.setenv("COORDINATOR_OVERRIDE_MULTIPROBE_BANNER", "1")
-        assert guard.check(_payload(_BANNER_CMD), host_is_windows=False) is None
+        assert _enveloped(guard.check)(_payload(_BANNER_CMD), host_is_windows=False) is None
 
 
 class TestPowerShellSubagentRemedy:
@@ -649,7 +654,7 @@ class TestPowerShellSubagentRemedy:
             "cwd": "/repo",
             "agent_id": "a" * 16,
         }
-        ctx = _ctx(guard.check(payload, host_is_windows=True))
+        ctx = _ctx(_enveloped(guard.check)(payload, host_is_windows=True))
         assert "python3 " + _EXPECTED_SCRIPT_HINT in ctx
         assert "-c '" not in ctx
         assert "import subprocess" not in ctx
@@ -666,7 +671,7 @@ class TestPowerShellSubagentRemedy:
 class TestTrimAttemptC8b:
 
     def test_seam_confirmed_lede_is_trimmed(self):
-        out = guard.check(_payload(_BANNER_CMD_CONFIRMED), host_is_windows=False)
+        out = _enveloped(guard.check)(_payload(_BANNER_CMD_CONFIRMED), host_is_windows=False)
         ctx = _ctx(out)
         assert "this rewrite." not in ctx
         assert "rewrite." in ctx
@@ -681,7 +686,7 @@ class TestTrimAttemptC8b:
     def test_seam_confirmed_prose_bytes_do_not_regrow(self):
         from coordinator_core.bash_guards._message_size import measure_envelope
 
-        out = guard.check(_payload(_BANNER_CMD_CONFIRMED), host_is_windows=False)
+        out = _enveloped(guard.check)(_payload(_BANNER_CMD_CONFIRMED), host_is_windows=False)
         envelope = {"hookSpecificOutput": out["hookSpecificOutput"]}
         measurement = measure_envelope(envelope, band="platform-conditioned-deny")
         assert measurement.over_cap is True

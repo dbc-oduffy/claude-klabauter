@@ -180,6 +180,8 @@ from coordinator_core.bash_guards._sentinel_creation_guard import (
     REASON_INDIRECTION,
     SentinelCreationDetector,
     indirection_deny_reason,
+    leveled_record,
+    sentinel_record,
     _DD_OF_RE,
     _FILE_ARG_COMMANDS,
     _REDIR_PREFIX_RE,
@@ -340,7 +342,7 @@ _WHY_WRITER_CONTEXT_CHANGES = (
     "the script path may change between its heredoc write and its run"
 )
 _WHY_WRITER_NOT_BARE_HEREDOC = (
-    "an earlier segment writes the script by something other than a bare cat heredoc"
+    "an earlier segment writes the script other than by a bare cat heredoc"
 )
 _WRITER_REASONS = (
     _WHY_SEVERAL_WRITERS,
@@ -1706,18 +1708,22 @@ def gate_disable_denial(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     cwd = payload.get("cwd") if isinstance(payload.get("cwd"), str) else None
     if pm_approval_fresh(cwd, payload):
         return None
-    envelope = {
-        "hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "permissionDecision": "deny",
-            "permissionDecisionReason": (
-                "BLOCKED: this turns off the doctrine-edit approval gate or lowers "
-                "the guard level. Ask the PM to change it."
-            ),
-        }
-    }
-    return apply_guard_level(
-        GUARD_NAME, envelope, risk=_RISK_GATE_OFF[0].upper() + _RISK_GATE_OFF[1:]
+    from coordinator_core.guard_messages.alternative_record import AdaptableOffer
+
+    record = sentinel_record(
+        GUARD_NAME,
+        "deny",
+        "BLOCKED: this turns off the doctrine-edit approval gate or lowers "
+        "the guard level. Ask the PM to change it.",
+        AdaptableOffer(
+            template="the same command without the gate or guard-level write",
+            what_to_adapt="the command (drop the setting change)",
+        ),
+        report_what="the setting you need changed",
+        authorize_what="the PM's approval of the change",
+    )
+    return leveled_record(
+        GUARD_NAME, record, apply_guard_level, _RISK_GATE_OFF[0].upper() + _RISK_GATE_OFF[1:]
     )
 
 
@@ -1751,12 +1757,31 @@ def check_ungated(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if not deny:
         return None
 
-    envelope = {
-        "hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "permissionDecision": "deny",
-            "permissionDecisionReason": _deny_reason(cmd, reason_kind, reason_class),
-        }
-    }
+    from coordinator_core.guard_messages.alternative_record import AdaptableOffer
+
+    if reason_class == REASON_INDIRECTION:
+        if any(why in reason_kind for why in _WRITER_REASONS):
+            offer = AdaptableOffer(
+                template="<write the script>, then <run the script>",
+                what_to_adapt="the two commands (issue them as separate Bash calls)",
+            )
+        else:
+            offer = AdaptableOffer(
+                template="python3 /abs/path/to/script.py",
+                what_to_adapt="the script path (literal, no $VAR)",
+            )
+    else:
+        offer = AdaptableOffer(
+            template="git add --pathspec-from-file=<list>",
+            what_to_adapt="<list> (a file of paths; add --pathspec-file-nul for NUL-separated)",
+        )
+    record = sentinel_record(
+        GUARD_NAME,
+        "deny",
+        _deny_reason(cmd, reason_kind, reason_class),
+        offer,
+        report_what="the file you need written",
+        authorize_what="the PM-approval sentinel",
+    )
     risk = _RISK_INDIRECTION if reason_class == REASON_INDIRECTION else _RISK_DIRECT
-    return apply_guard_level(GUARD_NAME, envelope, risk=risk[0].upper() + risk[1:])
+    return leveled_record(GUARD_NAME, record, apply_guard_level, risk[0].upper() + risk[1:])

@@ -483,9 +483,10 @@ def test_terminal_pathspec_carries_prep_and_wave_sidecars_only_of_its_own_plan(t
     _seed_plan(tmp_path, "docs/plans/p1.md", True)
     _seed_plan(tmp_path, "docs/plans/p10.md", False)
     d = tmp_path / "docs/plans"
-    for name in ("p1.wave-2.seam.yaml", "p1.wave-1.seam.yaml", "p10.wave-1.seam.yaml"):
+    for name in ("p1.wave-2.seam.yaml", "p1.wave-1.seam.yaml", "p10.wave-1.seam.yaml", "p1.fire.seam.yaml", "p10.fire.seam.yaml"):
         (d / name).write_text("schema: seam-check\n", encoding="utf-8")
     assert _seams(tmp_path, "docs/plans/p1.md") == [
+        "docs/plans/p1.fire.seam.yaml",
         "docs/plans/p1.seam.yaml",
         "docs/plans/p1.wave-1.seam.yaml",
         "docs/plans/p1.wave-2.seam.yaml",
@@ -505,6 +506,7 @@ def test_run_artifacts_enumerates_wave_sidecars_and_maps_them_to_the_plan_sizing
         sizing: f"plan: '{plan}'\n",
         plan: f"sizing_object: {sizing}\n",
         "docs/plans/2026-10-16-x.seam.yaml": "x\n",
+        "docs/plans/2026-10-16-x.fire.seam.yaml": "x\n",
         "docs/plans/2026-10-16-x.wave-1.seam.yaml": "x\n",
         "docs/plans/2026-10-16-x.wave-2.seam.yaml": "x\n",
         "docs/plans/2026-10-16-xy.wave-1.seam.yaml": "x\n",
@@ -515,10 +517,12 @@ def test_run_artifacts_enumerates_wave_sidecars_and_maps_them_to_the_plan_sizing
         p.write_text(text, encoding="utf-8")
     found = ra.candidate_paths(tmp_path, run).by_class["seam-sidecar"]
     assert found == (
+        "docs/plans/2026-10-16-x.fire.seam.yaml",
         "docs/plans/2026-10-16-x.seam.yaml",
         "docs/plans/2026-10-16-x.wave-1.seam.yaml",
         "docs/plans/2026-10-16-x.wave-2.seam.yaml",
     )
+    assert ra._sizing_of_artifact(tmp_path, "docs/plans/2026-10-16-x.fire.seam.yaml") == sizing
     assert ra._sizing_of_artifact(tmp_path, "docs/plans/2026-10-16-x.wave-2.seam.yaml") == sizing
     assert ra._sizing_of_artifact(tmp_path, "docs/plans/2026-10-16-x.seam.yaml") == sizing
 

@@ -1936,6 +1936,13 @@ def _write_back(
             )
             text = _set_scalar(text, "deliverable_id", json.dumps(mint(slug=slug)[0]))
 
+        plan_edge = doc.get("plan")
+        if isinstance(plan_edge, str) and plan_edge.strip() and decision["resolved_estimate"]["tshirt"] == "XS":
+            raise MutateAbort(
+                f"SIZING-PLAN-EDGE-RESIZE-TO-XS: {sizing_rel} has plan edge {plan_edge}; "
+                "a plan-edged sizing is never re-sized to XS. Keep the recorded size."
+            )
+
         estimate = dict(doc.get("estimate") or {})
         estimate["tshirt"] = decision["resolved_estimate"]["tshirt"]
         estimate.setdefault("provisional", True)

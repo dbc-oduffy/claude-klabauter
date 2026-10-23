@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import coordinator_core.hooks.track_dispatched_agents as tda
 from coordinator_core.bash_guards import block_reviewer_bash_outside_allowlist as guard
+from coordinator_core.guard_messages.testing import envelope_of
 
 TYPE = "coordinator:executor"
 ROSTER = frozenset({TYPE, "coordinator:code-reviewer"})
@@ -61,7 +62,7 @@ def test_resumed_same_type_row_is_not_confined(monkeypatch):
 
 def test_ambiguous_row_still_confines(monkeypatch):
     _wire(monkeypatch, tda.AMBIGUOUS_TYPE)
-    res = guard.check(_bash("python3 -c 1"))
+    res = envelope_of(guard.check(_bash("python3 -c 1")), "em")
     assert res is not None
     assert res["hookSpecificOutput"]["permissionDecision"] == "deny"
 

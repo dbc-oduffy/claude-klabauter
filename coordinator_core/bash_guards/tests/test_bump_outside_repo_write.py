@@ -46,6 +46,11 @@ from coordinator_core.bash_guards._write_bump_marker import (
 from coordinator_core.bash_guards._write_bump_sink_shapes import WRITE_SINK_BINARIES
 from coordinator_core.testing.home_sandbox import sandbox_home
 from coordinator_core.win_portability import no_console_creationflags
+from coordinator_core.guard_messages.testing import envelope_of
+
+
+def _enveloped(check):
+    return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 pytestmark = [
     pytest.mark.spawns_process,
@@ -255,7 +260,7 @@ def test_ac3_cp_to_outside_repo_target_bumps(env, monkeypatch):
     dest = env["outside"] / "newfile.txt"
     cmd = f"cp {_posix(src)} {_posix(dest)}"
 
-    result = guard.check_bump_outside_repo_write(cmd, "sess-1", str(env["anchor"]), {})
+    result = _enveloped(guard.check_bump_outside_repo_write)(cmd, "sess-1", str(env["anchor"]), {})
 
     assert result is not None
     assert "hookSpecificOutput" in result
@@ -266,7 +271,7 @@ def test_ac3_output_redirection_to_outside_repo_bumps(env, monkeypatch):
     dest = env["outside"] / "redir.txt"
     cmd = f"echo hi > {_posix(dest)}"
 
-    result = guard.check_bump_outside_repo_write(cmd, "sess-2", str(env["anchor"]), {})
+    result = _enveloped(guard.check_bump_outside_repo_write)(cmd, "sess-2", str(env["anchor"]), {})
 
     assert result is not None
 
@@ -303,7 +308,7 @@ def test_backslash_spelled_outside_target_message_names_bash_landing_effect(env,
     landing = flag_off[0][0]
     assert landing != backslash_target, "fixture must actually exercise the mangling divergence"
 
-    result = guard.check_bump_outside_repo_write(cmd, "sess-bs-outside", anchor_str, {})
+    result = _enveloped(guard.check_bump_outside_repo_write)(cmd, "sess-bs-outside", anchor_str, {})
 
     assert result is not None
     reason = result["hookSpecificOutput"]["permissionDecisionReason"]
@@ -335,7 +340,7 @@ def test_doubled_backslash_outside_target_clause_tracks_quoting_not_the_backslas
 
     _set_anchor(monkeypatch, env, "sess-bs-doubled-unquoted")
     unquoted_cmd = f"echo probe > {backslash_target}"
-    unquoted_result = guard.check_bump_outside_repo_write(
+    unquoted_result = _enveloped(guard.check_bump_outside_repo_write)(
         unquoted_cmd, "sess-bs-doubled-unquoted", anchor_str, {}
     )
     assert unquoted_result is not None
@@ -344,7 +349,7 @@ def test_doubled_backslash_outside_target_clause_tracks_quoting_not_the_backslas
 
     _set_anchor(monkeypatch, env, "sess-bs-doubled-quoted")
     quoted_cmd = f'echo probe > "{backslash_target}"'
-    quoted_result = guard.check_bump_outside_repo_write(
+    quoted_result = _enveloped(guard.check_bump_outside_repo_write)(
         quoted_cmd, "sess-bs-doubled-quoted", anchor_str, {}
     )
     assert quoted_result is not None
@@ -369,7 +374,7 @@ def test_quoted_backslash_outside_target_with_space_has_no_backslash_effect_clau
     quoted_target = str(dest)
     cmd = f'echo probe > "{quoted_target}"'
 
-    result = guard.check_bump_outside_repo_write(cmd, "sess-bs-quoted-space", str(env["anchor"]), {})
+    result = _enveloped(guard.check_bump_outside_repo_write)(cmd, "sess-bs-quoted-space", str(env["anchor"]), {})
 
     assert result is not None
     reason = result["hookSpecificOutput"]["permissionDecisionReason"]
@@ -393,7 +398,7 @@ def test_quoted_backslash_outside_target_with_semicolon_has_no_backslash_effect_
     quoted_target = str(dest)
     cmd = f'echo probe > "{quoted_target}"'
 
-    result = guard.check_bump_outside_repo_write(
+    result = _enveloped(guard.check_bump_outside_repo_write)(
         cmd, "sess-bs-quoted-semicolon", str(env["anchor"]), {}
     )
 
@@ -413,7 +418,7 @@ def test_forward_slash_spelled_outside_target_message_has_no_backslash_effect_cl
     dest = env["outside"] / "probe.txt"
     cmd = f"echo probe > {_posix(dest)}"
 
-    result = guard.check_bump_outside_repo_write(cmd, "sess-fs-outside", str(env["anchor"]), {})
+    result = _enveloped(guard.check_bump_outside_repo_write)(cmd, "sess-fs-outside", str(env["anchor"]), {})
 
     assert result is not None
     reason = result["hookSpecificOutput"]["permissionDecisionReason"]
@@ -431,7 +436,7 @@ def test_devnull_redirect_does_not_bump(env, monkeypatch):
     _set_anchor(monkeypatch, env, "sess-devnull-1")
     cmd = 'while pgrep -f "x" > /dev/null; do sleep 20; done'
 
-    result = guard.check_bump_outside_repo_write(cmd, "sess-devnull-1", str(env["anchor"]), {})
+    result = _enveloped(guard.check_bump_outside_repo_write)(cmd, "sess-devnull-1", str(env["anchor"]), {})
 
     assert result is None
 
@@ -440,7 +445,7 @@ def test_devnull_stderr_redirect_does_not_bump(env, monkeypatch):
     _set_anchor(monkeypatch, env, "sess-devnull-2")
     cmd = "grep foo bar 2>/dev/null"
 
-    result = guard.check_bump_outside_repo_write(cmd, "sess-devnull-2", str(env["anchor"]), {})
+    result = _enveloped(guard.check_bump_outside_repo_write)(cmd, "sess-devnull-2", str(env["anchor"]), {})
 
     assert result is None
 
@@ -451,7 +456,7 @@ def test_devnull_redirect_plus_genuine_outside_write_still_bumps(env, monkeypatc
     cmd = f"echo hi > /dev/null; cp {_posix(env['anchor'] / 'src.txt')} {_posix(dest)}"
     (env["anchor"] / "src.txt").write_text("x\n", encoding="utf-8")
 
-    result = guard.check_bump_outside_repo_write(cmd, "sess-devnull-3", str(env["anchor"]), {})
+    result = _enveloped(guard.check_bump_outside_repo_write)(cmd, "sess-devnull-3", str(env["anchor"]), {})
 
     assert result is not None
     assert "hookSpecificOutput" in result
@@ -464,7 +469,7 @@ def test_devnull_redirect_plus_genuine_outside_write_still_bumps(env, monkeypatc
 def test_redirect_to_a_non_repo_dir_bumps_under_both_tools(env, monkeypatch, tool, slashes):
     _set_anchor(monkeypatch, env, "sess-redir-" + tool)
     dest = str(env["outside"] / "redir.txt").replace("\\", "/").replace("/", slashes)
-    result = guard.check_bump_outside_repo_write(
+    result = _enveloped(guard.check_bump_outside_repo_write)(
         "echo hi > " + dest, "sess-redir-" + tool, str(env["anchor"]), {"tool_name": tool}
     )
     assert result is not None
@@ -478,7 +483,7 @@ def test_powershell_alias_shape_declines_and_records_silent(env, monkeypatch):
     cmd = f"cp src.txt {_posix(env['outside'] / 'x.txt')}"
 
     with _verdict.collecting() as silences:
-        result = guard.check_bump_outside_repo_write(
+        result = _enveloped(guard.check_bump_outside_repo_write)(
             cmd, "sess-ps", str(env["anchor"]), {"tool_name": "PowerShell"}
         )
 
@@ -504,7 +509,7 @@ def test_powershell_new_item_to_outside_repo_target_bumps(env, monkeypatch):
     dest = env["outside"] / "newfile.txt"
     cmd = f"New-Item -Path {dest} -ItemType File"
 
-    result = guard.check_bump_outside_repo_write(
+    result = _enveloped(guard.check_bump_outside_repo_write)(
         cmd, "sess-ps-new-item", str(env["anchor"]), {"tool_name": "PowerShell"}
     )
 
@@ -525,7 +530,7 @@ def test_powershell_new_item_quoted_outside_repo_target_bumps(env, monkeypatch):
     dest = env["outside"] / "newfile.txt"
     cmd = f'New-Item -Path "{dest}" -ItemType File'
 
-    result = guard.check_bump_outside_repo_write(
+    result = _enveloped(guard.check_bump_outside_repo_write)(
         cmd, "sess-ps-new-item-quoted", str(env["anchor"]), {"tool_name": "PowerShell"}
     )
 
@@ -541,7 +546,7 @@ def test_powershell_new_item_single_quoted_outside_repo_target_bumps(env, monkey
     dest = env["outside"] / "newfile.txt"
     cmd = f"New-Item -Path '{dest}' -ItemType File"
 
-    result = guard.check_bump_outside_repo_write(
+    result = _enveloped(guard.check_bump_outside_repo_write)(
         cmd, "sess-ps-new-item-single-quoted", str(env["anchor"]), {"tool_name": "PowerShell"}
     )
 
@@ -558,7 +563,7 @@ def test_powershell_new_item_quoted_inside_own_repo_target_does_not_bump(env, mo
     dest = env["anchor"] / "newfile.txt"
     cmd = f'New-Item -Path "{dest}" -ItemType File'
 
-    result = guard.check_bump_outside_repo_write(
+    result = _enveloped(guard.check_bump_outside_repo_write)(
         cmd, "sess-ps-new-item-quoted-inside", str(env["anchor"]), {"tool_name": "PowerShell"}
     )
 
@@ -573,7 +578,7 @@ def test_powershell_copy_item_positional_destination_bumps(env, monkeypatch):
     dest = env["outside"] / "dest.txt"
     cmd = f"Copy-Item {src} {dest}"
 
-    result = guard.check_bump_outside_repo_write(
+    result = _enveloped(guard.check_bump_outside_repo_write)(
         cmd, "sess-ps-copy-item", str(env["anchor"]), {"tool_name": "PowerShell"}
     )
 
@@ -586,7 +591,7 @@ def test_powershell_out_file_bumps(env, monkeypatch):
     dest = env["outside"] / "out.txt"
     cmd = f"Get-Date | Out-File -FilePath {dest}"
 
-    result = guard.check_bump_outside_repo_write(
+    result = _enveloped(guard.check_bump_outside_repo_write)(
         cmd, "sess-ps-out-file", str(env["anchor"]), {"tool_name": "PowerShell"}
     )
 
@@ -606,7 +611,7 @@ def test_powershell_tee_object_variable_only_does_not_bump(env, monkeypatch):
     cmd = "Get-Date | Tee-Object -Variable foo"
 
     with _verdict.collecting() as silences:
-        result = guard.check_bump_outside_repo_write(
+        result = _enveloped(guard.check_bump_outside_repo_write)(
             cmd, "sess-ps-tee-var", str(env["anchor"]), {"tool_name": "PowerShell"}
         )
 
@@ -630,7 +635,7 @@ def test_powershell_copy_item_alias_and_cp_are_not_duplicated_here(env, monkeypa
     cmd = f"cp {src} {dest}"
 
     with _verdict.collecting() as silences:
-        result = guard.check_bump_outside_repo_write(
+        result = _enveloped(guard.check_bump_outside_repo_write)(
             cmd, "sess-ps-cp-alias", str(env["anchor"]), {"tool_name": "PowerShell"}
         )
 
@@ -644,7 +649,7 @@ def test_ac3_mkdir_to_not_yet_existing_outside_repo_dir_bumps(env, monkeypatch):
     assert not new_dir.exists()
     cmd = f"mkdir -p {_posix(new_dir)}"
 
-    result = guard.check_bump_outside_repo_write(cmd, "sess-3", str(env["anchor"]), {})
+    result = _enveloped(guard.check_bump_outside_repo_write)(cmd, "sess-3", str(env["anchor"]), {})
 
     assert result is not None
 
@@ -656,7 +661,7 @@ def test_same_repo_write_does_not_bump(env, monkeypatch):
     dest = env["anchor"] / "dest.txt"
     cmd = f"cp {_posix(src)} {_posix(dest)}"
 
-    result = guard.check_bump_outside_repo_write(cmd, "sess-4", str(env["anchor"]), {})
+    result = _enveloped(guard.check_bump_outside_repo_write)(cmd, "sess-4", str(env["anchor"]), {})
 
     assert result is None
 
@@ -673,7 +678,7 @@ def test_unexpanded_variable_redirect_target_bumps(env, monkeypatch):
     _set_anchor(monkeypatch, env, "sess-var-1")
     cmd = "echo x > $D"
 
-    result = guard.check_bump_outside_repo_write(cmd, "sess-var-1", str(env["anchor"]), {})
+    result = _enveloped(guard.check_bump_outside_repo_write)(cmd, "sess-var-1", str(env["anchor"]), {})
 
     assert result is not None
     reason = result["hookSpecificOutput"]["permissionDecisionReason"]
@@ -725,7 +730,7 @@ def test_write_into_a_different_git_repo_does_not_bump_here(env, tmp_path, monke
     dest = foreign / "dest.txt"
     cmd = f"cp {_posix(src)} {_posix(dest)}"
 
-    result = guard.check_bump_outside_repo_write(cmd, "sess-5", str(env["anchor"]), {})
+    result = _enveloped(guard.check_bump_outside_repo_write)(cmd, "sess-5", str(env["anchor"]), {})
 
     assert result is None
 
@@ -738,7 +743,7 @@ def test_subagent_class_message_names_the_sandbox_route(env, monkeypatch):
     cmd = f"cp {_posix(src)} {_posix(dest)}"
     payload = {"agent_id": "af307f34d8afa24eb"}
 
-    result = guard.check_bump_outside_repo_write(cmd, "sess-6", str(env["anchor"]), payload)
+    result = _enveloped(guard.check_bump_outside_repo_write)(cmd, "sess-6", str(env["anchor"]), payload)
 
     assert result is not None
     reason = result["hookSpecificOutput"]["permissionDecisionReason"]
@@ -759,7 +764,7 @@ def test_session_anchor_with_no_git_repo_never_bumps_outside_repo_writes(tmp_pat
     dest.parent.mkdir()
     cmd = f"echo hi > {_posix(dest)}"
 
-    result = guard.check_bump_outside_repo_write(cmd, "sess-7", str(no_repo_anchor), {})
+    result = _enveloped(guard.check_bump_outside_repo_write)(cmd, "sess-7", str(no_repo_anchor), {})
 
     assert result is None
 
@@ -769,7 +774,7 @@ def test_ac4_inline_python3_dash_c_write_sink_bumps(env, monkeypatch):
     dest = env["outside"] / "inline.txt"
     cmd = f'python3 -c "echo hi > {_posix(dest)}"'
 
-    result = guard.check_bump_outside_repo_write(cmd, "sess-8", str(env["anchor"]), {})
+    result = _enveloped(guard.check_bump_outside_repo_write)(cmd, "sess-8", str(env["anchor"]), {})
 
     assert result is not None
 
@@ -781,7 +786,7 @@ def test_ac4_inline_python_bundled_short_flag_write_sink_bumps(env, monkeypatch)
     dest = env["outside"] / "bundled.txt"
     cmd = f'python3 -ic "echo hi > {_posix(dest)}"'
 
-    result = guard.check_bump_outside_repo_write(cmd, "sess-9", str(env["anchor"]), {})
+    result = _enveloped(guard.check_bump_outside_repo_write)(cmd, "sess-9", str(env["anchor"]), {})
 
     assert result is not None
 
@@ -794,7 +799,7 @@ def test_ac4_inline_bash_dash_c_write_sink_bumps_via_shared_tokenizer_recursion(
     dest = env["outside"] / "bash-inline.txt"
     cmd = f'bash -c "echo hi > {_posix(dest)}"'
 
-    result = guard.check_bump_outside_repo_write(cmd, "sess-10", str(env["anchor"]), {})
+    result = _enveloped(guard.check_bump_outside_repo_write)(cmd, "sess-10", str(env["anchor"]), {})
 
     assert result is not None
 
@@ -808,7 +813,7 @@ def test_ac4_file_invoked_python_script_does_not_bump(env, monkeypatch):
     script.write_text("print('hi')\n", encoding="utf-8")
     cmd = f"python3 {_posix(script)}"
 
-    result = guard.check_bump_outside_repo_write(cmd, "sess-11", str(env["anchor"]), {})
+    result = _enveloped(guard.check_bump_outside_repo_write)(cmd, "sess-11", str(env["anchor"]), {})
 
     assert result is None
 
@@ -825,7 +830,7 @@ def test_ac4_file_invoked_install_script_writing_settings_home_is_allowed(env, m
     install_sh.write_text("#!/bin/sh\necho installing\n", encoding="utf-8")
     cmd = f"bash {_posix(install_sh)}"
 
-    result = guard.check_bump_outside_repo_write(cmd, "sess-12", str(env["anchor"]), {})
+    result = _enveloped(guard.check_bump_outside_repo_write)(cmd, "sess-12", str(env["anchor"]), {})
 
     assert result is None
 
@@ -839,7 +844,7 @@ def test_ac9_settings_home_write_never_bumps(env, monkeypatch):
     dest.parent.mkdir(parents=True)
     cmd = f"echo hi > {_posix(dest)}"
 
-    result = guard.check_bump_outside_repo_write(cmd, "sess-13", str(env["anchor"]), {})
+    result = _enveloped(guard.check_bump_outside_repo_write)(cmd, "sess-13", str(env["anchor"]), {})
 
     assert result is None
 
@@ -867,7 +872,7 @@ def test_ac2_claude_home_write_never_bumps(env, monkeypatch):
     dest.parent.mkdir(parents=True)
     cmd = f"echo hi > {_posix(dest)}"
 
-    result = guard.check_bump_outside_repo_write(cmd, "sess-c1-outside", str(env["anchor"]), {})
+    result = _enveloped(guard.check_bump_outside_repo_write)(cmd, "sess-c1-outside", str(env["anchor"]), {})
 
     assert result is None
 
@@ -898,7 +903,7 @@ def test_ac9_system_temp_write_never_bumps(env, monkeypatch):
     cmd = f"echo hi > {_posix(dest)}"
 
     try:
-        result = guard.check_bump_outside_repo_write(cmd, "sess-14", str(env["anchor"]), {})
+        result = _enveloped(guard.check_bump_outside_repo_write)(cmd, "sess-14", str(env["anchor"]), {})
         assert result is None
     finally:
         if dest.exists():
@@ -920,7 +925,7 @@ def test_ac9_subagent_sandbox_root_write_never_bumps(env, monkeypatch):
     dest = sandbox / "note.txt"
     cmd = f"echo hi > {_posix(dest)}"
 
-    result = guard.check_bump_outside_repo_write(cmd, session_id, str(env["anchor"]), {})
+    result = _enveloped(guard.check_bump_outside_repo_write)(cmd, session_id, str(env["anchor"]), {})
 
     assert result is None
 
@@ -938,7 +943,7 @@ def test_agent_memory_store_write_never_bumps(env, monkeypatch):
     dest = memory_dir / "note.md"
     cmd = f"echo hi > {_posix(dest)}"
 
-    result = guard.check_bump_outside_repo_write(cmd, session_id, str(env["anchor"]), {})
+    result = _enveloped(guard.check_bump_outside_repo_write)(cmd, session_id, str(env["anchor"]), {})
 
     assert result is None
 
@@ -952,7 +957,7 @@ def test_agent_memory_store_index_write_never_bumps(env, monkeypatch):
     dest = memory_dir / "MEMORY.md"
     cmd = f"echo hi > {_posix(dest)}"
 
-    result = guard.check_bump_outside_repo_write(cmd, session_id, str(env["anchor"]), {})
+    result = _enveloped(guard.check_bump_outside_repo_write)(cmd, session_id, str(env["anchor"]), {})
 
     assert result is None
 
@@ -965,7 +970,7 @@ def test_marker_present_for_session_clears_the_bump(env, monkeypatch):
     dest = env["outside"] / "cleared.txt"
     cmd = f"echo hi > {_posix(dest)}"
 
-    result = guard.check_bump_outside_repo_write(cmd, "sess-16", str(env["anchor"]), {})
+    result = _enveloped(guard.check_bump_outside_repo_write)(cmd, "sess-16", str(env["anchor"]), {})
 
     assert result is None
 
@@ -978,7 +983,7 @@ def test_marker_for_a_different_session_does_not_clear_this_ones_bump(env, monke
     dest = env["outside"] / "not-cleared.txt"
     cmd = f"echo hi > {_posix(dest)}"
 
-    result = guard.check_bump_outside_repo_write(cmd, "sess-17", str(env["anchor"]), {})
+    result = _enveloped(guard.check_bump_outside_repo_write)(cmd, "sess-17", str(env["anchor"]), {})
 
     assert result is not None
 
@@ -1011,7 +1016,7 @@ def test_destination_class_kwarg_is_passed_explicitly_as_foreign(env, monkeypatc
 
     dest = env["outside"] / "x.txt"
     cmd = f"echo hi > {_posix(dest)}"
-    result = guard.check_bump_outside_repo_write(cmd, session_id, str(env["anchor"]), {})
+    result = _enveloped(guard.check_bump_outside_repo_write)(cmd, session_id, str(env["anchor"]), {})
 
     assert result is not None
     assert len(captured) == 1
@@ -1022,11 +1027,11 @@ def test_fail_open_when_session_id_empty(env, monkeypatch):
     dest = env["outside"] / "x.txt"
     cmd = f"echo hi > {_posix(dest)}"
 
-    assert guard.check_bump_outside_repo_write(cmd, "", str(env["anchor"]), {}) is None
+    assert _enveloped(guard.check_bump_outside_repo_write)(cmd, "", str(env["anchor"]), {}) is None
 
 
 def test_fail_open_when_cmd_empty(env, monkeypatch):
-    assert guard.check_bump_outside_repo_write("", "sess-18", str(env["anchor"]), {}) is None
+    assert _enveloped(guard.check_bump_outside_repo_write)("", "sess-18", str(env["anchor"]), {}) is None
 
 
 def test_fail_open_when_anchor_unresolvable(env, monkeypatch):
@@ -1035,7 +1040,7 @@ def test_fail_open_when_anchor_unresolvable(env, monkeypatch):
     dest = env["outside"] / "x.txt"
     cmd = f"echo hi > {_posix(dest)}"
 
-    result = guard.check_bump_outside_repo_write(cmd, "sess-19", str(env["anchor"]), {})
+    result = _enveloped(guard.check_bump_outside_repo_write)(cmd, "sess-19", str(env["anchor"]), {})
 
     assert result is None
 
@@ -1137,7 +1142,7 @@ def test_regression_real_harness_scratchpad_shape_never_bumps(env, monkeypatch):
     dest = scratchpad / "draft-memo.md"
     cmd = f"cat > {_posix(dest)} <<'E'\nx\nE"
 
-    result = guard.check_bump_outside_repo_write(cmd, session_id, str(env["anchor"]), {})
+    result = _enveloped(guard.check_bump_outside_repo_write)(cmd, session_id, str(env["anchor"]), {})
 
     assert result is None
 
@@ -1188,10 +1193,10 @@ def test_regression_symlinked_tmp_root_resolves_to_same_verdict_as_real(env, tmp
     dest_via_real = real_root / "scratchpad" / "via-real.txt"
     dest_via_link = link_root / "scratchpad" / "via-link.txt"
 
-    result_real = guard.check_bump_outside_repo_write(
+    result_real = _enveloped(guard.check_bump_outside_repo_write)(
         f"echo hi > {dest_via_real}", "sess-symlink-real", str(env["anchor"]), {}
     )
-    result_link = guard.check_bump_outside_repo_write(
+    result_link = _enveloped(guard.check_bump_outside_repo_write)(
         f"echo hi > {dest_via_link}", "sess-symlink-link", str(env["anchor"]), {}
     )
 
@@ -1237,7 +1242,7 @@ def test_ac6_cwd_drifted_to_a_foreign_repo_still_bumps_an_outside_repo_write(
     dest = env["outside"] / "drifted-write.txt"
     cmd = f"echo hi > {_posix(dest)}"
 
-    result = guard.check_bump_outside_repo_write(cmd, session_id, str(foreign), {})
+    result = _enveloped(guard.check_bump_outside_repo_write)(cmd, session_id, str(foreign), {})
 
     assert result is not None
 
@@ -1284,7 +1289,7 @@ def test_ac1_msys_absolute_target_inside_own_repo_not_denied(env, monkeypatch):
     msys_target = _msys_form(dest)
     cmd = f"echo hi > {msys_target}"
 
-    result = guard.check_bump_outside_repo_write(cmd, "sess-ac1", str(env["anchor"]), {})
+    result = _enveloped(guard.check_bump_outside_repo_write)(cmd, "sess-ac1", str(env["anchor"]), {})
 
     assert result is None, (
         "MSYS-spelled target inside the session's own repo was wrongly "
@@ -1302,7 +1307,7 @@ def test_ac3_msys_absolute_target_genuinely_outside_repo_still_denies(env, monke
     msys_target = _msys_form(dest)
     cmd = f"echo hi > {msys_target}"
 
-    result = guard.check_bump_outside_repo_write(cmd, "sess-ac3-msys", str(env["anchor"]), {})
+    result = _enveloped(guard.check_bump_outside_repo_write)(cmd, "sess-ac3-msys", str(env["anchor"]), {})
 
     assert result is not None
 
@@ -1457,7 +1462,7 @@ def test_set_location_into_no_repo_dir_then_write_is_detected(env, monkeypatch):
     _set_anchor(monkeypatch, env, "sess-ps-setloc-outside")
     cmd = f'Set-Location {_posix(env["outside"])}; New-Item -Path file.txt -ItemType File'
 
-    result = guard.check_bump_outside_repo_write(
+    result = _enveloped(guard.check_bump_outside_repo_write)(
         cmd, "sess-ps-setloc-outside", str(env["anchor"]), {"tool_name": "PowerShell"}
     )
 
@@ -1473,7 +1478,7 @@ def test_set_location_into_git_root_dir_then_write_does_not_bump(env, monkeypatc
     _set_anchor(monkeypatch, env, "sess-ps-setloc-anchor")
     cmd = f'Set-Location {_posix(env["anchor"])}; New-Item -Path file.txt -ItemType File'
 
-    result = guard.check_bump_outside_repo_write(
+    result = _enveloped(guard.check_bump_outside_repo_write)(
         cmd, "sess-ps-setloc-anchor", str(env["anchor"]), {"tool_name": "PowerShell"}
     )
 
@@ -1497,7 +1502,7 @@ def test_set_location_unresolvable_target_yields_silent_not_deny(env, monkeypatc
     cmd = "Set-Location $SomeUnresolvedVar; New-Item -Path file.txt -ItemType File"
 
     with _verdict.collecting() as silences:
-        result = guard.check_bump_outside_repo_write(
+        result = _enveloped(guard.check_bump_outside_repo_write)(
             cmd, "sess-ps-setloc-unresolvable", str(env["anchor"]), {"tool_name": "PowerShell"}
         )
 
@@ -1524,7 +1529,7 @@ def test_c1_ac1_heredoc_python_write_text_target_bumps(env, monkeypatch):
         "EOF\n"
     )
 
-    result = guard.check_bump_outside_repo_write(cmd, "sess-c1-ac1", str(env["anchor"]), {})
+    result = _enveloped(guard.check_bump_outside_repo_write)(cmd, "sess-c1-ac1", str(env["anchor"]), {})
 
     assert result is not None
     assert "hookSpecificOutput" in result
@@ -1537,7 +1542,7 @@ def test_c1_ac2_inline_dash_c_open_write_mode_target_bumps(env, monkeypatch):
     _set_anchor(monkeypatch, env, "sess-c1-ac2")
     cmd = "python3 -c \"open('../mine2.patch','w').write('x')\""
 
-    result = guard.check_bump_outside_repo_write(cmd, "sess-c1-ac2", str(env["anchor"]), {})
+    result = _enveloped(guard.check_bump_outside_repo_write)(cmd, "sess-c1-ac2", str(env["anchor"]), {})
 
     assert result is not None
     assert "hookSpecificOutput" in result
@@ -1553,7 +1558,7 @@ def test_payload_relative_write_after_cd_outside_any_repo_bumps(env, monkeypatch
         "EOF\n"
     )
 
-    result = guard.check_bump_outside_repo_write(
+    result = _enveloped(guard.check_bump_outside_repo_write)(
         cmd, "sess-payload-cd-outside", str(env["anchor"]), {}
     )
 
@@ -1569,7 +1574,7 @@ def test_payload_relative_write_after_cd_into_repo_from_outside_does_not_bump(en
         "EOF\n"
     )
 
-    result = guard.check_bump_outside_repo_write(
+    result = _enveloped(guard.check_bump_outside_repo_write)(
         cmd, "sess-payload-cd-inrepo", str(env["outside"]), {}
     )
 
@@ -1593,14 +1598,14 @@ def test_c1_ac3_same_payload_with_in_repo_target_does_not_bump(env, monkeypatch)
         "pathlib.Path('sub/mine.patch').write_text('x')\n"
         "EOF\n"
     )
-    result = guard.check_bump_outside_repo_write(
+    result = _enveloped(guard.check_bump_outside_repo_write)(
         heredoc_cmd, "sess-c1-ac3-heredoc", str(env["anchor"]), {}
     )
     assert result is None
 
     _set_anchor(monkeypatch, env, "sess-c1-ac3-dashc")
     dash_c_cmd = "python3 -c \"open('sub/mine.patch','w').write('x')\""
-    result = guard.check_bump_outside_repo_write(
+    result = _enveloped(guard.check_bump_outside_repo_write)(
         dash_c_cmd, "sess-c1-ac3-dashc", str(env["anchor"]), {}
     )
     assert result is None
@@ -1645,7 +1650,7 @@ def test_c1_ac4_foreign_repo_guard_corpus_undrifted_by_the_interpreter_extractor
     ]
 
     for cmd, expect_bump in corpus:
-        result = foreign_guard.check_bump_foreign_repo_write(
+        result = _enveloped(foreign_guard.check_bump_foreign_repo_write)(
             cmd, "sess-c1-ac4", str(anchor), {}
         )
         if expect_bump:
@@ -1660,14 +1665,14 @@ def test_c1_ac5_unparseable_or_unterminated_payload_shapes_never_raise(env, monk
     module's own FAIL OPEN posture, never a parser."""
     _set_anchor(monkeypatch, env, "sess-c1-ac5-heredoc")
     unterminated_heredoc = "python3 - <<'EOF'\nimport pathlib\npathlib.Path('../x.patch')\n"
-    result = guard.check_bump_outside_repo_write(
+    result = _enveloped(guard.check_bump_outside_repo_write)(
         unterminated_heredoc, "sess-c1-ac5-heredoc", str(env["anchor"]), {}
     )
     assert result is None
 
     _set_anchor(monkeypatch, env, "sess-c1-ac5-dashc")
     unterminated_quote = "python3 -c \"open('../x.patch', 'w').write('x"
-    result = guard.check_bump_outside_repo_write(
+    result = _enveloped(guard.check_bump_outside_repo_write)(
         unterminated_quote, "sess-c1-ac5-dashc", str(env["anchor"]), {}
     )
     assert result is None
@@ -1687,7 +1692,7 @@ def test_c1_ac6_deny_message_names_the_session_scratchpad_for_a_subagent(env, mo
     )
     payload = {"agent_id": "af307f34d8afa24eb"}
 
-    result = guard.check_bump_outside_repo_write(cmd, "sess-c1-ac6", str(env["anchor"]), payload)
+    result = _enveloped(guard.check_bump_outside_repo_write)(cmd, "sess-c1-ac6", str(env["anchor"]), payload)
 
     assert result is not None
     reason = result["hookSpecificOutput"]["permissionDecisionReason"]
@@ -1708,7 +1713,7 @@ def test_c1_ac7_dollar_var_target_class_now_bumps(env, monkeypatch):
     _set_anchor(monkeypatch, env, "sess-c1-ac7")
     cmd = "echo hi > $D"
 
-    result = guard.check_bump_outside_repo_write(cmd, "sess-c1-ac7", str(env["anchor"]), {})
+    result = _enveloped(guard.check_bump_outside_repo_write)(cmd, "sess-c1-ac7", str(env["anchor"]), {})
 
     assert result is not None
     reason = result["hookSpecificOutput"]["permissionDecisionReason"]
@@ -1743,7 +1748,7 @@ def test_c1_ac9_docstring_or_comment_mentioning_a_write_shape_does_not_bump(env,
         "print('no real write here')\n"
         "EOF\n"
     )
-    result = guard.check_bump_outside_repo_write(
+    result = _enveloped(guard.check_bump_outside_repo_write)(
         docstring_cmd, "sess-c1-ac9-docstring", str(env["anchor"]), {}
     )
     assert result is None
@@ -1755,7 +1760,7 @@ def test_c1_ac9_docstring_or_comment_mentioning_a_write_shape_does_not_bump(env,
         "print('no real write here')\n"
         "EOF\n"
     )
-    result = guard.check_bump_outside_repo_write(
+    result = _enveloped(guard.check_bump_outside_repo_write)(
         comment_cmd, "sess-c1-ac9-comment", str(env["anchor"]), {}
     )
     assert result is None
@@ -1780,7 +1785,7 @@ def test_c1_ac9_stray_triple_quote_inside_comment_does_not_eat_a_real_write(env,
         '"""\n'
         "EOF\n"
     )
-    result = guard.check_bump_outside_repo_write(
+    result = _enveloped(guard.check_bump_outside_repo_write)(
         cmd, "sess-c1-p1-comment-quote", str(env["anchor"]), {}
     )
     assert result is not None
@@ -1801,7 +1806,7 @@ def test_c1_ac9_unterminated_triple_quote_does_not_false_deny(env, monkeypatch):
         "print('hi')\n"
         "EOF\n"
     )
-    result = guard.check_bump_outside_repo_write(
+    result = _enveloped(guard.check_bump_outside_repo_write)(
         cmd, "sess-c1-p2-unterminated", str(env["anchor"]), {}
     )
     assert result is None
@@ -1819,7 +1824,7 @@ def test_c1_ac9_plain_comment_then_real_write_still_bumps(env, monkeypatch):
         "open('../shared/out.csv', 'w').write('x')\n"
         "EOF\n"
     )
-    result = guard.check_bump_outside_repo_write(
+    result = _enveloped(guard.check_bump_outside_repo_write)(
         cmd, "sess-c1-plain-comment-write", str(env["anchor"]), {}
     )
     assert result is not None
@@ -1831,7 +1836,7 @@ def test_sed_inplace_slash_script_on_own_repo_file_does_not_bump(env, monkeypatc
     target.write_text("import os\n", encoding="utf-8")
     cmd = f"sed -i '' '/^import os$/d' {_posix(target)}"
 
-    result = guard.check_bump_outside_repo_write(cmd, "sess-sed-script", str(env["anchor"]), {})
+    result = _enveloped(guard.check_bump_outside_repo_write)(cmd, "sess-sed-script", str(env["anchor"]), {})
 
     assert result is None
 
@@ -1841,7 +1846,7 @@ def test_sed_inplace_on_outside_repo_file_still_bumps(env, monkeypatch):
     dest = env["outside"] / "notes.txt"
     cmd = f"sed -i 's/a/b/' {_posix(dest)}"
 
-    result = guard.check_bump_outside_repo_write(cmd, "sess-sed-outside", str(env["anchor"]), {})
+    result = _enveloped(guard.check_bump_outside_repo_write)(cmd, "sess-sed-outside", str(env["anchor"]), {})
 
     assert result is not None
 
@@ -1857,7 +1862,7 @@ def test_ac3_outside_repo_mkdir_deny_names_command_shapes_not_effects(env, monke
     new_dir = env["outside"] / "brand-new-b1-dir"
     cmd = f"mkdir -p {_posix(new_dir)}"
 
-    result = guard.check_bump_outside_repo_write(cmd, "sess-b1-shapes", str(env["anchor"]), {})
+    result = _enveloped(guard.check_bump_outside_repo_write)(cmd, "sess-b1-shapes", str(env["anchor"]), {})
 
     assert result is not None
     reason = result["hookSpecificOutput"]["permissionDecisionReason"]
@@ -1894,8 +1899,8 @@ def test_consumer_level_warns_instead_of_denying_outside_repo_write(env, monkeyp
     src.write_text("x\n", encoding="utf-8")
     cmd = f"cp {_posix(src)} {_posix(env['outside'] / 'newfile.txt')}"
 
-    first = guard.check_bump_outside_repo_write(cmd, "sess-warn-outside", str(env["anchor"]), {})
+    first = _enveloped(guard.check_bump_outside_repo_write)(cmd, "sess-warn-outside", str(env["anchor"]), {})
     hso = first["hookSpecificOutput"]
     assert hso["permissionDecision"] == "allow"
     assert "full context" in hso["additionalContext"]
-    assert guard.check_bump_outside_repo_write(cmd, "sess-warn-outside", str(env["anchor"]), {}) is None
+    assert _enveloped(guard.check_bump_outside_repo_write)(cmd, "sess-warn-outside", str(env["anchor"]), {}) is None

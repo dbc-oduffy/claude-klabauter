@@ -132,15 +132,29 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             return None
         if not _creates_home_entry(cmd.replace("\r", ""), cwd, dialect_from_tool_name(tool_name)):
             return None
-        return apply_guard_level(
-            "block-home-root-bash-write",
-            {
-                "hookSpecificOutput": {
-                    "hookEventName": "PreToolUse",
-                    "permissionDecision": "deny",
-                    "permissionDecisionReason": DENY_REASON,
-                }
-            },
-        )
+        return _deny()
     except Exception:
         return None
+
+
+def _deny() -> Any:
+    """The deny record; a non-strict guard level returns the leveled envelope instead."""
+    from coordinator_core.guard_messages.alternative_record import AdaptableOffer, AlternativeRecord, Audience
+    from coordinator_core.guard_messages.render import render
+
+    summary, _, offer = DENY_REASON.partition(" Instead: ")
+    record = AlternativeRecord(
+        verdict_kind="deny",
+        guard_name="block-home-root-bash-write",
+        summary=summary,
+        em_text=DENY_REASON,
+        members=(
+            AdaptableOffer(
+                template=offer or "write under <repo>/scratch/ or the session scratchpad.",
+                what_to_adapt="<repo>",
+            ),
+        ),
+    )
+    envelope = render(record, Audience.EM)
+    leveled = apply_guard_level("block-home-root-bash-write", envelope)
+    return record if leveled == envelope else leveled

@@ -21,6 +21,11 @@ import pytest
 from coordinator_core.bash_guards import dispatch_checks
 from coordinator_core.session import core
 from coordinator_core.win_portability import no_console_creationflags
+from coordinator_core.guard_messages.testing import envelope_of
+
+
+def _enveloped(check):
+    return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 pytestmark = [
     pytest.mark.spawns_process,
@@ -95,7 +100,7 @@ class TestCheckFiveDenyByDefault:
         _push_started_at_to_future(root, sid)
         _stage_dir_with_one_foreign_file(tmp_path, root, sid, other_sid)
 
-        result = dispatch_checks.check_validate_commit(
+        result = _enveloped(dispatch_checks.check_validate_commit)(
             'git commit -m "sub work" -- sub', sid, cwd=root
         )
         assert result is not None
@@ -116,7 +121,7 @@ class TestCheckFiveDenyByDefault:
         _claim(root, sid, "sub/mine.txt")
         _claim(root, sid, "sub/also_mine.txt")
 
-        result = dispatch_checks.check_validate_commit(
+        result = _enveloped(dispatch_checks.check_validate_commit)(
             'git commit -m "sub work" -- sub', sid, cwd=root
         )
         assert result is None
@@ -132,7 +137,7 @@ class TestCheckFiveDenyByDefault:
         _push_started_at_to_future(root, sid)
         _stage_dir_with_one_foreign_file(tmp_path, root, sid)
 
-        result = dispatch_checks.check_validate_commit(
+        result = _enveloped(dispatch_checks.check_validate_commit)(
             'git commit -m "sub work" -- sub', sid, cwd=root
         )
         assert result is not None

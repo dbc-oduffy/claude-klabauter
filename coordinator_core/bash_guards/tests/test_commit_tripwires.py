@@ -27,6 +27,11 @@ import pytest
 
 from coordinator_core.bash_guards import commit_tripwires
 from coordinator_core.win_portability import no_console_creationflags
+from coordinator_core.guard_messages.testing import envelope_of
+
+
+def _enveloped(check):
+    return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 # Spawns a real external process; runs at cadence gates, not per-commit.
 # Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
@@ -561,13 +566,13 @@ class TestRegistrationQuadOverrideAtCallSite:
         )
 
         monkeypatch.delenv("COORDINATOR_OVERRIDE_REGISTRATION_QUAD", raising=False)
-        denied = dispatch_checks.check_validate_commit("git commit -m x", cwd=root)
+        denied = _enveloped(dispatch_checks.check_validate_commit)("git commit -m x", cwd=root)
         assert denied is not None
         assert denied["hookSpecificOutput"]["permissionDecision"] == "deny"
         assert "REGISTRATION-QUAD-INVARIANT" in denied["hookSpecificOutput"]["permissionDecisionReason"]
 
         monkeypatch.setenv("COORDINATOR_OVERRIDE_REGISTRATION_QUAD", "1")
-        advisory = dispatch_checks.check_validate_commit("git commit -m x", cwd=root)
+        advisory = _enveloped(dispatch_checks.check_validate_commit)("git commit -m x", cwd=root)
         assert advisory is not None
         assert advisory["hookSpecificOutput"]["permissionDecision"] == "allow"
         assert "REGISTRATION-QUAD-INVARIANT" in advisory["hookSpecificOutput"]["additionalContext"]
@@ -1121,7 +1126,7 @@ class TestCheckStagedPathspecDivergenceCallSiteIntegration:
         _git(root, "add", "shared.txt")
         (tmp_path / "shared.txt").write_text("line1\nMINE\nPEER\n", encoding="utf-8")
 
-        result = dispatch_checks.check_validate_commit(
+        result = _enveloped(dispatch_checks.check_validate_commit)(
             'git commit -m "test" -- shared.txt', cwd=root
         )
         assert result is not None

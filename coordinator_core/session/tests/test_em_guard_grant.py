@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.bash_guards import block_subagent_commit
+from coordinator_core.guard_messages.testing import envelope_of
 from coordinator_core.bash_guards import dispatch as bash_dispatch
 from coordinator_core.session import core
 from coordinator_core.session import em_guard_grant as eg
@@ -317,7 +318,7 @@ class TestAC14SubagentCommitNeverComposesWithGrant:
             block_subagent_commit, "_resolve_subagent_identity", lambda raw, session: raw
         )
         try:
-            result = block_subagent_commit.check(_commit_payload(session_id=sid))
+            result = envelope_of(block_subagent_commit.check(_commit_payload(session_id=sid)), "em")
             assert result is not None
             assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
         finally:

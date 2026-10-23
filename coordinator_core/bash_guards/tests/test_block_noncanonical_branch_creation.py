@@ -22,6 +22,11 @@ import pytest
 
 
 from coordinator_core.bash_guards import block_noncanonical_branch_creation as guard
+from coordinator_core.guard_messages.testing import envelope_of
+
+
+def _enveloped(check):
+    return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 
 def _payload(command, cwd="/repo"):
@@ -49,58 +54,58 @@ def _hazard_repo_by_default(monkeypatch):
 class TestNonBashOrEmpty:
     def test_non_bash_tool_allows(self):
         payload = {"tool_name": "Edit", "tool_input": {"file_path": "x"}}
-        assert guard.check(payload) is None
+        assert _enveloped(guard.check)(payload) is None
 
     def test_empty_command_allows(self):
-        assert guard.check(_payload("")) is None
+        assert _enveloped(guard.check)(_payload("")) is None
 
     def test_malformed_tool_input_allows(self):
         payload = {"tool_name": "Bash", "tool_input": "not-a-dict"}
-        assert guard.check(payload) is None
+        assert _enveloped(guard.check)(payload) is None
 
     def test_no_creation_verb_mention_allows(self):
-        assert guard.check(_payload("git status && ls -la")) is None
+        assert _enveloped(guard.check)(_payload("git status && ls -la")) is None
 
 
 class TestSubstrateTable:
 
     def test_canonical_daily_branch_passes(self):
-        assert guard.check(_payload("git checkout -b work/machine-b/2026-07-13")) is None
+        assert _enveloped(guard.check)(_payload("git checkout -b work/machine-b/2026-07-13")) is None
 
     def test_closeout_suffix_denies(self):
-        _reason(guard.check(_payload("git checkout -b work/machine-b/2026-07-13-closeout")))
+        _reason(_enveloped(guard.check)(_payload("git checkout -b work/machine-b/2026-07-13-closeout")))
 
     def test_numeric_suffix_denies(self):
-        _reason(guard.check(_payload("git checkout -b work/machine-b/2026-07-13-2")))
+        _reason(_enveloped(guard.check)(_payload("git checkout -b work/machine-b/2026-07-13-2")))
 
     def test_ci_green_suffix_denies(self):
-        _reason(guard.check(_payload("git checkout -b work/machine-b/2026-07-13-ci-green")))
+        _reason(_enveloped(guard.check)(_payload("git checkout -b work/machine-b/2026-07-13-ci-green")))
 
     def test_fix_prefix_denies(self):
-        _reason(guard.check(_payload("git checkout -b fix/open-or-create-build-index-optout")))
+        _reason(_enveloped(guard.check)(_payload("git checkout -b fix/open-or-create-build-index-optout")))
 
     def test_docs_prefix_denies(self):
-        _reason(guard.check(_payload("git checkout -b docs/scoped-to-memo-pins")))
+        _reason(_enveloped(guard.check)(_payload("git checkout -b docs/scoped-to-memo-pins")))
 
     def test_mixed_case_daily_branch_denies(self):
-        _reason(guard.check(_payload("git checkout -b work/MACHINE-B/2026-07-13")))
+        _reason(_enveloped(guard.check)(_payload("git checkout -b work/MACHINE-B/2026-07-13")))
 
 
 class TestGitBranchRenameVsCreate:
     def test_branch_rename_lowercase_m_passes(self):
-        assert guard.check(_payload("git branch -m a b")) is None
+        assert _enveloped(guard.check)(_payload("git branch -m a b")) is None
 
     def test_branch_rename_uppercase_m_passes(self):
-        assert guard.check(_payload("git branch -M a b")) is None
+        assert _enveloped(guard.check)(_payload("git branch -M a b")) is None
 
     def test_branch_creation_no_start_point_denies(self):
-        _reason(guard.check(_payload("git branch bad-name")))
+        _reason(_enveloped(guard.check)(_payload("git branch bad-name")))
 
     def test_branch_creation_with_start_point_denies(self):
-        _reason(guard.check(_payload("git branch bad-name main")))
+        _reason(_enveloped(guard.check)(_payload("git branch bad-name main")))
 
     def test_bare_git_branch_list_allows(self):
-        assert guard.check(_payload("git branch")) is None
+        assert _enveloped(guard.check)(_payload("git branch")) is None
 
     @pytest.mark.parametrize(
         "command",
@@ -121,49 +126,49 @@ class TestGitBranchRenameVsCreate:
         # long-form spelling, so e.g. `git branch --delete
         # stray-fix-branch` was misclassified as a CREATION of
         # `stray-fix-branch` and denied a legitimate delete.
-        assert guard.check(_payload(command)) is None
+        assert _enveloped(guard.check)(_payload(command)) is None
 
     def test_branch_creation_with_force_flag_still_denies(self):
-        _reason(guard.check(_payload("git branch --force bad-name")))
+        _reason(_enveloped(guard.check)(_payload("git branch --force bad-name")))
 
 
 class TestCompoundAndEnvPrefixedShapes:
     def test_compound_command_denies(self):
-        _reason(guard.check(_payload("cmd && git checkout -b bad")))
+        _reason(_enveloped(guard.check)(_payload("cmd && git checkout -b bad")))
 
     def test_env_prefixed_denies(self):
-        _reason(guard.check(_payload("FOO=1 git checkout -b bad")))
+        _reason(_enveloped(guard.check)(_payload("FOO=1 git checkout -b bad")))
 
 
 class TestSwitchAndUppercaseFlags:
     def test_switch_lowercase_c_denies(self):
-        _reason(guard.check(_payload("git switch -c bad")))
+        _reason(_enveloped(guard.check)(_payload("git switch -c bad")))
 
     def test_switch_uppercase_c_denies(self):
-        _reason(guard.check(_payload("git switch -C bad")))
+        _reason(_enveloped(guard.check)(_payload("git switch -C bad")))
 
     def test_checkout_uppercase_b_denies(self):
-        _reason(guard.check(_payload("git checkout -B bad")))
+        _reason(_enveloped(guard.check)(_payload("git checkout -B bad")))
 
     def test_switch_long_form_create_denies(self):
         # pre-fix,
         # `_SWITCH_CREATE_FLAGS` was `{-c, -C}` only, so `git switch
         # --create bad-name` bypassed the guard entirely.
-        _reason(guard.check(_payload("git switch --create bad-name")))
+        _reason(_enveloped(guard.check)(_payload("git switch --create bad-name")))
 
     def test_switch_long_form_force_create_denies(self):
-        _reason(guard.check(_payload("git switch --force-create bad-name")))
+        _reason(_enveloped(guard.check)(_payload("git switch --force-create bad-name")))
 
 
 class TestSanctionedLonglivedPrefixes:
     def test_feature_prefix_passes(self):
-        assert guard.check(_payload("git checkout -b feature/x")) is None
+        assert _enveloped(guard.check)(_payload("git checkout -b feature/x")) is None
 
     def test_release_prefix_passes(self):
-        assert guard.check(_payload("git checkout -b release/x")) is None
+        assert _enveloped(guard.check)(_payload("git checkout -b release/x")) is None
 
     def test_migration_prefix_passes(self):
-        assert guard.check(_payload("git checkout -b migration/x")) is None
+        assert _enveloped(guard.check)(_payload("git checkout -b migration/x")) is None
 
     def test_prefixes_exported_for_sibling_guard(self):
         assert guard.SANCTIONED_LONGLIVED_PREFIXES == ("migration/", "release/", "feature/")
@@ -176,14 +181,14 @@ class TestDenyMessageRemediation:
         # "did not match any file(s) known to git" in the common case:
         # this deny fires while the user is CREATING a branch, so today's
         # canonical branch usually doesn't exist as a ref yet either.
-        reason = _reason(guard.check(_payload("git checkout -b bad-name")))
+        reason = _reason(_enveloped(guard.check)(_payload("git checkout -b bad-name")))
         assert "git checkout -b work/" in reason
 
 
 class TestRepoScoping:
     def test_out_of_scope_repo_allows_unconditionally(self, monkeypatch):
         monkeypatch.setattr(guard, "_is_hazard_repo", lambda git_root: False)
-        assert guard.check(_payload("git checkout -b fix/foo")) is None
+        assert _enveloped(guard.check)(_payload("git checkout -b fix/foo")) is None
 
 
 class TestPowerShellIdiomDialectNeutral:
@@ -202,13 +207,13 @@ class TestPowerShellIdiomDialectNeutral:
     """
 
     def test_semicolon_chained_powershell_style_denies(self):
-        _reason(guard.check(_payload("Get-Location; git checkout -b bad-name")))
+        _reason(_enveloped(guard.check)(_payload("Get-Location; git checkout -b bad-name")))
 
     def test_dollar_env_prefix_powershell_style_fails_open_same_as_bash(self):
-        assert guard.check(_payload('git checkout -b "$env:BRANCH_NAME"')) is None
+        assert _enveloped(guard.check)(_payload('git checkout -b "$env:BRANCH_NAME"')) is None
 
     def test_canonical_daily_branch_still_passes_under_semicolon_chain(self):
-        assert guard.check(
+        assert _enveloped(guard.check)(
             _payload("Get-Location; git checkout -b work/machine-b/2026-07-13")
         ) is None
 
@@ -225,26 +230,26 @@ class TestActualPowerShellToolName:
     def test_denies_via_actual_powershell_tool_name(self):
         p = _payload("git checkout -b bad-name")
         p["tool_name"] = "PowerShell"
-        _reason(guard.check(p))
+        _reason(_enveloped(guard.check)(p))
 
 
 class TestFailOpenOnUnreadableName:
     def test_unexpanded_shell_variable_passes(self):
-        assert guard.check(_payload('git checkout -b "$BRANCH"')) is None
+        assert _enveloped(guard.check)(_payload('git checkout -b "$BRANCH"')) is None
 
     def test_command_substitution_passes(self):
-        assert guard.check(_payload('git checkout -b "$(date +%F)"')) is None
+        assert _enveloped(guard.check)(_payload('git checkout -b "$(date +%F)"')) is None
 
     def test_unterminated_quote_passes(self):
-        assert guard.check(_payload('git checkout -b "unterminated')) is None
+        assert _enveloped(guard.check)(_payload('git checkout -b "unterminated')) is None
 
     def test_partial_substitution_quoted_form_passes(self):
-        assert guard.check(
+        assert _enveloped(guard.check)(
             _payload('git checkout -b "work/machine-b/$(date +%F)"')
         ) is None
 
     def test_partial_substitution_unquoted_form_passes(self):
-        assert guard.check(
+        assert _enveloped(guard.check)(
             _payload("git checkout -b work/machine-b/$(date +%F)")
         ) is None
 
@@ -258,7 +263,7 @@ class TestDesignatedDayBranch:
             daily_branch, "read_configured_day_branch",
             lambda root: "claude/compassionate-pascal-98ncw7",
         )
-        assert guard.check(
+        assert _enveloped(guard.check)(
             _payload("git checkout -b claude/compassionate-pascal-98ncw7")
         ) is None
 
@@ -269,16 +274,16 @@ class TestDesignatedDayBranch:
             daily_branch, "read_configured_day_branch",
             lambda root: "claude/compassionate-pascal-98ncw7",
         )
-        out = guard.check(_payload("git checkout -b fix/some-bug"))
+        out = _enveloped(guard.check)(_payload("git checkout -b fix/some-bug"))
         assert "not canonical" in _reason(out)
 
 
 class TestDenies:
     def test_letter_suffixed_day_branch_is_denied(self):
-        out = guard.check(_payload("git checkout -b work/machine-b/2026-10-02k"))
+        out = _enveloped(guard.check)(_payload("git checkout -b work/machine-b/2026-10-02k"))
         hso = out["hookSpecificOutput"]
         assert hso["permissionDecision"] == "deny"
         assert "work/machine-b/2026-10-02k" in hso["permissionDecisionReason"]
 
     def test_canonical_day_branch_is_not_denied(self):
-        assert guard.check(_payload("git branch feature/thing")) is None
+        assert _enveloped(guard.check)(_payload("git branch feature/thing")) is None

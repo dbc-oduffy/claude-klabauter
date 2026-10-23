@@ -61,9 +61,8 @@ NEGATIVE-SPEC -- what this gate deliberately does NOT do
   That claim is semantic entailment and was dropped on purpose -- an
   overclaiming gate gets trusted for a property it cannot actually verify.
   This module checks only the MECHANICALLY DECIDABLE consequence of a
-  declared class: presence of an alternative-shaped signal (reusing
-  ``_alternative_liveness.extract_alternatives`` rather than
-  re-implementing alternative detection), that named alternative's liveness
+  declared class: presence of a typed alternative member in the emitter's
+  ``AlternativeRecord`` (never parsed out of prose), that named alternative's liveness
   (reusing ``_alternative_liveness.probe_alternative``/``probe_command``/
   ``probe_flag``/etc.), latching/repetition state for REPORT-class
   emitters, and literal ``[TODO:``/placeholder text.
@@ -114,6 +113,12 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from coordinator_core.bash_guards import _alternative_liveness as altlive
 from coordinator_core.bash_guards import dispatch_checks as _dc
 from coordinator_core.bash_guards import guard_inprocess_search as _gis
+from coordinator_core.guard_messages.alternative_record import (
+    AdaptableOffer,
+    AlternativeRecord,
+    CapabilityRef,
+    ReadyCommand,
+)
 from coordinator_core.temp_layout import managed_tempdir
 
 
@@ -213,38 +218,39 @@ class AskEvaluation:
     reasons: List[str] = field(default_factory=list)
 
 
-def evaluate_ask_hso(hso: Optional[Dict[str, Any]], *, alternative_required: bool = True) -> AskEvaluation:
-    if hso is None:
+def evaluate_ask(result: Any, *, alternative_required: bool = True) -> AskEvaluation:
+    """Grade an ASK-class emitter's result: an ``AlternativeRecord``, a legacy
+    ``{"hookSpecificOutput": ...}`` dict, or ``None`` (silence).
+
+    A record offers an alternative through a ``ReadyCommand``, ``AdaptableOffer``
+    or ``CapabilityRef`` member, or a rewrite's ``updated_input`` command. A
+    legacy dict has no members, so only its ``updatedInput`` command counts."""
+    if result is None:
         return AskEvaluation(fired=False, violated=False)
 
-    text = hso.get("permissionDecisionReason") or hso.get("additionalContext") or ""
+    if isinstance(result, AlternativeRecord):
+        text = "%s %s" % (result.summary, result.em_text or "")
+        updated = result.updated_input
+        has_member = any(
+            isinstance(m, (ReadyCommand, AdaptableOffer, CapabilityRef))
+            for m in altlive.em_visible_members(result)
+        )
+    else:
+        hso = result.get("hookSpecificOutput", {})
+        text = hso.get("permissionDecisionReason") or hso.get("additionalContext") or ""
+        updated = hso.get("updatedInput")
+        has_member = False
     reasons: List[str] = []
 
     if TODO_PLACEHOLDER_RE.search(text):
         reasons.append("emitted text carries a literal '[TODO:' placeholder in place of a concrete alternative")
 
-    updated = hso.get("updatedInput")
     has_updated_input = isinstance(updated, dict) and bool(updated.get("command"))
 
-    try:
-        alts = altlive.extract_alternatives(hso)
-    except altlive.UnclassifiableAlternative as exc:
-        reasons.append("alternative-shaped cue phrase present but unclassifiable: %s" % exc)
-        alts = []
-
-    # Axis B (a withheld/offered override incantation) is orthogonal to
-    # Axis A and never satisfies it on its own -- an OVERRIDE-kind
-    # extraction is a bypass, not an offered course of action, so it is
-    # excluded here. Without this exclusion, item 1's pre-fix message
-    # (which names no genuine alternative but DOES embed its
-    # `COORDINATOR_ALLOW_MULTIPROBE_BANNER` override note) would have
-    # wrongly graded as satisfying Axis A -- exactly the "syntactically
-    # compliant, substantively nonsense" shape the plan's own Problem
-    # section names.
-    non_override_alts = [a for a in alts if a.kind is not altlive.AlternativeKind.OVERRIDE]
-
-    if alternative_required and not non_override_alts and not has_updated_input:
-        reasons.append("ASK-class emission names no alternative-shaped signal (prose-only ask)")
+    # Axis B: an Override member is a bypass, not an offered course of
+    # action, and never satisfies Axis A; neither does an EscalationRoute.
+    if alternative_required and not has_member and not has_updated_input:
+        reasons.append("ASK-class emission names no alternative (prose-only ask)")
 
     return AskEvaluation(fired=True, violated=bool(reasons), reasons=reasons)
 
@@ -269,12 +275,11 @@ def _trigger_multiprobe_banner_still_violates() -> bool:
     result as ASK-class. Post-C4 this returns ``None`` (silence, not a
     violation) -- the row exists so a REGRESSION back to the pre-fix
     prose-only advisory fails loud."""
-    envelope = _dc.check_multiprobe_banner_rewrite(
+    result = _dc.check_multiprobe_banner_rewrite(
         "sed -n 1,5p a.py; echo ===; sed -n 6,9p b.py", "firing-shape-ratchet-probe"
     )
-    hso = envelope.get("hookSpecificOutput") if envelope else None
     spec = REGISTRY["check_multiprobe_banner_rewrite"]
-    return evaluate_ask_hso(hso, alternative_required=spec.alternative_required).violated
+    return evaluate_ask(result, alternative_required=spec.alternative_required).violated
 
 
 def _trigger_inprocess_search_still_violates() -> bool:
@@ -313,17 +318,15 @@ def _trigger_nudge_dispatch_brief_still_violates() -> bool:
 
 
 def _trigger_worktree_sentinel_still_violates() -> bool:
-    envelope = altlive.LIVE_TRIGGERS["block_worktree_sentinel_creation"]()
-    hso = envelope.get("hookSpecificOutput") if envelope else None
+    result = altlive.LIVE_TRIGGERS["block_worktree_sentinel_creation"]()
     spec = REGISTRY["block_worktree_sentinel_creation"]
-    return evaluate_ask_hso(hso, alternative_required=spec.alternative_required).violated
+    return evaluate_ask(result, alternative_required=spec.alternative_required).violated
 
 
 def _trigger_approval_sentinel_still_violates() -> bool:
-    envelope = altlive.LIVE_TRIGGERS["block_approval_sentinel_creation"]()
-    hso = envelope.get("hookSpecificOutput") if envelope else None
+    result = altlive.LIVE_TRIGGERS["block_approval_sentinel_creation"]()
     spec = REGISTRY["block_approval_sentinel_creation"]
-    return evaluate_ask_hso(hso, alternative_required=spec.alternative_required).violated
+    return evaluate_ask(result, alternative_required=spec.alternative_required).violated
 
 
 #: One hermetic, re-runnable "does this emitter still violate its declared

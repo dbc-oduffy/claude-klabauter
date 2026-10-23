@@ -7,6 +7,11 @@ import pytest
 
 from coordinator_core.bash_guards import guard_doctrine_surface_bash_write as guard
 from coordinator_core.write_guards._guard_level import DOCTRINE_SURFACE_ADVISORY
+from coordinator_core.guard_messages.testing import envelope_of
+
+
+def _enveloped(check):
+    return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 SURFACES = [
     "global-doctrine/CLAUDE.md",
@@ -24,16 +29,21 @@ HEREDOC = (
 
 @pytest.fixture(autouse=True)
 def _gate_off(monkeypatch):
+    from coordinator_core import machine_profile
+
     monkeypatch.setenv("MACHINE_LOCAL_COORDINATOR_FEATURE_DOCTRINE_EDIT_GATE", "off")
+    machine_profile.reset_cache()
+    yield
+    machine_profile.reset_cache()
 
 
 def _run(command, tool="Bash"):
-    return guard.check({"tool_name": tool, "tool_input": {"command": command}}, SURFACES)
+    return _enveloped(guard.check)({"tool_name": tool, "tool_input": {"command": command}}, SURFACES)
 
 
 def _text(result):
     hso = result["hookSpecificOutput"]
-    assert "permissionDecision" not in hso
+    assert hso.get("permissionDecision") != "deny"
     return hso["additionalContext"]
 
 
@@ -73,7 +83,10 @@ def test_advisory_is_about_two_lines():
 
 
 def test_gate_on_keeps_the_hard_deny(monkeypatch):
+    from coordinator_core import machine_profile
+
     monkeypatch.setenv("MACHINE_LOCAL_COORDINATOR_FEATURE_DOCTRINE_EDIT_GATE", "on")
+    machine_profile.reset_cache()
     hso = _run(HEREDOC)["hookSpecificOutput"]
     assert hso["permissionDecision"] == "deny"
 

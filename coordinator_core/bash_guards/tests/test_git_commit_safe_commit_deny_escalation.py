@@ -48,6 +48,11 @@ from coordinator_core.bash_guards import dispatch_checks
 from coordinator_core.win_portability import no_console_creationflags, no_console_passthrough_kwargs
 
 import pytest
+from coordinator_core.guard_messages.testing import envelope_of
+
+
+def _enveloped(check):
+    return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 pytestmark = [
     pytest.mark.spawns_process,
@@ -71,7 +76,7 @@ def _stage(repo, name, content="x"):
 
 
 def _verdict(cmd: str) -> str:
-    out = dispatch_checks.check_git_commit_safe_commit_advise(cmd, "sess-c7")
+    out = _enveloped(dispatch_checks.check_git_commit_safe_commit_advise)(cmd, "sess-c7")
     if out is None:
         return "none"
     decision = out["hookSpecificOutput"]["permissionDecision"]
@@ -82,7 +87,7 @@ def _verdict(cmd: str) -> str:
 
 
 def _rewritten(cmd: str) -> str:
-    out = dispatch_checks.check_git_commit_safe_commit_advise(cmd, "sess-c7")
+    out = _enveloped(dispatch_checks.check_git_commit_safe_commit_advise)(cmd, "sess-c7")
     return out["hookSpecificOutput"]["updatedInput"]["command"]
 
 
@@ -170,7 +175,7 @@ def test_rewrite_quotes_a_path_with_a_space(tmp_path):
 def test_rewrite_nag_names_the_rewritten_command(tmp_path):
     repo = _init_repo(tmp_path)
     cmd = _compound_cmd(repo, ["own.txt"])
-    out = dispatch_checks.check_git_commit_safe_commit_advise(cmd, "sess-c7")
+    out = _enveloped(dispatch_checks.check_git_commit_safe_commit_advise)(cmd, "sess-c7")
     context = out["hookSpecificOutput"]["additionalContext"]
     assert context.startswith("Rewritten:")
     assert cmd + " -- own.txt" in context
@@ -303,7 +308,7 @@ def test_amend_scoped_denies_when_head_is_not_this_session(tmp_path):
     subprocess.run(["git", "commit", "-m", "peer base"], cwd=repo, check=True, **no_console_passthrough_kwargs())
     _stage(repo, "extra.txt")
     cmd = 'git -C %s commit --amend --only -m "x" -- mine.txt' % shlex.quote(str(repo))
-    out = dispatch_checks.check_git_commit_safe_commit_advise(cmd, "sess-mine")
+    out = _enveloped(dispatch_checks.check_git_commit_safe_commit_advise)(cmd, "sess-mine")
     assert out is not None
     assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
 
@@ -314,7 +319,7 @@ def test_amend_scoped_denies_when_head_is_a_different_session(tmp_path):
     _commit_with_trailer(repo, "peer base", "sess-peer")
     _stage(repo, "extra.txt")
     cmd = 'git -C %s commit --amend --only -m "x" -- mine.txt' % shlex.quote(str(repo))
-    out = dispatch_checks.check_git_commit_safe_commit_advise(cmd, "sess-mine")
+    out = _enveloped(dispatch_checks.check_git_commit_safe_commit_advise)(cmd, "sess-mine")
     assert out is not None
     assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
 
@@ -334,7 +339,7 @@ def test_amend_bare_own_head_still_reaches_bare_commit_chain(tmp_path):
     _commit_with_trailer(repo, "my base", "sess-mine")
     _stage(repo, "foreign.txt")
     cmd = 'git -C %s commit --amend -m "x"' % shlex.quote(str(repo))
-    out = dispatch_checks.check_git_commit_safe_commit_advise(cmd, "sess-mine")
+    out = _enveloped(dispatch_checks.check_git_commit_safe_commit_advise)(cmd, "sess-mine")
     assert out is not None
     assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
 
@@ -345,7 +350,7 @@ def test_amend_missing_session_id_fails_closed(tmp_path):
     subprocess.run(["git", "commit", "-m", "base"], cwd=repo, check=True, **no_console_passthrough_kwargs())
     _stage(repo, "extra.txt")
     cmd = 'git -C %s commit --amend --only -m "x" -- mine.txt' % shlex.quote(str(repo))
-    out = dispatch_checks.check_git_commit_safe_commit_advise(cmd, "")
+    out = _enveloped(dispatch_checks.check_git_commit_safe_commit_advise)(cmd, "")
     assert out is not None
     assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
 
@@ -367,7 +372,7 @@ def test_amend_probe_failure_fails_closed_never_silent(monkeypatch, tmp_path):
         return (-1, "")
 
     monkeypatch.setattr(dispatch_checks._dc_git_probe, "_run_git", _boom)
-    out = dispatch_checks.check_git_commit_safe_commit_advise(cmd, "sess-mine")
+    out = _enveloped(dispatch_checks.check_git_commit_safe_commit_advise)(cmd, "sess-mine")
     assert out is not None
     assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
 
@@ -391,7 +396,7 @@ def test_amend_deny_reason_names_the_commit_and_notes_remedy(tmp_path):
     subprocess.run(["git", "commit", "-m", "peer subject line"], cwd=repo, check=True, **no_console_passthrough_kwargs())
     _stage(repo, "extra.txt")
     cmd = 'git -C %s commit --amend --only -m "x" -- mine.txt' % shlex.quote(str(repo))
-    out = dispatch_checks.check_git_commit_safe_commit_advise(cmd, "sess-mine")
+    out = _enveloped(dispatch_checks.check_git_commit_safe_commit_advise)(cmd, "sess-mine")
     reason = out["hookSpecificOutput"]["permissionDecisionReason"]
     assert "peer subject line" in reason
     assert "git notes add" in reason
@@ -405,7 +410,7 @@ def test_amend_does_not_regress_non_amend_commits(tmp_path):
 
 
 def _verdict_with_sid(cmd: str, sid: str) -> str:
-    out = dispatch_checks.check_git_commit_safe_commit_advise(cmd, sid)
+    out = _enveloped(dispatch_checks.check_git_commit_safe_commit_advise)(cmd, sid)
     if out is None:
         return "none"
     decision = out["hookSpecificOutput"]["permissionDecision"]
@@ -424,7 +429,7 @@ def test_solo_bare_commit_deny_reason_offers_scoped_forms(tmp_path):
     repo = _init_repo(tmp_path)
     _stage(repo, "foreign.txt")
     cmd = 'git -C %s commit -m "the subject"' % shlex.quote(str(repo))
-    out = dispatch_checks.check_git_commit_safe_commit_advise(cmd, "sess-c7")
+    out = _enveloped(dispatch_checks.check_git_commit_safe_commit_advise)(cmd, "sess-c7")
     reason = out["hookSpecificOutput"]["permissionDecisionReason"]
     assert "the subject" in reason
     assert "git commit -m" in reason and " -- <paths>" in reason
@@ -534,7 +539,7 @@ def test_deny_reason_names_the_shape_and_offers_a_runnable_scoped_form(tmp_path)
     _stage(repo, "foreign.txt")
     repo_q = shlex.quote(str(repo))
     cmd = 'git -C %s add -A && git -C %s commit -m "the subject"' % (repo_q, repo_q)
-    out = dispatch_checks.check_git_commit_safe_commit_advise(cmd, "sess-c7")
+    out = _enveloped(dispatch_checks.check_git_commit_safe_commit_advise)(cmd, "sess-c7")
     reason = out["hookSpecificOutput"]["permissionDecisionReason"]
     assert "the subject" in reason
     assert "git add -- <paths> && git commit -m" in reason
@@ -800,7 +805,7 @@ def test_bare_commit_mid_merge_is_advisory_not_deny(tmp_path):
 def test_bare_commit_mid_merge_advisory_names_the_continue_verb(tmp_path):
     repo = _repo_mid_merge(tmp_path)
     cmd = 'git -C %s commit -m "x"' % (shlex.quote(str(repo)),)
-    out = dispatch_checks.check_git_commit_safe_commit_advise(cmd, "sess-c7")
+    out = _enveloped(dispatch_checks.check_git_commit_safe_commit_advise)(cmd, "sess-c7")
     context = json.dumps(out["hookSpecificOutput"])
     assert "git merge --continue" in context
     assert "MERGE_HEAD" in context
@@ -871,7 +876,7 @@ def test_compound_unscoped_commit_is_caught_by_the_real_predicate_for_m_and_f(
     _stage(repo, "foreign.txt")
     cmd = _compound_cmd(repo, ["own.txt"], commit_flags)
     assert _verdict(cmd) == verdict
-    out = dispatch_checks.check_git_commit_safe_commit_advise(cmd, "sess-c7")
+    out = _enveloped(dispatch_checks.check_git_commit_safe_commit_advise)(cmd, "sess-c7")
     assert "no scope" in out["hookSpecificOutput"][reason_key]
     if "-F" in commit_flags:
         scoped_flags = commit_flags.replace(" -F -", " -F - -- own.txt", 1)

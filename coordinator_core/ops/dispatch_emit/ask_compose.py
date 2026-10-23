@@ -16,10 +16,11 @@ from pathlib import Path
 from typing import Callable, Optional, Sequence
 
 from coordinator_core.git.git_state import head_sha
+from coordinator_core.git.residue_classes import REPLY_KEY as _RESIDUE_REPLY_KEY, RESIDUE_DIRECTIVE as _RESIDUE_DIRECTIVE
 from coordinator_core.warp_fire import SUBMIT_WORKFLOW_NAME, fire_command
 from coordinator_core.ops.dispatch_emit import agent_sidecar as _sidecar
 from coordinator_core.ops.dispatch_emit import prompt_fragments as _prompt_fragments
-from coordinator_core.ops.dispatch_emit.nested_run_contract import STAGE_PENDING_KEY, STAGED_INLINE_SLOT
+from coordinator_core.ops.dispatch_emit.nested_run_contract import STAGE_PENDING_KEY, STAGED_INLINE_SLOT, STAGED_RESUME_KEY
 from coordinator_core.ops.dispatch_emit.reply_sidecar import (
     READ_STAGE_SIDECAR_JS,
     STAGE_REPLY_SCHEMA,
@@ -284,6 +285,10 @@ _MECHANICAL_EFFORT = "low"
 _MECHANICAL_AGENT_TYPE = "general-purpose"
 _MECHANICAL_MODEL = "haiku"
 _PLAN_AUTHOR_AGENT_TYPE = "coordinator:plan-author"
+#: apply-rulings and pull-split: light judgment (edit a plan in place per a recorded ruling, slice rows by
+#: disjoint writes); haiku loses the census/corrects/declared_absent semantics the edit must preserve.
+_RULINGS_AGENT_TYPE = _MECHANICAL_AGENT_TYPE
+_RULINGS_MODEL = "sonnet"
 _PLAN_AUTHOR_EFFORT = "low"
 _XL_EXIT_EFFORT = "low"
 #: Models of DoE-defined types (commit, docs executor, sizing-scout) come from `emit._AGENT_MODELS`.
@@ -320,6 +325,7 @@ _GATE_SCHEMA = _obj(
         "route": _STR,
         "resume_plan": {"type": ["string", "null"]},
         "resume_rows": {"type": ["array", "null"], "items": _STR},
+        "pending_rulings": {"type": ["array", "null"], "items": _STR},
         "spine_plan": {"type": ["string", "null"]},
         RESUME_LEDGER_KEY: {"type": ["object", "null"]},
         DESIGN_BRIEF_KEY: {"type": ["string", "null"]},
@@ -423,6 +429,7 @@ _COMMIT_SCHEMA = _obj(
         "siblings": {"type": ["object", "array", "null"]},
         "run_artifacts": {"type": ["object", "null"]},
         "run_artifact_residue": {"type": ["object", "null"]},
+        _RESIDUE_REPLY_KEY: {"type": ["array", "null"], "items": {"type": "string"}},
     },
 )
 _DOC_PATHS_JS = (
@@ -704,6 +711,15 @@ _ADOPT_STAGED_INLINE_JS = """function _adoptStagedInline(h) {
   }
 }
 """
+# The inline's resume block says the launcher already sized, planned and staged: the twin skips every pre-stage leg.
+# Trap: the guard keys on the block alone, never on arm; the manifest's verify is `_adoptStageReply`'s, so a failed
+# verify halts with `_STAGE_SIDECAR_HALT` and the legs stay skipped.
+_STAGED_RESUME_JS = (
+    "  const _STAGED_RESUME = (() => { const s = _STAGED_INLINE; "
+    "if (!s || typeof s !== 'object' || Array.isArray(s)) return null; "
+    f"const r = s.{STAGED_RESUME_KEY}; "
+    "return (r && typeof r === 'object' && typeof r.arm === 'string') ? r : null; })();\n"
+)
 _ADOPT_STAGE_REPLY_TAIL_JS = (
     f"    if (got.fail) {{ if (!_diskHalt) _diskHalt = {_js_string_literal(_STAGE_SIDECAR_HALT)} + got.fail; return; }}\n"
     "    const gap = _wholeManifestGap(got.manifest);\n"
@@ -718,9 +734,13 @@ _ADOPT_STAGE_REPLY_LAUNCHER_CHILD_JS = _ADOPT_STAGE_REPLY_HEAD_JS + _ADOPT_STAGE
 def _stage_reply_js(launcher_child: bool = False) -> str:
     """The script block that turns a stage reply into `_stagedManifest`: the runtime reads the sidecar's reader
     with no agent, and the text is verified against the handle before `JSON.parse`. `launcher_child` renders the
-    reader-free form: the staged twin carries the verified text in the `STAGED_INLINE_SLOT` line."""
+    reader-free form: the staged twin carries the verified text in the `STAGED_INLINE_SLOT` line, and a resume block
+    there (`STAGED_RESUME_KEY`) is read into `_STAGED_RESUME`."""
     if launcher_child:
-        return VERIFY_REPLY_JS + STAGED_INLINE_SLOT + "\n" + _ADOPT_STAGED_INLINE_JS + _ADOPT_STAGE_REPLY_LAUNCHER_CHILD_JS
+        return (
+            VERIFY_REPLY_JS + STAGED_INLINE_SLOT + "\n" + _ADOPT_STAGED_INLINE_JS + _STAGED_RESUME_JS
+            + _ADOPT_STAGE_REPLY_LAUNCHER_CHILD_JS
+        )
     return VERIFY_REPLY_JS + READ_STAGE_SIDECAR_JS + _ADOPT_STAGE_REPLY_JS
 
 
@@ -1681,7 +1701,7 @@ def compose_ask_script(
             f"{head}\n\n{anchor}\n\n",
             f"Run `{_INVOKE} {OP_ASK_GATE} '",
             _gate_payload(),
-            "'` and return its JSON reply verbatim as arm, halt, baton and (when present) resume_plan, resume_rows, resume_ledger and spine_plan, plus design_brief and design_route when present; "
+            "'` and return its JSON reply verbatim as arm, halt, baton and (when present) resume_plan, resume_rows, resume_ledger, pending_rulings and spine_plan, plus design_brief and design_route when present; "
             "when the command is denied or fails, return halt {kind: 'refusal', reason: <its error text>}, never arm "
             "and halt both null. Also read the sizing at ",
             "js:_sizingRel",
@@ -1699,7 +1719,33 @@ def compose_ask_script(
             effort=_MECHANICAL_EFFORT, run_id=run_id,
         )
 
+    # A launcher child whose twin carries a resume block runs from the inline manifest: every pre-stage leg sits
+    # behind `_NO_RESUME`, and `_gate` is seeded from the block instead of a leg's reply.
+    _NO_RESUME = "!_STAGED_RESUME" if launcher_child else "true"
+    _gate_seed_js = (
+        "{ arm: _STAGED_RESUME.arm, halt: null, baton: null, tshirt: null, route: null, "
+        f"resume_plan: (_STAGED_RESUME.arm !== {_lit(ARM_XS)} && typeof _STAGED_RESUME.plan_rel === 'string' "
+        "&& _STAGED_RESUME.plan_rel) ? _STAGED_RESUME.plan_rel : null, "
+        "resume_rows: null, resume_ledger: null, pending_rulings: null, spine_plan: null, "
+        f"{DESIGN_BRIEF_KEY}: null, {DESIGN_ROUTE_KEY}: null, {_ROUTE_VERDICT_KEY}: null }}"
+    )
+    if launcher_child:
+        b.append(
+            "  if (_STAGED_RESUME) {\n"
+            "    if (typeof _STAGED_RESUME.sizing_rel === 'string' && _STAGED_RESUME.sizing_rel) "
+            "_sizingRel = _STAGED_RESUME.sizing_rel;\n"
+            f"    if (_STAGED_RESUME.arm !== {_lit(ARM_XS)} && typeof _STAGED_RESUME.plan_rel === 'string' "
+            "&& _STAGED_RESUME.plan_rel) _planRel = _STAGED_RESUME.plan_rel;\n"
+            "    await _adoptStageReply({ manifest_handle: _STAGED_INLINE.handle });\n"
+            "  }"
+        )
     if sized_in_run:
+        if launcher_child:
+            b.append("  let _scouted = null;")
+            b.append("  let _scoutClean = false;")
+            b.append("  let _pmExit = null;")
+            b.append("  let _rewordStaged = false;")
+            b.append("  if (!_STAGED_RESUME) {")
         b.append("  phase('size');")
         _sizings_prefix = Path(home_dir(".", "sizings")).as_posix() + "/"
         # One path form for both the scout's `--write` template and the runtime `_sizingPathFor`: a
@@ -1742,7 +1788,7 @@ def compose_ask_script(
             "with <name> filled as above and <your writes> replaced by the JSON array you return as writes:\n\n"
             + gate_template
             + "\n\nand return its JSON reply verbatim as arm, halt, baton, sizing_path and (when present) resume_plan, "
-            f"resume_rows, resume_ledger and spine_plan, plus design_brief and design_route{_VERDICT_RETURN if has_route_pref else ''} when present; then read estimate.tshirt and route from the sizing at {sizing_write_rel} "
+            f"resume_rows, resume_ledger, pending_rulings and spine_plan, plus design_brief and design_route{_VERDICT_RETURN if has_route_pref else ''} when present; then read estimate.tshirt and route from the sizing at {sizing_write_rel} "
             "and return them as tshirt and route (tshirt replaces your own judged value). "
             "On a non-zero exit_code run no gate command and return no arm or halt."
         )
@@ -1859,13 +1905,13 @@ def compose_ask_script(
             scout_closing_tail,
         )
         b.append(
-            "  const _scouted = _assembleProven(_scoutedFirst) ? _scoutedFirst : { ..._scoutedFirst, ...(await "
+            "  " + ("" if launcher_child else "const ") + "_scouted = _assembleProven(_scoutedFirst) ? _scoutedFirst : { ..._scoutedFirst, ...(await "
             f"{_agent(scout_prompt + ' + (_scoutHasValues(_scoutedFirst) ? (' + values_retry + ') : ' + _lit(SCOUT_DID_NOT_ASSEMBLE_RETRY) + ')', label='size-retry', phase='size', agent_type=SIZING_SCOUT_AGENT_TYPE, schema=_ASK_SCOUT_STAGED_SCHEMA if fold_stage else ASK_SCOUT_SCHEMA, run_id=run_id)}) }};"
         )
         b.append("  const _scoutAssembled = Number.isInteger(_scouted.exit_code);")
         # Captured before the reword path mutates `_scouted`: a folded manifest or falsifier is
         # valid only for the criterion and sizing the scout's own gate reply judged.
-        b.append("  const _scoutClean = _scouted.exit_code === 0 && !_scouted.halt && !!_scouted.arm;")
+        b.append(f"  {'' if launcher_child else 'const '}_scoutClean = _scouted.exit_code === 0 && !_scouted.halt && !!_scouted.arm;")
         b.append("  _writes = _scouted.writes ?? [];")
         b.append("  _gated = _scouted.gated ?? [];")
         b.append("  const _sizingPath = _boundRelOf(_scouted.sizing_path) ? REPO_ROOT + '/' + _scouted.sizing_path : _sizingPathFor(_scouted);")
@@ -1880,7 +1926,7 @@ def compose_ask_script(
             f"Do not edit, retry or repair it. (2) Only when exit_code is 0, run `{_INVOKE} {OP_ASK_GATE} '",
             _gate_payload(sizing_js=_reword_sizing_js),
             "'` and return its JSON reply verbatim as arm, halt, baton, sizing_path and (when present) resume_plan, resume_rows, resume_ledger, "
-            f"spine_plan, design_brief and design_route{_VERDICT_RETURN if has_route_pref else ''}; when the command is denied or fails, return halt {{kind: 'refusal', reason: <its error "
+            f"pending_rulings, spine_plan, design_brief and design_route{_VERDICT_RETURN if has_route_pref else ''}; when the command is denied or fails, return halt {{kind: 'refusal', reason: <its error "
             "text>}, never arm and halt both null. Also read the sizing at ",
             "js:" + _reword_sizing_js,
             " and return its estimate.tshirt as tshirt and its route as route. On a non-zero exit_code run no "
@@ -1912,7 +1958,8 @@ def compose_ask_script(
             "js:String(_scouted.exit_criterion ?? '')",
             *reword_closing,
         )
-        b.append("  let _rewordStaged = false;")
+        if not launcher_child:
+            b.append("  let _rewordStaged = false;")
         b.append(
             "  const _asmOut = String(_scouted.stderr ?? '') + '\\n' + String(_scouted.stdout ?? '');"
         )
@@ -1936,7 +1983,7 @@ def compose_ask_script(
         b.append(
             "      Object.assign(_scouted, { arm: _reworded.arm ?? null, halt: _reworded.halt ?? null, "
             "baton: _reworded.baton ?? null, sizing_path: _sizingRel, tshirt: _reworded.tshirt, route: _reworded.route, "
-            "resume_plan: _reworded.resume_plan ?? null, resume_rows: _reworded.resume_rows ?? null, resume_ledger: _reworded.resume_ledger ?? null, spine_plan: _reworded.spine_plan ?? null, "
+            "resume_plan: _reworded.resume_plan ?? null, resume_rows: _reworded.resume_rows ?? null, resume_ledger: _reworded.resume_ledger ?? null, pending_rulings: _reworded.pending_rulings ?? null, spine_plan: _reworded.spine_plan ?? null, "
             f"{DESIGN_BRIEF_KEY}: _reworded.{DESIGN_BRIEF_KEY} ?? null, "
             f"{DESIGN_ROUTE_KEY}: _reworded.{DESIGN_ROUTE_KEY} ?? null, "
             f"{_ROUTE_VERDICT_KEY}: _reworded.{_ROUTE_VERDICT_KEY} ?? null, "
@@ -1977,19 +2024,24 @@ def compose_ask_script(
             "detail: [_scouted.stdout, _scouted.stderr].map((s) => String(s ?? '').trim())"
             ".filter((s) => s).join('\\n').slice(0, 600), run_id: _runId }; }"
         )
-        b.append(f"  const _pmExit = (_decision && _decision[{_lit(PM_EXIT_QUESTION_KEY)}]) || null;")
+        b.append(
+            f"  {'' if launcher_child else 'const '}_pmExit = (_decision && _decision[{_lit(PM_EXIT_QUESTION_KEY)}]) || null;"
+        )
+        if launcher_child:
+            b.append("  }")
 
     b.append("  phase('gate');")
     if sized_in_run:
         # The scout's closing acts ran the gate; a failed assemble leaves nothing to carry.
         b.append(
-            "  let _gate = _halted ? { arm: null, halt: null } : { arm: _scouted.arm ?? null, "
+            "  let _gate = " + ("_STAGED_RESUME ? " + _gate_seed_js + " : (" if launcher_child else "")
+            + "_halted ? { arm: null, halt: null } : { arm: _scouted.arm ?? null, "
             "halt: _scouted.halt ?? null, baton: _scouted.baton ?? null, tshirt: _scouted.tshirt, "
             "route: _scouted.route, resume_plan: _scouted.resume_plan ?? null, "
-            "resume_rows: _scouted.resume_rows ?? null, resume_ledger: _scouted.resume_ledger ?? null, spine_plan: _scouted.spine_plan ?? null, "
+            "resume_rows: _scouted.resume_rows ?? null, resume_ledger: _scouted.resume_ledger ?? null, pending_rulings: _scouted.pending_rulings ?? null, spine_plan: _scouted.spine_plan ?? null, "
             f"{DESIGN_BRIEF_KEY}: _scouted.{DESIGN_BRIEF_KEY} ?? null, "
             f"{DESIGN_ROUTE_KEY}: _scouted.{DESIGN_ROUTE_KEY} ?? null, "
-            f"{_ROUTE_VERDICT_KEY}: _scouted.{_ROUTE_VERDICT_KEY} ?? null }};"
+            f"{_ROUTE_VERDICT_KEY}: _scouted.{_ROUTE_VERDICT_KEY} ?? null }}" + (")" if launcher_child else "") + ";"
         )
         if fold_falsifier:
             b.append("  let _scoutFalsifier = null;")
@@ -2009,10 +2061,13 @@ def compose_ask_script(
                 schema=FOOTPRINT_SCHEMA, run_id=run_id,
             )
             b.append(
-                f"  if (!_writes.length) {{ const _fp = await {fp_call}; "
+                f"  if ({_NO_RESUME} && !_writes.length) {{ const _fp = await {fp_call}; "
                 f"_writes = (Array.isArray(_fp?.writes) ? _fp.writes : []).filter({admit_writes_js()}); }}"
             )
-        b.append(f"  let _gate = await {_gate_agent_call('gate', 'gate', stage_act=True)};")
+        _gate_call = f"await {_gate_agent_call('gate', 'gate', stage_act=True)}"
+        if launcher_child:
+            _gate_call = f"_STAGED_RESUME ? {_gate_seed_js} : ({_gate_call})"
+        b.append(f"  let _gate = {_gate_call};")
     if fold_stage:
         # Adopted only under the plan folds' guard (rows array, no error), for the arms the act covers.
         clean_js = "(_scoutClean || _rewordStaged)" if sized_in_run else "!_gate.halt"
@@ -2033,7 +2088,7 @@ def compose_ask_script(
         return [
             " When, and only when, your verdict is 'ruled', run this one command once, with " + fields
             + " set in its `record` member, and return its JSON reply verbatim as arm, halt, baton, "
-            "recorded and (when present) resume_plan, resume_rows, resume_ledger and spine_plan, beside your verdict, pmOnly and ruling. "
+            "recorded and (when present) resume_plan, resume_rows, resume_ledger, pending_rulings and spine_plan, beside your verdict, pmOnly and ruling. "
             f"On 'pm-only' run nothing. `{_INVOKE} {OP_ASK_GATE} '",
             _gate_payload(record_js),
             "'` That command is the only way you write the sizing: never edit it by hand.",
@@ -2120,14 +2175,14 @@ def compose_ask_script(
             schema=_ruling_schema(_XL_SCHEMA), effort=_XL_EXIT_EFFORT, run_id=run_id,
         )
         # A record writes neither estimate.tshirt nor route, so both carry over from the first gate.
-        take_gate = "_gate = { ..._gate, arm: %s.arm, halt: %s.halt, baton: %s.baton ?? null, resume_plan: %s.resume_plan ?? null, resume_rows: %s.resume_rows ?? null, resume_ledger: %s.resume_ledger ?? null, spine_plan: %s.spine_plan ?? null, design_route: %s.design_route ?? _gate.design_route ?? null };"
+        take_gate = "_gate = { ..._gate, arm: %s.arm, halt: %s.halt, baton: %s.baton ?? null, resume_plan: %s.resume_plan ?? null, resume_rows: %s.resume_rows ?? null, resume_ledger: %s.resume_ledger ?? null, pending_rulings: %s.pending_rulings ?? null, spine_plan: %s.spine_plan ?? null, design_route: %s.design_route ?? _gate.design_route ?? null };"
         irreversible = f"new RegExp({_lit(IRREVERSIBLE_GATE_SOURCE)}, 'i')"
         b.append("  let _splitSlices = null;")
         b.append("  let _splitFan = null;")
         b.append(
             # Each round discharges one halt in-run and re-gates: an XL sizing in ceo mode can
             # owe both the exit pick and the exit-criterion acceptance. No progress ends the loop.
-            "  for (let _round = 0; _round < 3 && _gate.halt; _round++) {\n"
+            f"  for (let _round = 0; _round < 3 && {_NO_RESUME} && _gate.halt; _round++) {{\n"
             "    let _progressed = false;\n"
             f"    if (_gate.halt.kind === {_lit(HALT_TOUCHPOINT)}) {{\n"
             "    phase('accept');\n"
@@ -2136,7 +2191,7 @@ def compose_ask_script(
             f"    const _apmGated = {irreversible}.test(_apm?.ruling ?? '');\n"
             "    if (_apm && _apm.verdict === 'ruled' && _apm.pmOnly !== true && !_apmGated && _apm.ruling "
             "&& _apm.recorded && _apm.recorded.ok === true && 'arm' in _apm && 'halt' in _apm) {\n"
-            f"      {take_gate % (('_apm',) * 8)}\n"
+            f"      {take_gate % (('_apm',) * 9)}\n"
             + (
                 f"      if (!_gate.halt && _gate.arm === {_lit(ARM_XS)}) {{ await _adoptStageReply(_apm.stage_reply); }}\n"
                 if fold_stage
@@ -2156,7 +2211,7 @@ def compose_ask_script(
             "    if (_xl && _xl.verdict === 'ruled' && _xl.pmOnly !== true && !_xlGated && _xl.ruling "
             "&& ['roadmap', 'accept_multi_session', 'split'].includes(_xl.pick) "
             "&& _xl.recorded && _xl.recorded.ok === true && 'arm' in _xl && 'halt' in _xl) {\n"
-            f"      {take_gate % (('_xl',) * 8)}\n"
+            f"      {take_gate % (('_xl',) * 9)}\n"
             "      if (_xl.pick === 'split' && Array.isArray(_xl.slices)) { _splitSlices = _xl.slices; _splitFan = _xl; }\n"
             "      _progressed = true;\n"
             "    }\n"
@@ -2370,7 +2425,7 @@ def compose_ask_script(
         *(plan_falsifier_parts if fold_falsifier else ()),
         *(stage_fold(" Once the plan is filled and carries no marker,") if fold_stage else ()),
     )
-    b.append(f"  if (!_halted && _gate.arm === {_lit(ARM_S)}) {{")
+    b.append(f"  if (!_halted && {_NO_RESUME} && _gate.arm === {_lit(ARM_S)}) {{")
     b.append("    if (_resumeLedger) { /* planRel already the ledger plan */ } else if (_gate.resume_plan) { _planRel = _gate.resume_plan; } else {")
     b.append("    phase('plan');")
     plan_call = _agent(
@@ -2389,7 +2444,7 @@ def compose_ask_script(
     b.append("    }")
     b.append("  }")
     if blitz_fn:
-        b.append(f"  if (!_halted && _gate.arm === {_lit(ARM_M_PLUS)}) {{")
+        b.append(f"  if (!_halted && {_NO_RESUME} && _gate.arm === {_lit(ARM_M_PLUS)}) {{")
         b.append("    phase('plan');")
         # gateReportPath binds from the runtime `_sizingRel`: a raw ask's sizing is minted in-run.
         blitz_spread = f"...{json.dumps(plan_blitz_args, sort_keys=True)}, " if plan_blitz_args else ""
@@ -2485,13 +2540,19 @@ def compose_ask_script(
             "Never scaffold a new plan, never change its path, and never delete a census premise or a "
             "review finding to clear one. Return the plan's repo-relative path as plan_rel and the "
             "ruling ids you applied as applied (an empty list, with no edit, when the ledger carries "
-            "no ruling)." + ledger_clause,
+            "no ruling). Apply rulings: ",
+            "js:_gate.pending_rulings ? _gate.pending_rulings.join(', ') : '(unlisted: read the ledger)'",
+            "." + ledger_clause,
         )
         ruled_call = _agent(
-            ruled_prompt, label="apply-rulings", phase="plan", agent_type=_PLAN_AUTHOR_AGENT_TYPE,
-            schema=_RULED_SCHEMA, effort=_PLAN_AUTHOR_EFFORT, run_id=run_id,
+            ruled_prompt, label="apply-rulings", phase="plan", agent_type=_RULINGS_AGENT_TYPE,
+            agent_model=_RULINGS_MODEL, schema=_RULED_SCHEMA, effort=_MECHANICAL_EFFORT, run_id=run_id,
         )
-        b.append(f"    if (_gate.resume_plan) {{ const _ruled = await {ruled_call}; _gate = {{ ..._gate, resume_rulings: (_ruled?.applied ?? []) }}; }}")
+        b.append(
+            "    if (_gate.resume_plan && (_gate.pending_rulings == null || _gate.pending_rulings.length > 0)) "
+            f"{{ const _ruled = await {ruled_call}; _gate = {{ ..._gate, resume_rulings: (_ruled?.applied ?? []) }}; "
+            "} else if (_gate.resume_plan) { _gate = { ..._gate, resume_rulings: [] }; }"
+        )
         b.append(f"    const _blitz = {_blitz_call('_gate.resume_plan ?? _spineFallback ?? null')}")
         b.append("    const _ready = (_blitz?.ready ?? [])[0];")
         if fold_stage:
@@ -2565,8 +2626,8 @@ def compose_ask_script(
             + pull_split_prompt("_pullPlan", "_sizingRel")
         )
         split_call = _agent(
-            split_prompt, label="pull-split", phase="plan", agent_type=_PLAN_AUTHOR_AGENT_TYPE,
-            schema=_PULL_SPLIT_SCHEMA, effort=_PLAN_AUTHOR_EFFORT, run_id=run_id,
+            split_prompt, label="pull-split", phase="plan", agent_type=_RULINGS_AGENT_TYPE,
+            agent_model=_RULINGS_MODEL, schema=_PULL_SPLIT_SCHEMA, effort=_MECHANICAL_EFFORT, run_id=run_id,
         )
         b.append(
             "      if (_revised?.split_recommended === true && _splitSlices == null "
@@ -3589,8 +3650,8 @@ def _commit_stage_call(
         f"doc_paths: {_DOC_PATHS_JS} }})",
         f"\n\n{LAND_RUN_OP} enumerates every file this run authored and lands it; you run the "
         "one command and return its reply.\n\nReturn from its JSON reply committed, sha, already_landed, error, refused, "
-        "sizing_shipped, close, fanout, siblings, run_artifacts and run_artifact_residue, verbatim (null "
-        "where absent). Run nothing else.",
+        f"sizing_shipped, close, fanout, siblings, run_artifacts, run_artifact_residue and {_RESIDUE_REPLY_KEY}, verbatim (null "
+        f"where absent). A non-empty {_RESIDUE_REPLY_KEY} is returned with \"{_RESIDUE_DIRECTIVE}\". Run nothing else.",
     )
     # Stays its own agent: a commit is denied to every agent but git-commit-agent
     # (`block_subagent_commit` run-token leg), so it cannot fold into the docs agent's last act.
@@ -3630,7 +3691,8 @@ def _halt_record_commit_fn(
         "plan_path: _nextAction.params.plan_path ?? _planRel ?? null } } : {}) })",
         f"\n\n{LAND_RUN_OP} enumerates every file this run authored and lands it; you run the "
         "one command and return its reply.\n\nReturn from its JSON reply committed, sha, already_landed, error, refused, "
-        "run_artifacts and run_artifact_residue, verbatim (null where absent). Run nothing else.",
+        f"run_artifacts, run_artifact_residue and {_RESIDUE_REPLY_KEY}, verbatim (null where absent). "
+        f"A non-empty {_RESIDUE_REPLY_KEY} is returned with \"{_RESIDUE_DIRECTIVE}\". Run nothing else.",
     )
     call = _agent(
         prompt, label="halt-commit", phase="commit", agent_type=_COMMIT_AGENT_TYPE,

@@ -310,7 +310,32 @@ def _deny_reason(cmd: str, reason_kind: str, reason_class: str) -> str:
     )
 
 
-def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def _deny_record(cmd: str, reason_kind: str, reason_class: str):
+    """Deny record; `em_text` keeps the EM render the legacy text byte for
+    byte, the typed members drive the subagent render."""
+    from coordinator_core.guard_messages.alternative_record import (
+        AlternativeRecord,
+        EscalationRoute,
+        ReadyCommand,
+    )
+
+    reason = _deny_reason(cmd, reason_kind, reason_class)
+    return AlternativeRecord(
+        verdict_kind="deny",
+        guard_name="block-fleet-delegation-creation",
+        summary=reason,
+        em_text=reason,
+        members=(
+            ReadyCommand(text="cat, ls, stat, rm, git status, git log"),
+            EscalationRoute(
+                report_what="the blocked command to your EM",
+                authorize_what="the delegation grant (the PM runs `coordinator-delegation grant ...`)",
+            ),
+        ),
+    )
+
+
+def check(payload: Dict[str, Any]):
     tool_name = payload.get("tool_name") or ""
     if tool_name not in MATCHERS:
         return None
@@ -326,10 +351,4 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if not deny:
         return None
 
-    return {
-        "hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "permissionDecision": "deny",
-            "permissionDecisionReason": _deny_reason(cmd, reason_kind, reason_class),
-        }
-    }
+    return _deny_record(cmd, reason_kind, reason_class)

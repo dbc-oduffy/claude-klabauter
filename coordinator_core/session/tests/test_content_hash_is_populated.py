@@ -27,6 +27,7 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.bash_guards import dispatch_checks
+from coordinator_core.guard_messages.testing import envelope_of
 from coordinator_core.session import core, touch_record
 from coordinator_core.win_portability import no_console_creationflags
 
@@ -94,7 +95,7 @@ class TestHookPathPopulatesHashAndRefusalFires:
             'git commit -m "add foo"', sid, cwd=root
         )
         assert result is not None
-        out = result["hookSpecificOutput"]
+        out = envelope_of(result, "em")["hookSpecificOutput"]
         assert out["permissionDecision"] == "deny"
         assert "foreign hunk" in out["permissionDecisionReason"].lower()
         assert "foo.txt" in out["permissionDecisionReason"]
@@ -156,7 +157,7 @@ class TestBashReconcilerPopulatesHashAndRefusalFires:
             'git commit -m "add bar"', sid, cwd=root
         )
         assert result is not None
-        out = result["hookSpecificOutput"]
+        out = envelope_of(result, "em")["hookSpecificOutput"]
         assert out["permissionDecision"] == "deny"
         assert "foreign hunk" in out["permissionDecisionReason"].lower()
         assert "bar.txt" in out["permissionDecisionReason"]

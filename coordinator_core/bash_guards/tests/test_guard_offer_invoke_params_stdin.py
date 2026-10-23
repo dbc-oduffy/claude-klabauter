@@ -17,6 +17,11 @@ from coordinator_core.bash_guards.guard_offer_invoke_params_stdin import (
     check_offer_invoke_params_stdin,
 )
 from coordinator_core.win_portability import no_console_creationflags
+from coordinator_core.guard_messages.testing import envelope_of
+
+
+def _enveloped(check):
+    return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 pytestmark = [
     pytest.mark.spawns_process,
@@ -48,10 +53,10 @@ def _rewritten(verdict) -> str:
 
 def test_the_live_failure_shape_is_rewritten_not_denied():
     cmd = _cmd_with(json.dumps(_HAZARDOUS_PAYLOAD))
-    verdict = check_offer_invoke_params_stdin(cmd)
+    verdict = _enveloped(check_offer_invoke_params_stdin)(cmd)
     assert verdict is not None
     out = verdict["hookSpecificOutput"]
-    assert out["permissionDecision"] == "allow"
+    assert out.get("permissionDecision") != "deny" and "updatedInput" in out
     assert "--params-file - <<'CCJSON'" in out["updatedInput"]["command"]
 
 
@@ -69,26 +74,26 @@ def test_the_live_failure_shape_is_rewritten_not_denied():
 def test_powershell_call_operator_prefixed_invocation_rewritten_same_as_bash():
     payload = json.dumps(_HAZARDOUS_PAYLOAD)
     cmd = "& " + _cmd_with(payload)
-    verdict = check_offer_invoke_params_stdin(cmd)
+    verdict = _enveloped(check_offer_invoke_params_stdin)(cmd)
     assert verdict is not None
     out = verdict["hookSpecificOutput"]
-    assert out["permissionDecision"] == "allow"
+    assert out.get("permissionDecision") != "deny" and "updatedInput" in out
     assert "--params-file - <<'CCJSON'" in out["updatedInput"]["command"]
 
 
 def test_powershell_semicolon_chained_invocation_rewritten_same_as_bash():
     payload = json.dumps(_HAZARDOUS_PAYLOAD)
     cmd = "Set-Location C:\\repo; " + _cmd_with(payload)
-    verdict = check_offer_invoke_params_stdin(cmd)
+    verdict = _enveloped(check_offer_invoke_params_stdin)(cmd)
     assert verdict is not None
     out = verdict["hookSpecificOutput"]
-    assert out["permissionDecision"] == "allow"
+    assert out.get("permissionDecision") != "deny" and "updatedInput" in out
     assert "--params-file - <<'CCJSON'" in out["updatedInput"]["command"]
 
 
 def test_rewrite_preserves_payload_bytes_exactly():
     payload = json.dumps(_HAZARDOUS_PAYLOAD)
-    rewritten = _rewritten(check_offer_invoke_params_stdin(_cmd_with(payload)))
+    rewritten = _rewritten(_enveloped(check_offer_invoke_params_stdin)(_cmd_with(payload)))
     body = rewritten.split("<<'CCJSON'", 1)[1]
     heredoc = body.split("\n", 1)[1].rsplit("\nCCJSON", 1)[0]
     assert heredoc == payload
@@ -98,7 +103,7 @@ def test_rewrite_preserves_payload_bytes_exactly():
 def test_rewrite_keeps_flags_after_the_payload_and_places_heredoc_before_a_pipe():
     payload = json.dumps(_HAZARDOUS_PAYLOAD)
     rewritten = _rewritten(
-        check_offer_invoke_params_stdin(
+        _enveloped(check_offer_invoke_params_stdin)(
             _cmd_with(payload, tail=" --repo /r --bare 2>&1 | tail -5")
         )
     )
@@ -127,7 +132,7 @@ def test_rewritten_command_is_valid_shell_and_reaches_the_op():
         "%s -m coordinator_core.invoke ping '%s'%s --bare"
         % (shlex.quote(sys.executable), payload, _UNSTAMPED)
     )
-    verdict = check_offer_invoke_params_stdin(cmd)
+    verdict = _enveloped(check_offer_invoke_params_stdin)(cmd)
     assert verdict is not None
     proc = subprocess.run(
         ["bash", "-c", _rewritten(verdict)],
@@ -155,7 +160,7 @@ def test_rewritten_command_is_valid_shell_for_and_semicolon_and_background(tail)
         "%s -m coordinator_core.invoke ping '%s'%s%s"
         % (shlex.quote(sys.executable), payload, _UNSTAMPED, tail)
     )
-    verdict = check_offer_invoke_params_stdin(cmd)
+    verdict = _enveloped(check_offer_invoke_params_stdin)(cmd)
     assert verdict is not None
     proc = subprocess.run(
         ["bash", "-c", _rewritten(verdict)],
@@ -177,27 +182,27 @@ def test_original_command_is_the_shell_syntax_error_this_guard_exists_for():
 
 
 def test_shell_safe_payload_is_left_alone():
-    assert check_offer_invoke_params_stdin(
+    assert _enveloped(check_offer_invoke_params_stdin)(
         _cmd_with('{"dry_run": true, "limit": 5}')
     ) is None
 
 
 def test_oversized_payload_is_rewritten_even_without_an_apostrophe():
     payload = json.dumps({"blob": "x" * 9000})
-    verdict = check_offer_invoke_params_stdin(_cmd_with(payload))
+    verdict = _enveloped(check_offer_invoke_params_stdin)(_cmd_with(payload))
     assert verdict is not None
     assert "argv ceiling" in verdict["hookSpecificOutput"]["additionalContext"]
 
 
 def test_double_quoted_payload_is_left_alone():
-    assert check_offer_invoke_params_stdin(
+    assert _enveloped(check_offer_invoke_params_stdin)(
         'python3 -m coordinator_core.invoke ping "{\\"note\\": \\"it\'s\\"}" --bare'
     ) is None
 
 
 def test_multiline_command_denies_with_the_shape_named():
     cmd = _cmd_with(json.dumps(_HAZARDOUS_PAYLOAD), tail=" --repo /r \\\n  --bare")
-    verdict = check_offer_invoke_params_stdin(cmd)
+    verdict = _enveloped(check_offer_invoke_params_stdin)(cmd)
     assert verdict is not None
     out = verdict["hookSpecificOutput"]
     assert out["permissionDecision"] == "deny"
@@ -205,26 +210,26 @@ def test_multiline_command_denies_with_the_shape_named():
 
 
 def test_already_using_params_file_is_untouched():
-    assert check_offer_invoke_params_stdin(
+    assert _enveloped(check_offer_invoke_params_stdin)(
         "python3 -m coordinator_core.invoke ping --params-file /tmp/p.json --bare"
     ) is None
 
 
 def test_non_invoke_command_is_untouched():
-    assert check_offer_invoke_params_stdin(
+    assert _enveloped(check_offer_invoke_params_stdin)(
         "curl -d '{\"a\": \"it's fine\"}' https://example.invalid"
     ) is None
 
 
 def test_non_json_object_payload_is_untouched():
-    assert check_offer_invoke_params_stdin(
+    assert _enveloped(check_offer_invoke_params_stdin)(
         "python3 -m coordinator_core.invoke ping '{not json at all}' --bare"
     ) is None
 
 
 def test_override_disables_the_guard(monkeypatch):
     monkeypatch.setenv("COORDINATOR_ALLOW_INVOKE_ARGV_PARAMS", "1")
-    assert check_offer_invoke_params_stdin(
+    assert _enveloped(check_offer_invoke_params_stdin)(
         _cmd_with(json.dumps(_HAZARDOUS_PAYLOAD))
     ) is None
 
@@ -251,7 +256,7 @@ def test_even_apostrophe_payload_denies_because_the_apostrophes_silently_vanish(
     )
     assert shlex.split(cmd)[4] == '{"m":"isnt,doesnt"}'
     assert json.loads(shlex.split(cmd)[4]) == {"m": "isnt,doesnt"}
-    verdict = check_offer_invoke_params_stdin(cmd)
+    verdict = _enveloped(check_offer_invoke_params_stdin)(cmd)
     assert verdict is not None
     out = verdict["hookSpecificOutput"]
     assert out["permissionDecision"] == "deny"
@@ -274,7 +279,7 @@ def test_two_adjacent_quoted_tokens_that_merge_into_valid_json_are_not_rewritten
         "python3 -m coordinator_core.invoke ping "
         "'{\"a\": \"unterminated --repo ' 'done\", \"b\": 2}' --bare"
     )
-    verdict = check_offer_invoke_params_stdin(cmd)
+    verdict = _enveloped(check_offer_invoke_params_stdin)(cmd)
     assert verdict is not None
     out = verdict["hookSpecificOutput"]
     assert out["permissionDecision"] == "deny"
@@ -283,7 +288,7 @@ def test_two_adjacent_quoted_tokens_that_merge_into_valid_json_are_not_rewritten
 
 def test_heredoc_delimiter_never_appears_inside_the_body():
     payload = json.dumps({"message": "line\nCCJSON\nmore ' apostrophe"})
-    rewritten = _rewritten(check_offer_invoke_params_stdin(_cmd_with(payload)))
+    rewritten = _rewritten(_enveloped(check_offer_invoke_params_stdin)(_cmd_with(payload)))
     delim = rewritten.split("<<'", 1)[1].split("'", 1)[0]
     body = rewritten.split("\n", 1)[1].rsplit("\n" + delim, 1)[0]
     assert delim not in body.split("\n")
@@ -291,7 +296,7 @@ def test_heredoc_delimiter_never_appears_inside_the_body():
 
 @pytest.mark.parametrize("empty", ["", None])
 def test_empty_command_is_untouched(empty):
-    assert check_offer_invoke_params_stdin(empty) is None
+    assert _enveloped(check_offer_invoke_params_stdin)(empty) is None
 
 
 class TestCrossCheckOutcomesEachHaveTheirOwnVerdict:
@@ -301,8 +306,8 @@ class TestCrossCheckOutcomesEachHaveTheirOwnVerdict:
         assert _gi._span_is_single_shell_token(
             cmd, cmd.split("'")[1]
         ) == _gi._CROSS_CHECK_CONFIRMED
-        out = check_offer_invoke_params_stdin(cmd)["hookSpecificOutput"]
-        assert out["permissionDecision"] == "allow"
+        out = _enveloped(check_offer_invoke_params_stdin)(cmd)["hookSpecificOutput"]
+        assert out.get("permissionDecision") != "deny" and "updatedInput" in out
         assert "updatedInput" in out
 
     def test_contradicted_span_denies(self):
@@ -313,7 +318,7 @@ class TestCrossCheckOutcomesEachHaveTheirOwnVerdict:
         assert _gi._span_is_single_shell_token(
             cmd, '{"a": "unterminated --repo \' \'done", "b": 2}'
         ) == _gi._CROSS_CHECK_CONTRADICTED
-        out = check_offer_invoke_params_stdin(cmd)["hookSpecificOutput"]
+        out = _enveloped(check_offer_invoke_params_stdin)(cmd)["hookSpecificOutput"]
         assert out["permissionDecision"] == "deny"
 
     def test_unavailable_cross_check_still_rewrites_the_guards_target_shape(self):
@@ -324,8 +329,8 @@ class TestCrossCheckOutcomesEachHaveTheirOwnVerdict:
         assert _gi._span_is_single_shell_token(
             cmd, cmd.split("'")[1]
         ) == _gi._CROSS_CHECK_UNAVAILABLE
-        out = check_offer_invoke_params_stdin(cmd)["hookSpecificOutput"]
-        assert out["permissionDecision"] == "allow"
+        out = _enveloped(check_offer_invoke_params_stdin)(cmd)["hookSpecificOutput"]
+        assert out.get("permissionDecision") != "deny" and "updatedInput" in out
         assert "updatedInput" in out
 
     def test_over_ceiling_command_denies_instead_of_buying_a_rewrite(self):
@@ -335,7 +340,7 @@ class TestCrossCheckOutcomesEachHaveTheirOwnVerdict:
         assert _gi._span_is_single_shell_token(
             cmd, payload
         ) == _gi._CROSS_CHECK_TOO_LARGE
-        out = check_offer_invoke_params_stdin(cmd)["hookSpecificOutput"]
+        out = _enveloped(check_offer_invoke_params_stdin)(cmd)["hookSpecificOutput"]
         assert out["permissionDecision"] == "deny"
         assert "updatedInput" not in out
         assert "too large" in out["permissionDecisionReason"]
@@ -344,6 +349,24 @@ class TestCrossCheckOutcomesEachHaveTheirOwnVerdict:
         payload = json.dumps({"m": "x' y" + "A" * 4000})
         cmd = _cmd_with(payload)
         assert len(cmd) <= _CEILING
-        out = check_offer_invoke_params_stdin(cmd)["hookSpecificOutput"]
-        assert out["permissionDecision"] == "allow"
+        out = _enveloped(check_offer_invoke_params_stdin)(cmd)["hookSpecificOutput"]
+        assert out.get("permissionDecision") != "deny" and "updatedInput" in out
         assert "too large" not in out.get("permissionDecisionReason", "")
+
+
+def test_rewrite_and_deny_are_records_carrying_a_subagent_route():
+    from coordinator_core.guard_messages.alternative_record import (
+        AlternativeRecord,
+        Audience,
+        EscalationRoute,
+        Override,
+    )
+    from coordinator_core.guard_messages.render import render
+
+    rewrite = check_offer_invoke_params_stdin(_cmd_with(json.dumps({"m": "it's"})))
+    deny = check_offer_invoke_params_stdin(_cmd_with(json.dumps({"m": "x' y" + "A" * 4000})) + "\nmore")
+    for record, kind in ((rewrite, "rewrite"), (deny, "deny")):
+        assert isinstance(record, AlternativeRecord) and record.verdict_kind == kind
+        assert any(isinstance(m, Override) for m in record.members)
+        assert any(isinstance(m, EscalationRoute) for m in record.members)
+        assert "COORDINATOR_ALLOW_INVOKE_ARGV_PARAMS" not in str(render(record, Audience.SUBAGENT))

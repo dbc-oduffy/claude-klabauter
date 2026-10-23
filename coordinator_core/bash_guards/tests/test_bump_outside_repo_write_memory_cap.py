@@ -13,6 +13,11 @@ from coordinator_core.bash_guards import _write_bump_session_start as session_st
 from coordinator_core.bash_guards import bump_outside_repo_write as guard
 from coordinator_core.testing.home_sandbox import sandbox_home
 from coordinator_core.win_portability import no_console_creationflags
+from coordinator_core.guard_messages.testing import envelope_of
+
+
+def _enveloped(check):
+    return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -61,7 +66,7 @@ def _fill(mem: Path, count: int) -> None:
 
 
 def _check(env, cmd: str):
-    return guard.check_bump_outside_repo_write(cmd, "sess-memcap", str(env["anchor"]), {})
+    return _enveloped(guard.check_bump_outside_repo_write)(cmd, "sess-memcap", str(env["anchor"]), {})
 
 
 def _reason(result) -> str:

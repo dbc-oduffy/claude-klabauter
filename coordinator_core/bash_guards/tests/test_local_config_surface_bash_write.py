@@ -25,6 +25,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 
 from coordinator_core.bash_guards import dispatch
+from coordinator_core.guard_messages.testing import envelope_of
 
 
 class TestWithLocalConfigSurface:
@@ -80,6 +81,7 @@ class TestBashMediatedLocalConfigWriteIsDenied:
             "python3 -c \"open('coordinator.local.md', 'a').write('x')\""
         )
         assert result is not None
+        result = envelope_of(result)
         assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
     def test_shell_redirect_write_is_denied(self) -> None:
@@ -87,6 +89,7 @@ class TestBashMediatedLocalConfigWriteIsDenied:
             "echo corrupted > coordinator.local.md"
         )
         assert result is not None
+        result = envelope_of(result)
         assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
     def test_read_only_command_still_allows(self) -> None:

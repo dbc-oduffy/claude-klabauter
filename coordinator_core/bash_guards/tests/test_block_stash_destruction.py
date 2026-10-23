@@ -2,6 +2,11 @@
 from __future__ import annotations
 
 from coordinator_core.bash_guards import block_stash_destruction as guard
+from coordinator_core.guard_messages.testing import envelope_of
+
+
+def _enveloped(check):
+    return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 
 def _payload(command, agent_id=None, agent_type=None):
@@ -28,34 +33,34 @@ def _reason(out):
 
 class TestNonBashOrEmpty:
     def test_non_bash_tool_allows(self):
-        assert guard.check({"tool_name": "Edit", "tool_input": {"file_path": "x"}}) is None
+        assert _enveloped(guard.check)({"tool_name": "Edit", "tool_input": {"file_path": "x"}}) is None
 
     def test_empty_command_allows(self):
-        assert guard.check(_payload("")) is None
+        assert _enveloped(guard.check)(_payload("")) is None
 
     def test_malformed_tool_input_allows(self):
-        assert guard.check({"tool_name": "Bash", "tool_input": "not-a-dict"}) is None
+        assert _enveloped(guard.check)({"tool_name": "Bash", "tool_input": "not-a-dict"}) is None
 
     def test_command_without_stash_word_allows(self):
-        assert guard.check(_payload("git status --porcelain")) is None
+        assert _enveloped(guard.check)(_payload("git status --porcelain")) is None
 
 
 class TestDenySet:
     def test_bare_drop_denies(self):
-        _reason(guard.check(_payload("git stash drop")))
+        _reason(_enveloped(guard.check)(_payload("git stash drop")))
 
     def test_drop_with_explicit_index_denies(self):
-        _reason(guard.check(_payload("git stash drop stash@{2}")))
+        _reason(_enveloped(guard.check)(_payload("git stash drop stash@{2}")))
 
     def test_clear_denies(self):
-        _reason(guard.check(_payload("git stash clear")))
+        _reason(_enveloped(guard.check)(_payload("git stash clear")))
 
     def test_drop_with_quiet_flag_after_subcommand_denies(self):
-        _reason(guard.check(_payload("git stash drop -q stash@{0}")))
+        _reason(_enveloped(guard.check)(_payload("git stash drop -q stash@{0}")))
 
     def test_deny_kind_names_the_subcommand(self):
-        assert "git stash drop" in _reason(guard.check(_payload("git stash drop")))
-        assert "git stash clear" in _reason(guard.check(_payload("git stash clear")))
+        assert "git stash drop" in _reason(_enveloped(guard.check)(_payload("git stash drop")))
+        assert "git stash clear" in _reason(_enveloped(guard.check)(_payload("git stash clear")))
 
 
 class TestAllowSet:
@@ -66,29 +71,29 @@ class TestAllowSet:
     rule would block the EM from stashing at all."""
 
     def test_bare_stash_allows(self):
-        assert guard.check(_payload("git stash")) is None
+        assert _enveloped(guard.check)(_payload("git stash")) is None
 
     def test_implicit_push_flag_only_form_allows(self):
-        assert guard.check(_payload("git stash -u")) is None
+        assert _enveloped(guard.check)(_payload("git stash -u")) is None
 
     def test_scoped_push_allows(self):
-        assert guard.check(_payload("git stash push -- coordinator/agents/")) is None
+        assert _enveloped(guard.check)(_payload("git stash push -- coordinator/agents/")) is None
 
     def test_list_allows(self):
-        assert guard.check(_payload("git stash list")) is None
+        assert _enveloped(guard.check)(_payload("git stash list")) is None
 
     def test_show_allows(self):
-        assert guard.check(_payload("git stash show -p stash@{1}")) is None
+        assert _enveloped(guard.check)(_payload("git stash show -p stash@{1}")) is None
 
     def test_save_allows(self):
-        assert guard.check(_payload("git stash save wip")) is None
+        assert _enveloped(guard.check)(_payload("git stash save wip")) is None
 
     def test_branch_create_store_allow(self):
         for sub in ("branch topic stash@{0}", "create", "store abc123"):
-            assert guard.check(_payload("git stash " + sub)) is None
+            assert _enveloped(guard.check)(_payload("git stash " + sub)) is None
 
     def test_unrecognized_subcommand_allows_not_default_deny(self):
-        assert guard.check(_payload("git stash frobnicate")) is None
+        assert _enveloped(guard.check)(_payload("git stash frobnicate")) is None
 
 
 class TestPopApplyCarveOut:
@@ -100,70 +105,70 @@ class TestPopApplyCarveOut:
     widen the deny set."""
 
     def test_pop_allows(self):
-        assert guard.check(_payload("git stash pop")) is None
+        assert _enveloped(guard.check)(_payload("git stash pop")) is None
 
     def test_pop_with_index_allows(self):
-        assert guard.check(_payload("git stash pop stash@{3}")) is None
+        assert _enveloped(guard.check)(_payload("git stash pop stash@{3}")) is None
 
     def test_apply_allows(self):
-        assert guard.check(_payload("git stash apply stash@{1}")) is None
+        assert _enveloped(guard.check)(_payload("git stash apply stash@{1}")) is None
 
 
 class TestFlagValueFalsePositives:
 
     def test_push_with_drop_as_message_allows(self):
-        assert guard.check(_payload("git stash push -m drop -- src/x.py")) is None
+        assert _enveloped(guard.check)(_payload("git stash push -m drop -- src/x.py")) is None
 
     def test_push_with_clear_in_quoted_message_allows(self):
-        assert guard.check(_payload('git stash push -m "clear the decks" -- src/x.py')) is None
+        assert _enveloped(guard.check)(_payload('git stash push -m "clear the decks" -- src/x.py')) is None
 
     def test_push_with_pathspec_named_drop_allows(self):
-        assert guard.check(_payload("git stash push -- src/drop_handler.py")) is None
+        assert _enveloped(guard.check)(_payload("git stash push -- src/drop_handler.py")) is None
 
     def test_non_git_command_mentioning_stash_drop_allows(self):
-        assert guard.check(_payload("echo git stash drop")) is None
+        assert _enveloped(guard.check)(_payload("echo git stash drop")) is None
 
     def test_grep_for_stash_drop_allows(self):
-        assert guard.check(_payload("rg 'git stash drop' coordinator_core/")) is None
+        assert _enveloped(guard.check)(_payload("rg 'git stash drop' coordinator_core/")) is None
 
 
 class TestShellShapes:
     def test_chained_after_and_denies(self):
-        _reason(guard.check(_payload("git stash list && git stash drop")))
+        _reason(_enveloped(guard.check)(_payload("git stash list && git stash drop")))
 
     def test_chained_after_semicolon_denies(self):
-        _reason(guard.check(_payload("cd /repo; git stash drop")))
+        _reason(_enveloped(guard.check)(_payload("cd /repo; git stash drop")))
 
     def test_leading_env_assignment_denies(self):
-        _reason(guard.check(_payload("GIT_TRACE=1 git stash drop")))
+        _reason(_enveloped(guard.check)(_payload("GIT_TRACE=1 git stash drop")))
 
     def test_passthrough_wrapper_denies(self):
-        _reason(guard.check(_payload("nice git stash drop")))
+        _reason(_enveloped(guard.check)(_payload("nice git stash drop")))
 
     def test_wrapper_with_own_argv_denies(self):
-        _reason(guard.check(_payload("timeout 30 git stash drop")))
-        _reason(guard.check(_payload("ionice -c2 git stash clear")))
+        _reason(_enveloped(guard.check)(_payload("timeout 30 git stash drop")))
+        _reason(_enveloped(guard.check)(_payload("ionice -c2 git stash clear")))
 
     def test_sh_c_payload_denies(self):
-        _reason(guard.check(_payload("sh -c 'git stash drop'")))
+        _reason(_enveloped(guard.check)(_payload("sh -c 'git stash drop'")))
 
     def test_bundled_c_flag_payload_denies(self):
-        _reason(guard.check(_payload("bash -ic 'git stash clear'")))
+        _reason(_enveloped(guard.check)(_payload("bash -ic 'git stash clear'")))
 
     def test_git_c_global_option_before_subcommand_denies(self):
-        _reason(guard.check(_payload("git -C /repo stash drop")))
+        _reason(_enveloped(guard.check)(_payload("git -C /repo stash drop")))
 
     def test_git_exe_basename_denies(self):
-        _reason(guard.check(_payload("git.exe -C /repo stash drop")))
+        _reason(_enveloped(guard.check)(_payload("git.exe -C /repo stash drop")))
 
 
 class TestPowerShellIdiomDialectNeutral:
 
     def test_semicolon_chained_powershell_style_denies(self):
-        _reason(guard.check(_payload("Get-Location; git stash drop")))
+        _reason(_enveloped(guard.check)(_payload("Get-Location; git stash drop")))
 
     def test_semicolon_chained_powershell_style_allow_case_unaffected(self):
-        assert guard.check(_payload("Get-Location; git stash pop")) is None
+        assert _enveloped(guard.check)(_payload("Get-Location; git stash pop")) is None
 
 
 class TestHeredocBodies:
@@ -174,7 +179,7 @@ class TestHeredocBodies:
             "The EM ran; git stash drop and lost a peer's entry.\n"
             "EOF"
         )
-        assert guard.check(_payload(cmd)) is None
+        assert _enveloped(guard.check)(_payload(cmd)) is None
 
     def test_real_invocation_outside_heredoc_still_denies(self):
         cmd = (
@@ -183,7 +188,7 @@ class TestHeredocBodies:
             "EOF\n"
             "git stash drop"
         )
-        _reason(guard.check(_payload(cmd)))
+        _reason(_enveloped(guard.check)(_payload(cmd)))
 
     def test_real_invocation_after_heredoc_denies_when_separator_is_explicit(self):
         cmd = (
@@ -192,43 +197,43 @@ class TestHeredocBodies:
             "EOF\n"
             "; git stash drop"
         )
-        _reason(guard.check(_payload(cmd)))
+        _reason(_enveloped(guard.check)(_payload(cmd)))
 
 
 class TestNotIdentityGated:
 
     def test_denies_with_no_identity_fields_at_all(self):
-        _reason(guard.check(_payload("git stash drop")))
+        _reason(_enveloped(guard.check)(_payload("git stash drop")))
 
     def test_denies_with_subagent_identity_present(self):
-        _reason(guard.check(_payload("git stash drop", agent_id="a1", agent_type="executor")))
+        _reason(_enveloped(guard.check)(_payload("git stash drop", agent_id="a1", agent_type="executor")))
 
     def test_sibling_guard_exempts_the_em_on_the_same_command(self):
         from coordinator_core.bash_guards import block_subagent_destructive_action as sibling
 
         em_payload = _payload("git stash drop")
-        assert sibling.check(em_payload) is None, (
+        assert _enveloped(sibling.check)(em_payload) is None, (
             "sibling is expected to allow an EM-typed stash drop -- if this "
             "starts denying, the gap this module closes may have moved"
         )
-        _reason(guard.check(em_payload))
+        _reason(_enveloped(guard.check)(em_payload))
 
 
 class TestDenyMessage:
     def test_names_the_no_reflog_fact(self):
-        msg = _reason(guard.check(_payload("git stash drop")))
+        msg = _reason(_enveloped(guard.check)(_payload("git stash drop")))
         assert "reflog" in msg
 
     def test_offers_the_read_without_dropping_alternative(self):
-        msg = _reason(guard.check(_payload("git stash drop")))
+        msg = _reason(_enveloped(guard.check)(_payload("git stash drop")))
         assert "git show stash@{N}" in msg
 
     def test_echoes_the_command(self):
-        assert "git stash clear" in _reason(guard.check(_payload("git stash clear")))
+        assert "git stash clear" in _reason(_enveloped(guard.check)(_payload("git stash clear")))
 
     def test_truncates_a_very_long_command(self):
         long_cmd = "git stash drop " + ("x" * 500)
-        assert "..." in _reason(guard.check(_payload(long_cmd)))
+        assert "..." in _reason(_enveloped(guard.check)(_payload(long_cmd)))
 
 
 def _advisory_context(out):
@@ -245,48 +250,48 @@ class TestApplyAdvisory:
     (the drop/clear hard-deny) is untouched by this leg."""
 
     def test_apply_fires_the_advisory(self):
-        _advisory_context(guard.check_apply_advisory(_payload("git stash apply")))
+        _advisory_context(_enveloped(guard.check_apply_advisory)(_payload("git stash apply")))
 
     def test_apply_with_explicit_index_fires(self):
         _advisory_context(
-            guard.check_apply_advisory(_payload('git stash apply "stash@{0}"'))
+            _enveloped(guard.check_apply_advisory)(_payload('git stash apply "stash@{0}"'))
         )
 
     def test_advisory_names_the_correct_read_only_alternative(self):
-        msg = _advisory_context(guard.check_apply_advisory(_payload("git stash apply")))
+        msg = _advisory_context(_enveloped(guard.check_apply_advisory)(_payload("git stash apply")))
         assert "git stash show --name-only" in msg
 
     def test_advisory_states_the_overlap_fact(self):
-        msg = _advisory_context(guard.check_apply_advisory(_payload("git stash apply")))
+        msg = _advisory_context(_enveloped(guard.check_apply_advisory)(_payload("git stash apply")))
         assert "overlapping files match" in msg
 
     def test_advisory_echoes_the_command(self):
-        msg = _advisory_context(guard.check_apply_advisory(_payload("git stash apply")))
+        msg = _advisory_context(_enveloped(guard.check_apply_advisory)(_payload("git stash apply")))
         assert "git stash apply" in msg
 
     def test_advisory_never_names_a_bypass_key(self):
-        msg = _advisory_context(guard.check_apply_advisory(_payload("git stash apply")))
+        msg = _advisory_context(_enveloped(guard.check_apply_advisory)(_payload("git stash apply")))
         assert "COORDINATOR_OVERRIDE" not in msg
         assert "override" not in msg.lower()
 
     def test_pop_does_not_fire_the_advisory(self):
-        assert guard.check_apply_advisory(_payload("git stash pop")) is None
+        assert _enveloped(guard.check_apply_advisory)(_payload("git stash pop")) is None
 
     def test_drop_does_not_fire_the_advisory(self):
-        assert guard.check_apply_advisory(_payload("git stash drop")) is None
+        assert _enveloped(guard.check_apply_advisory)(_payload("git stash drop")) is None
 
     def test_bare_stash_does_not_fire_the_advisory(self):
-        assert guard.check_apply_advisory(_payload("git stash")) is None
+        assert _enveloped(guard.check_apply_advisory)(_payload("git stash")) is None
 
     def test_push_does_not_fire_the_advisory(self):
-        assert guard.check_apply_advisory(_payload("git stash push")) is None
+        assert _enveloped(guard.check_apply_advisory)(_payload("git stash push")) is None
 
     def test_apply_advisory_does_not_disturb_the_deny_leg(self):
-        assert guard.check(_payload("git stash apply")) is None
+        assert _enveloped(guard.check)(_payload("git stash apply")) is None
 
     def test_flag_value_false_positive_class_does_not_fire(self):
         assert (
-            guard.check_apply_advisory(
+            _enveloped(guard.check_apply_advisory)(
                 _payload("git stash push -m apply -- src/apply_handler.py")
             )
             is None
@@ -295,17 +300,17 @@ class TestApplyAdvisory:
     def test_message_size_within_cap(self):
         from coordinator_core.bash_guards._message_size import MESSAGE_PROSE_CAP_BYTES
 
-        msg = _advisory_context(guard.check_apply_advisory(_payload("git stash apply")))
+        msg = _advisory_context(_enveloped(guard.check_apply_advisory)(_payload("git stash apply")))
         assert len(msg.encode("utf-8")) <= MESSAGE_PROSE_CAP_BYTES
 
     def test_non_bash_tool_allows(self):
         assert (
-            guard.check_apply_advisory({"tool_name": "Edit", "tool_input": {"file_path": "x"}})
+            _enveloped(guard.check_apply_advisory)({"tool_name": "Edit", "tool_input": {"file_path": "x"}})
             is None
         )
 
     def test_empty_command_allows(self):
-        assert guard.check_apply_advisory(_payload("")) is None
+        assert _enveloped(guard.check_apply_advisory)(_payload("")) is None
 
     def test_command_without_stash_word_allows(self):
-        assert guard.check_apply_advisory(_payload("git status --porcelain")) is None
+        assert _enveloped(guard.check_apply_advisory)(_payload("git status --porcelain")) is None

@@ -336,29 +336,13 @@ def _deny_reason(cmd: str, deny_kind: str) -> str:
     cmd_safe = cmd if len(cmd) <= 200 else cmd[:200] + "..."
     return (
         "Did you mean one of these instead? Neither touches the shared "
-        "worktree:\n"
-        "  - Whole-tree baseline:  git archive <sha> | tar -x -C <tmpdir>\n"
-        "  - Single file:          git show <sha>:<path>\n\n"
+        "worktree; they are listed after the notice below.\n\n"
         "BLOCKED: `%s` creates a stash entry, and on a shared working tree "
         "a stash is GLOBAL -- it sweeps every concurrent session's "
         "uncommitted work, not just yours, and you have no sanctioned way "
-        # `instead` here is load-bearing, not decorative: it is what puts
-        # `git stash pop`/`git stash apply` inside `_alternative_liveness`'s
-        # cue window so its extractor has SOMETHING backtick-classifiable to
-        # verify. Those two placeholder-bearing bullets above (`<sha>`,
-        # `<tmpdir>`, `<path>`) can never classify as COMMAND themselves --
-        # `_classify_backtick_span` excludes any span containing `<`/`>`/`|`
-        # on principle (real shell metacharacters it cannot safely probe),
-        # and un-backticked they only reach a COMMAND-shaped alternative via
-        # `_alternative_liveness`'s "if not alts" indented-line fallback,
-        # which reads the bullet'S LABEL LINE as its own one-token command
-        # (argv[0] "-") before it ever reaches the real command line below
-        # it -- confirmed by direct extractor calls during this dispatch
-        # (see run report). The two bullets are the real, correct offer and
-        # stay; this one word is what keeps the gate from going DEAD without
-        # restoring the deleted incident narrative. Do not remove "instead"
-        # here without re-verifying `extract_alternatives` against this
-        # exact string first.
+        # The liveness gate grades the deny record's members
+        # (`AdaptableOffer` templates for the two bullets above), not this
+        # text, so the wording here is free of any grading constraint.
         "to undo it instead (`git stash pop`/`git stash apply` are denied for you).\n\n"
         "  Command:  %s\n"
     ) % (deny_kind, cmd_safe)
@@ -409,10 +393,28 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if deny_kind is None:
         return None
 
-    return {
-        "hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "permissionDecision": "deny",
-            "permissionDecisionReason": _deny_reason(cmd, deny_kind),
-        }
-    }
+    from coordinator_core.guard_messages.alternative_record import (
+        AdaptableOffer,
+        AlternativeRecord,
+        EscalationRoute,
+    )
+
+    return AlternativeRecord(
+        verdict_kind="deny",
+        summary=_deny_reason(cmd, deny_kind),
+        members=(
+            AdaptableOffer(
+                template="git archive <sha> | tar -x -C <tmpdir>",
+                what_to_adapt="<sha> and <tmpdir> (whole-tree baseline, shared worktree untouched)",
+            ),
+            AdaptableOffer(
+                template="git show <sha>:<path>",
+                what_to_adapt="<sha> and <path> (single file, shared worktree untouched)",
+            ),
+            EscalationRoute(
+                report_what="the stash you needed",
+                authorize_what="a stash-creating command",
+            ),
+        ),
+        guard_name="block-subagent-stash-creation",
+    )

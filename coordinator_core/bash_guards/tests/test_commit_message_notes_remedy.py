@@ -10,6 +10,11 @@ from coordinator_core.git.correction_note import SENTINEL, parse_note
 from coordinator_core.win_portability import no_console_passthrough_kwargs
 
 import pytest
+from coordinator_core.guard_messages.testing import envelope_of
+
+
+def _enveloped(check):
+    return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -36,7 +41,7 @@ def _repo(tmp_path):
 def test_amend_deny_remedy_carries_sentinel(tmp_path):
     repo = _repo(tmp_path)
     cmd = 'git -C %s commit --amend --only -m "x" -- mine.txt' % shlex.quote(str(repo))
-    out = dispatch_checks.check_git_commit_safe_commit_advise(cmd, "sess-mine")
+    out = _enveloped(dispatch_checks.check_git_commit_safe_commit_advise)(cmd, "sess-mine")
     reason = out["hookSpecificOutput"]["permissionDecisionReason"]
     remedy = [ln for ln in reason.splitlines() if "git notes add" in ln]
     assert remedy and all(('-m "%s ' % SENTINEL) in ln for ln in remedy)

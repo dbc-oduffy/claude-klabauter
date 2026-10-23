@@ -22,6 +22,11 @@ from coordinator_core.bash_guards.tests.test_bump_outside_repo_write import (
 )
 from coordinator_core.group_em import nomination
 from coordinator_core.session import machinery_paths
+from coordinator_core.guard_messages.testing import envelope_of
+
+
+def _enveloped(check):
+    return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -44,7 +49,7 @@ def _marker(repos, sid: str = SID) -> None:  # noqa: F811
 
 
 def _run(repos, cmd, sid: str = SID, payload=None):  # noqa: F811
-    return guard.check_bump_foreign_repo_write(cmd, sid, str(repos["anchor"]), payload or {})
+    return _enveloped(guard.check_bump_foreign_repo_write)(cmd, sid, str(repos["anchor"]), payload or {})
 
 
 def _reason(result) -> str:

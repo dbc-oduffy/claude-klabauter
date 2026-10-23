@@ -512,3 +512,16 @@ def test_an_empty_scout_claim_is_written_and_absence_writes_nothing(repo: Path) 
     sizing_assemble.write_back(repo, str(path), _decision("M"), doc_consumers=[], ask_conflicts=[])
     doc = _load(path)
     assert doc["doc_consumers"] == [] and doc["ask_conflicts"] == []
+
+
+def test_a_plan_edged_sizing_refuses_an_xs_resize_and_other_sizes_still_write(repo: Path) -> None:
+    edged = _DRAFT.replace("estimate:\n  tshirt: XS", "plan: docs/plans/x.md\nestimate:\n  tshirt: S")
+    path = _sizing(repo, edged)
+    with pytest.raises(sizing_assemble.SizingAssembleError, match="SIZING-PLAN-EDGE-RESIZE-TO-XS"):
+        sizing_assemble.write_back(repo, str(path), _decision("XS"))
+    assert path.read_text(encoding="utf-8") == edged
+    sizing_assemble.write_back(repo, str(path), _decision("S"))
+    assert _load(path)["estimate"]["tshirt"] == "S"
+    plain = _sizing(repo)
+    sizing_assemble.write_back(repo, str(plain), _decision("XS"))
+    assert _load(plain)["estimate"]["tshirt"] == "XS"

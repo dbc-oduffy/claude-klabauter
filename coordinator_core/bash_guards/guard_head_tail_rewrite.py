@@ -14,7 +14,7 @@ file's own private helpers below -- ``_bt_head_tail_count``,
 ``_bt_build_generator_lines``, ``_bt_head_short_circuit_lines``,
 ``_bt_tail_ring_buffer_lines`` -- are used ONLY by
 ``check_head_tail_plumbing_rewrite`` and each other): ``_crlf_strip``,
-``_override``, ``_advisory``, ``_allow_rewrite``, ``_bt_has_redirection``
+``_override``, ``_advisory_record``, ``_allow_rewrite_record``, ``_bt_has_redirection``
 (also consumed by ``check_grep_via_bash_rewrite``'s
 ``_bt_grep_flags_and_operands``, which stays behind),
 ``_bt_grep_flags_and_operands``/``_GREP_FAMILY_BINARIES_BT`` (also consumed
@@ -35,20 +35,23 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from coordinator_core.bash_guards.dispatch_checks import (
     _GREP_FAMILY_BINARIES_BT,
-    _advisory,
-    _allow_rewrite,
     _bt_grep_flags_and_operands,
     _bt_has_redirection,
     _bt_python3_invocation,
     _crlf_strip,
     _override,
 )
-from coordinator_core.bash_guards._rewrite_support import _bt_ps_python_c
+from coordinator_core.bash_guards._rewrite_support import (
+    _advisory_record,
+    _allow_rewrite_record,
+    _bt_ps_python_c,
+    _em_stamped,
+)
+from coordinator_core.bash_guards._helpers import operator_override_note
 from coordinator_core.bash_guards._command_tokenizer import (
     segments_from_tokens_with_pipe_flag as _bt_segments_from_tokens_with_pipe_flag,
     token_matches_binary as _bt_token_matches_binary,
 )
-from coordinator_core.bash_guards._helpers import operator_override_note
 from coordinator_core.bash_guards._shape_classifier import (
     Shape as _BT_Shape,
     classify_command as _bt_classify_command,
@@ -320,12 +323,42 @@ def _bt_tail_ring_buffer_lines(gen_lines: List[str], kind: str, n: int) -> List[
     return out
 
 
+_GUARD = "head-tail-plumbing-rewrite"
+_OVERRIDE_ENV = "COORDINATOR_ALLOW_HEAD_TAIL_PLUMBING"
+
+
+def _em_line(msg: str, payload: Optional[Dict[str, Any]], git_root: Optional[str] = None) -> str:
+    """The EM-facing text: `msg` followed by the override pointer."""
+    return "%s %s" % (
+        msg,
+        operator_override_note(_OVERRIDE_ENV, payload=payload, git_root=git_root),
+    )
+
+
+def _select_object_offer(flag: str = "-First") -> Any:
+    from coordinator_core.guard_messages.alternative_record import AdaptableOffer
+
+    return AdaptableOffer(
+        template="<upstream command> | Select-Object %s N" % flag,
+        what_to_adapt="the upstream command and N",
+    )
+
+
+def _python_slice_offer(binary: str) -> Any:
+    from coordinator_core.guard_messages.alternative_record import AdaptableOffer
+
+    return AdaptableOffer(
+        template="python3 -c 'import sys; print(\"\".join(sys.stdin.readlines()[:N]))'",
+        what_to_adapt="the slice (%s) and the upstream command piped into it" % binary,
+    )
+
+
 def _bt_serve_find_census(
     up_tokens: List[str],
     is_head: bool,
     n: int,
     payload: Optional[Dict[str, Any]],
-) -> Optional[Dict[str, Any]]:
+) -> Any:
     """SERVE (not rewrite) a `find`-census-into-`head`/`tail` pipeline whose upstream
     segment falls inside `coordinator_core.search.census`'s certified subset (C0's
     spike, docs/research/2026-09-10-in-process-census-evaluator-spike.md; AC13/AC14) --
@@ -342,7 +375,6 @@ def _bt_serve_find_census(
     if not isinstance(tool_input, dict) or not tool_input.get("command"):
         return None
     try:
-        from coordinator_core._hook_envelope import rewrite_input
         from coordinator_core.search import census as _census
         from coordinator_core.search.engine import Unanswerable
     except Exception:
@@ -356,20 +388,24 @@ def _bt_serve_find_census(
     except Exception:
         return None
     served = entries[:n] if is_head else (entries[-n:] if n > 0 else [])
-    updated_input = dict(tool_input)
-    updated_input["command"] = "true"
     footer = (
         "[Answered in-process: recognized as a find census feeding "
         "head/tail, no subprocess spawned.]"
     )
-    return rewrite_input(
-        "PreToolUse", updated_input, context="%s\n\n%s" % (footer, "\n".join(served))
+    context = "%s\n\n%s" % (footer, "\n".join(served))
+    return _allow_rewrite_record(
+        _GUARD,
+        "true",
+        context,
+        tool_input=tool_input,
+        em_text=_em_stamped(context),
+        rewrite_allow=False,
     )
 
 
 def _check_head_tail_plumbing_powershell(
     cmd: str, payload: Optional[Dict[str, Any]] = None
-) -> Optional[Dict[str, Any]]:
+) -> Any:
     """PowerShell-dialect leg of `check_head_tail_plumbing_rewrite` (row 13,
     docs/reference/guard-dialect-coverage.md): the `find`/`ls` upstream-
     generator recognition (`_bt_parse_find_census_segment`/
@@ -431,18 +467,19 @@ def _check_head_tail_plumbing_powershell(
 
     is_head, is_tail, n = _bt_select_object_first_last(ht_tokens[1:])
     if n is None:
-        return _advisory(
+        msg = (
             "Advisory: '... | %s' truncates output via an extra subprocess "
             "-- this rewrite recognizes '-First N' and '-Last N' forms "
             "only; this invocation's own arguments ('%s') are not one of "
-            "those, so the rewrite is not offered automatically. %s"
-            % (
-                ht_tokens[0],
-                " ".join(ht_tokens[1:]),
-                operator_override_note(
-                    "COORDINATOR_ALLOW_HEAD_TAIL_PLUMBING", payload=payload
-                ),
-            )
+            "those, so the rewrite is not offered automatically."
+            % (ht_tokens[0], " ".join(ht_tokens[1:]))
+        )
+        return _advisory_record(
+            _GUARD,
+            msg,
+            (_select_object_offer(),),
+            _OVERRIDE_ENV,
+            em_text=_em_line(msg, payload),
         )
 
     kind: Optional[str] = None
@@ -489,20 +526,23 @@ def _check_head_tail_plumbing_powershell(
     script = "\n".join(script_lines)
     if not _bt_script_compiles(script):
         return None
-    return _allow_rewrite(
+    return _allow_rewrite_record(
+        _GUARD,
         _bt_ps_python_c(script),
         "Auto-rewrite: '%s' piped through head/tail forked twice; "
-        "replaced with one python3 -c doing the same slice. %s"
-        % (
-            ht_tokens[0],
-            operator_override_note("COORDINATOR_ALLOW_HEAD_TAIL_PLUMBING", payload=payload),
+        "replaced with one python3 -c doing the same slice." % (ht_tokens[0],),
+        override_env=_OVERRIDE_ENV,
+        em_text=_em_line(
+            "Auto-rewrite: '%s' piped through head/tail forked twice; "
+            "replaced with one python3 -c doing the same slice." % (ht_tokens[0],),
+            payload,
         ),
     )
 
 
 def _bash_shaped_head_tail_advisory_powershell(
     cmd: str, payload: Optional[Dict[str, Any]]
-) -> Optional[Dict[str, Any]]:
+) -> Any:
     """A `<generator> | head/tail` pipeline sent through the PowerShell tool.
     Advises only: the bash rewrite (`updatedInput`, `python3 -c`) is not a
     valid PowerShell command, so the remedy offered is `Select-Object`."""
@@ -520,14 +560,17 @@ def _bash_shaped_head_tail_advisory_powershell(
     if not any(_bt_token_matches_binary(ht_tokens[0], b) for b in ("head", "tail")):
         return None
     flag = "-First" if _bt_token_matches_binary(ht_tokens[0], "head") else "-Last"
-    return _advisory(
+    return _advisory_record(
+        _GUARD,
         "Advisory: '... | %s' truncates output via an extra subprocess -- "
-        "use '... | Select-Object %s N' in-process. %s"
-        % (
-            ht_tokens[0],
-            flag,
-            operator_override_note("COORDINATOR_ALLOW_HEAD_TAIL_PLUMBING", payload=payload),
-        )
+        "use Select-Object %s N in-process." % (ht_tokens[0], flag),
+        (_select_object_offer(flag),),
+        _OVERRIDE_ENV,
+        em_text=_em_line(
+            "Advisory: '... | %s' truncates output via an extra subprocess -- "
+            "use '... | Select-Object %s N' in-process." % (ht_tokens[0], flag),
+            payload,
+        ),
     )
 
 
@@ -537,7 +580,7 @@ def check_head_tail_plumbing_rewrite(
     dialect: "Optional[_dialect.Dialect]" = None,
     payload: Optional[Dict[str, Any]] = None,
     git_root: Optional[str] = None,
-) -> Optional[Dict[str, Any]]:
+) -> Any:
     """BX-16 shape 7 (BX-8's rewrite target, head/tail half) -- `... | head
     -n N` / `... | tail -n N` truncates a subprocess's output via ANOTHER
     subprocess. A third of all measured forks are this text-plumbing shape
@@ -630,22 +673,26 @@ def check_head_tail_plumbing_rewrite(
 
     n = _bt_head_tail_count(ht_tokens[1:])
     if n is None:
-        return _advisory(
+        msg = (
             "Advisory: '... | %s' truncates output via an extra subprocess -- "
             "this rewrite recognizes bare '%s', '%s -N', and '%s -n N' "
             "line-count forms only; this invocation's own arguments ('%s') "
             "are not one of those, so the rewrite is not offered "
-            "automatically. %s"
+            "automatically."
             % (
                 ht_tokens[0],
                 ht_tokens[0],
                 ht_tokens[0],
                 ht_tokens[0],
                 " ".join(ht_tokens[1:]),
-                operator_override_note(
-                    "COORDINATOR_ALLOW_HEAD_TAIL_PLUMBING", payload=payload, git_root=git_root
-                ),
             )
+        )
+        return _advisory_record(
+            _GUARD,
+            msg,
+            (_python_slice_offer(ht_tokens[0]),),
+            _OVERRIDE_ENV,
+            em_text=_em_line(msg, payload, git_root),
         )
 
     kind: Optional[str] = None
@@ -717,14 +764,16 @@ def check_head_tail_plumbing_rewrite(
     script = "\n".join(script_lines)
     if not _bt_script_compiles(script):
         return None
-    return _allow_rewrite(
+    return _allow_rewrite_record(
+        _GUARD,
         "%s -c %s" % (_bt_python3_invocation(), shlex.quote(script)),
         "Auto-rewrite: '%s' piped through head/tail forked twice; "
-        "replaced with one python3 -c doing the same slice. %s"
-        % (
-            ht_tokens[0],
-            operator_override_note(
-                "COORDINATOR_ALLOW_HEAD_TAIL_PLUMBING", payload=payload, git_root=git_root
-            ),
+        "replaced with one python3 -c doing the same slice." % (ht_tokens[0],),
+        override_env=_OVERRIDE_ENV,
+        em_text=_em_line(
+            "Auto-rewrite: '%s' piped through head/tail forked twice; "
+            "replaced with one python3 -c doing the same slice." % (ht_tokens[0],),
+            payload,
+            git_root,
         ),
     )

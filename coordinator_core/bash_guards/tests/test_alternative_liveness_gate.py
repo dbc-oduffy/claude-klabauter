@@ -1,27 +1,25 @@
 """Structural gate over ``_alternative_liveness``: every guard's registered
-trigger must FIRE (a broken row fails loud), every alternative it names must
-resolve to a non-``DEAD`` verdict, and the guard registry itself must track
-the package's real guard surface so a newly-added guard cannot silently
-escape this gate.
+trigger must FIRE (a broken row fails loud), every alternative its
+``AlternativeRecord`` offers must resolve to a non-``DEAD`` verdict, each
+(guard, caller class) pair must grade no lower than its pinned rung, and the
+guard registry itself must track the package's real guard surface so a
+newly-added guard cannot silently escape this gate.
 
 This is a MEASUREMENT test, not a policy test -- it never asserts what a
 guard denies/allows/rewrites (that is `test_deny_message_accuracy.py`,
 each guard's own dedicated test file, and `_guard_coverage.py`'s job). It
-asserts that whatever a guard's message NAMES as the way out is real.
+asserts that whatever a guard's record NAMES as the way out is real and
+reachable. Alternatives and rungs are read from record members; message prose
+is never parsed.
 
-BAND ATTRIBUTION (2026-07-29 PM ruling): guard ownership is now split
-end-to-end, by guard -- this session owns the advisory/rewrite guards
-(`guard_grep_via_bash`/`guard_multiprobe_banner`/`guard_plumbing_and_loops`
-plus the BX-16 rewrite/advisory family + `check_offer_git_c` in
-`dispatch_checks.py`); a peer session owns chain structure and the
-confinement (hard-deny) guards (every `block_*` module and every other
-`check_*` function in `dispatch_checks.py`). This gate is deliberately
-module-agnostic and evaluates BOTH bands without editing either -- it is
-the artifact that carries the duty-of-care obligation across that boundary,
-so band tagging (`_alternative_liveness.classify_band`) exists ONLY so a
-finding can be handed to the right session without further investigation,
-never to narrow what gets checked. See ``test_report_output_is_band_
-attributable`` below for the acceptance form of that requirement.
+BAND ATTRIBUTION (2026-07-29 PM ruling): guard ownership is split by guard --
+this session owns the advisory/rewrite guards (`guard_grep_via_bash`/
+`guard_multiprobe_banner`/`guard_plumbing_and_loops` plus the BX-16
+rewrite/advisory family + `check_offer_git_c` in `dispatch_checks.py`); a
+peer session owns chain structure and the confinement (hard-deny) guards.
+This gate evaluates BOTH bands without editing either; band tagging
+(`_alternative_liveness.classify_band`) exists ONLY so a finding can be handed
+to the right session, never to narrow what gets checked.
 
 Spec backlink: coordinator_core/bash_guards/_alternative_liveness.py
 """
@@ -30,13 +28,27 @@ from __future__ import annotations
 
 import os
 import shutil
-from typing import Any, Dict, List, Optional
+from typing import Dict
 
 import pytest
 
 from coordinator_core.bash_guards import _alternative_liveness as altlive
 from coordinator_core.bash_guards import guard_grep_via_bash
 from coordinator_core.bash_guards import guard_inprocess_search
+from coordinator_core.guard_messages.alternative_record import (
+    AdaptableOffer,
+    AlternativeRecord,
+    Audience,
+    CapabilityRef,
+    EscalationRoute,
+    Override,
+    ReadyCommand,
+)
+from coordinator_core.subagent_sandbox.engine import load_policy
+
+
+def _record(*members, kind="deny", summary="BLOCKED: fake finding.", **extra) -> AlternativeRecord:
+    return AlternativeRecord(verdict_kind=kind, summary=summary, members=members, guard_name="fake", **extra)
 
 
 # ---------------------------------------------------------------------------
@@ -89,13 +101,9 @@ def test_untriggered_set_matches_expected_no_silent_growth():
     assert set(altlive.UNTRIGGERED) == EXPECTED_UNTRIGGERED
 
 
-#: the Director of Engineering's review (finding 5, "UNTRIGGERED is an un-ratcheted suppression
-#: list"): assert the pinned CEILING form explicitly, not only the exact-
-#: match above -- `<=` is the literal ratchet the review asked for (growth
-#: fails loud; shrinking a follow-up session's closed entries never needs
-#: this line touched, unlike the exact-match test above which is stricter
-#: and catches BOTH directions). Lower this pin by hand as entries close;
-#: never raise it to make a new suppression quiet.
+#: The pinned CEILING form, alongside the exact match above: growth fails loud.
+#: Lower this pin by hand as entries close; never raise it to make a new
+#: suppression quiet.
 _UNTRIGGERED_PINNED_MAX = 5
 
 
@@ -109,12 +117,9 @@ def test_untriggered_count_never_grows_past_pin():
 
 
 # ---------------------------------------------------------------------------
-# write_guards/ discovery extension (chunk C9, agent-facing-messages-not-
-# apology plan). SEPARATE registries (WRITE_GUARD_LIVE_TRIGGERS/WRITE_GUARD_
-# UNTRIGGERED, not LIVE_TRIGGERS/UNTRIGGERED) so this extension never
-# touches the bash_guards-scoped EXPECTED_UNTRIGGERED/_UNTRIGGERED_PINNED_MAX
-# ratchets above -- per this dispatch's explicit "never relax an existing
-# pin" instruction.
+# write_guards/ discovery extension. SEPARATE registries so this extension
+# never touches the bash_guards-scoped EXPECTED_UNTRIGGERED/_UNTRIGGERED_
+# PINNED_MAX ratchets above.
 # ---------------------------------------------------------------------------
 
 
@@ -136,11 +141,8 @@ def test_write_guard_untriggered_set_is_documented_not_silently_empty():
 
 
 def test_write_guard_live_triggers_registry_is_non_empty():
-    """The two parametrized tests below collect zero cases -- and silently
-    report a pass -- if `WRITE_GUARD_LIVE_TRIGGERS` were ever emptied. Same
-    dark-gate shape `guard_message_register_lint`'s own gate guards against
-    with `test_gate_fails_loud_if_collection_drops_to_zero`: a green run and
-    a RUNNING run must not be distinguishable only by incident."""
+    """The parametrized tests below collect zero cases -- and silently
+    report a pass -- if `WRITE_GUARD_LIVE_TRIGGERS` were ever emptied."""
     assert altlive.WRITE_GUARD_LIVE_TRIGGERS, (
         "WRITE_GUARD_LIVE_TRIGGERS is empty -- the parametrized write_guards "
         "liveness tests below would collect zero cases and pass vacuously"
@@ -161,11 +163,6 @@ def test_write_guard_named_alternatives_are_not_dead(guard):
     ev = altlive.evaluate_guard(guard)
     if not ev.fire.fired:
         pytest.skip("covered by test_write_guard_registered_trigger_fires; not re-asserted here")
-    if ev.extraction_error:
-        pytest.fail(
-            "%s: message names an alternative this extractor cannot classify: %s"
-            % (guard, ev.extraction_error)
-        )
     dead = [(alt, v) for alt, v in ev.verdicts if v.status is altlive.VerdictStatus.DEAD]
     assert not dead, "\n".join(
         "%s: DEAD alternative [%s] %r -- %s" % (guard, alt.kind.value, alt.raw, v.evidence)
@@ -193,7 +190,10 @@ def test_registered_trigger_fires(guard, tmp_path, monkeypatch):
     )
 
 
-def _guard_message_text(hso: Dict[str, Any]) -> str:
+def _message_text(result) -> str:
+    if isinstance(result, AlternativeRecord):
+        return result.em_text or result.summary
+    hso = result.get("hookSpecificOutput", {})
     return hso.get("permissionDecisionReason") or hso.get("additionalContext") or ""
 
 
@@ -212,7 +212,7 @@ def test_fire_guard_isolates_from_a_pre_existing_session_latch(monkeypatch, tmp_
     result = altlive.fire_guard("guard_inprocess_search")
 
     assert result.fired, "guard_inprocess_search's trigger did not fire: %r" % result.error
-    reason = _guard_message_text(result.envelope.get("hookSpecificOutput", {}))
+    reason = _message_text(result.envelope)
     # Guard's actual wording is "recognized as a search" -- this phrase
     # opens `_footer`'s full-paragraph branch and is absent from
     # `_ANSWERED_MARKER`, so it is a reliable full-vs-short discriminator.
@@ -231,222 +231,68 @@ def test_fire_guard_isolates_from_a_pre_existing_session_latch(monkeypatch, tmp_
 
 
 # ---------------------------------------------------------------------------
-# The gate itself: every alternative named by a fired guard must be LIVE or
-# an explicitly-counted UNVERIFIABLE, never DEAD.
+# The gate itself: every alternative a fired guard's record offers must be
+# LIVE or an explicitly-counted UNVERIFIABLE, never DEAD.
 # ---------------------------------------------------------------------------
 
-#: Guards whose alternative(s) are known to include a NAMED override that is
-#: verified LIVE against the guard's own source (probe_override), plus any
-#: HARNESS_CAPABILITY alternative expected to land UNVERIFIABLE (no on-disk
-#: roster-truth for that specific claim). Tracked explicitly so a NEW
-#: UNVERIFIABLE verdict surfaces as a diff here rather than hiding inside a
-#: passing test.
+#: UNVERIFIABLE verdicts per guard, measured over record members: a
+#: `ReadyCommand` (or a `git <subcommand>` template) executed in the probe's
+#: throwaway non-git cwd exits 128 with no dead-marker, so it grades ambiguous
+#: rather than DEAD. A new UNVERIFIABLE verdict surfaces as a diff here; the
+#: ceiling may only shrink.
 EXPECTED_UNVERIFIABLE_COUNTS: Dict[str, int] = {
-    "check_sed_range_read_advise": 2,
-    # check_cat_heredoc_write_advise's row was REMOVED (2026-09-11), for the
-    # same reason and by the same rule as the sibling row below. Its message no
-    # longer names "the Write tool": the guard was rewritten to state a
-    # consequence (the write is recorded and lands in this session's commit,
-    # DR-258 § Amendment 2026-08-30) instead of advertising a tool to prefer.
-    # With no HARNESS_CAPABILITY marker emitted, the measured count is 0 and
-    # the key belongs absent rather than set to 0 -- UNVERIFIABLE shrinking is
-    # the only honest direction of travel.
-    # check_heredoc_repo_write_advise's row was REMOVED (2026-08-30), the same
-    # shrink-not-raise move the head_tail row below records: its "the Write
-    # tool" capability marker is no longer emitted, so the measured count is
-    # 0 and the key belongs absent rather than set to 0. UNVERIFIABLE
-    # shrinking is the only honest direction of travel, per this module's own
-    # docstring. If the marker reappears, restore the row with the reason.
-    # H11's narrowed `guard_grep_via_bash` (2026-07-30, docs/plans/2026-07-30-
-    # os-aware-guard-advisory-defaults.md) names "dispatching an Explore or
-    # general-purpose subagent" as its fallback -- a real, dispatchable
-    # harness capability, but no `harness_capability_manifest.json` entry
-    # exists for this guard+marker pairing yet (same UNVERIFIABLE-not-DEAD
-    # shape as the sed/cat rows above -- an unproven claim, not a false one).
-    "guard_grep_via_bash": 1,
-    # check_head_tail_plumbing_rewrite's row was REMOVED (2026-07-29, false-claim
-    # sweep): it counted an UNVERIFIABLE "in-process" harness-capability marker
-    # emitted by this guard's own messages -- a claim the NOTE below already called
-    # "likely FALSE". It was false, and the messages no longer make it: the rewrite
-    # is a python3 -c subprocess (one fork replacing the pipeline's two, not zero),
-    # so there is no capability marker left to grade and the expected count is 0,
-    # i.e. this key is absent rather than set to 0. This is the UNVERIFIABLE ceiling
-    # SHRINKING, which this module's own docstring names as the only honest
-    # direction of travel. If a marker reappears here, a false capability claim has
-    # been reintroduced into the message text -- fix the message, don't re-add a row.
-    # guard_inprocess_search's own "in-process" + "searched in-process" markers moved from
-    # UNVERIFIABLE to LIVE (S0, 2026-07-29): the new harness_capability_manifest.json carries
-    # a real, human-reviewed entry for `guard_inprocess_search::in-process` /
-    # `guard_inprocess_search::searched in-process` (its own genuine zero-fork capability),
-    # so no UNVERIFIABLE count is expected here anymore -- see EXPECTED_LIVE_FLOORS below.
-    # NOTE: check_head_tail_plumbing_rewrite's OWN "in-process" marker (row above) stays
-    # UNVERIFIABLE on purpose -- it describes a DIFFERENT, unverified (and per the roster-
-    # truth audit, likely FALSE) claim about its python3-subprocess rewrite, and the manifest
-    # is keyed `<guard>::<marker>` specifically so one guard's true claim can never make an
-    # unrelated guard's same-worded claim grade LIVE by prose coincidence.
-    # `python3 <claude-klabauter-live-root>/coordinator/bin/coordinator-doc-new.py ...` --
-    # the `<claude-klabauter-live-root>` placeholder makes this a template, not a directly
-    # invocable path, AND it is a `python3 <script.py>` invocation (no -c/
-    # -m flag), a form `_probe_python_dash_c` does not attempt to run --
-    # honestly UNVERIFIABLE rather than guessed at in either direction.
     "block_reviewer_bash_outside_allowlist": 1,
-    # `block_approval_sentinel_creation`'s REASON_DIRECT message names 10
-    # forms: bare `grep` plus the 9 read-only `git <query-subcommand>`
-    # forms (`status`/`diff`/`log`/`show`/`ls-files`/`rev-parse`/
-    # `describe`/`check-ignore`/`check-attr`). The pre-merge trim on this
-    # branch (message-size discipline) that cut the message to 2 forms
-    # (`status`/`log`) did not survive the 2026-09-20 origin/main merge --
-    # the merged `block_approval_sentinel_creation.py` carries the
-    # untrimmed 10-form message, so 10 is what the merged tree actually
-    # produces. All 10 grade UNVERIFIABLE not because the alternatives are
-    # genuinely ambiguous -- `git status` etc. are plainly live commands --
-    # but because `probe_command` executes each argv in a bare
-    # `tempfile.mkdtemp()` cwd with no `.git`, so every `git` subcommand
-    # exits 128 "fatal: not a git repository" and `grep` (no stdin/args)
-    # exits 2 on usage. That is the probe being blind in a non-git cwd, not
-    # a genuine verdict on the alternatives; a `git init -q` in that
-    # throwaway cwd when argv[0] is `git` would grade nine of these LIVE
-    # and move this count toward 2. That probe fix belongs to
-    # `_alternative_liveness.py`, not to this test file -- out of scope
-    # here.
-    # 0960a33e8d added `git grep` to _SAFE_GIT_SUBCOMMANDS: one more git form blind in the bare cwd (11 -> 12).
-    "block_approval_sentinel_creation": 12,
-    # Same trim, same reason, same new count as the row above:
-    # `block_fleet_delegation_creation`'s REASON_DIRECT copy was also cut to
-    # `git status`/`git log` to fit the prose cap. Was 10 before the trim.
-    "block_fleet_delegation_creation": 2,
-    # Same shape as the `guard_grep_via_bash` row above: this guard's decline
-    # copy names answering "in-process", which is a real capability
-    # (`guard_inprocess_search`'s own genuine zero-fork answer, and the reason
-    # this guard declines that family at all) -- but the manifest is keyed
-    # `<guard>::<marker>` precisely so one guard's true claim cannot validate
-    # another's same-worded one, and no
-    # `guard_host_subagent_bash_spawn_shapes::in-process` entry exists yet.
-    # UNVERIFIABLE, not DEAD: unproven, not false. Close it by adding the
-    # manifest entry -- a human-reviewed capability record, not a pin bump.
-    # Entered with this guard's first LIVE_TRIGGERS row, 2026-08-30.
-    "guard_host_subagent_bash_spawn_shapes": 1,
-    # `check_raw_pid_liveness`'s two `session-liveness-cli` COMMAND
-    # alternatives (`session-live`, `claim-holder-live`) resolve the real
-    # binary on PATH and execute for real -- genuinely LIVE outside pytest
-    # (confirmed via a bare, unquarantined invocation). Under THIS suite
-    # they land UNVERIFIABLE instead: `coordinator_core/conftest.py`'s
-    # autouse `HOME`/`USERPROFILE` quarantine (the same one
-    # `_ALTLIVE_HAZARD_CWD`'s own docstring names for `_is_hazard_repo`)
-    # makes `session-liveness-cli` unable to resolve its own
-    # `CLAUDE_KLABAUTER_ROOT`/engine-root registry entry (real HOME's
-    # `machine-local/registry.local.toml` is exactly what quarantine hides),
-    # so it exits 3 with a bootstrap-remedy message -- no dead-marker
-    # string, so `probe_command` correctly grades this ambiguous rather
-    # than DEAD, per this module's own UNVERIFIABLE contract. Environment-
-    # dependent, not a broken alternative; see the paired
-    # `EXPECTED_LIVE_FLOORS` row for why the LIVE floor for this guard
-    # dropped from 2 to 1 (only the `COORDINATOR_OVERRIDE_RAW_PID_LIVENESS`
-    # OVERRIDE alternative is unaffected by the quarantine).
-    "check_raw_pid_liveness": 2,
-    # shell-doc-ok: quotes the bash offer text the probe receives.
-    # The `ls-files ... > "${TMPDIR:-/tmp}/p"` offer carries a redirect to a
-    # shell-expanded path, so its probe cannot run it as written.
-    "check_blanket_git_add": 1,
-    # `git restore` exits 128 in the probe's non-git cwd with no dead-marker.
+    "block_subagent_stash_creation": 1,
     "check_destructive_git_revert_advisory": 1,
+    "check_destructive_rm": 1,
+    "check_stale_write": 1,
+    "guard_deploy_dirty_tree": 1,
 }
 
-#: DEAD offers the plain-indented-line fallback surfaced and no guard has fixed
-#: yet. Shrink-only: each entry is a guard whose message offers something
-#: that is not a command.
+#: DEAD offers no guard has fixed yet. Shrink-only: each entry is a guard whose
+#: record offers something that is not a command.
 KNOWN_DEAD_OFFERS: Dict[str, int] = {
+    # Its one ReadyCommand is the list "cat, ls, stat, rm, git status, git log",
+    # not a command. Fix: one ReadyCommand per command.
+    "block_fleet_delegation_creation": 1,
 }
 
-#: the Director of Engineering's review (finding 6, "UNVERIFIABLE is an ungated sink"): pin a
-#: per-guard LIVE-count FLOOR alongside the UNVERIFIABLE ceiling above, so
-#: a verdict silently degrading LIVE -> UNVERIFIABLE (three structural
-#: funnels named in the review: probe_flag with no cli_name -- now fixed,
-#: see EXPECTED_UNVERIFIABLE_COUNTS' block_reviewer_bash_outside_allowlist
-#: comment for the one legitimate template-path exception; probe_harness_
-#: capability's unconditional UNVERIFIABLE; probe_command's ambiguous-exit
-#: fallback) is a loud test failure, never invisible. Together the two
-#: pinned baselines make the three-valued verdict honest: LIVE can only
-#: hold steady or grow, UNVERIFIABLE can only hold steady or shrink, DEAD
-#: stays asserted at zero by `test_named_alternatives_are_not_dead` itself.
+#: Per-guard LIVE-count FLOOR, so a verdict silently degrading LIVE ->
+#: UNVERIFIABLE is a loud failure. LIVE holds or grows, UNVERIFIABLE holds or
+#: shrinks, DEAD stays at KNOWN_DEAD_OFFERS.
 EXPECTED_LIVE_FLOORS: Dict[str, int] = {
+    "block_approval_sentinel_creation": 1,
+    "block_dev_repo_sentinel_removal": 1,
+    "block_hand_authored_handoff_creation": 2,
     "block_illegal_filename": 2,
+    "block_noncanonical_branch_creation": 1,
+    "block_stash_destruction": 1,
     "block_subagent_plan_body_bash_write": 1,
-    # UNTRIGGERED -> LIVE (this dispatch, C3): `_is_hazard_repo` replaced the
-    # hardcoded ~/.claude gate the prior UNTRIGGERED reason described, so
-    # this guard's target-class gate is reachable the same way the C2
-    # branch-creation guards' is -- `_ALTLIVE_HAZARD_CWD` +
-    # `_dc._is_hazard_repo` temporary swap (see `_trigger_check_blanket_
-    # git_add`). Only the `COORDINATOR_OVERRIDE_BLANKET_ADD` override
-    # extracts (proven LIVE behaviorally by `probe_override`): the message's
-    # "Use instead: git add -- path/to/file" / "scoped-git-commit ..." lines
-    # are plain indented text, not backtick-quoted, and `extract_
-    # alternatives`'s indented-line fallback only engages when `alts` is
-    # still empty after the OVERRIDE regex match -- it is not, here. Not
-    # this chunk's scope to reshape that message (owned by a parallel
-    # executor, `dispatch_checks.py` is out of C3's write scope).
-    "check_blanket_git_add": 5,
+    "block_topic_branch": 1,
+    "block_venv_creation": 1,
+    "block_worktree_creation": 3,
+    "check_blanket_git_add": 3,
     "check_cat_heredoc_write_advise": 1,
-    "check_heredoc_repo_write_advise": 1,
     "check_destructive_git_clean": 2,
+    "check_destructive_git_revert": 3,
     "check_destructive_git_revert_advisory": 2,
+    "check_destructive_rm": 1,
     "check_find_exec_rewrite": 2,
-    # Re-pinned 1 -> 2, 2026-08-15 (example-retrieval-repo-em cross-repo memo,
-    # `check_git_commit_safe_commit_advise` amend gate): the guard now
-    # advertises TWO independently-gated override keys
-    # (`COORDINATOR_ALLOW_GIT_COMMIT_BARE`, `COORDINATOR_ALLOW_GIT_COMMIT_
-    # AMEND`), reachable only via different input shapes -- see
-    # `_alternative_liveness.KEY_SPECIFIC_TRIGGERS`'s own docstring for the
-    # per-(guard, override-key) trigger this needed. Both now grade LIVE.
-    "check_git_commit_safe_commit_advise": 3,
+    "check_git_commit_safe_commit_advise": 2,
     "check_grep_via_bash_rewrite": 2,
     "check_head_tail_plumbing_rewrite": 2,
+    "check_heredoc_repo_write_advise": 1,
     "check_multiprobe_banner_rewrite": 2,
     "check_no_verify": 1,
     "check_offer_git_c": 2,
-    # Dropped 2 -> 1 (not a ratchet relaxation of a REAL degrade): the two
-    # `session-liveness-cli` COMMAND alternatives now grade UNVERIFIABLE
-    # under this suite's HOME quarantine (see the paired row in
-    # `EXPECTED_UNVERIFIABLE_COUNTS` for the measured cause), leaving only
-    # the `COORDINATOR_OVERRIDE_RAW_PID_LIVENESS` OVERRIDE alternative
-    # reliably LIVE here.
     "check_raw_pid_liveness": 1,
     "check_sed_range_read_advise": 1,
+    "check_stale_write": 1,
     "guard_grep_via_bash": 1,
-    # 1 (pre-existing, unrelated to the capability manifest) + 2 ("in-process" +
-    # "searched in-process" -- both now resolve LIVE against harness_capability_manifest.json,
-    # see EXPECTED_UNVERIFIABLE_COUNTS' comment above).
-    # Re-pinned 3 -> 2 on 2026-08-12, EM ruling. NOT a ratchet relaxation: the
-    # third alternative stopped existing rather than stopping verifying. This
-    # floor was pinned at 3 in a49cd99e8 (2026-07-29), when `_footer()` still
-    # appended `operator_override_note(_DISABLE_ENV_VAR)`, giving one OVERRIDE
-    # alternative alongside the two HARNESS_CAPABILITY markers. 18b73e5bc
-    # (2026-08-11) deliberately removed that call -- a successfully ANSWERED
-    # search is not a denial and has no bypass to offer, and the offer was
-    # itself the trust defect (five dispatched executors distrusted correct
-    # in-process results because of it). `_source_override_alternatives` finds
-    # OVERRIDE alternatives by AST-walking for `operator_override_note` calls,
-    # so it now correctly returns []; the two capability markers both still
-    # grade LIVE. `_DISABLE_ENV_VAR` still works, it is just documented in
-    # docs/reference/guard-override-keys.md instead of announced inline.
     "guard_inprocess_search": 2,
-    "guard_multiprobe_banner": 1,
-    "guard_plumbing_and_loops": 1,
-    # docs/plans/2026-08-01-branch-creation-seam-guards.md, chunk C7 (this
-    # C2-divergence closeout): C1's deny now renders a CONCRETE
-    # canonical-branch example (`git checkout work/<real machine>/<real
-    # date>`, resolved via `coordinator_core.machine_resolver.
-    # compute_machine` + `daily_day.local_day`, never a
-    # `work/<machine>/<date>` template) -- a real, invocable `git checkout
-    # <branch>` command that classifies LIVE via `probe_command`'s
-    # mutating-git-subcommand `--help` leg. This is the ratchet moving
-    # from EXPECTED_UNVERIFIABLE_COUNTS (removed above) to here, exactly
-    # as the C2 comment this replaces anticipated. `guard_branch_set_
-    # precedence` and `guard_longlived_branch_naming` (C5/C7's advisory
-    # guards) were deleted 2026-09-19 (docs/plans/2026-08-21-the-advisory-
-    # band-gets-smaller-cheaper-and-honest.md, C6); their rows leave this
-    # dict rather than being replaced.
-    "block_noncanonical_branch_creation": 1,
+    "guard_multiprobe_banner": 2,
+    "guard_plumbing_and_loops": 2,
+    "guard_powershell_via_bash": 1,
 }
 
 
@@ -464,8 +310,6 @@ def assert_named_alternatives_are_not_dead(guard):
     ev = altlive.evaluate_guard(guard)
     if not ev.fire.fired:
         pytest.skip("covered by test_registered_trigger_fires; not re-asserted here")
-    if ev.extraction_error:
-        pytest.fail("%s: message names an alternative this extractor cannot classify: %s" % (guard, ev.extraction_error))
 
     dead = [(alt, v) for alt, v in ev.verdicts if v.status is altlive.VerdictStatus.DEAD]
     known_dead = KNOWN_DEAD_OFFERS.get(guard, 0)
@@ -480,8 +324,6 @@ def assert_named_alternatives_are_not_dead(guard):
     unverifiable = [v for _alt, v in ev.verdicts if v.status is altlive.VerdictStatus.UNVERIFIABLE]
     expected = EXPECTED_UNVERIFIABLE_COUNTS.get(guard, 0)
     if guard == "check_raw_pid_liveness" and shutil.which("session-liveness-cli"):
-        # The two COMMAND alternatives are UNVERIFIABLE only when the shim is
-        # not resolvable; a PATH-installed shim grades them LIVE.
         expected = 0
     assert len(unverifiable) == expected, (
         "%s: expected %d UNVERIFIABLE alternative(s), got %d (%s) -- update "
@@ -499,23 +341,250 @@ def assert_named_alternatives_are_not_dead(guard):
     )
 
 
-def _fake_deny(reason: str) -> Dict[str, Any]:
-    return {
-        "hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "permissionDecision": "deny",
-            "permissionDecisionReason": reason,
-        }
+# ---------------------------------------------------------------------------
+# Rung gate: (guard, caller class) -> A/B/C/D computed from the record.
+# ---------------------------------------------------------------------------
+
+_RUNG_CLASSES = ("em", "unresolved", "coordinator:code-reviewer")
+
+#: Rung floor per guard, in `_RUNG_CLASSES` order, measured over record members.
+#: No ledger of the 2026-07-29 rungs exists in the tree, so this measured table
+#: is the baseline: a pair grading lower than its floor fails unless
+#: ACKNOWLEDGED_RUNG_DROPS names it. An EM floor of A or B is never edited down.
+#: A "D" floor is the lowest rung, so that (guard, class) pair cannot fail: it
+#: records that the guard offers that receiver nothing, and is raised when the
+#: guard gains an offer, never read as a passing grade.
+RUNG_FLOORS: Dict[str, str] = {
+    "block_approval_sentinel_creation": "BCC",
+    "block_dev_repo_sentinel_removal": "DCC",
+    "block_disarm_marker_sentinel_creation": "DCC",
+    "block_drive_root_new_dir_bash_write": "BDD",
+    "block_editor_kill_by_name": "DDD",
+    "block_external_workspace_vcs_write": "BDD",
+    "block_fleet_delegation_creation": "DCC",
+    "block_hand_authored_handoff_creation": "ACA",
+    "block_home_root_bash_write": "BDD",
+    "block_illegal_filename": "ACC",
+    "block_noncanonical_branch_creation": "ACC",
+    "block_perforce_submit": "DCC",
+    "block_push_pr_non_owned_remote": "DCC",
+    "block_reviewer_bash_outside_allowlist": "ACA",
+    "block_stash_destruction": "BCC",
+    "block_subagent_commit": "DCC",
+    "block_subagent_destructive_action": "CCC",
+    "block_subagent_findings_reject": "CCC",
+    "block_subagent_grant_acquisition": "CCC",
+    "block_subagent_guard_grant": "CCC",
+    "block_subagent_plan_body_bash_write": "CCC",
+    "block_subagent_stash_creation": "BCC",
+    "block_topic_branch": "CCC",
+    "block_unreal_engine_resave": "DDD",
+    "block_venv_creation": "CCC",
+    "block_whole_filesystem_scan": "DDD",
+    "block_worktree_creation": "ACC",
+    "block_worktree_sentinel_creation": "DCC",
+    "check_blanket_git_add": "BCC",
+    "check_cat_heredoc_write_advise": "CCC",
+    "check_destructive_git_clean": "BCC",
+    "check_destructive_git_revert": "ACC",
+    "check_destructive_git_revert_advisory": "BCC",
+    "check_destructive_rm": "ACA",
+    "check_find_exec_rewrite": "ACC",
+    "check_git_commit_safe_commit_advise": "BCC",
+    "check_grep_via_bash_rewrite": "CCC",
+    "check_head_tail_plumbing_rewrite": "ACC",
+    "check_heredoc_repo_write_advise": "CCC",
+    "check_multiprobe_banner_rewrite": "CCC",
+    "check_no_verify": "CCC",
+    "check_offer_git_c": "ACA",
+    "check_raw_pid_liveness": "BCC",
+    "check_runaway_find": "BCB",
+    "check_sed_range_read_advise": "BCC",
+    "check_stale_write": "ACA",
+    "guard_deploy_dirty_tree": "ADA",
+    "guard_doctrine_surface_bash_write": "DCC",
+    "guard_grep_via_bash": "CCC",
+    "guard_heavy_command_admission": "DCC",
+    "guard_host_subagent_bash_ban": "BCC",
+    "guard_host_subagent_bash_spawn_shapes": "BCC",
+    "guard_inprocess_search": "BBB",
+    "guard_multiprobe_banner": "ACC",
+    "guard_plumbing_and_loops": "ACC",
+    "guard_post_executor_verification": "BDD",
+    "guard_powershell_via_bash": "CCC",
+    "guard_repo_setup_claude_home_refusal": "BCC",
+    "guard_subagent_heavy_ue_launch": "CCC",
+    "p4_verb_fence": "DCC",
+}
+
+#: (guard, caller class) pairs allowed to grade below their floor. Empty: no
+#: rung drop is acknowledged.
+ACKNOWLEDGED_RUNG_DROPS: frozenset = frozenset()
+
+#: Guards whose `em_text` omits the text of an offered (non-route) member, so the
+#: EM-class rung is graded from the members that do occur. Shrink-only. Fix the
+#: guard (put the offer in its EM text), then delist. Each delisting changes
+#: that guard's EM render, which the guard_render_baseline fixture pins byte for
+#: byte, so it lands only with a ruled baseline re-freeze.
+EM_TEXT_OFFER_GAPS = frozenset(
+    {
+        "block_dev_repo_sentinel_removal",
+        "block_disarm_marker_sentinel_creation",
+        "block_editor_kill_by_name",
+        "block_fleet_delegation_creation",
+        "block_topic_branch",
+        "block_unreal_engine_resave",
+        "block_venv_creation",
+        "block_whole_filesystem_scan",
+        "block_worktree_creation",
+        "block_worktree_sentinel_creation",
+        "check_blanket_git_add",
+        "check_no_verify",
+        "guard_doctrine_surface_bash_write",
+        "guard_grep_via_bash",
+        "guard_post_executor_verification",
+        "guard_powershell_via_bash",
     }
+)
+
+
+@pytest.fixture(scope="module")
+def policy():
+    return load_policy(None)
+
+
+def _fired_record(guard):
+    result = altlive.fire_guard(guard)
+    assert result.fired, "%s did not fire (error=%r)" % (guard, result.error)
+    return result.envelope
+
+
+def test_rung_floors_name_exactly_the_registered_guards():
+    assert set(RUNG_FLOORS) == set(altlive.LIVE_TRIGGERS)
+
+
+@pytest.mark.parametrize("guard", sorted(altlive.LIVE_TRIGGERS))
+def test_no_guard_caller_pair_grades_below_its_rung_floor(guard, tmp_path, monkeypatch, policy):
+    if guard == "block_topic_branch":
+        (tmp_path / ".git").mkdir()
+        (tmp_path / ".git" / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
+        monkeypatch.chdir(tmp_path)
+    record = _fired_record(guard)
+    assert isinstance(record, AlternativeRecord), (
+        "%s returned %s, not an AlternativeRecord -- the rung is computed from record members"
+        % (guard, type(record).__name__)
+    )
+    table = altlive.rung_table(record, policy)
+    for cls, floor in zip(_RUNG_CLASSES, RUNG_FLOORS[guard]):
+        got = table[cls]
+        if (guard, cls) in ACKNOWLEDGED_RUNG_DROPS:
+            continue
+        assert altlive.RUNG_ORDER.index(got) <= altlive.RUNG_ORDER.index(floor), (
+            "%s graded %s for %s, below its floor %s" % (guard, got, cls, floor)
+        )
+
+
+_EM_RUNG_AB_FLOORS = 32
+
+
+def test_em_rung_a_and_b_floors_are_not_edited_down():
+    em_ab = sum(1 for floor in RUNG_FLOORS.values() if floor[0] in "AB")
+    assert em_ab >= _EM_RUNG_AB_FLOORS, (
+        "EM rung A/B floors were edited down -- a downgrade needs an ACKNOWLEDGED_RUNG_DROPS entry"
+    )
+
+
+def test_em_text_offer_gaps_match_the_pinned_set():
+    gaps = set()
+    for guard in altlive.LIVE_TRIGGERS:
+        record = _fired_record(guard)
+        if any(
+            not isinstance(m, EscalationRoute) for m in altlive.em_text_gaps(record)
+        ):
+            gaps.add(guard)
+    assert gaps == EM_TEXT_OFFER_GAPS, (
+        "EM-text offer gaps changed: new %s, closed %s"
+        % (sorted(gaps - EM_TEXT_OFFER_GAPS), sorted(EM_TEXT_OFFER_GAPS - gaps))
+    )
+
+
+class TestRungSemantics:
+    """`rung` on synthetic records: it reads members and reachability, never the verdict kind."""
+
+    REVIEWER = "coordinator:code-reviewer"
+
+    def test_ready_command_reachable_for_em_is_a(self, policy):
+        record = _record(ReadyCommand("git status"))
+        assert altlive.rung(record, None, Audience.EM, policy) == "A"
+
+    def test_adaptable_offer_or_capability_is_b(self, policy):
+        offer = _record(AdaptableOffer("git status", "paths"))
+        ref = _record(CapabilityRef("guard_inprocess_search::in-process"))
+        assert altlive.rung(offer, None, Audience.EM, policy) == "B"
+        assert altlive.rung(ref, None, Audience.EM, policy) == "B"
+
+    def test_only_route_or_override_is_c(self, policy):
+        record = _record(EscalationRoute("what", "authorize"), Override("COORDINATOR_ALLOW_X"))
+        assert altlive.rung(record, None, Audience.EM, policy) == "C"
+        assert altlive.rung(record, self.REVIEWER, Audience.SUBAGENT, policy) == "C"
+
+    def test_nothing_reachable_is_d(self, policy):
+        record = _record(ReadyCommand("rm -rf build"))
+        assert altlive.rung(record, self.REVIEWER, Audience.SUBAGENT, policy) == "D"
+        assert altlive.rung(record, None, Audience.SUBAGENT, policy) == "D"
+
+    def test_unresolved_subagent_fails_closed_but_keeps_the_route(self, policy):
+        record = _record(ReadyCommand("git status"), EscalationRoute("what", "authorize"))
+        assert altlive.rung(record, None, Audience.SUBAGENT, policy) == "C"
+
+    def test_verdict_kind_never_changes_the_rung(self, policy):
+        members = (CapabilityRef("guard_inprocess_search::in-process"),)
+        deny = _record(*members, kind="deny")
+        advisory = _record(*members, kind="advisory")
+        assert altlive.rung(deny, None, Audience.EM, policy) == altlive.rung(advisory, None, Audience.EM, policy) == "B"
+
+    def test_em_text_drops_a_member_whose_text_it_does_not_offer(self, policy):
+        record = _record(ReadyCommand("git status"), em_text="Use something else entirely.")
+        assert altlive.rung(record, None, Audience.EM, policy) == "D"
+        assert [type(m) for m in altlive.em_text_gaps(record)] == [ReadyCommand]
+
+    def test_em_text_keeps_a_member_whose_text_it_offers(self, policy):
+        record = _record(ReadyCommand("git status"), em_text="Run git status instead.")
+        assert altlive.rung(record, None, Audience.EM, policy) == "A"
+        assert altlive.em_text_gaps(record) == []
+
+    def test_subagent_rung_ignores_em_text(self, policy):
+        record = _record(ReadyCommand("git status"), em_text="Nothing relevant.")
+        assert altlive.rung(record, self.REVIEWER, Audience.SUBAGENT, policy) == "A"
+
+    def test_rewrite_command_counts_for_em_without_appearing_in_em_text(self, policy):
+        record = _record(
+            ReadyCommand("git status"),
+            kind="rewrite",
+            updated_input={"command": "git status"},
+            em_text="Rewritten for you.",
+        )
+        assert altlive.rung(record, None, Audience.EM, policy) == "A"
+
+    def test_em_text_is_never_parsed_for_alternatives(self, policy):
+        record = _record(EscalationRoute("what", "authorize"), em_text="Use instead: `git status`")
+        assert altlive.rung(record, None, Audience.EM, policy) == "D"
+
+    def test_rung_table_covers_em_unresolved_and_each_confined_class(self, policy):
+        table = altlive.rung_table(_record(ReadyCommand("git status")), policy)
+        assert set(_RUNG_CLASSES) <= set(table)
+        assert set(table) == {"em", "unresolved"} | set(altlive.confined_caller_classes(policy))
+
+
+def _fake_deny(reason: str) -> AlternativeRecord:
+    return _record(ReadyCommand("git --version"), summary=reason)
 
 
 class TestMetaGateProvenToFail:
     def test_dead_binary_alternative_is_caught(self):
-        hso = _fake_deny(
-            "BLOCKED: fake finding.\n\nUse instead: `this-binary-does-not-exist-anywhere --fake-flag`\n"
-        )["hookSpecificOutput"]
-        alts = altlive.extract_alternatives(hso)
-        assert alts, "extractor found no alternative in a message with an explicit backtick command"
+        record = _record(ReadyCommand("this-binary-does-not-exist-anywhere --fake-flag"))
+        alts = altlive.record_alternatives(record)
+        assert alts, "no alternative read from a record with a ReadyCommand"
         verdicts = [altlive.probe_alternative(a) for a in alts]
         assert any(v.status is altlive.VerdictStatus.DEAD for v in verdicts), (
             "a nonexistent-binary alternative was not classified DEAD: %s" % verdicts
@@ -543,8 +612,7 @@ class TestMetaGateProvenToFail:
         assert verdict.status is altlive.VerdictStatus.DEAD
 
     def test_live_command_alternative_passes(self):
-        hso = _fake_deny("BLOCKED: fake finding.\n\nUse instead: `git --version`\n")["hookSpecificOutput"]
-        alts = altlive.extract_alternatives(hso)
+        alts = altlive.record_alternatives(_record(ReadyCommand("git --version")))
         assert alts
         verdicts = [altlive.probe_alternative(a) for a in alts]
         assert all(v.status is altlive.VerdictStatus.LIVE for v in verdicts), verdicts
@@ -564,16 +632,9 @@ class TestMetaGateProvenToFail:
         assert verdict.status is altlive.VerdictStatus.LIVE
 
     def test_key_specific_trigger_not_reading_its_var_is_still_dead(self, monkeypatch):
-        """KEY_SPECIFIC_TRIGGERS (added to close the disjoint-input-shape
-        gap for check_git_commit_safe_commit_advise's two override keys)
-        must stay a proven-to-fail mechanism, not a suppression one -- a
-        registered key-specific trigger that never actually reads the env
-        var it is supposed to prove must still grade DEAD, exactly like an
-        ordinary LIVE_TRIGGERS-based probe would. Registers a throwaway
-        (guard, env_var) row whose trigger always returns the SAME deny
-        regardless of the env var, and asserts probe_override still reports
-        DEAD -- a registry that can only turn DEAD into LIVE would pass this
-        with a false LIVE."""
+        """A registered key-specific trigger that never reads the env var it is
+        supposed to prove must still grade DEAD, exactly like an ordinary
+        LIVE_TRIGGERS-based probe would."""
         guard = "check_git_commit_safe_commit_advise"
         env_var = "COORDINATOR_ALLOW_TOTALLY_MADE_UP_KEY_SPECIFIC"
 
@@ -595,40 +656,14 @@ class TestCapabilityManifestOracle:
         ev = altlive.evaluate_guard("guard_inprocess_search")
         assert ev.fire.fired
         capability_verdicts = [v for alt, v in ev.verdicts if alt.kind is altlive.AlternativeKind.HARNESS_CAPABILITY]
-        assert capability_verdicts, "expected guard_inprocess_search's real message to name its in-process marker(s)"
+        assert capability_verdicts, "expected guard_inprocess_search's real record to carry its in-process capability"
         assert all(v.status is altlive.VerdictStatus.LIVE for v in capability_verdicts), capability_verdicts
 
-    def test_guard_grep_via_bash_composed_advisory_names_the_same_real_capability(self):
-        """guard_grep_via_bash's composed-advisory path, narrowed 2026-07-30
-        (worklist row H11(c)): a plain `&&`-chained grep with no partial
-        rewrite and no genuine GNU-only construct is now SILENT (no
-        actionable alternative -- design-as-offers), so that shape no
-        longer names any capability at all. The surviving population --
-        a genuine GNU-only construct (`-P`/`-z`/a long option other than
-        `--include`/`--exclude`) with no partial rewrite -- still fires.
-
-        2026-07-30 (a9fce05a, same-day follow-up to H11(b)/(c)): the
-        sentence this test used to pin an "in-process" marker against was
-        cut from the message entirely. It never described a capability the
-        reader could take -- it explained that a DIFFERENT, already-run
-        answerer had declined this exact invocation and could not be
-        re-targeted or reordered, which is exactly the unusable-by-the-
-        reader prose the message-trim exists to remove. Its removal is not
-        a claim silently downgrading LIVE -> UNVERIFIABLE (the shape this
-        gate exists to catch) -- there is no claim left to grade at all,
-        which is the module docstring's named-legitimate direction of
-        travel ("the UNVERIFIABLE ceiling may only shrink"), one step
-        further: to zero. This test now pins the negative so the sentence
-        cannot creep back into the reader's context (mirroring
-        test_guard_grep_via_bash.py's own
-        `test_message_does_not_explain_why_the_in_process_answerer_declined`),
-        and asserts the composed-advisory message's remaining
-        HARNESS_CAPABILITY alternative (the subagent-dispatch fallback)
-        is graded consistently with EXPECTED_UNVERIFIABLE_COUNTS above --
-        no manifest entry exists for that claim, so it must land
-        UNVERIFIABLE, never silently LIVE by prose coincidence with
-        guard_inprocess_search's own genuine "in-process" claim (the T8
-        shape this module's other tests below plant deliberately)."""
+    def test_guard_grep_via_bash_composed_advisory_no_longer_claims_in_process(self):
+        """A plain `&&`-chained grep is SILENT. A genuine GNU-only construct
+        with no partial rewrite still fires, and its record offers the
+        subagent-dispatch fallback as a template -- never an `in-process`
+        capability claim."""
         silent_payload = {
             "tool_name": "Bash",
             "tool_input": {"command": "grep -rn foo . && echo done"},
@@ -636,50 +671,25 @@ class TestCapabilityManifestOracle:
         assert guard_grep_via_bash.check(silent_payload, host_is_windows=False) is None
 
         payload = {"tool_name": "Bash", "tool_input": {"command": "grep -Pn foo . && echo done"}}
-        envelope = guard_grep_via_bash.check(payload, host_is_windows=False)
-        assert envelope is not None
-        hso = envelope["hookSpecificOutput"]
-        assert "registered ahead of this guard" not in hso["additionalContext"]
-        alts = altlive.extract_alternatives(hso)
-        capability_alts = [a for a in alts if a.kind is altlive.AlternativeKind.HARNESS_CAPABILITY]
-        in_process_alts = [a for a in capability_alts if a.detail == "in-process"]
-        assert not in_process_alts, (
-            "guard_grep_via_bash's composed advisory should no longer name an "
-            "'in-process' marker at all (cut 2026-07-30, a9fce05a) -- if one "
-            "reappears here, the cut explanatory sentence has crept back in: "
-            "%s" % in_process_alts
-        )
-        assert capability_alts, "expected the subagent-dispatch fallback to still extract as a HARNESS_CAPABILITY alternative"
-        verdicts = [altlive.probe_harness_capability(a, guard="guard_grep_via_bash") for a in capability_alts]
-        assert all(v.status is altlive.VerdictStatus.UNVERIFIABLE for v in verdicts), verdicts
+        record = guard_grep_via_bash.check(payload, host_is_windows=False)
+        assert isinstance(record, AlternativeRecord)
+        assert "registered ahead of this guard" not in (record.em_text or record.summary)
+        refs = [m for m in record.members if isinstance(m, CapabilityRef)]
+        assert not [r for r in refs if "in-process" in r.capability_id], refs
+        assert any(isinstance(m, AdaptableOffer) and "subagent" in m.template for m in record.members)
 
     def test_planted_t8_shape_defect_is_not_corroborated_by_prose_coincidence(self):
-        """Plant the T8 shape: a message using the SAME marker word
-        ("in-process") that a DIFFERENT guard's genuinely-live capability
-        also uses, fired under a guard name (`check_head_tail_plumbing_
-        rewrite`) that carries NO manifest entry for that marker --
-        mirroring that guard's own real, unverified "in-process, zero
-        extra forks" claim about what is actually a `python3 -c`
-        subprocess (see harness_capability_manifest.json's own comment;
-        roster-truth audit: coordinator-content-repo state/audits/2026-07-29-search-
-        capability-roster-truth.md). The REAL, guard-scoped oracle must
-        refuse to grade this LIVE just because `guard_inprocess_search::
-        in-process` happens to be a true entry."""
-        hso = _fake_deny(
-            "BASH-SPAWN ADVISORY: a single python3 -c collecting the same "
-            "lines and slicing head/tail in-process avoids the extra fork."
-        )["hookSpecificOutput"]
-        alts = altlive.extract_alternatives(hso)
-        capability_alts = [a for a in alts if a.kind is altlive.AlternativeKind.HARNESS_CAPABILITY]
-        assert capability_alts, "expected the planted message to extract an 'in-process' HARNESS_CAPABILITY alternative"
-        assert capability_alts[0].detail == "in-process"
+        """The SAME marker word ("in-process") that a DIFFERENT guard's
+        genuinely-live capability also uses, fired under a guard name
+        (`check_head_tail_plumbing_rewrite`) that carries NO manifest entry
+        for that marker. The guard-scoped oracle must refuse to grade it LIVE
+        just because `guard_inprocess_search::in-process` is a true entry."""
+        alt = altlive.Alternative(altlive.AlternativeKind.HARNESS_CAPABILITY, "in-process", "in-process")
 
-        real_verdicts = [
-            altlive.probe_harness_capability(a, guard="check_head_tail_plumbing_rewrite") for a in capability_alts
-        ]
-        assert all(v.status is altlive.VerdictStatus.UNVERIFIABLE for v in real_verdicts), (
-            "the real, guard-scoped oracle incorrectly corroborated a false capability "
-            "claim by bare-marker prose coincidence: %s" % real_verdicts
+        real_verdict = altlive.probe_harness_capability(alt, guard="check_head_tail_plumbing_rewrite")
+        assert real_verdict.status is altlive.VerdictStatus.UNVERIFIABLE, (
+            "the guard-scoped oracle incorrectly corroborated a false capability "
+            "claim by bare-marker prose coincidence: %s" % real_verdict
         )
 
         naive_manifest = {"in-process": {"available": True, "note": "guard_inprocess_search exists"}}
@@ -690,18 +700,19 @@ class TestCapabilityManifestOracle:
                 return altlive.VerdictStatus.UNVERIFIABLE.value
             return altlive.VerdictStatus.LIVE.value if entry.get("available") is True else altlive.VerdictStatus.DEAD.value
 
-        naive_verdict = _naive_lookup("check_head_tail_plumbing_rewrite", capability_alts[0].detail)
+        naive_verdict = _naive_lookup("check_head_tail_plumbing_rewrite", alt.detail)
         assert naive_verdict == altlive.VerdictStatus.LIVE.value, (
-            "expected the reconstructed naive (bare-marker, guard-blind) oracle to "
-            "grade the planted T8-shape defect LIVE -- if it does not, this test no "
-            "longer demonstrates a real defect the real oracle's guard-scoping "
-            "closes, and is exercising a fixture rather than the actual risk"
+            "the reconstructed naive (bare-marker, guard-blind) oracle must grade the planted "
+            "T8-shape defect LIVE, else this test exercises a fixture rather than the real risk"
         )
-        assert real_verdicts[0].status is not altlive.VerdictStatus.LIVE, (
-            "the real oracle must diverge from the naive one on this exact planted "
-            "defect -- both landing on the same verdict means this test is not "
-            "actually discriminating"
-        )
+        assert real_verdict.status is not altlive.VerdictStatus.LIVE
+
+    def test_capability_ref_id_is_graded_against_the_manifest_by_its_own_id(self):
+        record = _record(CapabilityRef("guard_inprocess_search::in-process"))
+        (alt,) = altlive.record_alternatives(record)
+        assert alt.kind is altlive.AlternativeKind.HARNESS_CAPABILITY
+        verdict = altlive.probe_alternative(alt, guard="some_other_guard")
+        assert verdict.status is altlive.VerdictStatus.LIVE
 
 
 class _FakeNTOS:
@@ -760,28 +771,73 @@ class TestResolveOnPathOrSettingsHomeWindowsGuard:
         )
 
 
-class TestExtractionEdgeCases:
-    def test_pure_policy_message_with_no_alternative_is_empty_not_a_failure(self):
-        hso = _fake_deny("BLOCKED: this is banned. No exceptions.")["hookSpecificOutput"]
-        assert altlive.extract_alternatives(hso) == []
+class TestRecordAlternatives:
+    def test_pure_policy_record_offers_no_alternative(self):
+        record = _record(EscalationRoute("what", "authorize"))
+        assert altlive.record_alternatives(record) == []
 
-    def test_cue_phrase_with_no_recognizable_signal_raises(self):
-        hso = _fake_deny("BLOCKED: this is banned. Use instead: something we describe only in prose with no code span at all.")[
-            "hookSpecificOutput"
-        ]
-        with pytest.raises(altlive.UnclassifiableAlternative):
-            altlive.extract_alternatives(hso)
+    def test_ready_command_and_rewrite_command_are_one_alternative(self):
+        record = _record(
+            ReadyCommand("git -C /tmp status"),
+            kind="rewrite",
+            updated_input={"command": "git -C /tmp status"},
+        )
+        alts = altlive.record_alternatives(record)
+        assert len(alts) == 1
+        assert alts[0].kind is altlive.AlternativeKind.COMMAND
+        assert alts[0].detail == ["git", "-C", "/tmp", "status"]
 
-    def test_updated_input_command_is_always_extracted_as_a_command_alternative(self):
-        hso = {
+    def test_updated_input_command_is_extracted_without_a_member(self):
+        record = _record(EscalationRoute("what", "authorize"), kind="rewrite", updated_input={"command": "git -C /tmp status"})
+        assert any(
+            a.kind is altlive.AlternativeKind.COMMAND and a.detail == ["git", "-C", "/tmp", "status"]
+            for a in altlive.record_alternatives(record)
+        )
+
+    def test_members_map_to_their_alternative_kinds(self):
+        record = _record(
+            CapabilityRef("guard_inprocess_search::in-process"),
+            Override("COORDINATOR_ALLOW_X"),
+        )
+        kinds = [a.kind for a in altlive.record_alternatives(record)]
+        assert kinds == [altlive.AlternativeKind.HARNESS_CAPABILITY, altlive.AlternativeKind.OVERRIDE]
+
+    def test_a_git_template_is_probed_with_its_placeholders_intact(self):
+        record = _record(AdaptableOffer("git stash push -u -- <paths>", "paths"))
+        (alt,) = altlive.record_alternatives(record)
+        assert alt.kind is altlive.AlternativeKind.COMMAND and alt.detail[0] == "git"
+
+    @pytest.mark.parametrize(
+        "template",
+        [
+            "taskkill /PID <pid>",
+            "write under <repo>/scratch/",
+            "git archive <sha> | tar -x -C <tmpdir>",
+            "git show stash@{N}:<path> > <path>",
+        ],
+    )
+    def test_other_templates_are_never_executed(self, template):
+        assert altlive.record_alternatives(_record(AdaptableOffer(template, "x"))) == []
+
+    def test_a_legacy_dict_result_offers_only_its_updated_input_command(self, monkeypatch):
+        legacy = {
             "hookSpecificOutput": {
                 "permissionDecision": "allow",
-                "additionalContext": "Auto-rewritten.",
-                "updatedInput": {"command": "git -C /tmp status"},
+                "additionalContext": "Use instead: `git status`",
+                "updatedInput": {"command": "git status"},
             }
-        }["hookSpecificOutput"]
-        alts = altlive.extract_alternatives(hso)
-        assert any(a.kind is altlive.AlternativeKind.COMMAND and a.detail == ["git", "-C", "/tmp", "status"] for a in alts)
+        }
+        monkeypatch.setitem(altlive.LIVE_TRIGGERS, "fake_legacy_guard", lambda: legacy)
+        ev = altlive.evaluate_guard("fake_legacy_guard")
+        assert [a.raw for a in ev.alternatives] == ["git status"]
+
+        prose_only = {"hookSpecificOutput": {"permissionDecision": "deny", "permissionDecisionReason": "Use instead: `git status`"}}
+        monkeypatch.setitem(altlive.LIVE_TRIGGERS, "fake_legacy_guard", lambda: prose_only)
+        assert altlive.evaluate_guard("fake_legacy_guard").alternatives == []
+
+    def test_the_prose_extractor_is_gone(self):
+        assert not [n for n in dir(altlive) if n.startswith("extract_")]
+        assert not hasattr(altlive, "UnclassifiableAlternative")
 
 
 EXPECTED_OURS = frozenset(
@@ -826,58 +882,6 @@ def test_report_output_is_band_attributable():
     assert "--- per-band breakdown ---" in report
     assert "ours: " in report
     assert "peer: " in report
-
-
-class TestPlainIndentedOffers:
-    """The indented-line fallback grades one-line offers and skips rewrite
-    bodies, with or without a call-site override route."""
-
-    _REWRITE_BODY = (
-        "[coordinator] BASH-SPAWN ADVISORY: use rewrite.\n\n"
-        "  Example:  python3 -c 'import os\n"
-        "import subprocess\n"
-        "for _l in os.listdir():\n"
-        "    if _l:\n"
-        "        print(_l)\n"
-        "raise SystemExit(0)'\n"
-    )
-    _BLANKET_ADD = (
-        "BLOCKED: blanket `git add` sweeps in sibling sessions' edits.\n\n"
-        "Use instead:\n"
-        "  git add -- path/to/file\n"
-        "  git commit -m <subject> -- path/to/file\n"
-    )
-
-    @staticmethod
-    def _hso(text):
-        return {"permissionDecisionReason": text}
-
-    def test_multiline_rewrite_body_is_not_graded_with_an_override_route(self):
-        alts = altlive.extract_alternatives(
-            self._hso(self._REWRITE_BODY), override_route_known=True
-        )
-        assert [a for a in alts if a.kind is altlive.AlternativeKind.COMMAND] == []
-
-    def test_multiline_rewrite_body_without_a_route_fails_loud_not_graded_dead(self):
-        with pytest.raises(altlive.UnclassifiableAlternative):
-            altlive.extract_alternatives(self._hso(self._REWRITE_BODY))
-
-    @pytest.mark.parametrize("override_route_known", [False, True])
-    def test_blanket_add_extracts_both_offers(self, override_route_known):
-        alts = altlive.extract_alternatives(
-            self._hso(self._BLANKET_ADD), override_route_known=override_route_known
-        )
-        raws = [a.raw for a in alts if a.kind is altlive.AlternativeKind.COMMAND]
-        assert raws == [
-            "git add -- path/to/file",
-            "git commit -m <subject> -- path/to/file",
-        ]
-
-    def test_override_route_known_still_skips_a_message_with_no_cue(self):
-        alts = altlive.extract_alternatives(
-            self._hso("BLOCKED.\n\n  git add -- path/to/file\n"), override_route_known=True
-        )
-        assert alts == []
 
 
 class TestWindowsPosixTwinResolution:

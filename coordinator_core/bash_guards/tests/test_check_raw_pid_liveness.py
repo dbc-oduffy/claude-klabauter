@@ -5,6 +5,11 @@ import pytest
 
 from coordinator_core.bash_guards import _verdict
 from coordinator_core.bash_guards import check_raw_pid_liveness as guard
+from coordinator_core.guard_messages.testing import envelope_of
+
+
+def _enveloped(check):
+    return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 
 def _payload(command, agent_id=None):
@@ -34,100 +39,100 @@ def _clean_override(monkeypatch):
 class TestNonBashOrEmpty:
     def test_non_bash_tool_allows(self):
         payload = {"tool_name": "Edit", "tool_input": {"file_path": "x"}}
-        assert guard.check(payload) is None
+        assert _enveloped(guard.check)(payload) is None
 
     def test_empty_command_allows(self):
-        assert guard.check(_payload("")) is None
+        assert _enveloped(guard.check)(_payload("")) is None
 
     def test_malformed_tool_input_allows(self):
         payload = {"tool_name": "Bash", "tool_input": "not-a-dict"}
-        assert guard.check(payload) is None
+        assert _enveloped(guard.check)(payload) is None
 
 
 class TestPsPForm:
     def test_ps_p_variable_arg_advises(self):
-        out = guard.check(_payload('pid=$(cat claim.pid); ps -p "$pid"'))
+        out = _enveloped(guard.check)(_payload('pid=$(cat claim.pid); ps -p "$pid"'))
         reason = _reason(out)
         assert "ps -p" in reason
         assert "session-liveness-cli" in reason
 
     def test_ps_p_literal_pid_number_advises(self):
-        out = guard.check(_payload("ps -p 12345"))
+        out = _enveloped(guard.check)(_payload("ps -p 12345"))
         _reason(out)
 
     def test_ps_p_no_argument_allows(self):
-        assert guard.check(_payload("ps -p")) is None
+        assert _enveloped(guard.check)(_payload("ps -p")) is None
 
     def test_ps_without_p_flag_allows(self):
-        assert guard.check(_payload("ps aux | grep something")) is None
+        assert _enveloped(guard.check)(_payload("ps aux | grep something")) is None
 
 
 class TestKill0Form:
     def test_kill_0_variable_arg_advises(self):
-        out = guard.check(_payload("kill -0 $pid"))
+        out = _enveloped(guard.check)(_payload("kill -0 $pid"))
         reason = _reason(out)
         assert "kill -0" in reason
 
     def test_kill_0_dollar_dollar_advises(self):
-        out = guard.check(_payload("kill -0 $$"))
+        out = _enveloped(guard.check)(_payload("kill -0 $$"))
         _reason(out)
 
     def test_kill_non_zero_signal_allows(self):
-        assert guard.check(_payload("kill -9 $pid")) is None
+        assert _enveloped(guard.check)(_payload("kill -9 $pid")) is None
 
     def test_plain_kill_allows(self):
-        assert guard.check(_payload("kill $pid")) is None
+        assert _enveloped(guard.check)(_payload("kill $pid")) is None
 
 
 class TestOsKillForm:
     def test_python_one_liner_advises(self):
-        out = guard.check(
+        out = _enveloped(guard.check)(
             _payload("python3 -c \"import os; os.kill(pid, 0)\"")
         )
         reason = _reason(out)
         assert "os.kill(pid, 0)" in reason
 
     def test_python_one_liner_no_spaces_advises(self):
-        out = guard.check(_payload("python3 -c \"os.kill(target,0)\""))
+        out = _enveloped(guard.check)(_payload("python3 -c \"os.kill(target,0)\""))
         _reason(out)
 
     def test_os_kill_non_zero_signal_allows(self):
-        assert guard.check(_payload("python3 -c \"os.kill(pid, 9)\"")) is None
+        assert _enveloped(guard.check)(_payload("python3 -c \"os.kill(pid, 9)\"")) is None
 
 
 class TestSegmentScoping:
     def test_unrelated_neighboring_segment_does_not_leak_context(self):
-        assert guard.check(_payload("ps -p nothing_here_at_all_xyz; echo pid")) is None
+        assert _enveloped(guard.check)(_payload("ps -p nothing_here_at_all_xyz; echo pid")) is None
 
     def test_matched_segment_carries_its_own_pid_hint(self):
-        out = guard.check(_payload("echo hello && ps -p $mypid"))
+        out = _enveloped(guard.check)(_payload("echo hello && ps -p $mypid"))
         _reason(out)
 
 
 class TestOverride:
     def test_override_env_allows(self, monkeypatch):
         monkeypatch.setenv(guard._OVERRIDE_ENV, "1")
-        assert guard.check(_payload("kill -0 $pid")) is None
+        assert _enveloped(guard.check)(_payload("kill -0 $pid")) is None
 
 
 class TestHeredocBodyStripped:
     def test_heredoc_body_containing_ps_p_pid_allows(self):
         cmd = "cat <<'EOF' > probe.py\n" "ps -p 1234\n" "EOF\n"
-        assert guard.check(_payload(cmd)) is None
+        assert _enveloped(guard.check)(_payload(cmd)) is None
 
     def test_actual_command_after_heredoc_still_advises(self):
         cmd = "cat <<'EOF' > probe.py\nsome data\nEOF\nps -p $pid"
-        out = guard.check(_payload(cmd))
+        out = _enveloped(guard.check)(_payload(cmd))
         _reason(out)
 
 
 class TestNotIdentityGated:
     def test_advises_without_agent_id(self):
-        out = guard.check(_payload("ps -p $pid"))
+        out = _enveloped(guard.check)(_payload("ps -p $pid"))
         _reason(out)
 
     def test_advises_with_agent_id(self):
-        out = guard.check(_payload("ps -p $pid", agent_id="a0123456789abcdef"))
+        out = _enveloped(guard.check)(_payload("ps -p $pid", agent_id="a0123456789abcdef"))
         _reason(out)
 
 
@@ -137,7 +142,7 @@ class TestPowerShellDialectRecordsSilent:
         payload = _payload("Get-Process -Id $pid")
         payload["tool_name"] = "PowerShell"
         with _verdict.collecting() as silences:
-            result = guard.check(payload)
+            result = _enveloped(guard.check)(payload)
         assert result is None
         assert _verdict.was_silent("check_raw_pid_liveness", silences)
 
@@ -145,7 +150,7 @@ class TestPowerShellDialectRecordsSilent:
         payload = _payload("ps -p $pid")
         payload["tool_name"] = "PowerShell"
         with _verdict.collecting() as silences:
-            result = guard.check(payload)
+            result = _enveloped(guard.check)(payload)
         assert result is None
         assert _verdict.was_silent("check_raw_pid_liveness", silences)
 
@@ -159,7 +164,7 @@ _REPRO = (
 
 class TestQuotedArgumentMask:
     def test_idiom_inside_non_executed_quoted_arg_is_allowed(self):
-        assert guard.check(_payload(_REPRO)) is None
+        assert _enveloped(guard.check)(_payload(_REPRO)) is None
 
     @pytest.mark.parametrize(
         "command",
@@ -177,7 +182,7 @@ class TestQuotedArgumentMask:
     )
     def test_executed_or_bare_idiom_still_denies(self, command):
         assert "session-liveness-cli session-live SID" in _reason(
-            guard.check(_payload(command))
+            _enveloped(guard.check)(_payload(command))
         )
 
     def test_mask_is_length_preserving(self):
@@ -186,6 +191,6 @@ class TestQuotedArgumentMask:
 
 class TestEnvelopeOffers:
     def test_keeps_the_two_session_offers(self):
-        reason = _reason(guard.check(_payload("kill -0 $PID")))
+        reason = _reason(_enveloped(guard.check)(_payload("kill -0 $PID")))
         assert "`session-liveness-cli session-live SID`" in reason
         assert "`session-liveness-cli claim-holder-live CLAIM_DIR`" in reason

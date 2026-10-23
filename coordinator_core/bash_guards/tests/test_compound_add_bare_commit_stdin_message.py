@@ -26,6 +26,11 @@ import pytest
 from coordinator_core.bash_guards.dispatch_checks import (
     check_git_commit_safe_commit_advise,
 )
+from coordinator_core.guard_messages.testing import envelope_of
+
+
+def _enveloped(check):
+    return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 
 def _is_deny(result):
@@ -39,7 +44,7 @@ def _is_deny(result):
 @pytest.mark.cadence
 def test_compound_add_then_commit_dash_f_dash_piped_is_scoped_to_its_add():
     cmd = 'git add a.py && echo msg | git commit -F -'
-    result = check_git_commit_safe_commit_advise(cmd)
+    result = _enveloped(check_git_commit_safe_commit_advise)(cmd)
     assert not _is_deny(result), result
     assert result["hookSpecificOutput"]["updatedInput"]["command"] == cmd + " -- a.py"
 
@@ -48,7 +53,7 @@ def test_compound_add_then_commit_dash_f_dash_piped_is_scoped_to_its_add():
 @pytest.mark.cadence
 def test_compound_add_then_commit_dash_f_dash_heredoc_fed_denies():
     cmd = "git add a.py && git commit -F - <<'EOF'\nfoo\nEOF"
-    result = check_git_commit_safe_commit_advise(cmd)
+    result = _enveloped(check_git_commit_safe_commit_advise)(cmd)
     assert _is_deny(result), result
 
 
@@ -61,5 +66,5 @@ def test_compound_add_then_commit_dash_m_command_substitution_heredoc_denies():
         'EOF\n'
         ')"'
     )
-    result = check_git_commit_safe_commit_advise(cmd)
+    result = _enveloped(check_git_commit_safe_commit_advise)(cmd)
     assert _is_deny(result), result

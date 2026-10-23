@@ -358,12 +358,17 @@ def _arm_verdict(
     resume_rows = list(resume.incomplete) if resume and resume_ledger is None else None
     if landed_sink is not None and resume_rows:
         landed_sink.extend(resume.landed_open)
+    pending_rulings = None
+    if resume_plan is not None:
+        from coordinator_core.ops.dispatch_emit.requirements_ledger import pending_ruling_ids
+
+        pending_rulings = list(pending_ruling_ids((sizing.get("requirement_register") or {}).get("rows") or []))
 
     if arm != ARM_M_PLUS:
         # roadmap mints no baton: roadmap-blitz stubs are the batons
         return GateVerdict(
             arm=arm, halt=None, acceptance=acceptance, resume_plan=resume_plan, resume_rows=resume_rows,
-            resume_ledger=resume_ledger, design_route=route_payload,
+            resume_ledger=resume_ledger, design_route=route_payload, pending_rulings=pending_rulings,
         )
 
     doc_new = _load_doc_new()
@@ -390,6 +395,7 @@ def _arm_verdict(
         spine_plan=spine,
         resume_ledger=resume_ledger,
         design_route=route_payload,
+        pending_rulings=pending_rulings,
     )
 
 

@@ -91,7 +91,7 @@ import os
 import re
 from typing import Any, Dict, Optional
 
-from coordinator_core._hook_envelope import allow_advisory
+from coordinator_core._hook_envelope import _stamp
 from coordinator_core.bash_guards._helpers import operator_override_note
 from coordinator_core.bash_guards._tool_names import COMMAND_TOOL_NAMES
 
@@ -149,12 +149,34 @@ def _advisory(payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     of them; repeating it back here would only spend prose-cap bytes on
     something the reader does not need restated.
     """
-    return allow_advisory(
-        "PreToolUse",
+    from coordinator_core.guard_messages.alternative_record import (
+        AdaptableOffer,
+        AlternativeRecord,
+        EscalationRoute,
+        Override,
+    )
+
+    body = (
         "powershell-via-bash: double-quoted inline script contains `$` -- "
         "bash will silently expand it first. Use the `PowerShell` tool "
-        "instead (verbatim, no bash seam), or single-quote the script. %s"
-        % operator_override_note(_OVERRIDE_ENV_VAR, payload=payload),
+        "instead (verbatim, no bash seam), or single-quote the script. "
+    )
+    return AlternativeRecord(
+        verdict_kind="advisory",
+        guard_name="powershell-via-bash-guard",
+        summary=body.strip(),
+        members=(
+            AdaptableOffer(
+                template="the `PowerShell` tool with the script verbatim",
+                what_to_adapt="the script",
+            ),
+            EscalationRoute(
+                report_what="the script that needs bash-side expansion",
+                authorize_what="the double-quoted form",
+            ),
+            Override(_OVERRIDE_ENV_VAR),
+        ),
+        em_text=_stamp(body + operator_override_note(_OVERRIDE_ENV_VAR, payload=payload)),
     )
 
 

@@ -16,6 +16,7 @@ from coordinator_core.bash_guards import (
     guard_host_subagent_bash_spawn_shapes as spawn_guard,
 )
 from coordinator_core.bash_guards._dialect import Dialect
+from coordinator_core.guard_messages.testing import envelope_of
 from coordinator_core.bash_guards._sanctioned_remedy import (
     CALLER_CLASSES,
     CALLER_EM,
@@ -64,6 +65,7 @@ def host(tmp_path, monkeypatch):
 
 
 def _denied(result):
+    result = envelope_of(result, "em")
     return result is not None and result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 

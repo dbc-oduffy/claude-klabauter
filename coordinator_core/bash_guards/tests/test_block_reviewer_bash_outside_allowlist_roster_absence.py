@@ -24,6 +24,11 @@ from __future__ import annotations
 from coordinator_core.bash_guards import (
     block_reviewer_bash_outside_allowlist as guard,
 )
+from coordinator_core.guard_messages.testing import envelope_of
+
+
+def _enveloped(check):
+    return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 _INVENTED_TYPE = "hookprobe-named"
 _ENUMERATED_NON_CONFINED_TYPE = "coordinator:enricher"
@@ -98,7 +103,7 @@ def test_unenumerated_type_denies_arbitrary_command(monkeypatch):
     _wire_identity(monkeypatch, subagent_type=_INVENTED_TYPE)
     monkeypatch.setattr(guard, "is_confined_by_roster_absence", lambda t: t == _INVENTED_TYPE)
     payload = _payload("rm -rf /", agent_type=None)
-    verdict = guard.check(payload)
+    verdict = _enveloped(guard.check)(payload)
     assert verdict is not None
     assert verdict["hookSpecificOutput"]["permissionDecision"] == "deny"
 
@@ -107,21 +112,21 @@ def test_unenumerated_type_allows_readonly_tier_a_command(monkeypatch):
     _wire_identity(monkeypatch, subagent_type=_INVENTED_TYPE)
     monkeypatch.setattr(guard, "is_confined_by_roster_absence", lambda t: t == _INVENTED_TYPE)
     payload = _payload("git status", agent_type=None)
-    assert guard.check(payload) is None
+    assert _enveloped(guard.check)(payload) is None
 
 
 def test_enumerated_non_confined_type_still_allows(monkeypatch):
     _wire_identity(monkeypatch, subagent_type="")
     monkeypatch.setattr(guard, "is_confined_by_roster_absence", lambda t: False)
     payload = _payload("rm -rf /", agent_type=_ENUMERATED_NON_CONFINED_TYPE)
-    assert guard.check(payload) is None
+    assert _enveloped(guard.check)(payload) is None
 
 
 def test_already_confined_type_unaffected_by_roster_leg(monkeypatch):
     _wire_identity(monkeypatch, subagent_type=_CONFINED_TYPE)
     monkeypatch.setattr(guard, "is_confined_by_roster_absence", lambda t: False)
     payload = _payload("rm -rf /", agent_type=None)
-    verdict = guard.check(payload)
+    verdict = _enveloped(guard.check)(payload)
     assert verdict is not None
     assert verdict["hookSpecificOutput"]["permissionDecision"] == "deny"
 
@@ -140,4 +145,4 @@ def test_workflow_subagent_can_run_verification(monkeypatch):
                         _helpers.is_confined_by_roster_absence)
     payload = _payload("pnpm exec vitest run src/x.test.ts 2>&1 | tail -60",
                        agent_type="workflow-subagent")
-    assert guard.check(payload) is None
+    assert _enveloped(guard.check)(payload) is None

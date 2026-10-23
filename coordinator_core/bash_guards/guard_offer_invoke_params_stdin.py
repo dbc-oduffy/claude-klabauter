@@ -90,10 +90,10 @@ import re
 import shlex
 from typing import Any, Dict, Optional, Tuple
 
-from coordinator_core.bash_guards.dispatch_checks import (
-    _allow_rewrite,
+from coordinator_core.bash_guards._rewrite_support import (
+    _allow_rewrite_record,
     _crlf_strip,
-    _deny,
+    _deny_record,
     _override,
 )
 from coordinator_core.bash_guards._helpers import operator_override_note
@@ -108,6 +108,8 @@ _INVOKE_RE = re.compile(r"coordinator_core[./]invoke(?:\b|$)")
 #: hand-writing "To bypass: export COORDINATOR_ALLOW_INVOKE_ARGV_PARAMS=1." --
 #: that clause named an action unreachable from inside a live session.
 _OVERRIDE_ENV_VAR = "COORDINATOR_ALLOW_INVOKE_ARGV_PARAMS"
+
+_GUARD = "offer-invoke-params-stdin"
 
 _ARGV_PAYLOAD_HAZARD_BYTES = 8000
 
@@ -235,7 +237,7 @@ def check_offer_invoke_params_stdin(
     session_id: str = "",
     hook_payload: Optional[Dict[str, Any]] = None,
     git_root: Optional[str] = None,
-) -> Optional[Dict[str, Any]]:
+) -> Any:
     if not cmd:
         return None
     original_cmd = _crlf_strip(cmd)
@@ -261,13 +263,33 @@ def check_offer_invoke_params_stdin(
         n += 1
         delim = "%s_%d" % (_HEREDOC_DELIM, n)
 
+    from coordinator_core.guard_messages.alternative_record import AdaptableOffer
+
+    offer_members = (
+        AdaptableOffer(
+            template=(
+                "python3 -m coordinator_core.invoke <op> --params-file - "
+                "--repo <root> <<'%s'\n<json payload, verbatim>\n%s" % (delim, delim)
+            ),
+            what_to_adapt="the op, the repo root and the JSON payload",
+        ),
+    )
+
     offer_shape = (
         "  python3 -m coordinator_core.invoke <op> --params-file - "
         "--repo <root> <<'%s'\n  <json payload, verbatim>\n  %s" % (delim, delim)
     )
-
     _offer_note = operator_override_note(_OVERRIDE_ENV_VAR, payload=hook_payload, git_root=git_root)
     _offer_note_trailer = ("\n\n" + _offer_note) if _offer_note else ""
+
+    def _deny_with_offer(head: str) -> Any:
+        return _deny_record(
+            _GUARD,
+            head,
+            offer_members,
+            _OVERRIDE_ENV_VAR,
+            em_text=head + "\n\nUse instead:\n" + offer_shape + _offer_note_trailer,
+        )
 
     cross_check = _span_is_single_shell_token(original_cmd, payload)
 
@@ -281,14 +303,9 @@ def check_offer_invoke_params_stdin(
     # `{"m":"isnt"}`, valid JSON with both apostrophes silently gone, which is
     # the quiet corruption this guard exists to stop.
     if cross_check == _CROSS_CHECK_CONTRADICTED:
-        return _deny(
-            (
-                "Denied: %s. Tokens merged or vanished -- the op would not "
-                "get what you typed.\n\n"
-                "Use instead:\n%s"
-                % (hazard, offer_shape)
-            )
-            + _offer_note_trailer
+        return _deny_with_offer(
+            "Denied: %s. Tokens merged or vanished -- the op would not "
+            "get what you typed." % (hazard,)
         )
 
     # TOO_LARGE: the command is past the shared tokenizer ceiling, so no
@@ -299,14 +316,9 @@ def check_offer_invoke_params_stdin(
     # since a rewrite short-circuits the guard chain, skip the bands behind
     # it). Cannot fire below the ceiling by construction.
     if cross_check == _CROSS_CHECK_TOO_LARGE:
-        return _deny(
-            (
-                "Denied: %s, and the command is too large to shell-tokenize, "
-                "so its payload boundaries cannot be verified.\n\n"
-                "Use instead:\n%s"
-                % (hazard, offer_shape)
-            )
-            + _offer_note_trailer
+        return _deny_with_offer(
+            "Denied: %s, and the command is too large to shell-tokenize, "
+            "so its payload boundaries cannot be verified." % (hazard,)
         )
 
     # UNAVAILABLE: `cmd` is not shell-tokenizable at all (an odd number of
@@ -321,23 +333,15 @@ def check_offer_invoke_params_stdin(
     # through: a future fifth outcome must not inherit the rewrite by being
     # unmentioned, which is precisely how the old `None` became a fail-open.
     if cross_check not in (_CROSS_CHECK_CONFIRMED, _CROSS_CHECK_UNAVAILABLE):
-        return _deny(
-            (
-                "Denied: %s, and the payload's boundaries could not be "
-                "verified.\n\nUse instead:\n%s" % (hazard, offer_shape)
-            )
-            + _offer_note_trailer
+        return _deny_with_offer(
+            "Denied: %s, and the payload's boundaries could not be "
+            "verified." % (hazard,)
         )
 
     if "\n" in original_cmd:
-        return _deny(
-            (
-                "Denied: %s. Not rewritten -- command spans multiple "
-                "lines; a heredoc body must follow its own '<<' line.\n\n"
-                "Use instead:\n%s"
-                % (hazard, offer_shape)
-            )
-            + _offer_note_trailer
+        return _deny_with_offer(
+            "Denied: %s. Not rewritten -- command spans multiple "
+            "lines; a heredoc body must follow its own '<<' line." % (hazard,)
         )
 
     rewritten = "%s--params-file - <<'%s'%s\n%s\n%s" % (
@@ -347,11 +351,11 @@ def check_offer_invoke_params_stdin(
         payload,
         delim,
     )
-    return _allow_rewrite(
+    summary = "Auto-rewritten to '--params-file -' heredoc: %s." % hazard
+    return _allow_rewrite_record(
+        _GUARD,
         rewritten,
-        (
-            "Auto-rewritten to '--params-file -' heredoc: %s."
-            % hazard
-        )
-        + _offer_note_trailer,
+        summary,
+        override_env=_OVERRIDE_ENV_VAR,
+        em_text=summary + _offer_note_trailer,
     )

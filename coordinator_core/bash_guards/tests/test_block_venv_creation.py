@@ -3,6 +3,11 @@ from __future__ import annotations
 import pytest
 
 from coordinator_core.bash_guards import block_venv_creation as guard
+from coordinator_core.guard_messages.testing import envelope_of
+
+
+def _enveloped(check):
+    return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 _OVERRIDE = "COORDINATOR_OVERRIDE_VENV_CREATION"
 
@@ -39,14 +44,14 @@ def _advisory(out):
 class TestNonMatchingAllowsSilently:
     def test_non_command_tool_allows(self):
         payload = {"tool_name": "Edit", "tool_input": {"file_path": "x"}}
-        assert guard.check(payload) is None
+        assert _enveloped(guard.check)(payload) is None
 
     def test_empty_command_allows(self):
-        assert guard.check(_payload("")) is None
+        assert _enveloped(guard.check)(_payload("")) is None
 
     def test_malformed_tool_input_allows(self):
         payload = {"tool_name": "Bash", "tool_input": "not-a-dict"}
-        assert guard.check(payload) is None
+        assert _enveloped(guard.check)(payload) is None
 
     @pytest.mark.parametrize(
         "cmd",
@@ -62,11 +67,11 @@ class TestNonMatchingAllowsSilently:
         ],
     )
     def test_non_creating_commands_allow(self, cmd):
-        assert guard.check(_payload(cmd)) is None
+        assert _enveloped(guard.check)(_payload(cmd)) is None
 
     def test_heredoc_prose_naming_venv_allows(self):
         cmd = "cat <<'EOF' > notes.md\nrun python -m venv .venv\nEOF"
-        assert guard.check(_payload(cmd)) is None
+        assert _enveloped(guard.check)(_payload(cmd)) is None
 
 
 class TestVenvCreationShapesDeny:
@@ -90,25 +95,25 @@ class TestVenvCreationShapesDeny:
         ],
     )
     def test_denies(self, cmd):
-        _denied(guard.check(_payload(cmd)))
+        _denied(_enveloped(guard.check)(_payload(cmd)))
 
     def test_message_offers_alternative(self):
-        reason = _denied(guard.check(_payload("python3 -m venv .venv")))
+        reason = _denied(_enveloped(guard.check)(_payload("python3 -m venv .venv")))
         assert "system interpreter" in reason
 
 
 class TestOverrideKey:
     def test_override_one_allows_silently(self, monkeypatch):
         monkeypatch.setenv(_OVERRIDE, "1")
-        assert guard.check(_payload("python3 -m venv .venv")) is None
+        assert _enveloped(guard.check)(_payload("python3 -m venv .venv")) is None
 
     @pytest.mark.parametrize("value", ["", "0", "true", "yes"])
     def test_non_one_value_still_denies(self, monkeypatch, value):
         monkeypatch.setenv(_OVERRIDE, value)
-        _denied(guard.check(_payload("python3 -m venv .venv")))
+        _denied(_enveloped(guard.check)(_payload("python3 -m venv .venv")))
 
     def test_message_points_at_override_doc_without_naming_key(self):
-        reason = _denied(guard.check(_payload("virtualenv .venv")))
+        reason = _denied(_enveloped(guard.check)(_payload("virtualenv .venv")))
         assert "guard-override-keys" in reason
         assert _OVERRIDE not in reason
 
@@ -128,7 +133,7 @@ class TestPowerShell:
         ],
     )
     def test_denies(self, cmd):
-        _denied(guard.check(_payload(cmd, tool="PowerShell")))
+        _denied(_enveloped(guard.check)(_payload(cmd, tool="PowerShell")))
 
     @pytest.mark.parametrize(
         "cmd",
@@ -139,11 +144,11 @@ class TestPowerShell:
         ],
     )
     def test_non_creating_allows(self, cmd):
-        assert guard.check(_payload(cmd, tool="PowerShell")) is None
+        assert _enveloped(guard.check)(_payload(cmd, tool="PowerShell")) is None
 
     def test_override_allows(self, monkeypatch):
         monkeypatch.setenv(_OVERRIDE, "1")
-        assert guard.check(_payload("python -m venv .venv", tool="PowerShell")) is None
+        assert _enveloped(guard.check)(_payload("python -m venv .venv", tool="PowerShell")) is None
 
 
 class TestAdvisoryShapesStayAdvisory:
@@ -158,17 +163,17 @@ class TestAdvisoryShapesStayAdvisory:
         ],
     )
     def test_warns_without_denying(self, cmd):
-        reason = _advisory(guard.check(_payload(cmd)))
+        reason = _advisory(_enveloped(guard.check)(_payload(cmd)))
         assert "PER-REPO-VENVS-ARE-BANNED-FLEET-WIDE" in reason
 
     def test_deny_wins_over_advisory_in_one_command(self):
-        _denied(guard.check(_payload("poetry install && python -m venv .venv")))
+        _denied(_enveloped(guard.check)(_payload("poetry install && python -m venv .venv")))
 
 
 class TestOverrideClearsAdvisory:
     def test_override_silences_advisory_shape(self, monkeypatch):
         monkeypatch.setenv(_OVERRIDE, "1")
-        assert guard.check(_payload("uv sync")) is None
+        assert _enveloped(guard.check)(_payload("uv sync")) is None
 
 
 class TestThroughDispatchChain:

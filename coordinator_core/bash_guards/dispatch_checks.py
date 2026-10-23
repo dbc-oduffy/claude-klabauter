@@ -4,7 +4,7 @@ nothing; every name resolves to the ``_dc_*`` module that owns it.
 
 Shared layer (imported by the family modules, never the reverse):
   _dc_shell_text   segment split, quote strip, heredoc / ``sh -c`` unwrap
-  _dc_git_probe    ``_deny``, git-probe budget and deadline, ``_run_git``,
+  _dc_git_probe    git-probe budget and deadline, ``_run_git``,
                    owner-sentence text, porcelain dirty-path and peer-claim helpers
   _dc_git_shared   git argv / cwd / cd-chain / hazard-repo / commit-operand helpers
 
@@ -78,10 +78,17 @@ from coordinator_core.bash_guards._rewrite_support import (
     _GIT_GLOBAL_OPT_NO_ARG_SIMPLE,
     _GIT_GLOBAL_OPT_WITH_ARG,
     _GIT_WRAPPER_PREFIX_WORDS,
-    _advisory,
-    _allow_rewrite,
+    _GREP_BASIC_SAFE_ESCAPES,
+    _GREP_EXTENDED_SAFE_ESCAPES,
+    _GREP_POSIX_BRACKET_CLASS_RE,
+    _GREP_SUBSTITUTABLE_SHORT_FLAGS,
     _bt_git_resolved_subcommand,
     _bt_git_subcommand_start_index,
+    _bt_grep_dialect,
+    _bt_grep_flags_and_operands,
+    _bt_grep_pattern_safe_for_dialect,
+    _bt_grep_python_rewrite,
+    _bt_grep_translate_pattern,
     _bt_peel_wrapper_prefix,
     _bt_python3_invocation,
     _crlf_strip,
@@ -153,7 +160,6 @@ from coordinator_core.bash_guards._dc_git_probe import (
     _batch_show_index_blobs,
     _bulk_foreign_index_refusal,
     _clear_probe_fail_open_reasons,
-    _deny,
     _dirty_paths_from_porcelain,
     _disarm_git_probe_deadline,
     _format_batched_scope_denial,
@@ -292,20 +298,11 @@ from coordinator_core.bash_guards._dc_blanket_add import (
 from coordinator_core.bash_guards._dc_rewrites import (
     _ENV_ASSIGN_RE,
     _FIND_WRAPPER_WORDS,
-    _GREP_BASIC_SAFE_ESCAPES,
-    _GREP_EXTENDED_SAFE_ESCAPES,
     _GREP_FAMILY_BINARIES_BT,
-    _GREP_POSIX_BRACKET_CLASS_RE,
-    _GREP_SUBSTITUTABLE_SHORT_FLAGS,
     _HEREDOC_SCRATCH_ROOT_MARKERS,
     _HEREDOC_WRITE_TARGET_RE,
     _NICE_NICENESS_ARG_RE,
     _WRAPPER_WORD_RE,
-    _bt_grep_dialect,
-    _bt_grep_flags_and_operands,
-    _bt_grep_pattern_safe_for_dialect,
-    _bt_grep_python_rewrite,
-    _bt_grep_translate_pattern,
     _find_is_find_segment,
     _find_is_root_anchor,
     _heredoc_scriptable_bodies,

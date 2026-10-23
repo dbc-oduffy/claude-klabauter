@@ -43,7 +43,6 @@ from coordinator_core.bash_guards._command_tokenizer import (
     tokenize_full_command as _bt_tokenize_full_command,
 )
 from coordinator_core.bash_guards._dc_git_probe import (
-    _deny,
     _new_dirty_paths_memo,
     _rm_peer_claim_of,
 )
@@ -83,9 +82,11 @@ from coordinator_core.bash_guards._helpers import operator_override_note
 from coordinator_core.bash_guards._rewrite_support import (
     _GIT_GLOBAL_OPT_NO_ARG_SIMPLE,
     _GIT_GLOBAL_OPT_WITH_ARG,
-    _advisory,
+    _alt_record,
     _crlf_strip,
+    _offer,
     _override,
+    _ready,
 )
 from coordinator_core.bash_guards.block_subagent_destructive_action import (
     _normalize_executable_basename,
@@ -389,14 +390,21 @@ def check_no_verify(
         "COORDINATOR_OVERRIDE_NO_VERIFY", payload=hook_payload, git_root=git_root
     )
 
-    def _nv_bypass_deny() -> Dict[str, Any]:
+    def _nv_bypass_deny() -> Any:
         base = (
             "BLOCKED: git bypass flag detected. The coordinator doctrine "
             "prohibits --no-verify, --no-gpg-sign, and -c commit.gpgsign=false."
         )
         if _nv_note:
             base += " If the PM has explicitly authorized bypassing hooks: %s" % _nv_note
-        return _deny(base)
+        return _alt_record(
+            "deny", "no-verify",
+            "BLOCKED: git bypass flag detected. The coordinator doctrine "
+            "prohibits --no-verify, --no-gpg-sign, and -c commit.gpgsign=false.",
+            (_offer("the same git command without the bypass flag", "the command"),),
+            _NOVERIFY_ENV, report="the git command you need", authorize="bypassing hooks",
+            em_text=base,
+        )
 
     if re.search(r"\bgit\b", flat):
         if resolved:
@@ -548,6 +556,15 @@ def _orphan_override_hint(payload: Optional[Dict[str, Any]], git_root: Optional[
     if not note:
         return ""
     return "If this is genuinely intended: %s" % note
+
+
+_ORPHAN_ENV = "COORDINATOR_ALLOW_ORPHAN"
+_ORPHAN_KW = dict(report="the git operation you need", authorize="the history-orphaning operation")
+_CLEAN_ENV = "COORDINATOR_OVERRIDE_GIT_CLEAN"
+_CLEAN_KW = dict(report="the git clean you need", authorize="deleting load-bearing untracked files")
+_REVERT_ENV = "COORDINATOR_OVERRIDE_GIT_REVERT"
+_REVERT_KW = dict(report="the checkout, restore, reset or stash you need", authorize="discarding uncommitted work")
+_NOVERIFY_ENV = "COORDINATOR_OVERRIDE_NO_VERIFY"
 
 
 def _seg_excluding_freetext_operands(seg: str) -> str:
@@ -1105,14 +1122,21 @@ def check_destructive_git_orphan(
             # arm for Python/Node bodies -- so what reaches `after` with
             # delimiters still in it is shell, where they mean what they say.
             if re.search(r"\$\(.*\)|`.*`", after, re.DOTALL):
-                return _deny(
-                    (
-                        "BLOCKED: 'git reset %s' targets a subshell-resolved "
-                        "ref -- cannot verify it.\n\n"
-                        "Resolve to a literal first; use instead:\n"
-                        "  git rev-list --count <resolved-ref>..HEAD"
-                    ) % _reset_mode
-                    + ("\n\n" + _orphan_hint if _orphan_hint else "")
+                return _alt_record(
+                    "deny", "destructive-git-orphan",
+                    "BLOCKED: 'git reset %s' targets a subshell-resolved "
+                    "ref -- cannot verify it. Resolve to a literal first." % _reset_mode,
+                    (_offer("git rev-list --count <resolved-ref>..HEAD", "the resolved ref"),),
+                    _ORPHAN_ENV, **_ORPHAN_KW,
+                    em_text=(
+                        (
+                            "BLOCKED: 'git reset %s' targets a subshell-resolved "
+                            "ref -- cannot verify it.\n\n"
+                            "Resolve to a literal first; use instead:\n"
+                            "  git rev-list --count <resolved-ref>..HEAD"
+                        ) % _reset_mode
+                        + ("\n\n" + _orphan_hint if _orphan_hint else "")
+                    ),
                 )
             if not re.search(r"(^|\s)--(\s|$)", after):
                 bare = [
@@ -1157,8 +1181,22 @@ def check_destructive_git_orphan(
                                 if _orphan_hint
                                 else ""
                             )
-                            return _deny(
+                            return _alt_record(
+                                "deny", "destructive-git-orphan",
+                                "BLOCKED: 'git reset %s %s' would drop %d "
+                                "commit(s) from branch '%s'. These commits are "
+                                "reachable from HEAD but NOT from %s, so the reset "
+                                "orphans them:\n%s%s\n"
+                                "This is the 2026-05-28 near-miss shape: a reset to "
+                                "a ref that is BEHIND your current work. Re-derive "
+                                "the TRUE state yourself (do not trust a remembered count)."
+                                % (_reset_mode, target, n, cur_branch, target, subjects, more),
                                 (
+                                    _ready("git rev-list --count %s..HEAD" % target),
+                                    _ready("git branch -a --contains HEAD"),
+                                ),
+                                _ORPHAN_ENV, **_ORPHAN_KW,
+                                em_text=(
                                     "BLOCKED: 'git reset %s %s' would drop %d "
                                     "commit(s) from branch '%s'.\n\n"
                                     "These commits are reachable from HEAD but NOT from "
@@ -1173,7 +1211,7 @@ def check_destructive_git_orphan(
                                     "that already hold this work"
                                     % (_reset_mode, target, n, cur_branch, target, subjects, more, target)
                                 )
-                                + _reset_trailer
+                                + _reset_trailer,
                             )
 
         # CHECK 2 -- force push
@@ -1226,16 +1264,27 @@ def check_destructive_git_orphan(
                 r"(--force([^-=]|$)|(^|\s)-[a-zA-Z]*f[a-zA-Z]*(\s|$)|(^|[\s\"'])\+\S+)",
                 _seg_forcing_form_scan_text(seg_check2),
             ):
-                return _deny(
+                return _alt_record(
+                    "deny", "destructive-git-orphan",
                     "BLOCKED: this 'git push' uses a forcing form (--force / -f / "
                     "+refspec) that rewrites remote history and can drop commits "
                     "existing only on the remote (a concurrent push you have not "
-                    "fetched).\n\n"
-                    "Use --force-with-lease instead. It refuses the push if the "
-                    "remote moved since your last fetch — exactly the protection "
-                    "plain --force discards:\n"
-                    "  git push <remote> <branch> --force-with-lease"
-                    + ("\n\n" + _orphan_hint if _orphan_hint else "")
+                    "fetched). --force-with-lease refuses the push if the remote "
+                    "moved since your last fetch — exactly the protection plain "
+                    "--force discards.",
+                    (_offer("git push <remote> <branch> --force-with-lease", "the remote and branch"),),
+                    _ORPHAN_ENV, **_ORPHAN_KW,
+                    em_text=(
+                        "BLOCKED: this 'git push' uses a forcing form (--force / -f / "
+                        "+refspec) that rewrites remote history and can drop commits "
+                        "existing only on the remote (a concurrent push you have not "
+                        "fetched).\n\n"
+                        "Use --force-with-lease instead. It refuses the push if the "
+                        "remote moved since your last fetch — exactly the protection "
+                        "plain --force discards:\n"
+                        "  git push <remote> <branch> --force-with-lease"
+                        + ("\n\n" + _orphan_hint if _orphan_hint else "")
+                    ),
                 )
 
         # CHECK 3 -- force-delete branch
@@ -1284,8 +1333,19 @@ def check_destructive_git_orphan(
                                 if _orphan_hint
                                 else ""
                             )
-                            return _deny(
-                                (
+                            return _alt_record(
+                                "deny", "destructive-git-orphan",
+                                "BLOCKED: force-deleting branch '%s' would orphan "
+                                "its commits — they live on NO other ref (no local "
+                                "branch, no remote). '%s' is not contained in any "
+                                "other branch or remote. The lowercase, non-forced "
+                                "'git branch -d' refuses exactly this case; the force "
+                                "form ('-D', or '-d --force') overrides that safety."
+                                % (br, br),
+                                (_offer("git checkout <target> && git merge %s" % br,
+                                        "the target branch; preserves the work first"),),
+                                _ORPHAN_ENV, **_ORPHAN_KW,
+                                em_text=(
                                     "BLOCKED: force-deleting branch '%s' would orphan "
                                     "its commits — they live on NO other ref (no local "
                                     "branch, no remote).\n\n"
@@ -1297,7 +1357,7 @@ def check_destructive_git_orphan(
                                     "  git checkout <target> && git merge %s"
                                     % (br, br, br)
                                 )
-                                + _branch_trailer
+                                + _branch_trailer,
                             )
 
     # BX-13 rescan (see comment near `raw_cmd` above): unwrap any
@@ -1486,12 +1546,19 @@ def check_destructive_git_clean(
             _clean_note = operator_override_note(
                 "COORDINATOR_OVERRIDE_GIT_CLEAN", payload=payload, git_root=git_root
             )
-            return _deny(
+            return _alt_record(
+                "deny", "destructive-git-clean",
                 "BLOCKED: git clean safety check timed out (2s) — cannot "
-                "confirm no load-bearing files would be lost.\n\n"
-                "Use instead:\n"
-                "  git clean -nd [your flags]"
-                + ("\n\nOr: " + _clean_note if _clean_note else "")
+                "confirm no load-bearing files would be lost.",
+                (_offer("git clean -nd [your flags]", "your flags"),),
+                _CLEAN_ENV, **_CLEAN_KW,
+                em_text=(
+                    "BLOCKED: git clean safety check timed out (2s) — cannot "
+                    "confirm no load-bearing files would be lost.\n\n"
+                    "Use instead:\n"
+                    "  git clean -nd [your flags]"
+                    + ("\n\nOr: " + _clean_note if _clean_note else "")
+                ),
             )
         if rc != 0:
             continue
@@ -1515,15 +1582,23 @@ def check_destructive_git_clean(
         _clean_note2 = operator_override_note(
             "COORDINATOR_OVERRIDE_GIT_CLEAN", payload=payload, git_root=git_root
         )
-        return _deny(
-            (
-                "BLOCKED: git clean would delete %d untracked load-bearing "
-                "file(s), unrecoverable (no commit/stash/reflog):\n%s%s\n\n"
-                "Use instead:\n"
-                '  git stash push -u -m "wip" -- <paths>'
-                % (shown_count, shown, more)
-            )
-            + ("\n\nOr: " + _clean_note2 if _clean_note2 else "")
+        return _alt_record(
+            "deny", "destructive-git-clean",
+            "BLOCKED: git clean would delete %d untracked load-bearing "
+            "file(s), unrecoverable (no commit/stash/reflog):\n%s%s"
+            % (shown_count, shown, more),
+            (_offer('git stash push -u -m "wip" -- <paths>', "the paths"),),
+            _CLEAN_ENV, **_CLEAN_KW,
+            em_text=(
+                (
+                    "BLOCKED: git clean would delete %d untracked load-bearing "
+                    "file(s), unrecoverable (no commit/stash/reflog):\n%s%s\n\n"
+                    "Use instead:\n"
+                    '  git stash push -u -m "wip" -- <paths>'
+                    % (shown_count, shown, more)
+                )
+                + ("\n\nOr: " + _clean_note2 if _clean_note2 else "")
+            ),
         )
 
     return None
@@ -1872,14 +1947,6 @@ def _check_destructive_git_revert_full(
     if _override("COORDINATOR_OVERRIDE_GIT_REVERT", payload=hook_payload):
         return None, None
 
-    # Per-call replacement for the former module-level `_GR_OVERRIDE_HINT`
-    # constant (2026-08-13, audience-gated `operator_override_note`
-    # migration) -- computed once per call, from THIS call's `hook_payload`/
-    # `git_root`, not at import time. `_gr_note` feeds the five direct
-    # `operator_override_note` call sites below (all now redundant with this
-    # one resolution) and `_gr_hint` mirrors the old constant's own
-    # sentence-prefixed shape for its three former call sites, empty when
-    # `_gr_note` is empty (see `operator_override_note`'s SPLICE CONTRACT).
     _gr_note = operator_override_note(
         "COORDINATOR_OVERRIDE_GIT_REVERT", payload=hook_payload, git_root=git_root
     )
@@ -2070,14 +2137,23 @@ def _check_destructive_git_revert_full(
                 # forms and keep today's probe-then-deny-on-risk behavior
                 # below, unchanged.
                 if dotspec and verb in ("checkout", "restore"):
-                    return _deny(
-                        "BLOCKED: 'git %s .' is whole-tree "
-                        "(SC-DR-023).\n\n"
-                        "Scope or preserve:\n"
-                        "  git %s -- <your-paths>\n"
-                        '  git stash push -u -m "before-revert" -- <paths>'
-                        % (verb, verb)
-                        + ("\n\nOr: %s" % _gr_note if _gr_note else "")
+                    return _alt_record(
+                        "deny", "destructive-git-revert",
+                        "BLOCKED: 'git %s .' is whole-tree (SC-DR-023). Scope or preserve." % verb,
+                        (
+                            _offer("git %s -- <your-paths>" % verb, "your paths"),
+                            _offer('git stash push -u -m "before-revert" -- <paths>', "the paths"),
+                        ),
+                        _REVERT_ENV, **_REVERT_KW,
+                        em_text=(
+                            "BLOCKED: 'git %s .' is whole-tree "
+                            "(SC-DR-023).\n\n"
+                            "Scope or preserve:\n"
+                            "  git %s -- <your-paths>\n"
+                            '  git stash push -u -m "before-revert" -- <paths>'
+                            % (verb, verb)
+                            + ("\n\nOr: %s" % _gr_note if _gr_note else "")
+                        ),
                     ), None
                 # Name the shape actually seen: `git checkout -f` reaches this
                 # oracle too now, and reporting it as `git checkout .` would
@@ -2085,16 +2161,27 @@ def _check_destructive_git_revert_full(
                 shape = "git %s -f" % verb if force_whole_tree and not dotspec else "git %s ." % verb
                 rc, out = _memo_status_porcelain(git_cwd)
                 if rc == -1:
-                    return _deny(
-                        "BLOCKED: '%s' oracle (git status) timed "
-                        "out (2 s) — cannot verify the revert is safe.\n\n"
-                        "Safe path first — verify what would be discarded, "
-                        "then preserve it:\n"
-                        "  git status --porcelain\n"
-                        '  git stash push -u -m "before-revert" -- <paths>   '
-                        "# make it recoverable"
-                        % (shape,)
-                        + ("\n\nAfter preserving the files, re-run. Or:\n%s" % _gr_hint if _gr_hint else "")
+                    return _alt_record(
+                        "deny", "destructive-git-revert",
+                        "BLOCKED: '%s' oracle (git status) timed out (2 s) — cannot "
+                        "verify the revert is safe. Verify what would be discarded, "
+                        "then preserve it and re-run." % (shape,),
+                        (
+                            _ready("git status --porcelain"),
+                            _offer('git stash push -u -m "before-revert" -- <paths>', "the paths"),
+                        ),
+                        _REVERT_ENV, **_REVERT_KW,
+                        em_text=(
+                            "BLOCKED: '%s' oracle (git status) timed "
+                            "out (2 s) — cannot verify the revert is safe.\n\n"
+                            "Safe path first — verify what would be discarded, "
+                            "then preserve it:\n"
+                            "  git status --porcelain\n"
+                            '  git stash push -u -m "before-revert" -- <paths>   '
+                            "# make it recoverable"
+                            % (shape,)
+                            + ("\n\nAfter preserving the files, re-run. Or:\n%s" % _gr_hint if _gr_hint else "")
+                        ),
                     ), None
                 if rc != 0:
                     continue
@@ -2122,28 +2209,51 @@ def _check_destructive_git_revert_full(
                     tk for tk in after.split() if tk != "--hard" and not tk.startswith("-")
                 ]
                 if not _reset_hard_tokens:
-                    return _deny(
+                    return _alt_record(
+                        "deny", "destructive-git-revert",
                         "BLOCKED: 'git reset --hard' is a whole-tree revert "
                         "(SC-DR-023) -- denied from the command alone, with "
-                        "no git-status check of what it would discard.\n\n"
-                        "Preserve it first instead of discarding it -- "
-                        "stash, then reset:\n"
-                        '  git stash push -u -m "before-reset"\n'
-                        "  git reset --hard"
-                        + ("\n\nOr: %s" % _gr_note if _gr_note else "")
+                        "no git-status check of what it would discard. Preserve "
+                        "it first instead of discarding it: stash, then reset.",
+                        (
+                            _ready('git stash push -u -m "before-reset"'),
+                            _ready("git reset --hard"),
+                        ),
+                        _REVERT_ENV, **_REVERT_KW,
+                        em_text=(
+                            "BLOCKED: 'git reset --hard' is a whole-tree revert "
+                            "(SC-DR-023) -- denied from the command alone, with "
+                            "no git-status check of what it would discard.\n\n"
+                            "Preserve it first instead of discarding it -- "
+                            "stash, then reset:\n"
+                            '  git stash push -u -m "before-reset"\n'
+                            "  git reset --hard"
+                            + ("\n\nOr: %s" % _gr_note if _gr_note else "")
+                        ),
                     ), None
                 rc, out = _memo_status_porcelain(git_cwd)
                 if rc == -1:
-                    return _deny(
+                    return _alt_record(
+                        "deny", "destructive-git-revert",
                         "BLOCKED: 'git reset --hard' oracle (git status) "
-                        "timed out (2 s) — cannot verify the reset is "
-                        "safe.\n\n"
-                        "Safe path first — verify what would be discarded, "
-                        "then preserve it:\n"
-                        "  git status --porcelain\n"
-                        '  git stash push -u -m "before-reset" -- <paths>   '
-                        "# make it recoverable"
-                        + ("\n\nAfter preserving the files, re-run. Or:\n" + _gr_hint if _gr_hint else "")
+                        "timed out (2 s) — cannot verify the reset is safe. "
+                        "Verify what would be discarded, then preserve it and re-run.",
+                        (
+                            _ready("git status --porcelain"),
+                            _offer('git stash push -u -m "before-reset" -- <paths>', "the paths"),
+                        ),
+                        _REVERT_ENV, **_REVERT_KW,
+                        em_text=(
+                            "BLOCKED: 'git reset --hard' oracle (git status) "
+                            "timed out (2 s) — cannot verify the reset is "
+                            "safe.\n\n"
+                            "Safe path first — verify what would be discarded, "
+                            "then preserve it:\n"
+                            "  git status --porcelain\n"
+                            '  git stash push -u -m "before-reset" -- <paths>   '
+                            "# make it recoverable"
+                            + ("\n\nAfter preserving the files, re-run. Or:\n" + _gr_hint if _gr_hint else "")
+                        ),
                     ), None
                 if rc != 0:
                     continue
@@ -2206,13 +2316,20 @@ def _check_destructive_git_revert_full(
                 # before any `git status` probe. A `--`-delimited pathspec
                 # (`has_dashdash`) already routes around this branch
                 # entirely and stays on today's allowed path.
-                return _deny(
+                return _alt_record(
+                    "deny", "destructive-git-revert",
                     "BLOCKED: unscoped 'git stash' is a whole-tree revert "
-                    "(SC-DR-023) -- sweeps every session's uncommitted "
-                    "work.\n\n"
-                    "Scope it instead:\n"
-                    '  git stash push -u -m "before-stash" -- <your-paths>'
-                    + ("\n\nOr: %s" % _gr_note if _gr_note else "")
+                    "(SC-DR-023) -- sweeps every session's uncommitted work. Scope it.",
+                    (_offer('git stash push -u -m "before-stash" -- <your-paths>', "your paths"),),
+                    _REVERT_ENV, **_REVERT_KW,
+                    em_text=(
+                        "BLOCKED: unscoped 'git stash' is a whole-tree revert "
+                        "(SC-DR-023) -- sweeps every session's uncommitted "
+                        "work.\n\n"
+                        "Scope it instead:\n"
+                        '  git stash push -u -m "before-stash" -- <your-paths>'
+                        + ("\n\nOr: %s" % _gr_note if _gr_note else "")
+                    ),
                 ), None
 
         if not affected:
@@ -2241,6 +2358,13 @@ def _check_destructive_git_revert_full(
                 deny_paths.append((ap, "peer-claimed by %s" % peer_sid))
 
         verb_label = {"reset": "git reset --hard", "stash": "git stash (unscoped)"}.get(verb, "git %s" % verb)
+        _scope = (
+            _offer("git checkout -- <your-paths>", "your paths"),
+            _offer("git restore -- <your-paths>", "your paths"),
+        )
+        _stash_rev = _offer('git stash push -u -m "before-revert" -- <paths>', "the paths")
+        _stash_rst = (_ready('git stash push -u -m "before-reset"'), _ready("git reset --hard"))
+        _stash_scope = _offer('git stash push -u -m "before-stash" -- <your-paths>', "your paths")
         if verb in ("checkout", "restore"):
             safe_path = (
                 "Did you mean to scope this to your own paths?\n"
@@ -2292,7 +2416,7 @@ def _check_destructive_git_revert_full(
             # Finding 1) -- an advisory that overstates is one the next
             # reader discounts.
             if pending_advisory is None or len(affected) > _pending_advisory_affected:
-                offer = safe_path.split("\n\n", 1)[0] if verb in ("checkout", "restore") else safe_path
+                offer = _scope if verb in ("checkout", "restore") else _stash_rst if verb == "reset" else (_stash_scope,)
                 if verb == "stash":
                     # Finding 12: this exact branch has already confirmed
                     # `repo_root`/`_rm_peer_claim_of` found no peer claim on
@@ -2306,12 +2430,19 @@ def _check_destructive_git_revert_full(
                     )
                 else:
                     harm = "discard %d uncommitted file(s) git cannot recover"
-                pending_advisory = _advisory(
-                    (
+                pending_advisory = _alt_record(
+                    "advisory", "destructive-git-revert-advisory",
+                    "ADVISORY: %s would %s." % (verb_label, harm % len(affected)),
+                    offer, _REVERT_ENV, **_REVERT_KW,
+                    em_text=(
                         "ADVISORY: %s would %s.\n\n%s"
-                        % (verb_label, harm % len(affected), offer)
+                        % (
+                            verb_label,
+                            harm % len(affected),
+                            safe_path.split("\n\n", 1)[0] if verb in ("checkout", "restore") else safe_path,
+                        )
                     )
-                    + ("\n\nOr: %s" % _gr_note if _gr_note else "")
+                    + ("\n\nOr: %s" % _gr_note if _gr_note else ""),
                 )
                 _pending_advisory_affected = len(affected)
             continue
@@ -2366,17 +2497,10 @@ def _check_destructive_git_revert_full(
             deny_reason = (
                 "BLOCKED: '%s' discards %d uncommitted file(s). Staged blobs "
                 "survive in `git fsck --lost-found`; unstaged and untracked "
-                "edits do not:\n%s%s\n\n"
-                # "instead" is load-bearing, not phrasing: `_alternative_
-                # liveness._CUE_WINDOW_RE` only exempts an indented command
-                # block that falls inside a cue window, so dropping the cue
-                # word makes the two commands below count as prose and pushes
-                # this message back over `MESSAGE_PROSE_CAP_BYTES`.
-                "Preserve it first instead:\n"
-                '  git stash push -u -m "before-reset"\n'
-                "  git reset --hard"
+                "edits do not:\n%s%s\nPreserve it first."
                 % (verb_label, shown_count, shown, more)
-            ) + ("\n\n%s" % _gr_note if _gr_note else "")
+            )
+            deny_members = _stash_rst
         elif verb == "stash":
             # Verb-conditioned for the same reason the advisory harm text
             # above is: a stash is RECOVERABLE (`pop`/`apply`), so the shared
@@ -2385,29 +2509,53 @@ def _check_destructive_git_revert_full(
             # had gone on making.
             deny_reason = (
                 "BLOCKED: '%s' sweeps %d uncommitted file(s), including work "
-                "no session has claimed:\n%s%s\n\n"
-                # See the reset branch on why the cue word is load-bearing.
-                "Scope it to your own paths instead:\n"
-                '  git stash push -u -m "before-stash" -- <your-paths>'
+                "no session has claimed:\n%s%s\nScope it to your own paths."
                 % (verb_label, shown_count, shown, more)
-            ) + ("\n\n%s" % _gr_note if _gr_note else "")
+            )
+            deny_members = (_stash_scope,)
         else:
             deny_reason = (
                 "BLOCKED: '%s' discards %d uncommitted file(s) git cannot "
+                "recover — no commit, stash, or reflog holds them:\n%s%s\n"
+                "Scope it, or preserve everything first."
+                % (verb_label, shown_count, shown, more)
+            )
+            deny_members = _scope + (_stash_rev,)
+
+        if verb == "reset":
+            deny_em = (
+                "BLOCKED: '%s' discards %d uncommitted file(s). Staged blobs "
+                "survive in `git fsck --lost-found`; unstaged and untracked "
+                "edits do not:\n%s%s\n\n"
+                "Preserve it first instead:\n"
+                '  git stash push -u -m "before-reset"\n'
+                "  git reset --hard"
+                % (verb_label, shown_count, shown, more)
+            )
+        elif verb == "stash":
+            deny_em = (
+                "BLOCKED: '%s' sweeps %d uncommitted file(s), including work "
+                "no session has claimed:\n%s%s\n\n"
+                "Scope it to your own paths instead:\n"
+                '  git stash push -u -m "before-stash" -- <your-paths>'
+                % (verb_label, shown_count, shown, more)
+            )
+        else:
+            deny_em = (
+                "BLOCKED: '%s' discards %d uncommitted file(s) git cannot "
                 "recover — no commit, stash, or reflog holds them:\n%s%s\n\n"
-                # Both offers need their own cue word: an indented block is
-                # exempt only inside a cue window, and the window closes at
-                # the next blank line, so the second paragraph does not
-                # inherit the first's "Did you mean".
                 "Did you mean to scope it?\n"
                 "  git checkout -- <your-paths>\n"
                 "  git restore -- <your-paths>\n\n"
                 "Or preserve everything first instead:\n"
                 '  git stash push -u -m "before-revert" -- <paths>'
                 % (verb_label, shown_count, shown, more)
-            ) + ("\n\n%s" % _gr_note if _gr_note else "")
-
-        return _deny(deny_reason), None
+            )
+        deny_em += "\n\n%s" % _gr_note if _gr_note else ""
+        return _alt_record(
+            "deny", "destructive-git-revert", deny_reason, deny_members, _REVERT_ENV,
+            em_text=deny_em, **_REVERT_KW,
+        ), None
 
     # BX-13: a `sh -c '...'`/`bash -c "..."` (etc.) wrapper's quoted argument
     # is executed, not inert text -- unwrap and re-scan it too. The rescan

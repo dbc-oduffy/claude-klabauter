@@ -792,14 +792,38 @@ def _git_invocation_is_write(subcommand: str, args: List[str]) -> bool:
         return True
 
 
-def _deny(reason: str) -> Dict[str, Any]:
-    return {
-        "hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "permissionDecision": "deny",
-            "permissionDecisionReason": reason,
-        }
-    }
+def _levelled_deny(guard_name: str, reason: str, **level_kwargs: Any) -> Any:
+    """The deny record for ``reason``; a non-strict guard level returns the levelled envelope.
+
+    The EM text is ``reason`` verbatim, so the EM render is the legacy envelope byte for byte.
+    """
+    from coordinator_core.guard_messages.alternative_record import (
+        AdaptableOffer,
+        AlternativeRecord,
+        Audience,
+        EscalationRoute,
+    )
+    from coordinator_core.guard_messages.render import render
+
+    record = AlternativeRecord(
+        verdict_kind="deny",
+        guard_name=guard_name,
+        summary=reason,
+        em_text=reason,
+        members=(
+            AdaptableOffer(
+                template="cross-repo-memo <owner-of-the-target-repo> <subject>",
+                what_to_adapt="<owner-of-the-target-repo> and <subject>",
+            ),
+            EscalationRoute(
+                report_what="the refused write target to whoever dispatched you",
+                authorize_what="a write into a repo other than this session's own",
+            ),
+        ),
+    )
+    envelope = render(record, Audience.EM)
+    leveled = apply_cross_repo_level(guard_name, envelope, **level_kwargs)
+    return record if leveled == envelope else leveled
 
 
 _STAND_DOWN_MARKER = "STAND-DOWN-FOREIGN-REPO-WRITE"
@@ -1562,7 +1586,7 @@ def _evaluate_foreign_repo_candidate(
     if target_is_under_settings_home(target_dir, env=env, target_gitdir=target_gitdir):
         return None
 
-    # _deny(message)`. The AC14 SAME-REPO comparison above already
+    # _levelled_deny(...)`. The AC14 SAME-REPO comparison above already
     # answers its own question from `target_gitdir` alone and never reads
     # this variable.
     #
@@ -1849,9 +1873,9 @@ def _evaluate_foreign_repo_candidate(
             "COORDINATOR_CAP_FLEET_PRESENT=1 and the bump enforces again."
         )
         return None
-    return apply_cross_repo_level(
+    return _levelled_deny(
         "bump-foreign-repo-write",
-        _deny(message),
+        message,
         gitdir=marker_gitdir or target_gitdir,
         session_id=effective_sid,
     )

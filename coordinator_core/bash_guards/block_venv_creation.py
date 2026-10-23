@@ -30,7 +30,7 @@ import os
 import re
 from typing import Any, Dict, Optional, Tuple
 
-from coordinator_core._hook_envelope import deny
+from coordinator_core._hook_envelope import _stamp
 from coordinator_core.bash_guards._dialect import (
     Dialect,
     _strip_ps_quotes,
@@ -175,19 +175,41 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         return None
 
     shape, is_deny = hit
+    from coordinator_core.guard_messages.alternative_record import (
+        AdaptableOffer,
+        AlternativeRecord,
+        EscalationRoute,
+        Override,
+    )
+
+    members = (
+        AdaptableOffer(
+            template="python3 <the same work on the system interpreter>",
+            what_to_adapt="the script",
+        ),
+        EscalationRoute(
+            report_what="the dependency you need isolated",
+            authorize_what="a venv",
+        ),
+    )
     if is_deny:
-        return deny(
-            "PreToolUse",
-            "BLOCKED [%s]: `%s` creates a venv. Use the system interpreter.\n\n%s"
-            % (_TRIPWIRE, shape, operator_override_note(_OVERRIDE_ENV, payload=payload)),
-        )
-    return {
-        "hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "permissionDecision": "allow",
-            "additionalContext": (
-                "ADVISORY [%s]: `%s` provisions a venv. Use the system interpreter."
-                % (_TRIPWIRE, shape)
+        summary = "BLOCKED [%s]: `%s` creates a venv. Use the system interpreter." % (_TRIPWIRE, shape)
+        return AlternativeRecord(
+            verdict_kind="deny",
+            guard_name="block-venv-creation",
+            summary=summary,
+            members=members + (Override(_OVERRIDE_ENV),),
+            em_text=_stamp(
+                summary
+                + "\n\n"
+                + operator_override_note(_OVERRIDE_ENV, payload=payload)
             ),
-        }
-    }
+        )
+    advisory = "ADVISORY [%s]: `%s` provisions a venv. Use the system interpreter." % (_TRIPWIRE, shape)
+    return AlternativeRecord(
+        verdict_kind="advisory",
+        guard_name="block-venv-creation",
+        summary=advisory,
+        members=members,
+        em_text=advisory,
+    )

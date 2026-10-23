@@ -31,6 +31,11 @@ import pytest
 
 from coordinator_core.bash_guards import dispatch_checks as guard
 from coordinator_core.bash_guards import _dc_git_probe, _dc_git_shared
+from coordinator_core.guard_messages.testing import envelope_of
+
+
+def _enveloped(check):
+    return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 
 def _wire_hazard(monkeypatch, *, is_hazard=True):
@@ -88,7 +93,7 @@ def test_subtree_add_with_foreign_path_is_denied(monkeypatch, tmp_path):
     )
     _wire_claims(monkeypatch, {"src/mine.py"})
 
-    result = guard.check_blanket_git_add(
+    result = _enveloped(guard.check_blanket_git_add)(
         "git add src/", session_id="sess1", hook_payload={}
     )
 
@@ -110,7 +115,7 @@ def test_subtree_add_all_own_paths_is_allowed(monkeypatch, tmp_path):
     )
     _wire_claims(monkeypatch, {"src/mine.py"})
 
-    result = guard.check_blanket_git_add(
+    result = _enveloped(guard.check_blanket_git_add)(
         "git add src/", session_id="sess1", hook_payload={}
     )
 
@@ -123,7 +128,7 @@ def test_single_file_add_is_not_denied_and_spawns_no_extra_git(monkeypatch, tmp_
     _wire_hazard(monkeypatch)
     calls = _wire_git(monkeypatch, str(root))
 
-    result = guard.check_blanket_git_add(
+    result = _enveloped(guard.check_blanket_git_add)(
         "git add src/mine.py", session_id="sess1", hook_payload={}
     )
 
@@ -143,7 +148,7 @@ def test_subtree_add_no_session_id_fails_open(monkeypatch, tmp_path):
         dry_run_lines=["add 'src/peer.py'"],
     )
 
-    result = guard.check_blanket_git_add("git add src/", session_id="", hook_payload={})
+    result = _enveloped(guard.check_blanket_git_add)("git add src/", session_id="", hook_payload={})
 
     assert result is None
 
@@ -157,7 +162,7 @@ def test_subtree_add_dry_run_failure_fails_open(monkeypatch, tmp_path):
     _wire_git(monkeypatch, str(root), dry_run_rc=1, dry_run_lines=None)
     _wire_claims(monkeypatch, set())
 
-    result = guard.check_blanket_git_add(
+    result = _enveloped(guard.check_blanket_git_add)(
         "git add src/", session_id="sess1", hook_payload={}
     )
 
@@ -177,7 +182,7 @@ def test_subtree_add_with_foreign_path_is_denied_after_dashdash(monkeypatch, tmp
     )
     _wire_claims(monkeypatch, {"src/mine.py"})
 
-    result = guard.check_blanket_git_add(
+    result = _enveloped(guard.check_blanket_git_add)(
         "git add -- src/", session_id="sess1", hook_payload={}
     )
 
@@ -199,7 +204,7 @@ def test_multiple_post_dashdash_tokens_all_evaluated(monkeypatch, tmp_path):
     )
     _wire_claims(monkeypatch, {"src/mine.py", "README.md"})
 
-    result = guard.check_blanket_git_add(
+    result = _enveloped(guard.check_blanket_git_add)(
         "git add -- README.md src/", session_id="sess1", hook_payload={}
     )
 
@@ -214,7 +219,7 @@ def test_root_anchor_after_dashdash_is_still_denied(monkeypatch, tmp_path):
     _wire_hazard(monkeypatch)
     _wire_git(monkeypatch, str(root))
 
-    result = guard.check_blanket_git_add(
+    result = _enveloped(guard.check_blanket_git_add)(
         "git add -- .", session_id="sess1", hook_payload={}
     )
 
@@ -231,7 +236,7 @@ def test_flag_shaped_token_after_dashdash_is_a_literal_path_not_a_flag(
     _wire_hazard(monkeypatch)
     _wire_git(monkeypatch, str(root))
 
-    result = guard.check_blanket_git_add(
+    result = _enveloped(guard.check_blanket_git_add)(
         "git add -- -A", session_id="sess1", hook_payload={}
     )
 
@@ -261,7 +266,7 @@ def test_own_run_record_dir_is_not_foreign_when_no_live_peer_holds_it(monkeypatc
     _wire_claims(monkeypatch, set())
     _wire_peer_contest(monkeypatch, set())
 
-    result = guard.check_blanket_git_add(
+    result = _enveloped(guard.check_blanket_git_add)(
         "git add -- state/warp/ask-1/", session_id="sess1", hook_payload={}
     )
 
@@ -280,7 +285,7 @@ def test_generated_tree_paths_are_not_listed_as_foreign(monkeypatch, tmp_path):
     )
     _wire_claims(monkeypatch, set())
 
-    result = guard.check_blanket_git_add(
+    result = _enveloped(guard.check_blanket_git_add)(
         "git add -- data/", session_id="sess1", hook_payload={}
     )
 
@@ -301,7 +306,7 @@ def test_non_generated_foreign_path_beside_generated_tree_is_still_listed(
     )
     _wire_claims(monkeypatch, set())
 
-    result = guard.check_blanket_git_add(
+    result = _enveloped(guard.check_blanket_git_add)(
         "git add -- data/", session_id="sess1", hook_payload={}
     )
 
@@ -320,7 +325,7 @@ def test_run_record_dir_held_by_a_live_peer_is_still_foreign(monkeypatch, tmp_pa
     _wire_claims(monkeypatch, set())
     _wire_peer_contest(monkeypatch, {"state/warp/ask-1/run.json"})
 
-    result = guard.check_blanket_git_add(
+    result = _enveloped(guard.check_blanket_git_add)(
         "git add -- state/warp/ask-1/", session_id="sess1", hook_payload={}
     )
 
@@ -349,7 +354,7 @@ def _held_run_repo(monkeypatch, tmp_path, holder, live=("sess1", "peer")):
 def test_run_record_dir_of_a_different_live_sessions_held_run_is_denied(monkeypatch, tmp_path):
     _held_run_repo(monkeypatch, tmp_path, holder="peer")
 
-    result = guard.check_blanket_git_add(
+    result = _enveloped(guard.check_blanket_git_add)(
         "git add -- state/warp/ask-1/", session_id="sess1", hook_payload={}
     )
 
@@ -360,7 +365,7 @@ def test_run_record_dir_of_a_different_live_sessions_held_run_is_denied(monkeypa
 def test_run_record_dir_of_the_submitting_sessions_own_run_is_allowed(monkeypatch, tmp_path):
     calls = _held_run_repo(monkeypatch, tmp_path, holder="sess1")
 
-    result = guard.check_blanket_git_add(
+    result = _enveloped(guard.check_blanket_git_add)(
         "git add -- state/warp/ask-1/", session_id="sess1", hook_payload={}
     )
 
@@ -373,7 +378,7 @@ def test_run_record_dir_of_the_submitting_sessions_own_run_is_allowed(monkeypatc
 def test_run_record_dir_of_an_unheld_run_is_allowed_on_the_add_side(monkeypatch, tmp_path):
     _held_run_repo(monkeypatch, tmp_path, holder=None)
 
-    result = guard.check_blanket_git_add(
+    result = _enveloped(guard.check_blanket_git_add)(
         "git add -- state/warp/ask-1/", session_id="sess1", hook_payload={}
     )
 

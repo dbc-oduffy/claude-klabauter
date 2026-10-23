@@ -16,6 +16,7 @@ import pytest
 
 from coordinator_core import env_locality
 from coordinator_core.bash_guards import check_test_suite_invocation as guard
+from coordinator_core.guard_messages.testing import envelope_of
 
 pytestmark = pytest.mark.cadence
 
@@ -135,7 +136,7 @@ def _run(cmd, repo, *, env=None, agent_id=None):
         payload["env"] = env
     if agent_id:
         payload["agent_id"] = agent_id
-    result = guard.check(payload)
+    result = envelope_of(guard.check(payload), "em")
     assert result is not None, "suite command must not pass silently"
     return result["hookSpecificOutput"]["permissionDecisionReason"]
 

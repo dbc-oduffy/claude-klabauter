@@ -43,15 +43,6 @@ GENERATES = []
 _CREATIONFLAGS = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
-def _deny(reason: str) -> Dict[str, Any]:
-    return {
-        "hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "permissionDecision": "deny",
-            "permissionDecisionReason": reason,
-        }
-    }
-
 #: Wall-clock a single dispatch may spend inside `_run_git` subprocesses
 #: before further probes are declined unspawned. Derived from the harness's
 #: own PreToolUse hook window (15 000 ms, read off a `hook_cancelled`

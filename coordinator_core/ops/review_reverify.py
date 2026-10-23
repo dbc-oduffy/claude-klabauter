@@ -17,7 +17,10 @@ restores bytes older than HEAD. With no HEAD the baseline is always the snapshot
 anchor tree is unreadable, revert mode returns ``error`` and writes nothing (fail closed); list mode
 keeps the snapshot baseline and adds ``"head_unreadable": true``.
 
-List mode (no ``failing``): ``{"edited", "created", "snapshot", "error"}``. ``edited`` is every
+List mode (no ``failing``): ``{"edited", "created", "foreign", "tripwires", "snapshot", "error"}``,
+plus ``head_unreadable`` when applicable.
+``tripwires`` is the sorted test modules (not already edited or created) whose source holds a string
+literal naming an edited or created path; empty for an empty edit set. ``edited`` is every
 manifest path whose bytes now differ from its baseline (a missing file counts); ``created`` is every path the
 session's review stage wrote that the manifest and its declared ``paths`` do not name. ``foreign``
 is such a path another live run declared that is tracked in the snapshot's base commit, or that predates the snapshot: the session's write record
@@ -26,11 +29,13 @@ the failing node ids whose test file is foreign.
 
 Revert mode (``failing`` given): ``{"reverted", "unattributed", "record", "error"}``. A failing
 node id's test file implicates itself when edited or created, and every edited ``.py`` module it
-imports. ``restored`` writes the baseline bytes back and each ``reverted`` entry carries
-``source`` (``"snapshot"`` or ``"head"``); ``removed`` deletes a created path, but a created path
-tracked at HEAD is restored to HEAD's bytes, never unlinked. Before anything is written, the revert
-refuses (``error``, nothing written, the whole call) when it would remove a top-level symbol that a
-committed file in the run's surface (manifest paths plus paths changed anchor..HEAD) still uses. An id
+imports, plus every edited or created path a string literal in it names. Trap: a tripwire naming
+several edited paths implicates, and so reverts, all of them. ``restored`` writes the baseline bytes
+back and each ``reverted`` entry carries ``source`` (``"snapshot"`` or ``"head"``); ``removed``
+deletes a created path, but a created path tracked at HEAD is restored to HEAD's bytes, never
+unlinked. Before anything is written, the revert (tripwire-named paths included) refuses (``error``,
+nothing written, the whole call) when it would remove a top-level symbol that a committed file in the
+run's surface (manifest paths plus paths changed anchor..HEAD) still uses. An id
 implicating nothing is ``unattributed`` and reverts nothing. Every restored or removed path is
 passed to ``declare_write`` so the session's write record carries the new bytes. The record
 ``reverify.json`` merges across calls.
@@ -60,6 +65,7 @@ from coordinator_core.git.index_write import (
 )
 from coordinator_core.ipc import register_op
 from coordinator_core.ops._path_guard import contained_path
+from coordinator_core.ops.review_tripwires import literal_namers, names_in
 from coordinator_core.ops.reverify_callers import callers_of, removed_symbols
 from coordinator_core.pyimports import collect_imports, module_name_for_file, resolve_relative_module
 from coordinator_core.session.core import resolve_session_id
@@ -310,6 +316,17 @@ def _imported_edited(repo_root: Path, test_file: str, edited_py: Set[str]) -> Se
     return hit
 
 
+def _literal_named(repo_root: Path, test_file: str, named: List[str]) -> List[str]:
+    """Paths in ``named`` that a string literal in ``test_file`` names; empty when it is unreadable."""
+    if not named:
+        return []
+    try:
+        data = (repo_root / test_file).read_bytes()
+    except OSError:
+        return []
+    return names_in(data, named)
+
+
 _Plan = Dict[str, Tuple[Optional[bytes], str]]
 
 
@@ -451,7 +468,15 @@ def review_reverify(
     edited = _edited(repo_root, manifest, view)
     snapshot_rel = _rel(str(snapshot_dir / _MANIFEST), repo_root)
     if not revert:
-        out = {"edited": edited, "created": created, "foreign": foreign, "snapshot": snapshot_rel, "error": None}
+        tripwires = sorted(literal_namers(repo_root, edited + created, exclude=set(edited) | set(created)))
+        out = {
+            "edited": edited,
+            "created": created,
+            "foreign": foreign,
+            "tripwires": tripwires,
+            "snapshot": snapshot_rel,
+            "error": None,
+        }
         if unreadable:
             out["head_unreadable"] = True
         return out
@@ -472,6 +497,7 @@ def review_reverify(
             targets.add(test_file)
         if test_file.endswith(".py"):
             targets.update(_imported_edited(repo_root, test_file, edited_py))
+            targets.update(_literal_named(repo_root, test_file, edited + created))
         for target in targets:
             implicated.setdefault(target, []).append(node)
         if not targets and node not in already:

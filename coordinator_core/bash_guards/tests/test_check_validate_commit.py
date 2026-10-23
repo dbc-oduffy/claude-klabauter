@@ -45,6 +45,11 @@ from coordinator_core.session.scope import OwnerFact
 from coordinator_core.win_portability import no_console_creationflags
 
 import pytest
+from coordinator_core.guard_messages.testing import envelope_of
+
+
+def _enveloped(check):
+    return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 # Spawns a real external process; runs at cadence gates, not per-commit.
 # Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
@@ -98,7 +103,7 @@ class TestCheckFiveScopedStaging:
         (tmp_path / "foo.txt").write_text("hello\n", encoding="utf-8")
         _git(root, "add", "foo.txt")
 
-        result = dispatch_checks.check_validate_commit(
+        result = _enveloped(dispatch_checks.check_validate_commit)(
             'git commit -m "add foo"', sid, cwd=root
         )
         assert result is not None
@@ -140,7 +145,7 @@ class TestCheckFiveScopedStaging:
         (tmp_path / "foo.txt").write_text("hello\n", encoding="utf-8")
         _git(root, "add", "foo.txt")
 
-        result = dispatch_checks.check_validate_commit(
+        result = _enveloped(dispatch_checks.check_validate_commit)(
             'git commit -m "add foo"', sid, cwd=root
         )
         assert result is not None
@@ -158,7 +163,7 @@ class TestCheckFiveScopedStaging:
         _git(root, "add", "foo.txt")
         _claim(root, sid, "foo.txt")
 
-        result = dispatch_checks.check_validate_commit(
+        result = _enveloped(dispatch_checks.check_validate_commit)(
             'git commit -m "add foo"', sid, cwd=root
         )
         assert result is None
@@ -189,7 +194,7 @@ class TestCheckFiveScopedStaging:
         (agent_dir / "em-session-id.txt").write_text(sid + "\n", encoding="utf-8")
         _claim(root, sid, "foo.txt", agent_id=agent_id)
 
-        result = dispatch_checks.check_validate_commit(
+        result = _enveloped(dispatch_checks.check_validate_commit)(
             'git commit -m "add foo"', sid, cwd=root
         )
         assert result is None
@@ -210,7 +215,7 @@ class TestCheckFiveScopedStaging:
         (tmp_path / "foo.txt").write_text("hello\n", encoding="utf-8")
         _git(root, "add", "foo.txt")
 
-        result = dispatch_checks.check_validate_commit(
+        result = _enveloped(dispatch_checks.check_validate_commit)(
             'git commit -m "add foo"', sid, cwd=root
         )
         assert result is None
@@ -220,7 +225,7 @@ class TestCheckFiveScopedStaging:
         (tmp_path / "foo.txt").write_text("hello\n", encoding="utf-8")
         _git(root, "add", "foo.txt")
 
-        result = dispatch_checks.check_validate_commit(
+        result = _enveloped(dispatch_checks.check_validate_commit)(
             'git commit -m "add foo"', "", cwd=root
         )
         assert result is None
@@ -274,7 +279,7 @@ class TestCheckFiveScopedStaging:
         assert "scratch.txt" not in scope_result.orphans
         assert "scratch.txt" not in scope_result.my_scope
 
-        result = dispatch_checks.check_validate_commit(
+        result = _enveloped(dispatch_checks.check_validate_commit)(
             'git commit -m "add scratch"', sid, cwd=root
         )
         assert result is not None
@@ -313,7 +318,7 @@ class TestCheckFiveScopedStaging:
         assert "tracked.txt" in scope_result.orphans
         assert "tracked.txt" not in scope_result.my_scope
 
-        result = dispatch_checks.check_validate_commit(
+        result = _enveloped(dispatch_checks.check_validate_commit)(
             'git commit -m "rm tracked"', sid, cwd=root
         )
         assert result is not None
@@ -467,7 +472,7 @@ class TestCheckFiveStrictModePromotion:
         (tmp_path / "foo.txt").write_text("hello\n", encoding="utf-8")
         _git(root, "add", "foo.txt")
 
-        result = dispatch_checks.check_validate_commit(
+        result = _enveloped(dispatch_checks.check_validate_commit)(
             'git commit -m "add foo"', sid, cwd=root
         )
         assert result is None
@@ -640,7 +645,7 @@ class TestCheckFiveOwnerAttributionIntegration:
         )
         monkeypatch.setattr(session_scope, "compute_scope", lambda *a, **kw: injected)
 
-        result = dispatch_checks.check_validate_commit(
+        result = _enveloped(dispatch_checks.check_validate_commit)(
             'git commit -m "add foo"', sid, cwd=root
         )
         assert result is not None
@@ -679,14 +684,14 @@ class TestCheckFiveOwnerAttributionIntegration:
         )
 
         monkeypatch.setenv("COORDINATOR_SCOPE_STRICT_OFF", "1")
-        advisory = dispatch_checks.check_validate_commit(
+        advisory = _enveloped(dispatch_checks.check_validate_commit)(
             'git commit -m "add foo"', sid, cwd=root
         )
         assert advisory is not None
         assert marker in advisory["hookSpecificOutput"]["additionalContext"]
 
         monkeypatch.delenv("COORDINATOR_SCOPE_STRICT_OFF", raising=False)
-        denied = dispatch_checks.check_validate_commit(
+        denied = _enveloped(dispatch_checks.check_validate_commit)(
             'git commit -m "add foo"', sid, cwd=root
         )
         assert denied is not None
@@ -716,7 +721,7 @@ class TestCheckFiveOwnerAttributionIntegration:
         (tmp_path / "peer.txt").write_text("hello\n", encoding="utf-8")
         _git(root, "add", "peer.txt")
 
-        result = dispatch_checks.check_validate_commit(
+        result = _enveloped(dispatch_checks.check_validate_commit)(
             'git commit -m "add peer" -- peer.txt', sid, cwd=root
         )
         assert result is not None
@@ -748,7 +753,7 @@ class TestCheckFiveOwnerAttributionIntegration:
 
         monkeypatch.setattr(session_scope, "compute_scope", _raise)
 
-        result = dispatch_checks.check_validate_commit(
+        result = _enveloped(dispatch_checks.check_validate_commit)(
             'git commit -m "add foo"', sid, cwd=root
         )
         assert result is not None
@@ -783,7 +788,7 @@ class TestCheckFiveOwnerAttributionIntegration:
         monkeypatch.setattr(session_scope, "compute_scope", _raise)
         monkeypatch.setenv("COORDINATOR_SCOPE_STRICT", "1")
 
-        result = dispatch_checks.check_validate_commit(
+        result = _enveloped(dispatch_checks.check_validate_commit)(
             'git commit -m "add foo"', sid, cwd=root
         )
         assert result is not None
@@ -824,7 +829,7 @@ class TestCheckFiveScopeAdvisoryTailClause:
         (Path(root) / "peer.txt").write_text("hello\n", encoding="utf-8")
         _git(root, "add", "peer.txt")
 
-        result = dispatch_checks.check_validate_commit(
+        result = _enveloped(dispatch_checks.check_validate_commit)(
             'git commit -m "add peer"', sid, cwd=root
         )
         assert result is not None
@@ -841,7 +846,7 @@ class TestCheckFiveScopeAdvisoryTailClause:
         (Path(root) / "peer.txt").write_text("hello\n", encoding="utf-8")
         _git(root, "add", "peer.txt")
 
-        bare_result = dispatch_checks.check_validate_commit(
+        bare_result = _enveloped(dispatch_checks.check_validate_commit)(
             'git commit -m "add peer"', sid, cwd=root
         )
         bare_line = self._scope_line(
@@ -849,7 +854,7 @@ class TestCheckFiveScopeAdvisoryTailClause:
         )
         head_text = bare_line[: -len(" This bare commit sweeps it in.")]
 
-        scoped_result = dispatch_checks.check_validate_commit(
+        scoped_result = _enveloped(dispatch_checks.check_validate_commit)(
             'git commit -m "add peer" -- peer.txt', sid, cwd=root
         )
         assert scoped_result is not None
@@ -872,7 +877,7 @@ class TestCheckFiveScopeAdvisoryTailClause:
         (Path(root) / "own.txt").write_text("mine\n", encoding="utf-8")
         _git(root, "add", "own.txt")
 
-        result = dispatch_checks.check_validate_commit(
+        result = _enveloped(dispatch_checks.check_validate_commit)(
             'git commit -m "own change" -- own.txt', sid, cwd=root
         )
         assert result is not None
@@ -883,13 +888,13 @@ class TestCheckFiveScopeAdvisoryTailClause:
             "This commit's pathspec does not name it; it stays staged."
         )
 
-        again = dispatch_checks.check_validate_commit(
+        again = _enveloped(dispatch_checks.check_validate_commit)(
             'git commit -m "own change" -- own.txt', sid, cwd=root
         )
         context = (again or {}).get("hookSpecificOutput", {}).get("additionalContext") or ""
         assert "peer_del.txt" not in context
 
-        bare = dispatch_checks.check_validate_commit('git commit -m "sweep"', sid, cwd=root)
+        bare = _enveloped(dispatch_checks.check_validate_commit)('git commit -m "sweep"', sid, cwd=root)
         assert "peer_del.txt" in bare["hookSpecificOutput"]["additionalContext"]
 
     def test_three_clauses_differ_pairwise_and_share_the_prefix(self, tmp_path):
@@ -900,14 +905,14 @@ class TestCheckFiveScopeAdvisoryTailClause:
         (Path(root) / "peer.txt").write_text("hello\n", encoding="utf-8")
         _git(root, "add", "peer.txt")
 
-        bare = dispatch_checks.check_validate_commit(
+        bare = _enveloped(dispatch_checks.check_validate_commit)(
             'git commit -m "add peer"', sid, cwd=root
         )
         bare_line = self._scope_line(
             bare["hookSpecificOutput"]["additionalContext"], "peer.txt"
         )
 
-        scoped = dispatch_checks.check_validate_commit(
+        scoped = _enveloped(dispatch_checks.check_validate_commit)(
             'git commit -m "add peer" -- peer.txt', sid, cwd=root
         )
         scoped_line = self._scope_line(
@@ -922,7 +927,7 @@ class TestCheckFiveScopeAdvisoryTailClause:
         (Path(root) / "own.txt").write_text("mine\n", encoding="utf-8")
         _git(root, "add", "own.txt")
 
-        outside = dispatch_checks.check_validate_commit(
+        outside = _enveloped(dispatch_checks.check_validate_commit)(
             'git commit -m "own change" -- own.txt', sid, cwd=root
         )
         outside_line = self._scope_line(
@@ -993,7 +998,7 @@ class TestCheckEightFrontmatterMutation:
         root = _init_repo(tmp_path)
         _stage_frontmatter_change(root, tmp_path, "docs/plans/2026-07-16-foo.md", self._OLD, self._NEW)
 
-        result = dispatch_checks.check_validate_commit(
+        result = _enveloped(dispatch_checks.check_validate_commit)(
             'git commit -m "tweak plan"', "no-session", cwd=root
         )
         assert result is not None
@@ -1006,7 +1011,7 @@ class TestCheckEightFrontmatterMutation:
         root = _init_repo(tmp_path)
         _stage_frontmatter_change(root, tmp_path, "docs/plans/2026-07-16-foo.md", self._OLD, self._NEW)
 
-        result = dispatch_checks.check_validate_commit(
+        result = _enveloped(dispatch_checks.check_validate_commit)(
             'git commit -m "handoff: flip status to ready"', "no-session", cwd=root
         )
         assert result is None or "FRONTMATTER-MUTATION:" not in result["hookSpecificOutput"].get(
@@ -1017,7 +1022,7 @@ class TestCheckEightFrontmatterMutation:
         root = _init_repo(tmp_path)
         _stage_frontmatter_change(root, tmp_path, "docs/plans/2026-07-16-foo.md", self._OLD, self._NEW)
 
-        result = dispatch_checks.check_validate_commit(
+        result = _enveloped(dispatch_checks.check_validate_commit)(
             'git commit -m "status: bump to ready"', "no-session", cwd=root
         )
         assert result is None or "FRONTMATTER-MUTATION:" not in result["hookSpecificOutput"].get(
@@ -1034,7 +1039,7 @@ class TestCheckEightFrontmatterMutation:
             "---\nstatus: draft\nkind: plan\n---\nbody with an edit\n",
         )
 
-        result = dispatch_checks.check_validate_commit(
+        result = _enveloped(dispatch_checks.check_validate_commit)(
             'git commit -m "tweak body prose"', "no-session", cwd=root
         )
         assert result is None or "FRONTMATTER-MUTATION:" not in result["hookSpecificOutput"].get(
@@ -1045,7 +1050,7 @@ class TestCheckEightFrontmatterMutation:
         root = _init_repo(tmp_path)
         _stage_frontmatter_change(root, tmp_path, "docs/other/2026-07-16-foo.md", self._OLD, self._NEW)
 
-        result = dispatch_checks.check_validate_commit(
+        result = _enveloped(dispatch_checks.check_validate_commit)(
             'git commit -m "tweak plan"', "no-session", cwd=root
         )
         assert result is None or "FRONTMATTER-MUTATION:" not in result["hookSpecificOutput"].get(
@@ -1056,7 +1061,7 @@ class TestCheckEightFrontmatterMutation:
         root = _init_repo(tmp_path)
         _stage_frontmatter_change(root, tmp_path, "docs/plans/2026-07-16-foo.md", self._OLD, self._NEW)
 
-        result = dispatch_checks.check_validate_commit(
+        result = _enveloped(dispatch_checks.check_validate_commit)(
             'git commit -m "tweak plan"', "no-session", cwd=root
         )
         assert result is not None

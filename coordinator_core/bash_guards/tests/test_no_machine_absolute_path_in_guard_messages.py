@@ -225,6 +225,7 @@ from coordinator_core.bash_guards.tests.guard_message_corpus import (
     fire_write_guard_row,
     is_fixture_scratch_path,
 )
+from coordinator_core.guard_messages.testing import envelope_of
 from coordinator_core.session.guard_unlock_sentinel import annotate_deny
 from coordinator_core.write_guards.block_unauthorized_claude_md_write import (
     _grant_cli_invocation,
@@ -415,7 +416,7 @@ def test_no_machine_absolute_path_in_any_corpus_guard_message():
             _collect_violations(
                 row.guard,
                 row.row_id,
-                capture.envelope,
+                envelope_of(capture.envelope, "em"),
                 row_input=row.input,
                 grant_cli_text=grant_cli_text,
                 interpreter_text=interpreter_text,

@@ -85,7 +85,27 @@ def _offence(tokens: List[str]) -> Optional[str]:
     return "-run=ResavePackages without -projectonly"
 
 
-def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def _deny_record(offence: str) -> Any:
+    from coordinator_core.bash_guards._rewrite_support import _deny_record as _build
+    from coordinator_core.guard_messages.alternative_record import AdaptableOffer
+
+    return _build(
+        "block-unreal-engine-resave",
+        f"BLOCKED: {offence} rewrites installed engine content.",
+        (
+            AdaptableOffer(
+                template="add -projectonly, or scope -package=/-packagefolder= to the project",
+                what_to_adapt="the commandlet arguments",
+            ),
+        ),
+        em_text=(
+            f"BLOCKED: {offence} rewrites installed engine content. "
+            "Add -projectonly, or scope -package=/-packagefolder= to the project."
+        ),
+    )
+
+
+def check(payload: Dict[str, Any]) -> Any:
     if (payload.get("tool_name") or "") not in MATCHERS:
         return None
     tool_input = payload.get("tool_input") or {}
@@ -95,14 +115,5 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     for resolved in resolve_command_positions(cmd.replace("\r", "")):
         offence = _offence(resolved.tokens)
         if offence:
-            return {
-                "hookSpecificOutput": {
-                    "hookEventName": "PreToolUse",
-                    "permissionDecision": "deny",
-                    "permissionDecisionReason": (
-                        f"BLOCKED: {offence} rewrites installed engine content. "
-                        "Add -projectonly, or scope -package=/-packagefolder= to the project."
-                    ),
-                }
-            }
+            return _deny_record(offence)
     return None

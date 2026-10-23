@@ -8,8 +8,13 @@ from __future__ import annotations
 
 import pytest
 
-from coordinator_core.bash_guards.guard_subagent_heavy_ue_launch import check
+from coordinator_core.bash_guards.guard_subagent_heavy_ue_launch import check as _check
 from coordinator_core.bash_guards.roster import guard_roster
+from coordinator_core.guard_messages.testing import envelope_of
+
+
+def check(*args, **kwargs):
+    return envelope_of(_check(*args, **kwargs))
 
 
 def _payload(command, *, tool="Bash", agent_id="agent-abc123"):

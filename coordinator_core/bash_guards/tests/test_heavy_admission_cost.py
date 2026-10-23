@@ -15,6 +15,11 @@ import pytest
 
 from coordinator_core.bash_guards import guard_heavy_command_admission as guard
 from coordinator_core.bash_guards._heavy_admission_contract import MemoryReading
+from coordinator_core.guard_messages.testing import envelope_of
+
+
+def _enveloped(check):
+    return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 LIGHT_BATCH = 200
 CENSUS_BATCH = 20
@@ -66,10 +71,10 @@ def _payload(command):
 
 def test_light_calls_spawn_nothing_and_stay_under_the_bar(no_spawn):
     for command in LIGHT_COMMANDS:
-        assert guard.check(_payload(command)) is None
+        assert _enveloped(guard.check)(_payload(command)) is None
     start = time.process_time()
     for i in range(LIGHT_BATCH):
-        guard.check(_payload(LIGHT_COMMANDS[i % len(LIGHT_COMMANDS)]))
+        _enveloped(guard.check)(_payload(LIGHT_COMMANDS[i % len(LIGHT_COMMANDS)]))
     mean_ms = (time.process_time() - start) * 1000 / LIGHT_BATCH
     print("heavy-admission light-call process time: %.3f ms/call (n=%d)" % (mean_ms, LIGHT_BATCH))
     assert mean_ms < LIGHT_BAR_MS
@@ -100,7 +105,7 @@ def test_heavy_calls_spawn_nothing_across_the_classifier_table(no_spawn, monkeyp
         },
     )
     for command in HEAVY_COMMANDS:
-        out = guard.check(_payload(command))
+        out = _enveloped(guard.check)(_payload(command))
         assert out is None or "BLOCKED" in out["hookSpecificOutput"]["permissionDecisionReason"], command
 
 

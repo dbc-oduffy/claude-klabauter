@@ -6,6 +6,7 @@ from __future__ import annotations
 import pytest
 
 from coordinator_core.bash_guards import block_hand_authored_handoff_creation as bash_guard
+from coordinator_core.guard_messages.testing import envelope_of
 from coordinator_core.write_guards import block_hand_authored_handoff_creation as guard
 
 _OVERRIDE_ENV = "COORDINATOR_OVERRIDE_HAND_HANDOFF_WRITE"
@@ -34,6 +35,7 @@ def _bash(tmp_path, command):
 
 
 def _denied(result):
+    result = envelope_of(result, "em")
     return result is not None and result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 

@@ -77,13 +77,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from coordinator_core._hook_envelope import deny
 from coordinator_core.bash_guards._dialect import Dialect, dialect_from_tool_name
 from coordinator_core.bash_guards._helpers import (
     resolve_git_root,
     _read_backpointer_subagent_type,
     emit_kind_resolution_failure_signal,
-    operator_override_note,
 )
 from coordinator_core.bash_guards._verdict import record_silent
 from coordinator_core.write_guards.block_subagent_plan_body_write import (
@@ -163,16 +161,6 @@ _CP_MV_DD_RE = re.compile(
 )
 
 
-_CMD_WHITESPACE_CTRL_RE = re.compile(r"[\t\r\n\f\v]")
-_CMD_C0_CTRL_RE = re.compile(r"[\x00-\x1f]")
-
-
-def _sanitize_cmd_for_reason(cmd: str) -> str:
-    """Port of CMD_SAFE (reference hook 266-267)."""
-    safe = _CMD_WHITESPACE_CTRL_RE.sub(" ", cmd)
-    return _CMD_C0_CTRL_RE.sub("", safe)
-
-
 def _write_block_log(git_root: Optional[str], session_id: str, agent_id: str) -> None:
     if not session_id or not git_root:
         return
@@ -192,44 +180,50 @@ def _write_block_log(git_root: Optional[str], session_id: str, agent_id: str) ->
         )
 
 
-def _deny_reason_ambiguous(
-    agent_id: str,
-    cmd_safe: str,
-    payload: Optional[Dict[str, Any]] = None,
-    git_root: Optional[str] = None,
-) -> str:
-    """Compressed port of the AMBIGUOUS-branch REASON (reference hook)."""
-    _note = operator_override_note(_OVERRIDE_ENV_VAR, payload=payload, git_root=git_root)
-    return (
-        "BLOCKED: ambiguous agent identity — canonical-id collision, failing closed.\n\n"
-        "Two dispatches shared one id with different subagent_types. Ask the EM to\n"
-        "re-dispatch cleanly."
-        + ("\n\n" + _note if _note else "")
+def _deny_record(summary: str, report_what: str, authorize_what: str):
+    """Deny record: the refusal, an escalation route, and the guard's Override
+    (rendered for the EM audience only)."""
+    from coordinator_core.guard_messages.alternative_record import (
+        AlternativeRecord,
+        EscalationRoute,
+        Override,
+    )
+
+    return AlternativeRecord(
+        verdict_kind="deny",
+        guard_name="block-subagent-plan-body-bash-write",
+        summary=summary,
+        members=(
+            EscalationRoute(report_what=report_what, authorize_what=authorize_what),
+            Override(env_var=_OVERRIDE_ENV_VAR),
+        ),
     )
 
 
-def _deny_reason_executor(
-    agent_id: str,
-    cmd_safe: str,
-    subagent_type: str = _EXECUTOR_TYPE,
-    payload: Optional[Dict[str, Any]] = None,
-    git_root: Optional[str] = None,
-) -> str:
-    _note = operator_override_note(_OVERRIDE_ENV_VAR, payload=payload, git_root=git_root)
+def _deny_record_ambiguous():
+    return _deny_record(
+        "BLOCKED: ambiguous agent identity — canonical-id collision, failing closed.\n\n"
+        "Two dispatches shared one id with different subagent_types.",
+        "the id collision to your EM",
+        "a clean re-dispatch",
+    )
+
+
+def _deny_record_executor(subagent_type: str = _EXECUTOR_TYPE):
     if subagent_type != _EXECUTOR_TYPE:
-        return (
-            f"BLOCKED: subagent_type {subagent_type!r} is not on coordinator's\n"
+        return _deny_record(
+            f"BLOCKED: subagent_type {subagent_type!r} is not on coordinator's "
             "enumerated agent roster, so it can't write docs/plans/*.md via Bash.\n\n"
-            "Status stamps go in your run-report sidecar (report_sidecar).\n\n"
-            "Type is legitimate? It belongs on the roster. Body edit was your\n"
-            "deliverable? Ask the EM to dispatch an enumerated kind."
-            + ("\n\n" + _note if _note else "")
+            "Status stamps go in your run-report sidecar (report_sidecar).",
+            "the type (if legitimate it belongs on the roster) or the plan-body edit "
+            "you were dispatched to make, to your EM",
+            "an enumerated dispatch kind",
         )
-    return (
+    return _deny_record(
         "BLOCKED: coordinator:executor can't write docs/plans/*.md via Bash.\n\n"
-        "Stamps go in your run-report sidecar. Body edit is your "
-        "deliverable? Ask the EM for an enricher."
-        + ("\n\n" + _note if _note else "")
+        "Stamps go in your run-report sidecar.",
+        "that the plan-body edit is your deliverable, to your EM",
+        "an enricher dispatch",
     )
 
 
@@ -249,10 +243,10 @@ def _has_unambiguous_write(cmd_norm: str) -> bool:
     return False
 
 
-def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def check(payload: Dict[str, Any]) -> Optional[Any]:
     """Evaluate the plan-body-bash-write guard against a PreToolUse payload.
 
-    Returns ``None`` (allow) or the nested hard-deny envelope. Fails open
+    Returns ``None`` (allow) or a deny ``AlternativeRecord``. Fails open
     (returns ``None``) on any missing/unparseable field or lookup-miss,
     matching the reference hook's ``-e``-omitted, fail-open-on-error
     contract for the target-detection axis, and the identity axis's own
@@ -369,13 +363,6 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     # Best-effort fire log; never flips the verdict.
     _write_block_log(git_root, session_id, agent_id or raw_agent_id)
 
-    cmd_safe = _sanitize_cmd_for_reason(cmd)
-
     if is_ambiguous:
-        reason = _deny_reason_ambiguous(agent_id or raw_agent_id, cmd_safe, payload=payload, git_root=git_root)
-    else:
-        reason = _deny_reason_executor(
-            agent_id or raw_agent_id, cmd_safe, subagent_type, payload=payload, git_root=git_root
-        )
-
-    return deny("PreToolUse", reason)
+        return _deny_record_ambiguous()
+    return _deny_record_executor(subagent_type)

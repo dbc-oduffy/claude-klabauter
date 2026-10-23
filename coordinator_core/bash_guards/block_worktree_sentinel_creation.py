@@ -75,6 +75,8 @@ from coordinator_core.bash_guards._sentinel_creation_guard import (
     REASON_INDIRECTION,
     SentinelCreationDetector,
     indirection_deny_reason,
+    leveled_record,
+    sentinel_record,
 )
 from coordinator_core.bash_guards._dialect import Dialect, dialect_from_tool_name
 from coordinator_core.bash_guards._tool_names import COMMAND_TOOL_NAMES
@@ -267,12 +269,25 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if reason_class == REASON_INDIRECTION and is_read_only_compound(cmd):
         return None
 
-    envelope = {
-        "hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "permissionDecision": "deny",
-            "permissionDecisionReason": _deny_reason(cmd, reason_kind, reason_class),
-        }
-    }
+    from coordinator_core.guard_messages.alternative_record import AdaptableOffer
+
+    if reason_class == REASON_INDIRECTION:
+        offer = AdaptableOffer(
+            template="./path/to/script.py",
+            what_to_adapt="the script path (executable, shebang)",
+        )
+    else:
+        offer = AdaptableOffer(
+            template="the same edits as scoped-parallel work in this tree",
+            what_to_adapt="the plan (disjoint file scopes per agent)",
+        )
+    record = sentinel_record(
+        GUARD_NAME,
+        "deny",
+        _deny_reason(cmd, reason_kind, reason_class),
+        offer,
+        report_what="why you need worktree isolation",
+        authorize_what="the worktree-ban override",
+    )
     risk = _RISK_INDIRECTION if reason_class == REASON_INDIRECTION else _RISK_DIRECT
-    return apply_guard_level(GUARD_NAME, envelope, risk=risk[0].upper() + risk[1:])
+    return leveled_record(GUARD_NAME, record, apply_guard_level, risk[0].upper() + risk[1:])

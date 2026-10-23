@@ -18,6 +18,11 @@ import pytest
 
 from coordinator_core.bash_guards import guard_host_subagent_bash_ban as ban
 from coordinator_core.bash_guards import guard_host_subagent_bash_spawn_shapes as guard
+from coordinator_core.guard_messages.testing import envelope_of
+
+
+def _enveloped(check):
+    return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 _PS_FANOUT = (
     "Get-CimInstance Win32_Process | Where-Object { $_.Name -like 'py*' } "
@@ -35,7 +40,7 @@ def opted_in_repo(tmp_path: Path) -> Path:
 
 
 def _check(cwd: Path, tool_name: str, command: str, agent_id: str = "dispatched-1"):
-    return guard.check(
+    return _enveloped(guard.check)(
         {
             "tool_name": tool_name,
             "agent_id": agent_id,
@@ -95,7 +100,7 @@ def test_the_ban_guard_stays_bash_only_on_purpose(tmp_path: Path) -> None:
         "tool_input": {"command": _PS_FANOUT},
         "cwd": str(tmp_path),
     }
-    assert ban.check(payload) is None
+    assert _enveloped(ban.check)(payload) is None
     assert ban.MATCHERS == ("Bash",)
 
 

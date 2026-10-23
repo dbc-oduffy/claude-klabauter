@@ -11,6 +11,11 @@ import pytest
 from coordinator_core.bash_guards import dispatch_checks
 from coordinator_core.session import core
 from coordinator_core.win_portability import no_console_creationflags
+from coordinator_core.guard_messages.testing import envelope_of
+
+
+def _enveloped(check):
+    return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 pytestmark = [
     pytest.mark.spawns_process,
@@ -74,7 +79,7 @@ class TestBatchedScopeDenial:
         _claim(root, sid, "hunk.txt", content_hash="0" * 64)
         _claim(root, peer_sid, "theirs.txt")
 
-        result = dispatch_checks.check_validate_commit(
+        result = _enveloped(dispatch_checks.check_validate_commit)(
             'git commit -m "batch"', sid, cwd=root
         )
         assert result is not None
@@ -99,7 +104,7 @@ class TestBatchedScopeDenial:
         _git(root, "add", "theirs.txt")
         _claim(root, peer_sid, "theirs.txt")
 
-        result = dispatch_checks.check_validate_commit(
+        result = _enveloped(dispatch_checks.check_validate_commit)(
             'git commit -m "single"', sid, cwd=root
         )
         assert result is not None
@@ -119,7 +124,7 @@ class TestBatchedScopeDenial:
         _claim(root, sid, "mine.txt")
         _claim(root, sid, "also_mine.txt")
 
-        result = dispatch_checks.check_validate_commit(
+        result = _enveloped(dispatch_checks.check_validate_commit)(
             'git commit -m "clean"', sid, cwd=root
         )
         assert result is None

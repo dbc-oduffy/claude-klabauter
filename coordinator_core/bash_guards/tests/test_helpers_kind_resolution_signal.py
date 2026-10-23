@@ -40,6 +40,30 @@ _OUTCOMES = [
 ]
 
 
+def _record(kind):
+    from coordinator_core.guard_messages.alternative_record import (
+        AlternativeRecord,
+        EscalationRoute,
+        ReadyCommand,
+    )
+
+    return AlternativeRecord(
+        kind, "s", (ReadyCommand(text="x"), EscalationRoute("a", "b")), "g"
+    )
+
+
+@pytest.mark.parametrize("kind,outcome", [("deny", _OUT_DENY), ("advisory", _OUT_UNKNOWN)])
+def test_record_verdict_reports_its_disposition(capsys, kind, outcome):
+    line = _emit(capsys, "a1", "/repo", _record(kind)).err
+    assert line.rstrip("\n").endswith("%s." % outcome)
+
+
+def test_record_verdict_records_no_silent_declaration(capsys):
+    with collecting() as silences:
+        _emit(capsys, "a1", "/repo", _record("deny"))
+    assert silences == []
+
+
 def _emit(capsys, agent_id, git_root, verdict):
     _helpers.emit_kind_resolution_failure_signal(_GUARD, agent_id, git_root, verdict)
     return capsys.readouterr()

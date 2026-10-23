@@ -38,7 +38,6 @@ from coordinator_core.bash_guards._command_tokenizer import (
     split_unquoted_newlines as _bt_split_unquoted_newlines,
 )
 from coordinator_core.bash_guards._dc_git_probe import (
-    _deny,
     _new_dirty_paths_memo,
     _rm_peer_claim_of,
 )
@@ -57,7 +56,7 @@ from coordinator_core.bash_guards._dialect import (
     resolve_segments_for_dialect,
 )
 from coordinator_core.bash_guards._helpers import operator_override_note
-from coordinator_core.bash_guards._rewrite_support import _crlf_strip, _override
+from coordinator_core.bash_guards._rewrite_support import _alt_record, _crlf_strip, _offer, _override, _ready
 from coordinator_core.bash_guards.block_subagent_destructive_action import (
     _PS_REMOVE_VERBS,
     _ps_normalize_verb_token,
@@ -524,13 +523,17 @@ def check_stale_write(
         note = operator_override_note(
             "COORDINATOR_OVERRIDE_STALE_WRITE", payload=payload, git_root=root
         )
-        return _deny(
-            (
+        return _alt_record(
+            "deny", "stale-write", "BLOCKED: %s -- %s." % (rel, fact),
+            (_ready("git log --oneline -3 -- %s" % rel),),
+            "COORDINATOR_OVERRIDE_STALE_WRITE",
+            report="the write you need to make", authorize="overwriting the changed file",
+            em_text=(
                 "BLOCKED: %s -- %s. `git log --oneline -3 -- %s` shows what "
                 "changed."
                 % (rel, fact, rel)
             )
-            + (" %s" % note if note else "")
+            + (" %s" % note if note else ""),
         )
 
     return None
@@ -925,12 +928,20 @@ def check_destructive_rm(
         recursive = recursion_flag is not None
 
         if recursive and re.search(r"\$\(|`", after) and not rm_override:
-            return _deny(
+            return _alt_record(
+                "deny", "destructive-rm",
                 "BLOCKED: 'rm' has a recursive flag and a subshell-resolved "
                 "target ($(...) or backticks) — cannot verify what it would "
-                "delete.\n\n"
-                "Resolve it to a literal path first; use instead:\n"
-                "  git status --porcelain -- <resolved-path>"
+                "delete. Resolve it to a literal path first.",
+                (_offer("git status --porcelain -- <resolved-path>", "the resolved path"),),
+                report="the rm you need", authorize="a recursive rm of an unverifiable target",
+                em_text=(
+                    "BLOCKED: 'rm' has a recursive flag and a subshell-resolved "
+                    "target ($(...) or backticks) — cannot verify what it would "
+                    "delete.\n\n"
+                    "Resolve it to a literal path first; use instead:\n"
+                    "  git status --porcelain -- <resolved-path>"
+                ),
             )
 
         targets: List[Tuple[str, str]] = []
@@ -1004,19 +1015,30 @@ def check_destructive_rm(
             ) or re.search(r"/coordinator-sessions/[^/]*-claims$", norm):
                 if rm_override:
                     continue
-                return _deny(
+                return _alt_record(
+                    "deny", "destructive-rm",
                     "BLOCKED: '%s' is a coordinator claim lock dir — "
                     "regenerable session scratch, NOT git history. Do not rm "
-                    "it by hand.\n\n"
-                    "Did you mean: cs_clear_claim_if_dead <class> <basename>\n\n"
-                    "  cs_clear_claim_if_dead calls cs_claim_holder_live first "
-                    "and refuses to clear a LIVE peer's claim. The manual-rm "
-                    "path is exactly how a live peer gets stomped (see "
-                    "CLAIM-CLEAR-LIVENESS in coordinator-tripwires.md).\n\n"
-                    "  cs_clear_claim_if_dead is the canonical safe path for "
-                    "clearing a stale claim.\n"
-                    "  (Available in lib/coordinator-session.sh — source it "
-                    "first if not already loaded.)" % tgt
+                    "it by hand: the manual-rm path is how a live peer gets "
+                    "stomped (CLAIM-CLEAR-LIVENESS in coordinator-tripwires.md)." % tgt,
+                    (_offer(
+                        "cs_clear_claim_if_dead <class> <basename> (lib/coordinator-session.sh; "
+                        "refuses to clear a LIVE peer's claim)", "the class and basename"),),
+                    report="the claim dir you need cleared", authorize="removing the claim lock dir",
+                    em_text=(
+                        "BLOCKED: '%s' is a coordinator claim lock dir — "
+                        "regenerable session scratch, NOT git history. Do not rm "
+                        "it by hand.\n\n"
+                        "Did you mean: cs_clear_claim_if_dead <class> <basename>\n\n"
+                        "  cs_clear_claim_if_dead calls cs_claim_holder_live first "
+                        "and refuses to clear a LIVE peer's claim. The manual-rm "
+                        "path is exactly how a live peer gets stomped (see "
+                        "CLAIM-CLEAR-LIVENESS in coordinator-tripwires.md).\n\n"
+                        "  cs_clear_claim_if_dead is the canonical safe path for "
+                        "clearing a stale claim.\n"
+                        "  (Available in lib/coordinator-session.sh — source it "
+                        "first if not already loaded.)" % tgt
+                    ),
                 )
 
             # A `*.lock` file under the git store holds no committed data --
@@ -1094,10 +1116,17 @@ def check_destructive_rm(
             if is_git_store_target:
                 if rm_override:
                     continue
-                return _deny(
+                return _alt_record(
+                    "deny", "destructive-rm",
                     "BLOCKED: 'rm' would delete part of the git store at "
                     "'%s'. This corrupts/destroys repository history "
-                    "irreversibly — no checkout, reflog, or stash recovers it." % tgt
+                    "irreversibly — no checkout, reflog, or stash recovers it." % tgt, (),
+                    report="the git-store removal you need", authorize="deleting part of the git store",
+                    em_text=(
+                        "BLOCKED: 'rm' would delete part of the git store at "
+                        "'%s'. This corrupts/destroys repository history "
+                        "irreversibly — no checkout, reflog, or stash recovers it." % tgt
+                    ),
                 )
 
             # A repo ROOT is the same irreversibility class as the `.git`
@@ -1204,30 +1233,56 @@ def check_destructive_rm(
                         if clone_failed
                         else ""
                     )
-                    return _deny(
+                    return _alt_record(
+                        "deny", "destructive-rm",
                         "BLOCKED: '%s' is the ROOT of a git repository (%s). "
                         "'rm' on it %s "
                         "is gone irreversibly, "
                         "plus all gitignored content (settings, caches, "
                         "credentials, session state) that no commit ever "
-                        "held.\n\n"
-                        "%s"
+                        "held. %s"
                         "This deny is on identity, not on dirty-state: a "
                         "clean worktree does NOT make deleting the store "
-                        "safe.\n\n"
-                        "If you are removing a CLONE that is fully pushed, "
-                        "confirm every ref is on a remote first:\n"
-                        '  git -C "%s" log --branches --not --remotes '
-                        "--oneline    # empty == nothing unpushed\n"
-                        '  git -C "%s" stash list                          '
-                        "  # stashes are never pushed\n"
-                        '  git -C "%s" status --porcelain --ignored        '
-                        "  # untracked + gitignored content\n\n"
-                        "Beware case-insensitive filesystems: a path that "
+                        "safe. Beware case-insensitive filesystems: a path that "
                         "LOOKS like a case-variant probe directory can be the "
-                        "real one. Verify with:\n"
-                        '  python3 -c "import os;print(os.stat(%r).st_ino)"'
-                        % (tgt, store_desc, loss_desc, failed_note, tgt_abs, tgt_abs, tgt_abs, tgt_abs)
+                        "real one."
+                        % (tgt, store_desc, loss_desc, failed_note),
+                        (
+                            _offer(
+                                'git -C "%s" log --branches --not --remotes --oneline (empty == nothing unpushed); '
+                                'git -C "%s" stash list (stashes are never pushed); '
+                                'git -C "%s" status --porcelain --ignored (untracked + gitignored content)'
+                                % (tgt_abs, tgt_abs, tgt_abs),
+                                "nothing; run to confirm a fully pushed CLONE before removing it",
+                            ),
+                            _ready('python3 -c "import os;print(os.stat(%r).st_ino)"' % tgt_abs),
+                        ),
+                        report="the repository removal you need", authorize="deleting a repository root",
+                        em_text=(
+                            "BLOCKED: '%s' is the ROOT of a git repository (%s). "
+                            "'rm' on it %s "
+                            "is gone irreversibly, "
+                            "plus all gitignored content (settings, caches, "
+                            "credentials, session state) that no commit ever "
+                            "held.\n\n"
+                            "%s"
+                            "This deny is on identity, not on dirty-state: a "
+                            "clean worktree does NOT make deleting the store "
+                            "safe.\n\n"
+                            "If you are removing a CLONE that is fully pushed, "
+                            "confirm every ref is on a remote first:\n"
+                            '  git -C "%s" log --branches --not --remotes '
+                            "--oneline    # empty == nothing unpushed\n"
+                            '  git -C "%s" stash list                          '
+                            "  # stashes are never pushed\n"
+                            '  git -C "%s" status --porcelain --ignored        '
+                            "  # untracked + gitignored content\n\n"
+                            "Beware case-insensitive filesystems: a path that "
+                            "LOOKS like a case-variant probe directory can be the "
+                            "real one. Verify with:\n"
+                            '  python3 -c "import os;print(os.stat(%r).st_ino)"'
+                            % (tgt, store_desc, loss_desc, failed_note, tgt_abs, tgt_abs, tgt_abs, tgt_abs)
+                        ),
                     )
 
             # Scratch allowlist.
@@ -1315,7 +1370,8 @@ def check_destructive_rm(
                 if status:
                     peer_sid = _rm_peer_claim_of(tgt_abs, root, _dirty_paths_lookup)
                     if peer_sid:
-                        return _deny(
+                        return _alt_record(
+                            "deny", "destructive-rm",
                             "BLOCKED (not overridable): '%s' holds "
                             "untracked/uncommitted work claimed by LIVE peer "
                             "session %s in this shared worktree. "
@@ -1323,7 +1379,18 @@ def check_destructive_rm(
                             "your own and git CANNOT recover them. If you "
                             "believe it is stale, confirm with the peer or "
                             "wait for their handoff — do not delete a live "
-                            "peer's uncommitted work." % (tgt, peer_sid)
+                            "peer's uncommitted work." % (tgt, peer_sid), (),
+                            report="the removal you need", authorize="deleting a live peer's work",
+                            em_text=(
+                                "BLOCKED (not overridable): '%s' holds "
+                                "untracked/uncommitted work claimed by LIVE peer "
+                                "session %s in this shared worktree. "
+                                "Untracked files are byte-indistinguishable from "
+                                "your own and git CANNOT recover them. If you "
+                                "believe it is stale, confirm with the peer or "
+                                "wait for their handoff — do not delete a live "
+                                "peer's uncommitted work." % (tgt, peer_sid)
+                            ),
                         )
                     if rm_override:
                         continue
@@ -1337,21 +1404,40 @@ def check_destructive_rm(
                     why = ""
                     if not tgt_is_dir and recursion_flag:
                         why = " (read as recursive: %s)" % recursion_flag
-                    return _deny(
+                    return _alt_record(
+                        "deny", "destructive-rm",
                         "BLOCKED: 'rm' on '%s'%s would destroy uncommitted/"
                         "untracked work that git CANNOT recover (untracked "
                         "files and unstaged edits live in no commit, no "
-                        "stash, no reflog):\n%s%s\n\n"
-                        "Before overriding, re-derive what would actually be "
-                        "lost (do not trust a remembered or narrated state):\n"
-                        '  git -C "%s" status --porcelain -- "%s"\n\n'
-                        "To preserve the work first, COPY it aside — never "
-                        "stash on this tree, which a dozen sessions share "
-                        "(`stash@{0}` is whoever stashed last, not you):\n"
-                        '  cp -r -- "%s" "${TMPDIR:-/tmp}/preserved-$(basename "%s")"\n\n'
-                        "Reserve irreversible deletion for genuinely "
+                        "stash, no reflog):\n%s%s\n"
+                        "Re-derive what would actually be lost rather than trusting a "
+                        "remembered state; reserve irreversible deletion for genuinely "
                         "disposable, self-authored, uncontested paths."
-                        % (tgt, why, disp, more, root, tgt_abs, tgt_abs, tgt_abs)
+                        % (tgt, why, disp, more),
+                        (
+                            _ready('git -C "%s" status --porcelain -- "%s"' % (root, tgt_abs)),
+                            _ready(
+                                'cp -r -- "%s" "${TMPDIR:-/tmp}/preserved-$(basename "%s")"'
+                                % (tgt_abs, tgt_abs)
+                            ),
+                        ),
+                        report="the removal you need", authorize="deleting uncommitted work",
+                        em_text=(
+                            "BLOCKED: 'rm' on '%s'%s would destroy uncommitted/"
+                            "untracked work that git CANNOT recover (untracked "
+                            "files and unstaged edits live in no commit, no "
+                            "stash, no reflog):\n%s%s\n\n"
+                            "Before overriding, re-derive what would actually be "
+                            "lost (do not trust a remembered or narrated state):\n"
+                            '  git -C "%s" status --porcelain -- "%s"\n\n'
+                            "To preserve the work first, COPY it aside — never "
+                            "stash on this tree, which a dozen sessions share "
+                            "(`stash@{0}` is whoever stashed last, not you):\n"
+                            '  cp -r -- "%s" "${TMPDIR:-/tmp}/preserved-$(basename "%s")"\n\n'
+                            "Reserve irreversible deletion for genuinely "
+                            "disposable, self-authored, uncontested paths."
+                            % (tgt, why, disp, more, root, tgt_abs, tgt_abs, tgt_abs)
+                        ),
                     )
 
     # BX-13: a `sh -c '...'`/`bash -c "..."` (etc.) wrapper's quoted argument

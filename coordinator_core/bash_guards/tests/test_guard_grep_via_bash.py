@@ -46,6 +46,11 @@ import inspect
 from coordinator_core.bash_guards._helpers import OVERRIDE_KEYS_DOC_DISPLAY
 from coordinator_core.bash_guards import _dc_rewrites, dispatch_checks
 from coordinator_core.bash_guards import guard_grep_via_bash as guard
+from coordinator_core.guard_messages.testing import envelope_of
+
+
+def _enveloped(check):
+    return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 
 def _payload(command):
@@ -58,7 +63,7 @@ def _payload(command):
 
 
 def _result(cmd, **kwargs):
-    return guard.check(_payload(cmd), **kwargs)
+    return _enveloped(guard.check)(_payload(cmd), **kwargs)
 
 
 def _envelope(cmd, **kwargs):
@@ -92,11 +97,11 @@ class TestRewriteScriptCompilesAndFallsBack:
 
     def test_standalone_rewrite_that_will_not_compile_keeps_the_original(self, monkeypatch):
         cmd = "grep -n foo src"
-        assert _dc_rewrites.check_grep_via_bash_rewrite(cmd) is not None
+        assert _enveloped(_dc_rewrites.check_grep_via_bash_rewrite)(cmd) is not None
         monkeypatch.setattr(
             _dc_rewrites, "_bt_grep_python_rewrite", lambda parsed: "python3 -c 'if ('"
         )
-        assert _dc_rewrites.check_grep_via_bash_rewrite(cmd) is None
+        assert _enveloped(_dc_rewrites.check_grep_via_bash_rewrite)(cmd) is None
 
 
 class TestSubstitutableResidueIsSilent:
@@ -122,7 +127,7 @@ class TestSubstitutableResidueIsSilent:
         would mean `_substitutable_rewrite` silently stopped matching
         `check_grep_via_bash_rewrite`'s own reach."""
         cmd = "grep -rn TODO src/"
-        assert dispatch_checks.check_grep_via_bash_rewrite(cmd) is not None
+        assert _enveloped(dispatch_checks.check_grep_via_bash_rewrite)(cmd) is not None
 
 
 class TestPartialRewriteIsDeleted:
@@ -363,7 +368,7 @@ class TestOverrideEnvVar:
 class TestNonMatches:
     def test_non_bash_tool_allows(self):
         payload = {"tool_name": "Read", "tool_input": {"file_path": "x"}}
-        assert guard.check(payload) is None
+        assert _enveloped(guard.check)(payload) is None
 
     def test_empty_command_allows(self):
         assert _result("") is None
@@ -372,7 +377,7 @@ class TestNonMatches:
         assert _result("ls -la") is None
 
     def test_missing_tool_input_allows(self):
-        assert guard.check({"tool_name": "Bash"}) is None
+        assert _enveloped(guard.check)({"tool_name": "Bash"}) is None
 
     def test_unparseable_command_allows(self):
         assert _result("grep 'unterminated") is None
@@ -399,7 +404,7 @@ class TestPowerShellDialect:
         from coordinator_core.bash_guards._verdict import collecting, was_silent
 
         with collecting() as silences:
-            result = guard.check(self._ps_payload("Select-String -Pattern TODO -Path ."))
+            result = _enveloped(guard.check)(self._ps_payload("Select-String -Pattern TODO -Path ."))
         assert result is None
         assert was_silent("guard_grep_via_bash", silences)
 
@@ -407,7 +412,7 @@ class TestPowerShellDialect:
         from coordinator_core.bash_guards._verdict import collecting, was_silent
 
         with collecting() as silences:
-            result = guard.check(self._ps_payload("sls TODO ."))
+            result = _enveloped(guard.check)(self._ps_payload("sls TODO ."))
         assert result is None
         assert was_silent("guard_grep_via_bash", silences)
 
@@ -415,7 +420,7 @@ class TestPowerShellDialect:
         from coordinator_core.bash_guards._verdict import collecting, was_silent
 
         with collecting() as silences:
-            result = guard.check(self._ps_payload("Get-ChildItem -Path ."))
+            result = _enveloped(guard.check)(self._ps_payload("Get-ChildItem -Path ."))
         assert result is None
         assert not was_silent("guard_grep_via_bash", silences)
 
@@ -441,7 +446,7 @@ class TestPowerShellTokenizesOnce:
             return real(*args, **kwargs)
 
         monkeypatch.setattr(sc, "tokenize_command", spy)
-        guard.check(self._ps("grep -rnP TODO src"))
+        _enveloped(guard.check)(self._ps("grep -rnP TODO src"))
         assert len(calls) == 1
 
     def test_heredoc_body_does_not_trigger_select_string_decline(self):
@@ -450,7 +455,7 @@ class TestPowerShellTokenizesOnce:
         # policy is chosen for both the decline check and the
         # classification, so the GNU-only advisory fires.
         cmd = "grep -rnP TODO src <<EOF\ndata | Select-String x\nEOF"
-        result = guard.check(self._ps(cmd))
+        result = _enveloped(guard.check)(self._ps(cmd))
         assert result is not None
         assert "GNU-only" in result["hookSpecificOutput"]["additionalContext"]
 
@@ -458,7 +463,7 @@ class TestPowerShellTokenizesOnce:
         from coordinator_core.bash_guards._verdict import collecting, was_silent
 
         with collecting() as silences:
-            result = guard.check(self._ps("Select-String -Pattern TODO -Path ."))
+            result = _enveloped(guard.check)(self._ps("Select-String -Pattern TODO -Path ."))
         assert result is None
         assert was_silent("guard_grep_via_bash", silences)
 
@@ -469,7 +474,7 @@ class TestPowerShellTokenizesOnce:
 
         cmd = "grep -rn TODO src <<EOF\ndata | Select-String x\nEOF"
         with collecting() as silences:
-            guard.check(self._ps(cmd))
+            _enveloped(guard.check)(self._ps(cmd))
         assert not was_silent("guard_grep_via_bash", silences)
 
 

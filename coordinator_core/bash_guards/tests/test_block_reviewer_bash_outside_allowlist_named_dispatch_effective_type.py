@@ -1,6 +1,7 @@
 
 from __future__ import annotations
 
+from coordinator_core.guard_messages.testing import envelope_of
 from coordinator_core.bash_guards import (
     block_reviewer_bash_outside_allowlist as guard,
 )
@@ -47,6 +48,7 @@ def _wire_named_dispatch(monkeypatch, subagent_type):
 
 def _assert_denied(result):
     assert result is not None
+    result = envelope_of(result)
     assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
     return result["hookSpecificOutput"]["permissionDecisionReason"]
 

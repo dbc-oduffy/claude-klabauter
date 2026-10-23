@@ -175,7 +175,14 @@ import os
 import sys
 from typing import Any, Dict, Optional
 
-from coordinator_core._hook_envelope import allow_advisory, deny
+from coordinator_core._hook_envelope import _stamp, allow_advisory, deny
+from coordinator_core.guard_messages.alternative_record import (
+    AdaptableOffer,
+    AlternativeRecord,
+    EscalationRoute,
+    Override,
+    ReadyCommand,
+)
 from coordinator_core.machine_resolver import load_flat_registry_file, registry_dir
 
 _EVENT_NAME = "PreToolUse"
@@ -332,9 +339,62 @@ def platform_verdict_for_shape(
             every caller; see this chunk's run report for the tradeoff.
     """
     del matched_cmd, host_is_windows
-    advisory_context = (
+    from coordinator_core.guard_messages.alternative_record import Audience
+    from coordinator_core.guard_messages.render import render
+
+    return render(
+        shape_advisory_record(
+            spawn_shape_summary(shape_name, outlet_summary),
+            outlet_example,
+            guard_name="platform-verdict",
+            em_text=shape_context(shape_name, outlet_summary, outlet_example),
+        ),
+        Audience.EM,
+    )
+
+
+def spawn_shape_summary(shape_name: str, outlet_summary: str) -> str:
+    return (
         "BASH-SPAWN ADVISORY (non-blocking): `%s` spawns a subprocess "
-        "per iteration; use %s.\n\n"
-        "  Example:  %s\n"
-    ) % (shape_name, outlet_summary, outlet_example)
-    return allow_advisory(_EVENT_NAME, advisory_context)
+        "per iteration; use %s." % (shape_name, outlet_summary)
+    )
+
+
+def shape_context(shape_name: str, outlet_summary: str, outlet_example: str) -> str:
+    """The stamped advisory string ``platform_verdict_for_shape`` has always
+    emitted: the EM's text for a spawn-shape finding."""
+    return _stamp(
+        "%s\n\n  Example:  %s\n"
+        % (spawn_shape_summary(shape_name, outlet_summary), outlet_example)
+    )
+
+
+def shape_advisory_record(
+    summary: str,
+    outlet_example: str,
+    *,
+    guard_name: str,
+    override_env: Optional[str] = None,
+    ready: bool = False,
+    em_text: Optional[str] = None,
+) -> AlternativeRecord:
+    """Advisory record for a spawn-shape finding: ``summary`` leads, the outlet
+    follows as a ReadyCommand (``ready``, a seam-confirmed rewrite) or an
+    AdaptableOffer (a skeleton the reader fills in). The escalation route is
+    what a subagent sees; ``override_env`` adds the EM-only Override;
+    ``em_text`` is the EM's legacy string, rendered verbatim."""
+    offer = (
+        ReadyCommand(text=outlet_example)
+        if ready
+        else AdaptableOffer(template=outlet_example, what_to_adapt="the example")
+    )
+    members = [offer, EscalationRoute(report_what="this command", authorize_what="it")]
+    if override_env:
+        members.append(Override(env_var=override_env))
+    return AlternativeRecord(
+        verdict_kind="advisory",
+        summary=summary + "\n  Example:",
+        members=tuple(members),
+        guard_name=guard_name,
+        em_text=em_text,
+    )

@@ -126,7 +126,7 @@ def test_ac1_ac2_powershell_find_root_denies_via_runaway_find():
 def test_ac3_powershell_grep_rewrite_advisory_fires_via_matcher_widening():
     """AC3: a corroborating ADVISORY oracle proves the normalization reaches
     matcher selection for the `ADVISORY_REWRITE` band too, not only
-    `CONFINEMENT_DENY`. `grep -rn foo .` under `tool_name="PowerShell"`
+    `CONFINEMENT_DENY`. `grep -rn foo coordinator_core` under `tool_name="PowerShell"`
     surfaces `grep-via-bash-rewrite`'s own distinctive rewrite text in
     `additionalContext`.
 
@@ -145,20 +145,18 @@ def test_ac3_powershell_grep_rewrite_advisory_fires_via_matcher_widening():
     rules out "the assertion below happens to match some OTHER guard's
     output" as a false-positive shape.
     """
-    out = _probe("grep -rn foo .", "PowerShell")
+    out = _probe("grep -rn foo coordinator_core", "PowerShell")
     assert isinstance(out, dict), out
     hso = out.get("hookSpecificOutput")
     assert isinstance(hso, dict), out
     assert hso.get("permissionDecision") == "allow", out
     assert "Auto-rewritten: 'grep' via Bash" in hso.get("additionalContext", ""), out
 
-    sentinel = {
-        "hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "permissionDecision": "allow",
-            "additionalContext": "__AC3_SHADOW_CONTROL_SENTINEL__",
-        }
-    }
+    from coordinator_core.bash_guards._rewrite_support import _allow_rewrite_record
+
+    sentinel_text = "__AC3_SHADOW_CONTROL_SENTINEL__"
+    sentinel = _allow_rewrite_record("grep-via-bash-rewrite", "true", sentinel_text)
+
     original = _dc.check_grep_via_bash_rewrite
 
     def _sentinel_check(*args, **kwargs):
@@ -166,11 +164,13 @@ def test_ac3_powershell_grep_rewrite_advisory_fires_via_matcher_widening():
 
     _dc.check_grep_via_bash_rewrite = _sentinel_check
     try:
-        shadowed = _probe("grep -rn foo .", "PowerShell")
+        shadowed = _probe("grep -rn foo coordinator_core", "PowerShell")
     finally:
         _dc.check_grep_via_bash_rewrite = original
 
-    assert shadowed == sentinel, (
+    assert shadowed is not None and sentinel_text in (
+        shadowed.get("hookSpecificOutput", {}).get("additionalContext", "")
+    ), (
         "expected grep-via-bash-rewrite's own check to be the one reaching "
         "the top of the chain for this probe -- got %r instead, meaning some "
         "earlier-registered guard shadows this oracle" % (shadowed,)
@@ -180,10 +180,13 @@ def test_ac4_bash_labelled_payload_reaches_every_guard_identically():
     assert _is_deny(find_out)
     assert "anchored at" in _deny_reason(find_out)
 
-    grep_out = _probe("grep -rn foo .", "Bash")
+    grep_out = _probe("grep -rn foo coordinator_core", "Bash")
     hso = grep_out["hookSpecificOutput"]
-    assert hso.get("permissionDecision") == "allow"
-    assert "Auto-rewritten: 'grep' via Bash" in hso.get("additionalContext", "")
+    # On Bash an earlier-registered in-process guard answers a repo-scoped grep
+    # (the command is rewritten to `true`); the grep-via-bash rewrite itself is
+    # PowerShell-labelled here (AC3).
+    assert hso.get("updatedInput", {}).get("command") == "true"
+    assert "Answered in-process" in hso.get("additionalContext", "")
 
     assert _probe("echo hello world", "Bash") is None
 
@@ -226,7 +229,7 @@ def test_ac11_advisory_envelope_still_collapses_to_no_objection_on_the_http_leg(
     (the case this chunk newly arms at the dispatcher's own matcher-gate
     layer, which is a strictly EARLIER stage than `_verdict_from_envelope`)."""
     for tool_name in ("Bash", "PowerShell"):
-        raw = _probe("grep -rn foo .", tool_name)
+        raw = _probe("grep -rn foo coordinator_core", tool_name)
         assert raw is not None, "expected the advisory to actually fire for this control"
         verdict = _verdict_from_envelope(raw)
         assert verdict == NO_OBJECTION, (

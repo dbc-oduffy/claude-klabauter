@@ -8,6 +8,11 @@ import pytest
 from coordinator_core.bash_guards import block_subagent_destructive_action as guard
 from coordinator_core.bash_guards._tool_names import COMMAND_TOOL_NAMES
 from coordinator_core.contract.grind_vocab import encode_undo_paths
+from coordinator_core.guard_messages.testing import envelope_of
+
+
+def _enveloped(check):
+    return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 _AGENT_TYPE = "coordinator:queue-grind-op-runner"
 _BIN = '"${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/bin/backlog-grind-assemble"'
@@ -40,7 +45,7 @@ def _verb_command(paths):
     ],
 )
 def test_verb_command_allows(tool_name, paths):
-    assert guard.check(_payload(tool_name, _verb_command(paths))) is None
+    assert _enveloped(guard.check)(_payload(tool_name, _verb_command(paths))) is None
 
 
 _GIT_SHAPES = [
@@ -58,6 +63,6 @@ _RM_SHAPE = {"Bash": "rm -f unclaimed/file.py", "PowerShell": "Remove-Item -Forc
     [(t, c) for t in COMMAND_TOOL_NAMES for c in (*_GIT_SHAPES, _RM_SHAPE[t])],
 )
 def test_raw_restore_shapes_deny(tool_name, command):
-    result = guard.check(_payload(tool_name, command))
+    result = _enveloped(guard.check)(_payload(tool_name, command))
     assert result is not None
     assert result["hookSpecificOutput"]["permissionDecision"] == "deny"

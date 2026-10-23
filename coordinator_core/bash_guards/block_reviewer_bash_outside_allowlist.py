@@ -2733,32 +2733,16 @@ _DEFAULT_CLOSING_STANZA: tuple = ()
 #: still locates its anchor by regex, not by full-string match, so this
 #: reformat does not touch that suite's assertions.
 #: The first line is a single BACKTICK-wrapped, genuinely runnable example
-#: (``git show``, no placeholder). This is a deliberate liveness-gate
-#: anchor, not decoration: ``extract_alternatives`` classifies every
-#: backtick span in a cue window FIRST, and only falls through to its raw
-#: indented-line scan when that first pass finds nothing at all. The two
-#: slash-separated enumeration lines below (needed verbatim, byte-for-byte,
-#: by ``test_offer_block_git_subcommands_match_the_enforced_set`` /
-#: ``test_offer_block_fs_binaries_match_the_enforced_set``) are NOT
-#: themselves single runnable commands -- ``ls / cat / head / ...`` parses,
-#: under that raw fallback, as one `ls` invocation with every other name as
-#: a literal path argument, which genuinely fails ("No such file or
-#: directory") and would register as a false DEAD alternative. Anchoring a
-#: real, classifiable command in this same window is what keeps the
-#: fallback from ever reaching those enumeration lines at all -- it is not
-#: itself required as an "offer" (the two lines below already are), so it
-#: is intentionally terse.
-#:
-#: The last two lines are prefixed ``Denied:`` (not offered commands) --
-#: belt-and-suspenders should the anchor above ever be removed -- so the
-#: raw indented-line fallback's own skip-list (``candidate.startswith(
-#: ("Subagent:", "Command:", "Denied:", "Reason:"))``) would still exclude
-#: them: ``unquoted shell-chaining metacharacter (...)`` has no argv[0]
-#: that resolves on PATH and would otherwise register as a false DEAD
-#: alternative. Every line here still lands inside the indented span the
-#: prose-byte exemption matches (``_message_size`` does not consult label
-#: prefixes or backticks -- see ``_exempt_span_bytes``), so none of this
-#: costs cap budget.
+#: (``git show``, no placeholder). The liveness gate grades record content,
+#: not these lines: the ``ReadyCommand`` the deny record carries is the
+#: executed alternative. The two slash-separated enumeration lines (needed
+#: verbatim, byte-for-byte, by
+#: ``test_offer_block_git_subcommands_match_the_enforced_set`` /
+#: ``test_offer_block_fs_binaries_match_the_enforced_set``) are not single
+#: runnable commands, and the ``Denied:`` lines are not offers. Every line
+#: here still lands inside the indented span the prose-byte exemption
+#: matches (``_message_size`` does not consult label prefixes or backticks --
+#: see ``_exempt_span_bytes``), so none of this costs cap budget.
 _TIER_A_ENUM_BLOCK = (
     "  `git show`",
     "  git show / diff / log / status / blame / ls-files / rev-parse / describe / check-ignore / check-attr / ls-tree / cat-file",
@@ -3153,10 +3137,22 @@ def check(payload: Dict[str, Any], policy_path: Optional[str] = None) -> Optiona
         suppress_retry_advice,
         confinement_cause=_confinement_cause(effective_type, policy),
     )
-    return {
-        "hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "permissionDecision": "deny",
-            "permissionDecisionReason": reason,
-        }
-    }
+    from coordinator_core.guard_messages.alternative_record import (
+        AlternativeRecord,
+        EscalationRoute,
+        ReadyCommand,
+    )
+
+    return AlternativeRecord(
+        verdict_kind="deny",
+        guard_name="block_reviewer_bash_outside_allowlist",
+        summary=reason,
+        em_text=reason,
+        members=(
+            ReadyCommand(text="git show"),
+            EscalationRoute(
+                report_what="the denied command to whoever dispatched you",
+                authorize_what="a wider Bash allowlist for this agent type",
+            ),
+        ),
+    )

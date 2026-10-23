@@ -59,6 +59,11 @@ from coordinator_core.bash_guards.dispatch_checks import (
     _seg_excluding_freetext_operands,
     check_destructive_git_orphan,
 )
+from coordinator_core.guard_messages.testing import envelope_of
+
+
+def _enveloped(check):
+    return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 # Spawns a real external process; runs at cadence gates, not per-commit.
 # Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
@@ -78,35 +83,35 @@ def _rf() -> str:
 class TestCheck2FreetextOperandExclusion:
     def test_commit_message_describing_force_push_allows(self):
         cmd = 'git commit -m "explain why we force-push and reset here"'
-        assert check_destructive_git_orphan(cmd) is None
+        assert _enveloped(check_destructive_git_orphan)(cmd) is None
 
     def test_commit_message_with_push_log_and_dash_f_word_allows(self):
         cmd = 'git commit -m "see push-failures.log and use -f flag"'
-        assert check_destructive_git_orphan(cmd) is None
+        assert _enveloped(check_destructive_git_orphan)(cmd) is None
 
     def test_commit_message_mentioning_rm_rf_and_forcing_push_allows(self):
         cmd = 'git commit -m "the %s it flagged; a forcing push"' % _rf()
-        assert check_destructive_git_orphan(cmd) is None
+        assert _enveloped(check_destructive_git_orphan)(cmd) is None
 
     def test_commit_message_via_long_form_message_flag_allows(self):
         cmd = 'git commit --message "this documents why we force push"'
-        assert check_destructive_git_orphan(cmd) is None
+        assert _enveloped(check_destructive_git_orphan)(cmd) is None
 
     def test_genuine_force_push_still_denies(self):
         cmd = "git push origin main --force"
-        result = check_destructive_git_orphan(cmd)
+        result = _enveloped(check_destructive_git_orphan)(cmd)
         assert result is not None
         reason = result["hookSpecificOutput"]["permissionDecisionReason"]
         assert "force" in reason.lower()
 
     def test_genuine_short_flag_force_push_still_denies(self):
         cmd = "git push origin main -f"
-        result = check_destructive_git_orphan(cmd)
+        result = _enveloped(check_destructive_git_orphan)(cmd)
         assert result is not None
 
     def test_genuine_plus_refspec_force_push_still_denies(self):
         cmd = "git push origin +main:main"
-        result = check_destructive_git_orphan(cmd)
+        result = _enveloped(check_destructive_git_orphan)(cmd)
         assert result is not None
 
     def test_force_push_disguised_behind_commit_message_in_same_segment_still_denies(self):
@@ -117,7 +122,7 @@ class TestCheck2FreetextOperandExclusion:
             'git commit -m "just documenting our force push policy" '
             "&& git push origin main --force"
         )
-        result = check_destructive_git_orphan(cmd)
+        result = _enveloped(check_destructive_git_orphan)(cmd)
         assert result is not None
 
     def test_malformed_unterminated_quote_with_real_force_push_still_denies(self):
@@ -125,7 +130,7 @@ class TestCheck2FreetextOperandExclusion:
         # be the conservative raw-segment scan, which still sees the literal
         # `--force` token and denies.
         cmd = 'git push origin main --force "unterminated'
-        result = check_destructive_git_orphan(cmd)
+        result = _enveloped(check_destructive_git_orphan)(cmd)
         assert result is not None
 
     def test_malformed_unterminated_quote_with_no_destructive_token_allows(self):
@@ -133,7 +138,7 @@ class TestCheck2FreetextOperandExclusion:
         # fallback scan, must still allow -- fallback is conservative
         # (same-as-before), not maximally paranoid.
         cmd = 'git commit -m "unterminated'
-        assert check_destructive_git_orphan(cmd) is None
+        assert _enveloped(check_destructive_git_orphan)(cmd) is None
 
 
 class TestCheck2HeredocBodyProseExclusion:
@@ -158,7 +163,7 @@ class TestCheck2HeredocBodyProseExclusion:
             "git push --force origin main, also -f flag usage.\n"
             "MSG"
         )
-        assert check_destructive_git_orphan(cmd) is None
+        assert _enveloped(check_destructive_git_orphan)(cmd) is None
 
     def test_python3_heredoc_body_discussing_force_push_allows(self):
         cmd = (
@@ -168,7 +173,7 @@ class TestCheck2HeredocBodyProseExclusion:
             "git push --force origin main -f')\n"
             "PY"
         )
-        assert check_destructive_git_orphan(cmd) is None
+        assert _enveloped(check_destructive_git_orphan)(cmd) is None
 
     def test_python3_heredoc_body_discussing_force_delete_branch_allows(self):
         cmd = (
@@ -176,11 +181,11 @@ class TestCheck2HeredocBodyProseExclusion:
             "print('do not use git branch -D on shared branches')\n"
             "PY"
         )
-        assert check_destructive_git_orphan(cmd) is None
+        assert _enveloped(check_destructive_git_orphan)(cmd) is None
 
     def test_genuine_force_push_outside_any_heredoc_still_denies(self):
         cmd = "git push origin main --force"
-        result = check_destructive_git_orphan(cmd)
+        result = _enveloped(check_destructive_git_orphan)(cmd)
         assert result is not None
         reason = result["hookSpecificOutput"]["permissionDecisionReason"]
         assert "force" in reason.lower()
@@ -191,7 +196,7 @@ class TestCheck2HeredocBodyProseExclusion:
         # must still be caught (the shell-fed discriminator must not strip
         # this heredoc's body).
         cmd = "bash <<'EOF'\ngit push origin main --force\nEOF"
-        result = check_destructive_git_orphan(cmd)
+        result = _enveloped(check_destructive_git_orphan)(cmd)
         assert result is not None
 
     def test_unterminated_heredoc_with_no_destructive_token_allows(self):
@@ -199,7 +204,7 @@ class TestCheck2HeredocBodyProseExclusion:
             "git commit -F - <<'MSG'\n"
             "unterminated heredoc without a closing delimiter\n"
         )
-        assert check_destructive_git_orphan(cmd) is None
+        assert _enveloped(check_destructive_git_orphan)(cmd) is None
 
     def test_unterminated_heredoc_with_force_push_in_body_fails_closed(self):
         # Fail-closed contract: an unterminated heredoc must return the
@@ -210,7 +215,7 @@ class TestCheck2HeredocBodyProseExclusion:
             "git commit -F - <<'MSG'\n"
             "git push origin main --force\n"
         )
-        result = check_destructive_git_orphan(cmd)
+        result = _enveloped(check_destructive_git_orphan)(cmd)
         assert result is not None
 
 
@@ -233,7 +238,7 @@ class TestCheck2ScriptableHeredocSpawnDetection:
             "subprocess.run(['git', 'push', 'origin', 'main', '--force'])\n"
             "PY"
         )
-        result = check_destructive_git_orphan(cmd)
+        result = _enveloped(check_destructive_git_orphan)(cmd)
         assert result is not None
 
     def test_python_heredoc_that_actually_force_pushes_via_subprocess_string_denies(self):
@@ -247,7 +252,7 @@ class TestCheck2ScriptableHeredocSpawnDetection:
             "subprocess.run('git push origin main --force', shell=True)\n"
             "PY"
         )
-        result = check_destructive_git_orphan(cmd)
+        result = _enveloped(check_destructive_git_orphan)(cmd)
         assert result is not None
 
     def test_node_heredoc_that_actually_force_pushes_via_execsync_denies(self):
@@ -258,7 +263,7 @@ class TestCheck2ScriptableHeredocSpawnDetection:
             "require('child_process').execSync('git push origin main --force')\n"
             "JS"
         )
-        result = check_destructive_git_orphan(cmd)
+        result = _enveloped(check_destructive_git_orphan)(cmd)
         assert result is not None
 
     def test_python_heredoc_that_spawns_something_harmless_allows(self):
@@ -272,7 +277,7 @@ class TestCheck2ScriptableHeredocSpawnDetection:
             "subprocess.run(['git', 'status'])\n"
             "PY"
         )
-        assert check_destructive_git_orphan(cmd) is None
+        assert _enveloped(check_destructive_git_orphan)(cmd) is None
 
     def test_python_heredoc_writing_a_doc_still_allows(self):
         # No spawn indicator at all -- prose, stripped, still ALLOWs even
@@ -284,7 +289,7 @@ class TestCheck2ScriptableHeredocSpawnDetection:
             "    f.write('discussion of git push --force policy')\n"
             "PY"
         )
-        assert check_destructive_git_orphan(cmd) is None
+        assert _enveloped(check_destructive_git_orphan)(cmd) is None
 
     def test_git_commit_dash_capital_f_heredoc_prose_still_allows(self):
         # `git` is a recognized non-executing consumer ("prose" tier, not
@@ -295,12 +300,12 @@ class TestCheck2ScriptableHeredocSpawnDetection:
             "fixed a bug described as git push origin main --force\n"
             "MSG"
         )
-        assert check_destructive_git_orphan(cmd) is None
+        assert _enveloped(check_destructive_git_orphan)(cmd) is None
 
     def test_shell_fed_heredoc_real_force_push_still_denies(self):
         # Re-affirms case A after the scriptable-tier changes.
         cmd = "bash <<'EOF'\ngit push origin main --force\nEOF"
-        result = check_destructive_git_orphan(cmd)
+        result = _enveloped(check_destructive_git_orphan)(cmd)
         assert result is not None
 
 
@@ -314,19 +319,19 @@ class TestCheck2ShellAnywhereOnIntroLine:
 
     def test_cat_heredoc_piped_into_bash_still_denies(self):
         cmd = "cat <<'EOF' | bash\ngit push origin main --force\nEOF"
-        result = check_destructive_git_orphan(cmd)
+        result = _enveloped(check_destructive_git_orphan)(cmd)
         assert result is not None
 
     def test_cat_heredoc_piped_into_sh_still_denies(self):
         cmd = "cat <<'EOF' | sh\ngit push origin main --force\nEOF"
-        result = check_destructive_git_orphan(cmd)
+        result = _enveloped(check_destructive_git_orphan)(cmd)
         assert result is not None
 
     def test_bash_dash_s_heredoc_still_denies(self):
         # `bash -s <<EOF ... EOF` -- shell as the leading word with a flag,
         # a second delivery shape distinct from the pipe-to-bash case.
         cmd = "bash -s <<'EOF'\ngit push origin main --force\nEOF"
-        result = check_destructive_git_orphan(cmd)
+        result = _enveloped(check_destructive_git_orphan)(cmd)
         assert result is not None
 
     def test_cat_heredoc_writing_prose_to_a_file_still_allows(self):
@@ -334,15 +339,15 @@ class TestCheck2ShellAnywhereOnIntroLine:
         # prose and still ALLOWs -- the fix widens what counts as
         # shell-fed, it must not blanket-deny every `cat` heredoc.
         cmd = "cat > notes.md <<'EOF'\nwe must never use git push origin main --force here\nEOF"
-        assert check_destructive_git_orphan(cmd) is None
+        assert _enveloped(check_destructive_git_orphan)(cmd) is None
 
     def test_a_leading_assignment_segment_does_not_make_a_cat_heredoc_shell_fed(self):
         # cockpit-73: a bare dir assignment before a cat heredoc denied a prose
         # body that quoted a push; the assignment segment failed closed as "shell".
         body = "\nthe flow runs git push origin main --force later\nEOF"
-        assert check_destructive_git_orphan("D=out; cat > $D/x.md <<'EOF'" + body) is None
-        assert check_destructive_git_orphan("D=out; bash <<'EOF'" + body) is not None
-        assert check_destructive_git_orphan("D=out; cat <<'EOF' | bash" + body) is not None
+        assert _enveloped(check_destructive_git_orphan)("D=out; cat > $D/x.md <<'EOF'" + body) is None
+        assert _enveloped(check_destructive_git_orphan)("D=out; bash <<'EOF'" + body) is not None
+        assert _enveloped(check_destructive_git_orphan)("D=out; cat <<'EOF' | bash" + body) is not None
 
 
 class TestCheck2SpawningBodyOverBlocksProseInSameBody:
@@ -364,7 +369,7 @@ class TestCheck2SpawningBodyOverBlocksProseInSameBody:
             "open('a.md', 'w').write('...git push origin main --force...')\n"
             "PY"
         )
-        result = check_destructive_git_orphan(cmd)
+        result = _enveloped(check_destructive_git_orphan)(cmd)
         assert result is not None
 
 
@@ -388,35 +393,35 @@ class TestCheck2StashPushIsNotAForcePush:
 
     def test_stash_push_with_plus_refspec_pathspec_allows(self):
         cmd = 'git stash push -m "x" -- +path'
-        assert check_destructive_git_orphan(cmd) is None
+        assert _enveloped(check_destructive_git_orphan)(cmd) is None
 
     def test_stash_push_with_dash_f_flag_allows(self):
         cmd = "git stash push -f -- path"
-        assert check_destructive_git_orphan(cmd) is None
+        assert _enveloped(check_destructive_git_orphan)(cmd) is None
 
     def test_bare_stash_push_allows(self):
-        assert check_destructive_git_orphan("git stash push") is None
+        assert _enveloped(check_destructive_git_orphan)("git stash push") is None
 
     def test_stash_save_deprecated_spelling_allows(self):
-        assert check_destructive_git_orphan("git stash save -f") is None
+        assert _enveloped(check_destructive_git_orphan)("git stash save -f") is None
 
     def test_genuine_force_push_after_a_stash_push_still_denies(self):
         # A real, later `git push --force` must not be masked by an
         # earlier, unrelated `git stash push` in the same compound command.
         cmd = "git stash push && git push origin main --force"
-        result = check_destructive_git_orphan(cmd)
+        result = _enveloped(check_destructive_git_orphan)(cmd)
         assert result is not None
         reason = result["hookSpecificOutput"]["permissionDecisionReason"]
         assert "force" in reason.lower()
 
     def test_genuine_force_push_via_git_dash_c_still_denies(self):
         cmd = "git -C /some/dir push --force"
-        result = check_destructive_git_orphan(cmd)
+        result = _enveloped(check_destructive_git_orphan)(cmd)
         assert result is not None
 
     def test_genuine_force_push_via_git_namespace_still_denies(self):
         cmd = "git --namespace n push --force"
-        result = check_destructive_git_orphan(cmd)
+        result = _enveloped(check_destructive_git_orphan)(cmd)
         assert result is not None
 
     def test_force_push_with_trailing_pathspec_mentioning_stash_push_still_denies(self):
@@ -426,16 +431,16 @@ class TestCheck2StashPushIsNotAForcePush:
         # invokes `push`, the "stash push" text is a pathspec operand, not
         # the resolved subcommand.
         cmd = "git push origin main --force -- stash push"
-        result = check_destructive_git_orphan(cmd)
+        result = _enveloped(check_destructive_git_orphan)(cmd)
         assert result is not None
 
     def test_force_push_with_trailing_comment_mentioning_stash_push_still_denies(self):
         cmd = "git push origin main --force # git stash push"
-        result = check_destructive_git_orphan(cmd)
+        result = _enveloped(check_destructive_git_orphan)(cmd)
         assert result is not None
 
     def test_stash_pop_allows(self):
-        assert check_destructive_git_orphan("git stash pop") is None
+        assert _enveloped(check_destructive_git_orphan)("git stash pop") is None
 
 
 class TestSegExcludingFreetextOperandsHelper:
@@ -503,48 +508,48 @@ class TestCheck2ConfirmedNonGitLeafCommand:
 
     def test_allows_test_f_against_push_failures_log(self):
         cmd = "test -f /Users/x/repo/.git/" + "push" + "-failures.log && echo exists"
-        assert check_destructive_git_orphan(cmd) is None
+        assert _enveloped(check_destructive_git_orphan)(cmd) is None
 
     def test_allows_bracket_form_against_push_named_path(self):
         cmd = "[ -f .git/" + "push" + "-failures.log ] && echo yes"
-        assert check_destructive_git_orphan(cmd) is None
+        assert _enveloped(check_destructive_git_orphan)(cmd) is None
 
     def test_allows_rm_f_near_push_named_path(self):
         cmd = _rf().replace("rf", "f") + " docs/x.bak && cat .git/" + "push" + "-failures.log"
-        assert check_destructive_git_orphan(cmd) is None
+        assert _enveloped(check_destructive_git_orphan)(cmd) is None
 
     def test_allows_grep_f_with_push_named_pattern_file(self):
         cmd = "grep -f patterns-" + "push" + ".txt somefile.txt"
-        assert check_destructive_git_orphan(cmd) is None
+        assert _enveloped(check_destructive_git_orphan)(cmd) is None
 
     def test_allows_wc_on_push_named_path(self):
         cmd = "wc -l .git/" + "push" + "-failures.log"
-        assert check_destructive_git_orphan(cmd) is None
+        assert _enveloped(check_destructive_git_orphan)(cmd) is None
 
     # ---- direction 2: everything that must still deny, still denies ----
 
     def test_still_denies_long_flag_forcing_push(self):
         cmd = "git " + "push" + " origin main --" + "force"
-        assert check_destructive_git_orphan(cmd) is not None
+        assert _enveloped(check_destructive_git_orphan)(cmd) is not None
 
     def test_still_denies_short_flag_forcing_push(self):
         cmd = "git " + "push" + " origin main -f"
-        assert check_destructive_git_orphan(cmd) is not None
+        assert _enveloped(check_destructive_git_orphan)(cmd) is not None
 
     def test_still_denies_plus_refspec_forcing_push(self):
         cmd = "git " + "push" + " origin +main"
-        assert check_destructive_git_orphan(cmd) is not None
+        assert _enveloped(check_destructive_git_orphan)(cmd) is not None
 
     def test_still_denies_flag_before_remote(self):
         cmd = "git " + "push" + " -f origin main"
-        assert check_destructive_git_orphan(cmd) is not None
+        assert _enveloped(check_destructive_git_orphan)(cmd) is not None
 
     def test_scripted_heredoc_spawn_stays_fail_closed(self):
         """The allowlist must NOT vouch for a scripted spawn. This is the case
         the whole allowlist-not-denylist argument exists to protect."""
         body = "subprocess.run(['git', '" + "push" + "', 'origin', 'main', '--" + "force" + "'])"
         cmd = "python3 - <<'PY'\nimport subprocess\n" + body + "\nPY"
-        assert check_destructive_git_orphan(cmd) is not None
+        assert _enveloped(check_destructive_git_orphan)(cmd) is not None
 
     def test_shell_head_is_not_allowlisted(self):
         """A shell can spawn git, so it must stay ambiguous and keep the
@@ -573,21 +578,21 @@ class TestCheck2ConfirmedNonGitLeafCommand:
         precisely so this would surface the moment it started passing.
         """
         cmd = "bash -c 'git " + "push" + " origin main --" + "force" + "'"
-        assert check_destructive_git_orphan(cmd) is not None
+        assert _enveloped(check_destructive_git_orphan)(cmd) is not None
 
     # ---- unchanged behaviour that the fix must not disturb ----
 
     def test_ordinary_push_still_allowed(self):
         cmd = "git " + "push" + " origin main"
-        assert check_destructive_git_orphan(cmd) is None
+        assert _enveloped(check_destructive_git_orphan)(cmd) is None
 
     def test_force_with_lease_still_allowed(self):
         cmd = "git " + "push" + " --" + "force" + "-with-lease origin main"
-        assert check_destructive_git_orphan(cmd) is None
+        assert _enveloped(check_destructive_git_orphan)(cmd) is None
 
     def test_stash_push_with_f_still_allowed(self):
         cmd = "git stash " + "push" + " -f -- paths"
-        assert check_destructive_git_orphan(cmd) is None
+        assert _enveloped(check_destructive_git_orphan)(cmd) is None
 
 
 class TestCheck2WrapperOwnFlagsAreNotGitsFlags:
@@ -624,36 +629,36 @@ class TestCheck2WrapperOwnFlagsAreNotGitsFlags:
 
     def test_allows_time_f_measuring_a_plain_push(self):
         cmd = "/usr/bin/time -f \"%e\" git " + "push"
-        assert check_destructive_git_orphan(cmd) is None
+        assert _enveloped(check_destructive_git_orphan)(cmd) is None
 
     def test_allows_env_wrapper_with_own_f_flag(self):
         cmd = "env -f other.env git " + "push" + " origin main"
-        assert check_destructive_git_orphan(cmd) is None
+        assert _enveloped(check_destructive_git_orphan)(cmd) is None
 
     def test_allows_time_f_measuring_a_dry_run_push(self):
         cmd = "/usr/bin/time -f \"%e\" git " + "push" + " --dry-run origin HEAD"
-        assert check_destructive_git_orphan(cmd) is None
+        assert _enveloped(check_destructive_git_orphan)(cmd) is None
 
     # ---- direction 2: a real forcing push behind a wrapper still denies ----
 
     def test_still_denies_long_flag_force_behind_wrapper(self):
         cmd = "/usr/bin/time -f \"%e\" git " + "push" + " origin main --" + "force"
-        assert check_destructive_git_orphan(cmd) is not None
+        assert _enveloped(check_destructive_git_orphan)(cmd) is not None
 
     def test_still_denies_short_flag_force_behind_wrapper(self):
         cmd = "/usr/bin/time -f \"%e\" git " + "push" + " origin main -f"
-        assert check_destructive_git_orphan(cmd) is not None
+        assert _enveloped(check_destructive_git_orphan)(cmd) is not None
 
     def test_still_denies_plus_refspec_behind_wrapper(self):
         cmd = "env -f other.env git " + "push" + " origin +main"
-        assert check_destructive_git_orphan(cmd) is not None
+        assert _enveloped(check_destructive_git_orphan)(cmd) is not None
 
     def test_still_denies_force_when_no_git_token_resolves(self):
         """Fail-closed leg: the scan text falls back to the whole segment
         whenever no `git` token is located, so the scripted-spawn shape the
         raw `\bpush\b` fallback exists for keeps denying."""
         cmd = "subprocess.run(['g" + "it', '" + "push" + "', '--" + "force" + "'])"
-        assert check_destructive_git_orphan(cmd) is not None
+        assert _enveloped(check_destructive_git_orphan)(cmd) is not None
 
 
 class TestCheck1ResetIsAnInvocationNotAWord:
@@ -707,7 +712,7 @@ class TestCheck1ResetIsAnInvocationNotAWord:
             "tool_input": {"command": cmd},
             "cwd": str(Path(__file__).resolve().parents[3]),
         }
-        assert check_destructive_git_orphan(cmd, "sid", payload=payload) is not None
+        assert _enveloped(check_destructive_git_orphan)(cmd, "sid", payload=payload) is not None
 
     @pytest.mark.parametrize(
         "cmd",
@@ -720,7 +725,7 @@ class TestCheck1ResetIsAnInvocationNotAWord:
         ],
     )
     def test_every_real_subshell_resolved_reset_still_denies(self, cmd):
-        result = check_destructive_git_orphan(cmd)
+        result = _enveloped(check_destructive_git_orphan)(cmd)
         assert result is not None, cmd
 
 

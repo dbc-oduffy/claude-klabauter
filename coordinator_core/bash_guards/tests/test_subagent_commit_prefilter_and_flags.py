@@ -37,6 +37,11 @@ Spec backlink: pln-confine-subagent-bash-by-allow-7c2901
 from __future__ import annotations
 
 from coordinator_core.bash_guards import block_subagent_commit as guard
+from coordinator_core.guard_messages.testing import envelope_of
+
+
+def _enveloped(check):
+    return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 _SUBAGENT_TYPE = "coordinator:executor"
 
@@ -69,7 +74,7 @@ def _subagent(monkeypatch, subagent_type=_SUBAGENT_TYPE):
 
 def _denies(monkeypatch, cmd):
     _subagent(monkeypatch)
-    result = guard.check(_payload(cmd, agent_type=_SUBAGENT_TYPE))
+    result = _enveloped(guard.check)(_payload(cmd, agent_type=_SUBAGENT_TYPE))
     assert result is not None, f"expected DENY for: {cmd!r}"
     assert (
         result["hookSpecificOutput"]["permissionDecision"] == "deny"
@@ -78,7 +83,7 @@ def _denies(monkeypatch, cmd):
 
 def _allows(monkeypatch, cmd):
     _subagent(monkeypatch)
-    result = guard.check(_payload(cmd, agent_type=_SUBAGENT_TYPE))
+    result = _enveloped(guard.check)(_payload(cmd, agent_type=_SUBAGENT_TYPE))
     assert result is None, f"expected ALLOW for: {cmd!r}, got {result!r}"
 
 
@@ -112,7 +117,7 @@ def test_prefilter_admits_memo_send(monkeypatch):
         "python3 -m coordinator_core.invoke memo.send '{}'",
         agent_type=_SUBAGENT_TYPE,
     )
-    assert guard.check(payload) is None
+    assert _enveloped(guard.check)(payload) is None
 
 
 def test_subagent_permitted_ops_disjoint_from_committing_ops():
@@ -160,7 +165,7 @@ def test_committing_op_em_main_loop_still_allows():
         "python3 -m coordinator_core.invoke session.boot_sweep '{}'",
         agent_id=None,
     )
-    assert guard.check(payload) is None
+    assert _enveloped(guard.check)(payload) is None
 
 
 def test_non_committing_op_still_allows(monkeypatch):
@@ -266,7 +271,7 @@ def test_ceremony_scoped_git_commit_with_repo_flag_after_op_still_denies(
 
 def test_no_agent_id_em_main_loop_allows():
     payload = _payload("git commit -m x", agent_id=None)
-    assert guard.check(payload) is None
+    assert _enveloped(guard.check)(payload) is None
 
 
 def test_bare_scoped_git_commit_denies(monkeypatch):
@@ -301,7 +306,7 @@ def test_no_agent_id_em_main_loop_allows_scoped_git_commit():
     like every other committing shape this gate denies for a subagent.
     """
     payload = _payload('scoped-git-commit -m "subject" -- path', agent_id=None)
-    assert guard.check(payload) is None
+    assert _enveloped(guard.check)(payload) is None
 
 
 # ---------------------------------------------------------------------------

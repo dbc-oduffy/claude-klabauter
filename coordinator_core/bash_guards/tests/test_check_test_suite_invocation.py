@@ -28,6 +28,11 @@ from coordinator_core.bash_guards import check_test_suite_invocation as guard
 from coordinator_core.session import core as session_core
 from coordinator_core.session import grant as grant_module
 from coordinator_core.win_portability import no_console_passthrough_kwargs
+from coordinator_core.guard_messages.testing import envelope_of
+
+
+def _enveloped(check):
+    return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 pytestmark = [
     pytest.mark.spawns_process,
@@ -53,7 +58,7 @@ def test_cloud_box_em_bare_suite_denied_wrapper_required_without_grant_ask(
 ):
     monkeypatch.setattr(guard, "_is_cloud_box", lambda payload: True)
     monkeypatch.setattr(guard, "_tier_u_grant", lambda cwd: (False, None))
-    reason = _reason(guard.check(_payload("pytest", repo)))
+    reason = _reason(_enveloped(guard.check)(_payload("pytest", repo)))
     assert "with-suite-mutex" in reason
     assert "grant" not in reason.lower()
 
@@ -61,20 +66,20 @@ def test_cloud_box_em_bare_suite_denied_wrapper_required_without_grant_ask(
 def test_cloud_box_em_wrapped_suite_allowed(repo, free_mutex, monkeypatch):
     monkeypatch.setattr(guard, "_is_cloud_box", lambda payload: True)
     monkeypatch.setattr(guard, "_tier_u_grant", lambda cwd: (False, None))
-    assert guard.check(_payload("with-suite-mutex -- pytest", repo)) is None
+    assert _enveloped(guard.check)(_payload("with-suite-mutex -- pytest", repo)) is None
 
 
 def test_cloud_box_em_wrapped_suite_denied_when_mutex_held(repo, held_mutex, monkeypatch):
     monkeypatch.setattr(guard, "_is_cloud_box", lambda payload: True)
     monkeypatch.setattr(guard, "_tier_u_grant", lambda cwd: (False, None))
-    result = guard.check(_payload("with-suite-mutex -- pytest", repo))
+    result = _enveloped(guard.check)(_payload("with-suite-mutex -- pytest", repo))
     assert result is not None
     assert "Route this through the suite mutex" not in _reason(result)
 
 
 def test_box_em_without_grant_denied_with_grant_reason(repo, free_mutex, monkeypatch):
     monkeypatch.setattr(guard, "_tier_u_grant", lambda cwd: (False, None))
-    result = guard.check(_payload("with-suite-mutex -- pytest", repo))
+    result = _enveloped(guard.check)(_payload("with-suite-mutex -- pytest", repo))
     assert result is not None
     assert "grant" in _reason(result).lower()
 
@@ -104,7 +109,7 @@ def test_forged_marker_on_attended_machine_is_not_cloud(monkeypatch):
 ])
 def test_subagent_suite_cli_denied(repo, free_mutex, monkeypatch, cloud, command):
     monkeypatch.setattr(guard, "_is_cloud_box", lambda payload: cloud)
-    result = guard.check(_payload(command, repo, agent_id=_AGENT_ID))
+    result = _enveloped(guard.check)(_payload(command, repo, agent_id=_AGENT_ID))
     assert result is not None
     assert "subagent" in _reason(result).lower()
 
@@ -114,18 +119,18 @@ def test_subagent_suite_cli_denied(repo, free_mutex, monkeypatch, cloud, command
     "python coordinator/bin/workday-complete-step1-validate.py",
 ])
 def test_em_suite_cli_not_denied_by_identity_leg(repo, free_mutex, command):
-    assert guard.check(_payload(command, repo)) is None
+    assert _enveloped(guard.check)(_payload(command, repo)) is None
 
 
 def test_subagent_cloud_wrapped_suite_denied_with_subagent_reason(repo, free_mutex, monkeypatch):
     monkeypatch.setattr(guard, "_is_cloud_box", lambda payload: True)
-    result = guard.check(_payload("with-suite-mutex -- pytest", repo, agent_id=_AGENT_ID))
+    result = _enveloped(guard.check)(_payload("with-suite-mutex -- pytest", repo, agent_id=_AGENT_ID))
     assert "subagent" in _reason(result).lower()
 
 
 def test_cloud_box_still_denies_a_subagent_broad_suite_command(repo, free_mutex, monkeypatch):
     monkeypatch.setattr(guard, "_is_cloud_box", lambda payload: True)
-    assert guard.check(_payload("pytest", repo, agent_id="a1")) is not None
+    assert _enveloped(guard.check)(_payload("pytest", repo, agent_id="a1")) is not None
 
 
 @pytest.fixture
@@ -236,7 +241,7 @@ def held_mutex(monkeypatch):
     ],
 )
 def test_subagent_suite_shaped_denied(repo, free_mutex, command):
-    out = guard.check(_payload(command, repo, agent_id=_AGENT_ID))
+    out = _enveloped(guard.check)(_payload(command, repo, agent_id=_AGENT_ID))
     reason = _reason(out)
     assert reason.startswith("Full-suite subagent runs are denied")
 
@@ -251,7 +256,7 @@ def test_subagent_js_ecosystem_deny_suggests_js_runner_not_pytest(
     """F15 (GH #71): a JS-runner-shaped or package-script-shaped subagent
     deny must not tell a TypeScript/vitest repo to run `python3 -m
     pytest` -- it names a JS runner instead."""
-    out = guard.check(_payload(command, repo, agent_id=_AGENT_ID))
+    out = _enveloped(guard.check)(_payload(command, repo, agent_id=_AGENT_ID))
     reason = _reason(out)
     assert "python3 -m pytest" not in reason
     assert "vitest" in reason or "jest" in reason
@@ -262,7 +267,7 @@ def test_mutex_deny_js_ecosystem_suggests_js_runner_not_pytest(repo, held_mutex)
     suite run already holding the machine-wide lock) must also route
     through the ecosystem-aware helper -- it used to hard-code
     `python3 -m pytest` regardless of what runner the caller invoked."""
-    out = guard.check(_payload("vitest run", repo))
+    out = _enveloped(guard.check)(_payload("vitest run", repo))
     reason = _reason(out)
     assert "python3 -m pytest" not in reason
     assert "vitest" in reason
@@ -274,7 +279,7 @@ def test_subagent_python_ecosystem_deny_still_suggests_pytest(
 ):
     """Regression pin: the ecosystem-aware F15 fix must not disturb the
     pre-existing Python-repo suggestion."""
-    out = guard.check(_payload(command, repo, agent_id=_AGENT_ID))
+    out = _enveloped(guard.check)(_payload(command, repo, agent_id=_AGENT_ID))
     reason = _reason(out)
     assert "python3 -m pytest path/to/test_file.py" in reason
     assert "Reshaping the command text does not bypass" in reason
@@ -297,7 +302,7 @@ def test_subagent_python_ecosystem_deny_still_suggests_pytest(
     ],
 )
 def test_subagent_scoped_allowed(repo, free_mutex, command):
-    _assert_allowed(guard.check(_payload(command, repo, agent_id=_AGENT_ID)))
+    _assert_allowed(_enveloped(guard.check)(_payload(command, repo, agent_id=_AGENT_ID)))
 
 
 @pytest.mark.parametrize(
@@ -308,7 +313,7 @@ def test_subagent_scoped_allowed(repo, free_mutex, command):
     ],
 )
 def test_subagent_powershell_spelled_suite_shaped_denied_same_as_bash(repo, free_mutex, command):
-    out = guard.check(_payload(command, repo, agent_id=_AGENT_ID))
+    out = _enveloped(guard.check)(_payload(command, repo, agent_id=_AGENT_ID))
     reason = _reason(out)
     assert reason.startswith("Full-suite subagent runs are denied")
 
@@ -320,7 +325,7 @@ def test_subagent_powershell_tool_unscoped_suite_denied(repo, free_mutex):
     through every leg (identity, grant, mutex) unclassified."""
     payload = _payload("pytest", repo, agent_id=_AGENT_ID)
     payload["tool_name"] = "PowerShell"
-    reason = _reason(guard.check(payload))
+    reason = _reason(_enveloped(guard.check)(payload))
     assert reason.startswith("Full-suite subagent runs are denied")
 
 
@@ -331,7 +336,7 @@ def test_top_level_em_powershell_tool_unscoped_suite_denied_without_grant(grant_
     grant."""
     payload = _payload("pytest", grant_repo)
     payload["tool_name"] = "PowerShell"
-    out = guard.check(payload)
+    out = _enveloped(guard.check)(payload)
     assert out is not None
 
 
@@ -356,7 +361,7 @@ def test_subagent_start_process_argumentlist_suite_shaped_denied(repo, free_mute
     string, and `-FilePath` named explicitly vs. the bare positional form."""
     payload = _payload(command, repo, agent_id=_AGENT_ID)
     payload["tool_name"] = "PowerShell"
-    reason = _reason(guard.check(payload))
+    reason = _reason(_enveloped(guard.check)(payload))
     assert reason.startswith("Full-suite subagent runs are denied")
 
 
@@ -367,7 +372,7 @@ def test_top_level_em_start_process_argumentlist_unscoped_denied_without_grant(g
     Tier-U grant."""
     payload = _payload("Start-Process python -ArgumentList '-m','pytest'", grant_repo)
     payload["tool_name"] = "PowerShell"
-    assert guard.check(payload) is not None
+    assert _enveloped(guard.check)(payload) is not None
 
 
 @pytest.mark.parametrize(
@@ -389,7 +394,7 @@ def test_subagent_start_process_argumentlist_scoped_allowed(repo, free_mutex, co
         agent_id=_AGENT_ID,
     )
     payload["tool_name"] = "PowerShell"
-    _assert_allowed(guard.check(payload))
+    _assert_allowed(_enveloped(guard.check)(payload))
 
 
 def test_start_process_innocuous_command_allows_with_no_deny(repo, free_mutex):
@@ -398,7 +403,7 @@ def test_start_process_innocuous_command_allows_with_no_deny(repo, free_mutex):
     classifier can SEE, never a blanket `Start-Process` deny."""
     payload = _payload("Start-Process notepad", repo, agent_id=_AGENT_ID)
     payload["tool_name"] = "PowerShell"
-    assert guard.check(payload) is None
+    assert _enveloped(guard.check)(payload) is None
 
 
 def test_start_process_unresolvable_target_does_not_crash(repo, free_mutex):
@@ -409,18 +414,18 @@ def test_start_process_unresolvable_target_does_not_crash(repo, free_mutex):
     command substitution generally."""
     payload = _payload("Start-Process $target -ArgumentList $args", repo, agent_id=_AGENT_ID)
     payload["tool_name"] = "PowerShell"
-    guard.check(payload)
+    _enveloped(guard.check)(payload)
 
 
 def test_subagent_testpaths_root_is_not_a_scope(repo, free_mutex):
     """`pytest coordinator_core/` looks scoped and is the entire suite."""
-    reason = _reason(guard.check(_payload("pytest coordinator_core/", repo, agent_id=_AGENT_ID)))
+    reason = _reason(_enveloped(guard.check)(_payload("pytest coordinator_core/", repo, agent_id=_AGENT_ID)))
     assert "Detected:" in reason
 
 
 @pytest.mark.parametrize("command", ["pytest coordinator/", "pytest .", "pytest coordinator_core"])
 def test_subagent_testpaths_ancestor_is_not_a_scope(repo, free_mutex, command):
-    assert guard.check(_payload(command, repo, agent_id=_AGENT_ID)) is not None
+    assert _enveloped(guard.check)(_payload(command, repo, agent_id=_AGENT_ID)) is not None
 
 
 # ---------------------------------------------------------------------------
@@ -441,25 +446,25 @@ def test_testpaths_root_positional_with_scoping_flag_is_not_laundered(repo, free
     """A name-pattern/selection flag alongside a whole-suite positional must
     not launder the invocation to Tier T -- this repo's own configured
     `testpaths` root (`coordinator_core/`) is the regression shape."""
-    reason = _reason(guard.check(_payload(command, repo, agent_id=_AGENT_ID)))
+    reason = _reason(_enveloped(guard.check)(_payload(command, repo, agent_id=_AGENT_ID)))
     assert "Detected:" in reason
     assert "filter selection, not collection" in reason
     assert "file::node" in reason
 
 
 def test_a_suite_deny_with_no_selection_flag_carries_no_selection_note(repo, free_mutex):
-    reason = _reason(guard.check(_payload("pytest coordinator_core/", repo, agent_id=_AGENT_ID)))
+    reason = _reason(_enveloped(guard.check)(_payload("pytest coordinator_core/", repo, agent_id=_AGENT_ID)))
     assert "filter selection, not collection" not in reason
 
 
 def test_the_interpreters_dash_m_is_not_a_selection_flag(repo, free_mutex):
-    reason = _reason(guard.check(_payload("python -m pytest coordinator_core/", repo, agent_id=_AGENT_ID)))
+    reason = _reason(_enveloped(guard.check)(_payload("python -m pytest coordinator_core/", repo, agent_id=_AGENT_ID)))
     assert "Detected:" in reason
     assert "filter selection, not collection" not in reason
 
 
 def test_python_dash_m_pytest_with_a_selection_flag_still_carries_the_note(repo, free_mutex):
-    reason = _reason(guard.check(
+    reason = _reason(_enveloped(guard.check)(
         _payload('python -m pytest coordinator_core/ -k "expr"', repo, agent_id=_AGENT_ID)))
     assert "filter selection, not collection" in reason
 
@@ -468,7 +473,7 @@ def test_bare_dash_k_with_no_positional_stays_tier_t(repo, free_mutex):
     """The BARE form (`-k` with no positional at all) is unaffected -- the
     flag-derived `scoped` bit still governs when there is nothing to
     launder."""
-    _assert_allowed(guard.check(_payload('pytest -k "expr"', repo, agent_id=_AGENT_ID)))
+    _assert_allowed(_enveloped(guard.check)(_payload('pytest -k "expr"', repo, agent_id=_AGENT_ID)))
 
 
 def test_dash_k_alongside_a_real_file_scope_stays_tier_t(repo, free_mutex):
@@ -478,31 +483,31 @@ def test_dash_k_alongside_a_real_file_scope_stays_tier_t(repo, free_mutex):
     leg -- which denies a dispatched agent's directory arg regardless of
     Tier T -- does not confound this assertion."""
     command = 'pytest coordinator_core/frontmatter/tests/test_x.py -k "expr"'
-    _assert_allowed(guard.check(_payload(command, repo, agent_id=_AGENT_ID)))
+    _assert_allowed(_enveloped(guard.check)(_payload(command, repo, agent_id=_AGENT_ID)))
 
 
 def test_compound_command_hiding_a_suite_run_denied(repo, free_mutex):
-    out = guard.check(
+    out = _enveloped(guard.check)(
         _payload("cd /some/repo && python3 -m pytest 2>&1 | tee /tmp/log", repo, agent_id=_AGENT_ID)
     )
     assert _reason(out)
 
 
 def test_wrapped_and_path_qualified_runner_denied(repo, free_mutex):
-    out = guard.check(_payload("CI=1 timeout 900 .venv/bin/pytest", repo, agent_id=_AGENT_ID))
+    out = _enveloped(guard.check)(_payload("CI=1 timeout 900 .venv/bin/pytest", repo, agent_id=_AGENT_ID))
     assert _reason(out)
 
 
 def test_flag_operand_is_not_credited_as_a_scope(repo, free_mutex):
     """`-m <expr>` selects markers, not paths — its operand must never be
     mistaken for a positional scope argument."""
-    out = guard.check(_payload("pytest -m 'not cadence'", repo, agent_id=_AGENT_ID))
+    out = _enveloped(guard.check)(_payload("pytest -m 'not cadence'", repo, agent_id=_AGENT_ID))
     assert _reason(out)
 
 
 @pytest.mark.parametrize("command", ["Invoke-Pester", "invoke-pester", "Invoke-Pester -CI"])
 def test_subagent_invoke_pester_unscoped_denied(repo, free_mutex, command):
-    out = guard.check(_payload(command, repo, agent_id=_AGENT_ID))
+    out = _enveloped(guard.check)(_payload(command, repo, agent_id=_AGENT_ID))
     assert _reason(out)
 
 
@@ -511,7 +516,7 @@ def test_subagent_invoke_pester_unscoped_denied(repo, free_mutex, command):
     ["Invoke-Pester -Path tests/thing.tests.ps1", "Invoke-Pester -TestName 'my test'"],
 )
 def test_subagent_invoke_pester_scoped_allowed(repo, free_mutex, command):
-    _assert_allowed(guard.check(_payload(command, repo, agent_id=_AGENT_ID)))
+    _assert_allowed(_enveloped(guard.check)(_payload(command, repo, agent_id=_AGENT_ID)))
 
 
 def test_subagent_invoke_pester_path_directory_denied(repo, free_mutex):
@@ -519,7 +524,7 @@ def test_subagent_invoke_pester_path_directory_denied(repo, free_mutex):
     precision -- denied for a dispatched subagent, same as the unscoped
     bare-`Invoke-Pester` case."""
     (repo / "tests").mkdir()
-    out = guard.check(
+    out = _enveloped(guard.check)(
         _payload("Invoke-Pester -Path tests", repo, agent_id=_AGENT_ID)
     )
     assert _reason(out)
@@ -533,7 +538,7 @@ def test_em_invoke_pester_path_directory_needs_tier_u_grant(grant_repo, free_mut
     `agent_id`) nor the grant leg (`_classify_pester` reported it scoped) and
     fell straight through to allow."""
     (grant_repo / "tests").mkdir()
-    out = guard.check(_payload("Invoke-Pester -Path tests", grant_repo))
+    out = _enveloped(guard.check)(_payload("Invoke-Pester -Path tests", grant_repo))
     reason = _reason(out)
     assert "Tier-U" in reason
     assert "authorization grant" in reason
@@ -545,7 +550,7 @@ def test_em_invoke_pester_path_directory_allowed_with_live_grant(grant_repo, fre
     assert grant_module.write_tier_u_grant(
         "pm", "yes, run the full suite", session_id=_GRANT_SID, cwd=str(grant_repo)
     )
-    assert guard.check(
+    assert _enveloped(guard.check)(
         _payload("with-suite-mutex -- Invoke-Pester -Path tests", grant_repo)
     ) is None
 
@@ -557,8 +562,8 @@ def test_invoke_pester_path_file_argument_still_scoped(repo, free_mutex):
     (repo / "tests").mkdir()
     (repo / "tests" / "thing.tests.ps1").write_text("", encoding="utf-8")
     cmd = "Invoke-Pester -Path tests/thing.tests.ps1"
-    _assert_allowed(guard.check(_payload(cmd, repo, agent_id=_AGENT_ID)))
-    assert guard.check(_payload(cmd, repo)) is None
+    _assert_allowed(_enveloped(guard.check)(_payload(cmd, repo, agent_id=_AGENT_ID)))
+    assert _enveloped(guard.check)(_payload(cmd, repo)) is None
 
 
 def test_invoke_pester_path_comma_separated_directory_denied(repo, free_mutex):
@@ -568,7 +573,7 @@ def test_invoke_pester_path_comma_separated_directory_denied(repo, free_mutex):
     (repo / "tests" / "thing.tests.ps1").write_text("", encoding="utf-8")
     (repo / "other").mkdir()
     cmd = "Invoke-Pester -Path tests/thing.tests.ps1,other"
-    out = guard.check(_payload(cmd, repo, agent_id=_AGENT_ID))
+    out = _enveloped(guard.check)(_payload(cmd, repo, agent_id=_AGENT_ID))
     assert _reason(out)
 
 
@@ -579,7 +584,7 @@ def test_invoke_pester_repeated_path_flag_directory_denied(repo, free_mutex):
     (repo / "tests" / "thing.tests.ps1").write_text("", encoding="utf-8")
     (repo / "other").mkdir()
     cmd = "Invoke-Pester -Path tests/thing.tests.ps1 -Path other"
-    out = guard.check(_payload(cmd, repo, agent_id=_AGENT_ID))
+    out = _enveloped(guard.check)(_payload(cmd, repo, agent_id=_AGENT_ID))
     assert _reason(out)
 
 
@@ -589,12 +594,12 @@ def test_invoke_pester_fullnamefilter_stays_scoped_no_path_check(repo, free_mute
     like `-TestName`. Already correct before this fix; pinned here so a
     future change to `_PESTER_SCOPING_FLAGS` cannot silently regress it."""
     cmd = "Invoke-Pester -FullNameFilter '*my test*'"
-    _assert_allowed(guard.check(_payload(cmd, repo, agent_id=_AGENT_ID)))
+    _assert_allowed(_enveloped(guard.check)(_payload(cmd, repo, agent_id=_AGENT_ID)))
 
 
 def test_non_test_command_allowed(repo, free_mutex):
-    _assert_allowed(guard.check(_payload("git status --porcelain", repo, agent_id=_AGENT_ID)))
-    _assert_allowed(guard.check(_payload("ls coordinator_core/", repo, agent_id=_AGENT_ID)))
+    _assert_allowed(_enveloped(guard.check)(_payload("git status --porcelain", repo, agent_id=_AGENT_ID)))
+    _assert_allowed(_enveloped(guard.check)(_payload("ls coordinator_core/", repo, agent_id=_AGENT_ID)))
 
 
 def test_heredoc_prose_mentioning_pytest_is_not_misread_as_an_invocation(repo, free_mutex):
@@ -612,7 +617,7 @@ def test_heredoc_prose_mentioning_pytest_is_not_misread_as_an_invocation(repo, f
         "pytest coordinator_core/tests\n"
         "EOF"
     )
-    _assert_allowed(guard.check(_payload(cmd, repo, agent_id=_AGENT_ID)))
+    _assert_allowed(_enveloped(guard.check)(_payload(cmd, repo, agent_id=_AGENT_ID)))
 
 
 @pytest.mark.parametrize("base", ["npm", "pnpm", "yarn", "bun"])
@@ -685,7 +690,7 @@ def test_is_package_script_label():
 
 
 def test_deny_offers_direct_runner_invocation_for_package_script(repo, free_mutex):
-    out = guard.check(
+    out = _enveloped(guard.check)(
         _payload("pnpm run test -- x.test.ts", repo, agent_id=_AGENT_ID)
     )
     reason = _reason(out)
@@ -693,7 +698,7 @@ def test_deny_offers_direct_runner_invocation_for_package_script(repo, free_mute
 
 
 def test_deny_omits_package_script_offer_for_non_package_manager(repo, free_mutex):
-    out = guard.check(_payload("pytest", repo, agent_id=_AGENT_ID))
+    out = _enveloped(guard.check)(_payload("pytest", repo, agent_id=_AGENT_ID))
     reason = _reason(out)
     assert "pnpm exec vitest run" not in reason
 
@@ -733,7 +738,7 @@ def test_subagent_tox_nox_denied(repo, free_mutex, command):
     """Layer-3 identity-leg regression: before the fix, neither runner was
     in the prefilter at all, so a dispatched subagent's bare `tox`/`nox`
     skipped this guard entirely -- no classification, no identity deny."""
-    out = guard.check(_payload(command, repo, agent_id=_AGENT_ID))
+    out = _enveloped(guard.check)(_payload(command, repo, agent_id=_AGENT_ID))
     reason = _reason(out)
     assert reason.startswith("Full-suite subagent runs are denied")
 
@@ -743,7 +748,7 @@ def test_em_tox_nox_needs_tier_u_grant(grant_repo, free_mutex, command):
     """Tier-F/U grant-check-leg regression: before the fix, the top-level
     EM's `tox`/`nox` invocation never reached the grant leg at all -- it was
     silently allowed with no grant, no record, and no deny."""
-    out = guard.check(_payload(command, grant_repo))
+    out = _enveloped(guard.check)(_payload(command, grant_repo))
     reason = _reason(out)
     assert "Tier-U" in reason
     assert "authorization grant" in reason
@@ -755,7 +760,7 @@ def test_em_tox_nox_allowed_with_live_grant(grant_repo, free_mutex, command):
     assert grant_module.write_tier_u_grant(
         "pm", "yes, run the full suite", session_id=_GRANT_SID, cwd=str(grant_repo)
     )
-    assert guard.check(
+    assert _enveloped(guard.check)(
         _payload("with-suite-mutex -- " + command, grant_repo)
     ) is None
 
@@ -817,7 +822,7 @@ def test_has_variable_path_operand_does_not_match_embedded_reference():
 def test_subagent_deny_names_a_variable_held_path_list(repo, command):
     """A test-runner leg handing vitest its files through `$FILES` was denied
     as a full suite with no reason it could act on, and reported tests run: 0."""
-    result = guard.check(_payload(command, repo, agent_id="agent-1"))
+    result = _enveloped(guard.check)(_payload(command, repo, agent_id="agent-1"))
     reason = result["hookSpecificOutput"]["permissionDecisionReason"]
     assert "held in a variable" in reason and "Name the paths literally" in reason
 
@@ -825,7 +830,7 @@ def test_subagent_deny_names_a_variable_held_path_list(repo, command):
 def test_literal_bound_non_scope_denies_without_the_variable_note(repo):
     """A variable bound to a testpaths root resolves to that literal word, so
     the deny is about breadth, not about a variable the guard could not see."""
-    result = guard.check(_payload("FILES=coordinator_core; pytest $FILES", repo, agent_id="agent-1"))
+    result = _enveloped(guard.check)(_payload("FILES=coordinator_core; pytest $FILES", repo, agent_id="agent-1"))
     reason = _reason(result)
     assert "held in a variable" not in reason
 
@@ -879,12 +884,12 @@ _LITERAL_DENIED = [
 
 @pytest.mark.parametrize("command", _LITERAL_ALLOWED)
 def test_subagent_literal_same_command_path_list_is_allowed(literal_repo, command):
-    _assert_allowed(guard.check(_payload(command, literal_repo, agent_id="agent-1")))
+    _assert_allowed(_enveloped(guard.check)(_payload(command, literal_repo, agent_id="agent-1")))
 
 
 @pytest.mark.parametrize("command", _LITERAL_DENIED)
 def test_subagent_broad_loop_or_unbound_variable_is_denied(literal_repo, command):
-    _reason(guard.check(_payload(command, literal_repo, agent_id="agent-1")))
+    _reason(_enveloped(guard.check)(_payload(command, literal_repo, agent_id="agent-1")))
 
 
 def test_unbound_variable_keeps_tier_u_and_the_variable_note(literal_repo):
@@ -907,11 +912,11 @@ def test_literal_binding_adds_no_spawn_and_bounded_process_time(literal_repo, mo
         for _ in range(20):
             t0 = time.process_time()
             for c in commands:
-                guard.check(_payload(c, literal_repo, agent_id="agent-1"))
+                _enveloped(guard.check)(_payload(c, literal_repo, agent_id="agent-1"))
             samples.append((time.process_time() - t0) / len(commands))
         return sorted(samples)[len(samples) // 2]
 
-    guard.check(_payload(commands[0], literal_repo, agent_id="agent-1"))
+    _enveloped(guard.check)(_payload(commands[0], literal_repo, agent_id="agent-1"))
     bound = _per_call()
     monkeypatch.setattr(guard, "bind_literal_operands", lambda argvs, joiners=None: [list(a) for a in argvs])
     monkeypatch.setattr(guard, "bind_literal_iterations", lambda argvs, joiners=None: [[list(a)] for a in argvs])
@@ -920,16 +925,16 @@ def test_literal_binding_adds_no_spawn_and_bounded_process_time(literal_repo, mo
 
 
 def test_subagent_deny_of_plain_breadth_has_no_variable_note(repo):
-    result = guard.check(_payload("npx vitest run", repo, agent_id="agent-1"))
+    result = _enveloped(guard.check)(_payload("npx vitest run", repo, agent_id="agent-1"))
     assert "variable" not in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
 def test_top_level_em_allowed_when_mutex_free(repo, free_mutex):
-    assert guard.check(_payload("with-suite-mutex -- pytest", repo)) is None
+    assert _enveloped(guard.check)(_payload("with-suite-mutex -- pytest", repo)) is None
 
 
 def test_top_level_em_denied_when_mutex_held(repo, held_mutex):
-    reason = _reason(guard.check(_payload("with-suite-mutex -- pytest", repo)))
+    reason = _reason(_enveloped(guard.check)(_payload("with-suite-mutex -- pytest", repo)))
     assert reason.startswith("Wait for the in-flight suite run")
     assert "4242" in reason
     assert "em-session-abc" in reason
@@ -939,14 +944,14 @@ def test_top_level_em_denied_when_mutex_held(repo, held_mutex):
 def test_mutex_deny_names_a_wait_command_the_guards_allow(repo, held_mutex):
     """The refusal's wait command must itself pass this guard, or the caller is
     pushed back to a raw pid poll that another guard denies."""
-    reason = _reason(guard.check(_payload("with-suite-mutex -- pytest", repo)))
+    reason = _reason(_enveloped(guard.check)(_payload("with-suite-mutex -- pytest", repo)))
     assert "with-suite-mutex --wait" in reason
-    assert guard.check(_payload("with-suite-mutex --wait", repo)) is None
+    assert _enveloped(guard.check)(_payload("with-suite-mutex --wait", repo)) is None
 
 
 def test_scoped_run_allowed_even_when_mutex_held(repo, held_mutex):
     cmd = "pytest coordinator_core/frontmatter/tests/test_x.py"
-    assert guard.check(_payload(cmd, repo)) is None
+    assert _enveloped(guard.check)(_payload(cmd, repo)) is None
 
 
 def test_mutex_leg_fails_open_when_module_lacks_holder(repo, monkeypatch):
@@ -955,7 +960,7 @@ def test_mutex_leg_fails_open_when_module_lacks_holder(repo, monkeypatch):
     fake = types.ModuleType("coordinator_core.testing.suite_mutex")
     monkeypatch.setitem(sys.modules, "coordinator_core.testing.suite_mutex", fake)
     assert guard._mutex_holder() is None
-    assert guard.check(_payload("with-suite-mutex -- pytest", repo)) is None
+    assert _enveloped(guard.check)(_payload("with-suite-mutex -- pytest", repo)) is None
 
 
 def test_mutex_leg_fails_open_when_holder_raises(repo, monkeypatch):
@@ -966,7 +971,7 @@ def test_mutex_leg_fails_open_when_holder_raises(repo, monkeypatch):
 
     fake.holder = _boom
     monkeypatch.setitem(sys.modules, "coordinator_core.testing.suite_mutex", fake)
-    assert guard.check(_payload("with-suite-mutex -- pytest", repo)) is None
+    assert _enveloped(guard.check)(_payload("with-suite-mutex -- pytest", repo)) is None
 
 
 def test_subagent_leg_denies_even_when_mutex_raises(repo, monkeypatch):
@@ -978,7 +983,7 @@ def test_subagent_leg_denies_even_when_mutex_raises(repo, monkeypatch):
 
     fake.holder = _boom
     monkeypatch.setitem(sys.modules, "coordinator_core.testing.suite_mutex", fake)
-    assert guard.check(_payload("pytest", repo, agent_id=_AGENT_ID)) is not None
+    assert _enveloped(guard.check)(_payload("pytest", repo, agent_id=_AGENT_ID)) is not None
 
 
 def test_bare_tier_u_em_command_denied_naming_wrapped_form(grant_repo, free_mutex):
@@ -989,7 +994,7 @@ def test_bare_tier_u_em_command_denied_naming_wrapped_form(grant_repo, free_mute
         "pm", "yes, run the full suite", session_id=_GRANT_SID, cwd=str(grant_repo)
     )
     cmd = "python3 -m pytest -q"
-    out = guard.check(_payload(cmd, grant_repo))
+    out = _enveloped(guard.check)(_payload(cmd, grant_repo))
     reason = _reason(out)
     assert "with-suite-mutex -- " + cmd in reason
 
@@ -1002,7 +1007,7 @@ def test_wrapped_tier_u_em_command_allowed(grant_repo, free_mutex):
         "pm", "yes, run the full suite", session_id=_GRANT_SID, cwd=str(grant_repo)
     )
     cmd = "with-suite-mutex -- python3 -m pytest -q"
-    assert guard.check(_payload(cmd, grant_repo)) is None
+    assert _enveloped(guard.check)(_payload(cmd, grant_repo)) is None
 
 
 @pytest.mark.parametrize("wrapper", [
@@ -1021,7 +1026,7 @@ def test_wrapper_spellings_all_recognized(grant_repo, free_mutex, wrapper):
         "pm", "yes, run the full suite", session_id=_GRANT_SID, cwd=str(grant_repo)
     )
     cmd = "%s -- pytest" % wrapper
-    assert guard.check(_payload(cmd, grant_repo)) is None
+    assert _enveloped(guard.check)(_payload(cmd, grant_repo)) is None
 
 
 def test_wrapper_leg_accepts_direct_form_not_only_bash_c(grant_repo, free_mutex):
@@ -1035,8 +1040,8 @@ def test_wrapper_leg_accepts_direct_form_not_only_bash_c(grant_repo, free_mutex)
     )
     direct = "with-suite-mutex -- python3 -m pytest -m 'not cadence'"
     via_bash_c = "with-suite-mutex -- bash -c 'python3 -m pytest -m \"not cadence\"'"
-    assert guard.check(_payload(direct, grant_repo)) is None
-    assert guard.check(_payload(via_bash_c, grant_repo)) is None
+    assert _enveloped(guard.check)(_payload(direct, grant_repo)) is None
+    assert _enveloped(guard.check)(_payload(via_bash_c, grant_repo)) is None
 
 
 def test_wrapper_leg_denial_names_the_accepted_wrapped_form(grant_repo, free_mutex):
@@ -1048,7 +1053,7 @@ def test_wrapper_leg_denial_names_the_accepted_wrapped_form(grant_repo, free_mut
         "pm", "yes, run the full suite", session_id=_GRANT_SID, cwd=str(grant_repo)
     )
     cmd = "python3 -m pytest -q"
-    reason = _reason(guard.check(_payload(cmd, grant_repo)))
+    reason = _reason(_enveloped(guard.check)(_payload(cmd, grant_repo)))
     assert "with-suite-mutex -- " + cmd in reason
     assert "bash -c" not in reason
 
@@ -1057,7 +1062,7 @@ def test_wrapper_leg_still_requires_a_live_grant_first(grant_repo, free_mutex):
     """Ordering: an UNGRANTED caller is denied on the grant leg, never told
     to wrap a command it has no standing to run at all."""
     cmd = "with-suite-mutex -- pytest"
-    out = guard.check(_payload(cmd, grant_repo))
+    out = _enveloped(guard.check)(_payload(cmd, grant_repo))
     reason = _reason(out)
     assert "authorization grant" in reason
     assert "Route this through the suite mutex" not in reason
@@ -1067,7 +1072,7 @@ def test_wrapper_leg_never_fires_for_a_subagent(grant_repo, free_mutex):
     """A dispatched subagent's bare Tier-U command is denied on IDENTITY,
     never told to wrap it -- that would read as an invitation to run the
     suite anyway."""
-    out = guard.check(_payload("pytest", grant_repo, agent_id=_AGENT_ID))
+    out = _enveloped(guard.check)(_payload("pytest", grant_repo, agent_id=_AGENT_ID))
     reason = _reason(out)
     assert reason.startswith("Full-suite subagent runs are denied")
     assert "with-suite-mutex" not in reason
@@ -1077,8 +1082,8 @@ def test_wrapper_leg_never_fires_for_tier_t(repo, free_mutex):
     """A scoped (Tier T) command is unaffected by this leg -- for the
     granted EM and for a subagent alike."""
     cmd = "pytest coordinator_core/frontmatter/tests/test_x.py"
-    assert guard.check(_payload(cmd, repo)) is None
-    _assert_allowed(guard.check(_payload(cmd, repo, agent_id=_AGENT_ID)))
+    assert _enveloped(guard.check)(_payload(cmd, repo)) is None
+    _assert_allowed(_enveloped(guard.check)(_payload(cmd, repo, agent_id=_AGENT_ID)))
 
 
 def test_wrapper_leg_runs_before_mutex_leg(grant_repo, held_mutex):
@@ -1088,7 +1093,7 @@ def test_wrapper_leg_runs_before_mutex_leg(grant_repo, held_mutex):
     assert grant_module.write_tier_u_grant(
         "pm", "yes, run the full suite", session_id=_GRANT_SID, cwd=str(grant_repo)
     )
-    out = guard.check(_payload("pytest", grant_repo))
+    out = _enveloped(guard.check)(_payload("pytest", grant_repo))
     reason = _reason(out)
     assert "Route this through the suite mutex" in reason
     assert "Wait for the in-flight suite run" not in reason
@@ -1107,7 +1112,7 @@ def test_wrapper_leg_rejects_decoy_wrap_of_a_no_op_segment(grant_repo, free_mute
         "pm", "yes, run the full suite", session_id=_GRANT_SID, cwd=str(grant_repo)
     )
     cmd = "with-suite-mutex -- true && python -m pytest"
-    out = guard.check(_payload(cmd, grant_repo))
+    out = _enveloped(guard.check)(_payload(cmd, grant_repo))
     reason = _reason(out)
     assert "Route this through the suite mutex" in reason
     assert "Detected: python -m pytest" in reason
@@ -1121,7 +1126,7 @@ def test_wrapper_leg_still_allows_a_legitimately_chained_wrap(grant_repo, free_m
         "pm", "yes, run the full suite", session_id=_GRANT_SID, cwd=str(grant_repo)
     )
     cmd = "cd . && with-suite-mutex -- pytest"
-    assert guard.check(_payload(cmd, grant_repo)) is None
+    assert _enveloped(guard.check)(_payload(cmd, grant_repo)) is None
 
 
 # ---------------------------------------------------------------------------
@@ -1135,14 +1140,14 @@ def test_nested_tool_response_agent_id_is_not_an_identity(repo, free_mutex):
         "with-suite-mutex -- pytest", repo,
         extra={"tool_response": {"agent_id": _AGENT_ID}},
     )
-    assert guard.check(payload) is None
+    assert _enveloped(guard.check)(payload) is None
 
 
 def test_empty_agent_id_is_not_a_subagent(repo, free_mutex):
-    assert guard.check(
+    assert _enveloped(guard.check)(
         _payload("with-suite-mutex -- pytest", repo, agent_id="")
     ) is None
-    assert guard.check(
+    assert _enveloped(guard.check)(
         _payload("with-suite-mutex -- pytest", repo, agent_id="   ")
     ) is None
 
@@ -1150,31 +1155,31 @@ def test_empty_agent_id_is_not_a_subagent(repo, free_mutex):
 def test_workflow_shaped_agent_id_denied_without_any_backpointer(repo, free_mutex):
     """Presence-keying, not type-keying: a Workflow-phase agent has no
     dispatched-agents.txt row, so a type-keyed guard would exempt it."""
-    assert guard.check(_payload("pytest", repo, agent_id="a" + "0f1e2d3c4b5a6978")) is not None
+    assert _enveloped(guard.check)(_payload("pytest", repo, agent_id="a" + "0f1e2d3c4b5a6978")) is not None
 
 
 def test_override_env_never_allows_a_subagent(repo, free_mutex, monkeypatch):
     monkeypatch.setenv(guard._OVERRIDE_ENV_VAR, "1")
-    assert guard.check(_payload("pytest", repo, agent_id=_AGENT_ID)) is not None
+    assert _enveloped(guard.check)(_payload("pytest", repo, agent_id=_AGENT_ID)) is not None
 
 
 def test_override_env_still_disarms_the_em(repo, free_mutex, monkeypatch):
     monkeypatch.setenv(guard._OVERRIDE_ENV_VAR, "0")
-    assert guard.check(_payload("pytest", repo)) is not None
+    assert _enveloped(guard.check)(_payload("pytest", repo)) is not None
     monkeypatch.setenv(guard._OVERRIDE_ENV_VAR, "1")
-    assert guard.check(_payload("pytest", repo)) is None
+    assert _enveloped(guard.check)(_payload("pytest", repo)) is None
 
 
 def test_non_bash_tool_allowed(repo, free_mutex):
     payload = _payload("pytest", repo, agent_id=_AGENT_ID)
     payload["tool_name"] = "Write"
-    assert guard.check(payload) is None
+    assert _enveloped(guard.check)(payload) is None
 
 
 def test_malformed_payload_allowed(repo, free_mutex):
-    assert guard.check({"tool_name": "Bash"}) is None
-    assert guard.check({"tool_name": "Bash", "tool_input": {}}) is None
-    assert guard.check({"tool_name": "Bash", "tool_input": {"command": ""}}) is None
+    assert _enveloped(guard.check)({"tool_name": "Bash"}) is None
+    assert _enveloped(guard.check)({"tool_name": "Bash", "tool_input": {}}) is None
+    assert _enveloped(guard.check)({"tool_name": "Bash", "tool_input": {"command": ""}}) is None
 
 
 def test_configured_cmd_leg_reuses_the_canonical_resolver(repo, free_mutex, monkeypatch):
@@ -1188,7 +1193,7 @@ def test_configured_cmd_leg_reuses_the_canonical_resolver(repo, free_mutex, monk
     assert guard._classify_tokens(
         guard._tokens(configured), ["coordinator_core"], str(repo)
     ) is None
-    out = guard.check(_payload(configured, repo, agent_id=_AGENT_ID))
+    out = _enveloped(guard.check)(_payload(configured, repo, agent_id=_AGENT_ID))
     assert "configured fast_test_cmd" in _reason(out)
 
 
@@ -1201,7 +1206,7 @@ def test_configured_cmd_leg_ignores_unrelated_commands(repo, free_mutex, monkeyp
         )],
     )
     other = "pytest coordinator_core/bash_guards/tests/test_y.py"
-    _assert_allowed(guard.check(_payload(other, repo, agent_id=_AGENT_ID)))
+    _assert_allowed(_enveloped(guard.check)(_payload(other, repo, agent_id=_AGENT_ID)))
 
 
 def test_configured_cmd_leg_degrades_silently_without_a_resolver(tmp_path):
@@ -1381,7 +1386,7 @@ def test_configured_test_cmds_resolved_at_most_once_per_check_call(repo, free_mu
     assert guard._classify_tokens(
         guard._tokens(configured_cmd), ["coordinator_core"], str(repo)
     ) is None
-    guard.check(_payload(configured_cmd, repo))
+    _enveloped(guard.check)(_payload(configured_cmd, repo))
     assert len(calls) == 1
 
 
@@ -1421,7 +1426,7 @@ def grant_repo(tmp_path, monkeypatch):
 class TestGrantLeg:
     def test_em_tier_u_no_grant_denied(self, grant_repo, free_mutex):
         """AC-1: EM, Tier-U command, no grant -> deny naming the grant."""
-        out = guard.check(_payload("pytest", grant_repo))
+        out = _enveloped(guard.check)(_payload("pytest", grant_repo))
         reason = _reason(out)
         assert "Tier-U" in reason
         assert "authorization grant" in reason
@@ -1433,7 +1438,7 @@ class TestGrantLeg:
         Tier-U command, no live grant) must also route through the
         ecosystem-aware helper rather than hard-coding `python3 -m pytest`
         for a vitest-shaped invocation."""
-        out = guard.check(_payload("vitest run", grant_repo))
+        out = _enveloped(guard.check)(_payload("vitest run", grant_repo))
         reason = _reason(out)
         assert "python3 -m pytest" not in reason
         assert "vitest" in reason
@@ -1444,7 +1449,7 @@ class TestGrantLeg:
         assert grant_module.write_tier_u_grant(
             "pm", "yes, run the full suite", session_id=_GRANT_SID, cwd=str(grant_repo)
         )
-        assert guard.check(
+        assert _enveloped(guard.check)(
             _payload("with-suite-mutex -- pytest", grant_repo)
         ) is None
 
@@ -1454,28 +1459,28 @@ class TestGrantLeg:
         """A grant record that fails the gate (session reads dead) must not
         remove the literal-path scoped run the no-record path allows."""
         cmd = "python3 -m pytest tests/test_x.py -q"
-        assert guard.check(_payload(cmd, grant_repo)) is None
+        assert _enveloped(guard.check)(_payload(cmd, grant_repo)) is None
         _write_live_session(grant_repo, _GRANT_SID)
         assert grant_module.write_tier_u_grant(
             "pm", "run it", session_id=_GRANT_SID, cwd=str(grant_repo)
         )
         monkeypatch.setattr(grant_module.liveness, "session_live", lambda *a, **k: False)
         assert grant_module.check_tier_u_grant(str(grant_repo))[0] is False
-        assert guard.check(_payload(cmd, grant_repo)) is None
-        assert guard.check(_payload("pytest", grant_repo)) is not None
+        assert _enveloped(guard.check)(_payload(cmd, grant_repo)) is None
+        assert _enveloped(guard.check)(_payload("pytest", grant_repo)) is not None
 
     def test_em_tier_u_collect_only_no_grant_allowed(self, grant_repo, free_mutex):
         """2026-08-28 row (the-tier-u-guard-refuses-collect-only): a
         collection pass runs no test body, so it must not need the Tier-U
         grant ceremony an unbounded RUN does -- the exact same command minus
         ``--collect-only`` still denies (test_em_tier_u_no_grant_denied)."""
-        assert guard.check(_payload("pytest --collect-only -q", grant_repo)) is None
+        assert _enveloped(guard.check)(_payload("pytest --collect-only -q", grant_repo)) is None
 
     def test_em_tier_u_collect_only_co_alias_no_grant_allowed(self, grant_repo, free_mutex):
         """The ``--co`` short alias gets the same carve-out as
         ``--collect-only``, through the ``python -m pytest`` invocation
         shape as well as the bare ``pytest`` one."""
-        assert guard.check(_payload("python3 -m pytest --co", grant_repo)) is None
+        assert _enveloped(guard.check)(_payload("python3 -m pytest --co", grant_repo)) is None
 
     def test_em_tier_f_no_grant_denied(self, grant_repo, free_mutex, monkeypatch):
         """AC-4 (2026-08-04 PM ruling, tier-f-is-grant-gated): the configured
@@ -1489,7 +1494,7 @@ class TestGrantLeg:
             guard, "_configured_test_cmds",
             lambda root: [guard.ConfiguredCmd("fast_test_cmd", "pytest tests/test_x.py", 0)],
         )
-        out = guard.check(_payload("pytest tests/test_x.py", grant_repo))
+        out = _enveloped(guard.check)(_payload("pytest tests/test_x.py", grant_repo))
         reason = _reason(out)
         assert "authorization grant" in reason
 
@@ -1506,7 +1511,7 @@ class TestGrantLeg:
         assert grant_module.write_tier_u_grant(
             "pm", "yes, run the fast tier", session_id=_GRANT_SID, cwd=str(grant_repo)
         )
-        assert guard.check(
+        assert _enveloped(guard.check)(
             _payload("with-suite-mutex -- pytest tests/test_x.py", grant_repo)
         ) is None
 
@@ -1527,7 +1532,7 @@ class TestGrantLeg:
             guard, "_fast_tier_unscoped_declaration",
             lambda root: "marker-based fast/full split; no path subset is meaningful",
         )
-        out = guard.check(_payload("pytest tests/test_x.py", grant_repo))
+        out = _enveloped(guard.check)(_payload("pytest tests/test_x.py", grant_repo))
         reason = _reason(out)
         assert "authorization grant" in reason
 
@@ -1549,7 +1554,7 @@ class TestGrantLeg:
             guard, "_configured_test_cmds",
             lambda root: [guard.ConfiguredCmd("fast_test_cmd", chained, 0)],
         )
-        out = guard.check(_payload(chained, grant_repo))
+        out = _enveloped(guard.check)(_payload(chained, grant_repo))
         assert out is not None
         assert "Tier-U" in _reason(out)
 
@@ -1565,7 +1570,7 @@ class TestGrantLeg:
             guard, "_configured_test_cmds",
             lambda root: [guard.ConfiguredCmd("fast_test_cmd", chained, 0)],
         )
-        out = guard.check(_payload("pnpm run test", grant_repo))
+        out = _enveloped(guard.check)(_payload("pnpm run test", grant_repo))
         reason = _reason(out)
         assert "Tier-U" in reason
         assert "authorization grant" in reason
@@ -1581,7 +1586,7 @@ class TestGrantLeg:
             guard, "_configured_test_cmds",
             lambda root: [guard.ConfiguredCmd("full_test_cmd", chained, 0)],
         )
-        out = guard.check(_payload(chained, grant_repo))
+        out = _enveloped(guard.check)(_payload(chained, grant_repo))
         reason = _reason(out)
         assert "Tier-U" in reason
         assert "authorization grant" in reason
@@ -1610,7 +1615,7 @@ class TestGrantLeg:
                 guard.ConfiguredCmd("full_test_cmd", cmd, 0),
             ],
         )
-        out = guard.check(_payload(cmd, grant_repo))
+        out = _enveloped(guard.check)(_payload(cmd, grant_repo))
         reason = _reason(out)
         assert "Tier-U" in reason
         assert "authorization grant" in reason
@@ -1631,7 +1636,7 @@ class TestGrantLeg:
                 guard.ConfiguredCmd("full_test_cmd", cmd, 3),
             ],
         )
-        out = guard.check(_payload(cmd, grant_repo))
+        out = _enveloped(guard.check)(_payload(cmd, grant_repo))
         reason = _reason(out)
         assert "Tier-U" in reason
         assert "authorization grant" in reason
@@ -1654,7 +1659,7 @@ class TestGrantLeg:
             guard, "_configured_test_cmds",
             lambda root: [guard.ConfiguredCmd("fast_test_cmd", "pytest -m 'not cadence'", 0)],
         )
-        out = guard.check(_payload("pytest", grant_repo))
+        out = _enveloped(guard.check)(_payload("pytest", grant_repo))
         reason = _reason(out)
         assert "Tier-U" in reason
         assert "ungated by this leg" not in reason
@@ -1675,7 +1680,7 @@ class TestGrantLeg:
             guard, "_configured_test_cmds",
             lambda root: [guard.ConfiguredCmd("fast_test_cmd", "pytest tests/test_x.py", 0)],
         )
-        out = guard.check(_payload("pytest tests/test_x.py", grant_repo))
+        out = _enveloped(guard.check)(_payload("pytest tests/test_x.py", grant_repo))
         reason = _reason(out)
         assert "ungated by this leg" not in reason
         assert "Tier F, ungated" not in reason
@@ -1704,14 +1709,14 @@ class TestGrantLeg:
         monkeypatch.delenv("COORDINATOR_FULL_TEST_CMD", raising=False)
         _write_local_md_cmds(grant_repo)
         fast_cmd = "python3 -m pytest -m 'not cadence'"
-        out = guard.check(_payload(fast_cmd, grant_repo))
+        out = _enveloped(guard.check)(_payload(fast_cmd, grant_repo))
         assert out is not None
         assert "Tier-U" in _reason(out)
 
     def test_tier_t_scoped_no_grant_allowed(self, grant_repo, free_mutex):
         """AC-4: a scoped (Tier T) command is unaffected by this leg."""
         cmd = "pytest path/to/test_x.py"
-        assert guard.check(_payload(cmd, grant_repo)) is None
+        assert _enveloped(guard.check)(_payload(cmd, grant_repo)) is None
 
     def test_subagent_tier_u_with_live_grant_still_denied_as_subagent(self, grant_repo, free_mutex):
         """AC-5: a live grant never buys a subagent a suite run -- the
@@ -1720,7 +1725,7 @@ class TestGrantLeg:
         assert grant_module.write_tier_u_grant(
             "pm", "yes", session_id=_GRANT_SID, cwd=str(grant_repo)
         )
-        out = guard.check(_payload("pytest", grant_repo, agent_id=_AGENT_ID))
+        out = _enveloped(guard.check)(_payload("pytest", grant_repo, agent_id=_AGENT_ID))
         reason = _reason(out)
         assert reason.startswith("Full-suite subagent runs are denied")
 
@@ -1736,7 +1741,7 @@ class TestGrantLeg:
             return real_import(name, *args, **kwargs)
 
         monkeypatch.setattr("builtins.__import__", _fake_import)
-        assert guard.check(
+        assert _enveloped(guard.check)(
             _payload("with-suite-mutex -- pytest", grant_repo)
         ) is None
 
@@ -1755,12 +1760,12 @@ class TestGrantLeg:
 
         monkeypatch.setattr(grant_module, "check_tier_u_grant", _boom)
         with pytest.raises(RuntimeError, match="grant backend unavailable"):
-            guard.check(_payload("pytest", grant_repo))
+            _enveloped(guard.check)(_payload("pytest", grant_repo))
 
     def test_grant_reason_wins_over_mutex_when_both_apply(self, grant_repo, held_mutex):
         """AC-7: ordering -- grant denial precedes the mutex leg. A session
         with no standing to ask is told so, not told to wait."""
-        out = guard.check(_payload("pytest", grant_repo))
+        out = _enveloped(guard.check)(_payload("pytest", grant_repo))
         reason = _reason(out)
         assert "authorization grant" in reason
         assert "Wait for the in-flight suite run" not in reason
@@ -1786,7 +1791,7 @@ class TestR6DeclaredUnscopedFastTier:
             guard, "_fast_tier_unscoped_declaration",
             lambda root: "marker-based fast/full split; no path subset is meaningful",
         )
-        assert guard.check(
+        assert _enveloped(guard.check)(
             _payload("with-suite-mutex -- " + _CLAUDE_KLABAUTER_FAST_TEST_CMD, grant_repo)
         ) is None
 
@@ -1808,7 +1813,7 @@ class TestR6DeclaredUnscopedFastTier:
         double_quoted = (
             'python3 -m pytest -m "not cadence and not pending_fix and not designed_red" -n auto'
         )
-        assert guard.check(
+        assert _enveloped(guard.check)(
             _payload("with-suite-mutex -- " + double_quoted, grant_repo)
         ) is None
 
@@ -1831,7 +1836,7 @@ class TestR6DeclaredUnscopedFastTier:
         extra_ws = (
             "python3 -m pytest  -m 'not cadence  and not pending_fix and  not designed_red'   -n auto"
         )
-        assert guard.check(
+        assert _enveloped(guard.check)(
             _payload("with-suite-mutex -- " + extra_ws, grant_repo)
         ) is None
 
@@ -1846,7 +1851,7 @@ class TestR6DeclaredUnscopedFastTier:
             lambda root: [guard.ConfiguredCmd("fast_test_cmd", _CLAUDE_KLABAUTER_FAST_TEST_CMD, 0)],
         )
         monkeypatch.setattr(guard, "_fast_tier_unscoped_declaration", lambda root: "")
-        out = guard.check(_payload(_CLAUDE_KLABAUTER_FAST_TEST_CMD, grant_repo))
+        out = _enveloped(guard.check)(_payload(_CLAUDE_KLABAUTER_FAST_TEST_CMD, grant_repo))
         reason = _reason(out)
         assert "Tier-U" in reason
         assert "authorization grant" in reason
@@ -1865,7 +1870,7 @@ class TestR6DeclaredUnscopedFastTier:
             guard, "_fast_tier_unscoped_declaration",
             lambda root: "marker-based fast/full split; no path subset is meaningful",
         )
-        out = guard.check(_payload("pytest", grant_repo))
+        out = _enveloped(guard.check)(_payload("pytest", grant_repo))
         reason = _reason(out)
         assert "Tier-U" in reason
         assert "authorization grant" in reason
@@ -1885,7 +1890,7 @@ class TestR6DeclaredUnscopedFastTier:
             guard, "_fast_tier_unscoped_declaration",
             lambda root: "marker-based fast/full split; no path subset is meaningful",
         )
-        out = guard.check(_payload("pytest coordinator_core/", grant_repo))
+        out = _enveloped(guard.check)(_payload("pytest coordinator_core/", grant_repo))
         reason = _reason(out)
         assert "Tier-U" in reason
         assert "authorization grant" in reason
@@ -1907,7 +1912,7 @@ class TestR6DeclaredUnscopedFastTier:
             lambda root: "marker-based fast/full split; no path subset is meaningful",
         )
         superset = _CLAUDE_KLABAUTER_FAST_TEST_CMD + " --extra-unscoped-thing"
-        out = guard.check(_payload(superset, grant_repo))
+        out = _enveloped(guard.check)(_payload(superset, grant_repo))
         reason = _reason(out)
         assert "Tier-U" in reason
         assert "authorization grant" in reason
@@ -1925,7 +1930,7 @@ class TestR6DeclaredUnscopedFastTier:
             guard, "_fast_tier_unscoped_declaration",
             lambda root: "marker-based fast/full split; no path subset is meaningful",
         )
-        out = guard.check(
+        out = _enveloped(guard.check)(
             _payload("with-suite-mutex -- " + _CLAUDE_KLABAUTER_FAST_TEST_CMD, grant_repo)
         )
         reason = _reason(out)
@@ -1945,7 +1950,7 @@ class TestR6DeclaredUnscopedFastTier:
             guard, "_fast_tier_unscoped_declaration",
             lambda root: "marker-based fast/full split; no path subset is meaningful",
         )
-        out = guard.check(_payload(_CLAUDE_KLABAUTER_FAST_TEST_CMD, grant_repo, agent_id=_AGENT_ID))
+        out = _enveloped(guard.check)(_payload(_CLAUDE_KLABAUTER_FAST_TEST_CMD, grant_repo, agent_id=_AGENT_ID))
         reason = _reason(out)
         assert reason.startswith("Full-suite subagent runs are denied")
 
@@ -1964,7 +1969,7 @@ class TestR6DeclaredUnscopedFastTier:
             guard, "_fast_tier_unscoped_declaration",
             lambda root: "marker-based fast/full split; no path subset is meaningful",
         )
-        out = guard.check(_payload(_CLAUDE_KLABAUTER_FAST_TEST_CMD, grant_repo))
+        out = _enveloped(guard.check)(_payload(_CLAUDE_KLABAUTER_FAST_TEST_CMD, grant_repo))
         reason = _reason(out)
         assert "Tier-U" in reason
         assert "authorization grant" in reason
@@ -1987,7 +1992,7 @@ class TestR6DeclaredUnscopedFastTier:
             guard, "_fast_tier_unscoped_declaration",
             lambda root: "chained fast tier for demonstration purposes",
         )
-        out = guard.check(
+        out = _enveloped(guard.check)(
             _payload("with-suite-mutex -- " + chained, grant_repo)
         )
         # Prefixing
@@ -2006,7 +2011,7 @@ class TestR6DeclaredUnscopedFastTier:
         assert "Route this through the suite mutex" in reason
         assert "Detected: pnpm test" in reason
         half = "pnpm run test"
-        out_half = guard.check(_payload(half, grant_repo))
+        out_half = _enveloped(guard.check)(_payload(half, grant_repo))
         reason_half = _reason(out_half)
         assert "Tier-U" in reason_half
 
@@ -2041,7 +2046,7 @@ class TestR6DeclaredUnscopedFastTier:
             guard, "_fast_tier_unscoped_declaration",
             lambda root: "marker-based fast/full split; no path subset is meaningful",
         )
-        out = guard.check(
+        out = _enveloped(guard.check)(
             _payload("with-suite-mutex -- " + chained, grant_repo)
         )
         reason = _reason(out)
@@ -2071,7 +2076,7 @@ class TestR6DeclaredUnscopedFastTier:
             lambda root: "marker-based fast/full split; no path subset is meaningful",
         )
         chained = _CLAUDE_KLABAUTER_FAST_TEST_CMD + " && " + _CLAUDE_KLABAUTER_FAST_TEST_CMD + " tests/test_x.py"
-        out = guard.check(_payload(chained, grant_repo))
+        out = _enveloped(guard.check)(_payload(chained, grant_repo))
         reason = _reason(out)
         assert out is not None
         assert "authorization grant" in reason
@@ -2127,7 +2132,7 @@ class TestConfiguredCmdReachability:
     ])
     def test_declared_suite_denied_for_subagent(self, declared_repo, free_mutex,
                                                 command):
-        reason = _reason(guard.check(
+        reason = _reason(_enveloped(guard.check)(
             _payload(command, declared_repo, agent_id=_AGENT_ID)))
         assert "configured" in reason
 
@@ -2154,7 +2159,7 @@ class TestConfiguredCmdReachability:
         ``test_declared_tie_with_scoped_shape_still_needs_grant`` below
         for that counterexample, pinned directly."""
         monkeypatch.setattr(guard, "_tier_u_grant", lambda cwd: (False, None))
-        assert "Tier-U" in _reason(guard.check(_payload(command, declared_repo)))
+        assert "Tier-U" in _reason(_enveloped(guard.check)(_payload(command, declared_repo)))
 
     def test_declared_tie_with_scoped_shape_still_needs_grant(
             self, declared_repo, free_mutex, monkeypatch):
@@ -2169,7 +2174,7 @@ class TestConfiguredCmdReachability:
         like Tier U (repoints the pre-2026-08-04 assertion that it was
         ungated)."""
         monkeypatch.setattr(guard, "_tier_u_grant", lambda cwd: (False, None))
-        out = guard.check(_payload(
+        out = _enveloped(guard.check)(_payload(
             "python -m pytest coordinator/tests", declared_repo))
         assert "authorization grant" in _reason(out)
 
@@ -2178,7 +2183,7 @@ class TestConfiguredCmdReachability:
         """The companion case: the same Tier-F tie shape IS allowed once a
         live Tier-U grant is held -- one grant record covers both tiers."""
         monkeypatch.setattr(guard, "_tier_u_grant", lambda cwd: (True, None))
-        assert guard.check(_payload(
+        assert _enveloped(guard.check)(_payload(
             "with-suite-mutex -- python -m pytest coordinator/tests",
             declared_repo,
         )) is None
@@ -2193,7 +2198,7 @@ class TestConfiguredCmdReachability:
         the declared one does not carry the declared token, so it stays
         Tier T -- ungated even for a subagent with no grant."""
         monkeypatch.setattr(guard, "_tier_u_grant", lambda cwd: (False, None))
-        _assert_allowed(guard.check(
+        _assert_allowed(_enveloped(guard.check)(
             _payload(command, declared_repo, agent_id=_AGENT_ID)))
 
     # -----------------------------------------------------------------------
@@ -2269,7 +2274,7 @@ class TestConfiguredCmdReachability:
         scoped, narrower invocation of the same runner into Tier F/U -- that
         run stays ungated even for a subagent with no grant."""
         cmd = "pytest coordinator_core/frontmatter/tests/test_x.py::test_y"
-        _assert_allowed(guard.check(
+        _assert_allowed(_enveloped(guard.check)(
             _payload(cmd, bare_runner_repo, agent_id=_AGENT_ID)))
 
     def test_bare_configured_fast_test_cmd_still_leaves_unscoped_run_denied(
@@ -2279,7 +2284,7 @@ class TestConfiguredCmdReachability:
         invocation is still denied, just via the generic shape classifier
         rather than the (now correctly inert for this shape) containment
         leg."""
-        out = guard.check(_payload("pytest", bare_runner_repo, agent_id=_AGENT_ID))
+        out = _enveloped(guard.check)(_payload("pytest", bare_runner_repo, agent_id=_AGENT_ID))
         reason = _reason(out)
         assert "Detected:" in reason
 
@@ -2349,7 +2354,7 @@ class TestRunnerRecognizedNonPythonFamilies:
         classifier in isolation) -- a dispatched subagent is denied outright
         on identity alone regardless of tier, so this pins that the deny
         fires and is not accidentally allowed as an ungated Tier-F run."""
-        reason = _reason(guard.check(
+        reason = _reason(_enveloped(guard.check)(
             _payload("cargo watch -x test", cargo_repo, agent_id=_AGENT_ID)))
         assert "Detected:" in reason
 
@@ -2360,7 +2365,7 @@ class TestRunnerRecognizedNonPythonFamilies:
         ``cargo watch -x test`` must be denied pending a grant -- not
         silently allowed as the repo's configured (ungated) Tier F."""
         monkeypatch.setattr(guard, "_tier_u_grant", lambda cwd: (False, None))
-        reason = _reason(guard.check(_payload("cargo watch -x test", cargo_repo)))
+        reason = _reason(_enveloped(guard.check)(_payload("cargo watch -x test", cargo_repo)))
         assert "Tier-U" in reason
 
     @pytest.fixture
@@ -2534,7 +2539,7 @@ def repo_with_test_dir(repo):
     ],
 )
 def test_subagent_directory_argument_denied(repo_with_test_dir, free_mutex, command):
-    reason = _reason(guard.check(_payload(command, repo_with_test_dir, agent_id=_AGENT_ID)))
+    reason = _reason(_enveloped(guard.check)(_payload(command, repo_with_test_dir, agent_id=_AGENT_ID)))
     assert "Directory arg" in reason
     assert "DR-088 R9" in reason
 
@@ -2546,7 +2551,7 @@ def test_r9_deny_instructs_reporting_the_substitution_to_the_dispatcher(
     and the agent narrows to a file/node-id command, the dispatching EM
     never learned that the brief's breadth was refused. The deny text must
     now instruct the agent to report that substitution back explicitly."""
-    reason = _reason(guard.check(
+    reason = _reason(_enveloped(guard.check)(
         _payload("pytest coordinator_core/frontmatter/tests/sub", repo_with_test_dir,
                  agent_id=_AGENT_ID)
     ))
@@ -2566,7 +2571,7 @@ def test_r9_deny_instructs_reporting_the_substitution_to_the_dispatcher(
     ],
 )
 def test_subagent_precision_shapes_still_allowed(repo_with_test_dir, free_mutex, command):
-    _assert_allowed(guard.check(_payload(command, repo_with_test_dir, agent_id=_AGENT_ID)))
+    _assert_allowed(_enveloped(guard.check)(_payload(command, repo_with_test_dir, agent_id=_AGENT_ID)))
 
 
 @pytest.mark.parametrize(
@@ -2580,7 +2585,7 @@ def test_em_directory_argument_unaffected(repo_with_test_dir, free_mutex, comman
     """R9 narrows the subagent rung ONLY. Directory-level Tier T for the
     top-level EM stays exactly as it was -- the amendment is explicit that
     this is not a fleet-wide narrowing of the EM path."""
-    assert guard.check(_payload(command, repo_with_test_dir)) is None
+    assert _enveloped(guard.check)(_payload(command, repo_with_test_dir)) is None
 
 
 def test_r9_is_additive_suite_shaped_still_gets_the_identity_diagnosis(repo, free_mutex):
@@ -2588,7 +2593,7 @@ def test_r9_is_additive_suite_shaped_still_gets_the_identity_diagnosis(repo, fre
     precision one, and must keep saying so. R9 runs only when the command is
     not suite-shaped, so it can only ever deny what was previously allowed --
     never restate a deny another leg owns with a worse diagnosis."""
-    reason = _reason(guard.check(_payload("pytest coordinator_core/", repo, agent_id=_AGENT_ID)))
+    reason = _reason(_enveloped(guard.check)(_payload("pytest coordinator_core/", repo, agent_id=_AGENT_ID)))
     assert reason.startswith("Full-suite subagent runs are denied")
     assert "Directory arg" not in reason
 
@@ -2602,7 +2607,7 @@ def test_r9_deny_leads_with_the_agents_own_touched_test_files(
         "_agent_touched_test_files",
         lambda raw, sid, root: ["tests/test_alpha.py", "tests/test_beta.py"],
     )
-    reason = _reason(guard.check(
+    reason = _reason(_enveloped(guard.check)(
         _payload("pytest coordinator_core/frontmatter/tests/sub", repo_with_test_dir,
                  agent_id=_AGENT_ID)
     ))
@@ -2618,7 +2623,7 @@ def test_r9_empty_touched_set_still_denies_and_names_the_precise_shapes(
     ids stay permitted because they are self-bounding, but a directory is
     still refused, and the deny has to say what to type instead."""
     monkeypatch.setattr(guard, "_agent_touched_test_files", lambda raw, sid, root: [])
-    reason = _reason(guard.check(
+    reason = _reason(_enveloped(guard.check)(
         _payload("pytest coordinator_core/frontmatter/tests/sub", repo_with_test_dir,
                  agent_id=_AGENT_ID)
     ))
@@ -2681,7 +2686,7 @@ def repo_with_glob_fixtures(repo_with_test_dir):
 def test_subagent_glob_covering_a_real_directory_denied(
     repo_with_glob_fixtures, free_mutex, command
 ):
-    reason = _reason(guard.check(_payload(command, repo_with_glob_fixtures, agent_id=_AGENT_ID)))
+    reason = _reason(_enveloped(guard.check)(_payload(command, repo_with_glob_fixtures, agent_id=_AGENT_ID)))
     assert "Directory arg" in reason
     assert "DR-088 R9" in reason
 
@@ -2691,7 +2696,7 @@ def test_em_glob_covering_a_real_directory_unaffected(repo_with_glob_fixtures, f
     subagent rung only -- the top-level EM (no ``agent_id``) is unaffected,
     same as the literal-directory case in ``test_em_directory_argument_
     unaffected`` above."""
-    assert guard.check(
+    assert _enveloped(guard.check)(
         _payload("pytest coordinator_core/frontmatter/*/sub", repo_with_glob_fixtures)
     ) is None
 
@@ -2704,7 +2709,7 @@ def test_subagent_glob_matching_only_files_is_not_denied(repo_with_glob_fixtures
     would -- narrowing the runner-facing grammar of the argument does not
     change what it is scoped to."""
     command = "pytest coordinator_core/frontmatter/tests/sub/test_*.py"
-    _assert_allowed(guard.check(_payload(command, repo_with_glob_fixtures, agent_id=_AGENT_ID)))
+    _assert_allowed(_enveloped(guard.check)(_payload(command, repo_with_glob_fixtures, agent_id=_AGENT_ID)))
 
 
 def test_subagent_glob_matching_nothing_fails_open(repo_with_glob_fixtures, free_mutex):
@@ -2714,7 +2719,7 @@ def test_subagent_glob_matching_nothing_fails_open(repo_with_glob_fixtures, free
     point the deny at. The identity leg still denies any suite-shaped
     subagent command regardless."""
     command = "pytest coordinator_core/frontmatter/tests/sub/nonexistent_*"
-    _assert_allowed(guard.check(_payload(command, repo_with_glob_fixtures, agent_id=_AGENT_ID)))
+    _assert_allowed(_enveloped(guard.check)(_payload(command, repo_with_glob_fixtures, agent_id=_AGENT_ID)))
 
 
 def test_subagent_glob_shaped_node_id_still_never_returned(repo_with_glob_fixtures, free_mutex):
@@ -2722,7 +2727,7 @@ def test_subagent_glob_shaped_node_id_still_never_returned(repo_with_glob_fixtur
     construction and is never returned, glob-shaped or not -- this is what
     keeps an executor's pre-existing-failure verification legal."""
     command = "pytest coordinator_core/frontmatter/tests/sub/test_*.py::test_case"
-    _assert_allowed(guard.check(_payload(command, repo_with_glob_fixtures, agent_id=_AGENT_ID)))
+    _assert_allowed(_enveloped(guard.check)(_payload(command, repo_with_glob_fixtures, agent_id=_AGENT_ID)))
 
 
 def test_pytest_directory_args_glob_covering_a_directory_is_returned(repo_with_test_dir):
@@ -2779,7 +2784,7 @@ class TestDynamicPrefilterLeg:
         "python3 bin/run-full-test-suite.py --yes",
     ])
     def test_ue_addon_denies_for_subagent(self, ue_addon_repo, free_mutex, command):
-        reason = _reason(guard.check(
+        reason = _reason(_enveloped(guard.check)(
             _payload(command, ue_addon_repo, agent_id=_AGENT_ID)))
         assert "configured" in reason
 
@@ -2788,7 +2793,7 @@ class TestDynamicPrefilterLeg:
         "python3 bin/run-full-test-suite.py --yes",
     ])
     def test_ue_addon_denies_for_em(self, ue_addon_repo, free_mutex, command):
-        reason = _reason(guard.check(_payload(command, ue_addon_repo)))
+        reason = _reason(_enveloped(guard.check)(_payload(command, ue_addon_repo)))
         assert "authorization grant" in reason
 
     def test_example_retrieval_repo_run_tier_tests_denies_without_static_token(
@@ -2810,7 +2815,7 @@ class TestDynamicPrefilterLeg:
         monkeypatch.delenv(guard._OVERRIDE_ENV_VAR, raising=False)
         monkeypatch.delenv("COORDINATOR_FAST_TEST_CMD", raising=False)
         monkeypatch.delenv("COORDINATOR_FULL_TEST_CMD", raising=False)
-        reason = _reason(guard.check(_payload(
+        reason = _reason(_enveloped(guard.check)(_payload(
             "python project_rag_scripts/run_tier_tests.py --tier sufficient",
             tmp_path, agent_id=_AGENT_ID,
         )))
@@ -2833,7 +2838,7 @@ class TestDynamicPrefilterLeg:
         monkeypatch.setenv("COORDINATOR_FAST_TEST_CMD", "bin/run-the-suite.sh --all")
         monkeypatch.delenv("COORDINATOR_FULL_TEST_CMD", raising=False)
         assert not guard._RUNNER_PREFILTER_RE.search("bin/run-the-suite.sh --all")
-        reason = _reason(guard.check(
+        reason = _reason(_enveloped(guard.check)(
             _payload("bin/run-the-suite.sh --all", tmp_path, agent_id=_AGENT_ID)))
         assert "configured" in reason
 
@@ -2841,8 +2846,8 @@ class TestDynamicPrefilterLeg:
         """A command sharing no token with either configured tier stays
         allowed -- the dynamic leg must not widen the gate open for
         everything just because a repo has configured commands."""
-        assert guard.check(_payload("git status", ue_addon_repo)) is None
-        assert guard.check(_payload("echo hello", ue_addon_repo)) is None
+        assert _enveloped(guard.check)(_payload("git status", ue_addon_repo)) is None
+        assert _enveloped(guard.check)(_payload("echo hello", ue_addon_repo)) is None
 
     def test_scoped_pytest_still_allowed_in_dynamic_repo(self, ue_addon_repo, free_mutex):
         """A Tier-T-scoped ``pytest`` invocation stays allowed even in a repo
@@ -2850,7 +2855,7 @@ class TestDynamicPrefilterLeg:
         STATIC regex and is classified/scoped exactly as before; this pins
         that the new leg does not change that pre-existing behavior."""
         command = "pytest bin/test_x.py::test_y"
-        _assert_allowed(guard.check(_payload(command, ue_addon_repo, agent_id=_AGENT_ID)))
+        _assert_allowed(_enveloped(guard.check)(_payload(command, ue_addon_repo, agent_id=_AGENT_ID)))
 
     def test_cheap_repo_root_never_shells_out(self, tmp_path, monkeypatch):
         """``_cheap_repo_root`` must not spawn a subprocess -- pins the
@@ -2973,14 +2978,14 @@ def test_bare_pytest_is_still_suite_shaped():
 def test_value_flag_dot_does_not_unscope_explicit_test_file(repo, free_mutex, flag):
     command = "python -m pytest %s . coordinator_core/x/tests/test_y.py -q" % flag
     assert guard.classify_command(command, cwd=str(repo)) == []
-    _assert_allowed(guard.check(_payload(command, repo, agent_id=_AGENT_ID)))
+    _assert_allowed(_enveloped(guard.check)(_payload(command, repo, agent_id=_AGENT_ID)))
 
 
 def test_rootdir_dot_alone_is_still_unscoped(repo, free_mutex, monkeypatch):
     monkeypatch.setattr(guard, "_tier_u_grant", lambda cwd: (False, None))
     command = "python -m pytest --rootdir ."
     assert guard.classify_command(command, cwd=str(repo)) != []
-    assert guard.check(_payload(command, repo, agent_id=_AGENT_ID)) is not None
+    assert _enveloped(guard.check)(_payload(command, repo, agent_id=_AGENT_ID)) is not None
 
 
 @pytest.fixture
@@ -2995,8 +3000,8 @@ def pnpm_fast_cmd(repo, free_mutex, monkeypatch):
 @pytest.mark.parametrize("launcher", ["pnpm exec", "pnpm dlx", "yarn exec", "npm exec --", "npm exec"])
 def test_pm_exec_scoped_spec_is_not_the_configured_pnpm_test_suite(pnpm_fast_cmd, launcher):
     cmd = "%s playwright test e2e/x.spec.ts" % launcher
-    assert guard.check(_payload(cmd, pnpm_fast_cmd, agent_id=_AGENT_ID)) is None
-    assert guard.check(_payload(cmd, pnpm_fast_cmd)) is None
+    assert _enveloped(guard.check)(_payload(cmd, pnpm_fast_cmd, agent_id=_AGENT_ID)) is None
+    assert _enveloped(guard.check)(_payload(cmd, pnpm_fast_cmd)) is None
 
 
 def test_pm_exec_classifies_exactly_as_npx_and_bare(pnpm_fast_cmd):
@@ -3006,20 +3011,20 @@ def test_pm_exec_classifies_exactly_as_npx_and_bare(pnpm_fast_cmd):
         "vitest run src/a.test.ts",
     ):
         verdicts = {
-            launcher: guard.check(_payload("%s%s" % (launcher, cmd), pnpm_fast_cmd, agent_id=_AGENT_ID)) is None
+            launcher: _enveloped(guard.check)(_payload("%s%s" % (launcher, cmd), pnpm_fast_cmd, agent_id=_AGENT_ID)) is None
             for launcher in ("", "npx ", "pnpm exec ")
         }
         assert len(set(verdicts.values())) == 1, (cmd, verdicts)
 
 
 def test_pm_exec_whole_suite_runner_still_denied(pnpm_fast_cmd):
-    out = guard.check(_payload("pnpm exec vitest run", pnpm_fast_cmd, agent_id=_AGENT_ID))
+    out = _enveloped(guard.check)(_payload("pnpm exec vitest run", pnpm_fast_cmd, agent_id=_AGENT_ID))
     assert out is not None
 
 
 def test_pnpm_test_package_script_keeps_its_verdict(pnpm_fast_cmd):
     for cmd in ("pnpm test", "pnpm run test -- x.test.ts"):
-        assert guard.check(_payload(cmd, pnpm_fast_cmd, agent_id=_AGENT_ID)) is not None
+        assert _enveloped(guard.check)(_payload(cmd, pnpm_fast_cmd, agent_id=_AGENT_ID)) is not None
 
 
 @pytest.mark.parametrize("cmd", [
@@ -3035,8 +3040,8 @@ def test_pnpm_test_package_script_keeps_its_verdict(pnpm_fast_cmd):
 ])
 def test_script_cli_sharing_a_token_with_pnpm_test_is_not_the_configured_suite(pnpm_fast_cmd, cmd):
     assert guard.classify_command(cmd, cwd=str(pnpm_fast_cmd)) == []
-    assert guard.check(_payload(cmd, pnpm_fast_cmd, agent_id=_AGENT_ID)) is None
-    assert guard.check(_payload(cmd, pnpm_fast_cmd)) is None
+    assert _enveloped(guard.check)(_payload(cmd, pnpm_fast_cmd, agent_id=_AGENT_ID)) is None
+    assert _enveloped(guard.check)(_payload(cmd, pnpm_fast_cmd)) is None
 
 
 @pytest.mark.parametrize("cmd", [
@@ -3049,7 +3054,7 @@ def test_script_cli_sharing_a_token_with_pnpm_test_is_not_the_configured_suite(p
 ])
 def test_script_cli_carve_out_keeps_real_pnpm_test_runs_denied(pnpm_fast_cmd, cmd):
     assert guard.classify_command(cmd, cwd=str(pnpm_fast_cmd)) != []
-    assert guard.check(_payload(cmd, pnpm_fast_cmd, agent_id=_AGENT_ID)) is not None
+    assert _enveloped(guard.check)(_payload(cmd, pnpm_fast_cmd, agent_id=_AGENT_ID)) is not None
 
 
 def test_script_cli_carve_out_does_not_apply_when_config_names_the_script(repo, free_mutex, monkeypatch):
@@ -3058,7 +3063,7 @@ def test_script_cli_carve_out_does_not_apply_when_config_names_the_script(repo, 
         lambda root: [guard.ConfiguredCmd("fast_test_cmd", "pnpm tsx scripts/run-suite.ts --all", 0)],
     )
     cmd = "pnpm tsx scripts/run-suite.ts --all -q"
-    assert guard.check(_payload(cmd, repo, agent_id=_AGENT_ID)) is not None
+    assert _enveloped(guard.check)(_payload(cmd, repo, agent_id=_AGENT_ID)) is not None
 
 
 def test_pm_exec_without_a_runner_is_not_peeled():
@@ -3078,7 +3083,7 @@ class TestReuseFreshDeferral:
         "FOO=1 with-suite-mutex --reuse-fresh -- pytest",
     ])
     def test_allows_without_grant_or_free_mutex(self, grant_repo, held_mutex, command):
-        assert guard.check(_payload(command, grant_repo)) is None
+        assert _enveloped(guard.check)(_payload(command, grant_repo)) is None
 
     @pytest.mark.parametrize("command", [
         "with-suite-mutex -- pytest --reuse-fresh",
@@ -3091,9 +3096,9 @@ class TestReuseFreshDeferral:
         "pytest",
     ])
     def test_denies_when_flag_absent_misplaced_or_decoyed(self, grant_repo, free_mutex, command):
-        assert guard.check(_payload(command, grant_repo)) is not None
+        assert _enveloped(guard.check)(_payload(command, grant_repo)) is not None
 
     def test_subagent_still_denied(self, grant_repo, free_mutex):
-        out = guard.check(_payload(
+        out = _enveloped(guard.check)(_payload(
             "with-suite-mutex --reuse-fresh -- pytest", grant_repo, agent_id=_AGENT_ID))
         assert out is not None

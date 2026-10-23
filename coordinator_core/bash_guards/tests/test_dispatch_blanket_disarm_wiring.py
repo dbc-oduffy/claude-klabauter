@@ -37,6 +37,8 @@ import pytest
 from coordinator_core.bash_guards import _blanket_disarm as bd
 from coordinator_core.bash_guards import dispatch
 from coordinator_core.bash_guards.dispatch import GuardBand, GuardEntry
+from coordinator_core.guard_messages.alternative_record import AlternativeRecord, ReadyCommand
+from coordinator_core.guard_messages.testing import envelope_of
 
 
 @pytest.fixture(autouse=True)
@@ -77,10 +79,26 @@ def _run(payload):
     return dispatch.evaluate_payload_json(json.dumps(payload))
 
 
+def _marker_record(kind, tag):
+    return AlternativeRecord(kind, tag, (ReadyCommand("true"),), "fake-" + tag, em_text=tag)
+
+
+_ADV_REC = _marker_record("advisory", "advisory")
+_PLAT_REC = _marker_record("deny", "platform")
+_CONF_REC = _marker_record("deny", "confinement-deny-fired")
+_ADV_ENV = envelope_of(_ADV_REC)
+
+
+def _deny_reason(out):
+    """The dispatcher stamps a guard footer on a deny, so a deny is matched by its reason prefix."""
+    assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+    return out["hookSpecificOutput"]["permissionDecisionReason"]
+
+
 _FAKE_CHAIN = [
     GuardEntry("fake-confinement", lambda: None, True, GuardBand.CONFINEMENT_DENY),
-    GuardEntry("fake-advisory", lambda: {"marker": "advisory"}, False, GuardBand.ADVISORY_REWRITE),
-    GuardEntry("fake-platform", lambda: {"marker": "platform"}, True, GuardBand.PLATFORM_CONDITIONED_DENY),
+    GuardEntry("fake-advisory", lambda: _ADV_REC, False, GuardBand.ADVISORY_REWRITE),
+    GuardEntry("fake-platform", lambda: _PLAT_REC, True, GuardBand.PLATFORM_CONDITIONED_DENY),
 ]
 
 
@@ -90,7 +108,7 @@ class TestControlledBandSuppression:
         monkeypatch.setattr(dispatch, "_build_guard_chain", lambda *a, **k: list(_FAKE_CHAIN))
 
     def test_no_marker_runs_every_guard_first_non_none_wins(self):
-        assert _run(EM_PAYLOAD) == {"marker": "advisory"}
+        assert _run(EM_PAYLOAD) == _ADV_ENV
 
     def test_advisory_rewrite_suppressed_falls_through_to_platform(self, tmp_path):
         now = datetime.now(timezone.utc)
@@ -98,7 +116,7 @@ class TestControlledBandSuppression:
             tmp_path,
             f"Scope: machine-total\nSince: {_iso(now)}\nBands: advisory-rewrite\nReason: x\n",
         )
-        assert _run(EM_PAYLOAD) == {"marker": "platform"}
+        assert _deny_reason(_run(EM_PAYLOAD)).startswith("platform")
 
     def test_both_suppressible_bands_suppressed_yields_none(self, tmp_path):
         now = datetime.now(timezone.utc)
@@ -122,7 +140,7 @@ class TestControlledBandSuppression:
         # SCOPED SUPPRESSION" doctring) -- so NEITHER band is suppressed,
         # not even the otherwise-legitimate advisory-rewrite one. Proves
         # this at the dispatcher level: fake-advisory still fires.
-        assert _run(EM_PAYLOAD) == {"marker": "advisory"}
+        assert _run(EM_PAYLOAD) == _ADV_ENV
 
     def test_confinement_deny_never_suppressed_even_if_fake_confinement_denied(self, monkeypatch, tmp_path):
         """Belt-and-suspenders: even if a CONFINEMENT_DENY guard actually
@@ -130,8 +148,8 @@ class TestControlledBandSuppression:
         naming every band (rejected whole for naming confinement-deny)
         must not suppress it."""
         denying_chain = [
-            GuardEntry("fake-confinement-deny", lambda: {"marker": "confinement-deny-fired"}, True, GuardBand.CONFINEMENT_DENY),
-            GuardEntry("fake-advisory", lambda: {"marker": "advisory"}, False, GuardBand.ADVISORY_REWRITE),
+            GuardEntry("fake-confinement-deny", lambda: _CONF_REC, True, GuardBand.CONFINEMENT_DENY),
+            GuardEntry("fake-advisory", lambda: _ADV_REC, False, GuardBand.ADVISORY_REWRITE),
         ]
         monkeypatch.setattr(dispatch, "_build_guard_chain", lambda *a, **k: list(denying_chain))
         now = datetime.now(timezone.utc)
@@ -141,7 +159,7 @@ class TestControlledBandSuppression:
             f"Since: {_iso(now)}\n"
             "Bands: advisory-rewrite,confinement-deny\nReason: x\n",
         )
-        assert _run(EM_PAYLOAD) == {"marker": "confinement-deny-fired"}
+        assert _deny_reason(_run(EM_PAYLOAD)).startswith("confinement-deny-fired")
 
     def test_session_scope_does_not_leak_to_dispatched_subagent(self, tmp_path):
         now = datetime.now(timezone.utc)
@@ -152,7 +170,7 @@ class TestControlledBandSuppression:
             "Bands: advisory-rewrite,platform-conditioned-deny\nReason: x\n",
         )
         assert _run(EM_PAYLOAD) is None
-        assert _run(SUBAGENT_PAYLOAD) == {"marker": "advisory"}
+        assert _run(SUBAGENT_PAYLOAD) == _ADV_ENV
 
     def test_machine_total_scope_never_disarms_a_subagent(self, tmp_path):
         now = datetime.now(timezone.utc)
@@ -162,14 +180,14 @@ class TestControlledBandSuppression:
             "Bands: advisory-rewrite,platform-conditioned-deny\nReason: x\n",
         )
         assert _run(EM_PAYLOAD) is None
-        assert _run(SUBAGENT_PAYLOAD) == {"marker": "advisory"}
+        assert _run(SUBAGENT_PAYLOAD) == _ADV_ENV
 
     def test_absent_marker_stays_fully_armed(self):
-        assert _run(EM_PAYLOAD) == {"marker": "advisory"}
+        assert _run(EM_PAYLOAD) == _ADV_ENV
 
     def test_malformed_marker_stays_fully_armed(self, tmp_path):
         _write_marker(tmp_path, "this is garbage, not Key: value shaped \x00")
-        assert _run(EM_PAYLOAD) == {"marker": "advisory"}
+        assert _run(EM_PAYLOAD) == _ADV_ENV
 
     def test_expired_marker_stays_fully_armed(self, tmp_path):
         now = datetime.now(timezone.utc)
@@ -179,7 +197,7 @@ class TestControlledBandSuppression:
             f"Since: {_iso(now - timedelta(hours=2))}\nExpires: {_iso(now - timedelta(hours=1))}\n"
             "Bands: advisory-rewrite,platform-conditioned-deny\nReason: x\n",
         )
-        assert _run(EM_PAYLOAD) == {"marker": "advisory"}
+        assert _run(EM_PAYLOAD) == _ADV_ENV
 
 
 class TestRealGuardSuppression:

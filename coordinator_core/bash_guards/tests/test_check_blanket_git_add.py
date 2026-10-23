@@ -59,6 +59,11 @@ import pytest
 from coordinator_core.bash_guards import dispatch_checks as guard
 from coordinator_core.bash_guards import _dc_git_probe, _dc_git_shared
 from coordinator_core.bash_guards._message_size import MESSAGE_PROSE_CAP_BYTES, measure_envelope
+from coordinator_core.guard_messages.testing import envelope_of
+
+
+def _enveloped(check):
+    return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 
 def _set_fake_home(monkeypatch, home_path):
@@ -92,7 +97,7 @@ def _check(monkeypatch, tmp_path, cmd, *, hazard, session_id="sess1"):
     root.mkdir(parents=True, exist_ok=True)
     _wire_git_root(monkeypatch, str(root))
     _wire_hazard(monkeypatch, is_hazard=hazard)
-    return guard.check_blanket_git_add(cmd, session_id)
+    return _enveloped(guard.check_blanket_git_add)(cmd, session_id)
 
 
 def _denies(monkeypatch, tmp_path, cmd, **kw):
@@ -208,7 +213,7 @@ def test_dash_c_value_used_to_resolve_git_root_cwd(monkeypatch, tmp_path):
     monkeypatch.setattr(_dc_git_shared, "_is_hazard_repo", lambda root: True)
 
     explicit_target = str(tmp_path / "explicit" / "target")
-    guard.check_blanket_git_add("git -C %s add -A" % explicit_target, "sess1")
+    _enveloped(guard.check_blanket_git_add)("git -C %s add -A" % explicit_target, "sess1")
 
     assert seen_cwd["cwd"] == explicit_target
 
@@ -226,7 +231,7 @@ def test_absolute_pathspec_equal_to_repo_root_denies_in_hazard_repo(monkeypatch,
     root.mkdir(parents=True, exist_ok=True)
     _wire_git_root(monkeypatch, str(root))
     _wire_hazard(monkeypatch, is_hazard=True)
-    result = guard.check_blanket_git_add("git add %s" % root, "sess1")
+    result = _enveloped(guard.check_blanket_git_add)("git add %s" % root, "sess1")
     assert result is not None
     assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
@@ -238,7 +243,7 @@ def test_absolute_pathspec_trailing_slash_equal_to_repo_root_denies_in_hazard_re
     root.mkdir(parents=True, exist_ok=True)
     _wire_git_root(monkeypatch, str(root))
     _wire_hazard(monkeypatch, is_hazard=True)
-    result = guard.check_blanket_git_add("git add %s/" % root, "sess1")
+    result = _enveloped(guard.check_blanket_git_add)("git add %s/" % root, "sess1")
     assert result is not None
     assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
@@ -249,7 +254,7 @@ def test_absolute_pathspec_denies_in_the_backslash_spelling(monkeypatch, tmp_pat
     _wire_git_root(monkeypatch, str(root))
     _wire_hazard(monkeypatch, is_hazard=True)
     backslashed = str(root).replace("/", "\\")
-    result = guard.check_blanket_git_add("git add %s" % backslashed, "sess1")
+    result = _enveloped(guard.check_blanket_git_add)("git add %s" % backslashed, "sess1")
     assert result is not None
     assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
@@ -259,8 +264,8 @@ def test_both_separator_spellings_reach_the_same_verdict(monkeypatch, tmp_path):
     root.mkdir(parents=True, exist_ok=True)
     _wire_git_root(monkeypatch, str(root))
     _wire_hazard(monkeypatch, is_hazard=True)
-    fwd = guard.check_blanket_git_add("git add %s" % str(root).replace("\\", "/"), "s")
-    back = guard.check_blanket_git_add("git add %s" % str(root).replace("/", "\\"), "s")
+    fwd = _enveloped(guard.check_blanket_git_add)("git add %s" % str(root).replace("\\", "/"), "s")
+    back = _enveloped(guard.check_blanket_git_add)("git add %s" % str(root).replace("/", "\\"), "s")
     assert (fwd is None) == (back is None)
 
 
@@ -270,7 +275,7 @@ def test_a_scoped_subtree_in_the_backslash_spelling_still_passes(monkeypatch, tm
     _wire_git_root(monkeypatch, str(root))
     _wire_hazard(monkeypatch, is_hazard=True)
     sub = str(root / "sub").replace("/", "\\")
-    assert guard.check_blanket_git_add("git add %s" % sub, "sess1") is None
+    assert _enveloped(guard.check_blanket_git_add)("git add %s" % sub, "sess1") is None
 
 
 def test_absolute_pathspec_subdirectory_allows_in_hazard_repo(monkeypatch, tmp_path):
@@ -278,7 +283,7 @@ def test_absolute_pathspec_subdirectory_allows_in_hazard_repo(monkeypatch, tmp_p
     root.mkdir(parents=True, exist_ok=True)
     _wire_git_root(monkeypatch, str(root))
     _wire_hazard(monkeypatch, is_hazard=True)
-    result = guard.check_blanket_git_add("git add %s/subdir/file.py" % root, "sess1")
+    result = _enveloped(guard.check_blanket_git_add)("git add %s/subdir/file.py" % root, "sess1")
     assert result is None
 
 
@@ -306,7 +311,7 @@ def test_explicit_pathspec_separator_at_repo_root_still_denies_in_hazard_repo(
     root.mkdir(parents=True, exist_ok=True)
     _wire_git_root(monkeypatch, str(root))
     _wire_hazard(monkeypatch, is_hazard=True)
-    result = guard.check_blanket_git_add("git add -- %s" % root, "sess1")
+    result = _enveloped(guard.check_blanket_git_add)("git add -- %s" % root, "sess1")
     assert result is not None
     assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
@@ -375,7 +380,7 @@ def test_unresolvable_git_root_allows(monkeypatch, tmp_path):
         return 128, ""
 
     monkeypatch.setattr(_dc_git_probe, "_run_git", _fake_run_git)
-    result = guard.check_blanket_git_add("git add -A", "sess1")
+    result = _enveloped(guard.check_blanket_git_add)("git add -A", "sess1")
     assert result is None
 
 

@@ -34,6 +34,11 @@ from typing import List
 import pytest
 
 from coordinator_core.bash_guards import check_test_suite_invocation as guard
+from coordinator_core.guard_messages.testing import envelope_of
+
+
+def _enveloped(check):
+    return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 _AGENT_ID = "a0123456789abcdef"
 
@@ -109,7 +114,7 @@ def _deny_messages() -> List[tuple]:
                          ids=lambda v: v if isinstance(v, str) and "\n" not in v else "")
 def test_offered_alternative_is_allowed_by_this_guard(label, message, agent_id, repo):
     for alternative in _alternatives(message):
-        assert not _refused(guard.check(_payload(alternative, repo, agent_id))), (
+        assert not _refused(_enveloped(guard.check)(_payload(alternative, repo, agent_id))), (
             "%s deny text offers a command this guard refuses: %r" % (label, alternative)
         )
 
@@ -120,7 +125,7 @@ def test_offered_alternative_captures_output_without_flipping_the_verdict(
         label, message, agent_id, repo):
     for alternative in _alternatives(message):
         piped = "%s 2>&1 | tail -20" % alternative
-        assert not _refused(guard.check(_payload(piped, repo, agent_id))), (
+        assert not _refused(_enveloped(guard.check)(_payload(piped, repo, agent_id))), (
             "%s alternative flips to a deny once output is captured: %r"
             % (label, piped)
         )

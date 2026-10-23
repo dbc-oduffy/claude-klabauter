@@ -11,6 +11,11 @@ import subprocess
 import pytest
 
 from coordinator_core.bash_guards import dispatch_checks
+from coordinator_core.guard_messages.testing import envelope_of
+
+
+def _enveloped(check):
+    return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 pytestmark = pytest.mark.spawns_process
 
@@ -58,7 +63,7 @@ def _cmd(repo, *carriers, extra=""):
 
 
 def _out(cmd, payload=None):
-    return dispatch_checks.check_git_commit_safe_commit_advise(cmd, "sess-named", payload)
+    return _enveloped(dispatch_checks.check_git_commit_safe_commit_advise)(cmd, "sess-named", payload)
 
 
 def _decision(out):

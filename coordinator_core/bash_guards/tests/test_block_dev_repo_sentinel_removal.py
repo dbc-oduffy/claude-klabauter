@@ -24,6 +24,11 @@ from coordinator_core.bash_guards import _verdict
 from coordinator_core.bash_guards import block_dev_repo_sentinel_removal as guard
 from coordinator_core.bash_guards import dispatch
 from coordinator_core.bash_guards._helpers import OVERRIDE_KEYS_DOC_DISPLAY
+from coordinator_core.guard_messages.testing import envelope_of
+
+
+def _enveloped(check):
+    return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 
 SENTINEL = ".coordinator-dev-repo"
@@ -69,88 +74,88 @@ def _advisory_text(out):
 
 class TestNonBashOrEmpty:
     def test_non_bash_tool_allows(self):
-        assert guard.check({"tool_name": "Edit", "tool_input": {"file_path": "x"}}) is None
+        assert _enveloped(guard.check)({"tool_name": "Edit", "tool_input": {"file_path": "x"}}) is None
 
     def test_empty_command_allows(self):
-        assert guard.check(_payload("")) is None
+        assert _enveloped(guard.check)(_payload("")) is None
 
     def test_malformed_tool_input_allows(self):
-        assert guard.check({"tool_name": "Bash", "tool_input": "not-a-dict"}) is None
+        assert _enveloped(guard.check)({"tool_name": "Bash", "tool_input": "not-a-dict"}) is None
 
     def test_no_sentinel_mention_allows(self):
-        assert guard.check(_payload("git status && ls -la")) is None
+        assert _enveloped(guard.check)(_payload("git status && ls -la")) is None
 
 
 class TestDirectRemovalDenies:
     def test_rm_denies(self):
-        _deny_reason(guard.check(_payload("rm %s" % SENTINEL)))
+        _deny_reason(_enveloped(guard.check)(_payload("rm %s" % SENTINEL)))
 
     def test_rm_dash_f_denies(self):
-        _deny_reason(guard.check(_payload("rm -f ./%s" % SENTINEL)))
+        _deny_reason(_enveloped(guard.check)(_payload("rm -f ./%s" % SENTINEL)))
 
     def test_unlink_denies(self):
-        _deny_reason(guard.check(_payload("unlink %s" % SENTINEL)))
+        _deny_reason(_enveloped(guard.check)(_payload("unlink %s" % SENTINEL)))
 
     def test_mv_source_denies(self):
-        _deny_reason(guard.check(_payload("mv %s /tmp/x" % SENTINEL)))
+        _deny_reason(_enveloped(guard.check)(_payload("mv %s /tmp/x" % SENTINEL)))
 
     def test_git_rm_denies(self):
-        _deny_reason(guard.check(_payload("git rm %s" % SENTINEL)))
+        _deny_reason(_enveloped(guard.check)(_payload("git rm %s" % SENTINEL)))
 
     def test_git_mv_source_denies(self):
-        _deny_reason(guard.check(_payload("git mv %s other" % SENTINEL)))
+        _deny_reason(_enveloped(guard.check)(_payload("git mv %s other" % SENTINEL)))
 
     def test_git_dash_capital_c_rm_denies(self):
-        _deny_reason(guard.check(_payload("git -C /repo rm %s" % SENTINEL)))
+        _deny_reason(_enveloped(guard.check)(_payload("git -C /repo rm %s" % SENTINEL)))
 
     def test_bash_dash_c_wrapped_rm_denies(self):
-        _deny_reason(guard.check(_payload('bash -c "rm %s"' % SENTINEL)))
+        _deny_reason(_enveloped(guard.check)(_payload('bash -c "rm %s"' % SENTINEL)))
 
     def test_case_varied_basename_denies(self):
-        _deny_reason(guard.check(_payload("rm .COORDINATOR-DEV-REPO")))
+        _deny_reason(_enveloped(guard.check)(_payload("rm .COORDINATOR-DEV-REPO")))
 
     def test_windows_separator_path_denies(self):
         sep = chr(92) * 2
         cmd = "rm relative%sdir%s%s" % (sep, sep, SENTINEL)
-        _deny_reason(guard.check(_payload(cmd)))
+        _deny_reason(_enveloped(guard.check)(_payload(cmd)))
 
     def test_find_delete_denies(self):
-        _deny_reason(guard.check(_payload("find . -name %s -delete" % SENTINEL)))
+        _deny_reason(_enveloped(guard.check)(_payload("find . -name %s -delete" % SENTINEL)))
 
     def test_find_exec_rm_denies(self):
-        _deny_reason(guard.check(_payload("find . -name %s -exec rm {} \\;" % SENTINEL)))
+        _deny_reason(_enveloped(guard.check)(_payload("find . -name %s -exec rm {} \\;" % SENTINEL)))
 
     def test_python_dash_c_remove_verb_denies(self):
         code = "import os; os.remove('%s')" % SENTINEL
-        _deny_reason(guard.check(_payload('python3 -c "%s"' % code)))
+        _deny_reason(_enveloped(guard.check)(_payload('python3 -c "%s"' % code)))
 
 
 class TestPassSet:
 
     def test_rm_unrelated_file_allows(self):
-        assert guard.check(_payload("rm somefile.txt")) is None
+        assert _enveloped(guard.check)(_payload("rm somefile.txt")) is None
 
     def test_mv_unrelated_allows(self):
-        assert guard.check(_payload("mv a b")) is None
+        assert _enveloped(guard.check)(_payload("mv a b")) is None
 
     def test_git_rm_unrelated_allows(self):
-        assert guard.check(_payload("git rm coordinator/foo.py")) is None
+        assert _enveloped(guard.check)(_payload("git rm coordinator/foo.py")) is None
 
     def test_python_read_only_probe_allows(self):
         code = "from pathlib import Path; print(Path('%s').exists())" % SENTINEL
-        assert guard.check(_payload('python3 -c "%s"' % code)) is None
+        assert _enveloped(guard.check)(_payload('python3 -c "%s"' % code)) is None
 
     def test_mention_in_comment_allows(self):
-        assert guard.check(_payload("echo 'do not touch %s'" % SENTINEL)) is None
+        assert _enveloped(guard.check)(_payload("echo 'do not touch %s'" % SENTINEL)) is None
 
     def test_grep_allows(self):
-        assert guard.check(_payload("grep -n %s some/file" % SENTINEL)) is None
+        assert _enveloped(guard.check)(_payload("grep -n %s some/file" % SENTINEL)) is None
 
     def test_cat_allows(self):
-        assert guard.check(_payload("cat %s" % SENTINEL)) is None
+        assert _enveloped(guard.check)(_payload("cat %s" % SENTINEL)) is None
 
     def test_mv_as_destination_allows(self):
-        assert guard.check(_payload("mv something %s" % SENTINEL)) is None
+        assert _enveloped(guard.check)(_payload("mv something %s" % SENTINEL)) is None
 
 
 class TestAdvisoryOnUnexaminableIndirection:
@@ -158,25 +163,25 @@ class TestAdvisoryOnUnexaminableIndirection:
     (deny-only) returns None for it."""
 
     def test_xargs_advisory_not_deny(self):
-        out = guard.check_advisory(_payload("echo %s | xargs rm" % SENTINEL))
+        out = _enveloped(guard.check_advisory)(_payload("echo %s | xargs rm" % SENTINEL))
         _advisory_text(out)
 
     def test_xargs_check_leg_allows_with_no_content(self):
-        assert guard.check(_payload("echo %s | xargs rm" % SENTINEL)) is None
+        assert _enveloped(guard.check)(_payload("echo %s | xargs rm" % SENTINEL)) is None
 
     def test_bare_file_interpreter_unrelated_allows(self):
-        out = guard.check_advisory(_payload("bash /tmp/some-script.sh"))
+        out = _enveloped(guard.check_advisory)(_payload("bash /tmp/some-script.sh"))
         assert out is None
 
     def test_stdin_piped_interpreter_advisory(self):
-        out = guard.check_advisory(_payload("echo %s | bash" % SENTINEL))
+        out = _enveloped(guard.check_advisory)(_payload("echo %s | bash" % SENTINEL))
         _advisory_text(out)
 
     def test_stdin_check_leg_allows_with_no_content(self):
-        assert guard.check(_payload("echo %s | bash" % SENTINEL)) is None
+        assert _enveloped(guard.check)(_payload("echo %s | bash" % SENTINEL)) is None
 
     def test_advisory_does_not_name_sentinel(self):
-        out = guard.check_advisory(_payload("echo %s | xargs rm" % SENTINEL))
+        out = _enveloped(guard.check_advisory)(_payload("echo %s | xargs rm" % SENTINEL))
         text = _advisory_text(out)
         assert SENTINEL not in text
 
@@ -184,24 +189,24 @@ class TestAdvisoryOnUnexaminableIndirection:
 class TestOverrideEnvVar:
     def test_override_allows_direct_deny(self, monkeypatch):
         monkeypatch.setenv("COORDINATOR_OVERRIDE_DEV_REPO_SENTINEL", "1")
-        assert guard.check(_payload("rm %s" % SENTINEL)) is None
+        assert _enveloped(guard.check)(_payload("rm %s" % SENTINEL)) is None
 
     def test_override_allows_indirection_advisory(self, monkeypatch):
         monkeypatch.setenv("COORDINATOR_OVERRIDE_DEV_REPO_SENTINEL", "1")
-        assert guard.check(_payload("echo %s | xargs rm" % SENTINEL)) is None
+        assert _enveloped(guard.check)(_payload("echo %s | xargs rm" % SENTINEL)) is None
 
     def test_override_allows_advisory_leg(self, monkeypatch):
         monkeypatch.setenv("COORDINATOR_OVERRIDE_DEV_REPO_SENTINEL", "1")
-        assert guard.check_advisory(_payload("echo %s | xargs rm" % SENTINEL)) is None
+        assert _enveloped(guard.check_advisory)(_payload("echo %s | xargs rm" % SENTINEL)) is None
 
 
 class TestDenyMessageDiscipline:
     def test_deny_reason_never_names_the_sentinel(self):
-        reason = _deny_reason(guard.check(_payload("rm %s" % SENTINEL)))
+        reason = _deny_reason(_enveloped(guard.check)(_payload("rm %s" % SENTINEL)))
         assert SENTINEL not in reason
 
     def test_deny_reason_is_offer_shaped(self):
-        reason = _deny_reason(guard.check(_payload("rm %s" % SENTINEL)))
+        reason = _deny_reason(_enveloped(guard.check)(_payload("rm %s" % SENTINEL)))
         assert reason.split(":", 1)[1].strip().lower().startswith("instead")
 
     def test_deny_reason_advertises_override(self):
@@ -214,17 +219,17 @@ class TestDenyMessageDiscipline:
         # assignment form -- it points to the reference doc instead.
         # Asserting a pasteable `KEY=1` literal was stale against that
         # doctrine.
-        reason = _deny_reason(guard.check(_payload("rm %s" % SENTINEL)))
+        reason = _deny_reason(_enveloped(guard.check)(_payload("rm %s" % SENTINEL)))
         # RETARGETED 2026-08-30 (DR-290 form 1 -> form 2).
         assert OVERRIDE_KEYS_DOC_DISPLAY in reason
 
 
 class TestNotIdentityGated:
     def test_denies_without_any_identity_fields(self):
-        _deny_reason(guard.check(_payload("rm %s" % SENTINEL)))
+        _deny_reason(_enveloped(guard.check)(_payload("rm %s" % SENTINEL)))
 
     def test_denies_with_subagent_identity(self):
-        out = guard.check(
+        out = _enveloped(guard.check)(
             _payload(
                 "rm %s" % SENTINEL,
                 agent_id="a0123456789abcdef",
@@ -311,12 +316,12 @@ class TestAdvisoryLegAtItsNewChainPosition:
         advisory shape for any of the three trigger shapes -- only `None`
         or a deny."""
         for cmd in self._TRIGGER_SHAPES:
-            out = guard.check(_payload(cmd))
+            out = _enveloped(guard.check)(_payload(cmd))
             assert out is None, (cmd, out)
 
     def test_advisory_leg_fires_for_each_trigger_shape(self):
         for cmd in self._TRIGGER_SHAPES:
-            out = guard.check_advisory(_payload(cmd))
+            out = _enveloped(guard.check_advisory)(_payload(cmd))
             _advisory_text(out)
 
     def test_advisory_no_longer_shadows_a_downstream_deny(self):
@@ -340,7 +345,7 @@ class TestAdvisoryLegAtItsNewChainPosition:
         cmd = "echo %s | xargs rm; git stash drop" % SENTINEL
         payload = _payload(cmd)
 
-        assert guard.check(payload) is None
+        assert _enveloped(guard.check)(payload) is None
 
         chain = dispatch._build_guard_chain(
             cmd=cmd,
@@ -359,7 +364,7 @@ class TestAdvisoryLegAtItsNewChainPosition:
         start = 0
         first_non_none = None
         for i in range(start, len(chain)):
-            envelope = chain[i].fn()
+            envelope = envelope_of(chain[i].fn(), "em")
             if envelope is not None:
                 first_non_none = (i, chain[i].name, envelope)
                 break
@@ -389,34 +394,34 @@ class TestPowerShellDialect:
 
     @requires_powershell_grammar
     def test_remove_item_denies(self):
-        out = guard.check(
+        out = _enveloped(guard.check)(
             _payload("Remove-Item %s" % SENTINEL, tool_name="PowerShell")
         )
         _deny_reason(out)
 
     @requires_powershell_grammar
     def test_ri_alias_denies(self):
-        out = guard.check(_payload("ri %s" % SENTINEL, tool_name="PowerShell"))
+        out = _enveloped(guard.check)(_payload("ri %s" % SENTINEL, tool_name="PowerShell"))
         _deny_reason(out)
 
     @requires_powershell_grammar
     def test_rd_alias_denies(self):
-        out = guard.check(_payload("rd %s" % SENTINEL, tool_name="PowerShell"))
+        out = _enveloped(guard.check)(_payload("rd %s" % SENTINEL, tool_name="PowerShell"))
         _deny_reason(out)
 
     @requires_powershell_grammar
     def test_del_alias_denies(self):
-        out = guard.check(_payload("del %s" % SENTINEL, tool_name="PowerShell"))
+        out = _enveloped(guard.check)(_payload("del %s" % SENTINEL, tool_name="PowerShell"))
         _deny_reason(out)
 
     @requires_powershell_grammar
     def test_rm_alias_still_denies_under_powershell(self):
-        out = guard.check(_payload("rm %s" % SENTINEL, tool_name="PowerShell"))
+        out = _enveloped(guard.check)(_payload("rm %s" % SENTINEL, tool_name="PowerShell"))
         _deny_reason(out)
 
     @requires_powershell_grammar
     def test_remove_item_with_recurse_force_flags_denies(self):
-        out = guard.check(
+        out = _enveloped(guard.check)(
             _payload(
                 "Remove-Item -Recurse -Force %s" % SENTINEL, tool_name="PowerShell"
             )
@@ -426,25 +431,25 @@ class TestPowerShellDialect:
     @requires_powershell_grammar
     def test_remove_item_unrelated_target_allows(self):
         assert (
-            guard.check(_payload("Remove-Item somefile.txt", tool_name="PowerShell"))
+            _enveloped(guard.check)(_payload("Remove-Item somefile.txt", tool_name="PowerShell"))
             is None
         )
 
     @requires_powershell_grammar
     def test_git_rm_denies_under_powershell(self):
-        out = guard.check(_payload("git rm %s" % SENTINEL, tool_name="PowerShell"))
+        out = _enveloped(guard.check)(_payload("git rm %s" % SENTINEL, tool_name="PowerShell"))
         _deny_reason(out)
 
     @requires_powershell_grammar
     def test_unlink_alias_has_no_powershell_equivalent_and_allows(self):
         assert (
-            guard.check(_payload("unlink %s" % SENTINEL, tool_name="PowerShell"))
+            _enveloped(guard.check)(_payload("unlink %s" % SENTINEL, tool_name="PowerShell"))
             is None
         )
 
     def test_unrecognized_tool_name_records_silent_not_a_guess(self):
         with _verdict.collecting() as silences:
-            out = guard.check_advisory(
+            out = _enveloped(guard.check_advisory)(
                 _payload("Remove-Item %s" % SENTINEL, tool_name="Zsh")
             )
         assert out is None
@@ -452,7 +457,7 @@ class TestPowerShellDialect:
 
     def test_check_leg_also_silent_on_unrecognized_dialect(self):
         with _verdict.collecting() as silences:
-            out = guard.check(_payload("rm %s" % SENTINEL, tool_name="Zsh"))
+            out = _enveloped(guard.check)(_payload("rm %s" % SENTINEL, tool_name="Zsh"))
         assert out is None
         assert _verdict.was_silent(guard._GUARD_NAME, silences)
 
@@ -469,7 +474,7 @@ class TestPowerShellIndirectionDeclinesRatherThanClean:
     @requires_powershell_grammar
     def test_xargs_wrapper_records_silent_not_clean(self):
         with _verdict.collecting() as silences:
-            out = guard.check_advisory(
+            out = _enveloped(guard.check_advisory)(
                 _payload("echo %s | xargs rm" % SENTINEL, tool_name="PowerShell")
             )
         assert out is None
@@ -478,7 +483,7 @@ class TestPowerShellIndirectionDeclinesRatherThanClean:
     @requires_powershell_grammar
     def test_dash_c_flag_wrapper_records_silent_not_clean(self):
         with _verdict.collecting() as silences:
-            out = guard.check_advisory(
+            out = _enveloped(guard.check_advisory)(
                 _payload('bash -c "rm %s"' % SENTINEL, tool_name="PowerShell")
             )
         assert out is None
@@ -492,7 +497,7 @@ class TestPowerShellIndirectionDeclinesRatherThanClean:
         # over-classify an env-prefixed but otherwise plain command as
         # unresolved indirection.
         with _verdict.collecting() as silences:
-            out = guard.check(
+            out = _enveloped(guard.check)(
                 _payload("env FOO=bar rm %s" % SENTINEL, tool_name="PowerShell")
             )
         _deny_reason(out)
@@ -501,6 +506,6 @@ class TestPowerShellIndirectionDeclinesRatherThanClean:
     @requires_powershell_grammar
     def test_ordinary_command_does_not_record_silent(self):
         with _verdict.collecting() as silences:
-            out = guard.check_advisory(_payload("Get-ChildItem", tool_name="PowerShell"))
+            out = _enveloped(guard.check_advisory)(_payload("Get-ChildItem", tool_name="PowerShell"))
         assert out is None
         assert not _verdict.was_silent(guard._GUARD_NAME, silences)

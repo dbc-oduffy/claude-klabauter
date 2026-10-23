@@ -3437,16 +3437,51 @@ def _is_opaque_indirection(wrapper_verdict: str) -> bool:
     return " -> " not in wrapper_verdict
 
 
-def _build_indirection_advisory_reason(wrapper_shape: str) -> str:
-    """One-line (Axis-A, <220-byte-prose-cap) advisory for an OPAQUE
-    indirection wrapper (see `_is_opaque_indirection`) -- the guard cannot
-    see the payload, so it no longer blocks it outright; it only flags the
-    shape. No override note: this guard has none, by design (module
-    docstring "OVERRIDE-WITHHOLDING")."""
-    return (
-        f"ADVISORY: indirection wrapper, payload opaque, not blocked -- "
-        f"shape: {wrapper_shape}. Genuinely destructive? Surface it to the EM."
+_GUARD_NAME = "block-subagent-destructive-action"
+
+
+def build_record(
+    guard_name: str,
+    verdict_kind: str,
+    summary: str,
+    report_what: str,
+    authorize_what: str,
+    *,
+    ready: Optional[str] = None,
+    adapt: Optional[tuple] = None,
+):
+    """Build this family's AlternativeRecord: never an Override, always an
+    EscalationRoute (the subagent's only way out), plus an optional pasteable
+    ``ready`` command and an optional ``adapt`` (template, what_to_adapt) offer.
+    Shared by the stash siblings. Imports lazily: guard modules stay off the
+    hot-path import budget. Sibling constructor for the Override/em_text
+    families: ``_rewrite_support._alt_record``."""
+    from coordinator_core.guard_messages.alternative_record import (
+        AdaptableOffer,
+        AlternativeRecord,
+        EscalationRoute,
+        ReadyCommand,
     )
+
+    members: list = []
+    if ready:
+        members.append(ReadyCommand(text=ready))
+    if adapt:
+        members.append(AdaptableOffer(template=adapt[0], what_to_adapt=adapt[1]))
+    members.append(EscalationRoute(report_what=report_what, authorize_what=authorize_what))
+    return AlternativeRecord(
+        verdict_kind=verdict_kind,
+        summary=summary,
+        members=tuple(members),
+        guard_name=guard_name,
+    )
+
+
+def _indirection_advisory_summary(wrapper_shape: str) -> str:
+    """Axis-A advisory for an OPAQUE indirection wrapper (see
+    `_is_opaque_indirection`) -- the guard cannot see the payload, so it
+    flags the shape and does not block."""
+    return f"ADVISORY: indirection wrapper, payload opaque, not blocked -- shape: {wrapper_shape}."
 
 
 def _build_reason(
@@ -3678,11 +3713,34 @@ def _build_reason(
         )
     return (
         "BLOCKED: destructive git/rm/chmod-chown -R at the shell surface --\n"
-        "not a capability boundary; an interpreter still reaches git.\n\n"
+        "not a capability boundary; an interpreter reaches git.\n\n"
         f"  Denied:   {deny_kind}\n"
         f"  Command:  {cmd_safe}\n\n"
-        "Fix forward, or surface it to the EM. No subagent-reachable\n"
-        "override exists."
+        "Fix forward, or surface it to the EM."
+    )
+
+
+def _build_record(
+    deny_kind: str, agent_id: str, effective_type: str, cmd_safe: str, cmd: str = ""
+):
+    """The deny record for ``deny_kind``: the prose from `_build_reason`, the
+    escalation route every subagent deny carries, and for `git mv` the
+    rung-B `mv` replacement (a ready command when the operands parse, else an
+    adaptable template)."""
+    summary = _build_reason(deny_kind, agent_id, effective_type, cmd_safe, cmd)
+    ready = adapt = None
+    if deny_kind == "git mv (index-mutating rename)":
+        ready = _git_mv_corrected_command(cmd)
+        if ready is None:
+            adapt = ("mv <A> <B>", "<A> and <B> to your own source and destination")
+    return build_record(
+        _GUARD_NAME,
+        "deny",
+        summary,
+        "this command",
+        "it",
+        ready=ready,
+        adapt=adapt,
     )
 
 
@@ -4270,14 +4328,9 @@ def _check_powershell(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         deny_kind = "ambiguous-identity"
 
     cmd_safe = _sanitize_command(cmd)
-    reason = _build_reason(deny_kind, agent_id or raw_agent_id, effective_type, cmd_safe, cmd)
-    final_verdict = {
-        "hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "permissionDecision": "deny",
-            "permissionDecisionReason": reason,
-        }
-    }
+    final_verdict = _build_record(
+        deny_kind, agent_id or raw_agent_id, effective_type, cmd_safe, cmd
+    )
     if kind_unresolved:
         emit_kind_resolution_failure_signal(
             "block_subagent_destructive_action", agent_id, git_root, final_verdict
@@ -4535,28 +4588,25 @@ def _check_unscoped(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if deny_kind.startswith("indirection: "):
         wrapper_shape = deny_kind[len("indirection: "):]
         if _is_opaque_indirection(wrapper_shape):
-            advisory_verdict = {
-                "hookSpecificOutput": {
-                    "hookEventName": "PreToolUse",
-                    "permissionDecision": "allow",
-                    "additionalContext": _build_indirection_advisory_reason(wrapper_shape),
-                }
-            }
+            advisory_verdict = build_record(
+                _GUARD_NAME,
+                "advisory",
+                _indirection_advisory_summary(wrapper_shape),
+                "it to the EM if genuinely destructive",
+                "the wrapped command",
+            )
             if kind_unresolved:
                 emit_kind_resolution_failure_signal(
-                    "block_subagent_destructive_action", agent_id, git_root, advisory_verdict
+                    "block_subagent_destructive_action",
+                    agent_id,
+                    git_root,
+                    advisory_verdict,
                 )
             return advisory_verdict
 
-    reason = _build_reason(deny_kind, agent_id or raw_agent_id, effective_type, cmd_safe, cmd)
-
-    final_verdict = {
-        "hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "permissionDecision": "deny",
-            "permissionDecisionReason": reason,
-        }
-    }
+    final_verdict = _build_record(
+        deny_kind, agent_id or raw_agent_id, effective_type, cmd_safe, cmd
+    )
     if kind_unresolved:
         emit_kind_resolution_failure_signal(
             "block_subagent_destructive_action", agent_id, git_root, final_verdict

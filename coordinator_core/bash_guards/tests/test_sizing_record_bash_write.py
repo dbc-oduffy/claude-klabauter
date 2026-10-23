@@ -1,10 +1,15 @@
 """A shell write into state/sizings is refused; a read is allowed."""
 
 from coordinator_core.bash_guards import guard_doctrine_surface_bash_write as guard
+from coordinator_core.guard_messages.testing import envelope_of
+
+
+def _enveloped(check):
+    return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 
 def _check(cmd):
-    return guard.check({"tool_name": "Bash", "tool_input": {"command": cmd}}, None)
+    return _enveloped(guard.check)({"tool_name": "Bash", "tool_input": {"command": cmd}}, None)
 
 
 def test_append_redirect_into_sizings_is_refused():

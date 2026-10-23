@@ -35,6 +35,11 @@ from coordinator_core.bash_guards.tests.test_bump_foreign_repo_write import (
 from coordinator_core.bash_guards.tests.test_bump_outside_repo_write import (
     _clean_bump_env,  # noqa: F401 -- reused fixture, the isolation both guards' suites need.
 )
+from coordinator_core.guard_messages.testing import envelope_of
+
+
+def _enveloped(check):
+    return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 
 @pytest.fixture()
@@ -186,7 +191,7 @@ def test_guard_stands_down_end_to_end_on_a_host_with_no_fleet(
     monkeypatch.delenv("COORDINATOR_CAP_FLEET_PRESENT", raising=False)
     monkeypatch.setenv("CLAUDE_CODE_ENTRYPOINT", "remote")
 
-    result = guard.check_bump_foreign_repo_write(
+    result = _enveloped(guard.check_bump_foreign_repo_write)(
         _foreign_commit_cmd(repos), "sess-c4-sd-cloud", str(repos["anchor"]), {}
     )
 
@@ -207,7 +212,7 @@ def test_guard_still_denies_end_to_end_where_the_premise_holds(
     machine the stand-down must be invisible."""
     _set_anchor(monkeypatch, repos, "sess-c4-sd-fleet")
 
-    result = guard.check_bump_foreign_repo_write(
+    result = _enveloped(guard.check_bump_foreign_repo_write)(
         _foreign_commit_cmd(repos), "sess-c4-sd-fleet", str(repos["anchor"]), {}
     )
 
@@ -225,7 +230,7 @@ def test_guard_denies_end_to_end_when_the_capability_layer_raises(
     mechanism existed."""
     _set_anchor(monkeypatch, repos, "sess-c4-sd-broken-cap")
 
-    result = guard.check_bump_foreign_repo_write(
+    result = _enveloped(guard.check_bump_foreign_repo_write)(
         _foreign_commit_cmd(repos), "sess-c4-sd-broken-cap", str(repos["anchor"]), {}
     )
 

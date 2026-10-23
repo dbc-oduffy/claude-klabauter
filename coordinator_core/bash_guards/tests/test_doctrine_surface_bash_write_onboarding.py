@@ -4,12 +4,17 @@ from __future__ import annotations
 import pytest
 
 from coordinator_core.bash_guards import guard_doctrine_surface_bash_write as g
+from coordinator_core.guard_messages.testing import envelope_of
+
+
+def _enveloped(check):
+    return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 SURFACES = ["CLAUDE.md", "coordinator.local.md"]
 
 
 def _check(cmd, cwd):
-    return g.check({"tool_name": "Bash", "cwd": str(cwd), "tool_input": {"command": cmd}}, SURFACES)
+    return _enveloped(g.check)({"tool_name": "Bash", "cwd": str(cwd), "tool_input": {"command": cmd}}, SURFACES)
 
 
 @pytest.fixture(autouse=True)

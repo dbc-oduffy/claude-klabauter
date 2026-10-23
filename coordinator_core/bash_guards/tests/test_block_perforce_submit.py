@@ -5,6 +5,11 @@ from __future__ import annotations
 import pytest
 
 from coordinator_core.bash_guards import block_perforce_submit as guard
+from coordinator_core.guard_messages.testing import envelope_of
+
+
+def _enveloped(check):
+    return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 
 def _bash(cmd: str) -> dict:
@@ -29,7 +34,7 @@ def armed(monkeypatch):
     ],
 )
 def test_server_writes_denied_when_armed(armed, cmd):
-    out = guard.check(_bash(cmd))
+    out = _enveloped(guard.check)(_bash(cmd))
     assert out is not None
     assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
 
@@ -46,14 +51,10 @@ def test_server_writes_denied_when_armed(armed, cmd):
     ],
 )
 def test_deny_reason_names_anchor_and_wiki_path(armed, tool, cmd):
-    out = guard.check({"tool_name": tool, "tool_input": {"command": cmd}})
+    out = _enveloped(guard.check)({"tool_name": tool, "tool_input": {"command": cmd}})
     assert out is not None
     reason = out["hookSpecificOutput"]["permissionDecisionReason"]
     assert "P4-SUBMIT-AND-SHELVE-ARE-DENIED-ON-A-NO-SUBMIT-BOX" in reason
-    assert (
-        "coordinator-content-repo:coordinator/docs/wiki/coordinator-tripwires/"
-        "p4-submit-and-shelve-are-denied-on-a-no-submit-box.md"
-    ) in reason
 
 
 @pytest.mark.parametrize(
@@ -69,7 +70,7 @@ def test_deny_reason_names_anchor_and_wiki_path(armed, tool, cmd):
     ],
 )
 def test_local_and_mention_only_allowed_when_armed(armed, cmd):
-    assert guard.check(_bash(cmd)) is None
+    assert _enveloped(guard.check)(_bash(cmd)) is None
 
 
 @pytest.mark.parametrize("value", [None, [], ""])
@@ -79,7 +80,7 @@ def test_submit_allowed_when_key_absent_or_empty(monkeypatch, tmp_path, value):
     monkeypatch.setattr(machine_resolver, "registry_dir", lambda: tmp_path)
     flat = {} if value is None else {guard.POLICY_KEY: value}
     monkeypatch.setattr(machine_resolver, "load_flat_registry_file", lambda p: flat)
-    assert guard.check(_bash("p4 submit -d x")) is None
+    assert _enveloped(guard.check)(_bash("p4 submit -d x")) is None
 
 
 def test_unreadable_registry_fails_closed(monkeypatch):
@@ -89,7 +90,7 @@ def test_unreadable_registry_fails_closed(monkeypatch):
         raise OSError("unreadable")
 
     monkeypatch.setattr(machine_resolver, "registry_dir", boom)
-    assert guard.check(_bash("p4 submit -d x")) is not None
+    assert _enveloped(guard.check)(_bash("p4 submit -d x")) is not None
 
 
 def _registry(monkeypatch, tmp_path, *, vcs=None, policy=None):
@@ -115,29 +116,29 @@ def _registry(monkeypatch, tmp_path, *, vcs=None, policy=None):
 @pytest.mark.parametrize("cmd", ["p4 submit -d x", "p4 shelve -c 5"])
 def test_armed_by_p4_workspace_alone(monkeypatch, tmp_path, cmd):
     _registry(monkeypatch, tmp_path, vcs="P4")
-    assert guard.check(_bash(cmd)) is not None
+    assert _enveloped(guard.check)(_bash(cmd)) is not None
 
 
 def test_armed_by_policy_key_alone(monkeypatch, tmp_path):
     _registry(monkeypatch, tmp_path, policy='["//depot"]')
-    assert guard.check(_bash("p4 submit -d x")) is not None
+    assert _enveloped(guard.check)(_bash("p4 submit -d x")) is not None
 
 
 def test_unarmed_with_neither(monkeypatch, tmp_path):
     _registry(monkeypatch, tmp_path)
-    assert guard.check(_bash("p4 submit -d x")) is None
+    assert _enveloped(guard.check)(_bash("p4 submit -d x")) is None
 
 
 def test_git_workspace_alone_does_not_arm(monkeypatch, tmp_path):
     _registry(monkeypatch, tmp_path, vcs="git")
-    assert guard.check(_bash("p4 submit -d x")) is None
+    assert _enveloped(guard.check)(_bash("p4 submit -d x")) is None
 
 
 def test_empty_policy_key_with_p4_workspace_stays_armed(monkeypatch, tmp_path):
     _registry(monkeypatch, tmp_path, vcs="p4", policy="[]")
-    assert guard.check(_bash("p4 submit -d x")) is not None
+    assert _enveloped(guard.check)(_bash("p4 submit -d x")) is not None
 
 
 def test_p4_workspace_still_allows_local_verbs(monkeypatch, tmp_path):
     _registry(monkeypatch, tmp_path, vcs="p4")
-    assert guard.check(_bash("p4 sync //depot/...")) is None
+    assert _enveloped(guard.check)(_bash("p4 sync //depot/...")) is None
