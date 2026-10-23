@@ -92,3 +92,17 @@ def test_manifest_is_created_exclusively(tmp_path, prep):
     manifest.write_text("sentinel", encoding="utf-8")
     prep(prefix="pre-t")
     assert manifest.read_text(encoding="utf-8") == "sentinel"
+
+
+def test_manifest_head_is_the_repo_head_sha(tmp_path, prep):
+    sha = "c" * 40
+    (tmp_path / ".git" / "refs" / "heads").mkdir(parents=True)
+    (tmp_path / ".git" / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
+    (tmp_path / ".git" / "refs" / "heads" / "main").write_text(sha + "\n", encoding="utf-8")
+    record = json.loads(_manifest(tmp_path, prep()).read_text(encoding="utf-8"))
+    assert record["head"] == sha
+
+
+def test_manifest_head_is_null_outside_a_git_repo(tmp_path, prep):
+    record = json.loads(_manifest(tmp_path, prep()).read_text(encoding="utf-8"))
+    assert record["head"] is None

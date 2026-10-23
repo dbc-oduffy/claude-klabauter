@@ -19,9 +19,8 @@ from coordinator_core.git.git_state import head_sha
 from coordinator_core.warp_fire import SUBMIT_WORKFLOW_NAME, fire_command
 from coordinator_core.ops.dispatch_emit import agent_sidecar as _sidecar
 from coordinator_core.ops.dispatch_emit import prompt_fragments as _prompt_fragments
-from coordinator_core.ops.dispatch_emit.nested_run_contract import STAGE_PENDING_KEY
+from coordinator_core.ops.dispatch_emit.nested_run_contract import STAGE_PENDING_KEY, STAGED_INLINE_SLOT
 from coordinator_core.ops.dispatch_emit.reply_sidecar import (
-    ADOPT_STAGED_ARG_JS,
     READ_STAGE_SIDECAR_JS,
     STAGE_REPLY_SCHEMA,
     VERIFY_REPLY_JS,
@@ -59,6 +58,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     HALTED_RECORD_PARAM,
     PARKED_REPLY_KEY,
     PM_INTENT_FILE,
+    RESUME_LEDGER_CREDITED_FIELD,
     RESUME_LEDGER_EM_DISCHARGED_FIELD,
     RESUME_LEDGER_HALT_SHA_FIELD,
     RESUME_LEDGER_KEY,
@@ -668,7 +668,7 @@ _ADMIT_MANIFEST_JS = (
     "  };"
 )
 _STAGE_SIDECAR_HALT = "stage reply sidecar does not match its handle: "
-_ADOPT_STAGE_REPLY_JS = (
+_ADOPT_STAGE_REPLY_HEAD_JS = (
     "  let _stagePending = null;\n"
     # A soft (plan-blitz readyOp) reply's `error` is the pass-through's prose: `_adoptReadyError` owns
     # the refusal there. The manifest is only ever the sidecar text that matched its handle.
@@ -682,22 +682,45 @@ _ADOPT_STAGE_REPLY_JS = (
     f"    if (r.{PARKED_REPLY_KEY} && !r.manifest_handle) {{ if (!_parked) _parked = String(r.{PARKED_REPLY_KEY}); return; }}\n"
     "    if (!r.manifest_handle) { if (!soft && !_relayGap) _relayGap = 'manifest_handle'; return; }\n"
     "    let got;\n"
-    "    if (_LAUNCHER_CHILD) {\n"
-    "      got = _adoptStagedArg(r.manifest_handle);\n"
-    "      if (got === null) { if (!_stagePending) _stagePending = { handle: r.manifest_handle }; return; }\n"
-    "    } else { got = await _readStageSidecar(r.manifest_handle, REPO_ROOT); }\n"
+)
+_ADOPT_STAGE_REPLY_READER_JS = "    got = await _readStageSidecar(r.manifest_handle, REPO_ROOT);\n"
+# Trap: a launcher-child script holds no reader branch at all, so `workflow(` is absent from its bytes.
+_ADOPT_STAGE_REPLY_LAUNCHER_JS = (
+    "    got = _adoptStagedInline(r.manifest_handle);\n"
+    "    if (got === null) { if (!_stagePending) _stagePending = { handle: r.manifest_handle }; return; }\n"
+)
+# Trap: depends on _verifyReplyText, and the slot line must precede it; the text still passes the verify before JSON.parse.
+_ADOPT_STAGED_INLINE_JS = """function _adoptStagedInline(h) {
+  const s = _STAGED_INLINE;
+  if (!s || typeof s !== 'object' || !s.handle || typeof s.handle !== 'object' || h === null || typeof h !== 'object') return null;
+  if (s.handle.path !== h.path || s.handle.sha256 !== h.sha256 || s.handle.bytes !== h.bytes) return null;
+  const bad = _verifyReplyText(s.text, h);
+  if (bad !== null) return { fail: bad };
+  try {
+    return { manifest: JSON.parse(s.text) };
+  } catch (e) {
+    return { fail: 'reply text is not valid JSON' };
+  }
+}
+"""
+_ADOPT_STAGE_REPLY_TAIL_JS = (
     f"    if (got.fail) {{ if (!_diskHalt) _diskHalt = {_js_string_literal(_STAGE_SIDECAR_HALT)} + got.fail; return; }}\n"
     "    const gap = _wholeManifestGap(got.manifest);\n"
     "    if (gap) { if (!_relayGap) _relayGap = gap; return; }\n"
     "    _stagedManifest = got.manifest;\n"
     "  };"
 )
+_ADOPT_STAGE_REPLY_JS = _ADOPT_STAGE_REPLY_HEAD_JS + _ADOPT_STAGE_REPLY_READER_JS + _ADOPT_STAGE_REPLY_TAIL_JS
+_ADOPT_STAGE_REPLY_LAUNCHER_CHILD_JS = _ADOPT_STAGE_REPLY_HEAD_JS + _ADOPT_STAGE_REPLY_LAUNCHER_JS + _ADOPT_STAGE_REPLY_TAIL_JS
 
 
-def _stage_reply_js() -> str:
+def _stage_reply_js(launcher_child: bool = False) -> str:
     """The script block that turns a stage reply into `_stagedManifest`: the runtime reads the sidecar's reader
-    with no agent, and the text is verified against the handle before `JSON.parse`."""
-    return VERIFY_REPLY_JS + READ_STAGE_SIDECAR_JS + ADOPT_STAGED_ARG_JS + _ADOPT_STAGE_REPLY_JS
+    with no agent, and the text is verified against the handle before `JSON.parse`. `launcher_child` renders the
+    reader-free form: the staged twin carries the verified text in the `STAGED_INLINE_SLOT` line."""
+    if launcher_child:
+        return VERIFY_REPLY_JS + STAGED_INLINE_SLOT + "\n" + _ADOPT_STAGED_INLINE_JS + _ADOPT_STAGE_REPLY_LAUNCHER_CHILD_JS
+    return VERIFY_REPLY_JS + READ_STAGE_SIDECAR_JS + _ADOPT_STAGE_REPLY_JS
 
 
 #: The run reads its commit token from the Workflow `args` the emit's fire args carry, so the
@@ -706,6 +729,16 @@ _RUN_TOKEN_DECL_JS = (
     "  const _RUN_TOKEN = (() => { try { const a = (typeof args === 'string') ? JSON.parse(args) : "
     "(typeof args === 'undefined' ? null : args); return (a && typeof a.runToken === 'string' "
     "&& /^[0-9a-f]{32}$/.test(a.runToken)) ? a.runToken : null; } catch (_e) { return null; } })();"
+)
+
+# Trap: reads `_STAGED_INLINE`, so the slot line must precede it; the first emitted script's slot is null, so it holds no token.
+_RUN_TOKEN_DECL_LAUNCHER_CHILD_JS = (
+    "  const _RUN_TOKEN = (() => { try { const a = (typeof args === 'string') ? JSON.parse(args) : "
+    "(typeof args === 'undefined' ? null : args); "
+    "const t = (a && typeof a.runToken === 'string') ? a.runToken "
+    ": ((typeof _STAGED_INLINE === 'object' && _STAGED_INLINE && typeof _STAGED_INLINE.runToken === 'string') "
+    "? _STAGED_INLINE.runToken : null); "
+    "return (typeof t === 'string' && /^[0-9a-f]{32}$/.test(t)) ? t : null; } catch (_e) { return null; } })();"
 )
 
 #: A dispatched agent runs the definition loaded at session start, so a run that edits an
@@ -1348,12 +1381,16 @@ def compose_ask_script(
     required_reviewers: Sequence[str] = (),
     run_base_sha: Optional[str] = None,
     route_preference: Optional[_route_pref.RoutePreference] = None,
+    launcher_child: bool = False,
 ) -> str:
     """The .mjs text for one ask: a raw `prompt`, or an existing `sizing_rel` (size phase omitted).
 
     A non-empty `route_preference` adds the EM's steer to the size-stage scout prompt, ahead of the
     ask text, and a `route_override_reason` slot to each gate command the scout runs after its own
     sizing-assemble. Empty or absent, every string is unchanged.
+
+    `launcher_child` renders a script a launcher starts: the script holds no `workflow()` reader, so it can never
+    nest; it returns `stage_pending` until its staged twin fills the inline slot with the verified manifest.
 
     `run_base_sha`, when given, is the base for the review blocks, the criterion judge brief and
     the test instruction; absent, the base is HEAD at compose time.
@@ -1550,11 +1587,11 @@ def compose_ask_script(
     b.append("  let _manifest = null;")
     b.append("  let _stagedManifest = null;")
     b.append(_ADMIT_MANIFEST_JS)
-    b.append(_stage_reply_js())
+    b.append(_stage_reply_js(launcher_child))
     b.append(f"  let {_OWNER_ROWS_JS} = [];")
     b.append("  let _viaRoadmap = false;")
     b.append("  let _splitExit = null;")
-    b.append(_RUN_TOKEN_DECL_JS)
+    b.append(_RUN_TOKEN_DECL_LAUNCHER_CHILD_JS if launcher_child else _RUN_TOKEN_DECL_JS)
     b.append("  let _nextAction = null;")
     b.append("  let _docs = null;")
     b.append("  let _commit = null;")
@@ -2200,6 +2237,9 @@ def compose_ask_script(
             f"js:{_rl0}.blocking.join(', ')",
             f". Read each row's register text in {ledger_rel}. Work still owed, by row: ",
             f"js:JSON.stringify({_rl0}.{RESUME_LEDGER_REMAINING_FIELD} ?? {{}})",
+            ". Items already credited as landed by rows that landed after the halt (landed work: add no row for them, "
+            "never re-plan them): ",
+            f"js:JSON.stringify({_rl0}.{RESUME_LEDGER_CREDITED_FIELD} ?? [])",
             ". Revise notes, oldest first: ",
             f"js:JSON.stringify({_rl0}.{RESUME_LEDGER_NOTES_FIELD} ?? [])",
             ". Register rows the plan's register_claims.rows omit (a revise minted them after the plan was written; "
@@ -2215,7 +2255,7 @@ def compose_ask_script(
             f"As your very last act, when you added at least one row, run `{_INVOKE} {OP_ASK_STAGE} '<params>'` "
             "once, <params> being the JSON object ",
             "js:JSON.stringify({ run_id: _runId, plan_path: _planRel, "
-            "cross_repo_approved: _crossRepoApproved, session_id: _SESSION_ID, "
+            "cross_repo_approved: _crossRepoApproved, session_id: _SESSION_ID, ledger_resume: true, "
             f"...(({_rl0}.{RESUME_LEDGER_UNCLAIMED_FIELD} ?? []).length ? {{ claim_register_rows: true }} : {{}}), "
             "...(_sizingRel ? { commit_sizing_path: _sizingRel } : {}) })",
             " with only_rows set to the ids of exactly the rows you added",
@@ -2270,7 +2310,7 @@ def compose_ask_script(
             run' error). A reply that carried neither a refusal nor a verifiable handle halts as not whole; a
             readyOp error of its own halts."""
             return (
-                f"{indent}if ({entry} && typeof {entry} === 'object' && _planRel && !_stagedManifest && !_stageRefusal "
+                f"{indent}if ({entry} && typeof {entry} === 'object' && _planRel && !_resumeLedger && !_stagedManifest && !_stageRefusal "
                 f"&& !_diskHalt && !_relayGap && !_parked) {{\n"
                 f"{indent}  if ({entry}.readyOpReply?.{PARKED_REPLY_KEY} && !{entry}.readyOpReply.manifest_handle "
                 f"&& !{entry}.readyOpReply.error) {{ _parked = String({entry}.readyOpReply.{PARKED_REPLY_KEY}); }}\n"
@@ -2330,7 +2370,7 @@ def compose_ask_script(
         *(stage_fold(" Once the plan is filled and carries no marker,") if fold_stage else ()),
     )
     b.append(f"  if (!_halted && _gate.arm === {_lit(ARM_S)}) {{")
-    b.append("    if (_gate.resume_plan) { _planRel = _gate.resume_plan; } else {")
+    b.append("    if (_resumeLedger) { /* planRel already the ledger plan */ } else if (_gate.resume_plan) { _planRel = _gate.resume_plan; } else {")
     b.append("    phase('plan');")
     plan_call = _agent(
         plan_author, label="plan", phase="plan", agent_type=_PLAN_AUTHOR_AGENT_TYPE,
@@ -2690,9 +2730,10 @@ def compose_ask_script(
         "  let _stageHalt = _stageRefusal ? 'stage refused: ' + _stageRefusal : "
         "(_diskHalt ?? (_relayGap ? 'stage manifest relay is not whole: ' + _relayGap : null));"
     )
-    b.append(
-        f"  if (_LAUNCHER_CHILD && _stagePending && !_stagedManifest) {{ return {{ {STAGE_PENDING_KEY}: _stagePending }}; }}"
-    )
+    if launcher_child:
+        b.append(
+            f"  if (_stagePending && !_stagedManifest) {{ return {{ {STAGE_PENDING_KEY}: _stagePending }}; }}"
+        )
     b.append("  if (_stagedManifest) { _manifest = _stagedManifest; }")
     if judged and fold_falsifier:
         spec_js = "_scoutFalsifier ?? _planFalsifier" if sized_in_run else "_planFalsifier"
@@ -3017,8 +3058,10 @@ def compose_ask_script(
         f"      const _creditMatch = {CREDIT_MATCH_JS};\n"
         "      for (const i of (_ledger?.items ?? [])) {\n"
         "        if (!i || i.status !== 'met' || !_blk.includes(i.id)) continue;\n"
-        "        const _named = JSON.stringify(i.met_by ?? '');\n"
-        "        if (!_creditMatch(i.met_by, _named)) { i.status = 'not_met'; i.essential = true; "
+        f"        const _rec = ((_gate.{RESUME_LEDGER_KEY}.{RESUME_LEDGER_REMAINING_FIELD} ?? {{}})[i.id]) ?? {{}};\n"
+        f"        const _known = [...(_gate.{RESUME_LEDGER_KEY}.{RESUME_LEDGER_NOTES_FIELD} ?? []), String(_rec.evidence ?? ''), "
+        "String(Array.isArray(_rec.remaining) ? _rec.remaining.join(' ') : (_rec.remaining ?? ''))].join(' ');\n"
+        "        if (!_creditMatch(i.met_by, _known)) { i.status = 'not_met'; i.essential = true; "
         "i.remaining = ['met_by: the commit sha that carries the credited work']; }\n"
         "      }\n"
         "    }\n"

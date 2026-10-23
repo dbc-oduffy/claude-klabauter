@@ -32,6 +32,8 @@ import time
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
+from coordinator_core.git.run import run_git
+
 # (module, attribute) pairs bracketed as phases. Attributes absent from the engine in hand
 # are skipped, so the harness keeps running across a refactor of commit.py.
 _PHASE_TARGETS = (
@@ -112,11 +114,12 @@ def _ms(seconds: float) -> float:
 
 def _git(repo: Path, *args: str) -> str:
     """Setup-time git read/write; runs before the spawn counter is reset."""
-    return subprocess.run(
-        ["git", "-C", str(repo), *args],
-        check=True, capture_output=True, text=True,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-    ).stdout
+    res = run_git(["-C", str(repo), *args])
+    if res.returncode != 0:
+        raise RuntimeError(
+            f"git {' '.join(args)} failed rc={res.returncode} timed_out={res.timed_out}: {res.stderr.strip()}"
+        )
+    return res.stdout
 
 
 def _pick_paths(repo: Path, n: int) -> List[str]:

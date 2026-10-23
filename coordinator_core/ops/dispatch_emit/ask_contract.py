@@ -405,6 +405,11 @@ RESUME_LEDGER_UNLANDED_FIELD = "unlanded"
 RESUME_LEDGER_LEG_FIELD = "remaining_leg"
 #: `resume_ledger` verdict key carrying the ids of the rows derived for open ledger items.
 RESUME_LEDGER_DERIVED_FIELD = "derived_rows"
+#: `resume_ledger` verdict key carrying `{item_id: row_sha}` for blocking ledger items whose every serving
+#: plan row (resolved from the spine by `register_rows`, else frontmatter `register_claims.rows`, the rule
+#: `ledger_remaining_paths.plan_rows_serving` applies) landed after the halt commit; such items are
+#: removed from `blocking` and `remaining`.
+RESUME_LEDGER_CREDITED_FIELD = "credited_landed"
 #: `resume_ledger` verdict key echoing the halted run's arm.
 RESUME_LEDGER_ARM_FIELD = "arm"
 #: Id prefix of a row derived for an open ledger item (`L<item>`).
@@ -668,7 +673,11 @@ class LedgerHalt:
     landed and never persisted: ``to_json`` raises ValueError and ``from_json`` refuses the kind.
     Its run_id is the newest run that landed the plan, or "none" when unknown; halt_sha is None;
     blocking is the rulable register ids not met; remaining is the newest halt record's remaining
-    for those ids, else {}."""
+    for those ids, else {}.
+
+    ``landed_since_halt``: ids of plan rows landed by commits newer than ``halt_sha``; filled only when
+    the walk's ``ledger_sha`` equals ``halt_sha`` and empty otherwise (empty means no credit, never
+    "everything landed after")."""
 
     run_id: str
     plan_rel: str
@@ -685,6 +694,8 @@ class LedgerHalt:
     unlanded: tuple[str, ...] = ()
     #: Ids a claim-ruling added after the halt.
     ruled: tuple[str, ...] = ()
+    #: Plan row ids landed after the halt commit; derived at resume, never persisted.
+    landed_since_halt: frozenset = frozenset()
 
     def to_json(self) -> dict[str, Any]:
         if self.halted == ALL_LANDED_HALT_KIND:

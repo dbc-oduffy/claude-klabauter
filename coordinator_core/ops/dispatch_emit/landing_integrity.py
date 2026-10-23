@@ -22,6 +22,8 @@ TARGETED_TESTS_FAILED = "targeted-tests-failed"
 IMPORT_CLOSURE_UNTRACKED = "import-closure-untracked"
 TARGETED_TESTS_PARAM = "targeted_tests"
 NOT_RUN_CHECK = "not-run"
+ZERO_FAIL_UNATTRIBUTED = "test-verdict-names-no-failure"
+ZERO_FAIL_CHECK = "zero-fail-unattributed"
 
 RETEST_DIR = ".coordinator-local/retest"
 RETEST_LAUNCHER = "emit-dispatch-workflow --retest-targeted"
@@ -101,6 +103,7 @@ def targeted_test_verdict(params: Mapping) -> Optional[Mapping]:
             return {
                 "status": tests["status"], "tests_failed": tests.get("failed"),
                 "tests_run": tests.get("run"), "baseline": None,
+                **({"status_before": tests["status_before"]} if "status_before" in tests else {}),
             }
     return None
 
@@ -169,7 +172,10 @@ def failed_targeted_tests(
     A fail/error verdict with ``baseline.caused`` yields one Finding(TARGETED_TESTS_FAILED) per
     distinct caused test file (repo-relative POSIX), the detail naming up to three node ids. A
     fail/error verdict whose baseline is present with nothing caused is ``"pre-existing-only"``.
-    Trap: a fail/error verdict with no baseline yields one Finding with ``path=""`` (unattributed,
+    A ``fail`` verdict with ``tests_failed`` the integer 0 and no baseline names no failure: with
+    ``status_before == "fail"`` it is ``([], "pre-existing-only")``; otherwise one
+    Finding(ZERO_FAIL_UNATTRIBUTED) with check ``ZERO_FAIL_CHECK``, never TARGETED_TESTS_FAILED.
+    Trap: any other fail/error verdict with no baseline yields one Finding with ``path=""`` (unattributed,
     fail-closed), so a pre-existing failure with no baseline export refuses by design; the remedy
     is ``remedy`` (default ``retest_remedy(None)``), or a ``failed_tests`` node-id list that
     ``landing_test_gate`` attributes against the run base."""
@@ -186,6 +192,14 @@ def failed_targeted_tests(
     baseline = verdict.get("baseline")
     if not isinstance(baseline, Mapping):
         count = verdict.get("tests_failed")
+        if status == "fail" and isinstance(count, int) and not isinstance(count, bool) and count == 0:
+            if verdict.get("status_before") == "fail":
+                return [], "pre-existing-only"
+            return [Finding(
+                "", ZERO_FAIL_UNATTRIBUTED,
+                f"the verdict reads fail with 0 failing tests and no failing node id to attribute "
+                f"(status_before not fail); re-run: {remedy or retest_remedy(None)}",
+            )], ZERO_FAIL_CHECK
         shown = f"{count} " if isinstance(count, int) else ""
         if status == "error" and count == 0:
             cause = next((str(verdict[k]) for k in ("reason", "summary", "error") if verdict.get(k)), None)
@@ -286,7 +300,9 @@ def landing_test_gate(
         if failed_targeted_tests(verdict)[1] == NOT_RUN_CHECK:
             return [], NOT_RUN_CHECK
         nodes = _failed_nodes(params, verdict)
-        files = list(dict.fromkeys(f for f in (_node_file(n) for n in nodes) if f))
+        if nodes and failed_targeted_tests(verdict)[1] == ZERO_FAIL_CHECK:
+            verdict = {**verdict, "tests_failed": None}
+        files =list(dict.fromkeys(f for f in (_node_file(n) for n in nodes) if f))
         findings, check = failed_targeted_tests(verdict, retest_remedy(params, files))
         if check != "failed" or verdict.get("baseline"):
             return findings, check

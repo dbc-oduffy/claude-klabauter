@@ -350,32 +350,30 @@ def test_read_stage_sidecar_js_names_no_runtime_decoder():
         assert banned not in rs.READ_STAGE_SIDECAR_JS
 
 
-def test_adopt_staged_arg_js_names_no_workflow_or_agent_call():
-    for banned in ("workflow(", "agent(", "atob", "Buffer", "TextDecoder"):
-        assert banned not in rs.ADOPT_STAGED_ARG_JS
+def _slotted_script(root, run_id="run1"):
+    from coordinator_core.ops.dispatch_emit import nested_run_contract as nrc
+
+    script = root / "scratch" / "warp" / f"{run_id}.workflow.mjs"
+    script.parent.mkdir(parents=True, exist_ok=True)
+    script.write_text(f"export const meta = {{ name: 'x' }}\n{nrc.STAGED_INLINE_SLOT}\n", encoding="utf-8")
+    return nrc.staged_twin_rel
 
 
-@pytest.mark.spawns_process
-@pytest.mark.cadence
-@pytest.mark.skipif(shutil.which("node") is None, reason="node absent")
-def test_adopt_staged_arg_js_adopts_only_a_matching_verified_handle(sidecar, tmp_path):
-    root, path, handle = sidecar
-    text = path.read_text("ascii")
+def test_write_reply_and_handle_for_leave_the_staged_twin_beside_a_slotted_script(tmp_path):
+    twin_rel = _slotted_script(tmp_path)
+    path = tmp_path / "state" / "warp" / "run1" / "manifest.json"
+    handle = rs.write_reply(tmp_path, path, _manifest())
+    twin = tmp_path / twin_rel("run1", handle["sha256"])
+    assert str(handle["sha256"]) in twin.name
+    assert handle["sha256"] in twin.read_text(encoding="utf-8")
+    twin.unlink()
+    assert rs.handle_for(tmp_path, path) == handle
+    assert twin.is_file()
 
-    def adopt(args: dict, h: dict, txt: str | None = None):
-        a = {**args, "stagedManifest": {"handle": handle, "text": text if txt is None else txt}} if args else {}
-        src = (
-            "const args = " + json.dumps(a) + ";\n" + rs.VERIFY_REPLY_JS + rs.ADOPT_STAGED_ARG_JS
-            + f"\nconsole.log(JSON.stringify({{child: _LAUNCHER_CHILD, r: _adoptStagedArg({json.dumps(h)})}}));\n"
-        )
-        return _node_json(tmp_path, src)
 
-    ok = adopt({"launcherChild": True}, handle)
-    assert ok == {"child": True, "r": {"manifest": _manifest()}}
-    assert adopt({"launcherChild": True}, {**handle, "bytes": handle["bytes"] + 1})["r"] is None
-    assert "fail" in adopt({"launcherChild": True}, handle, text[:-5])["r"]
-    top = adopt({}, handle)
-    assert top["child"] is False and top["r"] is None
+def test_write_reply_without_a_script_leaves_no_twin(sidecar):
+    root, _, handle = sidecar
+    assert not list(root.glob("scratch/warp/*staged*"))
 
 
 def test_check_relay_default_cause_unchanged():

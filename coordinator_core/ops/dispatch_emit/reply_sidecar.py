@@ -17,7 +17,7 @@ from typing import Mapping
 
 from coordinator_core.ops import _path_guard
 from coordinator_core.ops.dispatch_emit import grind_commit_contract as _contract
-from coordinator_core.ops.dispatch_emit import nested_run_contract as _nested
+from coordinator_core.ops.dispatch_emit import launcher_staged_twin as _twin
 from coordinator_core.session import record_homes
 
 HANDLE_KEYS = ("path", "sha256", "bytes")
@@ -96,31 +96,6 @@ async function _readStageSidecar(h, root) {
   }
 }
 """
-
-# A launcher child never calls workflow(): the launcher reads the sidecar and hands the verified text back
-# in args.stagedManifest. Trap: depends on _verifyReplyText; text still passes it before JSON.parse.
-ADOPT_STAGED_ARG_JS = f"""
-const _LAUNCHER_ARGS = (() => {{
-  try {{
-    const a = (typeof args === 'string') ? JSON.parse(args) : (typeof args === 'undefined' ? null : args);
-    return (a && typeof a === 'object') ? a : null;
-  }} catch (_e) {{ return null; }}
-}})();
-const _LAUNCHER_CHILD = !!(_LAUNCHER_ARGS && _LAUNCHER_ARGS.{_nested.LAUNCHER_CHILD_ARG} === true);
-function _adoptStagedArg(h) {{
-  const s = _LAUNCHER_ARGS ? _LAUNCHER_ARGS.{_nested.STAGED_MANIFEST_ARG} : null;
-  if (!s || typeof s !== 'object' || !s.handle || typeof s.handle !== 'object' || h === null || typeof h !== 'object') return null;
-  if (s.handle.path !== h.path || s.handle.sha256 !== h.sha256 || s.handle.bytes !== h.bytes) return null;
-  const bad = _verifyReplyText(s.text, h);
-  if (bad !== null) return {{ fail: bad }};
-  try {{
-    return {{ manifest: JSON.parse(s.text) }};
-  }} catch (e) {{
-    return {{ fail: 'reply text is not valid JSON' }};
-  }}
-}}
-"""
-
 
 class ReplySidecarError(ValueError):
     """A handle or its sidecar failed verification; the message starts with ``RELAY_CORRUPT_HEAD``."""
@@ -211,6 +186,13 @@ def _ensure_reader(root: Path, raw: bytes, body: bytes) -> None:
         tmp.unlink(missing_ok=True)
 
 
+def _ensure_twin(root: Path, rel: str, raw: bytes, run_token: str | None = None) -> str | None:
+    # Trap: a tokenless call rewrites a token-bearing twin as tokenless (the bytes differ); the running copy is unaffected.
+    return _twin.ensure_twin(
+        root, rel, raw, _handle(rel, raw), max_bytes=READER_MAX_BYTES, refuse=_refuse, run_token=run_token
+    )
+
+
 def write_reply(root: Path, path: Path, payload: Mapping) -> dict:
     """Write ``canonical_json(payload)`` at ``path`` atomically; return its handle.
 
@@ -229,6 +211,7 @@ def write_reply(root: Path, path: Path, payload: Mapping) -> dict:
     finally:
         tmp.unlink(missing_ok=True)
     _ensure_reader(root, raw, body)
+    _ensure_twin(root, rel, raw)
     return _handle(rel, raw)
 
 
@@ -241,6 +224,7 @@ def handle_for(root: Path, path: Path) -> dict:
         raise _refuse(f"sidecar {rel!r} is unreadable: {exc}") from exc
     try:
         _ensure_reader(root, raw, _reader_body(raw))
+        _ensure_twin(root, rel, raw)
     except UnicodeDecodeError:
         pass
     return _handle(rel, raw)
@@ -269,6 +253,27 @@ def read_text(root: Path, handle: Mapping) -> str:
     if message is not None:
         raise ReplySidecarError(message)
     return text
+
+
+def ensure_twin_token(root: Path, handle: Mapping, run_token: str) -> str:
+    """Rewrite the staged twin of the sidecar ``handle`` names with ``run_token`` inlined; return the twin's path.
+
+    The sidecar bytes must match ``handle``; any no-op branch of the twin writer raises ``ReplySidecarError``.
+    """
+    h = _checked_handle(handle)
+    rel = _rel_posix(h["path"])
+    target = _contain(root, rel)
+    try:
+        raw = target.read_bytes()
+    except OSError as exc:
+        raise _refuse(f"sidecar {rel!r} is unreadable: {exc}") from exc
+    message = _contract.check_relay(_FLAG, raw.decode("latin-1"), str(h["bytes"]), h["sha256"], SIDECAR_CAUSE)
+    if message is not None:
+        raise ReplySidecarError(message)
+    twin_rel = _ensure_twin(root, rel, raw, run_token=run_token)
+    if twin_rel is None:
+        raise _refuse(f"staged twin for {rel!r} not written")
+    return twin_rel
 
 
 def read_reply(root: Path, handle: Mapping) -> dict:

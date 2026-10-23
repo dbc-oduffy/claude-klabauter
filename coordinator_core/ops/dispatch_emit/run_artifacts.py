@@ -456,11 +456,15 @@ def residue(
     still_changed: Iterable[str],
     landed: Iterable[str],
     withheld: Mapping[str, str],
+    foreign: Iterable[str] = (),
 ) -> dict[str, str]:
     """Candidates still changed after the caller's commits that were neither landed nor withheld,
-    as ``path -> class``."""
+    as ``path -> class``. ``foreign`` paths (another run's claim, a live peer's hold) are never
+    this run's residue."""
     cands = set(artifacts.paths())
-    done = {str(p).replace("\\", "/") for p in landed} | set(withheld)
+    done = {str(p).replace("\\", "/") for p in landed} | set(withheld) | {
+        str(p).replace("\\", "/") for p in foreign
+    }
     out: dict[str, str] = {}
     for raw in still_changed:
         path = str(raw).replace("\\", "/")

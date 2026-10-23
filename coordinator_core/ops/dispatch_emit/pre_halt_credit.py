@@ -8,13 +8,23 @@ from typing import Sequence
 SHA_TOKEN_PATTERN: str = r"\b[0-9a-f]{7,40}\b"
 _SHA = re.compile(SHA_TOKEN_PATTERN)
 
-# JS twin of `_row_credited`: same regex, digit-and-letter test and either-direction prefix match.
+# File-shaped: a name with a known extension, or a path of 3+ parts (two separators); one
+# separator is prose ('and/or'). ASCII-only so Python `\w` equals the JS twin's.
+FILE_SHAPE_PATTERN: str = r"\w\.(?:md|py|js|ts|json|ya?ml|toml|txt|sh|diff)\b|[\w\-]+[\\/][\w\-.]+[\\/]"
+_FILE_SHAPE = re.compile(FILE_SHAPE_PATTERN, re.ASCII)
+
+# JS twin of `_row_credited`: same regex, digit-and-letter test and either-direction prefix match;
+# a met_by with no sha token but a file-shaped entry is credited by any known sha.
 CREDIT_MATCH_JS: str = (
     "(metBy, knownText) => {\n"
     "  const hex = (s) => (String(s ?? '').toLowerCase().match(/\\b[0-9a-f]{7,40}\\b/g) ?? [])"
     ".filter((t) => /[0-9]/.test(t) && /[a-f]/.test(t));\n"
-    "  const named = hex(Array.isArray(metBy) ? metBy.join(' ') : metBy);\n"
+    "  const text = Array.isArray(metBy) ? metBy.join(' ') : metBy;\n"
+    "  const named = hex(text);\n"
     "  const known = hex(knownText);\n"
+    "  if (named.length === 0) {\n"
+    f"    return known.length > 0 && /{FILE_SHAPE_PATTERN}/.test(String(text ?? '').toLowerCase());\n"
+    "  }\n"
     "  return named.some((n) => known.some((k) => k.startsWith(n) || n.startsWith(k)));\n"
     "}"
 )
@@ -50,7 +60,10 @@ def with_notes(resume: object, notes: Sequence[object]) -> object:
 
 def _row_credited(met_by: object, known: Sequence[str]) -> bool:
     text = " ".join(str(m) for m in met_by) if isinstance(met_by, (list, tuple)) else str(met_by)
-    return any(k.startswith(n) or n.startswith(k) for n in sha_tokens(text) for k in known)
+    named = sha_tokens(text)
+    if not named:
+        return bool(known) and _FILE_SHAPE.search(text.lower()) is not None
+    return any(k.startswith(n) or n.startswith(k) for n in named for k in known)
 
 
 def credited_rows(resume: object, verdict: object) -> frozenset[str]:

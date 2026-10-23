@@ -67,7 +67,7 @@ def test_stale_fresh_verdict_still_refuses_and_names_retest(repo):
     _fresh(repo, "pass", head="0" * 40)
     out = _terminal(repo)
     assert out["refused"] == li.TARGETED_TESTS_FAILED
-    assert "retest_targeted" in out["integrity"][0]["detail"]
+    assert "--retest-targeted" in out["integrity"][0]["detail"]
     assert "retested_tests" not in out
     assert [f.reason for f in _land(repo)] == [li.TARGETED_TESTS_FAILED]
 

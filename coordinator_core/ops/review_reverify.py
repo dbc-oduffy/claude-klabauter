@@ -10,8 +10,15 @@ Reads the write-once pre-review snapshot ``review.prep`` left at
 ``<share>/<slice_prefix>.pre-review/`` (``manifest.json`` plus one blob per sha256). By path
 convention only; no ``review_prep`` import.
 
+Baseline: each manifest path is measured against its snapshot blob, unless a commit moved it
+since the snapshot (its leaf differs between the anchor commit's tree and HEAD's; the anchor is the
+manifest ``head``, else its ``base``). A moved path's baseline is HEAD's blob, so a revert never
+restores bytes older than HEAD. With no HEAD the baseline is always the snapshot. When HEAD or the
+anchor tree is unreadable, revert mode returns ``error`` and writes nothing (fail closed); list mode
+keeps the snapshot baseline and adds ``"head_unreadable": true``.
+
 List mode (no ``failing``): ``{"edited", "created", "snapshot", "error"}``. ``edited`` is every
-manifest path whose bytes now differ (a missing file counts); ``created`` is every path the
+manifest path whose bytes now differ from its baseline (a missing file counts); ``created`` is every path the
 session's review stage wrote that the manifest and its declared ``paths`` do not name. ``foreign``
 is such a path another live run declared that is tracked in the snapshot's base commit, or that predates the snapshot: the session's write record
 spans concurrent runs, so it is reported, never reverted or removed. In revert mode ``foreign`` lists
@@ -19,7 +26,11 @@ the failing node ids whose test file is foreign.
 
 Revert mode (``failing`` given): ``{"reverted", "unattributed", "record", "error"}``. A failing
 node id's test file implicates itself when edited or created, and every edited ``.py`` module it
-imports. ``restored`` writes the snapshot bytes back; ``removed`` deletes a created path. An id
+imports. ``restored`` writes the baseline bytes back and each ``reverted`` entry carries
+``source`` (``"snapshot"`` or ``"head"``); ``removed`` deletes a created path, but a created path
+tracked at HEAD is restored to HEAD's bytes, never unlinked. Before anything is written, the revert
+refuses (``error``, nothing written, the whole call) when it would remove a top-level symbol that a
+committed file in the run's surface (manifest paths plus paths changed anchor..HEAD) still uses. An id
 implicating nothing is ``unattributed`` and reverts nothing. Every restored or removed path is
 passed to ``declare_write`` so the session's write record carries the new bytes. The record
 ``reverify.json`` merges across calls.
@@ -39,6 +50,9 @@ from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
 from coordinator_core.atomic_replace import atomic_write_bytes
+from coordinator_core.git import git_objects, git_state
+from coordinator_core.git.content_hash import eol_folded_sha256
+from coordinator_core.git.git_dir import resolve_git_common_dir
 from coordinator_core.git.index_write import (
     DROP_IF_PHANTOM_INTENT_TO_ADD,
     IndexWriteError,
@@ -46,6 +60,7 @@ from coordinator_core.git.index_write import (
 )
 from coordinator_core.ipc import register_op
 from coordinator_core.ops._path_guard import contained_path
+from coordinator_core.ops.reverify_callers import callers_of, removed_symbols
 from coordinator_core.pyimports import collect_imports, module_name_for_file, resolve_relative_module
 from coordinator_core.session.core import resolve_session_id
 from coordinator_core.session.declared_writes import declare_write
@@ -175,12 +190,91 @@ def _predates(target: Path, since: Optional[float]) -> bool:
         return False
 
 
-def _edited(repo_root: Path, manifest: dict) -> List[str]:
-    return sorted(
-        _norm(rel)
-        for rel, digest in manifest["files"].items()
-        if compute_content_hash(repo_root / _norm(rel)) != digest
-    )
+_MODE_TREE = 0o40000
+_Entry = Tuple[int, str]
+
+
+class _View:
+    """HEAD against the snapshot anchor for a set of paths. ``state`` is ``"none"`` (no HEAD:
+    nothing is committed, so the snapshot is the baseline), ``"ok"`` or ``"unreadable"``.
+    ``anchor_map`` / ``head_map`` map a path to its leaf ``(mode, sha)``; an absent path has no key."""
+
+    def __init__(self, state: str, head: Optional[str] = None, anchor: Optional[str] = None,
+                 head_tree: Optional[str] = None, anchor_map: Optional[Dict[str, _Entry]] = None,
+                 head_map: Optional[Dict[str, _Entry]] = None) -> None:
+        self.state = state
+        self.head = head
+        self.anchor = anchor
+        self.head_tree = head_tree
+        self.anchor_map = anchor_map or {}
+        self.head_map = head_map or {}
+
+    def moved(self, rel: str) -> bool:
+        """True when a commit since the snapshot changed ``rel`` (absent on one side counts)."""
+        return self.state == "ok" and self.anchor_map.get(rel) != self.head_map.get(rel)
+
+
+def _is_sha(value: object) -> bool:
+    return isinstance(value, str) and len(value) == 40 and set(value.lower()) <= set("0123456789abcdef")
+
+
+def _leaves(repo_root: Path, tree: str, rels: List[str]) -> Optional[Dict[str, _Entry]]:
+    spine = git_state.read_tree_spine(repo_root, rels, root_tree_sha=tree)
+    if spine is None:
+        return None
+    out: Dict[str, _Entry] = {}
+    for rel in rels:
+        parent, _, name = rel.rpartition("/")
+        entry = spine.get(parent, {}).get(name)
+        if entry is not None and entry[0] != _MODE_TREE:
+            out[rel] = (entry[0], entry[1])
+    return out
+
+
+def _view(repo_root: Path, manifest: dict, rels: List[str]) -> _View:
+    """Spawn-free object reads only. The anchor is the manifest ``head``, else its ``base``."""
+    head = git_state.head_sha(repo_root)
+    if head is None:
+        return _View("none")
+    anchor = next((v for v in (manifest.get("head"), manifest.get("base")) if _is_sha(v)), None)
+    if anchor is None:
+        return _View("unreadable")
+    head_info = git_state.read_commit(repo_root, head)
+    anchor_info = git_state.read_commit(repo_root, anchor)
+    if head_info is None or anchor_info is None:
+        return _View("unreadable")
+    anchor_map = _leaves(repo_root, anchor_info.tree, rels)
+    head_map = _leaves(repo_root, head_info.tree, rels)
+    if anchor_map is None or head_map is None:
+        return _View("unreadable")
+    return _View("ok", head, anchor, head_info.tree, anchor_map, head_map)
+
+
+def _blob(repo_root: Path, entry: _Entry) -> Optional[bytes]:
+    got = git_objects.read_object(resolve_git_common_dir(repo_root), entry[1])
+    if got is None or got[0] != "blob":
+        return None
+    return got[1]
+
+
+def _edited(repo_root: Path, manifest: dict, view: _View) -> List[str]:
+    """Manifest paths whose bytes differ from their baseline: HEAD's blob for a path a commit
+    moved since the snapshot, the snapshot blob otherwise."""
+    out: List[str] = []
+    for rel, digest in manifest["files"].items():
+        rel = _norm(rel)
+        target = repo_root / rel
+        if view.moved(rel):
+            entry = view.head_map.get(rel)
+            if entry is None:
+                if target.exists():
+                    out.append(rel)
+                continue
+            blob = _blob(repo_root, entry)
+            digest = eol_folded_sha256(blob) if blob is not None else None
+        if compute_content_hash(target) != digest:
+            out.append(rel)
+    return sorted(out)
 
 
 def _contained(repo_root: Path, rels: List[str]) -> bool:
@@ -214,6 +308,72 @@ def _imported_edited(repo_root: Path, test_file: str, edited_py: Set[str]) -> Se
                 wanted.extend(_module_files(f"{base}.{name}"))
         hit.update(p for p in wanted if p in edited_py)
     return hit
+
+
+_Plan = Dict[str, Tuple[Optional[bytes], str]]
+
+
+def _candidate_sources(
+    repo_root: Path, view: _View, manifest: dict, plan: _Plan
+) -> Tuple[Dict[str, bytes], Optional[str]]:
+    """Committed ``.py`` callers in the run's surface (manifest paths plus paths changed between
+    the anchor and HEAD), each at its HEAD blob; a revert target is scanned at its post-revert
+    bytes instead (a removal drops it). Returns ``(sources, error)``."""
+    changes = git_state.diff_commit_trees(repo_root, str(view.anchor), str(view.head))
+    if changes is None:
+        return {}, "could not diff the snapshot anchor against HEAD"
+    paths = {_norm(p) for p in manifest["files"]}
+    paths.update(_norm(p) for p in (manifest.get("paths") or []) if isinstance(p, str))
+    paths.update(c.path for c in changes)
+    rels = sorted(p for p in paths if p.endswith(".py"))
+    leaves = _leaves(repo_root, str(view.head_tree), rels)
+    if leaves is None:
+        return {}, "could not read the HEAD tree"
+    sources: Dict[str, bytes] = {}
+    for rel, entry in leaves.items():
+        if rel in plan:
+            continue
+        blob = _blob(repo_root, entry)
+        if blob is None:
+            return {}, f"could not read the HEAD blob for {rel}"
+        sources[rel] = blob
+    for rel, (data, _src) in plan.items():
+        if data is not None and rel.endswith(".py"):
+            sources[rel] = data
+    return sources, None
+
+
+def _dangling(repo_root: Path, view: _View, manifest: dict, plan: _Plan) -> Optional[str]:
+    """An error message when applying ``plan`` would remove a top-level symbol a committed file
+    still uses; ``None`` when it is safe (always, with no HEAD)."""
+    if view.state != "ok":
+        return None
+    sources: Optional[Dict[str, bytes]] = None
+    for rel in sorted(plan):
+        module = module_name_for_file(rel)
+        if not module:
+            continue
+        entry = view.head_map.get(rel)
+        if entry is not None:
+            before = _blob(repo_root, entry)
+            if before is None:
+                return f"could not read the HEAD blob for {rel}"
+        else:
+            try:
+                before = (repo_root / rel).read_bytes()
+            except OSError:
+                before = b""
+        removed = removed_symbols(before, plan[rel][0] or b"")
+        if not removed:
+            continue
+        if sources is None:
+            sources, error = _candidate_sources(repo_root, view, manifest, plan)
+            if error:
+                return error
+        hits = callers_of(module, removed, sources)
+        if hits:
+            return f"revert would leave {hits[0]['caller']} referencing removed {module}.{hits[0]['symbol']}"
+    return None
 
 
 def _findings(repo_root: Path, sidecars: List[str], rel: str) -> List[dict]:
@@ -277,13 +437,24 @@ def review_reverify(
     rels = [_norm(p) for p in manifest["files"]]
     if not _contained(repo_root, rels):
         return _fail("a snapshot path escapes the worktree", revert)
-    edited = _edited(repo_root, manifest)
     created, foreign = _created(repo_root, session, manifest, share, slice_prefix)
     if not _contained(repo_root, created):
         return _fail("a review-written path escapes the worktree", revert)
+    view = _view(repo_root, manifest, sorted({*rels, *created}))
+    if view.state == "unreadable" and revert:
+        return _fail("HEAD or the snapshot anchor is unreadable; nothing reverted", True)
+    if view.state == "unreadable":
+        view = _View("none")
+        unreadable = True
+    else:
+        unreadable = False
+    edited = _edited(repo_root, manifest, view)
     snapshot_rel = _rel(str(snapshot_dir / _MANIFEST), repo_root)
     if not revert:
-        return {"edited": edited, "created": created, "foreign": foreign, "snapshot": snapshot_rel, "error": None}
+        out = {"edited": edited, "created": created, "foreign": foreign, "snapshot": snapshot_rel, "error": None}
+        if unreadable:
+            out["head_unreadable"] = True
+        return out
 
     ids = [str(i) for i in failing if isinstance(i, str) and i.strip()]
     edited_set, created_set = set(edited), set(created)
@@ -308,23 +479,41 @@ def review_reverify(
             if test_file in foreign_set:
                 foreign_ids.append(node)
 
-    blobs: Dict[str, bytes] = {}
+    plan: _Plan = {}
     for rel in implicated:
+        entry = view.head_map.get(rel)
         if rel in created_set:
+            if entry is None:
+                plan[rel] = (None, "snapshot")
+                continue
+        elif view.moved(rel):
+            if entry is None:
+                plan[rel] = (None, "head")
+                continue
+        else:
+            digest = manifest["files"].get(rel)
+            try:
+                data = (snapshot_dir / str(digest)).read_bytes()
+            except OSError:
+                return _fail(f"snapshot blob for {rel} is unreadable", True)
+            if hashlib.sha256(data).hexdigest() != digest:
+                return _fail(f"snapshot blob for {rel} does not match its hash", True)
+            plan[rel] = (data, "snapshot")
             continue
-        digest = manifest["files"].get(rel)
-        try:
-            data = (snapshot_dir / str(digest)).read_bytes()
-        except OSError:
-            return _fail(f"snapshot blob for {rel} is unreadable", True)
-        if hashlib.sha256(data).hexdigest() != digest:
-            return _fail(f"snapshot blob for {rel} does not match its hash", True)
-        blobs[rel] = data
+        blob = _blob(repo_root, entry)
+        if blob is None:
+            return _fail(f"HEAD blob for {rel} is unreadable", True)
+        plan[rel] = (blob, "head")
+
+    refusal = _dangling(repo_root, view, manifest, plan)
+    if refusal:
+        return _fail(refusal, True)
 
     reverted: List[dict] = []
     for rel in sorted(implicated):
         target = repo_root / rel
-        if rel in created_set:
+        data, source = plan[rel]
+        if data is None:
             try:
                 target.unlink()
             except OSError:
@@ -332,12 +521,13 @@ def review_reverify(
             action = "removed"
         else:
             target.parent.mkdir(parents=True, exist_ok=True)
-            atomic_write_bytes(target, blobs[rel])
+            atomic_write_bytes(target, data)
             action = "restored"
         declare_write(target)
         reverted.append({
             "path": rel,
             "action": action,
+            "source": source,
             "tests": sorted(set(implicated[rel])),
             "findings": _findings(repo_root, list(sidecars or []), rel),
         })

@@ -12,11 +12,11 @@ import datetime as _dt
 import functools
 import json
 import os
-import subprocess
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from coordinator_core.contract.decision_object.reader_result import build_directive
+from coordinator_core.git.run import run_git
 from coordinator_core.session import record_homes
 from coordinator_core.workday_start import contract
 
@@ -95,17 +95,13 @@ def _concluded_days(root: Path) -> set[str]:
 
 
 def _commit_days(root: Path, first: _dt.date) -> set[str]:
-    """Host-local calendar days with a non-merge commit on `main` or `HEAD` since `first`; one `git log`."""
+    """Host-local calendar days with a non-merge commit on `main` or `HEAD` since `first`; one `git log`.
+
+    A failed, unspawnable or timed-out (shared 2s bound) `git log` yields the empty set: commit days are then under-reported, not raised.
+    """
     after = (first - _dt.timedelta(days=1)).isoformat() + "T23:59:59"
-    try:
-        res = subprocess.run(
-            ["git", "-C", str(root), "log", "--no-merges", "--format=%ct", f"--after={after}",
-             "--branches=main", "HEAD"],
-            capture_output=True, text=True, check=False, timeout=10,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return set()
+    res = run_git(["-C", str(root), "log", "--no-merges", "--format=%ct", f"--after={after}",
+                   "--branches=main", "HEAD"])
     if res.returncode != 0:
         return set()
     days: set[str] = set()

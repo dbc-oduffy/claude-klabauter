@@ -110,6 +110,18 @@ def test_malformed_never_raises(resume, verdict):
         (["abcdef1234"], "2fd9d96c64"),
         (["12345678"], "12345678"),
         (None, "2fd9d96c64"),
+        (["docs/design/gsd/reviews/x-review.md"], "note f594d0a96"),
+        (["docs\\design\\x.md"], "note f594d0a96"),
+        (["docs/design/x.md"], "no sha here"),
+        (["TBD"], "f594d0a96"),
+        (["x.md", "abcdef1234"], "f594d0a96"),
+        (["and/or"], "f594d0a96"),
+        (["yes/no"], "f594d0a96"),
+        (["n/a"], "f594d0a96"),
+        (["a/b/c"], "f594d0a96"),
+        (["x.md"], "f594d0a96"),
+        (["é.md"], "f594d0a96"),
+        (["é/é/é"], "f594d0a96"),
     ],
 )
 def test_js_twin_agrees_with_python(met_by, known):
@@ -120,6 +132,53 @@ def test_js_twin_agrees_with_python(met_by, known):
     r = _resume([known])
     expected = bool(phc.credited_rows(r, _verdict(met_by)))
     assert json.loads(out) is expected
+
+
+FILE_MET_BY = ["docs/design/gsd/reviews/2026-10-23-review.md"]
+
+
+def test_file_met_by_credited_by_revise_note_sha():
+    r = _resume(["R2 met_by f594d0a96 and 67fde3387"])
+    assert phc.credited_rows(r, _verdict(FILE_MET_BY)) == {"R1"}
+    assert phc.credited_rows(r, _verdict(["docs\\design\\x.md"])) == {"R1"}
+
+
+def test_file_met_by_credited_by_evidence_sha():
+    r = _resume(["re-ruled"], remaining={"R1": {"evidence": "the review in f594d0a96"}})
+    assert phc.credited_rows(r, _verdict(FILE_MET_BY)) == {"R1"}
+
+
+def test_file_met_by_without_known_sha_still_demoted():
+    assert phc.credited_rows(_resume(["re-ruled, no sha"]), _verdict(FILE_MET_BY)) == frozenset()
+    assert phc.credited_rows(_resume([]), _verdict(FILE_MET_BY)) == frozenset()
+
+
+def test_non_file_non_sha_met_by_still_demoted():
+    assert phc.credited_rows(_resume(["f594d0a96"]), _verdict(["TBD"])) == frozenset()
+
+
+@pytest.mark.parametrize("prose", ["and/or", "yes/no", "n/a", "TBD", "see and/or yes/no"])
+def test_slash_prose_is_not_file_shaped(prose):
+    assert phc.credited_rows(_resume(["f594d0a96"]), _verdict([prose])) == frozenset()
+
+
+@pytest.mark.parametrize("name", ["x.md", "docs/design/x", "docs\\design\\x", "a/b/c.txt"])
+def test_extension_or_deep_path_is_file_shaped(name):
+    assert phc.credited_rows(_resume(["f594d0a96"]), _verdict([name])) == {"R1"}
+
+
+@pytest.mark.parametrize("name", ["é.md", "é/é/é"])
+def test_non_ascii_word_chars_are_not_file_shaped(name):
+    assert phc.credited_rows(_resume(["f594d0a96"]), _verdict([name])) == frozenset()
+
+
+def test_file_shape_compiled_ascii():
+    assert phc._FILE_SHAPE.flags & phc.re.ASCII
+
+
+def test_mismatched_sha_with_file_still_demoted():
+    r = _resume(["f594d0a96"])
+    assert phc.credited_rows(r, _verdict(["x.md", "abcdef1234"])) == frozenset()
 
 
 def test_with_notes_supplies_missing_revise_notes():

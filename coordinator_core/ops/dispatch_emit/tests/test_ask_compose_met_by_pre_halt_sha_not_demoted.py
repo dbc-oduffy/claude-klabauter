@@ -20,7 +20,7 @@ pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 _N1 = {
     "run_id": "ask-prior", "plan": _RESUME["plan"], "blocking": ["R1"], "halt_sha": "7ed10ac381" + "0" * 30,
-    "unlanded": [], "revise_notes": ["R1 is ruled met by the landed work"],
+    "unlanded": [], "revise_notes": ["R1 is ruled met by the landed work at 07ec9214b0 and 9d08bfbd0b"],
     "remaining": {"R1": {"remaining": ["update the sizing"], "evidence": "no sha here"}},
 }
 
@@ -41,6 +41,14 @@ def test_a_met_by_naming_no_sha_is_still_demoted(monkeypatch, met_by):
     item = out["result"]["halted_by"]["items"][0]
     assert item["status"] == "not_met"
     assert item["remaining"] == ["met_by: the commit sha that carries the credited work"]
+    assert "commit" not in _labels(out)
+
+
+@pytest.mark.parametrize("met_by", [["abcdef1234"], ["x.md", "abcdef1234"]])
+def test_a_met_by_sha_matching_no_known_sha_is_demoted(monkeypatch, met_by):
+    out = _run(_script(monkeypatch), verify=_met(met_by), resume=_N1)
+    item = out["result"]["halted_by"]["items"][0]
+    assert item["status"] == "not_met"
     assert "commit" not in _labels(out)
 
 

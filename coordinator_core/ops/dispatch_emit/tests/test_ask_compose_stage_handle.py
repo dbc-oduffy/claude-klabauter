@@ -18,6 +18,7 @@ import pytest
 
 from coordinator_core.ops.dispatch_emit import ask_compose, reply_sidecar
 from coordinator_core.ops.dispatch_emit.ask_compose import compose_ask_script
+from coordinator_core.ops.dispatch_emit.nested_run_contract import STAGED_INLINE_SLOT
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
 from coordinator_core.ops.dispatch_emit.tests._node_support import payload_file
 from coordinator_core.win_portability import no_console_creationflags
@@ -213,8 +214,8 @@ def test_a_forty_row_manifest_is_assembled_whole_from_the_reader_with_no_agent_l
     assert res["rows"] == [r["id"] for r in manifest["rows"]]
     assert out["workflowCalls"] == [f"REPO/{reply_sidecar.reader_rel(sha)}"]
     assert not [lab for lab in _labels(out) if lab and "reply" in lab and lab != "gate-stage"], _labels(out)
-    tail = next(c for c in out["calls"] if c["label"] == "ledger-remaining")
-    assert "pkg/f119.py" in tail["prompt"]
+    # The ledger-remaining prompt names `resume_ledger.leg.writes`, not manifest rows; _RESUME has no leg, so only the leg's presence is pinned.
+    assert "ledger-remaining" in _labels(out)
 
 
 def test_a_one_row_manifest_is_read_by_one_workflow_call(monkeypatch):
@@ -273,60 +274,86 @@ def test_a_reply_carrying_neither_is_not_whole(monkeypatch):
     assert _halt_reason(out) == "stage manifest relay is not whole: manifest_handle"
 
 
-def _child(handle: dict, text: str) -> dict:
-    return {"launcherChild": True, "stagedManifest": {"handle": handle, "text": text}}
+def _slotted(script: str, handle: dict, text: str) -> str:
+    """The staged twin: the inline slot line replaced by `{handle, text}`."""
+    assert script.count(STAGED_INLINE_SLOT) == 1
+    inline = json.dumps({"handle": handle, "text": text})
+    return script.replace(STAGED_INLINE_SLOT, "const _STAGED_INLINE = " + inline + ";")
 
 
-def test_a_launcher_child_without_a_staged_manifest_returns_stage_pending_and_never_calls_workflow(monkeypatch):
+def _launcher_script(monkeypatch) -> str:
+    monkeypatch.setattr(ask_compose, "_known_arm", lambda *_: "m_plus")
+    return compose_ask_script(
+        repo_root="REPO", prompt=None, sizing_rel=_SIZING, run_id="run-1", session_id=None,
+        wrap_stage=lambda _t: (_BLITZ_FN, ["Size", "Plan"]), plan_blitz_text="stub",
+        script_path="scratch/warp/x.mjs", in_run_commit=True, launcher_child=True, **REVIEW_KW,
+    )
+
+
+def test_a_launcher_child_script_holds_no_reader_no_workflow_call_and_one_slot_line(monkeypatch):
+    script = _launcher_script(monkeypatch)
+    assert "workflow(" not in script
+    assert "_readStageSidecar" not in script
+    assert "_LAUNCHER_ARGS" not in script and "_adoptStagedArg" not in script
+    assert script.count(STAGED_INLINE_SLOT + "\n") == 1
+    assert script.index(STAGED_INLINE_SLOT) < script.index("function _adoptStagedInline(")
+
+
+def test_a_launcher_child_with_an_empty_slot_is_pending_and_never_calls_workflow(monkeypatch):
     reply = stage_reply(big_manifest(3))
-    out = _run(_script(monkeypatch), reply, args={"launcherChild": True})
+    out = _run(_launcher_script(monkeypatch), reply)
     assert out["result"] == {"stage_pending": {"handle": reply["manifest_handle"]}}
     assert out["workflowCalls"] == []
     assert _no_executor(out)
 
 
-def test_a_launcher_child_adopts_the_matching_staged_manifest_with_no_workflow_call(monkeypatch):
+def test_a_launcher_child_adopts_the_matching_inline_manifest_with_no_workflow_call(monkeypatch):
     manifest = big_manifest(3)
     reply = stage_reply(manifest)
-    out = _run(_script(monkeypatch), reply, args=_child(reply["manifest_handle"], sidecar_text(manifest)))
+    script = _slotted(_launcher_script(monkeypatch), reply["manifest_handle"], sidecar_text(manifest))
+    out = _run(script, reply)
     assert out["result"]["halted_by"] is None, out["result"]["halted_by"]
     assert out["result"]["rows"] == [r["id"] for r in manifest["rows"]]
     assert out["workflowCalls"] == []
 
 
-def test_a_launcher_child_refuses_staged_text_that_does_not_match_its_handle(monkeypatch):
+def test_a_launcher_child_refuses_inline_text_that_does_not_match_its_handle(monkeypatch):
     manifest = big_manifest(3)
     reply = stage_reply(manifest)
     bad = sidecar_text(manifest).replace('"C1"', '"C9"', 1)
-    out = _run(_script(monkeypatch), reply, args=_child(reply["manifest_handle"], bad))
+    out = _run(_slotted(_launcher_script(monkeypatch), reply["manifest_handle"], bad), reply)
     assert _halt_reason(out).startswith("stage reply sidecar does not match its handle: ")
     assert _no_executor(out)
     assert out["workflowCalls"] == []
 
 
-def test_a_staged_manifest_for_another_handle_is_pending_not_adopted(monkeypatch):
-    other = stage_reply(big_manifest(2))["manifest_handle"]
-    manifest = big_manifest(3)
-    reply = stage_reply(manifest)
-    out = _run(_script(monkeypatch), reply, args=_child(other, sidecar_text(big_manifest(2))))
+def test_an_inline_manifest_for_another_handle_is_pending_not_adopted(monkeypatch):
+    other_manifest = big_manifest(2)
+    other = stage_reply(other_manifest)["manifest_handle"]
+    reply = stage_reply(big_manifest(3))
+    out = _run(_slotted(_launcher_script(monkeypatch), other, sidecar_text(other_manifest)), reply)
     assert "stage_pending" in out["result"]
 
 
-def test_a_top_level_run_ignores_a_staged_manifest_arg_and_reads_the_reader(monkeypatch):
+def test_a_standalone_script_has_no_slot_no_args_branch_and_reads_the_reader_unconditionally(monkeypatch):
+    script = _script(monkeypatch)
+    assert STAGED_INLINE_SLOT not in script
+    for gone in ("_LAUNCHER_CHILD", "_LAUNCHER_ARGS", "_adoptStagedArg", "_adoptStagedInline"):
+        assert gone not in script
+    assert ask_compose._stage_reply_js() == ask_compose._stage_reply_js(False)
+    assert ask_compose._ADOPT_STAGE_REPLY_JS in script
+
+
+def test_a_standalone_run_ignores_launcher_args_and_reads_the_reader(monkeypatch):
     manifest = big_manifest(3)
     reply = stage_reply(manifest)
-    args = {"stagedManifest": {"handle": reply["manifest_handle"], "text": sidecar_text(manifest)}}
+    args = {
+        "launcherChild": True,
+        "stagedManifest": {"handle": reply["manifest_handle"], "text": sidecar_text(manifest)},
+    }
     out = _run(_script(monkeypatch), reply, args=args)
     assert out["result"]["halted_by"] is None
     assert len(out["workflowCalls"]) == 1
-
-
-def test_the_reader_workflow_call_sits_behind_the_launcher_child_guard(monkeypatch):
-    script = _script(monkeypatch)
-    guard = script.index("if (_LAUNCHER_CHILD) {")
-    call = script.index("} else { got = await _readStageSidecar(r.manifest_handle, REPO_ROOT); }")
-    assert guard < script.index("_adoptStagedArg(r.manifest_handle)") < call
-    assert script.count("_readStageSidecar(r.manifest_handle") == 1
 
 
 def test_the_script_reads_the_reader_through_workflow_and_composes_no_page_leg(monkeypatch):
@@ -335,3 +362,12 @@ def test_the_script_reads_the_reader_through_workflow_and_composes_no_page_leg(m
     assert "await _readStageSidecar(r.manifest_handle, REPO_ROOT)" in script
     assert "stage-reply-page" not in script and "reply_page" not in script
     assert "_MANIFEST_READ_SCHEMA" not in script and "_adoptManifest" not in script
+
+
+def test_a_launcher_child_run_token_reads_the_inline_slot_and_standalone_bytes_are_unchanged(monkeypatch):
+    script = _launcher_script(monkeypatch)
+    assert "_STAGED_INLINE.runToken" in script
+    assert script.index(STAGED_INLINE_SLOT) < script.index("const _RUN_TOKEN")
+    standalone = _script(monkeypatch)
+    assert ask_compose._RUN_TOKEN_DECL_JS in standalone
+    assert "_STAGED_INLINE" not in standalone

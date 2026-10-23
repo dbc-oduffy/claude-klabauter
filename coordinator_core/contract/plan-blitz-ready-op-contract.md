@@ -40,10 +40,10 @@ the reply's `manifest_handle` as the stage manifest when the sidecar it names is
 The engine leaves `scratch/stage-readers/<sha256>.js` beside every handle; the script reads it with
 `workflow({scriptPath})` and checks the text's length and sha256 against the handle before parsing
 it. A mismatch halts the run with `stage reply sidecar does not match its handle: <reason>`. A
-launcher child (`args.launcherChild: true`) never calls `workflow()`: it adopts `args.stagedManifest.text`
-when `stagedManifest.handle` equals the reply's handle, through the same length and sha256 check
-and the same manifest rules below, and otherwise ends the run with `{stage_pending: {handle}}` for the
-launcher to answer. The
+launcher child never calls `workflow()` and receives no args: it adopts the manifest text inlined in
+its staged twin (`_STAGED_INLINE`) when the inlined handle equals the reply's handle, through the same
+length and sha256 check and the same manifest rules below, and otherwise ends the run with
+`{stage_pending: {handle}}` for the launcher to answer by starting the twin. The
 `readyOpReply` shape is unchanged: nothing on the plan-blitz side moves. The parsed
 manifest must be:
 

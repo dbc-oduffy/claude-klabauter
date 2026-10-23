@@ -1257,6 +1257,11 @@ def _row_agent_type(row: WaveRow) -> str:
                 f"row {row.id!r} declares agent_type {row.agent_type!r}, "
                 f"which does not match the required grammar {_AGENT_TYPE_GRAMMAR}"
             )
+        if row.agent_type == "em":
+            raise MalformedAgentOverrideError(
+                f"row {row.id!r} declares agent_type 'em', which names no agent; "
+                "an EM-performed row declares `performer: em`"
+            )
         return row.agent_type
 
     if getattr(row, "memo_send", None):
@@ -6908,7 +6913,9 @@ class ResumeLanded(NamedTuple):
     ``row_shas``: ``{row id: full sha}`` of the newest commit landing each id in ``rows``, the
     content half of a split checkpoint (never its ``(process files)`` child) unless only process
     halves landed the id. ``landing_shas``: ``{row id: frozenset of every full sha}`` that landed
-    the id: each checkpoint commit, both halves, and each ledger-check halt commit."""
+    the id: each checkpoint commit, both halves, and each ledger-check halt commit.
+    ``landed_since_ledger``: ids from checkpoint commits newer than ``ledger_sha`` (the newest-first
+    walk reached them before it set ``ledger_sha``); empty when no ledger halt names the plan."""
 
     rows: frozenset
     ledger_run: Optional[str]
@@ -6916,6 +6923,7 @@ class ResumeLanded(NamedTuple):
     run_halts: Mapping = {}
     row_shas: Mapping = {}
     landing_shas: Mapping = {}
+    landed_since_ledger: frozenset = frozenset()
 
 
 def resume_landed_rows(repo_root: Path, plan: str) -> frozenset:
@@ -6954,6 +6962,7 @@ def resume_landed_state(repo_root: Path, plan: str) -> ResumeLanded:
     row_shas: dict = {}
     process_shas: dict = {}
     landing: dict = {}
+    since_ledger: set = set()
 
     def _land(landed_ids, landing_sha: str, subject: str) -> None:
         ids.update(landed_ids)
@@ -6971,7 +6980,10 @@ def resume_landed_state(repo_root: Path, plan: str) -> ResumeLanded:
         sha = sha.strip()
         stop_ids = {i for i in re.split(r"[,\s\x1d]+", parts[6]) if i} if len(parts) > 6 else set()
         if any(checkpoint_plan_matches(v, plan) for v in checkpoint.split("\x1d") if v.strip()):
-            _land(set(plan_commit_row_ids(without_process_half(subject))) - stop_ids, sha, subject)
+            checkpoint_ids = set(plan_commit_row_ids(without_process_half(subject))) - stop_ids
+            _land(checkpoint_ids, sha, subject)
+            if ledger_run is None:
+                since_ledger.update(checkpoint_ids)
         is_ledger_check = any(v.strip() == "ledger-check" for v in halted_by.split("\x1d"))
         named = [v for v in halt_plan.split("\x1d") if v.strip()]
         names_plan = any(checkpoint_plan_matches(v, plan) for v in named)
@@ -6990,6 +7002,7 @@ def resume_landed_state(repo_root: Path, plan: str) -> ResumeLanded:
     return ResumeLanded(
         frozenset(ids), ledger_run, ledger_sha, run_halts, row_shas,
         {i: frozenset(s) for i, s in landing.items()},
+        frozenset(since_ledger) if ledger_run is not None else frozenset(),
     )
 
 

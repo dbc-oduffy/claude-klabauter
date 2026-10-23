@@ -26,7 +26,7 @@ prior freeze. Range mode ignores it. Trap: the key is deliberately outside ``_ST
 older sidecar without it stays readable by ``stored_reply_for_run``.
 
 Worktree mode also writes a write-once pre-review snapshot beside the sidecar:
-``<slice_prefix>.pre-review/manifest.json`` (``base``, ``recorded_at``, ``paths``, ``files``: product
+``<slice_prefix>.pre-review/manifest.json`` (``base``, ``head``, ``recorded_at``, ``paths``, ``files``: product
 path -> sha256) and one blob per distinct hash holding the bytes frozen. The reply names the manifest
 as ``pre_review_manifest`` (outside ``_STORED_KEYS``, like ``reviewed_sha256``). Range mode writes none.
 
@@ -67,6 +67,7 @@ import yaml
 
 from coordinator_core.atomic_replace import atomic_write_bytes
 from coordinator_core.frontmatter.primitives import split_frontmatter
+from coordinator_core.git import git_state
 from coordinator_core.git.content_hash import eol_folded_sha256
 from coordinator_core.git.literal_pathspec import git_pathspec
 from coordinator_core.git.run import run_git
@@ -526,6 +527,7 @@ def _write_pre_review_snapshot(
     body = json.dumps(
         {
             "base": base,
+            "head": git_state.head_sha(repo_root),
             "recorded_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
             "paths": paths,
             "files": files,

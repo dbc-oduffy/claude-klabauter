@@ -109,15 +109,14 @@ class PlanRowsUnreadable(Exception):
     """The plan cannot be read, or carries no parseable spine; the message names the failure."""
 
 
-def plan_rows_serving(plan_path: Path, blocking: Sequence[str]) -> list[str]:
-    """Ordered, de-duplicated `writes` of every spine row serving a blocking id.
+def serving_rows(plan_path: Path, blocking: Sequence[str]) -> list[dict[str, Any]]:
+    """Spine rows (dicts, row `id` included) serving a blocking id, in spine order.
 
     Raises `PlanRowsUnreadable` when the plan cannot be read or its spine does not parse: an
-    unreadable plan is never an empty footprint.
+    unreadable plan is never an empty selection.
 
-    Landed rows count (the owed work lies on their files); `wont_do` and `spun_off` rows do not.
-    A row serves an id through its `register_rows`, or through the frontmatter's
-    `register_claims.rows` when it declares none.
+    Landed rows count; `wont_do` and `spun_off` rows do not. A row serves an id through its
+    `register_rows`, or through the frontmatter's `register_claims.rows` when it declares none.
     """
     import yaml
 
@@ -131,7 +130,6 @@ def plan_rows_serving(plan_path: Path, blocking: Sequence[str]) -> list[str]:
         raise PlanRowsUnreadable(f"plan {plan_path} unreadable: {exc}") from exc
     if loaded.status is not LocateStatus.LOCATED:
         raise PlanRowsUnreadable(f"plan {plan_path} spine is {loaded.status.name}")
-    spine = loaded.rows
     claims: list[str] = []
     if text.startswith("---"):
         try:
@@ -141,14 +139,21 @@ def plan_rows_serving(plan_path: Path, blocking: Sequence[str]) -> list[str]:
         except (ValueError, yaml.YAMLError) as exc:
             raise PlanRowsUnreadable(f"plan {plan_path} frontmatter unparseable: {exc}") from exc
     blocked = set(blocking)
-    out: list[str] = []
-    for row in spine:
+    out: list[dict[str, Any]] = []
+    for row in loaded.rows:
         if row.get("disposition") in ("wont_do", "spun_off"):
             continue
         rr = row.get("register_rows")
         serves = [str(x) for x in rr] if isinstance(rr, list) and rr else claims
-        if not blocked.intersection(serves):
-            continue
+        if blocked.intersection(serves):
+            out.append(row)
+    return out
+
+
+def plan_rows_serving(plan_path: Path, blocking: Sequence[str]) -> list[str]:
+    """Ordered, de-duplicated `writes` of every spine row serving a blocking id (see `serving_rows`)."""
+    out: list[str] = []
+    for row in serving_rows(plan_path, blocking):
         for w in row.get("writes") or []:
             if isinstance(w, str) and w not in out:
                 out.append(w)

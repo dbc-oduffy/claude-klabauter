@@ -891,10 +891,10 @@ def _unchanged_since_halt(
                 detail["landed_sha"] = next(iter(shas)) if len(shas) == 1 else base
                 detail["landed_paths"] = list(paths)
             else:
-                from coordinator_core.ops.dispatch_emit.terminal_commit import _landed_before_halt
+                from coordinator_core.ops.dispatch_emit.halt_landing import landed_before_halt
 
                 owners = [x for x in (plan_rel, resume.get("plan"), resume.get("run_id")) if isinstance(x, str)]
-                landed = _landed_before_halt(root, base, paths, owners)
+                landed = landed_before_halt(root, base, paths, owners)
                 if landed:
                     detail["landed_sha"] = landed
                     detail["landed_paths"] = list(paths)
@@ -974,11 +974,11 @@ def _ledger_gate(
         f["reason"] == UNCHANGED_SINCE_HALT_REASON for f in result["failures"]
     ):
         from coordinator_core.ops.dispatch_emit.pre_halt_ancestry import CITED_DETAIL_KEY
-        from coordinator_core.ops.dispatch_emit.terminal_commit import _verdict_credits
+        from coordinator_core.ops.dispatch_emit.halt_landing import verdict_credits
 
         failed_ids = [f["id"] for f in result["failures"]]
         vouched = since_halt.get(CITED_DETAIL_KEY) or {}
-        if all(str(i) in vouched for i in failed_ids) or _verdict_credits(
+        if all(str(i) in vouched for i in failed_ids) or verdict_credits(
             verdict, failed_ids, since_halt["landed_sha"],
         ):
             return {

@@ -157,6 +157,10 @@ from coordinator_core.session.record_homes import home_dir
 from coordinator_core.warm.entry_seam import OpUnavailableError, reentrant_dispatch
 from coordinator_core.ops.dispatch_emit import credit_gate, gate_owed, pre_halt_credit  # noqa: E402 -- sibling-package group
 from coordinator_core.ops.dispatch_emit.land_run import _em_discharged_rows  # noqa: E402
+from coordinator_core.ops.dispatch_emit.halt_landing import (  # noqa: E402
+    landed_before_halt as _landed_before_halt,
+    verdict_credits as _verdict_credits,
+)
 from coordinator_core.ops.dispatch_emit.pre_halt_ancestry import (  # noqa: E402
     CITED_DETAIL_KEY, cited_at_or_before, verified_post_commit_credit,
 )
@@ -1786,28 +1790,6 @@ def _withheld_work_pending(worktree_root: Path, resume: object, declared: Sequen
     return status.returncode == 0 and bool(status.stdout.strip())
 
 
-def _landed_before_halt(
-    worktree_root: Path, base: str, paths: Sequence[str], owners: Sequence[str]
-) -> Optional[str]:
-    """The commit that carried the declared product when it landed strictly before the halt commit
-    ``base`` and HEAD still holds it byte for byte; None otherwise. The commit's message must name
-    one of ``owners`` (the plan path or run id): a path merely untouched since the halt was never
-    this run's landing. The halt commit itself carrying the product is not a prior landing."""
-    held = run_git(["--literal-pathspecs", "diff", "--quiet", "HEAD", "--", *paths], cwd=str(worktree_root))
-    if held.returncode != 0:
-        return None
-    log = run_git(
-        ["--literal-pathspecs", "log", "-1", "--format=%H%x00%B", "HEAD", "--", *paths],
-        cwd=str(worktree_root),
-    )
-    sha, _, body = log.stdout.partition("\0") if log.returncode == 0 else ("", "", "")
-    sha = sha.strip()
-    if not _FULL_SHA_RE.fullmatch(sha) or sha == base or not any(o and o in body for o in owners):
-        return None
-    anc = run_git(["merge-base", "--is-ancestor", sha, base], cwd=str(worktree_root))
-    return sha if anc.returncode == 0 else None
-
-
 def _unchanged_since_halt_failures(
     worktree_root: Path, resume: object, verdict: object, manifest_path: Optional[Path],
     plan_rel: Optional[str] = None, detail: Optional[dict] = None,
@@ -1967,20 +1949,6 @@ def _write_note_verdicts(note_abs: Path, ledger_verdict: object, inline_review: 
 def _awaiting_operator(open_rows: Sequence[dict]) -> list:
     """``[{id, row, command}]`` for each open ledger row classified ``awaiting_operator``."""
     return [{"id": r["id"], "row": r["row"], "command": r["command"]} for r in open_rows if "command" in r]
-
-
-def _verdict_credits(verdict: object, ids: Sequence[object], sha: str) -> bool:
-    """True unless a row in ``ids`` cites ``met_by`` shas none of which is ``sha``: a verdict that
-    credits some other commit has not vouched for this landing (pre-halt credit's rule)."""
-    items = verdict.get("items") if isinstance(verdict, dict) else None
-    for item in items if isinstance(items, list) else ():
-        if not isinstance(item, dict) or item.get("id") not in ids:
-            continue
-        met_by = item.get("met_by") or ()
-        cited = [m for m in ([met_by] if isinstance(met_by, str) else met_by) if isinstance(m, str) and m]
-        if cited and not any(sha.startswith(m) for m in cited):
-            return False
-    return True
 
 
 def _ledger_gate(
@@ -2356,10 +2324,13 @@ def _own_run_seniority(worktree_root: Path, run_id: object, script_path_raw: obj
 
 def _land_own_left_behind(
     reply: dict, product_sha: str, session_id: str, worktree_root: Path, repo_root: Optional[Path],
+    withheld: Sequence[str] = (),
 ) -> None:
     """Land the session's uncontested left-behind claims (``reply["own_left_behind"]["left"]``) in
     a follow-on commit and record it under ``own_carry.REPLY_KEY``. A refusal is recorded as
-    ``{"error": ...}`` and never un-lands the product commit; nothing left makes no call."""
+    ``{"error": ...}`` and never un-lands the product commit; nothing left makes no call.
+    ``withheld`` paths (foreign-excluded, or beside a live sibling run's declared path) are never
+    carried."""
     from coordinator_core.ops.dispatch_emit import own_carry
     from coordinator_core.session import scope as session_scope
 
@@ -2371,7 +2342,7 @@ def _land_own_left_behind(
     if contested is None:
         return
     try:
-        carry = own_carry.own_carry_params(list(left), contested, product_sha, session_id)
+        carry = own_carry.own_carry_params(list(left), {*contested, *withheld}, product_sha, session_id)
         if carry is None:
             return
         out = reentrant_dispatch("ceremony.commit_v2", {**carry, "session_id": session_id}, repo_root=repo_root)
@@ -3865,6 +3836,16 @@ def _terminal_commit(
 _CLAIM_POLL_SECS = 0.05
 
 
+def _drop_staged_twins(worktree_root: Path, run_id: object) -> None:
+    """The claim is held: drop the run's staged twins (they carry the plaintext token). Never fails the commit."""
+    from coordinator_core.ops.dispatch_emit import launcher_staged_twin
+
+    try:
+        launcher_staged_twin.remove_twins(worktree_root, run_id)
+    except Exception:  # noqa: BLE001 -- cleanup must not fail the commit
+        pass
+
+
 def _redeem_or_answer(worktree_root: Path, run_id: object, token: str, script_path: object) -> Optional[dict]:
     """Redeem the run token; None when this call holds the claim, else the reply that ends it.
 
@@ -3878,6 +3859,7 @@ def _redeem_or_answer(worktree_root: Path, run_id: object, token: str, script_pa
     from coordinator_core.ops.dispatch_emit import run_token, terminal_commit_reconcile
 
     if run_token.redeem(worktree_root, run_id, token, script_path):
+        _drop_staged_twins(worktree_root, run_id)
         return None
     landed = terminal_commit_reconcile.already_landed_reply(worktree_root, run_id, token, script_path)
     if landed is not None:
@@ -3892,6 +3874,7 @@ def _redeem_or_answer(worktree_root: Path, run_id: object, token: str, script_pa
                     return landed
                 time.sleep(_CLAIM_POLL_SECS)
             if run_token.redeem(worktree_root, run_id, token, script_path):
+                _drop_staged_twins(worktree_root, run_id)
                 return None
             landed = terminal_commit_reconcile.already_landed_reply(worktree_root, run_id, token, script_path)
             if landed is not None:
@@ -4627,7 +4610,7 @@ def _terminal_commit_inner(
         all_paths = [p for p in all_paths if p not in held_paths]
     note_committed = note_rel if note_rel is not None and note_rel in all_paths else None
 
-    declared_writes = {case_map.get(p, p) for c in done_chunks + partial_chunks for p in c.paths}
+    declared_writes = {p for c in done_chunks + partial_chunks for p in c.paths}
     absent = [p for p in all_paths if not (worktree_root / p).exists()]
     dropped_absent: list = []
     deleted_paths: list = []
@@ -4787,7 +4770,15 @@ def _terminal_commit_inner(
     claims_over([
         *all_paths, *deleted_paths,
         *(p for p in (review_writes or ()) if not p.startswith(("/", "../")) and p != ".." and p[1:2] != ":"),
+        *(p for ps in residue.values() for p in ps),
     ])
+    # A barred path another unlanded run claims or a live peer holds is that run's dirt, not this
+    # run's stranded residue: it stays barred but is not reported under this run's chunk.
+    # Trap: no test pins this filter or the matching `foreign=` on run_artifacts.residue.
+    for cid in list(residue):
+        residue[cid] = {p for p in residue[cid] if p not in sibling_claims and p not in left_out_map}
+        if not residue[cid]:
+            del residue[cid]
     if review_checked:
         verdict = _review_edit_verdict(
             worktree_root, review_writes, snapshot, session_id, review_run_id,
@@ -5312,7 +5303,18 @@ def _terminal_commit_inner(
 
         stamp_landed(guarded_script, str(reply["sha"]))
         if session_id is not None and not anchor_only:
-            _land_own_left_behind(reply, str(reply["sha"]), session_id, worktree_root, repo_root)
+            from coordinator_core.ops.dispatch_emit import sibling_claims as _sc_follow
+
+            left_behind = (reply.get("own_left_behind") or {}).get("left") or ()
+            _land_own_left_behind(
+                reply, str(reply["sha"]), session_id, worktree_root, repo_root,
+                withheld=[
+                    *foreign_excluded,
+                    *_sc_follow.shared_dir_holds(
+                        worktree_root, sibling_run_id, [*all_paths, *declared_writes], left_behind,
+                    ),
+                ],
+            )
     if not reply.get("committed"):
         _remove(worktree_root, receipt_paths)
         receipt_paths = []
@@ -5627,6 +5629,7 @@ def _terminal_commit_inner(
             withheld_art = {**(dict(art_landable.withheld) if art_landable is not None else {}), **wh_map}
             art_residue = run_artifacts.residue(
                 artifacts, snapshot.changed if snapshot is not None else (), landed_now, withheld_art,
+                foreign=set(claims_over(artifacts.paths())) | set(left_out_map),
             )
             reply["run_artifacts"] = {
                 "landed": sorted(p for p in artifacts.paths() if p in landed_now),

@@ -39,12 +39,27 @@ def _row(v: QuadViolation) -> dict:
     }
 
 
-def build_report(raw, *, suspended, generation: dict, registered_op_count: int) -> dict:
-    """Pure: prune known debt once, then partition suspended ops into their own field."""
+def _poisoned_rows(poisoned) -> list[dict]:
+    return [
+        {"module": m, "exception_type": type(e).__name__, "exception": str(e)}
+        for m, e in sorted((poisoned or {}).items())
+    ]
+
+
+def build_report(
+    raw, *, suspended, generation: dict, registered_op_count: int, poisoned=None
+) -> dict:
+    """Pure: prune known debt once, partition suspended ops into their own field.
+
+    `poisoned` maps op-module path to the exception its import raised; any entry makes the
+    report not complete, since its ops are absent from the live registry.
+    """
     pruned = filter_known_violations(list(raw), suspended=frozenset())
     live, by_design = partition_suspended(pruned, suspended)
+    poisoned_rows = _poisoned_rows(poisoned)
     return {
-        "complete": not live,
+        "complete": not live and not poisoned_rows,
+        "poisoned_modules": poisoned_rows,
         "violations": [_row(v) for v in live],
         "suspended_by_design": [_row(v) for v in by_design],
         "registered_op_count": registered_op_count,
@@ -73,7 +88,7 @@ def _engine_registration_completeness(params: dict, repo_root=None) -> dict:
     Params: none consumed. repo_root: unused — reports on the engine that is running.
     """
     from coordinator_core.op_budget_suspension import SUSPENDED_OPS
-    from coordinator_core.ops import _eager_import_all
+    from coordinator_core.ops import _eager_import_all, get_poisoned_modules
 
     _eager_import_all()
     registry = dict(_REGISTRY)
@@ -82,4 +97,5 @@ def _engine_registration_completeness(params: dict, repo_root=None) -> dict:
         suspended=frozenset(SUSPENDED_OPS),
         generation=_generation(),
         registered_op_count=len(registry),
+        poisoned=get_poisoned_modules(),
     )

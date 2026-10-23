@@ -82,7 +82,8 @@ def test_a_halt_that_landed_no_chunk_names_its_staged_rows_unlanded_and_stages_e
         HALTED_RUN,
         REFIRE_RUN,
         REGISTER,
-        REMAINING,
+        DERIVED_ROW,
+        REMAINING_AT_PATH,
         _git,
         _plan,
         _put,
@@ -109,7 +110,7 @@ def test_a_halt_that_landed_no_chunk_names_its_staged_rows_unlanded_and_stages_e
     record = repo / RECORD_DIR_ROOT / HALTED_RUN
     write_halt_marker(
         record, halted="ledger-check", sizing_rel=REL, plan_rel=PLAN_REL, blocking=("R1",),
-        blocking_items=[{"id": "R1", **REMAINING["R1"]}],
+        blocking_items=[{"id": "R1", **REMAINING_AT_PATH["R1"]}],
     )
     (record / "manifest.json").write_text(
         json.dumps({"rows": [{"id": "C0", "writes": ["some/C0.py"]}, {"id": "C1", "writes": ["some/C1.py"]}]}),
@@ -123,4 +124,4 @@ def test_a_halt_that_landed_no_chunk_names_its_staged_rows_unlanded_and_stages_e
     assert out.get("halt") is None, out
     assert sorted(out["resume_ledger"][RESUME_LEDGER_UNLANDED_FIELD]) == ["C0", "C1"], out["resume_ledger"]
     manifest = read_reply(repo, out["manifest_handle"])
-    assert sorted(r["id"] for r in manifest["rows"]) == ["C0", "C1"], manifest
+    assert sorted(r["id"] for r in manifest["rows"]) == ["C0", "C1", DERIVED_ROW], manifest

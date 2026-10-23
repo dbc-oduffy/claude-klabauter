@@ -131,8 +131,22 @@ def test_an_unreadable_script_leaves_the_token_admissible(repo):
          "run_id": "ask-1", "run_token": token},
         repo_root=repo / ".git",
     )
-    assert out["committed"] is False and "cannot read" in out["error"]
+    assert out["committed"] is False
+    assert out["refused"] == "script-missing"
     assert run_token.admits(repo, "ask-1", token, "gone.mjs") is True
+    assert not _claimed(repo).exists()
+
+
+def test_a_script_that_exists_but_cannot_be_read_still_owes_cannot_read(repo):
+    (repo / "dir.mjs").mkdir()
+    token = run_token.mint(repo, "ask-1", "dir.mjs")
+    out = terminal_commit._handler(
+        {"script_path": "dir.mjs", "incomplete_chunks": [], "inline_review": _REVIEWED,
+         "run_id": "ask-1", "run_token": token},
+        repo_root=repo / ".git",
+    )
+    assert out["committed"] is False and "cannot read" in out["error"]
+    assert run_token.admits(repo, "ask-1", token, "dir.mjs") is True
     assert not _claimed(repo).exists()
 
 

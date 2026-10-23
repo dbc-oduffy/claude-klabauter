@@ -493,3 +493,33 @@ def test_closure_detector_exception_fails_closed(closure_repo, monkeypatch):
     monkeypatch.setattr(import_closure, "detect", boom)
     out = li.import_closure_findings(closure_repo, ["cc/guard.py"], [])
     assert len(out) == 1 and out[0].reason == li.IMPORT_CLOSURE_UNTRACKED and "boom" in out[0].detail
+
+
+def test_zero_fail_no_baseline_names_its_cause_not_targeted_tests_failed():
+    verdict = {"status": "fail", "tests_failed": 0, "tests_run": 249, "baseline": None}
+    findings, check = li.landing_test_gate(Path("."), {"targeted_tests": verdict}, None)
+    assert check == li.ZERO_FAIL_CHECK
+    assert [f.reason for f in findings] == [li.ZERO_FAIL_UNATTRIBUTED]
+    assert li.TARGETED_TESTS_FAILED not in {f.reason for f in findings}
+
+
+def test_zero_fail_with_status_before_fail_lands_as_pre_existing():
+    verdict = {"status": "fail", "tests_failed": 0, "tests_run": 249, "status_before": "fail"}
+    assert li.landing_test_gate(Path("."), {"targeted_tests": verdict}, None) == ([], "pre-existing-only")
+
+
+def test_status_before_rides_the_inline_review_mapping():
+    params = {"inline_review": {"tests": {"status": "fail", "failed": 0, "run": 9, "status_before": "fail"}}}
+    assert li.landing_test_gate(Path("."), params, None) == ([], "pre-existing-only")
+
+
+def test_caused_ids_still_refuse_even_with_status_before_fail():
+    verdict = {"status": "fail", "tests_failed": 1, "status_before": "fail",
+               "baseline": {"caused": ["t/test_a.py::test_x"]}}
+    findings, check = li.failed_targeted_tests(verdict)
+    assert check == "failed" and findings[0].reason == li.TARGETED_TESTS_FAILED
+
+
+def test_nonzero_fail_with_no_baseline_still_refuses():
+    findings, check = li.failed_targeted_tests({"status": "fail", "tests_failed": 2, "status_before": "fail"})
+    assert check == "failed" and findings[0].reason == li.TARGETED_TESTS_FAILED

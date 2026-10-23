@@ -487,14 +487,13 @@ def _ledger_halt_for(
         blocking = _with_ruled_blocking(pointer).blocking
     else:
         blocking = record.blocking or ()
-    return _carry(
-        root, plan_rel,
-        LedgerHalt(
-            state.ledger_run, plan_rel, sizing_rel, tuple(blocking),
-            halt_sha=state.ledger_sha, remaining=record.remaining, unlanded=tuple(open_ids),
-        ),
-        state.run_halts,
+    halt = LedgerHalt(
+        state.ledger_run, plan_rel, sizing_rel, tuple(blocking),
+        halt_sha=state.ledger_sha, remaining=record.remaining, unlanded=tuple(open_ids),
     )
+    if state.ledger_sha:
+        halt = replace(halt, landed_since_halt=state.landed_since_ledger)
+    return _carry(root, plan_rel, halt, state.run_halts)
 
 
 def _with_ruled_blocking(pointer: LedgerHalt, **changes) -> LedgerHalt:

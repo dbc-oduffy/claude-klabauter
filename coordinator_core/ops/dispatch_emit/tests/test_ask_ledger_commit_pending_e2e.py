@@ -42,6 +42,7 @@ let _reviewWave = [], _deliveryVerdict = null, _deliveryNotRun = null, _waveNotR
 let _haltCommit = null; const _commitHaltRecord = async () => null; const _terminalCommitParamsBlock = (p) => JSON.stringify(p);
 let _ledger = null, _falsifierResult = null, _falsifierSpec = null;
 const log = () => {};
+let _memoCloseOnly = false;
 const _viaRoadmap = false, _RUN_TOKEN = '%(token)s', _sizingRel = 'state/sizings/x.yaml', _planRel = null, REPO_ROOT = '/r';
 const _gate = { arm: 'xs' }, _runId = 'run-1', _resumeLedger = null, _preHaltCredit = false;
 let _splitExit = null;

@@ -246,11 +246,11 @@ def _s_gate(resume_ledger, manifest=_DISK) -> dict:
 
 
 def test_an_s_arm_ledger_refire_that_owes_work_never_authors_a_new_plan(monkeypatch):
-    out = _run(_s_script(monkeypatch), gate=_s_gate(_OWED), replies={
-        "ledger-replan": {"plan_rel": _PLAN, "added_rows": ["R9"], "stage_reply": stage_reply(_DISK)},
-    })
+    # 6fac24f9c5: at arm s the gate derives rows for owed work (`derived_rows`), staged by the gate; no re-plan leg.
+    out = _run(_s_script(monkeypatch), gate=_s_gate({**_OWED, "derived_rows": ["C1"]}))
     labels = _labels(out)
     assert "plan" not in labels, labels
+    assert "ledger-replan" not in labels, labels
     assert "work:C1" in labels, labels
     assert "no folded stage manifest" not in str(out["result"]["halted_by"])
     assert out["result"]["plan"] == _PLAN

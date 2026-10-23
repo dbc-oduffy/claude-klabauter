@@ -177,6 +177,7 @@ from typing import Callable, Iterable, List, Optional, Sequence, Tuple
 
 from coordinator_core.bash_guards._unborn_scratch_repo import scratch_clone_failures
 from coordinator_core.git.repo_root import git_dir, show_toplevel
+from coordinator_core.git.run import LOCAL_PLUMBING_BUDGET_SECS, run_git
 from coordinator_core.ipc import register_op
 from coordinator_core.session.declared_writes import declare_write
 from coordinator_core.wire_paths import rel_id
@@ -1789,19 +1790,16 @@ def _resolve_repo_root(repo_root: Optional[Path]) -> Path:
     return Path.cwd()
 
 
-# Generous because the scratch sweep is off the hot path; a slow read costs only the sweep's own time.
-_SCRATCH_GIT_TIMEOUT_SECS = 30
-
-
 def _scratch_run_git(args: List[str], cwd: Optional[str]) -> Tuple[int, str]:
     """`scratch_clone_failures` git runner: `(args, cwd) -> (rc, stdout)`, args exclude `git`.
 
     Timeouts and spawn failures raise; the predicate reads them as UNREADABLE.
     """
-    r = subprocess.run(
-        ["git", *args], cwd=cwd, capture_output=True, text=True,
-        timeout=_SCRATCH_GIT_TIMEOUT_SECS, **no_console_creationflags(),
-    )
+    r = run_git(args, cwd=cwd)
+    if r.timed_out:
+        raise subprocess.TimeoutExpired(["git", *args], LOCAL_PLUMBING_BUDGET_SECS)
+    if r.returncode == 127:
+        raise OSError("git did not run")
     return r.returncode, r.stdout
 
 

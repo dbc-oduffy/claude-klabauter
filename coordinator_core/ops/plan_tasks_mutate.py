@@ -415,6 +415,30 @@ def _synthesize_tasks_section(source: str, body_yaml: str) -> str:
     return source + separator + section
 
 
+def _non_string_key_errors(obj: object, path: str = "") -> list:
+    """ErrorDicts naming each non-string mapping key in a row, with its row path.
+
+    A key like True is a YAML 1.1 read of on/off/yes/no; dumping it would write `true:`.
+    """
+    errors: list = []
+    if isinstance(obj, dict):
+        for key, value in obj.items():
+            if not isinstance(key, str):
+                errors.append({
+                    "field": path or "<row>",
+                    "error": (
+                        f"key {key!r} is not a string (YAML 1.1 reads on/off/yes/no as booleans; quote it)"
+                    ),
+                    "hint": "quote the key",
+                })
+                continue
+            errors.extend(_non_string_key_errors(value, f"{path}.{key}" if path else key))
+    elif isinstance(obj, list):
+        for i, item in enumerate(obj):
+            errors.extend(_non_string_key_errors(item, f"{path}[{i}]"))
+    return errors
+
+
 def _validate_row(row: dict, *, governed: bool = False, plan_created: Optional[str] = None) -> list:
     """Validate a single task row against the vendored base per-row shape
     PLUS the plan-tasks cross-field rules (DR-103 defect fix, 2026-07-29).
@@ -458,6 +482,9 @@ def _validate_row(row: dict, *, governed: bool = False, plan_created: Optional[s
     not a spine validation pass, and routing it through the driver would
     make a mutation refuse on defects it does not own.
     """
+    non_string = _non_string_key_errors(row)
+    if non_string:
+        return non_string
     schema = _PLAN_TASKS_SCHEMA_GOVERNED_DICT if governed else _PLAN_TASKS_SCHEMA_DICT
     return plan_tasks_row_errors(
         row, schema, governed=governed, plan_created=plan_created,
@@ -555,6 +582,26 @@ def _dump_rows(rows: list) -> str:
     )
 
 
+class _StringKeyLoader(yaml.SafeLoader):
+    """SafeLoader that keeps a mapping key YAML 1.1 reads as a bool
+    (on/off/yes/no/true/false) as its source text, so a spine row never
+    round-trips `on:` into `true:`. Values keep the stock resolution.
+    """
+
+    def construct_mapping(self, node, deep=False):
+        if isinstance(node, yaml.MappingNode):
+            self.flatten_mapping(node)
+            for key_node, _ in node.value:
+                if isinstance(key_node, yaml.ScalarNode) and key_node.tag == "tag:yaml.org,2002:bool":
+                    key_node.tag = "tag:yaml.org,2002:str"
+        return super().construct_mapping(node, deep)
+
+
+def _load_spine_yaml(text: str):
+    """The one spine-text loader: stock SafeLoader resolution except bool-looking keys stay strings."""
+    return yaml.load(text, Loader=_StringKeyLoader)  # noqa: S506 - SafeLoader subclass
+
+
 def _parse_rows_or_abort(body: str, verb: str) -> list:
     """Parse a LOCATED spine body, refusing the write when it does not parse.
 
@@ -574,7 +621,7 @@ def _parse_rows_or_abort(body: str, verb: str) -> list:
     translation would be a second, driftable computation.
     """
     try:
-        rows = yaml.safe_load(body) or []
+        rows = _load_spine_yaml(body) or []
     except yaml.YAMLError as exc:
         mark = getattr(exc, "problem_mark", None)
         where = f" at line {mark.line + 1} of the fenced block" if mark else ""
@@ -1146,7 +1193,7 @@ def _evidence_append(
     if located.status is LocateStatus.LOCATED:
         try:
             spine_ids = {
-                r.get("id") for r in yaml.safe_load(located.body) or [] if isinstance(r, dict)
+                r.get("id") for r in _load_spine_yaml(located.body) or [] if isinstance(r, dict)
             }
         except yaml.YAMLError:
             spine_ids = set()
@@ -2081,7 +2128,7 @@ def _patch_row_chunk(chunk: str, orig: dict, row: dict, force: frozenset = froze
     if last_key is None or not patched.startswith("- "):
         return None
     try:
-        return patched if yaml.safe_load(patched) == [row] else None
+        return patched if _load_spine_yaml(patched) == [row] else None
     except yaml.YAMLError:
         return None
 
@@ -2104,7 +2151,7 @@ def _chunk_parses_to(chunk: str, orig: dict) -> bool:
     # alone; it is not independently re-serializable, so the caller must take
     # the whole-body fallback rather than crash.
     try:
-        return yaml.safe_load(chunk) == [orig]
+        return _load_spine_yaml(chunk) == [orig]
     except yaml.YAMLError:
         return False
 

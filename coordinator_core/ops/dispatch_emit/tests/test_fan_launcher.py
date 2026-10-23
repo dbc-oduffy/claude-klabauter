@@ -12,9 +12,8 @@ import pytest
 from coordinator_core.ops.dispatch_emit import fan_launcher as fl
 from coordinator_core.ops.dispatch_emit.emission_receipt import emission_receipt_path
 from coordinator_core.ops.dispatch_emit.nested_run_contract import (
-    LAUNCHER_CHILD_ARG,
     STAGE_PENDING_KEY,
-    STAGED_MANIFEST_ARG,
+    staged_twin_rel,
 )
 from coordinator_core.ops.dispatch_emit.reply_sidecar import READ_STAGE_SIDECAR_JS, VERIFY_REPLY_JS
 
@@ -44,8 +43,24 @@ def test_every_run_id_and_emit_params_appear_exactly_once(tmp_path):
     _, script = _write(tmp_path)
     for run_id in ("ask-r1", "ask-r2"):
         assert script.count(f'{{"run_id": {json.dumps(run_id)}, ') == 1
-        params = json.dumps({"ask": True, "sizing_path": f"state/sizings/{run_id}.yaml", "reserved_run_id": run_id})
+        params = json.dumps(
+            {
+                "ask": True,
+                "sizing_path": f"state/sizings/{run_id}.yaml",
+                "reserved_run_id": run_id,
+                "launcher_child": True,
+            }
+        )
         assert script.count(params) == 1
+
+
+def test_rendered_emit_params_force_launcher_child_true(tmp_path):
+    kids = _children("ask-r1", "ask-r2")
+    kids[1].emit_params["launcher_child"] = False
+    script = fl._render(tmp_path, "ask-parent", kids)
+    assert script.count('"launcher_child"') == 2
+    assert script.count('"launcher_child": true') == 2
+    assert '"launcher_child": false' not in script
 
 
 def test_zero_children_refused(tmp_path):
@@ -77,11 +92,13 @@ def test_no_run_token_literal_in_the_script(tmp_path):
     assert not re.search(r"(?<![0-9a-f])[0-9a-f]{32}(?![0-9a-f])", script)
 
 
-def test_launcher_child_is_set_on_every_start(tmp_path):
+def test_every_start_passes_script_path_only(tmp_path):
     _, script = _write(tmp_path)
-    assert script.count("workflow({ scriptPath: scriptPath") == 1  # one start site, run for every child
-    assert f"{{ {LAUNCHER_CHILD_ARG}: true }}" in script
-    assert STAGE_PENDING_KEY in script and STAGED_MANIFEST_ARG in script
+    assert script.count("workflow({ scriptPath: scriptPath })") == 1  # one start site, run for every child
+    assert script.count("workflow(") == 1
+    assert not re.search(r"\bargs\s*:", script)
+    assert "launcherChild" not in script and "stagedManifest" not in script
+    assert STAGE_PENDING_KEY in script
 
 
 def test_children_run_under_parallel_with_isolated_failure(tmp_path):
@@ -137,17 +154,69 @@ def test_genuine_run_id_mismatch_still_refused(tmp_path):
     assert _refusal(script, "ask-r1", good) is None
 
 
-def test_stage_hand_back_reuses_the_reader_blocks_verbatim(tmp_path):
+def test_launcher_no_longer_reads_the_sidecar(tmp_path):
     _, script = _write(tmp_path)
-    assert VERIFY_REPLY_JS in script
-    assert READ_STAGE_SIDECAR_JS in script
+    assert READ_STAGE_SIDECAR_JS not in script and VERIFY_REPLY_JS not in script
+    assert "_readStageSidecar" not in script and "_makeStageReader" not in script
+    assert "legMemo" not in script
     assert "stage_pending repeated for a handle already supplied" in script
+
+
+def _run_child_stage(script: str, sha, fire_args=None, leg=None) -> list:
+    """Run _runChild in node with stubs; returns [result, paths workflow() was started with]."""
+    import shutil
+    import subprocess
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node not available")
+    body = script.split("\n", 1)[1].split("const _settled", 1)[0].replace("export const meta", "const meta")
+    pending = {"stage_pending": {"handle": {"sha256": sha}}}
+    root = re.search(r"const REPO_ROOT = (\".*?\");", body).group(1)
+    leg_js = json.dumps(leg)
+    code = (
+        f"const PENDING = {json.dumps(pending)};\n"
+        "const calls = [];\n"
+        f"const LEG = {leg_js};\nconst prompts = [];\n"
+        f"const agent = async (p, o) => {{ if (o.label.startsWith('twin-token-')) {{ prompts.push(p); return typeof LEG === 'string' ? {{ twin: LEG }} : LEG; }} "
+        f"return {{ path: {root} + '/scratch/warp/x/s.mjs', run_id: 'ask-r1', fire_args: {json.dumps(fire_args or {})} }}; }};\n"
+        "const workflow = async (o) => { calls.push(o); return calls.length === 1 ? PENDING : { done: true }; };\n"
+        "const parallel = async () => [];\n"
+        + body
+        + "\n_runChild(CHILDREN[0]).then((r) => console.log(JSON.stringify([r, calls, prompts])));\n"
+    )
+    out = subprocess.run([node, "-e", code], capture_output=True, text=True, timeout=30,
+                         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    assert out.returncode == 0, out.stderr
+    return json.loads(out.stdout)
+
+
+@pytest.mark.spawns_process
+def test_stage_pending_with_a_good_handle_starts_the_twin_path(tmp_path):
+    _, script = _write(tmp_path, ids=("ask-r1",))
+    sha = "ab" * 32
+    result, calls, _ = _run_child_stage(script, sha)
+    assert result["status"] == "ok"
+    root = tmp_path.as_posix()
+    assert calls[1] == {"scriptPath": f"{root}/{staged_twin_rel('ask-r1', sha)}"}
+    assert all(set(c) == {"scriptPath"} for c in calls)
+
+
+@pytest.mark.spawns_process
+@pytest.mark.parametrize("sha", ["AB" * 32, "ab" * 31, None, "../" + "a" * 61])
+def test_malformed_sha_refuses_by_name(tmp_path, sha):
+    _, script = _write(tmp_path, ids=("ask-r1",))
+    result, calls, _ = _run_child_stage(script, sha)
+    assert result["status"] == "failed"
+    assert result["error"] == "stage_pending handle sha256 is not 64 lowercase hex"
+    assert len(calls) == 1
 
 
 def test_placeholder_shaped_emit_params_stay_literal(tmp_path):
     child = fl.LaunchChild("ask-r1", "s.yaml", {"note": "__REPO_ROOT__"})
     path = fl.write_launcher(tmp_path, "ask-parent", [child], None)
-    assert json.dumps({"note": "__REPO_ROOT__"}) in path.read_text(encoding="utf-8")
+    expected = json.dumps({"note": "__REPO_ROOT__", "launcher_child": True})
+    assert expected in path.read_text(encoding="utf-8")
 
 
 def test_receipt_sha_matches_the_file(tmp_path):
@@ -163,3 +232,32 @@ def test_second_write_for_the_same_parent_is_refused(tmp_path):
     with pytest.raises(FileExistsError):
         fl.write_launcher(tmp_path, "ask-parent", _children("ask-r3"), "sess-1")
     assert path.read_text(encoding="utf-8") == script
+
+
+_TOKEN = "cd" * 16
+
+
+@pytest.mark.spawns_process
+def test_a_runtoken_runs_the_twin_token_leg_before_the_twin_start(tmp_path):
+    _, script = _write(tmp_path, ids=("ask-r1",))
+    sha = "ab" * 32
+    result, calls, prompts = _run_child_stage(script, sha, {"runToken": _TOKEN}, staged_twin_rel("ask-r1", sha))
+    assert result["status"] == "ok"
+    assert len(prompts) == 1 and "dispatch.stage_twin_token" in prompts[0]
+    assert calls[1] == {"scriptPath": f"{tmp_path.as_posix()}/{staged_twin_rel('ask-r1', sha)}"}
+
+
+@pytest.mark.spawns_process
+def test_no_runtoken_means_no_twin_token_leg(tmp_path):
+    _, script = _write(tmp_path, ids=("ask-r1",))
+    result, calls, prompts = _run_child_stage(script, "ab" * 32)
+    assert result["status"] == "ok" and prompts == [] and len(calls) == 2
+
+
+@pytest.mark.spawns_process
+@pytest.mark.parametrize("leg", [{"twin": "", "error": "denied"}, "scratch/warp/other.mjs"])
+def test_a_twin_token_leg_error_or_wrong_path_fails_by_name(tmp_path, leg):
+    _, script = _write(tmp_path, ids=("ask-r1",))
+    result, calls, _ = _run_child_stage(script, "ab" * 32, {"runToken": _TOKEN}, leg)
+    assert result["status"] == "failed" and result["error"].startswith("twin token leg failed: ")
+    assert len(calls) == 1

@@ -222,3 +222,9 @@ def test_residue_empty_when_all_landed(graph):
     left = ra.residue(a, [SIZING, "unrelated.py"], [], {})
     assert left == {SIZING: "sizing"}
     assert ra.residue(a, [SIZING], [], {SIZING: "peer-held"}) == {}
+
+
+def test_residue_leaves_a_foreign_dirty_path_unclaimed(graph):
+    a = ra.candidate_paths(graph, RUN)
+    assert ra.residue(a, [SIZING], [], {}, foreign=[SIZING]) == {}
+    assert ra.residue(a, [SIZING], [], {}, foreign=["other.py"]) == {SIZING: "sizing"}

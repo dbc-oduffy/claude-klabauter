@@ -1,8 +1,8 @@
 """
 coordinator_core.tests.test_fleet_mode_reader_set — the floor: a positive
-allowlist of every module whose TRANSITIVE IMPORT CLOSURE reaches the fleet
-record (``coordinator_core.session.fleet_mode`` / ``.mode_resolution``),
-red in both directions.
+allowlist of every PRODUCTION module whose TRANSITIVE IMPORT CLOSURE reaches
+the fleet record (``coordinator_core.session.fleet_mode`` /
+``.mode_resolution``), red in both directions.
 
 WHY AN ALLOWLIST, NOT A PROHIBITION. This plan's exit criterion ("no value
 in that file can change how a denial-shaped guard behaves") holds only
@@ -21,6 +21,18 @@ same shape of mistake: treating a guard's ABSENCE from a surface as a
 boundary the surface itself enforces, when nothing enforces it but this
 test.
 
+WHY TEST MODULES ARE NOT IN THE ALLOWLIST. A test module that reaches the
+record imports code that does; it measures that code and never consumes a
+resolved mode value to change runtime behaviour. Listing each one made the
+floor go red on every new test file and was hand-widened every time — a
+churn trap that guards nothing, because the production reader it rides on is
+already listed. ``is_test_module`` is the rule: a dotted name with a ``tests``
+package segment, a ``test_*`` leaf, or a ``conftest`` leaf. The floor compares
+``production_readers(reader_closure(...))`` against ``EXPECTED_READERS``;
+``reader_closure`` itself still returns every reader, test or not, and
+``test_no_denial_shaped_guard_reaches_the_record`` walks that FULL closure, so
+no module is exempted from the guard check by its name.
+
 WHY THE WALK IS TRANSITIVE, NOT DIRECT-IMPORT-ONLY. A module one import hop
 away from the record (an indirect reader) is exactly what a direct-import
 walk misses, and reachability — not directness — is the property this test
@@ -36,9 +48,8 @@ RESTRUCTURE C3. Its own module docstring declares its CLASS advisory — it
 offers a better path via ``additionalContext`` and never denies — so it is
 neither an irreversible-harm nor an ask-before-external-action guard, and
 restructuring C3 to dodge a shim would distort the hook conversion for a
-naming artifact rather than a safety one. This is the one allowlist
-addition this chunk is authorized to make; no other module may be added to
-EXPECTED_READERS without the same allowlist-vs-restructure analysis
+naming artifact rather than a safety one. No other production module may be
+added to EXPECTED_READERS without the same allowlist-vs-restructure analysis
 recorded inline (not merely re-run).
 
 "GUARD" IS DEFINED BY CLASS, NOT BY DIRECTORY. The prime exit criterion is
@@ -97,867 +108,85 @@ _TARGET_MODULES = (
 )
 _TARGET_BASENAME = "fleet-mode.json"
 
-# The floor. Hardcoded literal tuple -- never derived from the walk below.
+
+def is_test_module(dotted: str) -> bool:
+    """True for a module that measures code rather than being it: any
+    ``tests`` package segment, a ``test_*`` leaf, or a ``conftest`` leaf.
+    Operates on dotted names, never OS paths."""
+    parts = dotted.split(".")
+    return "tests" in parts or parts[-1].startswith("test_") or parts[-1] == "conftest"
+
+
+def production_readers(closure: frozenset[str]) -> frozenset[str]:
+    """The floor's subject: every reader in ``closure`` that is not a test module."""
+    return frozenset(m for m in closure if not is_test_module(m))
+
+
+# The floor: PRODUCTION readers only, as a hardcoded literal tuple -- never
+# derived from the walk below, never holding a test module (a test module is
+# exempt by `is_test_module`, and `test_no_test_module_in_expected_readers`
+# keeps it out). Each entry reaches the record through an edge measured by
+# `reader_closure`; none gates a tool call on a mode value except through the
+# sanctioned resolver.
 #
-# Beyond C3's two hooks, C4's op, and the two hooks'/op's/record's own direct
-# unit tests (the bucket the brief named), a full static walk of the real
-# tree surfaces THREE further clusters -- discovered by this chunk, not
-# pre-disposed by the brief, and disposed here by the same allowlist-vs-
-# restructure analysis the brief modeled for the one edge it did anticipate
-# (`write_guards.nudge_em_code_dispatch`). Restructuring any of them is out
-# of this chunk's file scope regardless (writes: is this one test file), so
-# allowlist is the only available disposition; each cluster is analyzed on
-# its own merits below, not merely because restructuring is unavailable.
-#
-#   1. PERF/BENCHMARK HARNESSES measuring the two hooks' entry cost
-#      (`coordinator_core.benchmarks.*`). These import the hooks to time
-#      them, never to gate a tool call -- structurally identical in kind to
-#      "the module's own tests" (measurement of the hook, not consumption of
-#      a resolved mode value to change runtime behaviour).
-#
-#   2. GUARD-CORPUS / MESSAGE-REGISTER / FIRING-SHAPE META-TESTS
-#      (`coordinator_core.bash_guards._firing_shape` and its dependents
-#      under `bash_guards/tests/`, plus `write_guards.tests.
-#      test_windows_platform_simulation`, `message_register.tests.
-#      test_register`, `tests.test_hooks_roundtrip`). These validate
-#      cross-cutting invariants (message format, firing-shape
-#      classification, corpus registration completeness) over the FULL
-#      guard/hook corpus, and reach the record only because
-#      `nudge_em_code_dispatch` -- already allowlisted, advisory, non-
-#      denial -- is one specimen among many they iterate. None of them is
-#      itself registered as a guard (no CLASS/MATCHERS/PRIORITY); they
-#      consume guard modules as static data, the same non-executing
-#      relationship a test has to the code it tests.
-#
-#      `bash_guards._firing_shape` ALSO reaches the record and sits at
-#      TOP LEVEL of `bash_guards/` (unlike its `tests/` dependents), which
-#      puts it in scope for `test_no_denial_shaped_guard_reaches_the_record`
-#      below. It carries no module-level `CLASS` (confirmed by static
-#      probe) -- it is not itself a registered guard (no MATCHERS/PRIORITY
-#      either), so it cannot execute as a denial-shaped gate, but per this
-#      file's own "fail loud, never default to advisory" rule it is
-#      correctly flagged there as an unresolved classification question,
-#      not silently passed. That failure is intentional and not remediated
-#      by this chunk (file scope is this test only) -- see the executor's
-#      run report for the disposition this surfaces.
-#
-# C3's two hooks, C4's op, the four modules' own direct unit tests, and the
-# two clusters above, plus the one pre-disposed advisory shim:
+#   * Hooks and guards (`hooks.*`, `bash_guards._firing_shape`,
+#     `write_guards.nudge_em_code_dispatch`): `nudge_em_code_dispatch` is
+#     advisory; `postuse_advisory_dispatch` reaches the record only by
+#     `_resolve_subagent_identity` re-use (no mode value reaches its decision),
+#     and `runtime_tripwire_em_check` / `stop_dispatch` ride that one edge.
+#     `stop_dispatch` IS denial-capable, outside the CLASS test's top-level
+#     scope; the symbol-level fact above, not its directory, is the analysis.
+#     Retiring the cluster means moving `_resolve_subagent_identity` into a
+#     leaf importing neither target. `_firing_shape` is a mechanism helper with
+#     no MATCHERS, reaching the record through a test-specimen import.
+#     `session_start_announce_job_mode` / `sessionstart_dispatch` announce the
+#     resolved mode as SessionStart context only.
+#   * Benchmarks (`benchmarks.*`): time the hooks / stage entry, never gate.
+#   * `sizing_assemble` and its importers (`plan_assemble*`, `ops.sizing_resize`,
+#     `ops.roadmap_blitz_stage`, `roadmap.blitz_stage`, `ops.dispatch_emit.*`,
+#     `ops.plan_chain.*`, `ops.workflow_fire.op`, `ops.plan_backfill_warp_executing`,
+#     `hooks.submit_*`): ONE edge, `sizing_assemble`'s lazy `mode_resolution`
+#     import, counted per module. They compute a route, script or staging
+#     manifest; `hooks.submit_*` rewrite or deny a Workflow submission on its
+#     own args shape, and no mode value reaches that decision. None is under
+#     `write_guards/` or `bash_guards/`.
+#   * `ops.fleet.mode_control`: the op that writes the record.
 EXPECTED_READERS = (
     "coordinator_core.bash_guards._firing_shape",
-    "coordinator_core.bash_guards.tests.guard_message_corpus",
-    "coordinator_core.bash_guards.tests.guard_message_register_lint",
-    "coordinator_core.bash_guards.tests.test_confinement_deny_band_shape",
-    "coordinator_core.bash_guards.tests.test_corpus_audience_axis",
-    "coordinator_core.bash_guards.tests.test_firing_shape_gate",
-    "coordinator_core.bash_guards.tests.test_guard_corpus_registration_invariants",
-    "coordinator_core.bash_guards.tests.test_guard_message_corpus",
-    "coordinator_core.bash_guards.tests.test_guard_message_register_lint",
-    "coordinator_core.bash_guards.tests.test_guard_message_size",
-    "coordinator_core.bash_guards.tests.test_no_machine_absolute_path_in_guard_messages",
-    "coordinator_core.bash_guards.tests.test_override_route_inventory",
+    "coordinator_core.benchmarks.ask_stage_size_l_profile",
     "coordinator_core.benchmarks.bash_dispatch_probe",
     "coordinator_core.benchmarks.hook_entry_cost",
-    "coordinator_core.benchmarks.tests.test_bash_dispatch_process_time_gate",
-    "coordinator_core.benchmarks.tests.test_hook_entry_cost",
+    "coordinator_core.benchmarks.shim_prototype_dispatcher",
     "coordinator_core.hooks.nudge_em_code_dispatch",
     "coordinator_core.hooks.postuse_advisory_dispatch",
-    # --- 2026-09-06 cluster: the `_resolve_subagent_identity` re-use chain ---
-    #
-    # Nine modules arrived at once, and every one of them reaches the record
-    # through a SINGLE edge measured, not assumed:
-    #
-    #   hooks.runtime_tripwire_em_check
-    #       -> hooks.postuse_advisory_dispatch   (already allowlisted, C3)
-    #       -> session.mode_resolution
-    #
-    # and `hooks.stop_dispatch` reaches it only by importing
-    # `runtime_tripwire_em_check._handler`; the seven test modules below reach
-    # it only by importing one of those two. So this is ONE edge, counted nine
-    # times by module granularity.
-    #
-    # ALLOWLIST-VS-RESTRUCTURE, done rather than re-run. The edge is
-    # `from coordinator_core.hooks.postuse_advisory_dispatch import
-    # _resolve_subagent_identity` -- a deliberate re-use, recorded in
-    # `runtime_tripwire_em_check`'s own docstring as "imported rather than
-    # carrying its own copy". `_resolve_subagent_identity` does NOT call
-    # `resolve_mode`: the only `resolve_mode` call in
-    # `postuse_advisory_dispatch` is in its compaction-warnings band, a
-    # different function entirely. NO MODE VALUE REACHES EITHER HOOK'S
-    # DECISION -- the reachability is module-granularity, not data flow.
-    #
-    # That distinction matters here more than for the clusters above, because
-    # `stop_dispatch` IS denial-capable: it aggregates eight legs and returns
-    # `deny("Stop", ...)` when any leg blocks. It is not in
-    # `test_no_denial_shaped_guard_reaches_the_record`'s scope (that test
-    # enumerates top-level `write_guards/`/`bash_guards/` modules), so the
-    # analysis is recorded here instead of being left to a check that would
-    # not have asked. The plan's exit criterion -- no value in the fleet
-    # record can change how a denial-shaped guard behaves -- still holds, on
-    # the symbol-level fact above and not on the directory `stop_dispatch`
-    # lives in.
-    #
-    # THE RESTRUCTURE THAT WOULD RETIRE THE WHOLE CLUSTER, named so it is a
-    # choice and not an omission: move `_resolve_subagent_identity` into a
-    # leaf module that imports neither target, and both hooks plus all seven
-    # tests drop out of the closure. Not done here -- it edits two per-turn
-    # hot-path hooks, which is a change that needs its own owner, and this
-    # file's writes are this test only. If that lands, delete this whole
-    # cluster rather than repointing it.
     "coordinator_core.hooks.runtime_tripwire_em_check",
-    "coordinator_core.hooks.stop_dispatch",
-    "coordinator_core.hooks.test_auto_push",
-    "coordinator_core.hooks.test_postuse_advisory_dispatch",
-    "coordinator_core.hooks.tests.test_fleet_mode_reaches_the_hooks",
-    "coordinator_core.hooks.tests.test_nudge_em_code_dispatch",
-    "coordinator_core.hooks.tests.test_nudge_em_code_dispatch_budget",
-    "coordinator_core.hooks.tests.test_post_executor_verification",
-    "coordinator_core.hooks.tests.test_postuse_advisory_dispatch",
-    "coordinator_core.hooks.tests.test_postuse_context_pressure",
-    "coordinator_core.hooks.tests.test_project_orientation_scratch_banner",
-    "coordinator_core.hooks.tests.test_runtime_tripwire_em_check",
-    "coordinator_core.hooks.tests.test_stop_dispatch",
-    "coordinator_core.hooks.tests.test_watchdog_undischarged_next_move",
-    "coordinator_core.message_register.tests.test_register",
-    "coordinator_core.ops.dispatch_emit.tests.conftest",
-    "coordinator_core.ops.dispatch_emit.tests.test_agent_type_host",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_compose_em_brief",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_compose_end_to_end",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_compose_resume",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_compose_size_then_plan",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_gate_ceo_xl_exit",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_gate_resume",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_ledger_seed",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_m_first_stage",
-    "coordinator_core.ops.dispatch_emit.tests.test_brief_outranks_relayed_chat",
-    "coordinator_core.ops.dispatch_emit.tests.test_checkpoint_commit_and_push",
-    "coordinator_core.ops.dispatch_emit.tests.test_checkpoint_rows_are_plan_scoped",
-    "coordinator_core.ops.dispatch_emit.tests.test_cli_ask_brief",
-    "coordinator_core.ops.dispatch_emit.tests.test_cli_ask_stop_after",
-    "coordinator_core.ops.dispatch_emit.tests.test_emit_brightline",
-    "coordinator_core.ops.dispatch_emit.tests.test_emit_dag",
-    "coordinator_core.ops.dispatch_emit.tests.test_emit_predispatch_gating",
-    "coordinator_core.ops.dispatch_emit.tests.test_emit_script_opens_plan_once",
-    "coordinator_core.ops.dispatch_emit.tests.test_emit_script_size_cap",
-    "coordinator_core.ops.dispatch_emit.tests.test_emitted_script_carries_no_host_path",
-    "coordinator_core.ops.dispatch_emit.tests.test_external_gate_shapes",
-    "coordinator_core.ops.dispatch_emit.tests.test_gate_baseline",
-    "coordinator_core.ops.dispatch_emit.tests.test_grind_compose",
-    "coordinator_core.ops.dispatch_emit.tests.test_grind_integration",
-    "coordinator_core.ops.dispatch_emit.tests.test_grind_pm_adjudication",
-    "coordinator_core.ops.dispatch_emit.tests.test_halt_on_unstarted_dependents",
-    "coordinator_core.ops.dispatch_emit.tests.test_memo_send_row",
-    "coordinator_core.ops.dispatch_emit.tests.test_needs_slot_narration",
-    "coordinator_core.ops.dispatch_emit.tests.test_part_script_name_matches_part_id",
-    "coordinator_core.ops.dispatch_emit.tests.test_predecessor_state_in_row_prompt",
-    "coordinator_core.ops.dispatch_emit.tests.test_review_only_test_scope_is_plan_surface",
-    "coordinator_core.ops.dispatch_emit.tests.test_row_prompt_names_its_spec",
-    "coordinator_core.ops.dispatch_emit.tests.test_run_base_at_fire",
-    "coordinator_core.ops.dispatch_emit.tests.test_seam_wave_boundary",
-    "coordinator_core.ops.dispatch_emit.tests.test_shared_blocks_keep_prompts_byte_identical",
-    "coordinator_core.ops.dispatch_emit.tests.test_sibling_split",
-    "coordinator_core.ops.dispatch_emit.tests.test_size_then_plan_e2e",
-    "coordinator_core.ops.dispatch_emit.tests.test_sizing_fire_accept_and_token_args",
-    "coordinator_core.ops.dispatch_emit.tests.test_stop_rule_halt_scopes_to_plan",
-    "coordinator_core.ops.dispatch_emit.tests.test_unroutable_row_survives_an_override",
-    "coordinator_core.ops.dispatch_emit.tests.test_unverifiable_enricher_row",
-    "coordinator_core.ops.dispatch_emit.tests.test_vitest_cap_and_row_local_block",
-    "coordinator_core.ops.dispatch_emit.tests.test_write_set_shared_once",
-    "coordinator_core.ops.dispatch_emit.tests.test_writes_under",
-    "coordinator_core.ops.dispatch_emit.tests.test_writes_under_carry_through",
-    "coordinator_core.ops.dispatch_emit.tests.test_writes_under_gitignored_prefix",
-    "coordinator_core.ops.fleet.mode_control",
-    "coordinator_core.ops.plan_chain.tests._chain_repo",
-    "coordinator_core.ops.tests.test_fleet_mode_control",
-    "coordinator_core.ops.tests.test_sizing_record_xl_exit_apm",
-    "coordinator_core.session.tests.test_fleet_mode",
-    "coordinator_core.session.tests.test_mode_resolution",
-    # Names "fleet-mode.json" as a literal in its own docstring/source (same
-    # basename-reader shape as this file's own _SELF_MODULE exclusion, but
-    # this module is not itself the reader_closure() walker so it does not
-    # get that exclusion) -- a basename reader, not an importer of either
-    # target module. Pre-existing gap found while integrating this diff's
-    # review; not one of the reviewer's three findings.
-    "coordinator_core.session.tests.test_unarchive_on_resume",
-    "coordinator_core.sizing_assemble.conftest",
-    "coordinator_core.sizing_assemble.test_clause_register_refusal",
-    "coordinator_core.sizing_assemble.test_intent_turn",
-    "coordinator_core.sizing_assemble.test_plan_hand_off",
-    "coordinator_core.sizing_assemble.test_register_cli",
-    "coordinator_core.sizing_assemble.test_verbatim_embed_report",
-    "coordinator_core.sizing_assemble.test_write_records_touch",
-    "coordinator_core.tests.test_fleet_mode_process_boundary",
-    "coordinator_core.tests.test_hooks_roundtrip",
-    "coordinator_core.write_guards.nudge_em_code_dispatch",
-    "coordinator_core.write_guards.tests.test_windows_platform_simulation",
-    # --- C6 (2026-09-27-sizing-carries-exit-criterion-and-interaction-mode) ---
-    #
-    # `sizing_assemble.route()`'s `_validate_interaction_mode` and `main()`'s
-    # `_resolve_interaction_mode_and_source` both do a FUNCTION-LOCAL (lazy)
-    # import of `mode_resolution` -- never at module top level, so a bare
-    # `import coordinator_core.sizing_assemble` stays import-light (module
-    # docstring's "READ-ONLY, by construction" note). This static AST walk
-    # still finds the import (it walks the WHOLE tree, not just module-level
-    # statements -- see `_module_imports`'s own docstring), so the module
-    # reaches this closure regardless of laziness. `sizing_assemble` is
-    # advisory-class (it never denies -- it computes a routing decision an
-    # EM/skill acts on, the same non-denial shape as
-    # `nudge_em_code_dispatch`'s own allowlisting above) and it is not under
-    # `write_guards/`/`bash_guards/`, so it is out of
-    # `test_no_denial_shaped_guard_reaches_the_record`'s CLASS-derivation
-    # scope entirely -- it only has to appear here.
-    "coordinator_core.sizing_assemble",
-    "coordinator_core.sizing_assemble.test_interaction_mode_cli",
-    "coordinator_core.sizing_assemble.test_interaction_mode_touchpoints",
-    # --- job-mode announce / sessionstart cluster ---------------------------
-    #
-    # `session_start_announce_job_mode` calls `resolve_mode("job_mode")` to
-    # announce the resolved mode as SessionStart `additionalContext`; it is
-    # advisory (context only, never a tool-call gate) and needs the resolver,
-    # so allowlisting is the disposition -- restructuring would mean
-    # re-deriving the resolver. `sessionstart_dispatch` reaches the record
-    # only by dispatching to it, with the same class. Consumers that need only
-    # a constant (`autonomous_go`, `sizing_accept_exit_criterion`, the warm
-    # door's `env_forwarding`) were restructured onto the import-free leaf
-    # `session.job_mode_env` and are NOT listed.
     "coordinator_core.hooks.session_start_announce_job_mode",
     "coordinator_core.hooks.sessionstart_dispatch",
-    "coordinator_core.hooks.tests.test_arrival_w4_c10",
-    "coordinator_core.hooks.tests.test_postuse_bash_commit_releases_claims",
-    "coordinator_core.bash_guards.tests.guard_message_exemptions",
-    "coordinator_core.benchmarks.shim_prototype_dispatcher",
-    "coordinator_core.ops.tests.test_sizing_spike_verdict",
-    "coordinator_core.tests.test_composition_budget_doc_scaffold",
-    # --- plan_assemble cluster ----------------------------------------------
-    #
-    # `plan_assemble.predicates.substrate_seven_dim` reads
-    # `sizing_assemble._PREMISE_DETENT_TSHIRTS` (a constant defined inside
-    # `sizing_assemble`, and monkeypatched there by its liveness test), so it
-    # reaches the record only through `sizing_assemble`, already allowlisted
-    # above as advisory. The predicate computes a report field for plan
-    # assembly and never gates a tool call. Moving the constant out would
-    # break that liveness test's premise, so the cluster is allowlisted.
-    "coordinator_core.plan_assemble",
-    "coordinator_core.plan_assemble.predicates.substrate_seven_dim",
-    "coordinator_core.plan_assemble.predicates.test_context",
-    "coordinator_core.plan_assemble.predicates.test_substrate_seven_dim",
-    "coordinator_core.plan_assemble.residue",
-    "coordinator_core.plan_assemble.test_residue",
-    "coordinator_core.plan_assemble.test_residue_admission",
-    "coordinator_core.plan_assemble.test_scaffold_directive_parity",
-    "coordinator_core.sizing_assemble.test_scaffold_directive_parity",
-    "coordinator_core.test_sizing_assemble",
-    # --- new-module cluster (marker-parity/allowlist sweep, bb-20261002a C38) ---
-    #
-    # Each group reaches the record through an edge measured by
-    # `reader_closure`, not assumed.
-    #
-    # (a) `sizing_assemble` importers. `ops.sizing_resize` and
-    # `ops.dispatch_emit.ask_gate` each import `sizing_assemble` (a function-
-    # local `route` import) to compute a sizing route; `sizing_assemble`
-    # reaches the record through its own lazy `mode_resolution` import and is
-    # already allowlisted above as advisory. Every `dispatch_emit` module
-    # (`op`, `cli`, `ask_compose`, `mark_landed`), `workflow_fire.op`, and
-    # their tests reach it only by importing `ask_gate` / `op` -- ONE edge,
-    # counted per module by the transitive walk. None of them is under
-    # `write_guards/`/`bash_guards/`, none gates a tool call: they compute and
-    # emit a dispatch script or a sizing arm, so no mode value reaches a
-    # denial. Restructure alternative (move `route` behind a leaf that does
-    # not import `mode_resolution`) edits `sizing_assemble`, which is another
-    # owner's surface; allowlisting is the available disposition here.
+    "coordinator_core.hooks.stop_dispatch",
+    "coordinator_core.hooks.submit_bug_blitz",
+    "coordinator_core.hooks.submit_engine_ask",
     "coordinator_core.ops.dispatch_emit.ask_compose",
     "coordinator_core.ops.dispatch_emit.ask_gate",
+    "coordinator_core.ops.dispatch_emit.ask_roadmap",
+    "coordinator_core.ops.dispatch_emit.ask_stage",
     "coordinator_core.ops.dispatch_emit.cli",
     "coordinator_core.ops.dispatch_emit.mark_landed",
     "coordinator_core.ops.dispatch_emit.op",
-    "coordinator_core.ops.dispatch_emit.tests.test_agent_type_resolution",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_compose",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_compose_plan_blitz_args",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_compose_single_exit",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_gate",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_gate_records_ruling",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_interaction_mode_single_source",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_shape_handback",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_zero_headless",
-    "coordinator_core.ops.dispatch_emit.tests.test_cli",
-    "coordinator_core.ops.dispatch_emit.tests.test_cli_admission",
-    "coordinator_core.ops.dispatch_emit.tests.test_cli_mark_landed",
-    "coordinator_core.ops.dispatch_emit.tests.test_cloud_spawn_brief",
-    "coordinator_core.ops.dispatch_emit.tests.test_doe_port_fidelity_and_scope",
-    "coordinator_core.ops.dispatch_emit.tests.test_emit",
-    "coordinator_core.ops.dispatch_emit.tests.test_emit_spawn_count",
-    "coordinator_core.ops.dispatch_emit.tests.test_emit_wake_digest",
-    "coordinator_core.ops.dispatch_emit.tests.test_emitted_script_states_node_check_does_not_apply",
-    "coordinator_core.ops.dispatch_emit.tests.test_every_emit_route_composes_review",
-    "coordinator_core.ops.dispatch_emit.tests.test_inventory_mint",
-    "coordinator_core.ops.dispatch_emit.tests.test_mark_landed",
-    "coordinator_core.ops.dispatch_emit.tests.test_new_module_importer_window",
-    "coordinator_core.ops.dispatch_emit.tests.test_op",
-    "coordinator_core.ops.dispatch_emit.tests.test_op_emission_receipt",
-    "coordinator_core.ops.dispatch_emit.tests.test_op_returns_fire_args",
-    "coordinator_core.ops.dispatch_emit.tests.test_op_sizing_emit",
-    "coordinator_core.ops.dispatch_emit.tests.test_queue_emit",
-    "coordinator_core.ops.dispatch_emit.tests.test_queue_emit_composes_review",
-    "coordinator_core.ops.dispatch_emit.tests.test_restamp",
-    "coordinator_core.ops.dispatch_emit.tests.test_sizing_fire_routes",
-    "coordinator_core.ops.dispatch_emit.tests.test_sizing_fire_wiring",
-    "coordinator_core.ops.sizing_resize",
-    "coordinator_core.ops.tests.test_sizing_resize",
-    # (c) `ask_stage` cluster. `dispatch_emit.ask_stage` reaches the record by ONE edge: the
-    # deferred `from ...ask_compose import SKILL_WEIGHT_HEADROOM_CLAUSE` (a constant; no mode
-    # value is read), onto `ask_compose`, already allowlisted above. The profile/budget
-    # benchmarks and the `ask_stage*`/ledger tests are importers of it; the two remaining
-    # test modules reach `sessionstart_dispatch` / `submit_engine_ask`. `ask_stage` computes
-    # a staging manifest and never denies; none is under `write_guards/`/`bash_guards/`.
-    "coordinator_core.benchmarks.ask_stage_size_l_profile",
-    "coordinator_core.benchmarks.tests.test_submit_engine_ask_fan_process_budget",
-    "coordinator_core.hooks.tests.test_compact_summary_constraints",
-    "coordinator_core.ops.dispatch_emit.ask_stage",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_compose_lifecycle_post_commit_acts",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_compose_memo_close_only",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_compose_plan_stage_omits_writes",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_compose_review_cross_repo_callers",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_compose_stage_refusal_reply",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_compose_xs_empty_footprint_leg",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_gate_ledger_derived_rows",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_gate_resume_stage_then_ask_stage",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_stage",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_stage_all_landed_ledger_resume",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_stage_change_kind_enum",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_stage_cross_repo",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_stage_engine_rows",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_stage_fanout_groups",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_stage_gated_rows",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_stage_head_sha",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_stage_ledger_footprint",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_stage_live_overlap",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_stage_manifest_register_rows",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_stage_memo_close_only",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_stage_memo_draft",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_stage_one_workflow",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_stage_parked",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_stage_pm_intent",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_stage_pm_intent_excludes_resume_relay",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_stage_prior_report_set_aside",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_stage_provisioned_sibling_gate",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_stage_refuses_misrouted_xs_mint",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_stage_reply_handle",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_stage_rerun_receipt",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_stage_resume_added_rows",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_stage_resume_replan_retired_rows",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_stage_rulable_ids",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_stage_size_l_budget",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_stage_spawn_count",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_stage_work_class_routing",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_xs_plan_evidence_e2e",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_xs_plan_less_stage_e2e",
-    "coordinator_core.ops.dispatch_emit.tests.test_em_discharge_releases_dependents",
-    "coordinator_core.ops.dispatch_emit.tests.test_emit_names_declined_rows",
-    "coordinator_core.ops.dispatch_emit.tests.test_land_run_em_discharge_satisfies_since_halt",
-    "coordinator_core.ops.dispatch_emit.tests.test_land_run_ledger_already_landed",
-    "coordinator_core.ops.dispatch_emit.tests.test_land_run_replays_34682f_refire",
-    "coordinator_core.ops.dispatch_emit.tests.test_ledger_em_context_row_never_halts",
-    "coordinator_core.ops.dispatch_emit.tests.test_ledger_remaining_leg_footprint_fence",
-    "coordinator_core.ops.dispatch_emit.tests.test_ledger_remaining_prompt_footprint",
-    "coordinator_core.ops.dispatch_emit.tests.test_memo_send_row_dispatches",
-    "coordinator_core.ops.dispatch_emit.tests.test_next_action_valid_revise_input",
-    "coordinator_core.ops.dispatch_emit.tests.test_plan_route_empty_register_ledger_check",
-    "coordinator_core.ops.dispatch_emit.tests.test_refire_ledger_halt_replays_20261022",
-    "coordinator_core.ops.dispatch_emit.tests.test_refire_sha_free_note_executes_remaining",
-    "coordinator_core.ops.dispatch_emit.tests.test_requirements_ledger_plan_row_mint",
-    "coordinator_core.ops.dispatch_emit.tests.test_resumable_plan_xs_ledger_halt",
-    "coordinator_core.ops.dispatch_emit.tests.test_stage_manifest_carries_ledger_ids",
-    "coordinator_core.ops.dispatch_emit.tests.test_terminal_commit_replays_34682f_refire",
-    "coordinator_core.ops.dispatch_emit.tests.test_wave_commit_empty_pathspec",
-    "coordinator_core.ops.dispatch_emit.tests.test_wave_width_cap",
-    "coordinator_core.ops.dispatch_emit.tests.test_withheld_gated_row_reaches_terminal_commit",
-    "coordinator_core.ops.dispatch_emit.tests.test_withheld_row_owner",
-    # (b) `plan_chain` cluster and later `dispatch_emit` importers. `plan_chain.plan_stage`
-    # and `.driver` import `dispatch_emit.op` (the emission receipt and the bind op), the
-    # same ONE edge into the `ask_gate` -> `sizing_assemble` closure group (a) records;
-    # the rest import `op`, `plan_stage` or `driver` or a test helper that does. The chain
-    # computes and fires a plan/execute script and halts; no mode value reaches a denial,
-    # and none is under `write_guards/`/`bash_guards/`. The size rule
-    # (`ops.sizing_acceptance`) is an import-free leaf and adds no edge.
-    "coordinator_core.hooks.tests.test_nudge_hand_written_plan",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_compose_usage_limit",
-    "coordinator_core.ops.dispatch_emit.tests.test_cli_research_route",
-    "coordinator_core.ops.dispatch_emit.tests.test_hold_rows",
-    "coordinator_core.ops.dispatch_emit.tests.test_inventory_tranche_gaps",
-    "coordinator_core.ops.dispatch_emit.tests.test_op_certified_plans",
-    "coordinator_core.ops.dispatch_emit.tests.test_pipeline_resume_missing",
-    "coordinator_core.ops.dispatch_emit.tests.test_pipeline_validator",
-    "coordinator_core.ops.dispatch_emit.tests.test_plan_blitz_call_contract",
-    "coordinator_core.ops.dispatch_emit.tests.test_review_close_routes",
-    "coordinator_core.ops.dispatch_emit.tests.test_review_fix_reverification_and_cli_line",
-    "coordinator_core.ops.dispatch_emit.tests.test_typecheck_leg",
+    "coordinator_core.ops.dispatch_emit.plan_route",
+    "coordinator_core.ops.fleet.mode_control",
+    "coordinator_core.ops.plan_backfill_warp_executing",
     "coordinator_core.ops.plan_chain",
     "coordinator_core.ops.plan_chain.driver",
     "coordinator_core.ops.plan_chain.plan_stage",
-    "coordinator_core.ops.plan_chain.tests.test_chain_budget",
-    "coordinator_core.ops.plan_chain.tests.test_chain_end_to_end",
-    "coordinator_core.ops.plan_chain.tests.test_contract",
-    "coordinator_core.ops.plan_chain.tests.test_digest",
-    "coordinator_core.ops.plan_chain.tests.test_driver",
-    "coordinator_core.ops.plan_chain.tests.test_execute_result",
-    "coordinator_core.ops.plan_chain.tests.test_phase1_checks",
-    "coordinator_core.ops.plan_chain.tests.test_phase1_dead_session_gate",
-    "coordinator_core.ops.plan_chain.tests.test_phase1_gates",
-    "coordinator_core.ops.plan_chain.tests.test_plan_stage",
-    "coordinator_core.session.tests.test_autonomous_sentinel_fleet_move",
-    "coordinator_core.sizing_assemble.test_research_flags",
-    "coordinator_core.tests.test_sizing_assemble_click_path",
-    "coordinator_core.ops.workflow_fire.op",
-    "coordinator_core.ops.workflow_fire.tests.test_end_to_end_fire",
-    "coordinator_core.ops.workflow_fire.tests.test_fired_drift_guard",
-    # (b) New test modules importing an already-allowlisted dispatcher or
-    # corpus module (`stop_dispatch`, `sessionstart_dispatch`,
-    # `postuse_advisory_dispatch`, `guard_message_corpus`,
-    # `test_guard_message_size`). Tests consume these as data or measure their
-    # spawn count; they are the same class as the test modules listed above.
-    "coordinator_core.bash_guards.tests.test_guard_message_size_claude_klabauter_corpus",
-    "coordinator_core.bash_guards.tests.test_platform_conditioned_deny_reachability",
-    "coordinator_core.hooks.tests.test_postuse_advisory_dispatch_spawn_count",
-    "coordinator_core.hooks.tests.test_sessionstart_dispatch_leg_parity",
-    "coordinator_core.hooks.tests.test_stop_dispatch_spawn_count",
-    # (c) `sizing_assemble`'s own write-back test.
-    "coordinator_core.sizing_assemble.test_write_back",
-    # (d) Importers of an already-allowlisted dispatcher/sizing module, measured by
-    # `reader_closure`: `ops.dispatch_emit.ask_roadmap` (imported by `ask_compose`),
-    # `roadmap.blitz_stage` / `ops.roadmap_blitz_stage` (a `sizing_assemble` `route`/
-    # `write_back` import) -- advisory-class, computing a sizing/roadmap fold that no
-    # tool call gates on -- and the test modules that import `dispatch_emit.op`/`cli`,
-    # `ask_compose`/`ask_gate`, `sizing_assemble` or `blitz_stage`. Neither lives under
-    # `write_guards/`/`bash_guards/`; the one `bash_guards/tests` entry is a test.
-    "coordinator_core.bash_guards.tests.test_guard_message_corpus_no_process_control",
-    "coordinator_core.frontmatter.tests.test_approval_body_sha_engine_bookkeeping",
-    "coordinator_core.frontmatter.tests.test_approved_body_sha",
-    "coordinator_core.hooks.tests.test_block_workflow_foreign_emission_pipeline",
-    "coordinator_core.ops.dispatch_emit.ask_roadmap",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_compose_gated_and_halt",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_baton_input",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_compose_apm_accept",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_roadmap",
-    "coordinator_core.ops.dispatch_emit.tests.test_inventory_default_out",
-    "coordinator_core.ops.dispatch_emit.tests.test_inventory_optional_columns",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_stage_scaffold_gate",
-    "coordinator_core.ops.dispatch_emit.tests.test_chatty_emit",
-    "coordinator_core.ops.dispatch_emit.tests.test_cli_lanes",
-    "coordinator_core.ops.dispatch_emit.tests.test_cli_pipeline",
-    "coordinator_core.ops.dispatch_emit.tests.test_cli_reverify_delivery_empty",
-    "coordinator_core.ops.dispatch_emit.tests.test_dirty_write_set_spawns",
-    "coordinator_core.ops.dispatch_emit.tests.test_inventory_split_cap_and_refusal",
-    "coordinator_core.ops.dispatch_emit.tests.test_landed_reconcile",
-    "coordinator_core.ops.dispatch_emit.tests.test_op_lanes",
-    "coordinator_core.ops.dispatch_emit.tests.test_op_pipeline_route",
-    "coordinator_core.ops.dispatch_emit.tests.test_pipeline_doe_manifests",
-    "coordinator_core.ops.dispatch_emit.tests.test_pipeline_route_budget",
-    "coordinator_core.ops.dispatch_emit.tests.test_pipeline_route_parity",
-    "coordinator_core.ops.dispatch_emit.tests.test_resume_from_continuance",
-    "coordinator_core.ops.dispatch_emit.tests.test_review_only_emit",
     "coordinator_core.ops.roadmap_blitz_stage",
-    "coordinator_core.ops.tests.test_roadmap_blitz_stage_spawn_count",
-    "coordinator_core.ops.tests.test_sizing_record_pm_resolution",
-    "coordinator_core.ops.tests.test_sizing_record_xl_exit",
+    "coordinator_core.ops.sizing_resize",
+    "coordinator_core.ops.workflow_fire.op",
+    "coordinator_core.plan_assemble",
+    "coordinator_core.plan_assemble.predicates.substrate_seven_dim",
+    "coordinator_core.plan_assemble.residue",
     "coordinator_core.roadmap.blitz_stage",
-    "coordinator_core.roadmap.tests.test_blitz_stage",
-    #
-    # --- engine-ask submission cluster (the same ONE edge as (a), measured) ---
-    #
-    # `hooks.submit_engine_ask` and `hooks.submit_bug_blitz` import
-    # `ops.dispatch_emit.op` (to emit the warp run), `ops.dispatch_emit.plan_route`
-    # imports `dispatch_emit.cli`, and the dispatch_emit / hooks / sizing_assemble
-    # tests import those or `ask_gate`/`ask_compose`/`sizing_assemble`: every
-    # module below reaches the record only through that already-allowlisted
-    # `dispatch_emit` -> `sizing_assemble` -> `mode_resolution` edge. The two
-    # `hooks.submit_*` modules rewrite or deny a `Workflow` submission on its
-    # own args shape (malformed ask, live run, unmet `after`); no mode value
-    # reaches either decision, and neither is under `write_guards/` or
-    # `bash_guards/`. Restructure alternative (move `route` behind a leaf)
-    # edits `sizing_assemble`, another owner's surface -- unchanged from (a).
-    #
-    # The WIDER edge this cluster once rode is NOT allowlisted but cut:
-    # `hooks.block_unenumerated_agent_type` (imported by guards and hooks
-    # across the tree) used to import `hooks.submit_engine_ask` for
-    # `sizing_scout_deny`, which put ~3,600 modules in the closure; it now
-    # imports the leaf `hooks.sizing_scout_deny`. Likewise
-    # `dispatch_emit.land_run` reads `ask_fanout_contract.recorded_run_base`, never
-    # `op._recorded_run_base`, which would pull `op` into every `ops.review_stamp`
-    # importer.
-    "coordinator_core.hooks.submit_bug_blitz",
-    "coordinator_core.hooks.submit_engine_ask",
-    "coordinator_core.hooks.tests.test_dispatch_escape_in_run_report",
-    "coordinator_core.hooks.tests.test_multi_ask_sibling_runs_e2e",
-    "coordinator_core.hooks.tests.test_submit_bug_blitz",
-    "coordinator_core.hooks.tests.test_submit_engine_ask",
-    "coordinator_core.hooks.tests.test_submit_engine_ask_real_emit",
-    "coordinator_core.hooks.tests.test_submit_engine_ask_research_sizing",
-    "coordinator_core.hooks.tests.test_submit_engine_ask_sizing_context",
-    "coordinator_core.hooks.tests.test_workflow_run_record_capture",
-    "coordinator_core.hooks.tests.test_workflow_stall_resume",
-    "coordinator_core.hooks.tests.test_workflow_stall_stop_op",
-    "coordinator_core.ops.dispatch_emit.plan_route",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_bundle_split_e2e",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_compose_acceptance_rows",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_compose_commit_doc_paths",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_compose_cross_repo_evidence",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_compose_design_brief",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_compose_design_met_by",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_compose_halt_commits_record",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_compose_in_run_close",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_compose_judge_evidence_and_run_base",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_compose_ledger_resume",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_compose_m_spine_direct",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_compose_mechanical_revise",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_compose_no_silent_end",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_compose_research_classification",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_compose_research_fire",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_compose_resume_all_landed",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_compose_test_leg_verdict",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_compose_verify_only_skips_review",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_compose_wave_barrier",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_gate_design_registry",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_gate_research_route",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_gate_spawn_count",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_halt_detail",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_intake_sizing_submission",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_ledger_commit_pending_e2e",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_ledger_resume_e2e",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_owed_handback",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_research_classification",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_roadmap_fanout_e2e",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_run_product_commit",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_stage_blinded_reviewer_row",
-    "coordinator_core.ops.dispatch_emit.tests.test_check_leg_cut",
-    "coordinator_core.ops.dispatch_emit.tests.test_cli_queue_route_run_token",
-    "coordinator_core.ops.dispatch_emit.tests.test_cli_research_multi_ask",
-    "coordinator_core.ops.dispatch_emit.tests.test_cli_research_parts",
-    "coordinator_core.ops.dispatch_emit.tests.test_cli_stdout_single_json",
-    "coordinator_core.ops.dispatch_emit.tests.test_commit_legs_are_haiku",
-    "coordinator_core.ops.dispatch_emit.tests.test_cross_repo_engine_ask",
-    "coordinator_core.ops.dispatch_emit.tests.test_em_mailbox_watch",
-    "coordinator_core.ops.dispatch_emit.tests.test_emit_register_pin_drift",
-    "coordinator_core.ops.dispatch_emit.tests.test_emit_verify_leg",
-    "coordinator_core.ops.dispatch_emit.tests.test_emitted_prompts_name_no_skill_to_invoke",
-    "coordinator_core.ops.dispatch_emit.tests.test_engine_owned_rows_judged_at_engine_root",
-    "coordinator_core.ops.dispatch_emit.tests.test_gate_baseline_owed_gates",
-    "coordinator_core.ops.dispatch_emit.tests.test_grind_improvement_queue",
-    "coordinator_core.ops.dispatch_emit.tests.test_halt_commit_relay_layout_e2e",
-    "coordinator_core.ops.dispatch_emit.tests.test_halted_record_withholds_peer_claims",
-    "coordinator_core.ops.dispatch_emit.tests.test_halted_rows_commit",
-    "coordinator_core.ops.dispatch_emit.tests.test_held_halt_reviews_landed_rows",
-    "coordinator_core.ops.dispatch_emit.tests.test_judge_reason_falls_back_to_observation",
-    "coordinator_core.ops.dispatch_emit.tests.test_ledger_halt_names_only_register_rows",
-    "coordinator_core.ops.dispatch_emit.tests.test_ledger_halt_recovery_text",
-    "coordinator_core.ops.dispatch_emit.tests.test_ledger_halt_resume_gate",
-    "coordinator_core.ops.dispatch_emit.tests.test_leg_register_ratchet",
-    "coordinator_core.ops.dispatch_emit.tests.test_no_run_leaves_a_dirty_tree",
-    "coordinator_core.ops.dispatch_emit.tests.test_only_incomplete_own_leftover",
-    "coordinator_core.ops.dispatch_emit.tests.test_only_incomplete_review_base",
-    "coordinator_core.ops.dispatch_emit.tests.test_plan_route",
-    "coordinator_core.ops.dispatch_emit.tests.test_plan_route_resume_rows",
-    "coordinator_core.ops.dispatch_emit.tests.test_reachability_fix_keeps_met_judge_met",
-    "coordinator_core.ops.dispatch_emit.tests.test_refire_echoes_revisions",
-    "coordinator_core.ops.dispatch_emit.tests.test_refire_reason_agrees_with_criterion",
-    "coordinator_core.ops.dispatch_emit.tests.test_refire_resumes_halted_run",
-    "coordinator_core.ops.dispatch_emit.tests.test_refire_xs_recorded_writes",
-    "coordinator_core.ops.dispatch_emit.tests.test_relayed_ask_registers_only_its_text",
-    "coordinator_core.ops.dispatch_emit.tests.test_research_close_params_grounding",
-    "coordinator_core.ops.dispatch_emit.tests.test_research_emit",
-    "coordinator_core.ops.dispatch_emit.tests.test_research_emit_script_cap",
-    "coordinator_core.ops.dispatch_emit.tests.test_research_emit_single_script",
-    "coordinator_core.ops.dispatch_emit.tests.test_research_emit_split",
-    "coordinator_core.ops.dispatch_emit.tests.test_research_gate_end_to_end",
-    "coordinator_core.ops.dispatch_emit.tests.test_research_halt_fire_routes",
-    "coordinator_core.ops.dispatch_emit.tests.test_research_multi_ask_e2e",
-    "coordinator_core.ops.dispatch_emit.tests.test_research_multi_repo_end_to_end",
-    "coordinator_core.ops.dispatch_emit.tests.test_research_route_scout_questions",
-    "coordinator_core.ops.dispatch_emit.tests.test_research_three_source_segment_halt",
-    "coordinator_core.ops.dispatch_emit.tests.test_reserved_run_refire",
-    "coordinator_core.ops.dispatch_emit.tests.test_resume_counts_ledger_halt_landed_chunks",
-    "coordinator_core.ops.dispatch_emit.tests.test_review_only_brief_drops_deleted_tests",
-    "coordinator_core.ops.dispatch_emit.tests.test_review_wave_blocked_halts_run",
-    "coordinator_core.ops.dispatch_emit.tests.test_seam_leg_executes_declared_paths",
-    "coordinator_core.ops.dispatch_emit.tests.test_terminal_commit_cli_escape",
-    "coordinator_core.ops.dispatch_emit.tests.test_terminal_commit_halted_record",
-    "coordinator_core.ops.dispatch_emit.tests.test_typecheck_criterion_routing",
-    "coordinator_core.ops.review_mint.tests.test_roster",
-    "coordinator_core.ops.tests.test_roadmap_blitz_stage_params",
-    "coordinator_core.sizing_assemble.test_acceptance_rows",
-    "coordinator_core.sizing_assemble.test_suite_tier_rewrite",
-    "coordinator_core.sizing_assemble.test_write_terse_default",
-    "coordinator_core.tests.test_cited_records_not_in_scratch",
-    #
-    # --- later test-module cluster (measured by `reader_closure`) -----------
-    #
-    # Every module below is a test that imports an already-allowlisted
-    # `dispatch_emit` (`op`/`cli`/`ask_gate`/`ask_compose`), `submit_engine_ask`
-    # or `sizing_assemble` module: the same ONE edge as groups (a)-(d) above.
-    # No production module is added; tests consume these as the code under test,
-    # none gates a tool call, and none sits under `write_guards/`/`bash_guards/`.
-    "coordinator_core.hooks.tests.test_engine_ask_route_preference_e2e",
-    "coordinator_core.hooks.tests.test_sibling_hold_release_and_supersession_e2e",
-    "coordinator_core.hooks.tests.test_size_stage_guard_run_scoped",
-    "coordinator_core.hooks.tests.test_submit_engine_ask_live_overlap",
-    # All-landed / resume test modules: none names fleet-mode.json or imports
-    # the resolver; each reaches the record only through an importer of
-    # `ask_gate` / `op` / `submit_engine_ask`, already allowlisted above.
-    "coordinator_core.hooks.tests.test_submit_engine_ask_landed_predecessor",
-    "coordinator_core.hooks.tests.test_submit_engine_ask_session_root",
-    "coordinator_core.ops.dispatch_emit.tests.test_all_landed_refire_e2e",
-    "coordinator_core.ops.dispatch_emit.tests.test_all_landed_refire_gate",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_compose_all_landed_ledger",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_gate_resume_stamps_landed_rows_coded",
-    "coordinator_core.ops.dispatch_emit.tests.test_resume_landed_state_row_shas",
-    "coordinator_core.hooks.tests.test_watchdog_research_sizing_repro",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_checkpoint_trailer_runtime",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_commit_halt_refire_e2e",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_compose_commit_halt_next_action",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_compose_design_route",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_compose_ledger_resume_restage",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_compose_pin_drift_halt",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_compose_plan_blitz_ready_restage",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_compose_relayed_manifest_admission",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_compose_repeat_pull_halt",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_compose_scout_not_run",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_compose_source_memo_clause",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_fold_reads_disk_manifest_e2e",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_gate_design_approval",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_gate_design_route",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_gate_ledger_stages",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_gate_resume_ledger_discharges",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_gate_resume_snapshot",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_gate_route_preference",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_prompts_name_sidecar_dir",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_route_preference_emit",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_scout_design_route",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_stage_folds_no_mechanical_leg",
-    "coordinator_core.ops.dispatch_emit.tests.test_checkpoint_lines_on_every_emitted_checkpoint",
-    "coordinator_core.ops.dispatch_emit.tests.test_commit_halt_resume_gate",
-    "coordinator_core.ops.dispatch_emit.tests.test_compose_script_front_end_wave_leg",
-    "coordinator_core.ops.dispatch_emit.tests.test_composed_chunk_ids_are_strings",
-    "coordinator_core.ops.dispatch_emit.tests.test_design_review_after_plan",
-    "coordinator_core.ops.dispatch_emit.tests.test_emit_prompts_name_sidecar_dir",
-    "coordinator_core.ops.dispatch_emit.tests.test_every_emitted_leg_names_its_sidecar",
-    "coordinator_core.ops.dispatch_emit.tests.test_grind_prompts_name_sidecar_dir",
-    "coordinator_core.ops.dispatch_emit.tests.test_halted_record_landing_integrity",
-    "coordinator_core.ops.dispatch_emit.tests.test_invoke_prompts_carry_reconcile_clause",
-    "coordinator_core.ops.dispatch_emit.tests.test_refire_after_ledger_halt_executes_unmet_rows_incident",
-    "coordinator_core.ops.dispatch_emit.tests.test_refire_after_ledger_halt_resumes_incident",
-    "coordinator_core.ops.dispatch_emit.tests.test_refire_after_partial_ledger_halt_e2e",
-    "coordinator_core.ops.dispatch_emit.tests.test_refire_carries_met_rows_across_halts",
-    "coordinator_core.ops.dispatch_emit.tests.test_refire_inherits_halted_base",
-    "coordinator_core.ops.dispatch_emit.tests.test_refire_ledger_halt_incident_falsifier",
-    "coordinator_core.ops.dispatch_emit.tests.test_refire_ledger_halt_keeps_met_rows_and_runs_remaining",
-    "coordinator_core.ops.dispatch_emit.tests.test_refire_ledger_halted_sizing_resumes",
-    "coordinator_core.ops.dispatch_emit.tests.test_refire_replan_added_rows_dispatch_e2e",
-    "coordinator_core.ops.dispatch_emit.tests.test_rejudge_agent_brief",
-    "coordinator_core.ops.dispatch_emit.tests.test_research_emit_seeds",
-    "coordinator_core.ops.dispatch_emit.tests.test_research_route_probe_targets",
-    "coordinator_core.ops.dispatch_emit.tests.test_review_only_inventory_repo_root",
-    "coordinator_core.ops.dispatch_emit.tests.test_revise_from_peer",
-    "coordinator_core.ops.dispatch_emit.tests.test_row_verify_folds_into_terminal",
-    "coordinator_core.ops.dispatch_emit.tests.test_ruled_out_filters_resume_and_prompt",
-    "coordinator_core.ops.dispatch_emit.tests.test_terminal_commit_refuses_blob_drift",
-    "coordinator_core.ops.review_mint.tests.test_review_prompts_name_sidecar_dir",
-    "coordinator_core.sizing_assemble.test_design_route_flags",
-    #
-    # --- test modules added after the last sweep (measured by `reader_closure`) ---
-    #
-    # Each imports an already-allowlisted `dispatch_emit` module (`ask_gate`, `op`,
-    # `plan_route`, `cli`) or a sibling test that does: the same ONE existing edge
-    # (`ask_gate` -> `sizing_assemble` -> `mode_resolution`), counted per module.
-    # No production module is added. Restructure alternative: none per test -- a test
-    # that exercises `ask_gate`/`op` has to import it. The wider edge the ipc closure
-    # once rode (`sizing_fire` lazily importing `mode_resolution`, ~4,000 modules) is
-    # CUT, not allowlisted: the fleet mode now arrives through
-    # `sizing_fire.set_fleet_mode_provider`, installed by `dispatch_emit.cli.main`,
-    # which is already a reader. `ops.research_reground` was likewise cut (it now
-    # resolves the content root itself, not through `dispatch_emit.op`).
-    "coordinator_core.hooks.tests.test_submit_engine_ask_held_slice",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_commit_stage_reconcile_clause",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_compose_all_ruled_out_passes_ledger_check",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_compose_bound_sizing_path",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_compose_fanout_groups",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_compose_review_reverify",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_compose_routed_rows",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_compose_scout_values_assemble",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_compose_sizing_path_single_source",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_gate_echoes_bound_sizing",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_gate_s_resume_stages",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_source_help_text",
-    "coordinator_core.ops.dispatch_emit.tests.test_cli_inventory_accounting",
-    "coordinator_core.ops.dispatch_emit.tests.test_cli_research_per_group",
-    "coordinator_core.ops.dispatch_emit.tests.test_deviation_reason_end_to_end",
-    "coordinator_core.ops.dispatch_emit.tests.test_direct_sizing_inherits_interaction_mode",
-    "coordinator_core.ops.dispatch_emit.tests.test_dirty_write_set",
-    "coordinator_core.ops.dispatch_emit.tests.test_dispatch_emit_fanout_reply",
-    "coordinator_core.ops.dispatch_emit.tests.test_emit_artifact_naming_and_out",
-    "coordinator_core.ops.dispatch_emit.tests.test_emit_fanout_groups",
-    "coordinator_core.ops.dispatch_emit.tests.test_emit_inventory_accounting",
-    "coordinator_core.ops.dispatch_emit.tests.test_emit_inventory_done_unlanded",
-    "coordinator_core.ops.dispatch_emit.tests.test_emit_work_class_routing",
-    "coordinator_core.ops.dispatch_emit.tests.test_fanout_exit_criterion",
-    "coordinator_core.ops.dispatch_emit.tests.test_grind_compose_fanout_meta",
-    "coordinator_core.ops.dispatch_emit.tests.test_grind_review_reverify",
-    "coordinator_core.ops.dispatch_emit.tests.test_grind_terminal_commit_reconcile_clause",
-    "coordinator_core.ops.dispatch_emit.tests.test_grind_verify_covered_flip",
-    "coordinator_core.ops.dispatch_emit.tests.test_grind_verify_dedupe_close",
-    "coordinator_core.ops.dispatch_emit.tests.test_grind_verify_mode",
-    "coordinator_core.ops.dispatch_emit.tests.test_halted_record_own_claims_landing",
-    "coordinator_core.ops.dispatch_emit.tests.test_halted_record_targeted_tests",
-    "coordinator_core.ops.dispatch_emit.tests.test_met_refire_lands_its_own_product_changes",
-    "coordinator_core.ops.dispatch_emit.tests.test_only_incomplete_row_subset",
-    "coordinator_core.ops.dispatch_emit.tests.test_op_research_per_group",
-    "coordinator_core.ops.dispatch_emit.tests.test_refire_credit_counts_landed",
-    "coordinator_core.ops.dispatch_emit.tests.test_research_spike_refusal",
-    "coordinator_core.ops.dispatch_emit.tests.test_resume_ledger_carries_ledger_ids",
-    "coordinator_core.ops.dispatch_emit.tests.test_stop_rule_refire_reemits_row_e2e",
-    "coordinator_core.ops.dispatch_emit.tests.test_stop_rule_row_not_landed",
-    "coordinator_core.ops.dispatch_emit.tests.test_stranded_run_reland",
-    "coordinator_core.ops.dispatch_emit.tests.test_terminal_commit_own_checkpoints_satisfy_since_halt",
-    "coordinator_core.ops.dispatch_emit.tests.test_unmarked_ask_source_derivation",
-    # `dispatch_emit.ask_compose` imports `ask_gate`, a sanctioned reader (the same
-    # edge as the `test_ask_compose*` entries above); each module below imports
-    # `ask_compose` and reaches the record through it alone. `test_land_run_contract`
-    # imports the successor's contract module, which `ask_compose` also names.
-    "coordinator_core.hooks.tests.test_submit_engine_ask_args_keys",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_compose_parked_after_plan",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_compose_prompt_fragments",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_compose_stage_handle",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_gate_records_run_baton",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_intake_slice_context",
-    "coordinator_core.ops.dispatch_emit.tests.test_land_run_contract",
-    "coordinator_core.ops.dispatch_emit.tests.test_ledger_check_empty_register_is_refusal",
-    "coordinator_core.ops.dispatch_emit.tests.test_ledger_halt_names_owed_rows",
-    "coordinator_core.ops.dispatch_emit.tests.test_refire_after_empty_ledger_halt_dispatches_open_row_incident",
-    "coordinator_core.ops.dispatch_emit.tests.test_refire_ledger_halt_split_checkpoint_incident",
-    "coordinator_core.ops.dispatch_emit.tests.test_research_emit_single_repo_target",
-    "coordinator_core.ops.dispatch_emit.tests.test_revise_stop_after_parks_run_e2e",
-    "coordinator_core.benchmarks.tests.test_clone_per_run_route_is_sanctioned",
-    "coordinator_core.hooks.tests.test_stop_drive_roots",
-    "coordinator_core.hooks.tests.test_submit_engine_ask_stop_after",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_compose_commit_repo_flag",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_compose_needs_judgment_resume",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_compose_pinned_interpreter",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_compose_sibling_blocked_next_action",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_compose_xs_footprint_leg",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_gate_resume_ledger_remaining_leg",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_gate_route_verdict",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_gate_stamps_plan_executing",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_gate_xs_reland_writes",
-    "coordinator_core.ops.dispatch_emit.tests.test_clear_earlier_outputs_keeps_unlanded_parts",
-    "coordinator_core.ops.dispatch_emit.tests.test_emit_refuses_spent_run_overwrite",
-    "coordinator_core.ops.dispatch_emit.tests.test_emit_sizing_baton_claims_run",
-    "coordinator_core.ops.dispatch_emit.tests.test_emit_stop_after_from_sizing",
-    "coordinator_core.ops.dispatch_emit.tests.test_failed_inventory_emit_leaves_no_residue",
-    "coordinator_core.ops.dispatch_emit.tests.test_inventory_emit_plan_edge_and_tranche_exit",
-    "coordinator_core.ops.dispatch_emit.tests.test_land_run_pre_halt_credit_satisfies_since_halt",
-    "coordinator_core.ops.dispatch_emit.tests.test_landing_fresh_verdict_halted",
-    "coordinator_core.ops.dispatch_emit.tests.test_landing_integrity",
-    "coordinator_core.ops.dispatch_emit.tests.test_ledger_remaining_leg_writes_incident",
-    "coordinator_core.ops.dispatch_emit.tests.test_needs_judgment_refire_resumes",
-    "coordinator_core.ops.dispatch_emit.tests.test_only_incomplete_skips_foreign_landed_ids",
-    "coordinator_core.ops.dispatch_emit.tests.test_refire_carries_revised_halt_notes",
-    "coordinator_core.ops.dispatch_emit.tests.test_refire_records_resumed_from",
-    "coordinator_core.ops.dispatch_emit.tests.test_refire_redirect_records_resumed_from",
-    "coordinator_core.ops.dispatch_emit.tests.test_refire_replans_register_and_token",
-    "coordinator_core.ops.dispatch_emit.tests.test_resume_revise_credits_pre_halt_work",
-    "coordinator_core.ops.dispatch_emit.tests.test_review_only_dirty_own_rows",
-    "coordinator_core.ops.dispatch_emit.tests.test_review_only_done_unlanded",
-    "coordinator_core.ops.dispatch_emit.tests.test_seam_no_rows_landed_commit_failure",
-    "coordinator_core.ops.dispatch_emit.tests.test_spent_run_reemit_next_tranche",
-    "coordinator_core.ops.dispatch_emit.tests.test_terminal_commit_cas_retry",
-    "coordinator_core.ops.dispatch_emit.tests.test_terminal_commit_comment_only_drift",
-    "coordinator_core.ops.dispatch_emit.tests.test_terminal_commit_ended_run_recovery",
-    "coordinator_core.ops.dispatch_emit.tests.test_terminal_commit_pre_halt_credit_satisfies_since_halt",
-    "coordinator_core.ops.dispatch_emit.tests.test_terminal_commit_repo_verifier_drift",
-    "coordinator_core.ops.dispatch_emit.tests.test_terminal_commit_review_carried_withheld",
-    "coordinator_core.ops.dispatch_emit.tests.test_wave_commit_carries_earlier_rows",
-    "coordinator_core.ops.dispatch_emit.tests.test_xs_checkpoint_landed_reland_e2e",
-    "coordinator_core.ops.plan_backfill_warp_executing",
-    "coordinator_core.ops.tests.test_plan_backfill_warp_executing",
-    "coordinator_core.ops.tests.test_plan_backfill_withheld_opens_dependents",
-    "coordinator_core.sizing_assemble.test_xs_lane_open",
-    "coordinator_core.tests.test_cloud_em_run_in_mounted_repo",
-    #
-    # --- `ask_stage` cluster (measured by `reader_closure`) ---
-    #
-    # `ops.dispatch_emit.ask_stage` lazily imports `ask_compose` (for
-    # `SKILL_WEIGHT_HEADROOM_CLAUSE`, deferred because `ask_compose` imports
-    # `ask_stage` at load), which is already allowlisted: the same ONE existing
-    # edge (`ask_gate` -> `sizing_assemble` -> `mode_resolution`), counted per
-    # module by the transitive walk. `ask_stage` stages a landing for a dispatch
-    # script and gates no tool call, so no mode value reaches a denial. The
-    # `benchmarks` and guard/hook test modules below reach it only by importing
-    # `ask_stage` / `ask_compose` / `dispatch_emit`. Restructure alternative
-    # (hoist the clause constant into a leaf both modules import) edits
-    # `ask_compose`, another owner's surface; allowlisting is the available
-    # disposition here.
-    "coordinator_core.bash_guards.tests.test_guard_render_baseline",
-    "coordinator_core.bash_guards.tests.test_no_guard_builds_bare_envelope",
-    "coordinator_core.benchmarks.ask_stage_size_l_profile",
-    "coordinator_core.benchmarks.tests.test_submit_engine_ask_fan_process_budget",
-    "coordinator_core.hooks.tests.test_compact_summary_constraints",
-    "coordinator_core.ops.dispatch_emit.ask_stage",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_compose_lifecycle_post_commit_acts",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_compose_memo_close_only",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_compose_plan_stage_omits_writes",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_compose_review_cross_repo_callers",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_compose_xs_empty_footprint_leg",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_gate_ledger_derived_rows",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_gate_resume_stage_then_ask_stage",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_stage",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_stage_all_landed_ledger_resume",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_stage_change_kind_enum",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_stage_cross_repo",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_stage_engine_rows",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_stage_fanout_groups",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_stage_gated_rows",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_stage_head_sha",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_stage_ledger_footprint",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_stage_live_overlap",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_stage_manifest_register_rows",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_stage_memo_close_only",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_stage_memo_draft",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_stage_one_workflow",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_stage_parked",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_stage_pm_intent",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_stage_pm_intent_excludes_resume_relay",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_stage_prior_report_set_aside",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_stage_provisioned_sibling_gate",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_stage_refuses_misrouted_xs_mint",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_stage_reply_handle",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_stage_rerun_receipt",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_stage_resume_added_rows",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_stage_resume_replan_retired_rows",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_stage_rulable_ids",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_stage_size_l_budget",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_stage_spawn_count",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_stage_work_class_routing",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_xs_plan_evidence_e2e",
-    "coordinator_core.ops.dispatch_emit.tests.test_ask_xs_plan_less_stage_e2e",
-    "coordinator_core.ops.dispatch_emit.tests.test_em_discharge_releases_dependents",
-    "coordinator_core.ops.dispatch_emit.tests.test_emit_names_declined_rows",
-    "coordinator_core.ops.dispatch_emit.tests.test_land_run_em_discharge_satisfies_since_halt",
-    "coordinator_core.ops.dispatch_emit.tests.test_land_run_ledger_already_landed",
-    "coordinator_core.ops.dispatch_emit.tests.test_land_run_replays_34682f_refire",
-    "coordinator_core.ops.dispatch_emit.tests.test_ledger_em_context_row_never_halts",
-    "coordinator_core.ops.dispatch_emit.tests.test_ledger_remaining_leg_footprint_fence",
-    "coordinator_core.ops.dispatch_emit.tests.test_ledger_remaining_prompt_footprint",
-    "coordinator_core.ops.dispatch_emit.tests.test_memo_send_row_dispatches",
-    "coordinator_core.ops.dispatch_emit.tests.test_next_action_valid_revise_input",
-    "coordinator_core.ops.dispatch_emit.tests.test_plan_route_empty_register_ledger_check",
-    "coordinator_core.ops.dispatch_emit.tests.test_refire_ledger_halt_replays_20261022",
-    "coordinator_core.ops.dispatch_emit.tests.test_refire_sha_free_note_executes_remaining",
-    "coordinator_core.ops.dispatch_emit.tests.test_requirements_ledger_plan_row_mint",
-    "coordinator_core.ops.dispatch_emit.tests.test_resumable_plan_xs_ledger_halt",
-    "coordinator_core.ops.dispatch_emit.tests.test_stage_manifest_carries_ledger_ids",
-    "coordinator_core.ops.dispatch_emit.tests.test_terminal_commit_replays_34682f_refire",
-    "coordinator_core.ops.dispatch_emit.tests.test_wave_commit_empty_pathspec",
-    "coordinator_core.ops.dispatch_emit.tests.test_wave_width_cap",
-    "coordinator_core.ops.dispatch_emit.tests.test_withheld_gated_row_reaches_terminal_commit",
-    "coordinator_core.ops.dispatch_emit.tests.test_withheld_row_owner",
+    "coordinator_core.sizing_assemble",
+    "coordinator_core.write_guards.nudge_em_code_dispatch",
 )
 
 # The one allowlist addition the brief itself pre-disposed (see module
@@ -1004,10 +233,8 @@ _GUARD_DISPATCH_MARKER = "MATCHERS"
 # carries no MATCHERS and no PRIORITY -- it is the classification mechanism
 # the firing-shape gate itself runs, not a registered guard -- and it reaches
 # the fleet record only through a function-local import of
-# `nudge_em_code_dispatch` used as a test specimen (see module docstring's
-# "GUARD-CORPUS / MESSAGE-REGISTER / FIRING-SHAPE META-TESTS" cluster note).
-# No other module may be added here without the same unambiguous-absence
-# analysis recorded inline.
+# `nudge_em_code_dispatch` used as a test specimen. No other module may be
+# added here without the same unambiguous-absence analysis recorded inline.
 _UNAMBIGUOUS_NON_GUARD_MODULES = frozenset({
     "coordinator_core/bash_guards/_firing_shape.py",
 })
@@ -1168,8 +395,10 @@ def reader_closure(root: Path, package: str = "coordinator_core") -> frozenset[s
     Returns the dotted-module-name set of every module whose TRANSITIVE
     import closure reaches one of ``_TARGET_MODULES``, unioned with every
     module that names ``_TARGET_BASENAME`` as a literal in its own source.
-    Takes a root path (never hardcodes the repo root) so it can run against
-    a fixture tree -- see ``TestReaderClosureSelfVerification`` below.
+    Test modules are included; the floor filters them with
+    ``production_readers``. Takes a root path (never hardcodes the repo root)
+    so it can run against a fixture tree -- see
+    ``TestReaderClosureSelfVerification`` below.
     """
     pkg_root = root / package
     forward_edges: dict[str, set[str]] = {}
@@ -1240,10 +469,11 @@ def _module_path(root: Path, dotted: str) -> Path:
 
 
 def test_reader_set_matches_allowlist_exactly():
-    """RED in both directions: a new reader appearing, or a listed reader
-    disappearing, both fail this equality -- never a subset/superset check."""
+    """RED in both directions: a new production reader appearing, or a listed
+    reader disappearing, both fail this equality -- never a subset/superset
+    check. Test modules are exempt by `is_test_module`."""
     root = _repo_root()
-    computed = reader_closure(root)
+    computed = production_readers(reader_closure(root))
     expected = frozenset(EXPECTED_READERS)
 
     unexpected = computed - expected
@@ -1266,6 +496,16 @@ def test_reader_set_matches_allowlist_exactly():
     )
 
 
+def test_no_test_module_in_expected_readers():
+    """Test modules are exempt by rule; listing one would be dead weight the
+    floor's missing-direction check could never retire."""
+    listed = sorted(m for m in EXPECTED_READERS if is_test_module(m))
+    assert not listed, (
+        f"test module(s) {listed} are in EXPECTED_READERS; they are exempt by "
+        "`is_test_module` -- remove them."
+    )
+
+
 def test_no_denial_shaped_guard_reaches_the_record():
     """The complement this plan's first unknown resolved to: no TOP-LEVEL
     module under write_guards/ or bash_guards/ (the non-recursive scope the
@@ -1274,7 +514,8 @@ def test_no_denial_shaped_guard_reaches_the_record():
     support code, never itself a registered guard) whose CLASS is denial-
     shaped may reach the fleet record, and an unclassifiable top-level
     guard-directory module in the reader closure fails loud rather than
-    being treated as advisory by default."""
+    being treated as advisory by default. Walks the FULL closure, so a
+    guard-directory module is never exempted by a test-shaped name."""
     root = _repo_root()
     computed = reader_closure(root)
 
@@ -1430,6 +671,40 @@ class TestReaderClosureSelfVerification:
         # able to fall OUT of the closure, or the walk is a one-way ratchet.
         _write(reader_path, "import json\n")
         assert "coordinator_core.unrelated.direct_reader" not in reader_closure(root)
+
+    def test_new_test_module_is_exempt_and_new_production_module_is_not(self, tmp_path):
+        """Both sides of the exemption, through the floor's own composition
+        (`production_readers(reader_closure(root))`): a new test module
+        reaching the record leaves the floor's subject unchanged; a new
+        production module reaching it lands in the subject, so the equality
+        against EXPECTED_READERS would go red."""
+        root = self._base_fixture(tmp_path)
+        pkg = root / "coordinator_core" / "unrelated"
+        reach = "from coordinator_core.session.fleet_mode import read_fleet_mode\n"
+        _write(pkg / "tests" / "__init__.py", "")
+        _write(pkg / "tests" / "test_new_thing.py", reach)
+        _write(pkg / "test_sibling.py", reach)
+        _write(pkg / "conftest.py", reach)
+
+        full = reader_closure(root)
+        assert "coordinator_core.unrelated.tests.test_new_thing" in full
+        assert production_readers(full) == frozenset()
+
+        _write(pkg / "new_production_reader.py", reach)
+        subject = production_readers(reader_closure(root))
+        assert subject == frozenset({"coordinator_core.unrelated.new_production_reader"})
+        assert subject - frozenset(EXPECTED_READERS)
+
+    def test_guard_directory_module_is_never_exempt_by_leaf_name(self):
+        """`is_test_module` keys on the dotted name; a guard module is not a
+        test module unless it sits under a `tests` package or is `test_*`."""
+        assert not is_test_module("coordinator_core.write_guards.nudge_em_code_dispatch")
+        assert not is_test_module("coordinator_core.bash_guards._firing_shape")
+        assert not is_test_module("coordinator_core.benchmarks.hook_entry_cost")
+        assert is_test_module("coordinator_core.write_guards.tests.test_x")
+        assert is_test_module("coordinator_core.ops.plan_chain.tests._chain_repo")
+        assert is_test_module("coordinator_core.sizing_assemble.conftest")
+        assert is_test_module("coordinator_core.hooks.test_auto_push")
 
     def test_expected_readers_tuple_is_not_derived_from_the_walk(self):
         """Guards against the exact vacuity this file's docstring names:

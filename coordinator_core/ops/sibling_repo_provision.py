@@ -10,7 +10,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import subprocess
 from pathlib import Path
 from typing import Optional
 
@@ -30,37 +29,24 @@ from coordinator_core.ops.sibling_repo_provision_contract import (
     read_marker,
     sibling_root,
 )
-from coordinator_core.win_portability import no_console_creationflags
+from coordinator_core.git.run import GitResult, run_git
 
-_GIT_TIMEOUT_SECS = 30
 _FALLBACK_NAME = "Coordinator"
 _FALLBACK_EMAIL = "coordinator@coordinator"
 _SECTION = re.compile(r"^\s*\[\s*([A-Za-z0-9.-]+)(?:\s+\"[^\"]*\")?\s*\]\s*(.*)$")
 _KEYVAL = re.compile(r"^\s*(name|email)\s*=\s*(.*?)\s*$", re.IGNORECASE)
 
 
-def _git(args: list[str], *, env: Optional[dict] = None) -> subprocess.CompletedProcess:
-    cmd = ["git", *args]
+def _git(args: list[str], *, env: Optional[dict] = None) -> GitResult:
     full_env = {**os.environ, "LC_ALL": "C", **(env or {})}
-
-    def _invoke() -> subprocess.CompletedProcess:
-        return subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=_GIT_TIMEOUT_SECS,
-            stdin=subprocess.DEVNULL,
-            env=full_env,
-            **no_console_creationflags(),
-        )
-
-    return run_with_lock_retry(_invoke)
+    return run_with_lock_retry(lambda: run_git(args, env=full_env))
 
 
-def _git_ok(args: list[str], *, env: Optional[dict] = None) -> subprocess.CompletedProcess:
+def _git_ok(args: list[str], *, env: Optional[dict] = None) -> GitResult:
     proc = _git(args, env=env)
     if proc.returncode != 0:
-        raise ValueError(f"{OP_KEY}: git {args[0]} failed: {(proc.stderr or '').strip()}")
+        why = "timed out" if proc.timed_out else (proc.stderr or "").strip()
+        raise ValueError(f"{OP_KEY}: git {args[0]} failed: {why}")
     return proc
 
 

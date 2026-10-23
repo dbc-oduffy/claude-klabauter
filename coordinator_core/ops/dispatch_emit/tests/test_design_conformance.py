@@ -140,6 +140,29 @@ def test_refusing_or_absent_verdict_fails(repo, verdict):
     assert "verdict" in dc.evidence_refusal(repo, row, {"met_by": [rec]}, None)
 
 
+def _body_record(repo, section, fm_verdict=None):
+    fm = "reviewer: senior-front-end\n" + (f"verdict: {fm_verdict}\n" if fm_verdict else "")
+    return _write(repo, "reviews/body.md", f"---\n{fm}---\nReviewed {BOARD}\n\n{section}\n")
+
+
+@pytest.mark.parametrize("section", ["## Verdict\n\n**APPROVED**", "## Verdict\n\nApproved with notes: tidy up"])
+def test_body_verdict_section_meets_row(repo, section):
+    row = _row(repo)
+    assert dc.evidence_refusal(repo, row, {"met_by": [_body_record(repo, section)]}, None) is None
+
+
+@pytest.mark.parametrize("section", ["## Verdict\n\n**REJECTED**", "## Verdict\n\nRequires changes before merge", "## Notes\n\nfine"])
+def test_body_verdict_refusing_or_absent_refused(repo, section):
+    row = _row(repo)
+    assert "verdict" in dc.evidence_refusal(repo, row, {"met_by": [_body_record(repo, section)]}, None)
+
+
+def test_frontmatter_verdict_wins_over_body(repo):
+    row = _row(repo)
+    rec = _body_record(repo, "## Verdict\n\nAPPROVED", fm_verdict="REJECTED")
+    assert "REJECTED" in dc.evidence_refusal(repo, row, {"met_by": [rec]}, None)
+
+
 def test_a_different_board_fails(repo):
     row = _row(repo)
     rec = _record(repo, reviewer="senior-front-end", body=OTHER_BOARD)

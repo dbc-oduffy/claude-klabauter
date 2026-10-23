@@ -35,6 +35,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     LEDGER_DERIVED_ROW_PREFIX,
     RESUME_LEDGER_ARM_FIELD,
     RESUME_LEDGER_CARRIED_MET_FIELD,
+    RESUME_LEDGER_CREDITED_FIELD,
     RESUME_LEDGER_DERIVED_FIELD,
     RESUME_LEDGER_EM_DISCHARGED_FIELD,
     RESUME_LEDGER_HALT_SHA_FIELD,
@@ -405,6 +406,28 @@ def _without_gate_verdicts(row_id: str, record):
     return {**record, "remaining": [s for s in record["remaining"] if not (isinstance(s, str) and s.strip() in verdicts)]}
 
 
+def _credited_landed(blocking: Sequence[str], halt, repo_root: Path) -> list[str]:
+    """Blocking items whose serving plan rows all landed, one at least after the halt commit.
+
+    Reads only `halt.landed_since_halt` and `halt.unlanded`; an item with an unlanded or no
+    serving row, or an unreadable plan, is never credited."""
+    since = set(halt.landed_since_halt or ())
+    if not since or not blocking:
+        return []
+    from coordinator_core.ops.dispatch_emit.ledger_remaining_paths import PlanRowsUnreadable, serving_rows
+
+    unlanded = set(halt.unlanded)
+    credited: list[str] = []
+    for item in blocking:
+        try:
+            ids = {str(r.get("id")) for r in serving_rows(Path(repo_root) / halt.plan_rel, [item])}
+        except PlanRowsUnreadable:
+            return []
+        if ids and not ids & unlanded and ids & since:
+            credited.append(item)
+    return credited
+
+
 def _resume_ledger(
     sizing: dict, halt, repo_root: Path, run_id: Optional[str] = None, sizing_rel: Optional[str] = None
 ) -> Optional[dict]:
@@ -441,6 +464,8 @@ def _resume_ledger(
         *(b for b in halt.blocking if b not in out),
         *(r for r in rulable if r not in halt.blocking and r not in carried),
     ]
+    credited = _credited_landed(blocking, halt, repo_root)
+    blocking = [b for b in blocking if b not in credited]
     all_landed = halt.halted == ALL_LANDED_HALT_KIND
     notes = (
         [] if all_landed and halt.run_id == ALL_LANDED_NO_RUN
@@ -469,6 +494,8 @@ def _resume_ledger(
         RESUME_LEDGER_UNLANDED_FIELD: list(halt.unlanded),
         RESUME_LEDGER_NOTES_FIELD: notes,
     }
+    if credited:
+        verdict[RESUME_LEDGER_CREDITED_FIELD] = credited
     revised = [b for b in blocking if b in revision_ids]
     if revised:
         verdict[RESUME_LEDGER_REVISED_FIELD] = revised

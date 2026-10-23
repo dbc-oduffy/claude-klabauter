@@ -342,6 +342,11 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
         "coordinator_core/ops/dispatch_emit/release_run_token.py",
         ("_handler",),
     ),
+    # Spawn-free on landing (empty function-granular reachable set): one sidecar read, one twin write.
+    "dispatch.stage_twin_token": (
+        "coordinator_core/ops/dispatch_emit/op.py",
+        ("_stage_twin_token",),
+    ),
     "dispatch.supersede_slice": (
         "coordinator_core/ops/dispatch_emit/slice_supersede.py",
         ("_handler",),
@@ -4753,9 +4758,14 @@ def test_registry_fast_path_matches_live_registry():
     `test_registry_divergence_and_residual_stay_accounted` above -- peer commit `117d960ec` made
     `hooks.*` registration lazy (on-miss, in `ipc`), so a bare `import coordinator_core.ops`
     leaves every `hooks.*` op out of the live registry by design. Do not remove this call."""
+    from coordinator_core.ops import get_poisoned_modules
+
     _hooks._eager_import_all()
     divergence = spawn_bearing_ops.registry_divergence()
+    poisoned = {**get_poisoned_modules(), **_hooks.get_poisoned_modules()}
     assert divergence.agrees, (
+        f"op modules that failed to import: "
+        f"{ {m: repr(e) for m, e in sorted(poisoned.items())} }\n"
         "the fast-path op-name map (_registry_map.py::OP_MODULE_MAP) and the "
         "live op registry (ipc._REGISTRY, via `import coordinator_core.ops`) "
         "disagree -- a stale/incomplete fast-path map degrades silently to "
@@ -7333,7 +7343,7 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     # launch (spawn_detached from _launch_close_job); typical landing: zero git. The walk also
     # reaches archive_stamp._run_git, commit_signing.write_signed_commit_object and
     # git_native._invoke through shared helpers: five sites, as the op it replaces reached.
-    # 4 -> 5, 2026-10-22 (2939d6540d): _unchanged_since_halt lazily reaches terminal_commit._landed_before_halt
+    # 4 -> 5, 2026-10-22 (2939d6540d): _unchanged_since_halt lazily reaches halt_landing.landed_before_halt
     # (run_git), refusal path only.
     "dispatch.land_run": 5,
     "dispatch.reap_abandoned_runs": 1,

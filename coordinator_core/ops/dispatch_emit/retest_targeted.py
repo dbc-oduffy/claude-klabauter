@@ -24,6 +24,7 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Callable, Optional, Sequence
 
+from coordinator_core.git.repo_root import show_toplevel
 from coordinator_core.ops._path_guard import contained_path, safe_id
 from coordinator_core.ops.dispatch_emit import landing_integrity as li
 from coordinator_core.warm.client import MUTATION_READ_DEADLINE_SECS
@@ -98,12 +99,10 @@ def dirty_paths(repo_root: Path) -> list[str]:
 def _repo_root(raw: Optional[str]) -> Path:
     if raw:
         return Path(raw).resolve()
-    proc = subprocess.run(
-        ["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True, creationflags=_NO_WINDOW,
-    )
-    if proc.returncode != 0:
+    top = show_toplevel()
+    if top is None:
         raise RuntimeError("not in a git repo; pass --repo-root")
-    return Path(proc.stdout.strip())
+    return Path(top)
 
 
 def _tests_to_run(explicit: Sequence[str], params: dict) -> list[str]:

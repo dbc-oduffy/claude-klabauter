@@ -75,7 +75,13 @@ def test_regate_after_an_in_run_ruling_keeps_resume_ledger(monkeypatch):
         wrap_stage=lambda _t: (_BLITZ_FN, ["Size", "Plan"]), plan_blitz_text="stub", script_path="x.mjs",
         in_run_commit=True, accept_pending=True, **REVIEW_KW,
     )
-    takes = re.findall(r"_gate = \{ \.\.\._gate, arm: _\w+\.arm[^;]*;", script)
+    # Commit 3e9a83f96c added `_gate = { ..._gate, arm: _gate.arm.trim().toLowerCase() }`, which
+    # normalises the arm and takes no reply; a take reads the arm from a reply other than `_gate`.
+    every_arm_spread = re.findall(r"_gate = \{ \.\.\._gate, arm: _\w+\.arm[^;]*;", script)
+    takes = re.findall(r"_gate = \{ \.\.\._gate, arm: _(?!gate\.)\w+\.arm[^;]*;", script)
+    normalisations = [m for m in every_arm_spread if "_gate.arm.trim().toLowerCase()" in m]
+    assert normalisations
+    assert takes == [m for m in every_arm_spread if m not in normalisations]
     assert takes
     for take in takes:
         assert "resume_ledger" in take, take

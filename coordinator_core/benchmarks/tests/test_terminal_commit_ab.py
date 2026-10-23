@@ -101,6 +101,71 @@ def test_probe_counts_replaces_and_lists_asyncio_importers(tmp_path):
         assert hit["phase"] in {"setup", "call"} and hit["requests"] >= 1
 
 
+def test_run_probe_not_ok_raises_with_child_stderr_tail(monkeypatch, tmp_path):
+    class _Done:
+        returncode = 0
+        stdout = 'RESULT={"ok": false, "importers": {}, "path_out": {"head": "PATH_OUT_MARK"}}\n'
+        stderr = "noise\n" * 300 + "Traceback: BOOM_AT_SITE"
+
+    monkeypatch.setattr(ab.subprocess, "run", lambda *a, **k: _Done())
+    with pytest.raises(RuntimeError, match="BOOM_AT_SITE") as exc:
+        ab.run_probe(tmp_path, tmp_path)
+    assert "PATH_OUT_MARK" in str(exc.value)
+    assert len(str(exc.value)) < 1200
+
+
+def _stub_close_background(monkeypatch, statuses):
+    from types import SimpleNamespace
+
+    from coordinator_core.git import git_dir
+    from coordinator_core.ops.ceremony import close_background
+
+    monkeypatch.setattr(close_background, "JobContext", lambda *a: SimpleNamespace(args=a))
+    monkeypatch.setattr(git_dir, "resolve_git_common_dir", lambda root: root)
+    monkeypatch.setattr(
+        close_background,
+        "run_background",
+        lambda ctx, budget_ms: {
+            leg: SimpleNamespace(status=status, detail="d") for leg, status in statuses.items()
+        },
+    )
+
+
+def test_close_job_step_ran_legs_mint_stamp_and_implement_plan(monkeypatch, tmp_path):
+    _stub_close_background(monkeypatch, {"review-stamp": ab.LEG_RAN, "plan-reconciliation": ab.LEG_RAN})
+    out = {}
+    ok, reason = ab.close_job_step([(str(tmp_path), "k", ("b",), "m")], out)
+    assert ok is True and reason == ""
+    assert out["review_stamp"] == ab.REVIEW_STAMP_MINTED
+    assert out["plan_status"] == ab.PLAN_STATUS_IMPLEMENTED
+    assert out["close_job_legs"]["review-stamp"] == {"status": ab.LEG_RAN, "detail": "d"}
+
+
+@pytest.mark.parametrize(
+    "statuses,named,absent",
+    [
+        ({"review-stamp": "failed", "plan-reconciliation": ab.LEG_RAN}, "review-stamp", "review_stamp"),
+        ({"review-stamp": ab.LEG_RAN, "plan-reconciliation": "not-applicable"}, "plan-reconciliation", "plan_status"),
+        ({}, "review-stamp", None),
+    ],
+)
+def test_close_job_step_non_ran_leg_is_not_ok_with_named_reason(monkeypatch, tmp_path, statuses, named, absent):
+    _stub_close_background(monkeypatch, statuses)
+    out = {}
+    ok, reason = ab.close_job_step([(str(tmp_path), "k", ("b",), "m")], out)
+    assert ok is False
+    assert named in reason
+    if absent:
+        assert absent not in out
+
+
+def test_probe_head_calls_the_close_job_step():
+    assert "close_job_step(queued_jobs, out)" in ab._PROBE_HEAD
+    for const in ("LEG_RAN", "REVIEW_STAMP_MINTED", "PLAN_STATUS_IMPLEMENTED"):
+        assert const not in ab._PROBE_HEAD
+    compile(ab._PROBE_HEAD, "<probe>", "exec")
+
+
 def test_spawn_verb_extraction():
     assert ab.spawn_verb(["git", "-C", "x", "--no-optional-locks", "status", "--porcelain"]) == ("git", "status")
     assert ab.spawn_verb(["git", "hash-object", "-w", "--stdin-paths"]) == ("git", "hash-object")
@@ -172,7 +237,7 @@ def test_main_refuses_repo_out_dir_for_at(monkeypatch):
 @pytest.mark.spawns_process
 @pytest.mark.cadence
 def test_importers_reports_a_requester_for_a_module_the_path_loads(tmp_path):
-    target = "coordinator_core.ops.ceremony.commit_v2"
+    target = "coordinator_core.ops.dispatch_emit.run_close"
     result = ab.run_probe(_REPO, tmp_path, targets=[target])
     hits = result["importers"][target]
     assert hits and all(h["requester"].count(":") == 1 and h["requests"] >= 1 for h in hits)

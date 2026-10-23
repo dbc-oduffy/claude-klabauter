@@ -278,6 +278,12 @@ EXIT_USAGE = 2
 _BIN_DIR = str(Path(__file__).resolve().parents[2] / "coordinator" / "bin")
 ensure_bin_lib_bound(_BIN_DIR)
 import lib  # noqa: F401,E402 -- bootstraps coordinator/bin/lib onto sys.path
+
+# A `lib` already cached in sys.modules skips its bootstrap, so the lib dir is
+# put on sys.path explicitly: the sibling bare imports need it in every order.
+_BIN_LIB_DIR = os.path.join(_BIN_DIR, "lib")
+if _BIN_LIB_DIR not in sys.path:
+    sys.path.insert(0, _BIN_LIB_DIR)
 import plan_completeness as _plan_completeness  # noqa: E402 -- bind-then-import
 
 #: Corpus-mutator declaration (generator-provenance sweep): this module

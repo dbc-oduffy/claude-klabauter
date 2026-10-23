@@ -178,3 +178,55 @@ def test_a_candidate_left_dirty_is_run_artifact_residue(repo, monkeypatch):
     assert EVIDENCE in out["run_artifact_residue"]
     assert out["run_artifact_residue"][EVIDENCE] == "evidence-sidecar"
     assert EVIDENCE in out["error"]
+
+
+def test_a_candidate_another_run_claims_is_not_this_runs_residue(repo, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import sibling_claims
+
+    _stage_graph(repo)
+    monkeypatch.setattr(run_artifacts, "landable", lambda *a, **k: run_artifacts.Landable())
+    monkeypatch.setattr(
+        sibling_claims, "sibling_run_claims",
+        lambda root, rid, paths: {p: "ask-20261016T130000-cccccc" for p in paths if p == EVIDENCE},
+    )
+
+    out = _fire(repo)
+
+    assert "run_artifact_residue" not in out or EVIDENCE not in out["run_artifact_residue"], out
+
+
+def _fire_stranded(root: Path, **extra) -> dict:
+    request = CommitRequest(chunks=(
+        ChunkCommit(id="C1", title="t1", paths=("a.py",)),
+        ChunkCommit(id="C2", title="t2", paths=("op.py",)),
+    ))
+    _write(root, "run.mjs", "// emitted\n" + render_marker(request) + "\n")
+    return terminal_commit._handler(
+        {"script_path": "run.mjs", "incomplete_chunks": ["C2"],
+         "inline_review": {**_REVIEWED, "prep": {"slice_files": ["op.py"]}}, **extra},
+        repo_root=root / ".git",
+    )
+
+
+@pytest.mark.parametrize("claimed", [True, False])
+def test_stranded_residue_omits_a_path_another_run_claims(repo, monkeypatch, claimed):
+    from coordinator_core.ops.dispatch_emit import sibling_claims
+    from coordinator_core.session import core as session_core
+
+    monkeypatch.setenv("COORDINATOR_SESSION_ID", SESSION)
+    session_core.init(SESSION, cwd=str(repo))
+    _write(repo, "op.py", "v1\n")
+    _git(["add", "op.py"], repo)
+    _git(["commit", "-q", "-m", "op"], repo)
+    _write(repo, "a.py", "a\n")
+    _write(repo, "op.py", "v2\n")
+    monkeypatch.setattr(
+        sibling_claims, "sibling_run_claims",
+        lambda root, rid, paths: {p: "ask-20261016T130000-cccccc" for p in paths if claimed and p == "op.py"},
+    )
+
+    out = _fire_stranded(repo, session_id=SESSION)
+
+    assert out["committed"] is True, out
+    assert "op.py" not in _git(["show", "--name-only", "--format=", "HEAD"], repo)
+    assert ("op.py" in out.get("stranded_residue", {}).get("C2", [])) is (not claimed), out

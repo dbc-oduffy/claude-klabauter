@@ -92,7 +92,39 @@ def spawn_verb(argv):
 '''
 exec(_VERB_SRC)
 
-_PROBE_HEAD = _VERB_SRC + """
+LEG_RAN = "ran"
+REVIEW_STAMP_MINTED = "minted"
+PLAN_STATUS_IMPLEMENTED = "implemented"
+
+_CLOSE_JOB_SRC = '''
+def close_job_step(queued_jobs, out):
+    """Run each queued close job in process through the job worker's own runner and fold the legs into `out`.
+
+    Sets out["close_job_legs"]; review_stamp / plan_status only when that leg's status is the ran literal.
+    Returns (ok, reason): ok needs both set, reason names what is missing ("" when ok)."""
+    from pathlib import Path
+    from coordinator_core.ops.ceremony import close_background
+    from coordinator_core.git.git_dir import resolve_git_common_dir
+    close_legs = {}
+    for root, key, batons, memo in queued_jobs:
+        ctx = close_background.JobContext(Path(root), resolve_git_common_dir(Path(root)), key, batons, memo)
+        for leg, res in close_background.run_background(ctx, budget_ms=float("inf")).items():
+            close_legs[leg] = {"status": res.status, "detail": res.detail}
+    out["close_job_legs"] = close_legs
+    if close_legs.get("review-stamp", {}).get("status") == LEG_RAN:
+        out["review_stamp"] = REVIEW_STAMP_MINTED
+    if close_legs.get("plan-reconciliation", {}).get("status") == LEG_RAN:
+        out["plan_status"] = PLAN_STATUS_IMPLEMENTED
+    missing = []
+    if out.get("review_stamp") != REVIEW_STAMP_MINTED:
+        missing.append("review-stamp leg status %r, not %r" % (close_legs.get("review-stamp", {}).get("status"), LEG_RAN))
+    if out.get("plan_status") != PLAN_STATUS_IMPLEMENTED:
+        missing.append("plan-reconciliation leg status %r, not %r" % (close_legs.get("plan-reconciliation", {}).get("status"), LEG_RAN))
+    return not missing, "; ".join(missing)
+'''
+exec(_CLOSE_JOB_SRC)
+
+_PROBE_HEAD = _VERB_SRC + _CLOSE_JOB_SRC.replace("LEG_RAN", repr(LEG_RAN)).replace("REVIEW_STAMP_MINTED", repr(REVIEW_STAMP_MINTED)).replace("PLAN_STATUS_IMPLEMENTED", repr(PLAN_STATUS_IMPLEMENTED)) + """
 import builtins, json, os, sys, subprocess
 from collections import Counter
 from pathlib import Path
@@ -166,26 +198,37 @@ subprocess.Popen.__init__ = _popen_init
 from coordinator_core.benchmarks import terminal_commit_full_path as drv
 repo, script = drv.build_fixture(Path(sys.argv[1]))
 drv._prepare_close(repo)
+from coordinator_core.ops.dispatch_emit import land_run
+queued_jobs = []
+_noop_launch = land_run._launch_close_job
+
+def _record_launch(root, key, batons, memo):
+    queued_jobs.append((root, key, tuple(batons), memo))
+    return _noop_launch(root, key, batons, memo)
+
+land_run._launch_close_job = _record_launch
 state["phase"] = "call"
 try:
     out = drv._run_full_path(repo, script)
+    ok, reason = close_job_step(queued_jobs, out)
+    out["close_job_reason"] = reason
 finally:
     builtins.__import__ = real_import
     os.replace = real_replace
     subprocess.Popen.__init__ = real_popen_init
-ok = out.get("review_stamp") == "minted" and out.get("plan_status") == "implemented"
 importers = {t: [] for t in targets}
 for (tgt, requester, phase), n in sorted(hits.items()):
     importers[tgt].append({"requester": requester, "phase": phase, "requests": n})
 print("RESULT=" + json.dumps({
     "ok": ok,
+    "path_out": out,
     "importers": importers,
     "first_loaders": first_loader if want_triggers else {},
     "replace_total": sum(replace_sites.values()),
     "replace_sites": dict(replace_sites.most_common()),
     "spawns": spawns,
     "spawn_total": len(spawns),
-}))
+}, default=str))
 """
 
 
@@ -411,7 +454,15 @@ def run_probe(
         raise RuntimeError(f"probe failed rc={done.returncode}: {done.stderr[-800:]}")
     result = json.loads(lines[-1][len("RESULT="):])
     if not result["ok"]:
-        raise RuntimeError("probe: the full path did not complete (review_stamp minted, plan_status implemented)")
+        path_out = result.get("path_out") or {}
+        raise RuntimeError(
+            "probe: the full path did not complete (review_stamp minted, plan_status implemented); "
+            f"got review_stamp={path_out.get('review_stamp')!r} "
+            f"plan_status={path_out.get('plan_status')!r}; "
+            f"reason: {path_out.get('close_job_reason')}; "
+            f"child path output head: {json.dumps(path_out, default=str)[:600]}; "
+            f"child stderr tail: {done.stderr[-800:]}"
+        )
     grouped: dict[tuple[str, str], int] = {}
     for hit in result["importers"].get("asyncio", []):
         key = (hit["requester"].split(":", 1)[0], hit["phase"])

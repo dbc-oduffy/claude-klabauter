@@ -74,6 +74,7 @@ def repo(tmp_path, monkeypatch):
     monkeypatch.setenv("COORDINATOR_SESSION_ID", SELF)
     monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
     monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+    monkeypatch.delenv("CLAUDE_PID", raising=False)
     session_core.init(SELF, cwd=str(root))
     _write(root, "src/a.py", "a\n")
     _write(root, JOB, "job\n")
@@ -94,8 +95,19 @@ def _run_r(repo: Path) -> dict:
 
 
 def _committed(repo: Path) -> list:
-    out = _git(["show", "--numstat", "--format=", "HEAD"], repo)
-    return sorted(ln.split("\t")[-1] for ln in out.splitlines() if ln.strip())
+    """Paths the last terminal commit landed: HEAD plus the product commit a follow-on HEAD
+    (`Own-Left-Behind-Of:` trailer) is attributed to."""
+    import re
+
+    def files(rev: str) -> set:
+        out = _git(["show", "--numstat", "--format=", rev], repo)
+        return {ln.split("\t")[-1] for ln in out.splitlines() if ln.strip()}
+
+    landed = files("HEAD")
+    product = re.search(r"Own-Left-Behind-Of: ([0-9a-f]{40})", _git(["log", "-1", "--format=%B", "HEAD"], repo))
+    if product:
+        landed |= files(product.group(1))
+    return sorted(landed)
 
 
 def test_a_halted_siblings_declared_writes_are_held_dirty_and_named(repo):

@@ -153,6 +153,31 @@ def sibling_run_claims(worktree_root: Path, own_run_id: Optional[str], candidate
     return claims
 
 
+def shared_dir_holds(
+    worktree_root: Path, own_run_id: Optional[str], own_paths: Iterable[str], candidates: Iterable[str],
+) -> list:
+    """The `candidates` sitting in a directory that both `own_paths` and an unlanded sibling run's
+    declared paths occupy: a sibling's undeclared dirt there cannot be told from this session's own,
+    so it is held whole (never hunk-split). Never raises."""
+    wanted = [_norm(p) for p in candidates if p]
+    if not wanted:
+        return []
+    own_dirs = {_norm(p).rpartition("/")[0] for p in own_paths if p}
+    try:
+        from coordinator_core.ops import warp_run_deliverable
+
+        root = Path(worktree_root)
+        held_dirs: set = set()
+        for run_id in _unlanded_run_ids(root, own_run_id):
+            paths, _prefixes, _unreadable = warp_run_deliverable._manifest_declared(run_id, root)
+            declared = (*paths, *_extra_declared(root, run_id))
+            held_dirs.update(p.rpartition("/")[0] for p in declared if isinstance(p, str) and p)
+    except Exception:  # noqa: BLE001 -- contest unknown: hold nothing further
+        return []
+    shared = own_dirs & held_dirs
+    return [p for p in wanted if p.rpartition("/")[0] in shared]
+
+
 def filter_own(
     paths: Iterable[str], claims: Mapping[str, str], own_declared: Iterable[str],
 ) -> tuple:

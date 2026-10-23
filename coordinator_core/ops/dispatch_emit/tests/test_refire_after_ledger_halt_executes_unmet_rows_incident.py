@@ -15,6 +15,8 @@ from coordinator_core.ops.dispatch_emit import land_run
 from coordinator_core.ops.dispatch_emit.ask_compose import compose_ask_script
 from coordinator_core.ops.dispatch_emit.ask_contract import (
     RECORD_DIR_ROOT,
+    LEG_FOOTPRINT_FILE,
+    RESUME_LEDGER_DERIVED_FIELD,
     RESUME_LEDGER_HALT_SHA_FIELD,
     RESUME_LEDGER_NOTES_FIELD,
     RESUME_LEDGER_REMAINING_FIELD,
@@ -40,6 +42,11 @@ HALTED_RUN = "ask-20261017T014048-0c9cac"
 REFIRE_RUN = "warp-2026-10-17-refire-20261017T020238-a32fd8"
 NOTE = "R1 still owes the unchanged-since-halt refusal in land_run"
 REMAINING = {"R1": {"remaining": ["add the unchanged-since-halt refusal"], "evidence": "falsifier still fails"}}
+# 6fac24f9c5: at arm s the gate derives a row for each owed item and refuses an item whose owed work names no path.
+REMAINING_AT_PATH = {
+    "R1": {"remaining": ["add the unchanged-since-halt refusal in some/C1.py"], "evidence": "falsifier still fails"},
+}
+DERIVED_ROW = "LR1"
 REGISTER = {
     "sources": [{"doc": "ask", "ref": "ask"}],
     "rows": [{"id": "R1", "source_text": "refuse met on an unchanged diff", "surface": "internal", "status": "open"}],
@@ -136,7 +143,14 @@ def test_land_run_refuses_met_on_an_unchanged_tree_and_passes_after_a_declared_e
     (repo / "state" / "extra.yaml").write_text("a: 1\n", encoding="utf-8")
     assert _gate(repo, run_dir, MET, manifest, param)[0]["refused"] == "ledger-unmet"
 
+    # The gate recorded the revise-note resume's leg footprint as writes=[]: an edit outside it is a breach,
+    # excluded from the work since the halt (31f84244b4 footprint fence).
     (repo / "some" / "C0.py").write_text("x = 2\n", encoding="utf-8")
+    breached = _gate(repo, run_dir, MET, manifest, param)[0]
+    assert breached["refused"] == "ledger-unmet"
+    assert breached["ledger_failures"] == [{"id": "R1", "reason": UNCHANGED_SINCE_HALT_REASON}]
+
+    (run_dir / LEG_FOOTPRINT_FILE).write_text(json.dumps({"writes": ["some/C0.py"]}), encoding="utf-8")
     after = _gate(repo, run_dir, MET, manifest, param)[0]
     assert after is None or UNCHANGED_SINCE_HALT_REASON not in json.dumps(after)
     assert after is None or after["refused"] == "ledger-unmet"
@@ -158,7 +172,7 @@ def _unlanded_halted_repo(repo):
     record = repo / RECORD_DIR_ROOT / HALTED_RUN
     write_halt_marker(
         record, halted="ledger-check", sizing_rel=REL, plan_rel=PLAN_REL, blocking=("R1",),
-        blocking_items=[{"id": "R1", **REMAINING["R1"]}],
+        blocking_items=[{"id": "R1", **REMAINING_AT_PATH["R1"]}],
     )
     (record / "manifest.json").write_text(
         json.dumps({"rows": [{"id": "C1", "writes": ["some/C1.py"]}]}), encoding="utf-8"
@@ -175,7 +189,8 @@ def test_unlanded_gate_names_the_never_landed_row_and_stages_only_it(repo):  # n
     resume = reply["resume_ledger"]
     assert resume["run_id"] == HALTED_RUN and resume["blocking"] == ["R1"]
     assert resume[RESUME_LEDGER_UNLANDED_FIELD] == ["C1"]
-    assert [r["id"] for r in read_reply(repo, reply["manifest_handle"])["rows"]] == ["C1"]
+    assert resume[RESUME_LEDGER_DERIVED_FIELD] == [DERIVED_ROW]
+    assert [r["id"] for r in read_reply(repo, reply["manifest_handle"])["rows"]] == ["C1", DERIVED_ROW]
 
 
 def test_unlanded_composed_script_sets_ledger_exec_ahead_of_the_execute_phase(repo, monkeypatch):  # noqa: F811

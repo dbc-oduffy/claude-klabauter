@@ -48,6 +48,39 @@ def test_build_report_complete_when_only_suspended_remain():
     assert report["violations"] == []
 
 
+def test_build_report_names_poisoned_module_and_is_incomplete():
+    report = mod.build_report(
+        [],
+        suspended=frozenset(),
+        generation={},
+        registered_op_count=1,
+        poisoned={"zz.bad_mod": ImportError("no module named qq")},
+    )
+    assert report["complete"] is False
+    assert report["poisoned_modules"] == [
+        {"module": "zz.bad_mod", "exception_type": "ImportError", "exception": "no module named qq"}
+    ]
+    json.dumps(report)
+
+
+def test_dispatch_reports_injected_poisoned_module_and_other_ops_still_dispatch(monkeypatch):
+    monkeypatch.setitem(ops_pkg._POISONED_MODULES, "zz.bad_mod", RuntimeError("boom"))
+    d = asyncio.run(
+        dispatch_message({"jsonrpc": "2.0", "id": 1, "method": OP, "params": {}})
+    )
+    result = d["result"]
+    assert result["complete"] is False
+    assert [r["module"] for r in result["poisoned_modules"]] == ["zz.bad_mod"]
+    assert result["poisoned_modules"][0]["exception"] == "boom"
+    assert result["registered_op_count"] > 0
+
+
+def test_no_poisoned_modules_reports_empty_list():
+    result = mod._engine_registration_completeness({})
+    assert result["poisoned_modules"] == []
+    assert result["complete"] is True
+
+
 def test_eager_registry_equals_full_walk():
     ops_pkg._eager_import_all()
     eager = set(_REGISTRY)

@@ -351,6 +351,7 @@ _DISPOSITIONS: Dict[str, Tuple[str, str]] = {
     'coordinator_core/ops/dispatch_emit/run_close.py': ('ignored-target', 'close-job record under .coordinator-local/close-jobs (gitignored): _write_atomic'),
     'coordinator_core/ops/ceremony/close_background.py': ('in-repo-non-state', 'no write: the vocabulary hit is dataclasses.replace; the legs write through their own seams'),
     'coordinator_core/ops/dispatch_emit/retest_targeted.py': ('ignored-target', 'fresh test-verdict record and the launcher log beside it under the retest dir (landing_integrity.RETEST_DIR): the two path.write_text calls and the _run_argv log open'),
+    'coordinator_core/ops/dispatch_emit/launcher_staged_twin.py': ('ignored-target', 'staged launcher twin under the gitignored scratch/warp/<run_id>/, contained by contained_path; carries the PLAINTEXT single-op run token inlined as runToken, so it must stay gitignored: ensure_twin tmp write_bytes, os.replace'),
     'coordinator_core/ops/dispatch_emit/reply_sidecar.py': ('in-repo-non-state', 'content-addressed stage readers under scratch/stage-readers and reply pages under the run record dir state/warp/<run_id>/: _ensure_reader, write_reply'),
     'coordinator_core/ops/plan_premise_carry.py': ('ignored-target', 'premise-carry record under .coordinator-local/plan-sidecars (gitignored): _write_atomic'),
     'coordinator_core/ops/dispatch_emit/run_close_lessons.py': ('outside-repo', 'front-matter stamp on a candidate queue_promote just wrote into the central lessons outbox, which is not this repo: _stamp'),

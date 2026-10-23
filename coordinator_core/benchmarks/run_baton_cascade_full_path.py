@@ -36,6 +36,7 @@ if str(_REPO) not in sys.path:
     sys.path.insert(0, str(_REPO))
 
 from coordinator_core.benchmarks import declare_benchmark_origin  # noqa: E402
+from coordinator_core.git.run import run_git  # noqa: E402
 from coordinator_core.win_portability import no_console_creationflags  # noqa: E402
 
 CORPUS_HANDOFFS = 757
@@ -60,10 +61,11 @@ _GIT_ENV = {
 
 
 def _git(repo: Path, *args: str) -> str:
-    done = subprocess.run(
-        ["git", "-C", str(repo), *args], capture_output=True, text=True, check=True,
-        env=_GIT_ENV, stdin=subprocess.DEVNULL, **no_console_creationflags(),
-    )
+    done = run_git(["-C", str(repo), *args], env=_GIT_ENV)
+    if done.returncode != 0:
+        raise RuntimeError(
+            f"git {' '.join(args)} failed rc={done.returncode} timed_out={done.timed_out}: {done.stderr.strip()}"
+        )
     return done.stdout.strip()
 
 

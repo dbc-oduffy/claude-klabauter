@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import shutil
 import subprocess
 import time
@@ -14,6 +15,8 @@ from coordinator_core.git import commit as commit_mod
 from coordinator_core.git import sshsig
 from coordinator_core.ops.dispatch_emit import terminal_commit
 from coordinator_core.win_portability import no_console_creationflags
+
+_SIGN_ADDRESS_DEFAULT = inspect.signature(sshsig.sign_via_agent).parameters["address"].default
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -107,7 +110,7 @@ def test_signing_stall_replies_inside_the_deadline_through_the_served_path(ssh_r
 def test_cold_path_signs_with_the_default_agent_timeout(ssh_repo, monkeypatch):
     seen: dict = {}
 
-    def _spy(data, pub, env=None, timeout=sshsig._DEFAULT_TIMEOUT_S):
+    def _spy(data, pub, env=None, timeout=sshsig._DEFAULT_TIMEOUT_S, *, address=_SIGN_ADDRESS_DEFAULT):
         seen["timeout"] = timeout
         raise sshsig.AgentUnavailable("spy")
 
@@ -122,7 +125,7 @@ def test_cold_path_signs_with_the_default_agent_timeout(ssh_repo, monkeypatch):
 def test_bound_deadline_halves_the_remaining_budget_for_the_agent_timeout(ssh_repo, monkeypatch):
     seen: dict = {}
 
-    def _spy(data, pub, env=None, timeout=sshsig._DEFAULT_TIMEOUT_S):
+    def _spy(data, pub, env=None, timeout=sshsig._DEFAULT_TIMEOUT_S, *, address=_SIGN_ADDRESS_DEFAULT):
         seen["timeout"] = timeout
         raise sshsig.AgentUnavailable("spy")
 

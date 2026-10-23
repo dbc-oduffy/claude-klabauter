@@ -220,6 +220,15 @@ def _frontmatter(text: str) -> dict[str, str]:
     }
 
 
+_BODY_VERDICT = re.compile(r"^#{1,6}[ \t]+Verdict[ \t]*:?[ \t]*\n+[ \t>*_`]*([A-Za-z]+(?:[ \t_-]+[A-Za-z]+)*)", re.M | re.I)
+
+
+def _body_verdict(text: str) -> str:
+    """Normalised leading words under a body `## Verdict` heading, or "" when there is none."""
+    m = _BODY_VERDICT.search(text)
+    return re.sub(r"[\s-]+", "_", m.group(1).strip()).upper() if m else ""
+
+
 def _record_refusal(target: Path, board: str) -> Optional[str]:
     """Why `target` is no senior-front-end review of `board`, or None when it is."""
     try:
@@ -230,8 +239,8 @@ def _record_refusal(target: Path, board: str) -> Optional[str]:
     reviewers = {bare_agent_type(fm.get("reviewer")), bare_agent_type(fm.get("agent_type"))}
     if SENIOR_FRONT_END not in reviewers:
         return "names no senior-front-end reviewer"
-    verdict = re.sub(r"[\s-]+", "_", fm.get("verdict", "").strip()).upper()
-    if not verdict or verdict in REFUSING_VERDICTS:
+    verdict = re.sub(r"[\s-]+", "_", fm.get("verdict", "").strip()).upper() or _body_verdict(text)
+    if not verdict or verdict in REFUSING_VERDICTS or any(verdict.startswith(r + "_") for r in REFUSING_VERDICTS):
         return f"carries verdict {verdict or '(none)'}"
     if board not in text:
         return "does not name the board"

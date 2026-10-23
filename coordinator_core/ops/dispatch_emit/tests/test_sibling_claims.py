@@ -115,6 +115,46 @@ def test_unreadable_manifest_contributes_nothing_and_never_raises(repo):
     assert sibling_claims.sibling_run_claims(repo, OWN, ["other/b.py"]) == {}
 
 
+def test_shared_dir_holds_live_sibling_dirt_in_a_shared_directory(repo):
+    _declare(repo, "run-b", "shared/b.py")
+    run_token.mint(repo, "run-b", "b.mjs", session_id=SELF)
+    held = sibling_claims.shared_dir_holds(
+        repo, OWN, ["shared/a.py"], ["shared/dirt.py", "elsewhere/x.py"]
+    )
+    assert held == ["shared/dirt.py"]
+
+
+def test_shared_dir_holds_halted_sibling_dirt_in_a_shared_directory(repo):
+    _halt(_declare(repo, _stamped("ffffff"), "shared/b.py"))
+    held = sibling_claims.shared_dir_holds(repo, OWN, ["shared/a.py"], ["shared/dirt.py"])
+    assert held == ["shared/dirt.py"]
+
+
+def test_shared_dir_holds_nothing_for_a_dead_sibling(repo):
+    _declare(repo, "run-b", "shared/b.py")
+    run_token.mint(repo, "run-b", "b.mjs", session_id=SELF)
+    path = run_token._record_path(repo, "run-b")
+    record = json.loads(path.read_text(encoding="utf-8"))
+    record["minted_at"] = 1.0
+    path.write_text(json.dumps(record), encoding="utf-8")
+    assert sibling_claims.shared_dir_holds(repo, OWN, ["shared/a.py"], ["shared/dirt.py"]) == []
+
+
+def test_shared_dir_holds_nothing_for_a_sibling_in_a_foreign_directory(repo):
+    _declare(repo, "run-b", "foreign/b.py")
+    run_token.mint(repo, "run-b", "b.mjs", session_id=SELF)
+    held = sibling_claims.shared_dir_holds(
+        repo, OWN, ["shared/a.py"], ["shared/dirt.py", "foreign/dirt.py"]
+    )
+    assert held == []
+
+
+def test_shared_dir_holds_excludes_the_run_itself(repo):
+    run_id = _stamped("a1b2c3")
+    _halt(_declare(repo, run_id, "shared/b.py"))
+    assert sibling_claims.shared_dir_holds(repo, run_id, ["shared/a.py"], ["shared/dirt.py"]) == []
+
+
 def test_filter_own_keeps_a_path_the_run_declares_and_withholds_the_rest():
     claims = {"other/b.py": "run-b", "src/a.py": "run-b"}
     kept, withheld = sibling_claims.filter_own(

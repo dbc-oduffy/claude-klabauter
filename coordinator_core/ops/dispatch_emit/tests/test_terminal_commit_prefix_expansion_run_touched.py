@@ -44,6 +44,7 @@ def repo(tmp_path, monkeypatch):
     monkeypatch.setenv("COORDINATOR_SESSION_ID", SELF)
     monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
     monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+    monkeypatch.delenv("CLAUDE_PID", raising=False)
     session_core.init(SELF, cwd=str(root))
     (root / "out").mkdir()
     return root
@@ -66,8 +67,26 @@ def _run(repo: Path, name: str, own_file: str) -> dict:
 
 
 def _committed(repo: Path) -> list:
-    out = _git(["show", "--numstat", "--format=", "HEAD"], repo)
-    return sorted(ln.split("\t")[-1] for ln in out.splitlines() if ln.strip())
+    """Paths the last terminal commit landed: HEAD plus the product commit a follow-on HEAD
+    (`Own-Left-Behind-Of:` trailer) is attributed to."""
+    import re
+
+    def files(rev: str) -> set:
+        out = _git(["show", "--numstat", "--format=", rev], repo)
+        return {ln.split("\t")[-1] for ln in out.splitlines() if ln.strip()}
+
+    landed = files("HEAD")
+    product = re.search(r"Own-Left-Behind-Of: ([0-9a-f]{40})", _git(["log", "-1", "--format=%B", "HEAD"], repo))
+    if product:
+        landed |= files(product.group(1))
+    return sorted(landed)
+
+
+def _product_files(repo: Path, out: dict) -> set:
+    """Paths of the run's product commit alone. The session's own claimed leftovers land in a
+    separate follow-on commit (`own_left_behind_commit`), never in this one."""
+    listed = _git(["show", "--numstat", "--format=", out["sha"]], repo)
+    return {ln.split("\t")[-1] for ln in listed.splitlines() if ln.strip()}
 
 
 def test_two_runs_one_session_each_commit_only_their_own_prefix_file(repo):
@@ -77,16 +96,20 @@ def test_two_runs_one_session_each_commit_only_their_own_prefix_file(repo):
 
     first = _run(repo, "A", "out/a.txt")
     assert first["committed"] is True, first
-    landed = _committed(repo)
+    landed = _product_files(repo, first)
     assert "out/a.txt" in landed
     assert "out/b.txt" not in landed
     assert "out/b.txt" in (first.get("undeclared_dirty") or []), first
 
-    second = _run(repo, "B", "out/b.txt")
+    assert first["own_left_behind_commit"]["paths"] == ["out/b.txt"], first
+
+    (repo / "out" / "c.txt").write_text("c\n", encoding="utf-8")
+    session_scope.touch(SELF, "out/c.txt", cwd=str(repo))
+    second = _run(repo, "B", "out/c.txt")
     assert second["committed"] is True, second
-    landed = _committed(repo)
-    assert "out/b.txt" in landed
-    assert "out/a.txt" not in landed
+    landed = _product_files(repo, second)
+    assert "out/c.txt" in landed
+    assert "out/a.txt" not in landed and "out/b.txt" not in landed
 
 
 def test_a_run_touched_prefix_file_a_live_peer_holds_is_left_out_and_named(repo):

@@ -805,6 +805,11 @@ def stage(
         named = f"; gated: {', '.join(g.id for g in gated)}" if gated else ""
         if owed:
             named += f"; owed by the EM: {', '.join(o.id for o in owed)}"
+        plan_held = [e for e in exclusions if e.get("reason") == "depends_on_plan"]
+        if plan_held:
+            named += "; waiting on another plan: " + ", ".join(
+                f"{e['id']} ({e.get('detail') or ''})" for e in plan_held
+            )
         raise AskStageError(
             f"the spine derives zero dispatchable rows{named}",
             owed_em_ids=[o.id for o in owed],

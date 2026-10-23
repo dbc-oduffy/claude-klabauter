@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import json
 import os
-import subprocess
 import sys
 import time
 import uuid
@@ -23,7 +22,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from coordinator_core.benchmarks import declare_benchmark_origin
-from coordinator_core.win_portability import no_console_creationflags
+from coordinator_core.git.run import run_git
 
 SELF = "tsb-self"
 SCRIPT = "scratch/warp/x.mjs"
@@ -32,10 +31,10 @@ LAUNCH_DIR_FILES = 2000
 
 
 def _git(repo: Path, *args: str) -> str:
-    return subprocess.run(
-        ["git", *args], cwd=str(repo), capture_output=True, text=True, check=True,
-        **no_console_creationflags(),
-    ).stdout.strip()
+    result = run_git(list(args), cwd=str(repo))
+    if result.returncode != 0:
+        raise RuntimeError(f"git {' '.join(args)} failed rc={result.returncode} timed_out={result.timed_out}: {result.stderr.strip()}")
+    return result.stdout.strip()
 
 
 def _write(repo: Path, rel: str, text: str = "x\n") -> None:

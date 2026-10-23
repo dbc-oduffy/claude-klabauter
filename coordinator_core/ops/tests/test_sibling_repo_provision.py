@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from coordinator_core import machine_resolver
+from coordinator_core.git.run import GitResult
 from coordinator_core.ops import sibling_repo_provision as op
 from coordinator_core.ops.fleet import _memo_resolver
 from coordinator_core.ops.sibling_repo_provision_contract import MARKER_NAME, has_remote, read_marker
@@ -92,13 +93,13 @@ def env(tmp_path, monkeypatch):
     for var in ("GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL"):
         monkeypatch.delenv(var, raising=False)
     spawns: list[list[str]] = []
-    real = subprocess.run
+    real = op.run_git
 
-    def spy(cmd, *a, **kw):
-        spawns.append(list(cmd))
-        return real(cmd, *a, **kw)
+    def spy(args, *a, **kw):
+        spawns.append(list(args))
+        return real(args, *a, **kw)
 
-    monkeypatch.setattr(op.subprocess, "run", spy)
+    monkeypatch.setattr(op, "run_git", spy)
     return home, tmp_path / NAME, registry, spawns
 
 
@@ -324,3 +325,9 @@ def test_refuses_missing_params(env):
         op._provision_local_op({"assent": ASSENT}, home)
     with pytest.raises(ValueError, match="repo_root"):
         op._provision_local_op(_params(), None)
+
+
+def test_timed_out_git_names_the_timeout(monkeypatch):
+    monkeypatch.setattr(op, "run_git", lambda args, **kw: GitResult(-1, "", "", True))
+    with pytest.raises(ValueError, match="timed out"):
+        op._git_ok(["status"])

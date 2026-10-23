@@ -1335,6 +1335,8 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     "plan.premise_scope": OpClass.COMPUTE_ONLY,
     # plan.premise_record — MUTATING: atomically rewrites the plan's gitignored premise-carry file.
     "plan.premise_record": OpClass.MUTATING,
+    # plan.record_residue_rulings — MUTATING: rewrites the pm_ruling block of each caller-named docs/plans/*.md.
+    "plan.record_residue_rulings": OpClass.MUTATING,
     # plan.backfill_warp_executing — MUTATING with apply: rewrites the `status:` line of pre-executing docs/plans/*.md
     # that a warp manifest names and commits them; a dry run writes nothing.
     "plan.backfill_warp_executing": OpClass.MUTATING,
@@ -2381,6 +2383,20 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
     # Spec: docs/plans/2026-10-01-warp-ask.md § C3, C10
     "dispatch.ask_stage": OpClass.MUTATING,
+    # dispatch.stage_twin_token — MUTATING: rewrites one staged twin under scratch/warp/ with the run token inlined
+    # (ops/dispatch_emit/op.py::_stage_twin_token); nothing else.
+    # DR-208 five-question affirmation (citing dispatch.stage_twin_token handler):
+    #   1. Writes, deletes, or reorders any state file, queue, or git object?  YES.
+    #      The one twin file under scratch/warp/; no git object, no queue.
+    #   2. Writes into rag's relational store?                                 No.
+    #   3. Opens any file for write (including sentinel creation)?             YES.
+    #      The twin and its temp file, contained by _path_guard.contained_path before any write.
+    #   4. Mutates shared mutable state outside its own module?                No.
+    #      The twin is minted per run and read only by that run's launcher child.
+    #   5. Persistent state changes observable across process boundaries?     YES.
+    #      The twin persists and is read by the child session.
+    # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
+    "dispatch.stage_twin_token": OpClass.MUTATING,
     # dispatch.ask_fanout — MUTATING: writes draft slice sizings under state/sizings/ and the write-once
     # parent record under scratch/warp/<parent_id>/, then raises sized_through_turn; spawns no process
     # (ops/dispatch_emit/ask_fanout.py).
