@@ -1482,6 +1482,22 @@ def _task_gone_in_tail(transcript_path: str, task_id: str) -> bool:
     return f"No task found with ID: {task_id}" in (text or "")
 
 
+def _task_finished_in_tail(transcript_path: str, task_id: str) -> bool:
+    """True when the tail holds a `<task-notification>` for `<task_id>` with a terminal status
+    (completed, failed, killed). Reads the tail only; never raises."""
+    try:
+        from coordinator_core.workflow_watch.tail import TailReader
+
+        text = TailReader(transcript_path, seek_to_tail=True).poll()
+    except Exception:
+        return False
+    pattern = (
+        r"<task-id>" + re.escape(task_id)
+        + r"</task-id>.{0,300}?<status>(?:completed|failed|killed)</status>"
+    )
+    return re.search(pattern, text or "", re.DOTALL) is not None
+
+
 def _task_paused_in_tail(transcript_path: str, task_id: str) -> bool:
     """True when one tail line holds `<task_id>` and the harness's `not running, status: paused`
     (a TaskStop refused on a paused task). Reads the tail only; never raises."""
@@ -1576,6 +1592,11 @@ def workflow_stall_resume_text(session_id: str, transcript_path: str, now: float
                 continue
             stalled = stall.scan_for_stall(os.path.join(transcript_dir, "journal.jsonl"), now)
             if stalled is None:
+                continue
+            if transcript_path and _task_finished_in_tail(transcript_path, task_id):
+                _remove_workflow_run_record(
+                    os.path.join(tmpdir, f"workflow-run-{session_id}-{task_id}.json")
+                )
                 continue
             if transcript_path and _task_paused_in_tail(transcript_path, task_id):
                 continue
@@ -2107,6 +2128,12 @@ async def _leg_text(label: str, coro) -> str:
         return _text_or_breadcrumb(label, exc)
 
 
+def _em_turn_budget_sync(params: dict) -> str:
+    from coordinator_core.hooks import nudge_em_turn_budget
+
+    return nudge_em_turn_budget.advisory_text(params)
+
+
 # ---------------------------------------------------------------------------
 # Op handler
 # ---------------------------------------------------------------------------
@@ -2337,6 +2364,7 @@ async def _handler(params: dict, repo_root=None) -> dict:
             if transcript_path
             else _idle()
         ),
+        asyncio.to_thread(_em_turn_budget_sync, params) if transcript_path else _idle(),
         return_exceptions=True,
     )
     labels = (
@@ -2367,8 +2395,12 @@ async def _handler(params: dict, repo_root=None) -> dict:
 
     stall_text = _text_or_breadcrumb("workflow_stall", results[9])
 
+    turn_text = _text_or_breadcrumb("em_turn_budget", results[10])
+
     texts = [
-        text for text in (cp_text, rt_text, ad_text, uh_text, hw_text, ge_text, stall_text) if text
+        text
+        for text in (cp_text, rt_text, ad_text, uh_text, hw_text, ge_text, stall_text, turn_text)
+        if text
     ]
     if texts:
         return post_advisory("\n\n".join(texts))

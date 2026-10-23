@@ -471,6 +471,7 @@ def _land(
             blocking=blocking if plan_rel else None,
             blocking_items=blocking_items if plan_rel else None,
             run_base_sha=run_base, reason=halt_reason,
+            next_action=halted.get("next_action") if isinstance(halted.get("next_action"), dict) else None,
         )
     raw_docs = params.get(run_artifacts.DOC_PATHS_PARAM)
     artifacts = within_handoffs_home(root, run_artifacts.candidate_paths(
@@ -625,6 +626,10 @@ def _land(
         }
 
     message = halted_record_message(run_id, halted)
+    from coordinator_core.ops.dispatch_emit.checkpoint_stamp import run_halted_trailer_lines
+
+    for line in run_halted_trailer_lines(landing_integrity.closing_bases(root, run_id, params)):
+        message += "\n" + line
     if landed_chunks:
         message += "\nLands-Chunks: " + ", ".join(landed_chunks)
     if landed_classes:
@@ -633,6 +638,9 @@ def _land(
         message += "\nRemoves: " + ", ".join(deleted)
     if (root / record_dir_rel).is_dir():
         record_withheld(root / record_dir_rel, withheld)
+    from coordinator_core.ops.dispatch_emit.halted_record_commit import _record_kept
+
+    kept_reply = _record_kept(root, record_dir_rel, owner, withheld, halted, paths)
     left = dispatch_abandon.remaining()
     if left is not None and left - dispatch_abandon.REPLY_MARGIN_SECS <= 0:
         return _error(
@@ -655,7 +663,7 @@ def _land(
     except CommitRefused as exc:
         return _error(str(exc), refused="commit-refused", **base)
     _settle_ledger_pointer(repo_root, run_id, halted, sizing_rel, outcome_rel)
-    out: dict = {"committed": True, "sha": outcome.sha, "error": None, "refused": None, **peer_held_by, **baton_reply}
+    out: dict = {"committed": True, "sha": outcome.sha, "error": None, "refused": None, **peer_held_by, **baton_reply, **kept_reply}
     left_over = run_artifacts.residue(artifacts, changed - set(paths) - set(deleted), paths + deleted, withheld)
     if left_over:
         out["run_artifact_residue"] = left_over

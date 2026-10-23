@@ -100,6 +100,24 @@ def test_other_tasks_no_task_found_leaves_live_run_advised(tmp_path, tdir):
     assert "abandoned" not in text and 'TaskStop({"task_id": "t1"})' in text
 
 
+@pytest.mark.parametrize("status", ["completed", "failed", "killed"])
+def test_finished_task_yields_nothing_and_retires_record(tmp_path, tdir, status):
+    _record(tdir, _run(tmp_path, "r1"))
+    note = (f"<task-notification><task-id>t1</task-id><status>{status}</status>"
+            "</task-notification>")
+    tp = _transcript(tmp_path, json.dumps({"content": note}))
+    assert mod.workflow_stall_resume_text(SID, tp, NOW) == ""
+    assert not (tdir / f"workflow-run-{SID}-t1.json").exists()
+
+
+def test_other_tasks_completion_leaves_live_run_advised(tmp_path, tdir):
+    _record(tdir, _run(tmp_path, "r1"))
+    note = "<task-notification><task-id>zzz</task-id><status>completed</status></task-notification>"
+    tp = _transcript(tmp_path, json.dumps({"content": note}))
+    assert 'TaskStop({"task_id": "t1"})' in mod.workflow_stall_resume_text(SID, tp, NOW)
+    assert (tdir / f"workflow-run-{SID}-t1.json").exists()
+
+
 def test_paused_task_yields_nothing(tmp_path, tdir):
     _record(tdir, _run(tmp_path, "r1"))
     tp = _transcript(tmp_path, json.dumps({"content": "Task t1 is not running, status: paused"}))

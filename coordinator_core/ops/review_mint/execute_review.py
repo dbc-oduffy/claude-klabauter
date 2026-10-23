@@ -16,8 +16,9 @@ Result bindings (C13 reads these names verbatim): ``_reviewPrep``,
 
 from __future__ import annotations
 
-from typing import Dict, List, NamedTuple, Optional, Tuple
+from typing import Dict, List, Mapping, NamedTuple, Optional, Sequence, Tuple
 
+from coordinator_core.ops.review_mint.post_exec_tail import ReviewGroup, group_slice_prefix
 from coordinator_core.ops.review_mint.roster import (
     _TSHIRT_ORDER,
     DELIVERY_NOT_ROSTERED,
@@ -26,6 +27,7 @@ from coordinator_core.ops.review_mint.roster import (
     RosterFragmentError,
     VALID_TIERS,
 )
+from coordinator_core.ops.review_mint.final_review import FINAL_REVIEW_PHASE, final_review_mandate
 from coordinator_core.ops.review_mint.compose import _agent_call_literal, prompt_literal, with_sidecar_clause
 from coordinator_core.ops.review_mint.wave_not_run import (
     NO_REVIEW as _WAVE_NO_REVIEW,
@@ -35,6 +37,7 @@ from coordinator_core.ops.review_mint.wave_not_run import (
     not_run_entry_js as _not_run_entry_js,
 )
 from coordinator_core.ops.dispatch_emit.test_interpreter import interpreter_clause
+from coordinator_core.ops.dispatch_emit.wake_digest import INTEGRATION_NOT_RUN_VAR
 from coordinator_core.ops.review_slice_limits import MAX_SLICES
 from coordinator_core.ops.review_prep import REVIEW_PREP_BUSY_PREFIX
 from coordinator_core.ops.workflow_scaffold import _js_string_literal
@@ -495,6 +498,13 @@ _PREP_GUARDS_JS = (
     "prep: _reviewPrep ?? null, wave: null, integration: null }; }"
 )
 
+REVIEW_GROUPS_PHASE = "Review groups"
+GROUP_PREP_HALT = "review group prep failed"
+_GROUP_PREP_REFUSAL = (
+    "A review group's review.prep call returned an error, so its slices were not reviewed. "
+    "Re-run the review."
+)
+
 _PREP_BUSY_RETRIES = 5
 PREP_BUSY_HALT = "review.prep stayed busy after retries"
 PREP_MALFORMED_HALT = "review.prep reply carried a non-array slices"
@@ -557,6 +567,18 @@ _PREP_FROM_WAVE_JS = (
     "    return { ...ok, slices: merged };\n"
     "  })();\n"
     "  const _realSliceIds = new Set((_reviewPrep && Array.isArray(_reviewPrep.slices) ? _reviewPrep.slices : []).map(s => s.id));\n"
+    "  const _resolveSliceId = (tok) => {\n"
+    "    if (_realSliceIds.has(tok)) return tok;\n"
+    "    const hits = [..._realSliceIds].filter(real => {\n"
+    "      let p = 0; while (p < tok.length && p < real.length && tok[p] === real[p]) p++;\n"
+    "      let s = 0; while (s < tok.length - p && s < real.length - p && tok[tok.length - 1 - s] === real[real.length - 1 - s]) s++;\n"
+    "      return tok.length >= 6 && s > 0 && tok.length - (p + s) <= 2;\n"
+    "    });\n"
+    "    return hits.length === 1 ? hits[0] : tok;\n"
+    "  };\n"
+    "  for (const r of _waveRaw) if (r && r.review && typeof r.review.slice_id === 'string') {\n"
+    "    r.review.slice_id = r.review.slice_id.split('+').filter(Boolean).map(_resolveSliceId).join('+');\n"
+    "  }\n"
     "  const _badSliceIdAt = _waveRaw.findIndex(r => r && r.review && typeof r.review.slice_id === 'string' && "
     "r.review.slice_id.split('+').filter(Boolean).some(id => !_realSliceIds.has(id)));\n"
     "  if (_badSliceIdAt >= 0) { "
@@ -577,11 +599,19 @@ _WAVE_GROUP_CLAUSE = (
 
 
 def _wave_prep_instruction(
-    mode_args: str, base_ref: str, prep_slice_id: str, repo_root: Optional[str], *, grouped: bool
+    mode_args: str,
+    base_ref: str,
+    prep_slice_id: str,
+    repo_root: Optional[str],
+    *,
+    grouped: bool,
+    paths_literal: Optional[str] = None,
 ) -> str:
     """The first-act ``review.prep`` instruction every review-wave agent carries under
     ``prep_in_wave``; a grouped agent adds the ``group_index`` / ``group_count`` values its prompt
-    ends with."""
+    ends with. ``paths_literal`` (a JSON list) replaces the declared-paths placeholder with one
+    review group's own files."""
+    paths_arg = paths_literal if paths_literal is not None else "[<every declared path>]"
     group_args = ',"group_index":<group_index>,"group_count":<group_count>' if grouped else ""
     group_note = " Pass the `group_index:` and `group_count:` values given below." if grouped else ""
     repo_pin = f" --repo '{repo_root}'" if repo_root else ""
@@ -589,7 +619,7 @@ def _wave_prep_instruction(
         f"First, run this run's review prep as ONE engine call, never your own freeze, grouping or "
         f"claim check: `\"${{COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}}/bin/coordinator-invoke\" "
         f"review.prep '{{{mode_args},\"base\":\"{base_ref}\","
-        f"\"slice_prefix\":\"{prep_slice_id}\",\"paths\":[<every declared path>],"
+        f"\"slice_prefix\":\"{prep_slice_id}\",\"paths\":{paths_arg},"
         f"\"plan_path\":\"<plan_path>\"{group_args}}}'{repo_pin}`, its command word exactly as written "
         f"(a guard denies the prefix moved into a shell variable). <plan_path> is the `plan:` value "
         f"below when it is given, else the `plan_path:` line. When a non-empty `session_id:` value is "
@@ -693,15 +723,100 @@ def _reverify_phase(
     prompt_head: str,
     host_degraded: bool,
     sc,
+    group_prefixes: Sequence[str] = (),
+    verify_scope_targets: Optional[Mapping[str, Sequence[str]]] = None,
 ) -> Tuple[str, str]:
     """The ``Review re-verify`` phase: a test-runner lists what review changed (``review.reverify``
     list mode), runs only the tests covering it, and reverts the implicated files in revert mode
-    when any fail. ``unapplied`` is joined from the reply in the emitted JS, never by the agent."""
+    when any fail. ``unapplied`` is joined from the reply in the emitted JS, never by the agent.
+
+    ``group_prefixes`` (one slice prefix per review group, in ``_groupReviews`` order) makes the
+    agent list, probe and revert once for EVERY prefix (each holds its own pre-review snapshot, and
+    revert attributes a failure only to the files of the prefix it is called with, so no call is
+    conditional), with the same failing set, and union the lists; empty keeps the single-prefix
+    prompt byte-identical. ``verify_scope_targets`` (path -> test targets, group mode only) widens
+    the rerun set with the verify-scope targets of every edited path."""
     agent_type, role = _host_native(_REVERIFY_AGENT_TYPE, host_degraded)
     repo_pin = f" --repo '{repo_root}'" if repo_root else ""
     invoke = '"${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/bin/coordinator-invoke"'
     base_args = f'"base":"{base_ref}","slice_prefix":"{prep_slice_id}"'
-    prompt = (
+    sidecars_js = _REVERIFY_SIDECARS_JS
+    if group_prefixes:
+        prefixes = [*group_prefixes, prep_slice_id]
+        list_calls = "; ".join(
+            f"`{invoke} review.reverify '{{\"base\":\"{base_ref}\",\"slice_prefix\":\"{p}\"}}'{repo_pin}`"
+            for p in prefixes
+        )
+        by_prefix = ", ".join(
+            [f"{json.dumps(p)}: _of(_groupReviews[{pos}])" for pos, p in enumerate(group_prefixes)]
+            + [f"{json.dumps(prep_slice_id)}: _of(_wholeWave)"]
+        )
+        sidecars_js = (
+            "'\\nreview_sidecars: ' + ((_of) => JSON.stringify({ " + by_prefix + " }))("
+            "ws => (Array.isArray(ws) ? ws : []).filter(w => w && typeof w.sidecar_path === 'string')"
+            ".map(w => w.sidecar_path))"
+        )
+        sliced = (
+            f'"base":"{base_ref}","slice_prefix":"<that prefix>"'
+        )
+        prompt = (
+            f"{prompt_head}\n\n{role}"
+            "Re-verify the edits this run's review applied in place, and keep only the ones whose "
+            "tests pass. Review ran per executor group, and each slice prefix holds its own "
+            "pre-review snapshot, so every engine call below is made once per prefix. Four steps, "
+            "in order.\n"
+            f"1. List what review changed with one engine call per slice prefix: {list_calls}; each "
+            "command word exactly as written (a guard denies the prefix moved into a shell "
+            'variable). When a non-empty `session_id:` value is given in this brief, add it as '
+            '`"session_id"` to each. The union of their `edited` and `created` lists is the files '
+            "review changed, the union of their `tripwires` lists names the test files whose source "
+            "names one of those files. Return the union as `edited`. If every list is empty, "
+            "return edited [], failing [], reverted [], status_before pass.\n"
+            "2. Run, and only run, the tests covering those files: the test files among them, every "
+            "file in the `tripwires` union, the test files that import an edited module"
+            + (
+                ", and the verify-scope test targets this map names for an edited path "
+                f"(path to targets): {json.dumps({k: list(v) for k, v in sorted(verify_scope_targets.items())})}"
+                if verify_scope_targets
+                else ""
+            )
+            + ". Name each test file or node id; never a directory, a tier (the fast tier "
+            "included) or the full suite. Report every failing node id as `failing` and set "
+            "status_before to pass when none failed, else fail.\n"
+            "3. When any failed, measure which were already failing before review, once for every "
+            "prefix, each time with the same failing set: call review.reverify with "
+            f"`\"probe\":\"open\"`: `{invoke} review.reverify "
+            f"'{{{sliced},\"probe\":\"open\",\"failing\":[<all failing node ids>],"
+            f"\"sidecars\":[<that prefix's review_sidecars paths below>]}}'{repo_pin}` "
+            "(add `session_id` as in step 1). If it returns an error because a probe is already "
+            "open, call it with `\"probe\":\"close\"` first and open once more; on any other open "
+            "error, pass no `failing_before` for that prefix and go to step 4. Run only the node "
+            "ids in its `rerun`; those still failing are that prefix's `failing_before`. Then "
+            f"ALWAYS call `{invoke} review.reverify "
+            f"'{{{sliced},\"probe\":\"close\"}}'{repo_pin}`, even when that run errored. If close "
+            "returns an error, return it as the sidecar's finding and do not call revert for that "
+            "prefix.\n"
+            f"4. Call review.reverify in revert mode for EVERY prefix, each time with the same "
+            f"failing set (all failing node ids): `{invoke} review.reverify '{{{sliced},"
+            f"\"failing\":[<all failing node ids>],\"failing_before\":[<that prefix's "
+            f"failing_before ids>],\"sidecars\":[<that prefix's review_sidecars paths below>]}}'"
+            f"{repo_pin}` (add `session_id` as in step 1). A prefix attributes a failure only to "
+            "its own files, so make every call whether or not that prefix listed anything. The "
+            "review_sidecars below is keyed by slice prefix: pass each call only its own prefix's "
+            "list. Return the union of the `reverted`, `pre_existing` and `kept` lists as given "
+            "(a test is unattributed only when every prefix reports it so), and the `record` of "
+            "the first call that returned one; re-run only the tests of the reverted paths, and "
+            "set status_after to pass or fail from that re-run. When nothing failed, "
+            "status_after is null. `status_before` is the status after review, before any "
+            "revert.\n"
+            "Revert only through review.reverify: never `git checkout`, `restore`, `stash` or "
+            "`reset`, and never edit a file yourself. Return the sidecar path you wrote as "
+            "sidecar_path.\n"
+            f"plan_path: {plan_path}\n"
+            f"run_base_sha: {run_base_sha}"
+        ).strip()
+    else:
+        prompt = (
         f"{prompt_head}\n\n{role}"
         "Re-verify the edits this run's review applied in place, and keep only the ones whose "
         "tests pass. Four steps, in order.\n"
@@ -751,7 +866,7 @@ def _reverify_phase(
     prefix = f"agent({_prompt_literal(prompt)}, "
     if not call.startswith(prefix):
         raise ValueError("re-verify agent call does not open with its prompt literal")
-    call = f"agent({_prompt_literal(prompt)} + '\\n' + {_REVERIFY_SIDECARS_JS}, " + call[len(prefix):]
+    call = f"agent({_prompt_literal(prompt)} + '\\n' + {sidecars_js}, " + call[len(prefix):]
     call = sc(call, "reverify", agent_type)
     block = (
         f"  phase({_js_string_literal(REVERIFY_PHASE)});\n"
@@ -791,6 +906,8 @@ def compose_execute_review(
     prep_in_wave: bool = False,
     reverify: bool = False,
     delivery_notes_js: Optional[str] = None,
+    review_groups: Optional[Sequence[ReviewGroup]] = None,
+    verify_scope_targets: Optional[Mapping[str, Sequence[str]]] = None,
 ) -> List[Tuple[str, str]]:
     """Compose the roster-v5 ``execute_review`` wave into ``(phase_title,
     block)`` entries: prep, review-wave, and -- ONLY when ``review.integration``
@@ -866,6 +983,21 @@ def compose_execute_review(
     the tests covering them, and reverts the implicated files when any fail. ``False`` keeps the
     output byte-identical.
 
+    ``review_groups`` (needs ``prep_in_wave=False``, a worktree run and no ``slice_key_js``)
+    pipelines the per-``slice`` agents: a leading "Review groups" phase starts, per group with
+    paths, ``_reviewGroups[i]``, a promise that awaits only the group's ``quiescence_rows`` and
+    then runs ``review.prep`` (worktree mode, the group's ``paths``, prefix
+    ``post_exec_tail.group_slice_prefix``) and its slice reviewers. The caller emits that block
+    before its all-rows barrier. "Review prep" then awaits the groups, halts on a group prep error,
+    and swaps ``_reviewPrep.slices`` for the slices the groups reviewed; "Review wave" holds the
+    whole-diff agents only, and ``_reviewWave`` is the group reviews followed by theirs. The
+    integration stage's final-review mandate is emitted only when ``criterion`` is given.
+    Re-verify lists, probes and reverts for every group prefix and the main prefix, each revert
+    with the same failing set. A group starts nothing once a stop rule has halted the run.
+    ``verify_scope_targets`` (path -> test targets, read only in this mode) adds the verify-scope
+    targets of every review-edited path to the re-verify rerun set. ``None`` keeps the output
+    byte-identical; so does a roster with no slice agent at the tier.
+
     ``slice_key_js`` is a JS expression joined into the frozen-diff slice id at run time, for a
     function composed once and called once per item (emit-wave-fire's per-baton
     ``executeReview``): without it every concurrent call freezes under one static id and all but
@@ -890,6 +1022,13 @@ def compose_execute_review(
             "compose_execute_review takes exactly one of declared_paths / "
             "declared_paths_js"
         )
+    if review_groups is not None:
+        if prep_in_wave:
+            raise ValueError("compose_execute_review(review_groups=...) needs prep_in_wave=False")
+        if review_terminal_sha:
+            raise ValueError("compose_execute_review(review_groups=...) reviews the working tree, not review_terminal_sha")
+        if slice_key_js:
+            raise ValueError("compose_execute_review(review_groups=...) takes no slice_key_js")
     phases: List[Tuple[str, str]] = []
 
     # -- 1. prep ----------------------------------------------------------
@@ -998,15 +1137,6 @@ def compose_execute_review(
             + prep_call[len(prep_prefix):]
         )
     prep_call = _sc(prep_call, "prep", prep_type)
-    if not prep_in_wave:
-        phases.append(
-            (
-                prep_phase,
-                f"  phase({_js_string_literal(prep_phase)});\n"
-                f"  const _reviewPrep = await {_degrading(prep_call)};\n" + _PREP_GUARDS_JS,
-            )
-        )
-
     # -- 2. review-wave -----------------------------------------------------
     wave_phase = "Review wave"
     if tier is not None and tier_js is not None:
@@ -1056,7 +1186,113 @@ def compose_execute_review(
         (f" + ' ' + JSON.stringify({declared_paths_js})" if declared_paths_js else "")
         + (f" + {prep_suffix_js}" if declared_paths_js and prep_suffix_js else "")
     )
-    for agent in slice_agents:
+
+    # -- 1b. review groups (opt-in): per-group slice review, started before the all-rows barrier --
+    active_groups: List[ReviewGroup] = (
+        [g for g in review_groups if g.paths] if review_groups is not None and slice_agents else []
+    )
+    group_prefixes: List[str] = []
+    if active_groups:
+        group_lines = [
+            f"  phase({_js_string_literal(REVIEW_GROUPS_PHASE)});",
+            "  const _reviewGroups = [];",
+        ]
+        for pos, group in enumerate(active_groups):
+            prefix = group_slice_prefix(sidecar_key, group.index)
+            group_prefixes.append(prefix)
+            paths_literal = json.dumps(list(group.paths))
+            group_items: List[str] = []
+            for agent in slice_agents:
+                g_type, g_role = _host_native(agent.agent_type, host_degraded)
+                g_bc = _brief_conformance_clause(criterion) if _is_code_reviewer(agent.agent_type) else ""
+                g_notes = _delivery_notes_expr(delivery_notes_js, agent.agent_type)
+                if agent.executor_rows_per_reviewer is None:
+                    reviewers = 1
+                else:
+                    min_rows, max_rows = agent.executor_rows_per_reviewer
+                    reviewers = max(
+                        1, min(MAX_SLICES, -(-len(group.rows) // max_rows), len(group.rows) // max(min_rows, 1))
+                    )
+                for k in range(reviewers):
+                    g_prompt = (
+                        f"{prompt_head}\n\n{g_role}"
+                        f"Review your assigned slice group of this run's diff.\n"
+                        + _wave_prep_instruction(
+                            wave_mode_args,
+                            base_ref,
+                            prefix,
+                            repo_root,
+                            grouped=reviewers > 1,
+                            paths_literal=paths_literal,
+                        )
+                        + f" Review exactly the slices the reply lists, and nothing else. If it lists "
+                        f"none, there is nothing in your group: return `prep` alone."
+                        f"{_WAVE_GROUP_CLAUSE}{g_bc}\n"
+                        f"plan_path: {plan_path}\n"
+                        f"run_base_sha: {run_base_sha}\n"
+                        f"declared_paths: {', '.join(group.paths)}"
+                        + (f"\ngroup_index: {k}\ngroup_count: {reviewers}" if reviewers > 1 else "")
+                    ).strip()
+                    g_call = _agent_call_literal(
+                        g_type,
+                        g_prompt,
+                        REVIEW_GROUPS_PHASE,
+                        schema=True,
+                        as_arrow=True,
+                        agent_opts=_agent_opts_for(agent, emitted_agent_type=g_type),
+                        schema_literal=_wave_schema_literal(_schema_literal(agent.schema, stage_schemas)),
+                    )
+                    g_head = f"() => agent({_prompt_literal(g_prompt)}, "
+                    assert g_call.startswith(g_head)
+                    g_call = (
+                        f"() => agent({_prompt_literal(g_prompt)}{' + ' + g_notes if g_notes else ''}, "
+                        + g_call[len(g_head):]
+                    )
+                    g_call = _degrading(_sc(g_call, f"slice-g{pos}r{k}", g_type))
+                    gate = _agent_gate(agent)
+                    group_items.append(
+                        f"    ...({gate} ? [{g_call}] : [])" if gate else f"    {g_call}"
+                    )
+            waits = ", ".join(f"_rows[{_js_string_literal(r)}]" for r in group.quiescence_rows)
+            group_lines.append(
+                f"  _reviewGroups[{pos}] = (async () => {{ await Promise.all([{waits}]).catch(() => null); "
+                f"if (_halted && !_haltedByHold) return []; "
+                f"return await parallel([\n" + ",\n".join(group_items) + "\n  ]); })();"
+            )
+            group_lines.append(f"  _reviewGroups[{pos}].catch(() => {{}});")
+        phases.append((REVIEW_GROUPS_PHASE, "\n".join(group_lines)))
+
+    if not prep_in_wave:
+        group_await = (
+            "  const _groupRaw = await Promise.all(_reviewGroups);\n"
+            "  const _groupFlat = _groupRaw.flatMap(arr => (Array.isArray(arr) ? arr : []));\n"
+            "  const _groupPrepBad = _groupFlat.find(r => r && r.prep && r.prep.error);\n"
+            "  if (_groupPrepBad) { "
+            f"return {{ halted: {_js_string_literal(GROUP_PREP_HALT)} + ' (' + _groupPrepBad.prep.error + ')', "
+            f"reason: {_js_string_literal(_GROUP_PREP_REFUSAL)}, "
+            "prep: _groupPrepBad.prep, wave: null, integration: null }; }\n"
+            if active_groups
+            else ""
+        )
+        group_merge = (
+            "\n  const _groupSliceList = _groupFlat.flatMap(r => (r && r.prep && Array.isArray(r.prep.slices)) ? r.prep.slices : []);\n"
+            "  if (_groupSliceList.length) { _reviewPrep.slices = _groupSliceList.filter("
+            "(s, at) => _groupSliceList.findIndex(t => t.id === s.id) === at); }"
+            if active_groups
+            else ""
+        )
+        phases.append(
+            (
+                prep_phase,
+                f"  phase({_js_string_literal(prep_phase)});\n"
+                + group_await
+                + f"  const _reviewPrep = await {_degrading(prep_call)};\n"
+                + _PREP_GUARDS_JS
+                + group_merge,
+            )
+        )
+
+    for agent in ([] if active_groups else slice_agents):
         slice_type, slice_role = _host_native(agent.agent_type, host_degraded)
         slice_bc = _brief_conformance_clause(criterion) if _is_code_reviewer(agent.agent_type) else ""
         notes_expr = _delivery_notes_expr(delivery_notes_js, agent.agent_type)
@@ -1321,7 +1557,11 @@ def compose_execute_review(
     )
 
     wave_lines = [f"  phase({_js_string_literal(wave_phase)});"]
-    if not prep_in_wave and any(a.executor_rows_per_reviewer is not None for a in slice_agents):
+    if (
+        not prep_in_wave
+        and not active_groups
+        and any(a.executor_rows_per_reviewer is not None for a in slice_agents)
+    ):
         wave_lines.append(_GROUP_SLICES_JS)
     if delivery_index is not None:
         wave_lines.append(f"  let {_DELIVERY_REASON_VAR} = null;")
@@ -1335,6 +1575,13 @@ def compose_execute_review(
     if prep_in_wave:
         wave_lines.append(f"  const _waveRaw = await parallel([\n{map_lines}\n  ]);")
         wave_lines.append("  const _reviewWave = _waveRaw.map(r => (r ? (r.review ?? null) : null));")
+    elif active_groups:
+        wave_lines.append(f"  const _wholeWave = await parallel([\n{map_lines}\n  ]);")
+        wave_lines.append(
+            "  const _groupReviews = _groupRaw.map(arr => (Array.isArray(arr) ? arr : [])"
+            ".map(r => (r ? (r.review ?? null) : null)));"
+        )
+        wave_lines.append("  const _reviewWave = [..._groupReviews.flat(), ..._wholeWave];")
     else:
         wave_lines.append(f"  const _reviewWave = await parallel([\n{map_lines}\n  ]);")
     if tracked:
@@ -1352,7 +1599,12 @@ def compose_execute_review(
             "(_waveRaw[i] && _waveRaw[i].prep && !_waveRaw[i].prep.error && "
             "!(Array.isArray(_waveRaw[i].prep.slices) ? _waveRaw[i].prep.slices : [{}]).length)"
             if prep_in_wave
-            else "false"
+            else (
+                "(_groupFlat[i] && _groupFlat[i].prep && !_groupFlat[i].prep.error && "
+                "!(Array.isArray(_groupFlat[i].prep.slices) ? _groupFlat[i].prep.slices : [{}]).length)"
+                if active_groups
+                else "false"
+            )
         )
         wave_lines.append(
             f"  for (let i = 0; i < _reviewWave.length - {len(whole_diff_agents)}; i++) {{ "
@@ -1389,9 +1641,12 @@ def compose_execute_review(
 
     # -- 3. integration (only when the fragment declares one stage) --------
     if review.integration is not None:
-        integration_phase = "Review integration"
+        integration_phase = FINAL_REVIEW_PHASE
         integration_type, integration_role = _host_native(
             review.integration.agent_type, host_degraded
+        )
+        integration_mandate = (
+            f"{final_review_mandate(criterion.statement)}\n" if criterion is not None and reverify else ""
         )
         integration_prompt = (
             f"{prompt_head}\n\n{integration_role}"
@@ -1403,6 +1658,7 @@ def compose_execute_review(
             f"named file (nits included; the sole exemption is a finding you "
             f"believe is wrong, said out loud and defended), then write and "
             f"verify your own residue ledger.\n"
+            f"{integration_mandate}"
             f"plan_path: {plan_path}\n"
             f"run_base_sha: {run_base_sha}"
         ).strip()
@@ -1416,13 +1672,21 @@ def compose_execute_review(
             schema_literal=_schema_literal(review.integration.schema, stage_schemas),
         )
         integration_call = _sc(integration_call, "integration", integration_type)
-        phases.append(
-            (
-                integration_phase,
-                f"  phase({_js_string_literal(integration_phase)});\n"
-                f"  const _reviewIntegration = _verifyOnly ? null : await {_degrading(integration_call)};",
+        integration_gate = _agent_gate(review.integration)
+        if not _runs_at_compile_tier(review.integration):
+            integration_block = (
+                f"  const {INTEGRATION_NOT_RUN_VAR} = true;\n  const _reviewIntegration = null;"
             )
-        )
+        else:
+            not_run_js = f"!({integration_gate})" if integration_gate else "false"
+            integration_block = (
+                f"  phase({_js_string_literal(integration_phase)});\n"
+                f"  const {INTEGRATION_NOT_RUN_VAR} = {not_run_js};\n"
+                f"  const _reviewIntegration = "
+                f"{f'(_verifyOnly || {INTEGRATION_NOT_RUN_VAR})' if integration_gate else '_verifyOnly'} ? null : "
+                f"await {_degrading(integration_call)};"
+            )
+        phases.append((integration_phase, integration_block))
 
     if reverify:
         phases.append(
@@ -1435,6 +1699,8 @@ def compose_execute_review(
                 prompt_head=prompt_head,
                 host_degraded=host_degraded,
                 sc=_sc,
+                group_prefixes=group_prefixes,
+                verify_scope_targets=verify_scope_targets if group_prefixes else None,
             )
         )
 
@@ -1860,6 +2126,7 @@ def compose_criterion_judge(
     sidecar_workflow: str = "review",
     sidecar_run_key: Optional[str] = None,
     withheld_rows: Optional[List[dict]] = None,
+    phase_title: str = CRITERION_JUDGE_PHASE_TITLE,
 ) -> Optional[str]:
     """The roster's ``judge`` agent as one ``agent(...)`` call EXPRESSION, or
     ``None`` when the roster declares no judge. ``evidence_path`` names the
@@ -1885,7 +2152,7 @@ def compose_criterion_judge(
     call = _agent_call_literal(
         parts.agent_type,
         prompt,
-        CRITERION_JUDGE_PHASE_TITLE,
+        phase_title,
         schema=True,
         as_arrow=False,
         agent_opts=_agent_opts_for(review.judge, emitted_agent_type=parts.agent_type),

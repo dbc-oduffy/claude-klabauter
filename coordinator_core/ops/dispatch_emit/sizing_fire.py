@@ -294,7 +294,34 @@ def resumable_plan(
         refusal = f"{plan_rel} already ran: every row is landed and nothing is left to judge; residue is a new sizing naming it"
         route = halted_route_for_sizing(root, sizing_rel)
         raise SizingFireRefused([f"{refusal} {route}" if route else refusal])
-    return ResumePlan(plan_rel, tuple(open_ids), landed_open=landed_open)
+    kept, kept_run = _kept_rows(root, sizing_rel, open_ids)
+    return ResumePlan(plan_rel, tuple(open_ids), landed_open=landed_open, kept=kept, kept_run=kept_run)
+
+
+def _kept_rows(root: Path, sizing_rel: str, open_ids: Sequence[str]) -> tuple[tuple[str, ...], str | None]:
+    """The still-open ids the newest halted ask run of this sizing kept, and that run's id.
+
+    A row is kept while `kept_work.still_kept` holds against the run's live notes. Reads the run
+    record dir only; no git spawn.
+    """
+    from coordinator_core.ops.dispatch_emit import kept_work, run_notes
+    from coordinator_core.ops.dispatch_emit.halted_run import halted_ask_run_for
+    from coordinator_core.ops.dispatch_emit.requirements_ledger import NOTES_FILE, LedgerRefused, run_dir
+
+    run_id = halted_ask_run_for(root, sizing_rel)
+    if run_id is None:
+        return (), None
+    try:
+        record = run_dir(root, run_id)
+    except LedgerRefused:
+        return (), None
+    chunks = kept_work.read(record)["chunks"]
+    candidates = [i for i in open_ids if i in chunks]
+    if not candidates:
+        return (), None
+    notes = [e["note"] for e in run_notes.live(run_notes.entries(record / NOTES_FILE, run_id))]
+    kept = tuple(i for i in candidates if kept_work.still_kept(root, chunks[i], notes, i))
+    return (kept, run_id) if kept else ((), None)
 
 
 def _xs_halt_spine(root: Path, sizing_rel: str) -> str | None:

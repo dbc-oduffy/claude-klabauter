@@ -1041,10 +1041,13 @@ def route(
     interaction_mode_source: Optional[str] = None,
     premise_evidence: Optional[str] = None,
     initiatives: Optional[list[dict[str, Any]]] = None,
+    research: bool = False,
 ) -> dict[str, Any]:
     """Resolves the sizing-object's route/detents/fork fields (C1 shape).
 
     Args:
+        research: a research-class sizing never opens a hand-edit lane, so it
+            skips the S -> XS tie-break and stays S.
         appetite: one of small|medium|large (Shape-Up budget enum), or
             `None` (the default). Appetite is never collected before a size
             is delivered — `None` means no budget has been stated yet, not a
@@ -1157,7 +1160,7 @@ def route(
         }
 
     tie_break: Optional[str] = None
-    if tshirt == "S" and not _has_positive_s_evidence(
+    if tshirt == "S" and not research and not _has_positive_s_evidence(
         scout_evidence, probe_signal, boundary_in_notch, precedent
     ):
         tie_break = "S -> XS: no positive S evidence"
@@ -2435,6 +2438,80 @@ def amend_research(root: Path, sizing: str, given: dict[str, Any]) -> dict[str, 
     return {"path": str(target), "status": "amended", "research": out["research"]}
 
 
+def amend_exit_criterion(root: Path, sizing: str, statement: str, ruling: str) -> dict[str, Any]:
+    """Replace an accepted sizing's `exit_criterion.statement` under the APM ruling file `ruling`.
+    `accepted` is kept; an APM entry {ruling_ref, statement, ...} is appended to `amendments`.
+    Refuses an empty statement, a ruling path that is not a file under the repo (existence only;
+    that the file is an APM ruling is the caller's assertion), a sizing without
+    an exit_criterion, and a sizing whose interaction_mode admits no APM ruling."""
+    import yaml
+
+    from coordinator_core.frontmatter.primitives import write_fm_nested_field
+    from coordinator_core.frontmatter.schema_validate import format_validation_errors, validate_frontmatter
+    from coordinator_core.locked_write import LockTimeout, MutateAbort, locked_rmw
+    from coordinator_core.ops._path_guard import contained_path
+    from coordinator_core.roadmap.post_stamp_clause import post_stamp_refusal
+
+    statement = (statement or "").strip()
+    ruling = (ruling or "").strip()
+    if not statement:
+        raise SizingAssembleError("--exit-criterion needs the amended criterion text")
+    if not ruling:
+        raise SizingAssembleError("--ruling needs the repo-relative path of the ruling")
+    if ruling[:1] in "/\\" or ruling[1:3] in (":\\", ":/") or "\n" in ruling:
+        raise SizingAssembleError("--ruling must be a repo-relative path on one line")
+    ruling_file = contained_path(root / ruling, [root])
+    if ruling_file is None or not ruling_file.is_file():
+        raise SizingAssembleError(f"--ruling {ruling!r} is not a file under {root.as_posix()}")
+    refusal = post_stamp_refusal(statement) or suite_tier_refusal(statement)
+    if refusal is not None:
+        raise SizingAssembleError(refusal)
+
+    schema = Path(__file__).resolve().parent.parent / "frontmatter" / "schemas" / "sizing-object.schema.json"
+    candidate = Path(sizing) if Path(sizing).is_absolute() else root / sizing
+    target = contained_path(candidate, [root / "state" / "sizings"])
+    if target is None or not target.is_file():
+        raise SizingAssembleError(
+            f"{sizing!r} is not a sizing under {(root / 'state' / 'sizings').as_posix()}/ "
+            f"(read as {candidate.as_posix()})"
+        )
+
+    def mutate(old: str) -> str:
+        doc = yaml.safe_load(old) or {}
+        existing = doc.get("exit_criterion") if isinstance(doc, dict) else None
+        if not isinstance(existing, dict) or not str(existing.get("statement") or "").strip():
+            raise MutateAbort(f"{sizing} carries no exit_criterion to amend")
+        mode = str(doc.get("interaction_mode") or "")
+        if mode not in ("pm", "ceo"):
+            raise MutateAbort(
+                f"{sizing} interaction_mode {mode or 'unrecorded'!r} admits no APM ruling (pm or ceo only)"
+            )
+        amendments = list(existing.get("amendments") or [])
+        amendments.append({
+            "source": "apm",
+            "apm_ruling": f"Exit criterion amended per the ruling recorded at {ruling}",
+            "ruling_ref": ruling,
+            "on": date.today().isoformat(),
+            "mode": mode,
+            "statement": statement,
+        })
+        kept = {k: v for k, v in existing.items() if k not in ("statement", "amendments")}
+        rendered = _render_block({"statement": statement, **kept, "amendments": amendments})
+        text = write_fm_nested_field(old, "exit_criterion", rendered)
+        problems = validate_frontmatter(yaml.safe_load(text) or {}, schema)
+        if problems:
+            raise MutateAbort(f"schema validation failed: {format_validation_errors(problems)}")
+        return text
+
+    try:
+        locked_rmw(target, mutate, repo_root=root)
+    except MutateAbort as exc:
+        raise SizingAssembleError(str(exc.args[0]) if exc.args else "mutation aborted") from exc
+    except LockTimeout as exc:
+        raise SizingAssembleError(f"timed out waiting for file lock on {target}: {exc}") from exc
+    return {"path": str(target), "status": "amended", "exit_criterion": statement, "ruling_ref": ruling}
+
+
 EXIT_OK = 0
 EXIT_BUSINESS_FAIL = 1
 EXIT_USAGE = 2
@@ -2488,6 +2565,8 @@ def _usage(prog: str, stream=None) -> int:
         "    [--relayed-ask-file <path> (register only that text; embedded PM turns go to unrelated_turns)]]\n"
         "or: --amend-research <state/sizings/x.yaml> --research-* ... (rewrites only the research block;\n"
         "    --clear-research-seeds drops every seed, --research-seed replaces them)\n"
+        "or: --amend-exit-criterion <state/sizings/x.yaml> --exit-criterion <str> --ruling <repo-relative path>\n"
+        "    (replaces the accepted statement, records the APM ruling in exit_criterion.amendments)\n"
         "or: --xl-exit shape|roadmap|accept_multi_session --pm-quote <str>\n"
         "    [--decided-on YYYY-MM-DD] --write <state/sizings/x.yaml>\n"
         "or: --pm-resolution <key> --pm-quote <str>\n"
@@ -2574,15 +2653,30 @@ def _xs_lane_session(write_path: Optional[str]) -> tuple[Optional[Path], Optiona
     return _cli_repo_root(write_path), sid
 
 
-def _xs_lane_refusal(write_path: Optional[str]) -> Optional[str]:
+def _xs_lane_refusal(write_path: Optional[str], tie_break: Optional[str] = None) -> Optional[str]:
     """The refusal text when this session may not take an XS sizing: a lane record exists in any
-    state, or an S-or-larger sizing was touched. None when the lane may open."""
+    state, or an S-or-larger sizing was touched. None when the lane may open. A tie-break XS names
+    the positive-S-evidence flags, since re-running `--tshirt S` repeats the same demotion."""
     from coordinator_core.session import xs_lane_budget
 
     root, sid = _xs_lane_session(write_path)
     if root is None:
         return None
-    if xs_lane_budget.read_lane(root, sid) is not None or xs_lane_budget.touched_s_or_larger(sid, root):
+    lane = xs_lane_budget.read_lane(root, sid)
+    if lane is not None or xs_lane_budget.touched_s_or_larger(sid, root):
+        du = (lane or {}).get("deny_usage")
+        if isinstance(du, dict) and isinstance(du.get("files"), list):
+            return (
+                f"XS refused: this session's hand-edit budget was denied at {du.get('lines')} changed lines "
+                f"over {', '.join(map(str, du['files']))} (cap {xs_lane_budget.BUDGET_LINES} lines / "
+                f"{xs_lane_budget.BUDGET_FILES} files). Size this work S or larger: re-run with `--tshirt S`."
+            )
+        if tie_break:
+            return (
+                "XS refused: this session already holds a lane or an S+ sizing, and S was demoted to XS "
+                "for lack of positive S evidence. Re-run with one of `--scout-evidence`, "
+                "`--boundary-in-notch yes`, `--precedent shipped-before`, `--probe-signal raise`."
+            )
         return (
             "XS refused: this session already holds a lane or an S+ sizing. "
             "Re-run the same command with `--tshirt S` (drop `--express-lane`); the S sizing hands to coordinator:engine-ask."
@@ -2680,6 +2774,8 @@ def main(argv: list[str]) -> int:
     pm_quote = None
     decided_on = None
     amend_research_path = None
+    amend_exit_path = None
+    ruling_path = None
     research_class = None
     research_appetite = None
     research_sources: list[str] = []
@@ -2743,6 +2839,12 @@ def main(argv: list[str]) -> int:
             i += 2
         elif tok == "--verbatim-turns" and i + 1 < len(argv):
             verbatim_turns_raw = argv[i + 1]
+            i += 2
+        elif tok == "--amend-exit-criterion" and i + 1 < len(argv):
+            amend_exit_path = argv[i + 1]
+            i += 2
+        elif tok == "--ruling" and i + 1 < len(argv):
+            ruling_path = argv[i + 1]
             i += 2
         elif tok == "--amend-research" and i + 1 < len(argv):
             amend_research_path = argv[i + 1]
@@ -3049,6 +3151,20 @@ def main(argv: list[str]) -> int:
         print(json.dumps(result, indent=2, sort_keys=True))
         return EXIT_OK if result["exit_code"] == 0 else EXIT_BUSINESS_FAIL
 
+    if amend_exit_path is not None:
+        if not exit_criterion or not ruling_path or tshirt is not None or write_path is not None:
+            print(f"{prog}: --amend-exit-criterion takes only --exit-criterion and --ruling", file=sys.stderr)
+            return EXIT_USAGE
+        try:
+            result = amend_exit_criterion(
+                _cli_repo_root(amend_exit_path), amend_exit_path, exit_criterion, ruling_path
+            )
+        except SizingAssembleError as exc:
+            print(f"{prog}: --amend-exit-criterion refused: {exc}", file=sys.stderr)
+            return EXIT_BUSINESS_FAIL
+        print(json.dumps(result, indent=2, sort_keys=True))
+        return EXIT_OK
+
     if amend_research_path is not None:
         given = {
             k: v
@@ -3150,6 +3266,7 @@ def main(argv: list[str]) -> int:
             interaction_mode_source=interaction_mode_source,
             premise_evidence=premise_evidence,
             initiatives=initiatives,
+            research=research_class is not None,
         )
     except SizingAssembleError as exc:
         print(f"{prog}: {exc}", file=sys.stderr)
@@ -3162,7 +3279,7 @@ def main(argv: list[str]) -> int:
     if warp_run is not None and write_path is not None:
         xs_sizing = False
     if xs_sizing:
-        refusal = _xs_lane_refusal(write_path)
+        refusal = _xs_lane_refusal(write_path, decision.get("tie_break"))
         if refusal:
             print(f"{prog}: {refusal}", file=sys.stderr)
             return EXIT_USAGE

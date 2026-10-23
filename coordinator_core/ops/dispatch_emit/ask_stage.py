@@ -87,7 +87,8 @@ from coordinator_core.ops.dispatch_emit.pathspec import (
 from coordinator_core.ops.requirement_register import pin_drift_reason, plan_pin_drift
 from coordinator_core.ops.review_findings_ledger import LedgerError, targets_add
 from coordinator_core.ops.dispatch_emit.request_validation import Field, validate_params
-from coordinator_core.ops.dispatch_emit import requirements_ledger, resume_snapshot, sibling_split
+from coordinator_core.ops.dispatch_emit import kept_work, requirements_ledger, resume_snapshot, sibling_split
+from coordinator_core.ops.dispatch_emit.land_run import _DELIVERED_REPORT_RE, _UNDELIVERED_REPORT_RE
 from coordinator_core.ops.dispatch_emit.self_dr_discharge import discharge_clauses
 from coordinator_core.ops.dispatch_emit.sizing_fire import ARM_XS, SizingFireRefused, load_sizing, resolve_arm
 from coordinator_core.ops.dispatch_emit.sizing_xs_mint import mint_xs_spine
@@ -98,6 +99,7 @@ from coordinator_core.ops.dispatch_emit.spine_read import (
 )
 from coordinator_core.ops.dispatch_emit.wave_map import build_waves, cap_waves, dag_from_waves
 from coordinator_core.ops.plan_tasks_render import load_rows
+from coordinator_core.ops.sizing_intake_contract import read_em_brief
 
 # Writes per-run staging files (manifest, commit-request) under a run dir, not a stamped artifact.
 GENERATES = []
@@ -174,6 +176,15 @@ def relayed_ask_block(relayed_text: Optional[str]) -> str:
         "verbatim words above (or in the sizing) read differently, the PM's words outrank it.",
     ])
     return "\n".join(lines) + "\n"
+
+
+def em_brief_block(sizing: Optional[Mapping]) -> str:
+    """The brief's EM-diagnosis section (the sizing's `em_analysis.em_brief`), marked as not the
+    PM's words and placed below the PM-intent and relayed-ask blocks. Empty when none is recorded."""
+    brief = read_em_brief(sizing) if isinstance(sizing, Mapping) else None
+    if not brief:
+        return ""
+    return f"## EM diagnosis (not the PM's words)\n\n{brief}\n"
 
 
 def _run_sizing_rel(sizing_rel: Optional[str], plan_text: str) -> Optional[str]:
@@ -310,6 +321,27 @@ def _set_aside_prior_report(root: Path, report_rel: str) -> Optional[str]:
     prior = report.with_name(report.stem + ".prior.md")
     report.replace(prior)
     return _rel(root, prior)
+
+
+def _kept_row_holds(root: Path, snap: Optional[resume_snapshot.Snapshot], row_id: str, report_rel: str) -> bool:
+    """True when the gate's snapshot names `row_id` kept, the kept run's `kept.json` fingerprints
+    still match the tree, no live note names the row, and the row's report reads DONE.
+    Never raises: any unreadable fact is False and the row stages as a fresh execute."""
+    if snap is None or not snap.kept_run or row_id not in snap.kept:
+        return False
+    try:
+        run_dir = record_dir(root, snap.kept_run)
+        entry = kept_work.read(run_dir)["chunks"].get(row_id)
+        if not kept_work.still_kept(root, entry, requirements_ledger.read_notes(run_dir), row_id):
+            return False
+        text = (root / report_rel).read_text(encoding="utf-8")
+    except (OSError, ValueError):
+        return False
+    return bool(_DELIVERED_REPORT_RE.search(text)) and not _UNDELIVERED_REPORT_RE.search(text)
+
+
+def _kept_brief(kept_run: str) -> str:
+    return f"Kept from run {kept_run}: this row's finished product and DONE report stand; no executor runs.\n"
 
 
 def _prior_report_line(prior_rel: str) -> str:
@@ -846,10 +878,11 @@ def stage(
     except InvalidChangeKindError as exc:
         raise AskStageError(f"INVALID-CHANGE-KIND: {plan_posix}: {exc}") from exc
     retired_resume: tuple[str, ...] = ()
+    resume_snap = resume_snapshot.read(root, run_id, plan_posix) if only_rows is not None else None
     dropped_landed: list = []
     if only_rows is not None:
         rows, exclusions, retired_resume, dropped_landed = _only_rows(
-            rows, exclusions, frozenset(only_rows), resume_snapshot.read(root, run_id, plan_posix)
+            rows, exclusions, frozenset(only_rows), resume_snap
         )
     if ledger_resume and only_rows is not None:
         _refuse_reminted_em_rows(plan_path, raw_by_id, frozenset(only_rows))
@@ -924,6 +957,9 @@ def stage(
         except requirements_ledger.LedgerRefused as exc:
             raise AskStageError(f"requirements: {exc}") from exc
         run_sizing = _run_sizing(root, run_sizing_rel) or run_sizing
+    em_block = em_brief_block(run_sizing)
+    if em_block:
+        intent = intent + ("\n" if intent else "") + em_block
     test_targets, no_test_target = _test_scope(waves, root)
     wave_test_targets = _wave_test_scopes(waves, root)
 
@@ -938,8 +974,16 @@ def stage(
             _model_opt(agent_type, row.agent_model)  # raises on bad model grammar or a pinned-type override
             model = resolve_agent_model(agent_type, row.agent_model)
             brief = run_dir / "briefs" / f"{row.id}.md"
-            prior = _set_aside_prior_report(root, _dispatch_report_path(plan_posix, row.id))
-            if agent_type == REVIEWER_AGENT_TYPE:
+            report_rel = _dispatch_report_path(plan_posix, row.id)
+            kept_from = (
+                resume_snap.kept_run
+                if agent_type != REVIEWER_AGENT_TYPE and _kept_row_holds(root, resume_snap, row.id, report_rel)
+                else ""
+            )
+            prior = None if kept_from else _set_aside_prior_report(root, report_rel)
+            if kept_from:
+                text = _kept_brief(kept_from)
+            elif agent_type == REVIEWER_AGENT_TYPE:
                 text = _reviewer_brief(root, run_dir, row.id, raw_by_id.get(row.id) or {})
             else:
                 text = _row_prompt(row, plan_posix, context)
@@ -966,6 +1010,7 @@ def stage(
                     deps=after.get(row.id, ()),
                     route=routes[row.id].to_json() if row.id in routes else None,
                     register_rows=tuple(str(r) for r in (raw_by_id.get(row.id) or {}).get("register_rows") or ()),
+                    kept_from=kept_from,
                 )
             )
             chunks.append(
@@ -1139,6 +1184,33 @@ def stamp_plan_executing(root: Path, plan_rel: str) -> dict:
     return out
 
 
+def _escaping_write_refusal(root: Path, plan_rel: Optional[str], only_rows) -> Optional[str]:
+    """The `CrossRepoWriteError` text for a full-plan stage whose rows write outside every checkout, else None.
+    Runs before the record dir exists, so a hard refusal leaves nothing on disk; `stage()` re-checks
+    approval and grants. Any other failure is left for `stage()` to report."""
+    if not plan_rel or only_rows is not None:
+        return None
+    try:
+        plan_path = contained_path(root / plan_rel, [root])
+        if plan_path is None or not plan_path.is_file():
+            return None
+        raw = [
+            r for r in load_rows(plan_path.read_text(encoding="utf-8")).rows
+            if isinstance(r, dict) and isinstance(r.get("id"), str)
+        ]
+        rows = read_spine(
+            plan_path,
+            exclusions=[],
+            cleared_gate_owners=own_gate_owners(raw, root) | frozenset(provisioned_sibling_roots(raw, root)),
+        )
+        check_cross_repo_writes(rows, root, approved=True)
+    except CrossRepoWriteError as exc:
+        return str(exc)
+    except Exception:
+        return None
+    return None
+
+
 @register_op("dispatch.ask_stage")
 def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "dispatch.ask_stage": params `run_id` (str), exactly one of `plan_path` / `sizing_path`, `writes`.
@@ -1176,6 +1248,9 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                 "error": f"{STAGE_RECEIPT_MISSING}: manifest.json landed for run {run_id} with no matching "
                 "stage receipt. Reconcile the run; nothing was written."
             }
+        escaping = _escaping_write_refusal(root, params.get("plan_path") or None, params.get("only_rows"))
+        if escaping is not None:
+            return {"error": escaping}
         prior_dir.mkdir(parents=True, exist_ok=True)
         if not ask_stage_receipt.claim(prior_dir, digest):
             # A racing claim of other params has no matching digest, so `in_flight` is None; the key still answers.

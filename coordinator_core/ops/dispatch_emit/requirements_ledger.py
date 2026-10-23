@@ -1473,7 +1473,22 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         out["warning"] = " ".join(warnings) + " Re-plan against the register before the run spends further."
     if not live:
         out.update(_refire(ledger.sizing_rel, root, unclaimed_result, halted=halted))
+    elif _rows_briefed(dir_):
+        out["briefed"] = True
+        out["note"] = (
+            "run live, rows already briefed: no row brief reads this revision; "
+            "refire fresh once the run finishes."
+        )
     return out
+
+
+def _rows_briefed(dir_: Path) -> bool:
+    """True once the run's stage manifest lists rows with composed briefs: later revisions reach no brief."""
+    try:
+        rows = json.loads((dir_ / "manifest.json").read_text(encoding="utf-8")).get("rows")
+    except (OSError, ValueError, AttributeError):
+        return False
+    return any(isinstance(r, dict) and r.get("brief_path") for r in rows or ())
 
 
 def _sizing_plan(root: Path, sizing_rel: Optional[str]) -> tuple[Optional[str], Optional[Path], str]:

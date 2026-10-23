@@ -80,5 +80,16 @@ def test_differing_review_base_adds_a_line(tmp_path):
     assert _closed(root) == [base, REVIEW_BASE]
 
 
+def test_manifest_head_sha_is_named_first_and_differs_from_submission_base(tmp_path):
+    root, base = _repo(tmp_path)
+    manifest_head = "c" * 40
+    rec = root / "state" / "warp" / "run-x"
+    rec.mkdir(parents=True)
+    (rec / "manifest.json").write_text(f'{{"head_sha": "{manifest_head}"}}', encoding="utf-8")
+    out = _close(root, {"run_base_sha": base, "run_id": "run-x"})
+    assert out.get("committed"), out
+    assert _closed(root) == [manifest_head, base]
+
+
 def test_halt_commit_path_never_emits_it():
     assert "Checkpoint-Run-Closed" not in Path(halted_record_commit.__file__).read_text(encoding="utf-8")

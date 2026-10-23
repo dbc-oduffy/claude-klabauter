@@ -107,7 +107,7 @@ already holds and passes the tier to ``compose_execute_review`` so the execute
 wave scales by size (``None`` composes the full roster).
 
 A review wave composes ONLY when the caller supplies BOTH a
-``review_roster_fragment`` that is ``schema_version 5`` AND
+``review_roster_fragment`` at an accepted ``schema_version`` (5 or 6) AND
 ``review_stage_schemas`` (DoE's ``review-stage.schema.json`` ``$defs``,
 injected exactly as the fragment is — this module never resolves either
 cross-repo pointer itself; that resolution lives at the op boundary,
@@ -285,6 +285,7 @@ from coordinator_core.ops._sizing_citation import resolve_sizing_citation
 from coordinator_core.ops._workflow_contract import Finding, Severity, run_checks
 from coordinator_core.ops.dispatch_emit.pathspec import (
     NoTestTargetError,
+    NoWritesDeclaredError,
     commit_pathspec,
     commit_pathspec_or_none,
     commit_prefixes,
@@ -295,6 +296,12 @@ from coordinator_core.ops.dispatch_emit.pathspec import (
     _declared_paths,
 )
 from coordinator_core.ops.dispatch_emit import chatty as _chatty
+from coordinator_core.ops.dispatch_emit.seam_repair import (
+    REPAIRABLE_CLASSES as _SEAM_REPAIRABLE_CLASSES,
+    SEAM_FIX_LABEL as _SEAM_FIX_LABEL,
+    SEAM_FIX_SCHEMA as _SEAM_FIX_SCHEMA_DICT,
+    seam_fix_prompt as _seam_fix_prompt,
+)
 from coordinator_core.ops.dispatch_emit.test_caller_widen import widen_waves as _widen_waves
 from coordinator_core.git.literal_pathspec import git_pathspec
 from coordinator_core.ops.dispatch_emit.criterion_leg import (
@@ -393,11 +400,16 @@ from coordinator_core.ops.review_mint.execute_review import (
     CRITERION_JUDGE_PHASE_TITLE,
     ROOTS_READ_SCHEMA,
     compose_criterion_judge,
-    criterion_judge_brief,
     owner_repo_clause,
     OperativeCriterion,
+    REVIEW_GROUPS_PHASE,
     resolve_operative_criterion,
     compose_execute_review,
+)
+from coordinator_core.ops.review_mint.post_exec_tail import (
+    VERIFY_WALL_BUDGET_S,
+    bounded_js as _bounded_js,
+    review_groups as _review_groups,
 )
 from coordinator_core.ops.review_mint.roster import (
     NAMED_SIGNAL_LABEL,
@@ -3346,22 +3358,16 @@ _JUDGE_VERDICT_RULES_JS = (
 
 
 def _never_stranding_criterion(
-    call_expr: str, *, judge: bool = False, verify: bool = False, withheld_ids: Sequence[str] = ()
+    call_expr: str, *, judge: bool = False, withheld_ids: Sequence[str] = ()
 ) -> str:
     """Wrap the criterion leg so a throw (an agentType the firing session
     cannot resolve, a schema refusal) yields ``indeterminate`` instead of
     killing the run after every executor has written: the run must still
     reach its terminal_commit next_action. ``differs_from_baseline: null``
     routes wake_digest's computed status to this ``status`` verbatim.
-    ``judge`` applies DoE's verdict rules to a returned judge result.
-    ``verify`` wraps the merged call: it resolves ``{test, judge}``, with a
-    ``null`` test (``not_run``) on a throw."""
+    ``judge`` applies DoE's verdict rules to a returned judge result."""
     gated = f", {json.dumps(list(withheld_ids))}" if withheld_ids else ""
-    if verify:
-        returned = (
-            f"((r) => ({{ test: r.test ?? null, judge: {_JUDGE_VERDICT_RULES_JS}(r.judge{gated}) }}))(await {call_expr})"
-        )
-    elif judge:
+    if judge:
         returned = f"{_JUDGE_VERDICT_RULES_JS}(await {call_expr}{gated})"
     else:
         returned = f"await {call_expr}"
@@ -3370,8 +3376,6 @@ def _never_stranding_criterion(
         "differs_from_baseline: null, observation: 'unjudged: ' + _cause, "
         "reason: String(e && e.message || e).slice(0, 200), sidecar_path: null }"
     )
-    if verify:
-        indeterminate = f"{{ test: null, judge: {indeterminate} }}"
     return (
         "(async () => { try { return "
         + returned
@@ -3382,10 +3386,92 @@ def _never_stranding_criterion(
     )
 
 
-#: The merged test-then-judge call on the judge arm. Emit-local names: the per-row
-#: ``verify:`` family and ask_contract's ``ASK_VERIFY_*`` are other legs.
+#: The judge arm's closing phase: its test leg (started before review lands) and its judge both carry it.
+#: Emit-local: the per-row ``verify:`` family and ask_contract's ``ASK_VERIFY_*`` are other legs.
 _VERIFY_LABEL = "verify"
 _VERIFY_PHASE_TITLE = "Verify"
+
+_VERIFY_TEST_RUN_VAR = "_verifyTestRun"
+_VERIFY_TEST_LABEL = "scoped tests"
+_VERIFY_JUDGE_LABEL = "criterion judge"
+
+#: Names the agent a budget race abandoned: a lost `agent()` call keeps running and cannot be
+#: cancelled, so the result says orphaned, never stopped. The test-leg result keeps `tests.status` inside
+#: the digest enum (`error`) and carries the text in `summary` (-> `tests.note`); the judge result
+#: stays `indeterminate` and carries it in `reason`.
+_VERIFY_ORPHANED_JS = (
+    "  const _orphaned = (r, label, asTest) => {\n"
+    "    if (!(r && r.status === 'indeterminate' && String(r.reason ?? '').startsWith('verify budget exceeded ('))) return r;\n"
+    "    const why = r.reason + '; agent still running (orphaned), not stopped: ' + label;\n"
+    "    return asTest\n"
+    "      ? { status: 'error', tests_run: 0, tests_failed: 0, summary: why, reason: r.reason }\n"
+    "      : { status: 'indeterminate', differs_from_baseline: null, observation: null, reason: why, sidecar_path: null };\n"
+    "  };"
+)
+
+#: Appended to the judge prompt at run time: the test leg started before review landed, so its
+#: failures on a review-edited file are stale and re-verify's run on the final bytes governs them.
+_VERIFY_JUDGE_SUFFIX_JS = (
+    "'\\n\\nVERIFY TEST LEG RESULT (JSON; the scoped test run started before review finished): ' "
+    "+ JSON.stringify(" + _TEST_RESULT_VAR + ") "
+    "+ '\\nREVIEW RE-VERIFY RESULT (JSON; null when none ran): ' + JSON.stringify(_reviewReverify) "
+    "+ '\\nSupersession: a failing test id the test leg reports that covers a path in the re-verify "
+    "result\\'s `edited` list is superseded by the re-verify result for it (it ran on the final "
+    "bytes); every other test result of the test leg stands. A failing, errored or indeterminate "
+    "test result is evidence for your verdict, never the verdict itself.'"
+)
+
+
+def _verify_test_launch_js(test_call: str) -> str:
+    """The Verify test leg started as a promise right after the all-rows barrier, so it runs beside
+    whole-diff review and re-verify. A stop-rule halt before launch starts no agent; a later halt
+    leaves the promise un-awaited and its result unbound. The race abandons the call on overrun; the
+    losing agent is never awaited."""
+    race = _bounded_js("_testCall", VERIFY_WALL_BUDGET_S, _VERIFY_TEST_LABEL)
+    return (
+        f"{_VERIFY_ORPHANED_JS}\n"
+        f"  let {_VERIFY_TEST_RUN_VAR} = null;\n"
+        "  if (!_halted) {\n"
+        "    const _testCall = (async () => { try { return await "
+        + test_call
+        + "; } catch (e) { log('scoped test leg threw: ' + String(e && e.message || e)); return null; } })();\n"
+        f"    {_VERIFY_TEST_RUN_VAR} = {race}.then((r) => _orphaned(r, {_js_string_literal(_VERIFY_TEST_LABEL)}, true));\n"
+        "  }"
+    )
+
+
+def _verify_judge_block_js(judge_call: str) -> str:
+    """The closing Verify block, run inside the `!_halted` guard after re-verify: await the test leg,
+    then race the judge, which reads both results."""
+    race = _bounded_js("_judgeCall", VERIFY_WALL_BUDGET_S, _VERIFY_JUDGE_LABEL)
+    return (
+        f"  phase({_js_string_literal(_VERIFY_PHASE_TITLE)});\n"
+        f"  {_TEST_RESULT_VAR} = await {_VERIFY_TEST_RUN_VAR};\n"
+        f"  const _judgeCall = {judge_call};\n"
+        f"  {_FALSIFIER_RESULT_VAR} = await {race}.then((r) => _orphaned(r, {_js_string_literal(_VERIFY_JUDGE_LABEL)}, false));"
+    )
+
+
+def _verify_scope_by_path(rows: Sequence[WaveRow], repo_root: Optional[Path]) -> dict[str, list[str]]:
+    """Declared written path -> the verify-scope test targets `terminal_test_scope` maps it to.
+
+    Which paths review edits is known only at run time and `terminal_test_scope` returns one flat
+    list, so each path is mapped alone; a path with no target, or whose only target is itself (a test
+    file the re-verify already reruns), is absent."""
+    # One terminal_test_scope call per distinct declared path, unbatched: the spawn-count amplification
+    # gate (test_no_unbatched_per_item_git_spawn.py) must cover this loop; batch it if it does not.
+    out: dict[str, list[str]] = {}
+    for row in rows:
+        for path in _declared_paths(row):
+            if path in out:
+                continue
+            try:
+                targets = terminal_test_scope([[row._replace(writes=[path], writes_under=())]], repo_root=repo_root)
+            except (NoTestTargetError, NoWritesDeclaredError):
+                continue
+            if targets and targets != [path]:
+                out[path] = targets
+    return out
 
 
 def _scoped_test_steps(
@@ -3397,7 +3483,7 @@ def _scoped_test_steps(
     surface: Optional[Sequence[str]],
     review_terminal: Optional[str],
 ) -> str:
-    """The scoped-test clauses shared by the test call and the verify call, ending in a space."""
+    """The scoped-test clauses shared by the test call and the verify test call, ending in a space."""
     scope = collapse_test_scope(scope, repo_root)
     run_clause = (
         f"Run the scoped test targets: [{', '.join(scope)}]. " if scope else "No scoped test targets. "
@@ -3416,9 +3502,8 @@ def _scoped_test_steps(
     )
 
 
-def _verify_agent_call_expr(
+def _verify_test_call_expr(
     review,
-    judge_brief_kwargs: dict,
     scope: list[str],
     repo_root: Optional[Path],
     plan_path: Optional[str],
@@ -3428,36 +3513,21 @@ def _verify_agent_call_expr(
     surface: Optional[Sequence[str]],
     review_terminal: Optional[str],
 ) -> str:
-    """One ``agent(...)`` call EXPRESSION that runs the scoped tests, then rules the criterion.
+    """One ``agent(...)`` call EXPRESSION for the judge arm's scoped test leg.
 
-    Hosted on the roster judge's own type, which must hold no Edit or Write so the ruling agent cannot
-    change the tree it rules on or write a test-runner sidecar (``test.sidecar_path`` is absent).
-    Compose does not check the roster's type; ``test_the_roster_judges_type_holds_no_edit_or_write``
-    does, and skips where the plugin is not installed. A throw resolves ``test`` to ``null`` (not_run).
-    Returns ``{test, judge}``; ``judge_brief_kwargs`` are ``criterion_judge_brief``'s keywords.
+    Hosted on the roster judge's own type, which must hold no Edit or Write, so the leg can neither
+    change the tree the judge later rules on nor write a test-runner sidecar (``sidecar_path`` is
+    absent from the result). Compose does not check the roster's type;
+    ``test_the_roster_judges_type_holds_no_edit_or_write`` does, and skips where the plugin is not
+    installed. Returns the ``test_result`` shape directly.
     """
     judge = review.judge
-    judge_prompt, judge_schema = criterion_judge_brief(review, **judge_brief_kwargs)
-    test_schema = json.loads(stage_schema_literal("test_result"))
-    test_schema["required"] = [k for k in test_schema["required"] if k != "sidecar_path"]
-    schema = {
-        "type": "object",
-        "properties": {"test": test_schema, "judge": judge_schema},
-        "required": ["test", "judge"],
-        "additionalProperties": False,
-    }
+    schema = json.loads(stage_schema_literal("test_result"))
+    schema["required"] = [k for k in schema["required"] if k != "sidecar_path"]
     prompt = (
-        "Verify in two steps, in order, in one run.\n\n"
-        "Step 1 -- scoped tests. "
-        + _scoped_test_steps(
-            scope, repo_root, typecheck, review_edits_base, owed_gates, surface, review_terminal
-        )
-        + "Report raw evidence; do not gate. You have no Write tool: return it under `test` (required, even when tests failed or could not run) and omit sidecar_path."
+        _scoped_test_steps(scope, repo_root, typecheck, review_edits_base, owed_gates, surface, review_terminal)
+        + "Report raw evidence; do not gate. You have no Write tool: omit sidecar_path."
         + (f" The plan is {_spec_path_for_prompt(Path(plan_path), repo_root).as_posix()}." if plan_path else "")
-        + "\n\nStep 2 -- criterion verdict. Only once the step 1 result is in, rule the criterion below. "
-        "A failing, errored or degraded test result is evidence for your verdict, never the verdict itself. "
-        "Return the verdict under `judge`.\n\n"
-        + judge_prompt
         + _emit_sidecar_clause(plan_path, _VERIFY_LABEL)
     )
     opts = (
@@ -3928,6 +3998,10 @@ def derive_plan_tshirt(
             f"not one of {sorted(_TSHIRT_TO_REVIEW_TIER)}"
         )
     return tshirt
+
+
+#: Review roster fragment schema versions the composer reads. Shared with grind_compose.
+ACCEPTED_ROSTER_SCHEMA_VERSIONS = frozenset({5, 6})
 
 
 class NoReviewStageError(ValueError):
@@ -4535,6 +4609,8 @@ class SeamLeg(NamedTuple):
     ``gated``: wave numbers whose seam leg a held row awaits.
     ``holds``: row id -> wave numbers (below the row's own) it awaits.
     ``held_plans``: wave number -> plans owning a row held behind that wave's leg.
+    ``own_tests``: ``(row id, (test path, ...))`` pairs of the test files a row's own plan-authored
+    ``writes`` name; caller-widened tests are not here and the seam never runs them.
     """
 
     plans: tuple
@@ -4542,6 +4618,10 @@ class SeamLeg(NamedTuple):
     holds: dict
     held_plans: dict
     certified_plans: tuple = ()
+    own_tests: tuple = ()
+
+
+_SEAM_TEST_FILE_RE = re.compile(r"(^|/)(test_[^/]*|[^/]*_test)\.py$")
 
 
 def _plan_of(row_plan: Optional[str], plan_path: Optional[str]) -> Optional[str]:
@@ -4677,9 +4757,22 @@ def _seam_leg_js(
         "failing file, or the first test path>, blocking: true}` and makes the `verdict` DRIFT. "
         "Run no other command."
     )
+    fix_tail = (
+        json.dumps(_seam_fix_prompt("@F@", "@P@"))
+        .replace("${@F@}", '" + _seamText(JSON.stringify(found)) + "')
+        .replace("${@P@}", '" + JSON.stringify(footprint) + "')
+    )
+    fix_label = json.dumps(_SEAM_FIX_LABEL)
+    own_tests = json.dumps({rid: list(paths) for rid, paths in seam.own_tests})
     return [
         "  const _seamDrift = [];",
         "  const _seamCommitted = [];",
+        f"  const _seamOwnTests = {own_tests};",
+        "  const _seamRepaired = {};",
+        "  const _lastSha = {};",
+        f"  const _SEAM_FIX_SCHEMA = {json.dumps(_SEAM_FIX_SCHEMA_DICT)};",
+        f"  const _SEAM_REPAIRABLE = {json.dumps(list(_SEAM_REPAIRABLE_CLASSES))};",
+        f"  const _isSeamFix = (i) => i.startsWith({fix_label});",
         f"  const _seamHeldPlans = {json.dumps({str(k): list(v) for k, v in seam.held_plans.items()})};",
         "  const _seamFailures = [];",
         f"  const _seamPlans = {json.dumps(list(seam.plans))};",
@@ -4690,15 +4783,16 @@ def _seam_leg_js(
         "  const _seamRelease = {};",
         "  const _seamGates = {};",
         "  async function _seamLeg(n, sha) {",
+        "    _lastSha[n] = sha;",
         "    const params = { plans: _seamPlans, phase: 'wave-boundary', named_set: true, wave: n,"
         + (" certified_plans: _seamCertified," if seam.certified_plans else ""),
         f"      landed_range: {_RUN_BASE_VAR} + '..' + sha,",
-        f"      landed_rows: _seamCommitted.map((i) => ({{ plan: _rowPlan[i] || {_js_string_literal(plan_path or '')}, row: i }})) }};",
+        f"      landed_rows: _seamCommitted.filter((i) => !_isSeamFix(i)).map((i) => ({{ plan: _rowPlan[i] || {_js_string_literal(plan_path or '')}, row: i }})) }};",
         "    const _paths = [...new Set(_seamCommitted.flatMap((i) => _landed[i].paths))];",
         f"    const reach = {{ base_sha: {_RUN_BASE_VAR}, head_sha: sha, paths: _paths }};",
-        "    const tests = [...new Set(_seamCommitted.flatMap((i) => _landed[i].declared))].filter((p) => /(^|\\/)(test_[^\\/]*|[^\\/]*_test)\\.py$/.test(p));",
+        "    const tests = [...new Set(_seamCommitted.flatMap((i) => (_seamOwnTests[i] || [])))].filter((p) => /(^|\\/)(test_[^\\/]*|[^\\/]*_test)\\.py$/.test(p));",
         "    const _seamPathPlan = {};",
-        f"    _seamCommitted.forEach((i) => [..._landed[i].paths, ..._landed[i].declared].forEach((p) => {{ _seamPathPlan[p] = _rowPlan[i] || {_js_string_literal(plan_path or '')}; }}));",
+        f"    _seamCommitted.filter((i) => !_isSeamFix(i)).forEach((i) => [..._landed[i].paths, ..._landed[i].declared].forEach((p) => {{ _seamPathPlan[p] = _rowPlan[i] || {_js_string_literal(plan_path or '')}; }}));",
         "    let r = null;",
         "    let cause = '';",
         "    for (let attempt = 0; attempt < 2; attempt++) {",
@@ -4735,6 +4829,13 @@ def _seam_leg_js(
         "      return;",
         "    }",
         "    if (r.verdict !== 'DRIFT') return;",
+        "    let repairWhy = '';",
+        "    if (!_seamRepaired[n] && found.length && found.every((f) => _SEAM_REPAIRABLE.includes(f.class))) {",
+        "      _seamRepaired[n] = true;",
+        "      const fix = await _seamRepair(n, found);",
+        "      if (fix.ok) return;",
+        "      repairWhy = fix.why;",
+        "    }",
         "    const halted = new Set(marked);",
         "    const finding = {};",
         "    found.forEach((f) => {",
@@ -4743,7 +4844,7 @@ def _seam_leg_js(
         "      if (f.plan) halted.add(f.plan);",
         "      const named = f.plan ? [f.plan, f.counterpart_plan].filter(Boolean) : mine ? [mine] : marked;",
         "      const what = (f.class || 'unclassified') + (f.path ? ' at ' + f.path : '');",
-        "      named.forEach((p) => { if (!finding[p]) finding[p] = what; });",
+        "      named.forEach((p) => { if (!finding[p]) finding[p] = what + (repairWhy ? '; in-route repair: ' + repairWhy : ''); });",
         "      _seamDrift.push({ wave: n, class: f.class || 'unclassified', plans: named, path: f.path || '' });",
         "    });",
         "    if (!found.length) _seamDrift.push({ wave: n, class: 'unclassified', plans: marked, path: '' });",
@@ -4751,6 +4852,33 @@ def _seam_leg_js(
         "      _haltedPlans.add(p);",
         "      if (!_haltedPlanReasons.has(p)) _haltedPlanReasons.set(p, 'seam drift at wave ' + n + (finding[p] ? ': ' + finding[p] : ''));",
         "    });",
+        "  }",
+        "  async function _seamRepair(n, found) {",
+        f"    const synth = {fix_label} + n;",
+        "    const footprint = [...new Set(_seamCommitted.filter((i) => !_isSeamFix(i)).flatMap((i) => _landed[i].declared))];",
+        "    let fix = null;",
+        "    try {",
+        "      fix = await agent(",
+        f"        {js(head)} + 'You repair the seam test failure of wave ' + n + '. ' + {fix_tail} + {sidecar_js},",
+        f"        {{ label: {fix_label} + n, phase: {phase}, agentType: {exec_type}, "
+        f"{_model_opt(_EXECUTOR_AGENT_TYPE)}, schema: _SEAM_FIX_SCHEMA }}",
+        "      );",
+        "    } catch (e) {",
+        "      return { ok: false, why: 'agent call threw: ' + _seamText(e && e.message ? e.message : e) };",
+        "    }",
+        "    if (!fix || fix.status !== 'DONE' || !Array.isArray(fix.paths)) {",
+        "      return { ok: false, why: (fix && fix.reason) ? _seamText(fix.reason) : 'no usable repair reply' };",
+        "    }",
+        "    const outside = fix.paths.filter((p) => !footprint.includes(p));",
+        "    if (outside.length) return { ok: false, why: 'repair wrote outside the footprint: ' + outside.join(', ') };",
+        "    if (!fix.paths.length) {",
+        "      await _seamLeg(n, _lastSha[n]);",
+        "      return { ok: true };",
+        "    }",
+        "    _landed[synth] = { paths: fix.paths, declared: fix.paths };",
+        "    await _commitWave(n, [synth]);",
+        "    if (!_seamCommitted.includes(synth)) return { ok: false, why: 'repair commit did not land' };",
+        "    return { ok: true };",
         "  }",
         "  function _seamText(v) {",
         "    const t = typeof v === 'string' ? v : JSON.stringify(v);",
@@ -5456,7 +5584,7 @@ def compose_script(
     ``plan_context``'s resolution discipline.
 
     The roster-v5 review wave (§ Design D6) composes ONLY when
-    ``review_roster_fragment`` is ``schema_version 5`` AND
+    ``review_roster_fragment`` is at an accepted ``schema_version`` (5 or 6) AND
     ``review_stage_schemas`` is supplied — either absent, or a fragment on
     an earlier schema version, raises ``NoReviewStageError``; the v4
     tier/stage review path this superseded is deleted, not degraded into.
@@ -5507,6 +5635,11 @@ def compose_script(
             "boundary in the module docstring)"
         )
 
+    row_own_writes = {
+        row.id: tuple(commit_pathspec_or_none([row]) or ())
+        for wave in waves
+        for row in wave
+    }
     if repo_root is not None and not review_only:
         waves = _widen_waves_with_test_referencers(waves, repo_root)
 
@@ -5664,6 +5797,13 @@ def compose_script(
             _checkpointable_rows(dag, row_pathspecs)[0],
             run_base_sha,
         )
+        if seam_leg is not None:
+            own_tests = tuple(
+                (rid, tests)
+                for rid, paths in row_own_writes.items()
+                if (tests := tuple(p for p in paths if p not in gitignored and _SEAM_TEST_FILE_RE.search(p)))
+            )
+            seam_leg = seam_leg._replace(own_tests=own_tests)
         body_blocks.append(
             _checkpoint_commit_js(
                 agent_type_host,
@@ -5699,6 +5839,7 @@ def compose_script(
     runtime_cap = _runtime_cap_on_host()
     agent_count = 0
     row_group: dict[str, tuple[str, ...]] = {}
+    barrier_index = 0
     if not review_only:
         phase_titles.append(_EXECUTE_PHASE_TITLE)
         if routes:
@@ -5868,6 +6009,7 @@ def compose_script(
                 ) if part
             )
             body_blocks.append("  log(" + _js_string_literal(notice) + ");")
+        barrier_index = len(body_blocks)
         body_blocks.append("  await Promise.all(Object.values(_rows));")
         if roster is not None:
             overseer_opts = (
@@ -5998,10 +6140,11 @@ def compose_script(
         raise NoReviewStageError(
             "no review roster fragment or stage schemas were supplied"
         )
-    if review_roster_fragment.get("schema_version") != 5:
+    if review_roster_fragment.get("schema_version") not in ACCEPTED_ROSTER_SCHEMA_VERSIONS:
         raise NoReviewStageError(
             "review roster fragment is schema_version "
-            f"{review_roster_fragment.get('schema_version')!r}, not 5"
+            f"{review_roster_fragment.get('schema_version')!r}, not one of "
+            f"{sorted(ACCEPTED_ROSTER_SCHEMA_VERSIONS)}"
         )
     review = parse_execute_review(
         review_roster_fragment,
@@ -6061,6 +6204,29 @@ def compose_script(
         else None
     )
     wave_tier = _TSHIRT_TO_REVIEW_TIER[wave_tshirt] if wave_tshirt is not None else None
+    # Per-group review starts as each group's rows land. A group reviews its rows' own declared
+    # writes (`row_own_writes`, before test-importer widening) and waits on the rows that declare
+    # them; the surface no row declares (widened test files, earlier runs' surface) goes to the
+    # last group, which waits on every row, because the
+    # whole-diff prep keeps only group slices. A chatty run continues executors after the barrier, so
+    # no group is quiescent before it; a `writes_under` prefix names no file to group.
+    pipelined_groups = None
+    if not review_only and not chatty and not any(row.writes_under for row in flat_rows):
+        _group_plan = _review_groups(
+            [[row.id for row in wave] for wave in waves],
+            {rid: [p for p in paths if p not in gitignored] for rid, paths in row_own_writes.items()},
+        )
+        if _group_plan:
+            _extras = set(declared_paths) - {p for g in _group_plan for p in g.paths}
+            if _extras:
+                _last = _group_plan[-1]
+                _group_plan[-1] = _dc_replace(
+                    _last,
+                    paths=tuple(sorted({*_last.paths, *_extras})),
+                    quiescence_rows=tuple(row.id for row in flat_rows),
+                )
+            pipelined_groups = _group_plan
+    groups_block: Optional[str] = None
     for title, block in compose_execute_review(
         review,
         stage_schemas=review_stage_schemas,
@@ -6079,9 +6245,16 @@ def compose_script(
         host_degraded=agent_type_host == _AGENT_TYPE_HOST_DEGRADED,
         review_terminal_sha=review_terminal_sha if review_only else None,
         reverify=True,
+        review_groups=pipelined_groups,
+        verify_scope_targets=_verify_scope_by_path(flat_rows, repo_root) if pipelined_groups else None,
     ):
         phase_titles.append(title)
-        review_blocks.append(_unconst(block, _REVIEW_RESULT_NAMES))
+        if title == REVIEW_GROUPS_PHASE:
+            groups_block = block
+        else:
+            review_blocks.append(_unconst(block, _REVIEW_RESULT_NAMES))
+    if groups_block is not None:
+        body_blocks.insert(barrier_index, groups_block)
     judge_evidence_path: Optional[str] = None
     if plan_path:
         from coordinator_core.ops.plan_tasks_mutate import evidence_sidecar_path, has_recorded_evidence
@@ -6150,6 +6323,7 @@ def compose_script(
     _review_terminal = review_terminal_sha if review_only else None
     test_var: Optional[str] = None
     falsifier_var: Optional[str] = None
+    verify_launch_block: Optional[str] = None
     test_absent_status = "not_run"
     test_absent_note: Optional[str] = None
     # The criterion leg: the roster's judge when DoE declares one (it runs any
@@ -6245,22 +6419,30 @@ def compose_script(
                 guarded_blocks.append(criterion_block)
                 falsifier_var = _FALSIFIER_RESULT_VAR
         elif verify_merge:
-            # One agent on the judge's own type: it runs the scoped tests, then rules on them.
+            # The scoped tests start beside review and re-verify; the judge runs after re-verify and
+            # reads both results. Each call is raced against the verify wall-time budget.
             phase_titles.remove(CRITERION_JUDGE_PHASE_TITLE)
             phase_titles.append(_VERIFY_PHASE_TITLE)
-            verify_expr = _never_stranding_criterion(
-                _verify_agent_call_expr(
-                    review, judge_brief_kwargs, scope, repo_root, plan_path, ts_leg,
-                    _stage_edits_base, owed_gates, _plan_surface, _review_terminal,
-                ),
-                verify=True,
-                withheld_ids=[w["id"] for w in judge_withheld],
+            verify_launch_block = _verify_test_launch_js(
+                _verify_test_call_expr(
+                    review, scope, repo_root, plan_path, ts_leg, _stage_edits_base, owed_gates,
+                    _plan_surface, _review_terminal,
+                )
             )
             guarded_blocks.append(
-                f"  phase({_js_string_literal(_VERIFY_PHASE_TITLE)});\n"
-                f"  const _verifyReply = await {verify_expr};\n"
-                f"  {_TEST_RESULT_VAR} = _verifyReply.test;\n"
-                f"  {_FALSIFIER_RESULT_VAR} = _verifyReply.judge;"
+                _verify_judge_block_js(
+                    _never_stranding_criterion(
+                        compose_criterion_judge(
+                            review,
+                            host_degraded=False,
+                            prompt_suffix_js=_VERIFY_JUDGE_SUFFIX_JS,
+                            phase_title=_VERIFY_PHASE_TITLE,
+                            **judge_brief_kwargs,
+                        ),
+                        judge=True,
+                        withheld_ids=[w["id"] for w in judge_withheld],
+                    )
+                )
             )
             test_var = _TEST_RESULT_VAR
             falsifier_var = _FALSIFIER_RESULT_VAR
@@ -6293,6 +6475,8 @@ def compose_script(
         body_blocks.append(
             "  if (!_halted) { const _r = _heldDependentsReason(); if (_r) { _halted = _r; _haltedByHold = true; } }"
         )
+    if verify_launch_block is not None:
+        body_blocks.append(verify_launch_block)
     if review_blocks:
         body_blocks.append(
             "  if (!_halted || _haltedByHold) {\n" + "\n\n".join(review_blocks) + "\n  }"
@@ -6336,14 +6520,14 @@ def compose_script(
     if not review_only:
         # Row agents are exact; review stages, per-row verifiers and checkpoint commits start
         # at run time, so they make the count a floor.
-        leg_agents = (1 if test_var is not None else 0) + (1 if falsifier_var is not None and not verify_merge else 0)
+        leg_agents = (1 if test_var is not None else 0) + (1 if falsifier_var is not None else 0)
         run_time_legs = bool(review_blocks) or (test_var is None and any(row_verify_scopes.values()))
         groups = tuple(dict.fromkeys(row_group.get(r.id, (r.id,)) for r in flat_rows))
         meta_block = _fanout.with_fanout(
             meta_block,
             _fanout.FanoutCost(
                 units=len(flat_rows),
-                agents=agent_count + leg_agents + sum(len(_fanout.AGENT_CALL_RE.findall(b)) for b in review_blocks),
+                agents=agent_count + leg_agents + sum(len(_fanout.AGENT_CALL_RE.findall(b)) for b in [*review_blocks, *([groups_block] if groups_block else [])]),
                 basis="lower-bound" if run_time_legs else "exact",
                 groups=groups,
             ),

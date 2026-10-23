@@ -163,10 +163,12 @@ def resolve(
     plugin_root: Path | None,
     engine_root: Path | None,
     sizing_abs: str | None,
+    chatty_run_id: str | None = None,
 ) -> dict:
     """planBlitz args for a single-mode ask. A key with no resolvable value is omitted,
     except `pluginAgentsAvailable`, which is always present. `sizing_abs` is None on a raw
-    ask, whose sizing is minted in-run; the emitted call then binds `gateReportPath` itself."""
+    ask, whose sizing is minted in-run; the emitted call then binds `gateReportPath` itself.
+    `chatty_run_id` set adds `chatty: True` and the `chattyReview` wave template."""
     available, _why = _plugin_agents_available(plugin_root, "")
     out: dict = {}
     sidecar = _default_sidecar_cli(engine_root, plugin_root)
@@ -181,4 +183,9 @@ def resolve(
     arming = _default_arming_check_cli(plugin_root)
     if arming:
         out["armingCheckCli"] = arming
+    if chatty_run_id is not None:
+        from coordinator_core.ops.dispatch_emit import chatty
+
+        out["chatty"] = True
+        out[chatty.REVIEW_WAVE_ARG] = chatty.review_wave_args(chatty_run_id)
     return out

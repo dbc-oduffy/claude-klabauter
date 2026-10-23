@@ -15,6 +15,7 @@ from typing import Callable, Optional
 
 from coordinator_core.ops.dispatch_emit import emit as _emit
 from coordinator_core.ops.dispatch_emit.fanout_cost import with_fanout
+from coordinator_core.ops.dispatch_emit.halt_refire import refire_next_action_js
 from coordinator_core.ops.dispatch_emit.ask_contract import (
     FANOUT_RECORD_PARAM,
     HALT_REFUSAL,
@@ -118,12 +119,17 @@ def roadmap_stage_lines(
     halt = lambda reason: (  # noqa: E731
         f"_halted = {{ halted: {lit(HALT_REFUSAL)}, reason: {reason}, sizing: _sizingRel, run_id: _runId }};"
     )
+    chatty_keys = ""
+    if plan_blitz_args and plan_blitz_args.get("chatty") is True and plan_blitz_args.get("chattyReview"):
+        chatty_keys = (
+            f"chatty: true, chattyReview: {json.dumps(plan_blitz_args['chattyReview'], sort_keys=True)}, "
+        )
 
     return [
         "  if (!_halted) {",
         "  phase('roadmap-blitz');",
         f"  _rb = await {ROADMAP_STAGE_FN}({{ repoRoot: REPO_ROOT, sizing: _sizingRel, "
-        f"interactionMode: {lit(str(interaction_mode))}, approver: {lit(approver)}, "
+        f"interactionMode: {lit(str(interaction_mode))}, approver: {lit(approver)}, {chatty_keys}"
         f"trailDir: {lit(run_dir + '/roadmap-blitz')} }});",
         f"  if (!_rb || !_rb.gate_report_path) {{ {halt(chr(39) + 'roadmap-blitz returned no gate_report_path' + chr(39))} }}",
         "  }",
@@ -209,6 +215,12 @@ def compose_roadmap_script(
         f"  const _runId = {lit(run_id)};",
         f"  let _sizingRel = {lit(sizing_rel)};",
         "  let _halted = null;",
+        refire_next_action_js(
+            call_js=ac._refire_js(None),
+            legacy_js="_halted.next_action",
+            kind_js="_halted.halted",
+            detail_js="(_legacy.detail ?? null)",
+        ),
         *ROADMAP_DECLS,
         *ac.roadmap_commit_decls(head=head, anchor=anchor, repo_root=repo_root, run_id=run_id),
         rb_fn,
@@ -227,6 +239,7 @@ def compose_roadmap_script(
         *ac.roadmap_commit_lines(
             head=head, anchor=anchor, repo_root=repo_root, run_id=run_id, script_path=script_path
         ),
+        "  _refireNextAction();",
         "  return { arm: 'roadmap', sizing: _sizingRel, run_id: _runId, roadmap: _rb, ready: _ready, "
         f"{NOT_FIRED_KEY}: _commit?.fanout?.{NOT_FIRED_KEY} ?? _unfired, "
         "commit: _commit, fanout: _commit?.fanout ?? null, next_action: _nextAction, halted_by: _halted };",

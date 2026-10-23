@@ -175,3 +175,92 @@ def summary_prompt(nonce: str) -> str:
         f"2. Read your mailbox ({OVERSEER_ROLE}.jsonl) and the roster. Report to the EM "
         "once, as a summary, never a relay."
     )
+
+
+#: Longest plan-review ladder row (XL/XXL); the slots one baton's review wave mints.
+REVIEW_WAVE_SLOTS = 3
+#: planBlitz/roadmapBlitz launch-arg key carrying the review-wave template.
+REVIEW_WAVE_ARG = "chattyReview"
+#: Filled by the consumer with the baton id; scopes roster, mail and nonces per baton.
+BATON_SLOT = "{BATON}"
+PEERS_SLOT = "{PEERS}"
+
+_WAVE_DIR_SENTENCE = (
+    f"Your wave directory is <run directory>/{BATON_SLOT}/; every <run-dir> and every roster.json "
+    "in this brief means that directory, except the transcript path <run-dir>/agent-<agent_id>.jsonl "
+    f"and the EM mailbox <run-dir>/mail/{EM_MAILBOX}, which stay in <run directory>."
+)
+
+_REVIEW_WAVE_CLAUSE = (
+    "\nREVIEW WAVE. Peers:\n" + PEERS_SLOT + "\n"
+    "Apply your own findings by exact-text Edit. A failed Edit means a peer moved the text: "
+    "re-read the plan and your mailbox, re-anchor or drop. A ledger row whose `after` text a peer "
+    "later edited over is re-anchored to the text now present and the peer mailed; never "
+    "hand-author around it. Mail the affected slot BEFORE applying a finding that shifts its ground "
+    "(scope, row, AC, exit criterion). On a PIVOT or REJECTED verdict, mail every slot to stop "
+    "applying. Re-read your mailbox after each section you review and before you return.\n"
+    "Region claims. A region is one `## ` section of the plan body, one spine row by `id`, or "
+    "`frontmatter`. CLAIM <region>: before your first Edit in it, append "
+    '{"from":"<slot>","text":"CLAIM <region>"} to every peer\'s mailbox, then re-read yours. '
+    "A region is held by the earliest unreleased CLAIM among those you received and those you sent. "
+    "Crossed claims: the lower review-N holds, the higher yields. Edit no region a peer holds; "
+    "mail the holder the finding. RELEASE <region>: once your edits there verify, append "
+    '{"from":"<slot>","text":"RELEASE <region>"} to every peer\'s mailbox. '
+    "A returned slot holds nothing."
+)
+
+_EM_KEEP = "\x00EM\x00"
+
+
+def review_slot(index: int) -> str:
+    """Slot name of review wave member `index` (0 -> "review-1"); refuses an index past the wave."""
+    if not 0 <= index < REVIEW_WAVE_SLOTS:
+        raise ValueError(f"review slot index {index} outside 0..{REVIEW_WAVE_SLOTS - 1}")
+    return f"review-{index + 1}"
+
+
+def _baton_scope(text: str) -> str:
+    """Roster and mail paths into the per-baton wave directory; the EM mailbox and
+    the transcript path stay run-level."""
+    text = text.replace(f"<run-dir>/mail/{EM_MAILBOX}", _EM_KEEP)
+    for base in ("<run-dir>", "<run directory>"):
+        for leaf in ("/roster.json", "/mail/"):
+            text = text.replace(base + leaf, f"{base}/{BATON_SLOT}{leaf}")
+    return text.replace(_EM_KEEP, f"<run-dir>/mail/{EM_MAILBOX}")
+
+
+def _scoped(text: str) -> str:
+    return _baton_scope(text) + "\n" + _WAVE_DIR_SENTENCE
+
+
+def review_member_brief(role: str, nonce: str) -> str:
+    """`member_brief` scoped to the baton wave directory, plus the review-wave clause
+    (exact-text Edit, ground-shift mail, region claims). `{PEERS}` is left for the
+    consumer to fill with `review-N = <agentType>` lines."""
+    base = _baton_scope(member_brief(role, nonce))
+    marker = " Wait for roster.json there"
+    base = base.replace(marker, " " + _WAVE_DIR_SENTENCE + marker, 1)
+    return base + _REVIEW_WAVE_CLAUSE
+
+
+def review_wave_args(run_id: str) -> dict:
+    """Review-wave template for one baton: roster, overseer, member/continuation briefs,
+    survey and summary prompts, every nonce and wave path carrying `{BATON}`.
+
+    Unused slots stay `registering`; the survey reads only `returned` members."""
+    slots = [review_slot(i) for i in range(REVIEW_WAVE_SLOTS)]
+    roster = build_roster(run_id, slots)
+    for member in roster["members"]:
+        member["nonce"] = f"{BATON_SLOT}-{member['nonce']}"
+    return {
+        "roster": roster,
+        "overseerPrompt": _scoped(overseer_prompt(roster)),
+        "memberBriefs": {s: review_member_brief(s, member_nonce(roster, s)) for s in slots},
+        "continuationBriefs": {s: _scoped(continuation_brief(s)) for s in slots},
+        "surveyPrompt": _scoped(survey_prompt(f"{BATON_SLOT}-{new_nonce()}")),
+        "summaryPrompt": _scoped(summary_prompt(f"{BATON_SLOT}-{new_nonce()}")),
+        "nonceSlot": NONCE_SLOT,
+        "peersSlot": PEERS_SLOT,
+        "batonSlot": BATON_SLOT,
+        "emMailbox": EM_MAILBOX,
+    }

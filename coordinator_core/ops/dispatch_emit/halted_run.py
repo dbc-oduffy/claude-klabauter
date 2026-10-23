@@ -24,6 +24,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     HALT_BLOCKING_FIELD, HALT_BLOCKING_ITEMS_FIELD, HALT_PLAN_FIELD, RECORD_DIR_ROOT, RUN_DIR_ROOT,
 )
 from coordinator_core.ops.dispatch_emit.ask_fanout_contract import STATUS_HALTED
+from coordinator_core.ops.dispatch_emit.halt_refire import is_refire_next_action
 
 HALTED_FILE = "halted.json"
 STATUS_RESUMED = "resumed"
@@ -32,6 +33,7 @@ HALT_RUN_BASE_FIELD = "run_base_sha"
 HALT_REASON_FIELD = "reason"
 HALT_RUN_ARTIFACTS_FIELD = "run_artifacts"
 REVISED_AT_FIELD = "revised_at"
+HALT_NEXT_ACTION_FIELD = "next_action"
 _SHA40 = re.compile(r"[0-9a-f]{40}")
 _DATE_PREFIX = re.compile(r"(\d{4})-(\d{2})-(\d{2})")
 
@@ -68,11 +70,12 @@ def write_halt_marker(
     run_base_sha: Optional[str] = None,
     blocking_items: Optional[list] = None,
     reason: Optional[str] = None,
+    next_action: Optional[dict] = None,
 ) -> Path:
     """Write the `halted` marker into `record_dir` (created if absent); return its path.
 
-    `plan`, the blocking key, the blocking items, the reason and the base are written only when given (the base
-    only when 40-hex), so other halts' markers are unchanged.
+    `plan`, the blocking key, the blocking items, the reason, the next_action and the base are written only when given (the base
+    only when 40-hex; next_action only when `halt_refire.is_refire_next_action` accepts it), so other halts' markers are unchanged.
     """
     payload = {
         "status": STATUS_HALTED,
@@ -87,6 +90,8 @@ def write_halt_marker(
         payload[HALT_BLOCKING_ITEMS_FIELD] = list(blocking_items)
     if reason:
         payload[HALT_REASON_FIELD] = reason
+    if next_action is not None and is_refire_next_action(next_action):
+        payload[HALT_NEXT_ACTION_FIELD] = next_action
     if run_base_sha and _SHA40.fullmatch(run_base_sha):
         payload[HALT_RUN_BASE_FIELD] = run_base_sha
     return _write(Path(record_dir), payload)
@@ -209,6 +214,20 @@ def record_withheld(record_dir: Path, withheld: dict) -> bool:
     if not withheld or marker is None or marker.get("status") != STATUS_HALTED:
         return False
     _write(Path(record_dir), {**marker, HALT_RUN_ARTIFACTS_FIELD: {"withheld": dict(sorted(withheld.items()))}})
+    return True
+
+
+def record_resume_stage(record_dir: Path, stage: dict) -> bool:
+    """Stamp ``next_action.resume.stage`` (the kept.json pointer) on a ``halted`` marker whose
+    ``next_action`` is a refire envelope; False and no write otherwise."""
+    marker = _read(Path(record_dir))
+    if marker is None or marker.get("status") != STATUS_HALTED:
+        return False
+    action = marker.get(HALT_NEXT_ACTION_FIELD)
+    if not is_refire_next_action(action):
+        return False
+    stamped = {**action, "resume": {**action["resume"], "stage": dict(stage)}}
+    _write(Path(record_dir), {**marker, HALT_NEXT_ACTION_FIELD: stamped})
     return True
 
 

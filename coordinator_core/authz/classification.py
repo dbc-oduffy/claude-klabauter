@@ -211,6 +211,11 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # only (always allows), but the write disqualifies COMPUTE_ONLY under the five-question
     # test the same way hooks.postuse_advisory_dispatch's own durable state does.
     "hooks.flag_em_poll_in_flight": OpClass.MUTATING,
+    # hooks.nudge_em_turn_budget — MUTATING: persists a per-session em-turns.json record (turn
+    # count, transcript offset, delivered marks) in the session hub under the git common dir.
+    # Advisory only (always allows); the write disqualifies COMPUTE_ONLY under the five-question
+    # test, as hooks.flag_em_poll_in_flight's state file does.
+    "hooks.nudge_em_turn_budget": OpClass.MUTATING,
     # hooks.submit_engine_ask — MUTATING: emits a warp run through dispatch.emit (script,
     # receipt, run token, ask.md) and writes the run's submission record beside its briefs.
     "hooks.submit_engine_ask": OpClass.MUTATING,

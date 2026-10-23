@@ -315,3 +315,13 @@ def test_deny_count_does_not_affect_measure(repo):
     xb.record_deny(root, "s")
     xb.record_deny(root, "s")
     assert xb.measure(root, xb.read_lane(root, "s"), "a.py", "x\n" + _lines(10)) == base
+
+
+def test_record_deny_with_usage_keeps_files_and_lines(repo):
+    root, sha = repo
+    xb.open_xs_lane(root, "s", sha)
+    xb.record_deny(root, "s", xb.Usage(2, 45, True), ["a.py", "b.py"])
+    assert xb.read_lane(root, "s")["deny_usage"] == {"files": ["a.py", "b.py"], "lines": 45}
+    xb.record_deny(root, "s")
+    assert xb.read_lane(root, "s")["deny_usage"]["lines"] == 45
+    assert xb.deny_count(xb.read_lane(root, "s")) == 2

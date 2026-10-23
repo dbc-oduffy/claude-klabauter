@@ -228,12 +228,12 @@ def test_sized_session_without_lane_keeps_head_decision(env):
     assert xb.read_lane(root, SID) is None
 
 
-def test_above_xs_sizing_keeps_head_decision(unsized, monkeypatch):
+def test_above_xs_sizing_unfired_is_denied(unsized, monkeypatch):
     root, _ = unsized
     monkeypatch.setattr(xb, "touched_s_or_larger", lambda sid, repo_root: True)
     monkeypatch.setattr(mod, "_session_sizing_state", lambda payload, sid: (True, False))
     result = mod.op(_edit(root, "a.py", "l1\n", "v1 = f(1)\n"))
-    assert result is not None and not _is_deny(result)
+    assert _is_deny(result)
     assert xb.read_lane(root, SID) is None
 
 
@@ -475,10 +475,10 @@ def test_shell_write_exemptions_return_none(env):
     assert xb.read_lane(root, SID)["paths"] == []
 
 
-def test_shell_write_s_sized_without_residue_is_none(env, monkeypatch):
+def test_shell_write_s_sized_unfired_is_denied(env, monkeypatch):
     root, _ = env
     monkeypatch.setattr(xb, "touched_s_or_larger", lambda sid, repo_root: True)
-    assert _shell(root, "a.py", "".join(f"x{i}\n" for i in range(42))) is None
+    assert _is_deny(_shell(root, "a.py", "".join(f"x{i}\n" for i in range(42))))
 
 
 def _big(n: int) -> str:

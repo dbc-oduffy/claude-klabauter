@@ -78,7 +78,7 @@ import json
 import re
 import sys
 
-from coordinator_core.hooks._envelope import allow_advisory, deny, no_advisory, payload_of
+from coordinator_core.hooks._envelope import allow_advisory, context_only, deny, no_advisory, payload_of
 from coordinator_core.ipc import register_op
 
 
@@ -124,7 +124,8 @@ def _irreversible_on_import_failure(command: str) -> str | None:
 @register_op("hooks.preuse_bash_dispatch")
 def _handler(params: dict, repo_root=None) -> dict:
     """PreToolUse(Bash|PowerShell) op: run the full bash-guard chain against
-    this payload and return its verdict.
+    this payload and return its verdict; when the chain answers nothing, the
+    turn-budget advisory (`nudge_em_turn_budget`) is the only possible output.
 
     `params` is the JSON-RPC params dict; the PreToolUse payload is
     `params["payload"]`, the shape `warm/hook_http.py :: payload_from_event`
@@ -172,8 +173,12 @@ def _handler(params: dict, repo_root=None) -> dict:
     except Exception as exc:
         return _unevaluated(f"{type(exc).__name__}: {exc}")
 
-    if out is None:
+    if isinstance(out, dict):
+        return out
+    try:
+        from coordinator_core.hooks import nudge_em_turn_budget
+
+        text = nudge_em_turn_budget.advisory_text(params)
+        return context_only("PreToolUse", text) if text else no_advisory()
+    except Exception:
         return no_advisory()
-    if not isinstance(out, dict):
-        return no_advisory()
-    return out

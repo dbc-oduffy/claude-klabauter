@@ -141,3 +141,12 @@ def test_warp_run_unsafe_id_is_usage(repo, capsys):
     rc = sa.main(["--tshirt", "XS", "--write", _XS_REL, "--warp-run", "../x"])
     assert rc == sa.EXIT_USAGE
     assert "--warp-run" in capsys.readouterr().err
+
+
+def test_xs_refusal_names_the_denied_files_and_lines(repo, capsys):
+    assert sa.main(["--tshirt", "XS", "--express-lane"]) == sa.EXIT_OK
+    xs_lane_budget.record_deny(repo, _SID, xs_lane_budget.Usage(1, 45, True), ["pkg/a.py"])
+    assert sa.main(["--tshirt", "XS", "--express-lane"]) == sa.EXIT_USAGE
+    err = capsys.readouterr().err
+    assert "45 changed lines" in err
+    assert "pkg/a.py" in err and "--tshirt S" in err

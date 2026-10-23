@@ -100,10 +100,11 @@ from coordinator_core.git.git_objects import (
     object_batch,
     write_object,
 )
-from coordinator_core.git.git_state import head_blobs, head_sha, head_tree_sha, read_tree_spine
+from coordinator_core.git.git_state import head_blobs, head_sha, head_tree_sha, read_commit, read_tree_spine
 from coordinator_core.git import published_tree_classification
 from coordinator_core.git import rollback_check
 from coordinator_core.git import checkpoint_guard
+from coordinator_core.git import merge_state
 from coordinator_core.git.tree_spine import (
     _ABSENT,
     _rewrite_head_spine,
@@ -194,6 +195,8 @@ class CommitOutcome(NamedTuple):
     #: this field, like `no_delta`, is a REPORT that only exists when there
     #: is something to report (claude-klabauter#34).
     sign_warning: Optional[str] = None
+    #: MERGE_HEAD's sha when this commit finished a merge (`finish_merge=True`); None otherwise.
+    merge_parent: Optional[str] = None
 
 
 class BlobDrift(NamedTuple):
@@ -849,6 +852,8 @@ def _sign_commit_in_process(
     email: str,
     when: str,
     message: Union[str, bytes],
+    *,
+    extra_parents: Sequence[str] = (),
 ) -> Optional[str]:
     """Signed commit for ``gpg.format=ssh`` via the ssh-agent, 0 spawns; the loose
     object is written here. None means "use the git path": not ssh format, a
@@ -873,6 +878,8 @@ def _sign_commit_in_process(
     head = f"tree {tree_sha}\n"
     if parent_sha:
         head += f"parent {parent_sha}\n"
+    for extra in extra_parents:
+        head += f"parent {extra}\n"
     head += f"author {who}\ncommitter {who}\n"
     head_b = head.encode("utf-8", "surrogateescape")
     msg = message if isinstance(message, bytes) else message.encode("utf-8", "surrogateescape")
@@ -899,6 +906,8 @@ def _sign_commit_tree(
     email: str,
     when: str,
     message: str,
+    *,
+    extra_parents: Sequence[str] = (),
 ) -> Tuple[Optional[str], Optional[str]]:
     """Produce a SIGNED commit object via ONE spawn of ``git commit-tree
     -S``, called ONLY when ``_gpgsign_enabled`` already read true -- this
@@ -938,6 +947,7 @@ def _sign_commit_tree(
     try:
         in_process = _sign_commit_in_process(
             repo, tree_sha, parent_sha, name, email, when, message,
+            extra_parents=extra_parents,
         )
     except Exception:  # noqa: BLE001 -- any in-process failure answers with the git path
         in_process = None
@@ -947,6 +957,8 @@ def _sign_commit_tree(
     args = ["commit-tree", "-S", tree_sha]
     if parent_sha:
         args += ["-p", parent_sha]
+    for extra in extra_parents:
+        args += ["-p", extra]
     env = dict(os.environ)
     env.update({
         "GIT_AUTHOR_NAME": name, "GIT_AUTHOR_EMAIL": email, "GIT_AUTHOR_DATE": when,
@@ -1088,8 +1100,15 @@ def commit_paths(
     modes: Optional[Mapping[str, int]] = None,
     expected_blobs: Optional[Mapping[str, str]] = None,
     expected_content_sha256: Optional[Mapping[str, str]] = None,
+    finish_merge: bool = False,
 ) -> CommitOutcome:
     """Commit exactly `paths` (+ remove `deleted_paths`). Zero git spawns.
+
+    `finish_merge` (DEFAULT FALSE): with `<gitdir>/MERGE_HEAD` present, commit the merge
+    with parents HEAD then MERGE_HEAD. `paths` + `deleted_paths` + `untracked_paths` must
+    equal the merge's own path set, no unmerged path may be left out, and no conflict marker
+    may remain (`merge_state.merge_refusal`); the merge state is cleared once the ref moves.
+    Without MERGE_HEAD it is an ordinary commit. The other four sequencer files still refuse.
 
     `modes` declares a path's tree-entry mode (e.g. 0o100755), taking
     precedence over the index entry and `_mode_for`. None leaves every
@@ -1371,6 +1390,10 @@ def commit_paths(
         ("rebase-merge", "rebase", "git rebase --continue"),
         ("rebase-apply", "rebase", "git rebase --continue"),
     ):
+        if _seq_file == "MERGE_HEAD" and finish_merge:
+            # An explicit caller that owns the merge: it names the merge's paths and gets
+            # the two-parent commit below instead of the refusal.
+            continue
         if (gitdir / _seq_file).exists():
             raise CommitRefused(
                 f"{repo} is partway through a {_seq_verb} "
@@ -1384,7 +1407,22 @@ def commit_paths(
     # THE ONE INDEX READ, and it decides nothing about mechanism: it answers
     # invariant 1 for exactly the k paths in this call. Scoped, so it never
     # materialises an entry outside `paths`.
-    staged = parse_index_identity(repo, wanted=set(path_list))
+    merge_view = None
+    if finish_merge and (gitdir / "MERGE_HEAD").exists():
+        try:
+            merge_view = merge_state.read_merge_state(repo)
+        except merge_state.MergeStateError as exc:
+            raise CommitRefused(f"cannot finish the merge: {exc}") from exc
+    if merge_view is not None:
+        merge_refused = merge_state.merge_refusal(
+            merge_view, set(path_list) | set(delete_list) | set(untrack_list), root
+        )
+        if merge_refused:
+            raise CommitRefused(merge_refused)
+    staged = parse_index_identity(
+        repo, wanted=set(path_list),
+        unmerged_out=set() if merge_view is not None else None,
+    )
 
     declared_modes = {k.replace("\\", "/"): v for k, v in (modes or {}).items()}
     assembled: Dict[str, object] = {}
@@ -1662,8 +1700,19 @@ def commit_paths(
         declared_set = {d.replace("\\", "/") for d in declared_reverts} | set(untrack_list)
         moved = rollback_check.moved_deletions(assembled, spine, _ABSENT)
         candidates: Dict[str, object] = {}
+        merge_side: Dict[str, object] = {}
+        if merge_view is not None:
+            info = read_commit(repo, merge_view.merge_head)
+            side = read_tree_spine(repo, list(assembled), root_tree_sha=info.tree) if info else None
+            for mp in assembled:
+                dir_, _, name_ = mp.rpartition("/")
+                hit = (side or {}).get(dir_, {}).get(name_)
+                if hit is not None:
+                    merge_side[mp] = hit
         for p, val in assembled.items():
             if p in declared_set or p in moved:
+                continue
+            if val is not _ABSENT and merge_side.get(p) == val:
                 continue
             if val is not _ABSENT and val[1] in created_blobs and not packed_contains(
                 resolve_git_common_dir(repo), val[1]
@@ -1717,6 +1766,10 @@ def commit_paths(
     body = f"tree {root_tree}\n"
     if old_head:
         body += f"parent {old_head}\n"
+    extra_parents: Tuple[str, ...] = ()
+    if merge_view is not None:
+        extra_parents = (merge_view.merge_head,)
+        body += f"parent {merge_view.merge_head}\n"
     body += f"author {who}\ncommitter {who}\n\n{message}"
     if not body.endswith("\n"):
         body += "\n"
@@ -1731,6 +1784,7 @@ def commit_paths(
         flush_object_batch()
         commit_sha, sign_warning = _sign_commit_tree(
             repo, root_tree, old_head, name, email, when, message,
+            extra_parents=extra_parents,
         )
     if commit_sha is None:
         # Unsigned: the commit object is queued into the batch, so blobs, trees
@@ -1759,6 +1813,12 @@ def commit_paths(
             "rebuilt against the new HEAD, and reusing this one would commit "
             "past a peer."
         )
+
+    if merge_view is not None:
+        # The ref move concluded the merge; a splice failure below must not leave MERGE_HEAD
+        # beside a moved HEAD, or a retry would build a second merge commit on the first.
+        # An OSError here (peer-held file on Windows) propagates after the commit landed.
+        merge_state.clear_merge_state(gitdir)
 
     try:
         from coordinator_core.git import store_hygiene
@@ -1797,11 +1857,15 @@ def commit_paths(
         worktree_over_staged=tuple(worktree_over_staged),
         no_delta=tuple(no_delta),
         sign_warning=sign_warning,
+        merge_parent=merge_view.merge_head if merge_view is not None else None,
     )
     try:
         for pause in (*_SPLICE_LOCK_BACKOFF_SECS, None):
             try:
-                index_write.splice_index(repo, index_updates, stat_fallback=True)
+                index_write.splice_index(
+                    repo, index_updates, stat_fallback=True,
+                    collapse_unmerged=merge_view.unmerged if merge_view is not None else (),
+                )
                 break
             except index_write.IndexWriteLockBusy:
                 # A peer's lock is held for the width of its own write; sleeping costs
@@ -1827,6 +1891,7 @@ def commit_paths(
         worktree_over_staged=tuple(worktree_over_staged),
         no_delta=tuple(no_delta),
         sign_warning=sign_warning,
+        merge_parent=merge_view.merge_head if merge_view is not None else None,
     )
 
 

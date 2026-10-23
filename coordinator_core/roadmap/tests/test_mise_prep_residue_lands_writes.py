@@ -67,6 +67,10 @@ def _plan_row(plan, declared=(), rewrote=()):
     return {"plan": plan, "declared": list(declared), "rewrote": list(rewrote), "leftoverCensus": [], "escalate": []}
 
 
+def _land_command(prompt: str) -> str:
+    return next(line for line in prompt.splitlines() if "ceremony.commit_v2" in line)
+
+
 def test_source_lands_through_commit_v2_only():
     text = SOURCE.read_text(encoding="utf-8")
     assert "ceremony.commit_v2" in text
@@ -85,8 +89,22 @@ def test_land_stage_takes_only_the_union_deduplicated(tmp_path):
     assert got["r"]["landPaths"] == ["docs/plans/p0.md", "docs/plans/p9.md", "state/mise-workflows/r.seam/p0.txt"]
     land = [c for c in got["calls"] if c[0] == "land-residue"]
     assert len(land) == 1
-    assert '/bin/coordinator-invoke" ceremony.commit_v2 --params-file REPO/scratch/mise-land-' in land[0][1]
+    assert "--params-file" not in land[0][1]
     assert "untouched.md" not in land[0][1]
+    from coordinator_core.bash_guards import block_subagent_commit as guard
+
+    cmd = _land_command(land[0][1])
+    assert guard._resolve_git_commit_agent_pathspec(cmd) == (got["r"]["landPaths"], False)
+    refused = cmd.replace(cmd[cmd.index("ceremony.commit_v2") + 19:cmd.index(" --repo")], "--params-file REPO/p.json")
+    assert guard._resolve_git_commit_agent_pathspec(refused) is None
+
+
+def test_land_leg_runs_as_the_commit_agent_the_guard_admits():
+    text = SOURCE.read_text(encoding="utf-8")
+    land = text[text.index("label: 'land-residue'"):]
+    land = land[:land.index("schema:")]
+    assert "agentType: 'coordinator:git-commit-agent'" in land
+    assert "residue.agentType" not in land
 
 
 @pytest.mark.spawns_process

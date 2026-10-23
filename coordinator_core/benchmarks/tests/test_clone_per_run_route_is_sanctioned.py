@@ -66,7 +66,7 @@ def _denied(out) -> bool:
 
 
 def test_post_executor_verification_neither_denies_nor_counts_the_grid_command(armed_repo) -> None:
-    assert verify_guard.check(_bash(armed_repo, "python -m pytest a.py")) is None
+    assert verify_guard.check(_bash(armed_repo, "python -m pytest")) is None
     counter = _counter(armed_repo)
     assert counter is not None and counter.read_text() == "1"
     for _ in range(3):

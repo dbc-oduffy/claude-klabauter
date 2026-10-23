@@ -89,6 +89,21 @@
       "type": "string",
       "maxLength": 1000,
       "description": "One-line statement of why the verdict holds."
+    },
+    "anchor_verdicts": {
+      "type": "array",
+      "description": "One entry per declared anchor premise, in declaration order; present whenever the plan declared at least one well-formed anchor. source says who supplied the verdict: a premise row, a live carry row, the in-process engine check, or none (verdict null).",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "verdict", "source", "observed"],
+        "properties": {
+          "id": { "type": "string" },
+          "verdict": { "type": ["string", "null"], "enum": ["RESOLVES", "UNRESOLVED", "CONTRADICTED", "UNCHECKABLE", null] },
+          "source": { "type": "string", "enum": ["row", "carry", "engine-check", "none"] },
+          "observed": { "type": "string" }
+        }
+      }
     }
   }
 }

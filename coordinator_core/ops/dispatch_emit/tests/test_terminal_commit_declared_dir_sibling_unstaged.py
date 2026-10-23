@@ -1,15 +1,16 @@
 """An unrelated untracked file beside a declared path stays unstaged and out of the product commit
-dispatch.terminal_commit makes, whether it is unclaimed, listed by a concurrent run's slice, or
+dispatch.terminal_commit makes, whether it is unclaimed, declared by a live peer run's manifest and listed in this run's slice, or
 claimed by this session."""
 
 from __future__ import annotations
 
+import json
 import subprocess
 from pathlib import Path
 
 import pytest
 
-from coordinator_core.ops.dispatch_emit import terminal_commit
+from coordinator_core.ops.dispatch_emit import run_token, terminal_commit
 from coordinator_core.ops.dispatch_emit.commit_request import (
     ChunkCommit,
     CommitRequest,
@@ -22,6 +23,7 @@ from coordinator_core.win_portability import no_console_creationflags
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 SELF = "5e1f0000-0000-4000-8000-0000000000a1"
+PEER = "5e1f0000-0000-4000-8000-0000000000b2"
 _REVIEWED = {"integration_stem": "rev-stem", "slices": 1, "fixes": 0}
 
 
@@ -75,8 +77,15 @@ def test_an_unclaimed_sibling_is_in_no_commit_and_stays_untracked(repo):
     assert "src/stray.py" in out["undeclared_dirty"]
 
 
-@pytest.mark.designed_red
 def test_a_sibling_a_concurrent_runs_slice_lists_is_not_in_the_product_commit(repo):
+    session_core.init(PEER, cwd=str(repo))
+    manifest_dir = repo / "state" / "warp" / "run-b"
+    manifest_dir.mkdir(parents=True)
+    (manifest_dir / "manifest.json").write_text(
+        json.dumps({"rows": [{"id": "C1", "writes": ["src/stray.py"]}], "doc_writes": []}),
+        encoding="utf-8",
+    )
+    run_token.mint(repo, "run-b", "b.mjs", session_id=PEER)
     reviewed = {**_REVIEWED, "prep": {"slice_files": ["src/stray.py"]}}
     out = _run(repo, session_id=SELF, inline_review=reviewed)
     assert out["committed"] is True, out

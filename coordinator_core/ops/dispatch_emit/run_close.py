@@ -120,6 +120,31 @@ class LegResult:
         return {"status": self.status, "detail": self.detail}
 
 
+#: On the review-stamp leg ``not-applicable`` means review did not run (reason in
+#: ``REVIEW_SKIP_REASONS``); ``failed`` means review ran and no stamp was minted.
+REVIEW_SKIP_REASONS: tuple[str, ...] = (
+    "no-plan",
+    "no-terminal-commit",
+    "not-opted-in",
+    "no-inventory-record",
+    "not-queued",
+    "no-review-outcome",
+)
+
+
+def review_skipped(reason: str, detail: str = "", root: Optional[Union[str, os.PathLike]] = None) -> LegResult:
+    """A ``not-applicable`` review-stamp result naming *reason*; ValueError outside ``REVIEW_SKIP_REASONS``."""
+    if reason not in REVIEW_SKIP_REASONS:
+        raise ValueError(f"unknown review skip reason: {reason!r}")
+    text = f"review skipped: {reason}" + (f": {detail}" if detail else "")
+    return LegResult("not-applicable", scrub_detail(text, root))
+
+
+def review_unminted(refusal: str, root: Optional[Union[str, os.PathLike]] = None) -> LegResult:
+    """A ``failed`` review-stamp result: review ran and the stamp mint refused with *refusal*."""
+    return LegResult("failed", scrub_detail(f"review ran, stamp not minted: {refusal}", root))
+
+
 CLOSE_KINDS: tuple[str, ...] = ("plan-run", "mise-run", "xs-s-run", "run-less-xs-s")
 
 
@@ -169,7 +194,10 @@ def build_close_block(
         if not applies:
             result = LegResult("not-applicable", "run does not land code")
         elif leg in LAND_RUN_ONLY_LEGS and leg not in legs:
-            result = LegResult("not-applicable", "paid only by a deferred close job")
+            if leg == "review-stamp":
+                result = review_skipped("not-queued")
+            else:
+                result = LegResult("not-applicable", "paid only by a deferred close job")
         else:
             result = legs.get(leg) or LegResult("failed", "leg did not run")
         out[leg] = result.to_dict()

@@ -287,10 +287,17 @@ def test_the_runs_own_session_claim_still_commits(repo):
 
 
 def _plan_run(repo: Path, request: CommitRequest, emitted_at: float, **params) -> dict:
-    """A plan run mints no run token: its script's mtime is when it was minted."""
+    """A plan run mints no run token: its emission receipt's emitted_at is when it was minted."""
+    from datetime import datetime
+
+    from coordinator_core.ops.dispatch_emit import emission_receipt
+
     script = repo / "plan-run.workflow.mjs"
     script.write_text("// emitted\n" + render_marker(request) + "\n", encoding="utf-8")
-    os.utime(script, (emitted_at, emitted_at))
+    emission_receipt.emission_receipt_path(script).write_text(
+        json.dumps({"emitted_at": datetime.fromtimestamp(emitted_at).isoformat(timespec="seconds")}),
+        encoding="utf-8",
+    )
     return terminal_commit._handler(
         {"script_path": script.name, "incomplete_chunks": [], "inline_review": _REVIEWED, **params},
         repo_root=repo / ".git",

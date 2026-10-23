@@ -103,24 +103,24 @@ def test_set_off_allowed_with_fresh_sentinel(box, cmd):
 
 
 def test_set_off_denied_in_next_pm_turn_without_fresh_touch(box):
+    """Name kept; the approval now holds its 30-minute window across PM turns."""
     _approve(box[1])
-    approval = box[1] / ".git" / SENTINEL
     _write_transcript(
         Path(_TRANSCRIPT),
         [("one", "2099-01-01T00:00:00Z"), ("two", "2099-01-01T00:01:00Z")],
     )
-    assert _deny(bash_guard.check(_bash(f"machine-local set {KEY} off", box[1])))
-    assert not approval.exists()
+    assert bash_guard.check(_bash(f"machine-local set {KEY} off", box[1])) is None
 
 
 def test_registry_file_write_off_denied_in_next_pm_turn(box):
+    """Name kept; the approval now holds its 30-minute window across PM turns."""
     _approve(box[1])
     _write_transcript(
         Path(_TRANSCRIPT),
         [("one", "2099-01-01T00:00:00Z"), ("two", "2099-01-01T00:01:00Z")],
     )
     path = box[0] / "registry.local.toml"
-    assert _deny(write_guard.check(_write(path, f'"{KEY}" = \'off\'\n')))
+    assert write_guard.check(_write(path, f'"{KEY}" = \'off\'\n')) is None
 
 
 def test_expired_sentinel_does_not_permit(box):

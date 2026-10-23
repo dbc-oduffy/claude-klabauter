@@ -25,10 +25,12 @@ PEER = "5e1f0000-0000-4000-8000-000000000012"
 RUN = "run-review-residue"
 STRAY = "elsewhere/tests/test_stray.py"
 FOREIGN = "foreign/other_run.py"
+EARLIER = "elsewhere/tests/earlier.py"
 _REVIEWED = {
     "integration_stem": "rev-stem", "slices": 1, "fixes": 0,
     "prep": {"slice_files": [STRAY, "elsewhere/tests/gone.py"]},
 }
+_UNLISTED = {"integration_stem": "rev-stem", "slices": 1, "fixes": 1}
 
 
 def _git(args, cwd: Path) -> str:
@@ -164,3 +166,29 @@ def test_a_review_write_outside_the_runs_own_files_is_left_dirty_and_not_halted(
     assert out["review_residue"] == [STRAY]
     assert FOREIGN not in _committed(repo)
     assert _dirty(repo, FOREIGN) != ""
+
+
+def test_a_review_edit_to_an_earlier_checkpoints_file_lands_when_the_review_record_lists_it(repo, monkeypatch):
+    (repo / EARLIER).write_text("v1\n", encoding="utf-8", newline="")
+    _git(["add", EARLIER], repo)
+    _git(["commit", "-q", "-m", "checkpoint(wave 1)"], repo)
+    (repo / EARLIER).write_text("v = 2\n", encoding="utf-8", newline="")
+    _review_wrote(monkeypatch, {EARLIER: "agent-1"})
+    out = _run(repo, inline_review={**_UNLISTED, "reverify": {"edited": [EARLIER]}})
+    assert out["committed"] is True, out
+    assert out["review_residue"] == [EARLIER]
+    assert EARLIER in _committed(repo)
+    assert _dirty(repo, EARLIER) == ""
+
+
+def test_an_earlier_checkpoint_file_the_review_record_omits_stays_dirty(repo, monkeypatch):
+    (repo / EARLIER).write_text("v1\n", encoding="utf-8", newline="")
+    _git(["add", EARLIER], repo)
+    _git(["commit", "-q", "-m", "checkpoint(wave 1)"], repo)
+    (repo / EARLIER).write_text("v = 3\n", encoding="utf-8", newline="")
+    _review_wrote(monkeypatch, {EARLIER: "agent-2"})
+    out = _run(repo, inline_review={**_UNLISTED, "reverify": {"edited": [STRAY]}})
+    assert out["committed"] is True, out
+    assert "review_residue" not in out
+    assert EARLIER not in _committed(repo)
+    assert _dirty(repo, EARLIER) != ""

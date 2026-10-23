@@ -555,7 +555,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--chatty",
         action="store_true",
-        help="plan route: compose an opt-in chatty workflow (roster, mailbox briefs, overseer wake stage)",
+        help="plan/ask route: compose an opt-in chatty workflow (roster, mailbox briefs, overseer wake stage)",
     )
     parser.add_argument(
         "--fire",
@@ -1929,6 +1929,8 @@ def main(argv: "Optional[list[str]]" = None) -> int:
             params["ask_context"] = [*args.context]
         if args.all_of_pm_ask:
             params["all_of_pm_ask"] = True
+        if args.chatty:
+            params["chatty"] = True
         if repo_root is None:
             repo_root = _default_repo_root_from_cwd()
     if is_research_route:

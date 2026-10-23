@@ -28,7 +28,9 @@ Suppression conditions (no_advisory):
      edits; authority is the APM ruling on calibration-ladder findings 60/61
      (relayed ask R1). The residue window opens on landing (run ids, no live run),
      superseding an XS lane; an XS lane closes to hand edits after GOLF_DENY_LIMIT
-     projected denies.
+     projected denies. An S+ sized session whose route has not fired is denied at strict
+     until it fires; once a run is live the advisory applies, once it has landed the
+     residue window applies.
 
   6. `op()` ONLY: scratch/tmp paths. Elsewhere `op()` answers the main EM's
      product-code write with a repeating advisory.
@@ -538,6 +540,10 @@ _SIZED_ADVISORY = (
     + fire_step(_SESSION_SIZING)
 )
 
+_ROUTE_UNFIRED_DENY = (
+    "Sized S or larger; its engine run has not fired. " + fire_step(_SESSION_SIZING)
+)
+
 _PLAN_ROUTE_ADVISORY = (
     "[em-code-dispatch nudge] This session's sizing routed to a plan. "
     + fire_step(_SESSION_SIZING)
@@ -680,8 +686,15 @@ def _budget_core(payload: dict, session_id: str, file_path: str, project) -> tup
             head = git_state.head_sha(root)
             if head and xlb.open_xs_lane(root, session_id, head):
                 rec = xlb.read_lane(root, session_id)
+        unfired = False
+        if s_plus and (rec is None or rec.get("kind") != xlb.KIND_RESIDUE):
+            from coordinator_core.session.engine_route_state import PHASE_UNFIRED, session_route_phase
+
+            unfired = session_route_phase(root, session_id) == PHASE_UNFIRED
     except Exception:
         return False, None
+    if unfired:
+        return True, _budget_deny(_ROUTE_UNFIRED_DENY)
     if rec is None:
         return False, None
     kind = rec.get("kind")
@@ -706,7 +719,7 @@ def _budget_core(payload: dict, session_id: str, file_path: str, project) -> tup
     if usage.over:
         if not residue:
             try:
-                denies = xlb.record_deny(root, session_id)
+                denies = xlb.record_deny(root, session_id, usage, [*rec.get("paths", []), file_path])
             except Exception:
                 denies = 0
             if denies >= xlb.GOLF_DENY_LIMIT:
@@ -734,6 +747,11 @@ def op(payload: dict) -> dict | None:
     A recorded XS lane allows in-budget edits and denies the first past 2 files / 30 changed
     lines; a landed session's residue edits are advised under that budget and denied over it
     (`_budget_decision`). A lane closes after GOLF_DENY_LIMIT projected denies.
+
+    An S+ sized session whose route has not fired is denied at strict until it fires (advised
+    at warn); once a run is live the advisory applies, once it has landed the residue window
+    applies. `touched_s_or_larger` reads the session's whole touch record, so any S+ (or
+    unreadable) sizing it touched counts, not only the one being delivered.
 
     Exempt: doc/data files, bootstrap/out-of-repo, semantic-bypass
     diffs, scratch/tmp, autonomous mode, and a sentinel carrying a reason

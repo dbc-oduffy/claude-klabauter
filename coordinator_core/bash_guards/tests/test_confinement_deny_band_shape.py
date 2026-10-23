@@ -278,7 +278,7 @@ _EXTRA_FIRING_ROWS: List[CorpusRow] = [
     CorpusRow(
         "guard-post-executor-verification",
         "guard-post-executor-verification-fire",
-        "python -m pytest tests/test_x.py",
+        "python -m pytest",
         True,
         GuardBand.CONFINEMENT_DENY,
         False,

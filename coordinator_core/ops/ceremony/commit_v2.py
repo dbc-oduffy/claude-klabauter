@@ -564,8 +564,9 @@ def _pre_commit_gates(
     `read_index` unscoped -- 35.16ms of the ~40ms it costs -- and the obvious
     swap to `parse_index_identity` (1.95-3.91ms, and what `commit_paths`
     already uses) does NOT preserve behaviour: `read_index` raises
-    `IndexParseError` on an unmerged index and `parse_index_identity` does
-    not, so the swap would silently turn a mid-merge-conflict refusal into a
+    `IndexParseError` on an unmerged index and `parse_index_identity` raises
+    it too unless handed `unmerged_out`; a swap that passed `unmerged_out`
+    would silently turn a mid-merge-conflict refusal into a
     pass -- the exact regression this gate's own F1 code-review finding
     exists to prevent. Reinstating it as written would also put this op over
     `PROCESS_TIME_TARGET_MS` (50.0), the standing budget its own gate asserts.
@@ -794,6 +795,7 @@ def _land(
     expected_blobs: Optional[dict] = None,
     expected_content_sha256: Optional[dict] = None,
     allow_empty: bool = False,
+    finish_merge: bool = False,
 ) -> _Landing:
     """One `commit_paths` attempt; `allow_empty` is tried only after `NothingToCommit` with no predecessor."""
 
@@ -807,6 +809,7 @@ def _land(
             prefer_staged=prefer_staged,
             prefer_deliberate_stage=deliberate_stage,
             allow_empty=empty_ok,
+            finish_merge=finish_merge,
             blob_fallback=partial(hash_worktree_blobs_via_spawn, cwd=worktree_root),
             detect_rollback=True,
             declared_reverts=declared_reverts,
@@ -984,6 +987,10 @@ def _handler_body(params: dict, repo_root: Optional[Path], ledger: PhaseLedger) 
                                        HEAD's) when every declared path already matches HEAD.
                                        Tried only after nothing-to-commit and no recent commit
                                        carries this message. A mixed set lands at most one marker.
+        finish_merge (bool, optional, DEFAULT FALSE) -- with MERGE_HEAD present and every conflict
+                                       resolved, land the merge as one two-parent commit over
+                                       `paths`; the reply carries `merge_parent`. Refused when
+                                       the paths split into product and process halves.
         session_id (str, optional)  -- canonical UUID (8-4-4-4-12 hex,
                                        case-insensitive) threaded into
                                        `apply_missing_trailers` as
@@ -1109,6 +1116,9 @@ def _handler_body(params: dict, repo_root: Optional[Path], ledger: PhaseLedger) 
     raw_allow_empty = params.get("allow_empty", False)
     if not isinstance(raw_allow_empty, bool):
         return _error("params.allow_empty must be a boolean")
+    raw_finish_merge = params.get("finish_merge", False)
+    if not isinstance(raw_finish_merge, bool):
+        return _error("params.finish_merge must be a boolean")
 
     session_id_override = params.get("session_id")
     if session_id_override is not None:
@@ -1414,6 +1424,12 @@ def _handler_body(params: dict, repo_root: Optional[Path], ledger: PhaseLedger) 
     mixed = bool(prod_paths or prod_deleted or prod_untracked) and bool(
         proc_paths or proc_deleted or proc_untracked
     )
+    if mixed and raw_finish_merge:
+        return _error(
+            "params.finish_merge needs one commit, but these paths split into product and "
+            "process halves; a merge cannot land as two commits. Commit the merge paths of "
+            "one half."
+        )
     if mixed:
         proc_set = set(proc_paths) | set(proc_deleted) | set(proc_untracked)
         halves = [
@@ -1455,6 +1471,7 @@ def _handler_body(params: dict, repo_root: Optional[Path], ledger: PhaseLedger) 
                 ),
                 deliberate_stage=raw_prefer_deliberate_stage,
                 allow_empty=raw_allow_empty and not landed_halves and half_index == len(halves) - 1,
+                finish_merge=raw_finish_merge,
                 declared_reverts=(
                     [p for p in raw_declared_reverts if (p in proc_set) == is_process]
                     if mixed else raw_declared_reverts
@@ -1647,4 +1664,7 @@ def _handler_body(params: dict, repo_root: Optional[Path], ledger: PhaseLedger) 
         result["checkpoint_stamp"] = checkpoint_stamp
     if process_sha is not None:
         result["process_sha"] = process_sha
+    merge_parent = next((o.merge_parent for o in outcomes if o.merge_parent), None)
+    if merge_parent is not None:
+        result["merge_parent"] = merge_parent
     return result

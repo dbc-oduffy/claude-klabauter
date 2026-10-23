@@ -91,6 +91,30 @@ def run_base_for(worktree_root: Path, run_id: Optional[str], params: Mapping) ->
     return ask_fanout_contract.recorded_run_base(Path(worktree_root), run_id)
 
 
+def closing_bases(worktree_root: Path, run_id: Optional[str], params: Mapping) -> tuple:
+    """The 40-hex bases a run's closing or halt trailer names, deduplicated, in order: the stage
+    manifest ``head_sha``, then ``run_base_for``, then ``params["review_run_base"]``.
+
+    The manifest comes first because the ask route's checkpoints carry it as ``Checkpoint-Base``
+    (``emit._checkpoint_trailer_js`` stamps ``_RUN_BASE_VAR`` from the emit sha), and it differs
+    from the submission ``run_base_sha``. A trailing ``.workflow`` is stripped from ``run_id``.
+    In-process file reads only; empty when nothing resolves."""
+    found: list = []
+    rid = run_id[: -len(".workflow")] if isinstance(run_id, str) and run_id.endswith(".workflow") else run_id
+    if rid:
+        try:
+            from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
+
+            data = json.loads((record_dir(Path(worktree_root), rid) / "manifest.json").read_text(encoding="utf-8"))
+            head = data.get("head_sha") if isinstance(data, dict) else None
+            found.append(head)
+        except (OSError, ValueError):
+            pass
+    found.append(run_base_for(worktree_root, rid, params))
+    found.append(params.get("review_run_base"))
+    return tuple(dict.fromkeys(b for b in found if isinstance(b, str) and re.fullmatch(r"[0-9a-f]{40}", b)))
+
+
 def targeted_test_verdict(params: Mapping) -> Optional[Mapping]:
     """The test verdict a commit's params carry: ``params["targeted_tests"]``, else
     ``params["inline_review"]["tests"]`` or ``params["run_outcome"]["inline_review"]["tests"]``

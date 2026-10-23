@@ -1065,8 +1065,7 @@ def test_cloud_denies_on_missing_transcript(tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Turn-bound approval: a touch binds to the PM turn it precedes and disarms
-# itself once its turn is no longer the previous one (the touch precedes turn T).
+# Window-bound approval: only the 30-minute window gates the edit, never the PM turn.
 # ---------------------------------------------------------------------------
 
 _HEAD_SUBAGENT_DENY = (
@@ -1124,21 +1123,21 @@ def _turns(*offsets):
     return [(f"turn {i}", _iso(off)) for i, off in enumerate(offsets)]
 
 
-def test_approval_allows_in_turn_t_denies_in_turn_t_plus_1_and_is_removed(turn_env):
+def test_approval_from_turn_n_admits_in_turn_n_plus_1_within_window(turn_env):
     repo, tmp_path = turn_env
     _touch_at(_gs(repo), -200)
-    in_t = _turn_payload(repo, tmp_path, _turns(-300, -100))
-    assert not _denied(guard.check(in_t))
-    in_t1 = _turn_payload(repo, tmp_path, _turns(-300, -100, -10))
-    assert _denied(guard.check(in_t1))
-    assert not _gs(repo).exists()
+    in_n = _turn_payload(repo, tmp_path, _turns(-300, -100))
+    assert not _denied(guard.check(in_n))
+    in_n1 = _turn_payload(repo, tmp_path, _turns(-300, -100, -10))
+    assert not _denied(guard.check(in_n1))
+    assert _gs(repo).exists()
 
 
-def test_fresh_touch_rearms_in_turn_t_plus_1(turn_env):
+def test_approval_is_refused_after_the_window_whatever_the_turn(turn_env):
     repo, tmp_path = turn_env
-    _touch_at(_gs(repo), -200)
+    _touch_at(_gs(repo), -(guard._APPROVAL_WINDOW_SECONDS + 60))
     assert _denied(guard.check(_turn_payload(repo, tmp_path, _turns(-300, -100, -10))))
-    _touch_at(_gs(repo), -5)
+    _touch_at(_gs(repo), -(guard._APPROVAL_WINDOW_SECONDS - 60))
     assert not _denied(guard.check(_turn_payload(repo, tmp_path, _turns(-300, -100, -10))))
 
 
@@ -1151,31 +1150,12 @@ def test_two_edits_in_one_turn_both_allow(turn_env):
     assert _gs(repo).exists()
 
 
-def test_sentinel_older_than_previous_turn_denies(turn_env):
-    repo, tmp_path = turn_env
-    _touch_at(_gs(repo), -600)
-    assert _denied(guard.check(_turn_payload(repo, tmp_path, _turns(-300, -100))))
-    assert not _gs(repo).exists()
-
-
-def test_missing_transcript_path_denies_and_keeps_sentinel(turn_env):
+def test_missing_transcript_path_does_not_affect_a_fresh_approval(turn_env):
     repo, tmp_path = turn_env
     _touch_at(_gs(repo), -200)
     payload = _turn_payload(repo, tmp_path, _turns(-100))
     del payload["transcript_path"]
-    assert _denied(guard.check(payload))
-    assert _gs(repo).exists()
-
-
-def test_transcript_without_genuine_turn_denies_and_keeps_sentinel(turn_env):
-    repo, tmp_path = turn_env
-    _touch_at(_gs(repo), -200)
-    payload = _turn_payload(repo, tmp_path, _turns(-100))
-    (tmp_path / "turns.jsonl").write_text(
-        json.dumps({"type": "assistant", "message": {"role": "assistant", "content": "hi"}}) + "\n",
-        encoding="utf-8",
-    )
-    assert _denied(guard.check(payload))
+    assert not _denied(guard.check(payload))
     assert _gs(repo).exists()
 
 
@@ -1184,12 +1164,13 @@ def test_em_audience_allow_and_deny_state_the_lifetime(turn_env):
     _touch_at(_gs(repo), -200)
     allowed = guard.check(_turn_payload(repo, tmp_path, _turns(-300, -100)))
     context = allowed["hookSpecificOutput"]["additionalContext"]
-    assert "disarms itself when the turn ends" in context
+    assert "30 minutes" in context
     assert "nothing to remove" in context
     assert guard._SENTINEL_NAME not in context
+    _touch_at(_gs(repo), -(guard._APPROVAL_WINDOW_SECONDS + 60))
     denied = guard.check(_turn_payload(repo, tmp_path, _turns(-300, -100, -10)))
     reason = denied["hookSpecificOutput"]["permissionDecisionReason"]
-    assert "disarms itself" in reason
+    assert "30 minutes" in reason
     assert "nothing to remove" in reason
     assert guard._SENTINEL_NAME not in reason
 
@@ -1211,30 +1192,16 @@ def test_subagent_audience_render_is_unchanged(turn_env, monkeypatch):
     monkeypatch.setattr(guard, "resolves_em_audience", lambda payload, root: False)
     _touch_at(_gs(repo), -200)
     assert guard.check(_turn_payload(repo, tmp_path, _turns(-300, -100))) is None
+    _touch_at(_gs(repo), -(guard._APPROVAL_WINDOW_SECONDS + 60))
     denied = guard.check(_turn_payload(repo, tmp_path, _turns(-300, -100, -10)))
     reason = denied["hookSpecificOutput"]["permissionDecisionReason"]
     assert reason == _HEAD_SUBAGENT_DENY.replace("CLAUDE.md is", f"{repo / 'CLAUDE.md'} is", 1)
 
 
-def test_pm_approval_fresh_is_turn_bound_and_fails_closed_without_payload(turn_env):
-    repo, tmp_path = turn_env
-    _touch_at(_gs(repo), -200)
-    assert guard.pm_approval_fresh(str(repo)) is False
-    assert guard.pm_approval_fresh(str(repo), _turn_payload(repo, tmp_path, _turns(-300, -100)))
-    assert not guard.pm_approval_fresh(
-        str(repo), _turn_payload(repo, tmp_path, _turns(-300, -100, -10))
-    )
-
-
-def test_turn_bound_state_spawns_nothing(turn_env, monkeypatch):
+def test_pm_approval_fresh_is_window_bound(turn_env):
     repo, tmp_path = turn_env
     _touch_at(_gs(repo), -200)
     payload = _turn_payload(repo, tmp_path, _turns(-300, -100, -10))
-
-    def _boom(*args, **kwargs):
-        raise AssertionError("_turn_bound_state spawned a process")
-
-    monkeypatch.setattr(subprocess, "run", _boom)
-    monkeypatch.setattr(subprocess, "Popen", _boom)
-    monkeypatch.setattr(os, "system", _boom)
-    assert guard._turn_bound_state(str(repo), payload) == "deny-expired"
+    assert guard.pm_approval_fresh(str(repo), payload)
+    _touch_at(_gs(repo), -(guard._APPROVAL_WINDOW_SECONDS + 60))
+    assert not guard.pm_approval_fresh(str(repo), payload)

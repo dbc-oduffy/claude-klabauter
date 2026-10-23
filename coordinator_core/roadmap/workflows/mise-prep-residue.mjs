@@ -221,18 +221,16 @@ for (const batch of (args.batches || [])) {
 let landed = null;
 if (landPaths.length > 0) {
   await phase('Land');
-  const landParamsPath = args.repoRoot + '/scratch/mise-land-' + args.runId + '.json';
+  const landParams = JSON.stringify({ paths: landPaths, message: 'mise-prep residue: land plans and seam notes (run ' + args.runId + ')' }).replace(/'/g, "'\\''");
   landed = await agent(
     'Repo root: ' + args.repoRoot + ' -- `cd` there first.\n'
-    + 'Step 1: with your Write tool (no shell heredoc), write this exact JSON to `' + landParamsPath + '`:\n'
-    + JSON.stringify({ paths: landPaths, message: 'mise-prep residue: land plans and seam notes (run ' + args.runId + ')' }, null, 2) + '\n'
-    + 'Step 2: run this one command as its own Bash call, and nothing else:\n'
-    + '"${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/bin/coordinator-invoke" ceremony.commit_v2 --params-file ' + landParamsPath + ' --repo ' + args.repoRoot + '\n'
+    + 'Run this one command as its own Bash call, verbatim, and nothing else (the inline JSON is what the commit guard reads; no params file):\n'
+    + '"${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/bin/coordinator-invoke" ceremony.commit_v2 \'' + landParams + '\' --repo ' + args.repoRoot + '\n'
     + 'Return `committed`, `sha`, `error` and `refused` from its JSON reply (null where absent). You stage and run nothing else.',
     {
       label: 'land-residue',
       phase: 'Land',
-      agentType: args.residue.agentType,
+      agentType: 'coordinator:git-commit-agent',
       model: args.residue.model,
       schema: {
         type: 'object',

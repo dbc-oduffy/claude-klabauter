@@ -71,13 +71,11 @@ deliberately NOT printed in the deny message — see Deny message below):
   - a file at the repo root instead -> DENY (a root file never approves)
   - present, mtime older than APPROVAL_WINDOW_SECONDS (30 minutes) -> DENY
     (treated as expired)
-  - present, mtime within the window -> turn-bound check: ALLOW only while
-    the sentinel was touched after the previous genuine PM turn began
-    (`_turn_bound_state`); an older one is unlinked and DENIED. One approval
-    covers a multi-edit change inside one PM turn. No readable transcript or
-    genuine PM turn -> DENY (fail closed). EM audience gets a lifetime
-    sentence on allow and on deny; other audiences are unchanged. A sentinel
-    judged stale is deleted by the guard at deny time; nothing else removes it.
+  - present, mtime within the window -> ALLOW, whatever PM turn the edit
+    lands in; the window alone gates the edit, so a background run that
+    reaches its edit after the approving turn ended is admitted. EM audience
+    gets a lifetime sentence on allow and on deny; other audiences are
+    unchanged. An expired sentinel is left in place (denied by age).
 
 Fail-closed is DELIBERATE and is the one place this guard differs from
 every sibling guard in this tree. Every other guard fails OPEN on its own
@@ -620,55 +618,6 @@ def _last_pm_turn(transcript_path: Any) -> str:
     return turns[0]["text"] if turns else ""
 
 
-def _epoch_of(timestamp: Any) -> "float | None":
-    if not isinstance(timestamp, str) or not timestamp:
-        return None
-    try:
-        parsed = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
-        if parsed.tzinfo is None:
-            parsed = parsed.replace(tzinfo=timezone.utc)
-        return parsed.timestamp()
-    except ValueError:
-        return None
-
-
-def _turn_bound_state(root: "str | None", payload: Optional[Dict[str, Any]]) -> str:
-    """"allow" or "deny-expired" for a sentinel `_sentinel_state` already allowed.
-
-    An approval binds to the PM turn it was given for: one touched before the
-    previous genuine PM turn began is stale, so it is unlinked and denied. No
-    readable transcript or genuine turn denies and deletes nothing. Stateless:
-    the sentinel is the only file read or written; no process is spawned.
-    """
-    if not isinstance(payload, dict):
-        return "deny-expired"
-    turns = _pm_turn_entries(payload.get("transcript_path"))
-    if not turns:
-        return "deny-expired"
-    if len(turns) < 2:
-        try:
-            truncated = os.path.getsize(payload["transcript_path"]) > _TRANSCRIPT_TAIL_BYTES
-        except OSError:
-            return "deny-expired"
-        return "deny-expired" if truncated else "allow"
-    previous_start = _epoch_of(turns[1]["timestamp"])
-    git_dir = _git_dir(root) if root else None
-    if previous_start is None or not git_dir:
-        return "deny-expired"
-    sentinel_path = os.path.join(git_dir, _SENTINEL_NAME)
-    try:
-        mtime = os.path.getmtime(sentinel_path)
-    except OSError:
-        return "deny-expired"
-    if mtime > previous_start:
-        return "allow"
-    try:
-        os.unlink(sentinel_path)
-    except OSError:
-        pass
-    return "deny-expired"
-
-
 def _pm_turn_names_target(payload: Dict[str, Any], target: str, repo_root: "str | None") -> bool:
     """Cloud only: the latest PM turn names `target` by repo-relative path or basename."""
     if not _in_cloud_session():
@@ -746,11 +695,11 @@ def _deny_reason(
 
 
 _LIFETIME_CONTEXT = (
-    "[doctrine-surface guard] PM approval in effect for this turn only; it "
-    "disarms itself when the turn ends, so there is nothing to remove."
+    "[doctrine-surface guard] PM approval in effect for 30 minutes from the "
+    "approval; it expires on its own, so there is nothing to remove."
 )
 _LIFETIME_DENY_SUFFIX = (
-    " An approval lasts one PM turn and disarms itself; there is nothing to remove."
+    " An approval lasts 30 minutes and expires on its own; there is nothing to remove."
 )
 
 
@@ -872,21 +821,15 @@ def _sentinel_write_deny_reason() -> str:
 def pm_approval_fresh(
     cwd: "str | None" = None, payload: "Optional[Dict[str, Any]]" = None
 ) -> bool:
-    """True when the PM's approval sentinel exists under the git dir, is
-    unexpired, and was given for the current PM turn; the session repo is
-    resolved from `cwd` when given. `payload=None` fails closed. A root-level
-    approval file is unlinked by this call, which returns False once."""
-    if payload is None:
-        return False
+    """True when the PM's approval sentinel exists under the git dir and is
+    within the approval window; the session repo is resolved from `cwd` when
+    given. `payload` is accepted for caller compatibility and unused. A
+    root-level approval file is unlinked by this call, which returns False once."""
     try:
         root = resolve_repo_root(cwd=cwd) if cwd else _git_root()
     except Exception:
         return False
-    root = root or None
-    return (
-        _sentinel_state(root) == "allow"
-        and _turn_bound_state(root, payload) == "allow"
-    )
+    return _sentinel_state(root or None) == "allow"
 
 
 _GATE_KEY = "coordinator.feature." + _GATE_FEATURE
@@ -1096,8 +1039,6 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         owning_root = foreign_root
 
     state = _sentinel_state(owning_root or repo_root)
-    if state == "allow":
-        state = _turn_bound_state(owning_root or repo_root, payload)
     if state != "allow" and _pm_turn_names_target(payload, target, owning_root or repo_root):
         state = "allow"
     if state == "allow":

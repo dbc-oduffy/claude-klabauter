@@ -111,3 +111,72 @@ def test_allow_source_rollback_flag_reaches_the_round(monkeypatch, tmp_path):
 
     assert rc == 0
     assert len(reached) == 1
+
+
+def _out(args, cwd) -> str:
+    return subprocess.run(
+        ["git", *args], cwd=str(cwd), check=True, capture_output=True, text=True, **no_console_creationflags()
+    ).stdout.strip()
+
+
+def _shared_and_clone(tmp_path: Path):
+    shared = tmp_path / "shared"
+    shared.mkdir()
+    _git(["init", "-q"], shared)
+    _git(["config", "user.email", "t@t.example"], shared)
+    _git(["config", "user.name", "t"], shared)
+    (shared / "a.py").write_text("a = 1\n", encoding="utf-8")
+    _git(["add", "--", "a.py"], shared)
+    _git(["commit", "-q", "-m", "seed"], shared)
+    _git(["branch", "-m", "work/shared"], shared)
+    clone = tmp_path / "clone"
+    _git(["clone", "-q", str(shared), str(clone)], tmp_path)
+    _git(["config", "user.email", "t@t.example"], clone)
+    _git(["config", "user.name", "t"], clone)
+    _git(["checkout", "-q", "-b", "round1-merge"], clone)
+    (clone / "b.py").write_text("b = 1\n", encoding="utf-8")
+    _git(["add", "--", "b.py"], clone)
+    _git(["commit", "-q", "-m", "merge"], clone)
+    return shared, clone, _out(["rev-parse", "HEAD"], clone)
+
+
+def test_private_clone_commit_on_candidate_source_ref_reaches_the_round(monkeypatch, tmp_path):
+    shared, clone, sha = _shared_and_clone(tmp_path)
+    _git(["config", "receive.denyCurrentBranch", "ignore"], shared)
+    _git(["push", "-q", "origin", f"{sha}:refs/heads/candidate-source"], clone)
+    before = _out(["rev-parse", "work/shared"], shared)
+
+    rc, reached = _run(monkeypatch, tmp_path, clone, "--source-ref", sha)
+
+    assert rc == 0
+    assert len(reached) == 1
+    assert _out(["rev-parse", "work/shared"], shared) == before
+    assert _out(["symbolic-ref", "HEAD"], shared) == "refs/heads/work/shared"
+    assert subprocess.run(
+        ["git", "config", "branch.round1-merge.remote"], cwd=str(clone), capture_output=True, text=True,
+        **no_console_creationflags(),
+    ).returncode != 0
+    _git(["cat-file", "-e", f"{sha}^{{commit}}"], shared)
+
+
+def test_unpublished_source_ref_refuses_before_the_round(monkeypatch, tmp_path, capsys):
+    _shared, clone, sha = _shared_and_clone(tmp_path)
+
+    rc, reached = _run(monkeypatch, tmp_path, clone, "--source-ref", sha)
+
+    assert rc == _mod._EXIT_FAIL
+    assert reached == []
+    assert "candidate-source" in capsys.readouterr().err
+
+
+def test_source_ref_lacking_the_mirror_stamp_refuses(monkeypatch, tmp_path, capsys):
+    shared, clone, sha = _shared_and_clone(tmp_path)
+    _git(["config", "receive.denyCurrentBranch", "ignore"], shared)
+    _git(["push", "-q", "origin", f"{sha}:refs/heads/candidate-source"], clone)
+    _stamp_mirror_with_foreign_head(tmp_path)
+
+    rc, reached = _run(monkeypatch, tmp_path, clone, "--source-ref", sha)
+
+    assert rc == _mod._EXIT_FAIL
+    assert reached == []
+    assert "deadbeefcafe" in capsys.readouterr().err

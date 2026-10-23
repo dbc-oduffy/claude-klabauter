@@ -531,8 +531,8 @@ def _install_currency_banner(out: List[str], env: Mapping[str, Any]) -> None:
 
     if age_hours >= _CURRENCY_BANNER_STALE_HOURS:
         out.append(
-            f"── Install currency: stale-unknown ({age_hours:.0f}h old, refresh window is "
-            f"{_CURRENCY_BANNER_STALE_HOURS}h) — /workday-start refreshes it ──\n"
+            f"── Install currency: stale ({age_hours:.0f}h > {_CURRENCY_BANNER_STALE_HOURS}h) "
+            "— /workday-start ──\n"
         )
         return
 
@@ -592,8 +592,8 @@ def _corpus_currency_banner(out: List[str], env: Mapping[str, Any]) -> None:
 
     if age_hours >= _CURRENCY_BANNER_STALE_HOURS:
         out.append(
-            f"── Corpus currency: stale-unknown ({age_hours:.0f}h old, refresh window is "
-            f"{_CURRENCY_BANNER_STALE_HOURS}h) — /workday-start refreshes it ──\n"
+            f"── Corpus currency: stale ({age_hours:.0f}h > {_CURRENCY_BANNER_STALE_HOURS}h) "
+            "— /workday-start ──\n"
         )
         return
 
@@ -720,7 +720,7 @@ def _engine_resolution_banner(out: List[str]) -> None:
     if klass == RESOLUTION_RESOLVED_ENGINE:
         out.append(f"── Engine: published engine mirror{branch_suffix} — this session's hooks resolve to {root} ──\n")
     elif klass == RESOLUTION_LIVE_WORKING_TREE:
-        out.append(f"── Engine: sibling LIVE working tree{branch_suffix} — this session's hooks resolve here ──\n")
+        out.append(f"── Engine: sibling LIVE working tree{branch_suffix} ──\n")
 
 
 def _extract_cache_field(cache_text: str, key: str) -> str:
@@ -873,8 +873,6 @@ def _handle_cache_present_boot(out: List[str], cache_text: Optional[str]) -> boo
     out.append("\n")
     out.append(_cache_banner_line(cache_text))
     out.append(cache_text)
-    out.append("\n")
-    out.append("── Orientation: 1 document loaded (from cache) ──\n")
     return True
 
 

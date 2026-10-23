@@ -60,10 +60,11 @@ MUTATES = [
 import hashlib
 import json
 import os
+import posixpath
 import re
 import time
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import List, Optional, Sequence
 
 import yaml
@@ -342,6 +343,13 @@ def _claim(lock: Path) -> bool:
     return False
 
 
+def _inside_repo(path: str) -> bool:
+    """False for a path git cannot pathspec in this repo: absolute, drive-lettered, or escaping via ``..``
+    (a withheld cross-repo row's write)."""
+    norm = posixpath.normpath(path.replace("\\", "/"))
+    return not (norm == ".." or norm.startswith("../") or norm.startswith("/") or PureWindowsPath(path).drive)
+
+
 def review_prep(
     repo_root: Path,
     *,
@@ -364,6 +372,7 @@ def review_prep(
         return _fail("group_index and group_count go together")
     if group_count is not None and not (group_count >= 1 and 0 <= group_index < group_count):
         return _fail("group_index must be in [0, group_count) and group_count at least 1")
+    paths = [posixpath.normpath(p.replace("\\", "/")) if ".." in p else p for p in paths if _inside_repo(p)]
     if not paths:
         # A pathspec-less `git diff <base>` would diff the whole tree: answer before any git, lock or sidecar.
         zero = _fail("")

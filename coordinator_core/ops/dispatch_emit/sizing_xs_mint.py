@@ -24,6 +24,7 @@ from coordinator_core.ops.dispatch_emit.inventory_mint import (
     _refuse_if_glob,
 )
 from coordinator_core.ops import requirement_register as rr
+from coordinator_core.ops.dispatch_emit.ask_exclusions import drop_excluded, excluded_paths, is_excluded
 from coordinator_core.git.tracked_case import tracked_spelling
 from coordinator_core.ops.dispatch_emit.ledger_remaining_paths import gated_paths, named_paths
 from coordinator_core.ops.dispatch_emit.source_memo_ref import sizing_source_memo
@@ -123,6 +124,15 @@ def _is_plan_or_problem_body(path: str) -> bool:
     return bool(_PLAN_BODY_RE.search(posixpath.normpath(path.replace("\\", "/")).lower()))
 
 
+_EDIT_VERB = re.compile(
+    r"\b(?:edit|edits|modify|change|update|add|append|write|strip|remove|delete|rewrite|create|amend|fix|replace|rename)\b",
+    re.IGNORECASE,
+)
+
+
+_DETECT_CUE = re.compile(r"\b(?:holds?|contains?|detects?|detected|detection|ancestors?|exists?|present|finds?)\b", re.IGNORECASE)
+
+
 def _ledger_named_paths(sizing: Mapping, repo_root: Path | None) -> list[str]:
     """Existing repo files the open register rows name literally; `[]` without a `repo_root`."""
     if repo_root is None:
@@ -134,7 +144,20 @@ def _ledger_named_paths(sizing: Mapping, repo_root: Path | None) -> list[str]:
         for r in rows or ()
         if isinstance(r, Mapping) and r.get(rr.ROW_STATUS) not in (rr.STATUS_DEFERRED, rr.STATUS_WAIVED)
     ]
-    return named_paths(texts, Path(repo_root), spelling=functools.partial(tracked_spelling, Path(repo_root)))
+    found = named_paths(texts, Path(repo_root), spelling=functools.partial(tracked_spelling, Path(repo_root)))
+    # Trap: a CLAUDE.md-class file named only as something to detect is not an edit surface, and it
+    # would otherwise mint an EM row nothing performs.
+    return [p for p in found if not (gated_paths([p]) and _named_only_as_target(p, texts))]
+
+
+def _named_only_as_target(path: str, texts: Sequence[str]) -> bool:
+    names = {path.lower(), PurePosixPath(path).name.lower()}
+    naming = [t for t in texts if any(n in t.lower() for n in names)]
+    return bool(naming) and all(_DETECT_CUE.search(t) and not _EDIT_VERB.search(t) for t in naming)
+
+
+class AskExcludedWriteError(ValueError):
+    """A supplied `writes` entry falls under a path the sizing's ask rules out."""
 
 
 class MemoReceiverUnresolvedError(ValueError):
@@ -192,6 +215,13 @@ def mint_xs_spine(
     paths = [str(w).replace("\\", "/") for w in writes]
     if not paths:
         raise ValueError("XS arm needs at least one --writes path")
+    excluded = excluded_paths(sizing)
+    for path in paths:
+        if is_excluded(path, excluded):
+            raise AskExcludedWriteError(
+                f"{path} is a supplied write the ask excludes (exclusions: {', '.join(excluded)}): "
+                "drop it from writes or revise the ask"
+            )
     for path in paths:
         _refuse_if_glob(XS_ROW_ID, path, path)
         _refuse_if_directory_shaped(XS_ROW_ID, path, path)
@@ -200,7 +230,7 @@ def mint_xs_spine(
 
     drafts = [p for p in paths if memo_outbox_topic(posixpath.normpath(p))]
     paths = [p for p in paths if p not in drafts]
-    ledger = _ledger_named_paths(sizing, repo_root)
+    ledger = drop_excluded(_ledger_named_paths(sizing, repo_root), excluded)
     ledger = [p for p in ledger if p not in drafts]
     paths = [p for p in paths if p not in ledger]
     em_paths = list(dict.fromkeys(gated_paths([*paths, *ledger])))

@@ -380,11 +380,11 @@ class _PathNotContained(Exception):
     pass
 
 
-def _resolve_path(plan_path: str, worktree: Path) -> Path:
+def _resolve_path(plan_path: str, worktree: Path, *, extra_roots: tuple = ()) -> Path:
     p = Path(plan_path)
     if not p.is_absolute():
         p = worktree / p
-    allowed_roots = [worktree / "docs" / "plans"]
+    allowed_roots = [worktree / "docs" / "plans", *(worktree / r for r in extra_roots)]
     resolved = contained_path(p, allowed_roots)
     if resolved is None:
         raise _PathNotContained(f"plan_path escapes docs/plans/: {plan_path!r}")
@@ -1261,7 +1261,7 @@ def _em_discharge(
     A second discharge of the same row is a no-op, never an overwrite.
     """
     try:
-        path = _resolve_path(plan_path, worktree)
+        path = _resolve_path(plan_path, worktree, extra_roots=("state/warp",))
     except _PathNotContained as exc:
         return _err(f"em-discharge: {exc}")
     if not row_id:

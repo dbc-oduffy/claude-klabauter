@@ -1,4 +1,4 @@
-"""Ratchet over DoE's live review-roster fragment: rows-per-reviewer ratio, Kira L+ admission,
+"""Ratchet over DoE's live review-roster fragment: rows-per-reviewer ratio, Kira in the integration stage at min_tshirt L,
 and a roster that names no delivery verifier."""
 
 import copy
@@ -56,9 +56,23 @@ def test_fragment_pins_three_to_four_rows_per_reviewer(fragment):
     assert reviewer["per"] == "slice"
 
 
-def test_fragment_gates_kira_at_tshirt_l(fragment):
-    kira = next(a for a in _wave_agents(fragment) if a["agentType"] == _KIRA)
-    assert kira["min_tshirt"] == "L"
+# Kira placement is pinned only once the live roster carries an integration stage; before that
+# these tests skip, so a stale roster leaves the Kira L-floor rule unpinned.
+def _integration_agents(fragment: dict) -> list:
+    stages = fragment["execute_review"]["stages"]
+    return [a for s in stages if s["kind"] == "integration" for a in s["agents"]]
+
+
+def _has_integration_stage(fragment: dict) -> bool:
+    return any(s["kind"] == "integration" for s in fragment["execute_review"]["stages"])
+
+
+def test_fragment_places_kira_in_integration_stage_at_min_tshirt_l(fragment):
+    if not _has_integration_stage(fragment):
+        pytest.skip("live roster predates the integration stage (schema v5)")
+    kira = next(a for a in _integration_agents(fragment) if a["agentType"] == _KIRA)
+    assert kira.get("min_tshirt") == "L"
+    assert all(a.get("agentType") != _KIRA for a in _wave_agents(fragment))
 
 
 @pytest.mark.parametrize("slices", [1, 2, 3, 5, 12])
@@ -81,11 +95,15 @@ def test_composed_wave_groups_slices_by_the_fragment_max(fragment, rows):
 
 @pytest.mark.parametrize("tshirt", ["L", "XL", "XXL"])
 def test_kira_composed_at_l_and_above(fragment, tshirt):
+    if _has_integration_stage(fragment):
+        pytest.skip("Kira is an integration-stage agent, not a review-wave one")
     assert _KIRA in _compose_wave(fragment, executor_rows=4, tshirt=tshirt)
 
 
 @pytest.mark.parametrize("tshirt", ["XS", "S", "M", None])
 def test_kira_absent_below_l(fragment, tshirt):
+    if _has_integration_stage(fragment):
+        pytest.skip("Kira is an integration-stage agent, not a review-wave one")
     assert _KIRA not in _compose_wave(fragment, executor_rows=4, tshirt=tshirt)
 
 
@@ -97,16 +115,25 @@ def test_live_fragment_names_no_delivery_verifier_and_composes_not_rostered(frag
     assert DELIVERY_NOT_ROSTERED in wave
 
 
-@pytest.mark.parametrize(
-    "field, check",
-    [
-        ("executor_rows_per_reviewer", test_fragment_pins_three_to_four_rows_per_reviewer),
-        ("min_tshirt", test_fragment_gates_kira_at_tshirt_l),
-    ],
-)
-def test_dropping_either_field_fails_the_ratchet(fragment, field, check):
+def test_dropping_rows_per_reviewer_fails_the_ratchet(fragment):
     stripped = copy.deepcopy(fragment)
     for agent in _wave_agents(stripped):
-        agent.pop(field, None)
+        agent.pop("executor_rows_per_reviewer", None)
     with pytest.raises(KeyError):
-        check(stripped)
+        test_fragment_pins_three_to_four_rows_per_reviewer(stripped)
+
+
+@pytest.mark.parametrize("floor", [None, "M", "XL"])
+def test_missing_or_different_kira_floor_fails_the_ratchet(fragment, floor):
+    if not _has_integration_stage(fragment):
+        pytest.skip("live roster predates the integration stage (schema v5)")
+    mutated = copy.deepcopy(fragment)
+    for agent in _integration_agents(mutated):
+        if agent["agentType"] != _KIRA:
+            continue
+        if floor is None:
+            agent.pop("min_tshirt", None)
+        else:
+            agent["min_tshirt"] = floor
+    with pytest.raises(AssertionError):
+        test_fragment_places_kira_in_integration_stage_at_min_tshirt_l(mutated)

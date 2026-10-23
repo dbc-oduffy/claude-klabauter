@@ -670,13 +670,16 @@ def test_a_redirected_root_passes_the_sessions_own_repo(tmp_path):
     root = _repo(tmp_path)
     other = _repo(tmp_path / "other")
     emit = _Emit()
-    mod.evaluate(_payload(root, {"ask": "a", "repo": str(other)}), emit=emit)
+    mod.evaluate(_payload(root, {"ask": "a", "repo": str(other), "cross_repo_approved": True}), emit=emit)
     params, called_root = emit.calls[0]
     assert called_root.resolve() == other.resolve()
     assert Path(params["session_root"]).resolve() == root.resolve()
 
     fan = _Fanout([("r1", "a", (), "ready"), ("r2", "b", (), "ready")])
-    mod.evaluate(_payload(root, {**_asks("a", "b"), "repo": str(other)}), emit=_Emit(), fanout=fan)
+    mod.evaluate(
+        _payload(root, {**_asks("a", "b"), "repo": str(other), "cross_repo_approved": True}),
+        emit=_Emit(), fanout=fan,
+    )
     assert Path(fan.calls[0][0]["session_root"]).resolve() == root.resolve()
 
 

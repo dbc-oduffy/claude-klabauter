@@ -259,10 +259,108 @@ _PARAM_FIELDS = (
 _PYTEST_NODE = re.compile(r"[\w./-]+\.py::[\w.\[\]-]+(?:::[\w.\[\]-]+)*")
 
 
-def _params_from_task_output(path_raw: str) -> dict:
+def _launcher_run_digest(data: dict, path_raw: str, run_id: Optional[str]) -> dict:
+    """The child digest a launcher envelope `{parent_id, runs: [{run_id, status, result|error}]}` holds for ``run_id``.
+
+    ``run_id`` may be omitted only when the envelope holds exactly one run.
+    """
+    runs = [r for r in data["runs"] if isinstance(r, dict)]
+    ids = [r.get("run_id") for r in runs]
+    if run_id is None:
+        if len(runs) != 1:
+            raise ValueError(
+                f"{path_raw!r} is a launcher envelope of {len(runs)} runs {ids}: pass params.run_id to select one"
+            )
+        chosen = runs[0]
+    else:
+        matches = [r for r in runs if r.get("run_id") == run_id]
+        if len(matches) != 1:
+            raise ValueError(f"{path_raw!r} is a launcher envelope with no single run {run_id!r}; runs: {ids}")
+        chosen = matches[0]
+    result = chosen.get("result")
+    if chosen.get("status") != "ok" or not isinstance(result, dict):
+        raise ValueError(
+            f"{path_raw!r} launcher run {chosen.get('run_id')!r} has status {chosen.get('status')!r}, "
+            f"no digest: {chosen.get('error')!r}"
+        )
+    return result
+
+
+def _xs_zero_slice_review(digest: dict) -> Optional[dict]:
+    """The zero-slice `inline_review` of an XS digest whose review never ran, else ``None``.
+
+    An XS arm skips review by design (`_reviewWave = []`), but a digest composed with an
+    integration stage derives `inline_review` from that stage's result and so carries null;
+    the bookkeeping-stem form below is what the same run emits without one.
+    """
+    review = digest.get("review")
+    run_id = digest.get("run_id")
+    if (
+        digest.get("arm") != "xs"
+        or not isinstance(run_id, str)
+        or not run_id
+        or not isinstance(review, dict)
+        or review.get("wave") != []
+        or any(review.get(k) is not None for k in ("prep", "delivery", "integration"))
+    ):
+        return None
+    from coordinator_core.ops.review_mint.wave_bookkeeping import review_wave_bookkeeping_stem
+
+    return {
+        "integration_stem": review_wave_bookkeeping_stem(run_id, None),
+        "slices": 0,
+        "fixes": 0,
+        "wave_sidecar_paths": [],
+        "wave_reviews": [],
+        "prep": None,
+        "delivery": None,
+        "wave_not_run": [],
+    }
+
+
+def _halted_commit_params(digest: dict) -> Optional[dict]:
+    """The `dispatch.terminal_commit` params of an XS digest that halted AT commit, else ``None``.
+
+    Such a digest's `next_action` is `revise_and_refire` and carries no commit params; the run's
+    script sits at its fixed scratch path and the ledger, incomplete ids and zero-slice review
+    are in the digest itself.
+    """
+    halted = digest.get("halted_by")
+    run_id = digest.get("run_id")
+    review = _xs_zero_slice_review(digest)
+    ledger = digest.get("ledger")
+    items = ledger.get("items") if isinstance(ledger, dict) else None
+    if (
+        review is None
+        or not isinstance(halted, dict)
+        or halted.get("halted") != "commit"
+        or not isinstance(items, list)
+    ):
+        return None
+    keep = ("id", "status", "essential", "wired", "superseded_by", "withheld_by", "post_commit_acts",
+            "met_by", "root_read", "remaining")
+    verdict = {
+        "items": [
+            {"essential": True, **{k: i[k] for k in keep if k in i}}
+            for i in items if isinstance(i, dict)
+        ]
+    }
+    incomplete = digest.get("incomplete")
+    return {
+        "incomplete_chunks": [c for c in incomplete if isinstance(c, str)] if isinstance(incomplete, list) else [],
+        "script_path": f"scratch/warp/{run_id}.workflow.mjs",
+        "inline_review": review,
+        "held": [],
+        "ledger_verdict": verdict,
+    }
+
+
+def _params_from_task_output(path_raw: str, run_id: Optional[str] = None) -> dict:
     """`next_action.params` out of a Workflow task-output file, bare or `{summary, logs, result}`-wrapped.
 
-    Same envelope unwrap as `land-wave.py :: _wave_result`: a dict `result` is the digest.
+    Same envelope unwrap as `land-wave.py :: _wave_result`: a dict `result` is the digest. A
+    launcher envelope (`result.runs`) yields the digest of the run ``run_id`` selects. An XS digest
+    whose `inline_review` is null gets the zero-slice form (`_xs_zero_slice_review`).
     Raises ValueError naming the file when no `next_action.params` dict is found.
     """
     path = Path(path_raw)
@@ -272,6 +370,8 @@ def _params_from_task_output(path_raw: str) -> dict:
         raise ValueError(f"cannot read params.task_output_path {path_raw!r}: {exc}") from exc
     if isinstance(data, dict) and "next_action" not in data and isinstance(data.get("result"), dict):
         data = data["result"]
+    if isinstance(data, dict) and "next_action" not in data and isinstance(data.get("runs"), list):
+        data = _launcher_run_digest(data, path_raw, run_id)
     action = data.get("next_action") if isinstance(data, dict) else None
     found = action.get("params") if isinstance(action, dict) else None
     if not isinstance(found, dict):
@@ -279,6 +379,14 @@ def _params_from_task_output(path_raw: str) -> dict:
             f"{path_raw!r} carries no next_action.params: neither a digest nor a "
             "task-output envelope wrapping one"
         )
+    if action.get("kind") == "revise_and_refire":
+        recovered = _halted_commit_params(data)
+        if recovered is not None:
+            return recovered
+    if found.get("inline_review") is None and action.get("kind") == "terminal_commit":
+        synthesized = _xs_zero_slice_review(data)
+        if synthesized is not None:
+            found = {**found, "inline_review": synthesized}
     return found
 
 
@@ -324,10 +432,77 @@ def _error(message: str, **extra: object) -> dict:
     return result
 
 
+def _merge_landing_plan(
+    worktree_root: Path, all_paths: list, deleted_paths: list, *, product: set,
+) -> Optional[dict]:
+    """None when no merge is open. Otherwise ``{"refusal", "extra"}`` when the merge may not
+    finish (markers, unresolved paths, foreign declared paths), else the merge commit's
+    ``paths``/``deleted`` (exactly the merge's changed paths) and the run artifacts
+    (``artifacts``) that land afterwards in their own single-parent commit."""
+    from coordinator_core.git import merge_state
+    from coordinator_core.git.git_dir import resolve_git_dir
+
+    if not (resolve_git_dir(worktree_root) / "MERGE_HEAD").exists():
+        return None
+    try:
+        state = merge_state.read_merge_state(worktree_root)
+    except merge_state.MergeStateError as exc:
+        return {"refusal": f"merge state unreadable: {exc}", "extra": {"refused": "merge_unreadable"}}
+    if state is None:
+        return None
+    declared = [p for p in (*all_paths, *deleted_paths) if p in product]
+    refusal = merge_state.merge_refusal(
+        state, sorted({*declared, *state.merge_paths}), worktree_root
+    )
+    if refusal is not None:
+        return {
+            "refusal": f"merge not finished, HEAD unmoved: {refusal}",
+            "extra": {"refused": refusal.split(":", 1)[0], "merge_paths": list(state.merge_paths)},
+        }
+    merge_set = set(state.merge_paths)
+    gone = sorted(p for p in merge_set if not (worktree_root / p).exists())
+    return {
+        "paths": sorted(merge_set - set(gone)),
+        "deleted": gone,
+        "artifacts": {
+            "paths": [p for p in all_paths if p not in merge_set],
+            "deleted": [p for p in deleted_paths if p not in merge_set],
+        },
+    }
+
+
+def _land_merge_artifacts(
+    commit_v2, repo_root: Path, artifacts: dict, message: str, merge_sha: str,
+    session_id: Optional[str],
+) -> dict:
+    """One ordinary single-parent commit for the run artifacts the merge commit left out; the
+    merge commit stands whatever this returns."""
+    if not artifacts["paths"] and not artifacts["deleted"]:
+        return {"committed": False, "nothing_to_commit": True}
+    subject = (message.splitlines() or ["run artifacts"])[0]
+    params: dict = {
+        "paths": artifacts["paths"],
+        "message": f"{subject} (run artifacts)\n\nFollows merge commit {merge_sha[:12]}.\n",
+        "carry_own_left_behind": False,
+        "carry_stopped_runs": False,
+    }
+    if artifacts["deleted"]:
+        params["deleted_paths"] = artifacts["deleted"]
+    if session_id is not None:
+        params["session_id"] = session_id
+    try:
+        out = commit_v2(params, repo_root)
+    except Exception as exc:  # the merge already landed; report, never raise
+        return {"committed": False, "error": f"{type(exc).__name__}: {exc}"}
+    if not isinstance(out, dict):
+        return {"committed": False, "error": f"unexpected commit_v2 reply: {out!r}"}
+    return {k: out.get(k) for k in ("committed", "sha", "error", "refused") if k in out}
+
+
 def _landing_integrity_gate(
     worktree_root: Path, all_paths: list, deleted_paths: list, record_abs: Optional[Path],
     params: dict, run_id: Optional[str], plan: Optional[str] = None,
-    *, residue_py: Sequence[str] = (), residue_known: bool = True,
+    *, residue_py: Sequence[str] = (), residue_known: bool = True, merge_open: bool = False,
 ) -> dict:
     """Pre-commit integrity findings over the product landing set (unparseable ``.py``, an
     import-closure hit where a ``.py`` the commit deletes (or a top-level def/class it removes) is
@@ -371,7 +546,10 @@ def _landing_integrity_gate(
             f"residue import-closure detector failed: {type(exc).__name__}: {exc}",
         ))
     base = li.run_base_for(worktree_root, run_id, params)
-    if base is None:
+    if merge_open:
+        # A conflict resolution taking the other side drops this side's lines by design.
+        extra["since_base_check"] = "skipped-merge"
+    elif base is None:
         extra["since_base_check"] = "no-base"
     else:
         findings += li.since_base_findings(worktree_root, paths, base, run_id=run_id, plan=plan)
@@ -2565,6 +2743,30 @@ def _resumed_review_source(
     return resumed, recorded_emitter(worktree_root, resumed) or session_id
 
 
+def _review_recorded_edits(inline_review: object) -> frozenset:
+    """Repo-relative paths the review's test-runner or reverify record lists as ``edited`` or
+    ``created``: files the run's review changed, including ones an earlier checkpoint of this run
+    already committed and this fire's chunks no longer declare. Absolute and ``..`` paths are skipped."""
+    found: set = set()
+    if isinstance(inline_review, dict):
+        for key in ("tests", "reverify"):
+            block = inline_review.get(key)
+            if not isinstance(block, dict):
+                continue
+            for field in ("edited", "created"):
+                listed = block.get(field)
+                if not isinstance(listed, list):
+                    continue
+                for p in listed:
+                    if not isinstance(p, str) or not p:
+                        continue
+                    n = p.replace("\\", "/")
+                    if n.startswith("/") or n[1:2] == ":" or ".." in n.split("/"):
+                        continue
+                    found.add(n)
+    return frozenset(found)
+
+
 def _review_edit_verdict(
     worktree_root: Path, writes: Optional[dict], snapshot: Optional[_Snapshot],
     session_id: Optional[str], run_id: Optional[str], committed: set,
@@ -2805,6 +3007,18 @@ def _ledger_met_ids(ledger_verdict: object) -> list:
         if isinstance(i, dict) and i.get("id") is not None
         and (i.get("status") == "met" or requirements_ledger.close_dischargeable(i))
     ]
+
+
+def _withheld_product_files(
+    worktree_root: Path, snapshot: Optional[_Snapshot], declared: set, committed: set,
+) -> list:
+    """Declared writes still changed in the tree that the commit did not carry, sorted.
+
+    A run whose commit omits a file it changed cannot report its ledger rows met: the claim is
+    checked against the tree, not against the verdict. Unknown change state reads as none.
+    """
+    changed = _changed(snapshot, worktree_root, sorted(declared))
+    return sorted(changed - committed) if changed else []
 
 
 def _lifecycle_owed(
@@ -4009,7 +4223,7 @@ def _terminal_commit_inner(
     task_output_raw = params.get("task_output_path") if isinstance(params, dict) else None
     if isinstance(params, dict) and isinstance(params.get("task_output_path"), str):
         try:
-            params = {**_params_from_task_output(params["task_output_path"]), **{
+            params = {**_params_from_task_output(params["task_output_path"], params.get("run_id")), **{
                 k: v for k, v in params.items() if k != "task_output_path"}}
         except ValueError as exc:
             return _error(str(exc))
@@ -4136,6 +4350,12 @@ def _terminal_commit_inner(
         request = _anchor_request(worktree_root, params, inline_review)
     if request is None:
         return {"committed": False, "nothing_to_commit": True}
+    # A declared directory (`docs/plans`) is a scope, not a file: git's pathspec staging refuses it.
+    if any((worktree_root / p).is_dir() for c in request.chunks for p in c.paths):
+        request = dataclasses.replace(request, chunks=tuple(
+            dataclasses.replace(c, paths=tuple(p for p in c.paths if not (worktree_root / p).is_dir()))
+            for c in request.chunks
+        ))
     anchor_only = not request.chunks
     reviewed_bytes, reviewed_at = _reconcile_prep(
         worktree_root, session_id, _run_id_of(params, ask_run_dir, script_path_raw), request, inline_review
@@ -4221,6 +4441,7 @@ def _terminal_commit_inner(
     )
     if close_ctx is not None:
         close_ctx["ledger_met"] = ledger_met
+    withheld_product: list = []
 
     observed_branch = head_branch(worktree_root)
     if observed_branch == "HEAD":
@@ -4913,6 +5134,7 @@ def _terminal_commit_inner(
             own_files=frozenset(
                 {review_edits_norm(p) for c in request.chunks for p in c.paths}
                 | {review_edits_norm(p) for p in prefix_files}
+                | {review_edits_norm(p) for p in _review_recorded_edits(inline_review)}
                 | {
                     review_edits_norm(p)
                     for p in ((inline_review.get("prep") or {}).get("slice_files") or ())
@@ -5097,7 +5319,7 @@ def _terminal_commit_inner(
         f"review anchor: {request.plan_path} -- delivery PASS, no product files"
         if anchor_only
         else _subject(
-            contributing_chunks + contributing_partial,
+            contributing_chunks or contributing_partial,
             f"review trail: {inline_review['integration_stem']}",
         )
     )
@@ -5142,12 +5364,15 @@ def _terminal_commit_inner(
     )
     from coordinator_core.ops.dispatch_emit import landing_integrity as _li_close
 
-    close_base = _li_close.run_base_for(worktree_root, _run_id_of(params, ask_run_dir, script_path_raw), params)
-    if close_base is not None:
-        trailers.append(f"Checkpoint-Run-Closed: {close_base}")
-    review_base = request.review_run_base
-    if isinstance(review_base, str) and review_base and review_base != close_base:
-        trailers.append(f"Checkpoint-Run-Closed: {review_base}")
+    from coordinator_core.ops.dispatch_emit.checkpoint_stamp import run_closed_trailer_lines, script_run_base
+
+    trailers.extend(run_closed_trailer_lines((
+        *_li_close.closing_bases(
+            worktree_root, _run_id_of(params, ask_run_dir, script_path_raw),
+            {**params, "review_run_base": request.review_run_base},
+        ),
+        script_run_base(script_text),
+    )))
     if product_only:
         trailers.extend(_ask_trailers(worktree_root, request.plan_path, record_abs, receipts_built))
     elif record_abs is not None:
@@ -5267,6 +5492,19 @@ def _terminal_commit_inner(
                 _ls.FOREIGN_EXCLUDED_KEY: foreign_excluded,
             }))
 
+    merge_plan = _merge_landing_plan(
+        worktree_root, all_paths, deleted_paths,
+        product={*declared_writes, *run_owned},
+    )
+    merge_artifacts: dict = {}
+    if merge_plan is not None:
+        if merge_plan.get("refusal"):
+            _remove(worktree_root, receipt_paths)
+            return _error(merge_plan["refusal"], **merge_plan["extra"])
+        all_paths = merge_plan["paths"]
+        deleted_paths = merge_plan["deleted"]
+        merge_artifacts = merge_plan["artifacts"]
+
     # The product commit never carries the session's claimed leftovers: commit_v2 would widen the
     # pathspec past the declared set. They land in the follow-on commit after this one.
     commit_params: dict = {
@@ -5275,6 +5513,8 @@ def _terminal_commit_inner(
         "carry_stopped_runs": False,
         "full_reply": True,
     }
+    if merge_plan is not None:
+        commit_params["finish_merge"] = True
     if deleted_paths:
         commit_params["deleted_paths"] = deleted_paths
     # A DONE chunk's own declared write that is now absent is a planned deletion; when it removes a
@@ -5342,6 +5582,7 @@ def _terminal_commit_inner(
         worktree_root, all_paths, deleted_paths, record_abs, params,
         _run_id_of(params, ask_run_dir, script_path_raw), request.plan_path,
         residue_py=residue_py, residue_known=snapshot is not None,
+        merge_open=merge_plan is not None,
     )
     if integrity_extra.get("refused"):
         _remove(worktree_root, receipt_paths)
@@ -5477,7 +5718,23 @@ def _terminal_commit_inner(
         # Advance plan status so a re-fire (which selects live `open` rows)
         # cannot redo landed work. incomplete_chunks never reach here.
         scope.setdefault("landed", set()).update(all_paths)
+        if merge_artifacts:
+            reply["merge_artifacts"] = _land_merge_artifacts(
+                commit_v2, repo_root, merge_artifacts, message, str(reply["sha"]), session_id,
+            )
+            if reply["merge_artifacts"].get("committed") or reply["merge_artifacts"].get("nothing_to_commit"):
+                scope["landed"].update(merge_artifacts["paths"])
+                scope["landed"].update(merge_artifacts["deleted"])
         scope["landed"].update(_stopped_run_carried(reply))
+        withheld_product = (
+            _withheld_product_files(worktree_root, snapshot, declared_writes, {*all_paths, *deleted_paths})
+            if ledger is not None else []
+        )
+        if withheld_product:
+            ledger_met = None
+            if close_ctx is not None:
+                close_ctx["ledger_met"] = None
+            reply["ledger_withheld_product"] = withheld_product
         reply = _cap_commit_reply(reply)
         no_delta = set(reply.get("no_delta") or [])
         coded_chunks = [
@@ -5608,7 +5865,11 @@ def _terminal_commit_inner(
         if pending_operator:
             reply["awaiting_operator"] = pending_operator
         not_stamped = _ledger_not_stamped_reason(ledger, params.get("ledger_verdict"), open_rows)
-        if not_stamped:
+        if withheld_product:
+            reply["exit_criterion_not_stamped"] = (
+                f"ledger rows not reported met: commit omits changed file(s) {withheld_product}"
+            )[:_UNDONE_CAP]
+        elif not_stamped:
             reply["exit_criterion_not_stamped"] = not_stamped
         if (
             record_abs is not None and record is not None and not anchor_only
@@ -5621,7 +5882,7 @@ def _terminal_commit_inner(
                     tree=reply.get("tree"),
                 )
             )
-        if ledger is not None:
+        if ledger is not None and not withheld_product:
             reply.update(_ledger_writeback(
                 worktree_root, ledger, params.get("ledger_verdict"),
                 str(params.get("run_id") or ask_run_dir.name), str(reply["sha"]),

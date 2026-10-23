@@ -37,7 +37,9 @@ NEGATIVE SPEC -- what this module deliberately does not do:
   that matters.
 - **It does not merge.** An unmerged index (any entry at stage != 0) is
   refused outright -- a commit pass has no business splicing into a
-  mid-conflict index.
+  mid-conflict index. The one carve-out is `collapse_unmerged`: the caller
+  names the resolved paths, each must carry a stage-0 update, and only those
+  paths' stage 1-3 entries are replaced. Any other unmerged path still refuses.
 - **It is not a general index editor.** One call, one splice, under the lock.
 
 `git_index.py`'s module docstring forbids WRITING from that module, which is
@@ -52,7 +54,7 @@ import os
 import struct
 from pathlib import Path
 from types import SimpleNamespace
-from typing import IO, Dict, Mapping, Optional, Tuple, Union
+from typing import IO, Collection, Dict, Mapping, Optional, Tuple, Union
 
 from coordinator_core.git.git_dir import resolve_git_dir
 from coordinator_core.git.git_objects import _replace_with_retry
@@ -152,9 +154,12 @@ def _entry_name(raw: bytes, start: int) -> bytes:
     return raw[begin : raw.index(b"\x00", begin)]
 
 
-def _walk_entries(raw: bytes, entry_count: int) -> Tuple[list, int]:
+def _walk_entries(
+    raw: bytes, entry_count: int, collapse: frozenset = frozenset()
+) -> Tuple[list, int]:
     """Entry start offsets and the end of the entry block, reading each name
-    length from the flags field (a 0xFFF length saturates and needs a NUL scan)."""
+    length from the flags field (a 0xFFF length saturates and needs a NUL scan).
+    A stage != 0 entry is kept in the walk only when its name is in `collapse`."""
     starts: list = []
     offset = 12
     limit = len(raw)
@@ -162,7 +167,7 @@ def _walk_entries(raw: bytes, entry_count: int) -> Tuple[list, int]:
         if offset + _ENTRY_FIXED_LEN > limit:
             raise IndexWriteError(f"truncated entry at offset {offset}")
         (flags,) = struct.unpack_from(">H", raw, offset + 60)
-        if (flags >> 12) & 0x3:
+        if (flags >> 12) & 0x3 and (not collapse or _entry_name(raw, offset) not in collapse):
             raise IndexWriteError(
                 "unmerged entry (stage != 0) -- refusing to splice a mid-conflict index"
             )
@@ -212,13 +217,29 @@ def splice_index(
     updates: Mapping[str, object],
     *,
     stat_fallback: bool = False,
+    collapse_unmerged: Collection[str] = frozenset(),
 ) -> None:
     """Splice `updates` into `.git/index` under `index.lock`.
+
+    `collapse_unmerged`: paths whose stage 1-3 entries are dropped and replaced by their stage-0
+    update. Each must appear in `updates` (an ABSENT value resolves it to deletion); any other
+    unmerged entry refuses.
 
     `stat_fallback`: a path whose worktree file cannot be stat'ed still gets its entry, with a zeroed
     stat that git reads as changed and re-hashes. Off, one unstat-able path refuses the whole splice.
     """
     refuse_dotgit(updates)
+    collapse = frozenset(
+        str(p).replace("\\", "/").encode("utf-8", "surrogateescape") for p in collapse_unmerged
+    )
+    update_keys = {
+        str(p).replace("\\", "/").encode("utf-8", "surrogateescape") for p in updates
+    }
+    missing = sorted(collapse - update_keys)
+    if missing:
+        raise IndexWriteError(
+            f"collapse_unmerged path has no update to resolve it to: {missing[0]!r}"
+        )
     gitdir = resolve_git_dir(repo)
     index_path = gitdir / "index"
     lock_path = gitdir / "index.lock"
@@ -233,7 +254,9 @@ def splice_index(
 
     try:
         with os.fdopen(fd, "wb") as handle:
-            _splice_locked(handle, root, index_path, lock_path, updates, stat_fallback)
+            _splice_locked(
+                handle, root, index_path, lock_path, updates, stat_fallback, collapse
+            )
     finally:
         if lock_path.exists():
             try:
@@ -249,6 +272,7 @@ def _splice_locked(
     lock_path: Path,
     updates: Mapping[str, object],
     stat_fallback: bool = False,
+    collapse: frozenset = frozenset(),
 ) -> None:
     try:
         raw = index_path.read_bytes()
@@ -270,7 +294,7 @@ def _splice_locked(
                 "refused rather than guessed at"
             )
         in_version = version
-        starts, body_end = _walk_entries(raw, entry_count)
+        starts, body_end = _walk_entries(raw, entry_count, collapse)
 
     replacements: Dict[bytes, Optional[bytes]] = {}
     for path, value in updates.items():
@@ -312,6 +336,12 @@ def _splice_locked(
             st = _ZERO_STAT
         replacements[key] = _build_entry(key, int(mode), str(sha_hex), st)
 
+    for key in collapse:
+        if key not in replacements:
+            raise IndexWriteError(
+                f"collapse_unmerged path has no update to resolve it to: {key!r}"
+            )
+
     view = memoryview(raw)
     count = len(starts)
     bounds = starts + [body_end]
@@ -337,10 +367,15 @@ def _splice_locked(
         if new_bytes is not None:
             pieces.append(new_bytes)
         if present:
-            lo = idx + 1
-            extended -= raw[starts[idx] + 60] & 0x40 != 0
-            if new_bytes is None:
-                total -= 1
+            hi = idx + 1
+            while hi < count and name_at(starts[hi]) == key:
+                hi += 1
+            lo = hi
+            for j in range(idx, hi):
+                extended -= raw[starts[j] + 60] & 0x40 != 0
+            total -= hi - idx
+            if new_bytes is not None:
+                total += 1
         else:
             lo = idx
             total += 1

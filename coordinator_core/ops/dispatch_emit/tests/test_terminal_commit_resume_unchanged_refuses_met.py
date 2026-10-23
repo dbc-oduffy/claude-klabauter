@@ -147,8 +147,9 @@ def test_verified_only_without_evidence_is_refused(run, ev):
     assert _gate(run, resume)["ledger_failures"] == [{"id": "R1", "reason": UNCHANGED_SINCE_HALT_REASON}]
 
 
-# ask_compose composes the terminal param as {run_id, halt_sha: <gate halt_sha or null>, blocking}
-# and never a `plan`: the shape every case below uses.
+# ask_gate's resume ledger also composes `since_sha` (the param that outranks a resolved halt) and
+# `halt_sha` (legacy, outranked); `_composed` is the legacy {run_id, halt_sha, blocking} shape and
+# never a `plan`.
 PLAN = "docs/plans/2026-10-17-resume.md"
 
 
@@ -201,8 +202,15 @@ def test_composed_param_resolves_halt_commit_from_plan_rel(run):
 def test_param_sha_outranks_plan_rel_and_stage_head(run):
     _halt_commit(run[0])
     _stamp_head(run, run[3])
-    refusal = _gate_plan(run, _composed(run[3]), plan_rel=PLAN)
+    refusal = _gate_plan(run, {**_composed(), "since_sha": run[3]}, plan_rel=PLAN)
     assert refusal["since_halt"] == {"base": run[3], "base_source": "param", "outcome": "unchanged"}
+
+
+def test_a_legacy_halt_sha_param_is_outranked_by_the_resolved_first_halt(run):
+    halt = _halt_commit(run[0])
+    _stamp_head(run, run[3])
+    refusal = _gate_plan(run, _composed(run[3]), plan_rel=PLAN)
+    assert refusal["since_halt"] == {"base": halt, "base_source": "resolved", "outcome": "unchanged"}
 
 
 def test_no_base_at_all_is_refused_as_no_base(run):

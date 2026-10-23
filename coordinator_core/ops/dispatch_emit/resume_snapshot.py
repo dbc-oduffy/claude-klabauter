@@ -36,10 +36,18 @@ class Snapshot(NamedTuple):
 
     not_to_run: frozenset
     resume_rows: frozenset
+    kept: frozenset = frozenset()
+    kept_run: Optional[str] = None
 
 
 def write(
-    repo_root: Path, run_id: str, plan_rel: str, not_to_run: Iterable[str], resume_rows: Iterable[str]
+    repo_root: Path,
+    run_id: str,
+    plan_rel: str,
+    not_to_run: Iterable[str],
+    resume_rows: Iterable[str],
+    kept: Iterable[str] = (),
+    kept_run: Optional[str] = None,
 ) -> Optional[Path]:
     """Write the snapshot; return its path, or None (nothing written) for an unsafe run_id or an unwritable run dir."""
     path = _snapshot_path(repo_root, run_id)
@@ -50,6 +58,10 @@ def write(
         "not_to_run": sorted(set(not_to_run)),
         "resume_rows": sorted(set(resume_rows)),
     }
+    if kept:
+        body["kept"] = sorted(set(kept))
+    if kept_run:
+        body["kept_run"] = kept_run
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(body, indent=2) + "\n", encoding="utf-8")
@@ -76,7 +88,13 @@ def read(repo_root: Path, run_id: str, plan_rel: str) -> Optional[Snapshot]:
     resume = body.get("resume_rows", [])
     if not isinstance(resume, list) or not all(isinstance(r, str) for r in resume):
         return None
-    return Snapshot(frozenset(rows), frozenset(resume))
+    kept = body.get("kept", [])
+    if not isinstance(kept, list) or not all(isinstance(r, str) for r in kept):
+        kept = []
+    kept_run = body.get("kept_run")
+    return Snapshot(
+        frozenset(rows), frozenset(resume), frozenset(kept), kept_run if isinstance(kept_run, str) and kept_run else None
+    )
 
 
 def clear(repo_root: Path, run_id: str) -> None:

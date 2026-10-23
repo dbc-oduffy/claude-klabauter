@@ -82,6 +82,17 @@ _KNOWN_PARAMS = frozenset({"plan", "plan_path", "coverage", "reviews", "premise"
 # Mirrors DoE plan-blitz.mjs PREMISE_REVIEWER.
 _PREMISE_REVIEWER = "premise-check"
 _PREMISE_BLOCKING = frozenset({"UNRESOLVED", "CONTRADICTED"})
+# Exempts only a CONTRADICTED row whose evidence carries this checker phrase; it depends on the
+# checker's wording, and test_ref_stamped_drift_contradiction_is_a_note_... pins that others block.
+_DRIFT_MARKER = "stated at the ref so drift, not load-bearing"
+
+
+def _is_ref_stamped_drift(row: dict) -> bool:
+    """A CONTRADICTED row whose own evidence says the claim is stamped at a ref and only drifted."""
+    evidence = row.get("evidence")
+    return isinstance(evidence, str) and _DRIFT_MARKER in " ".join(evidence.lower().split())
+
+
 _CLEAR_VERDICTS = frozenset(
     {
         "approve", "approved", "pass", "passed", "clear", "clean", "ready", "ok", "accept",
@@ -398,6 +409,7 @@ def readiness_verdict(
     declared_absent: Optional[Any] = None,
     open_questions: str = "",
     anchor_findings: Optional[List[str]] = None,
+    anchor_verdicts: Optional[List[dict]] = None,
 ) -> dict:
     """Verdict over a prep-gate reply plus coverage and reviewer values; the only read beyond
     them is a review's ledger sidecar, resolved against ``repo_root``. Only UNRESOLVED and
@@ -406,7 +418,8 @@ def readiness_verdict(
     row whose ``baseline_ref`` differs from ``falsifier_baseline_ref`` are notes, not blockers, as
     is an UNRESOLVED row a ``declared_absent`` entry covers through a resolvable ``tracked_by``.
     Each ``anchor_findings`` entry is a blocking judgment no ``corrects``/``declared_absent`` exempts;
-    rows carrying ``anchor`` are judged only through them."""
+    rows carrying ``anchor`` are judged only through them. ``anchor_verdicts`` is the recorded
+    per-anchor verdict list: it is echoed in the reply and only feeds a ready-reason note."""
     notes: List[str] = []
     repairs: List[dict] = []
     substantive: List[str] = []
@@ -466,12 +479,16 @@ def readiness_verdict(
     covered: List[str] = []
     absent_notes: List[str] = []
     stale_refs: List[str] = []
+    drift_notes: List[str] = []
     for row in premise_rows or []:
         if "anchor" in row:
             continue
         ref = row.get("baseline_ref")
         if ref is not None and falsifier_baseline_ref is not None and ref.strip() != falsifier_baseline_ref:
             stale_refs.append(ref)
+            continue
+        if row["verdict"] == "CONTRADICTED" and _is_ref_stamped_drift(row):
+            drift_notes.append(row["citation"][:120])
             continue
         if row["verdict"] in _PREMISE_BLOCKING:
             fixer = _covering_row(row, corrects, spine_rows) if row["verdict"] == "CONTRADICTED" else None
@@ -490,9 +507,19 @@ def readiness_verdict(
             uncheckable += 1
     blocking_findings += len(premise_blocking) + len(anchor_findings or [])
     counts = f"needs an agent: {blocking_findings} blocking, {advisory_findings} advisory: "
+    # Anchor findings are budgeted before premise rows: the reason is cut at _INSTRUCTION_MAX,
+    # and a cut that drops the anchor ids sends the reviser after the wrong premise.
+    budget = _INSTRUCTION_MAX - 40
+    anchor_shown = list(anchor_findings or [])
+    for i in range(len(anchor_shown)):
+        if len(counts) + len("; ".join(judgment + anchor_shown[: i + 1])) > budget:
+            anchor_shown = anchor_shown[: max(i, 1)] + [
+                f"+{len(anchor_shown) - max(i, 1)} more anchor finding(s)"
+            ]
+            break
     shown = list(premise_blocking)
     for i, entry in enumerate(shown):
-        if len(counts) + len("; ".join(judgment + shown[: i + 1])) > _INSTRUCTION_MAX - 40:
+        if len(counts) + len("; ".join(judgment + shown[: i + 1] + anchor_shown)) > budget:
             tail = len(shown) - i
             shown = shown[:i] + [f"+{tail} more premise row(s)"]
             break
@@ -515,7 +542,10 @@ def readiness_verdict(
     for entry in anchor_findings or []:
         rulings.append(_ruling(len(rulings) + 1, "premise", entry, _ANCHOR_ASK))
     judgment.extend(shown)
-    judgment.extend(anchor_findings or [])
+    judgment.extend(anchor_shown)
+    engine_checked = sum(1 for v in anchor_verdicts or [] if v.get("source") == "engine-check")
+    if engine_checked:
+        notes.append(f"{engine_checked} anchor premise(s) resolved by in-process check")
     if uncheckable:
         notes.append(f"{uncheckable} UNCHECKABLE premise row(s) left to reviewer judgment")
     if covered:
@@ -527,6 +557,11 @@ def readiness_verdict(
         notes.append(
             f"{len(absent_notes)} UNRESOLVED premise row(s) the plan declares absent: "
             + "; ".join(absent_notes)
+        )
+    if drift_notes:
+        notes.append(
+            f"{len(drift_notes)} CONTRADICTED premise row(s) the checker calls ref-stamped drift: "
+            + "; ".join(drift_notes)
         )
     if stale_refs:
         notes.append(
@@ -579,14 +614,23 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             "message": reason,
         }
         corrects, spine_rows, ref, absent, questions = None, None, None, None, ""
-        anchor = [_anchor_premise.unjudged(reason)]
+        anchor, verdicts = [_anchor_premise.unjudged(reason)], []
     else:
         corrects, spine_rows, ref, absent, questions, text, fm = _plan_inputs(plan_text)
-        anchors, defects = _anchor_premise.parse_anchors(fm, repo_root)
+        from coordinator_core.lifecycle import main_worktree_root
+
+        anchor_root = Path(main_worktree_root(repo_root))
+        anchors, defects = _anchor_premise.parse_anchors(fm, anchor_root)
         carried = _carry_rows(repo_root, str(prep_gate["plan"])) if anchors else []
-        anchor = defects + _anchor_premise.anchor_findings(anchors, premise_rows, carried, text)
+        verdicts = _anchor_premise.anchor_verdicts(anchors, premise_rows, carried, text, anchor_root)
+        anchor = defects + _anchor_premise.anchor_findings(
+            anchors, premise_rows, carried, text, anchor_root, verdicts
+        )
     out = readiness_verdict(
         prep_gate, coverage, reviews, repo_root, premise_rows, corrects, spine_rows, ref,
-        absent, questions, anchor,
+        absent, questions, anchor, verdicts,
     )
-    return {"plan": prep_gate["plan"], **out, "prep_gate": prep_gate}
+    reply = {"plan": prep_gate["plan"], **out, "prep_gate": prep_gate}
+    if verdicts:
+        reply["anchor_verdicts"] = verdicts
+    return reply

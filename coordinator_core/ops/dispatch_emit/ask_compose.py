@@ -107,6 +107,7 @@ from coordinator_core.ops.dispatch_emit.design_conformance import (
     DESIGN_BRIEF_KEY,
 )
 from coordinator_core.ops.dispatch_emit import agent_route as _agent_route
+from coordinator_core.ops.dispatch_emit import halt_refire as _halt_refire
 from coordinator_core.ops.dispatch_emit import route_dispatch_js as _route_js
 from coordinator_core.ops.dispatch_emit import route_preference as _route_pref
 from coordinator_core.ops.dispatch_emit.design_route import DESIGN_ROUTE_KEY, STAGE_REFUSAL_PREFIX, next_action as _design_next_action
@@ -337,6 +338,7 @@ _GATE_SCHEMA = _obj(
         "resume_plan": {"type": ["string", "null"]},
         "resume_rows": {"type": ["array", "null"], "items": _STR},
         "pending_rulings": {"type": ["array", "null"], "items": _STR},
+        "resume_ready": {"type": ["boolean", "null"]},
         "spine_plan": {"type": ["string", "null"]},
         RESUME_LEDGER_KEY: {"type": ["object", "null"]},
         DESIGN_BRIEF_KEY: {"type": ["string", "null"]},
@@ -859,7 +861,7 @@ def _review_blocked_halt_js(sizing_rel: Optional[str]) -> str:
         "unapplied_findings: _blockedSlices.reduce((n, w) => n + (w.findings - (w.applied ?? 0)), 0), "
         "slices: _blockedSlices.map((w) => ({ slice_id: w.slice_id ?? null, findings: w.findings, "
         "applied: w.applied ?? 0, sidecar_path: w.sidecar_path ?? null })), "
-        "next_action: 'Fix the unapplied findings named in each slice sidecar, then refire: ' + "
+        "next_action: 'The refire re-runs the review wave over the blocked slices: ' + "
         + _refire_js(sizing_rel) + " };\n"
         "  }"
     )
@@ -936,8 +938,21 @@ def _usage_limit_helper_js() -> str:
         "    if (!_USAGE_LIMIT_RE.test(msg)) throw e;\n"
         f"    _halted = {{ halted: {_lit(HALT_USAGE_LIMIT)}, run_id: _runId, detail: msg.slice(0, 300), "
         "resume_from_run_id: 'this Workflow run id (wf_...)', "
-        "next_action: 'After the limit resets, call Workflow with this scriptPath and resumeFromRunId set to this run id.' };\n"
+        f"next_action: {_lit(_USAGE_LIMIT_RESUME_CALL)} }};\n"
         "  }"
+    )
+
+
+_USAGE_LIMIT_RESUME_CALL = "After the limit resets, call Workflow with this scriptPath and resumeFromRunId set to this run id."
+
+
+def _refire_next_action_helper_js(sizing_rel: Optional[str]) -> str:
+    """`_refireNextAction()`: finalises `_halted.next_action` into the one-refire envelope before `_halted` leaves the script."""
+    return _halt_refire.refire_next_action_js(
+        call_js=f"(_hk === {_lit(HALT_USAGE_LIMIT)} ? {_lit(_USAGE_LIMIT_RESUME_CALL)} : {_refire_js(sizing_rel)})",
+        legacy_js="_halted.next_action",
+        kind_js="_halted.halted",
+        detail_js="(typeof _legacy.detail === 'string' ? _legacy.detail : null)",
     )
 
 
@@ -1229,6 +1244,79 @@ def _read_plan_blitz() -> str:
     from coordinator_core.ops.dispatch_emit.ask_plan_blitz import load_plan_blitz_text
 
     return load_plan_blitz_text()
+
+
+def _strip_comment_lines(js: str) -> str:
+    """``js`` without the lines holding only a ``//`` comment.
+
+    Strings, templates, regexes and block comments are untouched.
+
+    Trap: regex-vs-division is decided from the previous significant character, as in
+    ``prompt_fragments._scan_literals``; a regex literal that defeats it can hide a quote and
+    derail the scan, so the only deletions are whole comment lines the scan reached in code mode.
+    """
+    n, i, prev = len(js), 0, ""
+    stack: list = []  # "T" = inside a template body; an int = brace depth inside a `${ }`
+    cuts: list[tuple[int, int]] = []
+    while i < n:
+        c = js[i]
+        if stack and stack[-1] == "T":
+            if c == "\\":
+                i += 2
+            elif c == "`":
+                stack.pop()
+                prev, i = "`", i + 1
+            elif js.startswith("${", i):
+                stack.append(0)
+                prev, i = "{", i + 2
+            else:
+                i += 1
+        elif c in "'\"":
+            j = i + 1
+            while j < n and js[j] != c and js[j] != "\n":
+                j += 2 if js[j] == "\\" else 1
+            prev, i = c, j + 1
+        elif c == "`":
+            stack.append("T")
+            i += 1
+        elif c == "/" and js.startswith("//", i):
+            eol = js.find("\n", i)
+            eol = n if eol < 0 else eol
+            ls = js.rfind("\n", 0, i) + 1
+            if not js[ls:i].strip():
+                cuts.append((ls, min(eol + 1, n)))
+            i = eol
+        elif c == "/" and js.startswith("/*", i):
+            k = js.find("*/", i + 2)
+            i = n if k < 0 else k + 2
+        elif c == "/" and (prev == "" or prev in _prompt_fragments._PREV_OPENERS or js[max(0, i - 8) : i].rstrip().endswith(("return", "typeof"))):
+            j, in_cls = i + 1, False
+            while j < n and (in_cls or js[j] != "/") and js[j] != "\n":
+                if js[j] == "\\":
+                    j += 1
+                elif js[j] == "[":
+                    in_cls = True
+                elif js[j] == "]":
+                    in_cls = False
+                j += 1
+            prev, i = "/", j + 1
+        else:
+            if c == "{" and stack:
+                stack[-1] += 1
+            elif c == "}" and stack:
+                if stack[-1] == 0:
+                    stack.pop()
+                else:
+                    stack[-1] -= 1
+            if not c.isspace():
+                prev = c
+            i += 1
+    out, last = [], 0
+    for a, z in cuts:
+        out.append(js[last:a])
+        last = z
+    out.append(js[last:])
+    return "".join(out)
 
 
 def load_review_signal_selects(plugin_root: Optional[str] = None) -> dict[str, str]:
@@ -1567,6 +1655,7 @@ def compose_ask_script(
         blitz_fn, blitz_phases = (
             wrap_stage(blitz_text, agent_prefix_var=EM_BRIEF_VAR) if em_brief else wrap_stage(blitz_text)
         )
+        blitz_fn = _strip_comment_lines(blitz_fn)
         if f"async function {_PLAN_BLITZ_FN}(" not in blitz_fn:
             raise AskComposeRefused(f"wrapped plan-blitz stage does not define async function {_PLAN_BLITZ_FN}")
 
@@ -1729,6 +1818,7 @@ def compose_ask_script(
     ))
     b.append(_wave_tests_green_js(agent_type_host, repo_root=repo_root, run_id=run_id))
     b.append(_usage_limit_helper_js())
+    b.append(_refire_next_action_helper_js(sizing_rel))
     for name in (*_REVIEW_RESULT_NAMES, _emit._TEST_RESULT_VAR):
         b.append(f"  let {name} = {'[]' if name == WAVE_NOT_RUN_VAR else 'null'};")
     if judged:
@@ -1777,7 +1867,7 @@ def compose_ask_script(
             f"{head}\n\n{anchor}\n\n",
             f"Run `{_INVOKE} {OP_ASK_GATE} '",
             _gate_payload(),
-            "'` and return its JSON reply verbatim as arm, halt, baton and (when present) resume_plan, resume_rows, resume_ledger, pending_rulings and spine_plan, plus design_brief and design_route when present; "
+            "'` and return its JSON reply verbatim as arm, halt, baton and (when present) resume_plan, resume_rows, resume_ledger, pending_rulings and spine_plan, plus resume_ready, design_brief and design_route when present; "
             "when the command is denied or fails, return halt {kind: 'refusal', reason: <its error text>}, never arm "
             "and halt both null. Also read the sizing at ",
             "js:_sizingRel",
@@ -1802,7 +1892,7 @@ def compose_ask_script(
         "{ arm: _STAGED_RESUME.arm, halt: null, baton: null, tshirt: null, route: null, "
         f"resume_plan: (_STAGED_RESUME.arm !== {_lit(ARM_XS)} && typeof _STAGED_RESUME.plan_rel === 'string' "
         "&& _STAGED_RESUME.plan_rel) ? _STAGED_RESUME.plan_rel : null, "
-        "resume_rows: null, resume_ledger: null, pending_rulings: null, spine_plan: null, "
+        "resume_rows: null, resume_ledger: null, pending_rulings: null, resume_ready: null, spine_plan: null, "
         f"{DESIGN_BRIEF_KEY}: null, {DESIGN_ROUTE_KEY}: null, {_ROUTE_VERDICT_KEY}: null }}"
     )
     if launcher_child:
@@ -1864,7 +1954,7 @@ def compose_ask_script(
             "with <name> filled as above and <your writes> replaced by the JSON array you return as writes:\n\n"
             + gate_template
             + "\n\nand return its JSON reply verbatim as arm, halt, baton, sizing_path and (when present) resume_plan, "
-            f"resume_rows, resume_ledger, pending_rulings and spine_plan, plus design_brief and design_route{_VERDICT_RETURN if has_route_pref else ''} when present; then read estimate.tshirt and route from the sizing at {sizing_write_rel} "
+            f"resume_rows, resume_ledger, pending_rulings and spine_plan, plus resume_ready, design_brief and design_route{_VERDICT_RETURN if has_route_pref else ''} when present; then read estimate.tshirt and route from the sizing at {sizing_write_rel} "
             "and return them as tshirt and route (tshirt replaces your own judged value). "
             "On a non-zero exit_code run no gate command and return no arm or halt."
         )
@@ -2002,7 +2092,7 @@ def compose_ask_script(
             f"Do not edit, retry or repair it. (2) Only when exit_code is 0, run `{_INVOKE} {OP_ASK_GATE} '",
             _gate_payload(sizing_js=_reword_sizing_js),
             "'` and return its JSON reply verbatim as arm, halt, baton, sizing_path and (when present) resume_plan, resume_rows, resume_ledger, "
-            f"pending_rulings, spine_plan, design_brief and design_route{_VERDICT_RETURN if has_route_pref else ''}; when the command is denied or fails, return halt {{kind: 'refusal', reason: <its error "
+            f"pending_rulings, resume_ready, spine_plan, design_brief and design_route{_VERDICT_RETURN if has_route_pref else ''}; when the command is denied or fails, return halt {{kind: 'refusal', reason: <its error "
             "text>}, never arm and halt both null. Also read the sizing at ",
             "js:" + _reword_sizing_js,
             " and return its estimate.tshirt as tshirt and its route as route. On a non-zero exit_code run no "
@@ -2059,7 +2149,7 @@ def compose_ask_script(
         b.append(
             "      Object.assign(_scouted, { arm: _reworded.arm ?? null, halt: _reworded.halt ?? null, "
             "baton: _reworded.baton ?? null, sizing_path: _sizingRel, tshirt: _reworded.tshirt, route: _reworded.route, "
-            "resume_plan: _reworded.resume_plan ?? null, resume_rows: _reworded.resume_rows ?? null, resume_ledger: _reworded.resume_ledger ?? null, pending_rulings: _reworded.pending_rulings ?? null, spine_plan: _reworded.spine_plan ?? null, "
+            "resume_plan: _reworded.resume_plan ?? null, resume_rows: _reworded.resume_rows ?? null, resume_ledger: _reworded.resume_ledger ?? null, pending_rulings: _reworded.pending_rulings ?? null, resume_ready: _reworded.resume_ready ?? null, spine_plan: _reworded.spine_plan ?? null, "
             f"{DESIGN_BRIEF_KEY}: _reworded.{DESIGN_BRIEF_KEY} ?? null, "
             f"{DESIGN_ROUTE_KEY}: _reworded.{DESIGN_ROUTE_KEY} ?? null, "
             f"{_ROUTE_VERDICT_KEY}: _reworded.{_ROUTE_VERDICT_KEY} ?? null, "
@@ -2114,7 +2204,7 @@ def compose_ask_script(
             + "_halted ? { arm: null, halt: null } : { arm: _scouted.arm ?? null, "
             "halt: _scouted.halt ?? null, baton: _scouted.baton ?? null, tshirt: _scouted.tshirt, "
             "route: _scouted.route, resume_plan: _scouted.resume_plan ?? null, "
-            "resume_rows: _scouted.resume_rows ?? null, resume_ledger: _scouted.resume_ledger ?? null, pending_rulings: _scouted.pending_rulings ?? null, spine_plan: _scouted.spine_plan ?? null, "
+            "resume_rows: _scouted.resume_rows ?? null, resume_ledger: _scouted.resume_ledger ?? null, pending_rulings: _scouted.pending_rulings ?? null, resume_ready: _scouted.resume_ready ?? null, spine_plan: _scouted.spine_plan ?? null, "
             f"{DESIGN_BRIEF_KEY}: _scouted.{DESIGN_BRIEF_KEY} ?? null, "
             f"{DESIGN_ROUTE_KEY}: _scouted.{DESIGN_ROUTE_KEY} ?? null, "
             f"{_ROUTE_VERDICT_KEY}: _scouted.{_ROUTE_VERDICT_KEY} ?? null }}" + (")" if launcher_child else "") + ";"
@@ -2149,7 +2239,7 @@ def compose_ask_script(
         clean_js = "(_scoutClean || _rewordStaged)" if sized_in_run else "!_gate.halt"
         arms_js = (
             f"((_gate.arm === {_lit(ARM_XS)} && !_gate.resume_plan) || (_gate.arm === {_lit(ARM_S)} && _gate.resume_plan) "
-            f"|| _gate.{RESUME_LEDGER_KEY})"
+            f"|| _gate.resume_ready || _gate.{RESUME_LEDGER_KEY})"
         )
         if sized_in_run:
             b.append(f"  if ({clean_js} && {arms_js}) {{ await _adoptStageReply(_scouted.stage_reply); }}")
@@ -2164,7 +2254,7 @@ def compose_ask_script(
         return [
             " When, and only when, your verdict is 'ruled', run this one command once, with " + fields
             + " set in its `record` member, and return its JSON reply verbatim as arm, halt, baton, "
-            "recorded and (when present) resume_plan, resume_rows, resume_ledger, pending_rulings and spine_plan, beside your verdict, pmOnly and ruling. "
+            "recorded and (when present) resume_plan, resume_rows, resume_ledger, pending_rulings and spine_plan, plus resume_ready, beside your verdict, pmOnly and ruling. "
             f"On 'pm-only' run nothing. `{_INVOKE} {OP_ASK_GATE} '",
             _gate_payload(record_js),
             "'` That command is the only way you write the sizing: never edit it by hand.",
@@ -2251,7 +2341,7 @@ def compose_ask_script(
             schema=_ruling_schema(_XL_SCHEMA), effort=_XL_EXIT_EFFORT, run_id=run_id,
         )
         # A record writes neither estimate.tshirt nor route, so both carry over from the first gate.
-        take_gate = "_gate = { ..._gate, arm: %s.arm, halt: %s.halt, baton: %s.baton ?? null, resume_plan: %s.resume_plan ?? null, resume_rows: %s.resume_rows ?? null, resume_ledger: %s.resume_ledger ?? null, pending_rulings: %s.pending_rulings ?? null, spine_plan: %s.spine_plan ?? null, design_route: %s.design_route ?? _gate.design_route ?? null };"
+        take_gate = "_gate = { ..._gate, arm: %s.arm, halt: %s.halt, baton: %s.baton ?? null, resume_plan: %s.resume_plan ?? null, resume_rows: %s.resume_rows ?? null, resume_ledger: %s.resume_ledger ?? null, pending_rulings: %s.pending_rulings ?? null, resume_ready: %s.resume_ready ?? null, spine_plan: %s.spine_plan ?? null, design_route: %s.design_route ?? _gate.design_route ?? null };"
         irreversible = f"new RegExp({_lit(IRREVERSIBLE_GATE_SOURCE)}, 'i')"
         b.append("  let _splitSlices = null;")
         b.append("  let _splitFan = null;")
@@ -2267,7 +2357,7 @@ def compose_ask_script(
             f"    const _apmGated = {irreversible}.test(_apm?.ruling ?? '');\n"
             "    if (_apm && _apm.verdict === 'ruled' && _apm.pmOnly !== true && !_apmGated && _apm.ruling "
             "&& _apm.recorded && _apm.recorded.ok === true && 'arm' in _apm && 'halt' in _apm) {\n"
-            f"      {take_gate % (('_apm',) * 9)}\n"
+            f"      {take_gate % (('_apm',) * 10)}\n"
             + (
                 f"      if (!_gate.halt && _gate.arm === {_lit(ARM_XS)} && !_gate.resume_plan) {{ await _adoptStageReply(_apm.stage_reply); }}\n"
                 if fold_stage
@@ -2287,7 +2377,7 @@ def compose_ask_script(
             "    if (_xl && _xl.verdict === 'ruled' && _xl.pmOnly !== true && !_xlGated && _xl.ruling "
             "&& ['roadmap', 'accept_multi_session', 'split'].includes(_xl.pick) "
             "&& _xl.recorded && _xl.recorded.ok === true && 'arm' in _xl && 'halt' in _xl) {\n"
-            f"      {take_gate % (('_xl',) * 9)}\n"
+            f"      {take_gate % (('_xl',) * 10)}\n"
             "      if (_xl.pick === 'split' && Array.isArray(_xl.slices)) { _splitSlices = _xl.slices; _splitFan = _xl; }\n"
             "      _progressed = true;\n"
             "    }\n"
@@ -2605,6 +2695,7 @@ def compose_ask_script(
         b.append("      }")
         b.append("      }")
         b.append("    }")
+        b.append("    if (_gate.resume_ready && _gate.resume_plan) { _planRel = _gate.resume_plan; }")
         b.append("    if (!_planRel && !_halted) {")
 
         # plan-blitz-ready-op-contract: omitted once staged and in a stop_after script (never stages).
@@ -2836,6 +2927,7 @@ def compose_ask_script(
         )
         if in_run_commit:
             _append_halt_record_commit(b)
+        b.append("  _refireNextAction();")
         b.append(
             "  return _halted ? { halted_by: _halted, halt_commit: _haltCommit, sizing: _sizingRel, run_id: _runId, "
             f"{DESIGN_ROUTE_KEY}: _gate?.{DESIGN_ROUTE_KEY} ?? null }} : "
@@ -2851,6 +2943,7 @@ def compose_ask_script(
                 review_titles=[],
                 through_plan=True,
             ),
+            chatty=bool((plan_blitz_args or {}).get("chatty")),
         )
 
     if xl_possible:
@@ -2983,7 +3076,7 @@ def compose_ask_script(
     b.append("  const _groups = {};")
     b.append(
         "  function _groupPrompt(g) {\n"
-        "    const ms = _manifest.rows.filter((x) => x.group === g);\n"
+        "    const ms = _manifest.rows.filter((x) => x.group === g && !x.kept_from);\n"
         "    return 'You own ' + ms.length + ' assignments, in this order: ' + ms.map((m) => m.id).join(', ') "
         f"+ {_js_string_literal(GROUP_HEADER_TAIL)} + ms.map("
         "(m) => '=== Assignment ' + m.id + ' ===\\n' + _rowPrompt(m) + '\\n\\n').join('');\n"
@@ -2996,6 +3089,12 @@ def compose_ask_script(
         "    return _memberResult(await _groups[r.group], r.id);\n"
         "  }"
     )
+    b.append(
+        "  function _keptRun(r) {\n"
+        "    log('Kept from ' + r.kept_from + ': ' + r.id);\n"
+        "    return 'DONE: ' + r.id + ' kept from ' + r.kept_from + ' (report on disk)';\n"
+        "  }"
+    )
     routed = _routing_enabled(repo_root)
     if routed:
         b.append(_route_js.routed_run_js())
@@ -3005,7 +3104,7 @@ def compose_ask_script(
     b.extend(_reviewer_row_js(anchor, work_label, run_id))
     routed_arm = f"r.route ? {_routed_row_js(work_label, exec_phase)} : " if routed else ""
     b.append(
-        f"      else _rows[r.id] = _runRow(r.id, (r.deps ?? []).map((d) => _rows[d]), null, async () => {routed_arm}r.group ? _groupRun(r) : agent(_rowPrompt(r), "
+        f"      else _rows[r.id] = _runRow(r.id, (r.deps ?? []).map((d) => _rows[d]), null, async () => r.kept_from ? _keptRun(r) : {routed_arm}r.group ? _groupRun(r) : agent(_rowPrompt(r), "
         f"{{ label: {work_label} + r.id, phase: {exec_phase}, "
         f"agentType: r.agent_type, model: r.model, stallMs: {_emit._EXECUTOR_STALL_MS} }}), "
         "{ title: r.id, paths: r.writes ?? [], declared: r.writes ?? [] });"
@@ -3320,8 +3419,8 @@ def compose_ask_script(
         "+ ' with out_of_scope: [' + _blkRulable.join(', ') + '] for the rows ruled out; `verbatim` carries the PM words ruling them out, recorded as the ruling and adding no row.' "
         f"+ ' If the halt commit landed every row, close it after the revise: ' + {_lit(_HALTED_ROUTE_OP)} + ' {{run_id: ' + _runId + ', sha: <the halt commit>}}.' : '') "
         ": ((_blkIds.length ? 'Ledger rows ' + _blkIds.join(', ') + (_emptyVerdict ? ' were owed a verdict and the verify leg returned none' : '') + ' block the commit.' "
-        ": !_ledger ? 'The verify leg returned no items list, so the ledger holds no verdict: fix the verify leg before re-running.' "
-        ": 'The verify leg returned an empty items list and no ledger row ids are on record to hold it against: fix the verify leg before re-running.') "
+        ": !_ledger ? 'The verify leg returned no items list, so the ledger holds no verdict: the refire re-runs the verify leg.' "
+        ": 'The verify leg returned an empty items list and no ledger row ids are on record to hold it against: the refire re-runs the verify leg.') "
         "+ (_blkRulable.length ? ' Run coordinator-invoke workflow.revise with run_id ' + _runId "
         "+ ' with out_of_scope: [' + _blkRulable.join(', ') + '] for the rows ruled out; `verbatim` carries the PM words ruling them out, recorded as the ruling and adding no row. The re-fire resumes at the ledger check.' "
         f"+ ' If the halt commit landed every row, close it after the revise: ' + {_lit(_HALTED_ROUTE_OP)} + ' {{run_id: ' + _runId + ', sha: <the halt commit>}}.' : '') "
@@ -3433,6 +3532,7 @@ def compose_ask_script(
             script_path=script_path,
         )
         _append_halt_record_commit(b)
+    b.append("  _refireNextAction();")
     b.append(
         f"  return {{ arm: _gate.arm, {DESIGN_ROUTE_KEY}: _gate?.{DESIGN_ROUTE_KEY} ?? null, {_ROUTE_VERDICT_KEY}: _gate?.{_ROUTE_VERDICT_KEY} ?? null, sizing: _sizingRel, plan: _planRel, run_id: _runId, "
         "split: _splitExit ? _splitExit.split : null, fire: _splitExit ? _splitExit.fire : "
@@ -3481,6 +3581,7 @@ def compose_ask_script(
                 *(("commit",) if in_run_commit else ()),
             ],
         ),
+        chatty=bool((plan_blitz_args or {}).get("chatty")),
     )
 
 
@@ -3551,9 +3652,11 @@ def composed_fanout(body_lines: Sequence[str]) -> FanoutCost:
     return FanoutCost(units=legs, agents=legs, basis="lower-bound")
 
 
-def _finish_script(b: list[str], manifest_rel: str, description: str, phase_titles: list[str]) -> str:
+def _finish_script(
+    b: list[str], manifest_rel: str, description: str, phase_titles: list[str], chatty: bool = False
+) -> str:
     """The script text from its composed body lines, refused over the Workflow runner's byte cap."""
-    meta = with_fanout(_emit._meta_block("warp-ask", description, phase_titles), composed_fanout(b))
+    meta = with_fanout(_emit._meta_block("warp-ask", description, phase_titles, chatty=chatty), composed_fanout(b))
     script = (
         f"{_emit._NODE_CHECK_DOES_NOT_APPLY_COMMENT}\n{meta}\n"
         f"{ASK_MANIFEST_MARKER}{manifest_rel}\n"
@@ -3821,7 +3924,7 @@ def _halt_record_commit_fn(
         prompt, label="halt-commit", phase="commit", agent_type=_COMMIT_AGENT_TYPE,
         schema=_COMMIT_SCHEMA, effort=_MECHANICAL_EFFORT, run_id=run_id,
     )
-    return f"  async function _commitHaltRecord() {{ return await {call}; }}"
+    return f"  async function _commitHaltRecord() {{ _refireNextAction(); return await {call}; }}"
 
 
 def _append_split_stage(b: list[str]) -> None:

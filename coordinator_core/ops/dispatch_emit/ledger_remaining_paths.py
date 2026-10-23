@@ -47,6 +47,13 @@ def _clean(token: str) -> Optional[str]:
     return t
 
 
+def drop_excluded(paths: Sequence[str], excluded: Sequence[str]) -> list[str]:
+    # Lazy: ask_exclusions imports `_clean` from this module.
+    from coordinator_core.ops.dispatch_emit import ask_exclusions
+
+    return ask_exclusions.drop_excluded(paths, excluded)
+
+
 def _exists(rel: str, repo_root: Path) -> bool:
     p = repo_root / rel
     return p.is_file() or ("/" in rel and p.parent.is_dir())
@@ -204,6 +211,14 @@ def _module_paths(
     return [c for c in cands if resolved.get(c) == c]
 
 
+_DOC_BODY_HEADS = ("docs/plans/", "docs/problems/")
+
+
+def _is_note_only_doc_body(path: str, step_named: set[str]) -> bool:
+    """A plan or problem body named only by a revise note is evidence, never a write."""
+    return path.casefold().startswith(_DOC_BODY_HEADS) and path.casefold() not in step_named
+
+
 def derive_ledger_rows(
     remaining: Mapping[str, Mapping[str, Any]],
     notes: Sequence[str],
@@ -213,6 +228,7 @@ def derive_ledger_rows(
     repo_root: Path,
     *,
     spelling: Optional[Spelling] = None,
+    exclude: Sequence[str] = (),
 ) -> tuple[list[dict[str, Any]], list[str]]:
     """Return `(rows, underivable)`: one dispatchable row per open ledger item.
 
@@ -248,16 +264,19 @@ def derive_ledger_rows(
         if spelling is not None and serving:
             resolved = spelling(serving)
             serving = [resolved.get(s) or s for s in serving]
+        step_named = {c.casefold() for c in _cleaned(steps)} | {s.casefold() for s in serving}
+        named = [p for p in named if not _is_note_only_doc_body(p, step_named)]
+        note_named &= set(named)
         modules = _module_paths(texts, serving, repo_root, spelling=spelling)
         writes: list[str] = []
-        for p in [*named, *modules, *serving]:
+        for p in drop_excluded([*named, *modules, *serving], exclude):
             if p not in writes and p not in gated_paths([p]):
                 writes.append(p)
         if rerule and steps:
             note_mods = set(_module_cands(sha_notes, serving))
             note_serving = {s for s in serving for c in _cleaned(sha_notes) if s == c or s.endswith("/" + c)}
             hits = note_named | {m for m in modules if m in note_mods} | note_serving
-            if not any(p not in gated_paths([p]) for p in hits):
+            if not any(p not in gated_paths([p]) for p in drop_excluded(sorted(hits), exclude)):
                 continue
         dropped = [d for d in dropped if d not in writes]
         if not writes:
@@ -308,6 +327,7 @@ def remaining_leg_plan(
     plan_writes: Sequence[str] = (),
     arm: Optional[str] = None,
     spelling: Optional[Spelling] = None,
+    exclude: Sequence[str] = (),
 ) -> dict[str, Any]:
     """Return `{action, writes, unwritable, em_owed, reason}` for the ledger-remaining leg.
 
@@ -322,7 +342,7 @@ def remaining_leg_plan(
     xs nothing re-plans, so the leg refuses (`test_ask_compose_xs_empty_footprint_leg`). The sha is not resolved against
     git: the verify leg judges.
     """
-    named = _named(remaining, repo_root, spelling=spelling)
+    named = drop_excluded(_named(remaining, repo_root, spelling=spelling), exclude)
     em_owed = gated_paths(named)
     allowed = set(doc_writes) | ({sizing_rel} if sizing_rel else set())
     blocked = set(blocking)

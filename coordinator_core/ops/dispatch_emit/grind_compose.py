@@ -113,6 +113,7 @@ from coordinator_core.ops.dispatch_emit.terminal_commit_params_channel import (
     READ_CAP_BYTES,
 )
 from coordinator_core.ops.dispatch_emit.emit import (
+    ACCEPTED_ROSTER_SCHEMA_VERSIONS,
     NoReviewStageError,
     _AGENT_TYPE_HOST_DEGRADED,
     _BRIEF_PRECEDENCE_CLAUSE,
@@ -1545,7 +1546,7 @@ def compose_grind_script(
     row's own ``Grind-Row`` trailer.
 
     ``review_roster_fragment`` / ``review_stage_schemas`` carry the execute_review
-    wave inputs; either being None, or a fragment not at schema_version 5,
+    wave inputs; either being None, or a fragment not at an accepted schema_version (5 or 6),
     raises ``NoReviewStageError`` before anything is composed. The wave runs
     after ``runGrind()`` over the union of committed rows' touched files, and
     is skipped at run time when no row committed. ``review_run_base_sha`` is
@@ -1567,10 +1568,11 @@ def compose_grind_script(
     when omitted."""
     if review_roster_fragment is None or review_stage_schemas is None:
         raise NoReviewStageError("no review roster fragment or stage schemas were supplied")
-    if review_roster_fragment.get("schema_version") != 5:
+    if review_roster_fragment.get("schema_version") not in ACCEPTED_ROSTER_SCHEMA_VERSIONS:
         raise NoReviewStageError(
             "review roster fragment is schema_version "
-            f"{review_roster_fragment.get('schema_version')!r}, not 5"
+            f"{review_roster_fragment.get('schema_version')!r}, not one of "
+            f"{sorted(ACCEPTED_ROSTER_SCHEMA_VERSIONS)}"
         )
     review = parse_execute_review(review_roster_fragment)
     review_blocks = compose_execute_review(

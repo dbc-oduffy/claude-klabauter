@@ -324,6 +324,26 @@ def test_unmerged_entry_never_reads_as_staged(tmp_path):
         parse_index_identity(repo, wanted=["conflicted.txt"])
 
 
+def test_unmerged_out_collects_instead_of_raising(tmp_path):
+    repo = _plain_repo(tmp_path)
+    raw = _build_index(
+        [
+            {"name": "a.txt", "mode": 0o100644, "size": 3, "mtime": 100},
+            {"name": "conflicted.txt", "mode": 0o100644, "size": 3, "mtime": 100, "stage": 1},
+            {"name": "conflicted.txt", "mode": 0o100644, "size": 3, "mtime": 100, "stage": 2},
+        ]
+    )
+    _write_index(repo / ".git", raw)
+
+    seen: set = set()
+    got = parse_index_identity(repo, wanted=["a.txt", "conflicted.txt"], unmerged_out=seen)
+    assert seen == {"conflicted.txt"}
+    assert list(got) == ["a.txt"]
+
+    with pytest.raises(IndexParseError):
+        parse_index_identity(repo, wanted=["conflicted.txt"])
+
+
 _PREFIX_NAMES = [
     "a.b",
     "a/one.txt",

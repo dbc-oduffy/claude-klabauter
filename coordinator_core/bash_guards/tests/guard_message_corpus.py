@@ -3995,6 +3995,7 @@ from coordinator_core.hooks import nudge_unauthorized_handoff as _hook_nudge_una
 from coordinator_core.hooks import postuse_advisory_dispatch as _hook_postuse_advisory_dispatch
 from coordinator_core.hooks import example_retrieval_repo_detect as _hook_example_retrieval_repo_detect
 from coordinator_core.hooks import flag_em_poll_in_flight as _hook_flag_em_poll_in_flight
+from coordinator_core.hooks import nudge_em_turn_budget as _hook_nudge_em_turn_budget
 from coordinator_core.hooks import submit_engine_ask as _hook_submit_engine_ask
 from coordinator_core.hooks import guard_terminal_review as _hook_guard_terminal_review
 from coordinator_core.hooks import guard_agent_route_admission as _hook_guard_agent_route_admission
@@ -4457,6 +4458,22 @@ def _fire_nudge_em_code_dispatch_spent(kind: str, denies: int = 0) -> Optional[D
         return _to_envelope_or_none(_hook_nudge_em_code_dispatch.op(payload))
 
 
+def _fire_nudge_em_code_dispatch_route_unfired() -> Optional[Dict[str, Any]]:
+    from coordinator_core.session import engine_route_state as ers
+    from coordinator_core.session import xs_lane_budget as xlb
+
+    payload = {
+        "tool_input": {"file_path": "/repo/src/module.py", "content": "def foo():\n    return 42\n"},
+        "session_id": "sess-nemcd-route-unfired-%s" % uuid.uuid4().hex,
+    }
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(_hook_nudge_em_code_dispatch, "_is_bootstrap_or_out_of_repo", lambda file_path: False)
+        mp.setattr(xlb, "read_lane", lambda root, sid: None)
+        mp.setattr(xlb, "touched_s_or_larger", lambda sid, root: True)
+        mp.setattr(ers, "session_route_phase", lambda *a, **k: ers.RoutePhase(ers.PHASE_UNFIRED))
+        return _to_envelope_or_none(_hook_nudge_em_code_dispatch.op(payload))
+
+
 def _fire_nudge_em_code_dispatch_xs_over() -> Optional[Dict[str, Any]]:
     return _fire_nudge_em_code_dispatch_spent("xs")
 
@@ -4639,6 +4656,21 @@ def _fire_flag_em_poll_in_flight_with(transcript_tools: List[str], run_in_flight
                 "transcript_path": str(transcript),
             }
             return _to_envelope_or_none(_run_maybe_async(_hook_flag_em_poll_in_flight._handler(payload)))
+
+
+def _fire_nudge_em_turn_budget_pre_fire() -> Optional[Dict[str, Any]]:
+    return _hook_envelope_from_message({"message": _hook_nudge_em_turn_budget.pre_fire_text(11, 10)})
+
+
+def _fire_nudge_em_turn_budget_post_landing() -> Optional[Dict[str, Any]]:
+    return _hook_envelope_from_message({"message": _hook_nudge_em_turn_budget.post_landing_text(6, 5)})
+
+
+def _fire_nudge_em_turn_budget_quiet() -> Optional[Dict[str, Any]]:
+    text = _hook_nudge_em_turn_budget.advisory_text(
+        {"payload": {"agent_id": "subagent-1", "session_id": "s", "transcript_path": "t"}}
+    )
+    return _hook_envelope_from_message({"message": text}) if text else None
 
 
 def _fire_flag_em_poll_in_flight() -> Optional[Dict[str, Any]]:
@@ -6730,6 +6762,9 @@ HOOK_ROWS: List[HookRow] = [
         _fire_nudge_em_code_dispatch_residue_over,
     ),
     HookRow(
+        "nudge_em_code_dispatch", "fire-route-unfired", True, _fire_nudge_em_code_dispatch_route_unfired
+    ),
+    HookRow(
         "nudge_em_code_dispatch", "control-doc-write", False, _fire_nudge_em_code_dispatch_control
     ),
     HookRow("nudge_hand_written_plan", "fire-no-frontmatter", True, _fire_nudge_hand_written_plan_fire),
@@ -6784,6 +6819,9 @@ HOOK_ROWS: List[HookRow] = [
     ),
     HookRow("flag_em_poll_in_flight", "fire-second-poll", True, _fire_flag_em_poll_in_flight),
     HookRow("flag_em_poll_in_flight", "control-intervening-tool", False, _fire_flag_em_poll_in_flight_control),
+    HookRow("nudge_em_turn_budget", "fire-pre-fire", True, _fire_nudge_em_turn_budget_pre_fire),
+    HookRow("nudge_em_turn_budget", "fire-post-landing", True, _fire_nudge_em_turn_budget_post_landing),
+    HookRow("nudge_em_turn_budget", "quiet-subagent", False, _fire_nudge_em_turn_budget_quiet),
     HookRow("submit_engine_ask", "fire-scout-while-run-live", True, _fire_submit_engine_ask_scout_live),
     HookRow("submit_engine_ask", "fire-sizing-already-working", True, _fire_submit_engine_ask_sizing_in_flight),
     HookRow("submit_engine_ask", "fire-neither-ask-nor-sizing", True, _fire_submit_engine_ask_neither),

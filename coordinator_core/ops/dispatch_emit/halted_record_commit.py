@@ -279,12 +279,15 @@ def _xs_spine_halt(worktree_root: Path, record_dir_rel: str, halted: dict) -> tu
     return f"{record_dir_rel}/{spines[0].name}", tuple(i["id"] for i in items), items
 
 
+_OUTCOME_HALT_KINDS = ("commit", "ledger-check")
+
+
 def _persist_run_outcome(repo_root: Path, run_id: str, halted: dict, params: dict) -> Optional[str]:
-    """Write the run's review outcome into its record dir for an all-landed commit halt (a dict
-    ``params.run_outcome`` with a dict ``inline_review`` and no incomplete chunk); returns its
-    repo-relative posix path, else None."""
+    """Write the run's review outcome into its record dir for an all-landed commit or ledger-check
+    halt (a dict ``params.run_outcome`` with a dict ``inline_review`` and no incomplete chunk);
+    returns its repo-relative posix path, else None."""
     outcome = params.get("run_outcome")
-    if halted.get("halted") != "commit" or not isinstance(outcome, dict):
+    if halted.get("halted") not in _OUTCOME_HALT_KINDS or not isinstance(outcome, dict):
         return None
     if not isinstance(outcome.get("inline_review"), dict) or outcome.get("incomplete_chunks"):
         return None
@@ -407,6 +410,29 @@ def _baton_cascade(worktree_root: Path, repo_root: Path, run_id: str) -> dict:
     return {"run_baton_cascade": fire_for_batons(worktree_root, repo_root, [rel], None)}
 
 
+def _record_kept(
+    root: Path, record_dir_rel: str, owner: dict, withheld: dict, halted: dict, paths: list
+) -> dict:
+    """Write ``kept.json`` beside the withheld map; append its path to ``paths`` (in place) so it
+    lands with the record, and stamp it on the marker as ``next_action.resume.stage``. Returns ``{"kept": {...}}`` when anything was recorded, else ``{}``."""
+    from coordinator_core.ops.dispatch_emit import kept_work
+
+    record_dir = root / record_dir_rel
+    if not record_dir.is_dir():
+        return {}
+    chunks = kept_work.kept_chunks(root, owner, withheld)
+    gate = kept_work.plan_gate(halted, root)
+    written = kept_work.write(record_dir, chunks, gate)
+    if written is None:
+        return {}
+    rel = f"{record_dir_rel}/{kept_work.KEPT_FILE}"
+    if rel not in paths:
+        paths.append(rel)
+    kept = {"chunks": sorted(chunks), "plan_gate": gate is not None}
+    halted_run.record_resume_stage(record_dir, {"kept": rel, **kept})
+    return {"kept": kept}
+
+
 def _land(
     worktree_root: Path, repo_root: Path, params: dict, run_id: str, record_dir_rel: str, halted: dict
 ) -> dict:
@@ -464,6 +490,7 @@ def _land(
             blocking_items=blocking_items if plan_rel else None,
             run_base_sha=run_base,
             reason=halt_reason,
+            next_action=halted.get("next_action") if isinstance(halted.get("next_action"), dict) else None,
         )
     raw_docs = params.get(run_artifacts.DOC_PATHS_PARAM)
     artifacts = within_handoffs_home(worktree_root, run_artifacts.candidate_paths(
@@ -693,6 +720,10 @@ def _land(
         }
 
     message = halted_record_message(run_id, halted)
+    from coordinator_core.ops.dispatch_emit.checkpoint_stamp import run_halted_trailer_lines
+
+    for line in run_halted_trailer_lines(landing_integrity.closing_bases(worktree_root, run_id, params)):
+        message += "\n" + line
     for path in unlanded:
         message += "\nReview-Edit-Unlanded: " + path
     if landed_chunks:
@@ -703,6 +734,7 @@ def _land(
         message += "\nRemoves: " + ", ".join(deleted)
     if (worktree_root / record_dir_rel).is_dir():
         halted_run.record_withheld(worktree_root / record_dir_rel, withheld)
+    kept_reply = _record_kept(worktree_root, record_dir_rel, owner, withheld, halted, paths)
     commit_params: dict = {"paths": paths, "message": message, "carry_stopped_runs": False}
     if deleted:
         commit_params["deleted_paths"] = deleted
@@ -724,7 +756,7 @@ def _land(
         return _error("ceremony.commit_v2 is not registered", **base)
     if not isinstance(reply, dict):
         return _error(f"unexpected commit_v2 reply: {reply!r}", **base)
-    extra: dict = {**review_reply, **peer_held_by, **baton_reply}
+    extra: dict = {**review_reply, **peer_held_by, **baton_reply, **kept_reply}
     if not reply.get("error"):
         _settle_ledger_pointer(repo_root, run_id, halted, sizing_rel, outcome_rel)
         extra.update(_baton_cascade(worktree_root, repo_root, run_id))

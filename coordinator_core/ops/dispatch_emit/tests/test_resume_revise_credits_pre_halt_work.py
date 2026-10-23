@@ -109,4 +109,4 @@ def test_the_pre_halt_credit_const_is_declared_before_every_read(monkeypatch):
 
 def test_the_halt_next_action_names_the_pre_halt_credit_path(monkeypatch):
     out = _run(_script(monkeypatch), verify=_met("none"), resume=_REVISED)
-    assert "work committed at or before the halt meets a row when the verdict met_by names that commit" in out["result"]["halted_by"]["next_action"]
+    assert "work committed at or before the halt meets a row when the verdict met_by names that commit" in out["result"]["halted_by"]["next_action"]["detail"]

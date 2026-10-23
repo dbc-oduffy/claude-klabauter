@@ -39,6 +39,7 @@ from pathlib import Path
 from typing import Callable, List, Optional, Tuple
 
 from coordinator_core._hook_envelope import context_only, no_advisory, payload_of
+from coordinator_core.hooks import nudge_em_turn_budget
 from coordinator_core.hooks.example_retrieval_repo_detect import find_example_retrieval_repo_dir
 from coordinator_core.hooks.support.git_common_dir import resolve_git_common_dir
 from coordinator_core.hooks.support.session_hub import (
@@ -196,6 +197,14 @@ def _claim_once(session_dir: Path, session_id: str, name: str) -> bool:
     return True
 
 
+def _turn_budget_text(params: dict) -> str:
+    """Turn-budget advisory; any failure is silence. A non-empty return is already recorded as delivered."""
+    try:
+        return nudge_em_turn_budget.advisory_text(params) or ""
+    except Exception:
+        return ""
+
+
 @register_op("hooks.preuse_search_dispatch")
 def _handler(params: dict, repo_root=None) -> dict:
     params = payload_of(params)
@@ -210,13 +219,18 @@ def _handler(params: dict, repo_root=None) -> dict:
     if not isinstance(session_id, str) or not session_id_is_real(session_id):
         return no_advisory()
 
+    turn_text = _turn_budget_text(params)
+
+    def _only_turn_text() -> dict:
+        return context_only("PreToolUse", turn_text) if turn_text else no_advisory()
+
     search_root = _search_root(params, tool_input)
     indexed_root = _indexed_repo_root(search_root) if search_root else None
     if not indexed_root:
-        return no_advisory()
+        return _only_turn_text()
     common_dir = resolve_git_common_dir(indexed_root)
     if not common_dir:
-        return no_advisory()
+        return _only_turn_text()
     session_dir = Path(common_dir) / "coordinator-sessions" / session_id
 
     agent_id = params.get("agent_id")
@@ -240,6 +254,8 @@ def _handler(params: dict, repo_root=None) -> dict:
                     symbol=symbol, sidx=_structural_index_hint(indexed_root)))
             break
 
+    if turn_text:
+        parts.append(turn_text)
     if not parts:
         return no_advisory()
     return context_only("PreToolUse", "\n".join(parts))

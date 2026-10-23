@@ -6,7 +6,7 @@ a light helper.
 Purpose: in a fresh interpreter, after the benchmark's own plan-run fixture runs end to end
 (``build_fixture`` + ``_prepare_close`` + ``_run_full_path``), the modules below are absent from
 ``sys.modules``. Each was once loaded for one value: the recorded run base, an evidence sidecar
-name, a mode predicate.
+name, a mode predicate. The probe pins the opt-in policy as the suite does.
 
 Negative-spec:
     - Does NOT copy the benchmark driver: it is imported.
@@ -43,6 +43,9 @@ from pathlib import Path
 from coordinator_core.benchmarks import terminal_commit_full_path as drv
 repo, script = drv.build_fixture(Path(sys.argv[1]))
 drv._prepare_close(repo)
+# The conftest pin is a monkeypatch the child interpreter never sees.
+from coordinator_core.ops.dispatch_emit import process_artifact_policy as _pap
+_pap.hosts_coordinator_state = lambda root: True
 from coordinator_core.ops.dispatch_emit.tests import _legacy_terminal_commit_run as legacy
 out = legacy.run(repo, script)
 ok = out.get("review_stamp") == "minted" and out.get("plan_status") == "implemented"

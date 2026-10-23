@@ -149,6 +149,26 @@ ASK_SCOUT_SCHEMA = {
     "required": [*SCOUT_SCHEMA["required"], "exit_code"],
     "properties": {
         **SCOUT_SCHEMA["properties"],
+        "scout_evidence": {
+            "type": "array",
+            "items": _STR,
+            "description": "Read-evidence strings (files/sites actually read) supporting an S over XS; omit when none.",
+        },
+        "boundary_in_notch": {
+            "type": "string",
+            "enum": ["yes", "no"],
+            "description": "Whether a cross-repo boundary sits in the change's notch; omit when unread.",
+        },
+        "precedent": {
+            "type": "string",
+            "enum": ["shipped-before", "novel"],
+            "description": "Whether this change shape has shipped before; omit when unknown.",
+        },
+        "probe_signal": {
+            "type": "string",
+            "enum": ["collapse", "raise"],
+            "description": "Scout's size probe: collapse toward smaller or raise toward larger; omit when none.",
+        },
         "exit_code": {"type": "integer"},
         "stdout": _STR,
         "stderr": _STR,
@@ -235,8 +255,15 @@ ASSEMBLE_SCHEMA = {
 }
 
 
+#: JS variable the ask composer passes as ``scouted``; only it gets the S-evidence flags,
+#: because the grind composer's golden output is byte-pinned.
+ASK_ASSEMBLE_FIELDS_VAR = "_asmFields"
+
+
 def scout_assemble_flags_js(scouted: str, quote: str, extra: str = "") -> str:
     """JS expression text appending the sizing-assemble flags a scout's return fills.
+
+    The S-evidence flags are appended only when ``scouted`` is ``ASK_ASSEMBLE_FIELDS_VAR``.
 
     ``scouted`` names the JS variable holding the scout's return and ``quote`` the JS
     shell-quoting function in scope; ``extra`` is spliced after ``--exit-criterion``.
@@ -250,6 +277,25 @@ def scout_assemble_flags_js(scouted: str, quote: str, extra: str = "") -> str:
         f" + ' --exit-criterion ' + {quote}({scouted}.exit_criterion){extra}"
         f" + ({scouted}.jtbd_unclear === true ? ' --jtbd-unclear' : '')"
         f" + ({scouted}.well_trodden_step_change === true ? ' --well-trodden-step-change' : '')"
+        + (_s_evidence_flags_js(scouted, quote) if scouted == ASK_ASSEMBLE_FIELDS_VAR else "")
+    )
+
+
+def _s_evidence_flags_js(scouted: str, quote: str) -> str:
+    """JS text appending the S-evidence flags (`--precedent`, `--boundary-in-notch`,
+    `--probe-signal`, `--scout-evidence`) each only when the scout return carries it; with
+    none present it adds nothing, so route() keeps demoting an evidence-free S to XS."""
+    enum = lambda field, flag, values: (  # noqa: E731
+        f" + ([{', '.join(repr(v) for v in values)}].includes({scouted}.{field})"
+        f" ? ' {flag} ' + {quote}({scouted}.{field}) : '')"
+    )
+    ev = f"{scouted}.scout_evidence"
+    return (
+        enum("precedent", "--precedent", ("shipped-before", "novel"))
+        + enum("boundary_in_notch", "--boundary-in-notch", ("yes", "no"))
+        + enum("probe_signal", "--probe-signal", ("collapse", "raise"))
+        + f" + (Array.isArray({ev}) ? {ev}.filter(function (v) {{ return typeof v === 'string' && v.trim() !== ''; }})"
+        f".map(function (v) {{ return ' --scout-evidence ' + {quote}(v); }}).join('') : '')"
     )
 
 
@@ -853,6 +899,9 @@ class ResumePlan(NamedTuple):
     incomplete: tuple[str, ...]
     ledger: LedgerHalt | None = None
     landed_open: tuple[tuple[str, str], ...] = ()
+    #: Row ids whose finished product a halted run kept, from the run ``kept_run``.
+    kept: tuple[str, ...] = ()
+    kept_run: str | None = None
 
 
 @dataclass(frozen=True)
@@ -888,9 +937,13 @@ class GateVerdict:
     # The sizing's design_route payload (design_route.read); emitted under DESIGN_ROUTE_KEY
     # only when not None.
     design_route: dict | None = None
+    # A refused plan whose bytes are unchanged and whose carried reviews now pass: resume without re-planning.
+    resume_ready: bool = False
 
     def to_json(self) -> dict[str, Any]:
         out: dict[str, Any] = {"arm": self.arm, "halt": self.halt, "baton": self.baton}
+        if self.resume_ready:
+            out["resume_ready"] = True
         if self.design_brief:
             out["design_brief"] = self.design_brief
         if self.design_route is not None:
@@ -928,6 +981,8 @@ class ManifestRow:
     route: Optional[dict[str, Any]] = None
     #: Register row ids this row delivers.
     register_rows: tuple[str, ...] = ()
+    #: Run id whose halt kept this row's finished product; the row is staged kept, not executed.
+    kept_from: str = ""
 
     def to_json(self) -> dict[str, Any]:
         out: dict[str, Any] = {
@@ -945,6 +1000,8 @@ class ManifestRow:
             out["route"] = self.route
         if self.register_rows:
             out["register_rows"] = list(self.register_rows)
+        if self.kept_from:
+            out["kept_from"] = self.kept_from
         return out
 
     @classmethod
@@ -960,6 +1017,7 @@ class ManifestRow:
             group=data.get("group") or "",
             route=data.get("route"),
             register_rows=tuple(str(r) for r in data.get("register_rows") or ()),
+            kept_from=str(data.get("kept_from") or ""),
         )
 
 

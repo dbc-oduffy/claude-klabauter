@@ -61,7 +61,7 @@ def _bash_armed(repo) -> dict:
     d = repo / ".git" / "coordinator-sessions" / SID
     d.mkdir(parents=True)
     (d / "dispatched-agents.txt").write_text("abcdef0123456789\tsonnet\tcoordinator:executor\t1\n")
-    payload = {"tool_name": "Bash", "session_id": SID, "cwd": str(repo), "tool_input": {"command": "pytest a.py"}}
+    payload = {"tool_name": "Bash", "session_id": SID, "cwd": str(repo), "tool_input": {"command": "pytest"}}
     assert g.check(payload) is None
     return payload
 

@@ -104,6 +104,42 @@ def test_unknown_kind_refused_by_presets_and_block():
         rc.build_close_block("r1", True, {}, kind="queue-grind")
 
 
+def test_review_skip_reasons_vocabulary():
+    assert rc.REVIEW_SKIP_REASONS == (
+        "no-plan", "no-terminal-commit", "not-opted-in",
+        "no-inventory-record", "not-queued", "no-review-outcome",
+    )
+
+
+def test_review_skipped_prefixes_and_refuses_unknown_reason():
+    assert rc.review_skipped("no-plan") == LegResult("not-applicable", "review skipped: no-plan")
+    assert rc.review_skipped("no-plan", "x y") == LegResult(
+        "not-applicable", "review skipped: no-plan: x y"
+    )
+    with pytest.raises(ValueError):
+        rc.review_skipped("because")
+
+
+def test_review_unminted_is_failed_with_refusal():
+    assert rc.review_unminted("no sidecar") == LegResult(
+        "failed", "review ran, stamp not minted: no sidecar"
+    )
+
+
+def test_review_helpers_cap_and_scrub_paths(tmp_path):
+    long = rc.review_skipped("no-plan", "z" * 500)
+    assert len(long.detail) == rc.DETAIL_CAP
+    assert rc.review_unminted("see C:\\Users\\x\\f.md").detail.endswith("<path>")  # abs-path-ok: scrub fixture
+    inside = (tmp_path / "a" / "b.md").as_posix()
+    assert rc.review_skipped("no-plan", inside, root=tmp_path).detail.endswith(": a/b.md")
+
+
+def test_build_close_block_unqueued_review_stamp_reads_not_queued():
+    legs = rc.build_close_block("r1", True, {})["legs"]
+    assert legs["review-stamp"] == {"status": "not-applicable", "detail": "review skipped: not-queued"}
+    assert legs["coded-stamp"]["detail"] == "paid only by a deferred close job"
+
+
 def test_close_job_path_is_forward_slash_relative():
     assert rc.close_job_path("r1") == ".coordinator-local/close-jobs/r1.json"
 

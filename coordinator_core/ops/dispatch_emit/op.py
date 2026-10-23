@@ -1804,7 +1804,9 @@ def _dispatch_emit_body(
         cloud_spawn (dict, optional): the cloud-spawn route -- see module
             docstring. Replies ``{"ok": True, "create_session": {...}}``.
         chatty (bool, optional, default False): plan route; compose an opt-in
-            chatty workflow (``emit.compose_script``'s ``chatty``).
+            chatty workflow (``emit.compose_script``'s ``chatty``). Ask route: the
+            planBlitz call carries the chatty review wave and the reply carries the
+            run's EM mailbox (``em_mailbox``, ``em_watch``, ``em_rewatch``).
         force (bool, optional, default False): overwrite an ``output_path``
             that already holds a different session's emission. Off by
             default -- see ``ForeignEmissionError``.
@@ -2140,6 +2142,7 @@ def _dispatch_emit_body(
             "relayed_slice_text": relayed_slice_text,
             "route_preference": route_pref,
             "required_reviewers": list(params.get("required_reviewers") or ()),
+            "chatty": bool(params.get("chatty")),
         }
         if ask_baton is not None:
             ask_ctx["baton"] = ask_baton
@@ -2175,10 +2178,17 @@ def _dispatch_emit_body(
                 "batons": ask_sizing["batons"],
                 "uncommitted": ask_sizing["uncommitted"],
             }
+            if ask_ctx["chatty"]:
+                # The gate resolved its args before the run id existed; the wave template names the run.
+                ask_ctx["plan_blitz_args"] = _resolve_plan_blitz_args(
+                    (Path(ask_root) / sizing_rel).as_posix(), chatty_run_id=run_id
+                )
         else:
             # A raw ask's arm is unknown until the in-run size phase, so its script always
             # carries the planBlitz branch and needs the launch args the sizing route resolves.
-            ask_ctx["plan_blitz_args"] = _resolve_plan_blitz_args(None)
+            ask_ctx["plan_blitz_args"] = _resolve_plan_blitz_args(
+                None, chatty_run_id=run_id if ask_ctx["chatty"] else None
+            )
             if intake_doc is not None:
                 ask_ctx["writes"] = ask_sizing["writes"]
         if not aliased_param(params, "output_path", "out_path"):
@@ -2735,6 +2745,11 @@ def _dispatch_emit_body(
             from coordinator_core.ops.dispatch_emit.ask_contract import OUTPUT_PATH_REDIRECT_KEY
 
             reply[OUTPUT_PATH_REDIRECT_KEY] = ask_ctx["output_redirect"]
+        if ask_ctx.get("chatty"):
+            ask_root = Path(ask_ctx["root"])
+            reply.update(
+                _em_mailbox(ask_root, record_dir(ask_root, ask_ctx["run_id"]).relative_to(ask_root).as_posix())
+            )
         if "batons" in ask_ctx:
             reply["batons"] = ask_ctx["batons"]
             reply["uncommitted"] = ask_ctx["uncommitted"]
@@ -3261,7 +3276,7 @@ def _empty_baton_sections(path: Path) -> list:
     return [h for h in _BATON_REQUIRED_SECTIONS if h in bodies and not "".join(bodies[h]).strip()]
 
 
-def _resolve_plan_blitz_args(sizing_abs: Optional[str]) -> dict:
+def _resolve_plan_blitz_args(sizing_abs: Optional[str], chatty_run_id: Optional[str] = None) -> dict:
     """planBlitz launch args for an emit whose script carries a planBlitz branch.
 
     Raises ``SizingFireRefused`` when provisionSidecarCli is unresolved: plan-blitz refuses
@@ -3277,6 +3292,7 @@ def _resolve_plan_blitz_args(sizing_abs: Optional[str]) -> dict:
         plugin_root=Path(plugin_root) if plugin_root else None,
         engine_root=Path(__file__).resolve().parents[3],
         sizing_abs=sizing_abs,
+        chatty_run_id=chatty_run_id,
     )
     if not args.get("provisionSidecarCli"):
         raise SizingFireRefused(

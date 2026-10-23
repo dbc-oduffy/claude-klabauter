@@ -72,3 +72,20 @@ def test_sidecar_resolves_from_engine_bin(isolated, tmp_path):
     (eng / "coordinator" / "bin" / "provision-sidecar.py").write_text("x", encoding="utf-8")
     out = pba.resolve(plugin_root=None, engine_root=eng, sizing_abs="s")
     assert "provision-sidecar.py" in out["provisionSidecarCli"]
+
+
+def test_chatty_run_id_none_adds_no_keys(isolated, tmp_path):
+    root = _plugin(tmp_path)
+    plain = pba.resolve(plugin_root=root, engine_root=None, sizing_abs="s")
+    explicit = pba.resolve(plugin_root=root, engine_root=None, sizing_abs="s", chatty_run_id=None)
+    assert plain == explicit
+    assert "chatty" not in plain and "chattyReview" not in plain
+
+
+def test_chatty_run_id_adds_review_wave(isolated, tmp_path):
+    out = pba.resolve(
+        plugin_root=_plugin(tmp_path), engine_root=None, sizing_abs="s", chatty_run_id="run-9"
+    )
+    assert out["chatty"] is True
+    assert out["chattyReview"]["roster"]["run_id"] == "run-9"
+    assert out["pluginAgentsAvailable"] is True

@@ -39,6 +39,10 @@ DoE's `PREMISE_SCHEMA`, passed through unchanged.
   falsifier `baseline_ref` the checker read against. When present and different from the plan's
   current `prime_exit_criterion.falsifier.baseline_ref`, the row is **stale**: a note, never
   blocking. A row without `baseline_ref` behaves as before; a non-string value is refused.
+- **Ref-stamped drift.** A `CONTRADICTED` row whose `evidence` contains `stated at the ref so drift,
+  not load-bearing` (whitespace-normalised, case-insensitive) is a note (`<n> CONTRADICTED premise
+  row(s) the checker calls ref-stamped drift: <citation>`), never blocking. Other `CONTRADICTED`
+  rows still block.
 - **Plan frontmatter `corrects:` (optional input, read by the op from the plan file).** A list of
   `{citation: str, fixed_by: str}`. `citation` is non-empty text that the row's citation contains,
   compared after whitespace normalisation, case-sensitively. `fixed_by` is a spine row id. An entry
@@ -71,8 +75,9 @@ DoE's `PREMISE_SCHEMA`, passed through unchanged.
 caller runs, what a path resolves to). `id` and `claim` are non-blank strings, `id` unique.
 `check.command` is a census-form command that passes `roadmap.census.screen`
 (`census.ALLOWED_FORM`); `check.expect` is non-blank. Absent key: undeclared. `[]`: the plan rests
-on no anchor premise, and adds no finding. The engine never runs `command`; the premise-checker
-does.
+on no anchor premise, and adds no finding. The engine spawns nothing and walks nothing for a
+check: it evaluates the `_anchor_check` subset in-process and fills only the no-verdict gap. The
+premise-checker stays the runner for every other form.
 
 **Findings.** Each is one `judgment` entry and one ruling (`source: premise`), and counts as one
 blocking finding:
@@ -80,7 +85,8 @@ blocking finding:
 - `anchor-premises-undeclared`: the key is absent.
 - `anchor-premise-unchecked: <id>`: malformed entry, missing or blank check, or a `command` that
   `census.screen` refuses.
-- `anchor-premise-no-verdict: <id>`: no row resolves the anchor.
+- `anchor-premise-no-verdict: <id>`: no row resolves the anchor. When the engine check was
+  NOT_EVALUABLE the finding ends `(check not evaluable in-process: <detail>)`.
 - `anchor-premise-unknown: <id>`: a passed row names an `anchor` no declared entry carries.
 - `anchor-premises-unjudged: <reason>`: the plan could not be read; the reply pulls.
 - `anchor-premise-malformed-row: rows[<i>] (not a mapping)`: a passed `premise.rows` entry is not a
@@ -90,7 +96,12 @@ blocking finding:
 **Verdict source.** A passed `premise.rows` entry with `anchor: <id>` wins. Otherwise a row in the
 plan's premise-carry file (`premise-carry-contract.md` § 2) with `anchor: <id>` counts only while
 its `line_hash` is still among the plan's line hashes. A null or stale hash (the anchor line was
-edited) is no verdict. Matching is exact id equality, never prose similarity. A row's `anchor` is
+edited) is no verdict. With neither, the engine check decides: MATCH is `RESOLVES`, MISMATCH is
+`CONTRADICTED`, and NOT_EVALUABLE leaves the anchor with no verdict. An explicit row or live carry
+row always outranks the engine. The reply's `anchor_verdicts` lists `{id, verdict, source,
+observed}` per declared anchor, `source` being `row | carry | engine-check | none`. Matching is an
+exact declared-id match first, then a list or same-prefix range spec crediting each declared member
+(`P1-P4`, `P1..P4`, `P1, P2`); never prose similarity. A row's `anchor` is
 matched stripped; a non-string `anchor` never matches. A verdict outside
 `RESOLVES | UNRESOLVED | CONTRADICTED | UNCHECKABLE` (case-sensitive, non-strings included) counts
 as no verdict: the search continues to a later passed row or a live carry row.

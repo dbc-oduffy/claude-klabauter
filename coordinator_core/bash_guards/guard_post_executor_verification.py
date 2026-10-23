@@ -30,11 +30,8 @@ the session's last commit attempt arm (mtime of ``commit-scope-events.jsonl``, o
 such file means armed. A counter older than the newest arming row is ignored.
 
 Exempt: a scoped pytest (every target an explicit in-repo test file, node id, or directory
-under a ``tests/`` dir; a bare package dir is broad) in an
-execute-plan session -- ``session-shape.json`` records a ``plan.path`` whose plan reads
-``status: executing`` (execute-plan doctrine has the EM run the chunk's tests itself) --
-or in a session with a ``workflow-run-<session>-*.json`` record (any Workflow run it
-launched, completed or not); no counter bump. Also subagents (``agent_id`` present) and a sentinel
+under a ``tests/`` dir; a bare package dir, the repo root, no target, or a suite is broad),
+whatever the session shape; no counter bump. Also subagents (``agent_id`` present) and a sentinel
 carrying a reason line (the dispatch sentinel; each honoured one is appended to
 ``dispatch-escapes.jsonl``). One counter, ``post-executor-pytest-runs`` in the
 session share dir, spans every verification kind; counter I/O failure fails open.
@@ -43,7 +40,6 @@ session share dir, spans every verification kind; counter I/O failure fails open
 from __future__ import annotations
 
 import io
-import json
 import os
 import re
 import tempfile
@@ -164,6 +160,9 @@ _SPAWN_RE = re.compile(
     r"\b(?:Popen|check_call|check_output|run_module|system|popen"
     r"|execv\w*|spawn\w*|__import__|import_module|exec|eval)\s*\("
 )
+_RUNNER_CMD_RE = re.compile(
+    r"(?:python[\d.]*\s+-m\s+)?(?:pytest|unittest|doctest)(?:\s*$|\s+(?:-|\S*[/.:*\[\\]))"
+)
 _TEXT_TOKENS = frozenset({tokenize.STRING, tokenize.COMMENT, getattr(tokenize, "FSTRING_MIDDLE", -1)})
 
 
@@ -181,7 +180,13 @@ def _code_names_runner(code: str) -> bool:
     code_only = " ".join(t.string for t in toks if t.type not in _TEXT_TOKENS)
     if _RUNNER_RE.search(code_only) is not None:
         return True
-    return _SPAWN_RE.search(code_only) is not None
+    if _SPAWN_RE.search(code_only) is None:
+        return False
+    return any(t.type in _TEXT_TOKENS and _RUNNER_CMD_RE.match(_unquote(t.string)) for t in toks)
+
+
+def _unquote(literal: str) -> str:
+    return literal.strip().lstrip("rbfuRBFU").strip("'\"").strip()
 
 
 def _code_verifies(code: str, repo_root: str) -> bool:
@@ -404,35 +409,6 @@ def is_scoped_pytest(cmd: str, repo_root: str, cwd: str) -> bool:
     )
 
 
-# A post-run scoped pytest checks the EM's own residue edit. A run naming more targets
-# is a regression sweep over work the run's test stage and review already verified
-# (ladder XL: 199 files, an hour), so it counts toward the cap.
-_POST_RUN_SCOPED_TARGET_CAP = 10
-
-
-def _test_target_count(cmd: str) -> int:
-    return len(re.findall(r"(?:^|\s)['\"]?[^\s'\"]*(?:\.py|::)[^\s'\"]*", cmd))
-
-
-def execute_plan_session(session_id: str, repo_root: str) -> bool:
-    """This session claimed a plan through execute-plan: ``claim_plan(for_execution=True)``
-    stamps the plan ``executing`` and records ``plan.path`` in the session's
-    ``session-shape.json``. Two small reads, no spawn; any failure reads as False."""
-    from coordinator_core.lifecycle import git_common_dir
-
-    try:
-        sdir = git_common_dir(Path(repo_root)) / "coordinator-sessions" / session_id
-        with open(sdir / "session-shape.json", "r", encoding="utf-8") as fh:
-            rel = ((json.load(fh).get("plan") or {}).get("path")) or ""
-        if not rel:
-            return False
-        with open(Path(repo_root) / rel, "r", encoding="utf-8", errors="replace") as fh:
-            head = fh.read(4096)
-    except Exception:
-        return False
-    return re.search(r"^status:\s*['\"]?executing['\"]?\s*$", head, re.M) is not None
-
-
 def _executor_type(value: str) -> bool:
     folded = value.strip().casefold()
     if folded.startswith("coordinator:"):
@@ -622,14 +598,8 @@ def check(payload: dict):
         record_silent(GUARD_NAME, "suite under with-suite-mutex and a live Tier-U grant: exempt")
         return None
     if is_scoped_pytest(clean, repo_root, cwd):
-        if execute_plan_session(session_id, repo_root):
-            record_silent(GUARD_NAME, "scoped pytest in an execute-plan session: exempt")
-            return None
-        from coordinator_core.hooks.flag_em_poll_in_flight import session_workflow_run_ids
-
-        if session_workflow_run_ids(session_id) and _test_target_count(clean) <= _POST_RUN_SCOPED_TARGET_CAP:
-            record_silent(GUARD_NAME, "scoped pytest after a workflow run: exempt")
-            return None
+        record_silent(GUARD_NAME, "scoped pytest: exempt")
+        return None
     if _bump_counter(repo_root, session_id, newest_arming_epoch(session_id, repo_root) or 0.0) < 1:
         return None
     from coordinator_core.hooks import dispatch_escape as nd

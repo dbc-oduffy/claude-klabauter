@@ -40,6 +40,9 @@ from typing import Any, Mapping, Optional
 from coordinator_core.temp_layout import legacy_top_level_path, managed_tempdir
 from coordinator_core.ipc import register_op
 from coordinator_core.hooks._envelope import deny, no_advisory, payload_of
+from coordinator_core.machine_profile import apply_guard_level
+
+GUARD_NAME = "flag-em-poll-in-flight"
 
 #: Registered matcher names (C18 narrows hooks.json's HTTP matcher to the same set).
 POLL_TOOLS = frozenset(
@@ -274,8 +277,8 @@ def _handler(params: dict, repo_root=None) -> dict:
     if not flagged:
         return no_advisory()
 
-    return deny(
+    return apply_guard_level(GUARD_NAME, deny(
         "PreToolUse",
         "EM poll while workflow runs — the completion notification wakes you; end the turn. "
         f"See {_ANCHOR}.",
-    )
+    )) or no_advisory()

@@ -1366,7 +1366,6 @@ def test_a_grouped_wave_review_naming_every_prepped_slice_id_reaches_a_valid_wav
     "returned",
     [
         pytest.param("prep-1+…+prep-3", marks=pytest.mark.cadence),
-        "prep-1+prep-2",
         pytest.param("...e964d43cd66e-prep-1+...e964d43cd66e-prep-2", marks=pytest.mark.cadence),
         "prep",
         pytest.param("...", marks=pytest.mark.cadence),
@@ -1378,6 +1377,30 @@ def test_a_wave_review_slice_id_that_is_not_an_exact_prepped_id_halts(returned):
     result = _run_in_wave(_LONG_PREP, 9, patch=_with_slice_id(returned))
     assert result["halted"].startswith(SLICE_ID_UNKNOWN_HALT)
     assert result["wave"] is None
+
+
+_WIDE_SLICES = [_slice_row(f"{_RUN_PREP_ID}-prep-{i + 1}", i) for i in range(3)]
+_WIDE_PREP = {**_LONG_PREP, "slices": _WIDE_SLICES}
+
+
+@pytest.mark.parametrize(
+    "returned",
+    [
+        "prep-1+prep-2",
+        f"{_RUN_PREP_ID[:-3]}-prep-1+{_RUN_PREP_ID[:-3]}-prep-2",
+        f"{_RUN_PREP_ID[:-8]}-prep-1+{_RUN_PREP_ID[:-8]}-prep-2",
+    ],
+)
+def test_a_truncated_slice_id_matching_exactly_one_real_id_is_attributed_not_halted(returned):
+    result = _run_in_wave(_WIDE_PREP, 9, patch=_with_slice_id(returned))
+    assert "halted" not in result and "error" not in result
+    assert result["wave"][0]["slice_id"] == f"{_RUN_PREP_ID}-prep-1+{_RUN_PREP_ID}-prep-2"
+
+
+@pytest.mark.parametrize("returned", ["prep-", "prep-9", f"{_RUN_PREP_ID[:-8]}"])
+def test_an_ambiguous_or_unmatched_slice_id_still_halts(returned):
+    result = _run_in_wave(_WIDE_PREP, 9, patch=_with_slice_id(returned))
+    assert result["halted"].startswith(SLICE_ID_UNKNOWN_HALT)
 
 
 def test_a_wave_brief_tells_agents_to_return_the_exact_listed_ids():

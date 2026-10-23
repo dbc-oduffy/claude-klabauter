@@ -310,6 +310,37 @@ def test_new_file_in_existing_directory_is_minted_and_orphan_dir_is_not(tmp_path
     assert "nodir/none.py" not in rows["X1"]["writes"]
 
 
+_EXCLUDING_ROW = "edit CLAUDE.md, global-doctrine/CLAUDE.md and a/b.py, but do not touch global-doctrine"
+
+
+def test_ask_excluded_path_names_no_row(tmp_path):
+    repo = _repo_with(tmp_path / "repo", "CLAUDE.md", "global-doctrine/CLAUDE.md", "a/b.py")
+    sizing = {**_ledger_sizing((_EXCLUDING_ROW, "open")), "intent": "Fix the thing\nnot global-doctrine"}
+    text, rows = _rows_by_id(tmp_path, sizing, ["a/b.py"], repo)
+    assert rows["E1"]["writes"] == ["CLAUDE.md"]
+    assert rows["X1"]["title"] == "Fix the thing"
+    for row in rows.values():
+        assert "global-doctrine" not in " ".join([*row["writes"], str(row.get("surface")), row["title"]])
+    # second case: no other CLAUDE.md-class path, so no E1 row at all
+    only = {**_ledger_sizing(("edit global-doctrine/CLAUDE.md and a/b.py, do not touch global-doctrine", "open"))}
+    _, rows = _rows_by_id(tmp_path, only, ["a/b.py"], repo)
+    assert "E1" not in rows
+
+
+def test_ask_excluded_supplied_write_refused(tmp_path):
+    from coordinator_core.ops.dispatch_emit.sizing_xs_mint import AskExcludedWriteError
+
+    repo = _repo_with(tmp_path / "repo", "global-doctrine/CLAUDE.md", "a/b.py")
+    sizing = _ledger_sizing(("do not touch global-doctrine", "open"))
+    with pytest.raises(AskExcludedWriteError, match="global-doctrine/CLAUDE.md"):
+        mint_xs_spine(
+            sizing, sizing_rel=SIZING_REL, writes=["a/b.py", "global-doctrine/CLAUDE.md"],
+            out_dir=tmp_path / "out", repo_root=repo,
+        )
+    _, rows = _rows_by_id(tmp_path, sizing, ["a/b.py"], repo)
+    assert rows["X1"]["writes"] == ["a/b.py"]
+
+
 def test_plans_only_ledger_body_stays_in_x1(tmp_path):
     repo = _repo_with(tmp_path / "repo", "docs/plans/p.md")
     _, rows = _rows_by_id(tmp_path, _ledger_sizing(("docs/plans/p.md", "open")), ["docs/plans/p.md"], repo)

@@ -11,6 +11,12 @@ def test_refusal_names_the_offending_key():
     assert "ask.route_preference" in rp.refusal("ask", 3, None)
 
 
+def test_over_cap_refusal_names_length_cap_and_context():
+    msg = rp.refusal("ask", None, "x" * 2037)
+    assert "2037" in msg and "2000" in msg and "`context`" in msg
+    assert "non-empty string" not in msg
+
+
 def test_refusal_none_when_absent_or_valid():
     assert rp.refusal("ask", None, None) is None
     assert rp.refusal("ask", "goal", "why") is None

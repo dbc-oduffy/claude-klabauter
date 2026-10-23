@@ -100,3 +100,57 @@ def test_written_yaml_carries_the_tie_break_when_it_fired(tmp_path):
 
 def test_written_yaml_omits_the_tie_break_when_it_did_not_fire(tmp_path):
     assert "tie_break" not in _written(tmp_path, precedent="shipped-before")
+
+
+_SID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+_S_REL = "state/sizings/2026-10-22-s.yaml"
+_NEW_REL = "state/sizings/2026-10-23-fresh.yaml"
+
+
+@pytest.fixture()
+def s_plus_session(tmp_path, monkeypatch):
+    from coordinator_core.session.touch_record import KIND_WRITE, append_touch_claims
+
+    (tmp_path / ".git").mkdir()
+    (tmp_path / "state" / "sizings").mkdir(parents=True)
+    for name in ("COORDINATOR_SESSION_ID", "CLAUDE_SESSION_ID"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", _SID)
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / _S_REL).write_text("estimate:\n  tshirt: S\n", encoding="utf-8")
+    append_touch_claims([_S_REL], _SID, tmp_path, kind=KIND_WRITE)
+    monkeypatch.setattr(sa, "_open_routed_obligation", lambda *_a, **_k: None)
+    monkeypatch.setattr(sa, "_route_to_research", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        sa, "write_back", lambda *a, **k: {"pm_verbatims": {"embedded": 0, "turns": None}}
+    )
+    return tmp_path
+
+
+def test_research_class_s_skips_the_tie_break():
+    decision = sa.route(estimate={"tshirt": "S"}, research=True)
+    assert decision["resolved_estimate"]["tshirt"] == "S"
+    assert decision["tie_break"] is None
+    assert decision["route"] == "spec-dispatch"
+
+
+def test_research_s_writes_without_refusal_in_a_session_holding_an_s_plus_sizing(s_plus_session, capsys):
+    argv = ["--tshirt", "S", "--write", _NEW_REL, "--no-plan-hand-off"]
+    rc = sa.main([*argv, "--research-class", "corpus", "--research-source", "repo"])
+    assert rc == sa.EXIT_OK
+    assert "XS refused" not in capsys.readouterr().err
+
+
+def test_non_research_tie_break_xs_refusal_names_the_s_evidence_flags(s_plus_session, capsys):
+    rc = sa.main(["--tshirt", "S", "--write", _NEW_REL, "--no-plan-hand-off"])
+    assert rc == sa.EXIT_USAGE
+    err = capsys.readouterr().err
+    for flag in ("--scout-evidence", "--boundary-in-notch yes", "--precedent shipped-before", "--probe-signal raise"):
+        assert flag in err
+    assert "--tshirt S" not in err
+
+
+def test_requested_xs_refusal_keeps_the_rerun_as_s_text(s_plus_session, capsys):
+    rc = sa.main(["--tshirt", "XS", "--write", _NEW_REL, "--no-plan-hand-off"])
+    assert rc == sa.EXIT_USAGE
+    assert "--tshirt S" in capsys.readouterr().err

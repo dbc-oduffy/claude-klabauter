@@ -258,3 +258,118 @@ def test_a_repeated_handle_still_fails_by_name(tmp_path):
     assert result["status"] == "failed"
     assert result["error"] == "stage_pending repeated for a handle already supplied"
     assert len(calls) == 2
+
+
+def _xs_digest(run_id: str, arm: str = "xs") -> dict:
+    return {
+        "arm": arm,
+        "run_id": run_id,
+        "review": {"prep": None, "wave": [], "delivery": None, "integration": None, "reverify": None},
+        "next_action": {
+            "kind": "terminal_commit",
+            "op": "dispatch.terminal_commit",
+            "params": {
+                "incomplete_chunks": [],
+                "script_path": f"scratch/warp/{run_id}.workflow.mjs",
+                "inline_review": None,
+                "held": [],
+            },
+        },
+    }
+
+
+def _envelope(tmp_path: Path, *digests: dict) -> Path:
+    body = {
+        "summary": "launcher",
+        "result": {"parent_id": "ask-parent", "runs": [{"run_id": d["run_id"], "status": "ok", "result": d} for d in digests]},
+    }
+    out = tmp_path / "launcher.output"
+    out.write_text(json.dumps(body), encoding="utf-8")
+    return out
+
+
+def test_a_two_child_xs_launcher_envelope_commits_each_child_past_the_review_gate(tmp_path):
+    from coordinator_core.ops.dispatch_emit import terminal_commit as tc
+
+    out = _envelope(tmp_path, _xs_digest("ask-r1"), _xs_digest("ask-r2"))
+    (tmp_path / ".git").mkdir()
+    for run_id in ("ask-r1", "ask-r2"):
+        params = tc._params_from_task_output(str(out), run_id)
+        assert params["script_path"] == f"scratch/warp/{run_id}.workflow.mjs"
+        assert params["inline_review"]["integration_stem"] == f"{run_id}.review-wave-bookkeeping"
+        assert params["inline_review"]["slices"] == 0
+        reply = tc._terminal_commit({"task_output_path": str(out), "run_id": run_id}, tmp_path / ".git", {}, {})
+        assert reply.get("refused") != "unreviewed" and "carries no next_action.params" not in reply["error"]
+        assert f"{run_id}.workflow.mjs" in reply["error"], "the envelope's params must reach the script read"
+
+
+def test_launcher_envelope_refuses_an_unselected_or_unknown_run(tmp_path):
+    from coordinator_core.ops.dispatch_emit import terminal_commit as tc
+
+    out = _envelope(tmp_path, _xs_digest("ask-r1"), _xs_digest("ask-r2"))
+    with pytest.raises(ValueError, match="pass params.run_id"):
+        tc._params_from_task_output(str(out))
+    with pytest.raises(ValueError, match="no single run 'ask-zz'"):
+        tc._params_from_task_output(str(out), "ask-zz")
+
+
+def test_a_non_xs_digest_with_null_inline_review_stays_unreviewed(tmp_path):
+    from coordinator_core.ops.dispatch_emit import terminal_commit as tc
+
+    out = _envelope(tmp_path, _xs_digest("ask-r1", arm="s"))
+    assert tc._params_from_task_output(str(out), "ask-r1")["inline_review"] is None, "only an XS digest gets the zero-slice review"
+
+
+def _halted_digest(run_id: str) -> dict:
+    """An XS child digest as the launcher returns it when the child halted at commit."""
+    d = _xs_digest(run_id)
+    d["incomplete"] = ["X1"]
+    d["halted_by"] = {"halted": "commit", "refused": "unreviewed"}
+    d["ledger"] = {"items": [{"id": "R1", "status": "met", "wired": True, "root_read": "a.py"}]}
+    d["next_action"] = {"kind": "revise_and_refire", "op": "workflow.revise", "params": {"run_id": run_id, "note": "halted: commit"}}
+    return d
+
+
+def test_a_child_halted_at_commit_yields_its_own_commit_params(tmp_path):
+    from coordinator_core.ops.dispatch_emit import terminal_commit as tc
+
+    out = _envelope(tmp_path, _halted_digest("ask-r1"), _halted_digest("ask-r2"))
+    params = tc._params_from_task_output(str(out), "ask-r2")
+    assert params["script_path"] == "scratch/warp/ask-r2.workflow.mjs"
+    assert params["incomplete_chunks"] == ["X1"]
+    assert params["inline_review"]["integration_stem"] == "ask-r2.review-wave-bookkeeping"
+    assert params["ledger_verdict"]["items"] == [
+        {"essential": True, "id": "R1", "status": "met", "wired": True, "root_read": "a.py"}
+    ]
+
+
+def test_a_non_commit_halt_keeps_the_revise_params(tmp_path):
+    from coordinator_core.ops.dispatch_emit import terminal_commit as tc
+
+    d = _halted_digest("ask-r1")
+    d["halted_by"] = {"halted": "review"}
+    out = _envelope(tmp_path, d)
+    assert "script_path" not in tc._params_from_task_output(str(out), "ask-r1")
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_a_declared_directory_path_does_not_stop_the_commit(tmp_path, monkeypatch):
+    import copy
+
+    from coordinator_core.benchmarks import terminal_commit_full_path as driver
+    from coordinator_core.ops.dispatch_emit import terminal_commit as tc
+
+    repo, script = driver.build_fixture(tmp_path)
+    marker = repo / script
+    text = marker.read_text(encoding="utf-8")
+    assert '"paths":["a.py"]' in text
+    marker.write_text(text.replace('"paths":["a.py"]', '"paths":["a.py","docs"]'), encoding="utf-8")
+    monkeypatch.setenv("COORDINATOR_SESSION_ID", driver.SESSION_ID)
+    out = tc._handler(
+        {"script_path": script, "incomplete_chunks": [], "session_id": driver.SESSION_ID,
+         "inline_review": copy.deepcopy(driver.INLINE_REVIEW)},
+        repo_root=repo / ".git",
+    )
+    assert out.get("committed") is True and out.get("sha"), out.get("error")
+    assert "is a directory" not in json.dumps(out, default=str)

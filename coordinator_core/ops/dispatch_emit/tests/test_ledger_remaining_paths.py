@@ -256,3 +256,32 @@ def test_claude_md_does_not_lift_nongated_unwritable_refusal(tmp_path):
     assert plan["unwritable"] == ["pkg/mod.py"]
     assert plan["em_owed"] == ["CLAUDE.md"]
     assert plan["writes"] == []
+
+
+def test_exclude_covered_remaining_path_is_in_no_bucket(tmp_path):
+    root = _repo(tmp_path)
+    (root / "global-doctrine").mkdir()
+    (root / "global-doctrine/CLAUDE.md").write_text("x")
+    rem = _rem("edit global-doctrine/CLAUDE.md", "edit pkg/mod.py")
+    plan = remaining_leg_plan(rem, [], [_row(["pkg/mod.py"])], ["R1"], [], SIZING, root, exclude=["global-doctrine"])
+    assert "global-doctrine/CLAUDE.md" not in plan["writes"] + plan["em_owed"] + plan["unwritable"]
+    assert plan["action"] == LEG_DISPATCH
+
+
+def test_default_exclude_keeps_claude_md_em_owed(tmp_path):
+    root = _repo(tmp_path)
+    (root / "global-doctrine").mkdir()
+    (root / "global-doctrine/CLAUDE.md").write_text("x")
+    plan = remaining_leg_plan(_rem("edit global-doctrine/CLAUDE.md"), [], [], ["R1"], [], SIZING, root)
+    assert plan["em_owed"] == ["global-doctrine/CLAUDE.md"]
+
+
+def test_derive_ledger_rows_drops_excluded_writes(tmp_path):
+    from coordinator_core.ops.dispatch_emit.ledger_remaining_paths import derive_ledger_rows
+
+    root = _repo(tmp_path)
+    (root / "global-doctrine").mkdir()
+    (root / "global-doctrine/x.py").write_text("x")
+    args = (_rem("edit global-doctrine/x.py pkg/mod.py"), [], ["R1"], {}, [], root)
+    assert derive_ledger_rows(*args)[0][0]["writes"] == ["global-doctrine/x.py", "pkg/mod.py"]
+    assert derive_ledger_rows(*args, exclude=["global-doctrine"])[0][0]["writes"] == ["pkg/mod.py"]

@@ -15,6 +15,10 @@ still on the remote.
 
 The refusal must fire BEFORE anything is written, so the test pins HEAD as
 well as the exception.
+
+`finish_merge=True` is the one opt-in carve-out, for MERGE_HEAD only (see
+test_commit_paths_finishes_a_merge.py); CHERRY_PICK_HEAD, REVERT_HEAD and the
+rebase dirs still refuse with it set.
 """
 
 import subprocess
@@ -104,6 +108,18 @@ def test_commit_paths_refuses_a_mid_rebase_repo(conflicted):
 
     assert "git rebase --continue" in str(caught.value)
     assert _git(conflicted, "rev-parse", "HEAD").stdout.strip() == head_before
+
+
+@pytest.mark.parametrize("seq", ["CHERRY_PICK_HEAD", "REVERT_HEAD"])
+def test_finish_merge_still_refuses_other_sequencer_files(conflicted, seq):
+    _git(conflicted, "merge", "--abort")
+    head = _git(conflicted, "rev-parse", "HEAD").stdout.strip()
+    (conflicted / ".git" / seq).write_text(head + "\n")
+    (conflicted / "bystander.txt").write_text("two\n", encoding="utf-8", newline="\n")
+
+    with pytest.raises(CommitRefused, match=seq):
+        commit_paths(conflicted, ["bystander.txt"], "no", finish_merge=True)
+    assert _git(conflicted, "rev-parse", "HEAD").stdout.strip() == head
 
 
 @pytest.mark.parametrize(

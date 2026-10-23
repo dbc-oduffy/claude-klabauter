@@ -56,6 +56,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "session.poll_share":                    "none",
     "hooks.cater_subagent_start":            "none",
     "hooks.flag_em_poll_in_flight":          "none",
+    "hooks.nudge_em_turn_budget":            "none",
     "hooks.submit_engine_ask":               "none",
     "hooks.submit_bug_blitz":                "none",
     "hooks.taskstop_launch_recorder":        "none",

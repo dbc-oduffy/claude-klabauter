@@ -156,6 +156,50 @@ def test_second_discharge_is_noop_not_overwrite(tmp_path):
     assert read_em_discharges(plan)["E1"] == first
 
 
+def test_xs_spine_under_state_warp_discharges(tmp_path):
+    repo, plan = _plan(tmp_path)
+    spine = repo / "state" / "warp" / "ask-1" / "s.spine.md"
+    spine.parent.mkdir(parents=True)
+    spine.write_text(_PLAN, encoding="utf-8", newline="")
+    result = _call(repo, spine)
+    assert result["exit_code"] == 0 and result["applied"] is True, result
+    assert set(read_em_discharges(spine)) == {"E1"}
+
+
+def test_plan_path_outside_plans_and_state_warp_still_refused(tmp_path):
+    repo, plan = _plan(tmp_path)
+    stray = repo / "state" / "other" / "s.spine.md"
+    stray.parent.mkdir(parents=True)
+    stray.write_text(_PLAN, encoding="utf-8", newline="")
+    result = _call(repo, stray)
+    assert result["exit_code"] == 1 and "escapes" in result["error"]
+    assert not evidence_sidecar_path(stray).exists()
+
+
+def test_detection_target_claude_md_mints_no_em_row_but_edit_target_does(tmp_path):
+    from coordinator_core.ops.dispatch_emit.sizing_xs_mint import mint_xs_spine
+
+    (tmp_path / "CLAUDE.md").write_text("x\n", encoding="utf-8")
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "x.py").write_text("x\n", encoding="utf-8")
+
+    def spine(text):
+        sizing = {
+            "intent": "i",
+            "exit_criterion": {"statement": "s"},
+            "requirement_register": {
+                "rows": [{"id": "R1", "source_text": text, "status": "open", "anchor": "relayed"}]
+            },
+        }
+        return mint_xs_spine(
+            sizing, sizing_rel="state/sizings/s.yaml", writes=["src/x.py"], out_dir=tmp_path / "out", repo_root=tmp_path
+        )[0]
+
+    detect = "void the cell if any ancestor of its sandbox holds a CLAUDE.md"
+    assert "performer: em" not in spine(detect)
+    assert "performer: em" in spine("edit CLAUDE.md")
+
+
 @pytest.mark.parametrize("row_id", ["NOPE", "M1", "O1", "X1", "D1"])
 def test_refusals_write_nothing(tmp_path, row_id):
     repo, plan = _plan(tmp_path)

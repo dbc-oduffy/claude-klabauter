@@ -27,6 +27,9 @@ from typing import Optional, Sequence
 
 from coordinator_core.ops.dispatch_emit.gate_owed import GATE_OWED_VAR
 
+#: JS const the integration phase binds: true when its min_tshirt gate kept the stage from running.
+INTEGRATION_NOT_RUN_VAR = "_integrationNotRun"
+
 _SCHEMA_PATH = Path(__file__).resolve().parent.parent.parent / "contract" / "wake-digest.schema.json"
 
 # The script-level arrays and flag C12 declares; completion_return_js references only
@@ -577,7 +580,9 @@ def completion_return_js(
     delivery_var = review_field("delivery")
     integration_var = review_field("integration")
     review_status_expr = (
-        f"({integration_var} ? 'integrated' : (({prep_var} || {wave_var} || {delivery_var}) ? 'unstructured' : 'not_run'))"
+        f"({integration_var} ? 'integrated' : "
+        f"((typeof {INTEGRATION_NOT_RUN_VAR} !== 'undefined' && {INTEGRATION_NOT_RUN_VAR}) ? 'not_run' : "
+        f"(({prep_var} || {wave_var} || {delivery_var}) ? 'unstructured' : 'not_run')))"
         if review_vars
         else "'not_run'"
     )

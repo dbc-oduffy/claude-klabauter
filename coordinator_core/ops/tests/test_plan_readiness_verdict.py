@@ -536,6 +536,23 @@ def test_stale_class4_row_is_a_note_and_matching_baseline_ref_still_blocks(tmp_p
     assert fresh["blocking"] == ["premise-check: CONTRADICTED falsifier"]
 
 
+def test_ref_stamped_drift_contradiction_is_a_note_and_other_contradictions_still_block(tmp_path):
+    common = _corrects_plan(tmp_path, "")
+    drift = _row(
+        citation="440 halted (read at 6e394b67ba)",
+        evidence="census now 447 in working tree; census is Stated at the ref so drift, not load-bearing",
+    )
+    only = _op_reply(common, [drift])
+    assert only["verdict"] == "ready"
+    assert only["blocking"] == []
+    assert "ref-stamped drift" in only["reason"]
+    mixed = _op_reply(common, [drift, _row(citation="real break", evidence="file missing")])
+    assert mixed["verdict"] == "judgment"
+    assert mixed["blocking"] == ["premise-check: CONTRADICTED real break"]
+    unflagged = _op_reply(common, [_row(citation="440 halted", evidence="now 447")])
+    assert unflagged["blocking"] == ["premise-check: CONTRADICTED 440 halted"]
+
+
 def test_non_string_baseline_ref_is_refused(tmp_path):
     common = _corrects_plan(tmp_path, "")
     with pytest.raises(ValueError, match="baseline_ref"):
@@ -725,6 +742,11 @@ _AP1 = (
 )
 
 
+_AP1_NO_VERDICT = (
+    "anchor-premise-no-verdict: AP1 (check not evaluable in-process: unsupported shell operator '|')"
+)
+
+
 def _anchor_plan(root: Path, block: str) -> Path:
     common = _corrects_plan(root, "")
     plan = root / REL
@@ -761,7 +783,7 @@ def test_anchor_without_a_screenable_check_pulls_as_unchecked(tmp_path, block):
 def test_r32_anchor_with_a_named_check_and_no_verdict_is_caught(tmp_path):
     reply = op._handler({"plan": REL}, _anchor_plan(tmp_path, _AP1))
     assert reply["verdict"] == "judgment"
-    assert _anchor_rulings(reply) == ["anchor-premise-no-verdict: AP1"]
+    assert _anchor_rulings(reply) == [_AP1_NO_VERDICT]
 
 
 def test_contradicted_anchor_row_is_exactly_one_blocking_finding(tmp_path):
@@ -790,6 +812,11 @@ def test_passed_resolves_row_with_the_anchor_id_makes_the_plan_ready(tmp_path):
     assert reply["verdict"] == "ready"
 
 
+def test_resolves_row_citing_anchor_id_makes_the_plan_ready(tmp_path):
+    reply = _op_reply(_anchor_plan(tmp_path, _AP1), [_row("RESOLVES", citation="anchor AP1 -- " + _R32)])
+    assert reply["verdict"] == "ready"
+
+
 def _carry(root: Path, line_hash) -> None:
     from coordinator_core.session.machinery_paths import plan_sidecars_dir
 
@@ -814,7 +841,7 @@ def test_carry_row_resolves_an_anchor_only_while_its_line_is_unedited(tmp_path):
     assert op._handler({"plan": REL}, common)["verdict"] == "ready"
     _carry(tmp_path, "0" * 64)
     reply = op._handler({"plan": REL}, common)
-    assert _anchor_rulings(reply) == ["anchor-premise-no-verdict: AP1"]
+    assert _anchor_rulings(reply) == [_AP1_NO_VERDICT]
 
 
 def test_empty_anchor_premises_adds_no_finding(tmp_path):

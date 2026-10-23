@@ -142,6 +142,12 @@ _SANCTIONED_SITES: dict[tuple[str, str], str] = {
         "work dir under the operator's `--out-dir` (validated by `check_out_dir`), else the "
         "default temp; a synthetic-repo work dir, not an engine clone"
     ),
+    ("coordinator_core/benchmarks/ask_stage_size_l_profile.py", "mkdtemp"): (
+        "profile scratch under `managed_tempdir()`, the managed temp root; not an engine clone"
+    ),
+    ("coordinator_core/warm/door/tests/test_warm_zero_door_runs_cold.py", "TemporaryDirectory"): (
+        "built-door output dir under `managed_tempdir()`, the managed temp root; not an engine clone"
+    ),
     ("coordinator_core/benchmarks/tests/test_isolated_clone_destination.py", "mkdtemp"): (
         "exercises `mkdtemp_for_clone` itself, with destinations under `managed_tempdir()`"
     ),

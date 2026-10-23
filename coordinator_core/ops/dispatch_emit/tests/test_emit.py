@@ -2257,4 +2257,11 @@ def test_plan_route_renders_group_count_from_row_count_and_roster_max(tmp_path):
         plan_path, repo_root=tmp_path, review_roster_fragment=_sized_roster(),
         review_stage_schemas=_V5_STAGE_SCHEMAS,
     )
-    assert "_groupSlices((Array.isArray(_reviewPrep?.slices) ? _reviewPrep.slices : []), 9, 3, 4)" in script
+    groups = script[script.index("phase('Review groups')"):script.index("const _groupRaw = await")]
+    assert groups.count("agentType: 'coordinator:code-reviewer'") == 3
+    four = emit_script(
+        _sized_plan(tmp_path / "four", "L", 4), repo_root=tmp_path / "four",
+        review_roster_fragment=_sized_roster(), review_stage_schemas=_V5_STAGE_SCHEMAS,
+    )
+    four_groups = four[four.index("phase('Review groups')"):four.index("const _groupRaw = await")]
+    assert four_groups.count("agentType: 'coordinator:code-reviewer'") == 1

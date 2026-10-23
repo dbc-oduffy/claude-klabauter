@@ -12,13 +12,13 @@ the emitted run, in the background, under `claude -p` as interactively; its comp
 notification is the EM's one wake. The stub only ever runs when this hook did not: it returns a
 halt that names the gap, never a run.
 
-`args` shape: `{ask: str, em_context?, route_preference?, em_rationale?, stop_after?}` | `{sizing: str, stop_after?}` | `{asks: [{ask, source?, sender?, relayed_text?, em_context?, context?, route_preference?, em_rationale?, label?, writes?, stop_after?}], sender?, confirm_split?, stop_after?}` (`stop_after` is `"plan"` only: the run parks after planning for `/mise-prep`; a top-level value beside `asks` applies to every entry naming none; an `args` key outside the accepted set, or an `asks` entry key outside `ASKS_ITEM_KEYS`, is refused naming it and the accepted keys; `em_context` is a string of the EM's own context, carried in the emit op's `ask_brief` under an EM marker, never merged into the ask text, so `source: "pm"` stays true for the verbatim `ask`; an entry's `context` (a string or list of path / prose strings) and `em_context` ride the fan-out items on a multi-item `asks`, and a one-element `asks` carries them as a top-level `context` does; a top-level `context` beside a multi-item `asks` is refused; `route_preference` is goal|roadmap|plan, `em_rationale` at most 2000 chars; both forward to the emit op
+`args` shape: `{ask: str, em_context?, route_preference?, em_rationale?, stop_after?, chatty?}` (`chatty` is a boolean, forwarded to the emit op as params["chatty"]; a non-boolean is refused) | `{sizing: str, stop_after?}` | `{asks: [{ask, source?, sender?, relayed_text?, em_context?, context?, route_preference?, em_rationale?, label?, writes?, stop_after?}], sender?, confirm_split?, stop_after?}` (`stop_after` is `"plan"` only: the run parks after planning for `/mise-prep`; a top-level value beside `asks` applies to every entry naming none; an `args` key outside the accepted set, or an `asks` entry key outside `ASKS_ITEM_KEYS`, is refused naming it and the accepted keys; `em_context` is a string of the EM's own context, carried in the emit op's `ask_brief` under an EM marker, never merged into the ask text, so `source: "pm"` stays true for the verbatim `ask`; an entry's `context` (a string or list of path / prose strings) and `em_context` ride the fan-out items on a multi-item `asks`, and a one-element `asks` carries them as a top-level `context` does; a top-level `context` beside a multi-item `asks` is refused; `route_preference` is goal|roadmap|plan, `em_rationale` at most 2000 chars; both forward to the emit op
 or the fan-out, and either beside `{sizing}` is refused) (each ask a
 separate sibling run via `dispatch.ask_fanout`; with two or more ready runs the call is rewritten to one
 lazy-emit launcher (`fan_launcher.write_launcher`) that emits and starts each, with one ready run it fires
 that run directly; the allow reason carries `{parent_id, runs}` and the runs waiting; a one-element array is an `ask`; a
 slice `{sizing}` is denied until its `after` predecessors land), optional `repo` (absolute path; else the payload
-cwd's repo, or for an ask whose absolute `context` lies in another registered repo, that repo), optional `source: "pm" | "relayed"` (a chosen source is forwarded to the engine verbatim as `ask_source`; an unmarked single `ask` defaults to `pm` on the session's first human turn and to `relayed` with one warning in the allow reason on any later turn; only `source: "pm"` makes it the PM's
+cwd's repo, or for an ask whose absolute `context` lies in another registered repo, that repo; a run root foreign to an anchored session is refused unless the sizing takes the research route), optional `source: "pm" | "relayed"` (a chosen source is forwarded to the engine verbatim as `ask_source`; an unmarked single `ask` defaults to `pm` on the session's first human turn and to `relayed` with one warning in the allow reason on any later turn; only `source: "pm"` makes it the PM's
 words, which the engine verifies against the session's recorded turns (refused when contradicted, flagged
 when no log resolves); on `asks` it is the default for items naming no `source` of their own; a redirected
 root passes `session_root`, the submitting session's repo, so the log is found for that verification), optional EM brief beside either arm
@@ -65,7 +65,7 @@ from coordinator_core.warp_fire import SUBMIT_WORKFLOW_NAME, is_submit_name
 
 # Every `args` key this hook reads; a key outside it is refused by name. A key read below must be added here.
 _ARGS_KEYS: tuple[str, ...] = (
-    "ask", "asks", "brief", "brief_file", "confirm_split", "context", "cross_repo_approved", "em_context",
+    "ask", "asks", "brief", "brief_file", "chatty", "confirm_split", "context", "cross_repo_approved", "em_context",
     "em_rationale", "repo", "route_preference", "sender", "sizing", "source", "stop_after", "supersedes",
     "writes",
 )
@@ -157,6 +157,16 @@ def _call_preference(
 
     pref, rationale = normalize(pref, rationale)
     return pref, rationale, refusal("route_preference", pref, rationale)
+
+
+_CHATTY_KEY = "chatty"
+
+
+def _chatty_refusal(where: str, value: Any) -> Optional[str]:
+    """Refusal text for a non-boolean `chatty`; None when absent or a bool."""
+    if value is None or isinstance(value, bool):
+        return None
+    return f"{where}.{_CHATTY_KEY} must be true or false, got {value!r}."
 
 
 def _stop_after_refusal(where: str, value: Any) -> Optional[str]:
@@ -252,6 +262,24 @@ def _repo_root(repo_arg: Optional[str], payload: dict) -> Optional[Path]:
     return Path(top) if top else None
 
 
+def _cross_repo_refusal(
+    run_root: Path, own: Path, research_route: bool, session_id: Optional[str], payload: Mapping[str, Any]
+) -> Optional[str]:
+    """Deny text when the run root is a repo the write-bump guard refuses this session's agents; else None."""
+    from coordinator_core.ops.dispatch_emit.cross_repo_ask_refusal import cross_repo_run_refusal
+
+    cwd = payload.get("cwd")
+    pe = payload.get("env")
+    return cross_repo_run_refusal(
+        run_root,
+        own,
+        research_route=research_route,
+        session_id=session_id,
+        cwd=cwd if isinstance(cwd, str) and cwd else None,
+        env={**os.environ, **pe} if isinstance(pe, dict) and pe else None,
+    )
+
+
 def _context_home(root: Path, paths: list[str]) -> Path:
     """The registered repo holding the first absolute context path that lies outside `root`; else `root`."""
     resolved_root = root.resolve()
@@ -315,9 +343,15 @@ def _asks(tool_input: Mapping[str, Any]) -> tuple[Optional[list], Optional[str]]
     for i, item in enumerate(asks):
         if not isinstance(item, dict) or not isinstance(item.get("ask"), str) or not item["ask"].strip():
             return None, f"asks[{i}] carries no ask text."
-        unknown = unknown_keys_refusal(f"asks[{i}]", item, ASKS_ITEM_KEYS)
+        unknown = unknown_keys_refusal(f"asks[{i}]", item, ASKS_ITEM_KEYS + (_CHATTY_KEY,))
         if unknown:
             return None, unknown
+        if item.get(_CHATTY_KEY) is not None:
+            chatty_why = _chatty_refusal(f"asks[{i}]", item[_CHATTY_KEY])
+            if chatty_why:
+                return None, chatty_why
+            if len(asks) > 1:
+                return None, "chatty is not carried by a multi-item asks fan-out; submit one ask per chatty run."
         if item.get("context") is not None:
             _, bad = _context_items(item["context"], f"asks[{i}].context")
             if bad:
@@ -599,6 +633,8 @@ def _child_params(
             params["writes"] = [w.strip() for w in writes]
         if call_stop is not None:
             params["stop_after"] = call_stop
+        if isinstance(args, dict) and args.get(_CHATTY_KEY) is True:
+            params[_CHATTY_KEY] = True
     if cross_repo:
         params["cross_repo_approved"] = True
     return params
@@ -681,6 +717,7 @@ def evaluate(
         if unknown_arg:
             return _refuse(unknown_arg)
     ask, sizing_rel, repo_arg, source = _request(payload["tool_input"])
+    sizing_submitted = sizing_rel is not None
     asks, asks_refusal = _asks(payload["tool_input"])
     if asks_refusal:
         return _refuse(asks_refusal)
@@ -695,6 +732,12 @@ def evaluate(
     stop_why = _stop_after_refusal("args", call_stop)
     if stop_why:
         return _refuse(stop_why)
+    call_chatty = call_args.get(_CHATTY_KEY) if isinstance(call_args, dict) else None
+    chatty_why = _chatty_refusal("args", call_chatty)
+    if chatty_why:
+        return _refuse(chatty_why)
+    if call_chatty is True and asks is not None and len(asks) > 1:
+        return _refuse("chatty is not carried by a multi-item asks fan-out; submit one ask per chatty run.")
     if source is not None:
         if source not in ASK_SOURCES:
             return _refuse(f"source {source!r} is not one of: {', '.join(ASK_SOURCES)}.")
@@ -715,6 +758,8 @@ def evaluate(
             ask, source = asks[0]["ask"], asks[0].get("source")
             route_pref, em_rationale = asks[0].get("route_preference"), asks[0].get("em_rationale")
             call_stop = asks[0].get("stop_after")
+            if asks[0].get(_CHATTY_KEY) is not None:
+                call_chatty = asks[0][_CHATTY_KEY]
             item_em_context = asks[0].get("em_context")
             item_context, _ = _context_items(asks[0].get("context") or [], "context")
             asks = None
@@ -749,10 +794,16 @@ def evaluate(
     if (ask is not None or asks is not None) and repo_arg is None and brief.get("ask_context"):
         root = _context_home(root, brief["ask_context"])
     session_root: Optional[str] = None
+    own: Optional[Path] = None
     if (ask is not None or asks is not None) and (repo_arg is not None or root != target_root):
         own = _repo_root(None, payload) if repo_arg and Path(repo_arg).is_absolute() else target_root
         if own is not None and own.resolve() != root.resolve():
             session_root = str(own)
+    session_id = payload.get("session_id") if isinstance(payload.get("session_id"), str) else None
+    if own is not None:
+        cross = _cross_repo_refusal(root, own, False, session_id, payload)
+        if cross:
+            return _refuse(cross)
     missing = _missing_context(root, brief.get("ask_context", []))
     if missing:
         return _refuse(f"context {missing}: no such file. Pass inline prose as brief or context text, or fix the path.")
@@ -769,7 +820,6 @@ def evaluate(
         if refusal:
             return _refuse(refusal)
 
-    session_id = payload.get("session_id") if isinstance(payload.get("session_id"), str) else None
     transcript = payload.get("transcript_path") if isinstance(payload.get("transcript_path"), str) else None
 
     from coordinator_core import warp_live
@@ -777,7 +827,8 @@ def evaluate(
     fan_reply: Optional[dict] = None
     reserved_run_id: Optional[str] = None
     if asks is not None:
-        fan_params: dict = {"asks": asks, "session_id": session_id or ""}
+        fan_asks = [{k: v for k, v in item.items() if k != _CHATTY_KEY} for item in asks]
+        fan_params: dict = {"asks": fan_asks, "session_id": session_id or ""}
         if session_root:
             fan_params["session_root"] = session_root
         if isinstance(payload["tool_input"]["args"].get("sender"), str):
@@ -802,6 +853,12 @@ def evaluate(
         sizing_rel, reserved_run_id = first.slice_sizing, first.run_id
 
     sizing_doc = _load_sizing_doc(root, sizing_rel) if sizing_rel else {}
+    if sizing_submitted and repo_arg and Path(repo_arg).is_absolute() and not _has_research_block(sizing_doc):
+        sizing_own = _repo_root(None, payload)
+        if sizing_own is not None:
+            cross = _cross_repo_refusal(root, sizing_own, False, session_id, payload)
+            if cross:
+                return _refuse(cross)
     if sizing_rel and asks is None:
         from coordinator_core.ops.dispatch_emit.ask_fanout_contract import parse_ask_parent
 
@@ -866,6 +923,8 @@ def evaluate(
         params.update(brief)
         if call_stop is not None:
             params["stop_after"] = call_stop
+        if call_chatty is True:
+            params[_CHATTY_KEY] = True
     from coordinator_core.ops.dispatch_emit.cross_repo_write_refusal import is_remote_venue
 
     args = payload["tool_input"].get("args")

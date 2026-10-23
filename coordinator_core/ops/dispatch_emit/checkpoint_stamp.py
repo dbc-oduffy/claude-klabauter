@@ -6,7 +6,9 @@ checkpoint's own sha, in-process (rows named on ``Checkpoint-Gate-Owed:`` or
 ``Checkpoint-Stop-Rule:`` stay ``open``), and lands one plan-only follow-up commit
 carrying ``Checkpoint-Stamp: <sha>``. ``Checkpoint-Not-Landed: run-open`` marks a mid-run
 checkpoint and ``Checkpoint-Run-Closed: <base>`` on a later commit closes it for
-``rows_landed_at_head``. Stdlib-only at module top: callers gate the import on a literal
+``rows_landed_at_head``. ``Checkpoint-Run-Halted: <base>`` on a halt commit ends the run for the
+publish reader only: ``rows_landed_at_head`` ignores it, so a halted run's rows stay unlanded
+(A-HALT-IS-NOT-A-CLOSE). Stdlib-only at module top: callers gate the import on a literal
 ``Checkpoint-Plan: `` test so a plain commit pays nothing.
 """
 
@@ -28,11 +30,15 @@ STAMP_TRAILER = "Checkpoint-Stamp"
 _STAMP_LINE = re.compile(r"^" + STAMP_TRAILER + r":[ \t]*\S", re.M)
 # A marked checkpoint is mid-run: outside readers count it only once a newer first-parent
 # commit carries RUN_CLOSED_TRAILER naming its base. A line absent means legacy, i.e. landed.
+# RUN_HALTED_TRAILER marks a run that ended without landing: the publish reader honours it,
+# rows_landed_at_head does not (a halted run's rows must stay unlanded for a refire).
 CHECKPOINT_NOT_LANDED_TRAILER = "Checkpoint-Not-Landed"
 RUN_CLOSED_TRAILER = "Checkpoint-Run-Closed"
+RUN_HALTED_TRAILER = "Checkpoint-Run-Halted"
 _NOT_LANDED_LINE = re.compile(r"^" + CHECKPOINT_NOT_LANDED_TRAILER + r":[ \t]*\S", re.M)
 _BASE_LINE = re.compile(r"^Checkpoint-Base:[ \t]*(?P<v>\S+)[ \t]*$", re.M)
 _REVIEW_BASE_LINE = re.compile(r"^Checkpoint-Review-Base:[ \t]*(?P<v>\S+)[ \t]*$", re.M)
+_FULL_SHA = re.compile(r"^[0-9a-f]{40}$")
 _RUN_CLOSED_LINE = re.compile(r"^" + RUN_CLOSED_TRAILER + r":[ \t]*(?P<v>[0-9a-f]{40})[ \t]*$", re.M)
 
 
@@ -49,6 +55,68 @@ class Checkpoint(NamedTuple):
 def run_closed_bases(message: str) -> frozenset:
     """The 40-hex base of every ``Checkpoint-Run-Closed:`` line in ``message``."""
     return frozenset(m.group("v") for m in _RUN_CLOSED_LINE.finditer(message))
+
+
+_RUN_HALTED_LINE = re.compile(r"^" + RUN_HALTED_TRAILER + r":[ \t]*(?P<v>[0-9a-f]{40})[ \t]*$", re.M)
+_LANDING_TRAILER_LINE = re.compile(r"^(?:Lands-Chunks|Inline-Review):", re.M)
+_HALT_SUBJECT_PREFIX = "warp: record halted "
+_PLANS_PREFIX = "docs/plans/"
+_MISE_PREFIX = "state/mise-inventory/"
+
+
+def run_halted_bases(message: str) -> frozenset:
+    """The 40-hex base of every ``Checkpoint-Run-Halted:`` line in ``message``."""
+    return frozenset(m.group("v") for m in _RUN_HALTED_LINE.finditer(message))
+
+
+def _trailer_lines(trailer: str, bases) -> list:
+    return [f"{trailer}: {b}" for b in dict.fromkeys(b for b in bases if isinstance(b, str) and _FULL_SHA.fullmatch(b))]
+
+
+_SCRIPT_RUN_BASE = re.compile(r"^\s*let _runBase = '(?P<v>[0-9a-f]{40})';", re.M)
+
+
+def script_run_base(script_text: str) -> Optional[str]:
+    """The 40-hex `Checkpoint-Base` an emitted workflow script stamps on its checkpoints
+    (`let _runBase = '<sha>';`); None when the script carries none. An inventory run has no
+    manifest or submission record, so the script is the only place its base is recorded."""
+    m = _SCRIPT_RUN_BASE.search(script_text or "")
+    return m.group("v") if m else None
+
+
+def run_closed_trailer_lines(bases) -> list:
+    """One ``Checkpoint-Run-Closed: <sha>`` line per distinct 40-hex base, input order."""
+    return _trailer_lines(RUN_CLOSED_TRAILER, bases)
+
+
+def run_halted_trailer_lines(bases) -> list:
+    """One ``Checkpoint-Run-Halted: <sha>`` line per distinct 40-hex base, input order."""
+    return _trailer_lines(RUN_HALTED_TRAILER, bases)
+
+
+def terminal_plan_closures(message: str, changed_paths) -> frozenset:
+    """The ``Checkpoint-Plan`` paths a landing or halt commit ends a run of; empty unless typed.
+
+    Typed: a landing (``Lands-Chunks:``/``Inline-Review:`` line and not a checkpoint message) or a
+    halt (subject starts ``warp: record halted ``). Yields the changed ``docs/plans/*.md`` paths
+    plus any ``Halt-Plan:`` value. A checkpoint, stamp or untyped commit touching a plan yields
+    nothing."""
+    lines = message.splitlines()
+    subject = lines[0].strip() if lines else ""
+    halt = subject.startswith(_HALT_SUBJECT_PREFIX)
+    landing = bool(_LANDING_TRAILER_LINE.search(message)) and parse_checkpoint(message) is None
+    if not (halt or landing):
+        return frozenset()
+    out = {
+        p for p in (str(c).replace("\\", "/") for c in changed_paths)
+        if (p.startswith(_PLANS_PREFIX) and p.endswith(".md"))
+        or (p.startswith(_MISE_PREFIX) and p.endswith(".spine.md"))
+    }
+    from coordinator_core.ops.dispatch_emit.ask_contract import HALT_PLAN_TRAILER
+
+    for m in re.finditer(r"^" + re.escape(HALT_PLAN_TRAILER) + r":[ \t]*(?P<v>\S+)[ \t]*$", message, re.M):
+        out.add(m.group("v").replace("\\", "/"))
+    return frozenset(out)
 
 
 def _ids(text: str) -> frozenset:
@@ -116,7 +184,6 @@ def _walk_commit_meta(common_dir: Path, sha: str) -> Optional[dict]:
 
 
 _PROCESS_HALF_SUFFIX = "(process files)"
-_FULL_SHA = re.compile(r"^[0-9a-f]{40}$")
 
 
 def is_process_half(subject: str) -> bool:

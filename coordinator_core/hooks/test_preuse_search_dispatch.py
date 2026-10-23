@@ -106,6 +106,54 @@ def test_other_tools_are_silent(indexed_repo):
     assert m._handler(_payload(indexed_repo, tool="Read")) == m.no_advisory()
 
 
+_TURN = "[em-turn-budget] test signal"
+
+
+def test_turn_text_merges_with_example_retrieval_repo_parts(indexed_repo, monkeypatch):
+    monkeypatch.setattr(m.nudge_em_turn_budget, "advisory_text", lambda params: _TURN)
+    out = _ctx(m._handler(_payload(indexed_repo, pattern="some text")))
+    assert "this repo has a code index" in out
+    assert out.endswith(_TURN)
+
+
+def test_turn_text_alone_when_example_retrieval_repo_already_fired(indexed_repo, monkeypatch):
+    sid = str(uuid.uuid4())
+    m._handler(_payload(indexed_repo, pattern="x", session_id=sid))
+    monkeypatch.setattr(m.nudge_em_turn_budget, "advisory_text", lambda params: _TURN)
+    out = _ctx(m._handler(_payload(indexed_repo, pattern="y", session_id=sid)))
+    assert _TURN in out and "this repo has a code index" not in out
+
+
+def test_turn_text_signals_in_repo_without_index(tmp_path, monkeypatch):
+    (tmp_path / ".git").mkdir()
+    monkeypatch.setattr(m.nudge_em_turn_budget, "advisory_text", lambda params: _TURN)
+    assert _TURN in _ctx(m._handler(_payload(tmp_path)))
+
+
+def test_turn_leg_not_reached_for_synthetic_session_or_other_tool(indexed_repo, monkeypatch):
+    monkeypatch.setattr(m.nudge_em_turn_budget, "advisory_text", lambda params: _TURN)
+    assert m._handler(_payload(indexed_repo, session_id="probe")) == m.no_advisory()
+    assert m._handler(_payload(indexed_repo, tool="Read")) == m.no_advisory()
+
+
+def test_turn_leg_exception_keeps_example_retrieval_repo_advice(indexed_repo, monkeypatch):
+    def boom(params):
+        raise RuntimeError("x")
+
+    monkeypatch.setattr(m.nudge_em_turn_budget, "advisory_text", boom)
+    assert "this repo has a code index" in _ctx(m._handler(_payload(indexed_repo)))
+
+
+def test_turn_leg_exception_without_index_is_no_advisory(tmp_path, monkeypatch):
+    (tmp_path / ".git").mkdir()
+
+    def boom(params):
+        raise RuntimeError("x")
+
+    monkeypatch.setattr(m.nudge_em_turn_budget, "advisory_text", boom)
+    assert m._handler(_payload(tmp_path)) == m.no_advisory()
+
+
 def test_kill_switch(indexed_repo, monkeypatch):
     monkeypatch.setenv(m._KILL_SWITCH, "1")
     assert m._handler(_payload(indexed_repo)) == m.no_advisory()

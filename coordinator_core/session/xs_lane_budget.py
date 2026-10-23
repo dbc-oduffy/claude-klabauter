@@ -96,15 +96,19 @@ def deny_count(rec: dict) -> int:
     return rec.get("denies", 0)
 
 
-def record_deny(repo_root, sid: str) -> int:
+def record_deny(repo_root, sid: str, usage: Optional[Usage] = None, files: Optional[list] = None) -> int:
     """Increment the record's `denies` and return the new count. Absent record: writes nothing,
-    returns 0. Corrupt record: writes nothing, returns GOLF_DENY_LIMIT."""
+    returns 0. Corrupt record: writes nothing, returns GOLF_DENY_LIMIT. With `usage`, the latest
+    measured denial is kept as `deny_usage: {files: [rel], lines: n}` for the sizing refusal."""
     rec = read_lane(repo_root, sid)
     if rec is None:
         return 0
     if rec.get("corrupt"):
         return GOLF_DENY_LIMIT
     rec["denies"] = deny_count(rec) + 1
+    if usage is not None:
+        rels = [_norm_rel(repo_root, p) for p in (files if files is not None else rec["paths"])]
+        rec["deny_usage"] = {"files": list(dict.fromkeys(rels)), "lines": usage.lines}
     _write(repo_root, sid, rec)
     return rec["denies"]
 

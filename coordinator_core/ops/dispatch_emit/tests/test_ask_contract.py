@@ -150,7 +150,7 @@ def test_scout_schema_admits_resume_rows_array_or_null():
 
 def test_resume_plan_is_a_named_tuple():
     r = c.ResumePlan("docs/plans/p.md", ("A1", "M0"))
-    plan_rel, incomplete, ledger, landed_open = r
+    plan_rel, incomplete, ledger, landed_open, _kept, _kept_run = r
     assert (plan_rel, incomplete) == (r.plan_rel, r.incomplete) == ("docs/plans/p.md", ("A1", "M0"))
     assert ledger is r.ledger is None
     assert landed_open == r.landed_open == ()
@@ -299,3 +299,15 @@ def test_scout_schema_seeds_pattern_admits_only_seed_kinds():
     pat = re.compile(items["pattern"])
     assert pat.match("repo=https://x/y.git") and pat.match("video=https://v?a=b")
     assert not pat.match("blog=https://x") and not pat.match("doc=") and not pat.match("doc=a b")
+
+
+def test_kept_work_fields_absent_at_defaults_and_present_when_set():
+    assert "resume_ready" not in c.GateVerdict("s", None).to_json()
+    assert c.GateVerdict("s", None, resume_ready=True).to_json()["resume_ready"] is True
+    row = _manifest().rows[0]
+    assert "kept_from" not in row.to_json()
+    kept = c.ManifestRow.from_json({**row.to_json(), "kept_from": "ask-1"})
+    assert kept.kept_from == "ask-1" and kept.to_json()["kept_from"] == "ask-1"
+    assert c.ManifestRow.from_json(row.to_json()).kept_from == ""
+    plan = c.ResumePlan("p.md", ("C1",))
+    assert plan.kept == () and plan.kept_run is None

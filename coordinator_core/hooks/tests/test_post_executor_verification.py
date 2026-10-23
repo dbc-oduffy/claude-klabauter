@@ -64,13 +64,13 @@ def _denied(out) -> bool:
 
 def test_no_executor_yet_pytest_is_free(repo) -> None:
     for _ in range(3):
-        assert g.check(_bash(repo, "python -m pytest a.py")) is None
+        assert g.check(_bash(repo, "python -m pytest pkg")) is None
 
 
 def test_first_pytest_allowed_second_denied(repo) -> None:
     _executor_ran(repo)
-    assert g.check(_bash(repo, "python -m pytest a.py")) is None
-    out = envelope_of(g.check(_bash(repo, "pytest b.py -q")), "em")
+    assert g.check(_bash(repo, "python -m pytest pkg")) is None
+    out = envelope_of(g.check(_bash(repo, "pytest pkg -q")), "em")
     assert _denied(out)
     reason = out["hookSpecificOutput"]["permissionDecisionReason"]
     assert "engine-ask" not in reason and "sizing" not in reason
@@ -82,18 +82,18 @@ def test_grep_pytest_not_counted(repo) -> None:
     _executor_ran(repo)
     for _ in range(3):
         assert g.check(_bash(repo, "grep -rn pytest coordinator_core")) is None
-    assert g.check(_bash(repo, "pytest a.py")) is None
+    assert g.check(_bash(repo, "pytest pkg")) is None
 
 
 def test_non_executor_dispatch_does_not_arm(repo) -> None:
     _executor_ran(repo, "coordinator:test-runner")
-    assert g.check(_bash(repo, "pytest a.py")) is None
-    assert g.check(_bash(repo, "pytest a.py")) is None
+    assert g.check(_bash(repo, "pytest pkg")) is None
+    assert g.check(_bash(repo, "pytest pkg")) is None
 
 
 def test_subagent_exempt(repo) -> None:
     _executor_ran(repo)
-    p = _bash(repo, "pytest a.py")
+    p = _bash(repo, "pytest pkg")
     p["agent_id"] = "a1"
     assert g.check(p) is None and g.check(p) is None
 
@@ -101,8 +101,8 @@ def test_subagent_exempt(repo) -> None:
 def test_autonomous_still_routes_bash_verification(repo, monkeypatch) -> None:
     _executor_ran(repo)
     monkeypatch.setattr("coordinator_core.session.mode_resolution.resolve_mode", lambda k, sid: True)
-    assert g.check(_bash(repo, "pytest a.py")) is None
-    assert _denied(g.check(_bash(repo, "pytest a.py")))
+    assert g.check(_bash(repo, "pytest pkg")) is None
+    assert _denied(g.check(_bash(repo, "pytest pkg")))
 
 
 def test_autonomous_scratch_write_exempt(repo, monkeypatch) -> None:
@@ -122,21 +122,21 @@ def _sidecar(repo, status: str) -> None:
 
 def _armed_with_reason(repo) -> None:
     _executor_ran(repo)
-    assert g.check(_bash(repo, "pytest a.py")) is None
+    assert g.check(_bash(repo, "pytest pkg")) is None
     with open(nd.dispatch_nudge_sentinel_path(SID), "w", encoding="utf-8") as fh:
         fh.write("need a wider run\n")
 
 
 def test_reason_without_grant_or_failure_denied_not_consumed(repo) -> None:
     _armed_with_reason(repo)
-    assert _denied(g.check(_bash(repo, "pytest a.py")))
+    assert _denied(g.check(_bash(repo, "pytest pkg")))
     assert os.path.exists(nd.dispatch_nudge_sentinel_path(SID))
 
 
 def test_non_failed_executor_with_reason_denied(repo) -> None:
     _armed_with_reason(repo)
     _sidecar(repo, "complete")
-    assert _denied(g.check(_bash(repo, "pytest a.py")))
+    assert _denied(g.check(_bash(repo, "pytest pkg")))
     assert os.path.exists(nd.dispatch_nudge_sentinel_path(SID))
 
 
@@ -144,25 +144,25 @@ def test_pm_grant_honoured(repo) -> None:
     from coordinator_core.session import guard_unlock_sentinel as gus
 
     _executor_ran(repo)
-    assert g.check(_bash(repo, "pytest a.py")) is None
+    assert g.check(_bash(repo, "pytest pkg")) is None
     gus.sentinel_path(SID, g.GUARD_NAME).write_text("")
-    assert g.check(_bash(repo, "pytest a.py")) is None
-    assert _denied(g.check(_bash(repo, "pytest a.py")))
+    assert g.check(_bash(repo, "pytest pkg")) is None
+    assert _denied(g.check(_bash(repo, "pytest pkg")))
 
 
 def test_reasoned_sentinel_allows_and_logs(repo) -> None:
     _executor_ran(repo)
-    assert g.check(_bash(repo, "pytest a.py")) is None
-    assert _denied(g.check(_bash(repo, "pytest a.py")))
+    assert g.check(_bash(repo, "pytest pkg")) is None
+    assert _denied(g.check(_bash(repo, "pytest pkg")))
     with open(nd.dispatch_nudge_sentinel_path(SID), "w", encoding="utf-8") as fh:
         fh.write("need a wider run\n")
     _sidecar(repo, "blocked")
-    assert g.check(_bash(repo, "pytest a.py")) is None
+    assert g.check(_bash(repo, "pytest pkg")) is None
     logs = list((repo / ".coordinator-local").rglob(ESCAPE_LOG_NAME))
     assert len(logs) == 1
     assert json.loads(logs[0].read_text().splitlines()[0])["reason"] == "need a wider run"
     assert not os.path.exists(nd.dispatch_nudge_sentinel_path(SID))
-    assert _denied(g.check(_bash(repo, "pytest a.py")))
+    assert _denied(g.check(_bash(repo, "pytest pkg")))
 
 
 def test_scratch_py_write_denied_after_executor(repo) -> None:
@@ -255,7 +255,7 @@ def test_free_first_run_does_not_spend_the_sentinel(repo) -> None:
     _executor_ran(repo)
     with open(nd.dispatch_nudge_sentinel_path(SID), "w", encoding="utf-8") as fh:
         fh.write("saved for later\n")
-    assert g.check(_bash(repo, "pytest a.py")) is None
+    assert g.check(_bash(repo, "pytest pkg")) is None
     assert os.path.exists(nd.dispatch_nudge_sentinel_path(SID))
 
 
@@ -263,8 +263,8 @@ def test_free_first_run_does_not_spend_the_sentinel(repo) -> None:
     "SP=/s; with-suite-mutex -- timeout 900 python3 -m pytest tests/ -q -k ledger > $SP/a 2>&1",
     "n=$(timeout 120 python3 -m pytest t.py --collect-only -q | wc -l)",
     "for f in a.py b.py; do n=$(timeout 120 python3 -m pytest $f -q | tail -1); echo $n; done",
-    "with-suite-mutex -- timeout 600 bash -c 'for i in 1 2; do python3 -m pytest a.py -q; done'",
-    "nice -n 5 nohup time pytest a.py",
+    "with-suite-mutex -- timeout 600 bash -c 'for i in 1 2; do python3 -m pytest pkg -q; done'",
+    "nice -n 5 nohup time pytest pkg",
 ])
 def test_wrapped_pytest_is_counted(cmd) -> None:
     assert g.runs_pytest(cmd)
@@ -366,7 +366,7 @@ def test_runner_named_only_in_text_not_verification(repo, cmd) -> None:
 @pytest.mark.parametrize("cmd", [
     "python3 - <<'PY'\nfrom pkg import a\nimport subprocess\nsubprocess.run(['pytest', 'a.py'])\nPY",
     "python3 -c 'from pkg import a; import pytest; pytest.main()'",
-    "python3 -m pytest a.py",
+    "python3 -m pytest pkg",
     "python3 -c 'from pkg import a; __import__(\"pytest\").main()'",
     "python3 -c 'from pkg import a; import os; os.system(\"pytest a.py\")'",
     "python3 -c 'from pkg import a; x = (\"pytest\"'",
@@ -375,6 +375,25 @@ def test_runner_invoked_in_code_is_verification(repo, cmd) -> None:
     assert g.runs_verification(cmd, str(repo), str(repo))
 
 
+_LEDGER = (
+    "import subprocess, pkg\n"
+    "subprocess.run(['git', 'log'])\n"
+    "STEPS = ['pytest passed', 'unittest skipped']\n"
+)
+
+
+def test_step_ledger_spawning_script_naming_runner_in_labels_passes(repo, tmp_path) -> None:
+    path = _script(tmp_path, "scratchpad/step_ledger.py", _LEDGER)
+    assert not g.runs_verification(f"python3 {path} --record x", str(repo), str(repo))
+    _executor_ran(repo)
+    assert g.check(_bash(repo, f"python3 {path} --record x")) is None
+    assert g.check(_bash(repo, f"python3 {path} --record y")) is None
+
+
+def test_pytest_after_executor_still_trips(repo) -> None:
+    _executor_ran(repo)
+    assert g.check(_bash(repo, "python3 -m pytest pkg")) is None
+    assert _denied(g.check(_bash(repo, "python3 -m pytest pkg")))
 _TRANSCRIPT_SCRIPT = (
     "import json, sys\nfrom pkg import fm\n# which runs were pytest?\n"
     "system = None\n"
@@ -430,10 +449,10 @@ def test_read_only_probe_script_is_not_verification(repo, tmp_path) -> None:
     pin.write_text("from pkg import register\nprint(register.read())\n")
     assert not g.runs_verification(f"python3 {pin}", str(repo), str(repo))
     _executor_ran(repo)
-    assert g.check(_bash(repo, "pytest a.py")) is None
+    assert g.check(_bash(repo, "pytest pkg")) is None
     assert g.check(_bash(repo, f"python3 {pin}")) is None
     assert g.check(_bash(repo, "python3 -c 'from pkg.workstream_complete import apply; apply()'")) is None
-    assert _denied(g.check(_bash(repo, "pytest b.py")))
+    assert _denied(g.check(_bash(repo, "pytest pkg")))
 
 
 @pytest.mark.parametrize("cmd", [
@@ -467,17 +486,29 @@ def test_scoped_pytest_in_execute_plan_session_never_denied(repo) -> None:
         assert g.check(_bash(repo, cmd)) is None
 
 
-def test_scoped_pytest_without_execute_plan_signal_still_denied(repo) -> None:
+def test_scoped_pytest_never_denied_whatever_the_session_shape(repo) -> None:
+    _executor_ran(repo)
+    (repo / "pkg" / "tests").mkdir(parents=True, exist_ok=True)
+    for _ in range(3):
+        for cmd in ("pytest pkg/test_a.py", "pytest pkg/test_a.py::t -q", "pytest pkg/tests -q", "pytest a.py b.py"):
+            assert g.check(_bash(repo, cmd)) is None
+    many = "pytest " + " ".join(f"pkg/test_a.py::t{i}" for i in range(30))
+    assert g.check(_bash(repo, many)) is None
+    assert g.check(_bash(repo, many)) is None
+
+
+def test_scoped_run_does_not_spend_the_free_broad_run(repo) -> None:
     _executor_ran(repo)
     assert g.check(_bash(repo, "pytest pkg/test_a.py")) is None
-    assert _denied(g.check(_bash(repo, "pytest pkg/test_a.py")))
+    assert g.check(_bash(repo, "pytest pkg")) is None
+    assert _denied(g.check(_bash(repo, "pytest pkg")))
 
 
-def test_non_executing_plan_does_not_exempt(repo) -> None:
+def test_non_executing_plan_does_not_exempt_a_broad_run(repo) -> None:
     _executor_ran(repo)
     _execute_plan_session(repo, "landed")
-    assert g.check(_bash(repo, "pytest pkg/test_a.py")) is None
-    assert _denied(g.check(_bash(repo, "pytest pkg/test_a.py")))
+    assert g.check(_bash(repo, "pytest pkg")) is None
+    assert _denied(g.check(_bash(repo, "pytest pkg")))
 
 
 @pytest.mark.parametrize("cmd", [
@@ -520,14 +551,6 @@ def test_scoped_pytest_after_workflow_run_never_denied(repo, monkeypatch, tmp_pa
         assert g.check(_bash(repo, "pytest pkg/test_a.py -q")) is None
 
 
-def test_broad_scoped_pytest_after_workflow_run_counts(repo, monkeypatch, tmp_path) -> None:
-    _executor_ran(repo)
-    _workflow_run_record(monkeypatch, tmp_path)
-    cmd = "pytest " + " ".join(f"pkg/test_a.py::t{i}" for i in range(11))
-    assert g.check(_bash(repo, cmd)) is None
-    assert _denied(g.check(_bash(repo, cmd)))
-
-
 def test_unscoped_pytest_after_workflow_run_still_denied(repo, monkeypatch, tmp_path) -> None:
     _executor_ran(repo)
     _workflow_run_record(monkeypatch, tmp_path)
@@ -539,7 +562,7 @@ def test_unscoped_pytest_after_workflow_run_still_denied(repo, monkeypatch, tmp_
 
 def test_probe_shares_pytest_counter(repo) -> None:
     _executor_ran(repo)
-    assert g.check(_bash(repo, "pytest a.py")) is None
+    assert g.check(_bash(repo, "pytest pkg")) is None
     out = envelope_of(g.check(_bash(repo, "python3 -c 'import pkg, pytest'")), "em")
     assert _denied(out)
     assert "honoured once." in out["hookSpecificOutput"]["permissionDecisionReason"]
@@ -594,27 +617,27 @@ def _stamp(repo, executor_epoch: int, commit_epoch: int | None) -> None:
 def test_executor_older_than_last_commit_does_not_arm(repo) -> None:
     _stamp(repo, 1000, 2000)
     for _ in range(3):
-        assert g.check(_bash(repo, "python -m pytest a.py")) is None
+        assert g.check(_bash(repo, "python -m pytest pkg")) is None
 
 
 def test_executor_newer_than_last_commit_still_arms(repo) -> None:
     _stamp(repo, 3000, 2000)
-    assert g.check(_bash(repo, "python -m pytest a.py")) is None
-    assert _denied(g.check(_bash(repo, "pytest b.py -q")))
+    assert g.check(_bash(repo, "python -m pytest pkg")) is None
+    assert _denied(g.check(_bash(repo, "pytest pkg -q")))
 
 
 def test_no_commit_signal_stays_armed(repo) -> None:
     _stamp(repo, 1000, None)
-    assert g.check(_bash(repo, "python -m pytest a.py")) is None
-    assert _denied(g.check(_bash(repo, "pytest b.py -q")))
+    assert g.check(_bash(repo, "python -m pytest pkg")) is None
+    assert _denied(g.check(_bash(repo, "pytest pkg -q")))
 
 
 def test_stale_counter_before_newest_arming_row_is_ignored(repo) -> None:
     _stamp(repo, 1000, None)
-    assert g.check(_bash(repo, "python -m pytest a.py")) is None
+    assert g.check(_bash(repo, "python -m pytest pkg")) is None
     counter = next((repo / ".git").rglob(g.COUNTER_NAME), None) or next(repo.parent.rglob(g.COUNTER_NAME))
     os.utime(counter, (500, 500))
-    assert g.check(_bash(repo, "pytest b.py -q")) is None
+    assert g.check(_bash(repo, "pytest pkg -q")) is None
 
 
 _MEASURE = "python -m coordinator_core.benchmarks.measure"
@@ -633,7 +656,7 @@ def _counter(repo):
 ])
 def test_measure_wrapped_non_pytest_neither_counted_nor_denied(repo, cmd) -> None:
     _executor_ran(repo)
-    assert g.check(_bash(repo, "python -m pytest a.py")) is None
+    assert g.check(_bash(repo, "python -m pytest pkg")) is None
     before = _counter(repo).read_text()
     assert before == "1"
     assert g.check(_bash(repo, cmd)) is None
@@ -641,14 +664,14 @@ def test_measure_wrapped_non_pytest_neither_counted_nor_denied(repo, cmd) -> Non
 
 
 @pytest.mark.parametrize("cmd", [
-    f"{_MEASURE} -- python -m pytest a.py",
-    f"{_MEASURE} --once -- pytest a.py -q",
-    f"{_MEASURE} -- timeout 60 python3 -m pytest a.py",
-    "python -mcoordinator_core.benchmarks.measure -- pytest a.py",
+    f"{_MEASURE} -- python -m pytest pkg",
+    f"{_MEASURE} --once -- pytest pkg -q",
+    f"{_MEASURE} -- timeout 60 python3 -m pytest pkg",
+    "python -mcoordinator_core.benchmarks.measure -- pytest pkg",
 ])
 def test_measure_wrapped_pytest_is_still_counted_and_denied(repo, cmd) -> None:
     _executor_ran(repo)
-    assert g.check(_bash(repo, "python -m pytest a.py")) is None
+    assert g.check(_bash(repo, "python -m pytest pkg")) is None
     out = g.check(_bash(repo, cmd))
     assert _denied(out)
 
@@ -664,8 +687,8 @@ def test_measure_wrapped_scoped_pytest_gets_the_scoped_exemption(repo) -> None:
 
 def test_both_deny_halves_name_the_measurement_route(repo) -> None:
     _executor_ran(repo)
-    assert g.check(_bash(repo, "pytest a.py")) is None
-    bash_reason = envelope_of(g.check(_bash(repo, "pytest b.py")), "em")["hookSpecificOutput"]["permissionDecisionReason"]
+    assert g.check(_bash(repo, "pytest pkg")) is None
+    bash_reason = envelope_of(g.check(_bash(repo, "pytest pkg")), "em")["hookSpecificOutput"]["permissionDecisionReason"]
     write_reason = nd.op(_write(repo, str(repo / "scratch" / "probe.py")))["hookSpecificOutput"]["permissionDecisionReason"]
     for reason in (bash_reason, write_reason):
         assert "coordinator_core.benchmarks.measure -- <argv>" in reason

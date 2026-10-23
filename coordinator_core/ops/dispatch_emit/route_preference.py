@@ -53,6 +53,11 @@ def refusal(where: str, route_preference: object, em_rationale: object) -> Optio
             f'{where}.route_preference: not one of {", ".join(ROUTE_PREFERENCES)} '
             f'(e.g. route_preference: "plan").'
         )
+    if isinstance(em_rationale, str) and len(em_rationale.strip()) > EM_RATIONALE_MAX_CHARS:
+        return (
+            f"{where}.em_rationale: {len(em_rationale.strip())} chars, cap {EM_RATIONALE_MAX_CHARS}. "
+            f"Trim it to {EM_RATIONALE_MAX_CHARS}; put the rest in `context`."
+        )
     if em_rationale is not None and (
         not isinstance(em_rationale, str)
         or not em_rationale.strip()

@@ -398,29 +398,31 @@ def _review_stamp(ctx: JobContext) -> LegResult:
     """Mint the plan's ``review_stamp`` (a mise run: the receipt on its inventory record) against the
     terminal commit. A refusal is the leg's ``failed`` detail; the landed commit stands."""
     plan_rel, sha = _plan_rel(ctx), ctx.terminal_sha
-    if not plan_rel or not sha:
-        return _leg("not-applicable", "run has no plan or terminal commit")
+    if not plan_rel:
+        return run_close.review_skipped("no-plan", root=ctx.root)
+    if not sha:
+        return run_close.review_skipped("no-terminal-commit", root=ctx.root)
     if _not_opted_in(ctx):
-        return _leg("not-applicable", _NOT_OPTED_IN)
+        return run_close.review_skipped("not-opted-in", _NOT_OPTED_IN, ctx.root)
     from coordinator_core.ops import review_stamp as rs
     from coordinator_core.ops._path_guard import contained_path
     from coordinator_core.ops.dispatch_emit import plan_row_coding
     from coordinator_core.ops.dispatch_emit.ask_contract import SPINE_SUFFIX
 
     if contained_path(ctx.root / plan_rel, [ctx.root]) is None:
-        return _leg("failed", "plan path escapes the worktree")
+        return run_close.review_unminted("plan path escapes the worktree", ctx.root)
     resolved = None
     record_rel = _inputs(ctx).get("review_record")
     if isinstance(record_rel, str) and record_rel:
         data = rs._load_sidecar(ctx.root / record_rel)
         if data is None:
-            return _leg("failed", f"review record {record_rel} is unreadable", ctx)
+            return run_close.review_unminted(f"review record {record_rel} is unreadable", ctx.root)
         resolved = (sha, ctx.root / record_rel, data)
     try:
         if plan_rel.endswith(SPINE_SUFFIX):
             found = plan_row_coding.inventory_record_rel(ctx.root, plan_rel)
             if found is None:
-                return _leg("not-applicable", "minted spine has no inventory record")
+                return run_close.review_skipped("no-inventory-record", root=ctx.root)
             rs.mint_receipt(ctx.root / found[0], ctx.root, resolved=resolved)
             stamped = found[0]
         else:
@@ -429,7 +431,7 @@ def _review_stamp(ctx: JobContext) -> LegResult:
             )
             stamped = plan_rel
     except rs.MintRefusal as exc:
-        return _leg("failed", str(exc), ctx)
+        return run_close.review_unminted(str(exc), ctx.root)
     _note_written(ctx, stamped)
     _queue_review(ctx, stamped)
     return _leg("ran", f"review stamp minted on {stamped}", ctx)
@@ -1019,6 +1021,27 @@ def _lessons(ctx: JobContext) -> LegResult:
     return lessons_leg(ctx.root, ctx.run_id, _criterion(ctx))
 
 
+def _run_closed_lines(ctx: JobContext) -> list:
+    """``Checkpoint-Run-Closed`` lines for the run's bases when its terminal commit was a landing
+    (not a halt, not a checkpoint) that does not already name them."""
+    from coordinator_core.ops.dispatch_emit.checkpoint_stamp import (
+        _HALT_SUBJECT_PREFIX,
+        _LANDING_TRAILER_LINE,
+        parse_checkpoint,
+        run_closed_bases,
+        run_closed_trailer_lines,
+    )
+    from coordinator_core.ops.dispatch_emit.landing_integrity import closing_bases
+
+    message = (_meta(ctx, ctx.terminal_sha) or {}).get("message") or ""
+    if message.startswith(_HALT_SUBJECT_PREFIX) or not _LANDING_TRAILER_LINE.search(message):
+        return []
+    if parse_checkpoint(message) is not None:
+        return []
+    closed = run_closed_bases(message)
+    return run_closed_trailer_lines(b for b in closing_bases(ctx.root, ctx.run_id, ctx.record) if b not in closed)
+
+
 def _close_commit(ctx: JobContext) -> LegResult:
     """Land exactly the paths the legs wrote in one Form 4 commit, never a peer's dirty file. A lost
     compare-and-swap re-seeds from the new HEAD (``CLOSE_COMMIT_CAS_RETRIES`` times), then the leg fails
@@ -1051,8 +1074,9 @@ def _close_commit(ctx: JobContext) -> LegResult:
     if not paths:
         return _leg("ran", "no written path differs from HEAD")
     message = f"close: {len(paths)} path(s) for run {ctx.run_id}"
-    if ctx.trailers:
-        message += "\n\n" + "\n".join(ctx.trailers)
+    trailers = [*ctx.trailers, *_run_closed_lines(ctx)]
+    if trailers:
+        message += "\n\n" + "\n".join(trailers)
     message = apply_missing_trailers(message, ctx.root, paths)
     reason = ""
     for _attempt in range(CLOSE_COMMIT_CAS_RETRIES + 1):

@@ -312,13 +312,14 @@ def test_sibling_landing_flips_marker_queues_legs_and_launches_once(repo, launch
     assert out["recorded"] == "state/warp/A/halted.json"
     assert json.loads(marker.read_text(encoding="utf-8"))["status"] == "landed"
     assert out["close"] == {
-        "job": ".coordinator-local/close-jobs/A.json", "launched": True, "queued": list(op.CLOSE_LEGS),
+        "job": ".coordinator-local/close-jobs/A.json", "launched": True,
+        "queued": [leg for leg in op.CLOSE_LEGS if leg != "review-stamp"],
     }
     assert out["withheld"] == ["R1"]
     assert launches == ["A"]
     job = _job(root, "A")
     assert job["plan_rel"] == PLAN and job["terminal_sha"] == first and job["run_base_sha"] == FULL_BASE
-    assert set(job["legs"]) == set(op.CLOSE_LEGS)
+    assert set(job["legs"]) == set(op.CLOSE_LEGS) - {"review-stamp"}
 
 
 def test_landed_same_sha_without_job_flips_marker_writes_and_launches(repo, launches):

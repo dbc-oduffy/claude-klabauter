@@ -290,3 +290,60 @@ def test_stat_fallback_splices_a_path_whose_worktree_file_is_gone(tmp_path):
     index_write.splice_index(repo, updates, stat_fallback=True)
     staged = _git(repo, "ls-files", "-s").stdout
     assert gone in staged and kept in staged
+
+
+def _conflicted_repo(tmp_path):
+    repo = _repo(tmp_path)
+    for name in ("a.txt", "b.txt"):
+        (repo / name).write_text("base\n", encoding="utf-8", newline="\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "base")
+    _git(repo, "checkout", "-q", "-b", "side")
+    for name in ("a.txt", "b.txt"):
+        (repo / name).write_text("side\n", encoding="utf-8", newline="\n")
+    _git(repo, "commit", "-q", "-am", "side")
+    _git(repo, "checkout", "-q", "work/idx")
+    for name in ("a.txt", "b.txt"):
+        (repo / name).write_text("main\n", encoding="utf-8", newline="\n")
+    _git(repo, "commit", "-q", "-am", "main")
+    assert _git(repo, "merge", "side", check=False).returncode != 0
+    return repo
+
+
+def test_collapse_unmerged_resolves_named_path_and_refuses_the_rest(tmp_path):
+    repo = _conflicted_repo(tmp_path)
+    (repo / "a.txt").write_text("resolved\n", encoding="utf-8", newline="\n")
+    sha = write_object(repo / ".git", b"blob", b"resolved\n")
+    before = (repo / ".git" / "index").read_bytes()
+
+    with pytest.raises(index_write.IndexWriteError, match="unmerged"):
+        index_write.splice_index(repo, {"a.txt": (0o100644, sha)}, collapse_unmerged={"a.txt"})
+    assert (repo / ".git" / "index").read_bytes() == before
+    with pytest.raises(index_write.IndexWriteError, match="unmerged"):
+        index_write.splice_index(repo, {"a.txt": (0o100644, sha)})
+
+    (repo / "b.txt").write_text("resolved-b\n", encoding="utf-8", newline="\n")
+    sha_b = write_object(repo / ".git", b"blob", b"resolved-b\n")
+    with pytest.raises(index_write.IndexWriteError, match="no update"):
+        index_write.splice_index(
+            repo, {"a.txt": (0o100644, sha)}, collapse_unmerged={"a.txt", "b.txt"}
+        )
+
+    index_write.splice_index(
+        repo,
+        {"a.txt": (0o100644, sha), "b.txt": (0o100644, sha_b)},
+        collapse_unmerged={"a.txt", "b.txt"},
+    )
+    staged = _git(repo, "ls-files", "-s").stdout
+    assert staged.count("a.txt") == 1 and staged.count("b.txt") == 1
+    assert "\t" in staged and all(line.split()[2] == "0" for line in staged.splitlines())
+    assert _git(repo, "diff", "--cached", "--name-only", "--diff-filter=U").stdout == ""
+    _git(repo, "fsck", "--strict")
+
+
+def test_collapse_unmerged_leaves_other_conflicts_refused(tmp_path):
+    repo = _conflicted_repo(tmp_path)
+    (repo / "a.txt").write_text("resolved\n", encoding="utf-8", newline="\n")
+    sha = write_object(repo / ".git", b"blob", b"resolved\n")
+    with pytest.raises(index_write.IndexWriteError, match="unmerged"):
+        index_write.splice_index(repo, {"a.txt": (0o100644, sha)}, collapse_unmerged={"a.txt"})

@@ -111,6 +111,28 @@ def test_empty_paths_return_a_zero_file_reply_and_spawn_nothing(repo, monkeypatc
     assert not (repo / result["share_dir"] / "prep-t.review-prep.lock").exists()
 
 
+def test_cross_repo_path_is_excluded_from_the_freeze_not_fatal(repo):
+    _write(repo, ["a/b/one.py"], 3)
+    result = _call(repo, ["a/b/one.py", "../coordinator-content-repo/coordinator/workflows/plan-blitz.mjs"])
+    assert result["error"] is None
+    assert result["product_files"] == 1
+    assert [s["files"] for s in result["slices"]] == [["a/b/one.py"]]
+
+
+def test_only_cross_repo_paths_freeze_nothing_and_still_succeed(repo, monkeypatch):
+    _spawn_trap(monkeypatch)
+    result = _call(repo, ["../coordinator-content-repo/x.mjs", "a/../../y.py"])
+    assert result["error"] is None
+    assert result["slices"] == []
+
+
+def test_dotdot_inside_the_repo_is_kept(repo):
+    _write(repo, ["a/b/one.py"], 3)
+    result = _call(repo, ["a/c/../b/one.py"])
+    assert result["error"] is None
+    assert result["product_files"] == 1
+
+
 def test_empty_paths_with_a_group_return_no_slices(repo):
     result = _call(repo, [], group_index=0, group_count=2)
     assert result["error"] is None

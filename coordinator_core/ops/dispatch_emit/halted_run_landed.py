@@ -66,11 +66,50 @@ def _withheld(marker: dict) -> list:
     return [b for b in blocking if isinstance(b, str)] if isinstance(blocking, list) else []
 
 
+def _review_record(root: Path, run_id: str, session_id: Optional[str]) -> Optional[str]:
+    """Repo-relative posix path of the run's review sidecar, or None when none resolves.
+
+    Candidates, first existing file wins: ``inline_review.integration.sidecar`` (relative, posix, no
+    ``..``, under *root*), then ``inline_review.integration_stem`` (a bare stem) at
+    ``.coordinator-local/subagent-share/<session_id>/<stem>.md``. The stem carries no session, and
+    *session_id* is the session calling this op, which need not be the one whose wave review wrote the
+    sidecar; a mismatch resolves None, and the caller settles ``no-review-outcome``. That is the honest
+    outcome, not a bug. One json read, at most two stats.
+    """
+    from coordinator_core.ops.dispatch_emit import ask_contract
+
+    outcome = ask_contract.read_run_outcome(root, run_id)
+    inline_review = outcome.get("inline_review") if outcome else None
+    if not isinstance(inline_review, dict):
+        return None
+    candidates: list[Path] = []
+    integration = inline_review.get("integration")
+    sidecar = integration.get("sidecar") if isinstance(integration, dict) else None
+    if isinstance(sidecar, str) and sidecar and "\\" not in sidecar:
+        parts = sidecar.split("/")
+        if not sidecar.startswith("/") and ".." not in parts and not re.match(r"[A-Za-z]:", sidecar):
+            candidates.append(root / sidecar)
+    stem = inline_review.get("integration_stem")
+    if (
+        session_id and isinstance(stem, str) and stem and stem != ".." and "/" not in stem and "\\" not in stem
+    ):
+        candidates.append(root / ".coordinator-local" / "subagent-share" / session_id / f"{stem}.md")
+    for path in candidates:
+        try:
+            rel = path.resolve().relative_to(root.resolve())
+            if path.is_file():
+                return rel.as_posix()
+        except (OSError, ValueError):
+            continue
+    return None
+
+
 def _queue_close(root: Path, run_id: str, sha: str, marker: Optional[dict], session_id: Optional[str]) -> dict:
     """The reply's ``close`` and ``withheld`` for a run just recorded landed at *sha*.
 
     Writes the close-job record and launches it once; a failed write or launch reports
-    ``launched: false`` and never fails the op.
+    ``launched: false`` and never fails the op. With a resolvable review record the review-stamp leg
+    is queued and handed it; otherwise that leg is settled ``review skipped: no-review-outcome``.
     """
     from datetime import datetime, timedelta
 
@@ -84,12 +123,21 @@ def _queue_close(root: Path, run_id: str, sha: str, marker: Optional[dict], sess
     base = marker.get("run_base_sha")
     deadline = datetime.now().astimezone() + timedelta(minutes=_CLOSE_JOB_WINDOW_MINUTES)
     try:
+        record = _review_record(root, run_id, session_id)
+        if record is not None:
+            queued, settled, inputs = CLOSE_LEGS, None, {"review_record": record}
+        else:
+            queued = tuple(leg for leg in CLOSE_LEGS if leg != "review-stamp")
+            settled = {"review-stamp": run_close.review_skipped("no-review-outcome")}
+            inputs = None
         job = run_close.write_close_job(
-            root, run_id, CLOSE_LEGS, deadline,
+            root, run_id, queued, deadline,
             session_id=session_id,
             plan_rel=plan,
             terminal_sha=sha,
             run_base_sha=base if isinstance(base, str) and _FULL_SHA.fullmatch(base) else None,
+            settled=settled,
+            inputs=inputs,
         )
     except Exception as exc:  # noqa: BLE001 -- the landed write stands; the close reports itself
         return {
@@ -102,7 +150,7 @@ def _queue_close(root: Path, run_id: str, sha: str, marker: Optional[dict], sess
     except Exception as exc:  # noqa: BLE001 -- the job record stands; the reply reports launched: false
         launched = False
         launch_error = f"{type(exc).__name__}: {exc}"
-    close = {"job": job, "launched": launched, "queued": list(CLOSE_LEGS)}
+    close = {"job": job, "launched": launched, "queued": list(queued)}
     if launch_error is not None:
         close["error"] = launch_error
     return {"close": close, "withheld": withheld}

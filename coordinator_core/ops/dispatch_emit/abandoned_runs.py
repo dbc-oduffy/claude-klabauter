@@ -345,7 +345,14 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         process_artifact_policy.exclude_locally(root, held_back)
         return base
 
-    commit_params: dict = {"paths": paths + sizings, "message": reap_message(reaped)}
+    from coordinator_core.ops.dispatch_emit import landing_integrity
+    from coordinator_core.ops.dispatch_emit.checkpoint_stamp import run_halted_trailer_lines
+
+    message = reap_message(reaped)
+    bases = [b for run_id in reaped for b in landing_integrity.closing_bases(root, run_id, {})]
+    for line in run_halted_trailer_lines(bases):
+        message += "\n" + line
+    commit_params: dict = {"paths": paths + sizings, "message": message}
     if gone:
         commit_params["deleted_paths"] = gone
         commit_params["declared_reverts"] = gone

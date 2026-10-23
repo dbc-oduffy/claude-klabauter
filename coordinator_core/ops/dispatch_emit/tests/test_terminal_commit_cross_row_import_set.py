@@ -6,7 +6,8 @@ Purpose: in a fresh interpreter, after the benchmark's own plan-run fixture runs
 (``build_fixture`` + ``_prepare_close`` + ``_run_full_path``), ``asyncio`` and the modules that
 only existed to serve it (event-loop transports, the async-only handoff closure, the leak gate's
 deferred dependencies) are absent from ``sys.modules``. Rows C1 to C11 each own one importer; this
-test is the closure over all of them. Plan 2026-10-17-terminal-commit-under-200ms (K1) appends
+test is the closure over all of them. The probe pins the opt-in policy as the suite does.
+Plan 2026-10-17-terminal-commit-under-200ms (K1) appends
 ``baton_assemble`` and ``pickup_assemble``; ``session.claims``, ``spine_read``,
 ``schema_validate`` and ``plan_tasks_render`` stay loaded by other path modules and are not pinned.
 
@@ -48,6 +49,9 @@ from pathlib import Path
 from coordinator_core.benchmarks import terminal_commit_full_path as drv
 repo, script = drv.build_fixture(Path(sys.argv[1]))
 drv._prepare_close(repo)
+# The conftest pin is a monkeypatch the child interpreter never sees.
+from coordinator_core.ops.dispatch_emit import process_artifact_policy as _pap
+_pap.hosts_coordinator_state = lambda root: True
 from coordinator_core.ops.dispatch_emit.tests import _legacy_terminal_commit_run as legacy
 out = legacy.run(repo, script)
 ok = out.get("review_stamp") == "minted" and out.get("plan_status") == "implemented"

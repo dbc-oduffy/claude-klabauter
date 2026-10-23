@@ -16,8 +16,11 @@ CLASS/MATCHERS/PRIORITY convention per docs/wiki/write-guard-priority-bands.md
 (the real SSOT -- the prior citation, state/plan-sidecars/2026-07-29-hook-
 fan-in-write-path.priority-map.md, named a file that was never written).
 
-CLASS is advisory: for the main EM this guard offers a better path via
-`additionalContext` and does not deny it. MATCHERS is `Write|Edit|MultiEdit` only —
+CLASS is advisory only in that it orders the guard in the advisory phase; a deny
+envelope `op()` returns is passed through unchanged (engine advisory loop: first
+non-None wins). The main EM is denied at strict in the cases
+`hooks.nudge_em_code_dispatch.op` names (unsized, XS/residue budget, foreign
+checkout, unfired S+ session). MATCHERS is `Write|Edit|MultiEdit` only —
 NOT `NotebookEdit` — taken from the live `hooks.json` registration for
 `nudge-em-code-dispatch.py` (idx 3), not from INTERFACE.md's illustrative
 four-matcher example. PRIORITY is 105 per the wave map's assigned slot

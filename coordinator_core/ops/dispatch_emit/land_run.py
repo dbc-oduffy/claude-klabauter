@@ -1629,6 +1629,14 @@ def _reconcile_prep(
 # ---- trailers ---------------------------------------------------------------------------------
 
 
+def _run_closed_lines(root: Path, run_id: object, params: dict) -> list:
+    """``Checkpoint-Run-Closed:`` lines for every base the landing run's checkpoints carry; empty when none resolves."""
+    from coordinator_core.ops.dispatch_emit.checkpoint_stamp import run_closed_trailer_lines
+    from coordinator_core.ops.dispatch_emit.landing_integrity import closing_bases
+
+    return run_closed_trailer_lines(closing_bases(root, run_id if isinstance(run_id, str) else None, params))
+
+
 def _review_trailer(record_abs: Optional[Path]) -> list:
     """``["Review: <sha256 of the record>"]`` when the machine-local review record is readable, else ``[]``."""
     if record_abs is None:
@@ -2473,6 +2481,7 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
         f"Inline-Review: applies {inline_review['integration_stem']} -- execute-review: "
         f"{inline_review['slices']} slices, {inline_review.get('fixes')} fixes"
     )
+    trailers.extend(_run_closed_lines(root, art_run_id or sibling_run_id, params))
     if product_only:
         trailers.extend(_ask_trailers(root, request.plan_path, record_abs, receipts_built))
     else:

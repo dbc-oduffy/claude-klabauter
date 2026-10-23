@@ -1,4 +1,5 @@
-"""The judge arm's scoped test run and criterion judge are one `verify` agent on the judge's type."""
+"""The judge arm's closing verify: a scoped test leg started beside review and a criterion judge on the
+roster judge's type that runs after re-verify, each raced against the verify wall-time budget."""
 
 from __future__ import annotations
 
@@ -45,22 +46,32 @@ def _agent_labels(script: str) -> list[str]:
     return re.findall(r"label: '([^']*)'", script)
 
 
-def test_the_judge_arm_composes_one_verify_agent_and_neither_absorbed_leg():
+def test_the_judge_arm_composes_a_test_leg_and_a_judge_and_neither_absorbed_leg():
     script = _compose()
     labels = _agent_labels(script)
 
     assert labels.count("verify") == 1
-    assert not [l for l in labels if l == "test:terminal" or l.endswith("exit-criterion-judge")]
+    assert "test:terminal" not in labels
+    assert [l for l in labels if l.endswith("exit-criterion-judge")] == ["review:coordinator:exit-criterion-judge"]
     assert "phases: [" in script and "'Verify'" in script
     assert "'Scoped test run'" not in script and "'Criterion judge'" not in script
     assert "phase('Verify')" in script
 
 
-def test_the_verify_call_is_hosted_on_the_roster_judges_type_and_options():
+def test_the_judge_call_is_hosted_on_the_roster_judges_type_and_options():
+    script = _compose()
+    opts = script[script.index("label: 'review:coordinator:exit-criterion-judge'") :].split(", schema:", 1)[0]
+
+    assert f"agentType: '{_JUDGE_TYPE}'" in opts
+    assert "model: 'sonnet'" in opts and "effort: 'low'" in opts
+    assert "phase: 'Verify'" in opts
+
+
+def test_the_test_leg_is_hosted_on_the_roster_judges_type_in_the_verify_phase():
     script = _compose()
     opts = script[script.index("label: 'verify'") :].split(", schema:", 1)[0]
 
-    assert f"agentType: '{_JUDGE_TYPE}'" in opts
+    assert "phase: 'Verify'" in opts and f"agentType: '{_JUDGE_TYPE}'" in opts
     assert "model: 'sonnet'" in opts and "effort: 'low'" in opts
 
 
@@ -90,50 +101,57 @@ def test_the_roster_judges_type_holds_no_edit_or_write():
     assert not {"Edit", "Write", "MultiEdit", "NotebookEdit"} & set(tools)
 
 
-def test_the_prompt_carries_the_scoped_targets_then_the_judge_brief():
+def test_the_test_prompt_carries_the_scoped_targets_and_the_judge_prompt_the_brief():
     script = _compose()
-    prompt = script[script.index("Verify in two steps") :].split(", { label: 'verify'", 1)[0]
+    test_prompt = script[script.index("Run the scoped test targets:") :].split(", { label: 'verify'", 1)[0]
+    judge_prompt = script[script.index("Judge whether this run met its plan") :].split(
+        ", { label: 'review:coordinator:exit-criterion-judge'", 1
+    )[0]
 
-    targets = prompt.index("Run the scoped test targets: [coordinator_core/ops/dispatch_emit/tests/test_wave_map.py]")
-    step_two = prompt.index("Step 2 -- criterion verdict")
-    brief = prompt.index("Judge whether this run met its plan")
-    assert prompt.index("Step 1 -- scoped tests") < targets < step_two < brief
-    assert "never the verdict itself" in prompt
-    assert "return sidecar_path -- required" not in prompt
+    assert test_prompt.startswith("Run the scoped test targets: [coordinator_core/ops/dispatch_emit/tests/test_wave_map.py]")
+    assert "You have no Write tool: omit sidecar_path." in test_prompt
+    assert "return sidecar_path -- required" not in test_prompt
+    assert "VERIFY TEST LEG RESULT" in judge_prompt and "never the verdict itself" in judge_prompt
 
 
-def test_the_return_nests_test_and_judge_and_binds_both_result_variables():
+def test_the_test_leg_starts_at_launch_and_the_judge_reads_both_results_after_reverify():
     script = _compose()
+    launch = script.index("let _verifyTestRun = null;")
+    judge = script.index("phase('Verify')")
 
-    assert '"required": ["test", "judge"]' in script
-    assert "_testResult = _verifyReply.test;" in script
-    assert "_falsifierResult = _verifyReply.judge;" in script
-    assert "test: r.test ?? null" in script
-    assert "return { test: null, judge: { status: 'indeterminate'" in script
+    assert script.index("phase('Review re-verify')") < judge
+    assert launch < script.index("phase('Review prep')") < judge
+    assert "if (!_halted) {\n    const _testCall = " in script
+    assert "_testResult = await _verifyTestRun;" in script
+    assert "JSON.stringify(_testResult)" in script and "JSON.stringify(_reviewReverify)" in script
+    assert "_falsifierResult = await Promise.race([_judgeCall," in script
 
 
-def test_the_test_result_is_required_so_an_omitted_test_cannot_degrade_a_met_run():
+def test_the_test_binding_and_judge_stay_inside_the_halted_guard():
     script = _compose()
-    assert "`test` (required, even when tests failed or could not run)" in script
-    assert '"required": ["judge"]' not in script
+    guarded = script[script.index("  if (!_halted) {\n  phase('Verify');") :]
+
+    assert "_testResult = await _verifyTestRun;" in guarded and "const _judgeCall" in guarded
+    assert "_testResult = await _verifyTestRun;" not in script[: script.index("  if (!_halted) {\n  phase('Verify');")]
 
 
 def test_the_test_sidecar_is_absent_on_this_arm_and_the_digest_and_bookkeeping_tolerate_it(tmp_path):
     script = _compose()
-    schema = script[script.index("label: 'verify'") :]
-    test_schema = schema[schema.index('"test": {') :]
-    assert '"required": ["status", "tests_run", "tests_failed"]' in test_schema.split("}}, \"required\": [\"test\", \"judge\"]")[0]
+    schema = script[script.index("label: 'verify'") :].split("});", 1)[0]
+    assert '"required": ["status", "tests_run", "tests_failed"]' in schema
     assert "sidecar_path ?? null" in script
     assert resolve_prep_sidecar(None, repo_root=tmp_path, session_id="s", tests_sidecar=None) is None
     assert resolve_prep_sidecar("prep.md", repo_root=tmp_path, session_id="s", tests_sidecar=None) is None
 
 
-def test_the_falsifier_rides_the_judge_brief_inside_the_verify_prompt():
+def test_the_falsifier_rides_the_judge_brief_and_no_falsifier_leg_is_composed():
     script = _compose(falsifier=_FALSIFIER)
 
-    assert _agent_labels(script).count("verify") == 1
-    prompt = script[script.index("Verify in two steps") :].split(", { label: 'verify'", 1)[0]
-    assert "recorded falsifier: how=" in prompt and "run it" in prompt
+    assert _agent_labels(script).count("review:coordinator:exit-criterion-judge") == 1
+    judge_prompt = script[script.index("Judge whether this run met its plan") :].split(
+        ", { label: 'review:coordinator:exit-criterion-judge'", 1
+    )[0]
+    assert "recorded falsifier: how=" in judge_prompt and "run it" in judge_prompt
     assert "test:terminal-falsifier" not in script
 
 

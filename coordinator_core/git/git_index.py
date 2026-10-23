@@ -117,6 +117,7 @@ def parse_index_identity(
     *,
     prefixes: Optional[Collection[str]] = None,
     with_flags: bool = False,
+    unmerged_out: Optional[set] = None,
 ) -> Dict[str, Union[IndexIdentity, IndexFlaggedIdentity]]:
     """ONE walk of `.git/index` yielding the UNION of what the two
     clean/modified axes need per path -- `(mode, sha, size, mtime,
@@ -180,6 +181,9 @@ def parse_index_identity(
     caveat: a late-sorting prefix still steps over most of the index.
     `with_flags=True` returns `IndexFlaggedIdentity` values; without it the
     result is byte-identical to the unscoped call.
+    `unmerged_out`, when given, turns the stage != 0 raise into collection:
+    each returned unmerged name is added to the set and left out of the
+    result.
     """
     gitdir = resolve_git_dir(repo)
     index_path = gitdir / "index"
@@ -194,6 +198,7 @@ def parse_index_identity(
         wanted=wanted,
         prefixes=prefixes,
         with_flags=with_flags,
+        unmerged_out=unmerged_out,
     )
 
 
@@ -224,6 +229,7 @@ def _parse_index_bytes(
     wanted: Optional[Collection[str]] = None,
     prefixes: Optional[Collection[str]] = None,
     with_flags: bool = False,
+    unmerged_out: Optional[set] = None,
 ) -> Dict[str, Union[IndexIdentity, IndexFlaggedIdentity]]:
     if len(raw) < 12:
         raise IndexParseError(f"{index_path}: truncated header ({len(raw)} bytes)")
@@ -326,6 +332,9 @@ def _parse_index_bytes(
                 continue
 
         if stage != 0:
+            if unmerged_out is not None:
+                unmerged_out.add(name.decode("utf-8", "surrogateescape"))
+                continue
             raise IndexParseError(
                 f"{index_path}: entry {name!r} is unmerged (stage {stage}); "
                 "a conflicted path must never read as staged"
