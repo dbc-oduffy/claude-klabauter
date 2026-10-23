@@ -10,9 +10,10 @@ from typing import Optional, Sequence
 
 from coordinator_core.git.run import run_git
 from coordinator_core.ops.dispatch_emit.pre_halt_ancestry import CITED_DETAIL_KEY
-from coordinator_core.ops.dispatch_emit.pre_halt_credit import sha_tokens
+from coordinator_core.ops.dispatch_emit.pre_halt_credit import SHA_TOKEN_PATTERN
 
 _FULL_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+_CITED_SHA_RE = re.compile(SHA_TOKEN_PATTERN)
 
 
 def landed_before_halt(
@@ -40,14 +41,15 @@ def landed_before_halt(
 def landing_credited(verdict: object, ids: Sequence[object], sha: str) -> bool:
     """True unless a row in ``ids`` cites sha tokens in ``met_by`` none of which prefix-matches
     ``sha`` in either direction: a verdict crediting some other commit has not vouched for this
-    landing. Prose ``met_by`` (no sha token) is no contrary citation."""
+    landing. A sha-shaped token counts with or without a digit; ``met_by`` with none is no contrary
+    citation. Trap: prose words of 7+ letters drawn from a-f (``defaced``) read as a sha token."""
     items = verdict.get("items") if isinstance(verdict, dict) else None
     for item in items if isinstance(items, list) else ():
         if not isinstance(item, dict) or item.get("id") not in ids:
             continue
         met_by = item.get("met_by")
         text = " ".join(str(m) for m in met_by) if isinstance(met_by, (list, tuple)) else str(met_by or "")
-        named = sha_tokens(text)
+        named = _CITED_SHA_RE.findall(text.lower())
         if named and not any(sha.startswith(n) or n.startswith(sha) for n in named):
             return False
     return True

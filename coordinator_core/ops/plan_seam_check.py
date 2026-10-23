@@ -83,6 +83,7 @@ from coordinator_core.ops.dispatch_emit.spine_read import (
 )
 from coordinator_core.ops.dispatch_emit.wave_map import _normalize_path
 from coordinator_core.resolve_validation_cmd import cs_read_local_md_key
+from coordinator_core.session.declared_writes import declare_write
 
 
 _DUMPER = getattr(yaml, "CSafeDumper", yaml.SafeDumper)
@@ -1055,5 +1056,7 @@ def _record_handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         target = (root / rel).with_name(Path(rel).stem + suffix)
         body = yaml.dump(_sidecar(reply, rel, by_plan.get(rel, [])), Dumper=_DUMPER, sort_keys=False, allow_unicode=True)
         atomic_write_bytes(target, body.encode("utf-8"))
-        written.append(target.resolve().relative_to(root.resolve()).as_posix())
+        rel_written = target.resolve().relative_to(root.resolve()).as_posix()
+        declare_write(rel_written)
+        written.append(rel_written)
     return {**reply, "sidecars": written}

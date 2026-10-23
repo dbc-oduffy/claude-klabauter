@@ -112,7 +112,8 @@ def test_every_run_token_remover_is_allowlisted_with_its_condition():
 
 def test_run_token_own_unlinks_are_the_protocol_functions_only():
     """`run_token.py` is outside the caller walk; its own `.unlink` calls, the spent-receipt
-    removal in `mint` included, must stay in the protocol functions."""
+    removal in `mint` and the escrow TTL reaper `sweep_expired_escrows` included (escrow
+    removal is protocol too), must stay in the protocol functions."""
     tree = ast.parse((_PKG / "ops/dispatch_emit/run_token.py").read_text(encoding="utf-8"))
     scopes: set[str] = set()
     for fn in ast.walk(tree):
@@ -121,7 +122,7 @@ def test_run_token_own_unlinks_are_the_protocol_functions_only():
                 if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
                         and node.func.attr == "unlink"):
                     scopes.add(fn.name)
-    assert scopes == {"mint", "redeem", "consume", "discard"}
+    assert scopes == {"mint", "redeem", "consume", "discard", "sweep_expired_escrows"}
 
 
 def test_walk_resolves_aliased_and_from_imports(tmp_path):

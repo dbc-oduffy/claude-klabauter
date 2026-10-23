@@ -34,6 +34,7 @@ ARTIFACT_CLASSES = (
     "slice-sizing",
     "superseded-record",
     "docs-stage",
+    "mise-inventory",
 )
 DOC_PATHS_PARAM = "doc_paths"
 
@@ -253,6 +254,77 @@ def candidate_paths(
         run_id=run_id,
         by_class={k: tuple(sorted(v)) for k, v in classes.items()},
         record_dirs=(record_dir,),
+        root=root,
+    )
+
+
+_MISE_INVENTORY_REL = _home_rel("mise-inventory")
+_FAMILY_SUFFIX = re.compile(r"(?:-t\d+|-p\d+)+$")
+
+
+def mise_candidate_paths(
+    worktree_root: Path,
+    run_id: str,
+    *,
+    inventory_rel: Optional[str] = None,
+) -> RunArtifacts:
+    """The record files a mise run mints: the inventory family under ``state/mise-inventory/``
+    (base, ``-t<N>`` tranches, ``[-t<N>][-p<M>].spine.md`` spines) and the seam sidecars of every
+    plan the inventory's chunk table sources. Zero spawns; a missing file contributes nothing and
+    nothing raises."""
+    root = Path(worktree_root)
+    classes: dict[str, list[str]] = {}
+    seen: set[str] = set()
+
+    def add(cls: str, rel: Optional[str]) -> None:
+        norm = _norm_rel(rel)
+        if norm is None or norm in seen or not _contained(root, norm):
+            return
+        if not (root / norm).is_file():
+            return
+        seen.add(norm)
+        classes.setdefault(cls, []).append(norm)
+
+    if not _safe_run_id(run_id):
+        return RunArtifacts(run_id=str(run_id), by_class={}, record_dirs=(), root=root)
+
+    base = _FAMILY_SUFFIX.sub("", run_id)
+    if base:
+        stem = glob_escape(base)
+        for pattern in (f"{stem}.md", f"{stem}.spine.md", f"{stem}-*.md"):
+            for rel in _glob_files(root, _MISE_INVENTORY_REL, pattern):
+                name = rel.rpartition("/")[2][len(base):]
+                if re.fullmatch(r"(?:-t\d+)?(?:-p\d+)?(?:\.spine)?\.md", name):
+                    add("mise-inventory", rel)
+
+        inv = _norm_rel(inventory_rel) or f"{_MISE_INVENTORY_REL}/{base}.md"
+        text = _read_text(root, inv)
+        if text:
+            from coordinator_core.ops.dispatch_emit.inventory_mint import _strip_backtick, parse_chunk_table
+
+            try:
+                rows = parse_chunk_table(text)
+            except Exception:
+                rows = []
+            plans: set[str] = set()
+            for row in rows:
+                plan = _norm_rel(_strip_backtick(row.get("spec path", "")))
+                if plan and PurePosixPath(plan).suffix:
+                    plans.add(plan)
+            for plan in sorted(plans):
+                plan_base = PurePosixPath(plan).with_suffix("").as_posix()
+                add("seam-sidecar", f"{plan_base}.seam.yaml")
+                add("seam-sidecar", f"{plan_base}.fire.seam.yaml")
+                plan_dir = PurePosixPath(plan_base).parent.as_posix()
+                for wave_rel in _glob_files(
+                    root, plan_dir, f"{glob_escape(PurePosixPath(plan_base).name)}.wave-*.seam.yaml"
+                ):
+                    add("seam-sidecar", wave_rel)
+
+    return RunArtifacts(
+        run_id=run_id,
+        by_class={k: tuple(sorted(v)) for k, v in classes.items()},
+        record_dirs=(),
         root=root,
     )
 

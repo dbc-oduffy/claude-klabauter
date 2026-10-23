@@ -618,7 +618,8 @@ def _budget_deny(text: str) -> dict | None:
 
 
 def _budget_decision(payload: dict, session_id: str, file_path: str, tool_input: dict) -> tuple[bool, dict | None]:
-    """The XS-lane / residue-window answer: (handled, result). Not handled means the session is in
+    """The XS-lane / residue-window answer: (handled, result). A session with no sizing opens the
+    XS lane at HEAD on its first write. Not handled means the session is in
     neither state and the sizing branches decide. Runs after the escape check and ahead of the
     autonomous exemption, so autonomy cannot buy past the budget."""
     from coordinator_core.hooks.nudge_unrouted_sizing import _repo_root
@@ -640,6 +641,12 @@ def _budget_decision(payload: dict, session_id: str, file_path: str, tool_input:
             )
             head = git_state.head_sha(root) if landed else None
             if head and xlb.open_residue_window(root, session_id, head):
+                rec = xlb.read_lane(root, session_id)
+        if rec is None and not s_plus and not _session_sizing_state(payload, session_id)[0]:
+            from coordinator_core.git import git_state
+
+            head = git_state.head_sha(root)
+            if head and xlb.open_xs_lane(root, session_id, head):
                 rec = xlb.read_lane(root, session_id)
     except Exception:
         return False, None
@@ -684,8 +691,9 @@ def _budget_decision(payload: dict, session_id: str, file_path: str, tool_input:
 
 
 def op(payload: dict) -> dict | None:
-    """Route the main EM's product-code write to the session's next step. Unsized, it is
-    denied at guard level strict and advised at warn; sized, it is advised. The text
+    """Route the main EM's product-code write to the session's next step. Unsized, the first
+    write opens the XS lane and is admitted inside the budget (`_budget_decision`); where no lane
+    can open (no repo root) it is denied at guard level strict and advised at warn; sized, it is advised. The text
     repeats on every Edit and names the step for the session's sizing state. A subagent
     (`agent_id` present) is denied only as a size-stage run spawn (`_size_stage_write_deny`).
 

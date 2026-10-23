@@ -18,6 +18,15 @@ def test_launcher_child_escrows_the_minted_token_and_replies_without_it(env):  #
     assert run_token.admits(env.root, reply["run_id"], token, f"scratch/warp/{reply['run_id']}.workflow.mjs")
 
 
+def test_escrowed_token_appears_nowhere_in_the_worktree(env):  # noqa: F811
+    reply = op._dispatch_emit({"ask": "add a widget", "launcher_child": True}, repo_root=env.root)
+    token = run_token.escrowed(env.root, reply["run_id"]).encode()
+    assert token not in repr(reply).encode()
+    for path in env.root.rglob("*"):
+        if path.is_file() and ".git" not in path.parts:
+            assert token not in path.read_bytes(), path
+
+
 def test_standalone_ask_replies_with_the_token_and_writes_no_escrow(env):  # noqa: F811
     reply = op._dispatch_emit({"ask": "add a widget"}, repo_root=env.root)
     assert run_token.TOKEN_RE.match(reply["fire_args"]["runToken"])

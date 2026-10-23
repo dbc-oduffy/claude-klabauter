@@ -2912,7 +2912,9 @@ def compose_ask_script(
     # Wave barrier: wave w+1 launches only once wave w's commit:wave-w leg has settled.
     b.append("    const _waveIds = _manifest.rows.filter((x) => x.wave === w).map((x) => x.id);")
     b.append("    await Promise.allSettled(_waveIds.map((i) => _rows[i]));")
-    b.append("    await _commitWave(w, _waveIds);")
+    # Trap: the last wave takes no checkpoint leg; dispatch.terminal_commit lands its paths, so a
+    # checkpoint there is a commit agent immediately followed by the terminal commit.
+    b.append("    if (w !== _waves[_waves.length - 1]) await _commitWave(w, _waveIds);")
     b.append("  }")
     b.append(
         "  if (_commitFailures.length) log('Wave commit failures (the terminal commit covers their paths): ' "

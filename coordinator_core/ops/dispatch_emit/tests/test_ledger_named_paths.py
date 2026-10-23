@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from coordinator_core.ops.dispatch_emit.ledger_remaining_paths import gated_paths, named_paths
+from coordinator_core.ops.dispatch_emit.ledger_remaining_paths import _named_tagged, gated_paths, named_paths
 
 
 def _repo(tmp_path):
@@ -44,28 +44,29 @@ def test_spelling_called_once_canonicalizes_and_dedupes(tmp_path):
 
     out = named_paths(["a/Pub.py a/gone.py", "a/pub.py"], tmp_path, spelling=spelling)
     assert out == ["a/pub.py"]
-    assert len(calls) <= 2 and calls[0] == ["a/Pub.py", "a/gone.py", "a/pub.py"]
+    assert len(calls) == 1 and calls[0] == ["a/Pub.py", "a/gone.py", "a/pub.py"]
 
 
-def test_spelling_admits_a_new_file_in_an_existing_dir_and_drops_an_orphan(tmp_path):
+def test_new_file_in_existing_dir_admitted_with_one_spelling_call(tmp_path):
+    (tmp_path / "pkg").mkdir()
+    calls = []
+
+    def spelling(paths):
+        calls.append(list(paths))
+        return {"pkg": "pkg", "pkg/new.py": None, "nodir/new.py": None}
+
+    out, dropped, _ = _named_tagged(["pkg/new.py nodir/new.py"], tmp_path, spelling)
+    assert out == ["pkg/new.py"]
+    assert dropped == ["nodir/new.py"]
+    assert calls == [["pkg/new.py", "nodir/new.py", "pkg"]]
+
+
+def test_spelling_ignores_disk_and_parent_dir_leg(tmp_path):
     root = _repo(tmp_path)
-    backed = {"docs/plans": "docs/plans"}
-    out = named_paths(
-        ["docs/plans/x.md docs/plans/new.md nodir/new.py"], root, spelling=lambda ps: {p: backed.get(p) for p in ps}
-    )
-    assert out == ["docs/plans/x.md", "docs/plans/new.md"]
-
-
-def test_production_call_shape_returns_only_the_tracked_spelling(tmp_path):
-    from coordinator_core.git.tracked_case import tracked_spelling
-
-    (tmp_path / "bin").mkdir()
-    (tmp_path / "bin/blocked.py").write_text("x")
-    out = named_paths(
-        ["bin/BLOCKED.py bin/Publish.py"], tmp_path, spelling=lambda ps: tracked_spelling(tmp_path, ps)
-    )
-    assert "bin/BLOCKED.py" not in out and "bin/blocked.py" in out
-    assert "bin/Publish.py" in out  # parent exists: a new file the row may create
+    (root / "docs/plans/y.md").write_text("x")
+    backed = {"docs/plans/y.md": "docs/plans/y.md"}
+    out = named_paths(["docs/plans/x.md docs/plans/y.md"], root, spelling=lambda ps: {p: backed.get(p) for p in ps})
+    assert out == ["docs/plans/y.md"]
 
 
 def test_gated_paths_selects_claude_md_class():

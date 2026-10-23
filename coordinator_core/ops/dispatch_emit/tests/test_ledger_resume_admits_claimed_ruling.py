@@ -14,7 +14,7 @@ def _setup(monkeypatch, tmp_path, ruled, staged=("R1",)):
         sizing_rel="sizing.yaml", plan_rel="plan.md", staged=frozenset(staged),
         blocking=("R1",), remaining={},
     )
-    state = SimpleNamespace(ledger_run="run1", ledger_sha="abc", run_halts={})
+    state = SimpleNamespace(ledger_run="run1", ledger_sha="abc", run_halts={}, landed_since_ledger=frozenset())
     monkeypatch.setattr(sizing_fire, "_own_pointer", lambda *a, **k: pointer)
     monkeypatch.setattr(sizing_fire, "_terminal_coded", lambda *a, **k: False)
     monkeypatch.setattr(sizing_fire, "_sha_coded", lambda *a, **k: False)

@@ -1722,45 +1722,6 @@ class _EmitWrites:
                 pass
 
 
-_STAGE_TWIN_TOKEN_PARAMS = (
-    Field("run_id", "nonempty_str", required=True),
-    Field("handle", "dict", required=True),
-    Field("run_token", "nonempty_str", required=True),
-)
-
-
-@register_op("dispatch.stage_twin_token")
-def _stage_twin_token(params: dict, repo_root: Optional[Path] = None) -> dict:
-    """JSON-RPC "dispatch.stage_twin_token": params `run_id`, `handle` (a manifest sidecar handle), `run_token`.
-
-    Rewrites the launcher child's staged twin with `run_token` inlined as `runToken`, once
-    `run_token.admits` the token for the run's script. Replies `{"twin": <repo-relative path>}` or
-    `{"error": str}`; the reply, refusals and logs never carry the token. Zero spawns: one sidecar read,
-    one twin write.
-    """
-    if repo_root is None:
-        return {"error": "dispatch.stage_twin_token requires repo_root"}
-    refusal = validate_params("dispatch.stage_twin_token", params, _STAGE_TWIN_TOKEN_PARAMS)
-    if refusal is not None:
-        return refusal
-    from coordinator_core.lifecycle import main_worktree_root
-    from coordinator_core.ops.dispatch_emit import launcher_staged_twin, reply_sidecar, run_token
-
-    run_id, token = params["run_id"], params["run_token"]
-    root = main_worktree_root(Path(repo_root))
-    if not run_token.TOKEN_RE.match(token):
-        return {"error": f"dispatch.stage_twin_token: run_token for run {run_id} is not a 32-hex token"}
-    if not run_token.admits(root, run_id, token, f"scratch/warp/{run_id}.workflow.mjs"):
-        return {"error": f"dispatch.stage_twin_token: run_token is not admitted for run {run_id}"}
-    handle_path = params["handle"].get("path")
-    if not isinstance(handle_path, str) or launcher_staged_twin.manifest_run_id(handle_path.replace("\\", "/")) != run_id:
-        return {"error": f"dispatch.stage_twin_token: handle does not name a manifest of run {run_id}"}
-    try:
-        return {"twin": reply_sidecar.ensure_twin_token(root, params["handle"], token)}
-    except reply_sidecar.ReplySidecarError as exc:
-        return {"error": str(exc)}
-
-
 @register_op("dispatch.emit")
 def _dispatch_emit(
     params: dict,

@@ -360,7 +360,6 @@ OP_MODULE_MAP: Dict[str, str] = {
     "workflow.bind_args":                     "coordinator_core.ops.workflow_bind",
     "compute_layer.scaffold":                 "coordinator_core.ops.compute_layer_scaffold.op",
     "dispatch.emit":                          "coordinator_core.ops.dispatch_emit.op",
-    "dispatch.stage_twin_token":               "coordinator_core.ops.dispatch_emit.op",
     "dispatch.terminal_commit":                "coordinator_core.ops.dispatch_emit.terminal_commit",
     "dispatch.land_run":                       "coordinator_core.ops.dispatch_emit.land_run",
     "close.background":                        "coordinator_core.ops.ceremony.close_background",

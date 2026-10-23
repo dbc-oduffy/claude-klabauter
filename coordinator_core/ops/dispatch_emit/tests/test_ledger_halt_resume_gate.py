@@ -75,6 +75,8 @@ def test_matching_pointer_resumes_with_resume_ledger_and_no_halt(repo):  # noqa:
         "run_id": "run-1", "plan": PLAN_REL, "blocking": ["R1", "R2"], "rulable_ids": ["R1", "R2"],
         "carried_met": [], "halt_blocking": ["R1", "R2"], "halt_sha": None, "remaining": {}, "revise_notes": [],
         "unlanded": [],
+        # No halt sha is positioned in this fixture's walk.
+        "since_sha": None, "since_halt_shas": [],
     }
     assert v.resume_rows is None and v.resume_plan is None
     assert v.to_json()["resume_ledger"]["plan"] == PLAN_REL

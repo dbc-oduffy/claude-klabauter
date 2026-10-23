@@ -645,6 +645,8 @@ def test_halt_lands_plan_handoff_and_delivery_note_the_halt_names(repo):
 
 
 def test_halt_names_dirty_review_written_file_and_does_not_land_it(repo, monkeypatch):
+    """The halt-record commit lands this run's own review edit: leaving it dirty stranded reviewed
+    work whenever a refire's commit leg closed on a credited halt (the pre-halt-credit incident)."""
     from coordinator_core.ops.dispatch_emit import review_edits
 
     _write_record(repo, RUN)
@@ -655,10 +657,10 @@ def test_halt_names_dirty_review_written_file_and_does_not_land_it(repo, monkeyp
     out = _call(repo)
 
     assert out["committed"] is True, out
-    assert out["review_edits_unlanded"] == {"elsewhere/rev.py": "halted-run"}
-    assert "elsewhere/rev.py" not in _landed(repo, out, "--name-only")
-    assert "Review-Edit-Unlanded: elsewhere/rev.py" in _git(["log", "-1", "--format=%B"], repo)
-    assert "elsewhere/rev.py" in _status(repo)
+    assert out["review_edits_unlanded"] == {}
+    assert "elsewhere/rev.py" in _landed(repo, out, "--name-only")
+    assert "Review-Edit-Unlanded" not in _git(["log", "-1", "--format=%B"], repo)
+    assert "elsewhere/rev.py" not in _status(repo)
 
 
 def test_halt_with_no_review_writes_carries_empty_unlanded(repo, monkeypatch):

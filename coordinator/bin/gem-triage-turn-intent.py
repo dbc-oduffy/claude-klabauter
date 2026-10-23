@@ -34,6 +34,7 @@ def _place_engine_on_path() -> str:
 def main(argv: list[str] | None = None) -> int:
     try:
         _place_engine_on_path()
+        from coordinator_core.group_em import gem_home as _gem_home
         from coordinator_core.hooks.support import git_common_dir as _git_common_dir
         from coordinator_core.hooks.support import turn_intent as _turn_intent
     except Exception as exc:
@@ -68,13 +69,6 @@ def main(argv: list[str] | None = None) -> int:
     except ValueError:
         print("gem-triage-turn-intent: --turn-ended-at is not a float", file=sys.stderr)
         return 2
-
-    # TRAP: _gem_home.gem_holder is not ported to the engine, so this import fails on a
-    # published-mirror tree (no hooks/scripts); port it to coordinator_core.group_em.gem_home.
-    hooks = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "hooks", "scripts")
-    if hooks not in sys.path:
-        sys.path.insert(0, hooks)
-    import _gem_home
 
     holder = _gem_home.gem_holder()
     if not holder or str(holder.get("session_id") or "") != caller:

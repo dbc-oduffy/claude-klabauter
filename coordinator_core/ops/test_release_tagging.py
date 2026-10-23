@@ -271,7 +271,10 @@ _INDEXED = {
     ],
     "skipped": [],
 }
-_INDEXED_PATHS = {"written": ["archive/releases/v0.9.0.yaml", "archive/releases/v1.0.0.yaml"]}
+_INDEXED_PATHS = {
+    "written": ["archive/releases/v0.9.0.yaml", "archive/releases/v1.0.0.yaml"],
+    "commit_owed": ["archive/releases/v0.9.0.yaml", "archive/releases/v1.0.0.yaml"],
+}
 
 
 @pytest.mark.parametrize(
@@ -341,7 +344,10 @@ def test_cut_tag_writes_a_real_index_listing_the_tagged_entry(repo_env, monkeypa
     _git(repo, "commit", "-q", "-m", "entry")
     sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
     out = rt.cut_tag(repo, sha, "v1.0.0")
-    assert out["release_index"] == {"written": ["archive/releases/v1.0.0.yaml"]}
+    assert out["release_index"] == {
+        "written": ["archive/releases/v1.0.0.yaml"],
+        "commit_owed": ["archive/releases/v1.0.0.yaml"],
+    }
     assert ri.released_names(repo) == {"e.md": "v1.0.0"}
 
 

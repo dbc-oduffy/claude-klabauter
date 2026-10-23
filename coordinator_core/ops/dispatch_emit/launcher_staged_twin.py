@@ -2,7 +2,7 @@
 
 A multi-ask launcher child receives no args and never calls ``workflow()``, so the stage op leaves a
 copy of the child's script whose ``STAGED_INLINE_SLOT`` line carries the sha-verified manifest text
-(``nested_run_contract.staged_twin_rel``); the stage-token op adds the run token to that twin alone.
+(``nested_run_contract.staged_twin_rel``); ``ensure_twin`` adds the run's escrowed token to that twin alone.
 No git, no subprocess.
 """
 
@@ -65,7 +65,9 @@ def sweep_expired_twins(root: Path, now: float | None = None) -> int:
     """Unlink every staged twin in ``scratch/warp`` older than ``run_token.TTL_SECONDS``; return the count.
 
     Same exact twin-name shape as ``remove_twins``, any run id; age is file mtime. OSErrors are
-    swallowed after not counting. Zero spawns."""
+    swallowed after not counting. Zero spawns. Also sweeps expired token escrows (not counted): the
+    plaintext token outlives its run the same way the twin does, and this is the only periodic caller."""
+    _run_token.sweep_expired_escrows(root, now)
     cutoff = (time.time() if now is None else now) - _run_token.TTL_SECONDS
     directory = Path(root) / _RUN_DIR_ROOT
     try:

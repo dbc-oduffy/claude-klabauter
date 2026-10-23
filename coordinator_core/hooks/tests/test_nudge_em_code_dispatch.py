@@ -235,7 +235,11 @@ def _payload(sid: str = "sess-sizing-1") -> dict:
 
 
 def _unsized(monkeypatch) -> None:
+    from coordinator_core.hooks import nudge_unrouted_sizing as sizing
+
     monkeypatch.setattr(_mod, "_session_sizing_state", lambda payload, sid: (False, False))
+    # No repo root: the XS-lane budget stands down and the sizing branches decide.
+    monkeypatch.setattr(sizing, "_repo_root", lambda payload: None)
 
 
 def _advisory(result) -> str:
@@ -290,7 +294,7 @@ def test_plan_routed_sizing_without_a_plan_advises_and_repeats(monkeypatch) -> N
 
 def test_unsized_advisory_names_the_ask_fire_not_the_express_lane(monkeypatch) -> None:
     _level(monkeypatch, "warn")
-    monkeypatch.setattr(_mod, "_session_sizing_state", lambda payload, sid: (False, False))
+    _unsized(monkeypatch)
     reason = _advisory(op(_payload()))
     assert 'name: "coordinator:engine-ask", args: {"ask": ' in reason and "express-lane" not in reason
 

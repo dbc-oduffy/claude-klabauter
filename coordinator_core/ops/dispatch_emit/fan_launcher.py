@@ -115,9 +115,7 @@ async function _emitLeg(child) {
   return reply;
 }
 
-// Trap: a second nested round is unavoidable. A nested child receives no args and has no file read.
-// Trap: model relay of manifest bytes is retired.
-// Trap: the 2026-10-22 spike rejected splitting post-stage code.
+// Trap: a nested child receives no args and has no file read, so the stage round is a second nested start, not an in-place resume.
 async function _runChild(child) {
   let emitted;
   try {

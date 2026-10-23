@@ -433,6 +433,15 @@ def next_action_parts(
                     "completion_summary: null, lesson_candidates: null }"
                 )
             )
+            if "reverify" in review_vars:
+                from coordinator_core.ops.dispatch_emit.landing_integrity import REVERIFY_KEY
+
+                rv = review_vars["reverify"]
+                record_fields_expr += (
+                    f", {REVERIFY_KEY}: ({rv} ? {{ status_before: {rv}.status_before ?? null, "
+                    f"status_after: {rv}.status_after ?? null, failing: {rv}.failing ?? [], "
+                    f"reverted: ({rv}.reverted ?? []).map(v => ({{ path: v.path, tests: v.tests ?? [] }})) }} : null)"
+                )
         if review_vars and review_vars.get("integration"):
             # The trailer names the engine's record (`bookkeeping_stem`), not
             # the integrator's own sidecar: that sidecar's frontmatter is

@@ -1739,6 +1739,8 @@ def _land_product(root: Path, repo_root: Path, params: dict, token_state: dict) 
     if close is not None:
         if reply.get("committed"):
             reply = {**reply, "since_halt": close["since_halt"]}
+            if not reply.get("paths"):
+                reply[ALREADY_LANDED_KEY] = True
         elif reply.get("nothing_to_commit") and not reply.get("refused") and not reply.get("error"):
             reply = {**reply, **close, "nothing_to_commit": False}
     if reply.get("refused") not in _STRANDED_UNKNOWN_REFUSALS and not reply.get(ALREADY_LANDED_KEY):
@@ -2196,6 +2198,12 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
         and not machine_local_paths([bookkeeping_path]) and (root / bookkeeping_path).is_file()
     ):
         paths.append(bookkeeping_path)
+    if token_state.get("since_halt_close") is not None and not candidates and not (set(deleted) - set(art_deleted)):
+        return {
+            "committed": False, "nothing_to_commit": True,
+            "run_artifacts": {"landed": [], "withheld": {**art_withheld, **art_dropped}},
+            "stranded": {c: sorted(ps) for c, ps in stranded.items()},
+        }
 
     # ---- credit gate and Row-Unlanded
     unlanded: list = []  # (row id, path, reason)

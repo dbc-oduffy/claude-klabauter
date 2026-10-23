@@ -20,7 +20,7 @@ Negative-spec:
     ruling whose plan is absent from its ``cycle_plans``, an empty ruling and a
     malformed row are each refused by name.
   - Does NOT touch any frontmatter outside the ``pm_ruling`` block.
-  - Does NOT commit, and does NOT spawn.
+  - Does NOT commit, and does NOT spawn; it declares each plan it rewrote.
   - Merges by ``item``: a ruling for an id already in the list replaces it; other
     entries stay as they were.
 """
@@ -43,6 +43,7 @@ from coordinator_core.lifecycle import main_worktree_root
 from coordinator_core.locked_write import LockTimeout, MutateAbort, locked_rmw
 from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.roadmap.mise_residue import RULINGS_OP, render_pm_ruling
+from coordinator_core.session.declared_writes import declare_write
 
 
 def _existing_entries(text: str) -> List[dict]:
@@ -145,6 +146,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         except MutateAbort as exc:
             reason = str(exc.args[0]) if exc.args else "mutation aborted"
         else:
+            declare_write(candidate)
             applied += [{"plan": raw_plan, "id": r["id"]} for r in group]
             continue
         refused += [{"plan": raw_plan, "id": r["id"], "reason": reason} for r in group]

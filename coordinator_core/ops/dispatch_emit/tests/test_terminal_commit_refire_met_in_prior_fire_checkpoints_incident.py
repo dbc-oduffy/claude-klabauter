@@ -70,9 +70,10 @@ def _gate(incident, met_by):
 
 
 def test_prose_met_by_closes_on_the_prior_checkpoint(incident):
+    checkpoint = incident[3]
     reply = _gate(incident, PROSE)
     assert reply["committed"] is True and reply["already_landed"] is True
-    assert reply["sha"] == incident[3] and "refused" not in reply
+    assert reply["sha"] == checkpoint and "refused" not in reply
 
 
 def test_met_by_naming_an_unrelated_sha_still_refuses(incident):

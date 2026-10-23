@@ -290,3 +290,15 @@ def test_escrow_on_noop_branch_returns_none_quietly(tmp_path):
     assert twin.ensure_twin(tmp_path, "state/other/run1/manifest.json", RAW, HANDLE, max_bytes=CAP, refuse=ValueError) is None
     got = _stage(tmp_path)
     assert got is None
+
+
+def test_sweep_expired_twins_also_sweeps_aged_escrows(tmp_path):
+    import time
+
+    from coordinator_core.ops.dispatch_emit import run_token
+
+    _escrowed_run(tmp_path)
+    escrow_file = tmp_path / ".git" / "coordinator-warp-run-tokens" / "escrow" / "run1.json"
+    assert escrow_file.exists()
+    twin.sweep_expired_twins(tmp_path, now=time.time() + run_token.TTL_SECONDS + 60)
+    assert not escrow_file.exists()

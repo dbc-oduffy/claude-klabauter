@@ -2205,6 +2205,7 @@ def review_stage_vars(review, *, bookkeeping_stem_literal: str, plan_id_literal:
         "bookkeeping_stem": bookkeeping_stem_literal,
         "plan_id_literal": plan_id_literal,
     }
+    out["reverify"] = "_reviewReverify"
     if review.integration is not None:
         out["integration"] = "_reviewIntegration"
     return out
@@ -4663,7 +4664,8 @@ def _seam_leg_js(
         "`unreachable` and each `click_paths[]` item whose verdict is `broken`; never report "
         "`undecidable`. Any such finding makes the `verdict` DRIFT. Return `verdict`, `per_plan`, "
         "`findings`, `sidecars` with step 1's reply and step 2's findings merged. "
-        "Judge nothing, edit nothing, commit nothing."
+        "Judge nothing, edit nothing, commit nothing. "
+        "A reply saved for inspection goes under `scratch/seam/<run-id>/`, never the repo root."
         + _INVOKE_LITERAL_CLAUSE
         + " If either op refuses or errors, put its verbatim output in `findings` as one object with "
         "`class` `op-error` and report `verdict` REFUSED for any op refusal or error. "
@@ -4926,6 +4928,9 @@ def _checkpoint_commit_js(
             if plan_path or runtime_plan_js
             else ";"
         ),
+        # Trap: this commit stays an agent leg (haiku, effort low). The workflow script has no
+        # shell or op primitive, only agent(); ceremony.commit_v2 is reachable solely through
+        # bin/coordinator-invoke, which an agent runs. Pinned by test_commit_legs_are_haiku.py::test_every_commit_leg_emits_haiku.
         "    let r = null;",
         "    try {",
         "      r = await agent(",
@@ -5954,6 +5959,7 @@ def compose_script(
     body_blocks.append("  let _deliveryNotRun = null;")
     body_blocks.append(f"  let {WAVE_NOT_RUN_VAR} = [];")
     body_blocks.append("  let _reviewIntegration = null;")
+    body_blocks.append("  let _reviewReverify = null;")
     body_blocks.append(f"  let {_TEST_RESULT_VAR} = null;")
     body_blocks.append(f"  let {_FALSIFIER_RESULT_VAR} = null;")
 
@@ -5967,6 +5973,7 @@ def compose_script(
         "_deliveryNotRun",
         WAVE_NOT_RUN_VAR,
         "_reviewIntegration",
+        "_reviewReverify",
     )
     review_vars: Optional[dict] = None
     judge_expr: Optional[str] = None

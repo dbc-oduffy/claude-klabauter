@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from coordinator_core.ops.dispatch_emit import ask_compose, reply_sidecar
+from coordinator_core.ops.dispatch_emit import ask_compose, reply_sidecar, run_token
 from coordinator_core.ops.dispatch_emit.ask_compose import compose_ask_script
 from coordinator_core.ops.dispatch_emit.tests._node_support import payload_file
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
@@ -79,10 +79,13 @@ def _stage(root: Path, monkeypatch) -> dict:
     script_path.parent.mkdir(parents=True, exist_ok=True)
     script_path.write_text(script, encoding="utf-8", newline="")
     manifest = big_manifest(3)
+    (root / ".git").mkdir(exist_ok=True)
+    token = run_token.mint(root, _RUN_ID, f"scratch/warp/{_RUN_ID}.workflow.mjs")
+    assert run_token.escrow(root, _RUN_ID, token)
     handle = reply_sidecar.write_reply(root, run_dir / "manifest.json", manifest)
     twin = root / f"scratch/warp/{_RUN_ID}.staged-{handle['sha256']}.workflow.mjs"
     assert twin.is_file()
-    assert reply_sidecar.ensure_twin_token(root, handle, "a" * 32) == twin.relative_to(root).as_posix()
+    assert token in twin.read_text(encoding="utf-8")
     return {"script_path": script_path, "manifest": manifest, "handle": handle, "twin": twin}
 
 

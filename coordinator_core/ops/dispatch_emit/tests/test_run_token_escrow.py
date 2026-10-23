@@ -1,4 +1,4 @@
-"""run_token escrow: written at mint time by the launcher, peeked read-only, dead with the record."""
+"""run_token escrow: written at emit for a launcher child, peeked read-only, dead with the record."""
 
 from __future__ import annotations
 
