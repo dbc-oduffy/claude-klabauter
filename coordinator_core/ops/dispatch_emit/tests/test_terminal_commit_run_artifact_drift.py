@@ -11,7 +11,7 @@ import pytest
 
 from coordinator_core.ops import warp_run_deliverable
 from coordinator_core.ops.review_mint import wave_bookkeeping
-from coordinator_core.ops.dispatch_emit import run_token, terminal_commit
+from coordinator_core.ops.dispatch_emit import halted_record_commit, run_token, terminal_commit
 from coordinator_core.ops.dispatch_emit.commit_request import ChunkCommit, CommitRequest, render_marker
 from coordinator_core.session import touch_record
 from coordinator_core.win_portability import no_console_creationflags
@@ -124,6 +124,13 @@ def test_a_rewrite_of_the_runs_own_sizing_is_reread_and_lands(tmp_path, monkeypa
     assert out["committed"] is True, out
     assert OWN not in seen[0].get("expected_content_sha256", {})
     assert out["run_artifacts"]["reread"] == [OWN]
+
+
+def test_reread_is_reported_when_the_run_declares_no_run_artifacts(tmp_path, monkeypatch):
+    monkeypatch.setattr(halted_record_commit, "within_handoffs_home", lambda *a, **k: None)
+    out, _ = _fire(tmp_path, monkeypatch, drift={OWN})
+    assert out["committed"] is True, out
+    assert out["run_artifacts"] == {"landed": [], "withheld": {}, "reread": [OWN]}, out
 
 
 def test_a_product_path_drift_still_refuses(tmp_path, monkeypatch):

@@ -4113,7 +4113,8 @@ def _terminal_commit_inner(
         presets = kind_presets(kind, plan_governs=plan_governs)
         close_ctx.update(
             root=worktree_root,
-            # run_id is the close-job record key every reader uses (the script stem);
+            # run_id is the close-job record key every reader uses (the script stem, re-keyed
+            # to this run when the stem names a different run's .workflow script);
             # sibling_run_id is the ask run's own id, which names its sibling-status file.
             run_id=run_close.own_close_key(
                 _run_id_of(params, ask_run_dir, script_path_raw),
@@ -5718,8 +5719,6 @@ def _terminal_commit_inner(
                 "landed": sorted(p for p in artifacts.paths() if p in landed_now),
                 "withheld": dict(sorted(withheld_art.items())),
             }
-            if reread_artifacts:
-                reply["run_artifacts"]["reread"] = reread_artifacts
             if art_residue:
                 reply["run_artifact_residue"] = art_residue
                 reply["ok"] = False
@@ -5730,10 +5729,8 @@ def _terminal_commit_inner(
                 )
         elif wh_map:
             reply["run_artifacts"] = {"landed": [], "withheld": dict(sorted(wh_map.items()))}
-            if reread_artifacts:
-                reply["run_artifacts"]["reread"] = reread_artifacts
-        elif reread_artifacts:
-            reply["run_artifacts"] = {"landed": [], "withheld": {}, "reread": reread_artifacts}
+        if reread_artifacts:
+            reply.setdefault("run_artifacts", {"landed": [], "withheld": {}})["reread"] = reread_artifacts
         if review_land:
             reply["review_residue"] = sorted(review_land)
             still = _changed_paths(worktree_root, list(review_land))
