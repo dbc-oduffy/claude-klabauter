@@ -40,6 +40,7 @@ REPLY_KEYS: Final = frozenset({
     "siblings",
     "sizing_shipped",
     "stranded",
+    "peer_held_left",
     "incomplete_reasons",
     "next",
     "receipts",

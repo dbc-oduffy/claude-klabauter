@@ -41,34 +41,11 @@ def test_slot_present_writes_exact_twin_for_each_record_root(tmp_path, rel):
     assert _twin_path(tmp_path).read_text(encoding="utf-8") == expected
 
 
-def test_run_token_given_is_inlined_and_path_returned(tmp_path):
-    _script(tmp_path)
-    got = twin.ensure_twin(tmp_path, "state/warp/run1/manifest.json", RAW, HANDLE, max_bytes=CAP, refuse=ValueError, run_token="a" * 32)
-    assert got == nrc.staged_twin_rel("run1", SHA)
-    inline = json.dumps({"handle": HANDLE, "text": RAW.decode(), "runToken": "a" * 32}, ensure_ascii=True)
-    assert f"const _STAGED_INLINE = {inline};" in _twin_path(tmp_path).read_text(encoding="utf-8")
-
-
 def test_identical_rerun_returns_path_without_token(tmp_path):
     _script(tmp_path)
     first = twin.ensure_twin(tmp_path, "state/warp/run1/manifest.json", RAW, HANDLE, max_bytes=CAP, refuse=ValueError)
     assert first == twin.ensure_twin(tmp_path, "state/warp/run1/manifest.json", RAW, HANDLE, max_bytes=CAP, refuse=ValueError)
     assert "runToken" not in _twin_path(tmp_path).read_text(encoding="utf-8")
-
-
-@pytest.mark.parametrize("text", [None, "return 1;\n"])
-def test_run_token_with_no_twin_to_write_raises_not_none(tmp_path, text):
-    if text is not None:
-        _script(tmp_path, text)
-    with pytest.raises(ValueError, match="run1") as exc:
-        twin.ensure_twin(tmp_path, "state/warp/run1/manifest.json", RAW, HANDLE, max_bytes=CAP, refuse=ValueError, run_token="b" * 32)
-    assert "b" * 32 not in str(exc.value)
-    assert not _twin_path(tmp_path).exists()
-
-
-def test_run_token_with_foreign_sidecar_raises(tmp_path):
-    with pytest.raises(ValueError):
-        twin.ensure_twin(tmp_path, "state/other/run1/manifest.json", RAW, HANDLE, max_bytes=CAP, refuse=ValueError, run_token="b" * 32)
 
 
 def test_no_script_writes_nothing(tmp_path):
@@ -232,17 +209,6 @@ def test_no_run_json_omits_resume(tmp_path):
     assert nrc.STAGED_RESUME_KEY not in _inline(tmp_path)
 
 
-def test_token_call_and_stage_call_share_resume_block(tmp_path):
-    _script(tmp_path)
-    _run(tmp_path, "estimate:\n  tshirt: S\nplan: docs/plans/p.md\n")
-    _call(tmp_path)
-    staged = _inline(tmp_path)[nrc.STAGED_RESUME_KEY]
-    twin.ensure_twin(tmp_path, "state/warp/run1/manifest.json", RAW, HANDLE, max_bytes=CAP, refuse=ValueError, run_token="a" * 32)
-    tokened = _inline(tmp_path)
-    assert tokened[nrc.STAGED_RESUME_KEY] == staged
-    assert tokened["runToken"] == "a" * 32
-
-
 def _escrowed_run(root):
     from coordinator_core.ops.dispatch_emit import run_token
 
@@ -250,6 +216,16 @@ def _escrowed_run(root):
     token = run_token.mint(root, "run1", "scratch/warp/run1.workflow.mjs")
     assert run_token.escrow(root, "run1", token)
     return token
+
+
+def test_escrowed_token_and_resume_block_share_one_twin(tmp_path):
+    _script(tmp_path)
+    _run(tmp_path, "estimate:\n  tshirt: S\nplan: docs/plans/p.md\n")
+    token = _escrowed_run(tmp_path)
+    _call(tmp_path)
+    inline = _inline(tmp_path)
+    assert inline[nrc.STAGED_RESUME_KEY]["plan_rel"] == "docs/plans/p.md"
+    assert inline["runToken"] == token
 
 
 def _stage(root, **kw):

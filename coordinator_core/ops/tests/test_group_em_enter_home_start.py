@@ -25,6 +25,9 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(registry))
     for key in ("MACHINE_LOCAL_COORDINATOR_GROUP_EM_HOME", "MACHINE_LOCAL_COORDINATOR_GENERAL_WORK_HOME"):
         monkeypatch.delenv(key, raising=False)
+    # nomination.claim refuses a session with no registry row or transcript; the pending-proof
+    # cases here claim before any transcript exists, so the real-session check is stubbed.
+    monkeypatch.setattr(nomination, "_session_is_real", lambda sid: True)
     monkeypatch.setattr(gee.group_em_read_pass, "fetch_live_agents", lambda *a, **k: [])
     monkeypatch.setattr(gee.group_em_read_pass, "build_roster", lambda *a, **k: [])
     monkeypatch.setattr(gee.group_em_send_pass, "build_send_digest", lambda *a, **k: {"entries": []})

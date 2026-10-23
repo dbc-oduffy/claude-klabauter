@@ -44,7 +44,12 @@ class Usage(NamedTuple):
 
 
 def lane_path(repo_root, sid: str) -> Path:
-    return git_common_dir(Path(repo_root)) / "coordinator-sessions" / sid / _LANE_FILENAME
+    from coordinator_core.session import core as _core
+
+    hub = _core._sessions_dir_resolve(str(repo_root))
+    if not hub:
+        raise RuntimeError(f"session hub unresolvable for {repo_root!s}")
+    return Path(hub) / sid / _LANE_FILENAME
 
 
 def read_lane(repo_root, sid: str) -> Optional[dict]:
@@ -209,6 +214,22 @@ def project(file_path: str, tool_input: dict) -> Optional[str]:
     return text
 
 
+def project_shell_write(file_path: str, body: str, append: bool) -> Optional[str]:
+    """The file's text after a `>` (body replaces) or `>>` (current text + body) heredoc write,
+    computed in memory in LF. An absent append target projects to the body; None when an append
+    target is unreadable for any other reason."""
+    if not isinstance(body, str):
+        return None
+    body = _lf(body)
+    if not append:
+        return body
+    try:
+        text = _read_text(file_path)
+    except OSError:
+        return None
+    return body if text is None else _lf(text) + body
+
+
 def _base_texts(repo_root, base_sha: str, rels: list) -> dict:
     """{rel: base text or None when absent at base}. Raises when the base is unreadable."""
     commit = git_state.read_commit(repo_root, base_sha)
@@ -273,7 +294,7 @@ def touched_s_or_larger(sid: str, repo_root) -> bool:
     from coordinator_core.session.scope import parse_touch_event
 
     try:
-        sink = git_common_dir(Path(repo_root)) / "coordinator-sessions" / sid / _TOUCH_RECORD_FILENAME
+        sink = lane_path(repo_root, sid).parent / _TOUCH_RECORD_FILENAME
         lines, degraded = _read_touch_record_as_legacy_lines(sink)
     except Exception:
         return False

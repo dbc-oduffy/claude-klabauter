@@ -105,7 +105,12 @@ def scan_dir_for_findings(root: Path, scan_dirs: Tuple[str, ...] = _SCAN_DIRS) -
 
 #: Agent-facing haystacks: assertions ABOUT text an agent could read (a refusal, an
 #: advisory, a rendered message). A match here IS a withholding assertion.
-_AGENT_FACING_EXACT = frozenset({"err", "msg", "stderr", "reason", "note", "text", "ctx", "result"})
+#:
+#: `"str"` is the token `_ASSERT_RE` captures from `assert "K" not in str(render(record,
+#: Audience.SUBAGENT))` — it stops at the `(`, so the stringified rendered subagent text is
+#: all that is visible. Treated as agent-facing: a withhold-shaped read fails loudly if its
+#: knob is neither registered nor waived, where a not-withhold reading would hide it.
+_AGENT_FACING_EXACT = frozenset({"err", "msg", "stderr", "reason", "note", "text", "ctx", "result", "str"})
 _AGENT_FACING_SUFFIXES = ("_note", "_msg", "_err", "_ctx")
 
 #: Environment/dict/generated-text haystacks: assertions about the PROCESS ENVIRONMENT,
@@ -177,7 +182,7 @@ def classify_haystack(haystack: str) -> str:
 #
 # Two reason categories, not one string reused for both:
 #
-# 1. OVERRIDE-WITHHOLDING family (10 files) — declined for the registry on its own merits
+# 1. OVERRIDE-WITHHOLDING family — declined for the registry on its own merits
 #    (state/sizings/2026-09-04-an-unregistered-withhold-fails-the-suite.yaml, `em_analysis`):
 #    a wildcard withhold with a live exception (`block_subagent_plan_body_bash_write.py`
 #    DOES honor `COORDINATOR_OVERRIDE_SUBAGENT_PLAN_BODY`), declared in a docstring rather
@@ -196,6 +201,14 @@ _WAIVERS: Dict[Tuple[str, str], str] = {
         "OVERRIDE-WITHHOLDING family, declined for the registry (sizing em_analysis)",
     ("coordinator_core/bash_guards/tests/test_branch_creation_seam_no_hatch_and_ceremony_pins.py", "COORDINATOR_OVERRIDE_BRANCH"):
         "OVERRIDE-WITHHOLDING family, declined for the registry (sizing em_analysis)",
+    ("coordinator_core/bash_guards/tests/test_check_offer_git_c.py", "COORDINATOR_ALLOW_CD_PREFIX"):
+        "OVERRIDE-WITHHOLDING family, declined for the registry (sizing em_analysis)",
+    ("coordinator_core/bash_guards/tests/test_guard_head_tail_rewrite.py", "COORDINATOR_ALLOW_HEAD_TAIL_PLUMBING"):
+        "OVERRIDE-WITHHOLDING family, declined for the registry (sizing em_analysis)",
+    ("coordinator_core/bash_guards/tests/test_guard_offer_invoke_params_stdin.py", "COORDINATOR_ALLOW_INVOKE_ARGV_PARAMS"):
+        "OVERRIDE-WITHHOLDING family, declined for the registry (sizing em_analysis)",
+    ("coordinator_core/guard_messages/tests/test_alternative_record_invariant.py", "COORDINATOR_X"):
+        "synthetic knob in a renderer unit test, not a real knob",
     ("coordinator_core/bash_guards/tests/test_commit_tripwires.py", "COORDINATOR_OVERRIDE_PATHSPEC_DIVERGENCE"):
         "OVERRIDE-WITHHOLDING family, declined for the registry (sizing em_analysis)",
     ("coordinator_core/bash_guards/tests/test_guard_grep_via_bash.py", "COORDINATOR_OVERRIDE_GREP_VIA_BASH_GUARD"):
@@ -427,7 +440,7 @@ def test_probe_unrecognised_haystack_is_reported_not_ignored(tmp_path):
 
 @pytest.mark.parametrize(
     "haystack",
-    ["err", "msg", "stderr", "reason", "note", "text", "ctx", "result", "flag_note", "c1_ctx"],
+    ["err", "msg", "stderr", "reason", "note", "text", "ctx", "result", "str", "flag_note", "c1_ctx"],
 )
 def test_classifier_recognises_agent_facing_haystacks(haystack):
     assert classify_haystack(haystack) == WITHHOLD

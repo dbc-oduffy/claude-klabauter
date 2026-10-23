@@ -49,7 +49,7 @@ def _load_publish_module():
 publish = _load_publish_module()
 
 
-def test_real_table_orders_every_entrypoint_row_before_the_emitter_row():
+def test_real_table_orders_every_entrypoint_row_before_the_emitter_row(monkeypatch, tmp_path):
     """`setup/publish-targets.portable`, parsed through the real `load_targets`
     seam, must place every `_KLABAUTER_PARITY_ENTRYPOINT_ROWS` name before
     `_KLABAUTER_PARITY_EMITTER_ROW`. This is the REASON C3 exists: the
@@ -58,6 +58,12 @@ def test_real_table_orders_every_entrypoint_row_before_the_emitter_row():
     parses the argv it composes. A future row insertion that puts the
     emitter back ahead of a parser row must fail this assertion.
     """
+    # `load_targets` resolves each row's DEST from machine-local
+    # `publish.mirrors.claude_klabauter.path`; an unset key aborts the load on
+    # any box without a configured mirror. The ordering under test does not
+    # depend on the dest value, so supply a throwaway one through the
+    # `MACHINE_LOCAL_<KEY>` env rung rather than reading the box's registry.
+    monkeypatch.setenv("MACHINE_LOCAL_PUBLISH_MIRRORS_CLAUDE_KLABAUTER_PATH", str(tmp_path))
     rows = load_targets(_REPO_ROOT / "setup")
     index_by_name = {row.split("|", 1)[0]: i for i, row in enumerate(rows)}
 

@@ -49,6 +49,19 @@ def test_red_reverify_on_a_landed_importer_is_refused_naming_the_test_file(repo)
     assert _git(["rev-parse", "HEAD"], repo) == head
 
 
+def test_red_reverify_from_a_subdirectory_suite_is_refused(repo):
+    (repo / "lab" / "tests").mkdir(parents=True)
+    (repo / "lab" / "mod.py").write_text("x = 1\n", encoding="utf-8")
+    (repo / "lab" / TEST_FILE).write_text("import mod\n\n\ndef test_x():\n    assert mod.x\n", encoding="utf-8")
+    head = _git(["rev-parse", "HEAD"], repo)
+
+    out = _fire(repo, "lab/mod.py", inline_review=_review(_reverify("fail")))
+
+    assert out["committed"] is False
+    assert out["refused"] == li.REVIEW_REVERIFY_FAILED
+    assert _git(["rev-parse", "HEAD"], repo) == head
+
+
 def test_green_after_revert_commits(repo):
     _land(repo)
 

@@ -25,6 +25,8 @@ def _isolated_state_dir(tmp_path, monkeypatch):
     monkeypatch.setattr(
         group_em_nomination, "entry_status", lambda *a, **k: {"status": "verified"}
     )
+    # `claim` refuses a session with no registry row or transcript; these tests claim synthetic ids.
+    monkeypatch.setattr(group_em_nomination, "_session_is_real", lambda sid: True)
     yield
 
 

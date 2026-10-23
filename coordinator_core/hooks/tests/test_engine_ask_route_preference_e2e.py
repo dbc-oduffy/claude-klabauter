@@ -14,7 +14,7 @@ from coordinator_core.hooks import submit_engine_ask as mod
 from coordinator_core.ops import baton_pm_turns as PT
 from coordinator_core.ops.dispatch_emit import ask_compose
 from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
-from coordinator_core.ops.dispatch_emit.route_preference import ROUTE_PREFERENCE_FILE
+from coordinator_core.ops.dispatch_emit.route_preference import EM_RATIONALE_MAX_CHARS, ROUTE_PREFERENCE_FILE
 from coordinator_core.session_baton import store
 
 SID = "sess-route-pref-e2e"
@@ -83,15 +83,20 @@ def test_a_submission_without_a_preference_writes_no_record_and_no_block(repo):
     assert "## EM route preference" not in Path(_hso(env)["updatedInput"]["scriptPath"]).read_text(encoding="utf-8")
 
 
-@pytest.mark.parametrize("args", [
-    {"ask": "x", "route_preference": "shape"},
-    {"ask": "x", "route_preference": "plan", "em_rationale": "y" * 2001},
-], ids=["bad-enum", "over-cap"])
-def test_an_invalid_preference_is_denied_naming_the_key_and_writes_nothing(repo, args):
-    env = _submit(repo, args)
+def test_an_invalid_preference_is_denied_naming_the_key_and_writes_nothing(repo):
+    env = _submit(repo, {"ask": "x", "route_preference": "shape"})
 
     assert _hso(env)["permissionDecision"] == "deny"
-    assert ("route_preference" if args["route_preference"] == "shape" else "em_rationale") in (
-        _hso(env)["permissionDecisionReason"]
-    )
+    assert "route_preference" in _hso(env)["permissionDecisionReason"]
     assert not (repo / "scratch" / "warp").exists()
+
+
+def test_an_over_length_rationale_is_truncated_not_refused(repo):
+    env = _submit(repo, {"ask": VERBATIM, "source": "pm", "route_preference": "plan",
+                         "em_rationale": "y" * 2001})
+
+    assert _hso(env)["permissionDecision"] == "allow", env
+    record = json.loads((record_dir(repo, _run_id(env)) / ROUTE_PREFERENCE_FILE).read_text(encoding="utf-8"))
+    assert record["route_preference"] == "plan"
+    assert len(record["em_rationale"]) <= EM_RATIONALE_MAX_CHARS
+    assert record["em_rationale"].endswith("[truncated]")

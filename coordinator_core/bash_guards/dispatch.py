@@ -2528,6 +2528,9 @@ def _build_guard_chain(
     from coordinator_core.bash_guards.guard_head_tail_rewrite import (
         check_head_tail_plumbing_rewrite as _check_head_tail_plumbing_rewrite,
     )
+    from coordinator_core.bash_guards.guard_xs_lane_shell_write import (
+        check as _check_xs_lane_shell_write,
+    )
     from coordinator_core.bash_guards.guard_trailing_background_ampersand import (
         check_trailing_background_ampersand as _check_trailing_background_ampersand,
     )
@@ -3366,6 +3369,9 @@ def _build_guard_chain(
         # that entry's own comment above for why.
         # Bash-only is correct by construction, not unconverted -- reason:
         # docs/reference/guard-tool-name-membership.md §8.
+        # Ahead of the rewrite/advise run (cat-heredoc-write-advise, heredoc-repo-write-advise):
+        # the band is first-non-None-wins, so an advisory for the same heredoc would shadow the deny.
+        GuardEntry("xs-lane-shell-write", lambda: _check_xs_lane_shell_write(cmd, session_id, cwd, payload), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.NOT_COST_ARGUED, matchers=("Bash",)),
         GuardEntry("find-exec-rewrite", lambda: _dc.check_find_exec_rewrite(cmd, session_id, payload=payload), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.WINDOWS_COST_ONLY, matchers=("Bash",)),
         GuardEntry("grep-via-bash-rewrite", lambda: _dc.check_grep_via_bash_rewrite(cmd, session_id, payload=payload), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.HOST_INDEPENDENT, matchers=("Bash",)),
         GuardEntry("sed-range-read-advise", lambda: _dc.check_sed_range_read_advise(cmd, session_id, payload=payload), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.HOST_INDEPENDENT, matchers=("Bash",)),

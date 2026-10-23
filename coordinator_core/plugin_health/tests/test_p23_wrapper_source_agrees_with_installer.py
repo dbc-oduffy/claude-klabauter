@@ -61,6 +61,11 @@ def _install(box):
         claude_klabauter_root=str(box["live"]),
         settings_bin=str(box["settings_bin"]),
     )
+    # DoE's install chain runs the forwarder right after Step 3.5b; on POSIX the
+    # installer only links ~/.local/bin/claude-author onto a shim target that
+    # the forwarder's copy writes through, so the chain is the unit under test.
+    wrapper_src = claude_author_wrapper_source(box["live"])
+    assert install_claude_author_wrapper.main(["--wrapper-src", str(wrapper_src)]) == 0
 
 
 def _probe(box):

@@ -81,7 +81,10 @@ def test_redirected_home_env_still_drops_the_username(tmp_path, monkeypatch):
 
 
 def test_interpreter_outside_home_is_left_alone():
-    outside = os.path.join("C:" + os.sep, "Program Files", "Python313", "python.exe")
+    # Must be absolute on the host OS: "C:/..." is a relative path on POSIX and
+    # would be resolved against the cwd, which can sit under the home directory.
+    root = "C:" + os.sep if os.name == "nt" else os.sep + "opt"
+    outside = os.path.join(root, "Program Files", "Python313", "python.exe")
     rendered = _bt_render_interpreter_path(outside)
     assert "$HOME" not in rendered
     assert "Program Files" in rendered

@@ -203,6 +203,12 @@ EXPECTED: Dict[str, _Expected] = {
         "Guards PowerShell invoked VIA the Bash tool; the PowerShell tool "
         "is not a surface it can meaningfully watch.",
     ),
+    "xs-lane-shell-write": _Expected(
+        ("Bash",),
+        BASH_ONLY_BY_CONSTRUCTION,
+        "Reads Bash heredoc / redirect / `tee` / `sed -i` / `cp` / interpreter-body write "
+        "grammar; it has no PowerShell sink reader.",
+    ),
     "find-exec-rewrite": _Expected(
         ("Bash",),
         BASH_ONLY_BY_CONSTRUCTION,
@@ -522,9 +528,9 @@ def test_every_registered_guard_is_classified():
     (merge 49df735aad); 70 -> 72 with `trailing-background-ampersand` and
     `move-from-inside-cwd` (example-game-repo-3b friction advisories); 73 -> 74 with
     `block_drive_root_new_dir_bash_write`; 74 -> 75 with
-    `block-external-workspace-vcs-write`."""
+    `block-external-workspace-vcs-write`; 75 -> 76 with `xs-lane-shell-write`."""
     actual = _actual_matchers()
-    assert len(actual) == 75, sorted(actual)
+    assert len(actual) == 76, sorted(actual)
     assert set(actual) == set(EXPECTED)
 
 
@@ -565,7 +571,7 @@ def test_every_entry_is_in_exactly_one_partition_bucket():
             bucket3 += 1
         else:
             raise AssertionError("%r has an unrecognised kind %r" % (guard_id, exp.kind))
-    assert bucket1 + bucket2 + bucket3 == len(EXPECTED) == 75
+    assert bucket1 + bucket2 + bucket3 == len(EXPECTED) == 76
     assert bucket3 == 1, (
         "expected 1 dual-declaring-but-Bash-detecting entry (`stale-write`, "
         "merged in from origin/main 2026-09-20 -- see EXPECTED's own "
@@ -599,7 +605,7 @@ def test_held_cohort_kinds_are_uniform_and_distinct_from_by_construction():
     not_yet_converted = {
         gid for gid, exp in EXPECTED.items() if exp.kind == NOT_YET_CONVERTED
     }
-    assert len(by_construction) == 12
+    assert len(by_construction) == 13
     assert len(not_yet_converted) == 1
     assert by_construction.isdisjoint(not_yet_converted)
     assert set(held).isdisjoint(by_construction)

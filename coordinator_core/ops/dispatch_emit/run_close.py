@@ -322,10 +322,12 @@ def write_close_job(
 #: (the plan is not flipped). ``review_only``: ``{open_rows, run_base, rows: [{id, paths}]}`` of a review-only run.
 #: ``sibling_blocked``: ``sibling_blockers`` entries, one per open row waiting on a non-landed sibling run.
 #: ``landed_paths``: the paths the landing commit carried; the close job releases the session's claims on them.
+#: ``unlanded``: row ids the landing credited but whose paths did not land; a reclose keeps the criterion not_met while it is non-empty.
+#: ``unlanded_paths``: ``{row id: [repo-relative paths]}`` for each ``unlanded`` row; a reclose drops the rows whose paths since landed.
 CLOSE_INPUT_KEYS: frozenset[str] = frozenset(
     {
         "credited_rows", "resume_halt_sha", "review_record", "ledger_met", "ledger_judged",
-        "incomplete", "review_only", "sibling_blocked", "landed_paths",
+        "incomplete", "review_only", "sibling_blocked", "landed_paths", "unlanded", "unlanded_paths",
     }
 )
 
@@ -366,8 +368,12 @@ def amend_close_job(
     queue: Iterable[str] = (),
     deadline: Optional[datetime] = None,
     run_base_sha: Optional[str] = None,
+    unlanded: Optional[Iterable[str]] = None,
 ) -> None:
     """Change only the given fields of an existing record, in one atomic write.
+
+    *unlanded*, when given, is the row ids still unlanded: ``inputs.unlanded`` and ``inputs.unlanded_paths``
+    keep only those rows, and both keys are dropped when none remain.
 
     ``falsifier_broken=None`` writes null (mark read, not BROKEN); ``UNCHANGED`` leaves the
     key as it was, absent included. *queue* sets each named run-bound leg ``queued`` and
@@ -406,6 +412,17 @@ def amend_close_job(
         record["review_receipt"] = review_receipt
     if run_base_sha is not None:
         record["run_base_sha"] = run_base_sha
+    if unlanded is not None and isinstance(record.get("inputs"), dict):
+        remaining = sorted(set(unlanded))
+        inputs = record["inputs"]
+        paths = inputs.get("unlanded_paths")
+        if remaining:
+            inputs["unlanded"] = remaining
+            if isinstance(paths, dict):
+                inputs["unlanded_paths"] = {r: p for r, p in paths.items() if r in remaining}
+        else:
+            inputs.pop("unlanded", None)
+            inputs.pop("unlanded_paths", None)
     if settled_dict:
         merged = record.get("settled")
         record["settled"] = {**(merged if isinstance(merged, dict) else {}), **settled_dict}
@@ -437,6 +454,14 @@ def bare_run_id(stem: str) -> str:
     """A run id without the emitted script's ``.workflow`` suffix: the close-job record's key keeps it,
     a digest's ``run_id`` does not."""
     return stem[: -len(".workflow")] if stem.endswith(".workflow") else stem
+
+
+def own_close_key(run_id: str, script_stem: str) -> str:
+    """The close-job record key for the run being closed: *script_stem*, unless it is an emitted
+    ``.workflow`` script of a different run than *run_id*, which re-keys to ``<run_id>.workflow``."""
+    if script_stem.endswith(".workflow") and run_id and bare_run_id(script_stem) != bare_run_id(run_id):
+        return f"{bare_run_id(run_id)}.workflow"
+    return script_stem
 
 
 def resolve_close_job_stem(root: Path, run_id: str) -> Optional[str]:

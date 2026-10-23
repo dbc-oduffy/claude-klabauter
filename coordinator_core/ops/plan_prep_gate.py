@@ -113,6 +113,12 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             f"{spellings('plan', 'plan_path')} must be a non-empty string naming one plan file"
         )
 
+    return prep_gate_with_text(raw_plan, repo_root)[0]
+
+
+def prep_gate_with_text(raw_plan: str, repo_root: Path) -> "tuple[dict, str]":
+    """(reply, plan text) for one plan; the text is the single read the gate ran on. An
+    unreadable plan file raises ``OSError``; a missing or escaping path raises ``ValueError``."""
     worktree_root = Path(main_worktree_root(repo_root))
     plan_path = _resolve_plan(raw_plan.strip(), worktree_root)
 
@@ -130,4 +136,4 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         "message": report["message"],
         "stamp": read_stamp(text),
         "engine_build": engine_build(),
-    }
+    }, text

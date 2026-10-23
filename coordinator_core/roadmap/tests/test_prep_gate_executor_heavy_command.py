@@ -128,6 +128,7 @@ def _cls(tmp_path, body_text):
 def test_quoted_command_mid_sentence_or_in_text_fence_is_not_an_act(tmp_path):
     assert _cls(tmp_path, "The old step was `pnpm vitest run`; do not repeat it.") == "PASS"
     assert _cls(tmp_path, "Do not run `pnpm vitest run` here.") == "PASS"
+    assert _cls(tmp_path, "Measure with `pnpm vitest run`.") == "PASS"
     assert _cls(tmp_path, "```yaml\n    note: pnpm vitest run\n    ```") == "PASS"
 
 

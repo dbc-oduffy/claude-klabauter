@@ -17,6 +17,7 @@ from pathlib import Path
 
 from coordinator_core import machine_resolver
 from coordinator_core._settings_home import settings_home
+from coordinator_core.git.run import run_git
 from coordinator_core.session import record_homes
 
 KEY = "coordinator.group_em_home"
@@ -194,12 +195,11 @@ def ensure_home_outcome(template: Path | None = None, refresh: bool = False) -> 
     home = resolve_home()
     home.mkdir(parents=True, exist_ok=True)
     if not (home / ".git").exists():
-        subprocess.run(
-            ["git", "init", "-q", str(home)],
-            check=True,
-            capture_output=True,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        )
+        res = run_git(["init", "-q", str(home)])
+        if res.returncode != 0:
+            raise subprocess.CalledProcessError(
+                res.returncode, ["git", "init", "-q", str(home)], res.stdout, res.stderr
+            )
     (home / "state").mkdir(exist_ok=True)
     _ensure_ignored(home)
     src = template or default_template()

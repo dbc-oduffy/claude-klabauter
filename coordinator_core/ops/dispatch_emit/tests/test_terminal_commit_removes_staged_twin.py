@@ -7,6 +7,7 @@ import subprocess
 import pytest
 
 from coordinator_core.ops.dispatch_emit import run_token, terminal_commit
+from coordinator_core.win_portability import no_console_creationflags
 
 SHA = "a" * 64
 SCRIPT = "scratch/warp/run1.workflow.mjs"
@@ -14,7 +15,9 @@ SCRIPT = "scratch/warp/run1.workflow.mjs"
 
 @pytest.fixture
 def repo(tmp_path):
-    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    subprocess.run(
+        ["git", "init", "-q", str(tmp_path)], check=True, **no_console_creationflags()
+    )
     d = tmp_path / "scratch" / "warp"
     d.mkdir(parents=True)
     (d / "run1.workflow.mjs").write_text("first")

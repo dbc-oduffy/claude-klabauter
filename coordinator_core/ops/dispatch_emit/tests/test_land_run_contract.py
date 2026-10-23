@@ -54,7 +54,7 @@ def test_reply_keys_cover_ask_compose_commit_schema():
 
 def test_reply_keys_carry_what_callers_read():
     assert {"receipts", "review_stamp", "review_stamp_refusal", "plan_status", "plan_status_reason",
-            "criterion_status", "stranded", "incomplete_reasons", "next"} <= c.REPLY_KEYS
+            "criterion_status", "stranded", "peer_held_left", "incomplete_reasons", "next"} <= c.REPLY_KEYS
 
 
 def test_clause_names_op_and_not_the_killed_op():

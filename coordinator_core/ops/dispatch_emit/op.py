@@ -2029,12 +2029,12 @@ def _dispatch_emit_body(
             )
             from coordinator_core.ops.dispatch_emit.sizing_fire import load_sizing as _load_ask_sizing
             from coordinator_core.ops.sizing_intake_contract import (
-                is_intake, read_em_brief, read_em_context_paths,
+                needs_size_stage, read_em_brief, read_em_context_paths,
             )
 
             intake_doc = _load_ask_sizing(ask_root, sizing_rel)
             sizing_doc = intake_doc
-            if is_intake(intake_doc):
+            if needs_size_stage(intake_doc):
                 # Sized in-run: the gate and plan-blitz args are the run's, as for a raw ask.
                 ask_sizing = {"writes": list(params.get("writes") or []), "batons": []}
                 route_pref = _route_pref.from_em_analysis(intake_doc)

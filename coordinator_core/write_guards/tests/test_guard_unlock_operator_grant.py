@@ -1,6 +1,7 @@
 
 from __future__ import annotations
 
+import sys
 import tempfile
 
 import pytest
@@ -15,16 +16,24 @@ ADVISORY_TARGET = "scratch-nonexistent-dir/brand_new_script.sh"
 ADVISORY_GUARD_NAME = "nudge_new_sh_file_naked_python"
 
 
+_REPO_ROOT = "/repo"
+
+
 @pytest.fixture(autouse=True)
 def _isolated_tempdir(tmp_path, monkeypatch):
+    # A fake "/repo" is a new top-level entry under the drive root and trips
+    # block_drive_root_new_dir_write; payload paths must live under tmp_path.
     monkeypatch.setattr(tempfile, "gettempdir", lambda: str(tmp_path))
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    monkeypatch.setattr(sys.modules[__name__], "_REPO_ROOT", str(repo))
     yield
 
 
 def _payload(session_id, tool_name="Write", file_path=None):
     p = {
         "tool_name": tool_name,
-        "tool_input": {"file_path": file_path or "/repo/%s" % SENTINEL_BASENAME},
+        "tool_input": {"file_path": file_path or "%s/%s" % (_REPO_ROOT, SENTINEL_BASENAME)},
     }
     if session_id is not None:
         p["session_id"] = session_id
@@ -95,7 +104,7 @@ class TestAdvisoryGuardNeverConsultsUnlock:
     def _advisory_payload(self, session_id):
         return _payload(
             session_id,
-            file_path="/repo/%s" % ADVISORY_TARGET,
+            file_path="%s/%s" % (_REPO_ROOT, ADVISORY_TARGET),
         )
 
     def test_fires_as_advisory_regardless_of_sentinel(self):

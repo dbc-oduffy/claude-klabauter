@@ -9,12 +9,22 @@ and the commit is ``git.commit.commit_paths`` (zero spawns, a CAS ref move).
 
 A credited row's changed declared path either lands or is named: a peer-held, never-commit,
 sibling-repo or EM-withheld path stays out of the commit, rides a ``Row-Unlanded: <row> <path> <reason>``
-trailer and the reply's ``stranded``. Such a row is not in ``Lands-Chunks:`` and stays open.
+trailer and the reply's ``stranded``. Such a row is not in ``Lands-Chunks:`` and stays open. A path a
+senior live run merely declares does not hold a path this run's own ``checkpoint(wave N)`` commit
+already landed; a live write claim of another session still holds it. Every held path is named in the
+reply's ``peer_held_left``.
 
 Everything that can run after the commit is queued to the close job (``close_background``): the review
 stamp, coded stamp, implemented flip, sizing ship, cascade, completion entry, baton ship and ledger
 writeback. The reply reports those legs ``deferred``/``queued``; ``usage.json`` is stamped here because
 ``sibling_hold`` reads it at HEAD as the landed marker.
+
+Negative spec: the expectation on the run's own record-named run-artifact paths is dropped through
+``run_artifact_ownership.OwnArtifacts.drop_expectations`` and the paths are re-read at commit, named in
+``run_artifacts.reread``; the delivery note is never in the expectation here (excluded from the recorded
+fingerprints), so it is re-read like the terminal commit's, which keeps its own declared hash. A path
+``process_artifact_policy`` withholds (foreign repo, non-coordinator host) is dropped from the landing
+set and reported in ``run_artifacts.withheld``; it is never staged and never carries an expectation.
 
 Other record modes (halted, grind, fanout) are lazily imported from ``land_run_contract.MODE_MODULES``.
 ``landed_on_head`` and ``already_landed_reply`` are public: the mode modules and callers share them.
@@ -768,14 +778,20 @@ def _footprint_fence(
 ) -> dict:
     """The ledger-resume footprint fence: ``{"recorded": False}`` when the run's record dir holds no
     readable ``LEG_FOOTPRINT_FILE``, else ``{"recorded": True, "breach": [paths]}`` naming each
-    manifest-declared path changed since the halt base that the artifact's ``writes`` omits. No
-    spawn: it reuses the in-process tree read of ``_work_since_halt``."""
+    manifest-declared path changed since the halt base that the allowed set omits. The allowed set is
+    the artifact's recorded ``writes`` plus the ``writes`` of the plan rows serving the blocking ids,
+    read at landing (the re-plan leg appends rows after the artifact is written). No spawn: it reuses
+    the in-process tree read of ``_work_since_halt``."""
     if not isinstance(resume, dict):
         return {"recorded": False}
     writes = _leg_footprint_writes(root, run_dir)
     if writes is None:
         return {"recorded": False}
-    allowed = set(writes)
+    from coordinator_core.ops.dispatch_emit import footprint_breach
+
+    allowed = set(writes) | set(
+        footprint_breach.serving_writes(root / plan_rel if plan_rel else None, resume.get("blocking") or [])
+    )
     paths, stage_head = _manifest_declared(manifest_abs)
     base, _source = _halt_base(root, resume, plan_rel, stage_head)
     if base is None:
@@ -953,9 +969,10 @@ def _ledger_gate(
             refused="ledger-unjudged",
         ), ledger, []
     try:
-        routed = routed_roots(json.loads(Path(manifest_abs).read_text(encoding="utf-8"))) if manifest_abs else {}
+        manifest_data = json.loads(Path(manifest_abs).read_text(encoding="utf-8")) if manifest_abs else None
+        routed = routed_roots(manifest_data) if manifest_abs else {}
     except (OSError, ValueError):
-        routed = {}
+        manifest_data, routed = None, {}
     result = requirements_ledger.judge(
         ledger, verdict, routed, gated=gated, operator=operator, repo_root=root, plan_text=plan_text,
         wave_reviews=[w for w in inline_review.get("wave_reviews") or [] if isinstance(w, dict)],
@@ -974,6 +991,20 @@ def _ledger_gate(
         )
         if stale:
             result = {**result, "pass": False, "failures": [*result["failures"], *stale]}
+        if fenced.get("breach"):
+            from coordinator_core.ops.dispatch_emit import footprint_breach
+
+            rows = manifest_data.get("rows") if isinstance(manifest_data, dict) else None
+            row_writes = {
+                str(r["id"]): [w for w in r.get("writes") or () if isinstance(w, str)]
+                for r in rows if isinstance(r, dict) and r.get("id") is not None
+            } if isinstance(rows, list) else {}
+            items = verdict.get("items")
+            on_breach = footprint_breach.met_on_breach(
+                items if isinstance(items, list) else [], fenced["breach"], row_writes,
+            )
+            if on_breach:
+                result = {**result, "pass": False, "failures": [*result["failures"], *on_breach]}
     if result["pass"]:
         return None, ledger, result.get("open") or []
     foreign = [str(f["id"]) for f in result["failures"] if f["reason"] == requirements_ledger.NOT_A_ROW_REASON]
@@ -1211,8 +1242,9 @@ def _reverted_paths(params: dict, inline_review: object) -> frozenset:
 
 
 def _own_run_seniority(root: Path, run_id: object, script_path: object) -> Optional[tuple]:
-    """``(minted_at, run_id)`` of the landing run's claimed token, else its script's mtime; None when
-    neither resolves. Seniority drops only a junior peer's declaration."""
+    """``(minted_at, run_id)`` of the landing run's claimed token, else its emission receipt's
+    ``emitted_at`` (same wall clock as a token's ``minted_at``); None when neither resolves. Never a
+    file mtime. Seniority drops only a junior peer's declaration."""
     from coordinator_core.ops.dispatch_emit import run_token
 
     if isinstance(run_id, str):
@@ -1224,10 +1256,6 @@ def _own_run_seniority(root: Path, run_id: object, script_path: object) -> Optio
     script = Path(script_path)
     script = script if script.is_absolute() else root / script
     key = run_id if isinstance(run_id, str) else script.stem
-    try:
-        return (script.stat().st_mtime, key)
-    except OSError:
-        pass
     from datetime import datetime
 
     from coordinator_core.ops.dispatch_emit.emission_receipt import _read_receipt
@@ -1239,9 +1267,20 @@ def _own_run_seniority(root: Path, run_id: object, script_path: object) -> Optio
         return None
 
 
-def _peer_held(root: Path, paths: Sequence[str], own_sid: Optional[str], run_id: object, script_path: object) -> dict:
+def _peer_held_left(peer_held: dict) -> dict:
+    """``{"peer_held_left": [{path, sessions}]}`` for every peer-held path, sorted; empty when none."""
+    if not peer_held:
+        return {}
+    return {"peer_held_left": [{"path": p, "sessions": sorted(s)} for p, s in sorted(peer_held.items())]}
+
+
+def _peer_held(
+    root: Path, paths: Sequence[str], own_sid: Optional[str], run_id: object, script_path: object,
+    *, plan_rel: Optional[str] = None, run_base: Optional[str] = None,
+) -> dict:
     """``{path: [peer session ids]}`` (DR-462) a live peer session's touch claim or a senior live peer
-    run's declared writes holds over ``paths``. A claim read that fails answers no hold."""
+    run's declared writes holds over ``paths``. A bare declaration never holds a path this run's own
+    checkpoint landed; a live touch claim still does. A claim read that fails answers no hold."""
     held: dict = {}
     if not paths:
         return held
@@ -1275,15 +1314,23 @@ def _peer_held(root: Path, paths: Sequence[str], own_sid: Optional[str], run_id:
         pass
     try:
         from coordinator_core.ops import warp_run_deliverable
+        from coordinator_core.ops.dispatch_emit import own_checkpoint_paths
 
         claims = warp_run_deliverable.live_run_write_claims(
             root, list(paths), exclude_session="", cwd=str(root),
             minted_before=_own_run_seniority(root, run_id, script_path),
             exclude_run=run_id if isinstance(run_id, str) else None,
         )
+        own = (
+            own_checkpoint_paths.checkpoint_landed_paths(root, plan_rel, run_base, list(claims or ()))
+            if claims else frozenset()
+        )
     except Exception:  # noqa: BLE001 -- see above
         claims = None
+        own = frozenset()
     for path, sids in sorted((claims or {}).items()):
+        if path in own:
+            continue
         for sid in sids:
             if sid not in held.setdefault(path, []):
                 held[path].append(sid)
@@ -1690,6 +1737,36 @@ def _run_own_baton(root: Path, run_id: str) -> Optional[str]:
     return rel if target is not None and target.is_file() else None
 
 
+def _still_unlanded(root: Path, inputs: dict) -> list:
+    """The record's ``inputs.unlanded`` rows whose recorded paths still differ from HEAD, in one status
+    read for every row. A row with no recorded paths, or a status that cannot be read, stays unlanded."""
+    rows = [str(r) for r in inputs.get("unlanded") or []]
+    recorded = inputs.get("unlanded_paths")
+    recorded = recorded if isinstance(recorded, dict) else {}
+    paths = sorted({p for r in rows for p in (recorded.get(r) or []) if isinstance(p, str)})
+    if not paths:
+        return rows
+    from coordinator_core.git.scoped_worktree_status import scoped_worktree_status
+
+    snap = scoped_worktree_status(root, paths, [], [])
+    if snap is not None:
+        dirty = set(snap[0])
+    else:
+        from coordinator_core.git.run import git_out
+
+        out = git_out(["-C", str(root), "status", "--porcelain", "-z", "--untracked-files=all", "--", *paths])
+        if out is None:
+            return rows
+        dirty = set()
+        entries = iter(out.split("\0"))
+        for entry in entries:
+            if len(entry) > 3:
+                dirty.add(entry[3:])
+                if entry[0] in "RC":
+                    next(entries, None)  # -z rename/copy: the source path is its own NUL field
+    return [r for r in rows if not recorded.get(r) or any(p in dirty for p in recorded[r])]
+
+
 def _requeue_close(root: Path, params: dict, *, key: Optional[str] = None, criterion: Optional[dict] = None) -> None:
     """A repeat call after a landing re-queues the close legs the first call's job never recorded and
     refreshes the record's ``criterion`` when this call carries a different one. ``key`` names the
@@ -1711,15 +1788,22 @@ def _requeue_close(root: Path, params: dict, *, key: Optional[str] = None, crite
             review = params.get("inline_review")
             criterion = review.get("criterion") if isinstance(review, dict) else None
         criterion = criterion if isinstance(criterion, dict) else None
+        recorded_inputs = record.get("inputs")
+        recorded_unlanded = recorded_inputs.get("unlanded") if isinstance(recorded_inputs, dict) else None
+        still_unlanded = _still_unlanded(root, recorded_inputs) if recorded_unlanded else None
+        cleared = still_unlanded is not None and len(still_unlanded) < len(recorded_unlanded)
+        if criterion is not None and still_unlanded:
+            criterion = {**criterion, "status": "not_met"}
         unfinished = close_background.owed_on_reclose(
             {leg: v.get("status") for leg, v in legs.items() if isinstance(v, dict)}
         )
         newer = criterion is not None and criterion != record.get("criterion")
-        if not unfinished and not newer:
+        if not unfinished and not newer and not cleared:
             return
         deadline = datetime.now().astimezone() + timedelta(minutes=_CLOSE_JOB_WINDOW_MINUTES)
         run_close.amend_close_job(
             root, key, criterion=criterion if newer else None, queue=unfinished, deadline=deadline,
+            unlanded=still_unlanded if cleared else None,
         )
         batons = record.get("claimed_batons") if isinstance(record.get("claimed_batons"), list) else []
         if unfinished:
@@ -2170,7 +2254,12 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
             process_artifact_policy.exclude_locally(root, sorted(process_withheld), artifacts.record_dirs)
 
     carried_probe = [*candidates, *art_present, *art_deleted]
-    peer_held = _peer_held(root, carried_probe, session_id, rid, script_path)
+    prep = inline_review.get("prep")
+    run_base = prep.get("run_base_sha") if isinstance(prep, dict) else None
+    peer_held = _peer_held(
+        root, carried_probe, session_id, rid, script_path,
+        plan_rel=request.plan_path, run_base=run_base if isinstance(run_base, str) else None,
+    )
     for p in candidates:
         if p in peer_held:
             withhold_reason[p] = "peer-held"
@@ -2218,6 +2307,7 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
             "committed": False, "nothing_to_commit": True,
             "run_artifacts": {"landed": [], "withheld": {**art_withheld, **art_dropped}},
             "stranded": {c: sorted(ps) for c, ps in stranded.items()},
+            **_peer_held_left(peer_held),
         }
 
     # ---- credit gate and Row-Unlanded
@@ -2273,6 +2363,7 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
                 "committed": False, "nothing_to_commit": True,
                 "run_artifacts": {"landed": [], "withheld": {**art_withheld, **art_dropped}},
                 "stranded": {c: sorted(ps) for c, ps in stranded.items()},
+                **_peer_held_left(peer_held),
                 **({"resume_recorded": {"landed": [], "withheld": dict(sorted(recorded_reason.items()))}}
                    if recorded_reason else {}),
             }
@@ -2316,6 +2407,7 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
         )
 
     expected: dict = {}
+    reread_artifacts: list = []
     if session_id is not None:
         fixes_at, wave_paths = _fixes_integrated_at(root, inline_review)
         if fixes_at is None:
@@ -2331,6 +2423,11 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
         for ev_path, ev_before, ev_after in ([own_evidence_write] if own_evidence_write else []):
             if ev_path in paths and expected.get(ev_path) == ev_before:
                 expected[ev_path] = ev_after
+        if expected and isinstance(art_run_id, str) and art_run_id:
+            from coordinator_core.ops.dispatch_emit import run_artifact_ownership
+
+            owned = run_artifact_ownership.own_artifact_paths(root, art_run_id)
+            reread_artifacts = owned.drop_expectations(expected)
 
     # ---- the message
     subject = (
@@ -2481,6 +2578,7 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
     if script_source == "receipt":
         reply["script_source"] = script_source
     reply.update(_fence_reply(fence))
+    reply.update(_peer_held_left(peer_held))
     if recorded_changed:
         landed_now = set(paths)
         reply["resume_recorded"] = {
@@ -2496,7 +2594,7 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
         reply["siblings"] = siblings
     criterion = inline_review.get("criterion")
     if isinstance(criterion, dict) and criterion.get("status"):
-        reply["criterion_status"] = criterion["status"]
+        reply["criterion_status"] = "not_met" if unlanded_rows else criterion["status"]
     reasons = _incomplete_reasons(
         incomplete, held_now, _held_reasons(params), withheld_by_gate, blockers, regraded, unlanded
     )
@@ -2518,6 +2616,8 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
             "landed": sorted(p for p in landable_artifacts.paths() if p in landed_now),
             "withheld": dict(sorted(withheld_art.items())),
         }
+        if reread_artifacts:
+            reply["run_artifacts"]["reread"] = reread_artifacts
         still = [p for p in changed if p in set(landable_artifacts.paths())]
         residue = run_artifacts.residue(landable_artifacts, still, landed_now, withheld_art)
         if residue:
@@ -2543,8 +2643,6 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
                 review_record = record_abs.relative_to(root).as_posix()
             except ValueError:
                 review_record = None
-        prep = inline_review.get("prep")
-        run_base = prep.get("run_base_sha") if isinstance(prep, dict) else None
         halt_sha = (params.get(TERMINAL_RESUME_LEDGER_PARAM) or {}).get("halt_sha")
         inputs: dict = {"credited_rows": credited_ids}
         if isinstance(halt_sha, str) and _SHA40.fullmatch(halt_sha):
@@ -2558,6 +2656,11 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
         unfinished = sorted(incomplete | unlanded_rows | held_ids)
         if unfinished:
             inputs["incomplete"] = unfinished
+        if unlanded_rows:
+            inputs["unlanded"] = sorted(unlanded_rows)
+            inputs["unlanded_paths"] = {
+                row: sorted({p for r, p, _reason in unlanded if r == row}) for row in sorted(unlanded_rows)
+            }
         if request.review_only and request.review_open_rows and request.review_run_base:
             inputs["review_only"] = {
                 "open_rows": list(request.review_open_rows), "run_base": request.review_run_base,
@@ -2574,11 +2677,17 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
                 blocked_rows = []
         if blocked_rows:
             inputs["sibling_blocked"] = blocked_rows
+        from coordinator_core.ops.dispatch_emit.run_close import own_close_key
+
         ctx = {
-            "key": PurePosixPath(script_path.replace("\\", "/")).stem, "sibling_run_id": sibling_run_id,
+            "key": own_close_key(sibling_run_id, PurePosixPath(script_path.replace("\\", "/")).stem),
+            "sibling_run_id": sibling_run_id,
             "presets": presets, "plan_rel": request.plan_path, "session_id": session_id, "sha": sha,
             "review_receipt": review_record, "run_base_sha": run_base if isinstance(run_base, str) and _SHA40.fullmatch(run_base) else None,
-            "criterion": criterion if isinstance(criterion, dict) else None,
+            "criterion": (
+                {**criterion, "status": "not_met"} if isinstance(criterion, dict) and unlanded_rows
+                else criterion if isinstance(criterion, dict) else None
+            ),
             "falsifier_broken": _falsifier_broken_tells(params.get("falsifier_broken"), request.plan_path),
             "inputs": inputs,
         }

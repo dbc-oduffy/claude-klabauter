@@ -18,9 +18,11 @@ from typing import Callable, Mapping
 from coordinator_core.ops import _path_guard
 from coordinator_core.ops.dispatch_emit import run_token as _run_token
 from coordinator_core.ops.dispatch_emit import nested_run_contract as _nested
+from coordinator_core.session import record_homes
 
 _RUN_DIR_ROOT = "scratch/warp"
-_RECORD_ROOTS = ("state/warp", _RUN_DIR_ROOT)
+_WARP_HOME_REL = Path(record_homes.home_dir("", "warp")).as_posix()
+_RECORD_ROOTS = (_WARP_HOME_REL, _RUN_DIR_ROOT)
 _RUN_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 
@@ -99,7 +101,7 @@ def _resume_block(root: Path, run_id: str) -> dict | None:
     else None when any read fails. Imports are deferred: ``terminal_commit`` imports this module.
     Trap: None omits the block, and a child without it re-runs every pre-stage leg (the re-size the block exists to prevent)."""
     try:
-        record = json.loads((root / "state/warp" / run_id / "run.json").read_text(encoding="utf-8"))
+        record = json.loads((Path(record_homes.home_dir(str(root), "warp")) / run_id / "run.json").read_text(encoding="utf-8"))
         sizing_rel = record.get("sizing_rel") if isinstance(record, dict) else None
         if not isinstance(sizing_rel, str) or not sizing_rel.strip():
             return None
@@ -122,42 +124,33 @@ def ensure_twin(
     *,
     max_bytes: int,
     refuse: Callable[[str], Exception],
-    run_token: str | None = None,
 ) -> str | None:
     """Leave the staged twin for a launcher child's manifest; return its repo-relative path when the
     twin on disk now holds the body, else None (any other sidecar, a standalone run, no slot).
 
     ``refuse`` builds the exception raised when the twin exceeds ``max_bytes`` (passed in so this module
-    never imports ``reply_sidecar``). No write when the twin on disk is already identical. A given
-    ``run_token`` is inlined as ``runToken`` into the twin only; every None branch then raises through
-    ``refuse``, and no message carries the token. Without one, the run's escrowed token (if live) is
-    inlined and the None branches stay quiet.
+    never imports ``reply_sidecar``). No write when the twin on disk is already identical. The run's
+    escrowed token (if live) is inlined as ``runToken`` into the twin only.
     """
-
-    def _none(branch: str) -> None:
-        if run_token is not None:
-            raise refuse(f"staged twin for {sidecar_rel!r} not written: {branch}")
-        return None
-
     run_id = manifest_run_id(sidecar_rel)
     if run_id is None:
-        return _none("sidecar is not a run manifest")
+        return None
     sha = handle.get("sha256")
     if not isinstance(sha, str) or not _SHA256.fullmatch(sha):
-        return _none(f"run {run_id} handle sha256 is malformed")
+        return None
     script = Path(root) / _RUN_DIR_ROOT / f"{run_id}.workflow.mjs"
     try:
         lines = script.read_bytes().decode("utf-8").splitlines(keepends=True)
     except (OSError, UnicodeDecodeError):
-        return _none(f"run {run_id} script is unreadable")
+        return None
     slots = [i for i, line in enumerate(lines) if line.rstrip("\r\n") == _nested.STAGED_INLINE_SLOT]
     if len(slots) != 1:
-        return _none(f"run {run_id} script has {len(slots)} staged-inline slot lines, not 1")
+        return None
     payload = {"handle": dict(handle), "text": raw.decode("ascii")}
     resume = _resume_block(Path(root), run_id)
     if resume is not None:
         payload[_nested.STAGED_RESUME_KEY] = resume
-    token = run_token if run_token is not None else _run_token.escrowed(Path(root), run_id)
+    token = _run_token.escrowed(Path(root), run_id)
     if token is not None:
         payload["runToken"] = token
     inline = json.dumps(payload, ensure_ascii=True)
@@ -169,7 +162,7 @@ def ensure_twin(
     twin_rel = _nested.staged_twin_rel(run_id, sha)
     target = _path_guard.contained_path(Path(root) / twin_rel, [Path(root) / _RUN_DIR_ROOT])
     if target is None:
-        return _none(f"run {run_id} twin path is outside {_RUN_DIR_ROOT}")
+        return None
     try:
         if target.read_bytes() == body:
             return Path(twin_rel).as_posix()

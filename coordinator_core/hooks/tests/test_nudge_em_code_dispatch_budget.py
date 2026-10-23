@@ -375,6 +375,58 @@ def test_general_work_session_edit_outside_every_checkout_is_not_denied(landed, 
     assert mod.op(payload) is None
 
 
+def _insert(after: str, n: int, tag: str) -> tuple[str, str]:
+    """(old, new) of an Edit that is a pure insertion of n lines after `after`."""
+    return after, after + _lines(n, tag)
+
+
+def test_unsized_retry_is_admitted_only_within_remaining_budget(unsized):
+    root, _ = unsized
+
+    old, new = _insert("l1\n", 20, "p")
+    assert mod.op(_edit(root, "a.py", old, new)) is None
+    _apply(root, "a.py", old, new)
+    rec = xb.read_lane(root, SID)
+    assert rec["state"] == "open"
+    paths_before = list(rec["paths"])
+    assert paths_before
+
+    old, new = _insert("l5\n", 11, "q")
+    denied = mod.op(_edit(root, "a.py", old, new))
+    assert _is_deny(denied)
+    assert "XS budget spent (projected)" in _reason(denied)
+    assert "Measured from landed diff: 1/2 files, 20/30 lines" in _reason(denied)
+    assert xb.read_lane(root, SID)["paths"] == paths_before
+
+    old, new = _insert("l3\n", 1, "r")
+    assert mod.op(_edit(root, "a.py", old, new)) is None
+    _apply(root, "a.py", old, new)
+
+    old, new = _insert("l1\n", 10, "s")
+    over = mod.op(_edit(root, "b.py", old, new))
+    assert _is_deny(over)
+    assert "Measured from landed diff: 1/2 files, 21/30 lines" in _reason(over)
+
+    old, new = _insert("l1\n", 9, "t")
+    assert mod.op(_edit(root, "b.py", old, new)) is None
+    _apply(root, "b.py", old, new)
+    assert xb.read_lane(root, SID)["state"] == "open"
+
+
+def test_unsized_write_to_existing_file_is_priced_against_base(unsized):
+    root, _ = unsized
+    content = _lines(10) + _lines(31, "w")
+    payload = {
+        "tool_name": "Write",
+        "session_id": SID,
+        "cwd": str(root),
+        "tool_input": {"file_path": str(root / "a.py"), "content": content},
+    }
+    result = mod.op(payload)
+    assert _is_deny(result)
+    assert "XS budget spent (projected)" in _reason(result)
+
+
 def test_non_general_work_session_is_not_given_the_memo_pointer(landed, tmp_path, monkeypatch):
     monkeypatch.setattr(mod, "_COORDINATOR_PATH_MARKERS", [])
     root, _ = landed
@@ -382,3 +434,63 @@ def test_non_general_work_session_is_not_given_the_memo_pointer(landed, tmp_path
     result = _over_budget_edit(root)
     assert _is_deny(result)
     assert "cross-repo-memo draft" not in _reason(result)
+
+
+def _shell(root, rel, projected, unprojectable=None, **extra):
+    payload = {"session_id": SID, "cwd": str(root), **extra}
+    return mod.shell_write_budget(payload, SID, str(root / rel), projected, unprojectable)
+
+
+def test_shell_write_in_budget_is_admitted_and_recorded(env):
+    root, sha = env
+    xb.open_xs_lane(root, SID, sha)
+    assert _shell(root, "a.py", _lines(10).replace("l1\n", "v1 = f(1)\nv1b = 2\n")) is None
+    assert xb.read_lane(root, SID)["paths"] == ["a.py"]
+
+
+def test_shell_write_over_budget_is_denied(env):
+    root, sha = env
+    xb.open_xs_lane(root, SID, sha)
+    result = _shell(root, "a.py", "".join(f"x{i}\n" for i in range(42)))
+    assert _is_deny(result)
+    assert "XS budget spent (projected):" in _reason(result)
+    assert xb.read_lane(root, SID)["paths"] == []
+
+
+def test_shell_write_unprojectable_denied_in_lane_only(env):
+    root, sha = env
+    assert _shell(root, "a.py", None, "interpolated body") is None
+    xb.open_xs_lane(root, SID, sha)
+    result = _shell(root, "a.py", None, "interpolated body")
+    assert _is_deny(result)
+    assert "Budget unmeasurable (interpolated body). Make the change as one plain Edit per file." in _reason(result)
+
+
+def test_shell_write_exemptions_return_none(env):
+    root, sha = env
+    xb.open_xs_lane(root, SID, sha)
+    big = "".join(f"x{i}\n" for i in range(42))
+    assert _shell(root, "a.py", big, agent_id="sub") is None
+    assert _shell(root, "notes.md", big) is None
+    assert xb.read_lane(root, SID)["paths"] == []
+
+
+def test_shell_write_s_sized_without_residue_is_none(env, monkeypatch):
+    root, _ = env
+    monkeypatch.setattr(xb, "touched_s_or_larger", lambda sid, repo_root: True)
+    assert _shell(root, "a.py", "".join(f"x{i}\n" for i in range(42))) is None
+
+
+def test_shell_write_escape_is_consumed_once(env, monkeypatch):
+    root, sha = env
+    xb.open_xs_lane(root, SID, sha)
+    calls = []
+
+    def once(*a, **k):
+        calls.append(1)
+        return len(calls) == 1
+
+    monkeypatch.setattr(mod, "_take_escape", once)
+    big = "".join(f"x{i}\n" for i in range(42))
+    assert _shell(root, "a.py", big) is None
+    assert _is_deny(_shell(root, "a.py", big))

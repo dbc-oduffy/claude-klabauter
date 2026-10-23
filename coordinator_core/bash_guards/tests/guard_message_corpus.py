@@ -1851,6 +1851,23 @@ def _heredoc_repo_write_advise_setup(
     return {_CWD_OVERRIDE_KEY: str(scratch_dir)}
 
 
+def _xs_lane_shell_write_setup(
+    scratch_dir: Path, mp: pytest.MonkeyPatch
+) -> Dict[str, str]:
+    # An open XS lane is stubbed so no xs-lane.json lands in a live session hub; the scratch
+    # repo is lifted out of the tmp-path exemption the verdict applies to product paths.
+    from coordinator_core.hooks import nudge_em_code_dispatch as hook
+    from coordinator_core.session import xs_lane_budget as xlb
+
+    (scratch_dir / ".git").mkdir(exist_ok=True)
+    lane = {"kind": "xs", "state": "open", "base_sha": "0" * 40, "paths": []}
+    mp.setattr(tempfile, "gettempdir", lambda: str(scratch_dir / "_tmp"))
+    mp.setattr(hook, "_is_bootstrap_or_out_of_repo", lambda file_path: False)
+    mp.setattr(xlb, "read_lane", lambda root, sid: lane)
+    mp.setattr(xlb, "touched_s_or_larger", lambda sid, root: False)
+    return {_CWD_OVERRIDE_KEY: str(scratch_dir)}
+
+
 def _move_from_inside_cwd_setup(
     scratch_dir: Path, mp: pytest.MonkeyPatch
 ) -> Dict[str, str]:
@@ -2072,6 +2089,23 @@ ADVISORY_REWRITE_ROWS: List[CorpusRow] = [
         _REWRITE,
         False,
         setup=lambda scratch_dir, mp: {"tool_name": "PowerShell"},
+    ),
+    CorpusRow(
+        "xs-lane-shell-write",
+        "xs-lane-shell-write-fire",
+        "python3 - <<'PY'\nopen('pkg/step_ledger.py', 'w').write('x = 1\\n')\nPY",
+        True,
+        _REWRITE,
+        False,
+        setup=_xs_lane_shell_write_setup,
+    ),
+    CorpusRow(
+        "xs-lane-shell-write",
+        "xs-lane-shell-write-control",
+        "echo hi",
+        False,
+        _REWRITE,
+        False,
     ),
     CorpusRow(
         "find-exec-rewrite",
@@ -3076,8 +3110,12 @@ def _wg_em_code_dispatch_fire(scratch_dir: Path, mp: pytest.MonkeyPatch) -> Dict
     # The hook's per-(session, path) "already nudged" marker lives under the temp dir;
     # a marker left by an earlier run silences a small edit, so the fire row isolates it.
     mp.setattr(tempfile, "gettempdir", lambda: str(scratch_dir))
+    # A payload without `cwd` resolves the repo root from the process cwd (the live repo),
+    # and the hook's XS-lane record then mints a session-hub entry there.
+    (scratch_dir / ".git").mkdir(exist_ok=True)
     return {
         "tool_name": "Edit",
+        "cwd": str(scratch_dir),
         "session_id": "sess-c3c-ecd-%s" % uuid.uuid4().hex,
         "tool_input": {
             "file_path": "/repo/pkg/module.py",
@@ -4308,6 +4346,31 @@ def _fire_general_purpose_code_handoff_control() -> Optional[Dict[str, Any]]:
     )
 
 
+def _fire_unsized_writer_dispatch(sized: bool) -> Optional[Dict[str, Any]]:
+    from coordinator_core.hooks import unsized_writer_dispatch_deny as _leaf
+    from coordinator_core.session import engine_route_state
+
+    payload = {
+        "tool_name": "Agent",
+        "session_id": "corpus-sess",
+        "tool_input": {"subagent_type": "coordinator:executor", "prompt": "Do the work."},
+    }
+    saved = engine_route_state.session_sizing_state
+    engine_route_state.session_sizing_state = lambda p, sid: (sized, False)
+    try:
+        return _to_envelope_or_none(_leaf.unsized_writer_dispatch_deny(payload, "coordinator:executor"))
+    finally:
+        engine_route_state.session_sizing_state = saved
+
+
+def _fire_unsized_writer_dispatch_fire() -> Optional[Dict[str, Any]]:
+    return _fire_unsized_writer_dispatch(False)
+
+
+def _fire_unsized_writer_dispatch_control() -> Optional[Dict[str, Any]]:
+    return _fire_unsized_writer_dispatch(True)
+
+
 def _fire_submit_engine_ask_control() -> Optional[Dict[str, Any]]:
     payload = {
         "tool_name": "Agent", "agent_id": "a1", "tool_input": {"subagent_type": "coordinator:sizing-scout"},
@@ -4356,12 +4419,23 @@ def _fire_enforce_agent_model_pin_control() -> Optional[Dict[str, Any]]:
 
 
 def _fire_nudge_em_code_dispatch() -> Optional[Dict[str, Any]]:
+    # A 2-line write now fits the XS budget and is admitted; the row drives a write whose
+    # projected spend (40 lines) exceeds the 30-line budget. The lane is stubbed so no
+    # xs-lane.json lands in the live session hub.
+    from coordinator_core.session import xs_lane_budget as xlb
+
     payload = {
-        "tool_input": {"file_path": "/repo/src/module.py", "content": "def foo():\n    return 42\n"},
+        "tool_input": {
+            "file_path": "/repo/src/module.py",
+            "content": "".join("x%d = %d\n" % (i, i) for i in range(40)),
+        },
         "session_id": "sess-c12-nemcd-fire-%s" % uuid.uuid4().hex,
     }
+    record = {"kind": "xs", "state": "open", "base_sha": "0" * 40, "paths": []}
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr(_hook_nudge_em_code_dispatch, "_is_bootstrap_or_out_of_repo", lambda file_path: False)
+        mp.setattr(xlb, "read_lane", lambda root, sid: record)
+        mp.setattr(xlb, "touched_s_or_larger", lambda sid, root: False)
         return _to_envelope_or_none(_hook_nudge_em_code_dispatch.op(payload))
 
 
@@ -6714,6 +6788,8 @@ HOOK_ROWS: List[HookRow] = [
     HookRow("hand_dispatch_deny", "fire-roadmap-planner", True, _fire_hand_dispatch_deny_roadmap_planner),
     HookRow("hand_dispatch_deny", "control-mise-prep-brief", False, _fire_hand_dispatch_deny_mise_prep_control),
     HookRow("hand_dispatch_deny", "control-nested-dispatch", False, _fire_hand_dispatch_deny_nested_control),
+    HookRow("unsized_writer_dispatch_deny", "fire-unsized-executor", True, _fire_unsized_writer_dispatch_fire),
+    HookRow("unsized_writer_dispatch_deny", "control-sized-executor", False, _fire_unsized_writer_dispatch_control),
     HookRow("general_purpose_code_handoff_deny", "fire-code-edit-handoff", True, _fire_general_purpose_code_handoff_fire),
     HookRow("general_purpose_code_handoff_deny", "control-typed-executor", False, _fire_general_purpose_code_handoff_control),
     HookRow("submit_bug_blitz", "fire-on-main", True, _fire_submit_bug_blitz_main),

@@ -6,7 +6,8 @@ Shape: frontmatter ``anchor_premises:`` is a list of ``{id, claim, check: {comma
 ``anchor: <id>``; ``line`` is the 1-based plan line of that anchor's ``command:``.
 
 Negative-spec: the engine never runs a check command and never reads prose for premises. A
-command is only screened (``census.screen``) and a verdict is only matched by exact id.
+command is only screened (``census.screen``) and a verdict is only matched by stripped id; a
+verdict outside ``VERDICTS`` counts as none.
 """
 
 from pathlib import Path
@@ -15,6 +16,7 @@ from typing import Any, Optional
 from coordinator_core.ops._research_grounding import line_hashes
 
 FIELD = "anchor_premises"
+VERDICTS: frozenset = frozenset({"RESOLVES", "UNRESOLVED", "CONTRADICTED", "UNCHECKABLE"})
 _CLAIM_CAP = 160
 
 
@@ -85,18 +87,31 @@ def parse_anchors(fm: dict, repo_root: Optional[Path]) -> tuple[list[dict], list
     return anchors, findings
 
 
+def unjudged(reason: str) -> str:
+    return f"anchor-premises-unjudged: {reason}"
+
+
+def _named(row: Any) -> Optional[str]:
+    named = row.get("anchor") if isinstance(row, dict) else None
+    return named.strip() if isinstance(named, str) else None
+
+
+def _valid(verdict: Any) -> bool:
+    return isinstance(verdict, str) and verdict in VERDICTS
+
+
 def _verdict_for(anchor_id: str, passed: list, carried: list, live: frozenset) -> Optional[str]:
     for row in passed:
-        if isinstance(row, dict) and row.get("anchor") == anchor_id:
-            return row.get("verdict")
+        if _named(row) == anchor_id and _valid(row.get("verdict")):
+            return row["verdict"]
     for row in carried:
         if (
-            isinstance(row, dict)
-            and row.get("anchor") == anchor_id
+            _named(row) == anchor_id
+            and _valid(row.get("verdict"))
             and row.get("line_hash") is not None
             and row.get("line_hash") in live
         ):
-            return row.get("verdict")
+            return row["verdict"]
     return None
 
 
@@ -106,9 +121,12 @@ def anchor_findings(anchors: list, rows: list, carry_rows: list, plan_text: str)
     live = frozenset(line_hashes(plan_text))
     out: list[str] = []
     known = {a["id"] for a in anchors}
-    for row in rows or []:
-        named = row.get("anchor") if isinstance(row, dict) else None
-        if isinstance(named, str) and named not in known:
+    for index, row in enumerate(rows or []):
+        if not isinstance(row, dict):
+            out.append(f"anchor-premise-malformed-row: rows[{index}] (not a mapping)")
+            continue
+        named = _named(row)
+        if named is not None and named not in known:
             out.append(f"anchor-premise-unknown: {named} (no declared anchor has this id)")
     for anchor in anchors:
         verdict = _verdict_for(anchor["id"], rows or [], carry_rows or [], live)

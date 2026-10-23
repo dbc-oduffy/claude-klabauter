@@ -3225,8 +3225,14 @@ def _relaunch_under_provisioned_pin(argv: list[str]) -> int | None:
         return None
     print(f"Relaunching setup under the example-retrieval-repo pin: {pin}")
     env = dict(os.environ, **{_PIN_RELAUNCH_ENV: "1"})
+    # The child is the real setup run: its PASS/FAIL output must reach the operator,
+    # which CREATE_NO_WINDOW alone loses on Windows (no inherited std handles).
+    from coordinator_core.win_portability import no_console_passthrough_kwargs
+
     return subprocess.run(
-        [pin, str(Path(__file__).resolve()), *argv], env=env, **_NO_CONSOLE
+        [pin, str(Path(__file__).resolve()), *argv],
+        env=env,
+        **no_console_passthrough_kwargs(),
     ).returncode
 
 

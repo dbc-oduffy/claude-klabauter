@@ -47,9 +47,10 @@ def test_the_leg_is_called_only_when_readyop_never_ran(tmp_path):
     for script in _ask_scripts(tmp_path):
         for call in re.finditer(r"await _blitzStageRead\(\)", script):
             lines = script[: call.end()].splitlines()
-            guard, parked, branch = lines[-4], lines[-3], lines[-1]
+            guard, parked, errored, branch = lines[-5], lines[-4], lines[-3], lines[-1]
             assert "!_stagedManifest && !_stageRefusal && !_diskHalt && !_relayGap && !_parked" in guard, guard
             assert ".parked && !" in parked and "_parked = String(" in parked, parked
+            assert "readyOpReply?.error && !" in errored and "_adoptStageReply(" in errored, errored
             assert "readyOpReply != null" in lines[-2], lines[-2]
             assert (
                 "readyOpError == null || /did not run/.test(String(" in branch and branch.lstrip().startswith("else if")

@@ -111,7 +111,8 @@ def residue(
     """Dirty run-artifact candidates of each `stopped_own_runs` id, outside `pathspec`, and not
     held by a live peer. A candidate whose artifact `runs_of_artifacts` maps to a different run is
     dropped: a stopped run never carries a sibling's plan, nor a `docs/plans/` path no run owns. Unknown contest withholds every dirty
-    candidate as `contest-unknown`. An unreadable index propagates (`IndexParseError`)."""
+    candidate as `contest-unknown`. In a repo that has not opted in it returns empty and, as a side effect,
+    appends the candidates to `info/exclude`. An unreadable index propagates (`IndexParseError`)."""
     runs = stopped_own_runs(repo_root, session_id, now=now)
     if not runs:
         return StoppedResidue({}, {})

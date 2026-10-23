@@ -80,6 +80,7 @@ from coordinator_core.hooks.dispatch_escape import (
     _resolve_session_id_op,
 )
 from coordinator_core.session import general_work_scope
+from coordinator_core.session.engine_route_state import session_sizing_state as _session_sizing_state
 from coordinator_core.session.mode_resolution import resolve_mode
 from coordinator_core.warp_fire import fire_step
 
@@ -524,33 +525,6 @@ def _is_scratch_py(file_path: str) -> bool:
     return "scratch" in os.path.abspath(file_path).replace("\\", "/").split("/")[:-1]
 
 
-def _session_sizing_state(payload: dict, session_id: str) -> tuple[bool, bool]:
-    """(has_sizing, plan_pending): this session touched a sizing object, and one
-    of them routed to a plan this session has not touched. Failure is
-    (True, False), so the generic dispatch message stands."""
-    try:
-        from coordinator_core.hooks import nudge_unrouted_sizing as sizing
-
-        cwd = payload.get("cwd") or os.getcwd()
-        repo_root = sizing._repo_root({"cwd": cwd}) if isinstance(cwd, str) else None
-        if not repo_root:
-            return True, False
-        rels = sizing._session_touched_sizing_files(session_id, repo_root)
-        if not rels:
-            # A commit releases touched.txt; a Workflow run this session launched
-            # outlives it, so a session that fired the route stays sized.
-            from coordinator_core.hooks.flag_em_poll_in_flight import session_workflow_run_ids
-
-            return bool(session_workflow_run_ids(session_id)), False
-        routes = {(sizing._load_sizing_object(repo_root, rel) or {}).get("route") for rel in rels}
-        plan_pending = bool(routes & set(sizing._SKILL_BY_ROUTE)) and not (
-            sizing._session_touched_plan_files(session_id, repo_root)
-        )
-        return True, plan_pending
-    except Exception:
-        return True, False
-
-
 _SESSION_SIZING = "<this session's sizing path>"
 
 _UNSIZED_ADVISORY = (
@@ -622,6 +596,58 @@ def _budget_decision(payload: dict, session_id: str, file_path: str, tool_input:
     XS lane at HEAD on its first write. Not handled means the session is in
     neither state and the sizing branches decide. Runs after the escape check and ahead of the
     autonomous exemption, so autonomy cannot buy past the budget."""
+
+    def _project() -> str:
+        from coordinator_core.session import xs_lane_budget as xlb
+
+        projected = xlb.project(file_path, tool_input)
+        if projected is None:
+            raise ValueError("edit cannot be projected")
+        return projected
+
+    return _budget_core(payload, session_id, file_path, _project)
+
+
+def shell_write_budget(
+    payload: dict,
+    session_id: str,
+    file_path: str,
+    projected: str | None,
+    unprojectable: str | None,
+) -> dict | None:
+    """Budget verdict for a main-EM shell write to `file_path` whose post-write text is `projected`.
+    Runs the Edit/Write hook's exemption chain, then the lane/residue measure; returns the hook
+    envelope (deny, residue context) or None. `projected=None` with an `unprojectable` reason is
+    denied as unmeasurable only where a lane governs the session. Consumes an honoured escape
+    sentinel, as the hook does: the escape is taken ahead of the lane check, so it is spent even
+    where no lane would have denied."""
+    if "agent_id" in payload or not file_path:
+        return None
+    if _is_bootstrap_or_out_of_repo(file_path):
+        return None
+    if os.path.splitext(file_path)[1].lower() in _DOC_DATA_EXTENSIONS:
+        return None
+    if _is_scratch_or_tmp(file_path):
+        return None
+    if _take_escape(payload, session_id, file_path, "nudge-em-code-dispatch"):
+        return None
+
+    def _project() -> str:
+        if projected is None:
+            raise _Unprojectable(unprojectable or "write cannot be projected")
+        return projected
+
+    handled, result = _budget_core(payload, session_id, file_path, _project)
+    return result if handled else None
+
+
+class _Unprojectable(Exception):
+    """Carries the caller's own reason; rendered without an exception-type prefix."""
+
+
+def _budget_core(payload: dict, session_id: str, file_path: str, project) -> tuple[bool, dict | None]:
+    """Lane open/residue/measure logic shared by `_budget_decision` and `shell_write_budget`;
+    `project()` returns the post-write text or raises."""
     from coordinator_core.hooks.nudge_unrouted_sizing import _repo_root
     from coordinator_core.session import xs_lane_budget as xlb
 
@@ -664,12 +690,10 @@ def _budget_decision(payload: dict, session_id: str, file_path: str, tool_input:
     if rec.get("corrupt"):
         return True, _budget_deny(over_text(xlb.Usage(0, 0, True)))
     try:
-        projected = xlb.project(file_path, tool_input)
-        if projected is None:
-            raise ValueError("edit cannot be projected")
-        usage = xlb.measure(root, rec, file_path, projected)
+        usage = xlb.measure(root, rec, file_path, project())
     except Exception as exc:
-        text = f"Budget unmeasurable ({type(exc).__name__}: {exc}). Make the change as one plain Edit per file."
+        reason = str(exc) if isinstance(exc, _Unprojectable) else f"{type(exc).__name__}: {exc}"
+        text = f"Budget unmeasurable ({reason}). Make the change as one plain Edit per file."
         return True, _budget_deny(text)
     if usage.over:
         try:

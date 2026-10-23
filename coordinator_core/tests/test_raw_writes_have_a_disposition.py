@@ -329,6 +329,8 @@ _DISPOSITIONS: Dict[str, Tuple[str, str]] = {
     'coordinator_core/ops/review_prep.py': ('claims-explicitly', 'prep-freeze sidecar under the session share dir, declared through declare_write: _write_sidecar'),
     'coordinator_core/ops/dispatch_emit/terminal_commit_params_channel.py': ('ignored-target', 'params.json under the gitignored run scratch dir (RUN_DIR_ROOT/<run_id>/): materialize'),
     'coordinator_core/roadmap/blitz_stage.py': ('in-repo-non-state', 'OVERVIEW.md frontmatter stamp in the roadmap run dir, committed by _commit_paths in the same call; state writes go through create_exclusive'),
+    'coordinator_core/group_em/gem_home.py': ('outside-repo', 'group-em home dir under <settings-home>/group-em (resolve_home refuses any path inside a checkout): .gitignore lines, seeded CLAUDE.md and state/ in ensure_home, _ensure_ignored'),
+    'coordinator_core/ops/dispatch_emit/process_artifact_policy.py': ('git-internal', 'run-artifact path lines appended to <git-common-dir>/info/exclude, never a tracked path: exclude_locally'),
     'coordinator_core/ops/dispatch_emit/terminal_commit.py': ('in-repo-non-state', 'regenerated publish allowlist under coordinator/, committed with the run'),
     'coordinator_core/ops/plan_chain/contract.py': ('claims-explicitly', 'chain manifest under the caller-named trail dir, declared through declare_write'),
     'coordinator_core/ops/plan_chain/digest.py': ('claims-explicitly', 'final digest under the trail dir, declared through declare_write: write_final_digest'),

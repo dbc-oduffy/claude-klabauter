@@ -3,11 +3,11 @@ from __future__ import annotations
 
 import datetime as dt
 import json
-import subprocess
 from pathlib import Path
 
 import pytest
 
+from coordinator_core.git.run import GitResult
 from coordinator_core.workday_start import contract, manifest, run_spec
 
 TODAY = dt.date(2026, 10, 20)
@@ -34,11 +34,11 @@ class _Git:
         self.calls: list[list[str]] = []
         out = "\n".join(str(_commit_ts(d)) for d in days)
 
-        def fake(argv, **kw):
-            self.calls.append(list(argv))
-            return subprocess.CompletedProcess(argv, rc, stdout=out, stderr="")
+        def fake(args, **kw):
+            self.calls.append(list(args))
+            return GitResult(returncode=rc, stdout=out, stderr="", timed_out=False)
 
-        monkeypatch.setattr(manifest.subprocess, "run", fake)
+        monkeypatch.setattr(manifest, "run_git", fake)
 
 
 def _all_but(days: list[str]) -> list[str]:

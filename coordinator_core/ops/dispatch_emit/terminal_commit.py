@@ -107,6 +107,10 @@ Negative-spec:
     declared-only behaviour: a chain's claims split across child sessions, the other two have
     no commit of their own.
   - Does NOT write a receipt when there is nothing to commit.
+  - Drops the expectation on the run's own record-named run-artifact paths (its sizing, record dir:
+    ``run_artifact_ownership.own_artifact_paths``), re-reads them at commit and names them in
+    ``run_artifacts.reread``; every other path keeps its expectation, the delivery note included
+    (declared at the bytes this call left, so it is never re-read).
   - Declares ``expected_content_sha256`` per committed path from the newer of the run session's
     last recorded write and the run's newest ``review.prep`` reply (``reviewed_sha256`` at
     ``recorded_at``; a tie goes to the session write; a refire's newest review supplies it; a path
@@ -2296,8 +2300,9 @@ def _dirty_held_by_halted_run(worktree_root: Path, held: dict) -> dict:
 
 def _own_run_seniority(worktree_root: Path, run_id: object, script_path_raw: object = None) -> Optional[tuple]:
     """`(minted_at, run_id)` of the committing run's claimed token. A plan run mints no token: its
-    emitted script's mtime is then the moment it was minted, keyed by the script stem. None when
-    neither resolves. Seniority only drops a junior peer's declaration; blob-drift still refuses
+    emission receipt's `emitted_at` (wall time, the clock `minted_at` uses) is then the moment it was
+    minted, keyed by the script stem; never the script's filesystem mtime. None when neither
+    resolves. Seniority only drops a junior peer's declaration; blob-drift still refuses
     any hunk that junior run already wrote into a file this commit carries."""
     from coordinator_core.ops.dispatch_emit import run_token
 
@@ -2310,10 +2315,6 @@ def _own_run_seniority(worktree_root: Path, run_id: object, script_path_raw: obj
     script = Path(script_path_raw)
     script = script if script.is_absolute() else worktree_root / script
     key = run_id if isinstance(run_id, str) else script.stem
-    try:
-        return (script.stat().st_mtime, key)
-    except OSError:
-        pass
     from datetime import datetime
 
     from coordinator_core.ops.dispatch_emit.emission_receipt import _read_receipt
@@ -4103,14 +4104,19 @@ def _terminal_commit_inner(
         kind, plan_governs = (
             _close_kind(_read_rel(worktree_root, request.plan_path)) if applies else ("plan-run", True)
         )
+        from coordinator_core.ops.dispatch_emit import run_close
         from coordinator_core.ops.dispatch_emit.run_close import kind_presets
 
         presets = kind_presets(kind, plan_governs=plan_governs)
         close_ctx.update(
             root=worktree_root,
-            # run_id is the close-job record key every reader uses (the script stem);
+            # run_id is the close-job record key every reader uses (the script stem, re-keyed
+            # to this run when the stem names a different run's .workflow script);
             # sibling_run_id is the ask run's own id, which names its sibling-status file.
-            run_id=PurePosixPath(script_path_raw.replace("\\", "/")).stem,
+            run_id=run_close.own_close_key(
+                _run_id_of(params, ask_run_dir, script_path_raw),
+                PurePosixPath(script_path_raw.replace("\\", "/")).stem,
+            ),
             sibling_run_id=_run_id_of(params, ask_run_dir, script_path_raw),
             applies=applies,
             plan_rel=request.plan_path,
@@ -5215,6 +5221,7 @@ def _terminal_commit_inner(
         commit_params["declared_reverts"] = own_reverts
     if params.get("allow_empty") is True or marker_anchor or ((anchor_only or request.review_only) and review_trailed):
         commit_params["allow_empty"] = True  # marker_anchor: the review anchor must land tree-equal
+    reread_artifacts: list[str] = []
     if session_id is not None:
         commit_params["session_id"] = session_id
         fixes_at, wave_paths = _fixes_integrated_at(worktree_root, inline_review)
@@ -5242,6 +5249,11 @@ def _terminal_commit_inner(
             ev_path, ev_before, ev_after = own_evidence_write
             if ev_path in all_paths and ev_path not in deleted_paths and expected.get(ev_path) == ev_before:
                 expected[ev_path] = ev_after
+        if expected:
+            from coordinator_core.ops.dispatch_emit import run_artifact_ownership
+
+            owned = run_artifact_ownership.own_artifact_paths(worktree_root, art_run_id)
+            reread_artifacts = owned.drop_expectations(expected, keep={note_committed})
         if expected:
             commit_params["expected_content_sha256"] = expected
     if snapshot is not None:
@@ -5714,6 +5726,8 @@ def _terminal_commit_inner(
                 )
         elif wh_map:
             reply["run_artifacts"] = {"landed": [], "withheld": dict(sorted(wh_map.items()))}
+        if reread_artifacts:
+            reply.setdefault("run_artifacts", {"landed": [], "withheld": {}})["reread"] = reread_artifacts
         if review_land:
             reply["review_residue"] = sorted(review_land)
             still = _changed_paths(worktree_root, list(review_land))

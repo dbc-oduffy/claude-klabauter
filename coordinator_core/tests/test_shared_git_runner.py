@@ -1103,7 +1103,7 @@ _FROZEN_DESTRUCTIVE_VERB_SITES: frozenset = frozenset(
         ("coordinator_core/bash_guards/_alternative_liveness.py", "_scratch_git_repo", "commit"),
         ("coordinator_core/bash_guards/_alternative_liveness.py", "_trigger_destructive_git_revert", "add"),
         ("coordinator_core/bash_guards/_alternative_liveness.py", "_trigger_destructive_git_revert", "commit"),
-        ("coordinator_core/bash_guards/_dc_blanket_add.py", "_bt_add_subtree_foreign_paths", "add"),
+        ("coordinator_core/bash_guards/_dc_blanket_add.py", "_bt_add_subtree_foreign_paths_and_churn", "add"),
         ("coordinator_core/baton_assemble/apply.py", "_cleanup_orphan_on_commit_pipeline_error", "reset"),
         ("coordinator_core/benchmarks/handoff_supersede_baseline.py", "build_fixture", "add"),
         ("coordinator_core/benchmarks/handoff_supersede_baseline.py", "build_fixture", "commit"),

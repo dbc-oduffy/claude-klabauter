@@ -33,7 +33,7 @@ def _plan(root: Path, statement: str = "the op reports per class") -> Path:
     (root / REL).write_text(
         "---\ntitle: fixture\nauthor: fixture\nstatus: draft\ncreated: 2026-10-15\n"
         "census:\n  - question: q\n    command: echo a\n    result: '1'\n"
-        "capabilities: []\n"
+        "capabilities: []\nanchor_premises: []\n"
         f"prime_exit_criterion:\n  statement: {statement}\n"
         "  derived_from: state/sizings/2026-10-15-fixture.yaml\n"
         "---\n\n# Fixture\n\n## Tasks\n\n```yaml plan-tasks\n" + _SPINE + "```\n",
@@ -82,7 +82,7 @@ def test_no_writes_executor_heavy_gate_result_reads_mechanical(tmp_path):
 
     spine = (
         "- id: C1\n  title: Baseline\n  change_kind: code-edit\n  surface: src/a.py\n"
-        "  writes: []\n  disposition: open\n  body: |\n    Measure with `pnpm vitest run`.\n"
+        "  writes: []\n  disposition: open\n  body: |\n    Run `pnpm vitest run`.\n"
     )
     cls = pg.gate_plan(tmp_path, _write_plan(tmp_path, frontmatter=_CLEAN_FM, spine=spine))["classes"]["EXECUTOR_HEAVY"]
     out = op.readiness_verdict(_gate(cls), None, [])
@@ -374,7 +374,7 @@ def _corrects_plan(root: Path, corrects: str, fixer_disposition: str = "open", r
     (root / REL).write_text(
         "---\ntitle: fixture\nauthor: fixture\nstatus: draft\ncreated: 2026-10-15\n"
         "census:\n  - question: q\n    command: grep -c a b\n    result: '1'\n"
-        "capabilities: []\n"
+        "capabilities: []\nanchor_premises: []\n"
         f"{corrects}"
         "prime_exit_criterion:\n  statement: the op reports per class\n"
         "  derived_from: state/sizings/2026-10-15-fixture.yaml\n"
@@ -716,3 +716,159 @@ def test_split_recommended_flips_at_the_threshold(count, split):
     out = op.readiness_verdict(_gate(PASS, verdict="PREPPED"), cov, [])
     assert out["blocking_findings"] == count
     assert out["split_recommended"] is split
+
+
+_R32 = "ctx.data_dir is where graph.db lives"
+_AP1 = (
+    "anchor_premises:\n  - id: AP1\n    claim: " + _R32 + "\n    check:\n"
+    "      command: git grep -l init_graph_db | wc -l\n      expect: '1'\n"
+)
+
+
+def _anchor_plan(root: Path, block: str) -> Path:
+    common = _corrects_plan(root, "")
+    plan = root / REL
+    plan.write_text(plan.read_text(encoding="utf-8").replace("anchor_premises: []\n", block), encoding="utf-8")
+    return common
+
+
+def _anchor_rulings(reply: dict) -> list:
+    _validate(reply)
+    return [r["subject"] for r in reply["rulings"] if r["source"] == "premise"]
+
+
+def test_anchor_premises_key_absent_pulls_as_undeclared(tmp_path):
+    common = _anchor_plan(tmp_path, "")
+    reply = op._handler({"plan": REL}, common)
+    assert reply["verdict"] == "judgment"
+    assert _anchor_rulings(reply)[0].startswith("anchor-premises-undeclared")
+
+
+@pytest.mark.parametrize(
+    "block",
+    [
+        "anchor_premises:\n  - id: AP1\n    claim: c\n",
+        "anchor_premises:\n  - id: AP1\n    claim: c\n    check: {command: 'git grep -l x | wc -l', expect: ''}\n",
+        "anchor_premises:\n  - id: AP1\n    claim: c\n    check: {command: 'python -c 1', expect: '1'}\n",
+    ],
+)
+def test_anchor_without_a_screenable_check_pulls_as_unchecked(tmp_path, block):
+    reply = op._handler({"plan": REL}, _anchor_plan(tmp_path, block))
+    assert reply["verdict"] == "judgment"
+    assert _anchor_rulings(reply)[0].startswith("anchor-premise-unchecked: AP1")
+
+
+def test_r32_anchor_with_a_named_check_and_no_verdict_is_caught(tmp_path):
+    reply = op._handler({"plan": REL}, _anchor_plan(tmp_path, _AP1))
+    assert reply["verdict"] == "judgment"
+    assert _anchor_rulings(reply) == ["anchor-premise-no-verdict: AP1"]
+
+
+def test_contradicted_anchor_row_is_exactly_one_blocking_finding(tmp_path):
+    common = _anchor_plan(tmp_path, _AP1)
+    reply = _op_reply(common, [_row(citation=_R32, anchor="AP1")])
+    assert reply["blocking_findings"] == 1
+    assert _anchor_rulings(reply) == [f"anchor-premise-CONTRADICTED: AP1 -- {_R32}"]
+
+
+def test_anchor_verdict_ignores_corrects_and_declared_absent(tmp_path):
+    corrects = f"corrects:\n  - citation: {_R32}\n    fixed_by: C1\n"
+    common = _anchor_plan(tmp_path, corrects + _AP1)
+    for verdict in ("CONTRADICTED", "UNRESOLVED", "UNCHECKABLE"):
+        reply = _op_reply(common, [_row(verdict, citation=_R32, anchor="AP1")])
+        assert reply["verdict"] == "judgment"
+        assert _anchor_rulings(reply)[0].startswith(f"anchor-premise-{verdict}: AP1")
+
+
+def test_non_anchor_uncheckable_row_still_only_a_note(tmp_path):
+    reply = _op_reply(_anchor_plan(tmp_path, "anchor_premises: []\n"), [_row("UNCHECKABLE")])
+    assert reply["verdict"] == "ready"
+
+
+def test_passed_resolves_row_with_the_anchor_id_makes_the_plan_ready(tmp_path):
+    reply = _op_reply(_anchor_plan(tmp_path, _AP1), [_row("RESOLVES", citation=_R32, anchor="AP1")])
+    assert reply["verdict"] == "ready"
+
+
+def _carry(root: Path, line_hash) -> None:
+    from coordinator_core.session.machinery_paths import plan_sidecars_dir
+
+    path = Path(plan_sidecars_dir(str(root))) / f"{Path(REL).stem}.premise-carry.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps({
+            "schema": "premise-carry/1", "plan": REL, "brief_version": "v", "basis": [],
+            "rows": [{"verdict": "RESOLVES", "citation": _R32, "anchor": "AP1", "line_hash": line_hash}],
+        }),
+        encoding="utf-8",
+    )
+
+
+def test_carry_row_resolves_an_anchor_only_while_its_line_is_unedited(tmp_path):
+    from coordinator_core.ops._research_grounding import line_hashes
+
+    common = _anchor_plan(tmp_path, _AP1)
+    lines = (tmp_path / REL).read_text(encoding="utf-8").splitlines()
+    live = line_hashes("\n".join(lines))[next(i for i, ln in enumerate(lines) if "command: git grep" in ln)]
+    _carry(tmp_path, live)
+    assert op._handler({"plan": REL}, common)["verdict"] == "ready"
+    _carry(tmp_path, "0" * 64)
+    reply = op._handler({"plan": REL}, common)
+    assert _anchor_rulings(reply) == ["anchor-premise-no-verdict: AP1"]
+
+
+def test_empty_anchor_premises_adds_no_finding(tmp_path):
+    assert op._handler({"plan": REL}, _anchor_plan(tmp_path, "anchor_premises: []\n"))["verdict"] == "ready"
+
+
+def test_non_string_row_anchor_is_refused_naming_the_row(tmp_path):
+    common = _anchor_plan(tmp_path, _AP1)
+    with pytest.raises(ValueError, match=r"premise\.rows\[0\]\.anchor"):
+        op._handler({"plan": REL, "premise": {"rows": [_row(anchor=3)]}}, common)
+
+
+def test_pure_verdict_without_anchor_findings_is_unchanged():
+    out = op.readiness_verdict(_gate(PASS, verdict="PREPPED"), None, [])
+    assert out["verdict"] == "ready"
+
+
+def _plan_reads(monkeypatch, plan: Path, *, fail: bool = False) -> list:
+    real = Path.read_text
+    seen: list = []
+
+    def read_text(self, *args, **kwargs):
+        if self == plan:
+            seen.append(self)
+            if fail:
+                raise PermissionError("denied")
+        return real(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", read_text)
+    return seen
+
+
+@pytest.mark.parametrize("with_rows", [False, True])
+def test_unreadable_plan_pulls_with_anchors_unjudged(tmp_path, monkeypatch, with_rows):
+    common = _plan(tmp_path)
+    _plan_reads(monkeypatch, tmp_path / REL, fail=True)
+    params = {"plan": REL}
+    if with_rows:
+        params["premise"] = {"rows": _rows("RESOLVES")}
+    reply = op._handler(params, common)
+    assert reply["verdict"] == "pulled"
+    assert "anchor-premises-unjudged: plan unreadable (PermissionError)" in reply["blocking"]
+    assert reply["prep_gate"]["verdict"] == "REFUSED"
+    _validate(reply)
+
+
+def test_handler_reads_the_plan_once(tmp_path, monkeypatch):
+    common = _plan(tmp_path)
+    seen = _plan_reads(monkeypatch, tmp_path / REL)
+    op._handler({"plan": REL}, common)
+    assert len(seen) == 1
+
+
+def test_missing_plan_stays_an_error_reply(tmp_path):
+    common = _plan(tmp_path)
+    with pytest.raises(ValueError):
+        op._handler({"plan": "docs/plans/absent.md"}, common)

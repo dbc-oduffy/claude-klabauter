@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+from coordinator_core.ops import review_findings_ledger
 from coordinator_core.ops import review_reverify as rr
 from coordinator_core.ops.dispatch_emit import review_edits
 from coordinator_core.session.machinery_paths import share_dir
@@ -90,9 +91,14 @@ class Repo:
     def list(self, base: str) -> dict:
         return rr.review_reverify(self.root, base=base, slice_prefix=PREFIX, session_id=SESSION)
 
-    def revert(self, base: str, failing: list) -> dict:
+    def revert(self, base: str, failing: list, rows: list | None = None) -> dict:
+        """Revert with a findings sidecar carrying ``rows`` (applied ledger rows)."""
+        self.monkeypatch.setattr(
+            review_findings_ledger, "read_ledger", lambda _p: (True, rows or [])
+        )
         return rr.review_reverify(
-            self.root, base=base, slice_prefix=PREFIX, session_id=SESSION, failing=failing
+            self.root, base=base, slice_prefix=PREFIX, session_id=SESSION, failing=failing,
+            sidecars=["review.md"] if rows else None,
         )
 
 
@@ -112,14 +118,15 @@ def _checkpointed(repo: Repo, with_head: bool) -> str:
 
 
 @pytest.mark.parametrize("with_head", [True, False], ids=["head-anchor", "legacy-base-anchor"])
-def test_incident_replay_restores_checkpoint_bytes_not_the_snapshot(repo, with_head):
+def test_incident_replay_inverts_the_finding_and_keeps_checkpoint_bytes(repo, with_head):
     base = _checkpointed(repo, with_head)
-    repo.write({"pkg/reply_sidecar.py": b"def old():\n    return 9\n"})
+    repo.write({"pkg/reply_sidecar.py": CHECKPOINT_RS.replace(b"    return 1\n", b"    return 9\n")})
     repo.arm()
-    out = repo.revert(base, ["tests/test_rs.py::test_x"])
+    row = {"id": "F1", "file": "pkg/reply_sidecar.py", "before": "    return 1\n", "after": "    return 9\n"}
+    out = repo.revert(base, ["tests/test_rs.py::test_x"], [row])
     assert out["error"] is None
     assert [(e["path"], e["action"], e["source"]) for e in out["reverted"]] == [
-        ("pkg/reply_sidecar.py", "restored", "head")
+        ("pkg/reply_sidecar.py", "reverted-findings", "findings")
     ]
     assert (repo.root / "pkg/reply_sidecar.py").read_bytes() == CHECKPOINT_RS
     assert (repo.root / "pkg/op.py").read_bytes() == CHECKPOINT_OP
@@ -133,9 +140,10 @@ def test_uncommitted_snapshot_work_survives_the_revert(repo):
     repo.snapshot(base, base, {**BASE_FILES, "pkg/reply_sidecar.py": work})
     repo.write({"pkg/reply_sidecar.py": b"def old():\n    return 3\n"})
     repo.arm()
-    out = repo.revert(base, ["tests/test_rs.py::test_x"])
+    row = {"id": "F1", "file": "pkg/reply_sidecar.py", "before": "    return 2\n", "after": "    return 3\n"}
+    out = repo.revert(base, ["tests/test_rs.py::test_x"], [row])
     assert out["error"] is None
-    assert [(e["path"], e["source"]) for e in out["reverted"]] == [("pkg/reply_sidecar.py", "snapshot")]
+    assert [(e["path"], e["source"]) for e in out["reverted"]] == [("pkg/reply_sidecar.py", "findings")]
     assert (repo.root / "pkg/reply_sidecar.py").read_bytes() == work
 
 
@@ -181,7 +189,8 @@ def test_revert_that_strands_a_committed_caller_is_refused_whole(repo):
     review_edit = b"S = 1\nT = 2\n"
     repo.write({"pkg/mod.py": review_edit})
     repo.arm()
-    out = repo.revert(base, ["tests/test_mod.py::test_s"])
+    row = {"id": "F1", "file": "pkg/mod.py", "before": "T = 1\n", "after": review_edit.decode()}
+    out = repo.revert(base, ["tests/test_mod.py::test_s"], [row])
     assert out["error"] is not None
     assert "pkg/caller.py" in out["error"] and "pkg.mod.S" in out["error"]
     assert out["reverted"] == []

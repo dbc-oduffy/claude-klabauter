@@ -57,7 +57,8 @@ merge and carry verbatim and is read by `plan.readiness_verdict`
 (`readiness-verdict-producer-contract.md` § Anchor premises). An anchor row sets `line` to the
 1-based plan line of that anchor's `command:`, so a folded multi-line `claim` never keys to `null`;
 editing the check changes the hash and re-opens the anchor. A non-string `anchor` is refused by the
-readiness op, not by the carry ops.
+readiness op, not by the carry ops. The readiness op matches `anchor` stripped. A carried row whose
+`verdict` is outside `RESOLVES | UNRESOLVED | CONTRADICTED | UNCHECKABLE` is read as no verdict.
 
 ## 5. Flagged
 

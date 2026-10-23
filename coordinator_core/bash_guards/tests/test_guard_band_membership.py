@@ -136,6 +136,7 @@ ADVISORY_REWRITE_NAMES = [
     "validate-commit",
     "inprocess-search",
     "block-illegal-filename",
+    "xs-lane-shell-write",
     "find-exec-rewrite",
     "grep-via-bash-rewrite",
     "sed-range-read-advise",

@@ -342,6 +342,204 @@ def _cp_mv_lands_in_home(cmd: str, identifiers_lower: Tuple[str, ...]) -> Option
     )
 
 
+#: Programs that write only through a shell redirect, so a command made of
+#: them writes exactly where its redirects point. Excluded on purpose: ``sort``
+#: (``-o FILE``), ``uniq`` (second operand is an output file) and ``cd`` (makes
+#: a later relative redirect land in the store without naming it).
+_READ_ONLY_PROGRAMS = frozenset({
+    "grep", "egrep", "fgrep", "rg", "head", "tail", "cat", "wc",
+    "ls", "cut", "tr", "echo", "printf", "pwd", "test", "[", "true",
+    "basename", "dirname", "stat", "file", "diff", "realpath",
+})
+_XARGS_VALUE_FLAGS = frozenset({"-I", "-n", "-P", "-L", "-s", "-d", "-E", "-a"})
+
+#: Any unquoted ``>``/``>>`` redirect with a readable target; unlike
+#: ``_LITERAL_REDIRECT_RE`` a ``$`` may appear in the target, to be resolved
+#: against the command's own assignments.
+_ANY_REDIRECT_RE = re.compile(
+    r"(?<![>&\d])\d?>>?[ \t]*(?:\"(?P<dq>[^\"`\\\n]+)\"|'(?P<sq>[^'\n]+)'"
+    r"|(?P<bare>[^\s;&|\"'<>()`\\]+))(?=[\s;&|)]|$)"
+)
+
+
+def _unquoted_mask(text: str) -> "list[bool]":
+    """Per character: True when it is outside every quote and not escaped."""
+    mask: "list[bool]" = []
+    quote: Optional[str] = None
+    escaped = False
+    for ch in text:
+        if escaped:
+            escaped = False
+            mask.append(False)
+        elif ch == "\\" and quote != "'":
+            escaped = True
+            mask.append(False)
+        elif quote:
+            if ch == quote:
+                quote = None
+            mask.append(False)
+        elif ch in ("'", '"'):
+            quote = ch
+            mask.append(False)
+        else:
+            mask.append(True)
+    return mask
+
+
+def _segment_writes_outside_store(segment: str) -> bool:
+    """True when ``segment`` provably writes nowhere in the sizing store: every
+    redirect target resolves to a path outside it, and the command word is a
+    sanctioned writer or a read-only program (``xargs`` unwrapped)."""
+    ids = _SIZING_RECORD_IDENTIFIERS
+    bare_home = tuple(i.rstrip("/") for i in ids)
+    mask = _unquoted_mask(segment)
+    redirects = [m for m in _ANY_REDIRECT_RE.finditer(segment) if mask[m.start()]]
+    blanked = segment
+    for match in reversed(redirects):
+        target = match.group("dq") or match.group("sq") or match.group("bare") or ""
+        if target.lower() != "/dev/null":
+            if "$" in target or "~" in target:
+                return False
+            if _mentions_governed_identifier(target, ids) or any(
+                h in target.lower() for h in bare_home
+            ):
+                return False
+        blanked = blanked[: match.start()] + " " + blanked[match.end():]
+    if _is_sanctioned_sizing_writer_shape(blanked):
+        return True
+    if _has_write_marker(_strip_quoted_spans(blanked)):
+        return False
+    try:
+        words = shlex.split(blanked)
+    except ValueError:
+        return False
+    idx = 0
+    while idx < len(words) and _ASSIGN_RE.match(words[idx]):
+        idx += 1
+    if idx >= len(words):
+        return True
+    if _command_token_basename(words[idx]).lower() == "xargs":
+        idx += 1
+        while idx < len(words) and words[idx].startswith("-"):
+            idx += 2 if words[idx] in _XARGS_VALUE_FLAGS else 1
+        if idx >= len(words):
+            return False
+    return _command_token_basename(words[idx]).lower() in _READ_ONLY_PROGRAMS
+
+
+def _writes_nothing_into_store(cmd: str) -> bool:
+    """True when every segment of ``cmd`` is judged by its real write
+    destination to land outside the sizing store. Text that merely names the
+    store inside a quoted argument, or a pipeline of read-only programs, is not
+    a write. Heredocs, substitutions and anything unresolved return False and
+    fall to the full predicate."""
+    if "<<" in cmd or "<(" in cmd:
+        return False
+    expanded = _expand_local_assignments(cmd)
+    if _has_live_command_substitution(expanded):
+        return False
+    return all(
+        _segment_writes_outside_store(segment)
+        for segment in _split_top_level_segments(expanded)
+        if segment.strip()
+    )
+
+
+def _names_store(text: str) -> bool:
+    ids = _SIZING_RECORD_IDENTIFIERS
+    return _mentions_governed_identifier(text, ids) or any(
+        i.rstrip("/") in text.lower() for i in ids
+    )
+
+
+def _segment_words(segment: str) -> "list[str]":
+    try:
+        words = shlex.split(segment)
+    except ValueError:
+        words = segment.split()
+    idx = 0
+    while idx < len(words) and _ASSIGN_RE.match(words[idx]):
+        idx += 1
+    return words[idx:]
+
+
+def _output_operands(words: "list[str]") -> "list[str]":
+    """Operands a ``sort``/``uniq`` command writes its result to: ``sort -o F``
+    / ``--output=F``, and ``uniq``'s second positional."""
+    if not words:
+        return []
+    prog = _command_token_basename(words[0]).lower()
+    rest = words[1:]
+    if prog == "sort":
+        out: "list[str]" = []
+        for i, w in enumerate(rest):
+            if w == "-o" or w == "--output":
+                out.extend(rest[i + 1:i + 2])
+            elif w.startswith("--output="):
+                out.append(w[len("--output="):])
+            elif w.startswith("-o") and not w.startswith("--"):
+                out.append(w[2:])
+            elif w.startswith("-") and not w.startswith("--") and w.endswith("o"):
+                out.extend(rest[i + 1:i + 2])
+        return out
+    if prog == "uniq":
+        positionals: "list[str]" = []
+        skip = False
+        for w in rest:
+            if skip:
+                skip = False
+            elif w in ("-f", "-s", "-w"):
+                skip = True
+            elif not w.startswith("-"):
+                positionals.append(w)
+        return positionals[1:2]
+    return []
+
+
+def _redirect_lands_in_cwd(segment: str) -> bool:
+    """A redirect whose target is relative (or unresolvable) lands in the cwd."""
+    mask = _unquoted_mask(segment)
+    for m in _ANY_REDIRECT_RE.finditer(segment):
+        if not mask[m.start()]:
+            continue
+        target = m.group("dq") or m.group("sq") or m.group("bare") or ""
+        if target.lower() == "/dev/null":
+            continue
+        if target.startswith("/") and "$" not in target:
+            continue
+        return True
+    return False
+
+
+def _store_aimed_write(cmd: str) -> bool:
+    """True for shell writes into the store that carry no redirect to it:
+    ``sort -o`` / ``uniq`` output operands naming it, and any write after a
+    ``cd``/``pushd`` into it."""
+    expanded = _expand_local_assignments(cmd)
+    in_store = False
+    for segment in _split_top_level_segments(expanded):
+        if not segment.strip():
+            continue
+        words = _segment_words(segment)
+        if not words:
+            continue
+        prog = _command_token_basename(words[0]).lower()
+        if any(_names_store(o) for o in _output_operands(words)):
+            return True
+        if prog in ("cd", "pushd"):
+            in_store = any(_names_store(w) for w in words[1:])
+            continue
+        if in_store:
+            bare = _strip_quoted_spans(segment)
+            if (
+                _redirect_lands_in_cwd(segment)
+                or _has_non_redirect_write_marker(bare)
+                or _output_operands(words)
+            ):
+                return True
+    return False
+
+
 def _sizing_write_denied(cmd: str) -> bool:
     """Sizing-record leg of the predicate, judged by write TARGET: a redirect
     landing outside ``state/sizings`` is not a write into it, so the command
@@ -351,6 +549,10 @@ def _sizing_write_denied(cmd: str) -> bool:
     lands = _cp_mv_lands_in_home(cmd, _SIZING_RECORD_IDENTIFIERS)
     if lands is not None:
         return lands
+    if _store_aimed_write(cmd):
+        return True
+    if _writes_nothing_into_store(cmd):
+        return False
     if not is_denied_bash_write(cmd, _SIZING_RECORD_IDENTIFIERS):
         return False
     remainder = _strip_ungoverned_redirects(cmd, _SIZING_RECORD_IDENTIFIERS)
@@ -370,13 +572,6 @@ def _governed_identifiers_lower(surfaces: List[str]) -> Tuple[str, ...]:
         identifiers.add(surface)
         identifiers.add(surface.rsplit("/", 1)[-1])
     return tuple(sorted((i.lower() for i in identifiers), key=len, reverse=True))
-
-
-def _governed_identifier_patterns(identifiers_lower: Tuple[str, ...]) -> Tuple["re.Pattern[str]", ...]:
-    return tuple(
-        re.compile(r"(?<![A-Za-z0-9])" + re.escape(identifier) + r"(?![A-Za-z0-9])")
-        for identifier in identifiers_lower
-    )
 
 
 _SAFE_REDIRECT_RE = re.compile(r"\d?>&\d|>>?\s*/dev/null")
@@ -646,15 +841,6 @@ def _mentions_governed_identifier(text: str, identifiers_lower: Tuple[str, ...])
     if folded == lowered:
         return False
     return any(identifier in folded for identifier in identifiers_lower)
-
-
-def _names_governed_identifier(text: str, patterns: Tuple["re.Pattern[str]", ...]) -> bool:
-    """Path-segment-BOUNDARY-anchored precision test -- NEVER a prefilter.
-    Ported for structural parity with the original; has no live caller in
-    this module today (same as upstream), kept for a future diagnostic
-    consumer."""
-    lowered = text.lower()
-    return any(pattern.search(lowered) for pattern in patterns)
 
 
 def _has_write_marker_for_point3(

@@ -67,6 +67,38 @@ def test_windows_separator_node_ids_and_landing_paths_match(tmp_path):
     assert len(li.reverify_red_findings(tmp_path, p, ["pkg\\mod.py"])) == 1
 
 
+def _subdir_suite(root: Path, body: str) -> None:
+    (root / "lab" / "tests").mkdir(parents=True)
+    (root / "lab" / "ledger_tr.py").write_text("X = 1\n", encoding="utf-8")
+    (root / "lab" / "other.py").write_text("X = 1\n", encoding="utf-8")
+    (root / "lab" / "tests" / "test_ledger.py").write_text(body, encoding="utf-8")
+
+
+def test_suite_run_from_a_subdirectory_with_a_sys_path_import_is_implicated(tmp_path):
+    body = "def test_t():\n    import ledger_tr\n"
+    _subdir_suite(tmp_path, body)
+    p = _params(status_before="fail", status_after="fail", failing=["tests/test_ledger.py::test_t"])
+    found = li.reverify_red_findings(tmp_path, p, ["lab/ledger_tr.py"])
+    assert [f.reason for f in found] == [li.REVIEW_REVERIFY_FAILED]
+
+
+def test_subdirectory_test_file_that_is_itself_landed_is_implicated(tmp_path):
+    _subdir_suite(tmp_path, "import other\n")
+    p = _params(status_after="fail", failing=["tests/test_ledger.py::test_t"])
+    assert len(li.reverify_red_findings(tmp_path, p, ["lab/tests/test_ledger.py"])) == 1
+
+
+def test_subdirectory_test_file_missing_from_disk_but_landed_is_implicated(tmp_path):
+    p = _params(status_after="fail", failing=["tests/test_gone.py::test_t"])
+    assert len(li.reverify_red_findings(tmp_path, p, ["tests/test_gone.py"])) == 1
+
+
+def test_suite_run_from_a_subdirectory_importing_nothing_landed_gives_none(tmp_path):
+    _subdir_suite(tmp_path, "import other\n")
+    p = _params(status_after="fail", failing=["tests/test_ledger.py::test_t"])
+    assert li.reverify_red_findings(tmp_path, p, ["lab/ledger_tr.py"]) == []
+
+
 def test_reverted_tests_and_landed_test_file_itself_are_implicated(tmp_path):
     _tree(tmp_path, "import os\n")
     p = _params(status_after="fail", reverted=[{"tests": [f"{TEST}::t"]}])

@@ -94,23 +94,35 @@ def test_list_mode_reports_modified_deleted_and_created(world, monkeypatch):
     assert out["snapshot"].endswith(f"{PREFIX}.pre-review/manifest.json")
 
 
-def test_failing_id_in_edited_test_file_restores_byte_for_byte(world):
+def _ledger(monkeypatch, *rows):
+    """Patch the findings ledger to ``rows`` (applied rows) and return the sidecars param."""
+    monkeypatch.setattr(review_findings_ledger, "read_ledger", lambda _p: (True, list(rows)))
+    return ["review.md"]
+
+
+def _row(fid, file, before, after):
+    return {"id": fid, "file": file, "before": before, "after": after}
+
+
+def test_failing_id_in_edited_test_file_inverts_the_finding_byte_for_byte(world, monkeypatch):
     root, orig, declared = world
     (root / "tests/test_plain.py").write_text("def test_p():\n    assert undefined_local\n", encoding="utf-8")
-    out = _revert(root, ["tests/test_plain.py::test_p"])
+    sidecars = _ledger(monkeypatch, _row("F1", "tests/test_plain.py", "    assert True\n", "    assert undefined_local\n"))
+    out = _revert(root, ["tests/test_plain.py::test_p"], sidecars=sidecars)
     assert out["error"] is None
     assert [(e["path"], e["action"], e["tests"]) for e in out["reverted"]] == [
-        ("tests/test_plain.py", "restored", ["tests/test_plain.py::test_p"])
+        ("tests/test_plain.py", "reverted-findings", ["tests/test_plain.py::test_p"])
     ]
     assert (root / "tests/test_plain.py").read_bytes() == orig["tests/test_plain.py"]
     assert out["unattributed"] == []
     assert declared.count((root / "tests/test_plain.py").as_posix()) == 1
 
 
-def test_failing_test_importing_an_edited_module_restores_that_module(world):
+def test_failing_test_importing_an_edited_module_inverts_that_modules_finding(world, monkeypatch):
     root, orig, _ = world
     (root / "pkg/mod.py").write_text("VALUE = 99\n", encoding="utf-8")
-    out = _revert(root, ["tests/test_mod.py::test_v"])
+    sidecars = _ledger(monkeypatch, _row("F1", "pkg/mod.py", "VALUE = 1\n", "VALUE = 99\n"))
+    out = _revert(root, ["tests/test_mod.py::test_v"], sidecars=sidecars)
     assert [e["path"] for e in out["reverted"]] == ["pkg/mod.py"]
     assert (root / "pkg/mod.py").read_bytes() == orig["pkg/mod.py"]
 
@@ -134,26 +146,70 @@ def test_id_implicating_nothing_is_unattributed(world):
     assert (root / "pkg/other.py").read_text(encoding="utf-8") == "OTHER = 2\n"
 
 
-def test_second_identical_revert_reverts_nothing_and_keeps_the_record(world):
+def test_second_identical_revert_reverts_nothing_and_keeps_the_record(world, monkeypatch):
     root, _orig, _ = world
     (root / "tests/test_plain.py").write_text("def test_p():\n    assert nope\n", encoding="utf-8")
-    first = _revert(root, ["tests/test_plain.py::test_p"])
-    second = _revert(root, ["tests/test_plain.py::test_p"])
+    sidecars = _ledger(monkeypatch, _row("F1", "tests/test_plain.py", "    assert True\n", "    assert nope\n"))
+    first = _revert(root, ["tests/test_plain.py::test_p"], sidecars=sidecars)
+    second = _revert(root, ["tests/test_plain.py::test_p"], sidecars=sidecars)
     assert len(first["reverted"]) == 1
     assert second["reverted"] == [] and second["unattributed"] == []
+    assert second["kept"] == []
     record = json.loads((root / second["record"]).read_text(encoding="utf-8"))
     assert [e["path"] for e in record["reverted"]] == ["tests/test_plain.py"]
 
 
-def test_revert_returns_finding_ids_for_the_restored_path_only(world, monkeypatch):
+def test_revert_returns_finding_ids_for_the_reverted_path_only(world, monkeypatch):
     root, _orig, _ = world
     (root / "tests/test_plain.py").write_text("def test_p():\n    assert nope\n", encoding="utf-8")
-    rows = [{"id": "F1", "file": "tests/test_plain.py"}, {"id": "F2", "file": "pkg/mod.py"}]
-    monkeypatch.setattr(review_findings_ledger, "read_ledger", lambda _p: (True, rows))
-    out = _revert(root, ["tests/test_plain.py::test_p"], sidecars=["review.md"])
+    sidecars = _ledger(
+        monkeypatch,
+        _row("F1", "tests/test_plain.py", "    assert True\n", "    assert nope\n"),
+        _row("F2", "pkg/mod.py", "VALUE = 1\n", "VALUE = 2\n"),
+    )
+    out = _revert(root, ["tests/test_plain.py::test_p"], sidecars=sidecars)
     assert out["reverted"][0]["findings"] == [{"sidecar": "review.md", "id": "F1"}]
+
+
+def test_edited_path_with_no_applied_finding_is_kept_and_untouched(world):
+    root, _orig, _ = world
+    edit = "def test_p():\n    assert nope\n"
+    (root / "tests/test_plain.py").write_text(edit, encoding="utf-8")
     bare = _revert(root, ["tests/test_plain.py::test_p"])
-    assert bare["error"] is None
+    assert bare["error"] is None and bare["reverted"] == []
+    assert bare["kept"] == [{
+        "path": "tests/test_plain.py",
+        "tests": ["tests/test_plain.py::test_p"],
+        "findings": [{"sidecar": None, "id": None, "reason": "no-finding"}],
+    }]
+    assert (root / "tests/test_plain.py").read_text(encoding="utf-8") == edit
+
+
+def test_handler_validates_probe_and_failing_before(world):
+    root, _orig, _ = world
+    base = {"base": BASE, "slice_prefix": PREFIX, "session_id": SESSION}
+    assert "probe" in rr._handler({**base, "probe": "sideways"}, root)["error"]
+    assert "requires failing" in rr._handler({**base, "probe": "open"}, root)["error"]
+    assert "failing_before" in rr._handler({**base, "failing": [], "failing_before": "x"}, root)["error"]
+
+
+def test_revert_refuses_while_a_probe_is_open(world, monkeypatch):
+    root, _orig, _ = world
+    (root / "tests/test_plain.py").write_text("def test_p():\n    assert nope\n", encoding="utf-8")
+    sidecars = _ledger(monkeypatch, _row("F1", "tests/test_plain.py", "    assert True\n", "    assert nope\n"))
+    failing = ["tests/test_plain.py::test_p"]
+    opened = rr.review_reverify(
+        root, base=BASE, slice_prefix=PREFIX, session_id=SESSION, failing=failing, sidecars=sidecars, probe="open"
+    )
+    assert opened["error"] is None and opened["rerun"] == failing
+    assert (root / "tests/test_plain.py").read_bytes() == _orig["tests/test_plain.py"]
+    out = _revert(root, failing, sidecars=sidecars)
+    assert out["error"] and "probe" in out["error"] and out["reverted"] == []
+    closed = rr.review_reverify(
+        root, base=BASE, slice_prefix=PREFIX, session_id=SESSION, failing=failing, probe="close"
+    )
+    assert closed["error"] is None
+    assert (root / "tests/test_plain.py").read_text(encoding="utf-8") == "def test_p():\n    assert nope\n"
 
 
 def test_no_manifest_is_an_error(world):
@@ -299,9 +355,12 @@ def test_reverted_caller_is_scanned_at_its_post_revert_bytes(world, monkeypatch,
     (root / "pkg/new.py").write_text("FOO = 1\n", encoding="utf-8")
     (root / "tests/test_plain.py").write_text("def test_p():\n    assert nope\n", encoding="utf-8")
     monkeypatch.setattr(review_edits, "review_writes", lambda *_a, **_k: {"pkg/new.py": "a1"})
+    sidecars = _ledger(
+        monkeypatch, _row("F1", "tests/test_plain.py", snap_bytes.decode(), "def test_p():\n    assert nope\n")
+    )
     out = rr.review_reverify(
         root, base=base, slice_prefix=PREFIX, session_id=SESSION,
-        failing=["tests/test_plain.py::test_p", "pkg/new.py::x"],
+        failing=["tests/test_plain.py::test_p", "pkg/new.py::x"], sidecars=sidecars,
     )
     if refused:
         assert "referencing removed pkg.new.FOO" in out["error"]
@@ -376,11 +435,12 @@ def test_tripwire_edited_test_file_naming_another_edit_stays_in_edited_only(worl
     assert out["tripwires"] == []
 
 
-def test_tripwire_failing_node_restores_the_file_it_names(world):
+def test_tripwire_failing_node_inverts_the_finding_in_the_file_it_names(world, monkeypatch):
     root, orig, _ = world
     _add_tripwire(root)
     (root / "pkg/mod.py").write_text("VALUE = 2\n", encoding="utf-8")
-    out = _revert(root, ["tests/test_tripwire.py::test_t"])
+    sidecars = _ledger(monkeypatch, _row("F1", "pkg/mod.py", "VALUE = 1\n", "VALUE = 2\n"))
+    out = _revert(root, ["tests/test_tripwire.py::test_t"], sidecars=sidecars)
     assert [(e["path"], e["tests"]) for e in out["reverted"]] == [
         ("pkg/mod.py", ["tests/test_tripwire.py::test_t"])
     ]

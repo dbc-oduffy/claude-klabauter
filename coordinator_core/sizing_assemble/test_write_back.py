@@ -46,6 +46,8 @@ def _sizing(repo: Path, text: str = _DRAFT) -> Path:
 
 
 def _decision(tshirt: str = "M", **kwargs) -> dict:
+    if tshirt == "S":
+        kwargs.setdefault("precedent", "shipped-before")
     return sizing_assemble.route(
         estimate={"tshirt": tshirt}, intent="Ship the thing", **kwargs
     )

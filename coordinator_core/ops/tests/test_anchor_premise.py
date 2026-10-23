@@ -2,7 +2,13 @@
 
 import hashlib
 
-from coordinator_core.ops._anchor_premise import FIELD, anchor_findings, parse_anchors
+from coordinator_core.ops._anchor_premise import (
+    FIELD,
+    VERDICTS,
+    anchor_findings,
+    parse_anchors,
+    unjudged,
+)
 
 GOOD = {"id": "AP1", "claim": "data lives in x", "check": {"command": "grep -c a b", "expect": "1"}}
 
@@ -84,6 +90,39 @@ def test_non_resolves_verdicts():
     for v in ("UNRESOLVED", "CONTRADICTED", "UNCHECKABLE"):
         (f,) = anchor_findings(A, [{"anchor": "AP1", "verdict": v}], [], "p")
         assert f == f"anchor-premise-{v}: AP1 -- {'c' * 160}"
+
+
+def test_out_of_enum_verdict_is_no_verdict():
+    plan = "p"
+    for bad in ("RESOLVE", "resolves", 1, None):
+        assert anchor_findings(A, [{"anchor": "AP1", "verdict": bad}], [], plan) == [
+            "anchor-premise-no-verdict: AP1"
+        ]
+        carry = {"anchor": "AP1", "verdict": bad, "line_hash": _h("p")}
+        assert anchor_findings(A, [], [carry], plan) == ["anchor-premise-no-verdict: AP1"]
+    good = {"anchor": "AP1", "verdict": "RESOLVES", "line_hash": _h("p")}
+    assert anchor_findings(A, [{"anchor": "AP1", "verdict": "typo"}], [good], plan) == []
+
+
+def test_row_anchor_id_is_stripped_before_matching():
+    assert anchor_findings(A, [{"anchor": " AP1 ", "verdict": "RESOLVES"}], [], "p") == []
+
+
+def test_mixed_row_set_reports_unknown_and_non_mapping_rows():
+    rows = [
+        {"anchor": "AP1", "verdict": "RESOLVES"},
+        {"anchor": "AP9", "verdict": "RESOLVES"},
+        "junk",
+    ]
+    assert anchor_findings(A, rows, [], "p") == [
+        "anchor-premise-unknown: AP9 (no declared anchor has this id)",
+        "anchor-premise-malformed-row: rows[2] (not a mapping)",
+    ]
+
+
+def test_verdict_set_matches_readiness_premise_verdicts():
+    assert VERDICTS == {"RESOLVES", "UNRESOLVED", "CONTRADICTED", "UNCHECKABLE"}
+    assert unjudged("x") == "anchor-premises-unjudged: x"
 
 
 def test_exact_id_only():

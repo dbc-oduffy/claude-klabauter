@@ -96,6 +96,18 @@ def test_record_shape_add_path_and_spent(repo):
     assert xb.read_lane(root, "s")["state"] == "spent"
 
 
+def test_lane_path_routes_through_shared_sessions_dir_resolver(repo, tmp_path, monkeypatch):
+    from coordinator_core.session import core as _core
+
+    root, sha = repo
+    assert xb.lane_path(root, "s") == root / ".git" / "coordinator-sessions" / "s" / "xs-lane.json"
+    redirected = tmp_path / "elsewhere" / "coordinator-sessions"
+    monkeypatch.setattr(_core, "_sessions_dir_resolve", lambda cwd: str(redirected))
+    assert xb.open_xs_lane(root, "s", sha) is True
+    assert (redirected / "s" / "xs-lane.json").is_file()
+    assert not (root / ".git" / "coordinator-sessions" / "s").exists()
+
+
 def test_corrupt_record_reads_spent_and_blocks_reopen(repo):
     root, sha = repo
     p = xb.lane_path(root, "s")
@@ -217,3 +229,22 @@ def test_lf_file_stays_byte_exact_and_eol_only_change_is_free(repo):
     f = str(root / "b.py")
     assert xb.project(f, {"old_string": "l1\nl2", "new_string": "q"}) == "q\n"
     assert xb.project(f, {"old_string": "l1\r\nl2", "new_string": "q"}) is None
+
+
+def test_project_shell_write_overwrite_append_absent_and_crlf(repo):
+    root, _ = repo
+    f = str(root / "a.py")  # a.py is LF
+    assert xb.project_shell_write(f, "x\ny\n", append=False) == "x\ny\n"
+    assert xb.project_shell_write(f, "x\n", append=True) == _lines(10) + "x\n"
+    assert xb.project_shell_write(str(root / "new.py"), "x\n", append=True) == "x\n"
+    (root / "b.py").write_bytes(b"l1\r\nl2\r\n")
+    assert xb.project_shell_write(str(root / "b.py"), "q\r\n", append=True) == "l1\nl2\nq\n"
+    assert xb.project_shell_write(str(root / "d"), "q\n", append=True) is None
+
+
+def test_two_line_shell_write_into_new_file_prices_two_lines_one_file(repo):
+    root, sha = repo
+    xb.open_xs_lane(root, "s", sha)
+    text = xb.project_shell_write(str(root / "new.py"), "a = 1\nb = 2\n", append=False)
+    u = xb.measure(root, xb.read_lane(root, "s"), "new.py", text)
+    assert (u.files, u.lines, u.over) == (1, 2, False)

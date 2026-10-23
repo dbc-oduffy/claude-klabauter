@@ -22,6 +22,15 @@ def _patch_opus_gate_noop(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(opus_gate_mod, "check", lambda payload: None)
 
 
+@pytest.fixture(autouse=True)
+def _sized_session(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pins every test here to a sized session so `check()` never reads live
+    session sizing state; the unsized-dispatch leaf has its own tests."""
+    from coordinator_core.session import engine_route_state
+
+    monkeypatch.setattr(engine_route_state, "session_sizing_state", lambda p, s: (True, False))
+
+
 def _write_policy_yaml(content_root: Path, extra_type: str = "coordinator:executor") -> None:
     policy_dir = content_root / "coordinator"
     policy_dir.mkdir(parents=True, exist_ok=True)

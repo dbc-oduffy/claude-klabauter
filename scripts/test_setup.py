@@ -56,6 +56,13 @@ def setup_mod():
     return _load_setup_module()
 
 
+@pytest.fixture(autouse=True)
+def _no_pin_relaunch(setup_mod, monkeypatch):
+    # main() re-execs under the example-retrieval-repo pin when it differs from sys.executable; that
+    # child bypasses every in-process monkeypatch, so tests drive main() in this process.
+    monkeypatch.setattr(setup_mod, "_relaunch_under_provisioned_pin", lambda argv: None)
+
+
 # ---------------------------------------------------------------------------
 # parse_args
 # ---------------------------------------------------------------------------

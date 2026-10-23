@@ -1548,6 +1548,17 @@ def test_reverify_prompt_names_the_op_the_agent_and_forbids_a_suite_run():
     assert "review_sidecars" in block
 
 
+def test_reverify_prompt_probes_pre_review_status_before_revert():
+    block = dict(_reverify_phases(reverify=True))["Review re-verify"]
+    assert block.count("review.reverify") >= 4
+    assert "failing_before" in block
+    assert block.count('probe\\":\\"open') + block.count('probe":"open') >= 1
+    close_at = max(block.find('probe\\":\\"close'), block.find('probe":"close'))
+    revert_at = max(block.find('failing_before\\":['), block.find('failing_before":['))
+    assert 0 <= close_at < revert_at
+    assert '"pre_existing"' in block and '"kept"' in block
+
+
 def test_reverify_degrades_to_general_purpose_on_a_degraded_host():
     review = parse_execute_review(_v5_fragment(), signals={"named": ["coordinator:staff-eng"]})
     phases = compose_execute_review(

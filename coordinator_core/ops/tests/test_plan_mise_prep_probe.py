@@ -381,6 +381,7 @@ _SLOW_CENSUS_FM = """census:
   - question: second slow entry
     command: ls
     result: "1"
+capabilities: []
 prime_exit_criterion:
   statement: the op reports per class
   derived_from: state/sizings/2026-09-07-fixture.yaml

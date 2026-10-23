@@ -9,6 +9,7 @@ import pytest
 
 from coordinator_core.git import residue_classes as rc
 from coordinator_core.session import record_homes
+from coordinator_core.win_portability import no_console_creationflags
 
 
 @pytest.mark.parametrize("path", [
@@ -36,7 +37,9 @@ def test_build_churn():
 
 
 def _git(cwd, *args):
-    subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True)
+    subprocess.run(
+        ["git", *args], cwd=cwd, check=True, capture_output=True, **no_console_creationflags()
+    )
 
 
 def _repo(tmp_path):

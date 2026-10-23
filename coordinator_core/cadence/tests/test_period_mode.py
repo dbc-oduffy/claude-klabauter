@@ -10,6 +10,11 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.cadence import period_mode as pm
+from coordinator_core.machine_resolver import registry_get
+
+# Resolved at import: the autouse fixture below repoints COORDINATOR_SETTINGS_HOME
+# at an empty tmp dir, which would hide the box's real registry from the test.
+_CONTENT_ROOT = registry_get("repos.content_root")
 
 
 @pytest.fixture(autouse=True)
@@ -150,10 +155,9 @@ def test_concluding_directives_keys():
 
 
 def test_constants_match_doe_fragment():
-    frag_path = (
-        Path(__file__).resolve().parents[3].parent
-        / "coordinator-content-repo/coordinator/contract/cadence-period-mode-fragment.json"
-    )
+    if not _CONTENT_ROOT:
+        pytest.skip("repos.content_root unresolved: engine-mirror parity NOT enforced on this box")
+    frag_path = Path(_CONTENT_ROOT) / "coordinator/contract/cadence-period-mode-fragment.json"
     if not frag_path.is_file():
         pytest.skip("coordinator-content-repo fragment not present: engine-mirror parity NOT enforced on this box")
     frag = json.loads(frag_path.read_text(encoding="utf-8"))

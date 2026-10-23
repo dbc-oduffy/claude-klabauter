@@ -55,7 +55,7 @@ def test_conforming_estimate_auto_routes_no_fork():
 
 
 def test_small_tshirt_routes_spec_dispatch():
-    decision = sa.route(appetite="small", estimate={"tshirt": "S"})
+    decision = sa.route(appetite="small", estimate={"tshirt": "S"}, scout_evidence=["e"])
     assert decision["route"] == "spec-dispatch"
     assert decision["fork"] is None
     assert decision["xl_exit"] is None
@@ -63,7 +63,7 @@ def test_small_tshirt_routes_spec_dispatch():
 
 def test_small_tshirt_route_distinct_from_xs():
     xs_decision = sa.route(appetite="small", estimate={"tshirt": "XS"})
-    s_decision = sa.route(appetite="small", estimate={"tshirt": "S"})
+    s_decision = sa.route(appetite="small", estimate={"tshirt": "S"}, scout_evidence=["e"])
     assert xs_decision["route"] == "dispatch"
     assert s_decision["route"] == "spec-dispatch"
     assert xs_decision["route"] != s_decision["route"]
@@ -524,7 +524,7 @@ def test_cli_main_well_trodden_step_change_flag(capsys):
 
 
 def test_cli_main_spec_dispatch_smoke(capsys):
-    exit_code = sa.main(["--appetite", "small", "--tshirt", "S"])
+    exit_code = sa.main(["--appetite", "small", "--tshirt", "S", "--precedent", "shipped-before"])
     assert exit_code == sa.EXIT_OK
     out = capsys.readouterr().out
     assert '"route": "spec-dispatch"' in out
@@ -1524,9 +1524,10 @@ def test_scout_evidence_kind_is_independent_of_scout_evidence_contents():
 
 @pytest.mark.parametrize("tshirt", ["XS", "S", "M", "L", "XL", "XXL"])
 def test_neither_new_detent_alters_route_or_xl_exit(tshirt):
-    baseline = sa.route(estimate={"tshirt": tshirt})
+    baseline = sa.route(estimate={"tshirt": tshirt}, scout_evidence=["e"])
     flagged = sa.route(
         estimate={"tshirt": tshirt},
+        scout_evidence=["e"],
         boundary_in_notch="yes",
         scout_evidence_kind="mention-count",
     )

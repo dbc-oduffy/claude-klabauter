@@ -22,6 +22,24 @@ def _allow_machine_mutation(monkeypatch):
     monkeypatch.delenv("COORDINATOR_DISABLE_MACHINE_MUTATION", raising=False)
 
 
+class _NtOs:
+    """Delegates to the real ``os`` but reports ``name == "nt"``.
+
+    Patching ``os.name`` on the real module also flips ``pathlib.Path`` to
+    ``WindowsPath``, which cannot be instantiated on POSIX; scoping the fake to
+    ``maximalist``'s own ``os`` binding keeps pathlib and shutil on the real one.
+    """
+
+    name = "nt"
+
+    def __getattr__(self, attr):
+        return getattr(os, attr)
+
+
+def _pretend_windows(monkeypatch):
+    monkeypatch.setattr(maximalist, "os", _NtOs())
+
+
 def _make_wrapper_src(tmp_path):
     src = tmp_path / "claude-author.py"
     src.write_text("#!/usr/bin/env python3\nprint('claude-author')\n")
@@ -30,7 +48,7 @@ def _make_wrapper_src(tmp_path):
 
 def test_windows_install_never_copy2s_onto_the_live_destination(tmp_path, orch, monkeypatch):
     monkeypatch.delenv("COORDINATOR_DISABLE_MACHINE_MUTATION", raising=False)
-    monkeypatch.setattr(maximalist.os, "name", "nt")
+    _pretend_windows(monkeypatch)
 
     claude_klabauter_root = str(tmp_path / "claude-klabauter")
     coord_bin = os.path.join(claude_klabauter_root, "coordinator", "bin")
@@ -99,7 +117,7 @@ def test_windows_install_never_copy2s_onto_the_live_destination(tmp_path, orch, 
 
 def test_windows_install_cleans_up_temp_on_copy_failure(tmp_path, orch, monkeypatch):
     monkeypatch.delenv("COORDINATOR_DISABLE_MACHINE_MUTATION", raising=False)
-    monkeypatch.setattr(maximalist.os, "name", "nt")
+    _pretend_windows(monkeypatch)
 
     claude_klabauter_root = str(tmp_path / "claude-klabauter")
     coord_bin = os.path.join(claude_klabauter_root, "coordinator", "bin")

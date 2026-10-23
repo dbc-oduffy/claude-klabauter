@@ -82,12 +82,18 @@ blocking finding:
   `census.screen` refuses.
 - `anchor-premise-no-verdict: <id>`: no row resolves the anchor.
 - `anchor-premise-unknown: <id>`: a passed row names an `anchor` no declared entry carries.
+- `anchor-premises-unjudged: <reason>`: the plan could not be read; the reply pulls.
+- `anchor-premise-malformed-row: rows[<i>] (not a mapping)`: a passed `premise.rows` entry is not a
+  mapping; `<i>` is its 0-based index.
 - `anchor-premise-<VERDICT>: <id>`: the verdict is `UNRESOLVED`, `CONTRADICTED` or `UNCHECKABLE`.
 
 **Verdict source.** A passed `premise.rows` entry with `anchor: <id>` wins. Otherwise a row in the
 plan's premise-carry file (`premise-carry-contract.md` § 2) with `anchor: <id>` counts only while
 its `line_hash` is still among the plan's line hashes. A null or stale hash (the anchor line was
-edited) is no verdict. Matching is exact id equality, never prose similarity.
+edited) is no verdict. Matching is exact id equality, never prose similarity. A row's `anchor` is
+matched stripped; a non-string `anchor` never matches. A verdict outside
+`RESOLVES | UNRESOLVED | CONTRADICTED | UNCHECKABLE` (case-sensitive, non-strings included) counts
+as no verdict: the search continues to a later passed row or a live carry row.
 
 **No exemption.** `corrects:` and `declared_absent:` never cover an anchor finding.
 

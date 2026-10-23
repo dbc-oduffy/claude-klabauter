@@ -57,13 +57,17 @@ def test_g5_deletes_dead_pid_dirs_across_repos(temp, registry, dead_pid):
     assert sorted(r["action"] for r in recs) == ["deleted", "deleted"]
 
 
-def test_g6_never_deletes_live_or_own_pid(temp, registry, dead_pid):
+def test_g6_never_deletes_live_or_own_pid(temp, registry, dead_pid, monkeypatch):
+    # A real foreign pid cannot be probed here: the conftest os.kill tripwire refuses
+    # signalling outside the test's process tree, so liveness of "another" pid is stubbed.
+    live_pid = dead_pid - 1
+    monkeypatch.setattr(session_registry, "pid_alive", lambda pid: pid == live_pid)
     own = _mk(temp / "repo" / "pytest" / f"{os.getpid()}-a1b2c3")
-    parent = _mk(temp / "repo" / "pytest" / f"{os.getppid()}-a1b2c3")
+    live = _mk(temp / "repo" / "pytest" / f"{live_pid}-a1b2c3")
     dead = _mk(temp / "repo" / "pytest" / f"{dead_pid}-a1b2c3")
     sweep.sweep_dead_runs(registry_dir=registry)
     assert not dead.exists()
-    assert own.exists() and parent.exists()
+    assert own.exists() and live.exists()
 
 
 def test_g7_leaves_marked_unparsable_and_fleet(temp, registry, dead_pid):

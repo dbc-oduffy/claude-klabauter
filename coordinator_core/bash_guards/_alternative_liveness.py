@@ -403,11 +403,18 @@ def _run(argv: List[str], cwd: str, timeout: int = _PROBE_TIMEOUT_SEC) -> None:
     subprocess.run(argv, cwd=cwd, check=True, capture_output=True, timeout=timeout, **_NO_WINDOW)
 
 
+#: Every path `_scratch_git_repo` has created in this process. `probe_command`
+#: consults it to tell a trigger's own vanished scratch repo from any other
+#: missing path; a path outside this set is never rebased.
+_SCRATCH_REPOS_MADE: set = set()
+
+
 @contextlib.contextmanager
 def _scratch_git_repo():
     """A throwaway git repo (one committed file) in a tempdir -- cleaned up
     on every exit path. Never the real working tree."""
     tmp = tempfile.mkdtemp(prefix="altlive-repo-", dir=_probe_temp_root())
+    _SCRATCH_REPOS_MADE.add(tmp)
     try:
         _run(["git", "init", "-q"], cwd=tmp)
         _run(["git", "config", "user.email", "altlive-probe@example.com"], cwd=tmp)
@@ -502,6 +509,30 @@ def _trigger_stale_write() -> Optional[Dict[str, Any]]:
         with open(target, "w", encoding="utf-8", newline="\n") as fh:
             fh.write("the different content now on disk\n")
         return _dc.check_stale_write("echo replacement > %s" % rel, "altlive-stale-probe", repo)
+
+
+def _trigger_xs_lane_shell_write() -> Optional[Dict[str, Any]]:
+    """The unmeasurable-write deny: a python heredoc opens a product `.py` for write in a session
+    whose XS lane is open. The lane is stubbed (as the message corpus does for the Edit/Write
+    hook) so no `xs-lane.json` lands in a live session hub, and the scratch repo is lifted out of
+    the tmp-path exemption for the duration of the call."""
+    import tempfile
+    from unittest import mock
+
+    from coordinator_core.bash_guards import guard_xs_lane_shell_write
+    from coordinator_core.hooks import nudge_em_code_dispatch as hook
+    from coordinator_core.session import xs_lane_budget as xlb
+
+    lane = {"kind": "xs", "state": "open", "base_sha": "0" * 40, "paths": []}
+    with _scratch_git_repo() as repo:
+        repo = os.path.realpath(repo)
+        cmd = "python3 - <<'ALTLIVE_EOF'\nopen('pkg/step_ledger.py', 'w').write('x = 1\\n')\nALTLIVE_EOF"
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(mock.patch.object(tempfile, "gettempdir", lambda: os.path.join(repo, "_tmp")))
+            stack.enter_context(mock.patch.object(hook, "_is_bootstrap_or_out_of_repo", lambda file_path: False))
+            stack.enter_context(mock.patch.object(xlb, "read_lane", lambda root, sid: lane))
+            stack.enter_context(mock.patch.object(xlb, "touched_s_or_larger", lambda sid, root: False))
+            return guard_xs_lane_shell_write.check(cmd, "altlive-probe", repo, {"cwd": repo})
 
 
 def _trigger_destructive_git_revert_advisory() -> Optional[Dict[str, Any]]:
@@ -731,6 +762,7 @@ LIVE_TRIGGERS: Dict[str, Callable[[], Optional[Dict[str, Any]]]] = {
     "check_offer_git_c": lambda: guard_offer_git_c.check_offer_git_c(
         "cd %s && git status" % shlex.quote(os.path.dirname(_pkg.__file__)), "altlive-probe", ""
     ),
+    "guard_xs_lane_shell_write": _trigger_xs_lane_shell_write,
     "check_find_exec_rewrite": lambda: _dc.check_find_exec_rewrite(
         'find . -name "*.log" -exec rm {} \\;', "altlive-probe"
     ),
@@ -1801,6 +1833,23 @@ def probe_command(alt: Alternative) -> Verdict:
     safe_argv = [resolved] + [_dummy_substitute(t) for t in argv[1:]]
     tmp = tempfile.mkdtemp(prefix="altlive-cmd-", dir=_probe_temp_root())
     try:
+        # A trigger's `_scratch_git_repo()` is already deleted by the time its
+        # offers are probed, so a command naming that repo (`git -C <repo> ...`)
+        # would grade DEAD on "cannot change to". Rebase exactly the repos this
+        # process created (and that are now gone) onto an empty repo in this
+        # probe's own tmp; any other missing path is left alone and grades DEAD.
+        # Only the `check_destructive_rm` unverifiable count exercises this branch; no test pins
+        # the "other missing path stays DEAD" half.
+        vanished = [r for r in _SCRATCH_REPOS_MADE if not os.path.exists(r)]
+        rebased = safe_argv
+        for repo in vanished:
+            rebased = [t.replace(repo, tmp) for t in rebased]
+        if rebased != safe_argv:
+            try:
+                _run(["git", "init", "-q"], cwd=tmp)
+            except (OSError, subprocess.SubprocessError) as exc:
+                return Verdict(VerdictStatus.UNVERIFIABLE, "could not build the rebased probe repo: %s" % exc)
+            safe_argv = rebased
         try:
             proc = subprocess.run(safe_argv, cwd=tmp, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=_PROBE_TIMEOUT_SEC, **_NO_WINDOW)
         except (OSError, subprocess.TimeoutExpired) as exc:

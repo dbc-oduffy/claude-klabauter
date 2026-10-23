@@ -1003,6 +1003,21 @@ def parse_initiatives(raw: str) -> tuple[Optional[list[dict[str, Any]]], list[st
     return (None, errors) if errors else (out, [])
 
 
+def _has_positive_s_evidence(
+    scout_evidence: list[str],
+    probe_signal: Optional[str],
+    boundary_in_notch: Optional[str],
+    precedent: Optional[str],
+) -> bool:
+    """Any one flag separating S from XS; emptiness only, `scout_evidence` is never parsed."""
+    return bool(
+        scout_evidence
+        or probe_signal == "raise"
+        or boundary_in_notch == "yes"
+        or precedent == "shipped-before"
+    )
+
+
 def route(
     *,
     appetite: Optional[str] = None,
@@ -1040,8 +1055,9 @@ def route(
             module docstring's "Appetite<->estimate reconciliation" note).
         estimate: dict with at least "tshirt" (XS..XXL); "provisional" is
             echoed back true unconditionally per the schema's const:true.
-        scout_evidence: provenance passthrough only — NOT parsed for signal
-            (see module docstring's negative-spec).
+        scout_evidence: echoed back; NOT parsed for signal (see module
+            docstring's negative-spec). Its non-emptiness alone counts as
+            positive S evidence for the XS/S tie-break.
         express_lane: D3 short-circuit — trivial ask, no ceremony.
         probe_signal: None | "collapse" | "raise" — the symmetric resize
             direction the caller's substrate probe determined (Finding 2).
@@ -1089,7 +1105,7 @@ def route(
 
     Returns:
         A dict: {route, detents, fork, xl_exit, resolved_estimate, stages,
-        dispositions, scout_evidence, narration, next_move, exit_criterion,
+        dispositions, scout_evidence, narration, tie_break, next_move, exit_criterion,
         interaction_mode, interaction_mode_source, touchpoints} —
         READ-ONLY, mutates nothing.
     """
@@ -1130,6 +1146,7 @@ def route(
             "stages": stages("dispatch", tshirt),
             "dispositions": dispositions("dispatch", tshirt, pre_resize_tshirt=True),
             "narration": "Express lane: trivial ask, no sizing ceremony.",
+            "tie_break": None,
             "next_move": "No sizing-object persisted (D3). " + _warp_fire.fire_step(),
             "fire": _warp_fire.fire_command(),
             "directives": [],
@@ -1138,6 +1155,13 @@ def route(
             "interaction_mode_source": interaction_mode_source,
             "touchpoints": [],
         }
+
+    tie_break: Optional[str] = None
+    if tshirt == "S" and not _has_positive_s_evidence(
+        scout_evidence, probe_signal, boundary_in_notch, precedent
+    ):
+        tie_break = "S -> XS: no positive S evidence"
+        tshirt = "XS"
 
     resized_tshirt, resize_changed, raise_suppressed = _apply_symmetric_resize(
         tshirt, probe_signal, probe_raise_basis
@@ -1250,6 +1274,8 @@ def route(
             f"basis={probe_raise_basis or 'unstated'}, route={resolved_route}"
         )
         narration_bits.append(raise_line)
+    if tie_break:
+        narration_bits.append(f"Tie-break: {tie_break}.")
     narration = " ".join(narration_bits)
 
     #      PM-gated framing is APPENDED to this arm's text below rather than
@@ -1458,6 +1484,7 @@ def route(
         "scout_evidence": scout_evidence,
         "narration": narration,
         "probe_raise": raise_line,
+        "tie_break": tie_break,
         "next_move": next_move,
         "fire": fire,
         "exit_criterion": exit_criterion_field,
@@ -1952,6 +1979,8 @@ def _write_back(
         for key in ("fork", "xl_exit"):
             if decision.get(key) is not None:
                 text = _set_scalar(text, key, decision[key])
+        if decision.get("tie_break"):
+            text = _set_scalar(text, "tie_break", json.dumps(decision["tie_break"]))
         if scout_evidence:
             text = _set_scalar(text, "scout_evidence", json.dumps(list(scout_evidence)))
         if doc_consumers is not None:

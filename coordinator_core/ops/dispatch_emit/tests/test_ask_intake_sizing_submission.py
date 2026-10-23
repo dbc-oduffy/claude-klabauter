@@ -46,6 +46,15 @@ def _script(repo, *extra):
     return path.read_text(encoding="utf-8")
 
 
+def _reshape(repo, *, status, intake_mark):
+    doc = yaml.safe_load((repo / REL).read_text(encoding="utf-8"))
+    doc["status"] = status
+    doc["estimate"]["provisional"] = True  # the register schema pins it true on every sizing
+    if not intake_mark:
+        doc["em_analysis"].pop(contract.INTAKE_MARK_KEY, None)
+    (repo / REL).write_text(yaml.safe_dump(doc), encoding="utf-8", newline="\n")
+
+
 def test_intake_sizing_with_brief_emits_the_brief_clause_and_sizes_in_run(repo, capsys):
     _put(repo, brief=BRIEF)
     script = _script(repo)
@@ -80,11 +89,28 @@ def test_a_placeholder_roadmap_route_never_picks_the_arm_or_refuses_the_brief(re
 
 def test_a_sized_sizing_still_skips_the_size_stage(repo, capsys):
     _put(repo)
+    _reshape(repo, status="routed", intake_mark=True)
     doc = yaml.safe_load((repo / REL).read_text(encoding="utf-8"))
-    doc["status"] = "routed"
-    (repo / REL).write_text(yaml.safe_dump(doc), encoding="utf-8", newline="\n")
     assert contract.is_intake(doc) is False
     assert ask_compose._intake_sizing(str(repo), REL) is None
+
+
+def test_a_draft_sizing_lacking_the_intake_mark_is_sized_in_run(repo, capsys):
+    _put(repo)
+    _reshape(repo, status="draft", intake_mark=False)
+    assert contract.is_intake(yaml.safe_load((repo / REL).read_text(encoding="utf-8"))) is False
+    assert ask_compose._intake_sizing(str(repo), REL) is not None
+    script = ask_compose.compose_ask_script(
+        repo_root=str(repo), prompt=None, sizing_rel=REL, run_id="r1", session_id=None,
+    )
+    assert "phase('size')" in script
+
+
+def test_a_routed_sizing_is_not_sized_in_run_though_its_provisional_flag_is_true(repo, capsys):
+    _put(repo)
+    _reshape(repo, status="routed", intake_mark=False)
+    assert ask_compose._intake_sizing(str(repo), REL) is None
+    assert "phase('size')" not in _script(repo)
 
 
 def test_the_size_stage_keeps_a_two_word_turns_minted_verbatim(repo, capsys):
@@ -136,9 +162,7 @@ def test_em_passed_relayed_beside_a_sizing_path_still_refuses(repo, capsys):
 
 def test_compose_refuses_relayed_on_a_planned_sizing(repo):
     _put(repo)
-    doc = yaml.safe_load((repo / REL).read_text(encoding="utf-8"))
-    doc["status"] = "routed"
-    (repo / REL).write_text(yaml.safe_dump(doc), encoding="utf-8", newline="\n")
+    _reshape(repo, status="routed", intake_mark=True)
     with pytest.raises(ask_compose.AskComposeRefused, match="planned sizing"):
         ask_compose.compose_ask_script(
             repo_root=str(repo), prompt=None, sizing_rel=REL, run_id="r1", session_id=None,

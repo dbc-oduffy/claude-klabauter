@@ -1100,16 +1100,16 @@ def _known_arm(repo_root: str, sizing_rel: Optional[str]) -> Optional[str]:
 
 
 def _intake_sizing(repo_root: str, sizing_rel: Optional[str]) -> Optional[dict]:
-    """The sizing at `sizing_rel` when it is an unsized intake mint, else None."""
+    """The sizing at `sizing_rel` when its estimate is unsettled (intake mint or draft), else None."""
     if not sizing_rel:
         return None
-    from coordinator_core.ops.sizing_intake_contract import is_intake
+    from coordinator_core.ops.sizing_intake_contract import needs_size_stage
 
     try:
         sizing = load_sizing(Path(repo_root), sizing_rel)
     except (SizingFireRefused, OSError, ValueError, KeyError):
         return None
-    return sizing if is_intake(sizing) else None
+    return sizing if needs_size_stage(sizing) else None
 
 
 def _source_memo_clause(repo_root: str, prompt: Optional[str], sizing_rel: Optional[str]) -> str:
@@ -1446,7 +1446,7 @@ def compose_ask_script(
     `run_base_sha`, when given, is the base for the review blocks, the criterion judge brief and
     the test instruction; absent, the base is HEAD at compose time.
 
-    A `sizing_rel` that is an intake mint (`is_intake`) is sized in-run like a raw ask, into that
+    A `sizing_rel` that is an intake mint or at `draft` (`needs_size_stage`) is sized in-run like a raw ask, into that
     same file: its placeholder route never picks the arm and its minted `pm_verbatims` are kept.
 
     `ask_source="relayed"` marks `prompt` as an EM's relay: every prompt that would call the ask
@@ -3624,9 +3624,25 @@ def _append_docs_and_commit(
     )
     b.append(f"  if ({live}) {{")
     b.append("    phase('commit');")
+    # Trap: the commit op can return a close block keyed to a sibling run; the emitted script
+    # re-keys it to its own script basename so the reply never reports another run's close.
+    b.append(
+        f"    const _ownCloseKey = String(_nextAction.params.script_path ?? {_lit(script_path or '')})"
+        ".replace(/\\\\/g, '/').split('/').pop().replace(/\\.[^.]*$/, '');"
+    )
     b.append(f"    try {{ _commit = await {commit_call}; }} catch (e) {{ _haltOnUsageLimit(e); }}")
     b.append(
+        "    if (_ownCloseKey && _commit && _commit.committed === true && _commit.close "
+        "&& typeof _commit.close === 'object' && _commit.close.run_id !== _ownCloseKey) { "
+        "_commit = { ..._commit, close: { ..._commit.close, run_id: _ownCloseKey, "
+        "relayed_run_id: _commit.close.run_id ?? null } }; }"
+    )
+    b.append(
         "    if (_commit && _commit.committed === true) { const _blockedRows = _commit.close?.siblings?.blocked_rows ?? [];"
+    )
+    b.append(
+        "      for (const _uk of Object.keys(_commit.incomplete_reasons ?? {})) "
+        "{ if (!_incompleteChunks.includes(_uk)) _incompleteChunks.push(_uk); }"
     )
     b.append(
         "      if (_blockedRows.length > 0) { _nextAction = { kind: 'refire_after_sibling', op: "

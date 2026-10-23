@@ -37,6 +37,7 @@ def _twin_affixes() -> tuple:
     middle, suffix = rest.split(_SHA_SENTINEL)
     return prefix, middle, suffix
 
+
 _PARENT_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 _EMIT_OP = "dispatch.emit"
 _INVOKE = '"${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/bin/coordinator-invoke"'

@@ -77,6 +77,8 @@ def test_payload_env_pins_roots(world, tmp_path):
 
 def test_windows_bare_slash_rerooted_on_cwd_drive(monkeypatch):
     monkeypatch.setattr(sinks, "_host_is_windows", lambda: True)
+    # `configured_drive_roots` splits on `os.pathsep`; a POSIX ":" would cut "Z:\\" into "Z" and "\\".
+    monkeypatch.setattr(os, "pathsep", ";")
     z, y, q = ("%s:\\" % c for c in "ZYQ")  # abs-path-ok: synthetic nonexistent drives
     env = {"COORDINATOR_DRIVE_ROOTS": z, "HOME": q + "nohome", "USERPROFILE": q + "nohome"}
     kw = {"bare_slash_is_drive_root": True, "env": env}

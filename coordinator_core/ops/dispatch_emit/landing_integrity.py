@@ -234,27 +234,49 @@ def _module_files(module: str) -> list[str]:
     return [f"{base}.py", f"{base}/__init__.py"]
 
 
-def _imports_landed(worktree_root: Path, test_file: str, landed: set[str]) -> bool:
-    """True when ``test_file`` imports a module whose file is in ``landed``; False when unreadable."""
+def _repo_test_path(worktree_root: Path, test_file: str, landed: set[str]) -> Optional[str]:
+    """Repo-relative path of a re-verify node's test file. A node id is relative to the directory the
+    suite ran in, which may be a subdirectory of the repo: when ``test_file`` is not at the root, it is
+    sought under each ancestor directory of a landed path (the root match wins; otherwise the first
+    landed path in sorted order)."""
+    root = Path(worktree_root)
+    if (root / test_file).is_file():
+        return test_file
+    for path in sorted(landed):
+        parts = path.split("/")[:-1]
+        for depth in range(len(parts), 0, -1):
+            candidate = "/".join(parts[:depth] + [test_file])
+            if (root / candidate).is_file():
+                return candidate
+    return None
+
+
+def _imports_landed(worktree_root: Path, repo_file: str, landed: set[str]) -> bool:
+    """True when the repo-relative ``repo_file`` imports a module whose file is in ``landed``; False
+    when unreadable. A module resolves from the repo root and from every ancestor directory of the
+    test file, since a suite puts its own directory tree on ``sys.path`` rather than the repo root."""
     from coordinator_core.pyimports import collect_imports, module_name_for_file, resolve_relative_module
 
     try:
-        tree = ast.parse((Path(worktree_root) / test_file).read_text(encoding="utf-8"))
+        tree = ast.parse((Path(worktree_root) / repo_file).read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, SyntaxError, ValueError):
         return False
+    ancestors = ["/".join(repo_file.split("/")[:i]) for i in range(len(repo_file.split("/")) - 1, 0, -1)]
     records, _ = collect_imports(tree)
-    is_pkg = test_file.rsplit("/", 1)[-1] == "__init__.py"
+    is_pkg = repo_file.rsplit("/", 1)[-1] == "__init__.py"
     for rec in records:
         if rec.level == 0:
             base = rec.module or None
         else:
-            base = resolve_relative_module(rec.module, rec.level, module_name_for_file(test_file), is_pkg)
+            base = resolve_relative_module(rec.module, rec.level, module_name_for_file(repo_file), is_pkg)
         if not base:
             continue
         wanted = _module_files(base)
         for name in rec.names:
             if name != "*":
                 wanted.extend(_module_files(f"{base}.{name}"))
+        if rec.level == 0:
+            wanted += [f"{a}/{w}" for a in ancestors for w in wanted[:]]
         if any(p in landed for p in wanted):
             return True
     return False
@@ -294,7 +316,8 @@ def reverify_red_findings(
         by_file.setdefault(_node_file(node), []).append(node)
     out: list[Finding] = []
     for test_file, ids in by_file.items():
-        if not test_file or not (test_file in landed or _imports_landed(worktree_root, test_file, landed)):
+        repo_file = (_repo_test_path(worktree_root, test_file, landed) or test_file) if test_file else None
+        if not repo_file or not (repo_file in landed or _imports_landed(worktree_root, repo_file, landed)):
             continue
         shown = "; ".join(list(dict.fromkeys(ids))[:3])
         out.append(Finding(

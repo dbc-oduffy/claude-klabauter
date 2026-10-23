@@ -7,6 +7,7 @@ import pytest
 
 import coordinator_core.hooks.block_unenumerated_agent_type as unenumerated_mod
 import coordinator_core.hooks.enforce_agent_model_pin as mod
+from coordinator_core.session import engine_route_state
 
 
 def _write_agent_md(content_root: Path, name: str, *, model: str = "", effort: str = "") -> None:
@@ -174,6 +175,9 @@ def test_enumerated_type_with_violating_model_denies_via_composed_pin_reason(mon
         return (frozenset({"coordinator:executor"}), None)
 
     monkeypatch.setattr(unenumerated_mod, "resolve_roster", _fake_resolve_roster)
+    # The executor family is a writer type: an unsized session would be refused by the
+    # unsized-writer leg before the pin leg is reached.
+    monkeypatch.setattr(engine_route_state, "session_sizing_state", lambda p, s: (True, False))
     _patch_pins(
         monkeypatch,
         {"coordinator:executor": {"model": "sonnet", "_source_path": "test-fixture:/coordinator/agents/executor.md"}},

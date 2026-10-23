@@ -244,7 +244,6 @@ EXPECTED_UNVERIFIABLE_COUNTS: Dict[str, int] = {
     "block_reviewer_bash_outside_allowlist": 1,
     "block_subagent_stash_creation": 1,
     "check_destructive_git_revert_advisory": 1,
-    "check_destructive_rm": 1,
     "check_stale_write": 1,
     "guard_deploy_dirty_tree": 1,
 }
@@ -414,6 +413,7 @@ RUNG_FLOORS: Dict[str, str] = {
     "guard_powershell_via_bash": "CCC",
     "guard_repo_setup_claude_home_refusal": "BCC",
     "guard_subagent_heavy_ue_launch": "CCC",
+    "guard_xs_lane_shell_write": "BDD",
     "p4_verb_fence": "DCC",
 }
 

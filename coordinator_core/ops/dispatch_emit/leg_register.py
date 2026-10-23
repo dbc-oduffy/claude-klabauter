@@ -125,6 +125,11 @@ REGISTER: tuple[LegDecl, ...] = (
         "stages when readyOp did not run and returns the stage op's reply (a manifest handle), only when plan-blitz "
         "did not run readyOp; no judgment agent precedes it",
     ),
+    _floor(
+        "ask", "xs-plan-stage",
+        "stages the existing plan an XS sizing's plan edge names and returns the stage op's reply (a manifest "
+        "handle), only when the gate's resume_plan is set; no judgment agent follows the gate before it",
+    ),
     _floor("ask", "gate", "runs the gate op where no agent precedes it; a preceding size agent absorbs it"),
     _floor("ask", "commit", _COMMIT_FLOOR),
     _floor("ask", "halt-commit", _COMMIT_FLOOR),
