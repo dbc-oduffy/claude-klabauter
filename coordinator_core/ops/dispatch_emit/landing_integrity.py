@@ -316,6 +316,12 @@ def reverify_red_findings(
     for node in nodes:
         by_file.setdefault(_node_file(node), []).append(node)
     out: list[Finding] = []
+    if not any(by_file):
+        # Trap: a red verdict naming no test file cannot be shown off-landing, so it must not land.
+        return [Finding(
+            "", REVIEW_REVERIFY_FAILED,
+            f"re-verify ended red naming no failing test; re-run: {retest_remedy(params, [])}",
+        )]
     for test_file, ids in by_file.items():
         repo_file = (_repo_test_path(worktree_root, test_file, landed) or test_file) if test_file else None
         if not repo_file or not (repo_file in landed or _imports_landed(worktree_root, repo_file, landed)):

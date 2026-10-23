@@ -16,6 +16,7 @@ from coordinator_core.win_portability import no_console_creationflags
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 PARENT = "ask-parent-20261015T000000-abcdef"
+REAL_LAUNCH = op._launch
 
 
 def _git(repo: Path, *args: str) -> str:
@@ -52,6 +53,18 @@ def _status(root, rid):
     return json.loads((root / c.status_rel(rid)).read_text(encoding="utf-8"))
 
 
+@pytest.fixture(autouse=True)
+def launches(monkeypatch):
+    """Every test stubs the detached close-job launch; the list records each call."""
+    calls: list = []
+    monkeypatch.setattr(op, "_launch", lambda root, run_id: calls.append(run_id) or True)
+    return calls
+
+
+NO_CLOSE = {"close": {"status": "not-applicable", "detail": "no halt record"}, "withheld": []}
+JOB_NA_SOLO = {"close": {"status": "not-applicable", "detail": "halt record names no plan"}, "withheld": []}
+
+
 @pytest.fixture
 def repo(tmp_path):
     _git(tmp_path, "init", "-q")
@@ -79,7 +92,7 @@ def test_second_call_same_sha_is_idempotent(repo):
     _call(root, run_id="A", sha=first)
     before = (root / c.status_rel("A")).read_bytes()
     out = _call(root, run_id="A", sha=first)
-    assert out == {"ok": True, "run_id": "A", "sha": first, "written": False}
+    assert out == {"ok": True, "run_id": "A", "sha": first, "written": False, **NO_CLOSE}
     assert (root / c.status_rel("A")).read_bytes() == before
 
 
@@ -123,6 +136,7 @@ def test_solo_halted_run_records_landed_marker(repo):
     assert out == {
         "ok": True, "run_id": SOLO, "sha": first, "written": True,
         "recorded": f"state/warp/{SOLO}/halted.json",
+        "close": {"status": "not-applicable", "detail": "halt record names no plan"}, "withheld": [],
     }
     data = json.loads(marker.read_text(encoding="utf-8"))
     assert data["status"] == "landed" and data["sha"] == first and data["halted"] == "x"
@@ -135,7 +149,7 @@ def test_solo_second_call_is_idempotent(repo):
     _call(root, run_id=SOLO, sha=first)
     before = marker.read_bytes()
     out = _call(root, run_id=SOLO, sha=first)
-    assert out == {"ok": True, "run_id": SOLO, "sha": first, "written": False}
+    assert out == {"ok": True, "run_id": SOLO, "sha": first, "written": False, **JOB_NA_SOLO}
     assert marker.read_bytes() == before
 
 
@@ -215,7 +229,7 @@ def test_abbreviated_sha_idempotent_after_landing(repo):
     _seed(root, {"A": {"status": "halted"}})
     _call(root, run_id="A", sha=first[:10])
     out = _call(root, run_id="A", sha=first[:10])
-    assert out == {"ok": True, "run_id": "A", "sha": first, "written": False}
+    assert out == {"ok": True, "run_id": "A", "sha": first, "written": False, **NO_CLOSE}
 
 
 def test_ambiguous_abbreviation_refuses_by_name(repo, monkeypatch):
@@ -239,9 +253,10 @@ def test_unknown_abbreviation_refuses_by_name(repo):
     assert _status(root, "A")["status"] == "halted"
 
 
-def test_op_spawns_no_process(repo, monkeypatch):
+def test_op_spawns_no_process(repo, monkeypatch, launches):
     root, first, _ = repo
     _seed(root, {"A": {"status": "halted"}, "B": {"status": "after"}})
+    _plan_marker(root, "A")
 
     def boom(*a, **k):
         raise AssertionError("spawned a process")
@@ -249,11 +264,12 @@ def test_op_spawns_no_process(repo, monkeypatch):
     monkeypatch.setattr(subprocess, "Popen", boom)
     out = _call(root, run_id="A", sha=first)
     assert out["ok"] and out["written"] is True
+    assert launches == ["A"]
 
 
-def test_op_spawns_no_process_solo(repo, monkeypatch):
+def test_op_spawns_no_process_solo(repo, monkeypatch, launches):
     root, first, _ = repo
-    _solo(root)
+    _solo(root, plan=PLAN)
 
     def boom(*a, **k):
         raise AssertionError("spawned a process")
@@ -261,3 +277,133 @@ def test_op_spawns_no_process_solo(repo, monkeypatch):
     monkeypatch.setattr(subprocess, "Popen", boom)
     out = _call(root, run_id=SOLO, sha=first)
     assert out["ok"] and out["written"] is True
+    assert launches == [SOLO]
+
+
+PLAN = "docs/plans/p.md"
+FULL_BASE = "c" * 40
+UUID = "123e4567-e89b-12d3-a456-426614174000"
+
+
+def _plan_marker(root: Path, rid: str, **extra) -> Path:
+    d = root / "state" / "warp" / rid
+    d.mkdir(parents=True, exist_ok=True)
+    marker = d / "halted.json"
+    body = {
+        "status": "halted", "halted": "ledger-check", "plan": PLAN, "blocking": ["R1"],
+        "run_base_sha": FULL_BASE, "sizing_rel": None, **extra,
+    }
+    marker.write_text(json.dumps(body), encoding="utf-8")
+    return marker
+
+
+def _job(root, rid):
+    path = root / ".coordinator-local" / "close-jobs" / f"{rid}.json"
+    return json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
+
+
+def test_sibling_landing_flips_marker_queues_legs_and_launches_once(repo, launches):
+    root, first, _ = repo
+    _seed(root, {"A": {"status": "halted"}, "B": {"status": "after"}})
+    marker = _plan_marker(root, "A")
+    out = _call(root, run_id="A", sha=first, session_id=UUID)
+    assert out["ok"] and out["written"] is True
+    assert out["siblings"]["released"] == [fire_command("state/sizings/B.yaml")]
+    assert out["recorded"] == "state/warp/A/halted.json"
+    assert json.loads(marker.read_text(encoding="utf-8"))["status"] == "landed"
+    assert out["close"] == {
+        "job": ".coordinator-local/close-jobs/A.json", "launched": True, "queued": list(op.CLOSE_LEGS),
+    }
+    assert out["withheld"] == ["R1"]
+    assert launches == ["A"]
+    job = _job(root, "A")
+    assert job["plan_rel"] == PLAN and job["terminal_sha"] == first and job["run_base_sha"] == FULL_BASE
+    assert set(job["legs"]) == set(op.CLOSE_LEGS)
+
+
+def test_landed_same_sha_without_job_flips_marker_writes_and_launches(repo, launches):
+    root, first, _ = repo
+    _seed(root, {"A": {"status": "landed", "sha": first}})
+    marker = _plan_marker(root, "A")
+    before = (root / c.status_rel("A")).read_bytes()
+    out = _call(root, run_id="A", sha=first)
+    assert out["ok"] and out["written"] is False and out["close"]["launched"] is True
+    assert json.loads(marker.read_text(encoding="utf-8"))["sha"] == first
+    assert launches == ["A"]
+    assert (root / c.status_rel("A")).read_bytes() == before
+
+
+def test_landed_same_sha_with_job_launches_nothing(repo, launches):
+    root, first, _ = repo
+    _seed(root, {"A": {"status": "landed", "sha": first}})
+    _plan_marker(root, "A")
+    _call(root, run_id="A", sha=first)
+    launches.clear()
+    out = _call(root, run_id="A", sha=first)
+    assert out["ok"] and out["close"]["status"] == "not-applicable" and out["withheld"] == ["R1"]
+    assert launches == []
+
+
+def test_marker_without_plan_is_not_applicable(repo, launches):
+    root, first, _ = repo
+    _seed(root, {"A": {"status": "halted"}})
+    marker = _plan_marker(root, "A")
+    data = json.loads(marker.read_text(encoding="utf-8"))
+    del data["plan"]
+    marker.write_text(json.dumps(data), encoding="utf-8")
+    out = _call(root, run_id="A", sha=first)
+    assert out["ok"] and out["close"]["status"] == "not-applicable" and out["withheld"] == ["R1"]
+    assert launches == [] and _job(root, "A") is None
+
+
+def test_short_base_sha_and_non_uuid_session_are_dropped(repo):
+    root, first, _ = repo
+    _seed(root, {"A": {"status": "halted"}})
+    _plan_marker(root, "A", run_base_sha="abc")
+    _call(root, run_id="A", sha=first, session_id="not-a-uuid")
+    job = _job(root, "A")
+    assert job["run_base_sha"] is None and not job.get("session_id")
+
+
+def test_failed_launch_reports_unlaunched_and_stays_ok(repo, monkeypatch):
+    root, first, _ = repo
+    _seed(root, {"A": {"status": "halted"}})
+    _plan_marker(root, "A")
+    monkeypatch.setattr(op, "_launch", lambda root, run_id: False)
+    out = _call(root, run_id="A", sha=first)
+    assert out["ok"] and out["close"]["launched"] is False and out["close"]["job"]
+    assert _status(root, "A")["status"] == "landed"
+
+
+@pytest.mark.parametrize("params", [{"run_id": "A", "sha": "b" * 40}, {"run_id": "A", "sha": "abc"}])
+def test_refusals_write_nothing(repo, launches, params):
+    root, _, _ = repo
+    _seed(root, {"A": {"status": "halted"}})
+    marker = _plan_marker(root, "A")
+    before = marker.read_bytes()
+    assert not _call(root, **params)["ok"]
+    assert marker.read_bytes() == before and launches == [] and _job(root, "A") is None
+
+
+def test_launch_calls_spawn_detached_once_on_close_background(tmp_path, monkeypatch):
+    from coordinator_core.ops.ceremony import detached_spawn
+
+    seen: list = []
+    monkeypatch.setattr(detached_spawn, "spawn_detached", lambda *a, **k: seen.append((a, k)) or True)
+    assert REAL_LAUNCH(tmp_path, "A") is True
+    (args, kwargs), = seen
+    assert args[1].endswith("close_background.py") and args[2][0] == "A" and kwargs == {"site_free": True}
+
+
+def test_process_time_of_the_op_is_under_the_bar(repo):
+    import time
+
+    root, first, _ = repo
+    _seed(root, {"A": {"status": "halted"}, "B": {"status": "after"}})
+    _plan_marker(root, "A")
+    start = time.process_time()
+    out = _call(root, run_id="A", sha=first)
+    elapsed_ms = (time.process_time() - start) * 1000
+    assert out["close"]["launched"] is True
+    print(f"record_halted_run_landed process_time_ms={elapsed_ms:.1f}")
+    assert elapsed_ms <= 200

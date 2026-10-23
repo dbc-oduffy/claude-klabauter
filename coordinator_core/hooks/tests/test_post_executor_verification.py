@@ -375,6 +375,51 @@ def test_runner_invoked_in_code_is_verification(repo, cmd) -> None:
     assert g.runs_verification(cmd, str(repo), str(repo))
 
 
+_TRANSCRIPT_SCRIPT = (
+    "import json, sys\nfrom pkg import fm\n# which runs were pytest?\n"
+    "system = None\n"
+    "for line in open(sys.argv[1]):\n"
+    "    ev = json.loads(line)\n"
+    "    system = ev.get('system')\n"
+    "    if 'pytest' in str(ev) or 'unittest' in str(ev):\n"
+    "        print(ev.get('type'), system)\n"
+)
+
+
+def test_transcript_analysis_script_allowed_after_executor(repo, tmp_path) -> None:
+    path = _script(tmp_path, "scratchpad/seq.py", _TRANSCRIPT_SCRIPT)
+    mpd = tmp_path / "scratchpad" / "mpd"
+    mpd.write_text("{}\n")
+    cmd = f"python3 -I {path} {mpd.as_posix()}"
+    assert not g.runs_verification(cmd, str(repo), str(repo))
+    _executor_ran(repo)
+    for _ in range(3):
+        assert g.check(_bash(repo, cmd)) is None
+
+
+def test_scratch_script_spawning_runner_still_counted(repo, tmp_path) -> None:
+    path = _script(tmp_path, "scratchpad/seq.py", "import pkg, os\nos.system('pytest a.py')\n")
+    assert g.runs_verification(f"python3 -I {path}", str(repo), str(repo))
+    path = _script(tmp_path, "scratchpad/seq2.py", "import pkg, subprocess\nsubprocess.run(['pytest'])\n")
+    assert g.runs_verification(f"python3 -I {path}", str(repo), str(repo))
+
+
+def test_scratch_script_aliased_subprocess_import_still_counted(repo, tmp_path) -> None:
+    path = _script(tmp_path, "scratchpad/seq3.py", "import pkg\nfrom subprocess import run\nrun(['pytest'])\n")
+    assert g.runs_verification(f"python3 -I {path}", str(repo), str(repo))
+    path = _script(tmp_path, "scratchpad/seq4.py", "import pkg, subprocess as sp\nsp.run(['pytest'])\n")
+    assert g.runs_verification(f"python3 -I {path}", str(repo), str(repo))
+    path = _script(tmp_path, "scratchpad/seq5.py", "import pkg as p, subprocess as sp, json\nsp.run(['pytest'])\n")
+    assert g.runs_verification(f"python3 -I {path}", str(repo), str(repo))
+    path = _script(tmp_path, "scratchpad/seq6.py", "import pkg\nfrom subprocess import run as r\nr(['pytest'])\n")
+    assert g.runs_verification(f"python3 -I {path}", str(repo), str(repo))
+
+
+def test_scratch_script_aliased_spawn_import_from_os_still_counted(repo, tmp_path) -> None:
+    path = _script(tmp_path, "scratchpad/seq7.py", "import pkg\nfrom os import system as sh\nsh('pytest a.py')\n")
+    assert g.runs_verification(f"python3 -I {path}", str(repo), str(repo))
+
+
 def test_script_naming_runner_only_in_text_not_counted(repo, tmp_path) -> None:
     path = _script(tmp_path, "scratchpad/doc.py", 'import pkg\n"""mentions pytest"""\n# unittest\n')
     assert not g.runs_verification(f"python3 {path}", str(repo), str(repo))

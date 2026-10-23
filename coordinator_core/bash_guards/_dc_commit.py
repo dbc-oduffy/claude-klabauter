@@ -83,7 +83,8 @@ from coordinator_core.bash_guards._dc_git_shared import (
     _bt_commit_own_pathspec,
     _bt_git_sequencer_in_progress,
     _bt_leading_cd_prefix_cwd,
-    _bt_probe_cwd,
+    _bt_git_dash_c_value,
+    _bt_probe_cwd as _bt_probe_cwd_unexpanded,
 )
 from coordinator_core.bash_guards._dialect import (
     Dialect,
@@ -2094,6 +2095,44 @@ def _bt_solo_bare_commit_staged_paths(
     return [ln for ln in out.splitlines() if ln]
 
 
+def _bt_probe_cwd(
+    seg_tokens: List[str], payload: Optional[Dict[str, Any]], cmd: Optional[str] = None
+) -> Optional[str]:
+    """`_bt_probe_cwd` with a `-C ~/repo` / `-C $HOME/repo` value expanded: the
+    guard sees the token before any shell does, and joining the raw `~` onto
+    the payload cwd names no directory, so the probe spawn fails."""
+    dash_c = _bt_git_dash_c_value(seg_tokens)
+    if dash_c and (dash_c.startswith("~") or "$" in dash_c):
+        expanded = os.path.expandvars(os.path.expanduser(dash_c))
+        if os.path.isabs(expanded):
+            return expanded
+    return _bt_probe_cwd_unexpanded(seg_tokens, payload, cmd)
+
+
+def _bt_index_only_removals(
+    seg_tokens: List[str], payload: Optional[Dict[str, Any]], staged: List[str]
+) -> List[str]:
+    """Staged deletions whose worktree file still exists (`git rm --cached`).
+    A pathspec commit cannot record these -- git reports nothing to commit --
+    so the scoped `-- <paths>` form is not a remedy for them. Fails OPEN to []."""
+    if not staged:
+        return []
+    cwd = _bt_probe_cwd(seg_tokens, payload)
+    rc, deleted = _dc_git_probe._run_git(
+        ["diff", "--cached", "--diff-filter=D", "--name-only", "--no-renames"], cwd=cwd
+    )
+    if rc != 0 or not deleted.strip():
+        return []
+    rc, top = _dc_git_probe._run_git(["rev-parse", "--show-toplevel"], cwd=cwd)
+    if rc != 0 or not top.strip():
+        return []
+    root = top.strip()
+    return [
+        p for p in deleted.splitlines()
+        if p in staged and os.path.exists(os.path.join(root, p))
+    ]
+
+
 def _bt_solo_bare_commit_index_nonempty(
     seg_tokens: List[str],
     segments: List[Tuple[List[str], bool]],
@@ -2650,6 +2689,20 @@ def check_git_commit_safe_commit_advise(
                     "them under your subject." % ", ".join(_unnamed),
                     (_offer("add a -c coordinator.staged operand for your own path, "
                             "or unstage the foreign one", "your path"),),
+                ))
+            if _bt_index_only_removals(seg_tokens, payload, _solo_staged):
+                return _gc("deny", "Deny: ", (
+                    "this 'git commit' names no scope and the index holds a "
+                    "staged 'git rm --cached' removal, which a pathspec "
+                    "commit cannot record.\n\n"
+                    "Use instead:\n"
+                    "  git -c coordinator.staged=<path> commit -m %s\n"
+                    "or ceremony.commit_v2 `prefer_staged`." % (subject_operand,),
+                    "this 'git commit' names no scope and the index holds a "
+                    "staged 'git rm --cached' removal, which a pathspec "
+                    "commit cannot record.",
+                    (_offer("git -c coordinator.staged=<path> commit -m %s (or ceremony.commit_v2 "
+                            "`prefer_staged`)" % subject_operand, "the path"),),
                 ))
             return _gc("deny", "Deny: ", (
                 "this 'git commit' names no scope and stages "

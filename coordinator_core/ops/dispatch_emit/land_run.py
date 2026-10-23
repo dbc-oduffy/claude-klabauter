@@ -53,6 +53,7 @@ from coordinator_core.git.machine_local_paths import machine_local_paths
 from coordinator_core.ipc import register_op
 from coordinator_core.ops._path_guard import contained_path, safe_id
 from coordinator_core.ops.dispatch_emit import land_run_contract as contract
+from coordinator_core.ops.dispatch_emit.halted_run_route import halted_refusal, route_suffix
 from coordinator_core.ops.dispatch_emit.ask_contract import (
     LEG_FOOTPRINT_FILE,
     OUTSIDE_ROW_FOOTPRINT,
@@ -1865,6 +1866,10 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
             }
         except ValueError as exc:
             return _error(str(exc))
+    if isinstance(params, dict) and not params.get("script_path"):
+        halted = halted_refusal(root, params.get("run_id"), "run outcome")
+        if halted is not None:
+            return _error(halted, refused="halted-run")
     missing = _missing_run_outcome(params, task_output if isinstance(task_output, str) else None)
     if missing is not None:
         return missing
@@ -1983,7 +1988,7 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
             "params.inline_review is absent -- the run carries no review-stage output. Run the "
             "digest's commit line verbatim (or pass task_output_path = the Workflow run's output file, "
             "named in its completion notification); else re-emit "
-            "with a review stage and re-fire",
+            "with a review stage and re-fire" + route_suffix(root, params.get("run_id")),
             refused="unreviewed",
         )
     if not inline_review.get("integration_stem") or inline_review.get("slices") is None:

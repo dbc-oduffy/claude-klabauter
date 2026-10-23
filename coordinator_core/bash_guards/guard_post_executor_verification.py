@@ -157,8 +157,12 @@ _MEASURE_RE = re.compile(r"\bbenchmarks\.measure\b")
 
 
 _SPAWN_RE = re.compile(
-    r"\b(?:subprocess|Popen|check_call|check_output|runpy|run_module|system|popen"
-    r"|execv\w*|spawn\w*|__import__|import_module|exec|eval)\b"
+    r"\b(?:subprocess|runpy)\s*\.|\bfrom\s+(?:subprocess|runpy)\b|"
+    r"\bimport\s+(?:[\w.]+(?:\s+as\s+\w+)?\s*,\s*)*(?:subprocess|runpy)\b|"
+    r"\bfrom\s+[\w.]+\s+import\b[^\n]*\b(?:Popen|check_call|check_output|run_module|system|popen"
+    r"|execv\w*|spawn\w*|import_module)\b|"
+    r"\b(?:Popen|check_call|check_output|run_module|system|popen"
+    r"|execv\w*|spawn\w*|__import__|import_module|exec|eval)\s*\("
 )
 _TEXT_TOKENS = frozenset({tokenize.STRING, tokenize.COMMENT, getattr(tokenize, "FSTRING_MIDDLE", -1)})
 

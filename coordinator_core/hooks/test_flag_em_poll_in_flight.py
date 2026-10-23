@@ -100,7 +100,9 @@ def test_second_consecutive_poll_with_live_run_flags(session_id, transcript):
     mod._handler(_payload(session_id, transcript, "ReadNotifications"))
     result = mod._handler(_payload(session_id, transcript, "ReadNotifications"))
     assert result != {}
-    assert "poll" in result["hookSpecificOutput"]["additionalContext"].lower()
+    out = result["hookSpecificOutput"]
+    assert out["permissionDecision"] == "deny"
+    assert "poll" in out["permissionDecisionReason"].lower()
 
 
 def test_legacy_top_level_run_record_still_counts_as_in_flight(session_id, transcript, tmp_path):
@@ -181,7 +183,7 @@ def test_old_compaction_in_the_tail_no_longer_exempts(session_id, transcript):
     )
     result = mod._handler(_payload(session_id, transcript, "ReadNotifications"))
     assert result != {}
-    assert "poll" in result["hookSpecificOutput"]["additionalContext"].lower()
+    assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
 def test_missing_transcript_fails_open_silently(session_id):

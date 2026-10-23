@@ -1,7 +1,10 @@
 """Per-session XS by-hand lane / residue window: record + zero-spawn diff budget.
 
 The record lives at `<git common dir>/coordinator-sessions/<sid>/xs-lane.json` as
-`{kind: xs|residue, base_sha, state: open|spent, paths: [repo-relative]}`. `measure()` prices the
+`{kind: xs|residue, base_sha, state: open|spent, paths: [repo-relative], denies?: int}`. `denies`
+counts the projected denies the lane took; it is separate from the line budget (a denied attempt
+consumes no budget) and is not spend. A present `denies` that is not a non-negative int makes the
+record corrupt. `measure()` prices the
 record's paths plus the triggering path as added+deleted lines (the `git diff --numstat` unit)
 between the blob at the pinned `base_sha` and the working text, with the triggering edit applied in
 memory. Nothing the EM declares enters the measurement.
@@ -28,6 +31,7 @@ from coordinator_core.lifecycle import git_common_dir
 
 BUDGET_FILES = 2
 BUDGET_LINES = 30
+GOLF_DENY_LIMIT = 2
 
 KIND_XS = "xs"
 KIND_RESIDUE = "residue"
@@ -77,7 +81,32 @@ def read_lane(repo_root, sid: str) -> Optional[dict]:
         or not isinstance(rec.get("paths"), list)
     ):
         return _corrupt_record()
+    if "denies" in rec:
+        d = rec["denies"]
+        if not isinstance(d, int) or isinstance(d, bool) or d < 0:
+            return _corrupt_record()
     return rec
+
+
+def deny_count(rec: dict) -> int:
+    """Projected denies the lane took. An absent field reads 0; a corrupt record reads
+    GOLF_DENY_LIMIT (fails closed)."""
+    if rec.get("corrupt"):
+        return GOLF_DENY_LIMIT
+    return rec.get("denies", 0)
+
+
+def record_deny(repo_root, sid: str) -> int:
+    """Increment the record's `denies` and return the new count. Absent record: writes nothing,
+    returns 0. Corrupt record: writes nothing, returns GOLF_DENY_LIMIT."""
+    rec = read_lane(repo_root, sid)
+    if rec is None:
+        return 0
+    if rec.get("corrupt"):
+        return GOLF_DENY_LIMIT
+    rec["denies"] = deny_count(rec) + 1
+    _write(repo_root, sid, rec)
+    return rec["denies"]
 
 
 def _corrupt_record() -> dict:
@@ -122,17 +151,18 @@ def open_xs_lane(repo_root, sid: str, base_sha: str) -> bool:
     )
 
 
-def open_residue_window(repo_root, sid: str, base_sha: str) -> bool:
+def open_residue_window(repo_root, sid: str, base_sha: str, *, supersede_xs: bool = False) -> bool:
     """Open the post-landing residue window. Idempotent: True when a residue record exists or was
-    created; False when an xs record holds the slot."""
-    created = _create_exclusive(
-        repo_root,
-        sid,
-        {"kind": KIND_RESIDUE, "base_sha": base_sha, "state": STATE_OPEN, "paths": []},
-    )
+    created; False when an xs record holds the slot. With `supersede_xs`, a non-corrupt xs record
+    is replaced by a fresh residue record (no paths, no denies); a corrupt one is refused."""
+    fresh = {"kind": KIND_RESIDUE, "base_sha": base_sha, "state": STATE_OPEN, "paths": []}
+    created = _create_exclusive(repo_root, sid, fresh)
     if created:
         return True
     rec = read_lane(repo_root, sid)
+    if supersede_xs and rec and rec.get("kind") == KIND_XS and not rec.get("corrupt"):
+        _write(repo_root, sid, fresh)
+        return True
     return bool(rec) and rec.get("kind") == KIND_RESIDUE and not rec.get("corrupt")
 
 

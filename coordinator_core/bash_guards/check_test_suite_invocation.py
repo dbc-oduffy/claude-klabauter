@@ -882,7 +882,16 @@ def _unbound_segment_argvs(
 ) -> Tuple[List[List[str]], List[str], bool]:
     """Segment argvs before literal binding, the separator text preceding each
     (``""`` for a sequential join), and whether they came from a bash leg (the
-    only legs the binding applies to)."""
+    only legs the binding applies to). A chained ``sh -c`` payload is expanded
+    into its own segments."""
+    segments, joiners, bash_leg = _raw_unbound_segment_argvs(cmd, dialect)
+    segments, joiners = _expand_segments(segments, joiners)
+    return segments, joiners, bash_leg
+
+
+def _raw_unbound_segment_argvs(
+    cmd: str, dialect: Optional[_Dialect]
+) -> Tuple[List[List[str]], List[str], bool]:
     cmd = _protect_windows_drive_paths(_strip_heredoc_bodies(cmd))
     if dialect is _Dialect.POWERSHELL:
         segments = _resolve_segments_for_dialect(cmd, dialect, guard_name="check_test_suite_invocation")
@@ -1023,7 +1032,76 @@ def _strip_command_prefix(tokens: Sequence[str]) -> List[str]:
     and the ``run`` subcommand of the python-launcher wrappers are consumed
     with their wrapper. A `sh -c '<payload>'`-shaped wrapper is unwrapped by
     re-tokenizing its quoted argument and recursing (see
-    ``_SHELL_C_INTERPRETERS``'s BX-13 fix comment)."""
+    ``_SHELL_C_INTERPRETERS``'s BX-13 fix comment). The result is ONE argv:
+    a chained payload is expanded into its segments upstream by
+    ``_expand_shell_c_segments``."""
+    rest, payload = _peel_prefix(tokens)
+    if payload is None:
+        return rest
+    if _exceeds_tokenizable_ceiling(payload):
+        inner = payload.strip("'\"").split()
+    else:
+        try:
+            inner = shlex.split(payload, posix=True)
+        except ValueError:
+            return rest
+    return _strip_command_prefix(inner)
+
+
+#: Nesting depth past which a ``sh -c`` payload is no longer expanded into
+#: segments; only the single-argv unwrap still applies, so a CHAINED payload
+#: nested past the cap is judged as one argv (its later segments go unseen).
+_SHELL_C_EXPANSION_DEPTH = 4
+
+
+def _expand_shell_c_segments(
+    argv: Sequence[str], depth: int = 0
+) -> Optional[List[Tuple[List[str], str]]]:
+    """Segments of a chained ``sh -c '<a>; <b>'`` payload as ``(argv, joiner)``
+    pairs, each judged like an outer segment (the first carries ``""``, the
+    caller substitutes the outer joiner). ``None`` when ``argv`` is not a
+    shell ``-c`` wrapper, the payload is a single segment (the
+    ``_strip_command_prefix`` unwrap already covers it), or the depth cap is
+    reached."""
+    if depth >= _SHELL_C_EXPANSION_DEPTH:
+        return None
+    _rest, payload = _peel_prefix(argv)
+    if payload is None:
+        return None
+    inner_segments, inner_joiners, _bash = _raw_unbound_segment_argvs(payload, None)
+    flat: List[Tuple[List[str], str]] = []
+    for seg, joiner in zip(inner_segments, inner_joiners):
+        nested = _expand_shell_c_segments(seg, depth + 1)
+        if nested is None:
+            flat.append((seg, joiner))
+        else:
+            flat.append((nested[0][0], joiner))
+            flat.extend(nested[1:])
+    return flat if len(flat) > 1 else None
+
+
+def _expand_segments(
+    segments: List[List[str]], joiners: List[str]
+) -> Tuple[List[List[str]], List[str]]:
+    """Replace each chained ``sh -c`` segment by its payload's segments."""
+    out_s: List[List[str]] = []
+    out_j: List[str] = []
+    for seg, joiner in zip(segments, joiners):
+        expanded = _expand_shell_c_segments(seg)
+        if expanded is None:
+            out_s.append(seg)
+            out_j.append(joiner)
+            continue
+        for k, (inner, inner_joiner) in enumerate(expanded):
+            out_s.append(inner)
+            out_j.append(joiner if k == 0 else inner_joiner)
+    return out_s, out_j
+
+
+def _peel_prefix(tokens: Sequence[str]) -> Tuple[List[str], Optional[str]]:
+    """``(remaining_tokens, shell_c_payload)``: the tokens after the prefix
+    peel, and the raw payload string when the peel stopped at a shell ``-c``
+    wrapper (``None`` otherwise)."""
     i = 0
     n = len(tokens)
     while i < n:
@@ -1113,17 +1191,9 @@ def _strip_command_prefix(tokens: Sequence[str]) -> List[str]:
             if c_flag_positions:
                 idx = c_flag_positions[0]
                 if idx + 1 < n:
-                    payload = tokens[idx + 1]
-                    if _exceeds_tokenizable_ceiling(payload):
-                        inner = payload.strip("'\"").split()
-                    else:
-                        try:
-                            inner = shlex.split(payload, posix=True)
-                        except ValueError:
-                            break
-                    return _strip_command_prefix(inner)
+                    return list(tokens[i:]), tokens[idx + 1]
         break
-    return list(tokens[i:])
+    return list(tokens[i:]), None
 
 
 def _norm_path(raw: str) -> str:
@@ -1959,7 +2029,32 @@ def _segment_contains(cfg_seg: Sequence[str], inv_seg: Sequence[str]) -> bool:
         return False
     if not cfg_seg[1:]:
         return False
-    return set(cfg_seg[1:]).issubset(set(_args_before_script(cfg_seg, inv_seg)))
+    if not set(cfg_seg[1:]).issubset(set(_args_before_script(cfg_seg, inv_seg))):
+        return False
+    return not _names_only_test_files(cfg_seg, inv_seg)
+
+
+def _runner_positionals(cfg_seg: Sequence[str]) -> List[str]:
+    """Test-target positionals the configured segment itself carries, excluding
+    a ``python`` head's runner script (``-m <module>`` is a value-flag pair and
+    never reaches the positional list)."""
+    _, pos = _walk_pytest_args(cfg_seg[1:])
+    if cfg_seg[0] == "python" and "-m" not in cfg_seg[1:] and pos:
+        return pos[1:]
+    return pos
+
+
+def _names_only_test_files(cfg_seg: Sequence[str], inv_seg: Sequence[str]) -> bool:
+    """True when the invocation appends only test files / node ids to a
+    configured ``python``/``pytest`` command whose own segment names no test
+    target -- a run narrower than the tier. A configured directory
+    (``pytest tests/``) still runs in full, so it never narrows."""
+    if cfg_seg[0] not in ("python", "pytest") or _runner_positionals(cfg_seg):
+        return False
+    cfg_tokens = set(cfg_seg[1:]) | {os.path.basename(t) for t in cfg_seg[1:]}
+    _, pos = _walk_pytest_args(inv_seg[1:])
+    extras = [p for p in pos if p not in cfg_tokens and os.path.basename(p) not in cfg_tokens]
+    return bool(extras) and all(p.endswith(".py") or "::" in p for p in extras)
 
 
 #: Verbs a package manager hands a script to; everything after one belongs to
@@ -3833,6 +3928,19 @@ def _classify_command_core(
         "".join(ch for ch in command[(spans[k - 1][2] if k else 0):spans[k][1]] if ch in ";&|")
         for k in range(len(spans))
     ]
+    # Same joiner substitution as _expand_segments, over span tuples.
+    expanded_spans: List[Tuple[str, int, int, List[str]]] = []
+    expanded_joiners: List[str] = []
+    for (stripped, seg_start, seg_end, tokens), joiner in zip(spans, joiners):
+        parts = _expand_shell_c_segments(tokens)
+        if parts is None:
+            expanded_spans.append((stripped, seg_start, seg_end, tokens))
+            expanded_joiners.append(joiner)
+            continue
+        for k, (inner, inner_joiner) in enumerate(parts):
+            expanded_spans.append((stripped, seg_start, seg_end, inner))
+            expanded_joiners.append(joiner if k == 0 else inner_joiner)
+    spans, joiners = expanded_spans, expanded_joiners
     variants_per_span = bind_literal_iterations([tokens for _s, _a, _b, tokens in spans], joiners)
     for (stripped, seg_start, seg_end, tokens), variants in zip(spans, variants_per_span):
         unbound_argv = _strip_command_prefix(tokens)

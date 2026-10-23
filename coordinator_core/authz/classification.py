@@ -2435,17 +2435,20 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
     "dispatch.supersede_slice": OpClass.MUTATING,
     # dispatch.record_halted_run_landed — MUTATING: records a halted run as landed at a verified sha
-    # through run_close.sibling_release (ops/dispatch_emit/halted_run_landed.py).
+    # through run_close.sibling_release (ops/dispatch_emit/halted_run_landed.py), flips the run's
+    # halted.json marker, and queues the land-run close legs in a close-job record paid by one detached job.
     # DR-208 five-question affirmation (citing dispatch.record_halted_run_landed handler):
     #   1. Writes, deletes, or reorders any state file, queue, or git object?  YES.
-    #      One scratch/warp/<run_id>/sibling-status.json rewrite via sibling_release; no git object.
+    #      One scratch/warp/<run_id>/sibling-status.json rewrite via sibling_release, the
+    #      state/warp/<run_id>/halted.json marker, and one .coordinator-local/close-jobs record; the
+    #      detached job later writes plan, sizing and commit artifacts. The op itself writes no git object.
     #   2. Writes into rag's relational store?                                 No.
     #   3. Opens any file for write (including sentinel creation)?             YES.
-    #      That status file, through claimed_write.
+    #      That status file (claimed_write), the halt marker and the close-job record.
     #   4. Mutates shared mutable state outside its own module?                YES.
-    #      The status the submit hook and sibling closes read.
+    #      The status the submit hook and sibling closes read, and the job the close runner pays.
     #   5. Persistent state changes observable across process boundaries?     YES.
-    #      The status persists on disk.
+    #      The status, marker and job record persist on disk; the job runs detached.
     # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
     "dispatch.record_halted_run_landed": OpClass.MUTATING,
     # dispatch.release_run_token — MUTATING: deletes one warp run's unclaimed token record

@@ -4,9 +4,9 @@ ListAgents|ReadNotifications) advisory op.
 
 Purpose: docs/plans/2026-09-27-four-turn-em-loop.md § Settled here 4 / § Pinned interfaces
 (task C17). Flags the EM spending a turn checking on work that a Workflow completion
-notification would wake it for anyway. Fires on the SECOND CONSECUTIVE poll-tool call with
-no intervening non-poll tool call, while the session has a fired Workflow with no observed
-completion. Always allows — advisory only, never a deny.
+notification would wake it for anyway. Denies (short-circuits) the SECOND CONSECUTIVE poll-tool
+call with no intervening non-poll tool call, while the session has a fired Workflow with no
+observed completion. Every other case allows silently.
 
 In-flight source: the Workflow run record `_capture_workflow_run_record_sync`
 (`coordinator_core.hooks.postuse_advisory_dispatch`) already persists under
@@ -39,7 +39,7 @@ from typing import Any, Mapping, Optional
 
 from coordinator_core.temp_layout import legacy_top_level_path, managed_tempdir
 from coordinator_core.ipc import register_op
-from coordinator_core.hooks._envelope import allow_advisory, no_advisory, payload_of
+from coordinator_core.hooks._envelope import deny, no_advisory, payload_of
 
 #: Registered matcher names (C18 narrows hooks.json's HTTP matcher to the same set).
 POLL_TOOLS = frozenset(
@@ -223,8 +223,8 @@ def _handler(params: dict, repo_root=None) -> dict:
     """PreToolUse(poll tool) advisory: flag a second consecutive EM poll call while a
     dispatched Workflow is in flight and no intervening non-poll tool call was made.
 
-    Always returns allow (D2 shape a on a flag, no_advisory — shape c — otherwise). Never
-    denies, never raises: every internal check is wrapped to fail toward NOT flagging.
+    Denies on a flag (shape e), no_advisory otherwise. Never raises: every internal check is
+    wrapped to fail toward NOT flagging.
     """
     payload = payload_of(params)
 
@@ -274,7 +274,7 @@ def _handler(params: dict, repo_root=None) -> dict:
     if not flagged:
         return no_advisory()
 
-    return allow_advisory(
+    return deny(
         "PreToolUse",
         "EM poll while workflow runs — the completion notification wakes you; end the turn. "
         f"See {_ANCHOR}.",

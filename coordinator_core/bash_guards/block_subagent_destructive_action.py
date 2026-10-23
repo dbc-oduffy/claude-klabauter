@@ -664,6 +664,8 @@ _SETTINGS_HOME_BIN_EXEMPT_RE = re.compile(
     r"|\{COORDINATOR_SETTINGS_HOME\}"
     r"|\{COORDINATOR_SETTINGS_HOME:-" + _SETTINGS_HOME_DEFAULT_RE + r"\}"
     r")/bin/[A-Za-z0-9_.-]+$"
+    # The home-prefixed spelling is the same resolved path as the default rung.
+    r"|^" + _SETTINGS_HOME_DEFAULT_RE + r"/bin/[A-Za-z0-9_.-]+$"
 )
 
 

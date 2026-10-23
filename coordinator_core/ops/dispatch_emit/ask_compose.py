@@ -137,6 +137,7 @@ from coordinator_core.ops.dispatch_emit.ask_footprint import (
 )
 from coordinator_core.ops.dispatch_emit.terminal_commit_params_channel import PARAMS_BLOCK_JS, params_path
 from coordinator_core.ops.dispatch_emit.land_run_contract import OP_NAME as LAND_RUN_OP, RECONCILE_CLAUSE as LAND_RUN_RECONCILE_CLAUSE
+from coordinator_core.ops.dispatch_emit.halted_run_route import ROUTE_OP as _HALTED_ROUTE_OP
 from coordinator_core.ops.dispatch_emit.ask_stage_receipt import ALREADY_STAGED_KEY, STAGE_IN_FLIGHT_KEY
 from coordinator_core.ops.dispatch_emit.wake_digest import (
     CAP_HELPER_JS,
@@ -3271,12 +3272,14 @@ def compose_ask_script(
         "+ '. Perform each, record it (em-performed: plan.tasks.mutate verb em-discharge; operator: verb resolve, "
         "disposition coded, disposition_ref <sha>), then refire to re-judge ' + _blkIds.join(', ') + '.' "
         "+ (_blkRulable.length ? ' Run coordinator-invoke workflow.revise with run_id ' + _runId "
-        "+ ' with out_of_scope: [' + _blkRulable.join(', ') + '] for the rows ruled out; `verbatim` carries the PM words ruling them out, recorded as the ruling and adding no row.' : '') "
+        "+ ' with out_of_scope: [' + _blkRulable.join(', ') + '] for the rows ruled out; `verbatim` carries the PM words ruling them out, recorded as the ruling and adding no row.' "
+        f"+ ' If the halt commit landed every row, close it after the revise: ' + {_lit(_HALTED_ROUTE_OP)} + ' {{run_id: ' + _runId + ', sha: <the halt commit>}}.' : '') "
         ": ((_blkIds.length ? 'Ledger rows ' + _blkIds.join(', ') + (_emptyVerdict ? ' were owed a verdict and the verify leg returned none' : '') + ' block the commit.' "
         ": !_ledger ? 'The verify leg returned no items list, so the ledger holds no verdict: fix the verify leg before re-running.' "
         ": 'The verify leg returned an empty items list and no ledger row ids are on record to hold it against: fix the verify leg before re-running.') "
         "+ (_blkRulable.length ? ' Run coordinator-invoke workflow.revise with run_id ' + _runId "
-        "+ ' with out_of_scope: [' + _blkRulable.join(', ') + '] for the rows ruled out; `verbatim` carries the PM words ruling them out, recorded as the ruling and adding no row. The re-fire resumes at the ledger check.' : '') "
+        "+ ' with out_of_scope: [' + _blkRulable.join(', ') + '] for the rows ruled out; `verbatim` carries the PM words ruling them out, recorded as the ruling and adding no row. The re-fire resumes at the ledger check.' "
+        f"+ ' If the halt commit landed every row, close it after the revise: ' + {_lit(_HALTED_ROUTE_OP)} + ' {{run_id: ' + _runId + ', sha: <the halt commit>}}.' : '') "
         "+ (_blkForeign.length ? ' ' + _blkForeign.join(', ') + ' are not in the stage manifest rulable_ids: re-run the ledger check. "
         f"A ruling that is not yet a row is recorded with workflow.revise run_id ' + _runId + ' verbatim + from + {CLAIM_PARAM}: true, which claims it and resumes at the ledger check.' : '') "
         "+ (_blkIds.length ? ' Re-fire the same sizing: it executes the remaining work of the rows it keeps, briefed with the revise notes, '"

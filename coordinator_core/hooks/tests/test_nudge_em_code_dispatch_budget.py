@@ -103,7 +103,7 @@ def test_denied_oversized_edit_consumes_nothing_and_one_line_retry_is_admitted(e
     assert _is_deny(denied)
     reason = _reason(denied)
     assert "XS budget spent (projected): 1/2 files, 52/30 lines" in reason
-    assert "Measured from landed diff: 0/2 files, 0/30 lines" in reason
+    assert "Measured from landed" not in reason
     rec = xb.read_lane(root, SID)
     assert rec["state"] == "open" and rec["paths"] == []
     assert xb.measure(root, rec, str(root / "a.py"), (root / "a.py").read_text()) == (0, 0, False)
@@ -395,7 +395,7 @@ def test_unsized_retry_is_admitted_only_within_remaining_budget(unsized):
     denied = mod.op(_edit(root, "a.py", old, new))
     assert _is_deny(denied)
     assert "XS budget spent (projected)" in _reason(denied)
-    assert "Measured from landed diff: 1/2 files, 20/30 lines" in _reason(denied)
+    assert "Measured from landed" not in _reason(denied)
     assert xb.read_lane(root, SID)["paths"] == paths_before
 
     old, new = _insert("l3\n", 1, "r")
@@ -405,11 +405,11 @@ def test_unsized_retry_is_admitted_only_within_remaining_budget(unsized):
     old, new = _insert("l1\n", 10, "s")
     over = mod.op(_edit(root, "b.py", old, new))
     assert _is_deny(over)
-    assert "Measured from landed diff: 1/2 files, 21/30 lines" in _reason(over)
+    assert "Measured from landed" not in _reason(over)
+    assert "closed" in _reason(over)
 
     old, new = _insert("l1\n", 9, "t")
-    assert mod.op(_edit(root, "b.py", old, new)) is None
-    _apply(root, "b.py", old, new)
+    assert _is_deny(mod.op(_edit(root, "b.py", old, new)))
     assert xb.read_lane(root, SID)["state"] == "open"
 
 
@@ -479,6 +479,150 @@ def test_shell_write_s_sized_without_residue_is_none(env, monkeypatch):
     root, _ = env
     monkeypatch.setattr(xb, "touched_s_or_larger", lambda sid, repo_root: True)
     assert _shell(root, "a.py", "".join(f"x{i}\n" for i in range(42))) is None
+
+
+def _big(n: int) -> str:
+    return "".join(f"x{i}\n" for i in range(n))
+
+
+def test_measured_clause_is_absent_from_xs_and_residue_denies(env, monkeypatch):
+    from coordinator_core.bash_guards._message_size import MESSAGE_PROSE_CAP_BYTES, measure_envelope
+
+    root, sha = env
+    xb.open_xs_lane(root, SID, sha)
+    xs = mod.op(_edit(root, "a.py", _lines(10), _big(42)))
+    assert _is_deny(xs)
+    assert "Measured from landed" not in _reason(xs)
+    assert "XS budget spent (projected): 1/2 files, 52/30 lines. Size S or larger. " in _reason(xs)
+    assert measure_envelope(xs).prose_bytes <= MESSAGE_PROSE_CAP_BYTES
+    monkeypatch.setattr(xb, "touched_s_or_larger", lambda sid, repo_root: True)
+    monkeypatch.setattr(xb, "read_lane", lambda r, s: {"kind": "residue", "state": "open", "base_sha": sha, "paths": []})
+    res = mod.op(_edit(root, "a.py", _lines(10), _big(42)))
+    assert _is_deny(res)
+    assert "Measured from landed" not in _reason(res)
+    assert "Residue budget spent (projected)" in _reason(res)
+
+
+def test_golf_second_projected_deny_closes_hand_edits(env):
+    from coordinator_core.bash_guards._message_size import MESSAGE_PROSE_CAP_BYTES, measure_envelope
+
+    root, sha = env
+    xb.open_xs_lane(root, SID, sha)
+    first = mod.op(_edit(root, "a.py", _lines(10), _big(47)))
+    assert _is_deny(first) and "Size S or larger" in _reason(first)
+    assert xb.deny_count(xb.read_lane(root, SID)) == 1
+    second = mod.op(_edit(root, "a.py", _lines(10), _big(84)))
+    assert _is_deny(second)
+    assert "Size S or larger" not in _reason(second)
+    assert "Workflow" in _reason(second) and f"git diff {sha[:12]}" in _reason(second)
+    assert measure_envelope(second).prose_bytes <= MESSAGE_PROSE_CAP_BYTES
+    third = mod.op(_edit(root, "a.py", "l1\n", "v1 = f(1)\n"))
+    assert _is_deny(third) and f"git diff {sha[:12]}" in _reason(third)
+    assert xb.read_lane(root, SID)["paths"] == []
+
+
+def test_golf_one_deny_then_one_line_retry_is_admitted(env):
+    root, sha = env
+    xb.open_xs_lane(root, SID, sha)
+    assert _is_deny(mod.op(_edit(root, "a.py", _lines(10), _big(47))))
+    assert mod.op(_edit(root, "a.py", "l1\n", "v1 = f(1)\n")) is None
+
+
+def test_golf_closes_shell_writes_too(env):
+    root, sha = env
+    xb.open_xs_lane(root, SID, sha)
+    assert "Size S or larger" in _reason(_shell(root, "a.py", _big(42)))
+    closed = _shell(root, "a.py", _big(60))
+    assert _is_deny(closed) and "Size S or larger" not in _reason(closed)
+    assert _is_deny(_shell(root, "a.py", _lines(10).replace("l1\n", "v1 = f(1)\n")))
+
+
+def test_golf_residue_record_is_never_closed_by_denies(env, monkeypatch):
+    root, sha = env
+    monkeypatch.setattr(xb, "touched_s_or_larger", lambda sid, repo_root: True)
+    assert xb._create_exclusive(
+        root, SID, {"kind": "residue", "base_sha": sha, "state": "open", "paths": [], "denies": 5}
+    )
+    monkeypatch.setattr(mod, "_COORDINATOR_PATH_MARKERS", [])
+    over = mod.op(_edit(root, "a.py", _lines(10), _big(42)))
+    assert _is_deny(over) and "Residue budget spent" in _reason(over)
+    assert not _is_deny(mod.op(_edit(root, "b.py", "l1\n", "v1 = f(1)\n")))
+
+
+def test_golf_corrupt_record_returns_corrupt_deny_not_closed_text(env):
+    root, _ = env
+    path = xb.lane_path(root, SID)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("not json")
+    result = mod.op(_edit(root, "a.py", "l1\n", "v1 = f(1)\n"))
+    assert _is_deny(result)
+    assert "Size S or larger" in _reason(result) and "closed" not in _reason(result)
+
+
+def test_golf_unmeasurable_denies_are_not_counted(env, monkeypatch):
+    root, sha = env
+    xb.open_xs_lane(root, SID, sha)
+    real = xb.measure
+
+    def boom(*a, **k):
+        raise RuntimeError("base unreadable")
+
+    monkeypatch.setattr(xb, "measure", boom)
+    for _ in range(3):
+        assert "unmeasurable" in _reason(mod.op(_edit(root, "a.py", "l1\n", "v1 = f(1)\n")))
+    monkeypatch.setattr(xb, "measure", real)
+    assert xb.deny_count(xb.read_lane(root, SID)) == 0
+    assert mod.op(_edit(root, "a.py", "l1\n", "v1 = f(1)\n")) is None
+
+
+@pytest.fixture
+def landed_unmarked(env, monkeypatch):
+    root, sha = env
+    from coordinator_core import warp_live
+    from coordinator_core.hooks import flag_em_poll_in_flight as fl
+
+    monkeypatch.setattr(xb, "touched_s_or_larger", lambda sid, repo_root: False)
+    monkeypatch.setattr(fl, "session_workflow_run_ids", lambda sid: ["run-1"])
+    monkeypatch.setattr(warp_live, "live_run_for_session", lambda *a, **k: None)
+    monkeypatch.setattr(mod, "_COORDINATOR_PATH_MARKERS", [])
+    return root, sha
+
+
+def test_landed_residue_without_s_plus_touch_advises_then_denies_over(landed_unmarked):
+    root, sha = landed_unmarked
+    ok = mod.op(_edit(root, "a.py", "l1\n", "v1 = f(1)\n"))
+    assert ok is not None and not _is_deny(ok)
+    assert "residue 1/2 files, 2/30 lines" in _reason_ctx(ok)
+    assert xb.read_lane(root, SID)["kind"] == "residue"
+    over = mod.op(_edit(root, "b.py", _lines(10), _big(40)))
+    assert _is_deny(over) and "Residue budget spent" in _reason(over)
+
+
+def test_landed_residue_supersedes_a_pre_existing_xs_lane(landed_unmarked):
+    root, sha = landed_unmarked
+    xb.open_xs_lane(root, SID, "f" * 40)
+    xb.record_deny(root, SID)
+    ok = mod.op(_edit(root, "a.py", "l1\n", "v1 = f(1)\n"))
+    assert ok is not None and not _is_deny(ok)
+    rec = xb.read_lane(root, SID)
+    assert rec["kind"] == "residue" and rec["base_sha"] == sha
+    assert xb.deny_count(rec) == 0
+
+
+def test_landed_residue_live_run_keeps_the_sized_path(landed_unmarked, monkeypatch):
+    root, _ = landed_unmarked
+    from coordinator_core import warp_live
+
+    monkeypatch.setattr(warp_live, "live_run_for_session", lambda *a, **k: "run-1")
+    result = mod.op(_edit(root, "a.py", "l1\n", "v1 = f(1)\n"))
+    assert result is not None and not _is_deny(result)
+    assert xb.read_lane(root, SID) is None
+
+
+def test_landed_residue_shell_write_is_budgeted(landed_unmarked):
+    root, _ = landed_unmarked
+    result = _shell(root, "a.py", _big(42))
+    assert _is_deny(result) and "Residue budget spent" in _reason(result)
 
 
 def test_shell_write_escape_is_consumed_once(env, monkeypatch):

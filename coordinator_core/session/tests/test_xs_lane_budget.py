@@ -248,3 +248,70 @@ def test_two_line_shell_write_into_new_file_prices_two_lines_one_file(repo):
     text = xb.project_shell_write(str(root / "new.py"), "a = 1\nb = 2\n", append=False)
     u = xb.measure(root, xb.read_lane(root, "s"), "new.py", text)
     assert (u.files, u.lines, u.over) == (1, 2, False)
+
+
+def test_deny_count_absent_field_reads_zero(repo):
+    root, sha = repo
+    xb.open_xs_lane(root, "s", sha)
+    assert xb.deny_count(xb.read_lane(root, "s")) == 0
+    assert xb.deny_count({"kind": "xs", "state": "open", "base_sha": "", "paths": []}) == 0
+
+
+def test_deny_count_record_deny_increments_and_persists(repo):
+    root, sha = repo
+    xb.open_xs_lane(root, "s", sha)
+    assert xb.record_deny(root, "s") == 1
+    assert xb.record_deny(root, "s") == 2
+    assert xb.deny_count(xb.read_lane(root, "s")) == 2
+    assert xb.GOLF_DENY_LIMIT == 2
+
+
+def test_deny_count_record_deny_absent_and_corrupt_write_nothing(repo):
+    root, sha = repo
+    assert xb.record_deny(root, "none") == 0
+    assert xb.read_lane(root, "none") is None
+    p = xb.lane_path(root, "bad")
+    p.parent.mkdir(parents=True)
+    p.write_text("{not json")
+    assert xb.record_deny(root, "bad") == xb.GOLF_DENY_LIMIT
+    assert p.read_text() == "{not json"
+    assert xb.deny_count(xb.read_lane(root, "bad")) == xb.GOLF_DENY_LIMIT
+
+
+@pytest.mark.parametrize("bad", [-1, "2", 1.5, True, None, [1]])
+def test_deny_count_malformed_field_is_corrupt(repo, bad):
+    import json
+
+    root, sha = repo
+    p = xb.lane_path(root, "s")
+    p.parent.mkdir(parents=True)
+    p.write_text(json.dumps({"kind": "xs", "state": "open", "base_sha": sha, "paths": [], "denies": bad}))
+    rec = xb.read_lane(root, "s")
+    assert rec["corrupt"] and rec["state"] == "spent"
+    assert xb.deny_count(rec) == xb.GOLF_DENY_LIMIT
+
+
+def test_deny_count_supersede_xs_replaces_xs_and_refuses_corrupt(repo):
+    root, sha = repo
+    xb.open_xs_lane(root, "s", sha)
+    xb.add_path(root, "s", "a.py")
+    xb.record_deny(root, "s")
+    assert xb.open_residue_window(root, "s", sha) is False
+    assert xb.read_lane(root, "s")["kind"] == "xs"
+    assert xb.open_residue_window(root, "s", sha, supersede_xs=True) is True
+    assert xb.read_lane(root, "s") == {"kind": "residue", "base_sha": sha, "state": "open", "paths": []}
+    assert xb.open_residue_window(root, "s", sha, supersede_xs=True) is True
+    p = xb.lane_path(root, "bad")
+    p.parent.mkdir(parents=True)
+    p.write_text("{not json")
+    assert xb.open_residue_window(root, "bad", sha, supersede_xs=True) is False
+    assert p.read_text() == "{not json"
+
+
+def test_deny_count_does_not_affect_measure(repo):
+    root, sha = repo
+    xb.open_xs_lane(root, "s", sha)
+    base = xb.measure(root, xb.read_lane(root, "s"), "a.py", "x\n" + _lines(10))
+    xb.record_deny(root, "s")
+    xb.record_deny(root, "s")
+    assert xb.measure(root, xb.read_lane(root, "s"), "a.py", "x\n" + _lines(10)) == base

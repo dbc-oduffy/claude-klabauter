@@ -1223,7 +1223,7 @@ _BODY_OPEN_RE = re.compile(r"\bopen\s*\(\s*(?P<path>(['\"])[^'\"\n]*\2)?\s*(?P<r
 _BODY_PATH_SINK_RE = re.compile(
     r"\bPath\s*\(\s*(['\"])(?P<path>[^'\"\n]*)\1\s*\)\s*\.\s*write_(?:text|bytes)\s*\("
 )
-_BODY_UNRESOLVED_SINK_RE = re.compile(r"\.\s*(?:open|dump|dumps|touch|mkdir)\s*\(|\bos\s*\.\s*(?:open|fdopen)\s*\(")
+_BODY_UNRESOLVED_SINK_RE = re.compile(r"\.\s*(?:open|dump|touch|mkdir)\s*\(|\bos\s*\.\s*(?:open|fdopen)\s*\(")
 _BODY_ANY_WRITE_RE =re.compile(r"\.\s*write(?:_text|_bytes|lines)?\s*\(|\bprint\s*\([^)]*\bfile\s*=")
 
 

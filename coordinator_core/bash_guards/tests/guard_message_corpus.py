@@ -1864,6 +1864,7 @@ def _xs_lane_shell_write_setup(
     mp.setattr(tempfile, "gettempdir", lambda: str(scratch_dir / "_tmp"))
     mp.setattr(hook, "_is_bootstrap_or_out_of_repo", lambda file_path: False)
     mp.setattr(xlb, "read_lane", lambda root, sid: lane)
+    mp.setattr(xlb, "record_deny", lambda root, sid: 1)
     mp.setattr(xlb, "touched_s_or_larger", lambda sid, root: False)
     return {_CWD_OVERRIDE_KEY: str(scratch_dir)}
 
@@ -4435,27 +4436,33 @@ def _fire_nudge_em_code_dispatch() -> Optional[Dict[str, Any]]:
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr(_hook_nudge_em_code_dispatch, "_is_bootstrap_or_out_of_repo", lambda file_path: False)
         mp.setattr(xlb, "read_lane", lambda root, sid: record)
+        mp.setattr(xlb, "record_deny", lambda root, sid: 1)
         mp.setattr(xlb, "touched_s_or_larger", lambda sid, root: False)
         return _to_envelope_or_none(_hook_nudge_em_code_dispatch.op(payload))
 
 
-def _fire_nudge_em_code_dispatch_spent(kind: str) -> Optional[Dict[str, Any]]:
+def _fire_nudge_em_code_dispatch_spent(kind: str, denies: int = 0) -> Optional[Dict[str, Any]]:
     from coordinator_core.session import xs_lane_budget as xlb
 
     payload = {
         "tool_input": {"file_path": "/repo/src/module.py", "content": "def foo():\n    return 42\n"},
         "session_id": "sess-nemcd-%s-%s" % (kind, uuid.uuid4().hex),
     }
-    record = {"kind": kind, "state": "spent", "base_sha": "0" * 40, "paths": []}
+    record = {"kind": kind, "state": "spent", "base_sha": "0" * 40, "paths": [], "denies": denies}
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr(_hook_nudge_em_code_dispatch, "_is_bootstrap_or_out_of_repo", lambda file_path: False)
         mp.setattr(xlb, "read_lane", lambda root, sid: record)
+        mp.setattr(xlb, "record_deny", lambda root, sid: 1)
         mp.setattr(xlb, "touched_s_or_larger", lambda sid, root: kind == "residue")
         return _to_envelope_or_none(_hook_nudge_em_code_dispatch.op(payload))
 
 
 def _fire_nudge_em_code_dispatch_xs_over() -> Optional[Dict[str, Any]]:
     return _fire_nudge_em_code_dispatch_spent("xs")
+
+
+def _fire_nudge_em_code_dispatch_xs_closed() -> Optional[Dict[str, Any]]:
+    return _fire_nudge_em_code_dispatch_spent("xs", denies=2)
 
 
 def _fire_nudge_em_code_dispatch_residue_over() -> Optional[Dict[str, Any]]:
@@ -6715,6 +6722,7 @@ HOOK_ROWS: List[HookRow] = [
     ),
     HookRow("nudge_em_code_dispatch", "fire-code-write", True, _fire_nudge_em_code_dispatch),
     HookRow("nudge_em_code_dispatch", "fire-xs-budget-spent", True, _fire_nudge_em_code_dispatch_xs_over),
+    HookRow("nudge_em_code_dispatch", "fire-xs-hand-edits-closed", True, _fire_nudge_em_code_dispatch_xs_closed),
     HookRow(
         "nudge_em_code_dispatch",
         "fire-residue-budget-spent",

@@ -26,7 +26,9 @@ Suppression conditions (no_advisory):
      or a post-landing residue window applies a ruled diff-measured budget
      (`session.xs_lane_budget`: 2 files, 30 changed lines) to the EM's own
      edits; authority is the APM ruling on calibration-ladder findings 60/61
-     (relayed ask R1).
+     (relayed ask R1). The residue window opens on landing (run ids, no live run),
+     superseding an XS lane; an XS lane closes to hand edits after GOLF_DENY_LIMIT
+     projected denies.
 
   6. `op()` ONLY: scratch/tmp paths. Elsewhere `op()` answers the main EM's
      product-code write with a repeating advisory.
@@ -641,6 +643,10 @@ def shell_write_budget(
     return result if handled else None
 
 
+def _closed_text(rec: dict) -> str:
+    return f"XS hand edits closed. {fire_step()} Put `git diff {rec['base_sha'][:12]}` in the ask."
+
+
 class _Unprojectable(Exception):
     """Carries the caller's own reason; rendered without an exception-type prefix."""
 
@@ -657,7 +663,7 @@ def _budget_core(payload: dict, session_id: str, file_path: str, project) -> tup
     try:
         s_plus = xlb.touched_s_or_larger(session_id, root)
         rec = xlb.read_lane(root, session_id)
-        if s_plus and rec is None:
+        if rec is None or rec.get("kind") == xlb.KIND_XS:
             from coordinator_core import warp_live
             from coordinator_core.git import git_state
             from coordinator_core.hooks.flag_em_poll_in_flight import session_workflow_run_ids
@@ -666,7 +672,7 @@ def _budget_core(payload: dict, session_id: str, file_path: str, project) -> tup
                 warp_live.live_run_for_session(root, session_id) is None
             )
             head = git_state.head_sha(root) if landed else None
-            if head and xlb.open_residue_window(root, session_id, head):
+            if head and xlb.open_residue_window(root, session_id, head, supersede_xs=True):
                 rec = xlb.read_lane(root, session_id)
         if rec is None and not s_plus and not _session_sizing_state(payload, session_id)[0]:
             from coordinator_core.git import git_state
@@ -689,6 +695,8 @@ def _budget_core(payload: dict, session_id: str, file_path: str, project) -> tup
         over_text = lambda u: _budget_text("XS budget spent (projected):", u) + " Size S or larger. " + fire_step()
     if rec.get("corrupt"):
         return True, _budget_deny(over_text(xlb.Usage(0, 0, True)))
+    if not residue and xlb.deny_count(rec) >= xlb.GOLF_DENY_LIMIT:
+        return True, _budget_deny(_closed_text(rec))
     try:
         usage = xlb.measure(root, rec, file_path, project())
     except Exception as exc:
@@ -696,14 +704,14 @@ def _budget_core(payload: dict, session_id: str, file_path: str, project) -> tup
         text = f"Budget unmeasurable ({reason}). Make the change as one plain Edit per file."
         return True, _budget_deny(text)
     if usage.over:
-        try:
-            measured = xlb.measure(root, rec, file_path, xlb._read_text(file_path))
-        except Exception:
-            measured = xlb.Usage(0, 0, False)
-        return True, _budget_deny(
-            over_text(usage)
-            + f" Measured from landed diff: {measured.files}/2 files, {measured.lines}/30 lines."
-        )
+        if not residue:
+            try:
+                denies = xlb.record_deny(root, session_id)
+            except Exception:
+                denies = 0
+            if denies >= xlb.GOLF_DENY_LIMIT:
+                return True, _budget_deny(_closed_text(rec))
+        return True, _budget_deny(over_text(usage))
     try:
         xlb.add_path(root, session_id, file_path)
     except Exception:
@@ -724,8 +732,8 @@ def op(payload: dict) -> dict | None:
     (`agent_id` present) is denied only as a size-stage run spawn (`_size_stage_write_deny`).
 
     A recorded XS lane allows in-budget edits and denies the first past 2 files / 30 changed
-    lines; a landed S-or-larger session's residue edits are advised under that budget and denied
-    over it (`_budget_decision`).
+    lines; a landed session's residue edits are advised under that budget and denied over it
+    (`_budget_decision`). A lane closes after GOLF_DENY_LIMIT projected denies.
 
     Exempt: doc/data files, bootstrap/out-of-repo, semantic-bypass
     diffs, scratch/tmp, autonomous mode, and a sentinel carrying a reason

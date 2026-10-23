@@ -2242,6 +2242,22 @@ _LEGITIMIZED_SITES: dict[tuple[str, str, str, str, int], _Legitimation] = {
         "only spawn is the Popen behind that call.",
     ),
     (
+        "dispatch.record_halted_run_landed",
+        "coordinator_core/ops/ceremony/detached_spawn.py",
+        "spawn_detached",
+        "<dynamic>",
+        0,
+    ): _Legitimation(
+        # The op's one launch of the detached close job, via `halted_run_landed._launch`, once per
+        # landing that queues a close-job record. The companion substitutes the function object
+        # (`detached_spawn.spawn_detached`) and asserts exactly one call with the close_background
+        # script; the op's other tests stub `_launch` and assert one call and zero Popen.
+        counter=_SEAM,
+        counted_by="coordinator_core/ops/dispatch_emit/tests/test_halted_run_landed_op.py",
+        executed="Seam substitution under `test_launch_calls_spawn_detached_once_on_close_background` "
+        "(`(args, kwargs), = seen`) and `test_op_spawns_no_process` (`launches == [\"A\"]`).",
+    ),
+    (
         "session.reap",
         "coordinator_core/ops/ceremony/git_native.py",
         "_git._invoke",

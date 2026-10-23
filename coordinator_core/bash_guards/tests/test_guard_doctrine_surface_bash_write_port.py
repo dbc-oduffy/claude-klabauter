@@ -220,6 +220,32 @@ def test_claim_cli_with_a_redirect_or_other_subcommand_still_denies() -> None:
     assert guard._sizing_write_denied("echo x > state/sizings/y.yaml") is True
 
 
+_INVOKE_PROGRAM = (
+    "python3 - <<'E'\n"
+    "import json, subprocess\n"
+    'subprocess.run(["coordinator-invoke", "sizing.accept_exit_criterion", '
+    'json.dumps({"sizing": "state/sizings/x.yaml"})])\n'
+    "E"
+)
+
+
+def test_stdin_program_invoking_a_sizing_op_with_a_sizings_path_is_admitted() -> None:
+    assert guard._sizing_write_denied(_INVOKE_PROGRAM) is False
+    payload = {"tool_name": "Bash", "tool_input": {"command": _INVOKE_PROGRAM}}
+    assert guard.check(payload, SURFACES) is None
+
+
+def test_stdin_program_with_a_real_write_into_sizings_still_denies() -> None:
+    write = _INVOKE_PROGRAM.replace("\nE", '\nopen("state/sizings/x.yaml", "w").write("x")\nE')
+    assert guard._sizing_write_denied(write) is True
+    dump = _INVOKE_PROGRAM.replace(
+        "\nE", '\njson.dump({}, open(p, "w"))\np = "state/sizings/x.yaml"\nE'
+    )
+    assert guard._sizing_write_denied(dump) is True
+    piped = _INVOKE_PROGRAM.replace("\nE", '\nopen(q).write(json.dumps({}))\nE')
+    assert guard._sizing_write_denied(piped) is True
+
+
 def test_escaped_apostrophe_does_not_split_a_quoted_pipe() -> None:
     cmd = r"echo 'it'\''s a | b'"
     assert guard._split_top_level_segments(cmd) == [cmd]

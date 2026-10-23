@@ -2898,6 +2898,35 @@ def test_settings_home_bin_unquoted_allows():
     assert _enveloped(guard.check)(payload) is None
 
 
+@pytest.mark.parametrize(
+    "launcher",
+    [
+        "$HOME/.coordinator-claude-settings/bin/mise-prep-gate",
+        "${HOME}/.coordinator-claude-settings/bin/mise-prep-gate",
+        "${CLAUDE_HOME:-$HOME}/.coordinator-claude-settings/bin/mise-prep-gate",
+    ],
+)
+def test_settings_home_bin_home_prefixed_allows(launcher):
+    payload = _payload(f"{launcher} --repo-root repo plan.md", agent_type="coordinator:executor")
+    assert _enveloped(guard.check)(payload) is None
+
+
+@pytest.mark.parametrize(
+    "launcher",
+    [
+        "$HOME/.coordinator-claude-settings/bin/../../evil",
+        "$HOME/.coordinator-claude-settings/bin/$EVIL",
+        "$HOME/.coordinator-claude-settings/bin/x$(true)",
+        "$HOME/.other-settings/bin/mise-prep-gate",
+        "$HOME/bin/mise-prep-gate",
+    ],
+)
+def test_settings_home_bin_home_prefixed_bad_shapes_still_advise(launcher):
+    result = _enveloped(guard.check)(_payload(f"{launcher} --flag", agent_type="coordinator:executor"))
+    assert result is not None
+    assert "unresolved" in result["hookSpecificOutput"]["additionalContext"]
+
+
 def test_settings_home_bin_other_variable_still_advises():
     # A DIFFERENT variable name in the same shape must NOT be exempt --
     # still an unresolved (opaque) argv0, so it advises (RESHAPE, C18d).

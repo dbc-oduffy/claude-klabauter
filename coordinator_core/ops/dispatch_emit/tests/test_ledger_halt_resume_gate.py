@@ -211,6 +211,28 @@ def test_every_other_case_refuses_when_the_register_has_nothing_to_judge(repo, c
     assert v.arm is None and ALREADY_RAN in v.halt["reason"]
 
 
+def test_already_ran_refusal_names_the_halted_run_route_only_when_a_halted_run_exists(repo):  # noqa: F811
+    from coordinator_core.ops.dispatch_emit.halted_run_route import ROUTE_OP
+
+    _put_s(repo)
+    _landed_repo(repo)
+    with pytest.raises(SizingFireRefused) as bare:
+        resumable_plan(_load(repo), REL, repo, "s")
+    assert bare.value.fields == [ALREADY_RAN]
+
+    run_id = "ask-20261023T121013-e7c4ae"
+    d = repo / "state" / "warp" / run_id
+    d.mkdir(parents=True)
+    (d / "halted.json").write_text(
+        json.dumps({"status": "halted", "sizing_rel": REL, "plan": PLAN_REL}), encoding="utf-8"
+    )
+    with pytest.raises(SizingFireRefused) as routed:
+        resumable_plan(_load(repo), REL, repo, "s")
+    (text,) = routed.value.fields
+    assert text.startswith(ALREADY_RAN + " ") and ROUTE_OP in text and run_id in text
+    assert "sha: <the halt commit>" in text
+
+
 def test_gate_adds_no_spawn_beyond_the_one_git_log(repo, monkeypatch):  # noqa: F811
     _put_s(repo, requirement_register=REGISTER)
     _landed_repo(repo)

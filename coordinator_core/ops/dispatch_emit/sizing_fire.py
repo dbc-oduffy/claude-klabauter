@@ -221,7 +221,8 @@ def resumable_plan(
     landed, as in `read_spine` (`em_discharge_eligible`). A row the EM credited through
     `workflow.revise credit_chunks` on any run of this sizing (`run_credit.credits_for_sizing`) also counts
     landed: one date-floored scandir plus a `credit.jsonl` read per candidate dir, only while a row is
-    still open. One file read, plus one more on the already-ran
+    still open. The "already ran" refusal appends `halted_run_route.halted_route_for_sizing`'s line when a halted
+    run of the sizing is on disk. One file read, plus one more on the already-ran
     path, plus one more (the evidence sidecar) only when an open em-performed row exists; one `git log` only when a
     row is open. With rows left open, a ledger resume
     also needs the newest ledger-check halt's committed record to have staged every one of them
@@ -288,9 +289,11 @@ def resumable_plan(
         halt = _all_landed_halt(root, plan_rel, sizing, sizing_rel, state)
         if halt is not None:
             return ResumePlan(plan_rel, (), ledger=replace(halt, unlanded=tuple(pending)))
-        raise SizingFireRefused(
-            [f"{plan_rel} already ran: every row is landed and nothing is left to judge; residue is a new sizing naming it"]
-        )
+        from coordinator_core.ops.dispatch_emit.halted_run_route import halted_route_for_sizing
+
+        refusal = f"{plan_rel} already ran: every row is landed and nothing is left to judge; residue is a new sizing naming it"
+        route = halted_route_for_sizing(root, sizing_rel)
+        raise SizingFireRefused([f"{refusal} {route}" if route else refusal])
     return ResumePlan(plan_rel, tuple(open_ids), landed_open=landed_open)
 
 

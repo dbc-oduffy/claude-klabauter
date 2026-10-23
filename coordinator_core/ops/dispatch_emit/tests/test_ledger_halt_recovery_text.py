@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from coordinator_core.ops.dispatch_emit import ask_compose
 from coordinator_core.ops.dispatch_emit.ask_compose import compose_ask_script
+from coordinator_core.ops.dispatch_emit.halted_run_route import ROUTE_OP
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
 
 _BLITZ_FN = "  async function planBlitz(args) {\n    return { ready: [] };\n  }"
@@ -39,3 +40,9 @@ def test_ledger_halt_names_revise_run_id_and_scope(monkeypatch):
     assert "verbatim stating scope" not in text
     assert "_ledgerBlocking(_ledger)" in text
     assert "or fix the change" not in text
+
+
+def test_ledger_halt_names_landed_close_route_in_both_rulable_branches(monkeypatch):
+    text = _halt_text(_script(monkeypatch))
+    assert text.count(f"'{ROUTE_OP}'") == 2
+    assert text.count("{run_id: ' + _runId + ', sha: <the halt commit>}.") == 2

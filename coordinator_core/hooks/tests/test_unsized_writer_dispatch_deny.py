@@ -173,3 +173,78 @@ def test_r33_replay(env, monkeypatch):
     assert mod.unsized_writer_dispatch_deny(
         _payload("coordinator:executor", "Apply the change."), "coordinator:executor"
     ) is None
+
+
+def _lane(monkeypatch, rec, run_ids=()):
+    from coordinator_core.hooks import flag_em_poll_in_flight as poll
+    from coordinator_core.hooks import nudge_unrouted_sizing as sizing
+    from coordinator_core.session import xs_lane_budget
+
+    monkeypatch.setattr(poll, "session_workflow_run_ids", lambda s: list(run_ids))
+    monkeypatch.setattr(sizing, "_repo_root", lambda p: "/repo")
+    monkeypatch.setattr(xs_lane_budget, "read_lane", lambda r, s: rec)
+
+
+def _xs(denies):
+    return {"kind": "xs", "state": "open", "base_sha": "a", "paths": [], "denies": denies}
+
+
+def _after(monkeypatch, rec, run_ids=(), stype="coordinator:executor"):
+    _level(monkeypatch, "strict")
+    _set_sized(monkeypatch, True)
+    _lane(monkeypatch, rec, run_ids)
+    return mod.unsized_writer_dispatch_deny(_payload(stype), stype)
+
+
+def test_after_budget_deny_denies_with_fire_step(monkeypatch):
+    from coordinator_core.bash_guards._message_size import MESSAGE_PROSE_CAP_BYTES, measure_envelope
+    from coordinator_core.warp_fire import fire_step
+
+    out = _after(monkeypatch, _xs(1))
+    assert _hso(out)["permissionDecision"] == "deny"
+    reason = _hso(out)["permissionDecisionReason"]
+    assert reason.endswith(fire_step()) and "XS budget denied" in reason
+    assert measure_envelope(out).prose_bytes <= MESSAGE_PROSE_CAP_BYTES
+
+
+def test_after_budget_deny_with_workflow_run_admits(monkeypatch):
+    assert _after(monkeypatch, _xs(1), run_ids=["r1"]) is None
+
+
+def test_after_budget_deny_residue_record_admits(monkeypatch):
+    rec = dict(_xs(2), kind="residue")
+    assert _after(monkeypatch, rec) is None
+
+
+def test_after_budget_deny_zero_denies_or_no_record_admits(monkeypatch):
+    assert _after(monkeypatch, _xs(0)) is None
+    assert _after(monkeypatch, None) is None
+
+
+def test_after_budget_deny_read_failure_admits(monkeypatch):
+    from coordinator_core.session import xs_lane_budget
+
+    _level(monkeypatch, "strict")
+    _set_sized(monkeypatch, True)
+    _lane(monkeypatch, _xs(1))
+
+    def boom(r, s):
+        raise RuntimeError("x")
+
+    monkeypatch.setattr(xs_lane_budget, "read_lane", boom)
+    assert mod.unsized_writer_dispatch_deny(_payload("coordinator:executor"), "coordinator:executor") is None
+
+
+def test_after_budget_deny_non_writer_skips_lane_read_and_spawn(monkeypatch):
+    from coordinator_core.session import xs_lane_budget
+
+    def boom(*a, **k):
+        raise AssertionError("read")
+
+    monkeypatch.setattr(xs_lane_budget, "read_lane", boom)
+    monkeypatch.setattr(subprocess, "Popen", boom)
+    _set_sized(monkeypatch, True)
+    assert mod.unsized_writer_dispatch_deny(_payload("Explore"), "Explore") is None
+    _lane(monkeypatch, _xs(1))
+    monkeypatch.setattr(subprocess, "Popen", boom)
+    assert mod.unsized_writer_dispatch_deny(_payload("coordinator:executor"), "coordinator:executor") is not None

@@ -168,6 +168,7 @@ from coordinator_core.session.record_homes import home_dir
 from coordinator_core.warm.entry_seam import OpUnavailableError, reentrant_dispatch
 from coordinator_core.ops.dispatch_emit import credit_gate, gate_owed, halt_baseline, pre_halt_credit, process_artifact_policy  # noqa: E402 -- sibling-package group
 from coordinator_core.ops.dispatch_emit.land_run import _em_discharged_rows, _leg_footprint_writes  # noqa: E402
+from coordinator_core.ops.dispatch_emit.halted_run_route import halted_refusal, route_suffix  # noqa: E402
 from coordinator_core.ops.dispatch_emit.halt_landing import (  # noqa: E402
     landed_before_halt as _landed_before_halt,
     since_halt_close as _since_halt_close,
@@ -3997,6 +3998,12 @@ def _terminal_commit_inner(
     if missing is not None:
         return missing
 
+    if isinstance(params, dict) and not params.get("script_path"):
+        from coordinator_core.lifecycle import main_worktree_root
+        halted = halted_refusal(main_worktree_root(repo_root), params.get("run_id"), "terminal commit")
+        if halted is not None:
+            return _error(halted, refused="halted-run")
+
     refusal = validate_params("dispatch.terminal_commit", params, _PARAM_FIELDS)
     if refusal is not None:
         return _error(refusal["error"])
@@ -4162,7 +4169,8 @@ def _terminal_commit_inner(
             "params.inline_review is absent -- the run carries no review-stage "
             "output. Run the digest's `terminal_commit_cli` line verbatim (or pass "
             "task_output_path = the Workflow run's output file, the path named in its completion "
-            "notification); else re-emit with a review stage and re-fire",
+            "notification); else re-emit with a review stage and re-fire"
+            + route_suffix(worktree_root, params.get("run_id")),
             refused="unreviewed",
         )
     if not inline_review.get("integration_stem") or inline_review.get("slices") is None:
