@@ -153,6 +153,10 @@ def _baton_drain(ctx: JobContext) -> LegResult:
     """Archive the run's claimed batons that have reached a terminal state."""
     if not ctx.claimed_batons:
         return LegResult("not-applicable", "run claims no baton")
+    from coordinator_core.ops.dispatch_emit import process_artifact_policy
+
+    if not process_artifact_policy.hosts_coordinator_state(ctx.root):
+        return LegResult("not-applicable", "repo not opted into coordinator state")
     from coordinator_core.ops.fleet._common import archive_and_commit
     from coordinator_core.ops.fleet.archive_terminal_handoffs import plan_sweep
 
@@ -992,6 +996,11 @@ def _close_commit(ctx: JobContext) -> LegResult:
     """Land exactly the paths the legs wrote in one Form 4 commit, never a peer's dirty file. A lost
     compare-and-swap re-seeds from the new HEAD (``CLOSE_COMMIT_CAS_RETRIES`` times), then the leg fails
     naming the paths still dirty."""
+    from coordinator_core.ops.dispatch_emit import process_artifact_policy
+
+    if not process_artifact_policy.hosts_coordinator_state(ctx.root):
+        process_artifact_policy.exclude_locally(ctx.root, ctx.written)
+        return _leg("not-applicable", "repo not opted into coordinator state")
     paths = list(dict.fromkeys(ctx.written))
     if not paths:
         return _leg("not-applicable", "no leg wrote a tracked path")

@@ -90,9 +90,24 @@ def test_r21_replay(env):
     third = mod.op(_edit(root, "c.py", "l3\n", "v3 = f(3)\n"))
     assert _is_deny(third)
     assert "XS budget spent" in _reason(third)
-    assert xb.read_lane(root, SID)["state"] == "spent"
+    assert xb.read_lane(root, SID)["state"] == "open"
     again = mod.op(_edit(root, "a.py", "l5\n", "v5 = f(5)\n"))
-    assert _is_deny(again)
+    assert not _is_deny(again)
+
+
+def test_denied_oversized_edit_consumes_nothing_and_one_line_retry_is_admitted(env):
+    root, sha = env
+    xb.open_xs_lane(root, SID, sha)
+    big = "".join(f"x{i}\n" for i in range(42))
+    denied = mod.op(_edit(root, "a.py", _lines(10), big))
+    assert _is_deny(denied)
+    reason = _reason(denied)
+    assert "XS budget spent (projected): 1/2 files, 52/30 lines" in reason
+    assert "Measured from landed diff: 0/2 files, 0/30 lines" in reason
+    rec = xb.read_lane(root, SID)
+    assert rec["state"] == "open" and rec["paths"] == []
+    assert xb.measure(root, rec, str(root / "a.py"), (root / "a.py").read_text()) == (0, 0, False)
+    assert mod.op(_edit(root, "a.py", "l1\n", "v1 = f(1)\n")) is None
 
 
 def op_result(root, rel, old, new):
@@ -105,7 +120,15 @@ def test_line_budget_denies_the_edit_that_crosses_it(env):
     big = "".join(f"x{i}\n" for i in range(21))
     result = mod.op(_edit(root, "a.py", _lines(10), big))
     assert _is_deny(result)
-    assert xb.read_lane(root, SID)["state"] == "spent"
+    assert xb.read_lane(root, SID)["state"] == "open"
+
+
+def test_corrupt_record_still_denies(env):
+    root, _ = env
+    path = xb.lane_path(root, SID)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("not json")
+    assert _is_deny(mod.op(_edit(root, "a.py", "l1\n", "v1 = f(1)\n")))
 
 
 def test_autonomous_does_not_exempt_the_budget(env, monkeypatch):
@@ -247,8 +270,8 @@ def test_residue_over_budget_denies_naming_typed_executor(landed, monkeypatch):
     result = mod.op(_edit(root, "a.py", _lines(10), big))
     assert _is_deny(result)
     assert "python-executor" in _reason(result)
-    assert xb.read_lane(root, SID)["state"] == "spent"
-    assert _is_deny(mod.op(_edit(root, "b.py", "l1\n", "v1 = f(1)\n")))
+    assert xb.read_lane(root, SID)["state"] == "open"
+    assert not _is_deny(mod.op(_edit(root, "b.py", "l1\n", "v1 = f(1)\n")))
 
 
 def test_live_run_means_not_landed(landed, monkeypatch):

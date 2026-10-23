@@ -34,7 +34,7 @@ from typing import Optional
 
 from coordinator_core import dispatch_abandon
 from coordinator_core.ops._path_guard import contained_path, safe_id
-from coordinator_core.ops.dispatch_emit import review_edits, run_artifacts
+from coordinator_core.ops.dispatch_emit import process_artifact_policy, review_edits, run_artifacts
 from coordinator_core.ops.warp_run_deliverable import record_sizing_rel
 from coordinator_core.ops.dispatch_emit import halted_run
 from coordinator_core.ops.dispatch_emit.worktree_snapshot import record_dir_changes
@@ -472,8 +472,16 @@ def _land(
         plan_rel=halted.get(HALT_PLAN_FIELD) if isinstance(halted.get(HALT_PLAN_FIELD), str) else None,
         doc_paths=[d for d in raw_docs if isinstance(d, str)] if isinstance(raw_docs, list) else (),
     ))
+    artifacts, process_withheld = process_artifact_policy.withhold_process_artifacts(worktree_root, artifacts)
+    if process_withheld:
+        declared = [p for p in declared if p != sizing_rel]
+        if sizing_rel:
+            process_withheld[sizing_rel] = process_artifact_policy.WITHHELD_REASON
     baton_rel, baton_error = _stamp_run_baton(worktree_root, run_id, halted["halted"], halt_reason)
-    if baton_rel is not None and baton_rel not in artifacts.by_class.get("baton", ()) and baton_rel not in declared:
+    if process_withheld:
+        if baton_rel is not None:
+            process_withheld[baton_rel] = process_artifact_policy.WITHHELD_REASON
+    elif baton_rel is not None and baton_rel not in artifacts.by_class.get("baton", ()) and baton_rel not in declared:
         declared.append(baton_rel)
     baton_reply: dict = {"run_baton": baton_error} if baton_error is not None else {}
     review_written = _review_written(worktree_root, session_id, run_id)
@@ -492,7 +500,12 @@ def _land(
         ),
         RECORD_DIR_ROOT,
     )
+    artifacts, more_withheld = process_artifact_policy.withhold_process_artifacts(worktree_root, artifacts)
+    process_withheld.update(more_withheld)
     paths, deleted = record_dir_changes(worktree_root, record_dir_rel, snapshot.changed)
+    if process_withheld:
+        process_withheld.update({p: process_artifact_policy.WITHHELD_REASON for p in (*paths, *deleted)})
+        paths, deleted = [], []
 
     product: list = []
     gone: list = []
@@ -503,7 +516,7 @@ def _land(
     tracked_gone = set(_tracked_at_head(worktree_root, gone))
     dropped = [{"path": p, "reason": "deletion-git-cannot-see"} for p in gone if p not in tracked_gone]
     gone = [p for p in gone if p in tracked_gone]
-    withheld: dict = {}
+    withheld: dict = dict(process_withheld)
 
     handled = set(paths) | set(deleted) | set(declared)
     own_record = {p for p in artifacts.paths() if artifacts.class_of(p) == "record-dir"}
@@ -666,6 +679,9 @@ def _land(
         if review_landed:
             landed_classes["review-edit"] = len(review_landed)
     review_reply["review_edits_unlanded"] = unlanded
+
+    if process_withheld:
+        process_artifact_policy.exclude_locally(worktree_root, process_withheld, artifacts.record_dirs)
 
     if not paths and not deleted:
         _settle_ledger_pointer(repo_root, run_id, halted, sizing_rel, outcome_rel)

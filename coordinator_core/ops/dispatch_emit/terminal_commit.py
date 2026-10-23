@@ -34,7 +34,11 @@ Negative-spec:
   - Lands the run's candidate set (``run_artifacts.candidate_paths``: record dir, cited sizing,
     baton, plan, evidence and seam sidecars, delivery note, slice sizings, superseded predecessors'
     record dirs, the docs stage's ``doc_paths``) beside the declared writes, each only when dirty,
-    not gitignored and not held by a live peer's claim; a withheld path is named in
+    not gitignored and not held by a live peer's claim. In a repo that has not opted in
+    (``process_artifact_policy.hosts_coordinator_state`` False: no ``archive/``, no
+    ``state/workstreams/``) the whole set, the bookkeeping record, ask note and plan are withheld
+    as ``repo-not-opted-in`` and excluded locally, and the stamp commit and archive moves are
+    skipped. A withheld path is named in
     ``run_artifacts.withheld`` and the commit proceeds. A path the EM ruled out through
     ``workflow.revise withhold_paths`` (``withhold.jsonl`` in this run's record dir or a
     superseded predecessor's) is left unstaged and dirty, checked before the peer-claim and
@@ -158,7 +162,7 @@ from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.session.claimed_write import replace_text
 from coordinator_core.session.record_homes import home_dir
 from coordinator_core.warm.entry_seam import OpUnavailableError, reentrant_dispatch
-from coordinator_core.ops.dispatch_emit import credit_gate, gate_owed, halt_baseline, pre_halt_credit  # noqa: E402 -- sibling-package group
+from coordinator_core.ops.dispatch_emit import credit_gate, gate_owed, halt_baseline, pre_halt_credit, process_artifact_policy  # noqa: E402 -- sibling-package group
 from coordinator_core.ops.dispatch_emit.land_run import _em_discharged_rows, _leg_footprint_writes  # noqa: E402
 from coordinator_core.ops.dispatch_emit.halt_landing import (  # noqa: E402
     landed_before_halt as _landed_before_halt,
@@ -4363,6 +4367,19 @@ def _terminal_commit_inner(
             record_dirs=artifacts.record_dirs if artifacts is not None else (),
             root=worktree_root,
         )
+    foreign_repo = not process_artifact_policy.hosts_coordinator_state(worktree_root)
+    proc_wh: dict = {}
+    proc_record_dirs: tuple = (*((artifacts.record_dirs) if artifacts is not None else ()), *((record_dir_rel,) if record_dir_rel else ()))
+    if artifacts is not None:
+        artifacts, proc_wh = process_artifact_policy.withhold_process_artifacts(worktree_root, artifacts)
+
+    def _with_process_withheld(reply: dict) -> dict:
+        if proc_wh:
+            ra = reply.setdefault("run_artifacts", {"landed": [], "withheld": {}})
+            ra["withheld"] = dict(sorted({**ra.get("withheld", {}), **proc_wh}.items()))
+            process_artifact_policy.exclude_locally(worktree_root, proc_wh, proc_record_dirs if foreign_repo else ())
+        return reply
+
     review_run_id = _run_id_of(params, ask_run_dir, script_path_raw)
     review_checked = not anchor_only and bool(session_id)
     review_writes: Optional[dict] = None
@@ -4608,7 +4625,7 @@ def _terminal_commit_inner(
     if not all_paths and not art_has_landing:
         if close_ctx is not None:
             close_ctx.clear()
-        return _with_siblings({"committed": False, "nothing_to_commit": not sibling_paths})
+        return _with_process_withheld(_with_siblings({"committed": False, "nothing_to_commit": not sibling_paths}))
 
     if not anchor_only and not plan_artifacts:
         for companion in companions:
@@ -4678,7 +4695,7 @@ def _terminal_commit_inner(
     if not all_paths and not deleted_paths:
         if close_ctx is not None:
             close_ctx.clear()
-        return _with_siblings({"committed": False, "nothing_to_commit": not sibling_paths})
+        return _with_process_withheld(_with_siblings({"committed": False, "nothing_to_commit": not sibling_paths}))
 
     run_owned, owned_deletions = _run_owned_dirt(
         worktree_root, request, snapshot, session_id, all_paths, deleted_paths, touched,
@@ -4712,6 +4729,16 @@ def _terminal_commit_inner(
     # tree: commit_paths refuses the whole commit on it.
     all_paths = [p for p in all_paths if canonical_repo_relative_path_refusal(p) is None]
     deleted_paths = [p for p in deleted_paths if canonical_repo_relative_path_refusal(p) is None]
+
+    if foreign_repo:
+        for p in (bookkeeping_record_path, note_rel, request.plan_path, *record_dir_present, *companions, *seam_own):
+            if p and p not in declared_writes:
+                proc_wh.setdefault(p, process_artifact_policy.WITHHELD_REASON)
+    if proc_wh:
+        all_paths = [p for p in all_paths if p not in proc_wh]
+        deleted_paths = [p for p in deleted_paths if p not in proc_wh]
+        run_owned = [p for p in run_owned if p not in proc_wh]
+        scope["run_owned"] = list(run_owned)
 
     wh_reasons = {
         **_withhold_reasons(worktree_root, artifacts, record_dir_rel),
@@ -4752,13 +4779,14 @@ def _terminal_commit_inner(
                 )
 
     def _with_withheld(reply: dict) -> dict:
+        _with_process_withheld(reply)
         if wh_chunks:
             reply["withheld_chunks"] = wh_chunks
         if wh_unmatched:
             reply["withhold_unmatched"] = wh_unmatched
         return reply
 
-    if wh_map and not all_paths and not deleted_paths:
+    if (wh_map or proc_wh) and not all_paths and not deleted_paths:
         scope.update(root=worktree_root, request=request, snapshot=snapshot)
         if close_ctx is not None:
             close_ctx.clear()
@@ -4865,7 +4893,7 @@ def _terminal_commit_inner(
         if not any(p in changed and p not in run_artifact_paths for p in all_paths):
             if close_ctx is not None:
                 close_ctx.clear()
-            return _with_siblings({"committed": False, "nothing_to_commit": not sibling_paths})
+            return _with_process_withheld(_with_siblings({"committed": False, "nothing_to_commit": not sibling_paths}))
     # Only a path this commit actually carries can absorb a peer's edit: a clean declared path a
     # peer holds is not contention, and refusing on it wedges every review-only close behind it.
     carried = [p for p in all_paths if changed is None or p in changed] + list(deleted_paths)
@@ -5502,7 +5530,7 @@ def _terminal_commit_inner(
                 str(params.get("run_id") or ask_run_dir.name), str(reply["sha"]),
             ))
         shipped_sizing = None
-        if not anchor_only and not incomplete_chunks:
+        if not anchor_only and not incomplete_chunks and not foreign_repo:
             shipped = _ship_cited_sizing(worktree_root, repo_root, request.plan_path)
             shipped_sizing = shipped.pop("sizing_shipped", None)
             reply.update(shipped)
@@ -5567,22 +5595,23 @@ def _terminal_commit_inner(
             and not snapshot.ignored_among([request.plan_path])
         )
         stamp_commit = bool(shipped_sizing) or plan_commits or bool(late_rewrites)
-        reply.update(
-            _stamp_coded_commit(
-                commit_v2, worktree_root, repo_root, source_rows,
-                str(reply["sha"]), session_id,
-                also_commit=also_commit,
-                noop_rows=noop_rows, checkpoint_rows=checkpoint_rows, outside_rows=outside_rows,
-                snapshot=snapshot,
-                flip_plan=request.plan_path if flips else None,
-                flip_reason=_criterion_reason(inline_review), ledger_met=ledger_met,
-                receipt=request.plan_path if plan_commits and reply.get("review_stamp") == "minted" else None,
-                trailers=(f"Sizing-Shipped: {shipped_sizing} {reply['sha']}",) if shipped_sizing else (),
-                commit=stamp_commit,
-                archive_after_flip=archive_targets,
-                memo_closes=_memo_rows_to_close(worktree_root, request),
+        if not foreign_repo:
+            reply.update(
+                _stamp_coded_commit(
+                    commit_v2, worktree_root, repo_root, source_rows,
+                    str(reply["sha"]), session_id,
+                    also_commit=also_commit,
+                    noop_rows=noop_rows, checkpoint_rows=checkpoint_rows, outside_rows=outside_rows,
+                    snapshot=snapshot,
+                    flip_plan=request.plan_path if flips else None,
+                    flip_reason=_criterion_reason(inline_review), ledger_met=ledger_met,
+                    receipt=request.plan_path if plan_commits and reply.get("review_stamp") == "minted" else None,
+                    trailers=(f"Sizing-Shipped: {shipped_sizing} {reply['sha']}",) if shipped_sizing else (),
+                    commit=stamp_commit,
+                    archive_after_flip=archive_targets,
+                    memo_closes=_memo_rows_to_close(worktree_root, request),
+                )
             )
-        )
         flipped = reply.pop("_flip", None)
         stamp_committed = tuple(reply.pop("_committed", ()))
         scope["landed"].update(stamp_committed)

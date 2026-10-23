@@ -1,7 +1,7 @@
 # Privacy Policy
 
 **claude-klabauter** — a control-plane engine by [Dónal
-O'Duffy](https://github.com/dbc-oduffy)
+Example-operator](https://github.com/dbc-oduffy)
 
 Last updated: 2026-08-02
 

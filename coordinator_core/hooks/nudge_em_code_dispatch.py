@@ -658,12 +658,11 @@ def _budget_decision(payload: dict, session_id: str, file_path: str, tool_input:
     residue = kind == xlb.KIND_RESIDUE
     if residue:
         executor, _ = _derive_executor_info(file_path)
-        over_text = lambda u: _budget_text("Residue budget spent:", u) + f" Dispatch {executor} for the rest."
+        over_text = lambda u: _budget_text("Residue budget spent (projected):", u) + f" Dispatch {executor} for the rest."
     else:
-        over_text = lambda u: _budget_text("XS budget spent:", u) + " Size S or larger. " + fire_step()
-    if rec.get("state") == xlb.STATE_SPENT:
-        usage = xlb.Usage(0, 0, True)
-        return True, _budget_deny(over_text(usage))
+        over_text = lambda u: _budget_text("XS budget spent (projected):", u) + " Size S or larger. " + fire_step()
+    if rec.get("corrupt"):
+        return True, _budget_deny(over_text(xlb.Usage(0, 0, True)))
     try:
         projected = xlb.project(file_path, tool_input)
         if projected is None:
@@ -674,10 +673,13 @@ def _budget_decision(payload: dict, session_id: str, file_path: str, tool_input:
         return True, _budget_deny(text)
     if usage.over:
         try:
-            xlb.mark_spent(root, session_id)
+            measured = xlb.measure(root, rec, file_path, xlb._read_text(file_path))
         except Exception:
-            pass
-        return True, _budget_deny(over_text(usage))
+            measured = xlb.Usage(0, 0, False)
+        return True, _budget_deny(
+            over_text(usage)
+            + f" Measured from landed diff: {measured.files}/2 files, {measured.lines}/30 lines."
+        )
     try:
         xlb.add_path(root, session_id, file_path)
     except Exception:

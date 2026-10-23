@@ -747,10 +747,7 @@ def test_a_multi_item_asks_forwards_each_items_preference_to_the_fanout(tmp_path
     "args, needle",
     [
         ({"ask": "a", "route_preference": "shape"}, "route_preference"),
-        ({"ask": "a", "em_rationale": "x" * 2001}, "em_rationale"),
-        ({"ask": "a", "em_rationale": 3}, "em_rationale"),
         ({"asks": [{"ask": "x"}, {"ask": "y", "route_preference": "shape"}]}, "asks[1].route_preference"),
-        ({"asks": [{"ask": "x", "em_rationale": ""}, {"ask": "y"}]}, "asks[0].em_rationale"),
         ({"asks": [{"ask": "x", "route_preference": "shape"}]}, "asks[0].route_preference"),
         ({"sizing": "state/sizings/a.yaml", "route_preference": "plan"}, "a sizing is already sized"),
         ({"sizing": "state/sizings/a.yaml", "em_rationale": "why"}, "a sizing is already sized"),
@@ -763,6 +760,56 @@ def test_an_invalid_or_misplaced_route_preference_is_denied(tmp_path, args, need
     assert _hso(out)["permissionDecision"] == "deny"
     assert needle in _hso(out)["permissionDecisionReason"]
     assert emit.calls == [] and fan.calls == []
+
+
+@pytest.mark.parametrize(
+    "args, want_pref, want_why",
+    [
+        ({"ask": "a", "route_preference": "plan", "em_rationale": "why"}, "plan", "why"),
+        ({"ask": "a", "route_preference": {"route_preference": "plan", "em_rationale": "why"}}, "plan", "why"),
+        ({"ask": "a", "route_preference": {"preference": "Plan", "rationale": "why"}}, "plan", "why"),
+        ({"ask": "a", "route_preference": {"route_preference": "plan", "em_rationale": "nested"},
+          "em_rationale": "flat"}, "plan", "flat"),
+        ({"ask": "a", "route_preference": " PLAN ", "em_rationale": "x" * 5000}, "plan", None),
+        ({"ask": "a", "route_preference": "plan", "em_rationale": ["one", "two"]}, "plan", "one\ntwo"),
+        ({"ask": "a", "route_preference": "plan", "em_rationale": {"k": "v"}}, "plan", '{"k": "v"}'),
+        ({"ask": "a", "route_preference": "plan", "em_rationale": 3}, "plan", "3"),
+        ({"ask": "a", "route_preference": "plan", "em_rationale": ""}, "plan", None),
+        ({"ask": "a", "route_preference": "goal-setting"}, "goal", None),
+        ({"ask": "a", "em_rationale": "why"}, None, "why"),
+        ({"asks": [{"ask": "a", "route_preference": {"route_preference": "goal", "em_rationale": "why"}}]},
+         "goal", "why"),
+        ({"asks": [{"ask": "a", "em_rationale": "x" * 5000}]}, None, None),
+    ],
+)
+def test_a_well_meant_first_call_is_never_refused_for_its_route_preference(tmp_path, args, want_pref, want_why):
+    emit = _Emit()
+    out = mod.evaluate(_payload(_repo(tmp_path), args), emit=emit, fanout=_Fanout([]))
+    assert _hso(out)["permissionDecision"] == "allow", _hso(out)
+    params = emit.calls[0][0]
+    assert params.get("route_preference") == want_pref
+    got = params.get("em_rationale")
+    if want_why is None and got is not None:
+        assert 0 < len(got) <= 2000 and got.endswith("[truncated]")
+    else:
+        assert got == want_why
+
+
+def test_a_multi_item_asks_normalises_each_items_rationale(tmp_path):
+    fan = _Fanout([("r1", "a", (), "ready"), ("r2", "b", (), "ready")])
+    args = {"asks": [{"ask": "x", "route_preference": {"route_preference": "plan", "em_rationale": "w"}},
+                     {"ask": "y", "em_rationale": "z" * 3000}]}
+    out = mod.evaluate(_payload(_repo(tmp_path), args), emit=_Emit(), fanout=fan)
+    assert _hso(out)["permissionDecision"] == "allow", _hso(out)
+    sent = fan.calls[0][0]["asks"]
+    assert sent[0]["route_preference"] == "plan" and sent[0]["em_rationale"] == "w"
+    assert len(sent[1]["em_rationale"]) <= 2000
+
+
+def test_a_remaining_refusal_shows_a_valid_example_in_its_first_line(tmp_path):
+    out = mod.evaluate(_payload(_repo(tmp_path), {"ask": "a", "route_preference": "shape"}), emit=_Emit())
+    first = _hso(out)["permissionDecisionReason"].splitlines()[0]
+    assert "route_preference" in first and 'e.g. route_preference: "plan"' in first
 
 
 def test_the_args_shape_names_the_route_preference_keys():

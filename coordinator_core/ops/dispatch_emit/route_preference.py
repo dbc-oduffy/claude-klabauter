@@ -35,22 +35,80 @@ class RoutePreference:
         return self.route_preference is None and self.em_rationale is None
 
 
+_NESTED_PREFERENCE_KEYS = (ROUTE_PREFERENCE_KEY, "preference", "route", "value")
+_NESTED_RATIONALE_KEYS = (EM_RATIONALE_KEY, "rationale", "reason", "why")
+_TRUNCATION_MARK = " [truncated]"
+
+
 def refusal(where: str, route_preference: object, em_rationale: object) -> Optional[str]:
-    """None when each key is absent or valid; else one sentence naming the offending key."""
+    """None when each key is absent or valid; else one sentence naming the offending key.
+
+    The first line carries a valid example. Call `normalize` first: it repairs every
+    well-meant shape, so a refusal here means the preference itself is unusable.
+    """
     if route_preference is not None and (
         not isinstance(route_preference, str) or route_preference.strip() not in ROUTE_PREFERENCES
     ):
-        return f"{where}.route_preference: not one of {', '.join(ROUTE_PREFERENCES)}."
+        return (
+            f'{where}.route_preference: not one of {", ".join(ROUTE_PREFERENCES)} '
+            f'(e.g. route_preference: "plan").'
+        )
     if em_rationale is not None and (
         not isinstance(em_rationale, str)
         or not em_rationale.strip()
         or len(em_rationale.strip()) > EM_RATIONALE_MAX_CHARS
     ):
         return (
-            f"{where}.em_rationale: not a non-empty string of at most "
-            f"{EM_RATIONALE_MAX_CHARS} chars."
+            f'{where}.em_rationale: not a non-empty string of at most {EM_RATIONALE_MAX_CHARS} '
+            f'chars (e.g. em_rationale: "spans two workstreams").'
         )
     return None
+
+
+def normalize(route_preference: object, em_rationale: object) -> tuple[object, object]:
+    """(route_preference, em_rationale) repaired to the shape `refusal` accepts.
+
+    Repairs: a `route_preference` mapping carrying the preference and/or rationale
+    (a flat `em_rationale` wins over a nested one); a list/number/mapping rationale
+    rendered to text; blank rationale read as absent; an over-length rationale
+    truncated; a preference matched case-insensitively or by its sizing route name.
+    An unrecognisable preference passes through unchanged so `refusal` names it.
+    """
+    pref = route_preference
+    if isinstance(pref, Mapping):
+        nested_why = next((pref[k] for k in _NESTED_RATIONALE_KEYS if pref.get(k) is not None), None)
+        pref = next((pref[k] for k in _NESTED_PREFERENCE_KEYS if pref.get(k) is not None), None)
+        if em_rationale is None:
+            em_rationale = nested_why
+    if isinstance(pref, str):
+        key = pref.strip().lower()
+        by_route = {route: name for name, route in PREFERENCE_ROUTES.items()}
+        key = by_route.get(key, key)
+        pref = key if key in ROUTE_PREFERENCES else pref
+        if not pref.strip():
+            pref = None
+    return pref, _rationale_text(em_rationale)
+
+
+def _rationale_text(value: object) -> object:
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, str):
+        text = value
+    elif isinstance(value, (int, float)):
+        text = str(value)
+    elif isinstance(value, Mapping):
+        text = json.dumps(value, ensure_ascii=False, default=str)
+    elif isinstance(value, (list, tuple)):
+        text = "\n".join(str(v) for v in value if v is not None)
+    else:
+        return value
+    text = text.strip()
+    if not text:
+        return None
+    if len(text) > EM_RATIONALE_MAX_CHARS:
+        text = text[: EM_RATIONALE_MAX_CHARS - len(_TRUNCATION_MARK)].rstrip() + _TRUNCATION_MARK
+    return text
 
 
 def parse(route_preference: object, em_rationale: object) -> RoutePreference:

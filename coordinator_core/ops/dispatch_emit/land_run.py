@@ -2154,8 +2154,21 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
             art_dropped[p] = "never-commit"
         elif p in em_withheld:
             art_dropped[p] = f"withhold_paths: {em_withheld[p]}"
+    process_withheld: dict = {}
+    if artifacts is not None:
+        from coordinator_core.ops.dispatch_emit import process_artifact_policy
+
+        _kept, process_withheld = process_artifact_policy.withhold_process_artifacts(root, artifacts)
+        if process_withheld and bookkeeping_path:
+            process_withheld[bookkeeping_path] = process_artifact_policy.WITHHELD_REASON
+        art_dropped.update(process_withheld)
     art_present = [p for p in art_present if p not in art_dropped]
     art_deleted = [p for p in art_deleted if p not in art_dropped]
+
+    def _exclude_withheld() -> None:
+        if process_withheld:
+            process_artifact_policy.exclude_locally(root, sorted(process_withheld), artifacts.record_dirs)
+
     carried_probe = [*candidates, *art_present, *art_deleted]
     peer_held = _peer_held(root, carried_probe, session_id, rid, script_path)
     for p in candidates:
@@ -2195,10 +2208,12 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
     paths = [p for p in paths if p not in deleted]
     if (
         bookkeeping_path and not product_only and bookkeeping_path not in paths
+        and bookkeeping_path not in process_withheld
         and not machine_local_paths([bookkeeping_path]) and (root / bookkeeping_path).is_file()
     ):
         paths.append(bookkeeping_path)
     if token_state.get("since_halt_close") is not None and not candidates and not (set(deleted) - set(art_deleted)):
+        _exclude_withheld()
         return {
             "committed": False, "nothing_to_commit": True,
             "run_artifacts": {"landed": [], "withheld": {**art_withheld, **art_dropped}},
@@ -2250,9 +2265,10 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
     if not paths and not deleted:
         if params.get("allow_empty") is True or ((anchor_only or request.review_only or fixes_anchor) and _review_trailer(record_abs)):
             paths = [p for p in declared if p not in absent_dropped and (root / p).is_file()]
-            if not paths and request.plan_path and (root / request.plan_path).is_file():
+            if not paths and request.plan_path and request.plan_path not in process_withheld and (root / request.plan_path).is_file():
                 paths = [request.plan_path]
         if not paths and not deleted:
+            _exclude_withheld()
             return {
                 "committed": False, "nothing_to_commit": True,
                 "run_artifacts": {"landed": [], "withheld": {**art_withheld, **art_dropped}},
@@ -2442,6 +2458,7 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
             return _error(f"{type(exc).__name__}: {exc}", refused="commit")
 
     sha = outcome.sha
+    _exclude_withheld()
     token_state["landed"] = True
     _settle_token(token_state, landed=True, receipt={"sha": sha, "rows": credited_ids, "paths": list(paths)})
     if applies:
@@ -2496,6 +2513,7 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
     if landable_artifacts is not None:
         landed_now = set(paths) | set(deleted)
         withheld_art = {**(dict(art_landable.withheld) if art_landable else {}), **art_withheld, **art_dropped}
+        withheld_art.update(process_withheld)
         reply["run_artifacts"] = {
             "landed": sorted(p for p in landable_artifacts.paths() if p in landed_now),
             "withheld": dict(sorted(withheld_art.items())),

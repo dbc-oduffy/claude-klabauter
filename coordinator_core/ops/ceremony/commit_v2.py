@@ -48,6 +48,7 @@ Negative-spec (hard-won, restated for this row):
 
 from __future__ import annotations
 
+import contextlib
 import re
 import sys
 import time
@@ -109,6 +110,9 @@ from coordinator_core.session import liveness as session_liveness
 from coordinator_core.session import scope as session_scope
 from coordinator_core.session import touch_record
 from coordinator_core.git.path_canon import canonical_repo_relative_path_refusal
+from coordinator_core import dispatch_abandon
+from coordinator_core.ops.ceremony.commit_v2_phases import PhaseLedger
+from coordinator_core.telemetry import spawn_counter
 
 
 def detect_class_transition(old_source, new_source):
@@ -861,6 +865,25 @@ def _record_ledger(worktree_root: Path, paths: list, sha: str, message: str) -> 
 
 @register_op("ceremony.commit_v2")
 def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
+    ledger = PhaseLedger()
+    spawn_start = spawn_counter.spawn_count()
+    t0 = time.thread_time()
+    try:
+        return _handler_body(params, repo_root, ledger)
+    finally:
+        with contextlib.suppress(Exception):
+            total_ms = (time.thread_time() - t0) * 1000.0
+            ledger._ms["unbracketed"] = max(0.0, total_ms - sum(ledger._ms.values()))
+            declared = params.get("paths") if isinstance(params, dict) else None
+            ledger.emit(
+                repo_root,
+                abandoned=dispatch_abandon.is_abandoned(),
+                paths=len(declared) if isinstance(declared, list) else 0,
+                spawns=spawn_counter.spawn_count() - spawn_start,
+            )
+
+
+def _handler_body(params: dict, repo_root: Optional[Path], ledger: PhaseLedger) -> dict:
     """JSON-RPC "ceremony.commit_v2" handler -- mutating, sync.
 
     Sync (not async): `commit_paths` does synchronous filesystem I/O only
@@ -1083,7 +1106,8 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     on_main_reason = params.get("on_main_reason")
     if on_main_reason is not None and not isinstance(on_main_reason, str):
         return _error("params.on_main_reason must be a string")
-    main_refusal = main_commit_refusal(worktree_root, override_reason=on_main_reason)
+    with ledger.phase("main_commit_refusal"):
+        main_refusal = main_commit_refusal(worktree_root, override_reason=on_main_reason)
     if main_refusal is not None:
         return _error(main_refusal)
 
@@ -1102,7 +1126,8 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                 skipped_missing=skipped_missing,
             )
 
-    raw_untracked = _expand_untracked_dirs(worktree_root, raw_untracked)
+    with ledger.phase("expand_untracked_dirs"):
+        raw_untracked = _expand_untracked_dirs(worktree_root, raw_untracked)
 
     force_ignored = params.get("force_ignored") or []
     if not isinstance(force_ignored, list) or not all(isinstance(p, str) for p in force_ignored):
@@ -1113,7 +1138,8 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         return _error("params.drop_ignored must be a boolean")
     supplied_ignored = params.get("ignored_untracked")
     if supplied_ignored is None:
-        found_ignored = _ignored_untracked(worktree_root, raw_paths)
+        with ledger.phase("ignored_untracked"):
+            found_ignored = _ignored_untracked(worktree_root, raw_paths)
     elif not isinstance(supplied_ignored, list) or not all(
         isinstance(p, str) for p in supplied_ignored
     ):
@@ -1145,28 +1171,32 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
 
     # Filter FIRST: no path under `_GUARD_MODULE_DIR` means zero work below.
     guard_paths = _guard_module_paths(raw_paths, raw_removed)
-    pre_commit_guard_sources = (
-        _pre_commit_guard_sources(worktree_root, guard_paths) if guard_paths else {}
-    )
+    with ledger.phase("pre_commit_guard_sources"):
+        pre_commit_guard_sources = (
+            _pre_commit_guard_sources(worktree_root, guard_paths) if guard_paths else {}
+        )
 
     # A live peer holding a named path is reported, never refused.
     peer_holds: list = []
     abandoned_holds: list = []
     held_by: dict = {}
-    peer_claim_warnings = _peer_claim_warnings(
-        worktree_root, list(raw_paths) + raw_removed, peer_holds, own_sid=session_id_override,
-        abandoned_holds=abandoned_holds, held_out=held_by,
-    )
+    with ledger.phase("peer_claim_warnings"):
+        peer_claim_warnings = _peer_claim_warnings(
+            worktree_root, list(raw_paths) + raw_removed, peer_holds, own_sid=session_id_override,
+            abandoned_holds=abandoned_holds, held_out=held_by,
+        )
     own_sid = session_id_override
     if own_sid is None:
-        try:
-            own_sid = session_core.resolve_session_id(str(worktree_root))
-        except Exception:  # noqa: BLE001
-            own_sid = None
+        with ledger.phase("resolve_session_id"):
+            try:
+                own_sid = session_core.resolve_session_id(str(worktree_root))
+            except Exception:  # noqa: BLE001
+                own_sid = None
     # own_sid now reaches _peer_claim_warnings above, so the session's own holds drop out of peer warnings.
-    free, contested = _own_left_behind(
-        worktree_root, held_by, own_sid, [*raw_paths, *raw_removed]
-    )
+    with ledger.phase("own_left_behind"):
+        free, contested = _own_left_behind(
+            worktree_root, held_by, own_sid, [*raw_paths, *raw_removed]
+        )
     stopped_carried: dict = {}
     stopped_withheld: dict = {}
     stopped_error: Optional[str] = None
@@ -1174,17 +1204,18 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     if raw_carry_stopped and own_sid and not checkpoint_guard._SUBJECT_RE.match(
         message.split("\n", 1)[0].strip()
     ):
-        try:
-            from coordinator_core.ops.dispatch_emit import stopped_runs
+        with ledger.phase("stopped_runs_residue"):
+            try:
+                from coordinator_core.ops.dispatch_emit import stopped_runs
 
-            stopped = stopped_runs.residue(
-                worktree_root, own_sid, [*raw_paths, *raw_removed]
-            )
-            stopped_carried = {rid: list(ps) for rid, ps in stopped.carried.items()}
-            stopped_withheld = dict(stopped.withheld)
-        except Exception as exc:  # noqa: BLE001
-            stopped_carried, stopped_withheld = {}, {}
-            stopped_error = f"stopped-run residue unavailable ({type(exc).__name__}); nothing carried"
+                stopped = stopped_runs.residue(
+                    worktree_root, own_sid, [*raw_paths, *raw_removed]
+                )
+                stopped_carried = {rid: list(ps) for rid, ps in stopped.carried.items()}
+                stopped_withheld = dict(stopped.withheld)
+            except Exception as exc:  # noqa: BLE001
+                stopped_carried, stopped_withheld = {}, {}
+                stopped_error = f"stopped-run residue unavailable ({type(exc).__name__}); nothing carried"
     # The session's own `.git/` scratch (review-targets.txt) sits in its touch list but never
     # in a tree: carrying it makes commit_paths refuse the whole commit.
     free = [p for p in free if canonical_repo_relative_path_refusal(p) is None]
@@ -1201,7 +1232,8 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         asked = {p.replace("\\", "/") for p in raw_paths} if supplied_ignored is not None else set()
         skip = {p.replace("\\", "/") for p in supplied_ignored or ()}
         unasked = [p for p in probe if p.replace("\\", "/") not in asked]
-        skip |= {p.replace("\\", "/") for p in _ignored_untracked(worktree_root, unasked)} if unasked else set()
+        with ledger.phase("ignored_untracked"):
+            skip |= {p.replace("\\", "/") for p in _ignored_untracked(worktree_root, unasked)} if unasked else set()
         if raw_carry:
             carried = [p for p in free if p not in skip or p in exempt]
         kept_stopped = {p for p in stopped_flat if p not in skip or p in exempt}
@@ -1219,19 +1251,20 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     # Gates run BEFORE the commit lands -- they are refusals, and a refusal
     # after the fact is not one. Contrast `_guard_class_relay_step` below,
     # which runs after and is forbidden from failing the commit.
-    read_source = post_commit_reader(
-        worktree_root,
-        resolve_git_common_dir(worktree_root),
-        paths=raw_paths,
-        deleted_paths=raw_removed,
-        prefer_staged=raw_prefer_staged,
-        prefer_deliberate_stage=raw_prefer_deliberate_stage,
-    )
-    gate_refusal = _pre_commit_gates(
-        worktree_root, raw_paths, raw_removed, read_source,
-        prefer_staged=raw_prefer_staged,
-        deliberate_stage=raw_prefer_deliberate_stage,
-    )
+    with ledger.phase("pre_commit_gates"):
+        read_source = post_commit_reader(
+            worktree_root,
+            resolve_git_common_dir(worktree_root),
+            paths=raw_paths,
+            deleted_paths=raw_removed,
+            prefer_staged=raw_prefer_staged,
+            prefer_deliberate_stage=raw_prefer_deliberate_stage,
+        )
+        gate_refusal = _pre_commit_gates(
+            worktree_root, raw_paths, raw_removed, read_source,
+            prefer_staged=raw_prefer_staged,
+            deliberate_stage=raw_prefer_deliberate_stage,
+        )
     carry_withheld_note: Optional[str] = None
     if gate_refusal is not None:
         # TRAP: the carry is opportunistic and must never cost the run its own landing. A
@@ -1239,19 +1272,20 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         # pass is paid only on a refusal that was already going to stop the commit.
         if not ((carried or stopped_flat) and (own_paths or raw_removed)):
             return _error(gate_refusal)
-        own_reader = post_commit_reader(
-            worktree_root,
-            resolve_git_common_dir(worktree_root),
-            paths=own_paths,
-            deleted_paths=raw_removed,
-            prefer_staged=raw_prefer_staged,
-            prefer_deliberate_stage=raw_prefer_deliberate_stage,
-        )
-        own_refusal = _pre_commit_gates(
-            worktree_root, own_paths, raw_removed, own_reader,
-            prefer_staged=raw_prefer_staged,
-            deliberate_stage=raw_prefer_deliberate_stage,
-        )
+        with ledger.phase("pre_commit_gates_own"):
+            own_reader = post_commit_reader(
+                worktree_root,
+                resolve_git_common_dir(worktree_root),
+                paths=own_paths,
+                deleted_paths=raw_removed,
+                prefer_staged=raw_prefer_staged,
+                prefer_deliberate_stage=raw_prefer_deliberate_stage,
+            )
+            own_refusal = _pre_commit_gates(
+                worktree_root, own_paths, raw_removed, own_reader,
+                prefer_staged=raw_prefer_staged,
+                deliberate_stage=raw_prefer_deliberate_stage,
+            )
         if own_refusal is not None:
             return _error(own_refusal)
         stopped_withheld.update({p: "gate-refused" for p in stopped_flat})
@@ -1264,16 +1298,17 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     # Declared-vs-actual EOL repair for the executables this commit touches (`docs/reference/eol-drift-detection.md`).
     # Filter-first: no `.cmd`/`.ps1`/`.sh`/`.bat` means no spawn and no read. Runs BEFORE the commit; not a
     # refusal. Wrapped: a repair-side exception is worse than the drift. `prefer_staged` paths are excluded.
-    try:
-        prefer_staged_set = set(raw_prefer_staged)
-        eol_candidates = [p for p in raw_paths if p not in prefer_staged_set]
-        eol_drifts = find_declared_eol_drift(worktree_root, eol_candidates)
-        eol_repaired = (
-            repair_declared_eol_drift(worktree_root, eol_drifts) if eol_drifts else []
-        )
-    except Exception:
-        eol_drifts = []
-        eol_repaired = []
+    with ledger.phase("eol_drift"):
+        try:
+            prefer_staged_set = set(raw_prefer_staged)
+            eol_candidates = [p for p in raw_paths if p not in prefer_staged_set]
+            eol_drifts = find_declared_eol_drift(worktree_root, eol_candidates)
+            eol_repaired = (
+                repair_declared_eol_drift(worktree_root, eol_drifts) if eol_drifts else []
+            )
+        except Exception:
+            eol_drifts = []
+            eol_repaired = []
 
     # Attach Session-Id / Deliverable-Id (whichever are resolvable and not
     # already present) via the shared applier -- this route lands via
@@ -1288,22 +1323,25 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     message = _disclose_peer_holds(message, peer_holds + abandoned_holds)
     message = _disclose_gone_deletions(message, reclassified)
     message = _stopped_run_trailers(message, list(stopped_carried))
-    message = apply_missing_trailers(
-        message,
-        worktree_root,
-        list(raw_paths) + raw_removed,
-        session_id_override=session_id_override,
-    )
+    with ledger.phase("apply_missing_trailers"):
+        message = apply_missing_trailers(
+            message,
+            worktree_root,
+            list(raw_paths) + raw_removed,
+            session_id_override=session_id_override,
+        )
 
-    skill_weight_refusal, skill_weight_note = skill_weight_check_worktree(
-        worktree_root, raw_paths, raw_deleted
-    )
+    with ledger.phase("skill_weight_check"):
+        skill_weight_refusal, skill_weight_note = skill_weight_check_worktree(
+            worktree_root, raw_paths, raw_deleted
+        )
     if skill_weight_refusal is not None:
         return _error(skill_weight_refusal)
 
-    allowlist_drift = publish_allowlist_drift_refusal(
-        worktree_root, {p: ("", "") for p in [*raw_paths, *raw_untracked]}
-    )
+    with ledger.phase("publish_allowlist_drift"):
+        allowlist_drift = publish_allowlist_drift_refusal(
+            worktree_root, {p: ("", "") for p in [*raw_paths, *raw_untracked]}
+        )
     if allowlist_drift is not None:
         return _error(allowlist_drift)
 
@@ -1328,10 +1366,11 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     if mixed:
         # Each half is checkpoint-checked inside its own landing; judged here over the whole
         # set so a refusal in the second half cannot follow a landed first.
-        whole_refusal = checkpoint_guard.checkpoint_refusal(
-            worktree_root, resolve_git_common_dir(worktree_root), head_sha(worktree_root),
-            message, list(raw_paths),
-        )
+        with ledger.phase("checkpoint_refusal"):
+            whole_refusal = checkpoint_guard.checkpoint_refusal(
+                worktree_root, resolve_git_common_dir(worktree_root), head_sha(worktree_root),
+                message, list(raw_paths),
+            )
         if whole_refusal:
             return _error(whole_refusal)
 
@@ -1342,29 +1381,30 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     last_error: Optional[dict] = None
     for half_index, (h_paths, h_deleted, h_untracked, h_message) in enumerate(halves):
         is_process = mixed and half_index == 1
-        landing = _land(
-            worktree_root,
-            h_paths,
-            h_message,
-            deleted=h_deleted,
-            untracked=h_untracked,
-            prefer_staged=(
-                [p for p in raw_prefer_staged if (p in proc_set) == is_process]
-                if mixed else raw_prefer_staged
-            ),
-            deliberate_stage=raw_prefer_deliberate_stage,
-            allow_empty=raw_allow_empty and not landed_halves and half_index == len(halves) - 1,
-            declared_reverts=(
-                [p for p in raw_declared_reverts if (p in proc_set) == is_process]
-                if mixed else raw_declared_reverts
-            ),
-            **{
-                name: _half_expectations(exp, h_paths, half_index, mixed, [
-                    p for h in halves for p in h[0]
-                ])
-                for name, exp in expectations.items()
-            },
-        )
+        with ledger.phase("land.process" if is_process else "land.product"):
+            landing = _land(
+                worktree_root,
+                h_paths,
+                h_message,
+                deleted=h_deleted,
+                untracked=h_untracked,
+                prefer_staged=(
+                    [p for p in raw_prefer_staged if (p in proc_set) == is_process]
+                    if mixed else raw_prefer_staged
+                ),
+                deliberate_stage=raw_prefer_deliberate_stage,
+                allow_empty=raw_allow_empty and not landed_halves and half_index == len(halves) - 1,
+                declared_reverts=(
+                    [p for p in raw_declared_reverts if (p in proc_set) == is_process]
+                    if mixed else raw_declared_reverts
+                ),
+                **{
+                    name: _half_expectations(exp, h_paths, half_index, mixed, [
+                        p for h in halves for p in h[0]
+                    ])
+                    for name, exp in expectations.items()
+                },
+            )
         h_all = list(h_paths) + list(h_deleted) + list(h_untracked)
         if landing.error is None:
             assert landing.outcome is not None
@@ -1380,8 +1420,10 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         elif landed_halves:
             unlanded = ", ".join((list(h_paths) + list(h_deleted))[:5])
             for done_paths, done_message, _o, done_sha, _p in landed_halves:
-                _record_ledger(worktree_root, done_paths, done_sha, done_message)
-                _release_committed_claims_step(worktree_root, done_paths)
+                with ledger.phase("record_ledger"):
+                    _record_ledger(worktree_root, done_paths, done_sha, done_message)
+                with ledger.phase("release_committed_claims"):
+                    _release_committed_claims_step(worktree_root, done_paths)
             return _error(
                 f"{landing.error['error']} The product commit {landed_halves[0][3]} landed; "
                 f"these process paths did not: {unlanded}. Retry the same call to land them.",
@@ -1482,13 +1524,15 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
 
     # Same post-commit region, same negative spec: cannot refuse, delay, or fail the landed
     # commit. Release set: raw_paths + raw_deleted, including outcome.no_delta members.
-    _release_committed_claims_step(
-        worktree_root, list(raw_paths) + raw_removed
-    )
+    with ledger.phase("release_committed_claims"):
+        _release_committed_claims_step(
+            worktree_root, list(raw_paths) + raw_removed
+        )
 
     # Same post-commit region, same negative spec. Zero spawns.
     for done_paths, done_message, _o, done_sha, _p in landed_halves:
-        _record_ledger(worktree_root, done_paths, done_sha, done_message)
+        with ledger.phase("record_ledger"):
+            _record_ledger(worktree_root, done_paths, done_sha, done_message)
 
     # Mark the repo for the next push sweep: mark only, never push.
     # `sys.modules` gate: importing the cadence here would charge a cold commit its import graph.

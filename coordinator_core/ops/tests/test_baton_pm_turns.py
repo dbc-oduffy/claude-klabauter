@@ -191,6 +191,31 @@ def test_verify_pm_ask_one_bad_piece_is_unmatched_with_nearest_and_diff(tmp_path
     assert "ask has 'turn' where turn has 'make'" in got["diff"]
 
 
+_PASTE = '<\\pasted_content id="0da2">\n╭ Phases │ alpha beta gamma delta\n╰──╯\n</pasted_content>'
+
+
+def test_verify_pm_ask_ignores_pasted_content_blocks(tmp_path, monkeypatch):
+    _session(tmp_path, monkeypatch, "sid-paste")
+    before, after = "why is apply rulings an opus", "and what does it cost us"
+    turn = f"{before}\n\n```\n\n\n{_PASTE}\n\n{after}"
+    PT.append_turn(turn, session_id="sid-paste")
+    for ask in (f"{before}", f"{before} ``` {after}", turn,
+                "why is apply rulings an opus ``` and what does it cost"):
+        got = PT.verify_pm_ask(ask, session_id="sid-paste")
+        assert got["verdict"] == "matched" and got["turn"]["turn"] == 0, ask
+    unclosed = PT.verify_pm_ask(before, session_id="sid-paste")
+    assert unclosed["verdict"] == "matched"
+    miss = PT.verify_pm_ask("nothing like it at all", session_id="sid-paste")
+    assert miss["verdict"] == "unmatched" and miss["turn"] is None
+    padded = PT.verify_pm_ask(f"{before} plus extra words not said", session_id="sid-paste")
+    assert padded["verdict"] == "unmatched"
+    assert "alpha" not in padded["diff"] and "gamma" not in padded["diff"]
+
+
+def test_strip_pasted_handles_unclosed_block():
+    assert PT.strip_pasted('said this <pasted_content id="1">junk').strip() == "said this"
+
+
 def test_nearest_turn_none_when_no_shared_word(tmp_path, monkeypatch):
     _session(tmp_path, monkeypatch, "sid-nn")
     PT.append_turn("alpha beta gamma", session_id="sid-nn")

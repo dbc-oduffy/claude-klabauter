@@ -52,6 +52,13 @@ A row's `line_hash` is:
    `citation`;
 3. otherwise `null`. A `null` key never carries.
 
+**Optional row key `anchor`.** A string naming a plan `anchor_premises[].id`. It passes through
+merge and carry verbatim and is read by `plan.readiness_verdict`
+(`readiness-verdict-producer-contract.md` § Anchor premises). An anchor row sets `line` to the
+1-based plan line of that anchor's `command:`, so a folded multi-line `claim` never keys to `null`;
+editing the check changes the hash and re-opens the anchor. A non-string `anchor` is refused by the
+readiness op, not by the carry ops.
+
 ## 5. Flagged
 
 A row with verdict `UNRESOLVED` or `CONTRADICTED`. `UNCHECKABLE` and `RESOLVES` rows carry.

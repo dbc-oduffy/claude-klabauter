@@ -19,7 +19,7 @@ from typing import Optional, Sequence
 
 from coordinator_core import dispatch_abandon
 from coordinator_core.ops._path_guard import contained_path, safe_id
-from coordinator_core.ops.dispatch_emit import run_artifacts
+from coordinator_core.ops.dispatch_emit import process_artifact_policy, run_artifacts
 from coordinator_core.ops.dispatch_emit.ask_contract import (
     HALT_DEPENDENTS_UNSTARTED,
     HALT_PLAN_FIELD,
@@ -478,8 +478,16 @@ def _land(
         plan_rel=halted.get(HALT_PLAN_FIELD) if isinstance(halted.get(HALT_PLAN_FIELD), str) else None,
         doc_paths=[d for d in raw_docs if isinstance(d, str)] if isinstance(raw_docs, list) else (),
     ))
+    artifacts, process_withheld = process_artifact_policy.withhold_process_artifacts(root, artifacts)
+    if process_withheld:
+        declared = [p for p in declared if p != sizing_rel]
+        if sizing_rel:
+            process_withheld[sizing_rel] = process_artifact_policy.WITHHELD_REASON
     baton_rel, baton_error = _stamp_run_baton(root, run_id, kind, halt_reason)
-    if baton_rel is not None and baton_rel not in artifacts.by_class.get("baton", ()) and baton_rel not in declared:
+    if process_withheld:
+        if baton_rel is not None:
+            process_withheld[baton_rel] = process_artifact_policy.WITHHELD_REASON
+    elif baton_rel is not None and baton_rel not in artifacts.by_class.get("baton", ()) and baton_rel not in declared:
         declared.append(baton_rel)
     baton_reply = {"run_baton": baton_error} if baton_error is not None else {}
 
@@ -491,6 +499,8 @@ def _land(
         live_run_ids=_live_run_ids(repo_root),
     )
     artifacts = artifacts.with_superseded(superseded, RECORD_DIR_ROOT)
+    artifacts, more_withheld = process_artifact_policy.withhold_process_artifacts(root, artifacts)
+    process_withheld.update(more_withheld)
     extra_tracked = [p for n in superseded for p in _tracked_names_in(root, f"{RECORD_DIR_ROOT}/{n}")]
     probe = sorted({*probe, *artifacts.paths(), *extra_tracked})
     entries = _entries_at(root, None, probe)
@@ -502,9 +512,13 @@ def _land(
     paths = sorted(p for p in differ if p.startswith(record_dir_rel + "/") and "/" not in p[len(record_dir_rel) + 1:])
     deleted = sorted(p for p in gone if p.startswith(record_dir_rel + "/") and "/" not in p[len(record_dir_rel) + 1:])
 
+    if process_withheld:
+        process_withheld.update({p: process_artifact_policy.WITHHELD_REASON for p in (*paths, *deleted)})
+        paths, deleted = [], []
+
     product = [p for p in declared if p in differ]
     removed = [p for p in declared if p in gone]
-    withheld: dict = {}
+    withheld: dict = dict(process_withheld)
     handled = set(paths) | set(deleted) | set(declared)
     own_record = {p for p in artifacts.paths() if artifacts.class_of(p) == "record-dir"}
     rest = run_artifacts.RunArtifacts(
@@ -598,6 +612,9 @@ def _land(
         cls = artifacts.class_of(p)
         if cls:
             landed_classes[cls] = landed_classes.get(cls, 0) + 1
+
+    if process_withheld:
+        process_artifact_policy.exclude_locally(root, process_withheld, artifacts.record_dirs)
 
     if not paths and not deleted:
         _settle_ledger_pointer(repo_root, run_id, halted, sizing_rel, outcome_rel)

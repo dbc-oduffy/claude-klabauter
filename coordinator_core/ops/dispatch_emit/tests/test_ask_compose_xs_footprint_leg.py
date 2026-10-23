@@ -41,7 +41,7 @@ def test_xs_with_no_writes_composes_one_footprint_leg_before_the_gate(arm):
     assert script.index("label: 'footprint'") < script.index("label: 'gate'")
     assert "state/handoffs/b.md" in script[script.index("label: 'footprint'") - 2500 : script.index("label: 'footprint'")]
     assert "_writes = (Array.isArray(_fp?.writes)" in script
-    assert "if (!_writes.length)" in script
+    assert "&& !_writes.length) { const _fp = await" in script
 
 
 def test_xs_with_writes_composes_no_footprint_leg(arm):

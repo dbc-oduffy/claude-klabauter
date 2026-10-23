@@ -193,6 +193,8 @@ EXCLUDED_MODULES = {
         "67-line pure stdlib 3-way line merge; no spawns, no I/O, no commit-route narration.",
     "coordinator_core/ops/ceremony/memo_close_reply.py":
         "137-line memo close-reply sender; spawns nothing, outside the commit route.",
+    "coordinator_core/ops/ceremony/commit_v2_phases.py":
+        "per-dispatch phase telemetry; carries no commit logic.",
     "coordinator_core/ops/ceremony/close_background.py":
         "non-roster module under coordinator_core/ops/ceremony/; unsized by this plan's scope:.",
     "coordinator_core/ops/ceremony/close_review.py":

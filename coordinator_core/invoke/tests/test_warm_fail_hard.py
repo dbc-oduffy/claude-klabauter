@@ -361,6 +361,37 @@ def test_boot_wait_knob_parsing(monkeypatch):
         assert _warm_boot_wait_deadline() == WARM_BOOT_WAIT_SECS, bad
 
 
+@pytest.mark.parametrize("falsy", ["0", "false", "no", "off"])
+def test_env_warm_off_never_contacts_a_warm_engine_for_a_mutating_op(
+    monkeypatch, tmp_path, falsy
+):
+    """`COORDINATOR_WARM=<falsy>` reaches the real `is_warm_enabled` (unpatched)
+    and the dispatch never dials, waits on, or probes a warm engine; the
+    mutating op runs cold."""
+    from coordinator_core.warm import settings
+
+    def _must_not_dial(*a, **kw):
+        raise AssertionError("warm engine contacted with COORDINATOR_WARM off")
+
+    monkeypatch.setenv("COORDINATOR_WARM", falsy)
+    settings._reset_for_test()
+    monkeypatch.setattr(ipc, "_unstamped_dispatch_allowed", False)
+    monkeypatch.delenv(ipc.PYTEST_UNSTAMPED_DISPATCH_ENV, raising=False)
+    monkeypatch.setattr(ipc, "_is_dispatch_engine_stamped", lambda: True)
+    monkeypatch.setattr("coordinator_core.warm.client.try_warm_dispatch", _must_not_dial)
+    monkeypatch.setattr("coordinator_core.invoke.__main__.settle_warm_miss", _must_not_dial)
+    monkeypatch.setattr("coordinator_core.warm.client._op_may_mutate", lambda m: True)
+
+    stdout, stderr, code = _dispatch_argv(
+        ["test.warm_fail_hard_ping", "{}"], str(tmp_path), allow_warm=True
+    )
+
+    assert code == 0
+    assert '"pong":true' in stdout.lower().replace(" ", "")
+    assert "ENGINE UNREACHABLE" not in stderr
+    settings._reset_for_test()
+
+
 def test_warm_disabled_still_falls_through_to_cold(monkeypatch, tmp_path):
     stdout, stderr, code = _run(
         monkeypatch, tmp_path, warm_enabled=False, warm_response=None, allow_unstamped=False

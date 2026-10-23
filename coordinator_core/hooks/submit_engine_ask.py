@@ -153,8 +153,9 @@ def _call_preference(
         return None, None, "route_preference rides an ask; a sizing is already sized."
     if asks_present:
         return None, None, "route_preference and em_rationale ride each asks item, not the call."
-    from coordinator_core.ops.dispatch_emit.route_preference import refusal
+    from coordinator_core.ops.dispatch_emit.route_preference import normalize, refusal
 
+    pref, rationale = normalize(pref, rationale)
     return pref, rationale, refusal("route_preference", pref, rationale)
 
 
@@ -303,8 +304,10 @@ def _asks(tool_input: Mapping[str, Any]) -> tuple[Optional[list], Optional[str]]
     if not isinstance(asks, list) or not asks:
         return None, f"asks must be a non-empty list of {{{', '.join(ASKS_ITEM_KEYS)}}}."
     from coordinator_core.ops.dispatch_emit.ask_contract import ASK_SOURCES
+    from coordinator_core.ops.dispatch_emit.route_preference import normalize as normalize_route
     from coordinator_core.ops.dispatch_emit.route_preference import refusal as route_refusal
 
+    asks = list(asks)
     if len(asks) > 1 and args.get("context") is not None:
         return None, "context rides each asks item (asks[i].context), not the call."
     if args.get("sender") is not None and not isinstance(args["sender"], str):
@@ -328,9 +331,14 @@ def _asks(tool_input: Mapping[str, Any]) -> tuple[Optional[list], Optional[str]]
         relayed_text = item.get("relayed_text")
         if relayed_text is not None and not isinstance(relayed_text, str):
             return None, f"asks[{i}].relayed_text must be a string."
-        route_why = route_refusal(f"asks[{i}]", item.get("route_preference"), item.get("em_rationale"))
-        if route_why:
-            return None, route_why
+        if item.get("route_preference") is not None or item.get("em_rationale") is not None:
+            pref, why = normalize_route(item.get("route_preference"), item.get("em_rationale"))
+            route_why = route_refusal(f"asks[{i}]", pref, why)
+            if route_why:
+                return None, route_why
+            item = {k: v for k, v in item.items() if k not in ("route_preference", "em_rationale")}
+            item.update({k: v for k, v in (("route_preference", pref), ("em_rationale", why)) if v is not None})
+            asks[i] = item
         if item.get("em_context") is not None and not isinstance(item["em_context"], str):
             return None, f"asks[{i}].em_context must be a string."
         label = item.get("label")

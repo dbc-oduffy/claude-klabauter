@@ -2612,14 +2612,25 @@ def _timeout_error_envelope(method: str, op_timeout: float, id_: Any) -> dict:
         }
 
     if _op_may_mutate(method):
+        from coordinator_core.telemetry import op_latency  # noqa: PLC0415 - timeout path only
+
+        warm = op_latency.execution_route() != op_latency.IN_PROCESS
+        lead = (
+            _OP_TIMEOUT_INDETERMINATE_MESSAGE
+            if warm
+            else _OP_TIMEOUT_INDETERMINATE_MESSAGE.replace(
+                "warm dispatch indeterminate", "cold-run dispatch indeterminate", 1
+            ).replace("inside the warm engine", "in this cold (in-process) run", 1)
+        )
         return {
             "jsonrpc": "2.0",
             "id": id_,
             "error": {
                 "code": WARM_DISPATCH_INDETERMINATE,
                 "message": (
-                    f"{_OP_TIMEOUT_INDETERMINATE_MESSAGE} "
-                    f"(op {method!r} timed out after {op_timeout}s and is hung; its thread is "
+                    f"{lead} "
+                    f"(op {method!r} ran {'warm' if warm else 'cold'}, timed out after "
+                    f"{op_timeout}s and is hung; its thread is "
                     f"abandoned, not stopped -- reconcile before any retry)"
                 ),
                 "data": {

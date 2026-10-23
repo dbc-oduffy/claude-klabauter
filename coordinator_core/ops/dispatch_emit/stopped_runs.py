@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Iterable, Optional
 
 from coordinator_core import warp_live
-from coordinator_core.ops.dispatch_emit import run_artifacts, run_token
+from coordinator_core.ops.dispatch_emit import process_artifact_policy, run_artifacts, run_token
 
 STOPPED_RUN_WINDOW_SECONDS: int = run_token.TTL_SECONDS
 
@@ -131,6 +131,9 @@ def residue(
             if owner.get(p, None if p.startswith("docs/plans/") else run_id) != run_id
         }
     every = sorted(set().union(*cands.values()))
+    if not process_artifact_policy.hosts_coordinator_state(root):
+        process_artifact_policy.exclude_locally(root, [p for p in every if os.path.lexists(root / p)])
+        return StoppedResidue({}, {})
     dirty = set(commit_companion.own_left_behind(root, {session_id: every}, session_id, spec))
     if not dirty:
         return StoppedResidue({}, {})
