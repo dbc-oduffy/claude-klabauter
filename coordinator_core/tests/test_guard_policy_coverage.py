@@ -17,6 +17,7 @@ _DENY_SITE = re.compile(r'(?<![A-Za-z0-9_])deny\(|"permissionDecision":\s*"deny"
 
 #: Hook modules that compose a deny without resolving it themselves, each with its reason.
 ALLOWLIST = {
+    "hooks/preuse_bash_dispatch.py": "import-failure fallback; stdlib-only irreversible-harm deny that fires only when the guard chain cannot import, so it cannot import the policy point and every command it denies is floor-class",
     "hooks/stop_dispatch.py": "aggregate of Stop legs, each resolved at the policy point in its own module",
     "hooks/support/message_envelope.py": "envelope builder; the calling hook resolves the level",
     "hooks/support/sentinel_write_guard.py": "builder; no in-tree hook caller",

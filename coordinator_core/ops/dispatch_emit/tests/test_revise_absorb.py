@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-import time
-
 import yaml
 
+from coordinator_core.benchmarks.process_time import in_process_time_ms
 from coordinator_core.ops import requirement_register as rr
 from coordinator_core.ops.dispatch_emit import executor_economy as ee
 from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
@@ -63,9 +62,8 @@ def test_no_new_row_replies_empty(tmp_path):
 def test_unclaimed_row_replies_id_and_text_in_well_under_the_bar(tmp_path):
     root = _repo(tmp_path)
     _revise(root)
-    start = time.perf_counter()
     out = _pending(root)
-    assert time.perf_counter() - start < 0.5
+    assert in_process_time_ms(lambda: _pending(root))["process_time_ms"] < 500
     assert out["rows"] == [{"id": "R2", "text": "also cover Windows"}]
 
 

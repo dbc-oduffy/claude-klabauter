@@ -66,12 +66,26 @@ _SCRATCH_TAIL_RE = re.compile(r"(?<=guard-message-corpus-audience-)[A-Za-z0-9_]+
 
 
 _DAY_BRANCH_RE = re.compile(r"work/[A-Za-z0-9_-]+/\d{4}-\d{2}-\d{2}")
-_PYTHON_RE = re.compile(r'"(?:\$HOME|~|/|[A-Za-z]:)[^"\s]*python[0-9.]*(?:\.exe)?"')
+_PYTHON_PATH = r'(?:\$HOME|~|/|[A-Za-z]:)[^"\s]*python[0-9.]*(?:\.exe)?'
+#: A quoted interpreter path, or an unquoted one standing alone as a command word.
+_PYTHON_RE = re.compile(r'"%s"|(?<![^\s"\'])%s(?=[\s"\'])' % (_PYTHON_PATH, _PYTHON_PATH))
+#: macOS resolves a tmp dir through `/private`, which a guard that realpaths its target
+#: renders in front of the scratch span.
+_REALPATH_PREFIX_RE = re.compile(r"/private(?=<scratch>)")
+#: A clause a guard renders only when the host is Windows. It is a real platform branch
+#: (pinned in test_bump_outside_repo_write), so the host-invariant comparison drops it
+#: from both sides rather than letting whichever platform captured the fixture win.
+_PLATFORM_CLAUSE_RE = re.compile(r"; unquoted backslashes, so bash writes into cwd instead")
+
+
+def _drop_platform_clauses(text: str) -> str:
+    return _PLATFORM_CLAUSE_RE.sub("", text)
 
 
 def _normalise_text(text: str) -> str:
     """Rewrite only what varies per fire or per host: session ids, the per-row scratch
-    dir, the day-branch name a guard suggests, and the interpreter path it renders."""
+    dir, the day-branch name a guard suggests, the interpreter path it renders, the macOS
+    `/private` realpath prefix, and Windows-only clauses."""
     text = _SESSION_RE.sub("<session>", text)
     text = _DAY_BRANCH_RE.sub("work/<machine>/<date>", text)
     text = _PYTHON_RE.sub("<python>", text)
@@ -79,7 +93,8 @@ def _normalise_text(text: str) -> str:
         span = text[start:end].replace("\\", "/")
         span = _SCRATCH_RE.sub("<scratch>", span)
         text = text[:start] + span + text[end:]
-    return text
+    text = _REALPATH_PREFIX_RE.sub("", text)
+    return _drop_platform_clauses(text)
 
 
 def _normalise(value):
@@ -149,13 +164,18 @@ def test_every_speaking_row_matches_the_committed_baseline():
         "baseline keys drifted: missing from render %s; absent from fixture %s"
         % (sorted(set(baseline) - set(rendered)), sorted(set(rendered) - set(baseline)))
     )
-    drifted = sorted(key for key in baseline if rendered[key] != baseline[key])
+    drifted = sorted(
+        key for key in baseline if rendered[key] != _drop_platform_clauses(baseline[key])
+    )
     detail = "".join(
         "\n--- %s\n%s" % (
             key,
             "\n".join(
                 difflib.unified_diff(
-                    baseline[key].splitlines(), rendered[key].splitlines(), lineterm="", n=0
+                    _drop_platform_clauses(baseline[key]).splitlines(),
+                    rendered[key].splitlines(),
+                    lineterm="",
+                    n=0,
                 )
             ),
         )

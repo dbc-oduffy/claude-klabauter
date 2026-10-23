@@ -191,6 +191,9 @@ EXCLUDED_MODULES = {
         "116-line zero-spawn case-spelling resolver; no commit-route narration.",
     "coordinator_core/git/own_delta_merge.py":
         "67-line pure stdlib 3-way line merge; no spawns, no I/O, no commit-route narration.",
+    "coordinator_core/git/residue_classes.py":
+        "74-line pure path-class predicates plus one in-process worktree read; spawns no git, "
+        "no commit-route narration.",
     "coordinator_core/ops/ceremony/memo_close_reply.py":
         "137-line memo close-reply sender; spawns nothing, outside the commit route.",
     "coordinator_core/ops/ceremony/commit_v2_phases.py":

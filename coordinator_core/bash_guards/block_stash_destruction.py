@@ -416,19 +416,14 @@ def _evaluate_powershell(cmd: str, classify=_classify_stash_subcommand) -> Optio
 
 
 def _deny_reason(cmd: str, deny_kind: str) -> str:
-    cmd_safe = cmd if len(cmd) <= 200 else cmd[:200] + "..."
+    del cmd
     return (
-        "BLOCKED: `%s` permanently discards stash content, and on a shared "
-        "tree you cannot tell whose entry sits at a given stack position.\n\n"
-        "  Command:  %s\n\n"
-        "There is no undo -- a dropped stash leaves NO reflog entry.\n\n"
+        "BLOCKED: `%s` discards stash content for good (no reflog entry), and on a "
+        "shared tree the entry at a position may not be yours.\n\n"
         "Use instead:\n"
-        "  - Read content without touching the stack:\n"
-        "        git show stash@{N}:<path> > <path>     (per path)\n"
-        "        git stash show -p stash@{N}            (see the whole diff)\n"
-        "  - Restore your own stash: `git stash pop stash@{N}`, named "
-        "index, never position 0.\n"
-    ) % (deny_kind, cmd_safe)
+        "  - Read: `git show stash@{N}:<path> > <path>` or `git stash show -p stash@{N}`\n"
+        "  - Restore your own: `git stash pop stash@{N}`, never position 0.\n"
+    ) % (deny_kind,)
 
 
 def _record(verdict_kind: str, summary: str, em_text: str, *members: Any) -> Any:

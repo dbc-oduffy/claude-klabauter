@@ -48,8 +48,8 @@
     "doe_commit": "cb819d590e88a1324e0f59d7dde7749746f22219"
   },
   "goal.schema.json": {
-    "blob": "0c2d35e0bfa5d5e828fff60949ddaf0a305e6879",
-    "doe_commit": "cb819d590e88a1324e0f59d7dde7749746f22219"
+    "blob": "1e6c50d5e824450abef9d784fb1b28685218a6e1",
+    "doe_commit": "2eee177a8f4588f92bcc2fb781b2b00f99d5c33c"
   },
   "handoff-archived.schema.json": {
     "blob": "c45753a4646163f50ad91a53cc0a63b6d1d8e4b4",
@@ -68,8 +68,8 @@
     "doe_commit": "fd4a6410358cb567b8af5693a92246a8ef4aecd0"
   },
   "initiative.schema.json": {
-    "blob": "2d12f92ff1c46831e26565af022c70be557c113c",
-    "doe_commit": "cb819d590e88a1324e0f59d7dde7749746f22219"
+    "blob": "25555f5e58f63c844b5f1f9b7c35ce047649f9f3",
+    "doe_commit": "2eee177a8f4588f92bcc2fb781b2b00f99d5c33c"
   },
   "lesson-entry.schema.json": {
     "blob": "d53cedfd36baad3ee7cbe7cda3a9793775ff1d16",
@@ -96,12 +96,12 @@
     "doe_commit": "596ef82bb0f05877b13e8a46944b4faa4def8afc"
   },
   "plan-tasks.schema.json": {
-    "blob": "95d4591f6b1c2f4e404d5375f68ce0bdfa794bc2",
-    "doe_commit": "b00ee0a0e5a46e0c07aef430da8f5a5db707bb90"
+    "blob": "218718519d38a99d0e623e0d33c9b2f20ec47ac2",
+    "doe_commit": "2eee177a8f4588f92bcc2fb781b2b00f99d5c33c"
   },
   "plan.schema.json": {
-    "blob": "8a152a7a11df489c28a700c08e3fbba6be43bb0e",
-    "doe_commit": "1f104e53c4e0c77298e9a5fc145a937d5b237079"
+    "blob": "df722ca7d9a1af6544f4d15fa51e4753973bdd20",
+    "doe_commit": "2eee177a8f4588f92bcc2fb781b2b00f99d5c33c"
   },
   "prior-art-check.schema.json": {
     "blob": "70f770c2a1c104737f62f617b071f577575d309f",

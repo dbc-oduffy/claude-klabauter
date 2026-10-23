@@ -155,6 +155,7 @@ def ssh_repo(repo, tmp_path, monkeypatch):
     return repo
 
 
+@pytest.mark.deliberate_wall_clock(reason="the reply must land inside the dispatcher deadline while signing stalls; a stalled wait burns no CPU")
 def test_stalled_signing_wait_replies_inside_the_dispatcher_deadline(ssh_repo, monkeypatch):
     stall_s = 20.0
     budget_s = dispatch_abandon.REPLY_MARGIN_SECS + 3.0

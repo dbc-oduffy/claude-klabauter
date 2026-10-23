@@ -10,6 +10,15 @@ import coordinator_core.hooks.block_ungranted_opus_subagent as mod
 import coordinator_core.hooks.block_unenumerated_agent_type as unenumerated_mod
 
 
+@pytest.fixture(autouse=True)
+def _sized_session(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pins every test here to a sized session so `check()` never reads live
+    session sizing state; the unsized-dispatch leaf has its own tests."""
+    from coordinator_core.session import engine_route_state
+
+    monkeypatch.setattr(engine_route_state, "session_sizing_state", lambda p, s: (True, False))
+
+
 def _agent_payload(
     subagent_type: str,
     *,

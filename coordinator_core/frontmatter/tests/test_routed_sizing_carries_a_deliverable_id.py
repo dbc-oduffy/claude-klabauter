@@ -32,6 +32,10 @@ its id is load-bearing for every artifact downstream of it.
 Negative-spec:
   - Does NOT police `draft` sizings — see the placeholder-refusal rationale
     above; an unrouted scaffold with no id is a legal, transient state.
+  - Does NOT police `superseded` sizings — terminal, so nothing further is authored
+    off them; one that reached a routed plan was `routed` first and was checked
+    then, and one that went straight from intake to superseded has no plan and
+    so no id to carry. Do not mint ids into them.
   - Does NOT check that downstream artifacts CARRY the root id. That is the
     carry cascade's own job (`coordinator_core/ops/deliverable_carry.py`) and
     a fork already landed is not repairable by a corpus lint; this guard
@@ -51,7 +55,10 @@ import yaml
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _SIZINGS_DIR = _REPO_ROOT / "state" / "sizings"
 
-_EXEMPT_STATUSES = frozenset({"draft"})
+# draft: unrouted scaffold, placeholder title (see module docstring).
+# superseded: terminal — nothing is authored off it any more, and a record that
+# reached a routed plan was checked while `routed`.
+_EXEMPT_STATUSES = frozenset({"draft", "superseded"})
 
 
 def _iter_sizing_files() -> list[Path]:

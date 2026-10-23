@@ -59,7 +59,7 @@ def test_override_changing_a_pinned_model_is_refused(agent_type):
 _MODEL_NAMES = {"haiku", "sonnet", "opus"}
 _UNTYPED = {None, "", "general-purpose"}
 #: Module-level model constants of calls that carry no agent type.
-_UNTYPED_MODEL_CONSTANTS = {"_MECHANICAL_MODEL"}
+_UNTYPED_MODEL_CONSTANTS = {"_MECHANICAL_MODEL", "_RULINGS_MODEL"}
 
 
 def _str_const(node):

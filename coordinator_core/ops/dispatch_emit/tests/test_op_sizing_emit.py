@@ -58,7 +58,22 @@ def _mjs(repo):
     return list(repo.rglob("*.workflow.mjs")) + list(repo.rglob("*.emitted.json"))
 
 
-def test_draft_default_sizing_refused_naming_every_field_and_writes_nothing(repo, capsys):
+def test_scaffold_residue_in_a_settled_sizing_refused_naming_every_field_and_writes_nothing(repo, capsys):
+    _put(
+        repo,
+        "XS",
+        intent="PLACEHOLDER intent",
+        premise={"provenance": "unrecorded", "evidence": "PLACEHOLDER"},
+    )
+    rc = _emit(repo, "--writes", "a.py")
+    err = capsys.readouterr().err
+    assert rc != 0
+    for field in ("intent", "premise.evidence", "premise.provenance"):
+        assert field in err
+    assert _mjs(repo) == []
+
+
+def test_draft_sizing_is_sized_in_run_not_refused(repo):
     _put(
         repo,
         "XS",
@@ -66,12 +81,9 @@ def test_draft_default_sizing_refused_naming_every_field_and_writes_nothing(repo
         intent="PLACEHOLDER intent",
         premise={"provenance": "unrecorded", "evidence": "PLACEHOLDER"},
     )
-    rc = _emit(repo, "--writes", "a.py")
-    err = capsys.readouterr().err
-    assert rc != 0
-    for field in ("status", "intent", "premise.evidence", "premise.provenance"):
-        assert field in err
-    assert _mjs(repo) == []
+    assert _emit(repo, "--writes", "a.py") == 0
+    scripts = list(repo.rglob("*.workflow.mjs"))
+    assert len(scripts) == 1 and "phase('size')" in scripts[0].read_text(encoding="utf-8")
 
 
 def test_writes_outside_repo_root_refused_and_nothing_written(repo, capsys):

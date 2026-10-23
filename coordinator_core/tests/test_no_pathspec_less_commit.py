@@ -412,6 +412,17 @@ _KNOWN_BARE_COMMIT_SITES: frozenset[tuple[str, str, str]] = frozenset(
             "build_fixture",
             "_git",
         ),
+        # THROWAWAY-REPO FIXTURE. `--allow-empty` does NOT make a pathspec moot: a bare commit
+        # still absorbs everything staged in `repo`. Safe only because `repo` is a parameter
+        # whose two callers both pass a repo they just created (`_make_throwaway_clone` in the
+        # same module; `test_git_maintenance._daily_fixture` under tmp_path). RETIRES if the
+        # fixture moves to commit-tree/update-ref or fast-import; becomes a real defect if any
+        # caller passes an ambient repo.
+        (
+            "coordinator_core/benchmarks/maintenance_tier_budget.py",
+            "add_small_packs_and_loose",
+            "run_git",
+        ),
         # SELF-CREATED REPO. Guarded by `if not (dest / ".git").is_dir():` -- the `git init
         # str(dest)` call and this `--allow-empty` commit are inside the same conditional
         # branch, so the commit only ever fires immediately after this function itself just

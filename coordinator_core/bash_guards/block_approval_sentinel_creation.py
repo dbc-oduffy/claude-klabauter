@@ -342,7 +342,7 @@ _WHY_WRITER_CONTEXT_CHANGES = (
     "the script path may change between its heredoc write and its run"
 )
 _WHY_WRITER_NOT_BARE_HEREDOC = (
-    "an earlier segment writes the script other than by a bare cat heredoc"
+    "an earlier segment writes the script, not by a bare cat heredoc"
 )
 _WRITER_REASONS = (
     _WHY_SEVERAL_WRITERS,
@@ -1549,11 +1549,10 @@ def _deny_reason(cmd: str, reason_kind: str, reason_class: str) -> str:
         # Redact the basename out regardless of which sub-path produced it,
         # rather than trusting the branch alone to guarantee echo-safety.
         safe_shape = reason_kind.replace(_TARGET_BASENAME, "<the sentinel>")
-        remedy = (
-            _SEPARATE_CALLS_REMEDY
-            if any(why in reason_kind for why in _WRITER_REASONS)
-            else _LITERAL_PATH_REMEDY
-        )
+        writer_why = next((why for why in _WRITER_REASONS if why in reason_kind), None)
+        if writer_why:
+            safe_shape = writer_why
+        remedy = _SEPARATE_CALLS_REMEDY if writer_why else _LITERAL_PATH_REMEDY
         return indirection_deny_reason("approval-sentinel guard", safe_shape, remedy)
     del reason_kind  # REASON_DIRECT: message below is fixed, not shape-derived.
     safe_argv0 = ", ".join(

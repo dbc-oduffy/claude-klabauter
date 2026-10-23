@@ -2,9 +2,12 @@
 import threading
 import time
 
+import pytest
+
 from coordinator_core import atomic_append
 
 
+@pytest.mark.deliberate_wall_clock(reason="the caller must return while the worker is stalled; a blocked caller burns no CPU")
 def test_stalled_open_does_not_block_caller_and_full_queue_drops(tmp_path, monkeypatch):
     gate = threading.Event()
     landed = []

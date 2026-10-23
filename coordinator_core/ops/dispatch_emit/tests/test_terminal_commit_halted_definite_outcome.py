@@ -77,6 +77,7 @@ def test_short_deadline_before_commit_v2_replies_committed_false_naming_the_step
     assert _git(repo, "rev-parse", "HEAD") == head
 
 
+@pytest.mark.deliberate_wall_clock(reason="the served path must reply inside the dispatch deadline while signing stalls; a stalled wait burns no CPU")
 def test_signing_stall_replies_inside_the_deadline_through_the_served_path(ssh_repo, monkeypatch):
     from coordinator_core.warm import dispatch_ack, server
 

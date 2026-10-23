@@ -204,7 +204,7 @@ def _deny_record(cmd: str, deny_kind: str):
         summary="BLOCKED: `reject`/`targets` are EM-only. `verify` stays available.",
         members=(
             EscalationRoute(
-                report_what="the contested finding, or the write target you need, to your EM",
+                report_what="the contested finding or needed target to your EM",
                 authorize_what="`reject` or `targets --add`",
             ),
         ),

@@ -4354,23 +4354,7 @@ _QUEUE_SCHEMA_PINS = {
 # the stale-ahead branch caught that unprompted, and the pair converged back to
 # an ordinary byte-pin through bin/claude-klabauter-revendor-schema.py. That is the whole
 # intended lifecycle: declare, gate, converge, remove.
-_QUEUE_SCHEMA_AHEAD_PINS: dict = {
-    'plan': {
-        'doe_ref': 'a09fbe88d639e82bd85cf698f7db4a7929f74813',
-        'reason': (
-            'plan.schema.json 2.40.0 admits the typed census entry (kind next-free-number, '
-            'dir, claims) that coordinator_core/roadmap/census.py evaluates; DoE is still at 2.39.0.'
-        ),
-        'provenance': 'docs/plans/2026-10-19-next-free-number-census-entry.md C4',
-        # census.items.required shrinks [question, command, result] to [question, result]: the
-        # typed form has no command, so `command` moves into the anyOf command branch.
-        'exempt_paths': frozenset({
-            ('properties', 'census', 'items', 'required', 1),
-            ('properties', 'census', 'items', 'required', 2),
-        }),
-        'local_shape_hash': '322a694856d4b3902ab1f5b37fa71ce399fb59a8c8a16f0a61dc03f04e4adf8e',
-    },
-}
+_QUEUE_SCHEMA_AHEAD_PINS: dict = {}
 
 
 def _check_vendored_against_doe(name: str, schema_path: Path) -> None:

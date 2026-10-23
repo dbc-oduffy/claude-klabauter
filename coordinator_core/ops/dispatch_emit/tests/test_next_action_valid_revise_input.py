@@ -48,7 +48,9 @@ def test_every_recorded_revise_params_key_is_declared_by_revise():
 
 def test_recorded_note_expression_has_a_nonempty_literal_prefix():
     script = _compose(in_run_commit=True, script_path="x.mjs")
-    assert script.count("note: 'halted: ' + ") == 2
+    # The XS-misrouted stage_by_plan_path next_action carries the same note expression; only the
+    # workflow.revise sites are the ones whose note revise validates.
+    assert script.count("op: 'workflow.revise', params: { run_id: _runId, note: 'halted: ' + ") == 2
 
 
 def test_recorded_revise_params_pass_validation_and_carry_revision_content():

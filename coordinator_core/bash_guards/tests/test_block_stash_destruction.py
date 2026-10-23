@@ -231,9 +231,9 @@ class TestDenyMessage:
     def test_echoes_the_command(self):
         assert "git stash clear" in _reason(_enveloped(guard.check)(_payload("git stash clear")))
 
-    def test_truncates_a_very_long_command(self):
+    def test_does_not_echo_a_very_long_command(self):
         long_cmd = "git stash drop " + ("x" * 500)
-        assert "..." in _reason(_enveloped(guard.check)(_payload(long_cmd)))
+        assert "x" * 50 not in _reason(_enveloped(guard.check)(_payload(long_cmd)))
 
 
 def _advisory_context(out):

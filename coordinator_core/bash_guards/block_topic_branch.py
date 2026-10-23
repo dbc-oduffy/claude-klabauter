@@ -566,13 +566,10 @@ def _deny_reason(ref: str) -> Any:
 
     return _record(
         f"BLOCKED: topic branch `{ref}`; the Group EM grants exceptions. "
-        "The whole command did not run: file writes chained before the "
-        "blocked segment did not happen either.",
-        f"BLOCKED: topic branch `{ref}` -- commit to the day branch "
-        "(work/<machine>/<date>); the Group EM grants exceptions. "
-        "The whole command did not run: file writes chained before the "
-        "blocked segment did not happen either.\n\n"
-        f"Exception: {OVERRIDE_KEY} with a non-empty reason, prefixed on the command.",
+        "The whole command did not run.",
+        f"BLOCKED: topic branch `{ref}` -- commit to the day branch; "
+        "Group EM grants exceptions. The whole command did not run.\n"
+        f"Override: {OVERRIDE_KEY} with a reason, prefixed.",
         AdaptableOffer(template="commit to the day branch work/<machine>/<date>", what_to_adapt="the machine and date"),
         _escalation("the topic branch you need"),
         _override(),

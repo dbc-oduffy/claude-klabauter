@@ -220,9 +220,8 @@ def _deny_record_executor(subagent_type: str = _EXECUTOR_TYPE):
             "an enumerated dispatch kind",
         )
     return _deny_record(
-        "BLOCKED: coordinator:executor can't write docs/plans/*.md via Bash.\n\n"
-        "Stamps go in your run-report sidecar.",
-        "that the plan-body edit is your deliverable, to your EM",
+        "BLOCKED: coordinator:executor can't write docs/plans/*.md via Bash. Stamp via your run-report sidecar.",
+        "this to your EM",
         "an enricher dispatch",
     )
 

@@ -274,8 +274,8 @@ def _deny_record(cmd: str, deny_kind: str):
         ),
         members=(
             EscalationRoute(
-                report_what="BLOCKED to your EM",
-                authorize_what="the grant (EM ratifies with PM, then acquires before dispatch)",
+                report_what="this to your EM",
+                authorize_what="the grant (EM acquires it)",
             ),
         ),
     )

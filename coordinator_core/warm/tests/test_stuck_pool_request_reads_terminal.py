@@ -57,6 +57,7 @@ def test_late_stamp_after_the_bound_still_finishes_the_key():
     assert status["result"] == {"ok": 1}
 
 
+@pytest.mark.deliberate_wall_clock(reason="wait() must return within its timeout on a stuck key; a waiting call burns no CPU")
 def test_wait_on_a_past_bound_key_returns_unknowable_within_its_timeout():
     store = _bounded_store()
     key = dispatch_ack.mint_key()

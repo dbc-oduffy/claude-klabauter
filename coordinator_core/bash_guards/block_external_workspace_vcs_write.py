@@ -365,9 +365,8 @@ def _deny_reason(what: str, key: Optional[str]) -> str:
             "Alternative: run read verbs only, or fix the machine-local registry."
         )
     return (
-        f"BLOCKED: {what} in external workspace `{key}`. {ANCHOR}. It is a registered "
-        "read-only workspace of someone else's code. Alternative: leave the change "
-        "uncommitted; a human makes it through the workspace's own VCS."
+        f"BLOCKED: {what} in external workspace `{key}`. {ANCHOR}. "
+        "Alternative: leave the change uncommitted; a human makes it via the workspace's VCS."
     )
 
 
