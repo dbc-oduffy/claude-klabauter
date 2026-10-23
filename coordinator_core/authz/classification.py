@@ -4199,6 +4199,8 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # ops/__init__.py/_registry_map.py — scratchpad.sweep is the first sweep
     # op registered for JSON-RPC dispatch, not a copy of an existing pattern.
     "scratchpad.sweep": OpClass.MUTATING,
+    # scratch.delete — MUTATING: renames a chunk's declared gitignored scratch/ path into scratch/.deleted/.
+    "scratch.delete": OpClass.MUTATING,
     # dispatch.emit — MUTATING: writes the composed Workflow .mjs script text
     # to a caller-named path (ops/dispatch_emit/op.py). The only handler in
     # the dispatch-emit pipeline that touches disk — every upstream module

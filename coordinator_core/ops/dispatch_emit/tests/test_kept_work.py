@@ -98,3 +98,36 @@ def test_read_malformed_is_empty(tmp_path):
     assert k.read(tmp_path) == empty
     (tmp_path / k.KEPT_FILE).write_text("[1]", encoding="utf-8")
     assert k.read(tmp_path) == empty
+
+
+def _returned(tmp_path, text="DONE: 960449 B"):
+    from coordinator_core.ops.dispatch_emit import row_returns as rr
+
+    rr.write(tmp_path, {"C2": text})
+    return {"paths": {}, "return": rr.digest(text)}
+
+
+def test_kept_chunks_records_finished_writes_empty_row_with_return(tmp_path):
+    (tmp_path / "a").write_bytes(b"a")
+    out = k.kept_chunks(
+        tmp_path, {"a": "C1"}, {"a": "halt-record-only"}, returns={"C1": "x", "C2": "sha"}, finished=["C1", "C2", "C3"]
+    )
+    assert out["C1"] == {"paths": {"a": k.blob_sha(b"a")}}
+    assert out["C2"] == {"paths": {}, "return": "sha"}
+    assert "C3" not in out
+
+
+def test_writes_empty_entry_kept_then_unkept_by_note_and_sha_drift(tmp_path):
+    e = _returned(tmp_path)
+    assert k.still_kept(tmp_path, e, [], "C2", record_dir=tmp_path)
+    assert k.still_kept(tmp_path, e, ["C20 redone"], "C2", record_dir=tmp_path)
+    assert not k.still_kept(tmp_path, e, ["redo C2"], "C2", record_dir=tmp_path)
+    assert not k.still_kept(tmp_path, e, [], "C2")
+    _returned(tmp_path, "DONE: other")
+    assert not k.still_kept(tmp_path, e, [], "C2", record_dir=tmp_path)
+
+
+def test_writes_empty_entry_needs_done_return(tmp_path):
+    e = _returned(tmp_path, "BLOCKED: no")
+    assert not k.still_kept(tmp_path, e, [], "C2", record_dir=tmp_path)
+    assert not k.still_kept(tmp_path, {"paths": {}}, [], "C2", record_dir=tmp_path)

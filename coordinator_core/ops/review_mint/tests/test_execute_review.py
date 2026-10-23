@@ -1397,6 +1397,19 @@ def test_a_truncated_slice_id_matching_exactly_one_real_id_is_attributed_not_hal
     assert result["wave"][0]["slice_id"] == f"{_RUN_PREP_ID}-prep-1+{_RUN_PREP_ID}-prep-2"
 
 
+def test_a_joined_reply_with_a_prefix_truncated_tail_binds_the_unclaimed_real_id():
+    returned = f"{_RUN_PREP_ID}-prep-1+{_RUN_PREP_ID}-p"
+    two = {**_WIDE_PREP, "slices": _WIDE_SLICES[:2]}
+    result = _run_in_wave(two, 9, patch=_with_slice_id(returned))
+    assert "halted" not in result and "error" not in result
+    assert result["wave"][0]["slice_id"] == f"{_RUN_PREP_ID}-prep-1+{_RUN_PREP_ID}-prep-2"
+
+
+def test_a_prefix_truncated_token_with_two_unclaimed_candidates_still_halts():
+    result = _run_in_wave(_WIDE_PREP, 9, patch=_with_slice_id(f"{_RUN_PREP_ID}-p"))
+    assert result["halted"].startswith(SLICE_ID_UNKNOWN_HALT)
+
+
 @pytest.mark.parametrize("returned", ["prep-", "prep-9", f"{_RUN_PREP_ID[:-8]}"])
 def test_an_ambiguous_or_unmatched_slice_id_still_halts(returned):
     result = _run_in_wave(_WIDE_PREP, 9, patch=_with_slice_id(returned))

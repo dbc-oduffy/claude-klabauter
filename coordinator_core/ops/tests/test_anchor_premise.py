@@ -197,6 +197,22 @@ def test_not_evaluable_leaves_none_source_with_suffix(monkeypatch, tmp_path):
     ]
 
 
+def test_without_a_checker_not_evaluable_moves_to_unevaluable_anchors(monkeypatch, tmp_path):
+    from coordinator_core.ops._anchor_premise import anchor_verdicts, unevaluable_anchors
+
+    one = [{**GOOD, "id": "AP1"}]
+    _engine(monkeypatch, "NOT_EVALUABLE", "", "pipe refused")
+    verdicts = anchor_verdicts(one, [], [], "p", tmp_path)
+    assert anchor_findings(one, [], [], "p", tmp_path, verdicts, checker_ran=False) == []
+    assert unevaluable_anchors(verdicts) == [("AP1", "pipe refused")]
+    # no repo_root: nothing was evaluated, so the no-verdict finding stays in either lane
+    bare = anchor_verdicts(one, [], [], "p", None)
+    assert anchor_findings(one, [], [], "p", None, bare, checker_ran=False) == [
+        "anchor-premise-no-verdict: AP1"
+    ]
+    assert unevaluable_anchors(bare) == []
+
+
 def test_row_and_carry_outrank_engine_and_engine_needs_repo_root(monkeypatch, tmp_path):
     from coordinator_core.ops._anchor_premise import anchor_verdicts
 

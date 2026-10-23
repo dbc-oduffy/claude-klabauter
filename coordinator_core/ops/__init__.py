@@ -641,6 +641,7 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
         'registers "fanout.compose", "fanout.census", "fanout.reconcile"',
     ),
     ("coordinator_core.ops.scratchpad_sweep", 'registers "scratchpad.sweep"'),
+    ("coordinator_core.ops.scratch_delete", 'registers "scratch.delete"'),
     ("coordinator_core.ops.memo_fate_partition", 'registers "memo.fate_partition"'),
     ("coordinator_core.ops.memo_fate_backfill", 'registers "memo.fate_backfill"'),
     ("coordinator_core.ops.distill_curation_status", 'registers "distill.curation_status"'),

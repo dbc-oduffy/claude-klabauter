@@ -85,10 +85,11 @@ from coordinator_core.ops.dispatch_emit.pathspec import (
     commit_pathspec_or_none,
     terminal_test_scope,
 )
+from coordinator_core.ops import scratch_delete
 from coordinator_core.ops.requirement_register import pin_drift_reason, plan_pin_drift
 from coordinator_core.ops.review_findings_ledger import LedgerError, targets_add
 from coordinator_core.ops.dispatch_emit.request_validation import Field, validate_params
-from coordinator_core.ops.dispatch_emit import kept_work, requirements_ledger, resume_snapshot, sibling_split
+from coordinator_core.ops.dispatch_emit import kept_work, requirements_ledger, resume_snapshot, row_returns, sibling_split
 from coordinator_core.ops.dispatch_emit.land_run import _DELIVERED_REPORT_RE, _UNDELIVERED_REPORT_RE
 from coordinator_core.ops.dispatch_emit.self_dr_discharge import discharge_clauses
 from coordinator_core.ops.dispatch_emit.sizing_fire import ARM_XS, SizingFireRefused, load_sizing, resolve_arm
@@ -333,12 +334,29 @@ def _kept_row_holds(root: Path, snap: Optional[resume_snapshot.Snapshot], row_id
     try:
         run_dir = record_dir(root, snap.kept_run)
         entry = kept_work.read(run_dir)["chunks"].get(row_id)
-        if not kept_work.still_kept(root, entry, requirements_ledger.read_notes(run_dir), row_id):
+        if not kept_work.still_kept(root, entry, requirements_ledger.read_notes(run_dir), row_id, record_dir=run_dir):
             return False
+        if not entry.get("paths"):
+            return True  # writes-empty: DONE-ness was read from the persisted return
         text = (root / report_rel).read_text(encoding="utf-8")
     except (OSError, ValueError):
         return False
     return bool(_DELIVERED_REPORT_RE.search(text)) and not _UNDELIVERED_REPORT_RE.search(text)
+
+
+def _persisted_return_line(root: Path, kept_run: str, dep: str) -> str:
+    """The brief line naming a kept dependency's persisted return; "" when the kept run holds none."""
+    try:
+        run_dir = record_dir(root, kept_run)
+    except (OSError, ValueError):
+        return ""
+    if dep not in row_returns.read(run_dir):
+        return ""
+    where = row_returns.persisted_path(_rel(root, run_dir))
+    return (
+        f'Row {dep} is kept from run {kept_run}; its return is persisted at {where} under key "{dep}". '
+        "Read it there; do not re-obtain it.\n"
+    )
 
 
 def _kept_brief(kept_run: str) -> str:
@@ -968,6 +986,7 @@ def stage(
     chunks: list[ChunkCommit] = []
     declared: list[str] = []
     brief_sizes: dict[str, int] = {}
+    kept_ids: set[str] = set()
     for wave_no, wave in enumerate(waves):
         for row in wave:
             agent_type = _row_agent_type(row)
@@ -980,6 +999,8 @@ def stage(
                 if agent_type != REVIEWER_AGENT_TYPE and _kept_row_holds(root, resume_snap, row.id, report_rel)
                 else ""
             )
+            if kept_from:
+                kept_ids.add(row.id)
             prior = None if kept_from else _set_aside_prior_report(root, report_rel)
             if kept_from:
                 text = _kept_brief(kept_from)
@@ -991,8 +1012,16 @@ def stage(
                     text = intent + "\n" + text
                 if row.id in clauses:
                     text = text.rstrip() + "\n\n" + clauses[row.id] + "\n"
+                scratch_clause = scratch_delete.brief_clause(run_id, row.id, row.writes)
+                if scratch_clause:
+                    text = text.rstrip() + "\n\n" + scratch_clause + "\n"
                 if prior:
                     text = text.rstrip() + "\n\n" + _prior_report_line(prior) + "\n"
+                for dep in after.get(row.id, ()):
+                    if dep in kept_ids:
+                        line = _persisted_return_line(root, resume_snap.kept_run, dep)
+                        if line:
+                            text = text.rstrip() + "\n\n" + line
             _write(brief, text)
             brief_sizes[row.id] = len(text.encode("utf-8"))
             paths = _widen_with_test_candidates(
@@ -1071,6 +1100,14 @@ def stage(
         r for r in ((run_sizing or {}).get("requirement_register") or {}).get("rows") or [] if isinstance(r, Mapping)
     ]
     ledger_item_ids, withheld_ids = requirements_ledger.ledger_ids(register_rows)
+    held_ids: tuple[str, ...] = ()
+    if ledger_resume:
+        held_ids = derive_held_ids(
+            raw_by_id,
+            _recorded_manifest(record),
+            [r.id for r in manifest_rows],
+            tuple(resume_snap.not_to_run) if resume_snap else (),
+        )
     manifest = StageManifest(
         run_dir=_rel(root, run_dir),
         rows=tuple(manifest_rows),
@@ -1085,7 +1122,7 @@ def stage(
         wave_test_targets=wave_test_targets,
         fanout=fanout.meta_dict(),
         doc_writes=docs,
-        rulable_ids=rulable_ids(register_rows),
+        rulable_ids=without_held_rows(rulable_ids(register_rows), held_ids, raw_by_id),
         ledger_item_ids=ledger_item_ids,
         withheld_ids=withheld_ids,
         retired_resume_rows=retired_resume,
@@ -1093,6 +1130,7 @@ def stage(
         write_baseline=_stage_write_baseline(root, manifest_rows),
         slot_withheld=tuple(slot_withheld_rows(raw_by_id)),
         memo_close=memo_close if not manifest_rows else (),
+        held_ids=held_ids,
     )
     reply_sidecar.write_reply(root, record / "manifest.json", manifest_payload(root, manifest))
     if session_id:
@@ -1112,6 +1150,59 @@ def _adopts_stranded(raw: Optional[Mapping]) -> bool:
     if not isinstance(auth, Mapping) or auth.get("source") != "em-inferred":
         return False
     return re.search(r"\bstranded\b", str(auth.get("rationale") or "")) is not None
+
+
+def derive_held_ids(
+    raw_by_id: Mapping[str, Mapping],
+    recorded: Optional[Mapping],
+    staged_ids: Sequence[str],
+    landed_ids: Sequence[str] = (),
+) -> tuple[str, ...]:
+    """Plan chunks a ledger resume holds unrun, in spine order.
+
+    A `recorded` manifest that carries `held_ids` keeps them. One recorded before the key existed
+    yields the executor-run (non-`verification`) spine rows it neither staged, owed, gated nor
+    slot-withheld, that this stage does not stage and that `landed_ids` does not name. No recorded
+    manifest yields ``()``: nothing says what the run ran.
+
+    Trap: `held_ids` is serialised only when non-empty, so a manifest written by an earlier ledger
+    resume that held nothing reads as pre-change; `landed_ids` (the gate's resume snapshot) is what
+    keeps the rows that run landed from being re-derived as held.
+    """
+    if not isinstance(recorded, Mapping):
+        return ()
+    if "held_ids" in recorded:
+        return tuple(str(i) for i in recorded.get("held_ids") or ())
+    seen = {str(i) for i in (*staged_ids, *landed_ids)}
+    for key in ("rows", "owed", "gated", "slot_withheld", "engine_rows"):
+        seen.update(str(r.get("id")) for r in recorded.get(key) or () if isinstance(r, Mapping))
+    return tuple(
+        rid
+        for rid, raw in raw_by_id.items()
+        if rid not in seen
+        and raw.get("disposition", "open") in _MINTED_DISPOSITIONS
+        and raw.get("change_kind") != "verification"
+    )
+
+
+def without_held_rows(
+    rulable: Sequence[str], held_ids: Sequence[str], raw_by_id: Mapping[str, Mapping]
+) -> tuple[str, ...]:
+    """`rulable` less the register rows a held chunk serves: they have unrun work, so the ledger
+    loop recovers them rather than yielding to an EM ruling."""
+    served = {
+        str(r) for cid in held_ids for r in (raw_by_id.get(cid) or {}).get("register_rows") or ()
+    }
+    return tuple(r for r in rulable if r not in served)
+
+
+def _recorded_manifest(record: Path) -> Optional[dict]:
+    """The run's previously staged `manifest.json`, or None when absent or unreadable."""
+    try:
+        data = json.loads((record / "manifest.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
 
 
 def _stage_write_baseline(root: Path, rows: Sequence[ManifestRow]) -> dict:

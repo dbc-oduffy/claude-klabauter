@@ -646,6 +646,8 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # Spec: this module's own docstring (Two-gate deletion contract /
     # Liveness-scope fix, 2026-08-10).
     "scratchpad.sweep":                       "none",
+    # scratch.delete — "none", MUTATING: the handler resolves its repo from params like scratchpad.sweep.
+    "scratch.delete":                         "none",
     "cartography.count_references":           "none",
     "doctrine.assert_cross_reference_counts": "common_dir",
     "percolate.check_inverse_drift":          "none",

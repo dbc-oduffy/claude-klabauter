@@ -160,6 +160,31 @@ def _rmtree_tolerant(path: str) -> None:
         shutil.rmtree(path, onerror=_skip_error)
 
 
+def _reap_tombstones(path: str, budget: "_Budget") -> int:
+    """Remove every child of a scratch tombstone dir whatever its age; links are unlinked, never followed."""
+    removed = 0
+    if _is_link(path):
+        return 0
+    try:
+        children = list(os.scandir(path))
+    except OSError:
+        return 0
+    for child in children:
+        if budget.stopped:
+            break
+        try:
+            if _is_link(child.path) or not child.is_dir(follow_symlinks=False):
+                os.unlink(child.path)
+            else:
+                _rmtree_tolerant(child.path)
+            removed += 1
+        except OSError:
+            continue
+        finally:
+            budget.check()
+    return removed
+
+
 def _prune_level(
     path: str,
     level: int,
@@ -352,6 +377,11 @@ def prune(
             keep = keep_live
         elif root.parent == coord_parent:
             keep = frozenset({_PYTEST_CHILD})
+        elif repo_root and root == Path(repo_root, "scratch"):
+            from coordinator_core.ops.scratch_delete import TOMBSTONE_DIRNAME
+
+            keep = frozenset({TOMBSTONE_DIRNAME})
+            removed += _reap_tombstones(str(root / TOMBSTONE_DIRNAME), budget)
         removed += _prune_level(
             str(root), 0, depth, now - retention_days * 86400, session_id, tracked, budget, keep
         )

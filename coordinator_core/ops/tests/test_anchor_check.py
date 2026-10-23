@@ -189,3 +189,18 @@ def test_zero_spawn(root, monkeypatch):
     monkeypatch.setattr(os, "system", boom)
     assert evaluate("grep -c foo a.txt && grep -c one b.txt", "3 then 1", root)["state"] == "MATCH"
     assert evaluate("find . | wc -l", "1", root)["state"] == "NOT_EVALUABLE"
+
+
+def test_evaluable_accepts_grep_stages():
+    assert _anchor_check.evaluable("grep -c foo a.txt") is None
+    assert _anchor_check.evaluable("grep -c foo a.txt && grep -c one b.txt") is None
+
+
+def test_evaluable_refuses_with_detail():
+    assert _anchor_check.evaluable("ls -d bin | wc -l") == "unsupported shell operator '|'"
+    assert _anchor_check.evaluable("wc -l x") == "only grep stages are evaluable"
+
+
+def test_grammar_names_grep_c():
+    assert "grep -c" in _anchor_check.GRAMMAR
+    assert "\n" not in _anchor_check.GRAMMAR

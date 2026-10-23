@@ -3493,6 +3493,33 @@ def _indirection_advisory_summary(wrapper_shape: str) -> str:
     return f"ADVISORY: indirection wrapper, payload opaque, not blocked -- shape: {wrapper_shape}."
 
 
+def _rm_operand_under_repo_scratch(cmd: str) -> bool:
+    """True when an rm operand has a ``scratch`` segment directly under a repo root
+    (relative ``scratch/...`` or an absolute path whose parent holds ``.git``)."""
+    try:
+        tokens = shlex.split(cmd)
+    except ValueError:
+        return False
+    for tok in tokens:
+        if tok.startswith("-"):
+            continue
+        parts = tok.replace("\\", "/").split("/")
+        for i, seg in enumerate(parts[:-1]):
+            if seg != "scratch":
+                continue
+            if i == 0:
+                return True
+            if os.path.exists("/".join(parts[:i]) + "/.git"):
+                return True
+    return False
+
+
+_SCRATCH_DELETE_ROUTE_LINE = (
+    "  - A chunk's declared delete under scratch/ goes through\n"
+    "    `coordinator-invoke scratch.delete`.\n"
+)
+
+
 def _build_reason(
     deny_kind: str, agent_id: str, effective_type: str, cmd_safe: str, cmd: str = ""
 ) -> str:
@@ -3712,7 +3739,8 @@ def _build_reason(
             "`rm -r`/`rm -f` (recursive or force) is denied OUTRIGHT for subagents —\n"
             "including against your own session's scratchpad. There is no sandbox-\n"
             "scoped, path-based, or any other exception this guard will honor.\n\n"
-            "Safe forward paths:\n"
+            + (_SCRATCH_DELETE_ROUTE_LINE if _rm_operand_under_repo_scratch(cmd) else "")
+            + "Safe forward paths:\n"
             "  - Cleaning up your OWN scratchpad? You almost certainly do not need\n"
             "    this command. Unflagged `rm <file>` and `rmdir <dir>` are permitted\n"
             "    and are enough for throwaway files you created. Do NOT escalate\n"

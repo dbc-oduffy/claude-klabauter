@@ -85,8 +85,11 @@ blocking finding:
 - `anchor-premises-undeclared`: the key is absent.
 - `anchor-premise-unchecked: <id>`: malformed entry, missing or blank check, or a `command` that
   `census.screen` refuses.
-- `anchor-premise-no-verdict: <id>`: no row resolves the anchor. When the engine check was
-  NOT_EVALUABLE the finding ends `(check not evaluable in-process: <detail>)`.
+- `anchor-premise-no-verdict: <id>`: no row resolves the anchor, and `premise` or a `premise-check`
+  review is present. When the engine check was NOT_EVALUABLE the finding ends `(check not
+  evaluable in-process: <detail>)`. With neither present (no premise-checker ran) and the engine
+  check NOT_EVALUABLE, the anchor is no finding: it is a `mechanical_repairs` entry of kind
+  `anchor-check-not-evaluable` naming the grammar, so the plan is rewritten to fit it.
 - `anchor-premise-unknown: <id>`: a passed row names an `anchor` no declared entry carries.
 - `anchor-premises-unjudged: <reason>`: the plan could not be read; the reply pulls.
 - `anchor-premise-malformed-row: rows[<i>] (not a mapping)`: a passed `premise.rows` entry is not a
@@ -97,7 +100,11 @@ blocking finding:
 plan's premise-carry file (`premise-carry-contract.md` § 2) with `anchor: <id>` counts only while
 its `line_hash` is still among the plan's line hashes. A null or stale hash (the anchor line was
 edited) is no verdict. With neither, the engine check decides: MATCH is `RESOLVES`, MISMATCH is
-`CONTRADICTED`, and NOT_EVALUABLE leaves the anchor with no verdict. An explicit row or live carry
+`CONTRADICTED`, and NOT_EVALUABLE leaves the anchor with no verdict (a finding when checker output
+is present, a mechanical repair when not; see the findings list). The in-process grammar
+(`_anchor_check.GRAMMAR`; shlex, posix): `stage := grep FLAGS (PATTERN | (-e PATTERN)+) FILE`, FLAGS
+= `c` plus at most one of `E` or `F`; `command := stage ("&&" stage)*`; `expect := N | >=N | <=N |
+>N | <N | "N then M [then K ...]"`. Anything else is NOT_EVALUABLE. An explicit row or live carry
 row always outranks the engine. The reply's `anchor_verdicts` lists `{id, verdict, source,
 observed}` per declared anchor, `source` being `row | carry | engine-check | none`. Matching is an
 exact declared-id match first, then a list or same-prefix range spec crediting each declared member
@@ -111,7 +118,8 @@ as no verdict: the search continues to a later passed row or a live carry row.
 **Two rules, one reason.** "Only `UNRESOLVED` and `CONTRADICTED` rows block" holds for citation rows
 (approved ruling: `docs/plans/2026-10-15-premise-uncheckable-never-blocks.md`). An anchor row blocks
 on any verdict but `RESOLVES`: the route rests on it, so unverifiable means halt or re-plan.
-Non-anchor `UNCHECKABLE` rows stay notes.
+Non-anchor `UNCHECKABLE` rows stay notes. A gate never requires a verdict its lane cannot produce:
+the premise-checker runs at L and above, so below it a NOT_EVALUABLE anchor is repaired, not blocked.
 
 **Clear vocabulary.** A coverage or review verdict reads as clear (case-insensitive) when it is one
 of `approve`, `approved`, `pass`, `passed`, `clear`, `clean`, `ready`, `ok`, `accept`, `accepted`,

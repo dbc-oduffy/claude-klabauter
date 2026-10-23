@@ -39,6 +39,7 @@ from coordinator_core.ops.warp_run_deliverable import record_sizing_rel
 from coordinator_core.ops.dispatch_emit import halted_run
 from coordinator_core.ops.dispatch_emit.worktree_snapshot import record_dir_changes
 from coordinator_core.ops.dispatch_emit.halted_run import write_halt_marker
+from coordinator_core.ops.dispatch_emit.row_returns import CONSUMED_RETURNS_PARAM
 from coordinator_core.ops.dispatch_emit.ask_contract import (
     HALT_DEPENDENTS_UNSTARTED,
     HALT_REASON_FIELDS,
@@ -422,27 +423,81 @@ def _manifest_baseline(record_dir: Path) -> Optional[dict]:
     return base if isinstance(base, dict) and base else None
 
 
+def _manifest_kept_from(record_dir: Path) -> dict:
+    """``{row id: prior run id}`` for each row the run manifest stages ``kept_from``; empty when unreadable."""
+    import json
+
+    try:
+        data = json.loads((record_dir / "manifest.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    rows = data.get("rows") if isinstance(data, dict) else None
+    return {
+        r["id"]: r["kept_from"]
+        for r in rows or ()
+        if isinstance(r, dict) and isinstance(r.get("id"), str) and isinstance(r.get("kept_from"), str) and r["kept_from"]
+    }
+
+
+def _carried_returns(root: Path, record_dir: Path, returns: dict) -> dict:
+    """``returns`` with each kept-from-prior-run row's text replaced by that run's persisted entry
+    (a kept row's reply is a stub); a row with no such entry keeps its own text."""
+    from coordinator_core.ops.dispatch_emit import row_returns
+
+    out = dict(returns)
+    for row, prior in _manifest_kept_from(record_dir).items():
+        if row not in out or not safe_id(prior):
+            continue
+        entry = row_returns.read(root / RECORD_DIR_ROOT / prior).get(row)
+        if entry is not None:
+            out[row] = entry["text"]
+    return out
+
+
 def _record_kept(
-    root: Path, record_dir_rel: str, owner: dict, withheld: dict, halted: dict, paths: list
+    root: Path, record_dir_rel: str, owner: dict, withheld: dict, halted: dict, paths: list,
+    consumed_returns: Optional[dict] = None,
 ) -> dict:
-    """Write ``kept.json`` beside the withheld map; append its path to ``paths`` (in place) so it
-    lands with the record, and stamp it on the marker as ``next_action.resume.stage``. Returns ``{"kept": {...}}`` when anything was recorded, else ``{}``."""
-    from coordinator_core.ops.dispatch_emit import kept_work
+    """Write ``kept.json`` beside the withheld map and ``returns.json`` beside it when
+    ``consumed_returns`` (row id to reply) holds a str entry; append their paths to ``paths`` (in
+    place) so they land with the record, and stamp ``kept.json`` on the marker as
+    ``next_action.resume.stage``. Returns ``{"kept": {...}}`` (plus ``"returns": [ids]``) when anything was recorded, else ``{}``."""
+    from coordinator_core.ops.dispatch_emit import kept_work, row_returns
 
     record_dir = root / record_dir_rel
     if not record_dir.is_dir():
         return {}
-    chunks = kept_work.kept_chunks(root, owner, withheld, _manifest_baseline(record_dir))
+    returns = {
+        k: v for k, v in (consumed_returns.items() if isinstance(consumed_returns, dict) else ())
+        if isinstance(k, str) and isinstance(v, str)
+    }
+    persisted: dict = {}
+    if returns:
+        returns = _carried_returns(root, record_dir, returns)
+        if row_returns.write(record_dir, returns) is not None:
+            persisted = {k: v["sha256"] for k, v in row_returns.read(record_dir).items()}
+            returns_rel = row_returns.persisted_path(record_dir_rel)
+            if returns_rel not in paths:
+                paths.append(returns_rel)
+    owning = set(owner.values())
+    chunks = kept_work.kept_chunks(
+        root, owner, withheld, _manifest_baseline(record_dir),
+        returns=persisted, finished=[r for r in persisted if r not in owning],
+    )
     gate = kept_work.plan_gate(halted, root)
     written = kept_work.write(record_dir, chunks, gate)
+    reply: dict = {"returns": sorted(persisted)} if persisted else {}
     if written is None:
-        return {}
+        return reply
     rel = f"{record_dir_rel}/{kept_work.KEPT_FILE}"
     if rel not in paths:
         paths.append(rel)
     kept = {"chunks": sorted(chunks), "plan_gate": gate is not None}
-    halted_run.record_resume_stage(record_dir, {"kept": rel, **kept})
-    return {"kept": kept}
+    stage = {"kept": rel, **kept}
+    if persisted:
+        stage["returns"] = sorted(persisted)
+    halted_run.record_resume_stage(record_dir, stage)
+    return {"kept": kept, **reply}
 
 
 def _land(
@@ -746,7 +801,9 @@ def _land(
         message += "\nRemoves: " + ", ".join(deleted)
     if (worktree_root / record_dir_rel).is_dir():
         halted_run.record_withheld(worktree_root / record_dir_rel, withheld)
-    kept_reply = _record_kept(worktree_root, record_dir_rel, owner, withheld, halted, paths)
+    kept_reply = _record_kept(
+        worktree_root, record_dir_rel, owner, withheld, halted, paths, params.get(CONSUMED_RETURNS_PARAM)
+    )
     commit_params: dict = {"paths": paths, "message": message, "carry_stopped_runs": False}
     if deleted:
         commit_params["deleted_paths"] = deleted

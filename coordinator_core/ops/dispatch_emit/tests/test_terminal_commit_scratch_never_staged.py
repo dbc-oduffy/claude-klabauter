@@ -108,6 +108,26 @@ def test_declared_scratch_write_is_not_committed_and_is_reported(repo):
     assert out.get("ok", True) is True
 
 
+def test_declared_scratch_path_removed_by_the_run_does_not_halt_commit(repo):
+    (repo / ".gitignore").write_text("scratch/\n", encoding="utf-8")
+    _git(["add", ".gitignore"], repo)
+    _git(["commit", "-q", "-m", "ignore scratch"], repo)
+    (repo / "scratch" / "baseline-x").mkdir(parents=True)
+    (repo / "scratch" / "baseline-x" / "f.txt").write_text("x\n", encoding="utf-8")
+    (repo / "src").mkdir()
+    (repo / "src" / "product.py").write_text("p\n", encoding="utf-8")
+    (repo / "scratch" / "baseline-x" / "f.txt").unlink()
+    (repo / "scratch" / "baseline-x").rmdir()
+    request = CommitRequest(
+        chunks=(ChunkCommit(id="X1", title="t", paths=("src/product.py", "scratch/baseline-x")),)
+    )
+    out = _run(repo, request)
+    assert out["committed"] is True, out
+    assert "error" not in out and out.get("ok", True) is True
+    assert "src/product.py" in _tree(repo)
+    assert not [p for p in _tree(repo) if p.startswith("scratch/")]
+
+
 def test_run_with_only_scratch_declared_commits_nothing(repo):
     (repo / "scratch").mkdir()
     (repo / "scratch" / "only.txt").write_text("x\n", encoding="utf-8")

@@ -158,3 +158,32 @@ def test_leg_passes_repo_root_to_spawn(tmp_path, monkeypatch):
     disp._prune_claude_temp_leg({"payload": {"session_id": "s", "cwd": str(repo)}})
     assert len(spawned) == 1
     assert spawned[0][2] == ["s", str(repo.resolve())]
+
+
+def test_fresh_tombstone_child_reaped_fresh_sibling_and_tombstone_dir_kept(tmp_path):
+    from coordinator_core.ops.scratch_delete import TOMBSTONE_DIRNAME
+
+    repo = _repo(tmp_path)
+    tomb = repo / "scratch" / TOMBSTONE_DIRNAME
+    dead = _unit(tomb, "baseline-1", 0)
+    fresh = _unit(repo / "scratch", "new", 1)
+    stale = _unit(repo / "scratch", "old", 10)
+    assert _prune(repo) == 2
+    assert not dead.exists() and not stale.exists()
+    assert fresh.exists() and tomb.is_dir()
+
+
+def test_tombstone_link_child_unlinked_not_followed(tmp_path):
+    from coordinator_core.ops.scratch_delete import TOMBSTONE_DIRNAME
+
+    repo = _repo(tmp_path)
+    target = _unit(tmp_path / "outside", "keep", 0)
+    tomb = repo / "scratch" / TOMBSTONE_DIRNAME
+    tomb.mkdir(parents=True)
+    try:
+        os.symlink(target, tomb / "lnk", target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks unavailable")
+    _prune(repo)
+    assert not (tomb / "lnk").is_symlink()
+    assert (target / "f.txt").exists()

@@ -11,8 +11,9 @@ import hashlib
 import json
 import re
 from pathlib import Path
-from typing import Mapping, Optional, Sequence
+from typing import Iterable, Mapping, Optional, Sequence
 
+from coordinator_core.ops.dispatch_emit import row_returns
 from coordinator_core.session.declared_writes import declare_write
 
 KEPT_FILE = "kept.json"
@@ -37,10 +38,14 @@ def kept_chunks(
     owner: Mapping[str, str],
     withheld: Mapping[str, str],
     baseline: Optional[Mapping[str, Optional[str]]] = None,
+    returns: Optional[Mapping[str, str]] = None,
+    finished: Iterable[str] = (),
 ) -> dict:
     """``{chunk: {"paths": {rel: fingerprint}}}`` for each chunk all of whose withheld paths carry
     ``halt-record-only``; ``owner`` maps path to chunk, ``withheld`` maps path to reason.
-    With ``baseline``, a chunk any of whose paths still equals it (this run never wrote it) is not kept."""
+    With ``baseline``, a chunk any of whose paths still equals it (this run never wrote it) is not kept.
+    A ``finished`` chunk with no withheld path but a persisted return (``returns``: row to sha256)
+    is kept as ``{"paths": {}, "return": sha256}``."""
     unwritten: set[str] = set()
     if baseline:
         # Deferred: write_baseline imports this module's `fingerprint`.
@@ -58,6 +63,9 @@ def kept_chunks(
             prints = {p: fingerprint(root, p) for p in paths}
             if all(v is not None for v in prints.values()):
                 out[chunk] = {"paths": prints}
+    for chunk in finished:
+        if chunk not in by_chunk and chunk in (returns or {}):
+            out[chunk] = {"paths": {}, "return": returns[chunk]}
     return out
 
 
@@ -129,11 +137,26 @@ def read(record_dir: Path) -> dict:
     }
 
 
-def still_kept(root: Path, entry: object, notes: Sequence[str], row_id: str) -> bool:
-    """True while every recorded path still fingerprints the same and no note names the row or a path."""
+def still_kept(
+    root: Path,
+    entry: object,
+    notes: Sequence[str],
+    row_id: str,
+    record_dir: Optional[Path] = None,
+) -> bool:
+    """True while every recorded path still fingerprints the same and no note names the row or a path.
+    A writes-empty entry (``return`` sha, no paths) holds only with ``record_dir`` whose returns.json
+    carries that sha for the row and reads DONE."""
     paths = entry.get("paths") if isinstance(entry, Mapping) else None
-    if not isinstance(paths, Mapping) or not paths:
+    if not isinstance(paths, Mapping):
         return False
+    if not paths:
+        want_sha = entry.get("return")
+        if record_dir is None or not isinstance(want_sha, str):
+            return False
+        got = row_returns.read(record_dir).get(row_id)
+        if got is None or got["sha256"] != want_sha or not row_returns.is_done(got["text"]):
+            return False
     for rel, want in paths.items():
         if not isinstance(want, str) or fingerprint(root, rel) != want:
             return False

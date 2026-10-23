@@ -84,7 +84,7 @@ def test_mismatch_pulls_as_contradicted(tmp_path, monkeypatch):
 def test_not_evaluable_pulls_as_no_verdict_with_source_none(tmp_path, monkeypatch):
     common = _plan(tmp_path)
     monkeypatch.setattr(_anchor_check, "evaluate", _evaluate("NOT_EVALUABLE", detail="a pipe"))
-    reply = op._handler({"plan": REL}, common)
+    reply = op._handler({"plan": REL, "premise": {"rows": []}}, common)
     assert reply["verdict"] == "judgment"
     assert any(b.startswith(f"anchor-premise-no-verdict: {ANCHOR_ID}") for b in reply["blocking"])
     assert _entry(reply)["source"] == "none" and _entry(reply)["verdict"] is None
@@ -126,6 +126,30 @@ def test_reason_blocking_and_rulings_name_the_same_declared_anchor_ids(tmp_path,
     assert _anchor_ids(reply["reason"].split("; ")) == declared
     assert _anchor_ids([r["subject"] for r in reply["rulings"]]) == declared
     assert len(reply["reason"]) <= 1000
+    _validate(reply)
+
+
+def test_lone_p2_two_e_anchor_is_evaluable_and_resolved_with_no_p1(tmp_path):
+    common = _plan(tmp_path)
+    target = tmp_path / "coordinator" / "contract" / "review-roster-fragment.json"
+    target.parent.mkdir(parents=True)
+    target.write_text('{\n"schema_version": 5,\n"kind": "review-wave"\n}\n', encoding="utf-8")
+    plan = tmp_path / REL
+    text = plan.read_text(encoding="utf-8")
+    start = text.index("anchor_premises:")
+    end = text.index("prime_exit_criterion:")
+    anchor = (
+        "anchor_premises:\n  - id: P2\n    claim: roster is v5 with one review-wave stage\n"
+        "    check:\n      command: \"grep -c -e '\\\"schema_version\\\": 5' "
+        "-e '\\\"kind\\\": \\\"review-wave\\\"' coordinator/contract/review-roster-fragment.json\"\n"
+        "      expect: \"2\"\n"
+    )
+    plan.write_text(text[:start] + anchor + text[end:], encoding="utf-8")
+    reply = op._handler({"plan": REL}, common)
+    (entry,) = reply["anchor_verdicts"]
+    assert entry["id"] == "P2" and entry["source"] == "engine-check"
+    assert entry["verdict"] == "RESOLVES"
+    assert not any("P1" in b or "not evaluable" in b for b in reply["blocking"])
     _validate(reply)
 
 

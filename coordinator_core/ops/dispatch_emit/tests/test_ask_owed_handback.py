@@ -62,4 +62,4 @@ def test_stage_error_reply_carries_owed_ids_structurally():
 def test_return_object_carries_owed_next_action(monkeypatch):
     script = _script(monkeypatch)
     expr = ask_compose._owed_handback_js("state/sizings/x.yaml")
-    assert f"owed_next_action: {expr} || null, " in script
+    assert f"owed_next_action: {expr} || _haltNextActionText() || null, " in script

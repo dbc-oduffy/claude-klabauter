@@ -122,6 +122,9 @@ REGISTER: tuple[LegDecl, ...] = (
     _earns("ask", "pull-split", "slices a pulled plan into smaller batons when its blocking findings exceed one baton"),
     _earns("ask", "ledger-replan", "re-plans the rows a resumed ledger still owes"),
     _earns("ask", "ledger-remaining", "executes the rows a resumed ledger still owes"),
+    _earns("ask", "ledger-fix:", "fixes one reopened chunk behind a not_met ledger row inside its footprint; the chunks run in parallel"),
+    _earns("ask", "ledger-reverify", "re-judges only the reopened rows and re-runs only the reopened chunks' scoped tests"),
+    _earns("ask", "ledger-recovery-record", "writes recovery.json once the loop's final chunk statuses are known; a held-only run has no other agent to fold the write into"),
     _floor(
         "ask", "blitz-stage-read",
         "stages when readyOp did not run and returns the stage op's reply (a manifest handle), only when plan-blitz "

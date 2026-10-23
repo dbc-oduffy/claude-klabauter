@@ -65,6 +65,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
 )
 from coordinator_core.ops.dispatch_emit.grind_commit_contract import ALREADY_LANDED_KEY
 from coordinator_core.ops.dispatch_emit.halted_run_route import halted_refusal, route_suffix
+from coordinator_core.ops.dispatch_emit.ledger_recovery import RECOVERY_WITHHELD_PARAM
 from coordinator_core.ops.dispatch_emit.request_validation import Field, validate_params
 
 _PARAM_FIELDS = (
@@ -81,6 +82,7 @@ _PARAM_FIELDS = (
     Field("run_id", "nonempty_str"),
     Field("run_token", "nonempty_str"),
     Field("ledger_verdict", "dict"),
+    Field(RECOVERY_WITHHELD_PARAM, "str_list"),
     Field(TERMINAL_RESUME_LEDGER_PARAM, "dict"),
     Field("doc_paths", "str_list"),
     Field("allow_empty", "bool"),
@@ -941,15 +943,100 @@ def _unchanged_since_halt(
     return [{"id": i, "reason": UNCHANGED_SINCE_HALT_REASON} for i in judged]
 
 
+def _norm_rel(p: str) -> str:
+    s = p.replace("\\", "/")
+    while s.startswith("./"):
+        s = s[2:]
+    return s
+
+
+def _recovery_chunks(root: Path, ask_run_dir: Optional[Path]) -> dict:
+    """The ``chunks`` map of the run's ``recovery.json`` (its manifest dir, else its record dir); ``{}`` when absent."""
+    from coordinator_core.ops.dispatch_emit import ledger_recovery as lr
+
+    if ask_run_dir is None:
+        return {}
+    for d in (ask_run_dir, root / RECORD_DIR_ROOT / ask_run_dir.name):
+        try:
+            chunks = json.loads((d / lr.RECOVERY_RECORD_FILE).read_text(encoding="utf-8")).get("chunks")
+        except (OSError, ValueError, AttributeError):
+            continue
+        if isinstance(chunks, dict):
+            return chunks
+    return {}
+
+
+def _recovery_backing(chunks: dict, ids: Sequence[str]) -> tuple[dict, list]:
+    """``({chunk: open-row reason}, unbacked ids)`` for ``params.recovery_withheld``. A chunk is backed when
+    ``recovery.json`` records it exhausted (at the attempt cap), blocked or held. The record is written by
+    the re-verify agent: this catches a param the record does not support, not an agent misreporting its
+    own attempts."""
+    from coordinator_core.ops.dispatch_emit import ledger_recovery as lr
+
+    reasons: dict = {}
+    unbacked: list = []
+    for cid in ids:
+        entry = chunks.get(cid)
+        status = entry.get("status") if isinstance(entry, dict) else None
+        attempts = entry.get("attempts") if isinstance(entry, dict) else None
+        last = str(entry.get("last_reason") or "") if isinstance(entry, dict) else ""
+        if status == lr.STATUS_EXHAUSTED and attempts == lr.RECOVERY_ATTEMPT_CAP:
+            reasons[cid] = f"{lr.CAP_EXHAUSTED} ({attempts} attempts): {last}"
+        elif status == lr.STATUS_BLOCKED and isinstance(attempts, int):
+            reasons[cid] = f"{lr.FIX_BLOCKED} ({attempts} attempts): {last}"
+        elif status == lr.STATUS_HELD:
+            reasons[cid] = f"{lr.HELD}: {last}"
+        else:
+            unbacked.append(cid)
+    return reasons, unbacked
+
+
+_IMPORT_TARGET = re.compile(r"; (\S+) is (?:uncommitted in the worktree|absent from HEAD|deleted by this commit)")
+
+
+def _recovery_dependents(root: Path, request, incomplete: set, backed: dict, chunks: dict) -> dict:
+    """``{chunk: import-closure-open}`` for every other finished chunk whose ``.py`` imports a path a
+    recovery-withheld chunk owns, transitively. Edges come from the landing import scan over the chunks
+    still landing, rescanned until no chunk is added (a dependent's own importers leave the landing too)."""
+    from coordinator_core.ops.dispatch_emit import ledger_recovery as lr
+    from coordinator_core.ops.dispatch_emit import landing_integrity as li
+
+    rows = [{"id": c.id, "writes": list(c.paths)} for c in request.chunks]
+    status = {cid: chunks.get(cid) for cid in backed}
+    found: dict = {}
+    while True:
+        live = sorted({
+            p for c in request.chunks if c.id not in incomplete and c.id not in found
+            for p in c.paths if p.endswith(".py") and (root / p).is_file()
+        })
+        if not live:
+            return found
+        edges = []
+        for f in li.import_closure_findings(root, live, []):
+            m = _IMPORT_TARGET.search(f.detail)
+            if f.path and m:
+                edges.append((f.path, m.group(1)))
+        owners = {**status, **{cid: lr.STATUS_HELD for cid in found}}
+        added = {
+            cid: why for cid, why in lr.landing_withheld(owners, rows, edges).items()
+            if why == lr.IMPORT_CLOSURE_OPEN and cid not in incomplete and cid not in found
+        }
+        if not added:
+            return found
+        found.update(added)
+
+
 def _ledger_gate(
     root: Path, run_dir: Path, verdict: object, manifest_abs: Optional[Path], gated: Sequence[str],
     operator: dict, plan_text: Optional[str], inline_review: dict, resume_ledger: object,
-    plan_rel: Optional[str], fence: Optional[dict] = None,
+    plan_rel: Optional[str], fence: Optional[dict] = None, recovery_reasons: Optional[dict] = None,
 ) -> tuple[Optional[dict], object, list]:
     """``(refusal or None, ledger, open rows)`` for a ledger-bearing ask run: the refusal when the
     verdict does not pass ``requirements_ledger.judge`` against the live register rows (a not_met row a
     gated chunk withholds passes and returns in ``open``), or when a ledger resume has no work since its
-    halt. A run emitted without a ledger is not gated."""
+    halt. A run emitted without a ledger is not gated. ``recovery_reasons`` is ``{chunk: reason}`` of the
+    chunks ``recovery.json`` backs (``_recovery_backing``): they extend ``gated`` and their open rows carry
+    that reason."""
     from coordinator_core.ops.dispatch_emit import requirements_ledger
     from coordinator_core.ops.dispatch_emit.engine_owned_rows import routed_roots
 
@@ -974,8 +1061,9 @@ def _ledger_gate(
         routed = routed_roots(manifest_data) if manifest_abs else {}
     except (OSError, ValueError):
         manifest_data, routed = None, {}
+    recovery_reasons = recovery_reasons or {}
     result = requirements_ledger.judge(
-        ledger, verdict, routed, gated=gated, operator=operator, repo_root=root, plan_text=plan_text,
+        ledger, verdict, routed, gated=[*gated, *recovery_reasons], operator=operator, repo_root=root, plan_text=plan_text,
         wave_reviews=[w for w in inline_review.get("wave_reviews") or [] if isinstance(w, dict)],
         noted_paths=requirements_ledger.noted_paths(root, run_dir),
     )
@@ -1040,7 +1128,11 @@ def _ledger_gate(
             if on_breach:
                 result = {**result, "pass": False, "failures": [*result["failures"], *on_breach]}
     if result["pass"]:
-        return None, ledger, result.get("open") or []
+        return None, ledger, [
+            {**r, "reason": recovery_reasons.get(str(r["reason"])[len("withheld_by "):], r["reason"])}
+            if str(r.get("reason", "")).startswith("withheld_by ") else r
+            for r in result.get("open") or []
+        ]
     foreign = [str(f["id"]) for f in result["failures"] if f["reason"] == requirements_ledger.NOT_A_ROW_REASON]
     message = "the requirements are not met: " + "; ".join(
         (f"{f['id']}: {f['reason']}" if f["id"] is not None else f["reason"]) for f in result["failures"][:10]
@@ -2002,6 +2094,22 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
     if manifest is not None:
         withheld_by_gate.update({g.id: g.reason for g in manifest.gated})
         withheld_by_gate.update({o.id: f"owed: {o.detail}" for o in manifest.owed})
+    recovery_ids = list(dict.fromkeys(params.get(RECOVERY_WITHHELD_PARAM) or ()))
+    recovery_chunks: dict = {}
+    recovery_reasons: dict = {}
+    if recovery_ids:
+        recovery_chunks = _recovery_chunks(root, ask_run_dir)
+        recovery_reasons, unbacked = _recovery_backing(recovery_chunks, recovery_ids)
+        if unbacked:
+            return _error(
+                f"params.{RECOVERY_WITHHELD_PARAM} names chunks the run's recovery.json does not record as "
+                f"exhausted, blocked or held: {', '.join(unbacked)}. Re-run the ledger recovery or "
+                "drop them from the param",
+                refused="recovery-withheld-unbacked",
+                unbacked=unbacked,
+            )
+        withheld_by_gate.update(recovery_reasons)
+    recovery_dependents: dict = {}
 
     rid = params.get("run_id")
     sibling_run_id = (
@@ -2048,6 +2156,7 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
             root, ask_run_dir, params.get("ledger_verdict"), manifest_abs,
             [g.id for g in manifest.gated], {o.id: o.detail for o in manifest.owed if o.reason == "operator"},
             plan_text, inline_review, params.get(TERMINAL_RESUME_LEDGER_PARAM), request.plan_path, fence,
+            recovery_reasons,
         )
         if unmet is not None:
             if not (unmet.get(ALREADY_LANDED_KEY) and unmet.get("committed")):
@@ -2160,9 +2269,29 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
     incomplete -= set(regraded)
     held_ids = held_now
     incomplete |= held_ids & known_ids
+    incomplete |= set(recovery_reasons)
+    if recovery_reasons:
+        recovery_dependents = _recovery_dependents(root, request, incomplete, recovery_reasons, recovery_chunks)
+        incomplete |= set(recovery_dependents)
+        withheld_by_gate.update(recovery_dependents)
+    recovery_out = set(recovery_reasons) | set(recovery_dependents)
+    recovery_paths = {
+        _norm_rel(p): recovery_reasons[cid]
+        for cid in recovery_reasons for p in (recovery_chunks.get(cid) or {}).get("paths") or () if isinstance(p, str)
+    }
+    recovery_reply: dict = {}
+    if recovery_out:
+        recovery_open = set(recovery_reasons.values())
+        recovery_reply = {
+            "recovery": {
+                "withheld": {**recovery_reasons, **recovery_dependents},
+                "open_rows": [str(r["id"]) for r in open_rows if r.get("reason") in recovery_open],
+            },
+            "withheld": {**recovery_reasons, **recovery_dependents, **recovery_paths},
+        }
     stranded.update({c.id: list(c.paths) for c in request.chunks if c.id in incomplete})
     blockers: dict = {}
-    partial = [c for c in _partial_chunks(root, request, incomplete, blockers) if c.id not in held_ids]
+    partial = [c for c in _partial_chunks(root, request, incomplete, blockers) if c.id not in held_ids | recovery_out]
     done = [c for c in request.chunks if c.id not in incomplete]
     credited_chunks = done + partial
 
@@ -2354,6 +2483,7 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
             "run_artifacts": {"landed": [], "withheld": {**art_withheld, **art_dropped}},
             "stranded": {c: sorted(ps) for c, ps in stranded.items()},
             **_peer_held_left(peer_held),
+            **recovery_reply,
         }
 
     # ---- credit gate and Row-Unlanded
@@ -2389,7 +2519,7 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
             f"no product chunk lands in this commit; stranded work stays uncommitted: {shown}.{why} "
             f"Credit one: workflow.revise run_id={sibling_run_id} credit_chunks=[{{chunk, evidence}}], "
             "then re-fire; or finish or land the stranded chunks, then re-fire",
-            refused="no-credited-chunk-landed",
+            refused="no-credited-chunk-landed", **recovery_reply,
         )
     for row, p, _reason in unlanded:
         stranded.setdefault(row, [])
@@ -2410,6 +2540,7 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
                 "run_artifacts": {"landed": [], "withheld": {**art_withheld, **art_dropped}},
                 "stranded": {c: sorted(ps) for c, ps in stranded.items()},
                 **_peer_held_left(peer_held),
+                **recovery_reply,
                 **({"resume_recorded": {"landed": [], "withheld": dict(sorted(recorded_reason.items()))}}
                    if recorded_reason else {}),
             }
@@ -2655,6 +2786,7 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
         reply["reach_claims"] = reach_summary
     reply.update(_fence_reply(fence))
     reply.update(_peer_held_left(peer_held))
+    reply.update(recovery_reply)
     if recorded_changed:
         landed_now = set(paths)
         reply["resume_recorded"] = {
@@ -2694,7 +2826,8 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
         }
         if reread_artifacts:
             reply["run_artifacts"]["reread"] = reread_artifacts
-        still = [p for p in changed if p in set(landable_artifacts.paths())]
+        artifact_paths = set(landable_artifacts.paths())
+        still = [p for p in changed if p in artifact_paths and p not in recovery_paths]
         residue = run_artifacts.residue(landable_artifacts, still, landed_now, withheld_art)
         if residue:
             reply["run_artifact_residue"] = residue
@@ -2707,7 +2840,8 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
 
     reply.update(residue_classes.dirty_engine_residue(
         root,
-        exclude=set(paths) | set(deleted) | (set(landable_artifacts.paths()) if landable_artifacts is not None else set()),
+        exclude=set(paths) | set(deleted) | set(recovery_paths)
+        | (set(landable_artifacts.paths()) if landable_artifacts is not None else set()),
     ))
 
     # ---- the close job

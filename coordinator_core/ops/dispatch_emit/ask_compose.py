@@ -10,6 +10,7 @@ dispatch.ask_stage; the script only interprets the manifest. Pure composition: n
 from __future__ import annotations
 
 import json
+import re
 import shlex
 from datetime import date
 from pathlib import Path
@@ -27,6 +28,7 @@ from coordinator_core.ops.dispatch_emit.reply_sidecar import (
     VERIFY_REPLY_JS,
 )
 from coordinator_core.ops.dispatch_emit import emit as _emit
+from coordinator_core.ops.dispatch_emit.row_returns import CONSUMED_RETURNS_PARAM as _CONSUMED_RETURNS_PARAM
 from coordinator_core.ops.dispatch_emit.fanout_cost import AGENT_CALL_RE, GROUP_HEADER_TAIL, GROUP_MEMBER_RESULT_JS, FanoutCost, with_fanout
 from coordinator_core.ops.dispatch_emit.falsifier_integrity_phase import REVIEWER_AGENT_TYPE
 from coordinator_core.ops.dispatch_emit.ask_brief import EM_BRIEF_VAR, EmBrief, brief_decl_js
@@ -105,6 +107,17 @@ from coordinator_core.ops.dispatch_emit.design_conformance import (
     ANCHOR_PREFIX as _DESIGN_ANCHOR_PREFIX,
     DEFAULT_MET_BY_CLAUSE,
     DESIGN_BRIEF_KEY,
+)
+from coordinator_core.ops.dispatch_emit.ledger_recovery import (
+    LEDGER_FIX_LABEL,
+    LEDGER_FIX_PHASE,
+    LEDGER_FIX_SCHEMA,
+    LEDGER_REVERIFY_LABEL,
+    RECOVERY_ATTEMPT_CAP,
+    RECOVERY_RECORD_FILE,
+    RECOVERY_WITHHELD_PARAM,
+    REOPEN_PLAN_JS,
+    ledger_fix_prompt,
 )
 from coordinator_core.ops.dispatch_emit import agent_route as _agent_route
 from coordinator_core.ops.dispatch_emit import halt_refire as _halt_refire
@@ -974,6 +987,27 @@ def _refire_next_action_helper_js(sizing_rel: Optional[str]) -> str:
     )
 
 
+def _halt_next_action_text_helper_js(sizing_rel: Optional[str]) -> str:
+    """`_haltNextActionText()`: the halt's next step as text, '' when the run did not halt.
+
+    Call after `_refireNextAction()`: it renders the one-refire envelope, not the legacy shape.
+    """
+    return (
+        "  function _haltNextActionText() {\n"
+        "    if (!_halted || typeof _halted !== 'object') return '';\n"
+        "    const _na = _halted.next_action;\n"
+        "    if (typeof _na === 'string') return _na;\n"
+        "    if (_na && typeof _na === 'object') {\n"
+        "      const _rev = _na.input && _na.input.revise && typeof _na.input.revise.call === 'string' ? _na.input.revise.call : null;\n"
+        "      const _re = typeof _na.call === 'string' ? _na.call : (_na.input && typeof _na.input.refire === 'string' ? _na.input.refire : null);\n"
+        "      return 'kind: ' + String(_na.kind ?? _halted.halted) + '; ' + (_rev ? _rev + '; ' : '') + (_re ? 'refire: ' + _re : '');\n"
+        "    }\n"
+        f"    if (_halted.halted === {_lit(HALT_REFUSAL)}) return 'Refire: ' + {_refire_js(sizing_rel)};\n"
+        "    return '';\n"
+        "  }"
+    )
+
+
 _PLAN_SLOT = "PLAN_PATH_SLOT_X"
 _RUNTIME_PLAN_PATH_JS = "(_planRel ?? _sizingRel)"
 _EVIDENCE_SLOT = "EVIDENCE_PATH_SLOT_X"
@@ -1132,6 +1166,192 @@ def _verify_schema(judge_schema: Optional[dict]) -> dict:
         properties["judge"] = judge_schema
         required.append("judge")
     return _obj(required, properties)
+
+
+def _prompt_parts(text: str) -> list[str]:
+    """Split a `${js}`-templated prompt (`ledger_recovery.ledger_fix_prompt`) into `_cat` parts."""
+    parts = re.split(r"\$\{([^}]+)\}", text)
+    return [("js:" + p) if n % 2 else p for n, p in enumerate(parts) if p]
+
+
+_LEDGER_RECOVER_JS = r"""
+    const _recoveryCap = __CAP__;
+    const _fpPosix = (p) => { let s = String(p).replace(/\\/g, '/'); while (s.startsWith('./')) s = s.slice(2); return s; };
+    const _fpOwns = (r, p) => (r.writes ?? []).map(_fpPosix).includes(p) || (r.writes_under ?? []).some((d) => p.startsWith(_fpPosix(d).replace(/\/+$/, '') + '/'));
+    const _fpOf = (row, failed) => {
+      const out = [];
+      const own = failed.map((t) => _fpPosix(String(t).split('::')[0])).filter((f) => _fpOwns(row, f));
+      for (const p of [...(row.writes ?? []).map(_fpPosix), ...own]) if (!out.includes(p)) out.push(p);
+      return out;
+    };
+    const _ledgerRecover = async () => {
+      if (_gate.arm === __XS__) return;
+      const blocking = _ledger ? _ledgerBlocking(_ledger) : [];
+      if (!blocking.length) return;
+      const rulable = _manifest?.rulable_ids ?? _gate.__RL__?.rulable_ids ?? [];
+      if (blocking.some((i) => rulable.includes(i.id))) return;
+      if (blocking.every((i) => Array.isArray(i.owed_by) && i.owed_by.length > 0)) return;
+      const mrows = (_manifest.rows ?? []).filter((r) => r && typeof r === 'object');
+      const rowOf = (cid) => mrows.find((r) => String(r.id) === cid) ?? {};
+      const tr = __TEST__;
+      const failed = [...(tr?.baseline?.caused ?? []), ...(tr?.baseline?.foreign ?? []), ...(tr?.baseline?.pre_existing ?? [])].map(String);
+      const heldIds = [...(_manifest.gated ?? []), ...(_manifest.slot_withheld ?? [])].map((g) => String(g.id)).concat((_manifest.held_ids ?? []).map(String));
+      const plan = _reopenPlan(blocking, mrows, failed, heldIds);
+      const rec = {};
+      for (const [cid, ids] of Object.entries(plan.held)) {
+        rec[cid] = { rows: ids, attempts: 0, status: 'held', footprint: [], paths: [], last_reason: 'withheld at stage; never ran' };
+      }
+      for (const [cid, ids] of Object.entries(plan.reopen)) {
+        rec[cid] = { rows: ids, attempts: 0, status: 'open', footprint: _fpOf(rowOf(cid), failed), paths: [], last_reason: '' };
+      }
+      if (!Object.keys(rec).length) return;
+      const _fixOne = async (_cid) => {
+        const st = rec[_cid];
+        const _fixRow = rowOf(_cid);
+        const _items = (_ledger.items ?? []).filter((i) => i && st.rows.includes(i.id));
+        const remText = JSON.stringify(_items.map((i) => ({ id: i.id, remaining: i.remaining ?? [] })));
+        const evText = JSON.stringify(_items.map((i) => ({ id: i.id, evidence: String(i.evidence ?? '').slice(0, 600) })));
+        const failTxt = JSON.stringify({ failing: failed, summary: String(tr?.summary ?? ''), report: tr?.sidecar_path ?? null });
+        const fpText = JSON.stringify(st.footprint);
+        try { return await __FIXCALL__; }
+        catch (e) {
+          if (_USAGE_LIMIT_RE.test(String((e && e.message) ?? e))) { _haltOnUsageLimit(e); return null; }
+          log('ledger-fix leg threw: ' + String((e && e.message) ?? e)); return null;
+        }
+      };
+      for (let attempt = 1; attempt <= _recoveryCap && !_halted; attempt++) {
+        const open = Object.keys(rec).filter((c) => rec[c].status === 'open');
+        if (!open.length) break;
+        const fixed = await parallel(open.map((cid) => () => _fixOne(cid)));
+        if (_halted) return;
+        open.forEach((cid, k) => {
+          const st = rec[cid]; const r = fixed[k]; st.attempts = attempt;
+          if (!r || typeof r !== 'object') { st.last_reason = 'fix leg returned no result'; return; }
+          const row = rowOf(cid);
+          const outside = (Array.isArray(r.paths) ? r.paths : []).map(_fpPosix).filter((p) => !st.footprint.includes(p) && !_fpOwns(row, p));
+          if (outside.length) st.paths = [...new Set([...st.paths, ...outside])];
+          st.last_reason = String(r.reason ?? '');
+          if (r.status === 'BLOCKED') st.status = 'blocked';
+          else if (outside.length) { st.status = 'blocked'; st.last_reason = 'fix wrote outside the footprint: ' + outside.join(', '); }
+        });
+        const stillOpen = open.filter((c) => rec[c].status === 'open');
+        if (!stillOpen.length) continue;
+        const ids = [...new Set(stillOpen.flatMap((c) => rec[c].rows))];
+        const files = [...new Set(stillOpen.flatMap((c) => rec[c].footprint))];
+        const verdicts = JSON.stringify(ids.map((id) => ({ id, remaining: ((_ledger.items ?? []).find((i) => i && i.id === id) ?? {}).remaining ?? [] })));
+        const fileText = JSON.stringify(files);
+        let rv = null;
+        try { rv = await __REVERIFYCALL__; }
+        catch (e) {
+          if (_USAGE_LIMIT_RE.test(String((e && e.message) ?? e))) { _haltOnUsageLimit(e); return; }
+          log('ledger-reverify leg threw: ' + String((e && e.message) ?? e));
+        }
+        if (_halted) return;
+        if (rv && Array.isArray(rv.items)) {
+          for (const it of rv.items) {
+            if (!it || !ids.includes(it.id)) continue;
+            const at = _ledger.items.findIndex((x) => x && x.id === it.id);
+            if (at >= 0) _ledger.items[at] = it; else _ledger.items.push(it);
+          }
+          _normaliseLedger();
+          __RECONCILE__
+        }
+        const t = rv && rv.test;
+        if (t && typeof t.status === 'string') {
+          const passed = (s) => s === 'pass' || s === 'pass-with-skips';
+          const prior = __TEST__;
+          const priorFiles = failed.map((f) => _fpPosix(String(f).split('::')[0]));
+          if (!passed(t.status)) __TEST__ = t;
+          else if (prior && !passed(prior.status) && priorFiles.length && priorFiles.every((f) => files.includes(f))) __TEST__ = t;
+        }
+        const still = new Set(_ledgerBlocking(_ledger).map((i) => i.id));
+        for (const c of stillOpen) {
+          if (!rec[c].rows.some((id) => still.has(id))) { rec[c].status = 'fixed'; continue; }
+          rec[c].last_reason = JSON.stringify(rec[c].rows.map((id) => ((_ledger.items ?? []).find((i) => i && i.id === id) ?? {}).remaining ?? [])).slice(0, 300);
+        }
+      }
+      for (const c of Object.keys(rec)) if (rec[c].status === 'open') rec[c].status = 'exhausted';
+      const _out = ['exhausted', 'blocked', 'held'];
+      for (const i of _ledgerBlocking(_ledger)) {
+        const cs = Object.keys(rec).filter((c) => rec[c].rows.includes(i.id));
+        if (cs.length && cs.every((c) => _out.includes(rec[c].status))) i.withheld_by = cs[0];
+      }
+      _recoveryWithheld = Object.keys(rec).filter((c) => _out.includes(rec[c].status));
+      for (const c of _recoveryWithheld) if (!_incompleteChunks.includes(c)) _incompleteChunks.push(c);
+      const recordText = JSON.stringify({ cap: _recoveryCap, chunks: rec });
+      try { await __RECORDCALL__; }
+      catch (e) {
+        if (_USAGE_LIMIT_RE.test(String((e && e.message) ?? e))) { _haltOnUsageLimit(e); return; }
+        log('recovery record leg threw: ' + String((e && e.message) ?? e));
+      }
+    };
+    if (!_halted) await _ledgerRecover();
+"""
+
+
+def _ledger_recover_js(
+    *, head: str, anchor: str, session_tail: str, record_dir: str, ledger_rel: str, run_id: str, judged: bool, test_var: str
+) -> str:
+    """The `_ledgerRecover()` definition and its one call, composed between the verify leg's ledger and the ledger halt.
+
+    The fix legs run in parallel under `LEDGER_FIX_PHASE`; each re-verify judges only the reopened rows.
+    Trap: it reads `_ledgerBlocking`, `_normaliseLedger` and `_reopenPlan`, which must precede it in the script.
+    """
+    fix_prompt = _cat(
+        f"{head}\n\n{anchor}\n\nLedger-fix leg for chunk ",
+        "js:_cid",
+        f". Its brief is the file ",
+        "js:(_fixRow.brief_path ?? '(none)')",
+        ". ",
+        *_prompt_parts(ledger_fix_prompt("remText", "evText", "failTxt", "fpText")),
+        f" {SKILL_WEIGHT_HEADROOM_CLAUSE}{session_tail}",
+    )
+    fix_call = _agent(
+        fix_prompt, label=LEDGER_FIX_LABEL, phase=LEDGER_FIX_PHASE, agent_type=_emit._EXECUTOR_AGENT_TYPE,
+        schema=LEDGER_FIX_SCHEMA, run_id=run_id,
+    ).replace(f"label: {_lit(LEDGER_FIX_LABEL)},", f"label: {_lit(LEDGER_FIX_LABEL)} + _cid,", 1)
+    reverify_prompt = _cat(
+        f"{head}\n\n{anchor}\n\nLedger re-verify leg. Fix legs just ran on the chunks behind these rows. "
+        f"Re-read the requirements ledger at {ledger_rel}, then judge ONLY these rows now, against the current tree: ",
+        "js:verdicts",
+        ". Re-run only the scoped tests of these files (nothing wider): ",
+        "js:fileText",
+        ". Return `items` (one entry per judged row id, never another row) by the same contract: " + _LEDGER_ITEMS_RULES,
+        " Also return `test` (the status, tests_run, tests_failed and sidecar_path of your run) when you ran tests.",
+        f" {session_tail}",
+    )
+    reverify_schema = _obj(
+        ["items"],
+        {
+            "items": _LEDGER_CHECK_SCHEMA["properties"]["items"],
+            "test": json.loads(_emit.stage_schema_literal("test_result")),
+        },
+    )
+    reverify_call = _agent(
+        reverify_prompt, label=LEDGER_REVERIFY_LABEL, phase=ASK_VERIFY_PHASE, agent_type=_emit._EXECUTOR_AGENT_TYPE,
+        schema=reverify_schema, run_id=run_id,
+    )
+    record_prompt = _cat(
+        f"{head}\n\n{anchor}\n\nWrite the file {record_dir}/{RECOVERY_RECORD_FILE} with the Write tool (create its "
+        "directory if missing), holding exactly this JSON text and nothing else: ",
+        "js:recordText",
+        ". Edit nothing else. Return {written: true} once it is on disk.",
+    )
+    record_call = _agent(
+        record_prompt, label="ledger-recovery-record", phase=LEDGER_FIX_PHASE, agent_type=_emit._EXECUTOR_AGENT_TYPE,
+        effort=_MECHANICAL_EFFORT, schema=_obj(["written"], {"written": {"type": "boolean"}}),
+        run_id=run_id,
+    )
+    return (
+        _LEDGER_RECOVER_JS.replace("__CAP__", str(RECOVERY_ATTEMPT_CAP))
+        .replace("__RL__", RESUME_LEDGER_KEY)
+        .replace("__XS__", _lit(ARM_XS))
+        .replace("__TEST__", test_var)
+        .replace("__FIXCALL__", fix_call)
+        .replace("__REVERIFYCALL__", reverify_call)
+        .replace("__RECORDCALL__", record_call)
+        .replace("__RECONCILE__", "_reconcileJudged();" if judged else "")
+    )
 
 
 def _fire_tier_js() -> str:
@@ -1830,6 +2050,8 @@ def compose_ask_script(
             head=head, anchor=anchor, script_path=script_path, repo_root=repo_root, run_id=run_id,
         ))
     b.append("  let _ledger = null;")
+    b.append("  let _consumedReturns = {};")
+    b.append("  let _recoveryWithheld = [];")
     b.append(_AGENT_DEFS_HELPER_JS)
     if rb_fn:
         from coordinator_core.ops.dispatch_emit.ask_roadmap import ROADMAP_DECLS
@@ -1861,6 +2083,7 @@ def compose_ask_script(
     b.append(_wave_tests_green_js(agent_type_host, repo_root=repo_root, run_id=run_id, em_brief=bool(em_brief)))
     b.append(_usage_limit_helper_js())
     b.append(_refire_next_action_helper_js(sizing_rel))
+    b.append(_halt_next_action_text_helper_js(sizing_rel))
     for name in (*_REVIEW_RESULT_NAMES, _emit._TEST_RESULT_VAR):
         b.append(f"  let {name} = {'[]' if name == WAVE_NOT_RUN_VAR else 'false' if name == INTEGRATION_NOT_RUN_VAR else 'null'};")
     if judged:
@@ -2848,7 +3071,11 @@ def compose_ask_script(
             f"      const _revised = await {_agent(revise_prompt, label='plan-revise', phase='plan', agent_type=_PLAN_AUTHOR_AGENT_TYPE, schema=_REVISE_STAGED_SCHEMA if fold_stage else _REVISE_SCHEMA, effort=_PLAN_AUTHOR_EFFORT, run_id=run_id)};"
         )
         b.append("      _pullPlan = _revised?.plan_rel || _pulledEntry.planPath;")
-        b.append("      _pullRulings = Array.isArray(_revised?.rulings) ? _revised.rulings : [];")
+        b.append(
+            "      _pullRulings = Array.isArray(_revised?.rulings) && _revised.rulings.length ? _revised.rulings : "
+            "(Array.isArray(_pulledEntry.blocking) ? _pulledEntry.blocking : []).map((f, i) => "
+            "({ id: 'J' + (i + 1), source: 'blocking', subject: String(f).slice(0, 300), ask: String(f) }));"
+        )
         b.append("      _pullBlocking = typeof _revised?.blocking_findings === 'number' ? _revised.blocking_findings : null;")
         b.append(
             "      if (_revised?.pull_class === 'mechanical' && _revised?.verdict === 'ready') "
@@ -3177,6 +3404,19 @@ def compose_ask_script(
         "return typeof t === 'string' && t.trim() ? r.id + ': ' + t.trim().replace(/\\s+/g, ' ').slice(0, 600) : ''; })))"
         ".filter((x) => x).join(' | ');"
     )
+    # Trap: the engine caps; no truncation here. A reply that fails the DONE test is never persisted.
+    b.append(
+        "  { const _consumedIds = new Set(_manifest.rows.flatMap((r) => (r.deps ?? []).filter((d) => d !== r.id)));\n"
+        "    for (const r of _manifest.rows) {\n"
+        f"      if (r.agent_type === {_lit(REVIEWER_AGENT_TYPE)} || !_consumedIds.has(r.id)) continue;\n"
+        "      const t = await _rows[r.id];\n"
+        "      if (t == null) continue;\n"
+        "      const s = typeof t === 'string' ? t : JSON.stringify(t);\n"
+        "      const j = JSON.stringify(t);\n"
+        "      if (s.trim() && !_DEP_NON_DONE_RE.test(j) && _DEP_ANY_STATUS_RE.test(j)) _consumedReturns[r.id] = s;\n"
+        "    }\n"
+        "  }"
+    )
     # verify:<row> (emit.py's _runRow) pushes only behind _rowVerifyWanted: the terminal test leg
     # covers every row's scope, except on the XS arm where its test waits on review applying a fix.
     b.append("  await Promise.all(_verifications);")
@@ -3366,6 +3606,7 @@ def compose_ask_script(
     b.append(
         "    const _reconciled = [];\n"
         f"    const _designPrefix = {json.dumps(_DESIGN_ANCHOR_PREFIX)};\n"
+        "    const _normaliseLedger = () => {\n"
         "    for (const i of (_ledger?.items ?? [])) {\n"
         "      if (!i || i.status !== 'met' || !String(i.anchor ?? '').startsWith(_designPrefix)) continue;\n"
         "      const _mb = (Array.isArray(i.met_by) ? i.met_by : [i.met_by]).some((m) => typeof m === 'string' && m.trim() && m.trim().toLowerCase() !== 'none');\n"
@@ -3394,11 +3635,14 @@ def compose_ask_script(
         "&& (_docs?.doc_paths ?? []).includes(a)));\n"
         "      if (rest.length === i.remaining.length) continue;\n"
         "      if (rest.length) i.remaining = rest; else { _reconciled.push(i.id); i.status = 'met'; delete i.remaining; }\n"
-        "    }"
+        "    }\n"
+        "    };\n"
+        "    _normaliseLedger();"
     )
     if judged:
         v = _emit._FALSIFIER_RESULT_VAR
         b.append(
+            "    const _reconcileJudged = () => {\n"
             f"    if ({v}?.status === 'not_met' && (_ledger?.items ?? []).length "
             "&& (_ledger.items).every((i) => i && i.status === 'met') "
             f"&& !String({v}.reason ?? '').startsWith('not wired up: ') "
@@ -3406,7 +3650,9 @@ def compose_ask_script(
             f"&& (!Array.isArray({v}.clauses) || {v}.clauses.every((c) => !c || c.status === 'met'))) "
             f"{{ {v} = {{ ...{v}, status: 'met', differs_from_baseline: null, "
             "reason: _reconciled.join(', ') ? 'met after reconcile: ' + _reconciled.join(', ') : 'met: every ledger item met', "
-            "reconciled_from: 'not_met' }; }"
+            "reconciled_from: 'not_met' }; }\n"
+            "    };\n"
+            "    _reconcileJudged();"
         )
     b.append(
         f"    const _postCommitActs = {json.dumps(list(POST_COMMIT_ACTS))};\n"
@@ -3419,13 +3665,21 @@ def compose_ask_script(
         "      const acts = status === 'post_commit' && i.status === 'not_met' ? rem : i.post_commit_acts;\n"
         "      if (status === 'drifted') return true;\n"
         "      if (status === 'not_met' && typeof i.withheld_by === 'string' && i.withheld_by) "
-        "return !(_manifest?.gated ?? []).map((g) => g.id).includes(i.withheld_by);\n"
+        "return !((_manifest?.gated ?? []).map((g) => g.id).includes(i.withheld_by) || _recoveryWithheld.includes(i.withheld_by));\n"
         "      if (status === 'not_met') return l.all_of_pm_ask === true || i.essential !== false;\n"
         "      if (status === 'post_commit') return !Array.isArray(acts) || !acts.length "
         "|| acts.some((a) => !_postCommitActs.includes(a));\n"
         "      return false;\n"
         "    });"
     )
+    if known_arm != ARM_XS:
+        b.append(REOPEN_PLAN_JS)
+        b.append(
+            _ledger_recover_js(
+                head=head, anchor=anchor, session_tail=session_tail, record_dir=record_dir, ledger_rel=ledger_rel,
+                run_id=run_id, judged=judged, test_var=_emit._TEST_RESULT_VAR,
+            )
+        )
     # `out_of_scope` accepts only register rows still open at stage; any other blocking id is named
     # apart, with the ledger re-check as its remedy.
     b.append(
@@ -3532,6 +3786,10 @@ def compose_ask_script(
     )
     b.append("  let _reviseAndRefire = _closeable ? null : _mkRevise();")
     b.append(
+        f"  if (_recoveryWithheld.length && _nextAction && _nextAction.params) "
+        f"{{ _nextAction.params.{RECOVERY_WITHHELD_PARAM} = [..._recoveryWithheld]; }}"
+    )
+    b.append(
         f"  if (_resumeLedger && _nextAction && _nextAction.params && _gate.{RESUME_LEDGER_KEY}.inline_review "
         f"&& typeof _gate.{RESUME_LEDGER_KEY}.inline_review === 'object') "
         f"{{ _nextAction.params.inline_review = {{ ..._gate.{RESUME_LEDGER_KEY}.inline_review }}; }}"
@@ -3594,7 +3852,7 @@ def compose_ask_script(
         "incomplete: _incompleteChunks, "
         "withheld: ((_manifest && !_manifest.error) ? (_manifest.gated ?? []) : []).map((g) => ({ id: g.id, owner_repo: g.owner_repo ?? '', closure_key: g.closure_key ?? null })), "
         "owed: ((_manifest && !_manifest.error) ? (_manifest.owed ?? []) : []).map((o) => ({ id: o.id, reason: o.reason ?? '', detail: o.detail ?? '' })), "
-        f"owed_next_action: {_owed_handback_js(sizing_rel)} || null, "
+        f"owed_next_action: {_owed_handback_js(sizing_rel)} || _haltNextActionText() || null, "
         "blocked: _blockedChunks, held_by: _heldBy, unanswered: _unansweredBriefs, "
         "stopped_by: _stoppedBy, not_started: _notStarted, halted_by: _halted, halt_commit: _haltCommit, "
         "review: { prep: _reviewPrep, wave: _reviewWave, delivery: _deliveryVerdict, "
@@ -3630,6 +3888,7 @@ def compose_ask_script(
                 *(["xl-exit"] if accept_pending or sized_in_run else []),
                 *(["roadmap-blitz", *rb_phases] if rb_fn else []),
                 ASK_VERIFY_PHASE,
+                *((LEDGER_FIX_PHASE,) if known_arm != ARM_XS else ()),
                 *(("commit",) if in_run_commit else ()),
             ],
         ),
@@ -3961,7 +4220,8 @@ def _halt_record_commit_fn(
         f"coordinator-invoke {LAND_RUN_OP} --params-file {params_file.as_posix()} --repo {Path(repo_root).as_posix()}",
         "\n\nThe engine reads the params block below. Do not copy, edit or pass it.\n\n",
         f"js:_terminalCommitParamsBlock({{ script_path: {_lit(script_path or '')}, run_id: _runId, "
-        f"run_token: _RUN_TOKEN, {HALTED_RECORD_PARAM}: _halted, doc_paths: {_DOC_PATHS_JS}, "
+        f"run_token: _RUN_TOKEN, {HALTED_RECORD_PARAM}: _halted, {_CONSUMED_RETURNS_PARAM}: _consumedReturns, "
+        f"doc_paths: {_DOC_PATHS_JS}, "
         + _TARGETED_TESTS_JS + " "
         "...(_nextAction && _nextAction.kind === 'terminal_commit' && _nextAction.params && _nextAction.params.inline_review "
         "? { run_outcome: { inline_review: _nextAction.params.inline_review, "

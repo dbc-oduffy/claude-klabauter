@@ -1159,9 +1159,14 @@ class StageManifest:
     #: Declared write path -> `kept_work.fingerprint` taken at stage, before any executor
     #: (None = absent). Serialised only when non-empty; an absent key reads as ``{}``.
     write_baseline: dict[str, Optional[str]] = field(default_factory=dict)
+    #: Plan chunk ids a ledger resume holds unrun; serialised only when non-empty, an absent
+    #: key (a pre-change manifest) reads as ``()``.
+    held_ids: tuple[str, ...] = ()
 
     def to_json(self) -> dict[str, Any]:
         out = self._base_json()
+        if self.held_ids:
+            out["held_ids"] = list(self.held_ids)
         if self.write_baseline:
             out["write_baseline"] = dict(self.write_baseline)
         if self.wave_test_targets:
@@ -1216,6 +1221,7 @@ class StageManifest:
             fanout=dict(data["fanout"]) if data.get("fanout") else None,
             slot_withheld=tuple(dict(r) for r in data.get("slot_withheld") or ()),
             memo_close=tuple(dict(r) for r in data.get("memo_close") or ()),
+            held_ids=tuple(str(i) for i in data.get("held_ids") or ()),
             wave_test_targets={
                 str(k): tuple(v) for k, v in (data.get("wave_test_targets") or {}).items()
             },

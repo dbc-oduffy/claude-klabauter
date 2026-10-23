@@ -483,6 +483,7 @@ OP_MODULE_MAP: Dict[str, str] = {
     "fanout.census":                          "coordinator_core.ops.fanout.ops",
     "fanout.reconcile":                       "coordinator_core.ops.fanout.ops",
     "scratchpad.sweep":                       "coordinator_core.ops.scratchpad_sweep",
+    "scratch.delete":                         "coordinator_core.ops.scratch_delete",
     "distill.curation_status":                "coordinator_core.ops.distill_curation_status",
     "distill.assemble_disposal_manifest":     "coordinator_core.ops.distill_disposal_manifest",
     "distill.stamp_disposal":                 "coordinator_core.ops.distill_stamp_disposal",

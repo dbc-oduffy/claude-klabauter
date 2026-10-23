@@ -13,6 +13,11 @@ from typing import List, Optional, Tuple
 
 MAX_BYTES: int = 1 << 20
 
+GRAMMAR: str = (
+    'grep -c [-E|-F] (PATTERN | -e PATTERN ...) FILE [&& grep ...]; '
+    'expect N|>=N|<=N|>N|<N|"N then M"'
+)
+
 _GLOB = set("*?[]{}")
 _BRE_UNESCAPE = set("|(){}")
 _BRE_ESCAPE = set("(){}|+?")
@@ -186,6 +191,17 @@ def _holds(op: str, want: int, got: int) -> bool:
     return {
         "==": got == want, ">=": got >= want, "<=": got <= want, ">": got > want, "<": got < want
     }[op]
+
+
+def evaluable(command: str) -> Optional[str]:
+    """None when the command parses as GRAMMAR stages, else the refusal detail. Parse only:
+    reads no file, takes no repo root. Stage shape only: pattern compilation and expect are not
+    checked. No caller outside tests yet."""
+    try:
+        _parse_stages(command)
+    except _NotEvaluable as exc:
+        return str(exc)
+    return None
 
 
 def evaluate(command: str, expect: str, repo_root: Path) -> dict:

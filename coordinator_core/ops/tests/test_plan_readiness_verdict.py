@@ -781,7 +781,8 @@ def test_anchor_without_a_screenable_check_pulls_as_unchecked(tmp_path, block):
 
 
 def test_r32_anchor_with_a_named_check_and_no_verdict_is_caught(tmp_path):
-    reply = op._handler({"plan": REL}, _anchor_plan(tmp_path, _AP1))
+    # Checker lane: a premise param is present, so an unevaluable check still blocks.
+    reply = op._handler({"plan": REL, "premise": {"rows": []}}, _anchor_plan(tmp_path, _AP1))
     assert reply["verdict"] == "judgment"
     assert _anchor_rulings(reply) == [_AP1_NO_VERDICT]
 
@@ -840,7 +841,7 @@ def test_carry_row_resolves_an_anchor_only_while_its_line_is_unedited(tmp_path):
     _carry(tmp_path, live)
     assert op._handler({"plan": REL}, common)["verdict"] == "ready"
     _carry(tmp_path, "0" * 64)
-    reply = op._handler({"plan": REL}, common)
+    reply = op._handler({"plan": REL, "premise": {"rows": []}}, common)  # checker lane
     assert _anchor_rulings(reply) == [_AP1_NO_VERDICT]
 
 

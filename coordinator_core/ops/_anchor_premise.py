@@ -202,6 +202,11 @@ def anchor_verdicts(anchors, rows, carry_rows, plan_text, repo_root) -> list[dic
     return out
 
 
+def unevaluable_anchors(verdicts: list) -> list[tuple[str, str]]:
+    """(id, detail) per none-source anchor whose engine check was NOT_EVALUABLE."""
+    return [(v["id"], v["observed"]) for v in verdicts if v["verdict"] is None and v["observed"]]
+
+
 def anchor_findings(
     anchors: list,
     rows: list,
@@ -209,11 +214,14 @@ def anchor_findings(
     plan_text: str,
     repo_root: Optional[Path] = None,
     verdicts: Optional[list] = None,
+    *,
+    checker_ran: bool = True,
 ) -> list[str]:
     """One finding per anchor not resolved. Passed ``rows`` win over ``carry_rows``; a carry row
     counts only while its ``line_hash`` is still a line of ``plan_text``. A none-source anchor
     whose check was NOT_EVALUABLE gets the no-verdict finding with the suffix
-    '(check not evaluable in-process: <detail>)'."""
+    '(check not evaluable in-process: <detail>)', except when ``checker_ran`` is False: no
+    premise-checker can supply its verdict, so ``unevaluable_anchors`` carries it instead."""
     out: list[str] = []
     known = frozenset(a["id"] for a in anchors)
     for index, row in enumerate(rows or []):
@@ -229,6 +237,8 @@ def anchor_findings(
     for entry in verdicts:
         verdict = entry["verdict"]
         if verdict is None:
+            if not checker_ran and entry["observed"]:
+                continue
             detail = (
                 f" (check not evaluable in-process: {entry['observed']})" if entry["observed"] else ""
             )

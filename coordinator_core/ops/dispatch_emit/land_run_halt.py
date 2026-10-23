@@ -35,6 +35,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
 )
 from coordinator_core.ops.dispatch_emit.commit_request import PREFIX_CLAIM_LABEL
 from coordinator_core.ops.dispatch_emit.grind_commit_contract import ALREADY_LANDED_KEY
+from coordinator_core.ops.dispatch_emit.row_returns import CONSUMED_RETURNS_PARAM
 
 # One report grammar for both landing modes: `land_run` imports this module lazily, so no cycle.
 from coordinator_core.ops.dispatch_emit.land_run import _DELIVERED_REPORT_RE, _UNDELIVERED_REPORT_RE
@@ -640,7 +641,9 @@ def _land(
         record_withheld(root / record_dir_rel, withheld)
     from coordinator_core.ops.dispatch_emit.halted_record_commit import _record_kept
 
-    kept_reply = _record_kept(root, record_dir_rel, owner, withheld, halted, paths)
+    kept_reply = _record_kept(
+        root, record_dir_rel, owner, withheld, halted, paths, params.get(CONSUMED_RETURNS_PARAM)
+    )
     left = dispatch_abandon.remaining()
     if left is not None and left - dispatch_abandon.REPLY_MARGIN_SECS <= 0:
         return _error(

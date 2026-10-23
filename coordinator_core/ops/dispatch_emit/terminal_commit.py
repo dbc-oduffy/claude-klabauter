@@ -167,8 +167,9 @@ from coordinator_core.session.claimed_write import replace_text
 from coordinator_core.session.record_homes import home_dir
 from coordinator_core.warm.entry_seam import OpUnavailableError, reentrant_dispatch
 from coordinator_core.ops.dispatch_emit import credit_gate, gate_owed, halt_baseline, pre_halt_credit, process_artifact_policy  # noqa: E402 -- sibling-package group
-from coordinator_core.ops.dispatch_emit.land_run import _em_discharged_rows, _leg_footprint_writes  # noqa: E402
+from coordinator_core.ops.dispatch_emit.land_run import _em_discharged_rows, _leg_footprint_writes, _recovery_backing  # noqa: E402
 from coordinator_core.ops.dispatch_emit.halted_run_route import halted_refusal, route_suffix  # noqa: E402
+from coordinator_core.ops.dispatch_emit.ledger_recovery import RECOVERY_WITHHELD_PARAM  # noqa: E402
 from coordinator_core.ops.dispatch_emit.halt_landing import (  # noqa: E402
     landed_before_halt as _landed_before_halt,
     since_halt_close as _since_halt_close,
@@ -257,6 +258,7 @@ _PARAM_FIELDS = (
     Field("run_id", "nonempty_str"),
     Field("run_token", "nonempty_str"),
     Field("ledger_verdict", "dict"),
+    Field(RECOVERY_WITHHELD_PARAM, "str_list"),
     Field(TERMINAL_RESUME_LEDGER_PARAM, "dict"),
     Field("doc_paths", "str_list"),
     Field("allow_empty", "bool"),
@@ -944,6 +946,43 @@ def _checkpoint_rows_from(
         if by_plan:
             landed[sha] = by_plan
     return landed
+
+
+def _plan_checkpoint_touched(worktree_root: Path, plan_path: Optional[str], paths: Sequence[str]) -> frozenset:
+    """The ``paths`` whose blob a same-plan checkpoint landing an open row changed. Unlike
+    ``own_checkpoint_paths.checkpoint_landed_paths`` the walk steps over non-checkpoint commits (a
+    halt's run-record commit sits above the checkpoints on a refired run), bounded by the open rows
+    and the plan's ``created:`` floor."""
+    wanted_paths = [p.replace("\\", "/") for p in paths if isinstance(p, str) and p]
+    if not plan_path or not wanted_paths:
+        return frozenset()
+    from coordinator_core.git.git_dir import resolve_git_common_dir
+    from coordinator_core.git.git_state import head_sha
+    from coordinator_core.git.rollback_check import ABSENT, _blob_at_commit
+    from coordinator_core.ops.dispatch_emit.checkpoint_stamp import (
+        _walk_commit_meta, checkpoint_rows_landed, plan_created_floor,
+    )
+
+    head = head_sha(worktree_root)
+    rows = _open_row_ids(worktree_root, plan_path)
+    if not head or not rows:
+        return frozenset()
+    walk = checkpoint_rows_landed(
+        worktree_root, plan_path, head, frozenset(rows),
+        floor_epoch=plan_created_floor(_read_rel(worktree_root, plan_path) or ""),
+        cap=_HALTED_WALK_CAP,
+    )
+    common_dir = resolve_git_common_dir(Path(worktree_root))
+    touched: set = set()
+    for sha in walk.landed:
+        meta = _walk_commit_meta(common_dir, sha)
+        parents = (meta or {}).get("parents") or []
+        for p in wanted_paths:
+            cur = _blob_at_commit(common_dir, sha, p)
+            prev = ABSENT if not parents else _blob_at_commit(common_dir, parents[0], p)
+            if cur is not None and prev is not None and cur != prev:
+                touched.add(p)
+    return frozenset(touched)
 
 
 def _halted_run_checkpoint_rows(
@@ -2285,11 +2324,31 @@ def _no_change_refusal(
     )
 
 
+def _recovery_withheld_param(params: dict) -> list:
+    raw = params.get(RECOVERY_WITHHELD_PARAM)
+    return [c for c in raw if isinstance(c, str)] if isinstance(raw, list) else []
+
+
+def _recovery_withheld_reasons(run_dir: Path, ids: Sequence[str]) -> tuple[dict, list]:
+    """(``{chunk: open-row reason}``, unbacked ids) for the chunks ``params.recovery_withheld`` names.
+    A chunk is backed when the run dir's ``recovery.json`` records it ``exhausted`` (at the attempt
+    cap), ``blocked`` or ``held``. The record is written by the re-verify agent: this catches a param
+    the record does not support, not an agent misreporting its own attempts."""
+    from coordinator_core.ops.dispatch_emit import ledger_recovery as lr
+
+    try:
+        chunks = json.loads((run_dir / lr.RECOVERY_RECORD_FILE).read_text(encoding="utf-8")).get("chunks")
+    except (OSError, ValueError, AttributeError):
+        chunks = None
+    return _recovery_backing(chunks if isinstance(chunks, dict) else {}, ids)
+
+
 def _ledger_gate(
     worktree_root: Path, run_dir: Path, verdict: object, manifest_path: Optional[Path] = None,
     gated: Optional[Sequence[str]] = None, operator: Optional[dict] = None,
     plan_text: Optional[str] = None, inline_review: Optional[dict] = None,
     resume_ledger: object = None, plan_rel: Optional[str] = None,
+    recovery_withheld: Optional[Sequence[str]] = None,
 ) -> tuple[Optional[dict], object, list]:
     """(refusal or None, ledger, open) for a ledger-bearing ask run: the refusal when ``verdict``
     does not pass ``requirements_ledger.judge`` against the live register rows, an engine-routed
@@ -2303,6 +2362,17 @@ def _ledger_gate(
     landed when every refused row is in ``since_halt["cited"]`` (its met_by names a pre-halt commit)."""
     from coordinator_core.ops.dispatch_emit import requirements_ledger
 
+    recovery_reasons: dict = {}
+    if recovery_withheld:
+        recovery_reasons, unbacked = _recovery_withheld_reasons(run_dir, list(recovery_withheld))
+        if unbacked:
+            return _error(
+                f"params.recovery_withheld names chunks the run's recovery.json does not record as "
+                f"exhausted, blocked or held: {', '.join(unbacked)}. Re-run the ledger recovery or "
+                "drop them from the param",
+                refused="recovery-withheld-unbacked",
+                unbacked=unbacked,
+            ), None, []
     try:
         ledger = requirements_ledger.read_ledger(worktree_root, run_dir)
     except requirements_ledger.LedgerRefused as exc:
@@ -2312,6 +2382,7 @@ def _ledger_gate(
         ), None, []
     if ledger is None:
         return None, None, []
+    gated = [*(gated or ()), *recovery_reasons]
     if not isinstance(verdict, dict):
         return _error(
             "the run is ledger-bearing but params.ledger_verdict is absent: the final ledger "
@@ -2340,7 +2411,11 @@ def _ledger_gate(
         drift = _measured_rev_drift_refusal(run_dir, worktree_root, verdict, ledger)
         if drift is not None:
             return drift, ledger, []
-        return None, ledger, result.get("open") or []
+        return None, ledger, [
+            {**r, "reason": recovery_reasons.get(str(r["reason"])[len("withheld_by "):], r["reason"])}
+            if str(r.get("reason", "")).startswith("withheld_by ") else r
+            for r in result.get("open") or []
+        ]
     foreign = [
         str(f["id"]) for f in result["failures"] if f["reason"] == requirements_ledger.NOT_A_ROW_REASON
     ]
@@ -4558,6 +4633,7 @@ def _terminal_commit_inner(
     ledger = None
     open_rows: list = []
     if ask_run_dir is not None:
+        recovery_withheld = _recovery_withheld_param(params)
         unmet, ledger, open_rows = _ledger_gate(
             worktree_root, ask_run_dir, params.get("ledger_verdict"), manifest_abs,
             [g.id for g in manifest.gated],
@@ -4565,11 +4641,14 @@ def _terminal_commit_inner(
             _read_rel(worktree_root, request.plan_path) if request.plan_path else None,
             inline_review,
             params.get(TERMINAL_RESUME_LEDGER_PARAM), request.plan_path,
+            recovery_withheld=recovery_withheld,
         )
         if unmet is not None:
             if not (unmet.get("already_landed") and unmet.get("committed")):
                 return unmet
             token_state["since_halt_close"] = unmet
+        # Trap: names only; land_run also withholds their import-closure dependents (`_recovery_dependents`).
+        incomplete_chunks = incomplete_chunks | set(recovery_withheld)
     ledger_met = (
         _ledger_met_observation(ledger, params.get("ledger_verdict"), open_rows)
         if ask_run_dir is not None else None
@@ -5263,12 +5342,17 @@ def _terminal_commit_inner(
         if not residue[cid]:
             del residue[cid]
     if review_checked:
+        checkpointed = _plan_checkpoint_touched(
+            worktree_root, request.plan_path,
+            [p for p in (review_writes or ()) if not review_edits._out_of_worktree(p)],
+        )
         verdict = _review_edit_verdict(
             worktree_root, review_writes, snapshot, session_id, review_run_id,
             set(all_paths) | set(deleted_paths), sibling_claims,
             own_files=frozenset(
                 {review_edits_norm(p) for c in request.chunks for p in c.paths}
                 | {review_edits_norm(p) for p in prefix_files}
+                | {review_edits_norm(p) for p in checkpointed}
                 | {review_edits_norm(p) for p in _review_recorded_edits(inline_review)}
                 | {
                     review_edits_norm(p)

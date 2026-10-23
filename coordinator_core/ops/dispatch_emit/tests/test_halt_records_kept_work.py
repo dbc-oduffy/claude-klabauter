@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from coordinator_core.ops.dispatch_emit import kept_work, land_run_halt, terminal_commit
+from coordinator_core.ops.dispatch_emit import kept_work, land_run_halt, row_returns, terminal_commit
 from coordinator_core.ops.dispatch_emit.ask_contract import HALTED_RECORD_PARAM, RECORD_DIR_ROOT
 from coordinator_core.ops.dispatch_emit.commit_request import ChunkCommit, CommitRequest, render_marker
 from coordinator_core.win_portability import no_console_creationflags
@@ -65,14 +65,19 @@ def _halted(with_plan: bool) -> dict:
     return halted
 
 
-def _terminal(root: Path, halted: dict) -> dict:
+def _params(halted: dict, consumed: object) -> dict:
     params = {"script_path": "run.mjs", "run_id": RUN, HALTED_RECORD_PARAM: halted}
-    return terminal_commit._handler(params, repo_root=root / ".git")
+    if consumed is not None:
+        params[row_returns.CONSUMED_RETURNS_PARAM] = consumed
+    return params
 
 
-def _land_run(root: Path, halted: dict) -> dict:
-    params = {"script_path": "run.mjs", "run_id": RUN, HALTED_RECORD_PARAM: halted}
-    return land_run_halt.land(root, root, params)
+def _terminal(root: Path, halted: dict, consumed: object = None) -> dict:
+    return terminal_commit._handler(_params(halted, consumed), repo_root=root / ".git")
+
+
+def _land_run(root: Path, halted: dict, consumed: object = None) -> dict:
+    return land_run_halt.land(root, root, _params(halted, consumed))
 
 
 WRITERS = pytest.mark.parametrize("call", [_terminal, _land_run], ids=["halted_record_commit", "land_run_halt"])
@@ -133,3 +138,46 @@ def test_nothing_kept_writes_no_file_and_no_reply_key(repo, call):
     assert KEPT_REL not in _head_names(repo)
     assert "kept" not in out
     assert not (repo / KEPT_REL).exists()
+
+
+RETURNS_REL = f"{RECORD_DIR_ROOT}/{RUN}/{row_returns.RETURNS_FILE}"
+
+
+@WRITERS
+def test_consumed_return_lands_and_writes_empty_done_row_is_kept(repo, call):
+    _chunks(repo, {"C1": ["a.py"], "C2": []}, {"C1": "DONE: C1\n", "C2": "DONE: C2\n"})
+
+    out = call(repo, _halted(False), {"C2": "DONE: figures 960449 B", "C9": 7})
+
+    assert out["committed"] is True, out
+    assert RETURNS_REL in _head_names(repo) and KEPT_REL in _head_names(repo)
+    stored = json.loads(_git(repo, "show", f"HEAD:{RETURNS_REL}"))
+    assert list(stored) == ["C2"] and stored["C2"]["text"] == "DONE: figures 960449 B"
+    kept = json.loads(_git(repo, "show", f"HEAD:{KEPT_REL}"))
+    assert kept["chunks"]["C2"] == {"paths": {}, "return": stored["C2"]["sha256"]}
+    assert set(kept["chunks"]["C1"]["paths"]) == {"a.py"}
+    assert out["returns"] == ["C2"]
+
+
+@WRITERS
+def test_unconsumed_reply_is_never_written(repo, call):
+    _chunks(repo, {"C1": ["a.py"]}, {"C1": "DONE: C1\n"})
+
+    out = call(repo, _halted(False), {})
+
+    assert RETURNS_REL not in _head_names(repo)
+    assert "returns" not in out
+    assert out["kept"]["chunks"] == ["C1"]
+
+
+@WRITERS
+def test_kept_row_carries_the_prior_runs_entry(repo, call):
+    prior = "ask-20261014T000000-bbbbbb"
+    row_returns.write(repo / RECORD_DIR_ROOT / prior, {"C2": "DONE: figures 960449 B"})
+    _write(repo, f"{RECORD_DIR_ROOT}/{RUN}/manifest.json", json.dumps({"rows": [{"id": "C2", "kept_from": prior}]}))
+    _chunks(repo, {"C1": ["a.py"], "C2": []}, {"C1": "DONE: C1\n", "C2": "DONE: C2\n"})
+
+    call(repo, _halted(False), {"C2": "DONE: C2 kept from prior (report on disk)"})
+
+    stored = json.loads(_git(repo, "show", f"HEAD:{RETURNS_REL}"))
+    assert stored["C2"]["text"] == "DONE: figures 960449 B"

@@ -327,7 +327,7 @@ def _kept_rows(root: Path, sizing_rel: str, open_ids: Sequence[str]) -> tuple[tu
     if not candidates:
         return (), None
     notes = [e["note"] for e in run_notes.live(run_notes.entries(record / NOTES_FILE, run_id))]
-    kept = tuple(i for i in candidates if kept_work.still_kept(root, chunks[i], notes, i))
+    kept = tuple(i for i in candidates if kept_work.still_kept(root, chunks[i], notes, i, record_dir=record))
     return (kept, run_id) if kept else ((), None)
 
 

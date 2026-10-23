@@ -70,7 +70,7 @@ from pathlib import Path
 from typing import Any, List, Optional
 
 from coordinator_core.ipc import register_op
-from coordinator_core.ops import _anchor_premise
+from coordinator_core.ops import _anchor_check, _anchor_premise
 from coordinator_core.ops._param_alias import aliased_param, spellings
 from coordinator_core.ops.plan_prep_gate import prep_gate_with_text
 from coordinator_core.ops.review_findings_ledger import read_ledger
@@ -117,8 +117,10 @@ _PREMISE_ASK = {
 
 
 _ANCHOR_ASK = (
-    "The route rests on this anchor premise: give it a named check and a premise-checker verdict, "
-    "or re-plan around the checked fact; a failed or unverifiable anchor halts."
+    "The route rests on this anchor premise: give it a check in the in-process form ("
+    + _anchor_check.GRAMMAR
+    + ") or, where a premise-checker runs, its verdict; or re-plan around the checked fact. "
+    "A failed or unverifiable anchor halts."
 )
 
 
@@ -410,6 +412,7 @@ def readiness_verdict(
     open_questions: str = "",
     anchor_findings: Optional[List[str]] = None,
     anchor_verdicts: Optional[List[dict]] = None,
+    checker_ran: bool = True,
 ) -> dict:
     """Verdict over a prep-gate reply plus coverage and reviewer values; the only read beyond
     them is a review's ledger sidecar, resolved against ``repo_root``. Only UNRESOLVED and
@@ -419,7 +422,9 @@ def readiness_verdict(
     is an UNRESOLVED row a ``declared_absent`` entry covers through a resolvable ``tracked_by``.
     Each ``anchor_findings`` entry is a blocking judgment no ``corrects``/``declared_absent`` exempts;
     rows carrying ``anchor`` are judged only through them. ``anchor_verdicts`` is the recorded
-    per-anchor verdict list: it is echoed in the reply and only feeds a ready-reason note."""
+    per-anchor verdict list: it is echoed in the reply and feeds a ready-reason note. With
+    ``checker_ran`` False (no premise-checker output in the call) each anchor of it whose check
+    was not evaluable in-process is a mechanical repair, not a blocking finding."""
     notes: List[str] = []
     repairs: List[dict] = []
     substantive: List[str] = []
@@ -505,6 +510,13 @@ def readiness_verdict(
                 premise_blocking.append(f"{_PREMISE_REVIEWER}: {row['verdict']} {row['citation'][:200]}")
         elif row["verdict"] == "UNCHECKABLE":
             uncheckable += 1
+    if not checker_ran:
+        for anchor_id, detail in _anchor_premise.unevaluable_anchors(anchor_verdicts or []):
+            repairs.append(_repair(
+                "anchor-check-not-evaluable", anchor_id,
+                f"Rewrite anchor {anchor_id}'s check as {_anchor_check.GRAMMAR} (no premise-checker "
+                f"runs in this lane; detail: {detail}), or re-plan around a fact that form can check.",
+            ))
     blocking_findings += len(premise_blocking) + len(anchor_findings or [])
     counts = f"needs an agent: {blocking_findings} blocking, {advisory_findings} advisory: "
     # Anchor findings are budgeted before premise rows: the reason is cut at _INSTRUCTION_MAX,
@@ -605,6 +617,9 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     if repo_root is None:
         raise ValueError("plan.readiness_verdict requires a resolved repo_root")
     raw_plan, coverage, reviews, premise_rows = _check_params(params)
+    checker_ran = params.get("premise") is not None or any(
+        r.get("reviewer") == _PREMISE_REVIEWER for r in params.get("reviews") or []
+    )
     try:
         prep_gate, plan_text = prep_gate_with_text(raw_plan, repo_root)
     except OSError as exc:
@@ -624,11 +639,11 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         carried = _carry_rows(repo_root, str(prep_gate["plan"])) if anchors else []
         verdicts = _anchor_premise.anchor_verdicts(anchors, premise_rows, carried, text, anchor_root)
         anchor = defects + _anchor_premise.anchor_findings(
-            anchors, premise_rows, carried, text, anchor_root, verdicts
+            anchors, premise_rows, carried, text, anchor_root, verdicts, checker_ran=checker_ran
         )
     out = readiness_verdict(
         prep_gate, coverage, reviews, repo_root, premise_rows, corrects, spine_rows, ref,
-        absent, questions, anchor, verdicts,
+        absent, questions, anchor, verdicts, checker_ran,
     )
     reply = {"plan": prep_gate["plan"], **out, "prep_gate": prep_gate}
     if verdicts:
