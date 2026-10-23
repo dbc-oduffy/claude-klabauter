@@ -80,6 +80,7 @@ from coordinator_core.hooks.dispatch_escape import (
     _resolve_session_id_op,
 )
 from coordinator_core.session import general_work_scope
+from coordinator_core.session.engine_route_state import session_sizing_state as _session_sizing_state
 from coordinator_core.session.mode_resolution import resolve_mode
 from coordinator_core.warp_fire import fire_step
 
@@ -524,33 +525,6 @@ def _is_scratch_py(file_path: str) -> bool:
     return "scratch" in os.path.abspath(file_path).replace("\\", "/").split("/")[:-1]
 
 
-def _session_sizing_state(payload: dict, session_id: str) -> tuple[bool, bool]:
-    """(has_sizing, plan_pending): this session touched a sizing object, and one
-    of them routed to a plan this session has not touched. Failure is
-    (True, False), so the generic dispatch message stands."""
-    try:
-        from coordinator_core.hooks import nudge_unrouted_sizing as sizing
-
-        cwd = payload.get("cwd") or os.getcwd()
-        repo_root = sizing._repo_root({"cwd": cwd}) if isinstance(cwd, str) else None
-        if not repo_root:
-            return True, False
-        rels = sizing._session_touched_sizing_files(session_id, repo_root)
-        if not rels:
-            # A commit releases touched.txt; a Workflow run this session launched
-            # outlives it, so a session that fired the route stays sized.
-            from coordinator_core.hooks.flag_em_poll_in_flight import session_workflow_run_ids
-
-            return bool(session_workflow_run_ids(session_id)), False
-        routes = {(sizing._load_sizing_object(repo_root, rel) or {}).get("route") for rel in rels}
-        plan_pending = bool(routes & set(sizing._SKILL_BY_ROUTE)) and not (
-            sizing._session_touched_plan_files(session_id, repo_root)
-        )
-        return True, plan_pending
-    except Exception:
-        return True, False
-
-
 _SESSION_SIZING = "<this session's sizing path>"
 
 _UNSIZED_ADVISORY = (
@@ -658,12 +632,11 @@ def _budget_decision(payload: dict, session_id: str, file_path: str, tool_input:
     residue = kind == xlb.KIND_RESIDUE
     if residue:
         executor, _ = _derive_executor_info(file_path)
-        over_text = lambda u: _budget_text("Residue budget spent:", u) + f" Dispatch {executor} for the rest."
+        over_text = lambda u: _budget_text("Residue budget spent (projected):", u) + f" Dispatch {executor} for the rest."
     else:
-        over_text = lambda u: _budget_text("XS budget spent:", u) + " Size S or larger. " + fire_step()
-    if rec.get("state") == xlb.STATE_SPENT:
-        usage = xlb.Usage(0, 0, True)
-        return True, _budget_deny(over_text(usage))
+        over_text = lambda u: _budget_text("XS budget spent (projected):", u) + " Size S or larger. " + fire_step()
+    if rec.get("corrupt"):
+        return True, _budget_deny(over_text(xlb.Usage(0, 0, True)))
     try:
         projected = xlb.project(file_path, tool_input)
         if projected is None:
@@ -674,10 +647,13 @@ def _budget_decision(payload: dict, session_id: str, file_path: str, tool_input:
         return True, _budget_deny(text)
     if usage.over:
         try:
-            xlb.mark_spent(root, session_id)
+            measured = xlb.measure(root, rec, file_path, xlb._read_text(file_path))
         except Exception:
-            pass
-        return True, _budget_deny(over_text(usage))
+            measured = xlb.Usage(0, 0, False)
+        return True, _budget_deny(
+            over_text(usage)
+            + f" Measured from landed diff: {measured.files}/2 files, {measured.lines}/30 lines."
+        )
     try:
         xlb.add_path(root, session_id, file_path)
     except Exception:

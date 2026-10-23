@@ -1611,6 +1611,16 @@ def _pin_environment_answered_mode_defaults(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _pin_repo_hosts_coordinator_state(request, monkeypatch):
+    """Fixture repos read as onboarded unless the test carries `@pytest.mark.foreign_repo`."""
+    if request.node.get_closest_marker("foreign_repo") is not None:
+        return
+    from coordinator_core.ops.dispatch_emit import process_artifact_policy
+
+    monkeypatch.setattr(process_artifact_policy, "hosts_coordinator_state", lambda root: True)
+
+
+@pytest.fixture(autouse=True)
 def _pin_auto_compact_window_absent(monkeypatch):
     monkeypatch.delenv("CLAUDE_CODE_AUTO_COMPACT_WINDOW", raising=False)
 
@@ -1687,3 +1697,66 @@ if _psutil_for_tripwire is not None:
 
     for _name in ("kill", "terminate", "send_signal", "suspend"):
         _wrap_psutil(_name)
+
+
+# dispatch_emit/tests isolation. Fixtures declared in a Package-level conftest bind to the first
+# Package node pytest builds for that dir; an argument order that revisits the dir after an
+# unrelated file builds a second node, and the conftest's fixtures stop matching it. Declared
+# here they bind to no Package node, so they attach in any argument order.
+_DISPATCH_EMIT_TESTS = Path(__file__).resolve().parent / "ops" / "dispatch_emit" / "tests"
+
+
+def _under_dispatch_emit_tests(request) -> bool:
+    return _DISPATCH_EMIT_TESTS in Path(str(request.node.path)).resolve().parents
+
+
+@pytest.fixture(autouse=True)
+def _no_ambient_plugin_root(request, monkeypatch):
+    """Fixture rosters name agent types no real plugin ships; an ambient CLAUDE_PLUGIN_ROOT would
+    arm emit-time agent-type resolution against them. A degraded host refuses every surviving
+    coordinator: agentType, so the default host is the plugin-resolving one; degradation tests
+    set COORDINATOR_AGENT_TYPE_HOST."""
+    if not _under_dispatch_emit_tests(request):
+        return
+    monkeypatch.delenv("CLAUDE_PLUGIN_ROOT", raising=False)
+    monkeypatch.setenv("COORDINATOR_AGENT_TYPE_HOST", "coordinator")
+
+
+@pytest.fixture(autouse=True)
+def _unhoisted_ask_scripts(request, monkeypatch):
+    """Composer tests assert on literal script text; hoisting is pinned by test_ask_compose_prompt_fragments."""
+    if not _under_dispatch_emit_tests(request):
+        return
+    from coordinator_core.ops.dispatch_emit import prompt_fragments
+
+    monkeypatch.setattr(prompt_fragments, "HOIST_ENABLED", False)
+
+
+@pytest.fixture(autouse=True)
+def _no_ambient_box_terms(request, monkeypatch):
+    """A box whose machine-local registry names box terms would preamble every CLI-driven brief
+    here; tests that exercise the default patch it back in."""
+    if not _under_dispatch_emit_tests(request):
+        return
+    from coordinator_core import machine_resolver
+    from coordinator_core.bash_guards._heavy_admission_contract import KEY_VITEST_MAX_WORKERS
+    from coordinator_core.ops.dispatch_emit.cli import BOX_TERMS_KEY
+
+    real = machine_resolver.registry_get
+    masked = {BOX_TERMS_KEY, KEY_VITEST_MAX_WORKERS}
+    monkeypatch.setattr(
+        machine_resolver, "registry_get", lambda key: None if key in masked else real(key)
+    )
+
+
+@pytest.fixture(autouse=True)
+def _write_set_reads_clean(request, monkeypatch):
+    """The CLI plan route refuses on a dirty or unreadable write set; fixture repos here are fake
+    `.git` dirs, so the guard is stubbed. test_dirty_write_set* modules run the real function."""
+    if not _under_dispatch_emit_tests(request):
+        return
+    if request.module.__name__.rpartition(".")[2].startswith("test_dirty_write_set"):
+        return
+    from coordinator_core.ops.dispatch_emit import dirty_write_set
+
+    monkeypatch.setattr(dirty_write_set, "guard_against_dirty_write_set", lambda *a, **k: None)

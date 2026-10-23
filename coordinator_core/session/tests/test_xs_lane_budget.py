@@ -96,6 +96,18 @@ def test_record_shape_add_path_and_spent(repo):
     assert xb.read_lane(root, "s")["state"] == "spent"
 
 
+def test_lane_path_routes_through_shared_sessions_dir_resolver(repo, tmp_path, monkeypatch):
+    from coordinator_core.session import core as _core
+
+    root, sha = repo
+    assert xb.lane_path(root, "s") == root / ".git" / "coordinator-sessions" / "s" / "xs-lane.json"
+    redirected = tmp_path / "elsewhere" / "coordinator-sessions"
+    monkeypatch.setattr(_core, "_sessions_dir_resolve", lambda cwd: str(redirected))
+    assert xb.open_xs_lane(root, "s", sha) is True
+    assert (redirected / "s" / "xs-lane.json").is_file()
+    assert not (root / ".git" / "coordinator-sessions" / "s").exists()
+
+
 def test_corrupt_record_reads_spent_and_blocks_reopen(repo):
     root, sha = repo
     p = xb.lane_path(root, "s")

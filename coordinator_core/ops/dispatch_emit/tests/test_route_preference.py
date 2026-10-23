@@ -18,6 +18,39 @@ def test_refusal_none_when_absent_or_valid():
     assert rp.refusal("ask", "roadmap", None) is None
 
 
+def test_refusal_first_line_carries_a_valid_example():
+    assert 'e.g. route_preference: "plan"' in rp.refusal("ask", "shape", None).splitlines()[0]
+    assert "e.g. em_rationale:" in rp.refusal("ask", None, 5).splitlines()[0]
+
+
+def test_normalize_repairs_every_well_meant_shape():
+    assert rp.normalize("plan", "why") == ("plan", "why")
+    assert rp.normalize({"route_preference": "plan", "em_rationale": "why"}, None) == ("plan", "why")
+    assert rp.normalize({"preference": "Roadmap", "rationale": "why"}, None) == ("roadmap", "why")
+    assert rp.normalize({"route_preference": "plan", "em_rationale": "n"}, "flat") == ("plan", "flat")
+    assert rp.normalize("goal-setting", None) == ("goal", None)
+    assert rp.normalize(None, ["a", "b"]) == (None, "a\nb")
+    assert rp.normalize(None, 7) == (None, "7")
+    assert rp.normalize(None, {"k": "v"}) == (None, '{"k": "v"}')
+    assert rp.normalize("plan", "   ") == ("plan", None)
+    assert rp.normalize(None, None) == (None, None)
+
+
+def test_normalize_truncates_an_over_length_rationale_to_the_cap():
+    _, why = rp.normalize(None, "x" * 5000)
+    assert len(why) <= rp.EM_RATIONALE_MAX_CHARS and why.endswith("[truncated]")
+    assert rp.refusal("ask", None, why) is None
+    _, exact = rp.normalize(None, "y" * 2000)
+    assert exact == "y" * 2000
+
+
+def test_normalize_leaves_an_unusable_preference_for_refusal_to_name():
+    pref, _ = rp.normalize("shape", None)
+    assert pref == "shape" and "route_preference" in rp.refusal("ask", pref, None)
+    pref, _ = rp.normalize({"route_preference": "shape"}, None)
+    assert rp.refusal("ask", pref, None) is not None
+
+
 def test_diverges():
     assert rp.diverges(rp.parse("goal", None), "goal-setting") is False
     assert rp.diverges(rp.parse("roadmap", None), "plan") is True

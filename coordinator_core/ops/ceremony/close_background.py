@@ -153,6 +153,10 @@ def _baton_drain(ctx: JobContext) -> LegResult:
     """Archive the run's claimed batons that have reached a terminal state."""
     if not ctx.claimed_batons:
         return LegResult("not-applicable", "run claims no baton")
+    from coordinator_core.ops.dispatch_emit import process_artifact_policy
+
+    if not process_artifact_policy.hosts_coordinator_state(ctx.root):
+        return LegResult("not-applicable", "repo not opted into coordinator state")
     from coordinator_core.ops.fleet._common import archive_and_commit
     from coordinator_core.ops.fleet.archive_terminal_handoffs import plan_sweep
 
@@ -264,6 +268,17 @@ _RESOLUTION_SHA = re.compile(r"^[0-9a-f]{7,64}$")
 _LANDS_CHUNKS = re.compile(r"^Lands-Chunks:[ \t]*(?P<v>.+?)\s*$", re.M)
 _HALTED_WALK_CAP = 500
 SIZING_LEDGER_REL = ".coordinator-local/sizings.jsonl"
+
+
+_NOT_OPTED_IN = "repo not opted into coordinator state"
+
+
+def _not_opted_in(ctx: JobContext) -> bool:
+    """True when the repo has not opted into hosting coordinator state; legs that write state/,
+    docs/plans or archive/ return not-applicable (a write would create archive/ and flip the signal)."""
+    from coordinator_core.ops.dispatch_emit import process_artifact_policy
+
+    return not process_artifact_policy.hosts_coordinator_state(ctx.root)
 
 
 def _leg(status: str, text: str, ctx: Optional[JobContext] = None) -> LegResult:
@@ -385,6 +400,8 @@ def _review_stamp(ctx: JobContext) -> LegResult:
     plan_rel, sha = _plan_rel(ctx), ctx.terminal_sha
     if not plan_rel or not sha:
         return _leg("not-applicable", "run has no plan or terminal commit")
+    if _not_opted_in(ctx):
+        return _leg("not-applicable", _NOT_OPTED_IN)
     from coordinator_core.ops import review_stamp as rs
     from coordinator_core.ops._path_guard import contained_path
     from coordinator_core.ops.dispatch_emit import plan_row_coding
@@ -536,6 +553,10 @@ def _coded_stamp(ctx: JobContext) -> LegResult:
     plan_rel, sha = _plan_rel(ctx), ctx.terminal_sha
     if not plan_rel or not sha:
         return _leg("not-applicable", "run has no plan or terminal commit")
+    from coordinator_core.ops.dispatch_emit import process_artifact_policy
+
+    if not process_artifact_policy.hosts_coordinator_state(ctx.root):
+        return _leg("not-applicable", "repo not opted into coordinator state")
     text = _read(ctx, plan_rel)
     if text is None:
         return _leg("failed", f"plan {plan_rel} is unreadable", ctx)
@@ -663,6 +684,10 @@ def _plan_flip(ctx: JobContext) -> LegResult:
     plan_rel, sha = _plan_rel(ctx), ctx.terminal_sha
     if not plan_rel or not sha:
         return _leg("not-applicable", "run has no plan or terminal commit")
+    from coordinator_core.ops.dispatch_emit import process_artifact_policy
+
+    if not process_artifact_policy.hosts_coordinator_state(ctx.root):
+        return _leg("not-applicable", "repo not opted into coordinator state")
     text = _read(ctx, plan_rel)
     if text is None:
         return _leg("failed", f"plan {plan_rel} is unreadable", ctx)
@@ -873,6 +898,8 @@ def _sizing_ship(ctx: JobContext) -> LegResult:
     sizing_rel, _ = _cited(ctx, plan_rel)
     if sizing_rel is None:
         return _leg("not-applicable", "plan cites no sizing")
+    if _not_opted_in(ctx):
+        return _leg("not-applicable", _NOT_OPTED_IN)
     from coordinator_core.ops.dispatch_emit import register_gate
     from coordinator_core.warm.entry_seam import reentrant_dispatch
 
@@ -921,6 +948,8 @@ def _deliverable_cascade(ctx: JobContext) -> LegResult:
     plan_rel, sha = _plan_rel(ctx), ctx.terminal_sha
     if not plan_rel or not sha:
         return _leg("not-applicable", "run has no plan or terminal commit")
+    if _not_opted_in(ctx):
+        return _leg("not-applicable", _NOT_OPTED_IN)
     text = _read(ctx, plan_rel)
     fm = _plan_fm(text) if text is not None else {}
     if fm.get("status") != "implemented":
@@ -953,6 +982,8 @@ def _completion_entry(ctx: JobContext) -> LegResult:
     plan_rel = _plan_rel(ctx)
     if not plan_rel:
         return _leg("not-applicable", "run has no plan")
+    if _not_opted_in(ctx):
+        return _leg("not-applicable", _NOT_OPTED_IN)
     from coordinator_core.ops.dispatch_emit.run_close_completion import completion_entry_leg
 
     ledger_met = _inputs(ctx).get("ledger_met")
@@ -992,6 +1023,11 @@ def _close_commit(ctx: JobContext) -> LegResult:
     """Land exactly the paths the legs wrote in one Form 4 commit, never a peer's dirty file. A lost
     compare-and-swap re-seeds from the new HEAD (``CLOSE_COMMIT_CAS_RETRIES`` times), then the leg fails
     naming the paths still dirty."""
+    from coordinator_core.ops.dispatch_emit import process_artifact_policy
+
+    if not process_artifact_policy.hosts_coordinator_state(ctx.root):
+        process_artifact_policy.exclude_locally(ctx.root, ctx.written)
+        return _leg("not-applicable", "repo not opted into coordinator state")
     paths = list(dict.fromkeys(ctx.written))
     if not paths:
         return _leg("not-applicable", "no leg wrote a tracked path")

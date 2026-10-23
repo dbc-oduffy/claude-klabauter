@@ -439,6 +439,14 @@ def bare_run_id(stem: str) -> str:
     return stem[: -len(".workflow")] if stem.endswith(".workflow") else stem
 
 
+def own_close_key(run_id: str, script_stem: str) -> str:
+    """The close-job record key for the run being closed: *script_stem*, unless it is an emitted
+    ``.workflow`` script of a different run than *run_id*, which re-keys to ``<run_id>.workflow``."""
+    if script_stem.endswith(".workflow") and run_id and bare_run_id(script_stem) != bare_run_id(run_id):
+        return f"{bare_run_id(run_id)}.workflow"
+    return script_stem
+
+
 def resolve_close_job_stem(root: Path, run_id: str) -> Optional[str]:
     """Return the stem of the run's on-disk close-job record, or None when neither exists.
 

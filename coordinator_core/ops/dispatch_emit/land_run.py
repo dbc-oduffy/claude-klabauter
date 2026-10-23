@@ -16,6 +16,13 @@ stamp, coded stamp, implemented flip, sizing ship, cascade, completion entry, ba
 writeback. The reply reports those legs ``deferred``/``queued``; ``usage.json`` is stamped here because
 ``sibling_hold`` reads it at HEAD as the landed marker.
 
+Negative spec: the expectation on the run's own record-named run-artifact paths is dropped through
+``run_artifact_ownership.OwnArtifacts.drop_expectations`` and the paths are re-read at commit, named in
+``run_artifacts.reread``; the delivery note is never in the expectation here (excluded from the recorded
+fingerprints), so it is re-read like the terminal commit's, which keeps its own declared hash. A path
+``process_artifact_policy`` withholds (foreign repo, non-coordinator host) is dropped from the landing
+set and reported in ``run_artifacts.withheld``; it is never staged and never carries an expectation.
+
 Other record modes (halted, grind, fanout) are lazily imported from ``land_run_contract.MODE_MODULES``.
 ``landed_on_head`` and ``already_landed_reply`` are public: the mode modules and callers share them.
 
@@ -768,14 +775,20 @@ def _footprint_fence(
 ) -> dict:
     """The ledger-resume footprint fence: ``{"recorded": False}`` when the run's record dir holds no
     readable ``LEG_FOOTPRINT_FILE``, else ``{"recorded": True, "breach": [paths]}`` naming each
-    manifest-declared path changed since the halt base that the artifact's ``writes`` omits. No
-    spawn: it reuses the in-process tree read of ``_work_since_halt``."""
+    manifest-declared path changed since the halt base that the allowed set omits. The allowed set is
+    the artifact's recorded ``writes`` plus the ``writes`` of the plan rows serving the blocking ids,
+    read at landing (the re-plan leg appends rows after the artifact is written). No spawn: it reuses
+    the in-process tree read of ``_work_since_halt``."""
     if not isinstance(resume, dict):
         return {"recorded": False}
     writes = _leg_footprint_writes(root, run_dir)
     if writes is None:
         return {"recorded": False}
-    allowed = set(writes)
+    from coordinator_core.ops.dispatch_emit import footprint_breach
+
+    allowed = set(writes) | set(
+        footprint_breach.serving_writes(root / plan_rel if plan_rel else None, resume.get("blocking") or [])
+    )
     paths, stage_head = _manifest_declared(manifest_abs)
     base, _source = _halt_base(root, resume, plan_rel, stage_head)
     if base is None:
@@ -953,9 +966,10 @@ def _ledger_gate(
             refused="ledger-unjudged",
         ), ledger, []
     try:
-        routed = routed_roots(json.loads(Path(manifest_abs).read_text(encoding="utf-8"))) if manifest_abs else {}
+        manifest_data = json.loads(Path(manifest_abs).read_text(encoding="utf-8")) if manifest_abs else None
+        routed = routed_roots(manifest_data) if manifest_abs else {}
     except (OSError, ValueError):
-        routed = {}
+        manifest_data, routed = None, {}
     result = requirements_ledger.judge(
         ledger, verdict, routed, gated=gated, operator=operator, repo_root=root, plan_text=plan_text,
         wave_reviews=[w for w in inline_review.get("wave_reviews") or [] if isinstance(w, dict)],
@@ -974,6 +988,20 @@ def _ledger_gate(
         )
         if stale:
             result = {**result, "pass": False, "failures": [*result["failures"], *stale]}
+        if fenced.get("breach"):
+            from coordinator_core.ops.dispatch_emit import footprint_breach
+
+            rows = manifest_data.get("rows") if isinstance(manifest_data, dict) else None
+            row_writes = {
+                str(r["id"]): [w for w in r.get("writes") or () if isinstance(w, str)]
+                for r in rows if isinstance(r, dict) and r.get("id") is not None
+            } if isinstance(rows, list) else {}
+            items = verdict.get("items")
+            on_breach = footprint_breach.met_on_breach(
+                items if isinstance(items, list) else [], fenced["breach"], row_writes,
+            )
+            if on_breach:
+                result = {**result, "pass": False, "failures": [*result["failures"], *on_breach]}
     if result["pass"]:
         return None, ledger, result.get("open") or []
     foreign = [str(f["id"]) for f in result["failures"] if f["reason"] == requirements_ledger.NOT_A_ROW_REASON]
@@ -2154,8 +2182,21 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
             art_dropped[p] = "never-commit"
         elif p in em_withheld:
             art_dropped[p] = f"withhold_paths: {em_withheld[p]}"
+    process_withheld: dict = {}
+    if artifacts is not None:
+        from coordinator_core.ops.dispatch_emit import process_artifact_policy
+
+        _kept, process_withheld = process_artifact_policy.withhold_process_artifacts(root, artifacts)
+        if process_withheld and bookkeeping_path:
+            process_withheld[bookkeeping_path] = process_artifact_policy.WITHHELD_REASON
+        art_dropped.update(process_withheld)
     art_present = [p for p in art_present if p not in art_dropped]
     art_deleted = [p for p in art_deleted if p not in art_dropped]
+
+    def _exclude_withheld() -> None:
+        if process_withheld:
+            process_artifact_policy.exclude_locally(root, sorted(process_withheld), artifacts.record_dirs)
+
     carried_probe = [*candidates, *art_present, *art_deleted]
     peer_held = _peer_held(root, carried_probe, session_id, rid, script_path)
     for p in candidates:
@@ -2195,10 +2236,12 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
     paths = [p for p in paths if p not in deleted]
     if (
         bookkeeping_path and not product_only and bookkeeping_path not in paths
+        and bookkeeping_path not in process_withheld
         and not machine_local_paths([bookkeeping_path]) and (root / bookkeeping_path).is_file()
     ):
         paths.append(bookkeeping_path)
     if token_state.get("since_halt_close") is not None and not candidates and not (set(deleted) - set(art_deleted)):
+        _exclude_withheld()
         return {
             "committed": False, "nothing_to_commit": True,
             "run_artifacts": {"landed": [], "withheld": {**art_withheld, **art_dropped}},
@@ -2250,9 +2293,10 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
     if not paths and not deleted:
         if params.get("allow_empty") is True or ((anchor_only or request.review_only or fixes_anchor) and _review_trailer(record_abs)):
             paths = [p for p in declared if p not in absent_dropped and (root / p).is_file()]
-            if not paths and request.plan_path and (root / request.plan_path).is_file():
+            if not paths and request.plan_path and request.plan_path not in process_withheld and (root / request.plan_path).is_file():
                 paths = [request.plan_path]
         if not paths and not deleted:
+            _exclude_withheld()
             return {
                 "committed": False, "nothing_to_commit": True,
                 "run_artifacts": {"landed": [], "withheld": {**art_withheld, **art_dropped}},
@@ -2300,6 +2344,7 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
         )
 
     expected: dict = {}
+    reread_artifacts: list = []
     if session_id is not None:
         fixes_at, wave_paths = _fixes_integrated_at(root, inline_review)
         if fixes_at is None:
@@ -2315,6 +2360,11 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
         for ev_path, ev_before, ev_after in ([own_evidence_write] if own_evidence_write else []):
             if ev_path in paths and expected.get(ev_path) == ev_before:
                 expected[ev_path] = ev_after
+        if expected and isinstance(art_run_id, str) and art_run_id:
+            from coordinator_core.ops.dispatch_emit import run_artifact_ownership
+
+            owned = run_artifact_ownership.own_artifact_paths(root, art_run_id)
+            reread_artifacts = owned.drop_expectations(expected)
 
     # ---- the message
     subject = (
@@ -2442,6 +2492,7 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
             return _error(f"{type(exc).__name__}: {exc}", refused="commit")
 
     sha = outcome.sha
+    _exclude_withheld()
     token_state["landed"] = True
     _settle_token(token_state, landed=True, receipt={"sha": sha, "rows": credited_ids, "paths": list(paths)})
     if applies:
@@ -2496,10 +2547,13 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
     if landable_artifacts is not None:
         landed_now = set(paths) | set(deleted)
         withheld_art = {**(dict(art_landable.withheld) if art_landable else {}), **art_withheld, **art_dropped}
+        withheld_art.update(process_withheld)
         reply["run_artifacts"] = {
             "landed": sorted(p for p in landable_artifacts.paths() if p in landed_now),
             "withheld": dict(sorted(withheld_art.items())),
         }
+        if reread_artifacts:
+            reply["run_artifacts"]["reread"] = reread_artifacts
         still = [p for p in changed if p in set(landable_artifacts.paths())]
         residue = run_artifacts.residue(landable_artifacts, still, landed_now, withheld_art)
         if residue:
@@ -2556,8 +2610,11 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
                 blocked_rows = []
         if blocked_rows:
             inputs["sibling_blocked"] = blocked_rows
+        from coordinator_core.ops.dispatch_emit.run_close import own_close_key
+
         ctx = {
-            "key": PurePosixPath(script_path.replace("\\", "/")).stem, "sibling_run_id": sibling_run_id,
+            "key": own_close_key(sibling_run_id, PurePosixPath(script_path.replace("\\", "/")).stem),
+            "sibling_run_id": sibling_run_id,
             "presets": presets, "plan_rel": request.plan_path, "session_id": session_id, "sha": sha,
             "review_receipt": review_record, "run_base_sha": run_base if isinstance(run_base, str) and _SHA40.fullmatch(run_base) else None,
             "criterion": criterion if isinstance(criterion, dict) else None,

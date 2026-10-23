@@ -36,7 +36,15 @@ Wire params:
                                   CONTRADICTED rows are never exempted by it.
                                   When passed, a ``premise-check`` reviews entry is dropped: the
                                   rows carry that verdict, and refusing the pair would hand the
-                                  caller an unusable reply.
+                                  caller an unusable reply. A row's optional string ``anchor`` names
+                                  a plan ``anchor_premises[].id``: it is judged only through that
+                                  anchor, and any verdict but RESOLVES pulls.
+
+Plan inputs, parsed from the one plan read the prep gate makes: ``corrects``, ``declared_absent``, the spine, the falsifier
+``baseline_ref``, ``## Open questions`` and ``anchor_premises`` (``[{id, claim, check: {command,
+expect}}]``; absent, unchecked or verdict-less anchors pull, see ``_anchor_premise``). An anchor
+with no passed row is also resolved by the plan's premise-carry record under ``plan_sidecars_dir``.
+An unreadable plan file (``OSError``) pulls as ``anchor-premises-unjudged`` over a REFUSED prep gate.
 
 A coverage verdict that is not clear but carries zero findings gives the plan nothing to fix:
 it is a note on a ready reply, never a pull.
@@ -47,6 +55,7 @@ Negative-spec:
   - Takes no skip, force or override parameter; any key outside the five above is refused.
   - Does NOT write, stamp or mutate anything, and does NOT sweep the corpus. It reads a review's
     ledger sidecar through ``review_findings_ledger.read_ledger`` and never calls ``verify``.
+  - Reads the plan file once, through the prep gate; nothing here re-reads it.
   - Spawns nothing of its own; the prep gate's one batched ``git ls-files`` for python census
     targets is the only process it can cost, and only for a plan that declares such targets.
   - An unrecognised reviewer or coverage verdict reads as blocking: the verdict fails closed to
@@ -61,8 +70,9 @@ from pathlib import Path
 from typing import Any, List, Optional
 
 from coordinator_core.ipc import register_op
+from coordinator_core.ops import _anchor_premise
 from coordinator_core.ops._param_alias import aliased_param, spellings
-from coordinator_core.ops.plan_prep_gate import _handler as _prep_gate_handler
+from coordinator_core.ops.plan_prep_gate import prep_gate_with_text
 from coordinator_core.ops.review_findings_ledger import read_ledger
 from coordinator_core.roadmap.prep_gate import ZERO_DISPATCHABLE_KIND
 
@@ -71,7 +81,6 @@ GENERATES: list = []
 _KNOWN_PARAMS = frozenset({"plan", "plan_path", "coverage", "reviews", "premise"})
 # Mirrors DoE plan-blitz.mjs PREMISE_REVIEWER.
 _PREMISE_REVIEWER = "premise-check"
-_PREMISE_VERDICTS = frozenset({"RESOLVES", "UNRESOLVED", "CONTRADICTED", "UNCHECKABLE"})
 _PREMISE_BLOCKING = frozenset({"UNRESOLVED", "CONTRADICTED"})
 _CLEAR_VERDICTS = frozenset(
     {
@@ -94,6 +103,12 @@ _PREMISE_ASK = {
     "CONTRADICTED": "add a `corrects:` entry naming the spine row that fixes it, or correct the plan's claim",
     "UNRESOLVED": "add a `declared_absent:` entry with a resolvable `tracked_by`, or supply the evidence",
 }
+
+
+_ANCHOR_ASK = (
+    "The route rests on this anchor premise: give it a named check and a premise-checker verdict, "
+    "or re-plan around the checked fact; a failed or unverifiable anchor halts."
+)
 
 
 def _ruling(index: int, source: str, subject: str, ask: str) -> dict:
@@ -291,14 +306,11 @@ def _declared_absent_entry(
     return None
 
 
-def _plan_inputs(prep_gate: dict, repo_root: Path) -> tuple:
-    """(corrects, spine rows, falsifier baseline_ref, declared_absent, open-questions body) read
-    from the plan file the prep gate resolved."""
-    from coordinator_core.lifecycle import main_worktree_root
+def _plan_inputs(text: str) -> tuple:
+    """(corrects, spine rows, falsifier baseline_ref, declared_absent, open-questions body, plan
+    text, frontmatter) parsed from the plan text the prep gate read."""
     from coordinator_core.roadmap.prep_gate import plan_frontmatter, raw_spine_rows
 
-    path = Path(main_worktree_root(repo_root)) / str(prep_gate["plan"])
-    text = path.read_text(encoding="utf-8", errors="replace")
     fm = plan_frontmatter(text)
     pec = fm.get("prime_exit_criterion")
     falsifier = pec.get("falsifier") if isinstance(pec, dict) else None
@@ -309,7 +321,25 @@ def _plan_inputs(prep_gate: dict, repo_root: Path) -> tuple:
         ref.strip() if isinstance(ref, str) and ref.strip() else None,
         fm.get("declared_absent"),
         _open_questions_body(text),
+        text,
+        fm,
     )
+
+
+def _carry_rows(repo_root: Path, plan_rel: str) -> list:
+    """Rows of the plan's premise-carry record (premise-carry-contract.md section 2); [] when the
+    file is missing, unreadable or of another plan."""
+    from coordinator_core.lifecycle import main_worktree_root
+    from coordinator_core.ops import _premise_carry
+    from coordinator_core.session.machinery_paths import plan_sidecars_dir
+
+    path = Path(plan_sidecars_dir(str(main_worktree_root(repo_root)))) / f"{Path(plan_rel).stem}.premise-carry.json"
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except OSError:
+        return []
+    record = _premise_carry.parse_record(raw, plan_rel)
+    return record["rows"] if record else []
 
 
 def _repair(kind: str, target: str, instruction: str) -> dict:
@@ -341,14 +371,16 @@ def _check_params(params: dict) -> tuple:
         if not isinstance(premise, dict) or not isinstance(premise.get("rows"), list):
             raise ValueError("premise must be an object {rows: [{verdict, citation}]}")
         for i, row in enumerate(premise["rows"]):
-            if not isinstance(row, dict) or row.get("verdict") not in _PREMISE_VERDICTS:
+            if not isinstance(row, dict) or row.get("verdict") not in _anchor_premise.VERDICTS:
                 raise ValueError(
-                    f"premise.rows[{i}].verdict must be one of {', '.join(sorted(_PREMISE_VERDICTS))}"
+                    f"premise.rows[{i}].verdict must be one of {', '.join(sorted(_anchor_premise.VERDICTS))}"
                 )
             if not isinstance(row.get("citation"), str):
                 raise ValueError(f"premise.rows[{i}].citation must be a string")
             if "baseline_ref" in row and not isinstance(row["baseline_ref"], str):
                 raise ValueError(f"premise.rows[{i}].baseline_ref must be a string")
+            if "anchor" in row and not isinstance(row["anchor"], str):
+                raise ValueError(f"premise.rows[{i}].anchor must be a string")
         rows = premise["rows"]
         reviews = [r for r in reviews or [] if r.get("reviewer") != _PREMISE_REVIEWER]
     return raw_plan.strip(), coverage, reviews or [], rows
@@ -365,13 +397,16 @@ def readiness_verdict(
     falsifier_baseline_ref: Optional[str] = None,
     declared_absent: Optional[Any] = None,
     open_questions: str = "",
+    anchor_findings: Optional[List[str]] = None,
 ) -> dict:
     """Verdict over a prep-gate reply plus coverage and reviewer values; the only read beyond
     them is a review's ledger sidecar, resolved against ``repo_root``. Only UNRESOLVED and
     CONTRADICTED premise rows block; UNCHECKABLE and RESOLVES rows never do. A CONTRADICTED row
     covered by ``corrects`` (a spine row in ``spine_rows`` that is open or coded fixes it) and a
     row whose ``baseline_ref`` differs from ``falsifier_baseline_ref`` are notes, not blockers, as
-    is an UNRESOLVED row a ``declared_absent`` entry covers through a resolvable ``tracked_by``."""
+    is an UNRESOLVED row a ``declared_absent`` entry covers through a resolvable ``tracked_by``.
+    Each ``anchor_findings`` entry is a blocking judgment no ``corrects``/``declared_absent`` exempts;
+    rows carrying ``anchor`` are judged only through them."""
     notes: List[str] = []
     repairs: List[dict] = []
     substantive: List[str] = []
@@ -432,6 +467,8 @@ def readiness_verdict(
     absent_notes: List[str] = []
     stale_refs: List[str] = []
     for row in premise_rows or []:
+        if "anchor" in row:
+            continue
         ref = row.get("baseline_ref")
         if ref is not None and falsifier_baseline_ref is not None and ref.strip() != falsifier_baseline_ref:
             stale_refs.append(ref)
@@ -451,7 +488,7 @@ def readiness_verdict(
                 premise_blocking.append(f"{_PREMISE_REVIEWER}: {row['verdict']} {row['citation'][:200]}")
         elif row["verdict"] == "UNCHECKABLE":
             uncheckable += 1
-    blocking_findings += len(premise_blocking)
+    blocking_findings += len(premise_blocking) + len(anchor_findings or [])
     counts = f"needs an agent: {blocking_findings} blocking, {advisory_findings} advisory: "
     shown = list(premise_blocking)
     for i, entry in enumerate(shown):
@@ -459,7 +496,7 @@ def readiness_verdict(
             tail = len(shown) - i
             shown = shown[:i] + [f"+{tail} more premise row(s)"]
             break
-    blocking_keys = [*substantive, *judgment, *premise_blocking]
+    blocking_keys = [*substantive, *judgment, *premise_blocking, *(anchor_findings or [])]
     rulings: List[dict] = []
     for entry in substantive:
         rulings.append(_ruling(
@@ -475,7 +512,10 @@ def readiness_verdict(
         rulings.append(_ruling(len(rulings) + 1, source, entry, ask))
     for entry in premise_blocking:
         rulings.append(_ruling(len(rulings) + 1, "premise", entry, _premise_ask(entry)))
+    for entry in anchor_findings or []:
+        rulings.append(_ruling(len(rulings) + 1, "premise", entry, _ANCHOR_ASK))
     judgment.extend(shown)
+    judgment.extend(anchor_findings or [])
     if uncheckable:
         notes.append(f"{uncheckable} UNCHECKABLE premise row(s) left to reviewer judgment")
     if covered:
@@ -530,12 +570,23 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     if repo_root is None:
         raise ValueError("plan.readiness_verdict requires a resolved repo_root")
     raw_plan, coverage, reviews, premise_rows = _check_params(params)
-    prep_gate = _prep_gate_handler({"plan": raw_plan}, repo_root)
-    corrects, spine_rows, ref, absent, questions = (
-        _plan_inputs(prep_gate, repo_root) if premise_rows else (None, None, None, None, "")
-    )
+    try:
+        prep_gate, plan_text = prep_gate_with_text(raw_plan, repo_root)
+    except OSError as exc:
+        reason = f"plan unreadable ({type(exc).__name__})"
+        prep_gate = {
+            "plan": raw_plan, "verdict": "REFUSED", "withheld_rows": [], "classes": {},
+            "message": reason,
+        }
+        corrects, spine_rows, ref, absent, questions = None, None, None, None, ""
+        anchor = [_anchor_premise.unjudged(reason)]
+    else:
+        corrects, spine_rows, ref, absent, questions, text, fm = _plan_inputs(plan_text)
+        anchors, defects = _anchor_premise.parse_anchors(fm, repo_root)
+        carried = _carry_rows(repo_root, str(prep_gate["plan"])) if anchors else []
+        anchor = defects + _anchor_premise.anchor_findings(anchors, premise_rows, carried, text)
     out = readiness_verdict(
         prep_gate, coverage, reviews, repo_root, premise_rows, corrects, spine_rows, ref,
-        absent, questions,
+        absent, questions, anchor,
     )
     return {"plan": prep_gate["plan"], **out, "prep_gate": prep_gate}

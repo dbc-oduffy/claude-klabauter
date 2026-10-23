@@ -72,12 +72,15 @@ def _run_dirs(root: Path) -> list[Path]:
     return sorted(p for p in (root / RUN_DIR_ROOT).iterdir() if p.is_dir())
 
 
-def _assert_rewrite(env: dict) -> dict:
+def _assert_rewrite(env: dict, *, launcher: bool = False) -> dict:
     hso = env["hookSpecificOutput"]
     assert hso["permissionDecision"] == "allow", env
     updated = hso["updatedInput"]
     assert Path(updated["scriptPath"]).is_file()
-    assert updated.get("args")
+    if launcher:
+        assert set(updated) == {"scriptPath"}, updated
+    else:
+        assert updated.get("args")
     return updated
 
 
@@ -129,8 +132,9 @@ def test_asks_submission_through_the_real_fanout_and_emit(repo, monkeypatch):
     with _count_spawns_attributed(monkeypatch) as spawns:
         env = mod.evaluate(_payload(repo, {"asks": asks}))
 
-    _assert_rewrite(env)
-    (parent_dir,) = (repo / "scratch" / "warp").glob("ask-parent-*")
+    updated = _assert_rewrite(env, launcher=True)
+    assert updated["scriptPath"].endswith(".launcher.workflow.mjs")
+    (parent_dir,) = (p for p in (repo / "scratch" / "warp").glob("ask-parent-*") if p.is_dir())
     record = contract.ParentRecord.from_json(
         json.loads((parent_dir / "parent.json").read_text(encoding="utf-8"))
     )

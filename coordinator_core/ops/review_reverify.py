@@ -1,9 +1,10 @@
 """
 coordinator_core.ops.review_reverify — registers ``review.reverify``: lists the product files a
-review stage changed since ``review.prep`` froze them, and restores the ones failing tests implicate.
+review stage changed since ``review.prep`` froze them, and inverts the applied findings failing tests implicate.
 
 Params: ``base`` (str), ``slice_prefix`` (str), optional ``session_id``, optional ``failing``
-(list of pytest node ids), optional ``sidecars`` (list of review sidecar paths). Keying scope:
+(list of pytest node ids), optional ``sidecars`` (list of review sidecar paths), optional
+``failing_before`` (list of node ids), optional ``probe`` (``"open"`` or ``"close"``). Keying scope:
 show_top.
 
 Reads the write-once pre-review snapshot ``review.prep`` left at
@@ -27,28 +28,36 @@ is such a path another live run declared that is tracked in the snapshot's base 
 spans concurrent runs, so it is reported, never reverted or removed. In revert mode ``foreign`` lists
 the failing node ids whose test file is foreign.
 
-Revert mode (``failing`` given): ``{"reverted", "unattributed", "record", "error"}``. A failing
-node id's test file implicates itself when edited or created, and every edited ``.py`` module it
-imports, plus every edited or created path a string literal in it names. Trap: a tripwire naming
-several edited paths implicates, and so reverts, all of them. ``restored`` writes the baseline bytes
-back and each ``reverted`` entry carries ``source`` (``"snapshot"`` or ``"head"``); ``removed``
-deletes a created path, but a created path tracked at HEAD is restored to HEAD's bytes, never
-unlinked. Before anything is written, the revert (tripwire-named paths included) refuses (``error``,
-nothing written, the whole call) when it would remove a top-level symbol that a committed file in the
-run's surface (manifest paths plus paths changed anchor..HEAD) still uses. An id
-implicating nothing is ``unattributed`` and reverts nothing. Every restored or removed path is
-passed to ``declare_write`` so the session's write record carries the new bytes. The record
-``reverify.json`` merges across calls.
+Revert mode (``failing`` given, no ``probe``): ``{"reverted", "unattributed", "pre_existing",
+"kept", "record", "error"}``. A failing node id's test file implicates itself when edited or created,
+and every edited ``.py`` module it imports, plus every edited or created path a string literal in it
+names. Trap: a tripwire naming several edited paths implicates all of them. An implicated edited
+path is rewritten as its current bytes with each applied finding on it inverted (the ledger row's
+``after`` replaced by its ``before``; ``action`` ``"reverted-findings"``, ``source`` ``"findings"``);
+every other byte, executor hunks included, is untouched. A finding that cannot be inverted, and an
+implicated path with no applied finding, go to ``kept`` with a reason and write nothing. A created
+path is removed, but one tracked at HEAD is restored to HEAD's bytes, never unlinked. Before
+anything is written, the revert (tripwire-named paths included) refuses (``error``, nothing written,
+the whole call) when it would remove a top-level symbol that a committed file in the run's surface
+(manifest paths plus paths changed anchor..HEAD) still uses. An id implicating nothing is
+``unattributed`` and reverts nothing. Every rewritten or removed path is passed to ``declare_write``.
+The record ``reverify.json`` merges across calls. Revert refuses while a probe is open.
+
+Probe: ``"probe":"open"`` (with ``failing`` and ``sidecars``) writes the finding-inverted bytes of
+each implicated edited path into the tree, stashing the post-review bytes beside the snapshot, and
+names the ``rerun`` ids for the test-runner. ``"probe":"close"`` puts the post-review bytes back.
+``failing_before`` ids that a closed probe re-ran are ``pre_existing``: they implicate nothing, and
+are recorded, never reverted. An id no closed probe re-ran is never honoured.
 
 Negative-spec: zero process spawns, no git verb, no test execution. A refusal (no manifest, a
 path escaping the worktree, an unreadable or corrupt blob) is returned as ``error`` with nothing
-written, never raised. Attribution is per file, never per hunk.
+written, never raised. Attribution is by ledger finding, never by snapshot diff: a write-once
+snapshot predates a refire's executor writes.
 """
 
 from __future__ import annotations
 
 import ast
-import hashlib
 import json
 from datetime import datetime, timezone
 from pathlib import Path
@@ -64,7 +73,9 @@ from coordinator_core.git.index_write import (
     splice_index,
 )
 from coordinator_core.ipc import register_op
+from coordinator_core.ops import review_reverify_probe as probe_io
 from coordinator_core.ops._path_guard import contained_path
+from coordinator_core.ops.review_reverify_findings import applied_rows, invert
 from coordinator_core.ops.review_tripwires import literal_namers, names_in
 from coordinator_core.ops.reverify_callers import callers_of, removed_symbols
 from coordinator_core.pyimports import collect_imports, module_name_for_file, resolve_relative_module
@@ -75,6 +86,9 @@ from coordinator_core.session.touch_record import compute_content_hash
 
 MUTATES = [
     ".coordinator-local/subagent-share/*/*.pre-review/reverify.json",
+    ".coordinator-local/subagent-share/*/*.pre-review/probe.json",
+    ".coordinator-local/subagent-share/*/*.pre-review/probe-closed.json",
+    ".coordinator-local/subagent-share/*/*.pre-review/probe/*",
     "<review-edited product files named by the snapshot manifest>",
 ]
 
@@ -83,9 +97,15 @@ _RECORD = "reverify.json"
 _MACHINERY_PREFIXES = (".coordinator-local/", "state/")
 
 
-def _fail(message: str, revert: bool) -> dict:
+def _fail(message: str, revert: bool, probe: Optional[str] = None) -> dict:
+    if probe == "open":
+        return {"probed": [], "rerun": [], "record": None, "error": message}
+    if probe == "close":
+        return {"restored": [], "rerun": [], "error": message}
     if revert:
-        return {"reverted": [], "unattributed": [], "record": None, "error": message}
+        return {
+            "reverted": [], "unattributed": [], "pre_existing": [], "kept": [], "record": None, "error": message,
+        }
     return {"edited": [], "created": [], "snapshot": None, "error": message}
 
 
@@ -393,33 +413,65 @@ def _dangling(repo_root: Path, view: _View, manifest: dict, plan: _Plan) -> Opti
     return None
 
 
-def _findings(repo_root: Path, sidecars: List[str], rel: str) -> List[dict]:
-    from coordinator_core.ops import review_findings_ledger
-
-    out: List[dict] = []
-    for sidecar in sidecars:
-        path = Path(sidecar)
-        path = path if path.is_absolute() else repo_root / path
-        if contained_path(path, [repo_root]) is None:
-            continue
-        got = review_findings_ledger.read_ledger(path)
-        rows = got[1] if got else []
-        for row in rows:
-            if _norm(str(row.get("file") or "")) == rel:
-                out.append({"sidecar": sidecar, "id": row.get("id")})
-    return out
-
-
 def _load_record(record: Path) -> dict:
     try:
         data = json.loads(record.read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        return {"reverted": [], "unattributed": []}
+        data = None
     if not isinstance(data, dict):
-        return {"reverted": [], "unattributed": []}
-    data.setdefault("reverted", [])
-    data.setdefault("unattributed", [])
+        data = {}
+    for key in ("reverted", "unattributed", "pre_existing", "kept"):
+        data.setdefault(key, [])
     return data
+
+
+def _implication(
+    repo_root: Path, ids: List[str], edited: List[str], created: List[str]
+) -> Dict[str, Set[str]]:
+    """Node id -> the edited or created paths it implicates (empty set: implicates nothing)."""
+    edited_set, created_set = set(edited), set(created)
+    edited_py = {p for p in edited if p.endswith(".py")}
+    out: Dict[str, Set[str]] = {}
+    for node in ids:
+        test_file = _node_file(node)
+        targets: Set[str] = set()
+        if test_file in edited_set or test_file in created_set:
+            targets.add(test_file)
+        if test_file.endswith(".py"):
+            targets.update(_imported_edited(repo_root, test_file, edited_py))
+            targets.update(_literal_named(repo_root, test_file, edited + created))
+        out[node] = targets
+    return out
+
+
+def _current(repo_root: Path, rel: str) -> bytes:
+    try:
+        return (repo_root / rel).read_bytes()
+    except OSError:
+        return b""
+
+
+def _refs(refs) -> List[dict]:
+    return [{"sidecar": r.sidecar, "id": r.id} for r in refs]
+
+
+def _open_probe(
+    repo_root: Path, snapshot_dir: Path, ids: List[str], implicated: Dict[str, List[str]],
+    created_set: Set[str], sidecars: List[str],
+) -> dict:
+    writes: Dict[str, bytes] = {}
+    for rel in sorted(implicated):
+        target = repo_root / rel
+        if rel in created_set or not target.is_file():
+            continue
+        inv = invert(target.read_bytes(), applied_rows(repo_root, sidecars, rel))
+        if inv.reverted:
+            writes[rel] = inv.data
+    rerun = [
+        n for n in ids
+        if _node_file(n) not in created_set and any(n in implicated[rel] for rel in writes)
+    ]
+    return probe_io.open_probe(repo_root, snapshot_dir, writes, rerun)
 
 
 def review_reverify(
@@ -430,36 +482,47 @@ def review_reverify(
     session_id: str = "",
     failing: Optional[List[str]] = None,
     sidecars: Optional[List[str]] = None,
+    failing_before: Optional[List[str]] = None,
+    probe: Optional[str] = None,
 ) -> dict:
-    """List the review edits since the snapshot, or (``failing`` given) restore the ones those
-    tests implicate; see the module docstring."""
-    revert = failing is not None
+    """List the review edits since the snapshot, or (``failing`` given) invert the findings those
+    tests implicate; ``probe`` opens or closes the pre-review probe. See the module docstring."""
+    if probe not in (None, "open", "close"):
+        return _fail('probe must be "open" or "close"', failing is not None)
+    if probe == "open" and failing is None:
+        return _fail('probe "open" requires failing', False, "open")
+    revert = failing is not None and probe is None
+    shape = probe
     if not base or not slice_prefix:
-        return _fail("base and slice_prefix are required", revert)
+        return _fail("base and slice_prefix are required", revert, shape)
     session = session_id or resolve_session_id(str(repo_root))
     if not session:
-        return _fail("no session id: pass session_id or run under a session", revert)
+        return _fail("no session id: pass session_id or run under a session", revert, shape)
     for label, value in (("slice_prefix", slice_prefix), ("session_id", session)):
         if "/" in value or "\\" in value or ".." in value:
-            return _fail(f"{label} must be a bare name, not a path", revert)
+            return _fail(f"{label} must be a bare name, not a path", revert, shape)
     share = Path(share_dir(str(repo_root), session))
     snapshot_dir = share / f"{slice_prefix}.pre-review"
     manifest = _read_manifest(snapshot_dir)
     if manifest is None:
-        return _fail(f"no pre-review snapshot for {slice_prefix}", revert)
+        return _fail(f"no pre-review snapshot for {slice_prefix}", revert, shape)
     recorded_base = manifest.get("base")
     if isinstance(recorded_base, str) and recorded_base and recorded_base != base:
-        return _fail(f"base {base} does not match the snapshot base {recorded_base}", revert)
+        return _fail(f"base {base} does not match the snapshot base {recorded_base}", revert, shape)
+    if probe == "close":
+        return probe_io.close_probe(repo_root, snapshot_dir)
+    if revert and probe_io.is_open(snapshot_dir):
+        return _fail('a probe is open; call with "probe":"close"', True)
 
     rels = [_norm(p) for p in manifest["files"]]
     if not _contained(repo_root, rels):
-        return _fail("a snapshot path escapes the worktree", revert)
+        return _fail("a snapshot path escapes the worktree", revert, shape)
     created, foreign = _created(repo_root, session, manifest, share, slice_prefix)
     if not _contained(repo_root, created):
-        return _fail("a review-written path escapes the worktree", revert)
+        return _fail("a review-written path escapes the worktree", revert, shape)
     view = _view(repo_root, manifest, sorted({*rels, *created}))
-    if view.state == "unreadable" and revert:
-        return _fail("HEAD or the snapshot anchor is unreadable; nothing reverted", True)
+    if view.state == "unreadable" and (revert or probe):
+        return _fail("HEAD or the snapshot anchor is unreadable; nothing reverted", True, shape)
     if view.state == "unreadable":
         view = _View("none")
         unreadable = True
@@ -467,7 +530,7 @@ def review_reverify(
         unreadable = False
     edited = _edited(repo_root, manifest, view)
     snapshot_rel = _rel(str(snapshot_dir / _MANIFEST), repo_root)
-    if not revert:
+    if not revert and not probe:
         tripwires = sorted(literal_namers(repo_root, edited + created, exclude=set(edited) | set(created)))
         out = {
             "edited": edited,
@@ -482,61 +545,70 @@ def review_reverify(
         return out
 
     ids = [str(i) for i in failing if isinstance(i, str) and i.strip()]
-    edited_set, created_set = set(edited), set(created)
-    edited_py = {p for p in edited if p.endswith(".py")}
-    implicated: Dict[str, List[str]] = {}
-    unattributed: List[str] = []
-    foreign_set, foreign_ids = set(foreign), []  # type: Set[str], List[str]
+    created_set = set(created)
+    side = list(sidecars or [])
     record_path = snapshot_dir / _RECORD
     prior = _load_record(record_path)
     already = {t for entry in prior["reverted"] if isinstance(entry, dict) for t in entry.get("tests", [])}
-    for node in ids:
-        test_file = _node_file(node)
-        targets: Set[str] = set()
-        if test_file in edited_set or test_file in created_set:
-            targets.add(test_file)
-        if test_file.endswith(".py"):
-            targets.update(_imported_edited(repo_root, test_file, edited_py))
-            targets.update(_literal_named(repo_root, test_file, edited + created))
+    if revert:
+        vouched = {str(i) for i in failing_before or []} & probe_io.closed_rerun(snapshot_dir)
+        pre_existing = sorted(n for n in ids if n in vouched)
+    else:
+        pre_existing = []
+    skip = set(pre_existing)
+    implication = _implication(repo_root, [n for n in ids if n not in skip], edited, created)
+    implicated: Dict[str, List[str]] = {}
+    unattributed: List[str] = []
+    foreign_set, foreign_ids = set(foreign), []  # type: Set[str], List[str]
+    for node, targets in implication.items():
         for target in targets:
             implicated.setdefault(target, []).append(node)
         if not targets and node not in already:
             unattributed.append(node)
-            if test_file in foreign_set:
+            if _node_file(node) in foreign_set:
                 foreign_ids.append(node)
 
+    if probe == "open":
+        return _open_probe(repo_root, snapshot_dir, list(implication), implicated, created_set, side)
+
     plan: _Plan = {}
-    for rel in implicated:
-        entry = view.head_map.get(rel)
+    refs_by_rel: Dict[str, list] = {}
+    kept: List[dict] = []
+    for rel in sorted(implicated):
         if rel in created_set:
+            entry = view.head_map.get(rel)
             if entry is None:
                 plan[rel] = (None, "snapshot")
                 continue
-        elif view.moved(rel):
-            if entry is None:
-                plan[rel] = (None, "head")
-                continue
-        else:
-            digest = manifest["files"].get(rel)
-            try:
-                data = (snapshot_dir / str(digest)).read_bytes()
-            except OSError:
-                return _fail(f"snapshot blob for {rel} is unreadable", True)
-            if hashlib.sha256(data).hexdigest() != digest:
-                return _fail(f"snapshot blob for {rel} does not match its hash", True)
-            plan[rel] = (data, "snapshot")
+            blob = _blob(repo_root, entry)
+            if blob is None:
+                return _fail(f"HEAD blob for {rel} is unreadable", True)
+            plan[rel] = (blob, "head")
             continue
-        blob = _blob(repo_root, entry)
-        if blob is None:
-            return _fail(f"HEAD blob for {rel} is unreadable", True)
-        plan[rel] = (blob, "head")
+        rows = applied_rows(repo_root, side, rel)
+        inv = invert(_current(repo_root, rel), rows)
+        tests = sorted(set(implicated[rel]))
+        if not rows:
+            kept.append({
+                "path": rel, "tests": tests,
+                "findings": [{"sidecar": None, "id": None, "reason": "no-finding"}],
+            })
+            continue
+        if inv.kept:
+            kept.append({
+                "path": rel, "tests": tests,
+                "findings": [{"sidecar": r.sidecar, "id": r.id, "reason": why} for r, why in inv.kept],
+            })
+        if inv.reverted:
+            plan[rel] = (inv.data, "findings")
+            refs_by_rel[rel] = inv.reverted
 
     refusal = _dangling(repo_root, view, manifest, plan)
     if refusal:
         return _fail(refusal, True)
 
     reverted: List[dict] = []
-    for rel in sorted(implicated):
+    for rel in sorted(plan):
         target = repo_root / rel
         data, source = plan[rel]
         if data is None:
@@ -548,14 +620,14 @@ def review_reverify(
         else:
             target.parent.mkdir(parents=True, exist_ok=True)
             atomic_write_bytes(target, data)
-            action = "restored"
+            action = "reverted-findings" if source == "findings" else "restored"
         declare_write(target)
         reverted.append({
             "path": rel,
             "action": action,
             "source": source,
             "tests": sorted(set(implicated[rel])),
-            "findings": _findings(repo_root, list(sidecars or []), rel),
+            "findings": _refs(refs_by_rel.get(rel, [])),
         })
 
     # A removed path an author `git add -N`'d leaves an empty-blob entry with no file; drop only
@@ -569,14 +641,19 @@ def review_reverify(
             index_residue = removed
 
     merged = {
+        **prior,
         "reverted": [*prior["reverted"], *reverted],
         "unattributed": sorted(set(prior["unattributed"]) | set(unattributed)),
+        "pre_existing": sorted(set(prior["pre_existing"]) | set(pre_existing)),
+        "kept": [*prior["kept"], *kept],
     }
     atomic_write_bytes(record_path, (json.dumps(merged, indent=2, sort_keys=True) + "\n").encode("utf-8"))
     declare_write(record_path)
     return {
         "reverted": reverted,
         "unattributed": unattributed,
+        "pre_existing": pre_existing,
+        "kept": kept,
         "foreign": foreign_ids,
         "index_residue": index_residue,
         "record": _rel(str(record_path), repo_root),
@@ -588,15 +665,23 @@ def review_reverify(
 def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "review.reverify". Params: ``base`` (str), ``slice_prefix`` (str), optional
     ``session_id``, optional ``failing`` (list[str] node ids; presence selects revert mode),
-    optional ``sidecars`` (list[str]). Keying scope: show_top."""
-    revert = params.get("failing") is not None
+    optional ``sidecars`` (list[str]), optional ``failing_before`` (list[str]), optional ``probe``
+    (``"open"`` or ``"close"``). Keying scope: show_top."""
+    probe = params.get("probe")
+    shape = probe if probe in ("open", "close") else None
+    revert = params.get("failing") is not None and shape is None
     if repo_root is None:
-        return _fail("review.reverify requires a show_top-keyed dispatch; repo_root was not supplied", revert)
+        return _fail("review.reverify requires a show_top-keyed dispatch; repo_root was not supplied", revert, shape)
     failing, sidecars = params.get("failing"), params.get("sidecars")
+    failing_before = params.get("failing_before")
+    if probe is not None and shape is None:
+        return _fail('review.reverify probe must be "open" or "close"', failing is not None)
     if failing is not None and not isinstance(failing, list):
-        return _fail("review.reverify failing must be a list of node ids", True)
+        return _fail("review.reverify failing must be a list of node ids", True, shape)
+    if failing_before is not None and not isinstance(failing_before, list):
+        return _fail("review.reverify failing_before must be a list of node ids", revert, shape)
     if sidecars is not None and not isinstance(sidecars, list):
-        return _fail("review.reverify sidecars must be a list of paths", revert)
+        return _fail("review.reverify sidecars must be a list of paths", revert, shape)
     return review_reverify(
         repo_root,
         base=str(params.get("base") or ""),
@@ -604,4 +689,6 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         session_id=str(params.get("session_id") or ""),
         failing=failing,
         sidecars=[str(s) for s in sidecars] if sidecars else None,
+        failing_before=[str(i) for i in failing_before] if failing_before else None,
+        probe=shape,
     )

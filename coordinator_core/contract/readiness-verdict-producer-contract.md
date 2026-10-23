@@ -57,9 +57,50 @@ DoE's `PREMISE_SCHEMA`, passed through unchanged.
   `blocking`**. `CONTRADICTED` rows are never covered by `declared_absent` (that is `corrects:`'s
   job), and an entry with an unresolvable `tracked_by`, or a malformed entry, covers nothing. The
   carry that lets a refire skip unchanged citations is in `premise-carry-contract.md`.
+- **Row `anchor` (optional string).** Names a plan `anchor_premises[].id`. A non-string value is
+  refused with a ValueError naming `premise.rows[i].anchor`. A row carrying `anchor` is judged only
+  through the anchor findings below, never as a citation row.
 - `premise` together with a `reviews[]` entry whose `reviewer` is `premise-check` is refused: the
   rows are passed once.
 - An empty `rows` list adds nothing to the verdict (the `premise-check` exclusion still applies). With `premise` absent, the reply is unchanged.
+
+### Anchor premises
+
+**Plan frontmatter `anchor_premises:` (input, read by the op from the plan file).** A list of
+`{id, claim, check: {command, expect}}`: the premises the route rests on (where data lives, which
+caller runs, what a path resolves to). `id` and `claim` are non-blank strings, `id` unique.
+`check.command` is a census-form command that passes `roadmap.census.screen`
+(`census.ALLOWED_FORM`); `check.expect` is non-blank. Absent key: undeclared. `[]`: the plan rests
+on no anchor premise, and adds no finding. The engine never runs `command`; the premise-checker
+does.
+
+**Findings.** Each is one `judgment` entry and one ruling (`source: premise`), and counts as one
+blocking finding:
+
+- `anchor-premises-undeclared`: the key is absent.
+- `anchor-premise-unchecked: <id>`: malformed entry, missing or blank check, or a `command` that
+  `census.screen` refuses.
+- `anchor-premise-no-verdict: <id>`: no row resolves the anchor.
+- `anchor-premise-unknown: <id>`: a passed row names an `anchor` no declared entry carries.
+- `anchor-premises-unjudged: <reason>`: the plan could not be read; the reply pulls.
+- `anchor-premise-malformed-row: rows[<i>] (not a mapping)`: a passed `premise.rows` entry is not a
+  mapping; `<i>` is its 0-based index.
+- `anchor-premise-<VERDICT>: <id>`: the verdict is `UNRESOLVED`, `CONTRADICTED` or `UNCHECKABLE`.
+
+**Verdict source.** A passed `premise.rows` entry with `anchor: <id>` wins. Otherwise a row in the
+plan's premise-carry file (`premise-carry-contract.md` § 2) with `anchor: <id>` counts only while
+its `line_hash` is still among the plan's line hashes. A null or stale hash (the anchor line was
+edited) is no verdict. Matching is exact id equality, never prose similarity. A row's `anchor` is
+matched stripped; a non-string `anchor` never matches. A verdict outside
+`RESOLVES | UNRESOLVED | CONTRADICTED | UNCHECKABLE` (case-sensitive, non-strings included) counts
+as no verdict: the search continues to a later passed row or a live carry row.
+
+**No exemption.** `corrects:` and `declared_absent:` never cover an anchor finding.
+
+**Two rules, one reason.** "Only `UNRESOLVED` and `CONTRADICTED` rows block" holds for citation rows
+(approved ruling: `docs/plans/2026-10-15-premise-uncheckable-never-blocks.md`). An anchor row blocks
+on any verdict but `RESOLVES`: the route rests on it, so unverifiable means halt or re-plan.
+Non-anchor `UNCHECKABLE` rows stay notes.
 
 **Clear vocabulary.** A coverage or review verdict reads as clear (case-insensitive) when it is one
 of `approve`, `approved`, `pass`, `passed`, `clear`, `clean`, `ready`, `ok`, `accept`, `accepted`,

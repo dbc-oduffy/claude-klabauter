@@ -40,8 +40,9 @@ per the PM order).
      order drops ``unresolved[]`` routing on this path, since only the
      integrator ever fed it], ``confinement_violations`` [always 0],
      ``fixes_applied``, ``brief_conformance``, ``em_may_think_differently``)
-     plus ``plan_id``, ``integrated_from`` (every wave sidecar's stem) and
-     ``slices`` (the wave's own slice count).
+     plus ``plan_id``, ``integrated_from`` (every wave sidecar's stem),
+     ``slices`` (the wave's own slice count) and ``unapplied_findings``
+     (``{sidecar, finding, reason}`` per finding not an applied ledger row).
   5. Stamps ``plan_id`` onto every wave sidecar's own frontmatter (idempotent
      -- a no-op if already present and equal), so a wave sidecar (Kira's
      included) carries the same plan-identity join key the one-stage path's
@@ -352,6 +353,65 @@ def review_firing_rows(sidecar_paths: List[Path], plan_id: str) -> List[Dict[str
     return rows
 
 
+def _unapplied_findings(
+    stem: str, text: Optional[str], failures: Optional[List[str]]
+) -> List[Dict[str, str]]:
+    """One ``{sidecar, finding, reason}`` entry per reviewer finding that is not an
+    applied ledger row: a non-applied row, a declared finding with no row, or every
+    declared finding when the ledger is unreadable. Never raises."""
+    from coordinator_core.ops.review_findings_ledger import (
+        _declared_findings_count,
+        _extract_findings_section,
+        _parse_ledger_rows,
+        _row_status,
+    )
+
+    if text is None:
+        return []
+    out: List[Dict[str, str]] = []
+
+    def _entry(finding: str, reason: str) -> None:
+        out.append({"sidecar": stem, "finding": finding, "reason": reason})
+
+    declared = _declared_findings_count(text) or 0
+    section = _extract_findings_section(text) or ""
+    headings = [m.group(1).strip() for m in re.finditer(r"(?m)^###\s+(Finding\b[^\n]*)$", section)]
+    rows: Optional[List[Dict[str, Any]]]
+    try:
+        rows = _parse_ledger_rows(text)
+        ledger_error = None
+    except LedgerError as exc:
+        rows, ledger_error = None, str(exc)
+
+    def _missing_label(k: int, offset: int) -> str:
+        if offset == 0 and len(headings) == declared:
+            return headings[k]
+        return f"unledgered finding {offset + k + 1} of {declared}"
+
+    if rows is None:
+        reason = f"ledger unreadable: {ledger_error}" if ledger_error else "no ledger row"
+        if ledger_error is None and failures:
+            reason = f"no ledger row: {failures[0]}"
+        if declared == 0 and ledger_error is not None:
+            _entry("unledgered findings", reason)
+        for k in range(declared):
+            _entry(_missing_label(k, 0), reason)
+        return out
+
+    for row in rows:
+        status = _row_status(row)
+        if status == "applied":
+            continue
+        why = row.get("reason")
+        reason = why.strip() if isinstance(why, str) and why.strip() else f"status {status}"
+        _entry(str(row.get("id") or "(no id)"), reason)
+    if declared > len(rows):
+        reason = f"no ledger row: {failures[0]}" if failures else "no ledger row"
+        for k in range(declared - len(rows)):
+            _entry(_missing_label(k, len(rows)), reason)
+    return out
+
+
 def bookkeep_wave(
     wave_sidecar_paths: List[Path],
     *,
@@ -457,6 +517,11 @@ def bookkeep_wave(
     if stage_returns:
         record.update({k: v for k, v in stage_returns.items() if v is not None})
     record["review_firings"] = review_firing_rows(kept, plan_id)
+    record["unapplied_findings"] = [
+        entry
+        for p in kept
+        for entry in _unapplied_findings(_stem(p), _load_sidecar_text(p), ledger_failures.get(_stem(p)))
+    ]
 
     record_path = (
         repo_root

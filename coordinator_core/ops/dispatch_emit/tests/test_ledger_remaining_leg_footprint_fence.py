@@ -110,6 +110,60 @@ def test_absent_footprint_artifact_reports_unrecorded_and_withholds_nothing_on_t
     assert {"a.py", B} <= landed
 
 
+def _append_serving_row(root) -> None:
+    """Append a spine row serving `R1` that declares `B`, after the footprint artifact was recorded."""
+    text = (root / PLAN).read_text(encoding="utf-8")
+    row = f"- id: C2\n  title: t2\n  disposition: open\n  register_rows: [R1]\n  writes: [{B}]\n  body: |\n    b\n"
+    _write(root, PLAN, text.replace("```\n", row + "```\n", 1) if text.endswith("```\n") else text + row)
+
+
+def _terminal_with(root, token: str, resume: dict, verdict: dict) -> dict:
+    return land_run._handler(
+        {
+            "script_path": "run2.mjs", "run_id": RUN2, "run_token": token, "incomplete_chunks": [],
+            "inline_review": {"integration_stem": "rev-stem", "slices": 1, "fixes": 0},
+            "session_id": "11111111-2222-3333-4444-555555555555", "ledger_verdict": verdict,
+            "resume_ledger": resume,
+        },
+        repo_root=root / ".git",
+    )
+
+
+def test_row_appended_to_the_plan_after_the_footprint_was_recorded_lands(halted):  # noqa: F811
+    resume = _composed(halted)
+    token = _stage_refire(halted, change_in=True, change_out=True)
+    _record_footprint(halted, ["a.py"])
+    _append_serving_row(halted)
+
+    out = _terminal(halted, token, resume)
+
+    assert out["committed"] is True, out
+    assert "footprint_breach" not in out
+    landed = set(_git(halted, "show", "--name-only", "--format=", out["sha"]).split())
+    assert {"a.py", B} <= landed
+    assert "Row-Unlanded" not in _git(halted, "show", "-s", "--format=%B", out["sha"])
+
+
+def test_met_resting_on_a_breach_path_refuses_and_leaves_it_dirty(halted):  # noqa: F811
+    from coordinator_core.ops.dispatch_emit import footprint_breach
+
+    resume = _composed(halted)
+    token = _stage_refire(halted, change_in=True, change_out=True)
+    _record_footprint(halted, ["a.py"])
+    head = _git(halted, "rev-parse", "HEAD")
+    verdict = {"items": [{"id": "R1", "status": "met", "wired": True, "met_by": [B]}]}
+
+    out = _terminal_with(halted, token, resume, verdict)
+
+    assert out["committed"] is False and out["refused"] == "ledger-unmet", out
+    assert [f["id"] for f in out["ledger_failures"]] == ["R1"]
+    assert out["ledger_failures"][0]["reason"].startswith(footprint_breach.MET_ON_FOOTPRINT_BREACH_REASON)
+    assert "since_halt_close" not in out and not out.get(land_run.ALREADY_LANDED_KEY)
+    assert _git(halted, "rev-parse", "HEAD") == head
+    assert (halted / B).read_text(encoding="utf-8") == "b = 2\n"
+    assert B in _git(halted, "status", "--porcelain", "--", B)
+
+
 def test_fence_reply_keys():
     assert land_run._fence_reply({}) == {}
     assert land_run._fence_reply({"recorded": False}) == {"footprint": "unrecorded"}

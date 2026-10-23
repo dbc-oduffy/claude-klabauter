@@ -1,51 +1,10 @@
 import pytest
 
 
-@pytest.fixture(autouse=True)
-def _no_ambient_plugin_root(monkeypatch):
-    """Fixture rosters name agent types no real plugin ships; an ambient
-    CLAUDE_PLUGIN_ROOT from the invoking session would arm the emit-time
-    agent-type resolution against them. Tests that exercise the check set it. A degraded host refuses
-    every surviving coordinator: agentType, so the default host here is the
-    plugin-resolving one; degradation tests set COORDINATOR_AGENT_TYPE_HOST."""
-    monkeypatch.delenv("CLAUDE_PLUGIN_ROOT", raising=False)
-    monkeypatch.setenv("COORDINATOR_AGENT_TYPE_HOST", "coordinator")
-
-
-@pytest.fixture(autouse=True)
-def _unhoisted_ask_scripts(monkeypatch):
-    """Composer tests assert on literal script text; hoisting is pinned by test_ask_compose_prompt_fragments."""
-    from coordinator_core.ops.dispatch_emit import prompt_fragments
-
-    monkeypatch.setattr(prompt_fragments, "HOIST_ENABLED", False)
-
-
-@pytest.fixture(autouse=True)
-def _no_ambient_box_terms(monkeypatch):
-    """A box whose machine-local registry names box terms would preamble every
-    CLI-driven brief here; tests that exercise the default patch it back in."""
-    from coordinator_core import machine_resolver
-    from coordinator_core.ops.dispatch_emit.cli import BOX_TERMS_KEY
-
-    from coordinator_core.bash_guards._heavy_admission_contract import KEY_VITEST_MAX_WORKERS
-
-    real = machine_resolver.registry_get
-    masked = {BOX_TERMS_KEY, KEY_VITEST_MAX_WORKERS}
-    monkeypatch.setattr(
-        machine_resolver, "registry_get", lambda key: None if key in masked else real(key)
-    )
-
-
-@pytest.fixture(autouse=True)
-def _write_set_reads_clean(request, monkeypatch):
-    """The CLI plan route refuses on a dirty or unreadable write set; fixture
-    repos here are fake `.git` dirs, so the guard is stubbed out. The
-    guard's own test module runs the real function."""
-    if request.module.__name__.rpartition(".")[2].startswith("test_dirty_write_set"):
-        return
-    from coordinator_core.ops.dispatch_emit import dirty_write_set
-
-    monkeypatch.setattr(dirty_write_set, "guard_against_dirty_write_set", lambda *a, **k: None)
+#: The suite-wide autouse isolation for this directory (_no_ambient_plugin_root,
+#: _unhoisted_ask_scripts, _no_ambient_box_terms, _write_set_reads_clean) lives in
+#: coordinator_core/conftest.py: a Package-level conftest's fixtures detach under interleaved
+#: collection. Guard: test_dispatch_emit_fixtures_attach.py.
 
 
 _V5_ROSTER_FRAGMENT = {

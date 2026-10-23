@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Iterable, Optional
 
 from coordinator_core import warp_live
-from coordinator_core.ops.dispatch_emit import run_artifacts, run_token
+from coordinator_core.ops.dispatch_emit import process_artifact_policy, run_artifacts, run_token
 
 STOPPED_RUN_WINDOW_SECONDS: int = run_token.TTL_SECONDS
 
@@ -111,7 +111,8 @@ def residue(
     """Dirty run-artifact candidates of each `stopped_own_runs` id, outside `pathspec`, and not
     held by a live peer. A candidate whose artifact `runs_of_artifacts` maps to a different run is
     dropped: a stopped run never carries a sibling's plan, nor a `docs/plans/` path no run owns. Unknown contest withholds every dirty
-    candidate as `contest-unknown`. An unreadable index propagates (`IndexParseError`)."""
+    candidate as `contest-unknown`. In a repo that has not opted in it returns empty and, as a side effect,
+    appends the candidates to `info/exclude`. An unreadable index propagates (`IndexParseError`)."""
     runs = stopped_own_runs(repo_root, session_id, now=now)
     if not runs:
         return StoppedResidue({}, {})
@@ -131,6 +132,9 @@ def residue(
             if owner.get(p, None if p.startswith("docs/plans/") else run_id) != run_id
         }
     every = sorted(set().union(*cands.values()))
+    if not process_artifact_policy.hosts_coordinator_state(root):
+        process_artifact_policy.exclude_locally(root, [p for p in every if os.path.lexists(root / p)])
+        return StoppedResidue({}, {})
     dirty = set(commit_companion.own_left_behind(root, {session_id: every}, session_id, spec))
     if not dirty:
         return StoppedResidue({}, {})

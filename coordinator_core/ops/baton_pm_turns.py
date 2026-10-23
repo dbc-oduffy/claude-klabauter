@@ -265,6 +265,16 @@ def _words(text: str) -> List[str]:
     return re.findall(r"[a-z0-9']+", text.lower())
 
 
+_PASTED_RE = re.compile(
+    r"<\\?pasted_content\b[^>]*>.*?(?:</\\?pasted_content>|\Z)", re.DOTALL | re.IGNORECASE)
+
+
+def strip_pasted(text: str) -> str:
+    """`text` with each ``<pasted_content ...>...</pasted_content>`` block removed (an unclosed
+    block runs to the end): pasted text is not the PM's own words."""
+    return _PASTED_RE.sub(" ", text)
+
+
 def quotes_turn(intent: str, turn_text: str) -> bool:
     """True when `intent` quotes `turn_text`: the whole turn, or a run of `_QUOTE_RUN_WORDS`
     words of it, appears in the intent (case and punctuation ignored)."""
@@ -283,14 +293,18 @@ def is_turn_excerpt(ask: str, turn_text: str) -> bool:
     """True when `ask` is the PM's own words from `turn_text`: its words equal the turn's, or
     form a contiguous run of it at least `_QUOTE_RUN_WORDS` long (case and punctuation ignored).
     An ask carrying the whole turn plus other words is not an excerpt."""
-    have, turn = _words(ask), _words(turn_text)
-    if not have or len(have) > len(turn):
+    have = _words(ask)
+    if not have:
         return False
-    if have == turn:
-        return True
-    if len(have) < _QUOTE_RUN_WORDS:
-        return False
-    return " " + " ".join(have) + " " in " " + " ".join(turn) + " "
+    stripped = strip_pasted(turn_text)
+    for turn in (_words(turn_text), _words(stripped)) if stripped != turn_text else (_words(turn_text),):
+        if len(have) > len(turn):
+            continue
+        if have == turn:
+            return True
+        if len(have) >= _QUOTE_RUN_WORDS and " " + " ".join(have) + " " in " " + " ".join(turn) + " ":
+            return True
+    return False
 
 
 #: Separator between pieces of an ask made of several recorded turns.
@@ -325,7 +339,8 @@ def nearest_turn(piece: str, turns: List[Dict[str, Any]]) -> "tuple[Optional[Dic
     have = _words(piece)
     best, best_ratio, best_matcher = None, 0.0, None
     for entry in reversed(turns[-_NEAREST_SCAN_TURNS:]):
-        matcher = difflib.SequenceMatcher(None, have, _words(entry["prompt"]), autojunk=False)
+        matcher = difflib.SequenceMatcher(None, have, _words(strip_pasted(entry["prompt"])),
+                                          autojunk=False)
         ratio = matcher.ratio()
         if ratio > best_ratio:
             best, best_ratio, best_matcher = entry, ratio, matcher
@@ -335,7 +350,7 @@ def nearest_turn(piece: str, turns: List[Dict[str, Any]]) -> "tuple[Optional[Dic
     for tag, a0, a1, b0, b1 in best_matcher.get_opcodes():
         if tag == "equal":
             continue
-        ask_part, turn_part = _short(have[a0:a1]), _short(_words(best["prompt"])[b0:b1])
+        ask_part, turn_part = _short(have[a0:a1]), _short(_words(strip_pasted(best["prompt"]))[b0:b1])
         if tag == "replace":
             fragments.append(f"ask has '{ask_part}' where turn has '{turn_part}'")
         elif tag == "delete":

@@ -216,4 +216,4 @@ def test_the_ledger_halt_still_precedes_the_commit_on_the_resume_path(monkeypatc
 
 
 def test_the_gate_reply_prompts_name_resume_ledger(monkeypatch):
-    assert "resume_rows, resume_ledger and spine_plan" in _script(monkeypatch)
+    assert "resume_rows, resume_ledger, pending_rulings and spine_plan" in _script(monkeypatch)

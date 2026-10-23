@@ -295,6 +295,16 @@ _XL_EXIT_EFFORT = "low"
 _COMMIT_AGENT_TYPE = _emit._COMMIT_AGENT_TYPE
 _PLAN_REVIEW_AGENT_TYPE = "coordinator:staff-eng"
 _PLAN_REVIEW_EFFORT = "low"
+_ANCHOR_BRIEF_VERSION = "ask-compose-anchor/1"
+#: Inserted ahead of the readiness-op sentence in the review and revise prompts.
+_ANCHOR_PREMISES_SENTENCE = (
+    "Declare `anchor_premises:` in the plan's frontmatter: each premise the route rests on "
+    "(where data lives, which caller runs, what a path resolves to) as {id, claim, check: "
+    "{command, expect}} with the command in census form, or [] when it rests on none. Run each "
+    "check, then record its verdict through the `plan.premise_record` op with `anchor: <id>` and "
+    "`line: <1-based plan line of that anchor's command:>` on the row (brief_version "
+    f"`{_ANCHOR_BRIEF_VERSION}`). "
+)
 #: Every APM ruling in-run: a repo memo never outranks a live PM verbatim (an executor once
 #: followed a memo over the ask on the strength of an APM ruling).
 _KEEP_THE_ASK = (
@@ -891,9 +901,18 @@ _RUNTIME_PLAN_PATH_JS = "(_planRel ?? _sizingRel)"
 _EVIDENCE_SLOT = "EVIDENCE_PATH_SLOT_X"
 #: `<plan-stem>.evidence.yaml` beside the run's plan, which is unknown until run time.
 _RUNTIME_EVIDENCE_PATH_JS = "((_planRel ?? _sizingRel).replace(/\\.[^./]+$/, '') + '.evidence.yaml')"
+#: One source for the falsifier, judge and verify legs. Trap: a route-authored test shares the
+#: route's own assumptions (a store root it threads in, a cwd it sits in), so it can pass while the
+#: production path the ask names still fails.
+_PRODUCTION_PATH_CLAUSE = (
+    " When the ask asks to prove a behaviour holds, or names a production entry point or caller, "
+    "drive that production entry point end-to-end, from a foreign cwd (not the repo root) where cwd "
+    "matters. Verification that exercises only route-authored test fixtures for such an ask does not "
+    "prove the criterion: report it as not proving the criterion, never as met."
+)
 _JUDGE_PATH_CLAUSE = (
     "\n\nThe plan_path below is the plan, or on the XS route (no plan is authored) the sizing: "
-    "then its exit_criterion is the spec and there is no Verification section."
+    "then its exit_criterion is the spec and there is no Verification section." + _PRODUCTION_PATH_CLAUSE
 )
 #: The scout's folded falsifier act. Trap: the scout assembled the criterion, so the probe must hit
 #: the criterion's observable outcome and never the scout's own premise evidence.
@@ -907,6 +926,7 @@ _FALSIFIER_ACT = (
     "this run's uncommitted change. It probes observable output, not an internal name the change "
     "may rename. Return how (one runnable observation, verbatim), baseline_output and "
     "expected_when_true (what the same observation shows once the criterion holds)."
+    + _PRODUCTION_PATH_CLAUSE
 )
 #: The plan-authoring legs' falsifier act, for every arm with no in-run scout to fold it into (a presized
 #: ask, an M+ spine review) and for a scout that returned none. Same return shape as the scout fold.
@@ -968,7 +988,9 @@ _VERIFY_INTRO = (
     "docs and criterion-judge agents. The run's change is on disk, uncommitted. Do these three steps in "
     "order. Your write set is exactly step 2's declared doc writes and its delivery note (and any verdict "
     "report step 2 names); in steps 1 and 3 "
-    "you edit, stage and commit nothing, and you never change a file to make a requirement true.\n\n"
+    "you edit, stage and commit nothing, and you never change a file to make a requirement true."
+    + _PRODUCTION_PATH_CLAUSE
+    + "\n\n"
 )
 _VERIFY_NO_TESTS = "Run no tests: this run has no scoped test target to run. Omit `test`."
 _VERIFY_NO_DOCS = "Write no docs on this run: omit doc_paths, note_path and stale_docs."
@@ -1078,16 +1100,16 @@ def _known_arm(repo_root: str, sizing_rel: Optional[str]) -> Optional[str]:
 
 
 def _intake_sizing(repo_root: str, sizing_rel: Optional[str]) -> Optional[dict]:
-    """The sizing at `sizing_rel` when it is an unsized intake mint, else None."""
+    """The sizing at `sizing_rel` when its estimate is unsettled (intake mint or draft), else None."""
     if not sizing_rel:
         return None
-    from coordinator_core.ops.sizing_intake_contract import is_intake
+    from coordinator_core.ops.sizing_intake_contract import needs_size_stage
 
     try:
         sizing = load_sizing(Path(repo_root), sizing_rel)
     except (SizingFireRefused, OSError, ValueError, KeyError):
         return None
-    return sizing if is_intake(sizing) else None
+    return sizing if needs_size_stage(sizing) else None
 
 
 def _source_memo_clause(repo_root: str, prompt: Optional[str], sizing_rel: Optional[str]) -> str:
@@ -1424,7 +1446,7 @@ def compose_ask_script(
     `run_base_sha`, when given, is the base for the review blocks, the criterion judge brief and
     the test instruction; absent, the base is HEAD at compose time.
 
-    A `sizing_rel` that is an intake mint (`is_intake`) is sized in-run like a raw ask, into that
+    A `sizing_rel` that is an intake mint or at `draft` (`needs_size_stage`) is sized in-run like a raw ask, into that
     same file: its placeholder route never picks the arm and its minted `pm_verbatims` are kept.
 
     `ask_source="relayed"` marks `prompt` as an EM's relay: every prompt that would call the ask
@@ -2487,7 +2509,9 @@ def compose_ask_script(
             ". Review it as the plan reviewer: every row's writes are real, bounded paths, its done "
             "condition is a runnable check, and together the rows serve the sizing's exit criterion. "
             "Apply every finding IN PLACE with Edit -- never scaffold a new plan, never change its "
-            "path -- then return its repo-relative path as plan_rel. Then run the "
+            "path -- then return its repo-relative path as plan_rel. "
+            + _ANCHOR_PREMISES_SENTENCE
+            + "Then run the "
             "`plan.readiness_verdict` op on the reviewed plan and return that reply's pull_class and "
             "verdict alongside plan_rel. Also declare the spine's `review_signals` in its frontmatter "
             "(ids from this vocabulary, empty when none: "
@@ -2608,7 +2632,9 @@ def compose_ask_script(
             "js:_pulledEntry.planPath",
             " at its prep gate. Revise that plan IN PLACE with Edit -- never scaffold a new one, never "
             "change its path -- so every finding below is resolved, then return its repo-relative path "
-            "as plan_rel. Then run the `plan.readiness_verdict` op on the revised plan, passing the "
+            "as plan_rel. "
+            + _ANCHOR_PREMISES_SENTENCE
+            + "Then run the `plan.readiness_verdict` op on the revised plan, passing the "
             "pull's coverage and reviews values below when they are not null, apply every "
             "mechanical_repairs entry in place with Edit, then re-run the op with the plan alone "
             "(no coverage, no reviews: the repairs answered those findings, and the same values "
@@ -3598,7 +3624,19 @@ def _append_docs_and_commit(
     )
     b.append(f"  if ({live}) {{")
     b.append("    phase('commit');")
+    # Trap: the commit op can return a close block keyed to a sibling run; the emitted script
+    # re-keys it to its own script basename so the reply never reports another run's close.
+    b.append(
+        f"    const _ownCloseKey = String(_nextAction.params.script_path ?? {_lit(script_path or '')})"
+        ".replace(/\\\\/g, '/').split('/').pop().replace(/\\.[^.]*$/, '');"
+    )
     b.append(f"    try {{ _commit = await {commit_call}; }} catch (e) {{ _haltOnUsageLimit(e); }}")
+    b.append(
+        "    if (_ownCloseKey && _commit && _commit.committed === true && _commit.close "
+        "&& typeof _commit.close === 'object' && _commit.close.run_id !== _ownCloseKey) { "
+        "_commit = { ..._commit, close: { ..._commit.close, run_id: _ownCloseKey, "
+        "relayed_run_id: _commit.close.run_id ?? null } }; }"
+    )
     b.append(
         "    if (_commit && _commit.committed === true) { const _blockedRows = _commit.close?.siblings?.blocked_rows ?? [];"
     )

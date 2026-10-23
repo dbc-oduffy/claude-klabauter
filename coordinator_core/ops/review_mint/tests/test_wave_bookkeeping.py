@@ -346,3 +346,63 @@ def test_review_firing_rows_bookkeep_wave_one_row_per_kept_sidecar(tmp_path):
     assert record["excluded_sidecars"] == ["other-plan.delivery"]
     assert [r["leg"] for r in record["review_firings"]] == ["coordinator:code-reviewer"]
     assert record["review_firings"][0]["max_severity"] == "P2"
+
+
+def _findings_sidecar(sid, name, findings_md, ledger):
+    sid.mkdir(parents=True, exist_ok=True)
+    path = sid / name
+    path.write_text(
+        "---\nagent_type: coordinator:code-reviewer\n---\n# Review\n\n## Findings\n\n"
+        f"{findings_md}\n## Findings Ledger\n\n```json\n{json.dumps(ledger)}\n```\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+def test_unapplied_findings_record_why_each_was_left(tmp_path):
+    (tmp_path / ".git").mkdir()
+    sid = tmp_path / ".coordinator-local" / "subagent-share" / "s"
+    titles = [f"Title {i}" for i in range(1, 6)]
+    empty = _findings_sidecar(
+        sid, "four-fb340.md", "".join(f"### Finding {i}: {t}\nBody.\n\n" for i, t in enumerate(titles, 1)), []
+    )
+    rejected = _findings_sidecar(
+        sid,
+        "mixed.md",
+        "### Finding 1: a\nx\n\n### Finding 2: b\ny\n",
+        [
+            {"id": "f1", "file": "src.py", "before": "a", "after": "b"},
+            {"id": "f2", "status": "em-rejected", "reason": "out of slice"},
+        ],
+    )
+    record = bookkeep_wave(
+        [empty, rejected], repo_root=tmp_path, session_id="s", plan_id="pln-x-aaaaaa",
+        prep_sidecar=None, record_stem="rec",
+    )
+    entries = record["unapplied_findings"]
+    mine = [e for e in entries if e["sidecar"] == "four-fb340"]
+    assert [e["finding"] for e in mine] == [f"Finding {i}: {t}" for i, t in enumerate(titles, 1)]
+    assert all(e["reason"].startswith("no ledger row:") for e in mine)
+    assert [e for e in entries if e["sidecar"] == "mixed"] == [
+        {"sidecar": "mixed", "finding": "f2", "reason": "out of slice"}
+    ]
+    assert record["unresolved"] == []
+
+
+def test_unapplied_findings_unreadable_ledger_names_every_finding(tmp_path):
+    (tmp_path / ".git").mkdir()
+    sid = tmp_path / ".coordinator-local" / "subagent-share" / "s"
+    sid.mkdir(parents=True)
+    bad = sid / "bad.md"
+    bad.write_text(
+        "---\nagent_type: coordinator:code-reviewer\n---\n## Findings\n\n### Finding 1: a\n\n### Finding 2: b\n\n"
+        "## Findings Ledger\n\n```json\n{not json\n```\n",
+        encoding="utf-8",
+    )
+    record = bookkeep_wave(
+        [bad], repo_root=tmp_path, session_id="s", plan_id="pln-x-aaaaaa",
+        prep_sidecar=None, record_stem="rec",
+    )
+    entries = record["unapplied_findings"]
+    assert [e["finding"] for e in entries] == ["Finding 1: a", "Finding 2: b"]
+    assert all(e["reason"].startswith("ledger unreadable:") for e in entries)

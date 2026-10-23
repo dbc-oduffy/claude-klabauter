@@ -23,7 +23,8 @@ def _compose():
 
 def test_s_arm_stages_resume_plan_and_authors_only_without_one():
     script = _compose()
-    s_arm = script[script.index("if (!_halted && _gate.arm === 's')"):script.index("_gate.arm === 'm_plus'", script.index("if (!_halted && _gate.arm === 's')"))]
+    start = script.index("_gate.arm === 's') {\n    if (_resumeLedger)")
+    s_arm = script[start:script.index("_gate.arm === 'm_plus'", start)]
     assert "if (_gate.resume_plan) { _planRel = _gate.resume_plan; } else {" in s_arm
     assert s_arm.index("_gate.resume_plan") < s_arm.index("phase('plan')") < s_arm.index("label: 'plan'")
     assert s_arm.count("agent(") == 1

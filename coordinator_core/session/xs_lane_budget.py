@@ -44,7 +44,12 @@ class Usage(NamedTuple):
 
 
 def lane_path(repo_root, sid: str) -> Path:
-    return git_common_dir(Path(repo_root)) / "coordinator-sessions" / sid / _LANE_FILENAME
+    from coordinator_core.session import core as _core
+
+    hub = _core._sessions_dir_resolve(str(repo_root))
+    if not hub:
+        raise RuntimeError(f"session hub unresolvable for {repo_root!s}")
+    return Path(hub) / sid / _LANE_FILENAME
 
 
 def read_lane(repo_root, sid: str) -> Optional[dict]:
@@ -273,7 +278,7 @@ def touched_s_or_larger(sid: str, repo_root) -> bool:
     from coordinator_core.session.scope import parse_touch_event
 
     try:
-        sink = git_common_dir(Path(repo_root)) / "coordinator-sessions" / sid / _TOUCH_RECORD_FILENAME
+        sink = lane_path(repo_root, sid).parent / _TOUCH_RECORD_FILENAME
         lines, degraded = _read_touch_record_as_legacy_lines(sink)
     except Exception:
         return False

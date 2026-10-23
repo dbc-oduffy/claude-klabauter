@@ -26,7 +26,7 @@ from typing import Mapping, Optional
 from coordinator_core.git.run import run_git
 from coordinator_core.ipc import register_op
 from coordinator_core.lifecycle import main_worktree_root
-from coordinator_core.ops.dispatch_emit import run_artifacts, run_token
+from coordinator_core.ops.dispatch_emit import process_artifact_policy, run_artifacts, run_token
 from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT, halted_record_message
 from coordinator_core.ops.dispatch_emit.worktree_snapshot import record_dir_changes
 from coordinator_core.ops.dispatch_emit.halted_run import _STAMP, HALTED_FILE, STATUS_RESUMED
@@ -331,6 +331,18 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     gone = [d for d in deleted if d.split("/")[len(RECORD_DIR_ROOT.split("/"))] in reaped] + artifact_gone
     base["reaped"], base["sizings"] = reaped, sizings
     if params.get("dry_run") is True:
+        return base
+
+    if not process_artifact_policy.hosts_coordinator_state(root):
+        held_back = []
+        for run_id in reaped:
+            for path in [*files[run_id], *base["artifacts"].get(run_id, ())]:
+                if path not in held_back:
+                    held_back.append(path)
+                    base["skipped"].append(
+                        {"run_id": run_id, "reason": process_artifact_policy.WITHHELD_REASON, "path": path}
+                    )
+        process_artifact_policy.exclude_locally(root, held_back)
         return base
 
     commit_params: dict = {"paths": paths + sizings, "message": reap_message(reaped)}

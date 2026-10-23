@@ -641,6 +641,18 @@ _REVERIFY_SCHEMA = {
                 "required": ["path"],
             },
         },
+        "pre_existing": {"type": "array", "items": {"type": "string"}},
+        "kept": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string"},
+                    "tests": {"type": "array", "items": {"type": "string"}},
+                    "findings": {"type": "array", "items": {"type": "object"}},
+                },
+            },
+        },
         "status_before": {"type": "string"},
         "status_after": {"type": ["string", "null"]},
         "record": {"type": ["string", "null"]},
@@ -692,7 +704,7 @@ def _reverify_phase(
     prompt = (
         f"{prompt_head}\n\n{role}"
         "Re-verify the edits this run's review applied in place, and keep only the ones whose "
-        "tests pass. Three steps, in order.\n"
+        "tests pass. Four steps, in order.\n"
         f"1. List what review changed with ONE engine call: `{invoke} review.reverify "
         f"'{{{base_args}}}'{repo_pin}`, its command word exactly as written (a guard denies the "
         "prefix moved into a shell variable). When a non-empty `session_id:` value is given in "
@@ -704,11 +716,23 @@ def _reverify_phase(
         "file in `tripwires`, plus the test files that import an edited module. Name each test file or node id; never a "
         "directory, a tier (the fast tier included) or the full suite. Report every failing "
         "node id as `failing` and set status_before to pass when none failed, else fail.\n"
-        f"3. When any failed, call review.reverify ONCE more in revert mode: `{invoke} review.reverify "
-        f"'{{{base_args},\"failing\":[<failing node ids>],\"sidecars\":[<the review_sidecars "
-        f"paths below>]}}'{repo_pin}` (add `session_id` as in step 1). Return its `reverted` and "
-        "`record` as given, re-run only the tests of the reverted paths, and set status_after to "
-        "pass or fail from that re-run. When nothing failed, status_after is null.\n"
+        f"3. When any failed, measure which were already failing before review: call review.reverify "
+        f"with `\"probe\":\"open\"`: `{invoke} review.reverify "
+        f"'{{{base_args},\"probe\":\"open\",\"failing\":[<failing node ids>],\"sidecars\":[<the "
+        f"review_sidecars paths below>]}}'{repo_pin}` (add `session_id` as in step 1). If it "
+        "returns an error because a probe is already open, call it with `\"probe\":\"close\"` "
+        "first and open once more; on any other open error, pass no `failing_before` and go to "
+        "step 4. Run only the node ids in its `rerun`; those still failing are `failing_before`. "
+        f"Then ALWAYS call `{invoke} review.reverify "
+        f"'{{{base_args},\"probe\":\"close\"}}'{repo_pin}`, even when that run errored. If close "
+        "returns an error, return it as the sidecar's finding and do not call revert.\n"
+        f"4. Call review.reverify in revert mode: `{invoke} review.reverify "
+        f"'{{{base_args},\"failing\":[<failing node ids>],\"failing_before\":[<failing_before "
+        f"ids>],\"sidecars\":[<the review_sidecars paths below>]}}'{repo_pin}` (add `session_id` "
+        "as in step 1). Return its `reverted`, `pre_existing`, `kept` and `record` as given, "
+        "re-run only the tests of the reverted paths, and set status_after to pass or fail from "
+        "that re-run. When nothing failed, status_after is null. `status_before` is the status "
+        "after review, before any revert.\n"
         "Revert only through review.reverify: never `git checkout`, `restore`, `stash` or "
         "`reset`, and never edit a file yourself. Return the sidecar path you wrote as "
         "sidecar_path.\n"

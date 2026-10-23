@@ -73,6 +73,16 @@ def is_intake(doc: Mapping) -> bool:
             and doc.get("status") == "draft")
 
 
+def needs_size_stage(doc: Mapping) -> bool:
+    """True when the estimate is unsettled: an intake mint or `status: draft`.
+
+    `estimate.provisional` is not a signal: a routed or sized sizing keeps it true and is settled by its route.
+    """
+    if not isinstance(doc, Mapping):
+        return False
+    return is_intake(doc) or doc.get("status") == "draft"
+
+
 PROVENANCE_KEY = "provenance"
 PROVENANCE_RELAYED = "relayed"
 RELAYED_TEXT_KEY = "relayed_text"
