@@ -3966,7 +3966,10 @@ _QUEUE_SCHEMA_PINS = {
     # schema.py bug-backlog.
     #   DoE main: bug-backlog 1.2.0 -> 1.3.0 records the status enum gaining
     #   resolved (shape already vendored at 3cdbd7b52)
-    'bug-backlog': "30608be2ab718471cb6ccb4ba4b856c246078684",
+    # Pin moved 2026-10-23 to 2bd852644dd2aa268052046fcbdd56cb8e40beb2 (DoE
+    # HEAD) by bin/claude-klabauter-revendor-schema.py bug-backlog.
+    #   DoE HEAD 2bd852644d: workstream/workstream-event bumps
+    'bug-backlog': "2bd852644dd2aa268052046fcbdd56cb8e40beb2",
     # Pin moved 2026-08-17 to cd70f651f95503ac2d8979b6900ba905c910a75a (DoE
     # HEAD) by bin/claude-klabauter-revendor-schema.py cross-repo-commitment.
     #   scheduled re-vendor pass: sync non-major drifted schemas from DoE HEAD
@@ -4354,23 +4357,7 @@ _QUEUE_SCHEMA_PINS = {
 # the stale-ahead branch caught that unprompted, and the pair converged back to
 # an ordinary byte-pin through bin/claude-klabauter-revendor-schema.py. That is the whole
 # intended lifecycle: declare, gate, converge, remove.
-#
-# sizing-object: claude-klabauter 1.46.0 adds `tie_break` (claude-klabauter-first, 7fb517dc90); DoE
-# still reads 1.45.0 at the doe_ref below and has not vendored it yet.
-# Exit path: once DoE vendors 1.46.0, delete this entry and run
-# bin/claude-klabauter-revendor-schema.py sizing-object so it returns to a plain
-# check_schema_drift byte-pin.
-_QUEUE_SCHEMA_AHEAD_PINS: dict = {
-    'sizing-object': {
-        'doe_ref': "8807597379a74d97b6396eaa667e6646f6da49c2",
-        'reason': (
-            "claude-klabauter-first sizing-object 1.46.0 adds `tie_break` (7fb517dc90); "
-            "DoE's copy is still 1.45.0 and its own vendor of 1.46.0 is pending"
-        ),
-        'provenance': "claude-klabauter 7fb517dc90; plan 2026-10-23-vendored-schema-drift-reconcile",
-        'local_shape_hash': "54e992cbd5a430349237a5bbe24600a2266ea9ed6762511ddeb2115c25bef354",
-    },
-}
+_QUEUE_SCHEMA_AHEAD_PINS: dict = {}
 
 
 def _check_vendored_against_doe(name: str, schema_path: Path) -> None:

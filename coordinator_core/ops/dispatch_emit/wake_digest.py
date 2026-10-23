@@ -23,7 +23,7 @@ from __future__ import annotations
 import functools
 import json
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Sequence
 
 from coordinator_core.ops.dispatch_emit.gate_owed import GATE_OWED_VAR
 
@@ -317,6 +317,7 @@ def next_action_parts(
     anchor_plan_path: Optional[str] = None,
     predispatch: bool = False,
     held: bool = False,
+    targeted_test_paths: Optional[Sequence[str]] = None,
 ) -> tuple:
     """`(kind, op, params)` JS source for a script's `next_action`; the one composer both the
     plan route's wake-digest and the ask script's return render, so the params are
@@ -505,6 +506,10 @@ def next_action_parts(
                 ".map(([plan, tells]) => ({ plan, tells }))"
                 if predispatch else ""
             )
+            + (
+                f", targeted_test_paths: {_js_lit(list(targeted_test_paths))}"
+                if targeted_test_paths else ""
+            )
             + " }"
         )
         if anchor_only:
@@ -542,6 +547,7 @@ def completion_return_js(
     held: bool = False,
     seam: bool = False,
     run_base_runtime: bool = False,
+    targeted_test_paths: Optional[Sequence[str]] = None,
 ) -> str:
     """The emitted script's terminal `return { ... };`, plus the `_cap` helper it uses.
 
@@ -594,6 +600,7 @@ def completion_return_js(
         anchor_plan_path=anchor_plan_path,
         predispatch=predispatch is not None,
         held=held,
+        targeted_test_paths=targeted_test_paths,
     )
 
     routed_out_var = RUNTIME_VARS[8]

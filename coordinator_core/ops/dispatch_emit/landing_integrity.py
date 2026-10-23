@@ -29,6 +29,7 @@ ZERO_FAIL_CHECK = "zero-fail-unattributed"
 
 RETEST_DIR = ".coordinator-local/retest"
 RETEST_LAUNCHER = "emit-dispatch-workflow --retest-targeted"
+RETEST_RUNNING = "running"
 FAILED_TESTS_PARAM = "failed_tests"
 
 _SHA_RE = re.compile(r"^[0-9a-fA-F]{7,40}$")
@@ -350,9 +351,8 @@ def fresh_targeted_verdict(worktree_root: Path, run_id: str) -> Optional[Mapping
     HEAD match and every ``covered`` file hashes as recorded. None otherwise, including for an
     unreadable or malformed file.
 
-    A ``stale`` verdict (no test ran: it records only that the run carries no targeted set) needs
-    the ``run_id`` match alone, since HEAD and tree drift cannot outdate a result nothing measured;
-    a pass or fail verdict keeps the full tree match."""
+    A ``stale`` record (``stale: true`` or status ``"stale"``) and a ``running`` one measured
+    nothing, so neither is ever a fresh verdict."""
     from coordinator_core.git.git_state import head_sha
 
     try:
@@ -361,8 +361,8 @@ def fresh_targeted_verdict(worktree_root: Path, run_id: str) -> Optional[Mapping
         return None
     if not isinstance(record, dict) or record.get("run_id") != run_id or not isinstance(record.get("status"), str):
         return None
-    if record.get("stale") is True or record["status"] == "stale":
-        return record
+    if record.get("stale") is True or record["status"] in ("stale", RETEST_RUNNING):
+        return None
     covered = record.get("covered")
     if not isinstance(covered, dict) or not record.get("head") or record["head"] != head_sha(worktree_root):
         return None
@@ -379,12 +379,16 @@ def landing_test_gate(
     ``failed_targeted_tests`` (including ``"not-run"``, returned before any failure attribution).
     A None ``run_id`` skips the fresh read.
 
-    A fresh verdict with ``stale: true`` (or status ``"stale"``) is ``"stale-non-blocking"``: no
-    findings. A recorded fail with no baseline names its failing ids from ``failed_tests`` (top
+    A ``running`` retest record refuses (check ``"retest-running"``) with the poll command. A recorded fail with no baseline names its failing ids from ``failed_tests`` (top
     level or under ``params.params``), the verdict's, and the task output's digest
     (``params.task_output_path``); each id's file unchanged since the run base is pre-existing
     (``"pre-existing-only"`` when all are), and each other file is its own refusal whose remedy
     retests that file. With no id known the refusal names the ``failed_tests`` param."""
+    if _retest_record_status(worktree_root, run_id) == RETEST_RUNNING:
+        return [Finding("", TARGETED_TESTS_FAILED,
+                        "the run's retest is still running; poll: " + retest_remedy(params)
+                        + " --poll; if poll reports it abandoned past deadline, re-run: "
+                        + retest_remedy(params))], "retest-running"
     fresh = fresh_targeted_verdict(worktree_root, run_id) if run_id else None
     if fresh is not None and fresh.get("status") == "error" and fresh.get("tests_run") != 0:
         reason = fresh.get("reason") or "launcher produced no test results"
@@ -422,8 +426,6 @@ def landing_test_gate(
                     f"re-run: {retest_remedy(params, [f])}")
             for f in changed
         ], "failed"
-    if fresh.get("stale") is True or fresh.get("status") == "stale":
-        return [], "stale-non-blocking"
     findings, check = failed_targeted_tests(fresh, retest_remedy(params))
     return findings, "pass-on-retest" if check == "pass" else check
 
@@ -455,6 +457,11 @@ def _stale_retest_note(worktree_root: Path, run_id: Optional[str]) -> str:
     status = _retest_record_status(worktree_root, run_id)
     if status is None:
         return ""
+    if status == "stale":
+        return (
+            f"; the run's retest record (stale) ran no tests: re-run {RETEST_LAUNCHER}, "
+            f"or pass params.{FAILED_TESTS_PARAM}=[] after a passing retest"
+        )
     return (
         f"; the run's retest record ({status}) no longer matches the tree (HEAD or a covered file "
         f"changed since it was written), so it is ignored: re-run {RETEST_LAUNCHER}, "

@@ -1,7 +1,9 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://claude-klabauter/coordinator_core/contract/wake-digest.schema.json",
-  "x-schema-version": "1.1.0",
+  "x-schema-version": "1.2.0",
+  "x-bump-class": "nested-field-additive",
+  "x-bump-note": "1.2.0: next_action.params gains optional targeted_test_paths; every 1.1.0 document still validates.",
   "title": "Workflow wake digest",
   "description": "The return value of an emitted Workflow script — the only thing that reaches the EM on completion. Assembled entirely from structured stage-gate outputs; never executor free text. Design D1: docs/plans/2026-09-27-emitter-dag-terminal-commit-wake-digest.md.",
   "type": "object",
@@ -271,6 +273,12 @@
                 "incomplete_chunks": { "type": "array", "items": { "type": "string" } },
                 "script_path": { "type": "string" },
                 "session_id": { "type": "string" },
+                "targeted_test_paths": {
+                  "type": "array",
+                  "items": { "type": "string", "maxLength": 300 },
+                  "maxItems": 200,
+                  "description": "The emit-time scoped test targets the terminal test leg ran; retest-targeted re-runs them when no --tests is given."
+                },
                 "held": {
                   "type": "array",
                   "description": "Each row an operator hold (emit-dispatch-workflow --hold) kept out of this script, with its reason; such rows are also in incomplete_chunks.",

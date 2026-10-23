@@ -6157,6 +6157,7 @@ def compose_script(
             if cmds:
                 owed_gates[row.id] = cmds
     try:
+        targeted_paths = None
         scope = terminal_test_scope(waves, repo_root=repo_root)
         if _review_terminal:
             _gone = deleted_in_range(
@@ -6205,6 +6206,7 @@ def compose_script(
                 "falsifier to fall back to"
             )
     else:
+        targeted_paths = collapse_test_scope(scope, repo_root) if scope else None
         ts_leg = _merged_typecheck_leg(plan_context, flat_rows, repo_root)
         if not scope and ts_leg is None:
             guarded_blocks.append(_no_test_scope_narration())
@@ -6309,6 +6311,7 @@ def compose_script(
             predispatch={} if predispatch else None,
             held=bool(held_rows),
             seam=seam_leg is not None,
+            targeted_test_paths=targeted_paths if test_var is not None else None,
         )
     )
 

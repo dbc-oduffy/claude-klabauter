@@ -303,12 +303,31 @@ def test_unchanged_since_base_real_tree_check(tmp_path):
 
 
 @pytest.mark.parametrize("marker", [{"stale": True, "note": "no targeted set recorded"}, {"status": "stale"}])
-def test_stale_fresh_verdict_is_non_blocking(tmp_path, marker):
+def test_stale_record_does_not_admit_a_recorded_failure(tmp_path, marker):
     root = _repo(tmp_path)
     path = _write_fresh(root)
     record = {**json.loads(path.read_text(encoding="utf-8")), **marker}
     path.write_text(json.dumps(record), encoding="utf-8")
-    assert li.landing_test_gate(root, _RECORDED_FAIL, "r1") == ([], "stale-non-blocking")
+    assert li.fresh_targeted_verdict(root, "r1") is None
+    findings, check = li.landing_test_gate(root, _RECORDED_FAIL, "r1")
+    assert check == "failed" and findings[0].reason == li.TARGETED_TESTS_FAILED
+    assert li.RETEST_LAUNCHER in findings[0].detail
+    if marker.get("status") == "stale":
+        assert "(stale) ran no tests" in findings[0].detail
+    passed = {"targeted_tests": {"status": "pass", "tests_failed": 0}}
+    assert li.landing_test_gate(root, passed, "r1")[0] == []
+
+
+def test_running_record_refuses_with_poll_remedy(tmp_path):
+    root = _repo(tmp_path)
+    path = li.fresh_verdict_path(root, "r1")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"run_id": "r1", "status": li.RETEST_RUNNING, "tests": ["t.py"]}), encoding="utf-8")
+    findings, check = li.landing_test_gate(root, _RECORDED_FAIL, "r1")
+    assert check == "retest-running" and findings[0].reason == li.TARGETED_TESTS_FAILED
+    assert "--poll" in findings[0].detail and li.RETEST_LAUNCHER in findings[0].detail
+    passed = {"targeted_tests": {"status": "pass", "tests_failed": 0}}
+    assert li.landing_test_gate(root, passed, "r1")[1] == "retest-running"
 
 
 def _digest(tmp_path, deviations, wrap=True):
@@ -382,13 +401,13 @@ def test_failed_test_with_no_base_still_refuses(tmp_path, monkeypatch):
     assert check == "failed" and findings[0].path == "t/test_x.py"
 
 
-def test_stale_verdict_survives_head_and_tree_drift(tmp_path):
+def test_stale_verdict_after_head_and_tree_drift_still_refuses_a_recorded_failure(tmp_path):
     root = _repo(tmp_path)
     path = _write_fresh(root, head="b" * 40)
     record = {**json.loads(path.read_text(encoding="utf-8")), "status": "stale"}
     path.write_text(json.dumps(record), encoding="utf-8")
     (root / "t.py").write_text("x = 2\n", encoding="utf-8")
-    assert li.landing_test_gate(root, _RECORDED_FAIL, "r1") == ([], "stale-non-blocking")
+    assert li.landing_test_gate(root, _RECORDED_FAIL, "r1")[1] == "failed"
 
 
 def test_drifted_stale_verdict_of_another_run_is_ignored(tmp_path):

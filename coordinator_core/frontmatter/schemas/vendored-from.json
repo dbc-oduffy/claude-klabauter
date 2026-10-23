@@ -8,8 +8,8 @@
     "doe_commit": "33a89a443a9e6377f7c5222a3e988437c375984e"
   },
   "bug-backlog.schema.json": {
-    "blob": "c0d2ea9803229efbb442ccbd39fbf3dec29f519a",
-    "doe_commit": "30608be2ab718471cb6ccb4ba4b856c246078684"
+    "blob": "2ce706602f12b2bd5e368637e2ab3c71c9a5bc0a",
+    "doe_commit": "2bd852644dd2aa268052046fcbdd56cb8e40beb2"
   },
   "capability-manifest.schema.json": {
     "blob": "3636d914df851a34734e23bbf21372a8211ca416",
@@ -152,8 +152,8 @@
     "doe_commit": "b7c1d3c82cbba74c4f48ea7d8d885c943b344158"
   },
   "sizing-object.schema.json": {
-    "blob": "2414b93ac86192d9b2d44d4926625ebd1cd4ff07",
-    "doe_commit": "e6fe40b3cc9112a204677373b830d82c8e250c06"
+    "blob": "9b8163748e0130ff21f6c27f16a30c6422d07801",
+    "doe_commit": "2bd852644dd2aa268052046fcbdd56cb8e40beb2"
   },
   "spike-result.schema.json": {
     "blob": "16517aac6822aeecaaa34398370e2e2363877b7a",
@@ -168,11 +168,11 @@
     "doe_commit": "cb819d590e88a1324e0f59d7dde7749746f22219"
   },
   "workstream-event.schema.json": {
-    "blob": "d6de73b480a6f14858fac6beef7888320a04f388",
-    "doe_commit": "08e6c0f3907df625c1a3d72080fe619128e02fbf"
+    "blob": "b8660d97aa0af0c9872bc2e05238c60a3962a20f",
+    "doe_commit": "2bd852644dd2aa268052046fcbdd56cb8e40beb2"
   },
   "workstream.schema.json": {
-    "blob": "590ef154390cf792a71b4c139d03fe9544fe3de7",
-    "doe_commit": "08e6c0f3907df625c1a3d72080fe619128e02fbf"
+    "blob": "cf5aa528eb0fb84e4784212a434f25552143af07",
+    "doe_commit": "2bd852644dd2aa268052046fcbdd56cb8e40beb2"
   }
 }

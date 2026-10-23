@@ -29,7 +29,7 @@ def _schema():
 def test_schema_is_valid_draft202012():
     schema = _schema()
     jsonschema.Draft202012Validator.check_schema(schema)
-    assert schema.get("x-schema-version") == "1.1.0"
+    assert schema.get("x-schema-version") == "1.2.0"
     assert all(
         obj.get("additionalProperties") is False
         for obj in _walk_objects(schema)
