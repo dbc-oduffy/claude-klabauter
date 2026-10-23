@@ -120,6 +120,43 @@ def test_bare_slash_on_windows(world, monkeypatch):
     assert _enveloped(guard.check)(_payload("echo x > /tmp/f", "Bash", cwd)) is None
 
 
+@pytest.mark.parametrize(
+    "cmd",
+    ["pytest --basetemp=../root/new", "pytest --basetemp ../root/new/a", "curl --out ../root/new/f http://u"],
+)
+def test_relative_climbing_out_flag_is_judged(world, cmd):
+    _, _, work = world
+    assert _denied(_enveloped(guard.check)(_payload(cmd, "Bash", work)))
+
+
+@pytest.mark.parametrize(
+    "cmd",
+    ["pytest --basetemp=../root/existing/t", "pytest --basetemp=tmp/x", "pytest --basetemp=../work/t"],
+)
+def test_relative_out_flag_inside_or_existing_is_allowed(world, cmd):
+    _, _, work = world
+    assert _enveloped(guard.check)(_payload(cmd, "Bash", work)) is None
+
+
+def test_delete_of_top_level_entry_is_not_a_creation(world, monkeypatch):
+    monkeypatch.setattr(sinks, "_host_is_windows", lambda: True)
+    monkeypatch.setattr(guard, "_host_is_windows", lambda: True)
+    monkeypatch.delenv("COORDINATOR_DRIVE_ROOTS", raising=False)
+    cwd = "Z:/work"  # abs-path-ok: fake drive letter, never touched on disk
+    check = _enveloped(guard.check)
+    for cmd in (
+        "python -c \"import shutil; shutil.rmtree('/e/zz-probe-gone')\"",
+        "python -c \"import os; os.unlink('/e/zz-probe-gone')\"",
+        "python -c \"import os; os.system('rm -rf /e/zz-probe-gone*')\"",
+    ):
+        assert check(_payload(cmd, "Bash", cwd)) is None, cmd
+    for cmd in (
+        "python -c \"import os; os.makedirs('/e/zz-probe-gone')\"",
+        "python -c \"import shutil; shutil.rmtree('/e/old'); os.makedirs('/e/zz-probe-gone')\"",
+    ):
+        assert _denied(check(_payload(cmd, "Bash", cwd))), cmd
+
+
 class _Counter:
     def __init__(self, fn):
         self.fn, self.calls = fn, 0

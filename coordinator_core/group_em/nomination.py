@@ -352,7 +352,8 @@ def identify(repo_root: str, directory: Optional[Path] = None, now: Optional[flo
     """Who the Group EM is, decided once, for every surface that names it.
 
     ``state``: ``live`` (verified holder, session running), ``ended`` (verified holder, session
-    gone), ``unverified`` (a record with no verified human-typed /group-em), or ``vacant``.
+    gone), ``pending`` (a claim whose entry evidence has not resolved yet), ``unverified`` (a
+    record with no verified human-typed /group-em), or ``vacant``.
     ``source`` is ``box`` or ``repo`` (a pre-box claim). ``repo_record`` is ``current``,
     ``stale`` (names a session other than the box holder) or ``absent``. ``line`` is the one
     sentence a hook prints, or None when there is nothing to say. Never raises past a read.
@@ -369,6 +370,17 @@ def identify(repo_root: str, directory: Optional[Path] = None, now: Optional[flo
         if repo is None:
             return {"state": "vacant", "holder": None, "source": None, "repo_record": "absent", "line": None}
         name = _holder_name(repo)
+        # SessionStart runs before the transcript's first cwd line lands, so a real home-start
+        # still reads pending there; calling that "unverified" made the holder refuse its role.
+        if entry_status(repo, now, directory)["status"] == "pending":
+            return {
+                "state": "pending",
+                "holder": {"session_id": repo.get("session_id"), "name": name},
+                "source": "repo",
+                "repo_record": "current",
+                "line": f"Group EM standing is claimed by {name}; its entry evidence is still "
+                "pending -- re-check with group-em-nomination who before acting on it either way.",
+            }
         return {
             "state": "unverified",
             "holder": {"session_id": repo.get("session_id"), "name": name},

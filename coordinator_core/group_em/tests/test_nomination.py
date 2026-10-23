@@ -438,6 +438,9 @@ def test_identify_names_the_evidence_kind(repo_root, record_dir, monkeypatch):
     monkeypatch.setattr(nomination, "entry_status", lambda *a, **k: {"status": "rejected"})
     unverified = nomination.identify(repo_root, record_dir)["line"]
     assert "its start in the group-em home is not verified" in unverified
+    monkeypatch.setattr(nomination, "entry_status", lambda *a, **k: {"status": "pending"})
+    pending = nomination.identify(repo_root, record_dir)
+    assert pending["state"] == "pending" and "ordinary peer" not in pending["line"]
     _REAL_CLAIM(repo_root, "sid-h", peer_name="gem-1", directory=record_dir, prompt_id="p-1")
     monkeypatch.setattr(nomination, "entry_status", lambda *a, **k: {"status": "verified"})
     assert "its human-typed /group-em is verified" in nomination.identify(repo_root, record_dir)["line"]

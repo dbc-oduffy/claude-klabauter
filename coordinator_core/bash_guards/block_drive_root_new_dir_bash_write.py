@@ -65,8 +65,10 @@ _MSYS_MOUNT_RE = re.compile(
     r"^/(?:tmp|usr|etc|bin|dev|proc|opt|var|mingw32|mingw64|ucrt64|clang64|cygdrive)(?:/|$)"
 )
 
-_OUT_FLAGS = frozenset({"-o", "--out", "--output", "--outdir", "--out-dir", "--output-dir"})
-_PS_DIR_HEADS = frozenset({"new-item", "ni", "mkdir", "md"})
+_OUT_FLAGS = frozenset({"-o", "--out", "--output", "--outdir", "--out-dir", "--output-dir", "--basetemp"})
+_CLIMB_RE = re.compile(r"(?:^|[\s='\"/\\])\.\.(?:[/\\'\"\s]|$)")
+_OUT_FLAG_RE = re.compile(r"(?<![\w-])(?:-o|" + "|".join(re.escape(f) for f in sorted(_OUT_FLAGS - {"-o"})) + r")(?=[\s=]|$)")
+_PS_DIR_HEADS =frozenset({"new-item", "ni", "mkdir", "md"})
 
 
 def _env(payload: Dict[str, Any]) -> Optional[Mapping[str, str]]:
@@ -125,7 +127,7 @@ def _powershell_targets(cmd: str) -> Iterable[str]:
 
 
 def _out_flag_values(tokens: List[str]) -> Iterable[str]:
-    """Values of `-o`/`--out` style flags, only when absolute or home-spelled."""
+    """Values of `-o`/`--out`/`--basetemp` style flags, when absolute, home-spelled or `..`-climbing."""
     for i, tok in enumerate(tokens):
         flag, eq, value = tok.partition("=")
         if eq and flag in _OUT_FLAGS:
@@ -135,7 +137,7 @@ def _out_flag_values(tokens: List[str]) -> Iterable[str]:
         else:
             continue
         value = value.strip("\"'")
-        if _ABSOLUTE_VALUE_RE.match(value):
+        if _ABSOLUTE_VALUE_RE.match(value) or ".." in value.replace("\\", "/").split("/"):
             yield value
 
 
@@ -174,7 +176,7 @@ def _cwd_is_root(cwd: Optional[str], env: Optional[Mapping[str, str]]) -> bool:
 
 def _can_create_new(cmd: str, cwd: Optional[str], dialect: Optional[Dialect], env: Optional[Mapping[str, str]]) -> bool:
     """Existence pre-pass: False only when no candidate can be new and nothing is root-relative."""
-    if _cwd_is_root(cwd, env):
+    if _cwd_is_root(cwd, env) or (_CLIMB_RE.search(cmd) and _OUT_FLAG_RE.search(cmd)):
         return True
     for cand in _CAND_RE.findall(cmd):
         if _is_root_spelling(cand, env) or _judge(cand, cwd, dialect, env):
@@ -221,14 +223,24 @@ def _invoked_heads(cmd: str) -> frozenset:
     return frozenset(heads)
 
 
+_DELETE_CMD_RE = re.compile(r"(?<![\w./\\-])(?:rm|rmdir|rd|del|erase|ri|remove-item)(?:\.exe)?\s", re.IGNORECASE)
+_DELETE_CALL_RE = re.compile(r"(?:rmtree|unlink|rmdir|removedirs|remove)\(\s*[rbuf]{0,2}['\"]$", re.IGNORECASE)
+
+
+def _is_delete_operand(prefix: str) -> bool:
+    """True when the literal that follows `prefix` is a delete's operand: a delete removes, never creates."""
+    return bool(_DELETE_CALL_RE.search(prefix) or _DELETE_CMD_RE.search(re.split(r"[;&|\n]", prefix)[-1]))
+
+
 def _interpreter_new_entry(cmd: str, cwd: Optional[str], env: Optional[Mapping[str, str]]) -> Optional[str]:
     """Both readings of each `/x/...` literal (MSYS and cwd-drive) when a native interpreter runs."""
     if not _host_is_windows() or not _INTERPRETER_RE.search(cmd):
         return None
     eff = _effective_cwd(cmd, cwd)
     invoked = _invoked_heads(cmd)
-    for cand in _CAND_RE.findall(cmd):
-        if _MSYS_DRIVE_CAND_RE.match(cand) and cand not in invoked:
+    for m in _CAND_RE.finditer(cmd):
+        cand = m.group(0)
+        if _MSYS_DRIVE_CAND_RE.match(cand) and cand not in invoked and not _is_delete_operand(cmd[: m.start()]):
             name = new_top_level_entry(cand, eff, env=env, interpreter=True)
             if name:
                 return name
