@@ -101,6 +101,17 @@ def test_credit_regradable_excludes_held_and_uncredited():
     assert cg.credit_regradable(["C2"], {"C1": "ok"}, set()) == {}
 
 
+def test_without_withheld_drops_only_withheld_chunks():
+    regraded = {"C1": "credited: ok", "C2": "credited: ok"}
+    assert cg.without_withheld(regraded, ["C1"]) == {"C2": "credited: ok"}
+    assert cg.without_withheld(regraded, []) == regraded
+    assert regraded == {"C1": "credited: ok", "C2": "credited: ok"}
+
+
+def test_withheld_path_still_excused_from_uncommitted_gate():
+    assert cg.uncommitted_credited({"C1": []}, set(), set(), set(), {"a.py"}) == {}
+
+
 def test_module_is_stdlib_pure():
     tree = ast.parse(Path(cg.__file__).read_text(encoding="utf-8"))
     mods = set()

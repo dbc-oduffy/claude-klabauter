@@ -325,8 +325,12 @@ def _error(message: str, **extra: object) -> dict:
 def _landing_integrity_gate(
     worktree_root: Path, all_paths: list, deleted_paths: list, record_abs: Optional[Path],
     params: dict, run_id: Optional[str], plan: Optional[str] = None,
+    *, residue_py: Sequence[str] = (), residue_known: bool = True,
 ) -> dict:
-    """Pre-commit integrity findings over the product landing set (unparseable ``.py``, and a
+    """Pre-commit integrity findings over the product landing set (unparseable ``.py``, an
+    import-closure hit where a ``.py`` the commit deletes (or a top-level def/class it removes) is
+    still imported by a residue or landing ``.py``: ``import-closure-untracked`` naming the importer,
+    with ``residue_import_check: "no-snapshot"`` when ``residue_known`` is false; a
     blob dropping lines a foreign commit added since the run base, and the test verdict
     (a valid fresh retest verdict, else the carried one) naming a run-caused failure:
     ``targeted-tests-failed``, with ``targeted_tests_check`` always set and ``retested_tests`` on
@@ -349,6 +353,21 @@ def _landing_integrity_gate(
     paths = [p for p in all_paths if p not in skip]
     findings = li.unparseable_py(worktree_root, paths)
     extra: dict = {}
+    if not residue_known:
+        # Fail-open by design: with no snapshot only landing importers are scanned; untested.
+        extra["residue_import_check"] = "no-snapshot"
+    try:
+        from coordinator_core.authoring_leaks import import_closure
+
+        findings += [
+            li.Finding(f.path, li.IMPORT_CLOSURE_UNTRACKED, f"{f.line}: {f.detail}")
+            for f in import_closure.residue_findings(worktree_root, residue_py, paths, deleted_paths)
+        ]
+    except Exception as exc:  # fail closed: an unreadable closure must not land
+        findings.append(li.Finding(
+            "", li.IMPORT_CLOSURE_UNTRACKED,
+            f"residue import-closure detector failed: {type(exc).__name__}: {exc}",
+        ))
     base = li.run_base_for(worktree_root, run_id, params)
     if base is None:
         extra["since_base_check"] = "no-base"
@@ -4774,6 +4793,10 @@ def _terminal_commit_inner(
             incomplete_chunks = incomplete_chunks | set(wh_chunks)
             done_chunks = [c for c in done_chunks if c.id not in wh_chunks]
             stranded.update({c.id: list(c.paths) for c in request.chunks if c.id in wh_chunks})
+            if regraded is not None:
+                kept = credit_gate.without_withheld(regraded, wh_chunks)
+                regraded.clear()
+                regraded.update(kept)
             if withheld is not None:
                 withheld.update({
                     cid: "withheld: " + "; ".join(e["reason"] for e in entries)
@@ -5275,9 +5298,15 @@ def _terminal_commit_inner(
                 [p for p in all_paths if p not in fresh]
             )
 
+    _carried = set(all_paths) | set(deleted_paths)
+    residue_py = sorted(
+        p for p in snapshot.changed
+        if p.endswith(".py") and p not in _carried and (worktree_root / p).is_file()
+    ) if snapshot is not None else []
     integrity_extra = _landing_integrity_gate(
         worktree_root, all_paths, deleted_paths, record_abs, params,
         _run_id_of(params, ask_run_dir, script_path_raw), request.plan_path,
+        residue_py=residue_py, residue_known=snapshot is not None,
     )
     if integrity_extra.get("refused"):
         _remove(worktree_root, receipt_paths)

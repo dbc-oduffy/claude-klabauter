@@ -23,7 +23,7 @@ import re
 from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
-from coordinator_core.authoring_leaks import HeadView, LeakFinding, added_lines
+from coordinator_core.authoring_leaks import HeadView, LeakFinding, added_lines, normalize_path
 from coordinator_core.authoring_leaks.module_attrs import AttrRef, attribute_refs, module_aliases
 from coordinator_core.pyimports import ImportRecord, collect_imports, module_name_for_file, resolve_relative_module
 
@@ -244,6 +244,159 @@ def _check_attr(closure: _Closure, rel: str, ref: AttrRef) -> Optional[LeakFindi
             return None
     where = closure.locate(sub, closure.worktree_has) if wt_sub else target
     return LeakFinding(rel, ref.lineno, KIND, f"references {ref.name} from {ref.module}; {where} is uncommitted in the worktree")
+
+
+# Column-0 `def`/`class` heads: a cheap proposal of removed names. `_Closure.check` (ast) decides.
+_TOP_DEF = re.compile(r"^(?:async[ \t]+)?def[ \t]+(\w+)|^class[ \t]+(\w+)", re.MULTILINE)
+
+
+# An import statement's span (parenthesised group and `\` continuation included): the prefilter
+# searches only these, so a file that merely mentions a removed word is never parsed.
+_IMPORT_STMT = re.compile(r"^[ \t]*(?:from|import)\b(?:[^\n(\\]|\([^)]*\)|\\\n)*", re.MULTILINE)
+
+
+def _import_text(text: str) -> str:
+    return "\n".join(m.group(0) for m in _IMPORT_STMT.finditer(text))
+
+
+def _top_level_names(text: str) -> Set[str]:
+    return {a or b for a, b in _TOP_DEF.findall(text)}
+
+
+class _ResidueClosure(_Closure):
+    """A `_Closure` whose deleted paths are absent whatever the worktree holds, and whose first-party
+    test also counts a root HEAD already had (a wholly deleted package is still first party)."""
+
+    def __init__(self, root: Path, gate: Set[str], view: HeadView, landed_text: Optional[LandedText], deleted: Set[str]) -> None:
+        super().__init__(root, gate, view, landed_text)
+        self.deleted = deleted
+
+    def worktree_has(self, path: str) -> bool:
+        return path not in self.deleted and super().worktree_has(path)
+
+    def first_party(self, top: str) -> bool:
+        return super().first_party(top) or self.view.in_head(f"{top}/__init__.py")
+
+
+def residue_findings(
+    root: Path,
+    residue: Sequence[str],
+    landing: Sequence[str],
+    deleted: Sequence[str],
+    *,
+    landed_text: Optional[LandedText] = None,
+) -> List[LeakFinding]:
+    """Findings for every residue or staged .py that imports a first-party module whose file this
+    commit deletes, or a top-level def/class this commit removes from a landing module.
+
+    `residue` is the caller-held set of dirty or untracked paths the commit leaves behind; `landing`
+    the staged paths; `deleted` the paths the commit removes. Importer text: `landed_text(rel)` (else
+    the worktree) for a `landing` path; the worktree for a residue path, plus its HEAD bytes when HEAD
+    tracks it, because those are what the commit leaves in HEAD. A clean tracked importer outside both
+    sets is not scanned. Zero spawns. Reads no residue file
+    when the commit removes no module and no name; never reads a file outside the caller's sets.
+    """
+    root = Path(root)
+    deleted_set = {normalize_path(p) for p in deleted}
+    landing_py = sorted({normalize_path(p) for p in landing if p.endswith(".py")} - deleted_set)
+    residue_py = sorted({normalize_path(p) for p in residue if p.endswith(".py")} - deleted_set - set(landing_py))
+    deleted_py = sorted(p for p in deleted_set if p.endswith(".py"))
+    gate = set(landing_py) | deleted_set
+
+    def landed(rel: str) -> Optional[str]:
+        return landed_text(rel) if landed_text is not None else _read_text(root / rel)
+
+    deleted_mods: Dict[str, str] = {}
+    probe: Set[str] = set(landing_py) | set(deleted_py)
+    for rel in deleted_py:
+        mod = module_name_for_file(rel)
+        if mod:
+            probe.add(f"{mod.split('.')[0]}/__init__.py")
+            probe.update(_module_files(mod))
+    if not probe:
+        return []
+    view = HeadView(root, probe)
+    closure = _ResidueClosure(root, gate, view, landed_text, deleted_set)
+    for rel in deleted_py:
+        mod = module_name_for_file(rel)
+        if (
+            mod
+            and view.in_head(rel)
+            and closure.first_party(mod.split(".")[0])
+            and closure.locate(mod, closure.post_has) is None
+        ):
+            deleted_mods[mod] = rel
+    removed_names: Dict[str, Set[str]] = {}
+    for rel in landing_py:
+        head_text = view.head_text(rel)
+        new_text = landed(rel) if head_text is not None else None
+        mod = module_name_for_file(rel)
+        if head_text is None or new_text is None or not mod:
+            continue
+        gone = _top_level_names(head_text) - _top_level_names(new_text)
+        if gone:
+            removed_names[mod] = gone
+    if not deleted_mods and not removed_names:
+        return []
+
+    parent_leaves: Dict[str, Dict[str, str]] = {}
+    words: Set[str] = set()
+    for mod in deleted_mods:
+        parent, _, leaf = mod.rpartition(".")
+        words.add(leaf)
+        if parent:
+            parent_leaves.setdefault(parent, {})[leaf] = mod
+    for names in removed_names.values():
+        words.update(names)
+    prefilter = re.compile(r"\b(?:%s)\b" % "|".join(re.escape(w) for w in sorted(words)))
+
+    importers: List[Tuple[str, str]] = []
+    for rel in landing_py:
+        text = landed(rel)
+        if text is not None:
+            importers.append((rel, text))
+    residue_view = HeadView(root, residue_py) if residue_py else None
+    for rel in residue_py:
+        text = _read_text(root / rel)
+        if text is not None:
+            importers.append((rel, text))
+        head_text = residue_view.head_text(rel) if residue_view is not None else None
+        if head_text is not None and head_text != text:
+            importers.append((rel, head_text))
+
+    findings: Dict[Tuple[str, int, str], LeakFinding] = {}
+    kept: List[Tuple[str, ImportRecord]] = []
+    for rel, text in importers:
+        if not prefilter.search(_import_text(text)):
+            continue
+        try:
+            tree = ast.parse(text)
+        except (SyntaxError, ValueError):
+            continue
+        records, _ = collect_imports(tree)
+        for rec in records:
+            base = _absolute_base(rec, rel)
+            if not base:
+                continue
+            for name in rec.names:
+                mod = parent_leaves.get(base, {}).get(name)
+                if mod is not None:
+                    f = _Closure._finding(rel, rec, name, base, deleted_mods[mod], "deleted by this commit")
+                    findings[(f.path, f.line, f.detail)] = f
+            if base in deleted_mods or any(n in removed_names.get(base, ()) for n in rec.names):
+                kept.append((rel, rec))
+    if kept:
+        final = _ResidueClosure(root, gate, HeadView(root, probe | _needed_paths(kept)), landed_text, deleted_set)
+        for rel, rec in kept:
+            base = _absolute_base(rec, rel)
+            for f in final.check(rel, rec):
+                if f.detail.endswith("deleted by this commit") and base in deleted_mods:
+                    findings[(f.path, f.line, f.detail)] = f
+                elif f.detail.endswith("absent from HEAD") and any(
+                    f.detail.startswith(f"imports {n} from {base};") for n in removed_names.get(base, ())
+                ):
+                    findings[(f.path, f.line, f.detail)] = f
+    return sorted(findings.values(), key=lambda f: (f.path, f.line, f.detail))
 
 
 def detect(

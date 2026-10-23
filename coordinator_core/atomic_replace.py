@@ -46,13 +46,82 @@ from typing import Union
 __all__ = ["atomic_write_bytes"]
 
 
-def _replace_with_retry(src: str, dst: str) -> None:
-    """os.replace with a bounded (~1s) backoff on Windows PermissionError.
+def _posix_rename_windows(src: str, dst: str) -> bool:
+    """Rename ``src`` over ``dst`` with POSIX semantics; True when it landed.
 
-    Trap: replacing onto a file another process holds open without
-    FILE_SHARE_DELETE fails with WinError 5/32; readers hold it for
-    microseconds, so a short retry lands the write. POSIX never retries.
+    FileRenameInfoEx with REPLACE_IF_EXISTS|POSIX_SEMANTICS replaces a target
+    that other handles hold open WITH FILE_SHARE_DELETE; classic ``os.replace``
+    (MoveFileEx) fails with WinError 5 against those same readers. False means
+    the caller falls back to ``os.replace``: flag rejection (non-NTFS, pre-1607)
+    or a sharing/access failure from a reader without FILE_SHARE_DELETE.
+    ctypes loads here, not at module top: this module is on hook-process
+    import paths.
     """
+    import ctypes
+    from ctypes import wintypes
+
+    DELETE = 0x00010000
+    SHARE_ALL = 0x7
+    OPEN_EXISTING = 3
+    FILE_RENAME_INFO_EX = 22
+    FLAGS = 0x1 | 0x2  # REPLACE_IF_EXISTS | POSIX_SEMANTICS
+
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    k32.CreateFileW.argtypes = [
+        wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, wintypes.LPVOID,
+        wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE,
+    ]
+    k32.CreateFileW.restype = wintypes.HANDLE
+    k32.SetFileInformationByHandle.argtypes = [
+        wintypes.HANDLE, ctypes.c_int, wintypes.LPVOID, wintypes.DWORD,
+    ]
+    k32.SetFileInformationByHandle.restype = wintypes.BOOL
+    k32.CloseHandle.argtypes = [wintypes.HANDLE]
+
+    name = "\\??\\" + os.path.abspath(dst)
+    name_bytes = name.encode("utf-16-le")
+
+    class _RenameInfoEx(ctypes.Structure):
+        _fields_ = [
+            ("Flags", wintypes.DWORD),
+            ("RootDirectory", wintypes.HANDLE),
+            ("FileNameLength", wintypes.DWORD),
+            ("FileName", ctypes.c_char * (len(name_bytes) + 2)),
+        ]
+
+    info = _RenameInfoEx()
+    info.Flags = FLAGS
+    info.RootDirectory = None
+    info.FileNameLength = len(name_bytes)
+    ctypes.memmove(ctypes.addressof(info) + _RenameInfoEx.FileName.offset, name_bytes, len(name_bytes))
+
+    handle = k32.CreateFileW(
+        os.path.abspath(src), DELETE, SHARE_ALL, None, OPEN_EXISTING, 0, None
+    )
+    if handle is None or handle == ctypes.c_void_p(-1).value:
+        return False
+    try:
+        ok = k32.SetFileInformationByHandle(
+            handle, FILE_RENAME_INFO_EX, ctypes.byref(info), ctypes.sizeof(info)
+        )
+    finally:
+        k32.CloseHandle(handle)
+    return bool(ok)
+
+
+def _replace_with_retry(src: str, dst: str) -> None:
+    """Replace ``dst`` with ``src``; POSIX-semantics rename first on Windows.
+
+    Trap: classic ``os.replace`` onto a file another process holds open fails
+    with WinError 5/32 even when that reader opened it WITH FILE_SHARE_DELETE
+    (measured: 264/300 attempts under polling readers), so no retry ladder
+    converges. The POSIX-semantics rename lands against those readers; the
+    bounded (~1s) ``os.replace`` backoff below is the residual for readers
+    without FILE_SHARE_DELETE and for filesystems rejecting the flags. POSIX
+    never retries.
+    """
+    if os.name == "nt" and _posix_rename_windows(src, dst):
+        return
     delay = 0.01
     for attempt in range(11):
         try:

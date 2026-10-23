@@ -85,6 +85,12 @@ def credit_regradable(
     return {cid: credits[cid] for cid in candidates if cid in credits and cid not in held}
 
 
+def without_withheld(regraded: Mapping[str, str], withheld_ids: Iterable[str]) -> dict[str, str]:
+    """``regraded`` minus the chunks whose every path the EM withheld: a withheld row is never credited."""
+    barred = set(withheld_ids)
+    return {cid: why for cid, why in regraded.items() if cid not in barred}
+
+
 def no_credited_landing(
     stranded_ids: AbstractSet[str],
     contributing_ids: AbstractSet[str],

@@ -2390,7 +2390,14 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
     if not product_only:
         paths.extend(p for p in receipt_paths if p not in paths)
 
-    findings = _integrity(root, params, paths, deleted, record_abs, sibling_run_id, request.plan_path)
+    # `changed` covers only dirty declared paths, narrower than terminal_commit's worktree-wide snapshot.
+    landing_carried = set(paths) | set(deleted)
+    residue_py = sorted(
+        p for p in changed if p.endswith(".py") and p not in landing_carried and (root / p).is_file()
+    )
+    findings = _integrity(
+        root, params, paths, deleted, record_abs, sibling_run_id, request.plan_path, residue_py=residue_py,
+    )
     if findings:
         _remove(root, receipt_paths)
         first = findings[0]
@@ -2830,10 +2837,12 @@ def _withhold_reasons(root: Path, artifacts, record_dir_rel: Optional[str]) -> d
 
 def _integrity(
     root: Path, params: dict, paths: list, deleted: list, record_abs: Optional[Path], run_id: str,
-    plan: Optional[str],
+    plan: Optional[str], *, residue_py: Sequence[str] = (),
 ) -> list:
-    """Pre-commit findings over the landing set: unparseable ``.py``, a blob dropping lines a foreign
-    commit added since the run base, and a carried test verdict naming a run-caused failure."""
+    """Pre-commit findings over the landing set: unparseable ``.py``, a ``.py`` importing what the
+    commit leaves out of HEAD, a dirty declared ``.py`` the landing leaves behind that imports what
+    it deletes, a blob dropping lines a foreign commit added since the run base, and a carried test
+    verdict naming a run-caused failure."""
     from coordinator_core.ops.dispatch_emit import landing_integrity as li
 
     skip = set(deleted)
@@ -2845,6 +2854,17 @@ def _integrity(
     live = [p for p in paths if p not in skip]
     findings = li.unparseable_py(root, live)
     findings += li.import_closure_findings(root, live, deleted)
+    try:
+        from coordinator_core.authoring_leaks import import_closure
+
+        findings += [
+            li.Finding(f.path, li.IMPORT_CLOSURE_UNTRACKED, f"{f.line}: {f.detail}")
+            for f in import_closure.residue_findings(root, residue_py, live, deleted)
+        ]
+    except Exception as exc:  # noqa: BLE001 -- fail closed: an unscannable residue refuses the landing
+        findings.append(li.Finding(
+            "", li.IMPORT_CLOSURE_UNTRACKED, f"residue import scan failed: {type(exc).__name__}: {exc}",
+        ))
     base = li.run_base_for(root, run_id, params)
     if base is not None:
         findings += li.since_base_findings(root, live, base, run_id=run_id, plan=plan)

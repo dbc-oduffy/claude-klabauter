@@ -589,3 +589,60 @@ def test_retirement_leaves_other_keys_and_tables_intact(monkeypatch, tmp_path):
     text = (reg / "registry.local.toml").read_text(encoding="utf-8")
     assert "\"repos.claude_klabauter\" = '/m'" in text and "[plugin]\nx = 1" in text
     assert f'"{old}"' not in text
+
+
+# --- registry reads/writes survive a concurrent holder (machine-local replace) -
+
+
+def test_registry_reads_and_set_route_through_read_bytes_shared(monkeypatch, tmp_path):
+    reg = tmp_path / "reg"
+    reg.mkdir()
+    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(reg))
+    target = reg / "registry.local.toml"
+    target.write_text("\"repos.a\" = '/a'\n", encoding="utf-8")
+
+    calls = []
+    real = mr.read_bytes_shared
+
+    def recording(path):
+        calls.append(Path(path).name)
+        return real(path)
+
+    monkeypatch.setattr(mr, "read_bytes_shared", recording)
+
+    assert mr._load_toml(target) == {"repos.a": "/a"}
+    assert mr._read_registry_file_strict(target) == {"repos.a": "/a"}
+    seen = len(calls)
+    assert seen == 2
+    mr.registry_set("repos.b", "/b")
+    assert len(calls) > seen
+    assert set(calls) == {"registry.local.toml"}
+    assert mr.registry_get("repos.b") == "/b"
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="FILE_SHARE_DELETE holder is Windows-only")
+def test_registry_set_lands_first_try_while_a_shared_reader_holds_the_file(monkeypatch, tmp_path):
+    import _winapi
+
+    from coordinator_core import atomic_replace
+
+    reg = tmp_path / "reg"
+    reg.mkdir()
+    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(reg))
+    target = reg / "registry.local.toml"
+    target.write_text("\"repos.a\" = '/a'\n", encoding="utf-8")
+
+    def no_sleep(_s):
+        raise AssertionError("registry_set retried instead of landing first try")
+
+    monkeypatch.setattr(atomic_replace.time, "sleep", no_sleep)
+
+    # GENERIC_READ, FILE_SHARE_READ|WRITE|DELETE, OPEN_EXISTING: read_bytes_shared's shape.
+    handle = _winapi.CreateFile(str(target), 0x80000000, 0x7, 0, 3, 0, 0)
+    try:
+        mr.registry_set("repos.b", "/b")
+    finally:
+        _winapi.CloseHandle(handle)
+
+    assert mr.registry_get("repos.b") == "/b"
+    assert mr.registry_get("repos.a") == "/a"

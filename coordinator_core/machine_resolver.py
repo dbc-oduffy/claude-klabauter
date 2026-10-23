@@ -122,7 +122,9 @@ from coordinator_core._repo_root_probe import (
     reset_repo_root_memo as _reset_repo_root_memo,
     resolve_repo_root as _resolve_repo_root,
 )
+from coordinator_core.atomic_replace import atomic_write_bytes
 from coordinator_core.daily_branch import sanitize_slug
+from coordinator_core.shared_read import read_bytes_shared
 from coordinator_core.win_portability import same_path as _same_path
 
 _LOG = logging.getLogger(__name__)
@@ -188,10 +190,14 @@ def _load_toml(path: Path) -> dict:
         except ImportError:
             return {}
     try:
-        with open(path, "rb") as f:
-            return _tomllib.load(f)
+        return _tomllib.loads(read_bytes_shared(path).decode("utf-8"))
     except Exception:  # noqa: BLE001 — faithful catch-all; a malformed registry degrades to "not found"
         return {}
+
+
+def _read_text_shared(path: Path) -> str:
+    """``Path.read_text`` semantics (universal newlines) over a share-delete read."""
+    return read_bytes_shared(path).decode("utf-8").replace("\r\n", "\n")
 
 
 def _flatten(data: dict, prefix: str = "") -> dict:
@@ -361,7 +367,7 @@ def retire_paired_content_root_key(key: str) -> bool:
         return False
     target_path = registry_dir() / _REGISTRY_TARGET_FILE
     try:
-        content = target_path.read_text(encoding="utf-8")
+        content = _read_text_shared(target_path)
     except OSError:
         return False
     header = _TOML_TABLE_HEADER_RE.search(content)
@@ -371,9 +377,7 @@ def retire_paired_content_root_key(key: str) -> bool:
     new_root, removed = pattern.subn("", root)
     if not removed:
         return False
-    tmp_path = target_path.with_name(target_path.name + f".tmp{os.getpid()}")
-    tmp_path.write_text(new_root + tables, encoding="utf-8", newline="\n")
-    os.replace(tmp_path, target_path)
+    atomic_write_bytes(target_path, (new_root + tables).encode("utf-8"))
     return True
 
 
@@ -437,7 +441,7 @@ def registry_set(key: str, value: str) -> None:
     target_path = reg_dir / _REGISTRY_TARGET_FILE
 
     if target_path.is_file():
-        content = target_path.read_text(encoding="utf-8")
+        content = _read_text_shared(target_path)
     else:
         content = _REGISTRY_NEW_FILE_HEADER
 
@@ -486,9 +490,7 @@ def registry_set(key: str, value: str) -> None:
             "resolve this key at root; refusing to write it"
         )
 
-    tmp_path = target_path.with_name(target_path.name + f".tmp{os.getpid()}")
-    tmp_path.write_text(new_content, encoding="utf-8", newline="\n")
-    os.replace(tmp_path, target_path)
+    atomic_write_bytes(target_path, new_content.encode("utf-8"))
     retire_paired_content_root_key(key)
 
 
@@ -500,16 +502,14 @@ def registry_unset(key: str) -> bool:
     """
     target_path = registry_dir() / _REGISTRY_TARGET_FILE
     try:
-        content = target_path.read_text(encoding="utf-8")
+        content = _read_text_shared(target_path)
     except FileNotFoundError:
         return False
     pattern = re.compile(r'^"' + re.escape(key) + r'"\s*=.*\n?', re.MULTILINE)
     new_content, removed = pattern.subn("", content)
     if not removed:
         return False
-    tmp_path = target_path.with_name(target_path.name + f".tmp{os.getpid()}")
-    tmp_path.write_text(new_content, encoding="utf-8", newline="\n")
-    os.replace(tmp_path, target_path)
+    atomic_write_bytes(target_path, new_content.encode("utf-8"))
     return True
 
 
@@ -567,8 +567,7 @@ def _read_registry_file_strict(path: Path) -> Optional[dict]:
         except ImportError:
             return None
     try:
-        with open(path, "rb") as f:
-            return _flatten(_tomllib.load(f))
+        return _flatten(_tomllib.loads(read_bytes_shared(path).decode("utf-8")))
     except Exception:  # noqa: BLE001 — any read failure is "unreadable", never raised
         return None
 

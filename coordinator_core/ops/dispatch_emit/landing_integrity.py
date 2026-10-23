@@ -379,7 +379,8 @@ def landing_test_gate(
     ``failed_targeted_tests`` (including ``"not-run"``, returned before any failure attribution).
     A None ``run_id`` skips the fresh read.
 
-    A ``running`` retest record refuses (check ``"retest-running"``) with the poll command. A recorded fail with no baseline names its failing ids from ``failed_tests`` (top
+    A ``running`` retest record refuses (check ``"retest-running"``) with the poll command.
+    A recorded fail with no baseline names its failing ids from ``failed_tests`` (top
     level or under ``params.params``), the verdict's, and the task output's digest
     (``params.task_output_path``); each id's file unchanged since the run base is pre-existing
     (``"pre-existing-only"`` when all are), and each other file is its own refusal whose remedy

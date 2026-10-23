@@ -43,6 +43,62 @@ def test_machine_local_write_lands_under_a_held_reader(tmp_path):
     assert not list(tmp_path.glob("*.tmp.*"))
 
 
+def _hold_share_delete_then_release(target: Path, hold_s: float) -> threading.Thread:
+    import _winapi
+
+    opened = threading.Event()
+
+    def run() -> None:
+        h = _winapi.CreateFile(str(target), 0x80000000, 0x7, 0, 3, 0, 0)
+        try:
+            opened.set()
+            threading.Event().wait(hold_s)  # not time.sleep: the test patches that after start
+        finally:
+            _winapi.CloseHandle(h)
+
+    t = threading.Thread(target=run)
+    t.start()
+    opened.wait(5)
+    return t
+
+
+def _load_template():
+    spec = importlib.util.spec_from_file_location("_ml_under_test", _IMPL)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_machine_local_write_lands_first_try_under_a_share_delete_reader(tmp_path, monkeypatch):
+    mod = _load_template()
+    target = tmp_path / "registry.local.toml"
+    target.write_text("old = 1\n", encoding="utf-8")
+
+    def no_sleep(_s):
+        raise AssertionError("fell to the retry ladder")
+
+    t = _hold_share_delete_then_release(target, 0.5)
+    monkeypatch.setattr(time, "sleep", no_sleep)
+    started = time.monotonic()
+    rc = mod._write_registry_file(str(target), "new = 2\n", is_new=False)
+    landed_in = time.monotonic() - started
+    t.join()
+    assert rc == 0
+    assert landed_in < 0.4
+    assert target.read_text(encoding="utf-8") == "new = 2\n"
+    assert not list(tmp_path.glob("*.tmp.*"))
+
+
+def test_read_bytes_shared_reads_exact_bytes_and_raises_on_missing(tmp_path):
+    mod = _load_template()
+    target = tmp_path / "registry.local.toml"
+    target.write_bytes(b"a = 1\r\n")
+    assert mod._read_bytes_shared(str(target)) == b"a = 1\r\n"
+    assert mod._read_text_shared(str(target)) == "a = 1\n"
+    with pytest.raises(FileNotFoundError):
+        mod._read_bytes_shared(str(tmp_path / "missing.toml"))
+
+
 def test_atomic_write_bytes_lands_under_a_held_reader(tmp_path):
     from coordinator_core.atomic_replace import atomic_write_bytes
 

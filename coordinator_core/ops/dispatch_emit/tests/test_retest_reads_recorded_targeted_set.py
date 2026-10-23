@@ -81,10 +81,8 @@ def test_retest_with_no_tests_targets_the_recorded_set_and_writes_no_stale(tmp_p
         ["--from-task-output", str(out), "--repo-root", str(root)],
         run=_run,
         spawn=lambda *a, **k: seen.append(a) or True,
-    ) if "spawn" in retest_targeted.main.__code__.co_varnames else retest_targeted.main(
-        ["--from-task-output", str(out), "--repo-root", str(root)], run=_run,
     )
-    assert rc in (0, 1)
+    assert rc == 0
     assert any("test_a.py" in str(a) for a in seen)
-    record = li.fresh_targeted_verdict(root, RUN_ID)
-    assert record is not None and record["status"] != "stale"
+    record = json.loads(li.fresh_verdict_path(root, RUN_ID).read_text(encoding="utf-8"))
+    assert record["status"] == li.RETEST_RUNNING and record["tests"] == ["test_a.py"]

@@ -78,6 +78,44 @@ def test_halt_landing_without_the_import_lands(halt_repo):
     assert "bad.py" in halt._names(repo, out["sha"])
 
 
+def _seed_module_and_importer(root, importer_text: str) -> None:
+    prod._write(root, "rp/__init__.py", "")
+    prod._write(root, "rp/helper.py", "X = 1\n")
+    prod._write(root, "rp/user.py", importer_text)
+    prod._git(["add", "."], root)
+    prod._git(["commit", "-q", "-m", "seed module and importer"], root)
+
+
+def _delete_module_leave_importer_dirty(root, importer_text: str) -> None:
+    (root / "rp" / "helper.py").unlink()
+    prod._author(root, "rp/user.py", importer_text + "# edited\n")
+    prod._declare(root, "rp/helper.py", "rp/user.py")
+    prod._record_dir(root)
+
+
+def test_product_landing_refuses_a_deletion_a_residue_file_still_imports(product_repo):
+    _seed_module_and_importer(product_repo, "from rp.helper import X\n")
+    _delete_module_leave_importer_dirty(product_repo, "from rp.helper import X\n")
+    head = prod._git(["rev-parse", "HEAD"], product_repo).strip()
+
+    out = prod._land(product_repo, withhold_paths=[{"path": "rp/user.py", "reason": "peer owns it"}])
+
+    assert REASON in str(out), out
+    assert "rp/user.py" in str(out), out
+    assert out.get("committed") is not True, out
+    assert prod._git(["rev-parse", "HEAD"], product_repo).strip() == head
+
+
+def test_product_landing_lands_a_deletion_no_residue_file_imports(product_repo):
+    _seed_module_and_importer(product_repo, "Y = 2\n")
+    _delete_module_leave_importer_dirty(product_repo, "Y = 2\n")
+
+    out = prod._land(product_repo, withhold_paths=[{"path": "rp/user.py", "reason": "peer owns it"}])
+
+    assert out["committed"] is True, out
+    assert "rp/helper.py" in prod._tree(product_repo)
+
+
 def _detector_raises(monkeypatch) -> None:
     from coordinator_core.authoring_leaks import import_closure
 

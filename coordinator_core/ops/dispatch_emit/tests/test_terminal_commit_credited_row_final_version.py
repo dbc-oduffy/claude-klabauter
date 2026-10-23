@@ -144,7 +144,7 @@ def _credited_means_landed(out: dict, repo: Path, rel: str) -> None:
         assert out.get("committed") is True, out
         assert_final_version_landed(repo, rel, V2.encode())
     else:
-        assert out.get("refused"), out
+        assert "C1" in out.get("incomplete_reasons", {}), out
 
 
 def test_h1_checkpoint_landed_v1_then_run_wrote_v2(repo):
@@ -156,11 +156,12 @@ def test_h1_checkpoint_landed_v1_then_run_wrote_v2(repo):
     assert_final_version_landed(repo, ROW, V2.encode())
 
 
-@pytest.mark.xfail(strict=True, reason="H2: credited row lands earlier version (withheld path subtracted from the credited set)")
 def test_h2_credited_row_path_withheld_is_not_credited_as_landed(repo):
     _checkpoint(repo, ROW, V1)
     _write(repo, ROW, V2)
     out = _call(repo, withhold_paths=[{"path": ROW, "reason": "peer holds it"}])
+    assert "C1" not in out.get("regraded", {}), out
+    assert out["incomplete_reasons"]["C1"] == "withheld: peer holds it"
     _credited_means_landed(out, repo, ROW)
 
 
