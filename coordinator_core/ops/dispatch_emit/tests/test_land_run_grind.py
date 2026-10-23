@@ -213,3 +213,14 @@ def test_commit_grind_rows_is_the_in_process_entry(repo):
     params = {"run_id": RUN, "grind": {"profile": PROFILE, "rows": [_row("r1", ["a.py"])]}}
     out = land_run_grind.commit_grind_rows(repo, repo / ".git", params)
     assert out["committed"] is True and _head_files(repo) == {"a.py"}
+
+
+def test_imageless_path_held_by_a_live_peer_is_dropped_and_the_rest_lands(repo, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import grind_landing_select
+
+    monkeypatch.setattr(grind_landing_select, "_live_peer_held", lambda _root, paths: {"a.py"} & set(paths))
+    out = _call(repo, [_row("r1", ["a.py", "b.py"])])
+    assert out["committed"] is True
+    assert _head_files(repo) == {"b.py"}
+    assert out["dropped"] == [{"row_id": "r1", "path": "a.py", "reason": "unattributed-shared"}]
+    assert "Row-Unlanded: r1 a.py unattributed-shared" in _message(repo)

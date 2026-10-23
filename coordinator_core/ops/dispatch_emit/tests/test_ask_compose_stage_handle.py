@@ -160,12 +160,14 @@ def _script(monkeypatch) -> str:
     )
 
 
-def _run(script: str, reply: dict | None, *, relay=None, tamper=None, args: dict | None = None) -> dict:
+def _run(
+    script: str, reply: dict | None, *, relay=None, tamper=None, args: dict | None = None, resume: dict | None = None,
+) -> dict:
     node = shutil.which("node")
     if node is None:
         pytest.skip("node not on PATH")
     gate = {
-        "arm": "m_plus", "halt": None, "baton": None, "resume_ledger": _RESUME, "tshirt": "M",
+        "arm": "m_plus", "halt": None, "baton": None, "resume_ledger": resume or _RESUME, "tshirt": "M",
         "route": "spec-dispatch", "stage_reply": reply, **({"manifest": relay} if relay is not None else {}),
     }
     cfg = {
@@ -208,14 +210,20 @@ def test_a_forty_row_manifest_is_assembled_whole_from_the_reader_with_no_agent_l
     reply = stage_reply(manifest)
     sha = reply["manifest_handle"]["sha256"]
     assert len(sidecar_text(manifest)) > 3 * 4497
-    out = _run(_script(monkeypatch), reply)
+    leg_writes = ["pkg/leg_owed_a.py", "pkg/leg_owed_b.py"]
+    resume = {**_RESUME, "remaining_leg": {"action": "dispatch", "writes": leg_writes}}
+    out = _run(_script(monkeypatch), reply, resume=resume)
     res = out["result"]
     assert res["halted_by"] is None, res["halted_by"]
     assert res["rows"] == [r["id"] for r in manifest["rows"]]
     assert out["workflowCalls"] == [f"REPO/{reply_sidecar.reader_rel(sha)}"]
     assert not [lab for lab in _labels(out) if lab and "reply" in lab and lab != "gate-stage"], _labels(out)
-    # The ledger-remaining prompt names `resume_ledger.leg.writes`, not manifest rows; _RESUME has no leg, so only the leg's presence is pinned.
-    assert "ledger-remaining" in _labels(out)
+    # The ledger-remaining prompt lists `resume_ledger.remaining_leg.writes`, never manifest rows, so the tail
+    # row's path (pkg/f119.py) cannot appear in it; the leg's own writes are what the prompt carries.
+    prompts = [c["prompt"] for c in out["calls"] if c["label"] == "ledger-remaining"]
+    assert len(prompts) == 1, _labels(out)
+    assert ", ".join(leg_writes) in prompts[0]
+    assert "pkg/f119.py" not in prompts[0]
 
 
 def test_a_one_row_manifest_is_read_by_one_workflow_call(monkeypatch):

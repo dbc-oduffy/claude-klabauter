@@ -70,6 +70,9 @@ Spec backlink: docs/plans/2026-09-21-bug-blitz-emitter-engine-leg.md § Design
 - `size-fail --profile P --row-id R --digest D --run-stamp T --repo-root D --reason TEXT`:
   the same fail record for a size stage that ran no chain.
 
+- `image --run-id R --row-id I --phase pre|post --repo-root D (--paths-urlenc E | --path P ...)`:
+  records each path's blob sha (null when absent) into the row's image record; no spawn.
+
 - `undo --paths-urlenc E --repo-root R`: implemented in `grind_undo.py` (the
   one verb here that spawns git): puts each named path back to HEAD when this
   session declared it and no live peer holds it.
@@ -1197,7 +1200,80 @@ def _cmd_size_chain(rest: list[str]) -> int:
     return cmd_size_chain(rest)
 
 
+def cmd_image(rest: list[str]) -> int:
+    """`image --run-id R --row-id I --phase pre|post --repo-root D (--paths-urlenc E | --path P ...)`.
+
+    Writes each file's bytes as a loose blob into the repo's common dir and merges
+    `{phase: {path: sha}}` into `<row_images_rel>/<IMAGE_RECORD_FILE>` (an absent file records
+    null). Spawn-free and idempotent; an unparseable existing record is refused (exit 2), untouched."""
+    from coordinator_core.git import git_dir, git_objects
+    from coordinator_core.ops.dispatch_emit import grind_commit_contract as gcc
+
+    flags: dict[str, str] = {}
+    paths: list[str] = []
+    i = 0
+    while i < len(rest):
+        tok = rest[i]
+        if not tok.startswith("--") or i + 1 >= len(rest):
+            return _usage("image: malformed arguments")
+        name, value = tok[2:], rest[i + 1]
+        if name == "path":
+            paths.append(value)
+        elif name in ("run-id", "row-id", "phase", "repo-root", "paths-urlenc") and name not in flags:
+            flags[name] = value
+        else:
+            return _usage(f"image: unrecognized or repeated flag --{name}")
+        i += 2
+    if not all(k in flags for k in ("run-id", "row-id", "phase", "repo-root")):
+        return _usage("image: requires --run-id --row-id --phase --repo-root")
+    phase = flags["phase"]
+    if phase not in gcc.IMAGE_PHASES:
+        return _usage(f"image: --phase must be one of {list(gcc.IMAGE_PHASES)}")
+    try:
+        rel_dir = gcc.row_images_rel(flags["run-id"], flags["row-id"])
+        if "paths-urlenc" in flags:
+            paths = gcc.decode_declared_paths(flags["paths-urlenc"]) + paths
+    except ValueError as exc:
+        print(f"grind-row: image: {exc}", file=sys.stderr)
+        return EXIT_REFUSAL
+    repo_root = Path(flags["repo-root"])
+    for p in paths:
+        if contained_path(repo_root / p, [repo_root]) is None:
+            print(f"grind-row: image: path escapes --repo-root: {p!r}", file=sys.stderr)
+            return EXIT_REFUSAL
+    common = git_dir.resolve_git_common_dir(repo_root)
+    record_name = gcc.IMAGE_RECORD_FILE
+    record_path = repo_root / rel_dir / record_name
+    record: dict[str, Any] = {}
+    if record_path.is_file():
+        try:
+            record = json.loads(record_path.read_text(encoding="utf-8"))
+            if not isinstance(record, dict):
+                raise ValueError("record is not a JSON object")
+        except (OSError, ValueError) as exc:
+            print(f"grind-row: image: refused, unreadable {rel_dir}/{record_name}: {exc}", file=sys.stderr)
+            return EXIT_REFUSAL
+    # A re-run of `pre` after the row began editing must keep the first image, not the edited bytes.
+    kept = record.get(phase, {}) if phase == "pre" else {}
+    shas: dict[str, str | None] = {}
+    for p in sorted(set(paths)):
+        if p in kept:
+            shas[p] = kept[p]
+            continue
+        f = repo_root / p
+        shas[p] = git_objects.write_object(common, b"blob", f.read_bytes()) if f.is_file() else None
+    record.setdefault(phase, {}).update(shas)
+    record_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = record_path.with_name(record_path.name + f".tmp{os.getpid()}")
+    tmp.write_text(json.dumps(record, sort_keys=True, indent=2) + "\n", encoding="utf-8", newline="\n")
+    os.replace(tmp, record_path)
+    _declare_under_repo_root(record_path, repo_root)
+    print(json.dumps({"record": f"{rel_dir}/{record_name}", "phase": phase, "images": shas}, sort_keys=True))
+    return EXIT_OK
+
+
 _VERBS = {
+    "image": cmd_image,
     "check": cmd_check,
     "append": cmd_append,
     "close": cmd_close,
@@ -1213,7 +1289,7 @@ _VERBS = {
 
 def main(argv: list[str]) -> int:
     if not argv:
-        return _usage("usage: grind-row check|append|close|settle|sweep|run-record|undo|settle-run|size-chain|size-fail [...]")
+        return _usage("usage: grind-row image|check|append|close|settle|sweep|run-record|undo|settle-run|size-chain|size-fail [...]")
     verb, rest = argv[0], argv[1:]
     handler = _VERBS.get(verb)
     if handler is None:

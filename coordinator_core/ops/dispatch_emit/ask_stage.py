@@ -438,6 +438,35 @@ def _only_rows(
     return kept, [e for e in exclusions if e.get("id") in keep], retired
 
 
+def _refuse_reminted_em_rows(plan_path: Path, raw_by_id: Mapping[str, Mapping], keep: frozenset) -> None:
+    """Refuse a ledger re-plan's em-performed row whose register rows an em-discharged
+    em-performed row already serves. A row with no register_rows, or itself discharged, is never refused."""
+    from coordinator_core.ops.dispatch_emit.em_only_act import row_is_em_performed
+    from coordinator_core.ops.plan_tasks_mutate import read_em_discharges
+
+    discharged = read_em_discharges(plan_path)
+    if not discharged:
+        return
+    served: set[str] = set()
+    for row_id in discharged:
+        raw = raw_by_id.get(str(row_id))
+        if raw is not None and row_is_em_performed(raw):
+            served.update(str(x) for x in raw.get("register_rows") or ())
+    dupes = []
+    for row_id in sorted(keep):
+        raw = raw_by_id.get(row_id)
+        if raw is None or row_id in discharged or not row_is_em_performed(raw):
+            continue
+        regs = {str(x) for x in raw.get("register_rows") or ()}
+        if regs and regs <= served:
+            dupes.append(row_id)
+    if dupes:
+        raise AskStageError(
+            f"ledger re-plan re-mints em-performed row(s) {dupes}: their register rows are served by an "
+            "em-discharged row; refire, the verify leg re-judges the discharged row"
+        )
+
+
 _UNKNOWN_RECEIVER_MARK = "UNKNOWN RECEIVER"
 
 
@@ -774,6 +803,8 @@ def stage(
         rows, exclusions, retired_resume = _only_rows(
             rows, exclusions, frozenset(only_rows), resume_snapshot.read(root, run_id, plan_posix)
         )
+    if ledger_resume and only_rows is not None:
+        _refuse_reminted_em_rows(plan_path, raw_by_id, frozenset(only_rows))
     check_unschedulable_rows(rows, raw_by_id)
     _split = split_frontmatter(plan_text)
     _drift = plan_pin_drift(_split.fm_text, root) if _split is not None else []

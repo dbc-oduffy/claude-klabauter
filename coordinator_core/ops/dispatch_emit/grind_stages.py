@@ -76,6 +76,7 @@ from coordinator_core.ops.dispatch_emit.grind_commit_contract import (
     DECLARED_LEN_FLAG,
     DECLARED_SHA256_FLAG,
     HISTORICAL_RECORD_PREFIXES,
+    IMAGE_VERB,
     QUEUE_FLAG,
     RECORD_LEN_FLAG,
     RECORD_SHA256_FLAG,
@@ -748,6 +749,27 @@ SIZE_ASSEMBLE_JS = (
 )
 
 
+def _image_command_parts(
+    phase: str,
+    paths_expr: str,
+    run_id_part: tuple[str, str],
+    row_id_part: tuple[str, str],
+    repo_root_js: str,
+) -> list[tuple[str, str]]:
+    """The fenced `grind-row image` command recording a row's `phase` blobs over the JS array `paths_expr`."""
+    return [
+        ("lit", f"```\n{ASSEMBLE_CMD} grind-row {IMAGE_VERB} --phase {phase} --run-id "),
+        run_id_part,
+        ("lit", " --row-id "),
+        row_id_part,
+        ("lit", " --paths-urlenc '"),
+        ("expr", f"encodeURIComponent(JSON.stringify({{paths: {paths_expr}}})).replace(/'/g, '%27')"),
+        ("lit", "' --repo-root "),
+        _shq_part(repo_root_js),
+        ("lit", "\n```"),
+    ]
+
+
 def compose_fix_call(
     *,
     models: Optional[Mapping[str, str]] = None,
@@ -807,10 +829,18 @@ def compose_fix_call(
     parts.extend(_list_parts(locked_files, locked_files_js))
     parts.append(("lit", tail))
     parts.append(row_id_part)
+    parts.append(("lit", "`. Before doing any work, first run this exactly as written, as ONE Bash call:\n"))
+    parts.extend(_image_command_parts(
+        "pre",
+        locked_files_js or json.dumps(list(locked_files)),
+        fix_run_id_part,
+        row_id_part,
+        repo_root_js,
+    ))
     parts.append(
         (
             "lit",
-            "`. Before doing any work, "
+            "\nA row without images lands only files no peer holds. Then "
             "pre-check every locked file for peer dirt -- if a locked file has "
             "changed under you since the lock was acquired, stop and report "
             "PEER_DIRTY rather than fixing over it. If the fix needs files "
@@ -835,6 +865,9 @@ def compose_fix_call(
             + "report every file you touched and every file you created -- "
             "paths inside this repo relative to the repo root, any file outside it "
             "by its absolute path -- and "
+            "before any close, run the same image command with `--phase post` and one "
+            "`--path <file>` per locked file (edited or not) and per file you created, in place of "
+            "`--paths-urlenc`; a pre image with no post image drops that path; "
             "when they pass and `has_tradeoff` is false run `" + ASSEMBLE_CMD + " grind-row close --profile-dir ",
         )
     )

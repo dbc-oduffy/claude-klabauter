@@ -38,8 +38,7 @@ def test_landing_constants_are_pinned_and_documented():
     assert gcc.ROW_IMAGES_ROOT == ".coordinator-local/grind-row-images"
     assert gcc.IMAGE_VERB == "image"
     assert gcc.IMAGE_PHASES == ("pre", "post")
-    for name in (gcc.DROP_PEER_HUNKS_CONFLICT, gcc.DROP_UNATTRIBUTED_SHARED, gcc.REFUSED_IMPORT_CLOSURE):
-        assert name in gcc.__doc__ or name.upper().replace("-", "_") in gcc.__doc__
+    assert gcc.IMAGE_RECORD_FILE == "images.json"
     for const in ("DROP_PEER_HUNKS_CONFLICT", "DROP_UNATTRIBUTED_SHARED", "REFUSED_IMPORT_CLOSURE"):
         assert const in gcc.__doc__
 

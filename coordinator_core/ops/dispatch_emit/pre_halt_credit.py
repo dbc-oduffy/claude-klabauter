@@ -30,6 +30,33 @@ CREDIT_MATCH_JS: str = (
 )
 
 
+# JS twin of `since_halt_credited`: same regexes, same digit-and-letter test, same either-direction
+# prefix match; file entries are compared after trim and `\` -> `/`.
+SINCE_HALT_CREDIT_JS: str = (
+    "(metBy, sinceShas, reviewedPaths, reviewed) => {\n"
+    "  try {\n"
+    "    const hex = (s) => (String(s ?? '').toLowerCase().match(/\\b[0-9a-f]{7,40}\\b/g) ?? [])"
+    ".filter((t) => /[0-9]/.test(t) && /[a-f]/.test(t));\n"
+    "    const entries = Array.isArray(metBy) ? metBy.map((m) => String(m ?? '')) : [String(metBy ?? '')];\n"
+    "    const named = hex(entries.join(' '));\n"
+    "    if (named.length > 0) {\n"
+    "      if (!Array.isArray(sinceShas)) return false;\n"
+    "      const since = hex(sinceShas.join(' '));\n"
+    "      return named.some((n) => since.some((k) => k.startsWith(n) || n.startsWith(k)));\n"
+    "    }\n"
+    "    if (reviewed !== true || !Array.isArray(reviewedPaths) || reviewedPaths.length === 0) return false;\n"
+    "    const paths = reviewedPaths.map((p) => String(p));\n"
+    f"    const shape = /{FILE_SHAPE_PATTERN}/;\n"
+    "    const files = entries.filter((e) => shape.test(e.toLowerCase()));\n"
+    "    if (files.length === 0) return false;\n"
+    "    return files.every((e) => paths.includes(e.trim().replace(/\\\\/g, '/')));\n"
+    "  } catch (e) {\n"
+    "    return false;\n"
+    "  }\n"
+    "}"
+)
+
+
 def sha_tokens(text: object) -> list[str]:
     """Lowercased 7-40 hex tokens of str(text) that hold both a digit and a letter, in order, de-duplicated."""
     out: list[str] = []
@@ -64,6 +91,31 @@ def _row_credited(met_by: object, known: Sequence[str]) -> bool:
     if not named:
         return bool(known) and _FILE_SHAPE.search(text.lower()) is not None
     return any(k.startswith(n) or n.startswith(k) for n in named for k in known)
+
+
+def since_halt_credited(met_by: object, since_shas: object, reviewed_paths: object, reviewed: object) -> bool:
+    """True when `met_by` names a sha token that prefix-matches (either direction) a token of
+    `since_shas` (shas recorded outside the judge, since the halt); or, when it names no sha
+    token, `reviewed` is True, `reviewed_paths` is non-empty, and every file-shaped entry of
+    `met_by` (trimmed, `\\` as `/`) is in `reviewed_paths`, with at least one such entry.
+    Never raises; malformed input is False."""
+    try:
+        entries = [str(m) for m in met_by] if isinstance(met_by, (list, tuple)) else [str(met_by)]
+        named = sha_tokens(" ".join(entries))
+        if named:
+            if not isinstance(since_shas, (list, tuple, set, frozenset)):
+                return False
+            since = sha_tokens(" ".join(str(s) for s in since_shas))
+            return any(k.startswith(n) or n.startswith(k) for n in named for k in since)
+        if reviewed is not True or not isinstance(reviewed_paths, (list, tuple, set, frozenset)):
+            return False
+        paths = {str(p) for p in reviewed_paths}
+        if not paths:
+            return False
+        files = [e for e in entries if _FILE_SHAPE.search(e.lower())]
+        return bool(files) and all(e.strip().replace("\\", "/") in paths for e in files)
+    except Exception:
+        return False
 
 
 def credited_rows(resume: object, verdict: object) -> frozenset[str]:

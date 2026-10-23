@@ -274,11 +274,24 @@ def _on_result(state: _State, call: dict, block: dict, entry: dict, at: str, dir
     else:
         payload = None
         key = None
-    result_url = payload.get("url") if payload else result.get("url")
+    page = result.get("read")
+    page_url = page.get("url") if isinstance(page, dict) else None
+    result_url = payload.get("url") if payload else (result.get("url") or page_url)
     by_result = isinstance(result_url, str) and model.artifact_id_from_url(result_url) == state.artifact_id
     if not (call["by_input"] or by_result):
         return
     if key is None and not isinstance(result.get("threads"), list):
+        # An `Artifact` action:read carries its version only as `artifactRead.ver`.
+        seen = result.get("artifactRead")
+        if (
+            call["name"] == "Artifact"
+            and _is_read_call(call["name"], call["input"])
+            and isinstance(seen, dict)
+            and isinstance(seen.get("ver"), str)
+        ):
+            state.bound(entry, directory)
+            state.error = None
+            state.note_version(seen["ver"], at)
         return
     state.bound(entry, directory)
     state.error = None

@@ -46,6 +46,7 @@ REFUSED_IMPORT_CLOSURE = "import-closure"
 ROW_IMAGES_ROOT = ".coordinator-local/grind-row-images"
 IMAGE_VERB = "image"
 IMAGE_PHASES = ("pre", "post")
+IMAGE_RECORD_FILE = "images.json"  # the record ``grind-row image`` merges into ``row_images_rel``
 
 
 def row_images_rel(run_id: str, row_id: str) -> str:

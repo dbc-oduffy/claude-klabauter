@@ -31,7 +31,7 @@ from coordinator_core.ops.dispatch_emit.falsifier_integrity_phase import REVIEWE
 from coordinator_core.ops.dispatch_emit.ask_brief import EM_BRIEF_VAR, EmBrief, brief_decl_js
 from coordinator_core.ops.dispatch_emit import ask_gate as _ask_gate  # noqa: F401 -- installs the fleet-mode provider
 from coordinator_core.ops.dispatch_emit.sizing_fire import RESUME_LEDGER_HALT_BLOCKING_FIELD
-from coordinator_core.ops.dispatch_emit.pre_halt_credit import CREDIT_MATCH_JS
+from coordinator_core.ops.dispatch_emit.pre_halt_credit import CREDIT_MATCH_JS, SINCE_HALT_CREDIT_JS
 from coordinator_core.ops.dispatch_emit.memo_rows import MEMO_CLOSE_KEY
 from coordinator_core.ops._workflow_contract import agent_options_phase_titles
 from coordinator_core.ops.dispatch_emit.ask_contract import (
@@ -65,6 +65,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     RESUME_LEDGER_KIND_FIELD,
     RESUME_LEDGER_NOTES_FIELD,
     RESUME_LEDGER_REVISED_FIELD,
+    RESUME_LEDGER_SINCE_HALT_SHAS_FIELD,
     RESUME_LEDGER_UNCLAIMED_FIELD,
     RESUME_LEDGER_REMAINING_FIELD,
     RESUME_LEDGER_DERIVED_FIELD,
@@ -2886,9 +2887,11 @@ def compose_ask_script(
     # renaming its call sites: the leg register, phase-title and brief checks find legs by the
     # literal `agent(` token, so a renamed call site is invisible to every one of them.
     b.append("  const _reviewOuterAgent = agent;")
+    b.append("  let _footprintReviewed = false; // true only when this fire ran the review block; XS / _xsTail / no-paths set _reviewWave = [] without reviewing")
     b.append(f"  {{ const agent = (p, o) => _reviewOuterAgent({_DESIGN_PREFIX_JS} + p, o);")
     b.append(
-        f"  if (!_halted && _gate.arm !== {_lit(ARM_XS)} && !_xsTail && !_noReviewPaths) {{\n" + review_text + "\n  }"
+        f"  if (!_halted && _gate.arm !== {_lit(ARM_XS)} && !_xsTail && !_noReviewPaths) {{\n"
+        + review_text + "\n  _footprintReviewed = true;\n  }"
     )
     b.append("  }")
     # XS skips review; an empty wave (zero slices, no delivery verdict) is the form terminal_commit's
@@ -3056,12 +3059,16 @@ def compose_ask_script(
         "    if (_preHaltCredit) {\n"
         f"      const _blk = _gate.{RESUME_LEDGER_KEY}.blocking ?? [];\n"
         f"      const _creditMatch = {CREDIT_MATCH_JS};\n"
+        f"      const _sinceCredit = {SINCE_HALT_CREDIT_JS};\n"
+        f"      const _sinceHalt = [...(_gate.{RESUME_LEDGER_KEY}.{RESUME_LEDGER_SINCE_HALT_SHAS_FIELD} ?? []), ..._checkpointShas];\n"
         "      for (const i of (_ledger?.items ?? [])) {\n"
         "        if (!i || i.status !== 'met' || !_blk.includes(i.id)) continue;\n"
         f"        const _rec = ((_gate.{RESUME_LEDGER_KEY}.{RESUME_LEDGER_REMAINING_FIELD} ?? {{}})[i.id]) ?? {{}};\n"
         f"        const _known = [...(_gate.{RESUME_LEDGER_KEY}.{RESUME_LEDGER_NOTES_FIELD} ?? []), String(_rec.evidence ?? ''), "
         "String(Array.isArray(_rec.remaining) ? _rec.remaining.join(' ') : (_rec.remaining ?? ''))].join(' ');\n"
-        "        if (!_creditMatch(i.met_by, _known)) { i.status = 'not_met'; i.essential = true; "
+        "        if (!_creditMatch(i.met_by, _known) && !_sinceCredit(i.met_by, _sinceHalt, "
+        f"_manifest?.review_declared_paths ?? [], _footprintReviewed && {WAVE_NOT_RUN_VAR}.length === 0)) {{ "
+        "i.status = 'not_met'; i.essential = true; "
         "i.remaining = ['met_by: the commit sha that carries the credited work']; }\n"
         "      }\n"
         "    }\n"
@@ -3421,7 +3428,7 @@ _RESUME_LEDGER_CLAUSE_JS = (
     f"_gate.{RESUME_LEDGER_KEY}.blocking.join(', ') + '. ' + (_allLandedResume ? 'A blocking row is met when the "
     "landed work satisfies its register text. ' : _preHaltCredit ? 'A blocking row is met when the work at HEAD, "
     "including commits before the halt commit, satisfies its register text as the revise notes rule it; its "
-    "met_by must name the commit sha(s) carrying that work. ' : 'A blocking row is met on work changed since the halt "
+    "met_by must name the commit sha(s) carrying that work, which may be a checkpoint this run made since the halt. ' : 'A blocking row is met on work changed since the halt "
     f"commit ' + (_gate.{RESUME_LEDGER_KEY}.{RESUME_LEDGER_HALT_SHA_FIELD} ?? '(unknown)') + ', or on work at HEAD committed at or before it when met_by names that commit sha. ') + '"
     f"Revise notes: ' + JSON.stringify(_gate.{RESUME_LEDGER_KEY}.{RESUME_LEDGER_NOTES_FIELD} ?? []) + "
     "'. Return an item for each of them and no other item.' "

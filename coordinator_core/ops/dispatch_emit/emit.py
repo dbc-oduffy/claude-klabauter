@@ -4883,6 +4883,7 @@ def _checkpoint_commit_js(
         f"  const _CHECKPOINT_COMMIT_SCHEMA = {json.dumps(_CHECKPOINT_COMMIT_SCHEMA)};",
         "  const _commitFailures = [];",
         "  const _landed = {};",
+        "  const _checkpointShas = [];",
         "  const _waveTriggers = [];",
         "  const _carried = [];",
         "  let _commitChain = Promise.resolve();",
@@ -4953,6 +4954,7 @@ def _checkpoint_commit_js(
         "      return;",
         "    }",
         "    _carried.length = 0;",
+        "    if (typeof r.sha === 'string' && r.sha) _checkpointShas.push(r.sha);",
     ]
     if seam is not None:
         lines.append("    if (!r.sha) return;")
@@ -6915,7 +6917,12 @@ class ResumeLanded(NamedTuple):
     halves landed the id. ``landing_shas``: ``{row id: frozenset of every full sha}`` that landed
     the id: each checkpoint commit, both halves, and each ledger-check halt commit.
     ``landed_since_ledger``: ids from checkpoint commits newer than ``ledger_sha`` (the newest-first
-    walk reached them before it set ``ledger_sha``); empty when no ledger halt names the plan."""
+    walk reached them before it set ``ledger_sha``); empty when no ledger halt names the plan.
+    ``run_first_halts``: ``{run_id: sha}`` of the oldest ledger-check halt commit of each run in
+    the same walk (same inclusion as ``run_halts``); bounded by ``-n 500``, so the oldest visible.
+    ``checkpoint_shas``: full shas of every commit whose ``Checkpoint-Plan:`` names the plan,
+    newest first. ``walk_ordinals``: ``{sha: 0-based newest-first walk position}`` of each of those
+    and of each ledger-check halt sha recorded above, so a halt base compares against checkpoints."""
 
     rows: frozenset
     ledger_run: Optional[str]
@@ -6924,6 +6931,9 @@ class ResumeLanded(NamedTuple):
     row_shas: Mapping = {}
     landing_shas: Mapping = {}
     landed_since_ledger: frozenset = frozenset()
+    run_first_halts: Mapping = {}
+    checkpoint_shas: tuple = ()
+    walk_ordinals: Mapping = {}
 
 
 def resume_landed_rows(repo_root: Path, plan: str) -> frozenset:
@@ -6959,10 +6969,14 @@ def resume_landed_state(repo_root: Path, plan: str) -> ResumeLanded:
     ledger_run: Optional[str] = None
     ledger_sha: Optional[str] = None
     run_halts: dict = {}
+    run_first_halts: dict = {}
     row_shas: dict = {}
     process_shas: dict = {}
     landing: dict = {}
     since_ledger: set = set()
+    checkpoint_shas: list = []
+    walk_ordinals: dict = {}
+    position = -1
 
     def _land(landed_ids, landing_sha: str, subject: str) -> None:
         ids.update(landed_ids)
@@ -6978,10 +6992,14 @@ def resume_landed_state(repo_root: Path, plan: str) -> ResumeLanded:
             continue
         subject, checkpoint, halt_plan, halted_by, chunks, sha = parts[:6]
         sha = sha.strip()
+        position += 1
         stop_ids = {i for i in re.split(r"[,\s\x1d]+", parts[6]) if i} if len(parts) > 6 else set()
         if any(checkpoint_plan_matches(v, plan) for v in checkpoint.split("\x1d") if v.strip()):
             checkpoint_ids = set(plan_commit_row_ids(without_process_half(subject))) - stop_ids
             _land(checkpoint_ids, sha, subject)
+            if sha:
+                checkpoint_shas.append(sha)
+                walk_ordinals[sha] = position
             if ledger_run is None:
                 since_ledger.update(checkpoint_ids)
         is_ledger_check = any(v.strip() == "ledger-check" for v in halted_by.split("\x1d"))
@@ -6995,14 +7013,21 @@ def resume_landed_state(repo_root: Path, plan: str) -> ResumeLanded:
                 ledger_run = run
                 ledger_sha = sha or None
         if run is not None and is_ledger_check and (names_plan or not named):
-            landed, first_sha = run_halts[run] if run in run_halts else (frozenset(), None)
-            run_halts[run] = (landed | chunk_ids, first_sha or sha.strip() or None)
+            landed, newest_sha = run_halts[run] if run in run_halts else (frozenset(), None)
+            run_halts[run] = (landed | chunk_ids, newest_sha or sha.strip() or None)
+            if sha:
+                run_first_halts[run] = sha
+        if is_ledger_check and (names_plan or not named) and sha:
+            walk_ordinals[sha] = position
     for i, sha_ in process_shas.items():
         row_shas.setdefault(i, sha_)
     return ResumeLanded(
         frozenset(ids), ledger_run, ledger_sha, run_halts, row_shas,
         {i: frozenset(s) for i, s in landing.items()},
         frozenset(since_ledger) if ledger_run is not None else frozenset(),
+        run_first_halts,
+        tuple(checkpoint_shas),
+        walk_ordinals,
     )
 
 

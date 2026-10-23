@@ -567,9 +567,16 @@ def _land(
             plan = getattr(request, "plan_path", None)
         live = [p for p in product if p not in withheld]
         integrity = landing_integrity.unparseable_py(root, live)
+        integrity += landing_integrity.import_closure_findings(
+            root, live, [p for p in removed if p not in withheld])
         if run_base is not None and live:
             integrity += landing_integrity.since_base_findings(root, live, run_base, run_id=run_id, plan=plan)
         bad = {owner[f.path]: f.reason for f in reversed(integrity) if f.path in owner}
+        if any(f.path not in owner and f.reason == landing_integrity.IMPORT_CLOSURE_UNTRACKED for f in integrity):
+            # A detector failure names no path: fail closed over every chunk still landing.
+            for p in product + removed:
+                if p not in withheld and p in owner:
+                    bad.setdefault(owner[p], landing_integrity.IMPORT_CLOSURE_UNTRACKED)
         withheld.update({p: bad[owner[p]] for p in product + removed if p not in withheld and owner.get(p) in bad})
         if tfind:
             landing = {p for p in product + removed if p not in withheld}

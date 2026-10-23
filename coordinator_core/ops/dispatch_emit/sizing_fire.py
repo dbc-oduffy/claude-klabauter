@@ -464,14 +464,14 @@ def _ledger_halt_for(
         state = resume_landed_state(root, plan_rel)
     if pointer is not None and not open_ids:
         halt_sha = state.run_halts.get(pointer.run_id, (frozenset(), None))[1]
-        return _carry(root, plan_rel, replace(pointer, halt_sha=halt_sha), state.run_halts)
+        return _carry(root, plan_rel, replace(pointer, halt_sha=halt_sha), state)
     if state.ledger_run is None:
         # A halt commit without a `Halt-Plan:` trailer is invisible to `resume_landed_state`; the
         # pointer's run then resumes when that run's halt commit landed every open row.
         if pointer is not None:
             landed, sha = state.run_halts.get(pointer.run_id, (frozenset(), None))
             if set(open_ids) - set(pointer.ruled) <= landed:
-                return _carry(root, plan_rel, _with_ruled_blocking(pointer, halt_sha=sha), state.run_halts)
+                return _carry(root, plan_rel, _with_ruled_blocking(pointer, halt_sha=sha), state)
         return None
     record = read_halt_record(root, state.ledger_run, at_sha=state.ledger_sha)
     same_run = pointer is not None and pointer.run_id == state.ledger_run
@@ -493,7 +493,7 @@ def _ledger_halt_for(
     )
     if state.ledger_sha:
         halt = replace(halt, landed_since_halt=state.landed_since_ledger)
-    return _carry(root, plan_rel, halt, state.run_halts)
+    return _carry(root, plan_rel, halt, state)
 
 
 def _with_ruled_blocking(pointer: LedgerHalt, **changes) -> LedgerHalt:
@@ -502,40 +502,50 @@ def _with_ruled_blocking(pointer: LedgerHalt, **changes) -> LedgerHalt:
     return replace(pointer, blocking=(*pointer.blocking, *extra), **changes)
 
 
-def _carry(
-    root: Path, plan_rel: str, halt: LedgerHalt, run_halts: Mapping
+def since_halt_shas_of(state, halt: LedgerHalt) -> tuple[str, ...]:
+    """Plan checkpoint shas newer than the halt's measuring base (`since_sha`, else `halt_sha`).
+    The base is a halt commit, so it is positioned in `state.walk_ordinals`, never in
+    `checkpoint_shas`. A base outside the walk gives `()`: empty means no credit."""
+    base = halt.since_sha or halt.halt_sha
+    ordinals = getattr(state, "walk_ordinals", None) or {}
+    pos = ordinals.get(base) if base else None
+    if pos is None:
+        return ()
+    return tuple(s for s in getattr(state, "checkpoint_shas", ()) if ordinals.get(s, pos) < pos)
+
+
+def _carry(root: Path, plan_rel: str, halt: LedgerHalt, state) -> LedgerHalt:
+    """`_carry_chain` with `since_halt_shas` derived once `since_sha` is final on every return."""
+    out = _carry_chain(root, plan_rel, halt, state)
+    return replace(out, since_halt_shas=since_halt_shas_of(state, out))
+
+
+def _carry_chain(
+    root: Path, plan_rel: str, halt: LedgerHalt, state
 ) -> LedgerHalt:
     """`halt` with ids an earlier halt of this plan and sizing judged met dropped from `blocking`
     (named in `carried_met`) and `remaining` merged across the halts walked. Reads one record per
     halt back to the first that landed a chunk; no git spawn. A commit-halt pointer, a halt that
     itself landed a chunk, or an unreadable earlier record leaves `halt` as it is. This function only
-    loads records; `carry_forward` owns the stop-at-landing rule, so the early breaks here are a read bound."""
+    loads records; `carry_forward` owns the stop-at-landing rule, so the early breaks here are a read bound.
+    Every return sets `since_sha` to the first halt of the oldest run walked (`halt_sha` stays the
+    newest), so the since-halt gate measures from the chain's start, not the halt a fire just wrote."""
     from coordinator_core.ops.dispatch_emit.ask_contract import carry_forward, read_halt_record
+    from coordinator_core.ops.dispatch_emit.halt_baseline import first_halt_sha, walk_chain
 
+    halt = replace(halt, since_sha=first_halt_sha(state, halt.run_id))
     if halt.halted != LEDGER_HALT_KIND:
         return halt
     newest = read_halt_record(root, halt.run_id, at_sha=halt.halt_sha)
     if newest is None:
         return halt
-    chain = [(run, bool(landed), sha) for run, (landed, sha) in run_halts.items()]
-    runs = [entry[0] for entry in chain]
-    after = chain[runs.index(halt.run_id) + 1 :] if halt.run_id in runs else [e for e in chain if e[0] != halt.run_id]
-    head_lands = any(e[0] == halt.run_id and e[1] for e in chain)
-    earlier: list = []
-    if not head_lands:
-        for run, lands, sha in after:
-            record = read_halt_record(root, run, at_sha=sha)
-            if (
-                record is None
-                or record.sizing_rel != halt.sizing_rel
-                or (record.plan_rel is not None and record.plan_rel != plan_rel)
-            ):
-                break
-            earlier.append((record, lands))
-            if lands:
-                break
+    head_lands = bool(state.run_halts.get(halt.run_id, (frozenset(), None))[0])
+    earlier, oldest = walk_chain(root, plan_rel, halt.run_id, state, halt.sizing_rel)
     blocking, remaining, carried = carry_forward((replace(newest, blocking=halt.blocking), head_lands), earlier)
-    return replace(halt, blocking=blocking, remaining={**halt.remaining, **remaining}, carried_met=carried)
+    return replace(
+        halt, blocking=blocking, remaining={**halt.remaining, **remaining}, carried_met=carried,
+        since_sha=first_halt_sha(state, oldest),
+    )
 
 
 def _acceptance_skipped(sizing: Mapping) -> bool:

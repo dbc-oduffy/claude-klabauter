@@ -11,10 +11,12 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
 from pathlib import Path
 from typing import Callable, Mapping
 
 from coordinator_core.ops import _path_guard
+from coordinator_core.ops.dispatch_emit import run_token as _run_token
 from coordinator_core.ops.dispatch_emit import nested_run_contract as _nested
 
 _RUN_DIR_ROOT = "scratch/warp"
@@ -38,8 +40,8 @@ def remove_twins(root: Path, run_id: object) -> int:
     """Unlink every ``scratch/warp/<run_id>.staged-<sha>.workflow.mjs``; return how many were removed.
 
     Exact-name match on this run only (no glob); an invalid run_id removes nothing; OSErrors are
-    swallowed after not counting. Zero spawns. Trap: the only caller is the redeemed-claim path, so a
-    run that never commits leaves its token-bearing twin on disk."""
+    swallowed after not counting. Zero spawns. Trap: a run's twin is removed only by a commit leg's
+    call; a run that never commits leaves its token-bearing twin until ``sweep_expired_twins``."""
     if not isinstance(run_id, str) or not _RUN_ID.fullmatch(run_id) or ".." in run_id:
         return 0
     directory = Path(root) / _RUN_DIR_ROOT
@@ -56,6 +58,37 @@ def remove_twins(root: Path, run_id: object) -> int:
                 removed += 1
             except OSError:
                 pass
+    return removed
+
+
+def sweep_expired_twins(root: Path, now: float | None = None) -> int:
+    """Unlink every staged twin in ``scratch/warp`` older than ``run_token.TTL_SECONDS``; return the count.
+
+    Same exact twin-name shape as ``remove_twins``, any run id; age is file mtime. OSErrors are
+    swallowed after not counting. Zero spawns."""
+    cutoff = (time.time() if now is None else now) - _run_token.TTL_SECONDS
+    directory = Path(root) / _RUN_DIR_ROOT
+    try:
+        names = os.listdir(directory)
+    except OSError:
+        return 0
+    removed = 0
+    for name in names:
+        match = _TWIN_NAME.search(name)
+        if (
+            match is None
+            or match.start() == 0
+            or match.end() != len(name)
+            or not _RUN_ID.fullmatch(name[: match.start()])
+        ):
+            continue
+        path = directory / name
+        try:
+            if path.stat().st_mtime < cutoff:
+                path.unlink()
+                removed += 1
+        except OSError:
+            pass
     return removed
 
 

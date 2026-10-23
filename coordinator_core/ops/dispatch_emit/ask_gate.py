@@ -16,7 +16,7 @@ import importlib.util
 import sys
 from dataclasses import replace
 from pathlib import Path
-from typing import Optional, Sequence
+from typing import Mapping, Optional, Sequence
 
 from coordinator_core.ipc import register_op
 from coordinator_core.lifecycle import main_worktree_root
@@ -44,6 +44,8 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     RESUME_LEDGER_NOTES_FIELD,
     RESUME_LEDGER_REMAINING_FIELD,
     RESUME_LEDGER_REVISED_FIELD,
+    RESUME_LEDGER_SINCE_HALT_SHAS_FIELD,
+    RESUME_LEDGER_SINCE_SHA_FIELD,
     RESUME_LEDGER_UNCLAIMED_FIELD,
     RESUME_LEDGER_UNLANDED_FIELD,
     UNCHANGED_SINCE_HALT_REASON,
@@ -406,6 +408,26 @@ def _without_gate_verdicts(row_id: str, record):
     return {**record, "remaining": [s for s in record["remaining"] if not (isinstance(s, str) and s.strip() in verdicts)]}
 
 
+def _discharged_em_items(blocking: Sequence[str], discharged: Mapping, plan_path: Path) -> set[str]:
+    """Blocking items whose serving plan rows are all em-performed and em-discharged: the EM's
+    recorded discharge is the evidence, so such an item owes no re-plan. An unreadable plan, or an
+    item with no serving row, is never discharged."""
+    if not discharged or not blocking:
+        return set()
+    from coordinator_core.ops.dispatch_emit.em_only_act import row_is_em_performed
+    from coordinator_core.ops.dispatch_emit.ledger_remaining_paths import PlanRowsUnreadable, serving_rows
+
+    out: set[str] = set()
+    for item in blocking:
+        try:
+            rows = serving_rows(plan_path, [item])
+        except PlanRowsUnreadable:
+            return set()
+        if rows and all(row_is_em_performed(r) and str(r.get("id")) in discharged for r in rows):
+            out.add(item)
+    return out
+
+
 def _credited_landed(blocking: Sequence[str], halt, repo_root: Path) -> list[str]:
     """Blocking items whose serving plan rows all landed, one at least after the halt commit.
 
@@ -477,6 +499,7 @@ def _resume_ledger(
         str(r.get("id")) for r in rows
         if isinstance(r, dict) and _origin(r.get("anchor"))[0] == ORIGIN_REVISION
     }
+    em_done = _discharged_em_items(blocking, discharged, Path(repo_root) / halt.plan_rel)
     verdict = {
         "run_id": halt.run_id,
         "plan": halt.plan_rel,
@@ -488,8 +511,15 @@ def _resume_ledger(
         "ledger_item_ids": list(item_ids),
         "withheld_ids": list(withheld_ids),
         RESUME_LEDGER_HALT_SHA_FIELD: halt.halt_sha,
+        RESUME_LEDGER_SINCE_SHA_FIELD: halt.since_sha,
+        RESUME_LEDGER_SINCE_HALT_SHAS_FIELD: list(halt.since_halt_shas),
         RESUME_LEDGER_REMAINING_FIELD: {
-            k: _without_gate_verdicts(k, v) for k, v in halt.remaining.items() if k in blocking
+            k: (
+                {**v, "remaining": []}
+                if k in em_done and isinstance(v, dict)
+                else _without_gate_verdicts(k, v)
+            )
+            for k, v in halt.remaining.items() if k in blocking
         },
         RESUME_LEDGER_UNLANDED_FIELD: list(halt.unlanded),
         RESUME_LEDGER_NOTES_FIELD: notes,

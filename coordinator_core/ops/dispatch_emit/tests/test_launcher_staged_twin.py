@@ -138,3 +138,47 @@ def test_remove_twins_invalid_run_id_removes_nothing(tmp_path, run_id):
 
 def test_remove_twins_no_directory_is_zero(tmp_path):
     assert twin.remove_twins(tmp_path, "run1") == 0
+
+
+def test_sweep_removes_over_ttl_keeps_under_ttl_and_spawns_nothing(tmp_path, monkeypatch):
+    import subprocess
+
+    def _boom(*a, **k):
+        raise AssertionError("spawn")
+
+    monkeypatch.setattr(subprocess, "Popen", _boom)
+    monkeypatch.setattr(os, "system", _boom)
+    d = tmp_path / "scratch" / "warp"
+    d.mkdir(parents=True)
+    old = d / f"runA.staged-{SHA}.workflow.mjs"
+    fresh = d / f"runB.staged-{SHA}.workflow.mjs"
+    old.write_text("x")
+    fresh.write_text("x")
+    from coordinator_core.ops.dispatch_emit import run_token
+
+    now = 10_000_000.0
+    os.utime(old, (now - run_token.TTL_SECONDS - 5,) * 2)
+    os.utime(fresh, (now - run_token.TTL_SECONDS + 5,) * 2)
+    assert twin.sweep_expired_twins(tmp_path, now=now) == 1
+    assert not old.exists()
+    assert fresh.exists()
+
+
+def test_sweep_leaves_non_twin_names_even_when_old(tmp_path):
+    d = tmp_path / "scratch" / "warp"
+    d.mkdir(parents=True)
+    keep = [
+        d / "run1.workflow.mjs",
+        d / "run1.staged-short.workflow.mjs",
+        d / f".staged-{SHA}.workflow.mjs",
+        d / f"run1.staged-{SHA}.workflow.mjs.bak",
+    ]
+    for p in keep:
+        p.write_text("x")
+        os.utime(p, (1000, 1000))
+    assert twin.sweep_expired_twins(tmp_path, now=10_000_000.0) == 0
+    assert all(p.exists() for p in keep)
+
+
+def test_sweep_no_directory_is_zero(tmp_path):
+    assert twin.sweep_expired_twins(tmp_path) == 0

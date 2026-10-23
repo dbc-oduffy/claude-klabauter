@@ -4,34 +4,26 @@ coordinator_core.ops.ceremony.commit_v2 -- JSON-RPC "ceremony.commit_v2" op.
 Purpose: a fresh dispatchable identity over the 694 measured, zero-spawn lines
 in `coordinator_core/git/commit.py` (`commit_paths`) and
 `coordinator_core/git/index_write.py` (`splice_index`, called internally by
-`commit_paths`). `ceremony.commit` is DEAD (killed at p50 421.9ms process
-time against a 200ms bar -- `coordinator_core/op_budget_suspension.py`) and
+`commit_paths`). `ceremony.commit` is DEAD (`coordinator_core/op_budget_suspension.py`) and
 ITS NAME STAYS DEAD: this op is a fresh identity, ONCE, so every guard, budget
 row and test fixture keyed to the old name is unambiguous about which op it
 describes. Do not resurrect "ceremony.commit" for this handler or any other.
 
-Handler shape: a thin envelope, not a wrapper. It calls `commit.commit_paths`
-directly and returns its outcome. It does NOT import `run_commit_pipeline`,
-and does NOT import anything from `commit_pipeline.py` or `git_native.py` --
+Handler shape: a thin envelope over `commit.commit_paths`. It does NOT import
+`run_commit_pipeline`, and does NOT import anything from `commit_pipeline.py` or `git_native.py` --
 those two modules are the 11,015-line surface this op exists to make
 un-necessary, and importing from them here would make the v2 a second path
 into the same pipeline rather than a replacement for it
 (docs/plans/2026-08-27-something-must-commit-ceremony-commit-v2.md, C3 body).
 
-Keying scope: common_dir (`coordinator_core/op_scopes.py`) -- commits within
-the CALLER's own working tree/index, mirroring `commit.exec_bit_change` and
-`commit.anchors`'s precedent: the handler receives repo_root = git common dir
-and derives the caller's worktree via `main_worktree_root(repo_root)`.
+Keying scope: common_dir; the worktree derives from `main_worktree_root(repo_root)`.
 `params.repo_root` is the optional D3 consistency assertion only
 (`check_repo_root`), never the worktree-resolution source.
 
-Scope of THIS row (C4): the handler supplies `blob_fallback` --
-`commit.hash_worktree_blobs_via_spawn`, restated small in `git/commit.py`
-rather than imported from `git_native.py`'s `_hash_worktree_blobs` (barred by
-the negative-spec below) -- so an `eol=crlf`-pinned path carrying CR bytes,
-refused by `commit_paths`' own in-process check, lands via ONE batched
-`git hash-object -w --stdin-paths` spawn per commit rather than propagating
-as a structured `FilterUnsupported` error. A refusal `commit_paths` cannot
+The handler supplies `blob_fallback` (`commit.hash_worktree_blobs_via_spawn`, not
+`git_native.py`'s `_hash_worktree_blobs`, barred below) so an `eol=crlf`-pinned
+path carrying CR bytes lands via ONE batched `git hash-object -w --stdin-paths`
+spawn per commit rather than propagating as a structured `FilterUnsupported`. A refusal `commit_paths` cannot
 resolve even with the fallback (the fallback itself fails, or returns no sha
 for a path) still propagates as a structured error, unmodified in substance
 -- this handler does not catch, retry, or widen it.

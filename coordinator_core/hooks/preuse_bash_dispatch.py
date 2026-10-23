@@ -75,9 +75,10 @@ Spec backlink: docs/plans/2026-09-18-doe-holds-no-scripts.md § W4-C8
 from __future__ import annotations
 
 import json
+import re
 import sys
 
-from coordinator_core.hooks._envelope import allow_advisory, no_advisory, payload_of
+from coordinator_core.hooks._envelope import allow_advisory, deny, no_advisory, payload_of
 from coordinator_core.ipc import register_op
 
 
@@ -88,6 +89,36 @@ def _unevaluated(detail: str) -> dict:
     )
     print(f"[coordinator] {message}", file=sys.stderr)
     return allow_advisory("PreToolUse", message)
+
+
+_SEGMENT_SPLIT = re.compile(r"&&|\|\||[;&|\n]")
+_GIT = r"(?:^|\s)git\s+(?:(?:-[cC]\s+\S+|--\S+)\s+)*"
+# TRAP: closed list (APM ruling 2026-10-22-bash-dispatch-import-failure-mode). Stdlib only: this
+# runs exactly when engine imports are broken, so it must import nothing from bash_guards/ops.
+# Do not extend with local, reflog-recoverable commands (reset --hard, rebase): they block the fix.
+_IRREVERSIBLE = (
+    (re.compile(_GIT + r"push\b"), "git push"),
+    (re.compile(r"(?:^|\s)p4\s+(?:-\S+\s+(?:\S+\s+)?)*submit\b", re.I), "p4 submit"),
+    (re.compile(r"(?:^|\s)p4\s+(?:-\S+\s+(?:\S+\s+)?)*shelve\b", re.I), "p4 shelve"),
+    (re.compile(r"(?:^|\s)gh\s+pr\s+merge\b", re.I), "gh pr merge"),
+    (re.compile(r"(?:^|\s)gh\s+release\s+create\b", re.I), "gh release create"),
+    (re.compile(_GIT + r"branch\s+(?:\S+\s+)*(?:-D\b|--delete\s+(?:\S+\s+)*--force\b|--force\s+(?:\S+\s+)*--delete\b)"),
+     "git branch -D"),
+    (re.compile(_GIT + r"stash\s+drop\b"), "git stash drop"),
+    (re.compile(_GIT + r"stash\s+clear\b"), "git stash clear"),
+)
+
+
+def _irreversible_on_import_failure(command: str) -> str | None:
+    """Name of the irreversible command found in any segment of ``command``, else None."""
+    if not isinstance(command, str):
+        return None
+    for segment in _SEGMENT_SPLIT.split(command):
+        segment = segment.strip()
+        for pattern, name in _IRREVERSIBLE:
+            if pattern.search(segment):
+                return name
+    return None
 
 
 @register_op("hooks.preuse_bash_dispatch")
@@ -120,7 +151,16 @@ def _handler(params: dict, repo_root=None) -> dict:
             _policy_file_for,
         )
     except Exception as exc:
-        return _unevaluated(f"{type(exc).__name__}: {exc}")
+        detail = f"{type(exc).__name__}: {exc}"
+        tool_input = params.get("tool_input")
+        command = tool_input.get("command") if isinstance(tool_input, dict) else None
+        matched = _irreversible_on_import_failure(command)
+        if matched:
+            return deny(
+                "PreToolUse",
+                f"`{matched}` denied: bash guard chain failed to import ({detail}).",
+            )
+        return _unevaluated(detail)
 
     try:
         raw = json.dumps(params)

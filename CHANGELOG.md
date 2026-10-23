@@ -95,8 +95,38 @@ watch can be run as a single blocking wait.
   unnamed paths otherwise.
 - **`retest_targeted`** re-runs a run's failing targeted tests outside any op and records the
   fresh verdict.
+- **`plan.merge`** folds a delta plan into a base plan. It carries sections whole, merges the
+  task spines, detects id collisions and re-keys them, applies each delta entry to a row or
+  fails the run, proves six checks and writes once. It is classed MUTATING and measured against
+  its budget. The `plan-merge-delta` schema 1.0.0 is vendored.
+- **`review.prep` records the HEAD sha** its snapshot manifest was taken at, and
+  `reverify_callers` checks removed symbols against committed callers.
+- **Registered p4 workspaces at install.** Install registers this host's p4 clients into
+  `external_workspaces.<key>.*`, absent-only, through an ambient read-only discovery call; it
+  honours `--check-only` and never changes the install's exit code.
+- **A foreign-checkout nudge.** A general-work session editing another repo's checkout is
+  denied with a pointer to send a memo instead.
+- **Stage claim.** `ask_stage` writes a claim for the in-flight half of the re-run contract,
+  and the op's measured cost is cut.
 
 ### Changed
+- **Setup fails closed on a disarmed PowerShell dialect guard.** Setup relaunches under the
+  example-retrieval-repo pinned interpreter, probes `tree_sitter` and `tree_sitter_pwsh` under it and
+  under the engine interpreter, and exits 98 after its remaining steps when either is missing,
+  naming the interpreter.
+- **Hooks resolve the example-retrieval-repo provisioned interpreter**, and the install pin reader gets the
+  consumer root and prints exactly one stdout line.
+- **Terminal-commit pathspecs** honour sibling claims, halted-run release and run-touched prefix
+  expansion; done and partial `chunk.paths` are respelled to tracked case, and a new file in an
+  existing directory is admitted.
+- **Halt ancestry is met-only by default.** `pre_halt_ancestry` cites only met rows unless a
+  post-commit credit is verified, and the gate credits blocking ledger items whose serving
+  rows landed after the halt.
+- **`scan_plans` reads a plan's close-out slice** rather than the whole body.
+- **`queue_append` migrates faster** (200 rows in 0.19s process), and `xs_lane_budget` measures
+  CRLF working files as LF.
+- **A fan-launcher child's staged manifest** reaches the launcher over a dedicated channel, and
+  an XS child that never calls `workflow()` is pinned by an incident test.
 - **terminal_commit's worktree snapshot runs in process.** It no longer spawns `git status`,
   and falls back to it on any gap. Parity with real git is pinned across 23 cases. A full-path
   call drops from 4 processes to 1.
@@ -195,6 +225,17 @@ watch can be run as a single blocking wait.
   reason once, and resolve a Group EM receiver to the central inbox.
 
 ### Fixed
+- **`_top_level_names` counts** import, tuple-unpack and top-level `if`/`try` bindings.
+- **`review_reverify`** applies its settled findings, and the stale-verdict refusal names the
+  `--retest-targeted` flag its detail carries.
+- **A falsifier input** that is an in-process dict with a boolean key is refused, not stored as
+  a string.
+- **A throwaway p4d test fixture** is hermetic, and a setup failure no longer depends on the
+  host's p4 state.
+- **Eight APM rulings** from a bug sweep are applied, and a bulk test-hygiene grind landed fixes
+  across the guard, ceremony, dispatch-emit, roadmap and percolate test suites.
+- **Group EM tests** stub the claimant-session check package-wide.
+- **Percolate** protects the quoted `example_retrieval_repo_scripts` literal.
 - **terminal_commit stages what `git add` would.** CRLF content on an `autocrlf=true` checkout
   lands as LF blobs, and `allow_empty` from the params file is honoured, so a run whose content
   already landed can still close.

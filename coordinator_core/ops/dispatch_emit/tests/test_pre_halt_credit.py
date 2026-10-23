@@ -206,6 +206,81 @@ def test_with_notes_unchanged_for_non_dict_or_empty():
     assert phc.with_notes(r, []) is r
 
 
+SINCE = ["1a8340e0cf11223344556677889900aabbccddee"]
+REVIEWED = ["docs/design/x.md", "coordinator_core/a.py"]
+
+
+def test_since_halt_named_sha_matching_since_sha_is_credited():
+    assert phc.since_halt_credited(["57e71fe96d", "1a8340e0cf"], SINCE, [], False) is True
+    assert phc.since_halt_credited("1a8340e0cf11223344556677889900aabbccddee", ["1a8340e"], [], False) is True
+
+
+def test_since_halt_named_sha_matching_none_is_false():
+    assert phc.since_halt_credited(["57e71fe96d"], SINCE, REVIEWED, True) is False
+
+
+def test_since_halt_sha_named_never_falls_to_footprint():
+    assert phc.since_halt_credited(["x.md", "abcdef1234"], [], ["x.md"], True) is False
+
+
+def test_since_halt_footprint_credits_sha_free_files_inside_reviewed_paths():
+    assert phc.since_halt_credited(["docs/design/x.md", "docs\\design\\x.md"], [], REVIEWED, True) is True
+    assert phc.since_halt_credited("docs/design/x.md", [], REVIEWED, True) is True
+
+
+def test_since_halt_footprint_needs_reviewed_true():
+    assert phc.since_halt_credited(["docs/design/x.md"], [], REVIEWED, False) is False
+
+
+def test_since_halt_footprint_refuses_a_file_outside_reviewed_paths():
+    assert phc.since_halt_credited(["docs/design/x.md", "docs/design/other.md"], [], REVIEWED, True) is False
+
+
+def test_since_halt_prose_only_met_by_is_false():
+    assert phc.since_halt_credited(["final edits land with the terminal commit"], SINCE, REVIEWED, True) is False
+
+
+def test_since_halt_empty_reviewed_paths_is_false():
+    assert phc.since_halt_credited(["docs/design/x.md"], [], [], True) is False
+
+
+@pytest.mark.parametrize(
+    "args",
+    [(None, None, None, None), (object(), 5, "x", True), (["a"], [object()], None, True), ([None], None, [None], True)],
+)
+def test_since_halt_malformed_never_raises(args):
+    assert phc.since_halt_credited(*args) is False
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+@pytest.mark.skipif(shutil.which("node") is None, reason="node unavailable")
+@pytest.mark.parametrize(
+    "met_by,since,paths,reviewed",
+    [
+        (["57e71fe96d", "1a8340e0cf"], SINCE, [], False),
+        ("1a8340e0cf", SINCE, [], False),
+        (["57e71fe96d"], SINCE, REVIEWED, True),
+        (["x.md", "abcdef1234"], [], ["x.md"], True),
+        (["docs/design/x.md", "docs\\design\\x.md"], [], REVIEWED, True),
+        (["docs/design/x.md"], [], REVIEWED, False),
+        (["docs/design/x.md", "docs/design/other.md"], [], REVIEWED, True),
+        (["final edits land"], SINCE, REVIEWED, True),
+        (["and/or"], [], REVIEWED, True),
+        (["docs/design/x.md"], [], [], True),
+        ([" docs/design/x.md "], [], REVIEWED, True),
+        (["é.md"], [], ["é.md"], True),
+    ],
+)
+def test_since_halt_js_twin_agrees_with_python(met_by, since, paths, reviewed):
+    call = ", ".join(json.dumps(a) for a in (met_by, since, paths, reviewed))
+    src = f"console.log(JSON.stringify(({phc.SINCE_HALT_CREDIT_JS})({call})))"
+    out = subprocess.run(
+        ["node", "-"], input=src, capture_output=True, text=True, check=True, **no_console_creationflags()
+    ).stdout.strip()
+    assert json.loads(out) is phc.since_halt_credited(met_by, since, paths, reviewed)
+
+
 def test_with_notes_does_not_mutate_input():
     r = _resume(["a"])
     out = phc.with_notes(r, ["b"])

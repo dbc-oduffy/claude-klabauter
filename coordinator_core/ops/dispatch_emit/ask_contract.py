@@ -387,6 +387,10 @@ HALT_BLOCKING_FIELD = "blocking"
 RESUME_LEDGER_EM_DISCHARGED_FIELD = "em_discharged"
 #: `resume_ledger` verdict key carrying the halt commit's full 40-hex sha.
 RESUME_LEDGER_HALT_SHA_FIELD = "halt_sha"
+#: `resume_ledger` verdict key carrying the full sha the since-halt check measures from (the run's first halt).
+RESUME_LEDGER_SINCE_SHA_FIELD = "since_sha"
+#: `resume_ledger` verdict key carrying the full shas of this plan's checkpoint commits newer than the since-halt base.
+RESUME_LEDGER_SINCE_HALT_SHAS_FIELD = "since_halt_shas"
 #: `resume_ledger` verdict key carrying `{row_id: {remaining: [str], evidence: str}}` for blocking rows.
 RESUME_LEDGER_REMAINING_FIELD = "remaining"
 #: `resume_ledger` verdict key carrying the revise note texts, oldest first.
@@ -696,6 +700,10 @@ class LedgerHalt:
     ruled: tuple[str, ...] = ()
     #: Plan row ids landed after the halt commit; derived at resume, never persisted.
     landed_since_halt: frozenset = frozenset()
+    #: The first halt of the run's halt chain; derived at resume, never persisted.
+    since_sha: str | None = None
+    #: Full shas of this plan's checkpoint commits newer than ``since_sha``; derived at resume, never persisted.
+    since_halt_shas: tuple[str, ...] = ()
 
     def to_json(self) -> dict[str, Any]:
         if self.halted == ALL_LANDED_HALT_KIND:

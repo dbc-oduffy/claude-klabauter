@@ -152,6 +152,20 @@ def _held_reason(halted: dict) -> Optional[str]:
     return None
 
 
+def _reap_staged_twins(worktree_root: Path, run_id: str, *, own: bool) -> None:
+    """Sweep expired staged twins always; drop the halted run's own twins only when ``own`` (its run
+    token verified). Zero spawns; never fails the commit. Trap: an unverified caller must never pass
+    ``own=True``, since a valid-shaped run_id alone would delete a live run's twin."""
+    from coordinator_core.ops.dispatch_emit import launcher_staged_twin
+
+    try:
+        if own:
+            launcher_staged_twin.remove_twins(worktree_root, run_id)
+        launcher_staged_twin.sweep_expired_twins(worktree_root)
+    except Exception:  # noqa: BLE001 -- cleanup must not fail the commit
+        pass
+
+
 def commit_halted_record(worktree_root: Path, repo_root: Path, params: dict) -> dict:
     from coordinator_core.ops.dispatch_emit import run_token
     from coordinator_core.ops.dispatch_emit.terminal_commit import _error
@@ -169,7 +183,9 @@ def commit_halted_record(worktree_root: Path, repo_root: Path, params: dict) -> 
     siblings = sibling_release(worktree_root, run_id, None)
     token = params.get("run_token")
     script_path = params.get("script_path")
-    if token is not None and not run_token.admits(worktree_root, run_id, token, script_path):
+    verified = token is not None and run_token.admits(worktree_root, run_id, token, script_path)
+    _reap_staged_twins(worktree_root, run_id, own=verified)
+    if token is not None and not verified:
         refusal = _error(
             "params.run_token does not match a live, unspent token minted for params.run_id and "
             "this script (a token admits one landed commit)",

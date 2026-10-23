@@ -155,7 +155,7 @@ from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.session.claimed_write import replace_text
 from coordinator_core.session.record_homes import home_dir
 from coordinator_core.warm.entry_seam import OpUnavailableError, reentrant_dispatch
-from coordinator_core.ops.dispatch_emit import credit_gate, gate_owed, pre_halt_credit  # noqa: E402 -- sibling-package group
+from coordinator_core.ops.dispatch_emit import credit_gate, gate_owed, halt_baseline, pre_halt_credit  # noqa: E402 -- sibling-package group
 from coordinator_core.ops.dispatch_emit.land_run import _em_discharged_rows  # noqa: E402
 from coordinator_core.ops.dispatch_emit.halt_landing import (  # noqa: E402
     landed_before_halt as _landed_before_halt,
@@ -1747,21 +1747,6 @@ def _every_staged_row_landed(resume: object) -> bool:
     return isinstance(raw, list) and not raw
 
 
-def _resolve_halt_sha(worktree_root: Path, resume: object, plan_rel: Optional[str] = None) -> Optional[str]:
-    """The newest ledger-check halt commit sha of the resume's ``run_id`` (one ``git log``), for a
-    ``resume_ledger`` whose ``halt_sha`` arrived unfilled; the plan is the param's ``plan`` else
-    ``plan_rel``. None when the run's halt commit is not found."""
-    if not isinstance(resume, dict):
-        return None
-    run_id, plan = resume.get("run_id"), resume.get("plan") or plan_rel
-    if not isinstance(run_id, str) or not isinstance(plan, str) or not plan:
-        return None
-    from coordinator_core.ops.dispatch_emit.emit import resume_landed_state
-
-    sha = resume_landed_state(worktree_root, plan).run_halts.get(run_id, (None, None))[1]
-    return sha if isinstance(sha, str) and _FULL_SHA_RE.fullmatch(sha) else None
-
-
 def _withheld_work_pending(worktree_root: Path, resume: object, declared: Sequence[str]) -> bool:
     """True when a declared path the halt withheld (``run_artifacts.withheld`` of the resume, else
     of the halted run's ``halted.json``) is dirty or untracked: the halt left that product in the
@@ -1797,8 +1782,8 @@ def _unchanged_since_halt_failures(
     """``[{id, reason}]`` for each blocking row of a ledger resume that ``verdict`` judges met or
     post_commit while no declared product path differs from the diff base. One ``git diff
     --quiet`` against the worktree, run only when such a row exists. The base is the first that
-    resolves: the param's 40-hex ``halt_sha`` (``param``); the newest ledger-check halt commit of
-    ``run_id`` under the param's ``plan`` else ``plan_rel`` (``resolved``); the manifest's
+    resolves per ``halt_baseline.since_halt_base``: ``since_sha`` (``param``); the run's first
+    ledger-check halt (``resolved``); the 40-hex ``halt_sha`` (``param``); the manifest's
     ``head_sha``, the HEAD the refire's staging stamped (``stage-head``). No base, an empty
     declared set or any git exit other than 0 or 1 refuses the same rows. A resume whose
     ``unlanded`` is an empty list owes no diff and refuses nothing (``_every_staged_row_landed``).
@@ -1828,13 +1813,7 @@ def _unchanged_since_halt_failures(
     if not judged or _every_staged_row_landed(resume):
         return []
     paths, stage_head = _manifest_declared(manifest_path)
-    base, source = resume.get("halt_sha"), "param"
-    if not (isinstance(base, str) and _FULL_SHA_RE.fullmatch(base)):
-        base, source = _resolve_halt_sha(worktree_root, resume, plan_rel), "resolved"
-    if base is None:
-        base, source = stage_head, "stage-head"
-    if base is None:
-        source = None
+    base, source = halt_baseline.since_halt_base(worktree_root, resume, plan_rel, stage_head)
     if unverified and base:
         verified = verified_post_commit_credit(worktree_root, base, items, unverified)
         judged = [i for i in judged if i not in verified]
@@ -3836,16 +3815,6 @@ def _terminal_commit(
 _CLAIM_POLL_SECS = 0.05
 
 
-def _drop_staged_twins(worktree_root: Path, run_id: object) -> None:
-    """The claim is held: drop the run's staged twins (they carry the plaintext token). Never fails the commit."""
-    from coordinator_core.ops.dispatch_emit import launcher_staged_twin
-
-    try:
-        launcher_staged_twin.remove_twins(worktree_root, run_id)
-    except Exception:  # noqa: BLE001 -- cleanup must not fail the commit
-        pass
-
-
 def _redeem_or_answer(worktree_root: Path, run_id: object, token: str, script_path: object) -> Optional[dict]:
     """Redeem the run token; None when this call holds the claim, else the reply that ends it.
 
@@ -3859,7 +3828,6 @@ def _redeem_or_answer(worktree_root: Path, run_id: object, token: str, script_pa
     from coordinator_core.ops.dispatch_emit import run_token, terminal_commit_reconcile
 
     if run_token.redeem(worktree_root, run_id, token, script_path):
-        _drop_staged_twins(worktree_root, run_id)
         return None
     landed = terminal_commit_reconcile.already_landed_reply(worktree_root, run_id, token, script_path)
     if landed is not None:
@@ -3874,7 +3842,6 @@ def _redeem_or_answer(worktree_root: Path, run_id: object, token: str, script_pa
                     return landed
                 time.sleep(_CLAIM_POLL_SECS)
             if run_token.redeem(worktree_root, run_id, token, script_path):
-                _drop_staged_twins(worktree_root, run_id)
                 return None
             landed = terminal_commit_reconcile.already_landed_reply(worktree_root, run_id, token, script_path)
             if landed is not None:

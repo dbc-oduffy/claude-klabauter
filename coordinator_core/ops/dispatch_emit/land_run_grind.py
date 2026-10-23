@@ -2,7 +2,9 @@
 
 Lands the union of the finished rows' declared product paths as one ``commit_paths`` commit with a
 ``Grind-Row:`` trailer per landed row. Landing-set membership is closed: only a finished row's own
-declared paths enter, so an undeclared dirty file is never staged. A path the commit cannot land (a
+declared paths enter, so an undeclared dirty file is never staged. Each path lands the owning row's own
+bytes (``grind_landing_select``), never a peer run's dirty hunks of the same file; a landing whose
+bytes import code HEAD will lack is refused with ``REFUSED_IMPORT_CLOSURE`` before the commit. A path the commit cannot land (a
 ledger-root path, a deletion git never saw, a file gone from the worktree) is dropped, reported under
 ``dropped`` and ``stranded`` and named in the commit by one ``UNLANDED_ROW_TRAILER`` line; it is never a
 reason to refuse the call. A landed row's ledger is settled afterwards. The run token is redeemed,
@@ -21,11 +23,13 @@ from coordinator_core.ops.dispatch_emit.grind_commit_contract import (
     DROP_LEDGER_ROOT,
     DROP_UNSEEN_DELETION,
     GRIND_COMMIT_PARAM,
+    REFUSED_IMPORT_CLOSURE,
     UNLANDED_KEY,
     partition_ledger_paths,
     render_row_trailer,
     validate_grind_params,
 )
+from coordinator_core.ops.dispatch_emit import grind_landing_select, landing_integrity
 from coordinator_core.ops.dispatch_emit.land_run_contract import REFUSED_MODE_AMBIGUOUS, UNLANDED_ROW_TRAILER
 
 #: ``dropped`` reason of a changed, undeclared-deleted path that is no longer a file in the worktree.
@@ -71,7 +75,7 @@ def commit_grind_rows(main_root: Path, repo_root: Path, params: dict) -> dict:
         )
     landed = None
     try:
-        reply = _land(main_root, grind, params.get("deliverable_id"))
+        reply = _land(main_root, grind, params.get("deliverable_id"), run_id)
         if reply.get("committed") is True:
             landed = {"sha": reply.get("sha"), "rows": reply.get("rows") or [], "paths": reply.get("paths") or []}
         return reply
@@ -105,7 +109,7 @@ def _already_landed(receipt: dict, grind: dict) -> dict:
     }
 
 
-def _land(main_root: Path, grind: dict, deliverable_id: object) -> dict:
+def _land(main_root: Path, grind: dict, deliverable_id: object, run_id: str) -> dict:
     from coordinator_core.git.commit import CommitRefused, NothingToCommit, commit_paths, hash_worktree_blobs_via_spawn
     from coordinator_core.ops.dispatch_emit.worktree_snapshot import worktree_snapshot
 
@@ -124,9 +128,7 @@ def _land(main_root: Path, grind: dict, deliverable_id: object) -> dict:
         return _error("git status over the grind rows failed", dropped=dropped, stranded=[], rows=[])
     changed = snapshot.changed if snapshot is not None else set()
 
-    commit_files: list = []
-    commit_deleted: list = []
-    landing: list = []
+    staged: list = []
     for row, paths, deleted in plans:
         row_id = row["row_id"]
         live = []
@@ -143,6 +145,27 @@ def _land(main_root: Path, grind: dict, deliverable_id: object) -> dict:
                 removed.append(p)
             else:
                 dropped.append({"row_id": row_id, "path": p, "reason": DROP_UNSEEN_DELETION})
+        staged.append((row, live, removed))
+
+    owners: dict = {}
+    for row, live, _removed in staged:
+        for p in live:
+            owners.setdefault(p, row["row_id"])
+    sel = grind_landing_select.select(main_root, run_id, owners) if owners else None
+
+    commit_files: list = []
+    commit_deleted: list = []
+    landing: list = []
+    for row, live, removed in staged:
+        if sel is not None:
+            kept = []
+            for p in live:
+                reason = sel.dropped.get(p)
+                if reason is None:
+                    kept.append(p)
+                else:
+                    dropped.append({"row_id": row["row_id"], "path": p, "reason": reason})
+            live = kept
         if live or removed:
             landing.append(row)
             commit_files += live
@@ -154,6 +177,19 @@ def _land(main_root: Path, grind: dict, deliverable_id: object) -> dict:
     if not landing:
         return {"committed": False, "sha": None, "nothing_to_commit": True, **base}
 
+    findings = landing_integrity.import_closure_findings(
+        main_root, commit_files, commit_deleted,
+        landed_text=sel.landed_text if sel is not None else None,
+    )
+    if findings:
+        return _error(
+            "the landing's import closure reaches code HEAD will lack: "
+            + "; ".join(f"{f.path}: {f.detail}" for f in findings),
+            refused=REFUSED_IMPORT_CLOSURE,
+            integrity=[{"path": f.path, "reason": f.reason, "detail": f.detail} for f in findings],
+            **base,
+        )
+
     message = _message(grind, landing, len(commit_deleted), stranded, deliverable_id)
     try:
         outcome = commit_paths(
@@ -162,6 +198,7 @@ def _land(main_root: Path, grind: dict, deliverable_id: object) -> dict:
             message,
             deleted_paths=commit_deleted,
             declared_reverts=commit_deleted,
+            supplied_blobs=sel.supplied_blobs if sel is not None else None,
             blob_fallback=partial(hash_worktree_blobs_via_spawn, cwd=main_root),
         )
     except NothingToCommit:

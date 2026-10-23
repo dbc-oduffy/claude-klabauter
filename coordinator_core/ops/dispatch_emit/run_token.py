@@ -193,7 +193,19 @@ def redeem(repo_root: Path, run_id: object, token: object, script_path: object) 
             break
         except PermissionError:  # a racing reader holds the live record open (Windows)
             time.sleep(0.005)
+    _drop_staged_twins(repo_root, run_id)
     return True
+
+
+def _drop_staged_twins(repo_root: Path, run_id: object) -> None:
+    """A won claim drops the run's staged twins (they carry the plaintext token): the one seam for every
+    redeeming caller. Never fails the redeem; an in-process unlink, no spawn."""
+    from coordinator_core.ops.dispatch_emit import launcher_staged_twin
+
+    try:
+        launcher_staged_twin.remove_twins(repo_root, run_id)
+    except Exception:  # noqa: BLE001 -- cleanup must not fail the claim
+        pass
 
 
 def release(repo_root: Path, run_id: object, token: object, script_path: object) -> bool:

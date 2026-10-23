@@ -399,3 +399,30 @@ def test_darwin_footprints_spawn_nothing_and_include_self(monkeypatch):
     out = gov._darwin_footprints(top_n=100000)
     assert os.getpid() in out and out[os.getpid()] > 0
     assert len(gov._darwin_footprints(top_n=3)) == 3
+
+
+def test_default_pidfile_thaw_also_resumes_the_legacy_pidfile(tmp_path, monkeypatch):
+    managed, legacy = tmp_path / "managed.json", tmp_path / "legacy.json"
+    monkeypatch.setattr(gov, "default_pidfile", lambda: managed)
+    monkeypatch.setattr(gov, "legacy_pidfile", lambda: legacy)
+    _record(legacy, 999999, 5.0, [(70, 7.0)])  # frozen by a pre-upgrade governor
+    calls = []
+    assert gov.thaw_leftovers(managed, lambda p, s: calls.append(p), {70: 7.0}.get) == [70]
+    assert calls == [[70]] and not legacy.exists()
+
+
+def test_injected_pidfile_does_not_read_the_legacy_pidfile(tmp_path, monkeypatch):
+    injected, legacy = tmp_path / "injected.json", tmp_path / "legacy.json"
+    monkeypatch.setattr(gov, "default_pidfile", lambda: tmp_path / "managed.json")
+    monkeypatch.setattr(gov, "legacy_pidfile", lambda: legacy)
+    _record(legacy, 999999, 5.0, [(70, 7.0)])
+    calls = []
+    assert gov.thaw_leftovers(injected, lambda p, s: calls.append(p), {70: 7.0}.get) == []
+    assert calls == [] and legacy.exists()
+
+
+def test_pidfile_resolution_survives_an_unresolvable_engine(monkeypatch):
+    monkeypatch.setattr(gov, "_temp_layout", lambda: None)
+    assert gov.default_pidfile().name == "group-em-memory-governor.frozen.json"
+    assert gov.legacy_pidfile().name == gov.default_pidfile().name
+    assert gov.legacy_pidfile().parent != gov.default_pidfile().parent
