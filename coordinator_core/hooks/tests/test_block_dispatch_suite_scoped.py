@@ -3,6 +3,8 @@ explicit test files and runner names inside paths, and still denies broad ones."
 
 from __future__ import annotations
 
+import hashlib
+import json
 from pathlib import Path
 
 import pytest
@@ -50,3 +52,21 @@ def test_scoped_invocation_or_path_naming_runner_is_allowed(prompt):
 )
 def test_bare_or_broad_invocation_is_denied(prompt):
     assert _decision(prompt) == "deny"
+
+
+def test_engine_emitted_workflow_script_is_allowed_only_with_receipt(tmp_path):
+    script = tmp_path / "run.workflow.js"
+    script.write_text("agent(`\nRun python -m pytest -q\n`)\n", encoding="utf-8")
+    tool_input = {
+        "scriptPath": str(script),
+        "args": {"sizing": "state/sizings/2026-10-23-band-dedupe-identity-partition-exemptions-8241be.yaml"},
+    }
+    event = {"tool_name": "Workflow", "tool_input": tool_input, "cwd": _ROOT}
+
+    def decide():
+        return bdsi._handler(event).get("hookSpecificOutput", {}).get("permissionDecision", "allow")
+
+    assert decide() == "deny"
+    receipt = {"sha256": hashlib.sha256(script.read_bytes()).hexdigest(), "plan": "p"}
+    (tmp_path / "run.workflow.js.emitted.json").write_text(json.dumps(receipt), encoding="utf-8")
+    assert decide() == "allow"

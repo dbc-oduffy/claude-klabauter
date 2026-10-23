@@ -2202,8 +2202,8 @@
     "coordinator_core/_content_root_primitive.py": "f7fcd3083855a5e1dd53c09233fbfd64f8dffdf5",
     "coordinator_core/_data_root.py": "0c7c8524f25376ae49593f11334445539dc557f9",
     "coordinator_core/_engine_landing.py": "06dbb1273f3c36fdb6be08767ec75e73c71630e7",
-    "coordinator_core/_engine_published_at": "8c0a5e70de50eec8a23e2d09357eb16169d1c863",
-    "coordinator_core/_engine_stamp": "4b131ec151a7d5650b48490bc8eb30aa341b7a38",
+    "coordinator_core/_engine_published_at": "758be2591b32e8ec5668b968ed247efa9fd5e62b",
+    "coordinator_core/_engine_stamp": "0d1dca64a0fb5c7715cd41dbfd2e9c8d839876c2",
     "coordinator_core/_fleet_names.py": "e81fc4247611fe486697f4707b28a1a3a008f392",
     "coordinator_core/_hook_envelope.py": "7e70aa3f56bfcea2cc146eab698c57469159691b",
     "coordinator_core/_repo_root_probe.py": "2d8edfa8cd9343436a650584da430aa87ae0397d",
@@ -3817,7 +3817,7 @@
     "coordinator_core/hooks/allow_emitted_workflow_fire.py": "b082eebd3ec06fd2512ada37964a9a49c210476d",
     "coordinator_core/hooks/assert_em_role.py": "743e5c5c7d15c54f01862d05e9d3c8b6feb961a7",
     "coordinator_core/hooks/auto_push.py": "7b719878c3ed3b9734aa58b29f0ab47f786aca7c",
-    "coordinator_core/hooks/block_dispatch_suite_invocation.py": "90c995ac71250f07279a391f85683fd4a20e4982",
+    "coordinator_core/hooks/block_dispatch_suite_invocation.py": "f0b0889aab0d26b18a5d9bc27c300bc2d9b70c0b",
     "coordinator_core/hooks/block_group_em_agent_cap_grant.py": "29db3d2c35c400c984cce9432601603c9d128b1e",
     "coordinator_core/hooks/block_unenumerated_agent_type.py": "5b23c54e644ef70ce989625d97b243d3b9593bd4",
     "coordinator_core/hooks/block_ungranted_opus_subagent.py": "7652630070b856e2027305cf85ee38bf4cd72df9",
@@ -4004,7 +4004,7 @@
     "coordinator_core/hooks/tests/test_assert_em_role_incident_line.py": "cee4cb645b8cd7b281f984780119e95029419e57",
     "coordinator_core/hooks/tests/test_auto_push_namespace_absence.py": "6d16962d285dc36ad7a2b8efa05ae5e9fede5a11",
     "coordinator_core/hooks/tests/test_auto_push_no_credential_remote.py": "9358408306ebfc45e23225079ce680d913a00608",
-    "coordinator_core/hooks/tests/test_block_dispatch_suite_scoped.py": "da378620cbee78b06d3d90fea83024f1355053df",
+    "coordinator_core/hooks/tests/test_block_dispatch_suite_scoped.py": "7fd1691b1cf11bad64fa3a4530911676fc286f03",
     "coordinator_core/hooks/tests/test_block_group_em_agent_cap_grant.py": "2c61728b185029784a548022e07ef4bfd6ace726",
     "coordinator_core/hooks/tests/test_block_unenumerated_agent_type.py": "3a87597b8e3c584f4940f5a9ae1532636ad3c7ff",
     "coordinator_core/hooks/tests/test_block_ungranted_opus_subagent.py": "e2a75937c10421d47417cf328913d9fa9a3722b8",
@@ -9365,5 +9365,5 @@
     "scripts/unstick_claude.py": "5458a0f699f1793ff9fd32295b9d0b33635f1c06"
   },
   "schema": 1,
-  "source_head": "9207e66e1ece06040483796d8fda9f15b3dc5d5c"
+  "source_head": "0ca9ab3b7efee8e6039d3f9d53cf8f7fba02216c"
 }

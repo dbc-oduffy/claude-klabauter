@@ -141,6 +141,15 @@ def _extract_dispatch_text(tool_name: str, tool_input: Mapping) -> _DispatchText
         return _DispatchText("", caller_authored=False)
 
 
+def _engine_emitted(params: dict) -> bool:
+    from coordinator_core.hooks.allow_emitted_workflow_fire import _decide
+
+    try:
+        return _decide(params) is not None
+    except Exception:
+        return False
+
+
 def _has_override_marker(text: str) -> bool:
     for match in _OVERRIDE_MARKER_RE.finditer(text):
         reason = match.group(1)
@@ -233,6 +242,11 @@ def _handler(params: dict, repo_root=None) -> dict:
     tool_input = params.get("tool_input")
     if not isinstance(tool_input, Mapping):
         tool_input = {}
+
+    # A receipt-verified scriptPath is the engine's emitted run (the engine-ask
+    # submission rewrites to one): its test-runner prompts are no EM's brief.
+    if tool_name == "Workflow" and _engine_emitted(params):
+        return no_advisory()
 
     dispatch = _extract_dispatch_text(tool_name, tool_input)
     text = dispatch.text
