@@ -499,6 +499,14 @@ _PM_DECISION_ROUTE = "pm-decision"
 #: multi-session job is the exit that leaves a plan to write.
 _XL_EXIT_RESOLVING_TO_PLAN = "accept_multi_session"
 
+#: The `xl_exit` that fans an XL/XXL parent out into component sizings, each of
+#: which fires into the normal pipeline on its own.
+_XL_EXIT_FAN_OUT = "fan_out"
+
+#: The effective route of a fanned parent. Outside `_FIRE_ROUTES`, so no wave
+#: hands the parent itself to a plan author.
+FAN_OUT_ROUTE = "fan-out"
+
 
 def _sizing_route(worktree_root: Path, resolved: Sequence[str]) -> Optional[str]:
     """The EFFECTIVE `route` of the first resolvable sizing object, or None.
@@ -517,8 +525,11 @@ def _sizing_route(worktree_root: Path, resolved: Sequence[str]) -> Optional[str]
     on 2026-08-05 (`xl_exit: accept_multi_session`, `pm_resolution` filled) still
     routing to pm-decision in every wave since, at the PM's expense.
 
-    Only `accept_multi_session` resolves. The other exits name work that is not
-    writing this plan, so they stay at the gate, and an unset `xl_exit` stays
+    `fan_out` answers "is this parent plannable as one plan?" with no: it
+    resolves to FAN_OUT_ROUTE, whose components carry their own sizings.
+
+    Only `accept_multi_session` resolves to a plan. The remaining exits (`split`,
+    `shape`, `roadmap`) name work that is not writing this plan, so they stay at the gate, and an unset `xl_exit` stays
     `pm-decision` because null never means accepted (the schema says so).
 
     None is the answer for an UNSIZED baton, and it is not a finding — the gate
@@ -549,6 +560,8 @@ def _sizing_route(worktree_root: Path, resolved: Sequence[str]) -> Optional[str]
                         return route
                 if route == _PM_DECISION_ROUTE and xl_exit == _XL_EXIT_RESOLVING_TO_PLAN:
                     return "plan"
+                if route == _PM_DECISION_ROUTE and xl_exit == _XL_EXIT_FAN_OUT:
+                    return FAN_OUT_ROUTE
                 if route:
                     return route
         except OSError:

@@ -60,7 +60,7 @@ def unsized_writer_dispatch_deny(
 
     Sized means a sizing touched or a Workflow run launched this session
     (``engine_route_state.session_sizing_state``, called through the module so tests can patch
-    it). A sized session with no Workflow run and an xs lane record with ``denies >= 1`` also
+    it). A sized session with no Workflow run and an xs lane record with at least one recorded deny also
     denies. A ``ProbeFault`` result (probe raised) also denies, naming the failure. The deny
     goes through ``apply_guard_level`` so the guard level governs it.
     """

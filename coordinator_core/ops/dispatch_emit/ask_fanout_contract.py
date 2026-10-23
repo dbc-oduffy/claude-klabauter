@@ -64,6 +64,15 @@ class AskSlice:
     writes: Optional[tuple[str, ...]] = None
     wave: Optional[int] = None
     source: Optional[str] = None
+    estimate: Optional[str] = None
+    exit_criterion: Optional[str] = None
+
+
+#: XL/XXL fan-out: the submit param, the seam slice's label, and the t-shirts a component / the seam carry.
+FAN_OUT_PARAM = "fan_out"
+SEAM_PASS_LABEL = "seam-pass"
+FAN_OUT_COMPONENT_TSHIRTS = ("M", "L")
+SEAM_PASS_TSHIRT = "S"
 
 
 @dataclass(frozen=True)

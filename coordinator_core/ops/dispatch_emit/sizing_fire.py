@@ -171,13 +171,20 @@ def _fleet_interaction_mode() -> str | None:
 
 def effective_route(sizing: Mapping) -> object:
     """`route`, except a `pm-decision` whose recorded `xl_exit` resolves it: the plan-resolving
-    exit (plan_gate's constant) to `plan`, `roadmap` to `roadmap`. An unresolved one stays."""
+    exit (plan_gate's constant) to `plan`, `fan_out` to plan_gate's FAN_OUT_ROUTE, `roadmap` to
+    `roadmap`. An unresolved one stays."""
     route = sizing.get("route")
     if route != _PM_DECISION:
         return route
-    from coordinator_core.roadmap.plan_gate import _XL_EXIT_RESOLVING_TO_PLAN
+    from coordinator_core.roadmap.plan_gate import (
+        _XL_EXIT_FAN_OUT,
+        _XL_EXIT_RESOLVING_TO_PLAN,
+        FAN_OUT_ROUTE,
+    )
 
     xl_exit = sizing.get("xl_exit")
+    if xl_exit == _XL_EXIT_FAN_OUT:
+        return FAN_OUT_ROUTE
     if xl_exit == _XL_EXIT_RESOLVING_TO_PLAN:
         return "plan"
     return _ROADMAP_EXIT if xl_exit == _ROADMAP_EXIT else route

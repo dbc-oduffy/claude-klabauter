@@ -208,6 +208,21 @@ def test_the_other_xl_exits_stay_at_the_gate(tmp_path, exit_value):
     assert pg._sizing_route(tmp_path, [rel]) == "pm-decision"
 
 
+def test_a_fan_out_xl_exit_resolves_to_the_fan_out_route(tmp_path):
+    rel = _xl_sizing(tmp_path, "fanned", xl_exit="fan_out")
+    assert pg._sizing_route(tmp_path, [rel]) == pg.FAN_OUT_ROUTE == "fan-out"
+
+
+def test_a_fan_out_xl_exit_on_a_non_pm_decision_route_is_unchanged(tmp_path):
+    rel = "state/sizings/fan-plan.yaml"
+    path = tmp_path / rel
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "schema: sizing-object\nroute: plan\nxl_exit: fan_out\n", encoding="utf-8"
+    )
+    assert pg._sizing_route(tmp_path, [rel]) == "plan"
+
+
 def test_an_unset_xl_exit_is_not_an_acceptance(tmp_path):
     rel = _xl_sizing(tmp_path, "unset", xl_exit="null")
     assert pg._sizing_route(tmp_path, [rel]) == "pm-decision"

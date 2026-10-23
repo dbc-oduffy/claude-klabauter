@@ -311,3 +311,21 @@ def test_kept_work_fields_absent_at_defaults_and_present_when_set():
     assert c.ManifestRow.from_json(row.to_json()).kept_from == ""
     plan = c.ResumePlan("p.md", ("C1",))
     assert plan.kept == () and plan.kept_run is None
+
+
+def test_measured_rev_constants_and_record_path(tmp_path):
+    assert c.MEASURED_REV_OP == "dispatch.measured_rev"
+    assert c.MEASURED_REV_ENV == "COORDINATOR_MEASURED_REV"
+    assert c.MEASURED_REV_RECORD == "measured-rev.json"
+    assert c.MEASURED_REV_KEYS == ("sha", "base_sha", "paths", "removed", "blobs")
+    path = c.measured_rev_record_path(tmp_path, "rid")
+    assert path.parent == tmp_path / f"{c.RECORD_DIR_ROOT}/rid"
+    assert path.name == c.MEASURED_REV_RECORD
+    assert c.RUN_DIR_ROOT not in path.relative_to(tmp_path).as_posix()
+    for bad in ("../x", "a/b", ""):
+        with pytest.raises(ValueError):
+            c.measured_rev_record_path(tmp_path, bad)
+
+
+def test_ask_verify_return_keys_unchanged_by_measured_rev():
+    assert not set(c.MEASURED_REV_KEYS) & set(c.ASK_VERIFY_RETURN_KEYS)

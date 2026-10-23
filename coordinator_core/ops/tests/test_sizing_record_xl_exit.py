@@ -81,6 +81,26 @@ def test_shape_then_roadmap_overwrites(tmp_path):
     assert d["xl_exit"] == "roadmap" and d["pm_resolution"]["xl_exit"] == _QUOTE
 
 
+def test_fan_out_pick_records(tmp_path):
+    p = _seed(tmp_path)
+    r = _run(tmp_path, "fan_out")
+    assert r["exit_code"] == 0 and r["applied"] is True, r
+    d = _doc(p)
+    assert d["xl_exit"] == "fan_out" and d["pm_resolution"]["xl_exit"] == _QUOTE
+
+
+def test_shape_then_fan_out_overwrites_but_fan_out_then_roadmap_refused(tmp_path):
+    p = _seed(tmp_path)
+    assert _run(tmp_path, "shape", "shape it first")["applied"] is True
+    r = _run(tmp_path, "fan_out")
+    assert r["exit_code"] == 0 and r["applied"] is True, r
+    assert _doc(p)["xl_exit"] == "fan_out"
+    before = p.read_text(encoding="utf-8")
+    r = _run(tmp_path, "roadmap")
+    assert r["exit_code"] == 1 and "already" in r["error"], r
+    assert p.read_text(encoding="utf-8") == before
+
+
 def test_same_pick_is_idempotent_and_keeps_first_quote(tmp_path):
     p = _seed(tmp_path)
     _run(tmp_path, "roadmap")

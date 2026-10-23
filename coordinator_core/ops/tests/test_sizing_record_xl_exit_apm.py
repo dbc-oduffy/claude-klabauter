@@ -47,6 +47,15 @@ def test_ceo_mode_records_an_apm_split(tmp_path):
     assert yaml.safe_load(p.read_text(encoding="utf-8"))["xl_exit"] == "split"
 
 
+def test_ceo_mode_records_an_apm_fan_out(tmp_path):
+    p = _seed_mode(tmp_path, "ceo")
+    r = _apm(tmp_path, "fan_out")
+    assert r["exit_code"] == 0 and r["applied"] is True, r
+    doc = yaml.safe_load(p.read_text(encoding="utf-8"))
+    assert doc["xl_exit"] == "fan_out"
+    assert doc["pm_resolution"]["xl_exit_apm"] == f"ask-1: {_RULING}"
+
+
 @pytest.mark.parametrize("mode", ["pm", "hands-on"])
 def test_other_modes_keep_the_exit_the_pms(tmp_path, mode):
     p = _seed_mode(tmp_path, mode)

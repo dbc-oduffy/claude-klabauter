@@ -4357,7 +4357,24 @@ _QUEUE_SCHEMA_PINS = {
 # the stale-ahead branch caught that unprompted, and the pair converged back to
 # an ordinary byte-pin through bin/claude-klabauter-revendor-schema.py. That is the whole
 # intended lifecycle: declare, gate, converge, remove.
-_QUEUE_SCHEMA_AHEAD_PINS: dict = {}
+#
+# sizing-object: claude-klabauter 1.47.0 adds the `fan_out` xl_exit value (claude-klabauter-first); DoE
+# still reads 1.45.0 at the doe_ref below and has not vendored it yet.
+# Exit path: once DoE vendors 1.47.0, delete this entry and run
+# bin/claude-klabauter-revendor-schema.py sizing-object so it returns to a plain
+# check_schema_drift byte-pin.
+_QUEUE_SCHEMA_AHEAD_PINS: dict = {
+    'sizing-object': {
+        'doe_ref': "8807597379a74d97b6396eaa667e6646f6da49c2",
+        'reason': (
+            "claude-klabauter-first sizing-object 1.47.0 adds the `fan_out` xl_exit value; "
+            "DoE's copy is still 1.45.0 and its own vendor of 1.47.0 is pending"
+        ),
+        'provenance': "claude-klabauter plan 2026-10-23-xl-xxl-fan-out-sizing-seam-pass C1",
+        'exempt_paths': frozenset({('properties', 'xl_exit', 'description')}),
+        'local_shape_hash': "2536a4cf618d48d977010e5354697a819369e8a0225d7853fcbef061d63b9d5c",
+    },
+}
 
 
 def _check_vendored_against_doe(name: str, schema_path: Path) -> None:

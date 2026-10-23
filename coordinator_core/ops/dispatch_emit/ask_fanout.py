@@ -17,6 +17,8 @@ Three arms:
             `em_analysis.stop_after` on its slice sizing alone; the top-level default is the hook's.
   - slices: {slices: [{label, ask, rows, writes?}], parent_sizing, confirm_split?} -- the parent
             register is the parent sizing's own rows; each slice carries its rows byte for byte.
+            With `fan_out: true` each slice also names `estimate` (M or L) and `exit_criterion`, is
+            written routed, and the engine appends a seam-pass slice that follows every component.
   - sizings: {sizings: [{sizing, label?, writes?, wave?, ids?, blocked_by?}], interaction_mode?,
             edges_from?: "blocked_by", confirm_split?} -- with edges_from, after edges follow each item's
             blocked_by (a wave adds none), a blocker outside the batch holds the run, and the reply names
@@ -70,6 +72,7 @@ from coordinator_core.ops.session_context import resolve_current_session_id
 from coordinator_core.ops.sizing_intake_contract import (
     EM_BRIEF_KEY,
     EM_CONTEXT_PATHS_KEY,
+    INTAKE_MARK_KEY,
     em_context_paths_value,
     intake_record,
     is_path_shaped,
@@ -77,6 +80,7 @@ from coordinator_core.ops.sizing_intake_contract import (
 )
 from coordinator_core.session import claimed_write
 from coordinator_core.session.record_homes import home_dir
+from coordinator_core.sizing_assemble import _BASE_ROUTE_BY_TSHIRT
 from coordinator_core.warp_fire import fire_command
 
 _SIZING_SCHEMA_PATH: Path = (
@@ -108,8 +112,11 @@ def _writes(value: Any, where: str) -> Optional[tuple[str, ...]]:
     return tuple(w.strip() for w in value)
 
 
-def _read_slices(params: Mapping) -> tuple[list[contract.AskSlice], Optional[str]]:
-    """The submitted slices and, on the slices arm, the parent sizing path."""
+def _read_slices(params: Mapping, fan_out: bool = False) -> tuple[list[contract.AskSlice], Optional[str]]:
+    """The submitted slices and, on the slices arm, the parent sizing path.
+
+    With `fan_out`, each slice but the one labelled SEAM_PASS_LABEL (which only carries the seam's
+    rows) must name an `estimate` in FAN_OUT_COMPONENT_TSHIRTS and a non-empty `exit_criterion`."""
     asks, slices = params.get("asks"), params.get("slices")
     if (asks is None) == (slices is None):
         raise _Refused("pass exactly one of asks or slices")
@@ -143,7 +150,21 @@ def _read_slices(params: Mapping) -> tuple[list[contract.AskSlice], Optional[str
             if not isinstance(row_ids, list) or not all(isinstance(r, str) for r in row_ids):
                 raise _Refused(f"{where}: rows must be a list of register row ids")
             rows = tuple(row_ids)
-        out.append(contract.AskSlice(label, ask.strip(), rows, _writes(item.get("writes"), where), source=source))
+        estimate = criterion = None
+        if fan_out and label != contract.SEAM_PASS_LABEL:
+            estimate, criterion = item.get("estimate"), item.get("exit_criterion")
+            if estimate not in contract.FAN_OUT_COMPONENT_TSHIRTS:
+                raise _Refused(
+                    f"{where}: estimate must be one of {', '.join(contract.FAN_OUT_COMPONENT_TSHIRTS)} "
+                    f"on a fan_out component, got {estimate!r}"
+                )
+            if not isinstance(criterion, str) or not criterion.strip():
+                raise _Refused(f"{where}: exit_criterion must be a non-empty string on a fan_out component")
+            criterion = criterion.strip()
+        out.append(contract.AskSlice(
+            label, ask.strip(), rows, _writes(item.get("writes"), where), source=source,
+            estimate=estimate, exit_criterion=criterion,
+        ))
     parent_sizing = None
     if slices is not None:
         parent_sizing = params.get("parent_sizing")
@@ -276,9 +297,14 @@ def _slice_record(
     route_pref: Optional[RoutePreference] = None,
     context: tuple[Optional[str], tuple[str, ...]] = (None, ()),
     stop_after: Optional[str] = None,
+    sized: Optional[Mapping] = None, deliverable_id: Optional[str] = None,
 ) -> dict:
     """A slice sizing. A relayed or unmarked asks item (it arrives with no `turns`) is stamped relayed,
-    carries its text and sender in `em_analysis`, and never gets a `pm_verbatims` row."""
+    carries its text and sender in `em_analysis`, and never gets a `pm_verbatims` row.
+
+    `sized` ({ruling_ref, mode}) makes a fan_out slice already routed: its estimate, the route from
+    the size-to-route table, `status: routed` and an apm-accepted exit criterion, with the intake mark
+    dropped so no size stage runs. `deliverable_id` is set only on the seam slice."""
     relayed = sl.source == ASK_SOURCE_RELAYED or not turns
     record = intake_record(name=name, turn={"text": sl.ask} if not turns else turns[-1], today=today)
     record["intent"] = sl.ask
@@ -306,12 +332,51 @@ def _slice_record(
         record["em_analysis"].update(to_em_analysis(route_pref))
     if stop_after:
         record["em_analysis"][STOP_AFTER_KEY] = stop_after
-    if parent_rows is not None:
+    if parent_rows is not None and (sl.rows or sized is None):
         record[rr.REGISTER_KEY] = {
             rr.SOURCES_KEY: sources,
             rr.ROWS_KEY: [dict(parent_rows[r]) for r in sl.rows],
         }
+    if sized is not None:
+        record["em_analysis"].pop(INTAKE_MARK_KEY, None)
+        record["estimate"] = {"tshirt": sl.estimate, "provisional": True}
+        record["route"] = _BASE_ROUTE_BY_TSHIRT[sl.estimate]
+        record["status"] = "routed"
+        record["exit_criterion"] = {
+            "statement": sl.exit_criterion,
+            "accepted": {
+                "source": "apm",
+                "apm_ruling": "fan_out decomposition: the component's exit criterion is part of the parent's accepted split",
+                "ruling_ref": sized["ruling_ref"],
+                "on": today,
+                "mode": sized["mode"],
+            },
+        }
+        if sized.get("mode"):
+            record["interaction_mode"] = sized["mode"]
+    if deliverable_id:
+        record["deliverable_id"] = deliverable_id
     return record
+
+
+def _seam_ask(parent_rel: str, components: list[tuple[str, str]]) -> str:
+    listing = "\n".join(f"- {label}: run {run_id}" for label, run_id in components)
+    return (
+        f"Seam pass for the fan-out of {parent_rel}. Every component run below has landed.\n{listing}\n"
+        "Run `plan.seam_check` over the component plans, run the union of their targeted tests, and "
+        "repair only cross-component drift. Do not redo or widen any component's work."
+    )
+
+
+def _fan_out_mode(parent: Mapping, params: Mapping) -> str:
+    mode = parent.get("interaction_mode") or params.get(contract.INTERACTION_MODE_PARAM)
+    if mode is None:
+        from coordinator_core.ops.dispatch_emit.sizing_fire import _fleet_interaction_mode
+
+        mode = _fleet_interaction_mode()
+    if not isinstance(mode, str) or not mode.strip():
+        raise _Refused("fan_out: the parent sizing records no interaction_mode and none is inherited")
+    return mode.strip()
 
 
 def fanout(params: dict, root: Path) -> dict:
@@ -463,7 +528,12 @@ def _fanout(params: Mapping, root: Path) -> dict:
         if params.get("asks") is not None or params.get("slices") is not None:
             raise _Refused("pass exactly one of asks, slices or sizings")
         return _fanout_sizings(params, main_worktree_root(root), confirm)
-    slices, parent_rel = _read_slices(params)
+    fan_out = params.get(contract.FAN_OUT_PARAM, False)
+    if not isinstance(fan_out, bool):
+        raise _Refused(f"{contract.FAN_OUT_PARAM} must be a boolean")
+    if fan_out and params.get("slices") is None:
+        raise _Refused(f"{contract.FAN_OUT_PARAM} needs the slices arm")
+    slices, parent_rel = _read_slices(params, fan_out)
     cwd = str(root)
     worktree = main_worktree_root(root)
 
@@ -489,17 +559,41 @@ def _fanout(params: Mapping, root: Path) -> dict:
             f"asks[{pm_items[0]}]: source pm, but this session records no PM turn to carry. "
             "Mark it relayed, or submit from the session the PM spoke in."
         )
+    stamp = datetime.now().strftime("%Y%m%dT%H%M%S")
+    parent_hex = uuid.uuid4().hex[:6]
+    parent_id = f"ask-parent-{stamp}-{parent_hex}"
+    today = date.today().isoformat()
+    sized: Optional[dict] = None
+    deliverable_id: Optional[str] = None
+    if fan_out:
+        carriers = [sl for sl in slices if sl.label == contract.SEAM_PASS_LABEL]
+        components = [sl for sl in slices if sl.label != contract.SEAM_PASS_LABEL]
+        if len(carriers) > 1 or not components:
+            raise _Refused("fan_out needs at least one component and at most one seam-pass slice")
+        parent_ec = parent_doc.get("exit_criterion") if parent_doc else None
+        statement = parent_ec.get("statement") if isinstance(parent_ec, Mapping) else None
+        if not isinstance(statement, str) or not statement.strip():
+            raise _Refused("fan_out: the parent sizing records no exit_criterion statement for the seam pass")
+        deliverable_id = parent_doc.get("deliverable_id") or None
+        sized = {"ruling_ref": parent_id, "mode": _fan_out_mode(parent_doc, params)}
+        run_ids = [f"ask-{stamp}-{uuid.uuid4().hex[:6]}" for _ in range(len(components) + 1)]
+        comp_runs = run_ids[:-1]
+        edges = contract.after_edges(components)
+        edges[len(components)] = tuple(range(len(components)))
+        slices = components + [contract.AskSlice(
+            contract.SEAM_PASS_LABEL,
+            _seam_ask(parent_rel, [(sl.label, r) for sl, r in zip(components, comp_runs)]),
+            carriers[0].rows if carriers else (), None,
+            estimate=contract.SEAM_PASS_TSHIRT, exit_criterion=statement.strip(),
+        )]
+    else:
+        run_ids = [f"ask-{stamp}-{uuid.uuid4().hex[:6]}" for _ in slices]
+        edges = contract.after_edges(slices)
+
     relay = _relay_fields(params, len(slices))
     route_prefs = _route_fields(params, len(slices))
     contexts = _context_fields(params, len(slices))
     stop_afters = _stop_after_fields(params, len(slices))
-
-    stamp = datetime.now().strftime("%Y%m%dT%H%M%S")
-    parent_hex = uuid.uuid4().hex[:6]
-    parent_id = f"ask-parent-{stamp}-{parent_hex}"
-    run_ids = [f"ask-{stamp}-{uuid.uuid4().hex[:6]}" for _ in slices]
-    today = date.today().isoformat()
-    edges = contract.after_edges(slices)
 
     sources = None
     if parent_doc is not None:
@@ -518,6 +612,7 @@ def _fanout(params: Mapping, root: Path) -> dict:
             today=today, parent_rows=parent_rows, sources=sources,
             sender=relay[i][0], relayed_text=relay[i][1], route_pref=route_prefs[i],
             context=contexts[i], stop_after=stop_afters[i],
+            sized=sized, deliverable_id=deliverable_id if sized and sl.label == contract.SEAM_PASS_LABEL else None,
         )
         errors = validate_frontmatter(record, _SIZING_SCHEMA_PATH)
         if errors:

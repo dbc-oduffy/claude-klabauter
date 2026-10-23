@@ -1387,6 +1387,10 @@ def main(argv: "Optional[list[str]]" = None) -> int:
         from coordinator_core.ops.dispatch_emit import retest_targeted
 
         return retest_targeted.main(argv[1:])
+    if argv[:1] == ["--select-tests"]:
+        from coordinator_core.ops.dispatch_emit import diff_test_select
+
+        return diff_test_select.main(argv[1:])
     parser = _build_parser()
     args = parser.parse_args(argv)
 

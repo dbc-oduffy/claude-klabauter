@@ -14,7 +14,7 @@ Re-record invariant (a recorded exit is the PM's decision; a later call must not
 silently displace it):
   - no prior `xl_exit`           -> write.
   - same pick as recorded        -> idempotent no-op; the first quote is kept.
-  - recorded `shape`, new pick is `roadmap`, `accept_multi_session` or `split`
+  - recorded `shape`, new pick is `roadmap`, `accept_multi_session`, `split` or `fan_out`
                                  -> overwrite: shaping is a step toward an exit, so
                                     the PM moving on from it is the expected path.
   - any other change             -> refused; a settled exit is not re-decided here.
@@ -55,10 +55,12 @@ _SIZING_SCHEMA_PATH: Path = (
     Path(__file__).parent.parent / "frontmatter" / "schemas" / "sizing-object.schema.json"
 )
 
-XL_EXIT_PICKS = ("shape", "roadmap", "accept_multi_session", "split")
+XL_EXIT_PICKS = ("shape", "roadmap", "accept_multi_session", "split", "fan_out")
 
 # The only overwrite allowed: the PM moving on from `shape`.
-_OVERWRITABLE_FROM = {"shape": frozenset({"roadmap", "accept_multi_session", "split"})}
+_OVERWRITABLE_FROM = {
+    "shape": frozenset({"roadmap", "accept_multi_session", "split", "fan_out"})
+}
 
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
@@ -69,7 +71,7 @@ _PARAMS_HINT = (
 )
 
 #: The APM picks only exits that carry the work on to execution; `shape` needs the PM's JTBD.
-_APM_PICKS = frozenset({"roadmap", "accept_multi_session", "split"})
+_APM_PICKS = frozenset({"roadmap", "accept_multi_session", "split", "fan_out"})
 #: The `pm_resolution` key an APM pick is recorded under: never `xl_exit`, which is the PM's words.
 _APM_RESOLUTION_KEY = "xl_exit_apm"
 
@@ -98,12 +100,12 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
 
     Params:
         sizing     (str) — path to the sizing-object under the sizings home. Required.
-        xl_exit    (str) — shape | roadmap | accept_multi_session | split. Required.
+        xl_exit    (str) — shape | roadmap | accept_multi_session | split | fan_out. Required.
         pm_quote   (str) — the PM's verbatim words picking the exit.
         apm_ruling (str) — in place of pm_quote: the APM's verbatim ruling, admitted only when the
                            sizing's `interaction_mode` delegates the XL exit
-                           (`sizing_acceptance.apm_picks_xl_exit`) and the pick is roadmap or
-                           accept_multi_session. Recorded under `pm_resolution.xl_exit_apm`.
+                           (`sizing_acceptance.apm_picks_xl_exit`) and the pick is roadmap,
+                           accept_multi_session, split or fan_out. Recorded under `pm_resolution.xl_exit_apm`.
         ruling_ref (str) — required with apm_ruling: the run id that ruled.
         decided_on (str) — YYYY-MM-DD the PM decided. Defaults to today.
 
@@ -186,7 +188,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         if prior is not None and pick not in _OVERWRITABLE_FROM.get(prior, frozenset()):
             raise MutateAbort(
                 f"refusing to record on {p}: xl_exit is already {prior!r} — only "
-                f"'shape' may be overwritten, and only by roadmap, accept_multi_session or split"
+                f"'shape' may be overwritten, and only by roadmap, accept_multi_session, split or fan_out"
             )
 
         text = (

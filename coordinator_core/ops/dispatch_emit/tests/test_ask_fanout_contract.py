@@ -160,6 +160,23 @@ def test_ask_slice_source_defaults_none():
     assert c.AskSlice(label="a", ask="a", source="relayed").source == "relayed"
 
 
+def test_ask_slice_sizing_fields_default_none():
+    sl = c.AskSlice(label="a", ask="a")
+    assert sl.estimate is None and sl.exit_criterion is None
+    sized = c.AskSlice(label="a", ask="a", estimate="M", exit_criterion="done")
+    assert (sized.estimate, sized.exit_criterion) == ("M", "done")
+
+
+def test_fan_out_constants():
+    assert (c.FAN_OUT_PARAM, c.SEAM_PASS_LABEL) == ("fan_out", "seam-pass")
+    assert c.FAN_OUT_COMPONENT_TSHIRTS == ("M", "L") and c.SEAM_PASS_TSHIRT == "S"
+
+
+def test_partition_admits_a_seam_slice_with_zero_rows():
+    slices = [_slice("a", ["R1"]), c.AskSlice(label=c.SEAM_PASS_LABEL, ask="seam")]
+    assert c.ledger_partition(["R1"], slices) is None
+
+
 def test_slice_source_key_and_reader():
     assert c.SLICE_SOURCE_KEY == "ask_source"
     assert c.slice_ask_source({"em_analysis": {"ask_source": "relayed"}}) == "relayed"

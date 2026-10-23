@@ -91,8 +91,9 @@ def advisory_text(params: dict) -> str:
 
 @register_op("hooks.nudge_em_turn_budget")
 async def _handler(params: dict, repo_root=None) -> dict:
+    payload = payload_of(params)
     text = await asyncio.to_thread(advisory_text, params)
     if not text:
         return no_advisory()
-    event = field(payload_of(params), "hook_event_name") or "PostToolUse"
+    event = field(payload, "hook_event_name") or "PostToolUse"
     return context_only(event, text)

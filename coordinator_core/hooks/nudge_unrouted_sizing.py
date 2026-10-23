@@ -61,7 +61,7 @@ Three judgment halts are EXEMPT and this is the correctness core, not an edge ca
       halts are genuinely distinct questions that merely happen to share a
       resolution slot (`fork`).
     - `route: pm-decision` with `xl_exit: null` means the PM has not yet chosen among
-      the four XL exits — `xl_exit: null` NEVER means accept. This case is already
+      the five XL exits — `xl_exit: null` NEVER means accept. This case is already
       excluded by construction here: the route allow-list below is `{plan,
       spec-dispatch, dispatch}`, and `pm-decision` is not a member of it, so a
       `pm-decision` sizing-object never reaches the fork/xl_exit checks at all.

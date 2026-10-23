@@ -407,6 +407,27 @@ def halted_record_message(run_id: str, halted: dict) -> str:
     return "\n".join(lines)
 
 
+#: Op that measures the run's write set as a candidate commit; env var naming the measured rev
+#: for a HEAD-measured test; the record file it leaves; that record's keys.
+MEASURED_REV_OP = "dispatch.measured_rev"
+MEASURED_REV_ENV = "COORDINATOR_MEASURED_REV"
+MEASURED_REV_RECORD = "measured-rev.json"
+MEASURED_REV_KEYS = ("sha", "base_sha", "paths", "removed", "blobs")
+
+
+def measured_rev_record_path(repo_root: Path, run_id: str) -> Path:
+    """`<RECORD_DIR_ROOT>/<run_id>/measured-rev.json`. Invariant: the record sits beside
+    `manifest.json` (never under `RUN_DIR_ROOT`), so both `_ledger_gate` sites find it through
+    the `run_dir` they already hold. Raises ValueError on an unsafe run_id or an escape."""
+    if not isinstance(run_id, str) or not safe_id(run_id):
+        raise ValueError(f"run_id {run_id!r} is not a single safe path segment")
+    root = Path(repo_root)
+    state = contained_path(root / RECORD_DIR_ROOT / run_id, [root / RECORD_DIR_ROOT])
+    if state is None:
+        raise ValueError(f"record dir for {run_id!r} escapes {RECORD_DIR_ROOT}")
+    return Path(repo_root) / RECORD_DIR_ROOT / run_id / MEASURED_REV_RECORD
+
+
 def record_dir(repo_root: Path, run_id: str) -> Path:
     """The run's record directory: `state/warp/<run_id>`, except an in-flight run whose record
     file sits only under `scratch/warp/<run_id>`. Only a record file selects scratch, never the

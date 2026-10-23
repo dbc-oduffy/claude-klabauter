@@ -9,6 +9,9 @@ from coordinator_core.ops.dispatch_emit.ask_compose import compose_ask_script
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
 
 _BLITZ_FN = "  async function planBlitz(args) {\n    return { ready: [] };\n  }"
+# The bare token also sits in the scout reply schema (unconditional); only this plan-author clause is gated on args.
+# Starts after "sizing's": the composer JS-escapes that apostrophe in the emitted script.
+_SCOUT_EVIDENCE_CLAUSE = "`scout_evidence` entries, if it has any, before deriving the spine"
 
 
 def _compose(**over):
@@ -43,7 +46,7 @@ def test_none_and_empty_writes_leave_the_script_unchanged():
     base = _compose()
     assert _compose(plan_blitz_args=None, writes=()) == base
     assert "  let _writes = [];" in base
-    assert "scout_evidence" not in base
+    assert _SCOUT_EVIDENCE_CLAUSE not in base
 
 
 def test_writes_with_quote_and_backslash_round_trip_through_the_literal():
@@ -55,7 +58,7 @@ def test_writes_with_quote_and_backslash_round_trip_through_the_literal():
 
 
 def test_plan_author_prompt_reads_scout_evidence_when_args_given():
-    assert "scout_evidence" in _compose(plan_blitz_args={"k": 1})
+    assert _SCOUT_EVIDENCE_CLAUSE in _compose(plan_blitz_args={"k": 1})
 
 
 def _blitz_calls(script):

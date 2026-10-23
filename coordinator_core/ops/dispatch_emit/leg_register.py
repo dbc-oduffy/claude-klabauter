@@ -7,8 +7,10 @@ per (workflow, label). Imports nothing from an emitter.
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
+from types import MappingProxyType
 from typing import Optional
 
 from coordinator_core.ops._workflow_contract import (
@@ -184,6 +186,81 @@ REGISTER: tuple[LegDecl, ...] = (
     _earns("review", "review:coordinator:test-runner", "freezes the diff, runs tests and reports"),
     _earns("review", "review:general-purpose", "reviews the diff as a general reviewer"),
 )
+
+
+class Disposition(str, Enum):
+    """What the engine does with a leg: ENGINE never emits it, FOLD composes it only on a fallback arm,
+    HOOK runs it in a hook with the agent call kept as the reader fallback, FLOOR is a closed op-wrapper,
+    JUDGMENT stays an agent."""
+
+    ENGINE = "engine"
+    FOLD = "fold"
+    HOOK = "hook"
+    FLOOR = "floor"
+    JUDGMENT = "judgment"
+
+
+_DISPOSITION_WORKFLOWS = ("ask", "emit", "review")
+
+#: Non-JUDGMENT dispositions. Two labels are split by arm in the plan's inventory but hold one key:
+#: ("ask", "size-retry") is its no-values arm (the values arm composes under `gate`), and
+#: ("ask", "verify") carries both the pre-rule fold and the fully-decided skip.
+_NON_JUDGMENT: dict[tuple[str, str], tuple[Disposition, str]] = {
+    ("ask", "footprint"): (
+        Disposition.FOLD,
+        "fold condition: the baton names write paths, so declared_footprint answers and the agent stays only as the fallback",
+    ),
+    ("ask", "verify"): (
+        Disposition.FOLD,
+        "fold condition: the engine pre-rule decides the ledger fields and --select-tests picks the tests; "
+        "when nothing is owed the whole leg is skipped; otherwise the agent stays",
+    ),
+    ("ask", "gate"): (Disposition.FLOOR, "the gate op where no agent precedes it, and the values arm of size-retry"),
+    ("ask", "blitz-stage-read"): (Disposition.FLOOR, "stage op relay with no preceding judgment agent"),
+    ("ask", "xs-plan-stage"): (Disposition.FLOOR, "stage op relay with no judgment agent between the gate and it"),
+    ("ask", "commit"): (Disposition.FLOOR, _COMMIT_FLOOR),
+    ("ask", "halt-commit"): (Disposition.FLOOR, _COMMIT_FLOOR),
+    ("ask", "commit:wave-"): (Disposition.FLOOR, _COMMIT_FLOOR),
+    ("emit", "commit:wave-"): (Disposition.FLOOR, _COMMIT_FLOOR),
+    ("emit", "seam:wave-"): (
+        Disposition.FLOOR,
+        "the seam record relay and reachability run is mechanical: the Sonnet executor becomes a haiku test-runner",
+    ),
+    ("emit", "review:coordinator:review-prep"): (
+        Disposition.FOLD,
+        "fold condition: prep_in_wave runs review prep inside the review wave; the leg stays otherwise",
+    ),
+    ("emit", "test:terminal"): (
+        Disposition.FOLD,
+        "fold condition: --select-tests derives the edited set; the leg stays when the selection is empty or refused",
+    ),
+}
+
+
+def _dispositions() -> dict[tuple[str, str], tuple[Disposition, str]]:
+    table = dict(_NON_JUDGMENT)
+    for decl in REGISTER:
+        if decl.workflow in _DISPOSITION_WORKFLOWS:
+            table.setdefault((decl.workflow, decl.label), (Disposition.JUDGMENT, decl.reason))
+    return table
+
+
+DISPOSITIONS: Mapping[tuple[str, str], tuple[Disposition, str]] = MappingProxyType(_dispositions())
+
+#: (workflow, step) -> (trigger label, fallback label, reason). Steps are not REGISTER labels. Empty until
+#: the hook that runs a step has landed.
+HOOK_STEPS: Mapping[tuple[str, str], tuple[str, str, str]] = MappingProxyType({})
+
+
+def engine_labels(workflow: str) -> frozenset[str]:
+    """Labels of `workflow` whose disposition is ENGINE: never emitted."""
+    return frozenset(label for (wf, label), (d, _) in DISPOSITIONS.items() if wf == workflow and d is Disposition.ENGINE)
+
+
+def hook_labels(workflow: str) -> frozenset[str]:
+    """Fallback labels of `workflow`'s HOOK_STEPS: the agent calls that survive behind a hook."""
+    return frozenset(fallback for (wf, _), (_, fallback, _) in HOOK_STEPS.items() if wf == workflow)
+
 
 _STRING_START = re.compile(r"""\s*(['"`])""")
 _KEY_VALUE = r"\b{key}\s*:\s*"

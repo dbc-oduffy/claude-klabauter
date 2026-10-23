@@ -10,6 +10,7 @@ import yaml
 
 from coordinator_core.ops.dispatch_emit import op
 from coordinator_core.ops.dispatch_emit.ask_contract import ASK_PHASES, OP_ASK_GATE, OP_ASK_STAGE
+from coordinator_core.ops.dispatch_emit.sizing_fire import effective_route
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
 
 _BLITZ_FN = "  async function planBlitz(args) {\n    return { ready: [] };\n  }"
@@ -78,3 +79,24 @@ def test_sizing_entry_omits_the_size_phase(repo):
     text = Path(reply["path"]).read_text(encoding="utf-8")
     assert "phase('size')" not in text
     assert rel in text
+
+
+@pytest.mark.parametrize(
+    ("xl_exit", "expected"),
+    [
+        ("fan_out", "fan-out"),
+        ("accept_multi_session", "plan"),
+        ("roadmap", "roadmap"),
+        ("split", "pm-decision"),
+        (None, "pm-decision"),
+    ],
+)
+def test_effective_route_of_pm_decision_by_xl_exit(xl_exit, expected):
+    sizing = {"route": "pm-decision"}
+    if xl_exit is not None:
+        sizing["xl_exit"] = xl_exit
+    assert effective_route(sizing) == expected
+
+
+def test_effective_route_leaves_a_decided_route_alone():
+    assert effective_route({"route": "plan", "xl_exit": "fan_out"}) == "plan"

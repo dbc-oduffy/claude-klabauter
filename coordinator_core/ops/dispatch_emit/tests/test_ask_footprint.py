@@ -8,6 +8,7 @@ from coordinator_core.ops.dispatch_emit.ask_footprint import (
     ADMIT_WRITE_PATTERN,
     FOOTPRINT_SCHEMA,
     admit_writes_js,
+    declared_footprint,
     footprint_owed,
     footprint_prompt,
     is_admitted_write,
@@ -67,6 +68,33 @@ def test_js_predicate_embeds_the_same_pattern():
 def test_prompt_omits_baton_clause_when_none():
     p = footprint_prompt(sizing_rel="state/sizings/s.yaml", baton_path=None)
     assert "baton" not in p.lower()
+
+
+_BATON = """# Baton
+
+## What this covers
+Edits `coordinator_core/a.py` and `tests/test_a.py::test_x`.
+
+## Notes
+Mentions `coordinator_core/ignored.py` outside the named sections.
+
+## Specification
+Again `coordinator_core/a.py:12-20`, plus `ledger_remaining_paths` (no extension).
+"""
+
+
+def test_declared_footprint_returns_both_paths_once():
+    assert declared_footprint(_BATON) == ("coordinator_core/a.py", "tests/test_a.py")
+
+
+def test_declared_footprint_empty_when_none_named():
+    assert declared_footprint("## Specification\nNo paths, only `a_symbol`.\n") == ()
+    assert declared_footprint("") == ()
+
+
+@pytest.mark.parametrize("bad", ["../x.py", "a/../x.py", "/etc/x.py", "C:/x.py", "scratch/x.py"])  # abs-path-ok: refusal fixture
+def test_declared_footprint_refuses_unsafe_paths(bad):
+    assert declared_footprint(f"## Acceptance criteria\n`{bad}` and `ok/y.py`\n") == ("ok/y.py",)
 
 
 def test_schema_requires_writes():

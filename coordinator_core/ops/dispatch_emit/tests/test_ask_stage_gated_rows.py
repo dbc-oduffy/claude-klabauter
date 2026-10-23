@@ -44,9 +44,12 @@ title: fixture
 """
 
 
-def _stage(tmp_path, plan: str):
+def _stage(tmp_path, plan: str, existing_files: tuple[str, ...] = ()):
     (tmp_path / ".git").mkdir()
     (tmp_path / "docs" / "plans").mkdir(parents=True)
+    for rel in existing_files:
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).write_text("", encoding="utf-8")
     (tmp_path / PLAN_REL).write_text(plan, encoding="utf-8", newline="\n")
     return read_stage_reply(tmp_path, _handler({"run_id": "r1", "plan_path": PLAN_REL}, repo_root=tmp_path))
 
@@ -177,7 +180,9 @@ title: fixture
 
 
 def test_em_owned_rows_land_in_owed_not_gated(tmp_path):
-    reply = _stage(tmp_path, _em_plan())
+    # C4's write target must exist: spine_read classes a memo-send row with an unbuilt non-memo write
+    # as em-performed, so an absent pkg/memo.md would stop C4 being a bare memo-send row.
+    reply = _stage(tmp_path, _em_plan(), existing_files=("pkg/memo.md",))
     assert "error" not in reply
     assert [(o["id"], o["reason"]) for o in reply["owed"]] == [
         ("C3", "em-performed"),

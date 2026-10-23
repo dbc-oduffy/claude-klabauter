@@ -65,6 +65,9 @@ EXCLUDED_MODULES = {
     "coordinator_core/git/commit.py":
         "the live commit route (coordinator_core/git/commit.py :: commit_paths), 10 marker lines, "
         "the peer's active rewrite surface under external_gate[0]; no deletion row here.",
+    "coordinator_core/git/merge_state.py":
+        "merge-finish predicates (read_merge_state/merge_refusal/clear_merge_state), spawn-free; "
+        "0 comment, 18 docstring, 0 marker lines measured 2026-10-23; not a narration holder.",
     "coordinator_core/git/commit_context.py":
         "non-roster module under coordinator_core/git/; unsized by this plan's scope:.",
     "coordinator_core/git/correction_note.py":

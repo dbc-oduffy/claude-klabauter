@@ -9,6 +9,7 @@ import json
 import re
 from typing import Optional, Sequence
 
+from coordinator_core.ops.dispatch_emit.ledger_remaining_paths import _clean
 from coordinator_core.ops.dispatch_emit.sizing_fire import ARM_XS
 
 #: Same shape `ask_compose._obj` emits.
@@ -38,6 +39,33 @@ def is_admitted_write(path: object) -> bool:
 def admit_writes_js() -> str:
     """JS predicate source `(w) => ...` equal to `is_admitted_write`, for the composed script's filter."""
     return f"((w) => typeof w === 'string' && new RegExp({json.dumps(ADMIT_WRITE_PATTERN)}).test(w))"
+
+
+_BATON_SECTIONS = frozenset({"what this covers", "specification", "acceptance criteria"})
+_HEADING = re.compile(r"^##\s+(.*?)\s*$")
+_BACKTICKED = re.compile(r"`([^`\n]+)`")
+
+
+def declared_footprint(baton_text: str) -> tuple[str, ...]:
+    """Repo-relative file paths the baton's covers, specification and acceptance sections name in backticks.
+
+    Token normalisation is `ledger_remaining_paths._clean`; absolute, drive-lettered, `..` and
+    scratch/ tokens are refused there. Pure and lexical: no existence check, first-seen order, deduplicated.
+    """
+    found: dict[str, None] = {}
+    in_section = False
+    for line in baton_text.splitlines():
+        heading = _HEADING.match(line)
+        if heading:
+            in_section = heading.group(1).strip().lower() in _BATON_SECTIONS
+            continue
+        if not in_section:
+            continue
+        for token in _BACKTICKED.findall(line):
+            cleaned = _clean(token)
+            if cleaned is not None:
+                found.setdefault(cleaned, None)
+    return tuple(found)
 
 
 def footprint_owed(*, arm: Optional[str], writes: Sequence[str], sized_in_run: bool) -> bool:
