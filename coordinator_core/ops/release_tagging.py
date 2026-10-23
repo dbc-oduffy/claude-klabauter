@@ -79,13 +79,15 @@ Op contract (C0a manifest):
     release.cut_tag
     params: {repo_root: str, merge_sha: str, tag_prefix: str}
     -> {tag: str, created: bool, already_at_sha: bool, pushed: bool,
-        release_index: {written: [str]} | {error: str}}
+        release_index: {written: [str], commit_owed: [str]} | {error: str}}
 
     release.cut_tag_and_publish
     params: {repo_root: str, merge_sha: str, tag_prefix: str, release_notes: str}
     -> {tag: str, tag_pushed: bool, release_created: bool, release_url: str | null,
-        release_index: {written: [str]} | {error: str}}
+        release_index: {written: [str], commit_owed: [str]} | {error: str}}
 
+    `release_index.commit_owed` lists every index file written and declared, none committed:
+    the caller commits exactly that list.
     `release_index` is the post-cut `release.write_index` run (never raises; a
     ReleaseIndexError lands under `error`). In cut_tag_and_publish it runs after the tag push
     and before the release publish.
@@ -247,8 +249,9 @@ def _publish_release(tag: str, repo_root: Path, release_notes: str) -> tuple[boo
 
 
 def _index_after_cut(repo_root: Union[str, Path], tag: str) -> dict:
-    """Index the tags lacking a release index after a cut; `{"written": [paths]}` or
-    `{"error"}`. Never raises.
+    """Index the tags lacking a release index after a cut; `{"written": [paths],
+    "commit_owed": [paths]}` or `{"error"}`. Never raises. No commit (DR-216 D2(v)):
+    `commit_owed` is the set the calling session must commit.
 
     The tag prefix is the full tag minus its trailing `v<int>.<int>.<int>`.
     """
@@ -259,7 +262,8 @@ def _index_after_cut(repo_root: Union[str, Path], tag: str) -> dict:
         res = release_index.write_release_index(Path(repo_root), tag_prefix=prefix)
     except release_index.ReleaseIndexError as exc:
         return {"error": f"{exc.reason}: {exc.detail}"}
-    return {"written": [w["path"] for w in res["written"]]}
+    written = [w["path"] for w in res["written"]]
+    return {"written": written, "commit_owed": list(written)}
 
 
 def cut_tag(repo_root: Union[str, Path], merge_sha: str, tag_prefix: str) -> dict:

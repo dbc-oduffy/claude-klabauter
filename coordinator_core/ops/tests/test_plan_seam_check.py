@@ -584,6 +584,22 @@ def test_wave_boundary_record_leaves_prep_sidecar_byte_identical(tmp_path, git):
     assert yaml.safe_load(before.decode())["phase"] == "prep"
 
 
+def test_fire_record_leaves_prep_sidecar_byte_identical_and_writes_its_own(tmp_path, git):
+    root = _root(tmp_path)
+    a = _plan(root, "a", _row("A1", "[lib.py]"))
+    b = _plan(root, "b", _row("B1", "[b.py]", "[lib.py]"))
+    op._record_handler({"plans": [a, b], "phase": "prep", "named_set": True}, repo_root=root)
+    prep = root / "docs/plans/b.seam.yaml"
+    before = prep.read_bytes()
+    r = op._record_handler({"plans": [b], "phase": "fire", "named_set": True}, repo_root=root)
+    assert prep.read_bytes() == before
+    assert r["sidecars"] == ["docs/plans/b.fire.seam.yaml"]
+    fire = yaml.safe_load((root / "docs/plans/b.fire.seam.yaml").read_text())
+    _validate(fire)
+    assert fire["phase"] == "fire" and yaml.safe_load(before.decode())["phase"] == "prep"
+    assert "docs/plans/*.fire.seam.yaml" in op.MUTATES and "docs/plans/*.wave-*.seam.yaml" in op.MUTATES
+
+
 def test_seam_sidecar_travels_with_its_plan_on_archive(tmp_path):
     from coordinator_core.ops.fleet.archive_plans import collect_live_plan_paths
 

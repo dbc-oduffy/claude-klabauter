@@ -307,3 +307,24 @@ def test_tracked_evidence_sidecar_rides_the_archive_commit(tmp_path: Path) -> No
     ls_tree = _git(["ls-tree", "-r", "--name-only", "HEAD"], root).stdout
     assert "archive/specs/2026-08/2026-08-25-ev.evidence.yaml" in ls_tree
     assert "docs/plans/2026-08-25-ev.evidence.yaml" not in ls_tree
+
+
+def test_untracked_prep_fire_and_wave_seam_records_follow_their_plan(tmp_path: Path) -> None:
+    root = tmp_path / "repo"
+    _init_repo(root)
+    _write_and_commit_plan(root, "2026-08-26-sm.md", "implemented")
+    names = ["2026-08-26-sm.seam.yaml", "2026-08-26-sm.fire.seam.yaml", "2026-08-26-sm.wave-2.seam.yaml"]
+    for n in names:
+        (root / "docs" / "plans" / n).write_text("phase: x\n", encoding="utf-8")
+
+    result = m._handle_act(
+        "already-terminal", root, root, ["docs/plans/2026-08-26-sm.md"] + [f"docs/plans/{n}" for n in names], cap=10
+    )
+
+    assert not result["failed"], result["failed"]
+    for n in names:
+        assert (root / "archive" / "specs" / "2026-08" / n).is_file(), n
+        assert not (root / "docs" / "plans" / n).exists(), n
+    ls_tree = _git(["ls-tree", "-r", "--name-only", "HEAD"], root).stdout
+    assert "archive/specs/2026-08/2026-08-26-sm.fire.seam.yaml" in ls_tree
+    assert _git(["status", "--porcelain", "--", "archive", "docs"], root).stdout == ""

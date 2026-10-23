@@ -116,12 +116,10 @@ REGISTER: tuple[LegDecl, ...] = (
     ),
     _earns("ask", "footprint", "reads the baton for an XS sizing's write footprint when the sizing carries none"),
     _earns("ask", "size-retry", "re-runs the scout when its first pass did not assemble the sizing"),
-    _earns("ask", "apply-rulings", "applies the EM's recorded rulings on a pulled plan's blocking findings to the plan in place"),
+    _earns("ask", "apply-rulings", "applies the EM's J<n> rulings to a pulled plan in place; spawned only when the gate's pending_rulings is non-empty"),
     _earns("ask", "pull-split", "slices a pulled plan into smaller batons when its blocking findings exceed one baton"),
     _earns("ask", "ledger-replan", "re-plans the rows a resumed ledger still owes"),
     _earns("ask", "ledger-remaining", "executes the rows a resumed ledger still owes"),
-    _earns("ask", "apply-rulings", "applies the EM's rulings on a pulled plan's blocking findings to the plan in place"),
-    _earns("ask", "pull-split", "splits a pulled plan that drew more blocking findings than one baton can carry"),
     _floor(
         "ask", "blitz-stage-read",
         "stages when readyOp did not run and returns the stage op's reply (a manifest handle), only when plan-blitz "

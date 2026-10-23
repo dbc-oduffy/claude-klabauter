@@ -9,8 +9,11 @@ from pathlib import Path
 from typing import Optional, Sequence
 
 from coordinator_core.git.run import run_git
+from coordinator_core.ops.dispatch_emit.pre_halt_ancestry import CITED_DETAIL_KEY
+from coordinator_core.ops.dispatch_emit.pre_halt_credit import SHA_TOKEN_PATTERN
 
 _FULL_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+_CITED_SHA_RE = re.compile(SHA_TOKEN_PATTERN)
 
 
 def landed_before_halt(
@@ -35,15 +38,35 @@ def landed_before_halt(
     return sha if anc.returncode == 0 else None
 
 
-def verdict_credits(verdict: object, ids: Sequence[object], sha: str) -> bool:
-    """True unless a row in ``ids`` cites ``met_by`` shas none of which is ``sha``: a verdict that
-    credits some other commit has not vouched for this landing (pre-halt credit's rule)."""
+def landing_credited(verdict: object, ids: Sequence[object], sha: str) -> bool:
+    """True unless a row in ``ids`` cites sha tokens in ``met_by`` none of which prefix-matches
+    ``sha`` in either direction: a verdict crediting some other commit has not vouched for this
+    landing. A sha-shaped token counts with or without a digit; ``met_by`` with none is no contrary
+    citation. Trap: prose words of 7+ letters drawn from a-f (``defaced``) read as a sha token."""
     items = verdict.get("items") if isinstance(verdict, dict) else None
     for item in items if isinstance(items, list) else ():
         if not isinstance(item, dict) or item.get("id") not in ids:
             continue
-        met_by = item.get("met_by") or ()
-        cited = [m for m in ([met_by] if isinstance(met_by, str) else met_by) if isinstance(m, str) and m]
-        if cited and not any(sha.startswith(m) for m in cited):
+        met_by = item.get("met_by")
+        text = " ".join(str(m) for m in met_by) if isinstance(met_by, (list, tuple)) else str(met_by or "")
+        named = _CITED_SHA_RE.findall(text.lower())
+        if named and not any(sha.startswith(n) or n.startswith(sha) for n in named):
             return False
     return True
+
+
+def since_halt_close(since_halt: dict, failures: list, verdict: object) -> Optional[str]:
+    """The landing sha when every failure is the unchanged-since-halt refusal and each failed row
+    is cited at or before the halt or credited by ``landing_credited``; None otherwise."""
+    sha = since_halt.get("landed_sha")
+    if not sha or not failures:
+        return None
+    from coordinator_core.ops.dispatch_emit.ask_contract import UNCHANGED_SINCE_HALT_REASON
+
+    if any(f["reason"] != UNCHANGED_SINCE_HALT_REASON for f in failures):
+        return None
+    ids = [f["id"] for f in failures]
+    cited = since_halt.get(CITED_DETAIL_KEY) or {}
+    if all(str(i) in cited for i in ids) or landing_credited(verdict, ids, sha):
+        return sha
+    return None

@@ -225,7 +225,8 @@ def resumable_plan(
     path, plus one more (the evidence sidecar) only when an open em-performed row exists; one `git log` only when a
     row is open. With rows left open, a ledger resume
     also needs the newest ledger-check halt's committed record to have staged every one of them
-    (`_ledger_halt_for`), pointer or no pointer; a row it did not stage keeps `ResumePlan.rows`.
+    (`_ledger_halt_for`), pointer or no pointer; a row it did not stage keeps `ResumePlan.rows`,
+    except an inbound-memo-close row, which the halted manifest never stages and so is exempt.
     """
     from coordinator_core.frontmatter.body_blocks import LocateStatus
     from coordinator_core.ops.dispatch_emit.spine_read import (
@@ -443,7 +444,7 @@ def _ledger_halt_for(
     commit landed). A commit-halt pointer resumes only with no open id, so an open row takes the
     ordinary row resume. Otherwise the halt is the newest `ledger-check` halt commit naming the plan
     (`state.ledger_run`) whose committed record names this sizing (and this plan when it records
-    one) and staged every id in `open_ids`; its blocking ids come from the pointer when the pointer
+    one) and staged every id in `open_ids` bar ruled ids and inbound-memo-close rows; its blocking ids come from the pointer when the pointer
     names that run, else the record. With no open id the pointer alone also suffices. `state` is the
     `resume_landed_state` answer already spent; absent, it is read here once, so no path spends a
     second `git log`."""
@@ -470,7 +471,7 @@ def _ledger_halt_for(
         # pointer's run then resumes when that run's halt commit landed every open row.
         if pointer is not None:
             landed, sha = state.run_halts.get(pointer.run_id, (frozenset(), None))
-            if set(open_ids) - set(pointer.ruled) <= landed:
+            if set(open_ids) - set(pointer.ruled) - _memo_close_ids(rows, open_ids) <= landed:
                 return _carry(root, plan_rel, _with_ruled_blocking(pointer, halt_sha=sha), state)
         return None
     record = read_halt_record(root, state.ledger_run, at_sha=state.ledger_sha)
@@ -480,7 +481,7 @@ def _ledger_halt_for(
         record is None
         or record.sizing_rel != sizing_rel
         or (record.plan_rel is not None and record.plan_rel != plan_rel)
-        or not set(open_ids) - ruled <= record.staged
+        or not set(open_ids) - ruled - _memo_close_ids(rows, open_ids) <= record.staged
     ):
         return None
     if same_run:
@@ -494,6 +495,16 @@ def _ledger_halt_for(
     if state.ledger_sha:
         halt = replace(halt, landed_since_halt=state.landed_since_ledger)
     return _carry(root, plan_rel, halt, state)
+
+
+def _memo_close_ids(rows: Sequence, open_ids: Sequence[str]) -> set:
+    """Open ids whose row is an inbound-memo-close row (`memo_rows.inbound_close_path`). The
+    close-out memo-lifecycle leg owns them and a halted manifest never stages them, so the
+    staged-subset test exempts them. Pure: no I/O."""
+    from coordinator_core.ops.dispatch_emit.memo_rows import inbound_close_path
+
+    want = set(open_ids)
+    return {r["id"] for r in rows if isinstance(r, dict) and r.get("id") in want and inbound_close_path(r) is not None}
 
 
 def _with_ruled_blocking(pointer: LedgerHalt, **changes) -> LedgerHalt:

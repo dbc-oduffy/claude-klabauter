@@ -319,6 +319,16 @@ watch can be run as a single blocking wait.
 - **Several `ask_stage` and `ask_gate` defects:** the reply carries the manifest inline beside
   its sidecar handle, dispatchable memo rows stage as executor rows, and an audit-only run
   skips review.
+- **Pre-halt credit covers a run's own since-halt commits.** The terminal-commit credit gate
+  counts the run's commits made since the halt and its reviewed footprint, and the since-halt
+  chain base starts from the first halt.
+- **A zero-row ledger resume lands earlier fires' dirty product paths.** A resume that
+  dispatches no row still lands the run's earlier recorded product paths that remain dirty.
+- **Staged twins are dropped on every redeem, and a halt reap removes the run's own twins**
+  only after the run token verifies.
+- **The canvas-harvest lift** records the version from an `Artifact` `action:read`, and an
+  empty `ArtifactComments` read counts as a comments read.
+- **The governor loads `libproc` by absolute path.**
 
 ## [0.3.0] — 2026-10-01
 

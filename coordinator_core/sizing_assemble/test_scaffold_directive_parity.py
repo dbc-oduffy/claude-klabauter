@@ -298,6 +298,15 @@ class TestDirectiveSatisfiesScaffoldCli:
         assert args.route == result["route"] == "plan"
 
 
+def _load_cli(name: str):
+    # SourceFileLoader.load_module() is removed in Python 3.12+; exec_module is the stable path.
+    loader = importlib.machinery.SourceFileLoader(name, str(_CLI_PATH))
+    spec = importlib.util.spec_from_loader(name, loader)
+    mod = importlib.util.module_from_spec(spec)
+    loader.exec_module(mod)
+    return mod
+
+
 class TestScaffoldedStatus:
     def test_computed_sizing_lands_sized(self) -> None:
         result = sizing_assemble.route(
@@ -305,9 +314,7 @@ class TestScaffoldedStatus:
         )
         directive = _directive(result["directives"], "d-scaffold-sizing-object")
         args = _parser.parse_args(directive["args"])
-        mod = importlib.machinery.SourceFileLoader(
-            "doc_new_status_probe", str(_CLI_PATH)
-        ).load_module()
+        mod = _load_cli("doc_new_status_probe")
         text = mod._scaffold_sizing(
             args.title,
             tshirt=args.tshirt,
@@ -319,7 +326,5 @@ class TestScaffoldedStatus:
         assert "\nstatus: draft" not in text
 
     def test_bare_scaffold_stays_draft(self) -> None:
-        mod = importlib.machinery.SourceFileLoader(
-            "doc_new_status_probe2", str(_CLI_PATH)
-        ).load_module()
+        mod = _load_cli("doc_new_status_probe2")
         assert "\nstatus: draft " in mod._scaffold_sizing("x")

@@ -358,12 +358,17 @@ def _arm_verdict(
     resume_rows = list(resume.incomplete) if resume and resume_ledger is None else None
     if landed_sink is not None and resume_rows:
         landed_sink.extend(resume.landed_open)
+    pending_rulings = None
+    if resume_plan is not None:
+        from coordinator_core.ops.dispatch_emit.requirements_ledger import pending_ruling_ids
+
+        pending_rulings = list(pending_ruling_ids((sizing.get("requirement_register") or {}).get("rows") or []))
 
     if arm != ARM_M_PLUS:
         # roadmap mints no baton: roadmap-blitz stubs are the batons
         return GateVerdict(
             arm=arm, halt=None, acceptance=acceptance, resume_plan=resume_plan, resume_rows=resume_rows,
-            resume_ledger=resume_ledger, design_route=route_payload,
+            resume_ledger=resume_ledger, design_route=route_payload, pending_rulings=pending_rulings,
         )
 
     doc_new = _load_doc_new()
@@ -390,6 +395,7 @@ def _arm_verdict(
         spine_plan=spine,
         resume_ledger=resume_ledger,
         design_route=route_payload,
+        pending_rulings=pending_rulings,
     )
 
 
@@ -743,11 +749,6 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                 ledger_resume=ledger_resume,
                 only_rows=only_rows,
             )
-            stamp = stamp_plan_executing(root, plan_rel)
-            out["manifest_handle"] = reply_sidecar.handle_for(root, record_dir(root, params["run_id"]) / "manifest.json")
-            ask_stage_receipt.write_gate(record_dir(root, params["run_id"]), out["manifest_handle"])
-            if stamp["outcome"] != "unchanged":
-                out[PLAN_EXECUTING_STAMP_KEY] = stamp
             if ledger_resume:
                 from coordinator_core.ops.dispatch_emit.ledger_remaining_paths import (
                     PlanRowsUnreadable,
@@ -773,6 +774,25 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                     arm=verdict.arm,
                     spelling=functools.partial(tracked_spelling, root),
                 )
+                from coordinator_core.ops.dispatch_emit.refire_noop import identical_rehalt_reason
+
+                leg = resume_out[RESUME_LEDGER_LEG_FIELD]
+                # A dispatch leg with no writes carries no work unless a note asks for the re-plan
+                # leg, and a note releases the predicate on its own.
+                rehalt = identical_rehalt_reason(
+                    resume_out, manifest.rows, manifest.owed, manifest.gated,
+                    derived if verdict.arm in (ARM_XS, ARM_S) else [],
+                    leg if leg.get("writes") else None,
+                )
+                if rehalt is not None:
+                    out["halt"] = {"kind": HALT_REFUSAL, "reason": rehalt}
+                    return out
+            stamp = stamp_plan_executing(root, plan_rel)
+            out["manifest_handle"] = reply_sidecar.handle_for(root, record_dir(root, params["run_id"]) / "manifest.json")
+            ask_stage_receipt.write_gate(record_dir(root, params["run_id"]), out["manifest_handle"])
+            if stamp["outcome"] != "unchanged":
+                out[PLAN_EXECUTING_STAMP_KEY] = stamp
+            if ledger_resume:
                 import json
 
                 from coordinator_core.atomic_replace import atomic_write_bytes

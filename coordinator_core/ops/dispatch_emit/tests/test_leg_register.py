@@ -70,6 +70,13 @@ def test_runtime_floor_only_on_op_wrapper():
         lr.LegDecl("wf", "s", lr.LegClass.EARNS_ITS_COST, "r", runtime_floor="state/apm-rulings/x.md")
 
 
+def test_register_declares_each_leg_once():
+    from collections import Counter
+
+    counts = Counter((d.workflow, d.label) for d in lr.REGISTER)
+    assert [k for k, n in counts.items() if n > 1] == []
+
+
 def test_reason_required_and_refused_classes():
     with pytest.raises(ValueError):
         lr.LegDecl("wf", "s", lr.LegClass.DUPLICATE, "  ")

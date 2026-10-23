@@ -11,8 +11,9 @@ a day branch:
   repo's HEAD is `main` and a remote is configured is denied via
   `git.main_commit_policy`; the same override admits it. Listing,
   `-d`/`-D`/`-m`/`-c` and any other
-  non-create `git branch` flag, tag pushes, ref deletions, and a push with no
-  refspec are never denied.
+  non-create `git branch` flag, tag pushes (a local tag, or one created earlier
+  in the same command), ref deletions, and a push with no refspec are never
+  denied.
 
 Day branch, per `hooks.day_branch_assert` / `daily_branch`: the repo's
 `coordinator.dayBranch` designation (exact), else `work/<machine>/<date>`
@@ -35,7 +36,7 @@ A cloud session (`CLAUDE_CODE_REMOTE=true`) may use its harness-assigned
 `claude/...` branch.
 
 Override: `COORDINATOR_OVERRIDE_TOPIC_BRANCH=<non-empty reason>`, as an inline
-env prefix on the git segment only; the hook environment never overrides.
+env prefix on the git segment or on the `sh -c` wrapper that holds it; the hook environment never overrides.
 An empty value never overrides.
 
 Push hold (`coordinator_core.push_hold`): a `git push` whose target branch is
@@ -205,6 +206,31 @@ def _head_branch(git_root: Optional[str]) -> Optional[str]:
         return None
     m = re.match(r"^ref:\s*refs/heads/(.+)$", text)
     return m.group(1) if m else None
+
+
+_TAG_OPT_WITH_ARG = frozenset({"-m", "-F", "-u", "--message", "--file", "--local-user", "--cleanup"})
+
+
+def _created_tag(tokens: List[str]) -> Optional[str]:
+    """The tag name a `git tag [opts] <name> [<commit>]` creates, else None."""
+    parsed = _git_argv(tokens)
+    if parsed is None or parsed[0] != "tag":
+        return None
+    args = parsed[1]
+    if any(a in ("-d", "-l", "-v", "--delete", "--list", "--verify") for a in args):
+        return None
+    i = 0
+    while i < len(args):
+        tok = args[i]
+        if tok in _COMMAND_ENDS:
+            return None
+        if tok in _TAG_OPT_WITH_ARG:
+            i += 2
+        elif tok.startswith("-"):
+            i += 1
+        else:
+            return tok
+    return None
 
 
 def _is_local_tag(git_root: Optional[str], name: str) -> bool:
@@ -409,9 +435,11 @@ def _held_push(tokens: List[str], cwd: Optional[str]) -> Optional[str]:
 
 
 def _main_commit(
-    tokens: List[str], raw_tokens: List[str], cwd: Optional[str]
+    tokens: List[str], raw_tokens: List[str], cwd: Optional[str], inherited: str = ""
 ) -> Optional[str]:
-    """Refusal text when this `git commit` runs in a repo on a remote-backed `main`."""
+    """Refusal text when this `git commit` runs in a repo on a remote-backed `main`.
+
+    `inherited` is an override reason prefixed on an enclosing `sh -c` wrapper."""
     parsed = _git_argv(tokens)
     if parsed is None or parsed[0] != "commit":
         return None
@@ -420,7 +448,7 @@ def _main_commit(
         return None
     from coordinator_core.git.main_commit_policy import main_commit_refusal
 
-    override = _inline_reason(raw_tokens)
+    override = _inline_reason(raw_tokens) or inherited
     if _inline_reason(raw_tokens, MAIN_COMMIT_OVERRIDE_KEY) == "1":
         override = "1"
     refusal = main_commit_refusal(git_root, override_reason=override)
@@ -439,7 +467,10 @@ def _hold_reason(branch: Optional[str], note: str) -> str:
 
 
 def _offending_ref(
-    tokens: List[str], cwd: Optional[str], env: Optional[Dict[str, str]] = None
+    tokens: List[str],
+    cwd: Optional[str],
+    env: Optional[Dict[str, str]] = None,
+    new_tags: frozenset = frozenset(),
 ) -> Optional[str]:
     parsed = _git_argv(tokens)
     if parsed is None:
@@ -478,7 +509,7 @@ def _offending_ref(
             continue
         if sub == "push" and is_work_branch(ref) and ref ==_head_branch(git_root):
             continue
-        if sub == "push" and _is_local_tag(git_root, ref):
+        if sub == "push" and (ref in new_tags or _is_local_tag(git_root, ref)):
             continue
         if _is_publish_push(sub, ref, git_root):
             continue
@@ -533,20 +564,33 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     # would leak past its `)`; a command with any subshell keeps the payload cwd.
     # Only an unquoted paren opens a subshell: a quoted `python -c "...f(x)"` body is an argument.
     follow_cd = not any(c in _QUOTED_RE.sub("", cmd) for c in "()")
+    new_tags: set = set()
+    # An override prefixed on a wrapper (`sh -c '...'`) covers the git segments inside it.
+    wrapper_reason: Dict[int, str] = {}
     for resolved in segments:
+        depth = resolved.depth
+        inherited = next((wrapper_reason[d] for d in range(depth - 1, -1, -1) if d in wrapper_reason), "")
+        own = _inline_reason(resolved.raw_tokens)
+        for d in [d for d in wrapper_reason if d >= depth]:
+            del wrapper_reason[d]
+        if own or inherited:
+            wrapper_reason[depth] = own or inherited
+        created = _created_tag(resolved.tokens)
+        if created:
+            new_tags.add(created)
         if follow_cd and resolved.depth == 0 and resolved.tokens[:1] == ["cd"]:
             cwd = _cd_target(cwd, resolved.tokens[1:])
             continue
         held = _held_push(resolved.tokens, cwd)
         if held is not None:
             return _deny(held)
-        main_commit = _main_commit(resolved.tokens, resolved.raw_tokens, cwd)
+        main_commit = _main_commit(resolved.tokens, resolved.raw_tokens, cwd, inherited)
         if main_commit is not None:
             return _deny(main_commit)
-        ref = _offending_ref(resolved.tokens, cwd, env)
+        ref = _offending_ref(resolved.tokens, cwd, env, frozenset(new_tags))
         if ref is None:
             continue
-        if _inline_reason(resolved.raw_tokens):
+        if own or inherited:
             continue
         return _deny(_deny_reason(ref))
     return None

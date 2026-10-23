@@ -12,7 +12,7 @@ from typing import Any, Optional
 
 from coordinator_core.claude_md_budget import is_claude_md_class
 from coordinator_core.ops.dispatch_emit.ask_contract import LEG_DISPATCH, LEG_REFUSE, LEG_SKIP
-from coordinator_core.ops.dispatch_emit.pre_halt_credit import note_rerules
+from coordinator_core.ops.dispatch_emit.pre_halt_credit import note_rerules, sha_tokens
 from coordinator_core.session import record_homes
 
 _STRIP_EDGES = "`'\"()[]<>{}"
@@ -55,39 +55,62 @@ def _exists(rel: str, repo_root: Path) -> bool:
 Spelling = Callable[[Sequence[str]], Mapping[str, Optional[str]]]
 
 
-def _named_split(
-    texts: Iterable[str], repo_root: Path, spelling: Optional[Spelling]
-) -> tuple[list[str], list[str]]:
-    """`(admitted, dropped)` named paths; `dropped` is empty when `spelling` is None."""
+def _cleaned(texts: Iterable[str]) -> list[str]:
     out: list[str] = []
-    if spelling is None:
-        for text in texts:
-            for tok in str(text).split():
-                rel = _clean(tok)
-                if rel and rel not in out and _exists(rel, repo_root):
-                    out.append(rel)
-        return out, []
-    cands: list[str] = []
     for text in texts:
         for tok in str(text).split():
             rel = _clean(tok)
-            if rel and rel not in cands:
-                cands.append(rel)
-    resolved = dict(spelling(cands)) if cands else {}
-    parents = list(dict.fromkeys(c.rsplit("/", 1)[0] for c in cands if resolved.get(c) is None and "/" in c))
-    parent_spelled = spelling(parents) if parents else {}
+            if rel and rel not in out:
+                out.append(rel)
+    return out
+
+
+def _named_tagged(
+    texts: Iterable[str], repo_root: Path, spelling: Optional[Spelling], tag_texts: Sequence[str] = ()
+) -> tuple[list[str], list[str], set[str]]:
+    """`(admitted, dropped, tagged)`: `tagged` is the admitted subset naming a token of `tag_texts`.
+
+    With `spelling`, existing parent dirs of the named paths ride in the one resolver call so a
+    new file under an existing dir is admitted in the dir's resolved spelling.
+    """
+    tag_cands = set(_cleaned(tag_texts))
+    out: list[str] = []
+    tagged: set[str] = set()
+    if spelling is None:
+        for rel in _cleaned(texts):
+            if rel not in out and _exists(rel, repo_root):
+                out.append(rel)
+                if rel in tag_cands:
+                    tagged.add(rel)
+        return out, [], tagged
+    cands = _cleaned(texts)
+    parents = list(dict.fromkeys(
+        c.rsplit("/", 1)[0] for c in cands if "/" in c and (repo_root / c.rsplit("/", 1)[0]).is_dir()
+    ))
+    resolved = dict(spelling([*cands, *(p for p in parents if p not in cands)])) if cands else {}
     dropped: list[str] = []
     for c in cands:
         s = resolved.get(c)
         if s is None and "/" in c:
             parent, base = c.rsplit("/", 1)
-            ps = parent_spelled.get(parent)
+            ps = resolved.get(parent)
             if ps is not None and (repo_root / ps).is_dir():
                 s = f"{ps}/{base}"
         if s is None:
             dropped.append(c)
-        elif s not in out:
+            continue
+        if s not in out:
             out.append(s)
+        if c in tag_cands:
+            tagged.add(s)
+    return out, dropped, tagged
+
+
+def _named_split(
+    texts: Iterable[str], repo_root: Path, spelling: Optional[Spelling]
+) -> tuple[list[str], list[str]]:
+    """`(admitted, dropped)` named paths, from one resolver call; `dropped` is empty when `spelling` is None."""
+    out, dropped, _ = _named_tagged(texts, repo_root, spelling)
     return out, dropped
 
 
@@ -160,9 +183,7 @@ def plan_rows_serving(plan_path: Path, blocking: Sequence[str]) -> list[str]:
     return out
 
 
-def _module_paths(
-    texts: Iterable[str], serving: Sequence[str], repo_root: Path, *, spelling: Optional[Spelling] = None
-) -> list[str]:
+def _module_cands(texts: Iterable[str], serving: Sequence[str]) -> list[str]:
     dirs = list(dict.fromkeys(p.rsplit("/", 1)[0] for p in serving if "/" in p))
     mods: list[str] = []
     for text in texts:
@@ -170,7 +191,13 @@ def _module_paths(
             m = _MODULE_TOKEN.match(tok.strip(_STRIP_EDGES).rstrip(_TRAILING))
             if m and m.group(1) not in mods:
                 mods.append(m.group(1))
-    cands = [f"{d}/{m}.py" for m in mods for d in dirs]
+    return [f"{d}/{m}.py" for m in mods for d in dirs]
+
+
+def _module_paths(
+    texts: Iterable[str], serving: Sequence[str], repo_root: Path, *, spelling: Optional[Spelling] = None
+) -> list[str]:
+    cands = _module_cands(texts, serving)
     if spelling is None:
         return [c for c in cands if (repo_root / c).is_file()]
     resolved = spelling(cands) if cands else {}
@@ -190,37 +217,52 @@ def derive_ledger_rows(
     """Return `(rows, underivable)`: one dispatchable row per open ledger item.
 
     An item is open when its `remaining` list is non-empty, or it has none and a live (sha-free)
-    note exists. A re-ruling note derives nothing. `writes` = named paths, then module tokens
-    resolved beside the item's serving writes, then the serving writes; CLAUDE.md-class paths
-    are excluded. An open item with no resolved write is returned in `underivable`.
+    note exists. A sha-bearing (re-ruling) note credits landed rows but does not suppress an item
+    that still has `remaining` steps (the call-site predicate, `pre_halt_credit` unchanged).
+    With a sha-bearing note and `remaining` steps, an item derives a row only if that note's
+    text itself resolves a write: a named path, a module token beside the item's serving writes,
+    or a serving write named by path or file name (the note also rules new work). Otherwise it
+    derives nothing and is not underivable. With no `remaining` it derives nothing.
+
+    `writes` = named paths, then module tokens resolved beside the item's serving writes, then
+    the serving writes; CLAUDE.md-class paths are excluded. An open item with no resolved write
+    is returned in `underivable`.
 
     With `spelling`, every write is in the resolver's spelling: a named path it does not back is
     dropped and named in the row body, a serving write it does not back is kept as declared.
     """
     from coordinator_core.ops.dispatch_emit.ask_contract import LEDGER_DERIVED_ROW_PREFIX
 
-    if note_rerules(notes):
-        return [], []
+    rerule = note_rerules(notes)
+    sha_notes = [str(n) for n in notes if sha_tokens(n)]
     taken = set(existing_ids)
     rows: list[dict[str, Any]] = []
     underivable: list[str] = []
     for item in blocking:
         steps = [str(s) for s in (remaining.get(item) or {}).get("remaining") or []]
-        if not steps and not notes:
+        if not steps and (not notes or rerule):
             continue
         texts = [*steps, *(str(n) for n in notes)]
         serving = [str(w) for w in serving_writes.get(item) or []]
-        named, dropped = _named_split(texts, repo_root, spelling)
+        named, dropped, note_named = _named_tagged(texts, repo_root, spelling, sha_notes)
         if spelling is not None and serving:
             resolved = spelling(serving)
             serving = [resolved.get(s) or s for s in serving]
+        modules = _module_paths(texts, serving, repo_root, spelling=spelling)
         writes: list[str] = []
-        for p in [*named, *_module_paths(texts, serving, repo_root, spelling=spelling), *serving]:
+        for p in [*named, *modules, *serving]:
             if p not in writes and p not in gated_paths([p]):
                 writes.append(p)
+        if rerule and steps:
+            note_mods = set(_module_cands(sha_notes, serving))
+            note_serving = {s for s in serving for c in _cleaned(sha_notes) if s == c or s.endswith("/" + c)}
+            hits = note_named | {m for m in modules if m in note_mods} | note_serving
+            if not any(p not in gated_paths([p]) for p in hits):
+                continue
         dropped = [d for d in dropped if d not in writes]
         if not writes:
-            underivable.append(item)
+            if not rerule:
+                underivable.append(item)
             continue
         rid = f"{LEDGER_DERIVED_ROW_PREFIX}{item}"
         n = 1

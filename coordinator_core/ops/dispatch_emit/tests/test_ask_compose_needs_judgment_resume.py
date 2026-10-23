@@ -54,9 +54,21 @@ def test_split_recommended_pull_reaches_the_split_stage():
     assert script.index("if (_halted && _halted.halted === 'split')", pull) > pull
 
 
+_RULED_GUARD = "if (_gate.resume_plan && (_gate.pending_rulings == null || _gate.pending_rulings.length > 0))"
+
+
+def test_apply_rulings_and_pull_split_run_on_general_purpose_sonnet():
+    script = _script()
+    for label in ("apply-rulings", "pull-split"):
+        i = script.index(f"label: '{label}'")
+        opts = script[i : script.index("schema:", i)]
+        assert "agentType: 'general-purpose'" in opts and "model: 'sonnet'" in opts
+        assert "coordinator:plan-author" not in opts
+
+
 def test_resume_plan_runs_the_apply_rulings_leg_before_the_blitz():
     script = _script()
-    leg = script.index("if (_gate.resume_plan) { const _ruled = await agent(")
+    leg = script.index(_RULED_GUARD + " { const _ruled = await agent(")
     blitz = script.index("const _blitz = await ", leg)
     assert leg < blitz
     assert "label: 'apply-rulings'" in script
@@ -66,8 +78,9 @@ def test_resume_plan_runs_the_apply_rulings_leg_before_the_blitz():
 def test_resume_leg_is_only_for_a_resumed_plan_and_reads_the_ledger_at_run_time():
     script = _script()
     assert script.count("label: 'apply-rulings'") == 1
-    leg = script[script.index("if (_gate.resume_plan) { const _ruled"):]
-    assert leg.startswith("if (_gate.resume_plan)")
+    leg = script[script.index(_RULED_GUARD + " { const _ruled"):]
+    assert leg.startswith("if (_gate.resume_plan && ")
+    assert "else if (_gate.resume_plan) { _gate = { ..._gate, resume_rulings: [] }; }" in script
     assert "an empty list, with no edit, when the ledger carries no ruling" in script
 
 

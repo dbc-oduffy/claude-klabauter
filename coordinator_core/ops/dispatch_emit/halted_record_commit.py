@@ -632,6 +632,7 @@ def _land(
             landed_classes[cls] = landed_classes.get(cls, 0) + 1
     review_reply: dict = {}
     unlanded: dict = {}
+    review_landed: list = []
     if review_written is None:
         review_reply["review_edits"] = None
     else:
@@ -640,7 +641,30 @@ def _land(
             committed=set(paths) | set(deleted), sibling_declared=sibling, contested=set(),
             present=lambda p: (worktree_root / p).is_file(),
         )
-        unlanded = {p: HALT_RUN_REASON for p in sorted([*verdict.land, *verdict.halt])}
+        unlanded = {p: HALT_RUN_REASON for p in sorted(verdict.halt)}
+        stageable = [p for p in verdict.land if p != "scratch" and not p.startswith("scratch/") and p not in withheld]
+        review_holds: list = []
+        review_warnings = commit_v2._peer_claim_warnings(
+            worktree_root, stageable, review_holds, own_sid=session_id
+        )
+        review_held = {p for p, _sid in review_holds}
+        for p in stageable:
+            if p in review_held:
+                unlanded[p] = "peer-held"
+                withheld[p] = "peer-held"
+            elif any(
+                w.startswith("claim state indeterminate")
+                and (w.startswith("claim state indeterminate (") or f"claim state indeterminate for {p!r}" in w)
+                for w in review_warnings
+            ):
+                unlanded[p] = "peer-claim-indeterminate"
+                withheld[p] = "peer-claim-indeterminate"
+            else:
+                review_landed.append(p)
+        unlanded.update({p: HALT_RUN_REASON for p in verdict.land if p not in stageable})
+        paths = paths + [p for p in review_landed if p not in paths]
+        if review_landed:
+            landed_classes["review-edit"] = len(review_landed)
     review_reply["review_edits_unlanded"] = unlanded
 
     if not paths and not deleted:
@@ -667,7 +691,7 @@ def _land(
     if deleted:
         commit_params["deleted_paths"] = deleted
         commit_params["declared_reverts"] = deleted
-    if product or art_paths:
+    if product or art_paths or review_landed:
         commit_params["ignored_untracked"] = snapshot.ignored_among(paths)
     if session_id is not None:
         commit_params["session_id"] = session_id

@@ -342,11 +342,6 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
         "coordinator_core/ops/dispatch_emit/release_run_token.py",
         ("_handler",),
     ),
-    # Spawn-free on landing (empty function-granular reachable set): one sidecar read, one twin write.
-    "dispatch.stage_twin_token": (
-        "coordinator_core/ops/dispatch_emit/op.py",
-        ("_stage_twin_token",),
-    ),
     "dispatch.supersede_slice": (
         "coordinator_core/ops/dispatch_emit/slice_supersede.py",
         ("_handler",),

@@ -186,11 +186,10 @@ def _ensure_reader(root: Path, raw: bytes, body: bytes) -> None:
         tmp.unlink(missing_ok=True)
 
 
-def _ensure_twin(root: Path, rel: str, raw: bytes, run_token: str | None = None) -> str | None:
-    # Trap: a tokenless call rewrites a token-bearing twin as tokenless (the bytes differ); the running copy is unaffected.
-    return _twin.ensure_twin(
-        root, rel, raw, _handle(rel, raw), max_bytes=READER_MAX_BYTES, refuse=_refuse, run_token=run_token
-    )
+def _ensure_twin(root: Path, rel: str, raw: bytes) -> str | None:
+    # Trap: the twin inlines the run's escrowed token while its record is live; once the token is claimed or
+    # expired the next call rewrites the twin tokenless (the bytes differ); the running copy is unaffected.
+    return _twin.ensure_twin(root, rel, raw, _handle(rel, raw), max_bytes=READER_MAX_BYTES, refuse=_refuse)
 
 
 def write_reply(root: Path, path: Path, payload: Mapping) -> dict:
@@ -253,27 +252,6 @@ def read_text(root: Path, handle: Mapping) -> str:
     if message is not None:
         raise ReplySidecarError(message)
     return text
-
-
-def ensure_twin_token(root: Path, handle: Mapping, run_token: str) -> str:
-    """Rewrite the staged twin of the sidecar ``handle`` names with ``run_token`` inlined; return the twin's path.
-
-    The sidecar bytes must match ``handle``; any no-op branch of the twin writer raises ``ReplySidecarError``.
-    """
-    h = _checked_handle(handle)
-    rel = _rel_posix(h["path"])
-    target = _contain(root, rel)
-    try:
-        raw = target.read_bytes()
-    except OSError as exc:
-        raise _refuse(f"sidecar {rel!r} is unreadable: {exc}") from exc
-    message = _contract.check_relay(_FLAG, raw.decode("latin-1"), str(h["bytes"]), h["sha256"], SIDECAR_CAUSE)
-    if message is not None:
-        raise ReplySidecarError(message)
-    twin_rel = _ensure_twin(root, rel, raw, run_token=run_token)
-    if twin_rel is None:
-        raise _refuse(f"staged twin for {rel!r} not written")
-    return twin_rel
 
 
 def read_reply(root: Path, handle: Mapping) -> dict:

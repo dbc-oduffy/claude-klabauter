@@ -81,6 +81,8 @@ Negative-spec:
   - Lands a file the run's review stage wrote outside the declared writes as review residue (named
     files only, admitted by a review-stage touch record; ``Review-Residue:`` trailers), or refuses
     ``review-edit-unlanded`` naming the files; never leaves it silently dirty.
+  - Names dirty engine-owned paths outside the landing under ``engine_residue`` (``residue_classes``;
+    ``engine_residue_total`` when capped, ``None`` when unreadable): advisory, never staged.
   - Does NOT commit a dirty file no chunk declares and the run does not own: ``undeclared_dirty``
     reports it, because widening the pathspec would hide a wrong spine. The product commit
     is declared-only (``carry_own_left_behind: False``, no landing-set exception). A path the
@@ -148,6 +150,7 @@ from typing import Optional, Sequence
 
 from coordinator_core.git.git_state import head_branch
 from coordinator_core.git.machine_local_paths import machine_local_paths
+from coordinator_core.git import residue_classes
 from coordinator_core.git.path_canon import canonical_repo_relative_path_refusal
 from coordinator_core.git.run import run_git
 from coordinator_core.ipc import register_op
@@ -156,10 +159,10 @@ from coordinator_core.session.claimed_write import replace_text
 from coordinator_core.session.record_homes import home_dir
 from coordinator_core.warm.entry_seam import OpUnavailableError, reentrant_dispatch
 from coordinator_core.ops.dispatch_emit import credit_gate, gate_owed, halt_baseline, pre_halt_credit  # noqa: E402 -- sibling-package group
-from coordinator_core.ops.dispatch_emit.land_run import _em_discharged_rows  # noqa: E402
+from coordinator_core.ops.dispatch_emit.land_run import _em_discharged_rows, _leg_footprint_writes  # noqa: E402
 from coordinator_core.ops.dispatch_emit.halt_landing import (  # noqa: E402
     landed_before_halt as _landed_before_halt,
-    verdict_credits as _verdict_credits,
+    since_halt_close as _since_halt_close,
 )
 from coordinator_core.ops.dispatch_emit.pre_halt_ancestry import (  # noqa: E402
     CITED_DETAIL_KEY, cited_at_or_before, verified_post_commit_credit,
@@ -319,7 +322,12 @@ def _landing_integrity_gate(
     blob dropping lines a foreign commit added since the run base, and the test verdict
     (a valid fresh retest verdict, else the carried one) naming a run-caused failure:
     ``targeted-tests-failed``, with ``targeted_tests_check`` always set and ``retested_tests`` on
-    ``pass-on-retest``). Returns ``{}``-like extras:
+    ``pass-on-retest``), and the run's review re-verify ending red on a test file that is landing
+    or imports a landing module: ``review-reverify-failed``, with ``reverify_check`` always set
+    (``absent`` | ``pass`` | ``fail-off-landing`` | ``fail``). A fresh ``pass-on-retest`` clears
+    the re-verify findings only when every implicated test file is among the files that retest
+    ran (its record's ``tests`` node ids); a retest record naming no files clears nothing, since a
+    retest that never ran the red file is no evidence it went green. Returns ``{}``-like extras:
     ``refused`` + ``integrity`` on any finding, ``since_base_check: "no-base"`` when the run has
     no recorded base so the overlap arm was skipped."""
     from coordinator_core.ops.dispatch_emit import landing_integrity as li
@@ -347,6 +355,19 @@ def _landing_integrity_gate(
         fresh = li.fresh_targeted_verdict(worktree_root, run_id) if run_id else None
         if fresh is not None:
             extra["retested_tests"] = fresh.get("tests")
+    red = li.reverify_red_findings(worktree_root, params, paths)
+    record = li.reverify_record(params)
+    if record is None:
+        extra["reverify_check"] = "absent"
+    elif li.reverify_verdict(record) != "fail":
+        extra["reverify_check"] = "pass"
+    else:
+        extra["reverify_check"] = "fail" if red else "fail-off-landing"
+    if red and tcheck == "pass-on-retest":
+        ran = {li._node_file(t) for t in (extra.get("retested_tests") or []) if isinstance(t, str)}
+        if ran and all(f.path in ran for f in red):
+            red = []
+    findings += red
     if findings:
         extra["refused"] = findings[0].reason
         extra["integrity"] = [
@@ -548,6 +569,9 @@ def _seam_sidecars(worktree_root: Path, plan_path: Optional[str], chunk_ids: lis
         prep = str(pure.with_name(pure.stem + _SEAM_SIDECAR_SUFFIX))
         if (worktree_root / prep).is_file():
             found.append(prep)
+        fire = str(pure.with_name(pure.stem + ".fire" + _SEAM_SIDECAR_SUFFIX))
+        if (worktree_root / fire).is_file():
+            found.append(fire)
         try:
             waves = sorted(
                 p.name for p in (worktree_root / pure.parent).glob(f"{_glob.escape(pure.stem)}.wave-*{_SEAM_SIDECAR_SUFFIX}")
@@ -1354,7 +1378,7 @@ def _undo_archive(archived: list) -> None:
 #: the product commit), ``plan`` only for an ask run (a plan-route DAG run stamps its plan itself).
 _PRODUCT_ARTIFACT_CLASSES = frozenset({
     "record-dir", "evidence-sidecar", "seam-sidecar", "baton", "slice-sizing",
-    "superseded-record", "docs-stage", "delivery-note",
+    "superseded-record", "docs-stage", "delivery-note", "mise-inventory",
 })
 
 
@@ -1988,14 +2012,10 @@ def _ledger_gate(
     )
     if foreign:
         message += f". Verdict ids that are not register rows: {', '.join(foreign)}"
-    if since_halt.get("landed_sha") and all(
-        f["reason"] == UNCHANGED_SINCE_HALT_REASON for f in result["failures"]
-    ) and (
-        all(str(f["id"]) in since_halt.get(CITED_DETAIL_KEY, {}) for f in result["failures"])
-        or _verdict_credits(verdict, [f["id"] for f in result["failures"]], since_halt["landed_sha"])
-    ):
+    landed = _since_halt_close(since_halt, result["failures"], verdict)
+    if landed:
         return {
-            "committed": True, "sha": since_halt["landed_sha"], "already_landed": True,
+            "committed": True, "sha": landed, "already_landed": True,
             "paths": since_halt["landed_paths"], "since_halt": since_halt,
         }, ledger, []
     return _error(
@@ -2363,7 +2383,7 @@ def _stopped_run_carried(reply: dict) -> set:
 def _undeclared_dirty(
     worktree_root: Path, request: CommitRequest,
     snapshot: Optional[_Snapshot] = None, landed: frozenset = frozenset(),
-    *, run_id: Optional[str] = None,
+    *, run_id: Optional[str] = None, full_out: Optional[set] = None,
 ) -> dict:
     """Dirty files beside the run's declared writes that no chunk declares.
 
@@ -2373,7 +2393,8 @@ def _undeclared_dirty(
     signal. One scoped ``git status`` spawn; the shared tree means a peer's
     dirt in the same directory is listed too, so a row is a candidate for
     inspection, not proof of this run's authorship. ``undeclared_dirty`` is
-    ``None`` when git could not answer.
+    ``None`` when git could not answer. ``full_out``, when given, receives the uncapped
+    dirty set before the peer-held filter.
     """
     specs = _scope_pathspecs(request)
     if not specs:
@@ -2402,6 +2423,8 @@ def _undeclared_dirty(
             }
             - declared
         )
+    if full_out is not None:
+        full_out.update(dirty)
     peer_held = _peer_held(worktree_root, request.session_id, dirty, run_id=run_id)
     dirty = [p for p in dirty if p not in peer_held]
     out: dict = {"undeclared_dirty": dirty[:_UNDECLARED_DIRTY_CAP]}
@@ -3657,12 +3680,20 @@ def _handler_body(params: dict, repo_root: Optional[Path] = None) -> dict:
             reply["run_owned"] = scope["run_owned"]
         if scope.get("stranded_residue"):
             reply["stranded_residue"] = {c: sorted(ps) for c, ps in scope["stranded_residue"].items()}
+        in_scope_dirty: set = set()
         reply.update(
             _undeclared_dirty(
                 scope["root"], scope["request"], scope.get("snapshot"), frozenset(scope.get("landed", ())),
                 run_id=params.get("run_id") if isinstance(params, dict) else None,
+                full_out=in_scope_dirty,
             )
         )
+        arts = reply.get("run_artifacts")
+        named = in_scope_dirty | set(scope.get("landed", ())) | set(reply.get("archived") or ())
+        if isinstance(arts, dict):
+            named |= set(arts.get("landed") or ()) | set(arts.get("withheld") or ())
+        named |= set(reply.get("run_artifact_residue") or ())
+        reply.update(residue_classes.dirty_engine_residue(scope["root"], exclude=named))
     incomplete = params.get("incomplete_chunks") if isinstance(params, dict) else None
     landed = (params.get("landed_chunks") if isinstance(params, dict) else None) or []
     held = params.get("held") if isinstance(params, dict) else None
@@ -3809,6 +3840,14 @@ def _terminal_commit(
         _settle_token(token_state, landed=bool(token_state.get("landed")))
         raise
     _settle_token(token_state, landed=bool(token_state.get("landed")))
+    close = token_state.pop("since_halt_close", None)
+    if close is None:
+        return reply
+    if reply.get("committed"):
+        reply = {**reply, "since_halt": close["since_halt"]}
+        return reply if reply.get("paths") else {**reply, "already_landed": True}
+    if reply.get("nothing_to_commit") and not reply.get("refused") and not reply.get("error"):
+        return {**reply, **close, "nothing_to_commit": False}
     return reply
 
 
@@ -4108,7 +4147,9 @@ def _terminal_commit_inner(
             params.get(TERMINAL_RESUME_LEDGER_PARAM), request.plan_path,
         )
         if unmet is not None:
-            return unmet
+            if not (unmet.get("already_landed") and unmet.get("committed")):
+                return unmet
+            token_state["since_halt_close"] = unmet
     ledger_met = (
         _ledger_met_observation(ledger, params.get("ledger_verdict"), open_rows)
         if ask_run_dir is not None else None
@@ -4306,6 +4347,22 @@ def _terminal_commit_inner(
             worktree_root, art_run_id, sizing_rel=cited_sizing, plan_rel=request.plan_path,
             doc_paths=params.get(run_artifacts.DOC_PATHS_PARAM) or (),
         ))
+    plan_artifacts = artifacts is not None
+    if (not anchor_only and request.plan_path
+            and _close_kind(_read_rel(worktree_root, request.plan_path))[0] == "mise-run"):
+        spine_stem = PurePosixPath(request.plan_path).name.removesuffix(".md").removesuffix(".spine")
+        minted = run_artifacts.mise_candidate_paths(
+            worktree_root, spine_stem, inventory_rel=(_inventory_record_rel(worktree_root, request.plan_path) or (None,))[0]
+        )
+        merged = {k: set(v) for k, v in (artifacts.by_class.items() if artifacts is not None else ())}
+        for cls, paths in minted.by_class.items():
+            merged.setdefault(cls, set()).update(paths)
+        artifacts = run_artifacts.RunArtifacts(
+            run_id=artifacts.run_id if artifacts is not None else spine_stem,
+            by_class={k: tuple(sorted(v)) for k, v in merged.items()},
+            record_dirs=artifacts.record_dirs if artifacts is not None else (),
+            root=worktree_root,
+        )
     review_run_id = _run_id_of(params, ask_run_dir, script_path_raw)
     review_checked = not anchor_only and bool(session_id)
     review_writes: Optional[dict] = None
@@ -4344,13 +4401,14 @@ def _terminal_commit_inner(
             str(rec["run_id"]) for rec in abandoned_runs._token_records(worktree_root)
             if isinstance(rec.get("run_id"), str)
         }
-        artifacts = artifacts.with_superseded(
-            run_artifacts.superseded_runs(
-                worktree_root, art_run_id, cited_sizing or next(iter(artifacts.by_class.get("sizing", ())), None),
-                snapshot.changed, live_run_ids=live_ids,
-            ),
-            RECORD_DIR_ROOT,
-        )
+        if plan_artifacts:
+            artifacts = artifacts.with_superseded(
+                run_artifacts.superseded_runs(
+                    worktree_root, art_run_id, cited_sizing or next(iter(artifacts.by_class.get("sizing", ())), None),
+                    snapshot.changed, live_run_ids=live_ids,
+                ),
+                RECORD_DIR_ROOT,
+            )
         art_landable = run_artifacts.landable(
             worktree_root, artifacts, snapshot.changed, snapshot.ignored_among(list(artifacts.paths())),
             session_id=session_id,
@@ -4502,10 +4560,12 @@ def _terminal_commit_inner(
     ):
         all_paths.append(bookkeeping_record_path)
 
+    record_dir_present: set = set()
     if record_dir_rel is not None and snapshot is not None:
         from coordinator_core.ops.dispatch_emit.halted_record_commit import record_dir_changes
 
         present, _gone = record_dir_changes(worktree_root, record_dir_rel, snapshot.changed)
+        record_dir_present = set(present)
         all_paths.extend(p for p in present if p not in all_paths)
 
     # A sibling-checkout path never reaches the home commit (it would drop as
@@ -4550,7 +4610,7 @@ def _terminal_commit_inner(
             close_ctx.clear()
         return _with_siblings({"committed": False, "nothing_to_commit": not sibling_paths})
 
-    if not anchor_only and artifacts is None:
+    if not anchor_only and not plan_artifacts:
         for companion in companions:
             if companion not in all_paths:
                 all_paths.append(companion)
@@ -4759,6 +4819,10 @@ def _terminal_commit_inner(
                     if isinstance(p, str)
                 }
                 | {review_edits_norm(p) for p in (artifacts.paths() if artifacts is not None else ())}
+                | {
+                    review_edits_norm(p)
+                    for p in (_leg_footprint_writes(worktree_root, ask_run_dir) or () if ask_run_dir is not None else ())
+                }
             ),
         )
         if verdict.halt:
@@ -4793,6 +4857,15 @@ def _terminal_commit_inner(
     from coordinator_core.ops.ceremony import commit_v2 as commit_v2_mod
 
     changed = _changed(snapshot, worktree_root, all_paths)
+    if token_state.get("since_halt_close") is not None and changed is not None and not deleted_paths:
+        run_artifact_paths = {
+            *record_dir_present, *(artifacts.paths() if artifacts is not None else ()),
+            *([bookkeeping_record_path] if bookkeeping_record_path else ()),
+        }
+        if not any(p in changed and p not in run_artifact_paths for p in all_paths):
+            if close_ctx is not None:
+                close_ctx.clear()
+            return _with_siblings({"committed": False, "nothing_to_commit": not sibling_paths})
     # Only a path this commit actually carries can absorb a peer's edit: a clean declared path a
     # peer holds is not contention, and refusing on it wedges every review-only close behind it.
     carried = [p for p in all_paths if changed is None or p in changed] + list(deleted_paths)
@@ -5633,6 +5706,7 @@ def _terminal_commit_inner(
     if integrity_extra.get("since_base_check"):
         reply["since_base_check"] = integrity_extra["since_base_check"]
     reply["targeted_tests_check"] = integrity_extra["targeted_tests_check"]
+    reply["reverify_check"] = integrity_extra["reverify_check"]
     if "retested_tests" in integrity_extra:
         reply["retested_tests"] = integrity_extra["retested_tests"]
     reply["receipts"] = receipt_paths

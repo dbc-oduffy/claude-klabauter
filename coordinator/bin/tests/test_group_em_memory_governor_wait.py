@@ -119,6 +119,37 @@ def test_start_thaws_pidfile_leftovers_before_tailing(tmp_path, monkeypatch):
     assert not pidfile.exists()
 
 
+def test_waiter_governor_places_engine_from_a_klabauter_shaped_tree(tmp_path, monkeypatch):
+    import shutil
+
+    bin_src = _SRC.parent
+    root = tmp_path / "mirror"
+    (root / "coordinator_core").mkdir(parents=True)
+    (root / "pyproject.toml").write_text("[project]\nname='x'\n", encoding="utf-8")
+    dest = root / "coordinator" / "bin"
+    dest.mkdir(parents=True)
+    for name in (_SRC.name, "group-em-memory-governor.py"):
+        shutil.copy2(bin_src / name, dest / name)
+    shutil.copytree(bin_src / "lib", dest / "lib", ignore=shutil.ignore_patterns("__pycache__"))
+    assert not (root / "coordinator" / "hooks" / "scripts" / "_engine_root.py").exists()
+
+    monkeypatch.delenv("COORDINATOR_ENGINE_ROOT", raising=False)
+    monkeypatch.setattr(sys, "path", list(sys.path))
+    for name in ("cc_invoke", "engine_bootstrap", "lib"):
+        monkeypatch.delitem(sys.modules, name, raising=False)
+    spec = importlib.util.spec_from_file_location("gem_wait_mirror", dest / _SRC.name)
+    mirror = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = mirror
+    try:
+        spec.loader.exec_module(mirror)
+        governor = mirror._load_governor()
+        assert governor._place_engine_on_path() is True
+        assert sys.path[0] == str(root.resolve())
+    finally:
+        for name in (spec.name, "cc_invoke", "engine_bootstrap", "lib"):
+            sys.modules.pop(name, None)
+
+
 def test_start_with_no_pidfile_thaws_nothing(tmp_path):
     calls: list = []
     assert w.thaw_on_start(tmp_path / "absent.json", lambda p, s: calls.append(p)) == []

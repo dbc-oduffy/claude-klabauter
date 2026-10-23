@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from coordinator_core.ops.dispatch_emit.ledger_remaining_paths import gated_paths, named_paths
+from coordinator_core.ops.dispatch_emit.ledger_remaining_paths import _named_tagged, gated_paths, named_paths
 
 
 def _repo(tmp_path):
@@ -45,6 +45,20 @@ def test_spelling_called_once_canonicalizes_and_dedupes(tmp_path):
     out = named_paths(["a/Pub.py a/gone.py", "a/pub.py"], tmp_path, spelling=spelling)
     assert out == ["a/pub.py"]
     assert len(calls) == 1 and calls[0] == ["a/Pub.py", "a/gone.py", "a/pub.py"]
+
+
+def test_new_file_in_existing_dir_admitted_with_one_spelling_call(tmp_path):
+    (tmp_path / "pkg").mkdir()
+    calls = []
+
+    def spelling(paths):
+        calls.append(list(paths))
+        return {"pkg": "pkg", "pkg/new.py": None, "nodir/new.py": None}
+
+    out, dropped, _ = _named_tagged(["pkg/new.py nodir/new.py"], tmp_path, spelling)
+    assert out == ["pkg/new.py"]
+    assert dropped == ["nodir/new.py"]
+    assert calls == [["pkg/new.py", "nodir/new.py", "pkg"]]
 
 
 def test_spelling_ignores_disk_and_parent_dir_leg(tmp_path):

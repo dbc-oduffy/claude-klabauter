@@ -9,7 +9,7 @@
 export const meta = {
   name: 'mise-prep-residue',
   description: 'Residue authoring for mise-prep: one coordinator:residue-author agent per batch (mise-prep-residue-args/4) of plans, then one APM agent over leftover census rows and seam-fix cycles.',
-  phases: ['Residue', 'APM', 'Persist'],
+  phases: ['Residue', 'APM', 'Persist', 'Land'],
 };
 
 const RESIDUE_CHARTER = [
@@ -153,6 +153,7 @@ const unmatched = rulings.filter((r) => !itemIds.has(r.item));
 rulings = rulings.filter((r) => itemIds.has(r.item));
 
 let persisted = [];
+let receiptApplied = [];
 if (rulings.length > 0) {
   await phase('Persist');
   // The op reads `id`/`item_kind`/`subjectSha`/`cycle_plans`; the APM returns only `item`.
@@ -193,7 +194,8 @@ if (rulings.length > 0) {
     },
   );
   // The op's `applied` rows are `{plan, id}`.
-  persisted = ((receipt && receipt.applied) || []).map((a) => (typeof a === 'string' ? a : a && a.id));
+  receiptApplied = (receipt && receipt.applied) || [];
+  persisted = receiptApplied.map((a) => (typeof a === 'string' ? a : a && a.id));
   const ruled = rulings.map((r) => r.item);
   const missing = ruled.filter((id) => !persisted.includes(id));
   const extra = persisted.filter((id) => !ruled.includes(id));
@@ -202,7 +204,56 @@ if (rulings.length > 0) {
   }
 }
 
+// Landing union: plans the residue stage edited, plans the rulings op rewrote, and the seam notes
+// the launcher wrote. Nothing else.
+const landPaths = [];
+const addLandPath = (p) => { if (typeof p === 'string' && p.length > 0 && !landPaths.includes(p)) landPaths.push(p); };
+for (const res of batchResults) {
+  for (const p of ((res && res.plans) || [])) {
+    if ((p.declared || []).length > 0 || (p.rewrote || []).length > 0) addLandPath(p.plan);
+  }
+}
+for (const a of receiptApplied) addLandPath(a && a.plan);
+for (const batch of (args.batches || [])) {
+  for (const p of (batch.plans || [])) addLandPath(p.seamRef);
+}
+
+let landed = null;
+if (landPaths.length > 0) {
+  await phase('Land');
+  const landParamsPath = args.repoRoot + '/scratch/mise-land-' + args.runId + '.json';
+  landed = await agent(
+    'Repo root: ' + args.repoRoot + ' -- `cd` there first.\n'
+    + 'Step 1: with your Write tool (no shell heredoc), write this exact JSON to `' + landParamsPath + '`:\n'
+    + JSON.stringify({ paths: landPaths, message: 'mise-prep residue: land plans and seam notes (run ' + args.runId + ')' }, null, 2) + '\n'
+    + 'Step 2: run this one command as its own Bash call, and nothing else:\n'
+    + '"${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/bin/coordinator-invoke" ceremony.commit_v2 --params-file ' + landParamsPath + ' --repo ' + args.repoRoot + '\n'
+    + 'Return `committed`, `sha`, `error` and `refused` from its JSON reply (null where absent). You stage and run nothing else.',
+    {
+      label: 'land-residue',
+      phase: 'Land',
+      agentType: args.residue.agentType,
+      model: args.residue.model,
+      schema: {
+        type: 'object',
+        properties: {
+          committed: { type: 'boolean' },
+          sha: { type: ['string', 'null'] },
+          error: { type: ['string', 'null'] },
+          refused: {},
+        },
+        required: ['committed'],
+      },
+    },
+  );
+  if (!landed || landed.committed !== true) {
+    throw new Error('land-residue did not commit: ' + JSON.stringify(landed));
+  }
+}
+
 return {
+  landPaths,
+  landed,
   batches: batchResults,
   rulings,
   persisted,

@@ -416,15 +416,6 @@
       "spawn_count_budget": {},
       "_rationale": "Staging a plan reads the spine, sizing and live run footprints and writes the briefs and manifest in process; no git and no process is started. The empty figure is counted over the size-L fixture and over a 26-row, 253-dirty-file repo by coordinator_core/ops/dispatch_emit/tests/test_ask_stage_spawn_count.py with exact equality; coordinator_core/ops/dispatch_emit/tests/test_ask_stage_26_row_budget.py holds stage() and the handler under 500ms process time on the 26-row dirty repo."
     },
-    "dispatch.stage_twin_token": {
-      "target_ms": 300,
-      "tolerance": {
-        "kind": "relative",
-        "value": 0.2
-      },
-      "spawn_count_budget": {},
-      "_rationale": "The op reads the run's token record and the manifest sidecar once and writes the one staged twin in process; no git and no process is started."
-    },
     "dispatch.sibling_status": {
       "target_ms": 300,
       "tolerance": {

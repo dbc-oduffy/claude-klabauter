@@ -157,6 +157,7 @@ ASK_SCOUT_SCHEMA = {
         "baton": {"type": ["object", "null"]},
         "sizing_path": {"type": ["string", "null"]},
         "resume_plan": {"type": ["string", "null"]},
+        "pending_rulings": {"type": ["array", "null"], "items": {"type": "string"}},
         "resume_rows": {"type": ["array", "null"], "items": _STR},
         "spine_plan": {"type": ["string", "null"]},
         "route": _STR,
@@ -872,6 +873,8 @@ class GateVerdict:
     resume_plan: str | None = None
     # With `resume_plan`: the ids of its rows still to run; the script stages only these.
     resume_rows: list[str] | None = None
+    # With `resume_plan`: the J<n> ruling ids the ledger still owes; empty means no apply-rulings leg.
+    pending_rulings: list[str] | None = None
     # Plan path of the spine the gate minted at M+ from a sizing whose acceptance rows are all
     # concrete: the script reviews it instead of planning.
     spine_plan: str | None = None
@@ -902,6 +905,8 @@ class GateVerdict:
             out["resume_plan"] = self.resume_plan
         if self.resume_rows is not None:
             out["resume_rows"] = list(self.resume_rows)
+        if self.pending_rulings is not None:
+            out["pending_rulings"] = list(self.pending_rulings)
         if self.spine_plan is not None:
             out["spine_plan"] = self.spine_plan
         return out

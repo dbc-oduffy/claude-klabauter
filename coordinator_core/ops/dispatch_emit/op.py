@@ -1722,45 +1722,6 @@ class _EmitWrites:
                 pass
 
 
-_STAGE_TWIN_TOKEN_PARAMS = (
-    Field("run_id", "nonempty_str", required=True),
-    Field("handle", "dict", required=True),
-    Field("run_token", "nonempty_str", required=True),
-)
-
-
-@register_op("dispatch.stage_twin_token")
-def _stage_twin_token(params: dict, repo_root: Optional[Path] = None) -> dict:
-    """JSON-RPC "dispatch.stage_twin_token": params `run_id`, `handle` (a manifest sidecar handle), `run_token`.
-
-    Rewrites the launcher child's staged twin with `run_token` inlined as `runToken`, once
-    `run_token.admits` the token for the run's script. Replies `{"twin": <repo-relative path>}` or
-    `{"error": str}`; the reply, refusals and logs never carry the token. Zero spawns: one sidecar read,
-    one twin write.
-    """
-    if repo_root is None:
-        return {"error": "dispatch.stage_twin_token requires repo_root"}
-    refusal = validate_params("dispatch.stage_twin_token", params, _STAGE_TWIN_TOKEN_PARAMS)
-    if refusal is not None:
-        return refusal
-    from coordinator_core.lifecycle import main_worktree_root
-    from coordinator_core.ops.dispatch_emit import launcher_staged_twin, reply_sidecar, run_token
-
-    run_id, token = params["run_id"], params["run_token"]
-    root = main_worktree_root(Path(repo_root))
-    if not run_token.TOKEN_RE.match(token):
-        return {"error": f"dispatch.stage_twin_token: run_token for run {run_id} is not a 32-hex token"}
-    if not run_token.admits(root, run_id, token, f"scratch/warp/{run_id}.workflow.mjs"):
-        return {"error": f"dispatch.stage_twin_token: run_token is not admitted for run {run_id}"}
-    handle_path = params["handle"].get("path")
-    if not isinstance(handle_path, str) or launcher_staged_twin.manifest_run_id(handle_path.replace("\\", "/")) != run_id:
-        return {"error": f"dispatch.stage_twin_token: handle does not name a manifest of run {run_id}"}
-    try:
-        return {"twin": reply_sidecar.ensure_twin_token(root, params["handle"], token)}
-    except reply_sidecar.ReplySidecarError as exc:
-        return {"error": str(exc)}
-
-
 @register_op("dispatch.emit")
 def _dispatch_emit(
     params: dict,
@@ -2552,6 +2513,11 @@ def _dispatch_emit_body(
             # hands its commit back to the EM.
             ask_run_token = None
         ask_ctx["run_token"] = ask_run_token
+        ask_ctx["token_escrowed"] = bool(
+            ask_run_token
+            and params.get("launcher_child") is True
+            and _run_token.escrow(Path(ask_ctx["root"]), ask_ctx["run_id"], ask_run_token)
+        )
         script = compose_ask_script(
             review_roster_fragment=review_roster_fragment,
             review_stage_schemas=review_stage_schemas,
@@ -2821,8 +2787,11 @@ def _dispatch_emit_body(
         )
         if anchor_root is not None:
             reply["fire_args"] = {"repoRoot": Path(anchor_root).as_posix()}
-        if ask_ctx is not None and ask_ctx.get("run_token"):
+        if ask_ctx is not None and ask_ctx.get("run_token") and not ask_ctx.get("token_escrowed"):
             # The run's commit token rides the launch args only: never the script's bytes.
+            # Trap: an escrowed launcher child's token stays out of the reply, so the launcher holds
+            # no token and the child hands its commit back like a tokenless run; the stage-time twin
+            # write reads the token from escrow. A failed escrow keeps this reply.
             reply.setdefault("fire_args", {})["runToken"] = ask_ctx["run_token"]
         if ask_ctx is not None and ask_ctx.get("revisions_inherited"):
             reply["revisions_inherited"] = list(ask_ctx["revisions_inherited"])

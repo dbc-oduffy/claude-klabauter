@@ -211,6 +211,32 @@ def test_push_unknown_topic_branch_still_denied_with_tags_present(repo):
     assert _denied(_check(repo, "git push origin feature-x"))
 
 
+def test_push_two_local_tags_allowed(repo):
+    tags = repo / ".git" / "refs" / "tags"
+    tags.mkdir(parents=True)
+    for name in ("v4.6.0", "v4.6.1"):
+        (tags / name).write_text("abc\n", encoding="utf-8")
+    assert not _denied(_check(repo, "git push origin v4.6.0 v4.6.1"))
+    assert _denied(_check(repo, "git push origin v4.6.0 feature-x"))
+
+
+def test_push_of_tag_created_earlier_in_same_command_allowed(repo):
+    cmd = "git tag -a v4.6.0 abc -m x && git push origin v4.6.0"
+    assert not _denied(_check(repo, cmd))
+    assert _denied(_check(repo, "git tag -a v4.6.0 abc -m x && git push origin feature-x"))
+
+
+def test_wrapped_override_holds_inside_sh_c(repo):
+    assert not _denied(_check(repo, f"{KEY}=why sh -c 'git checkout -b x'"))
+    assert not _denied(_check(repo, f"{KEY}=why bash -lc 'git checkout -b x && git push origin y'"))
+    assert _denied(_check(repo, "sh -c 'git checkout -b x'"))
+    assert _denied(_check(repo, f"{KEY}= sh -c 'git checkout -b x'"))
+
+
+def test_wrapped_override_does_not_leak_to_later_segments(repo):
+    assert _denied(_check(repo, f"{KEY}=why sh -c 'git checkout -b x' && git checkout -b y"))
+
+
 def test_configured_day_branch_is_allowed(repo):
     (repo / ".git" / "config").write_text(
         "[coordinator]\n\tdayBranch = harness/cloud-1\n", encoding="utf-8"

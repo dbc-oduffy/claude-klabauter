@@ -982,22 +982,15 @@ def _ledger_gate(
     )
     if foreign:
         message += f". Verdict ids that are not register rows: {', '.join(foreign)}"
-    if since_halt.get("landed_sha") and all(
-        f["reason"] == UNCHANGED_SINCE_HALT_REASON for f in result["failures"]
-    ):
-        from coordinator_core.ops.dispatch_emit.pre_halt_ancestry import CITED_DETAIL_KEY
-        from coordinator_core.ops.dispatch_emit.halt_landing import verdict_credits
+    from coordinator_core.ops.dispatch_emit.halt_landing import since_halt_close
 
-        failed_ids = [f["id"] for f in result["failures"]]
-        vouched = since_halt.get(CITED_DETAIL_KEY) or {}
-        if all(str(i) in vouched for i in failed_ids) or verdict_credits(
-            verdict, failed_ids, since_halt["landed_sha"],
-        ):
-            return {
-                "committed": True, "sha": since_halt["landed_sha"], ALREADY_LANDED_KEY: True,
-                "paths": since_halt["landed_paths"], "since_halt": since_halt,
-                "error": None, "refused": None, "close": None,
-            }, ledger, []
+    landed = since_halt_close(since_halt, result["failures"], verdict)
+    if landed:
+        return {
+            "committed": True, "sha": landed, ALREADY_LANDED_KEY: True,
+            "paths": since_halt["landed_paths"], "since_halt": since_halt,
+            "error": None, "refused": None, "close": None,
+        }, ledger, []
     return _error(
         message,
         refused="ledger-unmet",
@@ -1742,6 +1735,14 @@ def _land_product(root: Path, repo_root: Path, params: dict, token_state: dict) 
     """Land one run's product; see the module. ``token_state`` carries the claimed run token."""
     stranded: dict = {}
     reply = _land_inner(root, repo_root, params, stranded, token_state)
+    close = token_state.pop("since_halt_close", None)
+    if close is not None:
+        if reply.get("committed"):
+            reply = {**reply, "since_halt": close["since_halt"]}
+            if not reply.get("paths"):
+                reply[ALREADY_LANDED_KEY] = True
+        elif reply.get("nothing_to_commit") and not reply.get("refused") and not reply.get("error"):
+            reply = {**reply, **close, "nothing_to_commit": False}
     if reply.get("refused") not in _STRANDED_UNKNOWN_REFUSALS and not reply.get(ALREADY_LANDED_KEY):
         reply.setdefault("stranded", {c: sorted(ps) for c, ps in stranded.items()})
     return reply
@@ -1919,7 +1920,9 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
             plan_text, inline_review, params.get(TERMINAL_RESUME_LEDGER_PARAM), request.plan_path, fence,
         )
         if unmet is not None:
-            return unmet
+            if not (unmet.get(ALREADY_LANDED_KEY) and unmet.get("committed")):
+                return unmet
+            token_state["since_halt_close"] = unmet
     ledger_met = None
     if ledger is not None and not open_rows:
         met_ids = _ledger_met_ids(params.get("ledger_verdict"))
@@ -2195,6 +2198,12 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
         and not machine_local_paths([bookkeeping_path]) and (root / bookkeeping_path).is_file()
     ):
         paths.append(bookkeeping_path)
+    if token_state.get("since_halt_close") is not None and not candidates and not (set(deleted) - set(art_deleted)):
+        return {
+            "committed": False, "nothing_to_commit": True,
+            "run_artifacts": {"landed": [], "withheld": {**art_withheld, **art_dropped}},
+            "stranded": {c: sorted(ps) for c, ps in stranded.items()},
+        }
 
     # ---- credit gate and Row-Unlanded
     unlanded: list = []  # (row id, path, reason)
@@ -2499,6 +2508,13 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
                 "run artifact(s) still dirty after the landing: "
                 + ", ".join(f"{p} ({cls})" for p, cls in residue.items())
             )
+
+    from coordinator_core.git import residue_classes
+
+    reply.update(residue_classes.dirty_engine_residue(
+        root,
+        exclude=set(paths) | set(deleted) | (set(landable_artifacts.paths()) if landable_artifacts is not None else set()),
+    ))
 
     # ---- the close job
     if applies:

@@ -20,6 +20,8 @@ PY_UNPARSEABLE = "py-unparseable"
 SINCE_BASE_OVERLAP = "since-base-overlap"
 TARGETED_TESTS_FAILED = "targeted-tests-failed"
 IMPORT_CLOSURE_UNTRACKED = "import-closure-untracked"
+REVIEW_REVERIFY_FAILED = "review-reverify-failed"
+REVERIFY_KEY = "reverify"
 TARGETED_TESTS_PARAM = "targeted_tests"
 NOT_RUN_CHECK = "not-run"
 ZERO_FAIL_UNATTRIBUTED = "test-verdict-names-no-failure"
@@ -225,6 +227,81 @@ def failed_targeted_tests(
         Finding(path, TARGETED_TESTS_FAILED, "; ".join(nodes[:3]))
         for path, nodes in by_file.items()
     ], "failed"
+
+
+def _module_files(module: str) -> list[str]:
+    base = module.replace(".", "/")
+    return [f"{base}.py", f"{base}/__init__.py"]
+
+
+def _imports_landed(worktree_root: Path, test_file: str, landed: set[str]) -> bool:
+    """True when ``test_file`` imports a module whose file is in ``landed``; False when unreadable."""
+    from coordinator_core.pyimports import collect_imports, module_name_for_file, resolve_relative_module
+
+    try:
+        tree = ast.parse((Path(worktree_root) / test_file).read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, SyntaxError, ValueError):
+        return False
+    records, _ = collect_imports(tree)
+    is_pkg = test_file.rsplit("/", 1)[-1] == "__init__.py"
+    for rec in records:
+        if rec.level == 0:
+            base = rec.module or None
+        else:
+            base = resolve_relative_module(rec.module, rec.level, module_name_for_file(test_file), is_pkg)
+        if not base:
+            continue
+        wanted = _module_files(base)
+        for name in rec.names:
+            if name != "*":
+                wanted.extend(_module_files(f"{base}.{name}"))
+        if any(p in landed for p in wanted):
+            return True
+    return False
+
+
+def reverify_record(params: Mapping) -> Optional[Mapping]:
+    """The run's ``inline_review`` re-verify record, or None when absent or not a mapping."""
+    review = params.get("inline_review") if isinstance(params, Mapping) else None
+    record = review.get(REVERIFY_KEY) if isinstance(review, Mapping) else None
+    return record if isinstance(record, Mapping) else None
+
+
+def reverify_verdict(record: Mapping) -> object:
+    """``status_after``, else ``status_before`` when after is null."""
+    after = record.get("status_after")
+    return after if after is not None else record.get("status_before")
+
+
+def reverify_red_findings(
+    worktree_root: Path, params: Mapping, landing_paths: Sequence[str]
+) -> list[Finding]:
+    """A Finding(REVIEW_REVERIFY_FAILED) per test file the run's review re-verify left red that the
+    landing touches: ``params["inline_review"]["reverify"]`` reading ``fail`` (``status_after``, else
+    ``status_before``), whose ``failing`` node ids and ``reverted[].tests`` name a file that is itself
+    landing or imports a landing module. An absent or non-dict re-verify, a non-fail verdict, or a
+    failure implicating no landed path yields []. In-process; one read per implicated test file."""
+    record = reverify_record(params)
+    if record is None or reverify_verdict(record) != "fail":
+        return []
+    landed = {str(p).replace("\\", "/") for p in landing_paths}
+    nodes: list[str] = [str(n) for n in (record.get("failing") or []) if n]
+    for entry in record.get("reverted") or []:
+        if isinstance(entry, Mapping):
+            nodes += [str(n) for n in (entry.get("tests") or []) if n]
+    by_file: dict[str, list[str]] = {}
+    for node in nodes:
+        by_file.setdefault(_node_file(node), []).append(node)
+    out: list[Finding] = []
+    for test_file, ids in by_file.items():
+        if not test_file or not (test_file in landed or _imports_landed(worktree_root, test_file, landed)):
+            continue
+        shown = "; ".join(list(dict.fromkeys(ids))[:3])
+        out.append(Finding(
+            test_file, REVIEW_REVERIFY_FAILED,
+            f"{shown}; re-run: {retest_remedy(params, [test_file])}",
+        ))
+    return out
 
 
 def fresh_verdict_path(worktree_root: Path, run_id: str) -> Path:

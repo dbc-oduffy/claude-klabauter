@@ -212,6 +212,23 @@ def _revision_anchor(at: str, sender: object) -> str:
     return f"{ORIGIN_REVISION}@{at}" + (SENDER_SEP + who if who else "")
 
 
+RULING_ID_RE = re.compile(r"\bJ\d+\b")
+
+
+def pending_ruling_ids(rows: Sequence[Mapping]) -> tuple[str, ...]:
+    """J<n> ids named by still-open (open/partial) revision rows, in row then text order, deduped."""
+    seen: dict[str, None] = {}
+    for row in rows:
+        if _origin(row.get(rr.ROW_ANCHOR))[0] != ORIGIN_REVISION:
+            continue
+        if row.get(rr.ROW_STATUS) not in (rr.STATUS_OPEN, rr.STATUS_PARTIAL):
+            continue
+        text = row.get(rr.ROW_TEXT)
+        for found in RULING_ID_RE.findall(text if isinstance(text, str) else ""):
+            seen.setdefault(found)
+    return tuple(seen)
+
+
 def read_run(dir_: Path) -> Optional[dict]:
     """run.json, or None when the run was emitted without a ledger."""
     try:

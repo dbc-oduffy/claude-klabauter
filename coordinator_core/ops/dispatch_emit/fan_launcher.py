@@ -39,7 +39,6 @@ def _twin_affixes() -> tuple:
 
 _PARENT_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 _EMIT_OP = "dispatch.emit"
-_STAGE_TWIN_TOKEN_OP = "dispatch.stage_twin_token"
 _INVOKE = '"${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/bin/coordinator-invoke"'
 
 
@@ -65,7 +64,7 @@ _META_JS = (
     "description: 'Emits and starts every ready run of one multi-ask submission' }\n"
 )
 
-# Trap: a nested workflow() child receives no args, so every start passes {scriptPath} only; the stage hand-back is a path to the staged twin, never a manifest. No token literal is rendered here: the token rides one stage_twin_token op call per stage round and lands only in the twin.
+# Trap: a nested workflow() child receives no args, so every start passes {scriptPath} only; the stage hand-back is a path to the staged twin, never a manifest. The run token reaches the twin engine-side (run_token escrow, written at emit, inlined at stage); the launcher never holds it.
 _BODY_JS = r"""
 const REPO_ROOT = __REPO_ROOT__;
 const PARENT_ID = __PARENT_ID__;
@@ -74,7 +73,6 @@ const MAX_STAGE_ROUNDS = __MAX_ROUNDS__;
 const WARP_PREFIX = REPO_ROOT + '/scratch/warp/';
 const INVOKE = __INVOKE__;
 const EMIT_OP = __EMIT_OP__;
-const STAGE_TWIN_TOKEN_OP = __STAGE_TWIN_TOKEN_OP__;
 const EMIT_SCHEMA = {
   type: 'object',
   required: ['path', 'run_id', 'fire_args'],
@@ -117,19 +115,7 @@ async function _emitLeg(child) {
   return reply;
 }
 
-// Trap: the token is in this agent's prompt and so its transcript; the prompt's "never return" clause is not enforced, the reply schema is.
-async function _twinTokenLeg(child, handle, token) {
-  const params = JSON.stringify({ run_id: child.run_id, handle: handle, run_token: token }).replace(/'/g, "'\\''");
-  return await agent(
-    'Run `' + INVOKE + ' ' + STAGE_TWIN_TOKEN_OP + " '" + params + "'` once, with the command word exactly as written, and "
-    + 'return the twin path from its JSON reply in the twin field. When the command is denied or fails, '
-    + "return the command's error text verbatim in the error field with twin as an empty string; on success omit error. "
-    + 'Never return the run_token value.',
-    { label: 'twin-token-' + child.run_id, phase: 'stage', agentType: 'general-purpose', model: 'haiku', effort: 'low',
-      schema: { type: 'object', required: ['twin'], properties: { twin: { type: 'string' }, error: { type: 'string' } } } },
-  );
-}
-
+// Trap: a nested child receives no args and has no file read, so the stage round is a second nested start, not an in-place resume.
 async function _runChild(child) {
   let emitted;
   try {
@@ -163,18 +149,6 @@ async function _runChild(child) {
     }
     lastSha = sha;
     const twinRel = TWIN_PREFIX + child.run_id + TWIN_MIDDLE + sha + TWIN_SUFFIX;
-    const token = emitted.fire_args.runToken;
-    if (typeof token === 'string' && /^[0-9a-f]{32}$/.test(token)) {
-      let leg;
-      try {
-        leg = await _twinTokenLeg(child, handle, token);
-      } catch (e) {
-        return { run_id: child.run_id, status: 'failed', error: 'twin token leg failed: ' + String(e && e.message ? e.message : e) };
-      }
-      if (!leg || typeof leg !== 'object') return { run_id: child.run_id, status: 'failed', error: 'twin token leg failed: reply is not an object' };
-      if (typeof leg.error === 'string' && leg.error !== '') return { run_id: child.run_id, status: 'failed', error: 'twin token leg failed: ' + leg.error };
-      if (leg.twin !== twinRel) return { run_id: child.run_id, status: 'failed', error: 'twin token leg failed: twin path ' + String(leg.twin) + ' is not ' + twinRel };
-    }
     scriptPath = REPO_ROOT + '/' + twinRel;
   }
   return { run_id: child.run_id, status: 'failed', error: 'stage rounds exhausted' };
@@ -208,7 +182,6 @@ def _render(root: Path, parent_id: str, children: Sequence[LaunchChild]) -> str:
         "__MAX_ROUNDS__": str(MAX_STAGE_ROUNDS),
         "__INVOKE__": lit(_INVOKE),
         "__EMIT_OP__": lit(_EMIT_OP),
-        "__STAGE_TWIN_TOKEN_OP__": lit(_STAGE_TWIN_TOKEN_OP),
         "__PENDING_KEY__": STAGE_PENDING_KEY,
         "__TWIN_PREFIX__": lit(prefix),
         "__TWIN_MIDDLE__": lit(middle),
@@ -233,7 +206,8 @@ def write_launcher(
     (forced, so the emitted script is a launcher-child script), refusing a path outside
     ``scratch/warp/`` or a foreign run_id; (2) start, ``workflow({scriptPath})`` on the emitted
     script, no args; (3) stage hand-back, on a ``STAGE_PENDING_KEY`` return with a 64-hex
-    ``handle.sha256`` the launcher starts the staged twin at ``staged_twin_rel`` the same way. Returns
+    ``handle.sha256`` the launcher starts the staged twin at ``staged_twin_rel`` the same way, with no
+    agent leg between the two rounds. Returns
     ``{parent_id, runs: [{run_id, status, result|error}]}``. An emission receipt is recorded.
 
     Raises ``ValueError`` for no children, a duplicate run_id or an unsafe ``parent_id``, and

@@ -79,3 +79,9 @@ def test_a_leg_with_no_landed_test_file_carries_no_tests_step(tmp_path):
     out = _run_script(tmp_path, _compose(_two_plan_waves()), CLEAN_REPLY)
     assert "Tests: " not in out["seamParams"][0]
     assert "Step 3" not in out["seamParams"][0]
+
+
+def test_the_leg_prompt_sends_a_saved_reply_under_scratch_never_the_repo_root():
+    leg = _seam_prompt(_compose(_two_plan_waves()))
+    assert "`scratch/seam/<run-id>/`" in leg
+    assert "never the repo root" in leg

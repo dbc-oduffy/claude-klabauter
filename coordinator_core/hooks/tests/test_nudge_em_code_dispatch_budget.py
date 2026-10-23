@@ -163,6 +163,62 @@ def test_escaped_edit_is_not_added_to_path_set(env, monkeypatch):
 
 
 @pytest.fixture
+def unsized(env, monkeypatch):
+    monkeypatch.setattr(mod, "_session_sizing_state", lambda payload, sid: (False, False))
+    return env
+
+
+def test_unsized_one_line_edit_is_admitted_and_opens_lane(unsized):
+    root, sha = unsized
+    assert xb.read_lane(root, SID) is None
+    assert mod.op(_edit(root, "a.py", "l1\n", "v1 = f(1)\n")) is None
+    rec = xb.read_lane(root, SID)
+    assert rec["kind"] == "xs" and rec["base_sha"] == sha and rec["state"] == "open"
+
+
+def test_unsized_third_file_is_denied_with_resize_ask(unsized):
+    root, _ = unsized
+    for rel, old, new in (("a.py", "l1\n", "v1 = f(1)\n"), ("b.py", "l2\n", "v2 = f(2)\n")):
+        assert mod.op(_edit(root, rel, old, new)) is None
+        _apply(root, rel, old, new)
+    third = mod.op(_edit(root, "c.py", "l3\n", "v3 = f(3)\n"))
+    assert _is_deny(third)
+    assert "XS budget spent" in _reason(third) and "Size S or larger" in _reason(third)
+
+
+def test_unsized_cumulative_lines_past_30_is_denied(unsized):
+    root, _ = unsized
+    first = "".join(f"x{i}\n" for i in range(11))
+    assert mod.op(_edit(root, "a.py", _lines(10), first)) is None
+    (root / "a.py").write_text(first)
+    second = "".join(f"y{i}\n" for i in range(20))
+    result = mod.op(_edit(root, "b.py", _lines(10), second))
+    assert _is_deny(result)
+    assert "XS budget spent" in _reason(result)
+
+
+def test_sized_session_without_lane_keeps_head_decision(env):
+    root, _ = env
+    result = mod.op(_edit(root, "a.py", "l1\n", "v1 = f(1)\n"))
+    assert result is not None and not _is_deny(result)
+    assert "route through the warp run" in _reason_ctx(result)
+    assert xb.read_lane(root, SID) is None
+
+
+def test_above_xs_sizing_keeps_head_decision(unsized, monkeypatch):
+    root, _ = unsized
+    monkeypatch.setattr(xb, "touched_s_or_larger", lambda sid, repo_root: True)
+    monkeypatch.setattr(mod, "_session_sizing_state", lambda payload, sid: (True, False))
+    result = mod.op(_edit(root, "a.py", "l1\n", "v1 = f(1)\n"))
+    assert result is not None and not _is_deny(result)
+    assert xb.read_lane(root, SID) is None
+
+
+def _reason_ctx(result) -> str:
+    return result["hookSpecificOutput"]["additionalContext"]
+
+
+@pytest.fixture
 def landed(env, monkeypatch):
     root, sha = env
     from coordinator_core import warp_live
