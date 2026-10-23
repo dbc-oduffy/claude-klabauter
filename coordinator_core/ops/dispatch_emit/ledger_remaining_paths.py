@@ -70,8 +70,9 @@ def _named_tagged(
 ) -> tuple[list[str], list[str], set[str]]:
     """`(admitted, dropped, tagged)`: `tagged` is the admitted subset naming a token of `tag_texts`.
 
-    With `spelling`, existing parent dirs of the named paths ride in the one resolver call so a
-    new file under an existing dir is admitted in the dir's resolved spelling.
+    With `spelling`, every parent dir of the named paths rides in the one resolver call, unfiltered
+    by disk case, so a new file under a case-variant spelling of a tracked dir is admitted in the
+    dir's tracked spelling.
     """
     tag_cands = set(_cleaned(tag_texts))
     out: list[str] = []
@@ -84,9 +85,7 @@ def _named_tagged(
                     tagged.add(rel)
         return out, [], tagged
     cands = _cleaned(texts)
-    parents = list(dict.fromkeys(
-        c.rsplit("/", 1)[0] for c in cands if "/" in c and (repo_root / c.rsplit("/", 1)[0]).is_dir()
-    ))
+    parents = list(dict.fromkeys(c.rsplit("/", 1)[0] for c in cands if "/" in c))
     resolved = dict(spelling([*cands, *(p for p in parents if p not in cands)])) if cands else {}
     dropped: list[str] = []
     for c in cands:

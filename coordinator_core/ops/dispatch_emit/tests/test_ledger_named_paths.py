@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from coordinator_core.ops.dispatch_emit.ledger_remaining_paths import _named_tagged, gated_paths, named_paths
 
 
@@ -44,7 +46,7 @@ def test_spelling_called_once_canonicalizes_and_dedupes(tmp_path):
 
     out = named_paths(["a/Pub.py a/gone.py", "a/pub.py"], tmp_path, spelling=spelling)
     assert out == ["a/pub.py"]
-    assert len(calls) == 1 and calls[0] == ["a/Pub.py", "a/gone.py", "a/pub.py"]
+    assert len(calls) == 1 and calls[0] == ["a/Pub.py", "a/gone.py", "a/pub.py", "a"]
 
 
 def test_new_file_in_existing_dir_admitted_with_one_spelling_call(tmp_path):
@@ -58,7 +60,28 @@ def test_new_file_in_existing_dir_admitted_with_one_spelling_call(tmp_path):
     out, dropped, _ = _named_tagged(["pkg/new.py nodir/new.py"], tmp_path, spelling)
     assert out == ["pkg/new.py"]
     assert dropped == ["nodir/new.py"]
-    assert calls == [["pkg/new.py", "nodir/new.py", "pkg"]]
+    assert calls == [["pkg/new.py", "nodir/new.py", "pkg", "nodir"]]
+
+
+def test_new_file_under_case_variant_dir_admitted_when_variant_is_not_a_dir(tmp_path, monkeypatch):
+    (tmp_path / "pkg").mkdir()
+    real_is_dir = Path.is_dir
+
+    def case_sensitive_is_dir(self, *a, **kw):
+        if self.name == "Pkg":
+            return False
+        return real_is_dir(self, *a, **kw)
+
+    monkeypatch.setattr(Path, "is_dir", case_sensitive_is_dir)
+    calls = []
+
+    def spelling(paths):
+        calls.append(list(paths))
+        return {p: {"Pkg": "pkg"}.get(p) for p in paths}
+
+    out, dropped, _ = _named_tagged(["Pkg/new.py"], tmp_path, spelling)
+    assert out == ["pkg/new.py"] and dropped == []
+    assert len(calls) == 1 and "Pkg" in calls[0]
 
 
 def test_spelling_ignores_disk_and_parent_dir_leg(tmp_path):

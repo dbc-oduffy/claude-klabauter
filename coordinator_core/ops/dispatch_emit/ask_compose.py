@@ -523,6 +523,14 @@ REVISE_NEXT_ACTION_JS = (
     "{ kind: 'revise_and_refire', op: 'workflow.revise', params: { run_id: _runId, "
     "note: 'halted: ' + String(_halted?.halted ?? 'unknown') } }"
 )
+#: An XS-MINT-MISROUTED halt repeats under any unchanged refire, so its next_action names the
+#: plan_path stage instead of `workflow.revise`. No engine op consumes this kind yet (op is null): the
+#: reading EM stages `plan_path` itself.
+XS_MISROUTED_CODE = "XS-MINT-MISROUTED"
+XS_MISROUTED_NEXT_ACTION_JS = (
+    "{ kind: 'stage_by_plan_path', op: null, params: { run_id: _runId, sizing: _sizingRel, plan_path: _planRel, "
+    "note: 'halted: ' + String(_halted?.halted ?? 'unknown') } }"
+)
 #: The stage-start read every judgment-bearing stage makes: the EM can revise the ask mid-run
 #: (`workflow.revise`), so a stage that read the ask only at emit would act on a stale one.
 _LEDGER_CLAUSE = (
@@ -1689,7 +1697,7 @@ def compose_ask_script(
             "return {manifest_handle: <it verbatim>} as stage_reply; when it carries `manifest` holding an `error`, return "
             "{error: <that text>} as stage_reply; either way run no stage command. "
             "As your very last act otherwise, stage the run, but only when the gate reply's halt is null and its arm "
-            f"is XS: run `{_INVOKE} {OP_ASK_STAGE} '<params>'` once, <params> being exactly this JSON object, "
+            f"is XS and it carries no resume_plan (a resumed plan is staged elsewhere): run `{_INVOKE} {OP_ASK_STAGE} '<params>'` once, <params> being exactly this JSON object, "
             "with no key added, dropped or renamed: ",
             *params,
             ". Return its JSON reply verbatim as stage_reply (a manifest_handle, or the {\"error\": ...} refusal). "
@@ -2072,7 +2080,7 @@ def compose_ask_script(
         # Adopted only under the plan folds' guard (rows array, no error), for the arms the act covers.
         clean_js = "(_scoutClean || _rewordStaged)" if sized_in_run else "!_gate.halt"
         arms_js = (
-            f"(_gate.arm === {_lit(ARM_XS)} || (_gate.arm === {_lit(ARM_S)} && _gate.resume_plan) "
+            f"((_gate.arm === {_lit(ARM_XS)} && !_gate.resume_plan) || (_gate.arm === {_lit(ARM_S)} && _gate.resume_plan) "
             f"|| _gate.{RESUME_LEDGER_KEY})"
         )
         if sized_in_run:
@@ -2193,7 +2201,7 @@ def compose_ask_script(
             "&& _apm.recorded && _apm.recorded.ok === true && 'arm' in _apm && 'halt' in _apm) {\n"
             f"      {take_gate % (('_apm',) * 9)}\n"
             + (
-                f"      if (!_gate.halt && _gate.arm === {_lit(ARM_XS)}) {{ await _adoptStageReply(_apm.stage_reply); }}\n"
+                f"      if (!_gate.halt && _gate.arm === {_lit(ARM_XS)} && !_gate.resume_plan) {{ await _adoptStageReply(_apm.stage_reply); }}\n"
                 if fold_stage
                 else ""
             )
@@ -2283,6 +2291,28 @@ def compose_ask_script(
         f"  const _preHaltCredit = _resumeLedger && !_allLandedResume && _ledgerUnlanded.length === 0"
         f" && ({_rl0}.{RESUME_LEDGER_NOTES_FIELD} ?? []).length > 0;"
     )
+    if fold_stage:
+        # An XS sizing whose plan edge names an existing plan stages that plan: the XS mint refuses a sizing with an edge.
+        xs_plan_stage_prompt = _cat(
+            f"{head}\n\n{anchor}\n\n",
+            f"Run `{_INVOKE} {OP_ASK_STAGE} '",
+            "js:JSON.stringify({ run_id: _runId, plan_path: _gate.resume_plan, "
+            "cross_repo_approved: _crossRepoApproved, session_id: _SESSION_ID, " + _ONLY_ROWS_JS
+            + "...(_sizingRel ? { commit_sizing_path: _sizingRel } : {}) })",
+            "'` once and return its JSON reply verbatim as stage_reply (a manifest_handle, or the "
+            "{\"error\": ...} refusal). Commit nothing.",
+        )
+        xs_plan_stage_call = _agent(
+            xs_plan_stage_prompt, label="xs-plan-stage", phase="gate", agent_type=_MECHANICAL_AGENT_TYPE,
+            agent_model=_MECHANICAL_MODEL, schema=_BLITZ_STAGE_READ_SCHEMA, effort=_MECHANICAL_EFFORT,
+            run_id=run_id,
+        )
+        b.append(
+            f"  if (!_halted && {_NO_RESUME} && !_resumeLedger && !_stagedManifest && !_stageRefusal "
+            f"&& _gate.arm === {_lit(ARM_XS)} && _gate.resume_plan) "
+            f"{{ _planRel = _gate.resume_plan; const _xsPlanStaged = await {xs_plan_stage_call}; "
+            "await _adoptStageReply(_xsPlanStaged?.stage_reply); }"
+        )
     if fold_stage:
         # A ledger verdict carries the gate op's own stage of the resumed plan as `manifest`; the re-plan
         # agent stages the plan itself over exactly the rows it added, so no standalone stage leg runs.
@@ -3265,7 +3295,8 @@ def compose_ask_script(
         f"refire: {_refire_js(sizing_rel)} }});"
     )
     stopped_na = (
-        REVISE_NEXT_ACTION_JS
+        f"(String(_halted?.halted ?? '') + String(_halted?.reason ?? '')).includes({_lit(XS_MISROUTED_CODE)}) "
+        f"? {XS_MISROUTED_NEXT_ACTION_JS} : {REVISE_NEXT_ACTION_JS}"
         if in_run_commit
         else "{ kind: 'none', op: null, params: null }"
     )
