@@ -112,8 +112,19 @@ def _tree(root: Path) -> list:
     return sorted(_git(["show", "--name-only", "--format=", "HEAD"], root).split())
 
 
-def test_incident_replay_own_checkpointed_path_lands_and_unchecked_declaration_still_holds(repo):
+def test_own_checkpointed_path_also_declared_by_an_unlanded_sibling_is_refused_co_declared(repo):
     base, _ = _scenario(repo, checkpointed=(P,), declared_by_senior=(P, Q))
+    head = _git(["rev-parse", "HEAD"], repo)
+
+    out = _land(repo, base)
+
+    assert out["committed"] is False, out
+    assert out["refused"] == "peer-hunks-co-declared"
+    assert _git(["rev-parse", "HEAD"], repo) == head
+
+
+def test_incident_replay_own_checkpointed_path_lands_and_unchecked_declaration_still_holds(repo):
+    base, _ = _scenario(repo, checkpointed=(P,), declared_by_senior=(Q,))
 
     out = _land(repo, base)
 

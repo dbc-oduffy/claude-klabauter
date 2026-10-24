@@ -81,7 +81,7 @@ def test_record_dir_lands_with_the_halt_in_the_message(repo):
 
     assert out["committed"] is True, out
     assert sorted(_names(repo, out["sha"])) == sorted(
-        f"{RECORD_DIR_ROOT}/{RUN}/{n}" for n in ("ask.md", "run.json", "halted.json")
+        f"{RECORD_DIR_ROOT}/{RUN}/{n}" for n in ("ask.md", "run.json", "halted.json", "run-stage.json")
     )
     message = _message(repo)
     assert "Halted-By: refusal" in message and "Halt-Reason: estimate L needs a PM touchpoint" in message

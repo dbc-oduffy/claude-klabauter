@@ -532,6 +532,23 @@ def _name_allof_branch(err: ErrorDict, idx: int, comment: str, field: str) -> Er
     }
 
 
+def _name_allof_fields(err: ErrorDict, idx: int, field: str) -> ErrorDict:
+    """Text-only: a commentless bare `not` refusal keeps its error text and gains the
+    allOf index in the hint (the offending field names are already in the hint)."""
+    if err.get('error') != _NOT_NEGATED_ERROR or err.get('field') != field:
+        return err
+    return {**err, 'hint': f"{err['hint']} (allOf[{idx}])"}
+
+
+def _negated_field_names(negated: Any, value: Any) -> list[str]:
+    """Field names a matched `not` sub-schema keyed on: its `required` and `properties`
+    keys that are present in `value`."""
+    if not isinstance(negated, dict) or not isinstance(value, dict):
+        return []
+    names = list(negated.get('required') or []) + list(negated.get('properties') or {})
+    return [n for n in dict.fromkeys(names) if isinstance(n, str) and n in value]
+
+
 def _validate_json_schema_node(
     value: Any,
     schema: dict | None,
@@ -682,6 +699,8 @@ def _validate_json_schema_node(
                     sub_errs = [
                         _name_allof_branch(e, idx, comment, field) for e in sub_errs
                     ]
+                else:
+                    sub_errs = [_name_allof_fields(e, idx, field) for e in sub_errs]
                 errors.extend(sub_errs)
 
     # oneOf — value must match EXACTLY one sub-schema. Unlike anyOf, the
@@ -742,10 +761,14 @@ def _validate_json_schema_node(
     if 'not' in schema:
         sub_errors = _validate_json_schema_node(value, schema['not'], root_schema, path)
         if len(sub_errors) == 0:
+            hint = 'Remove or change the field(s) that satisfy the forbidden condition'
+            named = _negated_field_names(schema['not'], value)
+            if named:
+                hint += ': ' + ', '.join(named)
             errors.append({
                 'field': field,
                 'error': _NOT_NEGATED_ERROR,
-                'hint': 'Remove or change the field(s) that satisfy the forbidden condition',
+                'hint': hint,
             })
             return errors
 

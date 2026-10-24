@@ -175,6 +175,28 @@ def test_publish_mechanics_exempt_and_survey_git_counts():
     assert not any(epw.publish_mechanics(c) for c in bad)
 
 
+def test_gate_probe_ops_and_sibling_git_probes_count_toward_no_budget():
+    exempt = [
+        "coordinator-invoke baton.awaiting_gate_recheck --path x",
+        "coordinator-invoke roadmap.plan_gate",
+        "git -C ../sibling merge-base HEAD origin/main",
+        "git -C ../sibling log --oneline -5",
+        "cd scratch/x-pub && git -C ../sibling log -1",
+    ]
+    for cmd in exempt:
+        assert epw.classify("Bash", {"command": cmd}, "", None) == (False, False), cmd
+    counted = [
+        "coordinator-invoke baton.awaiting_gate_recheck | cat",
+        "grep baton.awaiting_gate_recheck x",
+        "git log --oneline",
+        "git merge-base HEAD origin/main",
+        "git -C ../sibling diff HEAD",
+        "git -C ../sibling log --output=x",
+    ]
+    for cmd in counted:
+        assert epw.classify("Bash", {"command": cmd}, "", None) == (True, True), cmd
+
+
 def test_one_test_run_per_window_is_exempt_postlanding(tmp_path):
     cmd = {"command": "python3 -m pytest coordinator_core/x/tests/test_a.py -q"}
     st = run(tmp_path, [user(), tool_use("a", "Bash", cmd), tool_use("b", "Bash", cmd)])

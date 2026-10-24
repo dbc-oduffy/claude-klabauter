@@ -51,7 +51,14 @@ _QUOTED_RE = re.compile(r"\"[^\"]*\"|'[^']*'")
 _UNQUOTED_CHAIN_RE = re.compile(r"[;&|<>\n]")
 _SUBST_RE = re.compile(r"`|\$\(")
 # Engine lifecycle and comms verbs: an invocation is not survey, so it counts toward no budget.
-LIFECYCLE_OPS = ("sizing.supersede", "memo.transition", "workflow.revise")
+LIFECYCLE_OPS = (
+    "sizing.supersede",
+    "memo.transition",
+    "workflow.revise",
+    "baton.awaiting_gate_recheck",
+    "roadmap.plan_gate",
+)
+SIBLING_PROBE_GIT_VERBS = ("merge-base", "log")
 LIFECYCLE_BINS = ("cross-repo-memo", "pickup-assemble")
 _INVOKERS = ("coordinator-invoke", "invoke")
 _PYTHONS = re.compile(r"^python[0-9.]*(\.exe)?$")
@@ -234,11 +241,15 @@ def _segment_exempt(seg: str, state: dict) -> bool:
         return False
     rest = toks[1:]
     clone = state.get("clone", False)
+    sibling = False
     while rest and rest[0] == "-C" and len(rest) > 1:
         clone = clone or bool(_PUBLISH_CLONE_RE.search(_norm(rest[1])))
+        sibling = True
         rest = rest[2:]
     if not rest:
         return False
+    if sibling and rest[0] in SIBLING_PROBE_GIT_VERBS:
+        return not any(t.startswith("--output") for t in rest[1:])
     if rest[0] in PUBLISH_GIT_VERBS:
         return True
     return rest[0] in PUBLISH_CLONE_GIT_VERBS and clone
@@ -248,9 +259,10 @@ def publish_mechanics(command: object) -> bool:
     """True when every `&&`/`;`/newline segment of a Bash command is publish or build mechanics.
 
     Exempt: `git merge-tree|commit-tree|push|fetch`, `git checkout|switch|reset|clean` and `cd` only
-    inside a publish clone (`scratch/*-pub`), and `percolate-round.py`. Trap: a pipe, redirect,
-    backtick or nested substitution anywhere in a segment makes the command count, as does any
-    other git verb (log, diff, show, grep stay survey).
+    inside a publish clone (`scratch/*-pub`), `percolate-round.py`, and the read-only gate probes
+    `git -C <dir> merge-base|log`. Trap: a pipe, redirect, backtick or nested substitution anywhere
+    in a segment makes the command count, as does any other git verb, and a `git log`/`merge-base`
+    without `-C` (diff, show, grep, bare log stay survey).
     """
     if not isinstance(command, str) or not command.strip():
         return False

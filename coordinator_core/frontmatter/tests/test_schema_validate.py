@@ -2600,6 +2600,30 @@ class TestPlanTasksNotRuleNamesBranch:
         assert [e['error'] for e in errors] == ['value must NOT match the negated schema']
         assert not errors[0]['hint'].startswith('allOf[')
 
+    def test_commentless_not_branch_hint_names_fields_and_index(self, tmp_path):
+        schema_path = tmp_path / 's.schema.json'
+        schema_path.write_text(
+            json.dumps({'allOf': [{'not': {'required': ['a', 'b']}}]}), encoding='utf-8'
+        )
+        errors = validate_frontmatter({'a': 1, 'b': 2}, schema_path)
+        assert len(errors) == 1
+        assert 'a, b' in errors[0]['hint'] and 'allOf[0]' in errors[0]['hint']
+        assert not validate_frontmatter({'a': 1}, schema_path)
+
+    def test_handoff_gate_notes_with_blocking_notes_names_both(self):
+        errors = validate_frontmatter(
+            {'gate_notes': 'x', 'blocking_notes': 'y'}, _HANDOFF_SCHEMA
+        )
+        hits = [e for e in errors if e['error'].startswith('value must NOT match')]
+        assert any('gate_notes, blocking_notes' in e['hint'] for e in hits), errors
+
+    def test_handoff_ready_to_fire_with_gate_dependency_names_field(self):
+        errors = validate_frontmatter(
+            {'deployment_state': 'ready_to_fire', 'gate_dependency': 'g'}, _HANDOFF_SCHEMA
+        )
+        hits = [e for e in errors if e['error'].startswith('value must NOT match')]
+        assert any('gate_dependency' in e['hint'] for e in hits), errors
+
     def test_clean_row_has_no_not_refusal(self):
         errors = validate_frontmatter(_valid_plan_task_row(reads=['a.py']), _PLAN_TASKS_SCHEMA)
         assert not any('NOT match' in e['error'] for e in errors)
