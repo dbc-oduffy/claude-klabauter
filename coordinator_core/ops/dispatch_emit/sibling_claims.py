@@ -82,9 +82,7 @@ def _unlanded_run_ids(
         if stamp is not None and now - stamp > run_token.TTL_SECONDS:
             continue
         if warp_run_deliverable._halted(root, run_id):
-            if stamp is not None and not halted_hold_release.release_reason(
-                root, run_id, own_run_id, own_plan,
-            ):
+            if stamp is not None and not halted_hold_release.release_reason(root, run_id, own_run_id, own_plan):
                 found.append(run_id)
             continue
         for claimed in (False, True):

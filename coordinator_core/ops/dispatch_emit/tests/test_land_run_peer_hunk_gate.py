@@ -285,3 +285,31 @@ def test_unresolved_out_of_ask_finding_on_the_path_refuses(repo):
     assert "rev-1" in str(out), out
     assert out.get("committed") is not True
     assert prod._git(["rev-parse", "HEAD"], repo).strip() == head
+
+
+def _halted_manifest_sibling(root) -> None:
+    rdir = root / "state" / "warp" / SIBLING
+    rdir.mkdir(parents=True)
+    (rdir / "halted.json").write_text(json.dumps({"status": "halted"}), encoding="utf-8")
+    (rdir / "manifest.json").write_text(
+        json.dumps({"rows": [{"id": "C1", "writes": [PATH]}], "doc_writes": []}), encoding="utf-8"
+    )
+
+
+def test_halted_peer_whose_halt_record_omits_a_declared_dirty_path_still_refuses(repo):
+    """The 6137b0 shape: the manifest declares PATH, the halt record withheld nothing, PATH is dirty."""
+    _halted_manifest_sibling(repo)
+
+    out, head = _land_dirty(repo)
+
+    assert out.get("refused") == peer_hunk_gate.PEER_HUNKS_CO_DECLARED, out
+    assert SIBLING in str(out), out
+    assert prod._git(["rev-parse", "HEAD"], repo).strip() == head
+
+
+def test_halted_peer_declaring_the_path_in_its_manifest_but_leaving_it_clean_claims_nothing(repo):
+    from coordinator_core.ops.dispatch_emit import sibling_claims
+
+    _halted_manifest_sibling(repo)
+
+    assert sibling_claims.sibling_run_claims(repo, prod.RUN, [PATH]) == {}

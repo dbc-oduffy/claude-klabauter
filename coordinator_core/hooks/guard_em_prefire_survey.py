@@ -34,7 +34,8 @@ def prefire_deny_text(n: int, budget: int) -> str:
         f"{DENY_PREFIX} {n} exploratory calls since the last turn with no engine-ask fire, "
         f"budget {budget} (THE-EM-FIRES-ENGINE-ASK-WITHOUT-A-PREFIRE-SURVEY). "
         + fire_step()
-        + " Put what you already know in em_context; do not read to fill it."
+        + " A reworded or cd-prefixed retry of a survey call is denied too: fire the engine-ask now,"
+        " with what you already know in em_context."
     )
 
 

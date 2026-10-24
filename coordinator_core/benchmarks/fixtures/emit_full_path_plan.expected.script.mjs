@@ -290,6 +290,11 @@ Plan: Script-fired reconcile merge: start, file-only resolver, conclude
     const why = by.filter((h) => _chunkReason[h] && !(h in _heldBy)).map((h) => h + ': ' + _chunkReason[h]);
     return 'dependents unstarted: ' + ids.join(', ') + ' (held by ' + by.join(', ') + ')' + (why.length ? '; ' + why.join('; ') : '');
   }
+  const _TR_VERDICT_RE = /(?:^"?|\n|\\n)[ \t>#-]*[*_`]{0,2}test_verdict[*_`]{0,2}[ \t]*:[ \t]*[*_`]{0,2}[ \t]*(pass|fail|not_run)\b|"test_verdict"\s*:\s*"(pass|fail|not_run)"/;
+  function _trVerdictOf(t) {
+    const m = _TR_VERDICT_RE.exec(t);
+    return m ? (m[1] || m[2]).toLowerCase() : null;
+  }
   function _owedReleases(owed, id) {
     const m = /^gate-blocker: needs-dependent: *([^ \\"]+)/.exec(owed);
     return !m || m[1].replace(/[.,;]$/, '') === id;
@@ -301,7 +306,7 @@ Plan: Script-fired reconcile merge: start, file-only resolver, conclude
       const settled = typeof r === 'string' && r.startsWith('ROUTED-OUT:');
       const _o = r != null ? _gateOwedOf(t) : null;
       if (_o && _owedReleases(_o, id)) continue;
-      if (r == null || _DEP_NON_DONE_RE.test(t) || (!settled && !_DEP_ANY_STATUS_RE.test(t))) {
+      if (r == null || _DEP_NON_DONE_RE.test(t) || (!settled && !_DEP_ANY_STATUS_RE.test(t) && _trVerdictOf(t) !== 'pass')) {
         return _rowIdOf.get(deps[i]) || '?';
       }
     }
@@ -379,10 +384,13 @@ Plan: Script-fired reconcile merge: start, file-only resolver, conclude
         incomplete = true;
       }
     } else if (!/(?:^"?|\n|\\n)\s*[*_`]{0,2}(?:DONE(?:_WITH_CONCERNS)?|PARTIAL|BLOCKED)[*_`]{0,2}:|<exit-status>(?:DONE|PARTIAL|BLOCKED)<\/exit-status>/.test(_text)) {
-      _incompleteChunks.push(id);
-      _unansweredBriefs.push(id);
-      _chunkReason[id] = 'no contract status line in the executor reply';
-      incomplete = true;
+      const _tv = _trVerdictOf(_text);
+      if (_tv !== 'pass') {
+        _incompleteChunks.push(id);
+        if (!_tv) _unansweredBriefs.push(id);
+        _chunkReason[id] = _tv === 'not_run' ? 'instrument fault: the test-runner ran nothing (test_verdict: not_run)' : _tv ? 'test-runner verdict: ' + _tv : 'no contract status line in the executor reply';
+        incomplete = true;
+      }
     }
     if (/(?:^|\n|\\n)[*_]{0,2}STOP-RULE-FIRED[*_]{0,2}:\s*(?![*_`]*(?:[Nn]one|[Nn]\/[Aa]|[Nn]o)[*_`.]*\s*(?:$|\n|\\n|<))\S/.test(_text) && !/(?:^|\n|\\n)[*_]{0,2}ROW-LOCAL-BLOCK[*_]{0,2}:\s*(?![*_`]*(?:[Nn]one|[Nn]\/[Aa]|[Nn]o)[*_`.]*\s*(?:$|\n|\\n|<))\S/.test(_text)) {
       _stoppedBy.push(id);

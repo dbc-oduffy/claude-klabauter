@@ -4396,6 +4396,11 @@ def _run_row_helper_js(
         "    return 'dependents unstarted: ' + ids.join(', ') + ' (held by ' + by.join(', ') + ')' "
         "+ (why.length ? '; ' + why.join('; ') : '');\n"
         "  }\n"
+        f"  const _TR_VERDICT_RE = {_TEST_VERDICT_JS_RE};\n"
+        "  function _trVerdictOf(t) {\n"
+        "    const m = _TR_VERDICT_RE.exec(t);\n"
+        "    return m ? (m[1] || m[2]).toLowerCase() : null;\n"
+        "  }\n"
         "  function _owedReleases(owed, id) {\n"
         "    const m = /^gate-blocker: needs-dependent: *([^ \\\\\"]+)/.exec(owed);\n"
         "    return !m || m[1].replace(/[.,;]$/, '') === id;\n"
@@ -4408,7 +4413,7 @@ def _run_row_helper_js(
         "      const _o = r != null ? _gateOwedOf(t) : null;\n"
         "      if (_o && _owedReleases(_o, id)) continue;\n"
         "      if (r == null || _DEP_NON_DONE_RE.test(t) || "
-        "(!settled && !_DEP_ANY_STATUS_RE.test(t))) {\n"
+        "(!settled && !_DEP_ANY_STATUS_RE.test(t) && _trVerdictOf(t) !== 'pass')) {\n"
         "        return _rowIdOf.get(deps[i]) || '?';\n"
         "      }\n"
         "    }\n"
@@ -4493,10 +4498,15 @@ def _run_row_helper_js(
         "        incomplete = true;\n"
         "      }\n"
         "    } else if (!" + f"{_ANY_STATUS_JS_RE}.test(_text)) {{\n"
-        "      _incompleteChunks.push(id);\n"
-        "      _unansweredBriefs.push(id);\n"
-        f"      {CHUNK_REASON_VAR}[id] = 'no contract status line in the executor reply';\n"
-        "      incomplete = true;\n"
+        "      const _tv = _trVerdictOf(_text);\n"
+        "      if (_tv !== 'pass') {\n"
+        "        _incompleteChunks.push(id);\n"
+        "        if (!_tv) _unansweredBriefs.push(id);\n"
+        f"        {CHUNK_REASON_VAR}[id] = _tv === 'not_run' ? "
+        "'instrument fault: the test-runner ran nothing (test_verdict: not_run)' : _tv "
+        "? 'test-runner verdict: ' + _tv : 'no contract status line in the executor reply';\n"
+        "        incomplete = true;\n"
+        "      }\n"
         "    }\n"
         f"    if ({_STOP_RULE_JS_RE}.test(_text) && !{_ROW_LOCAL_BLOCK_JS_RE}.test(_text)) {{\n"
         "      _stoppedBy.push(id);\n"
@@ -6684,6 +6694,14 @@ _ANY_STATUS_JS_RE = (
     # the opening class already admits the leading backtick.
     r'/(?:^"?|\n|\\n)\s*[*_`]{0,2}(?:DONE(?:_WITH_CONCERNS)?|PARTIAL|BLOCKED)[*_`]{0,2}:'
     r'|<exit-status>(?:DONE|PARTIAL|BLOCKED)<\/exit-status>/'
+)
+
+
+#: A test-runner reply's verdict: `test_verdict: pass|fail|not_run` on a line, or the JSON key form.
+#: A test-runner has no executor contract status line; this is its answer. Group 1 line form, 2 key form.
+_TEST_VERDICT_JS_RE = (
+    rf'/{_LINE_START_JS}[ \t>#-]*[*_`]{{0,2}}test_verdict[*_`]{{0,2}}[ \t]*:[ \t]*[*_`]{{0,2}}[ \t]*(pass|fail|not_run)\b'
+    r'|"test_verdict"\s*:\s*"(pass|fail|not_run)"/'
 )
 
 

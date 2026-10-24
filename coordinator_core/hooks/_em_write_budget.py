@@ -21,7 +21,7 @@ import sys
 from coordinator_core._hook_envelope import deny
 from coordinator_core._settings_home import settings_home
 from coordinator_core.group_em.gem_home import contains as _path_contains
-from coordinator_core.hooks._envelope import context_only
+from coordinator_core.hooks import _em_post_fire
 from coordinator_core.hooks.dispatch_escape import _take_escape
 from coordinator_core.hooks.doc_data_extensions import _DOC_DATA_EXTENSIONS
 from coordinator_core.machine_profile import apply_guard_level
@@ -220,6 +220,8 @@ def shell_write_budget(
         return None
     if _take_escape(payload, session_id, file_path, "nudge-em-code-dispatch"):
         return None
+    if _em_post_fire.fired(session_id):
+        return None
 
     def _project() -> str:
         if projected is None:
@@ -259,17 +261,8 @@ def _budget_core(payload: dict, session_id: str, file_path: str, project) -> tup
     try:
         s_plus = xlb.touched_s_or_larger(session_id, root)
         rec = xlb.read_lane(root, session_id)
-        if rec is None or rec.get("kind") == xlb.KIND_XS:
-            from coordinator_core import warp_live
-            from coordinator_core.git import git_state
-            from coordinator_core.hooks.flag_em_poll_in_flight import session_workflow_run_ids
-
-            landed = bool(session_workflow_run_ids(session_id)) and (
-                warp_live.live_run_for_session(root, session_id) is None
-            )
-            head = git_state.head_sha(root) if landed else None
-            if head and xlb.open_residue_window(root, session_id, head, supersede_xs=True):
-                rec = xlb.read_lane(root, session_id)
+        if rec is not None and rec.get("kind") != xlb.KIND_XS:
+            return False, None
         if rec is None and not s_plus and not _session_sizing_state(payload, session_id)[0]:
             from coordinator_core.git import git_state
 
@@ -278,7 +271,7 @@ def _budget_core(payload: dict, session_id: str, file_path: str, project) -> tup
                 opened_here = True
                 rec = xlb.read_lane(root, session_id)
         unfired = False
-        if s_plus and (rec is None or rec.get("kind") != xlb.KIND_RESIDUE):
+        if s_plus:
             from coordinator_core.session.engine_route_state import PHASE_UNFIRED, session_route_phase
 
             unfired = (
@@ -292,30 +285,25 @@ def _budget_core(payload: dict, session_id: str, file_path: str, project) -> tup
     if rec is None:
         return False, None
     kind = rec.get("kind")
-    if s_plus and kind != xlb.KIND_RESIDUE:
+    if s_plus:
         return False, None
-    residue = kind == xlb.KIND_RESIDUE
-    if residue:
-        executor, _ = _derive_executor_info(file_path)
-        over_text = lambda u: _budget_text("Residue budget spent (projected):", u) + f" Dispatch {executor} for the rest."
-    else:
-        over_text = lambda u: _budget_text("XS budget spent (projected):", u) + " Size S or larger. " + fire_step()
+    over_text = lambda u: _budget_text("XS budget spent (projected):", u) + " Size S or larger. " + fire_step()
     if rec.get("corrupt"):
         return True, _budget_deny(over_text(xlb.Usage(0, 0, True)))
-    if not residue and xlb.deny_count(rec) >= xlb.GOLF_DENY_LIMIT:
+    if xlb.deny_count(rec) >= xlb.GOLF_DENY_LIMIT:
         return True, _budget_deny(_closed_text(rec))
     try:
         usage = xlb.measure(root, rec, file_path, project())
     except Exception as exc:
         reason = str(exc) if isinstance(exc, _Unprojectable) else f"{type(exc).__name__}: {exc}"
         text = f"Budget unmeasurable ({reason}). Make the change as one plain Edit per file."
-        if opened_here and not residue:
+        if opened_here:
             _discard_fresh(xlb, root, session_id)
         return True, _budget_deny(text)
     if usage.over:
-        if opened_here and not residue:
+        if opened_here:
             _discard_fresh(xlb, root, session_id)
-        elif not residue:
+        else:
             try:
                 denies = xlb.record_deny(root, session_id, usage, [*rec.get("paths", []), file_path])
             except Exception:
@@ -327,9 +315,4 @@ def _budget_core(payload: dict, session_id: str, file_path: str, project) -> tup
         xlb.add_path(root, session_id, file_path)
     except Exception:
         pass
-    if residue:
-        return True, context_only(
-            "PreToolUse",
-            _SIZED_ADVISORY + " " + _budget_text("residue", usage),
-        )
     return True, None

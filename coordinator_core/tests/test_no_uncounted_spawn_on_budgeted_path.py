@@ -7179,7 +7179,7 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     # (session_facts._dirty_paths), reached ONLY when the command resolves to a deploy shape.
     # 5 -> 6, 2026-10-24: guard `block_em_halted_withheld_commit._git_names` (1233235b64) runs one
     # `git diff --name-only` per EM commit-shaped command to list the paths a commit would take.
-    "warm_guard.evaluate": 6,
+    "warm_guard.evaluate": 5,
     # 9 -> 10, 2026-10-12 (f10d5c0233): `_common.files_citing` is the batched citation
     # prefetch -- one `rg -f` per needle set (live scope, harvest scope), never per candidate.
     "distill.apply_disposal": 10,
@@ -7408,7 +7408,7 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     "hooks.pickup_autofire": 1,
     # 8 -> 9, 2026-10-09: same deploy-dirty-tree `git status` as warm_guard.evaluate (gated).
     # 5 -> 6, 2026-10-24: same site as warm_guard.evaluate (`block_em_halted_withheld_commit._git_names`).
-    "hooks.preuse_bash_dispatch": 6,
+    "hooks.preuse_bash_dispatch": 5,
     "hooks.session_start_cloud_focus": 1,
     "hooks.session_start_repair_prepare_commit_msg_hook": 2,
     "hooks.sessionend_auto_commit": 3,

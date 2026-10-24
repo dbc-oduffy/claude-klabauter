@@ -565,12 +565,6 @@ def test_measured_clause_is_absent_from_xs_and_residue_denies(env, monkeypatch):
     assert "Measured from landed" not in _reason(xs)
     assert "XS budget spent (projected): 1/2 files, 52/30 lines. Size S or larger. " in _reason(xs)
     assert measure_envelope(xs).prose_bytes <= MESSAGE_PROSE_CAP_BYTES
-    monkeypatch.setattr(xb, "touched_s_or_larger", lambda sid, repo_root: True)
-    monkeypatch.setattr(xb, "read_lane", lambda r, s: {"kind": "residue", "state": "open", "base_sha": sha, "paths": []})
-    res = mod.op(_edit(root, "a.py", _lines(10), _big(42)))
-    assert _is_deny(res)
-    assert "Measured from landed" not in _reason(res)
-    assert "Residue budget spent (projected)" in _reason(res)
 
 
 def test_golf_second_projected_deny_closes_hand_edits(env):
@@ -607,16 +601,15 @@ def test_golf_closes_shell_writes_too(env):
     assert _is_deny(_shell(root, "a.py", _lines(10).replace("l1\n", "v1 = f(1)\n")))
 
 
-def test_golf_residue_record_is_never_closed_by_denies(env, monkeypatch):
+def test_stale_residue_record_is_not_a_lane(env, monkeypatch):
     root, sha = env
-    monkeypatch.setattr(xb, "touched_s_or_larger", lambda sid, repo_root: True)
+    monkeypatch.setattr(xb, "touched_s_or_larger", lambda sid, repo_root: False)
     assert xb._create_exclusive(
         root, SID, {"kind": "residue", "base_sha": sha, "state": "open", "paths": [], "denies": 5}
     )
     monkeypatch.setattr(leaf, "_COORDINATOR_PATH_MARKERS", [])
     over = mod.op(_edit(root, "a.py", _lines(10), _big(42)))
-    assert _is_deny(over) and "Residue budget spent" in _reason(over)
-    assert not _is_deny(mod.op(_edit(root, "b.py", "l1\n", "v1 = f(1)\n")))
+    assert not _is_deny(over) and "Residue budget" not in str(over)
 
 
 def test_golf_corrupt_record_returns_corrupt_deny_not_closed_text(env):
@@ -673,20 +666,23 @@ def test_landed_edit_is_denied_post_fire_despite_a_pre_existing_xs_lane(landed_u
     assert xb.read_lane(root, SID)["kind"] == "xs"
 
 
-def test_landed_residue_shell_write_is_budgeted(landed_unmarked):
+def test_landed_shell_write_is_denied_post_fire(landed_unmarked):
+    from coordinator_core.hooks import _em_post_fire
+
     root, _ = landed_unmarked
-    result = _shell(root, "a.py", _big(42))
-    assert _is_deny(result) and "Residue budget spent" in _reason(result)
+    assert _shell(root, "a.py", _big(42)) is None
+    assert xb.read_lane(root, SID) is None
+    result = _em_post_fire.deny_envelope()
+    assert _is_deny(result) and "workflow.revise" in _reason(result)
 
 
-def test_landed_shell_write_supersedes_a_pre_existing_xs_lane(landed_unmarked):
-    root, sha = landed_unmarked
+def test_landed_shell_write_opens_no_residue_lane_and_keeps_the_xs_lane(landed_unmarked):
+    root, _ = landed_unmarked
     xb.open_xs_lane(root, SID, "f" * 40)
-    xb.record_deny(root, SID)
-    assert not _is_deny(_shell(root, "a.py", "v1 = f(1)\n"))
+    assert _shell(root, "a.py", "v1 = f(1)\n") is None
+    assert _shell(root, "a.py", _big(42)) is None
     rec = xb.read_lane(root, SID)
-    assert rec["kind"] == "residue" and rec["base_sha"] == sha
-    assert xb.deny_count(rec) == 0
+    assert rec["kind"] == "xs" and rec["paths"] == []
 
 
 def test_shell_write_escape_is_consumed_once(env, monkeypatch):

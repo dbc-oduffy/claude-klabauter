@@ -165,6 +165,7 @@ def test_ninth_read_denies_with_fire_step(env):
     assert res is not None and res["hookSpecificOutput"]["permissionDecision"] == "deny"
     assert reason(res).startswith("[em-prefire-survey] 9 exploratory calls")
     assert warp_fire.fire_step() in reason(res)
+    assert "cd-prefixed retry" in reason(res) and "em_context" in reason(res)
 
 
 def test_eighth_read_allows(env):

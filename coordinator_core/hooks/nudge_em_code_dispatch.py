@@ -433,28 +433,33 @@ def _size_stage_write_deny(payload: dict) -> dict | None:
     return apply_guard_level("nudge-em-code-dispatch", deny("PreToolUse", _SIZE_STAGE_DENY))
 
 
-_POST_FIRE_DENY = (
-    "This session already fired engine-ask; its product edits belong to the run. "
-    "Send the gap through workflow.revise, or fire a follow-up engine-ask whose em_context "
-    "quotes the receipt's gap line."
-)
-
-
-def _post_fire_deny(session_id: str) -> dict | None:
+def _post_fire_deny(session_id: str, paths: tuple[str, ...] = (), root: str | None = None) -> dict | None:
     """Deny the main EM's product edit once the session has launched a Workflow run, whichever
     paths that run declared. Before the first fire this returns None and the XS budget decides.
-    Any read failure is no signal: the deny fails open (pinned in the budget test module)."""
-    if not session_id:
-        return None
-    try:
-        from coordinator_core.hooks import flag_em_poll_in_flight
+    With `paths`, the deny needs one of them to be a product path under `root`; with none given
+    the fire alone decides. Any read failure is no signal: the deny fails open."""
+    from coordinator_core.hooks import _em_post_fire
 
-        fired = bool(flag_em_poll_in_flight.session_workflow_run_ids(session_id))
-    except Exception:
+    if not _em_post_fire.fired(session_id):
         return None
-    if not fired:
+    if paths and not any(_em_post_fire.is_product_path(p, root or "", session_id) for p in paths):
         return None
-    return apply_guard_level("nudge-em-code-dispatch", deny("PreToolUse", _POST_FIRE_DENY))
+    return _em_post_fire.deny_envelope()
+
+
+def _edit_paths(tool_input: dict, cwd: object) -> tuple[str, ...]:
+    """Every path the call writes: file_path, a NotebookEdit's notebook_path and each edits[]
+    path, made absolute against `cwd`."""
+    raw = [tool_input.get("file_path"), tool_input.get("notebook_path")]
+    edits = tool_input.get("edits")
+    if isinstance(edits, list):
+        raw.extend(e.get("file_path") for e in edits if isinstance(e, dict))
+    base = cwd if isinstance(cwd, str) and cwd else os.getcwd()
+    return tuple(
+        p if os.path.isabs(p) else os.path.join(base, p)
+        for p in raw
+        if isinstance(p, str) and p
+    )
 
 
 def _budget_decision(payload: dict, session_id: str, file_path: str, tool_input: dict) -> tuple[bool, dict | None]:
@@ -514,6 +519,16 @@ def op(payload: dict) -> dict | None:
                 file_path = edit_path
                 break
 
+    paths = _edit_paths(tool_input, payload.get("cwd"))
+    if paths:
+        from coordinator_core.hooks.nudge_unrouted_sizing import _repo_root
+
+        post_fire = _post_fire_deny(_resolve_session_id_op(payload), paths, _repo_root(payload))
+        if post_fire is not None:
+            return post_fire
+
+    if not file_path:
+        file_path = tool_input.get("notebook_path")
     if not file_path:
         return None
 
@@ -545,10 +560,6 @@ def op(payload: dict) -> dict | None:
         checkout = general_work_scope.foreign_checkout(file_path)
         if checkout is not None:
             return apply_guard_level("nudge-em-code-dispatch", _foreign_checkout_deny(checkout, file_path))
-
-    post_fire = _post_fire_deny(session_id)
-    if post_fire is not None:
-        return post_fire
 
     handled, budget_result = _budget_decision(payload, session_id, file_path, tool_input)
     if handled:
