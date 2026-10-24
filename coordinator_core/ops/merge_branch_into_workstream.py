@@ -59,7 +59,7 @@ and never aborts on conflict.
 
 Op contract (C0a manifest row `merge-branch-into-active-workstream`):
     branch.merge_into_workstream
-    params: {branch: str, reason: str, stage?: bool, abort?: bool}
+    params: {branch: str, reason: str, stage?: bool, abort?: bool, run_id?: str}
     -> {merged: bool, already_ancestor: bool, conflict: bool}
     stage -> {merged: false, staged: bool, already_ancestor: bool,
               conflict: bool, conflicted: [str], merge_head: str|null}
@@ -76,11 +76,13 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 import subprocess
 from coordinator_core.win_portability import no_console_creationflags
 from pathlib import Path
 from typing import Optional, Union
 
+from coordinator_core.git import merge_owner
 from coordinator_core.git.git_dir import resolve_git_dir
 from coordinator_core.git.git_index import parse_index_identity
 from coordinator_core.git.machine_local_paths import MACHINE_LOCAL_PATHSPEC, machine_local_refusal
@@ -161,11 +163,23 @@ def merge_branch_into_workstream(
     *,
     stage: bool = False,
     abort: bool = False,
+    run_id: Optional[str] = None,
 ) -> dict:
     if not isinstance(stage, bool) or not isinstance(abort, bool):
         raise ValueError(
             "branch.merge_into_workstream: `stage` and `abort` must be booleans"
         )
+    if run_id is not None:
+        if not isinstance(run_id, str) or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]*", run_id) is None:
+            raise ValueError(
+                "branch.merge_into_workstream: `run_id` must be a non-empty run directory name"
+            )
+        if not stage:
+            raise ValueError("branch.merge_into_workstream: `run_id` requires `stage`")
+        if not (Path(repo_root) / "state" / "warp" / run_id).is_dir():
+            raise ValueError(
+                f"branch.merge_into_workstream: no run record for run_id {run_id!r}"
+            )
     if stage and abort:
         raise ValueError(
             "branch.merge_into_workstream: `stage` and `abort` are mutually exclusive"
@@ -178,7 +192,9 @@ def merge_branch_into_workstream(
             f"branch.merge_into_workstream: {repo} is not a git worktree"
         )
     if abort:
-        return _abort_merge(repo)
+        reply = _abort_merge(repo)
+        merge_owner.clear(repo)
+        return reply
 
     if stage:
         if branch.startswith("-"):
@@ -247,12 +263,21 @@ def merge_branch_into_workstream(
             )
         unmerged: set = set()
         parse_index_identity(repo, None, unmerged_out=unmerged)
-        return _stage_reply(
+        merge_head = merge_head_file.read_text().strip() or None
+        reply = _stage_reply(
             staged=True,
             already_ancestor=False,
             conflicted=sorted(unmerged),
-            merge_head=merge_head_file.read_text().strip() or None,
+            merge_head=merge_head,
         )
+        if run_id is not None and merge_head:
+            try:
+                merge_owner.record(repo, run_id, merge_head, head_sha)
+            except Exception:
+                _abort_merge(repo)  # an ownerless open merge is unlandable by the run
+                raise
+            reply["owner_run_id"] = run_id
+        return reply
 
     res = _git(
         [
@@ -290,10 +315,10 @@ async def _merge_branch_into_workstream_handler(
 ) -> dict:
     """JSON-RPC `branch.merge_into_workstream` handler.
 
-    params: {branch: str, reason: str, stage?: bool, abort?: bool}
+    params: {branch: str, reason: str, stage?: bool, abort?: bool, run_id?: str}
     -> {merged: bool, already_ancestor: bool, conflict: bool}
        stage -> {merged: false, staged, already_ancestor, conflict,
-                 conflicted: [paths], merge_head: sha|null}
+                 conflicted: [paths], merge_head: sha|null, owner_run_id?}
        abort -> {aborted: true}
 
     show_top scope: the target is the IPC-injected `repo_root` (the caller's
@@ -310,4 +335,5 @@ async def _merge_branch_into_workstream_handler(
         merge_branch_into_workstream,
         branch, reason, repo_root,
         stage=params.get("stage", False), abort=params.get("abort", False),
+        run_id=params.get("run_id"),
     )

@@ -171,11 +171,13 @@ def gate(
     kept_sink: Optional[list] = None,
     phase_sink: Optional[list] = None,
     held_sink: Optional[list] = None,
+    reasons_sink: Optional[list] = None,
 ) -> GateVerdict:
     """Arm for the sizing at `sizing_rel`, or the single halt that stops it, naming every cause.
 
     `kept_sink`, when given, receives `(kept row ids, kept_run)` for a row resume that keeps rows.
     `held_sink`, when given, receives the resume's `ResumePlan.held` on the row and the ledger resume alike.
+    `reasons_sink` likewise receives `ResumePlan.not_run_reasons`.
 
     `baton` (repo-relative) goes to the mint at M+, which owns the baton checks; XS carries it when it
     is this sizing's own (never in `GateVerdict.baton`) and refuses any other; S and roadmap mint no
@@ -208,7 +210,7 @@ def gate(
         return replace(_halt(HALT_REFUSAL, f"{error}: repair {shown or registry}"), design_route=route_payload)
     verdict = _arm_verdict(
         root, sizing_rel, writes=writes, baton=baton, landed_sink=landed_sink, run_id=run_id, kept_sink=kept_sink,
-        phase_sink=phase_sink, held_sink=held_sink,
+        phase_sink=phase_sink, held_sink=held_sink, reasons_sink=reasons_sink,
     )
     if route_payload is not None and verdict.design_route is None:
         verdict = replace(verdict, design_route=route_payload)
@@ -248,7 +250,7 @@ def _baton_belongs_to_sizing(repo_root: Path, sizing: dict, sizing_rel: str, bat
 def _arm_verdict(
     repo_root: Path, sizing_rel: str, *, writes: Sequence[str] = (), baton: Optional[str] = None,
     landed_sink: Optional[list] = None, run_id: Optional[str] = None, kept_sink: Optional[list] = None,
-    phase_sink: Optional[list] = None, held_sink: Optional[list] = None,
+    phase_sink: Optional[list] = None, held_sink: Optional[list] = None, reasons_sink: Optional[list] = None,
 ) -> GateVerdict:
     """The arm-or-halt verdict, before the design-registry leg."""
     from coordinator_core import sizing_assemble as sa
@@ -385,7 +387,9 @@ def _arm_verdict(
     if kept_sink is not None and resume_rows and resume.kept:
         kept_sink.append((list(resume.kept), resume.kept_run))
     if held_sink is not None and resume:
-        held_sink.extend(getattr(resume, "held", ()))
+        held_sink.extend(resume.held)
+    if reasons_sink is not None and resume:
+        reasons_sink.extend(resume.not_run_reasons)
     pending_rulings = None
     ready_memo: dict = {}
 
@@ -838,17 +842,18 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     kept: list = []
     phases: list = []
     held: list = []
+    reasons: list = []
     verdict = gate(
         root, sizing_rel, writes=writes, baton=params.get("baton"),
         mint_design_rows=bool(params.get("run_id")), landed_sink=landed, run_id=params.get("run_id"),
-        kept_sink=kept, phase_sink=phases, held_sink=held,
+        kept_sink=kept, phase_sink=phases, held_sink=held, reasons_sink=reasons,
     )
     if landed and verdict.halt is None and verdict.resume_plan and verdict.resume_rows:
         _stamp_landed_rows(root, verdict.resume_plan, landed)
     if params.get("run_id"):
         _record_resume_snapshot(
             root, params["run_id"], verdict, *(kept[0] if kept and verdict.halt is None else ((), None)),
-            held=held,
+            held=held, reasons=reasons,
         )
         # XS carries the caller's baton (validated in _arm_verdict) instead of minting one.
         claimed = verdict.baton["path"] if verdict.baton else (
@@ -1075,7 +1080,7 @@ def _clear_resume_snapshot(root: Path, run_id: str) -> None:
 
 def _record_resume_snapshot(
     root: Path, run_id: str, verdict: GateVerdict, kept: Sequence[str] = (), kept_run: Optional[str] = None,
-    held: Sequence = (),
+    held: Sequence = (), reasons: Sequence = (),
 ) -> None:
     """Write the run's resume snapshot (the plan's row ids minus `resume_rows`, plus `held`) for a row
     or a ledger resume, else clear it, so a snapshot from an earlier gate call never outlives its
@@ -1097,9 +1102,10 @@ def _record_resume_snapshot(
             # A ledger resume stages exactly its unlanded rows; `ask_stage` reads this snapshot for any `only_rows`
             # call, so an empty resume set would drop every row from the stage.
             rows = verdict.resume_rows or tuple((verdict.resume_ledger or {}).get(RESUME_LEDGER_UNLANDED_FIELD) or ())
-            extra = {"held": held} if held else {}
+            not_to_run = ids - set(rows)
             resume_snapshot.write(
-                root, run_id, plan_rel, ids - set(rows), rows, kept=kept, kept_run=kept_run, **extra,
+                root, run_id, plan_rel, not_to_run, rows, kept=kept, kept_run=kept_run, held=held,
+                reasons={i: r for i, r in reasons if i in not_to_run},
             )
             return
     resume_snapshot.clear(root, run_id)

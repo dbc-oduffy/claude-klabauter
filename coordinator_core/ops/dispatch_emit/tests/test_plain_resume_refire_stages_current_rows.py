@@ -109,7 +109,10 @@ def test_live_refire_still_writes_its_own_snapshot(repo):
     _start(repo)
     _plan(repo, {"C1": "coded", "C2": "open"})
     _fire(repo)
-    assert resume_snapshot.read(repo, RUN, PLAN_REL) == resume_snapshot.Snapshot(frozenset({"C1"}), frozenset({"C2"}))
+    snap = resume_snapshot.read(repo, RUN, PLAN_REL)
+    assert snap == resume_snapshot.Snapshot(
+        frozenset({"C1"}), frozenset({"C2"}), reasons={"C1": "disposition coded"}
+    )
 
 
 def test_refire_snapshot_names_the_current_ledger(repo):
@@ -119,5 +122,7 @@ def test_refire_snapshot_names_the_current_ledger(repo):
     _plan(repo, {"C1": "coded", "C2": "open"})
     _fire(repo)
     snap = resume_snapshot.read(repo, RUN, PLAN_REL)
-    assert snap == resume_snapshot.Snapshot(frozenset({"C1"}), frozenset({"C2"}))
+    assert snap == resume_snapshot.Snapshot(
+        frozenset({"C1"}), frozenset({"C2"}), reasons={"C1": "disposition coded"}
+    )
     assert json.loads((repo / "scratch" / "warp" / RUN / "resume-snapshot.json").read_text())["resume_rows"] == ["C2"]

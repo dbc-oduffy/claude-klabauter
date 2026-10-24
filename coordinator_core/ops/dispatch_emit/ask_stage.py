@@ -33,6 +33,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     REGISTER_ROWS_UNCLAIMED_REFUSAL,
     RELAYED_ASK_FILE,
     RELAYED_ASK_HEADING,
+    ROWS_DROPPED_WITHOUT_REASON,
     RUN_DIR_ROOT,
     SPINE_SUFFIX,
     STOP_AFTER_FILE,
@@ -101,8 +102,12 @@ from coordinator_core.ops.dispatch_emit.sizing_xs_mint import mint_xs_spine
 from coordinator_core.ops.dispatch_emit.spine_read import (
     EM_OWNED_REASONS,
     InvalidChangeKindError,
+    NON_DISPATCHABLE_DISPOSITIONS,
     read_spine,
+    with_canonical_disposition,
 )
+from coordinator_core.ops.dispatch_emit import run_notes
+from coordinator_core.ops.dispatch_emit.requirements_ledger import NOTES_FILE
 from coordinator_core.ops.dispatch_emit.wave_map import build_waves, cap_waves, dag_from_waves
 from coordinator_core.ops.plan_tasks_render import load_rows
 from coordinator_core.ops.sizing_intake_contract import read_em_brief
@@ -1150,6 +1155,33 @@ def stage(
         groups=(*row_groups, *((r.id,) for r in draft_rows)),
     )
 
+    held_ids: tuple[str, ...] = ()
+    if ledger_resume:
+        held_ids = derive_held_ids(
+            raw_by_id,
+            _recorded_manifest(record),
+            [r.id for r in manifest_rows],
+            tuple(resume_snap.not_to_run) if resume_snap else (),
+        )
+    dropped_rows: tuple[dict[str, str], ...] = ()
+    if only_rows is not None:
+        dropped_rows = _unstaged_row_reasons(
+            raw_by_id=raw_by_id,
+            parse_exclusions=parse.exclusions,
+            staged={r.id for r in manifest_rows},
+            reported={
+                *(o.id for o in owed),
+                *(g.id for g in gated),
+                *retired_resume,
+                *(str(s.get("id")) for s in slot_withheld_rows(raw_by_id)),
+                *(str(c.get("id")) for c in memo_close),
+                *held_ids,
+                *(h[0] for h in (resume_snap.held if resume_snap else ())),
+            },
+            resume_snap=resume_snap,
+            plan_posix=plan_posix,
+        )
+
     docs = doc_writes(run_id, run_sizing)
     _refuse_live_write_overlap(
         root, run_id, [*declared, *docs, *(w for r in draft_rows for w in r.writes)]
@@ -1187,14 +1219,6 @@ def stage(
         r for r in ((run_sizing or {}).get("requirement_register") or {}).get("rows") or [] if isinstance(r, Mapping)
     ]
     ledger_item_ids, withheld_ids = requirements_ledger.ledger_ids(register_rows)
-    held_ids: tuple[str, ...] = ()
-    if ledger_resume:
-        held_ids = derive_held_ids(
-            raw_by_id,
-            _recorded_manifest(record),
-            [r.id for r in manifest_rows],
-            tuple(resume_snap.not_to_run) if resume_snap else (),
-        )
     manifest = StageManifest(
         run_dir=_rel(root, run_dir),
         rows=tuple(manifest_rows),
@@ -1218,7 +1242,10 @@ def stage(
         slot_withheld=tuple(slot_withheld_rows(raw_by_id)),
         memo_close=memo_close if not manifest_rows else (),
         held_ids=held_ids,
+        dropped_rows=dropped_rows,
     )
+    if dropped_rows:
+        _record_staging_drops(record, run_id, dropped_rows)
     reply_sidecar.write_reply(root, record / "manifest.json", manifest_payload(root, manifest))
     stamp_run_stage(root, run_id, "staged", steps_planned=len(manifest_rows))
     if session_id:
@@ -1230,6 +1257,68 @@ def stage(
         except LedgerError:
             pass
     return manifest
+
+
+def _unstaged_row_reasons(
+    *,
+    raw_by_id: Mapping[str, Mapping],
+    parse_exclusions: Sequence[Mapping],
+    staged: set,
+    reported: set,
+    resume_snap: Optional[resume_snapshot.Snapshot],
+    plan_posix: str,
+) -> tuple[dict[str, str], ...]:
+    """`{id, reason}` for each unfinished spine row a refire neither staged nor reports under a
+    manifest category. Refuses ROWS-DROPPED-WITHOUT-REASON, naming the rows, when one has no reason:
+    the snapshot's, the exclusion's, or (no snapshot) the caller's exact `only_rows`."""
+    excl = {str(e.get("id")): e for e in parse_exclusions}
+    dropped: list[dict[str, str]] = []
+    unreasoned: list[str] = []
+    for rid, raw in raw_by_id.items():
+        disposition = (with_canonical_disposition(raw) or {}).get("disposition")
+        if disposition in NON_DISPATCHABLE_DISPOSITIONS or rid in staged or rid in reported:
+            continue
+        reason = (resume_snap.reasons.get(rid) if resume_snap else None) or ""
+        if not reason and rid in excl:
+            e = excl[rid]
+            reason = " ".join(str(x) for x in (e.get("reason"), e.get("detail")) if x)
+        if not reason and resume_snap is None:
+            reason = "outside the caller's only_rows"
+        if reason:
+            dropped.append({"id": rid, "reason": reason})
+        else:
+            unreasoned.append(rid)
+    if unreasoned:
+        raise AskStageError(
+            f"{ROWS_DROPPED_WITHOUT_REASON}: refire of {plan_posix} leaves unfinished row(s) "
+            f"{sorted(unreasoned)} unstaged with no recorded reason; refire through dispatch.ask_gate, "
+            "which records one per row",
+            plan_path=plan_posix,
+        )
+    return tuple(dropped)
+
+
+def _record_staging_drops(record: Path, run_id: str, dropped: Sequence[Mapping[str, str]]) -> None:
+    """One `staging_drop` notes line per dropped row, skipping a (row, reason, run) already held."""
+    if not dropped:
+        return
+    from datetime import datetime, timezone
+
+    from coordinator_core.atomic_append import append_line
+    from coordinator_core.session.declared_writes import declare_write
+
+    notes = record / NOTES_FILE
+    notes.parent.mkdir(parents=True, exist_ok=True)
+    held = {(e["id"], e["reason"], e["run"]) for e in run_notes.drop_entries(notes)}
+    at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    wrote = False
+    for d in dropped:
+        if (d["id"], d["reason"][: run_notes.REASON_CAP], run_id) in held:
+            continue
+        append_line(notes, run_notes.drop_line(d["id"], d["reason"], at, run_id))
+        wrote = True
+    if wrote:
+        declare_write(notes)
 
 
 def _adopts_stranded(raw: Optional[Mapping]) -> bool:

@@ -236,6 +236,8 @@ def resumable_plan(
     also needs the newest ledger-check halt's committed record to have staged every one of them
     (`_ledger_halt_for`), pointer or no pointer; a row it did not stage keeps `ResumePlan.rows`,
     except an inbound-memo-close row, which the halted manifest never stages and so is exempt.
+    `ResumePlan.not_run_reasons` names the evidence for each spine row the gate does not stage, from
+    sets already computed here (no new read or spawn).
     """
     from coordinator_core.frontmatter.body_blocks import LocateStatus
     from coordinator_core.ops.dispatch_emit.spine_read import (
@@ -262,19 +264,23 @@ def resumable_plan(
     ids = [r["id"] for r in rows if isinstance(r, dict) and isinstance(r.get("id"), str)]
     if not ids:
         return None
-    open_ids = [
-        r["id"]
-        for r in rows
-        if isinstance(r, dict)
-        and isinstance(r.get("id"), str)
-        and r.get("disposition") not in NON_DISPATCHABLE_DISPOSITIONS
-    ]
+    reasons: dict[str, str] = {}
+    open_ids = []
+    for r in rows:
+        if isinstance(r, dict) and isinstance(r.get("id"), str):
+            if r.get("disposition") not in NON_DISPATCHABLE_DISPOSITIONS:
+                open_ids.append(r["id"])
+            else:
+                reasons[r["id"]] = f"disposition {r.get('disposition')}"
     if open_ids:
-        open_ids = _drop_em_discharged(plan, plan_text, rows, open_ids)
+        kept_open = _drop_em_discharged(plan, plan_text, rows, open_ids)
+        reasons.update({i: "em-discharged" for i in open_ids if i not in kept_open})
+        open_ids = kept_open
     open_pre = list(open_ids)
     credited: Mapping = {}
     if open_ids:
         credited = credits_for_sizing(root, sizing_rel)
+        reasons.update({i: "credited by workflow.revise" for i in open_ids if i in credited})
         open_ids = [i for i in open_ids if i not in credited]
     state = None
     landed_open: tuple = ()
@@ -287,6 +293,9 @@ def resumable_plan(
         state = resume_landed_state(root, plan_rel)
         record, named = _blocking_named_rows(root, plan_rel, sizing_rel, plan_text, rows, open_pre, state)
         landed_open = tuple((i, state.row_shas[i]) for i in open_ids if i in state.rows and state.row_shas.get(i))
+        reasons.update(
+            {i: f"landed at {state.row_shas.get(i) or 'checkpoint'}" for i in open_ids if i in state.rows}
+        )
         open_ids = [i for i in open_ids if i not in state.rows]
         pending = list(open_ids)
         if open_ids:
@@ -296,16 +305,23 @@ def resumable_plan(
                 root, plan_rel, [r for r in rows if r.get("id") in open_ids and r.get("id") not in named]
             )
             landed_open += tuple((i, outside[i]) for i in open_ids if i in outside)
+            reasons.update({i: f"landed outside the executor at {outside[i]}" for i in open_ids if i in outside})
             open_ids = [i for i in open_ids if i not in outside]
+    ledger_reasons = tuple(sorted((i, r) for i, r in reasons.items() if i not in pending))
     halt = _ledger_halt_for(root, plan_rel, sizing_rel, rows, open_ids, state, record)
     if halt is not None:
         held = _held_rows(named, pending, credited, state)
-        return ResumePlan(plan_rel, (), ledger=replace(halt, unlanded=tuple(pending)), held=held)
+        return ResumePlan(
+            plan_rel, (), ledger=replace(halt, unlanded=tuple(pending)), held=held, not_run_reasons=ledger_reasons
+        )
     if not open_ids:
         halt = _all_landed_halt(root, plan_rel, sizing, sizing_rel, state)
         if halt is not None:
             held = _held_rows(named, pending, credited, state)
-            return ResumePlan(plan_rel, (), ledger=replace(halt, unlanded=tuple(pending)), held=held)
+            return ResumePlan(
+                plan_rel, (), ledger=replace(halt, unlanded=tuple(pending)), held=held,
+                not_run_reasons=ledger_reasons,
+            )
         from coordinator_core.ops.dispatch_emit.halted_run_route import halted_route_for_sizing
 
         refusal = f"{plan_rel} already ran: every row is landed and nothing is left to judge; residue is a new sizing naming it"
@@ -313,11 +329,15 @@ def resumable_plan(
         raise SizingFireRefused([f"{refusal} {route}" if route else refusal])
     unclaimed_halt = _unclaimed_rows_halt(root, plan_rel, plan_text, sizing, sizing_rel, pending)
     if unclaimed_halt is not None:
-        return ResumePlan(plan_rel, (), ledger=unclaimed_halt, held=_held_rows(named, pending, credited, state))
+        return ResumePlan(
+            plan_rel, (), ledger=unclaimed_halt, held=_held_rows(named, pending, credited, state),
+            not_run_reasons=ledger_reasons,
+        )
     kept, kept_run = _kept_rows(root, sizing_rel, open_ids)
     return ResumePlan(
         plan_rel, tuple(open_ids), landed_open=landed_open, kept=kept, kept_run=kept_run,
         held=_held_rows(named, open_ids, credited, state),
+        not_run_reasons=tuple(sorted(reasons.items())),
     )
 
 

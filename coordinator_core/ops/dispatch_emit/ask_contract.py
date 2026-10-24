@@ -711,6 +711,8 @@ ALL_LANDED_HALT_KIND = "all-landed"
 UNCLAIMED_ROWS_HALT_KIND = "unclaimed-rows"
 #: Stage refusal code for a plan whose claims omit register rows.
 REGISTER_ROWS_UNCLAIMED_REFUSAL = "REGISTER-ROWS-UNCLAIMED"
+#: Stage refusal prefix for a refire whose staged set omits unfinished plan rows with no recorded reason.
+ROWS_DROPPED_WITHOUT_REASON = "ROWS-DROPPED-WITHOUT-REASON"
 #: `resume_ledger` verdict key carrying the halted kind; absent means `LEDGER_HALT_KIND`.
 RESUME_LEDGER_KIND_FIELD = "kind"
 #: The run's recorded review outcome, in its record dir; the source of a re-fire's `inline_review`.
@@ -1011,6 +1013,8 @@ class ResumePlan(NamedTuple):
     kept: tuple[str, ...] = ()
     kept_run: str | None = None
     held: tuple[tuple[str, str], ...] = ()
+    #: ``(row id, reason)`` for each spine row the gate does not hand the stage.
+    not_run_reasons: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -1250,9 +1254,13 @@ class StageManifest:
     #: Plan chunk ids a ledger resume holds unrun; serialised only when non-empty, an absent
     #: key (a pre-change manifest) reads as ``()``.
     held_ids: tuple[str, ...] = ()
+    #: Unfinished plan rows the stage did not stage, as `{id, reason}`; serialised only when non-empty.
+    dropped_rows: tuple[dict[str, str], ...] = ()
 
     def to_json(self) -> dict[str, Any]:
         out = self._base_json()
+        if self.dropped_rows:
+            out["dropped_rows"] = [dict(r) for r in self.dropped_rows]
         if self.held_ids:
             out["held_ids"] = list(self.held_ids)
         if self.write_baseline:
@@ -1310,6 +1318,7 @@ class StageManifest:
             slot_withheld=tuple(dict(r) for r in data.get("slot_withheld") or ()),
             memo_close=tuple(dict(r) for r in data.get("memo_close") or ()),
             held_ids=tuple(str(i) for i in data.get("held_ids") or ()),
+            dropped_rows=tuple(dict(r) for r in data.get("dropped_rows") or ()),
             wave_test_targets={
                 str(k): tuple(v) for k, v in (data.get("wave_test_targets") or {}).items()
             },

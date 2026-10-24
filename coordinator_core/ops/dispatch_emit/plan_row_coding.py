@@ -14,7 +14,11 @@ from pathlib import Path
 from typing import Optional
 
 from coordinator_core.ops._path_guard import contained_path
-from coordinator_core.ops.dispatch_emit.ask_contract import SPINE_SUFFIX
+from coordinator_core.ops.dispatch_emit.ask_contract import (
+    _HALT_SUBJECT_RE,
+    HALT_PLAN_TRAILER,
+    SPINE_SUFFIX,
+)
 from coordinator_core.ops.dispatch_emit.checkpoint_stamp import (
     CHECKPOINT_PLAN_LINE,
     CHECKPOINT_SUBJECT,
@@ -362,9 +366,24 @@ def close_memo_rows_delivered(plan_text: str, receipts: dict) -> tuple:
     return plan_text[:start] + new_body + plan_text[end:], sorted(targets)
 
 
+_HALT_PLAN_LINE = re.compile(rf"^{re.escape(HALT_PLAN_TRAILER)}:[ \t]*(?P<v>\S+)[ \t]*$", re.MULTILINE)
+
+
+def _is_foreign_executor_commit(message: str, plan_path: str) -> bool:
+    """True for another plan's checkpoint commit or a halt-record commit naming another plan."""
+    subject = (message.splitlines() or [""])[0].strip()
+    if CHECKPOINT_SUBJECT.match(subject):
+        m = CHECKPOINT_PLAN_LINE.search(message)
+        return m is not None and m.group("v") != plan_path
+    if _HALT_SUBJECT_RE.match(subject):
+        m = _HALT_PLAN_LINE.search(message)
+        return m is not None and m.group("v") != plan_path
+    return False
+
+
 def outside_landings(
     worktree_root: Path, terminal_sha: str, plan_path: Optional[str], chunks: list, *,
-    include_start: bool = False, after_creation: bool = False,
+    include_start: bool = False, after_creation: bool = False, skip_foreign_runs: bool = False,
 ) -> dict:
     """Chunk id -> landing shas (newest first) of commits outside this run that landed every declared write.
 
@@ -373,6 +392,7 @@ def outside_landings(
     ``REVIEW_WALK_CAP`` or at the first commit without the plan file, so nothing older
     than the plan counts. A commit lands a path when its blob differs from its first
     parent's. A chunk is present only when every entry of ``paths`` has a landing commit.
+    ``skip_foreign_runs`` also steps over another plan's checkpoint and a halt-record commit naming another plan.
     """
     from coordinator_core.git.commit_walk import commit_meta
     from coordinator_core.git.git_dir import resolve_git_common_dir
@@ -411,6 +431,8 @@ def outside_landings(
             CHECKPOINT_SUBJECT.match((message.splitlines() or [""])[0].strip())
             and (m := CHECKPOINT_PLAN_LINE.search(message)) is not None and m.group("v") == plan_path
         )
+        if skip_foreign_runs and _is_foreign_executor_commit(message, plan_path):
+            stepped_over = True
         if not stepped_over:
             walked.append((sha, parent))
         if parent is None:
@@ -448,7 +470,10 @@ def outside_landing_attribution(
 def rows_landed_outside_executor(worktree_root: Path, plan_path: str, rows: list) -> dict:
     """Row id -> newest landing sha for each ``open`` row of ``plan_path`` whose every declared write
     a commit at or before HEAD already landed. The walk is in-process (zero spawns) and bounded by the
-    plan file's creation commit, itself excluded, so a write at or before the plan never counts. A row with no ``writes`` is absent."""
+    plan file's creation commit, itself excluded, so a write at or before the plan never counts. A row with no ``writes`` is absent.
+
+    Trap: another plan's checkpoint or another run's halt-record commit landing a shared file is that
+    plan's work, not this row's, so such commits are never credited (``skip_foreign_runs``)."""
     from types import SimpleNamespace
 
     from coordinator_core.git.git_state import head_sha
@@ -465,5 +490,6 @@ def rows_landed_outside_executor(worktree_root: Path, plan_path: str, rows: list
         cid: shas[0]
         for cid, shas in outside_landings(
             worktree_root, head, plan_path, chunks, include_start=True, after_creation=True,
+            skip_foreign_runs=True,
         ).items()
     }

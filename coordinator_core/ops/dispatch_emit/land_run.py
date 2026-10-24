@@ -2853,10 +2853,33 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
 
     index_stale: list = []
 
+    from coordinator_core.git import merge_owner
+    from coordinator_core.ops.dispatch_emit import merge_landing
+
+    commit_set, commit_deleted = paths, deleted
+    merge_plan = merge_landing.landing_plan(
+        root, paths, deleted, product=set(declared), owner_run_id=sibling_run_id or "",
+    )
+    merge_artifacts: dict = {}
+    merge_keep: set = set()
+    if merge_plan is not None and merge_plan.get("refusal"):
+        _remove(root, receipt_paths)
+        return _error(merge_plan["refusal"], **merge_plan["extra"])
+    if merge_plan is not None and not merge_plan.get(merge_landing.FOREIGN_KEY):
+        commit_set, commit_deleted = merge_plan["paths"], merge_plan["deleted"]
+        merge_artifacts = merge_plan["artifacts"]
+        merge_keep = set(commit_set)
+    else:
+        merge_plan = None
+
     def _attempt():
         try:
             return commit_paths(
-                root, paths, message, deleted_paths=deleted, expected_content_sha256=expected or None,
+                root, commit_set, message, deleted_paths=commit_deleted,
+                expected_content_sha256=(
+                    {k: v for k, v in expected.items() if k in merge_keep} if merge_plan is not None else expected
+                ) or None,
+                finish_merge=merge_plan is not None,
                 allow_empty=params.get("allow_empty") is True or ((anchor_only or request.review_only or fixes_anchor) and review_trailed),
                 blob_fallback=lambda ps: hash_worktree_blobs_via_spawn(ps, cwd=root),
             )
@@ -2867,7 +2890,7 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
 
     # Receipt files are run-unique, so no peer commit can have touched them.
     own_receipts = set(receipt_paths)
-    overlap_paths = [p for p in [*paths, *deleted] if p not in own_receipts]
+    overlap_paths = [p for p in [*commit_set, *commit_deleted] if p not in own_receipts]
     drift_moved = False
     while True:
         try:
@@ -2891,7 +2914,7 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
                 # A comment-only edit after the review read the bytes is not a different reviewed
                 # product: the expectation moves once and the drift rides a trailer.
                 tolerated, real = tolerated_drift(
-                    root, inline_review.get("prep_sidecar"), drift, untrusted_paths=[*paths, *deleted]
+                    root, inline_review.get("prep_sidecar"), drift, untrusted_paths=[*commit_set, *commit_deleted]
                 )
                 if tolerated and not real:
                     expected = {**expected, **{t["path"]: t["actual"] for t in tolerated}}
@@ -2930,6 +2953,10 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
             return _error(f"{type(exc).__name__}: {exc}", refused="commit")
 
     sha = outcome.sha
+    merge_artifacts_reply: Optional[dict] = None
+    if merge_plan is not None:
+        merge_owner.clear(root)
+        merge_artifacts_reply = _land_merge_artifacts(root, merge_artifacts, message, sha)
     _exclude_withheld()
     token_state["landed"] = True
     _settle_token(token_state, landed=True, receipt={"sha": sha, "rows": credited_ids, "paths": list(paths)})
@@ -2960,6 +2987,9 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
     }
     if script_source == "receipt":
         reply["script_source"] = script_source
+    if merge_artifacts_reply is not None:
+        reply["merge_parent"] = outcome.merge_parent
+        reply["merge_artifacts"] = merge_artifacts_reply
     if reach_summary:
         reply["reach_claims"] = reach_summary
     if shipped_summary:
@@ -3226,6 +3256,27 @@ def _withhold_reasons(root: Path, artifacts, record_dir_rel: Optional[str]) -> d
     return run_withhold.read(root / d for d in reversed(dirs))
 
 
+def _land_merge_artifacts(root: Path, artifacts: dict, message: str, merge_sha: str) -> dict:
+    """One ordinary single-parent commit for the run artifacts the merge commit left out; the
+    merge commit stands whatever this returns. Twin of terminal_commit._land_merge_artifacts;
+    test_land_run_finishes_a_merge pins the two messages equal."""
+    if not artifacts["paths"] and not artifacts["deleted"]:
+        return {"committed": False, "nothing_to_commit": True}
+    from coordinator_core.git.commit import commit_paths, hash_worktree_blobs_via_spawn
+
+    subject = (message.splitlines() or ["run artifacts"])[0]
+    try:
+        out = commit_paths(
+            root, artifacts["paths"],
+            f"{subject} (run artifacts)\n\nFollows merge commit {merge_sha[:12]}.\n",
+            deleted_paths=artifacts["deleted"],
+            blob_fallback=lambda ps: hash_worktree_blobs_via_spawn(ps, cwd=root),
+        )
+    except Exception as exc:  # noqa: BLE001 -- the merge already landed; report, never raise
+        return {"committed": False, "error": f"{type(exc).__name__}: {exc}"}
+    return {"committed": True, "sha": out.sha}
+
+
 def _integrity(
     root: Path, params: dict, paths: list, deleted: list, record_abs: Optional[Path], run_id: str,
     plan: Optional[str], *, residue_py: Sequence[str] = (), own_declared: Sequence[str] = (),
@@ -3258,13 +3309,29 @@ def _integrity(
             "", li.IMPORT_CLOSURE_UNTRACKED, f"residue import scan failed: {type(exc).__name__}: {exc}",
         ))
     base = li.run_base_for(root, run_id, params)
-    if base is not None:
-        findings += li.since_base_findings(root, live, base, run_id=run_id, plan=plan)
-    from coordinator_core.ops.dispatch_emit import peer_hunk_gate
+    from coordinator_core.git import merge_owner
 
-    for path, sibling in peer_hunk_gate.co_declared_peer_holds(
+    # The merge owner skips the since-base scan for the merge's own paths only: a resolution that
+    # takes the other side drops this side's lines by design. A path the merge does not move is
+    # still scanned. No readable merge state exempts nothing (fail closed).
+    if base is not None:
+        scan = live
+        if run_id and merge_owner.owner(root) == run_id:
+            from coordinator_core.git import merge_state
+
+            try:
+                state = merge_state.read_merge_state(root)
+            except merge_state.MergeStateError:
+                state = None
+            if state is not None:
+                moved = set(state.merge_paths)
+                scan = [p for p in live if p not in moved]
+        findings += li.since_base_findings(root, scan, base, run_id=run_id, plan=plan)
+    from coordinator_core.ops.dispatch_emit import merge_ancestry_release, peer_hunk_gate
+
+    for path, sibling in merge_ancestry_release.release(root, peer_hunk_gate.co_declared_peer_holds(
         root, run_id, live, own_declared, own_plan=plan, minted_before=minted_before,
-    ):
+    )):
         findings.append(li.Finding(
             path, peer_hunk_gate.PEER_HUNKS_CO_DECLARED,
             f"{sibling}: also declared by that unlanded run, whose hunks a path commit cannot split off",

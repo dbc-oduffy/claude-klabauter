@@ -5,13 +5,16 @@ handed the stage to run. The gate writes `<repo>/scratch/warp/<run_id>/resume-sn
 stage reads it so a re-plan's added rows are staged, landed or closed rows stay dropped, and a
 resume row the re-plan retired is told apart from an unknown id. Leaf module: no subprocess, no
 import from terminal_commit or ask_compose.
+
+`reasons` is the gate's reason for each `not_to_run` id.
 """
 
 from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Iterable, NamedTuple, Optional
+from types import MappingProxyType
+from typing import Iterable, Mapping, NamedTuple, Optional
 
 from coordinator_core.ops._path_guard import contained_path, safe_id
 from coordinator_core.ops.dispatch_emit.ask_contract import RUN_DIR_ROOT
@@ -38,7 +41,8 @@ class Snapshot(NamedTuple):
     resume_rows: frozenset
     kept: frozenset = frozenset()
     kept_run: Optional[str] = None
-    held: tuple[tuple[str, str], ...] = ()
+    held: tuple = ()
+    reasons: Mapping[str, str] = MappingProxyType({})
 
 
 def write(
@@ -50,6 +54,7 @@ def write(
     kept: Iterable[str] = (),
     kept_run: Optional[str] = None,
     held: Iterable = (),
+    reasons: Mapping[str, str] = MappingProxyType({}),
 ) -> Optional[Path]:
     """Write the snapshot; return its path, or None (nothing written) for an unsafe run_id or an unwritable run dir."""
     path = _snapshot_path(repo_root, run_id)
@@ -65,6 +70,8 @@ def write(
     if kept_run:
         body["kept_run"] = kept_run
     body["held"] = [{"id": i, "reason": r} for i, r in held]
+    if reasons:
+        body["reasons"] = {k: reasons[k] for k in sorted(reasons)}
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(body, indent=2) + "\n", encoding="utf-8")
@@ -101,12 +108,19 @@ def read(repo_root: Path, run_id: str, plan_rel: str) -> Optional[Snapshot]:
         for h in (held_raw if isinstance(held_raw, list) else [])
         if isinstance(h, dict) and isinstance(h.get("id"), str) and isinstance(h.get("reason"), str)
     )
+    reasons_raw = body.get("reasons", {})
+    reasons = MappingProxyType(
+        {k: v for k, v in reasons_raw.items() if isinstance(k, str) and isinstance(v, str)}
+        if isinstance(reasons_raw, dict)
+        else {}
+    )
     return Snapshot(
         frozenset(rows),
         frozenset(resume),
         frozenset(kept),
         kept_run if isinstance(kept_run, str) and kept_run else None,
         held,
+        reasons,
     )
 
 

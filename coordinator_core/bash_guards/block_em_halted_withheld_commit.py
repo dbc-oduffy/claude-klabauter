@@ -140,6 +140,26 @@ def _merge_in_progress(root: str) -> bool:
     return os.path.exists(os.path.join(dot_git, "MERGE_HEAD"))
 
 
+def _drop_merge_owner_hits(root: str, hits: Set[str], indexed: Dict[str, str]) -> Set[str]:
+    """Drops hits withheld by the run that started the live merge, when the index (scoped to the
+    withheld set) holds no unmerged entry. No owner, or an unreadable index, keeps every hit.
+    Every owner-withheld hit drops, whether or not the path is one the merge changed.
+    Spawn-free: file reads only."""
+    from coordinator_core.git import git_index, merge_owner
+
+    run_id = merge_owner.owner(root)
+    if run_id is None:
+        return hits
+    unmerged: Set[str] = set()
+    try:
+        git_index.parse_index_identity(root, set(indexed), unmerged_out=unmerged)
+    except Exception:
+        return hits
+    if unmerged:
+        return hits
+    return {p for p in hits if indexed[p] != run_id}
+
+
 def _drop_landed_merge_paths(root: str, hits: Set[str]) -> Set[str]:
     """Hits whose staged blob matches neither MERGE_HEAD's nor HEAD's blob (one batched cat-file).
     An unreadable answer keeps every hit."""
@@ -284,7 +304,10 @@ def _scan_text(cmd: str, scan: _Scan, depth: int) -> None:
             if not hits and sweeping:
                 hits.update(p for p in _git_names(root, "diff", "--name-only") if p in indexed)
         if hits and _merge_in_progress(root):
-            hits = _drop_landed_merge_paths(root, hits)
+            if not specs and not sweeping:
+                hits = _drop_merge_owner_hits(root, hits, indexed)
+            if hits:
+                hits = _drop_landed_merge_paths(root, hits)
         if hits:
             first = sorted(hits)[0]
             scan.hit = (indexed[first], first if len(hits) == 1 else f"{first} (+{len(hits) - 1} more)")

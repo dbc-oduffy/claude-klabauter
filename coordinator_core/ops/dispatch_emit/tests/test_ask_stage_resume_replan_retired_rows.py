@@ -17,6 +17,7 @@ from coordinator_core.ops.dispatch_emit.tests.test_ask_stage_resume_added_rows i
 
 GATE_RESUME = ["C4", "C5A", "C5B", "C6A", "C6B"]
 LANDED = ["C0", "C1", "C2", "C3"]
+_LANDED_REASONS = {r: "landed" for r in LANDED}
 
 
 def _landed_rows() -> str:
@@ -28,7 +29,7 @@ def test_incident_shape_stages_new_spine_and_reports_retired(tmp_path):
         tmp_path,
         _landed_rows() + _row("C1B") + _row("C4", _dep("C1B")) + _row("C5B", _dep("C1B", "C4")),
     )
-    resume_snapshot.write(tmp_path, RUN, PLAN_REL, LANDED, GATE_RESUME)
+    resume_snapshot.write(tmp_path, RUN, PLAN_REL, LANDED, GATE_RESUME, reasons=_LANDED_REASONS)
     reply = _stage(tmp_path, GATE_RESUME)
     assert "error" not in reply
     rows = {r["id"]: r for r in reply["rows"]}
@@ -39,7 +40,7 @@ def test_incident_shape_stages_new_spine_and_reports_retired(tmp_path):
 
 def test_retire_one_open_row_and_add_one(tmp_path):
     _plan(tmp_path, _row("A0") + _row("A2") + _row("A3"))
-    resume_snapshot.write(tmp_path, RUN, PLAN_REL, ["A0"], ["A1", "A2"])
+    resume_snapshot.write(tmp_path, RUN, PLAN_REL, ["A0"], ["A1", "A2"], reasons={"A0": "landed"})
     reply = _stage(tmp_path, ["A1", "A2"])
     assert "error" not in reply
     assert {r["id"] for r in reply["rows"]} == {"A2", "A3"}
@@ -48,7 +49,7 @@ def test_retire_one_open_row_and_add_one(tmp_path):
 
 def test_no_replan_stages_open_rows_and_reports_nothing(tmp_path):
     _plan(tmp_path, _landed_rows() + _row("C4") + _row("C5A"))
-    resume_snapshot.write(tmp_path, RUN, PLAN_REL, LANDED, ["C4", "C5A"])
+    resume_snapshot.write(tmp_path, RUN, PLAN_REL, LANDED, ["C4", "C5A"], reasons=_LANDED_REASONS)
     reply = _stage(tmp_path, ["C4", "C5A"])
     assert {r["id"] for r in reply["rows"]} == {"C4", "C5A"}
     assert reply["retired_resume_rows"] == []

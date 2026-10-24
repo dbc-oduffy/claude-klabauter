@@ -15,6 +15,7 @@ from typing import Iterable
 NOTE_ID_PREFIX = "N"
 RETRACTS_FIELD = "retracts"
 REASON_CAP = 500
+DROP_FIELD = "staging_drop"
 _ID_RE = re.compile(r"^N[1-9][0-9]*$")
 
 
@@ -22,6 +23,7 @@ def entries(path: Path, run_id: str) -> list[dict]:
     """Valid note lines of ``path`` oldest first as ``{id, note, at, run, retracted}``; never raises.
 
     ``retracted`` is ``None`` or ``{reason, at, from}`` from the first retraction line naming the id.
+    Staging-drop lines are never notes.
     """
     try:
         raw = Path(path).read_text(encoding="utf-8")
@@ -88,6 +90,35 @@ def retraction_line(note_id: str, reason: str, at: str, sender: str) -> bytes:
     if sender:
         obj["from"] = sender
     return (json.dumps(obj, ensure_ascii=False) + "\n").encode("utf-8")
+
+
+def drop_line(row_id: str, reason: str, at: str, run_id: str) -> bytes:
+    """One JSON staging-drop line: a plan row the stage did not stage, and why."""
+    obj = {DROP_FIELD: row_id, "reason": reason[:REASON_CAP], "at": at, "run": run_id}
+    return (json.dumps(obj, ensure_ascii=False) + "\n").encode("utf-8")
+
+
+def drop_entries(path: Path) -> list[dict]:
+    """Valid staging-drop lines of ``path`` oldest first as ``{id, reason, at, run}``; never raises."""
+    try:
+        raw = Path(path).read_text(encoding="utf-8")
+    except (OSError, ValueError):
+        return []
+    out: list[dict] = []
+    for line in raw.splitlines():
+        try:
+            obj = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(obj, dict) or not isinstance(obj.get(DROP_FIELD), str):
+            continue
+        out.append({
+            "id": obj[DROP_FIELD],
+            "reason": obj.get("reason") if isinstance(obj.get("reason"), str) else "",
+            "at": obj.get("at") if isinstance(obj.get("at"), str) else "",
+            "run": obj.get("run") if isinstance(obj.get("run"), str) else "",
+        })
+    return out
 
 
 def render_section(items: list[dict]) -> list[str]:

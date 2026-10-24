@@ -36,7 +36,10 @@ def test_resume_writes_plan_ids_minus_resume_rows(repo):  # noqa: F811
     _plan(repo, rows=[("A1", "coded"), ("A2", "open"), ("A3", "delivered_elsewhere"), ("A4", "open")])
     reply = _call(repo)
     assert reply["resume_rows"] == ["A2", "A4"]
-    assert _snap(repo) == resume_snapshot.Snapshot(frozenset({"A1", "A3"}), frozenset({"A2", "A4"}))
+    assert _snap(repo) == resume_snapshot.Snapshot(
+        frozenset({"A1", "A3"}), frozenset({"A2", "A4"}),
+        reasons={"A1": "disposition coded", "A3": "disposition delivered_elsewhere"},
+    )
 
 
 def test_no_run_id_writes_nothing(repo):  # noqa: F811
@@ -50,7 +53,9 @@ def test_no_resume_removes_an_earlier_snapshot(repo):  # noqa: F811
     _put(repo, tshirt="S", route="spec-dispatch")
     _plan(repo, rows=[("A1", "coded"), ("A2", "open")])
     _call(repo)
-    assert _snap(repo) == resume_snapshot.Snapshot(frozenset({"A1"}), frozenset({"A2"}))
+    assert _snap(repo) == resume_snapshot.Snapshot(
+        frozenset({"A1"}), frozenset({"A2"}), reasons={"A1": "disposition coded"}
+    )
     (repo / PLAN_REL).unlink()
     reply = _call(repo)
     assert "resume_rows" not in reply
