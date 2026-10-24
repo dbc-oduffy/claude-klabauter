@@ -5,6 +5,7 @@ holder's dirty declared paths that H's own work explains. The rules, first match
 
 1. p not in H's `write_baseline` (or H's manifest unreadable): hold -- unknown is not unchanged.
 2. the tree's blob equals H's baseline for p: release -- H left nothing.
+2b. the tree's blob equals a blob H's `kept.json` fingerprints for p: hold -- the hunks are H's.
 3. L unknown, p not in L's `write_baseline`, or H's halt not provably before L's start: hold.
 4. L's baseline equals H's for p: release -- the tree delta is L's own.
 5. the index entry for p equals L's baseline: release -- bH to bL is committed history.
@@ -145,6 +146,22 @@ def reader(
             root, landing_plan, base if isinstance(base, str) else None, sorted(wanted),
         )
 
+    def kept_blobs(halted_run_id: str, p: str) -> set:
+        """Blob shas H's `kept.json` fingerprints for `p`; empty when absent or unreadable."""
+        from coordinator_core.ops.dispatch_emit import kept_work
+        from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
+
+        try:
+            chunks = kept_work.read(record_dir(root, halted_run_id))["chunks"].values()
+        except ValueError:
+            return set()
+        found = set()
+        for chunk in chunks:
+            paths = chunk.get("paths") if isinstance(chunk, dict) else None
+            if isinstance(paths, dict):
+                found.update(v for k, v in paths.items() if _norm(k) == p and isinstance(v, str))
+        return found
+
     def attributable(halted_run_id: str, paths: Iterable[str]) -> set:
         wanted = {_norm(p) for p in paths if p}
         wanted.discard("")
@@ -170,8 +187,11 @@ def reader(
             def holds(p: str) -> bool:
                 if p not in b_h:
                     return True
-                if fingerprint(root, p) == b_h[p]:
+                current = fingerprint(root, p)
+                if current == b_h[p]:
                     return False
+                if current is not None and current in kept_blobs(halted_run_id, p):
+                    return True
                 b_l = landing_baseline()
                 if b_l is None or p not in b_l or not halted_before_landing():
                     return True

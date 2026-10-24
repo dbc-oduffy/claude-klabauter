@@ -330,10 +330,10 @@ def _halted_declaring_dirty(repo: Path, monkeypatch, path: str = "p/a.py", *, ke
     from coordinator_core.ops.dispatch_emit import kept_work
 
     run_id = _stamped("bbbb5e")
-    rdir = _declare(repo, run_id, path)
+    rdir = _declare(repo, run_id, path, write_baseline={path: kept_work.blob_sha(b"baseline = 0\n")})
     _halt(rdir)
     (repo / path).parent.mkdir(parents=True, exist_ok=True)
-    (repo / path).write_text("current = 1\n", encoding="utf-8")
+    (repo / path).write_bytes(b"current = 1\n")
     if kept is not None:
         blob = kept_work.blob_sha(kept.encode("utf-8"))
         (rdir / "kept.json").write_text(
@@ -354,7 +354,15 @@ def test_halted_sibling_that_recorded_nothing_claims_nothing_on_a_dirty_declared
 
 
 def test_halted_sibling_whose_kept_blob_matches_the_current_file_still_claims_it(repo, monkeypatch):
+    """The landing run shares the halted run's baseline and started after the halt, so only rule 2b
+    (kept blob == current) keeps the path held."""
+    from coordinator_core.ops.dispatch_emit import kept_work
+
     run_id = _halted_declaring_dirty(repo, monkeypatch, kept="current = 1\n")
+    own_dir = _declare(repo, OWN, "p/a.py", write_baseline={"p/a.py": kept_work.blob_sha(b"baseline = 0\n")})
+    (own_dir / "run-stage.json").write_text(
+        json.dumps({"stage": "running", "started_at": "2999-01-01T00:00:00Z"}), encoding="utf-8",
+    )
     assert sibling_claims.sibling_run_claims(repo, OWN, ["p/a.py"]) == {"p/a.py": run_id}
 
 
