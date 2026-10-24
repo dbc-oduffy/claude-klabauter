@@ -1,6 +1,8 @@
 """group-em-memory-governor — pause the command that pushed the box into critical memory pressure.
 
-Runs as the Group EM's session-long `run_in_background` shell, `python -u` appending to a log;
+Started from a Claude Code session it detaches itself on start (outside the session's process tree
+and job, so the session's low-memory reap cannot kill it), prints `DETACHED ... log=PATH` and exits;
+the detached child appends to `--log` (default `<settings home>/scratch/governor.log`).
 `group-em-memory-governor-wait.py <log>` is the one-shot wake on that log. Never run it under a
 `Monitor`: the Monitor's 30-minute expiry kills the governor, wakes the Group EM for nothing, and
 re-arming costs a turn. It samples the kernel's own pressure verdict and
@@ -568,6 +570,14 @@ def run(args: argparse.Namespace, emit: Callable[[str], None] = print,
                 pass
 
 
+def _settings_home() -> Path:
+    env = os.environ.get("COORDINATOR_SETTINGS_HOME")
+    if env:
+        return Path(env)
+    base = os.environ.get("CLAUDE_HOME") or str(Path.home())
+    return Path(base) / ".coordinator-claude-settings"
+
+
 def main(argv: Optional[list[str]] = None) -> None:
     ap = argparse.ArgumentParser(description=(__doc__ or "").split("\n", 1)[0])
     ap.add_argument("--interval", type=float, default=10.0, help="seconds between samples")
@@ -578,7 +588,20 @@ def main(argv: Optional[list[str]] = None) -> None:
     ap.add_argument("--runaway-mb", type=float, default=12288.0,
                     help="footprint that flags one process as a runaway; 0 disables")
     ap.add_argument("--runaway-every", type=int, default=6, help="samples between footprint reads")
+    ap.add_argument("--log", type=Path, default=None,
+                    help="log the detached governor appends to (default <settings home>/scratch/governor.log)")
     args = ap.parse_args(argv)
+    lib = str(Path(__file__).resolve().parent / "lib")
+    if lib not in sys.path:
+        sys.path.insert(0, lib)
+    import session_detach  # type: ignore
+    log = args.log or _settings_home() / "scratch" / "governor.log"
+    child_argv = list(sys.argv[1:] if argv is None else argv)
+    if "--log" not in child_argv:
+        child_argv += ["--log", str(log)]
+    rc = session_detach.ensure_detached("group-em-memory-governor", child_argv, log)
+    if rc is not None:
+        sys.exit(rc)
     getattr(sys.stdout, "reconfigure", lambda **_: None)(line_buffering=True)
     for sig in (signal.SIGTERM, getattr(signal, "SIGHUP", None)):
         if sig is not None:

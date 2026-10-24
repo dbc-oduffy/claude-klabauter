@@ -76,7 +76,6 @@ def test_halted_sibling_withholding_nothing_claims_nothing(repo):
     run_id = _stamped("aaaaab")
     _halt(_declare(repo, run_id, "other/b.py"))
     assert sibling_claims.sibling_run_claims(repo, OWN, ["other/b.py"]) == {}
-    assert sibling_claims._unlanded_run_ids(repo, OWN) == []
 
 
 def test_halted_sibling_withholding_another_path_does_not_claim_this_one(repo):
@@ -185,6 +184,77 @@ def test_shared_dir_holds_excludes_the_run_itself(repo):
     assert sibling_claims.shared_dir_holds(repo, run_id, ["shared/a.py"], ["shared/dirt.py"]) == []
 
 
+SIZING = "state/sizings/s.yaml"
+
+
+def _aged(age: int, tail: str) -> str:
+    return f"ask-{time.strftime('%Y%m%dT%H%M%S', time.gmtime(time.time() - age))}-{tail}"
+
+
+def _bind(repo: Path, run_id: str, marker: str | None, *, sizing: str = SIZING, plan: str | None = None, withheld: tuple = ()) -> None:
+    rec = repo / "state" / "warp" / run_id
+    rec.mkdir(parents=True, exist_ok=True)
+    (rec / "run.json").write_text(json.dumps({"sizing_rel": sizing}), encoding="utf-8")
+    if marker:
+        body = {"status": marker, "sizing_rel": sizing, **({"plan": plan} if plan else {})}
+        if withheld:
+            body["run_artifacts"] = {"withheld": {p: "left in tree" for p in withheld}}
+        (rec / "halted.json").write_text(json.dumps(body), encoding="utf-8")
+
+
+def _sizing(repo: Path, rel: str, status: str = "open") -> None:
+    (repo / rel).parent.mkdir(parents=True, exist_ok=True)
+    (repo / rel).write_text(f"status: {status}\n", encoding="utf-8")
+
+
+def test_halted_run_with_superseded_sizing_or_plan_landing_is_not_unlanded(repo):
+    _sizing(repo, SIZING, "superseded")
+    halted = _aged(300, "aaaaaa")
+    _declare(repo, halted, "p/a.py")
+    _bind(repo, halted, "halted", plan="docs/plans/p.md", withheld=("p/a.py",))
+    assert sibling_claims._unlanded_run_ids(repo, OWN) == []
+    assert sibling_claims.sibling_run_claims(repo, OWN, ["p/a.py"]) == {}
+    _sizing(repo, SIZING)
+    assert sibling_claims._unlanded_run_ids(repo, OWN) == [halted]
+    assert sibling_claims._unlanded_run_ids(repo, OWN, "docs/plans/p.md") == []
+    assert sibling_claims.sibling_run_claims(repo, OWN, ["p/a.py"], own_plan="docs/plans/p.md") == {}
+    assert sibling_claims.shared_dir_holds(repo, OWN, ["p/own.py"], ["p/x.py"]) == ["p/x.py"]
+    assert sibling_claims.shared_dir_holds(repo, OWN, ["p/own.py"], ["p/x.py"], own_plan="docs/plans/p.md") == []
+
+
+def test_resumed_run_with_landed_successor_claims_nothing_but_unlanded_successor_still_does(repo):
+    _sizing(repo, SIZING)
+    first, second = _aged(400, "aaaaaa"), _aged(200, "bbbbbb")
+    _declare(repo, first, "p/a.py")
+    _bind(repo, first, "resumed")
+    run_token.mint(repo, first, "a.mjs", session_id=SELF)
+    _bind(repo, second, "halted")
+    assert sibling_claims._unlanded_run_ids(repo, OWN) == [first, second]
+    assert sibling_claims.sibling_run_claims(repo, OWN, ["p/a.py"]) == {"p/a.py": first}
+    _bind(repo, second, "landed")
+    assert sibling_claims._unlanded_run_ids(repo, OWN) == []
+    assert sibling_claims.sibling_run_claims(repo, OWN, ["p/a.py"]) == {}
+
+
+def test_live_peer_with_superseded_sizing_still_claims(repo):
+    _sizing(repo, SIZING, "superseded")
+    live = _aged(100, "cccccc")
+    _declare(repo, live, "p/a.py")
+    _bind(repo, live, None)
+    run_token.mint(repo, live, "c.mjs", session_id=SELF)
+    assert sibling_claims._unlanded_run_ids(repo, OWN) == [live]
+    assert sibling_claims.sibling_run_claims(repo, OWN, ["p/a.py"]) == {"p/a.py": live}
+
+
+def test_fresh_token_run_minted_at_or_after_minted_before_is_junior_and_claims_nothing(repo):
+    live = _aged(100, "cccccc")
+    _declare(repo, live, "p/a.py")
+    run_token.mint(repo, live, "c.mjs", session_id=SELF)
+    minted_at = run_token._read(run_token._record_path(repo, live, claimed=False))["minted_at"]
+    assert sibling_claims._unlanded_run_ids(repo, OWN, None, (minted_at, live)) == []
+    assert sibling_claims._unlanded_run_ids(repo, OWN, None, (minted_at + 1, live)) == [live]
+
+
 def test_filter_own_keeps_a_path_the_run_declares_and_withholds_the_rest():
     claims = {"other/b.py": "run-b", "src/a.py": "run-b"}
     kept, withheld = sibling_claims.filter_own(
@@ -211,3 +281,44 @@ def test_reland_remedy_args_are_only_the_sizing():
     line = sibling_claims.reland_remedy("state/sizings/x.yaml")
     args = json.loads(re.search(r"args: (\{.*?\})\}\)", line).group(1))
     assert args == {"sizing": "state/sizings/x.yaml"}
+
+
+def _spine_only_halted(repo: Path, path: str, withheld: tuple = ()) -> str:
+    run_id = _stamped("aaaa5e")
+    rdir = repo / "state" / "warp" / run_id
+    rdir.mkdir(parents=True)
+    (rdir / "run.json").write_text(json.dumps({"sizing_rel": "state/sizings/sp.yaml"}), encoding="utf-8")
+    marker: dict = {"status": "halted"}
+    if withheld:
+        marker["run_artifacts"] = {"withheld": {p: "left" for p in withheld}}
+    (rdir / "halted.json").write_text(json.dumps(marker), encoding="utf-8")
+    (repo / "state/sizings").mkdir(parents=True, exist_ok=True)
+    (repo / "state/sizings/sp.yaml").write_text('plan: "docs/plans/sp.md"\n', encoding="utf-8")
+    (repo / "docs/plans").mkdir(parents=True, exist_ok=True)
+    (repo / "docs/plans/sp.md").write_text(
+        "# P\n\n## Tasks\n\n```yaml plan-tasks\n- id: C0\n  writes:\n    - " + path + "\n```\n", encoding="utf-8",
+    )
+    return run_id
+
+
+@pytest.mark.parametrize("dirty, withheld, warns", [
+    ({"p/a.py"}, (), True),
+    (set(), (), False),
+    ({"p/a.py"}, ("p/a.py",), False),
+])
+def test_spine_only_halted_sibling_warns_once_when_it_frees_a_dirty_own_declared_path(
+    repo, monkeypatch, caplog, dirty, withheld, warns,
+):
+    run_id = _spine_only_halted(repo, "p/a.py", withheld)
+    monkeypatch.setattr(sibling_claims, "_dirty_reader", lambda root, wanted: (lambda: dirty))
+
+    with caplog.at_level("WARNING", logger=sibling_claims.__name__):
+        claims = sibling_claims.sibling_run_claims(repo, OWN, ["p/a.py"], own_declared=["p/a.py"])
+
+    hits = [r.getMessage() for r in caplog.records if "freed for landing run" in r.getMessage()]
+    if warns:
+        assert hits == [f"spine-only halted sibling {run_id}: dirty declared path p/a.py freed for landing run {OWN}"]
+        assert claims == {}
+    else:
+        assert hits == []
+    assert bool(claims) is bool(withheld)

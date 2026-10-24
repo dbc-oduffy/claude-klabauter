@@ -7,8 +7,10 @@ is never read) whose status is still unresolved.
 `refusal_message` words both for the operator.
 
 Invariants: in-process file reads only (no spawn); an unreadable record contributes nothing and
-nothing raises. Stdlib only at module top (land_run cold-import pin); the readers are imported
-lazily.
+nothing raises; a halted run that `halted_hold_release.release_reason` frees holds nothing; a
+junior fresh-token sibling claims nothing against a senior committer; a clean landing path is not
+contention (callers pass only the paths the commit carries). Stdlib
+only at module top (land_run cold-import pin); the readers are imported lazily.
 """
 
 from __future__ import annotations
@@ -67,11 +69,16 @@ def co_declared_peer_holds(
     own_run_id: Optional[str],
     landing_paths: Iterable[str],
     own_declared: Iterable[str],
+    *,
+    own_plan: Optional[str] = None,
+    minted_before: Optional[tuple] = None,
 ) -> list:
     """`[(path, sibling_run_id)]` for each landing path in `own_declared` that another unlanded
-    run claims: the case `sibling_claims.filter_own` lets through. A halted sibling claims only
-    the paths its halt record withholds; a live sibling with no stage manifest is also read
-    through its plan spine's `writes`. Sorted by path. Never raises."""
+    run claims: the case `sibling_claims.filter_own` lets through. A halted sibling claims what
+    its halt record withholds plus the manifest or plan-spine paths it declares that are dirty now;
+    a live sibling with no stage manifest is also read through its plan spine's `writes`. A
+    fresh-token sibling minted at or after `minted_before=(minted_at, run_id)` is junior and
+    claims nothing. Sorted by path. Never raises."""
     root = Path(worktree_root)
     wanted = sorted({_norm(p) for p in landing_paths if p} - {""})
     own = {_norm(p) for p in own_declared if p}
@@ -81,8 +88,10 @@ def co_declared_peer_holds(
         from coordinator_core.ops import warp_run_deliverable
         from coordinator_core.ops.dispatch_emit import sibling_claims
 
-        claims = dict(sibling_claims.sibling_run_claims(root, own_run_id, wanted))
-        for run_id in sibling_claims._unlanded_run_ids(root, own_run_id):
+        claims = dict(sibling_claims.sibling_run_claims(
+            root, own_run_id, wanted, own_plan=own_plan, minted_before=minted_before, own_declared=own,
+        ))
+        for run_id in sibling_claims._unlanded_run_ids(root, own_run_id, own_plan, minted_before):
             if warp_run_deliverable._halted(root, run_id):
                 continue
             paths, prefixes, _unreadable = warp_run_deliverable._manifest_declared(run_id, root)
@@ -167,12 +176,27 @@ def out_of_ask_holds(
     return sorted(holds)
 
 
-def refusal_message(holds: Iterable[tuple], run_id: str) -> str:
+def refusal_message(holds: Iterable[tuple], run_id: str, root: Optional[Path] = None) -> str:
     """The refusal text for `(path, sibling_run_id)` holds: names every sibling run, and the
-    withhold and peer-commits routes (`peer_claim_contract.refusal` wording)."""
+    withhold and peer-commits routes (`peer_claim_contract.refusal` wording). With `root`, each
+    halted holder also gets its `halted_hold_release.release_calls`; the text is otherwise unchanged."""
     from coordinator_core.ops.dispatch_emit import peer_claim_contract
 
+    pairs = list(holds)
     message, _fields = peer_claim_contract.refusal(
-        [(p, f"run {s}") for p, s in holds], run_id,
+        [(p, f"run {s}") for p, s in pairs], run_id,
     )
-    return f"{PEER_HUNKS_CO_DECLARED}: {message}"
+    text = f"{PEER_HUNKS_CO_DECLARED}: {message}"
+    if root is None:
+        return text
+    try:
+        from coordinator_core.ops import warp_run_deliverable
+        from coordinator_core.ops.dispatch_emit import halted_hold_release
+
+        for holder in sorted({s for _p, s in pairs}):
+            if warp_run_deliverable._halted(Path(root), holder):
+                calls = "; ".join(halted_hold_release.release_calls(Path(root), holder))
+                text += f" Release run {holder}: {calls}."
+    except Exception:  # noqa: BLE001 -- release wording unknown: the base refusal stands
+        return text
+    return text

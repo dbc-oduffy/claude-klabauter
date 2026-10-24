@@ -169,9 +169,9 @@ def test_an_arm_outside_the_allow_list_is_excluded_not_landed(repo, monkeypatch)
     gated: list = []
     real_gate = terminal_commit._landing_integrity_gate
 
-    def spy(root, all_paths, *rest):
+    def spy(root, all_paths, *rest, **kwargs):
         gated.extend(all_paths)
-        return real_gate(root, all_paths, *rest)
+        return real_gate(root, all_paths, *rest, **kwargs)
 
     monkeypatch.setattr(terminal_commit, "_landing_integrity_gate", spy)
     out = _run(repo)

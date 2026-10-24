@@ -43,23 +43,48 @@ def _num(v) -> Optional[float]:
     return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else None
 
 
-def _pair(repo_root: Path) -> tuple[list[dict], int]:
+NO_CORR_ID = "phase_no_corr_id"
+DUP_PHASE = "phase_duplicate_corr_id"
+NO_HANDLER = "phase_no_handler_row"
+NO_PROCESS_MS = "handler_no_process_ms"
+NO_PHASE = "handler_no_phase_row"
+
+
+def _pair(repo_root: Path) -> tuple[list[dict], list[dict]]:
+    """(paired rows, unpaired entries). Each unpaired entry is {reason, t_start, paths}; join is corr_id only."""
     phase: dict[str, dict] = {}
     handler: dict[str, dict] = {}
+    unpaired: list[dict] = []
+
+    def _miss(reason: str, row: dict) -> None:
+        unpaired.append({"reason": reason, "t_start": _num(row.get("t_start")) or 0.0, "paths": row.get("paths")})
+
     for row in _read_rows(repo_root):
+        kind = row.get("kind")
+        is_phase = kind == "phase_time"
+        is_handler = kind == "process_time" and row.get("measurement_scope") == SCOPE
+        if not (is_phase or is_handler):
+            continue
         cid = row.get("corr_id")
         if not isinstance(cid, str) or not cid:
+            if is_phase:
+                _miss(NO_CORR_ID, row)
             continue
-        kind = row.get("kind")
-        if kind == "phase_time":
+        if is_phase:
+            if cid in phase:
+                _miss(DUP_PHASE, phase[cid])
             phase[cid] = row
-        elif kind == "process_time" and row.get("measurement_scope") == SCOPE:
+        else:
             handler[cid] = row
     paired = []
     for cid, prow in phase.items():
         hrow = handler.get(cid)
-        pms = _num(hrow.get("process_ms")) if hrow else None
+        if hrow is None:
+            _miss(NO_HANDLER, prow)
+            continue
+        pms = _num(hrow.get("process_ms"))
         if pms is None:
+            _miss(NO_PROCESS_MS, prow)
             continue
         phases = prow.get("phases_ms")
         paired.append(
@@ -73,7 +98,9 @@ def _pair(repo_root: Path) -> tuple[list[dict], int]:
                 "phases_ms": dict(phases) if isinstance(phases, dict) else {},
             }
         )
-    unpaired = (len(phase) - len(paired)) + sum(1 for c in handler if c not in phase)
+    for cid, hrow in handler.items():
+        if cid not in phase:
+            _miss(NO_PHASE, hrow)
     paired.sort(key=lambda r: r["t_start"])
     return paired, unpaired
 
@@ -87,6 +114,16 @@ def _filter(rows: list[dict], since_epoch: Optional[float], paths_max: int) -> l
             continue
         out.append(r)
     return out
+
+
+def unpaired_by_reason(unpaired: list[dict], since_epoch: Optional[float]) -> dict[str, int]:
+    """Unpaired count per reason, restricted to rows at or after `since_epoch`."""
+    out: dict[str, int] = {}
+    for u in unpaired:
+        if since_epoch is not None and u["t_start"] < since_epoch:
+            continue
+        out[u["reason"]] = out.get(u["reason"], 0) + 1
+    return dict(sorted(out.items()))
 
 
 def paired_rows(repo_root: Path, *, since_epoch: Optional[float], paths_max: int = 2) -> list[dict]:
@@ -164,7 +201,10 @@ def main(argv: Optional[list[str]] = None) -> int:
     allpaired, unpaired = _pair(Path(args.repo_root))
     rows = _filter(allpaired, since, args.paths_max)
 
-    print(f"unpaired: {unpaired}")
+    reasons = unpaired_by_reason(unpaired, since)
+    print(f"unpaired: {sum(reasons.values())}")
+    for reason, n in reasons.items():
+        print(f"  {reason}: {n}")
     print()
     print("| t_start | paths | process_ms | spawns | phase total_ms | phases >= 15.6ms |")
     print("|---|---|---|---|---|---|")

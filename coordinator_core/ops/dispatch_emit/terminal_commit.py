@@ -645,6 +645,7 @@ def _landing_integrity_gate(
     params: dict, run_id: Optional[str], plan: Optional[str] = None,
     *, residue_py: Sequence[str] = (), residue_known: bool = True, merge_open: bool = False,
     own_declared: Sequence[str] = (), session_id: Optional[str] = None,
+    carried_paths: Optional[Sequence[str]] = None, minted_before: Optional[tuple] = None,
 ) -> dict:
     """Pre-commit integrity findings over the product landing set (unparseable ``.py``, an
     import-closure hit where a ``.py`` the commit deletes (or a top-level def/class it removes) is
@@ -660,7 +661,9 @@ def _landing_integrity_gate(
     ran (its record's ``tests`` node ids); a retest record naming no files clears nothing, since a
     retest that never ran the red file is no evidence it went green. Returns ``{}``-like extras:
     ``refused`` + ``integrity`` on any finding, ``since_base_check: "no-base"`` when the run has
-    no recorded base so the overlap arm was skipped."""
+    no recorded base so the overlap arm was skipped. The co-declared peer-hunk arm tests only
+    ``carried_paths`` (None: every landing path), and a fresh-token sibling minted at or after
+    ``minted_before`` is junior and holds nothing."""
     from coordinator_core.ops.dispatch_emit import landing_integrity as li
 
     skip = set(deleted_paths)
@@ -699,12 +702,15 @@ def _landing_integrity_gate(
     # out-of-ask finding names it: a path-level commit cannot split either off.
     from coordinator_core.ops.dispatch_emit import peer_hunk_gate
 
+    # Only a carried path can absorb a peer's hunks; `carried_paths` (None: every landing path).
+    carried_set = None if carried_paths is None else set(carried_paths)
+    contested = paths if carried_set is None else [p for p in paths if p in carried_set]
     for held_path, sibling in peer_hunk_gate.co_declared_peer_holds(
-        worktree_root, run_id, paths, own_declared,
+        worktree_root, run_id, contested, own_declared, own_plan=plan, minted_before=minted_before,
     ):
         findings.append(li.Finding(
             held_path, peer_hunk_gate.PEER_HUNKS_CO_DECLARED,
-            peer_hunk_gate.refusal_message([(held_path, sibling)], run_id or ""),
+            peer_hunk_gate.refusal_message([(held_path, sibling)], run_id or "", worktree_root),
         ))
     if run_id and session_id:
         for held_path, stem, line in peer_hunk_gate.out_of_ask_holds(
@@ -2887,20 +2893,45 @@ def _own_run_seniority(worktree_root: Path, run_id: object, script_path_raw: obj
         return None
 
 
+def _claims_before_landing(worktree_root: Path, landed: Sequence[str]) -> dict:
+    """``{session id: paths it holds}`` for every claimant of ``landed``, read before the product
+    commit because landing releases those claims. Empty when the lookup fails."""
+    from coordinator_core.session import claim_index
+
+    try:
+        return dict(claim_index.lookup(list(landed), cwd=str(worktree_root)).held_by or {})
+    except Exception:  # noqa: BLE001 -- nothing is carried on a doubt
+        return {}
+
+
+def _session_left_behind(
+    worktree_root: Path, session_id: str, landed: Sequence[str], held_by: dict, resolver,
+) -> list:
+    """The session's own dirty claimed paths outside ``landed``, under ``resolver``'s sibling-claim
+    exclusion (which also fills the halted-hold map). Zero subprocess; any failure returns
+    nothing rather than refusing the landed commit."""
+    from coordinator_core.ops.ceremony import commit_companion
+
+    try:
+        if not held_by.get(session_id):
+            return []
+        with commit_companion.excluding_sibling_claims(resolver):
+            return list(commit_companion.own_left_behind(worktree_root, held_by, session_id, landed))
+    except Exception:  # noqa: BLE001 -- never un-land the product commit
+        return []
+
+
 def _land_own_left_behind(
     reply: dict, product_sha: str, session_id: str, worktree_root: Path, repo_root: Optional[Path],
-    withheld: Sequence[str] = (),
+    left: Sequence[str], withheld: Sequence[str] = (),
 ) -> None:
-    """Land the session's uncontested left-behind claims (``reply["own_left_behind"]["left"]``) in
-    a follow-on commit and record it under ``own_carry.REPLY_KEY``. A refusal is recorded as
-    ``{"error": ...}`` and never un-lands the product commit; nothing left makes no call.
-    ``withheld`` paths (foreign-excluded, or beside a live sibling run's declared path) are never
-    carried."""
+    """Land the session's uncontested ``left`` claims in a follow-on commit and record it under
+    ``own_carry.REPLY_KEY``. A refusal is recorded as ``{"error": ...}`` and never un-lands the
+    product commit; nothing left makes no call. ``withheld`` paths (foreign-excluded, or beside a
+    live sibling run's declared path) are never carried."""
     from coordinator_core.ops.dispatch_emit import own_carry
     from coordinator_core.session import scope as session_scope
 
-    info = reply.get("own_left_behind")
-    left = info.get("left") if isinstance(info, dict) else None
     if not left:
         return
     contested = session_scope.contested_by_live_peers(list(left), session_id, cwd=str(worktree_root))
@@ -2938,20 +2969,6 @@ def _in_scope(path: str, request: CommitRequest) -> bool:
         if any(path.startswith(prefix.rstrip("/") + "/") for prefix in chunk.prefixes):
             return True
     return False
-
-
-def _stopped_run_carried(reply: dict) -> set:
-    """Paths in commit_v2's ``stopped_run_residue.carried`` reply, normalised to ``/``; empty when
-    the key is absent or malformed."""
-    block = reply.get("stopped_run_residue")
-    carried = block.get("carried") if isinstance(block, dict) else None
-    if not isinstance(carried, dict):
-        return set()
-    return {
-        p.replace("\\", "/")
-        for ps in carried.values() if isinstance(ps, (list, tuple))
-        for p in ps if isinstance(p, str)
-    }
 
 
 def _undeclared_dirty(
@@ -5501,7 +5518,9 @@ def _terminal_commit_inner(
         fresh = {p for p in paths if p and p not in sibling_claims_seen}
         if fresh:
             sibling_claims_seen.update(fresh)
-            sibling_claims.update(sc.sibling_run_claims(worktree_root, sibling_claim_run_id, fresh))
+            sibling_claims.update(sc.sibling_run_claims(
+                worktree_root, sibling_claim_run_id, fresh, own_plan=request.plan_path,
+            ))
         return sibling_claims
 
     claims_over([
@@ -5585,6 +5604,7 @@ def _terminal_commit_inner(
     # Only a path this commit actually carries can absorb a peer's edit: a clean declared path a
     # peer holds is not contention, and refusing on it wedges every review-only close behind it.
     carried = [p for p in all_paths if changed is None or p in changed] + list(deleted_paths)
+    own_seniority = _own_run_seniority(worktree_root, params.get("run_id"), script_path_raw)
     peer_holds: list = []
     commit_v2_mod._peer_claim_warnings(worktree_root, carried, peer_holds, own_sid=session_id)
     from coordinator_core.ops import warp_run_deliverable
@@ -5593,7 +5613,7 @@ def _terminal_commit_inner(
         run_claims = warp_run_deliverable.live_run_write_claims(
             worktree_root, carried, exclude_session=session_id or "",
             cwd=str(worktree_root),
-            minted_before=_own_run_seniority(worktree_root, params.get("run_id"), script_path_raw),
+            minted_before=own_seniority,
             exclude_run=params.get("run_id") if isinstance(params.get("run_id"), str) else None,
         )
     except Exception:
@@ -5932,6 +5952,11 @@ def _terminal_commit_inner(
             stage_before = (_ac_stage.read_run_stage(worktree_root, art_run_id) or {}).get("stage")
             _ac_stage.write_run_stage(worktree_root, art_run_id, "landed")
             stage_stamped = True
+            stage_rel = (_ac_stage.record_dir(worktree_root, art_run_id) / _ac_stage.RUN_STAGE_FILE).relative_to(
+                worktree_root
+            ).as_posix()
+            if stage_rel not in all_paths:
+                all_paths.append(stage_rel)
         except (ValueError, OSError):
             stage_before = None
 
@@ -6008,6 +6033,7 @@ def _terminal_commit_inner(
         residue_py=residue_py, residue_known=snapshot is not None,
         merge_open=merge_plan is not None,
         own_declared=sorted(declared_writes), session_id=session_id,
+        carried_paths=carried, minted_before=own_seniority,
     )
     if integrity_extra.get("refused"):
         _unstamp_landed()
@@ -6064,6 +6090,11 @@ def _terminal_commit_inner(
     # compared paths because a peer's change to it must refuse rather than be overwritten.
     _own_receipts = set(receipt_paths)
     _overlap_paths = [p for p in (*all_paths, *deleted_paths) if p not in _own_receipts]
+
+    claims_before = (
+        _claims_before_landing(worktree_root, [*all_paths, *deleted_paths])
+        if session_id is not None and not anchor_only else {}
+    )
 
     def _attempt():
         return commit_v2(commit_params, repo_root)
@@ -6133,6 +6164,11 @@ def _terminal_commit_inner(
         reply["error"] += (
             ". A peer commit changed a path this landing writes; refire after the peer's commit"
         )
+    left_behind: list = []
+    if reply.get("committed") and reply.get("sha") and session_id is not None and not anchor_only:
+        left_behind = _session_left_behind(
+            worktree_root, session_id, [*all_paths, *deleted_paths], claims_before, _claimed_or_held,
+        )
     held_report = _dirty_held_by_halted_run(worktree_root, halted_held)
     if held_report:
         reply["held_by_halted_run"] = held_report
@@ -6159,14 +6195,14 @@ def _terminal_commit_inner(
         if session_id is not None and not anchor_only:
             from coordinator_core.ops.dispatch_emit import sibling_claims as _sc_follow
 
-            left_behind = (reply.get("own_left_behind") or {}).get("left") or ()
             _land_own_left_behind(
-                reply, str(reply["sha"]), session_id, worktree_root, repo_root,
+                reply, str(reply["sha"]), session_id, worktree_root, repo_root, left_behind,
                 withheld=[
                     *foreign_excluded,
                     *wh_reasons,
                     *_sc_follow.shared_dir_holds(
                         worktree_root, sibling_run_id, [*all_paths, *declared_writes], left_behind,
+                        own_plan=request.plan_path,
                     ),
                 ],
             )
@@ -6185,7 +6221,6 @@ def _terminal_commit_inner(
             if reply["merge_artifacts"].get("committed") or reply["merge_artifacts"].get("nothing_to_commit"):
                 scope["landed"].update(merge_artifacts["paths"])
                 scope["landed"].update(merge_artifacts["deleted"])
-        scope["landed"].update(_stopped_run_carried(reply))
         withheld_product = (
             _withheld_product_files(worktree_root, snapshot, declared_writes, {*all_paths, *deleted_paths})
             if ledger is not None else []

@@ -27,6 +27,11 @@ def test_constants():
     assert host.UNSUPPORTED_HOST_EXIT == 6
 
 
+def test_cannot_detach_exit_is_free_family_code():
+    assert host.CANNOT_DETACH_EXIT == 5
+    assert host.CANNOT_DETACH_EXIT not in (0, 1, 2, 3, 4, host.UNSUPPORTED_HOST_EXIT)
+
+
 def test_admit_cap_binds_for_large_peak():
     peak = 64 * GIB  # 25% = 16 GiB, capped at 8 GiB
     v = host.admit(peak, _status(avail=peak + 8 * GIB))

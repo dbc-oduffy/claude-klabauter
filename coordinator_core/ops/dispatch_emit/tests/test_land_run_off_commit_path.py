@@ -15,7 +15,7 @@ from coordinator_core.ops import deliverable_cascade, review_stamp
 from coordinator_core.ops.ceremony import close_background as cb
 from coordinator_core.ops.ceremony import commit_v2
 from coordinator_core.ops.ceremony.tests import test_close_background_land_run_legs as legs
-from coordinator_core.ops.dispatch_emit import ask_fanout, land_run, land_run_contract, stopped_runs
+from coordinator_core.ops.dispatch_emit import ask_fanout, land_run, land_run_contract
 from coordinator_core.ops.dispatch_emit.ask_contract import (
     FANOUT_RECORD_PARAM,
     HALTED_RECORD_PARAM,
@@ -38,7 +38,6 @@ def _forbidden_functions() -> dict:
     from coordinator_core import warp_live
 
     return {
-        "stopped_runs.stopped_own_runs": stopped_runs.stopped_own_runs,
         "warp_live.run_ended_on_evidence": warp_live.run_ended_on_evidence,
         "deliverable_cascade.cascade_terminal_sync": deliverable_cascade.cascade_terminal_sync,
         "deliverable_cascade._collect_live_candidates_for_kind": deliverable_cascade._collect_live_candidates_for_kind,

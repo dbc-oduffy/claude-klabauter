@@ -59,6 +59,62 @@ def test_cd_resolves_against_sub(tmp_path):
     assert w[0].body == "a\n"
 
 
+def _paths(cmd, root, cwd=None):
+    return [os.path.relpath(w.abs_path, root) for w in shell_writes(cmd, cwd or root, root)]
+
+
+def test_git_add_pathspecs(tmp_path):
+    root = _root(tmp_path)
+    assert _paths("git add pkg/a.py sub/b.py", root) == ["pkg/a.py", "sub/b.py"]
+    assert _paths("git add -- pkg/a.py", root) == ["pkg/a.py"]
+    assert _paths("cd sub && git add b.py", root) == ["sub/b.py"]
+    assert all(w.body is None for w in shell_writes("git add pkg/a.py", root, root))
+
+
+def test_git_add_all_is_root(tmp_path):
+    root = _root(tmp_path)
+    assert _paths("git add -A", root) == ["."]
+    assert _paths("git add .", root) == ["."]
+
+
+def test_git_checkout_only_after_double_dash(tmp_path):
+    root = _root(tmp_path)
+    assert _paths("git checkout -- pkg/a.py", root) == ["pkg/a.py"]
+    assert _paths("git checkout main", root) == []
+    assert _paths("git restore pkg/a.py", root) == ["pkg/a.py"]
+    assert _paths("git restore --staged pkg/a.py", root) == []
+
+
+def test_git_commit_forms(tmp_path):
+    root = _root(tmp_path)
+    assert _paths("git commit -m 'msg; x' pkg/a.py", root) == ["pkg/a.py"]
+    assert _paths("git commit -m msg", root) == ["."]
+    assert _paths("git commit -am msg", root) == ["."]
+    assert _paths("git commit -m msg -- pkg/a.py", root) == ["pkg/a.py"]
+    assert _paths('git commit -m "$(cat <<\'EOF\'\nfix\nEOF\n)"', root) == ["."]
+
+
+def test_git_apply_reads_patch_headers(tmp_path):
+    root = _root(tmp_path)
+    (tmp_path / "x.patch").write_text(
+        "--- a/pkg/a.py\n+++ b/pkg/a.py\n@@ -1 +1 @@\n-a\n+b\n+++ /dev/null\n--- a/sub/c.py\n+++ b/sub/c.py\n"
+    )
+    assert _paths("git apply x.patch", root) == ["pkg/a.py", "sub/c.py"]
+    assert _paths("git apply --check x.patch", root) == []
+
+
+def test_git_apply_unreadable_patch_is_root(tmp_path):
+    root = _root(tmp_path)
+    assert _paths("git apply missing.patch", root) == ["."]
+    assert _paths("git apply -", root) == ["."]
+
+
+def test_git_tag_push_log_yield_nothing(tmp_path):
+    root = _root(tmp_path)
+    for c in ("git tag -a v1 -m x", "git push origin main", "git log --oneline -3", "git status 2>&1"):
+        assert _paths(c, root) == []
+
+
 def test_sed_i_has_no_body(tmp_path):
     root = _root(tmp_path)
     (tmp_path / "pkg" / "m.py").write_text("a\n")

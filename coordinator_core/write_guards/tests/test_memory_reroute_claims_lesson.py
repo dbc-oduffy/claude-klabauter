@@ -1,4 +1,4 @@
-"""reroute_to_lesson claims the lesson it writes so commit_v2's own-left-behind carry commits it."""
+"""reroute_to_lesson claims the lesson it writes so terminal_commit's own-left-behind follow-on carries it."""
 
 from __future__ import annotations
 
@@ -7,7 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from coordinator_core.ops.ceremony import commit_v2
+from coordinator_core.ops.ceremony import commit_companion
+from coordinator_core.session import claim_index
 from coordinator_core.session import core as session_core
 from coordinator_core.session import scope as session_scope
 from coordinator_core.win_portability import no_console_creationflags
@@ -55,27 +56,18 @@ def _reroute(repo: Path, sid: str = SELF) -> str:
     return Path(out).relative_to(repo.resolve()).as_posix()
 
 
-def _commit(repo: Path) -> dict:
-    params = {"paths": ["a.py"], "message": "m", "carry_own_left_behind": True}
-    return commit_v2._handler(params, repo_root=repo / ".git")
+def _left_behind(repo: Path, rel: str) -> list:
+    """What the follow-on carry would land for SELF: its holds outside the product pathspec,
+    less what a live peer contests."""
+    held_by = claim_index.lookup(["a.py", rel], cwd=str(repo)).held_by or {}
+    contested = session_scope.contested_by_live_peers([rel], SELF, cwd=str(repo)) or {}
+    return commit_companion.own_left_behind(repo, held_by, SELF, ["a.py"], contested=list(contested))
 
 
-def _files(repo: Path) -> set:
-    return set(_git(["diff", "--name-only", _seed(repo), "HEAD"], repo).split())
-
-
-def _seed(repo: Path) -> str:
-    return _git(["rev-list", "--max-parents=0", "HEAD"], repo).strip()
-
-
-def test_written_lesson_is_carried_into_the_commit(repo):
+def test_written_lesson_is_left_behind_for_the_writing_session(repo):
     rel = _reroute(repo)
 
-    result = _commit(repo)
-
-    assert result["committed"] is True
-    assert _files(repo) == {"a.py", rel}
-    assert result["own_left_behind"] == {"carried": [rel], "left": []}
+    assert _left_behind(repo, rel) == [rel]
 
 
 def test_lesson_held_by_a_live_peer_is_left_out(repo):
@@ -83,17 +75,11 @@ def test_lesson_held_by_a_live_peer_is_left_out(repo):
     session_core.init(PEER, cwd=str(repo))
     session_scope.touch(PEER, rel, cwd=str(repo))
 
-    result = _commit(repo)
-
-    assert _files(repo) == {"a.py"}
-    assert result["own_left_behind"] == {"carried": [], "left": [rel]}
+    assert _left_behind(repo, rel) == []
 
 
 def test_no_session_id_writes_the_lesson_without_a_claim(repo):
     rel = _reroute(repo, sid="")
 
-    result = _commit(repo)
-
     assert (repo / rel).is_file()
-    assert _files(repo) == {"a.py"}
-    assert "own_left_behind" not in result or rel not in result["own_left_behind"]["carried"]
+    assert _left_behind(repo, rel) == []

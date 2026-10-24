@@ -331,6 +331,27 @@ def test_live_run_is_denied_post_fire_too(landed, monkeypatch):
     assert xb.read_lane(root, SID) is None
 
 
+def test_after_fire_read_failure_is_no_signal(landed, monkeypatch):
+    root, _ = landed
+    from coordinator_core.hooks import flag_em_poll_in_flight as fl
+
+    def boom(sid):
+        raise OSError("run index unreadable")
+
+    monkeypatch.setattr(fl, "session_workflow_run_ids", boom)
+    assert mod._post_fire_deny(SID) is None
+    result = mod.op(_edit(root, "a.py", "l1\n", "v1 = f(1)\n"))
+    assert "already fired engine-ask" not in str(result)
+
+
+def test_post_fire_deny_stands_down_without_a_session_or_a_fire(landed, monkeypatch):
+    from coordinator_core.hooks import flag_em_poll_in_flight as fl
+
+    assert mod._post_fire_deny("") is None
+    monkeypatch.setattr(fl, "session_workflow_run_ids", lambda sid: [])
+    assert mod._post_fire_deny(SID) is None
+
+
 # Captured at import, before the `env` fixture stubs the seam out.
 _REAL_SEAM = mod._is_bootstrap_or_out_of_repo
 

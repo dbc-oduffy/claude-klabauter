@@ -7,15 +7,13 @@ from pathlib import Path
 
 import pytest
 
-from coordinator_core.ops.ceremony import commit_v2
-from coordinator_core.ops.dispatch_emit import stopped_runs, terminal_commit
+from coordinator_core.ops.dispatch_emit import terminal_commit
 from coordinator_core.ops.dispatch_emit.ask_contract import HALTED_RECORD_PARAM, RECORD_DIR_ROOT
 from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 RUN = "ask-20261015T000000-aaaaaa"
-PEER_RUN = "ask-20261015T000001-bbbbbb"
 PEER_PLAN = "docs/plans/2026-10-21-peer-run-plan.md"
 SELF = "5e1f0000-0000-4000-8000-0000000000b3"
 
@@ -28,7 +26,7 @@ def _git(args, cwd: Path) -> str:
 
 
 @pytest.fixture
-def repo(tmp_path, monkeypatch):
+def repo(tmp_path):
     root = tmp_path / "repo"
     root.mkdir()
     _git(["init", "-q"], root)
@@ -44,23 +42,11 @@ def repo(tmp_path, monkeypatch):
         (rec / name).write_text(f"{name}\n", encoding="utf-8")
     (root / PEER_PLAN).parent.mkdir(parents=True)
     (root / PEER_PLAN).write_text("peer plan\n", encoding="utf-8")
-    monkeypatch.setattr(
-        stopped_runs, "residue",
-        lambda *a, **k: stopped_runs.StoppedResidue({PEER_RUN: (PEER_PLAN,)}, {}),
-    )
     return root
 
 
 def _committed_files(root: Path, sha: str) -> set:
     return set(_git(["show", "--name-only", "--format=", sha], root).split())
-
-
-def test_control_commit_v2_default_sweeps_the_stopped_runs_plan(repo):
-    out = commit_v2._handler(
-        {"paths": [f"{RECORD_DIR_ROOT}/{RUN}/ask.md"], "message": "m", "session_id": SELF},
-        repo_root=repo / ".git",
-    )
-    assert PEER_PLAN in _committed_files(repo, out["sha"])
 
 
 def test_halt_commit_lands_own_record_and_leaves_the_peer_plan_untracked(repo):

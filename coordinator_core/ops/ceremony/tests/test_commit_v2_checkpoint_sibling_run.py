@@ -109,14 +109,15 @@ def test_checkpoint_does_not_carry_a_stopped_sibling_runs_residue(repo, tmp_path
     assert f"Stopped-Run-Residue: {sibling}" not in _git(["log", "-1", "--format=%B"], repo)
 
 
-def test_ordinary_commit_still_carries_the_stopped_run_residue(repo, tmp_path):
-    sibling = _stopped_sibling(repo, tmp_path)
+def test_ordinary_commit_does_not_carry_the_stopped_run_residue(repo, tmp_path):
+    _stopped_sibling(repo, tmp_path)
     _write(repo, "tests/test_a.py")
 
     result = _call(repo, {"paths": ["tests/test_a.py"], "message": "m"})
 
     assert result["committed"] is True, result
-    assert list(result["stopped_run_residue"]["carried"]) == [sibling]
+    assert "stopped_run_residue" not in result
+    assert _files(repo) == {"tests/test_a.py"}
 
 
 def test_mixed_checkpoint_refused_on_its_process_half_lands_nothing(repo):

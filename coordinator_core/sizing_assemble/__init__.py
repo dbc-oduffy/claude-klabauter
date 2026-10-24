@@ -1010,6 +1010,31 @@ def _has_positive_s_evidence(
     )
 
 
+SCOPE_L_FLOOR_FILES = 5
+SCOPE_L_FLOOR_LINES = 800
+
+
+def _validate_scope(name: str, value: Optional[int]) -> None:
+    if value is not None and (isinstance(value, bool) or not isinstance(value, int) or value < 0):
+        raise SizingAssembleError(f"{name} must be an int >= 0 or None, got {value!r}")
+
+
+def _apply_scope_floor(
+    tshirt: str, scope_files: Optional[int], scope_lines: Optional[int]
+) -> Optional[str]:
+    """The L floor a full delivery's scope implies, or None when the rung stands. Raises only,
+    never lowers; the higher of the files and lines floors wins (both map to L today). Pure over
+    its arguments: no I/O, never reads scout_evidence. The thresholds sit between the M rung's
+    naked median (410 lines) and the L task's (7 files / 1643 lines, n=3)."""
+    if TSHIRT_WEIGHT[tshirt] >= TSHIRT_WEIGHT["L"]:
+        return None
+    if (scope_files is not None and scope_files >= SCOPE_L_FLOOR_FILES) or (
+        scope_lines is not None and scope_lines >= SCOPE_L_FLOOR_LINES
+    ):
+        return "L"
+    return None
+
+
 def route(
     *,
     appetite: Optional[str] = None,
@@ -1034,10 +1059,15 @@ def route(
     premise_evidence: Optional[str] = None,
     initiatives: Optional[list[dict[str, Any]]] = None,
     research: bool = False,
+    scope_files: Optional[int] = None,
+    scope_lines: Optional[int] = None,
 ) -> dict[str, Any]:
     """Resolves the sizing-object's route/detents/fork fields (C1 shape).
 
     Args:
+        scope_files / scope_lines: files / added lines of a FULL delivery of the task (prior or
+            naked deliveries, never the minimal fix). At or above the L thresholds the resolved
+            tshirt is raised to L, never lowered; None leaves the size untouched.
         research: a research-class sizing never opens a hand-edit lane, so it
             skips the S -> XS tie-break and stays S.
         appetite: one of small|medium|large (Shape-Up budget enum), or
@@ -1115,6 +1145,8 @@ def route(
     _validate_precedent(precedent)
     _validate_probe_raise_basis(probe_raise_basis)
     _validate_interaction_mode(interaction_mode)
+    _validate_scope("scope_files", scope_files)
+    _validate_scope("scope_lines", scope_lines)
     scout_evidence = list(scout_evidence or [])
     tier_refusal = suite_tier_refusal(exit_criterion)
     if tier_refusal is not None:
@@ -1161,6 +1193,17 @@ def route(
     resized_tshirt, resize_changed, raise_suppressed = _apply_symmetric_resize(
         tshirt, probe_signal, probe_raise_basis
     )
+
+    probe_resized = resize_changed
+    floor_tshirt = _apply_scope_floor(resized_tshirt, scope_files, scope_lines)
+    if floor_tshirt is not None:
+        floor_note = (
+            f"scope floor: {resized_tshirt} -> {floor_tshirt} "
+            f"(scope_files={scope_files}, scope_lines={scope_lines})"
+        )
+        tie_break = f"{tie_break}; {floor_note}" if tie_break else floor_note
+        resized_tshirt = floor_tshirt
+        resize_changed = True
 
     detents: list[str] = []
 
@@ -1256,14 +1299,14 @@ def route(
         raise SizingAssembleError(f"internal: resolved route {resolved_route!r} not in {ROUTE_ENUM}")
 
     narration_bits = [f"Resolved tshirt {resized_tshirt}"]
-    if resize_changed:
+    if probe_resized:
         narration_bits.append(f"(probe {probe_signal}d from {tshirt})")
     if appetite is not None:
         narration_bits.append(f"against appetite={appetite} -> route={resolved_route}.")
     else:
         narration_bits.append(f"-> route={resolved_route}.")
     raise_line: Optional[str] = None
-    if resize_changed and probe_signal == "raise":
+    if probe_resized and probe_signal == "raise":
         raise_line = (
             f"probe raise: {tshirt} -> {resized_tshirt}, "
             f"basis={probe_raise_basis or 'unstated'}, route={resolved_route}"
@@ -2530,6 +2573,7 @@ def _usage(prog: str, stream=None) -> int:
         "    [--premise-evidence <str>]\n"
         "    [--boundary-in-notch yes|no]\n"
         "    [--scout-evidence-kind mention-count|change-set|site-count]\n"
+        "    [--scope-files N] [--scope-lines N]\n"
         "    [--scout-evidence <str> ...]\n"
         "    [--intent <str> | --intent-turn N] [--intent-source pm-verbatim|em-elaborated]\n"
         "    [--doc-consumer <path> ... | --no-doc-consumers]\n"
@@ -2740,6 +2784,7 @@ def main(argv: list[str]) -> int:
     premise_provenance = None
     boundary_in_notch = None
     scout_evidence_kind = None
+    scope_args: dict[str, int] = {}
     intent = None
     intent_source = None
     name = None
@@ -2846,6 +2891,12 @@ def main(argv: list[str]) -> int:
             i += 2
         elif tok == "--scout-evidence-kind" and i + 1 < len(argv):
             scout_evidence_kind = argv[i + 1]
+            i += 2
+        elif tok in ("--scope-files", "--scope-lines") and i + 1 < len(argv):
+            if not (argv[i + 1].isascii() and argv[i + 1].isdigit()):
+                print(f"{prog}: {tok} needs an int N >= 0", file=sys.stderr)
+                return EXIT_USAGE
+            scope_args[tok] = int(argv[i + 1])
             i += 2
         elif tok == "--scout-evidence" and i + 1 < len(argv):
             scout_evidence.append(argv[i + 1])
@@ -3247,6 +3298,8 @@ def main(argv: list[str]) -> int:
             premise_provenance=premise_provenance,
             boundary_in_notch=boundary_in_notch,
             scout_evidence_kind=scout_evidence_kind,
+            scope_files=scope_args.get("--scope-files"),
+            scope_lines=scope_args.get("--scope-lines"),
             intent=intent,
             intent_source=intent_source,
             precedent=precedent,

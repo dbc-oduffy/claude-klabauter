@@ -443,7 +443,7 @@ _POST_FIRE_DENY = (
 def _post_fire_deny(session_id: str) -> dict | None:
     """Deny the main EM's product edit once the session has launched a Workflow run, whichever
     paths that run declared. Before the first fire this returns None and the XS budget decides.
-    Any read failure is no signal."""
+    Any read failure is no signal: the deny fails open (pinned in the budget test module)."""
     if not session_id:
         return None
     try:
@@ -485,7 +485,8 @@ def op(payload: dict) -> dict | None:
     lines (`_budget_decision`). A lane closes after GOLF_DENY_LIMIT projected denies.
 
     Once the session has fired a Workflow run, live or landed, every product Edit is denied
-    (`_post_fire_deny`); only the shell-write path still measures a residue window.
+    (`_post_fire_deny`); only the shell-write path still measures a residue window
+    (pinned by test_landed_residue_shell_write_is_budgeted).
 
     An S+ sized session whose route has not fired is denied at strict until it fires (advised
     at warn). `touched_s_or_larger` reads the session's whole touch record, so any S+ (or

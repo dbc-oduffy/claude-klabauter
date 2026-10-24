@@ -49,7 +49,6 @@ Negative-spec (hard-won, restated for this row):
 from __future__ import annotations
 
 import contextlib
-import re
 import sys
 import time
 from pathlib import Path
@@ -72,8 +71,8 @@ from coordinator_core.git.commit_trailers import (
 from coordinator_core.git.commit import partition_declared_deletions
 from coordinator_core.git.run import run_git
 from coordinator_core.git import checkpoint_guard
-from coordinator_core.git.git_state import head_sha, read_index_paths
-from coordinator_core.git.git_index import IndexParseError
+from coordinator_core.git.git_state import head_sha
+from coordinator_core.git.git_index import IndexParseError, parse_index_identity
 from coordinator_core.git.index_write import IndexStaleAfterCommit
 from coordinator_core.git.eol_declared import (
     find_declared_eol_drift,
@@ -109,7 +108,6 @@ from coordinator_core.session import core as session_core
 from coordinator_core.session import liveness as session_liveness
 from coordinator_core.session import scope as session_scope
 from coordinator_core.session import touch_record
-from coordinator_core.git.path_canon import canonical_repo_relative_path_refusal
 from coordinator_core import dispatch_abandon
 from coordinator_core.ops.ceremony.commit_v2_phases import PhaseLedger
 from coordinator_core.telemetry import spawn_counter
@@ -326,31 +324,15 @@ def _disclose_gone_deletions(message: str, gone: list) -> str:
     return f"{head}\n\n{lines}\n\n{rest}"
 
 
-_TRAILER_LINE = re.compile(r"^[A-Za-z][A-Za-z0-9-]*: \S")
-
-
-def _stopped_run_trailers(message: str, run_ids: list) -> str:
-    """Append one `Stopped-Run-Residue: <run_id>` trailer per carried stopped run, joining the
-    message's trailer block when it ends in one."""
-    if not run_ids:
-        return message
-    lines = [f"Stopped-Run-Residue: {rid}" for rid in run_ids]
-    body = message.rstrip("\n")
-    head, sep, last = body.rpartition("\n\n")
-    if sep and all(_TRAILER_LINE.match(ln) for ln in last.split("\n")):
-        return f"{head}\n\n{last}\n" + "\n".join(lines) + "\n"
-    return f"{body}\n\n" + "\n".join(lines) + "\n"
-
-
 def _peer_claim_warnings(
     worktree_root: Path, paths: list, peer_holds: Optional[list] = None,
     own_sid: Optional[str] = None, abandoned_holds: Optional[list] = None,
-    held_out: Optional[dict] = None,
+    companions: bool = True,
 ) -> list:
     """One batched ``claim_index.lookup(paths)`` plus a liveness check on each non-self claimant.
     Reports a live peer's hold; never refuses, never spawns, never raises: a lookup failure or
-    ``UNANSWERABLE`` entry degrades to a "claim state indeterminate" warning. Each live peer also
-    gets one warning naming (capped at 5) its untracked files outside ``paths``.
+    ``UNANSWERABLE`` entry degrades to a "claim state indeterminate" warning. With ``companions``
+    each live peer also gets one warning naming (capped at 5) its untracked files outside ``paths``.
     A claimant ``session_abandoned`` reads idle joins ``abandoned_holds`` (when given), not
     ``peer_holds``. ``own_sid`` (opt-in) names the caller's session.
     """
@@ -368,8 +350,6 @@ def _peer_claim_warnings(
     except Exception as exc:  # noqa: BLE001 -- never refuse the commit
         return [f"claim state indeterminate ({exc!r})"]
 
-    if held_out is not None:
-        held_out.update(lookup_result.held_by or {})
     warnings: list = []
     live_peers: list = []
     for path in paths:
@@ -407,7 +387,7 @@ def _peer_claim_warnings(
                     f"{path!r} is held by live peer session {sid!r} -- "
                     "committed anyway"
                 )
-    if live_peers:
+    if live_peers and companions:
         try:
             from coordinator_core.ops.ceremony.commit_companion import untracked_companions
 
@@ -425,54 +405,6 @@ def _peer_claim_warnings(
         except Exception as exc:  # noqa: BLE001 -- never refuse the commit
             warnings.append(f"companion state indeterminate ({exc})")
     return warnings
-
-
-def _own_left_behind(
-    worktree_root: Path, held_by: dict, own_sid: Optional[str], pathspec: list,
-) -> tuple:
-    """``(free, contested)`` own dirty paths outside ``pathspec``. A per-path liveness or
-    ``UNANSWERABLE`` doubt is contested; a failure of the whole candidate scan or lookup returns
-    ``([], [])`` (nothing carried, nothing reported). A sid holding no committed path is absent
-    from ``held_by`` and carries nothing."""
-    held = [p for p in held_by.get(own_sid, ()) if p not in pathspec] if own_sid else []
-    if not held:
-        return [], []
-    try:
-        from coordinator_core.ops.ceremony.commit_companion import own_left_behind
-
-        candidates = own_left_behind(worktree_root, held_by, own_sid, pathspec)
-    except Exception:  # noqa: BLE001 -- never refuse the commit
-        return [], []
-    if not candidates:
-        return [], []
-    contested: set = set()
-    try:
-        peers = session_claim_index.lookup(list(candidates), cwd=str(worktree_root))
-    except Exception:  # noqa: BLE001
-        return [], []
-    for path in candidates:
-        claimants = peers.get(path, [])
-        if session_claim_index.UNANSWERABLE in claimants:
-            contested.add(path)
-            continue
-        kinds = (peers.recorded_kind or {}).get(path, {})
-        for sid in claimants:
-            if sid == own_sid or not touch_record.kind_blocks_a_peer_commit(kinds.get(sid)):
-                continue
-            try:
-                if not session_liveness.session_live(sid, str(worktree_root)):
-                    continue
-            except Exception:  # noqa: BLE001
-                contested.add(path)
-                break
-            try:
-                if session_liveness.session_abandoned(sid, str(worktree_root)):
-                    continue
-            except Exception:  # noqa: BLE001
-                pass
-            contested.add(path)
-            break
-    return [p for p in candidates if p not in contested], [p for p in candidates if p in contested]
 
 
 def _pre_commit_gates(
@@ -645,20 +577,25 @@ def _drop_missing(worktree_root: Path, paths: list) -> tuple:
     return [p for p in paths if p not in gone], [p for p in paths if p in gone]
 
 
-def _split_index_deleted(worktree_root: Path, paths: list) -> tuple:
-    """(kept, untracked): on-disk HEAD-tracked paths absent from the index move to untracked, so a `git rm --cached` lands; zero spawns; any read failure leaves `paths` as given."""
+def _index_classify(worktree_root: Path, paths: list) -> tuple:
+    """(kept, untracked, in_index): on-disk HEAD-tracked paths absent from the index move to
+    untracked, so a `git rm --cached` lands. `in_index` is the on-disk members of `paths` the index
+    holds, or None when unread; zero spawns, one scoped index walk; any read failure leaves `paths`
+    as given."""
     present = [p for p in paths if (worktree_root / p).is_file()]
     if not present:
-        return list(paths), []
+        return list(paths), [], None
     try:
         partition = partition_declared_deletions(worktree_root, present)
-        if partition is None or not partition[0]:
-            return list(paths), []
-        in_index = read_index_paths(worktree_root)
+        if partition is None:
+            return list(paths), [], None
+        in_index = set(parse_index_identity(
+            worktree_root, wanted={p.replace("\\", "/") for p in present}
+        ))
     except Exception:  # noqa: BLE001
-        return list(paths), []
+        return list(paths), [], None
     gone = {p for p in partition[0] if p.replace("\\", "/") not in in_index}
-    return [p for p in paths if p not in gone], [p for p in paths if p in gone]
+    return [p for p in paths if p not in gone], [p for p in paths if p in gone], in_index
 
 
 def _split_gone_tracked(worktree_root: Path, paths: list) -> tuple:
@@ -692,6 +629,13 @@ def _ignored_untracked(worktree_root: Path, paths: list) -> list:
         return []
     ignored = {s.decode("utf-8", "surrogateescape") for s in result.stdout_bytes.split(b"\0") if s}
     return [p for p in candidates if p.replace("\\", "/") in ignored]
+
+
+#: Retired carry params and the owner of the job each did: a true value refuses naming the owner.
+_RETIRED_CARRY_PARAMS = {
+    "carry_own_left_behind": "land own left-behind paths with own_carry.own_carry_params",
+    "carry_stopped_runs": "dispatch.reap_abandoned_runs lands a stopped run's residue",
+}
 
 
 def _error(message: str, **extra: object) -> dict:
@@ -899,25 +843,10 @@ def _cap_mapping_lists(block: dict) -> dict:
 
 
 def cap_reply(result: dict) -> dict:
-    """Cap every reply list at REPLY_LIST_CAP with a `<key>_total` sibling, nested `own_left_behind` and `stopped_run_residue` blocks included; `full_reply: true` skips it."""
+    """Cap every reply list at REPLY_LIST_CAP with a `<key>_total` sibling; `full_reply: true` skips it."""
     if not isinstance(result, dict):
         return result
-    out = _cap_mapping_lists(result)
-    for key in ("own_left_behind", "stopped_run_residue"):
-        block = out.get(key)
-        if isinstance(block, dict):
-            inner = _cap_mapping_lists(block)
-            carried = inner.get("carried")
-            if key == "stopped_run_residue" and isinstance(carried, dict):
-                total = sum(len(v) for v in carried.values() if isinstance(v, list))
-                if total > REPLY_LIST_CAP:
-                    inner["carried"] = {
-                        rid: ps[:REPLY_LIST_CAP] if isinstance(ps, list) else ps
-                        for rid, ps in carried.items()
-                    }
-                    inner["carried_total"] = total
-            out[key] = inner
-    return out
+    return _cap_mapping_lists(result)
 
 
 @register_op("ceremony.commit_v2")
@@ -945,8 +874,32 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             )
 
 
-def _handler_body(params: dict, repo_root: Optional[Path], ledger: PhaseLedger) -> dict:
-    """JSON-RPC "ceremony.commit_v2" handler -- mutating, sync.
+class _Parsed(NamedTuple):
+    """Validated, normalised params of one call."""
+
+    paths: list
+    deleted: list
+    untracked: list
+    message: str
+    prefer_staged: list
+    deliberate_stage: bool
+    allow_empty: bool
+    finish_merge: bool
+    session_id: Optional[str]
+    declared_reverts: list
+    expectations: dict
+    skip_missing: bool
+    gone_as_deleted: bool
+    on_main_reason: Optional[str]
+    exempt: set
+    drop_ignored: bool
+    supplied_ignored: Optional[list]
+
+
+def _parse_params(params: dict, repo_root: Optional[Path]):
+    """Validate `params` of "ceremony.commit_v2": a `_Parsed`, or the structured-error dict.
+
+    Mutating, sync handler contract.
 
     Sync (not async): `commit_paths` does synchronous filesystem I/O only
     (zero git spawns on the common shapes); ipc.py offloads sync handlers via
@@ -1026,8 +979,7 @@ def _handler_body(params: dict, repo_root: Optional[Path], ledger: PhaseLedger) 
         under `coordinator_core/write_guards/`. It never gates or delays
         the commit above -- a step failure degrades to a `skips` entry.
         `warnings` also carries one entry per named path a live peer session holds a touch-claim on;
-        never a refusal (see `_peer_claim_warnings`), plus one entry per live peer naming the
-        untracked files it holds that this commit leaves behind.
+        never a refusal (see `_peer_claim_warnings`).
         Or
         {"committed": False, "sha": None, "error": str} on any
         structured refusal (an empty pathspec, a directory in `paths`, an unresolvable CAS ref, a lost
@@ -1037,9 +989,7 @@ def _handler_body(params: dict, repo_root: Optional[Path], ledger: PhaseLedger) 
     `main` and a remote is configured; a non-empty reason admits, never ambient. In-process callers of
     `_handler` (bookkeeping commits) get the same refusal on a remote-backed `main` unless they pass it.
 
-    carry_own_left_behind (bool, default false) adds own dirty claimed paths no live peer holds; reply `own_left_behind`.
-    carry_stopped_runs (bool, default true) adds the dirty, uncontested run artifacts of this session's
-    runs that ended on evidence; reply `stopped_run_residue`, one `Stopped-Run-Residue:` trailer per run.
+    carry_own_left_behind, carry_stopped_runs (bool): retired; absent or false is accepted, true refuses.
     skip_missing (bool, default false) drops `paths` absent from disk and HEAD, as `skipped_missing`.
     gone_tracked_as_deleted (bool, default false) reclassifies `paths` entries gone from the worktree
     but tracked at HEAD as declared deletions. For a caller whose `paths` is itself the declaration
@@ -1157,172 +1107,136 @@ def _handler_body(params: dict, repo_root: Optional[Path], ledger: PhaseLedger) 
     if not isinstance(raw_skip_missing, bool):
         return _error("params.skip_missing must be a boolean")
 
-    raw_carry = params.get("carry_own_left_behind", False)
-    if not isinstance(raw_carry, bool):
-        return _error("params.carry_own_left_behind must be a boolean")
-
-    raw_carry_stopped = params.get("carry_stopped_runs", True)
-    if not isinstance(raw_carry_stopped, bool):
-        return _error("params.carry_stopped_runs must be a boolean")
+    for name, owner in _RETIRED_CARRY_PARAMS.items():
+        value = params.get(name, False)
+        if not isinstance(value, bool):
+            return _error(f"params.{name} must be a boolean")
+        if value:
+            return _error(f"params.{name} is retired; {owner}.")
 
     raw_gone_as_deleted = params.get("gone_tracked_as_deleted", False)
     if not isinstance(raw_gone_as_deleted, bool):
         return _error("params.gone_tracked_as_deleted must be a boolean")
 
-    worktree_root = main_worktree_root(repo_root)
-
     on_main_reason = params.get("on_main_reason")
     if on_main_reason is not None and not isinstance(on_main_reason, str):
         return _error("params.on_main_reason must be a string")
+
+    force_ignored = params.get("force_ignored") or []
+    if not isinstance(force_ignored, list) or not all(isinstance(p, str) for p in force_ignored):
+        return _error("params.force_ignored must be a list of strings")
+    raw_drop_ignored = params.get("drop_ignored", False)
+    if not isinstance(raw_drop_ignored, bool):
+        return _error("params.drop_ignored must be a boolean")
+    supplied_ignored = params.get("ignored_untracked")
+    if supplied_ignored is not None and (
+        not isinstance(supplied_ignored, list) or not all(isinstance(p, str) for p in supplied_ignored)
+    ):
+        return _error("params.ignored_untracked must be a list of strings")
+
+    return _Parsed(
+        raw_paths, raw_deleted, raw_untracked, message, raw_prefer_staged,
+        raw_prefer_deliberate_stage, raw_allow_empty, raw_finish_merge, session_id_override,
+        raw_declared_reverts, expectations, raw_skip_missing, raw_gone_as_deleted, on_main_reason,
+        {p.replace("\\", "/") for p in force_ignored}, raw_drop_ignored, supplied_ignored,
+    )
+
+
+def _handler_body(params: dict, repo_root: Optional[Path], ledger: PhaseLedger) -> dict:
+    """JSON-RPC "ceremony.commit_v2" handler: params in `_parse_params`, landing through `commit_paths`."""
+    with ledger.phase("param_validation"):
+        parsed = _parse_params(params, repo_root)
+    if isinstance(parsed, dict):
+        return parsed
+    (
+        raw_paths, raw_deleted, raw_untracked, message, raw_prefer_staged,
+        raw_prefer_deliberate_stage, raw_allow_empty, raw_finish_merge, session_id_override,
+        raw_declared_reverts, expectations, raw_skip_missing, raw_gone_as_deleted, on_main_reason,
+        exempt, raw_drop_ignored, supplied_ignored,
+    ) = parsed
+    assert repo_root is not None
+
+    worktree_root = main_worktree_root(repo_root)
     with ledger.phase("main_commit_refusal"):
         main_refusal = main_commit_refusal(worktree_root, override_reason=on_main_reason)
     if main_refusal is not None:
         return _error(main_refusal)
 
     reclassified: list = []
-    if raw_gone_as_deleted and raw_paths:
-        raw_paths, reclassified = _split_gone_tracked(worktree_root, raw_paths)
-        raw_deleted = list(raw_deleted) + [p for p in reclassified if p not in raw_deleted]
-
     skipped_missing: list = []
-    if raw_skip_missing and raw_paths:
-        raw_paths, skipped_missing = _drop_missing(worktree_root, raw_paths)
-        if not (raw_paths or raw_deleted or raw_untracked):
-            return _error(
-                "every declared path is absent from disk and HEAD, nothing to commit.",
-                nothing_to_commit=True,
-                skipped_missing=skipped_missing,
-            )
+    dropped_ignored: list = []
+    with ledger.phase("head_classification"):
+        if raw_gone_as_deleted and raw_paths:
+            raw_paths, reclassified = _split_gone_tracked(worktree_root, raw_paths)
+            raw_deleted = list(raw_deleted) + [p for p in reclassified if p not in raw_deleted]
 
-    with ledger.phase("index_deleted_present"):
-        raw_paths, index_untracked = _split_index_deleted(worktree_root, raw_paths)
-    raw_untracked = list(raw_untracked) + [p for p in index_untracked if p not in raw_untracked]
+        if raw_skip_missing and raw_paths:
+            raw_paths, skipped_missing = _drop_missing(worktree_root, raw_paths)
+            if not (raw_paths or raw_deleted or raw_untracked):
+                return _error(
+                    "every declared path is absent from disk and HEAD, nothing to commit.",
+                    nothing_to_commit=True,
+                    skipped_missing=skipped_missing,
+                )
 
-    with ledger.phase("expand_untracked_dirs"):
+        raw_paths, index_untracked, in_index = _index_classify(worktree_root, raw_paths)
+        raw_untracked = list(raw_untracked) + [p for p in index_untracked if p not in raw_untracked]
         raw_untracked = _expand_untracked_dirs(worktree_root, raw_untracked)
 
-    force_ignored = params.get("force_ignored") or []
-    if not isinstance(force_ignored, list) or not all(isinstance(p, str) for p in force_ignored):
-        return _error("params.force_ignored must be a list of strings")
-    exempt = {p.replace("\\", "/") for p in force_ignored}
-    raw_drop_ignored = params.get("drop_ignored", False)
-    if not isinstance(raw_drop_ignored, bool):
-        return _error("params.drop_ignored must be a boolean")
-    supplied_ignored = params.get("ignored_untracked")
-    if supplied_ignored is None:
-        with ledger.phase("ignored_untracked"):
-            found_ignored = _ignored_untracked(worktree_root, raw_paths)
-    elif not isinstance(supplied_ignored, list) or not all(
-        isinstance(p, str) for p in supplied_ignored
-    ):
-        return _error("params.ignored_untracked must be a list of strings")
-    else:
-        supplied = {p.replace("\\", "/") for p in supplied_ignored}
-        found_ignored = [p for p in raw_paths if p.replace("\\", "/") in supplied]
-    ignored = [p for p in found_ignored if p not in exempt]
-    dropped_ignored: list = []
-    if ignored and raw_drop_ignored:
-        dropped_ignored = ignored
-        raw_paths = [p for p in raw_paths if p not in set(ignored)]
-        if not (raw_paths or raw_deleted or raw_untracked):
+        if supplied_ignored is None:
+            probe = (
+                raw_paths if in_index is None
+                else [p for p in raw_paths if p.replace("\\", "/") not in in_index]
+            )
+            found_ignored = _ignored_untracked(worktree_root, probe)
+        else:
+            supplied = {p.replace("\\", "/") for p in supplied_ignored}
+            found_ignored = [p for p in raw_paths if p.replace("\\", "/") in supplied]
+        ignored = [p for p in found_ignored if p not in exempt]
+        if ignored and raw_drop_ignored:
+            dropped_ignored = ignored
+            raw_paths = [p for p in raw_paths if p not in set(ignored)]
+            if not (raw_paths or raw_deleted or raw_untracked):
+                shown = ", ".join(ignored[:5]) + (", ..." if len(ignored) > 5 else "")
+                return _error(
+                    f"every path is gitignored and untracked, nothing left to commit: {shown}.",
+                    dropped_ignored=dropped_ignored,
+                )
+            ignored = []
+        if ignored:
             shown = ", ".join(ignored[:5]) + (", ..." if len(ignored) > 5 else "")
             return _error(
-                f"every path is gitignored and untracked, nothing left to commit: {shown}.",
-                dropped_ignored=dropped_ignored,
+                f"{len(ignored)} path(s) are gitignored and untracked: {shown}. "
+                "Drop them from `paths`, or `git add -f` one deliberately."
             )
-        ignored = []
-    if ignored:
-        shown = ", ".join(ignored[:5]) + (", ..." if len(ignored) > 5 else "")
-        return _error(
-            f"{len(ignored)} path(s) are gitignored and untracked: {shown}. "
-            "Drop them from `paths`, or `git add -f` one deliberately."
-        )
 
-    # An untracked path leaves HEAD like a deleted one: downstream consumers read the union.
-    raw_removed = list(raw_deleted) + list(raw_untracked)
+        # An untracked path leaves HEAD like a deleted one: downstream consumers read the union.
+        raw_removed = list(raw_deleted) + list(raw_untracked)
 
-    # Filter FIRST: no path under `_GUARD_MODULE_DIR` means zero work below.
-    guard_paths = _guard_module_paths(raw_paths, raw_removed)
-    with ledger.phase("pre_commit_guard_sources"):
+        # Filter FIRST: no path under `_GUARD_MODULE_DIR` means zero work.
+        guard_paths = _guard_module_paths(raw_paths, raw_removed)
         pre_commit_guard_sources = (
             _pre_commit_guard_sources(worktree_root, guard_paths) if guard_paths else {}
         )
 
-    # A live peer holding a named path is reported, never refused.
-    peer_holds: list = []
-    abandoned_holds: list = []
-    held_by: dict = {}
-    with ledger.phase("peer_claim_warnings"):
-        peer_claim_warnings = _peer_claim_warnings(
-            worktree_root, list(raw_paths) + raw_removed, peer_holds, own_sid=session_id_override,
-            abandoned_holds=abandoned_holds, held_out=held_by,
-        )
-    own_sid = session_id_override
-    if own_sid is None:
-        with ledger.phase("resolve_session_id"):
+    with ledger.phase("resolve_session_id"):
+        own_sid = session_id_override
+        if own_sid is None:
             try:
                 own_sid = session_core.resolve_session_id(str(worktree_root))
             except Exception:  # noqa: BLE001
                 own_sid = None
-    # own_sid now reaches _peer_claim_warnings above, so the session's own holds drop out of peer warnings.
-    with ledger.phase("own_left_behind"):
-        free, contested = _own_left_behind(
-            worktree_root, held_by, own_sid, [*raw_paths, *raw_removed]
-        )
-    stopped_carried: dict = {}
-    stopped_withheld: dict = {}
-    stopped_error: Optional[str] = None
-    # A checkpoint lands its wave's declared footprint only: a sibling run's residue is not it.
-    if raw_carry_stopped and own_sid and not checkpoint_guard._SUBJECT_RE.match(
-        message.split("\n", 1)[0].strip()
-    ):
-        with ledger.phase("stopped_runs_residue"):
-            try:
-                from coordinator_core.ops.dispatch_emit import stopped_runs
 
-                stopped = stopped_runs.residue(
-                    worktree_root, own_sid, [*raw_paths, *raw_removed]
-                )
-                stopped_carried = {rid: list(ps) for rid, ps in stopped.carried.items()}
-                stopped_withheld = dict(stopped.withheld)
-            except Exception as exc:  # noqa: BLE001
-                stopped_carried, stopped_withheld = {}, {}
-                stopped_error = f"stopped-run residue unavailable ({type(exc).__name__}); nothing carried"
-    # The session's own `.git/` scratch (review-targets.txt) sits in its touch list but never
-    # in a tree: carrying it makes commit_paths refuse the whole commit.
-    free = [p for p in free if canonical_repo_relative_path_refusal(p) is None]
-    stopped_carried = {
-        rid: [p for p in ps if canonical_repo_relative_path_refusal(p) is None]
-        for rid, ps in stopped_carried.items()
-    }
-    stopped_flat = list(dict.fromkeys(p for ps in stopped_carried.values() for p in ps))
-    carried: list = []
-    own_paths = list(raw_paths)
-    if (raw_carry and free) or stopped_flat:
-        probe = list(dict.fromkeys([*(free if raw_carry else ()), *stopped_flat]))
-        # A supplied set answers only for `paths`; carried candidates sit outside it.
-        asked = {p.replace("\\", "/") for p in raw_paths} if supplied_ignored is not None else set()
-        skip = {p.replace("\\", "/") for p in supplied_ignored or ()}
-        unasked = [p for p in probe if p.replace("\\", "/") not in asked]
-        with ledger.phase("ignored_untracked"):
-            skip |= {p.replace("\\", "/") for p in _ignored_untracked(worktree_root, unasked)} if unasked else set()
-        if raw_carry:
-            carried = [p for p in free if p not in skip or p in exempt]
-        kept_stopped = {p for p in stopped_flat if p not in skip or p in exempt}
-        stopped_carried = {
-            rid: [p for p in ps if p in kept_stopped] for rid, ps in stopped_carried.items()
-        }
-        stopped_carried = {rid: ps for rid, ps in stopped_carried.items() if ps}
-        have = set(raw_paths)
-        raw_paths = (
-            list(raw_paths) + carried
-            + [p for p in stopped_flat if p in kept_stopped and p not in have and p not in carried]
+    # A live peer holding a named path is reported, never refused.
+    peer_holds: list = []
+    abandoned_holds: list = []
+    with ledger.phase("claim_lookup"):
+        peer_claim_warnings = _peer_claim_warnings(
+            worktree_root, list(raw_paths) + raw_removed, peer_holds, own_sid=own_sid or "",
+            abandoned_holds=abandoned_holds, companions=False,
         )
-    left = [p for p in free if p not in carried] + contested
 
-    # Gates run BEFORE the commit lands -- they are refusals, and a refusal
-    # after the fact is not one. Contrast `_guard_class_relay_step` below,
-    # which runs after and is forbidden from failing the commit.
+    # Gates run BEFORE the commit lands -- they are refusals, and a refusal after the fact is not one.
     with ledger.phase("pre_commit_gates"):
         read_source = post_commit_reader(
             worktree_root,
@@ -1337,35 +1251,8 @@ def _handler_body(params: dict, repo_root: Optional[Path], ledger: PhaseLedger) 
             prefer_staged=raw_prefer_staged,
             deliberate_stage=raw_prefer_deliberate_stage,
         )
-    carry_withheld_note: Optional[str] = None
     if gate_refusal is not None:
-        # TRAP: the carry is opportunistic and must never cost the run its own landing. A
-        # refusal with something carried is re-judged over the caller's own paths; the second
-        # pass is paid only on a refusal that was already going to stop the commit.
-        if not ((carried or stopped_flat) and (own_paths or raw_removed)):
-            return _error(gate_refusal)
-        with ledger.phase("pre_commit_gates_own"):
-            own_reader = post_commit_reader(
-                worktree_root,
-                resolve_git_common_dir(worktree_root),
-                paths=own_paths,
-                deleted_paths=raw_removed,
-                prefer_staged=raw_prefer_staged,
-                prefer_deliberate_stage=raw_prefer_deliberate_stage,
-            )
-            own_refusal = _pre_commit_gates(
-                worktree_root, own_paths, raw_removed, own_reader,
-                prefer_staged=raw_prefer_staged,
-                deliberate_stage=raw_prefer_deliberate_stage,
-            )
-        if own_refusal is not None:
-            return _error(own_refusal)
-        stopped_withheld.update({p: "gate-refused" for p in stopped_flat})
-        left = left + carried
-        carried = []
-        stopped_carried = {}
-        raw_paths = own_paths
-        carry_withheld_note = "carried residue withheld: " + gate_refusal.splitlines()[0][:200]
+        return _error(gate_refusal)
 
     # Declared-vs-actual EOL repair for the executables this commit touches (`docs/reference/eol-drift-detection.md`).
     # Filter-first: no `.cmd`/`.ps1`/`.sh`/`.bat` means no spawn and no read. Runs BEFORE the commit; not a
@@ -1394,7 +1281,6 @@ def _handler_body(params: dict, repo_root: Optional[Path], ledger: PhaseLedger) 
     # `outcome.sign_warning` is surfaced into `warnings` below.
     message = _disclose_peer_holds(message, peer_holds + abandoned_holds)
     message = _disclose_gone_deletions(message, reclassified)
-    message = _stopped_run_trailers(message, list(stopped_carried))
     with ledger.phase("apply_missing_trailers"):
         message = apply_missing_trailers(
             message,
@@ -1419,24 +1305,25 @@ def _handler_body(params: dict, repo_root: Optional[Path], ledger: PhaseLedger) 
 
     # Process files (see `_PROCESS_PREFIXES`) never ride in a
     # product commit on a non-DoE repo: a mixed call lands product first, process second.
-    prod_paths, proc_paths = split_process_paths(worktree_root, raw_paths)
-    prod_deleted, proc_deleted = split_process_paths(worktree_root, raw_deleted)
-    prod_untracked, proc_untracked = split_process_paths(worktree_root, raw_untracked)
-    mixed = bool(prod_paths or prod_deleted or prod_untracked) and bool(
-        proc_paths or proc_deleted or proc_untracked
-    )
-    # A merge is one commit: a finish_merge over a live MERGE_HEAD never splits.
-    if mixed and raw_finish_merge and (resolve_git_dir(worktree_root) / "MERGE_HEAD").exists():
-        mixed = False
-    if mixed:
-        proc_set = set(proc_paths) | set(proc_deleted) | set(proc_untracked)
-        halves = [
-            (prod_paths, prod_deleted, prod_untracked, message),
-            (proc_paths, proc_deleted, proc_untracked, _process_message(message)),
-        ]
-    else:
-        proc_set = set()
-        halves = [(raw_paths, raw_deleted, raw_untracked, message)]
+    with ledger.phase("split_process_paths"):
+        prod_paths, proc_paths = split_process_paths(worktree_root, raw_paths)
+        prod_deleted, proc_deleted = split_process_paths(worktree_root, raw_deleted)
+        prod_untracked, proc_untracked = split_process_paths(worktree_root, raw_untracked)
+        mixed = bool(prod_paths or prod_deleted or prod_untracked) and bool(
+            proc_paths or proc_deleted or proc_untracked
+        )
+        # A merge is one commit: a finish_merge over a live MERGE_HEAD never splits.
+        if mixed and raw_finish_merge and (resolve_git_dir(worktree_root) / "MERGE_HEAD").exists():
+            mixed = False
+        if mixed:
+            proc_set = set(proc_paths) | set(proc_deleted) | set(proc_untracked)
+            halves = [
+                (prod_paths, prod_deleted, prod_untracked, message),
+                (proc_paths, proc_deleted, proc_untracked, _process_message(message)),
+            ]
+        else:
+            proc_set = set()
+            halves = [(raw_paths, raw_deleted, raw_untracked, message)]
     if mixed:
         # Each half is checkpoint-checked inside its own landing; judged here over the whole
         # set so a refusal in the second half cannot follow a landed first.
@@ -1532,14 +1419,6 @@ def _handler_body(params: dict, repo_root: Optional[Path], ledger: PhaseLedger) 
             f"dropped {len(dropped_ignored)} gitignored-untracked path(s) from `paths`: {shown}."
         )
     warnings.extend(peer_claim_warnings)
-    if carry_withheld_note is not None:
-        warnings.append(carry_withheld_note)
-    if stopped_error is not None:
-        warnings.append(stopped_error)
-    warnings.extend(
-        f"carried stopped run {rid}'s residue: {len(ps)} file(s)"
-        for rid, ps in stopped_carried.items()
-    )
     if skill_weight_note is not None:
         warnings.append(skill_weight_note)
     staged_preferred = [p for o in outcomes for p in o.staged_preferred]
@@ -1611,28 +1490,29 @@ def _handler_body(params: dict, repo_root: Optional[Path], ledger: PhaseLedger) 
         with ledger.phase("record_ledger"):
             _record_ledger(worktree_root, done_paths, done_sha, done_message)
 
-    # Mark the repo for the next push sweep: mark only, never push.
-    # `sys.modules` gate: importing the cadence here would charge a cold commit its import graph.
-    cadence = sys.modules.get("coordinator_core.warm.push_cadence")
-    if cadence is not None:
-        cadence.note_commit(worktree_root)
-
     checkpoint_stamp: dict = {}
-    if "Checkpoint-Plan: " in message:
-        # Literal mirrors checkpoint_stamp.CHECKPOINT_NOT_LANDED_TRAILER: that module is imported lazily.
-        if "\nCheckpoint-Not-Landed: " in message:
-            checkpoint_stamp = {"stamp_deferred": "run-open"}
-        else:
-            try:
-                from coordinator_core.ops.dispatch_emit.checkpoint_stamp import stamp_checkpoint
+    with ledger.phase("post_land_reply"):
+        # Mark the repo for the next push sweep: mark only, never push.
+        # `sys.modules` gate: importing the cadence here would charge a cold commit its import graph.
+        cadence = sys.modules.get("coordinator_core.warm.push_cadence")
+        if cadence is not None:
+            cadence.note_commit(worktree_root)
 
-                checkpoint_stamp = stamp_checkpoint(
-                    worktree_root, message, sha, session_id=session_id_override
-                )
-            except Exception as exc:  # noqa: BLE001 -- the landed checkpoint stands
-                checkpoint_stamp = {"stamp_error": repr(exc)}
+        if "Checkpoint-Plan: " in message:
+            # Literal mirrors checkpoint_stamp.CHECKPOINT_NOT_LANDED_TRAILER: that module is imported lazily.
+            if "\nCheckpoint-Not-Landed: " in message:
+                checkpoint_stamp = {"stamp_deferred": "run-open"}
+            else:
+                try:
+                    from coordinator_core.ops.dispatch_emit.checkpoint_stamp import stamp_checkpoint
 
-    landed = commit_meta(resolve_git_common_dir(worktree_root), sha)
+                    checkpoint_stamp = stamp_checkpoint(
+                        worktree_root, message, sha, session_id=session_id_override
+                    )
+                except Exception as exc:  # noqa: BLE001 -- the landed checkpoint stands
+                    checkpoint_stamp = {"stamp_error": repr(exc)}
+
+        landed = commit_meta(resolve_git_common_dir(worktree_root), sha)
     result = {
         "committed": True,
         "sha": sha,
@@ -1646,12 +1526,6 @@ def _handler_body(params: dict, repo_root: Optional[Path], ledger: PhaseLedger) 
         "dropped_ignored": dropped_ignored,
         "skipped_missing": skipped_missing,
     }
-    if carried or left:
-        result["own_left_behind"] = {"carried": carried, "left": left}
-    if stopped_carried or stopped_withheld:
-        result["stopped_run_residue"] = {
-            "carried": stopped_carried, "withheld": stopped_withheld,
-        }
     if checkpoint_stamp:
         result["checkpoint_stamp"] = checkpoint_stamp
     if process_sha is not None:

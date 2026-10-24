@@ -317,6 +317,67 @@ def _review_written(worktree_root: Path, session_id: Optional[str], run_id: str)
         return None
 
 
+#: ``withheld`` reason for a path this run wrote that stays uncommitted and no other leg named.
+RUN_DIRT_UNCOMMITTED = "run-dirt-uncommitted"
+
+
+def _run_written(worktree_root: Path, session_id: Optional[str], run_id: str) -> list:
+    """Worktree-relative paths the session or any agent it dispatched wrote since the run started,
+    from the engine's touch records (executors included, unlike the review-stage source). Empty
+    when the source cannot answer: unknown never names a path, so a peer's dirt is never claimed."""
+    import os
+
+    from coordinator_core.ops.dispatch_emit.terminal_commit import _run_started_at
+    from coordinator_core.session import core, touch_record
+
+    try:
+        since = _run_started_at(worktree_root, run_id)
+        hub = core.sessions_dir(str(worktree_root))
+        if not session_id or since is None or not hub:
+            return []
+        session_dir = os.path.join(hub, session_id)
+        sinks = [session_dir]
+        try:
+            ledger = Path(session_dir, "dispatched-agents.txt").read_text(encoding="utf-8")
+        except FileNotFoundError:
+            ledger = ""
+        for row in ledger.splitlines():
+            fields = row.split("\t")
+            agent_dir = os.path.join(hub, ".agents", fields[0]) if fields[0] else None
+            if agent_dir and len(fields) >= 3 and touch_record.agent_owner_sid(agent_dir)[0] == session_id:
+                sinks.append(agent_dir)
+        found: set = set()
+        for sink in dict.fromkeys(sinks):
+            for member in touch_record.discover_family(touch_record.sink_path(sink)):
+                try:
+                    raw = member.read_bytes()
+                except FileNotFoundError:
+                    continue
+                for line in touch_record.iter_complete_lines(raw):
+                    try:
+                        event = touch_record.decode_line(line)
+                    except touch_record.MalformedRecordLine:
+                        continue
+                    if (
+                        event.verb == touch_record.VERB_TOUCH and event.kind != touch_record.KIND_READ
+                        and event.timestamp >= since
+                    ):
+                        rel = review_edits._norm(event.path)
+                        if not review_edits._out_of_worktree(rel):
+                            found.add(rel)
+        return sorted(found)
+    except Exception:  # noqa: BLE001 -- an unreadable source names no path
+        return []
+
+
+def _withhold_run_dirt(withheld: dict, written: list, changed: set, landed: set) -> None:
+    """Add to ``withheld`` each path in ``written`` that is still changed against HEAD, not landed
+    by this commit and not already named; never a path the run did not write."""
+    for p in written:
+        if p in changed and p not in landed and p not in withheld:
+            withheld[p] = RUN_DIRT_UNCOMMITTED
+
+
 def _integrity_findings(
     worktree_root: Path, run_id: str, base: Optional[str], paths: list, plan: Optional[str] = None
 ) -> list:
@@ -559,8 +620,9 @@ def _land(
     review_literals = [] if review_written is None else [
         p for p in review_written if not review_edits._out_of_worktree(review_edits._norm(p))
     ]
+    run_written = [p for p in _run_written(worktree_root, session_id, run_id) if not p.startswith("scratch/")]
     snapshot = _worktree_snapshot(
-        worktree_root, declared + list(artifacts.paths()) + review_literals,
+        worktree_root, declared + list(artifacts.paths()) + review_literals + run_written,
         [record_dir_rel, RECORD_DIR_ROOT], [],
     )
     if snapshot is None:
@@ -750,6 +812,8 @@ def _land(
         if review_landed:
             landed_classes["review-edit"] = len(review_landed)
     review_reply["review_edits_unlanded"] = unlanded
+
+    _withhold_run_dirt(withheld, run_written, snapshot.changed, set(paths) | set(deleted))
 
     if process_withheld:
         process_artifact_policy.exclude_locally(worktree_root, process_withheld, artifacts.record_dirs)

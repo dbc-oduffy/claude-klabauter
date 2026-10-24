@@ -292,6 +292,9 @@ FLOOR_GUARDS = frozenset(
         # PM load norm (CLAUDE.md § Load norm): concurrent unscoped test runs, builds and dev
         # servers took the box down; a level must not reopen it (PM ruling 2026-10-10)
         "guard-heavy-command-admission",
+        # group-em-b7 (G-EM, PM-delegated) strict-by-default ruling after three cell kills under
+        # warn: a post-fire EM product write is an executor write, so no level may advise it
+        "block-em-post-fire-product-write",
     }
 )
 

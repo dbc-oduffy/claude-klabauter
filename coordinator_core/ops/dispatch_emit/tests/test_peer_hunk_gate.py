@@ -59,6 +59,60 @@ def test_co_declared_path_is_held_and_names_the_sibling(repo):
     assert "run-b" in peer_hunk_gate.refusal_message(holds, OWN)
 
 
+def _release_fixture(repo: Path, status: str = "open", plan: str | None = None):
+    (repo / "state/sizings").mkdir(parents=True, exist_ok=True)
+    (repo / "state/sizings/s.yaml").write_text(f"status: {status}\n", encoding="utf-8")
+    halted = f"ask-{time.strftime('%Y%m%dT%H%M%S', time.gmtime(time.time() - 300))}-aaaaaa"
+    rdir = _declare(repo, halted, PATH)
+    (rdir / "run.json").write_text(json.dumps({"sizing_rel": "state/sizings/s.yaml"}), encoding="utf-8")
+    marker = {
+        "status": "halted", "sizing_rel": "state/sizings/s.yaml", **({"plan": plan} if plan else {}),
+        "run_artifacts": {"withheld": {PATH: "peer-held"}},
+    }
+    (rdir / "halted.json").write_text(json.dumps(marker), encoding="utf-8")
+    return halted
+
+
+def test_halted_holder_holds_names_both_release_calls_and_superseding_releases(repo):
+    halted = _release_fixture(repo)
+    holds = peer_hunk_gate.co_declared_peer_holds(repo, OWN, [PATH], [PATH])
+    assert holds == [(PATH, halted)]
+    message = peer_hunk_gate.refusal_message(holds, OWN, repo)
+    assert "sizing.supersede {sizing: state/sizings/s.yaml}" in message
+    assert f"dispatch.record_halted_run_landed {{run_id: {halted}" in message
+    assert peer_hunk_gate.refusal_message(holds, OWN) == peer_hunk_gate.refusal_message(holds, OWN, None)
+    assert "Release run" not in peer_hunk_gate.refusal_message(holds, OWN)
+    _release_fixture(repo, "superseded")
+    assert peer_hunk_gate.co_declared_peer_holds(repo, OWN, [PATH], [PATH]) == []
+
+
+def test_plan_landing_releases_the_halted_holder_and_a_live_holder_message_is_unchanged(repo):
+    _release_fixture(repo, plan="docs/plans/p.md")
+    assert peer_hunk_gate.co_declared_peer_holds(repo, OWN, [PATH], [PATH], own_plan="docs/plans/p.md") == []
+    assert peer_hunk_gate.co_declared_peer_holds(repo, OWN, [PATH], [PATH], own_plan="docs/plans/q.md") != []
+    _declare(repo, "run-live", "live/x.py")
+    run_token.mint(repo, "run-live", "l.mjs", session_id=SELF)
+    holds = [("live/x.py", "run-live")]
+    assert peer_hunk_gate.refusal_message(holds, OWN, repo) == peer_hunk_gate.refusal_message(holds, OWN)
+
+
+def test_junior_fresh_token_sibling_holds_nothing_against_a_senior_committer(repo):
+    _declare(repo, "run-b", PATH)
+    run_token.mint(repo, "run-b", "b.mjs", session_id=SELF)
+    senior = (0.0, OWN)
+    junior = (time.time() + 600, OWN)
+    assert peer_hunk_gate.co_declared_peer_holds(repo, OWN, [PATH], [PATH], minted_before=senior) == []
+    assert peer_hunk_gate.co_declared_peer_holds(repo, OWN, [PATH], [PATH], minted_before=junior) == [(PATH, "run-b")]
+    assert peer_hunk_gate.co_declared_peer_holds(repo, OWN, [PATH], [PATH]) == [(PATH, "run-b")]
+
+
+def test_seniority_never_releases_a_halted_holder(repo):
+    halted = _release_fixture(repo)
+    assert peer_hunk_gate.co_declared_peer_holds(
+        repo, OWN, [PATH], [PATH], minted_before=(0.0, OWN),
+    ) == [(PATH, halted)]
+
+
 def test_own_only_path_is_not_held(repo):
     _declare(repo, "run-b", "other/b.py")
     run_token.mint(repo, "run-b", "b.mjs", session_id=SELF)

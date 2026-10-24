@@ -5,7 +5,8 @@ inside the functions that use them. No module-level `coordinator_core` import; a
 memory comes from `host_sampler.avail_mb`, imported inside `read_memory_status`.
 
 Family exit codes: 0 ok, 1 operational failure, 2 usage, 3 not elevated, 4 admission HOLD
-(`box-memory-snapshot --admit-peak` only), 6 unsupported host.
+(`box-memory-snapshot --admit-peak` only), 5 cannot leave the Claude Code session's job
+(`session_detach.ensure_detached` refusal), 6 unsupported host.
 """
 
 from __future__ import annotations
@@ -18,6 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 GIB = 1024**3
+CANNOT_DETACH_EXIT = 5
 UNSUPPORTED_HOST_EXIT = 6
 
 _PROCESS_QUERY_LIMITED_INFORMATION = 0x1000

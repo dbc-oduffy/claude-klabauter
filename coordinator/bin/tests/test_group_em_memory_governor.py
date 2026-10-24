@@ -34,6 +34,12 @@ def _non_windows_host(monkeypatch):
     monkeypatch.setattr(gov.sys, "platform", "linux")
 
 
+@pytest.fixture(autouse=True)
+def _inline_marker(monkeypatch):
+    # pytest runs under a Claude Code session; the marker keeps in-process main() calls inline.
+    monkeypatch.setenv("COORDINATOR_GUARD_DETACHED", "1")
+
+
 def _args(**kw):
     base = dict(interval=0, max_pauses=3, resume_after=2, psi_full=10.0, avail_pct=5.0,
                 runaway_mb=0, runaway_every=1)
@@ -490,6 +496,99 @@ def test_place_engine_on_path_resolves_from_a_klabauter_shaped_tree(tmp_path, mo
         sys.modules.pop(spec.name, None)
         for name in ("cc_invoke", "engine_bootstrap", "lib"):
             sys.modules.pop(name, None)
+
+
+class _FakePopen:
+    calls: list = []
+    fail = False
+
+    def __init__(self, cmd, **kw):
+        if _FakePopen.fail:
+            raise OSError("breakaway refused")
+        _FakePopen.calls.append((cmd, kw))
+        self.pid = 4242
+
+
+@pytest.fixture
+def relaunch(monkeypatch, tmp_path):
+    """A session-parented start with the spawn faked: no marker, injected ancestry, fake popen."""
+    import subprocess
+
+    monkeypatch.delenv("COORDINATOR_GUARD_DETACHED", raising=False)
+    monkeypatch.setenv("COORDINATOR_GUARD_FAKE_SESSION", "1")
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "home"))
+    _FakePopen.calls, _FakePopen.fail = [], False
+    monkeypatch.setattr(subprocess, "Popen", _FakePopen)
+    monkeypatch.setattr(gov, "run", lambda *a, **k: pytest.fail("run reached on a relaunch"))
+    return tmp_path
+
+
+def test_session_start_relaunches_detached_and_exits_zero(relaunch, capsys):
+    log = relaunch / "g.log"
+    with pytest.raises(SystemExit) as exc:
+        gov.main(["--interval", "3", "--log", str(log)])
+    assert exc.value.code == 0
+    assert f"DETACHED group-em-memory-governor pid=4242 log={log}" in capsys.readouterr().out
+    (cmd, kw), = _FakePopen.calls
+    assert kw["env"]["COORDINATOR_GUARD_DETACHED"] == "1"
+    assert cmd[-2:] == ["--log", str(log)] and "--interval" in cmd
+
+
+def test_default_log_is_settings_home_scratch_governor_log(relaunch):
+    with pytest.raises(SystemExit):
+        gov.main([])
+    (cmd, _), = _FakePopen.calls
+    assert cmd[-2:] == ["--log", str(relaunch / "home" / "scratch" / "governor.log")]
+
+
+def test_strict_spawn_failure_exits_five_with_one_line_remedy(relaunch, capsys):
+    _FakePopen.fail = True
+    with pytest.raises(SystemExit) as exc:
+        gov.main(["--log", str(relaunch / "g.log")])
+    assert exc.value.code == 5
+    err = capsys.readouterr().err.strip().splitlines()
+    assert len(err) == 1 and err[0].startswith("group-em-memory-governor: cannot leave")
+
+
+def test_marker_set_runs_inline(monkeypatch):
+    reached = []
+    monkeypatch.setattr(gov, "run", lambda *a, **k: reached.append(1))
+    monkeypatch.setattr(gov, "resolve_notice_path", lambda: None)
+    monkeypatch.setattr(gov, "default_pidfile", lambda: None)
+    gov.main([])
+    assert reached == [1]
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows process-time gate")
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_relaunching_parent_costs_under_budget(tmp_path, monkeypatch):
+    import os
+    import re
+    import subprocess
+
+    monkeypatch.undo()  # drop the module fixtures: this test spawns for real
+    tests_dir = Path(__file__).resolve().parent
+    spec = importlib.util.spec_from_file_location(
+        "box_memory_cli_process_time", tests_dir / "test_box_memory_cli_process_time.py")
+    pt = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(pt)
+    env = {k: v for k, v in os.environ.items() if k != "COORDINATOR_GUARD_DETACHED"}
+    env.update(COORDINATOR_GUARD_FAKE_SESSION="1", COORDINATOR_SETTINGS_HOME=str(tmp_path))
+    proc = subprocess.Popen(
+        [sys.executable, str(_SRC), "--log", str(tmp_path / "g.log")],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    out, err = proc.communicate(timeout=30)
+    m = re.search(rb"pid=(\d+)", out)
+    try:
+        assert proc.returncode in (0, 5), err
+        assert pt._cpu_seconds(proc) < 0.5
+    finally:
+        if m:
+            subprocess.run(["taskkill", "/F", "/T", "/PID", m.group(1).decode()],
+                           capture_output=True, check=False,
+                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
 
 
 def test_place_engine_on_path_is_false_when_the_engine_is_unresolvable(monkeypatch):

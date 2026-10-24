@@ -123,6 +123,27 @@ def test_main_exit_codes_and_single_final_line(tmp_path, capsys):
     assert out[-1].startswith("VERDICT: PASS")
     assert sum(1 for line in out if line.startswith("VERDICT")) == 1
     assert "land=100.0" in "\n".join(out) and "tiny" not in "\n".join(out)
+    assert out[1] == "  phase_no_handler_row: 1"
+
+
+def test_every_unpaired_reason_is_named_and_windowed_by_since(tmp_path):
+    repo = _repo(tmp_path)
+    nocid = _pair("x", t=100.0)[0]
+    nocid["corr_id"] = None
+    dup = _pair("d", t=3000.0)
+    dup_early = dict(dup[0], t_start=2999.0)
+    nohandler = _pair("nh", t=3001.0)[:1]
+    nophase = _pair("np", t=3002.0)[1:]
+    nopms = _pair("pm", t=3003.0)
+    del nopms[1]["process_ms"]
+    _write(repo, [nocid, dup_early] + dup + nohandler + nophase + nopms + _pair("ok", t=3004.0))
+    _, unpaired = pv._pair(repo)
+    assert pv.unpaired_by_reason(unpaired, None) == {
+        "handler_no_phase_row": 1, "handler_no_process_ms": 1, "phase_duplicate_corr_id": 1,
+        "phase_no_corr_id": 1, "phase_no_handler_row": 1,
+    }
+    assert "phase_no_corr_id" not in pv.unpaired_by_reason(unpaired, 1000.0)
+    assert sum(pv.unpaired_by_reason(unpaired, 1000.0).values()) == 4
 
     _write(repo, _many(5, ms=700.0, spawns=1))
     assert pv.main(["--repo-root", str(repo)]) == 1

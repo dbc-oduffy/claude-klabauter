@@ -105,6 +105,67 @@ def test_unstamped_name_skipped_without_read(repo, monkeypatch):
     assert _claims(repo, [JOB]) == {}
 
 
+SIZING = "state/sizings/s.yaml"
+PLAN = "docs/plans/p.md"
+
+
+def _bind(repo, run_id, *, sizing=SIZING, plan=None, marker=STATUS_HALTED):
+    rec = repo / "state/warp" / run_id
+    (rec / "run.json").write_text(json.dumps({"sizing_rel": sizing}), encoding="utf-8")
+    body = {"status": marker, "sizing_rel": sizing}
+    try:
+        body.update(run_artifacts=json.loads((rec / halted_run.HALTED_FILE).read_text(encoding="utf-8"))["run_artifacts"])
+    except (OSError, KeyError, ValueError):
+        pass
+    if plan:
+        body["plan"] = plan
+    (rec / halted_run.HALTED_FILE).write_text(json.dumps(body), encoding="utf-8")
+
+
+def _sizing(repo, rel, status="open", deliverable=""):
+    path = repo / rel
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(f"status: {status}\n" + (f"deliverable_id: {deliverable}\n" if deliverable else ""), encoding="utf-8")
+
+
+def test_superseded_sizing_halted_run_claims_nothing(repo):
+    _sizing(repo, SIZING, "superseded")
+    _record(repo, HALTED_ID, writes=[JOB])
+    _bind(repo, HALTED_ID)
+    assert _claims(repo, [JOB], exclude_run=OTHER_ID) == {}
+
+
+def test_same_sizing_successor_releases_and_unrelated_halted_still_holds(repo):
+    _sizing(repo, SIZING)
+    _sizing(repo, "state/sizings/u.yaml")
+    _record(repo, HALTED_ID, writes=[JOB], withheld=[JOB])
+    _bind(repo, HALTED_ID)
+    _record(repo, OTHER_ID)
+    _bind(repo, OTHER_ID)
+    assert _claims(repo, [JOB], exclude_run=OTHER_ID) == {}
+    _bind(repo, OTHER_ID, sizing="state/sizings/u.yaml")
+    assert _claims(repo, [JOB], exclude_run=OTHER_ID) == {JOB: [HALTED_ID]}
+
+
+def test_same_deliverable_successor_releases(repo):
+    _sizing(repo, SIZING, deliverable="dlv-x")
+    _sizing(repo, "state/sizings/t.yaml", deliverable="dlv-x")
+    _record(repo, HALTED_ID, writes=[JOB])
+    _bind(repo, HALTED_ID)
+    _record(repo, OTHER_ID)
+    _bind(repo, OTHER_ID, sizing="state/sizings/t.yaml")
+    assert _claims(repo, [JOB], exclude_run=OTHER_ID) == {}
+
+
+def test_own_plan_landing_releases_and_other_plan_holds(repo):
+    _sizing(repo, SIZING)
+    _record(repo, HALTED_ID, writes=[JOB], withheld=[JOB])
+    _bind(repo, HALTED_ID, plan=PLAN)
+    assert _claims(repo, [JOB], exclude_run=None, own_plan=PLAN) == {}
+    assert _claims(repo, [JOB], exclude_run=None, own_plan="docs/plans/q.md") == {JOB: [HALTED_ID]}
+    assert _claims(repo, [JOB], exclude_run=None) == {JOB: [HALTED_ID]}
+
+
 def test_no_candidates_or_no_state_dir(repo):
     assert _claims(repo, []) == {}
     assert _claims(repo, [JOB]) == {}

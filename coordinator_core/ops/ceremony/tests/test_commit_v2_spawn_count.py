@@ -67,7 +67,7 @@ def test_two_plain_landings_make_zero_run_git_calls(repo, monkeypatch):
     assert calls == []
 
 
-def test_a_new_file_without_a_supplied_ignore_set_costs_exactly_one_check_ignore(repo, monkeypatch):
+def test_a_new_file_held_by_the_index_needs_no_check_ignore(repo, monkeypatch):
     calls: list = []
     real = commit_v2.run_git
 
@@ -80,6 +80,23 @@ def test_a_new_file_without_a_supplied_ignore_set_costs_exactly_one_check_ignore
     _w(repo / "c.txt", "new\n")
     _git(repo, "add", "c.txt")
     out = commit_v2._handler({"paths": ["c.txt"], "message": "add c"}, repo_root=repo / ".git")
+
+    assert out["committed"] is True, out
+    assert calls == []
+
+
+def test_a_new_file_outside_the_index_costs_exactly_one_check_ignore(repo, monkeypatch):
+    calls: list = []
+    real = commit_v2.run_git
+
+    def counting(argv, *args, **kwargs):
+        calls.append(list(argv))
+        return real(argv, *args, **kwargs)
+
+    monkeypatch.setattr(commit_v2, "run_git", counting)
+
+    _w(repo / "d.txt", "new\n")
+    out = commit_v2._handler({"paths": ["d.txt"], "message": "add d"}, repo_root=repo / ".git")
 
     assert out["committed"] is True, out
     assert [c[c.index("--no-optional-locks") + 1] for c in calls] == ["check-ignore"]

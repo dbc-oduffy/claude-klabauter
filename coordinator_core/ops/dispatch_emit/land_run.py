@@ -2642,7 +2642,7 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
             from coordinator_core.ops.dispatch_emit import peer_hunk_gate
 
             remedy = ". " + peer_hunk_gate.refusal_message(
-                [(first.path, first.detail.partition(":")[0])], sibling_run_id,
+                [(first.path, first.detail.partition(":")[0])], sibling_run_id, root=root,
             )
         elif first.reason == "since-base-overlap":
             from coordinator_core.ops import warp_run_deliverable
@@ -2848,6 +2848,14 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
             pass
     else:
         siblings = None
+    origin_landed: list = []
+    if request.plan_path:
+        from coordinator_core.ops.dispatch_emit import halted_hold_release
+
+        # Never raises: the commit stands whatever the marker rewrite does.
+        origin_landed = halted_hold_release.mark_plan_origins_landed(
+            root, request.plan_path, sha, list(paths), exclude_run=sibling_run_id,
+        )
 
     # ---- the reply
     reply: dict = {
@@ -2877,6 +2885,8 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
         reply["index_stale"] = sorted(index_stale)
     if siblings is not None:
         reply["siblings"] = siblings
+    if origin_landed:
+        reply["origin_landed"] = origin_landed
     criterion = inline_review.get("criterion")
     if isinstance(criterion, dict) and criterion.get("status"):
         reply["criterion_status"] = "not_met" if unlanded_rows else criterion["status"]
@@ -3151,7 +3161,9 @@ def _integrity(
         findings += li.since_base_findings(root, live, base, run_id=run_id, plan=plan)
     from coordinator_core.ops.dispatch_emit import peer_hunk_gate
 
-    for path, sibling in peer_hunk_gate.co_declared_peer_holds(root, run_id, live, own_declared):
+    for path, sibling in peer_hunk_gate.co_declared_peer_holds(
+        root, run_id, live, own_declared, own_plan=plan,
+    ):
         findings.append(li.Finding(
             path, peer_hunk_gate.PEER_HUNKS_CO_DECLARED,
             f"{sibling}: also declared by that unlanded run, whose hunks a path commit cannot split off",

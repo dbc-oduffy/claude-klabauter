@@ -638,6 +638,14 @@ def _land(
     if process_withheld:
         process_artifact_policy.exclude_locally(root, process_withheld, artifacts.record_dirs)
 
+    from coordinator_core.ops.dispatch_emit.halted_record_commit import _run_written, _withhold_run_dirt
+
+    run_written = [p for p in _run_written(root, session_id, run_id) if not p.startswith("scratch/")]
+    written_entries = _entries_at(root, None, run_written) if run_written else {}
+    if written_entries is not None:
+        own_differ, own_gone = _differs(root, written_entries, run_written)
+        _withhold_run_dirt(withheld, run_written, own_differ | own_gone, set(paths) | set(deleted))
+
     if not paths and not deleted:
         _settle_ledger_pointer(repo_root, run_id, halted, sizing_rel, outcome_rel)
         return {

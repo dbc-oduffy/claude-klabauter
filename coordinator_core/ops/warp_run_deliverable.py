@@ -151,8 +151,8 @@ def live_run_deliverable_id(repo_root: Path, session_id: str, paths: Iterable[st
 def _halted(root: Path, run_id: str) -> bool:
     """A run whose record carries a `halted` marker writes nothing more; its token stays fresh for
     the TTL and its declaration contests no live write. Its declared writes stay held against
-    another run's carry until it resumes or ages out (`halted_run_write_claims`). A `resumed`
-    marker is live again."""
+    another run's carry until it resumes, ages out, or `halted_hold_release.release_reason` frees
+    it (`halted_run_write_claims`). A `resumed` marker is live again."""
     from coordinator_core.ops.dispatch_emit import halted_run
 
     try:
@@ -160,6 +160,21 @@ def _halted(root: Path, run_id: str) -> bool:
     except ValueError:
         return False
     return marker is not None and marker.get("status") == halted_run.STATUS_HALTED
+
+
+def resumed_run_released(root: Path, run_id: str, exclude_run: Optional[str]) -> bool:
+    """Whether `run_id`'s marker reads `resumed` and `halted_hold_release.release_reason` frees it
+    (superseded sizing or a landed successor). A run with no marker, or any other status, is False
+    without consulting the predicate."""
+    from coordinator_core.ops.dispatch_emit import halted_hold_release, halted_run
+
+    try:
+        marker = halted_run._read(record_dir(root, run_id))
+        if marker is None or marker.get("status") != halted_run.STATUS_RESUMED:
+            return False
+        return bool(halted_hold_release.release_reason(root, run_id, exclude_run, None))
+    except Exception:  # noqa: BLE001 -- unreadable record holds
+        return False
 
 
 def _manifest_declared(run_id: str, root: Path) -> tuple:
@@ -282,6 +297,8 @@ def live_run_write_claims(
             continue
         if not _live_peer_run(root, record, exclude_session, cwd, minted_before):
             continue
+        if resumed_run_released(root, run_id, exclude_run):
+            continue
         declared, prefixes, unreadable = _manifest_declared(run_id, root)
         if unreadable and not declared and not prefixes:
             logging.getLogger(__name__).warning("live run %s: unreadable write declaration", run_id)
@@ -295,16 +312,28 @@ def live_run_write_claims(
 
 
 def halted_run_write_claims(
-    repo_root: Path, paths: Iterable[str], *, exclude_run: Optional[str], now: Optional[float] = None,
+    repo_root: Path,
+    paths: Iterable[str],
+    *,
+    exclude_run: Optional[str],
+    now: Optional[float] = None,
+    own_plan: Optional[str] = None,
+    dirty=None,
 ) -> Optional[dict]:
     """`{path: sorted halted run ids}` for each of `paths` a halted, unresumed run's halt record
-    names as withheld: a halted run that withheld nothing on a path holds nothing there.
+    names as withheld, plus (when `dirty`, a no-arg callable returning the set of paths dirty in
+    the tree, is given) each path its manifest declares that is dirty now. `dirty` is called at most
+    once per call, and only when an unreleased halted run declares a candidate; a halted run that
+    withheld nothing and left nothing dirty holds nothing.
+
+    A halted run `halted_hold_release.release_reason(root, run_id, exclude_run, own_plan)` frees
+    (superseded sizing, same sizing/deliverable as `exclude_run`, or `own_plan` landing) claims nothing.
 
     Only record dirs whose run-id stamp is within `run_token.TTL_SECONDS` of `now` are read; a name
     with no stamp, or an older one, costs no IO. `exclude_run` is skipped. No session filter."""
     import time
 
-    from coordinator_core.ops.dispatch_emit import stopped_runs
+    from coordinator_core.ops.dispatch_emit import halted_hold_release, stopped_runs
 
     root = Path(repo_root)
     wanted = {_norm(p) for p in paths if p}
@@ -326,7 +355,18 @@ def halted_run_write_claims(
             continue
         if not _halted(root, run_id):
             continue
-        for path in wanted & halted_withheld_paths(root, run_id):
+        if halted_hold_release.release_reason(root, run_id, exclude_run, own_plan):
+            continue
+        held = halted_withheld_paths(root, run_id)
+        if dirty is not None:
+            declared, prefixes, _unreadable = _manifest_declared(run_id, root)
+            if declared or prefixes:
+                declared_set = set(declared)
+                hot = [p for p in wanted if p not in held and (
+                    p in declared_set or any(p == pre or p.startswith(pre + "/") for pre in prefixes))]
+                if hot:
+                    held = held | (set(hot) & dirty())
+        for path in wanted & held:
             claims.setdefault(path, set()).add(run_id)
     return {p: sorted(s) for p, s in claims.items()}
 

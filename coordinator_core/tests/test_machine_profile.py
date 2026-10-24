@@ -79,8 +79,9 @@ def test_underscore_name_resolves_kebab_key(reg):
     assert "a-c" in text and "a_c" not in text
 
 
-def test_floor_guards_has_the_fifteen_names():
-    assert len(mp.FLOOR_GUARDS) == 15
+def test_floor_guards_has_the_sixteen_names():
+    assert len(mp.FLOOR_GUARDS) == 16
+    assert "block-em-post-fire-product-write" in mp.FLOOR_GUARDS
     assert "block-approval-sentinel-creation" in mp.FLOOR_GUARDS
     assert "block-consumed-handoff-edit" in mp.FLOOR_GUARDS
     assert "block-whole-filesystem-scan" in mp.FLOOR_GUARDS

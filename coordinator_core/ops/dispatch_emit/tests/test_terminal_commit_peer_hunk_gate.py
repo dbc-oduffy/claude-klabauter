@@ -56,9 +56,9 @@ def _declare_sibling(repo: Path) -> None:
     run_token.mint(repo, SIBLING, "sibling.mjs", session_id=SELF)
 
 
-def _fire(repo: Path) -> dict:
+def _fire(repo: Path, plan_path: str | None = None) -> dict:
     (repo / PATH).write_text("x = 2\n", encoding="utf-8")
-    request = CommitRequest(chunks=(ChunkCommit(id="C1", title="t1", paths=(PATH,)),))
+    request = CommitRequest(chunks=(ChunkCommit(id="C1", title="t1", paths=(PATH,)),), plan_path=plan_path)
     (repo / "run.mjs").write_text(render_marker(request) + "\n", encoding="utf-8")
     params = {"inline_review": _REVIEWED, "script_path": "run.mjs", "incomplete_chunks": [], "session_id": SELF}
     return terminal_commit._handler(params, repo_root=repo / ".git")
@@ -74,7 +74,57 @@ def test_a_path_a_live_sibling_run_also_declares_is_refused_naming_it(repo):
     assert out["refused"] == peer_hunk_gate.PEER_HUNKS_CO_DECLARED
     assert out["integrity"][0]["path"] == PATH
     assert SIBLING in out["integrity"][0]["detail"]
+    assert "Release run" not in out["integrity"][0]["detail"]
     assert _git(["rev-parse", "HEAD"], repo) == head
+
+
+def _halted_sibling(repo: Path, sizing_status: str, plan: str | None = None) -> str:
+    import time
+
+    (repo / "state/sizings").mkdir(parents=True, exist_ok=True)
+    (repo / "state/sizings/s.yaml").write_text(f"status: {sizing_status}\n", encoding="utf-8")
+    halted = f"ask-{time.strftime('%Y%m%dT%H%M%S', time.gmtime(time.time() - 300))}-aaaaaa"
+    for old in (repo / "state" / "warp").glob("ask-*-aaaaaa"):
+        halted = old.name
+    rdir = repo / "state" / "warp" / halted
+    rdir.mkdir(parents=True, exist_ok=True)
+    (rdir / "manifest.json").write_text(
+        json.dumps({"rows": [{"id": "C1", "writes": [PATH]}], "doc_writes": []}), encoding="utf-8"
+    )
+    (rdir / "run.json").write_text(json.dumps({"sizing_rel": "state/sizings/s.yaml"}), encoding="utf-8")
+    (rdir / "halted.json").write_text(
+        json.dumps({"status": "halted", "sizing_rel": "state/sizings/s.yaml", **({"plan": plan} if plan else {})}),
+        encoding="utf-8",
+    )
+    return halted
+
+
+def test_a_halted_holder_refusal_names_its_release_and_a_superseded_sizing_releases_it(repo):
+    halted = _halted_sibling(repo, "open")
+
+    out = _fire(repo)
+
+    assert out["committed"] is False, out
+    assert out["refused"] == peer_hunk_gate.PEER_HUNKS_CO_DECLARED
+    assert f"Release run {halted}" in out["integrity"][0]["detail"]
+
+    _halted_sibling(repo, "superseded")
+    out = _fire(repo)
+
+    assert out["committed"] is True, out
+
+
+def test_a_halted_sibling_on_the_landing_plan_is_released_and_another_plan_still_holds(repo):
+    _halted_sibling(repo, "open", plan="docs/plans/p.md")
+
+    out = _fire(repo, plan_path="docs/plans/q.md")
+
+    assert out["committed"] is False, out
+    assert out["refused"] == peer_hunk_gate.PEER_HUNKS_CO_DECLARED
+
+    out = _fire(repo, plan_path="docs/plans/p.md")
+
+    assert out["committed"] is True, out
 
 
 def test_the_same_landing_without_a_co_declaring_sibling_commits(repo):
@@ -89,9 +139,11 @@ def test_an_unresolved_out_of_ask_finding_on_the_path_is_refused(repo):
     (share / "run.review-wave-bookkeeping.md").write_text(
         '---\nintegrated_from: ["rev-1"]\n---\n\nbody\n', encoding="utf-8"
     )
+    row = {"id": "finding-1", "file": PATH, "summary": "failing_detail changes belong to another run",
+           "out_of_ask": True}
     (share / "rev-1.md").write_text(
-        "---\nagent_type: reviewer\n---\n\n## Findings\n\n### Finding 1\n\n"
-        "Out-of-ask hunks: failing_detail changes in execute_review.py belong to another run.\n",
+        "---\nagent_type: reviewer\n---\n\n## Findings\n\n### Finding 1\n\nOut-of-ask hunks.\n"
+        f"\n## Findings Ledger\n\n```json\n{json.dumps([row])}\n```\n",
         encoding="utf-8",
     )
     head = _git(["rev-parse", "HEAD"], repo)
