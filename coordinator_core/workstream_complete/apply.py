@@ -1244,6 +1244,7 @@ def _execute_directives(
     alias_report: dict[str, Any] = {}
     unfilled_entry: Optional[tuple[str, str]] = None
     discharged: dict[str, str] = {}
+    replayed: dict[str, str] = {}
     _resolved_repo_root: list[Optional[Path]] = [repo_root]
     _repo_root_resolved: list[bool] = [repo_root is not None]
 
@@ -1393,6 +1394,16 @@ def _execute_directives(
         results.append(result)
         landed.append(directive["id"])
         stdout_by_id[directive["id"]] = result.get("stdout", "")
+        replay_line = next(
+            (
+                ln.strip()
+                for ln in (result.get("stdout") or "").splitlines()
+                if ln.startswith("already_satisfied ")
+            ),
+            None,
+        )
+        if directive["id"].startswith("d-ship-consumed-handoff:") and replay_line:
+            replayed[directive["id"]] = replay_line
 
         gate_root = _lazy_repo_root()
         if gate_root is not None:
@@ -1420,6 +1431,8 @@ def _execute_directives(
         "results": results,
         "discharged": discharged,
     }
+    if replayed:
+        report["already_satisfied_directives"] = replayed
 
     # The one `stdout_by_id` value that outlives this function. `apply()`'s
     # close-commit tail folds the sha it lands into the completion entry

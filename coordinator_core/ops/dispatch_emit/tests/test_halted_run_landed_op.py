@@ -169,12 +169,62 @@ def test_solo_landed_at_other_sha_refuses(repo):
     assert not out["ok"] and "already landed" in out["error"]
 
 
-def test_solo_non_halted_status_refuses(repo):
+def test_solo_running_status_refuses(repo):
     root, first, _ = repo
     marker = _solo(root, "running")
     before = marker.read_bytes()
     out = _call(root, run_id=SOLO, sha=first)
     assert not out["ok"] and "halted or resumed" in out["error"]
+    assert marker.read_bytes() == before
+
+
+SUCCESSOR = "warp-2026-10-21-successor-20261021T000000-abcdef"
+
+
+def _successor(root: Path, resumed_from: str = SOLO) -> None:
+    d = root / "state" / "warp" / SUCCESSOR
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "run.json").write_text(json.dumps({"resumed_from": resumed_from}), encoding="utf-8")
+
+
+def test_solo_resumed_without_live_successor_records_landed(repo, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import run_token
+
+    root, first, _ = repo
+    marker = _solo(root, "resumed")
+    _successor(root)
+    monkeypatch.setattr(run_token, "is_live", lambda r, rid: False)
+    out = _call(root, run_id=SOLO, sha=first[:8])
+    assert out["ok"] and out["written"] is True and out["sha"] == first
+    assert json.loads(marker.read_text(encoding="utf-8"))["status"] == "landed"
+
+
+def test_solo_resumed_with_live_successor_refuses_then_terminal_successor_does_not_hold(repo, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import run_token
+
+    root, first, _ = repo
+    marker = _solo(root, "resumed")
+    _successor(root)
+    monkeypatch.setattr(run_token, "is_live", lambda r, rid: True)
+    before = marker.read_bytes()
+    out = _call(root, run_id=SOLO, sha=first)
+    assert not out["ok"] and SUCCESSOR in out["error"] and "still live" in out["error"]
+    assert marker.read_bytes() == before
+    (root / "state" / "warp" / SUCCESSOR / "run-stage.json").write_text('{"stage": "halted"}', encoding="utf-8")
+    assert _call(root, run_id=SOLO, shas=[first])["ok"]
+
+
+def test_resumed_solo_with_withheld_still_refuses_unrelated_sha(repo, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import run_token
+
+    root, first, _ = repo
+    marker = _solo(root, "resumed")
+    _withhold(marker, "e.txt")
+    monkeypatch.setattr(run_token, "is_live", lambda r, rid: False)
+    unrelated = _commit(root, "unrelated")
+    before = marker.read_bytes()
+    out = _call(root, run_id=SOLO, shas=[unrelated[:8]])
+    assert not out["ok"] and "withheld e.txt" in out["error"]
     assert marker.read_bytes() == before
 
 
@@ -434,6 +484,43 @@ def test_sha_not_carrying_withheld_paths_refuses_and_follow_up_is_accepted(repo,
     out = _call(root, run_id=rid, sha=full)
     assert out["ok"] and out["written"] is True and out["sha"] == full
     assert later != full
+
+
+@pytest.mark.parametrize("solo", [True, False])
+def test_sha_set_covering_withheld_is_accepted_and_insufficient_or_unrelated_refuses(repo, solo):
+    root, first, _ = repo
+    rid = SOLO if solo else "A"
+    if solo:
+        marker = _solo(root)
+    else:
+        _seed(root, {"A": {"status": "halted"}})
+        marker = _plan_marker(root, "A")
+    _withhold(marker, "sub/d.md", "e.txt")
+    one = _commit_files(root, {"sub/d.md": "x"})
+    unrelated = _commit(root, "unrelated")
+    two = _commit_files(root, {"e.txt": "e"})
+    before = marker.read_bytes()
+    out = _call(root, run_id=rid, shas=[one])
+    assert not out["ok"] and "withheld e.txt" in out["error"]
+    out = _call(root, run_id=rid, shas=[one, unrelated])
+    assert not out["ok"] and unrelated in out["error"]
+    out = _call(root, run_id=rid, shas=[one, two, unrelated])
+    assert not out["ok"] and unrelated in out["error"]
+    out = _call(root, run_id=rid, shas=[one, "b" * 40])
+    assert not out["ok"] and "not a commit" in out["error"]
+    assert marker.read_bytes() == before
+    out = _call(root, run_id=rid, sha=one, shas=[two[:10]])
+    assert out["ok"] and out["written"] is True and out["sha"] == two
+    again = _call(root, run_id=rid, shas=[one, two])
+    assert again["ok"] and again["written"] is False and again["sha"] == two
+
+
+def test_shas_param_must_be_a_list_of_hex(repo):
+    root, first, _ = repo
+    _seed(root, {"A": {"status": "halted"}})
+    assert not _call(root, run_id="A", shas="abcd1234")["ok"]
+    assert not _call(root, run_id="A", shas=[first, "xyz1234"])["ok"]
+    assert not _call(root, run_id="A", shas=[])["ok"]
 
 
 def test_withheld_check_ignores_run_without_withheld_paths(repo):

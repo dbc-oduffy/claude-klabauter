@@ -166,7 +166,7 @@ from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.session.claimed_write import replace_text
 from coordinator_core.session.record_homes import home_dir
 from coordinator_core.warm.entry_seam import OpUnavailableError, reentrant_dispatch
-from coordinator_core.ops.dispatch_emit import credit_gate, gate_owed, halt_baseline, pre_halt_credit, process_artifact_policy  # noqa: E402 -- sibling-package group
+from coordinator_core.ops.dispatch_emit import cohold_refusal, credit_gate, gate_owed, halt_baseline, pre_halt_credit, process_artifact_policy  # noqa: E402 -- sibling-package group
 from coordinator_core.ops.dispatch_emit.land_run import (  # noqa: E402
     _em_discharged_rows, _halt_gap_lines, _leg_footprint_writes, _recovery_backing, _unclosed_halt_gaps,
 )
@@ -5847,10 +5847,16 @@ def _terminal_commit_inner(
     sibling_run_id = _run_id_of(params, ask_run_dir, script_path_raw)
 
     halted_held: dict = {}
+    claims_memo: dict = {}
 
     def _claimed_or_held(candidates):
         """Sibling-claimed candidates plus any a held chunk declares: commit_v2's left-behind carry never takes them."""
-        claimed = _live_run_claims(worktree_root, candidates, sibling_run_id, halted_held)
+        memo = claims_memo.pop("scan", None)
+        wanted = set(candidates)
+        if memo is not None and wanted <= memo[0]:
+            claimed = memo[1] & wanted
+        else:
+            claimed = _live_run_claims(worktree_root, candidates, sibling_run_id, halted_held)
         if claimed is None or not held_paths:
             return claimed
         return {*claimed, *(p for p in candidates if p in held_paths)}
@@ -5999,7 +6005,7 @@ def _terminal_commit_inner(
             stage_rel = (_ac_stage.record_dir(worktree_root, art_run_id) / _ac_stage.RUN_STAGE_FILE).relative_to(
                 worktree_root
             ).as_posix()
-            if stage_rel not in all_paths:
+            if stage_rel not in all_paths and not stage_rel.startswith(RUN_DIR_ROOT.rstrip("/") + "/"):
                 all_paths.append(stage_rel)
         except (ValueError, OSError):
             stage_before = None
@@ -6120,6 +6126,18 @@ def _terminal_commit_inner(
             _unstamp_landed()
             _remove(worktree_root, receipt_paths)
             return _error(reach_refused, refused=REACH_CLAIM_REFUSED, reach_claims=reach_reply_field)
+        pre_held: dict = {}
+        pre_claims = _live_run_claims(worktree_root, all_paths, sibling_run_id, pre_held)
+        if pre_claims is not None:
+            claims_memo["scan"] = (set(all_paths), pre_claims)
+            halted_held.update(pre_held)
+            declared_held = _dirty_held_by_halted_run(worktree_root, pre_held)
+            cohold_refused = cohold_refusal.refusal(declared_held, sibling_run_id, worktree_root)
+            if cohold_refused is not None:
+                claims_memo.clear()
+                _unstamp_landed()
+                _remove(worktree_root, receipt_paths)
+                return _error(cohold_refused, refused=cohold_refusal.REFUSED_COHOLD)
         shipped_refused, shipped_reply_field = shipped_gate(
             worktree_root, ask_note_text, landing_paths=all_paths,
             deleted_paths=deleted_paths, withheld_paths=reach_withheld,

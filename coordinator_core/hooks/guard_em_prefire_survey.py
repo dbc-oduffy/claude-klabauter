@@ -139,7 +139,9 @@ def _decide(payload: dict) -> Optional[str]:
     state = epw.advance(
         transcript, prior, current_id, settings_home=home, current_call=(tool_name, tool_input)
     )
-    pre_now, all_now = epw.classify(tool_name, tool_input, state.get("opening") or "", home)
+    pre_now, all_now = epw.classify(
+        tool_name, tool_input, state.get("opening") or "", home, named=state.get("named")
+    )
     if state != prior:
         epw.save_state(path, state)
     if not (pre_now or all_now):

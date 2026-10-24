@@ -299,6 +299,103 @@ def _git_writes(cmd: str, cwd: str, root: str) -> List[str]:
     return paths
 
 
+_VERB_HINTS = ("rm", "perl", "patch", "truncate", "dd")
+_PATCH_NO_WRITE = frozenset({"--dry-run", "-C", "--check", "--version", "-v"})
+_PATCH_VALUE = frozenset({"-o", "--output", "-d", "--directory", "-r", "--reject-file", "-B", "-z", "-V", "-D", "-F", "-Y", "-g"})
+
+
+def _positional(args: List[str], value_flags=frozenset()) -> List[str]:
+    out: List[str] = []
+    dd = False
+    skip = False
+    for a in args:
+        if skip:
+            skip = False
+        elif dd:
+            out.append(a)
+        elif a == "--":
+            dd = True
+        elif a in value_flags:
+            skip = True
+        elif a.startswith("-") and a != "-":
+            continue
+        else:
+            out.append(a)
+    return out
+
+
+def _perl_inplace_files(args: List[str]) -> List[str]:
+    inplace = False
+    have_script = False
+    files: List[str] = []
+    skip = False
+    for a in args:
+        if skip:
+            skip = False
+        elif files or (not a.startswith("-") and have_script):
+            files.append(a)
+        elif a.startswith("-") and len(a) > 1 and not a.startswith("--"):
+            letters = a[1:]
+            if "i" in letters:
+                inplace = True
+            if letters.endswith(("e", "E")):
+                have_script = True
+                skip = True
+        elif not a.startswith("-"):
+            have_script = True
+    return files if inplace else []
+
+
+def _verb_segment_specs(toks: List[str], cwd: str, root: str) -> List[str]:
+    """Absolute paths a single `rm`/`perl -i`/`patch`/`truncate`/`dd of=` segment writes."""
+    verb, args = os.path.basename(toks[0]), toks[1:]
+
+    def absp(p: str) -> str:
+        return os.path.normpath(p if os.path.isabs(p) else os.path.join(cwd, p))
+
+    if verb == "rm":
+        return [absp(p) for p in _positional(args)]
+    if verb == "truncate":
+        return [absp(p) for p in _positional(args, frozenset({"-s", "--size", "-r", "--reference"}))]
+    if verb == "dd":
+        return [absp(a[3:]) for a in args if a.startswith("of=") and len(a) > 3]
+    if verb == "perl":
+        return [absp(p) for p in _perl_inplace_files(args)]
+    if verb == "patch":
+        if any(a in _PATCH_NO_WRITE for a in args):
+            return []
+        strip = 0
+        patch_file = None
+        for k, a in enumerate(args):
+            if a.startswith("-p") and a[2:].isdigit():
+                strip = int(a[2:])
+            elif a == "-p" and k + 1 < len(args) and args[k + 1].isdigit():
+                strip = int(args[k + 1])
+            elif a in ("-i", "--input") and k + 1 < len(args):
+                patch_file = args[k + 1]
+            elif a.startswith("--input="):
+                patch_file = a[8:]
+        pos = _positional(args, _PATCH_VALUE | {"-i", "--input", "-p"})
+        if pos:
+            return [absp(pos[0])]
+        names = _apply_patch_targets(absp(patch_file), strip) if patch_file else None
+        return [absp(n) for n in names] if names else [root]
+    return []
+
+
+def _verb_writes(cmd: str, cwd: str, root: str) -> List[str]:
+    paths: List[str] = []
+    cur = cwd
+    for toks in _git_segments(cmd):
+        if not toks:
+            continue
+        if toks[0] == "cd" and len(toks) > 1:
+            cur = os.path.normpath(toks[1] if os.path.isabs(toks[1]) else os.path.join(cur, toks[1]))
+        elif os.path.basename(toks[0]) in _VERB_HINTS:
+            paths.extend(_verb_segment_specs(toks, cur, root))
+    return paths
+
+
 def shell_writes(cmd: str, cwd: str, root: str, with_git: bool = False) -> List[ShellWrite]:
     """Every in-repo write target of `cmd`, deduplicated, in encounter order. `with_git` adds the
     pathspecs of `git add/commit/checkout --/restore/apply`; the pre-fire XS budget leaves it off,
@@ -331,6 +428,10 @@ def shell_writes(cmd: str, cwd: str, root: str, with_git: bool = False) -> List[
                 out[resolved] = ShellWrite(resolved, None, False)
         if with_git and "git" in cmd:
             for p in _git_writes(cmd, cwd, root):
+                if _rel_if_inside(p, root) is not None and p not in out:
+                    out[p] = ShellWrite(p, None, False)
+        if with_git and any(v in cmd for v in _VERB_HINTS):
+            for p in _verb_writes(cmd, cwd, root):
                 if _rel_if_inside(p, root) is not None and p not in out:
                     out[p] = ShellWrite(p, None, False)
         return list(out.values())

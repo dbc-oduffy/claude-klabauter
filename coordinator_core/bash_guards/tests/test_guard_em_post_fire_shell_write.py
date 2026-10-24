@@ -64,7 +64,36 @@ DENIED = (
     "git add a.py",
     "git checkout -- a.py",
     "git commit -m msg",
+    "rm a.py",
+    "rm -rf src/a.py",
+    "perl -pi -e 's/a/b/' a.py",
+    "perl -i.bak -pe 's/a/b/' a.py",
+    "patch -p1 < x.diff",
+    "patch a.py x.diff",
+    "truncate -s 0 a.py",
+    "dd if=/dev/zero of=a.py",
+    "rsync -a b.txt a.py",
+    "install -m 644 b.txt a.py",
 )
+
+ADMITTED = (
+    "rm {scratch}",
+    "perl -ne 'print' a.py",
+    "perl -pi -e 's/a/b/' {scratch}",
+    "patch --dry-run a.py x.diff",
+    "truncate -s 0 {scratch}",
+    "dd if=a.py of={scratch}",
+    "rsync -a a.py {scratch}",
+    "install -m 644 a.py {scratch}",
+    "ls a.py",
+)
+
+
+@pytest.mark.parametrize("cmd", ADMITTED)
+def test_fired_session_read_only_and_scratch_forms_are_admitted(repo, monkeypatch, tmp_path, cmd):
+    _fire(monkeypatch, ["run-1"])
+    cmd = cmd.format(scratch=tmp_path / "sys-tmp" / "n.txt")
+    assert guard.check(cmd, SID, str(repo), {"cwd": str(repo)}) is None
 
 
 @pytest.mark.parametrize("cmd", DENIED)

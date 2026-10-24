@@ -352,3 +352,29 @@ def test_ship_sha_is_omitted_when_the_session_owns_no_commit(tmp_path, kind):
     (entry,) = _ship_directives(wsc.build_directives(gate, {}, tmp_path, history=history))
 
     assert entry["args"] == ["ship-handoff", "state/handoffs/foo.md", "--no-archive"]
+
+
+def test_apply_reports_a_replayed_ship_stamp_as_already_satisfied(  # apply-level replay
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from coordinator_core.workstream_complete import apply as wsc_apply
+
+    def fake(directive: dict, *, args: object = None) -> dict:
+        return {
+            "id": directive["id"], "cli": directive["cli"], "args": list(args or []),
+            "exit_code": 0, "stderr": "", "exit_class": "returned",
+            "stdout": "already_satisfied stored=f5f013a6 supplied=674f44838c\n",
+        }
+
+    monkeypatch.setattr(wsc_apply, "_dispatch_directive", fake)
+    monkeypatch.setattr(wsc_apply, "_emit_progress", lambda message: None)
+    did = "d-ship-consumed-handoff:h.md"
+    code, report = wsc_apply._execute_directives(
+        [{"id": did, "cli": "archive-stamp-cli", "args": ["ship-handoff", "state/handoffs/h.md"]}],
+        [], {}, repo_root=tmp_path,
+    )
+    assert code == int(wsc_apply.WorkstreamApplyExitCode.SUCCESS)
+    assert report["failed"] == []
+    assert report["already_satisfied_directives"] == {
+        did: "already_satisfied stored=f5f013a6 supplied=674f44838c"
+    }

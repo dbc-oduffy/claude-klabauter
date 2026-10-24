@@ -256,3 +256,58 @@ def test_state_roundtrip_and_malformed_reset(tmp_path):
     assert epw.load_state(p, t)["offset"] == 4
     epw.save_state(p, {**epw.fresh_state(), "pre": ["a"]})
     assert epw.load_state(p, t)["pre"] == ["a"]
+
+
+def _result(tid, text) -> str:
+    return _line(
+        {"type": "user", "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": tid, "content": text}]}}
+    )
+
+
+def test_every_installed_assemble_bin_is_lifecycle():
+    names = {
+        "backlog-grind-assemble", "baton-assemble", "consolidate-assemble", "coordinator-assemble",
+        "execute-plan-assemble", "merge-assemble", "orient-assemble", "pickup-assemble",
+        "plan-assemble", "quick-wrap-assemble", "review-assemble", "roadmap-planning-assemble",
+        "sizing-assemble", "sprint-planning-assemble", "staff-session-assemble", "workday-complete-assemble",
+        "workday-start-inbox-blitz-assemble", "workstream-complete-assemble",
+    }
+    assert names <= set(epw.LIFECYCLE_BINS)
+    for n in names:
+        assert epw.lifecycle_op(f"{n} brief --x 1") == n
+    assert "handoff.append_session_ledger" in epw.LIFECYCLE_OPS
+    assert epw.lifecycle_op("coordinator-invoke handoff.append_session_ledger '{\"a\":1}'") == "handoff.append_session_ledger"
+    for bad in ("grep x workstream-complete-assemble", "cat baton-assemble", "baton-assemble brief; grep x y"):
+        assert epw.lifecycle_op(bad) is None, bad
+
+
+def test_doe_close_sequence_replay_is_not_counted_beyond_reply_named_output(tmp_path):
+    led = "coordinator-invoke handoff.append_session_ledger '{\"a\":1}'"
+    lines = [
+        user("close it"),
+        tool_use("a1", "Bash", {"command": "workstream-complete-assemble brief"}),
+        tool_result("a1"),
+        tool_use("a2", "Bash", {"command": "workstream-complete-assemble brief"}),
+        tool_use("l1", "Bash", {"command": led}),
+        tool_use("l2", "Bash", {"command": led}),
+        tool_use("ap", "Bash", {"command": "workstream-complete-assemble apply"}),
+        _result("ap", "applied; output at scratch/wsc-apply.json"),
+        tool_use("r1", "Read", {"file_path": "/repo/scratch/wsc-apply.json"}),
+        tool_use("p1", "Bash", {"command": "python3 -c \"import json; print(json.load(open('scratch/wsc-apply.json')))\""}),
+        tool_use("o1", "Read", {"file_path": "other.json"}),
+        tool_use("o2", "Bash", {"command": "cat scratch/wsc-apply.json other.json"}),
+        tool_use("o3", "Bash", {"command": "cat scratch/wsc-apply.json; grep x y"}),
+    ]
+    st = run(tmp_path, lines)
+    assert st["pre"] == ["o1", "o2", "o3"]
+    assert st["named"] == ["scratch/wsc-apply.json"]
+
+
+def test_reply_named_path_only_from_assembler_results(tmp_path):
+    lines = [
+        user(),
+        tool_use("g", "Bash", {"command": "ls scratch"}),
+        _result("g", "scratch/other.json"),
+        tool_use("r", "Read", {"file_path": "scratch/other.json"}),
+    ]
+    assert run(tmp_path, lines)["pre"] == ["g", "r"]

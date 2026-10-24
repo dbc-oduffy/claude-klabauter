@@ -794,6 +794,60 @@ def _attested_succession_refusal(
     return None
 
 
+def _is_shipped_replay(
+    handoff_abs: Path, prior_value: Optional[str], worktree: Path
+) -> bool:
+    """True when the baton already reads `deployment_state: shipped` and its
+    stored `shipped_in` resolves to a real commit in `worktree`. Anything
+    else (unshipped baton, absent or unresolvable stored sha) is a genuine
+    conflict and stays refused."""
+    if not prior_value or _current_deployment_state(handoff_abs) != "shipped":
+        return False
+    if not all(c in "0123456789abcdefABCDEF" for c in prior_value.strip()):
+        return False
+    res = git_native._git(
+        ["cat-file", "-e", f"{prior_value.strip()}^{{commit}}"], cwd=worktree
+    )
+    return res.returncode == 0
+
+
+def _shipped_replay_fields(
+    handoff_abs: Path,
+    rel_id: str,
+    outcome,
+    stamp_sha: Optional[str],
+    stamp_force: bool,
+    worktree: Path,
+    warnings: list,
+) -> Optional[dict]:
+    """The `already_satisfied` result fields (and a warning appended to
+    `warnings`) when a non-applied stamp supplied a different real sha against
+    a baton that is already shipped with a resolvable stored sha; None when
+    the call is not such a replay and the caller's refusal branches apply."""
+    if (
+        outcome.applied
+        or not stamp_sha
+        or not stamp_sha.strip()
+        or stamp_force
+        or (
+            outcome.prior_value is not None
+            and _sha_canonically_matches(stamp_sha, outcome.prior_value)
+        )
+        or not _is_shipped_replay(handoff_abs, outcome.prior_value, worktree)
+    ):
+        return None
+    warnings.append(
+        f"already_satisfied: {rel_id} is already shipped with stored "
+        f"shipped_in={outcome.prior_value!r}; supplied sha "
+        f"{stamp_sha!r} ignored"
+    )
+    return {
+        "already_satisfied": True,
+        "stored_sha": outcome.prior_value,
+        "supplied_sha": stamp_sha,
+    }
+
+
 def _sha_canonically_matches(supplied: str, prior_value: str) -> bool:
     """True when `supplied` (a caller-supplied SHA, any length 7-64 hex) and
     `prior_value` (the stored `shipped_in`, `_final_stamp_value`-truncated to
@@ -1646,6 +1700,7 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     warnings: List[str] = []
     stamped = False
     superseded = False
+    replay_fields: dict = {}
 
     # ------------------------------------------------------------------
     # successor_path resolution (coordinator-content-repo, 2026-07-26) — resolves the
@@ -1792,6 +1847,14 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             out["stamped"] = stamped
             out["warnings"] = warnings
             return out
+        elif (
+            replay := _shipped_replay_fields(
+                contained, rel_id, outcome, stamp_sha, stamp_force,
+                worktree, warnings,
+            )
+        ) is not None:
+            replay_fields = replay
+            stamped = False
         elif not outcome.applied and stamp_sha and stamp_sha.strip() and not (
             outcome.prior_value is not None
             and _sha_canonically_matches(stamp_sha, outcome.prior_value)
@@ -2071,6 +2134,14 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             out["stamped"] = stamped
             out["warnings"] = warnings
             return out
+        elif (
+            replay := _shipped_replay_fields(
+                contained, rel_id, outcome, stamp_sha, stamp_force,
+                worktree, warnings,
+            )
+        ) is not None:
+            replay_fields = replay
+            stamped = False
         elif not outcome.applied and stamp_sha and stamp_sha.strip() and not (
             outcome.prior_value is not None
             and _sha_canonically_matches(stamp_sha, outcome.prior_value)
@@ -2166,6 +2237,7 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             "moved": False,
             "warnings": warnings,
             "message": f"stamped {rel_id} (deployment_state: shipped) — retained in state/handoffs/ for later archival sweep",
+            **replay_fields,
         }
 
     # ------------------------------------------------------------------
@@ -2313,6 +2385,7 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         "moved": moved,
         "warnings": warnings,
         "message": message,
+        **replay_fields,
     }
     if failed:
         # ADDITIVE key, present only on the refusal path (same discipline as

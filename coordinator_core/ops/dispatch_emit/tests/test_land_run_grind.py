@@ -37,9 +37,10 @@ def repo(tmp_path):
     (root / "state" / "backlog" / "tracked.yaml").write_text("id: tracked\n", encoding="utf-8")
     _git(["add", "."], root)
     _git(["commit", "-q", "-m", "seed"], root)
-    (root / "a.py").write_text("x = 2\n", encoding="utf-8")
-    (root / "b.py").write_text("x = 2\n", encoding="utf-8")
-    (root / "other.py").write_text("x = 2\n", encoding="utf-8")
+    # A different size from the seed: under `core.checkStat=minimal` a same-size edit within the seed's
+    # second reads clean, so the undeclared dirty paths would vanish from `git status`.
+    for name in ("a.py", "b.py", "other.py"):
+        (root / name).write_text("x = 200\n", encoding="utf-8")
     return root
 
 

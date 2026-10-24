@@ -1489,3 +1489,89 @@ def test_clear_advancement_still_requires_reason_and_archive_path(tmp_path):
     assert outside["exit_code"] == 1
     assert "archive/handoffs/" in outside["error"]
     assert "advanced_by" in live.read_text(encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------
+# ship-handoff replay: a shipped baton whose stored commit is real reads as
+# already_satisfied; every other mismatched stamp still refuses.
+# ---------------------------------------------------------------------------
+
+def _shipped_baton_with_two_commits(tmp_path: Path):
+    from coordinator_core.tests.git_seed import seeded_repo
+
+    repo = tmp_path / "ship_repo"
+    seeded_repo(repo, email="t@t", name="test")
+    hp = repo / "state" / "handoffs" / "replay.md"
+    hp.parent.mkdir(parents=True, exist_ok=True)
+    hp.write_text(
+        '---\ntitle: "Replay"\ncreated: 2026-01-01\nbranch: work/test/2026-01-01\n'
+        'status: claimed\npredecessor: "none"\ndeployment_state: in_flight\n'
+        "scope:\n  - state/handoffs/replay.md\n---\n\n# Handoff\n",
+        encoding="utf-8",
+    )
+
+    def git(*a: str) -> str:
+        args = list(a)
+        if args[:2] == ["commit", "-m"]:
+            args[2] += "\n\nSession-Id: 11111111-1111-1111-1111-111111111111"
+        return subprocess.run(
+            ["git", "-C", str(repo), *args], capture_output=True, text=True, check=True,
+            **no_console_creationflags(),
+        ).stdout.strip()
+
+    git("add", "-A")
+    git("commit", "-m", "add replay")
+    return repo, hp, git
+
+
+def test_ship_replay_on_shipped_baton_is_already_satisfied(tmp_path, capsys):
+    import coordinator_core.archive_stamp as arstamp
+
+    repo, hp, git = _shipped_baton_with_two_commits(tmp_path)
+    stored = git("rev-parse", "HEAD")
+    assert arstamp.cs_ship_handoff(str(hp), sha=stored) == 0
+    (repo / "other.txt").write_text("x\n", encoding="utf-8")
+    git("add", "other.txt")
+    git("commit", "-m", "later")
+    supplied = git("rev-parse", "HEAD")
+    before = hp.read_text(encoding="utf-8")
+    capsys.readouterr()
+
+    rc = arstamp.cs_ship_handoff(str(hp), sha=supplied)
+
+    assert rc == 0
+    assert hp.read_text(encoding="utf-8") == before
+    out = capsys.readouterr().out
+    assert f"already_satisfied stored={stored[:8]} supplied={supplied}" in out
+
+
+def test_ship_replay_refuses_when_baton_is_not_shipped(tmp_path):
+    import coordinator_core.archive_stamp as arstamp
+
+    repo, hp, git = _shipped_baton_with_two_commits(tmp_path)
+    text = hp.read_text(encoding="utf-8")
+    hp.write_text(
+        text.replace("scope:", "shipped_in: 'abcdef12'\nscope:"), encoding="utf-8"
+    )
+    git("add", "-A")
+    git("commit", "-m", "stored stamp, not shipped")
+    supplied = git("rev-parse", "HEAD")
+
+    assert arstamp.cs_ship_handoff(str(hp), sha=supplied) != 0
+
+
+def test_ship_replay_refuses_when_stored_sha_is_not_a_commit(tmp_path):
+    import coordinator_core.archive_stamp as arstamp
+
+    repo, hp, git = _shipped_baton_with_two_commits(tmp_path)
+    text = hp.read_text(encoding="utf-8")
+    hp.write_text(
+        text.replace("deployment_state: in_flight", "deployment_state: shipped")
+        .replace("scope:", "shipped_in: 'abcdef12'\nscope:"),
+        encoding="utf-8",
+    )
+    git("add", "-A")
+    git("commit", "-m", "shipped with unresolvable stamp")
+    supplied = git("rev-parse", "HEAD")
+
+    assert arstamp.cs_ship_handoff(str(hp), sha=supplied) != 0

@@ -274,3 +274,44 @@ def test_withhold_with_no_own_hunk_releases(tmp_path):
     base_text = "def f():\n    return 1\n"
     h, c = _kept_repo(tmp_path, KEPT, base_text)
     assert hr.release_reason(tmp_path, h, c, None) == hr.RELEASE_KEPT_AT_HEAD
+
+
+def _two_path_run(tmp_path: Path, b_head_text: str):
+    """Halted run withholding `a.py` (kept == HEAD) and `b.py` (kept `KEPT`, HEAD `b_head_text`)."""
+    h, c = _kept_repo(tmp_path, KEPT, KEPT)
+    base_b = "x = 1\n"
+    _write(tmp_path / "b.py", base_b)
+    _git(tmp_path, "add", "b.py")
+    _git(tmp_path, "commit", "-q", "-m", "b")
+    _write(tmp_path / "b.py", b_head_text)
+    _git(tmp_path, "commit", "-q", "-am", "b head")
+    kept_b = _git(tmp_path, "hash-object", "-w", "--stdin", stdin=KEPT)
+    kept_a = _git(tmp_path, "hash-object", "-w", "--stdin", stdin=KEPT)
+    rec = tmp_path / "state/warp" / h
+    halted = json.loads((rec / "halted.json").read_text(encoding="utf-8"))
+    halted["run_artifacts"] = {"withheld": {"a.py": "halt-record-only", "b.py": "halt-record-only"}}
+    _write(rec / "halted.json", json.dumps(halted))
+    _write(rec / "kept.json", json.dumps({"chunks": {"X1": {"paths": {"a.py": kept_a, "b.py": kept_b}}}, "plan_gate": None}))
+    return h, c, rec, halted
+
+
+def test_kept_at_head_paths_releases_per_path(tmp_path):
+    h, c, rec, halted = _two_path_run(tmp_path, "x = 2\n")
+    assert hr.kept_at_head_paths(tmp_path, rec, halted) == {"a.py"}
+    assert hr.release_reason(tmp_path, h, c, None) is None
+
+
+def test_kept_at_head_paths_all_at_head_releases_the_run(tmp_path):
+    h, c, rec, halted = _two_path_run(tmp_path, KEPT)
+    assert hr.kept_at_head_paths(tmp_path, rec, halted) == {"a.py", "b.py"}
+    assert hr.release_reason(tmp_path, h, c, None) == hr.RELEASE_KEPT_AT_HEAD
+
+
+def test_kept_at_head_paths_nothing_withheld_spawns_nothing(tmp_path, monkeypatch):
+    h, c = _kept_repo(tmp_path, KEPT, KEPT)
+    rec = tmp_path / "state/warp" / h
+    halted = json.loads((rec / "halted.json").read_text(encoding="utf-8"))
+    halted["run_artifacts"] = {}
+    _write(rec / "halted.json", json.dumps(halted))
+    monkeypatch.setattr(hr, "_blob_batch", lambda *a: (_ for _ in ()).throw(AssertionError("spawned")))
+    assert hr.kept_at_head_paths(tmp_path, rec, halted) == set()

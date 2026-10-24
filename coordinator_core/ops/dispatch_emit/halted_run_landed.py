@@ -1,6 +1,6 @@
 """``dispatch.record_halted_run_landed``: records a halted run as landed at a verified commit.
 
-Params: ``{run_id, sha}``; ``sha`` is a lowercase hex commit sha, full or abbreviated to at least 4
+Params: ``{run_id, sha}`` or ``{run_id, shas}`` (``sha`` and ``shas`` combine); each sha is a lowercase hex commit sha, full or abbreviated to at least 4
 characters; an abbreviation must name exactly one commit in the first-parent window and the reply and
 recorded marker carry the full 40-hex sha. The run's sibling status must read
 ``halted`` (or already ``landed`` at the same sha) and ``sha`` must be a commit on HEAD's first-parent
@@ -16,8 +16,9 @@ close-job record exists yet.
 Reply: ``{ok, run_id, sha, written, siblings?, recorded?, close, withheld}`` or ``{ok: false, error}``;
 ``withheld`` is the marker's ``blocking`` register-row ids.
 When the halt marker records withheld paths (``run_artifacts.withheld``), ``sha`` must have changed
-every one of them versus its first parent, so recording landed cannot release the withheld-commit
-guard for a commit that never carried them; a later follow-up commit that changed them qualifies.
+every one of them versus its first parent, or several shas must together (each changing at least one),
+so recording landed cannot release the withheld-commit guard for a commit that never carried them; a
+later follow-up commit that changed them qualifies. A set records its newest sha.
 """
 
 from __future__ import annotations
@@ -257,10 +258,12 @@ def _terminal(cand: Path) -> bool:
     return isinstance(stage, dict) and stage.get("stage") in ("halted", "landed")
 
 
-def _carries_withheld(root: Path, run_id: str, sha: str) -> Optional[str]:
-    """None when *sha* changed every path the run's halt marker withholds versus its first parent, else the refusal text.
+def _carries_withheld(root: Path, run_id: str, shas: list) -> Optional[str]:
+    """None when *shas* together changed every path the run's halt marker withholds, else the refusal text.
 
-    A run withholding nothing, or with no marker, passes. An unreadable commit or tree refuses.
+    Each sha is compared with its first parent; the union of changed withheld paths must cover the
+    withheld list, and every sha must change at least one of them. A run withholding nothing, or with
+    no marker, passes. An unreadable commit or tree refuses.
     """
     from coordinator_core.git.commit_walk import commit_meta
     from coordinator_core.git.git_dir import resolve_git_common_dir
@@ -274,30 +277,79 @@ def _carries_withheld(root: Path, run_id: str, sha: str) -> Optional[str]:
     if not withheld:
         return None
     common = resolve_git_common_dir(root)
-    meta = commit_meta(common, sha)
-    parents = meta.get("parents") if meta else None
-    parent_meta = commit_meta(common, parents[0]) if parents else None
-    if meta is None or not meta.get("tree") or (parents and (parent_meta is None or not parent_meta.get("tree"))):
-        return f"{sha} or its parent is unreadable; retry"
-    after = read_tree_spine(root, withheld, root_tree_sha=meta["tree"])
-    before = read_tree_spine(root, withheld, root_tree_sha=parent_meta["tree"]) if parent_meta else {}
-    if after is None or before is None:
-        return f"{sha} tree is unreadable; retry"
 
     def _entry(spine: dict, path: str):
         return spine.get(path.rpartition("/")[0], {}).get(path.rpartition("/")[2])
 
-    unchanged = [p for p in withheld if _entry(after, p) == _entry(before, p)]
+    covered: set = set()
+    for sha in shas:
+        meta = commit_meta(common, sha)
+        parents = meta.get("parents") if meta else None
+        parent_meta = commit_meta(common, parents[0]) if parents else None
+        if meta is None or not meta.get("tree") or (parents and (parent_meta is None or not parent_meta.get("tree"))):
+            return f"{sha} or its parent is unreadable; retry"
+        after = read_tree_spine(root, withheld, root_tree_sha=meta["tree"])
+        before = read_tree_spine(root, withheld, root_tree_sha=parent_meta["tree"]) if parent_meta else {}
+        if after is None or before is None:
+            return f"{sha} tree is unreadable; retry"
+        changed = {p for p in withheld if _entry(after, p) != _entry(before, p)}
+        if len(shas) > 1 and not changed:
+            return f"{sha} changed none of the run's withheld paths; drop it from shas"
+        covered |= changed
+    unchanged = [p for p in withheld if p not in covered]
     if unchanged:
         more = f" (+{len(unchanged) - 1} more)" if len(unchanged) > 1 else ""
+        who = shas[0] if len(shas) == 1 else "shas together"
         return (
-            f"{sha} did not change withheld {unchanged[0]}{more}; "
-            "pass the commit that landed the run's withheld paths"
+            f"{who} did not change withheld {unchanged[0]}{more}; "
+            "pass the commit(s) that landed the run's withheld paths"
         )
     return None
 
 
-def _record_solo(root: Path, run_id: str, sha: str, abbreviated: bool, session_id: Optional[str] = None) -> dict:
+def _verify(root: Path, run_id: str, shas: list) -> tuple[Optional[str], Optional[str]]:
+    """``(newest_full_sha, None)`` when *shas* resolve, are reachable and cover the withheld paths, else ``(None, refusal)``."""
+    from coordinator_core.git.git_dir import resolve_git_common_dir
+    from coordinator_core.git.git_state import head_sha
+    from coordinator_core.git.rollback_check import _first_parent_ancestors
+
+    full: list = []
+    for sha in shas:
+        if not _FULL_SHA.fullmatch(sha):
+            sha, problem = _resolve_prefix(root, sha)
+            if problem:
+                return None, problem
+        full.append(sha)
+    full = list(dict.fromkeys(full))
+    for sha in full:
+        problem = _reachable(root, sha)
+        if problem:
+            return None, problem
+    problem = _carries_withheld(root, run_id, full)
+    if problem:
+        return None, problem
+    if len(full) == 1:
+        return full[0], None
+    order = {s: i for i, s in _first_parent_ancestors(resolve_git_common_dir(root), head_sha(root), ANCESTRY_WINDOW)}
+    return min(full, key=lambda s: order.get(s, ANCESTRY_WINDOW)), None
+
+
+def _shas_param(params: dict) -> tuple[list, Optional[str]]:
+    """``(shas, None)`` from ``sha`` and/or ``shas`` params, else ``([], refusal)``."""
+    shas: list = []
+    if params.get("sha") is not None:
+        shas.append(params["sha"])
+    extra = params.get("shas")
+    if extra is not None:
+        if not isinstance(extra, list):
+            return [], f"{OP_NAME} requires shas to be a list"
+        shas.extend(extra)
+    if not shas or any(not isinstance(s, str) or not _SHA_PREFIX.fullmatch(s) for s in shas):
+        return [], f"{OP_NAME} requires a lowercase hex sha of 4 to 40 characters"
+    return list(dict.fromkeys(shas)), None
+
+
+def _record_solo(root: Path, run_id: str, shas: list, session_id: Optional[str] = None) -> dict:
     """Solo run (no sibling status): record landed on its halt marker; the caller commits ``recorded``."""
     from coordinator_core.ops.dispatch_emit import ask_contract, halted_run
 
@@ -311,7 +363,7 @@ def _record_solo(root: Path, run_id: str, sha: str, abbreviated: bool, session_i
     status = marker.get("status")
     if status == halted_run.STATUS_LANDED:
         landed = marker.get("sha")
-        if isinstance(landed, str) and landed.startswith(sha):
+        if isinstance(landed, str) and any(landed.startswith(s) for s in shas):
             return {
                 "ok": True, "run_id": run_id, "sha": landed, "written": False,
                 **_close_landed(root, run_id, landed, session_id),
@@ -323,11 +375,7 @@ def _record_solo(root: Path, run_id: str, sha: str, abbreviated: bool, session_i
             return _refuse(f"{run_id} is resumed and its successor {successor} is still live; wait for it or stop it")
     elif status != halted_run.STATUS_HALTED:
         return _refuse(f"{run_id} is {status}; only a halted or resumed run is recorded landed")
-    if abbreviated:
-        sha, problem = _resolve_prefix(root, sha)
-        if problem:
-            return _refuse(problem)
-    problem = _reachable(root, sha) or _carries_withheld(root, run_id, sha)
+    sha, problem = _verify(root, run_id, shas)
     if problem:
         return _refuse(problem)
     if not halted_run.mark_landed(record_dir, sha):
@@ -349,12 +397,12 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     if repo_root is None:
         return _refuse(f"{OP_NAME} requires repo_root")
     params = params if isinstance(params, dict) else {}
-    run_id, sha = params.get("run_id"), params.get("sha")
+    run_id = params.get("run_id")
     if not isinstance(run_id, str) or not run_id or not safe_id(run_id):
         return _refuse(f"{OP_NAME} requires a safe string run_id")
-    if not isinstance(sha, str) or not _SHA_PREFIX.fullmatch(sha):
-        return _refuse(f"{OP_NAME} requires a lowercase hex sha of 4 to 40 characters")
-    abbreviated = not _FULL_SHA.fullmatch(sha)
+    shas, problem = _shas_param(params)
+    if problem:
+        return _refuse(problem)
 
     sid = params.get("session_id")
     session_id = sid if isinstance(sid, str) and _UUID.fullmatch(sid) else None
@@ -363,13 +411,13 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     try:
         prior = json.loads((root / contract.status_rel(run_id)).read_text(encoding="utf-8"))
     except FileNotFoundError:
-        return _record_solo(root, run_id, sha, abbreviated, session_id)
+        return _record_solo(root, run_id, shas, session_id)
     except (OSError, ValueError):
         return _refuse(f"{run_id} sibling status is unreadable")
     status = prior.get("status") if isinstance(prior, dict) else None
     if status == contract.STATUS_LANDED:
         landed = prior.get("sha")
-        if isinstance(landed, str) and landed.startswith(sha):
+        if isinstance(landed, str) and any(landed.startswith(s) for s in shas):
             return {
                 "ok": True, "run_id": run_id, "sha": landed, "written": False,
                 **_close_landed(root, run_id, landed, session_id),
@@ -378,11 +426,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     if status != contract.STATUS_HALTED:
         return _refuse(f"{run_id} is {status}, not halted; only a halted run is recorded landed")
 
-    if abbreviated:
-        sha, problem = _resolve_prefix(root, sha)
-        if problem:
-            return _refuse(problem)
-    problem = _reachable(root, sha) or _carries_withheld(root, run_id, sha)
+    sha, problem = _verify(root, run_id, shas)
     if problem:
         return _refuse(problem)
     reply = run_close.sibling_release(root, run_id, sha)

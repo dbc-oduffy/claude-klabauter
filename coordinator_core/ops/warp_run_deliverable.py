@@ -374,11 +374,23 @@ def halted_run_write_claims(
         if halted_hold_release.release_reason(root, run_id, exclude_run, own_plan):
             continue
         held = halted_withheld_paths(root, run_id)
+        freed: set = set()
+        if held & wanted:
+            from coordinator_core.ops.dispatch_emit import halted_run
+
+            try:
+                rdir = record_dir(root, run_id)
+                marker = halted_run._read(rdir)
+                if marker is not None:
+                    freed = {_norm(p) for p in halted_hold_release.kept_at_head_paths(root, rdir, marker)}
+            except Exception:  # noqa: BLE001 -- unreadable record: nothing freed, the hold stands
+                freed = set()
+            held = held - freed
         if dirty is not None:
             declared, prefixes, _unreadable = _manifest_declared(run_id, root)
             if declared or prefixes:
                 declared_set = set(declared)
-                hot = [p for p in wanted if p not in held and (
+                hot = [p for p in wanted if p not in held and p not in freed and (
                     p in declared_set or any(p == pre or p.startswith(pre + "/") for pre in prefixes))]
                 if hot:
                     if attributable is None:

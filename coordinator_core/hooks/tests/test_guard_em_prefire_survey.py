@@ -453,6 +453,50 @@ def test_handler_returns_empty_without_deny(env):
     assert asyncio.run(g._handler(env.payload())) == {}
 
 
+def result(tid, text) -> str:
+    return _line({"type": "user", "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": tid, "content": text}]}})
+
+
+APPLY_OUT = "scratch/wsc-apply.json"
+BRIEF_CMD = {"command": "workstream-complete-assemble brief --baton ddf015"}
+LEDGER_CMD = {"command": "coordinator-invoke handoff.append_session_ledger '{\"entry\": \"x\"}'"}
+APPLY_CMD = {"command": "workstream-complete-assemble apply"}
+
+
+def _close_sequence(env):
+    """coordinator-content-repo-43's close: 3 unrelated reads, then the ceremony calls, its output read and parsed."""
+    env.write(user("close the workstream"))
+    env.survey(3)
+    for i, cmd in enumerate((BRIEF_CMD, BRIEF_CMD, LEDGER_CMD, LEDGER_CMD)):
+        assert g.evaluate(env.payload(tid=f"k{i}", name="Bash", inp=cmd)) is None
+        env.write(use(f"k{i}", "Bash", cmd), result(f"k{i}", "ok"))
+    assert g.evaluate(env.payload(tid="ap", name="Bash", inp=APPLY_CMD)) is None
+    env.write(use("ap", "Bash", APPLY_CMD), result("ap", f"exit 4: wrote {APPLY_OUT} (see apply output)"))
+    read = {"file_path": f"/r/{APPLY_OUT}"}
+    assert g.evaluate(env.payload(tid="rd", inp=read)) is None
+    env.write(use("rd", "Read", read))
+    parse = {"command": f"jq .status {APPLY_OUT}"}
+    assert g.evaluate(env.payload(tid="ps", name="Bash", inp=parse)) is None
+    env.write(use("ps", "Bash", parse))
+
+
+def test_doe_close_sequence_is_uncounted_and_the_ninth_counted_call_denies(env):
+    _close_sequence(env)
+    # Without the exemptions this tail is the 11th counted call; with them only 3 reads count.
+    env.survey(5, start=10)
+    assert g.evaluate(env.payload(tid="after")) is not None
+
+
+def test_unrelated_read_after_apply_still_counts_and_denies(env):
+    _close_sequence(env)
+    other = {"file_path": "/r/scratch/other.json"}
+    env.survey(4, start=10)
+    assert g.evaluate(env.payload(tid="o1", inp=other)) is None
+    env.write(use("o1", "Read", other))
+    res = g.evaluate(env.payload(tid="o2", inp={"file_path": "/r/scratch/third.json"}))
+    assert res is not None and reason(res).startswith("[em-prefire-survey] 9 exploratory calls")
+
+
 PUBLISH_SEQUENCE = [
     "python3 -m pytest coordinator_core/ops/dispatch_emit/tests/test_land_run.py -q",
     "t=$(git merge-tree --write-tree aaa bbb) && c=$(git commit-tree $t -p aaa -m x)",

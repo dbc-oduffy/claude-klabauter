@@ -2360,14 +2360,12 @@ class TestShipHandoff:
         # Rejected before any mutation — shipped_in unchanged.
         _assert_shipped_in(hp, stamped_sha)
 
-    def test_default_no_force_against_already_stamped_now_refuses_loudly(self, tmp_path):
-        """2026-07-28 (§ S11/AC6, chunk C0): omitting force (the default) against
-        an already-stamped handoff, while supplying a DIFFERENT --sha, no longer
-        silently no-ops (rc 0) — it refuses loudly (non-zero), naming --force
-        as the remedy, and leaves the frontmatter untouched. Renamed from
-        test_default_no_force_against_already_stamped_is_still_silent_noop,
-        whose rc2==0 assertion described exactly the silent-discard behaviour
-        AC6 retires."""
+    def test_default_no_force_against_already_shipped_reads_already_satisfied(
+        self, tmp_path, capsys
+    ):
+        """Omitting force against an already-shipped handoff whose stored sha
+        resolves to a real commit, while supplying a DIFFERENT real --sha,
+        reads as already_satisfied (rc 0, baton untouched)."""
         repo = tmp_path / "repo"
         _init_repo(repo)
         hp = _seed_handoff(
@@ -2385,10 +2383,11 @@ class TestShipHandoff:
         _git(repo, "commit", "-m", "should not be stamped")
         different_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
 
+        capsys.readouterr()
         rc2 = arstamp.cs_ship_handoff(str(hp), sha=different_sha)
-        assert rc2 != 0
-        _assert_shipped_in(hp, stamped_sha)
+        assert rc2 == 0
         assert hp.read_text(encoding="utf-8") == text_after_first
+        assert "already_satisfied" in capsys.readouterr().out
 
     def test_same_commit_resupply_is_legitimate_noop_not_refused(self, tmp_path):
         """§ S11/AC6b: re-supplying the SAME commit's full-length sha (the

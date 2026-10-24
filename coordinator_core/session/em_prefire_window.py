@@ -55,9 +55,32 @@ LIFECYCLE_OPS = (
     "workflow.revise",
     "baton.awaiting_gate_recheck",
     "roadmap.plan_gate",
+    "handoff.append_session_ledger",
 )
 SIBLING_PROBE_GIT_VERBS = ("merge-base", "log")
-LIFECYCLE_BINS = ("cross-repo-memo", "pickup-assemble")
+LIFECYCLE_BINS = (
+    "cross-repo-memo",
+    "backlog-grind-assemble",
+    "baton-assemble",
+    "consolidate-assemble",
+    "coordinator-assemble",
+    "execute-plan-assemble",
+    "merge-assemble",
+    "orient-assemble",
+    "pickup-assemble",
+    "plan-assemble",
+    "quick-wrap-assemble",
+    "review-assemble",
+    "roadmap-planning-assemble",
+    "sizing-assemble",
+    "sprint-planning-assemble",
+    "staff-session-assemble",
+    "workday-complete-assemble",
+    "workday-start-inbox-blitz-assemble",
+    "workstream-complete-assemble",
+)
+_REPLY_PATH_RE = re.compile(r"[\w~./\\:-]*[\w-]\.(?:json|md|yaml|yml|txt)\b")
+_READERS = ("cat", "head", "tail", "jq", "wc", "python", "python3")
 _VALUE_FLAGS = ("--params-file", "--params", "--repo-root")
 _INVOKERS =("coordinator-invoke", "invoke")
 _PYTHONS = re.compile(r"^python[0-9.]*(\.exe)?$")
@@ -91,6 +114,8 @@ def fresh_state(offset: int = 0) -> dict:
         "fires": 0,
         "test_used": False,
         "landings": {},
+        "asm": [],
+        "named": [],
     }
 
 
@@ -283,6 +308,50 @@ def lifecycle_op(command: object) -> Optional[str]:
     return args[0] if args and args[0] in LIFECYCLE_OPS else None
 
 
+def _same_path(a: str, b: str) -> bool:
+    a, b = re.sub(r"^(\./)+", "", _norm(a)), re.sub(r"^(\./)+", "", _norm(b))
+    return bool(a) and bool(b) and (a == b or a.endswith("/" + b) or b.endswith("/" + a))
+
+
+def reply_paths(text: object) -> list:
+    """File-looking paths an assembler reply names, in order.
+
+    Trap: every such path in any assembler reply (a `brief` lists many) becomes a free read, and
+    `_same_path` matches by path suffix.
+    """
+    if not isinstance(text, str):
+        return []
+    out: list = []
+    for m in _REPLY_PATH_RE.finditer(text):
+        if m.group(0) not in out:
+            out.append(m.group(0))
+    return out[:32]
+
+
+def named_read(name: object, tool_input: object, named: object) -> bool:
+    """True for a Read of, or one plain cat/head/tail/jq/wc/`python -c` over, only a file an assembler reply named.
+
+    Trap: a chained or substituted tail, a script file, or any other file-looking argument counts.
+    """
+    if not named or not isinstance(named, (list, tuple)):
+        return False
+    inp = tool_input if isinstance(tool_input, dict) else {}
+    if name == "Read":
+        target = inp.get("file_path")
+        return isinstance(target, str) and any(_same_path(target, n) for n in named)
+    if name != "Bash" or not isinstance(inp.get("command"), str):
+        return False
+    first, rest = _first_command_token(inp["command"])
+    args = _plain_args(rest)
+    base = _norm(first).rsplit("/", 1)[-1]
+    if args is None or base not in _READERS:
+        return False
+    if base.startswith("python") and "-c" not in args:
+        return False
+    hits = [p for a in args for p in _REPLY_PATH_RE.findall(a)]
+    return bool(hits) and all(any(_same_path(p, n) for n in named) for p in hits)
+
+
 def _segment_exempt(seg: str, state: dict) -> bool:
     seg = seg.strip()
     seg = re.sub(r"^[A-Za-z_][A-Za-z0-9_]*=", "", seg).strip()
@@ -365,6 +434,7 @@ def classify(
     opening: str,
     settings_home: Optional[str],
     test_used: bool = False,
+    named: object = (),
 ) -> tuple[bool, bool]:
     """(pre_counted, all_counted) for one main-thread tool call.
 
@@ -375,6 +445,8 @@ def classify(
     if name not in COUNTED_TOOLS:
         return False, False
     inp = tool_input if isinstance(tool_input, dict) else {}
+    if named_read(name, inp, named):
+        return False, False
     if name == "Bash":
         cmd = inp.get("command")
         if lifecycle_op(cmd):
@@ -446,7 +518,7 @@ def advance(
     call. An unreadable transcript returns the state unchanged.
     """
     st = dict(state)
-    for key in ("pre", "all"):
+    for key in ("pre", "all", "asm", "named"):
         st[key] = list(state.get(key) or [])
     st["landings"] = dict(state.get("landings") or {})
     try:
@@ -491,7 +563,11 @@ def advance(
                         disarmed=False,
                         revised=False,
                         test_used=False,
+                        asm=[],
+                        named=[],
                     )
+                else:
+                    _fold_results(st, rec)
                 continue
             msg = rec.get("message")
             content = msg.get("content") if isinstance(msg, dict) else None
@@ -503,12 +579,31 @@ def advance(
                 _fold_tool_use(st, block, settings_home)
     if isinstance(current_tool_use_id, str) and current_tool_use_id:
         name, inp = current_call if current_call else (None, None)
-        pre, every = classify(name, inp, st.get("opening") or "", settings_home, bool(st.get("test_used")))
+        pre, every = classify(
+            name, inp, st.get("opening") or "", settings_home, bool(st.get("test_used")), st.get("named")
+        )
         if pre:
             _add(st["pre"], current_tool_use_id)
         if every:
             _add(st["all"], current_tool_use_id)
     return st
+
+
+def _fold_results(st: dict, rec: dict) -> None:
+    """Record the paths an assembler's tool_result names; only results of assembler calls are read."""
+    msg = rec.get("message")
+    content = msg.get("content") if isinstance(msg, dict) else None
+    if not isinstance(content, list):
+        return
+    asm = st.get("asm") or []
+    for block in content:
+        if not isinstance(block, dict) or block.get("type") != "tool_result" or block.get("tool_use_id") not in asm:
+            continue
+        body = block.get("content")
+        if isinstance(body, list):
+            body = "\n".join(b.get("text", "") for b in body if isinstance(b, dict) and isinstance(b.get("text"), str))
+        for p in reply_paths(body):
+            _add(st.setdefault("named", []), p)
 
 
 def _fold_tool_use(st: dict, block: dict, settings_home: Optional[str]) -> None:
@@ -525,10 +620,15 @@ def _fold_tool_use(st: dict, block: dict, settings_home: Optional[str]) -> None:
         if _skill_disarms(inp):
             st["disarmed"] = True
         return
-    pre, every = classify(name, inp, st.get("opening") or "", settings_home, bool(st.get("test_used")))
+    pre, every = classify(
+        name, inp, st.get("opening") or "", settings_home, bool(st.get("test_used")), st.get("named")
+    )
     if name == "Bash" and isinstance(inp, dict):
-        if lifecycle_op(inp.get("command")) == "workflow.revise":
+        op = lifecycle_op(inp.get("command"))
+        if op == "workflow.revise":
             st["revised"] = True
+        elif op and op.endswith("-assemble"):
+            _add(st.setdefault("asm", []), block.get("id"))
         elif not st.get("test_used") and is_test_run(inp.get("command")):
             st["test_used"] = True
     if pre:

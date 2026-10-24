@@ -296,12 +296,12 @@ def mark_resumed(record_dir: Path) -> bool:
 
 
 def mark_landed(record_dir: Path, sha: str) -> bool:
-    """Rewrite a `halted` marker as `landed` at `sha`; False and no write when no halted marker is present.
+    """Rewrite a `halted` or `resumed` marker as `landed` at `sha`; False and no write for any other status.
 
     A `landed` marker is skipped by `halted_run_for` / `halted_ask_run_for`, so a refire no longer resumes it.
     """
     marker = _read(Path(record_dir))
-    if marker is None or marker.get("status") != STATUS_HALTED:
+    if marker is None or marker.get("status") not in (STATUS_HALTED, STATUS_RESUMED):
         return False
     _write(Path(record_dir), {**marker, "status": STATUS_LANDED, "sha": sha})
     _index_call("remove_run", record_dir)

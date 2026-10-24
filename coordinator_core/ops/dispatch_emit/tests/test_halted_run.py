@@ -45,8 +45,15 @@ def test_mark_landed_rewrites_only_a_halted_marker(tmp_path):
     hr.write_halt_marker(resumed, halted="x", sizing_rel=SIZING)
     hr.mark_resumed(resumed)
     before = (resumed / hr.HALTED_FILE).read_bytes()
-    assert hr.mark_landed(resumed, sha) is False
-    assert (resumed / hr.HALTED_FILE).read_bytes() == before
+    assert hr.mark_landed(resumed, sha) is True
+    assert json.loads((resumed / hr.HALTED_FILE).read_text())["status"] == hr.STATUS_LANDED
+    assert (resumed / hr.HALTED_FILE).read_bytes() != before
+    running = _dir(tmp_path, "20261016T030000-cccccc")
+    running.mkdir(parents=True)
+    (running / hr.HALTED_FILE).write_text(json.dumps({"status": "running"}), encoding="utf-8")
+    before = (running / hr.HALTED_FILE).read_bytes()
+    assert hr.mark_landed(running, sha) is False
+    assert (running / hr.HALTED_FILE).read_bytes() == before
 
 
 def test_record_released_stamps_only_a_halted_marker(tmp_path):

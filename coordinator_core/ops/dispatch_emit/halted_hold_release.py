@@ -172,44 +172,51 @@ def _hunks_present(base: str, kept: str, head: str) -> bool:
     return True
 
 
-def _kept_at_head(root: Path, record: Path, marker: dict) -> bool:
-    """True when every path the halt withheld has its kept content already at HEAD: blob-equal, or the kept
-    diff against `run_base_sha` already present. A withheld path with no kept blob, a missing object or an
-    unreadable record holds. One git spawn for the whole run."""
+def kept_at_head_paths(root: Path, record: Path, marker: dict) -> set:
+    """The withheld paths of the halt at `record` whose kept content is already at HEAD: blob-equal, or the
+    kept diff against `run_base_sha` already present. A path with no kept blob, a missing object, or an
+    unreadable record is absent (still held). One git spawn for the whole run, none when nothing is withheld."""
     from coordinator_core.ops.dispatch_emit import halted_run, kept_work
 
     withheld = halted_run.halted_withheld(record)
     if not withheld:
-        return False
+        return set()
     kept: dict = {}
     for chunk in kept_work.read(record)["chunks"].values():
         paths = chunk.get("paths") if isinstance(chunk, dict) else None
         if isinstance(paths, dict):
             kept.update({p: b for p, b in paths.items() if isinstance(b, str) and b})
-    if any(p not in kept for p in withheld):
-        return False
+    paths = sorted(p for p in withheld if p in kept)
+    if not paths:
+        return set()
     base_sha = marker.get("run_base_sha")
     base_sha = base_sha if isinstance(base_sha, str) and base_sha else ""
-    paths = sorted(withheld)
     specs = [f"HEAD:{p}" for p in paths] + [kept[p] for p in paths]
     specs += [f"{base_sha}:{p}" for p in paths] if base_sha else []
     blobs = _blob_batch(root, specs)
     if blobs is None:
-        return False
+        return set()
+    released: set = set()
     for p in paths:
         head, keep = blobs[f"HEAD:{p}"], blobs[kept[p]]
         if head is None or keep is None:
-            return False
-        if head == keep:
             continue
-        if not base_sha:
-            return False
-        base = blobs[f"{base_sha}:{p}"]
-        if not _hunks_present(
-            (base or b"").decode("utf-8", "replace"), keep.decode("utf-8", "replace"), head.decode("utf-8", "replace"),
+        if head == keep:
+            released.add(p)
+        elif base_sha and _hunks_present(
+            (blobs[f"{base_sha}:{p}"] or b"").decode("utf-8", "replace"),
+            keep.decode("utf-8", "replace"), head.decode("utf-8", "replace"),
         ):
-            return False
-    return True
+            released.add(p)
+    return released
+
+
+def _kept_at_head(root: Path, record: Path, marker: dict) -> bool:
+    """True when the halt withholds something and every withheld path is `kept_at_head_paths`."""
+    from coordinator_core.ops.dispatch_emit import halted_run
+
+    withheld = set(halted_run.halted_withheld(record))
+    return bool(withheld) and kept_at_head_paths(root, record, marker) == withheld
 
 
 def release_calls(root: Path, halted_run_id: str) -> tuple:

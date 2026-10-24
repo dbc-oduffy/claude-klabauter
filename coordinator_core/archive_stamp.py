@@ -1664,6 +1664,11 @@ def _cs_ship_handoff_core(
     if retained:
         print("stamped=false released=false archived=false")
         return SHIP_RC_RETAINED, True
+    if result.get("already_satisfied"):
+        print(
+            f"already_satisfied stored={result.get('stored_sha')} "
+            f"supplied={result.get('supplied_sha')}"
+        )
     if archive and not _archive_move_landed(handoff_path, worktree):
         print(
             f"cs_ship_handoff: archive move for {handoff_path} did not land "

@@ -489,3 +489,18 @@ def test_index_file_is_parsed_at_most_once_per_call_with_two_halted_runs(git_rep
     claims = sibling_claims.sibling_run_claims(git_repo, OWN, [EXTRA, EXTRA2])
     assert claims == {EXTRA: first, EXTRA2: second}
     assert len(parses) == 1
+
+
+def test_b9002c_replay_superseded_halted_run_is_not_unlanded_for_a_landing_on_another_sizing(repo):
+    _sizing(repo, SIZING, "superseded")
+    _sizing(repo, "state/sizings/land.yaml")
+    old = _aged(300, "b9002c")
+    _declare(repo, old, "p/a.py")
+    _bind(repo, old, "halted", withheld=("p/a.py",))
+    own = _aged(10, "996e12")
+    _declare(repo, own, "p/a.py")
+    _bind(repo, own, None, sizing="state/sizings/land.yaml")
+    assert sibling_claims._unlanded_run_ids(repo, own) == []
+    assert sibling_claims.sibling_run_claims(repo, own, ["p/a.py"]) == {}
+    _sizing(repo, SIZING)
+    assert sibling_claims._unlanded_run_ids(repo, own) == [old]

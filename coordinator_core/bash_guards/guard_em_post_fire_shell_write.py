@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional
 
-_PREFILTER_TOKENS = (">", "tee", "<<", "-c", "sed", "cp", "mv", "git")
+_PREFILTER_TOKENS = (">", "tee", "<<", "-c", "sed", "cp", "mv", "git", "rm", "perl", "patch", "truncate", "dd", "rsync", "install")
 _REVISE_ROUTE = "workflow.revise"
 
 
