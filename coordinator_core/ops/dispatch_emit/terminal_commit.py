@@ -640,6 +640,21 @@ def _land_merge_artifacts(
     return {k: out.get(k) for k in ("committed", "sha", "error", "refused") if k in out}
 
 
+def _retest_covers_targeted_set(li, params: dict, fresh: Optional[dict]) -> bool:
+    """True when ``fresh`` (a valid retest record) ran every file of the run's recorded targeted
+    set, less the files the record lists under ``dropped``. No fresh record: False."""
+    if fresh is None:
+        return False
+    from coordinator_core.ops.dispatch_emit import retest_targeted
+
+    required = {
+        f for f in retest_targeted._recorded_targeted_set(params, li.targeted_test_verdict(params))
+    }
+    dropped = {li._node_file(str(t)) for t in (fresh.get("dropped") or [])}
+    ran = {li._node_file(t) for t in (fresh.get("tests") or []) if isinstance(t, str)}
+    return (required - dropped) <= ran
+
+
 def _landing_integrity_gate(
     worktree_root: Path, all_paths: list, deleted_paths: list, record_abs: Optional[Path],
     params: dict, run_id: Optional[str], plan: Optional[str] = None,
@@ -722,10 +737,11 @@ def _landing_integrity_gate(
     tested, tcheck = li.landing_test_gate(worktree_root, params, run_id)
     findings += tested
     extra["targeted_tests_check"] = tcheck
+    fresh_record = None
     if tcheck == "pass-on-retest":
-        fresh = li.fresh_targeted_verdict(worktree_root, run_id) if run_id else None
-        if fresh is not None:
-            extra["retested_tests"] = fresh.get("tests")
+        fresh_record = li.fresh_targeted_verdict(worktree_root, run_id) if run_id else None
+        if fresh_record is not None:
+            extra["retested_tests"] = fresh_record.get("tests")
     red = li.reverify_red_findings(worktree_root, params, paths)
     record = li.reverify_record(params)
     if record is None:
@@ -734,6 +750,9 @@ def _landing_integrity_gate(
         extra["reverify_check"] = "pass"
     else:
         extra["reverify_check"] = "fail" if red else "fail-off-landing"
+    if tcheck == "pass-on-retest" and _retest_covers_targeted_set(li, params, fresh_record):
+        # A fresh passing retest of the whole targeted set supersedes a re-verify that never ran.
+        red = [f for f in red if f.reason != li.REVIEW_REVERIFY_INDETERMINATE]
     if red and tcheck == "pass-on-retest":
         ran = {li._node_file(t) for t in (extra.get("retested_tests") or []) if isinstance(t, str)}
         if ran and all(f.path in ran for f in red):

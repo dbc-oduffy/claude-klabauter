@@ -123,9 +123,15 @@ class _SubprocessSpy:
         gh_pr_create_stdout: str = "",
         gh_pr_merge_returncode: int = 0,
         gh_pr_merge_stderr: str = "",
+        push_stderr: str = "",
+        rev_parse_stdout: str = "0123456789abcdef0123456789abcdef01234567\n",
+        rev_list_stdout: str = "0\n",
     ):
         self.calls: List[List[str]] = []
         self._dest = dest
+        self._push_stderr = push_stderr
+        self._rev_parse_stdout = rev_parse_stdout
+        self._rev_list_stdout = rev_list_stdout
         self._push_returncode = push_returncode
         self._status_stdout = status_stdout
         self._status_returncode = status_returncode
@@ -159,7 +165,11 @@ class _SubprocessSpy:
         if "status" in cmd and "--porcelain=v2" in cmd:
             return _completed(self._status_returncode, self._status_stdout, self._status_stderr)
         if cmd[:1] == ["git"] and "push" in cmd:
-            return _completed(self._push_returncode, "", "")
+            return _completed(self._push_returncode, "", self._push_stderr)
+        if cmd[:1] == ["git"] and "rev-parse" in cmd:
+            return _completed(0, self._rev_parse_stdout, "")
+        if cmd[:1] == ["git"] and "rev-list" in cmd:
+            return _completed(0, self._rev_list_stdout, "")
         if cmd[:1] == ["git"] and "symbolic-ref" in cmd:
             return _completed(self._symref_returncode, self._symref_stdout, self._symref_stderr)
         if cmd[:1] == ["git"] and cmd[1:2] == ["-C"] and "remote" in cmd and "get-url" in cmd:
@@ -1046,3 +1056,184 @@ def test_run_decodes_child_output_as_utf8_not_the_locale_codepage(tmp_path):
     result = _mod._run([sys.executable, str(child)])
     assert result.stdout == "\u2713 Logged in \u2014 ok"
     assert result.stderr == "\u2717 nope"
+
+
+# ---------------------------------------------------------------------------
+# --open-only: push without merging, open the PR, never `gh pr merge`.
+# ---------------------------------------------------------------------------
+
+_SHA12 = "0123456789ab"
+
+
+def _open_only_setup(tmp_path, monkeypatch, *, gh_present=True, reconcile_ok=True, reconcile_reason="", **spy_kwargs):
+    dest = str(tmp_path / "dest")
+    spy = _SubprocessSpy(dest=dest, **spy_kwargs)
+    monkeypatch.setattr(_mod.subprocess, "run", spy)
+    monkeypatch.setattr(_mod.shutil, "which", lambda name: "/usr/bin/gh" if gh_present else None)
+    reconciles: List[List[List[str]]] = []
+
+    def _reconcile(repo_root, *, out, err):
+        reconciles.append(spy.calls[:])
+        return SimpleNamespace(ok=reconcile_ok, reason=reconcile_reason)
+
+    monkeypatch.setattr(_mod, "_reconcile_dest_before_push", _reconcile)
+    monkeypatch.delenv("COORDINATOR_SESSION_ID", raising=False)
+    return dest, spy, reconciles
+
+
+def _run_open_only(tmp_path, monkeypatch, **kwargs):
+    dest, spy, reconciles = _open_only_setup(tmp_path, monkeypatch, **kwargs)
+    argv = ["alpha", "--percolate-root", str(tmp_path / "percolate-root"), "--open-only"]
+    rc = _mod._cmd_push(_mod._build_parser().parse_args(argv))
+    return rc, spy, dest, reconciles
+
+
+def _never_merges(spy) -> None:
+    assert not any(c[:1] == ["gh"] and "merge" in c for c in spy.calls)
+
+
+def test_open_only_case_i_pushes_session_branch_with_no_refspec_and_never_merges(tmp_path, monkeypatch):
+    rc, spy, dest, _ = _run_open_only(tmp_path, monkeypatch, status_stdout=_STATUS_FEATURE_BRANCH_AHEAD_1)
+    assert rc == _mod._EXIT_OK
+    _never_merges(spy)
+    pushes = [c for c in spy.calls if c[:1] == ["git"] and "push" in c]
+    assert pushes == [["git", "-C", dest, "-c", "credential.interactive=never", "push"]]
+    creates = [c for c in spy.calls if c[:1] == ["gh"] and c[1:3] == ["pr", "create"]]
+    assert creates == [["gh", "pr", "create", "--fill", "--base", "main", "--head", "feature-x"]]
+
+
+def test_open_only_case_ii_pushes_percolate_refspec_never_the_default_branch(tmp_path, monkeypatch):
+    rc, spy, dest, _ = _run_open_only(tmp_path, monkeypatch, status_stdout=_STATUS_CLEAN_AHEAD_1)
+    assert rc == _mod._EXIT_OK
+    _never_merges(spy)
+    pushes = [c for c in spy.calls if c[:1] == ["git"] and "push" in c]
+    assert pushes == [
+        ["git", "-C", dest, "-c", "credential.interactive=never", "push", "origin",
+         f"HEAD:refs/heads/percolate/alpha/{_SHA12}"]
+    ]
+    creates = [c for c in spy.calls if c[:1] == ["gh"] and c[1:3] == ["pr", "create"]]
+    assert creates == [["gh", "pr", "create", "--fill", "--base", "main", "--head", f"percolate/alpha/{_SHA12}"]]
+
+
+def test_open_only_release_channel_takes_the_refspec_push(tmp_path, monkeypatch):
+    rc, spy, dest, _ = _run_open_only(tmp_path, monkeypatch, status_stdout=_STATUS_CANDIDATE_BRANCH_AHEAD_1)
+    assert rc == _mod._EXIT_OK
+    pushes = [c for c in spy.calls if c[:1] == ["git"] and "push" in c]
+    assert pushes[0][-2:] == ["origin", f"HEAD:refs/heads/percolate/alpha/{_SHA12}"]
+    _never_merges(spy)
+
+
+def test_open_only_gh_absent_exits_3_and_spawns_no_gh(tmp_path, monkeypatch, capsys):
+    rc, spy, dest, _ = _run_open_only(
+        tmp_path, monkeypatch, gh_present=False, status_stdout=_STATUS_FEATURE_BRANCH_AHEAD_1
+    )
+    assert rc == _mod._EXIT_PUSHED_NO_PR == 3
+    assert [c for c in spy.calls if c[:1] == ["gh"]] == []
+    out = capsys.readouterr().out
+    assert "feature-x" in out and "main" in out and _REMOTE_URL_HTTPS.strip() in out
+
+
+def test_open_only_gh_auth_failing_exits_3_and_never_creates_a_pr(tmp_path, monkeypatch, capsys):
+    rc, spy, dest, _ = _run_open_only(
+        tmp_path, monkeypatch, status_stdout=_STATUS_FEATURE_BRANCH_AHEAD_1, gh_auth_returncode=1
+    )
+    assert rc == 3
+    assert [c for c in spy.calls if c[:1] == ["gh"] and c[1:3] == ["pr", "create"]] == []
+    assert "feature-x" in capsys.readouterr().out
+    _never_merges(spy)
+
+
+def test_open_only_ruleset_refused_push_exits_1_with_git_stderr_and_precondition(tmp_path, monkeypatch, capsys):
+    rc, spy, dest, _ = _run_open_only(
+        tmp_path, monkeypatch, status_stdout=_STATUS_CLEAN_AHEAD_1, push_returncode=1,
+        push_stderr="remote: error: GH013: Repository rule violations found for refs/heads/percolate/alpha/x",
+    )
+    assert rc == _mod._EXIT_FAIL
+    err = capsys.readouterr().err
+    assert "GH013: Repository rule violations" in err
+    assert "ruleset exemption" in err and "upstream already exists" in err
+    assert [c for c in spy.calls if c[:1] == ["gh"]] == []
+
+
+def test_open_only_nothing_to_push_with_open_pr_exits_0_without_push(tmp_path, monkeypatch):
+    rc, spy, dest, _ = _run_open_only(
+        tmp_path, monkeypatch, status_stdout=_STATUS_FEATURE_BRANCH_AHEAD_0, gh_pr_list_stdout='[{"number": 7}]'
+    )
+    assert rc == _mod._EXIT_OK
+    assert [c for c in spy.calls if c[:1] == ["git"] and "push" in c] == []
+    assert [c for c in spy.calls if c[:1] == ["gh"] and c[1:3] == ["pr", "create"]] == []
+
+
+def test_open_only_case_i_reconciles_before_pushing_and_refusal_blocks_the_push(tmp_path, monkeypatch, capsys):
+    rc, spy, dest, reconciles = _run_open_only(
+        tmp_path, monkeypatch, status_stdout=_STATUS_FEATURE_BRANCH_AHEAD_AND_BEHIND,
+        reconcile_ok=False, reconcile_reason="merge conflict in a.txt",
+    )
+    assert rc == _mod._EXIT_FAIL
+    assert len(reconciles) == 1
+    assert [c for c in spy.calls if c[:1] == ["git"] and "push" in c] == []
+    assert "merge conflict in a.txt" in capsys.readouterr().err
+
+    rc, spy, dest, reconciles = _run_open_only(
+        tmp_path, monkeypatch, status_stdout=_STATUS_FEATURE_BRANCH_AHEAD_AND_BEHIND
+    )
+    assert rc == _mod._EXIT_OK
+    assert len(reconciles) == 1
+    assert not any("push" in c for c in reconciles[0] if c[:1] == ["git"])
+
+
+def test_open_only_case_i_names_commits_ahead_of_default(tmp_path, monkeypatch, capsys):
+    rc, spy, dest, _ = _run_open_only(
+        tmp_path, monkeypatch, status_stdout=_STATUS_FEATURE_BRANCH_AHEAD_1, rev_list_stdout="4\n"
+    )
+    assert rc == _mod._EXIT_OK
+    assert "4 commit" in capsys.readouterr().err
+
+
+def test_open_only_with_promote_is_a_usage_error(tmp_path, monkeypatch):
+    dest, spy, _ = _open_only_setup(tmp_path, monkeypatch)
+    args = _mod._build_parser().parse_args(["alpha", "--open-only", "--promote"])
+    assert _mod._cmd_push(args) == _mod._EXIT_USAGE
+    assert spy.calls == []
+
+
+def test_flag_absent_argv_is_unchanged_for_default_channel_and_feature_branches(tmp_path, monkeypatch):
+    for status in (_STATUS_CLEAN_AHEAD_1, _STATUS_CANDIDATE_BRANCH_AHEAD_1, _STATUS_FEATURE_BRANCH_AHEAD_1):
+        rc, spy, dest = _run_push(tmp_path, monkeypatch, status_stdout=status)
+        pushes = [c for c in spy.calls if c[:1] == ["git"] and "push" in c]
+        assert pushes == [["git", "-C", dest, "-c", "credential.interactive=never", "push"]]
+        assert not any("rev-parse" in c or "rev-list" in c for c in spy.calls)
+        _never_merges(spy)
+
+
+def test_open_only_publish_with_lock_held_spawns_no_percolate_gate(tmp_path, monkeypatch):
+    dest, spy, _ = _open_only_setup(tmp_path, monkeypatch, status_stdout=_STATUS_FEATURE_BRANCH_AHEAD_1)
+    rc = _mod.open_only_publish(dest, "alpha", lock_held=True, default_branch="main")
+    assert rc == _mod._EXIT_OK
+    assert not any(str(_mod._PERCOLATE_GATE) in " ".join(map(str, c)) for c in spy.calls)
+    assert not any("symbolic-ref" in c for c in spy.calls)
+    _never_merges(spy)
+
+
+def test_open_only_spawn_budget_case_i_and_case_ii(tmp_path, monkeypatch):
+    dest, spy, _ = _open_only_setup(tmp_path, monkeypatch, status_stdout=_STATUS_FEATURE_BRANCH_AHEAD_1)
+    assert _mod.open_only_publish(dest, "alpha", lock_held=True) == 0
+    # status, symbolic-ref, rev-list, push, gh auth, remote get-url, gh auth --hostname, pr list, pr create
+    assert len(spy.calls) == 9
+
+    dest, spy, _ = _open_only_setup(tmp_path, monkeypatch, status_stdout=_STATUS_CLEAN_AHEAD_1)
+    assert _mod.open_only_publish(dest, "alpha", lock_held=True) == 0
+    # status, symbolic-ref, rev-parse, push, gh auth, remote get-url, gh auth --hostname, pr list, pr create
+    assert len(spy.calls) == 9
+
+
+def test_open_and_merge_pr_delegates_to_open_pr_then_merges(tmp_path, monkeypatch):
+    seen: List[tuple] = []
+    monkeypatch.setattr(
+        _mod, "_open_pr", lambda dest, head, base, target: seen.append((dest, head, base, target))
+    )
+    spy = _SubprocessSpy(dest=str(tmp_path))
+    monkeypatch.setattr(_mod.subprocess, "run", spy)
+    assert _mod._open_and_merge_pr("d", "feature-x", "alpha") is None
+    assert seen == [("d", "feature-x", None, "alpha")]
+    assert [c for c in spy.calls if c[1:3] == ["pr", "merge"]] == [["gh", "pr", "merge", "feature-x", "--merge"]]

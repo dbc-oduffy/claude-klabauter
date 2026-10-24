@@ -1672,7 +1672,7 @@
     "coordinator/bin/tests/test_percolate_parse_dryrun_deletion_gate.py": "02dde8ef323e47d8b87337625c20ddce2da410f5",
     "coordinator/bin/tests/test_percolate_parse_dryrun_parity.py": "125068fab93203cb28d111bc510d5f15754a56bc",
     "coordinator/bin/tests/test_percolate_publish_readiness.py": "0801b9ddf2a72cee8b0d9a4a640f7a251c9b5f73",
-    "coordinator/bin/tests/test_percolate_push.py": "7bcc9ea2b59f67dc8944caa5bedf9228392c389e",
+    "coordinator/bin/tests/test_percolate_push.py": "97521b6b601946058c5862cf065ef0923485e765",
     "coordinator/bin/tests/test_percolate_round.py": "001867d515981e3f0ec3900a968ef9e66f6dd5bf",
     "coordinator/bin/tests/test_percolate_round_changelog_lag.py": "8fe8910c7415df004a0abeed3130b388eb67f1f4",
     "coordinator/bin/tests/test_percolate_round_commit_pathspec.py": "3f7fa384f248f243c8c6b13194a6de6e48225bae",
@@ -1687,6 +1687,7 @@
     "coordinator/bin/tests/test_percolate_round_names_not_carried.py": "9573410d7360d9ba0a1ff56187e75a5f5e19e1bf",
     "coordinator/bin/tests/test_percolate_round_never_promotes.py": "4e48a127e48c91a538d4ae3fef2043b420d1cd16",
     "coordinator/bin/tests/test_percolate_round_not_carried_wiring.py": "2cf422a7d48d8fa0a9a39ad86faa12e7734d5358",
+    "coordinator/bin/tests/test_percolate_round_open_only.py": "9043dd440470fd9586a9ef47a990bcf1a77cbc69",
     "coordinator/bin/tests/test_percolate_round_pathspec_form_matches_head_tree.py": "271c43d5235988affd1ba2a3e937f0bf619e089a",
     "coordinator/bin/tests/test_percolate_round_pathspec_spawn_budget.py": "67770e76e1b495d16d65080b53217366ef5f1b46",
     "coordinator/bin/tests/test_percolate_round_publish_trailers.py": "1ca9f7a4a03cd313f3e7a89a20d1c3b394f7d72b",
@@ -2229,8 +2230,8 @@
     "coordinator_core/_content_root_primitive.py": "f7fcd3083855a5e1dd53c09233fbfd64f8dffdf5",
     "coordinator_core/_data_root.py": "0c7c8524f25376ae49593f11334445539dc557f9",
     "coordinator_core/_engine_landing.py": "06dbb1273f3c36fdb6be08767ec75e73c71630e7",
-    "coordinator_core/_engine_published_at": "9ba3922b0b54069f205187389e56fee9834b98d3",
-    "coordinator_core/_engine_stamp": "b9e11ced83cbc284326705ced5f3aeab288633a0",
+    "coordinator_core/_engine_published_at": "4fe8f008da875e2c3d4e4665af4ab0f468f1aa9f",
+    "coordinator_core/_engine_stamp": "884c0df344705aea76aa2e3174f9c3630e2a442b",
     "coordinator_core/_fleet_names.py": "e81fc4247611fe486697f4707b28a1a3a008f392",
     "coordinator_core/_hook_envelope.py": "7e70aa3f56bfcea2cc146eab698c57469159691b",
     "coordinator_core/_repo_root_probe.py": "2d8edfa8cd9343436a650584da430aa87ae0397d",
@@ -4973,7 +4974,7 @@
     "coordinator_core/ops/dispatch_emit/spine_read.py": "21dcf9660c8f4ef9efca175b92d656ca4f8d1bfc",
     "coordinator_core/ops/dispatch_emit/stopped_runs.py": "bdd33c5d339edffd726844925fe7f0138fe40586",
     "coordinator_core/ops/dispatch_emit/stranded_part_rebuild.py": "dc801bf14cf6e3d928f68772fee48a33b585af84",
-    "coordinator_core/ops/dispatch_emit/terminal_commit.py": "7ead4fc735f9cf056c1f591f64562e86e05ddfbf",
+    "coordinator_core/ops/dispatch_emit/terminal_commit.py": "cb00202473df9bb5bc331e2b36e1ea725508bbdb",
     "coordinator_core/ops/dispatch_emit/terminal_commit_params_channel.py": "46e6e3d8d56f263bdd727d29a8a308b7bdac9c51",
     "coordinator_core/ops/dispatch_emit/terminal_commit_reconcile.py": "d37a375606433927d4aae9cdfc64fd1706ba684f",
     "coordinator_core/ops/dispatch_emit/test_caller_widen.py": "baabd208e358afccfb83f5b4536b627d1d2e7c5d",
@@ -5543,7 +5544,7 @@
     "coordinator_core/ops/dispatch_emit/tests/test_landing_fresh_verdict_halted.py": "2c94bb88cd170a5e52b43ee3e66c7745e2b4d356",
     "coordinator_core/ops/dispatch_emit/tests/test_landing_fresh_verdict_terminal.py": "dd918f64d0f9c0e989eb65b98fad2ee1fd478b4e",
     "coordinator_core/ops/dispatch_emit/tests/test_landing_integrity.py": "f9290709b914e1baddc7b2350ba775e86cce32a4",
-    "coordinator_core/ops/dispatch_emit/tests/test_landing_integrity_reverify_indeterminate.py": "f4f7783d6858239ff44d50dc0f16631d46938fea",
+    "coordinator_core/ops/dispatch_emit/tests/test_landing_integrity_reverify_indeterminate.py": "f8e0feff2a30b8bcee0b13c10e21e96316305c9f",
     "coordinator_core/ops/dispatch_emit/tests/test_landing_integrity_reverify_red.py": "cb37dbb68368bd13a2c99206be3c53efc500aa49",
     "coordinator_core/ops/dispatch_emit/tests/test_landing_remedy.py": "a9b1fdd0b7038dc565f28599cf22747737815e06",
     "coordinator_core/ops/dispatch_emit/tests/test_landing_scope.py": "c2dd5ab28519d1719f637fe80a58cda74fd885cc",
@@ -9583,5 +9584,5 @@
     "scripts/unstick_claude.py": "5458a0f699f1793ff9fd32295b9d0b33635f1c06"
   },
   "schema": 1,
-  "source_head": "386f807201338353751b1254397ccff46949b91c"
+  "source_head": "7b2a0accdc7ac375078d0f48e9b7772cdf240097"
 }
